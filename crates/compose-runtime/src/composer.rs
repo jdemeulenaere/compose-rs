@@ -83,6 +83,26 @@ pub(crate) enum WalkStep {
     Restart(fn(&dyn Any), Option<Rc<dyn Any>>),
 }
 
+/// Which composable a group belongs to, beyond its key: two composables can share a key.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum Identity {
+    /// A restartable composable: the `TypeId` of its restart closure.
+    Type(TypeId),
+    /// A non-restartable one: the type name of a marker closure, unique per composable and
+    /// instantiation, compared by address first.
+    Name(&'static str),
+}
+
+impl PartialEq for Identity {
+    fn eq(&self, other: &Identity) -> bool {
+        match (self, other) {
+            (Identity::Type(a), Identity::Type(b)) => a == b,
+            (Identity::Name(a), Identity::Name(b)) => std::ptr::eq(*a, *b) || a == b,
+            _ => false,
+        }
+    }
+}
+
 /// A restart group's kept arguments, when it has any.
 type Kept = Option<Rc<dyn Any>>;
 
@@ -124,7 +144,7 @@ impl Runtime {
         kind: GroupKind,
         key: u64,
         data_key: u64,
-        identity: Option<TypeId>,
+        identity: Option<Identity>,
     ) -> (NodeOp, NodeStart) {
         let composition = self.check_composing();
         let Runtime { compositions, scopes, frames, .. } = self;
@@ -694,8 +714,16 @@ fn start_group(kind: GroupKind, key: u64, data_key: u64) -> NodeStart {
 /// generic composable, a same-named composable) doesn't match. Not the restart function's address:
 /// an `#[inline]` composable can have a copy per crate, with distinct addresses.
 pub(crate) fn start_restart_group_of(key: u64, identity: TypeId) {
-    let (op, _) =
-        with_runtime(|runtime| runtime.start_group(GroupKind::Restart, key, 0, Some(identity)));
+    let identity = Some(Identity::Type(identity));
+    let (op, _) = with_runtime(|runtime| runtime.start_group(GroupKind::Restart, key, 0, identity));
+    apply_node_op(op);
+}
+
+/// Starts the replace group of a non-restartable composable, identified by the type name of a
+/// marker closure (its parameters may borrow, so no `TypeId`).
+pub(crate) fn start_replace_group_of(key: u64, identity: &'static str) {
+    let identity = Some(Identity::Name(identity));
+    let (op, _) = with_runtime(|runtime| runtime.start_group(GroupKind::Replace, key, 0, identity));
     apply_node_op(op);
 }
 

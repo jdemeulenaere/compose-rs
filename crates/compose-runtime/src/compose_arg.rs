@@ -103,6 +103,13 @@ impl<T: 'static> ComposeArg for OwnedState<T> {
     }
 }
 
+impl<T: ?Sized + 'static> ComposeArg for std::marker::PhantomData<T> {
+    #[inline]
+    fn same(&self, _: &Self) -> bool {
+        true
+    }
+}
+
 impl<T: ComposeArg> ComposeArg for Option<T> {
     #[inline]
     fn same(&self, other: &Self) -> bool {

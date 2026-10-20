@@ -58,10 +58,11 @@ pub struct ReplaceGroup {
 }
 
 impl ReplaceGroup {
+    /// `identity` is [`name_of`] a marker closure of the composable.
     #[inline]
-    pub fn start(key: u64) -> ReplaceGroup {
+    pub fn start(key: u64, identity: &'static str) -> ReplaceGroup {
         let composer = current();
-        composer.start_replace_group(key);
+        crate::composer::start_replace_group_of(key, identity);
         ReplaceGroup { composer, unwinding: std::thread::panicking() }
     }
 }
@@ -111,6 +112,13 @@ impl Drop for Region {
 #[inline]
 pub fn identity_of<F: 'static>(_restart: &F) -> TypeId {
     TypeId::of::<F>()
+}
+
+/// A non-restartable composable's identity: the type name of a closure it declares, which names
+/// the composable and its type arguments.
+#[inline]
+pub fn name_of<F>(_marker: &F) -> &'static str {
+    std::any::type_name::<F>()
 }
 
 /// A clone of an argument, to keep. A function rather than `Clone::clone`, so generated code

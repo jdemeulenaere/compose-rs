@@ -67,8 +67,10 @@ fn Conditional(
     extra: u32,
     mut __compose_argument1: (u32, u32),
 ) {
+    let __compose_marker = || ();
     let __compose_group = ::compose::__private::ReplaceGroup::start(
         18363063588487543881u64,
+        ::compose::__private::name_of(&__compose_marker),
     );
     {
         let (ref mut count, step) = __compose_argument1;

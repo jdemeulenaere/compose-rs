@@ -203,8 +203,15 @@ fn transform(attr: TokenStream, item: TokenStream, scope: &str) -> syn::Result<T
         if impl_trait.is_none() {
             impl_trait = types.impl_trait;
         }
+        let function_name = sig.ident.clone();
         let (name, pattern) = match &*typed.pat {
-            Pat::Ident(PatIdent { by_ref: None, subpat: None, ident, .. }) => (ident.clone(), None),
+            // A parameter named like the composable would shadow it for the restart function:
+            // renamed and rebound, as a pattern is.
+            Pat::Ident(PatIdent { by_ref: None, subpat: None, ident, .. })
+                if *ident != function_name =>
+            {
+                (ident.clone(), None)
+            }
             pattern => {
                 let name = format_ident!("__compose_argument{}", index);
                 let pattern = pattern.clone();
@@ -335,8 +342,12 @@ fn transform(attr: TokenStream, item: TokenStream, scope: &str) -> syn::Result<T
             }
         }
     } else {
+        let marker = Ident::new("__compose_marker", Span::mixed_site());
         quote! {
-            let #group = ::compose::__private::ReplaceGroup::start(#key);
+            // Its type names this composable (and its type arguments): the group's identity.
+            let #marker = || ();
+            let #group =
+                ::compose::__private::ReplaceGroup::start(#key, ::compose::__private::name_of(&#marker));
             {
                 #(#rebinds)*
                 #(#stmts)*

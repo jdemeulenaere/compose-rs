@@ -111,6 +111,14 @@ struct Continues<'a> {
 
 /// Standard macros that never expand to a `continue` of their own.
 const KNOWN_MACROS: &[&str] = &[
+    // log and tracing
+    "trace",
+    "debug",
+    "info",
+    "warn",
+    "error",
+    "log",
+    "event",
     "format",
     "format_args",
     "print",
