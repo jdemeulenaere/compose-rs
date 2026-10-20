@@ -7,6 +7,7 @@
 //! borrow ends.
 
 use std::cell::RefCell;
+use std::mem::ManuallyDrop;
 use std::rc::Rc;
 
 use crate::applier::{ErasedApplier, NodeRef};
@@ -18,7 +19,13 @@ use crate::slot_table::{GroupKind, NONE, SENTINEL, SlotTable, SlotValue};
 use crate::state::Cells;
 
 thread_local! {
-    static RUNTIME: RefCell<Runtime> = const { RefCell::new(Runtime::new()) };
+    // No destructor (`ManuallyDrop`): the runtime stays usable from every other thread-local's
+    // destructor, whatever their order. At thread exit, the exit guard (composition.rs) releases
+    // the compositions' contents while everything works; what remains (arena storage, cells
+    // still owned by other thread-locals) is leaked rather than dropped where using state would
+    // abort.
+    static RUNTIME: RefCell<ManuallyDrop<Runtime>> =
+        const { RefCell::new(ManuallyDrop::new(Runtime::new())) };
 }
 
 pub(crate) struct Runtime {

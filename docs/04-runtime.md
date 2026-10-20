@@ -99,7 +99,7 @@ composition.set_frame_requester(|| …);          // called when a scope becomes
 
 The content is held by a restart group like any composable's, with the content lambda as its kept argument, so `set_content` with new content recomposes against the old one.
 
-**Disposal.** At thread exit, compositions still alive are emptied while the runtime still works, and closed: a handle still owned (by a thread-local) stays usable as an empty composition until its owner drops it. Dropping a composition releases its nodes, then its values; state cells those values retire stay alive until the disposal ends, so values of one group may rely on each other in `Drop`.
+**Disposal.** The thread's runtime has no destructor, so it stays usable from every other thread-local's destructor, whatever their order. At thread exit, compositions still alive are emptied while everything works, and closed: a handle still owned (by a thread-local) stays usable as an empty composition until its owner drops it. What remains at thread exit (arena storage, state cells still owned by other thread-locals) is leaked rather than dropped where using state would abort. Dropping a composition releases its nodes, then its values; state cells those values retire stay alive until the disposal ends, so values of one group may rely on each other in `Drop`.
 
 **Panics.** A panic that unwinds out of a pass poisons the composition: the slot table can't be trusted to continue, so further passes panic, and dropping it still releases everything exactly once (observers remembered by the failed pass get `on_abandoned`).
 
