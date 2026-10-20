@@ -181,9 +181,8 @@ impl<'ast> Visit<'ast> for Continues<'_> {
         // A macro may expand to a `continue` (an unlabelled `continue` isn't hygienic) that
         // isn't in its tokens: only well-known macros and composables' call macros are trusted.
         let name = mac.path.segments.last().map(|segment| segment.ident.to_string());
-        let trusted = name
-            .as_deref()
-            .is_some_and(|name| KNOWN_MACROS.contains(&name) || is_composable_name(name));
+        // A PascalCase macro isn't trusted either: a user macro may be named like a composable.
+        let trusted = name.as_deref().is_some_and(|name| KNOWN_MACROS.contains(&name));
         if !trusted || tokens_contain_ident(mac.tokens.clone(), "continue") {
             self.found = true;
         }
@@ -224,6 +223,10 @@ impl Regions {
     }
 
     pub fn transform_block(&mut self, block: &mut Block) {
+        // Local closures that make likely composable calls are callables too: calling one in a
+        // branch is a likely composable call.
+        let mut closures = LocalClosures { callables: &mut self.callables };
+        closures.visit_block(block);
         self.visit_block_mut(block);
     }
 
@@ -268,9 +271,11 @@ impl Regions {
     /// In a loop with a `continue`: one group per statement containing a likely call. Plain and
     /// labelled blocks are entered, so their statements get groups of their own.
     fn wrap_statements(&mut self, body: &mut Block) {
-        for stmt in &mut body.stmts {
-            if let Stmt::Expr(Expr::Block(block), _) = stmt {
+        let stmts = std::mem::take(&mut body.stmts);
+        for mut stmt in stmts {
+            if let Stmt::Expr(Expr::Block(block), _) = &mut stmt {
                 self.wrap_statements(&mut block.block);
+                body.stmts.push(stmt);
                 continue;
             }
             let has_own_group = matches!(
@@ -283,24 +288,38 @@ impl Regions {
                         | Expr::Loop(_),
                     _
                 )
-            ) || is_key_call(stmt);
-            if has_own_group || !self.likely_stmt(stmt) {
+            ) || is_key_call(&stmt);
+            if has_own_group || !self.likely_stmt(&stmt) {
+                body.stmts.push(stmt);
                 continue;
             }
-            match stmt {
+            match &mut stmt {
                 Stmt::Local(local) => {
                     if let Some(init) = &mut local.init {
                         self.wrap_expr(&mut init.expr);
                     }
+                    body.stmts.push(stmt);
                 }
-                Stmt::Expr(expr, _) => self.wrap_expr(expr),
+                Stmt::Expr(expr, _) => {
+                    self.wrap_expr(expr);
+                    body.stmts.push(stmt);
+                }
                 Stmt::Macro(mac) => {
+                    // Around the statement rather than in a block: the macro may declare
+                    // bindings for the statements after it. Its `#[cfg]`s apply to the guard too.
+                    let cfgs: Vec<_> = mac
+                        .attrs
+                        .iter()
+                        .filter(|attr| attr.path().is_ident("cfg"))
+                        .cloned()
+                        .collect();
                     let region = self.region();
-                    let semi = &mac.semi_token;
-                    let inner = &mac.mac;
-                    *stmt = Stmt::Expr(parse_quote! {{ #region #inner #semi }}, None);
+                    let name = Ident::new("__compose_region", Span::mixed_site());
+                    body.stmts.push(parse_quote! { #(#cfgs)* #region });
+                    body.stmts.push(stmt);
+                    body.stmts.push(parse_quote! { #(#cfgs)* ::core::mem::drop(#name); });
                 }
-                Stmt::Item(_) => {}
+                Stmt::Item(_) => body.stmts.push(stmt),
             }
         }
     }
@@ -337,8 +356,38 @@ impl Regions {
 /// `key(…)`: a movable group already, and it must stay outermost in its loop body so items
 /// match by key across the whole loop.
 fn is_key_call(stmt: &Stmt) -> bool {
-    let Stmt::Expr(Expr::Call(call), _) = stmt else { return false };
-    matches!(&*call.func, Expr::Path(path) if path.path.segments.last().is_some_and(|segment| segment.ident == "key"))
+    fn key(expr: &Expr) -> bool {
+        let Expr::Call(call) = expr else { return false };
+        matches!(&*call.func, Expr::Path(path) if path.path.segments.last().is_some_and(|segment| segment.ident == "key"))
+    }
+    match stmt {
+        Stmt::Expr(Expr::Assign(assign), _) => key(&assign.right),
+        Stmt::Expr(expr, _) => key(expr),
+        Stmt::Local(local) => local.init.as_ref().is_some_and(|init| key(&init.expr)),
+        _ => false,
+    }
+}
+
+/// Finds `let name = |…| …` closures making likely composable calls.
+struct LocalClosures<'a> {
+    callables: &'a mut Vec<Ident>,
+}
+
+impl<'ast> Visit<'ast> for LocalClosures<'_> {
+    fn visit_local(&mut self, local: &'ast syn::Local) {
+        if let (syn::Pat::Ident(name), Some(init)) = (&local.pat, &local.init)
+            && let Expr::Closure(closure) = &*init.expr
+        {
+            let mut likely = Likely { callables: self.callables, found: false };
+            likely.visit_expr(&closure.body);
+            if likely.found {
+                self.callables.push(name.ident.clone());
+            }
+        }
+        visit::visit_local(self, local);
+    }
+
+    fn visit_item(&mut self, _: &'ast Item) {}
 }
 
 impl VisitMut for Regions {
@@ -399,6 +448,14 @@ impl VisitMut for Regions {
             // make them `!Send`; `const` blocks can't call the runtime.
             Expr::Async(_) | Expr::Const(_) => {}
             Expr::Closure(closure) if closure.asyncness.is_some() => {}
+            // A closure making likely calls is a region of its own wherever it runs, so a call
+            // it makes conditionally (`flag.then(|| Row(1))`) doesn't lend its state to the next.
+            Expr::Closure(closure) => {
+                self.visit_expr_mut(&mut closure.body);
+                if self.likely_expr(&closure.body) {
+                    self.wrap_expr(&mut closure.body);
+                }
+            }
             _ => visit_mut::visit_expr_mut(self, expr),
         }
     }

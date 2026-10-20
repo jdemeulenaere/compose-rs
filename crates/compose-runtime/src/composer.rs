@@ -83,6 +83,9 @@ pub(crate) enum WalkStep {
     Restart(fn(&dyn Any), Option<Rc<dyn Any>>),
 }
 
+/// A restart group's kept arguments, when it has any.
+type Kept = Option<Rc<dyn Any>>;
+
 /// Where `slot_next` reserved a slot, so `slot_set` writes exactly there.
 #[derive(Clone, Copy)]
 pub(crate) struct SlotPosition {
@@ -142,7 +145,18 @@ impl Runtime {
             let mut nodes_before = 0;
             while current != parent.limit && current != NONE {
                 let group = &table[current];
-                if group.key == key && group.kind == kind && group.data_key == data_key {
+                // A restart group of another composable with the same key (another restart
+                // function: an instantiation of a generic composable, a same-named composable)
+                // doesn't match: it would lend its kept arguments and state.
+                let same_composable = match (group.restart, restart) {
+                    (Some(old), Some(new)) => std::ptr::fn_addr_eq(old, new),
+                    _ => true,
+                };
+                if group.key == key
+                    && group.kind == kind
+                    && group.data_key == data_key
+                    && same_composable
+                {
                     found = current;
                     break;
                 }
@@ -222,10 +236,7 @@ impl Runtime {
                     group.scope = scopes.alloc(composition, index);
                 }
                 let scope = scopes.get_mut(group.scope).expect("restart group without a scope");
-                // Another composable's group (same key, another restart function) can't skip.
-                let foreign = matches!((group.restart, restart),
-                    (Some(old), Some(new)) if !std::ptr::fn_addr_eq(old, new));
-                frame.forced = scope.invalid || foreign;
+                frame.forced = scope.invalid;
                 scope.invalid = false;
                 // The epoch is bumped only once the body is known to run (`begin_body`): until
                 // then the scope may still skip, and its reads from the last run stay current.
@@ -499,7 +510,7 @@ impl Runtime {
         &mut self,
         kept: Option<Rc<dyn Any>>,
         changed: bool,
-    ) -> Result<Option<Rc<dyn Any>>, (Option<Rc<dyn Any>>, ComposeError)> {
+    ) -> Result<Kept, (Kept, ComposeError)> {
         let Some(active) = self.active.filter(|active| active.composing) else {
             return Err((kept, ComposeError::NotComposing));
         };
@@ -677,9 +688,9 @@ fn start_group(kind: GroupKind, key: u64, data_key: u64) -> NodeStart {
     start
 }
 
-/// Starts a restart group for the composable whose restart function is `restart`. A group found
-/// with another restart function (another composable with the same key: two instantiations of a
-/// generic composable, same-named composables) can't be skipped: its body runs.
+/// Starts a restart group for the composable whose restart function is `restart`. A group with
+/// another restart function (another composable with the same key: two instantiations of a
+/// generic composable, same-named composables) doesn't match.
 pub(crate) fn start_restart_group_of(key: u64, restart: fn(&dyn Any)) {
     let (op, _) =
         with_runtime(|runtime| runtime.start_group(GroupKind::Restart, key, 0, Some(restart)));

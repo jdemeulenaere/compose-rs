@@ -14,8 +14,10 @@ impl ::compose::__private::ComposeArg for Todo {
 }
 #[derive(Clone, ComposeArg)]
 struct Wrapper<T>(T, u8);
-impl<T: ::compose::__private::ComposeArg> ::compose::__private::ComposeArg
-for Wrapper<T> {
+impl<T> ::compose::__private::ComposeArg for Wrapper<T>
+where
+    T: ::compose::__private::ComposeArg,
+{
     #[inline]
     fn same(&self, other: &Self) -> bool {
         ::compose::__private::ComposeArg::same(&self.0, &other.0)

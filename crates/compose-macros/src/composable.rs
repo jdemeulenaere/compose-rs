@@ -94,7 +94,8 @@ impl<'ast> Visit<'ast> for TypeScan {
     }
 
     fn visit_type_bare_fn(&mut self, _: &'ast syn::TypeBareFn) {
-        // `fn(&str)`: as above.
+        // `fn(&str)`: as above. A function pointer is callable.
+        self.fn_trait = true;
     }
 
     fn visit_bound_lifetimes(&mut self, _: &'ast syn::BoundLifetimes) {
@@ -111,9 +112,37 @@ fn scan(ty: &Type) -> TypeScan {
 struct Param {
     name: Ident,
     ty: Type,
+    /// The parameter's `#[cfg]`s, which its rebinding needs too.
+    cfgs: Vec<syn::Attribute>,
     /// A parameter written as a pattern (`(x, y): (i32, i32)`) is renamed, and its pattern
     /// bound at the start of the body.
     pattern: Option<Pat>,
+}
+
+/// The generic type parameters bounded by `Fn`, `FnMut` or `FnOnce`.
+fn generic_function_types(generics: &syn::Generics) -> Vec<Ident> {
+    let bounded = |bounds: &syn::punctuated::Punctuated<syn::TypeParamBound, syn::Token![+]>| {
+        bounds.iter().any(|bound| {
+            matches!(bound, syn::TypeParamBound::Trait(bound)
+                if bound.path.segments.last().is_some_and(|segment|
+                    segment.ident == "Fn" || segment.ident == "FnMut" || segment.ident == "FnOnce"))
+        })
+    };
+    let mut names: Vec<Ident> = generics
+        .type_params()
+        .filter(|param| bounded(&param.bounds))
+        .map(|param| param.ident.clone())
+        .collect();
+    for predicate in generics.where_clause.iter().flat_map(|clause| &clause.predicates) {
+        if let syn::WherePredicate::Type(predicate) = predicate
+            && let Type::Path(path) = &predicate.bounded_ty
+            && let Some(ident) = path.path.get_ident()
+            && bounded(&predicate.bounds)
+        {
+            names.push(ident.clone());
+        }
+    }
+    names
 }
 
 fn is_unit(ty: &Type) -> bool {
@@ -124,6 +153,13 @@ fn transform(attr: TokenStream, item: TokenStream, scope: &str) -> syn::Result<T
     let options = parse_options(attr)?;
     let mut function: ItemFn = syn::parse2(item)?;
     let sig = &mut function.sig;
+    if let Some(unsafety) = sig.unsafety {
+        return Err(Error::new(
+            unsafety.span(),
+            "a composable can't be `unsafe`: the runtime calls it again from safe code when it \
+             restarts; make it safe and put the `unsafe` block inside",
+        ));
+    }
     if let Some(constness) = sig.constness {
         return Err(Error::new(
             constness.span(),
@@ -187,7 +223,8 @@ fn transform(attr: TokenStream, item: TokenStream, scope: &str) -> syn::Result<T
                 (name, Some(pattern))
             }
         };
-        params.push(Param { name, ty: (*typed.ty).clone(), pattern });
+        let cfgs = typed.attrs.iter().filter(|attr| attr.path().is_ident("cfg")).cloned().collect();
+        params.push(Param { name, ty: (*typed.ty).clone(), cfgs, pattern });
     }
     let returns_value = match &sig.output {
         ReturnType::Default => false,
@@ -203,9 +240,16 @@ fn transform(attr: TokenStream, item: TokenStream, scope: &str) -> syn::Result<T
         ));
     }
 
+    // Parameters called as composable lambdas: function-typed, or of a generic type bounded by a
+    // function trait.
+    let generic_functions = generic_function_types(&function.sig.generics);
     let callables: Vec<Ident> = params
         .iter()
-        .filter(|param| scan(&param.ty).fn_trait)
+        .filter(|param| {
+            scan(&param.ty).fn_trait
+                || matches!(&param.ty, Type::Path(path) if path.qself.is_none()
+                    && path.path.get_ident().is_some_and(|ident| generic_functions.contains(ident)))
+        })
         .map(|param| param.name.clone())
         .collect();
     // The group key: a hash of the crate, the file and the declaration, computed here so the
@@ -218,7 +262,8 @@ fn transform(attr: TokenStream, item: TokenStream, scope: &str) -> syn::Result<T
     let rebinds = params.iter().filter_map(|param| {
         let pattern = param.pattern.as_ref()?;
         let name = &param.name;
-        Some(quote! { let #pattern = #name; })
+        let cfgs = &param.cfgs;
+        Some(quote! { #(#cfgs)* let #pattern = #name; })
     });
     let stmts: &Vec<Stmt> = &function.block.stmts;
     let name = &function.sig.ident;
@@ -273,14 +318,20 @@ fn transform(attr: TokenStream, item: TokenStream, scope: &str) -> syn::Result<T
                 #composer.skip_to_group_end();
                 return;
             }
-            #(#rebinds)*
-            #(#stmts)*
+            // The body in a block of its own: an item it declares (`use other::Name;`) can't
+            // shadow the composable for the restart function above.
+            {
+                #(#rebinds)*
+                #(#stmts)*
+            }
         }
     } else {
         quote! {
             let #group = ::compose::__private::ReplaceGroup::start(#key);
-            #(#rebinds)*
-            #(#stmts)*
+            {
+                #(#rebinds)*
+                #(#stmts)*
+            }
         }
     };
 

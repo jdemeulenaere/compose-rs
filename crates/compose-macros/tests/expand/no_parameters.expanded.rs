@@ -10,6 +10,8 @@ fn Counter() {
         __composer.skip_to_group_end();
         return;
     }
-    let count = remember(|| mutable_state_of(0));
-    Text(format!("Count: {}", count.get()));
+    {
+        let count = remember(|| mutable_state_of(0));
+        Text(format!("Count: {}", count.get()));
+    }
 }

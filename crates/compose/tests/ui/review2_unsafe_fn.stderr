@@ -1,0 +1,5 @@
+error: a composable can't be `unsafe`: the runtime calls it again from safe code when it restarts; make it safe and put the `unsafe` block inside
+  --> tests/ui/review2_unsafe_fn.rs:10:1
+   |
+10 | unsafe fn Peek(address: usize) {
+   | ^^^^^^

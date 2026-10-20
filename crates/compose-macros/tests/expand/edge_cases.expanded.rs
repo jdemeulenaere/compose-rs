@@ -28,26 +28,36 @@ fn Filtered(ids: Rc<Vec<u32>>, on_change: Rc<dyn Fn(&str)>) {
         return;
     }
     {
-        let __compose_region = ::compose::__private::region(9868098601948503029u64);
-        for &id in ids.iter() {
-            if id == 0 {
-                continue;
-            }
-            key(id, || Row(id));
-        }
-    }
-    let Some(first) = ids.first() else {
-        let __compose_region = ::compose::__private::region(9868098601948503030u64);
         {
-            Row(0);
-            return;
+            let __compose_region = ::compose::__private::region(9868098601948503030u64);
+            for &id in ids.iter() {
+                if id == 0 {
+                    continue;
+                }
+                key(
+                    id,
+                    || {
+                        let __compose_region = ::compose::__private::region(
+                            9868098601948503029u64,
+                        );
+                        Row(id)
+                    },
+                );
+            }
         }
-    };
-    let task = async move {
-        if *first > 0 {
-            Event::Clicked(*first).send().await;
-        }
-    };
+        let Some(first) = ids.first() else {
+            let __compose_region = ::compose::__private::region(9868098601948503031u64);
+            {
+                Row(0);
+                return;
+            }
+        };
+        let task = async move {
+            if *first > 0 {
+                Event::Clicked(*first).send().await;
+            }
+        };
+    }
 }
 #[allow(non_snake_case)]
 fn Conditional(
@@ -58,6 +68,8 @@ fn Conditional(
     let __compose_group = ::compose::__private::ReplaceGroup::start(
         18363063588487543881u64,
     );
-    let (ref mut count, step) = __compose_argument1;
-    *count += step;
+    {
+        let (ref mut count, step) = __compose_argument1;
+        *count += step;
+    }
 }

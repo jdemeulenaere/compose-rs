@@ -3,7 +3,7 @@
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote, quote_spanned};
 use syn::spanned::Spanned;
-use syn::{Data, DeriveInput, Error, Fields, GenericParam, parse_quote};
+use syn::{Data, DeriveInput, Error, Fields, parse_quote};
 
 pub(crate) fn expand(input: TokenStream) -> TokenStream {
     match derive(input) {
@@ -20,11 +20,36 @@ fn all(conditions: Vec<TokenStream>) -> TokenStream {
     if conditions.is_empty() { quote!(true) } else { quote!(#(#conditions)&&*) }
 }
 
+/// Whether tokens mention one of the given identifiers.
+fn mentions(tokens: TokenStream, names: &[String]) -> bool {
+    tokens.into_iter().any(|token| match token {
+        proc_macro2::TokenTree::Ident(ident) => names.iter().any(|name| ident == name),
+        proc_macro2::TokenTree::Group(group) => mentions(group.stream(), names),
+        _ => false,
+    })
+}
+
 fn derive(input: TokenStream) -> syn::Result<TokenStream> {
     let mut input: DeriveInput = syn::parse2(input)?;
-    for param in &mut input.generics.params {
-        if let GenericParam::Type(param) = param {
-            param.bounds.push(parse_quote!(::compose::__private::ComposeArg));
+    // Bounds on the fields that use a type parameter (`T`, `Option<T>`), not on the parameters:
+    // `Rc<T>` is `ComposeArg` for any `T`, so `Shared<Vec<u32>>` works.
+    let parameters: Vec<String> =
+        input.generics.type_params().map(|param| param.ident.to_string()).collect();
+    let fields: Vec<syn::Type> = match &input.data {
+        Data::Struct(data) => data.fields.iter().map(|field| field.ty.clone()).collect(),
+        Data::Enum(data) => data
+            .variants
+            .iter()
+            .flat_map(|variant| variant.fields.iter().map(|field| field.ty.clone()))
+            .collect(),
+        Data::Union(_) => Vec::new(),
+    };
+    let generic_fields: Vec<syn::Type> =
+        fields.into_iter().filter(|ty| mentions(quote!(#ty), &parameters)).collect();
+    if !generic_fields.is_empty() {
+        let clause = input.generics.make_where_clause();
+        for ty in generic_fields {
+            clause.predicates.push(parse_quote!(#ty: ::compose::__private::ComposeArg));
         }
     }
     // Fields of a packed struct can't be borrowed in place: compare copies (they must be `Copy`).

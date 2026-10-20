@@ -27,8 +27,10 @@ fn Pair(__compose_argument0: (i32, i32), _unused: bool) {
         __composer.skip_to_group_end();
         return;
     }
-    let (first, second) = __compose_argument0;
-    Text(format!("{first}, {second}"));
+    {
+        let (first, second) = __compose_argument0;
+        Text(format!("{first}, {second}"));
+    }
 }
 #[allow(non_snake_case)]
 fn List<T: ComposeArg + Clone + Display>(items: Rc<Vec<T>>) {
@@ -53,9 +55,11 @@ fn List<T: ComposeArg + Clone + Display>(items: Rc<Vec<T>>) {
         return;
     }
     {
-        let __compose_region = ::compose::__private::region(18251905653550721706u64);
-        for item in items.iter() {
-            Text(item.to_string());
+        {
+            let __compose_region = ::compose::__private::region(18251905653550721706u64);
+            for item in items.iter() {
+                Text(item.to_string());
+            }
         }
     }
 }

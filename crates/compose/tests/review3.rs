@@ -1,6 +1,7 @@
 //! Regression tests from the third runtime review (after 3733426) that need `#[composable]`.
 
 #![allow(non_snake_case)]
+#![allow(clippy::redundant_closure)] // deliberate: a closure, as user code writes it
 
 use std::cell::Cell;
 use std::panic::{AssertUnwindSafe, catch_unwind};

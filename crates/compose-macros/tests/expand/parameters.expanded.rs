@@ -25,5 +25,7 @@ pub fn Greeting(name: String, count: i32) {
         __composer.skip_to_group_end();
         return;
     }
-    Text(format!("Hello {name}: {count}"));
+    {
+        Text(format!("Hello {name}: {count}"));
+    }
 }

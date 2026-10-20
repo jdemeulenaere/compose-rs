@@ -49,10 +49,16 @@ fn declaration_scope() -> String {
     // Cargo passes a workspace member's sources relative to the workspace root (rustc's working
     // directory) and a dependency's as absolute paths: resolve, then make relative to the package.
     let file = std::env::current_dir().map(|cwd| cwd.join(&file)).unwrap_or(file);
-    let file = match std::env::var_os("CARGO_MANIFEST_DIR") {
-        Some(manifest) => file.strip_prefix(manifest).map(Into::into).unwrap_or(file),
-        None => file,
+    let relative = |root: Option<std::ffi::OsString>, prefix: &str| {
+        let root = std::path::PathBuf::from(root?);
+        let rest = file.strip_prefix(&root).ok()?;
+        Some(std::path::Path::new(prefix).join(rest))
     };
+    // Relative to the package; else to the build script's output; else (a `macro_rules!` of
+    // another crate) only the file's name, so keys never hold a machine's absolute path.
+    let file = relative(std::env::var_os("CARGO_MANIFEST_DIR"), "")
+        .or_else(|| relative(std::env::var_os("OUT_DIR"), "OUT_DIR"))
+        .unwrap_or_else(|| file.file_name().map_or_else(Default::default, Into::into));
     let file: Vec<String> =
         file.components().map(|part| part.as_os_str().to_string_lossy().into_owned()).collect();
     format!("{krate}::{}", file.join("/"))
