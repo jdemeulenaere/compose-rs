@@ -1,0 +1,8 @@
+# Linker settings for a fast edit-build loop (docs/08-fast-builds.md).
+#
+# - macOS: Apple's linker from Xcode 15 and later is already fast; nothing to do.
+# - Linux x86_64: rustc uses rust-lld by default since Rust 1.90; nothing to do.
+# - Windows MSVC: use the bundled rust-lld instead of link.exe.
+
+[target.x86_64-pc-windows-msvc]
+linker = "rust-lld.exe"

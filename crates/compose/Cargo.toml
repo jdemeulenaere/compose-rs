@@ -1,0 +1,10 @@
+[package]
+name = "compose"
+description = "compose-rs: Jetpack Compose's model in Rust. Facade over the compose-* crates."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+compose-runtime.workspace = true

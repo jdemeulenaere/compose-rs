@@ -1,0 +1,28 @@
+[workspace]
+resolver = "3"
+members = ["crates/compose", "crates/compose-runtime", "benchmarks"]
+# The benchmarks pull in criterion; keep them out of a plain `cargo build` / `cargo test`.
+default-members = ["crates/compose", "crates/compose-runtime"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.86"
+publish = false
+
+[workspace.dependencies]
+compose-runtime = { path = "crates/compose-runtime" }
+
+# Fast edit-build loop (docs/08-fast-builds.md).
+[profile.dev]
+opt-level = 0
+debug = "line-tables-only"
+incremental = true
+split-debuginfo = "unpacked"
+
+[profile.dev.package."*"]
+opt-level = 1
+debug = false
+
+[profile.bench]
+debug = "line-tables-only"

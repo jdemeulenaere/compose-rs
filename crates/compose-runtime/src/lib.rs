@@ -1,0 +1,50 @@
+//! The composition runtime of compose-rs, as Jetpack Compose's `androidx.compose.runtime`: a
+//! slot table of keyed groups, a composer that generated code drives, restart scopes, observable
+//! state, `remember`, effects and compositions. It knows nothing about UI; it talks to a node
+//! tree through the [`Applier`] trait.
+//!
+//! See `docs/04-runtime.md` and `docs/05-state.md` for the design.
+//!
+//! # Threads
+//!
+//! Each thread has its own runtime: compositions, scopes and state cells are thread-bound, and
+//! their handles are `!Send`. One pass runs at a time per thread.
+
+mod applier;
+mod compose_arg;
+mod composer;
+mod composition;
+mod effects;
+mod error;
+mod hash;
+mod node_tree;
+mod remember;
+mod runtime;
+mod scope;
+mod slot_table;
+mod state;
+
+pub use applier::{Applier, NodeRef};
+pub use compose_arg::ComposeArg;
+pub use composer::{Composer, current, current_recompose_scope};
+pub use composition::Composition;
+pub use effects::{DisposableEffect, DisposableEffectResult, DisposableEffectScope, SideEffect};
+pub use error::ComposeError;
+pub use hash::{KeyHasher, hash_key, key_of};
+pub use node_tree::NodeTree;
+pub use remember::{
+    Observed, Remember, RememberObserver, key, remember, remember_keyed, remember_observer,
+    remember_observer_keyed,
+};
+pub use scope::RecomposeScope;
+pub use state::{
+    MutableState, MutationPolicy, NeverEqualPolicy, OwnedState, State, StructuralEqualityPolicy,
+    live_state_count, mutable_state_of, mutable_state_of_with, never_equal_policy,
+    structural_equality_policy,
+};
+
+/// The number of live recompose scopes on this thread. For tests.
+#[doc(hidden)]
+pub fn live_scope_count() -> usize {
+    runtime::with_runtime(|runtime| runtime.scopes.live_count())
+}

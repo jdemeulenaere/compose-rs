@@ -1,0 +1,9 @@
+[package]
+name = "compose-runtime"
+description = "The composition runtime of compose-rs: slot table, composer, recompose scopes and state."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
