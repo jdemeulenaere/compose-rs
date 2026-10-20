@@ -572,6 +572,7 @@ fn warm_reader_capacity() {
 }
 
 fn fuzz_seed(seed: u64, steps: usize, warm: bool) -> Result<(), String> {
+    let (states_before, scopes_before) = (live_state_count(), live_scope_count());
     let owners: Vec<OwnedState<u32>> = (0..SHARED_COUNT).map(|_| mutable_state_of(0)).collect();
     FUZZ_SHARED.with(|shared| *shared.borrow_mut() = owners.iter().map(|o| o.handle()).collect());
     if warm {
@@ -601,6 +602,13 @@ fn fuzz_seed(seed: u64, steps: usize, warm: bool) -> Result<(), String> {
     drop(composition);
     drop(root);
     drop(owners);
+    let (states, scopes) = (live_state_count(), live_scope_count());
+    if (states, scopes) != (states_before, scopes_before) {
+        return Err(format!(
+            "seed {seed}: {states} state cells and {scopes} scopes live after dropping \
+             everything, {states_before} and {scopes_before} before"
+        ));
+    }
     Ok(())
 }
 
