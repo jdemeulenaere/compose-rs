@@ -121,14 +121,16 @@ impl Cells {
 
     /// Frees the cells retired before the pass that just ended. Returns their values, to be
     /// dropped outside the borrow.
-    pub fn end_pass(&mut self) -> Vec<CellValue> {
-        if self.freeing.is_empty() {
-            return Vec::new();
-        }
-        let mut freeing = std::mem::take(&mut self.freeing);
-        let values = freeing.drain(..).filter_map(|id| self.free(id)).collect();
-        self.freeing = freeing;
-        values
+    /// Takes the cells retired before the pass that just ended: they are freed once its
+    /// end-of-pass work has run (`free`), so cleanups still see them, and a pass started by
+    /// that work doesn't see them.
+    pub fn end_pass(&mut self) -> Vec<StateId> {
+        std::mem::take(&mut self.freeing)
+    }
+
+    /// Frees cells taken by `end_pass`. Returns their values, to be dropped outside the borrow.
+    pub fn free_all(&mut self, ids: Vec<StateId>) -> Vec<CellValue> {
+        ids.into_iter().filter_map(|id| self.free(id)).collect()
     }
 
     /// After a panic in a pass: the cells it would have freed wait for the next one.
@@ -145,16 +147,26 @@ impl Cells {
         self.held_by_passes = held;
     }
 
-    /// The disposals ended: frees the cells they retired, and with `all` (no composition is
-    /// left to run the pass that would free them) every retired cell.
+    /// The disposals ended: the cells they retired wait for the next pass, as any retired cell
+    /// (they may not belong to the disposed compositions). With `all` (no composition is left to
+    /// run that pass), frees every retired cell.
     pub fn free_held_by_disposals(&mut self, all: bool) -> Vec<CellValue> {
         let mut ids = std::mem::take(&mut self.held_by_disposals);
-        if all {
+        if !all {
+            self.retired.append(&mut ids);
+            return Vec::new();
+        }
+        {
             ids.append(&mut self.retired);
             ids.append(&mut self.freeing);
             ids.append(&mut self.held_by_passes);
         }
         ids.into_iter().filter_map(|id| self.free(id)).collect()
+    }
+
+    /// Cells taken by `end_pass` whose pass couldn't free them (a panic): they wait.
+    pub fn retire_all(&mut self, mut ids: Vec<StateId>) {
+        self.retired.append(&mut ids);
     }
 
     /// After a panic in a disposal: its cells wait with the others.
@@ -273,7 +285,7 @@ fn invalidate_readers(id: StateId) {
             requested |= invalidate_scope_parts(scopes, compositions, frame_requests, reader.scope);
             true
         });
-        requested
+        requested || crate::runtime::frames_requested(runtime)
     });
     if requested {
         request_frames();

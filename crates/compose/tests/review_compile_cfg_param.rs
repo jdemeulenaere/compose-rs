@@ -1,4 +1,5 @@
-//! Review: valid code that `#[composable]` makes fail to compile.
+//! Regression test from the phase B review: valid code that `#[composable]` used to fail to
+//! compile.
 //!
 //! A `#[cfg]`-ed parameter stays `#[cfg]`-ed in the signature, but the macro uses it
 //! unconditionally in the kept tuple, the comparisons and the restart call. When the cfg is off:

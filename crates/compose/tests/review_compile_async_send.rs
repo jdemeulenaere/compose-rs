@@ -1,4 +1,5 @@
-//! Review: valid code that `#[composable]` makes fail to compile.
+//! Regression test from the phase B review: valid code that `#[composable]` used to fail to
+//! compile.
 //!
 //! The region pass descends into `async` blocks. A branch there containing a PascalCase call
 //! (here an enum variant, `Event::Clicked`) gets a `region` guard, which holds a `!Send`

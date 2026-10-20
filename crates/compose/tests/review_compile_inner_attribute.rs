@@ -1,4 +1,5 @@
-//! Review: valid code that `#[composable]` makes fail to compile.
+//! Regression test from the phase B review: valid code that `#[composable]` used to fail to
+//! compile.
 //!
 //! syn parses a body's inner attributes (`#![allow(…)]`) into `ItemFn::attrs`; the macro prints
 //! all of `attrs` before the `fn`, so the inner attribute lands outside the body: "an inner

@@ -103,7 +103,9 @@ impl RecomposeScope {
     /// Schedules the scope's composable to run again in the next pass. Does nothing if the scope
     /// has left the composition.
     pub fn invalidate(&self) {
-        let requested = with_runtime(|runtime| invalidate_scope(runtime, self.id));
+        let requested = with_runtime(|runtime| {
+            invalidate_scope(runtime, self.id) || crate::runtime::frames_requested(runtime)
+        });
         if requested {
             request_frames();
         }

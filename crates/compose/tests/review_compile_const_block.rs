@@ -1,4 +1,5 @@
-//! Review: valid code that `#[composable]` makes fail to compile.
+//! Regression test from the phase B review: valid code that `#[composable]` used to fail to
+//! compile.
 //!
 //! The region pass descends into inline `const { … }` blocks. A branch there with a PascalCase
 //! call (a tuple-struct constructor, `Dp(…)`, which is `const`) gets a `region(…)` call, which

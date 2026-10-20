@@ -428,7 +428,11 @@ impl Runtime {
         let (table, deferred) = (&mut data.table, &mut data.deferred);
         let frame = frames.last_mut().expect("walk frame");
         if frame.mode != Mode::Restart {
-            misuse(ComposeError::UnclosedGroups)
+            misuse(if self.abandoned_groups {
+                ComposeError::CaughtPanic
+            } else {
+                ComposeError::UnclosedGroups
+            })
         }
         let mut op = NodeOp::None;
         if frame.cursor != frame.limit {
@@ -489,19 +493,28 @@ impl Runtime {
 
     /// Puts the kept arguments back; `changed` means the body runs. Returns what was there (only
     /// after a misuse), to be dropped outside the borrow.
+    /// Puts the kept arguments back; `changed` means the body runs. Returns what was there (only
+    /// after a misuse), to be dropped outside the borrow; on misuse, gives `kept` back too.
     pub(crate) fn put_kept(
         &mut self,
         kept: Option<Rc<dyn Any>>,
         changed: bool,
-    ) -> Option<Rc<dyn Any>> {
-        let composition = self.check_composing();
-        let group = self.body_frame().group;
-        let group = &mut self.compositions.data_mut(composition).table[group];
+    ) -> Result<Option<Rc<dyn Any>>, (Option<Rc<dyn Any>>, ComposeError)> {
+        let Some(active) = self.active.filter(|active| active.composing) else {
+            return Err((kept, ComposeError::NotComposing));
+        };
+        let Some(frame) = self.frames.last().filter(|frame| frame.mode == Mode::Normal) else {
+            return Err((kept, ComposeError::UnbalancedGroups));
+        };
+        let group = &mut self.compositions.data_mut(active.composition.index).table[frame.group];
+        if group.kind != GroupKind::Restart {
+            return Err((kept, ComposeError::UnbalancedGroups));
+        }
         let old = std::mem::replace(&mut group.kept, kept);
         if changed {
             self.begin_body();
         }
-        old
+        Ok(old)
     }
 
     /// Reserves the next slot of the current group, and returns its value if it holds a value
@@ -523,20 +536,28 @@ impl Runtime {
 
     /// Writes a slot reserved by [`slot_next`]. Returns the value it replaces, if any, to be
     /// forgotten at the end of the pass.
+    /// On misuse, gives the value back, to be dropped outside the borrow before panicking.
     pub(crate) fn slot_set(
         &mut self,
         position: SlotPosition,
         value: SlotValue,
         type_name: &'static str,
-    ) {
-        let composition = self.check_composing();
+    ) -> Result<(), (SlotValue, ComposeError)> {
+        let Some(active) = self.active.filter(|active| active.composing) else {
+            return Err((value, ComposeError::NotComposing));
+        };
+        let composition = active.composition.index;
         let depth = self.frames.len() as u32;
-        let frame = self.body_frame();
-        if depth != position.depth
-            || frame.group != position.group
-            || position.index >= frame.slot_cursor
-        {
-            misuse(ComposeError::SlotOutOfOrder)
+        let in_order = self.frames.last().is_some_and(|frame| {
+            frame.mode == Mode::Normal
+                && !frame.skipped
+                && depth == position.depth
+                && frame.group == position.group
+                && position.index < frame.slot_cursor
+        });
+        let len = self.compositions.data(composition).table[position.group].slots.len();
+        if !in_order || position.index as usize > len {
+            return Err((value, ComposeError::SlotOutOfOrder));
         }
         let data = self.compositions.data_mut(composition);
         if let SlotValue::Observer(observer) = &value {
@@ -546,12 +567,11 @@ impl Runtime {
         let index = position.index as usize;
         if index == slots.len() {
             slots.push(Slot { value, type_name });
-        } else if index < slots.len() {
+        } else {
             let old = std::mem::replace(&mut slots[index], Slot { value, type_name });
             data.deferred.removed_values.push(old.value);
-        } else {
-            misuse(ComposeError::SlotOutOfOrder)
         }
+        Ok(())
     }
 
     pub(crate) fn record_side_effect(&mut self, effect: DeferredEffect) {
@@ -689,8 +709,13 @@ fn take_kept() -> Option<Rc<dyn Any>> {
 }
 
 fn put_kept(kept: Option<Rc<dyn Any>>, changed: bool) {
-    let old = with_runtime(|runtime| runtime.put_kept(kept, changed));
-    drop(old);
+    match with_runtime(|runtime| runtime.put_kept(kept, changed)) {
+        Ok(old) => drop(old),
+        Err((kept, error)) => {
+            drop(kept);
+            misuse(error)
+        }
+    }
 }
 
 fn applier_for_use() -> Rc<std::cell::RefCell<dyn crate::applier::ErasedApplier>> {

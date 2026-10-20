@@ -8,6 +8,7 @@ use std::rc::Rc;
 
 use crate::compose_arg::ComposeArg;
 use crate::composer::{SlotPosition, current};
+use crate::error::misuse;
 use crate::hash::{hash_key, key_of};
 use crate::runtime::with_runtime;
 use crate::slot_table::SlotValue;
@@ -57,7 +58,13 @@ fn slot_next(type_id: TypeId) -> (SlotPosition, Option<Rc<dyn Any>>) {
 }
 
 fn slot_set(position: SlotPosition, value: SlotValue, type_name: &'static str) {
-    with_runtime(|runtime| runtime.slot_set(position, value, type_name))
+    if let Err((value, error)) =
+        with_runtime(|runtime| runtime.slot_set(position, value, type_name))
+    {
+        // The user's value drops outside the runtime's borrow, then the misuse panics.
+        drop(value);
+        misuse(error)
+    }
 }
 
 fn downcast<T: 'static>(value: &Rc<dyn Any>) -> &T {

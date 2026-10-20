@@ -1,8 +1,8 @@
 //! What `#[composable]` generated code calls. Not a public API.
 //!
 //! Groups are guards closed on drop, so `return`, `break`, `continue` and `?` in a composable's
-//! body keep them balanced. While a panic unwinds they don't close: the pass is poisoned anyway,
-//! and touching the runtime then could panic again.
+//! body keep them balanced. While a panic unwinds through them they don't close: the pass is
+//! poisoned anyway, and touching the runtime then could panic again.
 
 use std::any::Any;
 
@@ -10,24 +10,33 @@ pub use crate::compose_arg::ComposeArg;
 pub use crate::composer::{Composer, current};
 pub use crate::hash::key_of;
 
+/// Whether a panic that started after the guard was created is unwinding through it. A pass may
+/// run while an unrelated panic unwinds (a `Drop` writing state, with an immediate frame
+/// requester): its guards end their groups as usual.
+#[inline]
+fn unwound(unwinding_at_start: bool) -> bool {
+    !unwinding_at_start && std::thread::panicking()
+}
+
 /// The restart group of a restartable composable.
 pub struct RestartGroup {
     composer: Composer,
     restart: fn(&dyn Any),
+    unwinding: bool,
 }
 
 impl RestartGroup {
     #[inline]
     pub fn start(composer: Composer, key: u64, restart: fn(&dyn Any)) -> RestartGroup {
         crate::composer::start_restart_group_of(key, restart);
-        RestartGroup { composer, restart }
+        RestartGroup { composer, restart, unwinding: std::thread::panicking() }
     }
 }
 
 impl Drop for RestartGroup {
     #[inline]
     fn drop(&mut self) {
-        if std::thread::panicking() {
+        if unwound(self.unwinding) {
             crate::composer::abandon_group();
         } else {
             self.composer.end_restart_group(self.restart);
@@ -38,6 +47,7 @@ impl Drop for RestartGroup {
 /// The group of a non-restartable composable.
 pub struct ReplaceGroup {
     composer: Composer,
+    unwinding: bool,
 }
 
 impl ReplaceGroup {
@@ -45,14 +55,14 @@ impl ReplaceGroup {
     pub fn start(key: u64) -> ReplaceGroup {
         let composer = current();
         composer.start_replace_group(key);
-        ReplaceGroup { composer }
+        ReplaceGroup { composer, unwinding: std::thread::panicking() }
     }
 }
 
 impl Drop for ReplaceGroup {
     #[inline]
     fn drop(&mut self) {
-        if std::thread::panicking() {
+        if unwound(self.unwinding) {
             crate::composer::abandon_group();
         } else {
             self.composer.end_group();
@@ -64,6 +74,7 @@ impl Drop for ReplaceGroup {
 /// macro's guess may put one in a handler closure that runs later, outside any pass.
 pub struct Region {
     composer: Option<Composer>,
+    unwinding: bool,
 }
 
 #[inline]
@@ -72,14 +83,14 @@ pub fn region(key: u64) -> Region {
     if let Some(composer) = composer {
         composer.start_replace_group(key);
     }
-    Region { composer }
+    Region { composer, unwinding: std::thread::panicking() }
 }
 
 impl Drop for Region {
     #[inline]
     fn drop(&mut self) {
         if let Some(composer) = self.composer {
-            if std::thread::panicking() {
+            if unwound(self.unwinding) {
                 crate::composer::abandon_group();
             } else {
                 composer.end_group();

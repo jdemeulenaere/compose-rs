@@ -1,4 +1,5 @@
-//! Review: valid code that `#[composable]` makes fail to compile.
+//! Regression test from the phase B review: valid code that `#[composable]` used to fail to
+//! compile.
 //!
 //! A parameter written as a pattern is renamed (`__compose_argument0`, immutable) and rebound
 //! with `let <pattern> = __compose_argument0;` (composable.rs, `rebinds`). The initializer is a

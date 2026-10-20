@@ -39,6 +39,9 @@ impl Composition {
         let id = with_runtime(|runtime| {
             runtime.compositions.alloc(CompositionData::new(applier, root_node))
         });
+        // Registered after the runtime, so (thread-locals being destroyed in reverse order) it
+        // disposes the compositions left at thread exit while the runtime still works.
+        let _ = EXIT_GUARD.try_with(|_| {});
         Composition { id, _not_send: PhantomData }
     }
 
@@ -70,8 +73,18 @@ impl Composition {
     /// was: the host's way to schedule a frame.
     pub fn set_frame_requester(&self, requester: impl Fn() + 'static) {
         let requester: Rc<dyn Fn()> = Rc::new(requester);
-        let old = with_runtime(|runtime| self.data(runtime).frame_requester.replace(requester));
+        let old = with_runtime(|runtime| {
+            let data = self.data(runtime);
+            let old = data.frame_requester.replace(requester.clone());
+            // Invalidated before a requester was set: it gets the frame now.
+            if data.has_invalidations() {
+                data.pending = true;
+                runtime.frame_requests.push(requester);
+            }
+            old
+        });
         drop(old);
+        request_frames();
     }
 
     /// Runs `f` with the applier, as type `A`.
@@ -163,6 +176,25 @@ impl Drop for Composition {
             return;
         };
         disposal.run();
+    }
+}
+
+thread_local! {
+    static EXIT_GUARD: ExitGuard = const { ExitGuard };
+}
+
+/// Disposes the compositions still alive when the thread exits (one kept in a thread-local, or
+/// leaked), so their values' `Drop` can still use state.
+struct ExitGuard;
+
+impl Drop for ExitGuard {
+    fn drop(&mut self) {
+        let Some(ids) = try_with_runtime(|runtime| runtime.compositions.live_ids()) else { return };
+        for id in ids {
+            if let Some(Some(disposal)) = try_with_runtime(|runtime| Disposal::take(runtime, id)) {
+                disposal.run();
+            }
+        }
     }
 }
 
@@ -295,7 +327,7 @@ impl Pass {
         });
         apply_node_op(op);
         flush_node_moves();
-        let (mut deferred, freed) = with_runtime(|runtime| {
+        let (mut deferred, freeing) = with_runtime(|runtime| {
             runtime.active = None;
             runtime.finishing += 1;
             let data = runtime.compositions.get_mut(self.id).expect("a live composition");
@@ -304,8 +336,11 @@ impl Pass {
         });
         // From here on the slot table is consistent: a panic in an effect doesn't poison it.
         self.finished = true;
-        let finishing = Finishing(self.id);
+        let mut finishing = Finishing { id: self.id, freeing };
         apply_deferred(&applier, &mut deferred, true);
+        // Rule R2: the cells retired before this pass go once its cleanups and effects ran.
+        let freeing = std::mem::take(&mut finishing.freeing);
+        let freed = with_runtime(|runtime| runtime.cells.free_all(freeing));
         drop(freed);
         drop(finishing);
         with_runtime(|runtime| {
@@ -320,16 +355,22 @@ impl Pass {
 }
 
 /// A pass applying its end-of-pass work; ends it, even when an effect panics.
-struct Finishing(CompositionId);
+struct Finishing {
+    id: CompositionId,
+    /// The cells to free once the work has run; after a panic, they wait for the next pass.
+    freeing: Vec<crate::state::StateId>,
+}
 
 impl Drop for Finishing {
     fn drop(&mut self) {
+        let freeing = std::mem::take(&mut self.freeing);
         try_with_runtime(|runtime| {
+            runtime.cells.retire_all(freeing);
             runtime.finishing -= 1;
             if runtime.finishing == 0 {
                 runtime.cells.release_held_by_passes();
             }
-            if let Some(data) = runtime.compositions.get_mut(self.0) {
+            if let Some(data) = runtime.compositions.get_mut(self.id) {
                 data.finishing = false;
                 // Invalidated while it finished: a frame for it.
                 if data.has_invalidations() && !data.pending {

@@ -128,20 +128,25 @@ fn reentered() -> ! {
 /// disposal is in progress they wait: a requester that recomposes at once must not start a pass
 /// in the middle of one, and Compose runs all of a pass's effects before the next pass. The pass
 /// or disposal calls this again when it ends.
+///
+/// Requests are taken one at a time, so a requester that panics loses nothing for the others;
+/// requests that couldn't be delivered (a panic ended the work that held them) are delivered the
+/// next time a state write or invalidation asks for frames.
 pub(crate) fn request_frames() {
-    let Some(mut requests) = with_runtime(|runtime| {
-        (!runtime.is_busy()).then(|| std::mem::take(&mut runtime.frame_requests))
-    }) else {
-        return;
-    };
-    for request in requests.drain(..) {
+    while let Some(request) = with_runtime(|runtime| {
+        if runtime.is_busy() || runtime.frame_requests.is_empty() {
+            None
+        } else {
+            Some(runtime.frame_requests.remove(0))
+        }
+    }) {
         request();
     }
-    with_runtime(|runtime| {
-        if runtime.frame_requests.is_empty() {
-            runtime.frame_requests = requests;
-        }
-    });
+}
+
+/// Whether frame requests are waiting: after an invalidation, `request_frames` is due.
+pub(crate) fn frames_requested(runtime: &Runtime) -> bool {
+    !runtime.frame_requests.is_empty()
 }
 
 /// Marks a scope invalid and its ancestors dirty. Returns whether a frame request was queued.
@@ -336,6 +341,16 @@ impl Compositions {
 
     pub fn live(&self) -> usize {
         self.live
+    }
+
+    pub fn live_ids(&self) -> Vec<CompositionId> {
+        (self.entries.iter().enumerate())
+            .filter(|(_, entry)| entry.data.is_some())
+            .map(|(index, entry)| CompositionId {
+                index: index as u32,
+                generation: entry.generation,
+            })
+            .collect()
     }
 }
 
