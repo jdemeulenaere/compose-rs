@@ -53,11 +53,23 @@ pub(crate) struct Cells {
     retired: Vec<StateId>,
     /// Cells retired before the pass in progress, freed at its end.
     freeing: Vec<StateId>,
+    /// Cells retired while a pass applies its end-of-pass work: they join `retired` when it
+    /// ends, so a pass started meanwhile doesn't free them early.
+    held_by_passes: Vec<StateId>,
+    /// Cells retired while compositions are being disposed: freed when the disposals end.
+    held_by_disposals: Vec<StateId>,
 }
 
 impl Cells {
     pub const fn new() -> Cells {
-        Cells { entries: Vec::new(), free: Vec::new(), retired: Vec::new(), freeing: Vec::new() }
+        Cells {
+            entries: Vec::new(),
+            free: Vec::new(),
+            retired: Vec::new(),
+            freeing: Vec::new(),
+            held_by_passes: Vec::new(),
+            held_by_disposals: Vec::new(),
+        }
     }
 
     fn alloc(&mut self, cell: Rc<dyn Any>, created_at: &'static Location<'static>) -> StateId {
@@ -126,18 +138,30 @@ impl Cells {
         self.freeing = freeing;
     }
 
-    pub fn retired_len(&self) -> usize {
-        self.retired.len()
+    /// A pass's end-of-pass work ended: the cells it retired wait for the next pass.
+    pub fn release_held_by_passes(&mut self) {
+        let mut held = std::mem::take(&mut self.held_by_passes);
+        self.retired.append(&mut held);
+        self.held_by_passes = held;
     }
 
-    /// Frees the cells retired since `mark`; with `all`, every retired cell, including those a
-    /// pass in progress would free.
-    pub fn free_retired(&mut self, mark: usize, all: bool) -> Vec<CellValue> {
-        let mut ids: Vec<StateId> = self.retired.drain(mark.min(self.retired.len())..).collect();
+    /// The disposals ended: frees the cells they retired, and with `all` (no composition is
+    /// left to run the pass that would free them) every retired cell.
+    pub fn free_held_by_disposals(&mut self, all: bool) -> Vec<CellValue> {
+        let mut ids = std::mem::take(&mut self.held_by_disposals);
         if all {
+            ids.append(&mut self.retired);
             ids.append(&mut self.freeing);
+            ids.append(&mut self.held_by_passes);
         }
         ids.into_iter().filter_map(|id| self.free(id)).collect()
+    }
+
+    /// After a panic in a disposal: its cells wait with the others.
+    pub fn abort_disposal(&mut self) {
+        let mut held = std::mem::take(&mut self.held_by_disposals);
+        self.retired.append(&mut held);
+        self.held_by_disposals = held;
     }
 
     pub fn live_count(&self) -> usize {
@@ -423,12 +447,20 @@ fn alloc_cell(cell: Rc<dyn Any>, created_at: &'static Location<'static>) -> Stat
 /// exists on the thread.
 fn retire(id: StateId) {
     let freed = try_with_runtime(|runtime| {
-        if runtime.compositions.live() == 0 && runtime.disposing == 0 {
-            runtime.cells.free(id)
+        let cells = &mut runtime.cells;
+        if runtime.disposing > 0 {
+            cells.held_by_disposals.push(id);
+        } else if runtime.finishing > 0 {
+            cells.held_by_passes.push(id);
+        } else if runtime.compositions.live() == 0 {
+            // No pass will come: free it, and anything an interrupted disposal left retired.
+            let mut ids = std::mem::take(&mut cells.retired);
+            ids.push(id);
+            return ids.into_iter().filter_map(|id| cells.free(id)).collect();
         } else {
-            runtime.cells.retired.push(id);
-            None
+            cells.retired.push(id);
         }
+        Vec::new()
     });
     drop(freed);
 }
@@ -553,7 +585,7 @@ impl<T: 'static> MutableState<T> {
 
     /// Whether the cell is still live.
     pub fn is_alive(&self) -> bool {
-        with_runtime(|runtime| runtime.cells.entry(self.id).is_ok())
+        try_with_runtime(|runtime| runtime.cells.entry(self.id).is_ok()).unwrap_or(false)
     }
 
     /// A read-only view of the same cell.

@@ -12,7 +12,7 @@ use crate::error::{ComposeError, misuse};
 use crate::hash::key_of;
 use crate::remember::dispatch_forgotten;
 use crate::runtime::{
-    ActivePass, CompositionData, CompositionId, Deferred, Runtime, remove_siblings,
+    ActivePass, CompositionData, CompositionId, Deferred, Runtime, remove_siblings, request_frames,
     try_with_runtime, with_runtime,
 };
 use crate::scope::ScopeId;
@@ -76,6 +76,11 @@ impl Composition {
 
     /// Runs `f` with the applier, as type `A`.
     pub fn with_applier<A: Applier, R>(&self, f: impl FnOnce(&mut A) -> R) -> R {
+        if with_runtime(|runtime| {
+            runtime.active.is_some_and(|active| active.composition == self.id)
+        }) {
+            flush_node_moves();
+        }
         let applier = with_runtime(|runtime| self.data(runtime).applier.clone());
         let mut applier =
             applier.try_borrow_mut().unwrap_or_else(|_| misuse(ComposeError::ApplierBusy));
@@ -197,6 +202,14 @@ impl Pass {
             if data.poisoned {
                 misuse(ComposeError::Poisoned)
             }
+            if data.finishing {
+                // Its last pass is still applying its end-of-pass work: the next pass waits
+                // until it ends, which then requests a frame for it.
+                if mode == Mode::Walk {
+                    return None;
+                }
+                misuse(ComposeError::PassInProgress)
+            }
             let sentinel = &mut data.table[SENTINEL];
             if mode == Mode::Walk && !sentinel.dirty {
                 return None;
@@ -278,18 +291,47 @@ impl Pass {
         flush_node_moves();
         let (mut deferred, freed) = with_runtime(|runtime| {
             runtime.active = None;
+            runtime.finishing += 1;
             let data = runtime.compositions.get_mut(self.id).expect("a live composition");
+            data.finishing = true;
             (std::mem::take(&mut data.deferred), runtime.cells.end_pass())
         });
         // From here on the slot table is consistent: a panic in an effect doesn't poison it.
         self.finished = true;
+        let finishing = Finishing(self.id);
         apply_deferred(&applier, &mut deferred, true);
         drop(freed);
+        drop(finishing);
         with_runtime(|runtime| {
             // An effect may have dropped the composition.
             if let Some(data) = runtime.compositions.get_mut(self.id) {
                 data.deferred.restore(deferred);
                 data.pending = data.has_invalidations();
+            }
+        });
+        request_frames();
+    }
+}
+
+/// A pass applying its end-of-pass work; ends it, even when an effect panics.
+struct Finishing(CompositionId);
+
+impl Drop for Finishing {
+    fn drop(&mut self) {
+        try_with_runtime(|runtime| {
+            runtime.finishing -= 1;
+            if runtime.finishing == 0 {
+                runtime.cells.release_held_by_passes();
+            }
+            if let Some(data) = runtime.compositions.get_mut(self.0) {
+                data.finishing = false;
+                // Invalidated while it finished: a frame for it.
+                if data.has_invalidations() && !data.pending {
+                    data.pending = true;
+                    if let Some(requester) = &data.frame_requester {
+                        runtime.frame_requests.push(requester.clone());
+                    }
+                }
             }
         });
     }
@@ -350,7 +392,6 @@ struct Disposal {
     data: CompositionData,
     deferred: Deferred,
     top_level_nodes: u32,
-    retired_mark: usize,
 }
 
 impl Disposal {
@@ -372,10 +413,12 @@ impl Disposal {
         remove_siblings(&mut data.table, &mut deferred, scopes, removal_stack, first, NONE);
         data.table[SENTINEL].first_child = NONE;
         let top_level_nodes = if data.poisoned { 0 } else { data.table[SENTINEL].node_count };
-        Some(Disposal { data, deferred, top_level_nodes, retired_mark: cells.retired_len() })
+        let _ = cells;
+        Some(Disposal { data, deferred, top_level_nodes })
     }
 
     fn run(mut self) {
+        let disposing = Disposing;
         let applier = self.data.applier.clone();
         {
             let mut applier =
@@ -387,24 +430,40 @@ impl Disposal {
         }
         apply_deferred(&applier, &mut self.deferred, false);
         drop(applier);
-        let Disposal { data, deferred, retired_mark, .. } = self;
+        let Disposal { data, deferred, .. } = self;
         drop(deferred);
         drop(data);
-        // Free the state cells this disposal retired, and everything if no composition is left
-        // to run the pass that would free them.
-        let last = with_runtime(|runtime| {
-            runtime.disposing -= 1;
-            runtime.compositions.live() == 0 && runtime.disposing == 0
-        });
+        drop(disposing);
+        // Free the state cells the disposals retired once none is left, and everything if no
+        // composition is left to run the pass that would free them.
         loop {
             let freed: Vec<CellValue> = with_runtime(|runtime| {
-                runtime.cells.free_retired(if last { 0 } else { retired_mark }, last)
+                if runtime.disposing > 0 {
+                    return Vec::new();
+                }
+                let all = runtime.compositions.live() == 0 && runtime.finishing == 0;
+                runtime.cells.free_held_by_disposals(all)
             });
             if freed.is_empty() {
                 break;
             }
             drop(freed);
         }
+        request_frames();
+    }
+}
+
+/// A disposal in progress; ends it, even when a value's `Drop` panics.
+struct Disposing;
+
+impl Drop for Disposing {
+    fn drop(&mut self) {
+        try_with_runtime(|runtime| {
+            runtime.disposing -= 1;
+            if std::thread::panicking() {
+                runtime.cells.abort_disposal();
+            }
+        });
     }
 }
 

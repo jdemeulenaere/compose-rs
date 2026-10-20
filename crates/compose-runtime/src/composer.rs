@@ -158,7 +158,8 @@ impl Runtime {
                     table[found].next_sibling = parent.cursor;
                     table.link_after(parent.group, parent.last_placed, found);
                     let count = table[found].node_count;
-                    if count > 0 {
+                    // Past node-less groups only, its nodes are already in place.
+                    if count > 0 && nodes_before > 0 {
                         op = NodeOp::Move {
                             parent: parent.node_parent,
                             from: parent.node_index + nodes_before,

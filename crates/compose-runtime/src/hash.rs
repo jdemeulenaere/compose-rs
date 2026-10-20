@@ -41,6 +41,47 @@ impl Hasher for KeyHasher {
             self.0 = self.0.wrapping_mul(FNV_PRIME);
         }
     }
+
+    // Integers hash as little-endian, 64-bit for `usize`, so keys are the same on every target.
+    fn write_u16(&mut self, value: u16) {
+        self.write(&value.to_le_bytes())
+    }
+
+    fn write_u32(&mut self, value: u32) {
+        self.write(&value.to_le_bytes())
+    }
+
+    fn write_u64(&mut self, value: u64) {
+        self.write(&value.to_le_bytes())
+    }
+
+    fn write_u128(&mut self, value: u128) {
+        self.write(&value.to_le_bytes())
+    }
+
+    fn write_usize(&mut self, value: usize) {
+        self.write_u64(value as u64)
+    }
+
+    fn write_i16(&mut self, value: i16) {
+        self.write_u16(value as u16)
+    }
+
+    fn write_i32(&mut self, value: i32) {
+        self.write_u32(value as u32)
+    }
+
+    fn write_i64(&mut self, value: i64) {
+        self.write_u64(value as u64)
+    }
+
+    fn write_i128(&mut self, value: i128) {
+        self.write_u128(value as u128)
+    }
+
+    fn write_isize(&mut self, value: isize) {
+        self.write_u64(value as i64 as u64)
+    }
 }
 
 /// Hashes a `key(…)` argument into a movable group's data key.

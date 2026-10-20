@@ -94,7 +94,11 @@ impl Drop for Token {
     }
 }
 
-const KIND_KEYS: [u64; 2] = [key_of("model::ItemA"), key_of("model::ItemB")];
+/// Kinds 0 and 1 emit a node holding their branch and children; kind 2 emits no node of its own,
+/// so its branch leaf and children are nodes of its parent's node (a group of several nodes, or
+/// of none).
+const KIND_KEYS: [u64; 3] =
+    [key_of("model::ItemA"), key_of("model::ItemB"), key_of("model::Ghost")];
 const BRANCH_KEY: u64 = key_of("model::Item::branch");
 
 fn Node(key: u64, label: String, content: impl FnOnce()) {
@@ -122,7 +126,7 @@ fn Item(item: Rc<ItemData>) {
         RUNS.with(|runs| runs.borrow_mut().push(item.id));
         let token = remember(|| Rc::new(Token::new()));
         let label = format!("{}:{}:t{}", item.id, item.value.get(), token.0);
-        Node(key_of("model::ItemNode"), label, || {
+        let content = || {
             if item.branch.get() {
                 composer.start_replace_group(BRANCH_KEY);
                 let token = remember(|| Rc::new(Token::new()));
@@ -138,7 +142,12 @@ fn Item(item: Rc<ItemData>) {
                     }
                 }
             });
-        });
+        };
+        if item.kind == 2 {
+            content();
+        } else {
+            Node(key_of("model::ItemNode"), label, content);
+        }
     }
     composer.end_restart_group(|kept| {
         let (item,) = kept.downcast_ref::<(Rc<ItemData>,)>().expect("kept arguments").clone();
@@ -267,13 +276,20 @@ impl Reference {
 }
 
 fn expected_tree(group: &ReferenceGroup, depth: usize, out: &mut String) {
-    let indent = "  ".repeat(depth);
-    let _ = writeln!(out, "{indent}{}:{}:t{}", group.item.id, group.item.value.get(), group.token);
+    // A ghost (kind 2) has no node: its contents are at its own depth.
+    let inner = if group.item.kind == 2 {
+        depth
+    } else {
+        let indent = "  ".repeat(depth);
+        let _ =
+            writeln!(out, "{indent}{}:{}:t{}", group.item.id, group.item.value.get(), group.token);
+        depth + 1
+    };
     if let Some(token) = group.branch_token {
-        let _ = writeln!(out, "{indent}  b{token}");
+        let _ = writeln!(out, "{}b{token}", "  ".repeat(inner));
     }
     for child in &group.children {
-        expected_tree(child, depth + 1, out);
+        expected_tree(child, inner, out);
     }
 }
 
@@ -339,7 +355,7 @@ fn mutate(
             *next_id += 1;
             let child = ItemData::new(
                 *next_id,
-                random.below(2),
+                random.below(3),
                 random.chance(50),
                 random.below(3) as u32,
                 random.chance(20),

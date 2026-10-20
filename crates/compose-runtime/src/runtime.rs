@@ -34,9 +34,10 @@ pub(crate) struct Runtime {
     pub frame_requests: Vec<Rc<dyn Fn()>>,
     /// A node move waiting to be coalesced with the next one (see `apply_node_op`).
     pub pending_move: Option<NodeOp>,
-    /// Compositions taken out of the arena and still releasing their values: while any is,
-    /// retired cells aren't freed at once.
+    /// Compositions taken out of the arena and still releasing their values.
     pub disposing: usize,
+    /// Passes applying their end-of-pass work (releases, observers, drops, effects).
+    pub finishing: usize,
 }
 
 #[derive(Clone, Copy)]
@@ -59,6 +60,7 @@ impl Runtime {
             frame_requests: Vec::new(),
             pending_move: None,
             disposing: 0,
+            finishing: 0,
         }
     }
 
@@ -70,6 +72,12 @@ impl Runtime {
             }
             _ => ScopeId::NONE,
         }
+    }
+
+    /// Whether a pass is composing or finishing, or a composition is being disposed: work whose
+    /// frame requests and retired cells wait until it ends.
+    pub fn is_busy(&self) -> bool {
+        self.active.is_some() || self.finishing > 0 || self.disposing > 0
     }
 
     pub fn is_composing(&self) -> bool {
@@ -113,9 +121,16 @@ fn reentered() -> ! {
     )
 }
 
-/// Calls the frame requesters queued by invalidations, outside the borrow.
+/// Calls the frame requesters queued by invalidations, outside the borrow. While a pass or a
+/// disposal is in progress they wait: a requester that recomposes at once must not start a pass
+/// in the middle of one, and Compose runs all of a pass's effects before the next pass. The pass
+/// or disposal calls this again when it ends.
 pub(crate) fn request_frames() {
-    let mut requests = with_runtime(|runtime| std::mem::take(&mut runtime.frame_requests));
+    let Some(mut requests) = with_runtime(|runtime| {
+        (!runtime.is_busy()).then(|| std::mem::take(&mut runtime.frame_requests))
+    }) else {
+        return;
+    };
     for request in requests.drain(..) {
         request();
     }
@@ -222,6 +237,8 @@ pub(crate) struct CompositionData {
     /// A frame was requested and not yet served.
     pub pending: bool,
     pub poisoned: bool,
+    /// Its last pass is applying its end-of-pass work.
+    pub finishing: bool,
     pub frame_requester: Option<Rc<dyn Fn()>>,
     pub deferred: Deferred,
 }
@@ -234,6 +251,7 @@ impl CompositionData {
             root_node,
             pending: false,
             poisoned: false,
+            finishing: false,
             frame_requester: None,
             deferred: Deferred::default(),
         }
