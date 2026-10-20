@@ -463,7 +463,10 @@ fn new_state<T: 'static>(
 }
 
 fn alloc_cell(cell: Rc<dyn Any>, created_at: &'static Location<'static>) -> StateId {
-    with_runtime(|runtime| runtime.cells.alloc(cell, created_at))
+    let id = with_runtime(|runtime| runtime.cells.alloc(cell, created_at));
+    // A thread that only ever makes state still releases the runtime's storage at exit.
+    crate::composition::register_exit_guard();
+    id
 }
 
 /// Retires a cell whose owner was dropped (rule R2), or frees it at once if no composition

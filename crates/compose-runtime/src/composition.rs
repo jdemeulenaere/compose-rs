@@ -39,9 +39,7 @@ impl Composition {
         let id = with_runtime(|runtime| {
             runtime.compositions.alloc(CompositionData::new(applier, root_node))
         });
-        // Registered after the runtime, so (thread-locals being destroyed in reverse order) it
-        // disposes the compositions left at thread exit while the runtime still works.
-        let _ = EXIT_GUARD.try_with(|_| {});
+        register_exit_guard();
         Composition { id, _not_send: PhantomData }
     }
 
@@ -182,6 +180,11 @@ impl Drop for Composition {
 
 thread_local! {
     static EXIT_GUARD: ExitGuard = const { ExitGuard };
+}
+
+/// Registers the thread's exit guard (once; then a cheap check).
+pub(crate) fn register_exit_guard() {
+    let _ = EXIT_GUARD.try_with(|_| {});
 }
 
 /// Disposes the compositions still alive when the thread exits (one kept in a thread-local, or
@@ -361,6 +364,7 @@ impl Pass {
             }
         });
         request_frames();
+        crate::runtime::release_if_empty();
     }
 }
 
