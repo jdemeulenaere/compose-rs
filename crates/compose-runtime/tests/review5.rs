@@ -32,10 +32,11 @@ thread_local! {
 
 fn run_a_host_with_a_stateful_frame_requester() {
     let thread = std::thread::spawn(|| {
-        // As in review4: the runtime's thread-local first, then `HOST`, then the exit guard.
-        let ticks = mutable_state_of(0u32);
-        let handle = ticks.handle();
+        // As in review4: `HOST` first, then the exit guard (registered by the first state), so
+        // the guard closes the composition before `HOST` drops its handle.
         HOST.with(|host| {
+            let ticks = mutable_state_of(0u32);
+            let handle = ticks.handle();
             let composition = Composition::new(NodeTree::<()>::new());
             // The host's frame requester owns a piece of state (a frame counter).
             composition.set_frame_requester(move || ticks.set(ticks.get() + 1));

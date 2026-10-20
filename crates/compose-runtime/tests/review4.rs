@@ -44,20 +44,20 @@ thread_local! {
 
 fn run_a_host_in_a_thread_local() {
     let thread = std::thread::spawn(|| {
-        // The app's state is created first (the runtime's thread-local is registered here)...
-        let count = mutable_state_of(0u32);
-        let handle = count.handle();
-        // ...then the host is stored (`HOST` registered), then its composition is created (the
-        // exit guard registered). Thread-locals are destroyed in reverse order: the guard, then
-        // `HOST`, then the runtime.
+        // `HOST` is registered first; the app's state, created inside, registers the exit guard
+        // after it. Thread-locals are destroyed in reverse order: the guard (which closes the
+        // composition), then `HOST`, whose `Drop` uses the closed handle. (The runtime itself has
+        // no destructor.)
         HOST.with(|host| {
+            let count = mutable_state_of(0u32);
+            let handle = count.handle();
+            std::mem::forget(count);
             let composition = Composition::new(NodeTree::<()>::new());
             composition.set_content(move || {
                 let _ = handle.get();
             });
             *host.borrow_mut() = Some(Host { composition });
         });
-        std::mem::forget(count);
     });
     assert!(thread.join().is_ok());
 }
