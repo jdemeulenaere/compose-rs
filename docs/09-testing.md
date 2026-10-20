@@ -1,0 +1,46 @@
+# 9. Testing (`compose-test`)
+
+## A `ComposeTestRule` for Rust
+
+```rust
+#[test]
+fn counting_to_three() {
+    let mut ui = compose_test(|| Counter());                 // headless host, Skia text, bundled fonts
+    for _ in 0..3 {
+        ui.on_node_with_text("Count").perform_click();         // finds through semantics
+    }
+    ui.on_node_with_text("Count: 3").assert_exists();
+    insta::assert_snapshot!(ui.dump_tree());                   // node tree with layout
+}
+```
+
+- **Running.** `compose_test` owns a `Composition` and a headless host, and runs frames synchronously: an action dispatches the event, recomposes, lays out and draws before returning.
+- **Finders and actions.** Finders go through the semantics tree as in Compose testing: `on_node_with_text`, `on_node_with_tag`, `on_all_nodes…`. Actions: `perform_click`, `perform_text_input`, `perform_key`, `resize`.
+- **Dumps.** Node tree, layout, display list, slot table, and a PNG through Skia's CPU raster backend. They are compared with `insta` snapshots.
+
+## Test suites
+
+- **Runtime scenarios.** `compose-runtime` is tested on its own, before the macro exists, with composables written by hand against the composer API (what the macro would generate). That includes a **model-checked randomized test**: random insertions, removals and moves at every position, keyed moves, removed and invalid scopes, each pass checked against a reference model, and every value released exactly once on disposal.
+- **UI and app scenarios.** `compose-test` tests for every UI rule and for the example apps. **Event scripts** (`click "Count: 0"`, `type "milk"`, `frame`, `dump`) give a compact text format for app sessions, stored beside each example with their expected dumps.
+- **Macro tests.** Golden tests of `#[composable]` expansions (with `macrotest`), compile-fail tests (with `trybuild`) for every rejected construct and every missing-`ComposeArg` diagnostic.
+
+## Memory and performance checks
+
+- **A counting `#[global_allocator]`** in test binaries. Steady-state frames must allocate nothing, live allocations must stay constant across 1,000 clicks or toggles, and everything must be freed when a composition is dropped: cells, slots, nodes.
+- **Runtime benchmarks** (`criterion`), with these targets:
+  - a counter click under 1 ms;
+  - a 1,000-item toggle recomposing one row, under 4 ms frame p99 headless;
+  - a slot-table operation O(1) amortized;
+  - a skipped composable costing one comparison per argument.
+- **Compile-time benchmarks.** Compile speed is a design criterion, so it's measured: generate crates with 256, 1,024 and 4,096 composables, branches and lambdas, measure `cargo build` time and macro expansion size, and assert near-linear growth.
+- **The edit loop.** A benchmark builds the sample app, touches one composable, and times the incremental rebuild, with and without dynamic linking of the framework. It guards the 1–3 s target of [08](08-fast-builds.md).
+
+## Android
+
+- **Replayer tests** on the JVM: the Kotlin replayer is fed recorded display lists, with a mock `Canvas` checking the calls.
+- **Instrumented tests** (emulator, opt-in in CI): a `ComposeRsView` inside a Kotlin Compose screen, driven with Compose's own `ComposeTestRule`, checking input, the soft keyboard, accessibility nodes and screenshots against the desktop goldens, allowing for platform text differences.
+- **The JNI budget:** a test counts crossings per frame, expecting one for the frame and one per input batch, plus text measurements only for changed texts.
+
+## Windows
+
+Real-window tests are opt-in (`COMPOSE_WINDOW_TESTS=1`). They feed input through the window's own event handling and check pixels and frame timing. Posting real OS input needs the Accessibility permission on macOS, which only the user can grant.
