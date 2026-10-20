@@ -25,6 +25,8 @@ compose (facade: re-exports the modules below as compose::runtime, compose::ui, 
 └── compose-test              ComposeTestRule-like API over the headless host
 ```
 
+In the repository the crates live under `crates/`, and are added as the roadmap reaches them ([10](10-roadmap.md)). `benchmarks/` holds the criterion benchmarks; it isn't a default workspace member, so `cargo build` and `cargo test` don't compile criterion.
+
 Mirroring Compose's artifacts as crates (`runtime`, `ui`, `foundation`, `material3`) keeps API ownership clear and helps build times: an app edit recompiles only the app crate, and the libraries rarely change. The facade's `dynamic` feature builds the framework and its heavy dependencies as one shared library for development, so an edit relinks only the app ([08](08-fast-builds.md)).
 
 ## Dependencies between them

@@ -25,7 +25,7 @@ pub fn mutable_state_of<T: PartialEq + 'static>(value: T) -> OwnedState<T>;
 pub fn mutable_state_of_with<T: 'static>(value: T, policy: impl MutationPolicy<T>) -> OwnedState<T>;
 ```
 
-- **Cells live in a per-thread generational arena.** A handle is an index plus a generation, and a handle of a freed cell is detected, never dereferenced.
+- **Cells live in a per-thread generational arena.** A handle is an index plus a generation, and a handle of a freed cell is detected, never dereferenced. A cell is an `Rc` in the arena: an access clones it out and releases the runtime before touching the value, so a cell freed during a `with` stays alive until the `with` returns.
 - **`OwnedState<T>` derefs to its `MutableState<T>`**, so `todo.done.get()` works on the owner directly, and `todo.done.handle()` gives the `Copy` handle a closure captures.
 - **`remember(|| mutable_state_of(0))` returns the handle**, and the slot keeps the owner ([04](04-runtime.md)). This is the common case, and it reads like Kotlin.
 - **Handles are `!Send`.** A cell belongs to the UI thread's arena, and the compiler rejects using a handle from another thread. Background work posts to the UI thread, which writes the state.
@@ -40,8 +40,9 @@ impl<T> MutableState<T> {
     pub fn with<R>(&self, f: impl FnOnce(&T) -> R) -> R;   // registers a read; borrows the value
     pub fn set(&self, value: T);                   // invalidates readers unless the policy says equal
     pub fn update(&self, f: impl FnOnce(&T) -> T);
-    pub fn edit(&self, f: impl FnOnce(&mut T));    // always invalidates (can't tell what changed)
+    pub fn edit<R>(&self, f: impl FnOnce(&mut T) -> R) -> R;  // always invalidates (can't tell what changed)
     pub fn try_get(&self) -> Option<T> where T: Clone;      // None if the cell was freed
+    pub fn try_set(&self, value: T) -> bool;                 // false if the cell was freed
 }
 ```
 
@@ -74,7 +75,7 @@ A handle can outlive its cell: a handler captures `done`, then the `Todo` is rem
 | Rule | In Rust |
 |---|---|
 | **R1** release order | Nodes and their handlers are released before the state their group owns. Kept in the runtime's end-of-pass order, and tested. |
-| **R2** deferred free | Dropping an `OwnedState` retires its cell, and the cell is freed at the end of the next pass. By then, every row that received the removed `Rc<Todo>` has recomposed or left, because the list scope re-ran, and its handlers were replaced. Code later in the same handler still sees a live, detached cell. |
+| **R2** deferred free | Dropping an `OwnedState` retires its cell, and the cell is freed at the end of the next pass on the thread. By then, every row that received the removed `Rc<Todo>` has recomposed or left, because the list scope re-ran, and its handlers were replaced. Code later in the same handler still sees a live, detached cell. With no composition on the thread, there is no pass to wait for, and the cell is freed at once; dropping a composition frees the cells it retired, and dropping the last one frees every retired cell. |
 | **R3** where captures may go | Not enforceable at compile time in Rust, since closures can go anywhere `'static`. The fallback is `try_get`/`try_set` for code that keeps handles outside the UI tree, and a panic naming the cell's creation site otherwise. Capturing an `Rc<Todo>` instead of a handle keeps the data alive, so it can never be stale. That's the recommended pattern for long-lived callbacks. |
 
 **Reference cycles.** A closure that captures an `Rc<Todo>` and is stored inside that same `Todo`'s state would leak. That's the usual `Rc` caveat. Handles never form cycles, because they're plain indices.

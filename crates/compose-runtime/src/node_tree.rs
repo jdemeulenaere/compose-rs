@@ -139,6 +139,20 @@ impl<N> NodeTree<N> {
     }
 }
 
+/// Compose's `MutableList.move(from, to, count)`: `to` is an index before the move.
+fn move_range<T>(list: &mut [T], from: usize, to: usize, count: usize) {
+    let destination = if from > to { to } else { to - count };
+    assert!(
+        destination + count <= list.len(),
+        "compose-runtime: NodeTree: move past the end"
+    );
+    if destination < from {
+        list[destination..from + count].rotate_right(count);
+    } else if destination > from {
+        list[from..destination + count].rotate_left(count);
+    }
+}
+
 impl<N: fmt::Debug> NodeTree<N> {
     /// An indented dump of the tree below the root, one `{:?}` value per line.
     pub fn dump(&self) -> String {
@@ -197,14 +211,7 @@ impl<N: 'static> Applier for NodeTree<N> {
         let parent = self.index(parent);
         self.check_range(parent, from, count);
         let children = &mut self.entries[parent as usize].children;
-        // As Compose's MutableList.move: `to` is an index before the move.
-        let destination = if from > to { to } else { to - count };
-        let moved: Vec<u32> = children.drain(from..from + count).collect();
-        assert!(
-            destination <= children.len(),
-            "compose-runtime: NodeTree: move past the end"
-        );
-        children.splice(destination..destination, moved);
+        move_range(children, from, to, count);
     }
 
     fn release(&mut self, node: NodeRef) {
@@ -231,5 +238,63 @@ impl<N: 'static> Applier for NodeTree<N> {
         }
         // Values drop last, with the tree consistent, in case their Drop looks at it.
         drop(values);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Compose's `MutableList.move`, transcribed.
+    fn compose_move(list: &mut Vec<u32>, from: usize, to: usize, count: usize) {
+        let destination = if from > to { to } else { to - count };
+        let moved: Vec<u32> = list.drain(from..from + count).collect();
+        for (offset, item) in moved.into_iter().enumerate() {
+            list.insert(destination + offset, item);
+        }
+    }
+
+    #[test]
+    fn moves_match_compose() {
+        for len in 1..7usize {
+            for count in 1..=len {
+                for from in 0..=len - count {
+                    for to in 0..=len {
+                        let destination = if from > to {
+                            to
+                        } else {
+                            to.wrapping_sub(count)
+                        };
+                        if to < count && from <= to || destination + count > len {
+                            continue;
+                        }
+                        let mut expected: Vec<u32> = (0..len as u32).collect();
+                        compose_move(&mut expected, from, to, count);
+                        let mut actual: Vec<u32> = (0..len as u32).collect();
+                        move_range(&mut actual, from, to, count);
+                        assert_eq!(
+                            actual, expected,
+                            "len {len} from {from} to {to} count {count}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn insert_remove_release() {
+        let mut tree = NodeTree::<u32>::new();
+        let root = tree.root();
+        let a = Applier::insert(&mut tree, root, 0, 1);
+        let b = Applier::insert(&mut tree, a, 0, 2);
+        Applier::insert(&mut tree, root, 1, 3);
+        assert_eq!(tree.dump(), "1\n  2\n3\n");
+        Applier::remove(&mut tree, root, 0, 1);
+        assert_eq!(tree.dump(), "3\n");
+        assert!(tree.contains(b), "removed nodes live until released");
+        Applier::release(&mut tree, a);
+        assert!(!tree.contains(a) && !tree.contains(b));
+        assert_eq!(tree.len(), 1);
     }
 }
