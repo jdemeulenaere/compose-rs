@@ -74,12 +74,19 @@ pub fn region(key: u64) -> Region {
 impl Drop for Region {
     #[inline]
     fn drop(&mut self) {
-        if let Some(composer) = self.composer {
-            if !std::thread::panicking() {
-                composer.end_group();
-            }
+        if let Some(composer) = self.composer
+            && !std::thread::panicking()
+        {
+            composer.end_group();
         }
     }
+}
+
+/// A clone of an argument, to keep. A function rather than `Clone::clone`, so generated code
+/// doesn't trip `clippy::clone_on_copy` in the user's crate.
+#[inline]
+pub fn keep<T: Clone>(value: &T) -> T {
+    value.clone()
 }
 
 /// A clone of a restart group's kept arguments, for its restart function.

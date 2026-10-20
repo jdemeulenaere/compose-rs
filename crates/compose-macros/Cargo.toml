@@ -1,0 +1,18 @@
+[package]
+name = "compose-macros"
+description = "The #[composable] transform and #[derive(ComposeArg)] of compose-rs."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2 = "1"
+quote = "1"
+syn = { version = "2", default-features = false, features = ["derive", "full", "parsing", "printing", "proc-macro", "visit", "visit-mut", "clone-impls"] }
+
+[dev-dependencies]
+prettyplease = "0.2"

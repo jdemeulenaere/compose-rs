@@ -1,0 +1,38 @@
+error[E0277]: the trait bound `Handle: Clone` is not satisfied in `(Handle,)`
+  --> tests/ui/missing_clone.rs:11:1
+   |
+11 | #[composable]
+   | ^^^^^^^^^^^^^ within `(Handle,)`, the trait `Clone` is not implemented for `Handle`
+   |
+   = note: required because it appears within the type `(Handle,)`
+note: required by a bound in `compose::__private::kept`
+  --> $WORKSPACE/crates/compose-runtime/src/private.rs
+   |
+   | pub fn kept<K: Clone + 'static>(kept: &dyn Any) -> K {
+   |                ^^^^^ required by this bound in `kept`
+   = note: this error originates in the attribute macro `composable` (in Nightly builds, run with -Z macro-backtrace for more info)
+help: consider annotating `Handle` with `#[derive(Clone)]`
+   |
+ 3 + #[derive(Clone)]
+ 4 | struct Handle(u32);
+   |
+
+error[E0277]: the trait bound `Handle: Clone` is not satisfied
+  --> tests/ui/missing_clone.rs:12:9
+   |
+12 | fn Show(handle: Handle) {
+   |         ^^^^^^^^------
+   |         |       |
+   |         |       required by a bound introduced by this call
+   |         the trait `Clone` is not implemented for `Handle`
+   |
+note: required by a bound in `compose::__private::keep`
+  --> $WORKSPACE/crates/compose-runtime/src/private.rs
+   |
+   | pub fn keep<T: Clone>(value: &T) -> T {
+   |                ^^^^^ required by this bound in `keep`
+help: consider annotating `Handle` with `#[derive(Clone)]`
+   |
+ 3 + #[derive(Clone)]
+ 4 | struct Handle(u32);
+   |

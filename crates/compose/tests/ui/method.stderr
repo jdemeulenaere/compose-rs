@@ -1,0 +1,5 @@
+error: a composable is a free function: methods can't be composables
+ --> tests/ui/method.rs:7:16
+  |
+7 |     fn Content(&self) {}
+  |                ^

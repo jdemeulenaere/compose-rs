@@ -1,0 +1,19 @@
+error[E0277]: `Vec<i32>` can't be compared for skipping: it doesn't implement `ComposeArg`
+ --> tests/ui/missing_compose_arg.rs:4:18
+  |
+4 | fn Total(values: Vec<i32>, scale: i32) {
+  |                  ^^^ this argument's type doesn't implement `ComposeArg`
+  |
+  = help: the trait `ComposeArg` is not implemented for `Vec<i32>`
+  = note: large or deep data is compared by identity: wrap it in `Rc<…>`
+  = note: or derive `ComposeArg` for your own types, or mark the composable `#[composable(non_restartable)]`
+  = help: the following other types implement trait `ComposeArg`:
+            &'static str
+            ()
+            (A,)
+            (A, B)
+            (A, B, C)
+            (A, B, C, D)
+            (A, B, C, D, E)
+            (A, B, C, D, E, F)
+          and $N others

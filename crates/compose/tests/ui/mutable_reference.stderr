@@ -1,0 +1,5 @@
+error: a composable can't take `&mut`: it can't hold a mutable borrow across passes; pass a state handle (`MutableState`) instead
+ --> tests/ui/mutable_reference.rs:4:17
+  |
+4 | fn Editor(text: &mut String) {
+  |                 ^

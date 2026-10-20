@@ -570,12 +570,13 @@ pub(crate) fn apply_node_op(op: NodeOp) {
             Some(NodeOp::Move { parent: pending_parent, from, to, count }),
             NodeOp::Move { parent, from: next_from, to: next_to, count: next_count },
         ) = (runtime.pending_move, op)
+            && pending_parent == parent
+            && next_from == from + count
+            && next_to == to + count
         {
-            if pending_parent == parent && next_from == from + count && next_to == to + count {
-                runtime.pending_move =
-                    Some(NodeOp::Move { parent, from, to, count: count + next_count });
-                return None;
-            }
+            runtime.pending_move =
+                Some(NodeOp::Move { parent, from, to, count: count + next_count });
+            return None;
         }
         let flushed = runtime.pending_move.take();
         let now = match op {

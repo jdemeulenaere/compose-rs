@@ -1,0 +1,5 @@
+error: ComposeArg can't be derived for a union
+ --> tests/ui/derive_union.rs:4:1
+  |
+4 | union Bits {
+  | ^^^^^

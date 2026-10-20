@@ -107,10 +107,10 @@ impl Composition {
                 if entry.kind == GroupKind::Node {
                     let _ = write!(out, " node={:#x}", entry.node.bits());
                 }
-                if let Some(scope) = runtime.scopes.get(entry.scope) {
-                    if scope.invalid {
-                        let _ = write!(out, " invalid");
-                    }
+                if let Some(scope) = runtime.scopes.get(entry.scope)
+                    && scope.invalid
+                {
+                    let _ = write!(out, " invalid");
                 }
                 if entry.node_count > 0 && entry.kind != GroupKind::Node {
                     let _ = write!(out, " nodes={}", entry.node_count);

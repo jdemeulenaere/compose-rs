@@ -7,4 +7,8 @@ rust-version.workspace = true
 publish.workspace = true
 
 [dependencies]
+compose-macros.workspace = true
 compose-runtime.workspace = true
+
+[dev-dependencies]
+trybuild = "1"

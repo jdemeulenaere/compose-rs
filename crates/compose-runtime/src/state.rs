@@ -180,6 +180,9 @@ fn register_read(entry: &mut CellEntry, scopes: &Scopes, scope: ScopeId) {
     entry.readers.push(Reader { scope, epoch });
 }
 
+/// `write_cell` or `try_write_cell`.
+type CellLookup = fn(StateId, &'static Location<'static>) -> Result<Rc<dyn Any>, Stale>;
+
 /// Looks a cell up for reading, registering the read.
 fn read_cell(id: StateId, at: &'static Location<'static>) -> Result<Rc<dyn Any>, Stale> {
     with_runtime(|runtime| read_cell_in(runtime, id, at))
@@ -567,7 +570,7 @@ impl<T: 'static> MutableState<T> {
         &self,
         value: T,
         at: &'static Location<'static>,
-        lookup: fn(StateId, &'static Location<'static>) -> Result<Rc<dyn Any>, Stale>,
+        lookup: CellLookup,
     ) -> Result<bool, Stale> {
         let cell = lookup(self.id, at)?;
         let cell = StateCell::<T>::of(&cell);

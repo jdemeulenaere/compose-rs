@@ -1,0 +1,19 @@
+error[E0277]: `Vec<String>` can't be compared for skipping: it doesn't implement `ComposeArg`
+ --> tests/ui/derive_field_without_compose_arg.rs:6:12
+  |
+6 |     items: Vec<String>,
+  |            ^^^ this argument's type doesn't implement `ComposeArg`
+  |
+  = help: the trait `compose::runtime::ComposeArg` is not implemented for `Vec<String>`
+  = note: large or deep data is compared by identity: wrap it in `Rc<…>`
+  = note: or derive `ComposeArg` for your own types, or mark the composable `#[composable(non_restartable)]`
+  = help: the following other types implement trait `compose::runtime::ComposeArg`:
+            &'static str
+            ()
+            (A,)
+            (A, B)
+            (A, B, C)
+            (A, B, C, D)
+            (A, B, C, D, E)
+            (A, B, C, D, E, F)
+          and $N others

@@ -1,0 +1,5 @@
+error: a restartable composable keeps its arguments, and an `impl Trait` argument can't be kept; use a concrete type or `Rc<dyn Trait>`, or mark the composable `#[composable(non_restartable)]`
+ --> tests/ui/impl_trait_argument.rs:4:20
+  |
+4 | fn Labelled(label: impl std::fmt::Display) {
+  |                    ^^^^

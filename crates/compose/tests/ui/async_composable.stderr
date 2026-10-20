@@ -1,0 +1,5 @@
+error: a composable can't be `async`: composition is synchronous; run asynchronous work in an effect
+ --> tests/ui/async_composable.rs:4:1
+  |
+4 | async fn Loader() {}
+  | ^^^^^
