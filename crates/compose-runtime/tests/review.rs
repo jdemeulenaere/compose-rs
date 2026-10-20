@@ -838,7 +838,7 @@ fn fuzz_recomposition_matches_a_pure_render() {
     let seeds = if cfg!(miri) { seeds.min(3) } else { seeds };
     for seed in 0..seeds {
         for warm in [true, false] {
-            if let Err(error) = fuzz_seed(seed, 80, warm) {
+            if let Err(error) = fuzz_seed(seed, if cfg!(miri) { 12 } else { 80 }, warm) {
                 panic!("warm {warm}: {error}");
             }
         }
