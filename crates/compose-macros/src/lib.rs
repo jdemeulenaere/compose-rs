@@ -6,6 +6,8 @@
 //! Crates that use it without the `compose` facade alias their runtime dependency:
 //! `extern crate compose_runtime as compose;`.
 
+#![forbid(unsafe_code)]
+
 use proc_macro::TokenStream;
 
 mod composable;
@@ -43,14 +45,17 @@ pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// machine.
 fn declaration_scope() -> String {
     let krate = std::env::var("CARGO_CRATE_NAME").unwrap_or_default();
-    let file = proc_macro::Span::call_site().file();
-    let file = match std::env::var("CARGO_MANIFEST_DIR") {
-        Ok(manifest) => file
-            .strip_prefix(&manifest)
-            .map_or(file.clone(), |relative| relative.trim_start_matches(['/', '\\']).to_string()),
-        Err(_) => file,
+    let file = std::path::PathBuf::from(proc_macro::Span::call_site().file());
+    // Cargo passes a workspace member's sources relative to the workspace root (rustc's working
+    // directory) and a dependency's as absolute paths: resolve, then make relative to the package.
+    let file = std::env::current_dir().map(|cwd| cwd.join(&file)).unwrap_or(file);
+    let file = match std::env::var_os("CARGO_MANIFEST_DIR") {
+        Some(manifest) => file.strip_prefix(manifest).map(Into::into).unwrap_or(file),
+        None => file,
     };
-    format!("{krate}::{file}")
+    let file: Vec<String> =
+        file.components().map(|part| part.as_os_str().to_string_lossy().into_owned()).collect();
+    format!("{krate}::{}", file.join("/"))
 }
 
 /// Derives `ComposeArg` field by field: `Rc` fields compare by identity, small fields by value.

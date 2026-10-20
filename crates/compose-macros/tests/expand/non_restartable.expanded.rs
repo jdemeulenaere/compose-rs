@@ -26,8 +26,8 @@ fn StaticReference(title: &'static str) {
         __composer,
         8726448151579878150u64,
         |__kept: &dyn ::core::any::Any| {
-            let (title,) = ::compose::__private::kept::<(&'static str,)>(__kept);
-            StaticReference(title)
+            let __kept = ::compose::__private::kept::<(&'static str,)>(__kept);
+            StaticReference(::compose::__private::keep(&__kept.0))
         },
     );
     if !__composer

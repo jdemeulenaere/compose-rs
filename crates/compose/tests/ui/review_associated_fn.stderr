@@ -1,0 +1,5 @@
+error[E0425]: cannot find function, tuple struct or tuple variant `Content` in this scope
+  --> tests/ui/review_associated_fn.rs:11:8
+   |
+11 |     fn Content(id: u32) {}
+   |        ^^^^^^^ not found in this scope

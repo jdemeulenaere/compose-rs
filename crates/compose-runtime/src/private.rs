@@ -19,7 +19,7 @@ pub struct RestartGroup {
 impl RestartGroup {
     #[inline]
     pub fn start(composer: Composer, key: u64, restart: fn(&dyn Any)) -> RestartGroup {
-        composer.start_restart_group(key);
+        crate::composer::start_restart_group_of(key, restart);
         RestartGroup { composer, restart }
     }
 }
@@ -27,7 +27,9 @@ impl RestartGroup {
 impl Drop for RestartGroup {
     #[inline]
     fn drop(&mut self) {
-        if !std::thread::panicking() {
+        if std::thread::panicking() {
+            crate::composer::abandon_group();
+        } else {
             self.composer.end_restart_group(self.restart);
         }
     }
@@ -50,7 +52,9 @@ impl ReplaceGroup {
 impl Drop for ReplaceGroup {
     #[inline]
     fn drop(&mut self) {
-        if !std::thread::panicking() {
+        if std::thread::panicking() {
+            crate::composer::abandon_group();
+        } else {
             self.composer.end_group();
         }
     }
@@ -74,10 +78,12 @@ pub fn region(key: u64) -> Region {
 impl Drop for Region {
     #[inline]
     fn drop(&mut self) {
-        if let Some(composer) = self.composer
-            && !std::thread::panicking()
-        {
-            composer.end_group();
+        if let Some(composer) = self.composer {
+            if std::thread::panicking() {
+                crate::composer::abandon_group();
+            } else {
+                composer.end_group();
+            }
         }
     }
 }
@@ -89,8 +95,8 @@ pub fn keep<T: Clone>(value: &T) -> T {
     value.clone()
 }
 
-/// A clone of a restart group's kept arguments, for its restart function.
+/// A restart group's kept arguments, for its restart function to clone.
 #[inline]
-pub fn kept<K: Clone + 'static>(kept: &dyn Any) -> K {
-    kept.downcast_ref::<K>().expect("compose-runtime: kept arguments of another type").clone()
+pub fn kept<K: 'static>(kept: &dyn Any) -> &K {
+    kept.downcast_ref::<K>().expect("compose-runtime: kept arguments of another type")
 }

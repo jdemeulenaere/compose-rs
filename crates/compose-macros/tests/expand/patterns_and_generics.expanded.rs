@@ -5,10 +5,11 @@ fn Pair(__compose_argument0: (i32, i32), _unused: bool) {
         __composer,
         17074722474517449155u64,
         |__kept: &dyn ::core::any::Any| {
-            let (__compose_argument0, _unused) = ::compose::__private::kept::<
-                ((i32, i32), bool),
-            >(__kept);
-            Pair(__compose_argument0, _unused)
+            let __kept = ::compose::__private::kept::<((i32, i32), bool)>(__kept);
+            Pair(
+                ::compose::__private::keep(&__kept.0),
+                ::compose::__private::keep(&__kept.1),
+            )
         },
     );
     if !__composer
@@ -36,8 +37,8 @@ fn List<T: ComposeArg + Clone + Display>(items: Rc<Vec<T>>) {
         __composer,
         18251905653550721707u64,
         |__kept: &dyn ::core::any::Any| {
-            let (items,) = ::compose::__private::kept::<(Rc<Vec<T>>,)>(__kept);
-            List::<T>(items)
+            let __kept = ::compose::__private::kept::<(Rc<Vec<T>>,)>(__kept);
+            List::<T>(::compose::__private::keep(&__kept.0))
         },
     );
     if !__composer

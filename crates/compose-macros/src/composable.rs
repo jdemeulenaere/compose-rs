@@ -86,7 +86,19 @@ impl<'ast> Visit<'ast> for TypeScan {
         if segment.ident == "Fn" || segment.ident == "FnMut" || segment.ident == "FnOnce" {
             self.fn_trait = true;
         }
-        visit::visit_path_segment(self, segment);
+        // `Fn(&str) -> &str`: references in a function signature are higher-ranked, not a
+        // borrow the argument holds.
+        if !matches!(segment.arguments, syn::PathArguments::Parenthesized(_)) {
+            visit::visit_path_segment(self, segment);
+        }
+    }
+
+    fn visit_type_bare_fn(&mut self, _: &'ast syn::TypeBareFn) {
+        // `fn(&str)`: as above.
+    }
+
+    fn visit_bound_lifetimes(&mut self, _: &'ast syn::BoundLifetimes) {
+        // `for<'a> …`: higher-ranked lifetimes.
     }
 }
 
@@ -112,6 +124,12 @@ fn transform(attr: TokenStream, item: TokenStream, scope: &str) -> syn::Result<T
     let options = parse_options(attr)?;
     let mut function: ItemFn = syn::parse2(item)?;
     let sig = &mut function.sig;
+    if let Some(constness) = sig.constness {
+        return Err(Error::new(
+            constness.span(),
+            "a composable can't be `const`: it runs in a composition",
+        ));
+    }
     if let Some(asyncness) = sig.asyncness {
         return Err(Error::new(
             asyncness.span(),
@@ -124,6 +142,7 @@ fn transform(attr: TokenStream, item: TokenStream, scope: &str) -> syn::Result<T
     let mut borrowed =
         sig.generics.params.iter().any(|param| matches!(param, GenericParam::Lifetime(_)));
     let mut impl_trait = None;
+    let mut conditional = false;
     for (index, input) in sig.inputs.iter_mut().enumerate() {
         let typed = match input {
             FnArg::Receiver(receiver) => {
@@ -143,6 +162,8 @@ fn transform(attr: TokenStream, item: TokenStream, scope: &str) -> syn::Result<T
             ));
         }
         borrowed |= types.reference || types.lifetime;
+        // A `#[cfg]`-ed parameter may not exist: it can't be kept, so the composable runs inline.
+        conditional |= typed.attrs.iter().any(|attr| attr.path().is_ident("cfg"));
         if impl_trait.is_none() {
             impl_trait = types.impl_trait;
         }
@@ -151,10 +172,15 @@ fn transform(attr: TokenStream, item: TokenStream, scope: &str) -> syn::Result<T
             pattern => {
                 let name = format_ident!("__compose_argument{}", index);
                 let pattern = pattern.clone();
+                // A `ref mut` binding in the pattern borrows the renamed argument mutably.
+                let mutability = quote!(#pattern)
+                    .to_string()
+                    .contains("ref mut")
+                    .then(<syn::Token![mut]>::default);
                 *typed.pat = Pat::Ident(PatIdent {
                     attrs: Vec::new(),
                     by_ref: None,
-                    mutability: None,
+                    mutability,
                     ident: name.clone(),
                     subpat: None,
                 });
@@ -167,7 +193,7 @@ fn transform(attr: TokenStream, item: TokenStream, scope: &str) -> syn::Result<T
         ReturnType::Default => false,
         ReturnType::Type(_, ty) => !is_unit(ty),
     };
-    let restartable = !options.non_restartable && !borrowed && !returns_value;
+    let restartable = !options.non_restartable && !borrowed && !returns_value && !conditional;
     if restartable && let Some(span) = impl_trait {
         return Err(Error::new(
             span,
@@ -202,17 +228,20 @@ fn transform(attr: TokenStream, item: TokenStream, scope: &str) -> syn::Result<T
     let body = if restartable {
         let composer = Ident::new("__composer", Span::mixed_site());
         let kept = Ident::new("__kept", Span::mixed_site());
-        let names: Vec<&Ident> = params.iter().map(|param| &param.name).collect();
         let types: Vec<&Type> = params.iter().map(|param| &param.ty).collect();
         let (_, type_generics, _) = function.sig.generics.split_for_impl();
         let turbofish = type_generics.as_turbofish();
         let restart = if params.is_empty() {
             quote! { |_: &dyn ::core::any::Any| #name #turbofish() }
         } else {
+            let arguments = params.iter().enumerate().map(|(index, param)| {
+                let index = syn::Index::from(index);
+                quote_spanned! { param.ty.span()=> ::compose::__private::keep(&#kept.#index) }
+            });
             quote! {
                 |#kept: &dyn ::core::any::Any| {
-                    let (#(#names,)*) = ::compose::__private::kept::<(#(#types,)*)>(#kept);
-                    #name #turbofish (#(#names),*)
+                    let #kept = ::compose::__private::kept::<(#(#types,)*)>(#kept);
+                    #name #turbofish (#(#arguments),*)
                 }
             }
         };
@@ -255,13 +284,15 @@ fn transform(attr: TokenStream, item: TokenStream, scope: &str) -> syn::Result<T
         }
     };
 
-    let attrs = &function.attrs;
+    let (inner, outer): (Vec<_>, Vec<_>) =
+        function.attrs.iter().partition(|attr| matches!(attr.style, syn::AttrStyle::Inner(_)));
     let vis = &function.vis;
     let sig = &function.sig;
     Ok(quote! {
-        #(#attrs)*
+        #(#outer)*
         #[allow(non_snake_case)]
         #vis #sig {
+            #(#inner)*
             #body
         }
     })

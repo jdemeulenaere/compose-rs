@@ -6,8 +6,11 @@ pub fn Greeting(name: String, count: i32) {
         __composer,
         12070982927730596820u64,
         |__kept: &dyn ::core::any::Any| {
-            let (name, count) = ::compose::__private::kept::<(String, i32)>(__kept);
-            Greeting(name, count)
+            let __kept = ::compose::__private::kept::<(String, i32)>(__kept);
+            Greeting(
+                ::compose::__private::keep(&__kept.0),
+                ::compose::__private::keep(&__kept.1),
+            )
         },
     );
     if !__composer

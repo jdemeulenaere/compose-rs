@@ -47,7 +47,8 @@ The pieces:
 - **Restart function**: a non-capturing closure, which coerces to a plain `fn` pointer. Registering it allocates nothing.
 - **Groups are guards.** Restart, replace and region groups end when their guard drops, so `return`, `break`, `continue` and `?` in a body keep them balanced without rewriting jumps. While a panic unwinds, guards don't end their groups: the pass is poisoned anyway ([04](04-runtime.md)).
 - **Paths.** Generated code calls `::compose::__private`. A crate using the macro without the `compose` facade (the runtime's own tests, the toolkit crates) aliases its runtime: `extern crate compose_runtime as compose;`.
-- **Free functions only.** A composable can't be a method: its restart function must name it, and a `self` receiver is a borrow. Parameters written as patterns (`(x, y): (i32, i32)`) are renamed and destructured at the start of the body.
+- **Free functions only.** A composable can't be a method or an associated function: its restart function names it unqualified, and a `self` receiver is a borrow. Nor can it be `const` or `async`. Parameters written as patterns (`(x, y): (i32, i32)`) are renamed and destructured at the start of the body; a `#[cfg]`-ed parameter makes the composable non-restartable, since it may not exist to be kept.
+- **Colliding keys never skip.** Two composables can share a key: two instantiations of a generic composable, or same-named composables in one file's inline modules. A restart group remembers its composable's restart function, and a group found with another one runs its body instead of skipping on the other composable's arguments. Remembered state of the same type may still be shared, as in Compose, where a generic composable is one function.
 - **The current composer** is a thread-local. Composables stay ordinary functions, callable from any composable without the caller passing anything.
 - **No `$changed` bits from the caller.** In Compose, callers pass static/same/different hints per argument. Here each callee compares its arguments with its kept tuple, which costs one cheap comparison per argument. This keeps calls plain and costs little, since `same` is identity or a small value compare (below). Caller hints can be added later if profiles ask for them.
 
@@ -130,11 +131,13 @@ The macro can't know which calls are composable, so it **adds a region group to 
 - `remember`, `remember_lambda`, `key`, `SideEffect`, `DisposableEffect`;
 - an invocation of a parameter typed as a composable lambda.
 
-A region group is a guard too: `let __compose_region = region(key ^ n);` (a literal) at the start of the branch, or around the loop. Outside a composition pass it does nothing, because the guess can place one inside a handler closure (`move || if x { Message::Text(s) } …`) that runs later, outside any pass. In a loop with a `continue`, each statement containing a likely composable call gets its own group (below).
+A region group is a guard too: `let __compose_region = region(key ^ n);` (a literal) at the start of the branch, or around the loop; the `else` block of a `let … else` is a branch too. Outside a composition pass it does nothing, because the guess can place one inside a handler closure (`move || if x { Message::Text(s) } …`) that runs later, outside any pass. None goes into `async` blocks or closures (futures run outside composition, and a guard held across an `.await` would make them `!Send`) or `const` blocks. In a loop with a `continue`, each statement containing a likely composable call gets its own group (below).
 
 Missing a region group is safe: groups carry their callee's key and slots carry their type, so a mismatch removes and recreates state rather than misreading it (the runtime never trusts keys for memory safety; see [04](04-runtime.md)). Branches with no likely composable call get no group, which keeps the cost proportional to UI code.
 
-Loops with a `continue` get one group per call site: a `continue` can skip different calls in different iterations, and in-order matching would then pair a call with another call's group. Keyed items use `key`, and `key` is outermost in the loop body.
+Loops with a `continue` get one group per call site: a `continue` can skip different calls in different iterations, and in-order matching would then pair a call with another call's group. A `break` out of a labelled block inside the loop counts as a `continue`, statements inside plain and labelled blocks get their own groups, and so does a loop containing a macro other than the standard ones and composables' call macros (a macro may expand to a `continue` that isn't in its tokens). Keyed items use `key`, and `key` is outermost in the loop body: a `key(…)` statement never gets a per-statement group, so items still match by key across the loop.
+
+The syntactic scan of parameter types ignores references inside function types: `Rc<dyn Fn(&str)>`, `fn(&str)` and `for<'a> …` are not borrows, so such callbacks keep a composable restartable.
 
 ## Composable lambdas (content)
 

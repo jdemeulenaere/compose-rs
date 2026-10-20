@@ -27,6 +27,11 @@ fn derive(input: TokenStream) -> syn::Result<TokenStream> {
             param.bounds.push(parse_quote!(::compose::__private::ComposeArg));
         }
     }
+    // Fields of a packed struct can't be borrowed in place: compare copies (they must be `Copy`).
+    let packed = input
+        .attrs
+        .iter()
+        .any(|attr| attr.path().is_ident("repr") && quote!(#attr).to_string().contains("packed"));
     let body = match &input.data {
         Data::Struct(data) => {
             let conditions = data
@@ -41,7 +46,11 @@ fn derive(input: TokenStream) -> syn::Result<TokenStream> {
                             quote!(#index)
                         }
                     };
-                    same(quote!(&self.#member), quote!(&other.#member), field)
+                    if packed {
+                        same(quote!(&{ self.#member }), quote!(&{ other.#member }), field)
+                    } else {
+                        same(quote!(&self.#member), quote!(&other.#member), field)
+                    }
                 })
                 .collect();
             all(conditions)

@@ -104,7 +104,50 @@ fn tokens_contain_call(tokens: TokenStream) -> bool {
 struct Continues<'a> {
     label: Option<&'a Label>,
     depth: usize,
+    /// Labelled blocks inside the loop body.
+    blocks: Vec<syn::Lifetime>,
     found: bool,
+}
+
+/// Standard macros that never expand to a `continue` of their own.
+const KNOWN_MACROS: &[&str] = &[
+    "format",
+    "format_args",
+    "print",
+    "println",
+    "eprint",
+    "eprintln",
+    "write",
+    "writeln",
+    "vec",
+    "assert",
+    "assert_eq",
+    "assert_ne",
+    "debug_assert",
+    "debug_assert_eq",
+    "debug_assert_ne",
+    "panic",
+    "todo",
+    "unimplemented",
+    "unreachable",
+    "matches",
+    "dbg",
+    "concat",
+    "stringify",
+    "include_str",
+    "env",
+    "line",
+    "file",
+    "column",
+    "cfg",
+];
+
+fn tokens_contain_ident(tokens: TokenStream, name: &str) -> bool {
+    tokens.into_iter().any(|token| match token {
+        TokenTree::Ident(ident) => ident == name,
+        TokenTree::Group(group) => tokens_contain_ident(group.stream(), name),
+        _ => false,
+    })
 }
 
 impl<'ast> Visit<'ast> for Continues<'_> {
@@ -113,6 +156,36 @@ impl<'ast> Visit<'ast> for Continues<'_> {
             (None, _) if self.depth == 0 => self.found = true,
             (Some(target), Some(label)) if *target == label.name => self.found = true,
             _ => {}
+        }
+    }
+
+    fn visit_expr_break(&mut self, expr: &'ast syn::ExprBreak) {
+        // Breaking out of a labelled block inside the loop skips the rest of the iteration,
+        // as `continue` does.
+        if let Some(target) = &expr.label
+            && self.blocks.contains(target)
+        {
+            self.found = true;
+        }
+        visit::visit_expr_break(self, expr);
+    }
+
+    fn visit_expr_block(&mut self, expr: &'ast syn::ExprBlock) {
+        if let Some(label) = &expr.label {
+            self.blocks.push(label.name.clone());
+        }
+        visit::visit_expr_block(self, expr);
+    }
+
+    fn visit_macro(&mut self, mac: &'ast syn::Macro) {
+        // A macro may expand to a `continue` (an unlabelled `continue` isn't hygienic) that
+        // isn't in its tokens: only well-known macros and composables' call macros are trusted.
+        let name = mac.path.segments.last().map(|segment| segment.ident.to_string());
+        let trusted = name
+            .as_deref()
+            .is_some_and(|name| KNOWN_MACROS.contains(&name) || is_composable_name(name));
+        if !trusted || tokens_contain_ident(mac.tokens.clone(), "continue") {
+            self.found = true;
         }
     }
 
@@ -192,9 +265,14 @@ impl Regions {
         *expr = parse_quote! {{ #region #inner }};
     }
 
-    /// In a loop with a `continue`: one group per statement containing a likely call.
+    /// In a loop with a `continue`: one group per statement containing a likely call. Plain and
+    /// labelled blocks are entered, so their statements get groups of their own.
     fn wrap_statements(&mut self, body: &mut Block) {
         for stmt in &mut body.stmts {
+            if let Stmt::Expr(Expr::Block(block), _) = stmt {
+                self.wrap_statements(&mut block.block);
+                continue;
+            }
             let has_own_group = matches!(
                 stmt,
                 Stmt::Expr(
@@ -205,7 +283,7 @@ impl Regions {
                         | Expr::Loop(_),
                     _
                 )
-            );
+            ) || is_key_call(stmt);
             if has_own_group || !self.likely_stmt(stmt) {
                 continue;
             }
@@ -248,7 +326,7 @@ impl Regions {
 
     fn visit_loop_body(&mut self, label: Option<&Label>, body: &mut Block) {
         self.visit_block_mut(body);
-        let mut continues = Continues { label, depth: 0, found: false };
+        let mut continues = Continues { label, depth: 0, blocks: Vec::new(), found: false };
         continues.visit_block(body);
         if continues.found {
             self.wrap_statements(body);
@@ -256,9 +334,27 @@ impl Regions {
     }
 }
 
+/// `key(…)`: a movable group already, and it must stay outermost in its loop body so items
+/// match by key across the whole loop.
+fn is_key_call(stmt: &Stmt) -> bool {
+    let Stmt::Expr(Expr::Call(call), _) = stmt else { return false };
+    matches!(&*call.func, Expr::Path(path) if path.path.segments.last().is_some_and(|segment| segment.ident == "key"))
+}
+
 impl VisitMut for Regions {
     fn visit_item_mut(&mut self, _: &mut Item) {
         // A nested item is not part of this body; a nested composable has its own attribute.
+    }
+
+    fn visit_local_mut(&mut self, local: &mut syn::Local) {
+        visit_mut::visit_local_mut(self, local);
+        // `let … else { … }`: the else block is a branch.
+        if let Some(init) = &mut local.init
+            && let Some((_, otherwise)) = &mut init.diverge
+            && self.likely_expr(otherwise)
+        {
+            self.wrap_expr(otherwise);
+        }
     }
 
     fn visit_expr_mut(&mut self, expr: &mut Expr) {
@@ -299,6 +395,10 @@ impl VisitMut for Regions {
                     self.wrap_expr(expr);
                 }
             }
+            // Futures run outside composition, and a region guard held across an `.await` would
+            // make them `!Send`; `const` blocks can't call the runtime.
+            Expr::Async(_) | Expr::Const(_) => {}
+            Expr::Closure(closure) if closure.asyncness.is_some() => {}
             _ => visit_mut::visit_expr_mut(self, expr),
         }
     }

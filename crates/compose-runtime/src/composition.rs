@@ -197,7 +197,7 @@ impl Pass {
             if runtime.active.is_some() {
                 misuse(ComposeError::PassInProgress)
             }
-            let Runtime { compositions, cells, frames, active, .. } = runtime;
+            let Runtime { compositions, cells, frames, active, abandoned_groups, .. } = runtime;
             let data = compositions.get_mut(id).expect("a live composition");
             if data.poisoned {
                 misuse(ComposeError::Poisoned)
@@ -218,6 +218,7 @@ impl Pass {
             sentinel.dirty = false;
             data.pending = false;
             *active = Some(ActivePass { composition: id, composing: true });
+            *abandoned_groups = false;
             cells.begin_pass();
             frames.clear();
             frames.push(Frame {
@@ -255,10 +256,15 @@ impl Pass {
     /// other compositions (a popup from an effect), and a frame requester may recompose at once.
     fn finish(mut self) {
         let (op, applier) = with_runtime(|runtime| {
-            let Runtime { compositions, scopes, frames, removal_stack, .. } = runtime;
+            let Runtime { compositions, scopes, frames, removal_stack, abandoned_groups, .. } =
+                runtime;
             let data = compositions.get_mut(self.id).expect("a live composition");
             if frames.len() != 1 {
-                misuse(ComposeError::UnclosedGroups)
+                misuse(if *abandoned_groups {
+                    ComposeError::CaughtPanic
+                } else {
+                    ComposeError::UnclosedGroups
+                })
             }
             let frame = frames.pop().expect("the sentinel frame");
             if frame.mode != Mode::Normal {

@@ -21,7 +21,7 @@ use std::rc::Rc;
 
 use crate::applier::{Applier, NodeRef};
 use crate::error::{ComposeError, misuse};
-use crate::runtime::{DeferredEffect, Runtime, remove_siblings, with_runtime};
+use crate::runtime::{DeferredEffect, Runtime, remove_siblings, try_with_runtime, with_runtime};
 use crate::scope::{RecomposeScope, ScopeId};
 use crate::slot_table::{GroupKind, NONE, Slot, SlotValue};
 
@@ -121,6 +121,7 @@ impl Runtime {
         kind: GroupKind,
         key: u64,
         data_key: u64,
+        restart: Option<fn(&dyn Any)>,
     ) -> (NodeOp, NodeStart) {
         let composition = self.check_composing();
         let Runtime { compositions, scopes, frames, .. } = self;
@@ -221,7 +222,10 @@ impl Runtime {
                     group.scope = scopes.alloc(composition, index);
                 }
                 let scope = scopes.get_mut(group.scope).expect("restart group without a scope");
-                frame.forced = scope.invalid;
+                // Another composable's group (same key, another restart function) can't skip.
+                let foreign = matches!((group.restart, restart),
+                    (Some(old), Some(new)) if !std::ptr::fn_addr_eq(old, new));
+                frame.forced = scope.invalid || foreign;
                 scope.invalid = false;
                 // The epoch is bumped only once the body is known to run (`begin_body`): until
                 // then the scope may still skip, and its reads from the last run stay current.
@@ -252,7 +256,7 @@ impl Runtime {
 
     pub(crate) fn end_group(&mut self, restart: Option<fn(&dyn Any)>) -> NodeOp {
         let composition = self.check_composing();
-        let Runtime { compositions, scopes, frames, removal_stack, .. } = self;
+        let Runtime { compositions, scopes, frames, removal_stack, abandoned_groups, .. } = self;
         let data = compositions.data_mut(composition);
         let (table, deferred) = (&mut data.table, &mut data.deferred);
         if frames.len() < 2 {
@@ -261,7 +265,11 @@ impl Runtime {
         let frame = *frames.last().expect("checked above");
         let kind = table[frame.group].kind;
         if frame.mode != Mode::Normal || (kind == GroupKind::Restart) != restart.is_some() {
-            misuse(ComposeError::UnbalancedGroups)
+            misuse(if *abandoned_groups {
+                ComposeError::CaughtPanic
+            } else {
+                ComposeError::UnbalancedGroups
+            })
         }
         frames.pop();
 
@@ -644,9 +652,24 @@ pub(crate) fn run_walk(base: usize) {
 // shims per composable, so they stay thin, and the work happens here, compiled once.
 
 fn start_group(kind: GroupKind, key: u64, data_key: u64) -> NodeStart {
-    let (op, start) = with_runtime(|runtime| runtime.start_group(kind, key, data_key));
+    let (op, start) = with_runtime(|runtime| runtime.start_group(kind, key, data_key, None));
     apply_node_op(op);
     start
+}
+
+/// Starts a restart group for the composable whose restart function is `restart`. A group found
+/// with another restart function (another composable with the same key: two instantiations of a
+/// generic composable, same-named composables) can't be skipped: its body runs.
+pub(crate) fn start_restart_group_of(key: u64, restart: fn(&dyn Any)) {
+    let (op, _) =
+        with_runtime(|runtime| runtime.start_group(GroupKind::Restart, key, 0, Some(restart)));
+    apply_node_op(op);
+}
+
+/// A group guard dropped while a panic unwinds: its group stays open. Recorded, so the error a
+/// caught panic later causes says why.
+pub(crate) fn abandon_group() {
+    try_with_runtime(|runtime| runtime.abandoned_groups = true);
 }
 
 fn insert_node(parent: NodeRef, index: u32, node: &mut dyn Any) -> NodeRef {

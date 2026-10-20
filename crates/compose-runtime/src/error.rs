@@ -32,6 +32,9 @@ pub enum ComposeError {
     WrongApplierType,
     /// The applier was used while it was already in use.
     ApplierBusy,
+    /// Groups were left open by a panic that unwound through composables and was caught
+    /// (`catch_unwind`) inside the composition.
+    CaughtPanic,
 }
 
 impl fmt::Display for ComposeError {
@@ -65,6 +68,11 @@ impl fmt::Display for ComposeError {
             }
             ComposeError::WrongApplierType => "the applier was accessed as the wrong type",
             ComposeError::ApplierBusy => "the applier was used while it was already in use",
+            ComposeError::CaughtPanic => {
+                "a panic unwound through composables and was caught inside the composition \
+                 (catch_unwind), leaving their groups open; let panics propagate out of the pass, \
+                 as Compose forbids try/catch around composable calls"
+            }
         };
         formatter.write_str(message)
     }

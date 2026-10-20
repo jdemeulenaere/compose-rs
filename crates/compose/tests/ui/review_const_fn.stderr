@@ -1,0 +1,13 @@
+error: a composable can't be `const`: it runs in a composition
+ --> tests/ui/review_const_fn.rs:7:1
+  |
+7 | const fn Badge(count: u32) {}
+  | ^^^^^
+
+warning: unused variable: `count`
+ --> tests/ui/review_const_fn.rs:7:16
+  |
+7 | const fn Badge(count: u32) {}
+  |                ^^^^^ help: if this is intentional, prefix it with an underscore: `_count`
+  |
+  = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default

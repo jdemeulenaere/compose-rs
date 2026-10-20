@@ -5,10 +5,14 @@ fn Screen(items: Rc<Vec<u32>>, mode: Mode, content: Rc<dyn Fn()>) {
         __composer,
         5250667602988625983u64,
         |__kept: &dyn ::core::any::Any| {
-            let (items, mode, content) = ::compose::__private::kept::<
+            let __kept = ::compose::__private::kept::<
                 (Rc<Vec<u32>>, Mode, Rc<dyn Fn()>),
             >(__kept);
-            Screen(items, mode, content)
+            Screen(
+                ::compose::__private::keep(&__kept.0),
+                ::compose::__private::keep(&__kept.1),
+                ::compose::__private::keep(&__kept.2),
+            )
         },
     );
     if !__composer

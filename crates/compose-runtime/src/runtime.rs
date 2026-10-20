@@ -38,6 +38,8 @@ pub(crate) struct Runtime {
     pub disposing: usize,
     /// Passes applying their end-of-pass work (releases, observers, drops, effects).
     pub finishing: usize,
+    /// A group guard was dropped by an unwinding panic in this pass, leaving its group open.
+    pub abandoned_groups: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -61,6 +63,7 @@ impl Runtime {
             pending_move: None,
             disposing: 0,
             finishing: 0,
+            abandoned_groups: false,
         }
     }
 
