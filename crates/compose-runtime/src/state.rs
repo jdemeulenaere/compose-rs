@@ -58,6 +58,8 @@ pub(crate) struct Cells {
     held_by_passes: Vec<StateId>,
     /// Cells retired while compositions are being disposed: freed when the disposals end.
     held_by_disposals: Vec<StateId>,
+    /// The generation of new entries (odd): after a reset, above every earlier one.
+    base: u32,
 }
 
 impl Cells {
@@ -69,6 +71,7 @@ impl Cells {
             freeing: Vec::new(),
             held_by_passes: Vec::new(),
             held_by_disposals: Vec::new(),
+            base: 1,
         }
     }
 
@@ -82,13 +85,13 @@ impl Cells {
         } else {
             let index = u32::try_from(self.entries.len()).expect("too many state cells");
             self.entries.push(CellEntry {
-                generation: 1,
+                generation: self.base,
                 cell: Some(cell),
                 readers: Vec::new(),
                 created_at,
                 freed: (0, created_at),
             });
-            StateId { index, generation: 1 }
+            StateId { index, generation: self.base }
         }
     }
 
@@ -174,6 +177,14 @@ impl Cells {
         let mut held = std::mem::take(&mut self.held_by_disposals);
         self.retired.append(&mut held);
         self.held_by_disposals = held;
+    }
+
+    pub fn set_base(&mut self, base: u32) {
+        self.base = base;
+    }
+
+    pub fn next_base(&self) -> u32 {
+        crate::runtime::next_base(self.base, self.entries.iter().map(|entry| entry.generation))
     }
 
     pub fn live_count(&self) -> usize {
@@ -475,6 +486,7 @@ fn retire(id: StateId) {
         Vec::new()
     });
     drop(freed);
+    crate::runtime::release_if_empty();
 }
 
 /// A `Copy` handle to a state cell: what code and closures pass around.

@@ -190,12 +190,18 @@ struct ExitGuard;
 
 impl Drop for ExitGuard {
     fn drop(&mut self) {
-        let Some(ids) = try_with_runtime(|runtime| runtime.compositions.live_ids()) else { return };
+        let Some(ids) = try_with_runtime(|runtime| {
+            runtime.exiting = true;
+            runtime.compositions.live_ids()
+        }) else {
+            return;
+        };
         for id in ids {
             if let Some(Some(disposal)) = try_with_runtime(|runtime| Disposal::close(runtime, id)) {
                 disposal.run();
             }
         }
+        crate::runtime::release_if_empty();
     }
 }
 
@@ -530,6 +536,7 @@ impl Disposal {
             drop(freed);
         }
         request_frames();
+        crate::runtime::release_if_empty();
     }
 }
 

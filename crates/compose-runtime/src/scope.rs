@@ -37,11 +37,13 @@ pub(crate) struct ScopeEntry {
 pub(crate) struct Scopes {
     entries: Vec<ScopeEntry>,
     free: Vec<u32>,
+    /// The generation of new entries (odd): after a reset, above every earlier one.
+    base: u32,
 }
 
 impl Scopes {
     pub const fn new() -> Scopes {
-        Scopes { entries: Vec::new(), free: Vec::new() }
+        Scopes { entries: Vec::new(), free: Vec::new(), base: 1 }
     }
 
     pub fn alloc(&mut self, composition: u32, group: u32) -> ScopeId {
@@ -56,13 +58,13 @@ impl Scopes {
         } else {
             let index = u32::try_from(self.entries.len()).expect("too many recompose scopes");
             self.entries.push(ScopeEntry {
-                generation: 1,
+                generation: self.base,
                 composition,
                 group,
                 epoch: 0,
                 invalid: false,
             });
-            ScopeId { index, generation: 1 }
+            ScopeId { index, generation: self.base }
         }
     }
 
@@ -85,6 +87,14 @@ impl Scopes {
     /// Whether a read recorded at `epoch` still belongs to the scope's latest run.
     pub fn is_current(&self, id: ScopeId, epoch: u32) -> bool {
         self.get(id).is_some_and(|entry| entry.epoch == epoch)
+    }
+
+    pub fn set_base(&mut self, base: u32) {
+        self.base = base;
+    }
+
+    pub fn next_base(&self) -> u32 {
+        crate::runtime::next_base(self.base, self.entries.iter().map(|entry| entry.generation))
     }
 
     pub fn live_count(&self) -> usize {

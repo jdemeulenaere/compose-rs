@@ -45,6 +45,8 @@ pub(crate) struct Runtime {
     pub disposing: usize,
     /// Passes applying their end-of-pass work (releases, observers, drops, effects).
     pub finishing: usize,
+    /// The thread is exiting: once nothing is left, the runtime releases its storage.
+    pub exiting: bool,
     /// A group guard was dropped by an unwinding panic in this pass, leaving its group open.
     pub abandoned_groups: bool,
 }
@@ -70,6 +72,7 @@ impl Runtime {
             pending_move: None,
             disposing: 0,
             finishing: 0,
+            exiting: false,
             abandoned_groups: false,
         }
     }
@@ -129,6 +132,37 @@ fn reentered() -> ! {
         "compose-runtime: the runtime was re-entered while busy; user code ran inside the runtime \
          (a bug in compose-runtime)"
     )
+}
+
+/// A generation above `base` and every one in `generations`, odd (as live entries' are).
+pub(crate) fn next_base(base: u32, generations: impl Iterator<Item = u32>) -> u32 {
+    let highest = generations.fold(base, u32::max);
+    (highest.wrapping_add(2)) | 1
+}
+
+/// At thread exit, once no composition, state cell or scope is left and nothing is running,
+/// replaces the runtime by an empty one, so a thread that dropped everything leaks nothing. The
+/// new arenas continue the old generations, so a stale handle still reads as freed.
+pub(crate) fn release_if_empty() {
+    let old = try_with_runtime(|runtime| {
+        let empty = runtime.exiting
+            && !runtime.is_busy()
+            && runtime.compositions.live() == 0
+            && runtime.cells.live_count() == 0
+            && runtime.scopes.live_count() == 0;
+        if !empty {
+            return None;
+        }
+        let mut fresh = Runtime::new();
+        fresh.exiting = true;
+        fresh.cells.set_base(runtime.cells.next_base());
+        fresh.scopes.set_base(runtime.scopes.next_base());
+        fresh.compositions.base = runtime.compositions.next_base();
+        Some(std::mem::replace(runtime, fresh))
+    })
+    .flatten();
+    // Queued frame requests (user closures) drop here, outside the borrow.
+    drop(old);
 }
 
 /// Calls the frame requesters queued by invalidations, outside the borrow. While a pass or a
@@ -298,11 +332,13 @@ pub(crate) struct Compositions {
     live: usize,
     /// Live compositions closed at thread exit.
     pub closed: usize,
+    /// The generation of new entries (odd): after a reset, above every earlier one.
+    base: u32,
 }
 
 impl Compositions {
     const fn new() -> Compositions {
-        Compositions { entries: Vec::new(), free: Vec::new(), live: 0, closed: 0 }
+        Compositions { entries: Vec::new(), free: Vec::new(), live: 0, closed: 0, base: 1 }
     }
 
     pub fn alloc(&mut self, data: CompositionData) -> CompositionId {
@@ -314,8 +350,8 @@ impl Compositions {
             CompositionId { index, generation: entry.generation }
         } else {
             let index = u32::try_from(self.entries.len()).expect("too many compositions");
-            self.entries.push(CompositionEntry { generation: 1, data: Some(data) });
-            CompositionId { index, generation: 1 }
+            self.entries.push(CompositionEntry { generation: self.base, data: Some(data) });
+            CompositionId { index, generation: self.base }
         }
     }
 
@@ -359,6 +395,15 @@ impl Compositions {
 
     pub fn data(&self, index: u32) -> &CompositionData {
         self.entries[index as usize].data.as_ref().expect("composition of a live scope or pass")
+    }
+
+    pub fn live(&self) -> usize {
+        self.live
+    }
+
+    /// A generation above every one this arena gave out, for the arena that replaces it.
+    pub fn next_base(&self) -> u32 {
+        next_base(self.base, self.entries.iter().map(|entry| entry.generation))
     }
 
     /// Live compositions not closed: those that may still run a pass.
