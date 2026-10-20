@@ -2,18 +2,20 @@
 fn Filtered(ids: Rc<Vec<u32>>, on_change: Rc<dyn Fn(&str)>) {
     #![allow(unused_variables)]
     let __composer = ::compose::__private::current();
+    let __compose_restart = |__kept: &dyn ::core::any::Any| {
+        let __kept = ::compose::__private::kept::<
+            (Rc<Vec<u32>>, Rc<dyn Fn(&str)>),
+        >(__kept);
+        Filtered(
+            ::compose::__private::keep(&__kept.0),
+            ::compose::__private::keep(&__kept.1),
+        )
+    };
     let __compose_group = ::compose::__private::RestartGroup::start(
         __composer,
         9868098601948503028u64,
-        |__kept: &dyn ::core::any::Any| {
-            let __kept = ::compose::__private::kept::<
-                (Rc<Vec<u32>>, Rc<dyn Fn(&str)>),
-            >(__kept);
-            Filtered(
-                ::compose::__private::keep(&__kept.0),
-                ::compose::__private::keep(&__kept.1),
-            )
-        },
+        __compose_restart,
+        ::compose::__private::identity_of(&__compose_restart),
     );
     if !__composer
         .update_kept(

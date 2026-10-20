@@ -1,16 +1,18 @@
 #[allow(non_snake_case)]
 fn Pair(__compose_argument0: (i32, i32), _unused: bool) {
     let __composer = ::compose::__private::current();
+    let __compose_restart = |__kept: &dyn ::core::any::Any| {
+        let __kept = ::compose::__private::kept::<((i32, i32), bool)>(__kept);
+        Pair(
+            ::compose::__private::keep(&__kept.0),
+            ::compose::__private::keep(&__kept.1),
+        )
+    };
     let __compose_group = ::compose::__private::RestartGroup::start(
         __composer,
         17074722474517449155u64,
-        |__kept: &dyn ::core::any::Any| {
-            let __kept = ::compose::__private::kept::<((i32, i32), bool)>(__kept);
-            Pair(
-                ::compose::__private::keep(&__kept.0),
-                ::compose::__private::keep(&__kept.1),
-            )
-        },
+        __compose_restart,
+        ::compose::__private::identity_of(&__compose_restart),
     );
     if !__composer
         .update_kept(
@@ -33,15 +35,17 @@ fn Pair(__compose_argument0: (i32, i32), _unused: bool) {
     }
 }
 #[allow(non_snake_case)]
-fn List<T: ComposeArg + Clone + Display>(items: Rc<Vec<T>>) {
+fn List<T: ComposeArg + Clone + Display + 'static>(items: Rc<Vec<T>>) {
     let __composer = ::compose::__private::current();
+    let __compose_restart = |__kept: &dyn ::core::any::Any| {
+        let __kept = ::compose::__private::kept::<(Rc<Vec<T>>,)>(__kept);
+        List::<T>(::compose::__private::keep(&__kept.0))
+    };
     let __compose_group = ::compose::__private::RestartGroup::start(
         __composer,
         18251905653550721707u64,
-        |__kept: &dyn ::core::any::Any| {
-            let __kept = ::compose::__private::kept::<(Rc<Vec<T>>,)>(__kept);
-            List::<T>(::compose::__private::keep(&__kept.0))
-        },
+        __compose_restart,
+        ::compose::__private::identity_of(&__compose_restart),
     );
     if !__composer
         .update_kept(

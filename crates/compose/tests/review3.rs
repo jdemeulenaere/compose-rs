@@ -71,6 +71,7 @@ fn recompose_while_another_panic_unwinds() {
 /// ("panic in a destructor during cleanup"). A guard should compare with the panicking state at its
 /// creation (or a panic count) instead.
 #[test]
+#[cfg_attr(miri, ignore = "spawns a process")]
 fn a_pass_while_another_panic_unwinds_does_not_abort() {
     if std::env::var_os("REVIEW3_CHILD").is_some() {
         recompose_while_another_panic_unwinds();

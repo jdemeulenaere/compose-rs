@@ -2,16 +2,18 @@
 #[allow(non_snake_case)]
 pub fn Greeting(name: String, count: i32) {
     let __composer = ::compose::__private::current();
+    let __compose_restart = |__kept: &dyn ::core::any::Any| {
+        let __kept = ::compose::__private::kept::<(String, i32)>(__kept);
+        Greeting(
+            ::compose::__private::keep(&__kept.0),
+            ::compose::__private::keep(&__kept.1),
+        )
+    };
     let __compose_group = ::compose::__private::RestartGroup::start(
         __composer,
         12070982927730596820u64,
-        |__kept: &dyn ::core::any::Any| {
-            let __kept = ::compose::__private::kept::<(String, i32)>(__kept);
-            Greeting(
-                ::compose::__private::keep(&__kept.0),
-                ::compose::__private::keep(&__kept.1),
-            )
-        },
+        __compose_restart,
+        ::compose::__private::identity_of(&__compose_restart),
     );
     if !__composer
         .update_kept(

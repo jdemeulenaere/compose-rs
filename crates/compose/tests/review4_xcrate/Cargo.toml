@@ -1,0 +1,8 @@
+# A two-crate fixture for crates/compose/tests/review4.rs: composables defined in one crate
+# (`widgets`) and called from another (`app`). Its own workspace, so the main one ignores it.
+[workspace]
+resolver = "3"
+members = ["widgets", "app"]
+
+[profile.dev]
+opt-level = 0

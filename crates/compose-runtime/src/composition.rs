@@ -49,7 +49,8 @@ impl Composition {
     /// new one: groups with the same keys keep their state.
     pub fn set_content(&self, content: impl Fn() + 'static) {
         let content: Rc<dyn Fn()> = Rc::new(content);
-        let pass = Pass::begin(self.id, Mode::Normal).expect("a full pass always starts");
+        // A composition closed at thread exit composes nothing.
+        let Some(pass) = Pass::begin(self.id, Mode::Normal) else { return };
         compose_root(content);
         pass.finish();
     }
@@ -191,7 +192,7 @@ impl Drop for ExitGuard {
     fn drop(&mut self) {
         let Some(ids) = try_with_runtime(|runtime| runtime.compositions.live_ids()) else { return };
         for id in ids {
-            if let Some(Some(disposal)) = try_with_runtime(|runtime| Disposal::take(runtime, id)) {
+            if let Some(Some(disposal)) = try_with_runtime(|runtime| Disposal::close(runtime, id)) {
                 disposal.run();
             }
         }
@@ -231,6 +232,9 @@ impl Pass {
             }
             let Runtime { compositions, cells, frames, active, abandoned_groups, .. } = runtime;
             let data = compositions.get_mut(id).expect("a live composition");
+            if data.closed {
+                return None;
+            }
             if data.poisoned {
                 misuse(ComposeError::Poisoned)
             }
@@ -436,7 +440,11 @@ fn apply_deferred(
 
 /// A composition taken out of the runtime, to be released outside the borrow.
 struct Disposal {
-    data: CompositionData,
+    /// The composition's data, or `None` when it is only closed (at thread exit) and its handle
+    /// still owns it.
+    data: Option<CompositionData>,
+    applier: Rc<RefCell<dyn ErasedApplier>>,
+    root_node: crate::applier::NodeRef,
     deferred: Deferred,
     top_level_nodes: u32,
 }
@@ -450,8 +458,27 @@ impl Disposal {
             }
             misuse(ComposeError::DisposedDuringPass)
         }
-        let Runtime { compositions, scopes, removal_stack, cells, disposing, .. } = runtime;
-        let mut data = compositions.remove(id)?;
+        let data = runtime.compositions.remove(id)?;
+        Some(Disposal::empty(runtime, data))
+    }
+
+    /// Empties a composition still owned by its handle, at thread exit, and closes it: the handle
+    /// stays usable (an empty tree; passes compose nothing) until its owner drops it.
+    fn close(runtime: &mut Runtime, id: CompositionId) -> Option<Disposal> {
+        if runtime.active.is_some_and(|active| active.composition == id) {
+            return None;
+        }
+        let data = runtime.compositions.get_mut(id).filter(|data| !data.closed)?;
+        data.closed = true;
+        let data = std::mem::replace(data, CompositionData::closed(data));
+        runtime.compositions.closed += 1;
+        let mut disposal = Disposal::empty(runtime, data);
+        disposal.data = None;
+        Some(disposal)
+    }
+
+    fn empty(runtime: &mut Runtime, mut data: CompositionData) -> Disposal {
+        let Runtime { scopes, removal_stack, disposing, .. } = runtime;
         // Counts as live while its values drop: cells they retire wait for the end of the
         // disposal, as they would wait for the end of a pass.
         *disposing += 1;
@@ -460,19 +487,25 @@ impl Disposal {
         remove_siblings(&mut data.table, &mut deferred, scopes, removal_stack, first, NONE);
         data.table[SENTINEL].first_child = NONE;
         let top_level_nodes = if data.poisoned { 0 } else { data.table[SENTINEL].node_count };
-        let _ = cells;
-        Some(Disposal { data, deferred, top_level_nodes })
+        data.table[SENTINEL].node_count = 0;
+        Disposal {
+            applier: data.applier.clone(),
+            root_node: data.root_node,
+            data: Some(data),
+            deferred,
+            top_level_nodes,
+        }
     }
 
     fn run(mut self) {
         let disposing = Disposing;
-        let applier = self.data.applier.clone();
+        let applier = self.applier.clone();
         {
             let mut applier =
                 applier.try_borrow_mut().unwrap_or_else(|_| misuse(ComposeError::ApplierBusy));
             applier.on_begin_changes();
             if self.top_level_nodes > 0 {
-                applier.remove(self.data.root_node, 0, self.top_level_nodes as usize);
+                applier.remove(self.root_node, 0, self.top_level_nodes as usize);
             }
         }
         apply_deferred(&applier, &mut self.deferred, false);
@@ -488,7 +521,7 @@ impl Disposal {
                 if runtime.disposing > 0 {
                     return Vec::new();
                 }
-                let all = runtime.compositions.live() == 0 && runtime.finishing == 0;
+                let all = runtime.compositions.open() == 0 && runtime.finishing == 0;
                 runtime.cells.free_held_by_disposals(all)
             });
             if freed.is_empty() {

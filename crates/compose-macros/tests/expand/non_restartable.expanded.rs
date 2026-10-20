@@ -26,13 +26,15 @@ fn Explicit(content: impl Fn()) {
 #[allow(non_snake_case)]
 fn StaticReference(title: &'static str) {
     let __composer = ::compose::__private::current();
+    let __compose_restart = |__kept: &dyn ::core::any::Any| {
+        let __kept = ::compose::__private::kept::<(&'static str,)>(__kept);
+        StaticReference(::compose::__private::keep(&__kept.0))
+    };
     let __compose_group = ::compose::__private::RestartGroup::start(
         __composer,
         8726448151579878150u64,
-        |__kept: &dyn ::core::any::Any| {
-            let __kept = ::compose::__private::kept::<(&'static str,)>(__kept);
-            StaticReference(::compose::__private::keep(&__kept.0))
-        },
+        __compose_restart,
+        ::compose::__private::identity_of(&__compose_restart),
     );
     if !__composer
         .update_kept(

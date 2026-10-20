@@ -4,7 +4,7 @@
 //! body keep them balanced. While a panic unwinds through them they don't close: the pass is
 //! poisoned anyway, and touching the runtime then could panic again.
 
-use std::any::Any;
+use std::any::{Any, TypeId};
 
 pub use crate::compose_arg::ComposeArg;
 pub use crate::composer::{Composer, current};
@@ -26,9 +26,16 @@ pub struct RestartGroup {
 }
 
 impl RestartGroup {
+    /// `identity` is [`identity_of`] the restart closure, `restart` the same closure as a
+    /// function pointer.
     #[inline]
-    pub fn start(composer: Composer, key: u64, restart: fn(&dyn Any)) -> RestartGroup {
-        crate::composer::start_restart_group_of(key, restart);
+    pub fn start(
+        composer: Composer,
+        key: u64,
+        restart: fn(&dyn Any),
+        identity: TypeId,
+    ) -> RestartGroup {
+        crate::composer::start_restart_group_of(key, identity);
         RestartGroup { composer, restart, unwinding: std::thread::panicking() }
     }
 }
@@ -97,6 +104,13 @@ impl Drop for Region {
             }
         }
     }
+}
+
+/// A composable's identity: the `TypeId` of its restart closure, distinct for each composable and
+/// each instantiation of a generic one, and the same in every copy of an `#[inline]` one.
+#[inline]
+pub fn identity_of<F: 'static>(_restart: &F) -> TypeId {
+    TypeId::of::<F>()
 }
 
 /// A clone of an argument, to keep. A function rather than `Clone::clone`, so generated code

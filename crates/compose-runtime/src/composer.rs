@@ -124,7 +124,7 @@ impl Runtime {
         kind: GroupKind,
         key: u64,
         data_key: u64,
-        restart: Option<fn(&dyn Any)>,
+        identity: Option<TypeId>,
     ) -> (NodeOp, NodeStart) {
         let composition = self.check_composing();
         let Runtime { compositions, scopes, frames, .. } = self;
@@ -145,11 +145,11 @@ impl Runtime {
             let mut nodes_before = 0;
             while current != parent.limit && current != NONE {
                 let group = &table[current];
-                // A restart group of another composable with the same key (another restart
-                // function: an instantiation of a generic composable, a same-named composable)
-                // doesn't match: it would lend its kept arguments and state.
-                let same_composable = match (group.restart, restart) {
-                    (Some(old), Some(new)) => std::ptr::fn_addr_eq(old, new),
+                // A restart group of another composable with the same key (an instantiation of a
+                // generic composable, a same-named composable) doesn't match: it would lend its
+                // kept arguments and state.
+                let same_composable = match (group.identity, identity) {
+                    (Some(old), Some(new)) => old == new,
                     _ => true,
                 };
                 if group.key == key
@@ -190,6 +190,7 @@ impl Runtime {
         let inserting = found == NONE;
         let index = if inserting {
             let index = table.alloc(kind, key, data_key, parent.group);
+            table[index].identity = identity;
             table[index].next_sibling = parent.cursor;
             table.link_after(parent.group, parent.last_placed, index);
             parent.last_placed = index;
@@ -688,12 +689,13 @@ fn start_group(kind: GroupKind, key: u64, data_key: u64) -> NodeStart {
     start
 }
 
-/// Starts a restart group for the composable whose restart function is `restart`. A group with
-/// another restart function (another composable with the same key: two instantiations of a
-/// generic composable, same-named composables) doesn't match.
-pub(crate) fn start_restart_group_of(key: u64, restart: fn(&dyn Any)) {
+/// Starts a restart group for the composable whose identity (the `TypeId` of its restart
+/// closure) is `identity`. A group of another composable with the same key (an instantiation of a
+/// generic composable, a same-named composable) doesn't match. Not the restart function's address:
+/// an `#[inline]` composable can have a copy per crate, with distinct addresses.
+pub(crate) fn start_restart_group_of(key: u64, identity: TypeId) {
     let (op, _) =
-        with_runtime(|runtime| runtime.start_group(GroupKind::Restart, key, 0, Some(restart)));
+        with_runtime(|runtime| runtime.start_group(GroupKind::Restart, key, 0, Some(identity)));
     apply_node_op(op);
 }
 

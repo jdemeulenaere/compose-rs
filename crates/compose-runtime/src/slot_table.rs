@@ -81,6 +81,8 @@ pub(crate) struct Group {
     /// The kept arguments of a restart group, read back by its restart function.
     pub kept: Option<Rc<dyn Any>>,
     pub restart: Option<fn(&dyn Any)>,
+    /// The identity of a restart group's composable: the `TypeId` of its restart closure.
+    pub identity: Option<TypeId>,
 }
 
 pub(crate) struct SlotTable {
@@ -110,6 +112,7 @@ impl SlotTable {
             group.node_count = 0;
             group.node = NodeRef::NONE;
             group.scope = ScopeId::NONE;
+            group.identity = None;
             index
         } else {
             let index = u32::try_from(self.groups.len()).expect("too many groups");
@@ -128,6 +131,7 @@ impl SlotTable {
                 slots: Vec::new(),
                 kept: None,
                 restart: None,
+                identity: None,
             });
             index
         }

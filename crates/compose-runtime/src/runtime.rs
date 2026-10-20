@@ -247,6 +247,8 @@ pub(crate) struct CompositionData {
     pub poisoned: bool,
     /// Its last pass is applying its end-of-pass work.
     pub finishing: bool,
+    /// Emptied at thread exit while its handle still owns it: passes compose nothing.
+    pub closed: bool,
     pub frame_requester: Option<Rc<dyn Fn()>>,
     pub deferred: Deferred,
 }
@@ -260,9 +262,17 @@ impl CompositionData {
             pending: false,
             poisoned: false,
             finishing: false,
+            closed: false,
             frame_requester: None,
             deferred: Deferred::default(),
         }
+    }
+
+    /// What a composition keeps once closed: its applier and root, with an empty slot table.
+    pub fn closed(data: &CompositionData) -> CompositionData {
+        let mut closed = CompositionData::new(data.applier.clone(), data.root_node);
+        closed.closed = true;
+        closed
     }
 
     pub fn has_invalidations(&self) -> bool {
@@ -279,11 +289,13 @@ pub(crate) struct Compositions {
     entries: Vec<CompositionEntry>,
     free: Vec<u32>,
     live: usize,
+    /// Live compositions closed at thread exit.
+    pub closed: usize,
 }
 
 impl Compositions {
     const fn new() -> Compositions {
-        Compositions { entries: Vec::new(), free: Vec::new(), live: 0 }
+        Compositions { entries: Vec::new(), free: Vec::new(), live: 0, closed: 0 }
     }
 
     pub fn alloc(&mut self, data: CompositionData) -> CompositionId {
@@ -310,6 +322,9 @@ impl Compositions {
         entry.generation = entry.generation.wrapping_add(1);
         self.free.push(id.index);
         self.live -= 1;
+        if data.closed {
+            self.closed -= 1;
+        }
         Some(data)
     }
 
@@ -339,8 +354,9 @@ impl Compositions {
         self.entries[index as usize].data.as_ref().expect("composition of a live scope or pass")
     }
 
-    pub fn live(&self) -> usize {
-        self.live
+    /// Live compositions not closed: those that may still run a pass.
+    pub fn open(&self) -> usize {
+        self.live - self.closed
     }
 
     pub fn live_ids(&self) -> Vec<CompositionId> {

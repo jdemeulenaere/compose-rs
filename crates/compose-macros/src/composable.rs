@@ -311,9 +311,18 @@ fn transform(attr: TokenStream, item: TokenStream, scope: &str) -> syn::Result<T
                 ) && #composer.skipping()
             }
         };
+        let restart_name = Ident::new("__compose_restart", Span::mixed_site());
         quote! {
             let #composer = ::compose::__private::current();
-            let #group = ::compose::__private::RestartGroup::start(#composer, #key, #restart);
+            // Also the composable's identity: its type is unique to this composable (and to each
+            // instantiation of a generic one), and the same in every copy of an `#[inline]` one.
+            let #restart_name = #restart;
+            let #group = ::compose::__private::RestartGroup::start(
+                #composer,
+                #key,
+                #restart_name,
+                ::compose::__private::identity_of(&#restart_name),
+            );
             if #skip {
                 #composer.skip_to_group_end();
                 return;
@@ -335,6 +344,14 @@ fn transform(attr: TokenStream, item: TokenStream, scope: &str) -> syn::Result<T
         }
     };
 
+    if restartable {
+        // The restart closure's `TypeId` identifies the composable: its type parameters must be
+        // `'static`, as its kept arguments already are.
+        // Inline, next to the parameter's other bounds, so clippy sees one bound location.
+        for parameter in function.sig.generics.type_params_mut() {
+            parameter.bounds.push(syn::parse_quote!('static));
+        }
+    }
     let (inner, outer): (Vec<_>, Vec<_>) =
         function.attrs.iter().partition(|attr| matches!(attr.style, syn::AttrStyle::Inner(_)));
     let vis = &function.vis;

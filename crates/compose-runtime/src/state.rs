@@ -464,7 +464,7 @@ fn retire(id: StateId) {
             cells.held_by_disposals.push(id);
         } else if runtime.finishing > 0 {
             cells.held_by_passes.push(id);
-        } else if runtime.compositions.live() == 0 {
+        } else if runtime.compositions.open() == 0 {
             // No pass will come: free it, and anything an interrupted disposal left retired.
             let mut ids = std::mem::take(&mut cells.retired);
             ids.push(id);

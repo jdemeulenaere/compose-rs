@@ -1,19 +1,21 @@
 #[allow(non_snake_case)]
 fn Screen(items: Rc<Vec<u32>>, mode: Mode, content: Rc<dyn Fn()>) {
     let __composer = ::compose::__private::current();
+    let __compose_restart = |__kept: &dyn ::core::any::Any| {
+        let __kept = ::compose::__private::kept::<
+            (Rc<Vec<u32>>, Mode, Rc<dyn Fn()>),
+        >(__kept);
+        Screen(
+            ::compose::__private::keep(&__kept.0),
+            ::compose::__private::keep(&__kept.1),
+            ::compose::__private::keep(&__kept.2),
+        )
+    };
     let __compose_group = ::compose::__private::RestartGroup::start(
         __composer,
         5250667602988625983u64,
-        |__kept: &dyn ::core::any::Any| {
-            let __kept = ::compose::__private::kept::<
-                (Rc<Vec<u32>>, Mode, Rc<dyn Fn()>),
-            >(__kept);
-            Screen(
-                ::compose::__private::keep(&__kept.0),
-                ::compose::__private::keep(&__kept.1),
-                ::compose::__private::keep(&__kept.2),
-            )
-        },
+        __compose_restart,
+        ::compose::__private::identity_of(&__compose_restart),
     );
     if !__composer
         .update_kept(

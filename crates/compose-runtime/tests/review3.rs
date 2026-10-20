@@ -355,6 +355,7 @@ fn compose_into_a_thread_local_and_exit() {
 /// destroyed thread-local and panics inside a TLS destructor, which aborts the process.
 /// (`HOST`'s own `Composition::drop`, later, finds no runtime and leaks quietly.)
 #[test]
+#[cfg_attr(miri, ignore = "spawns a process")]
 fn a_thread_exits_cleanly_with_a_composition_in_a_thread_local() {
     if std::env::var_os("REVIEW3_CHILD").is_some() {
         compose_into_a_thread_local_and_exit();
