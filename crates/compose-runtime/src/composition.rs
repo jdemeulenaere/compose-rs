@@ -440,8 +440,8 @@ fn apply_deferred(
 
 /// A composition taken out of the runtime, to be released outside the borrow.
 struct Disposal {
-    /// The composition's data, or `None` when it is only closed (at thread exit) and its handle
-    /// still owns it.
+    /// The composition's data, dropped once its values are released. When the composition is
+    /// only closed (at thread exit), its handle keeps a closed copy in the arena.
     data: Option<CompositionData>,
     applier: Rc<RefCell<dyn ErasedApplier>>,
     root_node: crate::applier::NodeRef,
@@ -472,9 +472,9 @@ impl Disposal {
         data.closed = true;
         let data = std::mem::replace(data, CompositionData::closed(data));
         runtime.compositions.closed += 1;
-        let mut disposal = Disposal::empty(runtime, data);
-        disposal.data = None;
-        Some(disposal)
+        // The old data (its frame requester, its applier's last references) drops in `run`,
+        // outside the runtime's borrow.
+        Some(Disposal::empty(runtime, data))
     }
 
     fn empty(runtime: &mut Runtime, mut data: CompositionData) -> Disposal {
