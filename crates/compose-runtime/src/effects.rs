@@ -1,15 +1,33 @@
 //! Effects, written on remember observers as in Compose.
 
 use std::cell::Cell;
+use std::rc::Rc;
 
 use crate::compose_arg::ComposeArg;
-use crate::composer::current;
-use crate::remember::{RememberObserver, remember_observer_keyed};
+use crate::composer::record_effect;
+use crate::remember::{RememberObserver, remember, remember_observer_keyed};
+use crate::runtime::{DeferredEffect, RunEffect};
+
+/// Where a [`SideEffect`]'s closure waits for the end of the pass: a remembered slot, so a
+/// pass that runs the call again allocates nothing.
+struct EffectSlot<F>(Cell<Option<F>>);
+
+impl<F: FnOnce()> RunEffect for EffectSlot<F> {
+    fn run(&self) {
+        if let Some(effect) = self.0.take() {
+            effect();
+        }
+    }
+}
 
 /// Runs `effect` after every successful pass that ran this call, as Compose's `SideEffect`.
 #[allow(non_snake_case)]
-pub fn SideEffect(effect: impl FnOnce() + 'static) {
-    current().record_side_effect(effect);
+pub fn SideEffect<F: FnOnce() + 'static>(effect: F) {
+    let slot = remember(|| Rc::new(EffectSlot::<F>(Cell::new(None))));
+    // Normally empty: the previous run's effect ran at the end of its pass.
+    let previous = slot.0.replace(Some(effect));
+    drop(previous);
+    record_effect(DeferredEffect::Slot(slot));
 }
 
 /// The receiver of a [`DisposableEffect`]'s body, as Compose's `DisposableEffectScope`.
@@ -25,9 +43,7 @@ pub struct DisposableEffectResult {
 impl DisposableEffectScope {
     /// The cleanup to run when the keys change or the effect leaves the composition.
     pub fn on_dispose(&self, on_dispose: impl FnOnce() + 'static) -> DisposableEffectResult {
-        DisposableEffectResult {
-            on_dispose: Box::new(on_dispose),
-        }
+        DisposableEffectResult { on_dispose: Box::new(on_dispose) }
     }
 }
 

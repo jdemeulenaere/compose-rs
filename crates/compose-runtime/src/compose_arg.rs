@@ -11,6 +11,13 @@ use crate::state::{MutableState, OwnedState, State};
 /// `Arc`, state handles, callbacks) compares by identity; small values by contents. Collections
 /// are never compared element by element, so `Vec` and `HashMap` don't implement it: wrap them
 /// in `Rc`.
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` can't be compared for skipping: it doesn't implement `ComposeArg`",
+    label = "this argument's type doesn't implement `ComposeArg`",
+    note = "large or deep data is compared by identity: wrap it in `Rc<…>`",
+    note = "or derive `ComposeArg` for your own types, or mark the composable \
+            `#[composable(non_restartable)]`"
+)]
 pub trait ComposeArg: 'static {
     /// Whether `other` is the same as `self` for skipping. Cheap: never a deep traversal.
     fn same(&self, other: &Self) -> bool;

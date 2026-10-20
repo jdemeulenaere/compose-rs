@@ -129,10 +129,8 @@ fn Counter() {
 fn SideEffectFree(count: MutableState<u64>) {
     let composer = current();
     composer.start_restart_group(key_of("allocations::Reader"));
-    let changed = composer.update_kept(
-        |kept: &(MutableState<u64>,)| !kept.0.same(&count),
-        || (count,),
-    );
+    let changed =
+        composer.update_kept(|kept: &(MutableState<u64>,)| !kept.0.same(&count), || (count,));
     if !changed && composer.skipping() {
         composer.skip_to_group_end();
     } else {
@@ -159,10 +157,8 @@ struct RowData {
 fn TodoRow(row: Rc<RowData>) {
     let composer = current();
     composer.start_restart_group(key_of("allocations::TodoRow"));
-    let changed = composer.update_kept(
-        |kept: &(Rc<RowData>,)| !kept.0.same(&row),
-        || (row.clone(),),
-    );
+    let changed =
+        composer.update_kept(|kept: &(Rc<RowData>,)| !kept.0.same(&row), || (row.clone(),));
     if !changed && composer.skipping() {
         composer.skip_to_group_end();
     } else {
@@ -174,12 +170,7 @@ fn TodoRow(row: Rc<RowData>) {
         composer.end_group();
     }
     composer.end_restart_group(|kept| {
-        TodoRow(
-            kept.downcast_ref::<(Rc<RowData>,)>()
-                .expect("kept")
-                .0
-                .clone(),
-        )
+        TodoRow(kept.downcast_ref::<(Rc<RowData>,)>().expect("kept").0.clone())
     });
 }
 
@@ -187,10 +178,8 @@ fn TodoRow(row: Rc<RowData>) {
 fn TodoList(rows: MutableState<Vec<Rc<RowData>>>) {
     let composer = current();
     composer.start_restart_group(key_of("allocations::TodoList"));
-    let changed = composer.update_kept(
-        |kept: &(MutableState<Vec<Rc<RowData>>>,)| !kept.0.same(&rows),
-        || (rows,),
-    );
+    let changed = composer
+        .update_kept(|kept: &(MutableState<Vec<Rc<RowData>>>,)| !kept.0.same(&rows), || (rows,));
     if !changed && composer.skipping() {
         composer.skip_to_group_end();
     } else {
@@ -202,23 +191,13 @@ fn TodoList(rows: MutableState<Vec<Rc<RowData>>>) {
         });
     }
     composer.end_restart_group(|kept| {
-        TodoList(
-            kept.downcast_ref::<(MutableState<Vec<Rc<RowData>>>,)>()
-                .expect("kept")
-                .0,
-        )
+        TodoList(kept.downcast_ref::<(MutableState<Vec<Rc<RowData>>>,)>().expect("kept").0)
     });
 }
 
 fn todo_rows(count: u64) -> OwnedState<Vec<Rc<RowData>>> {
-    let rows = (0..count)
-        .map(|id| {
-            Rc::new(RowData {
-                id,
-                done: mutable_state_of(false),
-            })
-        })
-        .collect();
+    let rows =
+        (0..count).map(|id| Rc::new(RowData { id, done: mutable_state_of(false) })).collect();
     mutable_state_of_with(rows, never_equal_policy())
 }
 
@@ -240,16 +219,10 @@ fn a_counter_click_allocates_nothing() {
             count.update(|count| count + 1);
             assert!(composition.recompose());
         });
-        assert_eq!(
-            allocated, 0,
-            "a click and its recomposition allocate nothing"
-        );
+        assert_eq!(allocated, 0, "a click and its recomposition allocate nothing");
         assert_eq!(runs(), 2, "the text and the reader recompose, nothing else");
     }
-    assert_eq!(
-        composition.with_applier(|tree: &mut Tree| tree.dump()),
-        "1000\n103\n206\n"
-    );
+    assert_eq!(composition.with_applier(|tree: &mut Tree| tree.dump()), "1000\n103\n206\n");
 }
 
 #[test]
@@ -266,20 +239,21 @@ fn a_pass_with_nothing_invalid_allocates_nothing() {
 
 #[test]
 fn toggling_one_of_a_thousand_rows_recomposes_one_row_and_allocates_nothing() {
-    let rows = todo_rows(1000);
+    let count = if cfg!(miri) { 50 } else { 1000 };
+    let rows = todo_rows(count);
     let handle = rows.handle();
     let composition = Composition::new(Tree::new());
     composition.set_content(move || TodoList(handle));
     runs();
     let done: Vec<MutableState<bool>> =
         rows.with(|rows| rows.iter().map(|row| row.done.handle()).collect());
-    for index in [3, 500, 999, 3] {
+    for index in [3, 25, 49, 3] {
         done[index].set(!done[index].get());
         composition.recompose();
     }
     runs();
     for round in 0..50 {
-        let index = (round * 37) % 1000;
+        let index = (round * 37) % count as usize;
         let allocated = allocations_in(|| {
             done[index].set(!done[index].get());
             assert!(composition.recompose());
@@ -325,7 +299,7 @@ fn live_allocations_stay_constant_across_a_thousand_clicks() {
         composition.recompose();
     }
     let before = live_bytes();
-    for _ in 0..1000 {
+    for _ in 0..if cfg!(miri) { 50 } else { 1000 } {
         count.update(|count| count + 1);
         composition.recompose();
     }
@@ -341,12 +315,9 @@ fn adding_and_removing_rows_returns_to_the_same_live_allocations() {
     let mut next_id = 10;
     let mut add_and_remove = || {
         handle.edit(|rows| {
-            for _ in 0..100 {
+            for _ in 0..if cfg!(miri) { 10 } else { 100 } {
                 next_id += 1;
-                rows.push(Rc::new(RowData {
-                    id: next_id,
-                    done: mutable_state_of(false),
-                }));
+                rows.push(Rc::new(RowData { id: next_id, done: mutable_state_of(false) }));
             }
         });
         composition.recompose();
@@ -361,7 +332,7 @@ fn adding_and_removing_rows_returns_to_the_same_live_allocations() {
         add_and_remove();
     }
     let before = live_bytes();
-    for _ in 0..40 {
+    for _ in 0..if cfg!(miri) { 5 } else { 40 } {
         add_and_remove();
     }
     assert_eq!(live_bytes(), before);
@@ -371,7 +342,7 @@ fn adding_and_removing_rows_returns_to_the_same_live_allocations() {
 #[test]
 fn dropping_a_composition_frees_what_it_allocated() {
     let build_and_drop = || {
-        let rows = todo_rows(200);
+        let rows = todo_rows(if cfg!(miri) { 20 } else { 200 });
         let handle = rows.handle();
         let composition = Composition::new(Tree::new());
         composition.set_content(move || TodoList(handle));
@@ -382,14 +353,10 @@ fn dropping_a_composition_frees_what_it_allocated() {
     build_and_drop();
     build_and_drop();
     let before = live_bytes();
-    for _ in 0..10 {
+    for _ in 0..if cfg!(miri) { 3 } else { 10 } {
         build_and_drop();
     }
-    assert_eq!(
-        live_bytes(),
-        before,
-        "everything a composition allocates is freed with it"
-    );
+    assert_eq!(live_bytes(), before, "everything a composition allocates is freed with it");
     assert_eq!(live_state_count(), 0);
     assert_eq!(live_scope_count(), 0);
 }

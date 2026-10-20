@@ -68,10 +68,8 @@ pub struct RowData {
 pub fn TodoRow(row: Rc<RowData>) {
     let composer = current();
     composer.start_restart_group(key_of("benchmarks::TodoRow"));
-    let changed = composer.update_kept(
-        |kept: &(Rc<RowData>,)| !kept.0.same(&row),
-        || (row.clone(),),
-    );
+    let changed =
+        composer.update_kept(|kept: &(Rc<RowData>,)| !kept.0.same(&row), || (row.clone(),));
     if !changed && composer.skipping() {
         composer.skip_to_group_end();
     } else {
@@ -81,12 +79,7 @@ pub fn TodoRow(row: Rc<RowData>) {
         composer.end_group();
     }
     composer.end_restart_group(|kept| {
-        TodoRow(
-            kept.downcast_ref::<(Rc<RowData>,)>()
-                .expect("kept")
-                .0
-                .clone(),
-        )
+        TodoRow(kept.downcast_ref::<(Rc<RowData>,)>().expect("kept").0.clone())
     });
 }
 
@@ -110,14 +103,8 @@ pub fn TodoList(rows: Rows) {
 }
 
 pub fn todo_rows(count: u64) -> OwnedState<Vec<Rc<RowData>>> {
-    let rows = (0..count)
-        .map(|id| {
-            Rc::new(RowData {
-                id,
-                done: mutable_state_of(false),
-            })
-        })
-        .collect();
+    let rows =
+        (0..count).map(|id| Rc::new(RowData { id, done: mutable_state_of(false) })).collect();
     mutable_state_of_with(rows, never_equal_policy())
 }
 
@@ -139,9 +126,7 @@ pub fn Skipper(trigger: MutableState<u64>, children: u64) {
         }
     }
     composer.end_restart_group(|kept| {
-        let (trigger, children) = *kept
-            .downcast_ref::<(MutableState<u64>, u64)>()
-            .expect("kept");
+        let (trigger, children) = *kept.downcast_ref::<(MutableState<u64>, u64)>().expect("kept");
         Skipper(trigger, children)
     });
 }

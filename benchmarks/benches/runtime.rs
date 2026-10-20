@@ -87,9 +87,7 @@ fn keyed_reorders(c: &mut Criterion) {
 
 fn state_reads(c: &mut Criterion) {
     let state = mutable_state_of(1u64);
-    c.bench_function("state get outside composition", |b| {
-        b.iter(|| black_box(state.get()))
-    });
+    c.bench_function("state get outside composition", |b| b.iter(|| black_box(state.get())));
 }
 
 criterion_group!(

@@ -61,9 +61,7 @@ fn slot_set(position: SlotPosition, value: SlotValue, type_name: &'static str) {
 }
 
 fn downcast<T: 'static>(value: &Rc<dyn Any>) -> &T {
-    value
-        .downcast_ref::<T>()
-        .expect("slot type checked by TypeId")
+    value.downcast_ref::<T>().expect("slot type checked by TypeId")
 }
 
 /// The value `calc` computed the first time this call ran at this position, as Compose's
@@ -87,29 +85,19 @@ pub fn remember<T: Remember>(calc: impl FnOnce() -> T) -> T::Output {
 pub fn remember_keyed<K: ComposeArg, T: Remember>(keys: K, calc: impl FnOnce() -> T) -> T::Output {
     let (keys_position, kept_keys) = slot_next(TypeId::of::<K>());
     let (value_position, existing) = slot_next(TypeId::of::<T::Stored>());
-    let keys_same = kept_keys
-        .as_ref()
-        .is_some_and(|kept| downcast::<K>(kept).same(&keys));
+    let keys_same = kept_keys.as_ref().is_some_and(|kept| downcast::<K>(kept).same(&keys));
     drop(kept_keys);
     if keys_same {
         if let Some(existing) = existing {
             return T::output(downcast::<T::Stored>(&existing));
         }
     } else {
-        slot_set(
-            keys_position,
-            SlotValue::Plain(Rc::new(keys)),
-            type_name::<K>(),
-        );
+        slot_set(keys_position, SlotValue::Plain(Rc::new(keys)), type_name::<K>());
     }
     drop(existing);
     let stored = Rc::new(calc().into_stored());
     let output = T::output(&stored);
-    slot_set(
-        value_position,
-        SlotValue::Plain(stored),
-        type_name::<T::Stored>(),
-    );
+    slot_set(value_position, SlotValue::Plain(stored), type_name::<T::Stored>());
     output
 }
 
@@ -200,21 +188,10 @@ impl<T: 'static> Deref for Observed<T> {
 pub fn remember_observer<T: RememberObserver>(calc: impl FnOnce() -> T) -> Observed<T> {
     let (position, existing) = slot_next(TypeId::of::<ObserverBox<T>>());
     if let Some(existing) = existing {
-        return Observed(
-            existing
-                .downcast::<ObserverBox<T>>()
-                .expect("slot type checked"),
-        );
+        return Observed(existing.downcast::<ObserverBox<T>>().expect("slot type checked"));
     }
-    let observer = Rc::new(ObserverBox {
-        state: Cell::new(ObserverState::New),
-        value: calc(),
-    });
-    slot_set(
-        position,
-        SlotValue::Observer(observer.clone()),
-        type_name::<T>(),
-    );
+    let observer = Rc::new(ObserverBox { state: Cell::new(ObserverState::New), value: calc() });
+    slot_set(position, SlotValue::Observer(observer.clone()), type_name::<T>());
     Observed(observer)
 }
 
@@ -225,35 +202,18 @@ pub fn remember_observer_keyed<K: ComposeArg, T: RememberObserver>(
 ) -> Observed<T> {
     let (keys_position, kept_keys) = slot_next(TypeId::of::<K>());
     let (value_position, existing) = slot_next(TypeId::of::<ObserverBox<T>>());
-    let keys_same = kept_keys
-        .as_ref()
-        .is_some_and(|kept| downcast::<K>(kept).same(&keys));
+    let keys_same = kept_keys.as_ref().is_some_and(|kept| downcast::<K>(kept).same(&keys));
     drop(kept_keys);
     if keys_same {
         if let Some(existing) = existing {
-            return Observed(
-                existing
-                    .downcast::<ObserverBox<T>>()
-                    .expect("slot type checked"),
-            );
+            return Observed(existing.downcast::<ObserverBox<T>>().expect("slot type checked"));
         }
     } else {
-        slot_set(
-            keys_position,
-            SlotValue::Plain(Rc::new(keys)),
-            type_name::<K>(),
-        );
+        slot_set(keys_position, SlotValue::Plain(Rc::new(keys)), type_name::<K>());
     }
     drop(existing);
-    let observer = Rc::new(ObserverBox {
-        state: Cell::new(ObserverState::New),
-        value: calc(),
-    });
-    slot_set(
-        value_position,
-        SlotValue::Observer(observer.clone()),
-        type_name::<T>(),
-    );
+    let observer = Rc::new(ObserverBox { state: Cell::new(ObserverState::New), value: calc() });
+    slot_set(value_position, SlotValue::Observer(observer.clone()), type_name::<T>());
     Observed(observer)
 }
 

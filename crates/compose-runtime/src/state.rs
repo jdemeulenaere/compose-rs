@@ -41,6 +41,9 @@ struct CellEntry {
     cell: Option<Rc<dyn Any>>,
     readers: Vec<Reader>,
     created_at: &'static Location<'static>,
+    /// The generation and creation site of the cell last freed here, so a stale handle still
+    /// names its creation site after the slot is reused (rule R3).
+    freed: (u32, &'static Location<'static>),
 }
 
 pub(crate) struct Cells {
@@ -54,12 +57,7 @@ pub(crate) struct Cells {
 
 impl Cells {
     pub const fn new() -> Cells {
-        Cells {
-            entries: Vec::new(),
-            free: Vec::new(),
-            retired: Vec::new(),
-            freeing: Vec::new(),
-        }
+        Cells { entries: Vec::new(), free: Vec::new(), retired: Vec::new(), freeing: Vec::new() }
     }
 
     fn alloc(&mut self, cell: Rc<dyn Any>, created_at: &'static Location<'static>) -> StateId {
@@ -68,10 +66,7 @@ impl Cells {
             entry.generation = entry.generation.wrapping_add(1);
             entry.cell = Some(cell);
             entry.created_at = created_at;
-            StateId {
-                index,
-                generation: entry.generation,
-            }
+            StateId { index, generation: entry.generation }
         } else {
             let index = u32::try_from(self.entries.len()).expect("too many state cells");
             self.entries.push(CellEntry {
@@ -79,20 +74,18 @@ impl Cells {
                 cell: Some(cell),
                 readers: Vec::new(),
                 created_at,
+                freed: (0, created_at),
             });
-            StateId {
-                index,
-                generation: 1,
-            }
+            StateId { index, generation: 1 }
         }
     }
 
     fn entry(&mut self, id: StateId) -> Result<&mut CellEntry, Stale> {
         match self.entries.get_mut(id.index as usize) {
             Some(entry) if entry.generation == id.generation => Ok(entry),
-            Some(entry) if entry.generation == id.generation.wrapping_add(1) => Err(Stale {
-                created_at: Some(entry.created_at),
-            }),
+            Some(entry) if entry.freed.0 == id.generation => {
+                Err(Stale { created_at: Some(entry.freed.1) })
+            }
             _ => Err(Stale { created_at: None }),
         }
     }
@@ -102,6 +95,7 @@ impl Cells {
         if entry.generation != id.generation {
             return None;
         }
+        entry.freed = (entry.generation, entry.created_at);
         entry.generation = entry.generation.wrapping_add(1);
         entry.readers.clear();
         self.free.push(id.index);
@@ -175,62 +169,72 @@ fn register_read(entry: &mut CellEntry, scopes: &Scopes, scope: ScopeId) {
     let Some(epoch) = scopes.get(scope).map(|scope| scope.epoch) else {
         return;
     };
-    if let Some(reader) = entry
-        .readers
-        .iter_mut()
-        .rev()
-        .find(|reader| reader.scope == scope)
-    {
+    if let Some(reader) = entry.readers.iter_mut().rev().find(|reader| reader.scope == scope) {
         reader.epoch = epoch;
         return;
     }
     if entry.readers.len() == entry.readers.capacity() {
         // Prune stale readers before growing, so cells read by short-lived scopes stay small.
-        entry
-            .readers
-            .retain(|reader| scopes.is_current(reader.scope, reader.epoch));
+        entry.readers.retain(|reader| scopes.is_current(reader.scope, reader.epoch));
     }
     entry.readers.push(Reader { scope, epoch });
 }
 
 /// Looks a cell up for reading, registering the read.
 fn read_cell(id: StateId, at: &'static Location<'static>) -> Result<Rc<dyn Any>, Stale> {
-    with_runtime(|runtime| {
-        let scope = runtime.reading_scope();
-        let Runtime { cells, scopes, .. } = runtime;
-        let entry = cells.entry(id)?;
-        if !scope.is_none() {
-            register_read(entry, scopes, scope);
-        }
-        let _ = at;
-        Ok(entry.cell.clone().expect("a live cell"))
-    })
+    with_runtime(|runtime| read_cell_in(runtime, id, at))
+}
+
+/// Like [`read_cell`], for `try_get`: a stale cell once the thread's runtime is gone.
+fn try_read_cell(id: StateId, at: &'static Location<'static>) -> Result<Rc<dyn Any>, Stale> {
+    try_with_runtime(|runtime| read_cell_in(runtime, id, at))
+        .unwrap_or(Err(Stale { created_at: None }))
+}
+
+fn read_cell_in(
+    runtime: &mut Runtime,
+    id: StateId,
+    _at: &'static Location<'static>,
+) -> Result<Rc<dyn Any>, Stale> {
+    let scope = runtime.reading_scope();
+    let Runtime { cells, scopes, .. } = runtime;
+    let entry = cells.entry(id)?;
+    if !scope.is_none() {
+        register_read(entry, scopes, scope);
+    }
+    Ok(entry.cell.clone().expect("a live cell"))
 }
 
 /// Looks a cell up for writing.
 fn write_cell(id: StateId, at: &'static Location<'static>) -> Result<Rc<dyn Any>, Stale> {
-    with_runtime(|runtime| {
-        if cfg!(debug_assertions) && runtime.is_composing() {
-            panic!(
-                "compose-runtime: state written at {at} during composition; composition must be \
-                 a pure function of state: write in a handler or an effect"
-            );
-        }
-        let entry = runtime.cells.entry(id)?;
-        Ok(entry.cell.clone().expect("a live cell"))
-    })
+    with_runtime(|runtime| write_cell_in(runtime, id, at))
+}
+
+/// Like [`write_cell`], for `try_set`: a stale cell once the thread's runtime is gone.
+fn try_write_cell(id: StateId, at: &'static Location<'static>) -> Result<Rc<dyn Any>, Stale> {
+    try_with_runtime(|runtime| write_cell_in(runtime, id, at))
+        .unwrap_or(Err(Stale { created_at: None }))
+}
+
+fn write_cell_in(
+    runtime: &mut Runtime,
+    id: StateId,
+    at: &'static Location<'static>,
+) -> Result<Rc<dyn Any>, Stale> {
+    if cfg!(debug_assertions) && runtime.is_composing() {
+        panic!(
+            "compose-runtime: state written at {at} during composition; composition must be a \
+             pure function of state: write in a handler or an effect"
+        );
+    }
+    let entry = runtime.cells.entry(id)?;
+    Ok(entry.cell.clone().expect("a live cell"))
 }
 
 /// Invalidates the scopes that read a cell in their latest run, and prunes the others.
 fn invalidate_readers(id: StateId) {
     let requested = with_runtime(|runtime| {
-        let Runtime {
-            cells,
-            scopes,
-            compositions,
-            frame_requests,
-            ..
-        } = runtime;
+        let Runtime { cells, scopes, compositions, frame_requests, .. } = runtime;
         let Ok(entry) = cells.entry(id) else {
             return false;
         };
@@ -270,11 +274,7 @@ impl<T: 'static> StateCell<T> {
                 if outer {
                     self.borrowed_at.set(Some(at));
                 }
-                CellRef {
-                    value,
-                    cell: self,
-                    outer,
-                }
+                CellRef { value, cell: self, outer }
             }
             Err(_) => self.conflict(at),
         }
@@ -292,10 +292,7 @@ impl<T: 'static> StateCell<T> {
 
     #[cold]
     fn conflict(&self, at: &'static Location<'static>) -> ! {
-        let holder = self
-            .borrowed_at
-            .get()
-            .map_or_else(|| "?".to_string(), |at| at.to_string());
+        let holder = self.borrowed_at.get().map_or_else(|| "?".to_string(), |at| at.to_string());
         panic!(
             "compose-runtime: state created at {} is borrowed by `with` or `edit` at {holder}, \
              and was accessed again at {at}",
@@ -412,13 +409,25 @@ fn new_state<T: 'static>(
         equivalent,
         created_at,
     });
-    let id = with_runtime(|runtime| runtime.cells.alloc(cell, created_at));
-    OwnedState {
-        handle: MutableState {
-            id,
-            _marker: PhantomData,
-        },
-    }
+    OwnedState { handle: MutableState { id: alloc_cell(cell, created_at), _marker: PhantomData } }
+}
+
+fn alloc_cell(cell: Rc<dyn Any>, created_at: &'static Location<'static>) -> StateId {
+    with_runtime(|runtime| runtime.cells.alloc(cell, created_at))
+}
+
+/// Retires a cell whose owner was dropped (rule R2), or frees it at once if no composition
+/// exists on the thread.
+fn retire(id: StateId) {
+    let freed = try_with_runtime(|runtime| {
+        if runtime.compositions.live() == 0 && runtime.disposing == 0 {
+            runtime.cells.free(id)
+        } else {
+            runtime.cells.retired.push(id);
+            None
+        }
+    });
+    drop(freed);
 }
 
 /// A `Copy` handle to a state cell: what code and closures pass around.
@@ -455,11 +464,7 @@ impl<T: 'static> Hash for MutableState<T> {
 
 impl<T: 'static> fmt::Debug for MutableState<T> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            formatter,
-            "MutableState({}v{})",
-            self.id.index, self.id.generation
-        )
+        write!(formatter, "MutableState({}v{})", self.id.index, self.id.generation)
     }
 }
 
@@ -490,10 +495,7 @@ impl<T: 'static> MutableState<T> {
     #[track_caller]
     pub fn set(&self, value: T) {
         let at = Location::caller();
-        if !self
-            .write(value, at)
-            .unwrap_or_else(|error| stale(error, at))
-        {
+        if !self.write(value, at).unwrap_or_else(|error| stale(error, at)) {
             return;
         }
         invalidate_readers(self.id);
@@ -528,7 +530,7 @@ impl<T: 'static> MutableState<T> {
         T: Clone,
     {
         let at = Location::caller();
-        let cell = read_cell(self.id, at).ok()?;
+        let cell = try_read_cell(self.id, at).ok()?;
         let value = StateCell::<T>::of(&cell).read(at).clone();
         Some(value)
     }
@@ -536,7 +538,7 @@ impl<T: 'static> MutableState<T> {
     /// Writes the value; returns `false` (dropping `value`) if the cell was freed.
     #[track_caller]
     pub fn try_set(&self, value: T) -> bool {
-        match self.write(value, Location::caller()) {
+        match self.write_with(value, Location::caller(), try_write_cell) {
             Ok(true) => {
                 invalidate_readers(self.id);
                 true
@@ -558,7 +560,16 @@ impl<T: 'static> MutableState<T> {
 
     /// Returns whether the value changed.
     fn write(&self, value: T, at: &'static Location<'static>) -> Result<bool, Stale> {
-        let cell = write_cell(self.id, at)?;
+        self.write_with(value, at, write_cell)
+    }
+
+    fn write_with(
+        &self,
+        value: T,
+        at: &'static Location<'static>,
+        lookup: fn(StateId, &'static Location<'static>) -> Result<Rc<dyn Any>, Stale>,
+    ) -> Result<bool, Stale> {
+        let cell = lookup(self.id, at)?;
         let cell = StateCell::<T>::of(&cell);
         let equivalent = {
             let current = cell.read(at);
@@ -596,11 +607,7 @@ impl<T: 'static> Eq for State<T> {}
 
 impl<T: 'static> fmt::Debug for State<T> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            formatter,
-            "State({}v{})",
-            self.handle.id.index, self.handle.id.generation
-        )
+        write!(formatter, "State({}v{})", self.handle.id.index, self.handle.id.generation)
     }
 }
 
@@ -657,26 +664,13 @@ impl<T: 'static> Deref for OwnedState<T> {
 
 impl<T: 'static> fmt::Debug for OwnedState<T> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            formatter,
-            "OwnedState({}v{})",
-            self.handle.id.index, self.handle.id.generation
-        )
+        write!(formatter, "OwnedState({}v{})", self.handle.id.index, self.handle.id.generation)
     }
 }
 
 impl<T: 'static> Drop for OwnedState<T> {
     fn drop(&mut self) {
-        let id = self.handle.id;
-        let freed = try_with_runtime(|runtime| {
-            if runtime.compositions.live() == 0 {
-                runtime.cells.free(id)
-            } else {
-                runtime.cells.retired.push(id);
-                None
-            }
-        });
-        drop(freed);
+        retire(self.handle.id);
     }
 }
 

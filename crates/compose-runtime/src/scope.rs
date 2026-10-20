@@ -12,10 +12,7 @@ pub(crate) struct ScopeId {
 }
 
 impl ScopeId {
-    pub const NONE: ScopeId = ScopeId {
-        index: u32::MAX,
-        generation: 0,
-    };
+    pub const NONE: ScopeId = ScopeId { index: u32::MAX, generation: 0 };
 
     pub fn is_none(self) -> bool {
         self.index == u32::MAX
@@ -44,10 +41,7 @@ pub(crate) struct Scopes {
 
 impl Scopes {
     pub const fn new() -> Scopes {
-        Scopes {
-            entries: Vec::new(),
-            free: Vec::new(),
-        }
+        Scopes { entries: Vec::new(), free: Vec::new() }
     }
 
     pub fn alloc(&mut self, composition: u32, group: u32) -> ScopeId {
@@ -58,10 +52,7 @@ impl Scopes {
             entry.group = group;
             entry.epoch = 0;
             entry.invalid = false;
-            ScopeId {
-                index,
-                generation: entry.generation,
-            }
+            ScopeId { index, generation: entry.generation }
         } else {
             let index = u32::try_from(self.entries.len()).expect("too many recompose scopes");
             self.entries.push(ScopeEntry {
@@ -71,10 +62,7 @@ impl Scopes {
                 epoch: 0,
                 invalid: false,
             });
-            ScopeId {
-                index,
-                generation: 1,
-            }
+            ScopeId { index, generation: 1 }
         }
     }
 
@@ -87,15 +75,11 @@ impl Scopes {
     }
 
     pub fn get(&self, id: ScopeId) -> Option<&ScopeEntry> {
-        self.entries
-            .get(id.index as usize)
-            .filter(|entry| entry.generation == id.generation)
+        self.entries.get(id.index as usize).filter(|entry| entry.generation == id.generation)
     }
 
     pub fn get_mut(&mut self, id: ScopeId) -> Option<&mut ScopeEntry> {
-        self.entries
-            .get_mut(id.index as usize)
-            .filter(|entry| entry.generation == id.generation)
+        self.entries.get_mut(id.index as usize).filter(|entry| entry.generation == id.generation)
     }
 
     /// Whether a read recorded at `epoch` still belongs to the scope's latest run.

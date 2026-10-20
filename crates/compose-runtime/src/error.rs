@@ -10,8 +10,6 @@ use std::fmt;
 pub enum ComposeError {
     /// The composer was used while no composition pass was running on this thread.
     NotComposing,
-    /// A `Composer` obtained in an earlier pass was used in a later one.
-    StaleComposer,
     /// A pass was started while another one was running on this thread.
     PassInProgress,
     /// `end_group` or `end_restart_group` had no matching start, or closed the wrong kind of group.
@@ -40,7 +38,6 @@ impl fmt::Display for ComposeError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         let message = match self {
             ComposeError::NotComposing => "the composer was used outside a composition pass",
-            ComposeError::StaleComposer => "a Composer from an earlier pass was used",
             ComposeError::PassInProgress => {
                 "a composition pass is already running on this thread (one pass at a time)"
             }

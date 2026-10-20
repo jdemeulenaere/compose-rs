@@ -7,7 +7,7 @@ use std::marker::PhantomData;
 use std::rc::Rc;
 
 use crate::applier::{Applier, ErasedApplier};
-use crate::composer::{Frame, Mode, NodeOp, apply_node_op, current, run_walk};
+use crate::composer::{Frame, Mode, NodeOp, apply_node_op, current, flush_node_moves, run_walk};
 use crate::error::{ComposeError, misuse};
 use crate::hash::key_of;
 use crate::remember::dispatch_forgotten;
@@ -37,14 +37,9 @@ impl Composition {
         let root_node = applier.root();
         let applier: Rc<RefCell<dyn ErasedApplier>> = Rc::new(RefCell::new(applier));
         let id = with_runtime(|runtime| {
-            runtime
-                .compositions
-                .alloc(CompositionData::new(applier, root_node))
+            runtime.compositions.alloc(CompositionData::new(applier, root_node))
         });
-        Composition {
-            id,
-            _not_send: PhantomData,
-        }
+        Composition { id, _not_send: PhantomData }
     }
 
     /// Sets the content and composes it at once. Content set before is recomposed against the
@@ -82,9 +77,8 @@ impl Composition {
     /// Runs `f` with the applier, as type `A`.
     pub fn with_applier<A: Applier, R>(&self, f: impl FnOnce(&mut A) -> R) -> R {
         let applier = with_runtime(|runtime| self.data(runtime).applier.clone());
-        let mut applier = applier
-            .try_borrow_mut()
-            .unwrap_or_else(|_| misuse(ComposeError::ApplierBusy));
+        let mut applier =
+            applier.try_borrow_mut().unwrap_or_else(|_| misuse(ComposeError::ApplierBusy));
         let applier = applier
             .as_any_mut()
             .downcast_mut::<A>()
@@ -95,10 +89,7 @@ impl Composition {
     /// A text dump of the groups and slots, for tests.
     pub fn dump(&self) -> String {
         with_runtime(|runtime| {
-            let data = runtime
-                .compositions
-                .get(self.id)
-                .expect("a live composition");
+            let data = runtime.compositions.get(self.id).expect("a live composition");
             let table = &data.table;
             let mut out = String::new();
             let mut stack = vec![(table[SENTINEL].first_child, 0usize)];
@@ -140,10 +131,7 @@ impl Composition {
     pub fn validate(&self) {
         let result = with_runtime(|runtime| validate(runtime, self.id));
         if let Err(error) = result {
-            panic!(
-                "compose-runtime: invalid slot table: {error}\n{}",
-                self.dump()
-            );
+            panic!("compose-runtime: invalid slot table: {error}\n{}", self.dump());
         }
     }
 
@@ -159,10 +147,7 @@ impl Composition {
     }
 
     fn data<'a>(&self, runtime: &'a mut Runtime) -> &'a mut CompositionData {
-        runtime
-            .compositions
-            .get_mut(self.id)
-            .expect("a live composition")
+        runtime.compositions.get_mut(self.id).expect("a live composition")
     }
 }
 
@@ -181,20 +166,15 @@ impl Drop for Composition {
 fn compose_root(content: Rc<dyn Fn()>) {
     let composer = current();
     composer.start_restart_group(ROOT_KEY);
-    let changed = composer.update_kept(
-        |kept: &Rc<dyn Fn()>| !Rc::ptr_eq(kept, &content),
-        || content.clone(),
-    );
+    let changed =
+        composer.update_kept(|kept: &Rc<dyn Fn()>| !Rc::ptr_eq(kept, &content), || content.clone());
     if !changed && composer.skipping() {
         composer.skip_to_group_end();
     } else {
         content();
     }
     composer.end_restart_group(|kept: &dyn Any| {
-        let content = kept
-            .downcast_ref::<Rc<dyn Fn()>>()
-            .expect("kept content")
-            .clone();
+        let content = kept.downcast_ref::<Rc<dyn Fn()>>().expect("kept content").clone();
         compose_root(content)
     });
 }
@@ -212,14 +192,7 @@ impl Pass {
             if runtime.active.is_some() {
                 misuse(ComposeError::PassInProgress)
             }
-            let Runtime {
-                compositions,
-                cells,
-                frames,
-                active,
-                next_pass_id,
-                ..
-            } = runtime;
+            let Runtime { compositions, cells, frames, active, .. } = runtime;
             let data = compositions.get_mut(id).expect("a live composition");
             if data.poisoned {
                 misuse(ComposeError::Poisoned)
@@ -231,13 +204,7 @@ impl Pass {
             let dirty = sentinel.dirty;
             sentinel.dirty = false;
             data.pending = false;
-            let pass_id = *next_pass_id;
-            *next_pass_id += 1;
-            *active = Some(ActivePass {
-                composition: id,
-                pass_id,
-                composing: true,
-            });
+            *active = Some(ActivePass { composition: id, composing: true });
             cells.begin_pass();
             frames.clear();
             frames.push(Frame {
@@ -256,13 +223,11 @@ impl Pass {
                 node_start: 0,
                 scope: ScopeId::NONE,
                 saved_epoch: 0,
+                body_started: false,
             });
             Some(data.applier.clone())
         })?;
-        let pass = Pass {
-            id,
-            finished: false,
-        };
+        let pass = Pass { id, finished: false };
         applier
             .try_borrow_mut()
             .unwrap_or_else(|_| misuse(ComposeError::ApplierBusy))
@@ -270,18 +235,14 @@ impl Pass {
         Some(pass)
     }
 
-    /// Ends the pass and applies its deferred changes: releases removed nodes, forgets removed
+    /// Ends the pass, then applies its deferred changes: releases removed nodes, forgets removed
     /// values, dispatches new remember observers, runs side effects, frees retired state cells.
+    ///
+    /// The pass is over before any of that runs, so effects, observers and drops may compose
+    /// other compositions (a popup from an effect), and a frame requester may recompose at once.
     fn finish(mut self) {
-        let (op, applier, mut deferred) = with_runtime(|runtime| {
-            let Runtime {
-                compositions,
-                scopes,
-                frames,
-                removal_stack,
-                active,
-                ..
-            } = runtime;
+        let (op, applier) = with_runtime(|runtime| {
+            let Runtime { compositions, scopes, frames, removal_stack, .. } = runtime;
             let data = compositions.get_mut(self.id).expect("a live composition");
             if frames.len() != 1 {
                 misuse(ComposeError::UnclosedGroups)
@@ -311,23 +272,26 @@ impl Pass {
                 }
             }
             table[SENTINEL].node_count = frame.node_index - frame.node_start;
-            active.as_mut().expect("the pass").composing = false;
-            (op, data.applier.clone(), std::mem::take(&mut data.deferred))
+            (op, data.applier.clone())
         });
         apply_node_op(op);
-        apply_deferred(&applier, &mut deferred, true);
-        let freed = with_runtime(|runtime| {
-            let data = runtime
-                .compositions
-                .get_mut(self.id)
-                .expect("a live composition");
-            data.deferred.restore(deferred);
-            data.pending = data.has_invalidations();
+        flush_node_moves();
+        let (mut deferred, freed) = with_runtime(|runtime| {
             runtime.active = None;
-            runtime.cells.end_pass()
+            let data = runtime.compositions.get_mut(self.id).expect("a live composition");
+            (std::mem::take(&mut data.deferred), runtime.cells.end_pass())
         });
+        // From here on the slot table is consistent: a panic in an effect doesn't poison it.
         self.finished = true;
+        apply_deferred(&applier, &mut deferred, true);
         drop(freed);
+        with_runtime(|runtime| {
+            // An effect may have dropped the composition.
+            if let Some(data) = runtime.compositions.get_mut(self.id) {
+                data.deferred.restore(deferred);
+                data.pending = data.has_invalidations();
+            }
+        });
     }
 }
 
@@ -339,12 +303,10 @@ impl Drop for Pass {
         // A panic unwound through the pass. Nothing can be trusted to continue it; keep the
         // slot table for disposal, which frees everything exactly once.
         try_with_runtime(|runtime| {
-            if runtime
-                .active
-                .is_some_and(|active| active.composition == self.id)
-            {
+            if runtime.active.is_some_and(|active| active.composition == self.id) {
                 runtime.active = None;
                 runtime.frames.clear();
+                runtime.pending_move = None;
                 runtime.cells.abort_pass();
             }
             if let Some(data) = runtime.compositions.get_mut(self.id) {
@@ -362,9 +324,8 @@ fn apply_deferred(
     run_effects: bool,
 ) {
     {
-        let mut applier = applier
-            .try_borrow_mut()
-            .unwrap_or_else(|_| misuse(ComposeError::ApplierBusy));
+        let mut applier =
+            applier.try_borrow_mut().unwrap_or_else(|_| misuse(ComposeError::ApplierBusy));
         for node in deferred.released_nodes.drain(..) {
             applier.release(node);
         }
@@ -377,7 +338,7 @@ fn apply_deferred(
     }
     if run_effects {
         for effect in deferred.side_effects.drain(..) {
-            effect();
+            effect.run();
         }
     } else {
         deferred.side_effects.clear();
@@ -389,62 +350,36 @@ struct Disposal {
     data: CompositionData,
     deferred: Deferred,
     top_level_nodes: u32,
-    last: bool,
     retired_mark: usize,
 }
 
 impl Disposal {
     fn take(runtime: &mut Runtime, id: CompositionId) -> Option<Disposal> {
-        if runtime
-            .active
-            .is_some_and(|active| active.composition == id)
-        {
+        if runtime.active.is_some_and(|active| active.composition == id) {
             if std::thread::panicking() {
                 // Unwinding through our own pass: leak rather than abort with a double panic.
                 return None;
             }
             misuse(ComposeError::DisposedDuringPass)
         }
-        let Runtime {
-            compositions,
-            scopes,
-            removal_stack,
-            cells,
-            ..
-        } = runtime;
+        let Runtime { compositions, scopes, removal_stack, cells, disposing, .. } = runtime;
         let mut data = compositions.remove(id)?;
+        // Counts as live while its values drop: cells they retire wait for the end of the
+        // disposal, as they would wait for the end of a pass.
+        *disposing += 1;
         let mut deferred = std::mem::take(&mut data.deferred);
         let first = data.table[SENTINEL].first_child;
-        remove_siblings(
-            &mut data.table,
-            &mut deferred,
-            scopes,
-            removal_stack,
-            first,
-            NONE,
-        );
+        remove_siblings(&mut data.table, &mut deferred, scopes, removal_stack, first, NONE);
         data.table[SENTINEL].first_child = NONE;
-        let top_level_nodes = if data.poisoned {
-            0
-        } else {
-            data.table[SENTINEL].node_count
-        };
-        let last = compositions.live() == 0;
-        Some(Disposal {
-            data,
-            deferred,
-            top_level_nodes,
-            last,
-            retired_mark: cells.retired_len(),
-        })
+        let top_level_nodes = if data.poisoned { 0 } else { data.table[SENTINEL].node_count };
+        Some(Disposal { data, deferred, top_level_nodes, retired_mark: cells.retired_len() })
     }
 
     fn run(mut self) {
         let applier = self.data.applier.clone();
         {
-            let mut applier = applier
-                .try_borrow_mut()
-                .unwrap_or_else(|_| misuse(ComposeError::ApplierBusy));
+            let mut applier =
+                applier.try_borrow_mut().unwrap_or_else(|_| misuse(ComposeError::ApplierBusy));
             applier.on_begin_changes();
             if self.top_level_nodes > 0 {
                 applier.remove(self.data.root_node, 0, self.top_level_nodes as usize);
@@ -452,22 +387,18 @@ impl Disposal {
         }
         apply_deferred(&applier, &mut self.deferred, false);
         drop(applier);
-        let Disposal {
-            data,
-            deferred,
-            last,
-            retired_mark,
-            ..
-        } = self;
+        let Disposal { data, deferred, retired_mark, .. } = self;
         drop(deferred);
         drop(data);
         // Free the state cells this disposal retired, and everything if no composition is left
         // to run the pass that would free them.
+        let last = with_runtime(|runtime| {
+            runtime.disposing -= 1;
+            runtime.compositions.live() == 0 && runtime.disposing == 0
+        });
         loop {
             let freed: Vec<CellValue> = with_runtime(|runtime| {
-                runtime
-                    .cells
-                    .free_retired(if last { 0 } else { retired_mark }, last)
+                runtime.cells.free_retired(if last { 0 } else { retired_mark }, last)
             });
             if freed.is_empty() {
                 break;
@@ -480,9 +411,7 @@ impl Disposal {
 fn validate(runtime: &Runtime, id: CompositionId) -> Result<(), String> {
     let data = runtime.compositions.get(id).ok_or("disposed composition")?;
     let table = &data.table;
-    let in_pass = runtime
-        .active
-        .is_some_and(|active| active.composition == id);
+    let in_pass = runtime.active.is_some_and(|active| active.composition == id);
     let mut reachable = 0usize;
     let mut stack = vec![SENTINEL];
     while let Some(index) = stack.pop() {
@@ -501,24 +430,14 @@ fn validate(runtime: &Runtime, id: CompositionId) -> Result<(), String> {
                     entry.parent
                 ));
             }
-            nodes += if entry.kind == GroupKind::Node {
-                1
-            } else {
-                entry.node_count
-            };
+            nodes += if entry.kind == GroupKind::Node { 1 } else { entry.node_count };
             if !in_pass && entry.dirty && !group.dirty {
-                return Err(format!(
-                    "group {child} is dirty but its parent {index} is not"
-                ));
+                return Err(format!("group {child} is dirty but its parent {index} is not"));
             }
             stack.push(child);
             child = entry.next_sibling;
         }
-        let expected = if group.kind == GroupKind::Node {
-            1
-        } else {
-            nodes
-        };
+        let expected = if group.kind == GroupKind::Node { 1 } else { nodes };
         if group.node_count != expected {
             return Err(format!(
                 "group {index} counts {} nodes, its children {expected}",
@@ -546,10 +465,7 @@ fn validate(runtime: &Runtime, id: CompositionId) -> Result<(), String> {
             }
             _ => {
                 if !group.scope.is_none() || group.kept.is_some() {
-                    return Err(format!(
-                        "group {index} of kind {:?} has a scope",
-                        group.kind
-                    ));
+                    return Err(format!("group {index} of kind {:?} has a scope", group.kind));
                 }
             }
         }

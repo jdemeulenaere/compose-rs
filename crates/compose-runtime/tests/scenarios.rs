@@ -59,10 +59,7 @@ fn tree(composition: &Composition) -> String {
 fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
     match payload.downcast::<String>() {
         Ok(message) => *message,
-        Err(payload) => payload
-            .downcast_ref::<&str>()
-            .map(|s| s.to_string())
-            .unwrap_or_default(),
+        Err(payload) => payload.downcast_ref::<&str>().map(|s| s.to_string()).unwrap_or_default(),
     }
 }
 
@@ -112,10 +109,7 @@ fn Text(text: String) {
         Leaf(&text);
     }
     composer.end_restart_group(|kept| {
-        let (text,) = kept
-            .downcast_ref::<(String,)>()
-            .expect("kept arguments")
-            .clone();
+        let (text,) = kept.downcast_ref::<(String,)>().expect("kept arguments").clone();
         Text(text)
     });
 }
@@ -135,9 +129,8 @@ fn Reader(name: &'static str, state: MutableState<i32>) {
         Leaf(&format!("{name}={}", state.get()));
     }
     composer.end_restart_group(|kept| {
-        let (name, state) = *kept
-            .downcast_ref::<(&'static str, MutableState<i32>)>()
-            .expect("kept");
+        let (name, state) =
+            *kept.downcast_ref::<(&'static str, MutableState<i32>)>().expect("kept");
         Reader(name, state)
     });
 }
@@ -147,20 +140,15 @@ fn Reader(name: &'static str, state: MutableState<i32>) {
 fn restartable<K: ComposeArg + Clone>(key: u64, args: K, body: fn(K)) {
     let composer = current();
     composer.start_restart_group(key);
-    let changed = composer.update_kept(
-        |kept: &(u64, K, fn(K))| !kept.1.same(&args),
-        || (key, args.clone(), body),
-    );
+    let changed = composer
+        .update_kept(|kept: &(u64, K, fn(K))| !kept.1.same(&args), || (key, args.clone(), body));
     if !changed && composer.skipping() {
         composer.skip_to_group_end();
     } else {
         body(args);
     }
     composer.end_restart_group(|kept| {
-        let (key, args, body) = kept
-            .downcast_ref::<(u64, K, fn(K))>()
-            .expect("kept")
-            .clone();
+        let (key, args, body) = kept.downcast_ref::<(u64, K, fn(K))>().expect("kept").clone();
         restartable(key, args, body)
     });
 }
@@ -260,11 +248,7 @@ fn a_scope_recomposes_alone_below_a_skipped_parent_and_reuses_its_group() {
         state.set(value);
         composition.recompose();
         assert_eq!(take_log(), ["r"]);
-        assert_eq!(
-            composition.group_count(),
-            groups,
-            "the restart reused its group"
-        );
+        assert_eq!(composition.group_count(), groups, "the restart reused its group");
         composition.validate();
     }
     assert_eq!(tree(&composition), "before\nr=10\nafter\n");
@@ -441,16 +425,12 @@ fn a_scope_removed_by_its_parent_never_runs() {
     let value = mutable_state_of(0);
     let (show_handle, value_handle) = (show.handle(), value.handle());
     composition.set_content(move || {
-        restartable(
-            key_of("Parent"),
-            (show_handle, value_handle),
-            |(show, value)| {
-                log("Parent");
-                if show.get() {
-                    region(1, || Reader("child", value));
-                }
-            },
-        )
+        restartable(key_of("Parent"), (show_handle, value_handle), |(show, value)| {
+            log("Parent");
+            if show.get() {
+                region(1, || Reader("child", value));
+            }
+        })
     });
     take_log();
     value.set(1);
@@ -491,16 +471,12 @@ fn reads_no_longer_made_stop_invalidating() {
     let value = mutable_state_of(0);
     let (flag_handle, value_handle) = (flag.handle(), value.handle());
     composition.set_content(move || {
-        restartable(
-            key_of("Reader"),
-            (flag_handle, value_handle),
-            |(flag, value)| {
-                log("Reader");
-                if flag.get() {
-                    value.get();
-                }
-            },
-        )
+        restartable(key_of("Reader"), (flag_handle, value_handle), |(flag, value)| {
+            log("Reader");
+            if flag.get() {
+                value.get();
+            }
+        })
     });
     take_log();
     value.set(1);
@@ -510,10 +486,7 @@ fn reads_no_longer_made_stop_invalidating() {
     composition.recompose();
     assert_eq!(take_log(), ["Reader"]);
     value.set(2);
-    assert!(
-        !composition.has_invalidations(),
-        "a read from an earlier run is stale"
-    );
+    assert!(!composition.has_invalidations(), "a read from an earlier run is stale");
 }
 
 #[test]
@@ -535,11 +508,7 @@ fn skipped_scopes_keep_their_reads() {
         assert_eq!(take_log(), [format!("Parent {round}")]);
         child_state.set(round);
         composition.recompose();
-        assert_eq!(
-            take_log(),
-            ["child"],
-            "the skipped child still observes its state"
-        );
+        assert_eq!(take_log(), ["child"], "the skipped child still observes its state");
     }
 }
 
@@ -679,10 +648,7 @@ fn nodes_are_released_before_the_state_of_their_group() {
     show.set(false);
     composition.recompose();
     // Rule R1: the nodes (and the handlers they hold) go before the state their group owned.
-    assert_eq!(
-        take_log(),
-        ["release node outer", "release node inner", "drop state"]
-    );
+    assert_eq!(take_log(), ["release node outer", "release node inner", "drop state"]);
     composition.with_applier(|tree: &mut NodeTree<Releasing>| assert!(tree.is_empty()));
 }
 
@@ -724,11 +690,7 @@ fn a_remembered_owned_state_is_freed_a_pass_after_its_group_leaves() {
     let state = HANDLE.with(|handle| handle.get()).expect("handle");
     show.set(false);
     composition.recompose();
-    assert_eq!(
-        state.try_get(),
-        Some(42),
-        "retired at the end of this pass, not freed"
-    );
+    assert_eq!(state.try_get(), Some(42), "retired at the end of this pass, not freed");
     show.set(true);
     composition.recompose();
     assert_eq!(state.try_get(), None, "freed at the end of the next one");
@@ -750,21 +712,12 @@ fn conflicting_access_inside_with_panics_with_both_locations() {
     let state = mutable_state_of(vec![1]);
     let handle = state.handle();
     let message = panic_message(
-        catch_unwind(AssertUnwindSafe(|| {
-            handle.with(|_| handle.edit(|list| list.push(2)))
-        }))
-        .expect_err("panics"),
+        catch_unwind(AssertUnwindSafe(|| handle.with(|_| handle.edit(|list| list.push(2)))))
+            .expect_err("panics"),
     );
-    assert_eq!(
-        message.matches("tests/scenarios.rs").count(),
-        3,
-        "{message}"
-    );
+    assert_eq!(message.matches("tests/scenarios.rs").count(), 3, "{message}");
     // Nested reads are fine, and the cell is usable afterwards.
-    assert_eq!(
-        handle.with(|outer| handle.with(|inner| outer.len() + inner.len())),
-        2
-    );
+    assert_eq!(handle.with(|outer| handle.with(|inner| outer.len() + inner.len())), 2);
     handle.edit(|list| list.push(3));
     assert_eq!(handle.get(), [1, 3]);
 }
@@ -790,10 +743,7 @@ fn update_and_edit() {
     });
     take_log();
     never.set(1);
-    assert!(
-        composition.has_invalidations(),
-        "never-equal policy invalidates equal writes"
-    );
+    assert!(composition.has_invalidations(), "never-equal policy invalidates equal writes");
 }
 
 #[cfg(debug_assertions)]
@@ -802,9 +752,7 @@ fn writing_state_during_composition_panics() {
     let composition = new_composition();
     let state = mutable_state_of(0);
     let handle = state.handle();
-    let result = catch_unwind(AssertUnwindSafe(|| {
-        composition.set_content(move || handle.set(1))
-    }));
+    let result = catch_unwind(AssertUnwindSafe(|| composition.set_content(move || handle.set(1))));
     let message = panic_message(result.expect_err("panics"));
     assert!(message.contains("during composition"), "{message}");
     assert!(composition.is_poisoned());
@@ -867,11 +815,7 @@ fn side_effects_run_after_the_pass_that_ran_them() {
     assert_eq!(take_log(), ["body 1", "effect 1"]);
     other.set(1);
     composition.recompose();
-    assert_eq!(
-        take_log(),
-        ["other"],
-        "a skipped scope's side effect doesn't run"
-    );
+    assert_eq!(take_log(), ["other"], "a skipped scope's side effect doesn't run");
 }
 
 #[test]
@@ -900,21 +844,17 @@ fn disposable_effects_clean_up_on_key_change_and_exit() {
     let show = mutable_state_of(true);
     let (key_handle, show_handle) = (key_state.handle(), show.handle());
     composition.set_content(move || {
-        restartable(
-            key_of("Parent"),
-            (key_handle, show_handle),
-            |(key_state, show)| {
-                if show.get() {
-                    region(1, || {
-                        let key = key_state.get();
-                        DisposableEffect(key, move |scope| {
-                            log(format!("effect {key}"));
-                            scope.on_dispose(move || log(format!("dispose {key}")))
-                        });
+        restartable(key_of("Parent"), (key_handle, show_handle), |(key_state, show)| {
+            if show.get() {
+                region(1, || {
+                    let key = key_state.get();
+                    DisposableEffect(key, move |scope| {
+                        log(format!("effect {key}"));
+                        scope.on_dispose(move || log(format!("dispose {key}")))
                     });
-                }
-            },
-        )
+                });
+            }
+        })
     });
     assert_eq!(take_log(), ["effect 1"]);
     key_state.set(2);
@@ -1006,13 +946,7 @@ fn a_panic_poisons_the_composition_and_dropping_it_frees_everything_once() {
     log.sort();
     assert_eq!(
         log,
-        [
-            "abandoned late observer",
-            "drop inner",
-            "drop late",
-            "drop outer",
-            "forgotten observer"
-        ]
+        ["abandoned late observer", "drop inner", "drop late", "drop outer", "forgotten observer"]
     );
     drop(fail);
     assert_eq!(live_state_count(), states_before);
@@ -1024,9 +958,8 @@ fn protocol_misuse_panics_with_a_clear_message() {
     assert!(message.contains("outside a composition pass"), "{message}");
 
     let composition = new_composition();
-    let result = catch_unwind(AssertUnwindSafe(|| {
-        composition.set_content(|| current().end_group())
-    }));
+    let result =
+        catch_unwind(AssertUnwindSafe(|| composition.set_content(|| current().end_group())));
     assert!(panic_message(result.expect_err("unbalanced")).contains("unbalanced"));
 
     let composition = new_composition();
@@ -1036,16 +969,21 @@ fn protocol_misuse_panics_with_a_clear_message() {
     // The content's restart group ends while the replace group is still open.
     assert!(panic_message(result.expect_err("unclosed")).contains("unbalanced"));
 
+    // A composer works in any pass on its thread: a lambda may capture it for later passes.
     thread_local! {
         static KEPT: Cell<Option<Composer>> = const { Cell::new(None) };
     }
     let composition = new_composition();
     composition.set_content(|| KEPT.with(|kept| kept.set(Some(current()))));
-    let stale = KEPT.with(|kept| kept.get()).expect("composer");
-    let result = catch_unwind(AssertUnwindSafe(|| {
-        composition.set_content(move || stale.start_replace_group(1))
-    }));
-    assert!(panic_message(result.expect_err("stale")).contains("earlier pass"));
+    let kept = KEPT.with(|kept| kept.get()).expect("composer");
+    composition.set_content(move || {
+        kept.start_replace_group(1);
+        Leaf("later");
+        kept.end_group();
+    });
+    assert_eq!(tree(&composition), "later\n");
+    let message = panic_message(catch_unwind(|| kept.start_replace_group(1)).expect_err("no pass"));
+    assert!(message.contains("outside a composition pass"), "{message}");
 
     let composition = new_composition();
     let result = catch_unwind(AssertUnwindSafe(|| {

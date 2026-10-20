@@ -90,10 +90,7 @@ pub(crate) struct SlotTable {
 
 impl SlotTable {
     pub fn new() -> SlotTable {
-        let mut table = SlotTable {
-            groups: Vec::new(),
-            free: Vec::new(),
-        };
+        let mut table = SlotTable { groups: Vec::new(), free: Vec::new() };
         let sentinel = table.alloc(GroupKind::Root, 0, 0, NONE);
         debug_assert_eq!(sentinel, SENTINEL);
         table

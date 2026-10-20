@@ -84,17 +84,12 @@ impl<N> NodeTree<N> {
     /// Whether the node is live (inserted and not released).
     pub fn contains(&self, node: NodeRef) -> bool {
         let (index, generation) = unpack(node);
-        self.entries
-            .get(index as usize)
-            .is_some_and(|entry| entry.generation == generation)
+        self.entries.get(index as usize).is_some_and(|entry| entry.generation == generation)
     }
 
     pub fn children(&self, node: NodeRef) -> impl Iterator<Item = NodeRef> + '_ {
         let index = self.index(node);
-        self.entries[index as usize]
-            .children
-            .iter()
-            .map(|&child| self.reference(child))
+        self.entries[index as usize].children.iter().map(|&child| self.reference(child))
     }
 
     pub fn parent(&self, node: NodeRef) -> Option<NodeRef> {
@@ -142,10 +137,7 @@ impl<N> NodeTree<N> {
 /// Compose's `MutableList.move(from, to, count)`: `to` is an index before the move.
 fn move_range<T>(list: &mut [T], from: usize, to: usize, count: usize) {
     let destination = if from > to { to } else { to - count };
-    assert!(
-        destination + count <= list.len(),
-        "compose-runtime: NodeTree: move past the end"
-    );
+    assert!(destination + count <= list.len(), "compose-runtime: NodeTree: move past the end");
     if destination < from {
         list[destination..from + count].rotate_right(count);
     } else if destination > from {
@@ -157,20 +149,12 @@ impl<N: fmt::Debug> NodeTree<N> {
     /// An indented dump of the tree below the root, one `{:?}` value per line.
     pub fn dump(&self) -> String {
         let mut out = String::new();
-        let mut stack: Vec<(u32, usize)> = self.entries[0]
-            .children
-            .iter()
-            .rev()
-            .map(|&child| (child, 0))
-            .collect();
+        let mut stack: Vec<(u32, usize)> =
+            self.entries[0].children.iter().rev().map(|&child| (child, 0)).collect();
         while let Some((index, depth)) = stack.pop() {
             let entry = &self.entries[index as usize];
-            let _ = writeln!(
-                out,
-                "{}{:?}",
-                "  ".repeat(depth),
-                entry.value.as_ref().expect("live")
-            );
+            let _ =
+                writeln!(out, "{}{:?}", "  ".repeat(depth), entry.value.as_ref().expect("live"));
             stack.extend(entry.children.iter().rev().map(|&child| (child, depth + 1)));
         }
         out
@@ -187,10 +171,7 @@ impl<N: 'static> Applier for NodeTree<N> {
     fn insert(&mut self, parent: NodeRef, index: usize, node: N) -> NodeRef {
         let parent = self.index(parent);
         let len = self.entries[parent as usize].children.len();
-        assert!(
-            index <= len,
-            "compose-runtime: NodeTree: insert at {index} past {len} children"
-        );
+        assert!(index <= len, "compose-runtime: NodeTree: insert at {index} past {len} children");
         let child = self.alloc(node, parent);
         self.entries[parent as usize].children.insert(index, child);
         self.reference(child)
@@ -216,15 +197,10 @@ impl<N: 'static> Applier for NodeTree<N> {
 
     fn release(&mut self, node: NodeRef) {
         let index = self.index(node);
-        assert!(
-            index != 0,
-            "compose-runtime: NodeTree: the root can't be released"
-        );
+        assert!(index != 0, "compose-runtime: NodeTree: the root can't be released");
         let parent = self.entries[index as usize].parent;
         if parent != NO_PARENT {
-            self.entries[parent as usize]
-                .children
-                .retain(|&child| child != index);
+            self.entries[parent as usize].children.retain(|&child| child != index);
         }
         let mut stack = vec![index];
         let mut values = Vec::new();
@@ -260,11 +236,7 @@ mod tests {
             for count in 1..=len {
                 for from in 0..=len - count {
                     for to in 0..=len {
-                        let destination = if from > to {
-                            to
-                        } else {
-                            to.wrapping_sub(count)
-                        };
+                        let destination = if from > to { to } else { to.wrapping_sub(count) };
                         if to < count && from <= to || destination + count > len {
                             continue;
                         }
@@ -272,10 +244,7 @@ mod tests {
                         compose_move(&mut expected, from, to, count);
                         let mut actual: Vec<u32> = (0..len as u32).collect();
                         move_range(&mut actual, from, to, count);
-                        assert_eq!(
-                            actual, expected,
-                            "len {len} from {from} to {to} count {count}"
-                        );
+                        assert_eq!(actual, expected, "len {len} from {from} to {to} count {count}");
                     }
                 }
             }

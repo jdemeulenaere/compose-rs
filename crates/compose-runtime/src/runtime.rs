@@ -10,7 +10,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::applier::{ErasedApplier, NodeRef};
-use crate::composer::Frame;
+use crate::composer::{Frame, NodeOp};
 use crate::error::{ComposeError, misuse};
 use crate::remember::ErasedObserver;
 use crate::scope::{ScopeId, Scopes};
@@ -32,13 +32,16 @@ pub(crate) struct Runtime {
     pub removal_stack: Vec<(u32, bool)>,
     /// Frame requesters to call once the borrow ends; kept for its capacity.
     pub frame_requests: Vec<Rc<dyn Fn()>>,
-    pub next_pass_id: u64,
+    /// A node move waiting to be coalesced with the next one (see `apply_node_op`).
+    pub pending_move: Option<NodeOp>,
+    /// Compositions taken out of the arena and still releasing their values: while any is,
+    /// retired cells aren't freed at once.
+    pub disposing: usize,
 }
 
 #[derive(Clone, Copy)]
 pub(crate) struct ActivePass {
     pub composition: CompositionId,
-    pub pass_id: u64,
     /// The pass is composing (not applying its end-of-pass changes): the composer may be used,
     /// and state writes are a misuse.
     pub composing: bool,
@@ -54,42 +57,29 @@ impl Runtime {
             frames: Vec::new(),
             removal_stack: Vec::new(),
             frame_requests: Vec::new(),
-            next_pass_id: 1,
+            pending_move: None,
+            disposing: 0,
         }
     }
 
     /// The scope state reads register: the innermost restart group of the pass in progress.
     pub fn reading_scope(&self) -> ScopeId {
         match self.active {
-            Some(ActivePass {
-                composing: true, ..
-            }) => self
-                .frames
-                .last()
-                .map_or(ScopeId::NONE, |frame| frame.scope),
+            Some(ActivePass { composing: true, .. }) => {
+                self.frames.last().map_or(ScopeId::NONE, |frame| frame.scope)
+            }
             _ => ScopeId::NONE,
         }
     }
 
     pub fn is_composing(&self) -> bool {
-        matches!(
-            self.active,
-            Some(ActivePass {
-                composing: true,
-                ..
-            })
-        )
+        matches!(self.active, Some(ActivePass { composing: true, .. }))
     }
 
     /// The applier of the composition whose pass is running.
     pub fn active_applier(&self) -> Rc<RefCell<dyn ErasedApplier>> {
-        let Some(active) = self.active else {
-            misuse(ComposeError::NotComposing)
-        };
-        self.compositions
-            .data(active.composition.index)
-            .applier
-            .clone()
+        let Some(active) = self.active else { misuse(ComposeError::NotComposing) };
+        self.compositions.data(active.composition.index).applier.clone()
     }
 }
 
@@ -138,12 +128,7 @@ pub(crate) fn request_frames() {
 
 /// Marks a scope invalid and its ancestors dirty. Returns whether a frame request was queued.
 pub(crate) fn invalidate_scope(runtime: &mut Runtime, id: ScopeId) -> bool {
-    let Runtime {
-        scopes,
-        compositions,
-        frame_requests,
-        ..
-    } = runtime;
+    let Runtime { scopes, compositions, frame_requests, .. } = runtime;
     invalidate_scope_parts(scopes, compositions, frame_requests, id)
 }
 
@@ -190,7 +175,28 @@ pub(crate) struct Deferred {
     pub released_nodes: Vec<NodeRef>,
     pub removed_values: Vec<SlotValue>,
     pub remembered: Vec<Rc<dyn ErasedObserver>>,
-    pub side_effects: Vec<Box<dyn FnOnce()>>,
+    pub side_effects: Vec<DeferredEffect>,
+}
+
+/// A side effect to run at the end of a pass.
+pub(crate) enum DeferredEffect {
+    /// Recorded with `Composer::record_side_effect`.
+    Boxed(Box<dyn FnOnce()>),
+    /// Recorded by `SideEffect`, whose closure waits in a remembered slot: no allocation.
+    Slot(Rc<dyn RunEffect>),
+}
+
+impl DeferredEffect {
+    pub fn run(self) {
+        match self {
+            DeferredEffect::Boxed(effect) => effect(),
+            DeferredEffect::Slot(slot) => slot.run(),
+        }
+    }
+}
+
+pub(crate) trait RunEffect {
+    fn run(&self);
 }
 
 impl Deferred {
@@ -202,22 +208,10 @@ impl Deferred {
                 *target = source;
             }
         }
-        put_back(
-            &mut self.released_nodes,
-            std::mem::take(&mut emptied.released_nodes),
-        );
-        put_back(
-            &mut self.removed_values,
-            std::mem::take(&mut emptied.removed_values),
-        );
-        put_back(
-            &mut self.remembered,
-            std::mem::take(&mut emptied.remembered),
-        );
-        put_back(
-            &mut self.side_effects,
-            std::mem::take(&mut emptied.side_effects),
-        );
+        put_back(&mut self.released_nodes, std::mem::take(&mut emptied.released_nodes));
+        put_back(&mut self.removed_values, std::mem::take(&mut emptied.removed_values));
+        put_back(&mut self.remembered, std::mem::take(&mut emptied.remembered));
+        put_back(&mut self.side_effects, std::mem::take(&mut emptied.side_effects));
     }
 }
 
@@ -263,11 +257,7 @@ pub(crate) struct Compositions {
 
 impl Compositions {
     const fn new() -> Compositions {
-        Compositions {
-            entries: Vec::new(),
-            free: Vec::new(),
-            live: 0,
-        }
+        Compositions { entries: Vec::new(), free: Vec::new(), live: 0 }
     }
 
     pub fn alloc(&mut self, data: CompositionData) -> CompositionId {
@@ -276,20 +266,11 @@ impl Compositions {
             let entry = &mut self.entries[index as usize];
             entry.generation = entry.generation.wrapping_add(1);
             entry.data = Some(data);
-            CompositionId {
-                index,
-                generation: entry.generation,
-            }
+            CompositionId { index, generation: entry.generation }
         } else {
             let index = u32::try_from(self.entries.len()).expect("too many compositions");
-            self.entries.push(CompositionEntry {
-                generation: 1,
-                data: Some(data),
-            });
-            CompositionId {
-                index,
-                generation: 1,
-            }
+            self.entries.push(CompositionEntry { generation: 1, data: Some(data) });
+            CompositionId { index, generation: 1 }
         }
     }
 
@@ -325,17 +306,11 @@ impl Compositions {
     /// The data of a live composition, by index: for scopes and passes, which hold an index
     /// only while their composition is alive.
     pub fn data_mut(&mut self, index: u32) -> &mut CompositionData {
-        self.entries[index as usize]
-            .data
-            .as_mut()
-            .expect("composition of a live scope or pass")
+        self.entries[index as usize].data.as_mut().expect("composition of a live scope or pass")
     }
 
     pub fn data(&self, index: u32) -> &CompositionData {
-        self.entries[index as usize]
-            .data
-            .as_ref()
-            .expect("composition of a live scope or pass")
+        self.entries[index as usize].data.as_ref().expect("composition of a live scope or pass")
     }
 
     pub fn live(&self) -> usize {
@@ -383,9 +358,7 @@ fn remove_subtree(
         if is_node && !under_node && !group.node.is_none() {
             deferred.released_nodes.push(group.node);
         }
-        deferred
-            .removed_values
-            .extend(group.slots.drain(..).map(|slot| slot.value));
+        deferred.removed_values.extend(group.slots.drain(..).map(|slot| slot.value));
         if let Some(kept) = group.kept.take() {
             deferred.removed_values.push(SlotValue::Plain(kept));
         }

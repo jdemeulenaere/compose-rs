@@ -48,13 +48,8 @@ impl ItemData {
 
     /// A copy with fresh state cells holding the same values: a new identity for skipping.
     fn copy(&self) -> Rc<ItemData> {
-        let copy = ItemData::new(
-            self.id,
-            self.kind,
-            self.keyed,
-            self.value.get(),
-            self.branch.get(),
-        );
+        let copy =
+            ItemData::new(self.id, self.kind, self.keyed, self.value.get(), self.branch.get());
         copy.children.set(self.children.get());
         copy
     }
@@ -119,10 +114,8 @@ fn Node(key: u64, label: String, content: impl FnOnce()) {
 fn Item(item: Rc<ItemData>) {
     let composer = current();
     composer.start_restart_group(KIND_KEYS[item.kind]);
-    let changed = composer.update_kept(
-        |kept: &(Rc<ItemData>,)| !kept.0.same(&item),
-        || (item.clone(),),
-    );
+    let changed =
+        composer.update_kept(|kept: &(Rc<ItemData>,)| !kept.0.same(&item), || (item.clone(),));
     if !changed && composer.skipping() {
         composer.skip_to_group_end();
     } else {
@@ -148,10 +141,7 @@ fn Item(item: Rc<ItemData>) {
         });
     }
     composer.end_restart_group(|kept| {
-        let (item,) = kept
-            .downcast_ref::<(Rc<ItemData>,)>()
-            .expect("kept arguments")
-            .clone();
+        let (item,) = kept.downcast_ref::<(Rc<ItemData>,)>().expect("kept arguments").clone();
         Item(item)
     });
 }
@@ -166,11 +156,7 @@ enum MatchKey {
 }
 
 fn match_key(item: &ItemData) -> MatchKey {
-    if item.keyed {
-        MatchKey::Keyed(item.id)
-    } else {
-        MatchKey::Unkeyed(item.kind)
-    }
+    if item.keyed { MatchKey::Keyed(item.id) } else { MatchKey::Unkeyed(item.kind) }
 }
 
 struct ReferenceGroup {
@@ -233,9 +219,7 @@ impl Reference {
         let mut new = Vec::new();
         for item in items {
             let key = match_key(item);
-            let found = old
-                .iter()
-                .position(|group| group.as_ref().is_some_and(|g| g.key == key));
+            let found = old.iter().position(|group| group.as_ref().is_some_and(|g| g.key == key));
             match found {
                 Some(index) => {
                     let group = old[index].take().expect("unused");
@@ -284,13 +268,7 @@ impl Reference {
 
 fn expected_tree(group: &ReferenceGroup, depth: usize, out: &mut String) {
     let indent = "  ".repeat(depth);
-    let _ = writeln!(
-        out,
-        "{indent}{}:{}:t{}",
-        group.item.id,
-        group.item.value.get(),
-        group.token
-    );
+    let _ = writeln!(out, "{indent}{}:{}:t{}", group.item.id, group.item.value.get(), group.token);
     if let Some(token) = group.branch_token {
         let _ = writeln!(out, "{indent}  b{token}");
     }
@@ -367,9 +345,7 @@ fn mutate(
                 random.chance(20),
             );
             let position = random.below(len + 1);
-            target
-                .children
-                .edit(|children| children.insert(position, child));
+            target.children.edit(|children| children.insert(position, child));
             reference.invalidate(rendered, &target);
         }
         // Remove a child at any position.
@@ -463,30 +439,17 @@ fn run_seed(seed: u64, steps: usize) {
     }
 
     drop(composition);
-    assert!(
-        LIVE_TOKENS.with(|live| live.borrow().is_empty()),
-        "seed {seed}: tokens leaked"
-    );
+    assert!(LIVE_TOKENS.with(|live| live.borrow().is_empty()), "seed {seed}: tokens leaked");
     drop(rendered);
     drop(root);
-    assert_eq!(
-        live_state_count(),
-        states_before,
-        "seed {seed}: state cells leaked"
-    );
-    assert_eq!(
-        live_scope_count(),
-        scopes_before,
-        "seed {seed}: scopes leaked"
-    );
+    assert_eq!(live_state_count(), states_before, "seed {seed}: state cells leaked");
+    assert_eq!(live_scope_count(), scopes_before, "seed {seed}: scopes leaked");
 }
 
 #[test]
 fn randomized_model() {
-    let seeds: u64 = std::env::var("COMPOSE_MODEL_SEEDS")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(300);
+    let seeds: u64 =
+        std::env::var("COMPOSE_MODEL_SEEDS").ok().and_then(|s| s.parse().ok()).unwrap_or(300);
     let steps = if cfg!(miri) { 20 } else { 60 };
     let seeds = if cfg!(miri) { seeds.min(4) } else { seeds };
     for seed in 0..seeds {
