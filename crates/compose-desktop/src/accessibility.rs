@@ -55,7 +55,9 @@ fn add(node: &SemanticsNode, nodes: &mut Vec<(AccessNodeId, Node)>, visit: &mut 
         Some(Role::Tab) => accesskit::Role::Tab,
         Some(Role::Image) => accesskit::Role::Image,
         Some(Role::DropdownList) => accesskit::Role::ComboBox,
+        None if config.is_dialog => accesskit::Role::Dialog,
         None if config.editable => accesskit::Role::TextInput,
+        None if config.progress_bar_range_info.is_some() => accesskit::Role::Slider,
         None if config.clickable => accesskit::Role::Button,
         None if !texts.is_empty() => accesskit::Role::Label,
         None => accesskit::Role::GenericContainer,
@@ -87,8 +89,27 @@ fn add(node: &SemanticsNode, nodes: &mut Vec<(AccessNodeId, Node)>, visit: &mut 
             ToggleableState::Indeterminate => Toggled::Mixed,
         });
     }
-    if let Some(selected) = config.selected {
-        access.set_selected(selected);
+    // A radio button's selection is its checked state, as ARIA's `aria-checked`.
+    match config.selected {
+        Some(selected) if role == accesskit::Role::RadioButton => {
+            access.set_toggled(if selected { Toggled::True } else { Toggled::False });
+        }
+        Some(selected) => access.set_selected(selected),
+        None => {}
+    }
+    if config.is_dialog {
+        access.set_modal();
+    }
+    if let Some(info) = config.progress_bar_range_info {
+        access.set_numeric_value(info.current as f64);
+        access.set_min_numeric_value(info.range.0 as f64);
+        access.set_max_numeric_value(info.range.1 as f64);
+        access.set_numeric_value_step(progress_step(info) as f64);
+        if !config.disabled {
+            access.add_action(Action::Increment);
+            access.add_action(Action::Decrement);
+            access.add_action(Action::SetValue);
+        }
     }
     if config.disabled {
         access.set_disabled();
@@ -107,15 +128,51 @@ fn add(node: &SemanticsNode, nodes: &mut Vec<(AccessNodeId, Node)>, visit: &mut 
     }
 }
 
-/// Performs an assistive technology's request: a click or a focus, as semantics actions.
-/// Returns whether a node did it.
+/// How far a screen reader's increment moves a value: a step, or a twentieth of the range when
+/// continuous, as Compose's accessibility delegate.
+fn progress_step(info: compose_ui::ProgressBarRangeInfo) -> f32 {
+    let length = info.range.1 - info.range.0;
+    if info.steps > 0 { length / (info.steps + 1) as f32 } else { length / 20.0 }
+}
+
+/// Performs an assistive technology's request (a click, a focus, a value's increment or a new
+/// value) as a semantics action. Returns whether a node did it.
 pub(crate) fn perform(host: &mut UiHost, request: &ActionRequest) -> bool {
+    let node = NodeId::from_bits(request.target_node.0);
+    let progress = || {
+        host.with_tree(|tree| {
+            let root = tree.semantics_tree(true);
+            fn find(node: &SemanticsNode, id: NodeId) -> Option<&SemanticsNode> {
+                if node.id == id {
+                    return Some(node);
+                }
+                node.children.iter().find_map(|child| find(child, id))
+            }
+            find(&root, node).and_then(|found| found.config.progress_bar_range_info)
+        })
+    };
     let action = match request.action {
         Action::Click => SemanticsAction::OnClick,
         Action::Focus => SemanticsAction::RequestFocus,
+        Action::Increment | Action::Decrement => {
+            let Some(info) = progress() else { return false };
+            let step = progress_step(info);
+            let delta = if request.action == Action::Increment { step } else { -step };
+            SemanticsAction::SetProgress(info.current + delta)
+        }
+        Action::SetValue => match &request.data {
+            Some(accesskit::ActionData::NumericValue(value)) => {
+                SemanticsAction::SetProgress(*value as f32)
+            }
+            Some(accesskit::ActionData::Value(text)) => match text.trim().parse::<f32>() {
+                Ok(value) => SemanticsAction::SetProgress(value),
+                Err(_) => return false,
+            },
+            _ => return false,
+        },
         _ => return false,
     };
-    host.perform_semantics_action(NodeId::from_bits(request.target_node.0), action)
+    host.perform_semantics_action(node, action)
 }
 
 #[cfg(test)]
@@ -182,5 +239,13 @@ mod tests {
         assert!(perform(&mut host, &focus));
         host.frame();
         assert_eq!(tree_update(&host, "App").focus, button);
+    }
+
+    #[test]
+    fn progress_steps_are_a_stop_or_a_twentieth_of_the_range() {
+        let info =
+            |steps| compose_ui::ProgressBarRangeInfo { current: 0.0, range: (0.0, 10.0), steps };
+        assert_eq!(progress_step(info(0)), 0.5);
+        assert_eq!(progress_step(info(4)), 2.0);
     }
 }

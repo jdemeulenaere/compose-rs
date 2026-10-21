@@ -138,6 +138,7 @@ impl MeasureScope<'_> {
         );
         assert_eq!(measurable.layer, 0, "compose-ui: intrinsic widths are asked of children");
         let probe = Constraints::new(0, Constraints::INFINITY, 0, height);
+        self.tree.node_mut(measurable.node).intrinsics_asked = true;
         self.tree.measure_node(measurable.node, probe).width
     }
 

@@ -236,6 +236,11 @@ impl UiTree {
             return (false, actions);
         }
         if action == crate::semantics::SemanticsAction::RequestFocus {
+            // Offered only by a node that can take the focus itself (a focusable modifier in
+            // its chain), as Compose's `RequestFocus`.
+            if self.focus_target_index(node).is_none() {
+                return (false, actions);
+            }
             let actions = self.request_focus(node);
             let focused = self.focused().is_some_and(|focused| self.is_at_or_below(focused, node));
             return (focused, actions);
@@ -275,9 +280,12 @@ impl UiTree {
     /// The key input nodes an event to the focused node visits: the focused node's, innermost
     /// first (those after its focus target too, as Compose's `lastLocalKeyInputNode`), then
     /// each ancestor's.
+    ///
+    /// The path ends at the overlay holding the focus, as a window's keys stay in it; with
+    /// nothing focused, keys go to the topmost overlay that takes the focus (a dialog's Escape).
     fn key_path(&mut self) -> Vec<(NodeId, usize)> {
         let mut path = Vec::new();
-        let mut node = self.focused();
+        let mut node = self.focused().or_else(|| self.modal_overlay());
         while let Some(id) = node {
             let value = self.node(id);
             for index in (0..value.chain.len()).rev() {
@@ -285,7 +293,7 @@ impl UiTree {
                     path.push((id, index));
                 }
             }
-            node = value.parent;
+            node = if value.overlay { None } else { value.parent };
         }
         path
     }

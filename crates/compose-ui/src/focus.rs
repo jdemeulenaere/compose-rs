@@ -293,10 +293,7 @@ impl UiTree {
     /// that took the focus shows (a dialog, a menu), only its own, as a window of its own; the
     /// overlays that can't take it (a popup) have none.
     pub fn focus_order(&mut self) -> Vec<NodeId> {
-        let modal = self.overlays.iter().rev().copied().find(|&node| {
-            self.get(node).is_some_and(|value| value.overlay && value.placed)
-                && self.overlay_node(node).is_some_and(|overlay| overlay.focus_on_open)
-        });
+        let modal = self.modal_overlay();
         let start = modal.unwrap_or(self.root_id());
         let mut order = Vec::new();
         let mut stack = vec![start];
@@ -311,12 +308,23 @@ impl UiTree {
                     continue;
                 }
             }
-            if self.focus_target_index(node).is_some() {
+            // A modal overlay itself is no stop: Tab wraps from its last focusable to its first,
+            // as a window's root isn't one.
+            if self.focus_target_index(node).is_some() && !(modal.is_some() && node == start) {
                 order.push(node);
             }
             stack.extend(self.node(node).children.iter().rev().map(|child| child.node));
         }
         order
+    }
+
+    /// The topmost overlay taking the focus (a dialog, a focusable popup): while it shows, the
+    /// rest of the window takes no focus nor keys.
+    pub(crate) fn modal_overlay(&self) -> Option<NodeId> {
+        self.overlays.iter().rev().copied().find(|&node| {
+            self.get(node).is_some_and(|value| value.overlay && value.placed)
+                && self.overlay_node(node).is_some_and(|overlay| overlay.focus_on_open)
+        })
     }
 
     /// Moves focus to the next (or previous) focusable node, wrapping around, as Tab does.

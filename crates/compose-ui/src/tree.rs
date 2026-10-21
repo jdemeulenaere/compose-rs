@@ -137,6 +137,9 @@ pub struct LayoutNode {
     pub(crate) placed: bool,
     /// The parent measurement that last measured it, to reject measuring it twice.
     pub(crate) measured_in: u64,
+    /// Its parent asked its intrinsic width in its last measurement: a change inside it
+    /// measures the parent again, not just it in place.
+    pub(crate) intrinsics_asked: bool,
     /// An overlay (`Modifier.overlay`): placed in the root at `overlay_origin`, not where its
     /// parent placed it; drawn last and hit first.
     pub(crate) overlay: bool,
@@ -165,6 +168,7 @@ impl LayoutNode {
             subtree_needs_measure: false,
             placed: false,
             measured_in: 0,
+            intrinsics_asked: false,
             overlay: false,
             overlay_origin: crate::unit::Offset::ZERO,
             place_order: 0,

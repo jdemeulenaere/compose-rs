@@ -37,6 +37,17 @@ pub enum SemanticsAction {
     OnClick,
     /// Focus it, as `SemanticsActions.RequestFocus`.
     RequestFocus,
+    /// Set its progress to a value in its range (a slider's), as `SemanticsActions.SetProgress`.
+    SetProgress(f32),
+}
+
+/// A value in a range, as Compose's `ProgressBarRangeInfo`: a slider's or a progress bar's.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct ProgressBarRangeInfo {
+    pub current: f32,
+    pub range: (f32, f32),
+    /// The stops between the ends (0: continuous).
+    pub steps: u32,
 }
 
 /// A toggle's state, as `ToggleableState`.
@@ -74,6 +85,10 @@ pub struct SemanticsConfiguration {
     pub editable: bool,
     /// The node's state in words (a slider's value), as `stateDescription`.
     pub state_description: Option<SharedString>,
+    /// Its value in a range (a slider's), as `progressBarRangeInfo`.
+    pub progress_bar_range_info: Option<ProgressBarRangeInfo>,
+    /// It's a dialog (its own pane, modal), as `isDialog`.
+    pub is_dialog: bool,
     /// The properties belong to the nearest ancestor with semantics, in both trees, as if its
     /// own modifiers set them: a text field's inner text, which in Compose is one semantics
     /// node with its decoration box.
@@ -97,14 +112,16 @@ impl SemanticsConfiguration {
         if self.state_description.is_none() {
             self.state_description = child.state_description.clone();
         }
-        if self.role.is_none() {
-            self.role = child.role;
-        }
+        // A role never merges up, as Compose's (`parentValue`): a clickable row holding an
+        // image is no image.
         if self.toggleable_state.is_none() {
             self.toggleable_state = child.toggleable_state;
         }
         if self.selected.is_none() {
             self.selected = child.selected;
+        }
+        if self.progress_bar_range_info.is_none() {
+            self.progress_bar_range_info = child.progress_bar_range_info;
         }
         // Compose's default merge policy, parent ?: child: a flag set below is set here.
         self.editable |= child.editable;
@@ -137,6 +154,10 @@ impl SemanticsConfiguration {
         if other.selected.is_some() {
             self.selected = other.selected;
         }
+        if other.progress_bar_range_info.is_some() {
+            self.progress_bar_range_info = other.progress_bar_range_info;
+        }
+        self.is_dialog |= other.is_dialog;
         self.disabled |= other.disabled;
         self.focusable |= other.focusable;
         self.focused |= other.focused;
@@ -183,6 +204,12 @@ impl fmt::Debug for SemanticsConfiguration {
         if let Some(state) = &self.state_description {
             parts.push(format!("state={:?}", state.as_str()));
         }
+        if let Some(info) = self.progress_bar_range_info {
+            parts.push(format!(
+                "progress={} in {}..{} steps {}",
+                info.current, info.range.0, info.range.1, info.steps
+            ));
+        }
         for (flag, name) in [
             (self.clickable, "clickable"),
             (self.editable, "editable"),
@@ -191,6 +218,7 @@ impl fmt::Debug for SemanticsConfiguration {
             (self.focused, "focused"),
             (self.merge_descendants, "merged"),
             (self.part_of_parent, "part_of_parent"),
+            (self.is_dialog, "dialog"),
         ] {
             if flag {
                 parts.push(name.to_string());
@@ -270,24 +298,30 @@ impl UiTree {
             return None;
         }
         let mut config = SemanticsConfiguration::default();
+        let mut layers: SmallVec<[usize; 8]> = SmallVec::new();
         let mut layer = 0;
-        let mut first_layer = None;
-        let mut merging_layer = None;
-        for index in 0..value.chain.len() {
-            let bits = value.capabilities[index];
-            if bits & capability::SEMANTICS != 0
-                && let Some(semantics) = value.chain[index].as_semantics()
-            {
-                let merging = config.merge_descendants;
-                semantics.apply_semantics(&mut config);
-                first_layer.get_or_insert(layer);
-                // A merging node's bounds are those of the modifier that merges.
-                if !merging && config.merge_descendants {
-                    merging_layer = Some(layer);
-                }
-            }
+        for bits in &value.capabilities {
+            layers.push(layer);
             if bits & capability::LAYOUT != 0 {
                 layer += 1;
+            }
+        }
+        let mut first_layer = None;
+        let mut merging_layer = None;
+        // From the innermost to the outermost, so an outer modifier's values win, as Compose's
+        // `collapsedSemantics` (`tailToHead`).
+        for index in (0..value.chain.len()).rev() {
+            if value.capabilities[index] & capability::SEMANTICS != 0
+                && let Some(semantics) = value.chain[index].as_semantics()
+            {
+                semantics.apply_semantics(&mut config);
+                first_layer = Some(layers[index]);
+                // A merging node's bounds are those of the outermost modifier that merges.
+                let mut own = SemanticsConfiguration::default();
+                semantics.apply_semantics(&mut own);
+                if own.merge_descendants {
+                    merging_layer = Some(layers[index]);
+                }
             }
         }
         Some((config, merging_layer.or(first_layer).unwrap_or(0)))

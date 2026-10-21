@@ -329,9 +329,13 @@ fn tonal_elevation_tints_the_surface_color_and_adds_up() {
     thread_local! { static COLORS: Cell<Option<(ColorScheme, Color, Color)>> = const { Cell::new(None) }; }
     let mut ui = compose_test(|| {
         MaterialTheme!({
-            Surface!(tonal_elevation = 3.dp(), modifier = Modifier.size(50.dp()).test_tag("outer"), {
-                Surface!(tonal_elevation = 3.dp(), modifier = Modifier.size(20.dp()), {});
-            });
+            Surface!(
+                tonal_elevation = 3.dp(),
+                modifier = Modifier.size(50.dp()).test_tag("outer"),
+                {
+                    Surface!(tonal_elevation = 3.dp(), modifier = Modifier.size(20.dp()), {});
+                }
+            );
             let scheme = MaterialTheme::color_scheme();
             COLORS.with(|cell| {
                 cell.set(Some((
@@ -355,4 +359,28 @@ fn tonal_elevation_tints_the_surface_color_and_adds_up() {
         })
         .collect();
     assert_eq!(fills, vec![at_3, at_6], "the inner surface at the sum of both");
+}
+
+#[test]
+fn a_slider_takes_set_progress_snapped_to_its_steps() {
+    let value = mutable_state_of(0.0f32);
+    let handle = value.handle();
+    let mut ui = compose_test(move || {
+        MaterialTheme!({
+            Slider!(
+                handle.get(),
+                move |new| handle.set(new),
+                modifier = Modifier.test_tag("slider"),
+                steps = 3,
+            );
+        });
+    });
+    let node = ui.on_node_with_tag("slider").fetch_semantics_node();
+    let info = node.config.progress_bar_range_info.expect("a range");
+    assert_eq!((info.current, info.range, info.steps), (0.0, (0.0, 1.0), 3));
+    ui.on_node_with_tag("slider")
+        .perform_semantics_action(compose_ui::SemanticsAction::SetProgress(0.3));
+    assert_eq!(value.get(), 0.25, "snapped to the nearest of the 5 stops");
+    let info = ui.on_node_with_tag("slider").fetch_semantics_node().config.progress_bar_range_info;
+    assert_eq!(info.map(|info| info.current), Some(0.25));
 }

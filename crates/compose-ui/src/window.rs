@@ -137,16 +137,17 @@ pub fn PopupWithPositionProvider(
             // Under the popup, the whole window: a press there dismisses it. A focusable popup
             // takes the press (what's beneath gets nothing while it shows); another lets it
             // through, as Android's non-focusable popup windows (`FLAG_NOT_TOUCH_MODAL`).
-            if properties.dismiss_on_click_outside
-                && let Some(dismiss) = on_dismiss_request.clone()
-            {
+            // A focusable popup's outside is there even when a press doesn't dismiss it.
+            let dismiss =
+                on_dismiss_request.clone().filter(|_| properties.dismiss_on_click_outside);
+            if properties.focusable || dismiss.is_some() {
                 let outside = if properties.focusable {
                     Modifier.overlay(window.clone(), false)
                 } else {
                     Modifier.overlay_passing_through(window.clone())
                 };
                 let catcher = outside.then_custom(DismissOnClick {
-                    on_dismiss: dismiss,
+                    on_dismiss: dismiss.unwrap_or_else(|| compose_runtime::callback(|| {})),
                     inside: Rc::new(Cell::new(None)),
                     on_press: true,
                     modal: properties.focusable,
@@ -204,7 +205,8 @@ pub fn Dialog(
                     on_press: false,
                     modal: true,
                 })
-                .focusable(true);
+                .focusable(true)
+                .semantics(false, |config| config.is_dialog = true);
             if properties.dismiss_on_back_press {
                 let dismiss = dismiss.clone();
                 modifier = modifier

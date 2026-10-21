@@ -116,7 +116,9 @@ impl UiTree {
         let mut index = 0;
         while index < self.focus_restore.len() {
             let (overlay, before) = self.focus_restore[index];
-            if self.get(overlay).is_some_and(|value| value.overlay) {
+            let takes_focus = self.get(overlay).is_some_and(|value| value.overlay)
+                && self.overlay_node(overlay).is_some_and(|overlay| overlay.focus_on_open);
+            if takes_focus {
                 index += 1;
                 continue;
             }
@@ -166,6 +168,10 @@ impl UiTree {
             let value = self.node(child);
             if !value.needs_measure && !value.subtree_needs_measure {
                 continue;
+            }
+            // Its parent's size depends on its intrinsics, not just its size.
+            if value.intrinsics_asked {
+                return true;
             }
             let Some(constraints) = value.constraints else { return true };
             let before = value.layers[0].size;
@@ -217,7 +223,9 @@ impl UiTree {
             let policy = value.policy.clone();
             let children = mem::take(&mut value.children);
             for child in &children {
-                self.node_mut(child.node).placed = false;
+                let child = self.node_mut(child.node);
+                child.placed = false;
+                child.intrinsics_asked = false;
             }
             let run = self.next_measure_run();
             let observer = self.observer.clone();

@@ -123,8 +123,8 @@ fn images_decode_and_draw_with_skia() {
 
 #[test]
 fn shadows_darken_beneath_an_elevated_shape() {
-    use compose::foundation::layout::Box;
     use compose::foundation::RECTANGLE_SHAPE;
+    use compose::foundation::layout::Box;
     use compose::ui::{Alignment, Modifier, UnitExt};
     let mut host =
         UiHost::new(IntSize::new(200, 200), Density::new(1.0), Box::new(SkiaTextMeasurer::new()));

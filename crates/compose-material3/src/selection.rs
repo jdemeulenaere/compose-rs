@@ -791,10 +791,36 @@ impl KeyInputModifierNode for SliderNode {
 }
 
 impl SemanticsModifierNode for SliderNode {
+    /// Its own node (as `progressSemantics`), its value in its range, and `SetProgress`.
     fn apply_semantics(&self, config: &mut SemanticsConfiguration) {
+        config.merge_descendants = true;
         config.focusable |= self.enabled;
         config.focused |= self.focused;
         config.disabled |= !self.enabled;
-        config.state_description = Some(format!("{}", self.value).into());
+        config.progress_bar_range_info = Some(compose_ui::ProgressBarRangeInfo {
+            current: self.value,
+            range: self.range,
+            steps: self.steps,
+        });
+    }
+
+    /// Moves to the value asked (in the range, snapped to the steps), as Compose's slider's
+    /// `setProgress`.
+    fn perform_action(
+        &mut self,
+        action: compose_ui::SemanticsAction,
+        context: &mut EventContext<'_>,
+    ) -> bool {
+        let compose_ui::SemanticsAction::SetProgress(target) = action else { return false };
+        if !self.enabled {
+            return false;
+        }
+        let value = self.value_at(self.fraction_of(target));
+        if value == self.asked.unwrap_or(self.value) {
+            return false;
+        }
+        self.change_to(value, context);
+        self.finish(context);
+        true
     }
 }

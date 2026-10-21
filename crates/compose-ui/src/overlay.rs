@@ -55,6 +55,10 @@ impl ModifierNodeElement for OverlayElement {
     fn update(&self, node: &mut dyn ModifierNode) {
         if let Some(node) = node.downcast_mut::<OverlayNode>() {
             node.provider = self.provider.clone();
+            if self.focus_on_open && !node.focus_on_open {
+                // Taking the focus again: it moves in, as when it opened.
+                node.focused_once = false;
+            }
             node.focus_on_open = self.focus_on_open;
             node.pass_through = self.pass_through;
         }

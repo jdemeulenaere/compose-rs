@@ -132,13 +132,17 @@ pub fn AlertDialog(
                                         CompositionLocalProvider(
                                             LOCAL_TEXT_STYLE.provides(typography.body_medium),
                                             || {
+                                                // What's left once the title and
+                                                // buttons have their room.
                                                 Box(
-                                                    Modifier.padding_sides(
-                                                        0.dp(),
-                                                        0.dp(),
-                                                        0.dp(),
-                                                        24.dp(),
-                                                    ),
+                                                    Modifier
+                                                        .weight_filled(column, 1.0, false)
+                                                        .padding_sides(
+                                                            0.dp(),
+                                                            0.dp(),
+                                                            0.dp(),
+                                                            24.dp(),
+                                                        ),
                                                     Alignment::TOP_START,
                                                     false,
                                                     compose_runtime::callback({
@@ -219,7 +223,11 @@ impl PopupPositionProvider for DropdownMenuPosition {
         .into_iter()
         .find(|&y| y >= margin && y + popup.height <= window.height - margin)
         .unwrap_or(bottom_to_anchor_top);
-        IntOffset::new(x, y)
+        // Kept in the window, as a popup window clipped to the screen.
+        IntOffset::new(
+            x.min(window.width - popup.width).max(0),
+            y.min(window.height - popup.height).max(0),
+        )
     }
 }
 
@@ -234,6 +242,7 @@ pub fn DropdownMenu(
     on_dismiss_request: impl Fn() + 'static,
     #[default(crate::Modifier)] modifier: Modifier,
     #[default(crate::IntOffset::ZERO)] offset: IntOffset,
+    #[default(crate::remember_scroll_state())] scroll_state: compose_foundation::ScrollState,
     content: impl Fn(ColumnScope) + 'static,
 ) {
     if expanded {
@@ -244,7 +253,7 @@ pub fn DropdownMenu(
                 as Rc<dyn PopupPositionProvider>
         });
         let column = remember(|| Rc::new(MenuColumn) as Rc<dyn MeasurePolicy>);
-        let scroll = compose_foundation::remember_scroll_state();
+        let scroll = scroll_state;
         let scheme = MaterialTheme::color_scheme();
         compose_ui::PopupWithPositionProvider(
             provider,

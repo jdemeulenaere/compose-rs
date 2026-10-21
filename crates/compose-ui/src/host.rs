@@ -41,6 +41,14 @@ pub struct UiHost {
     density: compose_runtime::OwnedState<Density>,
 }
 
+/// The content, skipped when the root recomposes for a new density: only what reads
+/// `LOCAL_DENSITY` runs again.
+#[compose_runtime::composable]
+#[allow(non_snake_case)]
+fn Content(content: compose_runtime::Callback) {
+    content()
+}
+
 /// The window's density, as Compose's `LocalDensity`: what composition converts `Dp` with.
 pub static LOCAL_DENSITY: compose_runtime::CompositionLocal<Density> =
     compose_runtime::CompositionLocal::new("LocalDensity", Density::default);
@@ -178,10 +186,12 @@ impl UiHost {
         let composed = content.is_some();
         if let Some(content) = content {
             let density = self.density.handle();
+            let content: compose_runtime::Callback = compose_runtime::callback(content);
             self.composition.set_content(move || {
+                let content = content.clone();
                 compose_runtime::CompositionLocalProvider(
                     LOCAL_DENSITY.provides(density.get()),
-                    &*content,
+                    move || Content(content),
                 )
             });
         }
