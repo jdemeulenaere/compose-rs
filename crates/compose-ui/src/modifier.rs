@@ -764,6 +764,11 @@ pub trait PointerInputModifierNode {
     );
     /// The gesture ended without its events (the node left, or another took the pointer).
     fn on_cancel_pointer_input(&mut self) {}
+    /// The mouse pointer's look over it, as `Modifier.pointerHoverIcon` (the innermost on the
+    /// hovered path wins).
+    fn hover_icon(&self) -> Option<crate::input::PointerIcon> {
+        None
+    }
 }
 
 /// A node that adds semantics, as `SemanticsModifierNode`.

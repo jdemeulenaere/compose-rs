@@ -270,6 +270,20 @@ impl UiTree {
         self.hovered = now;
     }
 
+    /// The mouse pointer's look where it is: the innermost hovered node's icon.
+    pub fn pointer_icon(&mut self) -> crate::input::PointerIcon {
+        let hovered = std::mem::take(&mut self.hovered);
+        let icon = hovered.iter().rev().find_map(|entry| {
+            let value = self.get_mut(entry.node)?;
+            if value.chain_version != entry.version {
+                return None;
+            }
+            value.chain[entry.index as usize].as_pointer_input()?.hover_icon()
+        });
+        self.hovered = hovered;
+        icon.unwrap_or_default()
+    }
+
     /// The mouse left the window: what it was over hears `Exit`.
     pub fn pointer_left(&mut self) -> Vec<Action> {
         let mut actions = Vec::new();

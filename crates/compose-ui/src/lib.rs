@@ -53,7 +53,7 @@ pub use host::{FrameStats, LOCAL_DENSITY, UiHost};
 pub use image::ImageBitmap;
 pub use input::{
     Action, EventContext, Key, KeyEvent, KeyEventType, KeyModifiers, PointerEvent,
-    PointerEventPass, PointerEventType, PointerId, PointerType,
+    PointerEventPass, PointerEventType, PointerIcon, PointerId, PointerType,
 };
 pub use interaction::MutableInteractionSource;
 pub use layout::{

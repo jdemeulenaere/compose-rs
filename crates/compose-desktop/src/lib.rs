@@ -131,6 +131,8 @@ struct Shown {
     accessibility: accesskit_winit::Adapter,
     /// The focused node the accessibility tree last had.
     accessibility_focus: Option<compose_ui::NodeId>,
+    /// The mouse pointer's look last set.
+    pointer_icon: compose_ui::PointerIcon,
 }
 
 struct App<C: Fn() + 'static> {
@@ -209,6 +211,7 @@ impl<C: Fn() + 'static> App<C> {
             ime_area: None,
             accessibility,
             accessibility_focus: None,
+            pointer_icon: compose_ui::PointerIcon::Default,
         });
     }
 
@@ -341,6 +344,21 @@ impl<C: Fn() + 'static> ApplicationHandler<UserEvent> for App<C> {
                     input::Outcome::Exit => event_loop.exit(),
                     input::Outcome::Handled => {
                         self.first_input.get_or_insert_with(Instant::now);
+                        // The pointer's look where it now is.
+                        let icon = shown.host.pointer_icon();
+                        if icon != shown.pointer_icon {
+                            shown.pointer_icon = icon;
+                            shown.window.set_cursor(match icon {
+                                compose_ui::PointerIcon::Default => {
+                                    winit::window::CursorIcon::Default
+                                }
+                                compose_ui::PointerIcon::Text => winit::window::CursorIcon::Text,
+                                compose_ui::PointerIcon::Hand => winit::window::CursorIcon::Pointer,
+                                compose_ui::PointerIcon::Crosshair => {
+                                    winit::window::CursorIcon::Crosshair
+                                }
+                            });
+                        }
                     }
                     input::Outcome::Ignored => {}
                 }

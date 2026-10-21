@@ -278,6 +278,11 @@ impl UiHost {
         self.wake_if_dirty();
     }
 
+    /// The mouse pointer's look where it is, as `pointerHoverIcon` set it.
+    pub fn pointer_icon(&self) -> crate::input::PointerIcon {
+        self.with_tree(|tree| tree.pointer_icon())
+    }
+
     /// The mouse left the window: what it was over hears `Exit` (hover states end).
     pub fn send_pointer_left(&mut self) {
         let actions = self.with_tree(|tree| tree.pointer_left());

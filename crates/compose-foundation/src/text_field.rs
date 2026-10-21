@@ -62,7 +62,11 @@ pub fn BasicTextField(
         );
     });
     crate::layout::Box(
-        modifier.semantics(true, |_| {}).then_custom(FocusOnTap),
+        // An I-beam over the field, as Compose Desktop's text fields.
+        modifier
+            .semantics(true, |_| {})
+            .then_custom(FocusOnTap)
+            .pointer_hover_icon(compose_ui::PointerIcon::Text),
         crate::Alignment::TOP_START,
         // The decoration's size is the field's: a field given a size passes it on.
         true,

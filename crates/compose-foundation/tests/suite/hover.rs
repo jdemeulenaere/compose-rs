@@ -48,3 +48,21 @@ fn hovering_a_clickable_shows_its_state_layer() {
     ui.wait_for_idle();
     assert_eq!(layer_alpha(&mut ui), None);
 }
+
+#[test]
+fn a_text_field_shows_an_i_beam() {
+    let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), || {
+        Column!({
+            BasicTextField!(String::new(), |_| {}, modifier = Modifier.size_wh(100.dp(), 30.dp()));
+            Box!(
+                modifier = Modifier.size(50.dp()).pointer_hover_icon(compose_ui::PointerIcon::Hand)
+            );
+        });
+    });
+    ui.host().send_pointer(PointerEvent::moved(Offset::new(10.0, 10.0), false));
+    assert_eq!(ui.host().pointer_icon(), compose_ui::PointerIcon::Text);
+    ui.host().send_pointer(PointerEvent::moved(Offset::new(10.0, 50.0), false));
+    assert_eq!(ui.host().pointer_icon(), compose_ui::PointerIcon::Hand);
+    ui.host().send_pointer(PointerEvent::moved(Offset::new(150.0, 150.0), false));
+    assert_eq!(ui.host().pointer_icon(), compose_ui::PointerIcon::Default);
+}

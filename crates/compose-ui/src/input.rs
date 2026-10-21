@@ -31,6 +31,25 @@ pub enum PointerEventType {
     Exit,
 }
 
+/// The mouse pointer's look, as Compose's `PointerIcon`.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
+pub enum PointerIcon {
+    /// The arrow.
+    #[default]
+    Default,
+    /// The I-beam, over text that can be edited or selected.
+    Text,
+    /// A hand, over what can be clicked.
+    Hand,
+    Crosshair,
+}
+
+impl compose_runtime::ComposeArg for PointerIcon {
+    fn same(&self, other: &Self) -> bool {
+        self == other
+    }
+}
+
 /// One pointer event, in the receiving node's coordinates, as Compose's `PointerEvent` with a
 /// single `PointerInputChange`.
 #[derive(Clone, Copy, PartialEq, Debug)]
