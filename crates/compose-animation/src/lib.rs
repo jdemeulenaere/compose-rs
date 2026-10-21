@@ -10,6 +10,8 @@ extern crate compose_runtime as compose;
 
 mod animatable;
 mod as_state;
+mod content_size;
+mod crossfade;
 mod easing;
 mod infinite;
 mod spec;
@@ -22,6 +24,8 @@ pub use as_state::{
     animate_int_offset_as_state, animate_offset_as_state, animate_size_as_state,
     animate_value_as_state,
 };
+pub use content_size::AnimationModifiers;
+pub use crossfade::Crossfade;
 pub use easing::{
     EASE, EASE_IN, EASE_IN_OUT, EASE_OUT, Easing, FAST_OUT_LINEAR_IN_EASING,
     FAST_OUT_SLOW_IN_EASING, LINEAR_EASING, LINEAR_OUT_SLOW_IN_EASING,
