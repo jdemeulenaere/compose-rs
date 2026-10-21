@@ -118,7 +118,6 @@ pub fn NavigationBarItem(
     };
     let show_label = label.is_some() && (always_show_label || selected);
     let policy = {
-        let show_label = show_label;
         compose_runtime::remember_keyed(show_label, move || {
             Rc::new(NavigationBarItemLayout { label: show_label }) as Rc<dyn MeasurePolicy>
         })

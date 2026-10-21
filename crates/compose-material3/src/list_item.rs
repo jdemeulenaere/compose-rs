@@ -165,6 +165,6 @@ pub fn ListItem(
 /// `content` in `color` and `style`.
 fn styled(color: Color, style: compose_ui::TextStyle, content: &compose_runtime::Callback) {
     CompositionLocalProvider(LOCAL_CONTENT_COLOR.provides(color), || {
-        CompositionLocalProvider(LOCAL_TEXT_STYLE.provides(style), || content());
+        CompositionLocalProvider(LOCAL_TEXT_STYLE.provides(style), &**content);
     });
 }
