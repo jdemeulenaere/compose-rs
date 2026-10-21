@@ -76,6 +76,15 @@ pub fn has_test_tag(tag: &str) -> Matcher {
     })
 }
 
+/// A node with exactly `description` among its content descriptions, as
+/// `hasContentDescription`.
+pub fn has_content_description(description: &str) -> Matcher {
+    let description = description.to_string();
+    Matcher::new(format!("with content description {description:?}"), move |config| {
+        config.content_description.iter().any(|candidate| candidate.as_str() == description)
+    })
+}
+
 pub fn has_role(role: Role) -> Matcher {
     Matcher::new(format!("with role {role:?}"), move |config| config.role == Some(role))
 }

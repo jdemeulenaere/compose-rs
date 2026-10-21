@@ -18,6 +18,7 @@ mod focus;
 pub mod graphics;
 pub mod graphics_layer;
 pub mod host;
+pub mod image;
 pub mod input;
 pub mod layout;
 mod measure;
@@ -40,6 +41,7 @@ pub use draw::DrawScope;
 pub use graphics::{Color, CornerSize, Outline, Paint, PaintStyle, RECTANGLE_SHAPE, Shape};
 pub use graphics_layer::{GraphicsLayerScope, TransformOrigin};
 pub use host::{FrameStats, UiHost};
+pub use image::ImageBitmap;
 pub use input::{
     Action, EventContext, Key, KeyEvent, KeyEventType, KeyModifiers, PointerEvent,
     PointerEventPass, PointerEventType, PointerId, PointerType,

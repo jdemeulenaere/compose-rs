@@ -78,3 +78,45 @@ fn the_test_rule_runs_with_the_skia_measurer() {
     ui.on_node(has_text_containing("Count")).perform_click();
     ui.on_node_with_text("Count: 1").assert_exists();
 }
+
+#[test]
+fn images_decode_and_draw_with_skia() {
+    use compose::foundation::ImageBitmap;
+    use compose::runtime::composable;
+    use compose::ui::{Modifier, UnitExt};
+    // A PNG of a red square on white, encoded by the renderer.
+    let mut source = RasterRenderer::new(8, 8);
+    let mut list = compose::ui::DisplayList::default();
+    list.push(compose::ui::DrawOp::DrawRect(
+        compose::ui::Rect::new(0.0, 0.0, 4.0, 8.0),
+        compose::ui::Paint::fill(Color::RED),
+    ));
+    source.render(&list, Color::WHITE, 1.0, &compose::ui::FixedTextMeasurer::default());
+    let png = source.png();
+    let image = compose_skia::decode_image(&png).expect("a PNG decodes");
+    assert_eq!((image.width(), image.height()), (8, 8));
+    assert_eq!(&image.pixels()[0..4], &[255, 0, 0, 255], "red at the left");
+    assert_eq!(&image.pixels()[7 * 4..8 * 4], &[255, 255, 255, 255], "white at the right");
+    assert!(compose_skia::decode_image(b"not an image").is_none());
+    // Drawn twice as large (FillBounds) by `Image`, at density 1.
+    #[composable]
+    #[allow(non_snake_case)]
+    fn Shown(image: ImageBitmap) {
+        compose::foundation::Image!(
+            image,
+            None,
+            modifier = Modifier.size_wh(16.dp(), 16.dp()),
+            content_scale = compose::foundation::ContentScale::FillBounds,
+        );
+    }
+    let mut host =
+        UiHost::new(IntSize::new(32, 32), Density::new(1.0), Box::new(SkiaTextMeasurer::new()));
+    host.set_content(move || Shown(image.clone()));
+    host.frame();
+    let mut renderer = RasterRenderer::new(32, 32);
+    let list = host.display_list();
+    host.with_tree(|tree| renderer.render(&list, Color::BLUE, 1.0, tree.text_measurer()));
+    assert_eq!(renderer.pixel(2, 8), Color::RED);
+    assert_eq!(renderer.pixel(13, 8), Color::WHITE);
+    assert_eq!(renderer.pixel(20, 20), Color::BLUE, "outside the image");
+}

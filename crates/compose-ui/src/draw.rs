@@ -79,6 +79,19 @@ impl DrawScope<'_> {
         self.list.push(DrawOp::Restore);
     }
 
+    /// Draws the part `src` of `image` (in its pixels) into `dst` (in the node's coordinates), at
+    /// `alpha`.
+    pub fn draw_image(
+        &mut self,
+        image: &crate::image::ImageBitmap,
+        src: Rect,
+        dst: Rect,
+        alpha: f32,
+    ) {
+        let dst = self.to_list(dst);
+        self.list.push(DrawOp::DrawImage { image: image.clone(), src, dst, alpha });
+    }
+
     /// Draws `path` (in the node's coordinates).
     pub fn draw_path(&mut self, path: &std::sync::Arc<crate::path::Path>, paint: Paint) {
         self.draw_path_scaled(path, Offset::ZERO, (1.0, 1.0), paint);

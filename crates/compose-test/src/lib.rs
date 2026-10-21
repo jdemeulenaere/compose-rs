@@ -20,8 +20,8 @@ use compose_ui::{
 };
 
 pub use matcher::{
-    Matcher, has_click_action, has_role, has_test_tag, has_text, has_text_containing, is_enabled,
-    is_focusable, is_focused, is_not_enabled,
+    Matcher, has_click_action, has_content_description, has_role, has_test_tag, has_text,
+    has_text_containing, is_enabled, is_focusable, is_focused, is_not_enabled,
 };
 pub use script::{check_script, run_script};
 
@@ -199,6 +199,14 @@ impl ComposeTestRule {
     /// The node whose text is exactly `text`, as `onNodeWithText`.
     pub fn on_node_with_text(&mut self, text: &str) -> SemanticsNodeInteraction<'_> {
         self.on_node(has_text(text))
+    }
+
+    /// The node with content description `description`, as `onNodeWithContentDescription`.
+    pub fn on_node_with_content_description(
+        &mut self,
+        description: &str,
+    ) -> SemanticsNodeInteraction<'_> {
+        self.on_node(has_content_description(description))
     }
 
     /// The node with test tag `tag`, as `onNodeWithTag`.

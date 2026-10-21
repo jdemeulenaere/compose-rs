@@ -38,6 +38,7 @@ fn skia_paint(paint: &Paint) -> skia_safe::Paint {
 /// measurers' paragraphs are skipped).
 pub fn draw_display_list(canvas: &Canvas, list: &DisplayList, text_measurer: &dyn TextMeasurer) {
     let measurer = (text_measurer as &dyn std::any::Any).downcast_ref::<SkiaTextMeasurer>();
+    forget_dropped_images();
     // A list's saves and restores are balanced against each other only: an unmatched restore
     // is ignored, and unmatched saves are undone at the end, so the canvas is left as found.
     let start = canvas.save_count();
@@ -85,6 +86,23 @@ pub fn draw_display_list(canvas: &Canvas, list: &DisplayList, text_measurer: &dy
                 canvas.scale((scale.0, scale.1));
                 canvas.draw_path(&skia, &skia_paint(paint));
                 canvas.restore();
+            }
+            DrawOp::DrawImage { image, src, dst, alpha } => {
+                if let Some(skia) = skia_image(image) {
+                    let mut paint = skia_safe::Paint::default();
+                    paint.set_alpha_f(alpha.clamp(0.0, 1.0));
+                    let sampling = skia_safe::SamplingOptions::new(
+                        skia_safe::FilterMode::Linear,
+                        skia_safe::MipmapMode::None,
+                    );
+                    canvas.draw_image_rect_with_sampling_options(
+                        &skia,
+                        Some((&rect(src), skia_safe::canvas::SrcRectConstraint::Fast)),
+                        rect(dst),
+                        sampling,
+                        &paint,
+                    );
+                }
             }
             DrawOp::SaveLayerAlpha(alpha) => {
                 canvas.save_layer_alpha_f(None, alpha.clamp(0.0, 1.0));
@@ -246,4 +264,64 @@ fn build_skia_path(path: &compose_ui::Path) -> skia_safe::Path {
         PathFillType::EvenOdd => skia_safe::PathFillType::EvenOdd,
     });
     skia.detach()
+}
+
+/// Skia's images by bitmap address, each with its bitmap's pixels to tell when it's gone.
+type ImageCache = std::collections::HashMap<usize, (std::sync::Weak<[u8]>, skia_safe::Image)>;
+
+thread_local! {
+    /// Skia's image of each bitmap drawn, by its pixels (kept while the bitmap lives).
+    static IMAGES: std::cell::RefCell<ImageCache> = std::cell::RefCell::new(ImageCache::new());
+}
+
+/// Forgets the images of bitmaps that are gone, so their pixels (copied into Skia) are freed
+/// at the next frame rather than kept.
+fn forget_dropped_images() {
+    IMAGES.with(|images| images.borrow_mut().retain(|_, (alive, _)| alive.strong_count() > 0));
+}
+
+/// Skia's image for `image`, made once per bitmap (while it lives).
+fn skia_image(image: &compose_ui::ImageBitmap) -> Option<skia_safe::Image> {
+    IMAGES.with(|images| {
+        let mut images = images.borrow_mut();
+        if let Some((alive, skia)) = images.get(&image.id())
+            && alive.strong_count() > 0
+        {
+            return Some(skia.clone());
+        }
+        let info = skia_safe::ImageInfo::new(
+            (image.width() as i32, image.height() as i32),
+            skia_safe::ColorType::RGBA8888,
+            skia_safe::AlphaType::Premul,
+            None,
+        );
+        let data = skia_safe::Data::new_copy(image.pixels());
+        let skia = skia_safe::images::raster_from_data(&info, data, image.width() as usize * 4)?;
+        images.insert(image.id(), (image.downgrade(), skia.clone()));
+        Some(skia)
+    })
+}
+
+/// Decodes an encoded image (PNG, JPEG, WebP, GIF's first frame, …) with Skia, as the
+/// desktop's `decodeToImageBitmap`. `None` if it isn't one Skia reads.
+pub fn decode_image(bytes: &[u8]) -> Option<compose_ui::ImageBitmap> {
+    let encoded = skia_safe::Image::from_encoded(skia_safe::Data::new_copy(bytes))?;
+    let (width, height) = (encoded.width(), encoded.height());
+    let info = skia_safe::ImageInfo::new(
+        (width, height),
+        skia_safe::ColorType::RGBA8888,
+        skia_safe::AlphaType::Premul,
+        None,
+    );
+    let mut pixels = vec![0u8; width as usize * height as usize * 4];
+    if !encoded.read_pixels(
+        &info,
+        &mut pixels,
+        width as usize * 4,
+        (0, 0),
+        skia_safe::image::CachingHint::Disallow,
+    ) {
+        return None;
+    }
+    Some(compose_ui::ImageBitmap::from_rgba_premultiplied(width as u32, height as u32, pixels))
 }

@@ -5,6 +5,6 @@
 mod render;
 mod text;
 
-pub use render::{RasterRenderer, draw_display_list};
+pub use render::{RasterRenderer, decode_image, draw_display_list};
 pub use skia_safe;
 pub use text::SkiaTextMeasurer;

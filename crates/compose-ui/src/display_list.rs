@@ -33,6 +33,13 @@ pub enum DrawOp {
         rotation: f32,
         translation: Offset,
     },
+    /// The part `src` of a bitmap (in its pixels) drawn into `dst`, at `alpha`.
+    DrawImage {
+        image: crate::image::ImageBitmap,
+        src: Rect,
+        dst: Rect,
+        alpha: f32,
+    },
     /// A path, scaled by `scale` then moved by `offset` (a vector image's viewport to its size).
     DrawPath {
         path: std::sync::Arc<crate::path::Path>,
@@ -130,6 +137,14 @@ impl DisplayList {
                     writeln!(out, "paragraph {} at {} {}", handle.0, offset.x, offset.y)
                 }
                 DrawOp::SaveLayerAlpha(alpha) => writeln!(out, "save layer alpha {alpha}"),
+                DrawOp::DrawImage { image, src, dst, alpha } => writeln!(
+                    out,
+                    "image {}x{} {} into {} alpha {alpha}",
+                    image.width(),
+                    image.height(),
+                    rect_text(src),
+                    rect_text(dst)
+                ),
                 DrawOp::DrawPath { path, offset, scale, paint } => writeln!(
                     out,
                     "path of {} commands at {},{} scale {}x{} {}",
