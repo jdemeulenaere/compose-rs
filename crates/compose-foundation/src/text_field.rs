@@ -488,12 +488,12 @@ impl TextFieldNode {
     /// The start of the word before `offset`: words as shown (a transformed text's), as
     /// Compose finds them in the layout.
     fn previous_word(&self, offset: usize) -> usize {
-        self.by_words(offset, |text, offset| previous_word_in(text, offset))
+        self.by_words(offset, previous_word_in)
     }
 
     /// The end of the word after `offset`.
     fn next_word(&self, offset: usize) -> usize {
-        self.by_words(offset, |text, offset| next_word_in(text, offset))
+        self.by_words(offset, next_word_in)
     }
 
     /// The word (or the run between words) at `offset`: what a double-click selects.
