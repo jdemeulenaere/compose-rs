@@ -59,6 +59,37 @@ impl Default for WindowOptions {
     }
 }
 
+/// The system clipboard, through `arboard`; a clipboard in memory if the system's can't be
+/// opened.
+struct SystemClipboard {
+    system: Option<arboard::Clipboard>,
+    fallback: compose_ui::MemoryClipboard,
+}
+
+impl SystemClipboard {
+    fn new() -> SystemClipboard {
+        SystemClipboard { system: arboard::Clipboard::new().ok(), fallback: Default::default() }
+    }
+}
+
+impl compose_ui::Clipboard for SystemClipboard {
+    fn text(&mut self) -> Option<String> {
+        match &mut self.system {
+            Some(system) => system.get_text().ok(),
+            None => self.fallback.text(),
+        }
+    }
+
+    fn set_text(&mut self, text: &str) {
+        match &mut self.system {
+            Some(system) => {
+                let _ = system.set_text(text);
+            }
+            None => self.fallback.set_text(text),
+        }
+    }
+}
+
 /// Timings of one frame, for `COMPOSE_FRAME_STATS`.
 #[derive(Clone, Copy, Debug, Default)]
 struct FrameTimes {
@@ -110,6 +141,7 @@ impl<C: Fn() + 'static> App<C> {
             density,
             Box::new(SkiaTextMeasurer::new()),
         );
+        host.with_tree(|tree| tree.set_clipboard(Box::new(SystemClipboard::new())));
         let waker = window.clone();
         host.set_frame_waker(move || waker.request_redraw());
         let content = self.content.clone();

@@ -18,6 +18,9 @@ use compose_ui::{
 };
 use unicode_segmentation::UnicodeSegmentation;
 
+/// The selection's highlight, as Compose's default `TextSelectionColors` (40% of #4286F4).
+const SELECTION_COLOR: Color = Color::from_argb(0x664286F4);
+
 /// The cursor's width, as Compose's `DefaultCursorThickness`.
 const CURSOR_WIDTH: compose_ui::Dp = compose_ui::Dp(2.0);
 
@@ -60,6 +63,8 @@ impl ModifierNodeElement for TextFieldElement {
         Box::new(TextFieldNode {
             // At the start, as Compose's `TextFieldValue` with no selection given.
             cursor: 0,
+            anchor: 0,
+            selection_rects: Vec::new(),
             text: self.value.clone(),
             value: self.value.clone(),
             awaiting_value: false,
@@ -93,6 +98,7 @@ impl ModifierNodeElement for TextFieldElement {
             if node.text != self.value {
                 node.text = self.value.clone();
                 node.cursor = floor_char_boundary(&node.text, node.cursor);
+                node.anchor = floor_char_boundary(&node.text, node.anchor);
             }
             node.style = self.style;
             node.single_line = self.single_line;
@@ -139,6 +145,8 @@ pub struct TextFieldNode {
     awaiting_value: bool,
     /// The cursor, as a byte offset at a character boundary.
     cursor: usize,
+    /// The selection's other end: the selection is between it and the cursor (none when equal).
+    anchor: usize,
     on_value_change: Callback<dyn Fn(String)>,
     enabled: bool,
     read_only: bool,
@@ -154,16 +162,34 @@ pub struct TextFieldNode {
     /// Where the cursor is drawn, from the measurer, refreshed at measurement: moving the
     /// cursor asks for one (the paragraph is kept).
     cursor_rect: Option<Rect>,
+    /// The selection's highlight, from the measurer, refreshed at measurement.
+    selection_rects: Vec<Rect>,
     /// A tap to put the cursor at, resolved at the next measurement by the measurer's hit test.
     pending_tap: Option<Offset>,
 }
 
 impl TextFieldNode {
-    fn move_cursor(&mut self, cursor: usize, context: &mut EventContext<'_>) {
-        if cursor != self.cursor {
+    /// Moves the cursor, extending the selection or collapsing it.
+    fn move_cursor(&mut self, cursor: usize, extend: bool, context: &mut EventContext<'_>) {
+        let anchor = if extend { self.anchor } else { cursor };
+        if cursor != self.cursor || anchor != self.anchor {
             self.cursor = cursor;
+            self.anchor = anchor;
             context.invalidate_measure();
         }
+    }
+
+    /// The selected bytes (empty: none).
+    fn selection(&self) -> std::ops::Range<usize> {
+        self.cursor.min(self.anchor)..self.cursor.max(self.anchor)
+    }
+
+    /// Replaces the selection (or inserts at the cursor) with `with`.
+    fn replace_selection(&mut self, with: &str, context: &mut EventContext<'_>) {
+        let range = self.selection();
+        let mut text = self.text.clone();
+        text.replace_range(range.clone(), with);
+        self.edit(text, range.start + with.len(), context);
     }
 
     fn invalidate_paragraph(&mut self) {
@@ -177,6 +203,7 @@ impl TextFieldNode {
     fn edit(&mut self, text: String, cursor: usize, context: &mut EventContext<'_>) {
         self.text = text;
         self.cursor = cursor;
+        self.anchor = cursor;
         self.awaiting_value = true;
         self.invalidate_paragraph();
         context.invalidate_measure();
@@ -210,10 +237,7 @@ impl TextFieldNode {
         if inserted.is_empty() {
             return;
         }
-        let mut text = self.text.clone();
-        text.insert_str(self.cursor, &inserted);
-        let cursor = self.cursor + inserted.len();
-        self.edit(text, cursor, context);
+        self.replace_selection(&inserted, context);
     }
 }
 
@@ -254,6 +278,7 @@ impl LayoutModifierNode for TextFieldNode {
         if std::mem::take(&mut self.awaiting_value) && self.text != self.value {
             self.text = self.value.clone();
             self.cursor = floor_char_boundary(&self.text, self.cursor);
+            self.anchor = floor_char_boundary(&self.text, self.anchor);
             self.invalidate_paragraph();
         }
         for paragraph in self.stale.drain(..) {
@@ -292,6 +317,11 @@ impl LayoutModifierNode for TextFieldNode {
             );
         }
         self.cursor_rect = Some(scope.text_measurer().cursor_rect(paragraph, self.cursor));
+        self.selection_rects.clear();
+        let selection = self.selection();
+        if !selection.is_empty() {
+            self.selection_rects = scope.text_measurer().selection_rects(paragraph, selection);
+        }
         let metrics = scope.text_measurer().metrics(paragraph);
         let size = constraints
             .constrain(IntSize::new(metrics.size.width + cursor_width, metrics.size.height));
@@ -304,6 +334,11 @@ impl LayoutModifierNode for TextFieldNode {
 impl DrawModifierNode for TextFieldNode {
     fn draw(&mut self, scope: &mut DrawScope<'_>) {
         let Some(paragraph) = self.paragraph else { return };
+        if self.focused {
+            for rect in &self.selection_rects {
+                scope.draw_rect(*rect, Paint::fill(SELECTION_COLOR));
+            }
+        }
         scope.draw_paragraph(paragraph, Offset::ZERO);
         if self.focused && !self.read_only {
             // The cursor: drawn where the measurer that laid the paragraph out puts it.
@@ -350,6 +385,7 @@ impl PointerInputModifierNode for TextFieldNode {
                         let offset =
                             context.text_measurer().hit_test(paragraph, event.position).offset;
                         self.cursor = floor_char_boundary(&self.text, offset);
+                        self.anchor = self.cursor;
                     }
                     None => self.pending_tap = Some(event.position),
                 }
@@ -381,7 +417,37 @@ impl KeyInputModifierNode for TextFieldNode {
             return false;
         }
         let editable = !self.read_only;
+        let extend = event.modifiers.shift;
+        // Shortcuts: Cmd on macOS, Ctrl elsewhere (either is taken).
+        if (event.modifiers.meta || event.modifiers.ctrl)
+            && let Key::Character(c) = event.key
+        {
+            let selected = self.text[self.selection()].to_string();
+            match c.to_ascii_lowercase() {
+                'a' => {
+                    self.anchor = 0;
+                    self.cursor = self.text.len();
+                    context.invalidate_measure();
+                }
+                'c' if !selected.is_empty() => context.clipboard().set_text(&selected),
+                'x' if !selected.is_empty() && editable => {
+                    context.clipboard().set_text(&selected);
+                    self.replace_selection("", context);
+                }
+                'v' if editable => {
+                    if let Some(pasted) = context.clipboard().text() {
+                        self.insert(&pasted, context);
+                    }
+                }
+                _ => return false,
+            }
+            return true;
+        }
         match event.key {
+            Key::Backspace | Key::Delete if editable && !self.selection().is_empty() => {
+                self.replace_selection("", context);
+                true
+            }
             Key::Backspace if editable => {
                 if self.cursor > 0 {
                     let start = self.previous_boundary();
@@ -401,26 +467,37 @@ impl KeyInputModifierNode for TextFieldNode {
                 }
                 true
             }
+            // Without Shift, an arrow collapses a selection to its side.
+            Key::DirectionLeft if !extend && !self.selection().is_empty() => {
+                let start = self.selection().start;
+                self.move_cursor(start, false, context);
+                true
+            }
+            Key::DirectionRight if !extend && !self.selection().is_empty() => {
+                let end = self.selection().end;
+                self.move_cursor(end, false, context);
+                true
+            }
             Key::DirectionLeft => {
                 let cursor = self.previous_boundary();
-                self.move_cursor(cursor, context);
+                self.move_cursor(cursor, extend, context);
                 true
             }
             Key::DirectionRight => {
                 let cursor = self.next_boundary();
-                self.move_cursor(cursor, context);
+                self.move_cursor(cursor, extend, context);
                 true
             }
             Key::MoveHome => {
                 let start = self.text[..self.cursor].rfind('\n').map_or(0, |index| index + 1);
-                self.move_cursor(start, context);
+                self.move_cursor(start, extend, context);
                 true
             }
             Key::MoveEnd => {
                 let end = self.text[self.cursor..]
                     .find('\n')
                     .map_or(self.text.len(), |index| self.cursor + index);
-                self.move_cursor(end, context);
+                self.move_cursor(end, extend, context);
                 true
             }
             Key::Enter | Key::NumPadEnter if editable && !self.single_line => {

@@ -9,6 +9,7 @@
 extern crate compose_runtime as compose;
 
 pub mod alignment;
+pub mod clipboard;
 pub mod constraints;
 mod dispatch;
 pub mod display_list;
@@ -28,6 +29,7 @@ pub mod tree;
 pub mod unit;
 
 pub use alignment::{Alignment, HorizontalAlignment, LayoutDirection, VerticalAlignment};
+pub use clipboard::{Clipboard, MemoryClipboard};
 pub use constraints::Constraints;
 pub use display_list::{DisplayList, DrawOp, Renderer};
 pub use draw::DrawScope;

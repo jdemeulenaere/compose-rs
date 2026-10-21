@@ -217,6 +217,24 @@ impl TextMeasurer for SkiaTextMeasurer {
         Rect::new(0.0, top, 0.0, top + height)
     }
 
+    fn selection_rects(
+        &self,
+        paragraph: ParagraphHandle,
+        range: std::ops::Range<usize>,
+    ) -> Vec<Rect> {
+        let entry = self.entry(paragraph);
+        let (start, end) =
+            (utf16_index(&entry.text, range.start), utf16_index(&entry.text, range.end));
+        entry
+            .paragraph
+            .get_rects_for_range(start..end, RectHeightStyle::Max, RectWidthStyle::Tight)
+            .iter()
+            .map(|found| {
+                Rect::new(found.rect.left, found.rect.top, found.rect.right, found.rect.bottom)
+            })
+            .collect()
+    }
+
     fn text(&self, paragraph: ParagraphHandle) -> &str {
         &self.entry(paragraph).text
     }

@@ -14,6 +14,10 @@ use crate::nodes;
 use crate::text::TextMeasurer;
 use crate::unit::{Density, IntOffset, IntSize, Offset};
 
+/// What an event handler reaches besides its node: the text measurer and the clipboard.
+pub(crate) type HandlerServices<'a> =
+    (&'a mut dyn TextMeasurer, &'a mut dyn crate::clipboard::Clipboard);
+
 /// A node of the UI tree: a generational index, so a stale id never reaches a new node.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct NodeId {
@@ -162,6 +166,7 @@ pub struct UiTree {
     free: Vec<u32>,
     root: NodeId,
     pub(crate) text_measurer: Box<dyn TextMeasurer>,
+    pub(crate) clipboard: Box<dyn crate::clipboard::Clipboard>,
     pub(crate) density: Density,
     pub(crate) display_list: DisplayList,
     pub(crate) needs_draw: bool,
@@ -182,6 +187,7 @@ impl UiTree {
             free: Vec::new(),
             root: NodeId { index: 0, generation: 0 },
             text_measurer,
+            clipboard: Box::new(crate::clipboard::MemoryClipboard::default()),
             density,
             display_list: DisplayList::default(),
             needs_draw: true,
@@ -235,16 +241,25 @@ impl UiTree {
         if slot.generation == node.generation { slot.node.as_mut() } else { None }
     }
 
-    /// A node and the text measurer, borrowed together: for event handlers.
+    /// A node, the text measurer and the clipboard, borrowed together: for event handlers.
     pub(crate) fn node_and_measurer(
         &mut self,
         node: NodeId,
-    ) -> Option<(&mut LayoutNode, &mut dyn TextMeasurer)> {
+    ) -> Option<(&mut LayoutNode, HandlerServices<'_>)> {
         let slot = self.slots.get_mut(node.index as usize)?;
         if slot.generation != node.generation {
             return None;
         }
-        Some((slot.node.as_mut()?, &mut *self.text_measurer))
+        Some((slot.node.as_mut()?, (&mut *self.text_measurer, &mut *self.clipboard)))
+    }
+
+    /// Replaces the clipboard (the host gives the system's).
+    pub fn set_clipboard(&mut self, clipboard: Box<dyn crate::clipboard::Clipboard>) {
+        self.clipboard = clipboard;
+    }
+
+    pub fn clipboard(&mut self) -> &mut dyn crate::clipboard::Clipboard {
+        &mut *self.clipboard
     }
 
     pub(crate) fn node(&self, node: NodeId) -> &LayoutNode {

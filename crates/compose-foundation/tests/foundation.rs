@@ -184,3 +184,51 @@ fn a_disabled_text_field_takes_no_input() {
     ui.on_node_with_tag("field").assert_text_equals(&["fixed"]);
     let _ = Dp(0.0);
 }
+
+fn shortcut(ui: &mut ComposeTestRule, key: Key, shift: bool, command: bool) {
+    let modifiers = compose_ui::KeyModifiers { shift, meta: command, ..Default::default() };
+    ui.host().send_key(compose_ui::KeyEvent {
+        key,
+        kind: compose_ui::KeyEventType::KeyDown,
+        modifiers,
+    });
+    ui.host().send_key(compose_ui::KeyEvent {
+        key,
+        kind: compose_ui::KeyEventType::KeyUp,
+        modifiers,
+    });
+    ui.wait_for_idle();
+}
+
+#[test]
+fn a_text_field_selects_copies_cuts_and_pastes() {
+    let mut ui = ComposeTestRule::sized(IntSize::new(300, 200), || Editor(true));
+    ui.on_node_with_tag("field").perform_text_input("hello world");
+    // Shift+Left five times selects "world"; typing replaces it.
+    for _ in 0..5 {
+        shortcut(&mut ui, Key::DirectionLeft, true, false);
+    }
+    ui.type_text("there");
+    ui.on_node_with_tag("field").assert_text_equals(&["hello there"]);
+    // Select all, copy, move to the end, paste.
+    shortcut(&mut ui, Key::Character('a'), false, true);
+    let display = ui.dump_display_list();
+    assert!(display.contains("#664286F4"), "the selection is highlighted: {display}");
+    shortcut(&mut ui, Key::Character('c'), false, true);
+    shortcut(&mut ui, Key::DirectionRight, false, false);
+    ui.type_text(" / ");
+    shortcut(&mut ui, Key::Character('v'), false, true);
+    ui.on_node_with_tag("field").assert_text_equals(&["hello there / hello there"]);
+    // Cut a word, then Backspace over a selection.
+    shortcut(&mut ui, Key::MoveHome, false, false);
+    for _ in 0..6 {
+        shortcut(&mut ui, Key::DirectionRight, true, false);
+    }
+    shortcut(&mut ui, Key::Character('x'), false, true);
+    ui.on_node_with_tag("field").assert_text_equals(&["there / hello there"]);
+    shortcut(&mut ui, Key::MoveEnd, true, false);
+    shortcut(&mut ui, Key::Backspace, false, false);
+    ui.on_node_with_tag("field").assert_text_equals(&[""]);
+    shortcut(&mut ui, Key::Character('v'), false, true);
+    ui.on_node_with_tag("field").assert_text_equals(&["hello "]);
+}

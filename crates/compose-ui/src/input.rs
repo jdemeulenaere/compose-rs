@@ -178,6 +178,7 @@ pub struct EventContext<'a> {
     pub(crate) actions: &'a mut Vec<Action>,
     pub(crate) requests: &'a mut Requests,
     pub(crate) text_measurer: &'a mut dyn crate::text::TextMeasurer,
+    pub(crate) clipboard: &'a mut dyn crate::clipboard::Clipboard,
 }
 
 /// Requests handlers make, applied after dispatch.
@@ -227,6 +228,11 @@ impl EventContext<'_> {
     /// The text measurer, for handlers that hit-test their paragraphs (a text field's tap).
     pub fn text_measurer(&mut self) -> &mut dyn crate::text::TextMeasurer {
         &mut *self.text_measurer
+    }
+
+    /// The clipboard, for copy and paste.
+    pub fn clipboard(&mut self) -> &mut dyn crate::clipboard::Clipboard {
+        &mut *self.clipboard
     }
 
     /// The layout node the handler belongs to.

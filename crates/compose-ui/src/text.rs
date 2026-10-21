@@ -218,6 +218,25 @@ pub trait TextMeasurer: std::any::Any {
     /// The cursor before byte `offset`: its top and bottom in the paragraph, as
     /// `TextLayoutResult.getCursorRect` (zero width).
     fn cursor_rect(&self, paragraph: ParagraphHandle, offset: usize) -> crate::unit::Rect;
+    /// The rectangles covering bytes `range` of the paragraph, one per line at most: for a
+    /// selection's highlight. The default joins the cursors at both ends, right for one line.
+    fn selection_rects(
+        &self,
+        paragraph: ParagraphHandle,
+        range: std::ops::Range<usize>,
+    ) -> Vec<crate::unit::Rect> {
+        if range.is_empty() {
+            return Vec::new();
+        }
+        let (start, end) =
+            (self.cursor_rect(paragraph, range.start), self.cursor_rect(paragraph, range.end));
+        vec![crate::unit::Rect::new(
+            start.left,
+            start.top,
+            end.left.max(start.left),
+            start.bottom.max(end.bottom),
+        )]
+    }
     /// The paragraph's text, for dumps and semantics.
     fn text(&self, paragraph: ParagraphHandle) -> &str;
     fn release(&mut self, paragraph: ParagraphHandle);
@@ -362,6 +381,32 @@ impl TextMeasurer for FixedTextMeasurer {
             .nth(column)
             .map_or(to, |(index, _)| from + index);
         TextPosition { offset }
+    }
+
+    fn selection_rects(
+        &self,
+        handle: ParagraphHandle,
+        range: std::ops::Range<usize>,
+    ) -> Vec<crate::unit::Rect> {
+        let paragraph = self.paragraph(handle);
+        let mut rects = Vec::new();
+        for (index, &(from, to)) in paragraph.lines.iter().enumerate() {
+            let (start, end) = (range.start.max(from), range.end.min(to));
+            if start >= end {
+                continue;
+            }
+            let column = |offset: usize| {
+                paragraph.text[from..offset].chars().count() as f32 * paragraph.advance
+            };
+            let top = index as f32 * paragraph.line_height;
+            rects.push(crate::unit::Rect::new(
+                column(start),
+                top,
+                column(end),
+                top + paragraph.line_height,
+            ));
+        }
+        rects
     }
 
     fn cursor_rect(&self, handle: ParagraphHandle, offset: usize) -> crate::unit::Rect {
