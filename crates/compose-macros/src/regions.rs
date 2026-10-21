@@ -36,10 +36,21 @@ pub(crate) fn is_pascal_case(name: &str) -> bool {
 }
 
 fn is_composable_name(name: &str) -> bool {
-    if RUNTIME_COMPOSABLES.contains(&name) {
+    if RUNTIME_COMPOSABLES.contains(&name) || is_value_composable_name(name) {
         return true;
     }
     is_pascal_case(name)
+}
+
+/// Composables that return a value are named in lower case, as Compose's: `remember_…`
+/// (`remember_scroll_state`, `remember_coroutine_scope`), `animate_…_as_state`, `…_as_state`,
+/// `produce_state`, `update_transition`.
+fn is_value_composable_name(name: &str) -> bool {
+    name.starts_with("remember")
+        || name.starts_with("animate_")
+        || name.ends_with("_as_state")
+        || name == "produce_state"
+        || name == "update_transition"
 }
 
 /// Whether some syntax contains a likely composable call: a call whose final path segment is

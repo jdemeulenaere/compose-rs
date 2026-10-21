@@ -132,6 +132,7 @@ The macro can't know which calls are composable, so it **adds a region group to 
 - a call whose final path segment starts with an uppercase letter: `Text(…)`, `material3::Button(…)`, `H1(…)`;
 - a PascalCase macro call: `Text!(…)`;
 - `remember`, `key`, `SideEffect`, `DisposableEffect`, and the probe of a memoized lambda;
+- a composable returning a value, named in lower case as Compose's: `remember…` (`remember_scroll_state`, `remember_coroutine_scope`), `animate_…`, `…_as_state`, `produce_state`, `update_transition`;
 - an invocation of a parameter typed as a composable lambda: a function-typed parameter (`Rc<dyn Fn()>`, `fn()`), one of a generic type bounded by a function trait (`F: Fn()`), or a local closure (`let header = || Row(1);`) that itself makes a likely call.
 
 A user's macro (not PascalCase, not a standard one) whose tokens make a likely composable call is a region too, as it may branch or loop around them (`when!(show, Text!("x"))`). A closure whose body makes a likely composable call is a region of its own, wherever it runs: `flag.then(|| Row(1))` and `list.iter().for_each(|id| Row(*id))` then don't lend their calls' state to a following `Row(2)`.
