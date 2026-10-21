@@ -219,6 +219,11 @@ impl EventContext<'_> {
     pub fn layout_direction(&self) -> crate::alignment::LayoutDirection {
         self.layout_direction
     }
+
+    /// Where the pointer is in the window, while handling a pointer event.
+    pub fn pointer_position(&self) -> Option<Offset> {
+        self.pointer_position
+    }
 }
 
 /// Requests handlers make, applied after dispatch.

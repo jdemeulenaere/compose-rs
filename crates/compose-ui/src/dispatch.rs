@@ -248,31 +248,44 @@ impl UiTree {
         let same = |a: &HitEntry, b: &HitEntry| {
             a.node == b.node && a.index == b.index && a.version == b.version
         };
-        let position = event.position;
-        for entry in before.iter().rev().filter(|old| !now.iter().any(|new| same(old, new))) {
-            let mut exit = PointerEvent { kind: PointerEventType::Exit, consumed: false, ..event };
-            self.deliver_pointer(
-                entry,
-                &mut exit,
-                PointerEventPass::Main,
-                position,
-                actions,
-                requests,
-            );
-        }
-        for entry in now.iter().rev().filter(|new| !before.iter().any(|old| same(old, new))) {
-            let mut enter =
-                PointerEvent { kind: PointerEventType::Enter, consumed: false, ..event };
-            self.deliver_pointer(
-                entry,
-                &mut enter,
-                PointerEventPass::Main,
-                position,
-                actions,
-                requests,
-            );
-        }
+        let left: Vec<HitEntry> =
+            before.iter().filter(|old| !now.iter().any(|new| same(old, new))).cloned().collect();
+        let entered: Vec<HitEntry> =
+            now.iter().filter(|new| !before.iter().any(|old| same(old, new))).cloned().collect();
+        self.deliver_hover(&left, PointerEventType::Exit, event, actions, requests);
+        self.deliver_hover(&entered, PointerEventType::Enter, event, actions, requests);
         self.hovered = now;
+    }
+
+    /// Delivers `kind` (`Enter` or `Exit`) to `entries` (outer to inner), each its own event,
+    /// through the three passes as any event: initial outer to inner, main inner to outer,
+    /// final outer to inner.
+    fn deliver_hover(
+        &mut self,
+        entries: &[HitEntry],
+        kind: PointerEventType,
+        event: PointerEvent,
+        actions: &mut Vec<Action>,
+        requests: &mut Requests,
+    ) {
+        let position = event.position;
+        let mut events = vec![PointerEvent { kind, consumed: false, ..event }; entries.len()];
+        for pass in [PointerEventPass::Initial, PointerEventPass::Main, PointerEventPass::Final] {
+            let mut order: Vec<usize> = (0..entries.len()).collect();
+            if pass == PointerEventPass::Main {
+                order.reverse();
+            }
+            for index in order {
+                self.deliver_pointer(
+                    &entries[index],
+                    &mut events[index],
+                    pass,
+                    position,
+                    actions,
+                    requests,
+                );
+            }
+        }
     }
 
     /// The mouse pointer's look where it is: the innermost hovered node's icon.

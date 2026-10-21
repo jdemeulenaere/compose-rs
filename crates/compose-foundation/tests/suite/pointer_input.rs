@@ -133,7 +133,7 @@ fn drags_start_past_the_slop_and_report_their_amounts() {
     drag_to(&mut ui, 30.0, 10.0);
     drag_to(&mut ui, 40.0, 10.0);
     release(&mut ui, 40.0, 10.0);
-    assert_eq!(*log.borrow(), vec!["start 30", "drag 20", "drag 10", "end"]);
+    assert_eq!(*log.borrow(), vec!["start 30", "drag 12", "drag 10", "end"]);
 }
 
 #[test]

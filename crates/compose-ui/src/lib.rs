@@ -69,7 +69,9 @@ pub use modifier::{
 };
 pub use overlay::{PopupPositionProvider, WindowPosition};
 pub use path::{ImageVector, Path, PathCommand, PathError, PathFillType};
-pub use pointer_input::{DragGestures, PointerInputChange, PointerInputScope, TapGestures};
+pub use pointer_input::{
+    Axis, DragGestures, PointerInputChange, PointerInputDriver, PointerInputScope, TapGestures,
+};
 pub use semantics::{
     ProgressBarRangeInfo, Role, SemanticsAction, SemanticsConfiguration, SemanticsNode,
     ToggleableState,
