@@ -1,4 +1,4 @@
-# compose-rs (design)
+# compose-rs
 
 A design for bringing Jetpack Compose's model to Rust: positional memoization over a slot table, a compiler-style transform that makes composables skippable and restartable, observable state, `Modifier.Node`-style modifiers, and Compose's layout model and API names, on desktop and Android.
 
@@ -6,10 +6,50 @@ A design for bringing Jetpack Compose's model to Rust: positional memoization ov
 
 | Crate | Contents |
 |---|---|
-| `crates/compose` | the facade: `compose::runtime` |
-| `crates/compose-runtime` | slot table, composer, restart scopes, state, `remember`, effects, `Composition` |
-| `crates/compose-macros` | `#[composable]`, `#[derive(ComposeArg)]` |
+| `crates/compose` | the facade: `compose::runtime`, `ui`, `foundation`, `material3`, and with features `test` and `desktop` |
+| `crates/compose-runtime` | slot table, composer, restart scopes, state, `remember`, effects, composition locals, `Composition` |
+| `crates/compose-macros` | `#[composable]` (skipping, restarts, call macros, lambda memoization), `#[derive(ComposeArg)]` |
+| `crates/compose-ui` | layout nodes, `Modifier`, `Layout`, drawing, pointer and key input, focus, semantics, `UiHost` |
+| `crates/compose-foundation` | `Box`, `Column`, `Row`, `Spacer`, `Arrangement`, `BasicText`, `BasicTextField`, scrolling, shapes |
+| `crates/compose-material3` | `MaterialTheme`, `Text`, `Surface`, buttons, `Checkbox`, `TextField` |
+| `crates/compose-test` | `ComposeTestRule`: finders, actions, assertions, event scripts |
+| `crates/compose-skia` | Skia renderer and SkParagraph text measurer |
+| `crates/compose-desktop` | `run_app`: a winit window on the main thread |
+| `examples/counter`, `examples/todo` | the sample apps, with tests and event-script transcripts |
 | `benchmarks` | criterion benchmarks (not a default member) |
+
+## Getting started
+
+```bash
+cargo run -p todo
+```
+
+An app depends on the facade with the `desktop` feature (and `test` for its tests), writes composables, and opens a window:
+
+```toml
+[dependencies]
+compose = { path = "crates/compose", features = ["desktop"] }
+
+[dev-dependencies]
+compose = { path = "crates/compose", features = ["desktop", "test"] }
+```
+
+Tests drive the app headless through Compose's test-rule API:
+
+```rust
+use compose::test::*;
+
+#[test]
+fn counting_to_three() {
+    let mut ui = compose_test(Counter);
+    for _ in 0..3 {
+        ui.on_node(has_text_containing("Count")).perform_click();
+    }
+    ui.on_node_with_text("Count: 3").assert_exists();
+}
+```
+
+`COMPOSE_FRAME_STATS=1` prints each frame's timings, and `COMPOSE_SCREENSHOT=out.png` writes the last frame when the app exits.
 
 ## Verdict
 
@@ -37,11 +77,12 @@ fn Counter() {
 }
 
 fn main() {
-    compose::desktop::run_app("Counter", (320, 200), || Counter());
+    use compose::desktop::{WindowOptions, run_app};
+    run_app(WindowOptions { title: "Counter".into(), size: (320, 200).into(), ..Default::default() }, Counter);
 }
 ```
 
-More in [sketches/](sketches): the [counter](sketches/counter.rs), [what `#[composable]` expands it to](sketches/counter.expanded.rs), and the [todo list](sketches/todo.rs) with per-item state and skipping rows.
+The [examples](examples) are this code, running. The design started from [sketches/](sketches): the [counter](sketches/counter.rs), [what `#[composable]` expands it to](sketches/counter.expanded.rs), and the [todo list](sketches/todo.rs) with per-item state and skipping rows.
 
 ## Reading order
 
