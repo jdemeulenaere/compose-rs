@@ -472,3 +472,69 @@ fn progress_indicators_draw_their_progress_and_animate_when_indeterminate() {
         .nth(1);
     assert_ne!(moved, Some(first));
 }
+
+#[test]
+fn list_items_are_as_high_as_their_lines_with_their_padding() {
+    let mut ui = compose_test(|| {
+        MaterialTheme!({
+            Column!({
+                ListItem!({ Text!("One") }, modifier = Modifier.test_tag("one"));
+                ListItem!(
+                    { Text!("Two") },
+                    modifier = Modifier.test_tag("two"),
+                    supporting_content = Some(|| Text!("Supporting")),
+                    leading_content = Some(|| {
+                        Icon!(icons::filled::star(), None, modifier = Modifier.test_tag("icon"))
+                    }),
+                );
+                ListItem!(
+                    { Text!("Three") },
+                    modifier = Modifier.test_tag("three"),
+                    overline_content = Some(|| Text!("Overline")),
+                    supporting_content = Some(|| Text!("Supporting")),
+                );
+            });
+        });
+    });
+    let height = |ui: &mut ComposeTestRule, tag: &str| {
+        ui.on_node_with_tag(tag).fetch_semantics_node().bounds.height()
+    };
+    assert_eq!(height(&mut ui, "one"), 56.0);
+    assert_eq!(height(&mut ui, "two"), 72.0);
+    assert_eq!(height(&mut ui, "three"), 88.0);
+    // The leading icon 16 dp in, centered down its 72 dp item.
+    let icon = ui.on_node_with_tag("icon").fetch_semantics_node().bounds;
+    assert_eq!((icon.left, icon.top), (16.0, 56.0 + 24.0));
+    ui.on_node_with_text("Two").assert_exists();
+}
+
+#[test]
+fn a_navigation_bar_shares_its_width_and_selects_on_click() {
+    let selected = mutable_state_of(0usize);
+    let handle = selected.handle();
+    let mut ui = compose_test(move || {
+        MaterialTheme!({
+            NavigationBar!(modifier = Modifier.test_tag("bar"), |row: RowScope| {
+                for (index, name) in ["Home", "Search"].into_iter().enumerate() {
+                    NavigationBarItem!(
+                        row,
+                        handle.get() == index,
+                        move || handle.set(index),
+                        { Icon!(icons::filled::star(), None) },
+                        modifier = Modifier.test_tag(name),
+                        label = Some(move || Text!("{}", name)),
+                    );
+                }
+            });
+        });
+    });
+    let bar = ui.on_node_with_tag("bar").fetch_semantics_node().bounds;
+    assert_eq!(bar.height(), 80.0);
+    let home = ui.on_node_with_tag("Home").fetch_semantics_node();
+    assert_eq!(home.config.selected, Some(true));
+    // Two items sharing 400 px, 8 dp apart.
+    assert_eq!(home.bounds.width(), 196.0);
+    ui.on_node_with_tag("Search").perform_click();
+    assert_eq!(selected.get(), 1);
+    assert_eq!(ui.on_node_with_tag("Search").fetch_semantics_node().config.selected, Some(true));
+}

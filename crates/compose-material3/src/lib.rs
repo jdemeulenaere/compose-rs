@@ -12,6 +12,8 @@ extern crate compose_runtime as compose;
 mod components;
 mod dialog;
 mod icon;
+mod list_item;
+mod navigation;
 mod progress;
 mod scaffold;
 mod selection;
@@ -25,6 +27,11 @@ pub use components::{
 };
 pub use dialog::{AlertDialog, DropdownMenu, DropdownMenuItem};
 pub use icon::{FloatingActionButton, Icon, IconButton, icons};
+pub use list_item::{ListItem, ListItemColors, ListItemDefaults};
+pub use navigation::{
+    NavigationBar, NavigationBarDefaults, NavigationBarItem, NavigationBarItemColors,
+    NavigationBarItemDefaults,
+};
 pub use progress::{
     CircularProgressIndicator, IndeterminateCircularProgressIndicator,
     IndeterminateLinearProgressIndicator, LinearProgressIndicator, ProgressIndicatorDefaults,
