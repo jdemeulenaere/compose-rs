@@ -61,3 +61,35 @@ fn a_transform_without_animation_switches_at_once() {
     ui.on_node_with_text("value 1").assert_exists();
     ui.on_node_with_text("value 0").assert_does_not_exist();
 }
+
+#[test]
+fn a_transition_animates_its_values_together_then_reaches_its_target() {
+    use std::cell::Cell;
+    use std::rc::Rc;
+    let expanded = mutable_state_of(false);
+    let handle = expanded.handle();
+    let seen: Rc<Cell<(f32, bool, bool)>> = Rc::default();
+    let report = seen.clone();
+    let mut ui = ComposeTestRule::with_manual_clock(move || {
+        let transition = update_transition(handle.get(), "Expand");
+        let width = transition
+            .animate_dp(|_, _| tween(100).into(), |&open| if open { 200.dp() } else { 100.dp() });
+        let alpha = transition
+            .animate_float(|_, _| tween(200).into(), |&open| if open { 1.0 } else { 0.5 });
+        report.set((width.get().0, transition.current_state(), transition.is_running()));
+        Box!(modifier = Modifier.size_wh(width.get(), 10.dp()).alpha(alpha.get()).test_tag("box"));
+    });
+    assert_eq!(seen.get(), (100.0, false, false));
+    expanded.set(true);
+    ui.advance_time_by(Duration::from_millis(48));
+    let (width, current, running) = seen.get();
+    assert!(width > 100.0 && width < 200.0, "{width}");
+    assert!(!current && running);
+    // The width done after 100 ms (it starts a frame or two in), the alpha after 200: only
+    // then at its target.
+    ui.advance_time_by(Duration::from_millis(100));
+    assert_eq!(seen.get().0, 200.0);
+    assert!(!seen.get().1, "the alpha still animates");
+    ui.advance_time_by(Duration::from_millis(150));
+    assert_eq!(seen.get(), (200.0, true, false));
+}

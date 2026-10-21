@@ -16,6 +16,7 @@ mod crossfade;
 mod easing;
 mod infinite;
 mod spec;
+mod transition;
 mod vector;
 mod visibility;
 
@@ -37,6 +38,7 @@ pub use spec::{
     AnimationSpec, DEFAULT_DURATION_MILLIS, RepeatMode, RepeatableSpec, Spring, SpringSpec,
     TweenSpec, infinite_repeatable, repeatable, snap, spring, spring_with, tween,
 };
+pub use transition::{Transition, update_transition};
 pub use vector::Animate;
 pub use visibility::{
     AnimatedVisibility, EnterTransition, ExitTransition, expand_horizontally, expand_in,
