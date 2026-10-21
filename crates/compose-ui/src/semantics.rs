@@ -61,6 +61,10 @@ pub struct SemanticsConfiguration {
     pub clickable: bool,
     /// Whether the node takes text input (a text field).
     pub editable: bool,
+    /// The properties belong to the nearest ancestor with semantics, in both trees, as if its
+    /// own modifiers set them: a text field's inner text, which in Compose is one semantics
+    /// node with its decoration box.
+    pub part_of_parent: bool,
 }
 
 impl SemanticsConfiguration {
@@ -164,6 +168,7 @@ impl fmt::Debug for SemanticsConfiguration {
             (self.focusable, "focusable"),
             (self.focused, "focused"),
             (self.merge_descendants, "merged"),
+            (self.part_of_parent, "part_of_parent"),
         ] {
             if flag {
                 parts.push(name.to_string());
@@ -272,20 +277,24 @@ impl UiTree {
     pub fn semantics_tree(&mut self, merged: bool) -> SemanticsNode {
         let root = self.root_id();
         let mut children = Vec::new();
+        let mut config = SemanticsConfiguration::default();
         let count = self.node(root).children.len();
         for index in 0..count {
             let child = self.node(root).children[index].node;
-            self.semantics_of(child, merged, &mut children);
+            self.semantics_of(child, merged, &mut config, &mut children);
         }
-        SemanticsNode {
-            id: root,
-            bounds: self.bounds_in_root(root),
-            config: SemanticsConfiguration::default(),
-            children,
-        }
+        SemanticsNode { id: root, bounds: self.bounds_in_root(root), config, children }
     }
 
-    fn semantics_of(&mut self, node: NodeId, merged: bool, out: &mut Vec<SemanticsNode>) {
+    /// Adds `node`'s semantics nodes to `out`, the children of the node whose properties are
+    /// `parent`.
+    fn semantics_of(
+        &mut self,
+        node: NodeId,
+        merged: bool,
+        parent: &mut SemanticsConfiguration,
+        out: &mut Vec<SemanticsNode>,
+    ) {
         if !self.node(node).placed {
             return;
         }
@@ -298,7 +307,13 @@ impl UiTree {
         match own {
             None => {
                 for child in children_of(self) {
-                    self.semantics_of(child, merged, out);
+                    self.semantics_of(child, merged, parent, out);
+                }
+            }
+            Some((own, _)) if own.part_of_parent => {
+                parent.apply(&own);
+                for child in children_of(self) {
+                    self.semantics_of(child, merged, parent, out);
                 }
             }
             Some((mut config, layer)) => {
@@ -309,7 +324,7 @@ impl UiTree {
                     }
                 } else {
                     for child in children_of(self) {
-                        self.semantics_of(child, merged, &mut children);
+                        self.semantics_of(child, merged, &mut config, &mut children);
                     }
                 }
                 let origin = self.layer_origin(node, layer);
@@ -337,7 +352,7 @@ impl UiTree {
         }
         if let Some((own, _)) = self.own_semantics(node) {
             if own.merge_descendants {
-                self.semantics_of(node, true, children);
+                self.semantics_of(node, true, config, children);
                 return;
             }
             config.merge_child(&own);

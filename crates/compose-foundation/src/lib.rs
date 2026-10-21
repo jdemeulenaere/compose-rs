@@ -40,4 +40,4 @@ pub use shape::{
     CIRCLE_SHAPE, RoundedCornerShape, RoundedCornerShapeEach, RoundedCornerShapePercent,
 };
 pub use text::{BasicText, TextElement, TextNode};
-pub use text_field::{BasicTextField, TextFieldElement, TextFieldNode};
+pub use text_field::{BasicTextField, TextFieldElement, TextFieldNode, inner_text_field_only};

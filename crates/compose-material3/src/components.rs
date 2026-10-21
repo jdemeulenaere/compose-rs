@@ -3,7 +3,7 @@
 
 use compose_foundation::layout::{Arrangement, Box, Column, PaddingValues, Row, RowScope};
 use compose_foundation::{BasicText, BasicTextField, BorderStroke};
-use compose_runtime::{CompositionLocalProvider, composable, mutable_state_of, remember};
+use compose_runtime::{Callback, CompositionLocalProvider, composable, mutable_state_of, remember};
 use compose_ui::{
     Alignment, Color, Dp, DrawModifierNode, DrawScope, FontWeight, Modifier, ModifierNode,
     ModifierNodeElement, Offset, Paint, Rect, Role, Shape, SharedString, SizeSpec, Sp, TextStyle,
@@ -111,68 +111,6 @@ impl compose_ui::PointerInputModifierNode for BlockPointerNode {
         _: compose_ui::IntSize,
         _: &mut compose_ui::EventContext<'_>,
     ) {
-    }
-}
-
-/// Focuses the focus target below it on a tap (a release after a press, inside).
-struct FocusOnTap;
-
-#[derive(Default)]
-struct FocusOnTapNode {
-    pressed: bool,
-}
-
-impl ModifierNodeElement for FocusOnTap {
-    fn create(&self) -> std::boxed::Box<dyn ModifierNode> {
-        std::boxed::Box::new(FocusOnTapNode::default())
-    }
-    fn update(&self, _: &mut dyn ModifierNode) {}
-    fn same(&self, other: &dyn ModifierNodeElement) -> bool {
-        other.downcast_ref::<FocusOnTap>().is_some()
-    }
-    fn name(&self) -> &'static str {
-        "focus_on_tap"
-    }
-}
-
-impl ModifierNode for FocusOnTapNode {
-    fn as_pointer_input(&mut self) -> Option<&mut dyn compose_ui::PointerInputModifierNode> {
-        Some(self)
-    }
-}
-
-impl compose_ui::PointerInputModifierNode for FocusOnTapNode {
-    fn on_pointer_event(
-        &mut self,
-        event: &mut compose_ui::PointerEvent,
-        pass: compose_ui::PointerEventPass,
-        bounds: compose_ui::IntSize,
-        context: &mut compose_ui::EventContext<'_>,
-    ) {
-        use compose_ui::PointerEventType;
-        // After the field's own handling (the Main pass goes up from the target): a tap the
-        // field took is consumed.
-        if pass != compose_ui::PointerEventPass::Main {
-            return;
-        }
-        match event.kind {
-            PointerEventType::Press if !event.consumed => self.pressed = true,
-            PointerEventType::Release if std::mem::take(&mut self.pressed) && !event.consumed => {
-                let inside = event.position.x >= 0.0
-                    && event.position.y >= 0.0
-                    && event.position.x < bounds.width as f32
-                    && event.position.y < bounds.height as f32;
-                if inside {
-                    event.consume();
-                    context.request_focus();
-                }
-            }
-            _ => {}
-        }
-    }
-
-    fn on_cancel_pointer_input(&mut self) {
-        self.pressed = false;
     }
 }
 
@@ -555,64 +493,67 @@ pub fn TextField(
     let typography = MaterialTheme::typography();
     let label_color = if is_focused { colors.focused_label_color } else { colors.label_color };
     let empty = value.is_empty();
-    let container = modifier
-        .size_in(SizeSpec::bounds(
-            TextFieldDefaults::MIN_WIDTH,
-            TextFieldDefaults::MIN_HEIGHT,
-            Dp::UNSPECIFIED,
-            Dp::UNSPECIFIED,
-        ))
-        .background_shape(colors.container_color, TextFieldDefaults::shape())
-        .on_focus_changed(move |now| focused.set(now))
-        // A tap anywhere in the container focuses the field, as Compose's decoration box.
-        .then_custom(FocusOnTap)
-        // One node for tests and accessibility: the field, its label and its text, as Compose's
-        // `TextField` (its decoration is inside the text field).
-        .semantics(true, |_| {});
-    Box!(modifier = container, content_alignment = Alignment::BOTTOM_START, {
-        Column!(
-            // 8 dp above and below with a label, 16 dp without, as Compose's.
-            modifier = Modifier.fill_max_width().padding_horizontal_vertical(
-                16.dp(),
-                if label.is_some() { 8.dp() } else { 16.dp() }
-            ),
-            {
-                if let Some(label) = &label {
-                    CompositionLocalProvider(LOCAL_CONTENT_COLOR.provides(label_color), || {
-                        CompositionLocalProvider(
-                            LOCAL_TEXT_STYLE.provides(typography.body_small),
-                            || label(),
-                        );
+    let has_label = label.is_some();
+    // The container, label and placeholder are the field's decoration, inside the text field
+    // (its semantics node, its taps), as Compose's `TextField` decoration box.
+    let decoration = move |inner_text_field: Callback| {
+        let container = Modifier
+            .size_in(SizeSpec::bounds(
+                TextFieldDefaults::MIN_WIDTH,
+                TextFieldDefaults::MIN_HEIGHT,
+                Dp::UNSPECIFIED,
+                Dp::UNSPECIFIED,
+            ))
+            .background_shape(colors.container_color, TextFieldDefaults::shape())
+            .on_focus_changed(move |now| focused.set(now));
+        Box!(modifier = container, content_alignment = Alignment::BOTTOM_START, {
+            Column!(
+                // 8 dp above and below with a label, 16 dp without, as Compose's.
+                modifier = Modifier
+                    .fill_max_width()
+                    .padding_horizontal_vertical(16.dp(), if has_label { 8.dp() } else { 16.dp() }),
+                {
+                    if let Some(label) = &label {
+                        CompositionLocalProvider(LOCAL_CONTENT_COLOR.provides(label_color), || {
+                            CompositionLocalProvider(
+                                LOCAL_TEXT_STYLE.provides(typography.body_small),
+                                || label(),
+                            );
+                        });
+                    }
+                    // The text fills the width (the minimum passed on), the placeholder under it.
+                    Box!(modifier = Modifier.fill_max_width(), propagate_min_constraints = true, {
+                        if empty && let Some(placeholder) = &placeholder {
+                            CompositionLocalProvider(
+                                LOCAL_CONTENT_COLOR.provides(colors.placeholder_color),
+                                || {
+                                    CompositionLocalProvider(
+                                        LOCAL_TEXT_STYLE.provides(style),
+                                        || placeholder(),
+                                    );
+                                },
+                            );
+                        }
+                        inner_text_field();
                     });
                 }
-                Box!(modifier = Modifier.fill_max_width(), {
-                    if empty && let Some(placeholder) = &placeholder {
-                        CompositionLocalProvider(
-                            LOCAL_CONTENT_COLOR.provides(colors.placeholder_color),
-                            || {
-                                CompositionLocalProvider(LOCAL_TEXT_STYLE.provides(style), || {
-                                    placeholder()
-                                });
-                            },
-                        );
-                    }
-                    BasicTextField(
-                        value.clone(),
-                        on_value_change.clone(),
-                        Modifier.fill_max_width(),
-                        enabled,
-                        read_only,
-                        style,
-                        single_line,
-                        colors.cursor_color,
-                    );
-                });
-            }
-        );
-        // The indicator line: 1 dp, 2 dp focused.
-        let thickness = if is_focused { 2.dp() } else { 1.dp() };
-        compose_foundation::layout::Spacer(
-            Modifier.fill_max_width().height(thickness).background(indicator),
-        );
-    });
+            );
+            // The indicator line: 1 dp, 2 dp focused.
+            let thickness = if is_focused { 2.dp() } else { 1.dp() };
+            compose_foundation::layout::Spacer(
+                Modifier.fill_max_width().height(thickness).background(indicator),
+            );
+        });
+    };
+    BasicTextField(
+        value,
+        on_value_change,
+        modifier,
+        enabled,
+        read_only,
+        style,
+        single_line,
+        colors.cursor_color,
+        compose_runtime::callback(decoration),
+    );
 }

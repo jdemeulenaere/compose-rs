@@ -235,6 +235,12 @@ impl UiTree {
         &mut *self.text_measurer
     }
 
+    /// The text measurer, shared: to render the display list with (`display_list()`) without
+    /// copying it.
+    pub fn text_measurer_ref(&self) -> &dyn TextMeasurer {
+        &*self.text_measurer
+    }
+
     /// The display list of the last draw.
     pub fn display_list(&self) -> &DisplayList {
         &self.display_list

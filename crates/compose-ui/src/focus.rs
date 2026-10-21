@@ -83,13 +83,51 @@ impl UiTree {
             && let Some(target) =
                 value.chain.get_mut(index).and_then(|entry| entry.as_focus_target())
         {
-            let mut context =
-                EventContext { node, actions, requests: &mut requests, text_measurer, clipboard };
+            let mut context = EventContext {
+                node,
+                actions,
+                requests: &mut requests,
+                text_measurer,
+                clipboard,
+                pointer_position: None,
+            };
             target.on_focus_changed(focused, &mut context);
         }
         // Not its focus requests: a target answering focus with focus would loop.
         requests.focus = None;
         requests.clear_focus = false;
+        self.needs_draw |= requests.draw;
+        for node in requests.measure {
+            self.invalidate_measure(node);
+        }
+    }
+
+    /// Tells the focused target where the tap that focused it was.
+    pub(crate) fn tell_focus_tap(&mut self, tap: crate::unit::Offset, actions: &mut Vec<Action>) {
+        let Some(focus) = self.focus else { return };
+        let layer = {
+            let value = self.node(focus.node);
+            value.capabilities[..focus.index as usize]
+                .iter()
+                .filter(|bits| **bits & capability::LAYOUT != 0)
+                .count()
+        };
+        let origin = self.layer_origin(focus.node, layer);
+        let mut requests = Requests::default();
+        if let Some((value, (text_measurer, clipboard))) = self.node_and_measurer(focus.node)
+            && let Some(target) =
+                value.chain.get_mut(focus.index as usize).and_then(|entry| entry.as_focus_target())
+        {
+            let mut context = EventContext {
+                node: focus.node,
+                actions,
+                requests: &mut requests,
+                text_measurer,
+                clipboard,
+                pointer_position: Some(tap),
+            };
+            target.on_focus_tap(tap - origin, &mut context);
+        }
         self.needs_draw |= requests.draw;
         for node in requests.measure {
             self.invalidate_measure(node);

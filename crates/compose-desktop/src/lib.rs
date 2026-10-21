@@ -163,19 +163,26 @@ impl<C: Fn() + 'static> App<C> {
         else {
             return;
         };
+        let resized = shown.renderer.size() != (size.width as i32, size.height as i32);
         shown.renderer.resize(size.width as i32, size.height as i32);
-        let list = shown.host.display_list();
-        let background = self.options.background;
-        let renderer = &mut shown.renderer;
-        shown.host.with_tree(|tree| renderer.render(&list, background, 1.0, tree.text_measurer()));
+        // Render only what changed (or a new size); present either way (the system may have
+        // asked for the window's content again).
+        if stats.drew || resized || self.frames == 0 {
+            let background = self.options.background;
+            let renderer = &mut shown.renderer;
+            shown.host.with_tree(|tree| {
+                renderer.render(tree.display_list(), background, 1.0, tree.text_measurer_ref())
+            });
+        }
         let rendered = Instant::now();
         if shown.surface.resize(width, height).is_ok()
             && let Ok(mut buffer) = shown.surface.buffer_mut()
         {
-            let pixels = shown.renderer.pixels();
-            for (target, pixel) in buffer.iter_mut().zip(pixels) {
+            // Straight from the raster surface into the window's buffer, allocating nothing.
+            shown.renderer.copy_pixels_to(&mut buffer);
+            for pixel in buffer.iter_mut() {
                 // softbuffer takes 0RGB.
-                *target = pixel & 0x00FF_FFFF;
+                *pixel &= 0x00FF_FFFF;
             }
             let _ = buffer.present();
         }

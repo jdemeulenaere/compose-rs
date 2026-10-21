@@ -74,6 +74,21 @@ impl SkiaTextMeasurer {
     }
 }
 
+/// Whether the first strong character of `text` is right-to-left (a simplified Unicode bidi
+/// rule P2: Hebrew, Arabic, Syriac, Thaana, N'Ko and their presentation forms).
+fn first_strong_is_rtl(text: &str) -> bool {
+    for c in text.chars() {
+        let code = c as u32;
+        if matches!(code, 0x0590..=0x08FF | 0xFB1D..=0xFDFF | 0xFE70..=0xFEFF) {
+            return true;
+        }
+        if c.is_alphabetic() {
+            return false;
+        }
+    }
+    false
+}
+
 /// The UTF-16 index of byte `offset` of `text` (SkParagraph indexes in UTF-16).
 fn utf16_index(text: &str, offset: usize) -> usize {
     text[..offset.min(text.len())].encode_utf16().count()
@@ -123,6 +138,11 @@ impl TextMeasurer for SkiaTextMeasurer {
         }
         let mut paragraph_style = ParagraphStyle::new();
         paragraph_style.set_text_style(&text_style);
+        // The direction from the content, as Compose resolves it: right-to-left when the first
+        // strong character is (Hebrew, Arabic and the other right-to-left scripts).
+        if first_strong_is_rtl(text) {
+            paragraph_style.set_text_direction(skia_safe::textlayout::TextDirection::RTL);
+        }
         if options.max_lines != u32::MAX {
             paragraph_style.set_max_lines(options.max_lines.max(1) as usize);
         }
@@ -136,12 +156,18 @@ impl TextMeasurer for SkiaTextMeasurer {
             f32::INFINITY
         };
         paragraph.layout(width);
-        // As Compose: the widest line, the whole height, rounded up.
-        let measured_width = if paragraph.line_number() > 1 && width.is_finite() {
-            paragraph.longest_line()
+        // As Compose's `finalMaxWidth`: laid out again at the text's own width, rounded up and
+        // kept in the constraints, so alignment and right-to-left text start where the text
+        // is (not at an unbounded width's far edge).
+        let min_width = constraints.min_width as f32;
+        let measured_width = if min_width == width {
+            width
         } else {
-            paragraph.max_intrinsic_width()
+            paragraph.max_intrinsic_width().ceil().clamp(min_width, width)
         };
+        if measured_width != width {
+            paragraph.layout(measured_width);
+        }
         let size = IntSize::new(measured_width.ceil() as i32, paragraph.height().ceil() as i32);
         let lines = paragraph.get_line_metrics();
         let metrics = ParagraphMetrics {
@@ -150,7 +176,7 @@ impl TextMeasurer for SkiaTextMeasurer {
             last_baseline: lines
                 .last()
                 .map_or(paragraph.alphabetic_baseline(), |line| line.baseline as f32),
-            line_count: paragraph.line_number() as u32,
+            line_count: paragraph.line_number().max(1) as u32,
         };
         drop(lines);
         let entry = Entry { paragraph, text: text.to_string(), metrics };
@@ -183,38 +209,54 @@ impl TextMeasurer for SkiaTextMeasurer {
         let rects = |range: std::ops::Range<usize>| {
             entry.paragraph.get_rects_for_range(range, RectHeightStyle::Max, RectWidthStyle::Tight)
         };
+        let rtl = |found: &skia_safe::textlayout::TextBox| {
+            found.direct == skia_safe::textlayout::TextDirection::RTL
+        };
+        // Before the character at the cursor: its leading edge (its right edge in right-to-left).
         if offset < text.len() && !text[offset..].starts_with('\n') {
             let next =
                 utf16_index(text, offset + text[offset..].chars().next().map_or(1, char::len_utf8));
             if let Some(found) = rects(at..next).first() {
-                return Rect::new(
-                    found.rect.left,
-                    found.rect.top,
-                    found.rect.left,
-                    found.rect.bottom,
-                );
+                let x = if rtl(found) { found.rect.right } else { found.rect.left };
+                return Rect::new(x, found.rect.top, x, found.rect.bottom);
             }
         }
+        // After the character before it: its trailing edge.
         if at > 0 {
             let previous = text[..offset].char_indices().next_back().map_or(0, |(index, _)| index);
             if !text[previous..offset].starts_with('\n')
                 && let Some(found) = rects(utf16_index(text, previous)..at).last()
             {
-                return Rect::new(
-                    found.rect.right,
-                    found.rect.top,
-                    found.rect.right,
-                    found.rect.bottom,
-                );
+                let x = if rtl(found) { found.rect.left } else { found.rect.right };
+                return Rect::new(x, found.rect.top, x, found.rect.bottom);
             }
         }
-        // An empty paragraph or line: its start, a line high.
-        let line = entry.paragraph.get_line_number_at(at).unwrap_or(0);
-        let metrics = entry.paragraph.get_line_metrics_at(line);
-        let (top, height) = metrics.map_or((0.0, entry.paragraph.height()), |line| {
-            ((line.baseline - line.ascent) as f32, (line.ascent + line.descent) as f32)
-        });
-        Rect::new(0.0, top, 0.0, top + height)
+        // An empty line: its start, a line high. The empty line after a final newline has no
+        // metrics of its own: it's below the last one.
+        let lines = entry.paragraph.get_line_metrics();
+        let line = entry.paragraph.get_line_number_at(at);
+        let (top, height) = match line.and_then(|line| lines.get(line)) {
+            Some(line) => {
+                ((line.baseline - line.ascent) as f32, (line.ascent + line.descent) as f32)
+            }
+            None => match lines.last() {
+                Some(last) if text.ends_with('\n') && offset >= text.len() => {
+                    let height = (last.ascent + last.descent) as f32;
+                    ((last.baseline + last.descent) as f32, height)
+                }
+                Some(first) if line.is_none() && offset == 0 => {
+                    ((first.baseline - first.ascent) as f32, (first.ascent + first.descent) as f32)
+                }
+                _ => (0.0, entry.paragraph.height()),
+            },
+        };
+        let rtl_paragraph = first_strong_is_rtl(text);
+        let x = if rtl_paragraph {
+            entry.paragraph.max_width().min(entry.metrics.size.width as f32)
+        } else {
+            0.0
+        };
+        Rect::new(x, top, x, top + height)
     }
 
     fn selection_rects(

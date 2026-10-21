@@ -35,13 +35,18 @@ fn skia_paint(paint: &Paint) -> skia_safe::Paint {
 /// measurers' paragraphs are skipped).
 pub fn draw_display_list(canvas: &Canvas, list: &DisplayList, text_measurer: &dyn TextMeasurer) {
     let measurer = (text_measurer as &dyn std::any::Any).downcast_ref::<SkiaTextMeasurer>();
+    // A list's saves and restores are balanced against each other only: an unmatched restore
+    // is ignored, and unmatched saves are undone at the end, so the canvas is left as found.
+    let start = canvas.save_count();
     for op in &list.ops {
         match op {
             DrawOp::Save => {
                 canvas.save();
             }
             DrawOp::Restore => {
-                canvas.restore();
+                if canvas.save_count() > start {
+                    canvas.restore();
+                }
             }
             DrawOp::Translate(offset) => {
                 canvas.translate((offset.x, offset.y));
@@ -72,6 +77,7 @@ pub fn draw_display_list(canvas: &Canvas, list: &DisplayList, text_measurer: &dy
             }
         }
     }
+    canvas.restore_to_count(start);
 }
 
 /// A renderer onto a CPU raster surface: for tests, screenshots, and windows presenting pixels.
@@ -113,6 +119,16 @@ impl RasterRenderer {
             .collect()
     }
 
+    /// Copies the pixels into `target` (row by row, as `pixels`), allocating nothing: what a
+    /// window presents.
+    pub fn copy_pixels_to(&mut self, target: &mut [u32]) {
+        let Some(pixmap) = self.surface.peek_pixels() else { return };
+        let Some(bytes) = pixmap.bytes() else { return };
+        for (pixel, chunk) in target.iter_mut().zip(bytes.as_chunks::<4>().0) {
+            *pixel = u32::from_ne_bytes(*chunk);
+        }
+    }
+
     /// The color of one pixel, as ARGB.
     pub fn pixel(&mut self, x: i32, y: i32) -> Color {
         let info = skia_safe::ImageInfo::new(
@@ -150,9 +166,9 @@ impl Renderer for RasterRenderer {
     ) {
         let canvas = self.surface.canvas();
         canvas.clear(skia_safe::Color::new(background.argb()));
-        canvas.save();
+        let count = canvas.save();
         canvas.scale((scale, scale));
         draw_display_list(canvas, list, text_measurer);
-        canvas.restore();
+        canvas.restore_to_count(count);
     }
 }

@@ -721,6 +721,9 @@ pub trait FocusTargetModifierNode {
         true
     }
     fn on_focus_changed(&mut self, _focused: bool, _context: &mut EventContext<'_>) {}
+    /// Focus came from a tap at `position` (in this target's coordinates, possibly outside its
+    /// bounds), on a decoration around it.
+    fn on_focus_tap(&mut self, _position: crate::unit::Offset, _context: &mut EventContext<'_>) {}
 }
 
 /// A node that receives key and text events while it or a descendant has focus, as

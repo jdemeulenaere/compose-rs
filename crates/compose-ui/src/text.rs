@@ -335,13 +335,18 @@ impl TextMeasurer for FixedTextMeasurer {
             }
         }
         lines.truncate(options.max_lines.max(1) as usize);
-        let widest =
-            lines.iter().map(|(from, to)| text[*from..*to].chars().count()).max().unwrap_or(0);
-        // The paragraph's own size: the layout coerces it into its constraints.
-        let size = IntSize::new(
-            (widest as f32 * advance).ceil() as i32,
-            (lines.len() as f32 * line_height).ceil() as i32,
-        );
+        // As Compose: the width the text was laid out at when wrapping (its own width, the
+        // widest hard line, when narrower), the lines' height; the layout coerces it into its
+        // constraints.
+        let intrinsic =
+            text.split('\n').map(|line| line.chars().count()).max().unwrap_or(0) as f32 * advance;
+        let width = if max_chars == usize::MAX {
+            intrinsic
+        } else {
+            intrinsic.min(constraints.max_width as f32)
+        };
+        let size =
+            IntSize::new(width.ceil() as i32, (lines.len() as f32 * line_height).ceil() as i32);
         let paragraph =
             FixedParagraph { text: text.to_string(), lines, advance, line_height, size };
         match self.free.pop() {
@@ -456,7 +461,8 @@ mod tests {
         );
         let metrics = measurer.metrics(handle);
         assert_eq!(metrics.line_count, 2);
-        assert_eq!(metrics.size, IntSize::new(55, 25));
+        // The width it was laid out at, as Compose's (not the longest line's).
+        assert_eq!(metrics.size, IntSize::new(60, 25));
         let single =
             measurer.layout("hi", &style, options, Constraints::unbounded(), &Density::new(2.0));
         assert_eq!(measurer.cursor_rect(handle, 13), crate::unit::Rect::new(5.0, 12.5, 5.0, 25.0));

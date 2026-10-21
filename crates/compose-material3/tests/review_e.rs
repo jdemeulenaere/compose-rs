@@ -30,6 +30,16 @@ fn bounds(ui: &mut ComposeTestRule, tag: &str) -> Rect {
     ui.on_node_with_tag(tag).fetch_semantics_node().bounds
 }
 
+/// The bounds of the field's inner text (its focus target): the field's semantics node is the
+/// whole decoration, as Compose's.
+fn inner_text_bounds(ui: &mut ComposeTestRule) -> compose_ui::Rect {
+    ui.on_node(Matcher::new("editable", |config| config.editable)).request_focus();
+    let bounds = ui.host().with_tree(|tree| tree.bounds_in_root(tree.focused().expect("focused")));
+    ui.host().clear_focus();
+    ui.wait_for_idle();
+    bounds
+}
+
 fn click_at(ui: &mut ComposeTestRule, x: f32, y: f32) {
     ui.host().send_pointer(PointerEvent::press(Offset::new(x, y)));
     ui.host().send_pointer(PointerEvent::release(Offset::new(x, y)));
@@ -188,11 +198,8 @@ fn a_text_field_without_a_label_places_its_text_as_compose() {
             TextField!(value = String::new(), on_value_change = |_| {});
         });
     });
-    // The text field itself, inside the container (the merged node is the whole container).
-    let input = ui
-        .on_node_unmerged(Matcher::new("editable", |config| config.editable))
-        .fetch_semantics_node()
-        .bounds;
+    // The text field itself, inside the container (the field's node is the whole container).
+    let input = inner_text_bounds(&mut ui);
     assert_eq!(input.top, 16.0);
 }
 

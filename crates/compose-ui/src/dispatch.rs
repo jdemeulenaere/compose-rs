@@ -129,6 +129,7 @@ impl UiTree {
                     requests: &mut requests,
                     text_measurer,
                     clipboard,
+                    pointer_position: Some(position),
                 };
                 if let Some(handler) = value.chain[entry.index as usize].as_pointer_input() {
                     handler.on_pointer_event(&mut event, pass, bounds, &mut context);
@@ -142,6 +143,23 @@ impl UiTree {
         }
         self.apply_requests(requests, &mut actions);
         actions
+    }
+
+    /// Ends the gesture of `pointer`, without a release: a touch the system cancelled.
+    pub fn cancel_pointer(&mut self, pointer: crate::input::PointerId) {
+        let Some(index) = self.captures.iter().position(|(captured, _)| *captured == pointer)
+        else {
+            return;
+        };
+        let (_, path) = self.captures.remove(index);
+        for entry in path {
+            if let Some(value) = self.get_mut(entry.node)
+                && value.chain_version == entry.version
+                && let Some(handler) = value.chain[entry.index as usize].as_pointer_input()
+            {
+                handler.on_cancel_pointer_input();
+            }
+        }
     }
 
     /// Ends every pointer gesture in progress, as when the window loses the pointer.
@@ -170,6 +188,9 @@ impl UiTree {
         }
         if let Some(node) = requests.focus {
             self.request_focus_into(node, actions);
+            if let Some(tap) = requests.focus_tap {
+                self.tell_focus_tap(tap, actions);
+            }
         }
         self.update_focus_listeners(actions);
     }
@@ -210,6 +231,7 @@ impl UiTree {
                 requests: &mut requests,
                 text_measurer,
                 clipboard,
+                pointer_position: None,
             };
             if let Some(handler) = value.chain[index].as_key_input()
                 && handler.on_key_event(&event, &mut context)
@@ -241,6 +263,7 @@ impl UiTree {
                 requests: &mut requests,
                 text_measurer,
                 clipboard,
+                pointer_position: None,
             };
             if let Some(handler) = value.chain[index].as_key_input()
                 && handler.on_text_input(text, &mut context)

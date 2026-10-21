@@ -179,12 +179,16 @@ pub struct EventContext<'a> {
     pub(crate) requests: &'a mut Requests,
     pub(crate) text_measurer: &'a mut dyn crate::text::TextMeasurer,
     pub(crate) clipboard: &'a mut dyn crate::clipboard::Clipboard,
+    /// The pointer's position in the root, while handling a pointer event.
+    pub(crate) pointer_position: Option<Offset>,
 }
 
 /// Requests handlers make, applied after dispatch.
 #[derive(Default)]
 pub(crate) struct Requests {
     pub(crate) focus: Option<NodeId>,
+    /// Where (in the root) the tap that asked for focus was, for the focus target to use.
+    pub(crate) focus_tap: Option<Offset>,
     pub(crate) clear_focus: bool,
     pub(crate) draw: bool,
     pub(crate) measure: Vec<NodeId>,
@@ -208,6 +212,14 @@ impl EventContext<'_> {
     /// Moves focus to this node's focus target, as `FocusRequester.requestFocus`.
     pub fn request_focus(&mut self) {
         self.requests.focus = Some(self.node);
+    }
+
+    /// Moves focus as `request_focus`, telling the focus target where the pointer was
+    /// (`FocusTargetModifierNode::on_focus_tap`): a text field's decoration focuses the field and
+    /// puts its cursor nearest the tap.
+    pub fn request_focus_at_pointer(&mut self) {
+        self.requests.focus = Some(self.node);
+        self.requests.focus_tap = self.pointer_position;
     }
 
     /// Clears focus, as `FocusManager.clearFocus`.

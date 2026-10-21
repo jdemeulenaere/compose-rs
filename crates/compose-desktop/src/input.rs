@@ -73,12 +73,18 @@ pub(crate) fn handle(state: &mut InputState, host: &mut UiHost, event: &WindowEv
         }
         WindowEvent::Touch(Touch { phase, location, id, .. }) => {
             let position = Offset::new(location.x as f32, location.y as f32);
+            let pointer = PointerId(*id + 1);
             let event = match phase {
                 TouchPhase::Started => PointerEvent::press(position),
                 TouchPhase::Moved => PointerEvent::moved(position, true),
-                TouchPhase::Ended | TouchPhase::Cancelled => PointerEvent::release(position),
+                TouchPhase::Ended => PointerEvent::release(position),
+                // A touch the system took back isn't a tap: its gesture ends without a release.
+                TouchPhase::Cancelled => {
+                    host.with_tree(|tree| tree.cancel_pointer(pointer));
+                    return Outcome::Handled;
+                }
             };
-            host.send_pointer(event.with_pointer(PointerId(*id + 1), PointerType::Touch));
+            host.send_pointer(event.with_pointer(pointer, PointerType::Touch));
         }
         WindowEvent::CursorLeft { .. } | WindowEvent::Focused(false) => {
             state.pressed = false;
@@ -108,9 +114,10 @@ pub(crate) fn handle(state: &mut InputState, host: &mut UiHost, event: &WindowEv
             let Some(key) = key_of(&event.logical_key) else { return Outcome::Ignored };
             let kind = if pressed { KeyEventType::KeyDown } else { KeyEventType::KeyUp };
             let consumed = host.send_key(KeyEvent { key, kind, modifiers: state.modifiers });
-            // Committed text from a key, unless a shortcut or a control key took it.
+            // The key's committed text, unless it's a shortcut: the focused node takes it (a
+            // text field takes the typed key too, so its ancestors don't act on it).
+            let _ = consumed;
             if pressed
-                && !consumed
                 && !state.modifiers.ctrl
                 && !state.modifiers.meta
                 && let Some(text) = &event.text

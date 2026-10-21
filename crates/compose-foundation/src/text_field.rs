@@ -7,6 +7,8 @@
 //! value) is undone, as Compose's value-based text field shows its `value`. The cursor moves by
 //! grapheme clusters, and starts at the start.
 
+use std::rc::Rc;
+
 use compose_runtime::{Callback, composable};
 use compose_ui::{
     Color, Constraints, DetachContext, DrawModifierNode, DrawScope, EventContext,
@@ -25,6 +27,12 @@ const SELECTION_COLOR: Color = Color::from_argb(0x664286F4);
 const CURSOR_WIDTH: compose_ui::Dp = compose_ui::Dp(2.0);
 
 /// An editable text, as Compose's `BasicTextField(value, onValueChange, …)`.
+///
+/// `decoration_box` lays out what surrounds the text (a container, a label, a placeholder) and
+/// calls `inner_text_field` where the text goes, as Compose's `decorationBox`. The decoration
+/// is part of the field: `modifier` applies around it, the field is one semantics node with
+/// it (`mergeDescendants`, as `CoreTextField`), and a tap anywhere in it focuses the field and
+/// puts the cursor at the offset nearest to the tap.
 #[composable]
 pub fn BasicTextField(
     value: String,
@@ -35,8 +43,9 @@ pub fn BasicTextField(
     #[default(crate::TextStyle::DEFAULT)] text_style: TextStyle,
     #[default(false)] single_line: bool,
     #[default(crate::Color::BLACK)] cursor_color: Color,
+    #[default(crate::inner_text_field_only)] decoration_box: impl Fn(Callback) + 'static,
 ) {
-    let element = TextFieldElement {
+    let element: Rc<dyn ModifierNodeElement> = Rc::new(TextFieldElement {
         value,
         on_value_change,
         enabled,
@@ -44,8 +53,26 @@ pub fn BasicTextField(
         style: text_style,
         single_line,
         cursor_color,
-    };
-    Layout(modifier.then_custom(element), empty_measure_policy(), compose_runtime::callback(|| {}));
+    });
+    let inner_text_field = Callback::new(move || {
+        Layout(
+            Modifier.then_element(compose_ui::Element::Custom(element.clone())),
+            empty_measure_policy(),
+            compose_runtime::callback(|| {}),
+        );
+    });
+    crate::layout::Box(
+        modifier.semantics(true, |_| {}).then_custom(FocusOnTap),
+        crate::Alignment::TOP_START,
+        // The decoration's size is the field's: a field given a size passes it on.
+        true,
+        compose_runtime::callback(move |_| decoration_box(inner_text_field.clone())),
+    );
+}
+
+/// The decoration of a field without one: the text alone, as Compose's default `decorationBox`.
+pub fn inner_text_field_only(inner_text_field: Callback) {
+    inner_text_field();
 }
 
 pub struct TextFieldElement {
@@ -82,6 +109,8 @@ impl ModifierNodeElement for TextFieldElement {
             density: None,
             cursor_rect: None,
             pending_tap: None,
+            scroll_x: 0.0,
+            overflows: false,
         })
     }
 
@@ -166,6 +195,10 @@ pub struct TextFieldNode {
     selection_rects: Vec<Rect>,
     /// A tap to put the cursor at, resolved at the next measurement by the measurer's hit test.
     pending_tap: Option<Offset>,
+    /// How far a single-line field's text is scrolled to keep the cursor in view, in pixels.
+    scroll_x: f32,
+    /// The paragraph is wider or taller than the field: drawn clipped.
+    overflows: bool,
 }
 
 impl TextFieldNode {
@@ -313,7 +346,10 @@ impl LayoutModifierNode for TextFieldNode {
         if let Some(tap) = self.pending_tap.take() {
             self.cursor = floor_char_boundary(
                 &self.text,
-                scope.text_measurer().hit_test(paragraph, tap).offset,
+                scope
+                    .text_measurer()
+                    .hit_test(paragraph, Offset::new(tap.x + self.scroll_x, tap.y))
+                    .offset,
             );
         }
         self.cursor_rect = Some(scope.text_measurer().cursor_rect(paragraph, self.cursor));
@@ -325,6 +361,23 @@ impl LayoutModifierNode for TextFieldNode {
         let metrics = scope.text_measurer().metrics(paragraph);
         let size = constraints
             .constrain(IntSize::new(metrics.size.width + cursor_width, metrics.size.height));
+        self.overflows =
+            metrics.size.width + cursor_width > size.width || metrics.size.height > size.height;
+        // A single line scrolls sideways to keep the cursor in view, as Compose's.
+        if self.single_line {
+            let visible = (size.width - cursor_width).max(0) as f32;
+            let x = self.cursor_rect.map_or(0.0, |rect| rect.left);
+            if x - self.scroll_x > visible {
+                self.scroll_x = x - visible;
+            }
+            if x < self.scroll_x {
+                self.scroll_x = x;
+            }
+            let max = (metrics.size.width as f32 - visible).max(0.0);
+            self.scroll_x = self.scroll_x.clamp(0.0, max);
+        } else {
+            self.scroll_x = 0.0;
+        }
         let placeable = scope.measure(content, Constraints::fixed(size.width, size.height));
         scope.place(&placeable, 0, 0);
         scope.layout(size.width, size.height)
@@ -334,20 +387,31 @@ impl LayoutModifierNode for TextFieldNode {
 impl DrawModifierNode for TextFieldNode {
     fn draw(&mut self, scope: &mut DrawScope<'_>) {
         let Some(paragraph) = self.paragraph else { return };
+        let clipped = self.overflows || self.scroll_x != 0.0;
+        if clipped {
+            scope.save();
+            scope.clip_outline(compose_ui::Outline::Rectangle(scope.bounds()));
+        }
+        let shift =
+            |rect: Rect, by: f32| Rect::new(rect.left - by, rect.top, rect.right - by, rect.bottom);
         if self.focused {
             for rect in &self.selection_rects {
-                scope.draw_rect(*rect, Paint::fill(SELECTION_COLOR));
+                scope.draw_rect(shift(*rect, self.scroll_x), Paint::fill(SELECTION_COLOR));
             }
         }
-        scope.draw_paragraph(paragraph, Offset::ZERO);
+        scope.draw_paragraph(paragraph, Offset::new(-self.scroll_x, 0.0));
         if self.focused && !self.read_only {
             // The cursor: drawn where the measurer that laid the paragraph out puts it.
             let width = scope.density().to_px(CURSOR_WIDTH);
-            let rect = self.cursor_rect.unwrap_or(Rect::new(0.0, 0.0, 0.0, 0.0));
+            let rect =
+                shift(self.cursor_rect.unwrap_or(Rect::new(0.0, 0.0, 0.0, 0.0)), self.scroll_x);
             scope.draw_rect(
                 Rect::new(rect.left, rect.top, rect.left + width, rect.bottom),
                 Paint::fill(self.cursor_color),
             );
+        }
+        if clipped {
+            scope.restore();
         }
     }
 }
@@ -382,8 +446,9 @@ impl PointerInputModifierNode for TextFieldNode {
                 // goes there.
                 match self.paragraph {
                     Some(paragraph) => {
-                        let offset =
-                            context.text_measurer().hit_test(paragraph, event.position).offset;
+                        let position =
+                            Offset::new(event.position.x + self.scroll_x, event.position.y);
+                        let offset = context.text_measurer().hit_test(paragraph, position).offset;
                         self.cursor = floor_char_boundary(&self.text, offset);
                         self.anchor = self.cursor;
                     }
@@ -405,6 +470,18 @@ impl FocusTargetModifierNode for TextFieldNode {
         self.enabled
     }
 
+    /// A tap on a decoration around the field (a Material container's padding) puts the cursor
+    /// nearest it.
+    fn on_focus_tap(&mut self, position: Offset, context: &mut EventContext<'_>) {
+        if let Some(paragraph) = self.paragraph {
+            let position = Offset::new(position.x + self.scroll_x, position.y);
+            let offset = context.text_measurer().hit_test(paragraph, position).offset;
+            self.cursor = floor_char_boundary(&self.text, offset);
+            self.anchor = self.cursor;
+            context.invalidate_measure();
+        }
+    }
+
     fn on_focus_changed(&mut self, focused: bool, context: &mut EventContext<'_>) {
         self.focused = focused;
         context.invalidate_draw();
@@ -413,10 +490,19 @@ impl FocusTargetModifierNode for TextFieldNode {
 
 impl KeyInputModifierNode for TextFieldNode {
     fn on_key_event(&mut self, event: &KeyEvent, context: &mut EventContext<'_>) -> bool {
-        if event.kind != KeyEventType::KeyDown || !self.enabled {
+        if !self.enabled {
             return false;
         }
         let editable = !self.read_only;
+        let shortcut = event.modifiers.meta || event.modifiers.ctrl;
+        // Typed keys: the text arrives as committed text (`on_text_input`); the field takes the
+        // key, down and up, so its ancestors' shortcuts and clicks don't.
+        if editable && !shortcut && matches!(event.key, Key::Character(_) | Key::Space) {
+            return true;
+        }
+        if event.kind != KeyEventType::KeyDown {
+            return false;
+        }
         let extend = event.modifiers.shift;
         // Shortcuts: Cmd on macOS, Ctrl elsewhere (either is taken).
         if (event.modifiers.meta || event.modifiers.ctrl)
@@ -444,6 +530,11 @@ impl KeyInputModifierNode for TextFieldNode {
             return true;
         }
         match event.key {
+            // In a multi-line field, Tab types a tab, as Compose's.
+            Key::Tab if editable && !self.single_line => {
+                self.insert("\t", context);
+                true
+            }
             Key::Backspace | Key::Delete if editable && !self.selection().is_empty() => {
                 self.replace_selection("", context);
                 true
@@ -488,16 +579,29 @@ impl KeyInputModifierNode for TextFieldNode {
                 self.move_cursor(cursor, extend, context);
                 true
             }
-            Key::MoveHome => {
-                let start = self.text[..self.cursor].rfind('\n').map_or(0, |index| index + 1);
-                self.move_cursor(start, extend, context);
-                true
-            }
-            Key::MoveEnd => {
-                let end = self.text[self.cursor..]
-                    .find('\n')
-                    .map_or(self.text.len(), |index| self.cursor + index);
-                self.move_cursor(end, extend, context);
+            // The start and end of the visual (wrapped) line, from the measurer.
+            Key::MoveHome | Key::MoveEnd => {
+                let end = event.key == Key::MoveEnd;
+                let offset = match (self.paragraph, self.cursor_rect) {
+                    (Some(paragraph), Some(rect)) => {
+                        let y = (rect.top + rect.bottom) / 2.0;
+                        let x = if end { f32::MAX / 4.0 } else { -1.0 };
+                        let found =
+                            context.text_measurer().hit_test(paragraph, Offset::new(x, y)).offset;
+                        let found = floor_char_boundary(&self.text, found);
+                        // At a soft wrap the line ends before the space that breaks it.
+                        if end && found < self.text.len() && self.text[..found].ends_with(' ') {
+                            found - 1
+                        } else {
+                            found
+                        }
+                    }
+                    _ if end => self.text[self.cursor..]
+                        .find('\n')
+                        .map_or(self.text.len(), |index| self.cursor + index),
+                    _ => self.text[..self.cursor].rfind('\n').map_or(0, |index| index + 1),
+                };
+                self.move_cursor(offset, extend, context);
                 true
             }
             Key::Enter | Key::NumPadEnter if editable && !self.single_line => {
@@ -519,10 +623,76 @@ impl KeyInputModifierNode for TextFieldNode {
 
 impl SemanticsModifierNode for TextFieldNode {
     fn apply_semantics(&self, config: &mut SemanticsConfiguration) {
+        // The field's node is its decoration's, as Compose's `CoreTextField`.
+        config.part_of_parent = true;
         config.editable_text = Some(self.text.clone().into());
         config.editable = true;
         config.focusable |= self.enabled;
         config.focused |= self.focused;
         config.disabled |= !self.enabled;
+    }
+}
+
+// ---- The decoration's taps ----------------------------------------------------------------
+
+/// Focuses the focus target below it on a tap (a release after a press, inside).
+struct FocusOnTap;
+
+#[derive(Default)]
+struct FocusOnTapNode {
+    pressed: bool,
+}
+
+impl ModifierNodeElement for FocusOnTap {
+    fn create(&self) -> Box<dyn ModifierNode> {
+        Box::new(FocusOnTapNode::default())
+    }
+    fn update(&self, _: &mut dyn ModifierNode) {}
+    fn same(&self, other: &dyn ModifierNodeElement) -> bool {
+        other.downcast_ref::<FocusOnTap>().is_some()
+    }
+    fn name(&self) -> &'static str {
+        "focus_on_tap"
+    }
+}
+
+impl ModifierNode for FocusOnTapNode {
+    fn as_pointer_input(&mut self) -> Option<&mut dyn compose_ui::PointerInputModifierNode> {
+        Some(self)
+    }
+}
+
+impl compose_ui::PointerInputModifierNode for FocusOnTapNode {
+    fn on_pointer_event(
+        &mut self,
+        event: &mut compose_ui::PointerEvent,
+        pass: compose_ui::PointerEventPass,
+        bounds: compose_ui::IntSize,
+        context: &mut compose_ui::EventContext<'_>,
+    ) {
+        use compose_ui::PointerEventType;
+        // After the field's own handling (the Main pass goes up from the target): a tap the
+        // field took is consumed.
+        if pass != compose_ui::PointerEventPass::Main {
+            return;
+        }
+        match event.kind {
+            PointerEventType::Press if !event.consumed => self.pressed = true,
+            PointerEventType::Release if std::mem::take(&mut self.pressed) && !event.consumed => {
+                let inside = event.position.x >= 0.0
+                    && event.position.y >= 0.0
+                    && event.position.x < bounds.width as f32
+                    && event.position.y < bounds.height as f32;
+                if inside {
+                    event.consume();
+                    context.request_focus_at_pointer();
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn on_cancel_pointer_input(&mut self) {
+        self.pressed = false;
     }
 }

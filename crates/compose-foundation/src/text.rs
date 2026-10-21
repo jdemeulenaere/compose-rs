@@ -40,6 +40,7 @@ impl ModifierNodeElement for TextElement {
             constraints: None,
             density: None,
             stale: Vec::new(),
+            overflows: false,
         })
     }
 
@@ -80,6 +81,8 @@ pub struct TextNode {
     /// Paragraphs replaced by an update, released at the next measurement (an update can't
     /// reach the measurer).
     stale: Vec<ParagraphHandle>,
+    /// The paragraph is larger than the node: drawn clipped.
+    overflows: bool,
 }
 
 impl ModifierNode for TextNode {
@@ -130,8 +133,10 @@ impl LayoutModifierNode for TextNode {
             self.paragraph = Some(paragraph);
         }
         self.constraints = Some(constraints);
-        let size = scope.text_measurer().metrics(self.paragraph.expect("laid out")).size;
-        let size = constraints.constrain(size);
+        let natural = scope.text_measurer().metrics(self.paragraph.expect("laid out")).size;
+        let size = constraints.constrain(natural);
+        // Text larger than its bounds is clipped, as Compose's `TextOverflow.Clip`.
+        self.overflows = natural.width > size.width || natural.height > size.height;
         let placeable = scope.measure(content, Constraints::fixed(size.width, size.height));
         scope.place(&placeable, 0, 0);
         scope.layout(size.width, size.height)
@@ -141,7 +146,14 @@ impl LayoutModifierNode for TextNode {
 impl DrawModifierNode for TextNode {
     fn draw(&mut self, scope: &mut DrawScope<'_>) {
         if let Some(paragraph) = self.paragraph {
-            scope.draw_paragraph(paragraph, Offset::ZERO);
+            if self.overflows {
+                scope.save();
+                scope.clip_outline(compose_ui::Outline::Rectangle(scope.bounds()));
+                scope.draw_paragraph(paragraph, Offset::ZERO);
+                scope.restore();
+            } else {
+                scope.draw_paragraph(paragraph, Offset::ZERO);
+            }
         }
     }
 }
