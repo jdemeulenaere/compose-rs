@@ -85,19 +85,50 @@ const CALLBACK_MODIFIERS: &[&str] =
     &["clickable", "clickable_with", "toggleable", "on_focus_changed", "on_key_event"];
 
 /// Whether `receiver` is a modifier chain: method calls on the path `Modifier`.
-fn is_modifier_chain(receiver: &Expr) -> bool {
+fn is_modifier_chain(receiver: &Expr, scopes: &Scopes) -> bool {
     match receiver {
-        Expr::MethodCall(call) => is_modifier_chain(&call.receiver),
+        Expr::MethodCall(call) => is_modifier_chain(&call.receiver, scopes),
         Expr::Path(path) => {
             path.qself.is_none()
                 && path.path.segments.last().is_some_and(|segment| {
-                    // `Modifier.…`, or a composable's `modifier` parameter.
-                    segment.ident == "Modifier" || segment.ident == "modifier"
+                    // `Modifier.…`, a composable's `modifier` parameter, or a local holding one.
+                    segment.ident == "Modifier"
+                        || segment.ident == "modifier"
+                        || (path.path.segments.len() == 1
+                            && scopes.is_modifier(&segment.ident.to_string()))
                 })
         }
-        Expr::Paren(paren) => is_modifier_chain(&paren.expr),
+        Expr::Paren(paren) => is_modifier_chain(&paren.expr, scopes),
         _ => false,
     }
+}
+
+/// Whether a `let`'s value is a modifier: a modifier chain, or a branch whose arms all are.
+fn is_modifier_value(value: &Expr, scopes: &Scopes) -> bool {
+    let tail = |block: &syn::Block| match block.stmts.last() {
+        Some(syn::Stmt::Expr(value, None)) => is_modifier_value(value, scopes),
+        _ => false,
+    };
+    match value {
+        Expr::If(branch) => {
+            tail(&branch.then_branch)
+                && branch
+                    .else_branch
+                    .as_ref()
+                    .is_some_and(|(_, otherwise)| is_modifier_value(otherwise, scopes))
+        }
+        Expr::Block(block) => tail(&block.block),
+        Expr::Match(choice) => {
+            !choice.arms.is_empty()
+                && choice.arms.iter().all(|arm| is_modifier_value(&arm.body, scopes))
+        }
+        other => is_modifier_chain(other, scopes),
+    }
+}
+
+/// `Modifier`, as a type.
+fn is_modifier_type(ty: &syn::Type) -> bool {
+    matches!(ty, syn::Type::Path(path) if path.qself.is_none() && path.path.segments.last().is_some_and(|segment| segment.ident == "Modifier" && segment.arguments.is_none()))
 }
 
 /// `remember(…)` and its variants.
@@ -162,7 +193,7 @@ fn probe_with(keys: Vec<TokenStream>, make: TokenStream, arity: Option<usize>) -
     };
     quote! {{
         #[allow(unused_imports)]
-        use ::compose::__private::{KeyedProbe as _, UnkeyedProbe as _};
+        use ::compose::__private::{KeyedProbe as _, StaticProbe as _, UnkeyedProbe as _};
         #resolve
     }}
 }
@@ -180,7 +211,7 @@ pub(crate) fn probe(
 ) -> TokenStream {
     let mut keys: Vec<TokenStream> = captures
         .iter()
-        .map(|capture| quote! { (&&::compose::__private::ArgProbe(&#capture)).arg_key() })
+        .map(|capture| quote! { (&&&::compose::__private::ArgProbe(&#capture)).arg_key() })
         .collect();
     if unknown {
         keys.push(quote! { ::compose::__private::Unkeyed::CHANGED });
@@ -196,7 +227,7 @@ pub(crate) fn probe(
     };
     quote! {{
         #[allow(unused_imports)]
-        use ::compose::__private::{KeyedProbe as _, UnkeyedProbe as _};
+        use ::compose::__private::{KeyedProbe as _, StaticProbe as _, UnkeyedProbe as _};
         ::compose::__private::#resolver(::compose::__private::lambda_probe(#site, #keys), || {
             #(let #captures = ::core::clone::Clone::clone(&#captures);)*
             #closure
@@ -208,12 +239,12 @@ pub(crate) fn probe(
 /// itself, so the same callback, function or capture-less closure passes the same `Callback`.
 pub(crate) fn probe_value(value: TokenStream) -> TokenStream {
     let name = Ident::new("__compose_value", Span::mixed_site());
-    let key = quote! { (&&::compose::__private::ArgProbe(#name)).arg_key() };
+    let key = quote! { (&&&::compose::__private::ArgProbe(#name)).arg_key() };
     let site = site_of(&value);
     let keys = key_tuple(vec![key]);
     quote! {{
         #[allow(unused_imports)]
-        use ::compose::__private::{KeyedProbe as _, UnkeyedProbe as _};
+        use ::compose::__private::{KeyedProbe as _, StaticProbe as _, UnkeyedProbe as _};
         let #name = &(#value);
         ::compose::__private::lambda_probe(#site, #keys).resolve_cloned(#name)
     }}
@@ -231,8 +262,9 @@ fn local_bindings(local: &syn::Local, out: &mut Vec<String>) {
 
 /// The names a macro's arguments may bind, as a user's PascalCase macro could: in each
 /// argument, the names before a lone `=` (`current = …`, `(low, high) = …`), or the whole
-/// argument when it is a name or a tuple of names (`doubled, n * 2`). Values after `=` and
-/// expressions are uses, not bindings.
+/// argument when it is a name or a tuple of names leading the arguments (`doubled, n * 2`, as
+/// `let`'s pattern leads). Values after `=`, expressions, and a name after a value
+/// (`Clickable!("save", save)`, a function given positionally) are uses, not bindings.
 fn unbound_names(tokens: TokenStream) -> Vec<String> {
     const KEYWORDS: &[&str] = &[
         "as", "async", "await", "break", "const", "continue", "crate", "dyn", "else", "enum",
@@ -260,6 +292,7 @@ fn unbound_names(tokens: TokenStream) -> Vec<String> {
     }
     let tokens: Vec<TokenTree> = tokens.into_iter().collect();
     let mut names = Vec::new();
+    let mut leading = true;
     for segment in
         tokens.split(|token| matches!(token, TokenTree::Punct(punct) if punct.as_char() == ','))
     {
@@ -271,13 +304,13 @@ fn unbound_names(tokens: TokenStream) -> Vec<String> {
         match equals {
             Some(equals) => names_in(&segment[..equals], &mut names),
             None => match segment {
-                [TokenTree::Ident(_)] => names_in(segment, &mut names),
+                [TokenTree::Ident(_)] if leading => names_in(segment, &mut names),
                 [TokenTree::Group(group)]
-                    if group.delimiter() == proc_macro2::Delimiter::Parenthesis =>
+                    if leading && group.delimiter() == proc_macro2::Delimiter::Parenthesis =>
                 {
                     names_in(segment, &mut names)
                 }
-                _ => {}
+                _ => leading = false,
             },
         }
     }
@@ -397,7 +430,32 @@ impl Scopes {
     fn contains(&self, name: &str) -> bool {
         self.lookup(name).is_some()
     }
+
+    /// Records that the local `name` just bound holds a modifier (`let base = Modifier.…;`).
+    fn bind_modifier(&mut self, name: &str) {
+        self.0.last_mut().expect("a scope").push((format!("{MODIFIER}{name}"), false));
+    }
+
+    /// Whether the innermost binding of `name` holds a modifier.
+    fn is_modifier(&self, name: &str) -> bool {
+        self.0
+            .iter()
+            .rev()
+            .find_map(|scope| {
+                scope.iter().rev().find_map(|(bound, _)| {
+                    if bound == name {
+                        Some(false)
+                    } else {
+                        bound.strip_prefix(MODIFIER).filter(|bound| *bound == name).map(|_| true)
+                    }
+                })
+            })
+            .unwrap_or(false)
+    }
 }
+
+/// Marks, in a scope, that the binding before it holds a modifier.
+const MODIFIER: char = '\u{2}';
 
 /// The captures of a closure or block: free identifiers naming locals of `outer`.
 struct Free<'a> {
@@ -482,10 +540,10 @@ impl Free<'_> {
 /// The names a format string refers to: inline arguments (`"{count}"`, `"{value:>8}"`) and
 /// width and precision arguments (`"{:>width$}"`, `"{:.prec$}"`). Positional indices (`"{0}"`)
 /// aren't names.
-fn format_names(literal: &str) -> Vec<String> {
+pub(crate) fn format_names(literal: &str) -> Vec<String> {
+    // An identifier, as Rust reads one (`²` is alphanumeric but not an identifier's).
     let is_name = |name: &str| {
-        name.chars().next().is_some_and(|c| c.is_alphabetic() || c == '_')
-            && name.chars().all(|c| c.is_alphanumeric() || c == '_')
+        !name.is_empty() && !name.starts_with("r#") && syn::parse_str::<syn::Ident>(name).is_ok()
     };
     let mut names = Vec::new();
     let mut chars = literal.chars().peekable();
@@ -509,8 +567,10 @@ fn format_names(literal: &str) -> Vec<String> {
             if c.is_alphanumeric() || c == '_' {
                 word.push(c);
             } else {
-                if c == '$' && is_name(&word) {
-                    names.push(word.clone());
+                // After the `0` flag (`{:0width$}`), the digits aren't the name's.
+                let name = word.trim_start_matches(|c: char| c.is_ascii_digit());
+                if c == '$' && is_name(name) {
+                    names.push(name.to_string());
                 }
                 word.clear();
             }
@@ -776,6 +836,17 @@ impl Memoize {
                 )
                 .to_tokens(tokens);
             }
+            // `Some(lambda)` for an optional callback: the lambda marked.
+            Expr::Call(call)
+                if crate::call::is_some(&call.func)
+                    && call.args.len() == 1
+                    && matches!(call.args[0], Expr::Closure(_)) =>
+            {
+                let function = &call.func;
+                let mut lambda = TokenStream::new();
+                self.mark(&mut call.args[0], &mut lambda);
+                tokens.extend(quote! { #function(#lambda) });
+            }
             other => {
                 self.visit_expr_mut(other);
                 other.to_tokens(tokens);
@@ -860,6 +931,22 @@ impl VisitMut for Memoize {
                         let mut names = Vec::new();
                         local_bindings(local, &mut names);
                         memoize.scopes.bind(names);
+                        // `let base = Modifier.…;` or `let base: Modifier = …;`: a modifier
+                        // chain on `base` memoizes its callbacks too.
+                        let (pattern, typed) = match &local.pat {
+                            syn::Pat::Type(typed) => (&*typed.pat, is_modifier_type(&typed.ty)),
+                            pattern => (pattern, false),
+                        };
+                        if let syn::Pat::Ident(ident) = pattern
+                            && ident.subpat.is_none()
+                            && (typed
+                                || local.init.as_ref().is_some_and(|init| {
+                                    init.diverge.is_none()
+                                        && is_modifier_value(&init.expr, &memoize.scopes)
+                                }))
+                        {
+                            memoize.scopes.bind_modifier(&ident.ident.to_string());
+                        }
                     }
                     syn::Stmt::Macro(statement) => {
                         let name = statement
@@ -873,10 +960,13 @@ impl VisitMut for Memoize {
                         if is_call_macro_path(&statement.mac.path) && !local {
                             memoize.rewrite_call_macro(&mut statement.mac);
                         } else if !is_known_macro(&statement.mac.path) {
-                            // It may bind locals the walk can't see: a lambda naming any
-                            // identifier it was given is always changed.
+                            // It may bind locals the walk can't see: a lambda naming a new
+                            // identifier it was given is always changed. A local it was given
+                            // keeps its key, which names whatever binding is in scope where
+                            // the lambda is (the macro's, if it shadowed it).
                             let mut names = Vec::new();
                             token_idents(statement.mac.tokens.clone(), &mut names);
+                            names.retain(|name| !memoize.scopes.contains(name));
                             memoize.scopes.taint(names);
                         }
                     }
@@ -894,7 +984,7 @@ impl VisitMut for Memoize {
             // a callback: modifiers take `impl IntoCallback`, so it is memoized, and the
             // modifier stays `same` when its captures do.
             Expr::MethodCall(call)
-                if is_modifier_chain(&call.receiver)
+                if is_modifier_chain(&call.receiver, &self.scopes)
                     && CALLBACK_MODIFIERS.contains(&call.method.to_string().as_str()) =>
             {
                 self.visit_expr_mut(&mut call.receiver);

@@ -603,6 +603,9 @@ impl VisitMut for Regions {
                 }
             }
             Expr::Macro(macro_expr) if is_user_macro_with_calls(&macro_expr.mac) => {
+                // Its lambdas' regions first, as a composable's call macro's
+                // (`Card!(Modifier.padding(Dp(8.0)), { … })` in a `match` arm).
+                self.visit_call_macro(&mut macro_expr.mac);
                 self.wrap_expr(expr);
             }
             // Futures run outside composition, and a region guard held across an `.await` would

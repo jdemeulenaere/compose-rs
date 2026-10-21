@@ -110,10 +110,20 @@ pub fn to_callback<F: ?Sized, C: IntoCallback<F> + Clone>(function: &C) -> Callb
     function.clone().into_callback()
 }
 
+/// Converts an optional function into an optional callback: what call macros apply to an
+/// optional callback argument that isn't a lambda (`if editable { Some(move || …) } else { None }`).
+#[inline]
+pub fn optional_callback<F: ?Sized, C: IntoCallback<F>>(
+    function: Option<C>,
+) -> Option<Callback<F>> {
+    function.map(IntoCallback::into_callback)
+}
+
 // ---- Memoization -----------------------------------------------------------------------------
 
-/// A capture, probed for its key: `(&&ArgProbe(&capture)).arg_key()` gives a [`Keyed`] key if
-/// the capture's type is `ComposeArg + Clone` (autoref specialisation), and [`Unkeyed`] otherwise.
+/// A capture, probed for its key: `(&&&ArgProbe(&capture)).arg_key()` gives a [`Keyed`] key if
+/// the capture's type is `ComposeArg + Clone` (autoref specialisation), and [`Unkeyed`]
+/// otherwise, telling types apart by their `TypeId` when they are `'static`.
 pub struct ArgProbe<'a, T>(pub &'a T);
 
 /// A capture compared with `ComposeArg::same`.
@@ -122,26 +132,44 @@ pub struct Keyed<'a, T>(&'a T);
 /// A capture that can't be compared: its lambda counts as changed on every pass, unless the
 /// capture is zero-sized (a function item, a closure capturing nothing), so every value of its
 /// type is the same.
+#[derive(Clone, Copy)]
 pub struct Unkeyed {
     zero_sized: bool,
-    /// The capture's type name: zero-sized values of the same type are the same, of different
-    /// types (two function items) are not.
+    /// The capture's type: zero-sized values of the same type are the same, of different types
+    /// (two function items, two closures) are not. Two closures of a function have the same
+    /// name, so `'static` types are told apart by their `TypeId`.
+    type_id: Option<std::any::TypeId>,
     type_name: &'static str,
 }
 
 impl Unkeyed {
     /// Always changed: what a lambda calling an unknown macro is keyed with.
-    pub const CHANGED: Unkeyed = Unkeyed { zero_sized: false, type_name: "" };
+    pub const CHANGED: Unkeyed = Unkeyed { zero_sized: false, type_id: None, type_name: "" };
 }
 
 pub trait KeyedProbe<'a, T> {
     fn arg_key(&self) -> Keyed<'a, T>;
 }
 
-impl<'a, T: ComposeArg + Clone> KeyedProbe<'a, T> for &ArgProbe<'a, T> {
+impl<'a, T: ComposeArg + Clone> KeyedProbe<'a, T> for &&ArgProbe<'a, T> {
     #[inline]
     fn arg_key(&self) -> Keyed<'a, T> {
         Keyed(self.0)
+    }
+}
+
+pub trait StaticProbe {
+    fn arg_key(&self) -> Unkeyed;
+}
+
+impl<T: 'static> StaticProbe for &ArgProbe<'_, T> {
+    #[inline]
+    fn arg_key(&self) -> Unkeyed {
+        Unkeyed {
+            zero_sized: std::mem::size_of::<T>() == 0,
+            type_id: Some(std::any::TypeId::of::<T>()),
+            type_name: std::any::type_name::<T>(),
+        }
     }
 }
 
@@ -152,7 +180,11 @@ pub trait UnkeyedProbe {
 impl<T> UnkeyedProbe for ArgProbe<'_, T> {
     #[inline]
     fn arg_key(&self) -> Unkeyed {
-        Unkeyed { zero_sized: std::mem::size_of::<T>() == 0, type_name: std::any::type_name::<T>() }
+        Unkeyed {
+            zero_sized: std::mem::size_of::<T>() == 0,
+            type_id: None,
+            type_name: std::any::type_name::<T>(),
+        }
     }
 }
 
@@ -178,16 +210,22 @@ impl<T: ComposeArg + Clone> LambdaKeys for Keyed<'_, T> {
 }
 
 impl LambdaKeys for Unkeyed {
-    type Owned = &'static str;
+    type Owned = Unkeyed;
 
     #[inline]
-    fn same(&self, kept: &&'static str) -> bool {
-        self.zero_sized && (std::ptr::eq(*kept, self.type_name) || *kept == self.type_name)
+    fn same(&self, kept: &Unkeyed) -> bool {
+        self.zero_sized
+            && match (self.type_id, kept.type_id) {
+                (Some(id), Some(kept)) => id == kept,
+                _ => {
+                    std::ptr::eq(kept.type_name, self.type_name) || kept.type_name == self.type_name
+                }
+            }
     }
 
     #[inline]
-    fn to_owned(&self) -> &'static str {
-        self.type_name
+    fn to_owned(&self) -> Unkeyed {
+        *self
     }
 }
 

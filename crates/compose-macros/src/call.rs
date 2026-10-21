@@ -397,6 +397,11 @@ fn plain_value(value: Value) -> TokenStream {
     }
 }
 
+/// `Some`, as a function called.
+pub(crate) fn is_some(function: &Expr) -> bool {
+    matches!(function, Expr::Path(path) if path.qself.is_none() && path.path.segments.last().is_some_and(|segment| segment.ident == "Some"))
+}
+
 fn is_string_literal(argument: &Argument) -> bool {
     matches!(argument, Argument::Positional(Value::Expr(Expr::Lit(literal))) if matches!(literal.lit, syn::Lit::Str(_)))
 }
@@ -426,24 +431,40 @@ fn build(call: Call) -> syn::Result<TokenStream> {
 
     // A leading string literal formats into a `#[format]` first parameter, with the positional
     // arguments after it.
+    // A named argument the string names (`"{count} items", count = items.len()`) is a format
+    // argument, as in `format!`, even if a parameter has its name.
     let mut arguments = arguments.into_iter().peekable();
     let mut next_positional = 0;
-    if format && arguments.peek().is_some_and(is_string_literal) {
-        let mut format_arguments = Vec::new();
+    let mut format_arguments = Vec::new();
+    let mut format_names = Vec::new();
+    let formatting = format && arguments.peek().is_some_and(is_string_literal);
+    if formatting {
+        if let Some(Argument::Positional(Value::Expr(Expr::Lit(literal)))) = arguments.peek()
+            && let syn::Lit::Str(string) = &literal.lit
+        {
+            format_names = memo::format_names(&string.value());
+        }
         while let Some(Argument::Positional(_)) = arguments.peek() {
             if let Some(argument) = arguments.next() {
                 format_arguments.push(plain_value(argument.into_value()));
             }
         }
-        let value = quote! {
-            ::core::convert::Into::into(::std::format!(#(#format_arguments),*))
-        };
-        set(&mut slots, 0, value);
         next_positional = 1;
     }
 
     let mut named_seen = false;
     for argument in arguments {
+        let argument = match argument {
+            Argument::Named(name, value)
+                if formatting && format_names.iter().any(|named| name == named) =>
+            {
+                named_seen = true;
+                let value = plain_value(value);
+                format_arguments.push(quote! { #name = #value });
+                continue;
+            }
+            argument => argument,
+        };
         let index = match &argument {
             Argument::Named(name, _) => {
                 named_seen = true;
@@ -497,7 +518,29 @@ fn build(call: Call) -> syn::Result<TokenStream> {
                         let callback = callback_value(arity, value);
                         quote! { ::core::option::Option::Some(#callback) }
                     }
-                    value => plain_value(value),
+                    // `Some(lambda)`: the same, memoized when marked.
+                    Value::Expr(Expr::Call(call))
+                        if is_some(&call.func)
+                            && call.args.len() == 1
+                            && matches!(call.args[0], Expr::Closure(_)) =>
+                    {
+                        let lambda = call.args[0].clone();
+                        let value = match Marked::from_expr(&lambda) {
+                            Some(marked) => Value::Marked(marked?),
+                            None => Value::Expr(lambda),
+                        };
+                        let callback = callback_value(arity, value);
+                        quote! { ::core::option::Option::Some(#callback) }
+                    }
+                    // `None` as written (its type comes from the parameter); another `Option`
+                    // converted, its closure unmemoized.
+                    Value::Expr(Expr::Path(path)) if path.path.is_ident("None") => {
+                        path.into_token_stream()
+                    }
+                    value => {
+                        let value = plain_value(value);
+                        quote! { ::compose::__private::optional_callback(#value) }
+                    }
                 }
             }
             // A `#[format]` parameter converts whatever it is given (`Text!(title)`).
@@ -508,6 +551,16 @@ fn build(call: Call) -> syn::Result<TokenStream> {
             None => plain_value(argument.into_value()),
         };
         set(&mut slots, index, value);
+    }
+
+    if formatting {
+        if slots[0].is_some() {
+            return Err(Error::new(span, format!("`{function}`'s text is given twice")));
+        }
+        let value = quote! {
+            ::core::convert::Into::into(::std::format!(#(#format_arguments),*))
+        };
+        set(&mut slots, 0, value);
     }
 
     if let Some(argument) = trailing {

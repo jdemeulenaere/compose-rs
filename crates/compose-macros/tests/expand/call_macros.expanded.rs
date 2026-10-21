@@ -100,11 +100,13 @@ fn Counter() {
         );
         Toolbar({
             #[allow(unused_imports)]
-            use ::compose::__private::{KeyedProbe as _, UnkeyedProbe as _};
+            use ::compose::__private::{
+                KeyedProbe as _, StaticProbe as _, UnkeyedProbe as _,
+            };
             ::compose::__private::resolve_0(
                 ::compose::__private::lambda_probe(
                     1804561070696882738u64,
-                    ((&&::compose::__private::ArgProbe(&count)).arg_key(),),
+                    ((&&&::compose::__private::ArgProbe(&count)).arg_key(),),
                 ),
                 move || count.set(0),
             )
