@@ -40,7 +40,7 @@ pub use display_list::{DisplayList, DrawOp, Renderer};
 pub use draw::DrawScope;
 pub use graphics::{Color, CornerSize, Outline, Paint, PaintStyle, RECTANGLE_SHAPE, Shape};
 pub use graphics_layer::{GraphicsLayerScope, TransformOrigin};
-pub use host::{FrameStats, UiHost};
+pub use host::{FrameStats, LOCAL_DENSITY, UiHost};
 pub use image::ImageBitmap;
 pub use input::{
     Action, EventContext, Key, KeyEvent, KeyEventType, KeyModifiers, PointerEvent,

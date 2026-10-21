@@ -12,16 +12,17 @@ use compose_ui::{
 use crate::components::minimum_interactive_component_size;
 use crate::theme::{LOCAL_CONTENT_COLOR, MaterialTheme};
 
-/// A vector icon, as Compose's `Icon`: its default size (24 dp), tinted (by default the content
-/// color). `content_description` is what accessibility reads; `None` for decoration.
+/// A vector icon, as Compose's `Icon`: its default size (24 dp), every path drawn in `tint` (by
+/// default the content color, as `ColorFilter.tint`), or in its own colors with
+/// `Color::UNSPECIFIED`. `content_description` is what accessibility reads; `None` for
+/// decoration.
 #[composable]
 pub fn Icon(
     image_vector: ImageVector,
     content_description: Option<&'static str>,
     #[default(crate::Modifier)] modifier: Modifier,
-    #[default(crate::Color::UNSPECIFIED)] tint: Color,
+    #[default(crate::LOCAL_CONTENT_COLOR.current())] tint: Color,
 ) {
-    let tint = tint.or(LOCAL_CONTENT_COLOR.current());
     let (width, height) = (image_vector.default_width, image_vector.default_height);
     let modifier = match content_description {
         Some(description) => modifier.semantics(false, move |config| {
@@ -84,7 +85,15 @@ impl DrawModifierNode for IconNode {
             (size.height - vector.viewport_height * scale) / 2.0,
         );
         for (path, fill) in vector.paths.iter() {
-            let color = fill.unwrap_or(self.tint);
+            // Tinted as `SrcIn`: the tint, as opaque as the path; untinted, the path's own
+            // color (black if it has none, as Material's icons).
+            let own = fill.unwrap_or(Color::BLACK);
+            let color = if self.tint.is_specified() {
+                self.tint
+                    .with_alpha(self.tint.alpha() as f32 / 255.0 * (own.alpha() as f32 / 255.0))
+            } else {
+                own
+            };
             scope.draw_path_scaled(path, offset, (scale, scale), Paint::fill(color));
         }
     }

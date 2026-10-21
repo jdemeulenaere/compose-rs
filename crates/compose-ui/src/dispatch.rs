@@ -37,8 +37,10 @@ impl UiTree {
             let placed = value.layers[0].offset;
             let at = value.overlay_origin - Offset::new(placed.x as f32, placed.y as f32);
             let inside = contains(value.layers[0].size, position - value.overlay_origin);
-            // A point in an overlay is its, handled or not, as a popup's window takes it.
-            if self.hit_node(node, position - at, &mut path) || inside {
+            let pass_through = self.overlay_node(node).is_some_and(|overlay| overlay.pass_through);
+            // A point in an overlay is its, handled or not, as a popup's window takes it; unless
+            // it passes its hits through (a non-focusable popup's outside).
+            if (self.hit_node(node, position - at, &mut path) || inside) && !pass_through {
                 return path;
             }
         }

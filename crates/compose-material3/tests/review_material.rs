@@ -349,7 +349,11 @@ fn a_disabled_checked_switch_has_materials_disabled_colors() {
     let shapes = round_rects(&mut ui);
     let (_, track) = shapes.first().expect("the track");
     let (_, thumb) = shapes.last().expect("the thumb");
-    assert_eq!(track.color, scheme.on_surface.with_alpha(0.12), "the track");
+    assert_eq!(
+        track.color,
+        scheme.on_surface.with_alpha(0.12).composite_over(scheme.surface),
+        "the track, opaque"
+    );
     assert_eq!(thumb.color, scheme.surface, "the thumb");
 }
 

@@ -147,6 +147,12 @@ pub struct Density {
     pub font_scale: f32,
 }
 
+impl compose_runtime::ComposeArg for Density {
+    fn same(&self, other: &Self) -> bool {
+        self == other
+    }
+}
+
 impl Default for Density {
     fn default() -> Self {
         Density { density: 1.0, font_scale: 1.0 }

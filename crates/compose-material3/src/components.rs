@@ -424,6 +424,10 @@ pub struct TextFieldColors {
     pub focused_label_color: Color,
     pub placeholder_color: Color,
     pub disabled_text_color: Color,
+    pub disabled_container_color: Color,
+    pub disabled_indicator_color: Color,
+    pub disabled_label_color: Color,
+    pub disabled_placeholder_color: Color,
 }
 
 impl compose_runtime::ComposeArg for TextFieldColors {
@@ -450,6 +454,10 @@ impl TextFieldDefaults {
             focused_label_color: scheme.primary,
             placeholder_color: scheme.on_surface_variant,
             disabled_text_color: scheme.on_surface.with_alpha(0.38),
+            disabled_container_color: scheme.on_surface.with_alpha(0.04),
+            disabled_indicator_color: scheme.on_surface.with_alpha(0.38),
+            disabled_label_color: scheme.on_surface.with_alpha(0.38),
+            disabled_placeholder_color: scheme.on_surface.with_alpha(0.38),
         }
     }
 
@@ -558,12 +566,23 @@ pub fn TextField(
 ) {
     let focused = remember(|| mutable_state_of(false));
     let is_focused = focused.get();
-    let indicator =
-        if is_focused { colors.focused_indicator_color } else { colors.unfocused_indicator_color };
+    let indicator = match (enabled, is_focused) {
+        (false, _) => colors.disabled_indicator_color,
+        (true, true) => colors.focused_indicator_color,
+        (true, false) => colors.unfocused_indicator_color,
+    };
     let text_color = if enabled { colors.text_color } else { colors.disabled_text_color };
     let style = TextStyle { color: text_style.color.or(text_color), ..text_style };
     let typography = MaterialTheme::typography();
-    let label_color = if is_focused { colors.focused_label_color } else { colors.label_color };
+    let label_color = match (enabled, is_focused) {
+        (false, _) => colors.disabled_label_color,
+        (true, true) => colors.focused_label_color,
+        (true, false) => colors.label_color,
+    };
+    let container_color =
+        if enabled { colors.container_color } else { colors.disabled_container_color };
+    let placeholder_color =
+        if enabled { colors.placeholder_color } else { colors.disabled_placeholder_color };
     let empty = value.is_empty();
     let has_label = label.is_some();
     // The container, label and placeholder are the field's decoration, inside the text field
@@ -576,7 +595,7 @@ pub fn TextField(
                 Dp::UNSPECIFIED,
                 Dp::UNSPECIFIED,
             ))
-            .background_shape(colors.container_color, TextFieldDefaults::shape())
+            .background_shape(container_color, TextFieldDefaults::shape())
             .on_focus_changed(move |now| focused.set(now));
         let showing_placeholder = empty && placeholder.is_some();
         let policy =
@@ -601,7 +620,7 @@ pub fn TextField(
             if empty && let Some(placeholder) = placeholder.clone() {
                 Box!({
                     CompositionLocalProvider(
-                        LOCAL_CONTENT_COLOR.provides(colors.placeholder_color),
+                        LOCAL_CONTENT_COLOR.provides(placeholder_color),
                         || {
                             CompositionLocalProvider(LOCAL_TEXT_STYLE.provides(style), || {
                                 placeholder()

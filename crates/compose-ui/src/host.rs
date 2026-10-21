@@ -37,7 +37,13 @@ pub struct UiHost {
     /// Content to compose at the next frame.
     pending_content: RefCell<Option<Box<dyn Fn()>>>,
     waker: Waker,
+    /// The density content sees as `LOCAL_DENSITY`.
+    density: compose_runtime::OwnedState<Density>,
 }
+
+/// The window's density, as Compose's `LocalDensity`: what composition converts `Dp` with.
+pub static LOCAL_DENSITY: compose_runtime::CompositionLocal<Density> =
+    compose_runtime::CompositionLocal::new("LocalDensity", Density::default);
 
 impl UiHost {
     /// A host of `size` pixels at `density`, measuring text with `text_measurer`.
@@ -74,6 +80,7 @@ impl UiHost {
             framing,
             pending_content: RefCell::new(None),
             waker,
+            density: compose_runtime::mutable_state_of(density),
         }
     }
 
@@ -131,6 +138,7 @@ impl UiHost {
 
     pub fn set_density(&mut self, density: Density) {
         self.with_tree(|tree| tree.set_density(density));
+        self.density.set(density);
         self.wake();
     }
 
@@ -169,7 +177,13 @@ impl UiHost {
         let content = self.pending_content.borrow_mut().take();
         let composed = content.is_some();
         if let Some(content) = content {
-            self.composition.set_content(content);
+            let density = self.density.handle();
+            self.composition.set_content(move || {
+                compose_runtime::CompositionLocalProvider(
+                    LOCAL_DENSITY.provides(density.get()),
+                    &*content,
+                )
+            });
         }
         let mut recomposed =
             (self.composition.has_invalidations() && self.composition.recompose()) || composed;

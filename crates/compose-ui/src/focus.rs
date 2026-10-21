@@ -53,6 +53,11 @@ impl UiTree {
     /// Focuses `node`'s focus target or, if it has none, the first one below it, as Compose's
     /// `FocusRequester.requestFocus()`.
     pub(crate) fn request_focus_into(&mut self, node: NodeId, actions: &mut Vec<Action>) {
+        self.focus_into(node, true, actions);
+    }
+
+    /// Focuses the first focus target at or below `node`; with `scroll`, scrolled into view.
+    pub(crate) fn focus_into(&mut self, node: NodeId, scroll: bool, actions: &mut Vec<Action>) {
         let Some(node) = self.first_focus_target_at_or_below(node) else { return };
         if self.focused() == Some(node) {
             return;
@@ -63,16 +68,19 @@ impl UiTree {
         self.tell_target(node, index, true, actions);
         self.focus_listeners_dirty = true;
         // A focused node in a scrolling container is scrolled into view, as Compose's.
-        self.bring_into_view(node);
+        if scroll {
+            self.bring_into_view(node);
+        }
     }
 
     /// Asks the scrolling ancestors of `node` to show it, innermost first, each shown where
     /// the scrolling inside it will put it.
     pub fn bring_into_view(&mut self, node: NodeId) {
         let mut rect = self.bounds_in_root(node);
-        let mut ancestor = self.node(node).parent;
+        // An overlay's containers are its own: the ones around its host don't show it.
+        let mut ancestor = if self.node(node).overlay { None } else { self.node(node).parent };
         while let Some(id) = ancestor {
-            ancestor = self.node(id).parent;
+            ancestor = if self.node(id).overlay { None } else { self.node(id).parent };
             let mut layer = 0;
             for index in 0..self.node(id).chain.len() {
                 let origin = self.layer_origin(id, layer.min(self.node(id).layers.len() - 1));
@@ -281,13 +289,27 @@ impl UiTree {
         false
     }
 
-    /// The nodes that can take focus, in tree order: what Tab moves through.
+    /// The nodes that can take focus, in tree order: what Tab moves through. While an overlay
+    /// that took the focus shows (a dialog, a menu), only its own, as a window of its own; the
+    /// overlays that can't take it (a popup) have none.
     pub fn focus_order(&mut self) -> Vec<NodeId> {
+        let modal = self.overlays.iter().rev().copied().find(|&node| {
+            self.get(node).is_some_and(|value| value.overlay && value.placed)
+                && self.overlay_node(node).is_some_and(|overlay| overlay.focus_on_open)
+        });
+        let start = modal.unwrap_or(self.root_id());
         let mut order = Vec::new();
-        let mut stack = vec![self.root_id()];
+        let mut stack = vec![start];
         while let Some(node) = stack.pop() {
             if !self.node(node).placed {
                 continue;
+            }
+            if node != start && self.node(node).overlay {
+                let takes_focus =
+                    self.overlay_node(node).is_some_and(|overlay| overlay.focus_on_open);
+                if !takes_focus || modal.is_some() {
+                    continue;
+                }
             }
             if self.focus_target_index(node).is_some() {
                 order.push(node);

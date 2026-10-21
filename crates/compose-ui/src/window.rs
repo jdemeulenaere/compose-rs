@@ -134,13 +134,22 @@ pub fn PopupWithPositionProvider(
         Modifier,
         host,
         compose_runtime::callback(move || {
-            // Under the popup, the whole window: a click there dismisses it.
+            // Under the popup, the whole window: a press there dismisses it. A focusable popup
+            // takes the press (what's beneath gets nothing while it shows); another lets it
+            // through, as Android's non-focusable popup windows (`FLAG_NOT_TOUCH_MODAL`).
             if properties.dismiss_on_click_outside
                 && let Some(dismiss) = on_dismiss_request.clone()
             {
-                let catcher = Modifier.overlay(window.clone(), false).then_custom(DismissOnClick {
+                let outside = if properties.focusable {
+                    Modifier.overlay(window.clone(), false)
+                } else {
+                    Modifier.overlay_passing_through(window.clone())
+                };
+                let catcher = outside.then_custom(DismissOnClick {
                     on_dismiss: dismiss,
                     inside: Rc::new(Cell::new(None)),
+                    on_press: true,
+                    modal: properties.focusable,
                 });
                 Layout(catcher, fill.clone(), compose_runtime::callback(|| {}));
             }
@@ -192,6 +201,8 @@ pub fn Dialog(
                         compose_runtime::callback(|| {})
                     },
                     inside: inside.clone(),
+                    on_press: false,
+                    modal: true,
                 })
                 .focusable(true);
             if properties.dismiss_on_back_press {
@@ -338,16 +349,21 @@ impl MeasurePolicy for CenterLayout {
     }
 }
 
-/// Takes every pointer event (what's beneath gets none), and calls `on_dismiss` for a click
-/// outside `inside` (all of it if `None`).
+/// Calls `on_dismiss` for a press (`on_press`, a popup's) or a click (a dialog's) outside
+/// `inside` (all of it if `None`); `modal`, it takes every pointer event (what's beneath gets
+/// none).
 struct DismissOnClick {
     on_dismiss: Callback,
     inside: Rc<Cell<Option<Rect>>>,
+    on_press: bool,
+    modal: bool,
 }
 
 struct DismissOnClickNode {
     on_dismiss: Callback,
     inside: Rc<Cell<Option<Rect>>>,
+    on_press: bool,
+    modal: bool,
     pressed_outside: bool,
 }
 
@@ -356,6 +372,8 @@ impl ModifierNodeElement for DismissOnClick {
         Box::new(DismissOnClickNode {
             on_dismiss: self.on_dismiss.clone(),
             inside: self.inside.clone(),
+            on_press: self.on_press,
+            modal: self.modal,
             pressed_outside: false,
         })
     }
@@ -363,11 +381,16 @@ impl ModifierNodeElement for DismissOnClick {
         if let Some(node) = node.downcast_mut::<DismissOnClickNode>() {
             node.on_dismiss = self.on_dismiss.clone();
             node.inside = self.inside.clone();
+            node.on_press = self.on_press;
+            node.modal = self.modal;
         }
     }
     fn same(&self, other: &dyn ModifierNodeElement) -> bool {
         other.downcast_ref::<DismissOnClick>().is_some_and(|other| {
-            other.on_dismiss.ptr_eq(&self.on_dismiss) && Rc::ptr_eq(&other.inside, &self.inside)
+            other.on_dismiss.ptr_eq(&self.on_dismiss)
+                && Rc::ptr_eq(&other.inside, &self.inside)
+                && other.on_press == self.on_press
+                && other.modal == self.modal
         })
     }
     fn name(&self) -> &'static str {
@@ -389,10 +412,24 @@ impl PointerInputModifierNode for DismissOnClickNode {
         _bounds: IntSize,
         context: &mut EventContext<'_>,
     ) {
+        let outside = self.inside.get().is_none_or(|inside| !inside.contains(event.position));
+        // A popup's press outside dismisses it before anything beneath handles it.
+        if self.on_press {
+            if pass == PointerEventPass::Initial
+                && event.kind == PointerEventType::Press
+                && outside
+                && !event.consumed
+            {
+                context.call(&self.on_dismiss);
+            }
+            if self.modal && pass == PointerEventPass::Main {
+                event.consume();
+            }
+            return;
+        }
         if pass != PointerEventPass::Main {
             return;
         }
-        let outside = self.inside.get().is_none_or(|inside| !inside.contains(event.position));
         match event.kind {
             PointerEventType::Press => self.pressed_outside = outside && !event.consumed,
             PointerEventType::Release
@@ -403,7 +440,9 @@ impl PointerInputModifierNode for DismissOnClickNode {
             _ => {}
         }
         // Modal: nothing beneath gets it.
-        event.consume();
+        if self.modal {
+            event.consume();
+        }
     }
 
     fn on_cancel_pointer_input(&mut self) {

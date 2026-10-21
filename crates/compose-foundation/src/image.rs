@@ -50,9 +50,9 @@ impl ContentScale {
     }
 }
 
-/// A bitmap, as Compose's `Image(bitmap, contentDescription, …)`: as large as its pixels,
-/// within the constraints (its aspect ratio kept), drawn scaled by `content_scale` and placed by
-/// `alignment` in its node, clipped to it. `content_description` is what accessibility reads;
+/// A bitmap, as Compose's `Image(bitmap, contentDescription, …)`: its pixels' size within the
+/// constraints, scaled by `content_scale` (a `FillWidth` banner as tall as its scaled width),
+/// drawn scaled by `content_scale` and placed by `alignment` in its node, clipped to it. `content_description` is what accessibility reads;
 /// `None` for decoration.
 #[composable]
 #[allow(non_snake_case)]
@@ -137,31 +137,45 @@ impl ModifierNode for ImageNode {
 }
 
 impl LayoutModifierNode for ImageNode {
-    /// Its pixels' size within the constraints, scaled down (its aspect ratio kept) to fit, as
-    /// Compose's painter node.
+    /// Its pixels' size within the constraints, scaled by its content scale, as Compose's
+    /// painter node (`modifyConstraints`): with fixed constraints, their size.
     fn measure(
         &mut self,
         scope: &mut MeasureScope<'_>,
         content: Measurable,
         constraints: Constraints,
     ) -> MeasureResult {
-        let intrinsic = Size::new(self.bitmap.width() as f32, self.bitmap.height() as f32);
-        let size = if constraints.min_width == constraints.max_width
-            && constraints.min_height == constraints.max_height
-        {
+        let bounded = constraints.max_width != Constraints::INFINITY
+            && constraints.max_height != Constraints::INFINITY;
+        let fixed = constraints.min_width == constraints.max_width
+            && constraints.min_height == constraints.max_height;
+        let size = if bounded && fixed {
             IntSize::new(constraints.max_width, constraints.max_height)
-        } else if intrinsic.width <= 0.0 || intrinsic.height <= 0.0 {
-            IntSize::new(constraints.min_width, constraints.min_height)
         } else {
-            let bound =
-                |max: i32| if max == Constraints::INFINITY { f32::INFINITY } else { max as f32 };
-            let scale = (bound(constraints.max_width) / intrinsic.width)
-                .min(bound(constraints.max_height) / intrinsic.height)
-                .min(1.0);
-            constraints.constrain(IntSize::new(
-                (intrinsic.width * scale).round() as i32,
-                (intrinsic.height * scale).round() as i32,
-            ))
+            let (width, height) = (self.bitmap.width() as i32, self.bitmap.height() as i32);
+            let constrained = Size::new(
+                constraints.constrain_width(if width > 0 { width } else { constraints.min_width })
+                    as f32,
+                constraints.constrain_height(if height > 0 {
+                    height
+                } else {
+                    constraints.min_height
+                }) as f32,
+            );
+            let scaled = if constrained.width <= 0.0 || constrained.height <= 0.0 {
+                Size::new(0.0, 0.0)
+            } else {
+                let source = Size::new(
+                    if width > 0 { width as f32 } else { constrained.width },
+                    if height > 0 { height as f32 } else { constrained.height },
+                );
+                let (x, y) = self.content_scale.scale_factor(source, constrained);
+                Size::new(source.width * x, source.height * y)
+            };
+            IntSize::new(
+                constraints.constrain_width(scaled.width.round() as i32),
+                constraints.constrain_height(scaled.height.round() as i32),
+            )
         };
         let placeable = scope.measure(content, Constraints::fixed(size.width, size.height));
         scope.place(&placeable, 0, 0);

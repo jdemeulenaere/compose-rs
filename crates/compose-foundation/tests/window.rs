@@ -74,7 +74,7 @@ fn a_popup_shows_over_its_anchor_takes_no_room_and_dismisses_on_a_click_outside(
     tap(&mut ui, 20.0, 60.0);
     assert_eq!(CLICKS.with(Cell::get), 0);
     ui.on_node_with_tag("popup").assert_exists();
-    // A tap outside dismisses it, and goes no further.
+    // A tap outside dismisses it (a non-focusable popup lets it through: nothing is there).
     tap(&mut ui, 250.0, 250.0);
     ui.on_node_with_tag("popup").assert_does_not_exist();
     assert!(!open.get());

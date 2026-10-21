@@ -126,6 +126,21 @@ impl MeasureScope<'_> {
         Placeable { measurable, width: size.width, height: size.height }
     }
 
+    /// The width `measurable` takes when its width is unbounded and its height at most
+    /// `height`, as Compose's `maxIntrinsicWidth` for layouts that don't compute their own:
+    /// measured to ask, then to be measured again (with `measure`) for its place. Costs a
+    /// measurement of its subtree.
+    pub fn max_intrinsic_width(&mut self, measurable: Measurable, height: i32) -> i32 {
+        assert_eq!(
+            self.tree.parent_of(measurable.node),
+            Some(self.node),
+            "compose-ui: a policy asked the width of a node that isn't its child"
+        );
+        assert_eq!(measurable.layer, 0, "compose-ui: intrinsic widths are asked of children");
+        let probe = Constraints::new(0, Constraints::INFINITY, 0, height);
+        self.tree.measure_node(measurable.node, probe).width
+    }
+
     /// Places `placeable` at `x`, `y` in this node's coordinates, as `Placeable.place`.
     pub fn place(&mut self, placeable: &Placeable, x: i32, y: i32) {
         self.place_at(placeable, IntOffset::new(x, y))

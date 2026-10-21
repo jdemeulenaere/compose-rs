@@ -203,8 +203,12 @@ pub struct UiTree {
     pub(crate) focus_listeners_dirty: bool,
     /// Actions queued outside dispatch, run by the host after the frame.
     pub(crate) pending_actions: Vec<crate::input::Action>,
-    /// The overlay nodes, in the order they became overlays: later ones over earlier ones.
+    /// The overlay nodes, in the order they became overlays: later ones over earlier ones (and
+    /// siblings in their order, a popup over its outside).
     pub(crate) overlays: Vec<NodeId>,
+    /// Overlays that took the focus when they opened, each with what had it before: focused
+    /// again once the overlay is gone, as a window regains its focus.
+    pub(crate) focus_restore: Vec<(NodeId, Option<NodeId>)>,
     /// The window's size, from the last layout.
     pub(crate) window: IntSize,
     /// Counts placements, for children's placement order.
@@ -233,6 +237,7 @@ impl UiTree {
             focus_listeners_dirty: false,
             pending_actions: Vec::new(),
             overlays: Vec::new(),
+            focus_restore: Vec::new(),
             window: IntSize::new(0, 0),
             place_serial: 0,
             captures: Vec::new(),
@@ -603,6 +608,14 @@ impl UiTree {
     }
 
     /// The bounds of `node` in the root, in pixels.
+    /// `node`'s overlay modifier node, if it's an overlay.
+    pub(crate) fn overlay_node(&self, node: NodeId) -> Option<&crate::overlay::OverlayNode> {
+        self.get(node)?
+            .chain
+            .iter()
+            .find_map(|entry| entry.downcast_ref::<crate::overlay::OverlayNode>())
+    }
+
     pub fn bounds_in_root(&self, node: NodeId) -> crate::unit::Rect {
         let origin = self.layer_origin(node, 0);
         let size = self.node(node).layers[0].measured;

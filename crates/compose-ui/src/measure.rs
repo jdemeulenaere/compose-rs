@@ -13,6 +13,15 @@ impl UiTree {
     /// Measures and places the tree in a root of `size` pixels. Does nothing when nothing
     /// changed since the last call with this size.
     pub fn layout(&mut self, size: IntSize) -> bool {
+        if self.window != size {
+            // Popups are measured with the window's size, whatever their host's constraints.
+            for index in 0..self.overlays.len() {
+                let overlay = self.overlays[index];
+                if let Some(host) = self.get(overlay).and_then(|value| value.parent) {
+                    self.invalidate_measure(host);
+                }
+            }
+        }
         self.window = size;
         let root = self.root_id();
         let constraints = Constraints::fixed(size.width, size.height);
@@ -30,12 +39,14 @@ impl UiTree {
         true
     }
 
-    /// Places the overlays in the root with their providers, from their anchors' bounds (the
-    /// layout around the popup, the parent of its host), and moves the focus into those that
-    /// ask for it when they first appear.
+    /// Places the overlays in the root with their providers, from their anchors' bounds (inside
+    /// the modifiers of the layout around the popup, the parent of its host, as Compose's
+    /// `parentLayoutCoordinates`), and moves the focus into those that ask for it when they
+    /// first appear; once one that took it is gone, what had it before gets it back.
     fn position_overlays(&mut self) {
         let mut overlays = std::mem::take(&mut self.overlays);
         overlays.retain(|node| self.get(*node).is_some_and(|value| value.overlay));
+        self.order_sibling_overlays(&mut overlays);
         self.overlays = overlays;
         for index in 0..self.overlays.len() {
             let node = self.overlays[index];
@@ -43,13 +54,14 @@ impl UiTree {
             let size = value.layers[0].size;
             let anchor_node = value.parent.and_then(|host| self.node(host).parent).or(value.parent);
             let anchor = anchor_node.map_or(crate::unit::Rect::new(0.0, 0.0, 0.0, 0.0), |anchor| {
-                self.bounds_in_root(anchor)
+                let inner = self.node(anchor).layers.len() - 1;
+                let origin = self.layer_origin(anchor, inner);
+                let size = self.node(anchor).layers[inner].measured;
+                crate::unit::Rect::from_offset_size(origin, size.into())
             });
             let window = self.window;
-            let Some((provider, focus)) = self.node(node).chain.iter().find_map(|entry| {
-                entry.downcast_ref::<crate::overlay::OverlayNode>().map(|overlay| {
-                    (overlay.provider.clone(), overlay.focus_on_open && !overlay.focused_once)
-                })
+            let Some((provider, focus)) = self.overlay_node(node).map(|overlay| {
+                (overlay.provider.clone(), overlay.focus_on_open && !overlay.focused_once)
             }) else {
                 continue;
             };
@@ -62,8 +74,63 @@ impl UiTree {
                         overlay.focused_once = true;
                     }
                 }
+                let before = self.focused();
+                self.focus_restore.push((node, before));
                 let mut actions = std::mem::take(&mut self.pending_actions);
-                self.request_focus_into(node, &mut actions);
+                self.focus_into(node, false, &mut actions);
+                self.pending_actions = actions;
+            }
+        }
+        self.restore_focus_of_closed_overlays();
+    }
+
+    /// Overlays of one host (a popup and its outside) in the host's order of children,
+    /// whenever each became one: the popup over its outside.
+    fn order_sibling_overlays(&self, overlays: &mut [NodeId]) {
+        if overlays.len() < 2 {
+            return;
+        }
+        let child_index = |node: NodeId| {
+            let parent = self.node(node).parent?;
+            self.node(parent).children.iter().position(|child| child.node == node)
+        };
+        for first in 0..overlays.len() {
+            let parent = self.node(overlays[first]).parent;
+            let positions: Vec<usize> = (first..overlays.len())
+                .filter(|&index| self.node(overlays[index]).parent == parent)
+                .collect();
+            if positions.len() < 2 || positions[0] != first {
+                continue;
+            }
+            let mut members: Vec<NodeId> = positions.iter().map(|&index| overlays[index]).collect();
+            members.sort_by_key(|&node| child_index(node));
+            for (&index, member) in positions.iter().zip(members) {
+                overlays[index] = member;
+            }
+        }
+    }
+
+    /// Gives the focus back to what had it before an overlay that took it, once that overlay
+    /// is gone and nothing else took it meanwhile.
+    fn restore_focus_of_closed_overlays(&mut self) {
+        let mut index = 0;
+        while index < self.focus_restore.len() {
+            let (overlay, before) = self.focus_restore[index];
+            if self.get(overlay).is_some_and(|value| value.overlay) {
+                index += 1;
+                continue;
+            }
+            self.focus_restore.remove(index);
+            // Overlays opened over it pass their restore on to it.
+            for later in 0..self.focus_restore.len() {
+                if self.focus_restore[later].1.is_some_and(|node| self.get(node).is_none()) {
+                    self.focus_restore[later].1 = before;
+                }
+            }
+            let focus_lost = self.focused().is_none_or(|focused| self.get(focused).is_none());
+            if focus_lost && let Some(before) = before.filter(|node| self.get(*node).is_some()) {
+                let mut actions = std::mem::take(&mut self.pending_actions);
+                self.focus_into(before, false, &mut actions);
                 self.pending_actions = actions;
             }
         }

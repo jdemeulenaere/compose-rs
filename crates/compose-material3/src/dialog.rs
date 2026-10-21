@@ -2,6 +2,7 @@
 
 use std::rc::Rc;
 
+use compose_foundation::ScrollModifiers as _;
 use compose_foundation::layout::{Arrangement, Box, Column, ColumnScope, Row};
 use compose_runtime::{CompositionLocalProvider, composable, remember};
 use compose_ui::{
@@ -179,26 +180,51 @@ pub fn AlertDialog(
 
 // ---- DropdownMenu ----------------------------------------------------------------------------
 
-/// Places a menu below its anchor, at its start (moved by `offset`), above it if there's no room
-/// below, and within the window, as Compose's `DropdownMenuPositionProvider`.
+/// How far a menu stays from the window's top and bottom, as Compose's `MenuVerticalMargin`.
+const MENU_VERTICAL_MARGIN: Dp = Dp(48.0);
+
+/// Places a menu as Compose's `DropdownMenuPositionProvider`: below its anchor at its start
+/// (moved by `offset`), else ending with the anchor's end, else at the window's end; below,
+/// else above, else centered on the anchor's top, else at the window's bottom, keeping 48 dp
+/// from the window's top and bottom.
 struct DropdownMenuPosition {
     offset: IntOffset,
+    vertical_margin: i32,
 }
 
 impl PopupPositionProvider for DropdownMenuPosition {
     fn position(&self, anchor: Rect, window: IntSize, popup: IntSize) -> IntOffset {
-        let below = anchor.bottom.round() as i32 + self.offset.y;
-        let above = anchor.top.round() as i32 - self.offset.y - popup.height;
-        let y = if below + popup.height <= window.height || above < 0 { below } else { above };
-        let x = (anchor.left.round() as i32 + self.offset.x).min(window.width - popup.width).max(0);
-        IntOffset::new(x, y.min(window.height - popup.height).max(0))
+        let (left, right) = (anchor.left.round() as i32, anchor.right.round() as i32);
+        let (top, bottom) = (anchor.top.round() as i32, anchor.bottom.round() as i32);
+        let start_to_anchor_start = left + self.offset.x;
+        let end_to_anchor_end = right - self.offset.x - popup.width;
+        let to_window = if left >= 0 { window.width - popup.width } else { 0 };
+        let x = [start_to_anchor_start, end_to_anchor_end, to_window]
+            .into_iter()
+            .find(|&x| x >= 0 && x + popup.width <= window.width)
+            .unwrap_or(end_to_anchor_end);
+        let margin = self.vertical_margin;
+        let top_to_anchor_bottom = (bottom + self.offset.y).max(margin);
+        let bottom_to_anchor_top = top - self.offset.y - popup.height;
+        let center_to_anchor_top = top - popup.height / 2;
+        let bottom_to_window_bottom = window.height - popup.height - margin;
+        let y = [
+            top_to_anchor_bottom,
+            bottom_to_anchor_top,
+            center_to_anchor_top,
+            bottom_to_window_bottom,
+        ]
+        .into_iter()
+        .find(|&y| y >= margin && y + popup.height <= window.height - margin)
+        .unwrap_or(bottom_to_anchor_top);
+        IntOffset::new(x, y)
     }
 }
 
 /// A menu shown while `expanded`, below its anchor (the layout around it), as Compose's
-/// `DropdownMenu`: on the extra-small shape in the surface container, 112 to 280 dp wide, 8 dp
-/// above and below its items; it takes the focus, and a click outside or Escape calls
-/// `on_dismiss_request`.
+/// `DropdownMenu`: on the extra-small shape in the surface container, as wide as its widest
+/// item (112 to 280 dp), 8 dp above and below its items, scrolling if taller than the window;
+/// it takes the focus, and a click outside or Escape calls `on_dismiss_request`.
 #[composable]
 #[allow(non_snake_case)]
 pub fn DropdownMenu(
@@ -209,18 +235,22 @@ pub fn DropdownMenu(
     content: impl Fn(ColumnScope) + 'static,
 ) {
     if expanded {
-        let provider = compose_runtime::remember_keyed(OffsetKey(offset), || {
-            Rc::new(DropdownMenuPosition { offset }) as Rc<dyn PopupPositionProvider>
+        let density = compose_ui::LOCAL_DENSITY.current();
+        let vertical_margin = density.round_to_px(MENU_VERTICAL_MARGIN);
+        let provider = compose_runtime::remember_keyed(OffsetKey(offset, vertical_margin), || {
+            Rc::new(DropdownMenuPosition { offset, vertical_margin })
+                as Rc<dyn PopupPositionProvider>
         });
         let column = remember(|| Rc::new(MenuColumn) as Rc<dyn MeasurePolicy>);
+        let scroll = compose_foundation::remember_scroll_state();
         let scheme = MaterialTheme::color_scheme();
         compose_ui::PopupWithPositionProvider(
             provider,
             Some(on_dismiss_request),
             PopupProperties { focusable: true, ..PopupProperties::default() },
             compose_runtime::callback(move || {
-                let (modifier, content, column) =
-                    (modifier.clone(), content.clone(), column.clone());
+                let (modifier, content, column, scroll) =
+                    (modifier.clone(), content.clone(), column.clone(), scroll.clone());
                 Surface(
                     modifier,
                     MaterialTheme::shapes().extra_small,
@@ -230,7 +260,9 @@ pub fn DropdownMenu(
                     compose_runtime::callback(move || {
                         let content = content.clone();
                         Layout(
-                            Modifier.padding_horizontal_vertical(0.dp(), 8.dp()),
+                            Modifier
+                                .vertical_scroll(scroll.clone())
+                                .padding_horizontal_vertical(0.dp(), 8.dp()),
                             column.clone(),
                             compose_runtime::callback(move || content(ColumnScope::__new())),
                         );
@@ -242,7 +274,7 @@ pub fn DropdownMenu(
 }
 
 #[derive(Clone, Copy, PartialEq)]
-struct OffsetKey(IntOffset);
+struct OffsetKey(IntOffset, i32);
 
 impl compose_runtime::ComposeArg for OffsetKey {
     fn same(&self, other: &Self) -> bool {
@@ -250,8 +282,8 @@ impl compose_runtime::ComposeArg for OffsetKey {
     }
 }
 
-/// A menu's items, one under the other, each at least the menu's minimum width (112 dp), at
-/// most 280 dp.
+/// A menu's items, one under the other, all as wide as the widest (at its natural width), at
+/// least 112 dp and at most 280 dp, as Compose's `width(IntrinsicSize.Max)` menu.
 struct MenuColumn;
 
 impl MeasurePolicy for MenuColumn {
@@ -264,10 +296,16 @@ impl MeasurePolicy for MenuColumn {
         let density = scope.density();
         let min = density.round_to_px(112.dp()).min(constraints.max_width);
         let max = density.round_to_px(280.dp()).min(constraints.max_width).max(min);
-        let item = Constraints::new(min, max, 0, Constraints::INFINITY);
+        // Each item's natural width first, then all at the widest.
+        let widest = measurables
+            .iter()
+            .map(|&child| scope.max_intrinsic_width(child, Constraints::INFINITY))
+            .max()
+            .unwrap_or(0);
+        let width = widest.clamp(min, max);
+        let item = Constraints::new(width, width, 0, Constraints::INFINITY);
         let placeables: Vec<Placeable> =
             measurables.iter().map(|&child| scope.measure(child, item)).collect();
-        let width = placeables.iter().map(|placeable| placeable.width).max().unwrap_or(min);
         let mut y = 0;
         for placeable in &placeables {
             scope.place(placeable, 0, y);
@@ -281,8 +319,8 @@ impl MeasurePolicy for MenuColumn {
     }
 }
 
-/// An item of a menu, as Compose's `DropdownMenuItem`: 48 dp high, 12 dp in, its text in the
-/// label-large style, with optional icons at its ends.
+/// An item of a menu, as Compose's `DropdownMenuItem`: at least 48 dp high, 12 dp in, its text
+/// in the label-large style, with optional icons at its ends.
 #[composable]
 #[allow(non_snake_case)]
 pub fn DropdownMenuItem(
@@ -296,6 +334,12 @@ pub fn DropdownMenuItem(
     let scheme = MaterialTheme::color_scheme();
     let color = if enabled { scheme.on_surface } else { scheme.on_surface.with_alpha(0.38) };
     let label = MaterialTheme::typography().label_large;
+    let layout = {
+        let leading = leading_icon.is_some();
+        compose_runtime::remember_keyed(leading, move || {
+            Rc::new(MenuItemLayout { leading }) as Rc<dyn MeasurePolicy>
+        })
+    };
     let modifier = modifier
         .clickable_indicated(enabled, Some(Role::Button), color, on_click)
         .fill_max_width()
@@ -310,17 +354,16 @@ pub fn DropdownMenuItem(
         CompositionLocalProvider(LOCAL_TEXT_STYLE.provides(label), || {
             let (text, leading, trailing) =
                 (text.clone(), leading_icon.clone(), trailing_icon.clone());
-            Row(
+            Layout(
                 modifier.clone(),
-                Arrangement::spaced_by(12.dp()),
-                Alignment::CENTER_VERTICALLY,
-                compose_runtime::callback(move |row| {
+                layout.clone(),
+                compose_runtime::callback(move || {
                     if let Some(leading) = leading.clone() {
                         leading();
                     }
                     let text = text.clone();
                     Box(
-                        Modifier.weight(row, 1.0),
+                        Modifier,
                         Alignment::CENTER_START,
                         false,
                         compose_runtime::callback(move |_| text()),
@@ -332,4 +375,61 @@ pub fn DropdownMenuItem(
             );
         });
     });
+}
+
+/// A menu item's row: the leading icon, the text taking the rest of a bounded width, and the
+/// trailing icon at the end, 12 dp apart and centered vertically; at their natural widths when
+/// the width is unbounded (the menu asking how wide it would be).
+struct MenuItemLayout {
+    /// The first child is the leading icon (the text the second).
+    leading: bool,
+}
+
+impl MeasurePolicy for MenuItemLayout {
+    fn measure(
+        &self,
+        scope: &mut MeasureScope<'_>,
+        measurables: &[Measurable],
+        constraints: Constraints,
+    ) -> MeasureResult {
+        let gap = scope.density().round_to_px(12.dp());
+        let loose = Constraints::new(0, Constraints::INFINITY, 0, constraints.max_height);
+        let count = measurables.len();
+        let text_index = usize::from(self.leading).min(count.saturating_sub(1));
+        let mut placeables: Vec<Option<Placeable>> = vec![None; count];
+        let mut fixed = 0;
+        for (index, &child) in measurables.iter().enumerate() {
+            if index != text_index {
+                let placeable = scope.measure(child, loose);
+                fixed += placeable.width + gap;
+                placeables[index] = Some(placeable);
+            }
+        }
+        if let Some(&text) = measurables.get(text_index) {
+            let text_constraints = if constraints.max_width == Constraints::INFINITY {
+                loose
+            } else {
+                let room = (constraints.max_width - fixed).max(0);
+                Constraints::new(room, room, 0, constraints.max_height)
+            };
+            placeables[text_index] = Some(scope.measure(text, text_constraints));
+        }
+        let content: i32 =
+            placeables.iter().flatten().map(|placeable| placeable.width).sum::<i32>()
+                + gap * (count.saturating_sub(1) as i32);
+        let width = constraints.constrain_width(content);
+        let height = constraints.constrain_height(
+            placeables.iter().flatten().map(|placeable| placeable.height).max().unwrap_or(0),
+        );
+        let mut x = 0;
+        for placeable in placeables.iter().flatten() {
+            scope.place(placeable, x, (height - placeable.height) / 2);
+            x += placeable.width + gap;
+        }
+        scope.layout(width, height)
+    }
+
+    fn debug_name(&self) -> &'static str {
+        "DropdownMenuItem"
+    }
 }

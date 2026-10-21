@@ -52,11 +52,24 @@ impl SwitchDefaults {
             unchecked_thumb_color: scheme.outline,
             unchecked_track_color: scheme.surface_container_highest,
             unchecked_border_color: scheme.outline,
+            // Opaque, over the surface, as Compose's `compositeOver(colorScheme.surface)`.
             disabled_checked_thumb_color: scheme.surface,
-            disabled_checked_track_color: scheme.on_surface.with_alpha(0.12),
-            disabled_unchecked_thumb_color: scheme.on_surface.with_alpha(0.38),
-            disabled_unchecked_track_color: scheme.surface_container_highest.with_alpha(0.12),
-            disabled_unchecked_border_color: scheme.on_surface.with_alpha(0.12),
+            disabled_checked_track_color: scheme
+                .on_surface
+                .with_alpha(0.12)
+                .composite_over(scheme.surface),
+            disabled_unchecked_thumb_color: scheme
+                .on_surface
+                .with_alpha(0.38)
+                .composite_over(scheme.surface),
+            disabled_unchecked_track_color: scheme
+                .surface_container_highest
+                .with_alpha(0.12)
+                .composite_over(scheme.surface),
+            disabled_unchecked_border_color: scheme
+                .on_surface
+                .with_alpha(0.12)
+                .composite_over(scheme.surface),
         }
     }
 }
@@ -226,6 +239,8 @@ impl DrawModifierNode for SwitchNode {
 pub struct RadioButtonColors {
     pub selected_color: Color,
     pub unselected_color: Color,
+    pub disabled_selected_color: Color,
+    pub disabled_unselected_color: Color,
 }
 
 impl compose_runtime::ComposeArg for RadioButtonColors {
@@ -243,6 +258,8 @@ impl RadioButtonDefaults {
         RadioButtonColors {
             selected_color: scheme.primary,
             unselected_color: scheme.on_surface_variant,
+            disabled_selected_color: scheme.on_surface.with_alpha(DISABLED_ALPHA),
+            disabled_unselected_color: scheme.on_surface.with_alpha(DISABLED_ALPHA),
         }
     }
 }
@@ -338,9 +355,13 @@ impl DrawModifierNode for RadioNode {
     fn draw(&mut self, scope: &mut DrawScope<'_>) {
         let size = scope.size();
         let density = scope.density();
-        let color =
-            if self.selected { self.colors.selected_color } else { self.colors.unselected_color };
-        let color = if self.enabled { color } else { color.with_alpha(DISABLED_ALPHA) };
+        let colors = &self.colors;
+        let color = match (self.enabled, self.selected) {
+            (true, true) => colors.selected_color,
+            (true, false) => colors.unselected_color,
+            (false, true) => colors.disabled_selected_color,
+            (false, false) => colors.disabled_unselected_color,
+        };
         let stroke = density.to_px(2.dp());
         let center = Offset::new(size.width / 2.0, size.height / 2.0);
         let ring = size.width.min(size.height) / 2.0 - stroke / 2.0;
@@ -371,6 +392,11 @@ pub struct SliderColors {
     /// The steps' ticks on the active and the inactive track.
     pub active_tick_color: Color,
     pub inactive_tick_color: Color,
+    pub disabled_thumb_color: Color,
+    pub disabled_active_track_color: Color,
+    pub disabled_active_tick_color: Color,
+    pub disabled_inactive_track_color: Color,
+    pub disabled_inactive_tick_color: Color,
 }
 
 impl compose_runtime::ComposeArg for SliderColors {
@@ -391,6 +417,14 @@ impl SliderDefaults {
             inactive_track_color: scheme.surface_container_highest,
             active_tick_color: scheme.on_primary.with_alpha(0.38),
             inactive_tick_color: scheme.on_surface_variant.with_alpha(0.38),
+            disabled_thumb_color: scheme
+                .on_surface
+                .with_alpha(DISABLED_ALPHA)
+                .composite_over(scheme.surface),
+            disabled_active_track_color: scheme.on_surface.with_alpha(DISABLED_ALPHA),
+            disabled_active_tick_color: scheme.on_surface.with_alpha(DISABLED_ALPHA),
+            disabled_inactive_track_color: scheme.on_surface.with_alpha(0.12),
+            disabled_inactive_tick_color: scheme.on_surface.with_alpha(DISABLED_ALPHA),
         }
     }
 }
@@ -588,8 +622,8 @@ impl DrawModifierNode for SliderNode {
     fn draw(&mut self, scope: &mut DrawScope<'_>) {
         let size = scope.size();
         let density = scope.density();
-        let alpha =
-            |color: Color| if self.enabled { color } else { color.with_alpha(DISABLED_ALPHA) };
+        let colors = &self.colors;
+        let pick = |enabled: Color, disabled: Color| if self.enabled { enabled } else { disabled };
         let radius = density.to_px(THUMB) / 2.0;
         let track = density.to_px(4.dp());
         let center_y = size.height / 2.0;
@@ -599,12 +633,12 @@ impl DrawModifierNode for SliderNode {
         scope.draw_round_rect(
             Rect::new(start, center_y - half, end, center_y + half),
             [half; 4],
-            Paint::fill(alpha(self.colors.inactive_track_color)),
+            Paint::fill(pick(colors.inactive_track_color, colors.disabled_inactive_track_color)),
         );
         scope.draw_round_rect(
             Rect::new(start, center_y - half, x, center_y + half),
             [half; 4],
-            Paint::fill(alpha(self.colors.active_track_color)),
+            Paint::fill(pick(colors.active_track_color, colors.disabled_active_track_color)),
         );
         // A tick at each stop, as Compose's.
         if self.steps > 0 {
@@ -613,14 +647,14 @@ impl DrawModifierNode for SliderNode {
             for stop in 0..stops {
                 let at = start + (end - start) * stop as f32 / (stops - 1) as f32;
                 let color = if at <= x {
-                    self.colors.active_tick_color
+                    pick(colors.active_tick_color, colors.disabled_active_tick_color)
                 } else {
-                    self.colors.inactive_tick_color
+                    pick(colors.inactive_tick_color, colors.disabled_inactive_tick_color)
                 };
                 scope.draw_round_rect(
                     Rect::new(at - tick, center_y - tick, at + tick, center_y + tick),
                     [tick; 4],
-                    Paint::fill(alpha(color)),
+                    Paint::fill(color),
                 );
             }
         }
@@ -636,7 +670,7 @@ impl DrawModifierNode for SliderNode {
         scope.draw_round_rect(
             Rect::new(x - radius, center_y - radius, x + radius, center_y + radius),
             [radius; 4],
-            Paint::fill(alpha(self.colors.thumb_color)),
+            Paint::fill(pick(colors.thumb_color, colors.disabled_thumb_color)),
         );
     }
 }

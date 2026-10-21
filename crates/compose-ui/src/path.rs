@@ -369,8 +369,8 @@ pub struct ImageVector {
     pub default_height: crate::unit::Dp,
     pub viewport_width: f32,
     pub viewport_height: f32,
-    /// Each path with its fill (`None`: the tint, as icons' black paths are). Shared: a clone
-    /// copies nothing.
+    /// Each path with its fill (`None`: black, as Material's icons; tinted by `Icon`). Shared: a
+    /// clone copies nothing.
     pub paths: Arc<[(Arc<Path>, Option<crate::graphics::Color>)]>,
 }
 

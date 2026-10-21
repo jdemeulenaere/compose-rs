@@ -65,6 +65,28 @@ impl Color {
         Color(alpha << 24 | (self.0 & 0x00FF_FFFF))
     }
 
+    /// This color drawn over `background`, as `compositeOver`: an opaque color for an opaque
+    /// background.
+    pub fn composite_over(self, background: Color) -> Color {
+        let front = self.alpha() as f32 / 255.0;
+        let back = background.alpha() as f32 / 255.0;
+        let alpha = front + back * (1.0 - front);
+        if alpha <= 0.0 {
+            return Color(0);
+        }
+        let channel = |front_value: u8, back_value: u8| {
+            let value =
+                (front_value as f32 * front + back_value as f32 * back * (1.0 - front)) / alpha;
+            value.round().clamp(0.0, 255.0) as u32
+        };
+        Color(
+            ((alpha * 255.0).round() as u32) << 24
+                | channel(self.red(), background.red()) << 16
+                | channel(self.green(), background.green()) << 8
+                | channel(self.blue(), background.blue()),
+        )
+    }
+
     /// `self` if specified, else `other`, as `takeOrElse`.
     pub fn or(self, other: Color) -> Color {
         if self.is_specified() { self } else { other }

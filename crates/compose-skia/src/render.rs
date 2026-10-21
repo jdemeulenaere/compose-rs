@@ -97,7 +97,7 @@ pub fn draw_display_list(canvas: &Canvas, list: &DisplayList, text_measurer: &dy
                     );
                     canvas.draw_image_rect_with_sampling_options(
                         &skia,
-                        Some((&rect(src), skia_safe::canvas::SrcRectConstraint::Fast)),
+                        Some((&rect(src), skia_safe::canvas::SrcRectConstraint::Strict)),
                         rect(dst),
                         sampling,
                         &paint,
@@ -307,6 +307,10 @@ fn skia_image(image: &compose_ui::ImageBitmap) -> Option<skia_safe::Image> {
 pub fn decode_image(bytes: &[u8]) -> Option<compose_ui::ImageBitmap> {
     let encoded = skia_safe::Image::from_encoded(skia_safe::Data::new_copy(bytes))?;
     let (width, height) = (encoded.width(), encoded.height());
+    // Its header's size is trusted only up to 2^28 pixels (a gigabyte decoded).
+    if width <= 0 || height <= 0 || (width as u64) * (height as u64) > 1 << 28 {
+        return None;
+    }
     let info = skia_safe::ImageInfo::new(
         (width, height),
         skia_safe::ColorType::RGBA8888,
