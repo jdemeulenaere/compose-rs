@@ -60,7 +60,7 @@ pub fn Button(
 }
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __compose_call_Button_ceda1bb746811f5a {
+macro_rules! __compose_call_Button_ceda1bb746811f5a_N {
     ($($arguments:tt)*) => {
         ::compose::__private::call! { Button[on_click : callback 0, modifier : value = {
         Modifier }, enabled : value = { true }, content : callback 0] plain;
@@ -69,7 +69,7 @@ macro_rules! __compose_call_Button_ceda1bb746811f5a {
 }
 #[doc(hidden)]
 #[allow(unused_imports)]
-pub use __compose_call_Button_ceda1bb746811f5a as Button;
+pub use __compose_call_Button_ceda1bb746811f5a_N as Button;
 #[allow(non_snake_case)]
 fn Counter() {
     let __composer = ::compose::__private::current();
@@ -87,36 +87,29 @@ fn Counter() {
     {
         let count = remember(|| mutable_state_of(0));
         Button!(
-            on_click = @ memoize(count) move | | count.update(| c | c + 1), enabled =
-            count.get() > 0, @ memoize(count) { let __compose_region =
-            ::compose::__private::region(3955738544659413940u64); Text!("Count: {}",
-            count.get()); }
+            on_click = ::compose::__private::marked!((count) move | | count.update(| c |
+            c + 1)), enabled = count.get() > 0, ::compose::__private::marked!((count) {
+            let __compose_region = ::compose::__private::region(3955738544659413940u64);
+            Text!("Count: {}", count.get()); })
         );
         Toolbar(
             callback({
                 #[allow(unused_imports)]
                 use ::compose::__private::{KeyedProbe as _, UnkeyedProbe as _};
-                let __compose_probe = ::compose::__private::lambda_probe((
-                    (&&::compose::__private::ArgProbe(&count)).arg_key(),
-                ));
-                match __compose_probe {
-                    ::compose::__private::LambdaProbe::Hit(__compose_callback) => {
-                        __compose_callback
-                    }
-                    ::compose::__private::LambdaProbe::Miss(__compose_pending) => {
-                        __compose_pending.store(move || count.set(0))
-                    }
-                }
+                ::compose::__private::lambda_probe((
+                        (&&::compose::__private::ArgProbe(&count)).arg_key(),
+                    ))
+                    .resolve(move || count.set(0))
             }),
         );
     }
 }
 #[doc(hidden)]
-macro_rules! __compose_call_Counter_abf9ac1093febf76 {
+macro_rules! __compose_call_Counter_abf9ac1093febf76_N {
     ($($arguments:tt)*) => {
         ::compose::__private::call! { Counter[] plain; $($arguments)* }
     };
 }
 #[doc(hidden)]
 #[allow(unused_imports)]
-use __compose_call_Counter_abf9ac1093febf76 as Counter;
+use __compose_call_Counter_abf9ac1093febf76_N as Counter;

@@ -56,3 +56,20 @@ pub fn Section(tick: MutableState<u32>) {
     InlinedAlways("section always", tick);
     Generic(9u8, tick);
 }
+
+#[doc(hidden)]
+pub fn noop() {}
+
+#[doc(hidden)]
+pub const DEFAULT_LABEL: &str = "clicker";
+
+/// Defaults naming items of this crate through `crate::`: they resolve here, wherever the call
+/// macro is used. Like any macro's, they must be public (hidden from docs is fine).
+#[composable]
+pub fn Clicker(
+    #[default(crate::DEFAULT_LABEL)] label: &'static str,
+    #[default(crate::noop)] on_click: impl Fn() + 'static,
+) {
+    on_click();
+    let _ = label;
+}

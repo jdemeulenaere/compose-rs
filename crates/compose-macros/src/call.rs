@@ -48,9 +48,10 @@ impl Parse for Parameter {
     }
 }
 
-/// A closure or trailing block the caller's `#[composable]` marked with its captures:
-/// `@memoize(capture, …) { … }` or `@memoize(capture, …) |x| …`. Bound to a callback parameter,
-/// it is memoized on them; bound to another parameter, it is passed as written.
+/// A closure or block the caller's `#[composable]` marked with its captures:
+/// `::compose::__private::marked!((capture, …) |x| …)`. Bound to a callback parameter, it is
+/// memoized on them; bound to another parameter, it is passed as written. The marker is a macro
+/// that expands to its body, so a user's own PascalCase macro receiving it still works.
 pub(crate) struct Marked {
     captures: Vec<Ident>,
     unknown: bool,
@@ -64,18 +65,12 @@ pub(crate) enum MarkedBody {
 
 impl Parse for Marked {
     fn parse(input: ParseStream) -> syn::Result<Marked> {
-        input.parse::<Token![@]>()?;
-        let marker: Ident = input.parse()?;
-        if marker != "memoize" {
-            return Err(Error::new(marker.span(), "expected `@memoize`"));
-        }
         let content;
         parenthesized!(content in input);
         let captures: Punctuated<Ident, Token![,]> =
             Punctuated::parse_terminated_with(&content, |stream: ParseStream| {
                 stream.parse::<Ident>()
-            })
-            .or_else(|_| Ok::<_, Error>(Punctuated::new()))?;
+            })?;
         let mut unknown = false;
         let mut captures: Vec<Ident> = captures.into_iter().collect();
         if let Some(position) = captures.iter().position(|capture| capture == "__compose_unknown") {
@@ -89,6 +84,17 @@ impl Parse for Marked {
         };
         Ok(Marked { captures, unknown, body })
     }
+}
+
+/// Whether `path` is `::compose::__private::marked`.
+fn is_marker(path: &syn::Path) -> bool {
+    path.leading_colon.is_some()
+        && path.segments.len() == 3
+        && path
+            .segments
+            .iter()
+            .zip(["compose", "__private", "marked"])
+            .all(|(segment, name)| segment.ident == name)
 }
 
 impl Marked {
@@ -113,7 +119,9 @@ impl ToTokens for Marked {
             MarkedBody::Block(block) => block.to_token_stream(),
             MarkedBody::Closure(closure) => closure.to_token_stream(),
         };
-        tokens.extend(quote! { @memoize(#(#captures),* #separator #unknown) #body });
+        tokens.extend(
+            quote! { ::compose::__private::marked!((#(#captures),* #separator #unknown) #body) },
+        );
     }
 }
 
@@ -133,11 +141,13 @@ impl ToTokens for Value {
 
 impl Parse for Value {
     fn parse(input: ParseStream) -> syn::Result<Value> {
-        if input.peek(Token![@]) {
-            Ok(Value::Marked(input.parse()?))
-        } else {
-            Ok(Value::Expr(input.parse()?))
+        let expression: Expr = input.parse()?;
+        if let Expr::Macro(mac) = &expression
+            && is_marker(&mac.mac.path)
+        {
+            return Ok(Value::Marked(syn::parse2(mac.mac.tokens.clone())?));
         }
+        Ok(Value::Expr(expression))
     }
 }
 
@@ -250,12 +260,11 @@ fn content_closure(arity: usize, block: &syn::Block) -> TokenStream {
 
 /// The value passed for a callback parameter: a marked lambda memoized on its captures, an
 /// unmarked one (outside a composable) wrapped, `move` added either way; anything else converted.
-fn callback_value(arity: usize, value: Value, trailing: bool) -> TokenStream {
+fn callback_value(arity: usize, value: Value) -> TokenStream {
     match value {
         Value::Marked(marked) => {
             let closure = match marked.body {
-                MarkedBody::Block(block) if trailing => content_closure(arity, &block),
-                MarkedBody::Block(block) => block.into_token_stream(),
+                MarkedBody::Block(block) => content_closure(arity, &block),
                 MarkedBody::Closure(mut closure) => {
                     closure.capture.get_or_insert_with(Default::default);
                     closure.into_token_stream()
@@ -263,7 +272,7 @@ fn callback_value(arity: usize, value: Value, trailing: bool) -> TokenStream {
             };
             memo::probe(&marked.captures, marked.unknown, closure)
         }
-        Value::Expr(Expr::Block(block)) if trailing && block.label.is_none() => {
+        Value::Expr(Expr::Block(block)) if block.label.is_none() => {
             let closure = content_closure(arity, &block.block);
             quote! { ::compose::__private::callback(#closure) }
         }
@@ -271,11 +280,9 @@ fn callback_value(arity: usize, value: Value, trailing: bool) -> TokenStream {
             closure.capture.get_or_insert_with(Default::default);
             quote! { ::compose::__private::callback(#closure) }
         }
-        // A callback given by name (`on_click = on_remove`) is cloned, not moved: the call may
-        // sit in a content lambda that runs again.
-        Value::Expr(expression) => {
-            quote_spanned! { expression.span()=> ::compose::__private::to_callback(&(#expression)) }
-        }
+        // A callback given by name (`on_click = on_remove`) is cloned, not moved, since the call
+        // may sit in a content lambda that runs again; and memoized on itself.
+        Value::Expr(expression) => memo::probe_value(expression.into_token_stream()),
     }
 }
 
@@ -376,7 +383,7 @@ fn build(call: Call) -> syn::Result<TokenStream> {
             }
         };
         let value = match parameters[index].callback {
-            Some(arity) => callback_value(arity, argument.into_value(), false),
+            Some(arity) => callback_value(arity, argument.into_value()),
             // A `#[format]` parameter converts whatever it is given (`Text!(title)`).
             None if format && index == 0 => {
                 let value = plain_value(argument.into_value());
@@ -393,7 +400,7 @@ fn build(call: Call) -> syn::Result<TokenStream> {
             return Err(Error::new(span, format!("`{function}`'s last argument is given twice")));
         }
         let arity = parameters[index].callback.unwrap_or(0);
-        set(&mut slots, index, callback_value(arity, argument.into_value(), true));
+        set(&mut slots, index, callback_value(arity, argument.into_value()));
     }
 
     let mut values = Vec::new();
@@ -401,7 +408,7 @@ fn build(call: Call) -> syn::Result<TokenStream> {
         let value = match (slot, &parameter.default) {
             (Some(value), _) => value,
             (None, Some(default)) => match parameter.callback {
-                Some(_) => quote! { ::compose::__private::to_callback(&(#default)) },
+                Some(_) => memo::probe_value(default.clone()),
                 None => default.clone(),
             },
             (None, None) => {

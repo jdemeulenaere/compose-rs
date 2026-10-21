@@ -18,11 +18,11 @@ fn Counter() {
     }
 }
 #[doc(hidden)]
-macro_rules! __compose_call_Counter_abf9ac1093febf76 {
+macro_rules! __compose_call_Counter_abf9ac1093febf76_N {
     ($($arguments:tt)*) => {
         ::compose::__private::call! { Counter[] plain; $($arguments)* }
     };
 }
 #[doc(hidden)]
 #[allow(unused_imports)]
-use __compose_call_Counter_abf9ac1093febf76 as Counter;
+use __compose_call_Counter_abf9ac1093febf76_N as Counter;

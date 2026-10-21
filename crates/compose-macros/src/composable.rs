@@ -128,8 +128,8 @@ struct Param {
 
 /// `impl Fn(A, B) -> R + 'static`, as `Callback<dyn Fn(A, B) -> R>`: kept and compared by
 /// identity, and the same type for every closure, so the composable stays non-generic.
-fn callback_type(ty: &Type) -> Option<Type> {
-    let Type::ImplTrait(impl_trait) = ty else { return None };
+fn callback_type(ty: &Type) -> syn::Result<Option<Type>> {
+    let Type::ImplTrait(impl_trait) = ty else { return Ok(None) };
     let mut function = None;
     let mut is_static = false;
     for bound in &impl_trait.bounds {
@@ -145,11 +145,67 @@ fn callback_type(ty: &Type) -> Option<Type> {
             syn::TypeParamBound::Lifetime(lifetime) if lifetime.ident == "static" => {
                 is_static = true;
             }
-            _ => return None,
+            _ => return Ok(None),
         }
     }
-    let function = function.filter(|_| is_static)?;
-    Some(syn::parse_quote!(::compose::__private::Callback<dyn #function>))
+    let Some(function) = function.filter(|_| is_static) else { return Ok(None) };
+    // A closure converts to `dyn Fn(&T)` only for one lifetime, so no call would compile.
+    if let Some(syn::PathArguments::Parenthesized(inputs)) =
+        function.segments.last().map(|segment| &segment.arguments)
+    {
+        for input in &inputs.inputs {
+            let types = scan(input);
+            if types.reference || types.lifetime {
+                let shown = quote::ToTokens::to_token_stream(&function)
+                    .to_string()
+                    .replace(" (", "(")
+                    .replace("& ", "&");
+                return Err(Error::new(
+                    input.span(),
+                    format!(
+                        "a callback parameter takes its arguments by value: `impl {shown}` can't \
+                         be converted from a closure; use an owned type (`String` for `&str`)"
+                    ),
+                ));
+            }
+        }
+    }
+    Ok(Some(syn::parse_quote!(::compose::__private::Callback<dyn #function>)))
+}
+
+/// `crate::…` paths in a default as `$crate::…`, so they resolve in the defining crate wherever
+/// the call macro is used. Other names resolve where it is used.
+fn crate_relative(tokens: TokenStream) -> TokenStream {
+    let mut out = Vec::new();
+    for token in tokens {
+        match token {
+            proc_macro2::TokenTree::Ident(ident) if ident == "crate" => {
+                let preceded_by_path = matches!(out.last(), Some(proc_macro2::TokenTree::Punct(punct)) if punct.as_char() == ':');
+                if !preceded_by_path {
+                    out.push(proc_macro2::TokenTree::Punct(proc_macro2::Punct::new(
+                        '$',
+                        proc_macro2::Spacing::Alone,
+                    )));
+                }
+                out.push(proc_macro2::TokenTree::Ident(ident));
+            }
+            proc_macro2::TokenTree::Group(group) => {
+                let mut inner =
+                    proc_macro2::Group::new(group.delimiter(), crate_relative(group.stream()));
+                inner.set_span(group.span());
+                out.push(proc_macro2::TokenTree::Group(inner));
+            }
+            other => out.push(other),
+        }
+    }
+    out.into_iter().collect()
+}
+
+/// A number unique to this expansion within the compiler process, so two composables a
+/// `macro_rules!` generates with the same name and span get different hidden macro names.
+fn expansion_serial() -> u64 {
+    static SERIAL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    SERIAL.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
 /// The number of arguments of a `Callback<dyn Fn(…)>` parameter.
@@ -181,7 +237,7 @@ fn callback_arity(ty: &Type) -> Option<usize> {
 fn call_macro(function: &ItemFn, params: &[Param], key: u64, site: &str) -> TokenStream {
     let name = &function.sig.ident;
     let unique = key_of(site) ^ key;
-    let hidden = format_ident!("__compose_call_{}_{:016x}", name, unique);
+    let hidden = format_ident!("__compose_call_{}_{:016x}_{}", name, unique, expansion_serial());
     let spec = params.iter().map(|param| {
         let parameter = &param.name;
         let kind = match callback_arity(&param.ty) {
@@ -191,7 +247,8 @@ fn call_macro(function: &ItemFn, params: &[Param], key: u64, site: &str) -> Toke
             }
             None => quote!(value),
         };
-        let default = param.default.as_ref().map(|default| quote!(= { #default }));
+        let default =
+            param.default.clone().map(crate_relative).map(|default| quote!(= { #default }));
         quote! { #parameter: #kind #default }
     });
     let flag = if params.first().is_some_and(|param| param.format) {
@@ -310,7 +367,7 @@ fn transform(
             }
         }
         typed.attrs = attributes;
-        if let Some(callback) = callback_type(&typed.ty) {
+        if let Some(callback) = callback_type(&typed.ty)? {
             *typed.ty = callback;
         }
         let types = scan(&typed.ty);

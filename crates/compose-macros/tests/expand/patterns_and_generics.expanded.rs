@@ -35,7 +35,7 @@ fn Pair(__compose_argument0: (i32, i32), _unused: bool) {
     }
 }
 #[doc(hidden)]
-macro_rules! __compose_call_Pair_c102bf861f04c7d2 {
+macro_rules! __compose_call_Pair_c102bf861f04c7d2_N {
     ($($arguments:tt)*) => {
         ::compose::__private::call! { Pair[__compose_argument0 : value, _unused : value]
         plain; $($arguments)* }
@@ -43,7 +43,7 @@ macro_rules! __compose_call_Pair_c102bf861f04c7d2 {
 }
 #[doc(hidden)]
 #[allow(unused_imports)]
-use __compose_call_Pair_c102bf861f04c7d2 as Pair;
+use __compose_call_Pair_c102bf861f04c7d2_N as Pair;
 #[allow(non_snake_case)]
 fn List<T: ComposeArg + Clone + Display + 'static>(items: Rc<Vec<T>>) {
     let __composer = ::compose::__private::current();
@@ -78,11 +78,11 @@ fn List<T: ComposeArg + Clone + Display + 'static>(items: Rc<Vec<T>>) {
     }
 }
 #[doc(hidden)]
-macro_rules! __compose_call_List_c06f50c9b9d68b8a {
+macro_rules! __compose_call_List_c06f50c9b9d68b8a_N {
     ($($arguments:tt)*) => {
         ::compose::__private::call! { List[items : value] plain; $($arguments)* }
     };
 }
 #[doc(hidden)]
 #[allow(unused_imports)]
-use __compose_call_List_c06f50c9b9d68b8a as List;
+use __compose_call_List_c06f50c9b9d68b8a_N as List;

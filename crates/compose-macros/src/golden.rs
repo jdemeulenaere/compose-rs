@@ -57,7 +57,28 @@ fn expand_file(source: &str) -> String {
         items.push(item);
     }
     let file: syn::File = parse_quote!(#(#items)*);
-    prettyplease::unparse(&file)
+    normalize_serials(&prettyplease::unparse(&file))
+}
+
+/// Hidden call macro names end with a serial that depends on expansion order:
+/// `__compose_call_Name_<hash>_<serial>` becomes `__compose_call_Name_<hash>_N`.
+fn normalize_serials(text: &str) -> String {
+    let mut out = String::new();
+    let mut rest = text;
+    while let Some(start) = rest.find("__compose_call_") {
+        let end = start
+            + rest[start..]
+                .find(|c: char| !(c.is_alphanumeric() || c == '_'))
+                .unwrap_or(rest.len() - start);
+        let name = &rest[start..end];
+        let trimmed = name.trim_end_matches(|c: char| c.is_ascii_digit());
+        out.push_str(&rest[..start]);
+        out.push_str(trimmed);
+        out.push('N');
+        rest = &rest[end..];
+    }
+    out.push_str(rest);
+    out
 }
 
 #[test]

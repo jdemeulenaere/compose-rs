@@ -10,14 +10,14 @@ fn Borrowed(title: &str) {
     }
 }
 #[doc(hidden)]
-macro_rules! __compose_call_Borrowed_1efc7a945654dc5e {
+macro_rules! __compose_call_Borrowed_1efc7a945654dc5e_N {
     ($($arguments:tt)*) => {
         ::compose::__private::call! { Borrowed[title : value] plain; $($arguments)* }
     };
 }
 #[doc(hidden)]
 #[allow(unused_imports)]
-use __compose_call_Borrowed_1efc7a945654dc5e as Borrowed;
+use __compose_call_Borrowed_1efc7a945654dc5e_N as Borrowed;
 #[allow(non_snake_case)]
 fn Returns(value: i32) -> i32 {
     let __compose_marker = || ();
@@ -28,14 +28,14 @@ fn Returns(value: i32) -> i32 {
     { remember(|| value * 2) }
 }
 #[doc(hidden)]
-macro_rules! __compose_call_Returns_0ad3229f33d2e0b2 {
+macro_rules! __compose_call_Returns_0ad3229f33d2e0b2_N {
     ($($arguments:tt)*) => {
         ::compose::__private::call! { Returns[value : value] plain; $($arguments)* }
     };
 }
 #[doc(hidden)]
 #[allow(unused_imports)]
-use __compose_call_Returns_0ad3229f33d2e0b2 as Returns;
+use __compose_call_Returns_0ad3229f33d2e0b2_N as Returns;
 #[allow(non_snake_case)]
 fn Explicit(content: impl Fn()) {
     let __compose_marker = || ();
@@ -48,14 +48,14 @@ fn Explicit(content: impl Fn()) {
     }
 }
 #[doc(hidden)]
-macro_rules! __compose_call_Explicit_0e6aa01d864d81a2 {
+macro_rules! __compose_call_Explicit_0e6aa01d864d81a2_N {
     ($($arguments:tt)*) => {
         ::compose::__private::call! { Explicit[content : value] plain; $($arguments)* }
     };
 }
 #[doc(hidden)]
 #[allow(unused_imports)]
-use __compose_call_Explicit_0e6aa01d864d81a2 as Explicit;
+use __compose_call_Explicit_0e6aa01d864d81a2_N as Explicit;
 #[allow(non_snake_case)]
 fn StaticReference(title: &'static str) {
     let __composer = ::compose::__private::current();
@@ -85,7 +85,7 @@ fn StaticReference(title: &'static str) {
     }
 }
 #[doc(hidden)]
-macro_rules! __compose_call_StaticReference_083104b1423b9cc6 {
+macro_rules! __compose_call_StaticReference_083104b1423b9cc6_N {
     ($($arguments:tt)*) => {
         ::compose::__private::call! { StaticReference[title : value] plain;
         $($arguments)* }
@@ -93,4 +93,4 @@ macro_rules! __compose_call_StaticReference_083104b1423b9cc6 {
 }
 #[doc(hidden)]
 #[allow(unused_imports)]
-use __compose_call_StaticReference_083104b1423b9cc6 as StaticReference;
+use __compose_call_StaticReference_083104b1423b9cc6_N as StaticReference;

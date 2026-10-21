@@ -1,0 +1,5 @@
+error: a callback parameter takes its arguments by value: `impl Fn(&str)` can't be converted from a closure; use an owned type (`String` for `&str`)
+ --> tests/ui/review_c_reference_callback.rs:8:29
+  |
+8 | fn Field(on_change: impl Fn(&str) + 'static) {
+  |                             ^

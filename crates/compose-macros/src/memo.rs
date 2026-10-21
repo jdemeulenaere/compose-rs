@@ -5,13 +5,15 @@
 //! callback and can skip. The captures are found syntactically: the identifiers in the closure
 //! that name locals of the enclosing function visible at that point, tracked through `let`,
 //! parameters, `for`, `match` arms, `if let` and closure parameters. A real capture must never be
-//! missed, so identifiers in macro arguments and inline format arguments (`"{count}"`) count, and
-//! a closure calling an unknown macro counts as always changed.
+//! missed, so identifiers in macro arguments and format strings (`"{count}"`, `"{:width$}"`)
+//! count; a closure calling an unknown macro, or naming an identifier given to an unknown
+//! statement macro (which may bind it), counts as always changed.
 //!
 //! The macro sees syntax, not types, so it only rewrites closures it knows become callbacks:
-//! - in a composable's call macro, every closure and the trailing block are marked
-//!   `@memoize(captures) …`, and the call macro memoizes those bound to callback parameters (it
-//!   knows its parameters, and the trailing block's arity);
+//! - in a composable's call macro, every closure and block argument is marked
+//!   `::compose::__private::marked!((captures) …)`, and the call macro memoizes those bound to
+//!   callback parameters (it knows its parameters and their arities), a block becoming a
+//!   content lambda; a callback given as a value (a name, a default) is memoized on itself;
 //! - elsewhere, a closure wrapped as `callback(…)` or `Callback::new(…)` is memoized.
 //!
 //! Closures passed to other functions (`map`, `update`, `key`, a generic `F: Fn()` parameter)
@@ -24,7 +26,7 @@ use quote::{ToTokens, quote};
 use syn::punctuated::Punctuated;
 use syn::visit::{self, Visit};
 use syn::visit_mut::{self, VisitMut};
-use syn::{Expr, Pat, Token};
+use syn::{Expr, Pat, Token, parse_quote};
 
 use crate::call::{Marked, MarkedBody};
 
@@ -66,6 +68,11 @@ fn is_call_macro(name: &str) -> bool {
     crate::regions::is_pascal_case(name)
 }
 
+/// `remember(…)` and its variants.
+fn is_remember(function: &Expr) -> bool {
+    matches!(function, Expr::Path(path) if path.path.segments.last().is_some_and(|segment| segment.ident.to_string().starts_with("remember")))
+}
+
 /// `callback(…)` or `Callback::new(…)`: a closure explicitly made a callback.
 fn is_callback_constructor(path: &syn::Path) -> bool {
     let segments: Vec<String> =
@@ -77,38 +84,116 @@ fn is_callback_constructor(path: &syn::Path) -> bool {
     }
 }
 
-/// The memoized form of `closure`: a probe of the lambda remembered at this position.
-pub(crate) fn probe(captures: &[Ident], unknown: bool, closure: TokenStream) -> TokenStream {
-    let probe = Ident::new("__compose_probe", Span::mixed_site());
-    let callback = Ident::new("__compose_callback", Span::mixed_site());
-    let pending = Ident::new("__compose_pending", Span::mixed_site());
-    let keys = captures.iter().map(|capture| {
-        quote! { (&&::compose::__private::ArgProbe(&#capture)).arg_key() }
-    });
-    let unknown = unknown.then(|| quote! { ::compose::__private::Unkeyed, });
+/// Keys as a tuple, nested in tuples of at most 12, which is as far as `LambdaKeys` goes.
+fn key_tuple(keys: Vec<TokenStream>) -> TokenStream {
+    if keys.len() <= 12 {
+        return quote! { (#(#keys,)*) };
+    }
+    let chunks: Vec<TokenStream> = keys.chunks(12).map(|chunk| key_tuple(chunk.to_vec())).collect();
+    key_tuple(chunks)
+}
+
+/// A lookup of the lambda remembered at this position, keyed with `keys`: the kept callback if
+/// they are all `same` as last pass's, else `make` stored.
+fn probe_with(keys: Vec<TokenStream>, make: TokenStream) -> TokenStream {
+    let keys = key_tuple(keys);
     quote! {{
         #[allow(unused_imports)]
         use ::compose::__private::{KeyedProbe as _, UnkeyedProbe as _};
-        let #probe = ::compose::__private::lambda_probe((#(#keys,)* #unknown));
-        match #probe {
-            ::compose::__private::LambdaProbe::Hit(#callback) => #callback,
-            ::compose::__private::LambdaProbe::Miss(#pending) => #pending.store(#closure),
-        }
+        ::compose::__private::lambda_probe(#keys).resolve(#make)
     }}
 }
 
-/// The names a pattern binds.
+/// The memoized form of `closure`: a probe of the lambda remembered at this position.
+pub(crate) fn probe(captures: &[Ident], unknown: bool, closure: TokenStream) -> TokenStream {
+    let mut keys: Vec<TokenStream> = captures
+        .iter()
+        .map(|capture| quote! { (&&::compose::__private::ArgProbe(&#capture)).arg_key() })
+        .collect();
+    if unknown {
+        keys.push(quote! { ::compose::__private::Unkeyed::CHANGED });
+    }
+    probe_with(keys, closure)
+}
+
+/// A callback given as a value (`on_click = on_remove`, a default): memoized on the value
+/// itself, so the same callback, function or capture-less closure passes the same `Callback`.
+pub(crate) fn probe_value(value: TokenStream) -> TokenStream {
+    let name = Ident::new("__compose_value", Span::mixed_site());
+    let key = quote! { (&&::compose::__private::ArgProbe(#name)).arg_key() };
+    let probe = probe_with(vec![key], quote! { ::compose::__private::to_callback(#name) });
+    quote! {{
+        let #name = &(#value);
+        #probe
+    }}
+}
+
+/// The names a parameter's pattern binds.
+/// The names a `let` binds: refutable when it has an `else`.
+fn local_bindings(local: &syn::Local, out: &mut Vec<String>) {
+    if local.init.as_ref().is_some_and(|init| init.diverge.is_some()) {
+        refutable_bindings(&local.pat, out)
+    } else {
+        bindings(&local.pat, out)
+    }
+}
+
+/// The identifiers in a macro's tokens.
+fn token_idents(tokens: TokenStream, out: &mut Vec<String>) {
+    for token in tokens {
+        match token {
+            TokenTree::Ident(ident) => out.push(ident.to_string()),
+            TokenTree::Group(group) => token_idents(group.stream(), out),
+            _ => {}
+        }
+    }
+}
+
+fn is_known_macro(path: &syn::Path) -> bool {
+    path.segments
+        .last()
+        .is_some_and(|segment| KNOWN_MACROS.contains(&segment.ident.to_string().as_str()))
+}
+
+fn is_call_macro_path(path: &syn::Path) -> bool {
+    path.segments.last().is_some_and(|segment| is_call_macro(&segment.ident.to_string()))
+}
+
+/// A call macro invoked by path (`ui::Label!(…)`): its expansion calls the bare name, so the
+/// path is imported around it instead (`{ use ui::Label; Label!(…) }`), and the call reaches
+/// the function the path names. Returns the path to import, leaving the bare name.
+fn unqualify(mac: &mut syn::Macro) -> Option<syn::Path> {
+    if mac.path.segments.len() < 2 {
+        return None;
+    }
+    let path = mac.path.clone();
+    let last = path.segments.last().expect("a segment").ident.clone();
+    mac.path = syn::Path::from(last);
+    Some(path)
+}
+
 pub(crate) fn pattern_names(pattern: &Pat, out: &mut Vec<String>) {
     bindings(pattern, out)
 }
 
-/// The names a pattern binds. A PascalCase identifier is taken for a constant or a unit variant.
+/// The names an irrefutable pattern binds (`let`, parameters, `for`, closure parameters): every
+/// identifier, PascalCase ones included (a unit struct there is harmless to take for a local).
 fn bindings(pattern: &Pat, out: &mut Vec<String>) {
-    struct Bindings<'a>(&'a mut Vec<String>);
+    pattern_bindings(pattern, out, false)
+}
+
+/// The names a refutable pattern binds (`match` arms, `if let`, `let … else`). A PascalCase
+/// identifier there is taken for a constant or a unit variant (`None`).
+fn refutable_bindings(pattern: &Pat, out: &mut Vec<String>) {
+    pattern_bindings(pattern, out, true)
+}
+
+fn pattern_bindings(pattern: &Pat, out: &mut Vec<String>, refutable: bool) {
+    struct Bindings<'a>(&'a mut Vec<String>, bool);
     impl<'ast> Visit<'ast> for Bindings<'_> {
         fn visit_pat_ident(&mut self, pattern: &'ast syn::PatIdent) {
             let name = pattern.ident.to_string();
-            if !crate::regions::is_pascal_case(&name) {
+            if !self.1 || !crate::regions::is_pascal_case(&name) {
                 self.0.push(name);
             }
             visit::visit_pat_ident(self, pattern);
@@ -117,13 +202,13 @@ fn bindings(pattern: &Pat, out: &mut Vec<String>) {
             // Range bounds and constants in patterns bind nothing.
         }
     }
-    Bindings(out).visit_pat(pattern);
+    Bindings(out, refutable).visit_pat(pattern);
 }
 
 /// Names bound by `let` conditions (`if let`, `while let`, let chains).
 fn condition_bindings(condition: &Expr, out: &mut Vec<String>) {
     match condition {
-        Expr::Let(binding) => bindings(&binding.pat, out),
+        Expr::Let(binding) => refutable_bindings(&binding.pat, out),
         Expr::Binary(binary) if matches!(binary.op, syn::BinOp::And(_)) => {
             condition_bindings(&binary.left, out);
             condition_bindings(&binary.right, out);
@@ -133,13 +218,14 @@ fn condition_bindings(condition: &Expr, out: &mut Vec<String>) {
     }
 }
 
-/// Scopes of local names, innermost last.
+/// Scopes of local names, innermost last. A tainted name may be a local bound by a macro the
+/// walk can't see into.
 #[derive(Clone, Default)]
-pub(crate) struct Scopes(Vec<Vec<String>>);
+pub(crate) struct Scopes(Vec<Vec<(String, bool)>>);
 
 impl Scopes {
     fn push(&mut self, names: Vec<String>) {
-        self.0.push(names);
+        self.0.push(names.into_iter().map(|name| (name, false)).collect());
     }
 
     fn pop(&mut self) {
@@ -147,11 +233,22 @@ impl Scopes {
     }
 
     fn bind(&mut self, names: Vec<String>) {
-        self.0.last_mut().expect("a scope").extend(names);
+        self.0.last_mut().expect("a scope").extend(names.into_iter().map(|name| (name, false)));
+    }
+
+    fn taint(&mut self, names: Vec<String>) {
+        self.0.last_mut().expect("a scope").extend(names.into_iter().map(|name| (name, true)));
+    }
+
+    /// Whether `name` is bound, and if so whether its innermost binding is tainted.
+    fn lookup(&self, name: &str) -> Option<bool> {
+        self.0.iter().rev().find_map(|scope| {
+            scope.iter().rev().find(|(bound, _)| bound == name).map(|(_, tainted)| *tainted)
+        })
     }
 
     fn contains(&self, name: &str) -> bool {
-        self.0.iter().any(|scope| scope.iter().any(|bound| bound == name))
+        self.lookup(name).is_some()
     }
 }
 
@@ -167,8 +264,13 @@ struct Free<'a> {
 impl Free<'_> {
     fn use_name(&mut self, ident: &Ident) {
         let name = ident.to_string();
-        if !self.inner.contains(&name) && self.outer.contains(&name) && self.seen.insert(name) {
-            self.found.push(ident.clone());
+        if self.inner.contains(&name) {
+            return;
+        }
+        match self.outer.lookup(&name) {
+            Some(true) => self.unknown = true,
+            Some(false) if self.seen.insert(name) => self.found.push(ident.clone()),
+            _ => {}
         }
     }
 
@@ -194,11 +296,17 @@ impl Free<'_> {
     }
 }
 
-/// Inline format arguments in a string literal: `"{count}"`, `"{value:>8}"`.
+/// The names a format string refers to: inline arguments (`"{count}"`, `"{value:>8}"`) and
+/// width and precision arguments (`"{:>width$}"`, `"{:.prec$}"`). Positional indices (`"{0}"`)
+/// aren't names.
 fn format_names(literal: &str) -> Vec<String> {
     if !literal.starts_with('"') && !literal.starts_with('r') {
         return Vec::new();
     }
+    let is_name = |name: &str| {
+        name.chars().next().is_some_and(|c| c.is_alphabetic() || c == '_')
+            && name.chars().all(|c| c.is_alphanumeric() || c == '_')
+    };
     let mut names = Vec::new();
     let mut chars = literal.chars().peekable();
     while let Some(c) = chars.next() {
@@ -209,11 +317,23 @@ fn format_names(literal: &str) -> Vec<String> {
             chars.next();
             continue;
         }
-        let name: String =
-            chars.by_ref().take_while(|c| *c != '}' && *c != ':').collect::<String>();
-        let name = name.trim();
-        if !name.is_empty() && name.chars().all(|c| c.is_alphanumeric() || c == '_') {
-            names.push(name.to_string());
+        let placeholder: String = chars.by_ref().take_while(|c| *c != '}').collect();
+        let (argument, spec) = placeholder.split_once(':').unwrap_or((&placeholder, ""));
+        let argument = argument.trim();
+        if is_name(argument) {
+            names.push(argument.to_string());
+        }
+        // `name$` in the spec: a width or precision taken from an argument.
+        let mut word = String::new();
+        for c in spec.chars() {
+            if c.is_alphanumeric() || c == '_' {
+                word.push(c);
+            } else {
+                if c == '$' && is_name(&word) {
+                    names.push(word.clone());
+                }
+                word.clear();
+            }
         }
     }
     names
@@ -252,7 +372,7 @@ impl<'ast> Visit<'ast> for Free<'_> {
                             }
                         }
                         let mut names = Vec::new();
-                        bindings(&local.pat, &mut names);
+                        local_bindings(local, &mut names);
                         free.inner.bind(names);
                     }
                     syn::Stmt::Item(_) => {}
@@ -279,7 +399,7 @@ impl<'ast> Visit<'ast> for Free<'_> {
 
     fn visit_arm(&mut self, arm: &'ast syn::Arm) {
         let mut names = Vec::new();
-        bindings(&arm.pat, &mut names);
+        refutable_bindings(&arm.pat, &mut names);
         self.scoped(names, |free| {
             if let Some((_, guard)) = &arm.guard {
                 free.visit_expr(guard);
@@ -360,9 +480,9 @@ impl Memoize {
         Memoize { scopes }
     }
 
-    /// A call macro argument: a closure (or the trailing block) marked with its captures,
+    /// A call macro argument: a closure or a block marked with its captures,
     /// anything else visited.
-    fn mark(&mut self, expression: &mut Expr, trailing: bool, tokens: &mut TokenStream) {
+    fn mark(&mut self, expression: &mut Expr, tokens: &mut TokenStream) {
         match expression {
             Expr::Closure(closure) => {
                 // Inner calls first, with the closure's parameters in scope.
@@ -372,7 +492,7 @@ impl Memoize {
                 Marked::new(captures, unknown, MarkedBody::Closure(closure.clone()))
                     .to_tokens(tokens);
             }
-            Expr::Block(block) if trailing && block.label.is_none() && block.attrs.is_empty() => {
+            Expr::Block(block) if block.label.is_none() && block.attrs.is_empty() => {
                 self.visit_block_mut(&mut block.block);
                 let (captures, unknown) =
                     captures_of(&self.scopes, |free| free.visit_block(&block.block));
@@ -397,7 +517,6 @@ impl Memoize {
             return;
         };
         let mut arguments: Vec<MacroArgument> = arguments.into_iter().collect();
-        let last = arguments.len().wrapping_sub(1);
         let mut tokens = TokenStream::new();
         for (index, argument) in arguments.iter_mut().enumerate() {
             if index > 0 {
@@ -405,12 +524,12 @@ impl Memoize {
             }
             match argument {
                 MacroArgument::Positional(expression) => {
-                    self.mark(expression, index == last, &mut tokens);
+                    self.mark(expression, &mut tokens);
                 }
                 MacroArgument::Named(name, equals, expression) => {
                     name.to_tokens(&mut tokens);
                     equals.to_tokens(&mut tokens);
-                    self.mark(expression, false, &mut tokens);
+                    self.mark(expression, &mut tokens);
                 }
             }
         }
@@ -439,10 +558,29 @@ impl VisitMut for Memoize {
                             }
                         }
                         let mut names = Vec::new();
-                        bindings(&local.pat, &mut names);
+                        local_bindings(local, &mut names);
                         memoize.scopes.bind(names);
                     }
-                    syn::Stmt::Macro(statement) => memoize.rewrite_call_macro(&mut statement.mac),
+                    syn::Stmt::Macro(statement) => {
+                        if is_call_macro_path(&statement.mac.path) {
+                            memoize.rewrite_call_macro(&mut statement.mac);
+                            if let Some(path) = unqualify(&mut statement.mac) {
+                                let attrs = std::mem::take(&mut statement.attrs);
+                                let mac = &statement.mac;
+                                let semi = statement.semi_token;
+                                *stmt = syn::Stmt::Expr(
+                                    parse_quote! { #(#attrs)* { use #path; #mac } },
+                                    semi,
+                                );
+                            }
+                        } else if !is_known_macro(&statement.mac.path) {
+                            // It may bind locals the walk can't see: a lambda naming any
+                            // identifier it was given is always changed.
+                            let mut names = Vec::new();
+                            token_idents(statement.mac.tokens.clone(), &mut names);
+                            memoize.scopes.taint(names);
+                        }
+                    }
                     syn::Stmt::Item(_) => {}
                     other => memoize.visit_stmt_mut(other),
                 }
@@ -452,6 +590,9 @@ impl VisitMut for Memoize {
 
     fn visit_expr_mut(&mut self, expr: &mut Expr) {
         match expr {
+            // `remember`'s calculation runs once, while `remember` holds its slot: a callback
+            // made there needs no memoization, and a probe there would take a slot out of order.
+            Expr::Call(call) if is_remember(&call.func) => self.visit_expr_mut(&mut call.func),
             Expr::Call(call) => {
                 let constructor =
                     matches!(&*call.func, Expr::Path(path) if is_callback_constructor(&path.path));
@@ -465,7 +606,15 @@ impl VisitMut for Memoize {
                     }
                 }
             }
-            Expr::Macro(macro_expr) => self.rewrite_call_macro(&mut macro_expr.mac),
+            Expr::Macro(macro_expr) => {
+                self.rewrite_call_macro(&mut macro_expr.mac);
+                if is_call_macro_path(&macro_expr.mac.path)
+                    && let Some(path) = unqualify(&mut macro_expr.mac)
+                {
+                    let mac = &macro_expr.mac;
+                    *expr = parse_quote! {{ use #path; #mac }};
+                }
+            }
             _ => visit_mut::visit_expr_mut(self, expr),
         }
     }
@@ -487,7 +636,7 @@ impl VisitMut for Memoize {
 
     fn visit_arm_mut(&mut self, arm: &mut syn::Arm) {
         let mut names = Vec::new();
-        bindings(&arm.pat, &mut names);
+        refutable_bindings(&arm.pat, &mut names);
         self.scoped(names, |memoize| {
             if let Some((_, guard)) = &mut arm.guard {
                 memoize.visit_expr_mut(guard);

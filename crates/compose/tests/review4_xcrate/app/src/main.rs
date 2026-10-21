@@ -15,6 +15,9 @@ fn Screen(tick: MutableState<u32>, outer: MutableState<u32>) {
     Generic(1i64, tick);
     Plain("plain", tick);
     Section(tick);
+    // Defaults resolved in `widgets`, by an imported and a path call macro.
+    Clicker!();
+    widgets::Clicker!(label = "path");
 }
 
 fn main() {

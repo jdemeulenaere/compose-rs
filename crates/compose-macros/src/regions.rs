@@ -20,7 +20,7 @@ const RUNTIME_COMPOSABLES: &[&str] = &[
     "remember_keyed",
     "remember_observer",
     "remember_observer_keyed",
-    "remember_lambda",
+    "lambda_probe",
     "key",
     "current_recompose_scope",
 ];

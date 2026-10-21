@@ -115,8 +115,17 @@ pub struct ArgProbe<'a, T>(pub &'a T);
 /// A capture compared with `ComposeArg::same`.
 pub struct Keyed<'a, T>(&'a T);
 
-/// A capture that can't be compared: its lambda counts as changed on every pass.
-pub struct Unkeyed;
+/// A capture that can't be compared: its lambda counts as changed on every pass, unless the
+/// capture is zero-sized (a function item, a closure capturing nothing), so every value of its
+/// type is the same.
+pub struct Unkeyed {
+    zero_sized: bool,
+}
+
+impl Unkeyed {
+    /// Always changed: what a lambda calling an unknown macro is keyed with.
+    pub const CHANGED: Unkeyed = Unkeyed { zero_sized: false };
+}
 
 pub trait KeyedProbe<'a, T> {
     fn arg_key(&self) -> Keyed<'a, T>;
@@ -136,7 +145,7 @@ pub trait UnkeyedProbe {
 impl<T> UnkeyedProbe for ArgProbe<'_, T> {
     #[inline]
     fn arg_key(&self) -> Unkeyed {
-        Unkeyed
+        Unkeyed { zero_sized: std::mem::size_of::<T>() == 0 }
     }
 }
 
@@ -166,7 +175,7 @@ impl LambdaKeys for Unkeyed {
 
     #[inline]
     fn same(&self, _: &()) -> bool {
-        false
+        self.zero_sized
     }
 
     #[inline]
@@ -220,6 +229,18 @@ pub struct PendingLambda<K: 'static, F: ?Sized + 'static> {
     keys: K,
     position: Option<SlotPosition>,
     _function: std::marker::PhantomData<fn() -> Box<F>>,
+}
+
+impl<K: 'static, F: ?Sized + 'static> LambdaProbe<K, F> {
+    /// The kept callback, or `lambda` wrapped and remembered: what a memoized lambda expands to,
+    /// `lambda_probe(keys).resolve(closure)`. On a hit the new closure is dropped unused.
+    #[inline]
+    pub fn resolve<C: IntoCallback<F>>(self, lambda: C) -> Callback<F> {
+        match self {
+            LambdaProbe::Hit(callback) => callback,
+            LambdaProbe::Miss(pending) => pending.store(lambda),
+        }
+    }
 }
 
 impl<K: 'static, F: ?Sized + 'static> PendingLambda<K, F> {

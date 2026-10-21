@@ -33,7 +33,7 @@ pub fn Greeting(name: String, count: i32) {
 }
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __compose_call_Greeting_460afe76bd277c02 {
+macro_rules! __compose_call_Greeting_460afe76bd277c02_N {
     ($($arguments:tt)*) => {
         ::compose::__private::call! { Greeting[name : value, count : value] plain;
         $($arguments)* }
@@ -41,4 +41,4 @@ macro_rules! __compose_call_Greeting_460afe76bd277c02 {
 }
 #[doc(hidden)]
 #[allow(unused_imports)]
-pub use __compose_call_Greeting_460afe76bd277c02 as Greeting;
+pub use __compose_call_Greeting_460afe76bd277c02_N as Greeting;

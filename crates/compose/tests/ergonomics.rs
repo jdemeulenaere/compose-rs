@@ -325,3 +325,35 @@ fn branches_inside_content_blocks_get_region_groups() {
     // with a new one.
     assert_eq!(take_log(), ["a0", "b1", "a2"]);
 }
+
+#[test]
+fn a_named_block_argument_is_a_content_lambda() {
+    #[composable]
+    fn Card(title: &'static str, content: impl Fn() + 'static) {
+        log(format!("card {title}"));
+        content();
+    }
+    let composition = composition();
+    composition.set_content(|| {
+        Card!(title = "named", content = { log("content") });
+    });
+    assert_eq!(take_log(), ["card named", "content"]);
+}
+
+#[test]
+fn a_zero_sized_capture_keeps_its_lambda() {
+    #[composable]
+    fn Parent(tick: MutableState<u32>) {
+        tick.get();
+        let format = |value: u32| value.to_string(); // captures nothing: zero-sized, not ComposeArg
+        Child!("zero-sized", move || format(1));
+    }
+    let composition = composition();
+    let tick = mutable_state_of(0);
+    let handle = tick.handle();
+    composition.set_content(move || Parent(handle));
+    take_log();
+    tick.set(1);
+    composition.recompose();
+    assert!(take_log().is_empty(), "the capture can't differ: the child skips");
+}

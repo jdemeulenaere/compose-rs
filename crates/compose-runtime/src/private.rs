@@ -138,3 +138,15 @@ pub fn keep<T: Clone>(value: &T) -> T {
 pub fn kept<K: 'static>(kept: &dyn Any) -> &K {
     kept.downcast_ref::<K>().expect("compose-runtime: kept arguments of another type")
 }
+
+/// A closure or block the caller's `#[composable]` marked with its captures, for `call!` to
+/// memoize. Anywhere else (an argument a user's own macro passes on), it is the code as written.
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __compose_marked {
+    (($($captures:tt)*) $($body:tt)*) => {
+        $($body)*
+    };
+}
+
+pub use crate::__compose_marked as marked;
