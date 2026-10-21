@@ -455,12 +455,13 @@ impl MeasurePolicy for LazyListLayout {
             offset = 0.0;
         }
         index = index.min(count.saturating_sub(1));
-        let size_of = |index: usize, sizes: &mut HashMap<usize, i32>, measure: &mut MeasureItem<'_>| {
-            match measure(index, sizes) {
-                Some(placeable) => main_of(&placeable),
-                None => sizes.get(&index).copied().unwrap_or_else(|| estimate(sizes)),
-            }
-        };
+        let size_of =
+            |index: usize, sizes: &mut HashMap<usize, i32>, measure: &mut MeasureItem<'_>| {
+                match measure(index, sizes) {
+                    Some(placeable) => main_of(&placeable),
+                    None => sizes.get(&index).copied().unwrap_or_else(|| estimate(sizes)),
+                }
+            };
         let mut placed: Vec<(Placeable, i32)> = Vec::new();
         let mut end_index;
         let mut missing;
