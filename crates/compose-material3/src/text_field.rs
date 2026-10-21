@@ -223,7 +223,7 @@ fn decorated_field(
                         CompositionLocalProvider(LOCAL_CONTENT_COLOR.provides(label_color), || {
                             CompositionLocalProvider(
                                 LOCAL_TEXT_STYLE.provides(label_style),
-                                || label(),
+                                &*label,
                             );
                         });
                     });
