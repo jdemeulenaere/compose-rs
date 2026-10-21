@@ -83,6 +83,15 @@ pub(crate) fn update(element: &Element, node: &mut dyn ModifierNode) {
         Element::Clip(shape) => set!(ClipNode, ClipNode(*shape)),
         Element::Clickable(clickable) => {
             if let Some(node) = node.downcast_mut::<ClickableNode>() {
+                // A source swapped or the clickable disabled mid-press: the old press is over.
+                let pressed = node.state.pressed.is_some() || node.state.keys_pressed != 0;
+                let swapped = match &node.spec {
+                    Press::Click(old) => old.interaction_source != clickable.interaction_source,
+                    Press::Toggle(_) => false,
+                };
+                if pressed && (swapped || !clickable.enabled) {
+                    node.release_later();
+                }
                 node.spec = Press::Click(clickable.clone());
                 node.state.disable_if(!clickable.enabled);
             }
@@ -466,6 +475,10 @@ struct ClickableNode {
 }
 
 impl ModifierNode for ClickableNode {
+    /// Leaving mid-press releases its interaction source, as Compose's `disposeInteractions`.
+    fn on_detach(&mut self, _context: &mut crate::modifier::DetachContext<'_>) {
+        self.release_later();
+    }
     fn as_pointer_input(&mut self) -> Option<&mut dyn PointerInputModifierNode> {
         Some(self)
     }
@@ -512,6 +525,18 @@ impl ClickableNode {
     fn press_changed(&self, context: &mut EventContext<'_>) {
         context.invalidate_draw();
         self.publish_press();
+    }
+
+    /// Releases its interaction source after the composition applying a change (a state
+    /// can't be written while composing): its press is over.
+    fn release_later(&self) {
+        let pressed = self.state.pressed.is_some() || self.state.keys_pressed != 0;
+        if pressed
+            && let Press::Click(clickable) = &self.spec
+            && let Some(source) = clickable.interaction_source.clone()
+        {
+            compose_runtime::CoroutineScope::new().launch(async move { source.set_pressed(false) });
+        }
     }
 
     fn publish_press(&self) {
@@ -616,7 +641,7 @@ impl FocusTargetModifierNode for ClickableNode {
         if !focused {
             self.state.keys_pressed = 0;
         }
-        context.invalidate_draw();
+        self.press_changed(context);
     }
 }
 

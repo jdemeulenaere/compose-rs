@@ -9,13 +9,13 @@ use std::rc::Rc;
 use std::task::{Context, Poll, Waker};
 
 use compose_animation::{AnimatedVisibility, fade_in_with, fade_out_with, scale_in, tween};
-use compose_foundation::layout::{Arrangement, Box, Row, RowScope};
+use compose_foundation::layout::{Box, RowScope};
 use compose_runtime::{
     ComposeArg, CompositionLocalProvider, LaunchedEffect, OwnedState, composable, remember,
 };
 use compose_ui::{Alignment, Color, Dp, Modifier, Shape, SizeSpec, UnitExt};
 
-use crate::components::{Surface, TextButton};
+use crate::components::Surface;
 use crate::icon::{Icon, IconButton, icons};
 use crate::theme::{LOCAL_CONTENT_COLOR, LOCAL_TEXT_STYLE, MaterialTheme};
 
@@ -125,7 +125,10 @@ impl Future for Wait {
         match self.0.result.get() {
             Some(result) => Poll::Ready(result),
             None => {
-                self.0.wakers.borrow_mut().push(context.waker().clone());
+                let mut wakers = self.0.wakers.borrow_mut();
+                if !wakers.iter().any(|waker| waker.will_wake(context.waker())) {
+                    wakers.push(context.waker().clone());
+                }
                 Poll::Pending
             }
         }
@@ -141,8 +144,40 @@ pub struct SnackbarHostState {
 
 struct HostInner {
     current: OwnedState<Option<SnackbarData>>,
-    /// The last snackbar asked for: the next one waits for it to end.
-    tail: RefCell<Option<Rc<Completion>>>,
+    /// The snackbars asked for and not ended, in order, as Compose's `Mutex` queue: the first
+    /// shows; a cancelled one leaves its place.
+    queue: RefCell<std::collections::VecDeque<Rc<Completion>>>,
+    /// Who waits for the queue to move.
+    waiting: RefCell<Vec<Waker>>,
+}
+
+impl HostInner {
+    /// Wakes the waiting ones: the queue moved.
+    fn moved(&self) {
+        for waker in self.waiting.take() {
+            waker.wake();
+        }
+    }
+}
+
+/// Waits for `done` to be first in the queue.
+struct Turn {
+    host: Rc<HostInner>,
+    done: Rc<Completion>,
+}
+
+impl Future for Turn {
+    type Output = ();
+    fn poll(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<()> {
+        let first =
+            self.host.queue.borrow().front().is_some_and(|first| Rc::ptr_eq(first, &self.done));
+        if first {
+            Poll::Ready(())
+        } else {
+            self.host.waiting.borrow_mut().push(context.waker().clone());
+            Poll::Pending
+        }
+    }
 }
 
 impl Default for SnackbarHostState {
@@ -168,7 +203,8 @@ impl SnackbarHostState {
         SnackbarHostState {
             inner: Rc::new(HostInner {
                 current: compose_runtime::mutable_state_of(None),
-                tail: RefCell::new(None),
+                queue: RefCell::new(std::collections::VecDeque::new()),
+                waiting: RefCell::new(Vec::new()),
             }),
         }
     }
@@ -195,12 +231,10 @@ impl SnackbarHostState {
             duration,
         };
         let done = Rc::new(Completion::default());
-        let previous = self.inner.tail.replace(Some(done.clone()));
-        // Ends it however this coroutine ends: the next ones go on.
+        self.inner.queue.borrow_mut().push_back(done.clone());
+        // Ends it however this coroutine ends: it leaves the queue, the next ones go on.
         let guard = Guard { host: self.inner.clone(), done: done.clone() };
-        if let Some(previous) = previous {
-            previous.wait().await;
-        }
+        Turn { host: self.inner.clone(), done: done.clone() }.await;
         let data = SnackbarData { visuals, done: done.clone() };
         self.inner.current.set(Some(data));
         let result = done.wait().await;
@@ -222,11 +256,8 @@ impl Drop for Guard {
         if ours {
             self.host.current.set(None);
         }
-        let last =
-            self.host.tail.borrow().as_ref().is_some_and(|tail| Rc::ptr_eq(tail, &self.done));
-        if last {
-            self.host.tail.replace(None);
-        }
+        self.host.queue.borrow_mut().retain(|queued| !Rc::ptr_eq(queued, &self.done));
+        self.host.moved();
     }
 }
 
@@ -284,8 +315,9 @@ pub fn SnackbarHost(
 }
 
 /// A snackbar, as Compose's `Snackbar(snackbarData, …)`: its message (body-medium) and
-/// optional action and dismiss button on the inverse surface, at least 48 dp high, with a 6 dp
-/// shadow.
+/// optional action (in `action_color`) and dismiss button on the inverse surface, 12 dp in from
+/// what's around it, at most 600 dp wide, at least 48 dp high (68 dp for two lines), with a
+/// 6 dp shadow.
 #[composable]
 #[allow(non_snake_case)]
 pub fn Snackbar(
@@ -298,7 +330,16 @@ pub fn Snackbar(
 ) {
     let typography = MaterialTheme::typography();
     let visuals = snackbar_data.visuals.clone();
-    let has_buttons = visuals.action_label.is_some() || visuals.with_dismiss_action;
+    let policy = compose_runtime::remember_keyed(
+        (visuals.action_label.is_some(), visuals.with_dismiss_action),
+        || {
+            Rc::new(SnackbarLayout {
+                action: visuals.action_label.is_some(),
+                dismiss: visuals.with_dismiss_action,
+                line_height: typography.body_medium.line_height,
+            }) as Rc<dyn compose_ui::MeasurePolicy>
+        },
+    );
     // 12 dp around it, as Compose's `Snackbar(snackbarData)`.
     Surface(
         modifier.padding(12.dp()),
@@ -309,48 +350,44 @@ pub fn Snackbar(
         6.dp(),
         None,
         compose_runtime::callback(move || {
-            let (data, visuals) = (snackbar_data.clone(), visuals.clone());
+            let (data, visuals, policy) = (snackbar_data.clone(), visuals.clone(), policy.clone());
             CompositionLocalProvider(LOCAL_TEXT_STYLE.provides(typography.body_medium), || {
                 let (data, visuals) = (data.clone(), visuals.clone());
-                Row(
-                    Modifier
-                        .size_in(SizeSpec::bounds(
-                            Dp::UNSPECIFIED,
-                            48.dp(),
-                            Dp::UNSPECIFIED,
-                            Dp::UNSPECIFIED,
-                        ))
-                        .padding_sides(
-                            16.dp(),
-                            0.dp(),
-                            if has_buttons { 8.dp() } else { 16.dp() },
-                            0.dp(),
-                        ),
-                    Arrangement::Start,
-                    Alignment::CENTER_VERTICALLY,
-                    compose_runtime::callback(move |row: RowScope| {
+                compose_ui::Layout(
+                    Modifier.size_in(SizeSpec::bounds(
+                        Dp::UNSPECIFIED,
+                        Dp::UNSPECIFIED,
+                        600.dp(),
+                        Dp::UNSPECIFIED,
+                    )),
+                    policy.clone(),
+                    compose_runtime::callback(move || {
                         let message = visuals.message.clone();
                         Box(
-                            Modifier.weight(row, 1.0).padding_horizontal_vertical(0.dp(), 6.dp()),
+                            Modifier,
                             Alignment::CENTER_START,
                             false,
                             compose_runtime::callback(move |_| themed_text(message.clone())),
                         );
                         if let Some(label) = visuals.action_label.clone() {
+                            // The action in its color, as `textButtonColors(contentColor =
+                            // actionColor)`.
                             let data = data.clone();
-                            CompositionLocalProvider(
-                                LOCAL_CONTENT_COLOR.provides(action_color),
-                                || {
-                                    let (data, label) = (data.clone(), label.clone());
-                                    TextButton(
-                                        compose_runtime::callback(move || data.perform_action()),
-                                        Modifier,
-                                        true,
-                                        compose_runtime::callback(move |_| {
-                                            themed_text(label.clone())
-                                        }),
-                                    );
+                            crate::components::Button(
+                                compose_runtime::callback(move || data.perform_action()),
+                                Modifier,
+                                true,
+                                crate::ButtonDefaults::shape(),
+                                crate::ButtonColors {
+                                    content_color: action_color,
+                                    ..crate::ButtonDefaults::text_button_colors()
                                 },
+                                Dp(0.0),
+                                None,
+                                crate::ButtonDefaults::TEXT_BUTTON_CONTENT_PADDING,
+                                compose_runtime::callback(move |_: RowScope| {
+                                    themed_text(label.clone())
+                                }),
                             );
                         }
                         if visuals.with_dismiss_action {
@@ -374,6 +411,65 @@ pub fn Snackbar(
             });
         }),
     );
+}
+
+/// A snackbar's row, as Compose's `OneRowSnackbar`: the message 16 dp from the start, 6 dp
+/// above and below, taking what the buttons leave; the action, then the dismiss button, at
+/// the end (8 dp in after the action alone, 0 dp after the dismiss button, 16 dp after the
+/// message alone); at least 48 dp high, 68 dp when the message takes two lines or more, all
+/// centered down it.
+struct SnackbarLayout {
+    action: bool,
+    dismiss: bool,
+    line_height: compose_ui::Sp,
+}
+
+impl compose_ui::MeasurePolicy for SnackbarLayout {
+    fn measure(
+        &self,
+        scope: &mut compose_ui::MeasureScope<'_>,
+        measurables: &[compose_ui::Measurable],
+        constraints: compose_ui::Constraints,
+    ) -> compose_ui::MeasureResult {
+        let density = scope.density();
+        let px = |dp: f32| density.round_to_px(Dp(dp));
+        let start = px(16.0);
+        let end = match (self.action, self.dismiss) {
+            (_, true) => 0,
+            (true, false) => px(8.0),
+            (false, false) => px(16.0),
+        };
+        let vertical = px(6.0);
+        let loose = constraints.loosen();
+        let buttons: Vec<_> =
+            measurables[1..].iter().map(|&button| scope.measure(button, loose)).collect();
+        let buttons_width: i32 = buttons.iter().map(|button| button.width).sum();
+        let width = constraints.max_width;
+        let text_width = (width - start - end - buttons_width).max(0);
+        let text = scope.measure(
+            measurables[0],
+            compose_ui::Constraints::new(0, text_width, 0, compose_ui::Constraints::INFINITY),
+        );
+        let line = density.sp_to_px(self.line_height).max(1.0);
+        let lines = (text.height as f32 / line).round().max(1.0);
+        let minimum = px(if lines > 1.0 { 68.0 } else { 48.0 });
+        let height = constraints.constrain_height(
+            minimum
+                .max(text.height + 2 * vertical)
+                .max(buttons.iter().map(|button| button.height).max().unwrap_or(0)),
+        );
+        scope.place_relative(&text, start, (height - text.height) / 2);
+        let mut x = width - end - buttons_width;
+        for button in &buttons {
+            scope.place_relative(button, x, (height - button.height) / 2);
+            x += button.width;
+        }
+        scope.layout(width, height)
+    }
+
+    fn debug_name(&self) -> &'static str {
+        "Snackbar"
+    }
 }
 
 /// `text` in the text style and content color around it, as `Text(text)`.

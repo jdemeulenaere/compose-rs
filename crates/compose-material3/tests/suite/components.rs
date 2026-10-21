@@ -650,15 +650,10 @@ fn a_tab_row_shares_its_width_and_slides_its_indicator() {
     assert_eq!((row.height(), two.bounds.left, two.bounds.width()), (48.0, 200.0, 200.0));
     assert_eq!(two.config.role, Some(Role::Tab));
     let indicator = |ui: &mut ComposeTestRule| {
-        ui.host()
-            .display_list()
-            .ops
-            .iter()
-            .rev()
-            .find_map(|op| match op {
-                DrawOp::DrawRect(rect, _) if rect.height() == 3.0 => Some(rect.left),
-                _ => None,
-            })
+        ui.host().display_list().ops.iter().rev().find_map(|op| match op {
+            DrawOp::DrawRect(rect, _) if rect.height() == 3.0 => Some(rect.left),
+            _ => None,
+        })
     };
     assert_eq!(indicator(&mut ui), Some(0.0));
     ui.on_node_with_tag("Two").perform_click();

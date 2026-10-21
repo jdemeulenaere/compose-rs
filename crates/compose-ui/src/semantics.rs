@@ -325,6 +325,11 @@ impl UiTree {
             {
                 let mut own = SemanticsConfiguration::default();
                 semantics.apply_semantics(&mut own);
+                // Clearing drops what the modifiers after it set, as Compose's
+                // `collapsedSemantics`.
+                if own.clear_descendants {
+                    config = SemanticsConfiguration::default();
+                }
                 config.apply(&own);
                 first_layer = Some(layers[index]);
                 // A merging node's bounds are those of the outermost modifier that merges.

@@ -127,7 +127,8 @@ pub fn Card(
         (colors.disabled_container_color, colors.disabled_content_color)
     };
     let mut surface = modifier
-        .shadow(if enabled { elevation } else { Dp(0.0) }, shape, false)
+        // Disabled cards keep their elevation, as Compose's `CardElevation` defaults.
+        .shadow(elevation, shape, false)
         .background_shape(container, shape)
         .clip(shape);
     if let Some(border) = border {

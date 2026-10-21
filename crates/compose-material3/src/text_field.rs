@@ -167,7 +167,8 @@ fn decorated_field(
     // Shown while the field is empty and its label floated (or it has none), as Compose's.
     let show_placeholder = empty && placeholder.is_some() && (!has_label || is_focused);
     let floated_label_height = typography.body_small.line_height;
-    let label_width = Rc::new(std::cell::Cell::new(0.0f32));
+    // Remembered: the layout (remembered too) writes it, the outline reads it.
+    let label_width = remember(|| Rc::new(std::cell::Cell::new(0.0f32)));
     let decoration = {
         let label_width = label_width.clone();
         move |inner_text_field: Callback| {
@@ -359,7 +360,12 @@ impl MeasurePolicy for DecorationLayout {
             vertical
         };
         if let Some(label) = &label {
-            let resting = if self.single_line { (height - label.height) / 2 } else { vertical };
+            // A single line centered; else at the field's 16 dp padding, as Compose's.
+            let resting = if self.single_line {
+                (height - label.height) / 2
+            } else {
+                density.round_to_px(16.dp())
+            };
             let floated = if outlined { -label.height / 2 } else { vertical };
             let y = resting + ((floated - resting) as f32 * self.progress).round() as i32;
             scope.place_relative(label, horizontal, y);
