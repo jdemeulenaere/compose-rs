@@ -337,3 +337,15 @@ mod tests {
         assert!(!rect.contains(Offset::new(10.0, 2.0)));
     }
 }
+
+macro_rules! compose_arg_by_value {
+    ($($type:ty),*) => {
+        $(impl ComposeArg for $type {
+            fn same(&self, other: &Self) -> bool {
+                self == other
+            }
+        })*
+    };
+}
+
+compose_arg_by_value!(IntOffset, IntSize, Offset, Size, Rect);

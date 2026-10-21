@@ -12,8 +12,16 @@ use compose::ui::*;
 
 #[composable]
 pub fn Gallery() {
+    GalleryWith(false);
+}
+
+/// The gallery, with its "About" dialog open from the start if `about`.
+#[composable]
+pub fn GalleryWith(about: bool) {
     MaterialTheme!({
         let count = remember(|| mutable_state_of(0));
+        let menu = remember(|| mutable_state_of(false));
+        let dialog = remember(|| mutable_state_of(about));
         Scaffold!(
             top_bar = {
                 TopAppBar!(
@@ -29,8 +37,36 @@ pub fn Gallery() {
                         IconButton!(on_click = || {}, {
                             Icon!(icons::filled::search(), Some("Search"));
                         });
-                        IconButton!(on_click = || {}, {
-                            Icon!(icons::filled::more_vert(), Some("More"));
+                        Box!({
+                            IconButton!(on_click = move || menu.set(true), {
+                                Icon!(icons::filled::more_vert(), Some("More"));
+                            });
+                            DropdownMenu!(menu.get(), move || menu.set(false), {
+                                DropdownMenuItem!(
+                                    {
+                                        Text!("Reset");
+                                    },
+                                    move || {
+                                        count.set(0);
+                                        menu.set(false);
+                                    },
+                                    leading_icon = {
+                                        Icon!(icons::filled::close(), None);
+                                    }
+                                );
+                                DropdownMenuItem!(
+                                    {
+                                        Text!("About");
+                                    },
+                                    move || {
+                                        menu.set(false);
+                                        dialog.set(true);
+                                    },
+                                    leading_icon = {
+                                        Icon!(icons::filled::info(), None);
+                                    }
+                                );
+                            });
                         });
                     }
                 );
@@ -41,6 +77,27 @@ pub fn Gallery() {
                 });
             },
             |padding: PaddingValues| {
+                if dialog.get() {
+                    AlertDialog!(
+                        on_dismiss_request = move || dialog.set(false),
+                        confirm_button = {
+                            TextButton!(on_click = move || dialog.set(false), {
+                                Text!("OK");
+                            });
+                        },
+                        icon = {
+                            Icon!(icons::filled::info(), None);
+                        },
+                        title = {
+                            Text!("compose-rs");
+                        },
+                        text = {
+                            Text!(
+                                "Jetpack Compose's model, in Rust: this gallery is drawn with Skia."
+                            );
+                        },
+                    );
+                }
                 Column!(
                     modifier = Modifier.padding_values(padding).padding(16.dp()).fill_max_size(),
                     vertical_arrangement = Arrangement::spaced_by(12.dp()),

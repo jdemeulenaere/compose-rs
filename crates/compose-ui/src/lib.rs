@@ -23,12 +23,14 @@ pub mod layout;
 mod measure;
 pub mod modifier;
 mod nodes;
+pub mod overlay;
 pub mod path;
 mod render;
 pub mod semantics;
 pub mod text;
 pub mod tree;
 pub mod unit;
+pub mod window;
 
 pub use alignment::{Alignment, HorizontalAlignment, LayoutDirection, VerticalAlignment};
 pub use clipboard::{Clipboard, MemoryClipboard};
@@ -52,6 +54,7 @@ pub use modifier::{
     ModifierNodeElement, PaddingValues, ParentAlignment, ParentData, PointerInputModifierNode,
     RowScope, SemanticsModifierNode, SizeSpec, WeightScope,
 };
+pub use overlay::{PopupPositionProvider, WindowPosition};
 pub use path::{ImageVector, Path, PathCommand, PathError, PathFillType};
 pub use semantics::{Role, SemanticsConfiguration, SemanticsNode, ToggleableState};
 pub use text::{
@@ -60,3 +63,7 @@ pub use text::{
 };
 pub use tree::{LayoutNode, NodeId, UiTree};
 pub use unit::{Density, Dp, IntOffset, IntSize, Offset, Rect, Size, Sp, UnitExt, round_to_int};
+pub use window::{
+    AlignmentOffsetPositionProvider, Dialog, DialogProperties, Popup, PopupProperties,
+    PopupWithPositionProvider,
+};

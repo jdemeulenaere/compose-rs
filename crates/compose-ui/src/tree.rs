@@ -127,6 +127,10 @@ pub struct LayoutNode {
     pub(crate) placed: bool,
     /// The parent measurement that last measured it, to reject measuring it twice.
     pub(crate) measured_in: u64,
+    /// An overlay (`Modifier.overlay`): placed in the root at `overlay_origin`, not where its
+    /// parent placed it; drawn last and hit first.
+    pub(crate) overlay: bool,
+    pub(crate) overlay_origin: crate::unit::Offset,
 }
 
 impl LayoutNode {
@@ -148,6 +152,8 @@ impl LayoutNode {
             subtree_needs_measure: false,
             placed: false,
             measured_in: 0,
+            overlay: false,
+            overlay_origin: crate::unit::Offset::ZERO,
         }
     }
 
@@ -183,6 +189,10 @@ pub struct UiTree {
     pub(crate) focus_listeners_dirty: bool,
     /// Actions queued outside dispatch, run by the host after the frame.
     pub(crate) pending_actions: Vec<crate::input::Action>,
+    /// The overlay nodes, in the order they became overlays: later ones over earlier ones.
+    pub(crate) overlays: Vec<NodeId>,
+    /// The window's size, from the last layout.
+    pub(crate) window: IntSize,
     pub(crate) captures: Vec<(crate::input::PointerId, Vec<crate::dispatch::HitEntry>)>,
     /// Observes the state measure policies and custom nodes read (D71), keyed by node.
     pub(crate) observer: Option<Rc<compose_runtime::ReadObserver>>,
@@ -206,6 +216,8 @@ impl UiTree {
             focus: None,
             focus_listeners_dirty: false,
             pending_actions: Vec::new(),
+            overlays: Vec::new(),
+            window: IntSize::new(0, 0),
             captures: Vec::new(),
             observer: None,
             measure_runs: 0,
@@ -471,6 +483,20 @@ impl UiTree {
                 value.layout_indices.push(index as u16);
             }
         }
+        let overlay = value
+            .chain
+            .iter()
+            .any(|entry| entry.downcast_ref::<crate::overlay::OverlayNode>().is_some());
+        if overlay != value.overlay {
+            value.overlay = overlay;
+            if overlay {
+                self.overlays.push(node);
+            } else {
+                self.overlays.retain(|existing| *existing != node);
+            }
+            self.needs_draw = true;
+        }
+        let value = self.node_mut(node);
         for element in value.modifier.elements() {
             match element {
                 // The outermost wins, as Compose's parent data chain folds from the outside.
@@ -534,11 +560,13 @@ impl UiTree {
     /// The position of layer `layer` of `node` in the root, in pixels.
     pub(crate) fn layer_origin(&self, node: NodeId, layer: usize) -> Offset {
         let value = self.node(node);
-        let mut origin = match value.parent {
-            Some(parent) => self.layer_origin(parent, self.node(parent).layers.len() - 1),
-            None => Offset::ZERO,
+        // An overlay is where its provider put it, wherever its parent is.
+        let (mut origin, skip) = match value.parent {
+            _ if value.overlay => (value.overlay_origin, 1),
+            Some(parent) => (self.layer_origin(parent, self.node(parent).layers.len() - 1), 0),
+            None => (Offset::ZERO, 0),
         };
-        for layer in &value.layers[..=layer] {
+        for layer in value.layers[..=layer].iter().skip(skip) {
             origin = origin + Offset::new(layer.offset.x as f32, layer.offset.y as f32);
         }
         origin

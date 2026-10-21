@@ -234,3 +234,91 @@ fn a_clickable_card_clicks() {
     ui.on_node_with_tag("card").perform_click();
     assert_eq!(CLICKS.with(Cell::get), 1);
 }
+
+#[test]
+fn an_alert_dialog_shows_its_parts_and_its_buttons_act() {
+    thread_local! { static CONFIRMED: Cell<u32> = const { Cell::new(0) }; }
+    #[composable]
+    fn Screen(open: MutableState<bool>) {
+        MaterialTheme!({
+            if open.get() {
+                AlertDialog!(
+                    on_dismiss_request = move || open.set(false),
+                    confirm_button = {
+                        TextButton!(
+                            on_click = move || {
+                                CONFIRMED.with(|c| c.set(c.get() + 1));
+                                open.set(false)
+                            },
+                            {
+                                Text!("Delete");
+                            }
+                        );
+                    },
+                    dismiss_button = {
+                        TextButton!(on_click = move || open.set(false), {
+                            Text!("Cancel");
+                        });
+                    },
+                    title = {
+                        Text!("Delete the item?");
+                    },
+                    text = {
+                        Text!("It can't be undone.");
+                    },
+                );
+            }
+        });
+    }
+    let open = mutable_state_of(true);
+    let handle = open.handle();
+    let mut ui = ComposeTestRule::sized(IntSize::new(600, 800), move || Screen(handle));
+    ui.on_node_with_text("Delete the item?").assert_exists();
+    ui.on_node_with_text("It can't be undone.").assert_exists();
+    let cancel = ui.on_node_with_text("Cancel").fetch_semantics_node().bounds;
+    let delete = ui.on_node_with_text("Delete").fetch_semantics_node().bounds;
+    assert!(cancel.right <= delete.left, "dismiss before confirm: {cancel:?} {delete:?}");
+    ui.on_node_with_text("Delete").perform_click();
+    assert_eq!(CONFIRMED.with(Cell::get), 1);
+    ui.on_node_with_text("Delete the item?").assert_does_not_exist();
+}
+
+#[test]
+fn a_dropdown_menu_opens_below_its_anchor_and_closes_on_selection() {
+    thread_local! { static PICKED: Cell<u32> = const { Cell::new(0) }; }
+    #[composable]
+    fn Screen() {
+        let expanded = remember(|| mutable_state_of(false));
+        MaterialTheme!({
+            Box!(modifier = Modifier.padding(20.dp()), {
+                IconButton!(
+                    on_click = move || expanded.set(true),
+                    modifier = Modifier.test_tag("more"),
+                    {
+                        Icon!(icons::filled::more_vert(), Some("More"));
+                    }
+                );
+                DropdownMenu!(expanded.get(), move || expanded.set(false), {
+                    DropdownMenuItem!({ Text!("Edit") }, move || {
+                        PICKED.with(|p| p.set(1));
+                        expanded.set(false)
+                    });
+                    DropdownMenuItem!({ Text!("Share") }, move || {
+                        PICKED.with(|p| p.set(2));
+                        expanded.set(false)
+                    });
+                });
+            });
+        });
+    }
+    let mut ui = ComposeTestRule::sized(IntSize::new(400, 400), Screen);
+    ui.on_node_with_text("Edit").assert_does_not_exist();
+    ui.on_node_with_tag("more").perform_click();
+    let edit = ui.on_node(has_text("Edit")).fetch_semantics_node().bounds;
+    let more = ui.on_node_with_tag("more").fetch_semantics_node().bounds;
+    assert!(edit.top >= more.bottom, "below the anchor: {edit:?} under {more:?}");
+    assert!(edit.width() >= 112.0, "{edit:?}");
+    ui.on_node_with_text("Share").perform_click();
+    assert_eq!(PICKED.with(Cell::get), 2);
+    ui.on_node_with_text("Edit").assert_does_not_exist();
+}

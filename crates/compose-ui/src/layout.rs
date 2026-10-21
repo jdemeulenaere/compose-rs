@@ -77,6 +77,11 @@ impl MeasureScope<'_> {
         self.tree.density
     }
 
+    /// The window's (the root's) size: what popups and dialogs are measured within.
+    pub fn window_size(&self) -> IntSize {
+        self.tree.window
+    }
+
     pub fn layout_direction(&self) -> LayoutDirection {
         LayoutDirection::Ltr
     }

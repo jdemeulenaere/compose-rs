@@ -28,6 +28,20 @@ impl UiTree {
     /// child hit at each level, as Compose's hit testing.
     pub(crate) fn hit_test(&mut self, position: Offset) -> Vec<HitEntry> {
         let mut path = Vec::new();
+        // The overlays first, the topmost first: what one hits, nothing beneath it gets.
+        for index in (0..self.overlays.len()).rev() {
+            let node = self.overlays[index];
+            let Some(value) = self.get(node).filter(|value| value.overlay && value.placed) else {
+                continue;
+            };
+            let placed = value.layers[0].offset;
+            let at = value.overlay_origin - Offset::new(placed.x as f32, placed.y as f32);
+            let inside = contains(value.layers[0].size, position - value.overlay_origin);
+            // A point in an overlay is its, handled or not, as a popup's window takes it.
+            if self.hit_node(node, position - at, &mut path) || inside {
+                return path;
+            }
+        }
         self.hit_node(self.root_id(), position, &mut path);
         path
     }
@@ -83,6 +97,10 @@ impl UiTree {
         let count = value.children.len();
         for index in (0..count).rev() {
             let child = self.node(node).children[index].node;
+            // Overlays are hit first, on their own.
+            if self.node(child).overlay {
+                continue;
+            }
             if self.hit_node(child, content, path) {
                 break;
             }

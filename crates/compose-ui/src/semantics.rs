@@ -294,12 +294,45 @@ impl UiTree {
             let child = self.node(root).children[index].node;
             self.semantics_of(child, merged, &mut config, &mut children);
         }
+        // Overlays (popups, dialogs) are roots of their own, as Compose's windows: after the
+        // content, never merged into what's around their anchor.
+        for index in 0..self.overlays.len() {
+            let overlay = self.overlays[index];
+            if self.get(overlay).is_some_and(|value| value.overlay) {
+                let mut overlay_config = SemanticsConfiguration::default();
+                self.semantics_of_overlay(overlay, merged, &mut overlay_config, &mut children);
+            }
+        }
         SemanticsNode { id: root, bounds: self.bounds_in_root(root), config, children }
     }
 
     /// Adds `node`'s semantics nodes to `out`, the children of the node whose properties are
     /// `parent`.
+    fn semantics_of_overlay(
+        &mut self,
+        node: NodeId,
+        merged: bool,
+        parent: &mut SemanticsConfiguration,
+        out: &mut Vec<SemanticsNode>,
+    ) {
+        self.semantics_of_node(node, merged, parent, out);
+    }
+
     fn semantics_of(
+        &mut self,
+        node: NodeId,
+        merged: bool,
+        parent: &mut SemanticsConfiguration,
+        out: &mut Vec<SemanticsNode>,
+    ) {
+        // Overlays are visited as roots of their own.
+        if self.node(node).overlay {
+            return;
+        }
+        self.semantics_of_node(node, merged, parent, out);
+    }
+
+    fn semantics_of_node(
         &mut self,
         node: NodeId,
         merged: bool,
@@ -358,7 +391,7 @@ impl UiTree {
         config: &mut SemanticsConfiguration,
         children: &mut Vec<SemanticsNode>,
     ) {
-        if !self.node(node).placed {
+        if !self.node(node).placed || self.node(node).overlay {
             return;
         }
         if let Some((own, _)) = self.own_semantics(node) {

@@ -10,6 +10,7 @@
 extern crate compose_runtime as compose;
 
 mod components;
+mod dialog;
 mod icon;
 mod scaffold;
 mod selection;
@@ -20,6 +21,7 @@ pub use components::{
     MINIMUM_INTERACTIVE_SIZE, OutlinedButton, Surface, Text, TextButton, TextField,
     TextFieldColors, TextFieldDefaults, minimum_interactive_component_size,
 };
+pub use dialog::{AlertDialog, DropdownMenu, DropdownMenuItem};
 pub use icon::{FloatingActionButton, Icon, IconButton, icons};
 pub use scaffold::{
     Card, CardColors, CardDefaults, HorizontalDivider, Scaffold, TopAppBar, TopAppBarColors,
@@ -36,4 +38,9 @@ pub use theme::{
 
 // What the defaults of the composables name through `crate::`.
 #[doc(hidden)]
-pub use compose_ui::{Color, Dp, Modifier, RECTANGLE_SHAPE, Sp};
+pub use compose_ui::{Color, Dp, IntOffset, Modifier, RECTANGLE_SHAPE, Sp};
+
+#[doc(hidden)]
+pub fn window_default_dialog_properties() -> compose_ui::DialogProperties {
+    compose_ui::DialogProperties::default()
+}

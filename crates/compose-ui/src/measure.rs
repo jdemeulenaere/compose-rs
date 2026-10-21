@@ -13,6 +13,7 @@ impl UiTree {
     /// Measures and places the tree in a root of `size` pixels. Does nothing when nothing
     /// changed since the last call with this size.
     pub fn layout(&mut self, size: IntSize) -> bool {
+        self.window = size;
         let root = self.root_id();
         let constraints = Constraints::fixed(size.width, size.height);
         let value = self.node(root);
@@ -24,8 +25,48 @@ impl UiTree {
         }
         self.measure_node(root, constraints);
         self.place(root, 0, IntOffset::ZERO);
+        self.position_overlays();
         self.needs_draw = true;
         true
+    }
+
+    /// Places the overlays in the root with their providers, from their anchors' bounds (the
+    /// layout around the popup, the parent of its host), and moves the focus into those that
+    /// ask for it when they first appear.
+    fn position_overlays(&mut self) {
+        let mut overlays = std::mem::take(&mut self.overlays);
+        overlays.retain(|node| self.get(*node).is_some_and(|value| value.overlay));
+        self.overlays = overlays;
+        for index in 0..self.overlays.len() {
+            let node = self.overlays[index];
+            let value = self.node(node);
+            let size = value.layers[0].size;
+            let anchor_node = value.parent.and_then(|host| self.node(host).parent).or(value.parent);
+            let anchor = anchor_node.map_or(crate::unit::Rect::new(0.0, 0.0, 0.0, 0.0), |anchor| {
+                self.bounds_in_root(anchor)
+            });
+            let window = self.window;
+            let Some((provider, focus)) = self.node(node).chain.iter().find_map(|entry| {
+                entry.downcast_ref::<crate::overlay::OverlayNode>().map(|overlay| {
+                    (overlay.provider.clone(), overlay.focus_on_open && !overlay.focused_once)
+                })
+            }) else {
+                continue;
+            };
+            let position = provider.position(anchor, window, size);
+            let value = self.node_mut(node);
+            value.overlay_origin = crate::unit::Offset::new(position.x as f32, position.y as f32);
+            if focus {
+                for entry in value.chain.iter_mut() {
+                    if let Some(overlay) = entry.downcast_mut::<crate::overlay::OverlayNode>() {
+                        overlay.focused_once = true;
+                    }
+                }
+                let mut actions = std::mem::take(&mut self.pending_actions);
+                self.request_focus_into(node, &mut actions);
+                self.pending_actions = actions;
+            }
+        }
     }
 
     /// Measures `node` with `constraints`, returning the size its parent sees. A node measured

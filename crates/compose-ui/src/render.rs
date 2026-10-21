@@ -20,6 +20,18 @@ impl UiTree {
         list.clear();
         let observer = self.observer.clone();
         self.draw_node(self.root_id(), &mut list, observer.as_deref());
+        // The overlays, over everything, each where its provider put it.
+        for index in 0..self.overlays.len() {
+            let node = self.overlays[index];
+            let Some(value) = self.get(node).filter(|value| value.overlay && value.placed) else {
+                continue;
+            };
+            let placed = value.layers[0].offset;
+            let at = value.overlay_origin - Offset::new(placed.x as f32, placed.y as f32);
+            translate(&mut list, at);
+            self.draw_node(node, &mut list, observer.as_deref());
+            translate(&mut list, negate(at));
+        }
         self.display_list = list;
         self.needs_draw = false;
         true
@@ -95,7 +107,10 @@ impl UiTree {
             translate(list, content);
             for index in 0..count {
                 let child = self.node(node).children[index].node;
-                self.draw_node(child, list, observer);
+                // Overlays are drawn last, over everything.
+                if !self.node(child).overlay {
+                    self.draw_node(child, list, observer);
+                }
             }
             translate(list, negate(content));
         }
