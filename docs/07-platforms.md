@@ -89,19 +89,23 @@ The NDK offers no C API for `Canvas`: drawing with the system's Skia means the `
 
 ### The rest of the platform glue
 
-This is a thin Kotlin layer, part of an AAR shipped with the Rust library:
+A thin Kotlin layer (`android/compose-rs`, an AAR) and `crates/compose-android` (the JNI functions, the display list's serializer, the text measurer):
 
 | Concern | Kotlin side | Crossings |
 |---|---|---|
-| Touch and keys | `onTouchEvent`, `onKeyEvent` forward batched events | one per event batch |
-| Text measurement | `StaticLayout` cache keyed by paragraph handle | one per changed text |
-| Soft keyboard | `onCreateInputConnection` returns an `InputConnection` bridged to the focused `TextFieldState` | per edit |
-| Accessibility | an `AccessibilityNodeProvider` built from the semantics tree | when the system asks |
-| Lifecycle and configuration | density, font scale and dark mode passed to the composition; detaching from the window disposes it | on change |
+| Frames | a Choreographer callback calls `frame` (recompose, lay out, record); `onDraw` takes the bytes and replays them; the first frame is composed during the view's first layout, so the window's first frame shows the content | one per frame, one per draw |
+| Drawing | `Replayer.kt`: each operation a `Canvas` call; paths and images kept by id (defined once, dropped with their owner); each paragraph recorded once into a `RenderNode`, then drawn by reference | in the frame's buffer |
+| Touch and keys | `onTouchEvent` forwards each pointer's samples with their event times (historical ones too: a fling's velocity comes from them); `onKeyDown`/`onKeyUp` the key and its character (without Ctrl, Alt or Meta, so shortcuts are known); a wheel's `ACTION_SCROLL` | one per sample, per key |
+| Text measurement | `TextMeasurer.kt`: a `StaticLayout` per paragraph, its style runs and line options encoded in a request; metrics back through a shared buffer; offsets converted between UTF-8 and UTF-16 on the Rust side | one per laid-out paragraph |
+| Soft keyboard | `onCreateInputConnection`: committed text, the composing text (shown in place), deletions as keys; a password field's input type keeps the keyboard from learning it | per edit |
+| Accessibility | `Accessibility.kt`, an `AccessibilityNodeProvider`: the merged semantics tree as virtual views (texts, roles, states, ranges, click, focus and progress actions, explore-by-touch) | when a service asks after a change |
+| Tasks | woken tasks and `delay`s become main-thread `Handler` posts (a new earliest timer wakes the host) | per tick |
+| Lifecycle and configuration | density, font scale and layout direction passed to the composition; detaching from the window disposes it | on change |
+| Tracing | the frame's phases as `ATrace` sections (`compose-rs: recompose`, `layout`, `draw`, `text layout`, `serialize`, `replay`), beside the system's in Perfetto | none |
 
-The **frame and composition thread** is Android's main thread. Choreographer drives frames only while scopes are invalid, so an idle view costs nothing.
+The **frame and composition thread** is Android's main thread. Choreographer drives frames only while scopes are invalid or animations run, so an idle view costs nothing. Rendering is the system's: a hardware-accelerated view's `Canvas` is recorded by the UI thread and drawn by the render thread on the GPU (Vulkan on recent devices), as Compose's is.
 
-**Packaging:** the Rust code builds as a `cdylib` per ABI (arm64-v8a, x86_64) with `cargo-ndk`, and an AAR bundles it with the Kotlin shim.
+**Packaging:** the app's Rust library (its root composables named with `compose_android::export_apps!`) builds as a `cdylib` for arm64 with `android/build-rust.sh` (the NDK's linker, no `cargo-ndk` needed), run by Gradle before each build; `ComposeRsView(context, "name")` shows one of its apps. `android/demo` hosts the examples; `android/bench-compose` and `android/bench-rs` are the same app in Kotlin Compose and compose-rs, measured by `android/bench/measure.py` ([12](12-android-performance.md)).
 
 ### Later option: native Skia on Android
 

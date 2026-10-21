@@ -114,8 +114,7 @@ fn modifier_order_decides_what_is_drawn_where() {
 rect 5,5 10x10 #FFFF0000
 translate 0 20
 rect 0,0 20x20 #FF0000FF
-translate 0 -20
-translate 0 40
+translate 0 20
 save
   clip 0,0 20x20 radii [4.0, 4.0, 4.0, 4.0]
   rect 0,0 20x20 #FF00FF00

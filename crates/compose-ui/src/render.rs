@@ -194,8 +194,18 @@ fn negate(offset: Offset) -> Offset {
     Offset::new(0.0 - offset.x, 0.0 - offset.y)
 }
 
+/// Moves what follows by `by`: merged into a translation just before (a node that drew
+/// nothing between its move in and out leaves none).
 fn translate(list: &mut DisplayList, by: Offset) {
-    if by != Offset::ZERO {
-        list.push(DrawOp::Translate(by));
+    if by == Offset::ZERO {
+        return;
     }
+    if let Some(DrawOp::Translate(last)) = list.ops.last_mut() {
+        *last = *last + by;
+        if *last == Offset::ZERO {
+            list.ops.pop();
+        }
+        return;
+    }
+    list.push(DrawOp::Translate(by));
 }

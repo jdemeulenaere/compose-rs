@@ -26,25 +26,16 @@ translate 16 16
 round rect 0,4 104x40 radii [20.0, 20.0, 20.0, 20.0] #FF6750A4
 save
   clip 0,4 104x40 radii [20.0, 20.0, 20.0, 20.0]
-  translate 0 4
-  translate 24 8
-  translate 0 2
+  translate 24 14
   paragraph 0 at 0 0
-  translate 0 -2
-  translate -24 -8
-  translate 0 -4
+  translate -24 -14
 restore
 translate 0 56
 round rect 0,4 83x40 radii [20.0, 20.0, 20.0, 20.0] #1F1D1B20
 save
   clip 0,4 83x40 radii [20.0, 20.0, 20.0, 20.0]
-  translate 0 4
-  translate 24 8
-  translate 0 2
+  translate 24 14
   paragraph 1 at 0 0
-  translate 0 -2
-  translate -24 -8
-  translate 0 -4
+  translate -24 -14
 restore
-translate 0 -56
-translate -16 -16
+translate -16 -72

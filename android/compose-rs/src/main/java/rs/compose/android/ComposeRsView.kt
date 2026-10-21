@@ -87,7 +87,9 @@ class ComposeRsView(context: Context, private val app: String) : View(context) {
             resources.configuration.fontScale,
             layoutDirection == LAYOUT_DIRECTION_RTL,
         )
-        requestFrame()
+        // Composed, laid out and recorded now (during the window's layout), so the first frame
+        // the window draws shows the content, as a Compose view's does.
+        frame()
     }
 
     private fun destroy() {

@@ -295,11 +295,69 @@ fn write_path(writer: &mut Writer, id: u32, path: &Path) {
     }
 }
 
+/// Whether the layer opening at `start` (a `SaveLayerAlpha`) holds one drawing with a paint,
+/// among saves, clips and moves: its alpha can go into that paint, without an offscreen layer
+/// (a GPU pass each frame on Android). Returns the index of its closing `Restore` if so.
+fn foldable_layer(ops: &[DrawOp], start: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    let mut drawings = 0;
+    for (index, op) in ops.iter().enumerate().skip(start + 1) {
+        match op {
+            DrawOp::Save | DrawOp::SaveLayerAlpha(_) => {
+                if matches!(op, DrawOp::SaveLayerAlpha(_)) {
+                    return None;
+                }
+                depth += 1;
+            }
+            DrawOp::Restore if depth == 0 => return (drawings == 1).then_some(index),
+            DrawOp::Restore => depth -= 1,
+            DrawOp::Translate(_)
+            | DrawOp::ClipRect(_)
+            | DrawOp::ClipRoundRect(..)
+            | DrawOp::Transform { .. } => {}
+            DrawOp::DrawRect(..)
+            | DrawOp::DrawRoundRect(..)
+            | DrawOp::DrawLine(..)
+            | DrawOp::DrawArc { .. }
+            | DrawOp::DrawPath { .. } => drawings += 1,
+            // Text, images and shadows draw what a paint's alpha doesn't reach.
+            DrawOp::DrawParagraph(..) | DrawOp::DrawImage { .. } | DrawOp::DrawShadow { .. } => {
+                return None;
+            }
+        }
+    }
+    None
+}
+
+/// `paint` with its color's alpha multiplied by `alpha`.
+fn faded(paint: &Paint, alpha: f32) -> Paint {
+    if alpha >= 1.0 {
+        return *paint;
+    }
+    let argb = paint.color.argb();
+    let faded = ((argb >> 24) as f32 * alpha.clamp(0.0, 1.0)).round() as u32;
+    Paint { color: Color::from_argb((faded << 24) | (argb & 0x00FF_FFFF)), ..*paint }
+}
+
 /// Writes `list` into `out` (cleared first), defining in `resources` the paths and images it
 /// uses.
 pub fn write_display_list(list: &DisplayList, resources: &mut Resources, out: &mut Writer) {
     out.bytes.clear();
-    for op in &list.ops {
+    // Layers folded into their one drawing's paint: where each ends, and its alpha.
+    let mut folds: Vec<(usize, f32)> = Vec::new();
+    for (index, op) in list.ops.iter().enumerate() {
+        while folds.last().is_some_and(|(end, _)| *end < index) {
+            folds.pop();
+        }
+        let alpha: f32 = folds.iter().map(|(_, alpha)| alpha).product();
+        let faded_paint = |paint: &Paint| faded(paint, alpha);
+        if let DrawOp::SaveLayerAlpha(layer_alpha) = op
+            && let Some(end) = foldable_layer(&list.ops, index)
+        {
+            folds.push((end, *layer_alpha));
+            out.u8(tag::SAVE);
+            continue;
+        }
         match op {
             DrawOp::Save => out.u8(tag::SAVE),
             DrawOp::Restore => out.u8(tag::RESTORE),
@@ -319,19 +377,19 @@ pub fn write_display_list(list: &DisplayList, resources: &mut Resources, out: &m
             DrawOp::DrawRect(rect, paint) => {
                 out.u8(tag::DRAW_RECT);
                 out.rect(rect);
-                out.paint(paint);
+                out.paint(&faded_paint(paint));
             }
             DrawOp::DrawRoundRect(rect, radii, paint) => {
                 out.u8(tag::DRAW_ROUND_RECT);
                 out.rect(rect);
                 out.radii(radii);
-                out.paint(paint);
+                out.paint(&faded_paint(paint));
             }
             DrawOp::DrawLine(from, to, paint) => {
                 out.u8(tag::DRAW_LINE);
                 out.offset(*from);
                 out.offset(*to);
-                out.paint(paint);
+                out.paint(&faded_paint(paint));
             }
             DrawOp::DrawParagraph(handle, offset) => {
                 out.u8(tag::DRAW_PARAGRAPH);
@@ -375,7 +433,7 @@ pub fn write_display_list(list: &DisplayList, resources: &mut Resources, out: &m
                 out.f32(*start_angle);
                 out.f32(*sweep_angle);
                 out.u8(u8::from(*use_center));
-                out.paint(paint);
+                out.paint(&faded_paint(paint));
             }
             DrawOp::DrawPath { path, offset, scale, paint } => {
                 let id = resources.path_id(path);
@@ -384,7 +442,7 @@ pub fn write_display_list(list: &DisplayList, resources: &mut Resources, out: &m
                 out.offset(*offset);
                 out.f32(scale.0);
                 out.f32(scale.1);
-                out.paint(paint);
+                out.paint(&faded_paint(paint));
             }
         }
     }
@@ -409,6 +467,30 @@ mod tests {
         assert_eq!(out.bytes[0], tag::DRAW_RECT);
         assert_eq!(f32::from_le_bytes(out.bytes[13..17].try_into().unwrap()), 4.0);
         assert_eq!(read_u32(&out.bytes, 17), 0xFF00_0000);
+    }
+
+    #[test]
+    fn a_layer_with_one_drawing_fades_its_paint_instead() {
+        let mut list = DisplayList::default();
+        list.push(DrawOp::SaveLayerAlpha(0.5));
+        list.push(DrawOp::ClipRect(Rect::new(0.0, 0.0, 4.0, 4.0)));
+        list.push(DrawOp::DrawRect(Rect::new(0.0, 0.0, 4.0, 4.0), Paint::fill(Color::BLACK)));
+        list.push(DrawOp::Restore);
+        // After it, the paint is whole again.
+        list.push(DrawOp::DrawRect(Rect::new(0.0, 0.0, 4.0, 4.0), Paint::fill(Color::BLACK)));
+        let (mut resources, mut out) = (Resources::default(), Writer::default());
+        write_display_list(&list, &mut resources, &mut out);
+        assert_eq!(out.bytes[0], tag::SAVE);
+        // Save, clip (17 bytes), then the rect: its color at 1 + 17 + 1 + 16.
+        assert_eq!(read_u32(&out.bytes, 35), 0x8000_0000);
+        let last = out.bytes.len() - 27;
+        assert_eq!(out.bytes[last], tag::DRAW_RECT);
+        assert_eq!(read_u32(&out.bytes, last + 17), 0xFF00_0000);
+        // Two drawings: a layer, as their overlap must fade together.
+        list.ops
+            .insert(3, DrawOp::DrawRect(Rect::new(1.0, 1.0, 2.0, 2.0), Paint::fill(Color::WHITE)));
+        write_display_list(&list, &mut resources, &mut out);
+        assert_eq!(out.bytes[0], tag::SAVE_LAYER_ALPHA);
     }
 
     #[test]
