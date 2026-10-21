@@ -563,6 +563,18 @@ pub struct TextFieldColors {
     pub disabled_indicator_color: Color,
     pub disabled_label_color: Color,
     pub disabled_placeholder_color: Color,
+    pub error_cursor_color: Color,
+    pub error_indicator_color: Color,
+    pub error_label_color: Color,
+    pub leading_icon_color: Color,
+    pub disabled_leading_icon_color: Color,
+    pub error_leading_icon_color: Color,
+    pub trailing_icon_color: Color,
+    pub disabled_trailing_icon_color: Color,
+    pub error_trailing_icon_color: Color,
+    pub supporting_text_color: Color,
+    pub disabled_supporting_text_color: Color,
+    pub error_supporting_text_color: Color,
 }
 
 impl compose_runtime::ComposeArg for TextFieldColors {
@@ -593,6 +605,18 @@ impl TextFieldDefaults {
             disabled_indicator_color: scheme.on_surface.with_alpha(0.38),
             disabled_label_color: scheme.on_surface.with_alpha(0.38),
             disabled_placeholder_color: scheme.on_surface.with_alpha(0.38),
+            error_cursor_color: scheme.error,
+            error_indicator_color: scheme.error,
+            error_label_color: scheme.error,
+            leading_icon_color: scheme.on_surface_variant,
+            disabled_leading_icon_color: scheme.on_surface.with_alpha(0.38),
+            error_leading_icon_color: scheme.on_surface_variant,
+            trailing_icon_color: scheme.on_surface_variant,
+            disabled_trailing_icon_color: scheme.on_surface.with_alpha(0.38),
+            error_trailing_icon_color: scheme.error,
+            supporting_text_color: scheme.on_surface_variant,
+            disabled_supporting_text_color: scheme.on_surface.with_alpha(0.38),
+            error_supporting_text_color: scheme.error,
         }
     }
 

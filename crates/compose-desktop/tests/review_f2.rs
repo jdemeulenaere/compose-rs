@@ -38,7 +38,10 @@ fn focused_field() -> UiHost {
             true,
             false,
             compose_ui::TextStyle::DEFAULT,
+            compose_foundation::KeyboardOptions::DEFAULT,
+            compose_foundation::KeyboardActions::new(),
             false,
+            compose_foundation::VisualTransformation::NONE,
             compose_ui::Color::BLACK,
             compose_runtime::callback(compose_foundation::inner_text_field_only),
         );

@@ -19,6 +19,7 @@ pub mod scrollbar;
 pub mod shape;
 mod text;
 mod text_field;
+pub mod text_input;
 pub mod tooltip;
 
 pub use compose_ui::{
@@ -60,4 +61,8 @@ pub use shape::{
 };
 pub use text::{BasicAnnotatedText, BasicText, TextElement, TextNode};
 pub use text_field::{BasicTextField, TextFieldElement, TextFieldNode, inner_text_field_only};
+pub use text_input::{
+    ImeAction, KeyboardActions, KeyboardOptions, KeyboardType, OffsetMapping,
+    PasswordVisualTransformation, TransformedText, VisualTransform, VisualTransformation,
+};
 pub use tooltip::{TooltipArea, TooltipPlacement};

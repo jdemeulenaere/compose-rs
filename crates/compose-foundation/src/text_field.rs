@@ -9,7 +9,11 @@
 
 use std::rc::Rc;
 
-use compose_runtime::{Callback, composable};
+use compose_runtime::{Callback, ComposeArg, composable};
+
+use crate::text_input::{
+    ImeAction, KeyboardActions, KeyboardOptions, OffsetMapping, VisualTransformation,
+};
 use compose_ui::{
     Color, Constraints, DetachContext, DrawModifierNode, DrawScope, EventContext,
     FocusTargetModifierNode, IntSize, Key, KeyEvent, KeyEventType, KeyInputModifierNode, Layout,
@@ -41,7 +45,10 @@ pub fn BasicTextField(
     #[default(true)] enabled: bool,
     #[default(false)] read_only: bool,
     #[default(crate::TextStyle::DEFAULT)] text_style: TextStyle,
+    #[default(crate::KeyboardOptions::DEFAULT)] keyboard_options: KeyboardOptions,
+    #[default(crate::KeyboardActions::new())] keyboard_actions: KeyboardActions,
     #[default(false)] single_line: bool,
+    #[default(crate::VisualTransformation::NONE)] visual_transformation: VisualTransformation,
     #[default(crate::Color::BLACK)] cursor_color: Color,
     #[default(crate::inner_text_field_only)] decoration_box: impl Fn(Callback) + 'static,
 ) {
@@ -53,6 +60,9 @@ pub fn BasicTextField(
         style: text_style,
         single_line,
         cursor_color,
+        keyboard_options,
+        keyboard_actions,
+        visual_transformation,
     });
     let inner_text_field = Callback::new(move || {
         Layout(
@@ -87,6 +97,9 @@ pub struct TextFieldElement {
     pub style: TextStyle,
     pub single_line: bool,
     pub cursor_color: Color,
+    pub keyboard_options: KeyboardOptions,
+    pub keyboard_actions: KeyboardActions,
+    pub visual_transformation: VisualTransformation,
 }
 
 impl ModifierNodeElement for TextFieldElement {
@@ -123,6 +136,10 @@ impl ModifierNodeElement for TextFieldElement {
             last_typing: None,
             composition: None,
             composition_rects: Vec::new(),
+            keyboard_options: self.keyboard_options,
+            keyboard_actions: self.keyboard_actions.clone(),
+            visual_transformation: self.visual_transformation.clone(),
+            mapping: None,
         })
     }
 
@@ -135,6 +152,7 @@ impl ModifierNodeElement for TextFieldElement {
         if node.text != self.value
             || node.style != self.style
             || node.single_line != self.single_line
+            || !node.visual_transformation.same(&self.visual_transformation)
         {
             if node.text != self.value {
                 // The application changed the text: the history no longer applies to it.
@@ -147,12 +165,15 @@ impl ModifierNodeElement for TextFieldElement {
             }
             node.style = self.style;
             node.single_line = self.single_line;
+            node.visual_transformation = self.visual_transformation.clone();
             node.invalidate_paragraph();
         }
         node.on_value_change = self.on_value_change.clone();
         node.enabled = self.enabled;
         node.read_only = self.read_only;
         node.cursor_color = self.cursor_color;
+        node.keyboard_options = self.keyboard_options;
+        node.keyboard_actions = self.keyboard_actions.clone();
     }
 
     fn same(&self, other: &dyn ModifierNodeElement) -> bool {
@@ -164,6 +185,9 @@ impl ModifierNodeElement for TextFieldElement {
                 && other.style == self.style
                 && other.single_line == self.single_line
                 && other.cursor_color == self.cursor_color
+                && other.keyboard_options == self.keyboard_options
+                && other.keyboard_actions.same(&self.keyboard_actions)
+                && other.visual_transformation.same(&self.visual_transformation)
         })
     }
 
@@ -275,9 +299,24 @@ pub struct TextFieldNode {
     composition: Option<(String, Option<(usize, usize)>)>,
     /// The composition's underline, from the measurer, refreshed at measurement.
     composition_rects: Vec<Rect>,
+    keyboard_options: KeyboardOptions,
+    keyboard_actions: KeyboardActions,
+    visual_transformation: VisualTransformation,
+    /// How the paragraph's offsets map to the text's, when it's transformed.
+    mapping: Option<Rc<dyn OffsetMapping>>,
 }
 
 impl TextFieldNode {
+    /// `offset` in the text, in the paragraph shown.
+    fn shown(&self, offset: usize) -> usize {
+        self.mapping.as_ref().map_or(offset, |mapping| mapping.original_to_transformed(offset))
+    }
+
+    /// `offset` in the paragraph shown, in the text.
+    fn original_of(&self, offset: usize) -> usize {
+        self.mapping.as_ref().map_or(offset, |mapping| mapping.transformed_to_original(offset))
+    }
+
     /// The text laid out and shown: the text, with the composition in place of the selection.
     fn display_text(&self) -> std::borrow::Cow<'_, str> {
         match &self.composition {
@@ -452,17 +491,17 @@ impl TextFieldNode {
     fn offset_at(&self, position: Offset, context: &mut EventContext<'_>) -> Option<usize> {
         let paragraph = self.paragraph?;
         let offset = context.text_measurer().hit_test(paragraph, position).offset;
-        Some(floor_char_boundary(&self.text, offset))
+        Some(floor_char_boundary(&self.text, self.original_of(offset)))
     }
 
     /// The start or end of the visual (wrapped) line the cursor is on, from the measurer.
     fn line_edge(&self, end: bool, context: &mut EventContext<'_>) -> usize {
         if let Some(paragraph) = self.paragraph {
-            let rect = context.text_measurer().cursor_rect(paragraph, self.cursor);
+            let rect = context.text_measurer().cursor_rect(paragraph, self.shown(self.cursor));
             let y = (rect.top + rect.bottom) / 2.0;
             let x = if end { f32::MAX / 4.0 } else { -1.0 };
             let found = context.text_measurer().hit_test(paragraph, Offset::new(x, y)).offset;
-            let found = floor_char_boundary(&self.text, found);
+            let found = floor_char_boundary(&self.text, self.original_of(found));
             // At a soft wrap the line ends before the space that breaks it (not at a new line,
             // where a space ending the line is the line's).
             return if end
@@ -488,7 +527,7 @@ impl TextFieldNode {
         let Some(paragraph) = self.paragraph else {
             return if down { self.text.len() } else { 0 };
         };
-        let rect = context.text_measurer().cursor_rect(paragraph, self.cursor);
+        let rect = context.text_measurer().cursor_rect(paragraph, self.shown(self.cursor));
         let x = *self.preferred_x.get_or_insert(rect.left);
         let height = context.text_measurer().metrics(paragraph).size.height as f32;
         let y = if down { rect.bottom + 1.0 } else { rect.top - 1.0 };
@@ -638,6 +677,17 @@ impl LayoutModifierNode for TextFieldNode {
                 let mut text_constraints = constraints.offset(-cursor_width, 0);
                 text_constraints.min_height = 0;
                 let text = if bare { self.text.clone() } else { self.display_text().into_owned() };
+                // Shown transformed (a password's mask), its offsets mapped.
+                let text = match self.visual_transformation.filter(&text) {
+                    Some(transformed) => {
+                        self.mapping = Some(transformed.offset_mapping);
+                        transformed.text
+                    }
+                    None => {
+                        self.mapping = None;
+                        text
+                    }
+                };
                 let paragraph = scope.text_measurer().layout(
                     &text,
                     &self.style,
@@ -650,10 +700,8 @@ impl LayoutModifierNode for TextFieldNode {
             }
             let paragraph = self.paragraph.expect("laid out");
             if let Some(tap) = self.pending_tap.take() {
-                self.cursor = floor_char_boundary(
-                    &self.text,
-                    scope.text_measurer().hit_test(paragraph, tap + self.scroll).offset,
-                );
+                let offset = scope.text_measurer().hit_test(paragraph, tap + self.scroll).offset;
+                self.cursor = floor_char_boundary(&self.text, self.original_of(offset));
                 self.anchor = self.cursor;
             }
             if bare {
@@ -666,23 +714,23 @@ impl LayoutModifierNode for TextFieldNode {
             break paragraph;
         };
         self.cursor_rect =
-            Some(scope.text_measurer().cursor_rect(paragraph, self.display_cursor()));
+            Some(scope.text_measurer().cursor_rect(paragraph, self.shown(self.display_cursor())));
         self.selection_rects.clear();
         self.composition_rects.clear();
         match &self.composition {
             Some((composing, _)) => {
                 let start = self.selection().start;
                 if !composing.is_empty() {
-                    self.composition_rects = scope
-                        .text_measurer()
-                        .selection_rects(paragraph, start..start + composing.len());
+                    let range = self.shown(start)..self.shown(start + composing.len());
+                    self.composition_rects =
+                        scope.text_measurer().selection_rects(paragraph, range);
                 }
             }
             None => {
                 let selection = self.selection();
                 if !selection.is_empty() {
-                    self.selection_rects =
-                        scope.text_measurer().selection_rects(paragraph, selection);
+                    let range = self.shown(selection.start)..self.shown(selection.end);
+                    self.selection_rects = scope.text_measurer().selection_rects(paragraph, range);
                 }
             }
         }
@@ -987,6 +1035,9 @@ impl KeyInputModifierNode for TextFieldNode {
                     self.cursor = self.text.len();
                     context.invalidate_measure();
                 }
+                // A password can't be copied nor cut, as Compose's.
+                'c' if self.visual_transformation.is_password() => {}
+                'x' if self.visual_transformation.is_password() => {}
                 'c' if !selected.is_empty() => context.clipboard().set_text(&selected),
                 'x' if !selected.is_empty() && editable => {
                     context.clipboard().set_text(&selected);
@@ -1084,6 +1135,17 @@ impl KeyInputModifierNode for TextFieldNode {
                 self.insert("\n", false, context);
                 true
             }
+            // A single line's Enter performs its action, as Compose's `onImeActionPerformed`.
+            Key::Enter | Key::NumPadEnter if self.single_line => {
+                let ime_action = self.keyboard_options.ime_action;
+                match (self.keyboard_actions.action(ime_action), ime_action) {
+                    (Some(action), _) => context.call(action),
+                    (None, ImeAction::Next) => context.move_focus(true),
+                    (None, ImeAction::Previous) => context.move_focus(false),
+                    _ => return false,
+                }
+                true
+            }
             _ => false,
         }
     }
@@ -1132,7 +1194,13 @@ impl SemanticsModifierNode for TextFieldNode {
     fn apply_semantics(&self, config: &mut SemanticsConfiguration) {
         // The field's node is its decoration's, as Compose's `CoreTextField`.
         config.part_of_parent = true;
-        config.editable_text = Some(self.display_text().into_owned().into());
+        // What's shown: a password's mask, as Compose's.
+        let text = self.display_text();
+        config.editable_text = Some(match self.visual_transformation.filter(&text) {
+            Some(transformed) => transformed.text.into(),
+            None => text.into_owned().into(),
+        });
+        config.password |= self.visual_transformation.is_password();
         config.editable = true;
         config.focusable |= self.enabled;
         config.focused |= self.focused;

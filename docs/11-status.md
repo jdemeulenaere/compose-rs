@@ -16,7 +16,7 @@ What compose-rs covers of Jetpack Compose today, and where it knowingly differs.
 - **Layout:** `Layout` and measure policies, `Box`, `BoxWithConstraints`, `Row`, `Column`, `Spacer`, arrangements and alignments, weights, size and padding modifiers, scrolling, `LazyColumn`, `LazyRow`, `LazyVerticalGrid`, scrollbars, right-to-left layout.
 - **Drawing:** shapes, borders, clips, graphics layers, paths and `ImageVector`, images, arcs and stroke caps, shadows, `Canvas`, `draw_behind`, `draw_with_content`.
 - **Text:** `BasicText`, `BasicTextField` (selection, IME, undo, Compose Desktop's key mappings), `TextStyle` (weight, style, family, letter spacing, decoration, alignment, line height), overflow, `AnnotatedString` spans.
-- **Input:** clicks and toggles, pointer events with passes, hover, pointer icons, `pointer_input` with Compose's gesture detectors, `draggable`, keys and focus (Tab order, focus requests, `bring_into_view`), semantics with actions.
+- **Input:** clicks and toggles, `FocusRequester`, keyboard options and actions, password fields, pointer events with passes, hover, pointer icons, `pointer_input` with Compose's gesture detectors, `draggable`, keys and focus (Tab order, focus requests, `bring_into_view`), semantics with actions.
 - **Windows:** `Popup`, `Dialog`, `TooltipArea`.
 - **Animation:** `Animatable`, tweens, springs, keyframe-free repeatables, `animate_*_as_state`, infinite transitions, `AnimatedVisibility`, `Crossfade`, `AnimatedContent`, `update_transition`, `animate_content_size`.
 - **Material 3:** the theme (colors, typography, shapes, tonal elevation), `Text`, `Surface`, buttons (filled, tonal, elevated, outlined, text, icon, FAB), icons, `Checkbox`, `Switch`, `RadioButton`, `Slider`, `TextField` and `OutlinedTextField`, cards, dividers, `ListItem`, `TopAppBar`, `Scaffold`, `NavigationBar`, `TabRow`, `AlertDialog`, `DropdownMenu`, `Snackbar`, progress indicators, `PlainTooltip`, chips and badges.
@@ -31,7 +31,7 @@ What compose-rs covers of Jetpack Compose today, and where it knowingly differs.
 - **Rendering** is on the CPU: fast at window sizes up to about 1080p (well under a millisecond to render a screen), slower at 4K. A GPU surface is planned (D93).
 - **One window** per app; Compose Desktop's `application { Window(…) }` with several windows isn't there.
 - **Grids** keep an item's state by its row rather than its key (D144); a popup in a lazy item composed beyond the viewport shows (D136).
-- **Text** has no link annotations, no paragraph styles in spans, no selection in non-editable text (`SelectionContainer`), and text fields have no leading or trailing icons, supporting text or error state.
+- **Text** has no link annotations, no paragraph styles in spans, no selection in non-editable text (`SelectionContainer`), and text fields have no prefix, suffix, `max_lines` or `min_lines`.
 - **Animation** has no keyframes spec, and transitions have no child transitions; `AnimatedContent` keeps at most three states' contents while they animate.
 - **Material** lacks, among others, navigation drawers, bottom sheets, input chips, date and time pickers, segmented buttons and search bars.
 - **Saving state** across process death (`rememberSaveable`) has no desktop counterpart and isn't provided.

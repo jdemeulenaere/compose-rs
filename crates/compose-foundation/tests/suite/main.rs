@@ -37,4 +37,5 @@ mod scroll;
 mod scrollbar;
 mod semantics_actions;
 mod shadow;
+mod text_input;
 mod window;

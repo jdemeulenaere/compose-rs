@@ -233,6 +233,8 @@ pub(crate) struct Requests {
     /// Where (in the root) the tap that asked for focus was, for the focus target to use.
     pub(crate) focus_tap: Option<Offset>,
     pub(crate) clear_focus: bool,
+    /// Tab's move, forward or back.
+    pub(crate) move_focus: Option<bool>,
     pub(crate) draw: bool,
     pub(crate) measure: Vec<NodeId>,
     pub(crate) reset_input_method: bool,
@@ -271,6 +273,12 @@ impl EventContext<'_> {
     pub fn request_focus_at_pointer(&mut self) {
         self.requests.focus = Some(self.node);
         self.requests.focus_tap = self.pointer_position;
+    }
+
+    /// Moves focus to the next (or previous) focus target, as `FocusManager.moveFocus(Next)`
+    /// (`Previous`).
+    pub fn move_focus(&mut self, forward: bool) {
+        self.requests.move_focus = Some(forward);
     }
 
     /// Clears focus, as `FocusManager.clearFocus`.

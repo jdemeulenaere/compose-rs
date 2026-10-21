@@ -71,6 +71,8 @@ pub struct SemanticsConfiguration {
     pub merge_descendants: bool,
     pub text: SmallVec<[SharedString; 1]>,
     pub editable_text: Option<SharedString>,
+    /// Why its input is invalid, as `error(description)`.
+    pub error: Option<SharedString>,
     pub content_description: SmallVec<[SharedString; 1]>,
     pub test_tag: Option<SharedString>,
     pub role: Option<Role>,
@@ -83,6 +85,8 @@ pub struct SemanticsConfiguration {
     pub clickable: bool,
     /// Whether the node takes text input (a text field).
     pub editable: bool,
+    /// Its text is a password, shown masked, as `password()`.
+    pub password: bool,
     /// The node's state in words (a slider's value), as `stateDescription`.
     pub state_description: Option<SharedString>,
     /// Its value in a range (a slider's), as `progressBarRangeInfo`.
@@ -111,6 +115,9 @@ impl SemanticsConfiguration {
         if self.editable_text.is_none() {
             self.editable_text = child.editable_text.clone();
         }
+        if self.error.is_none() {
+            self.error = child.error.clone();
+        }
         if self.state_description.is_none() {
             self.state_description = child.state_description.clone();
         }
@@ -127,6 +134,7 @@ impl SemanticsConfiguration {
         }
         // Compose's default merge policy, parent ?: child: a flag set below is set here.
         self.editable |= child.editable;
+        self.password |= child.password;
         self.focused |= child.focused;
         self.focusable |= child.focusable;
         self.disabled |= child.disabled;
@@ -142,6 +150,9 @@ impl SemanticsConfiguration {
         }
         if !other.content_description.is_empty() {
             self.content_description = other.content_description.clone();
+        }
+        if other.error.is_some() {
+            self.error = other.error.clone();
         }
         if other.editable_text.is_some() {
             self.editable_text = other.editable_text.clone();
@@ -171,6 +182,7 @@ impl SemanticsConfiguration {
         self.focused |= other.focused;
         self.clickable |= other.clickable;
         self.editable |= other.editable;
+        self.password |= other.password;
     }
 
     /// All text, editable text first, joined by ", ": what text finders match.
@@ -193,6 +205,9 @@ impl fmt::Debug for SemanticsConfiguration {
         }
         if let Some(text) = &self.editable_text {
             parts.push(format!("editable_text={text:?}"));
+        }
+        if let Some(error) = &self.error {
+            parts.push(format!("error={error:?}"));
         }
         if !self.content_description.is_empty() {
             parts.push(format!(
@@ -221,6 +236,7 @@ impl fmt::Debug for SemanticsConfiguration {
         for (flag, name) in [
             (self.clickable, "clickable"),
             (self.editable, "editable"),
+            (self.password, "password"),
             (self.disabled, "disabled"),
             (self.focusable, "focusable"),
             (self.focused, "focused"),

@@ -56,6 +56,7 @@ fn add(node: &SemanticsNode, nodes: &mut Vec<(AccessNodeId, Node)>, visit: &mut 
         Some(Role::Image) => accesskit::Role::Image,
         Some(Role::DropdownList) => accesskit::Role::ComboBox,
         None if config.is_dialog => accesskit::Role::Dialog,
+        None if config.password => accesskit::Role::PasswordInput,
         None if config.editable => accesskit::Role::TextInput,
         None if config.progress_bar_range_info.is_some() => accesskit::Role::Slider,
         None if config.clickable => accesskit::Role::Button,
@@ -81,6 +82,10 @@ fn add(node: &SemanticsNode, nodes: &mut Vec<(AccessNodeId, Node)>, visit: &mut 
         access.set_value(text.as_str());
     } else if let Some(state) = &config.state_description {
         access.set_value(state.as_str());
+    }
+    if let Some(error) = &config.error {
+        access.set_invalid(accesskit::Invalid::True);
+        access.set_description(error.as_str());
     }
     if let Some(state) = config.toggleable_state {
         access.set_toggled(match state {

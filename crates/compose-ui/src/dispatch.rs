@@ -350,6 +350,10 @@ impl UiTree {
         if requests.clear_focus {
             self.clear_focus_into(actions);
         }
+        if let Some(forward) = requests.move_focus {
+            let moved = self.move_focus(forward);
+            actions.extend(moved);
+        }
         if let Some(node) = requests.focus {
             self.request_focus_into(node, actions);
             if let Some(tap) = requests.focus_tap {
