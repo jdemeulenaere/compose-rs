@@ -75,6 +75,15 @@ pub fn draw_display_list(canvas: &Canvas, list: &DisplayList, text_measurer: &dy
                     paragraph.paint(canvas, (offset.x, offset.y));
                 }
             }
+            DrawOp::SaveLayerAlpha(alpha) => {
+                canvas.save_layer_alpha_f(None, alpha.clamp(0.0, 1.0));
+            }
+            DrawOp::Transform { pivot, scale, rotation, translation } => {
+                canvas.translate((pivot.x + translation.x, pivot.y + translation.y));
+                canvas.rotate(*rotation, None);
+                canvas.scale((scale.0, scale.1));
+                canvas.translate((-pivot.x, -pivot.y));
+            }
         }
     }
     canvas.restore_to_count(start);

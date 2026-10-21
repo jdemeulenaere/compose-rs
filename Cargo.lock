@@ -354,6 +354,7 @@ dependencies = [
 name = "compose"
 version = "0.1.0"
 dependencies = [
+ "compose-animation",
  "compose-desktop",
  "compose-foundation",
  "compose-material3",
@@ -361,6 +362,16 @@ dependencies = [
  "compose-test",
  "compose-ui",
  "trybuild",
+]
+
+[[package]]
+name = "compose-animation"
+version = "0.1.0"
+dependencies = [
+ "compose-foundation",
+ "compose-runtime",
+ "compose-test",
+ "compose-ui",
 ]
 
 [[package]]

@@ -177,7 +177,7 @@ fn painted(list: &compose_ui::DisplayList) -> Vec<(compose_ui::Rect, compose_ui:
     };
     for op in &list.ops {
         match op {
-            DrawOp::Save => saved.push(clip),
+            DrawOp::Save | DrawOp::SaveLayerAlpha(_) => saved.push(clip),
             DrawOp::Restore => clip = saved.pop().unwrap_or(everything),
             DrawOp::Translate(offset) => {
                 x += offset.x;
@@ -193,7 +193,7 @@ fn painted(list: &compose_ui::DisplayList) -> Vec<(compose_ui::Rect, compose_ui:
                 let at = Rect::new(offset.x + x, offset.y + y, offset.x + x, offset.y + y);
                 out.push((at, clip))
             }
-            DrawOp::DrawLine(..) => {}
+            DrawOp::DrawLine(..) | DrawOp::Transform { .. } => {}
         }
     }
     out

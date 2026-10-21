@@ -21,6 +21,18 @@ pub enum DrawOp {
     DrawLine(Offset, Offset, Paint),
     /// A paragraph laid out by the text measurer, drawn by handle at an offset.
     DrawParagraph(ParagraphHandle, Offset),
+    /// Saves, then draws what follows into a layer composited with `alpha` at the matching
+    /// restore, as a graphics layer's alpha.
+    SaveLayerAlpha(f32),
+    /// Transforms what follows (until the matching restore of an earlier save): scaled by
+    /// `scale` and rotated by `rotation` degrees (clockwise) around `pivot`, then moved by
+    /// `translation`, as a graphics layer.
+    Transform {
+        pivot: Offset,
+        scale: (f32, f32),
+        rotation: f32,
+        translation: Offset,
+    },
 }
 
 /// Replays display lists onto a surface: Skia on desktop, Android's `Canvas` (docs/07-platforms.md).
@@ -110,8 +122,14 @@ impl DisplayList {
                 DrawOp::DrawParagraph(handle, offset) => {
                     writeln!(out, "paragraph {} at {} {}", handle.0, offset.x, offset.y)
                 }
+                DrawOp::SaveLayerAlpha(alpha) => writeln!(out, "save layer alpha {alpha}"),
+                DrawOp::Transform { pivot, scale, rotation, translation } => writeln!(
+                    out,
+                    "transform pivot {},{} scale {}x{} rotate {} translate {},{}",
+                    pivot.x, pivot.y, scale.0, scale.1, rotation, translation.x, translation.y
+                ),
             };
-            if matches!(op, DrawOp::Save) {
+            if matches!(op, DrawOp::Save | DrawOp::SaveLayerAlpha(_)) {
                 depth += 1;
             }
         }

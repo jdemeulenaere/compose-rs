@@ -3,7 +3,7 @@
 //! This facade re-exports the framework's crates as modules mirroring Compose's packages:
 //! `compose::runtime` is `androidx.compose.runtime`, `compose::ui` is `androidx.compose.ui`
 //! (with `graphics`, `unit` and `text`), `compose::foundation` (with `layout`) and
-//! `compose::material3` are their Compose namesakes, and, with the `test` feature, `compose::test` is
+//! `compose::material3` and `compose::animation` are their Compose namesakes, and, with the `test` feature, `compose::test` is
 //! `androidx.compose.ui.test`.
 
 /// `androidx.compose.runtime`: composition, `remember`, state, effects, and the `#[composable]`
@@ -23,6 +23,12 @@ pub mod ui {
 /// and `Arrangement`.
 pub mod foundation {
     pub use compose_foundation::*;
+}
+
+/// `androidx.compose.animation` and `animation.core`: `Animatable`, `tween`, `spring`, easings,
+/// `animate_*_as_state`, infinite transitions.
+pub mod animation {
+    pub use compose_animation::*;
 }
 
 /// `androidx.compose.material3`: `MaterialTheme`, `Text`, `Surface`, the buttons, `Checkbox`,

@@ -79,6 +79,25 @@ impl DrawScope<'_> {
         self.list.push(DrawOp::Restore);
     }
 
+    /// Saves, and draws what follows into a layer composited with `alpha` at the next restore.
+    pub fn save_layer_alpha(&mut self, alpha: f32) {
+        self.list.push(DrawOp::SaveLayerAlpha(alpha));
+    }
+
+    /// Transforms what follows until the restore of a save made before: scaled and rotated
+    /// (degrees, clockwise) around `pivot` (in the node's coordinates), then moved by
+    /// `translation`.
+    pub fn transform(
+        &mut self,
+        pivot: Offset,
+        scale: (f32, f32),
+        rotation: f32,
+        translation: Offset,
+    ) {
+        let pivot = pivot + self.origin;
+        self.list.push(DrawOp::Transform { pivot, scale, rotation, translation });
+    }
+
     pub fn clip_outline(&mut self, outline: Outline) {
         match outline {
             Outline::Rectangle(rect) => {

@@ -1,8 +1,8 @@
 [workspace]
 resolver = "3"
-members = ["crates/compose", "crates/compose-macros", "crates/compose-runtime", "crates/compose-ui", "crates/compose-foundation", "crates/compose-material3", "crates/compose-test", "crates/compose-skia", "crates/compose-desktop", "examples/counter", "examples/todo", "benchmarks"]
+members = ["crates/compose", "crates/compose-macros", "crates/compose-runtime", "crates/compose-ui", "crates/compose-foundation", "crates/compose-material3", "crates/compose-animation", "crates/compose-test", "crates/compose-skia", "crates/compose-desktop", "examples/counter", "examples/todo", "benchmarks"]
 # The benchmarks pull in criterion; keep them out of a plain `cargo build` / `cargo test`.
-default-members = ["crates/compose", "crates/compose-macros", "crates/compose-runtime", "crates/compose-ui", "crates/compose-foundation", "crates/compose-material3", "crates/compose-test", "examples/counter", "examples/todo"]
+default-members = ["crates/compose", "crates/compose-macros", "crates/compose-runtime", "crates/compose-ui", "crates/compose-foundation", "crates/compose-material3", "crates/compose-animation", "crates/compose-test", "examples/counter", "examples/todo"]
 
 [workspace.package]
 version = "0.1.0"
@@ -19,6 +19,7 @@ compose-skia = { path = "crates/compose-skia" }
 compose-desktop = { path = "crates/compose-desktop" }
 compose-foundation = { path = "crates/compose-foundation" }
 compose-material3 = { path = "crates/compose-material3" }
+compose-animation = { path = "crates/compose-animation" }
 
 # Fast edit-build loop (docs/08-fast-builds.md).
 [profile.dev]

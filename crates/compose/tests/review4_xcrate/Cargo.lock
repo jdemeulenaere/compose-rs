@@ -14,8 +14,17 @@ dependencies = [
 name = "compose"
 version = "0.1.0"
 dependencies = [
+ "compose-animation",
  "compose-foundation",
  "compose-material3",
+ "compose-runtime",
+ "compose-ui",
+]
+
+[[package]]
+name = "compose-animation"
+version = "0.1.0"
+dependencies = [
  "compose-runtime",
  "compose-ui",
 ]

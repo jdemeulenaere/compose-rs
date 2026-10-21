@@ -12,6 +12,7 @@ A design for bringing Jetpack Compose's model to Rust: positional memoization ov
 | `crates/compose-ui` | layout nodes, `Modifier`, `Layout`, drawing, pointer and key input, focus, semantics, `UiHost` |
 | `crates/compose-foundation` | `Box`, `Column`, `Row`, `Spacer`, `Arrangement`, `BasicText`, `BasicTextField`, scrolling, shapes |
 | `crates/compose-material3` | `MaterialTheme`, `Text`, `Surface`, buttons, `Checkbox`, `TextField` |
+| `crates/compose-animation` | `Animatable`, animation specs and easings, `animate_*_as_state`, infinite transitions, `AnimatedVisibility` |
 | `crates/compose-test` | `ComposeTestRule`: finders, actions, assertions, event scripts |
 | `crates/compose-skia` | Skia renderer and SkParagraph text measurer |
 | `crates/compose-desktop` | `run_app`: a winit window on the main thread |

@@ -16,6 +16,7 @@ pub mod display_list;
 pub mod draw;
 mod focus;
 pub mod graphics;
+pub mod graphics_layer;
 pub mod host;
 pub mod input;
 pub mod layout;
@@ -34,6 +35,7 @@ pub use constraints::Constraints;
 pub use display_list::{DisplayList, DrawOp, Renderer};
 pub use draw::DrawScope;
 pub use graphics::{Color, CornerSize, Outline, Paint, PaintStyle, RECTANGLE_SHAPE, Shape};
+pub use graphics_layer::{GraphicsLayerScope, TransformOrigin};
 pub use host::{FrameStats, UiHost};
 pub use input::{
     Action, EventContext, Key, KeyEvent, KeyEventType, KeyModifiers, PointerEvent,
