@@ -50,18 +50,34 @@ pub fn TabRow(
     let positions = remember(|| Rc::new(RefCell::new(Vec::<(f32, f32)>::new())));
     // The indicator while it slides: left in `x`, width in `y`.
     let indicator = remember(|| Animatable::new(Offset::new(f32::NAN, 0.0)));
+    // The tab it rests under (where it's drawn, as laid out, when not sliding), and whether
+    // it's at rest (else it's where the animation left it).
+    let resting_at = remember(|| Rc::new(std::cell::Cell::new(None::<usize>)));
+    let at_rest = remember(|| Rc::new(std::cell::Cell::new(true)));
     {
-        let (positions, indicator) = (positions.clone(), indicator.clone());
+        let (positions, indicator, resting_at, at_rest) =
+            (positions.clone(), indicator.clone(), resting_at.clone(), at_rest.clone());
         LaunchedEffect(selected_tab_index, async move {
             // After the layout that placed the tabs.
             compose_runtime::executor::with_frame_nanos(|_| ()).await;
-            let Some(&(left, width)) = positions.borrow().get(selected_tab_index) else { return };
+            let position = |index: usize| positions.borrow().get(index).copied();
+            let Some((left, width)) = position(selected_tab_index) else { return };
             let target = Offset::new(left, width);
-            if indicator.value().x.is_nan() {
-                indicator.snap_to(target);
-            } else {
-                indicator.animate_to(target, tween(250).easing(FAST_OUT_SLOW_IN_EASING)).await;
+            match resting_at.get() {
+                Some(from) if from != selected_tab_index => {
+                    // From where it's drawn: under its tab as now laid out, or mid-slide.
+                    if at_rest.get()
+                        && let Some((left, width)) = position(from)
+                    {
+                        indicator.snap_to(Offset::new(left, width));
+                    }
+                    at_rest.set(false);
+                    indicator.animate_to(target, tween(250).easing(FAST_OUT_SLOW_IN_EASING)).await;
+                }
+                _ => indicator.snap_to(target),
             }
+            resting_at.set(Some(selected_tab_index));
+            at_rest.set(true);
         });
     }
     let policy = {
@@ -69,6 +85,7 @@ pub fn TabRow(
         remember(move || Rc::new(TabRowLayout { positions }) as Rc<dyn MeasurePolicy>)
     };
     let draw_positions = positions.clone();
+    let (draw_resting, draw_rest) = (resting_at.clone(), at_rest.clone());
     Surface(
         modifier,
         compose_ui::RECTANGLE_SHAPE,
@@ -80,15 +97,18 @@ pub fn TabRow(
         compose_runtime::callback(move || {
             let (draw_positions, indicator, tabs) =
                 (draw_positions.clone(), indicator.clone(), tabs.clone());
+            let (draw_resting, draw_rest) = (draw_resting.clone(), draw_rest.clone());
             Layout(
                 Modifier.fill_max_width().draw_with_content(move |scope| {
                     scope.draw_content();
-                    // Sliding, where the animation is; else under the selected tab as laid out.
-                    let (left, width) = if indicator.is_running() {
+                    // Sliding, where the animation is; at rest, under its tab as laid out (until
+                    // a new selection's slide starts: the old one's).
+                    let (left, width) = if !draw_rest.get() || indicator.is_running() {
                         let value = indicator.value();
                         (value.x, value.y)
                     } else {
-                        match draw_positions.borrow().get(selected_tab_index) {
+                        let index = draw_resting.get().unwrap_or(selected_tab_index);
+                        match draw_positions.borrow().get(index) {
                             Some(&position) => position,
                             None => return,
                         }
@@ -132,15 +152,14 @@ impl MeasurePolicy for TabRowLayout {
         };
         let width = constraints.max_width;
         let tab_width = if tabs.is_empty() { 0 } else { width / tabs.len() as i32 };
+        // Every tab as tall as the tallest, as Compose's (`maxIntrinsicHeight`).
+        let height = constraints.constrain_height(
+            tabs.iter().map(|&tab| scope.max_intrinsic_height(tab, tab_width)).max().unwrap_or(0),
+        );
         let placeables: Vec<_> = tabs
             .iter()
-            .map(|&tab| {
-                scope
-                    .measure(tab, Constraints::new(tab_width, tab_width, 0, constraints.max_height))
-            })
+            .map(|&tab| scope.measure(tab, Constraints::new(tab_width, tab_width, height, height)))
             .collect();
-        let height = constraints
-            .constrain_height(placeables.iter().map(|tab| tab.height).max().unwrap_or(0));
         let mut positions = self.positions.borrow_mut();
         positions.clear();
         for (index, tab) in placeables.iter().enumerate() {

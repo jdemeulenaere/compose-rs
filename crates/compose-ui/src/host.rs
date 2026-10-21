@@ -41,6 +41,8 @@ pub struct UiHost {
     density: compose_runtime::OwnedState<Density>,
     /// The layout direction content sees as `LOCAL_LAYOUT_DIRECTION`.
     layout_direction: compose_runtime::OwnedState<crate::alignment::LayoutDirection>,
+    /// The window's size, the root's constraints hint (`LOCAL_CONSTRAINTS_HINT`).
+    window_size: compose_runtime::OwnedState<IntSize>,
 }
 
 /// The content, skipped when the root recomposes for a new density: only what reads
@@ -50,6 +52,14 @@ pub struct UiHost {
 fn Content(content: compose_runtime::Callback) {
     content()
 }
+
+/// The constraints what's composed here will likely be measured with, for content that composes
+/// for its constraints (`BoxWithConstraints`) to compose right the first time: the window's at
+/// the root, the items' in a lazy list, the cells' in a grid. Compose composes such content
+/// while measuring; here it composes again within the frame when the hint was wrong.
+pub static LOCAL_CONSTRAINTS_HINT: compose_runtime::CompositionLocal<
+    Option<crate::constraints::Constraints>,
+> = compose_runtime::CompositionLocal::new("LocalConstraintsHint", || None);
 
 /// The window's density, as Compose's `LocalDensity`: what composition converts `Dp` with.
 pub static LOCAL_DENSITY: compose_runtime::CompositionLocal<Density> =
@@ -94,6 +104,7 @@ impl UiHost {
             layout_direction: compose_runtime::mutable_state_of(
                 crate::alignment::LayoutDirection::Ltr,
             ),
+            window_size: compose_runtime::mutable_state_of(size),
         }
     }
 
@@ -145,6 +156,7 @@ impl UiHost {
     pub fn resize(&mut self, size: IntSize) {
         if self.size != size {
             self.size = size;
+            self.window_size.set(size);
             self.wake();
         }
     }
@@ -203,6 +215,7 @@ impl UiHost {
         if let Some(content) = content {
             let density = self.density.handle();
             let direction = self.layout_direction.handle();
+            let window = self.window_size.handle();
             let content: compose_runtime::Callback = compose_runtime::callback(content);
             self.composition.set_content(move || {
                 let content = content.clone();
@@ -211,7 +224,18 @@ impl UiHost {
                     move || {
                         compose_runtime::CompositionLocalProvider(
                             crate::alignment::LOCAL_LAYOUT_DIRECTION.provides(direction.get()),
-                            move || Content(content),
+                            move || {
+                                let size = window.get();
+                                compose_runtime::CompositionLocalProvider(
+                                    LOCAL_CONSTRAINTS_HINT.provides(Some(
+                                        crate::constraints::Constraints::fixed(
+                                            size.width,
+                                            size.height,
+                                        ),
+                                    )),
+                                    move || Content(content),
+                                )
+                            },
                         )
                     },
                 )
@@ -235,6 +259,12 @@ impl UiHost {
                 tree.apply_observed_writes();
                 tree.layout(size)
             });
+        }
+        // Content that moved under a resting mouse: the hover follows it, as Compose Desktop's
+        // synthetic move after a layout.
+        if measured {
+            let actions = self.with_tree(|tree| tree.refresh_hover());
+            Self::run(actions);
         }
         let (drew, actions) = self.with_tree(|tree| (tree.draw(), tree.take_pending_actions()));
         // What composition queued (a focus lost, listeners attached), now that the tree is free.

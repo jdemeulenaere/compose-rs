@@ -44,8 +44,10 @@ impl GridCells {
 #[derive(Clone)]
 pub struct LazyGridState {
     list: LazyListState,
-    /// The columns of the last composition.
+    /// The columns of the last composition (0 before the first).
     columns: Rc<Cell<usize>>,
+    /// An item to scroll to once the columns are known, and the pixels into its row.
+    pending: Rc<Cell<Option<(usize, i32)>>>,
 }
 
 impl LazyGridState {
@@ -53,14 +55,18 @@ impl LazyGridState {
     /// pixels into it.
     pub fn new(first_visible_item_index: usize, first_visible_item_scroll_offset: i32) -> Self {
         LazyGridState {
-            list: LazyListState::new(first_visible_item_index, first_visible_item_scroll_offset),
-            columns: Rc::new(Cell::new(1)),
+            list: LazyListState::new(0, 0),
+            columns: Rc::new(Cell::new(0)),
+            pending: Rc::new(Cell::new(Some((
+                first_visible_item_index,
+                first_visible_item_scroll_offset,
+            )))),
         }
     }
 
     /// The first item of the first visible row, as `firstVisibleItemIndex`.
     pub fn first_visible_item_index(&self) -> usize {
-        self.list.first_visible_item_index() * self.columns.get()
+        self.list.first_visible_item_index() * self.columns.get().max(1)
     }
 
     pub fn first_visible_item_scroll_offset(&self) -> i32 {
@@ -69,7 +75,11 @@ impl LazyGridState {
 
     /// Scrolls to the row of item `index`, as `scrollToItem`.
     pub fn scroll_to_item(&self, index: usize, scroll_offset: i32) {
-        self.list.scroll_to_item(index / self.columns.get().max(1), scroll_offset);
+        match self.columns.get() {
+            // Not composed yet: once the columns are known.
+            0 => self.pending.set(Some((index, scroll_offset))),
+            columns => self.list.scroll_to_item(index / columns, scroll_offset),
+        }
     }
 
     /// Scrolls by `pixels`, returning whether it moved.
@@ -220,7 +230,23 @@ pub fn LazyVerticalGrid(
             let spacing = horizontal_arrangement.spacing(&density);
             let available = (box_scope.constraints.max_width - padding).max(0);
             let count = columns.count(available, spacing, density);
-            state.columns.set(count);
+            // The cells' constraints, for those composing for theirs (`BoxWithConstraints`).
+            let cell = (available - spacing * (count as i32 - 1)).max(0) / count as i32;
+            let cell_hint = Some(compose_ui::Constraints::new(
+                cell,
+                cell,
+                0,
+                compose_ui::Constraints::INFINITY,
+            ));
+            // A new column count keeps the first item in view (and its row's offset), as
+            // Compose's; the first count applies a scroll asked for before it.
+            let before = state.columns.replace(count);
+            if let Some((item, offset)) = state.pending.take() {
+                state.list.set_position_quietly(item / count, offset);
+            } else if before != 0 && before != count {
+                let (row, offset) = state.list.position_untracked();
+                state.list.set_position_quietly(row * before / count, offset);
+            }
             let rows = items.count.div_ceil(count);
             let items = items.clone();
             LazyColumn(
@@ -243,20 +269,26 @@ pub fn LazyVerticalGrid(
                                 Modifier.fill_max_width(),
                                 policy,
                                 compose_runtime::callback(move || {
-                                    for column in 0..count {
-                                        let index = row * count + column;
-                                        if index < items.count {
-                                            let items = items.clone();
-                                            Box(
-                                                Modifier,
-                                                Alignment::TOP_START,
-                                                false,
-                                                compose_runtime::callback(move |_| {
-                                                    items.content(index)
-                                                }),
-                                            );
-                                        }
-                                    }
+                                    let items = items.clone();
+                                    compose_runtime::CompositionLocalProvider(
+                                        compose_ui::LOCAL_CONSTRAINTS_HINT.provides(cell_hint),
+                                        move || {
+                                            for column in 0..count {
+                                                let index = row * count + column;
+                                                if index < items.count {
+                                                    let items = items.clone();
+                                                    Box(
+                                                        Modifier,
+                                                        Alignment::TOP_START,
+                                                        false,
+                                                        compose_runtime::callback(move |_| {
+                                                            items.content(index)
+                                                        }),
+                                                    );
+                                                }
+                                            }
+                                        },
+                                    );
                                 }),
                             );
                         },

@@ -52,19 +52,24 @@ struct LazyListAdapter(LazyListState);
 
 impl ScrollbarAdapter for LazyListAdapter {
     fn scroll_offset(&self) -> f64 {
-        let (_, average, _, _) = self.0.layout_info();
+        let (_, average, _, _, _) = self.0.layout_info();
         self.0.first_visible_item_index() as f64 * average as f64
             + self.0.first_visible_item_scroll_offset() as f64
     }
+    /// The items at their average size, with the spacing between them (not after the last)
+    /// and the padding, as Compose Desktop's.
     fn content_size(&self) -> f64 {
-        let (count, average, _, padding) = self.0.layout_info();
-        count as f64 * average as f64 + padding as f64
+        let (count, average, spacing, _, padding) = self.0.layout_info();
+        if count == 0 {
+            return padding as f64;
+        }
+        count as f64 * average as f64 - spacing as f64 + padding as f64
     }
     fn viewport_size(&self) -> f64 {
-        self.0.layout_info().2 as f64
+        self.0.layout_info().3 as f64
     }
     fn scroll_to(&self, scroll_offset: f64) {
-        let (count, average, _, _) = self.0.layout_info();
+        let (count, average, _, _, _) = self.0.layout_info();
         let average = average.max(1) as f64;
         let offset = scroll_offset.max(0.0);
         let index = ((offset / average).floor() as usize).min(count.saturating_sub(1));
@@ -177,6 +182,8 @@ struct ScrollbarNode {
     drag: Option<(f32, f64)>,
     /// Pixels per dp, from the last measurement.
     density: compose_ui::Density,
+    /// Horizontal in a right-to-left layout: reversed, as Compose Desktop's.
+    rtl: bool,
     /// A mouse is over it.
     hovered: bool,
 }
@@ -191,6 +198,7 @@ impl ModifierNodeElement for ScrollbarElement {
             drag: None,
             density: compose_ui::Density::default(),
             hovered: false,
+            rtl: false,
         })
     }
     fn update(&self, node: &mut dyn ModifierNode) {
@@ -227,6 +235,11 @@ impl ModifierNode for ScrollbarNode {
 }
 
 impl ScrollbarNode {
+    /// Reversed: as asked, flipped in a right-to-left layout.
+    fn reversed(&self) -> bool {
+        self.reverse != self.rtl
+    }
+
     /// The thumb's start and length along a track `track` pixels long, or `None` when the
     /// content fits.
     fn thumb(&self, track: f32) -> Option<(f32, f32)> {
@@ -239,7 +252,7 @@ impl ScrollbarNode {
         let length = ((viewport / content) as f32 * track).max(minimal).min(track);
         let scrollable = content - viewport;
         let fraction = (self.adapter.scroll_offset() / scrollable).clamp(0.0, 1.0) as f32;
-        let fraction = if self.reverse { 1.0 - fraction } else { fraction };
+        let fraction = if self.reversed() { 1.0 - fraction } else { fraction };
         Some(((track - length) * fraction, length))
     }
 
@@ -248,7 +261,7 @@ impl ScrollbarNode {
         let Some((_, length)) = self.thumb(track) else { return 0.0 };
         let room = (track - length).max(1.0) as f64;
         let scale = (self.adapter.content_size() - self.adapter.viewport_size()) / room;
-        if self.reverse { -scale } else { scale }
+        if self.reversed() { -scale } else { scale }
     }
 }
 
@@ -261,6 +274,7 @@ impl LayoutModifierNode for ScrollbarNode {
         constraints: Constraints,
     ) -> MeasureResult {
         self.density = scope.density();
+        self.rtl = !self.vertical && scope.layout_direction() == compose_ui::LayoutDirection::Rtl;
         let thickness = scope.density().round_to_px(self.style.thickness);
         let along = |max: i32, min: i32| if max == Constraints::INFINITY { min } else { max };
         let size = if self.vertical {
@@ -330,7 +344,7 @@ impl PointerInputModifierNode for ScrollbarNode {
                     context.invalidate_draw();
                 } else {
                     let page = self.adapter.viewport_size();
-                    let toward_end = (at > start + length) != self.reverse;
+                    let toward_end = (at > start + length) != self.reversed();
                     let offset =
                         self.adapter.scroll_offset() + if toward_end { page } else { -page };
                     let limit = (self.adapter.content_size() - page).max(0.0);

@@ -290,9 +290,10 @@ impl compose_runtime::ComposeArg for BoxWithConstraintsScope {
 }
 
 /// A box whose content depends on its constraints, as Compose's `BoxWithConstraints`: the
-/// content reads them from its scope. Compose composes it while measuring; here measuring
-/// writes them as state and the content composes again within the frame when they change (the
-/// first frame composes it twice, once with zero constraints).
+/// content reads them from its scope. Compose composes it while measuring; here it first
+/// composes for the constraints it'll likely get (`LOCAL_CONSTRAINTS_HINT`: the window's, a
+/// lazy list's items', a grid's cells'), then measuring writes those it got as state and the
+/// content composes again within the frame if they differ.
 #[composable]
 pub fn BoxWithConstraints(
     #[default(crate::Modifier)] modifier: Modifier,
@@ -300,8 +301,10 @@ pub fn BoxWithConstraints(
     #[default(false)] propagate_min_constraints: bool,
     content: impl Fn(BoxWithConstraintsScope) + 'static,
 ) {
+    // First the constraints it'll likely get (`LOCAL_CONSTRAINTS_HINT`), then those it got.
+    let hint = compose_ui::LOCAL_CONSTRAINTS_HINT.current();
     let measured = compose_runtime::remember(|| {
-        compose_runtime::mutable_state_of(compose_ui::Constraints::fixed(0, 0))
+        compose_runtime::mutable_state_of(hint.unwrap_or(compose_ui::Constraints::fixed(0, 0)))
     });
     let policy = compose_runtime::remember_keyed(
         (AlignmentKey(content_alignment), propagate_min_constraints),
@@ -317,7 +320,11 @@ pub fn BoxWithConstraints(
         modifier,
         policy,
         compose_runtime::callback(move || {
-            content(BoxWithConstraintsScope { constraints: measured.get(), density })
+            let constraints = measured.get();
+            compose_runtime::CompositionLocalProvider(
+                compose_ui::LOCAL_CONSTRAINTS_HINT.provides(Some(constraints.loosen())),
+                || content(BoxWithConstraintsScope { constraints, density }),
+            )
         }),
     );
 }

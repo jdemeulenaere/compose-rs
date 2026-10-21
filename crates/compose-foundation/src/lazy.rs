@@ -72,8 +72,12 @@ struct LazyListInner {
     /// Item sizes along the axis, as last measured: estimates for items not composed.
     sizes: RefCell<HashMap<usize, i32>>,
     /// What scrollbars estimate the content from, as last laid out: the item count, the
-    /// average item size with its spacing, the viewport's length and the content padding.
-    layout_info: OwnedState<(usize, i32, i32, i32)>,
+    /// average item size with its spacing, the spacing, the viewport's length and the content
+    /// padding.
+    layout_info: OwnedState<(usize, i32, i32, i32, i32)>,
+    /// The constraints its items are measured with, as last laid out: their composition's
+    /// `LOCAL_CONSTRAINTS_HINT`.
+    item_constraints: OwnedState<Option<Constraints>>,
     /// How far the list can scroll each way, as last laid out (infinite: not known).
     room_backward: Cell<f32>,
     room_forward: Cell<f32>,
@@ -104,7 +108,8 @@ impl LazyListState {
                 first_offset: mutable_state_of(offset),
                 published: Cell::new((first_visible_item_index, offset)),
                 sizes: RefCell::new(HashMap::new()),
-                layout_info: mutable_state_of((0, 1, 0, 0)),
+                layout_info: mutable_state_of((0, 1, 0, 0, 0)),
+                item_constraints: mutable_state_of(None),
                 room_backward: Cell::new(if first_visible_item_index > 0 {
                     f32::INFINITY
                 } else {
@@ -160,10 +165,26 @@ impl LazyListState {
         used
     }
 
-    /// The item count, the average item size (with its spacing), the viewport's length and the
-    /// content padding along the axis, as last laid out: a scrollbar's estimates (a state read).
-    pub(crate) fn layout_info(&self) -> (usize, i32, i32, i32) {
+    /// The item count, the average item size (with its spacing), the spacing, the viewport's
+    /// length and the content padding along the axis, as last laid out: a scrollbar's
+    /// estimates (a state read).
+    pub(crate) fn layout_info(&self) -> (usize, i32, i32, i32, i32) {
         self.inner.layout_info.get()
+    }
+
+    /// Moves the position for the next layout without asking for one: for a composition that
+    /// is about to lay the list out anyway (a grid whose columns changed).
+    pub(crate) fn set_position_quietly(&self, index: usize, scroll_offset: i32) {
+        self.inner.position.set((index, scroll_offset.max(0) as f32));
+        self.inner.first_key.set(None);
+        self.inner.pending.set(0.0);
+        self.inner.room_backward.set(f32::INFINITY);
+        self.inner.room_forward.set(f32::INFINITY);
+    }
+
+    /// The first visible item and its offset, as last laid out, read without observing it.
+    pub(crate) fn position_untracked(&self) -> (usize, i32) {
+        self.inner.published.get()
     }
 
     /// Whether the list can scroll towards its end, as `canScrollForward` (as last laid out).
@@ -410,10 +431,20 @@ fn LazyList(
         .clip(compose_ui::RECTANGLE_SHAPE)
         .then_custom(LazyScrollElement { state: state.clone(), vertical });
     let items = ItemsRef(items);
+    // Until the list is measured, its items' likely constraints: those around it, unbounded
+    // along the list.
+    let fallback = compose_ui::LOCAL_CONSTRAINTS_HINT.current().map(|around| {
+        let around = around.loosen();
+        if vertical {
+            Constraints::new(0, around.max_width, 0, Constraints::INFINITY)
+        } else {
+            Constraints::new(0, Constraints::INFINITY, 0, around.max_height)
+        }
+    });
     Layout(
         modifier,
         policy,
-        compose_runtime::callback(move || LazyItems(state.clone(), items.clone())),
+        compose_runtime::callback(move || LazyItems(state.clone(), items.clone(), fallback)),
     );
 }
 
@@ -421,7 +452,7 @@ fn LazyList(
 /// and not the list's caller; each item skips when it stays.
 #[composable]
 #[allow(non_snake_case)]
-fn LazyItems(state: LazyListState, items: ItemsRef) {
+fn LazyItems(state: LazyListState, items: ItemsRef, fallback: Option<Constraints>) {
     let (start, end) = state.inner.composed.get();
     let count = items.0.count;
     let mut indices: Vec<usize> = (start.min(count)..end.min(count)).collect();
@@ -435,11 +466,18 @@ fn LazyItems(state: LazyListState, items: ItemsRef) {
         }
     }
     *state.inner.children.borrow_mut() = indices.clone();
-    for index in indices {
-        let item_key = items.0.key(index);
-        let (state, items) = (state.clone(), items.clone());
-        key(item_key, move || LazyItem(index, state.clone(), items.clone()));
-    }
+    // The items' constraints, for those composing for theirs (`BoxWithConstraints`).
+    let hint = state.inner.item_constraints.get().or(fallback);
+    compose_runtime::CompositionLocalProvider(
+        compose_ui::LOCAL_CONSTRAINTS_HINT.provides(hint),
+        || {
+            for &index in &indices {
+                let item_key = items.0.key(index);
+                let (state, items) = (state.clone(), items.clone());
+                key(item_key, move || LazyItem(index, state.clone(), items.clone()));
+            }
+        },
+    );
 }
 
 /// One item: a layout node around its content, which pins the item while it holds the focus.
@@ -572,6 +610,9 @@ impl MeasurePolicy for LazyListLayout {
         } else {
             Constraints::new(0, Constraints::INFINITY, 0, cross_room)
         };
+        if state.item_constraints.get() != Some(item_constraints) {
+            state.item_constraints.set(Some(item_constraints));
+        }
         let count = info.items.count;
         let children = state.children.borrow().clone();
         let (composed_start, composed_end) = composed_range(&children, count);
@@ -775,7 +816,7 @@ impl MeasurePolicy for LazyListLayout {
         if count > 0 {
             state.first_key.set(Some(info.items.key(index)));
         }
-        let layout_info = (count, average + spacing, main_max, before + after);
+        let layout_info = (count, average + spacing, spacing, main_max, before + after);
         if state.layout_info.get() != layout_info {
             state.layout_info.set(layout_info);
         }

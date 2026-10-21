@@ -139,6 +139,11 @@ impl UiTree {
         let hovering = event.pointer_type == crate::input::PointerType::Mouse
             && event.kind != PointerEventType::Scroll
             && (!event.pressed || event.kind == PointerEventType::Press);
+        if event.pointer_type == crate::input::PointerType::Mouse
+            && event.kind != PointerEventType::Scroll
+        {
+            self.mouse = (!event.pressed).then_some(position);
+        }
         if hovering {
             let now = if event.kind == PointerEventType::Release || captured.is_some() {
                 self.hit_test(position)
@@ -284,10 +289,23 @@ impl UiTree {
         icon.unwrap_or_default()
     }
 
+    /// Hit-tests the resting mouse again (after a layout moved what's under it): what it left
+    /// hears `Exit`, what it's now over `Enter`.
+    pub fn refresh_hover(&mut self) -> Vec<Action> {
+        let mut actions = Vec::new();
+        let Some(position) = self.mouse else { return actions };
+        let mut requests = Requests::default();
+        let now = self.hit_test(position);
+        self.update_hover(now, PointerEvent::moved(position, false), &mut actions, &mut requests);
+        self.apply_requests(requests, &mut actions);
+        actions
+    }
+
     /// The mouse left the window: what it was over hears `Exit`.
     pub fn pointer_left(&mut self) -> Vec<Action> {
         let mut actions = Vec::new();
         let mut requests = Requests::default();
+        self.mouse = None;
         let mut event = PointerEvent::moved(Offset::new(-1.0, -1.0), false);
         event.kind = PointerEventType::Exit;
         self.update_hover(Vec::new(), event, &mut actions, &mut requests);

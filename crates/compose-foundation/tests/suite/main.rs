@@ -23,6 +23,7 @@ mod review_overlay;
 mod review_overlay2;
 mod review_round3;
 mod review_round5;
+mod review_round6;
 mod review_rtl;
 mod review_semantics;
 mod review_text_draw;

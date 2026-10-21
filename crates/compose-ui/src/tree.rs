@@ -223,6 +223,8 @@ pub struct UiTree {
     pub(crate) captures: Vec<(crate::input::PointerId, Vec<crate::dispatch::HitEntry>)>,
     /// What the mouse is over: its last hit path.
     pub(crate) hovered: Vec<crate::dispatch::HitEntry>,
+    /// Where the mouse is, in the root, while it's in the window and no button is held.
+    pub(crate) mouse: Option<crate::unit::Offset>,
     /// Observes the state measure policies and custom nodes read (D71), keyed by node.
     pub(crate) observer: Option<Rc<compose_runtime::ReadObserver>>,
     pub(crate) measure_runs: u64,
@@ -251,6 +253,7 @@ impl UiTree {
             place_serial: 0,
             captures: Vec::new(),
             hovered: Vec::new(),
+            mouse: None,
             observer: None,
             measure_runs: 0,
         }
@@ -501,7 +504,7 @@ impl UiTree {
     /// chain, so a gesture in progress continues on a node that was kept; captures of removed
     /// nodes are dropped.
     fn remap_captures(&mut self, node: NodeId, matched: &[Option<usize>]) {
-        if self.captures.is_empty() {
+        if self.captures.is_empty() && self.hovered.is_empty() {
             return;
         }
         let value = self.node(node);
@@ -510,22 +513,24 @@ impl UiTree {
             capabilities[..index].iter().filter(|bits| **bits & capability::LAYOUT != 0).count()
                 as u16
         };
+        let remap = |entry: &mut crate::dispatch::HitEntry| {
+            if entry.node != node {
+                return true;
+            }
+            let Some(new_index) = matched.iter().position(|old| *old == Some(entry.index as usize))
+            else {
+                return false;
+            };
+            entry.index = new_index as u16;
+            entry.layer = layer_of(new_index);
+            entry.version = version;
+            true
+        };
         for (_, path) in &mut self.captures {
-            path.retain_mut(|entry| {
-                if entry.node != node {
-                    return true;
-                }
-                let Some(new_index) =
-                    matched.iter().position(|old| *old == Some(entry.index as usize))
-                else {
-                    return false;
-                };
-                entry.index = new_index as u16;
-                entry.layer = layer_of(new_index);
-                entry.version = version;
-                true
-            });
+            path.retain_mut(remap);
         }
+        // The hover too: what's hovered hears its exit after a chain change.
+        self.hovered.retain_mut(remap);
     }
 
     /// Recomputes what the chain's nodes can do, its layers and its parent data. Returns
