@@ -1,0 +1,17 @@
+[package]
+name = "android-demo"
+description = "The examples as an Android library: the Rust side of android/demo (docs/07-platforms.md)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lib]
+name = "compose_rs_demo"
+crate-type = ["cdylib"]
+
+[dependencies]
+compose-android.workspace = true
+counter = { path = "../counter", default-features = false }
+todo = { path = "../todo", default-features = false }
+gallery = { path = "../gallery", default-features = false }

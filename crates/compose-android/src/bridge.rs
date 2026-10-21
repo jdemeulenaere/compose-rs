@@ -1,0 +1,588 @@
+//! The JNI functions `ComposeRsNative.kt` declares, and the calls back into Kotlin.
+//!
+//! Everything runs on Android's main thread, where Kotlin calls in, except the executor's wake
+//! (a task woken from another thread), which attaches its thread to post a `Handler` message.
+//! A host is a `Box` whose pointer Kotlin keeps as a `long`.
+
+use std::sync::OnceLock;
+
+use compose_runtime::executor;
+use compose_ui::{
+    Density, IntSize, Key, KeyEvent, KeyEventType, KeyModifiers, LayoutDirection, Offset,
+    ParagraphMetrics, PointerEvent, PointerId, PointerType, Rect, UiHost,
+};
+use jni::JNIEnv;
+use jni::JavaVM;
+use jni::objects::{
+    GlobalRef, JByteBuffer, JClass, JMethodID, JObject, JStaticMethodID, JString, JValue,
+};
+use jni::signature::{Primitive, ReturnType};
+use jni::sys::{jboolean, jfloat, jint, jlong, jobject};
+
+use crate::serialize::{Resources, Writer, write_display_list};
+use crate::text::{AndroidTextMeasurer, TextBackend};
+
+static VM: OnceLock<JavaVM> = OnceLock::new();
+/// `ComposeRsNative`'s class and its `wake` method: what a task woken on any thread calls.
+static WAKE: OnceLock<(GlobalRef, JStaticMethodID)> = OnceLock::new();
+
+pub(crate) fn set_vm(vm: JavaVM) {
+    install_panic_hook();
+    let _ = VM.set(vm);
+}
+
+fn vm() -> &'static JavaVM {
+    VM.get().expect("compose-android: JNI_OnLoad ran (export_apps!)")
+}
+
+/// The main thread's environment (attached, as Kotlin called in on it).
+fn main_env() -> JNIEnv<'static> {
+    vm().get_env().expect("compose-android: called on a thread attached to the VM")
+}
+
+// ---- Logging --------------------------------------------------------------------------------
+
+#[cfg(target_os = "android")]
+#[link(name = "log")]
+unsafe extern "C" {
+    fn __android_log_write(
+        priority: std::ffi::c_int,
+        tag: *const std::ffi::c_char,
+        text: *const std::ffi::c_char,
+    ) -> std::ffi::c_int;
+}
+
+/// Writes `message` to logcat (tag `compose-rs`), or stderr off Android.
+pub(crate) fn log(message: &str) {
+    #[cfg(target_os = "android")]
+    {
+        let text = std::ffi::CString::new(message.replace('\0', " ")).unwrap_or_default();
+        // 6: ERROR.
+        unsafe { __android_log_write(6, c"compose-rs".as_ptr(), text.as_ptr()) };
+    }
+    #[cfg(not(target_os = "android"))]
+    eprintln!("compose-rs: {message}");
+}
+
+/// A panic (which aborts at the JNI boundary) says what it was in logcat first.
+fn install_panic_hook() {
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        log(&format!("panic: {info}"));
+        previous(info);
+    }));
+}
+
+/// Logs and clears a pending Java exception (a Kotlin callback that threw).
+fn check(env: &mut JNIEnv, what: &str) {
+    if env.exception_check().unwrap_or(false) {
+        let _ = env.exception_describe();
+        let _ = env.exception_clear();
+        log(&format!("an exception in {what}"));
+    }
+}
+
+// ---- Text, through `TextMeasurer.kt` ---------------------------------------------------------
+
+/// `TextMeasurer.kt`, called back with JNI.
+struct JniText {
+    measurer: GlobalRef,
+    /// The Kotlin measurer's results: a direct buffer of floats it writes before returning.
+    results: *const f32,
+    layout: JMethodID,
+    hit_test: JMethodID,
+    cursor: JMethodID,
+    release: JMethodID,
+}
+
+impl JniText {
+    fn result(&self, index: usize) -> f32 {
+        // SAFETY: the Kotlin measurer's direct buffer holds 8 floats and outlives it.
+        unsafe { self.results.add(index).read_unaligned() }
+    }
+}
+
+impl TextBackend for JniText {
+    fn layout(&mut self, handle: u32, text: &str, request: &[u8]) -> ParagraphMetrics {
+        let mut env = main_env();
+        let _ = env.with_local_frame(4, |env| -> jni::errors::Result<()> {
+            let text = env.new_string(text)?;
+            // SAFETY: Kotlin only reads the request, during the call.
+            let request =
+                unsafe { env.new_direct_byte_buffer(request.as_ptr() as *mut u8, request.len())? };
+            // SAFETY: the method's signature is `(ILjava/lang/String;Ljava/nio/ByteBuffer;)V`.
+            unsafe {
+                env.call_method_unchecked(
+                    &self.measurer,
+                    self.layout,
+                    ReturnType::Primitive(Primitive::Void),
+                    &[
+                        JValue::Int(handle as jint).as_jni(),
+                        JValue::Object(&text).as_jni(),
+                        JValue::Object(&request).as_jni(),
+                    ],
+                )?;
+            }
+            Ok(())
+        });
+        check(&mut env, "TextMeasurer.layout");
+        ParagraphMetrics {
+            size: IntSize::new(self.result(0) as i32, self.result(1) as i32),
+            first_baseline: self.result(2),
+            last_baseline: self.result(3),
+            line_count: self.result(4) as u32,
+        }
+    }
+
+    fn hit_test(&self, handle: u32, position: Offset) -> usize {
+        let mut env = main_env();
+        // SAFETY: the method's signature is `(IFF)I`.
+        let index = unsafe {
+            env.call_method_unchecked(
+                &self.measurer,
+                self.hit_test,
+                ReturnType::Primitive(Primitive::Int),
+                &[
+                    JValue::Int(handle as jint).as_jni(),
+                    JValue::Float(position.x).as_jni(),
+                    JValue::Float(position.y).as_jni(),
+                ],
+            )
+        };
+        check(&mut env, "TextMeasurer.hitTest");
+        index.and_then(|value| value.i()).unwrap_or(0).max(0) as usize
+    }
+
+    fn cursor(&self, handle: u32, offset: usize) -> Rect {
+        let mut env = main_env();
+        // SAFETY: the method's signature is `(II)V`.
+        let _ = unsafe {
+            env.call_method_unchecked(
+                &self.measurer,
+                self.cursor,
+                ReturnType::Primitive(Primitive::Void),
+                &[JValue::Int(handle as jint).as_jni(), JValue::Int(offset as jint).as_jni()],
+            )
+        };
+        check(&mut env, "TextMeasurer.cursor");
+        Rect::new(self.result(0), self.result(1), self.result(2), self.result(3))
+    }
+
+    fn release(&mut self, handle: u32) {
+        let mut env = main_env();
+        // SAFETY: the method's signature is `(I)V`.
+        let _ = unsafe {
+            env.call_method_unchecked(
+                &self.measurer,
+                self.release,
+                ReturnType::Primitive(Primitive::Void),
+                &[JValue::Int(handle as jint).as_jni()],
+            )
+        };
+        check(&mut env, "TextMeasurer.release");
+    }
+}
+
+// ---- The clipboard, through the view --------------------------------------------------------
+
+struct JniClipboard {
+    view: GlobalRef,
+}
+
+impl compose_ui::Clipboard for JniClipboard {
+    fn text(&mut self) -> Option<String> {
+        let mut env = main_env();
+        let text = env
+            .call_method(&self.view, "clipboardText", "()Ljava/lang/String;", &[])
+            .and_then(|value| value.l());
+        check(&mut env, "ComposeRsView.clipboardText");
+        let text = text.ok().filter(|text| !text.is_null())?;
+        let text = JString::from(text);
+        let value: Option<String> = env.get_string(&text).ok().map(Into::into);
+        let _ = env.delete_local_ref(text);
+        value
+    }
+
+    fn set_text(&mut self, text: &str) {
+        let mut env = main_env();
+        if let Ok(text) = env.new_string(text) {
+            let _ = env.call_method(
+                &self.view,
+                "setClipboardText",
+                "(Ljava/lang/String;)V",
+                &[JValue::Object(&text)],
+            );
+            let _ = env.delete_local_ref(text);
+        }
+        check(&mut env, "ComposeRsView.setClipboardText");
+    }
+}
+
+// ---- A view's host ---------------------------------------------------------------------------
+
+/// A `ComposeRsView`'s composition, and the buffers its frames are drawn from.
+struct Host {
+    ui: UiHost,
+    resources: Resources,
+    /// The last frame's display list.
+    list: Writer,
+    /// What `take_drawing` last gave Kotlin: resource changes, then the display list.
+    drawing: Writer,
+    /// Nothing has been drawn yet.
+    first: bool,
+}
+
+/// The host behind a pointer Kotlin keeps.
+///
+/// # Safety
+/// `host` came from `create` and wasn't destroyed; only the main thread uses it.
+unsafe fn host<'a>(host: jlong) -> &'a mut Host {
+    unsafe { &mut *(host as *mut Host) }
+}
+
+fn method(env: &mut JNIEnv, object: &JObject, name: &str, signature: &str) -> JMethodID {
+    let class = env.get_object_class(object).expect("compose-android: a class");
+    let id = env
+        .get_method_id(&class, name, signature)
+        .unwrap_or_else(|_| panic!("compose-android: {name}{signature}"));
+    let _ = env.delete_local_ref(class);
+    id
+}
+
+/// `ComposeRsNative.create(view, measurer, results, app, width, height, density, fontScale,
+/// rtl)`: a composition of the app named `app`, in a view `width` × `height` pixels.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_rs_compose_android_ComposeRsNative_create<'local>(
+    mut env: JNIEnv<'local>,
+    class: JClass<'local>,
+    view: JObject<'local>,
+    measurer: JObject<'local>,
+    results: JByteBuffer<'local>,
+    app: JString<'local>,
+    width: jint,
+    height: jint,
+    density: jfloat,
+    font_scale: jfloat,
+    rtl: jboolean,
+) -> jlong {
+    if WAKE.get().is_none() {
+        let class_ref = env.new_global_ref(&class).expect("compose-android: a global ref");
+        let wake = env
+            .get_static_method_id(&class, "wake", "()V")
+            .expect("compose-android: ComposeRsNative.wake");
+        let _ = WAKE.set((class_ref, wake));
+        // A task woken on any thread posts a tick to the main thread.
+        executor::set_wake_handler(|| {
+            let (Some(vm), Some((class, wake))) = (VM.get(), WAKE.get()) else { return };
+            let Ok(mut env) = vm.attach_current_thread_as_daemon() else { return };
+            // SAFETY: `wake` is `()V`, static, of `class`.
+            let _ = unsafe {
+                env.call_static_method_unchecked(
+                    <&JClass>::from(class.as_obj()),
+                    *wake,
+                    ReturnType::Primitive(Primitive::Void),
+                    &[],
+                )
+            };
+            check(&mut env, "ComposeRsNative.wake");
+        });
+    }
+    let name: String = env.get_string(&app).map(Into::into).unwrap_or_default();
+    let content = crate::app(&name).unwrap_or_else(|| {
+        log(&format!("no app named {name:?} (export_apps!)"));
+        || {}
+    });
+    let results =
+        env.get_direct_buffer_address(&results).expect("compose-android: a direct buffer");
+    let text = JniText {
+        layout: method(
+            &mut env,
+            &measurer,
+            "layout",
+            "(ILjava/lang/String;Ljava/nio/ByteBuffer;)V",
+        ),
+        hit_test: method(&mut env, &measurer, "hitTest", "(IFF)I"),
+        cursor: method(&mut env, &measurer, "cursor", "(II)V"),
+        release: method(&mut env, &measurer, "release", "(I)V"),
+        measurer: env.new_global_ref(&measurer).expect("compose-android: a global ref"),
+        results: results as *const f32,
+    };
+    let view_ref = env.new_global_ref(&view).expect("compose-android: a global ref");
+    let mut ui = UiHost::new(
+        IntSize::new(width, height),
+        Density { density, font_scale },
+        Box::new(AndroidTextMeasurer::new(text)),
+    );
+    ui.with_tree(|tree| tree.set_clipboard(Box::new(JniClipboard { view: view_ref.clone() })));
+    if rtl != 0 {
+        ui.set_layout_direction(LayoutDirection::Rtl);
+    }
+    // A state change asks the view for a frame.
+    let request_frame = method(&mut env, &view, "requestFrame", "()V");
+    let waker_view = view_ref.clone();
+    ui.set_frame_waker(move || {
+        let mut env = main_env();
+        // SAFETY: `requestFrame` is `()V`.
+        let _ = unsafe {
+            env.call_method_unchecked(
+                &waker_view,
+                request_frame,
+                ReturnType::Primitive(Primitive::Void),
+                &[],
+            )
+        };
+        check(&mut env, "ComposeRsView.requestFrame");
+    });
+    ui.set_content(content);
+    let host = Box::new(Host {
+        ui,
+        resources: Resources::default(),
+        list: Writer::default(),
+        drawing: Writer { bytes: Vec::with_capacity(4096) },
+        first: true,
+    });
+    Box::into_raw(host) as jlong
+}
+
+/// `ComposeRsNative.destroy(host)`: the composition goes (its effects disposed).
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_rs_compose_android_ComposeRsNative_destroy(
+    _env: JNIEnv,
+    _class: JClass,
+    host: jlong,
+) {
+    if host != 0 {
+        // SAFETY: `host` came from `create`, and Kotlin forgets it now.
+        drop(unsafe { Box::from_raw(host as *mut Host) });
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_rs_compose_android_ComposeRsNative_resize(
+    _env: JNIEnv,
+    _class: JClass,
+    host: jlong,
+    width: jint,
+    height: jint,
+) {
+    // SAFETY: a live host, on the main thread.
+    unsafe { self::host(host) }.ui.resize(IntSize::new(width, height));
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_rs_compose_android_ComposeRsNative_setDensity(
+    _env: JNIEnv,
+    _class: JClass,
+    host: jlong,
+    density: jfloat,
+    font_scale: jfloat,
+) {
+    // SAFETY: a live host, on the main thread.
+    unsafe { self::host(host) }.ui.set_density(Density { density, font_scale });
+}
+
+/// What `frame` returns: flags in the low byte, and the milliseconds to the next `delay`'s end
+/// plus one (0: none) above them.
+mod flags {
+    /// The display list changed: the view invalidates.
+    pub const DREW: i64 = 1;
+    /// Another frame is wanted (an animation, work left).
+    pub const AGAIN: i64 = 2;
+    /// A text field has focus: the soft keyboard shows.
+    pub const TEXT_INPUT: i64 = 4;
+    /// A field committed or dropped its composition itself: the input method restarts.
+    pub const RESET_INPUT: i64 = 8;
+}
+
+fn next_timer_bits() -> i64 {
+    executor::next_timer().map_or(0, |wait| (wait.as_millis() as i64 + 1) << 8)
+}
+
+/// `ComposeRsNative.frame(host)`: recomposes, lays out and draws what changed.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_rs_compose_android_ComposeRsNative_frame(
+    _env: JNIEnv,
+    _class: JClass,
+    host: jlong,
+) -> jlong {
+    // SAFETY: a live host, on the main thread.
+    let host = unsafe { self::host(host) };
+    let stats = host.ui.frame();
+    let mut result = 0;
+    if stats.drew || host.first {
+        host.first = false;
+        let (list, resources) = (&mut host.list, &mut host.resources);
+        host.ui.with_tree(|tree| write_display_list(tree.display_list(), resources, list));
+        host.resources.collect();
+        result |= flags::DREW;
+    }
+    if host.ui.has_pending_work() || executor::has_frame_awaiters() {
+        result |= flags::AGAIN;
+    }
+    if host.ui.text_input_area().is_some() {
+        result |= flags::TEXT_INPUT;
+    }
+    if host.ui.take_input_method_reset() {
+        result |= flags::RESET_INPUT;
+    }
+    result | next_timer_bits()
+}
+
+/// `ComposeRsNative.takeDrawing(host)`: what `onDraw` replays: the resources defined or dropped
+/// since it last took them, then the last frame's display list.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_rs_compose_android_ComposeRsNative_takeDrawing(
+    mut env: JNIEnv,
+    _class: JClass,
+    host: jlong,
+) -> jobject {
+    // SAFETY: a live host, on the main thread.
+    let host = unsafe { self::host(host) };
+    host.drawing.bytes.clear();
+    host.drawing.bytes.append(&mut host.resources.pending.bytes);
+    host.drawing.bytes.extend_from_slice(&host.list.bytes);
+    host.drawing.bytes.reserve(1);
+    // SAFETY: the buffer lives in the host until the next `takeDrawing` (or `destroy`), and
+    // Kotlin reads it during `onDraw` only.
+    let buffer = unsafe {
+        env.new_direct_byte_buffer(host.drawing.bytes.as_mut_ptr(), host.drawing.bytes.len())
+    };
+    buffer.map_or(std::ptr::null_mut(), |buffer| buffer.into_raw())
+}
+
+/// `ComposeRsNative.touch(host, action, pointer, x, y)`: action 0 down, 1 move, 2 up, 3
+/// cancel; positions in the view's pixels.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_rs_compose_android_ComposeRsNative_touch(
+    _env: JNIEnv,
+    _class: JClass,
+    host: jlong,
+    action: jint,
+    pointer: jint,
+    x: jfloat,
+    y: jfloat,
+) {
+    // SAFETY: a live host, on the main thread.
+    let host = unsafe { self::host(host) };
+    let position = Offset::new(x, y);
+    // Pointer 0 is the mouse's: touches start at 1.
+    let pointer = PointerId(pointer as u64 + 1);
+    let event = match action {
+        0 => PointerEvent::press(position),
+        1 => PointerEvent::moved(position, true),
+        2 => PointerEvent::release(position),
+        _ => {
+            host.ui.with_tree(|tree| tree.cancel_pointer(pointer));
+            return;
+        }
+    };
+    host.ui.send_pointer(event.with_pointer(pointer, PointerType::Touch));
+}
+
+/// `ComposeRsNative.key(host, key, character, down, meta)`: a key (see `Keys` in
+/// `ComposeRsView.kt`; 0 for a character), with its typed text for a character key down.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_rs_compose_android_ComposeRsNative_key(
+    _env: JNIEnv,
+    _class: JClass,
+    host: jlong,
+    key: jint,
+    character: jint,
+    down: jboolean,
+    meta: jint,
+) -> jboolean {
+    // SAFETY: a live host, on the main thread.
+    let host = unsafe { self::host(host) };
+    let character = char::from_u32(character as u32).filter(|c| *c != '\0');
+    let key = match key {
+        1 => Key::Enter,
+        2 => Key::Space,
+        3 => Key::Tab,
+        4 => Key::Backspace,
+        5 => Key::Delete,
+        6 => Key::Escape,
+        7 => Key::DirectionLeft,
+        8 => Key::DirectionRight,
+        9 => Key::DirectionUp,
+        10 => Key::DirectionDown,
+        11 => Key::MoveHome,
+        12 => Key::MoveEnd,
+        13 => Key::PageUp,
+        14 => Key::PageDown,
+        _ => match character {
+            Some(c) => Key::Character(c),
+            None => return 0,
+        },
+    };
+    // Android's meta state: shift 1, alt 2, ctrl 0x1000, meta 0x10000.
+    let modifiers = KeyModifiers {
+        shift: meta & 0x1 != 0,
+        alt: meta & 0x2 != 0,
+        ctrl: meta & 0x1000 != 0,
+        meta: meta & 0x10000 != 0,
+    };
+    let kind = if down != 0 { KeyEventType::KeyDown } else { KeyEventType::KeyUp };
+    let consumed = host.ui.send_key(KeyEvent { key, kind, modifiers });
+    // A typed character's text, unless it's a shortcut, as the desktop host does.
+    if down != 0
+        && !modifiers.ctrl
+        && !modifiers.meta
+        && let Some(c) = character.filter(|c| !c.is_control())
+    {
+        return u8::from(host.ui.send_text(&c.to_string()) || consumed);
+    }
+    u8::from(consumed)
+}
+
+/// `ComposeRsNative.text(host, text)`: text an input method committed.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_rs_compose_android_ComposeRsNative_text(
+    mut env: JNIEnv,
+    _class: JClass,
+    host: jlong,
+    text: JString,
+) {
+    // SAFETY: a live host, on the main thread.
+    let host = unsafe { self::host(host) };
+    if let Ok(text) = env.get_string(&text) {
+        let text: String = text.into();
+        host.ui.send_text(&text);
+    }
+}
+
+/// `ComposeRsNative.preedit(host, text, cursor)`: the text an input method is composing (empty
+/// when it's cancelled), its cursor at UTF-16 `cursor` (-1 at its end).
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_rs_compose_android_ComposeRsNative_preedit(
+    mut env: JNIEnv,
+    _class: JClass,
+    host: jlong,
+    text: JString,
+    cursor: jint,
+) {
+    // SAFETY: a live host, on the main thread.
+    let host = unsafe { self::host(host) };
+    if let Ok(text) = env.get_string(&text) {
+        let text: String = text.into();
+        let cursor = (cursor >= 0).then(|| {
+            let at = crate::text::byte_offset(&text, cursor as usize);
+            (at, at)
+        });
+        host.ui.send_preedit(&text, cursor);
+    }
+}
+
+/// `ComposeRsNative.tick()`: runs the `delay`s that ended and the tasks woken. Returns the
+/// milliseconds to the next `delay`'s end plus one (0: none), shifted left once, with bit 0
+/// set if a task waits for a frame.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_rs_compose_android_ComposeRsNative_tick(
+    _env: JNIEnv,
+    _class: JClass,
+) -> jlong {
+    executor::fire_timers();
+    executor::run_ready();
+    let frames = i64::from(executor::has_frame_awaiters());
+    let timer = executor::next_timer().map_or(0, |wait| wait.as_millis() as i64 + 1);
+    (timer << 1) | frames
+}

@@ -6,8 +6,18 @@ edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 
+[features]
+# The desktop binary (`cargo run -p todo`); off for embedding the library (Android).
+default = ["desktop"]
+desktop = ["compose/desktop"]
+
+[[bin]]
+name = "todo"
+path = "src/main.rs"
+required-features = ["desktop"]
+
 [dependencies]
-compose = { path = "../../crates/compose", features = ["desktop"] }
+compose = { path = "../../crates/compose" }
 
 [dev-dependencies]
 compose = { path = "../../crates/compose", features = ["test"] }

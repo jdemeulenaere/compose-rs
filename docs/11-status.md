@@ -7,7 +7,7 @@ What compose-rs covers of Jetpack Compose today, and where it knowingly differs.
 | | Status |
 |---|---|
 | **Desktop** (macOS, Windows, Linux) | Runs: `application` with `Window`s (or one window with `run_app`), Skia rendering on the CPU raster backend presented with softbuffer, SkParagraph text, input with IME, hover and pointer icons, the system clipboard, AccessKit for screen readers, HiDPI, right-to-left. |
-| **Android** | Designed ([07](07-platforms.md)), not built: building it needs the Android NDK and Rust's Android targets, which this environment doesn't have. |
+| **Android** (arm64, API 29+) | Runs: `ComposeRsView`, a plain `View` embeddable in Kotlin Compose (`AndroidView`), drawing with the system `Canvas` (hardware-accelerated: the GPU), text by `StaticLayout`, touch, hardware keys, the soft keyboard, the clipboard ([07](07-platforms.md)). `android/` builds the library and the demo app with Gradle; cargo builds the Rust side. No accessibility yet, and shadows are approximated (a blurred outline). |
 | **iOS, web** | Not started. |
 
 ## Covered
