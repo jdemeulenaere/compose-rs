@@ -215,6 +215,11 @@ pub trait TextMeasurer: std::any::Any {
     ) -> ParagraphHandle;
     fn metrics(&self, paragraph: ParagraphHandle) -> ParagraphMetrics;
     fn hit_test(&self, paragraph: ParagraphHandle, position: Offset) -> TextPosition;
+    /// Whether the paragraph runs right to left (its first strong character's direction), as
+    /// `TextLayoutResult.getParagraphDirection`: Left and Right move the other way.
+    fn is_right_to_left(&self, _paragraph: ParagraphHandle) -> bool {
+        false
+    }
     /// The cursor before byte `offset`: its top and bottom in the paragraph, as
     /// `TextLayoutResult.getCursorRect` (zero width).
     fn cursor_rect(&self, paragraph: ParagraphHandle, offset: usize) -> crate::unit::Rect;

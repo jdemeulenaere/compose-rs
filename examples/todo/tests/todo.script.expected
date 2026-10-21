@@ -30,11 +30,9 @@ StackMeasurePolicy [0,0 400x800]
   RowColumnMeasurePolicy [0,0 400x800] Modifier.fill_max_size(1).padding(16.dp, 16.dp, 16.dp, 16.dp)
     RowColumnMeasurePolicy [0,0 368x56]
       BoxMeasurePolicy [0,0 299x56] Modifier.weight(1, true).test_tag("draft").semantics(merge = true).focus_on_tap {tag="draft" merged}
-        BoxMeasurePolicy [0,0 299x56] Modifier.size(280.dp.._ x 56.dp.._).background(#FFE6E0E9, Rounded([Dp(4.dp), Dp(4.dp), Dp(0.dp), Dp(0.dp)])).on_focus_changed
-          RowColumnMeasurePolicy [0,6 299x50] Modifier.fill_max_width(1).padding(16.dp, 16.dp, 16.dp, 16.dp)
-            BoxMeasurePolicy [0,0 267x18] Modifier.fill_max_width(1)
-              EmptyMeasurePolicy [0,0 267x18] Modifier.TextField {editable_text="" editable focusable focused part_of_parent}
-          EmptyMeasurePolicy [0,54 299x2] Modifier.fill_max_width(1).size(_ x 2.dp).background(#FF6750A4, Rectangle)
+        TextFieldLayout [0,0 299x56] Modifier.size(280.dp.._ x 56.dp.._).background(#FFE6E0E9, Rounded([Dp(4.dp), Dp(4.dp), Dp(0.dp), Dp(0.dp)])).on_focus_changed
+          EmptyMeasurePolicy [16,19 267x18] Modifier.TextField {editable_text="" editable focusable focused part_of_parent}
+          EmptyMeasurePolicy [0,54 299x2] Modifier.size(_ x 2.dp).background(#FF6750A4, Rectangle)
       BoxMeasurePolicy [299,4 69x48] Modifier.minimum_touch_target(48.dp).background(#FF6750A4, Rounded([Percent(50.0), Percent(50.0), Percent(50.0), Percent(50.0)])).clip(Rounded([Percent(50.0), Percent(50.0), Percent(50.0), Percent(50.0)])).clickable(enabled = true) {role=Button clickable focusable merged}
         RowColumnMeasurePolicy [0,0 69x40] Modifier.size(58.dp.._ x 40.dp.._).padding(24.dp, 8.dp, 24.dp, 8.dp)
           EmptyMeasurePolicy [0,2 21x20] Modifier.Text {text=["Add"]}

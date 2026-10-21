@@ -380,6 +380,7 @@ name = "compose-desktop"
 version = "0.1.0"
 dependencies = [
  "arboard",
+ "compose-foundation",
  "compose-runtime",
  "compose-skia",
  "compose-ui",

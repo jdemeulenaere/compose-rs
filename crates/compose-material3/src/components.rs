@@ -1,7 +1,7 @@
 //! Material 3 components: `Text`, `Surface`, the buttons, `Checkbox`, `TextField`, as
 //! Compose's, with their `…Defaults`.
 
-use compose_foundation::layout::{Arrangement, Box, Column, PaddingValues, Row, RowScope};
+use compose_foundation::layout::{Arrangement, Box, PaddingValues, Row, RowScope};
 use compose_foundation::{BasicText, BasicTextField, BorderStroke};
 use compose_runtime::{Callback, CompositionLocalProvider, composable, mutable_state_of, remember};
 use compose_ui::{
@@ -468,6 +468,78 @@ impl TextFieldDefaults {
     }
 }
 
+/// The layout of a filled text field's decoration, as Compose's `TextFieldMeasurePolicy`: the
+/// label (if any), the placeholder (if shown) and the text field, then the indicator line, as
+/// children in that order. 16 dp at the sides; 8 dp above and below with a label, 16 dp
+/// without. The width is the widest of them and the minimum (280 dp, the container's); the label
+/// sits at the top padding with the text below it; without one a single line is centered and a
+/// multi-line text starts at the top padding.
+struct TextFieldLayout {
+    has_label: bool,
+    has_placeholder: bool,
+    single_line: bool,
+}
+
+impl compose_ui::MeasurePolicy for TextFieldLayout {
+    fn measure(
+        &self,
+        scope: &mut compose_ui::MeasureScope<'_>,
+        measurables: &[compose_ui::Measurable],
+        constraints: compose_ui::Constraints,
+    ) -> compose_ui::MeasureResult {
+        let density = scope.density();
+        let horizontal = density.round_to_px(16.dp());
+        let vertical = density.round_to_px(if self.has_label { 8.dp() } else { 16.dp() });
+        let mut children = measurables.iter().copied();
+        let label = if self.has_label { children.next() } else { None };
+        let placeholder = if self.has_placeholder { children.next() } else { None };
+        let (Some(text), Some(indicator)) = (children.next(), children.next()) else {
+            return scope.layout(constraints.min_width, constraints.min_height);
+        };
+        let loose = constraints.loosen().offset(-2 * horizontal, -2 * vertical);
+        let label = label.map(|label| scope.measure(label, loose));
+        let label_height = label.map_or(0, |label| label.height);
+        let mut text_constraints =
+            constraints.offset(-2 * horizontal, -2 * vertical - label_height);
+        text_constraints.min_height = 0;
+        let text = scope.measure(text, text_constraints);
+        let placeholder = placeholder
+            .map(|placeholder| scope.measure(placeholder, loose.offset(0, -label_height)));
+        let content_width = text
+            .width
+            .max(label.map_or(0, |label| label.width))
+            .max(placeholder.map_or(0, |placeholder| placeholder.width));
+        let content_height =
+            text.height.max(placeholder.map_or(0, |placeholder| placeholder.height));
+        let width = constraints.constrain_width(content_width + 2 * horizontal);
+        let height =
+            constraints.constrain_height(vertical + label_height + content_height + vertical);
+        let indicator =
+            scope.measure(indicator, compose_ui::Constraints::new(width, width, 0, height));
+        let text_y = if self.has_label {
+            vertical + label_height
+        } else if self.single_line {
+            (height - text.height) / 2
+        } else {
+            vertical
+        };
+        if let Some(label) = &label {
+            scope.place(label, horizontal, vertical);
+        }
+        if let Some(placeholder) = &placeholder {
+            let y = if self.has_label || !self.single_line {
+                text_y
+            } else {
+                (height - placeholder.height) / 2
+            };
+            scope.place(placeholder, horizontal, y);
+        }
+        scope.place(&text, horizontal, text_y);
+        scope.place(&indicator, 0, height - indicator.height);
+        scope.layout(width, height)
+    }
+}
+
 /// A filled text field, as Compose's `TextField`: a container with an indicator line, an
 /// optional label above the text (always floated, without the animation) and a placeholder
 /// while empty.
@@ -506,44 +578,44 @@ pub fn TextField(
             ))
             .background_shape(colors.container_color, TextFieldDefaults::shape())
             .on_focus_changed(move |now| focused.set(now));
-        Box!(modifier = container, content_alignment = Alignment::BOTTOM_START, {
-            Column!(
-                // 8 dp above and below with a label, 16 dp without, as Compose's.
-                modifier = Modifier
-                    .fill_max_width()
-                    .padding_horizontal_vertical(16.dp(), if has_label { 8.dp() } else { 16.dp() }),
-                {
-                    if let Some(label) = &label {
-                        CompositionLocalProvider(LOCAL_CONTENT_COLOR.provides(label_color), || {
-                            CompositionLocalProvider(
-                                LOCAL_TEXT_STYLE.provides(typography.body_small),
-                                || label(),
-                            );
-                        });
-                    }
-                    // The text fills the width (the minimum passed on), the placeholder under it.
-                    Box!(modifier = Modifier.fill_max_width(), propagate_min_constraints = true, {
-                        if empty && let Some(placeholder) = &placeholder {
-                            CompositionLocalProvider(
-                                LOCAL_CONTENT_COLOR.provides(colors.placeholder_color),
-                                || {
-                                    CompositionLocalProvider(
-                                        LOCAL_TEXT_STYLE.provides(style),
-                                        || placeholder(),
-                                    );
-                                },
-                            );
-                        }
-                        inner_text_field();
+        let showing_placeholder = empty && placeholder.is_some();
+        let policy =
+            compose_runtime::remember_keyed((has_label, showing_placeholder, single_line), || {
+                std::rc::Rc::new(TextFieldLayout {
+                    has_label,
+                    has_placeholder: showing_placeholder,
+                    single_line,
+                }) as std::rc::Rc<dyn compose_ui::MeasurePolicy>
+            });
+        let content = compose_runtime::callback(move || {
+            if let Some(label) = label.clone() {
+                Box!({
+                    CompositionLocalProvider(LOCAL_CONTENT_COLOR.provides(label_color), || {
+                        CompositionLocalProvider(
+                            LOCAL_TEXT_STYLE.provides(typography.body_small),
+                            || label(),
+                        );
                     });
-                }
-            );
+                });
+            }
+            if empty && let Some(placeholder) = placeholder.clone() {
+                Box!({
+                    CompositionLocalProvider(
+                        LOCAL_CONTENT_COLOR.provides(colors.placeholder_color),
+                        || {
+                            CompositionLocalProvider(LOCAL_TEXT_STYLE.provides(style), || {
+                                placeholder()
+                            });
+                        },
+                    );
+                });
+            }
+            inner_text_field();
             // The indicator line: 1 dp, 2 dp focused.
             let thickness = if is_focused { 2.dp() } else { 1.dp() };
-            compose_foundation::layout::Spacer(
-                Modifier.fill_max_width().height(thickness).background(indicator),
-            );
+            compose_foundation::layout::Spacer(Modifier.height(thickness).background(indicator));
         });
+        compose_ui::Layout(container, policy, content);
     };
     BasicTextField(
         value,

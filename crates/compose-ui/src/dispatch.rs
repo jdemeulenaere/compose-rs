@@ -250,6 +250,51 @@ impl UiTree {
 
     /// Sends committed text to the focused node and its ancestors until one takes it.
     pub fn dispatch_text(&mut self, text: &str) -> (bool, Vec<Action>) {
+        self.dispatch_to_key_path(|handler, context| handler.on_text_input(text, context))
+    }
+
+    /// Sends an input method's composition to the focused node and its ancestors until one
+    /// takes it.
+    pub fn dispatch_preedit(
+        &mut self,
+        text: &str,
+        cursor: Option<(usize, usize)>,
+    ) -> (bool, Vec<Action>) {
+        self.dispatch_to_key_path(|handler, context| handler.on_preedit(text, cursor, context))
+    }
+
+    /// Where the focused node takes text, in the root: where an input method's candidate window
+    /// goes.
+    pub fn text_input_area(&mut self) -> Option<crate::unit::Rect> {
+        for (node, index) in self.key_path() {
+            let layer = {
+                let value = self.node(node);
+                value.capabilities[..index]
+                    .iter()
+                    .filter(|bits| **bits & capability::LAYOUT != 0)
+                    .count()
+            };
+            let area = self.get_mut(node)?.chain[index].as_key_input()?.text_input_area();
+            if let Some(area) = area {
+                let origin = self.layer_origin(node, layer);
+                return Some(crate::unit::Rect::new(
+                    area.left + origin.x,
+                    area.top + origin.y,
+                    area.right + origin.x,
+                    area.bottom + origin.y,
+                ));
+            }
+        }
+        None
+    }
+
+    fn dispatch_to_key_path(
+        &mut self,
+        mut send: impl FnMut(
+            &mut dyn crate::modifier::KeyInputModifierNode,
+            &mut EventContext<'_>,
+        ) -> bool,
+    ) -> (bool, Vec<Action>) {
         let mut actions = Vec::new();
         let mut requests = Requests::default();
         let mut consumed = false;
@@ -266,7 +311,7 @@ impl UiTree {
                 pointer_position: None,
             };
             if let Some(handler) = value.chain[index].as_key_input()
-                && handler.on_text_input(text, &mut context)
+                && send(handler, &mut context)
             {
                 consumed = true;
                 break;

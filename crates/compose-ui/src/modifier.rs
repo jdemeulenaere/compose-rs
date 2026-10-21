@@ -736,4 +736,19 @@ pub trait KeyInputModifierNode {
     fn on_text_input(&mut self, _text: &str, _context: &mut EventContext<'_>) -> bool {
         false
     }
+    /// The text an input method is composing (pinyin, kana, a dead key), shown until it is
+    /// committed or cancelled (empty), with the cursor's byte range in it, if any.
+    fn on_preedit(
+        &mut self,
+        _text: &str,
+        _cursor: Option<(usize, usize)>,
+        _context: &mut EventContext<'_>,
+    ) -> bool {
+        false
+    }
+    /// Where text input goes, in the node's coordinates: an input method places its candidate
+    /// window there. `None` if the node takes no text.
+    fn text_input_area(&self) -> Option<crate::unit::Rect> {
+        None
+    }
 }

@@ -106,6 +106,8 @@ struct Shown {
     host: UiHost,
     renderer: RasterRenderer,
     input: input::InputState,
+    /// Where the input method's candidate window was last placed.
+    ime_area: Option<compose_ui::Rect>,
 }
 
 struct App<C: Fn() + 'static> {
@@ -166,8 +168,14 @@ impl<C: Fn() + 'static> App<C> {
         host.set_content(move || content());
         let renderer = RasterRenderer::new(size.width as i32, size.height as i32);
         window.request_redraw();
-        self.shown =
-            Some(Shown { window, surface, host, renderer, input: input::InputState::default() });
+        self.shown = Some(Shown {
+            window,
+            surface,
+            host,
+            renderer,
+            input: input::InputState::default(),
+            ime_area: None,
+        });
     }
 
     fn redraw(&mut self, event_loop: &ActiveEventLoop) {
@@ -206,6 +214,20 @@ impl<C: Fn() + 'static> App<C> {
             let _ = buffer.present();
         }
         let presented = Instant::now();
+        // The input method's candidate window goes at the focused field's cursor.
+        let area = shown.host.text_input_area();
+        if area != shown.ime_area {
+            shown.ime_area = area;
+            if let Some(area) = area {
+                shown.window.set_ime_cursor_area(
+                    winit::dpi::PhysicalPosition::new(area.left as f64, area.top as f64),
+                    winit::dpi::PhysicalSize::new(
+                        (area.right - area.left).max(1.0) as f64,
+                        (area.bottom - area.top).max(1.0) as f64,
+                    ),
+                );
+            }
+        }
         self.frames += 1;
         if self.stats {
             let times = FrameTimes {

@@ -127,7 +127,15 @@ pub(crate) fn handle(state: &mut InputState, host: &mut UiHost, event: &WindowEv
             }
         }
         WindowEvent::Ime(Ime::Commit(text)) => {
+            // The composition ends with the commit.
+            host.send_preedit("", None);
             host.send_text(text);
+        }
+        WindowEvent::Ime(Ime::Preedit(text, cursor)) => {
+            host.send_preedit(text, *cursor);
+        }
+        WindowEvent::Ime(Ime::Disabled) => {
+            host.send_preedit("", None);
         }
         _ => return Outcome::Ignored,
     }

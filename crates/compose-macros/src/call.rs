@@ -193,7 +193,8 @@ impl ToTokens for Marked {
             MarkedBody::Closure(closure) => {
                 let mut closure = closure.clone();
                 let marker: syn::Stmt = syn::parse_quote! { #marker };
-                let body = std::mem::replace(&mut *closure.body, Expr::Verbatim(TokenStream::new()));
+                let body =
+                    std::mem::replace(&mut *closure.body, Expr::Verbatim(TokenStream::new()));
                 *closure.body = block_of(marker, body);
                 closure.to_tokens(tokens);
             }

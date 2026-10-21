@@ -28,6 +28,7 @@ struct Entry {
     paragraph: Paragraph,
     text: String,
     metrics: ParagraphMetrics,
+    right_to_left: bool,
 }
 
 /// Lays out paragraphs with SkParagraph and the system's fonts, keeping each until released:
@@ -179,7 +180,8 @@ impl TextMeasurer for SkiaTextMeasurer {
             line_count: paragraph.line_number().max(1) as u32,
         };
         drop(lines);
-        let entry = Entry { paragraph, text: text.to_string(), metrics };
+        let right_to_left = first_strong_is_rtl(text);
+        let entry = Entry { paragraph, text: text.to_string(), metrics, right_to_left };
         match self.free.pop() {
             Some(index) => {
                 self.paragraphs[index as usize] = Some(entry);
@@ -194,6 +196,10 @@ impl TextMeasurer for SkiaTextMeasurer {
 
     fn metrics(&self, paragraph: ParagraphHandle) -> ParagraphMetrics {
         self.entry(paragraph).metrics
+    }
+
+    fn is_right_to_left(&self, paragraph: ParagraphHandle) -> bool {
+        self.entry(paragraph).right_to_left
     }
 
     fn hit_test(&self, paragraph: ParagraphHandle, position: Offset) -> TextPosition {

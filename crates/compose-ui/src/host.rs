@@ -203,6 +203,21 @@ impl UiHost {
         consumed
     }
 
+    /// Dispatches an input method's composition to the focused node; returns whether it was
+    /// taken.
+    pub fn send_preedit(&mut self, text: &str, cursor: Option<(usize, usize)>) -> bool {
+        let (consumed, actions) = self.with_tree(|tree| tree.dispatch_preedit(text, cursor));
+        Self::run(actions);
+        self.wake_if_dirty();
+        consumed
+    }
+
+    /// Where the focused node takes text, in the root's pixels: where an input method's
+    /// candidate window goes.
+    pub fn text_input_area(&self) -> Option<crate::unit::Rect> {
+        self.with_tree(|tree| tree.text_input_area())
+    }
+
     /// Moves focus to `node`'s focus target.
     pub fn request_focus(&mut self, node: NodeId) {
         let actions = self.with_tree(|tree| tree.request_focus(node));
