@@ -22,9 +22,9 @@ mod theme;
 
 pub use components::{
     AnnotatedText, Button, ButtonColors, ButtonDefaults, Checkbox, CheckboxColors,
-    CheckboxDefaults, LOCAL_ABSOLUTE_TONAL_ELEVATION, MINIMUM_INTERACTIVE_SIZE, OutlinedButton,
-    Surface, Text, TextButton, TextField, TextFieldColors, TextFieldDefaults,
-    minimum_interactive_component_size,
+    CheckboxDefaults, ElevatedButton, FilledTonalButton, LOCAL_ABSOLUTE_TONAL_ELEVATION,
+    MINIMUM_INTERACTIVE_SIZE, OutlinedButton, Surface, Text, TextButton, TextField,
+    TextFieldColors, TextFieldDefaults, minimum_interactive_component_size,
 };
 pub use dialog::{AlertDialog, DropdownMenu, DropdownMenuItem};
 pub use icon::{FloatingActionButton, Icon, IconButton, icons};
@@ -38,8 +38,8 @@ pub use progress::{
     IndeterminateLinearProgressIndicator, LinearProgressIndicator, ProgressIndicatorDefaults,
 };
 pub use scaffold::{
-    Card, CardColors, CardDefaults, HorizontalDivider, Scaffold, TopAppBar, TopAppBarColors,
-    TopAppBarDefaults, VerticalDivider,
+    Card, CardColors, CardDefaults, ElevatedCard, HorizontalDivider, OutlinedCard, Scaffold,
+    TopAppBar, TopAppBarColors, TopAppBarDefaults, VerticalDivider,
 };
 pub use selection::{
     RadioButton, RadioButtonColors, RadioButtonDefaults, Slider, SliderColors, SliderDefaults,

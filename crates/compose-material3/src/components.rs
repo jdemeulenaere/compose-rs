@@ -217,6 +217,31 @@ impl ButtonDefaults {
         }
     }
 
+    /// The secondary container, as `filledTonalButtonColors()`.
+    pub fn filled_tonal_button_colors() -> ButtonColors {
+        let scheme = MaterialTheme::color_scheme();
+        ButtonColors {
+            container_color: scheme.secondary_container,
+            content_color: scheme.on_secondary_container,
+            disabled_container_color: scheme.on_surface.with_alpha(0.12),
+            disabled_content_color: scheme.on_surface.with_alpha(0.38),
+        }
+    }
+
+    /// The low surface container, primary text, as `elevatedButtonColors()`.
+    pub fn elevated_button_colors() -> ButtonColors {
+        let scheme = MaterialTheme::color_scheme();
+        ButtonColors {
+            container_color: scheme.surface_container_low,
+            content_color: scheme.primary,
+            disabled_container_color: scheme.on_surface.with_alpha(0.12),
+            disabled_content_color: scheme.on_surface.with_alpha(0.38),
+        }
+    }
+
+    /// An elevated button's shadow, as `elevatedButtonElevation()`'s resting elevation.
+    pub const ELEVATED_BUTTON_ELEVATION: Dp = Dp(1.0);
+
     /// Transparent, primary text: `outlinedButtonColors` and `textButtonColors`.
     pub fn text_button_colors() -> ButtonColors {
         let scheme = MaterialTheme::color_scheme();
@@ -238,7 +263,8 @@ impl ButtonDefaults {
 }
 
 /// A filled button, as Compose's `Button`: a clickable surface around a row of content in the
-/// label style.
+/// label style, with a shadow of `elevation` while enabled (a simplification of Compose's
+/// `ButtonElevation`: its resting elevation).
 #[composable]
 pub fn Button(
     on_click: impl Fn() + 'static,
@@ -246,6 +272,7 @@ pub fn Button(
     #[default(true)] enabled: bool,
     #[default(crate::ButtonDefaults::shape())] shape: Shape,
     #[default(crate::ButtonDefaults::button_colors())] colors: ButtonColors,
+    #[default(crate::Dp(0.0))] elevation: Dp,
     #[default(None)] border: Option<BorderStroke>,
     #[default(crate::ButtonDefaults::CONTENT_PADDING)] content_padding: PaddingValues,
     content: impl Fn(RowScope) + 'static,
@@ -260,7 +287,7 @@ pub fn Button(
         shape,
         container,
         border,
-        Dp(0.0),
+        if enabled { elevation } else { Dp(0.0) },
     )
     .clickable_indicated(enabled, Some(Role::Button), content_color, on_click);
     let label = MaterialTheme::typography().label_large;
@@ -290,6 +317,48 @@ pub fn Button(
     });
 }
 
+/// A button in the secondary container, as Compose's `FilledTonalButton`.
+#[composable]
+pub fn FilledTonalButton(
+    on_click: impl Fn() + 'static,
+    #[default(crate::Modifier)] modifier: Modifier,
+    #[default(true)] enabled: bool,
+    content: impl Fn(RowScope) + 'static,
+) {
+    Button(
+        on_click,
+        modifier,
+        enabled,
+        ButtonDefaults::shape(),
+        ButtonDefaults::filled_tonal_button_colors(),
+        Dp(0.0),
+        None,
+        ButtonDefaults::CONTENT_PADDING,
+        content,
+    );
+}
+
+/// A button raised on a 1 dp shadow, as Compose's `ElevatedButton`.
+#[composable]
+pub fn ElevatedButton(
+    on_click: impl Fn() + 'static,
+    #[default(crate::Modifier)] modifier: Modifier,
+    #[default(true)] enabled: bool,
+    content: impl Fn(RowScope) + 'static,
+) {
+    Button(
+        on_click,
+        modifier,
+        enabled,
+        ButtonDefaults::shape(),
+        ButtonDefaults::elevated_button_colors(),
+        ButtonDefaults::ELEVATED_BUTTON_ELEVATION,
+        None,
+        ButtonDefaults::CONTENT_PADDING,
+        content,
+    );
+}
+
 /// A button with an outline and no fill, as Compose's `OutlinedButton`.
 #[composable]
 pub fn OutlinedButton(
@@ -305,6 +374,7 @@ pub fn OutlinedButton(
         enabled,
         ButtonDefaults::shape(),
         ButtonDefaults::text_button_colors(),
+        Dp(0.0),
         Some(border),
         ButtonDefaults::CONTENT_PADDING,
         content,
@@ -325,6 +395,7 @@ pub fn TextButton(
         enabled,
         ButtonDefaults::shape(),
         ButtonDefaults::text_button_colors(),
+        Dp(0.0),
         None,
         ButtonDefaults::TEXT_BUTTON_CONTENT_PADDING,
         content,

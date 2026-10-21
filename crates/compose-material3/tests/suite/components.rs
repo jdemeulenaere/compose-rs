@@ -537,3 +537,37 @@ fn a_navigation_bar_shares_its_width_and_selects_on_click() {
     assert_eq!(selected.get(), 1);
     assert_eq!(ui.on_node_with_tag("Search").fetch_semantics_node().config.selected, Some(true));
 }
+
+#[test]
+fn button_and_card_variants_have_their_colors_and_shadows() {
+    use compose_ui::DrawOp;
+    thread_local! { static SCHEME: std::cell::Cell<Option<ColorScheme>> = const { std::cell::Cell::new(None) }; }
+    let mut ui = compose_test(|| {
+        MaterialTheme!({
+            SCHEME.with(|cell| cell.set(Some(MaterialTheme::color_scheme())));
+            Column!({
+                FilledTonalButton!(|| {}, { Text!("Tonal") });
+                ElevatedButton!(|| {}, { Text!("Elevated") });
+                ElevatedCard!(modifier = Modifier.size(40.dp()), {});
+                OutlinedCard!(modifier = Modifier.size(40.dp()), {});
+            });
+        });
+    });
+    let scheme = SCHEME.with(std::cell::Cell::get).expect("composed");
+    let list = ui.host().display_list();
+    let fills: Vec<Color> = list
+        .ops
+        .iter()
+        .filter_map(|op| match op {
+            DrawOp::DrawRoundRect(_, _, paint) if paint.style == compose_ui::PaintStyle::Fill => {
+                Some(paint.color)
+            }
+            _ => None,
+        })
+        .collect();
+    assert!(fills.contains(&scheme.secondary_container), "the tonal button");
+    assert_eq!(fills.iter().filter(|color| **color == scheme.surface_container_low).count(), 2);
+    assert!(fills.contains(&scheme.surface), "the outlined card");
+    let shadows = list.ops.iter().filter(|op| matches!(op, DrawOp::DrawShadow { .. })).count();
+    assert_eq!(shadows, 2, "the elevated button and card");
+}

@@ -77,6 +77,32 @@ impl CardDefaults {
         }
     }
 
+    /// An elevated card's, as `CardDefaults.elevatedCardColors()`.
+    pub fn elevated_card_colors() -> CardColors {
+        let scheme = MaterialTheme::color_scheme();
+        CardColors { container_color: scheme.surface_container_low, ..CardDefaults::card_colors() }
+    }
+
+    /// An outlined card's, as `CardDefaults.outlinedCardColors()`.
+    pub fn outlined_card_colors() -> CardColors {
+        let scheme = MaterialTheme::color_scheme();
+        CardColors { container_color: scheme.surface, ..CardDefaults::card_colors() }
+    }
+
+    /// An outlined card's border, as `CardDefaults.outlinedCardBorder()`.
+    pub fn outlined_card_border(enabled: bool) -> BorderStroke {
+        let scheme = MaterialTheme::color_scheme();
+        let color = if enabled {
+            scheme.outline_variant
+        } else {
+            scheme.outline.with_alpha(0.12).composite_over(scheme.surface_container_low)
+        };
+        BorderStroke::new(Dp(1.0), color)
+    }
+
+    /// An elevated card's shadow, as `elevatedCardElevation()`'s resting elevation.
+    pub const ELEVATED_CARD_ELEVATION: Dp = Dp(1.0);
+
     pub fn shape() -> Shape {
         MaterialTheme::shapes().medium
     }
@@ -91,6 +117,7 @@ pub fn Card(
     #[default(true)] enabled: bool,
     #[default(crate::CardDefaults::shape())] shape: Shape,
     #[default(crate::CardDefaults::card_colors())] colors: CardColors,
+    #[default(crate::Dp(0.0))] elevation: Dp,
     #[default(None)] border: Option<BorderStroke>,
     content: impl Fn(ColumnScope) + 'static,
 ) {
@@ -99,7 +126,10 @@ pub fn Card(
     } else {
         (colors.disabled_container_color, colors.disabled_content_color)
     };
-    let mut surface = modifier.background_shape(container, shape).clip(shape);
+    let mut surface = modifier
+        .shadow(if enabled { elevation } else { Dp(0.0) }, shape, false)
+        .background_shape(container, shape)
+        .clip(shape);
     if let Some(border) = border {
         surface = surface.border(border.width, border.color, shape);
     }
@@ -119,6 +149,46 @@ pub fn Card(
             content.clone(),
         );
     });
+}
+
+/// A card raised on a 1 dp shadow, as Compose's `ElevatedCard`.
+#[composable]
+pub fn ElevatedCard(
+    #[default(None)] on_click: Option<impl Fn() + 'static>,
+    #[default(crate::Modifier)] modifier: Modifier,
+    #[default(true)] enabled: bool,
+    content: impl Fn(ColumnScope) + 'static,
+) {
+    Card(
+        on_click,
+        modifier,
+        enabled,
+        CardDefaults::shape(),
+        CardDefaults::elevated_card_colors(),
+        CardDefaults::ELEVATED_CARD_ELEVATION,
+        None,
+        content,
+    );
+}
+
+/// A card with an outline, as Compose's `OutlinedCard`.
+#[composable]
+pub fn OutlinedCard(
+    #[default(None)] on_click: Option<impl Fn() + 'static>,
+    #[default(crate::Modifier)] modifier: Modifier,
+    #[default(true)] enabled: bool,
+    content: impl Fn(ColumnScope) + 'static,
+) {
+    Card(
+        on_click,
+        modifier,
+        enabled,
+        CardDefaults::shape(),
+        CardDefaults::outlined_card_colors(),
+        Dp(0.0),
+        Some(CardDefaults::outlined_card_border(enabled)),
+        content,
+    );
 }
 
 // ---- TopAppBar -------------------------------------------------------------------------------
