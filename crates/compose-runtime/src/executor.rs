@@ -319,6 +319,18 @@ pub fn set_wake_handler(wake: impl Fn() + Send + Sync + 'static) {
     *shared.wake.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(Arc::new(wake));
 }
 
+/// Asks the host for a turn of its loop (its wake handler, if set): state changed that only a
+/// frame tells readers about (a derived state's dependency).
+pub(crate) fn wake_host() {
+    let shared = EXECUTOR.try_with(|executor| executor.try_borrow().ok().map(|executor| executor.shared.clone()));
+    if let Ok(Some(shared)) = shared {
+        let wake = shared.wake.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone();
+        if let Some(wake) = wake {
+            wake();
+        }
+    }
+}
+
 /// The executor's time in nanoseconds: since the thread first used it, or the manual clock's.
 pub fn now_nanos() -> u64 {
     with_executor(|executor| executor.now())
@@ -347,15 +359,18 @@ pub fn next_timer_deadline() -> Option<u64> {
 
 // ---- Futures ---------------------------------------------------------------------------------
 
-/// Suspends the task for `duration` by the executor's clock, as Compose's `delay`.
+/// Suspends the task for `duration` by the executor's clock, as Compose's `delay`. Dropping it
+/// (the task cancelled) removes its timer.
 pub fn delay(duration: Duration) -> Delay {
-    Delay { duration, deadline: None }
+    Delay { duration, deadline: None, timer: None }
 }
 
 /// The future of [`delay`].
 pub struct Delay {
     duration: Duration,
     deadline: Option<u64>,
+    /// The serial of the timer it waits on, if any.
+    timer: Option<u64>,
 }
 
 impl Future for Delay {
@@ -364,12 +379,17 @@ impl Future for Delay {
     fn poll(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<()> {
         let duration = self.duration;
         let deadline = self.deadline;
-        let (ready, deadline) = with_executor(|executor| {
+        let timer = self.timer;
+        let (ready, deadline, timer) = with_executor(|executor| {
             let now = executor.now();
             let deadline =
                 deadline.unwrap_or_else(|| now.saturating_add(duration.as_nanos() as u64));
+            // Polled again: its timer is replaced (with this poll's waker), never doubled.
+            if let Some(serial) = timer {
+                executor.timers.retain(|Reverse(timer)| timer.serial != serial);
+            }
             if now >= deadline {
-                return (true, deadline);
+                return (true, deadline, None);
             }
             executor.timer_serial += 1;
             let serial = executor.timer_serial;
@@ -378,10 +398,23 @@ impl Future for Delay {
                 serial,
                 waker: context.waker().clone(),
             }));
-            (false, deadline)
+            (false, deadline, Some(serial))
         });
         self.deadline = Some(deadline);
+        self.timer = timer;
         if ready { Poll::Ready(()) } else { Poll::Pending }
+    }
+}
+
+impl Drop for Delay {
+    fn drop(&mut self) {
+        if let Some(serial) = self.timer {
+            let _ = EXECUTOR.try_with(|executor| {
+                if let Ok(mut executor) = executor.try_borrow_mut() {
+                    executor.timers.retain(|Reverse(timer)| timer.serial != serial);
+                }
+            });
+        }
     }
 }
 
@@ -424,6 +457,19 @@ impl<R, F: FnOnce(u64) -> R> Future for WithFrame<F> {
             wake();
         }
         Poll::Pending
+    }
+}
+
+impl<F> Drop for WithFrame<F> {
+    /// A frame no longer awaited (the task cancelled) isn't asked for.
+    fn drop(&mut self) {
+        if let Some(time) = &self.time {
+            let _ = EXECUTOR.try_with(|executor| {
+                if let Ok(mut executor) = executor.try_borrow_mut() {
+                    executor.frame_awaiters.retain(|(awaiting, _)| !Rc::ptr_eq(awaiting, time));
+                }
+            });
+        }
     }
 }
 

@@ -17,6 +17,8 @@ pub(crate) struct ObserverEntry {
     invalidated: Vec<u64>,
     /// `notify` is queued, and not called again until the invalidated keys are drained.
     pending: bool,
+    /// A derived state's result cell, marked dirty when a read is invalidated.
+    dirty_cell: Option<crate::state::StateId>,
 }
 
 /// The observation in progress: reads register under it.
@@ -60,6 +62,11 @@ impl Observers {
             .is_some_and(|entry| entry.epochs.get(&read.key) == Some(&read.epoch))
     }
 
+    /// The derived state result `read`'s observer computes, if it is a derived state's.
+    pub(crate) fn dirty_cell(&self, read: &ObservedRead) -> Option<crate::state::StateId> {
+        self.entries.get(read.observer as usize)?.as_ref()?.dirty_cell
+    }
+
     /// Records that a write invalidated `read`; returns the notification to queue, if any.
     pub(crate) fn invalidate(&mut self, read: &ObservedRead) -> Option<Rc<dyn Fn()>> {
         let entry = self.entries.get_mut(read.observer as usize)?.as_mut()?;
@@ -99,6 +106,7 @@ impl ReadObserver {
                 epochs: HashMap::new(),
                 invalidated: Vec::new(),
                 pending: false,
+                dirty_cell: None,
             };
             let index = match observers.entries.iter().position(Option::is_none) {
                 Some(index) => {
@@ -156,6 +164,15 @@ impl ReadObserver {
         }
         let _restore = Restore(previous);
         f()
+    }
+
+    /// Makes this observer a derived state's: an invalidated read marks `cell` dirty.
+    pub(crate) fn set_dirty_cell(&self, cell: crate::state::StateId) {
+        with_runtime(|runtime| {
+            if let Some(entry) = runtime.observers.entry(self.index, self.serial) {
+                entry.dirty_cell = Some(cell);
+            }
+        });
     }
 
     /// Calls `f` with each key a write invalidated since the last drain.

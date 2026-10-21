@@ -149,15 +149,28 @@ impl ComposeTestRule {
     /// Moves the clock `duration` on, a frame at a time, running the frames and tasks due on the
     /// way, as `mainClock.advanceTimeBy`.
     pub fn advance_time_by(&mut self, duration: std::time::Duration) {
-        let mut left = duration;
-        while !left.is_zero() {
-            let step = left.min(FRAME_DURATION);
-            left -= step;
-            executor::advance_clock(step);
+        // Frames come every 16 ms; each `delay` ends at its own deadline in between.
+        let end = executor::now_nanos() + duration.as_nanos() as u64;
+        let frame = FRAME_DURATION.as_nanos() as u64;
+        let mut next_frame = executor::now_nanos() + frame;
+        loop {
+            let now = executor::now_nanos();
+            let next = executor::next_timer_deadline()
+                .filter(|deadline| *deadline > now)
+                .unwrap_or(u64::MAX)
+                .min(next_frame)
+                .min(end);
+            executor::advance_clock(std::time::Duration::from_nanos(next - now));
             executor::fire_timers();
             executor::run_ready();
-            if self.host.needs_frame() {
-                self.host.frame();
+            if next == next_frame {
+                next_frame += frame;
+                if self.host.needs_frame() {
+                    self.host.frame();
+                }
+            }
+            if next >= end {
+                break;
             }
         }
         // What the last frame invalidated, without moving the clock.

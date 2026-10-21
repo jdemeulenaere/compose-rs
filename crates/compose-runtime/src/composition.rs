@@ -55,6 +55,8 @@ impl Composition {
 
     /// Runs a pass if any scope is invalid. Returns whether a pass ran.
     pub fn recompose(&self) -> bool {
+        // Derived states whose dependencies changed tell their readers first.
+        crate::derived::flush_derived_states();
         let Some(pass) = Pass::begin(self.id, Mode::Walk) else {
             return false;
         };
@@ -65,6 +67,10 @@ impl Composition {
 
     /// Whether some scope is invalid, so [`recompose`](Composition::recompose) would run a pass.
     pub fn has_invalidations(&self) -> bool {
+        // A derived state whose dependencies changed may have changed: computed now.
+        if crate::derived::has_pending_derived_states() && !crate::runtime::with_runtime(|runtime| runtime.is_busy()) {
+            crate::derived::flush_derived_states();
+        }
         with_runtime(|runtime| self.data(runtime).has_invalidations())
     }
 

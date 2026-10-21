@@ -42,6 +42,10 @@ struct CellEntry {
     readers: Vec<Reader>,
     /// Reads observed outside composition (layout, drawing).
     observed: Vec<crate::observe::ObservedRead>,
+    /// A derived state's result whose dependencies changed: a read recomputes it first.
+    dirty: bool,
+    /// The derived state computing this cell, if it is one's result.
+    refresh: Option<std::rc::Weak<dyn crate::derived::Refresh>>,
     created_at: &'static Location<'static>,
     /// The generation and creation site of the cell last freed here, so a stale handle still
     /// names its creation site after the slot is reused (rule R3).
@@ -91,6 +95,8 @@ impl Cells {
                 cell: Some(cell),
                 readers: Vec::new(),
                 observed: Vec::new(),
+                dirty: false,
+                refresh: None,
                 created_at,
                 freed: (0, created_at),
             });
@@ -117,6 +123,8 @@ impl Cells {
         entry.generation = entry.generation.wrapping_add(1);
         entry.readers.clear();
         entry.observed.clear();
+        entry.dirty = false;
+        entry.refresh = None;
         self.free.push(id.index);
         entry.cell.take()
     }
@@ -260,14 +268,50 @@ type CellLookup = fn(StateId, &'static Location<'static>) -> Result<Rc<dyn Any>,
 
 /// Looks a cell up for reading, registering the read.
 fn read_cell(id: StateId, at: &'static Location<'static>) -> Result<Rc<dyn Any>, Stale> {
+    refresh_if_dirty(id);
     with_runtime(|runtime| read_cell_in(runtime, id, at))
 }
 
 /// Like [`read_cell`], for `try_get`: a stale cell once the thread's runtime is gone.
 fn try_read_cell(id: StateId, at: &'static Location<'static>) -> Result<Rc<dyn Any>, Stale> {
+    refresh_if_dirty(id);
     try_with_runtime(|runtime| read_cell_in(runtime, id, at))
         .unwrap_or(Err(Stale { created_at: None }))
 }
+
+/// A derived state's result whose dependencies changed is recomputed before it is read, so a
+/// read is never behind what it derives from.
+fn refresh_if_dirty(id: StateId) {
+    let refresh = try_with_runtime(|runtime| {
+        let entry = runtime.cells.entry(id).ok()?;
+        if !entry.dirty {
+            return None;
+        }
+        entry.refresh.as_ref()?.upgrade()
+    })
+    .flatten();
+    if let Some(refresh) = refresh {
+        refresh.refresh();
+    }
+}
+
+/// Makes `id` a derived state's result, recomputed by `refresh` when dirty.
+pub(crate) fn set_refresh(id: StateId, refresh: std::rc::Weak<dyn crate::derived::Refresh>) {
+    with_runtime(|runtime| {
+        if let Ok(entry) = runtime.cells.entry(id) {
+            entry.refresh = Some(refresh);
+        }
+    });
+}
+
+/// Clears `id`'s dirty mark; returns whether it was set.
+pub(crate) fn take_dirty(id: StateId) -> bool {
+    try_with_runtime(|runtime| {
+        runtime.cells.entry(id).map(|entry| std::mem::take(&mut entry.dirty)).unwrap_or(false)
+    })
+    .unwrap_or(false)
+}
+
 
 fn read_cell_in(
     runtime: &mut Runtime,
@@ -315,6 +359,13 @@ fn write_cell_in(
 
 /// Invalidates the scopes that read a cell in their latest run, and prunes the others.
 fn invalidate_readers(id: StateId) {
+    invalidate_readers_except(id, ScopeId::NONE);
+}
+
+/// The same, but `skip`, a scope reading the cell right now (a derived state refreshed for it).
+/// Derived states that read the cell are marked dirty, and those reading them, at once: a read
+/// recomputes them, and a frame (`flush_derived_states`) tells their readers if they changed.
+pub(crate) fn invalidate_readers_except(id: StateId, skip: ScopeId) {
     let requested = with_runtime(|runtime| {
         let Runtime { cells, scopes, compositions, frame_requests, observers, .. } = runtime;
         let Ok(entry) = cells.entry(id) else {
@@ -325,13 +376,21 @@ fn invalidate_readers(id: StateId) {
             if !scopes.is_current(reader.scope, reader.epoch) {
                 return false;
             }
-            requested |= invalidate_scope_parts(scopes, compositions, frame_requests, reader.scope);
+            if reader.scope != skip {
+                requested |=
+                    invalidate_scope_parts(scopes, compositions, frame_requests, reader.scope);
+            }
             true
         });
-        // Reads observed in layout and drawing: their observers hear the keys.
+        // Reads observed in layout and drawing: their observers hear the keys. A derived
+        // state's observer marks its result dirty.
+        let mut dirty = Vec::new();
         entry.observed.retain(|read| {
             if !observers.is_current(read) {
                 return false;
+            }
+            if let Some(cell) = observers.dirty_cell(read) {
+                dirty.push(cell);
             }
             if let Some(notify) = observers.invalidate(read) {
                 frame_requests.push(notify);
@@ -339,6 +398,20 @@ fn invalidate_readers(id: StateId) {
             }
             true
         });
+        while let Some(cell) = dirty.pop() {
+            let Ok(entry) = cells.entry(cell) else { continue };
+            if entry.dirty {
+                continue;
+            }
+            entry.dirty = true;
+            for read in &entry.observed {
+                if observers.is_current(read)
+                    && let Some(cell) = observers.dirty_cell(read)
+                {
+                    dirty.push(cell);
+                }
+            }
+        }
         requested || crate::runtime::frames_requested(runtime)
     });
     if requested {
@@ -619,6 +692,23 @@ impl<T: 'static> MutableState<T> {
             return;
         }
         invalidate_readers(self.id);
+    }
+
+    /// A derived state's new result: written even during composition (a read refreshes it),
+    /// invalidating its readers if it changed, but the scope reading it now.
+    pub(crate) fn set_derived(&self, value: T) {
+        let at = Location::caller();
+        let lookup: CellLookup = |id, _| {
+            with_runtime(|runtime| runtime.cells.entry(id).map(|entry| entry.cell.clone().expect("a live cell")))
+        };
+        if self.write_with(value, at, lookup).unwrap_or(false) {
+            let skip = with_runtime(|runtime| runtime.reading_scope());
+            invalidate_readers_except(self.id, skip);
+        }
+    }
+
+    pub(crate) fn id(&self) -> StateId {
+        self.id
     }
 
     /// Writes `f(current)`.

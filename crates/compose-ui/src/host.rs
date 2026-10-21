@@ -32,6 +32,10 @@ pub struct UiHost {
     composition: Composition,
     size: IntSize,
     frame_requested: Rc<Cell<bool>>,
+    /// A frame is running: what its tasks write is drawn by it.
+    framing: Rc<Cell<bool>>,
+    /// Content to compose at the next frame.
+    pending_content: RefCell<Option<Box<dyn Fn()>>>,
     waker: Waker,
 }
 
@@ -40,26 +44,29 @@ impl UiHost {
     pub fn new(size: IntSize, density: Density, text_measurer: Box<dyn TextMeasurer>) -> UiHost {
         let composition = Composition::new(UiTree::new(density, text_measurer));
         let frame_requested = Rc::new(Cell::new(true));
+        let framing = Rc::new(Cell::new(false));
         let waker: Waker = Rc::new(RefCell::new(None));
-        let (requested, wake) = (frame_requested.clone(), waker.clone());
-        composition.set_frame_requester(move || {
-            requested.set(true);
-            let waker = wake.borrow().clone();
-            if let Some(waker) = waker {
-                waker();
-            }
-        });
+        // A write asks for a frame; one made while a frame runs its tasks is that frame's (an
+        // animation's step), so it wakes nothing.
+        let request = {
+            let (requested, framing, wake) = (frame_requested.clone(), framing.clone(), waker.clone());
+            Rc::new(move || {
+                requested.set(true);
+                if framing.get() {
+                    return;
+                }
+                let waker = wake.borrow().clone();
+                if let Some(waker) = waker {
+                    waker();
+                }
+            })
+        };
+        let requester = request.clone();
+        composition.set_frame_requester(move || requester());
         // Writes to state read while measuring or drawing ask for a frame, as composition's do.
-        let (requested, wake) = (frame_requested.clone(), waker.clone());
-        let observer = compose_runtime::ReadObserver::new(move || {
-            requested.set(true);
-            let waker = wake.borrow().clone();
-            if let Some(waker) = waker {
-                waker();
-            }
-        });
+        let observer = compose_runtime::ReadObserver::new(move || request());
         composition.with_applier(|tree: &mut UiTree| tree.set_read_observer(observer));
-        UiHost { composition, size, frame_requested, waker }
+        UiHost { composition, size, frame_requested, framing, pending_content: RefCell::new(None), waker }
     }
 
     /// A headless host at density 1 with the fixed-advance text measurer: for tests.
@@ -71,8 +78,10 @@ impl UiHost {
         )
     }
 
+    /// Composes `content` at the next frame, as Compose's `setContent`: a `LaunchedEffect` it
+    /// starts then waits for the frame after.
     pub fn set_content(&self, content: impl Fn() + 'static) {
-        self.composition.set_content(content);
+        *self.pending_content.borrow_mut() = Some(Box::new(content));
         self.wake();
     }
 
@@ -131,6 +140,7 @@ impl UiHost {
     /// changed, something to draw, a task ready.
     pub fn has_pending_work(&self) -> bool {
         self.frame_requested.get()
+            || self.pending_content.borrow().is_some()
             || self.composition.has_invalidations()
             || self.with_tree(|tree| tree.needs_draw)
             || executor::has_ready_tasks()
@@ -140,12 +150,21 @@ impl UiHost {
     /// frame's time), recomposes invalid scopes, measures and draws what changed, then starts the
     /// tasks the pass launched.
     pub fn frame(&mut self) -> FrameStats {
-        self.frame_requested.set(false);
+        // The tasks due and those waiting for this frame write state this frame recomposes,
+        // measures and draws: they ask for no other frame.
+        self.framing.set(true);
         executor::fire_timers();
         executor::run_ready();
         executor::dispatch_frame();
+        self.frame_requested.set(false);
         let bodies = compose_runtime::bodies_run();
-        let recomposed = self.composition.has_invalidations() && self.composition.recompose();
+        let content = self.pending_content.borrow_mut().take();
+        let composed = content.is_some();
+        if let Some(content) = content {
+            self.composition.set_content(content);
+        }
+        let recomposed =
+            (self.composition.has_invalidations() && self.composition.recompose()) || composed;
         let size = self.size;
         let (measured, drew, actions) = self.with_tree(|tree| {
             tree.apply_observed_writes();
@@ -155,6 +174,11 @@ impl UiHost {
         Self::run(actions);
         // `LaunchedEffect`s started by the pass take their first step.
         executor::run_ready();
+        // What the pass and its effects wrote needs the next frame.
+        self.framing.set(false);
+        if self.frame_requested.get() {
+            self.wake();
+        }
         FrameStats {
             recomposed,
             measured,

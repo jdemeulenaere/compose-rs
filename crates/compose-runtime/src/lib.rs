@@ -43,7 +43,7 @@ pub use compose_arg::ComposeArg;
 pub use compose_macros::{ComposeArg, composable};
 pub use composer::{Composer, current, current_recompose_scope};
 pub use composition::Composition;
-pub use derived::{DerivedState, derived_state_of, derived_state_of_with};
+pub use derived::{DerivedState, derived_state_of, derived_state_of_with, flush_derived_states};
 pub use effects::{
     DisposableEffect, DisposableEffectResult, DisposableEffectScope, LaunchedEffect, SideEffect,
     remember_coroutine_scope,
