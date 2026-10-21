@@ -154,6 +154,10 @@ A parameter typed `impl Fn(A, …) -> R + 'static` is rewritten by the callee's 
 
 A content lambda has no restart scope of its own: state read inside it registers the scope of the composable that invokes it. That composable restarts with its kept content callback, which re-runs the lambda, so restarts stay correct with one fewer kind of group. Compose gives content lambdas their own scope, which recomposes less; the cost here is re-running the invoking composable's own body too, usually a layout composable doing almost nothing. A content block making composable calls is a region group, as any such closure is, and the branches and loops inside it get theirs.
 
+### Root content: call a composable function
+
+The closures a host is given (`UiHost::set_content`, `run_app`, `application`, `compose_test`, `Composition::set_content`) are plain Rust: no `#[composable]` attribute sees them, so the closures and blocks inside them get no region groups and no memoization. Branches there (`if shown { Text!(…) }`) then match nodes by position, so a text shown or hidden above another hands its node (and its state) on, and content lambdas are new at each pass, so what they show never skips. Give a host a closure that only calls a `#[composable]` function (`run_app(options, App)`, `compose_test(|| Counter())`, `application(App)`), which gets both. A block macro can't do it for the closure: it can't tell the closure's captured locals from globals, and would keep lambdas built from stale captures.
+
 ## Named, default and trailing arguments: the call macro
 
 Rust has no named or default arguments, and Compose's API depends on them. `Button(onClick, modifier = Modifier, enabled = true, …, content)` is the norm. So `#[composable]` also generates a declarative macro with the composable's name:
