@@ -18,6 +18,7 @@ mod progress;
 mod scaffold;
 mod selection;
 mod snackbar;
+mod tabs;
 mod text_field;
 mod theme;
 
@@ -50,6 +51,7 @@ pub use snackbar::{
     Snackbar, SnackbarData, SnackbarDuration, SnackbarHost, SnackbarHostState, SnackbarResult,
     SnackbarVisuals,
 };
+pub use tabs::{Tab, TabRow, TabRowDefaults};
 pub use text_field::{OutlinedTextField, OutlinedTextFieldDefaults, TextField};
 pub use theme::{
     ColorScheme, LOCAL_COLOR_SCHEME, LOCAL_CONTENT_COLOR, LOCAL_SHAPES, LOCAL_TEXT_STYLE,

@@ -624,3 +624,48 @@ fn a_text_fields_label_rests_in_it_then_floats_when_focused() {
     });
     assert!(open_path, "the outline is cut: {}", list.dump());
 }
+
+#[test]
+fn a_tab_row_shares_its_width_and_slides_its_indicator() {
+    use compose_ui::DrawOp;
+    let selected = mutable_state_of(0usize);
+    let handle = selected.handle();
+    let mut ui = ComposeTestRule::with_manual_clock(move || {
+        MaterialTheme!({
+            TabRow!(handle.get(), modifier = Modifier.test_tag("row"), {
+                for (index, name) in ["One", "Two"].into_iter().enumerate() {
+                    Tab!(
+                        handle.get() == index,
+                        move || handle.set(index),
+                        modifier = Modifier.test_tag(name),
+                        text = Some(move || Text!("{}", name)),
+                    );
+                }
+            });
+        });
+    });
+    ui.advance_time_by(std::time::Duration::from_millis(50));
+    let row = ui.on_node_with_tag("row").fetch_semantics_node().bounds;
+    let two = ui.on_node_with_tag("Two").fetch_semantics_node();
+    assert_eq!((row.height(), two.bounds.left, two.bounds.width()), (48.0, 200.0, 200.0));
+    assert_eq!(two.config.role, Some(Role::Tab));
+    let indicator = |ui: &mut ComposeTestRule| {
+        ui.host()
+            .display_list()
+            .ops
+            .iter()
+            .rev()
+            .find_map(|op| match op {
+                DrawOp::DrawRect(rect, _) if rect.height() == 3.0 => Some(rect.left),
+                _ => None,
+            })
+    };
+    assert_eq!(indicator(&mut ui), Some(0.0));
+    ui.on_node_with_tag("Two").perform_click();
+    ui.advance_time_by(std::time::Duration::from_millis(100));
+    let sliding = indicator(&mut ui).expect("the indicator");
+    assert!(sliding > 0.0 && sliding < 200.0, "{sliding}");
+    ui.advance_time_by(std::time::Duration::from_millis(300));
+    assert_eq!(indicator(&mut ui), Some(200.0));
+    assert_eq!(ui.on_node_with_tag("Two").fetch_semantics_node().config.selected, Some(true));
+}

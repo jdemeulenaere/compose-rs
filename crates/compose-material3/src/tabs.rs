@@ -1,0 +1,215 @@
+//! `TabRow` and `Tab`, as Compose's Material 3: tabs sharing a row's width, the selected one
+//! underlined by an indicator that slides to it.
+
+use std::cell::RefCell;
+use std::rc::Rc;
+
+use compose_animation::{Animatable, FAST_OUT_SLOW_IN_EASING, tween};
+use compose_foundation::layout::{Arrangement, Box, Column};
+use compose_runtime::{CompositionLocalProvider, LaunchedEffect, composable, remember};
+use compose_ui::{
+    Alignment, Color, Constraints, Dp, Layout, Measurable, MeasurePolicy, MeasureResult,
+    MeasureScope, Modifier, Offset, Paint, Rect, Role, SizeSpec, UnitExt,
+};
+
+use crate::components::Surface;
+use crate::scaffold::HorizontalDivider;
+use crate::theme::{LOCAL_CONTENT_COLOR, LOCAL_TEXT_STYLE, MaterialTheme};
+
+/// As Compose's `TabRowDefaults`.
+pub struct TabRowDefaults;
+
+impl TabRowDefaults {
+    /// The indicator's height, as `TabRowDefaults.Indicator`'s.
+    pub const INDICATOR_HEIGHT: Dp = Dp(3.0);
+
+    /// The row's color, as `TabRowDefaults.containerColor` (the surface).
+    pub fn container_color() -> Color {
+        MaterialTheme::color_scheme().surface
+    }
+
+    /// The tabs' color, as `TabRowDefaults.contentColor` (the primary color).
+    pub fn content_color() -> Color {
+        MaterialTheme::color_scheme().primary
+    }
+}
+
+/// A row of tabs, as Compose's `TabRow`: each tab an equal share of its width, a divider along
+/// its bottom, and a 3 dp indicator in the content color under the selected tab, sliding to a
+/// newly selected one (250 ms).
+#[composable]
+#[allow(non_snake_case)]
+pub fn TabRow(
+    selected_tab_index: usize,
+    #[default(crate::Modifier)] modifier: Modifier,
+    #[default(crate::TabRowDefaults::container_color())] container_color: Color,
+    #[default(crate::TabRowDefaults::content_color())] content_color: Color,
+    tabs: impl Fn() + 'static,
+) {
+    // Each tab's left and width, as the last layout placed them.
+    let positions = remember(|| Rc::new(RefCell::new(Vec::<(f32, f32)>::new())));
+    // The indicator while it slides: left in `x`, width in `y`.
+    let indicator = remember(|| Animatable::new(Offset::new(f32::NAN, 0.0)));
+    {
+        let (positions, indicator) = (positions.clone(), indicator.clone());
+        LaunchedEffect(selected_tab_index, async move {
+            // After the layout that placed the tabs.
+            compose_runtime::executor::with_frame_nanos(|_| ()).await;
+            let Some(&(left, width)) = positions.borrow().get(selected_tab_index) else { return };
+            let target = Offset::new(left, width);
+            if indicator.value().x.is_nan() {
+                indicator.snap_to(target);
+            } else {
+                indicator.animate_to(target, tween(250).easing(FAST_OUT_SLOW_IN_EASING)).await;
+            }
+        });
+    }
+    let policy = {
+        let positions = positions.clone();
+        remember(move || Rc::new(TabRowLayout { positions }) as Rc<dyn MeasurePolicy>)
+    };
+    let draw_positions = positions.clone();
+    Surface(
+        modifier,
+        compose_ui::RECTANGLE_SHAPE,
+        container_color,
+        content_color,
+        Dp(0.0),
+        Dp(0.0),
+        None,
+        compose_runtime::callback(move || {
+            let (draw_positions, indicator, tabs) =
+                (draw_positions.clone(), indicator.clone(), tabs.clone());
+            Layout(
+                Modifier.fill_max_width().draw_with_content(move |scope| {
+                    scope.draw_content();
+                    // Sliding, where the animation is; else under the selected tab as laid out.
+                    let (left, width) = if indicator.is_running() {
+                        let value = indicator.value();
+                        (value.x, value.y)
+                    } else {
+                        match draw_positions.borrow().get(selected_tab_index) {
+                            Some(&position) => position,
+                            None => return,
+                        }
+                    };
+                    let height = scope.density().to_px(TabRowDefaults::INDICATOR_HEIGHT);
+                    let bottom = scope.size().height;
+                    scope.draw_rect(
+                        Rect::new(left, bottom - height, left + width, bottom),
+                        Paint::fill(content_color),
+                    );
+                }),
+                policy.clone(),
+                compose_runtime::callback(move || {
+                    tabs();
+                    HorizontalDivider(
+                        Modifier,
+                        Dp(1.0),
+                        MaterialTheme::color_scheme().outline_variant,
+                    );
+                }),
+            );
+        }),
+    );
+}
+
+/// Tabs, then the divider: each tab an equal share of the width, as tall as the tallest; the
+/// divider along the bottom.
+struct TabRowLayout {
+    positions: Rc<RefCell<Vec<(f32, f32)>>>,
+}
+
+impl MeasurePolicy for TabRowLayout {
+    fn measure(
+        &self,
+        scope: &mut MeasureScope<'_>,
+        measurables: &[Measurable],
+        constraints: Constraints,
+    ) -> MeasureResult {
+        let Some((&divider, tabs)) = measurables.split_last() else {
+            return scope.layout(constraints.min_width, constraints.min_height);
+        };
+        let width = constraints.max_width;
+        let tab_width = if tabs.is_empty() { 0 } else { width / tabs.len() as i32 };
+        let placeables: Vec<_> = tabs
+            .iter()
+            .map(|&tab| {
+                scope
+                    .measure(tab, Constraints::new(tab_width, tab_width, 0, constraints.max_height))
+            })
+            .collect();
+        let height = constraints
+            .constrain_height(placeables.iter().map(|tab| tab.height).max().unwrap_or(0));
+        let mut positions = self.positions.borrow_mut();
+        positions.clear();
+        for (index, tab) in placeables.iter().enumerate() {
+            let x = tab_width * index as i32;
+            scope.place_relative(tab, x, 0);
+            // Where it ends up, mirrored in a right-to-left row.
+            let left = if scope.layout_direction() == compose_ui::LayoutDirection::Rtl {
+                width - x - tab_width
+            } else {
+                x
+            };
+            positions.push((left as f32, tab_width as f32));
+        }
+        let divider = scope.measure(divider, Constraints::new(width, width, 0, height));
+        scope.place_relative(&divider, 0, height - divider.height);
+        scope.layout(width, height)
+    }
+
+    fn debug_name(&self) -> &'static str {
+        "TabRow"
+    }
+}
+
+/// A tab, as Compose's `Tab`: its text (title-small) and icon centered, 48 dp high (72 dp
+/// with both), in `selected_content_color` when selected; clicking it selects it.
+#[composable]
+#[allow(non_snake_case)]
+pub fn Tab(
+    selected: bool,
+    on_click: impl Fn() + 'static,
+    #[default(crate::Modifier)] modifier: Modifier,
+    #[default(true)] enabled: bool,
+    #[default(None)] text: Option<impl Fn() + 'static>,
+    #[default(None)] icon: Option<impl Fn() + 'static>,
+    #[default(crate::LOCAL_CONTENT_COLOR.current())] selected_content_color: Color,
+    #[default(crate::Color::UNSPECIFIED)] unselected_content_color: Color,
+) {
+    // As Compose's: unselected tabs in the selected color unless told otherwise.
+    let unselected = unselected_content_color.or(selected_content_color);
+    let color = if selected { selected_content_color } else { unselected };
+    let color = if enabled { color } else { color.with_alpha(0.38) };
+    let height = if text.is_some() && icon.is_some() { 72.dp() } else { 48.dp() };
+    let typography = MaterialTheme::typography();
+    let modifier = modifier
+        .fill_max_width()
+        .size_in(SizeSpec::bounds(Dp::UNSPECIFIED, height, Dp::UNSPECIFIED, Dp::UNSPECIFIED))
+        .clickable_indicated(enabled, Some(Role::Tab), selected_content_color, on_click)
+        .semantics(false, move |config| config.selected = Some(selected));
+    CompositionLocalProvider(LOCAL_CONTENT_COLOR.provides(color), || {
+        CompositionLocalProvider(LOCAL_TEXT_STYLE.provides(typography.title_small), || {
+            let (text, icon) = (text.clone(), icon.clone());
+            Column(
+                modifier.clone(),
+                Arrangement::Center,
+                Alignment::CENTER_HORIZONTALLY,
+                compose_runtime::callback(move |_| {
+                    if let Some(icon) = icon.clone() {
+                        icon();
+                    }
+                    if let Some(text) = text.clone() {
+                        Box(
+                            Modifier.padding_horizontal_vertical(16.dp(), 0.dp()),
+                            Alignment::CENTER,
+                            false,
+                            compose_runtime::callback(move |_| text()),
+                        );
+                    }
+                }),
+            );
+        });
+    });
+}
