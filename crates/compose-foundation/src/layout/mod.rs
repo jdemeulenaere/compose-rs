@@ -247,6 +247,114 @@ impl MeasurePolicy for RowColumnMeasurePolicy {
     }
 }
 
+/// What `BoxWithConstraints`' content knows: the constraints the box was measured with, as
+/// Compose's `BoxWithConstraintsScope`.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct BoxWithConstraintsScope {
+    pub constraints: compose_ui::Constraints,
+    density: compose_ui::Density,
+}
+
+impl BoxWithConstraintsScope {
+    /// The smallest width allowed, as `minWidth`.
+    pub fn min_width(&self) -> compose_ui::Dp {
+        compose_ui::Dp(self.constraints.min_width as f32 / self.density.density)
+    }
+
+    /// The largest width allowed (`Dp::INFINITY` if unbounded), as `maxWidth`.
+    pub fn max_width(&self) -> compose_ui::Dp {
+        if self.constraints.max_width == compose_ui::Constraints::INFINITY {
+            compose_ui::Dp(f32::INFINITY)
+        } else {
+            compose_ui::Dp(self.constraints.max_width as f32 / self.density.density)
+        }
+    }
+
+    pub fn min_height(&self) -> compose_ui::Dp {
+        compose_ui::Dp(self.constraints.min_height as f32 / self.density.density)
+    }
+
+    pub fn max_height(&self) -> compose_ui::Dp {
+        if self.constraints.max_height == compose_ui::Constraints::INFINITY {
+            compose_ui::Dp(f32::INFINITY)
+        } else {
+            compose_ui::Dp(self.constraints.max_height as f32 / self.density.density)
+        }
+    }
+}
+
+impl compose_runtime::ComposeArg for BoxWithConstraintsScope {
+    fn same(&self, other: &Self) -> bool {
+        self == other
+    }
+}
+
+/// A box whose content depends on its constraints, as Compose's `BoxWithConstraints`: the
+/// content reads them from its scope. Compose composes it while measuring; here measuring
+/// writes them as state and the content composes again within the frame when they change (the
+/// first frame composes it twice, once with zero constraints).
+#[composable]
+pub fn BoxWithConstraints(
+    #[default(crate::Modifier)] modifier: Modifier,
+    #[default(crate::Alignment::TOP_START)] content_alignment: Alignment,
+    #[default(false)] propagate_min_constraints: bool,
+    content: impl Fn(BoxWithConstraintsScope) + 'static,
+) {
+    let measured = compose_runtime::remember(|| {
+        compose_runtime::mutable_state_of(compose_ui::Constraints::fixed(0, 0))
+    });
+    let policy = compose_runtime::remember_keyed(
+        (AlignmentKey(content_alignment), propagate_min_constraints),
+        || {
+            Rc::new(BoxWithConstraintsPolicy {
+                inner: BoxMeasurePolicy { alignment: content_alignment, propagate_min_constraints },
+                measured,
+            }) as Rc<dyn compose_ui::MeasurePolicy>
+        },
+    );
+    let density = compose_ui::LOCAL_DENSITY.current();
+    Layout(
+        modifier,
+        policy,
+        compose_runtime::callback(move || {
+            content(BoxWithConstraintsScope { constraints: measured.get(), density })
+        }),
+    );
+}
+
+#[derive(Clone, Copy, PartialEq)]
+struct AlignmentKey(Alignment);
+
+impl compose_runtime::ComposeArg for AlignmentKey {
+    fn same(&self, other: &Self) -> bool {
+        self == other
+    }
+}
+
+/// A box's policy that also writes the constraints it's measured with, for the content.
+struct BoxWithConstraintsPolicy {
+    inner: BoxMeasurePolicy,
+    measured: compose_runtime::MutableState<compose_ui::Constraints>,
+}
+
+impl compose_ui::MeasurePolicy for BoxWithConstraintsPolicy {
+    fn measure(
+        &self,
+        scope: &mut MeasureScope<'_>,
+        measurables: &[Measurable],
+        constraints: Constraints,
+    ) -> MeasureResult {
+        if self.measured.get() != constraints {
+            self.measured.set(constraints);
+        }
+        self.inner.measure(scope, measurables, constraints)
+    }
+
+    fn debug_name(&self) -> &'static str {
+        "BoxWithConstraints"
+    }
+}
+
 /// A node to draw in, as Compose's `Canvas`: `on_draw` draws behind nothing, at the size
 /// `modifier` gives it. A plain function (its draw lambda takes a borrowed scope, which
 /// composable parameters can't), called as one: `Canvas(Modifier.size(…), |scope| …)`.
