@@ -1,0 +1,15 @@
+[package]
+name = "compose-skia"
+description = "Skia backends for compose-rs (skia-safe): the display-list renderer and the SkParagraph text measurer."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+compose-ui.workspace = true
+skia-safe = { version = "0.153", features = ["textlayout"] }
+
+[dev-dependencies]
+compose = { path = "../compose", features = ["test"] }
+counter = { path = "../../examples/counter" }

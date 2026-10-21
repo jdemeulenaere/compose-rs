@@ -12,10 +12,13 @@ compose-ui.workspace = true
 compose-foundation.workspace = true
 compose-material3.workspace = true
 compose-test = { workspace = true, optional = true }
+compose-desktop = { workspace = true, optional = true }
 
 [features]
 # `compose::test`: the test rule, for tests (as a dev-dependency feature).
 test = ["dep:compose-test"]
+# `compose::desktop`: run_app, a winit window drawn with Skia.
+desktop = ["dep:compose-desktop"]
 
 [dev-dependencies]
 trybuild = "1"

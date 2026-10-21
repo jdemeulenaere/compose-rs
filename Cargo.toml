@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/compose", "crates/compose-macros", "crates/compose-runtime", "crates/compose-ui", "crates/compose-foundation", "crates/compose-material3", "crates/compose-test", "examples/counter", "examples/todo", "benchmarks"]
+members = ["crates/compose", "crates/compose-macros", "crates/compose-runtime", "crates/compose-ui", "crates/compose-foundation", "crates/compose-material3", "crates/compose-test", "crates/compose-skia", "crates/compose-desktop", "examples/counter", "examples/todo", "benchmarks"]
 # The benchmarks pull in criterion; keep them out of a plain `cargo build` / `cargo test`.
 default-members = ["crates/compose", "crates/compose-macros", "crates/compose-runtime", "crates/compose-ui", "crates/compose-foundation", "crates/compose-material3", "crates/compose-test", "examples/counter", "examples/todo"]
 
@@ -15,6 +15,8 @@ compose-macros = { path = "crates/compose-macros" }
 compose-runtime = { path = "crates/compose-runtime" }
 compose-ui = { path = "crates/compose-ui" }
 compose-test = { path = "crates/compose-test" }
+compose-skia = { path = "crates/compose-skia" }
+compose-desktop = { path = "crates/compose-desktop" }
 compose-foundation = { path = "crates/compose-foundation" }
 compose-material3 = { path = "crates/compose-material3" }
 

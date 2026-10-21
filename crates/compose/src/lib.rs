@@ -37,6 +37,12 @@ pub mod test {
     pub use compose_test::*;
 }
 
+/// Desktop windows: `run_app` (the `desktop` feature).
+#[cfg(feature = "desktop")]
+pub mod desktop {
+    pub use compose_desktop::*;
+}
+
 /// What `#[composable]` generated code calls. Not a public API.
 #[doc(hidden)]
 pub mod __private {
