@@ -722,6 +722,12 @@ pub trait ModifierNode: Any {
     fn as_key_input(&mut self) -> Option<&mut dyn KeyInputModifierNode> {
         None
     }
+    /// Whether the node is a repaint boundary: what it draws, its children included, is a
+    /// group of the display list a renderer may keep while it's unchanged (graphics layers,
+    /// `Modifier.repaint_boundary`).
+    fn is_repaint_boundary(&self) -> bool {
+        false
+    }
     /// A text a `SelectionContainer` selects in.
     fn as_selectable(&mut self) -> Option<&mut dyn crate::text_selection::Selectable> {
         None

@@ -94,7 +94,7 @@ A thin Kotlin layer (`android/compose-rs`, an AAR) and `crates/compose-android` 
 | Concern | Kotlin side | Crossings |
 |---|---|---|
 | Frames | a Choreographer callback calls `frame` (recompose, lay out, record); `onDraw` takes the bytes and replays them; the first frame is composed during the view's first layout, so the window's first frame shows the content | one per frame, one per draw |
-| Drawing | `Replayer.kt`: each operation a `Canvas` call; paths and images kept by id (defined once, dropped with their owner); each paragraph recorded once into a `RenderNode`, then drawn by reference | in the frame's buffer |
+| Drawing | `Replayer.kt`: each operation a `Canvas` call; paths and images kept by id (defined once, dropped with their owner); each paragraph recorded once into a `RenderNode`, then drawn by reference; each repaint boundary's group (graphics layers, lazy items) recorded into a `RenderNode` kept while its bytes stay the same (D154) | in the frame's buffer |
 | Touch and keys | `onTouchEvent` forwards each pointer's samples with their event times (historical ones too: a fling's velocity comes from them); `onKeyDown`/`onKeyUp` the key and its character (without Ctrl, Alt or Meta, so shortcuts are known); a wheel's `ACTION_SCROLL` | one per sample, per key |
 | Text measurement | `TextMeasurer.kt`: a `StaticLayout` per paragraph, its style runs and line options encoded in a request; metrics back through a shared buffer; offsets converted between UTF-8 and UTF-16 on the Rust side | one per laid-out paragraph |
 | Soft keyboard | `onCreateInputConnection`: committed text, the composing text (shown in place), deletions as keys; a password field's input type keeps the keyboard from learning it | per edit |

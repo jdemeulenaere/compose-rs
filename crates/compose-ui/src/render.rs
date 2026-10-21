@@ -69,6 +69,11 @@ impl UiTree {
         let position = value.layers[0].offset;
         let position = Offset::new(position.x as f32, position.y as f32);
         translate(list, position);
+        let boundary = value.chain.iter().any(|entry| entry.is_repaint_boundary());
+        let start = list.ops.len();
+        if boundary {
+            list.merge_floor = start;
+        }
         // Each layer's origin in the node.
         let mut origins: SmallVec<[Offset; 4]> = SmallVec::new();
         let mut origin = Offset::ZERO;
@@ -79,6 +84,17 @@ impl UiTree {
             origins.push(origin);
         }
         self.draw_chain(node, 0, 0, &origins, list, observer);
+        if boundary {
+            let end = list.ops.len();
+            if end > start {
+                list.groups.push(crate::display_list::DrawGroup {
+                    key: node.to_bits(),
+                    start,
+                    end,
+                });
+            }
+            list.merge_floor = end;
+        }
         translate(list, negate(position));
     }
 }
@@ -200,7 +216,9 @@ fn translate(list: &mut DisplayList, by: Offset) {
     if by == Offset::ZERO {
         return;
     }
-    if let Some(DrawOp::Translate(last)) = list.ops.last_mut() {
+    if list.ops.len() > list.merge_floor
+        && let Some(DrawOp::Translate(last)) = list.ops.last_mut()
+    {
         *last = *last + by;
         if *last == Offset::ZERO {
             list.ops.pop();

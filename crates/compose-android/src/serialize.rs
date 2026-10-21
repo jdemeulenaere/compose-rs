@@ -32,6 +32,9 @@ pub mod tag {
     pub const DRAW_SHADOW: u8 = 12;
     pub const DRAW_ARC: u8 = 13;
     pub const DRAW_PATH: u8 = 14;
+    /// A repaint boundary's operations: its key (u64), their length in bytes (u32), then
+    /// them. The replayer keeps their recording while they stay the same.
+    pub const GROUP: u8 = 15;
     pub const DEFINE_PATH: u8 = 20;
     pub const DROP_PATH: u8 = 21;
     pub const DEFINE_IMAGE: u8 = 22;
@@ -345,9 +348,23 @@ pub fn write_display_list(list: &DisplayList, resources: &mut Resources, out: &m
     out.bytes.clear();
     // Layers folded into their one drawing's paint: where each ends, and its alpha.
     let mut folds: Vec<(usize, f32)> = Vec::new();
+    // The groups, outer before inner (they nest), and the open ones: where each ends and
+    // where its length goes.
+    let mut groups: Vec<_> = list.groups.iter().filter(|group| group.start < group.end).collect();
+    groups.sort_by_key(|group| (group.start, std::cmp::Reverse(group.end)));
+    let mut groups = groups.into_iter().peekable();
+    let mut open: Vec<(usize, usize)> = Vec::new();
     for (index, op) in list.ops.iter().enumerate() {
         while folds.last().is_some_and(|(end, _)| *end < index) {
             folds.pop();
+        }
+        close_groups(&mut open, index, out);
+        while let Some(group) = groups.next_if(|group| group.start == index) {
+            out.u8(tag::GROUP);
+            out.u32(group.key as u32);
+            out.u32((group.key >> 32) as u32);
+            open.push((group.end, out.bytes.len()));
+            out.u32(0);
         }
         let alpha: f32 = folds.iter().map(|(_, alpha)| alpha).product();
         let faded_paint = |paint: &Paint| faded(paint, alpha);
@@ -446,6 +463,19 @@ pub fn write_display_list(list: &DisplayList, resources: &mut Resources, out: &m
             }
         }
     }
+    close_groups(&mut open, usize::MAX, out);
+}
+
+/// Closes the open groups ending at or before `index`, writing their lengths.
+fn close_groups(open: &mut Vec<(usize, usize)>, index: usize, out: &mut Writer) {
+    while let Some(&(end, at)) = open.last() {
+        if end > index {
+            break;
+        }
+        open.pop();
+        let length = (out.bytes.len() - at - 4) as u32;
+        out.bytes[at..at + 4].copy_from_slice(&length.to_le_bytes());
+    }
 }
 
 #[cfg(test)]
@@ -491,6 +521,49 @@ mod tests {
             .insert(3, DrawOp::DrawRect(Rect::new(1.0, 1.0, 2.0, 2.0), Paint::fill(Color::WHITE)));
         write_display_list(&list, &mut resources, &mut out);
         assert_eq!(out.bytes[0], tag::SAVE_LAYER_ALPHA);
+    }
+
+    #[test]
+    fn groups_nest_and_carry_their_length() {
+        let rect = || DrawOp::DrawRect(Rect::new(0.0, 0.0, 1.0, 1.0), Paint::fill(Color::BLACK));
+        let mut list = DisplayList::default();
+        for _ in 0..3 {
+            list.push(rect());
+        }
+        // The outer group holds ops 0..3, the inner 1..2; an empty one is left out. They come
+        // inner first, as drawing closes them.
+        list.groups.push(compose_ui::DrawGroup { key: 2, start: 1, end: 2 });
+        list.groups.push(compose_ui::DrawGroup { key: 3, start: 2, end: 2 });
+        list.groups.push(compose_ui::DrawGroup { key: 1 << 40 | 1, start: 0, end: 3 });
+        let (mut resources, mut out) = (Resources::default(), Writer::default());
+        write_display_list(&list, &mut resources, &mut out);
+        let rect_bytes = 1 + 16 + 4 + 1 + 4 + 1;
+        let header = 1 + 8 + 4;
+        let bytes = &out.bytes;
+        assert_eq!(bytes.len(), 2 * header + 3 * rect_bytes);
+        assert_eq!(bytes[0], tag::GROUP);
+        assert_eq!((read_u32(bytes, 1), read_u32(bytes, 5)), (1, 1 << 8));
+        assert_eq!(read_u32(bytes, 9) as usize, header + 3 * rect_bytes);
+        let inner = header + rect_bytes;
+        assert_eq!(bytes[inner], tag::GROUP);
+        assert_eq!(read_u32(bytes, inner + 1), 2);
+        assert_eq!(read_u32(bytes, inner + 9) as usize, rect_bytes);
+        assert_eq!(bytes[inner + header], tag::DRAW_RECT);
+    }
+
+    /// A folded layer's `Save` opens the group as any operation does.
+    #[test]
+    fn a_group_can_start_with_a_folded_layer() {
+        let mut list = DisplayList::default();
+        list.push(DrawOp::SaveLayerAlpha(0.5));
+        list.push(DrawOp::DrawRect(Rect::new(0.0, 0.0, 4.0, 4.0), Paint::fill(Color::BLACK)));
+        list.push(DrawOp::Restore);
+        list.groups.push(compose_ui::DrawGroup { key: 7, start: 0, end: 3 });
+        let (mut resources, mut out) = (Resources::default(), Writer::default());
+        write_display_list(&list, &mut resources, &mut out);
+        assert_eq!(out.bytes[0], tag::GROUP);
+        assert_eq!(read_u32(&out.bytes, 9) as usize, out.bytes.len() - 13);
+        assert_eq!(out.bytes[13], tag::SAVE);
     }
 
     #[test]

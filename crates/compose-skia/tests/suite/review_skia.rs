@@ -10,7 +10,8 @@ fn red_then_blue() -> ImageBitmap {
 
 fn render(ops: Vec<DrawOp>, size: i32) -> RasterRenderer {
     let mut renderer = RasterRenderer::new(size, size);
-    let list = DisplayList { ops };
+    let mut list = DisplayList::default();
+    list.ops = ops;
     renderer.render(&list, Color::WHITE, 1.0, &FixedTextMeasurer::default());
     renderer
 }

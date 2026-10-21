@@ -89,11 +89,27 @@ pub trait Renderer {
 #[derive(Clone, Default, Debug)]
 pub struct DisplayList {
     pub ops: Vec<DrawOp>,
+    /// The operations each repaint boundary drew (`Modifier.repaint_boundary`, graphics
+    /// layers, lazy items), in its own coordinates, keyed by its node: a renderer can keep a
+    /// group's recording while its operations stay the same (Android's render nodes).
+    pub groups: Vec<DrawGroup>,
+    /// A translation before this index isn't merged into: a group's operations stay its own.
+    pub(crate) merge_floor: usize,
+}
+
+/// A repaint boundary's operations: `ops[start..end]`, keyed by its node.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct DrawGroup {
+    pub key: u64,
+    pub start: usize,
+    pub end: usize,
 }
 
 impl DisplayList {
     pub fn clear(&mut self) {
         self.ops.clear();
+        self.groups.clear();
+        self.merge_floor = 0;
     }
 
     pub fn push(&mut self, op: DrawOp) {

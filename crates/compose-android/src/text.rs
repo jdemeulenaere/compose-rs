@@ -11,6 +11,7 @@ use compose_ui::{
     ParagraphHandle, ParagraphMetrics, Rect, TextAlign, TextLayoutOptions, TextMeasurer,
     TextOverflow, TextPosition, TextStyle,
 };
+use std::collections::HashMap;
 
 use crate::serialize::Writer;
 
@@ -35,8 +36,10 @@ struct Entry {
 /// A `TextMeasurer` over a `TextBackend`.
 pub struct AndroidTextMeasurer<B: TextBackend> {
     backend: B,
-    paragraphs: Vec<Option<Entry>>,
-    free: Vec<u32>,
+    /// By handle. A handle isn't reused: a frame's bytes naming the same paragraphs draw the
+    /// same text, so the replayer can keep a group's recording by its bytes.
+    paragraphs: HashMap<u32, Entry>,
+    next: u32,
     request: Writer,
 }
 
@@ -44,19 +47,19 @@ impl<B: TextBackend> AndroidTextMeasurer<B> {
     pub fn new(backend: B) -> Self {
         AndroidTextMeasurer {
             backend,
-            paragraphs: Vec::new(),
-            free: Vec::new(),
+            paragraphs: HashMap::new(),
+            next: 0,
             request: Writer::default(),
         }
     }
 
     fn entry(&self, handle: ParagraphHandle) -> &Entry {
-        self.paragraphs[handle.0 as usize].as_ref().expect("compose-android: a live paragraph")
+        self.paragraphs.get(&(handle.0 as u32)).expect("compose-android: a live paragraph")
     }
 
     /// The number of live paragraphs: for leak checks.
     pub fn live(&self) -> usize {
-        self.paragraphs.iter().filter(|entry| entry.is_some()).count()
+        self.paragraphs.len()
     }
 
     fn layout_runs(
@@ -68,13 +71,12 @@ impl<B: TextBackend> AndroidTextMeasurer<B> {
         constraints: Constraints,
         density: &Density,
     ) -> ParagraphHandle {
-        let handle = match self.free.pop() {
-            Some(handle) => handle,
-            None => {
-                self.paragraphs.push(None);
-                self.paragraphs.len() as u32 - 1
-            }
-        };
+        // After 2³² paragraphs, past the live ones.
+        while self.paragraphs.contains_key(&self.next) {
+            self.next = self.next.wrapping_add(1);
+        }
+        let handle = self.next;
+        self.next = self.next.wrapping_add(1);
         let right_to_left =
             first_strong_is_rtl(text).unwrap_or(options.direction == LayoutDirection::Rtl);
         let _layout = compose_ui::trace::section(c"compose-rs: text layout");
@@ -89,8 +91,7 @@ impl<B: TextBackend> AndroidTextMeasurer<B> {
             right_to_left,
         );
         let metrics = self.backend.layout(handle, text, &self.request.bytes);
-        self.paragraphs[handle as usize] =
-            Some(Entry { text: text.to_string(), metrics, right_to_left });
+        self.paragraphs.insert(handle, Entry { text: text.to_string(), metrics, right_to_left });
         ParagraphHandle(handle as u64)
     }
 }
@@ -168,9 +169,8 @@ impl<B: TextBackend> TextMeasurer for AndroidTextMeasurer<B> {
 
     fn release(&mut self, paragraph: ParagraphHandle) {
         let handle = paragraph.0 as u32;
-        if self.paragraphs.get_mut(handle as usize).and_then(Option::take).is_some() {
+        if self.paragraphs.remove(&handle).is_some() {
             self.backend.release(handle);
-            self.free.push(handle);
         }
     }
 }

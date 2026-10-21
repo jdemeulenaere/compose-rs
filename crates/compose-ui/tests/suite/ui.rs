@@ -125,6 +125,38 @@ translate 0 -40
     );
 }
 
+/// A repaint boundary's operations are a group, in its own coordinates (after its position):
+/// a translation outside it isn't merged into one inside, so the group stays the same when
+/// only its position changes.
+#[test]
+fn repaint_boundaries_are_groups_of_their_own_operations() {
+    let host = host(|| {
+        Column!({
+            Leaf(Modifier.size(10.dp()));
+            Leaf(Modifier.repaint_boundary().padding(5.dp()).background(Color::RED).size(10.dp()));
+            Leaf(
+                Modifier
+                    .graphics_layer(|layer| layer.alpha = 0.5)
+                    .background(Color::BLUE)
+                    .size(10.dp()),
+            );
+        });
+    });
+    let list = host.display_list();
+    assert_eq!(list.groups.len(), 2, "{}", list.dump());
+    let ops = |group: &DrawGroup| {
+        let mut part = DisplayList::default();
+        part.ops = list.ops[group.start..group.end].to_vec();
+        part.dump()
+    };
+    // The first: its rect, in its own coordinates (not the move to it).
+    assert_eq!(ops(&list.groups[0]), "rect 5,5 10x10 #FFFF0000\n");
+    assert!(matches!(list.ops[list.groups[0].start - 1], DrawOp::Translate(_)));
+    // The layer's, its alpha included.
+    assert!(ops(&list.groups[1]).starts_with("save layer alpha 0.5"), "{}", ops(&list.groups[1]));
+    assert_ne!(list.groups[0].key, list.groups[1].key);
+}
+
 #[test]
 fn text_elements_measure_and_draw_paragraphs_and_release_them() {
     let mut host = UiHost::headless(200, 100);

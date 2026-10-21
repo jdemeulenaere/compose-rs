@@ -47,7 +47,7 @@ pub use alignment::{
 pub use annotated::{AnnotatedString, AnnotatedStringBuilder, SpanRange, SpanStyle};
 pub use clipboard::{Clipboard, MemoryClipboard};
 pub use constraints::Constraints;
-pub use display_list::{DisplayList, DrawOp, Renderer};
+pub use display_list::{DisplayList, DrawGroup, DrawOp, Renderer};
 pub use draw::DrawScope;
 pub use focus_requester::FocusRequester;
 pub use graphics::{

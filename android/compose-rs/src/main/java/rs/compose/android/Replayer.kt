@@ -7,6 +7,7 @@ import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.Rect
 import android.graphics.RectF
+import android.graphics.RenderNode
 import android.util.SparseArray
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -15,6 +16,12 @@ import java.nio.ByteOrder
  * Replays compose-rs display lists (`crates/compose-android/src/serialize.rs`) on a `Canvas`:
  * on a hardware-accelerated view, the system records the calls and draws them on the GPU.
  * Paths and images are kept by id across frames, as the buffer defines and drops them.
+ *
+ * A group (a repaint boundary: a graphics layer, a lazy item) is recorded into a `RenderNode`
+ * of its own, kept while its bytes stay the same: a frame where it's unchanged (it scrolled, or
+ * something beside it animates) draws the node instead of replaying its operations. The bytes
+ * name everything they draw (paragraph handles, path and image ids aren't reused), so equal
+ * bytes draw the same.
  */
 internal class Replayer(private val text: TextMeasurer) {
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
@@ -76,11 +83,48 @@ internal class Replayer(private val text: TextMeasurer) {
         return paint
     }
 
+    /** A group's recording, and the bytes it was recorded from. */
+    private class Group(val node: RenderNode) {
+        var bytes: ByteBuffer = ByteBuffer.allocateDirect(0).order(ByteOrder.LITTLE_ENDIAN)
+        var length = 0
+        var frame = 0
+        /** The groups drawn inside it: kept as long as it is. */
+        var children = ArrayList<Long>()
+    }
+
+    private val groups = HashMap<Long, Group>()
+    private var frame = 0
+    private var width = 1
+    private var height = 1
+    /** The groups met in the group being recorded (null outside any). */
+    private var children: ArrayList<Long>? = null
+    /** An unknown operation was met: the rest can't be read. */
+    private var unreadable = false
+
     fun replay(canvas: Canvas, buffer: ByteBuffer) {
         buffer.order(ByteOrder.LITTLE_ENDIAN)
         buffer.position(0)
+        frame++
+        width = canvas.width.coerceAtLeast(1)
+        height = canvas.height.coerceAtLeast(1)
+        children = null
+        unreadable = false
+        replay(canvas, buffer, buffer.limit())
+        // The groups this frame didn't draw are gone.
+        val iterator = groups.values.iterator()
+        while (iterator.hasNext()) {
+            val group = iterator.next()
+            if (group.frame != frame) {
+                group.node.discardDisplayList()
+                iterator.remove()
+            }
+        }
+    }
+
+    /** Replays the operations up to [end] on [canvas], restoring what they saved. */
+    private fun replay(canvas: Canvas, buffer: ByteBuffer, end: Int) {
         val start = canvas.saveCount
-        while (buffer.hasRemaining()) {
+        while (buffer.position() < end && !unreadable) {
             when (buffer.get().toInt()) {
                 SAVE -> canvas.save()
                 RESTORE -> if (canvas.saveCount > start) canvas.restore()
@@ -163,6 +207,13 @@ internal class Replayer(private val text: TextMeasurer) {
                         canvas.restore()
                     }
                 }
+                GROUP -> {
+                    val key = buffer.getLong()
+                    val length = buffer.getInt()
+                    val from = buffer.position()
+                    group(canvas, buffer, key, from, from + length)
+                    buffer.position(from + length)
+                }
                 DEFINE_PATH -> definePath(buffer)
                 DROP_PATH -> paths.remove(buffer.getInt())
                 DEFINE_IMAGE -> defineImage(buffer)
@@ -171,13 +222,80 @@ internal class Replayer(private val text: TextMeasurer) {
                     images.get(id)?.recycle()
                     images.remove(id)
                 }
-                else -> {
-                    // An unknown operation: the rest can't be read.
-                    break
-                }
+                else -> unreadable = true
             }
         }
         canvas.restoreToCount(start)
+    }
+
+    /** Draws group [key], bytes [from] to [end]: its kept node if they're the same. */
+    private fun group(canvas: Canvas, buffer: ByteBuffer, key: Long, from: Int, end: Int) {
+        if (!canvas.isHardwareAccelerated) {
+            replay(canvas, buffer, end)
+            return
+        }
+        children?.add(key)
+        val kept = groups[key]
+        if (kept != null && kept.length == end - from && recorded(kept) &&
+            same(kept.bytes, buffer, from, end - from)
+        ) {
+            keep(kept)
+            canvas.drawRenderNode(kept.node)
+            return
+        }
+        val group = kept ?: Group(RenderNode("compose-rs group")).also { groups[key] = it }
+        group.frame = frame
+        // Its bounds: the view's from the group's origin, what it draws past them not clipped.
+        group.node.setPosition(0, 0, width, height)
+        group.node.setClipToBounds(false)
+        val outer = children
+        val inner = ArrayList<Long>()
+        children = inner
+        val recording = group.node.beginRecording(width, height)
+        try {
+            replay(recording, buffer, end)
+        } finally {
+            group.node.endRecording()
+            children = outer
+        }
+        group.children = inner
+        val length = end - from
+        if (group.bytes.capacity() < length) {
+            group.bytes = ByteBuffer.allocateDirect(length + length / 4).order(ByteOrder.LITTLE_ENDIAN)
+        }
+        val source = buffer.duplicate()
+        source.limit(end).position(from)
+        group.bytes.clear()
+        group.bytes.put(source)
+        group.length = length
+        canvas.drawRenderNode(group.node)
+    }
+
+    /**
+     * Whether [group] and the groups inside it still have their recordings: the system drops
+     * them all when the window hides (`destroyHardwareResources`).
+     */
+    private fun recorded(group: Group): Boolean =
+        group.node.hasDisplayList() && group.children.all { child -> groups[child]?.let(::recorded) ?: false }
+
+    /** Marks [group] and the groups inside it drawn this frame. */
+    private fun keep(group: Group) {
+        group.frame = frame
+        for (child in group.children) groups[child]?.let(::keep)
+    }
+
+    /** Whether [length] bytes of [buffer] from [from] are [kept]'s. */
+    private fun same(kept: ByteBuffer, buffer: ByteBuffer, from: Int, length: Int): Boolean {
+        var at = 0
+        while (at + 8 <= length) {
+            if (kept.getLong(at) != buffer.getLong(from + at)) return false
+            at += 8
+        }
+        while (at < length) {
+            if (kept.get(at) != buffer.get(from + at)) return false
+            at++
+        }
+        return true
     }
 
     private fun drawRoundRect(canvas: Canvas, corners: FloatArray, paint: Paint) {
@@ -262,6 +380,8 @@ internal class Replayer(private val text: TextMeasurer) {
     }
 
     fun clear() {
+        for (group in groups.values) group.node.discardDisplayList()
+        groups.clear()
         paths.clear()
         for (index in 0 until images.size()) images.valueAt(index).recycle()
         images.clear()
@@ -283,6 +403,7 @@ internal class Replayer(private val text: TextMeasurer) {
         const val DRAW_SHADOW = 12
         const val DRAW_ARC = 13
         const val DRAW_PATH = 14
+        const val GROUP = 15
         const val DEFINE_PATH = 20
         const val DROP_PATH = 21
         const val DEFINE_IMAGE = 22

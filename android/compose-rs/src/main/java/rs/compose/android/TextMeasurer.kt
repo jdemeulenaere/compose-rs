@@ -231,8 +231,9 @@ internal class TextMeasurer {
             return
         }
         var node = nodes.get(handle)
-        if (node == null) {
-            node = RenderNode("paragraph")
+        // Recorded again if the system dropped its recording (the window hid).
+        if (node == null || !node.hasDisplayList()) {
+            node = node ?: RenderNode("paragraph")
             // Its bounds: the layout's width and height, glyphs past them (an italic's
             // overhang, a line wider than an ellipsized width) not clipped.
             node.setPosition(0, 0, layout.width.coerceAtLeast(1), layout.height.coerceAtLeast(1))

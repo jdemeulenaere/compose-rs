@@ -98,6 +98,43 @@ impl ModifierNode for GraphicsLayerNode {
     fn as_draw(&mut self) -> Option<&mut dyn DrawModifierNode> {
         Some(self)
     }
+    /// A layer, as Compose's (a render node on Android).
+    fn is_repaint_boundary(&self) -> bool {
+        true
+    }
+}
+
+/// `Modifier.repaint_boundary`'s element.
+struct RepaintBoundaryElement;
+
+struct RepaintBoundaryNode;
+
+impl crate::modifier::ModifierNodeElement for RepaintBoundaryElement {
+    fn create(&self) -> Box<dyn ModifierNode> {
+        Box::new(RepaintBoundaryNode)
+    }
+    fn update(&self, _node: &mut dyn ModifierNode) {}
+    fn same(&self, other: &dyn crate::modifier::ModifierNodeElement) -> bool {
+        other.downcast_ref::<RepaintBoundaryElement>().is_some()
+    }
+    fn name(&self) -> &'static str {
+        "repaint_boundary"
+    }
+}
+
+impl ModifierNode for RepaintBoundaryNode {
+    fn is_repaint_boundary(&self) -> bool {
+        true
+    }
+}
+
+impl Modifier {
+    /// Makes what this node draws a group a renderer can keep while it doesn't change (a
+    /// render node on Android), as a Compose `graphicsLayer { }` without properties: for
+    /// content that often stays the same while what's around it changes (lazy items).
+    pub fn repaint_boundary(self) -> Modifier {
+        self.then_custom(RepaintBoundaryElement)
+    }
 }
 
 impl DrawModifierNode for GraphicsLayerNode {

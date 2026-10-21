@@ -488,7 +488,8 @@ fn LazyItem(index: usize, state: LazyListState, items: ItemsRef) {
     let pinned = state.inner.pinned.handle();
     let item_key = items.0.key(index);
     let near = state.clone();
-    let modifier = Modifier.on_focus_changed(move |focused: bool| {
+    // An item is a repaint boundary: scrolled, or beside an animation, it's not recorded again.
+    let modifier = Modifier.repaint_boundary().on_focus_changed(move |focused: bool| {
         if focused {
             near.inner.pinned_near.set(index);
             pinned.set(Some(item_key));
