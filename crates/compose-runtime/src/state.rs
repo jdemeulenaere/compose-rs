@@ -627,6 +627,22 @@ impl<T: 'static> MutableState<T> {
         State { handle: *self }
     }
 
+    /// Writes the value during composition, invalidating its readers: for a composition local's
+    /// provider, whose readers are its descendants, which recompose later in the same pass.
+    #[track_caller]
+    pub(crate) fn set_while_composing(&self, value: T) {
+        let at = Location::caller();
+        let lookup: CellLookup = |id, _| {
+            with_runtime(|runtime| {
+                let entry = runtime.cells.entry(id)?;
+                Ok(entry.cell.clone().expect("a live cell"))
+            })
+        };
+        if self.write_with(value, at, lookup).unwrap_or_else(|error| stale(error, at)) {
+            invalidate_readers(self.id);
+        }
+    }
+
     /// Returns whether the value changed.
     fn write(&self, value: T, at: &'static Location<'static>) -> Result<bool, Stale> {
         self.write_with(value, at, write_cell)

@@ -26,6 +26,7 @@ mod composition;
 mod effects;
 mod error;
 mod hash;
+mod local;
 mod node_tree;
 mod remember;
 mod runtime;
@@ -42,6 +43,7 @@ pub use composition::Composition;
 pub use effects::{DisposableEffect, DisposableEffectResult, DisposableEffectScope, SideEffect};
 pub use error::ComposeError;
 pub use hash::{KeyHasher, hash_key, key_of};
+pub use local::{CompositionLocal, CompositionLocalProvider, ProvidedValue};
 pub use node_tree::NodeTree;
 pub use remember::{
     Observed, Remember, RememberObserver, key, remember, remember_keyed, remember_observer,

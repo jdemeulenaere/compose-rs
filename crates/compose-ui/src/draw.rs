@@ -60,6 +60,11 @@ impl DrawScope<'_> {
         }
     }
 
+    pub fn draw_line(&mut self, from: Offset, to: Offset, paint: Paint) {
+        let (from, to) = (from + self.origin, to + self.origin);
+        self.list.push(DrawOp::DrawLine(from, to, paint));
+    }
+
     pub fn draw_paragraph(&mut self, paragraph: ParagraphHandle, position: Offset) {
         let position = position + self.origin;
         self.list.push(DrawOp::DrawParagraph(paragraph, position));

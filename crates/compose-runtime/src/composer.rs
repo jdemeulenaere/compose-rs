@@ -117,7 +117,7 @@ pub(crate) struct SlotPosition {
 impl Runtime {
     /// The index of the composition whose pass is composing.
     #[inline]
-    fn check_composing(&self) -> u32 {
+    pub(crate) fn check_composing(&self) -> u32 {
         match self.active {
             Some(active) if active.composing => active.composition.index,
             _ => misuse(ComposeError::NotComposing),

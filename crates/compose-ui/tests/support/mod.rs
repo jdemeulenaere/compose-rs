@@ -178,6 +178,7 @@ impl LayoutModifierNode for TextNode {
             let paragraph = scope.text_measurer().layout(
                 &self.text,
                 &TextStyle::DEFAULT,
+                TextLayoutOptions::default(),
                 constraints,
                 &density,
             );

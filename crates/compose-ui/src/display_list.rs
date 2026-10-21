@@ -17,6 +17,8 @@ pub enum DrawOp {
     ClipRoundRect(Rect, [f32; 4]),
     DrawRect(Rect, Paint),
     DrawRoundRect(Rect, [f32; 4], Paint),
+    /// A line from the first point to the second, stroked with the paint's width (round caps).
+    DrawLine(Offset, Offset, Paint),
     /// A paragraph laid out by the text measurer, drawn by handle at an offset.
     DrawParagraph(ParagraphHandle, Offset),
 }
@@ -91,6 +93,17 @@ impl DisplayList {
                         "round rect {} radii {:?} {}",
                         rect_text(rect),
                         radii,
+                        paint_text(paint)
+                    )
+                }
+                DrawOp::DrawLine(from, to, paint) => {
+                    writeln!(
+                        out,
+                        "line {},{} to {},{} {}",
+                        from.x,
+                        from.y,
+                        to.x,
+                        to.y,
                         paint_text(paint)
                     )
                 }

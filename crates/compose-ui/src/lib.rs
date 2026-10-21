@@ -48,8 +48,8 @@ pub use modifier::{
 };
 pub use semantics::{Role, SemanticsConfiguration, SemanticsNode, ToggleableState};
 pub use text::{
-    FixedTextMeasurer, FontWeight, ParagraphHandle, ParagraphMetrics, SharedString, TextMeasurer,
-    TextPosition, TextStyle,
+    FixedTextMeasurer, FontWeight, ParagraphHandle, ParagraphMetrics, SharedString,
+    TextLayoutOptions, TextMeasurer, TextPosition, TextStyle,
 };
 pub use tree::{LayoutNode, NodeId, UiTree};
 pub use unit::{Density, Dp, IntOffset, IntSize, Offset, Rect, Size, Sp, UnitExt};

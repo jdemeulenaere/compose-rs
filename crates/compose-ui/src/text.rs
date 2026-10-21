@@ -181,17 +181,36 @@ pub struct TextPosition {
     pub offset: usize,
 }
 
+/// How a paragraph is broken into lines, as `BasicText`'s `softWrap` and `maxLines`.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct TextLayoutOptions {
+    /// Break lines to fit the width; otherwise only at newlines.
+    pub soft_wrap: bool,
+    /// Lines past this are cut (clipped), as `TextOverflow.Clip`.
+    pub max_lines: u32,
+}
+
+impl Default for TextLayoutOptions {
+    fn default() -> Self {
+        TextLayoutOptions { soft_wrap: true, max_lines: u32::MAX }
+    }
+}
+
 /// Lays out and measures paragraphs, implemented by each platform's text stack.
 pub trait TextMeasurer: std::any::Any {
     fn layout(
         &mut self,
         text: &str,
         style: &TextStyle,
+        options: TextLayoutOptions,
         constraints: Constraints,
         density: &Density,
     ) -> ParagraphHandle;
     fn metrics(&self, paragraph: ParagraphHandle) -> ParagraphMetrics;
     fn hit_test(&self, paragraph: ParagraphHandle, position: Offset) -> TextPosition;
+    /// The cursor before byte `offset`: its top and bottom in the paragraph, as
+    /// `TextLayoutResult.getCursorRect` (zero width).
+    fn cursor_rect(&self, paragraph: ParagraphHandle, offset: usize) -> crate::unit::Rect;
     /// The paragraph's text, for dumps and semantics.
     fn text(&self, paragraph: ParagraphHandle) -> &str;
     fn release(&mut self, paragraph: ParagraphHandle);
@@ -240,6 +259,7 @@ impl TextMeasurer for FixedTextMeasurer {
         &mut self,
         text: &str,
         style: &TextStyle,
+        options: TextLayoutOptions,
         constraints: Constraints,
         density: &Density,
     ) -> ParagraphHandle {
@@ -252,7 +272,7 @@ impl TextMeasurer for FixedTextMeasurer {
         } else {
             font_px * 1.25
         };
-        let max_chars = if constraints.has_bounded_width() && advance > 0.0 {
+        let max_chars = if options.soft_wrap && constraints.has_bounded_width() && advance > 0.0 {
             ((constraints.max_width as f32 / advance).floor() as usize).max(1)
         } else {
             usize::MAX
@@ -288,6 +308,7 @@ impl TextMeasurer for FixedTextMeasurer {
                 }
             }
         }
+        lines.truncate(options.max_lines.max(1) as usize);
         let widest =
             lines.iter().map(|(from, to)| text[*from..*to].chars().count()).max().unwrap_or(0);
         let size = constraints.constrain(IntSize::new(
@@ -335,6 +356,21 @@ impl TextMeasurer for FixedTextMeasurer {
         TextPosition { offset }
     }
 
+    fn cursor_rect(&self, handle: ParagraphHandle, offset: usize) -> crate::unit::Rect {
+        let paragraph = self.paragraph(handle);
+        let line = paragraph
+            .lines
+            .iter()
+            .position(|&(from, to)| offset >= from && offset <= to)
+            .unwrap_or(paragraph.lines.len().saturating_sub(1));
+        let from = paragraph.lines.get(line).map_or(0, |line| line.0);
+        let column =
+            paragraph.text.get(from..offset.max(from)).map_or(0, |text| text.chars().count());
+        let x = column as f32 * paragraph.advance;
+        let top = line as f32 * paragraph.line_height;
+        crate::unit::Rect::new(x, top, x, top + paragraph.line_height)
+    }
+
     fn text(&self, handle: ParagraphHandle) -> &str {
         &self.paragraph(handle).text
     }
@@ -357,16 +393,30 @@ mod tests {
         let mut measurer = FixedTextMeasurer::new();
         let style = TextStyle { font_size: Sp(10.0), ..TextStyle::DEFAULT };
         // 5 px per character, 12.5 px per line.
+        let options = TextLayoutOptions::default();
         let handle = measurer.layout(
             "hello brave world",
             &style,
+            options,
             Constraints::at_most(60, 100),
             &Density::default(),
         );
         let metrics = measurer.metrics(handle);
         assert_eq!(metrics.line_count, 2);
         assert_eq!(metrics.size, IntSize::new(55, 25));
-        let single = measurer.layout("hi", &style, Constraints::unbounded(), &Density::new(2.0));
+        let single =
+            measurer.layout("hi", &style, options, Constraints::unbounded(), &Density::new(2.0));
+        assert_eq!(measurer.cursor_rect(handle, 13), crate::unit::Rect::new(5.0, 12.5, 5.0, 25.0));
+        let clipped = TextLayoutOptions { soft_wrap: true, max_lines: 1 };
+        let one_line = measurer.layout(
+            "hello brave world",
+            &style,
+            clipped,
+            Constraints::at_most(60, 100),
+            &Density::default(),
+        );
+        assert_eq!(measurer.metrics(one_line).line_count, 1);
+        measurer.release(one_line);
         assert_eq!(measurer.metrics(single).size, IntSize::new(20, 25));
         assert_eq!(measurer.hit_test(handle, Offset::new(11.0, 1.0)).offset, 2);
         measurer.release(handle);
