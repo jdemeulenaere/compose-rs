@@ -45,7 +45,9 @@ pub(crate) fn create(element: &Element) -> Box<dyn ModifierNode> {
         Element::Focusable(enabled) => {
             Box::new(FocusableNode { enabled: *enabled, focused: false })
         }
-        Element::OnFocusChanged(callback) => Box::new(OnFocusChangedNode(callback.clone())),
+        Element::OnFocusChanged(callback) => {
+            Box::new(OnFocusChangedNode { callback: callback.clone(), last: None })
+        }
         Element::OnKeyEvent(callback) => Box::new(OnKeyEventNode(callback.clone())),
         Element::TestTag(tag) => Box::new(TestTagNode(tag.clone())),
         Element::Semantics(merge, properties) => {
@@ -93,7 +95,9 @@ pub(crate) fn update(element: &Element, node: &mut dyn ModifierNode) {
             }
         }
         Element::OnFocusChanged(callback) => {
-            set!(OnFocusChangedNode, OnFocusChangedNode(callback.clone()))
+            if let Some(node) = node.downcast_mut::<OnFocusChangedNode>() {
+                node.callback = callback.clone();
+            }
         }
         Element::OnKeyEvent(callback) => set!(OnKeyEventNode, OnKeyEventNode(callback.clone())),
         Element::TestTag(tag) => set!(TestTagNode, TestTagNode(tag.clone())),
@@ -136,7 +140,7 @@ impl LayoutModifierNode for PaddingNode {
         let (start, top) = (density.round_to_px(start), density.round_to_px(top));
         let horizontal = start + density.round_to_px(end);
         let vertical = top + density.round_to_px(bottom);
-        let placeable = scope.measure(content, constraints.offset(horizontal, vertical));
+        let placeable = scope.measure(content, constraints.offset(-horizontal, -vertical));
         let width = constraints.constrain_width(placeable.width + horizontal);
         let height = constraints.constrain_height(placeable.height + vertical);
         scope.place(&placeable, start, top);
@@ -261,7 +265,7 @@ impl LayoutModifierNode for FillNode {
     ) -> MeasureResult {
         let axis = |fraction: Option<f32>, bounded: bool, min: i32, max: i32| match fraction {
             Some(fraction) if bounded => {
-                let size = ((max as f32 * fraction).round() as i32).clamp(min, max);
+                let size = crate::unit::round_to_int(max as f32 * fraction).clamp(min, max);
                 (size, size)
             }
             _ => (min, max),
@@ -312,14 +316,20 @@ impl ModifierNode for BorderNode {
 }
 
 impl DrawModifierNode for BorderNode {
-    /// Over the content, as Compose's border, with the stroke inside the bounds.
+    /// Over the content, as Compose's border, with the stroke inside the bounds: whole pixels
+    /// (a hairline for 0 dp), and the shape filled when the stroke would meet itself.
     fn draw_after(&mut self, scope: &mut DrawScope<'_>) {
-        let width = scope.density().to_px(self.0);
-        if width <= 0.0 || !self.1.is_specified() {
+        if !self.1.is_specified() {
             return;
         }
+        let width = if self.0.0 == 0.0 { 1.0 } else { scope.density().to_px(self.0).ceil() };
         let size = scope.size();
-        let half = (width / 2.0).min(size.width / 2.0).min(size.height / 2.0);
+        if width * 2.0 >= size.width.min(size.height) {
+            let outline = self.2.outline(size, &scope.density());
+            scope.draw_outline(outline, Paint::fill(self.1));
+            return;
+        }
+        let half = width / 2.0;
         let paint = Paint::stroke(self.1, width);
         match self.2.outline(size, &scope.density()) {
             Outline::Rectangle(rect) => scope.draw_rect(inset(rect, half), paint),
@@ -336,7 +346,7 @@ fn inset(rect: Rect, by: f32) -> Rect {
     Rect::new(rect.left + by, rect.top + by, rect.right - by, rect.bottom - by)
 }
 
-struct ClipNode(Shape);
+pub(crate) struct ClipNode(pub(crate) Shape);
 
 impl ModifierNode for ClipNode {
     fn as_draw(&mut self) -> Option<&mut dyn DrawModifierNode> {
@@ -383,18 +393,26 @@ impl Press {
 
 #[derive(Default)]
 struct PressState {
-    /// A pointer press in progress, which a release inside completes.
-    pressed: bool,
-    /// A key press (Enter, Space) in progress, which its key release completes.
-    key_pressed: Option<Key>,
+    /// The pointer of a press in progress, which its release inside completes.
+    pressed: Option<crate::input::PointerId>,
+    /// The keys (Enter, NumPadEnter, Space) pressed and not released yet, as bits.
+    keys_pressed: u8,
     focused: bool,
+}
+
+fn key_bit(key: Key) -> u8 {
+    match key {
+        Key::Enter => 1,
+        Key::NumPadEnter => 2,
+        _ => 4,
+    }
 }
 
 impl PressState {
     fn disable_if(&mut self, disabled: bool) {
         if disabled {
-            self.pressed = false;
-            self.key_pressed = None;
+            self.pressed = None;
+            self.keys_pressed = 0;
         }
     }
 }
@@ -443,23 +461,25 @@ impl PointerInputModifierNode for ClickableNode {
         }
         match event.kind {
             PointerEventType::Press => {
-                if self.spec.enabled() && !event.consumed && !self.state.pressed {
-                    self.state.pressed = true;
+                if self.spec.enabled() && !event.consumed && self.state.pressed.is_none() {
+                    self.state.pressed = Some(event.pointer);
                     event.consume();
                 }
             }
             PointerEventType::Move => {
-                if self.state.pressed && (event.consumed || !inside(event, bounds)) {
-                    self.state.pressed = false;
+                if self.state.pressed == Some(event.pointer)
+                    && (event.consumed || !inside(event, bounds))
+                {
+                    self.state.pressed = None;
                 }
             }
             PointerEventType::Release => {
-                if std::mem::take(&mut self.state.pressed)
-                    && !event.consumed
-                    && inside(event, bounds)
-                {
-                    event.consume();
-                    self.spec.fire(context);
+                if self.state.pressed == Some(event.pointer) {
+                    self.state.pressed = None;
+                    if !event.consumed && inside(event, bounds) {
+                        event.consume();
+                        self.spec.fire(context);
+                    }
                 }
             }
             PointerEventType::Scroll => {}
@@ -467,7 +487,7 @@ impl PointerInputModifierNode for ClickableNode {
     }
 
     fn on_cancel_pointer_input(&mut self) {
-        self.state.pressed = false;
+        self.state.pressed = None;
     }
 }
 
@@ -503,7 +523,7 @@ impl FocusTargetModifierNode for ClickableNode {
     fn on_focus_changed(&mut self, focused: bool, context: &mut EventContext<'_>) {
         self.state.focused = focused;
         if !focused {
-            self.state.key_pressed = None;
+            self.state.keys_pressed = 0;
         }
         context.invalidate_draw();
     }
@@ -517,11 +537,13 @@ impl KeyInputModifierNode for ClickableNode {
         }
         match event.kind {
             KeyEventType::KeyDown => {
-                self.state.key_pressed = Some(event.key);
+                self.state.keys_pressed |= key_bit(event.key);
                 true
             }
             KeyEventType::KeyUp => {
-                if self.state.key_pressed.take() == Some(event.key) {
+                let bit = key_bit(event.key);
+                if self.state.keys_pressed & bit != 0 {
+                    self.state.keys_pressed &= !bit;
                     self.spec.fire(context);
                     true
                 } else {
@@ -566,7 +588,11 @@ impl SemanticsModifierNode for FocusableNode {
     }
 }
 
-pub(crate) struct OnFocusChangedNode(pub(crate) Callback<dyn Fn(bool)>);
+/// `on_focus_changed`: its callback, and the state it last reported.
+pub(crate) struct OnFocusChangedNode {
+    pub(crate) callback: Callback<dyn Fn(bool)>,
+    pub(crate) last: Option<bool>,
+}
 
 impl ModifierNode for OnFocusChangedNode {}
 
@@ -600,7 +626,7 @@ impl SemanticsModifierNode for TestTagNode {
     }
 }
 
-struct SemanticsNode(bool, Rc<dyn Fn(&mut SemanticsConfiguration)>);
+struct SemanticsNode(bool, Rc<SemanticsConfiguration>);
 
 impl ModifierNode for SemanticsNode {
     fn as_semantics(&mut self) -> Option<&mut dyn SemanticsModifierNode> {
@@ -611,6 +637,6 @@ impl ModifierNode for SemanticsNode {
 impl SemanticsModifierNode for SemanticsNode {
     fn apply_semantics(&self, config: &mut SemanticsConfiguration) {
         config.merge_descendants |= self.0;
-        (self.1)(config);
+        config.apply(&self.1);
     }
 }

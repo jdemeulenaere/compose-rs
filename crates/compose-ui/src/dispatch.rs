@@ -37,11 +37,11 @@ impl UiTree {
         if !value.placed {
             return false;
         }
+        // As Compose: a node's bounds don't limit what's hit inside it (an `offset`'s content,
+        // children placed outside), only clips do.
         let offset = value.layers[0].offset;
         let local = point - Offset::new(offset.x as f32, offset.y as f32);
-        if !contains(value.layers[0].measured, local) {
-            return false;
-        }
+        let density = self.density;
         let start = path.len();
         let mut origin = Offset::ZERO;
         let mut layer = 0usize;
@@ -52,9 +52,18 @@ impl UiTree {
             }
             origins.push(origin);
         }
-        if value.all_capabilities & capability::POINTER != 0 {
+        if value.all_capabilities & (capability::POINTER | capability::DRAW) != 0 {
             for index in 0..value.chain.len() {
                 let bits = value.capabilities[index];
+                if bits & capability::DRAW != 0
+                    && let Some(clip) = value.chain[index].downcast_ref::<crate::nodes::ClipNode>()
+                {
+                    let size = value.layers[layer].measured.into();
+                    if !clip.0.outline(size, &density).contains(local - origins[layer]) {
+                        // Outside the clip: nothing after it, nor the children, is hit.
+                        return path.len() > start;
+                    }
+                }
                 if bits & capability::POINTER != 0
                     && contains(value.layers[layer].measured, local - origins[layer])
                 {
@@ -144,7 +153,7 @@ impl UiTree {
         }
     }
 
-    fn apply_requests(&mut self, requests: Requests, actions: &mut Vec<Action>) {
+    pub(crate) fn apply_requests(&mut self, requests: Requests, actions: &mut Vec<Action>) {
         if requests.draw {
             self.needs_draw = true;
         }
@@ -157,136 +166,25 @@ impl UiTree {
         if let Some(node) = requests.focus {
             self.request_focus_into(node, actions);
         }
-    }
-
-    // ---- Focus ------------------------------------------------------------------------------
-
-    /// The focused node.
-    pub fn focused(&self) -> Option<NodeId> {
-        self.focused
-    }
-
-    /// The chain index of the node's focus target, if it has one that can take focus.
-    pub(crate) fn focus_target_index(&mut self, node: NodeId) -> Option<usize> {
-        let value = self.get_mut(node)?;
-        if value.all_capabilities & capability::FOCUS == 0 {
-            return None;
-        }
-        (0..value.chain.len()).find(|&index| {
-            value.capabilities[index] & capability::FOCUS != 0
-                && value.chain[index].as_focus_target().is_some_and(|target| target.can_focus())
-        })
-    }
-
-    /// Moves focus to `node`'s focus target. Returns the actions focus listeners queued.
-    pub fn request_focus(&mut self, node: NodeId) -> Vec<Action> {
-        let mut actions = Vec::new();
-        self.request_focus_into(node, &mut actions);
-        actions
-    }
-
-    pub fn clear_focus(&mut self) -> Vec<Action> {
-        let mut actions = Vec::new();
-        self.clear_focus_into(&mut actions);
-        actions
-    }
-
-    fn request_focus_into(&mut self, node: NodeId, actions: &mut Vec<Action>) {
-        if self.focused == Some(node) || self.focus_target_index(node).is_none() {
-            return;
-        }
-        self.clear_focus_into(actions);
-        self.focused = Some(node);
-        self.notify_focus(node, true, actions);
-    }
-
-    fn clear_focus_into(&mut self, actions: &mut Vec<Action>) {
-        if let Some(old) = self.focused.take() {
-            self.notify_focus(old, false, actions);
-        }
-    }
-
-    fn notify_focus(&mut self, node: NodeId, focused: bool, actions: &mut Vec<Action>) {
-        let Some(target) = self.focus_target_index(node).or_else(|| {
-            // Losing focus because it can't take it any more: tell the first target anyway.
-            let value = self.get(node)?;
-            (0..value.chain.len()).find(|&index| value.capabilities[index] & capability::FOCUS != 0)
-        }) else {
-            return;
-        };
-        let mut requests = Requests::default();
-        let value = self.node_mut(node);
-        let mut context = EventContext { node, actions, requests: &mut requests };
-        if let Some(handler) = value.chain[target].as_focus_target() {
-            handler.on_focus_changed(focused, &mut context);
-        }
-        for index in 0..target {
-            if value.capabilities[index] & capability::FOCUS_EVENT != 0
-                && let Some(listener) =
-                    value.chain[index].downcast_ref::<crate::nodes::OnFocusChangedNode>()
-            {
-                context.call_with_bool(&listener.0, focused);
-            }
-        }
-        if requests.draw {
-            self.needs_draw = true;
-        }
-    }
-
-    /// The nodes that can take focus, in tree order: what Tab moves through.
-    pub fn focus_order(&mut self) -> Vec<NodeId> {
-        let mut order = Vec::new();
-        let mut stack = vec![self.root_id()];
-        while let Some(node) = stack.pop() {
-            if !self.node(node).placed {
-                continue;
-            }
-            if self.focus_target_index(node).is_some() {
-                order.push(node);
-            }
-            stack.extend(self.node(node).children.iter().rev().map(|child| child.node));
-        }
-        order
-    }
-
-    /// Moves focus to the next (or previous) focusable node, wrapping around, as Tab does.
-    pub fn move_focus(&mut self, forward: bool) -> Vec<Action> {
-        let order = self.focus_order();
-        let mut actions = Vec::new();
-        if order.is_empty() {
-            return actions;
-        }
-        let current =
-            self.focused.and_then(|focused| order.iter().position(|&node| node == focused));
-        let next = match (current, forward) {
-            (None, true) => 0,
-            (None, false) => order.len() - 1,
-            (Some(index), true) => (index + 1) % order.len(),
-            (Some(index), false) => (index + order.len() - 1) % order.len(),
-        };
-        self.request_focus_into(order[next], &mut actions);
-        actions
+        self.update_focus_listeners(actions);
     }
 
     // ---- Keys and text ----------------------------------------------------------------------
 
-    /// The key input nodes an event to the focused node visits: the focused node's, from its
-    /// focus target outward, then each ancestor's, innermost first.
+    /// The key input nodes an event to the focused node visits: the focused node's, innermost
+    /// first (those after its focus target too, as Compose's `lastLocalKeyInputNode`), then
+    /// each ancestor's.
     fn key_path(&mut self) -> Vec<(NodeId, usize)> {
         let mut path = Vec::new();
-        let Some(focused) = self.focused else { return path };
-        let Some(target) = self.focus_target_index(focused) else { return path };
-        let mut node = Some(focused);
-        let mut limit = target + 1;
+        let mut node = self.focused();
         while let Some(id) = node {
             let value = self.node(id);
-            for index in (0..limit.min(value.chain.len())).rev() {
+            for index in (0..value.chain.len()).rev() {
                 if value.capabilities[index] & capability::KEY != 0 {
                     path.push((id, index));
                 }
             }
             node = value.parent;
-            limit = usize::MAX;
         }
         path
     }

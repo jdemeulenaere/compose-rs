@@ -68,6 +68,8 @@ pub struct MeasureResult {
 pub struct MeasureScope<'a> {
     pub(crate) tree: &'a mut UiTree,
     pub(crate) node: NodeId,
+    /// This measurement, to reject a child measured twice in it.
+    pub(crate) run: u64,
 }
 
 impl MeasureScope<'_> {
@@ -84,13 +86,24 @@ impl MeasureScope<'_> {
     }
 
     /// Measures `measurable` with `constraints`.
+    ///
+    /// # Panics
+    ///
+    /// If this measurement already measured it, as Compose does: a second measurement would
+    /// leave the layout depending on constraints no later pass replays.
     pub fn measure(&mut self, measurable: Measurable, constraints: Constraints) -> Placeable {
         let size = if measurable.layer == 0 {
-            debug_assert_eq!(
+            assert_eq!(
                 self.tree.parent_of(measurable.node),
                 Some(self.node),
                 "compose-ui: a policy measured a node that isn't its child"
             );
+            let child = self.tree.node_mut(measurable.node);
+            assert!(
+                child.measured_in != self.run,
+                "compose-ui: a measure policy measured the same child twice in one measurement"
+            );
+            child.measured_in = self.run;
             self.tree.measure_node(measurable.node, constraints)
         } else {
             debug_assert_eq!(measurable.node, self.node);

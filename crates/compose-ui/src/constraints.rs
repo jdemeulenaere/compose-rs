@@ -74,18 +74,18 @@ impl Constraints {
         Constraints::new(0, self.max_width, 0, self.max_height)
     }
 
-    /// Shrunk by `horizontal` and `vertical` pixels (negative grows), clamped at zero, keeping
+    /// Grown by `horizontal` and `vertical` pixels (negative shrinks), clamped at zero, keeping
     /// infinity infinite, as Compose's `Constraints.offset`.
     pub fn offset(&self, horizontal: i32, vertical: i32) -> Constraints {
-        let shrink = |value: i32, by: i32| {
-            if value == Self::INFINITY { value } else { (value - by).max(0) }
+        let add = |value: i32, by: i32| {
+            if value == Self::INFINITY { value } else { value.saturating_add(by).max(0) }
         };
-        let max_width = shrink(self.max_width, horizontal);
-        let max_height = shrink(self.max_height, vertical);
+        let max_width = add(self.max_width, horizontal);
+        let max_height = add(self.max_height, vertical);
         Constraints::new(
-            shrink(self.min_width, horizontal).min(max_width),
+            add(self.min_width, horizontal).min(max_width),
             max_width,
-            shrink(self.min_height, vertical).min(max_height),
+            add(self.min_height, vertical).min(max_height),
             max_height,
         )
     }
@@ -130,9 +130,9 @@ mod tests {
     #[test]
     fn offset_shrinks_and_keeps_infinity() {
         let constraints = Constraints::new(10, 100, 0, Constraints::INFINITY);
-        assert_eq!(constraints.offset(20, 5), Constraints::new(0, 80, 0, Constraints::INFINITY));
-        assert_eq!(Constraints::fixed(10, 10).offset(30, 30), Constraints::fixed(0, 0));
-        assert_eq!(Constraints::fixed(10, 10).offset(-5, 0), Constraints::new(15, 15, 10, 10));
+        assert_eq!(constraints.offset(-20, -5), Constraints::new(0, 80, 0, Constraints::INFINITY));
+        assert_eq!(Constraints::fixed(10, 10).offset(-30, -30), Constraints::fixed(0, 0));
+        assert_eq!(Constraints::fixed(10, 10).offset(5, 0), Constraints::new(15, 15, 10, 10));
     }
 
     #[test]

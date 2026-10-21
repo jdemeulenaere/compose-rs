@@ -69,7 +69,7 @@ impl Alignment {
 
 fn biased(size: i32, space: i32, bias: f32) -> i32 {
     let center = (space - size) as f32 / 2.0;
-    (center * (1.0 + bias)).round() as i32
+    crate::unit::round_to_int(center * (1.0 + bias))
 }
 
 impl HorizontalAlignment {

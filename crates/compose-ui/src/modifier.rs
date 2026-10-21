@@ -234,13 +234,16 @@ impl Modifier {
     }
 
     /// Semantics properties, as `Modifier.semantics`; `merge_descendants` merges the
-    /// descendants' semantics into this node, as a button merges its label.
+    /// descendants' semantics into this node, as a button merges its label. `properties` runs
+    /// at once and its result is kept as a value, so an unchanged modifier stays `same`.
     pub fn semantics(
         self,
         merge_descendants: bool,
-        properties: impl Fn(&mut SemanticsConfiguration) + 'static,
+        properties: impl FnOnce(&mut SemanticsConfiguration),
     ) -> Modifier {
-        self.then_element(Element::Semantics(merge_descendants, Rc::new(properties)))
+        let mut config = SemanticsConfiguration::default();
+        properties(&mut config);
+        self.then_element(Element::Semantics(merge_descendants, Rc::new(config)))
     }
 }
 
@@ -455,7 +458,7 @@ pub enum Element {
     OnFocusChanged(Callback<dyn Fn(bool)>),
     OnKeyEvent(Callback<dyn Fn(KeyEvent) -> bool>),
     TestTag(SharedString),
-    Semantics(bool, Rc<dyn Fn(&mut SemanticsConfiguration)>),
+    Semantics(bool, Rc<SemanticsConfiguration>),
     Custom(Rc<dyn ModifierNodeElement>),
 }
 
@@ -494,7 +497,7 @@ impl Element {
             (OnFocusChanged(a), OnFocusChanged(b)) => a.ptr_eq(b),
             (OnKeyEvent(a), OnKeyEvent(b)) => a.ptr_eq(b),
             (TestTag(a), TestTag(b)) => a.same(b),
-            (Semantics(a, b), Semantics(c, d)) => a == c && Rc::ptr_eq(b, d),
+            (Semantics(a, b), Semantics(c, d)) => a == c && (Rc::ptr_eq(b, d) || b == d),
             (Custom(a), Custom(b)) => Rc::ptr_eq(a, b) || ModifierNodeElement::same(&**a, &**b),
             _ => false,
         }

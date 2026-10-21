@@ -67,6 +67,7 @@ impl ModifierNodeElement for TextFieldElement {
             paragraph: None,
             constraints: None,
             stale: Vec::new(),
+            density: None,
             cursor_rect: None,
             pending_tap: None,
         })
@@ -131,6 +132,7 @@ pub struct TextFieldNode {
     pressed: bool,
     paragraph: Option<ParagraphHandle>,
     constraints: Option<Constraints>,
+    density: Option<compose_ui::Density>,
     stale: Vec<ParagraphHandle>,
     /// Where the cursor is drawn, from the measurer, refreshed at measurement: moving the
     /// cursor asks for one (the paragraph is kept).
@@ -226,7 +228,11 @@ impl LayoutModifierNode for TextFieldNode {
             scope.text_measurer().release(paragraph);
         }
         let cursor_width = scope.density().round_to_px(CURSOR_WIDTH);
-        if self.constraints != Some(constraints) || self.paragraph.is_none() {
+        if self.constraints != Some(constraints)
+            || self.paragraph.is_none()
+            || self.density != Some(scope.density())
+        {
+            self.density = Some(scope.density());
             if let Some(old) = self.paragraph.take() {
                 scope.text_measurer().release(old);
             }
@@ -235,7 +241,7 @@ impl LayoutModifierNode for TextFieldNode {
                 soft_wrap: !self.single_line,
                 max_lines: if self.single_line { 1 } else { u32::MAX },
             };
-            let text_constraints = constraints.offset(cursor_width, 0).loosen();
+            let text_constraints = constraints.offset(-cursor_width, 0).loosen();
             let paragraph = scope.text_measurer().layout(
                 &self.text,
                 &self.style,

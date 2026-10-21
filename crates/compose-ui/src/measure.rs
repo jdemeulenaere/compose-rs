@@ -1,11 +1,12 @@
 //! The measure pass (docs/06-ui.md, "Layout"): from the root, measuring only what changed.
 
 use std::mem;
+use std::panic::{self, AssertUnwindSafe};
 
 use crate::constraints::Constraints;
-use crate::layout::{Measurable, MeasureScope};
+use crate::layout::{Measurable, MeasureResult, MeasureScope};
 use crate::nodes::Taken;
-use crate::tree::{NodeId, UiTree};
+use crate::tree::{Layer, NodeId, UiTree};
 use crate::unit::{IntOffset, IntSize};
 
 impl UiTree {
@@ -69,6 +70,10 @@ impl UiTree {
 
     /// Measures layer `layer` of `node`: a layout modifier, or past the last one the node's
     /// policy with its children.
+    ///
+    /// A panic in application code (a policy, a modifier node) unwinds through here: the node
+    /// and its children are put back first, and the node marked for measuring again, so the
+    /// tree stays whole and a later frame or its drop is sound.
     pub(crate) fn measure_layer(
         &mut self,
         node: NodeId,
@@ -80,36 +85,62 @@ impl UiTree {
             let index = value.layout_indices[layer] as usize;
             // Out of the chain while it runs, so it can measure the rest of its own node.
             let mut modifier_node = mem::replace(&mut value.chain[index], Box::new(Taken));
-            let result = {
-                let mut scope = MeasureScope { tree: self, node };
+            let run = self.next_measure_run();
+            let result = panic::catch_unwind(AssertUnwindSafe(|| {
+                let mut scope = MeasureScope { tree: &mut *self, node, run };
                 let content = Measurable { node, layer: layer as u32 + 1 };
                 modifier_node.as_layout().expect("compose-ui: a layout node").measure(
                     &mut scope,
                     content,
                     constraints,
                 )
-            };
+            }));
             self.node_mut(node).chain[index] = modifier_node;
-            result
+            self.recover(node, result)
         } else {
             let policy = value.policy.clone();
             let children = mem::take(&mut value.children);
             for child in &children {
                 self.node_mut(child.node).placed = false;
             }
-            let result = {
-                let mut scope = MeasureScope { tree: self, node };
+            let run = self.next_measure_run();
+            let result = panic::catch_unwind(AssertUnwindSafe(|| {
+                let mut scope = MeasureScope { tree: &mut *self, node, run };
                 policy.measure(&mut scope, &children, constraints)
-            };
+            }));
             self.node_mut(node).children = children;
-            result
+            self.recover(node, result)
         };
         let measured = IntSize::new(result.width.max(0), result.height.max(0));
         let size = constraints.constrain(measured);
         let value = &mut self.node_mut(node).layers[layer];
         value.measured = measured;
         value.size = size;
+        // A new measured size within the same coerced one moves the centering.
+        value.offset = value.position + centering(value);
         size
+    }
+
+    /// The result of application measuring code, or, if it panicked, the node marked for
+    /// measuring again and the panic resumed.
+    fn recover(
+        &mut self,
+        node: NodeId,
+        result: std::thread::Result<MeasureResult>,
+    ) -> MeasureResult {
+        match result {
+            Ok(result) => result,
+            Err(panic) => {
+                self.node_mut(node).constraints = None;
+                self.invalidate_measure(node);
+                panic::resume_unwind(panic)
+            }
+        }
+    }
+
+    fn next_measure_run(&mut self) -> u64 {
+        self.measure_runs += 1;
+        self.measure_runs
     }
 
     /// Places layer `layer` of `node` at `position` in the layer outside it (or its parent's
@@ -118,13 +149,18 @@ impl UiTree {
     pub(crate) fn place(&mut self, node: NodeId, layer: usize, position: IntOffset) {
         let value = self.node_mut(node);
         let entry = &mut value.layers[layer];
-        let centering = IntOffset::new(
-            (entry.size.width - entry.measured.width) / 2,
-            (entry.size.height - entry.measured.height) / 2,
-        );
-        entry.offset = position + centering;
+        entry.position = position;
+        entry.offset = position + centering(entry);
         if layer == 0 {
             value.placed = true;
         }
     }
+}
+
+/// The offset centering a layer measured outside its constraints in the size its parent sees.
+fn centering(layer: &Layer) -> IntOffset {
+    IntOffset::new(
+        (layer.size.width - layer.measured.width) / 2,
+        (layer.size.height - layer.measured.height) / 2,
+    )
 }

@@ -312,7 +312,16 @@ fn tab_moves_focus_through_clickables_and_enter_clicks() {
     host.send_key(shift_tab);
     assert_eq!(
         take_log(),
-        ["a focused true", "a", "a focused false", "b", "a focused true", "a focused false"]
+        // The initial state first, as Compose reports it on attach.
+        [
+            "a focused false",
+            "a focused true",
+            "a",
+            "a focused false",
+            "b",
+            "a focused true",
+            "a focused false"
+        ]
     );
     let focused =
         host.semantics_tree(true).flatten().iter().filter(|node| node.config.focused).count();

@@ -207,6 +207,12 @@ impl SemanticsNodeInteraction<'_> {
             node.config
         );
         self.rule.host.request_focus(node.id);
+        let focused = self.rule.host.with_tree(|tree| tree.focused());
+        assert!(
+            focused == Some(node.id),
+            "compose-test: performTextInput on a node that can't take focus: {:?}",
+            node.config
+        );
         self.rule.host.send_text(text);
         self.rule.wait_for_idle();
         self
@@ -240,7 +246,9 @@ impl SemanticsNodeInteraction<'_> {
     #[track_caller]
     pub fn assert_does_not_exist(&self) -> &Self {
         let tree = self.rule.host.semantics_tree(self.merged);
-        let count = tree.flatten().iter().filter(|node| self.matcher.matches(&node.config)).count();
+        let found = tree.flatten().iter().filter(|node| self.matcher.matches(&node.config)).count();
+        // `on_all_nodes(…, index)` exists while more than `index` nodes match.
+        let count = found.saturating_sub(self.index.unwrap_or(0));
         assert!(
             count == 0,
             "compose-test: assert_does_not_exist failed: {count} nodes {} in\n{}",

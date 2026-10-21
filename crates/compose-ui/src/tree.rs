@@ -84,6 +84,9 @@ pub(crate) struct Layer {
     pub(crate) measured: IntSize,
     /// The size its parent sees: `measured` within the constraints.
     pub(crate) size: IntSize,
+    /// Where the layer outside placed it.
+    pub(crate) position: IntOffset,
+    /// `position`, plus the centering of a layer measured outside its constraints.
     pub(crate) offset: IntOffset,
 }
 
@@ -109,6 +112,8 @@ pub struct LayoutNode {
     pub(crate) subtree_needs_measure: bool,
     /// Whether the parent placed it in its last measurement: unplaced nodes aren't drawn.
     pub(crate) placed: bool,
+    /// The parent measurement that last measured it, to reject measuring it twice.
+    pub(crate) measured_in: u64,
 }
 
 impl LayoutNode {
@@ -129,6 +134,7 @@ impl LayoutNode {
             needs_measure: true,
             subtree_needs_measure: false,
             placed: false,
+            measured_in: 0,
         }
     }
 
@@ -157,8 +163,12 @@ pub struct UiTree {
     pub(crate) density: Density,
     pub(crate) display_list: DisplayList,
     pub(crate) needs_draw: bool,
-    pub(crate) focused: Option<NodeId>,
+    pub(crate) focus: Option<crate::focus::Focus>,
+    pub(crate) focus_listeners_dirty: bool,
+    /// Actions queued outside dispatch, run by the host after the frame.
+    pub(crate) pending_actions: Vec<crate::input::Action>,
     pub(crate) captures: Vec<(crate::input::PointerId, Vec<crate::dispatch::HitEntry>)>,
+    pub(crate) measure_runs: u64,
 }
 
 impl UiTree {
@@ -173,8 +183,11 @@ impl UiTree {
             density,
             display_list: DisplayList::default(),
             needs_draw: true,
-            focused: None,
+            focus: None,
+            focus_listeners_dirty: false,
+            pending_actions: Vec::new(),
             captures: Vec::new(),
+            measure_runs: 0,
         }
     }
 
@@ -296,6 +309,7 @@ impl UiTree {
             let previous = std::mem::replace(&mut value.modifier, modifier);
             let parent_data_changed = self.refresh_chain(node);
             drop(previous);
+            self.revalidate_focus(node, None);
             self.invalidate_measure(node);
             if parent_data_changed && let Some(parent) = self.parent_of(node) {
                 self.invalidate_measure(parent);
@@ -334,9 +348,7 @@ impl UiTree {
         for mut removed in old_nodes.into_iter().flatten() {
             removed.on_detach(&mut context);
         }
-        if self.focused == Some(node) && self.focus_target_index(node).is_none() {
-            self.focused = None;
-        }
+        self.revalidate_focus(node, Some(&matched));
         self.invalidate_measure(node);
         if parent_data_changed && let Some(parent) = self.parent_of(node) {
             self.invalidate_measure(parent);
@@ -405,6 +417,9 @@ impl UiTree {
         value.layers.resize(value.layout_indices.len() + 1, Layer::default());
         let changed = value.parent_data != parent_data;
         value.parent_data = parent_data;
+        // A new listener reports its initial state.
+        let listens = value.all_capabilities & capability::FOCUS_EVENT != 0;
+        self.focus_listeners_dirty |= listens;
         changed
     }
 
@@ -492,8 +507,9 @@ impl UiTree {
             slot.generation = slot.generation.wrapping_add(1);
             self.free.push(id.index);
             stack.extend(value.children.iter().map(|child| child.node));
-            if self.focused == Some(id) {
-                self.focused = None;
+            if self.focused() == Some(id) {
+                self.focus = None;
+                self.focus_listeners_dirty = true;
             }
             let mut context = DetachContext { text_measurer: &mut *self.text_measurer };
             for entry in &mut value.chain {

@@ -63,7 +63,23 @@ impl UiHost {
 
     pub fn set_content(&self, content: impl Fn() + 'static) {
         self.composition.set_content(content);
+        self.wake();
+    }
+
+    /// Asks for a frame: the platform's waker schedules one.
+    fn wake(&self) {
         self.frame_requested.set(true);
+        let waker = self.waker.borrow().clone();
+        if let Some(waker) = waker {
+            waker();
+        }
+    }
+
+    /// After dispatch: wakes the platform if the tree changed (focus, a modifier node's state).
+    fn wake_if_dirty(&self) {
+        if self.with_tree(|tree| tree.needs_draw) {
+            self.wake();
+        }
     }
 
     /// Called whenever the host needs a frame (state changed): a platform host schedules one.
@@ -82,13 +98,13 @@ impl UiHost {
     pub fn resize(&mut self, size: IntSize) {
         if self.size != size {
             self.size = size;
-            self.frame_requested.set(true);
+            self.wake();
         }
     }
 
     pub fn set_density(&mut self, density: Density) {
         self.with_tree(|tree| tree.set_density(density));
-        self.frame_requested.set(true);
+        self.wake();
     }
 
     /// Runs `f` with the tree.
@@ -109,7 +125,10 @@ impl UiHost {
         let bodies = compose_runtime::bodies_run();
         let recomposed = self.composition.has_invalidations() && self.composition.recompose();
         let size = self.size;
-        let (measured, drew) = self.with_tree(|tree| (tree.layout(size), tree.draw()));
+        let (measured, drew, actions) =
+            self.with_tree(|tree| (tree.layout(size), tree.draw(), tree.take_pending_actions()));
+        // What composition queued (a focus lost, listeners attached), now that the tree is free.
+        Self::run(actions);
         FrameStats {
             recomposed,
             measured,
@@ -139,12 +158,14 @@ impl UiHost {
     pub fn send_pointer(&mut self, event: PointerEvent) {
         let actions = self.with_tree(|tree| tree.dispatch_pointer(event));
         Self::run(actions);
+        self.wake_if_dirty();
     }
 
     /// Dispatches a key event to the focused node; returns whether it was consumed.
     pub fn send_key(&mut self, event: KeyEvent) -> bool {
         let (consumed, actions) = self.with_tree(|tree| tree.dispatch_key(event));
         Self::run(actions);
+        self.wake_if_dirty();
         consumed
     }
 
@@ -152,6 +173,7 @@ impl UiHost {
     pub fn send_text(&mut self, text: &str) -> bool {
         let (consumed, actions) = self.with_tree(|tree| tree.dispatch_text(text));
         Self::run(actions);
+        self.wake_if_dirty();
         consumed
     }
 
@@ -159,11 +181,13 @@ impl UiHost {
     pub fn request_focus(&mut self, node: NodeId) {
         let actions = self.with_tree(|tree| tree.request_focus(node));
         Self::run(actions);
+        self.wake_if_dirty();
     }
 
     pub fn clear_focus(&mut self) {
         let actions = self.with_tree(|tree| tree.clear_focus());
         Self::run(actions);
+        self.wake_if_dirty();
     }
 
     pub fn semantics_tree(&self, merged: bool) -> SemanticsNode {

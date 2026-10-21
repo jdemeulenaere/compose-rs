@@ -10,6 +10,12 @@ use compose_runtime::ComposeArg;
 #[derive(Clone, Copy, PartialEq, PartialOrd, Default)]
 pub struct Dp(pub f32);
 
+/// `x` rounded to the nearest integer, halves up, as Kotlin's `roundToInt` (`Math.round`), which
+/// Compose's layout uses: `-1.5` rounds to `-1`.
+pub fn round_to_int(x: f32) -> i32 {
+    (x + 0.5).floor() as i32
+}
+
 impl Dp {
     pub const ZERO: Dp = Dp(0.0);
     /// No value: a default meaning "decide elsewhere", as `Dp.Unspecified`.
@@ -137,11 +143,7 @@ impl Density {
     /// The number of pixels for `dp`, rounded as Compose's `roundToPx`.
     pub fn round_to_px(&self, dp: Dp) -> i32 {
         let px = dp.0 * self.density;
-        if px.is_infinite() {
-            if px > 0.0 { i32::MAX } else { i32::MIN }
-        } else {
-            px.round() as i32
-        }
+        if px.is_infinite() { if px > 0.0 { i32::MAX } else { i32::MIN } } else { round_to_int(px) }
     }
 
     pub fn to_px(&self, dp: Dp) -> f32 {

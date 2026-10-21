@@ -67,7 +67,7 @@ impl Arrangement {
             let mut position = start;
             for index in 0..count {
                 let index = if reverse { count - 1 - index } else { index };
-                positions[index] = position.round() as i32;
+                positions[index] = compose_ui::unit::round_to_int(position);
                 position += sizes[index] as f32 + gap;
             }
         };

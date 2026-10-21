@@ -86,7 +86,39 @@ impl SemanticsConfiguration {
         if self.selected.is_none() {
             self.selected = child.selected;
         }
+        // Compose's default merge policy, parent ?: child: a flag set below is set here.
         self.editable |= child.editable;
+        self.focused |= child.focused;
+        self.focusable |= child.focusable;
+        self.disabled |= child.disabled;
+    }
+
+    /// Sets the properties `other` sets, as applying another semantics modifier: lists append,
+    /// set values replace, flags are or'ed.
+    pub fn apply(&mut self, other: &SemanticsConfiguration) {
+        self.merge_descendants |= other.merge_descendants;
+        self.text.extend(other.text.iter().cloned());
+        self.content_description.extend(other.content_description.iter().cloned());
+        if other.editable_text.is_some() {
+            self.editable_text = other.editable_text.clone();
+        }
+        if other.test_tag.is_some() {
+            self.test_tag = other.test_tag.clone();
+        }
+        if other.role.is_some() {
+            self.role = other.role;
+        }
+        if other.toggleable_state.is_some() {
+            self.toggleable_state = other.toggleable_state;
+        }
+        if other.selected.is_some() {
+            self.selected = other.selected;
+        }
+        self.disabled |= other.disabled;
+        self.focusable |= other.focusable;
+        self.focused |= other.focused;
+        self.clickable |= other.clickable;
+        self.editable |= other.editable;
     }
 
     /// All text, editable text first, joined by ", ": what text finders match.
@@ -213,19 +245,25 @@ impl UiTree {
         let mut config = SemanticsConfiguration::default();
         let mut layer = 0;
         let mut first_layer = None;
+        let mut merging_layer = None;
         for index in 0..value.chain.len() {
             let bits = value.capabilities[index];
             if bits & capability::SEMANTICS != 0
                 && let Some(semantics) = value.chain[index].as_semantics()
             {
+                let merging = config.merge_descendants;
                 semantics.apply_semantics(&mut config);
                 first_layer.get_or_insert(layer);
+                // A merging node's bounds are those of the modifier that merges.
+                if !merging && config.merge_descendants {
+                    merging_layer = Some(layer);
+                }
             }
             if bits & capability::LAYOUT != 0 {
                 layer += 1;
             }
         }
-        Some((config, first_layer.unwrap_or(0)))
+        Some((config, merging_layer.or(first_layer).unwrap_or(0)))
     }
 
     /// The semantics tree, as Compose's: merged (`merged`), a node merging its descendants

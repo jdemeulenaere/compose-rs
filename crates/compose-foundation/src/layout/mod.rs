@@ -178,13 +178,13 @@ impl MeasurePolicy for RowColumnMeasurePolicy {
                 - measurables
                     .iter()
                     .filter_map(|&measurable| scope.parent_data(measurable).weight)
-                    .map(|(weight, _)| (weight * per_weight).round() as i32)
+                    .map(|(weight, _)| compose_ui::unit::round_to_int(weight * per_weight))
                     .sum::<i32>();
             for (index, &measurable) in measurables.iter().enumerate() {
                 let Some((weight, fill)) = scope.parent_data(measurable).weight else { continue };
                 let step = rounding.signum();
                 rounding -= step;
-                let size = ((weight * per_weight).round() as i32 + step).max(0);
+                let size = (compose_ui::unit::round_to_int(weight * per_weight) + step).max(0);
                 let child = AxisConstraints {
                     main_min: if fill { size } else { 0 },
                     main_max: size,

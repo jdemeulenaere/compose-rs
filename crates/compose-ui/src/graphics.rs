@@ -148,6 +148,36 @@ pub enum Outline {
     Rounded(Rect, [f32; 4]),
 }
 
+impl Outline {
+    /// Whether `point` is inside the outline: for clipping hit tests.
+    pub fn contains(&self, point: crate::unit::Offset) -> bool {
+        match self {
+            Outline::Rectangle(rect) => rect.contains(point),
+            Outline::Rounded(rect, radii) => {
+                if !rect.contains(point) {
+                    return false;
+                }
+                // Each corner's circle: top left, top right, bottom right, bottom left.
+                let corners = [
+                    (rect.left + radii[0], rect.top + radii[0], radii[0]),
+                    (rect.right - radii[1], rect.top + radii[1], radii[1]),
+                    (rect.right - radii[2], rect.bottom - radii[2], radii[2]),
+                    (rect.left + radii[3], rect.bottom - radii[3], radii[3]),
+                ];
+                corners.iter().enumerate().all(|(index, &(x, y, radius))| {
+                    let beyond_x = if index == 0 || index == 3 { point.x < x } else { point.x > x };
+                    let beyond_y = if index < 2 { point.y < y } else { point.y > y };
+                    if !(beyond_x && beyond_y) {
+                        return true;
+                    }
+                    let (dx, dy) = (point.x - x, point.y - y);
+                    dx * dx + dy * dy <= radius * radius
+                })
+            }
+        }
+    }
+}
+
 /// How a shape is drawn: filled, or stroked with a width in pixels.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum PaintStyle {

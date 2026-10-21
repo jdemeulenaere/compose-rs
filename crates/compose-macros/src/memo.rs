@@ -68,6 +68,11 @@ fn is_call_macro(name: &str) -> bool {
     crate::regions::is_pascal_case(name)
 }
 
+/// The modifiers whose closure arguments become callbacks (`impl IntoCallback`); others
+/// (`semantics`, a user's `then_if(cond, |m| …)`) take closures they run at once.
+const CALLBACK_MODIFIERS: &[&str] =
+    &["clickable", "clickable_with", "toggleable", "on_focus_changed", "on_key_event"];
+
 /// Whether `receiver` is a modifier chain: method calls on the path `Modifier`.
 fn is_modifier_chain(receiver: &Expr) -> bool {
     match receiver {
@@ -785,7 +790,10 @@ impl VisitMut for Memoize {
             // A closure argument in a modifier chain (`Modifier.clickable(move || …)`) becomes
             // a callback: modifiers take `impl IntoCallback`, so it is memoized, and the
             // modifier stays `same` when its captures do.
-            Expr::MethodCall(call) if is_modifier_chain(&call.receiver) => {
+            Expr::MethodCall(call)
+                if is_modifier_chain(&call.receiver)
+                    && CALLBACK_MODIFIERS.contains(&call.method.to_string().as_str()) =>
+            {
                 self.visit_expr_mut(&mut call.receiver);
                 for argument in &mut call.args {
                     if let Expr::Closure(closure) = argument {

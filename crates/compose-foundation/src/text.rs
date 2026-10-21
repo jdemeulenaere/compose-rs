@@ -38,6 +38,7 @@ impl ModifierNodeElement for TextElement {
             options: self.options,
             paragraph: None,
             constraints: None,
+            density: None,
             stale: Vec::new(),
         })
     }
@@ -74,6 +75,8 @@ pub struct TextNode {
     options: TextLayoutOptions,
     paragraph: Option<ParagraphHandle>,
     constraints: Option<Constraints>,
+    /// The density it was laid out at: a new one lays it out again.
+    density: Option<compose_ui::Density>,
     /// Paragraphs replaced by an update, released at the next measurement (an update can't
     /// reach the measurer).
     stale: Vec<ParagraphHandle>,
@@ -110,7 +113,9 @@ impl LayoutModifierNode for TextNode {
         let width_changed = self.constraints.is_none_or(|old| {
             old.min_width != constraints.min_width || old.max_width != constraints.max_width
         });
-        if width_changed || self.paragraph.is_none() {
+        let density = scope.density();
+        if width_changed || self.paragraph.is_none() || self.density != Some(density) {
+            self.density = Some(density);
             if let Some(old) = self.paragraph.take() {
                 scope.text_measurer().release(old);
             }
