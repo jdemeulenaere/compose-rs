@@ -384,3 +384,37 @@ fn a_slider_takes_set_progress_snapped_to_its_steps() {
     let info = ui.on_node_with_tag("slider").fetch_semantics_node().config.progress_bar_range_info;
     assert_eq!(info.map(|info| info.current), Some(0.25));
 }
+
+#[test]
+fn a_right_to_left_slider_runs_from_the_right() {
+    use compose_ui::{LayoutDirection, Offset, PointerEvent};
+    let value = mutable_state_of(0.0f32);
+    let handle = value.handle();
+    let mut ui = compose_test(move || {
+        MaterialTheme!({
+            Slider!(
+                handle.get(),
+                move |new| handle.set(new),
+                modifier = Modifier.test_tag("slider")
+            );
+        });
+    });
+    ui.host().set_layout_direction(LayoutDirection::Rtl);
+    ui.wait_for_idle();
+    let bounds = ui.on_node_with_tag("slider").fetch_semantics_node().bounds;
+    // A tap near the left end: near the range's end.
+    let at = Offset::new(bounds.left + 12.0, bounds.top + bounds.height() / 2.0);
+    ui.host().send_pointer(PointerEvent::press(at));
+    ui.host().send_pointer(PointerEvent::release(at));
+    ui.wait_for_idle();
+    assert!(value.get() > 0.95, "{}", value.get());
+    // The thumb is drawn on the left: the display list mirrors the slider.
+    let list = ui.host().display_list();
+    assert!(
+        list.ops
+            .iter()
+            .any(|op| matches!(op, compose_ui::DrawOp::Transform { scale, .. } if scale.0 == -1.0)),
+        "{}",
+        list.dump()
+    );
+}

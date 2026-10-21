@@ -65,7 +65,8 @@ impl UiTree {
             }) else {
                 continue;
             };
-            let position = provider.position(anchor, window, size);
+            let direction = self.node(node).layout_direction;
+            let position = provider.position(anchor, window, direction, size);
             let value = self.node_mut(node);
             value.overlay_origin = crate::unit::Offset::new(position.x as f32, position.y as f32);
             if focus {
@@ -202,8 +203,9 @@ impl UiTree {
             let custom = value.capabilities[index] & capability::CUSTOM != 0;
             let run = self.next_measure_run();
             let observer = if custom { self.observer.clone() } else { None };
+            let mut relative = Vec::new();
             let result = panic::catch_unwind(AssertUnwindSafe(|| {
-                let mut scope = MeasureScope { tree: &mut *self, node, run };
+                let mut scope = MeasureScope { tree: &mut *self, node, run, relative: Vec::new() };
                 let content = Measurable { node, layer: layer as u32 + 1 };
                 let mut measure = || {
                     modifier_node.as_layout().expect("compose-ui: a layout node").measure(
@@ -212,13 +214,17 @@ impl UiTree {
                         constraints,
                     )
                 };
-                match &observer {
+                let result = match &observer {
                     Some(observer) => observer.observe(observation_key(node, false), measure),
                     None => measure(),
-                }
+                };
+                relative = scope.relative;
+                result
             }));
             self.node_mut(node).chain[index] = modifier_node;
-            self.recover(node, result)
+            let result = self.recover(node, result);
+            self.mirror(relative, result.width);
+            result
         } else {
             let policy = value.policy.clone();
             let children = mem::take(&mut value.children);
@@ -229,17 +235,22 @@ impl UiTree {
             }
             let run = self.next_measure_run();
             let observer = self.observer.clone();
+            let mut relative = Vec::new();
             let result = panic::catch_unwind(AssertUnwindSafe(|| {
-                let mut scope = MeasureScope { tree: &mut *self, node, run };
-                match &observer {
+                let mut scope = MeasureScope { tree: &mut *self, node, run, relative: Vec::new() };
+                let result = match &observer {
                     Some(observer) => observer.observe(observation_key(node, false), || {
                         policy.measure(&mut scope, &children, constraints)
                     }),
                     None => policy.measure(&mut scope, &children, constraints),
-                }
+                };
+                relative = scope.relative;
+                result
             }));
             self.node_mut(node).children = children;
-            self.recover(node, result)
+            let result = self.recover(node, result);
+            self.mirror(relative, result.width);
+            result
         };
         let measured = IntSize::new(result.width.max(0), result.height.max(0));
         let size = constraints.constrain(measured);
@@ -265,6 +276,18 @@ impl UiTree {
                 self.invalidate_measure(node);
                 panic::resume_unwind(panic)
             }
+        }
+    }
+
+    /// Mirrors what a right-to-left layout of `width` placed relatively: each at its `x` from
+    /// the right edge, as Compose's `placeRelative` (placement order kept).
+    fn mirror(&mut self, relative: Vec<(crate::layout::Placeable, IntOffset)>, width: i32) {
+        for (placeable, at) in relative {
+            let measurable = placeable.measurable;
+            let position = IntOffset::new(width - at.x - placeable.width, at.y);
+            let entry = &mut self.node_mut(measurable.node).layers[measurable.layer as usize];
+            entry.position = position;
+            entry.offset = position + centering(entry);
         }
     }
 

@@ -4,13 +4,19 @@ use compose_runtime::ComposeArg;
 
 use crate::unit::{IntOffset, IntSize};
 
-/// The direction of a layout, as `LayoutDirection`. Only left-to-right is laid out for now.
+/// The direction of a layout, as `LayoutDirection`: right-to-left mirrors what's placed
+/// relatively (`MeasureScope::place_relative`), start and end, and rows.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
 pub enum LayoutDirection {
     #[default]
     Ltr,
     Rtl,
 }
+
+/// The layout direction of what's composed, as Compose's `LocalLayoutDirection`: each layout
+/// node takes it where it's composed; the host provides the window's.
+pub static LOCAL_LAYOUT_DIRECTION: compose_runtime::CompositionLocal<LayoutDirection> =
+    compose_runtime::CompositionLocal::new("LocalLayoutDirection", LayoutDirection::default);
 
 /// A 2D alignment, as `Alignment` (a `BiasAlignment`).
 #[derive(Clone, Copy, PartialEq, Debug)]

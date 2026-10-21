@@ -73,14 +73,24 @@ pub struct AlignmentOffsetPositionProvider {
 }
 
 impl PopupPositionProvider for AlignmentOffsetPositionProvider {
-    fn position(&self, anchor: Rect, _window: IntSize, popup: IntSize) -> IntOffset {
-        let direction = crate::alignment::LayoutDirection::Ltr;
+    fn position(
+        &self,
+        anchor: Rect,
+        _window: IntSize,
+        direction: crate::alignment::LayoutDirection,
+        popup: IntSize,
+    ) -> IntOffset {
         let anchor_size =
             IntSize::new(anchor.width().round() as i32, anchor.height().round() as i32);
         let in_anchor = self.alignment.align(IntSize::new(0, 0), anchor_size, direction);
         let in_popup = self.alignment.align(IntSize::new(0, 0), popup, direction);
+        // The offset goes toward the end: left in a right-to-left layout.
+        let offset_x = match direction {
+            crate::alignment::LayoutDirection::Ltr => self.offset.x,
+            crate::alignment::LayoutDirection::Rtl => -self.offset.x,
+        };
         IntOffset::new(
-            anchor.left.round() as i32 + in_anchor.x - in_popup.x + self.offset.x,
+            anchor.left.round() as i32 + in_anchor.x - in_popup.x + offset_x,
             anchor.top.round() as i32 + in_anchor.y - in_popup.y + self.offset.y,
         )
     }
@@ -110,8 +120,14 @@ pub fn Popup(
 struct SharedProvider(Rc<Cell<AlignmentOffsetPositionProvider>>);
 
 impl PopupPositionProvider for SharedProvider {
-    fn position(&self, anchor: Rect, window: IntSize, popup: IntSize) -> IntOffset {
-        self.0.get().position(anchor, window, popup)
+    fn position(
+        &self,
+        anchor: Rect,
+        window: IntSize,
+        direction: crate::alignment::LayoutDirection,
+        popup: IntSize,
+    ) -> IntOffset {
+        self.0.get().position(anchor, window, direction, popup)
     }
 }
 

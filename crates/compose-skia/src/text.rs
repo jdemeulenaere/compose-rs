@@ -77,17 +77,23 @@ impl SkiaTextMeasurer {
 
 /// Whether the first strong character of `text` is right-to-left (a simplified Unicode bidi
 /// rule P2: Hebrew, Arabic, Syriac, Thaana, N'Ko and their presentation forms).
-fn first_strong_is_rtl(text: &str) -> bool {
+fn first_strong_is_rtl(text: &str) -> Option<bool> {
     for c in text.chars() {
         let code = c as u32;
         if matches!(code, 0x0590..=0x08FF | 0xFB1D..=0xFDFF | 0xFE70..=0xFEFF) {
-            return true;
+            return Some(true);
         }
         if c.is_alphabetic() {
-            return false;
+            return Some(false);
         }
     }
-    false
+    None
+}
+
+/// Whether a paragraph of `text` runs right to left: from its first strong character, else
+/// the layout's direction, as Compose's `TextDirection.Content`.
+fn is_rtl_paragraph(text: &str, options: TextLayoutOptions) -> bool {
+    first_strong_is_rtl(text).unwrap_or(options.direction == compose_ui::LayoutDirection::Rtl)
 }
 
 /// The UTF-16 index of byte `offset` of `text` (SkParagraph indexes in UTF-16).
@@ -140,8 +146,10 @@ impl TextMeasurer for SkiaTextMeasurer {
         let mut paragraph_style = ParagraphStyle::new();
         paragraph_style.set_text_style(&text_style);
         // The direction from the content, as Compose resolves it: right-to-left when the first
-        // strong character is (Hebrew, Arabic and the other right-to-left scripts).
-        if first_strong_is_rtl(text) {
+        // strong character is (Hebrew, Arabic and the other right-to-left scripts), else the
+        // layout's.
+        let right_to_left = is_rtl_paragraph(text, options);
+        if right_to_left {
             paragraph_style.set_text_direction(skia_safe::textlayout::TextDirection::RTL);
         }
         if options.max_lines != u32::MAX {
@@ -180,7 +188,6 @@ impl TextMeasurer for SkiaTextMeasurer {
             line_count: paragraph.line_number().max(1) as u32,
         };
         drop(lines);
-        let right_to_left = first_strong_is_rtl(text);
         let entry = Entry { paragraph, text: text.to_string(), metrics, right_to_left };
         match self.free.pop() {
             Some(index) => {
@@ -256,8 +263,7 @@ impl TextMeasurer for SkiaTextMeasurer {
                 _ => (0.0, entry.paragraph.height()),
             },
         };
-        let rtl_paragraph = first_strong_is_rtl(text);
-        let x = if rtl_paragraph {
+        let x = if entry.right_to_left {
             entry.paragraph.max_width().min(entry.metrics.size.width as f32)
         } else {
             0.0

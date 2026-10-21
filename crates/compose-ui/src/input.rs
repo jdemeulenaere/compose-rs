@@ -182,12 +182,19 @@ pub struct EventContext<'a> {
     /// The pointer's position in the root, while handling a pointer event.
     pub(crate) pointer_position: Option<Offset>,
     pub(crate) density: crate::unit::Density,
+    pub(crate) layout_direction: crate::alignment::LayoutDirection,
 }
 
 impl EventContext<'_> {
     /// The density, to turn dp distances (a touch slop) into pixels.
     pub fn density(&self) -> crate::unit::Density {
         self.density
+    }
+
+    /// The handling node's layout direction: a horizontal scroll goes the other way in a
+    /// right-to-left layout.
+    pub fn layout_direction(&self) -> crate::alignment::LayoutDirection {
+        self.layout_direction
     }
 }
 

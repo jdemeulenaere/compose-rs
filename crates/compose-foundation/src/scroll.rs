@@ -220,10 +220,12 @@ impl LayoutModifierNode for ScrollNode {
         if value != self.state.value_state().get() {
             self.state.value_state().set(value);
         }
+        // Relatively: a horizontal scroll's content starts at the right in a right-to-left
+        // layout, and scrolls toward the left.
         if self.vertical {
-            scope.place(&placeable, 0, -value);
+            scope.place_relative(&placeable, 0, -value);
         } else {
-            scope.place(&placeable, -value, 0);
+            scope.place_relative(&placeable, -value, 0);
         }
         scope.layout(width, height)
     }
@@ -253,7 +255,8 @@ impl PointerInputModifierNode for ScrollNode {
         let (vertical, state) = (self.vertical, self.state.clone());
         let fraction = &mut self.fraction;
         let slop = touch_slop(context);
-        self.drag.on_pointer_event(event, pass, vertical, slop, |delta| {
+        let reverse = !vertical && context.layout_direction() == compose_ui::LayoutDirection::Rtl;
+        self.drag.on_pointer_event(event, pass, vertical, reverse, slop, |delta| {
             scroll_state_by(&state, delta, fraction)
         });
     }
@@ -297,9 +300,14 @@ impl DragScroller {
         event: &mut PointerEvent,
         pass: PointerEventPass,
         vertical: bool,
+        reverse: bool,
         slop: f32,
         mut scroll_by: impl FnMut(f32) -> f32,
     ) {
+        // A horizontal scroll in a right-to-left layout goes the other way, as Compose's
+        // `reverseDirection`.
+        let mut scroll_by =
+            move |delta: f32| if reverse { -scroll_by(-delta) } else { scroll_by(delta) };
         match (event.kind, pass) {
             (PointerEventType::Scroll, PointerEventPass::Main) if !event.consumed => {
                 let delta = if vertical { event.scroll_delta.y } else { event.scroll_delta.x };

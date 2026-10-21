@@ -15,7 +15,14 @@ use crate::unit::{IntOffset, IntSize, Rect};
 /// Where an overlay goes, as Compose's `PopupPositionProvider`: from its anchor's bounds and the
 /// window's size (both in the root's pixels) and its own size.
 pub trait PopupPositionProvider: 'static {
-    fn position(&self, anchor: Rect, window: IntSize, popup: IntSize) -> IntOffset;
+    /// As `calculatePosition(anchorBounds, windowSize, layoutDirection, popupContentSize)`.
+    fn position(
+        &self,
+        anchor: Rect,
+        window: IntSize,
+        layout_direction: crate::alignment::LayoutDirection,
+        popup: IntSize,
+    ) -> IntOffset;
 }
 
 /// An overlay covering the window from its top start: a dialog's scrim, a popup's
@@ -23,7 +30,13 @@ pub trait PopupPositionProvider: 'static {
 pub struct WindowPosition;
 
 impl PopupPositionProvider for WindowPosition {
-    fn position(&self, _anchor: Rect, _window: IntSize, _popup: IntSize) -> IntOffset {
+    fn position(
+        &self,
+        _anchor: Rect,
+        _window: IntSize,
+        _layout_direction: crate::alignment::LayoutDirection,
+        _popup: IntSize,
+    ) -> IntOffset {
         IntOffset::ZERO
     }
 }

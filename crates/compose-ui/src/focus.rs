@@ -139,6 +139,7 @@ impl UiTree {
                 clipboard,
                 pointer_position: None,
                 density,
+                layout_direction: value.layout_direction,
             };
             target.on_focus_changed(focused, &mut context);
         }
@@ -177,6 +178,7 @@ impl UiTree {
                 clipboard,
                 pointer_position: Some(tap),
                 density,
+                layout_direction: value.layout_direction,
             };
             target.on_focus_tap(tap - origin, &mut context);
         }

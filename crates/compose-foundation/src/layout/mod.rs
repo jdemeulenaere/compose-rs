@@ -219,10 +219,21 @@ impl MeasurePolicy for RowColumnMeasurePolicy {
         }
         let mut positions: Buffer<i32> = Buffer::new(count);
         let positions = positions.as_mut();
-        self.arrangement.arrange(main_size, sizes, scope.layout_direction(), &density, positions);
+        // A column's arrangement runs from the top whatever the layout direction.
+        let direction = match self.orientation {
+            Orientation::Horizontal => scope.layout_direction(),
+            Orientation::Vertical => compose_ui::LayoutDirection::Ltr,
+        };
+        self.arrangement.arrange(main_size, sizes, direction, &density, positions);
         for (index, &measurable) in measurables.iter().enumerate() {
             let Some(placeable) = placeables[index] else { continue };
-            let bias = self.cross_bias_of(scope, measurable);
+            let mut bias = self.cross_bias_of(scope, measurable);
+            // A column's start is on the right in a right-to-left layout.
+            if self.orientation == Orientation::Vertical
+                && scope.layout_direction() == compose_ui::LayoutDirection::Rtl
+            {
+                bias = -bias;
+            }
             let cross = VerticalAlignment { bias }.align(self.cross(&placeable), cross_size);
             match self.orientation {
                 Orientation::Horizontal => scope.place(&placeable, positions[index], cross),

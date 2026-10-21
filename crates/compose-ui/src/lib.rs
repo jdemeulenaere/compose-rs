@@ -34,7 +34,9 @@ pub mod tree;
 pub mod unit;
 pub mod window;
 
-pub use alignment::{Alignment, HorizontalAlignment, LayoutDirection, VerticalAlignment};
+pub use alignment::{
+    Alignment, HorizontalAlignment, LOCAL_LAYOUT_DIRECTION, LayoutDirection, VerticalAlignment,
+};
 pub use clipboard::{Clipboard, MemoryClipboard};
 pub use constraints::Constraints;
 pub use display_list::{DisplayList, DrawOp, Renderer};

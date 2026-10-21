@@ -147,7 +147,7 @@ impl LayoutModifierNode for PaddingNode {
         let placeable = scope.measure(content, constraints.offset(-horizontal, -vertical));
         let width = constraints.constrain_width(placeable.width + horizontal);
         let height = constraints.constrain_height(placeable.height + vertical);
-        scope.place(&placeable, start, top);
+        scope.place_relative(&placeable, start, top);
         scope.layout(width, height)
     }
 }
@@ -169,7 +169,8 @@ impl LayoutModifierNode for OffsetNode {
     ) -> MeasureResult {
         let placeable = scope.measure(content, constraints);
         let density = scope.density();
-        scope.place(&placeable, density.round_to_px(self.0), density.round_to_px(self.1));
+        // In the layout direction, as `offset` (not `absoluteOffset`).
+        scope.place_relative(&placeable, density.round_to_px(self.0), density.round_to_px(self.1));
         scope.layout(placeable.width, placeable.height)
     }
 }
@@ -272,7 +273,7 @@ impl LayoutModifierNode for SizeNode {
             Constraints::new(min_width, max_width, min_height, max_height)
         };
         let placeable = scope.measure(content, wrapped);
-        scope.place(&placeable, 0, 0);
+        scope.place_relative(&placeable, 0, 0);
         scope.layout(placeable.width, placeable.height)
     }
 }
@@ -313,7 +314,7 @@ impl LayoutModifierNode for FillNode {
         );
         let placeable =
             scope.measure(content, Constraints::new(min_width, max_width, min_height, max_height));
-        scope.place(&placeable, 0, 0);
+        scope.place_relative(&placeable, 0, 0);
         scope.layout(placeable.width, placeable.height)
     }
 }

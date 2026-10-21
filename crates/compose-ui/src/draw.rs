@@ -12,6 +12,7 @@ pub struct DrawScope<'a> {
     pub(crate) origin: Offset,
     pub(crate) size: Size,
     pub(crate) density: Density,
+    pub(crate) layout_direction: crate::alignment::LayoutDirection,
 }
 
 impl DrawScope<'_> {
@@ -21,6 +22,12 @@ impl DrawScope<'_> {
 
     pub fn density(&self) -> Density {
         self.density
+    }
+
+    /// The node's layout direction, as `DrawScope.layoutDirection`: what's drawn from the start
+    /// (a slider's track, a switch's thumb) is mirrored in right-to-left.
+    pub fn layout_direction(&self) -> crate::alignment::LayoutDirection {
+        self.layout_direction
     }
 
     fn to_list(&self, rect: Rect) -> Rect {

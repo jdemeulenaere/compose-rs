@@ -297,12 +297,12 @@ impl MeasurePolicy for ScaffoldLayout {
             self.padding.set(padding);
         }
         let content = scope.measure(*content, Constraints::fixed(width, height));
-        scope.place(&content, 0, 0);
-        scope.place(&top, 0, 0);
-        scope.place(&bottom, 0, height - bottom.height);
+        scope.place_relative(&content, 0, 0);
+        scope.place_relative(&top, 0, 0);
+        scope.place_relative(&bottom, 0, height - bottom.height);
         if fab.width > 0 && fab.height > 0 {
             let margin = density.round_to_px(16.dp());
-            scope.place(
+            scope.place_relative(
                 &fab,
                 width - fab.width - margin,
                 height - bottom.height - fab.height - margin,

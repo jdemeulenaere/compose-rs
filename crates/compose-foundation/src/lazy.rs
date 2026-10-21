@@ -475,7 +475,7 @@ impl MeasurePolicy for ItemLayout {
             },
         );
         for placeable in &placeables {
-            scope.place(placeable, 0, 0);
+            scope.place_relative(placeable, 0, 0);
         }
         scope.layout(size.width, size.height)
     }
@@ -519,7 +519,8 @@ impl MeasurePolicy for LazyListLayout {
         let info = &self.info;
         let vertical = info.vertical;
         let density = scope.density();
-        let direction = scope.layout_direction();
+        // Laid out left to right; `place_relative` mirrors it all in a right-to-left layout.
+        let direction = compose_ui::LayoutDirection::Ltr;
         let px = |dp: Dp| density.round_to_px(dp);
         let (before, after, cross_before, cross_after) = if vertical {
             (
@@ -839,11 +840,11 @@ impl MeasurePolicy for LazyListLayout {
             if vertical {
                 let space = IntSize::new(width - cross_before - cross_after, placeable.height);
                 let x = info.alignment.align(placeable.size(), space, direction).x;
-                scope.place(placeable, cross_before + x, main);
+                scope.place_relative(placeable, cross_before + x, main);
             } else {
                 let space = IntSize::new(placeable.width, height - cross_before - cross_after);
                 let y = info.alignment.align(placeable.size(), space, direction).y;
-                scope.place(placeable, main, cross_before + y);
+                scope.place_relative(placeable, main, cross_before + y);
             }
         };
         for (placeable, main) in placed.iter().chain(&beyond) {
@@ -958,7 +959,11 @@ impl PointerInputModifierNode for LazyScrollNode {
     ) {
         let state = self.state.clone();
         let slop = crate::scroll::touch_slop(context);
-        self.drag.on_pointer_event(event, pass, self.vertical, slop, |delta| state.dispatch(delta));
+        let reverse =
+            !self.vertical && context.layout_direction() == compose_ui::LayoutDirection::Rtl;
+        self.drag.on_pointer_event(event, pass, self.vertical, reverse, slop, |delta| {
+            state.dispatch(delta)
+        });
     }
 
     fn on_cancel_pointer_input(&mut self) {

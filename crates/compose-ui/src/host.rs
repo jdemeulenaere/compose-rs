@@ -39,6 +39,8 @@ pub struct UiHost {
     waker: Waker,
     /// The density content sees as `LOCAL_DENSITY`.
     density: compose_runtime::OwnedState<Density>,
+    /// The layout direction content sees as `LOCAL_LAYOUT_DIRECTION`.
+    layout_direction: compose_runtime::OwnedState<crate::alignment::LayoutDirection>,
 }
 
 /// The content, skipped when the root recomposes for a new density: only what reads
@@ -89,6 +91,9 @@ impl UiHost {
             pending_content: RefCell::new(None),
             waker,
             density: compose_runtime::mutable_state_of(density),
+            layout_direction: compose_runtime::mutable_state_of(
+                crate::alignment::LayoutDirection::Ltr,
+            ),
         }
     }
 
@@ -144,6 +149,17 @@ impl UiHost {
         }
     }
 
+    /// Lays the content out in `direction` (the window's: right-to-left for Arabic or Hebrew
+    /// locales), as `LocalLayoutDirection` at the root.
+    pub fn set_layout_direction(&mut self, direction: crate::alignment::LayoutDirection) {
+        self.layout_direction.set(direction);
+        self.with_tree(|tree| {
+            let root = tree.root_id();
+            tree.set_layout_direction(root, direction);
+        });
+        self.wake();
+    }
+
     pub fn set_density(&mut self, density: Density) {
         self.with_tree(|tree| tree.set_density(density));
         self.density.set(density);
@@ -186,12 +202,18 @@ impl UiHost {
         let composed = content.is_some();
         if let Some(content) = content {
             let density = self.density.handle();
+            let direction = self.layout_direction.handle();
             let content: compose_runtime::Callback = compose_runtime::callback(content);
             self.composition.set_content(move || {
                 let content = content.clone();
                 compose_runtime::CompositionLocalProvider(
                     LOCAL_DENSITY.provides(density.get()),
-                    move || Content(content),
+                    move || {
+                        compose_runtime::CompositionLocalProvider(
+                            crate::alignment::LOCAL_LAYOUT_DIRECTION.provides(direction.get()),
+                            move || Content(content),
+                        )
+                    },
                 )
             });
         }

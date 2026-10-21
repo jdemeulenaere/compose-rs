@@ -6,9 +6,9 @@ use compose_foundation::ScrollModifiers as _;
 use compose_foundation::layout::{Arrangement, Box, Column, ColumnScope, Row};
 use compose_runtime::{CompositionLocalProvider, composable, remember};
 use compose_ui::{
-    Alignment, Constraints, Dp, IntOffset, IntSize, Layout, Measurable, MeasurePolicy,
-    MeasureResult, MeasureScope, Modifier, Placeable, PopupPositionProvider, PopupProperties, Rect,
-    Role, UnitExt,
+    Alignment, Constraints, Dp, IntOffset, IntSize, Layout, LayoutDirection, Measurable,
+    MeasurePolicy, MeasureResult, MeasureScope, Modifier, Placeable, PopupPositionProvider,
+    PopupProperties, Rect, Role, UnitExt,
 };
 
 use crate::components::Surface;
@@ -199,16 +199,38 @@ struct DropdownMenuPosition {
 }
 
 impl PopupPositionProvider for DropdownMenuPosition {
-    fn position(&self, anchor: Rect, window: IntSize, popup: IntSize) -> IntOffset {
+    fn position(
+        &self,
+        anchor: Rect,
+        window: IntSize,
+        layout_direction: LayoutDirection,
+        popup: IntSize,
+    ) -> IntOffset {
         let (left, right) = (anchor.left.round() as i32, anchor.right.round() as i32);
         let (top, bottom) = (anchor.top.round() as i32, anchor.bottom.round() as i32);
-        let start_to_anchor_start = left + self.offset.x;
-        let end_to_anchor_end = right - self.offset.x - popup.width;
-        let to_window = if left >= 0 { window.width - popup.width } else { 0 };
-        let x = [start_to_anchor_start, end_to_anchor_end, to_window]
+        let ltr = layout_direction == LayoutDirection::Ltr;
+        // The offset goes toward the end: left in a right-to-left layout.
+        let offset_x = if ltr { self.offset.x } else { -self.offset.x };
+        let left_to_anchor_left = left + offset_x;
+        let right_to_anchor_right = right + offset_x - popup.width;
+        let right_to_window_right = window.width - popup.width;
+        let candidates = if ltr {
+            [
+                left_to_anchor_left,
+                right_to_anchor_right,
+                if left >= 0 { right_to_window_right } else { 0 },
+            ]
+        } else {
+            [
+                right_to_anchor_right,
+                left_to_anchor_left,
+                if right <= window.width { 0 } else { right_to_window_right },
+            ]
+        };
+        let x = candidates
             .into_iter()
             .find(|&x| x >= 0 && x + popup.width <= window.width)
-            .unwrap_or(end_to_anchor_end);
+            .unwrap_or(candidates[1]);
         let margin = self.vertical_margin;
         let top_to_anchor_bottom = (bottom + self.offset.y).max(margin);
         let bottom_to_anchor_top = top - self.offset.y - popup.height;
@@ -322,7 +344,7 @@ impl MeasurePolicy for MenuColumn {
             measurables.iter().map(|&child| scope.measure(child, item)).collect();
         let mut y = 0;
         for placeable in &placeables {
-            scope.place(placeable, 0, y);
+            scope.place_relative(placeable, 0, y);
             y += placeable.height;
         }
         scope.layout(constraints.constrain_width(width), constraints.constrain_height(y))
@@ -437,7 +459,7 @@ impl MeasurePolicy for MenuItemLayout {
         );
         let mut x = 0;
         for placeable in placeables.iter().flatten() {
-            scope.place(placeable, x, (height - placeable.height) / 2);
+            scope.place_relative(placeable, x, (height - placeable.height) / 2);
             x += placeable.width + gap;
         }
         scope.layout(width, height)

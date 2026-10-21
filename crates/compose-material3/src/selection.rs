@@ -176,6 +176,13 @@ pub(crate) fn blend(from: Color, to: Color, fraction: f32) -> Color {
 
 impl DrawModifierNode for SwitchNode {
     fn draw(&mut self, scope: &mut DrawScope<'_>) {
+        mirrored_in_rtl(scope, |scope| self.draw_start_to_end(scope));
+    }
+}
+
+impl SwitchNode {
+    /// Drawn from the start on the left (mirrored in a right-to-left layout).
+    fn draw_start_to_end(&mut self, scope: &mut DrawScope<'_>) {
         // Read while drawing: each animation frame redraws the switch only.
         let progress = self.progress.value().clamp(0.0, 1.0);
         let size = scope.size();
@@ -230,6 +237,20 @@ impl DrawModifierNode for SwitchNode {
             Paint::fill(blend(unchecked_thumb, checked_thumb, progress)),
         );
     }
+}
+
+/// Draws with `draw`, mirrored around the node's center in a right-to-left layout: a switch's
+/// thumb and a slider's track go from the right, as Compose's.
+fn mirrored_in_rtl(scope: &mut DrawScope<'_>, draw: impl FnOnce(&mut DrawScope<'_>)) {
+    if scope.layout_direction() != compose_ui::LayoutDirection::Rtl {
+        draw(scope);
+        return;
+    }
+    let size = scope.size();
+    scope.save();
+    scope.transform(Offset::new(size.width / 2.0, 0.0), (-1.0, 1.0), 0.0, Offset::ZERO);
+    draw(scope);
+    scope.restore();
 }
 
 // ---- RadioButton -----------------------------------------------------------------------------
@@ -620,6 +641,13 @@ impl LayoutModifierNode for SliderNode {
 
 impl DrawModifierNode for SliderNode {
     fn draw(&mut self, scope: &mut DrawScope<'_>) {
+        mirrored_in_rtl(scope, |scope| self.draw_start_to_end(scope));
+    }
+}
+
+impl SliderNode {
+    /// Drawn from the start on the left (mirrored in a right-to-left layout).
+    fn draw_start_to_end(&mut self, scope: &mut DrawScope<'_>) {
         let size = scope.size();
         let density = scope.density();
         let colors = &self.colors;
@@ -691,6 +719,12 @@ impl PointerInputModifierNode for SliderNode {
         let radius = self.radius;
         let span = (bounds.width as f32 - 2.0 * radius).max(1.0);
         let fraction = (event.position.x - radius) / span;
+        // From the right in a right-to-left layout.
+        let fraction = if context.layout_direction() == compose_ui::LayoutDirection::Rtl {
+            1.0 - fraction
+        } else {
+            fraction
+        };
         let slop = context.density().to_px(8.dp());
         match event.kind {
             PointerEventType::Press if !event.consumed => {
@@ -777,7 +811,11 @@ impl KeyInputModifierNode for SliderNode {
         }
         let step = if self.steps > 0 { 1.0 / (self.steps + 1) as f32 } else { 0.01 };
         let fraction = self.fraction_of(self.asked.unwrap_or(self.value));
+        // Right is toward the start in a right-to-left layout, as Compose Desktop's.
+        let rtl = context.layout_direction() == compose_ui::LayoutDirection::Rtl;
         let target = match event.key {
+            Key::DirectionRight if rtl => fraction - step,
+            Key::DirectionLeft if rtl => fraction + step,
             Key::DirectionRight | Key::DirectionUp => fraction + step,
             Key::DirectionLeft | Key::DirectionDown => fraction - step,
             Key::MoveHome => 0.0,

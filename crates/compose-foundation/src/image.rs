@@ -200,7 +200,7 @@ impl DrawModifierNode for ImageNode {
             (source.height * scale_y).round() as i32,
         );
         let space = IntSize::new(bounds.width.round() as i32, bounds.height.round() as i32);
-        let at = self.alignment.align(drawn, space, compose_ui::LayoutDirection::Ltr);
+        let at = self.alignment.align(drawn, space, scope.layout_direction());
         // Clipped to the node, as Compose's `Image`.
         scope.save();
         scope.clip_outline(compose_ui::Outline::Rectangle(Rect::new(

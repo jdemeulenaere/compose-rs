@@ -51,7 +51,7 @@ fn a_click_during_a_composition_does_not_panic() {
     let one = measurer.layout(
         "é",
         &TextStyle::DEFAULT,
-        TextLayoutOptions { soft_wrap: false, max_lines: 1 },
+        TextLayoutOptions { soft_wrap: false, max_lines: 1, ..Default::default() },
         Constraints::new(0, i32::MAX, 0, i32::MAX),
         &Density::default(),
     );

@@ -90,6 +90,7 @@ impl UiTree {
                         origin: origins[layer],
                         size: value.layers[layer].measured.into(),
                         density,
+                        layout_direction: value.layout_direction,
                     };
                     if let Some(draw) = value.chain[index].as_draw() {
                         draw.draw(&mut scope);
@@ -123,6 +124,7 @@ impl UiTree {
                 origin: origins[layer as usize],
                 size: value.layers[layer as usize].measured.into(),
                 density,
+                layout_direction: value.layout_direction,
             };
             if let Some(draw) = value.chain[index as usize].as_draw() {
                 draw.draw_after(&mut scope);

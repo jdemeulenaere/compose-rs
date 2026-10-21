@@ -111,10 +111,11 @@ pub fn GalleryWith(about: bool) {
                                     Card!(modifier = Modifier.fill_max_width(), {
                                         Row!(
                                             modifier = Modifier.padding(12.dp()),
+                                            horizontal_arrangement = Arrangement::spaced_by(8.dp()),
                                             vertical_alignment = Alignment::CENTER_VERTICALLY,
                                             {
                                                 Icon!(icons::filled::star(), None);
-                                                Text!("  Card {}", index);
+                                                Text!("Card {}", index);
                                             }
                                         );
                                     });

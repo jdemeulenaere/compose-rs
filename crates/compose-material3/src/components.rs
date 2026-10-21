@@ -557,7 +557,7 @@ impl compose_ui::MeasurePolicy for TextFieldLayout {
             vertical
         };
         if let Some(label) = &label {
-            scope.place(label, horizontal, vertical);
+            scope.place_relative(label, horizontal, vertical);
         }
         if let Some(placeholder) = &placeholder {
             let y = if self.has_label || !self.single_line {
@@ -565,10 +565,10 @@ impl compose_ui::MeasurePolicy for TextFieldLayout {
             } else {
                 (height - placeholder.height) / 2
             };
-            scope.place(placeholder, horizontal, y);
+            scope.place_relative(placeholder, horizontal, y);
         }
-        scope.place(&text, horizontal, text_y);
-        scope.place(&indicator, 0, height - indicator.height);
+        scope.place_relative(&text, horizontal, text_y);
+        scope.place_relative(&indicator, 0, height - indicator.height);
         scope.layout(width, height)
     }
 }

@@ -155,6 +155,7 @@ impl UiTree {
                     clipboard,
                     pointer_position: Some(position),
                     density,
+                    layout_direction: value.layout_direction,
                 };
                 if let Some(handler) = value.chain[entry.index as usize].as_pointer_input() {
                     handler.on_pointer_event(&mut event, pass, bounds, &mut context);
@@ -263,6 +264,7 @@ impl UiTree {
                 clipboard,
                 pointer_position: None,
                 density,
+                layout_direction: value.layout_direction,
             };
             if let Some(semantics) = value.chain[index].as_semantics()
                 && semantics.perform_action(action, &mut context)
@@ -317,6 +319,7 @@ impl UiTree {
                 clipboard,
                 pointer_position: None,
                 density,
+                layout_direction: value.layout_direction,
             };
             if let Some(handler) = value.chain[index].as_key_input()
                 && handler.on_key_event(&event, &mut context)
@@ -406,6 +409,7 @@ impl UiTree {
                 clipboard,
                 pointer_position: None,
                 density,
+                layout_direction: value.layout_direction,
             };
             if let Some(handler) = value.chain[index].as_key_input()
                 && send(handler, &mut context)

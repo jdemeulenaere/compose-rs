@@ -70,6 +70,9 @@ pub struct MeasureScope<'a> {
     pub(crate) node: NodeId,
     /// This measurement, to reject a child measured twice in it.
     pub(crate) run: u64,
+    /// What `place_relative` placed in a right-to-left layout, mirrored once the layout's
+    /// width is known.
+    pub(crate) relative: Vec<(Placeable, IntOffset)>,
 }
 
 impl MeasureScope<'_> {
@@ -82,8 +85,9 @@ impl MeasureScope<'_> {
         self.tree.window
     }
 
+    /// The direction of the layout being measured, as `MeasureScope.layoutDirection`.
     pub fn layout_direction(&self) -> LayoutDirection {
-        LayoutDirection::Ltr
+        self.tree.node(self.node).layout_direction
     }
 
     pub fn text_measurer(&mut self) -> &mut dyn TextMeasurer {
@@ -152,9 +156,13 @@ impl MeasureScope<'_> {
         self.tree.place(measurable.node, measurable.layer as usize, position);
     }
 
-    /// Places in the layout direction: as `place`, until right-to-left layout exists.
+    /// Places `placeable` at `x` from the start, as `placeRelative`: in a right-to-left
+    /// layout, mirrored in the width the layout reports (`x` from its right edge).
     pub fn place_relative(&mut self, placeable: &Placeable, x: i32, y: i32) {
-        self.place(placeable, x, y)
+        self.place(placeable, x, y);
+        if self.layout_direction() == LayoutDirection::Rtl {
+            self.relative.push((*placeable, IntOffset::new(x, y)));
+        }
     }
 
     /// The result of a measurement of `width` by `height`, as `MeasureScope.layout`.
@@ -183,7 +191,7 @@ impl MeasurePolicy for StackMeasurePolicy {
         let (mut width, mut height) = (constraints.min_width, constraints.min_height);
         for &measurable in measurables {
             let placeable = scope.measure(measurable, loose);
-            scope.place(&placeable, 0, 0);
+            scope.place_relative(&placeable, 0, 0);
             width = width.max(placeable.width);
             height = height.max(placeable.height);
         }
@@ -236,8 +244,10 @@ pub fn emit_layout_node(
     let node = composer.start_node(compose_runtime::key_of("compose_ui::Layout"), || {
         crate::tree::LayoutNode::new(measure_policy.clone())
     });
+    let direction = crate::alignment::LOCAL_LAYOUT_DIRECTION.current();
     composer.with_applier(|tree: &mut UiTree| {
         let id = tree.id_of(node);
+        tree.set_layout_direction(id, direction);
         tree.set_measure_policy(id, measure_policy);
         tree.set_modifier(id, modifier);
     });

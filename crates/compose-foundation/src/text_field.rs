@@ -621,6 +621,7 @@ impl LayoutModifierNode for TextFieldNode {
                 let options = TextLayoutOptions {
                     soft_wrap: !self.single_line,
                     max_lines: if self.single_line { 1 } else { u32::MAX },
+                    direction: scope.layout_direction(),
                 };
                 // The field's minimum width too, as Compose's text delegate: right-to-left text
                 // starts at the field's right edge.

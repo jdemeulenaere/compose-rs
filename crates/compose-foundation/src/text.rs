@@ -19,7 +19,11 @@ pub fn BasicText(
     #[default(true)] soft_wrap: bool,
     #[default(u32::MAX)] max_lines: u32,
 ) {
-    let element = TextElement { text, style, options: TextLayoutOptions { soft_wrap, max_lines } };
+    let element = TextElement {
+        text,
+        style,
+        options: TextLayoutOptions { soft_wrap, max_lines, ..Default::default() },
+    };
     Layout(modifier.then_custom(element), empty_measure_policy(), compose_runtime::callback(|| {}));
 }
 
@@ -39,6 +43,7 @@ impl ModifierNodeElement for TextElement {
             paragraph: None,
             constraints: None,
             density: None,
+            direction: compose_ui::LayoutDirection::Ltr,
             stale: Vec::new(),
             overflows: false,
         })
@@ -78,6 +83,8 @@ pub struct TextNode {
     constraints: Option<Constraints>,
     /// The density it was laid out at: a new one lays it out again.
     density: Option<compose_ui::Density>,
+    /// The layout direction it was laid out in (its fallback paragraph direction).
+    direction: compose_ui::LayoutDirection,
     /// Paragraphs replaced by an update, released at the next measurement (an update can't
     /// reach the measurer).
     stale: Vec<ParagraphHandle>,
@@ -117,8 +124,14 @@ impl LayoutModifierNode for TextNode {
             old.min_width != constraints.min_width || old.max_width != constraints.max_width
         });
         let density = scope.density();
-        if width_changed || self.paragraph.is_none() || self.density != Some(density) {
+        let direction = scope.layout_direction();
+        if width_changed
+            || self.paragraph.is_none()
+            || self.density != Some(density)
+            || self.direction != direction
+        {
             self.density = Some(density);
+            self.direction = direction;
             if let Some(old) = self.paragraph.take() {
                 scope.text_measurer().release(old);
             }
@@ -126,7 +139,7 @@ impl LayoutModifierNode for TextNode {
             let paragraph = scope.text_measurer().layout(
                 &self.text,
                 &self.style,
-                self.options,
+                TextLayoutOptions { direction, ..self.options },
                 constraints,
                 &density,
             );

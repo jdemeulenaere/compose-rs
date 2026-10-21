@@ -195,11 +195,18 @@ pub struct TextLayoutOptions {
     pub soft_wrap: bool,
     /// Lines past this are cut (clipped), as `TextOverflow.Clip`.
     pub max_lines: u32,
+    /// The paragraph's direction when its text has no strong character (the layout's), as
+    /// `TextDirection.Content`'s fallback.
+    pub direction: crate::alignment::LayoutDirection,
 }
 
 impl Default for TextLayoutOptions {
     fn default() -> Self {
-        TextLayoutOptions { soft_wrap: true, max_lines: u32::MAX }
+        TextLayoutOptions {
+            soft_wrap: true,
+            max_lines: u32::MAX,
+            direction: crate::alignment::LayoutDirection::Ltr,
+        }
     }
 }
 
@@ -471,7 +478,7 @@ mod tests {
         let single =
             measurer.layout("hi", &style, options, Constraints::unbounded(), &Density::new(2.0));
         assert_eq!(measurer.cursor_rect(handle, 13), crate::unit::Rect::new(5.0, 12.5, 5.0, 25.0));
-        let clipped = TextLayoutOptions { soft_wrap: true, max_lines: 1 };
+        let clipped = TextLayoutOptions { soft_wrap: true, max_lines: 1, ..Default::default() };
         let one_line = measurer.layout(
             "hello brave world",
             &style,

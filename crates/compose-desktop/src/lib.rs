@@ -61,6 +61,9 @@ pub struct WindowOptions {
     /// What's drawn under the content.
     pub background: Color,
     pub resizable: bool,
+    /// The content's layout direction (`LOCAL_LAYOUT_DIRECTION` at the root): right-to-left
+    /// for an Arabic or Hebrew interface.
+    pub layout_direction: compose_ui::LayoutDirection,
 }
 
 impl Default for WindowOptions {
@@ -70,6 +73,7 @@ impl Default for WindowOptions {
             size: WindowSize { width: 800.0, height: 600.0 },
             background: Color::WHITE,
             resizable: true,
+            layout_direction: compose_ui::LayoutDirection::Ltr,
         }
     }
 }
@@ -170,12 +174,13 @@ impl<C: Fn() + 'static> App<C> {
             softbuffer::Surface::new(&context, window.clone()).expect("compose-desktop: a surface");
         let size = window.inner_size();
         let density = Density::new(window.scale_factor() as f32);
-        let host = UiHost::new(
+        let mut host = UiHost::new(
             IntSize::new(size.width as i32, size.height as i32),
             density,
             Box::new(SkiaTextMeasurer::new()),
         );
         host.with_tree(|tree| tree.set_clipboard(Box::new(SystemClipboard::new())));
+        host.set_layout_direction(self.options.layout_direction);
         let waker = window.clone();
         host.set_frame_waker(move || waker.request_redraw());
         // A task woken (from any thread) or waiting for a frame: a turn of the loop, which runs

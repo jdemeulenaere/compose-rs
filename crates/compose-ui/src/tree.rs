@@ -137,6 +137,8 @@ pub struct LayoutNode {
     pub(crate) placed: bool,
     /// The parent measurement that last measured it, to reject measuring it twice.
     pub(crate) measured_in: u64,
+    /// The layout direction where it was composed (`LOCAL_LAYOUT_DIRECTION`).
+    pub(crate) layout_direction: crate::alignment::LayoutDirection,
     /// Its parent asked its intrinsic width in its last measurement: a change inside it
     /// measures the parent again, not just it in place.
     pub(crate) intrinsics_asked: bool,
@@ -169,6 +171,7 @@ impl LayoutNode {
             placed: false,
             measured_in: 0,
             intrinsics_asked: false,
+            layout_direction: crate::alignment::LayoutDirection::Ltr,
             overlay: false,
             overlay_origin: crate::unit::Offset::ZERO,
             place_order: 0,
@@ -396,6 +399,23 @@ impl UiTree {
                 self.invalidate_measure(node);
             }
         });
+    }
+
+    /// Sets the node's layout direction, measuring it again if it changed.
+    pub fn set_layout_direction(
+        &mut self,
+        node: NodeId,
+        direction: crate::alignment::LayoutDirection,
+    ) {
+        if self.node(node).layout_direction != direction {
+            self.node_mut(node).layout_direction = direction;
+            self.invalidate_measure(node);
+        }
+    }
+
+    /// The node's layout direction.
+    pub fn layout_direction(&self, node: NodeId) -> crate::alignment::LayoutDirection {
+        self.node(node).layout_direction
     }
 
     pub fn set_measure_policy(&mut self, node: NodeId, policy: Rc<dyn MeasurePolicy>) {
