@@ -277,10 +277,12 @@ fn read_cell_in(
     let scope = runtime.reading_scope();
     let Runtime { cells, scopes, observers, observing, .. } = runtime;
     let entry = cells.entry(id)?;
-    if !scope.is_none() {
-        register_read(entry, scopes, scope);
-    } else if let Some(observing) = *observing {
-        register_observed_read(entry, observers, observing);
+    match *observing {
+        Some(observing) if observing.exclusive || scope.is_none() => {
+            register_observed_read(entry, observers, observing)
+        }
+        _ if !scope.is_none() => register_read(entry, scopes, scope),
+        _ => {}
     }
     Ok(entry.cell.clone().expect("a live cell"))
 }

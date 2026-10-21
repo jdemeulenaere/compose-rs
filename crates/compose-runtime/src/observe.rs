@@ -25,6 +25,9 @@ pub(crate) struct Observing {
     pub(crate) observer: u32,
     pub(crate) key: u64,
     pub(crate) epoch: u32,
+    /// Reads register here even during composition (a derived state's calculation), not with
+    /// the composing scope.
+    pub(crate) exclusive: bool,
 }
 
 /// A state read observed under a key.
@@ -115,6 +118,16 @@ impl ReadObserver {
     /// `key` read). Observations nest: an inner one records its own reads, or adds them to the
     /// outer one's if it has the same key.
     pub fn observe<R>(&self, key: u64, f: impl FnOnce() -> R) -> R {
+        self.observe_with(key, false, f)
+    }
+
+    /// Like [`observe`](Self::observe), recording reads made during composition too, instead of
+    /// registering them with the composing scope: a derived state's calculation.
+    pub(crate) fn observe_exclusive<R>(&self, key: u64, f: impl FnOnce() -> R) -> R {
+        self.observe_with(key, true, f)
+    }
+
+    fn observe_with<R>(&self, key: u64, exclusive: bool, f: impl FnOnce() -> R) -> R {
         let previous = with_runtime(|runtime| {
             // Inside an observation of the same key (a node's layout modifiers around its
             // policy), the reads add to it.
@@ -132,7 +145,7 @@ impl ReadObserver {
                 }
                 None => return runtime.observing,
             };
-            runtime.observing.replace(Observing { observer: self.index, key, epoch })
+            runtime.observing.replace(Observing { observer: self.index, key, epoch, exclusive })
         });
         struct Restore(Option<Observing>);
         impl Drop for Restore {

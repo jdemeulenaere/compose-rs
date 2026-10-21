@@ -81,6 +81,10 @@ A handle can outlive its cell: a handler captures `done`, then the `Todo` is rem
 
 **Reference cycles.** A closure that captures an `Rc<Todo>` and is stored inside that same `Todo`'s state would leak. That's the usual `Rc` caveat. Handles never form cycles, because they're plain indices.
 
+## Derived state
+
+`derived_state_of(|| …)` is a state computed from other state, as Compose's `derivedStateOf`: `let empty = remember(move || derived_state_of(move || items.with(Vec::is_empty)));`. `remember` keeps the `DerivedState` owner in the slot and returns its `Copy` `State<T>` handle. Its calculation runs under a read observer of its own (the one layout and drawing use), so the state it reads, even during composition, registers with the derived state and not with the composing scope. A write to one of them recomputes it at once (after the pass, for a write in an effect), and its readers are invalidated only when the result changed by its policy (`==` by default, `derived_state_of_with(policy, …)` otherwise): a screen reading a list's emptiness recomposes when the list becomes empty, not on every edit. `DerivedState::get` recomputes first if a dependency changed and the recomputation hasn't run yet.
+
 ## Snapshots
 
-Observation only, for now. Reads register scopes, and writes invalidate them at once. There's no snapshot isolation, no MVCC and no concurrent composition. The cell layout reserves room for a record chain, so a later `Snapshot::take_mutable_snapshot` can add isolation without changing user code. `derived_state_of` and `snapshot_flow` come later ([10](10-roadmap.md)).
+Observation only, for now. Reads register scopes, and writes invalidate them at once. There's no snapshot isolation, no MVCC and no concurrent composition. The cell layout reserves room for a record chain, so a later `Snapshot::take_mutable_snapshot` can add isolation without changing user code. `snapshot_flow` comes later ([10](10-roadmap.md)).
