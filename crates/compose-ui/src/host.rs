@@ -270,6 +270,19 @@ impl UiHost {
     }
 
     /// Moves focus to `node`'s focus target.
+    /// Performs a semantics action on `node` (an accessibility service's click or focus), then
+    /// runs the handlers' actions. Returns whether the node did it.
+    pub fn perform_semantics_action(
+        &mut self,
+        node: NodeId,
+        action: crate::semantics::SemanticsAction,
+    ) -> bool {
+        let (performed, actions) =
+            self.with_tree(|tree| tree.perform_semantics_action(node, action));
+        Self::run(actions);
+        performed
+    }
+
     pub fn request_focus(&mut self, node: NodeId) {
         let actions = self.with_tree(|tree| tree.request_focus(node));
         Self::run(actions);

@@ -15,8 +15,8 @@ mod script;
 
 use compose_runtime::executor;
 use compose_ui::{
-    Density, FixedTextMeasurer, IntSize, Key, KeyEvent, NodeId, PointerEvent, SemanticsNode,
-    TextMeasurer, UiHost,
+    Density, FixedTextMeasurer, IntSize, Key, KeyEvent, NodeId, PointerEvent, SemanticsAction,
+    SemanticsNode, TextMeasurer, UiHost,
 };
 
 pub use matcher::{
@@ -319,6 +319,16 @@ impl SemanticsNodeInteraction<'_> {
         let host = &mut self.rule.host;
         host.send_pointer(PointerEvent::press(center));
         host.send_pointer(PointerEvent::release(center));
+        self.rule.wait_for_idle();
+        self
+    }
+
+    /// Performs `action` on the node, as `performSemanticsAction` (an accessibility service's
+    /// request, not input), then waits for idle. Panics if the node doesn't offer it.
+    pub fn perform_semantics_action(&mut self, action: SemanticsAction) -> &mut Self {
+        let node = self.fetch_semantics_node();
+        let performed = self.rule.host.perform_semantics_action(node.id, action);
+        assert!(performed, "compose-test: the node doesn't offer {action:?}: {:?}", node.config);
         self.rule.wait_for_idle();
         self
     }

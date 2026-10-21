@@ -726,6 +726,15 @@ pub trait PointerInputModifierNode {
 /// A node that adds semantics, as `SemanticsModifierNode`.
 pub trait SemanticsModifierNode {
     fn apply_semantics(&self, config: &mut SemanticsConfiguration);
+    /// Performs `action` if this node offers it (as its semantics say), returning whether it
+    /// did.
+    fn perform_action(
+        &mut self,
+        _action: crate::semantics::SemanticsAction,
+        _context: &mut EventContext<'_>,
+    ) -> bool {
+        false
+    }
 }
 
 /// A focus target, as `FocusTargetModifierNode`.

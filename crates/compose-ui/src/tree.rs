@@ -31,6 +31,16 @@ pub struct NodeId {
 }
 
 impl NodeId {
+    /// The id as one number, for platform bridges (accessibility nodes).
+    pub fn to_bits(self) -> u64 {
+        (self.generation as u64) << 32 | self.index as u64
+    }
+
+    /// The id `to_bits` gave.
+    pub fn from_bits(bits: u64) -> NodeId {
+        NodeId { index: bits as u32, generation: (bits >> 32) as u32 }
+    }
+
     fn to_ref(self) -> NodeRef {
         NodeRef::new((self.generation as u64) << 32 | self.index as u64)
     }

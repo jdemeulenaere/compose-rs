@@ -58,7 +58,9 @@ pub use modifier::{
 };
 pub use overlay::{PopupPositionProvider, WindowPosition};
 pub use path::{ImageVector, Path, PathCommand, PathError, PathFillType};
-pub use semantics::{Role, SemanticsConfiguration, SemanticsNode, ToggleableState};
+pub use semantics::{
+    Role, SemanticsAction, SemanticsConfiguration, SemanticsNode, ToggleableState,
+};
 pub use text::{
     FixedTextMeasurer, FontWeight, ParagraphHandle, ParagraphMetrics, SharedString,
     TextLayoutOptions, TextMeasurer, TextPosition, TextStyle,

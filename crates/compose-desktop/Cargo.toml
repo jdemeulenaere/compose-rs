@@ -11,6 +11,8 @@ compose-runtime.workspace = true
 compose-ui.workspace = true
 compose-skia.workspace = true
 winit = "0.30"
+accesskit = "0.25"
+accesskit_winit = "0.34"
 softbuffer = "0.4"
 arboard = { version = "3", default-features = false }
 

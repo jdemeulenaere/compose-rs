@@ -553,6 +553,18 @@ impl PointerInputModifierNode for ClickableNode {
 }
 
 impl SemanticsModifierNode for ClickableNode {
+    fn perform_action(
+        &mut self,
+        action: crate::semantics::SemanticsAction,
+        context: &mut EventContext<'_>,
+    ) -> bool {
+        if action != crate::semantics::SemanticsAction::OnClick || !self.spec.enabled() {
+            return false;
+        }
+        self.spec.fire(context);
+        true
+    }
+
     fn apply_semantics(&self, config: &mut SemanticsConfiguration) {
         config.merge_descendants = true;
         config.clickable = true;

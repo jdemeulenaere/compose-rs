@@ -219,6 +219,55 @@ impl UiTree {
         self.update_focus_listeners(actions);
     }
 
+    // ---- Semantics actions --------------------------------------------------------------
+
+    /// Performs `action` on `node` (a semantics node's id), as an accessibility service asks:
+    /// the first of its semantics modifier nodes offering it does it. Returns whether one did,
+    /// and the queued actions.
+    pub fn perform_semantics_action(
+        &mut self,
+        node: NodeId,
+        action: crate::semantics::SemanticsAction,
+    ) -> (bool, Vec<Action>) {
+        let mut actions = Vec::new();
+        if self.get(node).is_none() {
+            return (false, actions);
+        }
+        if action == crate::semantics::SemanticsAction::RequestFocus {
+            let actions = self.request_focus(node);
+            let focused = self.focused().is_some_and(|focused| self.is_at_or_below(focused, node));
+            return (focused, actions);
+        }
+        let mut requests = Requests::default();
+        let mut performed = false;
+        for index in 0..self.node(node).chain.len() {
+            if self.node(node).capabilities[index] & capability::SEMANTICS == 0 {
+                continue;
+            }
+            let density = self.density;
+            let Some((value, (text_measurer, clipboard))) = self.node_and_measurer(node) else {
+                break;
+            };
+            let mut context = EventContext {
+                node,
+                actions: &mut actions,
+                requests: &mut requests,
+                text_measurer,
+                clipboard,
+                pointer_position: None,
+                density,
+            };
+            if let Some(semantics) = value.chain[index].as_semantics()
+                && semantics.perform_action(action, &mut context)
+            {
+                performed = true;
+                break;
+            }
+        }
+        self.apply_requests(requests, &mut actions);
+        (performed, actions)
+    }
+
     // ---- Keys and text ----------------------------------------------------------------------
 
     /// The key input nodes an event to the focused node visits: the focused node's, innermost

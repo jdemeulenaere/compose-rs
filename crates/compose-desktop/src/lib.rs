@@ -11,6 +11,7 @@
 
 #![forbid(unsafe_code)]
 
+mod accessibility;
 mod input;
 
 use std::num::NonZeroU32;
@@ -24,6 +25,20 @@ use winit::application::ApplicationHandler;
 use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::window::{Window, WindowId};
+
+/// What wakes the event loop besides the window's own events.
+enum UserEvent {
+    /// A task woke, from any thread.
+    Wake,
+    /// An assistive technology asked for the tree or an action.
+    Accessibility(accesskit_winit::Event),
+}
+
+impl From<accesskit_winit::Event> for UserEvent {
+    fn from(event: accesskit_winit::Event) -> UserEvent {
+        UserEvent::Accessibility(event)
+    }
+}
 
 /// A window's size, in `Dp`.
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -108,6 +123,10 @@ struct Shown {
     input: input::InputState,
     /// Where the input method's candidate window was last placed.
     ime_area: Option<compose_ui::Rect>,
+    /// The bridge to screen readers, which asks for the tree only while one is on.
+    accessibility: accesskit_winit::Adapter,
+    /// The focused node the accessibility tree last had.
+    accessibility_focus: Option<compose_ui::NodeId>,
 }
 
 struct App<C: Fn() + 'static> {
@@ -120,7 +139,7 @@ struct App<C: Fn() + 'static> {
     screenshot: Option<std::path::PathBuf>,
     first_input: Option<Instant>,
     /// Wakes the loop from any thread.
-    proxy: winit::event_loop::EventLoopProxy<()>,
+    proxy: winit::event_loop::EventLoopProxy<UserEvent>,
     /// The display's refresh interval: animation frames come at most this often.
     frame_interval: Duration,
     last_frame: Instant,
@@ -134,9 +153,17 @@ impl<C: Fn() + 'static> App<C> {
                 self.options.size.width,
                 self.options.size.height,
             ))
-            .with_resizable(self.options.resizable);
+            .with_resizable(self.options.resizable)
+            // Shown once the accessibility adapter is attached, as AccessKit asks.
+            .with_visible(false);
         let window =
             Arc::new(event_loop.create_window(attributes).expect("compose-desktop: a window"));
+        let accessibility = accesskit_winit::Adapter::with_event_loop_proxy(
+            event_loop,
+            &window,
+            self.proxy.clone(),
+        );
+        window.set_visible(true);
         window.set_ime_allowed(true);
         let context = softbuffer::Context::new(window.clone()).expect("compose-desktop: a display");
         let surface =
@@ -155,7 +182,7 @@ impl<C: Fn() + 'static> App<C> {
         // it or paces the frame (`about_to_wait`).
         let proxy = std::sync::Mutex::new(self.proxy.clone());
         compose_runtime::executor::set_wake_handler(move || {
-            let _ = proxy.lock().map(|proxy| proxy.send_event(()));
+            let _ = proxy.lock().map(|proxy| proxy.send_event(UserEvent::Wake));
         });
         let refresh = window
             .current_monitor()
@@ -175,6 +202,8 @@ impl<C: Fn() + 'static> App<C> {
             renderer,
             input: input::InputState::default(),
             ime_area: None,
+            accessibility,
+            accessibility_focus: None,
         });
     }
 
@@ -228,6 +257,13 @@ impl<C: Fn() + 'static> App<C> {
                 );
             }
         }
+        // Screen readers see what changed (only while one is on: nothing is built otherwise).
+        let focus = shown.host.with_tree(|tree| tree.focused());
+        if stats.recomposed || stats.measured || stats.drew || focus != shown.accessibility_focus {
+            shown.accessibility_focus = focus;
+            let (host, title) = (&shown.host, &self.options.title);
+            shown.accessibility.update_if_active(|| accessibility::tree_update(host, title));
+        }
         self.frames += 1;
         if self.stats {
             let times = FrameTimes {
@@ -270,7 +306,7 @@ impl<C: Fn() + 'static> App<C> {
     }
 }
 
-impl<C: Fn() + 'static> ApplicationHandler for App<C> {
+impl<C: Fn() + 'static> ApplicationHandler<UserEvent> for App<C> {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.shown.is_none() {
             self.open(event_loop);
@@ -278,6 +314,9 @@ impl<C: Fn() + 'static> ApplicationHandler for App<C> {
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _: WindowId, event: WindowEvent) {
+        if let Some(shown) = &mut self.shown {
+            shown.accessibility.process_event(&shown.window, &event);
+        }
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::RedrawRequested => self.redraw(event_loop),
@@ -301,6 +340,23 @@ impl<C: Fn() + 'static> ApplicationHandler for App<C> {
                     input::Outcome::Ignored => {}
                 }
             }
+        }
+    }
+
+    fn user_event(&mut self, _: &ActiveEventLoop, event: UserEvent) {
+        let UserEvent::Accessibility(event) = event else { return };
+        let Some(shown) = &mut self.shown else { return };
+        match event.window_event {
+            accesskit_winit::WindowEvent::InitialTreeRequested => {
+                let (host, title) = (&shown.host, &self.options.title);
+                shown.accessibility.update_if_active(|| accessibility::tree_update(host, title));
+            }
+            accesskit_winit::WindowEvent::ActionRequested(request) => {
+                if accessibility::perform(&mut shown.host, &request) {
+                    shown.window.request_redraw();
+                }
+            }
+            accesskit_winit::WindowEvent::AccessibilityDeactivated => {}
         }
     }
 
@@ -357,7 +413,8 @@ impl<C: Fn() + 'static> ApplicationHandler for App<C> {
 /// Cmd+Q, Ctrl+W on other systems), on the calling thread, which must be the main thread on
 /// macOS.
 pub fn run_app(options: WindowOptions, content: impl Fn() + 'static) {
-    let event_loop = EventLoop::new().expect("compose-desktop: an event loop");
+    let event_loop =
+        EventLoop::<UserEvent>::with_user_event().build().expect("compose-desktop: an event loop");
     let proxy = event_loop.create_proxy();
     let mut app = App {
         options,

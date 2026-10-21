@@ -28,6 +28,17 @@ impl ComposeArg for Role {
     }
 }
 
+/// An action on a semantics node, as `SemanticsActions`: what accessibility services (and tests)
+/// ask of a node instead of sending it input.
+#[derive(Clone, Copy, PartialEq, Debug)]
+#[non_exhaustive]
+pub enum SemanticsAction {
+    /// Click it, as `SemanticsActions.OnClick`.
+    OnClick,
+    /// Focus it, as `SemanticsActions.RequestFocus`.
+    RequestFocus,
+}
+
 /// A toggle's state, as `ToggleableState`.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum ToggleableState {
