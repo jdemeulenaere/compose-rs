@@ -294,7 +294,11 @@ impl AnimationSpec {
                 for index in 0..N {
                     velocities[index] = (values[index] - previous[index]) * 1000.0;
                 }
-                Frame { values, velocities, finished: play_nanos >= keyframes.total_nanos() }
+                // Ended, at the target (whatever a keyframe at the end says), as Compose's.
+                if play_nanos >= keyframes.total_nanos() {
+                    return Frame { values: target, velocities: [0.0; N], finished: true };
+                }
+                Frame { values, velocities, finished: false }
             }
             AnimationSpec::Snap { delay_millis } => {
                 let finished = play_nanos >= u64::from(*delay_millis) * 1_000_000;
@@ -335,6 +339,10 @@ impl AnimationSpec {
                 } else {
                     (count + 1) * duration - play
                 };
+                // Ended, at the target, as Compose's (whichever way the last repetition went).
+                if finished {
+                    return Frame { values: target, velocities: [0.0; N], finished };
+                }
                 let frame = AnimationSpec::from(repeat.animation)
                     .frame(within, start, target, velocity, threshold);
                 Frame { finished, ..frame }

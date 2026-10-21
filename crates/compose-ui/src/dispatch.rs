@@ -354,7 +354,15 @@ impl UiTree {
             let moved = self.move_focus(forward);
             actions.extend(moved);
         }
+        // A press inside a nested container is its: the containers around it let it be.
+        let mut started: Option<NodeId> = None;
         for request in requests.selection {
+            if let crate::text_selection::SelectionRequest::Start { container, .. } = request {
+                if started.is_some_and(|inner| self.is_at_or_below(inner, container)) {
+                    continue;
+                }
+                started = Some(container);
+            }
             self.handle_selection(request);
         }
         if let Some(node) = requests.focus {

@@ -30,6 +30,10 @@ pub trait Selectable {
     fn offset_at(&self, position: Offset, measurer: &mut dyn TextMeasurer) -> Option<usize>;
     /// The word (or run between words) at `offset`: what a double-click selects.
     fn word_at(&self, offset: usize) -> Range<usize>;
+    /// Bumped when its text changes: a selection ending in it is dropped then.
+    fn version(&self) -> u64 {
+        0
+    }
     /// Shows `range` selected (highlighted), or nothing. Returns whether that changed.
     fn set_selection(
         &mut self,
@@ -72,11 +76,13 @@ pub(crate) enum SelectionRequest {
     },
 }
 
-/// A point in a container's texts: the text (its node and chain index) and an offset in it.
+/// A point in a container's texts: a text (its node, the chain index of its selectable, and
+/// the version of its text) and an offset in it.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 struct Point {
-    /// The text's place in the container's order.
-    order: usize,
+    node: NodeId,
+    index: usize,
+    version: u64,
     offset: usize,
 }
 
@@ -88,21 +94,36 @@ pub(crate) struct TextSelection {
     focus: Point,
     /// What the press selected (a word, a text): a drag keeps it whole.
     initial: (Point, Point),
+    unit: Unit,
 }
 
-/// A text below a container: its node, the chain index of its selectable, and its bounds in
-/// the root.
+/// A text below a container: its node, the chain index of its selectable, its bounds in the
+/// root, and its text's version.
 #[derive(Clone, Copy, Debug)]
 struct Entry {
     node: NodeId,
     index: usize,
     origin: Offset,
     size: IntSize,
+    version: u64,
 }
+
+impl Entry {
+    fn point(&self, offset: usize) -> Point {
+        Point { node: self.node, index: self.index, version: self.version, offset }
+    }
+
+    fn holds(&self, point: &Point) -> bool {
+        self.node == point.node && self.index == point.index && self.version == point.version
+    }
+}
+
+/// A selection's ends as places in a container's texts: `(order, offset)`, first to last.
+type Span = ((usize, usize), (usize, usize));
 
 impl UiTree {
     /// The selectable texts below `container`, in order: its subtree's nodes in placement
-    /// order, without what a `DisableSelection` or a nested container holds.
+    /// order, without what a nested container or a `DisableSelection` modifier holds.
     fn selectables(&mut self, container: NodeId) -> Vec<Entry> {
         let mut entries = Vec::new();
         let mut stack = vec![container];
@@ -122,13 +143,13 @@ impl UiTree {
             let mut layer = 0;
             for index in 0..self.node(node).chain.len() {
                 let bits = self.node(node).capabilities[index];
-                let selectable = self
-                    .get_mut(node)
-                    .is_some_and(|value| value.chain[index].as_selectable().is_some());
-                if selectable {
+                let version = self.get_mut(node).and_then(|value| {
+                    value.chain[index].as_selectable().map(|text| text.version())
+                });
+                if let Some(version) = version {
                     let origin = self.layer_origin(node, layer);
                     let size = self.node(node).layers[layer].measured;
-                    entries.push(Entry { node, index, origin, size });
+                    entries.push(Entry { node, index, origin, size, version });
                 }
                 if bits & capability::LAYOUT != 0 {
                     layer += 1;
@@ -145,34 +166,77 @@ impl UiTree {
         entries
     }
 
-    fn selectable_text(&mut self, entry: &Entry) -> SharedString {
-        self.get_mut(entry.node)
-            .and_then(|value| value.chain[entry.index].as_selectable().map(|text| text.text()))
+    fn selectable_text(&mut self, node: NodeId, index: usize) -> SharedString {
+        self.get_mut(node)
+            .and_then(|value| value.chain[index].as_selectable().map(|text| text.text()))
             .unwrap_or(SharedString::EMPTY)
     }
 
-    /// The point nearest to `position` (in the root): in the text whose line it's on, or
-    /// before the first text it's above, or at the end of the last.
+    /// The offset nearest to `position` (in the root) in `entry`'s text.
+    fn offset_in(&mut self, entry: &Entry, position: Offset) -> usize {
+        let local = position - entry.origin;
+        self.node_and_measurer(entry.node)
+            .and_then(|(value, (measurer, _))| {
+                value.chain[entry.index].as_selectable()?.offset_at(local, measurer)
+            })
+            .unwrap_or(0)
+    }
+
+    /// The point nearest to `position` (in the root), as Compose's selection finds it: in the
+    /// text under it; else, on a text's line (a row of texts), in the last text starting
+    /// before it; else at the start of the first text below it, or the end of the last.
     fn point_at(&mut self, entries: &[Entry], position: Offset) -> Option<Point> {
-        let last = entries.len().checked_sub(1)?;
-        for (order, entry) in entries.iter().enumerate() {
-            let top = entry.origin.y;
-            let bottom = top + entry.size.height as f32;
-            if position.y < top {
-                return Some(Point { order, offset: 0 });
-            }
-            if position.y < bottom {
-                let local = position - entry.origin;
-                let (value, (measurer, _)) = self.node_and_measurer(entry.node)?;
-                let offset = value.chain[entry.index]
-                    .as_selectable()?
-                    .offset_at(local, measurer)
-                    .unwrap_or(0);
-                return Some(Point { order, offset });
-            }
+        let last = entries.last()?;
+        let within = |entry: &Entry| {
+            position.y >= entry.origin.y && position.y < entry.origin.y + entry.size.height as f32
+        };
+        if let Some(entry) = entries.iter().find(|entry| {
+            within(entry)
+                && position.x >= entry.origin.x
+                && position.x < entry.origin.x + entry.size.width as f32
+        }) {
+            let offset = self.offset_in(entry, position);
+            return Some(entry.point(offset));
         }
-        let length = self.selectable_text(&entries[last]).len();
-        Some(Point { order: last, offset: length })
+        let row: Vec<&Entry> = entries.iter().filter(|entry| within(entry)).collect();
+        if let Some(first) = row.first() {
+            return Some(match row.iter().rev().find(|entry| entry.origin.x <= position.x) {
+                // Past its end (or in a gap after it): its end.
+                Some(entry) => {
+                    let length = self.selectable_text(entry.node, entry.index).len();
+                    entry.point(length)
+                }
+                None => first.point(0),
+            });
+        }
+        if let Some(entry) = entries.iter().find(|entry| position.y < entry.origin.y) {
+            return Some(entry.point(0));
+        }
+        let length = self.selectable_text(last.node, last.index).len();
+        Some(last.point(length))
+    }
+
+    /// The selection's ends in `entries`' order, or `None` if a text it ends in is gone or
+    /// changed (the selection is then dropped, as Compose's).
+    fn span(selection: &TextSelection, entries: &[Entry]) -> Option<Span> {
+        let place = |point: &Point| {
+            entries.iter().position(|entry| entry.holds(point)).map(|order| (order, point.offset))
+        };
+        let (anchor, focus) = (place(&selection.anchor)?, place(&selection.focus)?);
+        Some(if anchor <= focus { (anchor, focus) } else { (focus, anchor) })
+    }
+
+    /// The word around `point`.
+    fn word(&mut self, point: Point) -> Range<usize> {
+        self.get_mut(point.node)
+            .and_then(|value| {
+                value.chain[point.index].as_selectable().map(|text| text.word_at(point.offset))
+            })
+            .unwrap_or(point.offset..point.offset)
+    }
+
+    fn order_of(entries: &[Entry], point: &Point) -> Option<(usize, usize)> {
+        entries.iter().position(|entry| entry.holds(point)).map(|order| (order, point.offset))
     }
 
     /// Handles a selection gesture or command.
@@ -185,29 +249,21 @@ impl UiTree {
                 let (anchor, focus) = match unit {
                     Unit::Character => (point, point),
                     Unit::Word => {
-                        let word = self
-                            .get_mut(entries[point.order].node)
-                            .and_then(|value| {
-                                value.chain[entries[point.order].index]
-                                    .as_selectable()
-                                    .map(|text| text.word_at(point.offset))
-                            })
-                            .unwrap_or(point.offset..point.offset);
-                        (
-                            Point { order: point.order, offset: word.start },
-                            Point { order: point.order, offset: word.end },
-                        )
+                        let word = self.word(point);
+                        (Point { offset: word.start, ..point }, Point { offset: word.end, ..point })
                     }
                     Unit::Text => {
-                        let length = self.selectable_text(&entries[point.order]).len();
-                        (
-                            Point { order: point.order, offset: 0 },
-                            Point { order: point.order, offset: length },
-                        )
+                        let length = self.selectable_text(point.node, point.index).len();
+                        (Point { offset: 0, ..point }, Point { offset: length, ..point })
                     }
                 };
-                self.text_selection =
-                    Some(TextSelection { container, anchor, focus, initial: (anchor, focus) });
+                self.text_selection = Some(TextSelection {
+                    container,
+                    anchor,
+                    focus,
+                    initial: (anchor, focus),
+                    unit,
+                });
                 self.show_selection(&entries);
             }
             SelectionRequest::Extend { container, position } => {
@@ -218,40 +274,57 @@ impl UiTree {
                 };
                 let entries = self.selectables(container);
                 let Some(point) = self.point_at(&entries, position) else { return };
+                let (Some(start), Some(end), Some(at)) = (
+                    Self::order_of(&entries, &selection.initial.0),
+                    Self::order_of(&entries, &selection.initial.1),
+                    Self::order_of(&entries, &point),
+                ) else {
+                    self.text_selection = None;
+                    self.show_selection(&entries);
+                    return;
+                };
+                // A word selection extends by words, a text selection by texts.
+                let snap = |tree: &mut UiTree, forward: bool| match selection.unit {
+                    Unit::Character => point,
+                    Unit::Word => {
+                        let word = tree.word(point);
+                        Point { offset: if forward { word.end } else { word.start }, ..point }
+                    }
+                    Unit::Text => {
+                        let length = tree.selectable_text(point.node, point.index).len();
+                        Point { offset: if forward { length } else { 0 }, ..point }
+                    }
+                };
                 // From the side of what the press selected away from the pointer.
-                let (start, end) = selection.initial;
-                (selection.anchor, selection.focus) =
-                    if point >= start { (start, point.max(end)) } else { (end, point) };
+                (selection.anchor, selection.focus) = if at >= start {
+                    let focus = snap(self, true);
+                    let focus_at = (at.0, focus.offset);
+                    (selection.initial.0, if focus_at >= end { focus } else { selection.initial.1 })
+                } else {
+                    (selection.initial.1, snap(self, false))
+                };
                 self.text_selection = Some(selection);
                 self.show_selection(&entries);
             }
             SelectionRequest::SelectAll { container } => {
                 let entries = self.selectables(container);
-                let Some(last) = entries.len().checked_sub(1) else { return };
-                let length = self.selectable_text(&entries[last]).len();
-                let (anchor, focus) =
-                    (Point { order: 0, offset: 0 }, Point { order: last, offset: length });
-                self.text_selection =
-                    Some(TextSelection { container, anchor, focus, initial: (anchor, anchor) });
+                let (Some(first), Some(last)) = (entries.first(), entries.last()) else { return };
+                let length = self.selectable_text(last.node, last.index).len();
+                let (anchor, focus) = (first.point(0), last.point(length));
+                self.text_selection = Some(TextSelection {
+                    container,
+                    anchor,
+                    focus,
+                    initial: (anchor, anchor),
+                    unit: Unit::Character,
+                });
                 self.show_selection(&entries);
             }
             SelectionRequest::Copy { container } => {
-                let Some(selection) =
-                    self.text_selection.filter(|selection| selection.container == container)
-                else {
-                    return;
-                };
-                let entries = self.selectables(container);
-                let mut parts = Vec::new();
-                for (order, entry) in entries.iter().enumerate() {
-                    if let Some(range) = range_of(&selection, order) {
-                        let text = self.selectable_text(entry);
-                        let range = clamp(&text, range);
-                        parts.push(text[range].to_string());
-                    }
-                }
-                if !parts.is_empty() {
-                    self.clipboard.set_text(&parts.join("\n"));
+                if self.text_selection.is_some_and(|selection| selection.container == container)
+                    && let Some(text) = self.selected_text()
+                {
+                    self.clipboard.set_text(&text);
                 }
             }
             SelectionRequest::Clear { container } => {
@@ -268,21 +341,26 @@ impl UiTree {
     fn clear_other_selection(&mut self, container: NodeId) {
         if let Some(old) = self.text_selection
             && old.container != container
-            && self.get(old.container).is_some()
         {
-            let entries = self.selectables(old.container);
             self.text_selection = None;
-            self.show_selection(&entries);
+            if self.get(old.container).is_some() {
+                let entries = self.selectables(old.container);
+                self.show_selection(&entries);
+            }
         }
     }
 
-    /// Tells each text of `entries` its part of the selection.
+    /// Tells each text of `entries` its part of the selection (dropping a selection whose
+    /// texts are gone or changed).
     fn show_selection(&mut self, entries: &[Entry]) {
-        let selection = self.text_selection;
+        let span = self.text_selection.and_then(|selection| Self::span(&selection, entries));
+        if span.is_none() {
+            self.text_selection = None;
+        }
         let mut changed = false;
         for (order, entry) in entries.iter().enumerate() {
-            let range = selection.and_then(|selection| range_of(&selection, order));
-            let text = self.selectable_text(entry);
+            let range = span.and_then(|span| range_of(span, order));
+            let text = self.selectable_text(entry.node, entry.index);
             let range = range.map(|range| clamp(&text, range));
             if let Some((value, (measurer, _))) = self.node_and_measurer(entry.node)
                 && let Some(selectable) = value.chain[entry.index].as_selectable()
@@ -295,15 +373,21 @@ impl UiTree {
         }
     }
 
-    /// The text selected in a container, if any (what Cmd+C copies there).
+    /// The text selected in a container, if any (what Cmd+C copies there): `None` when nothing
+    /// is, or a text it ends in is gone or changed.
     pub fn selected_text(&mut self) -> Option<String> {
         let selection =
             self.text_selection.filter(|selection| selection.anchor != selection.focus)?;
         let entries = self.selectables(selection.container);
+        let Some(span) = Self::span(&selection, &entries) else {
+            self.text_selection = None;
+            self.show_selection(&entries);
+            return None;
+        };
         let mut parts = Vec::new();
         for (order, entry) in entries.iter().enumerate() {
-            if let Some(range) = range_of(&selection, order) {
-                let text = self.selectable_text(entry);
+            if let Some(range) = range_of(span, order) {
+                let text = self.selectable_text(entry.node, entry.index);
                 parts.push(text[clamp(&text, range)].to_string());
             }
         }
@@ -311,30 +395,14 @@ impl UiTree {
     }
 }
 
-impl PartialOrd for Point {
-    fn partial_cmp(&self, other: &Point) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for Point {
-    fn cmp(&self, other: &Point) -> std::cmp::Ordering {
-        (self.order, self.offset).cmp(&(other.order, other.offset))
-    }
-}
-
-/// The part of the text at `order` the selection covers, if any.
-fn range_of(selection: &TextSelection, order: usize) -> Option<Range<usize>> {
-    let (start, end) = if selection.anchor <= selection.focus {
-        (selection.anchor, selection.focus)
-    } else {
-        (selection.focus, selection.anchor)
-    };
-    if start == end || order < start.order || order > end.order {
+/// The part of the text at `order` a selection spanning `span` covers, if any.
+fn range_of(span: Span, order: usize) -> Option<Range<usize>> {
+    let (start, end) = span;
+    if start == end || order < start.0 || order > end.0 {
         return None;
     }
-    let from = if order == start.order { start.offset } else { 0 };
-    let to = if order == end.order { end.offset } else { usize::MAX };
+    let from = if order == start.0 { start.1 } else { 0 };
+    let to = if order == end.0 { end.1 } else { usize::MAX };
     Some(from..to)
 }
 
@@ -438,7 +506,7 @@ impl PointerInputModifierNode for SelectionContainerNode {
                     unit,
                 });
             }
-            PointerEventType::Move if self.dragging && event.pressed => {
+            PointerEventType::Move if self.dragging && event.pressed && !event.consumed => {
                 event.consume();
                 context.requests.selection.push(SelectionRequest::Extend { container, position });
             }

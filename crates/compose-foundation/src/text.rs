@@ -24,12 +24,16 @@ pub fn SelectionContainer(
     #[default(crate::Modifier)] modifier: Modifier,
     content: impl Fn() + 'static,
 ) {
-    crate::layout::Box(
-        modifier.selection_container(),
-        crate::Alignment::TOP_START,
-        false,
-        compose_runtime::callback(move |_| content()),
-    );
+    // Selectable again below a `DisableSelection`, as Compose's.
+    compose_runtime::CompositionLocalProvider(LOCAL_SELECTION_DISABLED.provides(false), || {
+        let content = content.clone();
+        crate::layout::Box(
+            modifier.clone().selection_container(),
+            crate::Alignment::TOP_START,
+            false,
+            compose_runtime::callback(move |_| content()),
+        );
+    });
 }
 
 /// Leaves the texts in `content` out of the `SelectionContainer` around it, as Compose's
@@ -109,6 +113,7 @@ impl ModifierNodeElement for TextElement {
             selection: None,
             selection_rects: Vec::new(),
             selectable: self.selectable,
+            version: 0,
         })
     }
 
@@ -116,6 +121,12 @@ impl ModifierNodeElement for TextElement {
         if let Some(node) = node.downcast_mut::<TextNode>()
             && (node.text != self.text || node.style != self.style || node.options != self.options)
         {
+            if node.text != self.text {
+                // A new text: a selection in it is dropped, as Compose's.
+                node.version += 1;
+                node.selection = None;
+                node.selection_rects.clear();
+            }
             node.text = self.text.clone();
             node.style = self.style;
             node.options = self.options;
@@ -163,6 +174,8 @@ pub struct TextNode {
     selection: Option<std::ops::Range<usize>>,
     selection_rects: Vec<compose_ui::Rect>,
     selectable: bool,
+    /// Bumped when the text changes.
+    version: u64,
 }
 
 impl ModifierNode for TextNode {
@@ -239,18 +252,19 @@ impl LayoutModifierNode for TextNode {
 
 impl DrawModifierNode for TextNode {
     fn draw(&mut self, scope: &mut DrawScope<'_>) {
+        let Some(paragraph) = self.paragraph else { return };
+        // Clipped as the text is, its selection's highlight included.
+        let clipped = self.overflows && self.options.overflow != compose_ui::TextOverflow::Visible;
+        if clipped {
+            scope.save();
+            scope.clip_outline(compose_ui::Outline::Rectangle(scope.bounds()));
+        }
         for rect in &self.selection_rects {
             scope.draw_rect(*rect, compose_ui::Paint::fill(crate::text::SELECTION_COLOR));
         }
-        if let Some(paragraph) = self.paragraph {
-            if self.overflows && self.options.overflow != compose_ui::TextOverflow::Visible {
-                scope.save();
-                scope.clip_outline(compose_ui::Outline::Rectangle(scope.bounds()));
-                scope.draw_paragraph(paragraph, Offset::ZERO);
-                scope.restore();
-            } else {
-                scope.draw_paragraph(paragraph, Offset::ZERO);
-            }
+        scope.draw_paragraph(paragraph, Offset::ZERO);
+        if clipped {
+            scope.restore();
         }
     }
 }
@@ -267,6 +281,10 @@ pub(crate) const SELECTION_COLOR: compose_ui::Color = compose_ui::Color::from_ar
 impl compose_ui::Selectable for TextNode {
     fn text(&self) -> SharedString {
         self.text.text.clone()
+    }
+
+    fn version(&self) -> u64 {
+        self.version
     }
 
     fn offset_at(

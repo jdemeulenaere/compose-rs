@@ -16,8 +16,8 @@ use crate::vector::Animate;
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct KeyframesSpec {
     entry: u32,
-    pub duration_millis: u32,
-    pub delay_millis: u32,
+    duration_millis: u32,
+    delay_millis: u32,
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -104,6 +104,15 @@ pub fn keyframes<T: Animate>(
 }
 
 impl KeyframesSpec {
+    /// How long it plays, after its delay.
+    pub fn duration_millis(&self) -> u32 {
+        self.duration_millis
+    }
+
+    pub fn delay_millis(&self) -> u32 {
+        self.delay_millis
+    }
+
     pub(crate) fn total_nanos(&self) -> u64 {
         (u64::from(self.delay_millis) + u64::from(self.duration_millis)) * 1_000_000
     }
