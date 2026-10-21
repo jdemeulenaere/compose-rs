@@ -109,6 +109,7 @@ fn Counter() {
                     ((&&&::compose::__private::ArgProbe(&count)).arg_key(),),
                 ),
                 || {
+                    #[allow(unused_variables)]
                     let count = ::core::clone::Clone::clone(&count);
                     move || count.set(0)
                 },

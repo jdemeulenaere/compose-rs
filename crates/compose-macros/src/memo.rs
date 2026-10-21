@@ -194,6 +194,11 @@ pub(crate) fn probe(
     if unknown {
         keys.push(quote! { ::compose::__private::Unkeyed::CHANGED });
     }
+    // Locals are rebound from clones; a name written like a constant or a variant (`LIMIT`,
+    // `Home`, from a match pattern or a macro's tokens) can't be a `let`'s pattern, and is used
+    // as written.
+    let clones: Vec<&Ident> =
+        captures.iter().filter(|capture| !starts_uppercase(&capture.to_string())).collect();
     let site = site_of(&closure);
     let keys = key_tuple(keys);
     let resolver = match arity.filter(|arity| *arity <= 8) {
@@ -204,7 +209,7 @@ pub(crate) fn probe(
         #[allow(unused_imports)]
         use ::compose::__private::{KeyedProbe as _, StaticProbe as _, UnkeyedProbe as _};
         ::compose::__private::#resolver(::compose::__private::lambda_probe(#site, #keys), || {
-            #(let #captures = ::core::clone::Clone::clone(&#captures);)*
+            #(#[allow(unused_variables)] let #clones = ::core::clone::Clone::clone(&#clones);)*
             #closure
         })
     }}
@@ -241,12 +246,6 @@ fn local_bindings(local: &syn::Local, out: &mut Vec<String>) {
 /// `let`'s pattern leads). Values after `=`, expressions, and a name after a value
 /// (`Clickable!("save", save)`, a function given positionally) are uses, not bindings.
 fn unbound_names(tokens: TokenStream) -> Vec<String> {
-    const KEYWORDS: &[&str] = &[
-        "as", "async", "await", "break", "const", "continue", "crate", "dyn", "else", "enum",
-        "false", "fn", "for", "if", "impl", "in", "let", "loop", "match", "mod", "move", "mut",
-        "pub", "ref", "return", "self", "static", "struct", "super", "trait", "true", "type",
-        "unsafe", "use", "where", "while", "_",
-    ];
     fn names_in(tokens: &[TokenTree], out: &mut Vec<String>) {
         for token in tokens {
             match token {
@@ -292,12 +291,39 @@ fn unbound_names(tokens: TokenStream) -> Vec<String> {
     names
 }
 
-/// The identifiers in a macro's tokens, but field and method names (`settings.enabled`).
+/// Rust's keywords: never names a macro binds or a lambda captures.
+const KEYWORDS: &[&str] = &[
+    "as", "async", "await", "break", "const", "continue", "crate", "dyn", "else", "enum", "false",
+    "fn", "for", "if", "impl", "in", "let", "loop", "match", "mod", "move", "mut", "pub", "ref",
+    "return", "self", "Self", "static", "struct", "super", "trait", "true", "type", "unsafe", "use",
+    "where", "while", "_",
+];
+
+/// The primitive types: what follows `as` in a cast, never a local in practice.
+const PRIMITIVES: &[&str] = &[
+    "bool", "char", "str", "u8", "u16", "u32", "u64", "u128", "usize", "i8", "i16", "i32", "i64",
+    "i128", "isize", "f32", "f64",
+];
+
+/// Whether a name starts with an uppercase letter: a constant, a type or a variant by
+/// convention, not a local.
+fn starts_uppercase(name: &str) -> bool {
+    name.chars().next().is_some_and(char::is_uppercase)
+}
+
+/// The identifiers in a macro's tokens, but field and method names (`settings.enabled`) and
+/// keywords.
 fn token_idents(tokens: TokenStream, out: &mut Vec<String>) {
     let mut dots = 0;
     for token in tokens {
         match token {
-            TokenTree::Ident(ident) if dots != 1 => out.push(ident.to_string()),
+            TokenTree::Ident(ident)
+                if dots != 1
+                    && !KEYWORDS.contains(&ident.to_string().as_str())
+                    && !PRIMITIVES.contains(&ident.to_string().as_str()) =>
+            {
+                out.push(ident.to_string())
+            }
             TokenTree::Group(group) => token_idents(group.stream(), out),
             TokenTree::Punct(punct) if punct.as_char() == '.' => {
                 dots += 1;
@@ -452,7 +478,10 @@ struct Free<'a> {
 impl Free<'_> {
     fn use_name(&mut self, ident: &Ident) {
         let name = ident.to_string();
-        if self.inner.contains(&name) {
+        if self.inner.contains(&name)
+            || KEYWORDS.contains(&name.as_str())
+            || PRIMITIVES.contains(&name.as_str())
+        {
             return;
         }
         match self.outer.lookup(&name) {
