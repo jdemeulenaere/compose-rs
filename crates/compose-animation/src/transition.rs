@@ -1,14 +1,14 @@
 //! `update_transition`, as Compose's `updateTransition`: values animating together when one
 //! state changes, each from its value for the state before to its value for the new one.
 
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::rc::Rc;
 
 use compose_runtime::{OwnedState, SideEffect, State, remember, remember_coroutine_scope};
 use compose_ui::{Color, Dp, Offset};
 
 use crate::animatable::{Animatable, AnimationEndReason};
-use crate::spec::AnimationSpec;
+use crate::spec::{AnimationSpec, spring};
 use crate::vector::Animate;
 
 /// A state's change animating values together, as Compose's `Transition`.
@@ -27,8 +27,8 @@ struct TransitionInner<S: 'static> {
     current: OwnedState<S>,
     /// The state they're going to, as `targetState`.
     target: RefCell<S>,
-    /// Animations running toward the target.
-    running: Cell<usize>,
+    /// Animations running toward the target (state: `is_running` readers follow it).
+    running: OwnedState<usize>,
 }
 
 /// A transition following `target_state`, remembered at its call site, as
@@ -42,7 +42,7 @@ pub fn update_transition<S: Clone + PartialEq + 'static>(
         inner: Rc::new(TransitionInner {
             current: compose_runtime::mutable_state_of(target_state.clone()),
             target: RefCell::new(target_state.clone()),
-            running: Cell::new(0),
+            running: compose_runtime::mutable_state_of(0),
         }),
     });
     let inner = transition.inner.clone();
@@ -77,13 +77,14 @@ impl<S: Clone + PartialEq + 'static> Transition<S> {
         self.inner.target.borrow().clone()
     }
 
-    /// Whether its values are animating, as `isRunning`.
+    /// Whether its values are animating, as `isRunning` (a state read).
     pub fn is_running(&self) -> bool {
         self.inner.running.get() > 0
     }
 
     /// A value animating to `target_value_by_state(target)` whenever the target changes, along
-    /// `transition_spec(initial, target)`, as `Transition.animateValue`. Remembered at its call
+    /// `transition_spec(initial, target)` (a default spring when it interrupts a running
+    /// animation of another kind), as `Transition.animateValue`. Remembered at its call
     /// site: call it on every pass, as a composable.
     pub fn animate_value<T: Animate>(
         &self,
@@ -99,6 +100,7 @@ impl<S: Clone + PartialEq + 'static> Transition<S> {
         // The spec of a change from the state the values are at.
         let changed = *launched.borrow() != target_value;
         let spec = changed.then(|| transition_spec(&self.inner.current.get(), &target_state));
+        let running = animatable.clone();
         let inner = self.inner.clone();
         SideEffect(move || {
             let Some(spec) = spec else { return };
@@ -106,6 +108,13 @@ impl<S: Clone + PartialEq + 'static> Transition<S> {
                 return;
             }
             *launched.borrow_mut() = target_value.clone();
+            // Interrupted mid-way: on from where it is, on a spring (unless it's one already),
+            // as Compose's `interruptionSpec`.
+            let spec = match spec {
+                AnimationSpec::Spring(_) => spec,
+                _ if running.is_running() => AnimationSpec::Spring(spring()),
+                _ => spec,
+            };
             inner.running.set(inner.running.get() + 1);
             scope.launch(async move {
                 let result = animatable.animate_to(target_value, spec).await;

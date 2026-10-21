@@ -12,7 +12,6 @@ use compose_ui::{
 };
 
 use crate::components::minimum_interactive_component_size;
-use crate::icon::{Icon, icons};
 use crate::theme::{LOCAL_CONTENT_COLOR, LOCAL_TEXT_STYLE, MaterialTheme};
 
 /// A chip's look, as resolved for its state.
@@ -158,7 +157,8 @@ pub fn SuggestionChip(
 }
 
 /// A chip that's on or off, as Compose's `FilterChip`: selected, in the secondary container
-/// without an outline (and, without a leading icon, a check mark leading).
+/// without an outline. It shows the icons it's given only (Compose's samples lead a selected
+/// chip with `icons::filled::check()`).
 #[composable]
 #[allow(non_snake_case)]
 pub fn FilterChip(
@@ -186,25 +186,12 @@ pub fn FilterChip(
     } else {
         outlined_look(enabled, scheme.on_surface_variant, scheme.primary)
     };
-    // As Compose's sample: a check mark when selected and given no icon of its own.
-    let leading = leading_icon.or_else(|| {
-        selected.then(|| {
-            compose_runtime::callback(|| {
-                Icon(
-                    icons::filled::check(),
-                    None,
-                    Modifier.size(18.dp()),
-                    LOCAL_CONTENT_COLOR.current(),
-                )
-            })
-        })
-    });
     chip(
         on_click,
         modifier,
         enabled,
         label,
-        leading,
+        leading_icon,
         trailing_icon,
         look,
         Role::Checkbox,
@@ -259,12 +246,14 @@ pub fn BadgedBox(
 ) {
     let policy = compose_runtime::remember(|| Rc::new(BadgedLayout) as Rc<dyn MeasurePolicy>);
     let (badge, content) = (badge.clone(), content.clone());
+    // Each in a box of its own, as Compose's: a badge lambda showing nothing leaves an empty one.
     Layout(
         modifier,
         policy,
         compose_runtime::callback(move || {
-            content();
-            badge();
+            let (badge, content) = (badge.clone(), content.clone());
+            Box(Modifier, Alignment::CENTER, false, compose_runtime::callback(move |_| content()));
+            Box(Modifier, Alignment::TOP_START, false, compose_runtime::callback(move |_| badge()));
         }),
     );
 }
@@ -282,9 +271,8 @@ impl MeasurePolicy for BadgedLayout {
         let [content, badge] = measurables else {
             return scope.layout(constraints.min_width, constraints.min_height);
         };
-        let loose = constraints.loosen();
-        let content = scope.measure(*content, loose);
-        let badge = scope.measure(*badge, loose);
+        let content = scope.measure(*content, constraints);
+        let badge = scope.measure(*badge, constraints.loosen());
         let density = scope.density();
         let dot = badge.height <= density.round_to_px(6.dp());
         let inset = density.round_to_px(if dot { 6.dp() } else { 12.dp() });

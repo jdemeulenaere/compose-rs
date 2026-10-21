@@ -13,7 +13,7 @@ use compose_ui::{
 use crate::content_size::AnimationModifiers;
 use crate::spec::tween;
 use crate::visibility::{
-    AnimatedVisibility, EnterTransition, ExitTransition, fade_in_with, fade_out_with, scale_in_with,
+    AnimatedEnterExit, EnterTransition, ExitTransition, fade_in_with, fade_out_with, scale_in_with,
 };
 
 /// How one state's content gives way to the next's, as Compose's `ContentTransform`.
@@ -107,8 +107,9 @@ pub fn AnimatedContent<T: Clone + PartialEq + 'static>(
     let transform = transform.get().unwrap_or_else(default_content_transform);
     let states = shown.borrow().states.clone();
     let content = Rc::new(content);
-    let policy = compose_runtime::remember_keyed(AlignmentKey(content_alignment), || {
-        Rc::new(AlignedStack { alignment: content_alignment }) as Rc<dyn MeasurePolicy>
+    let largest = !transform.size_transform;
+    let policy = compose_runtime::remember_keyed(StackKey(content_alignment, largest), || {
+        Rc::new(AlignedStack { alignment: content_alignment, largest }) as Rc<dyn MeasurePolicy>
     });
     let modifier = if transform.size_transform {
         modifier.clip(compose_ui::RECTANGLE_SHAPE).animate_content_size()
@@ -123,14 +124,16 @@ pub fn AnimatedContent<T: Clone + PartialEq + 'static>(
             for (index, (id, state)) in states.iter().enumerate() {
                 let (content, state) = (content.clone(), state.clone());
                 let visible = index == target;
+                // The first state's content is there at once; the others enter.
+                let initially_visible = *id == 0;
                 key(*id, move || {
                     let (content, state) = (content.clone(), state.clone());
-                    AnimatedVisibility(
+                    AnimatedEnterExit(
                         visible,
+                        initially_visible,
                         Modifier,
                         transform.target_content_enter,
                         transform.initial_content_exit,
-                        "AnimatedContent",
                         compose_runtime::callback(move || content(state.clone())),
                     );
                 });
@@ -140,17 +143,19 @@ pub fn AnimatedContent<T: Clone + PartialEq + 'static>(
 }
 
 #[derive(Clone, Copy, PartialEq)]
-struct AlignmentKey(Alignment);
+struct StackKey(Alignment, bool);
 
-impl compose_runtime::ComposeArg for AlignmentKey {
+impl compose_runtime::ComposeArg for StackKey {
     fn same(&self, other: &Self) -> bool {
         self == other
     }
 }
 
-/// The contents stacked, aligned in the largest of them.
+/// The contents stacked, measured with the container's constraints, aligned in the target's
+/// size (what a size transform animates) or, without one, the largest of them.
 struct AlignedStack {
     alignment: Alignment,
+    largest: bool,
 }
 
 impl MeasurePolicy for AlignedStack {
@@ -160,19 +165,17 @@ impl MeasurePolicy for AlignedStack {
         measurables: &[Measurable],
         constraints: Constraints,
     ) -> MeasureResult {
-        let loose = constraints.loosen();
         let placeables: Vec<_> =
-            measurables.iter().map(|&measurable| scope.measure(measurable, loose)).collect();
-        // As large as the content entering (the last), as Compose's target size.
-        let size = placeables.last().map_or(
-            IntSize::new(constraints.min_width, constraints.min_height),
-            |last| {
-                IntSize::new(
-                    constraints.constrain_width(last.width),
-                    constraints.constrain_height(last.height),
-                )
-            },
-        );
+            measurables.iter().map(|&measurable| scope.measure(measurable, constraints)).collect();
+        let empty = IntSize::new(constraints.min_width, constraints.min_height);
+        let size = if self.largest {
+            placeables.iter().fold(empty, |size, placeable| {
+                IntSize::new(size.width.max(placeable.width), size.height.max(placeable.height))
+            })
+        } else {
+            // As large as the content entering (the last), as Compose's target size.
+            placeables.last().map_or(empty, |last| IntSize::new(last.width, last.height))
+        };
         for placeable in &placeables {
             let at = self.alignment.align(placeable.size(), size, scope.layout_direction());
             scope.place_at(placeable, at);

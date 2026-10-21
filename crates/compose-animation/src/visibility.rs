@@ -307,10 +307,25 @@ pub fn AnimatedVisibility(
     content: impl Fn() + 'static,
 ) {
     let _ = label;
-    let progress = remember(|| Rc::new(Progress::new(visible)));
+    AnimatedEnterExit(visible, visible, modifier, enter, exit, content);
+}
+
+/// `AnimatedVisibility`, first composed as `initially_visible` (hidden, a content that enters
+/// at once), as Compose's `AnimatedVisibility(visibleState = MutableTransitionState(…))`.
+#[composable]
+#[allow(non_snake_case)]
+pub(crate) fn AnimatedEnterExit(
+    visible: bool,
+    initially_visible: bool,
+    modifier: Modifier,
+    enter: EnterTransition,
+    exit: ExitTransition,
+    content: impl Fn() + 'static,
+) {
+    let progress = remember(|| Rc::new(Progress::new(initially_visible)));
     let scope = remember_coroutine_scope();
     // The visibility last animated to, set when its animations launch, after the pass.
-    let launched = remember(|| Rc::new(std::cell::Cell::new(visible)));
+    let launched = remember(|| Rc::new(std::cell::Cell::new(initially_visible)));
     // The exit is running: the content stays until it ends.
     let leaving = remember(|| compose_runtime::mutable_state_of(false));
     let parts = if visible { enter.0 } else { exit.0 };
@@ -403,6 +418,7 @@ pub fn AnimatedVisibility(
         };
         let modifier =
             if layout_parts.size.is_some() { modifier.clip(RECTANGLE_SHAPE) } else { modifier };
+        let content = content.clone();
         Layout(modifier.then(layer), policy, compose_runtime::callback(move || content()));
     }
 }
