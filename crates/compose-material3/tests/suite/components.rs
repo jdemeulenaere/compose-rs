@@ -1,0 +1,539 @@
+//! Icons, icon buttons, the floating action button, switches, radio buttons, sliders, cards,
+//! dividers, the top app bar and the scaffold.
+
+#![allow(non_snake_case)]
+
+use std::cell::Cell;
+use std::time::Duration;
+
+use compose_foundation::layout::*;
+use compose_material3::*;
+use compose_runtime::*;
+use compose_test::*;
+use compose_ui::{DrawOp, IntSize, Key, Modifier, Offset, PointerEvent, Role, UnitExt};
+
+fn bounds(ui: &mut ComposeTestRule, tag: &str) -> compose_ui::Rect {
+    ui.on_node_with_tag(tag).fetch_semantics_node().bounds
+}
+
+#[test]
+fn an_icon_is_24_dp_and_described() {
+    let mut ui = compose_test(|| {
+        Icon!(icons::filled::add(), Some("Add"), modifier = Modifier.test_tag("icon"));
+    });
+    assert_eq!(bounds(&mut ui, "icon").width(), 24.0);
+    let node = ui.on_node_with_tag("icon").fetch_semantics_node();
+    assert_eq!(node.config.content_description.first().map(|text| text.as_str()), Some("Add"));
+    assert_eq!(node.config.role, Some(Role::Image));
+    let paths = ui
+        .host()
+        .display_list()
+        .ops
+        .iter()
+        .filter(|op| matches!(op, DrawOp::DrawPath { .. }))
+        .count();
+    assert_eq!(paths, 1);
+}
+
+#[test]
+fn every_icon_parses() {
+    use icons::filled::*;
+    for icon in [
+        add(),
+        arrow_back(),
+        check(),
+        close(),
+        delete(),
+        edit(),
+        favorite(),
+        home(),
+        info(),
+        menu(),
+        more_vert(),
+        person(),
+        search(),
+        star(),
+    ] {
+        assert!(!icon.paths[0].0.commands().is_empty(), "{}", icon.name);
+    }
+}
+
+#[test]
+fn an_icon_button_is_40_dp_in_a_48_dp_target_and_clicks() {
+    thread_local! { static CLICKS: Cell<u32> = const { Cell::new(0) }; }
+    let mut ui = compose_test(|| {
+        IconButton!(
+            on_click = || CLICKS.with(|clicks| clicks.set(clicks.get() + 1)),
+            modifier = Modifier.test_tag("button"),
+            {
+                Icon!(icons::filled::menu(), Some("Menu"));
+            }
+        );
+    });
+    // As Compose's: 40 dp, in a 48 dp touch target.
+    assert_eq!(bounds(&mut ui, "button").width(), 40.0);
+    ui.on_node_with_tag("button").perform_click();
+    assert_eq!(CLICKS.with(Cell::get), 1);
+}
+
+#[test]
+fn a_switch_toggles_and_its_thumb_slides() {
+    #[composable]
+    fn Screen() {
+        let on = remember(|| mutable_state_of(false));
+        MaterialTheme!({
+            Switch!(
+                on.get(),
+                Some(move |checked| on.set(checked)),
+                modifier = Modifier.test_tag("switch")
+            );
+        });
+    }
+    let mut ui = ComposeTestRule::with_manual_clock(Screen);
+    assert_eq!(bounds(&mut ui, "switch").width(), 52.0);
+    ui.on_node_with_tag("switch").assert_is_off();
+    ui.on_node_with_tag("switch").perform_click();
+    ui.on_node_with_tag("switch").assert_is_on();
+    // The thumb (the last shape drawn) moves right over a few frames.
+    let thumb = |ui: &mut ComposeTestRule| {
+        ui.host()
+            .display_list()
+            .ops
+            .iter()
+            .rev()
+            .find_map(|op| match op {
+                DrawOp::DrawRoundRect(rect, _, _) => Some(rect.left),
+                _ => None,
+            })
+            .unwrap()
+    };
+    let first = thumb(&mut ui);
+    ui.advance_time_by(Duration::from_millis(48));
+    let midway = thumb(&mut ui);
+    ui.advance_time_by(Duration::from_secs(1));
+    let last = thumb(&mut ui);
+    assert!(first < midway && midway < last, "{first} {midway} {last}");
+}
+
+#[test]
+fn radio_buttons_select_one() {
+    #[composable]
+    fn Choices() {
+        let selected = remember(|| mutable_state_of(0));
+        Column!({
+            for index in 0..3 {
+                RadioButton!(
+                    selected.get() == index,
+                    Some(move || selected.set(index)),
+                    modifier = Modifier.test_tag(format!("choice {index}"))
+                );
+            }
+        });
+    }
+    let mut ui = compose_test(Choices);
+    ui.on_node_with_tag("choice 2").perform_click();
+    let selected: Vec<Option<bool>> = (0..3)
+        .map(|index| {
+            ui.on_node_with_tag(&format!("choice {index}")).fetch_semantics_node().config.selected
+        })
+        .collect();
+    assert_eq!(selected, [Some(false), Some(false), Some(true)]);
+    assert_eq!(
+        ui.on_node_with_tag("choice 2").fetch_semantics_node().config.role,
+        Some(Role::RadioButton)
+    );
+}
+
+#[test]
+fn a_slider_follows_presses_drags_and_keys() {
+    thread_local! { static FINISHED: Cell<u32> = const { Cell::new(0) }; }
+    #[composable]
+    fn Screen(value: MutableState<f32>) {
+        Slider!(
+            value.get(),
+            move |new| value.set(new),
+            modifier = Modifier.width(220.dp()).test_tag("slider"),
+            value_range = (0.0, 100.0),
+            steps = 9,
+            on_value_change_finished =
+                || FINISHED.with(|finished| finished.set(finished.get() + 1)),
+        );
+    }
+    let value = mutable_state_of(0.0f32);
+    let handle = value.handle();
+    let mut ui = ComposeTestRule::sized(IntSize::new(300, 100), move || Screen(handle));
+    let slider = bounds(&mut ui, "slider");
+    assert_eq!((slider.width(), slider.height()), (220.0, 48.0));
+    // The track runs from 10 to 210: the middle is 50, a step.
+    ui.host().send_pointer(PointerEvent::press(Offset::new(110.0, 24.0)));
+    ui.host().send_pointer(PointerEvent::release(Offset::new(110.0, 24.0)));
+    ui.wait_for_idle();
+    assert!((value.get() - 50.0).abs() < 0.001, "{}", value.get());
+    // Dragged to 68 px: 29 %, snapped to 30.
+    ui.host().send_pointer(PointerEvent::press(Offset::new(110.0, 24.0)));
+    ui.host().send_pointer(PointerEvent::moved(Offset::new(68.0, 24.0), true));
+    ui.host().send_pointer(PointerEvent::release(Offset::new(68.0, 24.0)));
+    ui.wait_for_idle();
+    assert!((value.get() - 30.0).abs() < 0.001, "{}", value.get());
+    ui.on_node_with_tag("slider").request_focus();
+    ui.press_key(Key::DirectionRight);
+    assert!((value.get() - 40.0).abs() < 0.001, "{}", value.get());
+    assert_eq!(FINISHED.with(Cell::get), 3);
+}
+
+#[test]
+fn a_scaffold_pads_its_content_and_places_its_bars() {
+    #[composable]
+    fn Screen() {
+        MaterialTheme!({
+            Scaffold!(
+                top_bar = {
+                    TopAppBar!({ Text!("Title") }, modifier = Modifier.test_tag("top"));
+                },
+                bottom_bar = {
+                    Box!(modifier = Modifier.fill_max_width().height(80.dp()).test_tag("bottom"));
+                },
+                floating_action_button = {
+                    FloatingActionButton!(on_click = || {}, modifier = Modifier.test_tag("fab"), {
+                        Icon!(icons::filled::add(), Some("Add"));
+                    });
+                },
+                |padding: compose_ui::PaddingValues| {
+                    Box!(
+                        modifier =
+                            Modifier.padding_values(padding).fill_max_size().test_tag("content")
+                    );
+                }
+            );
+        });
+    }
+    let mut ui = ComposeTestRule::sized(IntSize::new(400, 800), Screen);
+    assert_eq!(bounds(&mut ui, "top").height(), 64.0);
+    let content = bounds(&mut ui, "content");
+    assert_eq!((content.top, content.bottom), (64.0, 720.0));
+    let fab = bounds(&mut ui, "fab");
+    assert_eq!((fab.right, fab.bottom), (384.0, 704.0));
+    ui.on_node_with_text("Title").assert_exists();
+}
+
+#[test]
+fn a_clickable_card_clicks() {
+    thread_local! { static CLICKS: Cell<u32> = const { Cell::new(0) }; }
+    let mut ui = compose_test(|| {
+        Card!(
+            on_click = || CLICKS.with(|clicks| clicks.set(clicks.get() + 1)),
+            modifier = Modifier.test_tag("card"),
+            {
+                Text!("A card");
+                HorizontalDivider!();
+            }
+        );
+    });
+    ui.on_node_with_tag("card").perform_click();
+    assert_eq!(CLICKS.with(Cell::get), 1);
+}
+
+#[test]
+fn an_alert_dialog_shows_its_parts_and_its_buttons_act() {
+    thread_local! { static CONFIRMED: Cell<u32> = const { Cell::new(0) }; }
+    #[composable]
+    fn Screen(open: MutableState<bool>) {
+        MaterialTheme!({
+            if open.get() {
+                AlertDialog!(
+                    on_dismiss_request = move || open.set(false),
+                    confirm_button = {
+                        TextButton!(
+                            on_click = move || {
+                                CONFIRMED.with(|c| c.set(c.get() + 1));
+                                open.set(false)
+                            },
+                            {
+                                Text!("Delete");
+                            }
+                        );
+                    },
+                    dismiss_button = {
+                        TextButton!(on_click = move || open.set(false), {
+                            Text!("Cancel");
+                        });
+                    },
+                    title = {
+                        Text!("Delete the item?");
+                    },
+                    text = {
+                        Text!("It can't be undone.");
+                    },
+                );
+            }
+        });
+    }
+    let open = mutable_state_of(true);
+    let handle = open.handle();
+    let mut ui = ComposeTestRule::sized(IntSize::new(600, 800), move || Screen(handle));
+    ui.on_node_with_text("Delete the item?").assert_exists();
+    ui.on_node_with_text("It can't be undone.").assert_exists();
+    let cancel = ui.on_node_with_text("Cancel").fetch_semantics_node().bounds;
+    let delete = ui.on_node_with_text("Delete").fetch_semantics_node().bounds;
+    assert!(cancel.right <= delete.left, "dismiss before confirm: {cancel:?} {delete:?}");
+    ui.on_node_with_text("Delete").perform_click();
+    assert_eq!(CONFIRMED.with(Cell::get), 1);
+    ui.on_node_with_text("Delete the item?").assert_does_not_exist();
+}
+
+#[test]
+fn a_dropdown_menu_opens_below_its_anchor_and_closes_on_selection() {
+    thread_local! { static PICKED: Cell<u32> = const { Cell::new(0) }; }
+    #[composable]
+    fn Screen() {
+        let expanded = remember(|| mutable_state_of(false));
+        MaterialTheme!({
+            Box!(modifier = Modifier.padding(20.dp()), {
+                IconButton!(
+                    on_click = move || expanded.set(true),
+                    modifier = Modifier.test_tag("more"),
+                    {
+                        Icon!(icons::filled::more_vert(), Some("More"));
+                    }
+                );
+                DropdownMenu!(expanded.get(), move || expanded.set(false), {
+                    DropdownMenuItem!({ Text!("Edit") }, move || {
+                        PICKED.with(|p| p.set(1));
+                        expanded.set(false)
+                    });
+                    DropdownMenuItem!({ Text!("Share") }, move || {
+                        PICKED.with(|p| p.set(2));
+                        expanded.set(false)
+                    });
+                });
+            });
+        });
+    }
+    let mut ui = ComposeTestRule::sized(IntSize::new(400, 400), Screen);
+    ui.on_node_with_text("Edit").assert_does_not_exist();
+    ui.on_node_with_tag("more").perform_click();
+    let edit = ui.on_node(has_text("Edit")).fetch_semantics_node().bounds;
+    let more = ui.on_node_with_tag("more").fetch_semantics_node().bounds;
+    assert!(edit.top >= more.bottom, "below the anchor: {edit:?} under {more:?}");
+    assert!(edit.width() >= 112.0, "{edit:?}");
+    ui.on_node_with_text("Share").perform_click();
+    assert_eq!(PICKED.with(Cell::get), 2);
+    ui.on_node_with_text("Edit").assert_does_not_exist();
+}
+
+#[test]
+fn tonal_elevation_tints_the_surface_color_and_adds_up() {
+    use std::cell::Cell;
+    thread_local! { static COLORS: Cell<Option<(ColorScheme, Color, Color)>> = const { Cell::new(None) }; }
+    let mut ui = compose_test(|| {
+        MaterialTheme!({
+            Surface!(
+                tonal_elevation = 3.dp(),
+                modifier = Modifier.size(50.dp()).test_tag("outer"),
+                {
+                    Surface!(tonal_elevation = 3.dp(), modifier = Modifier.size(20.dp()), {});
+                }
+            );
+            let scheme = MaterialTheme::color_scheme();
+            COLORS.with(|cell| {
+                cell.set(Some((
+                    scheme,
+                    scheme.surface_color_at_elevation(3.dp()),
+                    scheme.surface_color_at_elevation(6.dp()),
+                )))
+            });
+        });
+    });
+    let (scheme, at_3, at_6) = COLORS.with(Cell::get).expect("composed");
+    assert_ne!(at_3, scheme.surface);
+    let fills: Vec<Color> = ui
+        .host()
+        .display_list()
+        .ops
+        .iter()
+        .filter_map(|op| match op {
+            compose_ui::DrawOp::DrawRect(_, paint) => Some(paint.color),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(fills, vec![at_3, at_6], "the inner surface at the sum of both");
+}
+
+#[test]
+fn a_slider_takes_set_progress_snapped_to_its_steps() {
+    let value = mutable_state_of(0.0f32);
+    let handle = value.handle();
+    let mut ui = compose_test(move || {
+        MaterialTheme!({
+            Slider!(
+                handle.get(),
+                move |new| handle.set(new),
+                modifier = Modifier.test_tag("slider"),
+                steps = 3,
+            );
+        });
+    });
+    let node = ui.on_node_with_tag("slider").fetch_semantics_node();
+    let info = node.config.progress_bar_range_info.expect("a range");
+    assert_eq!((info.current, info.range, info.steps), (0.0, (0.0, 1.0), 3));
+    ui.on_node_with_tag("slider")
+        .perform_semantics_action(compose_ui::SemanticsAction::SetProgress(0.3));
+    assert_eq!(value.get(), 0.25, "snapped to the nearest of the 5 stops");
+    let info = ui.on_node_with_tag("slider").fetch_semantics_node().config.progress_bar_range_info;
+    assert_eq!(info.map(|info| info.current), Some(0.25));
+}
+
+#[test]
+fn a_right_to_left_slider_runs_from_the_right() {
+    use compose_ui::{LayoutDirection, Offset, PointerEvent};
+    let value = mutable_state_of(0.0f32);
+    let handle = value.handle();
+    let mut ui = compose_test(move || {
+        MaterialTheme!({
+            Slider!(
+                handle.get(),
+                move |new| handle.set(new),
+                modifier = Modifier.test_tag("slider")
+            );
+        });
+    });
+    ui.host().set_layout_direction(LayoutDirection::Rtl);
+    ui.wait_for_idle();
+    let bounds = ui.on_node_with_tag("slider").fetch_semantics_node().bounds;
+    // A tap near the left end: near the range's end.
+    let at = Offset::new(bounds.left + 12.0, bounds.top + bounds.height() / 2.0);
+    ui.host().send_pointer(PointerEvent::press(at));
+    ui.host().send_pointer(PointerEvent::release(at));
+    ui.wait_for_idle();
+    assert!(value.get() > 0.95, "{}", value.get());
+    // The thumb is drawn on the left: the display list mirrors the slider.
+    let list = ui.host().display_list();
+    assert!(
+        list.ops
+            .iter()
+            .any(|op| matches!(op, compose_ui::DrawOp::Transform { scale, .. } if scale.0 == -1.0)),
+        "{}",
+        list.dump()
+    );
+}
+
+#[test]
+fn progress_indicators_draw_their_progress_and_animate_when_indeterminate() {
+    use compose_ui::DrawOp;
+    let mut ui = ComposeTestRule::with_manual_clock(|| {
+        MaterialTheme!({
+            Column!({
+                CircularProgressIndicator!(0.25, modifier = Modifier.test_tag("circular"));
+                LinearProgressIndicator!(0.5, modifier = Modifier.test_tag("linear"));
+                IndeterminateCircularProgressIndicator!();
+            });
+        });
+    });
+    // Sizes and semantics, as Compose's.
+    let circular = ui.on_node_with_tag("circular").fetch_semantics_node();
+    assert_eq!((circular.bounds.width(), circular.bounds.height()), (40.0, 40.0));
+    let info = circular.config.progress_bar_range_info.expect("a range");
+    assert_eq!((info.current, info.range), (0.25, (0.0, 1.0)));
+    let linear = ui.on_node_with_tag("linear").fetch_semantics_node().bounds;
+    assert_eq!((linear.width(), linear.height()), (240.0, 4.0));
+    // A quarter turn from the top; a line half way over its track.
+    let list = ui.host().display_list();
+    let arcs: Vec<(f32, f32)> = list
+        .ops
+        .iter()
+        .filter_map(|op| match op {
+            DrawOp::DrawArc { start_angle, sweep_angle, .. } => Some((*start_angle, *sweep_angle)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(arcs[0], (-90.0, 90.0));
+    let lines: Vec<f32> = list
+        .ops
+        .iter()
+        .filter_map(|op| match op {
+            DrawOp::DrawLine(from, to, _) => Some(to.x - from.x),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(lines, vec![240.0, 120.0]);
+    // The indeterminate arc moves frame to frame, drawing again only.
+    let first = arcs[1];
+    ui.advance_time_by(std::time::Duration::from_millis(300));
+    let list = ui.host().display_list();
+    let moved = list
+        .ops
+        .iter()
+        .filter_map(|op| match op {
+            DrawOp::DrawArc { start_angle, sweep_angle, .. } => Some((*start_angle, *sweep_angle)),
+            _ => None,
+        })
+        .nth(1);
+    assert_ne!(moved, Some(first));
+}
+
+#[test]
+fn list_items_are_as_high_as_their_lines_with_their_padding() {
+    let mut ui = compose_test(|| {
+        MaterialTheme!({
+            Column!({
+                ListItem!({ Text!("One") }, modifier = Modifier.test_tag("one"));
+                ListItem!(
+                    { Text!("Two") },
+                    modifier = Modifier.test_tag("two"),
+                    supporting_content = Some(|| Text!("Supporting")),
+                    leading_content = Some(|| {
+                        Icon!(icons::filled::star(), None, modifier = Modifier.test_tag("icon"))
+                    }),
+                );
+                ListItem!(
+                    { Text!("Three") },
+                    modifier = Modifier.test_tag("three"),
+                    overline_content = Some(|| Text!("Overline")),
+                    supporting_content = Some(|| Text!("Supporting")),
+                );
+            });
+        });
+    });
+    let height = |ui: &mut ComposeTestRule, tag: &str| {
+        ui.on_node_with_tag(tag).fetch_semantics_node().bounds.height()
+    };
+    assert_eq!(height(&mut ui, "one"), 56.0);
+    assert_eq!(height(&mut ui, "two"), 72.0);
+    assert_eq!(height(&mut ui, "three"), 88.0);
+    // The leading icon 16 dp in, centered down its 72 dp item.
+    // Merged into its item (one node, as Compose's): found in the unmerged tree.
+    let icon = ui.on_node_unmerged(has_test_tag("icon")).fetch_semantics_node().bounds;
+    assert_eq!((icon.left, icon.top), (16.0, 56.0 + 24.0));
+    ui.on_node_with_text("Two").assert_exists();
+}
+
+#[test]
+fn a_navigation_bar_shares_its_width_and_selects_on_click() {
+    let selected = mutable_state_of(0usize);
+    let handle = selected.handle();
+    let mut ui = compose_test(move || {
+        MaterialTheme!({
+            NavigationBar!(modifier = Modifier.test_tag("bar"), |row: RowScope| {
+                for (index, name) in ["Home", "Search"].into_iter().enumerate() {
+                    NavigationBarItem!(
+                        row,
+                        handle.get() == index,
+                        move || handle.set(index),
+                        { Icon!(icons::filled::star(), None) },
+                        modifier = Modifier.test_tag(name),
+                        label = Some(move || Text!("{}", name)),
+                    );
+                }
+            });
+        });
+    });
+    let bar = ui.on_node_with_tag("bar").fetch_semantics_node().bounds;
+    assert_eq!(bar.height(), 80.0);
+    let home = ui.on_node_with_tag("Home").fetch_semantics_node();
+    assert_eq!(home.config.selected, Some(true));
+    // Two items sharing 400 px, 8 dp apart.
+    assert_eq!(home.bounds.width(), 196.0);
+    ui.on_node_with_tag("Search").perform_click();
+    assert_eq!(selected.get(), 1);
+    assert_eq!(ui.on_node_with_tag("Search").fetch_semantics_node().config.selected, Some(true));
+}

@@ -1,0 +1,9 @@
+//! The compose-animation integration tests in one binary, each file a module, so
+//! they build and link once (docs/08-fast-builds.md).
+
+extern crate compose_runtime as compose;
+
+mod animation;
+mod crossfade;
+mod review_animation;
+mod visibility;
