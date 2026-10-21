@@ -487,8 +487,8 @@ impl SliderNode {
     }
 
     fn finish(&self, context: &mut EventContext<'_>) {
-        if let Some(callback) = self.on_value_change_finished.clone() {
-            context.run(move || callback());
+        if let Some(callback) = &self.on_value_change_finished {
+            context.call(callback);
         }
     }
 }
