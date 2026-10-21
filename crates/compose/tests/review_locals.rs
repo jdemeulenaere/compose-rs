@@ -40,7 +40,7 @@ fn a_const_local_is_found_by_its_reader() {
     take_log();
     let composition = Composition::new(NodeTree::<()>::new());
     composition.set_content(|| {
-        CompositionLocalProvider(CONST_LOCAL.provides("provided"), || ConstReader());
+        CompositionLocalProvider(CONST_LOCAL.provides("provided"), ConstReader);
     });
     assert_eq!(take_log(), ["const: provided"]);
 }
