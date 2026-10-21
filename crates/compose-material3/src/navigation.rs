@@ -89,8 +89,9 @@ impl NavigationBarItemDefaults {
             selected_indicator_color: scheme.secondary_container,
             unselected_icon_color: scheme.on_surface_variant,
             unselected_text_color: scheme.on_surface_variant,
-            disabled_icon_color: scheme.on_surface.with_alpha(0.38),
-            disabled_text_color: scheme.on_surface.with_alpha(0.38),
+            // The unselected colors faded, as Compose's.
+            disabled_icon_color: scheme.on_surface_variant.with_alpha(0.38),
+            disabled_text_color: scheme.on_surface_variant.with_alpha(0.38),
         }
     }
 }
@@ -125,10 +126,18 @@ pub fn NavigationBarItem(
     let pill = remember(|| Shape::Rounded([compose_ui::CornerSize::Percent(50.0); 4]));
     let indicator = if selected { colors.selected_indicator_color } else { Color::TRANSPARENT };
     let typography = MaterialTheme::typography();
+    // The press shows on the pill only, as Compose's (`selectable(indication = null)`).
+    let interaction = remember(compose_ui::MutableInteractionSource::new);
     let modifier = modifier
         .weight(scope, 1.0)
         .fill_max_height()
-        .clickable_indicated(enabled, Some(Role::Tab), icon_color, on_click)
+        .clickable_interaction(
+            enabled,
+            Some(Role::Tab),
+            Color::UNSPECIFIED,
+            interaction.clone(),
+            on_click,
+        )
         .semantics(false, move |config| config.selected = Some(selected));
     let (icon, label) = (icon.clone(), label.clone());
     Layout(
@@ -136,25 +145,41 @@ pub fn NavigationBarItem(
         policy,
         compose_runtime::callback(move || {
             // The pill, then the icon over it, then the label.
+            let (pressed, pill_shape) = (interaction.clone(), pill);
             Box(
                 Modifier
                     .size_in(SizeSpec::bounds(64.dp(), 32.dp(), 64.dp(), 32.dp()))
-                    .background_shape(indicator, pill),
+                    .background_shape(indicator, pill)
+                    .draw_behind(move |scope| {
+                        // Read while drawing: a press draws again only.
+                        if pressed.is_pressed() {
+                            scope.draw_shape(&pill_shape, icon_color.with_alpha(0.1));
+                        }
+                    }),
                 Alignment::CENTER,
                 false,
                 compose_runtime::callback(|_| {}),
             );
             let icon = icon.clone();
+            // A label shown names the item: the icon's description isn't read too.
+            let icon_modifier =
+                if show_label { Modifier.clear_and_set_semantics(|_| {}) } else { Modifier };
             CompositionLocalProvider(LOCAL_CONTENT_COLOR.provides(icon_color), || {
-                Box(Modifier, Alignment::CENTER, false, compose_runtime::callback(move |_| icon()));
+                Box(
+                    icon_modifier.clone(),
+                    Alignment::CENTER,
+                    false,
+                    compose_runtime::callback(move |_| icon()),
+                );
             });
-            if show_label && let Some(label) = label.clone() {
+            // A hidden label is still there, transparent: it names the item for screen readers.
+            if let Some(label) = label.clone() {
                 CompositionLocalProvider(LOCAL_CONTENT_COLOR.provides(text_color), || {
                     CompositionLocalProvider(
                         LOCAL_TEXT_STYLE.provides(typography.label_medium),
                         || {
                             Box(
-                                Modifier,
+                                if show_label { Modifier } else { Modifier.alpha(0.0) },
                                 Alignment::CENTER,
                                 false,
                                 compose_runtime::callback({
@@ -189,13 +214,11 @@ impl MeasurePolicy for NavigationBarItemLayout {
         let height = constraints.max_height;
         let pill = scope.measure(measurables[0], loose);
         let icon = scope.measure(measurables[1], loose);
-        let label = if self.label {
-            measurables.get(2).map(|&label| scope.measure(label, loose))
-        } else {
-            None
-        };
+        let label = measurables.get(2).map(|&label| scope.measure(label, loose));
         let gap = density.round_to_px(4.dp());
-        let content = pill.height + label.as_ref().map_or(0, |label| gap + label.height);
+        // A hidden label takes no room: the icon centered alone, the label (transparent) under.
+        let shown = label.as_ref().filter(|_| self.label);
+        let content = pill.height + shown.map_or(0, |label| gap + label.height);
         let top = (height - content).max(0) / 2;
         let center = |child_width: i32| (width - child_width) / 2;
         scope.place_relative(&pill, center(pill.width), top);

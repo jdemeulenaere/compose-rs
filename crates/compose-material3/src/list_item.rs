@@ -70,8 +70,9 @@ pub fn ListItem(
     // Three lines align at the top, as Compose's.
     let alignment = if lines >= 3 { Alignment::TOP } else { Alignment::CENTER_VERTICALLY };
     let typography = MaterialTheme::typography();
+    // One node for the item, its texts merged, as Compose's.
     Surface(
-        modifier,
+        modifier.semantics(true, |_| {}),
         compose_ui::RECTANGLE_SHAPE,
         colors.container_color,
         Color::UNSPECIFIED,

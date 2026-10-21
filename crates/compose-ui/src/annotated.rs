@@ -97,11 +97,21 @@ impl AnnotatedString {
     /// (the spans covering it over `style`, in their order) and its background. Covers the
     /// whole text.
     pub fn runs(&self, style: &TextStyle) -> Vec<(Range<usize>, TextStyle, Color)> {
-        let length = self.text.as_str().len();
+        let text = self.text.as_str();
+        let length = text.len();
+        // In the text, at character boundaries (a span ending inside a character ends before
+        // it).
+        let bound = |offset: usize| {
+            let mut offset = offset.min(length);
+            while !text.is_char_boundary(offset) {
+                offset -= 1;
+            }
+            offset
+        };
         let mut bounds: Vec<usize> = vec![0, length];
         for span in self.span_styles.iter() {
-            bounds.push(span.start.min(length));
-            bounds.push(span.end.min(length));
+            bounds.push(bound(span.start));
+            bounds.push(bound(span.end));
         }
         bounds.sort_unstable();
         bounds.dedup();
@@ -111,9 +121,9 @@ impl AnnotatedString {
             .map(|pair| {
                 let range = pair[0]..pair[1];
                 let covering = || {
-                    self.span_styles
-                        .iter()
-                        .filter(|span| span.start <= range.start && range.end <= span.end)
+                    self.span_styles.iter().filter(|span| {
+                        bound(span.start) <= range.start && range.end <= bound(span.end)
+                    })
                 };
                 let style = covering().fold(*style, |style, span| span.style.over(&style));
                 let background = covering().fold(Color::UNSPECIFIED, |background, span| {

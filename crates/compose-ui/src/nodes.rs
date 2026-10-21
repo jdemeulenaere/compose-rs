@@ -507,6 +507,22 @@ fn inside(event: &PointerEvent, bounds: IntSize) -> bool {
         && position.y < bounds.height as f32
 }
 
+impl ClickableNode {
+    /// Its press changed: drawn again, and told to its interaction source.
+    fn press_changed(&self, context: &mut EventContext<'_>) {
+        context.invalidate_draw();
+        self.publish_press();
+    }
+
+    fn publish_press(&self) {
+        if let Press::Click(clickable) = &self.spec
+            && let Some(source) = &clickable.interaction_source
+        {
+            source.set_pressed(self.state.pressed.is_some() || self.state.keys_pressed != 0);
+        }
+    }
+}
+
 impl PointerInputModifierNode for ClickableNode {
     fn on_pointer_event(
         &mut self,
@@ -523,7 +539,7 @@ impl PointerInputModifierNode for ClickableNode {
                 if self.spec.enabled() && !event.consumed && self.state.pressed.is_none() {
                     self.state.pressed = Some(event.pointer);
                     event.consume();
-                    context.invalidate_draw();
+                    self.press_changed(context);
                 }
             }
             PointerEventType::Move => {
@@ -531,13 +547,13 @@ impl PointerInputModifierNode for ClickableNode {
                     && (event.consumed || !inside(event, bounds))
                 {
                     self.state.pressed = None;
-                    context.invalidate_draw();
+                    self.press_changed(context);
                 }
             }
             PointerEventType::Release => {
                 if self.state.pressed == Some(event.pointer) {
                     self.state.pressed = None;
-                    context.invalidate_draw();
+                    self.press_changed(context);
                     if !event.consumed && inside(event, bounds) {
                         event.consume();
                         self.spec.fire(context);
@@ -550,6 +566,7 @@ impl PointerInputModifierNode for ClickableNode {
 
     fn on_cancel_pointer_input(&mut self) {
         self.state.pressed = None;
+        self.publish_press();
     }
 }
 
@@ -612,14 +629,14 @@ impl KeyInputModifierNode for ClickableNode {
         match event.kind {
             KeyEventType::KeyDown => {
                 self.state.keys_pressed |= key_bit(event.key);
-                context.invalidate_draw();
+                self.press_changed(context);
                 true
             }
             KeyEventType::KeyUp => {
                 let bit = key_bit(event.key);
                 if self.state.keys_pressed & bit != 0 {
                     self.state.keys_pressed &= !bit;
-                    context.invalidate_draw();
+                    self.press_changed(context);
                     self.spec.fire(context);
                     true
                 } else {

@@ -22,6 +22,7 @@ pub mod graphics_layer;
 pub mod host;
 pub mod image;
 pub mod input;
+pub mod interaction;
 pub mod layout;
 mod measure;
 pub mod modifier;
@@ -54,6 +55,7 @@ pub use input::{
     Action, EventContext, Key, KeyEvent, KeyEventType, KeyModifiers, PointerEvent,
     PointerEventPass, PointerEventType, PointerId, PointerType,
 };
+pub use interaction::MutableInteractionSource;
 pub use layout::{
     EmptyMeasurePolicy, Layout, Measurable, MeasurePolicy, MeasureResult, MeasureScope, Placeable,
     StackMeasurePolicy, emit_layout_node, empty_measure_policy,

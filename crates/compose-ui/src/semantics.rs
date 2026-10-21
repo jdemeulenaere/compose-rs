@@ -89,6 +89,8 @@ pub struct SemanticsConfiguration {
     pub progress_bar_range_info: Option<ProgressBarRangeInfo>,
     /// It's a dialog (its own pane, modal), as `isDialog`.
     pub is_dialog: bool,
+    /// Its descendants have no semantics, as `clearAndSetSemantics`.
+    pub clear_descendants: bool,
     /// The properties belong to the nearest ancestor with semantics, in both trees, as if its
     /// own modifiers set them: a text field's inner text, which in Compose is one semantics
     /// node with its decoration box.
@@ -163,6 +165,7 @@ impl SemanticsConfiguration {
             self.progress_bar_range_info = other.progress_bar_range_info;
         }
         self.is_dialog |= other.is_dialog;
+        self.clear_descendants |= other.clear_descendants;
         self.disabled |= other.disabled;
         self.focusable |= other.focusable;
         self.focused |= other.focused;
@@ -224,6 +227,7 @@ impl fmt::Debug for SemanticsConfiguration {
             (self.merge_descendants, "merged"),
             (self.part_of_parent, "part_of_parent"),
             (self.is_dialog, "dialog"),
+            (self.clear_descendants, "cleared"),
         ] {
             if flag {
                 parts.push(name.to_string());
@@ -412,7 +416,9 @@ impl UiTree {
             }
             Some((mut config, layer)) => {
                 let mut children = Vec::new();
-                if merged && config.merge_descendants {
+                if config.clear_descendants {
+                    // Nothing inside reads.
+                } else if merged && config.merge_descendants {
                     for child in children_of(self) {
                         self.merge_into(child, &mut config, &mut children);
                     }
@@ -450,6 +456,9 @@ impl UiTree {
                 return;
             }
             config.merge_child(&own);
+            if own.clear_descendants {
+                return;
+            }
         }
         let count = self.node(node).children.len();
         for index in 0..count {

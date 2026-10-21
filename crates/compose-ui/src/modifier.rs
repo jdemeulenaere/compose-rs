@@ -206,6 +206,27 @@ impl Modifier {
             enabled,
             role,
             indication,
+            interaction_source: None,
+            on_click: on_click.into_callback(),
+        }))
+    }
+
+    /// `clickable_indicated` reporting its press to `interaction_source`, as
+    /// `clickable(interactionSource, indication)`: with an unspecified `indication`, something
+    /// else shows the press.
+    pub fn clickable_interaction(
+        self,
+        enabled: bool,
+        role: Option<Role>,
+        indication: Color,
+        interaction_source: crate::interaction::MutableInteractionSource,
+        on_click: impl IntoCallback<dyn Fn()>,
+    ) -> Modifier {
+        self.then_element(Element::Clickable(Clickable {
+            enabled,
+            role,
+            indication,
+            interaction_source: Some(interaction_source),
             on_click: on_click.into_callback(),
         }))
     }
@@ -277,6 +298,18 @@ impl Modifier {
         let mut config = SemanticsConfiguration::default();
         properties(&mut config);
         self.then_element(Element::Semantics(merge_descendants, Rc::new(config)))
+    }
+
+    /// Replaces the descendants' semantics with `properties`, as `Modifier.clearAndSetSemantics`:
+    /// what's inside reads as nothing (an icon next to its label).
+    pub fn clear_and_set_semantics(
+        self,
+        properties: impl FnOnce(&mut SemanticsConfiguration),
+    ) -> Modifier {
+        self.semantics(false, |config| {
+            properties(config);
+            config.clear_descendants = true;
+        })
     }
 }
 
@@ -467,6 +500,8 @@ pub struct Clickable {
     /// The state layer's color, drawn at 10% while pressed or focused (Material's indication);
     /// unspecified for none.
     pub indication: Color,
+    /// Where its press is reported.
+    pub interaction_source: Option<crate::interaction::MutableInteractionSource>,
     pub on_click: Callback<dyn Fn()>,
 }
 
@@ -531,6 +566,7 @@ impl Element {
                 a.enabled == b.enabled
                     && a.role == b.role
                     && a.indication == b.indication
+                    && a.interaction_source == b.interaction_source
                     && a.on_click.ptr_eq(&b.on_click)
             }
             (Toggleable(a), Toggleable(b)) => {

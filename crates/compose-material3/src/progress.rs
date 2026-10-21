@@ -101,9 +101,15 @@ pub fn IndeterminateCircularProgressIndicator(
             scope.draw_arc(oval, 0.0, 360.0, Paint::stroke_capped(track_color, stroke, stroke_cap));
         }
         let (start, sweep) = circular_indeterminate_angles(time.get());
+        // A cap past the arc's ends: the arc starts that much later, as Compose's.
+        let cap_offset = if stroke_cap == StrokeCap::Butt || size == 0.0 {
+            0.0
+        } else {
+            (stroke / (size / 2.0)).to_degrees() / 2.0
+        };
         scope.draw_arc(
             oval,
-            start,
+            start + cap_offset,
             sweep.max(0.1),
             Paint::stroke_capped(color, stroke, stroke_cap),
         );
@@ -218,7 +224,8 @@ fn linear_size(modifier: Modifier) -> Modifier {
 }
 
 /// A line across the node's middle from `start` to `end` (fractions of its width, from its
-/// start), as thick as the node.
+/// start), as thick as the node; a capped line's caps kept inside it, and none drawn if it's
+/// empty, as Compose's `drawLinearIndicator`.
 fn draw_line_fraction(
     scope: &mut compose_ui::DrawScope<'_>,
     start: f32,
@@ -228,13 +235,22 @@ fn draw_line_fraction(
     rtl: bool,
 ) {
     let size = scope.size();
-    let (from, to) = (start * size.width, end * size.width);
+    let stroke = size.height;
+    let (mut from, mut to) = (start * size.width, end * size.width);
+    if cap != StrokeCap::Butt && stroke <= size.width {
+        if (to - from).abs() == 0.0 {
+            return;
+        }
+        let (low, high) = (stroke / 2.0, size.width - stroke / 2.0);
+        from = from.clamp(low, high);
+        to = to.clamp(low, high);
+    }
     let (from, to) = if rtl { (size.width - from, size.width - to) } else { (from, to) };
     let y = size.height / 2.0;
     scope.draw_line(
         Offset::new(from, y),
         Offset::new(to, y),
-        Paint::stroke_capped(color, size.height, cap),
+        Paint::stroke_capped(color, stroke, cap),
     );
 }
 

@@ -503,7 +503,8 @@ fn list_items_are_as_high_as_their_lines_with_their_padding() {
     assert_eq!(height(&mut ui, "two"), 72.0);
     assert_eq!(height(&mut ui, "three"), 88.0);
     // The leading icon 16 dp in, centered down its 72 dp item.
-    let icon = ui.on_node_with_tag("icon").fetch_semantics_node().bounds;
+    // Merged into its item (one node, as Compose's): found in the unmerged tree.
+    let icon = ui.on_node_unmerged(has_test_tag("icon")).fetch_semantics_node().bounds;
     assert_eq!((icon.left, icon.top), (16.0, 56.0 + 24.0));
     ui.on_node_with_text("Two").assert_exists();
 }

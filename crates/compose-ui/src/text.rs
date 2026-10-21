@@ -459,7 +459,13 @@ impl TextMeasurer for FixedTextMeasurer {
                 }
             }
         }
-        lines.truncate(options.max_lines.max(1) as usize);
+        // As Compose: an ellipsis without soft wrapping is one line.
+        let max_lines = if options.overflow == TextOverflow::Ellipsis && !options.soft_wrap {
+            1
+        } else {
+            options.max_lines
+        };
+        lines.truncate(max_lines.max(1) as usize);
         // As Compose: the width the text was laid out at when wrapping (its own width, the
         // widest hard line, when narrower), the lines' height; the layout coerces it into its
         // constraints.
