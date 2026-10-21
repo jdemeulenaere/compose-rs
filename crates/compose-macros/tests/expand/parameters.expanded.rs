@@ -1,5 +1,5 @@
 /// Greets someone.
-#[allow(non_snake_case)]
+#[allow(non_snake_case, clippy::too_many_arguments)]
 pub fn Greeting(name: String, count: i32) {
     let __composer = ::compose::__private::current();
     let __compose_restart = |__kept: &dyn ::core::any::Any| {

@@ -9,7 +9,8 @@ use std::any::{Any, TypeId};
 pub use crate::callback::{
     ArgProbe, Callback, KeyedProbe, LambdaProbe, PendingLambda, Unkeyed, UnkeyedProbe, callback,
     callback_0, callback_1, callback_2, callback_3, callback_4, lambda_probe, resolve_0, resolve_1,
-    resolve_2, resolve_3, resolve_4, to_callback,
+    resolve_2, resolve_3, resolve_4, resolve_lazy, resolve_lazy_0, resolve_lazy_1, resolve_lazy_2,
+    resolve_lazy_3, resolve_lazy_4, to_callback,
 };
 pub use crate::compose_arg::ComposeArg;
 pub use crate::composer::{Composer, current};

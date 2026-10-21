@@ -1,0 +1,540 @@
+//! Material 3 components: `Text`, `Surface`, the buttons, `Checkbox`, `TextField`, as
+//! Compose's, with their `…Defaults`.
+
+use compose_foundation::layout::{Arrangement, Box, Column, PaddingValues, Row, RowScope};
+use compose_foundation::{BasicText, BasicTextField, BorderStroke};
+use compose_runtime::{CompositionLocalProvider, composable, mutable_state_of, remember};
+use compose_ui::{
+    Alignment, Color, Constraints, Dp, DrawModifierNode, DrawScope, FontWeight, LayoutModifierNode,
+    Measurable, MeasureResult, MeasureScope, Modifier, ModifierNode, ModifierNodeElement, Offset,
+    Paint, Rect, Role, Shape, SharedString, SizeSpec, Sp, TextStyle, UnitExt,
+};
+
+use crate::theme::{LOCAL_CONTENT_COLOR, LOCAL_TEXT_STYLE, MaterialTheme};
+
+// ---- Text ------------------------------------------------------------------------------------
+
+/// Text in the theme, as Compose's material3 `Text`: unspecified attributes come from `style`,
+/// which defaults to `LocalTextStyle`, and the color from `LocalContentColor`.
+#[composable]
+pub fn Text(
+    #[format] text: SharedString,
+    #[default(crate::Modifier)] modifier: Modifier,
+    #[default(crate::Color::UNSPECIFIED)] color: Color,
+    #[default(crate::Sp::UNSPECIFIED)] font_size: Sp,
+    #[default(None)] font_weight: Option<FontWeight>,
+    #[default(crate::Sp::UNSPECIFIED)] line_height: Sp,
+    #[default(true)] soft_wrap: bool,
+    #[default(u32::MAX)] max_lines: u32,
+    #[default(crate::LOCAL_TEXT_STYLE.current())] style: TextStyle,
+) {
+    let color = color.or(style.color).or(LOCAL_CONTENT_COLOR.current());
+    let style = TextStyle {
+        color,
+        font_size: if font_size.is_specified() { font_size } else { style.font_size },
+        font_weight: font_weight.unwrap_or(style.font_weight),
+        line_height: if line_height.is_specified() { line_height } else { style.line_height },
+    };
+    BasicText(text, modifier, style, soft_wrap, max_lines);
+}
+
+// ---- Surface ---------------------------------------------------------------------------------
+
+/// The modifiers of a surface: clipped to its shape, filled with its color, bordered.
+fn surface_modifier(
+    modifier: Modifier,
+    shape: Shape,
+    color: Color,
+    border: Option<BorderStroke>,
+) -> Modifier {
+    let modifier = modifier.background_shape(color, shape);
+    let modifier = match border {
+        Some(border) => modifier.border(border.width, border.color, shape),
+        None => modifier,
+    };
+    modifier.clip(shape)
+}
+
+/// A themed container, as Compose's `Surface`: its shape and color, and its content's color
+/// (by default the theme's content color for `color`).
+#[composable]
+pub fn Surface(
+    #[default(crate::Modifier)] modifier: Modifier,
+    #[default(crate::RECTANGLE_SHAPE)] shape: Shape,
+    #[default(crate::MaterialTheme::color_scheme().surface)] color: Color,
+    #[default(crate::Color::UNSPECIFIED)] content_color: Color,
+    #[default(None)] border: Option<BorderStroke>,
+    content: impl Fn() + 'static,
+) {
+    let content_color = content_color
+        .or(MaterialTheme::color_scheme().content_color_for(color))
+        .or(LOCAL_CONTENT_COLOR.current());
+    let modifier = surface_modifier(modifier, shape, color, border);
+    CompositionLocalProvider(LOCAL_CONTENT_COLOR.provides(content_color), || {
+        Box(modifier, Alignment::TOP_START, true, compose_runtime::callback(move |_| content()));
+    });
+}
+
+// ---- Minimum touch target --------------------------------------------------------------------
+
+/// The minimum size of an interactive element, as Compose's `minimumInteractiveComponentSize`.
+pub const MINIMUM_INTERACTIVE_SIZE: Dp = Dp(48.0);
+
+/// Lays its content out at least `MINIMUM_INTERACTIVE_SIZE` in both directions, centered, so
+/// small controls are easy to hit, as Compose's `minimumInteractiveComponentSize()`.
+pub fn minimum_interactive_component_size(modifier: Modifier) -> Modifier {
+    modifier.then_custom(MinimumInteractive)
+}
+
+struct MinimumInteractive;
+
+impl ModifierNodeElement for MinimumInteractive {
+    fn create(&self) -> std::boxed::Box<dyn ModifierNode> {
+        std::boxed::Box::new(MinimumInteractiveNode)
+    }
+    fn update(&self, _: &mut dyn ModifierNode) {}
+    fn same(&self, other: &dyn ModifierNodeElement) -> bool {
+        other.downcast_ref::<MinimumInteractive>().is_some()
+    }
+    fn name(&self) -> &'static str {
+        "minimum_interactive_component_size"
+    }
+}
+
+struct MinimumInteractiveNode;
+
+impl ModifierNode for MinimumInteractiveNode {
+    fn as_layout(&mut self) -> Option<&mut dyn LayoutModifierNode> {
+        Some(self)
+    }
+}
+
+impl LayoutModifierNode for MinimumInteractiveNode {
+    fn measure(
+        &mut self,
+        scope: &mut MeasureScope<'_>,
+        content: Measurable,
+        constraints: Constraints,
+    ) -> MeasureResult {
+        let placeable = scope.measure(content, constraints);
+        let minimum = scope.density().round_to_px(MINIMUM_INTERACTIVE_SIZE);
+        let width = constraints.constrain_width(placeable.width.max(minimum));
+        let height = constraints.constrain_height(placeable.height.max(minimum));
+        scope.place(&placeable, (width - placeable.width) / 2, (height - placeable.height) / 2);
+        scope.layout(width, height)
+    }
+}
+
+// ---- Buttons ---------------------------------------------------------------------------------
+
+/// A button's colors, enabled and disabled, as Compose's `ButtonColors`.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct ButtonColors {
+    pub container_color: Color,
+    pub content_color: Color,
+    pub disabled_container_color: Color,
+    pub disabled_content_color: Color,
+}
+
+impl compose_runtime::ComposeArg for ButtonColors {
+    fn same(&self, other: &Self) -> bool {
+        self == other
+    }
+}
+
+/// As Compose's `ButtonDefaults`.
+pub struct ButtonDefaults {}
+
+impl ButtonDefaults {
+    pub const CONTENT_PADDING: PaddingValues = PaddingValues::symmetric(Dp(24.0), Dp(8.0));
+    pub const TEXT_BUTTON_CONTENT_PADDING: PaddingValues =
+        PaddingValues::symmetric(Dp(12.0), Dp(8.0));
+    pub const MIN_WIDTH: Dp = Dp(58.0);
+    pub const MIN_HEIGHT: Dp = Dp(40.0);
+
+    /// A fully rounded pill, as `ButtonDefaults.shape`.
+    pub fn shape() -> Shape {
+        compose_foundation::CIRCLE_SHAPE
+    }
+
+    pub fn button_colors() -> ButtonColors {
+        let scheme = MaterialTheme::color_scheme();
+        ButtonColors {
+            container_color: scheme.primary,
+            content_color: scheme.on_primary,
+            disabled_container_color: scheme.on_surface.with_alpha(0.12),
+            disabled_content_color: scheme.on_surface.with_alpha(0.38),
+        }
+    }
+
+    /// Transparent, primary text: `outlinedButtonColors` and `textButtonColors`.
+    pub fn text_button_colors() -> ButtonColors {
+        let scheme = MaterialTheme::color_scheme();
+        ButtonColors {
+            container_color: Color::TRANSPARENT,
+            content_color: scheme.primary,
+            disabled_container_color: Color::TRANSPARENT,
+            disabled_content_color: scheme.on_surface.with_alpha(0.38),
+        }
+    }
+
+    pub fn outlined_button_border(enabled: bool) -> BorderStroke {
+        let scheme = MaterialTheme::color_scheme();
+        BorderStroke::new(
+            Dp(1.0),
+            if enabled { scheme.outline } else { scheme.on_surface.with_alpha(0.12) },
+        )
+    }
+}
+
+/// A filled button, as Compose's `Button`: a clickable surface around a row of content in the
+/// label style.
+#[composable]
+pub fn Button(
+    on_click: impl Fn() + 'static,
+    #[default(crate::Modifier)] modifier: Modifier,
+    #[default(true)] enabled: bool,
+    #[default(crate::ButtonDefaults::shape())] shape: Shape,
+    #[default(crate::ButtonDefaults::button_colors())] colors: ButtonColors,
+    #[default(None)] border: Option<BorderStroke>,
+    #[default(crate::ButtonDefaults::CONTENT_PADDING)] content_padding: PaddingValues,
+    content: impl Fn(RowScope) + 'static,
+) {
+    let (container, content_color) = if enabled {
+        (colors.container_color, colors.content_color)
+    } else {
+        (colors.disabled_container_color, colors.disabled_content_color)
+    };
+    let surface =
+        surface_modifier(minimum_interactive_component_size(modifier), shape, container, border)
+            .clickable_with(enabled, Some(Role::Button), on_click);
+    let label = MaterialTheme::typography().label_large;
+    CompositionLocalProvider(LOCAL_CONTENT_COLOR.provides(content_color), || {
+        CompositionLocalProvider(LOCAL_TEXT_STYLE.provides(label), || {
+            Box(
+                surface,
+                Alignment::TOP_START,
+                true,
+                compose_runtime::callback(move |_| {
+                    Row(
+                        Modifier
+                            .size_in(SizeSpec::bounds(
+                                ButtonDefaults::MIN_WIDTH,
+                                ButtonDefaults::MIN_HEIGHT,
+                                Dp::UNSPECIFIED,
+                                Dp::UNSPECIFIED,
+                            ))
+                            .padding_values(content_padding),
+                        Arrangement::Center,
+                        Alignment::CENTER_VERTICALLY,
+                        content.clone(),
+                    );
+                }),
+            );
+        });
+    });
+}
+
+/// A button with an outline and no fill, as Compose's `OutlinedButton`.
+#[composable]
+pub fn OutlinedButton(
+    on_click: impl Fn() + 'static,
+    #[default(crate::Modifier)] modifier: Modifier,
+    #[default(true)] enabled: bool,
+    content: impl Fn(RowScope) + 'static,
+) {
+    let border = ButtonDefaults::outlined_button_border(enabled);
+    Button(
+        on_click,
+        modifier,
+        enabled,
+        ButtonDefaults::shape(),
+        ButtonDefaults::text_button_colors(),
+        Some(border),
+        ButtonDefaults::CONTENT_PADDING,
+        content,
+    );
+}
+
+/// A button of text alone, as Compose's `TextButton`.
+#[composable]
+pub fn TextButton(
+    on_click: impl Fn() + 'static,
+    #[default(crate::Modifier)] modifier: Modifier,
+    #[default(true)] enabled: bool,
+    content: impl Fn(RowScope) + 'static,
+) {
+    Button(
+        on_click,
+        modifier,
+        enabled,
+        ButtonDefaults::shape(),
+        ButtonDefaults::text_button_colors(),
+        None,
+        ButtonDefaults::TEXT_BUTTON_CONTENT_PADDING,
+        content,
+    );
+}
+
+// ---- Checkbox --------------------------------------------------------------------------------
+
+/// A checkbox's colors, as Compose's `CheckboxColors` (the enabled ones).
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct CheckboxColors {
+    pub checked_box_color: Color,
+    pub checked_check_color: Color,
+    pub unchecked_border_color: Color,
+    pub disabled_color: Color,
+}
+
+impl compose_runtime::ComposeArg for CheckboxColors {
+    fn same(&self, other: &Self) -> bool {
+        self == other
+    }
+}
+
+pub struct CheckboxDefaults {}
+
+impl CheckboxDefaults {
+    pub fn colors() -> CheckboxColors {
+        let scheme = MaterialTheme::color_scheme();
+        CheckboxColors {
+            checked_box_color: scheme.primary,
+            checked_check_color: scheme.on_primary,
+            unchecked_border_color: scheme.on_surface_variant,
+            disabled_color: scheme.on_surface.with_alpha(0.38),
+        }
+    }
+}
+
+/// A checkbox, as Compose's: a 20 dp box in a 48 dp touch target, toggled by a click when
+/// `on_checked_change` is given.
+#[composable]
+pub fn Checkbox(
+    checked: bool,
+    on_checked_change: Option<impl Fn(bool) + 'static>,
+    #[default(crate::Modifier)] modifier: Modifier,
+    #[default(true)] enabled: bool,
+    #[default(crate::CheckboxDefaults::colors())] colors: CheckboxColors,
+) {
+    let modifier = match on_checked_change {
+        Some(on_checked_change) => {
+            modifier.toggleable(checked, enabled, Some(Role::Checkbox), on_checked_change)
+        }
+        None => modifier,
+    };
+    let modifier = minimum_interactive_component_size(modifier)
+        .padding(2.dp())
+        .size(20.dp())
+        .then_custom(CheckboxElement { checked, enabled, colors });
+    compose_foundation::layout::Spacer(modifier);
+}
+
+struct CheckboxElement {
+    checked: bool,
+    enabled: bool,
+    colors: CheckboxColors,
+}
+
+impl ModifierNodeElement for CheckboxElement {
+    fn create(&self) -> std::boxed::Box<dyn ModifierNode> {
+        std::boxed::Box::new(CheckboxNode {
+            checked: self.checked,
+            enabled: self.enabled,
+            colors: self.colors,
+        })
+    }
+    fn update(&self, node: &mut dyn ModifierNode) {
+        if let Some(node) = node.downcast_mut::<CheckboxNode>() {
+            *node =
+                CheckboxNode { checked: self.checked, enabled: self.enabled, colors: self.colors };
+        }
+    }
+    fn same(&self, other: &dyn ModifierNodeElement) -> bool {
+        other.downcast_ref::<CheckboxElement>().is_some_and(|other| {
+            other.checked == self.checked
+                && other.enabled == self.enabled
+                && other.colors == self.colors
+        })
+    }
+    fn name(&self) -> &'static str {
+        "checkbox"
+    }
+}
+
+struct CheckboxNode {
+    checked: bool,
+    enabled: bool,
+    colors: CheckboxColors,
+}
+
+impl ModifierNode for CheckboxNode {
+    fn as_draw(&mut self) -> Option<&mut dyn DrawModifierNode> {
+        Some(self)
+    }
+}
+
+impl DrawModifierNode for CheckboxNode {
+    fn draw(&mut self, scope: &mut DrawScope<'_>) {
+        let size = scope.size();
+        let density = scope.density();
+        let stroke = density.to_px(2.dp());
+        let radius = density.to_px(2.dp());
+        let colors = self.colors;
+        let box_rect = Rect::new(0.0, 0.0, size.width, size.height);
+        if self.checked {
+            let fill = if self.enabled { colors.checked_box_color } else { colors.disabled_color };
+            scope.draw_round_rect(box_rect, [radius; 4], Paint::fill(fill));
+            let check = Paint::stroke(colors.checked_check_color, stroke);
+            let point = |x: f32, y: f32| Offset::new(size.width * x, size.height * y);
+            scope.draw_line(point(0.2, 0.5), point(0.4, 0.7), check);
+            scope.draw_line(point(0.4, 0.7), point(0.8, 0.3), check);
+        } else {
+            let border =
+                if self.enabled { colors.unchecked_border_color } else { colors.disabled_color };
+            let half = stroke / 2.0;
+            let inset = Rect::new(half, half, size.width - half, size.height - half);
+            scope.draw_round_rect(
+                inset,
+                [(radius - half).max(0.0); 4],
+                Paint::stroke(border, stroke),
+            );
+        }
+    }
+}
+
+// ---- TextField -------------------------------------------------------------------------------
+
+/// A text field's colors, as Compose's `TextFieldColors` (the roles used).
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct TextFieldColors {
+    pub container_color: Color,
+    pub text_color: Color,
+    pub cursor_color: Color,
+    pub focused_indicator_color: Color,
+    pub unfocused_indicator_color: Color,
+    pub label_color: Color,
+    pub focused_label_color: Color,
+    pub placeholder_color: Color,
+    pub disabled_text_color: Color,
+}
+
+impl compose_runtime::ComposeArg for TextFieldColors {
+    fn same(&self, other: &Self) -> bool {
+        self == other
+    }
+}
+
+pub struct TextFieldDefaults {}
+
+impl TextFieldDefaults {
+    pub const MIN_WIDTH: Dp = Dp(280.0);
+    pub const MIN_HEIGHT: Dp = Dp(56.0);
+
+    pub fn colors() -> TextFieldColors {
+        let scheme = MaterialTheme::color_scheme();
+        TextFieldColors {
+            container_color: scheme.surface_container_highest,
+            text_color: scheme.on_surface,
+            cursor_color: scheme.primary,
+            focused_indicator_color: scheme.primary,
+            unfocused_indicator_color: scheme.on_surface_variant,
+            label_color: scheme.on_surface_variant,
+            focused_label_color: scheme.primary,
+            placeholder_color: scheme.on_surface_variant,
+            disabled_text_color: scheme.on_surface.with_alpha(0.38),
+        }
+    }
+
+    /// The filled field's shape: extra small, rounded at the top only.
+    pub fn shape() -> Shape {
+        let radius = match MaterialTheme::shapes().extra_small {
+            Shape::Rounded(corners) => corners[0],
+            Shape::Rectangle => compose_ui::CornerSize::Dp(Dp(0.0)),
+        };
+        Shape::Rounded([
+            radius,
+            radius,
+            compose_ui::CornerSize::Dp(Dp(0.0)),
+            compose_ui::CornerSize::Dp(Dp(0.0)),
+        ])
+    }
+}
+
+/// A filled text field, as Compose's `TextField`: a container with an indicator line, an
+/// optional label above the text (always floated, without the animation) and a placeholder
+/// while empty.
+#[composable]
+pub fn TextField(
+    value: String,
+    on_value_change: impl Fn(String) + 'static,
+    #[default(crate::Modifier)] modifier: Modifier,
+    #[default(true)] enabled: bool,
+    #[default(false)] read_only: bool,
+    #[default(crate::LOCAL_TEXT_STYLE.current())] text_style: TextStyle,
+    #[default(None)] label: Option<impl Fn() + 'static>,
+    #[default(None)] placeholder: Option<impl Fn() + 'static>,
+    #[default(false)] single_line: bool,
+    #[default(crate::TextFieldDefaults::colors())] colors: TextFieldColors,
+) {
+    let focused = remember(|| mutable_state_of(false));
+    let is_focused = focused.get();
+    let indicator =
+        if is_focused { colors.focused_indicator_color } else { colors.unfocused_indicator_color };
+    let text_color = if enabled { colors.text_color } else { colors.disabled_text_color };
+    let style = TextStyle { color: text_style.color.or(text_color), ..text_style };
+    let typography = MaterialTheme::typography();
+    let label_color = if is_focused { colors.focused_label_color } else { colors.label_color };
+    let empty = value.is_empty();
+    let container = modifier
+        .size_in(SizeSpec::bounds(
+            TextFieldDefaults::MIN_WIDTH,
+            TextFieldDefaults::MIN_HEIGHT,
+            Dp::UNSPECIFIED,
+            Dp::UNSPECIFIED,
+        ))
+        .background_shape(colors.container_color, TextFieldDefaults::shape())
+        .on_focus_changed(move |now| focused.set(now));
+    Box!(modifier = container, content_alignment = Alignment::BOTTOM_START, {
+        Column!(
+            modifier = Modifier.fill_max_width().padding_horizontal_vertical(16.dp(), 8.dp()),
+            {
+                if let Some(label) = &label {
+                    CompositionLocalProvider(LOCAL_CONTENT_COLOR.provides(label_color), || {
+                        CompositionLocalProvider(
+                            LOCAL_TEXT_STYLE.provides(typography.body_small),
+                            || label(),
+                        );
+                    });
+                }
+                Box!(modifier = Modifier.fill_max_width(), {
+                    if empty && let Some(placeholder) = &placeholder {
+                        CompositionLocalProvider(
+                            LOCAL_CONTENT_COLOR.provides(colors.placeholder_color),
+                            || {
+                                CompositionLocalProvider(LOCAL_TEXT_STYLE.provides(style), || {
+                                    placeholder()
+                                });
+                            },
+                        );
+                    }
+                    BasicTextField(
+                        value.clone(),
+                        on_value_change.clone(),
+                        Modifier.fill_max_width(),
+                        enabled,
+                        read_only,
+                        style,
+                        single_line,
+                        colors.cursor_color,
+                    );
+                });
+            }
+        );
+        // The indicator line: 1 dp, 2 dp focused.
+        let thickness = if is_focused { 2.dp() } else { 1.dp() };
+        compose_foundation::layout::Spacer(
+            Modifier.fill_max_width().height(thickness).background(indicator),
+        );
+    });
+}

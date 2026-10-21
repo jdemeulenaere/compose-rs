@@ -277,6 +277,50 @@ macro_rules! resolvers {
 
 resolvers!(resolve_0(), resolve_1(A), resolve_2(A, B), resolve_3(A, B, C1), resolve_4(A, B, C1, D));
 
+/// `resolve_N` for a lambda nested in another closure: `make` builds it, from clones of its
+/// captures, only on a miss, so the outer closure keeps its own (and stays `Fn`).
+macro_rules! lazy_resolvers {
+    ($($name:ident ($($argument:ident),*)),*) => {
+        $(
+            #[doc(hidden)]
+            #[inline]
+            pub fn $name<K: 'static, $($argument: 'static,)* Output: 'static, C>(
+                probe: LambdaProbe<K, dyn Fn($($argument),*) -> Output>,
+                make: impl FnOnce() -> C,
+            ) -> Callback<dyn Fn($($argument),*) -> Output>
+            where
+                C: Fn($($argument),*) -> Output + 'static,
+            {
+                match probe {
+                    LambdaProbe::Hit(callback) => callback,
+                    LambdaProbe::Miss(pending) => pending.store(make()),
+                }
+            }
+        )*
+    };
+}
+
+lazy_resolvers!(
+    resolve_lazy_0(),
+    resolve_lazy_1(A),
+    resolve_lazy_2(A, B),
+    resolve_lazy_3(A, B, C1),
+    resolve_lazy_4(A, B, C1, D)
+);
+
+/// `resolve_lazy_N` for lambdas of more arguments, through `IntoCallback`.
+#[doc(hidden)]
+#[inline]
+pub fn resolve_lazy<K: 'static, F: ?Sized + 'static, C: IntoCallback<F>>(
+    probe: LambdaProbe<K, F>,
+    make: impl FnOnce() -> C,
+) -> Callback<F> {
+    match probe {
+        LambdaProbe::Hit(callback) => callback,
+        LambdaProbe::Miss(pending) => pending.store(make()),
+    }
+}
+
 /// `callback(lambda)` for a lambda of `N` arguments, as `resolve_N`.
 macro_rules! wrappers {
     ($($name:ident ($($argument:ident),*)),*) => {

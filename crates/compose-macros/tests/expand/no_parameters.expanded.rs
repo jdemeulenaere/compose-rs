@@ -1,4 +1,4 @@
-#[allow(non_snake_case)]
+#[allow(non_snake_case, clippy::too_many_arguments)]
 fn Counter() {
     let __composer = ::compose::__private::current();
     let __compose_restart = |_: &dyn ::core::any::Any| Counter();

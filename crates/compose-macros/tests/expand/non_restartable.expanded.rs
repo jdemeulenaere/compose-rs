@@ -1,4 +1,4 @@
-#[allow(non_snake_case)]
+#[allow(non_snake_case, clippy::too_many_arguments)]
 fn Borrowed(title: &str) {
     let __compose_marker = || ();
     let __compose_group = ::compose::__private::ReplaceGroup::start(
@@ -18,7 +18,7 @@ macro_rules! __compose_call_Borrowed_1efc7a945654dc5e_N {
 #[doc(hidden)]
 #[allow(unused_imports)]
 use __compose_call_Borrowed_1efc7a945654dc5e_N as Borrowed;
-#[allow(non_snake_case)]
+#[allow(non_snake_case, clippy::too_many_arguments)]
 fn Returns(value: i32) -> i32 {
     let __compose_marker = || ();
     let __compose_group = ::compose::__private::ReplaceGroup::start(
@@ -36,7 +36,7 @@ macro_rules! __compose_call_Returns_0ad3229f33d2e0b2_N {
 #[doc(hidden)]
 #[allow(unused_imports)]
 use __compose_call_Returns_0ad3229f33d2e0b2_N as Returns;
-#[allow(non_snake_case)]
+#[allow(non_snake_case, clippy::too_many_arguments)]
 fn Explicit(content: impl Fn()) {
     let __compose_marker = || ();
     let __compose_group = ::compose::__private::ReplaceGroup::start(
@@ -56,7 +56,7 @@ macro_rules! __compose_call_Explicit_0e6aa01d864d81a2_N {
 #[doc(hidden)]
 #[allow(unused_imports)]
 use __compose_call_Explicit_0e6aa01d864d81a2_N as Explicit;
-#[allow(non_snake_case)]
+#[allow(non_snake_case, clippy::too_many_arguments)]
 fn StaticReference(title: &'static str) {
     let __composer = ::compose::__private::current();
     let __compose_restart = |__kept: &dyn ::core::any::Any| {

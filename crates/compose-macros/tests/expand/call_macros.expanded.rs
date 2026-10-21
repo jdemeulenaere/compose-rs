@@ -1,4 +1,4 @@
-#[allow(non_snake_case)]
+#[allow(non_snake_case, clippy::too_many_arguments)]
 pub fn Button(
     on_click: ::compose::__private::Callback<dyn Fn()>,
     modifier: Modifier,
@@ -70,7 +70,7 @@ macro_rules! __compose_call_Button_ceda1bb746811f5a_N {
 #[doc(hidden)]
 #[allow(unused_imports)]
 pub use __compose_call_Button_ceda1bb746811f5a_N as Button;
-#[allow(non_snake_case)]
+#[allow(non_snake_case, clippy::too_many_arguments)]
 fn Counter() {
     let __composer = ::compose::__private::current();
     let __compose_restart = |_: &dyn ::core::any::Any| Counter();

@@ -1,4 +1,4 @@
-#[allow(non_snake_case)]
+#[allow(non_snake_case, clippy::too_many_arguments)]
 fn Pair(__compose_argument0: (i32, i32), _unused: bool) {
     let __composer = ::compose::__private::current();
     let __compose_restart = |__kept: &dyn ::core::any::Any| {
@@ -44,7 +44,7 @@ macro_rules! __compose_call_Pair_c102bf861f04c7d2_N {
 #[doc(hidden)]
 #[allow(unused_imports)]
 use __compose_call_Pair_c102bf861f04c7d2_N as Pair;
-#[allow(non_snake_case)]
+#[allow(non_snake_case, clippy::too_many_arguments)]
 fn List<T: ComposeArg + Clone + Display + 'static>(items: Rc<Vec<T>>) {
     let __composer = ::compose::__private::current();
     let __compose_restart = |__kept: &dyn ::core::any::Any| {

@@ -357,3 +357,27 @@ fn a_zero_sized_capture_keeps_its_lambda() {
     composition.recompose();
     assert!(take_log().is_empty(), "the capture can't differ: the child skips");
 }
+
+#[test]
+fn optional_callbacks_take_a_lambda_or_none() {
+    #[composable]
+    fn Captioned(
+        #[default(None)] label: Option<impl Fn() + 'static>,
+        #[default(None)] on_change: Option<impl Fn(u32) + 'static>,
+    ) {
+        match &label {
+            Some(label) => label(),
+            None => log("no label"),
+        }
+        if let Some(on_change) = &on_change {
+            on_change(7);
+        }
+    }
+    let composition = composition();
+    composition.set_content(|| {
+        Captioned!();
+        Captioned!(label = { log("label") }, on_change = |value| log(format!("changed {value}")));
+        Captioned!(label = None, on_change = None);
+    });
+    assert_eq!(take_log(), ["no label", "label", "changed 7", "no label"]);
+}

@@ -103,6 +103,12 @@ impl From<&SharedString> for SharedString {
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct FontWeight(pub u16);
 
+impl ComposeArg for FontWeight {
+    fn same(&self, other: &Self) -> bool {
+        self == other
+    }
+}
+
 impl FontWeight {
     pub const NORMAL: FontWeight = FontWeight(400);
     pub const MEDIUM: FontWeight = FontWeight(500);

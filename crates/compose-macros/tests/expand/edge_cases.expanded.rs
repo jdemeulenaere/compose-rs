@@ -1,4 +1,4 @@
-#[allow(non_snake_case)]
+#[allow(non_snake_case, clippy::too_many_arguments)]
 fn Filtered(ids: Rc<Vec<u32>>, on_change: Rc<dyn Fn(&str)>) {
     #![allow(unused_variables)]
     let __composer = ::compose::__private::current();
@@ -71,7 +71,7 @@ macro_rules! __compose_call_Filtered_5673cd8923f60262_N {
 #[doc(hidden)]
 #[allow(unused_imports)]
 use __compose_call_Filtered_5673cd8923f60262_N as Filtered;
-#[allow(non_snake_case)]
+#[allow(non_snake_case, clippy::too_many_arguments)]
 fn Conditional(
     #[cfg(feature = "extra")]
     extra: u32,

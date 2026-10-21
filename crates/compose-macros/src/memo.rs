@@ -135,11 +135,15 @@ fn probe_with(keys: Vec<TokenStream>, make: TokenStream, arity: Option<usize>) -
 }
 
 /// The memoized form of `closure`: a probe of the lambda remembered at this position.
+///
+/// A lambda nested in another closure (a content block inside a content block) can't move its
+/// captures out of it: it is built only on a miss, from clones of its captures.
 pub(crate) fn probe(
     captures: &[Ident],
     unknown: bool,
     closure: TokenStream,
     arity: Option<usize>,
+    nested: bool,
 ) -> TokenStream {
     let mut keys: Vec<TokenStream> = captures
         .iter()
@@ -148,7 +152,22 @@ pub(crate) fn probe(
     if unknown {
         keys.push(quote! { ::compose::__private::Unkeyed::CHANGED });
     }
-    probe_with(keys, closure, arity)
+    if !nested {
+        return probe_with(keys, closure, arity);
+    }
+    let keys = key_tuple(keys);
+    let resolver = match arity.filter(|arity| *arity <= 4) {
+        Some(arity) => format_ident!("resolve_lazy_{}", arity),
+        None => format_ident!("resolve_lazy"),
+    };
+    quote! {{
+        #[allow(unused_imports)]
+        use ::compose::__private::{KeyedProbe as _, UnkeyedProbe as _};
+        ::compose::__private::#resolver(::compose::__private::lambda_probe(#keys), || {
+            #(let #captures = ::core::clone::Clone::clone(&#captures);)*
+            #closure
+        })
+    }}
 }
 
 /// A callback given as a value (`on_click = on_remove`, a default): memoized on the value
@@ -455,6 +474,23 @@ impl<'ast> Visit<'ast> for Free<'_> {
         if !name.as_deref().is_some_and(|name| self.trusted(name)) {
             self.unknown = true;
         }
+        // A call macro's arguments are expressions: visited as such, a named argument's name
+        // (`modifier = …`) isn't a use, and names bound inside its lambdas are scoped.
+        if name.as_deref().is_some_and(is_call_macro) {
+            let parser = Punctuated::<crate::call::Argument, Token![,]>::parse_terminated;
+            if let Ok(arguments) = syn::parse::Parser::parse2(parser, mac.tokens.clone()) {
+                for argument in &arguments {
+                    match argument.value() {
+                        crate::call::Value::Expr(expression) => self.visit_expr(expression),
+                        crate::call::Value::Marked(marked) => match marked.body() {
+                            MarkedBody::Block(block) => self.visit_block(block),
+                            MarkedBody::Closure(closure) => self.visit_expr_closure(closure),
+                        },
+                    }
+                }
+                return;
+            }
+        }
         self.scan_tokens(mac.tokens.clone());
     }
 
@@ -551,6 +587,7 @@ fn captures_of(
 /// A closure made a callback, memoized on its captures; `move` is added, as a callback is
 /// `'static`.
 fn memoize_closure(
+    nested: bool,
     scopes: &Scopes,
     local_macros: &[String],
     closure: &mut syn::ExprClosure,
@@ -558,7 +595,8 @@ fn memoize_closure(
     let (captures, unknown) =
         captures_of(scopes, local_macros, |free| free.visit_expr_closure(closure));
     closure.capture.get_or_insert_with(Default::default);
-    let tokens = probe(&captures, unknown, closure.to_token_stream(), Some(closure.inputs.len()));
+    let tokens =
+        probe(&captures, unknown, closure.to_token_stream(), Some(closure.inputs.len()), nested);
     syn::parse2(tokens).expect("a probe parses")
 }
 
@@ -580,6 +618,8 @@ impl syn::parse::Parse for MacroArgument {
 pub(crate) struct Memoize {
     scopes: Scopes,
     local_macros: Vec<String>,
+    /// How many closures (or content blocks) enclose the code being visited.
+    depth: usize,
 }
 
 impl Memoize {
@@ -598,7 +638,7 @@ impl Memoize {
         }
         let mut local_macros = LocalMacros(Vec::new());
         local_macros.visit_block(body);
-        Memoize { scopes, local_macros: local_macros.0 }
+        Memoize { scopes, local_macros: local_macros.0, depth: 0 }
     }
 
     /// A call macro argument: a closure or a block marked with its captures,
@@ -611,16 +651,29 @@ impl Memoize {
                 let (captures, unknown) = captures_of(&self.scopes, &self.local_macros, |free| {
                     free.visit_expr_closure(closure)
                 });
-                Marked::new(captures, unknown, MarkedBody::Closure(closure.clone()))
-                    .to_tokens(tokens);
+                Marked::new(
+                    captures,
+                    unknown,
+                    self.depth > 0,
+                    MarkedBody::Closure(closure.clone()),
+                )
+                .to_tokens(tokens);
             }
             Expr::Block(block) if block.label.is_none() && block.attrs.is_empty() => {
+                // A block becomes a content lambda: what's inside is nested.
+                self.depth += 1;
                 self.visit_block_mut(&mut block.block);
+                self.depth -= 1;
                 let (captures, unknown) = captures_of(&self.scopes, &self.local_macros, |free| {
                     free.visit_block(&block.block)
                 });
-                Marked::new(captures, unknown, MarkedBody::Block(block.block.clone()))
-                    .to_tokens(tokens);
+                Marked::new(
+                    captures,
+                    unknown,
+                    self.depth > 0,
+                    MarkedBody::Block(block.block.clone()),
+                )
+                .to_tokens(tokens);
             }
             other => {
                 self.visit_expr_mut(other);
@@ -737,7 +790,12 @@ impl VisitMut for Memoize {
                 for argument in &mut call.args {
                     if let Expr::Closure(closure) = argument {
                         self.visit_expr_closure_mut(closure);
-                        *argument = memoize_closure(&self.scopes, &self.local_macros, closure);
+                        *argument = memoize_closure(
+                            self.depth > 0,
+                            &self.scopes,
+                            &self.local_macros,
+                            closure,
+                        );
                     } else {
                         self.visit_expr_mut(argument);
                     }
@@ -753,7 +811,12 @@ impl VisitMut for Memoize {
                 for argument in &mut call.args {
                     if let (true, Expr::Closure(closure)) = (constructor, &mut *argument) {
                         self.visit_expr_closure_mut(closure);
-                        *argument = memoize_closure(&self.scopes, &self.local_macros, closure);
+                        *argument = memoize_closure(
+                            self.depth > 0,
+                            &self.scopes,
+                            &self.local_macros,
+                            closure,
+                        );
                     } else {
                         self.visit_expr_mut(argument);
                     }
@@ -777,7 +840,9 @@ impl VisitMut for Memoize {
         for input in &closure.inputs {
             bindings(input, &mut names);
         }
+        self.depth += 1;
         self.scoped(names, |memoize| memoize.visit_expr_mut(&mut closure.body));
+        self.depth -= 1;
     }
 
     fn visit_expr_for_loop_mut(&mut self, expr: &mut syn::ExprForLoop) {

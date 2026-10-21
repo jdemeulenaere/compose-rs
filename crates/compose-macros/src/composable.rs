@@ -208,6 +208,27 @@ fn expansion_serial() -> u64 {
     SERIAL.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
+/// `Option<impl Fn(…) + 'static>`, as `Option<Callback<dyn Fn(…)>>`: Compose's nullable
+/// lambdas (`onCheckedChange: ((Boolean) -> Unit)?`, `label: (@Composable () -> Unit)?`).
+fn optional_callback_type(ty: &Type) -> syn::Result<Option<Type>> {
+    let Some(inner) = option_argument(ty) else { return Ok(None) };
+    Ok(callback_type(inner)?.map(|callback| syn::parse_quote!(::core::option::Option<#callback>)))
+}
+
+/// `T` in `Option<T>`.
+fn option_argument(ty: &Type) -> Option<&Type> {
+    let Type::Path(path) = ty else { return None };
+    let segment = path.path.segments.last()?;
+    if segment.ident != "Option" {
+        return None;
+    }
+    let syn::PathArguments::AngleBracketed(arguments) = &segment.arguments else { return None };
+    match arguments.args.first()? {
+        syn::GenericArgument::Type(inner) if arguments.args.len() == 1 => Some(inner),
+        _ => None,
+    }
+}
+
 /// The number of arguments of a `Callback<dyn Fn(…)>` parameter.
 fn callback_arity(ty: &Type) -> Option<usize> {
     let Type::Path(path) = ty else { return None };
@@ -240,12 +261,17 @@ fn call_macro(function: &ItemFn, params: &[Param], key: u64, site: &str) -> Toke
     let hidden = format_ident!("__compose_call_{}_{:016x}_{}", name, unique, expansion_serial());
     let spec = params.iter().map(|param| {
         let parameter = &param.name;
-        let kind = match callback_arity(&param.ty) {
-            Some(arity) => {
+        let optional = option_argument(&param.ty).and_then(callback_arity);
+        let kind = match (callback_arity(&param.ty), optional) {
+            (Some(arity), _) => {
                 let arity = proc_macro2::Literal::usize_unsuffixed(arity);
                 quote!(callback #arity)
             }
-            None => quote!(value),
+            (None, Some(arity)) => {
+                let arity = proc_macro2::Literal::usize_unsuffixed(arity);
+                quote!(optional #arity)
+            }
+            (None, None) => quote!(value),
         };
         let default =
             param.default.clone().map(crate_relative).map(|default| quote!(= { #default }));
@@ -368,6 +394,8 @@ fn transform(
         }
         typed.attrs = attributes;
         if let Some(callback) = callback_type(&typed.ty)? {
+            *typed.ty = callback;
+        } else if let Some(callback) = optional_callback_type(&typed.ty)? {
             *typed.ty = callback;
         }
         let types = scan(&typed.ty);
@@ -565,7 +593,7 @@ fn transform(
     let sig = &function.sig;
     Ok(quote! {
         #(#outer)*
-        #[allow(non_snake_case)]
+        #[allow(non_snake_case, clippy::too_many_arguments)]
         #vis #sig {
             #(#inner)*
             #body

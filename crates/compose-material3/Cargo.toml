@@ -1,0 +1,15 @@
+[package]
+name = "compose-material3"
+description = "compose-rs's Material 3 components, as Compose's androidx.compose.material3: MaterialTheme, Text, Surface, Button, Checkbox, TextField."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+compose-runtime.workspace = true
+compose-ui.workspace = true
+compose-foundation.workspace = true
+
+[dev-dependencies]
+compose-test.workspace = true

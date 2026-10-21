@@ -112,6 +112,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "compose-foundation"
+version = "0.1.0"
+dependencies = [
+ "compose-runtime",
+ "compose-test",
+ "compose-ui",
+]
+
+[[package]]
 name = "compose-macros"
 version = "0.1.0"
 dependencies = [
@@ -119,6 +128,16 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "compose-material3"
+version = "0.1.0"
+dependencies = [
+ "compose-foundation",
+ "compose-runtime",
+ "compose-test",
+ "compose-ui",
 ]
 
 [[package]]

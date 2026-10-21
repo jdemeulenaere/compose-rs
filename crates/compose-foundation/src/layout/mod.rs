@@ -1,0 +1,334 @@
+//! `compose::foundation::layout`, as `androidx.compose.foundation.layout`: `Box`, `Column`,
+//! `Row` and `Spacer`, each a `Layout` with its own measure policy, and `Arrangement`.
+//! The layout modifiers (`padding`, `size`, `fill_max_*`, `weight`, `align`) are methods of
+//! `Modifier` (docs/06-ui.md).
+
+mod arrangement;
+
+use std::rc::Rc;
+
+use compose_runtime::{composable, remember_keyed};
+use compose_ui::{
+    Alignment, Constraints, HorizontalAlignment, Layout, Measurable, MeasurePolicy, MeasureResult,
+    MeasureScope, Modifier, ParentAlignment, Placeable, VerticalAlignment, empty_measure_policy,
+};
+use smallvec_free::Buffer;
+
+pub use arrangement::{Arrangement, SpacedAlignment};
+pub use compose_ui::{BoxScope, ColumnScope, PaddingValues, RowScope, SizeSpec};
+
+/// Scratch space for a policy's children, without allocating for up to 16 of them.
+mod smallvec_free {
+    pub(crate) enum Buffer<T: Copy + Default> {
+        Inline([T; 16], usize),
+        Heap(Vec<T>),
+    }
+
+    impl<T: Copy + Default> Buffer<T> {
+        pub(crate) fn new(len: usize) -> Buffer<T> {
+            if len <= 16 {
+                Buffer::Inline([T::default(); 16], len)
+            } else {
+                Buffer::Heap(vec![T::default(); len])
+            }
+        }
+
+        pub(crate) fn as_mut(&mut self) -> &mut [T] {
+            match self {
+                Buffer::Inline(items, len) => &mut items[..*len],
+                Buffer::Heap(items) => items,
+            }
+        }
+    }
+}
+
+// ---- Row and Column --------------------------------------------------------------------------
+
+/// The main axis of a `Row` (horizontal) or a `Column` (vertical).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Orientation {
+    Horizontal,
+    Vertical,
+}
+
+/// Constraints along the main and cross axes.
+#[derive(Clone, Copy)]
+struct AxisConstraints {
+    main_min: i32,
+    main_max: i32,
+    cross_min: i32,
+    cross_max: i32,
+}
+
+impl AxisConstraints {
+    fn new(orientation: Orientation, constraints: Constraints) -> AxisConstraints {
+        match orientation {
+            Orientation::Horizontal => AxisConstraints {
+                main_min: constraints.min_width,
+                main_max: constraints.max_width,
+                cross_min: constraints.min_height,
+                cross_max: constraints.max_height,
+            },
+            Orientation::Vertical => AxisConstraints {
+                main_min: constraints.min_height,
+                main_max: constraints.max_height,
+                cross_min: constraints.min_width,
+                cross_max: constraints.max_width,
+            },
+        }
+    }
+
+    fn to_constraints(self, orientation: Orientation) -> Constraints {
+        match orientation {
+            Orientation::Horizontal => {
+                Constraints::new(self.main_min, self.main_max, self.cross_min, self.cross_max)
+            }
+            Orientation::Vertical => {
+                Constraints::new(self.cross_min, self.cross_max, self.main_min, self.main_max)
+            }
+        }
+    }
+}
+
+/// `Row`'s and `Column`'s measure policy, as Compose's `RowColumnMeasurePolicy`: children
+/// without weight measured first with the space left, then the weighted ones sharing what
+/// remains in proportion; placed by the arrangement along the main axis and by their alignment
+/// across it.
+pub struct RowColumnMeasurePolicy {
+    orientation: Orientation,
+    arrangement: Arrangement,
+    /// A `Row`'s vertical bias or a `Column`'s horizontal bias.
+    cross_bias: f32,
+}
+
+impl RowColumnMeasurePolicy {
+    fn main(&self, placeable: &Placeable) -> i32 {
+        match self.orientation {
+            Orientation::Horizontal => placeable.width,
+            Orientation::Vertical => placeable.height,
+        }
+    }
+
+    fn cross(&self, placeable: &Placeable) -> i32 {
+        match self.orientation {
+            Orientation::Horizontal => placeable.height,
+            Orientation::Vertical => placeable.width,
+        }
+    }
+
+    fn cross_bias_of(&self, scope: &MeasureScope<'_>, measurable: Measurable) -> f32 {
+        match (self.orientation, scope.parent_data(measurable).alignment) {
+            (Orientation::Horizontal, Some(ParentAlignment::Vertical(alignment))) => alignment.bias,
+            (Orientation::Vertical, Some(ParentAlignment::Horizontal(alignment))) => alignment.bias,
+            _ => self.cross_bias,
+        }
+    }
+}
+
+impl MeasurePolicy for RowColumnMeasurePolicy {
+    fn measure(
+        &self,
+        scope: &mut MeasureScope<'_>,
+        measurables: &[Measurable],
+        constraints: Constraints,
+    ) -> MeasureResult {
+        let axis = AxisConstraints::new(self.orientation, constraints);
+        let density = scope.density();
+        let spacing = self.arrangement.spacing(&density);
+        let count = measurables.len();
+        let mut placeables: Buffer<Option<Placeable>> = Buffer::new(count);
+        let placeables = placeables.as_mut();
+        let bounded = axis.main_max != Constraints::INFINITY;
+
+        // Children without weight, with what's left of the main axis.
+        let mut total_weight = 0.0f32;
+        let mut weighted = 0usize;
+        let mut fixed_space = 0i32;
+        let mut cross_size = 0i32;
+        for (index, &measurable) in measurables.iter().enumerate() {
+            let weight = scope.parent_data(measurable).weight.filter(|_| bounded);
+            if let Some((weight, _)) = weight {
+                total_weight += weight;
+                weighted += 1;
+                continue;
+            }
+            let remaining =
+                if bounded { (axis.main_max - fixed_space).max(0) } else { Constraints::INFINITY };
+            let child = AxisConstraints {
+                main_min: 0,
+                main_max: remaining,
+                cross_min: 0,
+                cross_max: axis.cross_max,
+            };
+            let placeable = scope.measure(measurable, child.to_constraints(self.orientation));
+            fixed_space = fixed_space.saturating_add(self.main(&placeable));
+            cross_size = cross_size.max(self.cross(&placeable));
+            placeables[index] = Some(placeable);
+        }
+        let gaps = spacing * (count as i32 - 1).max(0);
+        fixed_space = fixed_space.saturating_add(gaps);
+
+        // Weighted children share the rest, rounding as Compose does: each takes its share
+        // rounded, and the remainder goes one pixel at a time to the first ones.
+        let mut weighted_space = 0;
+        if weighted > 0 {
+            let remaining = (axis.main_max - fixed_space).max(0);
+            let per_weight = remaining as f32 / total_weight;
+            let mut rounding = remaining
+                - measurables
+                    .iter()
+                    .filter_map(|&measurable| scope.parent_data(measurable).weight)
+                    .map(|(weight, _)| (weight * per_weight).round() as i32)
+                    .sum::<i32>();
+            for (index, &measurable) in measurables.iter().enumerate() {
+                let Some((weight, fill)) = scope.parent_data(measurable).weight else { continue };
+                let step = rounding.signum();
+                rounding -= step;
+                let size = ((weight * per_weight).round() as i32 + step).max(0);
+                let child = AxisConstraints {
+                    main_min: if fill { size } else { 0 },
+                    main_max: size,
+                    cross_min: 0,
+                    cross_max: axis.cross_max,
+                };
+                let placeable = scope.measure(measurable, child.to_constraints(self.orientation));
+                weighted_space += self.main(&placeable);
+                cross_size = cross_size.max(self.cross(&placeable));
+                placeables[index] = Some(placeable);
+            }
+        }
+
+        let main_size = if weighted > 0 && bounded {
+            axis.main_max
+        } else {
+            (fixed_space + weighted_space).max(axis.main_min).min(axis.main_max)
+        };
+        let cross_size = cross_size.max(axis.cross_min).min(axis.cross_max);
+
+        // Main-axis positions from the arrangement, cross-axis ones from the alignments.
+        let mut sizes: Buffer<i32> = Buffer::new(count);
+        let sizes = sizes.as_mut();
+        for (index, placeable) in placeables.iter().enumerate() {
+            sizes[index] = placeable.as_ref().map_or(0, |placeable| self.main(placeable));
+        }
+        let mut positions: Buffer<i32> = Buffer::new(count);
+        let positions = positions.as_mut();
+        self.arrangement.arrange(main_size, sizes, scope.layout_direction(), &density, positions);
+        for (index, &measurable) in measurables.iter().enumerate() {
+            let Some(placeable) = placeables[index] else { continue };
+            let bias = self.cross_bias_of(scope, measurable);
+            let cross = VerticalAlignment { bias }.align(self.cross(&placeable), cross_size);
+            match self.orientation {
+                Orientation::Horizontal => scope.place(&placeable, positions[index], cross),
+                Orientation::Vertical => scope.place(&placeable, cross, positions[index]),
+            }
+        }
+        match self.orientation {
+            Orientation::Horizontal => scope.layout(main_size, cross_size),
+            Orientation::Vertical => scope.layout(cross_size, main_size),
+        }
+    }
+}
+
+/// A row: its children side by side, as Compose's `Row`.
+#[composable]
+pub fn Row(
+    #[default(crate::Modifier)] modifier: Modifier,
+    #[default(crate::layout::Arrangement::Start)] horizontal_arrangement: Arrangement,
+    #[default(crate::Alignment::TOP)] vertical_alignment: VerticalAlignment,
+    content: impl Fn(RowScope) + 'static,
+) {
+    let policy = remember_keyed((horizontal_arrangement, vertical_alignment), || {
+        Rc::new(RowColumnMeasurePolicy {
+            orientation: Orientation::Horizontal,
+            arrangement: horizontal_arrangement,
+            cross_bias: vertical_alignment.bias,
+        }) as Rc<dyn MeasurePolicy>
+    });
+    Layout(modifier, policy, compose_runtime::callback(move || content(RowScope::__new())));
+}
+
+/// A column: its children one below the other, as Compose's `Column`.
+#[composable]
+pub fn Column(
+    #[default(crate::Modifier)] modifier: Modifier,
+    #[default(crate::layout::Arrangement::Start)] vertical_arrangement: Arrangement,
+    #[default(crate::Alignment::START)] horizontal_alignment: HorizontalAlignment,
+    content: impl Fn(ColumnScope) + 'static,
+) {
+    let policy = remember_keyed((vertical_arrangement, horizontal_alignment), || {
+        Rc::new(RowColumnMeasurePolicy {
+            orientation: Orientation::Vertical,
+            arrangement: vertical_arrangement,
+            cross_bias: horizontal_alignment.bias,
+        }) as Rc<dyn MeasurePolicy>
+    });
+    Layout(modifier, policy, compose_runtime::callback(move || content(ColumnScope::__new())));
+}
+
+// ---- Box and Spacer --------------------------------------------------------------------------
+
+/// `Box`'s measure policy, as Compose's: children stacked, each aligned by its own `align` or
+/// the box's content alignment; the box as large as its largest child, within its constraints.
+pub struct BoxMeasurePolicy {
+    alignment: Alignment,
+    propagate_min_constraints: bool,
+}
+
+impl MeasurePolicy for BoxMeasurePolicy {
+    fn measure(
+        &self,
+        scope: &mut MeasureScope<'_>,
+        measurables: &[Measurable],
+        constraints: Constraints,
+    ) -> MeasureResult {
+        if measurables.is_empty() {
+            return scope.layout(constraints.min_width, constraints.min_height);
+        }
+        let child_constraints =
+            if self.propagate_min_constraints { constraints } else { constraints.loosen() };
+        let count = measurables.len();
+        let mut placeables: Buffer<Option<Placeable>> = Buffer::new(count);
+        let placeables = placeables.as_mut();
+        let (mut width, mut height) = (constraints.min_width, constraints.min_height);
+        for (index, &measurable) in measurables.iter().enumerate() {
+            let placeable = scope.measure(measurable, child_constraints);
+            width = width.max(placeable.width);
+            height = height.max(placeable.height);
+            placeables[index] = Some(placeable);
+        }
+        let space = compose_ui::IntSize::new(width, height);
+        for (index, &measurable) in measurables.iter().enumerate() {
+            let Some(placeable) = placeables[index] else { continue };
+            let alignment = match scope.parent_data(measurable).alignment {
+                Some(ParentAlignment::Box(alignment)) => alignment,
+                _ => self.alignment,
+            };
+            let position = alignment.align(placeable.size(), space, scope.layout_direction());
+            scope.place_at(&placeable, position);
+        }
+        scope.layout(width, height)
+    }
+}
+
+/// A box: its children stacked, as Compose's `Box`. `Box` the composable lives in the value
+/// namespace, `std::boxed::Box` in the type namespace, so `Box::new` still works.
+#[composable]
+pub fn Box(
+    #[default(crate::Modifier)] modifier: Modifier,
+    #[default(crate::Alignment::TOP_START)] content_alignment: Alignment,
+    #[default(false)] propagate_min_constraints: bool,
+    #[default(|_| {})] content: impl Fn(BoxScope) + 'static,
+) {
+    let policy = remember_keyed((content_alignment, propagate_min_constraints), || {
+        Rc::new(BoxMeasurePolicy { alignment: content_alignment, propagate_min_constraints })
+            as Rc<dyn MeasurePolicy>
+    });
+    Layout(modifier, policy, compose_runtime::callback(move || content(BoxScope::__new())));
+}
+
+/// Empty space of the size its modifier gives it, as Compose's `Spacer`.
+#[composable]
+pub fn Spacer(modifier: Modifier) {
+    Layout(modifier, empty_measure_policy(), compose_runtime::callback(|| {}));
+}

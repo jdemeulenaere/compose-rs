@@ -1,4 +1,4 @@
-#[allow(non_snake_case)]
+#[allow(non_snake_case, clippy::too_many_arguments)]
 fn Screen(items: Rc<Vec<u32>>, mode: Mode, content: Rc<dyn Fn()>) {
     let __composer = ::compose::__private::current();
     let __compose_restart = |__kept: &dyn ::core::any::Any| {

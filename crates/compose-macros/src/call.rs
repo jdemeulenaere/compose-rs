@@ -22,6 +22,8 @@ struct Parameter {
     name: Ident,
     /// The callback's number of arguments, for a callback parameter.
     callback: Option<usize>,
+    /// The same, for an optional callback parameter (`Option<impl Fn(…)>`).
+    optional: Option<usize>,
     default: Option<TokenStream>,
 }
 
@@ -30,12 +32,13 @@ impl Parse for Parameter {
         let name: Ident = input.parse()?;
         input.parse::<Token![:]>()?;
         let kind: Ident = input.parse()?;
-        let callback = if kind == "callback" {
+        let arity = if kind == "callback" || kind == "optional" {
             let arity: syn::LitInt = input.parse()?;
             Some(arity.base10_parse()?)
         } else {
             None
         };
+        let (callback, optional) = if kind == "optional" { (None, arity) } else { (arity, None) };
         let default = if input.peek(Token![=]) {
             input.parse::<Token![=]>()?;
             let content;
@@ -44,7 +47,7 @@ impl Parse for Parameter {
         } else {
             None
         };
-        Ok(Parameter { name, callback, default })
+        Ok(Parameter { name, callback, optional, default })
     }
 }
 
@@ -56,6 +59,8 @@ impl Parse for Parameter {
 pub(crate) struct Marked {
     captures: Vec<Ident>,
     unknown: bool,
+    /// Inside another closure: built from clones of its captures (`memo::probe`).
+    nested: bool,
     body: MarkedBody,
 }
 
@@ -76,20 +81,24 @@ fn is_marker(path: &syn::Path) -> bool {
 }
 
 /// The captures of a marker statement, if `statement` is one.
-fn marker_of(statement: &syn::Stmt) -> Option<syn::Result<(Vec<Ident>, bool)>> {
+fn marker_of(statement: &syn::Stmt) -> Option<syn::Result<(Vec<Ident>, bool, bool)>> {
     let syn::Stmt::Macro(statement) = statement else { return None };
     if !is_marker(&statement.mac.path) {
         return None;
     }
     let parser = Punctuated::<Ident, Token![,]>::parse_terminated;
     Some(syn::parse::Parser::parse2(parser, statement.mac.tokens.clone()).map(|captures| {
-        let mut unknown = false;
         let mut captures: Vec<Ident> = captures.into_iter().collect();
-        if let Some(position) = captures.iter().position(|capture| capture == "__compose_unknown") {
-            captures.remove(position);
-            unknown = true;
-        }
-        (captures, unknown)
+        let mut flag = |name: &str| match captures.iter().position(|capture| capture == name) {
+            Some(position) => {
+                captures.remove(position);
+                true
+            }
+            None => false,
+        };
+        let unknown = flag("__compose_unknown");
+        let nested = flag("__compose_nested");
+        (captures, unknown, nested)
     }))
 }
 
@@ -99,16 +108,16 @@ impl Marked {
         match expression {
             Expr::Block(block) if block.label.is_none() && block.attrs.is_empty() => {
                 let first = block.block.stmts.first()?;
-                Some(marker_of(first)?.map(|(captures, unknown)| {
+                Some(marker_of(first)?.map(|(captures, unknown, nested)| {
                     let mut body = block.block.clone();
                     body.stmts.remove(0);
-                    Marked { captures, unknown, body: MarkedBody::Block(body) }
+                    Marked { captures, unknown, nested, body: MarkedBody::Block(body) }
                 }))
             }
             Expr::Closure(closure) => {
                 let Expr::Block(body) = &*closure.body else { return None };
                 let first = body.block.stmts.first()?;
-                Some(marker_of(first)?.map(|(captures, unknown)| {
+                Some(marker_of(first)?.map(|(captures, unknown, nested)| {
                     let mut closure = closure.clone();
                     let mut rest = body.block.clone();
                     rest.stmts.remove(0);
@@ -121,7 +130,7 @@ impl Marked {
                             block: rest,
                         }),
                     };
-                    Marked { captures, unknown, body: MarkedBody::Closure(closure) }
+                    Marked { captures, unknown, nested, body: MarkedBody::Closure(closure) }
                 }))
             }
             _ => None,
@@ -130,8 +139,13 @@ impl Marked {
 }
 
 impl Marked {
-    pub(crate) fn new(captures: Vec<Ident>, unknown: bool, body: MarkedBody) -> Marked {
-        Marked { captures, unknown, body }
+    pub(crate) fn new(
+        captures: Vec<Ident>,
+        unknown: bool,
+        nested: bool,
+        body: MarkedBody,
+    ) -> Marked {
+        Marked { captures, unknown, nested, body }
     }
 
     fn span(&self) -> Span {
@@ -145,9 +159,14 @@ impl Marked {
 impl ToTokens for Marked {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         let captures = &self.captures;
-        let unknown = self.unknown.then(|| quote!(__compose_unknown));
-        let separator = (self.unknown && !captures.is_empty()).then(|| quote!(,));
-        let marker = quote! { ::compose::__private::marked!(#(#captures),* #separator #unknown); };
+        let mut names: Vec<Ident> = captures.clone();
+        if self.unknown {
+            names.push(Ident::new("__compose_unknown", proc_macro2::Span::call_site()));
+        }
+        if self.nested {
+            names.push(Ident::new("__compose_nested", proc_macro2::Span::call_site()));
+        }
+        let marker = quote! { ::compose::__private::marked!(#(#names),*); };
         match &self.body {
             MarkedBody::Block(block) => {
                 let statements = &block.stmts;
@@ -219,6 +238,12 @@ impl ToTokens for Argument {
 }
 
 impl Argument {
+    pub(crate) fn value(&self) -> &Value {
+        match self {
+            Argument::Named(_, value) | Argument::Positional(value) => value,
+        }
+    }
+
     pub(crate) fn value_mut(&mut self) -> &mut Value {
         match self {
             Argument::Named(_, value) | Argument::Positional(value) => value,
@@ -227,6 +252,10 @@ impl Argument {
 }
 
 impl Marked {
+    pub(crate) fn body(&self) -> &MarkedBody {
+        &self.body
+    }
+
     pub(crate) fn body_mut(&mut self) -> &mut MarkedBody {
         &mut self.body
     }
@@ -307,7 +336,7 @@ fn callback_value(arity: usize, value: Value) -> TokenStream {
                     (closure.into_token_stream(), arity)
                 }
             };
-            memo::probe(&marked.captures, marked.unknown, closure, Some(arity))
+            memo::probe(&marked.captures, marked.unknown, closure, Some(arity), marked.nested)
         }
         Value::Expr(Expr::Block(block)) if block.label.is_none() => {
             let closure = content_closure(arity, &block.block);
@@ -423,6 +452,20 @@ fn build(call: Call) -> syn::Result<TokenStream> {
         };
         let value = match parameters[index].callback {
             Some(arity) => callback_value(arity, argument.into_value()),
+            // A lambda for an optional callback is `Some` callback; anything else (`None`, an
+            // `Option` value) is passed as written.
+            None if parameters[index].optional.is_some() => {
+                let arity = parameters[index].optional.unwrap_or(0);
+                match argument.into_value() {
+                    value @ (Value::Marked(_)
+                    | Value::Expr(Expr::Closure(_))
+                    | Value::Expr(Expr::Block(_))) => {
+                        let callback = callback_value(arity, value);
+                        quote! { ::core::option::Option::Some(#callback) }
+                    }
+                    value => plain_value(value),
+                }
+            }
             // A `#[format]` parameter converts whatever it is given (`Text!(title)`).
             None if format && index == 0 => {
                 let value = plain_value(argument.into_value());
