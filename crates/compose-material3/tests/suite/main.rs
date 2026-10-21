@@ -4,6 +4,7 @@
 extern crate compose_runtime as compose;
 
 mod components;
+mod drawer;
 mod material;
 mod review_e;
 mod review_f;

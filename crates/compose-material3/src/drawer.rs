@@ -1,0 +1,446 @@
+//! `ModalNavigationDrawer`, as Compose's Material 3: a sheet of destinations sliding in from
+//! the start over the content, behind a scrim, with `ModalDrawerSheet` and
+//! `NavigationDrawerItem`.
+
+use std::rc::Rc;
+
+use compose_animation::{Animatable, tween};
+use compose_foundation::gestures::{DraggableModifier, DraggableState, Orientation};
+use compose_foundation::layout::{Box, Column, ColumnScope, Row, Spacer};
+use compose_runtime::{
+    ComposeArg, CompositionLocalProvider, OwnedState, composable, mutable_state_of, remember,
+    remember_coroutine_scope,
+};
+use compose_ui::{
+    Alignment, Color, Constraints, CornerSize, Dp, Layout, LayoutDirection, Measurable,
+    MeasurePolicy, MeasureResult, MeasureScope, Modifier, Role, Shape, SizeSpec, UnitExt,
+};
+
+use crate::components::Surface;
+use crate::theme::{LOCAL_CONTENT_COLOR, LOCAL_TEXT_STYLE, MaterialTheme};
+
+/// Whether a drawer is open, as Compose's `DrawerValue`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum DrawerValue {
+    Closed,
+    Open,
+}
+
+impl ComposeArg for DrawerValue {
+    fn same(&self, other: &Self) -> bool {
+        self == other
+    }
+}
+
+/// As Compose's drawer animation: a 256 ms tween.
+const ANIMATION_MILLIS: u32 = 256;
+
+struct DrawerInner {
+    /// How far open it is: 0 closed, 1 open (its offset, as a fraction of its width).
+    open: Animatable<f32>,
+    /// Where it's going (or is), as `targetValue`.
+    target: OwnedState<DrawerValue>,
+    /// Shown: open, or opening or closing (its sheet is composed).
+    shown: OwnedState<bool>,
+}
+
+/// A drawer's state, as Compose's `DrawerState`: open or closed, animated by `open` and
+/// `close`.
+#[derive(Clone)]
+pub struct DrawerState {
+    inner: Rc<DrawerInner>,
+}
+
+impl DrawerState {
+    pub fn new(initial_value: DrawerValue) -> DrawerState {
+        let open = initial_value == DrawerValue::Open;
+        DrawerState {
+            inner: Rc::new(DrawerInner {
+                open: Animatable::new(if open { 1.0 } else { 0.0 }),
+                target: mutable_state_of(initial_value),
+                shown: mutable_state_of(open),
+            }),
+        }
+    }
+
+    /// Where it is or is going, as `targetValue` (a state read).
+    pub fn target_value(&self) -> DrawerValue {
+        self.inner.target.get()
+    }
+
+    /// Where it is, as `currentValue` (a state read): open until it's closed.
+    pub fn current_value(&self) -> DrawerValue {
+        if self.inner.shown.get() { DrawerValue::Open } else { DrawerValue::Closed }
+    }
+
+    pub fn is_open(&self) -> bool {
+        self.current_value() == DrawerValue::Open
+    }
+
+    pub fn is_closed(&self) -> bool {
+        !self.is_open()
+    }
+
+    /// Opens it, animating, as `open()`.
+    pub async fn open(&self) {
+        self.animate_to(DrawerValue::Open).await;
+    }
+
+    /// Closes it, animating, as `close()`.
+    pub async fn close(&self) {
+        self.animate_to(DrawerValue::Closed).await;
+    }
+
+    /// Opens or closes it at once, as `snapTo`.
+    pub fn snap_to(&self, value: DrawerValue) {
+        let open = value == DrawerValue::Open;
+        self.inner.target.set(value);
+        self.inner.shown.set(open);
+        self.inner.open.snap_to(if open { 1.0 } else { 0.0 });
+    }
+
+    async fn animate_to(&self, value: DrawerValue) {
+        let open = value == DrawerValue::Open;
+        self.inner.target.set(value);
+        if open {
+            self.inner.shown.set(true);
+        }
+        let result =
+            self.inner.open.animate_to(if open { 1.0 } else { 0.0 }, tween(ANIMATION_MILLIS)).await;
+        if !open && result.end_reason == compose_animation::AnimationEndReason::Finished {
+            self.inner.shown.set(false);
+        }
+    }
+
+    /// How far open it is, 0 to 1 (a state read).
+    fn fraction(&self) -> f32 {
+        self.inner.open.value().clamp(0.0, 1.0)
+    }
+}
+
+impl ComposeArg for DrawerState {
+    fn same(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.inner, &other.inner)
+    }
+}
+
+/// A drawer state remembered at its call site, as `rememberDrawerState(initialValue)`.
+#[composable(non_restartable)]
+pub fn remember_drawer_state(initial_value: DrawerValue) -> DrawerState {
+    remember(|| DrawerState::new(initial_value))
+}
+
+/// As Compose's `DrawerDefaults`.
+pub struct DrawerDefaults;
+
+impl DrawerDefaults {
+    /// A modal drawer sheet's widest, as `MaximumDrawerWidth`.
+    pub const MAXIMUM_DRAWER_WIDTH: Dp = Dp(360.0);
+    /// Its tonal elevation, as `ModalDrawerElevation`.
+    pub const MODAL_DRAWER_ELEVATION: Dp = Dp(1.0);
+
+    /// Its shape: large corners at its end, as `DrawerDefaults.shape`.
+    pub fn shape() -> Shape {
+        let radius = CornerSize::Dp(Dp(16.0));
+        let none = CornerSize::Dp(Dp(0.0));
+        // Top start, top end, bottom end, bottom start.
+        Shape::Rounded([none, radius, radius, none])
+    }
+
+    pub fn modal_container_color() -> Color {
+        MaterialTheme::color_scheme().surface_container_low
+    }
+
+    /// The scrim: 32 % of the scheme's scrim color, as `DrawerDefaults.scrimColor`.
+    pub fn scrim_color() -> Color {
+        MaterialTheme::color_scheme().scrim.with_alpha(0.32)
+    }
+}
+
+/// `content` with a drawer over it, as Compose's `ModalNavigationDrawer`: while it's open (or
+/// sliding), `drawer_content` slides in from the start edge over a scrim that closes it when
+/// clicked; with `gestures_enabled`, dragging the sheet towards the start closes it.
+#[composable]
+#[allow(non_snake_case)]
+pub fn ModalNavigationDrawer(
+    drawer_content: impl Fn() + 'static,
+    #[default(crate::Modifier)] modifier: Modifier,
+    #[default(crate::remember_drawer_state(crate::DrawerValue::Closed))] drawer_state: DrawerState,
+    #[default(true)] gestures_enabled: bool,
+    #[default(crate::DrawerDefaults::scrim_color())] scrim_color: Color,
+    content: impl Fn() + 'static,
+) {
+    let scope = remember_coroutine_scope();
+    let shown = drawer_state.inner.shown.get();
+    let rtl = compose_ui::LOCAL_LAYOUT_DIRECTION.current() == LayoutDirection::Rtl;
+    // The width the sheet was last laid out at: a drag moves it by fractions of it.
+    let width = remember(|| Rc::new(std::cell::Cell::new(1.0f32)));
+    let policy = {
+        let (state, width) = (drawer_state.clone(), width.clone());
+        compose_runtime::remember_keyed(drawer_state.clone(), || {
+            Rc::new(DrawerLayout { state, width }) as Rc<dyn MeasurePolicy>
+        })
+    };
+    // A drag across the drawer (open or sliding) moves the sheet; let go, it settles open or
+    // closed, as Compose's `anchoredDraggable` on the drawer's box.
+    let drag = {
+        let (dragged, width) = (drawer_state.clone(), width.clone());
+        compose_runtime::remember_keyed(drawer_state.clone(), move || {
+            DraggableState::new(move |delta| {
+                let fraction = (dragged.fraction() + delta / width.get()).clamp(0.0, 1.0);
+                dragged.inner.open.snap_to(fraction);
+            })
+        })
+    };
+    let settle = {
+        let (state, scope) = (drawer_state.clone(), scope.clone());
+        move || {
+            let state = state.clone();
+            scope.launch(async move {
+                if state.fraction() > 0.5 { state.open().await } else { state.close().await }
+            });
+        }
+    };
+    let modifier = modifier.draggable(
+        drag,
+        Orientation::Horizontal,
+        gestures_enabled && shown,
+        rtl,
+        |_| {},
+        settle,
+    );
+    let (state, drag_scope) = (drawer_state.clone(), scope.clone());
+    Layout(
+        modifier,
+        policy,
+        compose_runtime::callback(move || {
+            content();
+            if shown {
+                // The scrim, its alpha following the drawer (read while drawing).
+                let (state, close_scope) = (state.clone(), drag_scope.clone());
+                let fraction = state.clone();
+                Box(
+                    Modifier
+                        .fill_max_size()
+                        .draw_behind(move |draw| {
+                            let alpha = scrim_color.alpha() as f32 / 255.0 * fraction.fraction();
+                            draw.draw_rect(
+                                draw.bounds(),
+                                compose_ui::Paint::fill(scrim_color.with_alpha(alpha)),
+                            );
+                        })
+                        .clickable_with(true, None, {
+                            let state = state.clone();
+                            move || {
+                                let state = state.clone();
+                                close_scope.launch(async move { state.close().await });
+                            }
+                        })
+                        .semantics(false, |config| {
+                            config.content_description.push("Close navigation menu".into())
+                        }),
+                    Alignment::TOP_START,
+                    false,
+                    compose_runtime::callback(|_| {}),
+                );
+                let drawer_content = drawer_content.clone();
+                Box(
+                    Modifier,
+                    Alignment::TOP_START,
+                    false,
+                    compose_runtime::callback(move |_| drawer_content()),
+                );
+            }
+        }),
+    );
+}
+
+/// The content, then (while shown) the scrim over it, then the sheet at the start edge, slid
+/// out by how far the drawer is closed.
+struct DrawerLayout {
+    state: DrawerState,
+    /// The sheet's width, for drags.
+    width: Rc<std::cell::Cell<f32>>,
+}
+
+impl MeasurePolicy for DrawerLayout {
+    fn measure(
+        &self,
+        scope: &mut MeasureScope<'_>,
+        measurables: &[Measurable],
+        constraints: Constraints,
+    ) -> MeasureResult {
+        let Some((content, rest)) = measurables.split_first() else {
+            return scope.layout(constraints.min_width, constraints.min_height);
+        };
+        let content = scope.measure(*content, constraints);
+        let width = constraints.constrain_width(content.width);
+        let height = constraints.constrain_height(content.height);
+        scope.place_relative(&content, 0, 0);
+        if let [scrim, sheet] = rest {
+            let scrim = scope.measure(*scrim, Constraints::fixed(width, height));
+            scope.place_relative(&scrim, 0, 0);
+            let sheet = scope.measure(*sheet, Constraints::new(0, width, height, height));
+            self.width.set(sheet.width.max(1) as f32);
+            // Read while measuring: a frame of the slide places the sheet again only.
+            let hidden = 1.0 - self.state.fraction();
+            scope.place_relative(&sheet, -(sheet.width as f32 * hidden).round() as i32, 0);
+        }
+        scope.layout(width, height)
+    }
+
+    fn debug_name(&self) -> &'static str {
+        "ModalNavigationDrawer"
+    }
+}
+
+/// A modal drawer's sheet, as Compose's `ModalDrawerSheet`: as tall as the drawer, up to 360 dp
+/// wide, on the low surface container with large corners at its end; its content a column.
+#[composable]
+#[allow(non_snake_case)]
+pub fn ModalDrawerSheet(
+    #[default(crate::Modifier)] modifier: Modifier,
+    #[default(crate::DrawerDefaults::shape())] drawer_shape: Shape,
+    #[default(crate::DrawerDefaults::modal_container_color())] drawer_container_color: Color,
+    #[default(crate::Color::UNSPECIFIED)] drawer_content_color: Color,
+    #[default(crate::DrawerDefaults::MODAL_DRAWER_ELEVATION)] drawer_tonal_elevation: Dp,
+    content: impl Fn(ColumnScope) + 'static,
+) {
+    let content_color = drawer_content_color
+        .or(MaterialTheme::color_scheme().content_color_for(drawer_container_color));
+    Surface(
+        modifier
+            .size_in(SizeSpec::bounds(
+                240.dp(),
+                Dp::UNSPECIFIED,
+                DrawerDefaults::MAXIMUM_DRAWER_WIDTH,
+                Dp::UNSPECIFIED,
+            ))
+            .fill_max_height()
+            .semantics(false, |config| config.content_description.push("Navigation menu".into())),
+        drawer_shape,
+        drawer_container_color,
+        content_color,
+        drawer_tonal_elevation,
+        Dp(0.0),
+        None,
+        compose_runtime::callback(move || {
+            Column(
+                Modifier.fill_max_height(),
+                compose_foundation::layout::Arrangement::Start,
+                Alignment::START,
+                content.clone(),
+            );
+        }),
+    );
+}
+
+/// The colors of a `NavigationDrawerItem`, as Compose's `NavigationDrawerItemColors`.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct NavigationDrawerItemColors {
+    pub selected_container_color: Color,
+    pub unselected_container_color: Color,
+    pub selected_icon_color: Color,
+    pub unselected_icon_color: Color,
+    pub selected_text_color: Color,
+    pub unselected_text_color: Color,
+}
+
+impl ComposeArg for NavigationDrawerItemColors {
+    fn same(&self, other: &Self) -> bool {
+        self == other
+    }
+}
+
+/// As Compose's `NavigationDrawerItemDefaults`.
+pub struct NavigationDrawerItemDefaults;
+
+impl NavigationDrawerItemDefaults {
+    pub fn colors() -> NavigationDrawerItemColors {
+        let scheme = MaterialTheme::color_scheme();
+        NavigationDrawerItemColors {
+            selected_container_color: scheme.secondary_container,
+            unselected_container_color: Color::TRANSPARENT,
+            selected_icon_color: scheme.on_secondary_container,
+            unselected_icon_color: scheme.on_surface_variant,
+            selected_text_color: scheme.on_secondary_container,
+            unselected_text_color: scheme.on_surface_variant,
+        }
+    }
+
+    /// The padding around an item in a sheet, as `ItemPadding` (12 dp at the sides).
+    pub fn item_padding(modifier: Modifier) -> Modifier {
+        modifier.padding_horizontal_vertical(12.dp(), 0.dp())
+    }
+}
+
+/// A destination in a drawer, as Compose's `NavigationDrawerItem`: 56 dp high in a pill, its
+/// icon (24 dp) and label (label large) 16 dp in and 12 dp apart, a badge at the end; the
+/// selected one in the secondary container.
+#[composable]
+#[allow(non_snake_case)]
+pub fn NavigationDrawerItem(
+    label: impl Fn() + 'static,
+    selected: bool,
+    on_click: impl Fn() + 'static,
+    #[default(crate::Modifier)] modifier: Modifier,
+    #[default(None)] icon: Option<impl Fn() + 'static>,
+    #[default(None)] badge: Option<impl Fn() + 'static>,
+    #[default(crate::NavigationDrawerItemColors::default_colors())]
+    colors: NavigationDrawerItemColors,
+) {
+    let pill = Shape::Rounded([CornerSize::Percent(50.0); 4]);
+    let (container, icon_color, text_color) = if selected {
+        (colors.selected_container_color, colors.selected_icon_color, colors.selected_text_color)
+    } else {
+        (
+            colors.unselected_container_color,
+            colors.unselected_icon_color,
+            colors.unselected_text_color,
+        )
+    };
+    let typography = MaterialTheme::typography();
+    let row_modifier = modifier
+        .height(56.dp())
+        .fill_max_width()
+        .background_shape(container, pill)
+        .clip(pill)
+        .clickable_indicated(true, Some(Role::Tab), text_color, on_click)
+        .semantics(false, move |config| config.selected = Some(selected))
+        .padding_sides(16.dp(), 0.dp(), 24.dp(), 0.dp());
+    let (label, icon, badge) = (label.clone(), icon.clone(), badge.clone());
+    Row(
+        row_modifier,
+        compose_foundation::layout::Arrangement::Start,
+        Alignment::CENTER_VERTICALLY,
+        compose_runtime::callback(move |row| {
+            if let Some(icon) = icon.clone() {
+                CompositionLocalProvider(LOCAL_CONTENT_COLOR.provides(icon_color), &*icon);
+                Spacer(Modifier.width(12.dp()));
+            }
+            let label = label.clone();
+            CompositionLocalProvider(LOCAL_CONTENT_COLOR.provides(text_color), || {
+                CompositionLocalProvider(LOCAL_TEXT_STYLE.provides(typography.label_large), || {
+                    let label = label.clone();
+                    Box(
+                        Modifier.weight(row, 1.0),
+                        Alignment::CENTER_START,
+                        false,
+                        compose_runtime::callback(move |_| label()),
+                    );
+                });
+            });
+            if let Some(badge) = badge.clone() {
+                Spacer(Modifier.width(12.dp()));
+                CompositionLocalProvider(LOCAL_CONTENT_COLOR.provides(text_color), &*badge);
+            }
+        }),
+    );
+}
+
+impl NavigationDrawerItemColors {
+    /// From the theme: `NavigationDrawerItemDefaults::colors()`.
+    pub fn default_colors() -> NavigationDrawerItemColors {
+        NavigationDrawerItemDefaults::colors()
+    }
+}

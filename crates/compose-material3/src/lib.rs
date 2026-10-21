@@ -12,6 +12,7 @@ extern crate compose_runtime as compose;
 mod chips;
 mod components;
 mod dialog;
+mod drawer;
 mod icon;
 mod list_item;
 mod navigation;
@@ -31,6 +32,11 @@ pub use components::{
     TextFieldDefaults, minimum_interactive_component_size,
 };
 pub use dialog::{AlertDialog, DropdownMenu, DropdownMenuItem};
+pub use drawer::{
+    DrawerDefaults, DrawerState, DrawerValue, ModalDrawerSheet, ModalNavigationDrawer,
+    NavigationDrawerItem, NavigationDrawerItemColors, NavigationDrawerItemDefaults,
+    remember_drawer_state,
+};
 pub use icon::{FloatingActionButton, Icon, IconButton, icons};
 pub use list_item::{ListItem, ListItemColors, ListItemDefaults};
 pub use navigation::{
