@@ -5,8 +5,9 @@ use compose_foundation::layout::{Arrangement, Box, Column, PaddingValues, Row, R
 use compose_foundation::{BasicText, BasicTextField, BorderStroke};
 use compose_runtime::{CompositionLocalProvider, composable, mutable_state_of, remember};
 use compose_ui::{
-    Alignment, Color, Dp, DrawModifierNode, DrawScope, FontWeight, Modifier, ModifierNode, ModifierNodeElement, Offset,
-    Paint, Rect, Role, Shape, SharedString, SizeSpec, Sp, TextStyle, UnitExt,
+    Alignment, Color, Dp, DrawModifierNode, DrawScope, FontWeight, Modifier, ModifierNode,
+    ModifierNodeElement, Offset, Paint, Rect, Role, Shape, SharedString, SizeSpec, Sp, TextStyle,
+    UnitExt,
 };
 
 use crate::theme::{LOCAL_CONTENT_COLOR, LOCAL_TEXT_STYLE, MaterialTheme};

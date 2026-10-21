@@ -108,6 +108,10 @@ fn Screen(items: Rc<Vec<u32>>, mode: Mode, content: Rc<dyn Fn()>) {
 }
 #[doc(hidden)]
 macro_rules! __compose_call_Screen_3c9387609e3b686e_N {
+    (@ path($($path:tt)*) $($arguments:tt)*) => {
+        ::compose::__private::call! { Screen[items : value, mode : value, content :
+        value] plain @ path($($path)*); $($arguments)* }
+    };
     ($($arguments:tt)*) => {
         ::compose::__private::call! { Screen[items : value, mode : value, content :
         value] plain; $($arguments)* }

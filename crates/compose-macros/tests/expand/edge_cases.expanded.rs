@@ -63,6 +63,10 @@ fn Filtered(ids: Rc<Vec<u32>>, on_change: Rc<dyn Fn(&str)>) {
 }
 #[doc(hidden)]
 macro_rules! __compose_call_Filtered_5673cd8923f60262_N {
+    (@ path($($path:tt)*) $($arguments:tt)*) => {
+        ::compose::__private::call! { Filtered[ids : value, on_change : value] plain @
+        path($($path)*); $($arguments)* }
+    };
     ($($arguments:tt)*) => {
         ::compose::__private::call! { Filtered[ids : value, on_change : value] plain;
         $($arguments)* }
@@ -89,6 +93,10 @@ fn Conditional(
 }
 #[doc(hidden)]
 macro_rules! __compose_call_Conditional_7f76342f2708a77a_N {
+    (@ path($($path:tt)*) $($arguments:tt)*) => {
+        ::compose::__private::call! { Conditional[extra : value, __compose_argument1 :
+        value] plain @ path($($path)*); $($arguments)* }
+    };
     ($($arguments:tt)*) => {
         ::compose::__private::call! { Conditional[extra : value, __compose_argument1 :
         value] plain; $($arguments)* }

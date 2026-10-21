@@ -11,6 +11,10 @@ fn Borrowed(title: &str) {
 }
 #[doc(hidden)]
 macro_rules! __compose_call_Borrowed_1efc7a945654dc5e_N {
+    (@ path($($path:tt)*) $($arguments:tt)*) => {
+        ::compose::__private::call! { Borrowed[title : value] plain @ path($($path)*);
+        $($arguments)* }
+    };
     ($($arguments:tt)*) => {
         ::compose::__private::call! { Borrowed[title : value] plain; $($arguments)* }
     };
@@ -29,6 +33,10 @@ fn Returns(value: i32) -> i32 {
 }
 #[doc(hidden)]
 macro_rules! __compose_call_Returns_0ad3229f33d2e0b2_N {
+    (@ path($($path:tt)*) $($arguments:tt)*) => {
+        ::compose::__private::call! { Returns[value : value] plain @ path($($path)*);
+        $($arguments)* }
+    };
     ($($arguments:tt)*) => {
         ::compose::__private::call! { Returns[value : value] plain; $($arguments)* }
     };
@@ -49,6 +57,10 @@ fn Explicit(content: impl Fn()) {
 }
 #[doc(hidden)]
 macro_rules! __compose_call_Explicit_0e6aa01d864d81a2_N {
+    (@ path($($path:tt)*) $($arguments:tt)*) => {
+        ::compose::__private::call! { Explicit[content : value] plain @ path($($path)*);
+        $($arguments)* }
+    };
     ($($arguments:tt)*) => {
         ::compose::__private::call! { Explicit[content : value] plain; $($arguments)* }
     };
@@ -86,6 +98,10 @@ fn StaticReference(title: &'static str) {
 }
 #[doc(hidden)]
 macro_rules! __compose_call_StaticReference_083104b1423b9cc6_N {
+    (@ path($($path:tt)*) $($arguments:tt)*) => {
+        ::compose::__private::call! { StaticReference[title : value] plain @
+        path($($path)*); $($arguments)* }
+    };
     ($($arguments:tt)*) => {
         ::compose::__private::call! { StaticReference[title : value] plain;
         $($arguments)* }

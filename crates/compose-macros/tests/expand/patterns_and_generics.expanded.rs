@@ -36,6 +36,10 @@ fn Pair(__compose_argument0: (i32, i32), _unused: bool) {
 }
 #[doc(hidden)]
 macro_rules! __compose_call_Pair_c102bf861f04c7d2_N {
+    (@ path($($path:tt)*) $($arguments:tt)*) => {
+        ::compose::__private::call! { Pair[__compose_argument0 : value, _unused : value]
+        plain @ path($($path)*); $($arguments)* }
+    };
     ($($arguments:tt)*) => {
         ::compose::__private::call! { Pair[__compose_argument0 : value, _unused : value]
         plain; $($arguments)* }
@@ -79,6 +83,10 @@ fn List<T: ComposeArg + Clone + Display + 'static>(items: Rc<Vec<T>>) {
 }
 #[doc(hidden)]
 macro_rules! __compose_call_List_c06f50c9b9d68b8a_N {
+    (@ path($($path:tt)*) $($arguments:tt)*) => {
+        ::compose::__private::call! { List[items : value] plain @ path($($path)*);
+        $($arguments)* }
+    };
     ($($arguments:tt)*) => {
         ::compose::__private::call! { List[items : value] plain; $($arguments)* }
     };

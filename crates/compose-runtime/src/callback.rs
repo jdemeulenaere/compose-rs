@@ -124,11 +124,14 @@ pub struct Keyed<'a, T>(&'a T);
 /// type is the same.
 pub struct Unkeyed {
     zero_sized: bool,
+    /// The capture's type name: zero-sized values of the same type are the same, of different
+    /// types (two function items) are not.
+    type_name: &'static str,
 }
 
 impl Unkeyed {
     /// Always changed: what a lambda calling an unknown macro is keyed with.
-    pub const CHANGED: Unkeyed = Unkeyed { zero_sized: false };
+    pub const CHANGED: Unkeyed = Unkeyed { zero_sized: false, type_name: "" };
 }
 
 pub trait KeyedProbe<'a, T> {
@@ -149,7 +152,7 @@ pub trait UnkeyedProbe {
 impl<T> UnkeyedProbe for ArgProbe<'_, T> {
     #[inline]
     fn arg_key(&self) -> Unkeyed {
-        Unkeyed { zero_sized: std::mem::size_of::<T>() == 0 }
+        Unkeyed { zero_sized: std::mem::size_of::<T>() == 0, type_name: std::any::type_name::<T>() }
     }
 }
 
@@ -175,15 +178,17 @@ impl<T: ComposeArg + Clone> LambdaKeys for Keyed<'_, T> {
 }
 
 impl LambdaKeys for Unkeyed {
-    type Owned = ();
+    type Owned = &'static str;
 
     #[inline]
-    fn same(&self, _: &()) -> bool {
-        self.zero_sized
+    fn same(&self, kept: &&'static str) -> bool {
+        self.zero_sized && (std::ptr::eq(*kept, self.type_name) || *kept == self.type_name)
     }
 
     #[inline]
-    fn to_owned(&self) {}
+    fn to_owned(&self) -> &'static str {
+        self.type_name
+    }
 }
 
 macro_rules! key_tuples {

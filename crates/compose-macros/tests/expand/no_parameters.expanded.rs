@@ -19,6 +19,9 @@ fn Counter() {
 }
 #[doc(hidden)]
 macro_rules! __compose_call_Counter_abf9ac1093febf76_N {
+    (@ path($($path:tt)*) $($arguments:tt)*) => {
+        ::compose::__private::call! { Counter[] plain @ path($($path)*); $($arguments)* }
+    };
     ($($arguments:tt)*) => {
         ::compose::__private::call! { Counter[] plain; $($arguments)* }
     };

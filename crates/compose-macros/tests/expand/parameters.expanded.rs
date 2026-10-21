@@ -34,6 +34,10 @@ pub fn Greeting(name: String, count: i32) {
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __compose_call_Greeting_460afe76bd277c02_N {
+    (@ path($($path:tt)*) $($arguments:tt)*) => {
+        ::compose::__private::call! { Greeting[name : value, count : value] plain @
+        path($($path)*); $($arguments)* }
+    };
     ($($arguments:tt)*) => {
         ::compose::__private::call! { Greeting[name : value, count : value] plain;
         $($arguments)* }

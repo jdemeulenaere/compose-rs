@@ -26,7 +26,7 @@ use quote::{ToTokens, format_ident, quote};
 use syn::punctuated::Punctuated;
 use syn::visit::{self, Visit};
 use syn::visit_mut::{self, VisitMut};
-use syn::{Expr, Pat, Token, parse_quote};
+use syn::{Expr, Pat, Token};
 
 use crate::call::{Marked, MarkedBody};
 
@@ -90,7 +90,10 @@ fn is_modifier_chain(receiver: &Expr) -> bool {
         Expr::MethodCall(call) => is_modifier_chain(&call.receiver),
         Expr::Path(path) => {
             path.qself.is_none()
-                && path.path.segments.last().is_some_and(|segment| segment.ident == "Modifier")
+                && path.path.segments.last().is_some_and(|segment| {
+                    // `Modifier.…`, or a composable's `modifier` parameter.
+                    segment.ident == "Modifier" || segment.ident == "modifier"
+                })
         }
         Expr::Paren(paren) => is_modifier_chain(&paren.expr),
         _ => false,
@@ -226,38 +229,56 @@ fn local_bindings(local: &syn::Local, out: &mut Vec<String>) {
     }
 }
 
-/// The plain snake-case names in a macro's top-level tokens: not called (`f(`, `m!`), not a
-/// path segment (`a::b`) or a field or method (`.x`), not a keyword.
+/// The names a macro's arguments may bind, as a user's PascalCase macro could: in each
+/// argument, the names before a lone `=` (`current = …`, `(low, high) = …`), or the whole
+/// argument when it is a name or a tuple of names (`doubled, n * 2`). Values after `=` and
+/// expressions are uses, not bindings.
 fn unbound_names(tokens: TokenStream) -> Vec<String> {
     const KEYWORDS: &[&str] = &[
         "as", "async", "await", "break", "const", "continue", "crate", "dyn", "else", "enum",
         "false", "fn", "for", "if", "impl", "in", "let", "loop", "match", "mod", "move", "mut",
         "pub", "ref", "return", "self", "static", "struct", "super", "trait", "true", "type",
-        "unsafe", "use", "where", "while",
+        "unsafe", "use", "where", "while", "_",
     ];
+    fn names_in(tokens: &[TokenTree], out: &mut Vec<String>) {
+        for token in tokens {
+            match token {
+                TokenTree::Ident(ident) => {
+                    let name = ident.to_string();
+                    if !crate::regions::is_pascal_case(&name) && !KEYWORDS.contains(&name.as_str())
+                    {
+                        out.push(name);
+                    }
+                }
+                TokenTree::Group(group) if group.delimiter() != proc_macro2::Delimiter::Brace => {
+                    let inner: Vec<TokenTree> = group.stream().into_iter().collect();
+                    names_in(&inner, out);
+                }
+                _ => {}
+            }
+        }
+    }
     let tokens: Vec<TokenTree> = tokens.into_iter().collect();
     let mut names = Vec::new();
-    for (index, token) in tokens.iter().enumerate() {
-        let TokenTree::Ident(ident) = token else { continue };
-        let name = ident.to_string();
-        if crate::regions::is_pascal_case(&name) || KEYWORDS.contains(&name.as_str()) {
-            continue;
-        }
-        let after = tokens.get(index + 1);
-        let called = match after {
-            Some(TokenTree::Group(group)) => {
-                group.delimiter() == proc_macro2::Delimiter::Parenthesis
-            }
-            Some(TokenTree::Punct(punct)) => {
-                (punct.as_char() == '!' && punct.spacing() == proc_macro2::Spacing::Alone)
-                    || (punct.as_char() == ':' && punct.spacing() == proc_macro2::Spacing::Joint)
-            }
-            _ => false,
-        };
-        let qualified = index > 0
-            && matches!(&tokens[index - 1], TokenTree::Punct(punct) if punct.as_char() == '.' || punct.as_char() == ':');
-        if !called && !qualified {
-            names.push(name);
+    for segment in
+        tokens.split(|token| matches!(token, TokenTree::Punct(punct) if punct.as_char() == ','))
+    {
+        // A lone `=`: not `==`, `!=`, `<=`, `>=`, `=>`.
+        let equals = segment.iter().enumerate().position(|(index, token)| {
+            matches!(token, TokenTree::Punct(punct) if punct.as_char() == '=' && punct.spacing() == proc_macro2::Spacing::Alone)
+                && !matches!(index.checked_sub(1).and_then(|previous| segment.get(previous)), Some(TokenTree::Punct(previous)) if previous.spacing() == proc_macro2::Spacing::Joint)
+        });
+        match equals {
+            Some(equals) => names_in(&segment[..equals], &mut names),
+            None => match segment {
+                [TokenTree::Ident(_)] => names_in(segment, &mut names),
+                [TokenTree::Group(group)]
+                    if group.delimiter() == proc_macro2::Delimiter::Parenthesis =>
+                {
+                    names_in(segment, &mut names)
+                }
+                _ => {}
+            },
         }
     }
     names
@@ -282,19 +303,6 @@ fn is_known_macro(path: &syn::Path) -> bool {
 
 fn is_call_macro_path(path: &syn::Path) -> bool {
     path.segments.last().is_some_and(|segment| is_call_macro(&segment.ident.to_string()))
-}
-
-/// A call macro invoked by path (`ui::Label!(…)`): its expansion calls the bare name, so the
-/// path is imported around it instead (`{ use ui::Label; Label!(…) }`), and the call reaches
-/// the function the path names. Returns the path to import, leaving the bare name.
-fn unqualify(mac: &mut syn::Macro) -> Option<syn::Path> {
-    if mac.path.segments.len() < 2 {
-        return None;
-    }
-    let path = mac.path.clone();
-    let last = path.segments.last().expect("a segment").ident.clone();
-    mac.path = syn::Path::from(last);
-    Some(path)
 }
 
 pub(crate) fn pattern_names(pattern: &Pat, out: &mut Vec<String>) {
@@ -409,7 +417,14 @@ impl Free<'_> {
             return;
         }
         match self.outer.lookup(&name) {
-            Some(true) => self.unknown = true,
+            // A name a macro may have bound: the lambda is always changed, and the name is
+            // still captured (cloned into nested lambdas, D83).
+            Some(true) => {
+                self.unknown = true;
+                if self.seen.insert(name) {
+                    self.found.push(ident.clone());
+                }
+            }
             Some(false) if self.seen.insert(name) => self.found.push(ident.clone()),
             _ => {}
         }
@@ -519,11 +534,12 @@ impl<'ast> Visit<'ast> for Free<'_> {
         if !name.as_deref().is_some_and(|name| self.trusted(name)) {
             self.unknown = true;
         }
-        // A call macro's arguments are expressions: visited as such, a named argument's name
-        // (`modifier = …`) isn't a use, and names bound inside its lambdas are scoped.
+        // A call macro's arguments are expressions: visited as such, so names bound inside its
+        // lambdas are scoped, and a named argument's name (`modifier = …`) isn't a use (D98).
         if name.as_deref().is_some_and(is_call_macro) {
             let parser = Punctuated::<crate::call::Argument, Token![,]>::parse_terminated;
-            if let Ok(arguments) = syn::parse::Parser::parse2(parser, mac.tokens.clone()) {
+            let (_, tokens) = crate::call::split_path_prefix(mac.tokens.clone());
+            if let Ok(arguments) = syn::parse::Parser::parse2(parser, tokens) {
                 for argument in &arguments {
                     match argument.value() {
                         crate::call::Value::Expr(expression) => self.visit_expr(expression),
@@ -537,6 +553,13 @@ impl<'ast> Visit<'ast> for Free<'_> {
             }
         }
         self.scan_tokens(mac.tokens.clone());
+    }
+
+    /// A string literal may be a format string (`Text!("Count: {count}")`).
+    fn visit_lit_str(&mut self, literal: &'ast syn::LitStr) {
+        for name in format_names(&literal.value()) {
+            self.use_name(&Ident::new(&name, literal.span()));
+        }
     }
 
     fn visit_block(&mut self, block: &'ast syn::Block) {
@@ -760,10 +783,24 @@ impl Memoize {
         }
     }
 
-    /// A composable's call macro: its closures and its trailing block marked.
+    /// A composable's call macro: its closures and blocks marked; invoked by path
+    /// (`ui::Label!(…)`), the path passed first (`@path (ui::Label)`), as its expansion would
+    /// otherwise call the bare name, whatever `Label` is where it's used.
     fn rewrite_call_macro(&mut self, mac: &mut syn::Macro) {
         let name = mac.path.segments.last().map(|segment| segment.ident.to_string());
-        if !name.as_deref().is_some_and(is_call_macro) || mac.tokens.is_empty() {
+        if !name.as_deref().is_some_and(is_call_macro) {
+            return;
+        }
+        self.rewrite_call_macro_arguments(mac);
+        if mac.path.segments.len() > 1 {
+            let path = &mac.path;
+            let tokens = &mac.tokens;
+            mac.tokens = quote! { @path (#path) #tokens };
+        }
+    }
+
+    fn rewrite_call_macro_arguments(&mut self, mac: &mut syn::Macro) {
+        if mac.tokens.is_empty() {
             return;
         }
         // A PascalCase macro may be the user's, binding names it's given (`Bind!(current = …)`,
@@ -835,19 +872,6 @@ impl VisitMut for Memoize {
                             name.as_ref().is_some_and(|name| memoize.local_macros.contains(name));
                         if is_call_macro_path(&statement.mac.path) && !local {
                             memoize.rewrite_call_macro(&mut statement.mac);
-                            // By path: the path imported first, in the block (a statement macro
-                            // may declare bindings for the statements after it).
-                            if let Some(path) = unqualify(&mut statement.mac) {
-                                let cfgs: Vec<syn::Attribute> = statement
-                                    .attrs
-                                    .iter()
-                                    .filter(|attr| attr.path().is_ident("cfg"))
-                                    .cloned()
-                                    .collect();
-                                block.stmts.push(
-                                    parse_quote! { #(#cfgs)* #[allow(unused_imports)] use #path; },
-                                );
-                            }
                         } else if !is_known_macro(&statement.mac.path) {
                             // It may bind locals the walk can't see: a lambda naming any
                             // identifier it was given is always changed.
@@ -920,15 +944,7 @@ impl VisitMut for Memoize {
                     }
                 }
             }
-            Expr::Macro(macro_expr) => {
-                self.rewrite_call_macro(&mut macro_expr.mac);
-                if is_call_macro_path(&macro_expr.mac.path)
-                    && let Some(path) = unqualify(&mut macro_expr.mac)
-                {
-                    let mac = &macro_expr.mac;
-                    *expr = parse_quote! {{ use #path; #mac }};
-                }
-            }
+            Expr::Macro(macro_expr) => self.rewrite_call_macro(&mut macro_expr.mac),
             _ => visit_mut::visit_expr_mut(self, expr),
         }
     }
@@ -943,11 +959,20 @@ impl VisitMut for Memoize {
         self.depth -= 1;
     }
 
+    /// A loop body runs again: the lambdas in it are nested, built from clones (D83).
     fn visit_expr_for_loop_mut(&mut self, expr: &mut syn::ExprForLoop) {
         self.visit_expr_mut(&mut expr.expr);
         let mut names = Vec::new();
         bindings(&expr.pat, &mut names);
+        self.depth += 1;
         self.scoped(names, |memoize| memoize.visit_block_mut(&mut expr.body));
+        self.depth -= 1;
+    }
+
+    fn visit_expr_loop_mut(&mut self, expr: &mut syn::ExprLoop) {
+        self.depth += 1;
+        self.visit_block_mut(&mut expr.body);
+        self.depth -= 1;
     }
 
     fn visit_arm_mut(&mut self, arm: &mut syn::Arm) {
@@ -975,7 +1000,9 @@ impl VisitMut for Memoize {
         self.visit_expr_mut(&mut expr.cond);
         let mut names = Vec::new();
         condition_bindings(&expr.cond, &mut names);
+        self.depth += 1;
         self.scoped(names, |memoize| memoize.visit_block_mut(&mut expr.body));
+        self.depth -= 1;
     }
 
     /// In a let chain, the names bound by the left operand are in scope in the right one.

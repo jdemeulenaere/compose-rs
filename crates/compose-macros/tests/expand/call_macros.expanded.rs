@@ -61,6 +61,11 @@ pub fn Button(
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __compose_call_Button_ceda1bb746811f5a_N {
+    (@ path($($path:tt)*) $($arguments:tt)*) => {
+        ::compose::__private::call! { Button[on_click : callback 0, modifier : value = {
+        Modifier }, enabled : value = { true }, content : callback 0] plain @
+        path($($path)*); $($arguments)* }
+    };
     ($($arguments:tt)*) => {
         ::compose::__private::call! { Button[on_click : callback 0, modifier : value = {
         Modifier }, enabled : value = { true }, content : callback 0] plain;
@@ -108,6 +113,9 @@ fn Counter() {
 }
 #[doc(hidden)]
 macro_rules! __compose_call_Counter_abf9ac1093febf76_N {
+    (@ path($($path:tt)*) $($arguments:tt)*) => {
+        ::compose::__private::call! { Counter[] plain @ path($($path)*); $($arguments)* }
+    };
     ($($arguments:tt)*) => {
         ::compose::__private::call! { Counter[] plain; $($arguments)* }
     };

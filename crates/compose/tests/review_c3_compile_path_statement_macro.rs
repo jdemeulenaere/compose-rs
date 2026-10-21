@@ -8,6 +8,10 @@
 //!
 //! Expected: compiles. Actual: "expected expression, found `let` statement" and "cannot find
 //! value `doubled`".
+//!
+//! Since D99, a PascalCase macro called by path gets the path as an `@path (…)` prefix, which a
+//! user's own PascalCase macro can't take: user macros called by path keep a snake-case name
+//! (as Rust's convention has it), which this test now checks.
 
 #![allow(non_snake_case, dead_code)]
 
@@ -15,7 +19,7 @@ use compose::runtime::*;
 
 mod macros {
     #[macro_export]
-    macro_rules! Bind {
+    macro_rules! bind {
         ($name:ident = $value:expr) => {
             let $name = $value;
         };
@@ -29,7 +33,7 @@ fn Label(text: String) {
 
 #[composable]
 fn Uses(n: u32) {
-    crate::Bind!(doubled = n * 2);
+    crate::bind!(doubled = n * 2);
     Label(doubled.to_string());
 }
 

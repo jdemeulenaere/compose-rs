@@ -418,9 +418,10 @@ impl Regions {
         if !name.as_deref().is_some_and(is_pascal_case) || mac.tokens.is_empty() {
             return;
         }
+        let (prefix, tokens) = crate::call::split_path_prefix(mac.tokens.clone());
         let parser =
             syn::punctuated::Punctuated::<crate::call::Argument, syn::Token![,]>::parse_terminated;
-        let Ok(mut arguments) = syn::parse::Parser::parse2(parser, mac.tokens.clone()) else {
+        let Ok(mut arguments) = syn::parse::Parser::parse2(parser, tokens) else {
             return;
         };
         for argument in arguments.iter_mut() {
@@ -442,18 +443,40 @@ impl Regions {
                 },
             }
         }
-        mac.tokens = quote::ToTokens::to_token_stream(&arguments);
+        let arguments = quote::ToTokens::to_token_stream(&arguments);
+        mac.tokens = quote::quote! { #prefix #arguments };
     }
 }
 
 /// A user's macro (not PascalCase, not a standard one) whose tokens make likely composable
 /// calls: it may branch or loop around them (`when!(show, Text!("x"))`), so it is a region.
+///
+/// A PascalCase macro may be the user's too (`When!(show, Text!("x"))`): one with an argument
+/// that isn't a lambda but makes a likely call is a region as well. A composable's call macro
+/// rarely has one (its lambdas are regions of their own).
 fn is_user_macro_with_calls(mac: &syn::Macro) -> bool {
     let name =
         mac.path.segments.last().map(|segment| segment.ident.to_string()).unwrap_or_default();
-    !is_pascal_case(&name)
-        && !KNOWN_MACROS.contains(&name.as_str())
-        && tokens_contain_call(mac.tokens.clone())
+    if KNOWN_MACROS.contains(&name.as_str()) {
+        return false;
+    }
+    if !is_pascal_case(&name) {
+        return tokens_contain_call(mac.tokens.clone());
+    }
+    let (_, tokens) = crate::call::split_path_prefix(mac.tokens.clone());
+    let parser =
+        syn::punctuated::Punctuated::<crate::call::Argument, syn::Token![,]>::parse_terminated;
+    let Ok(arguments) = syn::parse::Parser::parse2(parser, tokens) else { return false };
+    arguments.iter().any(|argument| match argument.value() {
+        crate::call::Value::Expr(expression) => {
+            !matches!(expression, Expr::Block(_) | Expr::Closure(_)) && {
+                let mut likely = Likely { callables: &[], found: false };
+                likely.visit_expr(expression);
+                likely.found
+            }
+        }
+        crate::call::Value::Marked(_) => false,
+    })
 }
 
 impl VisitMut for Regions {
@@ -561,11 +584,9 @@ impl VisitMut for Regions {
                 self.visit_expr_mut(&mut binary.right);
                 // A `let` of a let chain can't be a block: its scrutinee is the branch then.
                 match &mut *binary.right {
-                    Expr::Let(binding) => {
-                        if self.likely_expr(&binding.expr) {
-                            self.wrap_expr(&mut binding.expr);
-                        }
-                    }
+                    // A `let` of a let chain: left as it is (a block would end its temporaries'
+                    // lives); a missed group costs state, never correctness (D88).
+                    Expr::Let(_) => {}
                     right => {
                         if self.likely_expr(right) {
                             self.wrap_expr(right);

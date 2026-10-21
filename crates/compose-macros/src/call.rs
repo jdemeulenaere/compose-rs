@@ -13,7 +13,7 @@ use quote::{ToTokens, quote, quote_spanned};
 use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
 use syn::spanned::Spanned;
-use syn::{Error, Expr, Ident, Token, braced, bracketed};
+use syn::{Error, Expr, Ident, Token, braced, bracketed, parenthesized};
 
 use crate::memo;
 
@@ -67,6 +67,24 @@ pub(crate) struct Marked {
 pub(crate) enum MarkedBody {
     Block(syn::Block),
     Closure(syn::ExprClosure),
+}
+
+/// A call macro's tokens without the `@path (…)` its caller may have put first, and that
+/// prefix.
+pub(crate) fn split_path_prefix(tokens: TokenStream) -> (Option<TokenStream>, TokenStream) {
+    let mut iter = tokens.clone().into_iter();
+    if let (
+        Some(proc_macro2::TokenTree::Punct(at)),
+        Some(proc_macro2::TokenTree::Ident(word)),
+        Some(proc_macro2::TokenTree::Group(group)),
+    ) = (iter.next(), iter.next(), iter.next())
+        && at.as_char() == '@'
+        && word == "path"
+    {
+        let prefix = quote! { @path #group };
+        return (Some(prefix), iter.collect());
+    }
+    (None, tokens)
 }
 
 /// Whether `path` is `::compose::__private::marked`.
@@ -282,6 +300,8 @@ impl Argument {
 
 struct Call {
     function: Ident,
+    /// The path the call macro was invoked by, to call the function by (`ui::Label`).
+    path: Option<TokenStream>,
     parameters: Vec<Parameter>,
     format: bool,
     arguments: Vec<Argument>,
@@ -296,12 +316,22 @@ impl Parse for Call {
         let parameters: Punctuated<Parameter, Token![,]> =
             content.parse_terminated(Parameter::parse, Token![,])?;
         let flag: Ident = input.parse()?;
+        let path = if input.peek(Token![@]) {
+            input.parse::<Token![@]>()?;
+            input.parse::<Ident>()?;
+            let content;
+            parenthesized!(content in input);
+            Some(content.parse::<TokenStream>()?)
+        } else {
+            None
+        };
         input.parse::<Token![;]>()?;
         let span = input.span();
         let arguments: Punctuated<Argument, Token![,]> =
             input.parse_terminated(Argument::parse, Token![,])?;
         Ok(Call {
             function,
+            path,
             parameters: parameters.into_iter().collect(),
             format: flag == "format",
             arguments: arguments.into_iter().collect(),
@@ -372,7 +402,7 @@ fn is_string_literal(argument: &Argument) -> bool {
 }
 
 fn build(call: Call) -> syn::Result<TokenStream> {
-    let Call { function, parameters, format, mut arguments, span } = call;
+    let Call { function, path, parameters, format, mut arguments, span } = call;
     let mut slots: Vec<Option<TokenStream>> = parameters.iter().map(|_| None).collect();
     let set = |slots: &mut Vec<Option<TokenStream>>, index: usize, value: TokenStream| {
         slots[index] = Some(value);
@@ -380,7 +410,9 @@ fn build(call: Call) -> syn::Result<TokenStream> {
 
     // A final block or closure is the last parameter, when that is a callback (a trailing lambda).
     let mut trailing = None;
-    let last_is_callback = parameters.last().is_some_and(|parameter| parameter.callback.is_some());
+    let last_is_callback = parameters
+        .last()
+        .is_some_and(|parameter| parameter.callback.is_some() || parameter.optional.is_some());
     if last_is_callback {
         let is_trailing =
             matches!(arguments.last(), Some(Argument::Positional(value)) if value.is_lambda());
@@ -483,8 +515,14 @@ fn build(call: Call) -> syn::Result<TokenStream> {
         if slots[index].is_some() {
             return Err(Error::new(span, format!("`{function}`'s last argument is given twice")));
         }
-        let arity = parameters[index].callback.unwrap_or(0);
-        set(&mut slots, index, callback_value(arity, argument.into_value()));
+        let arity = parameters[index].callback.or(parameters[index].optional).unwrap_or(0);
+        let value = callback_value(arity, argument.into_value());
+        let value = if parameters[index].optional.is_some() {
+            quote! { ::core::option::Option::Some(#value) }
+        } else {
+            value
+        };
+        set(&mut slots, index, value);
     }
 
     let mut values = Vec::new();
@@ -502,5 +540,8 @@ fn build(call: Call) -> syn::Result<TokenStream> {
         };
         values.push(value);
     }
-    Ok(quote! { #function(#(#values),*) })
+    match path {
+        Some(path) => Ok(quote! { #path(#(#values),*) }),
+        None => Ok(quote! { #function(#(#values),*) }),
+    }
 }

@@ -259,24 +259,27 @@ fn call_macro(function: &ItemFn, params: &[Param], key: u64, site: &str) -> Toke
     let name = &function.sig.ident;
     let unique = key_of(site) ^ key;
     let hidden = format_ident!("__compose_call_{}_{:016x}_{}", name, unique, expansion_serial());
-    let spec = params.iter().map(|param| {
-        let parameter = &param.name;
-        let optional = option_argument(&param.ty).and_then(callback_arity);
-        let kind = match (callback_arity(&param.ty), optional) {
-            (Some(arity), _) => {
-                let arity = proc_macro2::Literal::usize_unsuffixed(arity);
-                quote!(callback #arity)
-            }
-            (None, Some(arity)) => {
-                let arity = proc_macro2::Literal::usize_unsuffixed(arity);
-                quote!(optional #arity)
-            }
-            (None, None) => quote!(value),
-        };
-        let default =
-            param.default.clone().map(crate_relative).map(|default| quote!(= { #default }));
-        quote! { #parameter: #kind #default }
-    });
+    let spec: Vec<TokenStream> = params
+        .iter()
+        .map(|param| {
+            let parameter = &param.name;
+            let optional = option_argument(&param.ty).and_then(callback_arity);
+            let kind = match (callback_arity(&param.ty), optional) {
+                (Some(arity), _) => {
+                    let arity = proc_macro2::Literal::usize_unsuffixed(arity);
+                    quote!(callback #arity)
+                }
+                (None, Some(arity)) => {
+                    let arity = proc_macro2::Literal::usize_unsuffixed(arity);
+                    quote!(optional #arity)
+                }
+                (None, None) => quote!(value),
+            };
+            let default =
+                param.default.clone().map(crate_relative).map(|default| quote!(= { #default }));
+            quote! { #parameter: #kind #default }
+        })
+        .collect();
     let flag = if params.first().is_some_and(|param| param.format) {
         quote!(format)
     } else {
@@ -288,6 +291,10 @@ fn call_macro(function: &ItemFn, params: &[Param], key: u64, site: &str) -> Toke
         #[doc(hidden)]
         #export
         macro_rules! #hidden {
+            // Called by path in a composable: the path to call the function by.
+            (@path ($($path:tt)*) $($arguments:tt)*) => {
+                ::compose::__private::call! { #name [#(#spec),*] #flag @path ($($path)*) ; $($arguments)* }
+            };
             ($($arguments:tt)*) => {
                 ::compose::__private::call! { #name [#(#spec),*] #flag ; $($arguments)* }
             };
