@@ -14,7 +14,6 @@ dependencies = [
 name = "compose"
 version = "0.1.0"
 dependencies = [
- "compose-macros",
  "compose-runtime",
 ]
 
@@ -30,6 +29,9 @@ dependencies = [
 [[package]]
 name = "compose-runtime"
 version = "0.1.0"
+dependencies = [
+ "compose-macros",
+]
 
 [[package]]
 name = "proc-macro2"

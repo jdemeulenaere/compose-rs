@@ -9,6 +9,15 @@ fn Borrowed(title: &str) {
         Text(title.to_string());
     }
 }
+#[doc(hidden)]
+macro_rules! __compose_call_Borrowed_1efc7a945654dc5e {
+    ($($arguments:tt)*) => {
+        ::compose::__private::call! { Borrowed[title : value] plain; $($arguments)* }
+    };
+}
+#[doc(hidden)]
+#[allow(unused_imports)]
+use __compose_call_Borrowed_1efc7a945654dc5e as Borrowed;
 #[allow(non_snake_case)]
 fn Returns(value: i32) -> i32 {
     let __compose_marker = || ();
@@ -18,6 +27,15 @@ fn Returns(value: i32) -> i32 {
     );
     { remember(|| value * 2) }
 }
+#[doc(hidden)]
+macro_rules! __compose_call_Returns_0ad3229f33d2e0b2 {
+    ($($arguments:tt)*) => {
+        ::compose::__private::call! { Returns[value : value] plain; $($arguments)* }
+    };
+}
+#[doc(hidden)]
+#[allow(unused_imports)]
+use __compose_call_Returns_0ad3229f33d2e0b2 as Returns;
 #[allow(non_snake_case)]
 fn Explicit(content: impl Fn()) {
     let __compose_marker = || ();
@@ -29,6 +47,15 @@ fn Explicit(content: impl Fn()) {
         content();
     }
 }
+#[doc(hidden)]
+macro_rules! __compose_call_Explicit_0e6aa01d864d81a2 {
+    ($($arguments:tt)*) => {
+        ::compose::__private::call! { Explicit[content : value] plain; $($arguments)* }
+    };
+}
+#[doc(hidden)]
+#[allow(unused_imports)]
+use __compose_call_Explicit_0e6aa01d864d81a2 as Explicit;
 #[allow(non_snake_case)]
 fn StaticReference(title: &'static str) {
     let __composer = ::compose::__private::current();
@@ -57,3 +84,13 @@ fn StaticReference(title: &'static str) {
         Text(title.to_string());
     }
 }
+#[doc(hidden)]
+macro_rules! __compose_call_StaticReference_083104b1423b9cc6 {
+    ($($arguments:tt)*) => {
+        ::compose::__private::call! { StaticReference[title : value] plain;
+        $($arguments)* }
+    };
+}
+#[doc(hidden)]
+#[allow(unused_imports)]
+use __compose_call_StaticReference_083104b1423b9cc6 as StaticReference;

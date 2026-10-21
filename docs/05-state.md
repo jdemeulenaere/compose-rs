@@ -23,6 +23,7 @@ pub struct State<T: 'static> { … }
 
 pub fn mutable_state_of<T: PartialEq + 'static>(value: T) -> OwnedState<T>;
 pub fn mutable_state_of_with<T: 'static>(value: T, policy: impl MutationPolicy<T>) -> OwnedState<T>;
+pub fn mutable_state_list_of<T: 'static>() -> OwnedState<Vec<T>>;   // Compose's mutableStateListOf(): edits always invalidate
 ```
 
 - **Cells live in a per-thread generational arena.** A handle is an index plus a generation, and a handle of a freed cell is detected, never dereferenced. A cell is an `Rc` in the arena: an access clones it out and releases the runtime before touching the value, so a cell freed during a `with` stays alive until the `with` returns.
@@ -61,7 +62,7 @@ struct Todo {
     done: OwnedState<bool>,              // owned by the Todo; freed when the Todo is dropped
 }
 
-let todos = remember(|| mutable_state_of(Vec::<Rc<Todo>>::new()));
+let todos = remember(|| mutable_state_list_of::<Rc<Todo>>());
 // Toggling writes only `done`: the list scope doesn't re-run and other rows aren't visited.
 Checkbox!(checked = todo.done.get(), on_checked_change = { let done = todo.done.handle(); move |v| done.set(v) });
 ```

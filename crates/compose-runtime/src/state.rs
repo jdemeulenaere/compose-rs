@@ -448,6 +448,13 @@ pub fn mutable_state_of_with<T: 'static, P: MutationPolicy<T>>(
     new_state(value, P::equivalent, Location::caller())
 }
 
+/// A new state holding an empty list, as Compose's `mutableStateListOf()`: `edit` it to change
+/// the list; every edit invalidates the readers (the list's elements need no `PartialEq`).
+#[track_caller]
+pub fn mutable_state_list_of<T: 'static>() -> OwnedState<Vec<T>> {
+    new_state(Vec::new(), NeverEqualPolicy::equivalent, Location::caller())
+}
+
 fn new_state<T: 'static>(
     value: T,
     equivalent: fn(&T, &T) -> bool,

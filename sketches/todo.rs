@@ -31,7 +31,7 @@ pub enum Filter {
 
 #[composable]
 pub fn TodoApp() {
-    let todos = remember(|| mutable_state_of(Vec::<Rc<Todo>>::new()));
+    let todos = remember(|| mutable_state_list_of::<Rc<Todo>>());
     let draft = remember(|| mutable_state_of(String::new()));
     let filter = remember(|| mutable_state_of(Filter::All));
     let next_id = remember(|| mutable_state_of(0u64));

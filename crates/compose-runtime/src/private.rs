@@ -6,9 +6,14 @@
 
 use std::any::{Any, TypeId};
 
+pub use crate::callback::{
+    ArgProbe, Callback, KeyedProbe, LambdaProbe, PendingLambda, Unkeyed, UnkeyedProbe, callback,
+    lambda_probe, to_callback,
+};
 pub use crate::compose_arg::ComposeArg;
 pub use crate::composer::{Composer, current};
 pub use crate::hash::key_of;
+pub use compose_macros::call;
 
 /// Whether a panic that started after the guard was created is unwinding through it. A pass may
 /// run while an unrelated panic unwinds (a `Drop` writing state, with an immediate frame

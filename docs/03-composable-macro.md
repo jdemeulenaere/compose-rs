@@ -102,15 +102,18 @@ A restartable composable must keep its arguments across passes, and Rust can't k
 
 Strong skipping only works if lambdas passed as arguments keep their identity across passes. Compose wraps each lambda in `remember(captures) { lambda }`, and the macro does the same, syntactically:
 
-1. **Which closures.** Only `move` closures, and closures that capture nothing, are memoized: only they can be `'static`, and only `'static` closures are stored, as handlers or as content kept for restarts. A borrowing closure, such as the one given to `key(id, || …)` or `state.with(|v| …)`, runs at once and is left untouched. The call macros add `move` to the closures they pass as composable content, so content is always memoizable.
-2. For each memoized closure, the macro computes its captures: the free identifiers in the closure that resolve to locals or parameters of the enclosing function. It tracks scopes from `let`, parameters, `for`, `match` arms and closure parameters, in order.
-3. It rewrites `move |x| body` into
+1. **Which closures.** The macro sees syntax, not types, so it rewrites only the closures it knows become callbacks. In a composable's call macro (`Button!(on_click = move || …, { … })`), every closure argument and the trailing block are *marked* with their captures (`@memoize(count) move || …`), and the call macro, which knows its parameters, memoizes those bound to callback parameters and passes the others as written. In plain code, a closure wrapped as `callback(…)` or `Callback::new(…)` is memoized. Every other closure keeps its type: one passed to `map`, `state.update(|v| …)`, `key(id, || …)`, a generic `F: Fn()` parameter, or a PascalCase tuple struct such as `AssertUnwindSafe(|| …)`. Memoized closures get `move` added: a callback is `'static`.
+2. For each memoized closure, the macro computes its captures: the free identifiers in the closure that resolve to locals or parameters of the enclosing function. It tracks scopes from `let`, parameters, `for`, `match` arms, `if let` and `while let` (including let chains) and closure parameters, in order, and shadowing inside the closure.
+3. It rewrites the closure into a probe of the lambda remembered at that position:
    ```rust
-   compose::remember_lambda((compose::arg_key(&cap1), compose::arg_key(&cap2)), move |x| body)
+   {
+       let probe = lambda_probe(((&&ArgProbe(&cap1)).arg_key(), (&&ArgProbe(&cap2)).arg_key()));
+       match probe { LambdaProbe::Hit(callback) => callback, LambdaProbe::Miss(pending) => pending.store(move |x| body) }
+   }
    ```
-   This returns a `Callback` (an `Rc<dyn Fn(X)>`) stored in a slot. While every capture is `same` as last pass, it returns the stored `Rc`, so the callee sees the identical callback and can skip; otherwise it stores the new closure.
-4. `arg_key` uses *autoref specialisation*, which works because macro output is type-checked at the use site. A capture whose type implements `ComposeArg` contributes its value. A capture that doesn't makes the lambda count as always changed, instead of being a compile error.
-5. **Soundness of the walk.** A real capture must never be missed, or the lambda would wrongly keep an old closure. The walk sees every identifier in the closure's tokens, including those passed to macros. It also scans the string literals of macro calls for inline format arguments (`"{count}"` captures `count`). Declarative macros are hygienic for local variables, so they can't reach a local that isn't in their tokens. Only an unhygienic proc macro could invent such a reference. For that residual case, a closure containing a call to a macro outside a small allow-list (`format!`, `println!`, `vec!`, the composables' own call macros, …) counts as always changed. Over-counting captures is harmless: the lambda is just recreated more often than necessary.
+   The probe compares the captures with the ones kept last pass (borrowing them, so a steady-state pass clones nothing) and returns the remembered `Callback` (an `Rc<dyn Fn(X)>`) when every capture is `same`; otherwise it stores the new closure with clones of its captures. The callee sees the identical callback and can skip.
+4. `arg_key` uses *autoref specialisation*, which works because macro output is type-checked at the use site. A capture whose type implements `ComposeArg + Clone` contributes a key. A capture that doesn't makes the lambda count as always changed, instead of being a compile error.
+5. **Soundness of the walk.** A real capture must never be missed, or the lambda would wrongly keep an old closure. The walk sees every identifier in the closure's tokens, including those passed to macros. It also scans string literals in macro calls for inline format arguments (`"{count}"` captures `count`). Declarative macros are hygienic for local variables, so they can't reach a local that isn't in their tokens. Only an unhygienic proc macro could invent such a reference. For that residual case, a closure containing a call to a macro outside a small allow-list (the standard macros, `log`/`tracing` macros and the composables' own call macros) counts as always changed. Over-counting captures is harmless: the lambda is just recreated more often than necessary.
 
 Handlers stored in UI nodes (`on_click`) must be `'static`, so closures capture `Copy` state handles or clones (`move`). `Copy` handles make that the natural case; see [05](05-state.md).
 
@@ -144,7 +147,9 @@ The syntactic scan of parameter types ignores references inside function types: 
 
 ## Composable lambdas (content)
 
-A parameter typed `impl Fn() + 'static` whose name or attribute marks it as content is rewritten by the callee's macro to a `Callback<()>`. That makes it comparable by identity and storable in the kept tuple. A content lambda has no restart scope of its own: state read inside it registers the scope of the composable that invokes it. That composable restarts with its kept content callback, which re-runs the lambda, so restarts stay correct with one fewer kind of group. Compose gives content lambdas their own scope, which recomposes less; the cost here is re-running the invoking composable's own body too, usually a layout composable doing almost nothing.
+A parameter typed `impl Fn(A, …) -> R + 'static` is rewritten by the callee's macro to `Callback<dyn Fn(A, …) -> R>`, which makes it comparable by identity and storable in the kept tuple, and keeps the composable non-generic (one instantiation, whatever closures callers pass). The body calls it as before (`content()`): a `Callback` derefs to the function. Callback arguments are passed by value (`impl Fn(String)`, as Compose's `onValueChange: (String) -> Unit`); a callback taking a reference (`impl Fn(&str)`) isn't supported, since its higher-ranked type would make the conversion from closures ambiguous. A plain call passes a `Callback`: `Button(callback(move || …), Modifier, true, callback(move || { … }))`.
+
+A content lambda has no restart scope of its own: state read inside it registers the scope of the composable that invokes it. That composable restarts with its kept content callback, which re-runs the lambda, so restarts stay correct with one fewer kind of group. Compose gives content lambdas their own scope, which recomposes less; the cost here is re-running the invoking composable's own body too, usually a layout composable doing almost nothing. A content block making composable calls is a region group, as any such closure is, and the branches and loops inside it get theirs.
 
 ## Named, default and trailing arguments: the call macro
 
@@ -170,12 +175,14 @@ Button!(on_click = move || count.update(|c| c + 1), enabled = count.get() > 0, {
 Rules of the call macro:
 
 - **Positional, then named.** Arguments bind positionally from the first parameter, then by `name = value`, as in Kotlin.
-- **Defaults** come from `#[default(expr)]`. A missing parameter without a default is a compile error naming it.
+- **Defaults** come from `#[default(expr)]`. A missing parameter without a default is a compile error naming it. Default expressions are resolved where the call macro is used, as macro arguments are (a declarative macro can't name the callee's module): library composables use defaults that callers have in scope through the module's prelude (`Modifier`, `Arrangement::Top`, literals).
 - **Trailing lambda.** A final bare block `{ … }` becomes the last parameter, as a closure `move || { … }`, or `move |_scope| { … }` when the content is scoped (`Column`, `Row`, `Box`). A final explicit closure (`|row| { … }`) is passed as is, with `move` added.
-- **Formatting.** A composable whose first parameter is marked `#[format]` (`Text`) accepts format arguments: `Text!("Count: {}", n)`.
+- **Formatting.** A composable whose first parameter is marked `#[format]` (`Text`) accepts format arguments: `Text!("Count: {}", n)`, including inline ones (`Text!("Count: {n}")`). Whatever it is given is converted with `Into` (`Text!(title)` with a `SharedString`).
+- **Callback arguments.** A closure given for a callback parameter is memoized (above); a callback given by name (`on_click = on_remove`) is cloned rather than moved, so a content lambda passing it on stays `Fn`.
+- **Errors** name the problem at its place: an unknown parameter (listing the parameters), an argument given twice, a positional argument after a named one, a missing argument.
 - **Plain calls still work.** The function itself stays callable with every argument written out, which is what rust-analyzer completes best.
 
-The generated `macro_rules!` binds names with one arm per parameter, so expansion is linear in the number of arguments written.
+The generated `macro_rules!` has one arm: it forwards its arguments, with a spec of the parameters (names, callback arities, defaults, the format flag), to one shared function-like proc macro, `call!`, which binds them. One shared macro rather than a recursive `macro_rules!` muncher per composable: a macro-expanded `#[macro_export]` macro can't refer to itself by absolute path within its crate. A `pub` composable's call macro is `#[macro_export]`ed under a hidden unique name and re-exported next to the function (`pub use __compose_call_Button_… as Button;`); the others are plain `macro_rules!` re-exported with the function's visibility. So `Name!` is in scope wherever `Name` is imported, and its expansion calls `Name(…)` there.
 
 **Considered alternatives.**
 - **A builder per composable**, as in `Button(on_click).enabled(false).content(|| …)`. It's more IDE-friendly, but it emits on a terminal call, which makes the positional identity of a call depend on where `.content()` or `.show()` is called.

@@ -27,6 +27,7 @@ fn expand_file(source: &str) -> String {
                         arguments,
                         function.to_token_stream(),
                         "golden::src/lib.rs",
+                        &function.sig.ident.to_string(),
                     );
                     let expanded: syn::File = syn::parse2(expanded).expect("expansion parses");
                     items.extend(expanded.items);

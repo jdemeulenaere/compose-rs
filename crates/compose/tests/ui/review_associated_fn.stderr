@@ -1,3 +1,21 @@
+error: macro definition is not supported in `trait`s or `impl`s
+  --> tests/ui/review_associated_fn.rs:10:5
+   |
+10 |     #[composable]
+   |     ^^^^^^^^^^^^^
+   |
+   = help: consider moving the macro definition out to a nearby module scope
+   = note: this error originates in the attribute macro `composable` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: `use` import is not supported in `trait`s or `impl`s
+  --> tests/ui/review_associated_fn.rs:10:5
+   |
+10 |     #[composable]
+   |     ^^^^^^^^^^^^^
+   |
+   = help: consider moving the `use` import out to a nearby module scope
+   = note: this error originates in the attribute macro `composable` (in Nightly builds, run with -Z macro-backtrace for more info)
+
 error[E0425]: cannot find function, tuple struct or tuple variant `Content` in this scope
   --> tests/ui/review_associated_fn.rs:11:8
    |

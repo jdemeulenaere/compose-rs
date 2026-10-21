@@ -1,0 +1,5 @@
+error: positional arguments come before named ones
+  --> tests/ui/call_positional_after_named.rs:10:22
+   |
+10 |     Label!(size = 2, "x".into());
+   |                      ^^^

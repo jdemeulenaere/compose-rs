@@ -26,7 +26,14 @@ const RUNTIME_COMPOSABLES: &[&str] = &[
 ];
 
 /// PascalCase calls that are almost never composables.
-const NOT_COMPOSABLES: &[&str] = &["Some", "Ok", "Err"];
+const NOT_COMPOSABLES: &[&str] = &["Some", "Ok", "Err", "ArgProbe"];
+
+/// Whether a name looks like a composable's: PascalCase, not `Some`, `Ok` or `Err`.
+pub(crate) fn is_pascal_case(name: &str) -> bool {
+    name.chars().next().is_some_and(char::is_uppercase)
+        && name.chars().any(char::is_lowercase)
+        && !NOT_COMPOSABLES.contains(&name)
+}
 
 fn is_composable_name(name: &str) -> bool {
     if RUNTIME_COMPOSABLES.contains(&name) {
@@ -398,9 +405,49 @@ impl<'ast> Visit<'ast> for LocalClosures<'_> {
     fn visit_item(&mut self, _: &'ast Item) {}
 }
 
+impl Regions {
+    /// A composable's call macro: its arguments' blocks and closures get their region groups
+    /// too, and a content block making likely calls is a region of its own, like a closure.
+    fn visit_call_macro(&mut self, mac: &mut syn::Macro) {
+        let name = mac.path.segments.last().map(|segment| segment.ident.to_string());
+        if !name.as_deref().is_some_and(is_pascal_case) || mac.tokens.is_empty() {
+            return;
+        }
+        let parser =
+            syn::punctuated::Punctuated::<crate::call::Argument, syn::Token![,]>::parse_terminated;
+        let Ok(mut arguments) = syn::parse::Parser::parse2(parser, mac.tokens.clone()) else {
+            return;
+        };
+        for argument in arguments.iter_mut() {
+            match argument.value_mut() {
+                crate::call::Value::Expr(expression) => self.visit_expr_mut(expression),
+                crate::call::Value::Marked(marked) => match marked.body_mut() {
+                    crate::call::MarkedBody::Block(block) => {
+                        self.visit_block_mut(block);
+                        if self.likely_block(block) {
+                            self.wrap_block(block);
+                        }
+                    }
+                    crate::call::MarkedBody::Closure(closure) => {
+                        self.visit_expr_closure_mut(closure);
+                        if self.likely_expr(&closure.body) {
+                            self.wrap_expr(&mut closure.body);
+                        }
+                    }
+                },
+            }
+        }
+        mac.tokens = quote::ToTokens::to_token_stream(&arguments);
+    }
+}
+
 impl VisitMut for Regions {
     fn visit_item_mut(&mut self, _: &mut Item) {
         // A nested item is not part of this body; a nested composable has its own attribute.
+    }
+
+    fn visit_macro_mut(&mut self, mac: &mut syn::Macro) {
+        self.visit_call_macro(mac);
     }
 
     fn visit_local_mut(&mut self, local: &mut syn::Local) {

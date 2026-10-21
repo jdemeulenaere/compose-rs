@@ -6,7 +6,6 @@
 /// `androidx.compose.runtime`: composition, `remember`, state, effects, and the `#[composable]`
 /// transform.
 pub mod runtime {
-    pub use compose_macros::{ComposeArg, composable};
     pub use compose_runtime::*;
 }
 

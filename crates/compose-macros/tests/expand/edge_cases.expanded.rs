@@ -61,6 +61,16 @@ fn Filtered(ids: Rc<Vec<u32>>, on_change: Rc<dyn Fn(&str)>) {
         };
     }
 }
+#[doc(hidden)]
+macro_rules! __compose_call_Filtered_5673cd8923f60262 {
+    ($($arguments:tt)*) => {
+        ::compose::__private::call! { Filtered[ids : value, on_change : value] plain;
+        $($arguments)* }
+    };
+}
+#[doc(hidden)]
+#[allow(unused_imports)]
+use __compose_call_Filtered_5673cd8923f60262 as Filtered;
 #[allow(non_snake_case)]
 fn Conditional(
     #[cfg(feature = "extra")]
@@ -77,3 +87,13 @@ fn Conditional(
         *count += step;
     }
 }
+#[doc(hidden)]
+macro_rules! __compose_call_Conditional_7f76342f2708a77a {
+    ($($arguments:tt)*) => {
+        ::compose::__private::call! { Conditional[extra : value, __compose_argument1 :
+        value] plain; $($arguments)* }
+    };
+}
+#[doc(hidden)]
+#[allow(unused_imports)]
+use __compose_call_Conditional_7f76342f2708a77a as Conditional;

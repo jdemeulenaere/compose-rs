@@ -19,6 +19,7 @@ extern crate self as compose;
 #[path = "private.rs"]
 pub mod __private;
 mod applier;
+mod callback;
 mod compose_arg;
 mod composer;
 mod composition;
@@ -33,7 +34,9 @@ mod slot_table;
 mod state;
 
 pub use applier::{Applier, NodeRef};
+pub use callback::{Callback, IntoCallback, callback};
 pub use compose_arg::ComposeArg;
+pub use compose_macros::{ComposeArg, composable};
 pub use composer::{Composer, current, current_recompose_scope};
 pub use composition::Composition;
 pub use effects::{DisposableEffect, DisposableEffectResult, DisposableEffectScope, SideEffect};
@@ -47,9 +50,16 @@ pub use remember::{
 pub use scope::RecomposeScope;
 pub use state::{
     MutableState, MutationPolicy, NeverEqualPolicy, OwnedState, State, StructuralEqualityPolicy,
-    live_state_count, mutable_state_of, mutable_state_of_with, never_equal_policy,
-    structural_equality_policy,
+    live_state_count, mutable_state_list_of, mutable_state_of, mutable_state_of_with,
+    never_equal_policy, structural_equality_policy,
 };
+
+/// The number of composable bodies run on this thread so far (restart groups that didn't skip).
+/// For tests and frame statistics.
+#[doc(hidden)]
+pub fn bodies_run() -> u64 {
+    runtime::with_runtime(|runtime| runtime.bodies_run)
+}
 
 /// The number of live recompose scopes on this thread. For tests.
 #[doc(hidden)]

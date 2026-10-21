@@ -502,6 +502,7 @@ impl Runtime {
             return;
         }
         frame.body_started = true;
+        self.bodies_run += 1;
         if let Some(scope) = scopes.get_mut(frame.scope) {
             scope.epoch = scope.epoch.wrapping_add(1);
         }

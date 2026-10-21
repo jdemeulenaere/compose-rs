@@ -1,0 +1,5 @@
+error: argument `size` of `Label` is given twice
+  --> tests/ui/call_argument_twice.rs:10:34
+   |
+10 |     Label!("x".into(), size = 2, size = 3);
+   |                                  ^^^^

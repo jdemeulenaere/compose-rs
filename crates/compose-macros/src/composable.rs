@@ -4,6 +4,7 @@ use proc_macro2::{Span, TokenStream};
 use quote::{format_ident, quote, quote_spanned};
 use syn::spanned::Spanned;
 use syn::visit::{self, Visit};
+use syn::visit_mut::VisitMut;
 use syn::{Error, FnArg, GenericParam, Ident, ItemFn, Pat, PatIdent, ReturnType, Stmt, Type};
 
 use crate::regions::Regions;
@@ -15,8 +16,8 @@ pub(crate) fn key_of(text: &str) -> u64 {
     })
 }
 
-pub(crate) fn expand(attr: TokenStream, item: TokenStream, scope: &str) -> TokenStream {
-    match transform(attr, item.clone(), scope) {
+pub(crate) fn expand(attr: TokenStream, item: TokenStream, scope: &str, site: &str) -> TokenStream {
+    match transform(attr, item.clone(), scope, site) {
         Ok(tokens) => tokens,
         Err(error) => {
             // Emit the function untransformed too, so the error doesn't cascade into
@@ -117,6 +118,101 @@ struct Param {
     /// A parameter written as a pattern (`(x, y): (i32, i32)`) is renamed, and its pattern
     /// bound at the start of the body.
     pattern: Option<Pat>,
+    /// The call macro's default for the parameter.
+    default: Option<TokenStream>,
+    /// The parameter takes the call macro's format arguments.
+    format: bool,
+    /// The names the parameter binds in the body.
+    visible: Vec<String>,
+}
+
+/// `impl Fn(A, B) -> R + 'static`, as `Callback<dyn Fn(A, B) -> R>`: kept and compared by
+/// identity, and the same type for every closure, so the composable stays non-generic.
+fn callback_type(ty: &Type) -> Option<Type> {
+    let Type::ImplTrait(impl_trait) = ty else { return None };
+    let mut function = None;
+    let mut is_static = false;
+    for bound in &impl_trait.bounds {
+        match bound {
+            syn::TypeParamBound::Trait(bound)
+                if bound.lifetimes.is_none()
+                    && bound.path.segments.len() == 1
+                    && bound.path.segments[0].ident == "Fn"
+                    && function.is_none() =>
+            {
+                function = Some(bound.path.clone());
+            }
+            syn::TypeParamBound::Lifetime(lifetime) if lifetime.ident == "static" => {
+                is_static = true;
+            }
+            _ => return None,
+        }
+    }
+    let function = function.filter(|_| is_static)?;
+    Some(syn::parse_quote!(::compose::__private::Callback<dyn #function>))
+}
+
+/// The number of arguments of a `Callback<dyn Fn(…)>` parameter.
+fn callback_arity(ty: &Type) -> Option<usize> {
+    let Type::Path(path) = ty else { return None };
+    let segment = path.path.segments.last()?;
+    if segment.ident != "Callback" {
+        return None;
+    }
+    let syn::PathArguments::AngleBracketed(arguments) = &segment.arguments else {
+        return Some(0);
+    };
+    arguments.args.iter().find_map(|argument| {
+        let syn::GenericArgument::Type(Type::TraitObject(object)) = argument else { return None };
+        object.bounds.iter().find_map(|bound| {
+            let syn::TypeParamBound::Trait(bound) = bound else { return None };
+            let segment = bound.path.segments.last()?;
+            match &segment.arguments {
+                syn::PathArguments::Parenthesized(inputs) => Some(inputs.inputs.len()),
+                _ => None,
+            }
+        })
+    })
+}
+
+/// The composable's call macro: `Name!(…)` with named, default, trailing and format arguments,
+/// forwarding to `call!` with the parameters' spec. A `pub` composable's macro is exported; the
+/// others are scoped like the function, through a `use` with its visibility.
+fn call_macro(function: &ItemFn, params: &[Param], key: u64, site: &str) -> TokenStream {
+    let name = &function.sig.ident;
+    let unique = key_of(site) ^ key;
+    let hidden = format_ident!("__compose_call_{}_{:016x}", name, unique);
+    let spec = params.iter().map(|param| {
+        let parameter = &param.name;
+        let kind = match callback_arity(&param.ty) {
+            Some(arity) => {
+                let arity = proc_macro2::Literal::usize_unsuffixed(arity);
+                quote!(callback #arity)
+            }
+            None => quote!(value),
+        };
+        let default = param.default.as_ref().map(|default| quote!(= { #default }));
+        quote! { #parameter: #kind #default }
+    });
+    let flag = if params.first().is_some_and(|param| param.format) {
+        quote!(format)
+    } else {
+        quote!(plain)
+    };
+    let vis = &function.vis;
+    let export = matches!(vis, syn::Visibility::Public(_)).then(|| quote!(#[macro_export]));
+    quote! {
+        #[doc(hidden)]
+        #export
+        macro_rules! #hidden {
+            ($($arguments:tt)*) => {
+                ::compose::__private::call! { #name [#(#spec),*] #flag ; $($arguments)* }
+            };
+        }
+        #[doc(hidden)]
+        #[allow(unused_imports)]
+        #vis use #hidden as #name;
+    }
 }
 
 /// The generic type parameters bounded by `Fn`, `FnMut` or `FnOnce`.
@@ -149,7 +245,12 @@ fn is_unit(ty: &Type) -> bool {
     matches!(ty, Type::Tuple(tuple) if tuple.elems.is_empty())
 }
 
-fn transform(attr: TokenStream, item: TokenStream, scope: &str) -> syn::Result<TokenStream> {
+fn transform(
+    attr: TokenStream,
+    item: TokenStream,
+    scope: &str,
+    site: &str,
+) -> syn::Result<TokenStream> {
     let options = parse_options(attr)?;
     let mut function: ItemFn = syn::parse2(item)?;
     let sig = &mut function.sig;
@@ -189,6 +290,29 @@ fn transform(attr: TokenStream, item: TokenStream, scope: &str) -> syn::Result<T
             }
             FnArg::Typed(typed) => typed,
         };
+        // `#[default(expr)]` and `#[format]` are for the call macro; they leave the signature.
+        let mut default = None;
+        let mut format = false;
+        let mut attributes = Vec::new();
+        for attr in std::mem::take(&mut typed.attrs) {
+            if attr.path().is_ident("default") {
+                default = Some(attr.parse_args::<TokenStream>()?);
+            } else if attr.path().is_ident("format") {
+                if index != 0 {
+                    return Err(Error::new(
+                        attr.span(),
+                        "only the first parameter can be `#[format]`",
+                    ));
+                }
+                format = true;
+            } else {
+                attributes.push(attr);
+            }
+        }
+        typed.attrs = attributes;
+        if let Some(callback) = callback_type(&typed.ty) {
+            *typed.ty = callback;
+        }
         let types = scan(&typed.ty);
         if let Some(span) = types.mutable_reference {
             return Err(Error::new(
@@ -231,7 +355,17 @@ fn transform(attr: TokenStream, item: TokenStream, scope: &str) -> syn::Result<T
             }
         };
         let cfgs = typed.attrs.iter().filter(|attr| attr.path().is_ident("cfg")).cloned().collect();
-        params.push(Param { name, ty: (*typed.ty).clone(), cfgs, pattern });
+        let mut visible = Vec::new();
+        crate::memo::pattern_names(pattern.as_ref().unwrap_or(&typed.pat), &mut visible);
+        params.push(Param {
+            name,
+            ty: (*typed.ty).clone(),
+            cfgs,
+            pattern,
+            default,
+            format,
+            visible,
+        });
     }
     let returns_value = match &sig.output {
         ReturnType::Default => false,
@@ -263,8 +397,13 @@ fn transform(attr: TokenStream, item: TokenStream, scope: &str) -> syn::Result<T
     // expansion holds a literal rather than a `const` item (each costs the compiler a body to
     // check and evaluate).
     let key = key_of(&format!("{scope}::{}", function.sig.ident));
+    // Closures passed to composable calls are memoized on their captures, then region groups
+    // are placed.
+    let visible = params.iter().flat_map(|param| param.visible.clone()).collect();
+    crate::memo::Memoize::new(visible).visit_block_mut(&mut function.block);
     let mut regions = Regions::new(callables, key);
     regions.transform_block(&mut function.block);
+    let call_macro = call_macro(&function, &params, key, site);
 
     let rebinds = params.iter().filter_map(|param| {
         let pattern = param.pattern.as_ref()?;
@@ -374,5 +513,6 @@ fn transform(attr: TokenStream, item: TokenStream, scope: &str) -> syn::Result<T
             #(#inner)*
             #body
         }
+        #call_macro
     })
 }

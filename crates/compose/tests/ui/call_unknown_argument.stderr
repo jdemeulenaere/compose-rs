@@ -1,0 +1,5 @@
+error: `Label` has no parameter `colour`; its parameters are: text, size
+  --> tests/ui/call_unknown_argument.rs:10:24
+   |
+10 |     Label!("x".into(), colour = 3);
+   |                        ^^^^^^

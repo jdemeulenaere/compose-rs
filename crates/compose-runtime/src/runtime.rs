@@ -47,6 +47,8 @@ pub(crate) struct Runtime {
     pub finishing: usize,
     /// The thread is exiting: once nothing is left, the runtime releases its storage.
     pub exiting: bool,
+    /// Composable bodies run on this thread: frame statistics and tests.
+    pub bodies_run: u64,
     /// A group guard was dropped by an unwinding panic in this pass, leaving its group open.
     pub abandoned_groups: bool,
 }
@@ -73,6 +75,7 @@ impl Runtime {
             disposing: 0,
             finishing: 0,
             exiting: false,
+            bodies_run: 0,
             abandoned_groups: false,
         }
     }

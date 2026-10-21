@@ -10,8 +10,10 @@
 
 use proc_macro::TokenStream;
 
+mod call;
 mod composable;
 mod derive;
+mod memo;
 mod regions;
 
 #[cfg(test)]
@@ -36,7 +38,10 @@ mod golden;
 ///   inline whenever their caller runs. `#[composable(non_restartable)]` asks for it explicitly.
 #[proc_macro_attribute]
 pub fn composable(attr: TokenStream, item: TokenStream) -> TokenStream {
-    composable::expand(attr.into(), item.into(), &declaration_scope()).into()
+    // The attribute's position only names the exported call macro uniquely; keys don't use it.
+    let span = proc_macro::Span::call_site();
+    let site = format!("{}:{}", span.line(), span.column());
+    composable::expand(attr.into(), item.into(), &declaration_scope(), &site).into()
 }
 
 /// The crate and source file of the composable being expanded: with its name, what its group
@@ -62,6 +67,14 @@ fn declaration_scope() -> String {
     let file: Vec<String> =
         file.components().map(|part| part.as_os_str().to_string_lossy().into_owned()).collect();
     format!("{krate}::{}", file.join("/"))
+}
+
+/// The call macros' implementation: binds positional, named, default, trailing and format
+/// arguments to a composable's parameters. Not called directly: `Name!(…)` expands to it.
+#[doc(hidden)]
+#[proc_macro]
+pub fn call(input: TokenStream) -> TokenStream {
+    call::expand(input.into()).into()
 }
 
 /// Derives `ComposeArg` field by field: `Rc` fields compare by identity, small fields by value.

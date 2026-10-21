@@ -31,3 +31,14 @@ pub fn Greeting(name: String, count: i32) {
         Text(format!("Hello {name}: {count}"));
     }
 }
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __compose_call_Greeting_460afe76bd277c02 {
+    ($($arguments:tt)*) => {
+        ::compose::__private::call! { Greeting[name : value, count : value] plain;
+        $($arguments)* }
+    };
+}
+#[doc(hidden)]
+#[allow(unused_imports)]
+pub use __compose_call_Greeting_460afe76bd277c02 as Greeting;

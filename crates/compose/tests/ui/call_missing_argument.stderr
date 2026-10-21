@@ -1,0 +1,5 @@
+error: missing argument `text` for `Label`
+  --> tests/ui/call_missing_argument.rs:10:12
+   |
+10 |     Label!(size = 2);
+   |            ^^^^
