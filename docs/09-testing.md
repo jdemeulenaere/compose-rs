@@ -7,7 +7,7 @@
 fn counting_to_three() {
     let mut ui = compose_test(|| Counter());                 // headless host, Skia text, bundled fonts
     for _ in 0..3 {
-        ui.on_node_with_text("Count").perform_click();         // finds through semantics
+        ui.on_node(has_text_containing("Count")).perform_click();         // finds through semantics
     }
     ui.on_node_with_text("Count: 3").assert_exists();
     insta::assert_snapshot!(ui.dump_tree());                   // node tree with layout

@@ -8,6 +8,12 @@ publish.workspace = true
 
 [dependencies]
 compose-runtime.workspace = true
+compose-ui.workspace = true
+compose-test = { workspace = true, optional = true }
+
+[features]
+# `compose::test`: the test rule, for tests (as a dev-dependency feature).
+test = ["dep:compose-test"]
 
 [dev-dependencies]
 trybuild = "1"

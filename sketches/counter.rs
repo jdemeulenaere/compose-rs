@@ -43,7 +43,7 @@ mod tests {
     fn counting_to_three() {
         let mut ui = compose_test(|| Counter());
         for _ in 0..3 {
-            ui.on_node_with_text("Count").perform_click();
+            ui.on_node(has_text_containing("Count")).perform_click();
         }
         ui.on_node_with_text("Count: 3").assert_exists();
         ui.on_node_with_text("Reset").assert_is_enabled();

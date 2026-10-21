@@ -1,0 +1,11 @@
+[package]
+name = "compose-ui"
+description = "The UI layer of compose-rs: layout nodes, modifiers, layout, drawing, input, semantics."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+compose-runtime.workspace = true
+smallvec = { version = "1.13", features = ["const_new", "union"] }

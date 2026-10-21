@@ -9,8 +9,8 @@ compose (facade: re-exports the modules below as compose::runtime, compose::ui, 
 │                             state and observation, effects, Composition, Applier
 ├── compose-ui                node tree, Modifier and Modifier.Node, Layout/MeasurePolicy,
 │                             the TextMeasurer and Renderer interfaces, drawing (display
-│                             list), input, focus, the Host trait, the headless host,
-│                             event scripts, dumps
+│                             list), input, focus, semantics, UiHost (the host core every
+│                             platform wraps, and the headless host), dumps
 ├── compose-foundation        Box, Column, Row, Spacer, Arrangement, padding/size/fill,
 │                             weight/align (scopes), clickable, toggleable, background,
 │                             border, shapes, BasicText, BasicTextField  (module
@@ -22,7 +22,7 @@ compose (facade: re-exports the modules below as compose::runtime, compose::ui, 
 ├── compose-android           ComposeRsView host: display-list replayer, StaticLayout text
 │                             measurer, input, IME and accessibility bridges (a cdylib plus
 │                             a Kotlin AAR, embeddable in Kotlin Compose with AndroidView)
-└── compose-test              ComposeTestRule-like API over the headless host
+└── compose-test              ComposeTestRule-like API over the headless host, event scripts
 ```
 
 In the repository the crates live under `crates/`, and are added as the roadmap reaches them ([10](10-roadmap.md)). `benchmarks/` holds the criterion benchmarks; it isn't a default workspace member, so `cargo build` and `cargo test` don't compile criterion.

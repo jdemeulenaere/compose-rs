@@ -1,8 +1,8 @@
 [workspace]
 resolver = "3"
-members = ["crates/compose", "crates/compose-macros", "crates/compose-runtime", "benchmarks"]
+members = ["crates/compose", "crates/compose-macros", "crates/compose-runtime", "crates/compose-ui", "crates/compose-test", "benchmarks"]
 # The benchmarks pull in criterion; keep them out of a plain `cargo build` / `cargo test`.
-default-members = ["crates/compose", "crates/compose-macros", "crates/compose-runtime"]
+default-members = ["crates/compose", "crates/compose-macros", "crates/compose-runtime", "crates/compose-ui", "crates/compose-test"]
 
 [workspace.package]
 version = "0.1.0"
@@ -13,6 +13,8 @@ publish = false
 [workspace.dependencies]
 compose-macros = { path = "crates/compose-macros" }
 compose-runtime = { path = "crates/compose-runtime" }
+compose-ui = { path = "crates/compose-ui" }
+compose-test = { path = "crates/compose-test" }
 
 # Fast edit-build loop (docs/08-fast-builds.md).
 [profile.dev]

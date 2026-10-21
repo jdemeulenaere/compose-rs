@@ -1,0 +1,10 @@
+# The counter: three clicks, then a reset.
+semantics
+click "Count: 0"
+click "Count: 1"
+click tag:increment
+assert "Count: 3"
+assert_not "Count: 0"
+click tag:reset
+dump
+display

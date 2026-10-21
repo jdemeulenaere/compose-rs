@@ -2,7 +2,7 @@
 
 A design for bringing Jetpack Compose's model to Rust: positional memoization over a slot table, a compiler-style transform that makes composables skippable and restartable, observable state, `Modifier.Node`-style modifiers, and Compose's layout model and API names, on desktop and Android.
 
-**Status:** phases A (the runtime, `crates/compose-runtime`) and B (the `#[composable]` transform, `crates/compose-macros`) of the [roadmap](docs/10-roadmap.md) are implemented; there is no UI layer yet. `cargo test` runs the runtime scenarios, the randomized model test, the allocation checks, the expansion goldens and the compile-fail tests; `cargo bench -p compose-benchmarks` runs the runtime benchmarks.
+**Status:** phases A (the runtime, `crates/compose-runtime`), B (the `#[composable]` transform, `crates/compose-macros`), C (call macros and lambda memoization) and D (the UI core, `crates/compose-ui`, and the test rule, `crates/compose-test`) of the [roadmap](docs/10-roadmap.md) are implemented; the toolkit (foundation, material3) and the platform hosts come next. `cargo test` runs the runtime scenarios, the randomized model test, the allocation checks, the expansion goldens, the compile-fail tests and the UI rule tests; `cargo bench -p compose-benchmarks` runs the runtime benchmarks.
 
 | Crate | Contents |
 |---|---|

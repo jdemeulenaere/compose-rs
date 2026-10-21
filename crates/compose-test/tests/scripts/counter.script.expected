@@ -1,0 +1,24 @@
+> semantics
+[0,0 400x800] 
+  [16,16 56x18] text=["Count: 0"] tag="increment" clickable focusable merged
+  [16,34 35x18] role=Button text=["Reset"] tag="reset" clickable disabled merged
+> click "Count: 0"
+> click "Count: 1"
+> click tag:increment
+> assert "Count: 3"
+> assert_not "Count: 0"
+> click tag:reset
+> dump
+StackMeasurePolicy [0,0 400x800]
+  ColumnPolicy [0,0 88x68] Modifier.padding(16.dp, 16.dp, 16.dp, 16.dp)
+    RowPolicy [0,0 56x18] Modifier.clickable(enabled = true).test_tag("increment") {tag="increment" clickable focusable merged}
+      EmptyMeasurePolicy [0,0 56x18] Modifier.TextElement {text=["Count: 0"]}
+    RowPolicy [0,18 35x18] Modifier.clickable(enabled = false).test_tag("reset") {role=Button tag="reset" clickable disabled merged}
+      EmptyMeasurePolicy [0,0 35x18] Modifier.TextElement {text=["Reset"]}
+> display
+translate 16 16
+paragraph 0 at 0 0
+translate 0 18
+paragraph 1 at 0 0
+translate 0 -18
+translate -16 -16

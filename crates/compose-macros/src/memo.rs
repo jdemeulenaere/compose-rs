@@ -68,6 +68,19 @@ fn is_call_macro(name: &str) -> bool {
     crate::regions::is_pascal_case(name)
 }
 
+/// Whether `receiver` is a modifier chain: method calls on the path `Modifier`.
+fn is_modifier_chain(receiver: &Expr) -> bool {
+    match receiver {
+        Expr::MethodCall(call) => is_modifier_chain(&call.receiver),
+        Expr::Path(path) => {
+            path.qself.is_none()
+                && path.path.segments.last().is_some_and(|segment| segment.ident == "Modifier")
+        }
+        Expr::Paren(paren) => is_modifier_chain(&paren.expr),
+        _ => false,
+    }
+}
+
 /// `remember(…)` and its variants.
 fn is_remember(function: &Expr) -> bool {
     matches!(function, Expr::Path(path) if path.path.segments.last().is_some_and(|segment| segment.ident.to_string().starts_with("remember")))
@@ -590,6 +603,20 @@ impl VisitMut for Memoize {
 
     fn visit_expr_mut(&mut self, expr: &mut Expr) {
         match expr {
+            // A closure argument in a modifier chain (`Modifier.clickable(move || …)`) becomes
+            // a callback: modifiers take `impl IntoCallback`, so it is memoized, and the
+            // modifier stays `same` when its captures do.
+            Expr::MethodCall(call) if is_modifier_chain(&call.receiver) => {
+                self.visit_expr_mut(&mut call.receiver);
+                for argument in &mut call.args {
+                    if let Expr::Closure(closure) = argument {
+                        self.visit_expr_closure_mut(closure);
+                        *argument = memoize_closure(&self.scopes, closure);
+                    } else {
+                        self.visit_expr_mut(argument);
+                    }
+                }
+            }
             // `remember`'s calculation runs once, while `remember` holds its slot: a callback
             // made there needs no memoization, and a probe there would take a slot out of order.
             Expr::Call(call) if is_remember(&call.func) => self.visit_expr_mut(&mut call.func),

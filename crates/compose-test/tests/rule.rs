@@ -1,0 +1,68 @@
+//! The test rule over a small counter: finders, actions, assertions and an event script.
+
+#![allow(non_snake_case)]
+
+extern crate compose_runtime as compose;
+
+#[path = "../../compose-ui/tests/support/mod.rs"]
+mod support;
+
+use compose_runtime::*;
+use compose_test::*;
+use compose_ui::*;
+use support::*;
+
+#[composable]
+fn Counter() {
+    let count = remember(|| mutable_state_of(0));
+    Column!(modifier = Modifier.padding(16.dp()), {
+        Row!(
+            modifier =
+                Modifier.clickable(move || count.update(|count| count + 1)).test_tag("increment"),
+            {
+                Text!("Count: {}", count.get());
+            }
+        );
+        Row!(
+            modifier = Modifier
+                .clickable_with(count.get() > 0, Some(Role::Button), move || count.set(0))
+                .test_tag("reset"),
+            {
+                Text!("Reset");
+            }
+        );
+    });
+}
+
+#[test]
+fn finders_actions_and_assertions() {
+    let mut ui = compose_test(Counter);
+    ui.on_node_with_text("Reset").assert_is_not_enabled();
+    for _ in 0..3 {
+        ui.on_node(has_text_containing("Count")).perform_click();
+    }
+    ui.on_node_with_text("Count: 3").assert_exists().assert_is_enabled();
+    ui.on_node_with_text("Count: 0").assert_does_not_exist();
+    ui.on_node_with_tag("reset").assert_is_enabled().assert_text_equals(&["Reset"]);
+    ui.on_node_with_tag("reset").perform_click();
+    ui.on_node_with_text("Count: 0").assert_exists();
+    assert_eq!(ui.count_nodes(&has_click_action()), 2);
+    // Keyboard: Tab to the first clickable, Enter clicks it.
+    ui.press_key(Key::Tab);
+    ui.on_node_with_tag("increment").assert_is_focused();
+    ui.press_key(Key::Enter);
+    ui.on_node_with_text("Count: 1").assert_exists();
+}
+
+#[test]
+#[should_panic(expected = "expected exactly 1 node with text \"Missing\", found 0")]
+fn a_missing_node_fails_with_the_tree() {
+    let mut ui = compose_test(Counter);
+    ui.on_node_with_text("Missing").perform_click();
+}
+
+#[test]
+fn an_event_script_records_its_session() {
+    let mut ui = compose_test(Counter);
+    check_script(&mut ui, concat!(env!("CARGO_MANIFEST_DIR"), "/tests/scripts/counter.script"));
+}
