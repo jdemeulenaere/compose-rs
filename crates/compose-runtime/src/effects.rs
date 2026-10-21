@@ -5,7 +5,8 @@ use std::rc::Rc;
 
 use crate::compose_arg::ComposeArg;
 use crate::composer::record_effect;
-use crate::remember::{RememberObserver, remember, remember_observer_keyed};
+use crate::executor::{CoroutineScope, Job};
+use crate::remember::{RememberObserver, remember, remember_observer, remember_observer_keyed};
 use crate::runtime::{DeferredEffect, RunEffect};
 
 /// Where a [`SideEffect`]'s closure waits for the end of the pass: a remembered slot, so a
@@ -81,4 +82,60 @@ pub fn DisposableEffect<K: ComposeArg>(
         effect: Cell::new(Some(Box::new(effect))),
         on_dispose: Cell::new(None),
     });
+}
+
+// ---- Launched effects ------------------------------------------------------------------------
+
+struct LaunchedEffectImpl {
+    task: Cell<Option<std::pin::Pin<Box<dyn std::future::Future<Output = ()>>>>>,
+    job: Cell<Option<Job>>,
+}
+
+impl RememberObserver for LaunchedEffectImpl {
+    fn on_remembered(&self) {
+        if let Some(task) = self.task.take() {
+            self.job.set(Some(CoroutineScope::new().launch(task)));
+        }
+    }
+
+    fn on_forgotten(&self) {
+        if let Some(job) = self.job.take() {
+            job.cancel();
+        }
+    }
+}
+
+/// Runs `block` as a task on the UI thread's executor after the pass that first runs this call,
+/// cancelling it (dropping the future) and starting the new `block` whenever `keys` changes, and
+/// cancelling it when the call leaves the composition. As Compose's
+/// `LaunchedEffect(keys) { … }`. A `block` given on a pass where the keys are the same is dropped
+/// unpolled.
+#[allow(non_snake_case)]
+pub fn LaunchedEffect<K: ComposeArg>(
+    keys: K,
+    block: impl std::future::Future<Output = ()> + 'static,
+) {
+    remember_observer_keyed(keys, || LaunchedEffectImpl {
+        task: Cell::new(Some(Box::pin(block))),
+        job: Cell::new(None),
+    });
+}
+
+struct ScopeObserver(CoroutineScope);
+
+impl RememberObserver for ScopeObserver {
+    fn on_forgotten(&self) {
+        self.0.cancel();
+    }
+
+    fn on_abandoned(&self) {
+        self.0.cancel();
+    }
+}
+
+/// A coroutine scope bound to this point of the composition, as Compose's
+/// `rememberCoroutineScope()`: launch tasks from handlers (`scope.launch(async move { … })`);
+/// they are cancelled when the call leaves the composition.
+pub fn remember_coroutine_scope() -> CoroutineScope {
+    remember_observer(|| ScopeObserver(CoroutineScope::new())).0.clone()
 }

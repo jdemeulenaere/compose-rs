@@ -5,7 +5,7 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use compose_runtime::Composition;
+use compose_runtime::{Composition, executor};
 
 use crate::display_list::DisplayList;
 use crate::input::{Action, KeyEvent, PointerEvent};
@@ -124,14 +124,26 @@ impl UiHost {
 
     /// Whether a frame would do anything.
     pub fn needs_frame(&self) -> bool {
+        self.has_pending_work() || executor::has_frame_awaiters()
+    }
+
+    /// Whether a frame would do anything besides resuming the tasks waiting for one: state
+    /// changed, something to draw, a task ready.
+    pub fn has_pending_work(&self) -> bool {
         self.frame_requested.get()
             || self.composition.has_invalidations()
             || self.with_tree(|tree| tree.needs_draw)
+            || executor::has_ready_tasks()
     }
 
-    /// One frame: recomposes invalid scopes, then measures and draws what changed.
+    /// One frame: runs the tasks that are due and resumes those waiting for a frame (with this
+    /// frame's time), recomposes invalid scopes, measures and draws what changed, then starts the
+    /// tasks the pass launched.
     pub fn frame(&mut self) -> FrameStats {
         self.frame_requested.set(false);
+        executor::fire_timers();
+        executor::run_ready();
+        executor::dispatch_frame();
         let bodies = compose_runtime::bodies_run();
         let recomposed = self.composition.has_invalidations() && self.composition.recompose();
         let size = self.size;
@@ -141,6 +153,8 @@ impl UiHost {
         });
         // What composition queued (a focus lost, listeners attached), now that the tree is free.
         Self::run(actions);
+        // `LaunchedEffect`s started by the pass take their first step.
+        executor::run_ready();
         FrameStats {
             recomposed,
             measured,

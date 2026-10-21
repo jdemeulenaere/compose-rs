@@ -117,6 +117,11 @@ struct App<C: Fn() + 'static> {
     exit_after: Option<u64>,
     screenshot: Option<std::path::PathBuf>,
     first_input: Option<Instant>,
+    /// Wakes the loop from any thread.
+    proxy: winit::event_loop::EventLoopProxy<()>,
+    /// The display's refresh interval: animation frames come at most this often.
+    frame_interval: Duration,
+    last_frame: Instant,
 }
 
 impl<C: Fn() + 'static> App<C> {
@@ -144,6 +149,20 @@ impl<C: Fn() + 'static> App<C> {
         host.with_tree(|tree| tree.set_clipboard(Box::new(SystemClipboard::new())));
         let waker = window.clone();
         host.set_frame_waker(move || waker.request_redraw());
+        // A task woken (from any thread) or waiting for a frame: a turn of the loop, which runs
+        // it or paces the frame (`about_to_wait`).
+        let proxy = std::sync::Mutex::new(self.proxy.clone());
+        compose_runtime::executor::set_wake_handler(move || {
+            let _ = proxy.lock().map(|proxy| proxy.send_event(()));
+        });
+        let refresh = window
+            .current_monitor()
+            .and_then(|monitor| monitor.refresh_rate_millihertz())
+            .filter(|millihertz| *millihertz > 0);
+        self.frame_interval = refresh
+            .map_or(Duration::from_micros(16_667), |millihertz| {
+                Duration::from_secs_f64(1000.0 / f64::from(millihertz))
+            });
         let content = self.content.clone();
         host.set_content(move || content());
         let renderer = RasterRenderer::new(size.width as i32, size.height as i32);
@@ -155,6 +174,7 @@ impl<C: Fn() + 'static> App<C> {
     fn redraw(&mut self, event_loop: &ActiveEventLoop) {
         let Some(shown) = &mut self.shown else { return };
         let start = Instant::now();
+        self.last_frame = start;
         let stats = shown.host.frame();
         let composed = Instant::now();
         let size = shown.window.inner_size();
@@ -210,8 +230,9 @@ impl<C: Fn() + 'static> App<C> {
         } else {
             self.first_input = None;
         }
-        // Effects that wrote state during the frame ask for the next one.
-        if shown.host.needs_frame() {
+        // Effects that wrote state during the frame ask for the next one (animation frames
+        // are paced by `about_to_wait`).
+        if shown.host.has_pending_work() {
             shown.window.request_redraw();
         }
         if self.exit_after.is_some_and(|limit| self.frames >= limit) {
@@ -268,8 +289,32 @@ impl<C: Fn() + 'static> ApplicationHandler for App<C> {
         if self.exit_after.is_some() && self.frames >= 1 && idle {
             event_loop.exit();
         }
-        // Sleep until an event or a redraw request: an idle window costs nothing.
-        event_loop.set_control_flow(ControlFlow::Wait);
+        // Tasks whose `delay` ended, and the ones woken meanwhile, take their step; their state
+        // writes ask for a frame.
+        compose_runtime::executor::fire_timers();
+        compose_runtime::executor::run_ready();
+        let now = Instant::now();
+        let mut next_frame = None;
+        if let Some(shown) = &self.shown {
+            if shown.host.has_pending_work() {
+                shown.window.request_redraw();
+            } else if compose_runtime::executor::has_frame_awaiters() {
+                // An animation: its next frame a refresh interval after the last one.
+                let due = self.last_frame + self.frame_interval;
+                if now >= due {
+                    shown.window.request_redraw();
+                } else {
+                    next_frame = Some(due);
+                }
+            }
+        }
+        // Sleep until an event, a redraw request, the next animation frame or the next
+        // `delay`'s end: an idle window costs nothing.
+        let timer = compose_runtime::executor::next_timer().map(|wait| now + wait);
+        match [next_frame, timer].into_iter().flatten().min() {
+            Some(deadline) => event_loop.set_control_flow(ControlFlow::WaitUntil(deadline)),
+            None => event_loop.set_control_flow(ControlFlow::Wait),
+        }
     }
 
     fn exiting(&mut self, _: &ActiveEventLoop) {
@@ -284,6 +329,7 @@ impl<C: Fn() + 'static> ApplicationHandler for App<C> {
 /// macOS.
 pub fn run_app(options: WindowOptions, content: impl Fn() + 'static) {
     let event_loop = EventLoop::new().expect("compose-desktop: an event loop");
+    let proxy = event_loop.create_proxy();
     let mut app = App {
         options,
         content: Rc::new(content),
@@ -295,6 +341,9 @@ pub fn run_app(options: WindowOptions, content: impl Fn() + 'static) {
             .and_then(|frames| frames.parse().ok()),
         screenshot: std::env::var_os("COMPOSE_SCREENSHOT").map(Into::into),
         first_input: None,
+        proxy,
+        frame_interval: Duration::from_micros(16_667),
+        last_frame: Instant::now(),
     };
     event_loop.run_app(&mut app).expect("compose-desktop: the event loop");
 }

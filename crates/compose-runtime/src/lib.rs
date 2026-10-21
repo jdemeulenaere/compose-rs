@@ -26,6 +26,7 @@ mod composition;
 mod derived;
 mod effects;
 mod error;
+pub mod executor;
 mod hash;
 mod local;
 mod node_tree;
@@ -43,7 +44,11 @@ pub use compose_macros::{ComposeArg, composable};
 pub use composer::{Composer, current, current_recompose_scope};
 pub use composition::Composition;
 pub use derived::{DerivedState, derived_state_of, derived_state_of_with};
-pub use effects::{DisposableEffect, DisposableEffectResult, DisposableEffectScope, SideEffect};
+pub use effects::{
+    DisposableEffect, DisposableEffectResult, DisposableEffectScope, LaunchedEffect, SideEffect,
+    remember_coroutine_scope,
+};
+pub use executor::{CoroutineScope, Job, delay, with_frame_millis, with_frame_nanos};
 pub use error::ComposeError;
 pub use hash::{KeyHasher, hash_key, key_of};
 pub use local::{CompositionLocal, CompositionLocalProvider, ProvidedValue};

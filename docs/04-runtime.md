@@ -85,7 +85,12 @@ Effects are written in Rust on remember observers, as in Compose:
 
 - `SideEffect(|| …)` runs after a successful pass.
 - `DisposableEffect(keys, |scope| { …; scope.on_dispose(|| …) })` gets the cleanup when the keys change or the group leaves.
-- `LaunchedEffect(keys, async move { … })` runs a future on the UI thread's executor and cancels it on key change or exit. It's planned for after the first milestone ([10](10-roadmap.md)). It needs an executor integrated with the frame loop.
+- `LaunchedEffect(keys, async move { … })` runs a future on the UI thread's executor after the pass, and cancels it (drops the future) when the keys change or the call leaves the composition. A future given on a pass whose keys are the same is dropped unpolled.
+- `remember_coroutine_scope()` is a `CoroutineScope` for handlers: `scope.launch(async move { … })` returns a `Job` (`cancel`, `is_active`), and the scope cancels its jobs when the call leaves the composition.
+
+## Tasks and the frame clock
+
+`compose_runtime::executor` is the UI thread's executor, as Compose's main dispatcher and `MonotonicFrameClock`. Tasks are futures polled on that thread, never during composition. Their wakers are `Send`, so a background thread completing work (a channel, a network client) wakes the task, which then writes state on the UI thread. `delay(duration)` waits by the executor's clock. `with_frame_nanos(|time| …)` waits for the next frame and runs with its time, before that frame recomposes, so an animation's state is the frame's. Hosts drive it: each frame fires due timers, polls ready tasks, resumes frame awaiters, then recomposes, lays out and draws, then polls the tasks the pass launched. `set_wake_handler` (called from any thread) asks the host for a turn of its loop, and `next_timer` says when the next `delay` ends. The clock is real (`Instant`) or manual, for tests ([09](09-testing.md)).
 
 ## Compositions
 

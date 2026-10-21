@@ -10,10 +10,10 @@ error[E0277]: `Vec<String>` can't be compared for skipping: it doesn't implement
   = help: the following other types implement trait `compose::runtime::ComposeArg`:
             &'static str
             ()
-            (A,)
             (A, B)
             (A, B, C)
             (A, B, C, D)
             (A, B, C, D, E)
             (A, B, C, D, E, F)
+            (A, B, C, D, E, F, G)
           and $N others

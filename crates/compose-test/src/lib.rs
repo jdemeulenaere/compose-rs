@@ -13,6 +13,7 @@
 mod matcher;
 mod script;
 
+use compose_runtime::executor;
 use compose_ui::{
     Density, FixedTextMeasurer, IntSize, Key, KeyEvent, NodeId, PointerEvent, SemanticsNode,
     TextMeasurer, UiHost,
@@ -31,7 +32,15 @@ pub const DEFAULT_SIZE: IntSize = IntSize::new(400, 800);
 /// test rule waits for idle.
 pub struct ComposeTestRule {
     host: UiHost,
+    auto_advance: bool,
 }
+
+/// One frame's duration on the test clock, as Compose's test frame clock (16 ms).
+pub const FRAME_DURATION: std::time::Duration = std::time::Duration::from_millis(16);
+
+/// How long `wait_for_idle` lets the test clock run (animations, delays) before deciding the UI
+/// never idles.
+const IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// A test rule composing `content` in the default root, measuring text with the fixed-advance
 /// measurer.
@@ -52,13 +61,27 @@ pub fn compose_test_with(
 impl ComposeTestRule {
     pub fn with_host(host: UiHost, content: impl Fn() + 'static) -> ComposeTestRule {
         compose_runtime::track_recompositions(true);
-        let mut rule = ComposeTestRule { host };
+        // The test's main clock: time moves only as the rule advances it.
+        executor::set_manual_clock(executor::now_nanos());
+        let mut rule = ComposeTestRule { host, auto_advance: true };
         rule.host.set_content(content);
         rule.wait_for_idle();
         rule
     }
 
     /// A rule over the fixed-advance measurer at density 1, in a root of `size`.
+    /// A test rule whose clock moves only by `advance_time_by`, as a test that sets
+    /// `mainClock.autoAdvance = false` before its content: animations and delays wait for it.
+    pub fn with_manual_clock(content: impl Fn() + 'static) -> ComposeTestRule {
+        compose_runtime::track_recompositions(true);
+        executor::set_manual_clock(executor::now_nanos());
+        let host = UiHost::headless(DEFAULT_SIZE.width, DEFAULT_SIZE.height);
+        let mut rule = ComposeTestRule { host, auto_advance: false };
+        rule.host.set_content(content);
+        rule.wait_for_idle();
+        rule
+    }
+
     pub fn sized(size: IntSize, content: impl Fn() + 'static) -> ComposeTestRule {
         compose_test_with(size, Density::default(), Box::new(FixedTextMeasurer::new()), content)
     }
@@ -67,10 +90,85 @@ impl ComposeTestRule {
         &mut self.host
     }
 
-    /// Runs frames until nothing is left to do, as `waitForIdle`.
+    /// Runs frames until nothing is left to do, as `waitForIdle`. With the clock advancing
+    /// automatically (the default, as `mainClock.autoAdvance`), a frame a task waits for (an
+    /// animation) moves the clock one frame on, and pending `delay`s end: time passes until the
+    /// UI is idle, up to a minute of test time.
     pub fn wait_for_idle(&mut self) {
-        let frames = self.host.settle(100);
-        assert!(frames < 100, "compose-test: the UI never became idle (100 frames)");
+        let start = executor::now_nanos();
+        let mut frames = 0;
+        loop {
+            let elapsed = std::time::Duration::from_nanos(executor::now_nanos() - start);
+            assert!(
+                elapsed <= IDLE_TIMEOUT && frames < 100_000,
+                "compose-test: the UI never became idle ({frames} frames, {elapsed:?} of test \
+                 time): an animation or a task that never ends?"
+            );
+            // A frame a task waits for (an animation) is the next one, a frame later.
+            if self.auto_advance && executor::has_frame_awaiters() {
+                executor::advance_clock(FRAME_DURATION);
+                self.host.frame();
+                frames += 1;
+                continue;
+            }
+            if self.host.has_pending_work() {
+                self.host.frame();
+                frames += 1;
+                continue;
+            }
+            if !self.auto_advance {
+                return;
+            }
+            // Only delays are left: time moves on to the next one's end.
+            match executor::next_timer_deadline() {
+                Some(deadline) => {
+                    let now = executor::now_nanos();
+                    executor::advance_clock(std::time::Duration::from_nanos(
+                        deadline.saturating_sub(now),
+                    ));
+                    executor::fire_timers();
+                    executor::run_ready();
+                }
+                None => return,
+            }
+        }
+    }
+
+    // ---- The main clock -----------------------------------------------------------------------
+
+    /// Whether `wait_for_idle` moves the clock (frames and delays), as `mainClock.autoAdvance`.
+    pub fn set_auto_advance(&mut self, auto_advance: bool) {
+        self.auto_advance = auto_advance;
+    }
+
+    /// The test clock's time in milliseconds, as `mainClock.currentTime`.
+    pub fn current_time_millis(&self) -> u64 {
+        executor::now_nanos() / 1_000_000
+    }
+
+    /// Moves the clock `duration` on, a frame at a time, running the frames and tasks due on the
+    /// way, as `mainClock.advanceTimeBy`.
+    pub fn advance_time_by(&mut self, duration: std::time::Duration) {
+        let mut left = duration;
+        while !left.is_zero() {
+            let step = left.min(FRAME_DURATION);
+            left -= step;
+            executor::advance_clock(step);
+            executor::fire_timers();
+            executor::run_ready();
+            if self.host.needs_frame() {
+                self.host.frame();
+            }
+        }
+        // What the last frame invalidated, without moving the clock.
+        let auto_advance = std::mem::replace(&mut self.auto_advance, false);
+        self.wait_for_idle();
+        self.auto_advance = auto_advance;
+    }
+
+    /// Moves the clock one frame on, as `mainClock.advanceTimeByFrame()`.
+    pub fn advance_time_by_frame(&mut self) {
+        self.advance_time_by(FRAME_DURATION);
     }
 
     // ---- Finders ----------------------------------------------------------------------------

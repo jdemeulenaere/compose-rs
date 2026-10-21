@@ -53,7 +53,7 @@ pub trait TextMeasurer {
   3. **Layout and draw** from dirty nodes, recording the display list.
   4. **Render and present** through Skia, only when something was drawn (or the window resized): the display list is rendered in place on Skia's CPU raster surface and its pixels copied straight into the window's buffer (softbuffer), so a warm frame allocates nothing.
 
-  The loop sleeps (`ControlFlow::Wait`) until there's a reason to work: an idle window costs 0% CPU.
+  The loop sleeps (`ControlFlow::Wait`) until there's a reason to work: an idle window costs 0% CPU. Tasks ([04](04-runtime.md)) wake it through an event-loop proxy from any thread; a pending `delay` makes it wake at its end (`WaitUntil`); and frames only animations wait for come one display refresh interval apart (the monitor's rate, 60 Hz otherwise), since the CPU raster surface has no vsync.
 - **HiDPI.** Layout is in logical pixels (`Dp`), and rendering happens at the window's scale factor.
 - **Input mapping:** pointer move, press, release and wheel (a cancelled touch cancels its gesture); keys with modifiers; committed text (sent whether or not the key was consumed: a focused text field consumes its typed keys, unless Ctrl or Cmd is held) and IME preedit; focus, occlusion, resize, scale changes and close. Closing via the close button, Cmd+W or Cmd+Q ends `run_app`.
 - **Screenshots and statistics.** `COMPOSE_SCREENSHOT=path.png` renders the last frame through Skia's CPU raster backend. `COMPOSE_FRAME_STATS=1` reports events, recomposition, layout, draw and render times, input-to-present, and allocations per frame (with the `compose-test` counting allocator).
