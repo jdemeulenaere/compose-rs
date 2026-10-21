@@ -86,8 +86,9 @@ pub(crate) enum WalkStep {
 /// Which composable a group belongs to, beyond its key: two composables can share a key.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum Identity {
-    /// A restartable composable: the `TypeId` of its restart closure.
-    Type(TypeId),
+    /// A restartable composable: the `TypeId` of its restart closure, and its type name (for
+    /// recomposition counts).
+    Type(TypeId, &'static str),
     /// A non-restartable one: the type name of a marker closure, unique per composable and
     /// instantiation, compared by address first.
     Name(&'static str),
@@ -96,7 +97,7 @@ pub(crate) enum Identity {
 impl PartialEq for Identity {
     fn eq(&self, other: &Identity) -> bool {
         match (self, other) {
-            (Identity::Type(a), Identity::Type(b)) => a == b,
+            (Identity::Type(a, _), Identity::Type(b, _)) => a == b,
             (Identity::Name(a), Identity::Name(b)) => std::ptr::eq(*a, *b) || a == b,
             _ => false,
         }
@@ -503,6 +504,12 @@ impl Runtime {
         }
         frame.body_started = true;
         self.bodies_run += 1;
+        if let Some(counts) = &mut self.recomposition_counts
+            && let Some(Identity::Type(_, name)) =
+                compositions.data(composition).table[frame.group].identity
+        {
+            *counts.entry(name).or_insert(0) += 1;
+        }
         if let Some(scope) = scopes.get_mut(frame.scope) {
             scope.epoch = scope.epoch.wrapping_add(1);
         }
@@ -714,8 +721,8 @@ fn start_group(kind: GroupKind, key: u64, data_key: u64) -> NodeStart {
 /// closure) is `identity`. A group of another composable with the same key (an instantiation of a
 /// generic composable, a same-named composable) doesn't match. Not the restart function's address:
 /// an `#[inline]` composable can have a copy per crate, with distinct addresses.
-pub(crate) fn start_restart_group_of(key: u64, identity: TypeId) {
-    let identity = Some(Identity::Type(identity));
+pub(crate) fn start_restart_group_of(key: u64, identity: crate::__private::RestartIdentity) {
+    let identity = Some(Identity::Type(identity.type_id, identity.name));
     let (op, _) = with_runtime(|runtime| runtime.start_group(GroupKind::Restart, key, 0, identity));
     apply_node_op(op);
 }

@@ -32,10 +32,10 @@ fn layouts_measure_and_place_with_modifiers() {
         "\
 StackMeasurePolicy [0,0 200x100]
   ColumnPolicy [0,0 50x52] Modifier.padding(10.dp, 10.dp, 10.dp, 10.dp)
-    EmptyMeasurePolicy [0,0 30x20] Modifier.size(30.dp..30.dp x 20.dp..20.dp)
+    EmptyMeasurePolicy [0,0 30x20] Modifier.size(30.dp x 20.dp)
     RowPolicy [0,20 19x12]
-      EmptyMeasurePolicy [0,0 5x5] Modifier.size(5.dp..5.dp x 5.dp..5.dp)
-      EmptyMeasurePolicy [5,0 14x12] Modifier.padding(2.dp, 1.dp, 2.dp, 1.dp).size(10.dp..10.dp x 10.dp..10.dp)
+      EmptyMeasurePolicy [0,0 5x5] Modifier.size(5.dp x 5.dp)
+      EmptyMeasurePolicy [5,0 14x12] Modifier.padding(2.dp, 1.dp, 2.dp, 1.dp).size(10.dp x 10.dp)
 "
     );
     let column = host.with_tree(|tree| tree.children_of(tree.root_id()).next().unwrap());

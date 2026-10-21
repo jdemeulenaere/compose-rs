@@ -49,6 +49,8 @@ pub(crate) struct Runtime {
     pub exiting: bool,
     /// Composable bodies run on this thread: frame statistics and tests.
     pub bodies_run: u64,
+    /// Body runs per composable, while tracking is on (`track_recompositions`).
+    pub recomposition_counts: Option<std::collections::HashMap<&'static str, u64>>,
     /// A group guard was dropped by an unwinding panic in this pass, leaving its group open.
     pub abandoned_groups: bool,
 }
@@ -76,6 +78,7 @@ impl Runtime {
             finishing: 0,
             exiting: false,
             bodies_run: 0,
+            recomposition_counts: None,
             abandoned_groups: false,
         }
     }

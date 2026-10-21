@@ -97,6 +97,8 @@ checksum = "1c133bc6a41be0d194c306b5506d15e6feeea7b1d6604bd3f8310dfb2ca96486"
 name = "compose"
 version = "0.1.0"
 dependencies = [
+ "compose-foundation",
+ "compose-material3",
  "compose-runtime",
  "compose-test",
  "compose-ui",
@@ -107,8 +109,11 @@ dependencies = [
 name = "compose-benchmarks"
 version = "0.1.0"
 dependencies = [
+ "compose",
  "compose-runtime",
+ "counter",
  "criterion",
+ "todo",
 ]
 
 [[package]]
@@ -162,6 +167,13 @@ version = "0.1.0"
 dependencies = [
  "compose-runtime",
  "smallvec",
+]
+
+[[package]]
+name = "counter"
+version = "0.1.0"
+dependencies = [
+ "compose",
 ]
 
 [[package]]
@@ -483,6 +495,13 @@ checksum = "be4d6b5f19ff7664e8c98d03e2139cb510db9b0a60b55f8e8709b689d939b6bc"
 dependencies = [
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "todo"
+version = "0.1.0"
+dependencies = [
+ "compose",
 ]
 
 [[package]]

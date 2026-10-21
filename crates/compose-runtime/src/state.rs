@@ -455,6 +455,14 @@ pub fn mutable_state_list_of<T: 'static>() -> OwnedState<Vec<T>> {
     new_state(Vec::new(), NeverEqualPolicy::equivalent, Location::caller())
 }
 
+/// A new list state holding `items`, as Compose's `toMutableStateList()`.
+#[track_caller]
+pub fn mutable_state_list_from<T: 'static>(
+    items: impl IntoIterator<Item = T>,
+) -> OwnedState<Vec<T>> {
+    new_state(items.into_iter().collect(), NeverEqualPolicy::equivalent, Location::caller())
+}
+
 fn new_state<T: 'static>(
     value: T,
     equivalent: fn(&T, &T) -> bool,

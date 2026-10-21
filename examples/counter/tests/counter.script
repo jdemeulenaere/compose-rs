@@ -1,0 +1,11 @@
+# The counter: three clicks, a reset, and the frames' dumps.
+semantics
+click "Count: 0"
+click "Count: 1"
+click "Count: 2"
+assert "Count: 3"
+dump
+click "Reset"
+assert "Count: 0"
+semantics
+display

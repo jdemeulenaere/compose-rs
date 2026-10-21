@@ -11,7 +11,14 @@ compose-runtime.workspace = true
 
 [dev-dependencies]
 criterion = { version = "0.5", default-features = false }
+compose = { path = "../crates/compose", features = ["test"] }
+counter = { path = "../examples/counter" }
+todo = { path = "../examples/todo" }
 
 [[bench]]
 name = "runtime"
+harness = false
+
+[[bench]]
+name = "ui"
 harness = false

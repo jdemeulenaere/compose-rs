@@ -15,6 +15,7 @@ fn counting_to_three() {
 ```
 
 - **Running.** `compose_test` owns a `Composition` and a headless host, and runs frames synchronously: an action dispatches the event, recomposes, lays out and draws before returning.
+- **Recomposition counts.** `recomposition_counts()` snapshots how many times each composable's body ran (the runtime counts them while tracking is on, which the rule turns on); `since(&before).scopes_named("TodoRow")` checks what a click recomposed.
 - **Finders and actions.** Finders go through the semantics tree as in Compose testing: `on_node_with_text`, `on_node_with_tag`, `on_all_nodes…`. Actions: `perform_click`, `perform_text_input`, `perform_key`, `resize`.
 - **Dumps.** Node tree, layout, display list, slot table, and a PNG through Skia's CPU raster backend. They are compared with `insta` snapshots.
 

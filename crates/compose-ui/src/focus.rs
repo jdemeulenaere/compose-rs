@@ -49,7 +49,10 @@ impl UiTree {
         actions
     }
 
+    /// Focuses `node`'s focus target or, if it has none, the first one below it, as Compose's
+    /// `FocusRequester.requestFocus()`.
     pub(crate) fn request_focus_into(&mut self, node: NodeId, actions: &mut Vec<Action>) {
+        let Some(node) = self.first_focus_target_at_or_below(node) else { return };
         if self.focused() == Some(node) {
             return;
         }
@@ -169,6 +172,29 @@ impl UiTree {
             }
             stack.extend(value.children.iter().map(|child| child.node));
         }
+    }
+
+    fn first_focus_target_at_or_below(&mut self, node: NodeId) -> Option<NodeId> {
+        let mut stack = vec![node];
+        while let Some(current) = stack.pop() {
+            if self.focus_target_index(current).is_some() {
+                return Some(current);
+            }
+            stack.extend(self.get(current)?.children.iter().rev().map(|child| child.node));
+        }
+        None
+    }
+
+    /// Whether `node` is `ancestor` or below it.
+    pub fn is_at_or_below(&self, node: NodeId, ancestor: NodeId) -> bool {
+        let mut current = Some(node);
+        while let Some(id) = current {
+            if id == ancestor {
+                return true;
+            }
+            current = self.get(id).and_then(|value| value.parent);
+        }
+        false
     }
 
     /// The nodes that can take focus, in tree order: what Tab moves through.

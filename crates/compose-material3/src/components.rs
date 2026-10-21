@@ -494,7 +494,10 @@ pub fn TextField(
             Dp::UNSPECIFIED,
         ))
         .background_shape(colors.container_color, TextFieldDefaults::shape())
-        .on_focus_changed(move |now| focused.set(now));
+        .on_focus_changed(move |now| focused.set(now))
+        // One node for tests and accessibility: the field, its label and its text, as Compose's
+        // `TextField` (its decoration is inside the text field).
+        .semantics(true, |_| {});
     Box!(modifier = container, content_alignment = Alignment::BOTTOM_START, {
         Column!(
             modifier = Modifier.fill_max_width().padding_horizontal_vertical(16.dp(), 8.dp()),

@@ -52,8 +52,8 @@ pub use remember::{
 pub use scope::RecomposeScope;
 pub use state::{
     MutableState, MutationPolicy, NeverEqualPolicy, OwnedState, State, StructuralEqualityPolicy,
-    live_state_count, mutable_state_list_of, mutable_state_of, mutable_state_of_with,
-    never_equal_policy, structural_equality_policy,
+    live_state_count, mutable_state_list_from, mutable_state_list_of, mutable_state_of,
+    mutable_state_of_with, never_equal_policy, structural_equality_policy,
 };
 
 /// The number of composable bodies run on this thread so far (restart groups that didn't skip).
@@ -61,6 +61,66 @@ pub use state::{
 #[doc(hidden)]
 pub fn bodies_run() -> u64 {
     runtime::with_runtime(|runtime| runtime.bodies_run)
+}
+
+/// Starts (or stops) counting body runs per composable on this thread, for
+/// [`recomposition_counts`]. For tests and tools; off by default.
+pub fn track_recompositions(enabled: bool) {
+    runtime::with_runtime(|runtime| {
+        if enabled {
+            runtime.recomposition_counts.get_or_insert_with(Default::default);
+        } else {
+            runtime.recomposition_counts = None;
+        }
+    })
+}
+
+/// How many times each composable's body ran since tracking started.
+pub fn recomposition_counts() -> RecompositionCounts {
+    RecompositionCounts(runtime::with_runtime(|runtime| {
+        runtime.recomposition_counts.clone().unwrap_or_default()
+    }))
+}
+
+/// Body runs per composable, by the type name of its restart closure.
+#[derive(Clone, Debug, Default)]
+pub struct RecompositionCounts(std::collections::HashMap<&'static str, u64>);
+
+impl RecompositionCounts {
+    /// The runs since `before`.
+    pub fn since(&self, before: &RecompositionCounts) -> RecompositionCounts {
+        RecompositionCounts(
+            self.0
+                .iter()
+                .map(|(name, count)| (*name, count - before.0.get(name).copied().unwrap_or(0)))
+                .filter(|(_, count)| *count > 0)
+                .collect(),
+        )
+    }
+
+    /// The runs of composables named `name` (the function's own name, any module).
+    pub fn scopes_named(&self, name: &str) -> u64 {
+        self.0
+            .iter()
+            .filter(|(full, _)| composable_name(full) == name)
+            .map(|(_, count)| count)
+            .sum()
+    }
+
+    /// Every composable that ran, by name, sorted.
+    pub fn names(&self) -> Vec<(&'static str, u64)> {
+        let mut names: Vec<(&'static str, u64)> =
+            self.0.iter().map(|(full, count)| (composable_name(full), *count)).collect();
+        names.sort();
+        names
+    }
+}
+
+/// `TodoRow` from `app::screen::TodoRow::{{closure}}`.
+fn composable_name(full: &'static str) -> &'static str {
+    let path = full.split('<').next().unwrap_or(full);
+    let path = path.strip_suffix("::{{closure}}").unwrap_or(path);
+    path.rsplit("::").next().unwrap_or(path)
 }
 
 /// The number of live recompose scopes on this thread. For tests.

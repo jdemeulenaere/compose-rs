@@ -1,0 +1,11 @@
+# Two items, one done, filtered, then removed.
+type tag:draft "milk"
+click "Add"
+type tag:draft "eggs"
+click "Add"
+assert "milk"
+semantics
+click "Done"
+semantics
+click "All"
+dump

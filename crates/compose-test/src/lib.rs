@@ -51,6 +51,7 @@ pub fn compose_test_with(
 
 impl ComposeTestRule {
     pub fn with_host(host: UiHost, content: impl Fn() + 'static) -> ComposeTestRule {
+        compose_runtime::track_recompositions(true);
         let mut rule = ComposeTestRule { host };
         rule.host.set_content(content);
         rule.wait_for_idle();
@@ -118,6 +119,11 @@ impl ComposeTestRule {
     pub fn type_text(&mut self, text: &str) {
         self.host.send_text(text);
         self.wait_for_idle();
+    }
+
+    /// Body runs per composable so far on this thread: `since` a snapshot, `scopes_named`.
+    pub fn recomposition_counts(&self) -> compose_runtime::RecompositionCounts {
+        compose_runtime::recomposition_counts()
     }
 
     // ---- Dumps ------------------------------------------------------------------------------
@@ -207,9 +213,11 @@ impl SemanticsNodeInteraction<'_> {
             node.config
         );
         self.rule.host.request_focus(node.id);
-        let focused = self.rule.host.with_tree(|tree| tree.focused());
+        let focused = self.rule.host.with_tree(|tree| {
+            tree.focused().is_some_and(|focused| tree.is_at_or_below(focused, node.id))
+        });
         assert!(
-            focused == Some(node.id),
+            focused,
             "compose-test: performTextInput on a node that can't take focus: {:?}",
             node.config
         );
@@ -236,7 +244,7 @@ impl SemanticsNodeInteraction<'_> {
     // ---- Assertions -------------------------------------------------------------------------
 
     #[track_caller]
-    pub fn assert_exists(&self) -> &Self {
+    pub fn assert_exists(&mut self) -> &mut Self {
         if let Err(message) = self.find() {
             panic!("compose-test: assert_exists failed: {message}");
         }
@@ -244,7 +252,7 @@ impl SemanticsNodeInteraction<'_> {
     }
 
     #[track_caller]
-    pub fn assert_does_not_exist(&self) -> &Self {
+    pub fn assert_does_not_exist(&mut self) -> &mut Self {
         let tree = self.rule.host.semantics_tree(self.merged);
         let found = tree.flatten().iter().filter(|node| self.matcher.matches(&node.config)).count();
         // `on_all_nodes(…, index)` exists while more than `index` nodes match.
@@ -260,10 +268,10 @@ impl SemanticsNodeInteraction<'_> {
 
     #[track_caller]
     fn assert_config(
-        &self,
+        &mut self,
         what: &str,
         check: impl Fn(&compose_ui::SemanticsConfiguration) -> bool,
-    ) -> &Self {
+    ) -> &mut Self {
         let node = self.fetch_semantics_node();
         assert!(
             check(&node.config),
@@ -275,37 +283,37 @@ impl SemanticsNodeInteraction<'_> {
     }
 
     #[track_caller]
-    pub fn assert_is_enabled(&self) -> &Self {
+    pub fn assert_is_enabled(&mut self) -> &mut Self {
         self.assert_config("enabled", |config| !config.disabled)
     }
 
     #[track_caller]
-    pub fn assert_is_not_enabled(&self) -> &Self {
+    pub fn assert_is_not_enabled(&mut self) -> &mut Self {
         self.assert_config("not enabled", |config| config.disabled)
     }
 
     #[track_caller]
-    pub fn assert_is_on(&self) -> &Self {
+    pub fn assert_is_on(&mut self) -> &mut Self {
         self.assert_config("on", |config| {
             config.toggleable_state == Some(compose_ui::ToggleableState::On)
         })
     }
 
     #[track_caller]
-    pub fn assert_is_off(&self) -> &Self {
+    pub fn assert_is_off(&mut self) -> &mut Self {
         self.assert_config("off", |config| {
             config.toggleable_state == Some(compose_ui::ToggleableState::Off)
         })
     }
 
     #[track_caller]
-    pub fn assert_is_focused(&self) -> &Self {
+    pub fn assert_is_focused(&mut self) -> &mut Self {
         self.assert_config("focused", |config| config.focused)
     }
 
     /// The node's text, merged and in order, is exactly `texts`, as `assertTextEquals`.
     #[track_caller]
-    pub fn assert_text_equals(&self, texts: &[&str]) -> &Self {
+    pub fn assert_text_equals(&mut self, texts: &[&str]) -> &mut Self {
         let node = self.fetch_semantics_node();
         let actual: Vec<&str> = node.config.all_text().collect();
         assert_eq!(

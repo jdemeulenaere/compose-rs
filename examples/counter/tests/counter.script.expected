@@ -1,0 +1,50 @@
+> semantics
+[0,0 400x800] 
+  [16,20 104x40] role=Button text=["Count: 0"] clickable focusable merged
+  [16,76 83x40] role=Button text=["Reset"] clickable disabled merged
+> click "Count: 0"
+> click "Count: 1"
+> click "Count: 2"
+> assert "Count: 3"
+> dump
+StackMeasurePolicy [0,0 400x800]
+  RowColumnMeasurePolicy [0,0 136x136] Modifier.padding(16.dp, 16.dp, 16.dp, 16.dp)
+    BoxMeasurePolicy [0,0 104x48] Modifier.minimum_interactive_component_size.background(#FF6750A4, Rounded([Percent(50.0), Percent(50.0), Percent(50.0), Percent(50.0)])).clip(Rounded([Percent(50.0), Percent(50.0), Percent(50.0), Percent(50.0)])).clickable(enabled = true) {role=Button clickable focusable merged}
+      RowColumnMeasurePolicy [0,0 104x40] Modifier.size(58.dp.._ x 40.dp.._).padding(24.dp, 8.dp, 24.dp, 8.dp)
+        EmptyMeasurePolicy [0,2 56x20] Modifier.Text {text=["Count: 3"]}
+    BoxMeasurePolicy [0,56 83x48] Modifier.minimum_interactive_component_size.background(#FF6750A4, Rounded([Percent(50.0), Percent(50.0), Percent(50.0), Percent(50.0)])).clip(Rounded([Percent(50.0), Percent(50.0), Percent(50.0), Percent(50.0)])).clickable(enabled = true) {role=Button clickable focusable merged}
+      RowColumnMeasurePolicy [0,0 83x40] Modifier.size(58.dp.._ x 40.dp.._).padding(24.dp, 8.dp, 24.dp, 8.dp)
+        EmptyMeasurePolicy [0,2 35x20] Modifier.Text {text=["Reset"]}
+> click "Reset"
+> assert "Count: 0"
+> semantics
+[0,0 400x800] 
+  [16,20 104x40] role=Button text=["Count: 0"] clickable focusable merged
+  [16,76 83x40] role=Button text=["Reset"] clickable disabled merged
+> display
+translate 16 16
+round rect 0,4 104x40 radii [20.0, 20.0, 20.0, 20.0] #FF6750A4
+save
+  clip 0,4 104x40 radii [20.0, 20.0, 20.0, 20.0]
+  translate 0 4
+  translate 24 8
+  translate 0 2
+  paragraph 0 at 0 0
+  translate 0 -2
+  translate -24 -8
+  translate 0 -4
+restore
+translate 0 56
+round rect 0,4 83x40 radii [20.0, 20.0, 20.0, 20.0] #1F1D1B20
+save
+  clip 0,4 83x40 radii [20.0, 20.0, 20.0, 20.0]
+  translate 0 4
+  translate 24 8
+  translate 0 2
+  paragraph 1 at 0 0
+  translate 0 -2
+  translate -24 -8
+  translate 0 -4
+restore
+translate 0 -56
+translate -16 -16

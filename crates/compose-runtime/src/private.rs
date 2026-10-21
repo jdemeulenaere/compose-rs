@@ -42,7 +42,7 @@ impl RestartGroup {
         composer: Composer,
         key: u64,
         restart: fn(&dyn Any),
-        identity: TypeId,
+        identity: RestartIdentity,
     ) -> RestartGroup {
         crate::composer::start_restart_group_of(key, identity);
         RestartGroup { composer, restart, unwinding: std::thread::panicking() }
@@ -119,8 +119,15 @@ impl Drop for Region {
 /// A composable's identity: the `TypeId` of its restart closure, distinct for each composable and
 /// each instantiation of a generic one, and the same in every copy of an `#[inline]` one.
 #[inline]
-pub fn identity_of<F: 'static>(_restart: &F) -> TypeId {
-    TypeId::of::<F>()
+pub fn identity_of<F: 'static>(_restart: &F) -> RestartIdentity {
+    RestartIdentity { type_id: TypeId::of::<F>(), name: std::any::type_name::<F>() }
+}
+
+/// A restartable composable's identity: its restart closure's type, and that type's name.
+#[derive(Clone, Copy)]
+pub struct RestartIdentity {
+    pub(crate) type_id: TypeId,
+    pub(crate) name: &'static str,
 }
 
 /// A non-restartable composable's identity: the type name of a closure it declares, which names

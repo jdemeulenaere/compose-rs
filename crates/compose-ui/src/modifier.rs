@@ -514,16 +514,30 @@ impl fmt::Debug for Element {
                 padding.start, padding.top, padding.end, padding.bottom
             ),
             Offset(x, y) => write!(formatter, "offset({x:?}, {y:?})"),
-            Size(spec) => write!(
-                formatter,
-                "size({:?}..{:?} x {:?}..{:?}{})",
-                spec.min_width,
-                spec.max_width,
-                spec.min_height,
-                spec.max_height,
-                if spec.enforce_incoming { "" } else { ", required" }
-            ),
-            Fill(fill) => write!(formatter, "fill({:?}, {:?})", fill.horizontal, fill.vertical),
+            Size(spec) => {
+                let bound =
+                    |dp: Dp| if dp.is_specified() { format!("{dp:?}") } else { "_".to_string() };
+                let axis = |min: Dp, max: Dp| {
+                    if min == max || (!min.is_specified() && !max.is_specified()) {
+                        bound(min)
+                    } else {
+                        format!("{}..{}", bound(min), bound(max))
+                    }
+                };
+                write!(
+                    formatter,
+                    "{}size({} x {})",
+                    if spec.enforce_incoming { "" } else { "required_" },
+                    axis(spec.min_width, spec.max_width),
+                    axis(spec.min_height, spec.max_height)
+                )
+            }
+            Fill(fill) => match (fill.horizontal, fill.vertical) {
+                (Some(h), Some(v)) if h == v => write!(formatter, "fill_max_size({h})"),
+                (Some(h), None) => write!(formatter, "fill_max_width({h})"),
+                (None, Some(v)) => write!(formatter, "fill_max_height({v})"),
+                (h, v) => write!(formatter, "fill({h:?}, {v:?})"),
+            },
             Weight(weight, fill) => write!(formatter, "weight({weight}, {fill})"),
             Align(alignment) => write!(formatter, "align({alignment:?})"),
             Background(color, shape) => write!(formatter, "background({color:?}, {shape:?})"),
