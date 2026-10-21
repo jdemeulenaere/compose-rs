@@ -22,7 +22,12 @@ pub trait AnimationModifiers {
 
 impl AnimationModifiers for Modifier {
     fn animate_content_size(self) -> Modifier {
-        self.animate_content_size_with(SpringSpec { visibility_threshold: Some(1.0), ..spring() })
+        // As Compose's default: medium-low stiffness, a pixel's threshold.
+        self.animate_content_size_with(SpringSpec {
+            stiffness: crate::Spring::STIFFNESS_MEDIUM_LOW,
+            visibility_threshold: Some(1.0),
+            ..spring()
+        })
     }
 
     fn animate_content_size_with(self, animation_spec: impl Into<AnimationSpec>) -> Modifier {

@@ -92,8 +92,13 @@ impl compose_runtime::ComposeArg for ExitTransition {
     }
 }
 
+/// Enter and exit transitions' default spring, as Compose's (`Spring.StiffnessMediumLow`).
 fn default_spec() -> AnimationSpec {
-    AnimationSpec::Spring(SpringSpec { visibility_threshold: Some(0.001), ..spring() })
+    AnimationSpec::Spring(SpringSpec {
+        stiffness: crate::Spring::STIFFNESS_MEDIUM_LOW,
+        visibility_threshold: Some(0.001),
+        ..spring()
+    })
 }
 
 /// Fades in from `initial_alpha`, as `fadeIn()`.
@@ -299,14 +304,21 @@ pub fn AnimatedVisibility(
     // The exit is running: the content stays until it ends.
     let leaving = remember(|| compose_runtime::mutable_state_of(false));
     let parts = if visible { enter.0 } else { exit.0 };
+    // Each launch's number: an animation of an earlier launch (an enter the exit interrupted)
+    // doesn't end the content's stay.
+    let launches = remember(|| Rc::new(std::cell::Cell::new(0u64)));
     {
-        let (progress, launched) = (progress.clone(), launched.clone());
+        let (progress, launched, launches) = (progress.clone(), launched.clone(), launches.clone());
         SideEffect(move || {
             if launched.get() == visible {
                 return;
             }
+            // Gone (not leaving): an enter starts from its parts' hidden ends.
+            let gone = visible && !leaving.get();
             launched.set(visible);
             leaving.set(!visible);
+            let launch = launches.get() + 1;
+            launches.set(launch);
             let target = if visible { 1.0 } else { 0.0 };
             let animations = [
                 (progress.alpha.clone(), parts.fade.map(|(_, spec)| spec)),
@@ -314,20 +326,27 @@ pub fn AnimatedVisibility(
                 (progress.slide.clone(), parts.slide.map(|(_, spec)| spec)),
                 (progress.scale.clone(), parts.scale.map(|(_, spec)| spec)),
             ];
-            // The parts animate at once, each as a task; those without an animation jump. The
-            // last to end lets the content go, unless an enter took over meanwhile.
+            // The parts animate at once, each as a task. A part the transition doesn't animate
+            // keeps its value while leaving (an exit without a shrink keeps the size), and is
+            // shown at once when entering. The last animation to end lets the content go,
+            // unless another launch took over meanwhile.
             let left = Rc::new(std::cell::Cell::new(0usize));
             for (animatable, spec) in animations {
                 let Some(spec) = spec else {
-                    animatable.snap_to(target);
+                    if visible {
+                        animatable.snap_to(1.0);
+                    }
                     continue;
                 };
+                if gone {
+                    animatable.snap_to(0.0);
+                }
                 left.set(left.get() + 1);
-                let (left, launched) = (left.clone(), launched.clone());
+                let (left, launches) = (left.clone(), launches.clone());
                 scope.launch(async move {
                     animatable.animate_to(target, spec).await;
                     left.set(left.get() - 1);
-                    if left.get() == 0 && !launched.get() {
+                    if left.get() == 0 && launches.get() == launch && !visible {
                         leaving.set(false);
                     }
                 });

@@ -27,18 +27,26 @@ pub fn animate_value_as_state<T: Animate>(
     let scope = remember_coroutine_scope();
     // The target the last animation went to: set when it is launched, after the pass.
     let launched = remember(|| Rc::new(RefCell::new(target_value.clone())));
+    // The latest listener, as Compose's `rememberUpdatedState`: an animation that finishes
+    // calls the one given last.
+    type Listener<T> = Option<compose_runtime::Callback<dyn Fn(T)>>;
+    let listener = remember(|| Rc::new(RefCell::new(None::<compose_runtime::Callback<dyn Fn(T)>>)));
     let state = animatable.as_state();
     SideEffect(move || {
+        let latest: Listener<T> = finished_listener.clone();
+        *listener.borrow_mut() = latest;
         if *launched.borrow() == target_value {
             return;
         }
         *launched.borrow_mut() = target_value.clone();
+        let listener = listener.clone();
         scope.launch(async move {
             let result = animatable.animate_to(target_value, animation_spec).await;
-            if result.end_reason == AnimationEndReason::Finished
-                && let Some(listener) = &finished_listener
-            {
-                listener(result.end_value);
+            if result.end_reason == AnimationEndReason::Finished {
+                let latest = listener.borrow().clone();
+                if let Some(latest) = latest {
+                    latest(result.end_value);
+                }
             }
         });
     });

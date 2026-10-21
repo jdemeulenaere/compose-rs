@@ -88,10 +88,23 @@ pub fn Crossfade<T: Clone + PartialEq + 'static>(
             if all.items.last().is_some_and(|item| item.state == target) {
                 return;
             }
-            let id = all.next_id;
-            all.next_id += 1;
-            let alpha = Animatable::new(0.0);
-            all.items.push(Item { id, state: target, alpha: alpha.clone() });
+            // A state still shown (fading out) fades back in, its content kept, as Compose's;
+            // another one is added.
+            let alpha = match all.items.iter().position(|item| item.state == target) {
+                Some(index) => {
+                    let item = all.items.remove(index);
+                    let alpha = item.alpha.clone();
+                    all.items.push(item);
+                    alpha
+                }
+                None => {
+                    let id = all.next_id;
+                    all.next_id += 1;
+                    let alpha = Animatable::new(0.0);
+                    all.items.push(Item { id, state: target, alpha: alpha.clone() });
+                    alpha
+                }
+            };
             // The new one in, the others out (and gone once out).
             scope.launch(async move {
                 alpha.animate_to(1.0, spec).await;

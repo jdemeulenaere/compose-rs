@@ -263,19 +263,20 @@ impl AnimationSpec {
                 Frame { values, velocities, finished }
             }
             AnimationSpec::Repeatable(repeat) => {
+                // As Compose's `VectorizedRepeatableSpec`: a reversed repetition plays the
+                // animation backwards in time (`(count + 1) × duration − play time`).
                 let duration = repeat.animation.total_nanos().max(1);
-                let iteration = play_nanos / duration;
-                let finished = repeat.iterations.is_some_and(|count| iteration >= u64::from(count));
-                let (iteration, within) = if finished {
-                    let last = u64::from(repeat.iterations.unwrap_or(1)) - 1;
-                    (last, duration)
+                let total = repeat.iterations.map(|count| u64::from(count) * duration);
+                let finished = total.is_some_and(|total| play_nanos >= total);
+                let play = total.map_or(play_nanos, |total| play_nanos.min(total));
+                let count = play / duration;
+                let within = if repeat.repeat_mode == RepeatMode::Restart || count % 2 == 0 {
+                    play - count * duration
                 } else {
-                    (iteration, play_nanos % duration)
+                    (count + 1) * duration - play
                 };
-                let reversed = repeat.repeat_mode == RepeatMode::Reverse && iteration % 2 == 1;
-                let (from, to) = if reversed { (target, start) } else { (start, target) };
                 let frame = AnimationSpec::Tween(repeat.animation)
-                    .frame(within, from, to, velocity, threshold);
+                    .frame(within, start, target, velocity, threshold);
                 Frame { finished, ..frame }
             }
         }
