@@ -314,6 +314,14 @@ impl<C: Fn() + 'static> ApplicationHandler for App<C> {
         // writes ask for a frame.
         compose_runtime::executor::fire_timers();
         compose_runtime::executor::run_ready();
+        // A field committed or dropped its composition itself (a click, a focus change): the
+        // input method starts over, so it doesn't commit the text again.
+        if let Some(shown) = &self.shown
+            && shown.host.take_input_method_reset()
+        {
+            shown.window.set_ime_allowed(false);
+            shown.window.set_ime_allowed(true);
+        }
         let now = Instant::now();
         let mut next_frame = None;
         if let Some(shown) = &self.shown {

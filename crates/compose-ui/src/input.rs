@@ -192,9 +192,17 @@ pub(crate) struct Requests {
     pub(crate) clear_focus: bool,
     pub(crate) draw: bool,
     pub(crate) measure: Vec<NodeId>,
+    pub(crate) reset_input_method: bool,
 }
 
 impl EventContext<'_> {
+    /// Asks the platform to reset its input method: a text field committed or dropped the
+    /// composition itself (a click, a focus change), so the input method mustn't commit it
+    /// again.
+    pub fn reset_input_method(&mut self) {
+        self.requests.reset_input_method = true;
+    }
+
     /// Runs `callback` after dispatch.
     pub fn call(&mut self, callback: &Callback<dyn Fn()>) {
         self.actions.push(Action::Call(callback.clone()));

@@ -180,6 +180,7 @@ impl UiTree {
         if requests.draw {
             self.needs_draw = true;
         }
+        self.input_method_reset |= requests.reset_input_method;
         for node in requests.measure {
             self.invalidate_measure(node);
         }
@@ -266,23 +267,33 @@ impl UiTree {
     /// Where the focused node takes text, in the root: where an input method's candidate window
     /// goes.
     pub fn text_input_area(&mut self) -> Option<crate::unit::Rect> {
-        for (node, index) in self.key_path() {
-            let layer = {
-                let value = self.node(node);
-                value.capabilities[..index]
-                    .iter()
-                    .filter(|bits| **bits & capability::LAYOUT != 0)
-                    .count()
-            };
-            let area = self.get_mut(node)?.chain[index].as_key_input()?.text_input_area();
-            if let Some(area) = area {
-                let origin = self.layer_origin(node, layer);
-                return Some(crate::unit::Rect::new(
-                    area.left + origin.x,
-                    area.top + origin.y,
-                    area.right + origin.x,
-                    area.bottom + origin.y,
-                ));
+        // The key path, walked without collecting it: asked every frame.
+        let mut next = self.focused();
+        while let Some(node) = next {
+            next = self.node(node).parent;
+            for index in (0..self.node(node).chain.len()).rev() {
+                if self.node(node).capabilities[index] & capability::KEY == 0 {
+                    continue;
+                }
+                let layer = {
+                    let value = self.node(node);
+                    value.capabilities[..index]
+                        .iter()
+                        .filter(|bits| **bits & capability::LAYOUT != 0)
+                        .count()
+                };
+                let area = self.get_mut(node)?.chain[index]
+                    .as_key_input()
+                    .and_then(|handler| handler.text_input_area());
+                if let Some(area) = area {
+                    let origin = self.layer_origin(node, layer);
+                    return Some(crate::unit::Rect::new(
+                        area.left + origin.x,
+                        area.top + origin.y,
+                        area.right + origin.x,
+                        area.bottom + origin.y,
+                    ));
+                }
             }
         }
         None

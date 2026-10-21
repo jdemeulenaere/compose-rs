@@ -177,6 +177,8 @@ pub struct UiTree {
     pub(crate) density: Density,
     pub(crate) display_list: DisplayList,
     pub(crate) needs_draw: bool,
+    /// A handler asked for the platform's input method to be reset.
+    pub(crate) input_method_reset: bool,
     pub(crate) focus: Option<crate::focus::Focus>,
     pub(crate) focus_listeners_dirty: bool,
     /// Actions queued outside dispatch, run by the host after the frame.
@@ -200,6 +202,7 @@ impl UiTree {
             density,
             display_list: DisplayList::default(),
             needs_draw: true,
+            input_method_reset: false,
             focus: None,
             focus_listeners_dirty: false,
             pending_actions: Vec::new(),

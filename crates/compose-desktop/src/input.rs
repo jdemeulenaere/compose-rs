@@ -86,6 +86,9 @@ pub(crate) fn handle(state: &mut InputState, host: &mut UiHost, event: &WindowEv
             };
             host.send_pointer(event.with_pointer(pointer, PointerType::Touch));
         }
+        // A drag goes on outside the window (the system keeps sending its moves and its
+        // release), as Compose Desktop's.
+        WindowEvent::CursorLeft { .. } if state.pressed => {}
         WindowEvent::CursorLeft { .. } | WindowEvent::Focused(false) => {
             state.pressed = false;
             host.with_tree(|tree| tree.cancel_pointers());
@@ -107,7 +110,7 @@ pub(crate) fn handle(state: &mut InputState, host: &mut UiHost, event: &WindowEv
             if pressed
                 && command
                 && let WinitKey::Character(text) = &event.logical_key
-                && (text.as_str() == "w" || text.as_str() == "q")
+                && (text.as_str() == "w" || (cfg!(target_os = "macos") && text.as_str() == "q"))
             {
                 return Outcome::Exit;
             }

@@ -541,7 +541,9 @@ fn build(call: Call) -> syn::Result<TokenStream> {
                     }
                     // An optional callback given by name is cloned, as a callback given by name
                     // is: a content lambda passing it on stays `Fn`.
-                    Value::Expr(Expr::Path(path)) if path.qself.is_none() && path.path.get_ident().is_some() => {
+                    Value::Expr(Expr::Path(path))
+                        if path.qself.is_none() && path.path.get_ident().is_some() =>
+                    {
                         quote! { ::compose::__private::optional_callback(::core::clone::Clone::clone(&#path)) }
                     }
                     value => {

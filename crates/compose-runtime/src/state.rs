@@ -312,7 +312,6 @@ pub(crate) fn take_dirty(id: StateId) -> bool {
     .unwrap_or(false)
 }
 
-
 fn read_cell_in(
     runtime: &mut Runtime,
     id: StateId,
@@ -699,7 +698,9 @@ impl<T: 'static> MutableState<T> {
     pub(crate) fn set_derived(&self, value: T) {
         let at = Location::caller();
         let lookup: CellLookup = |id, _| {
-            with_runtime(|runtime| runtime.cells.entry(id).map(|entry| entry.cell.clone().expect("a live cell")))
+            with_runtime(|runtime| {
+                runtime.cells.entry(id).map(|entry| entry.cell.clone().expect("a live cell"))
+            })
         };
         if self.write_with(value, at, lookup).unwrap_or(false) {
             let skip = with_runtime(|runtime| runtime.reading_scope());

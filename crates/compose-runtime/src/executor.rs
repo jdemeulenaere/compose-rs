@@ -322,7 +322,8 @@ pub fn set_wake_handler(wake: impl Fn() + Send + Sync + 'static) {
 /// Asks the host for a turn of its loop (its wake handler, if set): state changed that only a
 /// frame tells readers about (a derived state's dependency).
 pub(crate) fn wake_host() {
-    let shared = EXECUTOR.try_with(|executor| executor.try_borrow().ok().map(|executor| executor.shared.clone()));
+    let shared = EXECUTOR
+        .try_with(|executor| executor.try_borrow().ok().map(|executor| executor.shared.clone()));
     if let Ok(Some(shared)) = shared {
         let wake = shared.wake.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone();
         if let Some(wake) = wake {

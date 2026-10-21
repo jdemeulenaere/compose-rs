@@ -68,7 +68,9 @@ impl Composition {
     /// Whether some scope is invalid, so [`recompose`](Composition::recompose) would run a pass.
     pub fn has_invalidations(&self) -> bool {
         // A derived state whose dependencies changed may have changed: computed now.
-        if crate::derived::has_pending_derived_states() && !crate::runtime::with_runtime(|runtime| runtime.is_busy()) {
+        if crate::derived::has_pending_derived_states()
+            && !crate::runtime::with_runtime(|runtime| runtime.is_busy())
+        {
             crate::derived::flush_derived_states();
         }
         with_runtime(|runtime| self.data(runtime).has_invalidations())

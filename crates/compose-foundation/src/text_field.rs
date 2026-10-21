@@ -195,15 +195,26 @@ const UNDO_LIMIT: usize = 100;
 const DOUBLE_CLICK_NANOS: u64 = 500_000_000;
 const DOUBLE_CLICK_DISTANCE: f32 = 8.0;
 
+/// What a press selects, and a drag after it extends by, as Compose's `SelectionAdjustment`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Unit {
+    Character,
+    /// A double-click: words.
+    Word,
+    /// A triple-click: lines (between new lines).
+    Line,
+}
+
 /// A press on the field, while held.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct Press {
     /// Where it went down, in the text's coordinates (scroll included).
     at: Offset,
     /// The pointer moved with the button held: a drag selecting from `at`.
     dragging: bool,
-    /// It was a double-click, which selected a word.
-    selected_word: bool,
+    unit: Unit,
+    /// The word or line a double- or triple-click selected.
+    initial: std::ops::Range<usize>,
 }
 
 pub struct TextFieldNode {
@@ -226,8 +237,9 @@ pub struct TextFieldNode {
     cursor_color: Color,
     focused: bool,
     press: Option<Press>,
-    /// When and where the last tap was: a press soon after and near it is a double-click.
-    last_tap: Option<(u64, Offset)>,
+    /// When and where the last press was, and how many came in a row: a press soon after and
+    /// near it is a double- or triple-click.
+    last_tap: Option<(u64, Offset, u32)>,
     paragraph: Option<ParagraphHandle>,
     constraints: Option<Constraints>,
     density: Option<compose_ui::Density>,
@@ -444,8 +456,13 @@ impl TextFieldNode {
             let x = if end { f32::MAX / 4.0 } else { -1.0 };
             let found = context.text_measurer().hit_test(paragraph, Offset::new(x, y)).offset;
             let found = floor_char_boundary(&self.text, found);
-            // At a soft wrap the line ends before the space that breaks it.
-            return if end && found < self.text.len() && self.text[..found].ends_with(' ') {
+            // At a soft wrap the line ends before the space that breaks it (not at a new line,
+            // where a space ending the line is the line's).
+            return if end
+                && found < self.text.len()
+                && !self.text[found..].starts_with('\n')
+                && self.text[..found].ends_with(' ')
+            {
                 found - 1
             } else {
                 found
@@ -495,6 +512,32 @@ impl TextFieldNode {
     fn end_composition(&mut self) {
         if self.composition.take().is_some() {
             self.invalidate_paragraph();
+        }
+    }
+
+    /// Commits the composition in progress, if any, as Compose does when a click or a focus
+    /// change interrupts it, and has the platform's input method start over.
+    fn commit_composition(&mut self, context: &mut EventContext<'_>) {
+        let Some((composing, _)) = self.composition.take() else { return };
+        self.invalidate_paragraph();
+        context.invalidate_measure();
+        context.reset_input_method();
+        self.insert(&composing, true, context);
+    }
+
+    /// The hard line (between new lines) at `offset`: what a triple-click selects.
+    fn line_at(&self, offset: usize) -> std::ops::Range<usize> {
+        let start = self.text[..offset].rfind('\n').map_or(0, |index| index + 1);
+        let end = self.text[offset..].find('\n').map_or(self.text.len(), |index| offset + index);
+        start..end
+    }
+
+    /// The `unit` (word, line) at `offset`.
+    fn unit_at(&self, unit: Unit, offset: usize) -> std::ops::Range<usize> {
+        match unit {
+            Unit::Character => offset..offset,
+            Unit::Word => self.word_at(offset),
+            Unit::Line => self.line_at(offset),
         }
     }
 }
@@ -556,42 +599,61 @@ impl LayoutModifierNode for TextFieldNode {
             scope.text_measurer().release(paragraph);
         }
         let cursor_width = scope.density().round_to_px(CURSOR_WIDTH);
-        if self.constraints != Some(constraints)
-            || self.paragraph.is_none()
-            || self.density != Some(scope.density())
-        {
-            self.density = Some(scope.density());
-            if let Some(old) = self.paragraph.take() {
-                scope.text_measurer().release(old);
+        // A tap before this measurement is placed in the text without a composition (offsets
+        // in it are the text's); the text is laid out again with the composition at the tap.
+        let mut bare = self.pending_tap.is_some() && self.composition.is_some();
+        if bare {
+            self.invalidate_paragraph();
+            for paragraph in self.stale.drain(..) {
+                scope.text_measurer().release(paragraph);
             }
-            let density = scope.density();
-            let options = TextLayoutOptions {
-                soft_wrap: !self.single_line,
-                max_lines: if self.single_line { 1 } else { u32::MAX },
-            };
-            // The field's minimum width too, as Compose's text delegate: right-to-left text
-            // starts at the field's right edge.
-            let mut text_constraints = constraints.offset(-cursor_width, 0);
-            text_constraints.min_height = 0;
-            let text = self.display_text().into_owned();
-            let paragraph = scope.text_measurer().layout(
-                &text,
-                &self.style,
-                options,
-                text_constraints,
-                &density,
-            );
-            self.paragraph = Some(paragraph);
-            self.constraints = Some(constraints);
         }
-        let paragraph = self.paragraph.expect("laid out");
-        if let Some(tap) = self.pending_tap.take() {
-            self.cursor = floor_char_boundary(
-                &self.text,
-                scope.text_measurer().hit_test(paragraph, tap + self.scroll).offset,
-            );
-            self.anchor = self.cursor;
-        }
+        let paragraph = loop {
+            if self.constraints != Some(constraints)
+                || self.paragraph.is_none()
+                || self.density != Some(scope.density())
+            {
+                self.density = Some(scope.density());
+                if let Some(old) = self.paragraph.take() {
+                    scope.text_measurer().release(old);
+                }
+                let density = scope.density();
+                let options = TextLayoutOptions {
+                    soft_wrap: !self.single_line,
+                    max_lines: if self.single_line { 1 } else { u32::MAX },
+                };
+                // The field's minimum width too, as Compose's text delegate: right-to-left text
+                // starts at the field's right edge.
+                let mut text_constraints = constraints.offset(-cursor_width, 0);
+                text_constraints.min_height = 0;
+                let text = if bare { self.text.clone() } else { self.display_text().into_owned() };
+                let paragraph = scope.text_measurer().layout(
+                    &text,
+                    &self.style,
+                    options,
+                    text_constraints,
+                    &density,
+                );
+                self.paragraph = Some(paragraph);
+                self.constraints = Some(constraints);
+            }
+            let paragraph = self.paragraph.expect("laid out");
+            if let Some(tap) = self.pending_tap.take() {
+                self.cursor = floor_char_boundary(
+                    &self.text,
+                    scope.text_measurer().hit_test(paragraph, tap + self.scroll).offset,
+                );
+                self.anchor = self.cursor;
+            }
+            if bare {
+                bare = false;
+                if let Some(old) = self.paragraph.take() {
+                    scope.text_measurer().release(old);
+                }
+                continue;
+            }
+            break paragraph;
+        };
         self.cursor_rect =
             Some(scope.text_measurer().cursor_rect(paragraph, self.display_cursor()));
         self.selection_rects.clear();
@@ -711,22 +773,35 @@ impl PointerInputModifierNode for TextFieldNode {
         match event.kind {
             PointerEventType::Press if !event.consumed => {
                 event.consume();
+                // A click ends a composition, which commits.
+                self.commit_composition(context);
                 let now = compose_runtime::executor::now_nanos();
-                let double = self.last_tap.take().is_some_and(|(time, tapped)| {
-                    let distance = tapped - event.position;
-                    now.saturating_sub(time) < DOUBLE_CLICK_NANOS
-                        && distance.x.abs() <= DOUBLE_CLICK_DISTANCE
-                        && distance.y.abs() <= DOUBLE_CLICK_DISTANCE
-                });
-                let mut selected_word = false;
-                if double && let Some(offset) = self.offset_at(at, context) {
-                    let word = self.word_at(offset);
-                    self.anchor = word.start;
-                    self.cursor = word.end;
-                    selected_word = true;
+                let clicks = match self.last_tap {
+                    Some((time, tapped, clicks))
+                        if now.saturating_sub(time) < DOUBLE_CLICK_NANOS
+                            && (tapped - event.position).x.abs() <= DOUBLE_CLICK_DISTANCE
+                            && (tapped - event.position).y.abs() <= DOUBLE_CLICK_DISTANCE =>
+                    {
+                        clicks % 3 + 1
+                    }
+                    _ => 1,
+                };
+                self.last_tap = Some((now, event.position, clicks));
+                let unit = match clicks {
+                    2 => Unit::Word,
+                    3 => Unit::Line,
+                    _ => Unit::Character,
+                };
+                let mut initial = 0..0;
+                if unit != Unit::Character
+                    && let Some(offset) = self.offset_at(at, context)
+                {
+                    initial = self.unit_at(unit, offset);
+                    self.anchor = initial.start;
+                    self.cursor = initial.end;
                     context.invalidate_measure();
                 }
-                self.press = Some(Press { at, dragging: false, selected_word });
+                self.press = Some(Press { at, dragging: false, unit, initial });
             }
             PointerEventType::Move if event.pressed => {
                 let Some(press) = &mut self.press else { return };
@@ -734,17 +809,31 @@ impl PointerInputModifierNode for TextFieldNode {
                 {
                     return;
                 }
-                let (start, selected_word) = (press.at, press.selected_word);
                 press.dragging = true;
+                let press = press.clone();
                 event.consume();
                 if !self.focused {
                     context.request_focus();
                 }
-                if !selected_word && let Some(anchor) = self.offset_at(start, context) {
-                    self.anchor = anchor;
-                }
-                if let Some(cursor) = self.offset_at(at, context) {
-                    self.cursor = cursor;
+                let Some(offset) = self.offset_at(at, context) else { return };
+                match press.unit {
+                    Unit::Character => {
+                        if let Some(anchor) = self.offset_at(press.at, context) {
+                            self.anchor = anchor;
+                        }
+                        self.cursor = offset;
+                    }
+                    // By words or lines from the ones the click selected, as Compose's.
+                    unit => {
+                        let reached = self.unit_at(unit, offset);
+                        if offset >= press.initial.start {
+                            self.anchor = press.initial.start;
+                            self.cursor = reached.end.max(press.initial.end);
+                        } else {
+                            self.anchor = press.initial.end;
+                            self.cursor = reached.start;
+                        }
+                    }
                 }
                 self.preferred_x = None;
                 context.invalidate_measure();
@@ -757,10 +846,9 @@ impl PointerInputModifierNode for TextFieldNode {
                 event.consume();
                 context.request_focus();
                 self.preferred_x = None;
-                if press.dragging || press.selected_word {
+                if press.dragging || press.unit != Unit::Character {
                     return;
                 }
-                self.last_tap = Some((compose_runtime::executor::now_nanos(), event.position));
                 // The cursor where the tap landed, now, so text typed before the next frame
                 // goes there.
                 match self.offset_at(at, context) {
@@ -789,27 +877,36 @@ impl FocusTargetModifierNode for TextFieldNode {
     /// A tap on a decoration around the field (a Material container's padding) puts the cursor
     /// nearest it.
     fn on_focus_tap(&mut self, position: Offset, context: &mut EventContext<'_>) {
-        if let Some(offset) = self.offset_at(position + self.scroll, context) {
-            self.cursor = offset;
-            self.anchor = offset;
-            context.invalidate_measure();
+        self.commit_composition(context);
+        match self.offset_at(position + self.scroll, context) {
+            Some(offset) => {
+                self.cursor = offset;
+                self.anchor = offset;
+            }
+            // Laid out again at the next measurement (an edit before the tap): resolved then.
+            None => self.pending_tap = Some(position),
         }
+        context.invalidate_measure();
     }
 
     fn on_focus_changed(&mut self, focused: bool, context: &mut EventContext<'_>) {
         self.focused = focused;
         if !focused {
-            // As Compose's `deselect` when the field loses focus: the selection collapses to
-            // its end, and a composition in progress ends.
+            // As Compose's `onBlur`: a composition in progress is committed, and the
+            // selection collapses to its end (`deselect`).
+            self.commit_composition(context);
             let end = self.selection().end;
             self.cursor = end;
             self.anchor = end;
-            self.end_composition();
             self.preferred_x = None;
             context.invalidate_measure();
         }
         context.invalidate_draw();
     }
+}
+
+fn key_is_not_tab(key: Key) -> bool {
+    key != Key::Tab
 }
 
 /// Cmd on macOS, Ctrl elsewhere: shortcuts and their key mappings, as Compose Desktop's.
@@ -823,25 +920,55 @@ impl KeyInputModifierNode for TextFieldNode {
             return false;
         }
         let editable = !self.read_only;
-        let modifiers = event.modifiers;
-        let shortcut = modifiers.meta || modifiers.ctrl;
+        let mut modifiers = event.modifiers;
+        // Shortcuts: Cmd on macOS, Ctrl elsewhere. On macOS, Ctrl moves and deletes as Cocoa's
+        // Emacs-style bindings, as Compose Desktop's key mapping.
+        let shortcut = if is_macos() { modifiers.meta } else { modifiers.ctrl };
+        let emacs = is_macos() && modifiers.ctrl && !modifiers.meta;
         // Typed keys: the text arrives as committed text (`on_text_input`); the field takes the
         // key, down and up, so its ancestors' shortcuts and clicks don't.
-        if editable && !shortcut && matches!(event.key, Key::Character(_) | Key::Space) {
+        if editable && !shortcut && !emacs && matches!(event.key, Key::Character(_) | Key::Space) {
             return true;
         }
         if event.kind != KeyEventType::KeyDown {
             return false;
         }
+        // While an input method composes, keys are its own; Tab still moves focus (which
+        // commits the composition).
+        if self.composition.is_some() {
+            return key_is_not_tab(event.key);
+        }
+        let mut key = event.key;
+        if emacs && let Key::Character(c) = key {
+            let mapped = match c.to_ascii_lowercase() {
+                'a' => Key::MoveHome,
+                'e' => Key::MoveEnd,
+                'b' => Key::DirectionLeft,
+                'f' => Key::DirectionRight,
+                'p' => Key::DirectionUp,
+                'n' => Key::DirectionDown,
+                'd' => Key::Delete,
+                'h' => Key::Backspace,
+                'k' if editable => {
+                    let end = self.line_edge(true, context);
+                    // At a line's end, the new line goes.
+                    let end = if end == self.cursor { self.next_boundary(end) } else { end };
+                    self.delete(self.cursor..end.max(self.cursor), context);
+                    return true;
+                }
+                _ => return false,
+            };
+            key = mapped;
+            modifiers.ctrl = false;
+        }
         let extend = modifiers.shift;
         // Word motion: Option on macOS, Ctrl elsewhere. Line motion: Cmd on macOS.
         let by_word = if is_macos() { modifiers.alt } else { modifiers.ctrl };
         let by_line = is_macos() && modifiers.meta;
-        if !matches!(event.key, Key::DirectionUp | Key::DirectionDown) {
+        if !matches!(key, Key::DirectionUp | Key::DirectionDown) {
             self.preferred_x = None;
         }
-        // Shortcuts: Cmd on macOS, Ctrl elsewhere (either is taken).
-        if shortcut && let Key::Character(c) = event.key {
+        if shortcut && let Key::Character(c) = key {
             let selected = self.text[self.selection()].to_string();
             match c.to_ascii_lowercase() {
                 'a' => {
@@ -868,7 +995,7 @@ impl KeyInputModifierNode for TextFieldNode {
         let right_to_left = self
             .paragraph
             .is_some_and(|paragraph| context.text_measurer().is_right_to_left(paragraph));
-        match event.key {
+        match key {
             // In a multi-line field, a plain Tab types a tab, as Compose's; Shift+Tab moves focus.
             Key::Tab if editable && !self.single_line && !extend && !shortcut && !modifiers.alt => {
                 self.insert("\t", false, context);
@@ -900,7 +1027,7 @@ impl KeyInputModifierNode for TextFieldNode {
             }
             Key::DirectionLeft | Key::DirectionRight => {
                 // Left is backward in left-to-right text, forward in right-to-left text.
-                let backward = (event.key == Key::DirectionLeft) != right_to_left;
+                let backward = (key == Key::DirectionLeft) != right_to_left;
                 let selection = self.selection();
                 let cursor = if by_line {
                     self.line_edge(!backward, context)
@@ -922,7 +1049,7 @@ impl KeyInputModifierNode for TextFieldNode {
                 true
             }
             Key::DirectionUp | Key::DirectionDown => {
-                let down = event.key == Key::DirectionDown;
+                let down = key == Key::DirectionDown;
                 let cursor = if by_line {
                     if down { self.text.len() } else { 0 }
                 } else {
@@ -933,7 +1060,7 @@ impl KeyInputModifierNode for TextFieldNode {
             }
             // The start and end of the visual (wrapped) line, or of the text with Ctrl.
             Key::MoveHome | Key::MoveEnd => {
-                let end = event.key == Key::MoveEnd;
+                let end = key == Key::MoveEnd;
                 let cursor = if modifiers.ctrl {
                     if end { self.text.len() } else { 0 }
                 } else {

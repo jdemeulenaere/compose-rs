@@ -97,6 +97,7 @@ impl UiTree {
         requests.focus = None;
         requests.clear_focus = false;
         self.needs_draw |= requests.draw;
+        self.input_method_reset |= requests.reset_input_method;
         for node in requests.measure {
             self.invalidate_measure(node);
         }
@@ -129,6 +130,7 @@ impl UiTree {
             target.on_focus_tap(tap - origin, &mut context);
         }
         self.needs_draw |= requests.draw;
+        self.input_method_reset |= requests.reset_input_method;
         for node in requests.measure {
             self.invalidate_measure(node);
         }

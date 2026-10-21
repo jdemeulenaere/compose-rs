@@ -49,7 +49,8 @@ impl UiHost {
         // A write asks for a frame; one made while a frame runs its tasks is that frame's (an
         // animation's step), so it wakes nothing.
         let request = {
-            let (requested, framing, wake) = (frame_requested.clone(), framing.clone(), waker.clone());
+            let (requested, framing, wake) =
+                (frame_requested.clone(), framing.clone(), waker.clone());
             Rc::new(move || {
                 requested.set(true);
                 if framing.get() {
@@ -66,7 +67,14 @@ impl UiHost {
         // Writes to state read while measuring or drawing ask for a frame, as composition's do.
         let observer = compose_runtime::ReadObserver::new(move || request());
         composition.with_applier(|tree: &mut UiTree| tree.set_read_observer(observer));
-        UiHost { composition, size, frame_requested, framing, pending_content: RefCell::new(None), waker }
+        UiHost {
+            composition,
+            size,
+            frame_requested,
+            framing,
+            pending_content: RefCell::new(None),
+            waker,
+        }
     }
 
     /// A headless host at density 1 with the fixed-advance text measurer: for tests.
@@ -234,6 +242,12 @@ impl UiHost {
         Self::run(actions);
         self.wake_if_dirty();
         consumed
+    }
+
+    /// Whether a handler asked for the input method to be reset since the last call: the
+    /// platform host then resets it.
+    pub fn take_input_method_reset(&self) -> bool {
+        self.with_tree(|tree| std::mem::take(&mut tree.input_method_reset))
     }
 
     /// Where the focused node takes text, in the root's pixels: where an input method's
