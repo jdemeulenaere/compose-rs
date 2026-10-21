@@ -11,13 +11,25 @@ use std::any::TypeId;
 use std::rc::Rc;
 
 use crate::__private::ReplaceGroup;
+use crate::compose_arg::ComposeArg;
 use crate::hash::key_of;
 use crate::remember::remember;
 use crate::runtime::with_runtime;
 use crate::slot_table::{GroupKind, NONE};
-use crate::state::{OwnedState, mutable_state_of_with, structural_equality_policy};
+use crate::state::{MutationPolicy, OwnedState, mutable_state_of_with};
 
-/// A composition local: declare it as a `static`, whose address is its identity.
+/// Writes of a `same` value (`ComposeArg`) invalidate nothing: a provider's policy, so locals
+/// may hold `Rc`s of trait objects (compared by identity) as well as plain values.
+struct SamePolicy;
+
+impl<T: ComposeArg> MutationPolicy<T> for SamePolicy {
+    fn equivalent(a: &T, b: &T) -> bool {
+        a.same(b)
+    }
+}
+
+/// A composition local: declared as a `static` (or a `const`), identified by its name and
+/// value type, which must be unique together.
 ///
 /// ```ignore
 /// pub static LOCAL_CONTENT_COLOR: CompositionLocal<Color> =
@@ -30,13 +42,15 @@ pub struct CompositionLocal<T: 'static> {
 
 /// A value for a local, for [`CompositionLocalProvider`], as Compose's `provides`.
 pub struct ProvidedValue<T: 'static> {
-    local: &'static CompositionLocal<T>,
+    /// The local's identity and its provider groups' key.
+    id: u64,
+    key: u64,
     value: T,
 }
 
 /// What a provider group keeps.
 struct ProviderSlot<T: 'static> {
-    local: usize,
+    local: u64,
     value: OwnedState<T>,
 }
 
@@ -50,17 +64,19 @@ impl<T: 'static> CompositionLocal<T> {
         self.name
     }
 
-    fn id(&'static self) -> usize {
-        self as *const CompositionLocal<T> as usize
+    /// Its identity: its name and its type (an address isn't one: a `const` has a new one at
+    /// each use).
+    fn id(&self) -> u64 {
+        key_of(self.name) ^ key_of(std::any::type_name::<T>()).rotate_left(29)
     }
 
-    fn key(&'static self) -> u64 {
-        key_of("compose_runtime::CompositionLocalProvider") ^ (self.id() as u64).rotate_left(17)
+    fn key(&self) -> u64 {
+        key_of("compose_runtime::CompositionLocalProvider") ^ self.id().rotate_left(17)
     }
 
     /// `value` for this local, as `local provides value`.
-    pub fn provides(&'static self, value: T) -> ProvidedValue<T> {
-        ProvidedValue { local: self, value }
+    pub fn provides(&self, value: T) -> ProvidedValue<T> {
+        ProvidedValue { id: self.id(), key: self.key(), value }
     }
 
     /// The value of the nearest provider above the composable composing now, or the default.
@@ -69,7 +85,7 @@ impl<T: 'static> CompositionLocal<T> {
     /// # Panics
     ///
     /// Outside composition.
-    pub fn current(&'static self) -> T
+    pub fn current(&self) -> T
     where
         T: Clone,
     {
@@ -104,17 +120,14 @@ impl<T: 'static> CompositionLocal<T> {
 /// A changed value recomposes the scopes that read it, and only those. Nest providers for
 /// several locals.
 #[allow(non_snake_case)]
-pub fn CompositionLocalProvider<T: Clone + PartialEq + 'static>(
+pub fn CompositionLocalProvider<T: Clone + ComposeArg + 'static>(
     value: ProvidedValue<T>,
     content: impl FnOnce(),
 ) {
-    let ProvidedValue { local, value } = value;
-    let group = ReplaceGroup::start(local.key(), "compose_runtime::CompositionLocalProvider");
+    let ProvidedValue { id, key, value } = value;
+    let group = ReplaceGroup::start(key, "compose_runtime::CompositionLocalProvider");
     let slot: Rc<ProviderSlot<T>> = remember(|| {
-        Rc::new(ProviderSlot {
-            local: local.id(),
-            value: mutable_state_of_with(value.clone(), structural_equality_policy()),
-        })
+        Rc::new(ProviderSlot { local: id, value: mutable_state_of_with(value.clone(), SamePolicy) })
     });
     slot.value.handle().set_while_composing(value);
     drop(slot);

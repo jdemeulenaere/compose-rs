@@ -69,10 +69,111 @@ pub fn Surface(
     let content_color = content_color
         .or(MaterialTheme::color_scheme().content_color_for(color))
         .or(LOCAL_CONTENT_COLOR.current());
-    let modifier = surface_modifier(modifier, shape, color, border);
+    // A surface takes the pointer: what's beneath it isn't hit, as Compose's (an empty
+    // `pointerInput`).
+    let modifier = surface_modifier(modifier, shape, color, border).then_custom(BlockPointer);
     CompositionLocalProvider(LOCAL_CONTENT_COLOR.provides(content_color), || {
         Box(modifier, Alignment::TOP_START, true, compose_runtime::callback(move |_| content()));
     });
+}
+
+// ---- Pointer helpers --------------------------------------------------------------------------
+
+/// A pointer input node that does nothing: its node is hit, so siblings beneath aren't.
+struct BlockPointer;
+
+struct BlockPointerNode;
+
+impl ModifierNodeElement for BlockPointer {
+    fn create(&self) -> std::boxed::Box<dyn ModifierNode> {
+        std::boxed::Box::new(BlockPointerNode)
+    }
+    fn update(&self, _: &mut dyn ModifierNode) {}
+    fn same(&self, other: &dyn ModifierNodeElement) -> bool {
+        other.downcast_ref::<BlockPointer>().is_some()
+    }
+    fn name(&self) -> &'static str {
+        "block_pointer"
+    }
+}
+
+impl ModifierNode for BlockPointerNode {
+    fn as_pointer_input(&mut self) -> Option<&mut dyn compose_ui::PointerInputModifierNode> {
+        Some(self)
+    }
+}
+
+impl compose_ui::PointerInputModifierNode for BlockPointerNode {
+    fn on_pointer_event(
+        &mut self,
+        _: &mut compose_ui::PointerEvent,
+        _: compose_ui::PointerEventPass,
+        _: compose_ui::IntSize,
+        _: &mut compose_ui::EventContext<'_>,
+    ) {
+    }
+}
+
+/// Focuses the focus target below it on a tap (a release after a press, inside).
+struct FocusOnTap;
+
+#[derive(Default)]
+struct FocusOnTapNode {
+    pressed: bool,
+}
+
+impl ModifierNodeElement for FocusOnTap {
+    fn create(&self) -> std::boxed::Box<dyn ModifierNode> {
+        std::boxed::Box::new(FocusOnTapNode::default())
+    }
+    fn update(&self, _: &mut dyn ModifierNode) {}
+    fn same(&self, other: &dyn ModifierNodeElement) -> bool {
+        other.downcast_ref::<FocusOnTap>().is_some()
+    }
+    fn name(&self) -> &'static str {
+        "focus_on_tap"
+    }
+}
+
+impl ModifierNode for FocusOnTapNode {
+    fn as_pointer_input(&mut self) -> Option<&mut dyn compose_ui::PointerInputModifierNode> {
+        Some(self)
+    }
+}
+
+impl compose_ui::PointerInputModifierNode for FocusOnTapNode {
+    fn on_pointer_event(
+        &mut self,
+        event: &mut compose_ui::PointerEvent,
+        pass: compose_ui::PointerEventPass,
+        bounds: compose_ui::IntSize,
+        context: &mut compose_ui::EventContext<'_>,
+    ) {
+        use compose_ui::PointerEventType;
+        // After the field's own handling (the Main pass goes up from the target): a tap the
+        // field took is consumed.
+        if pass != compose_ui::PointerEventPass::Main {
+            return;
+        }
+        match event.kind {
+            PointerEventType::Press if !event.consumed => self.pressed = true,
+            PointerEventType::Release if std::mem::take(&mut self.pressed) && !event.consumed => {
+                let inside = event.position.x >= 0.0
+                    && event.position.y >= 0.0
+                    && event.position.x < bounds.width as f32
+                    && event.position.y < bounds.height as f32;
+                if inside {
+                    event.consume();
+                    context.request_focus();
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn on_cancel_pointer_input(&mut self) {
+        self.pressed = false;
+    }
 }
 
 // ---- Minimum touch target --------------------------------------------------------------------
@@ -83,46 +184,7 @@ pub const MINIMUM_INTERACTIVE_SIZE: Dp = Dp(48.0);
 /// Lays its content out at least `MINIMUM_INTERACTIVE_SIZE` in both directions, centered, so
 /// small controls are easy to hit, as Compose's `minimumInteractiveComponentSize()`.
 pub fn minimum_interactive_component_size(modifier: Modifier) -> Modifier {
-    modifier.then_custom(MinimumInteractive)
-}
-
-struct MinimumInteractive;
-
-impl ModifierNodeElement for MinimumInteractive {
-    fn create(&self) -> std::boxed::Box<dyn ModifierNode> {
-        std::boxed::Box::new(MinimumInteractiveNode)
-    }
-    fn update(&self, _: &mut dyn ModifierNode) {}
-    fn same(&self, other: &dyn ModifierNodeElement) -> bool {
-        other.downcast_ref::<MinimumInteractive>().is_some()
-    }
-    fn name(&self) -> &'static str {
-        "minimum_interactive_component_size"
-    }
-}
-
-struct MinimumInteractiveNode;
-
-impl ModifierNode for MinimumInteractiveNode {
-    fn as_layout(&mut self) -> Option<&mut dyn LayoutModifierNode> {
-        Some(self)
-    }
-}
-
-impl LayoutModifierNode for MinimumInteractiveNode {
-    fn measure(
-        &mut self,
-        scope: &mut MeasureScope<'_>,
-        content: Measurable,
-        constraints: Constraints,
-    ) -> MeasureResult {
-        let placeable = scope.measure(content, constraints);
-        let minimum = scope.density().round_to_px(MINIMUM_INTERACTIVE_SIZE);
-        let width = constraints.constrain_width(placeable.width.max(minimum));
-        let height = constraints.constrain_height(placeable.height.max(minimum));
-        scope.place(&placeable, (width - placeable.width) / 2, (height - placeable.height) / 2);
-        scope.layout(width, height)
-    }
+    modifier.minimum_touch_target(MINIMUM_INTERACTIVE_SIZE)
 }
 
 // ---- Buttons ---------------------------------------------------------------------------------
@@ -317,15 +379,19 @@ pub fn Checkbox(
     #[default(true)] enabled: bool,
     #[default(crate::CheckboxDefaults::colors())] colors: CheckboxColors,
 ) {
+    // As Compose's: the touch target only with a callback, then a 20 dp box whatever the size.
     let modifier = match on_checked_change {
-        Some(on_checked_change) => {
-            modifier.toggleable(checked, enabled, Some(Role::Checkbox), on_checked_change)
-        }
+        Some(on_checked_change) => minimum_interactive_component_size(modifier.toggleable(
+            checked,
+            enabled,
+            Some(Role::Checkbox),
+            on_checked_change,
+        )),
         None => modifier,
     };
-    let modifier = minimum_interactive_component_size(modifier)
+    let modifier = modifier
         .padding(2.dp())
-        .size(20.dp())
+        .required_size(20.dp(), 20.dp())
         .then_custom(CheckboxElement { checked, enabled, colors });
     compose_foundation::layout::Spacer(modifier);
 }
@@ -495,12 +561,18 @@ pub fn TextField(
         ))
         .background_shape(colors.container_color, TextFieldDefaults::shape())
         .on_focus_changed(move |now| focused.set(now))
+        // A tap anywhere in the container focuses the field, as Compose's decoration box.
+        .then_custom(FocusOnTap)
         // One node for tests and accessibility: the field, its label and its text, as Compose's
         // `TextField` (its decoration is inside the text field).
         .semantics(true, |_| {});
     Box!(modifier = container, content_alignment = Alignment::BOTTOM_START, {
         Column!(
-            modifier = Modifier.fill_max_width().padding_horizontal_vertical(16.dp(), 8.dp()),
+            // 8 dp above and below with a label, 16 dp without, as Compose's.
+            modifier = Modifier.fill_max_width().padding_horizontal_vertical(
+                16.dp(),
+                if label.is_some() { 8.dp() } else { 16.dp() }
+            ),
             {
                 if let Some(label) = &label {
                     CompositionLocalProvider(LOCAL_CONTENT_COLOR.provides(label_color), || {

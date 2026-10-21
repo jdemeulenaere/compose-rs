@@ -23,7 +23,7 @@ use crate::unit::{Dp, IntSize};
 /// then draws the background inside the padding.
 #[derive(Clone, Default)]
 pub struct Modifier {
-    elements: SmallVec<[Element; 4]>,
+    elements: SmallVec<[Element; 6]>,
 }
 
 /// The empty modifier. `Modifier` is a type and a value, as in Kotlin, so code writes
@@ -73,6 +73,12 @@ impl Modifier {
 
     pub fn padding_values(self, padding: PaddingValues) -> Modifier {
         self.then_element(Element::Padding(padding))
+    }
+
+    /// Lays the content out at least `size` in both directions, centered, so small controls are
+    /// easy to hit, as Material's `minimumInteractiveComponentSize()` (48 dp).
+    pub fn minimum_touch_target(self, size: Dp) -> Modifier {
+        self.then_element(Element::MinimumTouchTarget(size))
     }
 
     /// Moves the content by `x`, `y` without changing its size, as `Modifier.offset`.
@@ -141,7 +147,8 @@ impl Modifier {
     /// `weight` with `fill`: whether the child must take its whole share.
     pub fn weight_filled(self, _scope: impl WeightScope, weight: f32, fill: bool) -> Modifier {
         assert!(weight > 0.0, "compose-ui: weight must be positive, was {weight}");
-        self.then_element(Element::Weight(weight, fill))
+        // As Compose: an infinite weight is the largest finite one.
+        self.then_element(Element::Weight(weight.min(f32::MAX), fill))
     }
 
     /// The child's alignment in its parent: a `BoxScope` takes an `Alignment`, a `RowScope` a
@@ -445,6 +452,7 @@ pub struct Toggleable {
 pub enum Element {
     Padding(PaddingValues),
     Offset(Dp, Dp),
+    MinimumTouchTarget(Dp),
     Size(SizeSpec),
     Fill(Fill),
     Weight(f32, bool),
@@ -477,6 +485,7 @@ impl Element {
         match (self, other) {
             (Padding(a), Padding(b)) => a == b,
             (Offset(a, b), Offset(c, d)) => a == c && b == d,
+            (MinimumTouchTarget(a), MinimumTouchTarget(b)) => a == b,
             (Size(a), Size(b)) => a == b,
             (Fill(a), Fill(b)) => a == b,
             (Weight(a, b), Weight(c, d)) => a == c && b == d,
@@ -514,6 +523,7 @@ impl fmt::Debug for Element {
                 padding.start, padding.top, padding.end, padding.bottom
             ),
             Offset(x, y) => write!(formatter, "offset({x:?}, {y:?})"),
+            MinimumTouchTarget(size) => write!(formatter, "minimum_touch_target({size:?})"),
             Size(spec) => {
                 let bound =
                     |dp: Dp| if dp.is_specified() { format!("{dp:?}") } else { "_".to_string() };

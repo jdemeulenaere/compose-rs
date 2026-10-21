@@ -217,27 +217,23 @@ pub static LOCAL_CONTENT_COLOR: CompositionLocal<Color> =
 pub static LOCAL_TEXT_STYLE: CompositionLocal<TextStyle> =
     CompositionLocal::new("LocalTextStyle", || TextStyle::DEFAULT);
 
-/// The theme of `content`, as Compose's `MaterialTheme`. Also a type: `MaterialTheme::color_scheme()`
+/// The theme of `content`, as Compose's `MaterialTheme`; what isn't given stays the enclosing
+/// theme's. Also a type: `MaterialTheme::color_scheme()`
 /// reads the current theme, as Kotlin's `MaterialTheme.colorScheme`.
 #[composable]
 pub fn MaterialTheme(
-    #[default(crate::light_color_scheme())] color_scheme: ColorScheme,
-    #[default(::core::default::Default::default())] shapes: Shapes,
-    #[default(::core::default::Default::default())] typography: Typography,
+    #[default(crate::MaterialTheme::color_scheme())] color_scheme: ColorScheme,
+    #[default(crate::MaterialTheme::shapes())] shapes: Shapes,
+    #[default(crate::MaterialTheme::typography())] typography: Typography,
     content: impl Fn() + 'static,
 ) {
     CompositionLocalProvider(LOCAL_COLOR_SCHEME.provides(color_scheme), || {
         CompositionLocalProvider(LOCAL_SHAPES.provides(shapes), || {
             CompositionLocalProvider(LOCAL_TYPOGRAPHY.provides(typography), || {
-                CompositionLocalProvider(
-                    LOCAL_CONTENT_COLOR.provides(color_scheme.on_surface),
-                    || {
-                        CompositionLocalProvider(
-                            LOCAL_TEXT_STYLE.provides(typography.body_large),
-                            || content(),
-                        );
-                    },
-                );
+                // The body text style, as Compose's (and no content color: surfaces give it).
+                CompositionLocalProvider(LOCAL_TEXT_STYLE.provides(typography.body_large), || {
+                    content()
+                });
             });
         });
     });

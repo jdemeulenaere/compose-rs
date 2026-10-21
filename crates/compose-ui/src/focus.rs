@@ -79,11 +79,12 @@ impl UiTree {
         actions: &mut Vec<Action>,
     ) {
         let mut requests = Requests::default();
-        if let Some(value) = self.get_mut(node)
+        if let Some((value, text_measurer)) = self.node_and_measurer(node)
             && let Some(target) =
                 value.chain.get_mut(index).and_then(|entry| entry.as_focus_target())
         {
-            let mut context = EventContext { node, actions, requests: &mut requests };
+            let mut context =
+                EventContext { node, actions, requests: &mut requests, text_measurer };
             target.on_focus_changed(focused, &mut context);
         }
         // Not its focus requests: a target answering focus with focus would loop.

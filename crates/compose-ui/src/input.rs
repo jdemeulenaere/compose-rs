@@ -177,6 +177,7 @@ pub struct EventContext<'a> {
     pub(crate) node: NodeId,
     pub(crate) actions: &'a mut Vec<Action>,
     pub(crate) requests: &'a mut Requests,
+    pub(crate) text_measurer: &'a mut dyn crate::text::TextMeasurer,
 }
 
 /// Requests handlers make, applied after dispatch.
@@ -221,6 +222,11 @@ impl EventContext<'_> {
     /// The node's measurement changed.
     pub fn invalidate_measure(&mut self) {
         self.requests.measure.push(self.node);
+    }
+
+    /// The text measurer, for handlers that hit-test their paragraphs (a text field's tap).
+    pub fn text_measurer(&mut self) -> &mut dyn crate::text::TextMeasurer {
+        &mut *self.text_measurer
     }
 
     /// The layout node the handler belongs to.

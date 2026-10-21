@@ -117,13 +117,16 @@ impl UiTree {
                     return;
                 }
                 let origin = tree.layer_origin(entry.node, entry.layer as usize);
-                let value = tree.node_mut(entry.node);
+                let Some((value, text_measurer)) = tree.node_and_measurer(entry.node) else {
+                    return;
+                };
                 let bounds = value.layers[entry.layer as usize].measured;
                 event.position = position - origin;
                 let mut context = EventContext {
                     node: entry.node,
                     actions: &mut actions,
                     requests: &mut requests,
+                    text_measurer,
                 };
                 if let Some(handler) = value.chain[entry.index as usize].as_pointer_input() {
                     handler.on_pointer_event(&mut event, pass, bounds, &mut context);
@@ -196,8 +199,13 @@ impl UiTree {
         let mut requests = Requests::default();
         let mut consumed = false;
         for (node, index) in self.key_path() {
-            let value = self.node_mut(node);
-            let mut context = EventContext { node, actions: &mut actions, requests: &mut requests };
+            let Some((value, text_measurer)) = self.node_and_measurer(node) else { continue };
+            let mut context = EventContext {
+                node,
+                actions: &mut actions,
+                requests: &mut requests,
+                text_measurer,
+            };
             if let Some(handler) = value.chain[index].as_key_input()
                 && handler.on_key_event(&event, &mut context)
             {
@@ -219,8 +227,13 @@ impl UiTree {
         let mut requests = Requests::default();
         let mut consumed = false;
         for (node, index) in self.key_path() {
-            let value = self.node_mut(node);
-            let mut context = EventContext { node, actions: &mut actions, requests: &mut requests };
+            let Some((value, text_measurer)) = self.node_and_measurer(node) else { continue };
+            let mut context = EventContext {
+                node,
+                actions: &mut actions,
+                requests: &mut requests,
+                text_measurer,
+            };
             if let Some(handler) = value.chain[index].as_key_input()
                 && handler.on_text_input(text, &mut context)
             {

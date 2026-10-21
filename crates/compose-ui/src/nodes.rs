@@ -26,6 +26,7 @@ pub(crate) fn create(element: &Element) -> Box<dyn ModifierNode> {
     match element {
         Element::Padding(padding) => Box::new(PaddingNode(*padding)),
         Element::Offset(x, y) => Box::new(OffsetNode(*x, *y)),
+        Element::MinimumTouchTarget(size) => Box::new(MinimumTouchTargetNode(*size)),
         Element::Size(spec) => Box::new(SizeNode(*spec)),
         Element::Fill(fill) => Box::new(FillNode(*fill)),
         // Parent data is read from the elements; these nodes do nothing. A zero-sized box
@@ -69,6 +70,9 @@ pub(crate) fn update(element: &Element, node: &mut dyn ModifierNode) {
     match element {
         Element::Padding(padding) => set!(PaddingNode, PaddingNode(*padding)),
         Element::Offset(x, y) => set!(OffsetNode, OffsetNode(*x, *y)),
+        Element::MinimumTouchTarget(size) => {
+            set!(MinimumTouchTargetNode, MinimumTouchTargetNode(*size))
+        }
         Element::Size(spec) => set!(SizeNode, SizeNode(*spec)),
         Element::Fill(fill) => set!(FillNode, FillNode(*fill)),
         Element::Weight(..) | Element::Align(_) => {}
@@ -167,6 +171,31 @@ impl LayoutModifierNode for OffsetNode {
         let density = scope.density();
         scope.place(&placeable, density.round_to_px(self.0), density.round_to_px(self.1));
         scope.layout(placeable.width, placeable.height)
+    }
+}
+
+struct MinimumTouchTargetNode(Dp);
+
+impl ModifierNode for MinimumTouchTargetNode {
+    fn as_layout(&mut self) -> Option<&mut dyn LayoutModifierNode> {
+        Some(self)
+    }
+}
+
+impl LayoutModifierNode for MinimumTouchTargetNode {
+    fn measure(
+        &mut self,
+        scope: &mut MeasureScope<'_>,
+        content: Measurable,
+        constraints: Constraints,
+    ) -> MeasureResult {
+        let placeable = scope.measure(content, constraints);
+        let minimum = scope.density().round_to_px(self.0);
+        let width = constraints.constrain_width(placeable.width.max(minimum));
+        let height = constraints.constrain_height(placeable.height.max(minimum));
+        let center = |space: i32| crate::unit::round_to_int(space as f32 / 2.0);
+        scope.place(&placeable, center(width - placeable.width), center(height - placeable.height));
+        scope.layout(width, height)
     }
 }
 

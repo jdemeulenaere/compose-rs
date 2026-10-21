@@ -106,7 +106,9 @@ impl RasterRenderer {
         let mut bytes = vec![0u8; (width * height * 4) as usize];
         self.surface.read_pixels(&info, &mut bytes, (width * 4) as usize, (0, 0));
         bytes
-            .as_chunks::<4>().0.iter()
+            .as_chunks::<4>()
+            .0
+            .iter()
             .map(|pixel| u32::from_ne_bytes([pixel[0], pixel[1], pixel[2], pixel[3]]))
             .collect()
     }

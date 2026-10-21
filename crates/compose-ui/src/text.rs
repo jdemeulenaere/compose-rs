@@ -172,7 +172,8 @@ impl ComposeArg for TextStyle {
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct ParagraphHandle(pub u64);
 
-/// A paragraph's metrics, in pixels.
+/// A paragraph's metrics, in pixels: its own size, which the layout coerces into its
+/// constraints.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct ParagraphMetrics {
     pub size: IntSize,
@@ -317,10 +318,11 @@ impl TextMeasurer for FixedTextMeasurer {
         lines.truncate(options.max_lines.max(1) as usize);
         let widest =
             lines.iter().map(|(from, to)| text[*from..*to].chars().count()).max().unwrap_or(0);
-        let size = constraints.constrain(IntSize::new(
+        // The paragraph's own size: the layout coerces it into its constraints.
+        let size = IntSize::new(
             (widest as f32 * advance).ceil() as i32,
             (lines.len() as f32 * line_height).ceil() as i32,
-        ));
+        );
         let paragraph =
             FixedParagraph { text: text.to_string(), lines, advance, line_height, size };
         match self.free.pop() {

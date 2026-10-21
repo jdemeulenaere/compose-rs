@@ -366,6 +366,7 @@ dependencies = [
  "compose-runtime",
  "compose-test",
  "compose-ui",
+ "unicode-segmentation",
 ]
 
 [[package]]

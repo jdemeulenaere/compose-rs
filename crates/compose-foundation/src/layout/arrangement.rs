@@ -81,23 +81,42 @@ impl Arrangement {
                 place_from(positions, gap, gap)
             }
             Arrangement::SpaceBetween => {
-                let gap = if count > 1 { free / (count - 1) as f32 } else { 0.0 };
-                place_from(positions, 0.0, gap)
+                let gap = free / (count.max(2) - 1) as f32;
+                // A single child goes to the end in right-to-left, as Compose's.
+                let start = if reverse && count == 1 { gap } else { 0.0 };
+                place_from(positions, start, gap)
             }
             Arrangement::SpaceAround => {
                 let gap = if count > 0 { free / count as f32 } else { 0.0 };
                 place_from(positions, gap / 2.0, gap)
             }
             Arrangement::SpacedBy(space, alignment) => {
+                // As Compose's `spacedBy`: each child at the end of the last, kept inside the
+                // total, and the group aligned when it doesn't fill it.
                 let space = density.round_to_px(*space);
-                let occupied = used + space * (count.max(1) as i32 - 1);
-                let left = (total - occupied) as f32;
-                let start = match (alignment, reverse) {
-                    (SpacedAlignment::Start, false) | (SpacedAlignment::End, true) => 0.0,
-                    (SpacedAlignment::Center, _) => left / 2.0,
-                    _ => left,
-                };
-                place_from(positions, start, space as f32)
+                let mut occupied = 0;
+                let mut last_space = 0;
+                for step in 0..count {
+                    let index = if reverse { count - 1 - step } else { step };
+                    let size = sizes[index];
+                    let position = occupied.min(total - size);
+                    positions[index] = position;
+                    last_space = space.min(total - position - size);
+                    occupied = position + size + last_space;
+                }
+                occupied -= last_space;
+                if occupied < total {
+                    let free = (total - occupied) as f32;
+                    let shift = match (alignment, reverse) {
+                        (SpacedAlignment::Start, false) | (SpacedAlignment::End, true) => 0.0,
+                        (SpacedAlignment::Center, _) => free / 2.0,
+                        _ => free,
+                    };
+                    let shift = compose_ui::unit::round_to_int(shift);
+                    for position in positions.iter_mut().take(count) {
+                        *position += shift;
+                    }
+                }
             }
         }
     }

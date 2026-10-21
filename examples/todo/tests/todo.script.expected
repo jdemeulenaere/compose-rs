@@ -29,8 +29,8 @@
 StackMeasurePolicy [0,0 400x800]
   RowColumnMeasurePolicy [0,0 400x800] Modifier.fill_max_size(1).padding(16.dp, 16.dp, 16.dp, 16.dp)
     RowColumnMeasurePolicy [0,0 368x56]
-      BoxMeasurePolicy [0,0 299x56] Modifier.weight(1, true).test_tag("draft").size(280.dp.._ x 56.dp.._).background(#FFE6E0E9, Rounded([Dp(4.dp), Dp(4.dp), Dp(0.dp), Dp(0.dp)])).on_focus_changed.semantics(merge = true) {tag="draft" merged}
-        RowColumnMeasurePolicy [0,22 299x34] Modifier.fill_max_width(1).padding(16.dp, 8.dp, 16.dp, 8.dp)
+      BoxMeasurePolicy [0,0 299x56] Modifier.weight(1, true).test_tag("draft").size(280.dp.._ x 56.dp.._).background(#FFE6E0E9, Rounded([Dp(4.dp), Dp(4.dp), Dp(0.dp), Dp(0.dp)])).on_focus_changed.focus_on_tap.semantics(merge = true) {tag="draft" merged}
+        RowColumnMeasurePolicy [0,6 299x50] Modifier.fill_max_width(1).padding(16.dp, 16.dp, 16.dp, 16.dp)
           BoxMeasurePolicy [0,0 267x18] Modifier.fill_max_width(1)
             EmptyMeasurePolicy [0,0 267x18] Modifier.fill_max_width(1).TextField {editable_text="" editable focusable focused}
         EmptyMeasurePolicy [0,54 299x2] Modifier.fill_max_width(1).size(_ x 2.dp).background(#FF6750A4, Rectangle)
@@ -48,13 +48,13 @@ StackMeasurePolicy [0,0 400x800]
         RowColumnMeasurePolicy [0,0 76x40] Modifier.size(58.dp.._ x 40.dp.._).padding(24.dp, 8.dp, 24.dp, 8.dp)
           EmptyMeasurePolicy [0,2 28x20] Modifier.Text {text=["Done"]}
     RowColumnMeasurePolicy [0,104 368x56] Modifier.fill_max_width(1).padding(4.dp, 4.dp, 4.dp, 4.dp)
-      EmptyMeasurePolicy [0,0 48x48] Modifier.toggleable(false, enabled = true).minimum_interactive_component_size.padding(2.dp, 2.dp, 2.dp, 2.dp).size(20.dp x 20.dp).checkbox {role=Checkbox toggle=Off clickable focusable merged}
+      EmptyMeasurePolicy [0,0 48x48] Modifier.toggleable(false, enabled = true).minimum_interactive_component_size.padding(2.dp, 2.dp, 2.dp, 2.dp).required_size(20.dp x 20.dp).checkbox {role=Checkbox toggle=Off clickable focusable merged}
       EmptyMeasurePolicy [48,15 222x18] Modifier.weight(1, true).Text {text=["milk"]}
       BoxMeasurePolicy [270,0 90x48] Modifier.minimum_interactive_component_size.background(#FF6750A4, Rounded([Percent(50.0), Percent(50.0), Percent(50.0), Percent(50.0)])).clip(Rounded([Percent(50.0), Percent(50.0), Percent(50.0), Percent(50.0)])).clickable(enabled = true) {role=Button clickable focusable merged}
         RowColumnMeasurePolicy [0,0 90x40] Modifier.size(58.dp.._ x 40.dp.._).padding(24.dp, 8.dp, 24.dp, 8.dp)
           EmptyMeasurePolicy [0,2 42x20] Modifier.Text {text=["Remove"]}
     RowColumnMeasurePolicy [0,160 368x56] Modifier.fill_max_width(1).padding(4.dp, 4.dp, 4.dp, 4.dp)
-      EmptyMeasurePolicy [0,0 48x48] Modifier.toggleable(false, enabled = true).minimum_interactive_component_size.padding(2.dp, 2.dp, 2.dp, 2.dp).size(20.dp x 20.dp).checkbox {role=Checkbox toggle=Off clickable focusable merged}
+      EmptyMeasurePolicy [0,0 48x48] Modifier.toggleable(false, enabled = true).minimum_interactive_component_size.padding(2.dp, 2.dp, 2.dp, 2.dp).required_size(20.dp x 20.dp).checkbox {role=Checkbox toggle=Off clickable focusable merged}
       EmptyMeasurePolicy [48,15 222x18] Modifier.weight(1, true).Text {text=["eggs"]}
       BoxMeasurePolicy [270,0 90x48] Modifier.minimum_interactive_component_size.background(#FF6750A4, Rounded([Percent(50.0), Percent(50.0), Percent(50.0), Percent(50.0)])).clip(Rounded([Percent(50.0), Percent(50.0), Percent(50.0), Percent(50.0)])).clickable(enabled = true) {role=Button clickable focusable merged}
         RowColumnMeasurePolicy [0,0 90x40] Modifier.size(58.dp.._ x 40.dp.._).padding(24.dp, 8.dp, 24.dp, 8.dp)

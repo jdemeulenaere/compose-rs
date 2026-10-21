@@ -2,7 +2,10 @@
 //! with a cursor, focused by a tap, edited by keys and committed text.
 //!
 //! The node keeps its own copy of the text, so edits arriving before the next recomposition
-//! build on each other; a new `value` from composition replaces it.
+//! build on each other; a new `value` from composition replaces it, and an edit the application
+//! didn't take (its `value` unchanged by the next frame: rejected, or filtered back to the old
+//! value) is undone, as Compose's value-based text field shows its `value`. The cursor moves by
+//! grapheme clusters, and starts at the start.
 
 use compose_runtime::{Callback, composable};
 use compose_ui::{
@@ -13,6 +16,7 @@ use compose_ui::{
     PointerEventType, PointerInputModifierNode, Rect, SemanticsConfiguration,
     SemanticsModifierNode, TextLayoutOptions, TextStyle, empty_measure_policy,
 };
+use unicode_segmentation::UnicodeSegmentation;
 
 /// The cursor's width, as Compose's `DefaultCursorThickness`.
 const CURSOR_WIDTH: compose_ui::Dp = compose_ui::Dp(2.0);
@@ -54,8 +58,11 @@ pub struct TextFieldElement {
 impl ModifierNodeElement for TextFieldElement {
     fn create(&self) -> Box<dyn ModifierNode> {
         Box::new(TextFieldNode {
-            cursor: self.value.len(),
+            // At the start, as Compose's `TextFieldValue` with no selection given.
+            cursor: 0,
             text: self.value.clone(),
+            value: self.value.clone(),
+            awaiting_value: false,
             on_value_change: self.on_value_change.clone(),
             enabled: self.enabled,
             read_only: self.read_only,
@@ -75,6 +82,10 @@ impl ModifierNodeElement for TextFieldElement {
 
     fn update(&self, node: &mut dyn ModifierNode) {
         let Some(node) = node.downcast_mut::<TextFieldNode>() else { return };
+        if node.value != self.value {
+            node.value = self.value.clone();
+            node.awaiting_value = false;
+        }
         if node.text != self.value
             || node.style != self.style
             || node.single_line != self.single_line
@@ -119,7 +130,13 @@ fn floor_char_boundary(text: &str, offset: usize) -> usize {
 }
 
 pub struct TextFieldNode {
+    /// The text shown: `value`, with the edits made since the last frame.
     text: String,
+    /// The application's value, as composition last gave it.
+    value: String,
+    /// An edit was made: unless the application changes `value` by the next measurement, the
+    /// edit is undone.
+    awaiting_value: bool,
     /// The cursor, as a byte offset at a character boundary.
     cursor: usize,
     on_value_change: Callback<dyn Fn(String)>,
@@ -160,6 +177,7 @@ impl TextFieldNode {
     fn edit(&mut self, text: String, cursor: usize, context: &mut EventContext<'_>) {
         self.text = text;
         self.cursor = cursor;
+        self.awaiting_value = true;
         self.invalidate_paragraph();
         context.invalidate_measure();
         let callback = self.on_value_change.clone();
@@ -167,12 +185,20 @@ impl TextFieldNode {
         context.run(move || callback(value));
     }
 
+    /// The start of the grapheme cluster before the cursor.
     fn previous_boundary(&self) -> usize {
-        self.text[..self.cursor].char_indices().next_back().map_or(0, |(index, _)| index)
+        self.text[..self.cursor]
+            .graphemes(true)
+            .next_back()
+            .map_or(0, |cluster| self.cursor - cluster.len())
     }
 
+    /// The end of the grapheme cluster after the cursor.
     fn next_boundary(&self) -> usize {
-        self.text[self.cursor..].chars().next().map_or(self.cursor, |c| self.cursor + c.len_utf8())
+        self.text[self.cursor..]
+            .graphemes(true)
+            .next()
+            .map_or(self.cursor, |cluster| self.cursor + cluster.len())
     }
 
     fn insert(&mut self, inserted: &str, context: &mut EventContext<'_>) {
@@ -224,6 +250,12 @@ impl LayoutModifierNode for TextFieldNode {
         content: Measurable,
         constraints: Constraints,
     ) -> MeasureResult {
+        // An edit the application didn't take is undone.
+        if std::mem::take(&mut self.awaiting_value) && self.text != self.value {
+            self.text = self.value.clone();
+            self.cursor = floor_char_boundary(&self.text, self.cursor);
+            self.invalidate_paragraph();
+        }
         for paragraph in self.stale.drain(..) {
             scope.text_measurer().release(paragraph);
         }
@@ -311,7 +343,16 @@ impl PointerInputModifierNode for TextFieldNode {
             {
                 event.consume();
                 context.request_focus();
-                self.pending_tap = Some(event.position);
+                // The cursor where the tap landed, now, so text typed before the next frame
+                // goes there.
+                match self.paragraph {
+                    Some(paragraph) => {
+                        let offset =
+                            context.text_measurer().hit_test(paragraph, event.position).offset;
+                        self.cursor = floor_char_boundary(&self.text, offset);
+                    }
+                    None => self.pending_tap = Some(event.position),
+                }
                 context.invalidate_measure();
             }
             _ => {}

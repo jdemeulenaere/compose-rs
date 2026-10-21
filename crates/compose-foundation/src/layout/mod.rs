@@ -8,6 +8,7 @@ mod arrangement;
 use std::rc::Rc;
 
 use compose_runtime::{composable, remember_keyed};
+use compose_ui::unit::round_to_int;
 use compose_ui::{
     Alignment, Constraints, HorizontalAlignment, Layout, Measurable, MeasurePolicy, MeasureResult,
     MeasureScope, Modifier, ParentAlignment, Placeable, VerticalAlignment, empty_measure_policy,
@@ -140,14 +141,15 @@ impl MeasurePolicy for RowColumnMeasurePolicy {
         let placeables = placeables.as_mut();
         let bounded = axis.main_max != Constraints::INFINITY;
 
-        // Children without weight, with what's left of the main axis.
+        // Children without weight, with what's left of the main axis, each followed by the
+        // spacing, clamped to what's left, as Compose's `RowColumnMeasurePolicy`.
         let mut total_weight = 0.0f32;
-        let mut weighted = 0usize;
+        let mut weighted = 0i32;
         let mut fixed_space = 0i32;
         let mut cross_size = 0i32;
+        let mut space_after_last = 0i32;
         for (index, &measurable) in measurables.iter().enumerate() {
-            let weight = scope.parent_data(measurable).weight.filter(|_| bounded);
-            if let Some((weight, _)) = weight {
+            if let Some((weight, _)) = scope.parent_data(measurable).weight {
                 total_weight += weight;
                 weighted += 1;
                 continue;
@@ -161,30 +163,36 @@ impl MeasurePolicy for RowColumnMeasurePolicy {
                 cross_max: axis.cross_max,
             };
             let placeable = scope.measure(measurable, child.to_constraints(self.orientation));
-            fixed_space = fixed_space.saturating_add(self.main(&placeable));
+            let size = self.main(&placeable);
+            space_after_last =
+                if bounded { spacing.min((remaining - size).max(0)) } else { spacing };
+            fixed_space = fixed_space.saturating_add(size + space_after_last);
             cross_size = cross_size.max(self.cross(&placeable));
             placeables[index] = Some(placeable);
         }
-        let gaps = spacing * (count as i32 - 1).max(0);
-        fixed_space = fixed_space.saturating_add(gaps);
 
-        // Weighted children share the rest, rounding as Compose does: each takes its share
-        // rounded, and the remainder goes one pixel at a time to the first ones.
-        let mut weighted_space = 0;
-        if weighted > 0 {
-            let remaining = (axis.main_max - fixed_space).max(0);
-            let per_weight = remaining as f32 / total_weight;
+        // Weighted children share what remains of the maximum (of the minimum when the main
+        // axis is unbounded), rounding as Compose does: each takes its share rounded, and the
+        // remainder goes one pixel at a time to the first ones.
+        let mut weighted_space = 0i32;
+        if weighted == 0 {
+            fixed_space -= space_after_last;
+        } else {
+            let target = if total_weight > 0.0 && bounded { axis.main_max } else { axis.main_min };
+            let weighted_gaps = spacing * (weighted - 1);
+            let remaining = (target - fixed_space - weighted_gaps).max(0);
+            let per_weight = if total_weight > 0.0 { remaining as f32 / total_weight } else { 0.0 };
             let mut rounding = remaining
                 - measurables
                     .iter()
                     .filter_map(|&measurable| scope.parent_data(measurable).weight)
-                    .map(|(weight, _)| compose_ui::unit::round_to_int(weight * per_weight))
+                    .map(|(weight, _)| round_to_int(weight * per_weight))
                     .sum::<i32>();
             for (index, &measurable) in measurables.iter().enumerate() {
                 let Some((weight, fill)) = scope.parent_data(measurable).weight else { continue };
                 let step = rounding.signum();
                 rounding -= step;
-                let size = (compose_ui::unit::round_to_int(weight * per_weight) + step).max(0);
+                let size = (round_to_int(weight * per_weight) + step).max(0);
                 let child = AxisConstraints {
                     main_min: if fill { size } else { 0 },
                     main_max: size,
@@ -196,13 +204,11 @@ impl MeasurePolicy for RowColumnMeasurePolicy {
                 cross_size = cross_size.max(self.cross(&placeable));
                 placeables[index] = Some(placeable);
             }
+            let room = if bounded { axis.main_max - fixed_space } else { i32::MAX };
+            weighted_space = (weighted_space + weighted_gaps).clamp(0, room.max(0));
         }
 
-        let main_size = if weighted > 0 && bounded {
-            axis.main_max
-        } else {
-            (fixed_space + weighted_space).max(axis.main_min).min(axis.main_max)
-        };
+        let main_size = (fixed_space + weighted_space).max(0).max(axis.main_min).min(axis.main_max);
         let cross_size = cross_size.max(axis.cross_min).min(axis.cross_max);
 
         // Main-axis positions from the arrangement, cross-axis ones from the alignments.

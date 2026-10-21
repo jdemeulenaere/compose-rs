@@ -182,9 +182,10 @@ impl<C: Fn() + 'static> App<C> {
 
     fn write_screenshot(&mut self) {
         if let (Some(path), Some(shown)) = (&self.screenshot, &mut self.shown)
-            && let Err(error) = std::fs::write(path, shown.renderer.png()) {
-                eprintln!("compose-desktop: writing the screenshot to {}: {error}", path.display());
-            }
+            && let Err(error) = std::fs::write(path, shown.renderer.png())
+        {
+            eprintln!("compose-desktop: writing the screenshot to {}: {error}", path.display());
+        }
     }
 }
 

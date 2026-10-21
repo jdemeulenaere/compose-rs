@@ -106,7 +106,16 @@ impl MeasureScope<'_> {
             child.measured_in = self.run;
             self.tree.measure_node(measurable.node, constraints)
         } else {
-            debug_assert_eq!(measurable.node, self.node);
+            assert_eq!(
+                measurable.node, self.node,
+                "compose-ui: a layout modifier measured another node's content"
+            );
+            let layer = &mut self.tree.node_mut(measurable.node).layers[measurable.layer as usize];
+            assert!(
+                layer.measured_in != self.run,
+                "compose-ui: a layout modifier measured its content twice in one measurement"
+            );
+            layer.measured_in = self.run;
             self.tree.measure_layer(measurable.node, measurable.layer as usize, constraints)
         };
         Placeable { measurable, width: size.width, height: size.height }

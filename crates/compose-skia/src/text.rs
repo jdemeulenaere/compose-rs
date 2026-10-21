@@ -142,10 +142,7 @@ impl TextMeasurer for SkiaTextMeasurer {
         } else {
             paragraph.max_intrinsic_width()
         };
-        let size = constraints.constrain(IntSize::new(
-            measured_width.ceil() as i32,
-            paragraph.height().ceil() as i32,
-        ));
+        let size = IntSize::new(measured_width.ceil() as i32, paragraph.height().ceil() as i32);
         let lines = paragraph.get_line_metrics();
         let metrics = ParagraphMetrics {
             size,

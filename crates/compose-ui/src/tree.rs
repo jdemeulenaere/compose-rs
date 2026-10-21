@@ -88,6 +88,8 @@ pub(crate) struct Layer {
     pub(crate) position: IntOffset,
     /// `position`, plus the centering of a layer measured outside its constraints.
     pub(crate) offset: IntOffset,
+    /// The measurement that last measured it, to reject measuring it twice.
+    pub(crate) measured_in: u64,
 }
 
 /// One UI element, as Compose's `LayoutNode`.
@@ -231,6 +233,18 @@ impl UiTree {
     pub(crate) fn get_mut(&mut self, node: NodeId) -> Option<&mut LayoutNode> {
         let slot = self.slots.get_mut(node.index as usize)?;
         if slot.generation == node.generation { slot.node.as_mut() } else { None }
+    }
+
+    /// A node and the text measurer, borrowed together: for event handlers.
+    pub(crate) fn node_and_measurer(
+        &mut self,
+        node: NodeId,
+    ) -> Option<(&mut LayoutNode, &mut dyn TextMeasurer)> {
+        let slot = self.slots.get_mut(node.index as usize)?;
+        if slot.generation != node.generation {
+            return None;
+        }
+        Some((slot.node.as_mut()?, &mut *self.text_measurer))
     }
 
     pub(crate) fn node(&self, node: NodeId) -> &LayoutNode {

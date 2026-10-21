@@ -7,8 +7,20 @@ use std::ops::{Add, Div, Mul, Neg, Sub};
 use compose_runtime::ComposeArg;
 
 /// Density-independent pixels: the unit of layout, as Compose's `Dp`.
-#[derive(Clone, Copy, PartialEq, PartialOrd, Default)]
+#[derive(Clone, Copy, PartialOrd, Default)]
 pub struct Dp(pub f32);
+
+/// Equal, `UNSPECIFIED` (NaN) included: unspecified equals unspecified, as Compose's value
+/// classes compare their bits.
+fn same_value(a: f32, b: f32) -> bool {
+    a == b || (a.is_nan() && b.is_nan())
+}
+
+impl PartialEq for Dp {
+    fn eq(&self, other: &Self) -> bool {
+        same_value(self.0, other.0)
+    }
+}
 
 /// `x` rounded to the nearest integer, halves up, as Kotlin's `roundToInt` (`Math.round`), which
 /// Compose's layout uses: `-1.5` rounds to `-1`.
@@ -38,7 +50,7 @@ impl fmt::Debug for Dp {
 
 impl ComposeArg for Dp {
     fn same(&self, other: &Self) -> bool {
-        self.0.same(&other.0)
+        self == other
     }
 }
 
@@ -78,8 +90,14 @@ impl Neg for Dp {
 }
 
 /// Scale-independent pixels: the unit of text size, as Compose's `TextUnit` in `sp`.
-#[derive(Clone, Copy, PartialEq, PartialOrd, Default)]
+#[derive(Clone, Copy, PartialOrd, Default)]
 pub struct Sp(pub f32);
+
+impl PartialEq for Sp {
+    fn eq(&self, other: &Self) -> bool {
+        same_value(self.0, other.0)
+    }
+}
 
 impl Sp {
     pub const UNSPECIFIED: Sp = Sp(f32::NAN);
@@ -97,7 +115,7 @@ impl fmt::Debug for Sp {
 
 impl ComposeArg for Sp {
     fn same(&self, other: &Self) -> bool {
-        self.0.same(&other.0)
+        self == other
     }
 }
 

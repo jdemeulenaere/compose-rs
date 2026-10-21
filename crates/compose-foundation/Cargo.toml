@@ -9,6 +9,7 @@ publish.workspace = true
 [dependencies]
 compose-runtime.workspace = true
 compose-ui.workspace = true
+unicode-segmentation = "1"
 
 [dev-dependencies]
 compose-test.workspace = true
