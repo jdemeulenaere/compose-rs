@@ -134,37 +134,42 @@ impl UiTree {
         };
         let mut actions = Vec::new();
         let mut requests = Requests::default();
-        for pass in [PointerEventPass::Initial, PointerEventPass::Main, PointerEventPass::Final] {
-            let mut deliver = |tree: &mut UiTree, entry: &HitEntry| {
-                if tree.get(entry.node).is_none_or(|value| value.chain_version != entry.version) {
-                    return;
-                }
-                let origin = tree.layer_origin(entry.node, entry.layer as usize);
-                let density = tree.density;
-                let Some((value, (text_measurer, clipboard))) = tree.node_and_measurer(entry.node)
-                else {
-                    return;
-                };
-                let bounds = value.layers[entry.layer as usize].measured;
-                event.position = position - origin;
-                let mut context = EventContext {
-                    node: entry.node,
-                    actions: &mut actions,
-                    requests: &mut requests,
-                    text_measurer,
-                    clipboard,
-                    pointer_position: Some(position),
-                    density,
-                    layout_direction: value.layout_direction,
-                };
-                if let Some(handler) = value.chain[entry.index as usize].as_pointer_input() {
-                    handler.on_pointer_event(&mut event, pass, bounds, &mut context);
-                }
-            };
-            if pass == PointerEventPass::Main {
-                path.iter().rev().for_each(|entry| deliver(self, entry));
+        // A mouse's hover: what it left hears `Exit`, what it came over `Enter`, as Compose's
+        // (not while a button is held: a drag stays with what it pressed).
+        let hovering = event.pointer_type == crate::input::PointerType::Mouse
+            && event.kind != PointerEventType::Scroll
+            && (!event.pressed || event.kind == PointerEventType::Press);
+        if hovering {
+            let now = if event.kind == PointerEventType::Release || captured.is_some() {
+                self.hit_test(position)
             } else {
-                path.iter().for_each(|entry| deliver(self, entry));
+                path.clone()
+            };
+            self.update_hover(now, event, &mut actions, &mut requests);
+        }
+        for pass in [PointerEventPass::Initial, PointerEventPass::Main, PointerEventPass::Final] {
+            if pass == PointerEventPass::Main {
+                for entry in path.iter().rev() {
+                    self.deliver_pointer(
+                        entry,
+                        &mut event,
+                        pass,
+                        position,
+                        &mut actions,
+                        &mut requests,
+                    );
+                }
+            } else {
+                for entry in path.iter() {
+                    self.deliver_pointer(
+                        entry,
+                        &mut event,
+                        pass,
+                        position,
+                        &mut actions,
+                        &mut requests,
+                    );
+                }
             }
         }
         self.apply_requests(requests, &mut actions);
@@ -189,6 +194,93 @@ impl UiTree {
     }
 
     /// Ends every pointer gesture in progress, as when the window loses the pointer.
+    /// Sends one pointer event, in a pass, to one entry of a hit path.
+    fn deliver_pointer(
+        &mut self,
+        entry: &HitEntry,
+        event: &mut PointerEvent,
+        pass: PointerEventPass,
+        position: Offset,
+        actions: &mut Vec<Action>,
+        requests: &mut Requests,
+    ) {
+        if self.get(entry.node).is_none_or(|value| value.chain_version != entry.version) {
+            return;
+        }
+        let origin = self.layer_origin(entry.node, entry.layer as usize);
+        let density = self.density;
+        let Some((value, (text_measurer, clipboard))) = self.node_and_measurer(entry.node) else {
+            return;
+        };
+        let bounds = value.layers[entry.layer as usize].measured;
+        event.position = position - origin;
+        let mut context = EventContext {
+            node: entry.node,
+            actions,
+            requests,
+            text_measurer,
+            clipboard,
+            pointer_position: Some(position),
+            density,
+            layout_direction: value.layout_direction,
+        };
+        if let Some(handler) = value.chain[entry.index as usize].as_pointer_input() {
+            handler.on_pointer_event(event, pass, bounds, &mut context);
+        }
+        event.position = position;
+    }
+
+    /// Moves the mouse's hover to the entries of `now`: `Exit` to those it left, `Enter` to
+    /// those it came over (in the main pass).
+    fn update_hover(
+        &mut self,
+        now: Vec<HitEntry>,
+        event: PointerEvent,
+        actions: &mut Vec<Action>,
+        requests: &mut Requests,
+    ) {
+        let before = std::mem::take(&mut self.hovered);
+        let same = |a: &HitEntry, b: &HitEntry| {
+            a.node == b.node && a.index == b.index && a.version == b.version
+        };
+        let position = event.position;
+        for entry in before.iter().rev().filter(|old| !now.iter().any(|new| same(old, new))) {
+            let mut exit = PointerEvent { kind: PointerEventType::Exit, consumed: false, ..event };
+            self.deliver_pointer(
+                entry,
+                &mut exit,
+                PointerEventPass::Main,
+                position,
+                actions,
+                requests,
+            );
+        }
+        for entry in now.iter().rev().filter(|new| !before.iter().any(|old| same(old, new))) {
+            let mut enter =
+                PointerEvent { kind: PointerEventType::Enter, consumed: false, ..event };
+            self.deliver_pointer(
+                entry,
+                &mut enter,
+                PointerEventPass::Main,
+                position,
+                actions,
+                requests,
+            );
+        }
+        self.hovered = now;
+    }
+
+    /// The mouse left the window: what it was over hears `Exit`.
+    pub fn pointer_left(&mut self) -> Vec<Action> {
+        let mut actions = Vec::new();
+        let mut requests = Requests::default();
+        let mut event = PointerEvent::moved(Offset::new(-1.0, -1.0), false);
+        event.kind = PointerEventType::Exit;
+        self.update_hover(Vec::new(), event, &mut actions, &mut requests);
+        self.apply_requests(requests, &mut actions);
+        actions
+    }
+
     pub fn cancel_pointers(&mut self) {
         for (_, path) in std::mem::take(&mut self.captures) {
             for entry in path {

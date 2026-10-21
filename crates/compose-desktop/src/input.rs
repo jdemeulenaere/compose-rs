@@ -14,6 +14,8 @@ pub(crate) struct InputState {
     cursor: Offset,
     pressed: bool,
     modifiers: KeyModifiers,
+    /// The cursor left the window during a drag: its hover ends at the release.
+    left: bool,
 }
 
 pub(crate) enum Outcome {
@@ -61,6 +63,9 @@ pub(crate) fn handle(state: &mut InputState, host: &mut UiHost, event: &WindowEv
                 PointerEvent::release(state.cursor)
             };
             host.send_pointer(event);
+            if !pressed && std::mem::take(&mut state.left) {
+                host.send_pointer_left();
+            }
         }
         WindowEvent::MouseWheel { delta, .. } => {
             let delta = match delta {
@@ -88,10 +93,12 @@ pub(crate) fn handle(state: &mut InputState, host: &mut UiHost, event: &WindowEv
         }
         // A drag goes on outside the window (the system keeps sending its moves and its
         // release), as Compose Desktop's.
-        WindowEvent::CursorLeft { .. } if state.pressed => {}
+        WindowEvent::CursorLeft { .. } if state.pressed => state.left = true,
+        WindowEvent::CursorEntered { .. } => state.left = false,
         WindowEvent::CursorLeft { .. } | WindowEvent::Focused(false) => {
             state.pressed = false;
             host.with_tree(|tree| tree.cancel_pointers());
+            host.send_pointer_left();
         }
         WindowEvent::ModifiersChanged(modifiers) => {
             let modifiers = modifiers.state();

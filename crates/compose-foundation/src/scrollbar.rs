@@ -99,7 +99,7 @@ pub struct ScrollbarStyle {
     pub shape: Shape,
     /// The thumb's color at rest.
     pub unhover_color: Color,
-    /// Its color while dragged.
+    /// Its color while hovered or dragged.
     pub hover_color: Color,
 }
 
@@ -177,6 +177,8 @@ struct ScrollbarNode {
     drag: Option<(f32, f64)>,
     /// Pixels per dp, from the last measurement.
     density: compose_ui::Density,
+    /// A mouse is over it.
+    hovered: bool,
 }
 
 impl ModifierNodeElement for ScrollbarElement {
@@ -188,6 +190,7 @@ impl ModifierNodeElement for ScrollbarElement {
             style: self.style,
             drag: None,
             density: compose_ui::Density::default(),
+            hovered: false,
         })
     }
     fn update(&self, node: &mut dyn ModifierNode) {
@@ -288,8 +291,8 @@ impl DrawModifierNode for ScrollbarNode {
         } else {
             Rect::new(start, 0.0, start + length, size.height)
         };
-        let color =
-            if self.drag.is_some() { self.style.hover_color } else { self.style.unhover_color };
+        let active = self.drag.is_some() || self.hovered;
+        let color = if active { self.style.hover_color } else { self.style.unhover_color };
         let size = compose_ui::Size::new(rect.width(), rect.height());
         let outline = match self.style.shape.outline(size, &scope.density()) {
             compose_ui::Outline::Rounded(_, radii) => compose_ui::Outline::Rounded(rect, radii),
@@ -314,6 +317,10 @@ impl PointerInputModifierNode for ScrollbarNode {
         let along = |position: Offset| if self.vertical { position.y } else { position.x };
         let track = if self.vertical { bounds.height } else { bounds.width } as f32;
         match event.kind {
+            PointerEventType::Enter | PointerEventType::Exit => {
+                self.hovered = event.kind == PointerEventType::Enter;
+                context.invalidate_draw();
+            }
             PointerEventType::Press if !event.consumed => {
                 let Some((start, length)) = self.thumb(track) else { return };
                 let at = along(event.position);

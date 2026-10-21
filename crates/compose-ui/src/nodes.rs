@@ -447,6 +447,8 @@ struct PressState {
     /// The keys (Enter, NumPadEnter, Space) pressed and not released yet, as bits.
     keys_pressed: u8,
     focused: bool,
+    /// A mouse is over it.
+    hovered: bool,
 }
 
 fn key_bit(key: Key) -> u8 {
@@ -498,6 +500,8 @@ impl ModifierNode for ClickableNode {
 
 /// Material's state layer opacity for pressed and focused, as its ripple settles at.
 const STATE_LAYER_ALPHA: f32 = 0.10;
+/// Material's hovered state layer.
+const HOVER_STATE_LAYER_ALPHA: f32 = 0.08;
 
 impl DrawModifierNode for ClickableNode {
     /// The state layer, over the content, while pressed or focused.
@@ -505,9 +509,20 @@ impl DrawModifierNode for ClickableNode {
         let indication = self.spec.indication();
         let active =
             self.state.pressed.is_some() || self.state.keys_pressed != 0 || self.state.focused;
-        if indication.is_specified() && active && self.spec.enabled() {
+        // Material's state layers: pressed and focused 10 %, hovered 8 %.
+        let alpha = if active {
+            Some(STATE_LAYER_ALPHA)
+        } else if self.state.hovered {
+            Some(HOVER_STATE_LAYER_ALPHA)
+        } else {
+            None
+        };
+        if let Some(alpha) = alpha
+            && indication.is_specified()
+            && self.spec.enabled()
+        {
             let bounds = scope.bounds();
-            scope.draw_rect(bounds, Paint::fill(indication.with_alpha(STATE_LAYER_ALPHA)));
+            scope.draw_rect(bounds, Paint::fill(indication.with_alpha(alpha)));
         }
     }
 }
@@ -560,6 +575,13 @@ impl PointerInputModifierNode for ClickableNode {
             return;
         }
         match event.kind {
+            PointerEventType::Enter | PointerEventType::Exit => {
+                let hovered = event.kind == PointerEventType::Enter;
+                if self.state.hovered != hovered {
+                    self.state.hovered = hovered;
+                    context.invalidate_draw();
+                }
+            }
             PointerEventType::Press => {
                 if self.spec.enabled() && !event.consumed && self.state.pressed.is_none() {
                     self.state.pressed = Some(event.pointer);

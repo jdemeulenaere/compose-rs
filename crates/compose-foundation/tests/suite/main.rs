@@ -7,6 +7,7 @@ mod draw_modifiers;
 mod effects;
 mod foundation;
 mod grid;
+mod hover;
 mod image;
 mod lazy;
 mod review_e;

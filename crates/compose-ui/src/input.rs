@@ -25,6 +25,10 @@ pub enum PointerEventType {
     Release,
     Move,
     Scroll,
+    /// A mouse came over the node (its hit path), as `PointerEventType.Enter`.
+    Enter,
+    /// A mouse left it, or the window, as `PointerEventType.Exit`.
+    Exit,
 }
 
 /// One pointer event, in the receiving node's coordinates, as Compose's `PointerEvent` with a

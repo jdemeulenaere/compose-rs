@@ -221,6 +221,8 @@ pub struct UiTree {
     /// Counts placements, for children's placement order.
     pub(crate) place_serial: u64,
     pub(crate) captures: Vec<(crate::input::PointerId, Vec<crate::dispatch::HitEntry>)>,
+    /// What the mouse is over: its last hit path.
+    pub(crate) hovered: Vec<crate::dispatch::HitEntry>,
     /// Observes the state measure policies and custom nodes read (D71), keyed by node.
     pub(crate) observer: Option<Rc<compose_runtime::ReadObserver>>,
     pub(crate) measure_runs: u64,
@@ -248,6 +250,7 @@ impl UiTree {
             window: IntSize::new(0, 0),
             place_serial: 0,
             captures: Vec::new(),
+            hovered: Vec::new(),
             observer: None,
             measure_runs: 0,
         }

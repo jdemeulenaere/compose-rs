@@ -278,6 +278,13 @@ impl UiHost {
         self.wake_if_dirty();
     }
 
+    /// The mouse left the window: what it was over hears `Exit` (hover states end).
+    pub fn send_pointer_left(&mut self) {
+        let actions = self.with_tree(|tree| tree.pointer_left());
+        Self::run(actions);
+        self.wake_if_dirty();
+    }
+
     /// Dispatches a key event to the focused node; returns whether it was consumed.
     pub fn send_key(&mut self, event: KeyEvent) -> bool {
         let (consumed, actions) = self.with_tree(|tree| tree.dispatch_key(event));
