@@ -103,12 +103,15 @@ fn Counter() {
             use ::compose::__private::{
                 KeyedProbe as _, StaticProbe as _, UnkeyedProbe as _,
             };
-            ::compose::__private::resolve_0(
+            ::compose::__private::resolve_lazy_0(
                 ::compose::__private::lambda_probe(
                     1804561070696882738u64,
                     ((&&&::compose::__private::ArgProbe(&count)).arg_key(),),
                 ),
-                move || count.set(0),
+                || {
+                    let count = ::core::clone::Clone::clone(&count);
+                    move || count.set(0)
+                },
             )
         });
     }

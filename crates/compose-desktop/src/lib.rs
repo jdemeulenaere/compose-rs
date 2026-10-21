@@ -159,10 +159,9 @@ impl<C: Fn() + 'static> App<C> {
             .current_monitor()
             .and_then(|monitor| monitor.refresh_rate_millihertz())
             .filter(|millihertz| *millihertz > 0);
-        self.frame_interval = refresh
-            .map_or(Duration::from_micros(16_667), |millihertz| {
-                Duration::from_secs_f64(1000.0 / f64::from(millihertz))
-            });
+        self.frame_interval = refresh.map_or(Duration::from_micros(16_667), |millihertz| {
+            Duration::from_secs_f64(1000.0 / f64::from(millihertz))
+        });
         let content = self.content.clone();
         host.set_content(move || content());
         let renderer = RasterRenderer::new(size.width as i32, size.height as i32);

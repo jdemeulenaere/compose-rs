@@ -130,15 +130,16 @@ fn a_scope_launches_from_a_handler_and_is_cancelled_with_its_caller() {
             let scope = remember_coroutine_scope();
             let count = remember(|| mutable_state_of(0));
             Box!(
-                modifier = Modifier.clickable(move || {
-                    scope.launch(async move {
-                        let _guard = DropLog("launched");
-                        delay(Duration::from_millis(100)).await;
-                        count.update(|count| count + 1);
-                        std::future::pending::<()>().await;
-                    });
-                })
-                .test_tag("button"),
+                modifier = Modifier
+                    .clickable(move || {
+                        scope.launch(async move {
+                            let _guard = DropLog("launched");
+                            delay(Duration::from_millis(100)).await;
+                            count.update(|count| count + 1);
+                            std::future::pending::<()>().await;
+                        });
+                    })
+                    .test_tag("button"),
                 {
                     BasicText!("{}", count.get());
                 }

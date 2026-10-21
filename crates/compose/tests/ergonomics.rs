@@ -194,6 +194,7 @@ fn a_lambda_calling_an_unknown_macro_is_never_kept() {
 
 #[test]
 fn a_capture_that_is_not_compose_arg_makes_the_lambda_always_changed() {
+    #[derive(Clone)]
     struct Opaque(u32);
     #[composable]
     fn Parent(tick: MutableState<u32>) {

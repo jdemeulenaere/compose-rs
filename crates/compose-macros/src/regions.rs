@@ -291,7 +291,7 @@ impl Regions {
     fn wrap_expr(&mut self, expr: &mut Expr) {
         let region = self.region();
         let inner = std::mem::replace(expr, Expr::Verbatim(TokenStream::new()));
-        *expr = parse_quote! {{ #region #inner }};
+        *expr = crate::call::block_of(region, inner);
     }
 
     /// In a loop with a `continue`: one group per statement containing a likely call. Plain and
@@ -437,6 +437,25 @@ impl Regions {
         };
         for argument in arguments.iter_mut() {
             match argument.value_mut() {
+                // `Some(lambda)` for an optional callback: the marked lambda's region goes
+                // after its marker, as a bare lambda's.
+                crate::call::Value::Expr(Expr::Call(call))
+                    if crate::call::is_some(&call.func) && call.args.len() == 1 =>
+                {
+                    match crate::call::Marked::from_expr(&call.args[0]) {
+                        Some(Ok(mut marked)) => {
+                            if let crate::call::MarkedBody::Closure(closure) = marked.body_mut() {
+                                self.visit_expr_closure_mut(closure);
+                                if self.likely_expr(&closure.body) {
+                                    self.wrap_expr(&mut closure.body);
+                                }
+                            }
+                            call.args[0] = syn::parse2(quote::ToTokens::to_token_stream(&marked))
+                                .expect("a marked closure is an expression");
+                        }
+                        _ => self.visit_expr_call_mut(call),
+                    }
+                }
                 crate::call::Value::Expr(expression) => self.visit_expr_mut(expression),
                 crate::call::Value::Marked(marked) => match marked.body_mut() {
                     crate::call::MarkedBody::Block(block) => {

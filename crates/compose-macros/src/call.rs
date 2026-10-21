@@ -122,7 +122,7 @@ fn marker_of(statement: &syn::Stmt) -> Option<syn::Result<(Vec<Ident>, bool, boo
 
 impl Marked {
     /// `expression` as a marked closure or block, if it is one.
-    fn from_expr(expression: &Expr) -> Option<syn::Result<Marked>> {
+    pub(crate) fn from_expr(expression: &Expr) -> Option<syn::Result<Marked>> {
         match expression {
             Expr::Block(block) if block.label.is_none() && block.attrs.is_empty() => {
                 let first = block.block.stmts.first()?;
@@ -192,8 +192,9 @@ impl ToTokens for Marked {
             }
             MarkedBody::Closure(closure) => {
                 let mut closure = closure.clone();
-                let body = &closure.body;
-                *closure.body = syn::parse_quote! { { #marker #body } };
+                let marker: syn::Stmt = syn::parse_quote! { #marker };
+                let body = std::mem::replace(&mut *closure.body, Expr::Verbatim(TokenStream::new()));
+                *closure.body = block_of(marker, body);
                 closure.to_tokens(tokens);
             }
         }
@@ -597,4 +598,17 @@ fn build(call: Call) -> syn::Result<TokenStream> {
         Some(path) => Ok(quote! { #path(#(#values),*) }),
         None => Ok(quote! { #function(#(#values),*) }),
     }
+}
+
+/// `{ first; tail }`, built rather than parsed: syn prints the parentheses a tail needs in
+/// statement position (`(if a { 1 } else { 2 }) + base`), which re-parsing the tokens would lose.
+pub(crate) fn block_of(first: syn::Stmt, tail: Expr) -> Expr {
+    Expr::Block(syn::ExprBlock {
+        attrs: Vec::new(),
+        label: None,
+        block: syn::Block {
+            brace_token: Default::default(),
+            stmts: vec![first, syn::Stmt::Expr(tail, None)],
+        },
+    })
 }

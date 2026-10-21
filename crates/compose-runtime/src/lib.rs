@@ -48,8 +48,8 @@ pub use effects::{
     DisposableEffect, DisposableEffectResult, DisposableEffectScope, LaunchedEffect, SideEffect,
     remember_coroutine_scope,
 };
-pub use executor::{CoroutineScope, Job, delay, with_frame_millis, with_frame_nanos};
 pub use error::ComposeError;
+pub use executor::{CoroutineScope, Job, delay, with_frame_millis, with_frame_nanos};
 pub use hash::{KeyHasher, hash_key, key_of};
 pub use local::{CompositionLocal, CompositionLocalProvider, ProvidedValue};
 pub use node_tree::NodeTree;

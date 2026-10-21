@@ -366,14 +366,18 @@ impl Future for Delay {
         let deadline = self.deadline;
         let (ready, deadline) = with_executor(|executor| {
             let now = executor.now();
-            let deadline = deadline
-                .unwrap_or_else(|| now.saturating_add(duration.as_nanos() as u64));
+            let deadline =
+                deadline.unwrap_or_else(|| now.saturating_add(duration.as_nanos() as u64));
             if now >= deadline {
                 return (true, deadline);
             }
             executor.timer_serial += 1;
             let serial = executor.timer_serial;
-            executor.timers.push(Reverse(Timer { deadline, serial, waker: context.waker().clone() }));
+            executor.timers.push(Reverse(Timer {
+                deadline,
+                serial,
+                waker: context.waker().clone(),
+            }));
             (false, deadline)
         });
         self.deadline = Some(deadline);
@@ -459,7 +463,10 @@ impl CoroutineScope {
     /// A scope of its own, cancelled only by [`cancel`](Self::cancel).
     pub fn new() -> CoroutineScope {
         CoroutineScope {
-            inner: Rc::new(ScopeInner { jobs: RefCell::new(Vec::new()), cancelled: Cell::new(false) }),
+            inner: Rc::new(ScopeInner {
+                jobs: RefCell::new(Vec::new()),
+                cancelled: Cell::new(false),
+            }),
         }
     }
 

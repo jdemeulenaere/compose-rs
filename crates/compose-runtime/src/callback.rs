@@ -303,40 +303,10 @@ impl<K: 'static, F: ?Sized + 'static> LambdaProbe<K, F> {
     }
 }
 
-/// `probe.resolve(lambda)` for a lambda of `N` arguments, with the `Fn` bound spelled out so
-/// a closure's untyped parameters (`|text| …`) take their types from the callback parameter.
-macro_rules! resolvers {
-    ($($name:ident ($($argument:ident),*)),*) => {
-        $(
-            #[doc(hidden)]
-            #[inline]
-            pub fn $name<K: 'static, $($argument: 'static,)* Output: 'static, C>(
-                probe: LambdaProbe<K, dyn Fn($($argument),*) -> Output>,
-                lambda: C,
-            ) -> Callback<dyn Fn($($argument),*) -> Output>
-            where
-                C: Fn($($argument),*) -> Output + 'static,
-            {
-                probe.resolve(lambda)
-            }
-        )*
-    };
-}
-
-resolvers!(
-    resolve_0(),
-    resolve_1(A),
-    resolve_2(A, B),
-    resolve_3(A, B, C1),
-    resolve_4(A, B, C1, D),
-    resolve_5(A, B, C1, D, E),
-    resolve_6(A, B, C1, D, E, G),
-    resolve_7(A, B, C1, D, E, G, H),
-    resolve_8(A, B, C1, D, E, G, H, I)
-);
-
-/// `resolve_N` for a lambda nested in another closure: `make` builds it, from clones of its
-/// captures, only on a miss, so the outer closure keeps its own (and stays `Fn`).
+/// `probe.resolve(lambda)` for a lambda of `N` arguments, with the `Fn` bound spelled out so a
+/// closure's untyped parameters (`|text| …`) take their types from the callback parameter.
+/// `make` builds the lambda, from clones of its captures, only on a miss: the captures stay the
+/// caller's (and an enclosing closure stays `Fn`).
 macro_rules! lazy_resolvers {
     ($($name:ident ($($argument:ident),*)),*) => {
         $(

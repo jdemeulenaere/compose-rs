@@ -127,7 +127,7 @@ fn is_modifier_value(value: &Expr, scopes: &Scopes) -> bool {
 }
 
 /// `Modifier`, as a type.
-fn is_modifier_type(ty: &syn::Type) -> bool {
+pub(crate) fn is_modifier_type(ty: &syn::Type) -> bool {
     matches!(ty, syn::Type::Path(path) if path.qself.is_none() && path.path.segments.last().is_some_and(|segment| segment.ident == "Modifier" && segment.arguments.is_none()))
 }
 
@@ -169,45 +169,23 @@ fn key_tuple(keys: Vec<TokenStream>) -> TokenStream {
     key_tuple(chunks)
 }
 
-/// The runtime function resolving a probe for a lambda of `arity` arguments: one spelling the
-/// `Fn` bound out, so untyped closure parameters are inferred, up to four.
-fn resolver(arity: Option<usize>) -> Option<Ident> {
-    arity.filter(|arity| *arity <= 8).map(|arity| format_ident!("resolve_{}", arity))
-}
-
-/// The runtime function wrapping a lambda of `arity` arguments in a `Callback`, as `resolver`.
+/// The runtime function wrapping a lambda of `arity` arguments in a `Callback`, spelling the `Fn`
+/// bound out so untyped closure parameters are inferred.
 pub(crate) fn wrapper(arity: usize) -> Ident {
     if arity <= 8 { format_ident!("callback_{}", arity) } else { format_ident!("callback") }
 }
 
-/// A lookup of the lambda remembered at this position, keyed with `keys`: the kept callback if
-/// they are all `same` as last pass's, else `make` stored.
-fn probe_with(keys: Vec<TokenStream>, make: TokenStream, arity: Option<usize>) -> TokenStream {
-    let site = site_of(&make);
-    let keys = key_tuple(keys);
-    let resolve = match resolver(arity) {
-        Some(resolver) => {
-            quote! { ::compose::__private::#resolver(::compose::__private::lambda_probe(#site, #keys), #make) }
-        }
-        None => quote! { ::compose::__private::lambda_probe(#site, #keys).resolve(#make) },
-    };
-    quote! {{
-        #[allow(unused_imports)]
-        use ::compose::__private::{KeyedProbe as _, StaticProbe as _, UnkeyedProbe as _};
-        #resolve
-    }}
-}
-
 /// The memoized form of `closure`: a probe of the lambda remembered at this position.
 ///
-/// A lambda nested in another closure (a content block inside a content block) can't move its
-/// captures out of it: it is built only on a miss, from clones of its captures.
+/// The lambda is built only on a miss, from clones of its captures: a capture stays usable by
+/// the code and the lambdas after it (`Section!({ Label!("{name}") }); Label!("{name}")`), and
+/// a lambda nested in another closure can't move its captures out of it anyway.
 pub(crate) fn probe(
     captures: &[Ident],
     unknown: bool,
     closure: TokenStream,
     arity: Option<usize>,
-    nested: bool,
+    _nested: bool,
 ) -> TokenStream {
     let mut keys: Vec<TokenStream> = captures
         .iter()
@@ -215,9 +193,6 @@ pub(crate) fn probe(
         .collect();
     if unknown {
         keys.push(quote! { ::compose::__private::Unkeyed::CHANGED });
-    }
-    if !nested {
-        return probe_with(keys, closure, arity);
     }
     let site = site_of(&closure);
     let keys = key_tuple(keys);
@@ -317,14 +292,20 @@ fn unbound_names(tokens: TokenStream) -> Vec<String> {
     names
 }
 
-/// The identifiers in a macro's tokens.
+/// The identifiers in a macro's tokens, but field and method names (`settings.enabled`).
 fn token_idents(tokens: TokenStream, out: &mut Vec<String>) {
+    let mut dots = 0;
     for token in tokens {
         match token {
-            TokenTree::Ident(ident) => out.push(ident.to_string()),
+            TokenTree::Ident(ident) if dots != 1 => out.push(ident.to_string()),
             TokenTree::Group(group) => token_idents(group.stream(), out),
+            TokenTree::Punct(punct) if punct.as_char() == '.' => {
+                dots += 1;
+                continue;
+            }
             _ => {}
         }
+        dots = 0;
     }
 }
 
@@ -497,11 +478,21 @@ impl Free<'_> {
 
     fn scan_tokens(&mut self, tokens: TokenStream) {
         let mut previous: Option<Ident> = None;
+        let mut dots = 0;
         for token in tokens {
             match token {
                 TokenTree::Ident(ident) => {
-                    self.use_name(&ident);
+                    // A field or method name (`settings.enabled`), not after a range's `..`.
+                    if dots != 1 {
+                        self.use_name(&ident);
+                    }
                     previous = Some(ident);
+                    dots = 0;
+                    continue;
+                }
+                TokenTree::Punct(punct) if punct.as_char() == '.' => {
+                    dots += 1;
+                    previous = None;
                     continue;
                 }
                 TokenTree::Group(group) => self.scan_tokens(group.stream()),
@@ -527,6 +518,7 @@ impl Free<'_> {
                 }
             }
             previous = None;
+            dots = 0;
         }
     }
 
@@ -763,9 +755,12 @@ pub(crate) struct Memoize {
 }
 
 impl Memoize {
-    pub fn new(parameters: Vec<String>, body: &syn::Block) -> Memoize {
+    pub fn new(parameters: Vec<String>, modifiers: Vec<String>, body: &syn::Block) -> Memoize {
         let mut scopes = Scopes::default();
         scopes.push(parameters);
+        for modifier in &modifiers {
+            scopes.bind_modifier(modifier);
+        }
         // `macro_rules!` items in the body, at any depth: hygiene lets them name the locals in
         // scope where they're defined, so they're never trusted.
         struct LocalMacros(Vec<String>);
