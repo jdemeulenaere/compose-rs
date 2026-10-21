@@ -15,6 +15,7 @@ pub mod constraints;
 mod dispatch;
 pub mod display_list;
 pub mod draw;
+pub mod draw_modifiers;
 mod focus;
 pub mod graphics;
 pub mod graphics_layer;

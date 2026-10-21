@@ -708,6 +708,13 @@ pub trait LayoutModifierNode {
 pub trait DrawModifierNode {
     fn draw(&mut self, _scope: &mut DrawScope<'_>) {}
     fn draw_after(&mut self, _scope: &mut DrawScope<'_>) {}
+    /// Whether it draws the content itself, with `draw_with_content` (instead of `draw` and
+    /// `draw_after` around it).
+    fn draws_content(&self) -> bool {
+        false
+    }
+    /// Draws, the content where it calls `scope.draw_content()`, as `ContentDrawScope`.
+    fn draw_with_content(&mut self, _scope: &mut crate::draw_modifiers::ContentDrawScope<'_, '_>) {}
 }
 
 /// A node that receives pointer events hitting its bounds, as `PointerInputModifierNode`.

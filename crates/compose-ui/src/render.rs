@@ -62,7 +62,6 @@ impl UiTree {
         list: &mut DisplayList,
         observer: Option<&compose_runtime::ReadObserver>,
     ) {
-        let density = self.density;
         let value = self.node_mut(node);
         if !value.placed {
             return;
@@ -79,19 +78,64 @@ impl UiTree {
             }
             origins.push(origin);
         }
+        self.draw_chain(node, 0, 0, &origins, list, observer);
+        translate(list, negate(position));
+    }
+}
+
+impl UiTree {
+    /// Draws `node`'s chain from entry `from` (in layer `layer`), then its children, then the
+    /// `draw_after`s of the entries drawn here. An entry drawing its content
+    /// (`draw_with_content`) draws the rest of the chain and the children where it asks.
+    fn draw_chain(
+        &mut self,
+        node: NodeId,
+        from: usize,
+        mut layer: usize,
+        origins: &[Offset],
+        list: &mut DisplayList,
+        observer: Option<&compose_runtime::ReadObserver>,
+    ) {
+        let density = self.density;
         let mut after: SmallVec<[(u16, u16); 4]> = SmallVec::new();
-        if value.all_capabilities & capability::DRAW != 0 {
-            let mut layer = 0usize;
-            for index in 0..value.chain.len() {
+        let length = self.node(node).chain.len();
+        if self.node(node).all_capabilities & capability::DRAW != 0 {
+            for index in from..length {
+                let value = self.node_mut(node);
                 let bits = value.capabilities[index];
                 if bits & capability::DRAW != 0 {
-                    let mut scope = DrawScope {
-                        list,
-                        origin: origins[layer],
-                        size: value.layers[layer].measured.into(),
-                        density,
-                        layout_direction: value.layout_direction,
-                    };
+                    let draws_content =
+                        value.chain[index].as_draw().is_some_and(|draw| draw.draws_content());
+                    let size = value.layers[layer].measured.into();
+                    let layout_direction = value.layout_direction;
+                    if draws_content {
+                        // Out of the chain while it draws the rest of its node.
+                        let mut entry =
+                            mem::replace(&mut value.chain[index], Box::new(crate::nodes::Taken));
+                        let next_layer = layer + usize::from(bits & capability::LAYOUT != 0);
+                        let mut scope = DrawScope {
+                            list,
+                            origin: origins[layer],
+                            size,
+                            density,
+                            layout_direction,
+                        };
+                        let mut content = |list: &mut DisplayList| {
+                            self.draw_chain(node, index + 1, next_layer, origins, list, observer)
+                        };
+                        let mut content_scope = crate::draw_modifiers::ContentDrawScope {
+                            scope: &mut scope,
+                            content: &mut content,
+                        };
+                        if let Some(draw) = entry.as_draw() {
+                            draw.draw_with_content(&mut content_scope);
+                        }
+                        self.node_mut(node).chain[index] = entry;
+                        self.draw_afters(node, &after, origins, list);
+                        return;
+                    }
+                    let mut scope =
+                        DrawScope { list, origin: origins[layer], size, density, layout_direction };
                     if let Some(draw) = value.chain[index].as_draw() {
                         draw.draw(&mut scope);
                     }
@@ -103,7 +147,7 @@ impl UiTree {
             }
         }
         let content = *origins.last().expect("a layer");
-        let count = value.children.len();
+        let count = self.node(node).children.len();
         if count > 0 {
             translate(list, content);
             let order = self.placement_order(node);
@@ -117,6 +161,18 @@ impl UiTree {
             }
             translate(list, negate(content));
         }
+        self.draw_afters(node, &after, origins, list);
+    }
+
+    /// The `draw_after`s of `after`'s entries, innermost first.
+    fn draw_afters(
+        &mut self,
+        node: NodeId,
+        after: &[(u16, u16)],
+        origins: &[Offset],
+        list: &mut DisplayList,
+    ) {
+        let density = self.density;
         let value = self.node_mut(node);
         for &(index, layer) in after.iter().rev() {
             let mut scope = DrawScope {
@@ -130,7 +186,6 @@ impl UiTree {
                 draw.draw_after(&mut scope);
             }
         }
-        translate(list, negate(position));
     }
 }
 

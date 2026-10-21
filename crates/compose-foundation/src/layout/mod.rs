@@ -247,6 +247,14 @@ impl MeasurePolicy for RowColumnMeasurePolicy {
     }
 }
 
+/// A node to draw in, as Compose's `Canvas`: `on_draw` draws behind nothing, at the size
+/// `modifier` gives it. A plain function (its draw lambda takes a borrowed scope, which
+/// composable parameters can't), called as one: `Canvas(Modifier.size(…), |scope| …)`.
+#[allow(non_snake_case)]
+pub fn Canvas(modifier: Modifier, on_draw: impl Fn(&mut compose_ui::DrawScope<'_>) + 'static) {
+    Spacer(modifier.draw_behind(on_draw));
+}
+
 /// A row: its children side by side, as Compose's `Row`.
 #[composable]
 pub fn Row(
