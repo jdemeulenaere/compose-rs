@@ -47,14 +47,14 @@ StackMeasurePolicy [0,0 400x800]
         RowColumnMeasurePolicy [0,0 76x40] Modifier.size(58.dp.._ x 40.dp.._).padding(24.dp, 8.dp, 24.dp, 8.dp)
           EmptyMeasurePolicy [0,2 28x20] Modifier.Text {text=["Done"]}
     LazyList [0,104 368x664] Modifier.weight(1, true).fill_max_width(1).clip(Rectangle).lazy_scroll
-      LazyItem [0,0 368x56]
+      LazyItem [0,0 368x56] Modifier.on_focus_changed
         RowColumnMeasurePolicy [0,0 368x56] Modifier.fill_max_width(1).padding(4.dp, 4.dp, 4.dp, 4.dp)
           EmptyMeasurePolicy [0,0 48x48] Modifier.toggleable(false, enabled = true).minimum_touch_target(48.dp).padding(2.dp, 2.dp, 2.dp, 2.dp).required_size(20.dp x 20.dp).checkbox {role=Checkbox toggle=Off clickable focusable merged}
           EmptyMeasurePolicy [48,15 222x18] Modifier.weight(1, true).Text {text=["milk"]}
           BoxMeasurePolicy [270,0 90x48] Modifier.minimum_touch_target(48.dp).background(#FF6750A4, Rounded([Percent(50.0), Percent(50.0), Percent(50.0), Percent(50.0)])).clip(Rounded([Percent(50.0), Percent(50.0), Percent(50.0), Percent(50.0)])).clickable(enabled = true) {role=Button clickable focusable merged}
             RowColumnMeasurePolicy [0,0 90x40] Modifier.size(58.dp.._ x 40.dp.._).padding(24.dp, 8.dp, 24.dp, 8.dp)
               EmptyMeasurePolicy [0,2 42x20] Modifier.Text {text=["Remove"]}
-      LazyItem [0,56 368x56]
+      LazyItem [0,56 368x56] Modifier.on_focus_changed
         RowColumnMeasurePolicy [0,0 368x56] Modifier.fill_max_width(1).padding(4.dp, 4.dp, 4.dp, 4.dp)
           EmptyMeasurePolicy [0,0 48x48] Modifier.toggleable(false, enabled = true).minimum_touch_target(48.dp).padding(2.dp, 2.dp, 2.dp, 2.dp).required_size(20.dp x 20.dp).checkbox {role=Checkbox toggle=Off clickable focusable merged}
           EmptyMeasurePolicy [48,15 222x18] Modifier.weight(1, true).Text {text=["eggs"]}

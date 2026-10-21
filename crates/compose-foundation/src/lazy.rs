@@ -1,15 +1,16 @@
 //! Lazy lists, as Compose's `LazyColumn` and `LazyRow`: only the items in view (and a few
-//! beyond) are composed, measured and drawn.
+//! beyond, and the focused one) are composed, measured and drawn.
 //!
 //! Compose composes items while measuring (subcomposition). Here the list composes a range of
 //! items, and its measurement, which fills the viewport from the scroll position, writes the
 //! range it needs when the composed one falls short; the host then recomposes and measures again
-//! within the same frame (`UiHost::frame`), so scrolling shows no empty frame.
+//! within the same frame (`UiHost::frame`), so scrolling shows no empty frame. The items are
+//! composed by a restartable composable of their own, each item one too: a scroll recomposes
+//! neither the list's caller nor the items that stay.
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::hash::Hash;
-use std::ops::Range;
 use std::rc::Rc;
 
 use compose_runtime::{
@@ -18,14 +19,18 @@ use compose_runtime::{
 use compose_ui::{
     Alignment, Constraints, Dp, EventContext, IntSize, Layout, Measurable, MeasurePolicy,
     MeasureResult, MeasureScope, Modifier, ModifierNode, ModifierNodeElement, PaddingValues,
-    Placeable, PointerEvent, PointerEventPass, PointerInputModifierNode,
+    Placeable, PointerEvent, PointerEventPass, PointerInputModifierNode, Rect,
 };
 
 use crate::layout::Arrangement;
-use crate::scroll::DragScroller;
+use crate::scroll::{DragScroller, bring_into_view_delta};
 
-/// Items composed beyond the viewport on each side, ready when scrolling reaches them.
+/// Items composed beyond the viewport on each side, ready when scrolling reaches them, and
+/// placed (out of view) so focus can move to them.
 const BEYOND: usize = 2;
+
+/// The most items a measurement asks for beyond those in view, however small they may be.
+const MOST_MISSING: usize = 200;
 
 /// Where a lazy list is scrolled, as Compose's `LazyListState`: the first visible item and how
 /// far it is scrolled off. Reading them in composition recomposes on scrolls.
@@ -35,21 +40,31 @@ pub struct LazyListState {
 }
 
 struct LazyListInner {
-    /// The position the layout works from (the item, the pixels it is scrolled off).
-    position: Cell<(usize, i32)>,
+    /// The position the layout works from: the item, the pixels it is scrolled off (with
+    /// their fraction, so slow scrolls add up).
+    position: Cell<(usize, f32)>,
+    /// The first visible item's key: the position follows it when items come and go before it.
+    first_key: Cell<Option<u64>>,
     /// Scrolling asked for since the last measurement, in pixels.
     pending: Cell<f32>,
     /// Bumped by scrolls: the layout reads it, so a scroll measures the list again.
     remeasure: OwnedState<u64>,
-    /// The items composed: what the layout asks for.
+    /// The items to compose: what the layout asks for, read by the items' composition only.
     composed: OwnedState<(usize, usize)>,
-    /// The position as state, for composition.
+    /// The focused item, kept composed and placed while it scrolls away, as Compose pins it.
+    pinned: OwnedState<Option<usize>>,
+    /// The items composed, in the children's order: written by their composition, read by the
+    /// layout (a change of children measures it again).
+    children: RefCell<Vec<usize>>,
+    /// The position as state, for composition, and what was last written to it.
     first_index: OwnedState<usize>,
     first_offset: OwnedState<i32>,
+    published: Cell<(usize, i32)>,
     /// Item sizes along the axis, as last measured: estimates for items not composed.
     sizes: RefCell<HashMap<usize, i32>>,
-    can_scroll_backward: Cell<bool>,
-    can_scroll_forward: Cell<bool>,
+    /// How far the list can scroll each way, as last laid out (infinite: not known).
+    room_backward: Cell<f32>,
+    room_forward: Cell<f32>,
 }
 
 impl LazyListState {
@@ -60,18 +75,26 @@ impl LazyListState {
         let offset = first_visible_item_scroll_offset.max(0);
         LazyListState {
             inner: Rc::new(LazyListInner {
-                position: Cell::new((first_visible_item_index, offset)),
+                position: Cell::new((first_visible_item_index, offset as f32)),
+                first_key: Cell::new(None),
                 pending: Cell::new(0.0),
                 remeasure: mutable_state_of(0),
                 composed: mutable_state_of((
                     first_visible_item_index,
                     first_visible_item_index + 1,
                 )),
+                pinned: mutable_state_of(None),
+                children: RefCell::new(Vec::new()),
                 first_index: mutable_state_of(first_visible_item_index),
                 first_offset: mutable_state_of(offset),
+                published: Cell::new((first_visible_item_index, offset)),
                 sizes: RefCell::new(HashMap::new()),
-                can_scroll_backward: Cell::new(false),
-                can_scroll_forward: Cell::new(true),
+                room_backward: Cell::new(if first_visible_item_index > 0 {
+                    f32::INFINITY
+                } else {
+                    offset as f32
+                }),
+                room_forward: Cell::new(f32::INFINITY),
             }),
         }
     }
@@ -89,34 +112,46 @@ impl LazyListState {
     /// Scrolls to `index` (and `scroll_offset` pixels into it) at the next layout, as
     /// `scrollToItem`, without animation.
     pub fn scroll_to_item(&self, index: usize, scroll_offset: i32) {
-        self.inner.position.set((index, scroll_offset.max(0)));
+        self.inner.position.set((index, scroll_offset.max(0) as f32));
+        self.inner.first_key.set(None);
         self.inner.pending.set(0.0);
+        self.inner.room_backward.set(f32::INFINITY);
+        self.inner.room_forward.set(f32::INFINITY);
         self.inner.remeasure.update(|count| count.wrapping_add(1));
     }
 
     /// Scrolls by `pixels` (positive: towards the end) at the next layout, as
     /// `scrollBy`/`dispatchRawDelta`; returns whether the list can move that way.
     pub fn scroll_by(&self, pixels: f32) -> bool {
-        let can = if pixels > 0.0 {
-            self.inner.can_scroll_forward.get()
+        self.dispatch(pixels) != 0.0
+    }
+
+    /// Scrolls by up to `pixels`, as far as the list goes (as last laid out); returns the
+    /// pixels it will move.
+    fn dispatch(&self, pixels: f32) -> f32 {
+        let inner = &self.inner;
+        let used = if pixels > 0.0 {
+            pixels.min(inner.room_forward.get().max(0.0))
         } else {
-            pixels < 0.0 && self.inner.can_scroll_backward.get()
+            pixels.max(-inner.room_backward.get().max(0.0))
         };
-        if can {
-            self.inner.pending.set(self.inner.pending.get() + pixels);
-            self.inner.remeasure.update(|count| count.wrapping_add(1));
+        if used != 0.0 {
+            inner.room_forward.set(inner.room_forward.get() - used);
+            inner.room_backward.set(inner.room_backward.get() + used);
+            inner.pending.set(inner.pending.get() + used);
+            inner.remeasure.update(|count| count.wrapping_add(1));
         }
-        can
+        used
     }
 
     /// Whether the list can scroll towards its end, as `canScrollForward` (as last laid out).
     pub fn can_scroll_forward(&self) -> bool {
-        self.inner.can_scroll_forward.get()
+        self.inner.room_forward.get() > 0.0
     }
 
     /// Whether the list can scroll towards its start, as `canScrollBackward`.
     pub fn can_scroll_backward(&self) -> bool {
-        self.inner.can_scroll_backward.get()
+        self.inner.room_backward.get() > 0.0
     }
 }
 
@@ -178,7 +213,8 @@ impl LazyListScope {
     }
 
     /// `count` items with keys, as `items(count, key = { … }) { … }`: an item keeps its state
-    /// when items before it come and go. Keys must be unique in the list.
+    /// (and the scroll position follows the first visible one) when items before it come and
+    /// go. Keys must be unique in the list.
     pub fn items_keyed<K: Hash>(
         &self,
         count: usize,
@@ -199,17 +235,64 @@ impl ComposeArg for LazyListScope {
     }
 }
 
+/// The items a list's content declared, for one composition of the list.
+struct Items {
+    intervals: Vec<Interval>,
+    count: usize,
+}
+
+impl Items {
+    /// The interval holding item `index`, and the item's index in it.
+    fn find(&self, index: usize) -> Option<(&Interval, usize)> {
+        let mut local = index;
+        for interval in &self.intervals {
+            if local < interval.count {
+                return Some((interval, local));
+            }
+            local -= interval.count;
+        }
+        None
+    }
+
+    fn key(&self, index: usize) -> u64 {
+        match self.find(index) {
+            Some((interval, local)) => {
+                interval.key.as_ref().map_or(hash_key(&("index", index)), |key| key(local))
+            }
+            None => hash_key(&("index", index)),
+        }
+    }
+}
+
+/// The items, compared by identity (a new set each time the list's caller recomposes).
+#[derive(Clone)]
+struct ItemsRef(Rc<Items>);
+
+impl ComposeArg for ItemsRef {
+    fn same(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.0, &other.0)
+    }
+}
+
 /// What the layout needs from composition: a new value is a new policy, which measures the
 /// list again.
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone)]
 struct ListInfo {
-    count: usize,
-    /// The items composed, in the children's order.
-    range: Range<usize>,
+    items: Rc<Items>,
     vertical: bool,
     padding: PaddingValues,
     arrangement: Arrangement,
     alignment: Alignment,
+}
+
+impl PartialEq for ListInfo {
+    fn eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.items, &other.items)
+            && self.vertical == other.vertical
+            && self.padding == other.padding
+            && self.arrangement == other.arrangement
+            && self.alignment == other.alignment
+    }
 }
 
 /// A vertical lazy list, as Compose's `LazyColumn`.
@@ -269,13 +352,11 @@ fn LazyList(
 ) {
     let scope = LazyListScope::default();
     content(scope.clone());
-    let intervals: Rc<Vec<Interval>> = Rc::new(std::mem::take(&mut *scope.intervals.borrow_mut()));
-    let count: usize = intervals.iter().map(|interval| interval.count).sum();
-    let (start, end) = state.inner.composed.get();
-    let range = start.min(count)..end.min(count);
+    let intervals = std::mem::take(&mut *scope.intervals.borrow_mut());
+    let count = intervals.iter().map(|interval| interval.count).sum();
+    let items = Rc::new(Items { intervals, count });
     let info = ListInfo {
-        count,
-        range: range.clone(),
+        items: items.clone(),
         vertical,
         padding: content_padding,
         arrangement,
@@ -287,38 +368,59 @@ fn LazyList(
             Rc::new(LazyListLayout { state: state.inner.clone(), info }) as Rc<dyn MeasurePolicy>
         })
     };
-    let item_policy = remember(|| Rc::new(ItemLayout) as Rc<dyn MeasurePolicy>);
     let modifier = modifier
         .clip(compose_ui::RECTANGLE_SHAPE)
         .then_custom(LazyScrollElement { state: state.clone(), vertical });
+    let items = ItemsRef(items);
+    Layout(
+        modifier,
+        policy,
+        compose_runtime::callback(move || LazyItems(state.clone(), items.clone())),
+    );
+}
+
+/// The items composed: a restartable scope of its own, so a change of the range recomposes it
+/// and not the list's caller; each item skips when it stays.
+#[composable]
+#[allow(non_snake_case)]
+fn LazyItems(state: LazyListState, items: ItemsRef) {
+    let (start, end) = state.inner.composed.get();
+    let pinned = state.inner.pinned.get();
+    let count = items.0.count;
+    let mut indices: Vec<usize> = (start.min(count)..end.min(count)).collect();
+    if let Some(pinned) = pinned
+        && pinned < count
+        && !indices.contains(&pinned)
+    {
+        indices.push(pinned);
+    }
+    *state.inner.children.borrow_mut() = indices.clone();
+    for index in indices {
+        let item_key = items.0.key(index);
+        let (state, items) = (state.clone(), items.clone());
+        key(item_key, move || LazyItem(index, state.clone(), items.clone()));
+    }
+}
+
+/// One item: a layout node around its content, which pins the item while it holds the focus.
+#[composable]
+#[allow(non_snake_case)]
+fn LazyItem(index: usize, state: LazyListState, items: ItemsRef) {
+    let policy = remember(|| Rc::new(ItemLayout) as Rc<dyn MeasurePolicy>);
+    let pinned = state.inner.pinned.handle();
+    let modifier = Modifier.on_focus_changed(move |focused: bool| {
+        if focused {
+            pinned.set(Some(index));
+        } else if pinned.get() == Some(index) {
+            pinned.set(None);
+        }
+    });
     Layout(
         modifier,
         policy,
         compose_runtime::callback(move || {
-            for index in range.clone() {
-                // The interval holding the item, and the item's index in it.
-                let mut local = index;
-                let Some(interval) = intervals.iter().find(|interval| {
-                    if local < interval.count {
-                        true
-                    } else {
-                        local -= interval.count;
-                        false
-                    }
-                }) else {
-                    break;
-                };
-                let item_key =
-                    interval.key.as_ref().map_or(hash_key(&("index", index)), |key| key(local));
-                let content = interval.content.clone();
-                let item_policy = item_policy.clone();
-                key(item_key, move || {
-                    Layout(
-                        Modifier,
-                        item_policy.clone(),
-                        compose_runtime::callback(move || content(local)),
-                    );
-                });
+            if let Some((interval, local)) = items.0.find(index) {
+                (interval.content)(local);
             }
         }),
     );
@@ -353,8 +455,15 @@ impl MeasurePolicy for ItemLayout {
     }
 }
 
-/// Measures an item by index (once), recording its size.
-type MeasureItem<'a> = dyn FnMut(usize, &mut HashMap<usize, i32>) -> Option<Placeable> + 'a;
+/// The list's info, compared by value (its items by identity).
+#[derive(Clone)]
+struct InfoKey(ListInfo);
+
+impl ComposeArg for InfoKey {
+    fn same(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+}
 
 /// The lazy list's measurement: fills the viewport from the scroll position with the composed
 /// items, and asks for the items it lacks.
@@ -363,15 +472,8 @@ struct LazyListLayout {
     info: ListInfo,
 }
 
-/// The list's info, compared by value.
-#[derive(Clone, PartialEq, Debug)]
-struct InfoKey(ListInfo);
-
-impl ComposeArg for InfoKey {
-    fn same(&self, other: &Self) -> bool {
-        self == other
-    }
-}
+/// Measures an item by index (once), recording its size; `None` if it isn't composed.
+type MeasureItem<'a> = dyn FnMut(usize, &mut HashMap<usize, i32>) -> Option<Placeable> + 'a;
 
 impl MeasurePolicy for LazyListLayout {
     fn measure(
@@ -381,11 +483,13 @@ impl MeasurePolicy for LazyListLayout {
         constraints: Constraints,
     ) -> MeasureResult {
         let state = &self.state;
-        // Observed: a scroll measures the list again.
+        // Observed: a scroll measures the list again. Nothing else this measurement writes is
+        // read here.
         state.remeasure.get();
         let info = &self.info;
         let vertical = info.vertical;
         let density = scope.density();
+        let direction = scope.layout_direction();
         let px = |dp: Dp| density.round_to_px(dp);
         let (before, after, cross_before, cross_after) = if vertical {
             (
@@ -420,48 +524,81 @@ impl MeasurePolicy for LazyListLayout {
         } else {
             Constraints::new(0, Constraints::INFINITY, 0, cross_room)
         };
-        let count = info.count;
-        let range = info.range.clone();
+        let count = info.items.count;
+        let children = state.children.borrow().clone();
+        let (composed_start, composed_end) = composed_range(&children, count);
         // Each child measured once, when first needed.
         let mut placeables: Vec<Option<Placeable>> = vec![None; measurables.len()];
         let mut sizes = state.sizes.borrow_mut();
         let main_of =
-            |placeable: &Placeable| if vertical { placeable.height } else { placeable.width };
-        let mut measure = |index: usize, sizes: &mut HashMap<usize, i32>| -> Option<Placeable> {
-            if !range.contains(&index) || index - range.start >= measurables.len() {
-                return None;
-            }
-            let child = index - range.start;
-            if placeables[child].is_none() {
-                let placeable = scope.measure(measurables[child], item_constraints);
-                sizes.insert(index, main_of(&placeable));
-                placeables[child] = Some(placeable);
-            }
-            placeables[child]
-        };
-        let estimate = |sizes: &HashMap<usize, i32>| {
-            if sizes.is_empty() {
-                1
-            } else {
-                (sizes.values().map(|size| *size as i64).sum::<i64>() / sizes.len() as i64).max(1)
-                    as i32
-            }
-        };
-        // The position, with the scrolling asked for.
+            move |placeable: &Placeable| if vertical { placeable.height } else { placeable.width };
+        let mut measure_child =
+            |index: usize, sizes: &mut HashMap<usize, i32>| -> Option<Placeable> {
+                let child = children
+                    .iter()
+                    .position(|composed| *composed == index)
+                    .filter(|child| *child < measurables.len())?;
+                if placeables[child].is_none() {
+                    let placeable = scope.measure(measurables[child], item_constraints);
+                    sizes.insert(index, main_of(&placeable));
+                    placeables[child] = Some(placeable);
+                }
+                placeables[child]
+            };
+        let measure: &mut MeasureItem<'_> = &mut measure_child;
+        // The position, with the scrolling asked for; the first visible item found again by
+        // its key if items came or went before it.
         let (mut index, offset) = state.position.get();
-        let mut offset = offset as f32 + state.pending.replace(0.0);
+        let mut offset = offset + state.pending.replace(0.0);
+        if let Some(first_key) = state.first_key.get()
+            && (index >= count || info.items.key(index) != first_key)
+            && let Some(found) =
+                (0..count).find(|candidate| info.items.key(*candidate) == first_key)
+        {
+            index = found;
+        }
         if count == 0 {
             index = 0;
             offset = 0.0;
         }
         index = index.min(count.saturating_sub(1));
-        let size_of =
-            |index: usize, sizes: &mut HashMap<usize, i32>, measure: &mut MeasureItem<'_>| {
-                match measure(index, sizes) {
-                    Some(placeable) => main_of(&placeable),
-                    None => sizes.get(&index).copied().unwrap_or_else(|| estimate(sizes)),
+        // Items before the composed ones are stepped over only once composed (their sizes
+        // known): the scrolling left waits for them, in this frame's next round.
+        let mut wanted_before = 0usize;
+        let step_back = |index: &mut usize,
+                         offset: &mut f32,
+                         sizes: &mut HashMap<usize, i32>,
+                         measure: &mut MeasureItem<'_>|
+         -> usize {
+            while *offset < 0.0 && *index > 0 {
+                match measure(*index - 1, sizes) {
+                    Some(placeable) => {
+                        *index -= 1;
+                        *offset += (main_of(&placeable) + spacing) as f32;
+                    }
+                    None => {
+                        let wanted = ((-*offset) / smallest_size(sizes) as f32).ceil() as usize + 1;
+                        state.pending.set(state.pending.get() + *offset);
+                        *offset = 0.0;
+                        return wanted;
+                    }
                 }
-            };
+            }
+            *offset = offset.max(0.0);
+            0
+        };
+        wanted_before = wanted_before.max(step_back(&mut index, &mut offset, &mut sizes, measure));
+        // On over the items scrolled past, while they are composed.
+        while index + 1 < count {
+            let Some(placeable) = measure(index, &mut sizes) else { break };
+            let size = (main_of(&placeable) + spacing) as f32;
+            if offset >= size {
+                offset -= size;
+                index += 1;
+            } else {
+                break;
+            }
+        }
         let mut placed: Vec<(Placeable, i32)> = Vec::new();
         let mut end_index;
         let mut missing;
@@ -469,25 +606,6 @@ impl MeasurePolicy for LazyListLayout {
         let mut attempt = 0;
         loop {
             attempt += 1;
-            // Back over the items before, while scrolled before the first.
-            while offset < 0.0 && index > 0 {
-                index -= 1;
-                offset += (size_of(index, &mut sizes, &mut measure) + spacing) as f32;
-            }
-            if offset < 0.0 {
-                offset = 0.0;
-            }
-            // On over the items scrolled past.
-            while index + 1 < count {
-                let size = (size_of(index, &mut sizes, &mut measure) + spacing) as f32;
-                if offset >= size {
-                    offset -= size;
-                    index += 1;
-                } else {
-                    break;
-                }
-            }
-            // Fill the viewport.
             placed.clear();
             missing = false;
             let mut main = before - offset.round() as i32;
@@ -508,51 +626,128 @@ impl MeasurePolicy for LazyListLayout {
             }
             content_end = if placed.is_empty() { main } else { main - spacing } + after;
             // At the end with room left: scrolled back so the last item ends the viewport.
-            let gap = main_max - content_end;
+            let gap = (main_max - content_end) as f32;
             if !missing
                 && end_index == count
-                && gap > 0
+                && gap > 0.0
                 && (index > 0 || offset > 0.0)
                 && attempt < 3
             {
-                offset -= gap as f32;
+                offset -= gap;
+                let wanted = step_back(&mut index, &mut offset, &mut sizes, measure);
+                wanted_before = wanted_before.max(wanted);
+                if wanted > 0 {
+                    // The items before aren't composed: the rest waits for them (pending).
+                    break;
+                }
                 continue;
             }
             break;
         }
+        // Content shorter than the viewport, not scrolled: placed by the arrangement.
+        if !missing
+            && end_index == count
+            && index == 0
+            && offset == 0.0
+            && content_end < main_max
+            && !placed.is_empty()
+        {
+            let item_sizes: Vec<i32> =
+                placed.iter().map(|(placeable, _)| main_of(placeable)).collect();
+            let mut positions = vec![0; item_sizes.len()];
+            info.arrangement.arrange(
+                main_max - before - after,
+                &item_sizes,
+                direction,
+                &density,
+                &mut positions,
+            );
+            for ((_, main), position) in placed.iter_mut().zip(positions) {
+                *main = before + position;
+            }
+        }
         // The items wanted composed: those in view and a few beyond, and as many more as the
-        // room left would take if items were missing.
-        let wanted_start = index.saturating_sub(BEYOND);
+        // room left would take, at the smallest size seen, if items were missing.
+        let wanted_start = index.saturating_sub(BEYOND + wanted_before);
         let mut wanted_end = (end_index + BEYOND).min(count);
         if missing {
             let room = (main_max - content_end).max(0);
-            let more = (room / estimate(&sizes)) as usize + 1;
+            let more = ((room / smallest_size(&sizes)) as usize + 1).min(MOST_MISSING);
             wanted_end = (end_index + more + BEYOND).min(count);
         }
-        let (composed_start, composed_end) = state.composed.get();
         let covers = composed_start <= wanted_start && composed_end >= wanted_end;
         let too_many =
             composed_start + 2 * BEYOND < wanted_start || composed_end > wanted_end + 2 * BEYOND;
         if !covers || too_many {
             state.composed.set((wanted_start, wanted_end));
         }
-        let offset = offset.round() as i32;
         state.position.set((index, offset));
-        if state.first_index.get() != index {
-            state.first_index.set(index);
+        if count > 0 {
+            state.first_key.set(Some(info.items.key(index)));
         }
-        if state.first_offset.get() != offset {
-            state.first_offset.set(offset);
+        let rounded = (index, offset.round() as i32);
+        if state.published.get() != rounded {
+            state.published.set(rounded);
+            state.first_index.set(rounded.0);
+            state.first_offset.set(rounded.1);
         }
-        state.can_scroll_backward.set(index > 0 || offset > 0);
-        state.can_scroll_forward.set(end_index < count || content_end > main_max);
+        // The composed items out of view are placed too (clipped away), so focus can move to
+        // them and a focused item scrolled away keeps its node.
+        let mut beyond: Vec<(Placeable, i32)> = Vec::new();
+        let mut main =
+            placed.last().map_or(before, |(placeable, main)| main + main_of(placeable) + spacing);
+        for next in end_index..composed_end.min(count) {
+            if let Some(placeable) = measure(next, &mut sizes) {
+                beyond.push((placeable, main));
+                main += main_of(&placeable) + spacing;
+            }
+        }
+        // How far the list can scroll each way: known when the composed items reach its ends.
+        let extent_end = main - spacing + after;
+        let mut main = placed.first().map_or(before, |(_, main)| *main);
+        for previous in (composed_start.min(index)..index).rev() {
+            if let Some(placeable) = measure(previous, &mut sizes) {
+                main -= main_of(&placeable) + spacing;
+                beyond.push((placeable, main));
+            }
+        }
+        let extent_start = main - before;
+        let pending = state.pending.get();
+        let reaches_start = (index == 0 || composed_start == 0) && wanted_before == 0;
+        state.room_backward.set(if reaches_start {
+            (-extent_start) as f32 + pending
+        } else {
+            f32::INFINITY
+        });
+        let reaches_end = !missing && (end_index == count || composed_end >= count);
+        state.room_forward.set(if reaches_end {
+            (extent_end.max(content_end) - main_max).max(0) as f32 - pending
+        } else {
+            f32::INFINITY
+        });
+        let children = state.children.borrow().clone();
+        for &pinned in &children {
+            if (pinned < composed_start || pinned >= composed_end)
+                && let Some(placeable) = measure(pinned, &mut sizes)
+            {
+                let at =
+                    if pinned < index { -main_of(&placeable) - main_max } else { main_max * 2 };
+                beyond.push((placeable, at));
+            }
+        }
+        // Sizes far from view are forgotten, so the estimates follow the data.
+        if sizes.len() > 4 * MOST_MISSING {
+            sizes.retain(|item, _| item.abs_diff(index) <= MOST_MISSING);
+        }
+        drop(sizes);
         // Placed along the axis, aligned across it.
         let cross_size = placed
             .iter()
             .map(|(placeable, _)| if vertical { placeable.width } else { placeable.height })
             .max()
             .unwrap_or(0);
-        let main_size = content_end.min(main_max);
+        let scrolled = index > 0 || offset > 0.0;
+        let main_size = if scrolled { main_max } else { content_end.min(main_max) };
         let (width, height) = if vertical {
             (
                 constraints.constrain_width(cross_size + cross_before + cross_after),
@@ -564,17 +759,19 @@ impl MeasurePolicy for LazyListLayout {
                 constraints.constrain_height(cross_size + cross_before + cross_after),
             )
         };
-        let direction = scope.layout_direction();
-        for (placeable, main) in &placed {
+        let layout = |scope: &mut MeasureScope<'_>, placeable: &Placeable, main: i32| {
             if vertical {
                 let space = IntSize::new(width - cross_before - cross_after, placeable.height);
                 let x = info.alignment.align(placeable.size(), space, direction).x;
-                scope.place(placeable, cross_before + x, *main);
+                scope.place(placeable, cross_before + x, main);
             } else {
                 let space = IntSize::new(placeable.width, height - cross_before - cross_after);
                 let y = info.alignment.align(placeable.size(), space, direction).y;
-                scope.place(placeable, *main, cross_before + y);
+                scope.place(placeable, main, cross_before + y);
             }
+        };
+        for (placeable, main) in placed.iter().chain(&beyond) {
+            layout(scope, placeable, *main);
         }
         scope.layout(width, height)
     }
@@ -582,6 +779,27 @@ impl MeasurePolicy for LazyListLayout {
     fn debug_name(&self) -> &'static str {
         "LazyList"
     }
+}
+
+/// The smallest item size measured (at least a pixel): what estimates of how many items fit
+/// use, so they compose enough.
+fn smallest_size(sizes: &HashMap<usize, i32>) -> i32 {
+    sizes.values().copied().min().unwrap_or(1).max(1)
+}
+
+/// The contiguous range of composed items (the children but a pinned one out of it).
+fn composed_range(children: &[usize], count: usize) -> (usize, usize) {
+    let mut start = None;
+    let mut end = 0;
+    for (position, &index) in children.iter().enumerate() {
+        if position > 0 && index != children[position - 1] + 1 {
+            break;
+        }
+        start.get_or_insert(index);
+        end = index + 1;
+    }
+    let start = start.unwrap_or(0).min(count);
+    (start, end.min(count).max(start))
 }
 
 /// The wheel and drags scroll the list.
@@ -631,6 +849,22 @@ impl ModifierNode for LazyScrollNode {
     fn hit_clip(&self) -> Option<compose_ui::Shape> {
         Some(compose_ui::Shape::Rectangle)
     }
+
+    /// Scrolls the least that shows `rect` (an item beyond the viewport taking the focus).
+    fn bring_into_view(&mut self, rect: Rect, viewport: IntSize) -> Option<Rect> {
+        let (start, end, length) = if self.vertical {
+            (rect.top, rect.bottom, viewport.height as f32)
+        } else {
+            (rect.left, rect.right, viewport.width as f32)
+        };
+        let delta = bring_into_view_delta(start, end, length);
+        let used = if delta == 0.0 { 0.0 } else { self.state.dispatch(delta) };
+        Some(if self.vertical {
+            Rect::new(rect.left, rect.top - used, rect.right, rect.bottom - used)
+        } else {
+            Rect::new(rect.left - used, rect.top, rect.right - used, rect.bottom)
+        })
+    }
 }
 
 impl PointerInputModifierNode for LazyScrollNode {
@@ -642,7 +876,7 @@ impl PointerInputModifierNode for LazyScrollNode {
         _context: &mut EventContext<'_>,
     ) {
         let state = self.state.clone();
-        self.drag.on_pointer_event(event, pass, self.vertical, |delta| state.scroll_by(delta));
+        self.drag.on_pointer_event(event, pass, self.vertical, |delta| state.dispatch(delta));
     }
 
     fn on_cancel_pointer_input(&mut self) {

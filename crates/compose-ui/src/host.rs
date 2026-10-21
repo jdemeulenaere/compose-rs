@@ -171,7 +171,7 @@ impl UiHost {
         if let Some(content) = content {
             self.composition.set_content(content);
         }
-        let recomposed =
+        let mut recomposed =
             (self.composition.has_invalidations() && self.composition.recompose()) || composed;
         let size = self.size;
         let invalid_before_layout = self.composition.has_invalidations();
@@ -184,7 +184,7 @@ impl UiHost {
         let mut rounds = 0;
         while !invalid_before_layout && rounds < 3 && self.composition.has_invalidations() {
             rounds += 1;
-            self.composition.recompose();
+            recomposed |= self.composition.recompose();
             measured |= self.with_tree(|tree| {
                 tree.apply_observed_writes();
                 tree.layout(size)

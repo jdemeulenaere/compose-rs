@@ -8,6 +8,7 @@ use smallvec::SmallVec;
 use crate::input::{Action, EventContext, Requests};
 use crate::nodes::OnFocusChangedNode;
 use crate::tree::{NodeId, UiTree, capability};
+use crate::unit::Rect;
 
 /// The focused target.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -61,6 +62,44 @@ impl UiTree {
         self.focus = Some(Focus { node, index: index as u16 });
         self.tell_target(node, index, true, actions);
         self.focus_listeners_dirty = true;
+        // A focused node in a scrolling container is scrolled into view, as Compose's.
+        self.bring_into_view(node);
+    }
+
+    /// Asks the scrolling ancestors of `node` to show it, innermost first, each shown where
+    /// the scrolling inside it will put it.
+    pub fn bring_into_view(&mut self, node: NodeId) {
+        let mut rect = self.bounds_in_root(node);
+        let mut ancestor = self.node(node).parent;
+        while let Some(id) = ancestor {
+            ancestor = self.node(id).parent;
+            let mut layer = 0;
+            for index in 0..self.node(id).chain.len() {
+                let origin = self.layer_origin(id, layer.min(self.node(id).layers.len() - 1));
+                let viewport =
+                    self.node(id).layers[layer.min(self.node(id).layers.len() - 1)].measured;
+                let local = Rect::new(
+                    rect.left - origin.x,
+                    rect.top - origin.y,
+                    rect.right - origin.x,
+                    rect.bottom - origin.y,
+                );
+                let is_layout = self.node(id).capabilities[index] & capability::LAYOUT != 0;
+                if let Some(value) = self.get_mut(id)
+                    && let Some(moved) = value.chain[index].bring_into_view(local, viewport)
+                {
+                    rect = Rect::new(
+                        moved.left + origin.x,
+                        moved.top + origin.y,
+                        moved.right + origin.x,
+                        moved.bottom + origin.y,
+                    );
+                }
+                if is_layout {
+                    layer += 1;
+                }
+            }
+        }
     }
 
     pub(crate) fn clear_focus_into(&mut self, actions: &mut Vec<Action>) {

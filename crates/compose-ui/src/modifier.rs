@@ -663,6 +663,16 @@ pub trait ModifierNode: Any {
     }
     /// Called when the node leaves the tree, before it's dropped: release resources here.
     fn on_detach(&mut self, _context: &mut DetachContext<'_>) {}
+    /// Asked to show `rect` (in this node's coordinates; `viewport` is its size), as Compose's
+    /// `BringIntoViewResponder`: a scrolling node scrolls so it is in view, and returns where it
+    /// will then be, for the scrolling ancestors. `None`: not a scrolling node.
+    fn bring_into_view(
+        &mut self,
+        _rect: crate::unit::Rect,
+        _viewport: crate::unit::IntSize,
+    ) -> Option<crate::unit::Rect> {
+        None
+    }
 }
 
 impl dyn ModifierNode {

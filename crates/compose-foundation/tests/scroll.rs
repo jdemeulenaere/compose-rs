@@ -72,7 +72,8 @@ fn a_drag_scrolls_and_cancels_the_click_under_it() {
     host.send_pointer(PointerEvent::moved(Offset::new(50.0, 50.0), true));
     host.send_pointer(PointerEvent::release(Offset::new(50.0, 50.0)));
     ui.wait_for_idle();
-    assert_eq!(state().value(), 100);
+    // What moved past the 8 px slop scrolls, as Compose's.
+    assert_eq!(state().value(), 92);
     assert!(CLICKS.with(|clicks| clicks.borrow().is_empty()), "the drag isn't a click");
     // A tap clicks the item now under it.
     ui.on_node_with_tag("item 3").perform_click();
