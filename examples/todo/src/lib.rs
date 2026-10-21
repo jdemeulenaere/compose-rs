@@ -7,7 +7,7 @@
 use std::rc::Rc;
 
 use compose::foundation::layout::*;
-use compose::foundation::{ScrollModifiers, remember_scroll_state};
+use compose::foundation::{LazyColumn, LazyListScope, remember_lazy_list_state};
 use compose::material3::*;
 use compose::runtime::*;
 use compose::ui::*;
@@ -58,7 +58,7 @@ pub fn TodoAppWith(initial_items: u64) {
     let draft = remember(|| mutable_state_of(String::new()));
     let filter = remember(|| mutable_state_of(Filter::All));
     let next_id = remember(|| mutable_state_of(initial_items));
-    let scroll = remember_scroll_state();
+    let list_state = remember_lazy_list_state!();
 
     Column!(modifier = Modifier.fill_max_size().padding(16.dp()), |column| {
         Row!(vertical_alignment = Alignment::CENTER_VERTICALLY, |row| {
@@ -93,30 +93,35 @@ pub fn TodoAppWith(initial_items: u64) {
 
         FilterRow!(selected = filter.get(), on_select = move |f: Filter| filter.set(f));
 
-        // The list scrolls under the fixed header. Reading `todos` registers this scope: adding
-        // or removing an item re-runs the loop, and every unchanged row then skips, because its
-        // Rc<Todo> is the kept one.
-        Column!(
-            modifier =
-                Modifier.weight(column, 1.0).fill_max_width().vertical_scroll(scroll.clone()),
-            {
-                todos.with(|list| {
-                    let selected = filter.get();
-                    for todo in list {
-                        // Under `All` the loop never reads `done`, so toggling an item doesn't re-run
-                        // this scope: only that row recomposes, as it reads its own `done`.
-                        if selected == Filter::All || selected.shows(todo.done.get()) {
-                            key(todo.id, || {
-                                let id = todo.id;
-                                TodoRow!(
-                                    todo = todo.clone(),
-                                    on_remove =
-                                        move || { todos.edit(|list| list.retain(|t| t.id != id)) }
-                                );
-                            });
-                        }
-                    }
-                });
+        // The list scrolls under the fixed header, composing only the rows in view. Reading
+        // `todos` registers this scope: adding or removing an item recomposes the list, and its
+        // unchanged rows then skip, because each Rc<Todo> is the kept one.
+        let shown: Rc<Vec<Rc<Todo>>> = Rc::new(todos.with(|list| {
+            let selected = filter.get();
+            // Under `All` this never reads `done`, so toggling an item doesn't recompose the
+            // list: only that row recomposes, as it reads its own `done`.
+            list.iter()
+                .filter(|todo| selected == Filter::All || selected.shows(todo.done.get()))
+                .cloned()
+                .collect()
+        }));
+        LazyColumn!(
+            modifier = Modifier.weight(column, 1.0).fill_max_width(),
+            state = list_state.clone(),
+            |scope: LazyListScope| {
+                let (keys, rows) = (shown.clone(), shown.clone());
+                scope.items_keyed(
+                    shown.len(),
+                    move |index| keys[index].id,
+                    move |index| {
+                        let todo = rows[index].clone();
+                        let id = todo.id;
+                        TodoRow!(
+                            todo = todo,
+                            on_remove = move || todos.edit(|list| list.retain(|t| t.id != id))
+                        );
+                    },
+                );
             }
         );
     });

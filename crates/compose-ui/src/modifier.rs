@@ -307,6 +307,9 @@ pub struct PaddingValues {
 }
 
 impl PaddingValues {
+    /// No padding.
+    pub const ZERO: PaddingValues = PaddingValues::new(Dp(0.0), Dp(0.0), Dp(0.0), Dp(0.0));
+
     pub const fn new(start: Dp, top: Dp, end: Dp, bottom: Dp) -> PaddingValues {
         PaddingValues { start, top, end, bottom }
     }

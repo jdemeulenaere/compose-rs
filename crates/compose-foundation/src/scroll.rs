@@ -93,7 +93,11 @@ struct ScrollElement {
 
 impl ModifierNodeElement for ScrollElement {
     fn create(&self) -> Box<dyn ModifierNode> {
-        Box::new(ScrollNode { state: self.state.clone(), vertical: self.vertical, drag: None })
+        Box::new(ScrollNode {
+            state: self.state.clone(),
+            vertical: self.vertical,
+            drag: DragScroller::default(),
+        })
     }
 
     fn update(&self, node: &mut dyn ModifierNode) {
@@ -129,22 +133,7 @@ const TOUCH_SLOP: f32 = 8.0;
 struct ScrollNode {
     state: ScrollState,
     vertical: bool,
-    drag: Option<Drag>,
-}
-
-impl ScrollNode {
-    /// Scrolls by `delta` pixels, within the range; returns whether it moved.
-    fn scroll_by(&mut self, delta: f32, _context: &mut EventContext<'_>) -> bool {
-        let old = self.state.value_state().get();
-        let max = self.state.max_state().get();
-        let new = (old as f32 + delta).round().clamp(0.0, max as f32) as i32;
-        if new == old {
-            return false;
-        }
-        // The layout read the value: the write measures it again.
-        self.state.value_state().set(new);
-        true
-    }
+    drag: DragScroller,
 }
 
 impl ModifierNode for ScrollNode {
@@ -219,14 +208,51 @@ impl PointerInputModifierNode for ScrollNode {
         event: &mut PointerEvent,
         pass: PointerEventPass,
         _bounds: IntSize,
-        context: &mut EventContext<'_>,
+        _context: &mut EventContext<'_>,
+    ) {
+        let (vertical, state) = (self.vertical, self.state.clone());
+        self.drag.on_pointer_event(event, pass, vertical, |delta| scroll_state_by(&state, delta));
+    }
+
+    fn on_cancel_pointer_input(&mut self) {
+        self.drag.cancel();
+    }
+}
+
+/// Scrolls `state` by `delta` pixels, within its range; returns whether it moved.
+fn scroll_state_by(state: &ScrollState, delta: f32) -> bool {
+    let old = state.value_state().get();
+    let max = state.max_state().get();
+    let new = (old as f32 + delta).round().clamp(0.0, max as f32) as i32;
+    if new == old {
+        return false;
+    }
+    // The layout read the value: the write measures it again.
+    state.value_state().set(new);
+    true
+}
+
+/// The wheel and drags of a scrollable node, as Compose's `scrollable`: `scroll_by` gets the
+/// deltas (positive towards the end) and says whether it moved.
+#[derive(Default)]
+pub(crate) struct DragScroller {
+    drag: Option<Drag>,
+}
+
+impl DragScroller {
+    pub(crate) fn on_pointer_event(
+        &mut self,
+        event: &mut PointerEvent,
+        pass: PointerEventPass,
+        vertical: bool,
+        mut scroll_by: impl FnMut(f32) -> bool,
     ) {
         // The wheel scrolls in the Main pass (innermost scrollable first); drags are taken in
         // the Initial pass once past the slop, so the content under them sees them consumed.
         match (event.kind, pass) {
             (PointerEventType::Scroll, PointerEventPass::Main) if !event.consumed => {
-                let delta = if self.vertical { event.scroll_delta.y } else { event.scroll_delta.x };
-                if self.scroll_by(delta, context) {
+                let delta = if vertical { event.scroll_delta.y } else { event.scroll_delta.x };
+                if scroll_by(delta) {
                     event.consume();
                 }
             }
@@ -239,7 +265,6 @@ impl PointerInputModifierNode for ScrollNode {
                 });
             }
             (PointerEventType::Move, PointerEventPass::Initial) => {
-                let vertical = self.vertical;
                 let Some(drag) = &mut self.drag else { return };
                 if drag.pointer != event.pointer || !event.pressed {
                     return;
@@ -254,7 +279,7 @@ impl PointerInputModifierNode for ScrollNode {
                 if drag.scrolling {
                     event.consume();
                     // Dragging content up scrolls down.
-                    self.scroll_by(-along, context);
+                    scroll_by(-along);
                 }
             }
             (PointerEventType::Release, PointerEventPass::Initial) => {
@@ -268,7 +293,7 @@ impl PointerInputModifierNode for ScrollNode {
         }
     }
 
-    fn on_cancel_pointer_input(&mut self) {
+    pub(crate) fn cancel(&mut self) {
         self.drag = None;
     }
 }

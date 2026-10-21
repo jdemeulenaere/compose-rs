@@ -10,6 +10,7 @@
 extern crate compose_runtime as compose;
 
 pub mod layout;
+pub mod lazy;
 mod scroll;
 pub mod shape;
 mod text;
@@ -35,6 +36,7 @@ impl compose_runtime::ComposeArg for BorderStroke {
         self == other
     }
 }
+pub use lazy::{LazyColumn, LazyListScope, LazyListState, LazyRow, remember_lazy_list_state};
 pub use scroll::{ScrollModifiers, ScrollState, remember_scroll_state};
 pub use shape::{
     CIRCLE_SHAPE, RoundedCornerShape, RoundedCornerShapeEach, RoundedCornerShapePercent,

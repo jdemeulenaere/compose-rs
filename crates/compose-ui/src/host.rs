@@ -174,10 +174,23 @@ impl UiHost {
         let recomposed =
             (self.composition.has_invalidations() && self.composition.recompose()) || composed;
         let size = self.size;
-        let (measured, drew, actions) = self.with_tree(|tree| {
+        let invalid_before_layout = self.composition.has_invalidations();
+        let mut measured = self.with_tree(|tree| {
             tree.apply_observed_writes();
-            (tree.layout(size), tree.draw(), tree.take_pending_actions())
+            tree.layout(size)
         });
+        // A layout that changed what to compose (a lazy list reaching items it lacks) is
+        // composed and laid out again in this frame, a few times at most, before drawing.
+        let mut rounds = 0;
+        while !invalid_before_layout && rounds < 3 && self.composition.has_invalidations() {
+            rounds += 1;
+            self.composition.recompose();
+            measured |= self.with_tree(|tree| {
+                tree.apply_observed_writes();
+                tree.layout(size)
+            });
+        }
+        let (drew, actions) = self.with_tree(|tree| (tree.draw(), tree.take_pending_actions()));
         // What composition queued (a focus lost, listeners attached), now that the tree is free.
         Self::run(actions);
         // `LaunchedEffect`s started by the pass take their first step.

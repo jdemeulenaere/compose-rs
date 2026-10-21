@@ -2,7 +2,7 @@
 
 A design for bringing Jetpack Compose's model to Rust: positional memoization over a slot table, a compiler-style transform that makes composables skippable and restartable, observable state, `Modifier.Node`-style modifiers, and Compose's layout model and API names, on desktop and Android.
 
-**Status:** phases A to F of the [roadmap](docs/10-roadmap.md) are implemented: the runtime (`crates/compose-runtime`), the `#[composable]` transform with call macros and lambda memoization (`crates/compose-macros`), the UI core (`crates/compose-ui`), the toolkit (`crates/compose-foundation`, `crates/compose-material3`), the test rule (`crates/compose-test`), Skia rendering and text (`crates/compose-skia`), desktop windows (`crates/compose-desktop`), and the counter and todo apps (`examples/`, `cargo run -p todo`). Android (phase G) needs the Android NDK. `cargo test` runs everything; `cargo bench -p compose-benchmarks` runs the runtime and frame benchmarks (toggling one of 1,000 todos: about 0.14 ms a headless frame, about 1 ms from input to Skia-rendered pixels at 2×; an edit to the todo app rebuilds in about 0.5 s).
+**Status:** phases A to F of the [roadmap](docs/10-roadmap.md) are implemented: the runtime (`crates/compose-runtime`), the `#[composable]` transform with call macros and lambda memoization (`crates/compose-macros`), the UI core (`crates/compose-ui`), the toolkit (`crates/compose-foundation`, `crates/compose-material3`), the test rule (`crates/compose-test`), Skia rendering and text (`crates/compose-skia`), desktop windows (`crates/compose-desktop`), and the counter and todo apps (`examples/`, `cargo run -p todo`). Beyond the first milestone (phase H): `LaunchedEffect` and coroutine scopes on a UI-thread executor with `delay` and a frame clock, `derived_state_of`, `LazyColumn`/`LazyRow`, and `compose-animation` (`Animatable`, specs, `animate_*_as_state`, `AnimatedVisibility`, `Crossfade`). Android (phase G) needs the Android NDK. `cargo test` runs everything; `cargo bench -p compose-benchmarks` runs the runtime and frame benchmarks (toggling one of 1,000 todos in a `LazyColumn`: about 0.24 ms a headless frame with all 1,000 in view, about 0.3 ms from input to Skia-rendered pixels at 2×; an edit to the todo app rebuilds in about 0.5 s).
 
 | Crate | Contents |
 |---|---|
@@ -10,7 +10,7 @@ A design for bringing Jetpack Compose's model to Rust: positional memoization ov
 | `crates/compose-runtime` | slot table, composer, restart scopes, state, `remember`, effects, composition locals, `Composition` |
 | `crates/compose-macros` | `#[composable]` (skipping, restarts, call macros, lambda memoization), `#[derive(ComposeArg)]` |
 | `crates/compose-ui` | layout nodes, `Modifier`, `Layout`, drawing, pointer and key input, focus, semantics, `UiHost` |
-| `crates/compose-foundation` | `Box`, `Column`, `Row`, `Spacer`, `Arrangement`, `BasicText`, `BasicTextField`, scrolling, shapes |
+| `crates/compose-foundation` | `Box`, `Column`, `Row`, `Spacer`, `Arrangement`, `BasicText`, `BasicTextField`, scrolling, `LazyColumn`, `LazyRow`, shapes |
 | `crates/compose-material3` | `MaterialTheme`, `Text`, `Surface`, buttons, `Checkbox`, `TextField` |
 | `crates/compose-animation` | `Animatable`, animation specs and easings, `animate_*_as_state`, infinite transitions, `AnimatedVisibility` |
 | `crates/compose-test` | `ComposeTestRule`: finders, actions, assertions, event scripts |
