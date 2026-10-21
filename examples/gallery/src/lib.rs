@@ -1,5 +1,7 @@
-//! A tour of the toolkit: a scaffold with a top app bar and a floating action button, Material's
-//! selection controls, cards, icons, an animated panel and a lazy list.
+//! A tour of the toolkit: a scaffold with a top app bar (its menu opening a navigation drawer,
+//! its search filtering the cards) and a floating action button adding a card (and saying so
+//! in a snackbar), Material's selection controls, text fields, progress indicators, an
+//! animated panel and a lazy list of cards with a scrollbar.
 
 #![allow(non_snake_case)]
 
@@ -22,129 +24,112 @@ pub fn Gallery() {
 #[composable]
 pub fn GalleryWith(about: bool) {
     MaterialTheme!({
-        let count = remember(|| mutable_state_of(0));
+        let cards = remember(|| mutable_state_of(FIRST_CARDS));
         let menu = remember(|| mutable_state_of(false));
         let dialog = remember(|| mutable_state_of(about));
-        Scaffold!(
-            top_bar = {
-                TopAppBar!(
-                    {
-                        Text!("Gallery");
-                    },
-                    navigation_icon = {
-                        IconButton!(on_click = || {}, {
-                            Icon!(icons::filled::menu(), Some("Menu"));
-                        });
-                    },
-                    actions = |_row: RowScope| {
-                        TooltipArea!(|| PlainTooltip!({ Text!("Search the gallery") }), {
-                            IconButton!(on_click = || {}, {
-                                Icon!(icons::filled::search(), Some("Search"));
-                            });
-                        });
-                        Box!({
-                            IconButton!(on_click = move || menu.set(true), {
-                                Icon!(icons::filled::more_vert(), Some("More"));
-                            });
-                            DropdownMenu!(menu.get(), move || menu.set(false), {
-                                DropdownMenuItem!(
-                                    {
-                                        Text!("Reset");
-                                    },
-                                    move || {
-                                        count.set(0);
-                                        menu.set(false);
-                                    },
-                                    leading_icon = {
-                                        Icon!(icons::filled::close(), None);
-                                    }
-                                );
-                                DropdownMenuItem!(
-                                    {
-                                        Text!("About");
-                                    },
-                                    move || {
-                                        menu.set(false);
-                                        dialog.set(true);
-                                    },
-                                    leading_icon = {
-                                        Icon!(icons::filled::info(), None);
-                                    }
-                                );
-                            });
-                        });
-                    }
-                );
-            },
-            floating_action_button = {
-                FloatingActionButton!(on_click = move || count.update(|count| count + 1), {
-                    Icon!(icons::filled::add(), Some("Add"));
+        let searching = remember(|| mutable_state_of(false));
+        let query = remember(|| mutable_state_of(String::new()));
+        let drawer = remember_drawer_state(DrawerValue::Closed);
+        let snackbars = remember(SnackbarHostState::new);
+        let scope = remember_coroutine_scope();
+        // Closes the drawer.
+        let close_drawer = {
+            let (drawer, scope) = (drawer.clone(), scope.clone());
+            move || {
+                let drawer = drawer.clone();
+                scope.launch(async move { drawer.close().await });
+            }
+        };
+        let reset_from_drawer = {
+            let close_drawer = close_drawer.clone();
+            move || {
+                cards.set(FIRST_CARDS);
+                query.set(String::new());
+                close_drawer();
+            }
+        };
+        let about_from_drawer = {
+            let close_drawer = close_drawer.clone();
+            move || {
+                dialog.set(true);
+                close_drawer();
+            }
+        };
+        ModalNavigationDrawer!(
+            {
+                ModalDrawerSheet!({
+                    Text!(
+                        "compose-rs",
+                        modifier = Modifier.padding_sides(28.dp(), 24.dp(), 16.dp(), 16.dp()),
+                        style = MaterialTheme::typography().title_medium
+                    );
+                    NavigationDrawerItem!(
+                        { Text!("Gallery") },
+                        true,
+                        close_drawer.clone(),
+                        modifier = NavigationDrawerItemDefaults::item_padding(Modifier),
+                        icon = Some(|| Icon!(icons::filled::home(), None))
+                    );
+                    NavigationDrawerItem!(
+                        { Text!("Reset the cards") },
+                        false,
+                        reset_from_drawer,
+                        modifier = NavigationDrawerItemDefaults::item_padding(Modifier),
+                        icon = Some(|| Icon!(icons::filled::delete(), None))
+                    );
+                    NavigationDrawerItem!(
+                        { Text!("About") },
+                        false,
+                        about_from_drawer,
+                        modifier = NavigationDrawerItemDefaults::item_padding(Modifier),
+                        icon = Some(|| Icon!(icons::filled::info(), None))
+                    );
                 });
             },
-            |padding: PaddingValues| {
-                if dialog.get() {
-                    AlertDialog!(
-                        on_dismiss_request = move || dialog.set(false),
-                        confirm_button = {
-                            TextButton!(on_click = move || dialog.set(false), {
-                                Text!("OK");
-                            });
-                        },
-                        icon = {
-                            Icon!(icons::filled::info(), None);
-                        },
-                        title = {
-                            Text!("compose-rs");
-                        },
-                        text = {
-                            Text!(
-                                "Jetpack Compose's model, in Rust: this gallery is drawn with Skia."
-                            );
-                        },
-                    );
-                }
-                Column!(
-                    modifier = Modifier.padding_values(padding).padding(16.dp()).fill_max_size(),
-                    vertical_arrangement = Arrangement::spaced_by(12.dp()),
-                    |column| {
-                        Controls(count);
-                        // The list with its scrollbar, as on desktop.
-                        let list = remember_lazy_list_state(0, 0);
-                        Row!(
-                            modifier = Modifier.weight(column, 1.0).fill_max_width(),
-                            |row: RowScope| {
-                                LazyColumn!(
-                                    modifier = Modifier.weight(row, 1.0),
-                                    state = list.clone(),
-                                    vertical_arrangement = Arrangement::spaced_by(8.dp()),
-                                    |scope: LazyListScope| {
-                                        scope.items(100, |index| {
-                                            Card!(modifier = Modifier.fill_max_width(), {
-                                                Row!(
-                                                    modifier = Modifier.padding(12.dp()),
-                                                    horizontal_arrangement =
-                                                        Arrangement::spaced_by(8.dp()),
-                                                    vertical_alignment =
-                                                        Alignment::CENTER_VERTICALLY,
-                                                    {
-                                                        Icon!(icons::filled::star(), None);
-                                                        Text!("Card {}", index);
-                                                    }
-                                                );
-                                            });
-                                        });
-                                    }
-                                );
-                                let adapter = remember_lazy_list_scrollbar_adapter(list.clone());
-                                VerticalScrollbar!(
-                                    adapter,
-                                    modifier = Modifier.fill_max_height().padding_sides(
-                                        4.dp(),
-                                        0.dp(),
-                                        0.dp(),
-                                        0.dp()
-                                    )
-                                );
+            drawer_state = drawer.clone(),
+            {
+                let (drawer, scope, snackbars) = (drawer.clone(), scope.clone(), snackbars.clone());
+                Scaffold!(
+                    top_bar = {
+                        TopBar(drawer.clone(), searching, query, menu, cards, dialog);
+                    },
+                    snackbar_host = {
+                        SnackbarHost!(snackbars.clone());
+                    },
+                    floating_action_button = {
+                        let (scope, snackbars) = (scope.clone(), snackbars.clone());
+                        FloatingActionButton!(
+                            on_click = move || {
+                                let added = cards.get();
+                                cards.set(added + 1);
+                                let snackbars = snackbars.clone();
+                                scope.launch(async move {
+                                    snackbars
+                                        .show_snackbar(
+                                            format!("Card {added} added at the top"),
+                                            None,
+                                            false,
+                                            SnackbarDuration::Short,
+                                        )
+                                        .await;
+                                });
+                            },
+                            {
+                                Icon!(icons::filled::add(), Some("Add a card"));
+                            }
+                        );
+                    },
+                    |padding: PaddingValues| {
+                        if dialog.get() {
+                            AboutDialog(dialog);
+                        }
+                        Column!(
+                            modifier =
+                                Modifier.padding_values(padding).padding(16.dp()).fill_max_size(),
+                            vertical_arrangement = Arrangement::spaced_by(12.dp()),
+                            |column| {
+                                Controls(cards);
+                                Cards(cards.get(), query.get(), Modifier.weight(column, 1.0));
                             }
                         );
                     }
@@ -154,8 +139,194 @@ pub fn GalleryWith(about: bool) {
     });
 }
 
+/// How many cards the gallery starts with.
+const FIRST_CARDS: u32 = 20;
+
+/// The top bar: the menu opens the drawer; search turns the title into a field filtering the
+/// cards; "More" offers Reset and About.
 #[composable]
-fn Controls(count: MutableState<i32>) {
+fn TopBar(
+    drawer: DrawerState,
+    searching: MutableState<bool>,
+    query: MutableState<String>,
+    menu: MutableState<bool>,
+    cards: MutableState<u32>,
+    dialog: MutableState<bool>,
+) {
+    let scope = remember_coroutine_scope();
+    let search_field = remember(FocusRequester::new);
+    // The field takes the focus as it shows (the keyboard opens).
+    let focus = search_field.clone();
+    LaunchedEffect(searching.get(), async move {
+        if searching.get() {
+            focus.request_focus();
+        }
+    });
+    TopAppBar!(
+        {
+            if searching.get() {
+                TextField!(
+                    query.get(),
+                    move |value| query.set(value),
+                    modifier = Modifier.fill_max_width().focus_requester(search_field.clone()),
+                    text_style = MaterialTheme::typography().body_large,
+                    placeholder = Some(|| Text!("Search the cards")),
+                    single_line = true,
+                );
+            } else {
+                Text!("Gallery");
+            }
+        },
+        navigation_icon = Some({
+            let (drawer, scope) = (drawer.clone(), scope.clone());
+            move || {
+                let (drawer, scope) = (drawer.clone(), scope.clone());
+                IconButton!(
+                    on_click = move || {
+                        let drawer = drawer.clone();
+                        scope.launch(async move { drawer.open().await });
+                    },
+                    {
+                        Icon!(icons::filled::menu(), Some("Menu"));
+                    }
+                );
+            }
+        }),
+        actions = move |_row: RowScope| {
+            TooltipArea!(
+                move || PlainTooltip!({
+                    Text!(if searching.get() { "Close the search" } else { "Search the cards" })
+                }),
+                {
+                    IconButton!(
+                        on_click = move || {
+                            if searching.get() {
+                                query.set(String::new());
+                            }
+                            searching.set(!searching.get());
+                        },
+                        {
+                            if searching.get() {
+                                Icon!(icons::filled::close(), Some("Close the search"));
+                            } else {
+                                Icon!(icons::filled::search(), Some("Search"));
+                            }
+                        }
+                    );
+                }
+            );
+            Box!({
+                IconButton!(on_click = move || menu.set(true), {
+                    Icon!(icons::filled::more_vert(), Some("More"));
+                });
+                DropdownMenu!(menu.get(), move || menu.set(false), {
+                    DropdownMenuItem!(
+                        {
+                            Text!("Reset the cards");
+                        },
+                        move || {
+                            cards.set(FIRST_CARDS);
+                            query.set(String::new());
+                            menu.set(false);
+                        },
+                        leading_icon = {
+                            Icon!(icons::filled::delete(), None);
+                        }
+                    );
+                    DropdownMenuItem!(
+                        {
+                            Text!("About");
+                        },
+                        move || {
+                            menu.set(false);
+                            dialog.set(true);
+                        },
+                        leading_icon = {
+                            Icon!(icons::filled::info(), None);
+                        }
+                    );
+                });
+            });
+        }
+    );
+}
+
+#[composable]
+fn AboutDialog(dialog: MutableState<bool>) {
+    AlertDialog!(
+        on_dismiss_request = move || dialog.set(false),
+        confirm_button = {
+            TextButton!(on_click = move || dialog.set(false), {
+                Text!("OK");
+            });
+        },
+        icon = {
+            Icon!(icons::filled::info(), None);
+        },
+        title = {
+            Text!("compose-rs");
+        },
+        text = {
+            Text!(
+                "Jetpack Compose's model, in Rust: drawn with Skia on desktop, and with the system's Canvas on Android."
+            );
+        },
+    );
+}
+
+/// The cards, newest first, those matching the search, with a scrollbar as on desktop.
+#[composable]
+fn Cards(count: u32, query: String, modifier: Modifier) {
+    let query = query.trim().to_lowercase();
+    let shown: std::rc::Rc<Vec<u32>> = std::rc::Rc::new(
+        (0..count).rev().filter(|index| format!("card {index}").contains(&query)).collect(),
+    );
+    let list = remember_lazy_list_state(0, 0);
+    if shown.is_empty() {
+        Text!("No card matches “{}”", query, modifier = modifier.padding(16.dp()));
+        return;
+    }
+    Row!(modifier = modifier.fill_max_width(), |row: RowScope| {
+        let shown = shown.clone();
+        LazyColumn!(
+            modifier = Modifier.weight(row, 1.0),
+            state = list.clone(),
+            vertical_arrangement = Arrangement::spaced_by(8.dp()),
+            move |scope: LazyListScope| {
+                let shown = shown.clone();
+                scope.items_keyed(
+                    shown.len(),
+                    {
+                        let shown = shown.clone();
+                        move |index| u64::from(shown[index])
+                    },
+                    move |index| {
+                        let card = shown[index];
+                        Card!(modifier = Modifier.fill_max_width(), {
+                            Row!(
+                                modifier = Modifier.padding(12.dp()),
+                                horizontal_arrangement = Arrangement::spaced_by(8.dp()),
+                                vertical_alignment = Alignment::CENTER_VERTICALLY,
+                                {
+                                    Icon!(icons::filled::star(), None);
+                                    Text!("Card {}", card);
+                                }
+                            );
+                        });
+                    },
+                );
+            }
+        );
+        let adapter = remember_lazy_list_scrollbar_adapter(list.clone());
+        VerticalScrollbar!(
+            adapter,
+            modifier = Modifier.fill_max_height().padding_sides(4.dp(), 0.dp(), 0.dp(), 0.dp())
+        );
+    });
+}
+
+#[composable]
+fn Controls(cards: MutableState<u32>) {
     let switched = remember(|| mutable_state_of(true));
     let choice = remember(|| mutable_state_of(0));
     let level = remember(|| mutable_state_of(0.4f32));
@@ -164,7 +335,7 @@ fn Controls(count: MutableState<i32>) {
         for index in 0..3 {
             RadioButton!(choice.get() == index, Some(move || choice.set(index)));
         }
-        Text!("Count: {}", count.get());
+        Text!("Cards: {}", cards.get());
     });
     let name = remember(|| mutable_state_of(String::new()));
     let city = remember(|| mutable_state_of(String::from("Paris")));
