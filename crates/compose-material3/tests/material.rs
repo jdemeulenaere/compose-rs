@@ -149,3 +149,23 @@ fn a_text_field_shows_its_label_and_placeholder() {
     assert_eq!(text.get(), "Ada");
     ui.on_node_with_tag("field").assert_text_equals(&["Ada", "Name"]);
 }
+
+#[test]
+fn a_pressed_button_shows_its_state_layer() {
+    #[composable]
+    fn Screen() {
+        Button!(on_click = || {}, modifier = Modifier.test_tag("button"), {
+            Text!("Go");
+        });
+    }
+    let mut ui = compose_test(Screen);
+    let layer = format!("{:?}", light_color_scheme().on_primary.with_alpha(0.10));
+    assert!(!ui.dump_display_list().contains(&layer));
+    let center = ui.on_node_with_tag("button").fetch_semantics_node().center();
+    ui.host().send_pointer(compose_ui::PointerEvent::press(center));
+    ui.wait_for_idle();
+    assert!(ui.dump_display_list().contains(&layer), "{}", ui.dump_display_list());
+    ui.host().send_pointer(compose_ui::PointerEvent::release(center));
+    ui.wait_for_idle();
+    assert!(!ui.dump_display_list().contains(&layer));
+}

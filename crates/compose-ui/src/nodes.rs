@@ -406,6 +406,13 @@ enum Press {
 }
 
 impl Press {
+    fn indication(&self) -> Color {
+        match self {
+            Press::Click(clickable) => clickable.indication,
+            Press::Toggle(toggleable) => toggleable.indication,
+        }
+    }
+
     fn enabled(&self) -> bool {
         match self {
             Press::Click(clickable) => clickable.enabled,
@@ -470,6 +477,25 @@ impl ModifierNode for ClickableNode {
     fn as_key_input(&mut self) -> Option<&mut dyn KeyInputModifierNode> {
         Some(self)
     }
+    fn as_draw(&mut self) -> Option<&mut dyn DrawModifierNode> {
+        Some(self)
+    }
+}
+
+/// Material's state layer opacity for pressed and focused, as its ripple settles at.
+const STATE_LAYER_ALPHA: f32 = 0.10;
+
+impl DrawModifierNode for ClickableNode {
+    /// The state layer, over the content, while pressed or focused.
+    fn draw_after(&mut self, scope: &mut DrawScope<'_>) {
+        let indication = self.spec.indication();
+        let active =
+            self.state.pressed.is_some() || self.state.keys_pressed != 0 || self.state.focused;
+        if indication.is_specified() && active && self.spec.enabled() {
+            let bounds = scope.bounds();
+            scope.draw_rect(bounds, Paint::fill(indication.with_alpha(STATE_LAYER_ALPHA)));
+        }
+    }
 }
 
 fn inside(event: &PointerEvent, bounds: IntSize) -> bool {
@@ -496,6 +522,7 @@ impl PointerInputModifierNode for ClickableNode {
                 if self.spec.enabled() && !event.consumed && self.state.pressed.is_none() {
                     self.state.pressed = Some(event.pointer);
                     event.consume();
+                    context.invalidate_draw();
                 }
             }
             PointerEventType::Move => {
@@ -503,11 +530,13 @@ impl PointerInputModifierNode for ClickableNode {
                     && (event.consumed || !inside(event, bounds))
                 {
                     self.state.pressed = None;
+                    context.invalidate_draw();
                 }
             }
             PointerEventType::Release => {
                 if self.state.pressed == Some(event.pointer) {
                     self.state.pressed = None;
+                    context.invalidate_draw();
                     if !event.consumed && inside(event, bounds) {
                         event.consume();
                         self.spec.fire(context);
@@ -570,12 +599,14 @@ impl KeyInputModifierNode for ClickableNode {
         match event.kind {
             KeyEventType::KeyDown => {
                 self.state.keys_pressed |= key_bit(event.key);
+                context.invalidate_draw();
                 true
             }
             KeyEventType::KeyUp => {
                 let bit = key_bit(event.key);
                 if self.state.keys_pressed & bit != 0 {
                     self.state.keys_pressed &= !bit;
+                    context.invalidate_draw();
                     self.spec.fire(context);
                     true
                 } else {

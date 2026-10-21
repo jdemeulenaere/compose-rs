@@ -190,9 +190,22 @@ impl Modifier {
         role: Option<Role>,
         on_click: impl IntoCallback<dyn Fn()>,
     ) -> Modifier {
+        self.clickable_indicated(enabled, role, Color::UNSPECIFIED, on_click)
+    }
+
+    /// `clickable_with` drawing a state layer of `indication` while pressed or focused, as
+    /// Compose's `clickable(indication = …)` with Material's ripple (without its animation).
+    pub fn clickable_indicated(
+        self,
+        enabled: bool,
+        role: Option<Role>,
+        indication: Color,
+        on_click: impl IntoCallback<dyn Fn()>,
+    ) -> Modifier {
         self.then_element(Element::Clickable(Clickable {
             enabled,
             role,
+            indication,
             on_click: on_click.into_callback(),
         }))
     }
@@ -205,10 +218,23 @@ impl Modifier {
         role: Option<Role>,
         on_value_change: impl IntoCallback<dyn Fn(bool)>,
     ) -> Modifier {
+        self.toggleable_indicated(value, enabled, role, Color::UNSPECIFIED, on_value_change)
+    }
+
+    /// `toggleable` drawing a state layer of `indication`, as `clickable_indicated`.
+    pub fn toggleable_indicated(
+        self,
+        value: bool,
+        enabled: bool,
+        role: Option<Role>,
+        indication: Color,
+        on_value_change: impl IntoCallback<dyn Fn(bool)>,
+    ) -> Modifier {
         self.then_element(Element::Toggleable(Toggleable {
             value,
             enabled,
             role,
+            indication,
             on_value_change: on_value_change.into_callback(),
         }))
     }
@@ -435,6 +461,9 @@ scopes_compose_arg!(RowScope, ColumnScope, BoxScope);
 pub struct Clickable {
     pub enabled: bool,
     pub role: Option<Role>,
+    /// The state layer's color, drawn at 10% while pressed or focused (Material's indication);
+    /// unspecified for none.
+    pub indication: Color,
     pub on_click: Callback<dyn Fn()>,
 }
 
@@ -444,6 +473,8 @@ pub struct Toggleable {
     pub value: bool,
     pub enabled: bool,
     pub role: Option<Role>,
+    /// As `Clickable::indication`.
+    pub indication: Color,
     pub on_value_change: Callback<dyn Fn(bool)>,
 }
 
@@ -494,12 +525,16 @@ impl Element {
             (Border(a, b, c), Border(d, e, f)) => a == d && b == e && c == f,
             (Clip(a), Clip(b)) => a == b,
             (Clickable(a), Clickable(b)) => {
-                a.enabled == b.enabled && a.role == b.role && a.on_click.ptr_eq(&b.on_click)
+                a.enabled == b.enabled
+                    && a.role == b.role
+                    && a.indication == b.indication
+                    && a.on_click.ptr_eq(&b.on_click)
             }
             (Toggleable(a), Toggleable(b)) => {
                 a.value == b.value
                     && a.enabled == b.enabled
                     && a.role == b.role
+                    && a.indication == b.indication
                     && a.on_value_change.ptr_eq(&b.on_value_change)
             }
             (Focusable(a), Focusable(b)) => a == b,

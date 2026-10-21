@@ -269,7 +269,7 @@ pub fn Button(
     };
     let surface =
         surface_modifier(minimum_interactive_component_size(modifier), shape, container, border)
-            .clickable_with(enabled, Some(Role::Button), on_click);
+            .clickable_indicated(enabled, Some(Role::Button), content_color, on_click);
     let label = MaterialTheme::typography().label_large;
     CompositionLocalProvider(LOCAL_CONTENT_COLOR.provides(content_color), || {
         CompositionLocalProvider(LOCAL_TEXT_STYLE.provides(label), || {
@@ -381,12 +381,15 @@ pub fn Checkbox(
 ) {
     // As Compose's: the touch target only with a callback, then a 20 dp box whatever the size.
     let modifier = match on_checked_change {
-        Some(on_checked_change) => minimum_interactive_component_size(modifier.toggleable(
-            checked,
-            enabled,
-            Some(Role::Checkbox),
-            on_checked_change,
-        )),
+        Some(on_checked_change) => {
+            minimum_interactive_component_size(modifier.toggleable_indicated(
+                checked,
+                enabled,
+                Some(Role::Checkbox),
+                if checked { colors.checked_box_color } else { colors.unchecked_border_color },
+                on_checked_change,
+            ))
+        }
         None => modifier,
     };
     let modifier = modifier
