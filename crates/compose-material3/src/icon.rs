@@ -141,6 +141,8 @@ pub fn FloatingActionButton(
             compose_ui::Dp::UNSPECIFIED,
             compose_ui::Dp::UNSPECIFIED,
         ))
+        // Its 6 dp shadow, as `FloatingActionButtonDefaults.elevation()`.
+        .shadow(6.dp(), shape, false)
         .background_shape(container_color, shape)
         .clip(shape)
         .clickable_indicated(true, Some(Role::Button), content_color, on_click);

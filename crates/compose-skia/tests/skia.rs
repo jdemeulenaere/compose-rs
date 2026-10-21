@@ -120,3 +120,34 @@ fn images_decode_and_draw_with_skia() {
     assert_eq!(renderer.pixel(13, 8), Color::WHITE);
     assert_eq!(renderer.pixel(20, 20), Color::BLUE, "outside the image");
 }
+
+#[test]
+fn shadows_darken_beneath_an_elevated_shape() {
+    use compose::foundation::layout::Box;
+    use compose::foundation::RECTANGLE_SHAPE;
+    use compose::ui::{Alignment, Modifier, UnitExt};
+    let mut host =
+        UiHost::new(IntSize::new(200, 200), Density::new(1.0), Box::new(SkiaTextMeasurer::new()));
+    host.set_content(|| {
+        Box(
+            Modifier
+                .padding(50.dp())
+                .shadow(12.dp(), RECTANGLE_SHAPE, false)
+                .background(Color::WHITE)
+                .size(100.dp()),
+            Alignment::TOP_START,
+            false,
+            compose::runtime::callback(|_| {}),
+        );
+    });
+    host.frame();
+    let mut renderer = RasterRenderer::new(200, 200);
+    let list = host.display_list();
+    host.with_tree(|tree| renderer.render(&list, Color::WHITE, 1.0, tree.text_measurer()));
+    // Under the shape's bottom edge (the light is above), darker than the background; far
+    // away, untouched.
+    let below = renderer.pixel(100, 153);
+    assert!(below.red() < 250, "the shadow under the shape: {below:?}");
+    assert_eq!(renderer.pixel(100, 100), Color::WHITE, "the shape itself");
+    assert_eq!(renderer.pixel(2, 2), Color::WHITE, "far from it");
+}

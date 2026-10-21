@@ -54,6 +54,8 @@ pub fn AlertDialog(
                 MaterialTheme::shapes().extra_large,
                 scheme.surface_container_high,
                 compose_ui::Color::UNSPECIFIED,
+                Dp(0.0),
+                Dp(0.0),
                 None,
                 compose_runtime::callback(move || {
                     let (confirm, dismiss, icon, title, text) = (
@@ -256,6 +258,9 @@ pub fn DropdownMenu(
                     MaterialTheme::shapes().extra_small,
                     scheme.surface_container,
                     compose_ui::Color::UNSPECIFIED,
+                    Dp(0.0),
+                    // As `MenuDefaults.ShadowElevation`.
+                    3.dp(),
                     None,
                     compose_runtime::callback(move || {
                         let content = content.clone();

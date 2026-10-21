@@ -28,6 +28,7 @@ pub mod overlay;
 pub mod path;
 mod render;
 pub mod semantics;
+pub mod shadow;
 pub mod text;
 pub mod tree;
 pub mod unit;

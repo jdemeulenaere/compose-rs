@@ -46,8 +46,9 @@ fn surface_modifier(
     shape: Shape,
     color: Color,
     border: Option<BorderStroke>,
+    shadow_elevation: Dp,
 ) -> Modifier {
-    let modifier = modifier.background_shape(color, shape);
+    let modifier = modifier.shadow(shadow_elevation, shape, false).background_shape(color, shape);
     let modifier = match border {
         Some(border) => modifier.border(border.width, border.color, shape),
         None => modifier,
@@ -55,27 +56,46 @@ fn surface_modifier(
     modifier.clip(shape)
 }
 
-/// A themed container, as Compose's `Surface`: its shape and color, and its content's color
-/// (by default the theme's content color for `color`).
+/// A themed container, as Compose's `Surface`: its shape and color (the surface color tinted
+/// with the primary color by its absolute `tonal_elevation`, as `surfaceColorAtElevation`), its
+/// shadow (`shadow_elevation`), and its content's color (by default the theme's content color
+/// for `color`).
 #[composable]
 pub fn Surface(
     #[default(crate::Modifier)] modifier: Modifier,
     #[default(crate::RECTANGLE_SHAPE)] shape: Shape,
     #[default(crate::MaterialTheme::color_scheme().surface)] color: Color,
     #[default(crate::Color::UNSPECIFIED)] content_color: Color,
+    #[default(crate::Dp(0.0))] tonal_elevation: Dp,
+    #[default(crate::Dp(0.0))] shadow_elevation: Dp,
     #[default(None)] border: Option<BorderStroke>,
     content: impl Fn() + 'static,
 ) {
-    let content_color = content_color
-        .or(MaterialTheme::color_scheme().content_color_for(color))
-        .or(LOCAL_CONTENT_COLOR.current());
+    let scheme = MaterialTheme::color_scheme();
+    let content_color =
+        content_color.or(scheme.content_color_for(color)).or(LOCAL_CONTENT_COLOR.current());
+    let elevation = Dp(LOCAL_ABSOLUTE_TONAL_ELEVATION.current().0 + tonal_elevation.0);
+    let color =
+        if color == scheme.surface { scheme.surface_color_at_elevation(elevation) } else { color };
     // A surface takes the pointer: what's beneath it isn't hit, as Compose's (an empty
     // `pointerInput`).
-    let modifier = surface_modifier(modifier, shape, color, border).then_custom(BlockPointer);
+    let modifier = surface_modifier(modifier, shape, color, border, shadow_elevation)
+        .then_custom(BlockPointer);
     CompositionLocalProvider(LOCAL_CONTENT_COLOR.provides(content_color), || {
-        Box(modifier, Alignment::TOP_START, true, compose_runtime::callback(move |_| content()));
+        CompositionLocalProvider(LOCAL_ABSOLUTE_TONAL_ELEVATION.provides(elevation), || {
+            Box(
+                modifier,
+                Alignment::TOP_START,
+                true,
+                compose_runtime::callback(move |_| content()),
+            );
+        });
     });
 }
+
+/// The elevation surfaces around add up to, as Compose's `LocalAbsoluteTonalElevation`.
+pub static LOCAL_ABSOLUTE_TONAL_ELEVATION: compose_runtime::CompositionLocal<Dp> =
+    compose_runtime::CompositionLocal::new("LocalAbsoluteTonalElevation", || Dp(0.0));
 
 // ---- Pointer helpers --------------------------------------------------------------------------
 
@@ -205,9 +225,14 @@ pub fn Button(
     } else {
         (colors.disabled_container_color, colors.disabled_content_color)
     };
-    let surface =
-        surface_modifier(minimum_interactive_component_size(modifier), shape, container, border)
-            .clickable_indicated(enabled, Some(Role::Button), content_color, on_click);
+    let surface = surface_modifier(
+        minimum_interactive_component_size(modifier),
+        shape,
+        container,
+        border,
+        Dp(0.0),
+    )
+    .clickable_indicated(enabled, Some(Role::Button), content_color, on_click);
     let label = MaterialTheme::typography().label_large;
     CompositionLocalProvider(LOCAL_CONTENT_COLOR.provides(content_color), || {
         CompositionLocalProvider(LOCAL_TEXT_STYLE.provides(label), || {

@@ -92,6 +92,36 @@ impl DrawScope<'_> {
         self.list.push(DrawOp::DrawImage { image: image.clone(), src, dst, alpha });
     }
 
+    /// Draws the shadows of `outline` (in the node's coordinates) raised by `elevation` pixels,
+    /// in `ambient_color` and `spot_color` (their alphas set to Compose's), as a graphics
+    /// layer's `shadowElevation` does: from a light 300 dp above the window's top, 600 dp up,
+    /// 800 dp wide, as Compose Desktop's.
+    pub fn draw_shadow(
+        &mut self,
+        outline: Outline,
+        elevation: f32,
+        ambient_color: Color,
+        spot_color: Color,
+    ) {
+        if elevation <= 0.0 {
+            return;
+        }
+        let outline = match outline {
+            Outline::Rectangle(rect) => Outline::Rectangle(self.to_list(rect)),
+            Outline::Rounded(rect, radii) => Outline::Rounded(self.to_list(rect), radii),
+        };
+        let density = self.density;
+        let px = |dp: f32| density.to_px(crate::unit::Dp(dp));
+        self.list.push(DrawOp::DrawShadow {
+            outline,
+            elevation,
+            light: (0.0, -px(300.0), px(600.0)),
+            light_radius: px(800.0),
+            ambient: ambient_color.with_alpha(0.039),
+            spot: spot_color.with_alpha(0.19),
+        });
+    }
+
     /// Draws `path` (in the node's coordinates).
     pub fn draw_path(&mut self, path: &std::sync::Arc<crate::path::Path>, paint: Paint) {
         self.draw_path_scaled(path, Offset::ZERO, (1.0, 1.0), paint);

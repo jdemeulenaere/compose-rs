@@ -322,3 +322,37 @@ fn a_dropdown_menu_opens_below_its_anchor_and_closes_on_selection() {
     assert_eq!(PICKED.with(Cell::get), 2);
     ui.on_node_with_text("Edit").assert_does_not_exist();
 }
+
+#[test]
+fn tonal_elevation_tints_the_surface_color_and_adds_up() {
+    use std::cell::Cell;
+    thread_local! { static COLORS: Cell<Option<(ColorScheme, Color, Color)>> = const { Cell::new(None) }; }
+    let mut ui = compose_test(|| {
+        MaterialTheme!({
+            Surface!(tonal_elevation = 3.dp(), modifier = Modifier.size(50.dp()).test_tag("outer"), {
+                Surface!(tonal_elevation = 3.dp(), modifier = Modifier.size(20.dp()), {});
+            });
+            let scheme = MaterialTheme::color_scheme();
+            COLORS.with(|cell| {
+                cell.set(Some((
+                    scheme,
+                    scheme.surface_color_at_elevation(3.dp()),
+                    scheme.surface_color_at_elevation(6.dp()),
+                )))
+            });
+        });
+    });
+    let (scheme, at_3, at_6) = COLORS.with(Cell::get).expect("composed");
+    assert_ne!(at_3, scheme.surface);
+    let fills: Vec<Color> = ui
+        .host()
+        .display_list()
+        .ops
+        .iter()
+        .filter_map(|op| match op {
+            compose_ui::DrawOp::DrawRect(_, paint) => Some(paint.color),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(fills, vec![at_3, at_6], "the inner surface at the sum of both");
+}

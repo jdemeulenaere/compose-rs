@@ -104,6 +104,28 @@ pub fn draw_display_list(canvas: &Canvas, list: &DisplayList, text_measurer: &dy
                     );
                 }
             }
+            DrawOp::DrawShadow { outline, elevation, light, light_radius, ambient, spot } => {
+                let mut path = skia_safe::PathBuilder::new();
+                match outline {
+                    compose_ui::Outline::Rectangle(bounds) => {
+                        path.add_rect(rect(bounds), None, None);
+                    }
+                    compose_ui::Outline::Rounded(bounds, radii) => {
+                        path.add_rrect(round_rect(bounds, radii), None, None);
+                    }
+                }
+                // As Compose Desktop: an opaque occluder, the light in the window's pixels.
+                skia_safe::utils::shadow_utils::draw_shadow(
+                    canvas,
+                    &path.detach(),
+                    skia_safe::Point3::new(0.0, 0.0, *elevation),
+                    skia_safe::Point3::new(light.0, light.1, light.2),
+                    *light_radius,
+                    skia_safe::Color::new(ambient.argb()),
+                    skia_safe::Color::new(spot.argb()),
+                    None,
+                );
+            }
             DrawOp::SaveLayerAlpha(alpha) => {
                 canvas.save_layer_alpha_f(None, alpha.clamp(0.0, 1.0));
             }

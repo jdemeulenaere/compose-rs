@@ -18,8 +18,8 @@ mod theme;
 
 pub use components::{
     Button, ButtonColors, ButtonDefaults, Checkbox, CheckboxColors, CheckboxDefaults,
-    MINIMUM_INTERACTIVE_SIZE, OutlinedButton, Surface, Text, TextButton, TextField,
-    TextFieldColors, TextFieldDefaults, minimum_interactive_component_size,
+    LOCAL_ABSOLUTE_TONAL_ELEVATION, MINIMUM_INTERACTIVE_SIZE, OutlinedButton, Surface, Text,
+    TextButton, TextField, TextFieldColors, TextFieldDefaults, minimum_interactive_component_size,
 };
 pub use dialog::{AlertDialog, DropdownMenu, DropdownMenuItem};
 pub use icon::{FloatingActionButton, Icon, IconButton, icons};

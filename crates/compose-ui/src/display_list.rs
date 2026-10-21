@@ -40,6 +40,18 @@ pub enum DrawOp {
         dst: Rect,
         alpha: f32,
     },
+    /// The shadows of `outline` raised by `elevation` pixels, lit from `light` (x, y, z in the
+    /// window's pixels, not moved by transforms) of `light_radius`: an ambient shadow in
+    /// `ambient` and a spot shadow in `spot` (their alphas Compose's 3.9 % and 19 %), as
+    /// Compose Desktop draws them with Skia's `ShadowUtils`.
+    DrawShadow {
+        outline: crate::graphics::Outline,
+        elevation: f32,
+        light: (f32, f32, f32),
+        light_radius: f32,
+        ambient: crate::graphics::Color,
+        spot: crate::graphics::Color,
+    },
     /// A path, scaled by `scale` then moved by `offset` (a vector image's viewport to its size).
     DrawPath {
         path: std::sync::Arc<crate::path::Path>,
@@ -155,6 +167,18 @@ impl DisplayList {
                     scale.1,
                     paint_text(paint)
                 ),
+                DrawOp::DrawShadow { outline, elevation, ambient, spot, .. } => {
+                    let (rect, radii) = match outline {
+                        crate::graphics::Outline::Rectangle(rect) => (rect, [0.0; 4]),
+                        crate::graphics::Outline::Rounded(rect, radii) => (rect, *radii),
+                    };
+                    writeln!(
+                        out,
+                        "shadow {} radii {:?} elevation {elevation} {ambient:?} {spot:?}",
+                        rect_text(rect),
+                        radii
+                    )
+                }
                 DrawOp::Transform { pivot, scale, rotation, translation } => writeln!(
                     out,
                     "transform pivot {},{} scale {}x{} rotate {} translate {},{}",

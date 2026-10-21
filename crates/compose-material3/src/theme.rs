@@ -101,6 +101,16 @@ pub const fn dark_color_scheme() -> ColorScheme {
 }
 
 impl ColorScheme {
+    /// The surface color at `elevation`, as `surfaceColorAtElevation`: tinted with the primary
+    /// color, more as it rises.
+    pub fn surface_color_at_elevation(&self, elevation: compose_ui::Dp) -> Color {
+        if elevation.0 <= 0.0 {
+            return self.surface;
+        }
+        let alpha = (4.5 * (elevation.0 + 1.0).ln() + 2.0) / 100.0;
+        self.primary.with_alpha(alpha).composite_over(self.surface)
+    }
+
     /// The content color for `background`, as `contentColorFor`: the matching `on` role.
     pub fn content_color_for(&self, background: Color) -> Color {
         let pairs = [
