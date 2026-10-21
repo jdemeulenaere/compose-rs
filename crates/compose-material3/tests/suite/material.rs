@@ -142,6 +142,10 @@ fn a_text_field_shows_its_label_and_placeholder() {
     let handle = text.handle();
     let mut ui = compose_test(move || Screen(handle));
     assert!(bounds(&mut ui, "field").height() >= 56.0);
+    // The label rests in the empty field; the placeholder shows once it's focused, as
+    // Compose's.
+    ui.on_node_with_tag("field").assert_text_equals(&["", "Name"]);
+    ui.on_node_with_tag("field").request_focus();
     ui.on_node_with_tag("field").assert_text_equals(&["", "Name", "Your name"]);
     ui.on_node_with_tag("field").perform_text_input("Ada");
     assert_eq!(text.get(), "Ada");

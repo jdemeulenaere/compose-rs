@@ -571,3 +571,56 @@ fn button_and_card_variants_have_their_colors_and_shadows() {
     let shadows = list.ops.iter().filter(|op| matches!(op, DrawOp::DrawShadow { .. })).count();
     assert_eq!(shadows, 2, "the elevated button and card");
 }
+
+#[test]
+fn a_text_fields_label_rests_in_it_then_floats_when_focused() {
+    use compose_ui::DrawOp;
+    let mut ui = ComposeTestRule::with_manual_clock(|| {
+        MaterialTheme!({
+            Column!({
+                TextField!(
+                    String::new(),
+                    |_| {},
+                    modifier = Modifier.test_tag("filled"),
+                    label = Some(|| Text!("Name", modifier = Modifier.test_tag("filled label"))),
+                    single_line = true,
+                );
+                OutlinedTextField!(
+                    String::new(),
+                    |_| {},
+                    modifier = Modifier.test_tag("outlined"),
+                    label = Some(|| Text!("City", modifier = Modifier.test_tag("outlined label"))),
+                    single_line = true,
+                );
+            });
+        });
+    });
+    let label = |ui: &mut ComposeTestRule, tag: &str| {
+        ui.on_node_unmerged(has_test_tag(tag)).fetch_semantics_node().bounds
+    };
+    let field = ui.on_node_with_tag("filled").fetch_semantics_node().bounds;
+    let resting = label(&mut ui, "filled label");
+    // Centered in the 56 dp field, in the large body style (24 px lines).
+    assert_eq!(resting.height(), 24.0);
+    assert_eq!(resting.top - field.top, 16.0);
+    ui.on_node_with_tag("filled").request_focus();
+    ui.advance_time_by(std::time::Duration::from_millis(300));
+    let floated = label(&mut ui, "filled label");
+    // 8 dp from the top, in the small body style (16 px lines).
+    assert_eq!((floated.top - field.top, floated.height()), (8.0, 16.0));
+    // The outlined field's floated label sits on its top edge, the outline cut around it.
+    ui.on_node_with_tag("outlined").request_focus();
+    ui.advance_time_by(std::time::Duration::from_millis(300));
+    let outlined = ui.on_node_with_tag("outlined").fetch_semantics_node().bounds;
+    let floated = label(&mut ui, "outlined label");
+    // (The field's node is its outline, inside the 8 dp above it for the label.)
+    assert_eq!(floated.top + floated.height() / 2.0, outlined.top, "on the edge");
+    let list = ui.host().display_list();
+    let open_path = list.ops.iter().any(|op| match op {
+        DrawOp::DrawPath { path, .. } => {
+            !matches!(path.commands().last(), Some(compose_ui::PathCommand::Close))
+        }
+        _ => false,
+    });
+    assert!(open_path, "the outline is cut: {}", list.dump());
+}

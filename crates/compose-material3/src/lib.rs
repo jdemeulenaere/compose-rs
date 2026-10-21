@@ -18,13 +18,14 @@ mod progress;
 mod scaffold;
 mod selection;
 mod snackbar;
+mod text_field;
 mod theme;
 
 pub use components::{
     AnnotatedText, Button, ButtonColors, ButtonDefaults, Checkbox, CheckboxColors,
     CheckboxDefaults, ElevatedButton, FilledTonalButton, LOCAL_ABSOLUTE_TONAL_ELEVATION,
-    MINIMUM_INTERACTIVE_SIZE, OutlinedButton, Surface, Text, TextButton, TextField,
-    TextFieldColors, TextFieldDefaults, minimum_interactive_component_size,
+    MINIMUM_INTERACTIVE_SIZE, OutlinedButton, Surface, Text, TextButton, TextFieldColors,
+    TextFieldDefaults, minimum_interactive_component_size,
 };
 pub use dialog::{AlertDialog, DropdownMenu, DropdownMenuItem};
 pub use icon::{FloatingActionButton, Icon, IconButton, icons};
@@ -49,6 +50,7 @@ pub use snackbar::{
     Snackbar, SnackbarData, SnackbarDuration, SnackbarHost, SnackbarHostState, SnackbarResult,
     SnackbarVisuals,
 };
+pub use text_field::{OutlinedTextField, OutlinedTextFieldDefaults, TextField};
 pub use theme::{
     ColorScheme, LOCAL_COLOR_SCHEME, LOCAL_CONTENT_COLOR, LOCAL_SHAPES, LOCAL_TEXT_STYLE,
     LOCAL_TYPOGRAPHY, MaterialTheme, Shapes, Typography, dark_color_scheme, light_color_scheme,

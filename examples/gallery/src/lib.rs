@@ -141,6 +141,24 @@ fn Controls(count: MutableState<i32>) {
         }
         Text!("Count: {}", count.get());
     });
+    let name = remember(|| mutable_state_of(String::new()));
+    let city = remember(|| mutable_state_of(String::from("Paris")));
+    Row!(horizontal_arrangement = Arrangement::spaced_by(8.dp()), |row: RowScope| {
+        TextField!(
+            name.get(),
+            move |value| name.set(value),
+            modifier = Modifier.weight(row, 1.0),
+            label = Some(|| Text!("Name")),
+            single_line = true,
+        );
+        OutlinedTextField!(
+            city.get(),
+            move |value| city.set(value),
+            modifier = Modifier.weight(row, 1.0),
+            label = Some(|| Text!("City")),
+            single_line = true,
+        );
+    });
     Slider!(level.get(), move |value| level.set(value));
     Row!(
         modifier = Modifier.padding_horizontal_vertical(0.dp(), 8.dp()),
