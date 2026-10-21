@@ -46,5 +46,32 @@ fn ui(criterion: &mut Criterion) {
     report_p99("toggle 1 of 1000 todos", samples);
 }
 
-criterion_group!(benches, ui);
+/// A toggle in a 480 × 640 dp window at 2×, as the desktop host does it: dispatch, recompose,
+/// measure, record and render with Skia's CPU raster backend. Input to rendered pixels, without
+/// the window system's present.
+fn desktop_frame(criterion: &mut Criterion) {
+    use compose::ui::{Color, Density, Renderer};
+    let host = compose::ui::UiHost::new(
+        IntSize::new(960, 1280),
+        Density::new(2.0),
+        Box::new(compose_skia::SkiaTextMeasurer::new()),
+    );
+    let mut ui = ComposeTestRule::with_host(host, || todo::TodoAppWith(1000));
+    let mut renderer = compose_skia::RasterRenderer::new(960, 1280);
+    let checkbox = has_role(Role::Checkbox);
+    let mut frame = |ui: &mut ComposeTestRule| {
+        let elapsed = click_frame(ui, &checkbox, 3);
+        let start = Instant::now();
+        let list = ui.host().display_list();
+        ui.host().with_tree(|tree| renderer.render(&list, Color::WHITE, 1.0, tree.text_measurer()));
+        elapsed + start.elapsed()
+    };
+    criterion.bench_function("toggle 1 of 1000 todos, rendered at 2x", |bench| {
+        bench.iter_custom(|iterations| (0..iterations).map(|_| frame(&mut ui)).sum())
+    });
+    let samples = (0..300).map(|_| frame(&mut ui)).collect();
+    report_p99("toggle 1 of 1000 todos, rendered at 2x", samples);
+}
+
+criterion_group!(benches, ui, desktop_frame);
 criterion_main!(benches);

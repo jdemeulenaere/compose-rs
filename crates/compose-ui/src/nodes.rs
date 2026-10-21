@@ -381,6 +381,9 @@ impl ModifierNode for ClipNode {
     fn as_draw(&mut self) -> Option<&mut dyn DrawModifierNode> {
         Some(self)
     }
+    fn hit_clip(&self) -> Option<Shape> {
+        Some(self.0)
+    }
 }
 
 impl DrawModifierNode for ClipNode {

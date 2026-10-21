@@ -10,6 +10,7 @@
 extern crate compose_runtime as compose;
 
 pub mod layout;
+mod scroll;
 pub mod shape;
 mod text;
 mod text_field;
@@ -34,6 +35,7 @@ impl compose_runtime::ComposeArg for BorderStroke {
         self == other
     }
 }
+pub use scroll::{ScrollModifiers, ScrollState, remember_scroll_state};
 pub use shape::{
     CIRCLE_SHAPE, RoundedCornerShape, RoundedCornerShapeEach, RoundedCornerShapePercent,
 };

@@ -618,6 +618,11 @@ pub trait ModifierNode: Any {
     fn as_key_input(&mut self) -> Option<&mut dyn KeyInputModifierNode> {
         None
     }
+    /// The shape this node clips its content to, for hit testing: what's outside isn't hit
+    /// (`clip`, a scroll's viewport), as a Compose graphics layer clips.
+    fn hit_clip(&self) -> Option<crate::graphics::Shape> {
+        None
+    }
     /// Called when the node leaves the tree, before it's dropped: release resources here.
     fn on_detach(&mut self, _context: &mut DetachContext<'_>) {}
 }

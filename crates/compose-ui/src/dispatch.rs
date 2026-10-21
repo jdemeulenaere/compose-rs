@@ -56,10 +56,10 @@ impl UiTree {
             for index in 0..value.chain.len() {
                 let bits = value.capabilities[index];
                 if bits & capability::DRAW != 0
-                    && let Some(clip) = value.chain[index].downcast_ref::<crate::nodes::ClipNode>()
+                    && let Some(clip) = value.chain[index].hit_clip()
                 {
                     let size = value.layers[layer].measured.into();
-                    if !clip.0.outline(size, &density).contains(local - origins[layer]) {
+                    if !clip.outline(size, &density).contains(local - origins[layer]) {
                         // Outside the clip: nothing after it, nor the children, is hit.
                         return path.len() > start;
                     }

@@ -14,6 +14,7 @@ criterion = { version = "0.5", default-features = false }
 compose = { path = "../crates/compose", features = ["test"] }
 counter = { path = "../examples/counter" }
 todo = { path = "../examples/todo" }
+compose-skia = { path = "../crates/compose-skia" }
 
 [[bench]]
 name = "runtime"
