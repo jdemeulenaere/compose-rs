@@ -17,6 +17,7 @@ mod navigation;
 mod progress;
 mod scaffold;
 mod selection;
+mod snackbar;
 mod theme;
 
 pub use components::{
@@ -43,6 +44,10 @@ pub use scaffold::{
 pub use selection::{
     RadioButton, RadioButtonColors, RadioButtonDefaults, Slider, SliderColors, SliderDefaults,
     Switch, SwitchColors, SwitchDefaults,
+};
+pub use snackbar::{
+    Snackbar, SnackbarData, SnackbarDuration, SnackbarHost, SnackbarHostState, SnackbarResult,
+    SnackbarVisuals,
 };
 pub use theme::{
     ColorScheme, LOCAL_COLOR_SCHEME, LOCAL_CONTENT_COLOR, LOCAL_SHAPES, LOCAL_TEXT_STYLE,

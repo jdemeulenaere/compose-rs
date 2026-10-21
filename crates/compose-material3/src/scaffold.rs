@@ -229,6 +229,7 @@ pub fn Scaffold(
     #[default(crate::Modifier)] modifier: Modifier,
     #[default(|| {})] top_bar: impl Fn() + 'static,
     #[default(|| {})] bottom_bar: impl Fn() + 'static,
+    #[default(|| {})] snackbar_host: impl Fn() + 'static,
     #[default(|| {})] floating_action_button: impl Fn() + 'static,
     #[default(crate::MaterialTheme::color_scheme().background)] container_color: Color,
     #[default(crate::Color::UNSPECIFIED)] content_color: Color,
@@ -239,8 +240,13 @@ pub fn Scaffold(
     let padding = remember(|| mutable_state_of(PaddingValues::ZERO));
     let policy = remember(|| Rc::new(ScaffoldLayout { padding }) as Rc<dyn MeasurePolicy>);
     CompositionLocalProvider(LOCAL_CONTENT_COLOR.provides(content_color), || {
-        let (top_bar, bottom_bar, fab, content) =
-            (top_bar.clone(), bottom_bar.clone(), floating_action_button.clone(), content.clone());
+        let (top_bar, bottom_bar, snackbar_host, fab, content) = (
+            top_bar.clone(),
+            bottom_bar.clone(),
+            snackbar_host.clone(),
+            floating_action_button.clone(),
+            content.clone(),
+        );
         Layout(
             modifier.background(container_color),
             policy.clone(),
@@ -258,12 +264,14 @@ pub fn Scaffold(
                 slot(compose_runtime::callback(move || content(padding.get())));
                 slot(bottom_bar.clone());
                 slot(fab.clone());
+                slot(snackbar_host.clone());
             }),
         );
     });
 }
 
-/// Children: the top bar, the content, the bottom bar, the floating action button.
+/// Children: the top bar, the content, the bottom bar, the floating action button, the
+/// snackbar host (placed last: over the rest).
 struct ScaffoldLayout {
     padding: MutableState<PaddingValues>,
 }
@@ -277,13 +285,14 @@ impl MeasurePolicy for ScaffoldLayout {
     ) -> MeasureResult {
         let width = constraints.max_width;
         let height = constraints.max_height;
-        let [top, content, bottom, fab] = measurables else {
+        let [top, content, bottom, fab, snackbar] = measurables else {
             return scope.layout(constraints.min_width, constraints.min_height);
         };
         let loose = constraints.loosen();
         let top = scope.measure(*top, loose);
         let bottom = scope.measure(*bottom, loose);
         let fab = scope.measure(*fab, loose);
+        let snackbar = scope.measure(*snackbar, loose);
         // The content's padding: the bars' heights. Written as state the content reads, which
         // composes it again (within the frame) when they change.
         let density = scope.density();
@@ -300,12 +309,23 @@ impl MeasurePolicy for ScaffoldLayout {
         scope.place_relative(&content, 0, 0);
         scope.place_relative(&top, 0, 0);
         scope.place_relative(&bottom, 0, height - bottom.height);
+        // Above the bottom bar, the FAB 16 dp up, and the snackbar above both, centered, as
+        // Compose's `ScaffoldLayout`.
+        let mut above = bottom.height;
         if fab.width > 0 && fab.height > 0 {
             let margin = density.round_to_px(16.dp());
             scope.place_relative(
                 &fab,
                 width - fab.width - margin,
-                height - bottom.height - fab.height - margin,
+                height - above - fab.height - margin,
+            );
+            above += fab.height + margin;
+        }
+        if snackbar.height > 0 {
+            scope.place_relative(
+                &snackbar,
+                (width - snackbar.width) / 2,
+                height - above - snackbar.height,
             );
         }
         scope.layout(width, height)

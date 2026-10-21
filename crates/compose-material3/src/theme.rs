@@ -32,6 +32,17 @@ pub struct ColorScheme {
     pub surface_container_highest: Color,
     pub outline: Color,
     pub outline_variant: Color,
+    pub tertiary_container: Color,
+    pub on_tertiary_container: Color,
+    pub error_container: Color,
+    pub on_error_container: Color,
+    pub inverse_surface: Color,
+    pub inverse_on_surface: Color,
+    pub inverse_primary: Color,
+    pub surface_tint: Color,
+    pub scrim: Color,
+    pub surface_bright: Color,
+    pub surface_dim: Color,
 }
 
 const fn argb(value: u32) -> Color {
@@ -66,6 +77,17 @@ pub const fn light_color_scheme() -> ColorScheme {
         surface_container_highest: argb(0xFFE6E0E9),
         outline: argb(0xFF79747E),
         outline_variant: argb(0xFFCAC4D0),
+        tertiary_container: argb(0xFFFFD8E4),
+        on_tertiary_container: argb(0xFF31111D),
+        error_container: argb(0xFFF9DEDC),
+        on_error_container: argb(0xFF410E0B),
+        inverse_surface: argb(0xFF322F35),
+        inverse_on_surface: argb(0xFFF5EFF7),
+        inverse_primary: argb(0xFFD0BCFF),
+        surface_tint: argb(0xFF6750A4),
+        scrim: argb(0xFF000000),
+        surface_bright: argb(0xFFFEF7FF),
+        surface_dim: argb(0xFFDED8E1),
     }
 }
 
@@ -97,6 +119,17 @@ pub const fn dark_color_scheme() -> ColorScheme {
         surface_container_highest: argb(0xFF36343B),
         outline: argb(0xFF938F99),
         outline_variant: argb(0xFF49454F),
+        tertiary_container: argb(0xFF633B48),
+        on_tertiary_container: argb(0xFFFFD8E4),
+        error_container: argb(0xFF8C1D18),
+        on_error_container: argb(0xFFF9DEDC),
+        inverse_surface: argb(0xFFE6E0E9),
+        inverse_on_surface: argb(0xFF322F35),
+        inverse_primary: argb(0xFF6750A4),
+        surface_tint: argb(0xFFD0BCFF),
+        scrim: argb(0xFF000000),
+        surface_bright: argb(0xFF3B383E),
+        surface_dim: argb(0xFF141218),
     }
 }
 
@@ -119,7 +152,10 @@ impl ColorScheme {
             (self.secondary, self.on_secondary),
             (self.secondary_container, self.on_secondary_container),
             (self.tertiary, self.on_tertiary),
+            (self.tertiary_container, self.on_tertiary_container),
             (self.error, self.on_error),
+            (self.error_container, self.on_error_container),
+            (self.inverse_surface, self.inverse_on_surface),
             (self.background, self.on_background),
             (self.surface, self.on_surface),
             (self.surface_variant, self.on_surface_variant),
