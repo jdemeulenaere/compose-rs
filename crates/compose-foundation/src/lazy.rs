@@ -639,6 +639,10 @@ impl MeasurePolicy for LazyListLayout {
         // its key if items came or went before it.
         let (mut index, offset) = state.position.get();
         let mut offset = offset + state.pending.replace(0.0);
+        // Kept to what pixel arithmetic holds (a jump to `i32::MAX` into an item, an infinite
+        // scroll): the end clamps it on to where the list ends.
+        const MOST_OFFSET: f32 = 1.0e9;
+        offset = if offset.is_nan() { 0.0 } else { offset.clamp(-MOST_OFFSET, MOST_OFFSET) };
         if let Some(first_key) = state.first_key.get()
             && (index >= count || info.items.key(index) != first_key)
             && let Some(found) = info.items.index_of(first_key, index)
@@ -716,6 +720,12 @@ impl MeasurePolicy for LazyListLayout {
             } else {
                 break;
             }
+        }
+        // Past the end of the last item: at its end (the room left then scrolls back).
+        if index + 1 == count
+            && let Some(placeable) = measure(index, &mut sizes)
+        {
+            offset = offset.min(main_of(&placeable) as f32);
         }
         let mut placed: Vec<(Placeable, i32)> = Vec::new();
         let mut end_index;

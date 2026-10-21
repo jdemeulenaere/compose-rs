@@ -35,7 +35,7 @@ pub fn animate_value_as_state<T: Animate>(
     SideEffect(move || {
         let latest: Listener<T> = finished_listener.clone();
         *listener.borrow_mut() = latest;
-        if *launched.borrow() == target_value {
+        if crate::vector::same_value(&*launched.borrow(), &target_value) {
             return;
         }
         *launched.borrow_mut() = target_value.clone();

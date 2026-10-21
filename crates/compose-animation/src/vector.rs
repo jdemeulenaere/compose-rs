@@ -15,6 +15,21 @@ pub trait Animate: Clone + PartialEq + 'static {
     }
 }
 
+/// Whether `a` and `b` are the same value, as Kotlin compares boxed floats: NaN equals NaN.
+pub(crate) fn same_value<T: Animate>(a: &T, b: &T) -> bool {
+    a.to_vector().iter().zip(b.to_vector()).all(|(&a, b)| a == b || (a.is_nan() && b.is_nan()))
+}
+
+/// The policy of an animated value's state: writing the same value (NaN over NaN included)
+/// invalidates nothing.
+pub(crate) struct SameValuePolicy;
+
+impl<T: Animate> compose_runtime::MutationPolicy<T> for SameValuePolicy {
+    fn equivalent(a: &T, b: &T) -> bool {
+        same_value(a, b)
+    }
+}
+
 impl Animate for f32 {
     fn to_vector(&self) -> [f32; 4] {
         [*self, 0.0, 0.0, 0.0]

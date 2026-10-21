@@ -77,8 +77,10 @@ pub fn Crossfade<T: Clone + PartialEq + 'static>(
         }))
     });
     // Bumped when a faded-out item leaves: the stack recomposes without it.
+    // Read by the stack's content only: the call site doesn't recompose for the stack's own
+    // changes (it would compare its target again: a state unequal to itself, holding a NaN,
+    // would be added at each pass).
     let removed = remember(|| mutable_state_of(0u64));
-    removed.get();
     let scope = remember_coroutine_scope();
     {
         let items = items.clone();
@@ -124,18 +126,19 @@ pub fn Crossfade<T: Clone + PartialEq + 'static>(
             removed.update(|count| count + 1);
         });
     }
-    let shown: Vec<(u64, T, Animatable<f32>)> = items
-        .borrow()
-        .items
-        .iter()
-        .map(|item| (item.id, item.state.clone(), item.alpha.clone()))
-        .collect();
     let content = Rc::new(content);
     let policy = remember(|| Rc::new(StackLayout) as Rc<dyn MeasurePolicy>);
     Layout(
         modifier,
         policy,
         compose_runtime::callback(move || {
+            removed.get();
+            let shown: Vec<(u64, T, Animatable<f32>)> = items
+                .borrow()
+                .items
+                .iter()
+                .map(|item| (item.id, item.state.clone(), item.alpha.clone()))
+                .collect();
             for (id, state, alpha) in &shown {
                 let content = content.clone();
                 let state = state.clone();

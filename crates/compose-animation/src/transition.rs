@@ -98,13 +98,13 @@ impl<S: Clone + PartialEq + 'static> Transition<S> {
         let scope = remember_coroutine_scope();
         let state = animatable.as_state();
         // The spec of a change from the state the values are at.
-        let changed = *launched.borrow() != target_value;
+        let changed = !crate::vector::same_value(&*launched.borrow(), &target_value);
         let spec = changed.then(|| transition_spec(&self.inner.current.get(), &target_state));
         let running = animatable.clone();
         let inner = self.inner.clone();
         SideEffect(move || {
             let Some(spec) = spec else { return };
-            if *launched.borrow() == target_value {
+            if crate::vector::same_value(&*launched.borrow(), &target_value) {
                 return;
             }
             *launched.borrow_mut() = target_value.clone();

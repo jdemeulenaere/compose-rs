@@ -82,7 +82,10 @@ impl<T: Animate> Animatable<T> {
         Animatable {
             inner: Rc::new(Inner {
                 target: RefCell::new(initial.clone()),
-                value: mutable_state_of(initial),
+                value: compose_runtime::mutable_state_of_with(
+                    initial,
+                    crate::vector::SameValuePolicy,
+                ),
                 is_running: mutable_state_of(false),
                 velocity: Cell::new([0.0; 4]),
                 generation: Cell::new(0),
@@ -153,6 +156,23 @@ impl<T: Animate> Animatable<T> {
         inner.is_running.set(true);
         let _running = Running { inner: inner.clone(), generation };
         let threshold = T::visibility_threshold();
+        // A value that isn't a number (NaN, infinite) can't be animated: it's at the target at
+        // once (a spring would never come to rest).
+        if start.iter().chain(&end).any(|value| !value.is_finite()) {
+            let _ = with_frame_nanos(|time| time).await;
+            if inner.generation.get() != generation {
+                return AnimationResult {
+                    end_reason: AnimationEndReason::Interrupted,
+                    end_value: self.value(),
+                };
+            }
+            inner.value.set(target);
+            inner.velocity.set([0.0; 4]);
+            return AnimationResult {
+                end_reason: AnimationEndReason::Finished,
+                end_value: self.value(),
+            };
+        }
         let mut started = None;
         loop {
             let time = with_frame_nanos(|time| time).await;

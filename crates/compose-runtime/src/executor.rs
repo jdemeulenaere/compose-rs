@@ -209,9 +209,13 @@ fn is_live(key: TaskKey) -> bool {
 }
 
 /// Polls the tasks woken since the last call, and the ones they wake meanwhile, until none is
-/// ready. For hosts: between events and frames. Returns whether a task ran.
+/// ready. For hosts: between events and frames. A task woken again after its poll here (one
+/// that yields) waits for the next call, so it can't hold the thread: frames and input come
+/// between its steps, as Compose's `yield()`. Returns whether a task ran.
 pub fn run_ready() -> bool {
     let mut ran = false;
+    let mut polled: Vec<TaskKey> = Vec::new();
+    let mut deferred: Vec<TaskKey> = Vec::new();
     loop {
         let (mut keys, shared) = with_executor(|executor| {
             let mut keys = std::mem::take(&mut executor.polling);
@@ -222,9 +226,24 @@ pub fn run_ready() -> bool {
         });
         if keys.is_empty() {
             with_executor(|executor| executor.polling = keys);
+            if !deferred.is_empty() {
+                let shared = with_executor(|executor| executor.shared.clone());
+                shared
+                    .ready
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .append(&mut deferred);
+            }
             return ran;
         }
         for &key in &keys {
+            if polled.contains(&key) {
+                if !deferred.contains(&key) {
+                    deferred.push(key);
+                }
+                continue;
+            }
+            polled.push(key);
             ran |= poll_task(key, &shared);
         }
         keys.clear();
