@@ -6,8 +6,8 @@
 use compose::animation::*;
 use compose::foundation::layout::*;
 use compose::foundation::{
-    LazyColumn, LazyListScope, VerticalScrollbar, remember_lazy_list_scrollbar_adapter,
-    remember_lazy_list_state,
+    LazyColumn, LazyListScope, TooltipArea, VerticalScrollbar,
+    remember_lazy_list_scrollbar_adapter, remember_lazy_list_state,
 };
 use compose::material3::*;
 use compose::runtime::*;
@@ -37,8 +37,10 @@ pub fn GalleryWith(about: bool) {
                         });
                     },
                     actions = |_row: RowScope| {
-                        IconButton!(on_click = || {}, {
-                            Icon!(icons::filled::search(), Some("Search"));
+                        TooltipArea!(|| PlainTooltip!({ Text!("Search the gallery") }), {
+                            IconButton!(on_click = || {}, {
+                                Icon!(icons::filled::search(), Some("Search"));
+                            });
                         });
                         Box!({
                             IconButton!(on_click = move || menu.set(true), {

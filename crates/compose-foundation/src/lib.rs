@@ -18,6 +18,7 @@ pub mod scrollbar;
 pub mod shape;
 mod text;
 mod text_field;
+pub mod tooltip;
 
 pub use compose_ui::{
     Alignment, AnnotatedString, Color, FontFamily, FontStyle, ImageBitmap, Modifier,
@@ -57,3 +58,4 @@ pub use shape::{
 };
 pub use text::{BasicAnnotatedText, BasicText, TextElement, TextNode};
 pub use text_field::{BasicTextField, TextFieldElement, TextFieldNode, inner_text_field_only};
+pub use tooltip::{TooltipArea, TooltipPlacement};

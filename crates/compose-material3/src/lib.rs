@@ -48,8 +48,8 @@ pub use selection::{
     Switch, SwitchColors, SwitchDefaults,
 };
 pub use snackbar::{
-    Snackbar, SnackbarData, SnackbarDuration, SnackbarHost, SnackbarHostState, SnackbarResult,
-    SnackbarVisuals,
+    PlainTooltip, Snackbar, SnackbarData, SnackbarDuration, SnackbarHost, SnackbarHostState,
+    SnackbarResult, SnackbarVisuals,
 };
 pub use tabs::{Tab, TabRow, TabRowDefaults};
 pub use text_field::{OutlinedTextField, OutlinedTextFieldDefaults, TextField};
