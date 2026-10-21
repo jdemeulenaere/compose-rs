@@ -118,6 +118,7 @@ impl UiTree {
         actions: &mut Vec<Action>,
     ) {
         let mut requests = Requests::default();
+        let density = self.density;
         if let Some((value, (text_measurer, clipboard))) = self.node_and_measurer(node)
             && let Some(target) =
                 value.chain.get_mut(index).and_then(|entry| entry.as_focus_target())
@@ -129,6 +130,7 @@ impl UiTree {
                 text_measurer,
                 clipboard,
                 pointer_position: None,
+                density,
             };
             target.on_focus_changed(focused, &mut context);
         }
@@ -154,6 +156,7 @@ impl UiTree {
         };
         let origin = self.layer_origin(focus.node, layer);
         let mut requests = Requests::default();
+        let density = self.density;
         if let Some((value, (text_measurer, clipboard))) = self.node_and_measurer(focus.node)
             && let Some(target) =
                 value.chain.get_mut(focus.index as usize).and_then(|entry| entry.as_focus_target())
@@ -165,6 +168,7 @@ impl UiTree {
                 text_measurer,
                 clipboard,
                 pointer_position: Some(tap),
+                density,
             };
             target.on_focus_tap(tap - origin, &mut context);
         }

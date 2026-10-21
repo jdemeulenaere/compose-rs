@@ -73,14 +73,19 @@ impl ModifierNode for IconNode {
 }
 
 impl DrawModifierNode for IconNode {
-    /// The paths, their viewport scaled to the node's size.
+    /// The paths, their viewport fitted in the node (its aspect ratio kept) and centered, as
+    /// Compose's `Icon` (`ContentScale.Fit`).
     fn draw(&mut self, scope: &mut DrawScope<'_>) {
         let size = scope.size();
         let vector = &self.image_vector;
-        let scale = (size.width / vector.viewport_width, size.height / vector.viewport_height);
+        let scale = (size.width / vector.viewport_width).min(size.height / vector.viewport_height);
+        let offset = Offset::new(
+            (size.width - vector.viewport_width * scale) / 2.0,
+            (size.height - vector.viewport_height * scale) / 2.0,
+        );
         for (path, fill) in vector.paths.iter() {
             let color = fill.unwrap_or(self.tint);
-            scope.draw_path_scaled(path, Offset::ZERO, scale, Paint::fill(color));
+            scope.draw_path_scaled(path, offset, (scale, scale), Paint::fill(color));
         }
     }
 }
@@ -119,8 +124,14 @@ pub fn FloatingActionButton(
     // By default the content color for the container, as `contentColorFor`.
     let content_color =
         content_color.or(MaterialTheme::color_scheme().content_color_for(container_color));
+    // At least 56 dp, growing with its content, as Compose's `defaultMinSize`.
     let modifier = modifier
-        .size_wh(56.dp(), 56.dp())
+        .size_in(compose_ui::SizeSpec::bounds(
+            56.dp(),
+            56.dp(),
+            compose_ui::Dp::UNSPECIFIED,
+            compose_ui::Dp::UNSPECIFIED,
+        ))
         .background_shape(container_color, shape)
         .clip(shape)
         .clickable_indicated(true, Some(Role::Button), content_color, on_click);

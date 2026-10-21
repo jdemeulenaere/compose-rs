@@ -105,7 +105,9 @@ impl UiTree {
         let count = value.children.len();
         if count > 0 {
             translate(list, content);
-            for index in 0..count {
+            let order = self.placement_order(node);
+            for position in 0..count {
+                let index = order.as_ref().map_or(position, |order| order[position] as usize);
                 let child = self.node(node).children[index].node;
                 // Overlays are drawn last, over everything.
                 if !self.node(child).overlay {

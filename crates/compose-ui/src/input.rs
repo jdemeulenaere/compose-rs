@@ -181,6 +181,14 @@ pub struct EventContext<'a> {
     pub(crate) clipboard: &'a mut dyn crate::clipboard::Clipboard,
     /// The pointer's position in the root, while handling a pointer event.
     pub(crate) pointer_position: Option<Offset>,
+    pub(crate) density: crate::unit::Density,
+}
+
+impl EventContext<'_> {
+    /// The density, to turn dp distances (a touch slop) into pixels.
+    pub fn density(&self) -> crate::unit::Density {
+        self.density
+    }
 }
 
 /// Requests handlers make, applied after dispatch.

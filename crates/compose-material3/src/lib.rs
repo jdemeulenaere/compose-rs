@@ -40,6 +40,8 @@ pub use theme::{
 #[doc(hidden)]
 pub use compose_ui::{Color, Dp, IntOffset, Modifier, RECTANGLE_SHAPE, Sp};
 
+pub(crate) use selection::blend as selection_blend;
+
 #[doc(hidden)]
 pub fn window_default_dialog_properties() -> compose_ui::DialogProperties {
     compose_ui::DialogProperties::default()

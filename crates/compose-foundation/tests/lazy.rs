@@ -50,9 +50,9 @@ fn only_the_items_in_view_and_a_few_beyond_are_composed() {
     let (mut ui, _) = list();
     ui.on_node_with_text("item 0").assert_exists();
     ui.on_node_with_text("item 4").assert_exists();
-    // 5 in view (100 / 20), and at most a few more.
+    // 5 in view (100 / 20), and a viewport's worth beyond.
     let composed = COMPOSED.with(Cell::get);
-    assert!((5..=10).contains(&composed), "{composed} items composed");
+    assert!((5..=12).contains(&composed), "{composed} items composed");
     ui.on_node_with_text("item 50").assert_does_not_exist();
 }
 

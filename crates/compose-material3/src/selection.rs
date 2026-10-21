@@ -26,6 +26,11 @@ pub struct SwitchColors {
     pub unchecked_thumb_color: Color,
     pub unchecked_track_color: Color,
     pub unchecked_border_color: Color,
+    pub disabled_checked_thumb_color: Color,
+    pub disabled_checked_track_color: Color,
+    pub disabled_unchecked_thumb_color: Color,
+    pub disabled_unchecked_track_color: Color,
+    pub disabled_unchecked_border_color: Color,
 }
 
 impl compose_runtime::ComposeArg for SwitchColors {
@@ -47,6 +52,11 @@ impl SwitchDefaults {
             unchecked_thumb_color: scheme.outline,
             unchecked_track_color: scheme.surface_container_highest,
             unchecked_border_color: scheme.outline,
+            disabled_checked_thumb_color: scheme.surface,
+            disabled_checked_track_color: scheme.on_surface.with_alpha(0.12),
+            disabled_unchecked_thumb_color: scheme.on_surface.with_alpha(0.38),
+            disabled_unchecked_track_color: scheme.surface_container_highest.with_alpha(0.12),
+            disabled_unchecked_border_color: scheme.on_surface.with_alpha(0.12),
         }
     }
 }
@@ -140,7 +150,7 @@ impl ModifierNode for SwitchNode {
     }
 }
 
-fn blend(from: Color, to: Color, fraction: f32) -> Color {
+pub(crate) fn blend(from: Color, to: Color, fraction: f32) -> Color {
     let channel =
         |a: u8, b: u8| (f32::from(a) + (f32::from(b) - f32::from(a)) * fraction).round() as u32;
     Color::from_argb(
@@ -158,21 +168,41 @@ impl DrawModifierNode for SwitchNode {
         let size = scope.size();
         let density = scope.density();
         let colors = self.colors;
-        let alpha =
-            |color: Color| if self.enabled { color } else { color.with_alpha(DISABLED_ALPHA) };
+        // Material's disabled colors, as `SwitchDefaults.colors()`'s.
+        let (checked_thumb, checked_track, unchecked_thumb, unchecked_track, unchecked_border) =
+            if self.enabled {
+                (
+                    colors.checked_thumb_color,
+                    colors.checked_track_color,
+                    colors.unchecked_thumb_color,
+                    colors.unchecked_track_color,
+                    colors.unchecked_border_color,
+                )
+            } else {
+                (
+                    colors.disabled_checked_thumb_color,
+                    colors.disabled_checked_track_color,
+                    colors.disabled_unchecked_thumb_color,
+                    colors.disabled_unchecked_track_color,
+                    colors.disabled_unchecked_border_color,
+                )
+            };
         let track = Rect::new(0.0, 0.0, size.width, size.height);
         let radius = size.height / 2.0;
-        let track_color = blend(colors.unchecked_track_color, colors.checked_track_color, progress);
-        scope.draw_round_rect(track, [radius; 4], Paint::fill(alpha(track_color)));
+        scope.draw_round_rect(
+            track,
+            [radius; 4],
+            Paint::fill(blend(unchecked_track, checked_track, progress)),
+        );
         if progress < 1.0 {
             let border = density.to_px(2.dp());
             let half = border / 2.0;
             let inset = Rect::new(half, half, size.width - half, size.height - half);
-            let border_color = colors.unchecked_border_color.with_alpha(1.0 - progress);
+            let opacity = f32::from(unchecked_border.alpha()) / 255.0 * (1.0 - progress);
             scope.draw_round_rect(
                 inset,
                 [radius - half; 4],
-                Paint::stroke(alpha(border_color), border),
+                Paint::stroke(unchecked_border.with_alpha(opacity), border),
             );
         }
         // The thumb: 16 dp unchecked, 24 dp checked, centered 16 dp from its end.
@@ -180,12 +210,11 @@ impl DrawModifierNode for SwitchNode {
         let start = radius;
         let end = size.width - radius;
         let center = Offset::new(start + (end - start) * progress, size.height / 2.0);
-        let thumb_color = blend(colors.unchecked_thumb_color, colors.checked_thumb_color, progress);
         let half = diameter / 2.0;
         scope.draw_round_rect(
             Rect::new(center.x - half, center.y - half, center.x + half, center.y + half),
             [half; 4],
-            Paint::fill(alpha(thumb_color)),
+            Paint::fill(blend(unchecked_thumb, checked_thumb, progress)),
         );
     }
 }
@@ -256,7 +285,7 @@ struct RadioNode {
     selected: bool,
     enabled: bool,
     colors: RadioButtonColors,
-    /// The dot's radius in dp: 6 selected, 0 not.
+    /// The dot's radius in dp: 5 selected (Compose's 6 dp less half the 2 dp stroke), 0 not.
     dot: Animatable<f32>,
     scope: CoroutineScope,
 }
@@ -267,14 +296,14 @@ impl ModifierNodeElement for RadioElement {
             selected: self.selected,
             enabled: self.enabled,
             colors: self.colors,
-            dot: Animatable::new(if self.selected { 6.0 } else { 0.0 }),
+            dot: Animatable::new(if self.selected { 5.0 } else { 0.0 }),
             scope: CoroutineScope::new(),
         })
     }
     fn update(&self, node: &mut dyn ModifierNode) {
         let Some(node) = node.downcast_mut::<RadioNode>() else { return };
         if node.selected != self.selected {
-            let (dot, target) = (node.dot.clone(), if self.selected { 6.0 } else { 0.0 });
+            let (dot, target) = (node.dot.clone(), if self.selected { 5.0 } else { 0.0 });
             // As Compose's `RadioAnimationDuration`.
             node.scope.launch(async move {
                 dot.animate_to(target, tween(100)).await;
@@ -339,6 +368,9 @@ pub struct SliderColors {
     pub thumb_color: Color,
     pub active_track_color: Color,
     pub inactive_track_color: Color,
+    /// The steps' ticks on the active and the inactive track.
+    pub active_tick_color: Color,
+    pub inactive_tick_color: Color,
 }
 
 impl compose_runtime::ComposeArg for SliderColors {
@@ -357,6 +389,8 @@ impl SliderDefaults {
             thumb_color: scheme.primary,
             active_track_color: scheme.primary,
             inactive_track_color: scheme.surface_container_highest,
+            active_tick_color: scheme.on_primary.with_alpha(0.38),
+            inactive_tick_color: scheme.on_surface_variant.with_alpha(0.38),
         }
     }
 }
@@ -406,10 +440,15 @@ struct SliderNode {
     range: (f32, f32),
     steps: u32,
     colors: SliderColors,
+    /// A press on the track, until it becomes a tap or a drag (or another handler takes it).
+    press: Option<Offset>,
     dragging: bool,
     focused: bool,
     /// The thumb's radius in pixels, from the last measurement.
     radius: f32,
+    /// The value last asked for, until the application gives the slider its new value: keys
+    /// pressed before the next frame go on from it.
+    asked: Option<f32>,
 }
 
 impl ModifierNodeElement for SliderElement {
@@ -422,14 +461,17 @@ impl ModifierNodeElement for SliderElement {
             range: self.range,
             steps: self.steps,
             colors: self.colors,
+            press: None,
             dragging: false,
             focused: false,
             radius: 10.0,
+            asked: None,
         })
     }
     fn update(&self, node: &mut dyn ModifierNode) {
         let Some(node) = node.downcast_mut::<SliderNode>() else { return };
         node.value = self.value;
+        node.asked = None;
         node.on_value_change = self.on_value_change.clone();
         node.on_value_change_finished = self.on_value_change_finished.clone();
         node.enabled = self.enabled;
@@ -462,8 +504,12 @@ const THUMB: compose_ui::Dp = compose_ui::Dp(20.0);
 
 impl SliderNode {
     fn fraction(&self) -> f32 {
+        self.fraction_of(self.value)
+    }
+
+    fn fraction_of(&self, value: f32) -> f32 {
         let (start, end) = self.range;
-        if end <= start { 0.0 } else { ((self.value - start) / (end - start)).clamp(0.0, 1.0) }
+        if end <= start { 0.0 } else { ((value - start) / (end - start)).clamp(0.0, 1.0) }
     }
 
     /// The value at `fraction` of the range, snapped to the steps.
@@ -477,10 +523,11 @@ impl SliderNode {
         start + (end - start) * fraction
     }
 
+    /// Asks the application for `value`: the slider shows the value it is given back (it is
+    /// controlled), as Compose's.
     fn change_to(&mut self, value: f32, context: &mut EventContext<'_>) {
-        if value != self.value {
-            self.value = value;
-            context.invalidate_draw();
+        if value != self.asked.unwrap_or(self.value) {
+            self.asked = Some(value);
             let callback = self.on_value_change.clone();
             context.run(move || callback(value));
         }
@@ -559,6 +606,24 @@ impl DrawModifierNode for SliderNode {
             [half; 4],
             Paint::fill(alpha(self.colors.active_track_color)),
         );
+        // A tick at each stop, as Compose's.
+        if self.steps > 0 {
+            let tick = density.to_px(2.dp()) / 2.0;
+            let stops = self.steps + 2;
+            for stop in 0..stops {
+                let at = start + (end - start) * stop as f32 / (stops - 1) as f32;
+                let color = if at <= x {
+                    self.colors.active_tick_color
+                } else {
+                    self.colors.inactive_tick_color
+                };
+                scope.draw_round_rect(
+                    Rect::new(at - tick, center_y - tick, at + tick, center_y + tick),
+                    [tick; 4],
+                    Paint::fill(alpha(color)),
+                );
+            }
+        }
         if self.focused || self.dragging {
             // The state layer around the thumb, as Material's.
             let layer = radius * 2.0;
@@ -577,6 +642,8 @@ impl DrawModifierNode for SliderNode {
 }
 
 impl PointerInputModifierNode for SliderNode {
+    /// A tap moves the value there; a horizontal drag past the touch slop follows the pointer;
+    /// a vertical one is left to a scrolling parent, as Compose's.
     fn on_pointer_event(
         &mut self,
         event: &mut PointerEvent,
@@ -590,30 +657,53 @@ impl PointerInputModifierNode for SliderNode {
         let radius = self.radius;
         let span = (bounds.width as f32 - 2.0 * radius).max(1.0);
         let fraction = (event.position.x - radius) / span;
+        let slop = context.density().to_px(8.dp());
         match event.kind {
             PointerEventType::Press if !event.consumed => {
-                event.consume();
-                self.dragging = true;
-                context.request_focus();
-                let value = self.value_at(fraction);
-                self.change_to(value, context);
+                self.press = Some(event.position);
+                self.dragging = false;
             }
             PointerEventType::Move if self.dragging => {
                 event.consume();
                 let value = self.value_at(fraction);
                 self.change_to(value, context);
             }
-            PointerEventType::Release if self.dragging => {
-                event.consume();
-                self.dragging = false;
-                context.invalidate_draw();
-                self.finish(context);
+            PointerEventType::Move => {
+                let Some(start) = self.press else { return };
+                if event.consumed {
+                    // A scrolling parent (or another handler) took it.
+                    self.press = None;
+                    return;
+                }
+                if (event.position.x - start.x).abs() > slop {
+                    self.dragging = true;
+                    event.consume();
+                    context.request_focus();
+                    context.invalidate_draw();
+                    let value = self.value_at(fraction);
+                    self.change_to(value, context);
+                }
+            }
+            PointerEventType::Release => {
+                let pressed = self.press.take();
+                if std::mem::take(&mut self.dragging) {
+                    event.consume();
+                    context.invalidate_draw();
+                    self.finish(context);
+                } else if pressed.is_some() && !event.consumed {
+                    event.consume();
+                    context.request_focus();
+                    let value = self.value_at(fraction);
+                    self.change_to(value, context);
+                    self.finish(context);
+                }
             }
             _ => {}
         }
     }
 
     fn on_cancel_pointer_input(&mut self) {
+        self.press = None;
         self.dragging = false;
     }
 }
@@ -629,13 +719,30 @@ impl FocusTargetModifierNode for SliderNode {
 }
 
 impl KeyInputModifierNode for SliderNode {
-    /// The arrows move a step (or a hundredth), Home and End to the ends.
+    /// The arrows move a step (or a hundredth), Home and End to the ends; the change finishes
+    /// when the key is released, as Compose's `slideOnKeyEvents`.
     fn on_key_event(&mut self, event: &KeyEvent, context: &mut EventContext<'_>) -> bool {
-        if event.kind != KeyEventType::KeyDown || !self.enabled {
+        if !self.enabled {
             return false;
         }
+        let handled = matches!(
+            event.key,
+            Key::DirectionRight
+                | Key::DirectionUp
+                | Key::DirectionLeft
+                | Key::DirectionDown
+                | Key::MoveHome
+                | Key::MoveEnd
+        );
+        if !handled {
+            return false;
+        }
+        if event.kind == KeyEventType::KeyUp {
+            self.finish(context);
+            return true;
+        }
         let step = if self.steps > 0 { 1.0 / (self.steps + 1) as f32 } else { 0.01 };
-        let fraction = self.fraction();
+        let fraction = self.fraction_of(self.asked.unwrap_or(self.value));
         let target = match event.key {
             Key::DirectionRight | Key::DirectionUp => fraction + step,
             Key::DirectionLeft | Key::DirectionDown => fraction - step,
@@ -645,7 +752,6 @@ impl KeyInputModifierNode for SliderNode {
         };
         let value = self.value_at(target);
         self.change_to(value, context);
-        self.finish(context);
         true
     }
 }

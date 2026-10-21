@@ -95,7 +95,10 @@ impl UiTree {
         }
         let content = local - *origins.last().expect("a layer");
         let count = value.children.len();
-        for index in (0..count).rev() {
+        // The last placed (drawn on top) first.
+        let order = self.placement_order(node);
+        for position in (0..count).rev() {
+            let index = order.as_ref().map_or(position, |order| order[position] as usize);
             let child = self.node(node).children[index].node;
             // Overlays are hit first, on their own.
             if self.node(child).overlay {
@@ -135,6 +138,7 @@ impl UiTree {
                     return;
                 }
                 let origin = tree.layer_origin(entry.node, entry.layer as usize);
+                let density = tree.density;
                 let Some((value, (text_measurer, clipboard))) = tree.node_and_measurer(entry.node)
                 else {
                     return;
@@ -148,6 +152,7 @@ impl UiTree {
                     text_measurer,
                     clipboard,
                     pointer_position: Some(position),
+                    density,
                 };
                 if let Some(handler) = value.chain[entry.index as usize].as_pointer_input() {
                     handler.on_pointer_event(&mut event, pass, bounds, &mut context);
@@ -241,6 +246,7 @@ impl UiTree {
         let mut requests = Requests::default();
         let mut consumed = false;
         for (node, index) in self.key_path() {
+            let density = self.density;
             let Some((value, (text_measurer, clipboard))) = self.node_and_measurer(node) else {
                 continue;
             };
@@ -251,6 +257,7 @@ impl UiTree {
                 text_measurer,
                 clipboard,
                 pointer_position: None,
+                density,
             };
             if let Some(handler) = value.chain[index].as_key_input()
                 && handler.on_key_event(&event, &mut context)
@@ -328,6 +335,7 @@ impl UiTree {
         let mut requests = Requests::default();
         let mut consumed = false;
         for (node, index) in self.key_path() {
+            let density = self.density;
             let Some((value, (text_measurer, clipboard))) = self.node_and_measurer(node) else {
                 continue;
             };
@@ -338,6 +346,7 @@ impl UiTree {
                 text_measurer,
                 clipboard,
                 pointer_position: None,
+                density,
             };
             if let Some(handler) = value.chain[index].as_key_input()
                 && send(handler, &mut context)

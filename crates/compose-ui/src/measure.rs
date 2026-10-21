@@ -208,6 +208,9 @@ impl UiTree {
         entry.offset = position + centering(entry);
         if layer == 0 {
             value.placed = true;
+            self.place_serial += 1;
+            let serial = self.place_serial;
+            self.node_mut(node).place_order = serial;
         }
     }
 }

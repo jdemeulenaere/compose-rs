@@ -98,6 +98,7 @@ impl ModifierNodeElement for ScrollElement {
             vertical: self.vertical,
             drag: DragScroller::default(),
             fraction: 0.0,
+            laid_out: 0,
         })
     }
 
@@ -123,13 +124,17 @@ impl ModifierNodeElement for ScrollElement {
 /// (then it scrolls, and clicks under it are cancelled).
 struct Drag {
     pointer: PointerId,
+    /// Where it was pressed.
+    start: Offset,
     last: Offset,
-    travelled: f32,
     scrolling: bool,
 }
 
-/// The distance a pointer moves before a drag scrolls, as Compose's touch slop (8 dp).
-const TOUCH_SLOP: f32 = 8.0;
+/// The distance a pointer moves before a drag scrolls, as Compose's touch slop (8 dp), in
+/// pixels.
+pub(crate) fn touch_slop(context: &EventContext<'_>) -> f32 {
+    context.density().to_px(compose_ui::Dp(8.0))
+}
 
 struct ScrollNode {
     state: ScrollState,
@@ -137,6 +142,8 @@ struct ScrollNode {
     drag: DragScroller,
     /// The fraction of a pixel scrolled but not yet shown.
     fraction: f32,
+    /// The offset the last layout used.
+    laid_out: i32,
 }
 
 impl ModifierNode for ScrollNode {
@@ -159,7 +166,9 @@ impl ModifierNode for ScrollNode {
         } else {
             (rect.left, rect.right, viewport.width as f32)
         };
-        let delta = bring_into_view_delta(start, end, length);
+        // Where it will be once the scrolling asked for (not yet laid out) is.
+        let pending = (self.state.value_state().get() - self.laid_out) as f32;
+        let delta = bring_into_view_delta(start - pending, end - pending, length);
         let used = scroll_state_by(&self.state, delta, &mut self.fraction);
         Some(if self.vertical {
             Rect::new(rect.left, rect.top - used, rect.right, rect.bottom - used)
@@ -207,6 +216,7 @@ impl LayoutModifierNode for ScrollNode {
             self.state.max_state().set(max);
         }
         let value = self.state.value_state().get().min(max);
+        self.laid_out = value;
         if value != self.state.value_state().get() {
             self.state.value_state().set(value);
         }
@@ -238,11 +248,12 @@ impl PointerInputModifierNode for ScrollNode {
         event: &mut PointerEvent,
         pass: PointerEventPass,
         _bounds: IntSize,
-        _context: &mut EventContext<'_>,
+        context: &mut EventContext<'_>,
     ) {
         let (vertical, state) = (self.vertical, self.state.clone());
         let fraction = &mut self.fraction;
-        self.drag.on_pointer_event(event, pass, vertical, |delta| {
+        let slop = touch_slop(context);
+        self.drag.on_pointer_event(event, pass, vertical, slop, |delta| {
             scroll_state_by(&state, delta, fraction)
         });
     }
@@ -286,6 +297,7 @@ impl DragScroller {
         event: &mut PointerEvent,
         pass: PointerEventPass,
         vertical: bool,
+        slop: f32,
         mut scroll_by: impl FnMut(f32) -> f32,
     ) {
         match (event.kind, pass) {
@@ -308,8 +320,8 @@ impl DragScroller {
             (PointerEventType::Press, PointerEventPass::Initial) => {
                 self.drag = Some(Drag {
                     pointer: event.pointer,
+                    start: event.position,
                     last: event.position,
-                    travelled: 0.0,
                     scrolling: false,
                 });
             }
@@ -332,21 +344,19 @@ impl DragScroller {
                 if drag.scrolling || drag.pointer != event.pointer || !event.pressed {
                     return;
                 }
-                let moved = event.position - drag.last;
-                let along = if vertical { moved.y } else { moved.x };
+                drag.last = event.position;
                 if event.consumed {
                     // An inner scrollable or handler took it.
-                    drag.last = event.position;
                     return;
                 }
-                drag.travelled += along.abs();
-                drag.last = event.position;
-                if drag.travelled > TOUCH_SLOP {
+                // How far it is from the press (a tremor going back and forth isn't a drag).
+                let moved = event.position - drag.start;
+                let along = if vertical { moved.y } else { moved.x };
+                if along.abs() > slop {
                     drag.scrolling = true;
                     event.consume();
                     // What moved past the slop scrolls.
-                    let past = (drag.travelled - TOUCH_SLOP).copysign(along);
-                    scroll_by(-past);
+                    scroll_by(-(along - slop.copysign(along)));
                 }
             }
             (PointerEventType::Release, PointerEventPass::Initial) => {

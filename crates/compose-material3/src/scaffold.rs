@@ -47,6 +47,8 @@ pub fn VerticalDivider(
 pub struct CardColors {
     pub container_color: Color,
     pub content_color: Color,
+    pub disabled_container_color: Color,
+    pub disabled_content_color: Color,
 }
 
 impl compose_runtime::ComposeArg for CardColors {
@@ -65,6 +67,13 @@ impl CardDefaults {
         CardColors {
             container_color: scheme.surface_container_highest,
             content_color: scheme.on_surface,
+            // As Compose's: the surface variant at 38 % over the surface, the content at 38 %.
+            disabled_container_color: crate::selection_blend(
+                scheme.surface,
+                scheme.surface_variant,
+                0.38,
+            ),
+            disabled_content_color: scheme.on_surface.with_alpha(0.38),
         }
     }
 
@@ -85,7 +94,12 @@ pub fn Card(
     #[default(None)] border: Option<BorderStroke>,
     content: impl Fn(ColumnScope) + 'static,
 ) {
-    let mut surface = modifier.background_shape(colors.container_color, shape).clip(shape);
+    let (container, content_color) = if enabled {
+        (colors.container_color, colors.content_color)
+    } else {
+        (colors.disabled_container_color, colors.disabled_content_color)
+    };
+    let mut surface = modifier.background_shape(container, shape).clip(shape);
     if let Some(border) = border {
         surface = surface.border(border.width, border.color, shape);
     }
@@ -97,7 +111,7 @@ pub fn Card(
             on_click,
         );
     }
-    CompositionLocalProvider(LOCAL_CONTENT_COLOR.provides(colors.content_color), || {
+    CompositionLocalProvider(LOCAL_CONTENT_COLOR.provides(content_color), || {
         Column(
             surface.clone(),
             compose_foundation::layout::Arrangement::TOP,
@@ -168,7 +182,7 @@ pub fn TopAppBar(
             }
             // The title starts 16 dp in (the bar's 4 and 12), or right after the navigation
             // icon, as Compose's `TopAppBarTitleInset`.
-            let inset = if has_navigation { 0.dp() } else { 12.dp() };
+            let inset = if has_navigation { 4.dp() } else { 12.dp() };
             let title = title.clone();
             CompositionLocalProvider(
                 LOCAL_CONTENT_COLOR.provides(colors.title_content_color),

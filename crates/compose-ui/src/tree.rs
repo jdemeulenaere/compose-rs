@@ -131,6 +131,9 @@ pub struct LayoutNode {
     /// parent placed it; drawn last and hit first.
     pub(crate) overlay: bool,
     pub(crate) overlay_origin: crate::unit::Offset,
+    /// When its parent last placed it: children are drawn, and hit, in placement order, as
+    /// Compose's (a scaffold's bars over its content).
+    pub(crate) place_order: u64,
 }
 
 impl LayoutNode {
@@ -154,6 +157,7 @@ impl LayoutNode {
             measured_in: 0,
             overlay: false,
             overlay_origin: crate::unit::Offset::ZERO,
+            place_order: 0,
         }
     }
 
@@ -193,6 +197,8 @@ pub struct UiTree {
     pub(crate) overlays: Vec<NodeId>,
     /// The window's size, from the last layout.
     pub(crate) window: IntSize,
+    /// Counts placements, for children's placement order.
+    pub(crate) place_serial: u64,
     pub(crate) captures: Vec<(crate::input::PointerId, Vec<crate::dispatch::HitEntry>)>,
     /// Observes the state measure policies and custom nodes read (D71), keyed by node.
     pub(crate) observer: Option<Rc<compose_runtime::ReadObserver>>,
@@ -218,10 +224,24 @@ impl UiTree {
             pending_actions: Vec::new(),
             overlays: Vec::new(),
             window: IntSize::new(0, 0),
+            place_serial: 0,
             captures: Vec::new(),
             observer: None,
             measure_runs: 0,
         }
+    }
+
+    /// `node`'s children's indices in placement order (the order they're drawn in), if it
+    /// isn't their order: `None` when it is (the usual case, which allocates nothing).
+    pub(crate) fn placement_order(&self, node: NodeId) -> Option<SmallVec<[u32; 8]>> {
+        let children = &self.node(node).children;
+        let orders = || children.iter().map(|child| self.node(child.node).place_order);
+        if orders().zip(orders().skip(1)).all(|(a, b)| a <= b) {
+            return None;
+        }
+        let mut indices: SmallVec<[u32; 8]> = (0..children.len() as u32).collect();
+        indices.sort_by_key(|index| self.node(children[*index as usize].node).place_order);
+        Some(indices)
     }
 
     pub fn root_id(&self) -> NodeId {

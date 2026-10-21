@@ -32,6 +32,9 @@ const BEYOND: usize = 2;
 /// The most items a measurement asks for beyond those in view, however small they may be.
 const MOST_MISSING: usize = 200;
 
+/// How far from its last index an item is looked for by key.
+const KEY_WINDOW: usize = 100;
+
 /// Where a lazy list is scrolled, as Compose's `LazyListState`: the first visible item and how
 /// far it is scrolled off. Reading them in composition recomposes on scrolls.
 #[derive(Clone)]
@@ -51,8 +54,12 @@ struct LazyListInner {
     remeasure: OwnedState<u64>,
     /// The items to compose: what the layout asks for, read by the items' composition only.
     composed: OwnedState<(usize, usize)>,
-    /// The focused item, kept composed and placed while it scrolls away, as Compose pins it.
-    pinned: OwnedState<Option<usize>>,
+    /// The focused item's key, kept composed and placed while it scrolls away, as Compose pins
+    /// it, and the index it was last at.
+    pinned: OwnedState<Option<u64>>,
+    pinned_near: Cell<usize>,
+    /// The list has had items: an empty layout before that keeps the initial position.
+    had_items: Cell<bool>,
     /// The items composed, in the children's order: written by their composition, read by the
     /// layout (a change of children measures it again).
     children: RefCell<Vec<usize>>,
@@ -84,6 +91,8 @@ impl LazyListState {
                     first_visible_item_index + 1,
                 )),
                 pinned: mutable_state_of(None),
+                pinned_near: Cell::new(0),
+                had_items: Cell::new(false),
                 children: RefCell::new(Vec::new()),
                 first_index: mutable_state_of(first_visible_item_index),
                 first_offset: mutable_state_of(offset),
@@ -238,20 +247,37 @@ impl ComposeArg for LazyListScope {
 /// The items a list's content declared, for one composition of the list.
 struct Items {
     intervals: Vec<Interval>,
+    /// Each interval's first item: a binary search finds an item's interval.
+    starts: Vec<usize>,
     count: usize,
 }
 
 impl Items {
+    fn new(intervals: Vec<Interval>) -> Items {
+        let mut starts = Vec::with_capacity(intervals.len());
+        let mut count = 0;
+        for interval in &intervals {
+            starts.push(count);
+            count += interval.count;
+        }
+        Items { intervals, starts, count }
+    }
+
     /// The interval holding item `index`, and the item's index in it.
     fn find(&self, index: usize) -> Option<(&Interval, usize)> {
-        let mut local = index;
-        for interval in &self.intervals {
-            if local < interval.count {
-                return Some((interval, local));
-            }
-            local -= interval.count;
+        if index >= self.count {
+            return None;
         }
-        None
+        let interval = self.starts.partition_point(|start| *start <= index) - 1;
+        Some((&self.intervals[interval], index - self.starts[interval]))
+    }
+
+    /// The item with `key`, looked for within a window around `near` (as Compose's
+    /// `NearestRangeKeyIndexMap`): an item moved further than that is lost.
+    fn index_of(&self, key: u64, near: usize) -> Option<usize> {
+        let start = near.saturating_sub(KEY_WINDOW);
+        let end = (near + KEY_WINDOW + 1).min(self.count);
+        (start..end).find(|candidate| self.key(*candidate) == key)
     }
 
     fn key(&self, index: usize) -> u64 {
@@ -353,8 +379,7 @@ fn LazyList(
     let scope = LazyListScope::default();
     content(scope.clone());
     let intervals = std::mem::take(&mut *scope.intervals.borrow_mut());
-    let count = intervals.iter().map(|interval| interval.count).sum();
-    let items = Rc::new(Items { intervals, count });
+    let items = Rc::new(Items::new(intervals));
     let info = ListInfo {
         items: items.clone(),
         vertical,
@@ -385,14 +410,16 @@ fn LazyList(
 #[allow(non_snake_case)]
 fn LazyItems(state: LazyListState, items: ItemsRef) {
     let (start, end) = state.inner.composed.get();
-    let pinned = state.inner.pinned.get();
     let count = items.0.count;
     let mut indices: Vec<usize> = (start.min(count)..end.min(count)).collect();
-    if let Some(pinned) = pinned
-        && pinned < count
-        && !indices.contains(&pinned)
+    // The focused item, by key (gone with its item).
+    if let Some(pinned) = state.inner.pinned.get()
+        && let Some(index) = items.0.index_of(pinned, state.inner.pinned_near.get())
     {
-        indices.push(pinned);
+        state.inner.pinned_near.set(index);
+        if !indices.contains(&index) {
+            indices.push(index);
+        }
     }
     *state.inner.children.borrow_mut() = indices.clone();
     for index in indices {
@@ -408,10 +435,13 @@ fn LazyItems(state: LazyListState, items: ItemsRef) {
 fn LazyItem(index: usize, state: LazyListState, items: ItemsRef) {
     let policy = remember(|| Rc::new(ItemLayout) as Rc<dyn MeasurePolicy>);
     let pinned = state.inner.pinned.handle();
+    let item_key = items.0.key(index);
+    let near = state.clone();
     let modifier = Modifier.on_focus_changed(move |focused: bool| {
         if focused {
-            pinned.set(Some(index));
-        } else if pinned.get() == Some(index) {
+            near.inner.pinned_near.set(index);
+            pinned.set(Some(item_key));
+        } else if pinned.get() == Some(item_key) {
             pinned.set(None);
         }
     });
@@ -552,15 +582,25 @@ impl MeasurePolicy for LazyListLayout {
         let mut offset = offset + state.pending.replace(0.0);
         if let Some(first_key) = state.first_key.get()
             && (index >= count || info.items.key(index) != first_key)
-            && let Some(found) =
-                (0..count).find(|candidate| info.items.key(*candidate) == first_key)
+            && let Some(found) = info.items.index_of(first_key, index)
         {
             index = found;
         }
         if count == 0 {
-            index = 0;
-            offset = 0.0;
+            // Before the first items (data still loading), the initial position waits for
+            // them; a list emptied starts again at its top, as Compose's.
+            if state.had_items.get() {
+                state.position.set((0, 0.0));
+                state.first_key.set(None);
+                state.had_items.set(false);
+            } else {
+                state.pending.set(state.pending.get() + offset - state.position.get().1);
+            }
+            state.room_backward.set(0.0);
+            state.room_forward.set(0.0);
+            return scope.layout(constraints.min_width, constraints.min_height);
         }
+        state.had_items.set(true);
         index = index.min(count.saturating_sub(1));
         // Items before the composed ones are stepped over only once composed (their sizes
         // known): the scrolling left waits for them, in this frame's next round.
@@ -577,7 +617,17 @@ impl MeasurePolicy for LazyListLayout {
                         *offset += (main_of(&placeable) + spacing) as f32;
                     }
                     None => {
-                        let wanted = ((-*offset) / smallest_size(sizes) as f32).ceil() as usize + 1;
+                        // Far back: jumped over by the average size (an estimate, as the items
+                        // between aren't composed); near: waits for them to be.
+                        let average = average_size(sizes) as f32 + spacing as f32;
+                        let skip = ((-*offset) / average) as usize;
+                        if skip > MOST_MISSING {
+                            let skip = skip.min(*index);
+                            *index -= skip;
+                            *offset += skip as f32 * average;
+                            continue;
+                        }
+                        let wanted = ((-*offset) / average).ceil() as usize + 1;
                         state.pending.set(state.pending.get() + *offset);
                         *offset = 0.0;
                         return wanted;
@@ -588,9 +638,18 @@ impl MeasurePolicy for LazyListLayout {
             0
         };
         wanted_before = wanted_before.max(step_back(&mut index, &mut offset, &mut sizes, measure));
-        // On over the items scrolled past, while they are composed.
+        // On over the items scrolled past, while they are composed; far ahead, jumped over by
+        // the average size (an estimate).
         while index + 1 < count {
-            let Some(placeable) = measure(index, &mut sizes) else { break };
+            let Some(placeable) = measure(index, &mut sizes) else {
+                let average = average_size(&sizes) as f32 + spacing as f32;
+                let skip = ((offset / average) as usize).min(count - 1 - index);
+                if skip > MOST_MISSING {
+                    index += skip;
+                    offset -= skip as f32 * average;
+                }
+                break;
+            };
             let size = (main_of(&placeable) + spacing) as f32;
             if offset >= size {
                 offset -= size;
@@ -668,16 +727,29 @@ impl MeasurePolicy for LazyListLayout {
         }
         // The items wanted composed: those in view and a few beyond, and as many more as the
         // room left would take, at the smallest size seen, if items were missing.
-        let wanted_start = index.saturating_sub(BEYOND + wanted_before);
-        let mut wanted_end = (end_index + BEYOND).min(count);
+        // A viewport's worth of items beyond each side (at least two), so focus can move to
+        // the next focusable item and scrolling finds them ready.
+        let average = average_size(&sizes);
+        let beyond = ((main_max / (average + spacing).max(1)) as usize).clamp(BEYOND, MOST_MISSING);
+        let wanted_start = index.saturating_sub(beyond + wanted_before);
+        let mut wanted_end = (end_index + beyond).min(count);
         if missing {
+            // At the size of the items in view, if any: the ones about to come are likelier
+            // like them than like the list's average.
+            let in_view = if placed.is_empty() {
+                average
+            } else {
+                (placed.iter().map(|(placeable, _)| main_of(placeable)).sum::<i32>()
+                    / placed.len() as i32)
+                    .max(1)
+            };
             let room = (main_max - content_end).max(0);
-            let more = ((room / smallest_size(&sizes)) as usize + 1).min(MOST_MISSING);
-            wanted_end = (end_index + more + BEYOND).min(count);
+            let more = ((room / (in_view + spacing).max(1)) as usize + 1).min(MOST_MISSING);
+            wanted_end = (end_index + more + beyond).min(count);
         }
         let covers = composed_start <= wanted_start && composed_end >= wanted_end;
         let too_many =
-            composed_start + 2 * BEYOND < wanted_start || composed_end > wanted_end + 2 * BEYOND;
+            composed_start + 2 * beyond < wanted_start || composed_end > wanted_end + 2 * beyond;
         if !covers || too_many {
             state.composed.set((wanted_start, wanted_end));
         }
@@ -714,16 +786,20 @@ impl MeasurePolicy for LazyListLayout {
         let extent_start = main - before;
         let pending = state.pending.get();
         let reaches_start = (index == 0 || composed_start == 0) && wanted_before == 0;
+        // Not reaching an end: estimated from the average size (a nested list's wheel delta
+        // it can't use goes on to its parent).
+        let average = average_size(&sizes) as f32 + spacing as f32;
         state.room_backward.set(if reaches_start {
             (-extent_start) as f32 + pending
         } else {
-            f32::INFINITY
+            (composed_start.min(index) as f32 * average - extent_start as f32 + pending).max(1.0)
         });
         let reaches_end = !missing && (end_index == count || composed_end >= count);
         state.room_forward.set(if reaches_end {
             (extent_end.max(content_end) - main_max).max(0) as f32 - pending
         } else {
-            f32::INFINITY
+            let after_composed = count.saturating_sub(composed_end.max(end_index)) as f32 * average;
+            (after_composed + (extent_end.max(content_end) - main_max) as f32 - pending).max(1.0)
         });
         let children = state.children.borrow().clone();
         for &pinned in &children {
@@ -781,10 +857,13 @@ impl MeasurePolicy for LazyListLayout {
     }
 }
 
-/// The smallest item size measured (at least a pixel): what estimates of how many items fit
-/// use, so they compose enough.
-fn smallest_size(sizes: &HashMap<usize, i32>) -> i32 {
-    sizes.values().copied().min().unwrap_or(1).max(1)
+/// The average item size measured (at least a pixel): what estimates of positions and of how
+/// many items fit use.
+fn average_size(sizes: &HashMap<usize, i32>) -> i32 {
+    if sizes.is_empty() {
+        return 1;
+    }
+    (sizes.values().map(|size| i64::from(*size)).sum::<i64>() / sizes.len() as i64).max(1) as i32
 }
 
 /// The contiguous range of composed items (the children but a pinned one out of it).
@@ -857,7 +936,9 @@ impl ModifierNode for LazyScrollNode {
         } else {
             (rect.left, rect.right, viewport.width as f32)
         };
-        let delta = bring_into_view_delta(start, end, length);
+        // Where it will be once the scrolling asked for (not yet laid out) is.
+        let pending = self.state.inner.pending.get();
+        let delta = bring_into_view_delta(start - pending, end - pending, length);
         let used = if delta == 0.0 { 0.0 } else { self.state.dispatch(delta) };
         Some(if self.vertical {
             Rect::new(rect.left, rect.top - used, rect.right, rect.bottom - used)
@@ -873,10 +954,11 @@ impl PointerInputModifierNode for LazyScrollNode {
         event: &mut PointerEvent,
         pass: PointerEventPass,
         _bounds: IntSize,
-        _context: &mut EventContext<'_>,
+        context: &mut EventContext<'_>,
     ) {
         let state = self.state.clone();
-        self.drag.on_pointer_event(event, pass, self.vertical, |delta| state.dispatch(delta));
+        let slop = crate::scroll::touch_slop(context);
+        self.drag.on_pointer_event(event, pass, self.vertical, slop, |delta| state.dispatch(delta));
     }
 
     fn on_cancel_pointer_input(&mut self) {
