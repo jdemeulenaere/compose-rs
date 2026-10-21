@@ -4,8 +4,8 @@
 //!
 //! Paths and images are resources: defined once (a `DefinePath` or `DefineImage` before their
 //! first use) and dropped when the last frame using them is gone, so a frame names them by id.
-//! Their definitions accumulate until the Kotlin side takes them with the frame it draws, so a
-//! frame drawn twice or skipped loses none.
+//! Their definitions wait until the Kotlin side takes them with the frame it draws, so a frame
+//! drawn twice or skipped loses none; one dropped before it was taken is cancelled.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Weak};
@@ -117,23 +117,51 @@ impl Writer {
     }
 }
 
+/// A resource change the Kotlin side hasn't taken yet.
+enum Pending {
+    Path { id: u32, path: Weak<Path> },
+    Image { id: u32, width: u32, height: u32, pixels: Weak<[u8]> },
+    DropPath(u32),
+    DropImage(u32),
+}
+
 /// The paths and images the Kotlin side holds, by id.
 #[derive(Default)]
 pub struct Resources {
     paths: HashMap<usize, (Weak<Path>, u32)>,
     images: HashMap<usize, (Weak<[u8]>, u32)>,
     next_id: u32,
-    /// Definitions and drops the Kotlin side hasn't taken yet.
-    pub pending: Writer,
+    /// Definitions and drops the Kotlin side hasn't taken yet: a definition dropped before it
+    /// was taken is cancelled, so this stays bounded however many frames go undrawn.
+    pending: Vec<Pending>,
 }
 
 impl Resources {
     fn next(&mut self) -> u32 {
-        self.next_id = self.next_id.wrapping_add(1);
+        self.next_id = self.next_id.wrapping_add(1).max(1);
         self.next_id
     }
 
-    /// The id of `path`, defined (in `pending`) if new.
+    /// Drops path `id`: its definition, if still pending, or the Kotlin side's.
+    fn drop_path(&mut self, id: u32) {
+        let before = self.pending.len();
+        self.pending
+            .retain(|op| !matches!(op, Pending::Path { id: defined, .. } if *defined == id));
+        if self.pending.len() == before {
+            self.pending.push(Pending::DropPath(id));
+        }
+    }
+
+    fn drop_image(&mut self, id: u32) {
+        let before = self.pending.len();
+        self.pending
+            .retain(|op| !matches!(op, Pending::Image { id: defined, .. } if *defined == id));
+        if self.pending.len() == before {
+            self.pending.push(Pending::DropImage(id));
+        }
+    }
+
+    /// The id of `path`, defined if new.
     fn path_id(&mut self, path: &Arc<Path>) -> u32 {
         let key = Arc::as_ptr(path) as usize;
         if let Some((weak, id)) = self.paths.get(&key)
@@ -143,46 +171,17 @@ impl Resources {
         }
         let id = self.next();
         if let Some((_, old)) = self.paths.insert(key, (Arc::downgrade(path), id)) {
-            self.pending.u8(tag::DROP_PATH);
-            self.pending.u32(old);
+            self.drop_path(old);
         }
-        let writer = &mut self.pending;
-        writer.u8(tag::DEFINE_PATH);
-        writer.u32(id);
-        writer.u8(match path.fill_type {
-            PathFillType::NonZero => 0,
-            PathFillType::EvenOdd => 1,
-        });
-        writer.u32(path.commands().len() as u32);
-        for command in path.commands() {
-            match command {
-                PathCommand::MoveTo(point) => {
-                    writer.u8(command::MOVE_TO);
-                    writer.offset(*point);
-                }
-                PathCommand::LineTo(point) => {
-                    writer.u8(command::LINE_TO);
-                    writer.offset(*point);
-                }
-                PathCommand::QuadTo(control, end) => {
-                    writer.u8(command::QUAD_TO);
-                    writer.offset(*control);
-                    writer.offset(*end);
-                }
-                PathCommand::CubicTo(first, second, end) => {
-                    writer.u8(command::CUBIC_TO);
-                    writer.offset(*first);
-                    writer.offset(*second);
-                    writer.offset(*end);
-                }
-                PathCommand::Close => writer.u8(command::CLOSE),
-            }
-        }
+        self.pending.push(Pending::Path { id, path: Arc::downgrade(path) });
         id
     }
 
-    /// The id of `image`, defined (with its pixels) if new.
+    /// The id of `image`, defined if new; 0 (nothing) for an empty one.
     fn image_id(&mut self, image: &ImageBitmap) -> u32 {
+        if image.width() == 0 || image.height() == 0 {
+            return 0;
+        }
         let key = image.id();
         if let Some((weak, id)) = self.images.get(&key)
             && weak.strong_count() > 0
@@ -191,38 +190,108 @@ impl Resources {
         }
         let id = self.next();
         if let Some((_, old)) = self.images.insert(key, (image.downgrade(), id)) {
-            self.pending.u8(tag::DROP_IMAGE);
-            self.pending.u32(old);
+            self.drop_image(old);
         }
-        let writer = &mut self.pending;
-        writer.u8(tag::DEFINE_IMAGE);
-        writer.u32(id);
-        writer.u32(image.width());
-        writer.u32(image.height());
-        writer.u32(image.pixels().len() as u32);
-        writer.bytes.extend_from_slice(image.pixels());
+        self.pending.push(Pending::Image {
+            id,
+            width: image.width(),
+            height: image.height(),
+            pixels: image.downgrade(),
+        });
         id
     }
 
     /// Drops the resources no frame can use any more (their owners are gone).
     pub fn collect(&mut self) {
-        let pending = &mut self.pending;
-        self.paths.retain(|_, (weak, id)| {
-            let alive = weak.strong_count() > 0;
-            if !alive {
-                pending.u8(tag::DROP_PATH);
-                pending.u32(*id);
+        let dead_paths: Vec<u32> = self
+            .paths
+            .values()
+            .filter(|(weak, _)| weak.strong_count() == 0)
+            .map(|(_, id)| *id)
+            .collect();
+        self.paths.retain(|_, (weak, _)| weak.strong_count() > 0);
+        for id in dead_paths {
+            self.drop_path(id);
+        }
+        let dead_images: Vec<u32> = self
+            .images
+            .values()
+            .filter(|(weak, _)| weak.strong_count() == 0)
+            .map(|(_, id)| *id)
+            .collect();
+        self.images.retain(|_, (weak, _)| weak.strong_count() > 0);
+        for id in dead_images {
+            self.drop_image(id);
+        }
+    }
+
+    /// Whether changes wait for the Kotlin side.
+    pub fn has_pending(&self) -> bool {
+        !self.pending.is_empty()
+    }
+
+    /// Appends the pending changes to `out` (a definition whose owner is already gone is
+    /// skipped), and forgets them: the Kotlin side has them.
+    pub fn write_pending(&mut self, out: &mut Writer) {
+        for op in self.pending.drain(..) {
+            match op {
+                Pending::Path { id, path } => {
+                    let Some(path) = path.upgrade() else { continue };
+                    write_path(out, id, &path);
+                }
+                Pending::Image { id, width, height, pixels } => {
+                    let Some(pixels) = pixels.upgrade() else { continue };
+                    out.u8(tag::DEFINE_IMAGE);
+                    out.u32(id);
+                    out.u32(width);
+                    out.u32(height);
+                    out.u32(pixels.len() as u32);
+                    out.bytes.extend_from_slice(&pixels);
+                }
+                Pending::DropPath(id) => {
+                    out.u8(tag::DROP_PATH);
+                    out.u32(id);
+                }
+                Pending::DropImage(id) => {
+                    out.u8(tag::DROP_IMAGE);
+                    out.u32(id);
+                }
             }
-            alive
-        });
-        self.images.retain(|_, (weak, id)| {
-            let alive = weak.strong_count() > 0;
-            if !alive {
-                pending.u8(tag::DROP_IMAGE);
-                pending.u32(*id);
+        }
+    }
+}
+
+fn write_path(writer: &mut Writer, id: u32, path: &Path) {
+    writer.u8(tag::DEFINE_PATH);
+    writer.u32(id);
+    writer.u8(match path.fill_type {
+        PathFillType::NonZero => 0,
+        PathFillType::EvenOdd => 1,
+    });
+    writer.u32(path.commands().len() as u32);
+    for command in path.commands() {
+        match command {
+            PathCommand::MoveTo(point) => {
+                writer.u8(command::MOVE_TO);
+                writer.offset(*point);
             }
-            alive
-        });
+            PathCommand::LineTo(point) => {
+                writer.u8(command::LINE_TO);
+                writer.offset(*point);
+            }
+            PathCommand::QuadTo(control, end) => {
+                writer.u8(command::QUAD_TO);
+                writer.offset(*control);
+                writer.offset(*end);
+            }
+            PathCommand::CubicTo(first, second, end) => {
+                writer.u8(command::CUBIC_TO);
+                writer.offset(*first);
+                writer.offset(*second);
+                writer.offset(*end);
+            }
+            PathCommand::Close => writer.u8(command::CLOSE),
+        }
     }
 }
 
@@ -356,16 +425,17 @@ mod tests {
         list.push(op);
         let (mut resources, mut out) = (Resources::default(), Writer::default());
         write_display_list(&list, &mut resources, &mut out);
-        let defined = resources.pending.bytes.iter().filter(|b| **b == tag::DEFINE_PATH).count();
-        assert!(defined >= 1);
-        assert_eq!(resources.pending.bytes[0], tag::DEFINE_PATH);
-        resources.pending.bytes.clear();
+        let mut pending = Writer::default();
+        resources.write_pending(&mut pending);
+        assert_eq!(pending.bytes[0], tag::DEFINE_PATH);
         // Drawn again: nothing new to define.
         write_display_list(&list, &mut resources, &mut out);
-        assert!(resources.pending.bytes.is_empty());
+        assert!(!resources.has_pending());
         drop(list);
         drop(path);
         resources.collect();
-        assert_eq!(resources.pending.bytes[0], tag::DROP_PATH);
+        let mut pending = Writer::default();
+        resources.write_pending(&mut pending);
+        assert_eq!(pending.bytes[0], tag::DROP_PATH);
     }
 }

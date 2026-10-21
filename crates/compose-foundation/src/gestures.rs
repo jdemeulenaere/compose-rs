@@ -243,8 +243,8 @@ fn drag_driver(
                 let mut guard = StopOnDrop { callbacks: callbacks.clone(), armed: true };
                 delta(&callbacks, along(over));
                 let mut last = start.position;
-                let mut tracker = VelocityTracker::default();
-                tracker.add(start.uptime_millis, along(start.position));
+                let mut tracker = crate::fling::VelocityTracker::default();
+                tracker.add(start.uptime_millis * 1_000_000, along(start.position));
                 let velocity = loop {
                     let change = scope.await_pointer_event(PointerEventPass::Main).await;
                     if change.id != down.id {
@@ -255,10 +255,10 @@ fn drag_driver(
                             change.consume();
                             delta(&callbacks, along(change.position - last));
                             last = change.position;
-                            tracker.add(change.uptime_millis, along(change.position));
+                            tracker.add(change.uptime_millis * 1_000_000, along(change.position));
                         }
                         PointerEventType::Release => {
-                            tracker.add(change.uptime_millis, along(change.position));
+                            tracker.add(change.uptime_millis * 1_000_000, along(change.position));
                             break tracker.velocity();
                         }
                         PointerEventType::Move => break 0.0,
@@ -272,43 +272,4 @@ fn drag_driver(
             }
         }
     })
-}
-
-/// The pointer's speed along the drag's axis at its release, in pixels per second, from its
-/// moves in the last 100 ms, as Compose's `VelocityTracker` (a straight line through them,
-/// here).
-#[derive(Default)]
-struct VelocityTracker {
-    samples: std::collections::VecDeque<(u64, f32)>,
-}
-
-impl VelocityTracker {
-    /// How far back the moves count, as Compose's `HorizonMilliseconds`.
-    const HORIZON_MILLIS: u64 = 100;
-
-    fn add(&mut self, millis: u64, position: f32) {
-        self.samples.push_back((millis, position));
-        while self.samples.front().is_some_and(|(at, _)| millis - at > Self::HORIZON_MILLIS) {
-            self.samples.pop_front();
-        }
-    }
-
-    fn velocity(&self) -> f32 {
-        // Least squares over the window: the slope of position over time.
-        let count = self.samples.len() as f32;
-        if self.samples.len() < 2 {
-            return 0.0;
-        }
-        let first = self.samples[0].0;
-        let times: Vec<f32> =
-            self.samples.iter().map(|(at, _)| (at - first) as f32 / 1000.0).collect();
-        let mean_time = times.iter().sum::<f32>() / count;
-        let mean_position = self.samples.iter().map(|(_, at)| at).sum::<f32>() / count;
-        let (mut covariance, mut variance) = (0.0, 0.0);
-        for (time, (_, position)) in times.iter().zip(&self.samples) {
-            covariance += (time - mean_time) * (position - mean_position);
-            variance += (time - mean_time) * (time - mean_time);
-        }
-        if variance <= f32::EPSILON { 0.0 } else { covariance / variance }
-    }
 }

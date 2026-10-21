@@ -5,11 +5,15 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.res.Configuration
 import android.graphics.Canvas
+import android.os.SystemClock
+import android.os.Trace
 import android.text.InputType
 import android.view.Choreographer
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
+import android.view.accessibility.AccessibilityManager
+import android.view.accessibility.AccessibilityNodeProvider
 import android.view.inputmethod.BaseInputConnection
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
@@ -33,6 +37,14 @@ class ComposeRsView(context: Context, private val app: String) : View(context) {
     private val inputMethods = context.getSystemService(InputMethodManager::class.java)
 
     private val frameCallback = Choreographer.FrameCallback { frame() }
+    private val accessibility = Accessibility(this)
+    private val accessibilityManager = context.getSystemService(AccessibilityManager::class.java)
+    /** A change of semantics is told to accessibility services at most this often. */
+    private var semanticsChangePosted = false
+    private val semanticsChanged = Runnable {
+        semanticsChangePosted = false
+        accessibility.invalidate()
+    }
 
     init {
         isFocusable = true
@@ -115,39 +127,94 @@ class ComposeRsView(context: Context, private val app: String) : View(context) {
         if (result and Frame.AGAIN != 0L) requestFrame()
         ComposeRsRuntime.schedule(Frame.nextTimer(result))
         updateTextInput(result and Frame.TEXT_INPUT != 0L, result and Frame.RESET_INPUT != 0L)
+        if (result and Frame.SEMANTICS != 0L && accessibilityManager.isEnabled && !semanticsChangePosted) {
+            semanticsChangePosted = true
+            postDelayed(semanticsChanged, 100)
+        }
     }
+
+    // ---- Accessibility -------------------------------------------------------------------
+
+    override fun getAccessibilityNodeProvider(): AccessibilityNodeProvider = accessibility
+
+    override fun dispatchHoverEvent(event: MotionEvent): Boolean {
+        if (accessibilityManager.isTouchExplorationEnabled && accessibility.hover(event)) return true
+        return super.dispatchHoverEvent(event)
+    }
+
+    internal fun semantics() = if (host != 0L) ComposeRsNative.semantics(host) else null
+
+    internal fun performSemanticsAction(id: Int, action: Int, value: Float): Boolean =
+        host != 0L && ComposeRsNative.performAction(host, id, action, value)
 
     override fun onDraw(canvas: Canvas) {
         if (host == 0L) return
         val drawing = ComposeRsNative.takeDrawing(host) ?: return
+        Trace.beginSection("compose-rs: replay")
         replayer.replay(canvas, drawing)
+        Trace.endSection()
     }
 
     // ---- Touch ---------------------------------------------------------------------------
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
         if (host == 0L) return false
+        val now = SystemClock.uptimeMillis()
+        fun age(time: Long) = (now - time).coerceAtLeast(0L) * 1_000_000L
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> {
                 val index = event.actionIndex
-                ComposeRsNative.touch(host, 0, event.getPointerId(index), event.getX(index), event.getY(index))
+                ComposeRsNative.touch(host, 0, event.getPointerId(index), event.getX(index), event.getY(index), age(event.eventTime))
             }
             MotionEvent.ACTION_MOVE -> {
+                // The samples batched since the last event, then the latest, at their times: a
+                // fling's velocity comes from all of them.
+                for (sample in 0 until event.historySize) {
+                    val time = age(event.getHistoricalEventTime(sample))
+                    for (index in 0 until event.pointerCount) {
+                        ComposeRsNative.touch(
+                            host,
+                            1,
+                            event.getPointerId(index),
+                            event.getHistoricalX(index, sample),
+                            event.getHistoricalY(index, sample),
+                            time,
+                        )
+                    }
+                }
                 for (index in 0 until event.pointerCount) {
-                    ComposeRsNative.touch(host, 1, event.getPointerId(index), event.getX(index), event.getY(index))
+                    ComposeRsNative.touch(host, 1, event.getPointerId(index), event.getX(index), event.getY(index), age(event.eventTime))
                 }
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP -> {
                 val index = event.actionIndex
-                ComposeRsNative.touch(host, 2, event.getPointerId(index), event.getX(index), event.getY(index))
+                ComposeRsNative.touch(host, 2, event.getPointerId(index), event.getX(index), event.getY(index), age(event.eventTime))
             }
             MotionEvent.ACTION_CANCEL -> {
                 for (index in 0 until event.pointerCount) {
-                    ComposeRsNative.touch(host, 3, event.getPointerId(index), 0f, 0f)
+                    ComposeRsNative.touch(host, 3, event.getPointerId(index), 0f, 0f, 0L)
                 }
             }
         }
+        // A timeout a gesture started (a long press): a tick when it ends.
+        ComposeRsRuntime.schedule(ComposeRsNative.nextTimer())
         return true
+    }
+
+    /** A mouse wheel (or a trackpad's scroll), in pixels, as Compose's scroll events. */
+    override fun onGenericMotionEvent(event: MotionEvent): Boolean {
+        if (host != 0L && event.actionMasked == MotionEvent.ACTION_SCROLL) {
+            val step = 64f * resources.displayMetrics.density
+            ComposeRsNative.scroll(
+                host,
+                event.x,
+                event.y,
+                -event.getAxisValue(MotionEvent.AXIS_HSCROLL) * step,
+                -event.getAxisValue(MotionEvent.AXIS_VSCROLL) * step,
+            )
+            return true
+        }
+        return super.onGenericMotionEvent(event)
     }
 
     // ---- Keys and text -------------------------------------------------------------------
@@ -174,13 +241,17 @@ class ComposeRsView(context: Context, private val app: String) : View(context) {
         if (host == 0L) return false
         val down = event.action == KeyEvent.ACTION_DOWN
         if (event.action == KeyEvent.ACTION_MULTIPLE) return false
+        // The key's character without Ctrl, Alt or Meta (which map to none), so a shortcut's
+        // key (Ctrl+C) is known; Rust types no text while they're held.
+        val shortcutMask = KeyEvent.META_CTRL_MASK or KeyEvent.META_ALT_MASK or KeyEvent.META_META_MASK
         val consumed = ComposeRsNative.key(
             host,
             keyCode(event.keyCode),
-            event.getUnicodeChar(event.metaState),
+            event.getUnicodeChar(event.metaState and shortcutMask.inv()),
             down,
             event.metaState,
         )
+        ComposeRsRuntime.schedule(ComposeRsNative.nextTimer())
         return consumed
     }
 
@@ -194,6 +265,14 @@ class ComposeRsView(context: Context, private val app: String) : View(context) {
 
     internal fun composeText(text: CharSequence, cursor: Int) {
         if (host != 0L) ComposeRsNative.preedit(host, text.toString(), cursor)
+    }
+
+    override fun onRtlPropertiesChanged(layoutDirection: Int) {
+        super.onRtlPropertiesChanged(layoutDirection)
+        if (host != 0L) {
+            ComposeRsNative.setRtl(host, layoutDirection == LAYOUT_DIRECTION_RTL)
+            requestFrame()
+        }
     }
 
     private fun updateTextInput(active: Boolean, reset: Boolean) {
@@ -215,8 +294,14 @@ class ComposeRsView(context: Context, private val app: String) : View(context) {
     override fun onCheckIsTextEditor(): Boolean = textInput
 
     override fun onCreateInputConnection(info: EditorInfo): InputConnection? {
-        if (!textInput) return null
-        info.inputType = InputType.TYPE_CLASS_TEXT
+        if (!textInput || host == 0L) return null
+        val kind = ComposeRsNative.textInputKind(host)
+        info.inputType = if (kind and 1 != 0) {
+            // A password: no suggestions learned from it.
+            InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+        } else {
+            InputType.TYPE_CLASS_TEXT
+        }
         info.imeOptions = EditorInfo.IME_FLAG_NO_FULLSCREEN or EditorInfo.IME_FLAG_NO_EXTRACT_UI
         return ComposeRsInputConnection(this)
     }
@@ -271,6 +356,15 @@ internal class ComposeRsInputConnection(private val view: ComposeRsView) : BaseI
         repeat(beforeLength) { key(KeyEvent.KEYCODE_DEL) }
         repeat(afterLength) { key(KeyEvent.KEYCODE_FORWARD_DEL) }
         return true
+    }
+
+    /**
+     * The connection closes (the keyboard restarts input, focus moves): what it was composing
+     * is the field's to commit or drop (it already did), not to commit again.
+     */
+    override fun closeConnection() {
+        composing = ""
+        super.closeConnection()
     }
 
     override fun sendKeyEvent(event: KeyEvent): Boolean {

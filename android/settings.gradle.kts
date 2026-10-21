@@ -18,3 +18,6 @@ rootProject.name = "compose-rs-android"
 include(":compose-rs")
 // The examples (counter, todo, gallery) in a Kotlin Compose app.
 include(":demo")
+// The benchmark (docs/12): the same app in Kotlin Compose and in compose-rs.
+include(":bench-compose")
+include(":bench-rs")

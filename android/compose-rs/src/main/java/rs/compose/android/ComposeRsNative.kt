@@ -29,15 +29,32 @@ internal object ComposeRsNative {
     /** What `onDraw` replays: resource changes, then the last frame's display list. */
     @JvmStatic external fun takeDrawing(host: Long): ByteBuffer?
 
-    /** Action 0 down, 1 move, 2 up, 3 cancel. */
-    @JvmStatic external fun touch(host: Long, action: Int, pointer: Int, x: Float, y: Float)
+    /** Action 0 down, 1 move, 2 up, 3 cancel; [age]: how long ago it happened (ns). */
+    @JvmStatic external fun touch(host: Long, action: Int, pointer: Int, x: Float, y: Float, age: Long)
 
     @JvmStatic
     external fun key(host: Long, key: Int, character: Int, down: Boolean, meta: Int): Boolean
 
     @JvmStatic external fun text(host: Long, text: String)
 
+    /** A wheel's scroll at ([x], [y]), by ([dx], [dy]) pixels. */
+    @JvmStatic external fun scroll(host: Long, x: Float, y: Float, dx: Float, dy: Float)
+
+    @JvmStatic external fun setRtl(host: Long, rtl: Boolean)
+
+    /** The focused text field's kind: 1 a password. */
+    @JvmStatic external fun textInputKind(host: Long): Int
+
+    /** The milliseconds to the next timer's end, or -1. */
+    @JvmStatic external fun nextTimer(): Long
+
     @JvmStatic external fun preedit(host: Long, text: String, cursor: Int)
+
+    /** The merged semantics tree, for accessibility (`accessibility.rs`). */
+    @JvmStatic external fun semantics(host: Long): ByteBuffer?
+
+    /** An accessibility action on virtual view [id]: 0 click, 1 focus, 2 set progress. */
+    @JvmStatic external fun performAction(host: Long, id: Int, action: Int, value: Float): Boolean
 
     /** Runs the timers due and the tasks woken: the next timer, and whether frames are wanted. */
     @JvmStatic external fun tick(): Long
@@ -55,6 +72,7 @@ internal object Frame {
     const val AGAIN = 2L
     const val TEXT_INPUT = 4L
     const val RESET_INPUT = 8L
+    const val SEMANTICS = 16L
 
     /** The milliseconds to the next timer, or -1. */
     fun nextTimer(result: Long): Long = (result shr 8) - 1

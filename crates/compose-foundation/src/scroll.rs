@@ -8,7 +8,8 @@
 use std::rc::Rc;
 
 use compose_runtime::{
-    ComposeArg, MutableState, OwnedState, composable, mutable_state_of, remember,
+    ComposeArg, CoroutineScope, Job, MutableState, OwnedState, composable, mutable_state_of,
+    remember, with_frame_nanos,
 };
 use compose_ui::{
     Constraints, DrawModifierNode, DrawScope, EventContext, IntSize, LayoutModifierNode,
@@ -138,6 +139,46 @@ struct Drag {
     start: Offset,
     last: Offset,
     scrolling: bool,
+    /// Its speed, for the fling at its release.
+    tracker: crate::fling::VelocityTracker,
+    touch: bool,
+}
+
+/// When an event happened (its time, else now), for velocities.
+fn event_time(event: &PointerEvent) -> u64 {
+    if event.time_nanos != 0 { event.time_nanos } else { compose_runtime::executor::now_nanos() }
+}
+
+/// The fastest a fling starts, as Android's `ViewConfiguration.getScaledMaximumFlingVelocity`
+/// (8,000 dp/s), and the slowest that flings (50 dp/s).
+const MAXIMUM_FLING_DP: f32 = 8000.0;
+const MINIMUM_FLING_DP: f32 = 50.0;
+
+/// Scrolls with `scroll_by` (pixels towards the end; returns those used) along a fling starting
+/// at `velocity` (pixels per second), frame by frame, until its distance is covered or an edge
+/// stops it, as Compose's default fling behaviour.
+fn fling(velocity: f32, density: f32, scroll_by: Rc<dyn Fn(f32) -> f32>) -> Job {
+    let course = crate::fling::Fling::new(velocity, density);
+    CoroutineScope::new().launch(async move {
+        let start = with_frame_nanos(|time| time).await;
+        let mut covered = 0.0f32;
+        loop {
+            let now = with_frame_nanos(|time| time).await;
+            let fraction = if course.duration_nanos == 0 {
+                1.0
+            } else {
+                now.saturating_sub(start) as f32 / course.duration_nanos as f32
+            };
+            let target = course.distance_at(fraction);
+            let delta = target - covered;
+            covered = target;
+            let used = if delta == 0.0 { 0.0 } else { scroll_by(delta) };
+            // An edge took less than asked: the fling ends there.
+            if fraction >= 1.0 || (delta - used).abs() > 0.5 {
+                break;
+            }
+        }
+    })
 }
 
 /// The distance a pointer moves before a drag scrolls, as Compose's touch slop (8 dp), in
@@ -159,6 +200,10 @@ struct ScrollNode {
 }
 
 impl ModifierNode for ScrollNode {
+    fn on_detach(&mut self, _context: &mut compose_ui::DetachContext<'_>) {
+        self.drag.stop_fling();
+    }
+
     fn as_layout(&mut self) -> Option<&mut dyn LayoutModifierNode> {
         Some(self)
     }
@@ -292,11 +337,25 @@ impl PointerInputModifierNode for ScrollNode {
     ) {
         let (vertical, state) = (self.vertical, self.state.clone());
         let fraction = &mut self.fraction;
-        let slop = touch_slop(context);
         let reverse = !vertical && context.layout_direction() == compose_ui::LayoutDirection::Rtl;
-        self.drag.on_pointer_event(event, pass, vertical, reverse, slop, |delta| {
-            scroll_state_by(&state, delta, fraction)
-        });
+        let flung = state.clone();
+        self.drag.on_pointer_event(
+            event,
+            pass,
+            vertical,
+            reverse,
+            context,
+            |delta| scroll_state_by(&state, delta, fraction),
+            move || {
+                let fraction = std::cell::Cell::new(0.0f32);
+                Rc::new(move |delta| {
+                    let mut left = fraction.get();
+                    let used = scroll_state_by(&flung, delta, &mut left);
+                    fraction.set(left);
+                    used
+                })
+            },
+        );
     }
 
     fn on_cancel_pointer_input(&mut self) {
@@ -330,22 +389,30 @@ fn scroll_state_by(state: &ScrollState, delta: f32, fraction: &mut f32) -> f32 {
 #[derive(Default)]
 pub(crate) struct DragScroller {
     drag: Option<Drag>,
+    /// A fling going on: a press stops it (and does nothing else).
+    fling: Option<Job>,
 }
 
 impl DragScroller {
+    /// `scroll_by` scrolls during the event; `flinger` gives a scroll a fling's task can use
+    /// later (a touch let go while moving flings, as on Android).
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn on_pointer_event(
         &mut self,
         event: &mut PointerEvent,
         pass: PointerEventPass,
         vertical: bool,
         reverse: bool,
-        slop: f32,
+        context: &EventContext<'_>,
         mut scroll_by: impl FnMut(f32) -> f32,
+        flinger: impl FnOnce() -> Rc<dyn Fn(f32) -> f32>,
     ) {
+        let slop = touch_slop(context);
         // A horizontal scroll in a right-to-left layout goes the other way, as Compose's
         // `reverseDirection`.
         let mut scroll_by =
             move |delta: f32| if reverse { -scroll_by(-delta) } else { scroll_by(delta) };
+        let along_axis = move |offset: Offset| if vertical { offset.y } else { offset.x };
         match (event.kind, pass) {
             (PointerEventType::Scroll, PointerEventPass::Main) if !event.consumed => {
                 let delta = if vertical { event.scroll_delta.y } else { event.scroll_delta.x };
@@ -364,11 +431,23 @@ impl DragScroller {
                 }
             }
             (PointerEventType::Press, PointerEventPass::Initial) => {
+                // A press during a fling stops it, and is taken: the item under it isn't
+                // clicked, as Compose's.
+                if let Some(fling) = self.fling.take()
+                    && fling.is_active()
+                {
+                    fling.cancel();
+                    event.consume();
+                }
+                let mut tracker = crate::fling::VelocityTracker::default();
+                tracker.add(event_time(event), along_axis(event.position));
                 self.drag = Some(Drag {
                     pointer: event.pointer,
                     start: event.position,
                     last: event.position,
                     scrolling: false,
+                    tracker,
+                    touch: event.pointer_type == compose_ui::PointerType::Touch,
                 });
             }
             (PointerEventType::Move, PointerEventPass::Initial) => {
@@ -378,6 +457,7 @@ impl DragScroller {
                 }
                 let moved = event.position - drag.last;
                 let along = if vertical { moved.y } else { moved.x };
+                drag.tracker.add(event_time(event), along_axis(event.position));
                 if drag.scrolling {
                     drag.last = event.position;
                     event.consume();
@@ -406,10 +486,25 @@ impl DragScroller {
                 }
             }
             (PointerEventType::Release, PointerEventPass::Initial) => {
-                if let Some(drag) = self.drag.take()
+                if let Some(mut drag) = self.drag.take()
                     && drag.scrolling
                 {
                     event.consume();
+                    // A touch let go while moving: the content goes on, slowing down.
+                    drag.tracker.add(event_time(event), along_axis(event.position));
+                    let density = context.density().density;
+                    let maximum = MAXIMUM_FLING_DP * density;
+                    // The finger's velocity; the content scrolls the other way.
+                    let velocity = (-drag.tracker.velocity()).clamp(-maximum, maximum);
+                    if drag.touch && velocity.abs() > MINIMUM_FLING_DP * density {
+                        let scroll = flinger();
+                        let scroll: Rc<dyn Fn(f32) -> f32> = if reverse {
+                            Rc::new(move |delta: f32| -scroll(-delta))
+                        } else {
+                            scroll
+                        };
+                        self.fling = Some(fling(velocity, density, scroll));
+                    }
                 }
             }
             _ => {}
@@ -418,5 +513,12 @@ impl DragScroller {
 
     pub(crate) fn cancel(&mut self) {
         self.drag = None;
+    }
+
+    /// The node leaves: its fling stops.
+    pub(crate) fn stop_fling(&mut self) {
+        if let Some(fling) = self.fling.take() {
+            fling.cancel();
+        }
     }
 }

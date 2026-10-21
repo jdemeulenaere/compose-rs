@@ -5,6 +5,7 @@ extern crate compose_runtime as compose;
 
 mod draw_modifiers;
 mod effects;
+mod fling;
 mod focus_requester;
 mod foundation;
 mod grid;

@@ -28,7 +28,28 @@ static WAKE: OnceLock<(GlobalRef, JStaticMethodID)> = OnceLock::new();
 
 pub(crate) fn set_vm(vm: JavaVM) {
     install_panic_hook();
+    #[cfg(target_os = "android")]
+    compose_ui::trace::set_tracer(trace_begin, trace_end);
     let _ = VM.set(vm);
+}
+
+#[cfg(target_os = "android")]
+#[link(name = "android")]
+unsafe extern "C" {
+    fn ATrace_beginSection(name: *const std::ffi::c_char);
+    fn ATrace_endSection();
+}
+
+#[cfg(target_os = "android")]
+fn trace_begin(name: &'static std::ffi::CStr) {
+    // SAFETY: a NUL-terminated name.
+    unsafe { ATrace_beginSection(name.as_ptr()) };
+}
+
+#[cfg(target_os = "android")]
+fn trace_end() {
+    // SAFETY: ends the section `trace_begin` began on this thread.
+    unsafe { ATrace_endSection() };
 }
 
 fn vm() -> &'static JavaVM {
@@ -100,10 +121,20 @@ impl JniText {
         // SAFETY: the Kotlin measurer's direct buffer holds 8 floats and outlives it.
         unsafe { self.results.add(index).read_unaligned() }
     }
+
+    /// Zeroes the results first: a call that fails (an exception, a missing layout) reads
+    /// zeros rather than the last call's.
+    fn clear_results(&self) {
+        for index in 0..8 {
+            // SAFETY: as `result`; Kotlin writes it only during calls, on this thread.
+            unsafe { (self.results as *mut f32).add(index).write_unaligned(0.0) };
+        }
+    }
 }
 
 impl TextBackend for JniText {
     fn layout(&mut self, handle: u32, text: &str, request: &[u8]) -> ParagraphMetrics {
+        self.clear_results();
         let mut env = main_env();
         let _ = env.with_local_frame(4, |env| -> jni::errors::Result<()> {
             let text = env.new_string(text)?;
@@ -154,6 +185,7 @@ impl TextBackend for JniText {
     }
 
     fn cursor(&self, handle: u32, offset: usize) -> Rect {
+        self.clear_results();
         let mut env = main_env();
         // SAFETY: the method's signature is `(II)V`.
         let _ = unsafe {
@@ -228,6 +260,8 @@ struct Host {
     list: Writer,
     /// What `take_drawing` last gave Kotlin: resource changes, then the display list.
     drawing: Writer,
+    /// What `semantics` last gave Kotlin: the semantics tree.
+    semantics: Writer,
     /// Nothing has been drawn yet.
     first: bool,
 }
@@ -339,6 +373,7 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_create<'local>(
         resources: Resources::default(),
         list: Writer::default(),
         drawing: Writer { bytes: Vec::with_capacity(4096) },
+        semantics: Writer::default(),
         first: true,
     });
     Box::into_raw(host) as jlong
@@ -392,10 +427,13 @@ mod flags {
     pub const TEXT_INPUT: i64 = 4;
     /// A field committed or dropped its composition itself: the input method restarts.
     pub const RESET_INPUT: i64 = 8;
+    /// The semantics may have changed (a recomposition or a layout): accessibility hears it.
+    pub const SEMANTICS: i64 = 16;
 }
 
 fn next_timer_bits() -> i64 {
-    executor::next_timer().map_or(0, |wait| (wait.as_millis() as i64 + 1) << 8)
+    // Rounded up: a tick never comes before the timer ends (and spins).
+    executor::next_timer().map_or(0, |wait| (wait.as_nanos().div_ceil(1_000_000) as i64 + 1) << 8)
 }
 
 /// `ComposeRsNative.frame(host)`: recomposes, lays out and draws what changed.
@@ -407,9 +445,11 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_frame(
 ) -> jlong {
     // SAFETY: a live host, on the main thread.
     let host = unsafe { self::host(host) };
+    let _frame = compose_ui::trace::section(c"compose-rs: frame");
     let stats = host.ui.frame();
     let mut result = 0;
     if stats.drew || host.first {
+        let _serialize = compose_ui::trace::section(c"compose-rs: serialize");
         host.first = false;
         let (list, resources) = (&mut host.list, &mut host.resources);
         host.ui.with_tree(|tree| write_display_list(tree.display_list(), resources, list));
@@ -425,6 +465,9 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_frame(
     if host.ui.take_input_method_reset() {
         result |= flags::RESET_INPUT;
     }
+    if stats.recomposed || stats.measured {
+        result |= flags::SEMANTICS;
+    }
     result | next_timer_bits()
 }
 
@@ -438,8 +481,9 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_takeDrawing(
 ) -> jobject {
     // SAFETY: a live host, on the main thread.
     let host = unsafe { self::host(host) };
+    let _take = compose_ui::trace::section(c"compose-rs: take drawing");
     host.drawing.bytes.clear();
-    host.drawing.bytes.append(&mut host.resources.pending.bytes);
+    host.resources.write_pending(&mut host.drawing);
     host.drawing.bytes.extend_from_slice(&host.list.bytes);
     host.drawing.bytes.reserve(1);
     // SAFETY: the buffer lives in the host until the next `takeDrawing` (or `destroy`), and
@@ -450,9 +494,11 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_takeDrawing(
     buffer.map_or(std::ptr::null_mut(), |buffer| buffer.into_raw())
 }
 
-/// `ComposeRsNative.touch(host, action, pointer, x, y)`: action 0 down, 1 move, 2 up, 3
-/// cancel; positions in the view's pixels.
+/// `ComposeRsNative.touch(host, action, pointer, x, y, age)`: action 0 down, 1 move, 2 up, 3
+/// cancel; positions in the view's pixels; `age` how long ago it happened (nanoseconds), so a
+/// batch of samples keeps their times (a fling's velocity comes from them).
 #[unsafe(no_mangle)]
+#[allow(clippy::too_many_arguments)]
 pub extern "system" fn Java_rs_compose_android_ComposeRsNative_touch(
     _env: JNIEnv,
     _class: JClass,
@@ -461,6 +507,7 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_touch(
     pointer: jint,
     x: jfloat,
     y: jfloat,
+    age: jlong,
 ) {
     // SAFETY: a live host, on the main thread.
     let host = unsafe { self::host(host) };
@@ -476,7 +523,69 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_touch(
             return;
         }
     };
-    host.ui.send_pointer(event.with_pointer(pointer, PointerType::Touch));
+    let time = executor::now_nanos().saturating_sub(age.max(0) as u64).max(1);
+    host.ui.send_pointer(event.with_pointer(pointer, PointerType::Touch).at_time(time));
+}
+
+/// `ComposeRsNative.scroll(host, x, y, dx, dy)`: a mouse wheel at (`x`, `y`), by pixels.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_rs_compose_android_ComposeRsNative_scroll(
+    _env: JNIEnv,
+    _class: JClass,
+    host: jlong,
+    x: jfloat,
+    y: jfloat,
+    dx: jfloat,
+    dy: jfloat,
+) {
+    // SAFETY: a live host, on the main thread.
+    let host = unsafe { self::host(host) };
+    host.ui.send_pointer(PointerEvent::scroll(Offset::new(x, y), Offset::new(dx, dy)));
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_rs_compose_android_ComposeRsNative_setRtl(
+    _env: JNIEnv,
+    _class: JClass,
+    host: jlong,
+    rtl: jboolean,
+) {
+    // SAFETY: a live host, on the main thread.
+    let host = unsafe { self::host(host) };
+    host.ui.set_layout_direction(if rtl != 0 {
+        LayoutDirection::Rtl
+    } else {
+        LayoutDirection::Ltr
+    });
+}
+
+/// `ComposeRsNative.textInputKind(host)`: the focused text field's kind (1: a password), for
+/// the keyboard's input type.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_rs_compose_android_ComposeRsNative_textInputKind(
+    _env: JNIEnv,
+    _class: JClass,
+    host: jlong,
+) -> jint {
+    // SAFETY: a live host, on the main thread.
+    let host = unsafe { self::host(host) };
+    fn password(node: &compose_ui::SemanticsNode) -> Option<bool> {
+        if node.config.focused && node.config.editable {
+            return Some(node.config.password);
+        }
+        node.children.iter().find_map(password)
+    }
+    jint::from(password(&host.ui.semantics_tree(true)).unwrap_or(false))
+}
+
+/// `ComposeRsNative.nextTimer()`: the milliseconds to the next `delay`'s end (rounded up), or
+/// -1.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_rs_compose_android_ComposeRsNative_nextTimer(
+    _env: JNIEnv,
+    _class: JClass,
+) -> jlong {
+    executor::next_timer().map_or(-1, |wait| wait.as_nanos().div_ceil(1_000_000) as jlong)
 }
 
 /// `ComposeRsNative.key(host, key, character, down, meta)`: a key (see `Keys` in
@@ -583,6 +692,51 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_tick(
     executor::fire_timers();
     executor::run_ready();
     let frames = i64::from(executor::has_frame_awaiters());
-    let timer = executor::next_timer().map_or(0, |wait| wait.as_millis() as i64 + 1);
+    let timer =
+        executor::next_timer().map_or(0, |wait| wait.as_nanos().div_ceil(1_000_000) as i64 + 1);
     (timer << 1) | frames
+}
+
+/// `ComposeRsNative.semantics(host)`: the merged semantics tree, for `Accessibility.kt`.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_rs_compose_android_ComposeRsNative_semantics(
+    mut env: JNIEnv,
+    _class: JClass,
+    host: jlong,
+) -> jobject {
+    // SAFETY: a live host, on the main thread.
+    let host = unsafe { self::host(host) };
+    let root = host.ui.semantics_tree(true);
+    crate::accessibility::write_tree(&root, &mut host.semantics);
+    host.semantics.bytes.reserve(1);
+    // SAFETY: the buffer lives in the host until the next `semantics` (or `destroy`), and
+    // Kotlin reads it before calling again.
+    let buffer = unsafe {
+        env.new_direct_byte_buffer(host.semantics.bytes.as_mut_ptr(), host.semantics.bytes.len())
+    };
+    buffer.map_or(std::ptr::null_mut(), |buffer| buffer.into_raw())
+}
+
+/// `ComposeRsNative.performAction(host, id, action, value)`: an accessibility service's action
+/// on virtual view `id`: 0 click, 1 focus, 2 set progress to `value`.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_rs_compose_android_ComposeRsNative_performAction(
+    _env: JNIEnv,
+    _class: JClass,
+    host: jlong,
+    id: jint,
+    action: jint,
+    value: jfloat,
+) -> jboolean {
+    // SAFETY: a live host, on the main thread.
+    let host = unsafe { self::host(host) };
+    let root = host.ui.semantics_tree(true);
+    let Some(node) = crate::accessibility::find(&root, id).map(|node| node.id) else { return 0 };
+    let action = match action {
+        0 => compose_ui::SemanticsAction::OnClick,
+        1 => compose_ui::SemanticsAction::RequestFocus,
+        2 => compose_ui::SemanticsAction::SetProgress(value),
+        _ => return 0,
+    };
+    u8::from(host.ui.perform_semantics_action(node, action))
 }

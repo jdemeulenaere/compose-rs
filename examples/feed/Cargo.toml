@@ -1,0 +1,18 @@
+[package]
+name = "feed"
+description = "A social feed: the compose-rs side of the Android benchmark (android/bench)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lib]
+crate-type = ["rlib", "cdylib"]
+name = "compose_rs_feed"
+
+[dependencies]
+compose = { path = "../../crates/compose" }
+compose-android.workspace = true
+
+[dev-dependencies]
+compose = { path = "../../crates/compose", features = ["test"] }

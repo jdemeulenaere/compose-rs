@@ -1000,6 +1000,10 @@ impl ModifierNodeElement for LazyScrollElement {
 }
 
 impl ModifierNode for LazyScrollNode {
+    fn on_detach(&mut self, _context: &mut compose_ui::DetachContext<'_>) {
+        self.drag.stop_fling();
+    }
+
     fn as_pointer_input(&mut self) -> Option<&mut dyn PointerInputModifierNode> {
         Some(self)
     }
@@ -1029,12 +1033,18 @@ impl PointerInputModifierNode for LazyScrollNode {
         context: &mut EventContext<'_>,
     ) {
         let state = self.state.clone();
-        let slop = crate::scroll::touch_slop(context);
         let reverse =
             !self.vertical && context.layout_direction() == compose_ui::LayoutDirection::Rtl;
-        self.drag.on_pointer_event(event, pass, self.vertical, reverse, slop, |delta| {
-            state.dispatch(delta)
-        });
+        let flung = state.clone();
+        self.drag.on_pointer_event(
+            event,
+            pass,
+            self.vertical,
+            reverse,
+            context,
+            |delta| state.dispatch(delta),
+            move || Rc::new(move |delta| flung.dispatch(delta)),
+        );
     }
 
     fn on_cancel_pointer_input(&mut self) {

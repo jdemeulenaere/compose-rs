@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/compose", "crates/compose-macros", "crates/compose-runtime", "crates/compose-ui", "crates/compose-foundation", "crates/compose-material3", "crates/compose-animation", "crates/compose-test", "crates/compose-skia", "crates/compose-desktop", "crates/compose-android", "examples/counter", "examples/todo", "examples/gallery", "examples/android-demo", "benchmarks"]
+members = ["crates/compose", "crates/compose-macros", "crates/compose-runtime", "crates/compose-ui", "crates/compose-foundation", "crates/compose-material3", "crates/compose-animation", "crates/compose-test", "crates/compose-skia", "crates/compose-desktop", "crates/compose-android", "examples/counter", "examples/todo", "examples/gallery", "examples/android-demo", "examples/feed", "benchmarks"]
 # The benchmarks pull in criterion; keep them out of a plain `cargo build` / `cargo test`.
 default-members = ["crates/compose", "crates/compose-macros", "crates/compose-runtime", "crates/compose-ui", "crates/compose-foundation", "crates/compose-material3", "crates/compose-animation", "crates/compose-test", "crates/compose-android", "examples/counter", "examples/todo", "examples/gallery"]
 

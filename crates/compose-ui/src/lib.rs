@@ -36,6 +36,7 @@ pub mod semantics;
 pub mod shadow;
 pub mod text;
 mod text_selection;
+pub mod trace;
 pub mod tree;
 pub mod unit;
 pub mod window;

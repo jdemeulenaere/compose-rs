@@ -1,6 +1,7 @@
 package rs.compose.android
 
 import android.graphics.Canvas
+import android.graphics.RenderNode
 import android.graphics.Typeface
 import android.graphics.text.LineBreaker
 import android.text.Layout
@@ -28,6 +29,8 @@ internal class TextMeasurer {
     val results: ByteBuffer = ByteBuffer.allocateDirect(32).order(ByteOrder.nativeOrder())
 
     private val layouts = SparseArray<Layout>()
+    /** Each paragraph's drawing, recorded once: a frame draws the node, not the glyphs. */
+    private val nodes = SparseArray<RenderNode>()
     private val typefaces = HashMap<Long, Typeface>()
 
     /** A text style, as the request encodes it. */
@@ -161,9 +164,9 @@ internal class TextMeasurer {
         }
         val builder = StaticLayout.Builder.obtain(text, 0, text.length, paint, width.coerceAtLeast(0))
             .setAlignment(alignment)
-            .setTextDirection(
-                if (rtl) TextDirectionHeuristics.FIRSTSTRONG_RTL else TextDirectionHeuristics.FIRSTSTRONG_LTR,
-            )
+            // The direction Rust decided (its first strong character's), for the whole text, as
+            // the desktop measurer: alignment and the cursor's movement agree with what's drawn.
+            .setTextDirection(if (rtl) TextDirectionHeuristics.RTL else TextDirectionHeuristics.LTR)
             .setIncludePad(false)
             .setUseLineSpacingFromFallbacks(true)
             .setBreakStrategy(LineBreaker.BREAK_STRATEGY_SIMPLE)
@@ -173,9 +176,13 @@ internal class TextMeasurer {
         if (align == 3) builder.setJustificationMode(LineBreaker.JUSTIFICATION_MODE_INTER_WORD)
         val layout = builder.build()
         layouts.put(handle, layout)
-        val lines = layout.lineCount.coerceAtLeast(1)
+        nodes.get(handle)?.discardDisplayList()
+        nodes.remove(handle)
+        // StaticLayout limits the lines only when it ellipsizes: the rest are cut here, as
+        // Compose's `TextLayout` does (the text is clipped to its height).
+        val lines = layout.lineCount.coerceIn(1, maxLines.coerceAtLeast(1))
         results.putFloat(0, width.toFloat())
-        results.putFloat(4, layout.height.toFloat())
+        results.putFloat(4, layout.getLineBottom(lines - 1).toFloat())
         results.putFloat(8, layout.getLineBaseline(0).toFloat())
         results.putFloat(12, layout.getLineBaseline(lines - 1).toFloat())
         results.putFloat(16, lines.toFloat())
@@ -200,18 +207,44 @@ internal class TextMeasurer {
 
     fun release(handle: Int) {
         layouts.remove(handle)
+        nodes.get(handle)?.discardDisplayList()
+        nodes.remove(handle)
     }
 
     fun clear() {
         layouts.clear()
+        for (index in 0 until nodes.size()) nodes.valueAt(index).discardDisplayList()
+        nodes.clear()
     }
 
-    /** Draws paragraph [handle] with its top left at ([x], [y]). */
+    /**
+     * Draws paragraph [handle] with its top left at ([x], [y]): on a hardware canvas, its
+     * render node, recorded the first time (a paragraph never changes once laid out).
+     */
     fun draw(canvas: Canvas, handle: Int, x: Float, y: Float) {
         val layout = layouts.get(handle) ?: return
+        if (!canvas.isHardwareAccelerated) {
+            canvas.save()
+            canvas.translate(x, y)
+            layout.draw(canvas)
+            canvas.restore()
+            return
+        }
+        var node = nodes.get(handle)
+        if (node == null) {
+            node = RenderNode("paragraph")
+            // Its bounds: the layout's width and height, glyphs past them (an italic's
+            // overhang, a line wider than an ellipsized width) not clipped.
+            node.setPosition(0, 0, layout.width.coerceAtLeast(1), layout.height.coerceAtLeast(1))
+            node.setClipToBounds(false)
+            val recording = node.beginRecording()
+            layout.draw(recording)
+            node.endRecording()
+            nodes.put(handle, node)
+        }
         canvas.save()
         canvas.translate(x, y)
-        layout.draw(canvas)
+        canvas.drawRenderNode(node)
         canvas.restore()
     }
 }

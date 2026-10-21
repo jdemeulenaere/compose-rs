@@ -413,7 +413,7 @@ impl Future for Delay {
         let duration = self.duration;
         let deadline = self.deadline;
         let timer = self.timer;
-        let (ready, deadline, timer) = with_executor(|executor| {
+        let (ready, deadline, timer, wake) = with_executor(|executor| {
             let now = executor.now();
             let deadline =
                 deadline.unwrap_or_else(|| now.saturating_add(duration.as_nanos() as u64));
@@ -422,8 +422,11 @@ impl Future for Delay {
                 executor.timers.retain(|Reverse(timer)| timer.serial != serial);
             }
             if now >= deadline {
-                return (true, deadline, None);
+                return (true, deadline, None, None);
             }
+            // A new timer ending first: the host hears it (it may sleep until the one it knew).
+            let earliest = timer.is_none()
+                && executor.timers.peek().is_none_or(|Reverse(next)| deadline < next.deadline);
             executor.timer_serial += 1;
             let serial = executor.timer_serial;
             executor.timers.push(Reverse(Timer {
@@ -431,10 +434,18 @@ impl Future for Delay {
                 serial,
                 waker: context.waker().clone(),
             }));
-            (false, deadline, Some(serial))
+            let wake = if earliest {
+                executor.shared.wake.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone()
+            } else {
+                None
+            };
+            (false, deadline, Some(serial), wake)
         });
         self.deadline = Some(deadline);
         self.timer = timer;
+        if let Some(wake) = wake {
+            wake();
+        }
         if ready { Poll::Ready(()) } else { Poll::Pending }
     }
 }

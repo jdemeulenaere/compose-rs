@@ -77,6 +77,7 @@ impl<B: TextBackend> AndroidTextMeasurer<B> {
         };
         let right_to_left =
             first_strong_is_rtl(text).unwrap_or(options.direction == LayoutDirection::Rtl);
+        let _layout = compose_ui::trace::section(c"compose-rs: text layout");
         encode_request(
             &mut self.request,
             text,
@@ -134,6 +135,31 @@ impl<B: TextBackend> TextMeasurer for AndroidTextMeasurer<B> {
     fn cursor_rect(&self, paragraph: ParagraphHandle, offset: usize) -> Rect {
         let index = utf16_index(&self.entry(paragraph).text, offset);
         self.backend.cursor(paragraph.0 as u32, index)
+    }
+
+    /// One rectangle per line the range covers: the first line from the start to its end,
+    /// the lines between whole, the last from its start to the end (left to right).
+    fn selection_rects(
+        &self,
+        paragraph: ParagraphHandle,
+        range: std::ops::Range<usize>,
+    ) -> Vec<Rect> {
+        if range.is_empty() {
+            return Vec::new();
+        }
+        let (start, end) =
+            (self.cursor_rect(paragraph, range.start), self.cursor_rect(paragraph, range.end));
+        if start.top == end.top {
+            let (left, right) = (start.left.min(end.left), start.left.max(end.left));
+            return vec![Rect::new(left, start.top, right, start.bottom.max(end.bottom))];
+        }
+        let width = self.entry(paragraph).metrics.size.width as f32;
+        let mut rects = vec![Rect::new(start.left, start.top, width, start.bottom)];
+        if end.top > start.bottom {
+            rects.push(Rect::new(0.0, start.bottom, width, end.top));
+        }
+        rects.push(Rect::new(0.0, end.top, end.left, end.bottom));
+        rects
     }
 
     fn text(&self, paragraph: ParagraphHandle) -> &str {
@@ -210,7 +236,8 @@ fn encode_request(
     // As Compose: an ellipsis without soft wrapping is one line.
     let max_lines = if ellipsis && !options.soft_wrap { 1 } else { options.max_lines };
     out.u8(u8::from(options.soft_wrap));
-    out.u32(max_lines.max(1));
+    // A Java `int`: unlimited is `Integer.MAX_VALUE`, not -1.
+    out.u32(max_lines.clamp(1, i32::MAX as u32));
     out.u8(u8::from(ellipsis));
     let normal = |start: bool| if start { 0 } else { 1 };
     out.u8(match style.text_align {

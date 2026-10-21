@@ -603,7 +603,11 @@ impl PointerInputDriver {
             pass,
             taken: false,
             consumed: consumed.clone(),
-            uptime_millis: compose_runtime::executor::now_nanos() / 1_000_000,
+            uptime_millis: if event.time_nanos != 0 {
+                event.time_nanos / 1_000_000
+            } else {
+                compose_runtime::executor::now_nanos() / 1_000_000
+            },
         }));
         compose_runtime::executor::poll_now(job);
         inner.delivery.replace(None);

@@ -14,6 +14,7 @@
 //! An app's Rust library names its root composables with [`export_apps!`], which also defines
 //! `JNI_OnLoad`; `ComposeRsView(context, "name")` shows one.
 
+pub mod accessibility;
 pub mod serialize;
 pub mod text;
 

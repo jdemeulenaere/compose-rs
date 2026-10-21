@@ -42,16 +42,36 @@ internal class Replayer(private val text: TextMeasurer) {
         return radii
     }
 
+    // The paint's last settings: a setter (a native call) runs only for a change.
+    private var paintColor = paint.color
+    private var paintStroke = false
+    private var paintWidth = 0f
+    private var paintCap = 0
+
     private fun ByteBuffer.readPaint(): Paint {
-        paint.color = getInt()
+        val color = getInt()
         val stroke = get().toInt() != 0
         val width = getFloat()
-        paint.style = if (stroke) Paint.Style.STROKE else Paint.Style.FILL
-        paint.strokeWidth = width
-        paint.strokeCap = when (get().toInt()) {
-            1 -> Paint.Cap.ROUND
-            2 -> Paint.Cap.SQUARE
-            else -> Paint.Cap.BUTT
+        val cap = get().toInt()
+        if (color != paintColor) {
+            paintColor = color
+            paint.color = color
+        }
+        if (stroke != paintStroke) {
+            paintStroke = stroke
+            paint.style = if (stroke) Paint.Style.STROKE else Paint.Style.FILL
+        }
+        if (width != paintWidth) {
+            paintWidth = width
+            paint.strokeWidth = width
+        }
+        if (cap != paintCap) {
+            paintCap = cap
+            paint.strokeCap = when (cap) {
+                1 -> Paint.Cap.ROUND
+                2 -> Paint.Cap.SQUARE
+                else -> Paint.Cap.BUTT
+            }
         }
         return paint
     }

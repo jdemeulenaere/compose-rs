@@ -228,10 +228,13 @@ impl UiHost {
         // The tasks due and those waiting for this frame write state this frame recomposes,
         // measures and draws: they ask for no other frame.
         self.framing.set(true);
+        let tasks = crate::trace::section(c"compose-rs: tasks");
         executor::fire_timers();
         executor::run_ready();
         self.handle_focus_requests();
         executor::dispatch_frame();
+        drop(tasks);
+        let compose = crate::trace::section(c"compose-rs: recompose");
         self.frame_requested.set(false);
         let bodies = compose_runtime::bodies_run();
         let content = self.pending_content.borrow_mut().take();
@@ -267,17 +270,21 @@ impl UiHost {
         }
         let mut recomposed =
             (self.composition.has_invalidations() && self.composition.recompose()) || composed;
+        drop(compose);
         let size = self.size;
         let invalid_before_layout = self.composition.has_invalidations();
+        let layout = crate::trace::section(c"compose-rs: layout");
         let mut measured = self.with_tree(|tree| {
             tree.apply_observed_writes();
             tree.layout(size)
         });
+        drop(layout);
         // A layout that changed what to compose (a lazy list reaching items it lacks) is
         // composed and laid out again in this frame, a few times at most, before drawing.
         let mut rounds = 0;
         while !invalid_before_layout && rounds < 3 && self.composition.has_invalidations() {
             rounds += 1;
+            let _round = crate::trace::section(c"compose-rs: recompose and layout again");
             recomposed |= self.composition.recompose();
             measured |= self.with_tree(|tree| {
                 tree.apply_observed_writes();
@@ -290,7 +297,9 @@ impl UiHost {
             let actions = self.with_tree(|tree| tree.refresh_hover());
             Self::run(actions);
         }
+        let draw = crate::trace::section(c"compose-rs: draw");
         let (drew, actions) = self.with_tree(|tree| (tree.draw(), tree.take_pending_actions()));
+        drop(draw);
         // What composition queued (a focus lost, listeners attached), now that the tree is free.
         Self::run(actions);
         // `LaunchedEffect`s started by the pass take their first step.
@@ -326,7 +335,10 @@ impl UiHost {
     }
 
     /// Dispatches a pointer event (its position in the root), then runs the handlers' actions.
-    pub fn send_pointer(&mut self, event: PointerEvent) {
+    pub fn send_pointer(&mut self, mut event: PointerEvent) {
+        if event.time_nanos == 0 {
+            event.time_nanos = executor::now_nanos();
+        }
         let actions = self.with_tree(|tree| tree.dispatch_pointer(event));
         Self::run(actions);
         self.wake_if_dirty();

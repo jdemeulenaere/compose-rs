@@ -66,6 +66,9 @@ pub struct PointerEvent {
     /// Set by a handler that used the event: handlers after it should ignore it, as
     /// `PointerInputChange.consume()`.
     pub consumed: bool,
+    /// When it happened, by the executor's clock (nanoseconds), as `uptimeMillis`: a platform
+    /// delivering events late or batched says when each was; 0 is "as it's dispatched".
+    pub time_nanos: u64,
 }
 
 impl PointerEvent {
@@ -78,6 +81,7 @@ impl PointerEvent {
             pressed,
             scroll_delta: Offset::ZERO,
             consumed: false,
+            time_nanos: 0,
         }
     }
 
@@ -100,6 +104,11 @@ impl PointerEvent {
             scroll_delta: delta,
             ..PointerEvent::new(PointerEventType::Scroll, position, false)
         }
+    }
+
+    /// The same event, as it happened at `time_nanos` (by the executor's clock).
+    pub fn at_time(self, time_nanos: u64) -> PointerEvent {
+        PointerEvent { time_nanos, ..self }
     }
 
     /// The same event for another pointer (a finger).
