@@ -457,7 +457,7 @@ fn transform(
     // Closures passed to composable calls are memoized on their captures, then region groups
     // are placed.
     let visible = params.iter().flat_map(|param| param.visible.clone()).collect();
-    crate::memo::Memoize::new(visible).visit_block_mut(&mut function.block);
+    crate::memo::Memoize::new(visible, &function.block).visit_block_mut(&mut function.block);
     let mut regions = Regions::new(callables, key);
     regions.transform_block(&mut function.block);
     let call_macro = call_macro(&function, &params, key, site);

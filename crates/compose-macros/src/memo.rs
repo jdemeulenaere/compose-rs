@@ -22,7 +22,7 @@
 use std::collections::HashSet;
 
 use proc_macro2::{Ident, Span, TokenStream, TokenTree};
-use quote::{ToTokens, quote};
+use quote::{ToTokens, format_ident, quote};
 use syn::punctuated::Punctuated;
 use syn::visit::{self, Visit};
 use syn::visit_mut::{self, VisitMut};
@@ -106,19 +106,41 @@ fn key_tuple(keys: Vec<TokenStream>) -> TokenStream {
     key_tuple(chunks)
 }
 
+/// The runtime function resolving a probe for a lambda of `arity` arguments: one spelling the
+/// `Fn` bound out, so untyped closure parameters are inferred, up to four.
+fn resolver(arity: Option<usize>) -> Option<Ident> {
+    arity.filter(|arity| *arity <= 4).map(|arity| format_ident!("resolve_{}", arity))
+}
+
+/// The runtime function wrapping a lambda of `arity` arguments in a `Callback`, as `resolver`.
+pub(crate) fn wrapper(arity: usize) -> Ident {
+    if arity <= 4 { format_ident!("callback_{}", arity) } else { format_ident!("callback") }
+}
+
 /// A lookup of the lambda remembered at this position, keyed with `keys`: the kept callback if
 /// they are all `same` as last pass's, else `make` stored.
-fn probe_with(keys: Vec<TokenStream>, make: TokenStream) -> TokenStream {
+fn probe_with(keys: Vec<TokenStream>, make: TokenStream, arity: Option<usize>) -> TokenStream {
     let keys = key_tuple(keys);
+    let resolve = match resolver(arity) {
+        Some(resolver) => {
+            quote! { ::compose::__private::#resolver(::compose::__private::lambda_probe(#keys), #make) }
+        }
+        None => quote! { ::compose::__private::lambda_probe(#keys).resolve(#make) },
+    };
     quote! {{
         #[allow(unused_imports)]
         use ::compose::__private::{KeyedProbe as _, UnkeyedProbe as _};
-        ::compose::__private::lambda_probe(#keys).resolve(#make)
+        #resolve
     }}
 }
 
 /// The memoized form of `closure`: a probe of the lambda remembered at this position.
-pub(crate) fn probe(captures: &[Ident], unknown: bool, closure: TokenStream) -> TokenStream {
+pub(crate) fn probe(
+    captures: &[Ident],
+    unknown: bool,
+    closure: TokenStream,
+    arity: Option<usize>,
+) -> TokenStream {
     let mut keys: Vec<TokenStream> = captures
         .iter()
         .map(|capture| quote! { (&&::compose::__private::ArgProbe(&#capture)).arg_key() })
@@ -126,7 +148,7 @@ pub(crate) fn probe(captures: &[Ident], unknown: bool, closure: TokenStream) -> 
     if unknown {
         keys.push(quote! { ::compose::__private::Unkeyed::CHANGED });
     }
-    probe_with(keys, closure)
+    probe_with(keys, closure, arity)
 }
 
 /// A callback given as a value (`on_click = on_remove`, a default): memoized on the value
@@ -134,10 +156,12 @@ pub(crate) fn probe(captures: &[Ident], unknown: bool, closure: TokenStream) -> 
 pub(crate) fn probe_value(value: TokenStream) -> TokenStream {
     let name = Ident::new("__compose_value", Span::mixed_site());
     let key = quote! { (&&::compose::__private::ArgProbe(#name)).arg_key() };
-    let probe = probe_with(vec![key], quote! { ::compose::__private::to_callback(#name) });
+    let keys = key_tuple(vec![key]);
     quote! {{
+        #[allow(unused_imports)]
+        use ::compose::__private::{KeyedProbe as _, UnkeyedProbe as _};
         let #name = &(#value);
-        #probe
+        ::compose::__private::lambda_probe(#keys).resolve_cloned(#name)
     }}
 }
 
@@ -149,6 +173,32 @@ fn local_bindings(local: &syn::Local, out: &mut Vec<String>) {
     } else {
         bindings(&local.pat, out)
     }
+}
+
+/// The snake-case identifiers directly before a `=` (not `==`) in a macro's top-level tokens.
+fn assigned_names(tokens: TokenStream) -> Vec<String> {
+    let tokens: Vec<TokenTree> = tokens.into_iter().collect();
+    let mut names = Vec::new();
+    for window in tokens.windows(3) {
+        if let (TokenTree::Ident(ident), TokenTree::Punct(equals)) = (&window[0], &window[1]) {
+            let next_is_equals =
+                matches!(&window[2], TokenTree::Punct(next) if next.as_char() == '=');
+            let name = ident.to_string();
+            if equals.as_char() == '='
+                && equals.spacing() == proc_macro2::Spacing::Alone
+                && !next_is_equals
+                && !crate::regions::is_pascal_case(&name)
+            {
+                names.push(name);
+            }
+        }
+    }
+    if let [.., TokenTree::Ident(ident), TokenTree::Punct(equals)] = tokens.as_slice()
+        && equals.as_char() == '='
+    {
+        names.push(ident.to_string());
+    }
+    names
 }
 
 /// The identifiers in a macro's tokens.
@@ -196,7 +246,9 @@ fn bindings(pattern: &Pat, out: &mut Vec<String>) {
 }
 
 /// The names a refutable pattern binds (`match` arms, `if let`, `let … else`). A PascalCase
-/// identifier there is taken for a constant or a unit variant (`None`).
+/// identifier there may be a constant or a unit variant, or a binding: it is bound *tainted*
+/// (marked with a leading `TAINTED`), so a lambda naming it counts as always changed. `None` is
+/// the prelude's variant.
 fn refutable_bindings(pattern: &Pat, out: &mut Vec<String>) {
     pattern_bindings(pattern, out, true)
 }
@@ -208,6 +260,8 @@ fn pattern_bindings(pattern: &Pat, out: &mut Vec<String>, refutable: bool) {
             let name = pattern.ident.to_string();
             if !self.1 || !crate::regions::is_pascal_case(&name) {
                 self.0.push(name);
+            } else if name != "None" {
+                self.0.push(format!("{TAINTED}{name}"));
             }
             visit::visit_pat_ident(self, pattern);
         }
@@ -231,6 +285,16 @@ fn condition_bindings(condition: &Expr, out: &mut Vec<String>) {
     }
 }
 
+/// Marks a bound name as tainted in binding lists.
+const TAINTED: char = '\u{1}';
+
+fn binding(name: String) -> (String, bool) {
+    match name.strip_prefix(TAINTED) {
+        Some(name) => (name.to_string(), true),
+        None => (name, false),
+    }
+}
+
 /// Scopes of local names, innermost last. A tainted name may be a local bound by a macro the
 /// walk can't see into.
 #[derive(Clone, Default)]
@@ -238,7 +302,7 @@ pub(crate) struct Scopes(Vec<Vec<(String, bool)>>);
 
 impl Scopes {
     fn push(&mut self, names: Vec<String>) {
-        self.0.push(names.into_iter().map(|name| (name, false)).collect());
+        self.0.push(names.into_iter().map(binding).collect());
     }
 
     fn pop(&mut self) {
@@ -246,7 +310,7 @@ impl Scopes {
     }
 
     fn bind(&mut self, names: Vec<String>) {
-        self.0.last_mut().expect("a scope").extend(names.into_iter().map(|name| (name, false)));
+        self.0.last_mut().expect("a scope").extend(names.into_iter().map(binding));
     }
 
     fn taint(&mut self, names: Vec<String>) {
@@ -268,6 +332,8 @@ impl Scopes {
 /// The captures of a closure or block: free identifiers naming locals of `outer`.
 struct Free<'a> {
     outer: &'a Scopes,
+    /// `macro_rules!` defined in the function: they can name its locals.
+    local_macros: &'a [String],
     inner: Scopes,
     found: Vec<Ident>,
     seen: HashSet<String>,
@@ -287,18 +353,40 @@ impl Free<'_> {
         }
     }
 
+    /// Whether a macro can't reach a local that isn't in its tokens.
+    fn trusted(&self, name: &str) -> bool {
+        // `marked` is the call-macro marker this pass writes.
+        (KNOWN_MACROS.contains(&name) || crate::regions::is_pascal_case(name) || name == "marked")
+            && !self.local_macros.iter().any(|local| local == name)
+    }
+
     fn scan_tokens(&mut self, tokens: TokenStream) {
+        let mut previous: Option<Ident> = None;
         for token in tokens {
             match token {
-                TokenTree::Ident(ident) => self.use_name(&ident),
+                TokenTree::Ident(ident) => {
+                    self.use_name(&ident);
+                    previous = Some(ident);
+                    continue;
+                }
                 TokenTree::Group(group) => self.scan_tokens(group.stream()),
                 TokenTree::Literal(literal) => {
                     for name in format_names(&literal.to_string()) {
-                        self.use_name(&Ident::new(&name, Span::call_site()));
+                        // The literal's span: the name resolves where the string was written.
+                        self.use_name(&Ident::new(&name, literal.span()));
                     }
                 }
-                TokenTree::Punct(_) => {}
+                TokenTree::Punct(punct) => {
+                    // A macro called inside a macro's tokens.
+                    if punct.as_char() == '!'
+                        && let Some(name) = &previous
+                        && !self.trusted(&name.to_string())
+                    {
+                        self.unknown = true;
+                    }
+                }
             }
+            previous = None;
         }
     }
 
@@ -364,10 +452,7 @@ impl<'ast> Visit<'ast> for Free<'_> {
 
     fn visit_macro(&mut self, mac: &'ast syn::Macro) {
         let name = mac.path.segments.last().map(|segment| segment.ident.to_string());
-        let known = name.as_deref().is_some_and(|name| {
-            KNOWN_MACROS.contains(&name) || crate::regions::is_pascal_case(name)
-        });
-        if !known {
+        if !name.as_deref().is_some_and(|name| self.trusted(name)) {
             self.unknown = true;
         }
         self.scan_tokens(mac.tokens.clone());
@@ -446,9 +531,14 @@ impl<'ast> Visit<'ast> for Free<'_> {
 }
 
 /// The captures of `node` among the locals of `outer`, and whether it calls an unknown macro.
-fn captures_of(outer: &Scopes, visit: impl FnOnce(&mut Free<'_>)) -> (Vec<Ident>, bool) {
+fn captures_of(
+    outer: &Scopes,
+    local_macros: &[String],
+    visit: impl FnOnce(&mut Free<'_>),
+) -> (Vec<Ident>, bool) {
     let mut free = Free {
         outer,
+        local_macros,
         inner: Scopes::default(),
         found: Vec::new(),
         seen: HashSet::new(),
@@ -460,10 +550,15 @@ fn captures_of(outer: &Scopes, visit: impl FnOnce(&mut Free<'_>)) -> (Vec<Ident>
 
 /// A closure made a callback, memoized on its captures; `move` is added, as a callback is
 /// `'static`.
-fn memoize_closure(scopes: &Scopes, closure: &mut syn::ExprClosure) -> Expr {
-    let (captures, unknown) = captures_of(scopes, |free| free.visit_expr_closure(closure));
+fn memoize_closure(
+    scopes: &Scopes,
+    local_macros: &[String],
+    closure: &mut syn::ExprClosure,
+) -> Expr {
+    let (captures, unknown) =
+        captures_of(scopes, local_macros, |free| free.visit_expr_closure(closure));
     closure.capture.get_or_insert_with(Default::default);
-    let tokens = probe(&captures, unknown, closure.to_token_stream());
+    let tokens = probe(&captures, unknown, closure.to_token_stream(), Some(closure.inputs.len()));
     syn::parse2(tokens).expect("a probe parses")
 }
 
@@ -484,13 +579,26 @@ impl syn::parse::Parse for MacroArgument {
 
 pub(crate) struct Memoize {
     scopes: Scopes,
+    local_macros: Vec<String>,
 }
 
 impl Memoize {
-    pub fn new(parameters: Vec<String>) -> Memoize {
+    pub fn new(parameters: Vec<String>, body: &syn::Block) -> Memoize {
         let mut scopes = Scopes::default();
         scopes.push(parameters);
-        Memoize { scopes }
+        // `macro_rules!` items in the body, at any depth: hygiene lets them name the locals in
+        // scope where they're defined, so they're never trusted.
+        struct LocalMacros(Vec<String>);
+        impl<'ast> Visit<'ast> for LocalMacros {
+            fn visit_item_macro(&mut self, item: &'ast syn::ItemMacro) {
+                if let Some(ident) = &item.ident {
+                    self.0.push(ident.to_string());
+                }
+            }
+        }
+        let mut local_macros = LocalMacros(Vec::new());
+        local_macros.visit_block(body);
+        Memoize { scopes, local_macros: local_macros.0 }
     }
 
     /// A call macro argument: a closure or a block marked with its captures,
@@ -500,15 +608,17 @@ impl Memoize {
             Expr::Closure(closure) => {
                 // Inner calls first, with the closure's parameters in scope.
                 self.visit_expr_closure_mut(closure);
-                let (captures, unknown) =
-                    captures_of(&self.scopes, |free| free.visit_expr_closure(closure));
+                let (captures, unknown) = captures_of(&self.scopes, &self.local_macros, |free| {
+                    free.visit_expr_closure(closure)
+                });
                 Marked::new(captures, unknown, MarkedBody::Closure(closure.clone()))
                     .to_tokens(tokens);
             }
             Expr::Block(block) if block.label.is_none() && block.attrs.is_empty() => {
                 self.visit_block_mut(&mut block.block);
-                let (captures, unknown) =
-                    captures_of(&self.scopes, |free| free.visit_block(&block.block));
+                let (captures, unknown) = captures_of(&self.scopes, &self.local_macros, |free| {
+                    free.visit_block(&block.block)
+                });
                 Marked::new(captures, unknown, MarkedBody::Block(block.block.clone()))
                     .to_tokens(tokens);
             }
@@ -575,7 +685,23 @@ impl VisitMut for Memoize {
                         memoize.scopes.bind(names);
                     }
                     syn::Stmt::Macro(statement) => {
-                        if is_call_macro_path(&statement.mac.path) {
+                        let name = statement
+                            .mac
+                            .path
+                            .segments
+                            .last()
+                            .map(|segment| segment.ident.to_string());
+                        let local =
+                            name.as_ref().is_some_and(|name| memoize.local_macros.contains(name));
+                        if is_call_macro_path(&statement.mac.path) && !local {
+                            // A PascalCase macro may be the user's, binding the names it's given
+                            // (`Bind!(current = …)`): a new name before `=` is tainted. Names of
+                            // locals, and every other identifier, keep their meaning.
+                            let assigned = assigned_names(statement.mac.tokens.clone())
+                                .into_iter()
+                                .filter(|name| !memoize.scopes.contains(name))
+                                .collect();
+                            memoize.scopes.taint(assigned);
                             memoize.rewrite_call_macro(&mut statement.mac);
                             if let Some(path) = unqualify(&mut statement.mac) {
                                 let attrs = std::mem::take(&mut statement.attrs);
@@ -611,7 +737,7 @@ impl VisitMut for Memoize {
                 for argument in &mut call.args {
                     if let Expr::Closure(closure) = argument {
                         self.visit_expr_closure_mut(closure);
-                        *argument = memoize_closure(&self.scopes, closure);
+                        *argument = memoize_closure(&self.scopes, &self.local_macros, closure);
                     } else {
                         self.visit_expr_mut(argument);
                     }
@@ -627,7 +753,7 @@ impl VisitMut for Memoize {
                 for argument in &mut call.args {
                     if let (true, Expr::Closure(closure)) = (constructor, &mut *argument) {
                         self.visit_expr_closure_mut(closure);
-                        *argument = memoize_closure(&self.scopes, closure);
+                        *argument = memoize_closure(&self.scopes, &self.local_macros, closure);
                     } else {
                         self.visit_expr_mut(argument);
                     }

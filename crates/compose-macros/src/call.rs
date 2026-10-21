@@ -13,7 +13,7 @@ use quote::{ToTokens, quote, quote_spanned};
 use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
 use syn::spanned::Spanned;
-use syn::{Error, Expr, Ident, Token, braced, bracketed, parenthesized};
+use syn::{Error, Expr, Ident, Token, braced, bracketed};
 
 use crate::memo;
 
@@ -48,10 +48,11 @@ impl Parse for Parameter {
     }
 }
 
-/// A closure or block the caller's `#[composable]` marked with its captures:
-/// `::compose::__private::marked!((capture, …) |x| …)`. Bound to a callback parameter, it is
-/// memoized on them; bound to another parameter, it is passed as written. The marker is a macro
-/// that expands to its body, so a user's own PascalCase macro receiving it still works.
+/// A closure or block the caller's `#[composable]` marked with its captures: its first
+/// statement is `::compose::__private::marked!(capture, …);`, which expands to nothing. Bound to
+/// a callback parameter, it is memoized on them; bound to another parameter, it is passed as
+/// written. A marked block is still a block and a marked closure still a closure, so a user's
+/// own PascalCase macro receiving one (as `$body:block`, `|$x:ident| $e:expr`) still works.
 pub(crate) struct Marked {
     captures: Vec<Ident>,
     unknown: bool,
@@ -63,29 +64,6 @@ pub(crate) enum MarkedBody {
     Closure(syn::ExprClosure),
 }
 
-impl Parse for Marked {
-    fn parse(input: ParseStream) -> syn::Result<Marked> {
-        let content;
-        parenthesized!(content in input);
-        let captures: Punctuated<Ident, Token![,]> =
-            Punctuated::parse_terminated_with(&content, |stream: ParseStream| {
-                stream.parse::<Ident>()
-            })?;
-        let mut unknown = false;
-        let mut captures: Vec<Ident> = captures.into_iter().collect();
-        if let Some(position) = captures.iter().position(|capture| capture == "__compose_unknown") {
-            captures.remove(position);
-            unknown = true;
-        }
-        let body = if input.peek(syn::token::Brace) {
-            MarkedBody::Block(input.parse()?)
-        } else {
-            MarkedBody::Closure(input.parse()?)
-        };
-        Ok(Marked { captures, unknown, body })
-    }
-}
-
 /// Whether `path` is `::compose::__private::marked`.
 fn is_marker(path: &syn::Path) -> bool {
     path.leading_colon.is_some()
@@ -95,6 +73,60 @@ fn is_marker(path: &syn::Path) -> bool {
             .iter()
             .zip(["compose", "__private", "marked"])
             .all(|(segment, name)| segment.ident == name)
+}
+
+/// The captures of a marker statement, if `statement` is one.
+fn marker_of(statement: &syn::Stmt) -> Option<syn::Result<(Vec<Ident>, bool)>> {
+    let syn::Stmt::Macro(statement) = statement else { return None };
+    if !is_marker(&statement.mac.path) {
+        return None;
+    }
+    let parser = Punctuated::<Ident, Token![,]>::parse_terminated;
+    Some(syn::parse::Parser::parse2(parser, statement.mac.tokens.clone()).map(|captures| {
+        let mut unknown = false;
+        let mut captures: Vec<Ident> = captures.into_iter().collect();
+        if let Some(position) = captures.iter().position(|capture| capture == "__compose_unknown") {
+            captures.remove(position);
+            unknown = true;
+        }
+        (captures, unknown)
+    }))
+}
+
+impl Marked {
+    /// `expression` as a marked closure or block, if it is one.
+    fn from_expr(expression: &Expr) -> Option<syn::Result<Marked>> {
+        match expression {
+            Expr::Block(block) if block.label.is_none() && block.attrs.is_empty() => {
+                let first = block.block.stmts.first()?;
+                Some(marker_of(first)?.map(|(captures, unknown)| {
+                    let mut body = block.block.clone();
+                    body.stmts.remove(0);
+                    Marked { captures, unknown, body: MarkedBody::Block(body) }
+                }))
+            }
+            Expr::Closure(closure) => {
+                let Expr::Block(body) = &*closure.body else { return None };
+                let first = body.block.stmts.first()?;
+                Some(marker_of(first)?.map(|(captures, unknown)| {
+                    let mut closure = closure.clone();
+                    let mut rest = body.block.clone();
+                    rest.stmts.remove(0);
+                    // The marker wrapped the original body in a block: unwrap it.
+                    *closure.body = match rest.stmts.as_slice() {
+                        [syn::Stmt::Expr(original, None)] => original.clone(),
+                        _ => Expr::Block(syn::ExprBlock {
+                            attrs: Vec::new(),
+                            label: None,
+                            block: rest,
+                        }),
+                    };
+                    Marked { captures, unknown, body: MarkedBody::Closure(closure) }
+                }))
+            }
+            _ => None,
+        }
+    }
 }
 
 impl Marked {
@@ -115,13 +147,19 @@ impl ToTokens for Marked {
         let captures = &self.captures;
         let unknown = self.unknown.then(|| quote!(__compose_unknown));
         let separator = (self.unknown && !captures.is_empty()).then(|| quote!(,));
-        let body = match &self.body {
-            MarkedBody::Block(block) => block.to_token_stream(),
-            MarkedBody::Closure(closure) => closure.to_token_stream(),
-        };
-        tokens.extend(
-            quote! { ::compose::__private::marked!((#(#captures),* #separator #unknown) #body) },
-        );
+        let marker = quote! { ::compose::__private::marked!(#(#captures),* #separator #unknown); };
+        match &self.body {
+            MarkedBody::Block(block) => {
+                let statements = &block.stmts;
+                tokens.extend(quote! { { #marker #(#statements)* } });
+            }
+            MarkedBody::Closure(closure) => {
+                let mut closure = closure.clone();
+                let body = &closure.body;
+                *closure.body = syn::parse_quote! { { #marker #body } };
+                closure.to_tokens(tokens);
+            }
+        }
     }
 }
 
@@ -142,12 +180,10 @@ impl ToTokens for Value {
 impl Parse for Value {
     fn parse(input: ParseStream) -> syn::Result<Value> {
         let expression: Expr = input.parse()?;
-        if let Expr::Macro(mac) = &expression
-            && is_marker(&mac.mac.path)
-        {
-            return Ok(Value::Marked(syn::parse2(mac.mac.tokens.clone())?));
+        match Marked::from_expr(&expression) {
+            Some(marked) => Ok(Value::Marked(marked?)),
+            None => Ok(Value::Expr(expression)),
         }
-        Ok(Value::Expr(expression))
     }
 }
 
@@ -263,22 +299,25 @@ fn content_closure(arity: usize, block: &syn::Block) -> TokenStream {
 fn callback_value(arity: usize, value: Value) -> TokenStream {
     match value {
         Value::Marked(marked) => {
-            let closure = match marked.body {
-                MarkedBody::Block(block) => content_closure(arity, &block),
+            let (closure, arity) = match marked.body {
+                MarkedBody::Block(block) => (content_closure(arity, &block), arity),
                 MarkedBody::Closure(mut closure) => {
                     closure.capture.get_or_insert_with(Default::default);
-                    closure.into_token_stream()
+                    let arity = closure.inputs.len();
+                    (closure.into_token_stream(), arity)
                 }
             };
-            memo::probe(&marked.captures, marked.unknown, closure)
+            memo::probe(&marked.captures, marked.unknown, closure, Some(arity))
         }
         Value::Expr(Expr::Block(block)) if block.label.is_none() => {
             let closure = content_closure(arity, &block.block);
-            quote! { ::compose::__private::callback(#closure) }
+            let wrap = memo::wrapper(arity);
+            quote! { ::compose::__private::#wrap(#closure) }
         }
         Value::Expr(Expr::Closure(mut closure)) => {
             closure.capture.get_or_insert_with(Default::default);
-            quote! { ::compose::__private::callback(#closure) }
+            let wrap = memo::wrapper(closure.inputs.len());
+            quote! { ::compose::__private::#wrap(#closure) }
         }
         // A callback given by name (`on_click = on_remove`) is cloned, not moved, since the call
         // may sit in a content lambda that runs again; and memoized on itself.

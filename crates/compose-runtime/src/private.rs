@@ -8,7 +8,8 @@ use std::any::{Any, TypeId};
 
 pub use crate::callback::{
     ArgProbe, Callback, KeyedProbe, LambdaProbe, PendingLambda, Unkeyed, UnkeyedProbe, callback,
-    lambda_probe, to_callback,
+    callback_0, callback_1, callback_2, callback_3, callback_4, lambda_probe, resolve_0, resolve_1,
+    resolve_2, resolve_3, resolve_4, to_callback,
 };
 pub use crate::compose_arg::ComposeArg;
 pub use crate::composer::{Composer, current};
@@ -139,14 +140,13 @@ pub fn kept<K: 'static>(kept: &dyn Any) -> &K {
     kept.downcast_ref::<K>().expect("compose-runtime: kept arguments of another type")
 }
 
-/// A closure or block the caller's `#[composable]` marked with its captures, for `call!` to
-/// memoize. Anywhere else (an argument a user's own macro passes on), it is the code as written.
+/// The first statement of a closure body or block the caller's `#[composable]` marked with its
+/// captures, for `call!` to memoize. Anywhere else (an argument a user's own macro passes on),
+/// it expands to nothing.
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __compose_marked {
-    (($($captures:tt)*) $($body:tt)*) => {
-        $($body)*
-    };
+    ($($captures:tt)*) => {};
 }
 
 pub use crate::__compose_marked as marked;

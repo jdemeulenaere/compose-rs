@@ -289,7 +289,10 @@ impl Regions {
         let stmts = std::mem::take(&mut body.stmts);
         for mut stmt in stmts {
             if let Stmt::Expr(Expr::Block(block), _) = &mut stmt {
-                self.wrap_statements(&mut block.block);
+                // A labelled block grouped its statements when it was visited.
+                if block.label.is_none() {
+                    self.wrap_statements(&mut block.block);
+                }
                 body.stmts.push(stmt);
                 continue;
             }
@@ -469,6 +472,10 @@ impl VisitMut for Regions {
                 for arm in &mut match_expr.arms {
                     if let Some((_, guard)) = &mut arm.guard {
                         self.visit_expr_mut(guard);
+                        // A guard runs only for the arms tried before.
+                        if self.likely_expr(guard) {
+                            self.wrap_expr(guard);
+                        }
                     }
                     self.visit_expr_mut(&mut arm.body);
                     if self.likely_expr(&arm.body) {
@@ -497,6 +504,22 @@ impl VisitMut for Regions {
                 self.visit_loop_body(label.as_ref(), &mut loop_expr.body);
                 if self.likely_expr(expr) {
                     self.wrap_expr(expr);
+                }
+            }
+            // The right operand of `&&` and `||` is a branch.
+            Expr::Binary(binary) if matches!(binary.op, syn::BinOp::And(_) | syn::BinOp::Or(_)) => {
+                self.visit_expr_mut(&mut binary.left);
+                self.visit_expr_mut(&mut binary.right);
+                if self.likely_expr(&binary.right) {
+                    self.wrap_expr(&mut binary.right);
+                }
+            }
+            // A labelled block can be left early with `break 'label`, as a loop body with a
+            // `continue`: one group per statement, and one around it.
+            Expr::Block(block) if block.label.is_some() => {
+                self.visit_block_mut(&mut block.block);
+                if self.likely_block(&block.block) {
+                    self.wrap_statements(&mut block.block);
                 }
             }
             // Futures run outside composition, and a region guard held across an `.await` would

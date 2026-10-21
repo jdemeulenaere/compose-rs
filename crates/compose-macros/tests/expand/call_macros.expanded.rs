@@ -87,19 +87,22 @@ fn Counter() {
     {
         let count = remember(|| mutable_state_of(0));
         Button!(
-            on_click = ::compose::__private::marked!((count) move | | count.update(| c |
-            c + 1)), enabled = count.get() > 0, ::compose::__private::marked!((count) {
-            let __compose_region = ::compose::__private::region(3955738544659413940u64);
-            Text!("Count: {}", count.get()); })
+            on_click = move | | { ::compose::__private::marked!(count); count.update(| c
+            | c + 1) }, enabled = count.get() > 0, {
+            ::compose::__private::marked!(count); let __compose_region =
+            ::compose::__private::region(3955738544659413940u64); Text!("Count: {}",
+            count.get()); }
         );
         Toolbar(
             callback({
                 #[allow(unused_imports)]
                 use ::compose::__private::{KeyedProbe as _, UnkeyedProbe as _};
-                ::compose::__private::lambda_probe((
+                ::compose::__private::resolve_0(
+                    ::compose::__private::lambda_probe((
                         (&&::compose::__private::ArgProbe(&count)).arg_key(),
-                    ))
-                    .resolve(move || count.set(0))
+                    )),
+                    move || count.set(0),
+                )
             }),
         );
     }

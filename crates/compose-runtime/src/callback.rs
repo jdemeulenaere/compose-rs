@@ -243,6 +243,64 @@ impl<K: 'static, F: ?Sized + 'static> LambdaProbe<K, F> {
     }
 }
 
+impl<K: 'static, F: ?Sized + 'static> LambdaProbe<K, F> {
+    /// The kept callback, or a clone of `value` (a callback, a function) wrapped and
+    /// remembered: what a callback given by name expands to. A hit clones nothing.
+    #[inline]
+    pub fn resolve_cloned<C: IntoCallback<F> + Clone>(self, value: &C) -> Callback<F> {
+        match self {
+            LambdaProbe::Hit(callback) => callback,
+            LambdaProbe::Miss(pending) => pending.store(value.clone()),
+        }
+    }
+}
+
+/// `probe.resolve(lambda)` for a lambda of `N` arguments, with the `Fn` bound spelled out so
+/// a closure's untyped parameters (`|text| …`) take their types from the callback parameter.
+macro_rules! resolvers {
+    ($($name:ident ($($argument:ident),*)),*) => {
+        $(
+            #[doc(hidden)]
+            #[inline]
+            pub fn $name<K: 'static, $($argument: 'static,)* Output: 'static, C>(
+                probe: LambdaProbe<K, dyn Fn($($argument),*) -> Output>,
+                lambda: C,
+            ) -> Callback<dyn Fn($($argument),*) -> Output>
+            where
+                C: Fn($($argument),*) -> Output + 'static,
+            {
+                probe.resolve(lambda)
+            }
+        )*
+    };
+}
+
+resolvers!(resolve_0(), resolve_1(A), resolve_2(A, B), resolve_3(A, B, C1), resolve_4(A, B, C1, D));
+
+/// `callback(lambda)` for a lambda of `N` arguments, as `resolve_N`.
+macro_rules! wrappers {
+    ($($name:ident ($($argument:ident),*)),*) => {
+        $(
+            #[doc(hidden)]
+            #[inline]
+            pub fn $name<$($argument: 'static,)* Output: 'static, C>(lambda: C) -> Callback<dyn Fn($($argument),*) -> Output>
+            where
+                C: Fn($($argument),*) -> Output + 'static,
+            {
+                Callback(Rc::new(lambda))
+            }
+        )*
+    };
+}
+
+wrappers!(
+    callback_0(),
+    callback_1(A),
+    callback_2(A, B),
+    callback_3(A, B, C1),
+    callback_4(A, B, C1, D)
+);
+
 impl<K: 'static, F: ?Sized + 'static> PendingLambda<K, F> {
     /// Wraps the lambda, remembers it with its keys, and returns it.
     pub fn store<C: IntoCallback<F>>(self, lambda: C) -> Callback<F> {
