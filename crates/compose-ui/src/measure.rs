@@ -48,6 +48,9 @@ impl UiTree {
         overlays.retain(|node| self.get(*node).is_some_and(|value| value.overlay));
         self.order_sibling_overlays(&mut overlays);
         self.overlays = overlays;
+        // Closed overlays first give the focus back, so one opened in the same frame (a
+        // dialog replacing a menu) gives it back in turn once it closes.
+        self.restore_focus_of_closed_overlays();
         for index in 0..self.overlays.len() {
             let node = self.overlays[index];
             let value = self.node(node);
@@ -82,7 +85,6 @@ impl UiTree {
                 self.pending_actions = actions;
             }
         }
-        self.restore_focus_of_closed_overlays();
     }
 
     /// Overlays of one host (a popup and its outside) in the host's order of children,

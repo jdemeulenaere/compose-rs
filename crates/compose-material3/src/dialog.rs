@@ -8,7 +8,7 @@ use compose_runtime::{CompositionLocalProvider, composable, remember};
 use compose_ui::{
     Alignment, Constraints, Dp, IntOffset, IntSize, Layout, LayoutDirection, Measurable,
     MeasurePolicy, MeasureResult, MeasureScope, Modifier, Placeable, PopupPositionProvider,
-    PopupProperties, Rect, Role, UnitExt,
+    PopupProperties, Rect, UnitExt,
 };
 
 use crate::components::Surface;
@@ -285,7 +285,7 @@ pub fn DropdownMenu(
                 let (modifier, content, column, scroll) =
                     (modifier.clone(), content.clone(), column.clone(), scroll.clone());
                 Surface(
-                    modifier,
+                    Modifier,
                     MaterialTheme::shapes().extra_small,
                     scheme.surface_container,
                     compose_ui::Color::UNSPECIFIED,
@@ -295,10 +295,13 @@ pub fn DropdownMenu(
                     None,
                     compose_runtime::callback(move || {
                         let content = content.clone();
+                        // The modifier on the items' column, its 8 dp padding outside the
+                        // scroll, as Compose's `DropdownMenuContent`.
                         Layout(
-                            Modifier
-                                .vertical_scroll(scroll.clone())
-                                .padding_horizontal_vertical(0.dp(), 8.dp()),
+                            modifier
+                                .clone()
+                                .padding_horizontal_vertical(0.dp(), 8.dp())
+                                .vertical_scroll(scroll.clone()),
                             column.clone(),
                             compose_runtime::callback(move || content(ColumnScope::__new())),
                         );
@@ -338,7 +341,8 @@ impl MeasurePolicy for MenuColumn {
             .map(|&child| scope.max_intrinsic_width(child, Constraints::INFINITY))
             .max()
             .unwrap_or(0);
-        let width = widest.clamp(min, max);
+        // A width given to the menu wins, as `width(IntrinsicSize.Max)` within it.
+        let width = widest.clamp(min, max).clamp(constraints.min_width, constraints.max_width);
         let item = Constraints::new(width, width, 0, Constraints::INFINITY);
         let placeables: Vec<Placeable> =
             measurables.iter().map(|&child| scope.measure(child, item)).collect();
@@ -377,7 +381,7 @@ pub fn DropdownMenuItem(
         })
     };
     let modifier = modifier
-        .clickable_indicated(enabled, Some(Role::Button), color, on_click)
+        .clickable_indicated(enabled, None, color, on_click)
         .fill_max_width()
         .size_in(compose_ui::SizeSpec::bounds(
             Dp::UNSPECIFIED,

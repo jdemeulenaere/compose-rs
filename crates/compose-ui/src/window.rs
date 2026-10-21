@@ -197,6 +197,7 @@ pub fn Dialog(
     content: impl Fn() + 'static,
 ) {
     let host = remember(|| Rc::new(HostLayout) as Rc<dyn MeasurePolicy>);
+    let stack = remember(|| Rc::new(StackLayout) as Rc<dyn MeasurePolicy>);
     let window = remember(|| Rc::new(WindowPosition) as Rc<dyn PopupPositionProvider>);
     let inside = remember(|| Rc::new(Cell::new(None::<Rect>)));
     let center = {
@@ -221,15 +222,24 @@ pub fn Dialog(
                     on_press: false,
                     modal: true,
                 })
-                .focusable(true)
-                .semantics(false, |config| config.is_dialog = true);
+                .focusable(true);
             if properties.dismiss_on_back_press {
                 let dismiss = dismiss.clone();
                 modifier = modifier
                     .on_key_event(move |event: KeyEvent| dismiss_on_escape(&event, &dismiss));
             }
             let content = content.clone();
-            Layout(modifier, center.clone(), compose_runtime::callback(move || content()));
+            let stack = stack.clone();
+            // The dialog's own node, as large as its content: what's marked a dialog.
+            let content = compose_runtime::callback(move || {
+                let content = content.clone();
+                Layout(
+                    Modifier.semantics(false, |config| config.is_dialog = true),
+                    stack.clone(),
+                    compose_runtime::callback(move || content()),
+                );
+            });
+            Layout(modifier, center.clone(), content);
         }),
     );
 }

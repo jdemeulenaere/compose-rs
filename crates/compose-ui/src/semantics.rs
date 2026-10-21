@@ -130,12 +130,17 @@ impl SemanticsConfiguration {
         self.disabled |= child.disabled;
     }
 
-    /// Sets the properties `other` sets, as applying another semantics modifier: lists append,
-    /// set values replace, flags are or'ed.
+    /// Sets the properties `other` sets, as applying an outer semantics modifier over inner
+    /// ones: set values (lists too) replace, flags are or'ed, as Compose's `set`.
     pub fn apply(&mut self, other: &SemanticsConfiguration) {
         self.merge_descendants |= other.merge_descendants;
-        self.text.extend(other.text.iter().cloned());
-        self.content_description.extend(other.content_description.iter().cloned());
+        self.part_of_parent |= other.part_of_parent;
+        if !other.text.is_empty() {
+            self.text = other.text.clone();
+        }
+        if !other.content_description.is_empty() {
+            self.content_description = other.content_description.clone();
+        }
         if other.editable_text.is_some() {
             self.editable_text = other.editable_text.clone();
         }
@@ -314,11 +319,11 @@ impl UiTree {
             if value.capabilities[index] & capability::SEMANTICS != 0
                 && let Some(semantics) = value.chain[index].as_semantics()
             {
-                semantics.apply_semantics(&mut config);
-                first_layer = Some(layers[index]);
-                // A merging node's bounds are those of the outermost modifier that merges.
                 let mut own = SemanticsConfiguration::default();
                 semantics.apply_semantics(&mut own);
+                config.apply(&own);
+                first_layer = Some(layers[index]);
+                // A merging node's bounds are those of the outermost modifier that merges.
                 if own.merge_descendants {
                     merging_layer = Some(layers[index]);
                 }

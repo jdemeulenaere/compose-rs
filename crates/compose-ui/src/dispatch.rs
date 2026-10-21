@@ -237,9 +237,18 @@ impl UiTree {
             return (false, actions);
         }
         if action == crate::semantics::SemanticsAction::RequestFocus {
-            // Offered only by a node that can take the focus itself (a focusable modifier in
-            // its chain), as Compose's `RequestFocus`.
-            if self.focus_target_index(node).is_none() {
+            // Offered only by a node whose semantics say it's focusable (its own focus target,
+            // or a part's: a text field's inner field), as Compose's `RequestFocus`.
+            let focusable = self.focus_target_index(node).is_some() || {
+                fn find(tree: &crate::semantics::SemanticsNode, id: NodeId) -> Option<bool> {
+                    if tree.id == id {
+                        return Some(tree.config.focusable);
+                    }
+                    tree.children.iter().find_map(|child| find(child, id))
+                }
+                find(&self.semantics_tree(false), node).unwrap_or(false)
+            };
+            if !focusable {
                 return (false, actions);
             }
             let actions = self.request_focus(node);
