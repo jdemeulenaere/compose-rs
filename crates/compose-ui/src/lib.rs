@@ -23,6 +23,7 @@ pub mod layout;
 mod measure;
 pub mod modifier;
 mod nodes;
+pub mod path;
 mod render;
 pub mod semantics;
 pub mod text;
@@ -51,6 +52,7 @@ pub use modifier::{
     ModifierNodeElement, PaddingValues, ParentAlignment, ParentData, PointerInputModifierNode,
     RowScope, SemanticsModifierNode, SizeSpec, WeightScope,
 };
+pub use path::{ImageVector, Path, PathCommand, PathError, PathFillType};
 pub use semantics::{Role, SemanticsConfiguration, SemanticsNode, ToggleableState};
 pub use text::{
     FixedTextMeasurer, FontWeight, ParagraphHandle, ParagraphMetrics, SharedString,

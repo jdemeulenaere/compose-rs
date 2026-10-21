@@ -10,12 +10,24 @@
 extern crate compose_runtime as compose;
 
 mod components;
+mod icon;
+mod scaffold;
+mod selection;
 mod theme;
 
 pub use components::{
     Button, ButtonColors, ButtonDefaults, Checkbox, CheckboxColors, CheckboxDefaults,
     MINIMUM_INTERACTIVE_SIZE, OutlinedButton, Surface, Text, TextButton, TextField,
     TextFieldColors, TextFieldDefaults, minimum_interactive_component_size,
+};
+pub use icon::{FloatingActionButton, Icon, IconButton, icons};
+pub use scaffold::{
+    Card, CardColors, CardDefaults, HorizontalDivider, Scaffold, TopAppBar, TopAppBarColors,
+    TopAppBarDefaults, VerticalDivider,
+};
+pub use selection::{
+    RadioButton, RadioButtonColors, RadioButtonDefaults, Slider, SliderColors, SliderDefaults,
+    Switch, SwitchColors, SwitchDefaults,
 };
 pub use theme::{
     ColorScheme, LOCAL_COLOR_SCHEME, LOCAL_CONTENT_COLOR, LOCAL_SHAPES, LOCAL_TEXT_STYLE,
@@ -24,4 +36,4 @@ pub use theme::{
 
 // What the defaults of the composables name through `crate::`.
 #[doc(hidden)]
-pub use compose_ui::{Color, Modifier, RECTANGLE_SHAPE, Sp};
+pub use compose_ui::{Color, Dp, Modifier, RECTANGLE_SHAPE, Sp};

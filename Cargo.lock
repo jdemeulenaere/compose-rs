@@ -423,6 +423,7 @@ dependencies = [
 name = "compose-material3"
 version = "0.1.0"
 dependencies = [
+ "compose-animation",
  "compose-foundation",
  "compose-runtime",
  "compose-test",
@@ -782,6 +783,13 @@ dependencies = [
  "futures-task",
  "pin-project-lite",
  "slab",
+]
+
+[[package]]
+name = "gallery"
+version = "0.1.0"
+dependencies = [
+ "compose",
 ]
 
 [[package]]

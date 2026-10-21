@@ -79,6 +79,24 @@ impl DrawScope<'_> {
         self.list.push(DrawOp::Restore);
     }
 
+    /// Draws `path` (in the node's coordinates).
+    pub fn draw_path(&mut self, path: &std::sync::Arc<crate::path::Path>, paint: Paint) {
+        self.draw_path_scaled(path, Offset::ZERO, (1.0, 1.0), paint);
+    }
+
+    /// Draws `path` scaled by `scale`, then moved by `offset` (in the node's coordinates): a
+    /// vector image's viewport fitted to its size.
+    pub fn draw_path_scaled(
+        &mut self,
+        path: &std::sync::Arc<crate::path::Path>,
+        offset: Offset,
+        scale: (f32, f32),
+        paint: Paint,
+    ) {
+        let offset = offset + self.origin;
+        self.list.push(DrawOp::DrawPath { path: path.clone(), offset, scale, paint });
+    }
+
     /// Saves, and draws what follows into a layer composited with `alpha` at the next restore.
     pub fn save_layer_alpha(&mut self, alpha: f32) {
         self.list.push(DrawOp::SaveLayerAlpha(alpha));

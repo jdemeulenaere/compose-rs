@@ -33,6 +33,13 @@ pub enum DrawOp {
         rotation: f32,
         translation: Offset,
     },
+    /// A path, scaled by `scale` then moved by `offset` (a vector image's viewport to its size).
+    DrawPath {
+        path: std::sync::Arc<crate::path::Path>,
+        offset: Offset,
+        scale: (f32, f32),
+        paint: Paint,
+    },
 }
 
 /// Replays display lists onto a surface: Skia on desktop, Android's `Canvas` (docs/07-platforms.md).
@@ -123,6 +130,16 @@ impl DisplayList {
                     writeln!(out, "paragraph {} at {} {}", handle.0, offset.x, offset.y)
                 }
                 DrawOp::SaveLayerAlpha(alpha) => writeln!(out, "save layer alpha {alpha}"),
+                DrawOp::DrawPath { path, offset, scale, paint } => writeln!(
+                    out,
+                    "path of {} commands at {},{} scale {}x{} {}",
+                    path.commands().len(),
+                    offset.x,
+                    offset.y,
+                    scale.0,
+                    scale.1,
+                    paint_text(paint)
+                ),
                 DrawOp::Transform { pivot, scale, rotation, translation } => writeln!(
                     out,
                     "transform pivot {},{} scale {}x{} rotate {} translate {},{}",

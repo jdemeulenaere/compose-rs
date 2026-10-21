@@ -11,12 +11,12 @@ A design for bringing Jetpack Compose's model to Rust: positional memoization ov
 | `crates/compose-macros` | `#[composable]` (skipping, restarts, call macros, lambda memoization), `#[derive(ComposeArg)]` |
 | `crates/compose-ui` | layout nodes, `Modifier`, `Layout`, drawing, pointer and key input, focus, semantics, `UiHost` |
 | `crates/compose-foundation` | `Box`, `Column`, `Row`, `Spacer`, `Arrangement`, `BasicText`, `BasicTextField`, scrolling, `LazyColumn`, `LazyRow`, shapes |
-| `crates/compose-material3` | `MaterialTheme`, `Text`, `Surface`, buttons, `Checkbox`, `TextField` |
+| `crates/compose-material3` | `MaterialTheme`, `Text`, `Surface`, buttons, icons, `Checkbox`, `Switch`, `RadioButton`, `Slider`, `TextField`, `Card`, `TopAppBar`, `Scaffold` |
 | `crates/compose-animation` | `Animatable`, animation specs and easings, `animate_*_as_state`, infinite transitions, `AnimatedVisibility` |
 | `crates/compose-test` | `ComposeTestRule`: finders, actions, assertions, event scripts |
 | `crates/compose-skia` | Skia renderer and SkParagraph text measurer |
 | `crates/compose-desktop` | `run_app`: a winit window on the main thread |
-| `examples/counter`, `examples/todo` | the sample apps, with tests and event-script transcripts |
+| `examples/counter`, `examples/todo`, `examples/gallery` | the sample apps, with tests and event-script transcripts; the gallery tours the toolkit (`cargo run -p gallery`) |
 | `benchmarks` | criterion benchmarks (not a default member) |
 
 ## Getting started

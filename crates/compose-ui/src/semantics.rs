@@ -61,6 +61,8 @@ pub struct SemanticsConfiguration {
     pub clickable: bool,
     /// Whether the node takes text input (a text field).
     pub editable: bool,
+    /// The node's state in words (a slider's value), as `stateDescription`.
+    pub state_description: Option<SharedString>,
     /// The properties belong to the nearest ancestor with semantics, in both trees, as if its
     /// own modifiers set them: a text field's inner text, which in Compose is one semantics
     /// node with its decoration box.
@@ -80,6 +82,9 @@ impl SemanticsConfiguration {
         self.content_description.extend(child.content_description.iter().cloned());
         if self.editable_text.is_none() {
             self.editable_text = child.editable_text.clone();
+        }
+        if self.state_description.is_none() {
+            self.state_description = child.state_description.clone();
         }
         if self.role.is_none() {
             self.role = child.role;
@@ -105,6 +110,9 @@ impl SemanticsConfiguration {
         self.content_description.extend(other.content_description.iter().cloned());
         if other.editable_text.is_some() {
             self.editable_text = other.editable_text.clone();
+        }
+        if other.state_description.is_some() {
+            self.state_description = other.state_description.clone();
         }
         if other.test_tag.is_some() {
             self.test_tag = other.test_tag.clone();
@@ -160,6 +168,9 @@ impl fmt::Debug for SemanticsConfiguration {
         }
         if let Some(selected) = self.selected {
             parts.push(format!("selected={selected}"));
+        }
+        if let Some(state) = &self.state_description {
+            parts.push(format!("state={:?}", state.as_str()));
         }
         for (flag, name) in [
             (self.clickable, "clickable"),

@@ -1,6 +1,9 @@
 //! Replaying display lists onto a Skia canvas (docs/07-platforms.md, "The rendering interface").
 
-use compose_ui::{Color, DisplayList, DrawOp, Paint, PaintStyle, Rect, Renderer, TextMeasurer};
+use compose_ui::{
+    Color, DisplayList, DrawOp, Paint, PaintStyle, PathCommand, PathFillType, Rect, Renderer,
+    TextMeasurer,
+};
 use skia_safe::{Canvas, ClipOp, EncodedImageFormat, Point, RRect, Surface, Vector, paint};
 
 use crate::text::SkiaTextMeasurer;
@@ -74,6 +77,37 @@ pub fn draw_display_list(canvas: &Canvas, list: &DisplayList, text_measurer: &dy
                 if let Some(paragraph) = measurer.and_then(|measurer| measurer.paragraph(*handle)) {
                     paragraph.paint(canvas, (offset.x, offset.y));
                 }
+            }
+            DrawOp::DrawPath { path, offset, scale, paint } => {
+                let mut skia = skia_safe::PathBuilder::new();
+                for command in path.commands() {
+                    match *command {
+                        PathCommand::MoveTo(point) => {
+                            skia.move_to((point.x, point.y));
+                        }
+                        PathCommand::LineTo(point) => {
+                            skia.line_to((point.x, point.y));
+                        }
+                        PathCommand::QuadTo(control, end) => {
+                            skia.quad_to((control.x, control.y), (end.x, end.y));
+                        }
+                        PathCommand::CubicTo(first, second, end) => {
+                            skia.cubic_to((first.x, first.y), (second.x, second.y), (end.x, end.y));
+                        }
+                        PathCommand::Close => {
+                            skia.close();
+                        }
+                    }
+                }
+                skia.set_fill_type(match path.fill_type {
+                    PathFillType::NonZero => skia_safe::PathFillType::Winding,
+                    PathFillType::EvenOdd => skia_safe::PathFillType::EvenOdd,
+                });
+                canvas.save();
+                canvas.translate((offset.x, offset.y));
+                canvas.scale((scale.0, scale.1));
+                canvas.draw_path(&skia.detach(), &skia_paint(paint));
+                canvas.restore();
             }
             DrawOp::SaveLayerAlpha(alpha) => {
                 canvas.save_layer_alpha_f(None, alpha.clamp(0.0, 1.0));
