@@ -26,6 +26,7 @@ mod review_semantics;
 mod review_text_draw;
 mod rtl;
 mod scroll;
+mod scrollbar;
 mod semantics_actions;
 mod shadow;
 mod window;

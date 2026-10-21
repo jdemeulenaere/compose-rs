@@ -71,6 +71,9 @@ struct LazyListInner {
     published: Cell<(usize, i32)>,
     /// Item sizes along the axis, as last measured: estimates for items not composed.
     sizes: RefCell<HashMap<usize, i32>>,
+    /// What scrollbars estimate the content from, as last laid out: the item count, the
+    /// average item size with its spacing, the viewport's length and the content padding.
+    layout_info: OwnedState<(usize, i32, i32, i32)>,
     /// How far the list can scroll each way, as last laid out (infinite: not known).
     room_backward: Cell<f32>,
     room_forward: Cell<f32>,
@@ -101,6 +104,7 @@ impl LazyListState {
                 first_offset: mutable_state_of(offset),
                 published: Cell::new((first_visible_item_index, offset)),
                 sizes: RefCell::new(HashMap::new()),
+                layout_info: mutable_state_of((0, 1, 0, 0)),
                 room_backward: Cell::new(if first_visible_item_index > 0 {
                     f32::INFINITY
                 } else {
@@ -154,6 +158,12 @@ impl LazyListState {
             inner.remeasure.update(|count| count.wrapping_add(1));
         }
         used
+    }
+
+    /// The item count, the average item size (with its spacing), the viewport's length and the
+    /// content padding along the axis, as last laid out: a scrollbar's estimates (a state read).
+    pub(crate) fn layout_info(&self) -> (usize, i32, i32, i32) {
+        self.inner.layout_info.get()
     }
 
     /// Whether the list can scroll towards its end, as `canScrollForward` (as last laid out).
@@ -764,6 +774,10 @@ impl MeasurePolicy for LazyListLayout {
         state.position.set((index, offset));
         if count > 0 {
             state.first_key.set(Some(info.items.key(index)));
+        }
+        let layout_info = (count, average + spacing, main_max, before + after);
+        if state.layout_info.get() != layout_info {
+            state.layout_info.set(layout_info);
         }
         let rounded = (index, offset.round() as i32);
         if state.published.get() != rounded {

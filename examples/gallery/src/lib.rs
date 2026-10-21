@@ -5,7 +5,10 @@
 
 use compose::animation::*;
 use compose::foundation::layout::*;
-use compose::foundation::{LazyColumn, LazyListScope};
+use compose::foundation::{
+    LazyColumn, LazyListScope, VerticalScrollbar, remember_lazy_list_scrollbar_adapter,
+    remember_lazy_list_state,
+};
 use compose::material3::*;
 use compose::runtime::*;
 use compose::ui::*;
@@ -103,23 +106,43 @@ pub fn GalleryWith(about: bool) {
                     vertical_arrangement = Arrangement::spaced_by(12.dp()),
                     |column| {
                         Controls(count);
-                        LazyColumn!(
+                        // The list with its scrollbar, as on desktop.
+                        let list = remember_lazy_list_state(0, 0);
+                        Row!(
                             modifier = Modifier.weight(column, 1.0).fill_max_width(),
-                            vertical_arrangement = Arrangement::spaced_by(8.dp()),
-                            |scope: LazyListScope| {
-                                scope.items(100, |index| {
-                                    Card!(modifier = Modifier.fill_max_width(), {
-                                        Row!(
-                                            modifier = Modifier.padding(12.dp()),
-                                            horizontal_arrangement = Arrangement::spaced_by(8.dp()),
-                                            vertical_alignment = Alignment::CENTER_VERTICALLY,
-                                            {
-                                                Icon!(icons::filled::star(), None);
-                                                Text!("Card {}", index);
-                                            }
-                                        );
-                                    });
-                                });
+                            |row: RowScope| {
+                                LazyColumn!(
+                                    modifier = Modifier.weight(row, 1.0),
+                                    state = list.clone(),
+                                    vertical_arrangement = Arrangement::spaced_by(8.dp()),
+                                    |scope: LazyListScope| {
+                                        scope.items(100, |index| {
+                                            Card!(modifier = Modifier.fill_max_width(), {
+                                                Row!(
+                                                    modifier = Modifier.padding(12.dp()),
+                                                    horizontal_arrangement =
+                                                        Arrangement::spaced_by(8.dp()),
+                                                    vertical_alignment =
+                                                        Alignment::CENTER_VERTICALLY,
+                                                    {
+                                                        Icon!(icons::filled::star(), None);
+                                                        Text!("Card {}", index);
+                                                    }
+                                                );
+                                            });
+                                        });
+                                    }
+                                );
+                                let adapter = remember_lazy_list_scrollbar_adapter(list.clone());
+                                VerticalScrollbar!(
+                                    adapter,
+                                    modifier = Modifier.fill_max_height().padding_sides(
+                                        4.dp(),
+                                        0.dp(),
+                                        0.dp(),
+                                        0.dp()
+                                    )
+                                );
                             }
                         );
                     }

@@ -22,12 +22,15 @@ use compose_ui::{
 #[derive(Clone)]
 pub struct ScrollState {
     owner: Rc<(OwnedState<i32>, OwnedState<i32>)>,
+    /// The viewport's length along the axis, as last laid out (for scrollbars).
+    viewport: Rc<OwnedState<i32>>,
 }
 
 impl ScrollState {
     pub fn new(initial: i32) -> ScrollState {
         ScrollState {
             owner: Rc::new((mutable_state_of(initial.max(0)), mutable_state_of(i32::MAX))),
+            viewport: Rc::new(mutable_state_of(0)),
         }
     }
 
@@ -47,6 +50,12 @@ impl ScrollState {
     /// The largest offset, known once laid out.
     pub fn max_value(&self) -> i32 {
         self.max_state().get()
+    }
+
+    /// The viewport's length along the scroll's axis, in pixels, as `viewportSize` (a state
+    /// read; 0 until laid out).
+    pub fn viewport_size(&self) -> i32 {
+        self.viewport.get()
     }
 
     /// Scrolls to `value` (clamped to the content at the next layout), as `scrollTo`, without
@@ -239,6 +248,10 @@ impl LayoutModifierNode for ScrollNode {
             if self.vertical { placeable.height - height } else { placeable.width - width }.max(0);
         if self.state.max_state().get() != max {
             self.state.max_state().set(max);
+        }
+        let viewport = if self.vertical { height } else { width };
+        if self.state.viewport.get() != viewport {
+            self.state.viewport.set(viewport);
         }
         let value = self.state.value_state().get().min(max);
         self.laid_out = value;

@@ -14,6 +14,7 @@ mod image;
 pub mod layout;
 pub mod lazy;
 mod scroll;
+pub mod scrollbar;
 pub mod shape;
 mod text;
 mod text_field;
@@ -47,6 +48,10 @@ pub use grid::{
 pub use image::{ContentScale, Image};
 pub use lazy::{LazyColumn, LazyListScope, LazyListState, LazyRow, remember_lazy_list_state};
 pub use scroll::{ScrollModifiers, ScrollState, remember_scroll_state};
+pub use scrollbar::{
+    HorizontalScrollbar, LOCAL_SCROLLBAR_STYLE, ScrollbarAdapter, ScrollbarStyle,
+    VerticalScrollbar, remember_lazy_list_scrollbar_adapter, remember_scrollbar_adapter,
+};
 pub use shape::{
     CIRCLE_SHAPE, RoundedCornerShape, RoundedCornerShapeEach, RoundedCornerShapePercent,
 };
