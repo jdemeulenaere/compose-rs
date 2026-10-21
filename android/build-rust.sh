@@ -12,6 +12,8 @@ if [ ! -d "$NDK" ]; then
 fi
 HOST=$(ls "$NDK/toolchains/llvm/prebuilt" | head -1)
 export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$NDK/toolchains/llvm/prebuilt/$HOST/bin/aarch64-linux-android29-clang"
+# Segments aligned to 16 KB pages, as Android 15+ devices with 16 KB pages require.
+export CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS="-C link-arg=-Wl,-z,max-page-size=16384"
 CARGO=$(command -v cargo || echo "$HOME/.cargo/bin/cargo")
 "$CARGO" build --release --target aarch64-linux-android -p "$1"
 mkdir -p "$3/arm64-v8a"
