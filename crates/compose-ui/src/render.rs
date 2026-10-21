@@ -6,7 +6,7 @@ use smallvec::SmallVec;
 
 use crate::display_list::{DisplayList, DrawOp};
 use crate::draw::DrawScope;
-use crate::tree::{NodeId, UiTree, capability};
+use crate::tree::{NodeId, UiTree, capability, observation_key};
 use crate::unit::Offset;
 
 impl UiTree {
@@ -18,13 +18,38 @@ impl UiTree {
         }
         let mut list = mem::take(&mut self.display_list);
         list.clear();
-        self.draw_node(self.root_id(), &mut list);
+        let observer = self.observer.clone();
+        self.draw_node(self.root_id(), &mut list, observer.as_deref());
         self.display_list = list;
         self.needs_draw = false;
         true
     }
 
-    fn draw_node(&mut self, node: NodeId, list: &mut DisplayList) {
+    /// Records `node`; a custom node draws under observation (`observer`), so a state write it
+    /// read draws again (D71).
+    fn draw_node(
+        &mut self,
+        node: NodeId,
+        list: &mut DisplayList,
+        observer: Option<&compose_runtime::ReadObserver>,
+    ) {
+        // One observation for the node's drawing, before and after its children.
+        let custom =
+            self.get(node).is_some_and(|value| value.all_capabilities & capability::CUSTOM != 0);
+        match observer.filter(|_| custom) {
+            Some(observer) => observer.observe(observation_key(node, true), || {
+                self.draw_node_observed(node, list, Some(observer))
+            }),
+            None => self.draw_node_observed(node, list, observer),
+        }
+    }
+
+    fn draw_node_observed(
+        &mut self,
+        node: NodeId,
+        list: &mut DisplayList,
+        observer: Option<&compose_runtime::ReadObserver>,
+    ) {
         let density = self.density;
         let value = self.node_mut(node);
         if !value.placed {
@@ -70,7 +95,7 @@ impl UiTree {
             translate(list, content);
             for index in 0..count {
                 let child = self.node(node).children[index].node;
-                self.draw_node(child, list);
+                self.draw_node(child, list, observer);
             }
             translate(list, negate(content));
         }

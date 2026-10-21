@@ -507,3 +507,65 @@ fn a_modifier_closure_is_memoized_so_the_receiver_skips() {
     click(&mut host, 5.0, 5.0);
     assert_eq!(count.get(), 1);
 }
+
+// ---- State read in layout and drawing (D71) -----------------------------------------------------
+
+#[test]
+fn state_read_by_a_policy_or_a_draw_node_measures_or_draws_again_without_recomposing() {
+    thread_local! {
+        static WIDTH: Cell<Option<MutableState<i32>>> = const { Cell::new(None) };
+        static SHADE: Cell<Option<MutableState<u32>>> = const { Cell::new(None) };
+    }
+    struct StateWidth(MutableState<i32>);
+    impl MeasurePolicy for StateWidth {
+        fn measure(
+            &self,
+            scope: &mut MeasureScope<'_>,
+            _: &[Measurable],
+            _: Constraints,
+        ) -> MeasureResult {
+            scope.layout(self.0.get(), 10)
+        }
+    }
+    struct Shade(MutableState<u32>);
+    impl ModifierNodeElement for Shade {
+        fn create(&self) -> Box<dyn ModifierNode> {
+            Box::new(ShadeNode(self.0))
+        }
+        fn update(&self, _: &mut dyn ModifierNode) {}
+        fn same(&self, _: &dyn ModifierNodeElement) -> bool {
+            true
+        }
+    }
+    struct ShadeNode(MutableState<u32>);
+    impl ModifierNode for ShadeNode {
+        fn as_draw(&mut self) -> Option<&mut dyn DrawModifierNode> {
+            Some(self)
+        }
+    }
+    impl DrawModifierNode for ShadeNode {
+        fn draw(&mut self, scope: &mut DrawScope<'_>) {
+            let color = Color::from_argb(0xFF00_0000 | self.0.get());
+            scope.draw_rect(scope.bounds(), Paint::fill(color));
+        }
+    }
+    #[composable]
+    fn Screen() {
+        let width = remember(|| mutable_state_of(10));
+        let shade = remember(|| mutable_state_of(0x11));
+        WIDTH.with(|cell| cell.set(Some(width)));
+        SHADE.with(|cell| cell.set(Some(shade)));
+        Layout(Modifier.then_custom(Shade(shade)), Rc::new(StateWidth(width)), callback(|| {}));
+    }
+    let mut host = host(Screen);
+    let bodies = compose_runtime::bodies_run();
+    WIDTH.with(Cell::get).unwrap().set(42);
+    assert!(host.needs_frame(), "the write asks for a frame");
+    host.frame();
+    let leaf = host.with_tree(|tree| tree.children_of(tree.root_id()).next().unwrap());
+    assert_eq!(host.with_tree(|tree| tree.bounds_in_root(leaf)).width(), 42.0);
+    SHADE.with(Cell::get).unwrap().set(0x22);
+    host.frame();
+    assert!(host.display_list().dump().contains("#FF000022"), "{}", host.display_list().dump());
+    assert_eq!(compose_runtime::bodies_run(), bodies, "no recomposition");
+}

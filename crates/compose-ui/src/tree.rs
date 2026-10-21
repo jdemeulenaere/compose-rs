@@ -14,6 +14,11 @@ use crate::nodes;
 use crate::text::TextMeasurer;
 use crate::unit::{Density, IntOffset, IntSize, Offset};
 
+/// The key `node`'s measuring (or drawing) reads are observed under.
+pub(crate) fn observation_key(node: NodeId, draw: bool) -> u64 {
+    node.to_ref().bits() & !(1 << 63) | (draw as u64) << 63
+}
+
 /// What an event handler reaches besides its node: the text measurer and the clipboard.
 pub(crate) type HandlerServices<'a> =
     (&'a mut dyn TextMeasurer, &'a mut dyn crate::clipboard::Clipboard);
@@ -50,6 +55,8 @@ pub(crate) mod capability {
     pub const FOCUS: u8 = 16;
     pub const KEY: u8 = 32;
     pub const FOCUS_EVENT: u8 = 64;
+    /// A user-defined element's node: its measuring and drawing are observed for state reads.
+    pub const CUSTOM: u8 = 128;
 }
 
 fn capabilities_of(node: &mut dyn ModifierNode) -> u8 {
@@ -175,6 +182,8 @@ pub struct UiTree {
     /// Actions queued outside dispatch, run by the host after the frame.
     pub(crate) pending_actions: Vec<crate::input::Action>,
     pub(crate) captures: Vec<(crate::input::PointerId, Vec<crate::dispatch::HitEntry>)>,
+    /// Observes the state measure policies and custom nodes read (D71), keyed by node.
+    pub(crate) observer: Option<Rc<compose_runtime::ReadObserver>>,
     pub(crate) measure_runs: u64,
 }
 
@@ -195,6 +204,7 @@ impl UiTree {
             focus_listeners_dirty: false,
             pending_actions: Vec::new(),
             captures: Vec::new(),
+            observer: None,
             measure_runs: 0,
         }
     }
@@ -306,6 +316,26 @@ impl UiTree {
 
     pub fn invalidate_draw(&mut self) {
         self.needs_draw = true;
+    }
+
+    /// Observes the state policies and custom nodes read while measuring and drawing, so a
+    /// write measures or draws them again (D71). `observer` calls back when one happens.
+    pub fn set_read_observer(&mut self, observer: compose_runtime::ReadObserver) {
+        self.observer = Some(Rc::new(observer));
+    }
+
+    /// Measures and draws again what observed writes invalidated.
+    pub fn apply_observed_writes(&mut self) {
+        let Some(observer) = self.observer.clone() else { return };
+        observer.drain_invalidated(|key| {
+            let draw = key >> 63 == 1;
+            let node = NodeId::from_ref(NodeRef::new(key & !(1 << 63)));
+            if draw {
+                self.needs_draw = true;
+            } else if self.get(node).is_some() {
+                self.invalidate_measure(node);
+            }
+        });
     }
 
     pub fn set_measure_policy(&mut self, node: NodeId, policy: Rc<dyn MeasurePolicy>) {
@@ -424,7 +454,8 @@ impl UiTree {
         value.all_capabilities = 0;
         let mut parent_data = ParentData::default();
         for (index, entry) in value.chain.iter_mut().enumerate() {
-            let bits = capabilities_of(&mut **entry);
+            let custom = matches!(value.modifier.elements().get(index), Some(Element::Custom(_)));
+            let bits = capabilities_of(&mut **entry) | if custom { capability::CUSTOM } else { 0 };
             value.capabilities.push(bits);
             value.all_capabilities |= bits;
             if bits & capability::LAYOUT != 0 {
@@ -536,6 +567,10 @@ impl UiTree {
             slot.generation = slot.generation.wrapping_add(1);
             self.free.push(id.index);
             stack.extend(value.children.iter().map(|child| child.node));
+            if let Some(observer) = &self.observer {
+                observer.forget(observation_key(id, false));
+                observer.forget(observation_key(id, true));
+            }
             if self.focused() == Some(id) {
                 self.focus = None;
                 self.focus_listeners_dirty = true;

@@ -2,14 +2,14 @@
 //! content measured without a bound along the axis, clipped, and moved by the scroll offset,
 //! which the wheel and drags change.
 //!
-//! The offset lives in the modifier's node and in its `ScrollState`, readable by the
-//! application; scrolling invalidates the layout directly, without recomposing (state read in
-//! layout isn't observed yet, D71).
+//! The offset is state: the node reads it while measuring (observed, so a write by the
+//! application scrolls), and writes it when the wheel or a drag scrolls.
 
-use std::cell::Cell;
 use std::rc::Rc;
 
-use compose_runtime::{ComposeArg, composable, remember};
+use compose_runtime::{
+    ComposeArg, MutableState, OwnedState, composable, mutable_state_of, remember,
+};
 use compose_ui::{
     Constraints, DrawModifierNode, DrawScope, EventContext, IntSize, LayoutModifierNode,
     Measurable, MeasureResult, MeasureScope, Modifier, ModifierNode, ModifierNodeElement, Offset,
@@ -17,35 +17,48 @@ use compose_ui::{
     Rect,
 };
 
-/// How far content is scrolled, in pixels, and how far it can be, as Compose's `ScrollState`.
-#[derive(Clone, Default)]
+/// How far content is scrolled, in pixels, and how far it can be, as Compose's `ScrollState`:
+/// state, so reading it in composition recomposes on scrolls, and setting it scrolls.
+#[derive(Clone)]
 pub struct ScrollState {
-    value: Rc<Cell<i32>>,
-    max_value: Rc<Cell<i32>>,
+    owner: Rc<(OwnedState<i32>, OwnedState<i32>)>,
 }
 
 impl ScrollState {
     pub fn new(initial: i32) -> ScrollState {
         ScrollState {
-            value: Rc::new(Cell::new(initial.max(0))),
-            max_value: Rc::new(Cell::new(i32::MAX)),
+            owner: Rc::new((mutable_state_of(initial.max(0)), mutable_state_of(i32::MAX))),
         }
+    }
+
+    fn value_state(&self) -> MutableState<i32> {
+        self.owner.0.handle()
+    }
+
+    fn max_state(&self) -> MutableState<i32> {
+        self.owner.1.handle()
     }
 
     /// The scroll offset, in pixels.
     pub fn value(&self) -> i32 {
-        self.value.get()
+        self.value_state().get()
     }
 
     /// The largest offset, known once laid out.
     pub fn max_value(&self) -> i32 {
-        self.max_value.get()
+        self.max_state().get()
+    }
+
+    /// Scrolls to `value` (clamped to the content at the next layout), as `scrollTo`, without
+    /// animation.
+    pub fn scroll_to(&self, value: i32) {
+        self.value_state().set(value.max(0));
     }
 }
 
 impl ComposeArg for ScrollState {
     fn same(&self, other: &Self) -> bool {
-        Rc::ptr_eq(&self.value, &other.value)
+        Rc::ptr_eq(&self.owner, &other.owner)
     }
 }
 
@@ -121,14 +134,15 @@ struct ScrollNode {
 
 impl ScrollNode {
     /// Scrolls by `delta` pixels, within the range; returns whether it moved.
-    fn scroll_by(&mut self, delta: f32, context: &mut EventContext<'_>) -> bool {
-        let old = self.state.value.get();
-        let new = (old as f32 + delta).round().clamp(0.0, self.state.max_value.get() as f32) as i32;
+    fn scroll_by(&mut self, delta: f32, _context: &mut EventContext<'_>) -> bool {
+        let old = self.state.value_state().get();
+        let max = self.state.max_state().get();
+        let new = (old as f32 + delta).round().clamp(0.0, max as f32) as i32;
         if new == old {
             return false;
         }
-        self.state.value.set(new);
-        context.invalidate_measure();
+        // The layout read the value: the write measures it again.
+        self.state.value_state().set(new);
         true
     }
 }
@@ -170,9 +184,13 @@ impl LayoutModifierNode for ScrollNode {
         let height = constraints.constrain_height(placeable.height);
         let max =
             if self.vertical { placeable.height - height } else { placeable.width - width }.max(0);
-        self.state.max_value.set(max);
-        let value = self.state.value.get().min(max);
-        self.state.value.set(value);
+        if self.state.max_state().get() != max {
+            self.state.max_state().set(max);
+        }
+        let value = self.state.value_state().get().min(max);
+        if value != self.state.value_state().get() {
+            self.state.value_state().set(value);
+        }
         if self.vertical {
             scope.place(&placeable, 0, -value);
         } else {

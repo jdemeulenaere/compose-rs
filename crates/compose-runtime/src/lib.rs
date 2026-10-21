@@ -28,6 +28,7 @@ mod error;
 mod hash;
 mod local;
 mod node_tree;
+mod observe;
 mod remember;
 mod runtime;
 mod scope;
@@ -45,6 +46,7 @@ pub use error::ComposeError;
 pub use hash::{KeyHasher, hash_key, key_of};
 pub use local::{CompositionLocal, CompositionLocalProvider, ProvidedValue};
 pub use node_tree::NodeTree;
+pub use observe::ReadObserver;
 pub use remember::{
     Observed, Remember, RememberObserver, key, remember, remember_keyed, remember_observer,
     remember_observer_keyed,

@@ -40,6 +40,8 @@ struct CellEntry {
     generation: u32,
     cell: Option<Rc<dyn Any>>,
     readers: Vec<Reader>,
+    /// Reads observed outside composition (layout, drawing).
+    observed: Vec<crate::observe::ObservedRead>,
     created_at: &'static Location<'static>,
     /// The generation and creation site of the cell last freed here, so a stale handle still
     /// names its creation site after the slot is reused (rule R3).
@@ -88,6 +90,7 @@ impl Cells {
                 generation: self.base,
                 cell: Some(cell),
                 readers: Vec::new(),
+                observed: Vec::new(),
                 created_at,
                 freed: (0, created_at),
             });
@@ -113,6 +116,7 @@ impl Cells {
         entry.freed = (entry.generation, entry.created_at);
         entry.generation = entry.generation.wrapping_add(1);
         entry.readers.clear();
+        entry.observed.clear();
         self.free.push(id.index);
         entry.cell.take()
     }
@@ -227,6 +231,30 @@ fn register_read(entry: &mut CellEntry, scopes: &Scopes, scope: ScopeId) {
     entry.readers.push(Reader { scope, epoch });
 }
 
+/// Records a read observed outside composition, under the observation in progress.
+fn register_observed_read(
+    entry: &mut CellEntry,
+    observers: &crate::observe::Observers,
+    observing: crate::observe::Observing,
+) {
+    if let Some(read) = entry
+        .observed
+        .iter_mut()
+        .find(|read| read.observer == observing.observer && read.key == observing.key)
+    {
+        read.epoch = observing.epoch;
+        return;
+    }
+    if entry.observed.len() == entry.observed.capacity() {
+        entry.observed.retain(|read| observers.is_current(read));
+    }
+    entry.observed.push(crate::observe::ObservedRead {
+        observer: observing.observer,
+        key: observing.key,
+        epoch: observing.epoch,
+    });
+}
+
 /// `write_cell` or `try_write_cell`.
 type CellLookup = fn(StateId, &'static Location<'static>) -> Result<Rc<dyn Any>, Stale>;
 
@@ -247,10 +275,12 @@ fn read_cell_in(
     _at: &'static Location<'static>,
 ) -> Result<Rc<dyn Any>, Stale> {
     let scope = runtime.reading_scope();
-    let Runtime { cells, scopes, .. } = runtime;
+    let Runtime { cells, scopes, observers, observing, .. } = runtime;
     let entry = cells.entry(id)?;
     if !scope.is_none() {
         register_read(entry, scopes, scope);
+    } else if let Some(observing) = *observing {
+        register_observed_read(entry, observers, observing);
     }
     Ok(entry.cell.clone().expect("a live cell"))
 }
@@ -284,7 +314,7 @@ fn write_cell_in(
 /// Invalidates the scopes that read a cell in their latest run, and prunes the others.
 fn invalidate_readers(id: StateId) {
     let requested = with_runtime(|runtime| {
-        let Runtime { cells, scopes, compositions, frame_requests, .. } = runtime;
+        let Runtime { cells, scopes, compositions, frame_requests, observers, .. } = runtime;
         let Ok(entry) = cells.entry(id) else {
             return false;
         };
@@ -294,6 +324,17 @@ fn invalidate_readers(id: StateId) {
                 return false;
             }
             requested |= invalidate_scope_parts(scopes, compositions, frame_requests, reader.scope);
+            true
+        });
+        // Reads observed in layout and drawing: their observers hear the keys.
+        entry.observed.retain(|read| {
+            if !observers.is_current(read) {
+                return false;
+            }
+            if let Some(notify) = observers.invalidate(read) {
+                frame_requests.push(notify);
+                requested = true;
+            }
             true
         });
         requested || crate::runtime::frames_requested(runtime)

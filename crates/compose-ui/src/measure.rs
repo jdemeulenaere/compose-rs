@@ -6,7 +6,7 @@ use std::panic::{self, AssertUnwindSafe};
 use crate::constraints::Constraints;
 use crate::layout::{Measurable, MeasureResult, MeasureScope};
 use crate::nodes::Taken;
-use crate::tree::{Layer, NodeId, UiTree};
+use crate::tree::{Layer, NodeId, UiTree, capability, observation_key};
 use crate::unit::{IntOffset, IntSize};
 
 impl UiTree {
@@ -85,15 +85,23 @@ impl UiTree {
             let index = value.layout_indices[layer] as usize;
             // Out of the chain while it runs, so it can measure the rest of its own node.
             let mut modifier_node = mem::replace(&mut value.chain[index], Box::new(Taken));
+            let custom = value.capabilities[index] & capability::CUSTOM != 0;
             let run = self.next_measure_run();
+            let observer = if custom { self.observer.clone() } else { None };
             let result = panic::catch_unwind(AssertUnwindSafe(|| {
                 let mut scope = MeasureScope { tree: &mut *self, node, run };
                 let content = Measurable { node, layer: layer as u32 + 1 };
-                modifier_node.as_layout().expect("compose-ui: a layout node").measure(
-                    &mut scope,
-                    content,
-                    constraints,
-                )
+                let mut measure = || {
+                    modifier_node.as_layout().expect("compose-ui: a layout node").measure(
+                        &mut scope,
+                        content,
+                        constraints,
+                    )
+                };
+                match &observer {
+                    Some(observer) => observer.observe(observation_key(node, false), measure),
+                    None => measure(),
+                }
             }));
             self.node_mut(node).chain[index] = modifier_node;
             self.recover(node, result)
@@ -104,9 +112,15 @@ impl UiTree {
                 self.node_mut(child.node).placed = false;
             }
             let run = self.next_measure_run();
+            let observer = self.observer.clone();
             let result = panic::catch_unwind(AssertUnwindSafe(|| {
                 let mut scope = MeasureScope { tree: &mut *self, node, run };
-                policy.measure(&mut scope, &children, constraints)
+                match &observer {
+                    Some(observer) => observer.observe(observation_key(node, false), || {
+                        policy.measure(&mut scope, &children, constraints)
+                    }),
+                    None => policy.measure(&mut scope, &children, constraints),
+                }
             }));
             self.node_mut(node).children = children;
             self.recover(node, result)

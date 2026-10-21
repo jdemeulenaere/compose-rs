@@ -49,6 +49,16 @@ impl UiHost {
                 waker();
             }
         });
+        // Writes to state read while measuring or drawing ask for a frame, as composition's do.
+        let (requested, wake) = (frame_requested.clone(), waker.clone());
+        let observer = compose_runtime::ReadObserver::new(move || {
+            requested.set(true);
+            let waker = wake.borrow().clone();
+            if let Some(waker) = waker {
+                waker();
+            }
+        });
+        composition.with_applier(|tree: &mut UiTree| tree.set_read_observer(observer));
         UiHost { composition, size, frame_requested, waker }
     }
 
@@ -125,8 +135,10 @@ impl UiHost {
         let bodies = compose_runtime::bodies_run();
         let recomposed = self.composition.has_invalidations() && self.composition.recompose();
         let size = self.size;
-        let (measured, drew, actions) =
-            self.with_tree(|tree| (tree.layout(size), tree.draw(), tree.take_pending_actions()));
+        let (measured, drew, actions) = self.with_tree(|tree| {
+            tree.apply_observed_writes();
+            (tree.layout(size), tree.draw(), tree.take_pending_actions())
+        });
         // What composition queued (a focus lost, listeners attached), now that the tree is free.
         Self::run(actions);
         FrameStats {

@@ -39,6 +39,9 @@ pub(crate) struct Runtime {
     pub removal_stack: Vec<(u32, bool)>,
     /// Frame requesters to call once the borrow ends; kept for its capacity.
     pub frame_requests: Vec<Rc<dyn Fn()>>,
+    /// Observers of reads outside composition, and the observation in progress.
+    pub observers: crate::observe::Observers,
+    pub observing: Option<crate::observe::Observing>,
     /// A node move waiting to be coalesced with the next one (see `apply_node_op`).
     pub pending_move: Option<NodeOp>,
     /// Compositions taken out of the arena and still releasing their values.
@@ -73,6 +76,8 @@ impl Runtime {
             frames: Vec::new(),
             removal_stack: Vec::new(),
             frame_requests: Vec::new(),
+            observers: crate::observe::Observers::new(),
+            observing: None,
             pending_move: None,
             disposing: 0,
             finishing: 0,
@@ -155,7 +160,8 @@ pub(crate) fn release_if_empty() {
             && !runtime.is_busy()
             && runtime.compositions.live() == 0
             && runtime.cells.live_count() == 0
-            && runtime.scopes.live_count() == 0;
+            && runtime.scopes.live_count() == 0
+            && runtime.observers.is_empty();
         if !empty {
             return None;
         }
