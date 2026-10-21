@@ -89,7 +89,8 @@ impl ModifierNode for ShadowNode {
 
 impl DrawModifierNode for ShadowNode {
     fn draw(&mut self, scope: &mut DrawScope<'_>) {
-        let outline = self.shape.outline(scope.size(), &scope.density());
+        let outline =
+            self.shape.outline_in(scope.size(), &scope.density(), scope.layout_direction());
         let elevation = scope.density().to_px(self.elevation);
         scope.draw_shadow(outline, elevation, self.ambient_color, self.spot_color);
     }

@@ -139,13 +139,28 @@ pub enum Shape {
 pub const RECTANGLE_SHAPE: Shape = Shape::Rectangle;
 
 impl Shape {
-    /// The shape's outline in a box of `size`.
+    /// The shape's outline in a box of `size`, left to right.
     pub fn outline(&self, size: Size, density: &Density) -> Outline {
+        self.outline_in(size, density, crate::alignment::LayoutDirection::Ltr)
+    }
+
+    /// The shape's outline in a box of `size`, its start and end corners mirrored in a
+    /// right-to-left layout, as Compose's `RoundedCornerShape`.
+    pub fn outline_in(
+        &self,
+        size: Size,
+        density: &Density,
+        direction: crate::alignment::LayoutDirection,
+    ) -> Outline {
         let rect = Rect::new(0.0, 0.0, size.width, size.height);
         match self {
             Shape::Rectangle => Outline::Rectangle(rect),
             Shape::Rounded(corners) => {
-                let radii = corners.map(|corner| corner.to_px(size, density));
+                let mut radii = corners.map(|corner| corner.to_px(size, density));
+                // Top left, top right, bottom right, bottom left.
+                if direction == crate::alignment::LayoutDirection::Rtl {
+                    radii = [radii[1], radii[0], radii[3], radii[2]];
+                }
                 if radii.iter().all(|radius| *radius == 0.0) {
                     Outline::Rectangle(rect)
                 } else {

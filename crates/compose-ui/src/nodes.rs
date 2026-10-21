@@ -364,13 +364,13 @@ impl DrawModifierNode for BorderNode {
         let width = if self.0.0 == 0.0 { 1.0 } else { scope.density().to_px(self.0).ceil() };
         let size = scope.size();
         if width * 2.0 >= size.width.min(size.height) {
-            let outline = self.2.outline(size, &scope.density());
+            let outline = self.2.outline_in(size, &scope.density(), scope.layout_direction());
             scope.draw_outline(outline, Paint::fill(self.1));
             return;
         }
         let half = width / 2.0;
         let paint = Paint::stroke(self.1, width);
-        match self.2.outline(size, &scope.density()) {
+        match self.2.outline_in(size, &scope.density(), scope.layout_direction()) {
             Outline::Rectangle(rect) => scope.draw_rect(inset(rect, half), paint),
             Outline::Rounded(rect, radii) => scope.draw_round_rect(
                 inset(rect, half),
@@ -399,7 +399,7 @@ impl ModifierNode for ClipNode {
 impl DrawModifierNode for ClipNode {
     fn draw(&mut self, scope: &mut DrawScope<'_>) {
         scope.save();
-        let outline = self.0.outline(scope.size(), &scope.density());
+        let outline = self.0.outline_in(scope.size(), &scope.density(), scope.layout_direction());
         scope.clip_outline(outline);
     }
 
@@ -590,6 +590,17 @@ impl PointerInputModifierNode for ClickableNode {
         bounds: IntSize,
         context: &mut EventContext<'_>,
     ) {
+        // A move of its press that an ancestor took by the final pass (a drag around it)
+        // cancels the press, as Compose's `waitForUpOrCancellation`.
+        if pass == PointerEventPass::Final
+            && event.kind == PointerEventType::Move
+            && event.consumed
+            && self.state.pressed == Some(event.pointer)
+        {
+            self.state.pressed = None;
+            self.press_changed(context);
+            return;
+        }
         if pass != PointerEventPass::Main {
             return;
         }

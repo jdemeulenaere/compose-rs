@@ -308,10 +308,11 @@ impl DrawModifierNode for ScrollbarNode {
         let active = self.drag.is_some() || self.hovered;
         let color = if active { self.style.hover_color } else { self.style.unhover_color };
         let size = compose_ui::Size::new(rect.width(), rect.height());
-        let outline = match self.style.shape.outline(size, &scope.density()) {
-            compose_ui::Outline::Rounded(_, radii) => compose_ui::Outline::Rounded(rect, radii),
-            compose_ui::Outline::Rectangle(_) => compose_ui::Outline::Rectangle(rect),
-        };
+        let outline =
+            match self.style.shape.outline_in(size, &scope.density(), scope.layout_direction()) {
+                compose_ui::Outline::Rounded(_, radii) => compose_ui::Outline::Rounded(rect, radii),
+                compose_ui::Outline::Rectangle(_) => compose_ui::Outline::Rectangle(rect),
+            };
         scope.draw_outline(outline, compose_ui::Paint::fill(color));
     }
 }

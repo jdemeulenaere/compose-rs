@@ -177,7 +177,7 @@ fn draggable_reports_deltas_along_its_axis_past_the_slop() {
                 true,
                 false,
                 |_| {},
-                move || stop.set(true),
+                move |_| stop.set(true),
             )
         );
     });

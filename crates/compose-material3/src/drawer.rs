@@ -34,13 +34,18 @@ impl ComposeArg for DrawerValue {
 
 /// As Compose's drawer animation: a 256 ms tween.
 const ANIMATION_MILLIS: u32 = 256;
+/// A release faster than this (towards one side) settles there, as Compose's drawer's
+/// `DrawerVelocityThreshold` (400 dp per second).
+const VELOCITY_THRESHOLD: Dp = Dp(400.0);
 
 struct DrawerInner {
     /// How far open it is: 0 closed, 1 open (its offset, as a fraction of its width).
     open: Animatable<f32>,
     /// Where it's going (or is), as `targetValue`.
     target: OwnedState<DrawerValue>,
-    /// Shown: open, or opening or closing (its sheet is composed).
+    /// Where it last settled, as `currentValue`.
+    current: OwnedState<DrawerValue>,
+    /// Shown: open, opening, closing or dragged (its scrim and sheet are composed).
     shown: OwnedState<bool>,
 }
 
@@ -58,6 +63,7 @@ impl DrawerState {
             inner: Rc::new(DrawerInner {
                 open: Animatable::new(if open { 1.0 } else { 0.0 }),
                 target: mutable_state_of(initial_value),
+                current: mutable_state_of(initial_value),
                 shown: mutable_state_of(open),
             }),
         }
@@ -68,9 +74,10 @@ impl DrawerState {
         self.inner.target.get()
     }
 
-    /// Where it is, as `currentValue` (a state read): open until it's closed.
+    /// Where it last settled, as `currentValue` (a state read): closed while it opens, open
+    /// while it closes.
     pub fn current_value(&self) -> DrawerValue {
-        if self.inner.shown.get() { DrawerValue::Open } else { DrawerValue::Closed }
+        self.inner.current.get()
     }
 
     pub fn is_open(&self) -> bool {
@@ -94,21 +101,34 @@ impl DrawerState {
     /// Opens or closes it at once, as `snapTo`.
     pub fn snap_to(&self, value: DrawerValue) {
         let open = value == DrawerValue::Open;
-        self.inner.target.set(value);
-        self.inner.shown.set(open);
         self.inner.open.snap_to(if open { 1.0 } else { 0.0 });
+        self.settle(value);
     }
 
     async fn animate_to(&self, value: DrawerValue) {
         let open = value == DrawerValue::Open;
         self.inner.target.set(value);
-        if open {
-            self.inner.shown.set(true);
-        }
+        self.inner.shown.set(true);
         let result =
             self.inner.open.animate_to(if open { 1.0 } else { 0.0 }, tween(ANIMATION_MILLIS)).await;
-        if !open && result.end_reason == compose_animation::AnimationEndReason::Finished {
-            self.inner.shown.set(false);
+        if result.end_reason == compose_animation::AnimationEndReason::Finished {
+            self.settle(value);
+        }
+    }
+
+    /// At `value`: settled there, its sheet composed only while open.
+    fn settle(&self, value: DrawerValue) {
+        self.inner.target.set(value);
+        self.inner.current.set(value);
+        self.inner.shown.set(value == DrawerValue::Open);
+    }
+
+    /// Dragged by `delta` pixels of a sheet `width` wide (positive towards open).
+    fn drag_by(&self, delta: f32, width: f32) {
+        let fraction = (self.fraction() + delta / width.max(1.0)).clamp(0.0, 1.0);
+        self.inner.open.snap_to(fraction);
+        if fraction > 0.0 && !self.inner.shown.get() {
+            self.inner.shown.set(true);
         }
     }
 
@@ -157,9 +177,10 @@ impl DrawerDefaults {
     }
 }
 
-/// `content` with a drawer over it, as Compose's `ModalNavigationDrawer`: while it's open (or
-/// sliding), `drawer_content` slides in from the start edge over a scrim that closes it when
-/// clicked; with `gestures_enabled`, dragging the sheet towards the start closes it.
+/// `content` with a drawer over it, as Compose's `ModalNavigationDrawer`, filling the space it's
+/// given: while it's open (or sliding), `drawer_content` slides in from the start edge over a
+/// scrim. With `gestures_enabled`, a click on the scrim closes it, and a drag across the drawer
+/// opens or closes it (settling by how far it went, or by the release's speed).
 #[composable]
 #[allow(non_snake_case)]
 pub fn ModalNavigationDrawer(
@@ -173,52 +194,71 @@ pub fn ModalNavigationDrawer(
     let scope = remember_coroutine_scope();
     let shown = drawer_state.inner.shown.get();
     let rtl = compose_ui::LOCAL_LAYOUT_DIRECTION.current() == LayoutDirection::Rtl;
+    let density = compose_ui::LOCAL_DENSITY.current();
     // The width the sheet was last laid out at: a drag moves it by fractions of it.
-    let width = remember(|| Rc::new(std::cell::Cell::new(1.0f32)));
+    let width = remember(|| Rc::new(std::cell::Cell::new(DrawerDefaults::MAXIMUM_DRAWER_WIDTH.0)));
     let policy = {
         let (state, width) = (drawer_state.clone(), width.clone());
         compose_runtime::remember_keyed(drawer_state.clone(), || {
             Rc::new(DrawerLayout { state, width }) as Rc<dyn MeasurePolicy>
         })
     };
-    // A drag across the drawer (open or sliding) moves the sheet; let go, it settles open or
-    // closed, as Compose's `anchoredDraggable` on the drawer's box.
+    // A drag across the drawer moves the sheet; let go, it settles open or closed, as
+    // Compose's `anchoredDraggable` on the drawer's box.
     let drag = {
         let (dragged, width) = (drawer_state.clone(), width.clone());
         compose_runtime::remember_keyed(drawer_state.clone(), move || {
-            DraggableState::new(move |delta| {
-                let fraction = (dragged.fraction() + delta / width.get()).clamp(0.0, 1.0);
-                dragged.inner.open.snap_to(fraction);
-            })
+            DraggableState::new(move |delta| dragged.drag_by(delta, width.get()))
         })
     };
+    let threshold = density.to_px(VELOCITY_THRESHOLD);
     let settle = {
         let (state, scope) = (drawer_state.clone(), scope.clone());
-        move || {
+        move |velocity: f32| {
             let state = state.clone();
             scope.launch(async move {
-                if state.fraction() > 0.5 { state.open().await } else { state.close().await }
+                let open = if velocity > threshold {
+                    true
+                } else if velocity < -threshold {
+                    false
+                } else {
+                    state.fraction() > 0.5
+                };
+                if open { state.open().await } else { state.close().await }
             });
         }
     };
-    let modifier = modifier.draggable(
+    let modifier = modifier.fill_max_size().draggable(
         drag,
         Orientation::Horizontal,
-        gestures_enabled && shown,
+        gestures_enabled,
         rtl,
         |_| {},
         settle,
     );
-    let (state, drag_scope) = (drawer_state.clone(), scope.clone());
+    let (state, close_scope) = (drawer_state.clone(), scope.clone());
     Layout(
         modifier,
         policy,
         compose_runtime::callback(move || {
-            content();
+            // The content in a box of its own, as Compose's: whatever it emits is one node.
+            let content = content.clone();
+            Box(
+                Modifier,
+                Alignment::TOP_START,
+                false,
+                compose_runtime::callback(move |_| content()),
+            );
             if shown {
                 // The scrim, its alpha following the drawer (read while drawing).
-                let (state, close_scope) = (state.clone(), drag_scope.clone());
                 let fraction = state.clone();
+                let close = {
+                    let (state, scope) = (state.clone(), close_scope.clone());
+                    compose_runtime::callback(move || {
+                        let state = state.clone();
+                        scope.launch(async move { state.close().await });
+                    })
+                };
                 Box(
                     Modifier
                         .fill_max_size()
@@ -229,16 +269,7 @@ pub fn ModalNavigationDrawer(
                                 compose_ui::Paint::fill(scrim_color.with_alpha(alpha)),
                             );
                         })
-                        .clickable_with(true, None, {
-                            let state = state.clone();
-                            move || {
-                                let state = state.clone();
-                                close_scope.launch(async move { state.close().await });
-                            }
-                        })
-                        .semantics(false, |config| {
-                            config.content_description.push("Close navigation menu".into())
-                        }),
+                        .then_custom(ScrimElement { close, enabled: gestures_enabled }),
                     Alignment::TOP_START,
                     false,
                     compose_runtime::callback(|_| {}),
@@ -253,6 +284,113 @@ pub fn ModalNavigationDrawer(
             }
         }),
     );
+}
+
+/// The scrim's input: a click closes the drawer (with gestures enabled), as Compose's scrim's
+/// `detectTapGestures`; it takes the pointer from the content beneath, and is no focus stop.
+struct ScrimElement {
+    close: compose_runtime::Callback,
+    enabled: bool,
+}
+
+struct ScrimNode {
+    close: compose_runtime::Callback,
+    enabled: bool,
+    pressed: Option<compose_ui::PointerId>,
+}
+
+impl compose_ui::ModifierNodeElement for ScrimElement {
+    fn create(&self) -> std::boxed::Box<dyn compose_ui::ModifierNode> {
+        std::boxed::Box::new(ScrimNode {
+            close: self.close.clone(),
+            enabled: self.enabled,
+            pressed: None,
+        })
+    }
+    fn update(&self, node: &mut dyn compose_ui::ModifierNode) {
+        if let Some(node) = node.downcast_mut::<ScrimNode>() {
+            node.close = self.close.clone();
+            node.enabled = self.enabled;
+        }
+    }
+    fn same(&self, other: &dyn compose_ui::ModifierNodeElement) -> bool {
+        other
+            .downcast_ref::<ScrimElement>()
+            .is_some_and(|other| other.close.ptr_eq(&self.close) && other.enabled == self.enabled)
+    }
+    fn name(&self) -> &'static str {
+        "drawer_scrim"
+    }
+}
+
+impl compose_ui::ModifierNode for ScrimNode {
+    fn as_pointer_input(&mut self) -> Option<&mut dyn compose_ui::PointerInputModifierNode> {
+        Some(self)
+    }
+    fn as_semantics(&mut self) -> Option<&mut dyn compose_ui::SemanticsModifierNode> {
+        Some(self)
+    }
+}
+
+impl compose_ui::PointerInputModifierNode for ScrimNode {
+    fn on_pointer_event(
+        &mut self,
+        event: &mut compose_ui::PointerEvent,
+        pass: compose_ui::PointerEventPass,
+        _bounds: compose_ui::IntSize,
+        context: &mut compose_ui::EventContext<'_>,
+    ) {
+        use compose_ui::PointerEventType;
+        // A move a drag took (by the final pass) is no click.
+        if pass == compose_ui::PointerEventPass::Final
+            && event.kind == PointerEventType::Move
+            && event.consumed
+        {
+            self.pressed = None;
+            return;
+        }
+        if pass != compose_ui::PointerEventPass::Main {
+            return;
+        }
+        match event.kind {
+            PointerEventType::Press if !event.consumed => {
+                // Taken: the content beneath gets nothing.
+                event.consume();
+                self.pressed = Some(event.pointer);
+            }
+            PointerEventType::Release if self.pressed == Some(event.pointer) => {
+                self.pressed = None;
+                if self.enabled && !event.consumed {
+                    event.consume();
+                    context.call(&self.close);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn on_cancel_pointer_input(&mut self) {
+        self.pressed = None;
+    }
+}
+
+impl compose_ui::SemanticsModifierNode for ScrimNode {
+    fn apply_semantics(&self, config: &mut compose_ui::SemanticsConfiguration) {
+        config.content_description.push("Close navigation menu".into());
+        config.clickable |= self.enabled;
+    }
+
+    fn perform_action(
+        &mut self,
+        action: compose_ui::SemanticsAction,
+        context: &mut compose_ui::EventContext<'_>,
+    ) -> bool {
+        if action != compose_ui::SemanticsAction::OnClick || !self.enabled {
+            return false;
+        }
+        context.call(&self.close);
+        true
+    }
 }
 
 /// The content, then (while shown) the scrim over it, then the sheet at the start edge, slid
@@ -276,6 +414,7 @@ impl MeasurePolicy for DrawerLayout {
         let content = scope.measure(*content, constraints);
         let width = constraints.constrain_width(content.width);
         let height = constraints.constrain_height(content.height);
+        // Read while measuring: a frame of the slide places the sheet again only.
         scope.place_relative(&content, 0, 0);
         if let [scrim, sheet] = rest {
             let scrim = scope.measure(*scrim, Constraints::fixed(width, height));
@@ -374,7 +513,7 @@ impl NavigationDrawerItemDefaults {
     }
 }
 
-/// A destination in a drawer, as Compose's `NavigationDrawerItem`: 56 dp high in a pill, its
+/// A destination in a drawer, as Compose's `NavigationDrawerItem`: at least 56 dp high in a pill, its
 /// icon (24 dp) and label (label large) 16 dp in and 12 dp apart, a badge at the end; the
 /// selected one in the secondary container.
 #[composable]
@@ -401,7 +540,7 @@ pub fn NavigationDrawerItem(
     };
     let typography = MaterialTheme::typography();
     let row_modifier = modifier
-        .height(56.dp())
+        .size_in(SizeSpec::bounds(Dp::UNSPECIFIED, 56.dp(), Dp::UNSPECIFIED, Dp::UNSPECIFIED))
         .fill_max_width()
         .background_shape(container, pill)
         .clip(pill)

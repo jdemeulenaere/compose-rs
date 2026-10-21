@@ -134,7 +134,7 @@ fn a_tap_is_cancelled_when_a_parent_consumes_the_moves() {
                 true,
                 false,
                 |_| {},
-                || {}
+                |_| {}
             ),
             {
                 let seen = seen.clone();
@@ -315,7 +315,7 @@ fn a_child_drag_gives_up_once_its_parent_took_the_drag() {
                 true,
                 false,
                 |_| {},
-                || {}
+                |_| {}
             ),
             {
                 Box!(
@@ -325,7 +325,7 @@ fn a_child_drag_gives_up_once_its_parent_took_the_drag() {
                         true,
                         false,
                         |_| {},
-                        || {}
+                        |_| {}
                     )
                 );
             }
@@ -359,7 +359,7 @@ fn a_second_finger_does_not_move_a_drag() {
                 true,
                 false,
                 |_| {},
-                || {}
+                |_| {}
             )
         );
     });
@@ -389,7 +389,7 @@ fn a_cancelled_drag_calls_on_drag_stopped() {
                 true,
                 false,
                 |_| {},
-                move || stop.set(stop.get() + 1)
+                move |_| stop.set(stop.get() + 1)
             )
         );
     });
@@ -420,7 +420,7 @@ fn draggable_calls_its_newest_callbacks() {
                 true,
                 false,
                 |_| {},
-                move || seen.borrow_mut().push(format!("stopped {current}"))
+                move |_| seen.borrow_mut().push(format!("stopped {current}"))
             )
         );
     });

@@ -75,7 +75,10 @@ impl UiTree {
                     && let Some(clip) = value.chain[index].hit_clip()
                 {
                     let size = value.layers[layer].measured.into();
-                    if !clip.outline(size, &density).contains(local - origins[layer]) {
+                    if !clip
+                        .outline_in(size, &density, value.layout_direction)
+                        .contains(local - origins[layer])
+                    {
                         // Outside the clip: nothing after it, nor the children, is hit.
                         return path.len() > start;
                     }

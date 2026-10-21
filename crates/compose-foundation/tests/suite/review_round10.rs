@@ -38,7 +38,7 @@ fn drag_started_is_where_the_slop_was_crossed() {
                 true,
                 false,
                 move |at: Offset| started.borrow_mut().push(format!("started {}", at.y)),
-                || {}
+                |_| {}
             )
         );
     });

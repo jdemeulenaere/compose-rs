@@ -56,7 +56,7 @@ impl DrawScope<'_> {
 
     /// Fills `shape` over the whole node.
     pub fn draw_shape(&mut self, shape: &Shape, color: Color) {
-        let outline = shape.outline(self.size, &self.density);
+        let outline = shape.outline_in(self.size, &self.density, self.layout_direction());
         self.draw_outline(outline, Paint::fill(color));
     }
 
