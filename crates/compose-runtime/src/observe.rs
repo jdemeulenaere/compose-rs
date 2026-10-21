@@ -132,10 +132,7 @@ impl ReadObserver {
                 }
                 None => return runtime.observing,
             };
-            std::mem::replace(
-                &mut runtime.observing,
-                Some(Observing { observer: self.index, key, epoch }),
-            )
+            runtime.observing.replace(Observing { observer: self.index, key, epoch })
         });
         struct Restore(Option<Observing>);
         impl Drop for Restore {
