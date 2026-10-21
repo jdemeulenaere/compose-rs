@@ -139,3 +139,56 @@ impl RememberObserver for ScopeObserver {
 pub fn remember_coroutine_scope() -> CoroutineScope {
     remember_observer(|| ScopeObserver(CoroutineScope::new())).0.clone()
 }
+
+/// The latest value given, for effects started earlier to read, as Compose's
+/// `rememberUpdatedState`: an effect keyed on something else (a timeout) calls the newest
+/// callback. Not state: reading it observes nothing.
+pub struct UpdatedState<T: 'static> {
+    value: std::rc::Rc<std::cell::RefCell<T>>,
+}
+
+impl<T: 'static> Clone for UpdatedState<T> {
+    fn clone(&self) -> Self {
+        UpdatedState { value: self.value.clone() }
+    }
+}
+
+impl<T: Clone + 'static> UpdatedState<T> {
+    /// The latest value.
+    pub fn get(&self) -> T {
+        self.value.borrow().clone()
+    }
+}
+
+impl<T: 'static> UpdatedState<T> {
+    /// Reads the latest value in place.
+    pub fn with<R>(&self, read: impl FnOnce(&T) -> R) -> R {
+        read(&self.value.borrow())
+    }
+}
+
+/// Remembers `value`, updated at each composition, as `rememberUpdatedState(value)`.
+pub fn remember_updated_state<T: Clone + 'static>(value: T) -> UpdatedState<T> {
+    let cell =
+        crate::remember::remember(|| std::rc::Rc::new(std::cell::RefCell::new(value.clone())));
+    *cell.borrow_mut() = value;
+    UpdatedState { value: cell }
+}
+
+/// State a coroutine produces, as Compose's `produceState(initialValue, key) { … }`: starting at
+/// `initial`, set by `producer`'s coroutine (launched, as `LaunchedEffect`, again when `key`
+/// changes; cancelled when this leaves the composition).
+pub fn produce_state<T, K, F>(
+    initial: T,
+    key: K,
+    producer: impl FnOnce(crate::state::MutableState<T>) -> F,
+) -> crate::state::State<T>
+where
+    T: PartialEq + 'static,
+    K: ComposeArg,
+    F: std::future::Future<Output = ()> + 'static,
+{
+    let state = crate::remember::remember(|| crate::state::mutable_state_of(initial));
+    LaunchedEffect(key, producer(state));
+    state.into()
+}

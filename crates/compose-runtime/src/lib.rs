@@ -46,7 +46,7 @@ pub use composition::Composition;
 pub use derived::{DerivedState, derived_state_of, derived_state_of_with, flush_derived_states};
 pub use effects::{
     DisposableEffect, DisposableEffectResult, DisposableEffectScope, LaunchedEffect, SideEffect,
-    remember_coroutine_scope,
+    UpdatedState, produce_state, remember_coroutine_scope, remember_updated_state,
 };
 pub use error::ComposeError;
 pub use executor::{CoroutineScope, Job, delay, with_frame_millis, with_frame_nanos};
