@@ -228,6 +228,8 @@ pub struct UiTree {
     /// Observes the state measure policies and custom nodes read (D71), keyed by node.
     pub(crate) observer: Option<Rc<compose_runtime::ReadObserver>>,
     pub(crate) measure_runs: u64,
+    /// What `FocusRequester`s attached to this tree's nodes asked for.
+    pub(crate) focus_requests: Rc<crate::focus_requester::FocusRequests>,
 }
 
 impl UiTree {
@@ -256,6 +258,7 @@ impl UiTree {
             mouse: None,
             observer: None,
             measure_runs: 0,
+            focus_requests: Rc::default(),
         }
     }
 
@@ -536,12 +539,18 @@ impl UiTree {
     /// Recomputes what the chain's nodes can do, its layers and its parent data. Returns
     /// whether the parent data changed.
     fn refresh_chain(&mut self, node: NodeId) -> bool {
+        let focus_requests = self.focus_requests.clone();
         let value = self.node_mut(node);
         value.capabilities.clear();
         value.layout_indices.clear();
         value.all_capabilities = 0;
         let mut parent_data = ParentData::default();
         for (index, entry) in value.chain.iter_mut().enumerate() {
+            if let Some(requester) =
+                entry.downcast_ref::<crate::focus_requester::FocusRequesterNode>()
+            {
+                requester.0.attach(&focus_requests, node);
+            }
             let custom = matches!(value.modifier.elements().get(index), Some(Element::Custom(_)));
             let bits = capabilities_of(&mut **entry) | if custom { capability::CUSTOM } else { 0 };
             value.capabilities.push(bits);

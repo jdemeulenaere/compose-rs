@@ -340,16 +340,30 @@ pub(crate) fn AnimatedEnterExit(
             }
             // Gone (not leaving): an enter starts from its parts' hidden ends.
             let gone = visible && !leaving.get();
+            // Back while leaving: each part springs back from where it is, as Compose's
+            // `PostExit -> Visible` (its default spring); an exit interrupting an enter goes on
+            // along the interruption spring unless its own spec is one.
+            let returning = visible && leaving.get();
+            let entering = !visible
+                && [&progress.alpha, &progress.size, &progress.slide, &progress.scale]
+                    .iter()
+                    .any(|animatable| animatable.is_running());
+            let respec = move |spec: AnimationSpec| match spec {
+                _ if returning => default_spec(),
+                AnimationSpec::Spring(_) => spec,
+                _ if entering => AnimationSpec::Spring(spring()),
+                _ => spec,
+            };
             launched.set(visible);
             leaving.set(!visible);
             let launch = launches.get() + 1;
             launches.set(launch);
             let target = if visible { 1.0 } else { 0.0 };
             let animations = [
-                (progress.alpha.clone(), parts.fade.map(|(_, spec)| spec)),
-                (progress.size.clone(), parts.size.map(|(_, _, spec)| spec)),
-                (progress.slide.clone(), parts.slide.map(|(_, spec)| spec)),
-                (progress.scale.clone(), parts.scale.map(|(_, spec)| spec)),
+                (progress.alpha.clone(), parts.fade.map(|(_, spec)| respec(spec))),
+                (progress.size.clone(), parts.size.map(|(_, _, spec)| respec(spec))),
+                (progress.slide.clone(), parts.slide.map(|(_, spec)| respec(spec))),
+                (progress.scale.clone(), parts.scale.map(|(_, spec)| respec(spec))),
             ];
             // The parts animate at once, each as a task. A part the transition doesn't animate
             // keeps its value while leaving (an exit without a shrink keeps the size), and is

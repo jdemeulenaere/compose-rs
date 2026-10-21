@@ -5,16 +5,41 @@ use std::rc::Rc;
 
 use compose_runtime::{ComposeArg, OwnedState};
 
-/// A clickable's press, shared, as Compose's `MutableInteractionSource` with
-/// `collectIsPressedAsState`. Remember one and give it to `Modifier.clickable_interaction`.
+/// A clickable's press, focus and hover, shared, as Compose's `MutableInteractionSource` with
+/// `collectIsPressedAsState`, `collectIsFocusedAsState` and `collectIsHoveredAsState`. Remember
+/// one and give it to `Modifier.clickable_interaction`.
 #[derive(Clone)]
 pub struct MutableInteractionSource {
     pressed: Rc<OwnedState<bool>>,
+    focused: Rc<OwnedState<bool>>,
+    hovered: Rc<OwnedState<bool>>,
 }
 
 impl MutableInteractionSource {
     pub fn new() -> MutableInteractionSource {
-        MutableInteractionSource { pressed: Rc::new(compose_runtime::mutable_state_of(false)) }
+        MutableInteractionSource {
+            pressed: Rc::new(compose_runtime::mutable_state_of(false)),
+            focused: Rc::new(compose_runtime::mutable_state_of(false)),
+            hovered: Rc::new(compose_runtime::mutable_state_of(false)),
+        }
+    }
+
+    /// Whether the clickable has the focus, as `collectIsFocusedAsState` (a state read).
+    pub fn is_focused(&self) -> bool {
+        self.focused.get()
+    }
+
+    /// Whether a mouse is over the clickable, as `collectIsHoveredAsState` (a state read).
+    pub fn is_hovered(&self) -> bool {
+        self.hovered.get()
+    }
+
+    pub(crate) fn set_focused(&self, focused: bool) {
+        self.focused.set(focused);
+    }
+
+    pub(crate) fn set_hovered(&self, hovered: bool) {
+        self.hovered.set(hovered);
     }
 
     /// Whether the clickable is pressed (by a pointer or a key), as `collectIsPressedAsState`:

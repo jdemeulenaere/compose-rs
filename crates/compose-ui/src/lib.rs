@@ -17,6 +17,7 @@ pub mod display_list;
 pub mod draw;
 pub mod draw_modifiers;
 mod focus;
+mod focus_requester;
 pub mod graphics;
 pub mod graphics_layer;
 pub mod host;
@@ -46,6 +47,7 @@ pub use clipboard::{Clipboard, MemoryClipboard};
 pub use constraints::Constraints;
 pub use display_list::{DisplayList, DrawOp, Renderer};
 pub use draw::DrawScope;
+pub use focus_requester::FocusRequester;
 pub use graphics::{
     Color, CornerSize, Outline, Paint, PaintStyle, RECTANGLE_SHAPE, Shape, StrokeCap,
 };
@@ -63,9 +65,9 @@ pub use layout::{
 };
 pub use modifier::{
     AlignScope, BoxScope, ColumnScope, DetachContext, DrawModifierNode, Element, Fill,
-    FocusTargetModifierNode, KeyInputModifierNode, LayoutModifierNode, Modifier, ModifierNode,
-    ModifierNodeElement, PaddingValues, ParentAlignment, ParentData, PointerInputModifierNode,
-    RowScope, SemanticsModifierNode, SizeSpec, WeightScope,
+    FocusTargetModifierNode, Indication, KeyInputModifierNode, LayoutModifierNode, Modifier,
+    ModifierNode, ModifierNodeElement, PaddingValues, ParentAlignment, ParentData,
+    PointerInputModifierNode, RowScope, SemanticsModifierNode, SizeSpec, WeightScope,
 };
 pub use overlay::{PopupPositionProvider, WindowPosition};
 pub use path::{ImageVector, Path, PathCommand, PathError, PathFillType};

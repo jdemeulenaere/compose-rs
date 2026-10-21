@@ -450,7 +450,11 @@ pub fn Checkbox(
                 checked,
                 enabled,
                 Some(Role::Checkbox),
-                if checked { colors.checked_box_color } else { colors.unchecked_border_color },
+                // A circle around the box, as Compose's `ripple(bounded = false, 20.dp)`.
+                compose_ui::Indication::unbounded(
+                    if checked { colors.checked_box_color } else { colors.unchecked_border_color },
+                    20.dp(),
+                ),
                 on_checked_change,
             ))
         }

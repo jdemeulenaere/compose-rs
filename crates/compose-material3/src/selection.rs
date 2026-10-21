@@ -300,7 +300,8 @@ pub fn RadioButton(
         Some(on_click) => minimum_interactive_component_size(modifier.clickable_indicated(
             enabled,
             Some(Role::RadioButton),
-            color,
+            // A circle around the button, as Compose's `ripple(bounded = false, 20.dp)`.
+            compose_ui::Indication::unbounded(color, 20.dp()),
             on_click,
         )),
         None => modifier,

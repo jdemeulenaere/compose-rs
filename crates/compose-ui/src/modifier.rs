@@ -190,7 +190,7 @@ impl Modifier {
         role: Option<Role>,
         on_click: impl IntoCallback<dyn Fn()>,
     ) -> Modifier {
-        self.clickable_indicated(enabled, role, Color::UNSPECIFIED, on_click)
+        self.clickable_indicated(enabled, role, Indication::NONE, on_click)
     }
 
     /// `clickable_with` drawing a state layer of `indication` while pressed or focused, as
@@ -199,13 +199,13 @@ impl Modifier {
         self,
         enabled: bool,
         role: Option<Role>,
-        indication: Color,
+        indication: impl Into<Indication>,
         on_click: impl IntoCallback<dyn Fn()>,
     ) -> Modifier {
         self.then_element(Element::Clickable(Clickable {
             enabled,
             role,
-            indication,
+            indication: indication.into(),
             interaction_source: None,
             on_click: on_click.into_callback(),
         }))
@@ -218,14 +218,14 @@ impl Modifier {
         self,
         enabled: bool,
         role: Option<Role>,
-        indication: Color,
+        indication: impl Into<Indication>,
         interaction_source: crate::interaction::MutableInteractionSource,
         on_click: impl IntoCallback<dyn Fn()>,
     ) -> Modifier {
         self.then_element(Element::Clickable(Clickable {
             enabled,
             role,
-            indication,
+            indication: indication.into(),
             interaction_source: Some(interaction_source),
             on_click: on_click.into_callback(),
         }))
@@ -239,7 +239,7 @@ impl Modifier {
         role: Option<Role>,
         on_value_change: impl IntoCallback<dyn Fn(bool)>,
     ) -> Modifier {
-        self.toggleable_indicated(value, enabled, role, Color::UNSPECIFIED, on_value_change)
+        self.toggleable_indicated(value, enabled, role, Indication::NONE, on_value_change)
     }
 
     /// `toggleable` drawing a state layer of `indication`, as `clickable_indicated`.
@@ -248,14 +248,14 @@ impl Modifier {
         value: bool,
         enabled: bool,
         role: Option<Role>,
-        indication: Color,
+        indication: impl Into<Indication>,
         on_value_change: impl IntoCallback<dyn Fn(bool)>,
     ) -> Modifier {
         self.then_element(Element::Toggleable(Toggleable {
             value,
             enabled,
             role,
-            indication,
+            indication: indication.into(),
             on_value_change: on_value_change.into_callback(),
         }))
     }
@@ -492,14 +492,44 @@ macro_rules! scopes_compose_arg {
 
 scopes_compose_arg!(RowScope, ColumnScope, BoxScope);
 
+/// A state layer shown while pressed, focused or hovered, as Material's ripple (without its
+/// animation): `color` over the node's bounds, or, `unbounded`, a circle of `radius` centered
+/// on it, as `ripple(bounded = false, radius)`. An unspecified color shows nothing.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct Indication {
+    pub color: Color,
+    /// The circle's radius, for an unbounded one.
+    pub radius: Option<crate::unit::Dp>,
+}
+
+impl Indication {
+    /// None, as `indication = null`.
+    pub const NONE: Indication = Indication { color: Color::UNSPECIFIED, radius: None };
+
+    /// Over the node's bounds, as `ripple()`.
+    pub fn bounded(color: Color) -> Indication {
+        Indication { color, radius: None }
+    }
+
+    /// A circle of `radius` centered on the node, as `ripple(bounded = false, radius)`.
+    pub fn unbounded(color: Color, radius: crate::unit::Dp) -> Indication {
+        Indication { color, radius: Some(radius) }
+    }
+}
+
+impl From<Color> for Indication {
+    fn from(color: Color) -> Indication {
+        Indication::bounded(color)
+    }
+}
+
 /// `clickable`'s data.
 #[derive(Clone)]
 pub struct Clickable {
     pub enabled: bool,
     pub role: Option<Role>,
-    /// The state layer's color, drawn at 10% while pressed or focused (Material's indication);
-    /// unspecified for none.
-    pub indication: Color,
+    /// The state layer, drawn at 10% while pressed or focused (Material's indication).
+    pub indication: Indication,
     /// Where its press is reported.
     pub interaction_source: Option<crate::interaction::MutableInteractionSource>,
     pub on_click: Callback<dyn Fn()>,
@@ -512,7 +542,7 @@ pub struct Toggleable {
     pub enabled: bool,
     pub role: Option<Role>,
     /// As `Clickable::indication`.
-    pub indication: Color,
+    pub indication: Indication,
     pub on_value_change: Callback<dyn Fn(bool)>,
 }
 

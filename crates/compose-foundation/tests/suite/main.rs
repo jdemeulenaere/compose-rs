@@ -5,6 +5,7 @@ extern crate compose_runtime as compose;
 
 mod draw_modifiers;
 mod effects;
+mod focus_requester;
 mod foundation;
 mod grid;
 mod hover;
@@ -22,6 +23,7 @@ mod review_lazy2;
 mod review_overlay;
 mod review_overlay2;
 mod review_round10;
+mod review_round11;
 mod review_round3;
 mod review_round5;
 mod review_round6;

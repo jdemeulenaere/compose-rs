@@ -90,6 +90,11 @@ impl UiHost {
         };
         let requester = request.clone();
         composition.set_frame_requester(move || requester());
+        // `FocusRequester`s ask for a frame, which moves the focus.
+        let focus_wake = request.clone();
+        composition.with_applier(|tree: &mut UiTree| {
+            *tree.focus_requests.wake.borrow_mut() = Some(Rc::new(move || focus_wake()));
+        });
         // Writes to state read while measuring or drawing ask for a frame, as composition's do.
         let observer = compose_runtime::ReadObserver::new(move || request());
         composition.with_applier(|tree: &mut UiTree| tree.set_read_observer(observer));
@@ -135,8 +140,25 @@ impl UiHost {
 
     /// After dispatch: wakes the platform if the tree changed (focus, a modifier node's state).
     fn wake_if_dirty(&self) {
+        self.handle_focus_requests();
         if self.with_tree(|tree| tree.needs_draw) {
             self.wake();
+        }
+    }
+
+    /// Moves focus as `FocusRequester`s asked, now that the tree is free.
+    fn handle_focus_requests(&self) {
+        loop {
+            let pending = self.with_tree(|tree| tree.focus_requests.pending.take());
+            if pending.is_empty() {
+                return;
+            }
+            for node in pending {
+                let actions = self.with_tree(|tree| {
+                    if tree.get(node).is_some() { tree.request_focus(node) } else { Vec::new() }
+                });
+                Self::run(actions);
+            }
         }
     }
 
@@ -196,6 +218,7 @@ impl UiHost {
             || self.composition.has_invalidations()
             || self.with_tree(|tree| tree.needs_draw)
             || executor::has_ready_tasks()
+            || self.with_tree(|tree| !tree.focus_requests.pending.borrow().is_empty())
     }
 
     /// One frame: runs the tasks that are due and resumes those waiting for a frame (with this
@@ -207,6 +230,7 @@ impl UiHost {
         self.framing.set(true);
         executor::fire_timers();
         executor::run_ready();
+        self.handle_focus_requests();
         executor::dispatch_frame();
         self.frame_requested.set(false);
         let bodies = compose_runtime::bodies_run();

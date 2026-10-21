@@ -344,9 +344,53 @@ impl UiTree {
             (Some(index), true) => (index + 1) % order.len(),
             (Some(index), false) => (index + order.len() - 1) % order.len(),
         };
+        // Entering a container that shows part of its content (a scrolled list), the first
+        // node in view, as Compose's search skips what isn't placed: the items a lazy list
+        // keeps placed beyond its viewport are stepped over unless the focus is inside it.
+        let focused = self.focused();
+        let step = |index: usize| {
+            if forward {
+                (index + 1) % order.len()
+            } else {
+                (index + order.len() - 1) % order.len()
+            }
+        };
+        let mut candidate = next;
+        let next = loop {
+            if self.reachable_from(order[candidate], focused) {
+                break candidate;
+            }
+            candidate = step(candidate);
+            if candidate == next {
+                break next;
+            }
+        };
         self.request_focus_into(order[next], &mut actions);
         self.update_focus_listeners(&mut actions);
         actions
+    }
+
+    /// Whether Tab may stop at `node` coming from `focused`: it's within the bounds of each of
+    /// its ancestors, or the ancestors it's outside of (a list it's scrolled out of) hold the
+    /// focus too.
+    fn reachable_from(&self, node: NodeId, focused: Option<NodeId>) -> bool {
+        let bounds = self.bounds_in_root(node);
+        let mut ancestor = self.parent_of(node);
+        while let Some(container) = ancestor {
+            if self.node(container).overlay {
+                break;
+            }
+            let outer = self.bounds_in_root(container);
+            let outside = bounds.right <= outer.left
+                || bounds.left >= outer.right
+                || bounds.bottom <= outer.top
+                || bounds.top >= outer.bottom;
+            if outside && !focused.is_some_and(|focused| self.is_at_or_below(focused, container)) {
+                return false;
+            }
+            ancestor = self.parent_of(container);
+        }
+        true
     }
 
     /// The actions queued outside dispatch (focus lost by a recomposition, listeners attached),

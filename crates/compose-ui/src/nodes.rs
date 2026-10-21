@@ -416,7 +416,7 @@ enum Press {
 }
 
 impl Press {
-    fn indication(&self) -> Color {
+    fn indication(&self) -> crate::modifier::Indication {
         match self {
             Press::Click(clickable) => clickable.indication,
             Press::Toggle(toggleable) => toggleable.indication,
@@ -518,11 +518,21 @@ impl DrawModifierNode for ClickableNode {
             None
         };
         if let Some(alpha) = alpha
-            && indication.is_specified()
+            && indication.color.is_specified()
             && self.spec.enabled()
         {
             let bounds = scope.bounds();
-            scope.draw_rect(bounds, Paint::fill(indication.with_alpha(alpha)));
+            let paint = Paint::fill(indication.color.with_alpha(alpha));
+            match indication.radius {
+                None => scope.draw_rect(bounds, paint),
+                Some(radius) => {
+                    let radius = scope.density().to_px(radius);
+                    let (x, y) =
+                        ((bounds.left + bounds.right) / 2.0, (bounds.top + bounds.bottom) / 2.0);
+                    let circle = Rect::new(x - radius, y - radius, x + radius, y + radius);
+                    scope.draw_round_rect(circle, [radius; 4], paint);
+                }
+            }
         }
     }
 }
@@ -543,14 +553,21 @@ impl ClickableNode {
     }
 
     /// Releases its interaction source after the composition applying a change (a state
-    /// can't be written while composing): its press is over.
+    /// can't be written while composing): its press, focus and hover are over.
     fn release_later(&self) {
-        let pressed = self.state.pressed.is_some() || self.state.keys_pressed != 0;
-        if pressed
+        let active = self.state.pressed.is_some()
+            || self.state.keys_pressed != 0
+            || self.state.focused
+            || self.state.hovered;
+        if active
             && let Press::Click(clickable) = &self.spec
             && let Some(source) = clickable.interaction_source.clone()
         {
-            compose_runtime::CoroutineScope::new().launch(async move { source.set_pressed(false) });
+            compose_runtime::CoroutineScope::new().launch(async move {
+                source.set_pressed(false);
+                source.set_focused(false);
+                source.set_hovered(false);
+            });
         }
     }
 
@@ -559,6 +576,8 @@ impl ClickableNode {
             && let Some(source) = &clickable.interaction_source
         {
             source.set_pressed(self.state.pressed.is_some() || self.state.keys_pressed != 0);
+            source.set_focused(self.state.focused);
+            source.set_hovered(self.state.hovered);
         }
     }
 }
@@ -579,7 +598,7 @@ impl PointerInputModifierNode for ClickableNode {
                 let hovered = event.kind == PointerEventType::Enter;
                 if self.state.hovered != hovered {
                     self.state.hovered = hovered;
-                    context.invalidate_draw();
+                    self.press_changed(context);
                 }
             }
             PointerEventType::Press => {

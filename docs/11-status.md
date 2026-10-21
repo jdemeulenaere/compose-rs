@@ -27,7 +27,7 @@ What compose-rs covers of Jetpack Compose today, and where it knowingly differs.
 - **No subcomposition.** Content that Compose composes while measuring (lazy items, `BoxWithConstraints`) is composed for what the measurement asks, then the frame recomposes and measures again (up to three rounds). `BoxWithConstraints` first composes for a hint of its constraints, so it usually composes once (D142).
 - **Intrinsics** are approximated by measuring a child once to ask (`max_intrinsic_width`, `max_intrinsic_height`), where Compose has each layout's own formulas (D137).
 - **State writes during composition** panic; `remember_updated_state` is a plain cell rather than state.
-- **Ripples** are static state layers (8 % hovered, 10 % pressed or focused), not animated ripples.
+- **Ripples** are static state layers (8 % hovered, 10 % pressed or focused), not animated ripples; a `Switch`'s is on its touch target rather than around its thumb.
 - **Rendering** is on the CPU: fast at window sizes up to about 1080p (well under a millisecond to render a screen), slower at 4K. A GPU surface is planned (D93).
 - **One window** per app; Compose Desktop's `application { Window(…) }` with several windows isn't there.
 - **Grids** keep an item's state by its row rather than its key (D144); a popup in a lazy item composed beyond the viewport shows (D136).

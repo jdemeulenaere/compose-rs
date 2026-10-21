@@ -126,7 +126,8 @@ pub fn NavigationBarItem(
     let pill = remember(|| Shape::Rounded([compose_ui::CornerSize::Percent(50.0); 4]));
     let indicator = if selected { colors.selected_indicator_color } else { Color::TRANSPARENT };
     let typography = MaterialTheme::typography();
-    // The press shows on the pill only, as Compose's (`selectable(indication = null)`).
+    // The press, focus and hover show on the pill only, as Compose's
+    // (`selectable(indication = null)`, the pill's own ripple).
     let interaction = remember(compose_ui::MutableInteractionSource::new);
     let modifier = modifier
         .weight(scope, 1.0)
@@ -151,9 +152,19 @@ pub fn NavigationBarItem(
                     .size_in(SizeSpec::bounds(64.dp(), 32.dp(), 64.dp(), 32.dp()))
                     .background_shape(indicator, pill)
                     .draw_behind(move |scope| {
-                        // Read while drawing: a press draws again only.
-                        if pressed.is_pressed() {
-                            scope.draw_shape(&pill_shape, icon_color.with_alpha(0.1));
+                        // Read while drawing: a press, focus or hover draws again only.
+                        // Material's state layers: pressed and focused 10 %, hovered 8 %.
+                        let alpha = if pressed.is_pressed() || pressed.is_focused() {
+                            Some(0.1)
+                        } else if pressed.is_hovered() {
+                            Some(0.08)
+                        } else {
+                            None
+                        };
+                        if let Some(alpha) = alpha
+                            && enabled
+                        {
+                            scope.draw_shape(&pill_shape, icon_color.with_alpha(alpha));
                         }
                     }),
                 Alignment::CENTER,
