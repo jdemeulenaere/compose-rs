@@ -664,3 +664,40 @@ fn a_tab_row_shares_its_width_and_slides_its_indicator() {
     assert_eq!(indicator(&mut ui), Some(200.0));
     assert_eq!(ui.on_node_with_tag("Two").fetch_semantics_node().config.selected, Some(true));
 }
+
+#[test]
+fn chips_and_badges_are_sized_and_behave_as_compose() {
+    let selected = mutable_state_of(false);
+    let handle = selected.handle();
+    let mut ui = compose_test(move || {
+        MaterialTheme!({
+            Column!({
+                FilterChip!(
+                    handle.get(),
+                    move || handle.set(!handle.get()),
+                    { Text!("Filter") },
+                    modifier = Modifier.test_tag("filter"),
+                );
+                AssistChip!(|| {}, { Text!("Assist") }, modifier = Modifier.test_tag("assist"));
+                BadgedBox!(
+                    { Badge!(modifier = Modifier.test_tag("dot")) },
+                    modifier = Modifier.test_tag("badged"),
+                    { Icon!(icons::filled::home(), Some("Home")) }
+                );
+            });
+        });
+    });
+    // 32 dp high (in a 48 dp touch target).
+    let filter = ui.on_node_with_tag("filter").fetch_semantics_node();
+    assert_eq!(filter.bounds.height(), 32.0);
+    assert_eq!(filter.config.selected, Some(false));
+    ui.on_node_with_tag("filter").perform_click();
+    assert!(selected.get());
+    assert_eq!(ui.on_node_with_tag("filter").fetch_semantics_node().config.selected, Some(true));
+    ui.on_node_with_tag("assist").assert_exists();
+    // The dot: 6 dp, its start 6 dp before the icon's end, centered on its top.
+    let icon = ui.on_node_with_tag("badged").fetch_semantics_node().bounds;
+    let dot = ui.on_node_unmerged(has_test_tag("dot")).fetch_semantics_node().bounds;
+    assert_eq!((dot.width(), dot.height()), (6.0, 6.0));
+    assert_eq!((dot.left, dot.top), (icon.right - 6.0, icon.top - 3.0));
+}
