@@ -29,6 +29,7 @@ pub mod modifier;
 mod nodes;
 pub mod overlay;
 pub mod path;
+pub mod pointer_input;
 mod render;
 pub mod semantics;
 pub mod shadow;
@@ -68,6 +69,7 @@ pub use modifier::{
 };
 pub use overlay::{PopupPositionProvider, WindowPosition};
 pub use path::{ImageVector, Path, PathCommand, PathError, PathFillType};
+pub use pointer_input::{DragGestures, PointerInputChange, PointerInputScope, TapGestures};
 pub use semantics::{
     ProgressBarRangeInfo, Role, SemanticsAction, SemanticsConfiguration, SemanticsNode,
     ToggleableState,

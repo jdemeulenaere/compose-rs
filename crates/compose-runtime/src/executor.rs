@@ -225,36 +225,49 @@ pub fn run_ready() -> bool {
             return ran;
         }
         for &key in &keys {
-            let future = with_executor(|executor| {
-                let slot = executor.slot(key)?;
-                if !slot.live {
-                    return None;
-                }
-                slot.future.take()
-            });
-            let Some(mut future) = future else { continue };
-            ran = true;
-            let waker = Waker::from(Arc::new(TaskWaker { key, shared: shared.clone() }));
-            let mut context = Context::from_waker(&waker);
-            let poll = future.as_mut().poll(&mut context);
-            let done = with_executor(move |executor| {
-                let Some(slot) = executor.slot(key) else { return Some(future) };
-                if poll.is_ready() || slot.cancelled {
-                    slot.live = false;
-                    slot.cancelled = false;
-                    executor.free.push(key.index);
-                    Some(future)
-                } else {
-                    slot.future = Some(future);
-                    None
-                }
-            });
-            // A finished or cancelled task's drops (user code) run outside the borrow.
-            drop(done);
+            ran |= poll_task(key, &shared);
         }
         keys.clear();
         with_executor(|executor| executor.polling = keys);
     }
+}
+
+/// Polls task `key` once, if it's live and not being polled; returns whether it was.
+fn poll_task(key: TaskKey, shared: &Arc<Shared>) -> bool {
+    let future = with_executor(|executor| {
+        let slot = executor.slot(key)?;
+        if !slot.live {
+            return None;
+        }
+        slot.future.take()
+    });
+    let Some(mut future) = future else { return false };
+    let waker = Waker::from(Arc::new(TaskWaker { key, shared: shared.clone() }));
+    let mut context = Context::from_waker(&waker);
+    let poll = future.as_mut().poll(&mut context);
+    let done = with_executor(move |executor| {
+        let Some(slot) = executor.slot(key) else { return Some(future) };
+        if poll.is_ready() || slot.cancelled {
+            slot.live = false;
+            slot.cancelled = false;
+            executor.free.push(key.index);
+            Some(future)
+        } else {
+            slot.future = Some(future);
+            None
+        }
+    });
+    // A finished or cancelled task's drops (user code) run outside the borrow.
+    drop(done);
+    true
+}
+
+/// Polls `job` now, on this thread, if it's waiting (not finished, nor being polled): for
+/// handlers whose task must see an event before the dispatch goes on (`pointer_input`, as
+/// Compose resumes it undispatched). Returns whether it was polled.
+pub fn poll_now(job: Job) -> bool {
+    let shared = with_executor(|executor| executor.shared.clone());
+    poll_task(job.key, &shared)
 }
 
 /// Wakes the tasks whose `delay` is over, by the executor's clock. For hosts, before

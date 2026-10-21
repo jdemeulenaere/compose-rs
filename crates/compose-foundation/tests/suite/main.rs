@@ -10,6 +10,7 @@ mod grid;
 mod hover;
 mod image;
 mod lazy;
+mod pointer_input;
 mod review_e;
 mod review_f;
 mod review_f2;
