@@ -50,9 +50,19 @@ pub fn default_content_transform() -> ContentTransform {
         .together_with(fade_out_with(tween(90), 0.0))
 }
 
+/// A state shown, with the enter it was given when it became the target and the exit it was
+/// given when it stopped being it, as Compose's.
+#[derive(Clone)]
+struct ShownState<T> {
+    id: u64,
+    state: T,
+    enter: EnterTransition,
+    exit: ExitTransition,
+}
+
 /// The states shown: the target last.
 struct Shown<T> {
-    states: Vec<(u64, T)>,
+    states: Vec<ShownState<T>>,
     next_id: u64,
 }
 
@@ -77,29 +87,50 @@ pub fn AnimatedContent<T: Clone + PartialEq + 'static>(
 ) {
     let _ = label;
     let shown = remember(|| {
-        Rc::new(RefCell::new(Shown { states: vec![(0, target_state.clone())], next_id: 1 }))
+        let first = default_content_transform();
+        Rc::new(RefCell::new(Shown {
+            states: vec![ShownState {
+                id: 0,
+                state: target_state.clone(),
+                enter: first.target_content_enter,
+                exit: first.initial_content_exit,
+            }],
+            next_id: 1,
+        }))
     });
     // The transition of the last change, as `transition_spec` gave it.
     let transform = remember(|| Rc::new(std::cell::Cell::new(None::<ContentTransform>)));
     {
         let mut all = shown.borrow_mut();
-        let last = all.states.last().map(|(_, state)| state.clone());
+        let last = all.states.last().map(|shown| shown.state.clone());
         if last.as_ref() != Some(&target_state) {
-            if let Some(initial) = &last {
-                transform.set(Some(transition_spec(initial.clone(), target_state.clone())));
+            let change = match &last {
+                Some(initial) => transition_spec(initial.clone(), target_state.clone()),
+                None => default_content_transform(),
+            };
+            transform.set(Some(change));
+            // The content leaving takes this change's exit.
+            if let Some(leaving) = all.states.last_mut() {
+                leaving.exit = change.initial_content_exit;
             }
-            // A state still shown comes back; another one is added.
-            match all.states.iter().position(|(_, state)| *state == target_state) {
-                Some(index) => {
-                    let item = all.states.remove(index);
-                    all.states.push(item);
-                }
+            // A state still shown comes back; another one is added. Either enters with this
+            // change's enter.
+            let mut entering = match all.states.iter().position(|shown| shown.state == target_state)
+            {
+                Some(index) => all.states.remove(index),
                 None => {
                     let id = all.next_id;
                     all.next_id += 1;
-                    all.states.push((id, target_state.clone()));
+                    ShownState {
+                        id,
+                        state: target_state.clone(),
+                        enter: change.target_content_enter,
+                        exit: change.initial_content_exit,
+                    }
                 }
-            }
+            };
+            entering.enter = change.target_content_enter;
+            all.states.push(entering);
             let excess = all.states.len().saturating_sub(3);
             all.states.drain(..excess);
         }
@@ -121,19 +152,20 @@ pub fn AnimatedContent<T: Clone + PartialEq + 'static>(
         policy,
         compose_runtime::callback(move || {
             let target = states.len() - 1;
-            for (index, (id, state)) in states.iter().enumerate() {
-                let (content, state) = (content.clone(), state.clone());
+            for (index, shown) in states.iter().enumerate() {
+                let (content, state) = (content.clone(), shown.state.clone());
+                let (enter, exit) = (shown.enter, shown.exit);
                 let visible = index == target;
                 // The first state's content is there at once; the others enter.
-                let initially_visible = *id == 0;
-                key(*id, move || {
+                let initially_visible = shown.id == 0;
+                key(shown.id, move || {
                     let (content, state) = (content.clone(), state.clone());
                     AnimatedEnterExit(
                         visible,
                         initially_visible,
                         Modifier,
-                        transform.target_content_enter,
-                        transform.initial_content_exit,
+                        enter,
+                        exit,
                         compose_runtime::callback(move || content(state.clone())),
                     );
                 });

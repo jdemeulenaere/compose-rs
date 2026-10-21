@@ -39,7 +39,7 @@ pub trait TextMeasurer {
 }
 ```
 
-- **Desktop:** SkParagraph with the system font manager, as Compose Desktop uses through Skiko, plus bundled fonts for tests, so headless measurements are identical on every machine.
+- **Desktop:** SkParagraph with the system font manager, as Compose Desktop uses through Skiko; tests measure with a fixed-advance measurer by default, so headless measurements are identical on every machine (no fonts are bundled: D94).
 - **Android:** a Kotlin-side cache of `StaticLayout`s keyed by handle. Rust asks for a layout once per changed text, through one JNI call that returns the metrics. Drawing calls `layout.draw(canvas)` in the replayer. This is the text stack Android Compose itself draws with, so line breaks, hyphenation, fallback fonts and emoji match exactly.
 - `BasicText` keeps its `ParagraphHandle` on the node, keyed on text, style and width constraint, so recomposing with the same text measures nothing.
 

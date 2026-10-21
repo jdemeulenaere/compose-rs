@@ -109,7 +109,7 @@ The content is held by a restart group like any composable's, with the content l
 
 **Panics.** A panic that unwinds out of a pass poisons the composition: the slot table can't be trusted to continue, so further passes panic, and dropping it still releases everything exactly once (observers remembered by the failed pass get `on_abandoned`).
 
-`run_app` in `compose-desktop`, `ComposeRsView` in `compose-android` and `ComposeTestRule` in `compose-test` own a composition each. Applications rarely touch `Composition` directly.
+`run_app` in `compose-desktop`, `ComposeRsView` in `compose-android` (planned) and `ComposeTestRule` in `compose-test` own a composition each. Applications rarely touch `Composition` directly.
 
 ## Errors
 

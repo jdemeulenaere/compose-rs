@@ -6,7 +6,7 @@ A design for bringing Jetpack Compose's model to Rust: positional memoization ov
 
 | Crate | Contents |
 |---|---|
-| `crates/compose` | the facade: `compose::runtime`, `ui`, `foundation`, `material3`, and with features `test` and `desktop` |
+| `crates/compose` | the facade: `compose::runtime`, `ui`, `foundation`, `material3`, `animation`, and with features `test` and `desktop` |
 | `crates/compose-runtime` | slot table, composer, restart scopes, state, `remember`, effects, composition locals, `Composition` |
 | `crates/compose-macros` | `#[composable]` (skipping, restarts, call macros, lambda memoization), `#[derive(ComposeArg)]` |
 | `crates/compose-ui` | layout nodes, `Modifier`, `Layout`, drawing (paths, images, arcs, shadows, graphics layers), pointer and key input, focus, semantics and actions, popups and dialogs, layout direction, `UiHost` |

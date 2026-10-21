@@ -27,6 +27,9 @@ struct TransitionInner<S: 'static> {
     current: OwnedState<S>,
     /// The state they're going to, as `targetState`.
     target: RefCell<S>,
+    /// Where the change to the target starts, as `segment.initialState`: the state the values
+    /// were at, or the target a change interrupted.
+    initial: RefCell<S>,
     /// Animations running toward the target (state: `is_running` readers follow it).
     running: OwnedState<usize>,
 }
@@ -42,14 +45,26 @@ pub fn update_transition<S: Clone + PartialEq + 'static>(
         inner: Rc::new(TransitionInner {
             current: compose_runtime::mutable_state_of(target_state.clone()),
             target: RefCell::new(target_state.clone()),
+            initial: RefCell::new(target_state.clone()),
             running: compose_runtime::mutable_state_of(0),
         }),
     });
     let inner = transition.inner.clone();
     let scope = remember_coroutine_scope();
-    // The target as of this pass (a plain cell: what the animations below go to).
-    *inner.target.borrow_mut() = target_state.clone();
+    // The target as of this pass (a plain cell: what the animations below go to). A change
+    // starts from the target before it: the state the values were at, or the one a change
+    // still running was heading for, as Compose's `updateTarget`.
+    let previous = inner.target.replace(target_state.clone());
+    let changed = previous != target_state;
+    if changed {
+        *inner.initial.borrow_mut() = previous;
+    }
+    let initial = inner.initial.borrow().clone();
     SideEffect(move || {
+        // Interrupted: at the state it was heading for, as `currentState`.
+        if changed && inner.current.get() != initial {
+            inner.current.set(initial);
+        }
         // Nothing to animate (or all done already): at the target at once, once the
         // animations of this pass have launched.
         let inner = inner.clone();
@@ -67,7 +82,7 @@ pub fn update_transition<S: Clone + PartialEq + 'static>(
 
 impl<S: Clone + PartialEq + 'static> Transition<S> {
     /// The state its values are at, as `currentState` (a state read: it changes when the
-    /// animations end).
+    /// animations end, and to the state a change was heading for when another interrupts it).
     pub fn current_state(&self) -> S {
         self.inner.current.get()
     }
@@ -99,7 +114,7 @@ impl<S: Clone + PartialEq + 'static> Transition<S> {
         let state = animatable.as_state();
         // The spec of a change from the state the values are at.
         let changed = !crate::vector::same_value(&*launched.borrow(), &target_value);
-        let spec = changed.then(|| transition_spec(&self.inner.current.get(), &target_state));
+        let spec = changed.then(|| transition_spec(&self.inner.initial.borrow(), &target_state));
         let running = animatable.clone();
         let inner = self.inner.clone();
         SideEffect(move || {

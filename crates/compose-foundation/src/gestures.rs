@@ -70,7 +70,7 @@ pub fn remember_draggable_state(on_delta: impl Fn(f32) + 'static) -> DraggableSt
 
 /// Drags along `orientation` are told to `state` as deltas, as `Modifier.draggable`: a press
 /// that moves past the touch slop along the axis starts one (`on_drag_started` with where it
-/// was pressed), with the movement past the slop as its first delta; the moves of its pointer
+/// crossed the slop), with the movement past the slop as its first delta; the moves of its pointer
 /// after it (consumed) are its deltas (negated if `reverse_direction`), and the release ends it
 /// (`on_drag_stopped`, also called when a parent takes the moves or the gesture is cancelled).
 /// A parent that takes the moves before the slop is crossed keeps the gesture. The newest
@@ -236,7 +236,8 @@ fn drag_driver(
                     continue;
                 };
                 let started = callbacks.borrow().on_drag_started.clone();
-                let position = down.position;
+                // Where the slop was crossed, as Compose's `DragStarted`.
+                let position = start.position - over;
                 scope.run_after_dispatch(move || started(position));
                 let mut guard = StopOnDrop { callbacks: callbacks.clone(), armed: true };
                 delta(&callbacks, along(over));
