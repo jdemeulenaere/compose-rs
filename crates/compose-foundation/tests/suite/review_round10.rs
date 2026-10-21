@@ -17,8 +17,9 @@ fn send(ui: &mut ComposeTestRule, event: PointerEvent) {
 }
 
 /// A vertical `draggable` pressed at y = 10 and moved to y = 40 in one move (the touch slop is
-/// 8 px at density 1). Compose's `DragGestureNode` sends `DragStarted(slopTriggerChange.position
-/// - postSlopOffset)`, "the down event + touch slop value": `onDragStarted` gets y = 18, and the
+/// 8 px at density 1). Compose's `DragGestureNode` sends
+/// `DragStarted(slopTriggerChange.position - postSlopOffset)`, "the down event + touch slop
+/// value": `onDragStarted` gets y = 18, and the
 /// first delta is the 22 px past the slop. Here `on_drag_started` gets the press's position,
 /// y = 10, so the start and the deltas don't add up to where the pointer is (10 + 22 != 40).
 #[test]
