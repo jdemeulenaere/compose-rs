@@ -181,6 +181,16 @@ pub fn scale_in(initial_scale: f32) -> EnterTransition {
     EnterTransition(Parts { scale: Some((initial_scale, default_spec())), ..Parts::default() })
 }
 
+/// Scales in from `initial_scale` along `spec`, as `scaleIn(animationSpec, initialScale)`.
+pub fn scale_in_with(spec: impl Into<AnimationSpec>, initial_scale: f32) -> EnterTransition {
+    EnterTransition(Parts { scale: Some((initial_scale, spec.into())), ..Parts::default() })
+}
+
+/// Scales out to `target_scale` along `spec`, as `scaleOut(animationSpec, targetScale)`.
+pub fn scale_out_with(spec: impl Into<AnimationSpec>, target_scale: f32) -> ExitTransition {
+    ExitTransition(Parts { scale: Some((target_scale, spec.into())), ..Parts::default() })
+}
+
 /// Scales out to `target_scale`, as `scaleOut()`.
 pub fn scale_out(target_scale: f32) -> ExitTransition {
     ExitTransition(Parts { scale: Some((target_scale, default_spec())), ..Parts::default() })

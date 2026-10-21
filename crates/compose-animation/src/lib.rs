@@ -10,6 +10,7 @@ extern crate compose_runtime as compose;
 
 mod animatable;
 mod as_state;
+mod content;
 mod content_size;
 mod crossfade;
 mod easing;
@@ -24,6 +25,7 @@ pub use as_state::{
     animate_int_offset_as_state, animate_offset_as_state, animate_size_as_state,
     animate_value_as_state,
 };
+pub use content::{AnimatedContent, ContentTransform, default_content_transform};
 pub use content_size::AnimationModifiers;
 pub use crossfade::Crossfade;
 pub use easing::{
@@ -38,10 +40,10 @@ pub use spec::{
 pub use vector::Animate;
 pub use visibility::{
     AnimatedVisibility, EnterTransition, ExitTransition, expand_horizontally, expand_in,
-    expand_vertically, fade_in, fade_in_with, fade_out, fade_out_with, scale_in, scale_out,
-    shrink_horizontally, shrink_out, shrink_vertically, slide_in, slide_in_vertically, slide_out,
-    slide_out_vertically,
+    expand_vertically, fade_in, fade_in_with, fade_out, fade_out_with, scale_in, scale_in_with,
+    scale_out, scale_out_with, shrink_horizontally, shrink_out, shrink_vertically, slide_in,
+    slide_in_vertically, slide_out, slide_out_vertically,
 };
 
 #[doc(hidden)]
-pub use compose_ui::Modifier;
+pub use compose_ui::{Alignment, Modifier};
