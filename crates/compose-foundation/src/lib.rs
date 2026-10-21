@@ -59,7 +59,10 @@ pub use scrollbar::{
 pub use shape::{
     CIRCLE_SHAPE, RoundedCornerShape, RoundedCornerShapeEach, RoundedCornerShapePercent,
 };
-pub use text::{BasicAnnotatedText, BasicText, TextElement, TextNode};
+pub use text::{
+    BasicAnnotatedText, BasicText, DisableSelection, LOCAL_SELECTION_DISABLED, SelectionContainer,
+    TextElement, TextNode,
+};
 pub use text_field::{BasicTextField, TextFieldElement, TextFieldNode, inner_text_field_only};
 pub use text_input::{
     ImeAction, KeyboardActions, KeyboardOptions, KeyboardType, OffsetMapping,

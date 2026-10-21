@@ -235,6 +235,8 @@ pub(crate) struct Requests {
     pub(crate) clear_focus: bool,
     /// Tab's move, forward or back.
     pub(crate) move_focus: Option<bool>,
+    /// Text selection gestures and commands.
+    pub(crate) selection: Vec<crate::text_selection::SelectionRequest>,
     pub(crate) draw: bool,
     pub(crate) measure: Vec<NodeId>,
     pub(crate) reset_input_method: bool,

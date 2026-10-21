@@ -354,6 +354,9 @@ impl UiTree {
             let moved = self.move_focus(forward);
             actions.extend(moved);
         }
+        for request in requests.selection {
+            self.handle_selection(request);
+        }
         if let Some(node) = requests.focus {
             self.request_focus_into(node, actions);
             if let Some(tap) = requests.focus_tap {

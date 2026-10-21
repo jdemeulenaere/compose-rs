@@ -10,6 +10,36 @@ use compose_ui::{
     SharedString, TextLayoutOptions, TextStyle, empty_measure_policy,
 };
 
+/// Under `DisableSelection`: texts a `SelectionContainer` leaves out.
+pub static LOCAL_SELECTION_DISABLED: compose_runtime::CompositionLocal<bool> =
+    compose_runtime::CompositionLocal::new("LocalSelectionDisabled", || false);
+
+/// Makes the texts in `content` selectable, as Compose's `SelectionContainer`: a press and drag
+/// selects from where it went down to the pointer, across texts in order; a double-click
+/// selects a word, a triple-click a text; Cmd+A (Ctrl+A) selects all and Cmd+C (Ctrl+C) copies,
+/// the texts joined by new lines. A click elsewhere in it, or its losing focus, clears it.
+#[composable]
+#[allow(non_snake_case)]
+pub fn SelectionContainer(
+    #[default(crate::Modifier)] modifier: Modifier,
+    content: impl Fn() + 'static,
+) {
+    crate::layout::Box(
+        modifier.selection_container(),
+        crate::Alignment::TOP_START,
+        false,
+        compose_runtime::callback(move |_| content()),
+    );
+}
+
+/// Leaves the texts in `content` out of the `SelectionContainer` around it, as Compose's
+/// `DisableSelection`.
+#[composable]
+#[allow(non_snake_case)]
+pub fn DisableSelection(content: impl Fn() + 'static) {
+    compose_runtime::CompositionLocalProvider(LOCAL_SELECTION_DISABLED.provides(true), &*content);
+}
+
 /// Text, as Compose's `BasicText`: no theme, the style as given; what doesn't fit is cut,
 /// ends with "…" or is drawn past its bounds (`overflow`).
 #[composable]
@@ -50,6 +80,7 @@ fn emit_text(
         text,
         style,
         options: TextLayoutOptions { soft_wrap, max_lines, overflow, ..Default::default() },
+        selectable: !LOCAL_SELECTION_DISABLED.current(),
     };
     Layout(modifier.then_custom(element), empty_measure_policy(), compose_runtime::callback(|| {}));
 }
@@ -59,6 +90,8 @@ pub struct TextElement {
     pub text: AnnotatedString,
     pub style: TextStyle,
     pub options: TextLayoutOptions,
+    /// A `SelectionContainer` can select it (not under `DisableSelection`).
+    pub selectable: bool,
 }
 
 impl ModifierNodeElement for TextElement {
@@ -73,6 +106,9 @@ impl ModifierNodeElement for TextElement {
             direction: compose_ui::LayoutDirection::Ltr,
             stale: Vec::new(),
             overflows: false,
+            selection: None,
+            selection_rects: Vec::new(),
+            selectable: self.selectable,
         })
     }
 
@@ -88,11 +124,17 @@ impl ModifierNodeElement for TextElement {
             }
             node.constraints = None;
         }
+        if let Some(node) = node.downcast_mut::<TextNode>() {
+            node.selectable = self.selectable;
+        }
     }
 
     fn same(&self, other: &dyn ModifierNodeElement) -> bool {
         other.downcast_ref::<TextElement>().is_some_and(|other| {
-            other.text == self.text && other.style == self.style && other.options == self.options
+            other.text == self.text
+                && other.style == self.style
+                && other.options == self.options
+                && other.selectable == self.selectable
         })
     }
 
@@ -117,6 +159,10 @@ pub struct TextNode {
     stale: Vec<ParagraphHandle>,
     /// The paragraph is larger than the node: drawn clipped.
     overflows: bool,
+    /// The part a `SelectionContainer` selected, and its highlight (from the measurer).
+    selection: Option<std::ops::Range<usize>>,
+    selection_rects: Vec<compose_ui::Rect>,
+    selectable: bool,
 }
 
 impl ModifierNode for TextNode {
@@ -128,6 +174,9 @@ impl ModifierNode for TextNode {
     }
     fn as_semantics(&mut self) -> Option<&mut dyn SemanticsModifierNode> {
         Some(self)
+    }
+    fn as_selectable(&mut self) -> Option<&mut dyn compose_ui::Selectable> {
+        if self.selectable { Some(self) } else { None }
     }
     fn on_detach(&mut self, context: &mut DetachContext<'_>) {
         for paragraph in self.paragraph.take().into_iter().chain(self.stale.drain(..)) {
@@ -171,6 +220,11 @@ impl LayoutModifierNode for TextNode {
                 &density,
             );
             self.paragraph = Some(paragraph);
+            // The highlight follows the new layout.
+            self.selection_rects = match &self.selection {
+                Some(range) => scope.text_measurer().selection_rects(paragraph, range.clone()),
+                None => Vec::new(),
+            };
         }
         self.constraints = Some(constraints);
         let natural = scope.text_measurer().metrics(self.paragraph.expect("laid out")).size;
@@ -185,6 +239,9 @@ impl LayoutModifierNode for TextNode {
 
 impl DrawModifierNode for TextNode {
     fn draw(&mut self, scope: &mut DrawScope<'_>) {
+        for rect in &self.selection_rects {
+            scope.draw_rect(*rect, compose_ui::Paint::fill(crate::text::SELECTION_COLOR));
+        }
         if let Some(paragraph) = self.paragraph {
             if self.overflows && self.options.overflow != compose_ui::TextOverflow::Visible {
                 scope.save();
@@ -201,5 +258,54 @@ impl DrawModifierNode for TextNode {
 impl SemanticsModifierNode for TextNode {
     fn apply_semantics(&self, config: &mut SemanticsConfiguration) {
         config.text.push(self.text.text.clone());
+    }
+}
+
+/// The selection's highlight, as Compose's default `TextSelectionColors` (40% of #4286F4).
+pub(crate) const SELECTION_COLOR: compose_ui::Color = compose_ui::Color::from_argb(0x664286F4);
+
+impl compose_ui::Selectable for TextNode {
+    fn text(&self) -> SharedString {
+        self.text.text.clone()
+    }
+
+    fn offset_at(
+        &self,
+        position: Offset,
+        measurer: &mut dyn compose_ui::TextMeasurer,
+    ) -> Option<usize> {
+        let paragraph = self.paragraph?;
+        let text = self.text.text.as_str();
+        let mut offset = measurer.hit_test(paragraph, position).offset.min(text.len());
+        while !text.is_char_boundary(offset) {
+            offset -= 1;
+        }
+        Some(offset)
+    }
+
+    fn word_at(&self, offset: usize) -> std::ops::Range<usize> {
+        use unicode_segmentation::UnicodeSegmentation;
+        let text = self.text.text.as_str();
+        text.split_word_bound_indices()
+            .map(|(start, word)| start..start + word.len())
+            .find(|range| range.contains(&offset) || range.end == offset && offset == text.len())
+            .unwrap_or(offset..offset)
+    }
+
+    fn set_selection(
+        &mut self,
+        range: Option<std::ops::Range<usize>>,
+        measurer: &mut dyn compose_ui::TextMeasurer,
+    ) -> bool {
+        let range = range.filter(|range| !range.is_empty());
+        if range == self.selection {
+            return false;
+        }
+        self.selection_rects = match (&range, self.paragraph) {
+            (Some(range), Some(paragraph)) => measurer.selection_rects(paragraph, range.clone()),
+            _ => Vec::new(),
+        };
+        self.selection = range;
+        true
     }
 }

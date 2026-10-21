@@ -15,7 +15,7 @@ What compose-rs covers of Jetpack Compose today, and where it knowingly differs.
 - **Runtime:** the slot table, restart scopes and skipping, `remember`, `key`, state (`mutable_state_of`, `derived_state_of`, state lists), `CompositionLocal`, `SideEffect`, `DisposableEffect`, `LaunchedEffect`, `produce_state`, `remember_updated_state`, coroutine scopes on a UI-thread executor (`delay`, `with_frame_nanos`), and a manual clock for tests.
 - **Layout:** `Layout` and measure policies, `Box`, `BoxWithConstraints`, `Row`, `Column`, `Spacer`, arrangements and alignments, weights, size and padding modifiers, scrolling, `LazyColumn`, `LazyRow`, `LazyVerticalGrid`, scrollbars, right-to-left layout.
 - **Drawing:** shapes, borders, clips, graphics layers, paths and `ImageVector`, images, arcs and stroke caps, shadows, `Canvas`, `draw_behind`, `draw_with_content`.
-- **Text:** `BasicText`, `BasicTextField` (selection, IME, undo, Compose Desktop's key mappings), `TextStyle` (weight, style, family, letter spacing, decoration, alignment, line height), overflow, `AnnotatedString` spans.
+- **Text:** `BasicText`, `SelectionContainer` and `DisableSelection`, `BasicTextField` (selection, IME, undo, Compose Desktop's key mappings), `TextStyle` (weight, style, family, letter spacing, decoration, alignment, line height), overflow, `AnnotatedString` spans.
 - **Input:** clicks and toggles, `FocusRequester`, keyboard options and actions, password fields, pointer events with passes, hover, pointer icons, `pointer_input` with Compose's gesture detectors, `draggable`, keys and focus (Tab order, focus requests, `bring_into_view`), semantics with actions.
 - **Windows:** `Popup`, `Dialog`, `TooltipArea`.
 - **Animation:** `Animatable`, tweens, springs, keyframes, repeatables, `animate_*_as_state`, infinite transitions, `AnimatedVisibility`, `Crossfade`, `AnimatedContent`, `update_transition`, `animate_content_size`.
@@ -31,7 +31,7 @@ What compose-rs covers of Jetpack Compose today, and where it knowingly differs.
 - **Rendering** is on the CPU: fast at window sizes up to about 1080p (well under a millisecond to render a screen), slower at 4K. A GPU surface is planned (D93).
 - **Windows** don't inherit the application's composition locals, and have no position, placement (maximized, minimized, fullscreen), icon, menu bar, tray, or `DialogWindow`; a `Window` can't be composed inside another window's content.
 - **Grids** keep an item's state by its row rather than its key (D144); a popup in a lazy item composed beyond the viewport shows (D136).
-- **Text** has no link annotations, no paragraph styles in spans, no selection in non-editable text (`SelectionContainer`), and text fields have no prefix, suffix, `max_lines` or `min_lines`.
+- **Text** has no link annotations, no paragraph styles in spans, and text fields have no prefix, suffix, `max_lines` or `min_lines`.
 - **Animation** transitions have no child transitions; `AnimatedContent` keeps at most three states' contents while they animate.
 - **Material** lacks, among others, navigation drawers, bottom sheets, input chips, date and time pickers, segmented buttons and search bars.
 - **Saving state** across process death (`rememberSaveable`) has no desktop counterpart and isn't provided.

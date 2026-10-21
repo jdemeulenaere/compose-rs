@@ -36,6 +36,7 @@ mod review_text_draw;
 mod rtl;
 mod scroll;
 mod scrollbar;
+mod selection;
 mod semantics_actions;
 mod shadow;
 mod text_input;

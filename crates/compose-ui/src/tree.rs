@@ -230,6 +230,8 @@ pub struct UiTree {
     pub(crate) measure_runs: u64,
     /// What `FocusRequester`s attached to this tree's nodes asked for.
     pub(crate) focus_requests: Rc<crate::focus_requester::FocusRequests>,
+    /// The text selected in a `SelectionContainer`, if any.
+    pub(crate) text_selection: Option<crate::text_selection::TextSelection>,
 }
 
 impl UiTree {
@@ -259,6 +261,7 @@ impl UiTree {
             observer: None,
             measure_runs: 0,
             focus_requests: Rc::default(),
+            text_selection: None,
         }
     }
 

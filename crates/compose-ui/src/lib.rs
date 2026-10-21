@@ -35,6 +35,7 @@ mod render;
 pub mod semantics;
 pub mod shadow;
 pub mod text;
+mod text_selection;
 pub mod tree;
 pub mod unit;
 pub mod window;
@@ -83,6 +84,7 @@ pub use text::{
     SharedString, TextAlign, TextDecoration, TextLayoutOptions, TextMeasurer, TextOverflow,
     TextPosition, TextStyle,
 };
+pub use text_selection::Selectable;
 pub use tree::{LayoutNode, NodeId, UiTree};
 pub use unit::{Density, Dp, IntOffset, IntSize, Offset, Rect, Size, Sp, UnitExt, round_to_int};
 pub use window::{

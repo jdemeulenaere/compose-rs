@@ -722,6 +722,10 @@ pub trait ModifierNode: Any {
     fn as_key_input(&mut self) -> Option<&mut dyn KeyInputModifierNode> {
         None
     }
+    /// A text a `SelectionContainer` selects in.
+    fn as_selectable(&mut self) -> Option<&mut dyn crate::text_selection::Selectable> {
+        None
+    }
     /// The shape this node clips its content to, for hit testing: what's outside isn't hit
     /// (`clip`, a scroll's viewport), as a Compose graphics layer clips.
     fn hit_clip(&self) -> Option<crate::graphics::Shape> {
