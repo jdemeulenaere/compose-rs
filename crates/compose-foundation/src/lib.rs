@@ -18,8 +18,8 @@ mod text;
 mod text_field;
 
 pub use compose_ui::{
-    Alignment, Color, FontFamily, FontStyle, ImageBitmap, Modifier, RECTANGLE_SHAPE, Role, Shape,
-    TextAlign, TextDecoration, TextOverflow, TextStyle,
+    Alignment, AnnotatedString, Color, FontFamily, FontStyle, ImageBitmap, Modifier,
+    RECTANGLE_SHAPE, Role, Shape, SpanStyle, TextAlign, TextDecoration, TextOverflow, TextStyle,
 };
 
 /// A border's width and color, as Compose's `BorderStroke`.
@@ -46,5 +46,5 @@ pub use scroll::{ScrollModifiers, ScrollState, remember_scroll_state};
 pub use shape::{
     CIRCLE_SHAPE, RoundedCornerShape, RoundedCornerShapeEach, RoundedCornerShapePercent,
 };
-pub use text::{BasicText, TextElement, TextNode};
+pub use text::{BasicAnnotatedText, BasicText, TextElement, TextNode};
 pub use text_field::{BasicTextField, TextFieldElement, TextFieldNode, inner_text_field_only};

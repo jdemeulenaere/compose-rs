@@ -99,6 +99,7 @@ impl ModifierNodeElement for ScrollElement {
             drag: DragScroller::default(),
             fraction: 0.0,
             laid_out: 0,
+            rtl: false,
         })
     }
 
@@ -144,6 +145,8 @@ struct ScrollNode {
     fraction: f32,
     /// The offset the last layout used.
     laid_out: i32,
+    /// Horizontal in a right-to-left layout: its content starts at the right.
+    rtl: bool,
 }
 
 impl ModifierNode for ScrollNode {
@@ -161,20 +164,41 @@ impl ModifierNode for ScrollNode {
     }
     /// Scrolls the least that shows `rect` (its start, if it's longer than the viewport).
     fn bring_into_view(&mut self, rect: Rect, viewport: IntSize) -> Option<Rect> {
-        let (start, end, length) = if self.vertical {
-            (rect.top, rect.bottom, viewport.height as f32)
-        } else {
-            (rect.left, rect.right, viewport.width as f32)
-        };
+        let (start, end, length) = scroll_axis(rect, viewport, self.vertical, self.rtl);
         // Where it will be once the scrolling asked for (not yet laid out) is.
         let pending = (self.state.value_state().get() - self.laid_out) as f32;
         let delta = bring_into_view_delta(start - pending, end - pending, length);
         let used = scroll_state_by(&self.state, delta, &mut self.fraction);
-        Some(if self.vertical {
-            Rect::new(rect.left, rect.top - used, rect.right, rect.bottom - used)
-        } else {
-            Rect::new(rect.left - used, rect.top, rect.right - used, rect.bottom)
-        })
+        Some(scrolled_rect(rect, used, self.vertical, self.rtl))
+    }
+}
+
+/// `rect`'s start and end along a scroll's axis, from where its content starts (the right of
+/// a right-to-left horizontal scroll), and the viewport's length.
+pub(crate) fn scroll_axis(
+    rect: Rect,
+    viewport: IntSize,
+    vertical: bool,
+    rtl: bool,
+) -> (f32, f32, f32) {
+    if vertical {
+        (rect.top, rect.bottom, viewport.height as f32)
+    } else if rtl {
+        let width = viewport.width as f32;
+        (width - rect.right, width - rect.left, width)
+    } else {
+        (rect.left, rect.right, viewport.width as f32)
+    }
+}
+
+/// `rect` once its scroll moved `used` pixels forward.
+pub(crate) fn scrolled_rect(rect: Rect, used: f32, vertical: bool, rtl: bool) -> Rect {
+    if vertical {
+        Rect::new(rect.left, rect.top - used, rect.right, rect.bottom - used)
+    } else if rtl {
+        Rect::new(rect.left + used, rect.top, rect.right + used, rect.bottom)
+    } else {
+        Rect::new(rect.left - used, rect.top, rect.right - used, rect.bottom)
     }
 }
 
@@ -208,6 +232,7 @@ impl LayoutModifierNode for ScrollNode {
             )
         };
         let placeable = scope.measure(content, content_constraints);
+        self.rtl = !self.vertical && scope.layout_direction() == compose_ui::LayoutDirection::Rtl;
         let width = constraints.constrain_width(placeable.width);
         let height = constraints.constrain_height(placeable.height);
         let max =

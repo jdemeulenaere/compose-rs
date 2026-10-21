@@ -111,7 +111,7 @@ impl LayoutModifierNode for ContentSizeNode {
         let current = size.value();
         let current = constraints
             .constrain(IntSize::new(current.width.round() as i32, current.height.round() as i32));
-        scope.place(&placeable, 0, 0);
+        scope.place_relative(&placeable, 0, 0);
         scope.layout(current.width, current.height)
     }
 }

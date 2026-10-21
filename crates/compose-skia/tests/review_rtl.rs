@@ -58,7 +58,8 @@ fn an_empty_field_puts_its_cursor_at_the_right_once_the_direction_turns_right_to
 /// The same field composed right to left from the start: the cursor at its right edge.
 #[test]
 fn passes_an_empty_field_composed_right_to_left_has_its_cursor_at_the_right() {
-    let mut host = UiHost::new(IntSize::new(300, 100), Density::default(), Box::new(SkiaTextMeasurer::new()));
+    let mut host =
+        UiHost::new(IntSize::new(300, 100), Density::default(), Box::new(SkiaTextMeasurer::new()));
     host.set_layout_direction(LayoutDirection::Rtl);
     let mut ui = ComposeTestRule::with_host(host, EmptyField);
     let left = cursor_left(&mut ui);

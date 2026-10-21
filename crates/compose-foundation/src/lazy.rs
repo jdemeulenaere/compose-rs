@@ -50,6 +50,8 @@ struct LazyListInner {
     first_key: Cell<Option<u64>>,
     /// Scrolling asked for since the last measurement, in pixels.
     pending: Cell<f32>,
+    /// A row laid out right to left (its items from the right), from the last measurement.
+    rtl: Cell<bool>,
     /// Bumped by scrolls: the layout reads it, so a scroll measures the list again.
     remeasure: OwnedState<u64>,
     /// The items to compose: what the layout asks for, read by the items' composition only.
@@ -85,6 +87,7 @@ impl LazyListState {
                 position: Cell::new((first_visible_item_index, offset as f32)),
                 first_key: Cell::new(None),
                 pending: Cell::new(0.0),
+                rtl: Cell::new(false),
                 remeasure: mutable_state_of(0),
                 composed: mutable_state_of((
                     first_visible_item_index,
@@ -519,7 +522,11 @@ impl MeasurePolicy for LazyListLayout {
         let info = &self.info;
         let vertical = info.vertical;
         let density = scope.density();
-        // Laid out left to right; `place_relative` mirrors it all in a right-to-left layout.
+        // A row is laid out left to right, and `place_relative` mirrors it in a right-to-left
+        // layout; a column's items align in the direction and are placed as they are, as
+        // Compose's (so a centered item rounds as in left to right).
+        let layout_direction = scope.layout_direction();
+        state.rtl.set(layout_direction == compose_ui::LayoutDirection::Rtl);
         let direction = compose_ui::LayoutDirection::Ltr;
         let px = |dp: Dp| density.round_to_px(dp);
         let (before, after, cross_before, cross_after) = if vertical {
@@ -839,8 +846,14 @@ impl MeasurePolicy for LazyListLayout {
         let layout = |scope: &mut MeasureScope<'_>, placeable: &Placeable, main: i32| {
             if vertical {
                 let space = IntSize::new(width - cross_before - cross_after, placeable.height);
-                let x = info.alignment.align(placeable.size(), space, direction).x;
-                scope.place_relative(placeable, cross_before + x, main);
+                let x = info.alignment.align(placeable.size(), space, layout_direction).x;
+                // The content padding's start is on the right in a right-to-left layout.
+                let before = if layout_direction == compose_ui::LayoutDirection::Rtl {
+                    cross_after
+                } else {
+                    cross_before
+                };
+                scope.place(placeable, before + x, main);
             } else {
                 let space = IntSize::new(placeable.width, height - cross_before - cross_after);
                 let y = info.alignment.align(placeable.size(), space, direction).y;
@@ -932,20 +945,13 @@ impl ModifierNode for LazyScrollNode {
 
     /// Scrolls the least that shows `rect` (an item beyond the viewport taking the focus).
     fn bring_into_view(&mut self, rect: Rect, viewport: IntSize) -> Option<Rect> {
-        let (start, end, length) = if self.vertical {
-            (rect.top, rect.bottom, viewport.height as f32)
-        } else {
-            (rect.left, rect.right, viewport.width as f32)
-        };
+        let rtl = !self.vertical && self.state.inner.rtl.get();
+        let (start, end, length) = crate::scroll::scroll_axis(rect, viewport, self.vertical, rtl);
         // Where it will be once the scrolling asked for (not yet laid out) is.
         let pending = self.state.inner.pending.get();
         let delta = bring_into_view_delta(start - pending, end - pending, length);
         let used = if delta == 0.0 { 0.0 } else { self.state.dispatch(delta) };
-        Some(if self.vertical {
-            Rect::new(rect.left, rect.top - used, rect.right, rect.bottom - used)
-        } else {
-            Rect::new(rect.left - used, rect.top, rect.right - used, rect.bottom)
-        })
+        Some(crate::scroll::scrolled_rect(rect, used, self.vertical, rtl))
     }
 }
 

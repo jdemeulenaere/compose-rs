@@ -108,6 +108,7 @@ impl ModifierNodeElement for TextFieldElement {
             constraints: None,
             stale: Vec::new(),
             density: None,
+            direction: compose_ui::LayoutDirection::Ltr,
             cursor_rect: None,
             pending_tap: None,
             scroll: Offset::ZERO,
@@ -243,6 +244,8 @@ pub struct TextFieldNode {
     paragraph: Option<ParagraphHandle>,
     constraints: Option<Constraints>,
     density: Option<compose_ui::Density>,
+    /// The layout direction it was laid out in (an empty field's cursor side).
+    direction: compose_ui::LayoutDirection,
     stale: Vec<ParagraphHandle>,
     /// Where the cursor is drawn, from the measurer, refreshed at measurement: moving the
     /// cursor asks for one (the paragraph is kept).
@@ -612,8 +615,10 @@ impl LayoutModifierNode for TextFieldNode {
             if self.constraints != Some(constraints)
                 || self.paragraph.is_none()
                 || self.density != Some(scope.density())
+                || self.direction != scope.layout_direction()
             {
                 self.density = Some(scope.density());
+                self.direction = scope.layout_direction();
                 if let Some(old) = self.paragraph.take() {
                     scope.text_measurer().release(old);
                 }

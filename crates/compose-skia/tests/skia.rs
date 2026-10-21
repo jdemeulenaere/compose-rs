@@ -194,3 +194,47 @@ fn text_styles_change_the_layout_as_compose() {
     assert!((start.left - plain as f32).abs() <= 2.0, "{start:?}");
     measurer.release(paragraph);
 }
+
+#[test]
+fn annotated_text_draws_each_span_in_its_style() {
+    use compose::material3::AnnotatedText;
+    use compose::ui::{AnnotatedString, SpanStyle};
+    let text = AnnotatedString::build(|builder| {
+        builder.append("aaaa");
+        builder.with_style(
+            SpanStyle { color: Color::RED, background: Color::BLUE, ..SpanStyle::DEFAULT },
+            |builder| {
+                builder.append("bbbb");
+            },
+        );
+    });
+    let mut ui = compose_test_with(
+        IntSize::new(300, 100),
+        Density::default(),
+        Box::new(SkiaTextMeasurer::new()),
+        move || {
+            AnnotatedText(
+                text.clone(),
+                compose::ui::Modifier,
+                Color::BLACK,
+                compose::ui::TextOverflow::Clip,
+                true,
+                u32::MAX,
+                TextStyle::DEFAULT,
+            )
+        },
+    );
+    ui.on_node_with_text("aaaabbbb").assert_exists();
+    let mut renderer = RasterRenderer::new(300, 100);
+    let list = ui.host().display_list();
+    ui.host().with_tree(|tree| renderer.render(&list, Color::WHITE, 1.0, tree.text_measurer()));
+    let mut colors = std::collections::HashSet::new();
+    for y in 0..40 {
+        for x in 0..300 {
+            colors.insert(renderer.pixel(x, y));
+        }
+    }
+    assert!(colors.contains(&Color::BLUE), "the span's background");
+    assert!(colors.contains(&Color::BLACK), "the first run's glyphs");
+    assert!(colors.contains(&Color::RED), "the span's glyphs");
+}

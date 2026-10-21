@@ -9,6 +9,7 @@
 extern crate compose_runtime as compose;
 
 pub mod alignment;
+pub mod annotated;
 pub mod clipboard;
 pub mod constraints;
 mod dispatch;
@@ -37,6 +38,7 @@ pub mod window;
 pub use alignment::{
     Alignment, HorizontalAlignment, LOCAL_LAYOUT_DIRECTION, LayoutDirection, VerticalAlignment,
 };
+pub use annotated::{AnnotatedString, AnnotatedStringBuilder, SpanRange, SpanStyle};
 pub use clipboard::{Clipboard, MemoryClipboard};
 pub use constraints::Constraints;
 pub use display_list::{DisplayList, DrawOp, Renderer};

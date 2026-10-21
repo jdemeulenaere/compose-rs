@@ -45,7 +45,7 @@ impl MeasurePolicy for StackLayout {
             },
         );
         for placeable in &placeables {
-            scope.place(placeable, 0, 0);
+            scope.place_relative(placeable, 0, 0);
         }
         scope.layout(size.width, size.height)
     }

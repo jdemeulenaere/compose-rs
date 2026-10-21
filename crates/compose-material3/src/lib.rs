@@ -17,9 +17,10 @@ mod selection;
 mod theme;
 
 pub use components::{
-    Button, ButtonColors, ButtonDefaults, Checkbox, CheckboxColors, CheckboxDefaults,
-    LOCAL_ABSOLUTE_TONAL_ELEVATION, MINIMUM_INTERACTIVE_SIZE, OutlinedButton, Surface, Text,
-    TextButton, TextField, TextFieldColors, TextFieldDefaults, minimum_interactive_component_size,
+    AnnotatedText, Button, ButtonColors, ButtonDefaults, Checkbox, CheckboxColors,
+    CheckboxDefaults, LOCAL_ABSOLUTE_TONAL_ELEVATION, MINIMUM_INTERACTIVE_SIZE, OutlinedButton,
+    Surface, Text, TextButton, TextField, TextFieldColors, TextFieldDefaults,
+    minimum_interactive_component_size,
 };
 pub use dialog::{AlertDialog, DropdownMenu, DropdownMenuItem};
 pub use icon::{FloatingActionButton, Icon, IconButton, icons};
@@ -40,8 +41,8 @@ pub use theme::{
 #[doc(hidden)]
 pub use compose_foundation::{ScrollState, remember_scroll_state};
 pub use compose_ui::{
-    Color, Dp, FontFamily, FontStyle, IntOffset, Modifier, RECTANGLE_SHAPE, Sp, TextAlign,
-    TextDecoration, TextOverflow,
+    AnnotatedString, Color, Dp, FontFamily, FontStyle, IntOffset, Modifier, RECTANGLE_SHAPE, Sp,
+    SpanStyle, TextAlign, TextDecoration, TextOverflow,
 };
 
 pub(crate) use selection::blend as selection_blend;

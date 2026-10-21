@@ -4,10 +4,10 @@
 
 use compose_runtime::composable;
 use compose_ui::{
-    Constraints, DetachContext, DrawModifierNode, DrawScope, Layout, LayoutModifierNode,
-    Measurable, MeasureResult, MeasureScope, Modifier, ModifierNode, ModifierNodeElement, Offset,
-    ParagraphHandle, SemanticsConfiguration, SemanticsModifierNode, SharedString,
-    TextLayoutOptions, TextStyle, empty_measure_policy,
+    AnnotatedString, Constraints, DetachContext, DrawModifierNode, DrawScope, Layout,
+    LayoutModifierNode, Measurable, MeasureResult, MeasureScope, Modifier, ModifierNode,
+    ModifierNodeElement, Offset, ParagraphHandle, SemanticsConfiguration, SemanticsModifierNode,
+    SharedString, TextLayoutOptions, TextStyle, empty_measure_policy,
 };
 
 /// Text, as Compose's `BasicText`: no theme, the style as given; what doesn't fit is cut,
@@ -21,6 +21,31 @@ pub fn BasicText(
     #[default(true)] soft_wrap: bool,
     #[default(u32::MAX)] max_lines: u32,
 ) {
+    emit_text(AnnotatedString::new(text), modifier, style, overflow, soft_wrap, max_lines);
+}
+
+/// Styled text, as Compose's `BasicText(AnnotatedString, …)`: each span in its style over
+/// `style`.
+#[composable]
+pub fn BasicAnnotatedText(
+    text: AnnotatedString,
+    #[default(crate::Modifier)] modifier: Modifier,
+    #[default(crate::TextStyle::DEFAULT)] style: TextStyle,
+    #[default(crate::TextOverflow::Clip)] overflow: compose_ui::TextOverflow,
+    #[default(true)] soft_wrap: bool,
+    #[default(u32::MAX)] max_lines: u32,
+) {
+    emit_text(text, modifier, style, overflow, soft_wrap, max_lines);
+}
+
+fn emit_text(
+    text: AnnotatedString,
+    modifier: Modifier,
+    style: TextStyle,
+    overflow: compose_ui::TextOverflow,
+    soft_wrap: bool,
+    max_lines: u32,
+) {
     let element = TextElement {
         text,
         style,
@@ -31,7 +56,7 @@ pub fn BasicText(
 
 /// The modifier element of a text: its string, style and line options.
 pub struct TextElement {
-    pub text: SharedString,
+    pub text: AnnotatedString,
     pub style: TextStyle,
     pub options: TextLayoutOptions,
 }
@@ -78,7 +103,7 @@ impl ModifierNodeElement for TextElement {
 
 /// A text's node: its laid-out paragraph, kept while the text, style and constraints hold.
 pub struct TextNode {
-    text: SharedString,
+    text: AnnotatedString,
     style: TextStyle,
     options: TextLayoutOptions,
     paragraph: Option<ParagraphHandle>,
@@ -138,7 +163,7 @@ impl LayoutModifierNode for TextNode {
                 scope.text_measurer().release(old);
             }
             let density = scope.density();
-            let paragraph = scope.text_measurer().layout(
+            let paragraph = scope.text_measurer().layout_annotated(
                 &self.text,
                 &self.style,
                 TextLayoutOptions { direction, ..self.options },
@@ -175,6 +200,6 @@ impl DrawModifierNode for TextNode {
 
 impl SemanticsModifierNode for TextNode {
     fn apply_semantics(&self, config: &mut SemanticsConfiguration) {
-        config.text.push(self.text.clone());
+        config.text.push(self.text.text.clone());
     }
 }

@@ -315,6 +315,18 @@ pub trait TextMeasurer: std::any::Any {
         constraints: Constraints,
         density: &Density,
     ) -> ParagraphHandle;
+    /// Lays out styled text, as `layout` does plain text: each span in its style. The default
+    /// ignores the spans (a measurer that can't style runs).
+    fn layout_annotated(
+        &mut self,
+        text: &crate::annotated::AnnotatedString,
+        style: &TextStyle,
+        options: TextLayoutOptions,
+        constraints: Constraints,
+        density: &Density,
+    ) -> ParagraphHandle {
+        self.layout(text.as_str(), style, options, constraints, density)
+    }
     fn metrics(&self, paragraph: ParagraphHandle) -> ParagraphMetrics;
     fn hit_test(&self, paragraph: ParagraphHandle, position: Offset) -> TextPosition;
     /// Whether the paragraph runs right to left (its first strong character's direction), as

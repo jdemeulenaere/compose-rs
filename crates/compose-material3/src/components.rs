@@ -51,6 +51,23 @@ pub fn Text(
     BasicText(text, modifier, style, overflow, soft_wrap, max_lines);
 }
 
+/// Styled text, as Compose's `Text(AnnotatedString, …)`: in the theme's text style and content
+/// color, each span in its style over them.
+#[composable]
+pub fn AnnotatedText(
+    text: compose_ui::AnnotatedString,
+    #[default(crate::Modifier)] modifier: Modifier,
+    #[default(crate::Color::UNSPECIFIED)] color: Color,
+    #[default(crate::TextOverflow::Clip)] overflow: compose_ui::TextOverflow,
+    #[default(true)] soft_wrap: bool,
+    #[default(u32::MAX)] max_lines: u32,
+    #[default(crate::LOCAL_TEXT_STYLE.current())] style: TextStyle,
+) {
+    let color = color.or(style.color).or(LOCAL_CONTENT_COLOR.current());
+    let style = TextStyle { color, ..style };
+    compose_foundation::BasicAnnotatedText(text, modifier, style, overflow, soft_wrap, max_lines);
+}
+
 // ---- Surface ---------------------------------------------------------------------------------
 
 /// The modifiers of a surface: clipped to its shape, filled with its color, bordered.
