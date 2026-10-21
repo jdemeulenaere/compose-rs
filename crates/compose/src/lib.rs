@@ -2,7 +2,8 @@
 //!
 //! This facade re-exports the framework's crates as modules mirroring Compose's packages:
 //! `compose::runtime` is `androidx.compose.runtime`, `compose::ui` is `androidx.compose.ui`
-//! (with `graphics`, `unit` and `text`), and, with the `test` feature, `compose::test` is
+//! (with `graphics`, `unit` and `text`), `compose::foundation` (with `layout`) and
+//! `compose::material3` are their Compose namesakes, and, with the `test` feature, `compose::test` is
 //! `androidx.compose.ui.test`.
 
 /// `androidx.compose.runtime`: composition, `remember`, state, effects, and the `#[composable]`
@@ -15,6 +16,19 @@ pub mod runtime {
 /// input, focus, semantics, and the host the platforms wrap.
 pub mod ui {
     pub use compose_ui::*;
+}
+
+/// `androidx.compose.foundation`: `BasicText`, `BasicTextField`, shapes, and the foundation
+/// modifiers (methods of `Modifier`); `foundation::layout` has `Box`, `Column`, `Row`, `Spacer`
+/// and `Arrangement`.
+pub mod foundation {
+    pub use compose_foundation::*;
+}
+
+/// `androidx.compose.material3`: `MaterialTheme`, `Text`, `Surface`, the buttons, `Checkbox`,
+/// `TextField`.
+pub mod material3 {
+    pub use compose_material3::*;
 }
 
 /// `androidx.compose.ui.test`: the test rule, finders, actions, assertions and event scripts.

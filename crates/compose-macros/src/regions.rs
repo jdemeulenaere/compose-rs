@@ -29,20 +29,17 @@ const RUNTIME_COMPOSABLES: &[&str] = &[
 const NOT_COMPOSABLES: &[&str] = &["Some", "Ok", "Err", "ArgProbe"];
 
 /// Whether a name looks like a composable's: PascalCase, not `Some`, `Ok` or `Err`.
+/// Whether a name looks like a composable's: starting with an uppercase letter (`Text`, and
+/// all-caps ones such as `H1`), not `Some`, `Ok` or `Err`.
 pub(crate) fn is_pascal_case(name: &str) -> bool {
-    name.chars().next().is_some_and(char::is_uppercase)
-        && name.chars().any(char::is_lowercase)
-        && !NOT_COMPOSABLES.contains(&name)
+    name.chars().next().is_some_and(char::is_uppercase) && !NOT_COMPOSABLES.contains(&name)
 }
 
 fn is_composable_name(name: &str) -> bool {
     if RUNTIME_COMPOSABLES.contains(&name) {
         return true;
     }
-    let mut chars = name.chars();
-    chars.next().is_some_and(char::is_uppercase)
-        && name.chars().any(char::is_lowercase)
-        && !NOT_COMPOSABLES.contains(&name)
+    is_pascal_case(name)
 }
 
 /// Whether some syntax contains a likely composable call: a call whose final path segment is
@@ -96,7 +93,10 @@ fn tokens_contain_call(tokens: TokenStream) -> bool {
                 }
             }
             TokenTree::Punct(punct) => {
-                if punct.as_char() == '!' && previous.as_deref().is_some_and(is_composable_name) {
+                if punct.as_char() == '!'
+                    && punct.spacing() == proc_macro2::Spacing::Alone
+                    && previous.as_deref().is_some_and(is_composable_name)
+                {
                     return true;
                 }
             }
@@ -306,7 +306,9 @@ impl Regions {
                         | Expr::Loop(_),
                     _
                 )
-            ) || is_key_call(&stmt);
+            ) || is_key_call(&stmt)
+                // A user macro making likely calls has its guard from `visit_block_mut`.
+                || matches!(&stmt, Stmt::Macro(statement) if is_user_macro_with_calls(&statement.mac));
             if has_own_group || !self.likely_stmt(&stmt) {
                 body.stmts.push(stmt);
                 continue;
@@ -444,9 +446,56 @@ impl Regions {
     }
 }
 
+/// A user's macro (not PascalCase, not a standard one) whose tokens make likely composable
+/// calls: it may branch or loop around them (`when!(show, Text!("x"))`), so it is a region.
+fn is_user_macro_with_calls(mac: &syn::Macro) -> bool {
+    let name =
+        mac.path.segments.last().map(|segment| segment.ident.to_string()).unwrap_or_default();
+    !is_pascal_case(&name)
+        && !KNOWN_MACROS.contains(&name.as_str())
+        && tokens_contain_call(mac.tokens.clone())
+}
+
 impl VisitMut for Regions {
     fn visit_item_mut(&mut self, _: &mut Item) {
         // A nested item is not part of this body; a nested composable has its own attribute.
+    }
+
+    fn visit_block_mut(&mut self, block: &mut Block) {
+        visit_mut::visit_block_mut(self, block);
+        let statements = std::mem::take(&mut block.stmts);
+        let count = statements.len();
+        for (index, stmt) in statements.into_iter().enumerate() {
+            let Stmt::Macro(statement) = &stmt else {
+                block.stmts.push(stmt);
+                continue;
+            };
+            if !is_user_macro_with_calls(&statement.mac) {
+                block.stmts.push(stmt);
+                continue;
+            }
+            if statement.semi_token.is_none() && index + 1 == count {
+                // The block's value: a region around the expression.
+                let Stmt::Macro(statement) = stmt else { unreachable!() };
+                let mut expr =
+                    Expr::Macro(syn::ExprMacro { attrs: statement.attrs, mac: statement.mac });
+                self.wrap_expr(&mut expr);
+                block.stmts.push(Stmt::Expr(expr, None));
+                continue;
+            }
+            // Around the statement rather than in a block: it may declare bindings.
+            let cfgs: Vec<_> = statement
+                .attrs
+                .iter()
+                .filter(|attr| attr.path().is_ident("cfg"))
+                .cloned()
+                .collect();
+            let region = self.region();
+            let name = Ident::new("__compose_region", Span::mixed_site());
+            block.stmts.push(parse_quote! { #(#cfgs)* #region });
+            block.stmts.push(stmt);
+            block.stmts.push(parse_quote! { #(#cfgs)* ::core::mem::drop(#name); });
+        }
     }
 
     fn visit_macro_mut(&mut self, mac: &mut syn::Macro) {
@@ -510,8 +559,18 @@ impl VisitMut for Regions {
             Expr::Binary(binary) if matches!(binary.op, syn::BinOp::And(_) | syn::BinOp::Or(_)) => {
                 self.visit_expr_mut(&mut binary.left);
                 self.visit_expr_mut(&mut binary.right);
-                if self.likely_expr(&binary.right) {
-                    self.wrap_expr(&mut binary.right);
+                // A `let` of a let chain can't be a block: its scrutinee is the branch then.
+                match &mut *binary.right {
+                    Expr::Let(binding) => {
+                        if self.likely_expr(&binding.expr) {
+                            self.wrap_expr(&mut binding.expr);
+                        }
+                    }
+                    right => {
+                        if self.likely_expr(right) {
+                            self.wrap_expr(right);
+                        }
+                    }
                 }
             }
             // A labelled block can be left early with `break 'label`, as a loop body with a
@@ -521,6 +580,9 @@ impl VisitMut for Regions {
                 if self.likely_block(&block.block) {
                     self.wrap_statements(&mut block.block);
                 }
+            }
+            Expr::Macro(macro_expr) if is_user_macro_with_calls(&macro_expr.mac) => {
+                self.wrap_expr(expr);
             }
             // Futures run outside composition, and a region guard held across an `.await` would
             // make them `!Send`; `const` blocks can't call the runtime.

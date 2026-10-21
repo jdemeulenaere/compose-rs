@@ -9,6 +9,8 @@ publish.workspace = true
 [dependencies]
 compose-runtime.workspace = true
 compose-ui.workspace = true
+compose-foundation.workspace = true
+compose-material3.workspace = true
 compose-test = { workspace = true, optional = true }
 
 [features]

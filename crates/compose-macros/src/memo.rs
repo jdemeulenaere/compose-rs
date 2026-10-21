@@ -62,6 +62,17 @@ const KNOWN_MACROS: &[&str] = &[
     "warn",
     "error",
     "log",
+    "cfg",
+    "line",
+    "column",
+    "file",
+    "env",
+    "option_env",
+    "module_path",
+    "include_str",
+    "include_bytes",
+    "compile_error",
+    "write",
 ];
 
 fn is_call_macro(name: &str) -> bool {
@@ -102,6 +113,19 @@ fn is_callback_constructor(path: &syn::Path) -> bool {
     }
 }
 
+/// Whether `block` is a probe this pass wrote (it starts by importing the probe traits): a
+/// callback value, not a content block.
+pub(crate) fn is_probe_block(block: &syn::Block) -> bool {
+    matches!(block.stmts.first(), Some(syn::Stmt::Item(syn::Item::Use(item)))
+        if item.to_token_stream().to_string().contains("KeyedProbe"))
+}
+
+/// A lambda's site id: a hash of its code, as a literal (`lambda_probe`). Two lambdas with the
+/// same code and keys behave the same, so they may share an id.
+fn site_of(code: &TokenStream) -> proc_macro2::Literal {
+    proc_macro2::Literal::u64_suffixed(crate::composable::key_of(&code.to_string()))
+}
+
 /// Keys as a tuple, nested in tuples of at most 12, which is as far as `LambdaKeys` goes.
 fn key_tuple(keys: Vec<TokenStream>) -> TokenStream {
     if keys.len() <= 12 {
@@ -114,23 +138,24 @@ fn key_tuple(keys: Vec<TokenStream>) -> TokenStream {
 /// The runtime function resolving a probe for a lambda of `arity` arguments: one spelling the
 /// `Fn` bound out, so untyped closure parameters are inferred, up to four.
 fn resolver(arity: Option<usize>) -> Option<Ident> {
-    arity.filter(|arity| *arity <= 4).map(|arity| format_ident!("resolve_{}", arity))
+    arity.filter(|arity| *arity <= 8).map(|arity| format_ident!("resolve_{}", arity))
 }
 
 /// The runtime function wrapping a lambda of `arity` arguments in a `Callback`, as `resolver`.
 pub(crate) fn wrapper(arity: usize) -> Ident {
-    if arity <= 4 { format_ident!("callback_{}", arity) } else { format_ident!("callback") }
+    if arity <= 8 { format_ident!("callback_{}", arity) } else { format_ident!("callback") }
 }
 
 /// A lookup of the lambda remembered at this position, keyed with `keys`: the kept callback if
 /// they are all `same` as last pass's, else `make` stored.
 fn probe_with(keys: Vec<TokenStream>, make: TokenStream, arity: Option<usize>) -> TokenStream {
+    let site = site_of(&make);
     let keys = key_tuple(keys);
     let resolve = match resolver(arity) {
         Some(resolver) => {
-            quote! { ::compose::__private::#resolver(::compose::__private::lambda_probe(#keys), #make) }
+            quote! { ::compose::__private::#resolver(::compose::__private::lambda_probe(#site, #keys), #make) }
         }
-        None => quote! { ::compose::__private::lambda_probe(#keys).resolve(#make) },
+        None => quote! { ::compose::__private::lambda_probe(#site, #keys).resolve(#make) },
     };
     quote! {{
         #[allow(unused_imports)]
@@ -160,15 +185,16 @@ pub(crate) fn probe(
     if !nested {
         return probe_with(keys, closure, arity);
     }
+    let site = site_of(&closure);
     let keys = key_tuple(keys);
-    let resolver = match arity.filter(|arity| *arity <= 4) {
+    let resolver = match arity.filter(|arity| *arity <= 8) {
         Some(arity) => format_ident!("resolve_lazy_{}", arity),
         None => format_ident!("resolve_lazy"),
     };
     quote! {{
         #[allow(unused_imports)]
         use ::compose::__private::{KeyedProbe as _, UnkeyedProbe as _};
-        ::compose::__private::#resolver(::compose::__private::lambda_probe(#keys), || {
+        ::compose::__private::#resolver(::compose::__private::lambda_probe(#site, #keys), || {
             #(let #captures = ::core::clone::Clone::clone(&#captures);)*
             #closure
         })
@@ -180,12 +206,13 @@ pub(crate) fn probe(
 pub(crate) fn probe_value(value: TokenStream) -> TokenStream {
     let name = Ident::new("__compose_value", Span::mixed_site());
     let key = quote! { (&&::compose::__private::ArgProbe(#name)).arg_key() };
+    let site = site_of(&value);
     let keys = key_tuple(vec![key]);
     quote! {{
         #[allow(unused_imports)]
         use ::compose::__private::{KeyedProbe as _, UnkeyedProbe as _};
         let #name = &(#value);
-        ::compose::__private::lambda_probe(#keys).resolve_cloned(#name)
+        ::compose::__private::lambda_probe(#site, #keys).resolve_cloned(#name)
     }}
 }
 
@@ -199,28 +226,39 @@ fn local_bindings(local: &syn::Local, out: &mut Vec<String>) {
     }
 }
 
-/// The snake-case identifiers directly before a `=` (not `==`) in a macro's top-level tokens.
-fn assigned_names(tokens: TokenStream) -> Vec<String> {
+/// The plain snake-case names in a macro's top-level tokens: not called (`f(`, `m!`), not a
+/// path segment (`a::b`) or a field or method (`.x`), not a keyword.
+fn unbound_names(tokens: TokenStream) -> Vec<String> {
+    const KEYWORDS: &[&str] = &[
+        "as", "async", "await", "break", "const", "continue", "crate", "dyn", "else", "enum",
+        "false", "fn", "for", "if", "impl", "in", "let", "loop", "match", "mod", "move", "mut",
+        "pub", "ref", "return", "self", "static", "struct", "super", "trait", "true", "type",
+        "unsafe", "use", "where", "while",
+    ];
     let tokens: Vec<TokenTree> = tokens.into_iter().collect();
     let mut names = Vec::new();
-    for window in tokens.windows(3) {
-        if let (TokenTree::Ident(ident), TokenTree::Punct(equals)) = (&window[0], &window[1]) {
-            let next_is_equals =
-                matches!(&window[2], TokenTree::Punct(next) if next.as_char() == '=');
-            let name = ident.to_string();
-            if equals.as_char() == '='
-                && equals.spacing() == proc_macro2::Spacing::Alone
-                && !next_is_equals
-                && !crate::regions::is_pascal_case(&name)
-            {
-                names.push(name);
-            }
+    for (index, token) in tokens.iter().enumerate() {
+        let TokenTree::Ident(ident) = token else { continue };
+        let name = ident.to_string();
+        if crate::regions::is_pascal_case(&name) || KEYWORDS.contains(&name.as_str()) {
+            continue;
         }
-    }
-    if let [.., TokenTree::Ident(ident), TokenTree::Punct(equals)] = tokens.as_slice()
-        && equals.as_char() == '='
-    {
-        names.push(ident.to_string());
+        let after = tokens.get(index + 1);
+        let called = match after {
+            Some(TokenTree::Group(group)) => {
+                group.delimiter() == proc_macro2::Delimiter::Parenthesis
+            }
+            Some(TokenTree::Punct(punct)) => {
+                (punct.as_char() == '!' && punct.spacing() == proc_macro2::Spacing::Alone)
+                    || (punct.as_char() == ':' && punct.spacing() == proc_macro2::Spacing::Joint)
+            }
+            _ => false,
+        };
+        let qualified = index > 0
+            && matches!(&tokens[index - 1], TokenTree::Punct(punct) if punct.as_char() == '.' || punct.as_char() == ':');
+        if !called && !qualified {
+            names.push(name);
+        }
     }
     names
 }
@@ -395,14 +433,19 @@ impl Free<'_> {
                 }
                 TokenTree::Group(group) => self.scan_tokens(group.stream()),
                 TokenTree::Literal(literal) => {
-                    for name in format_names(&literal.to_string()) {
+                    // The string's value, escapes resolved (`"{\x63ount}"` names `count`).
+                    let value = syn::parse_str::<syn::LitStr>(&literal.to_string())
+                        .map(|text| text.value());
+                    for name in value.map(|value| format_names(&value)).unwrap_or_default() {
                         // The literal's span: the name resolves where the string was written.
                         self.use_name(&Ident::new(&name, literal.span()));
                     }
                 }
                 TokenTree::Punct(punct) => {
                     // A macro called inside a macro's tokens.
+                    // `name!`, not `name != …`.
                     if punct.as_char() == '!'
+                        && punct.spacing() == proc_macro2::Spacing::Alone
                         && let Some(name) = &previous
                         && !self.trusted(&name.to_string())
                     {
@@ -425,9 +468,6 @@ impl Free<'_> {
 /// width and precision arguments (`"{:>width$}"`, `"{:.prec$}"`). Positional indices (`"{0}"`)
 /// aren't names.
 fn format_names(literal: &str) -> Vec<String> {
-    if !literal.starts_with('"') && !literal.starts_with('r') {
-        return Vec::new();
-    }
     let is_name = |name: &str| {
         name.chars().next().is_some_and(|c| c.is_alphabetic() || c == '_')
             && name.chars().all(|c| c.is_alphanumeric() || c == '_')
@@ -568,6 +608,18 @@ impl<'ast> Visit<'ast> for Free<'_> {
         self.visit_expr(&expr.expr);
     }
 
+    /// In a let chain (`let Some(x) = a && f(x)`), the names bound by the left operand are in
+    /// scope in the right one.
+    fn visit_expr_binary(&mut self, expr: &'ast syn::ExprBinary) {
+        if !matches!(expr.op, syn::BinOp::And(_)) {
+            return visit::visit_expr_binary(self, expr);
+        }
+        self.visit_expr(&expr.left);
+        let mut names = Vec::new();
+        condition_bindings(&expr.left, &mut names);
+        self.scoped(names, |free| free.visit_expr(&expr.right));
+    }
+
     fn visit_item(&mut self, _: &'ast syn::Item) {}
 }
 
@@ -640,6 +692,27 @@ impl Memoize {
                     self.0.push(ident.to_string());
                 }
             }
+            /// `macro_rules! Name` inside a macro's tokens (a content block of a call macro).
+            fn visit_macro(&mut self, mac: &'ast syn::Macro) {
+                fn scan(tokens: TokenStream, out: &mut Vec<String>) {
+                    let tokens: Vec<TokenTree> = tokens.into_iter().collect();
+                    for (index, token) in tokens.iter().enumerate() {
+                        match token {
+                            TokenTree::Ident(ident) if ident == "macro_rules" => {
+                                if let (Some(TokenTree::Punct(bang)), Some(TokenTree::Ident(name))) =
+                                    (tokens.get(index + 1), tokens.get(index + 2))
+                                    && bang.as_char() == '!'
+                                {
+                                    out.push(name.to_string());
+                                }
+                            }
+                            TokenTree::Group(group) => scan(group.stream(), out),
+                            _ => {}
+                        }
+                    }
+                }
+                scan(mac.tokens.clone(), &mut self.0);
+            }
         }
         let mut local_macros = LocalMacros(Vec::new());
         local_macros.visit_block(body);
@@ -693,6 +766,14 @@ impl Memoize {
         if !name.as_deref().is_some_and(is_call_macro) || mac.tokens.is_empty() {
             return;
         }
+        // A PascalCase macro may be the user's, binding names it's given (`Bind!(current = …)`,
+        // `Scoped!(doubled, n * 2, { … })`): a new name in its arguments, not a function, path or
+        // field, is tainted for the lambdas in and after it. Names of locals keep their meaning.
+        let new_names = unbound_names(mac.tokens.clone())
+            .into_iter()
+            .filter(|name| !self.scopes.contains(name))
+            .collect();
+        self.scopes.taint(new_names);
         let parser = Punctuated::<MacroArgument, Token![,]>::parse_terminated;
         let Ok(arguments) = syn::parse::Parser::parse2(parser, mac.tokens.clone()) else {
             return;
@@ -729,8 +810,9 @@ impl VisitMut for Memoize {
 
     fn visit_block_mut(&mut self, block: &mut syn::Block) {
         self.scoped(Vec::new(), |memoize| {
-            for stmt in &mut block.stmts {
-                match stmt {
+            let statements = std::mem::take(&mut block.stmts);
+            for mut stmt in statements {
+                match &mut stmt {
                     syn::Stmt::Local(local) => {
                         if let Some(init) = &mut local.init {
                             memoize.visit_expr_mut(&mut init.expr);
@@ -752,22 +834,18 @@ impl VisitMut for Memoize {
                         let local =
                             name.as_ref().is_some_and(|name| memoize.local_macros.contains(name));
                         if is_call_macro_path(&statement.mac.path) && !local {
-                            // A PascalCase macro may be the user's, binding the names it's given
-                            // (`Bind!(current = …)`): a new name before `=` is tainted. Names of
-                            // locals, and every other identifier, keep their meaning.
-                            let assigned = assigned_names(statement.mac.tokens.clone())
-                                .into_iter()
-                                .filter(|name| !memoize.scopes.contains(name))
-                                .collect();
-                            memoize.scopes.taint(assigned);
                             memoize.rewrite_call_macro(&mut statement.mac);
+                            // By path: the path imported first, in the block (a statement macro
+                            // may declare bindings for the statements after it).
                             if let Some(path) = unqualify(&mut statement.mac) {
-                                let attrs = std::mem::take(&mut statement.attrs);
-                                let mac = &statement.mac;
-                                let semi = statement.semi_token;
-                                *stmt = syn::Stmt::Expr(
-                                    parse_quote! { #(#attrs)* { use #path; #mac } },
-                                    semi,
+                                let cfgs: Vec<syn::Attribute> = statement
+                                    .attrs
+                                    .iter()
+                                    .filter(|attr| attr.path().is_ident("cfg"))
+                                    .cloned()
+                                    .collect();
+                                block.stmts.push(
+                                    parse_quote! { #(#cfgs)* #[allow(unused_imports)] use #path; },
                                 );
                             }
                         } else if !is_known_macro(&statement.mac.path) {
@@ -781,6 +859,7 @@ impl VisitMut for Memoize {
                     syn::Stmt::Item(_) => {}
                     other => memoize.visit_stmt_mut(other),
                 }
+                block.stmts.push(stmt);
             }
         });
     }
@@ -812,6 +891,17 @@ impl VisitMut for Memoize {
             // `remember`'s calculation runs once, while `remember` holds its slot: a callback
             // made there needs no memoization, and a probe there would take a slot out of order.
             Expr::Call(call) if is_remember(&call.func) => self.visit_expr_mut(&mut call.func),
+            // `callback(closure)`: the memoized closure replaces the call, so its parameters take
+            // their types from where the callback goes.
+            Expr::Call(call)
+                if call.args.len() == 1
+                    && matches!(&call.args[0], Expr::Closure(_))
+                    && matches!(&*call.func, Expr::Path(path) if is_callback_constructor(&path.path)) =>
+            {
+                let Some(Expr::Closure(closure)) = call.args.first_mut() else { unreachable!() };
+                self.visit_expr_closure_mut(closure);
+                *expr = memoize_closure(self.depth > 0, &self.scopes, &self.local_macros, closure);
+            }
             Expr::Call(call) => {
                 let constructor =
                     matches!(&*call.func, Expr::Path(path) if is_callback_constructor(&path.path));
@@ -886,5 +976,16 @@ impl VisitMut for Memoize {
         let mut names = Vec::new();
         condition_bindings(&expr.cond, &mut names);
         self.scoped(names, |memoize| memoize.visit_block_mut(&mut expr.body));
+    }
+
+    /// In a let chain, the names bound by the left operand are in scope in the right one.
+    fn visit_expr_binary_mut(&mut self, expr: &mut syn::ExprBinary) {
+        if !matches!(expr.op, syn::BinOp::And(_)) {
+            return visit_mut::visit_expr_binary_mut(self, expr);
+        }
+        self.visit_expr_mut(&mut expr.left);
+        let mut names = Vec::new();
+        condition_bindings(&expr.left, &mut names);
+        self.scoped(names, |memoize| memoize.visit_expr_mut(&mut expr.right));
     }
 }

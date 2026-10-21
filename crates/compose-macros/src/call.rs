@@ -338,7 +338,9 @@ fn callback_value(arity: usize, value: Value) -> TokenStream {
             };
             memo::probe(&marked.captures, marked.unknown, closure, Some(arity), marked.nested)
         }
-        Value::Expr(Expr::Block(block)) if block.label.is_none() => {
+        Value::Expr(Expr::Block(block))
+            if block.label.is_none() && !memo::is_probe_block(&block.block) =>
+        {
             let closure = content_closure(arity, &block.block);
             let wrap = memo::wrapper(arity);
             quote! { ::compose::__private::#wrap(#closure) }

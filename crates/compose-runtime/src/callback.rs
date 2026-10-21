@@ -92,6 +92,10 @@ closures!(A);
 closures!(A, B);
 closures!(A, B, C);
 closures!(A, B, C, D);
+closures!(A, B, C, D, E);
+closures!(A, B, C, D, E, G);
+closures!(A, B, C, D, E, G, H);
+closures!(A, B, C, D, E, G, H, I);
 
 /// Converts a function argument into a callback: what call macros apply to closure arguments.
 #[inline]
@@ -226,6 +230,7 @@ pub enum LambdaProbe<K: 'static, F: ?Sized + 'static> {
 /// A lambda to store, with its captures' keys. Outside a composition pass there is no slot:
 /// the lambda is wrapped and not remembered.
 pub struct PendingLambda<K: 'static, F: ?Sized + 'static> {
+    site: u64,
     keys: K,
     position: Option<SlotPosition>,
     _function: std::marker::PhantomData<fn() -> Box<F>>,
@@ -275,7 +280,17 @@ macro_rules! resolvers {
     };
 }
 
-resolvers!(resolve_0(), resolve_1(A), resolve_2(A, B), resolve_3(A, B, C1), resolve_4(A, B, C1, D));
+resolvers!(
+    resolve_0(),
+    resolve_1(A),
+    resolve_2(A, B),
+    resolve_3(A, B, C1),
+    resolve_4(A, B, C1, D),
+    resolve_5(A, B, C1, D, E),
+    resolve_6(A, B, C1, D, E, G),
+    resolve_7(A, B, C1, D, E, G, H),
+    resolve_8(A, B, C1, D, E, G, H, I)
+);
 
 /// `resolve_N` for a lambda nested in another closure: `make` builds it, from clones of its
 /// captures, only on a miss, so the outer closure keeps its own (and stays `Fn`).
@@ -305,7 +320,11 @@ lazy_resolvers!(
     resolve_lazy_1(A),
     resolve_lazy_2(A, B),
     resolve_lazy_3(A, B, C1),
-    resolve_lazy_4(A, B, C1, D)
+    resolve_lazy_4(A, B, C1, D),
+    resolve_lazy_5(A, B, C1, D, E),
+    resolve_lazy_6(A, B, C1, D, E, G),
+    resolve_lazy_7(A, B, C1, D, E, G, H),
+    resolve_lazy_8(A, B, C1, D, E, G, H, I)
 );
 
 /// `resolve_lazy_N` for lambdas of more arguments, through `IntoCallback`.
@@ -342,7 +361,11 @@ wrappers!(
     callback_1(A),
     callback_2(A, B),
     callback_3(A, B, C1),
-    callback_4(A, B, C1, D)
+    callback_4(A, B, C1, D),
+    callback_5(A, B, C1, D, E),
+    callback_6(A, B, C1, D, E, G),
+    callback_7(A, B, C1, D, E, G, H),
+    callback_8(A, B, C1, D, E, G, H, I)
 );
 
 impl<K: 'static, F: ?Sized + 'static> PendingLambda<K, F> {
@@ -350,8 +373,8 @@ impl<K: 'static, F: ?Sized + 'static> PendingLambda<K, F> {
     pub fn store<C: IntoCallback<F>>(self, lambda: C) -> Callback<F> {
         let callback = lambda.into_callback();
         if let Some(position) = self.position {
-            let stored: Rc<dyn Any> = Rc::new((self.keys, callback.clone()));
-            set_lambda_slot(position, stored, type_name::<(K, Callback<F>)>());
+            let stored: Rc<dyn Any> = Rc::new((self.site, self.keys, callback.clone()));
+            set_lambda_slot(position, stored, type_name::<(u64, K, Callback<F>)>());
         }
         callback
     }
@@ -373,21 +396,33 @@ fn lambda_slot(type_id: TypeId) -> Option<(SlotPosition, Option<Rc<dyn Any>>)> {
 
 /// Looks up the lambda remembered at this position: if its captures are all `same` as `keys`,
 /// returns it; otherwise returns a [`PendingLambda`] to store the new one.
-pub fn lambda_probe<K: LambdaKeys, F: ?Sized + 'static>(keys: K) -> LambdaProbe<K::Owned, F> {
-    let Some((position, existing)) = lambda_slot(TypeId::of::<(K::Owned, Callback<F>)>()) else {
+///
+/// `site` identifies the lambda's code (a hash of its tokens): a slot kept by another lambda,
+/// which a region group missed by the macro's guess could hand this one, is a miss, so a missed
+/// group costs state, never a call of the wrong function.
+pub fn lambda_probe<K: LambdaKeys, F: ?Sized + 'static>(
+    site: u64,
+    keys: K,
+) -> LambdaProbe<K::Owned, F> {
+    let Some((position, existing)) = lambda_slot(TypeId::of::<(u64, K::Owned, Callback<F>)>())
+    else {
         return LambdaProbe::Miss(PendingLambda {
+            site,
             keys: keys.to_owned(),
             position: None,
             _function: std::marker::PhantomData,
         });
     };
     if let Some(existing) = existing
-        && let Some((kept, callback)) = existing.downcast_ref::<(K::Owned, Callback<F>)>()
+        && let Some((kept_site, kept, callback)) =
+            existing.downcast_ref::<(u64, K::Owned, Callback<F>)>()
+        && *kept_site == site
         && keys.same(kept)
     {
         return LambdaProbe::Hit(callback.clone());
     }
     LambdaProbe::Miss(PendingLambda {
+        site,
         keys: keys.to_owned(),
         position: Some(position),
         _function: std::marker::PhantomData,

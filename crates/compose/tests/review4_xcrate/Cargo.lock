@@ -14,6 +14,16 @@ dependencies = [
 name = "compose"
 version = "0.1.0"
 dependencies = [
+ "compose-foundation",
+ "compose-material3",
+ "compose-runtime",
+ "compose-ui",
+]
+
+[[package]]
+name = "compose-foundation"
+version = "0.1.0"
+dependencies = [
  "compose-runtime",
  "compose-ui",
 ]
@@ -25,6 +35,15 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "compose-material3"
+version = "0.1.0"
+dependencies = [
+ "compose-foundation",
+ "compose-runtime",
+ "compose-ui",
 ]
 
 [[package]]
