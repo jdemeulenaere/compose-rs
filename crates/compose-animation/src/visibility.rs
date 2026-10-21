@@ -344,15 +344,16 @@ pub(crate) fn AnimatedEnterExit(
             // `PostExit -> Visible` (its default spring); an exit interrupting an enter goes on
             // along the interruption spring unless its own spec is one.
             let returning = visible && leaving.get();
-            let entering = !visible
-                && [&progress.alpha, &progress.size, &progress.slide, &progress.scale]
-                    .iter()
-                    .any(|animatable| animatable.is_running());
-            let respec = move |spec: AnimationSpec| match spec {
+            // Per part: an exit interrupting that part's enter (still running) goes on along
+            // the interruption spring, unless its own spec is one; a finished part keeps its.
+            let respec = move |spec: AnimationSpec, running: bool| match spec {
                 _ if returning => default_spec(),
                 AnimationSpec::Spring(_) => spec,
-                _ if entering => AnimationSpec::Spring(spring()),
+                _ if running && !visible => AnimationSpec::Spring(spring()),
                 _ => spec,
+            };
+            let part = |animatable: &Animatable<f32>, spec: Option<AnimationSpec>| {
+                (animatable.clone(), spec.map(|spec| respec(spec, animatable.is_running())))
             };
             launched.set(visible);
             leaving.set(!visible);
@@ -360,10 +361,10 @@ pub(crate) fn AnimatedEnterExit(
             launches.set(launch);
             let target = if visible { 1.0 } else { 0.0 };
             let animations = [
-                (progress.alpha.clone(), parts.fade.map(|(_, spec)| respec(spec))),
-                (progress.size.clone(), parts.size.map(|(_, _, spec)| respec(spec))),
-                (progress.slide.clone(), parts.slide.map(|(_, spec)| respec(spec))),
-                (progress.scale.clone(), parts.scale.map(|(_, spec)| respec(spec))),
+                part(&progress.alpha, parts.fade.map(|(_, spec)| spec)),
+                part(&progress.size, parts.size.map(|(_, _, spec)| spec)),
+                part(&progress.slide, parts.slide.map(|(_, spec)| spec)),
+                part(&progress.scale, parts.scale.map(|(_, spec)| spec)),
             ];
             // The parts animate at once, each as a task. A part the transition doesn't animate
             // keeps its value while leaving (an exit without a shrink keeps the size), and is

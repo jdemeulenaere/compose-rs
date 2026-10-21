@@ -371,8 +371,8 @@ impl UiTree {
     }
 
     /// Whether Tab may stop at `node` coming from `focused`: it's within the bounds of each of
-    /// its ancestors, or the ancestors it's outside of (a list it's scrolled out of) hold the
-    /// focus too.
+    /// its ancestors that clip their content, or the ancestors it's outside of (a list it's
+    /// scrolled out of) hold the focus too.
     fn reachable_from(&self, node: NodeId, focused: Option<NodeId>) -> bool {
         let bounds = self.bounds_in_root(node);
         let mut ancestor = self.parent_of(node);
@@ -380,11 +380,14 @@ impl UiTree {
             if self.node(container).overlay {
                 break;
             }
+            // Only a container clipping its content (a scroll's viewport, `clip`) hides it.
+            let clips = self.node(container).chain.iter().any(|entry| entry.hit_clip().is_some());
             let outer = self.bounds_in_root(container);
-            let outside = bounds.right <= outer.left
-                || bounds.left >= outer.right
-                || bounds.bottom <= outer.top
-                || bounds.top >= outer.bottom;
+            let outside = clips
+                && (bounds.right <= outer.left
+                    || bounds.left >= outer.right
+                    || bounds.bottom <= outer.top
+                    || bounds.top >= outer.bottom);
             if outside && !focused.is_some_and(|focused| self.is_at_or_below(focused, container)) {
                 return false;
             }

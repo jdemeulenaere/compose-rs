@@ -29,8 +29,8 @@ pub struct FocusRequester {
 
 #[derive(Default)]
 struct RequesterInner {
-    /// The tree and node it's attached to, if any.
-    owner: RefCell<Option<(Weak<FocusRequests>, NodeId)>>,
+    /// The trees and nodes it's attached to, first attached first.
+    owners: RefCell<Vec<(Weak<FocusRequests>, NodeId)>>,
 }
 
 impl FocusRequester {
@@ -38,12 +38,17 @@ impl FocusRequester {
         FocusRequester::default()
     }
 
-    /// Moves focus to its node, as `requestFocus()`. Returns whether it's attached to one (a
-    /// requester whose node isn't composed does nothing).
+    /// Moves focus to its node (the first it was attached to, if several), as
+    /// `requestFocus()`. Returns whether it's attached to one (a requester whose node isn't
+    /// composed does nothing).
     pub fn request_focus(&self) -> bool {
-        let owner = self.inner.owner.borrow().clone();
+        let owner = self
+            .inner
+            .owners
+            .borrow()
+            .iter()
+            .find_map(|(requests, node)| Some((requests.upgrade()?, *node)));
         let Some((requests, node)) = owner else { return false };
-        let Some(requests) = requests.upgrade() else { return false };
         requests.pending.borrow_mut().push(node);
         let wake = requests.wake.borrow().clone();
         if let Some(wake) = wake {
@@ -52,12 +57,15 @@ impl FocusRequester {
         true
     }
 
-    pub(crate) fn attach(&self, requests: &Rc<FocusRequests>, node: NodeId) {
-        *self.inner.owner.borrow_mut() = Some((Rc::downgrade(requests), node));
+    fn attach(&self, requests: &Weak<FocusRequests>, node: NodeId) {
+        let mut owners = self.inner.owners.borrow_mut();
+        if !owners.iter().any(|(tree, at)| *at == node && tree.ptr_eq(requests)) {
+            owners.push((requests.clone(), node));
+        }
     }
 
-    fn detach(&self) {
-        self.inner.owner.borrow_mut().take();
+    fn detach(&self, requests: &Weak<FocusRequests>, node: NodeId) {
+        self.inner.owners.borrow_mut().retain(|(tree, at)| !(*at == node && tree.ptr_eq(requests)));
     }
 }
 
@@ -84,18 +92,34 @@ impl Modifier {
 
 struct FocusRequesterElement(FocusRequester);
 
-pub(crate) struct FocusRequesterNode(pub(crate) FocusRequester);
+pub(crate) struct FocusRequesterNode {
+    requester: FocusRequester,
+    /// The tree and node it's on, once attached.
+    owner: Option<(Weak<FocusRequests>, NodeId)>,
+}
+
+impl FocusRequesterNode {
+    /// Attaches its requester to `node` of the tree whose requests are `requests`.
+    pub(crate) fn attach(&mut self, requests: &Rc<FocusRequests>, node: NodeId) {
+        let owner = (Rc::downgrade(requests), node);
+        self.requester.attach(&owner.0, owner.1);
+        self.owner = Some(owner);
+    }
+}
 
 impl ModifierNodeElement for FocusRequesterElement {
     fn create(&self) -> Box<dyn ModifierNode> {
-        Box::new(FocusRequesterNode(self.0.clone()))
+        Box::new(FocusRequesterNode { requester: self.0.clone(), owner: None })
     }
     fn update(&self, node: &mut dyn ModifierNode) {
         if let Some(node) = node.downcast_mut::<FocusRequesterNode>()
-            && !node.0.same(&self.0)
+            && !node.requester.same(&self.0)
         {
-            node.0.detach();
-            node.0 = self.0.clone();
+            if let Some((requests, at)) = &node.owner {
+                node.requester.detach(requests, *at);
+                self.0.attach(requests, *at);
+            }
+            node.requester = self.0.clone();
         }
     }
     fn same(&self, other: &dyn ModifierNodeElement) -> bool {
@@ -108,6 +132,8 @@ impl ModifierNodeElement for FocusRequesterElement {
 
 impl ModifierNode for FocusRequesterNode {
     fn on_detach(&mut self, _context: &mut crate::modifier::DetachContext<'_>) {
-        self.0.detach();
+        if let Some((requests, at)) = self.owner.take() {
+            self.requester.detach(&requests, at);
+        }
     }
 }

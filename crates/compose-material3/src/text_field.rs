@@ -327,6 +327,7 @@ fn decorated_field(
             });
             let slots = slots.clone();
             let supporting_text = slots.supporting_text.clone();
+            let below = remember(|| Rc::new(SupportingLayout) as Rc<dyn MeasurePolicy>);
             let content = compose_runtime::callback(move || {
                 // Each icon in a 48 dp box, centered, as Compose's `IconDefaultSizeModifier`.
                 for (icon, color) in
@@ -384,11 +385,10 @@ fn decorated_field(
                 // The supporting text below the container, 16 dp in, 4 dp under it.
                 Some(supporting_text) => {
                     let (container, policy, content) = (container.clone(), policy.clone(), content);
-                    compose_foundation::layout::Column(
+                    compose_ui::Layout(
                         Modifier,
-                        compose_foundation::layout::Arrangement::Start,
-                        Alignment::START,
-                        compose_runtime::callback(move |_| {
+                        below,
+                        compose_runtime::callback(move || {
                             compose_ui::Layout(container.clone(), policy.clone(), content.clone());
                             let supporting_text = supporting_text.clone();
                             CompositionLocalProvider(
@@ -614,6 +614,36 @@ impl MeasurePolicy for DecorationLayout {
 
     fn debug_name(&self) -> &'static str {
         "TextFieldDecoration"
+    }
+}
+
+/// The field, then its supporting text below it, as wide as the field (wrapping within it),
+/// as Compose's text field layouts measure it.
+struct SupportingLayout;
+
+impl MeasurePolicy for SupportingLayout {
+    fn measure(
+        &self,
+        scope: &mut MeasureScope<'_>,
+        measurables: &[Measurable],
+        constraints: Constraints,
+    ) -> MeasureResult {
+        let [field, supporting] = measurables else {
+            return scope.layout(constraints.min_width, constraints.min_height);
+        };
+        let mut field_constraints = constraints;
+        field_constraints.min_height = 0;
+        let field = scope.measure(*field, field_constraints);
+        let supporting =
+            scope.measure(*supporting, Constraints::new(0, field.width, 0, constraints.max_height));
+        scope.place_relative(&field, 0, 0);
+        scope.place_relative(&supporting, 0, field.height);
+        let height = constraints.constrain_height(field.height + supporting.height);
+        scope.layout(field.width, height)
+    }
+
+    fn debug_name(&self) -> &'static str {
+        "TextFieldSupporting"
     }
 }
 

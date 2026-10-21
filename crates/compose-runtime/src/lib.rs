@@ -68,6 +68,12 @@ pub use state::{
 /// The number of composable bodies run on this thread so far (restart groups that didn't skip).
 /// For tests and frame statistics.
 #[doc(hidden)]
+/// Whether a composition pass is composing on this thread: state can't be written now (write
+/// from a task launched for after it instead).
+pub fn is_composing() -> bool {
+    runtime::try_with_runtime(|runtime| runtime.is_composing()).unwrap_or(false)
+}
+
 pub fn bodies_run() -> u64 {
     runtime::with_runtime(|runtime| runtime.bodies_run)
 }

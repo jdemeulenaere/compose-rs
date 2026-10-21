@@ -547,9 +547,9 @@ impl UiTree {
         let mut parent_data = ParentData::default();
         for (index, entry) in value.chain.iter_mut().enumerate() {
             if let Some(requester) =
-                entry.downcast_ref::<crate::focus_requester::FocusRequesterNode>()
+                entry.downcast_mut::<crate::focus_requester::FocusRequesterNode>()
             {
-                requester.0.attach(&focus_requests, node);
+                requester.attach(&focus_requests, node);
             }
             let custom = matches!(value.modifier.elements().get(index), Some(Element::Custom(_)));
             let bits = capabilities_of(&mut **entry) | if custom { capability::CUSTOM } else { 0 };

@@ -35,11 +35,11 @@ impl MutableInteractionSource {
     }
 
     pub(crate) fn set_focused(&self, focused: bool) {
-        self.focused.set(focused);
+        write_soon(&self.focused, focused);
     }
 
     pub(crate) fn set_hovered(&self, hovered: bool) {
-        self.hovered.set(hovered);
+        write_soon(&self.hovered, hovered);
     }
 
     /// Whether the clickable is pressed (by a pointer or a key), as `collectIsPressedAsState`:
@@ -49,7 +49,17 @@ impl MutableInteractionSource {
     }
 
     pub(crate) fn set_pressed(&self, pressed: bool) {
-        self.pressed.set(pressed);
+        write_soon(&self.pressed, pressed);
+    }
+}
+
+/// Writes `value` now or, while composing (a focus lost to a recomposition), right after.
+fn write_soon(state: &Rc<OwnedState<bool>>, value: bool) {
+    if compose_runtime::is_composing() {
+        let state = state.clone();
+        compose_runtime::CoroutineScope::new().launch(async move { state.set(value) });
+    } else {
+        state.set(value);
     }
 }
 

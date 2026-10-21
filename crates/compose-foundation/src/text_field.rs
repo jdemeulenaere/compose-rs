@@ -140,6 +140,7 @@ impl ModifierNodeElement for TextFieldElement {
             keyboard_actions: self.keyboard_actions.clone(),
             visual_transformation: self.visual_transformation.clone(),
             mapping: None,
+            shown_text: None,
         })
     }
 
@@ -194,6 +195,30 @@ impl ModifierNodeElement for TextFieldElement {
     fn name(&self) -> &'static str {
         "TextField"
     }
+}
+
+/// The start of the word before `offset` in `text`.
+fn previous_word_in(text: &str, offset: usize) -> usize {
+    text.split_word_bound_indices()
+        .rev()
+        .find(|(start, word)| *start < offset && word.chars().any(char::is_alphanumeric))
+        .map_or(0, |(start, _)| start)
+}
+
+/// The end of the word after `offset` in `text`.
+fn next_word_in(text: &str, offset: usize) -> usize {
+    text.split_word_bound_indices()
+        .map(|(start, word)| (start + word.len(), word))
+        .find(|(end, word)| *end > offset && word.chars().any(char::is_alphanumeric))
+        .map_or(text.len(), |(end, _)| end)
+}
+
+/// The word (or the run between words) at `offset` in `text`.
+fn word_at_in(text: &str, offset: usize) -> std::ops::Range<usize> {
+    text.split_word_bound_indices()
+        .map(|(start, word)| start..start + word.len())
+        .find(|range| range.contains(&offset) || range.end == offset && offset == text.len())
+        .unwrap_or(offset..offset)
 }
 
 fn floor_char_boundary(text: &str, offset: usize) -> usize {
@@ -304,6 +329,8 @@ pub struct TextFieldNode {
     visual_transformation: VisualTransformation,
     /// How the paragraph's offsets map to the text's, when it's transformed.
     mapping: Option<Rc<dyn OffsetMapping>>,
+    /// The transformed text shown, when it's transformed.
+    shown_text: Option<String>,
 }
 
 impl TextFieldNode {
@@ -458,33 +485,38 @@ impl TextFieldNode {
         self.text[offset..].graphemes(true).next().map_or(offset, |cluster| offset + cluster.len())
     }
 
-    /// The start of the word before `offset` (skipping what separates it), as a word motion.
+    /// The start of the word before `offset`: words as shown (a transformed text's), as
+    /// Compose finds them in the layout.
     fn previous_word(&self, offset: usize) -> usize {
-        self.text
-            .split_word_bound_indices()
-            .rev()
-            .find(|(start, word)| *start < offset && word.chars().any(char::is_alphanumeric))
-            .map_or(0, |(start, _)| start)
+        self.by_words(offset, |text, offset| previous_word_in(text, offset))
     }
 
     /// The end of the word after `offset`.
     fn next_word(&self, offset: usize) -> usize {
-        self.text
-            .split_word_bound_indices()
-            .map(|(start, word)| (start + word.len(), word))
-            .find(|(end, word)| *end > offset && word.chars().any(char::is_alphanumeric))
-            .map_or(self.text.len(), |(end, _)| end)
+        self.by_words(offset, |text, offset| next_word_in(text, offset))
     }
 
     /// The word (or the run between words) at `offset`: what a double-click selects.
     fn word_at(&self, offset: usize) -> std::ops::Range<usize> {
-        self.text
-            .split_word_bound_indices()
-            .map(|(start, word)| start..start + word.len())
-            .find(|range| {
-                range.contains(&offset) || range.end == offset && offset == self.text.len()
-            })
-            .unwrap_or(offset..offset)
+        match self.words_shown() {
+            Some(shown) => {
+                let range = word_at_in(shown, self.shown(offset));
+                self.original_of(range.start)..self.original_of(range.end)
+            }
+            None => word_at_in(&self.text, offset),
+        }
+    }
+
+    /// The transformed text words are found in, when it's shown (not while composing).
+    fn words_shown(&self) -> Option<&str> {
+        self.shown_text.as_deref().filter(|_| self.composition.is_none())
+    }
+
+    fn by_words(&self, offset: usize, find: impl Fn(&str, usize) -> usize) -> usize {
+        match self.words_shown() {
+            Some(shown) => self.original_of(find(shown, self.shown(offset))),
+            None => find(&self.text, offset),
+        }
     }
 
     /// The offset nearest to `position` (in the text's coordinates), from the measurer.
@@ -681,10 +713,12 @@ impl LayoutModifierNode for TextFieldNode {
                 let text = match self.visual_transformation.filter(&text) {
                     Some(transformed) => {
                         self.mapping = Some(transformed.offset_mapping);
+                        self.shown_text = Some(transformed.text.clone());
                         transformed.text
                     }
                     None => {
                         self.mapping = None;
+                        self.shown_text = None;
                         text
                     }
                 };
