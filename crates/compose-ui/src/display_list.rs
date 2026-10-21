@@ -52,6 +52,15 @@ pub enum DrawOp {
         ambient: crate::graphics::Color,
         spot: crate::graphics::Color,
     },
+    /// An arc of the oval in `oval`: from `start_angle` degrees (0 at 3 o'clock, clockwise),
+    /// over `sweep_angle`, closed through the center if `use_center`.
+    DrawArc {
+        oval: Rect,
+        start_angle: f32,
+        sweep_angle: f32,
+        use_center: bool,
+        paint: Paint,
+    },
     /// A path, scaled by `scale` then moved by `offset` (a vector image's viewport to its size).
     DrawPath {
         path: std::sync::Arc<crate::path::Path>,
@@ -165,6 +174,13 @@ impl DisplayList {
                     offset.y,
                     scale.0,
                     scale.1,
+                    paint_text(paint)
+                ),
+                DrawOp::DrawArc { oval, start_angle, sweep_angle, use_center, paint } => writeln!(
+                    out,
+                    "arc {} from {start_angle} sweep {sweep_angle}{} {}",
+                    rect_text(oval),
+                    if *use_center { " to center" } else { "" },
                     paint_text(paint)
                 ),
                 DrawOp::DrawShadow { outline, elevation, ambient, spot, .. } => {

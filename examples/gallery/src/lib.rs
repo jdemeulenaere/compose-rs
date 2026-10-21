@@ -142,6 +142,18 @@ fn Controls(count: MutableState<i32>) {
         Text!("Count: {}", count.get());
     });
     Slider!(level.get(), move |value| level.set(value));
+    Row!(
+        modifier = Modifier.padding_horizontal_vertical(0.dp(), 8.dp()),
+        horizontal_arrangement = Arrangement::spaced_by(16.dp()),
+        vertical_alignment = Alignment::CENTER_VERTICALLY,
+        |row: RowScope| {
+            CircularProgressIndicator!(level.get());
+            LinearProgressIndicator!(level.get(), modifier = Modifier.weight(row, 1.0));
+            if switched.get() {
+                IndeterminateCircularProgressIndicator!();
+            }
+        }
+    );
     AnimatedVisibility!(switched.get(), {
         Card!(modifier = Modifier.fill_max_width(), {
             Text!("Shown while the switch is on", modifier = Modifier.padding(12.dp()));

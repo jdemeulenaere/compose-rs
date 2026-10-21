@@ -69,7 +69,6 @@ impl ComposeTestRule {
         rule
     }
 
-    /// A rule over the fixed-advance measurer at density 1, in a root of `size`.
     /// A test rule whose clock moves only by `advance_time_by`, as a test that sets
     /// `mainClock.autoAdvance = false` before its content: animations and delays wait for it.
     pub fn with_manual_clock(content: impl Fn() + 'static) -> ComposeTestRule {
@@ -82,6 +81,7 @@ impl ComposeTestRule {
         rule
     }
 
+    /// A rule over the fixed-advance measurer at density 1, in a root of `size`.
     pub fn sized(size: IntSize, content: impl Fn() + 'static) -> ComposeTestRule {
         compose_test_with(size, Density::default(), Box::new(FixedTextMeasurer::new()), content)
     }

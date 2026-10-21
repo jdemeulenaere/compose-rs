@@ -197,7 +197,8 @@ fn painted(list: &compose_ui::DisplayList) -> Vec<(compose_ui::Rect, compose_ui:
             DrawOp::DrawLine(..)
             | DrawOp::Transform { .. }
             | DrawOp::DrawPath { .. }
-            | DrawOp::DrawShadow { .. } => {}
+            | DrawOp::DrawShadow { .. }
+            | DrawOp::DrawArc { .. } => {}
         }
     }
     out

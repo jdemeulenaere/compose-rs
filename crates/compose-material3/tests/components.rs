@@ -418,3 +418,57 @@ fn a_right_to_left_slider_runs_from_the_right() {
         list.dump()
     );
 }
+
+#[test]
+fn progress_indicators_draw_their_progress_and_animate_when_indeterminate() {
+    use compose_ui::DrawOp;
+    let mut ui = ComposeTestRule::with_manual_clock(|| {
+        MaterialTheme!({
+            Column!({
+                CircularProgressIndicator!(0.25, modifier = Modifier.test_tag("circular"));
+                LinearProgressIndicator!(0.5, modifier = Modifier.test_tag("linear"));
+                IndeterminateCircularProgressIndicator!();
+            });
+        });
+    });
+    // Sizes and semantics, as Compose's.
+    let circular = ui.on_node_with_tag("circular").fetch_semantics_node();
+    assert_eq!((circular.bounds.width(), circular.bounds.height()), (40.0, 40.0));
+    let info = circular.config.progress_bar_range_info.expect("a range");
+    assert_eq!((info.current, info.range), (0.25, (0.0, 1.0)));
+    let linear = ui.on_node_with_tag("linear").fetch_semantics_node().bounds;
+    assert_eq!((linear.width(), linear.height()), (240.0, 4.0));
+    // A quarter turn from the top; a line half way over its track.
+    let list = ui.host().display_list();
+    let arcs: Vec<(f32, f32)> = list
+        .ops
+        .iter()
+        .filter_map(|op| match op {
+            DrawOp::DrawArc { start_angle, sweep_angle, .. } => Some((*start_angle, *sweep_angle)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(arcs[0], (-90.0, 90.0));
+    let lines: Vec<f32> = list
+        .ops
+        .iter()
+        .filter_map(|op| match op {
+            DrawOp::DrawLine(from, to, _) => Some(to.x - from.x),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(lines, vec![240.0, 120.0]);
+    // The indeterminate arc moves frame to frame, drawing again only.
+    let first = arcs[1];
+    ui.advance_time_by(std::time::Duration::from_millis(300));
+    let list = ui.host().display_list();
+    let moved = list
+        .ops
+        .iter()
+        .filter_map(|op| match op {
+            DrawOp::DrawArc { start_angle, sweep_angle, .. } => Some((*start_angle, *sweep_angle)),
+            _ => None,
+        })
+        .nth(1);
+    assert_ne!(moved, Some(first));
+}

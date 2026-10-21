@@ -28,7 +28,11 @@ fn skia_paint(paint: &Paint) -> skia_safe::Paint {
         PaintStyle::Stroke(width) => {
             skia.set_style(paint::Style::Stroke);
             skia.set_stroke_width(width);
-            skia.set_stroke_cap(paint::Cap::Round);
+            skia.set_stroke_cap(match paint.cap {
+                compose_ui::StrokeCap::Butt => paint::Cap::Butt,
+                compose_ui::StrokeCap::Round => paint::Cap::Round,
+                compose_ui::StrokeCap::Square => paint::Cap::Square,
+            });
         }
     }
     skia
@@ -103,6 +107,15 @@ pub fn draw_display_list(canvas: &Canvas, list: &DisplayList, text_measurer: &dy
                         &paint,
                     );
                 }
+            }
+            DrawOp::DrawArc { oval, start_angle, sweep_angle, use_center, paint } => {
+                canvas.draw_arc(
+                    rect(oval),
+                    *start_angle,
+                    *sweep_angle,
+                    *use_center,
+                    &skia_paint(paint),
+                );
             }
             DrawOp::DrawShadow { outline, elevation, light, light_radius, ambient, spot } => {
                 let mut path = skia_safe::PathBuilder::new();

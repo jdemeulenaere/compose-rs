@@ -207,20 +207,46 @@ pub enum PaintStyle {
     Stroke(f32),
 }
 
+/// How a stroke's open ends are drawn, as `StrokeCap`.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
+pub enum StrokeCap {
+    /// Cut flat at the end.
+    #[default]
+    Butt,
+    /// A half circle past the end.
+    Round,
+    /// A half square past the end.
+    Square,
+}
+
+impl compose_runtime::ComposeArg for StrokeCap {
+    fn same(&self, other: &Self) -> bool {
+        self == other
+    }
+}
+
 /// What a draw operation paints with, as a subset of Compose's `Paint`.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Paint {
     pub color: Color,
     pub style: PaintStyle,
+    /// A stroke's ends.
+    pub cap: StrokeCap,
 }
 
 impl Paint {
     pub fn fill(color: Color) -> Paint {
-        Paint { color, style: PaintStyle::Fill }
+        Paint { color, style: PaintStyle::Fill, cap: StrokeCap::Butt }
     }
 
+    /// A stroke `width` pixels wide, its ends flat, as `Stroke(width)`.
     pub fn stroke(color: Color, width: f32) -> Paint {
-        Paint { color, style: PaintStyle::Stroke(width) }
+        Paint::stroke_capped(color, width, StrokeCap::Butt)
+    }
+
+    /// A stroke with `cap` ends, as `Stroke(width, cap = …)`.
+    pub fn stroke_capped(color: Color, width: f32, cap: StrokeCap) -> Paint {
+        Paint { color, style: PaintStyle::Stroke(width), cap }
     }
 }
 

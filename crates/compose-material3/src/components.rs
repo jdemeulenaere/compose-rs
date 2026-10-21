@@ -447,7 +447,12 @@ impl DrawModifierNode for CheckboxNode {
         if self.checked {
             let fill = if self.enabled { colors.checked_box_color } else { colors.disabled_color };
             scope.draw_round_rect(box_rect, [radius; 4], Paint::fill(fill));
-            let check = Paint::stroke(colors.checked_check_color, stroke);
+            // Square ends, as Compose's check mark.
+            let check = Paint::stroke_capped(
+                colors.checked_check_color,
+                stroke,
+                compose_ui::StrokeCap::Square,
+            );
             let point = |x: f32, y: f32| Offset::new(size.width * x, size.height * y);
             scope.draw_line(point(0.2, 0.5), point(0.4, 0.7), check);
             scope.draw_line(point(0.4, 0.7), point(0.8, 0.3), check);

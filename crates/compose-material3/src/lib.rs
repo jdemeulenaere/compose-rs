@@ -12,6 +12,7 @@ extern crate compose_runtime as compose;
 mod components;
 mod dialog;
 mod icon;
+mod progress;
 mod scaffold;
 mod selection;
 mod theme;
@@ -24,6 +25,10 @@ pub use components::{
 };
 pub use dialog::{AlertDialog, DropdownMenu, DropdownMenuItem};
 pub use icon::{FloatingActionButton, Icon, IconButton, icons};
+pub use progress::{
+    CircularProgressIndicator, IndeterminateCircularProgressIndicator,
+    IndeterminateLinearProgressIndicator, LinearProgressIndicator, ProgressIndicatorDefaults,
+};
 pub use scaffold::{
     Card, CardColors, CardDefaults, HorizontalDivider, Scaffold, TopAppBar, TopAppBarColors,
     TopAppBarDefaults, VerticalDivider,
@@ -42,7 +47,7 @@ pub use theme::{
 pub use compose_foundation::{ScrollState, remember_scroll_state};
 pub use compose_ui::{
     AnnotatedString, Color, Dp, FontFamily, FontStyle, IntOffset, Modifier, RECTANGLE_SHAPE, Sp,
-    SpanStyle, TextAlign, TextDecoration, TextOverflow,
+    SpanStyle, StrokeCap, TextAlign, TextDecoration, TextOverflow,
 };
 
 pub(crate) use selection::blend as selection_blend;

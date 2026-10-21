@@ -67,6 +67,19 @@ impl DrawScope<'_> {
         }
     }
 
+    /// Draws an arc of the oval in `oval` from `start_angle` degrees (0 at 3 o'clock,
+    /// clockwise) over `sweep_angle`, as `drawArc(useCenter = false)`.
+    pub fn draw_arc(&mut self, oval: Rect, start_angle: f32, sweep_angle: f32, paint: Paint) {
+        let oval = self.to_list(oval);
+        self.list.push(DrawOp::DrawArc {
+            oval,
+            start_angle,
+            sweep_angle,
+            use_center: false,
+            paint,
+        });
+    }
+
     pub fn draw_line(&mut self, from: Offset, to: Offset, paint: Paint) {
         let (from, to) = (from + self.origin, to + self.origin);
         self.list.push(DrawOp::DrawLine(from, to, paint));
