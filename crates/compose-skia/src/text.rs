@@ -24,6 +24,23 @@ const DEFAULT_FAMILIES: &[&str] = &[
     "sans-serif",
 ];
 
+/// The families SkParagraph tries for `family`, the default ones after a named one.
+fn families(family: Option<compose_ui::FontFamily>) -> Vec<&'static str> {
+    use compose_ui::FontFamily;
+    let generic: &[&str] = match family {
+        None | Some(FontFamily::SansSerif) => return DEFAULT_FAMILIES.to_vec(),
+        Some(FontFamily::Serif) => &["Noto Serif", "Times New Roman", "Times", "Georgia", "serif"],
+        Some(FontFamily::Monospace) => {
+            &["Roboto Mono", "Menlo", "SF Mono", "Consolas", "DejaVu Sans Mono", "monospace"]
+        }
+        Some(FontFamily::Cursive) => &["Apple Chancery", "Comic Sans MS", "cursive"],
+        Some(FontFamily::Named(name)) => {
+            return std::iter::once(name).chain(DEFAULT_FAMILIES.iter().copied()).collect();
+        }
+    };
+    generic.iter().chain(DEFAULT_FAMILIES).copied().collect()
+}
+
 struct Entry {
     paragraph: Paragraph,
     text: String,
@@ -132,13 +149,31 @@ impl TextMeasurer for SkiaTextMeasurer {
         let color = if style.color.is_specified() { style.color } else { compose_ui::Color::BLACK };
         text_style.set_color(skia_safe::Color::new(color.argb()));
         text_style.set_font_size(font_px);
-        text_style.set_font_families(DEFAULT_FAMILIES);
-        let weight = font_style::Weight::from(style.font_weight.0 as i32);
+        text_style.set_font_families(&families(style.font_family));
+        let weight = style.font_weight.unwrap_or(compose_ui::FontWeight::NORMAL);
+        let slant = match style.font_style {
+            Some(compose_ui::FontStyle::Italic) => font_style::Slant::Italic,
+            _ => font_style::Slant::Upright,
+        };
         text_style.set_font_style(FontStyle::new(
-            weight,
+            font_style::Weight::from(weight.0 as i32),
             font_style::Width::NORMAL,
-            font_style::Slant::Upright,
+            slant,
         ));
+        if style.letter_spacing.is_specified() {
+            text_style.set_letter_spacing(density.sp_to_px(style.letter_spacing));
+        }
+        if let Some(decoration) = style.text_decoration {
+            let mut kind = skia_safe::textlayout::TextDecoration::NO_DECORATION;
+            if decoration.underline {
+                kind |= skia_safe::textlayout::TextDecoration::UNDERLINE;
+            }
+            if decoration.line_through {
+                kind |= skia_safe::textlayout::TextDecoration::LINE_THROUGH;
+            }
+            text_style.set_decoration_type(kind);
+            text_style.set_decoration_color(skia_safe::Color::new(color.argb()));
+        }
         if style.line_height.is_specified() && font_px > 0.0 {
             text_style.set_height(density.sp_to_px(style.line_height) / font_px);
             text_style.set_height_override(true);
@@ -152,14 +187,31 @@ impl TextMeasurer for SkiaTextMeasurer {
         if right_to_left {
             paragraph_style.set_text_direction(skia_safe::textlayout::TextDirection::RTL);
         }
-        if options.max_lines != u32::MAX {
-            paragraph_style.set_max_lines(options.max_lines.max(1) as usize);
+        if let Some(align) = style.text_align {
+            use skia_safe::textlayout::TextAlign as Align;
+            paragraph_style.set_text_align(match align {
+                compose_ui::TextAlign::Left => Align::Left,
+                compose_ui::TextAlign::Right => Align::Right,
+                compose_ui::TextAlign::Center => Align::Center,
+                compose_ui::TextAlign::Justify => Align::Justify,
+                compose_ui::TextAlign::Start => Align::Start,
+                compose_ui::TextAlign::End => Align::End,
+            });
+        }
+        // As Compose: an ellipsis without soft wrapping is one line.
+        let ellipsis = options.overflow == compose_ui::TextOverflow::Ellipsis;
+        let max_lines = if ellipsis && !options.soft_wrap { 1 } else { options.max_lines };
+        if max_lines != u32::MAX {
+            paragraph_style.set_max_lines(max_lines.max(1) as usize);
+        }
+        if ellipsis {
+            paragraph_style.set_ellipsis("\u{2026}");
         }
         let mut builder = ParagraphBuilder::new(&paragraph_style, self.collection.clone());
         builder.push_style(&text_style);
         builder.add_text(text);
         let mut paragraph = builder.build();
-        let width = if options.soft_wrap && constraints.has_bounded_width() {
+        let width = if (options.soft_wrap || ellipsis) && constraints.has_bounded_width() {
             constraints.max_width as f32
         } else {
             f32::INFINITY

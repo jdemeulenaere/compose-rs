@@ -22,20 +22,33 @@ pub fn Text(
     #[default(crate::Modifier)] modifier: Modifier,
     #[default(crate::Color::UNSPECIFIED)] color: Color,
     #[default(crate::Sp::UNSPECIFIED)] font_size: Sp,
+    #[default(None)] font_style: Option<compose_ui::FontStyle>,
     #[default(None)] font_weight: Option<FontWeight>,
+    #[default(None)] font_family: Option<compose_ui::FontFamily>,
+    #[default(crate::Sp::UNSPECIFIED)] letter_spacing: Sp,
+    #[default(None)] text_decoration: Option<compose_ui::TextDecoration>,
+    #[default(None)] text_align: Option<compose_ui::TextAlign>,
     #[default(crate::Sp::UNSPECIFIED)] line_height: Sp,
+    #[default(crate::TextOverflow::Clip)] overflow: compose_ui::TextOverflow,
     #[default(true)] soft_wrap: bool,
     #[default(u32::MAX)] max_lines: u32,
     #[default(crate::LOCAL_TEXT_STYLE.current())] style: TextStyle,
 ) {
+    // The parameters over the style, as Compose's `Text`; the color by default the content
+    // color.
     let color = color.or(style.color).or(LOCAL_CONTENT_COLOR.current());
-    let style = TextStyle {
+    let style = style.merge(&TextStyle {
         color,
-        font_size: if font_size.is_specified() { font_size } else { style.font_size },
-        font_weight: font_weight.unwrap_or(style.font_weight),
-        line_height: if line_height.is_specified() { line_height } else { style.line_height },
-    };
-    BasicText(text, modifier, style, soft_wrap, max_lines);
+        font_size,
+        font_weight,
+        font_style,
+        font_family,
+        letter_spacing,
+        text_decoration,
+        text_align,
+        line_height,
+    });
+    BasicText(text, modifier, style, overflow, soft_wrap, max_lines);
 }
 
 // ---- Surface ---------------------------------------------------------------------------------

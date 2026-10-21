@@ -206,6 +206,7 @@ mod tests {
                         "Save".into(),
                         Modifier,
                         compose_ui::TextStyle::DEFAULT,
+                        compose_ui::TextOverflow::Clip,
                         true,
                         u32::MAX,
                     )

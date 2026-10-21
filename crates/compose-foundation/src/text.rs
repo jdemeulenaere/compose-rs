@@ -10,19 +10,21 @@ use compose_ui::{
     TextLayoutOptions, TextStyle, empty_measure_policy,
 };
 
-/// Text, as Compose's `BasicText`: no theme, the style as given.
+/// Text, as Compose's `BasicText`: no theme, the style as given; what doesn't fit is cut,
+/// ends with "…" or is drawn past its bounds (`overflow`).
 #[composable]
 pub fn BasicText(
     #[format] text: SharedString,
     #[default(crate::Modifier)] modifier: Modifier,
     #[default(crate::TextStyle::DEFAULT)] style: TextStyle,
+    #[default(crate::TextOverflow::Clip)] overflow: compose_ui::TextOverflow,
     #[default(true)] soft_wrap: bool,
     #[default(u32::MAX)] max_lines: u32,
 ) {
     let element = TextElement {
         text,
         style,
-        options: TextLayoutOptions { soft_wrap, max_lines, ..Default::default() },
+        options: TextLayoutOptions { soft_wrap, max_lines, overflow, ..Default::default() },
     };
     Layout(modifier.then_custom(element), empty_measure_policy(), compose_runtime::callback(|| {}));
 }
@@ -159,7 +161,7 @@ impl LayoutModifierNode for TextNode {
 impl DrawModifierNode for TextNode {
     fn draw(&mut self, scope: &mut DrawScope<'_>) {
         if let Some(paragraph) = self.paragraph {
-            if self.overflows {
+            if self.overflows && self.options.overflow != compose_ui::TextOverflow::Visible {
                 scope.save();
                 scope.clip_outline(compose_ui::Outline::Rectangle(scope.bounds()));
                 scope.draw_paragraph(paragraph, Offset::ZERO);

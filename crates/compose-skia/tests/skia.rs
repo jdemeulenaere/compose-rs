@@ -151,3 +151,46 @@ fn shadows_darken_beneath_an_elevated_shape() {
     assert_eq!(renderer.pixel(100, 100), Color::WHITE, "the shape itself");
     assert_eq!(renderer.pixel(2, 2), Color::WHITE, "far from it");
 }
+
+#[test]
+fn text_styles_change_the_layout_as_compose() {
+    use compose::ui::{FontFamily, FontStyle, Sp, TextAlign, TextOverflow};
+    let mut measurer = SkiaTextMeasurer::new();
+    let density = Density::default();
+    let options = TextLayoutOptions::default();
+    let unbounded = Constraints::unbounded();
+    let width = |measurer: &mut SkiaTextMeasurer, style: TextStyle, options| {
+        let paragraph = measurer.layout("Hello world", &style, options, unbounded, &density);
+        let width = measurer.metrics(paragraph).size.width;
+        measurer.release(paragraph);
+        width
+    };
+    let plain = width(&mut measurer, TextStyle::DEFAULT, options);
+    // Letter spacing: 2 px more per character (11 of them).
+    let spaced = TextStyle { letter_spacing: Sp(2.0), ..TextStyle::DEFAULT };
+    assert!((width(&mut measurer, spaced, options) - plain - 22).abs() <= 2);
+    // Another family or slant measures differently.
+    let mono = TextStyle { font_family: Some(FontFamily::Monospace), ..TextStyle::DEFAULT };
+    assert_ne!(width(&mut measurer, mono, options), plain);
+    let italic = TextStyle { font_style: Some(FontStyle::Italic), ..TextStyle::DEFAULT };
+    let _ = width(&mut measurer, italic, options);
+    // An ellipsis keeps one line in the width, without soft wrap.
+    let narrow = Constraints::at_most(plain / 2, 1000);
+    let ellipsis = TextLayoutOptions {
+        soft_wrap: false,
+        overflow: TextOverflow::Ellipsis,
+        ..TextLayoutOptions::default()
+    };
+    let cut = measurer.layout("Hello world", &TextStyle::DEFAULT, ellipsis, narrow, &density);
+    let metrics = measurer.metrics(cut);
+    assert_eq!(metrics.line_count, 1);
+    assert!(metrics.size.width <= plain / 2, "{metrics:?}");
+    measurer.release(cut);
+    // Centered in a fixed width: the first character starts in the middle.
+    let centered = TextStyle { text_align: Some(TextAlign::Center), ..TextStyle::DEFAULT };
+    let fixed = Constraints::fixed(plain * 3, 100);
+    let paragraph = measurer.layout("Hello world", &centered, options, fixed, &density);
+    let start = measurer.cursor_rect(paragraph, 0);
+    assert!((start.left - plain as f32).abs() <= 2.0, "{start:?}");
+    measurer.release(paragraph);
+}

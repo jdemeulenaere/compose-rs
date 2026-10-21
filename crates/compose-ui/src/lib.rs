@@ -66,8 +66,9 @@ pub use semantics::{
     ToggleableState,
 };
 pub use text::{
-    FixedTextMeasurer, FontWeight, ParagraphHandle, ParagraphMetrics, SharedString,
-    TextLayoutOptions, TextMeasurer, TextPosition, TextStyle,
+    FixedTextMeasurer, FontFamily, FontStyle, FontWeight, ParagraphHandle, ParagraphMetrics,
+    SharedString, TextAlign, TextDecoration, TextLayoutOptions, TextMeasurer, TextOverflow,
+    TextPosition, TextStyle,
 };
 pub use tree::{LayoutNode, NodeId, UiTree};
 pub use unit::{Density, Dp, IntOffset, IntSize, Offset, Rect, Size, Sp, UnitExt, round_to_int};

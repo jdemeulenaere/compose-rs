@@ -39,7 +39,10 @@ pub use theme::{
 // What the defaults of the composables name through `crate::`.
 #[doc(hidden)]
 pub use compose_foundation::{ScrollState, remember_scroll_state};
-pub use compose_ui::{Color, Dp, IntOffset, Modifier, RECTANGLE_SHAPE, Sp};
+pub use compose_ui::{
+    Color, Dp, FontFamily, FontStyle, IntOffset, Modifier, RECTANGLE_SHAPE, Sp, TextAlign,
+    TextDecoration, TextOverflow,
+};
 
 pub(crate) use selection::blend as selection_blend;
 

@@ -158,10 +158,10 @@ pub struct Typography {
 
 const fn style(size: f32, line_height: f32, weight: FontWeight) -> TextStyle {
     TextStyle {
-        color: Color::UNSPECIFIED,
         font_size: Sp(size),
-        font_weight: weight,
+        font_weight: Some(weight),
         line_height: Sp(line_height),
+        ..TextStyle::DEFAULT
     }
 }
 

@@ -115,39 +115,126 @@ impl FontWeight {
     pub const BOLD: FontWeight = FontWeight(700);
 }
 
-/// A subset of Compose's `TextStyle`.
+/// Upright or italic, as `FontStyle`.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum FontStyle {
+    Normal,
+    Italic,
+}
+
+/// A font family, as `FontFamily`: the generic ones, or a family installed on the system by
+/// name (falling back to the default).
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum FontFamily {
+    SansSerif,
+    Serif,
+    Monospace,
+    Cursive,
+    Named(&'static str),
+}
+
+/// Lines drawn through or under text, as `TextDecoration` (combinable with `|`).
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
+pub struct TextDecoration {
+    pub underline: bool,
+    pub line_through: bool,
+}
+
+impl TextDecoration {
+    pub const NONE: TextDecoration = TextDecoration { underline: false, line_through: false };
+    pub const UNDERLINE: TextDecoration = TextDecoration { underline: true, line_through: false };
+    pub const LINE_THROUGH: TextDecoration =
+        TextDecoration { underline: false, line_through: true };
+}
+
+impl std::ops::BitOr for TextDecoration {
+    type Output = TextDecoration;
+    fn bitor(self, other: TextDecoration) -> TextDecoration {
+        TextDecoration {
+            underline: self.underline || other.underline,
+            line_through: self.line_through || other.line_through,
+        }
+    }
+}
+
+/// How lines sit in a paragraph's width, as `TextAlign`: `Start` and `End` follow the text's
+/// direction.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum TextAlign {
+    Left,
+    Right,
+    Center,
+    Justify,
+    Start,
+    End,
+}
+
+/// What shows when text doesn't fit, as `TextOverflow`.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
+pub enum TextOverflow {
+    /// Cut at the bounds.
+    #[default]
+    Clip,
+    /// The last line shown ends with "…".
+    Ellipsis,
+    /// Drawn past the bounds.
+    Visible,
+}
+
+macro_rules! compose_arg_by_eq {
+    ($($type:ty),*) => {
+        $(impl ComposeArg for $type {
+            fn same(&self, other: &Self) -> bool {
+                self == other
+            }
+        })*
+    };
+}
+
+compose_arg_by_eq!(FontStyle, FontFamily, TextDecoration, TextAlign, TextOverflow);
+
+/// How text looks, as Compose's `TextStyle`: what isn't set (`None`, unspecified) comes from
+/// the style it's merged over, or the measurer's defaults.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct TextStyle {
     pub color: Color,
     pub font_size: Sp,
-    pub font_weight: FontWeight,
+    pub font_weight: Option<FontWeight>,
+    pub font_style: Option<FontStyle>,
+    pub font_family: Option<FontFamily>,
+    pub letter_spacing: Sp,
+    pub text_decoration: Option<TextDecoration>,
+    pub text_align: Option<TextAlign>,
     pub line_height: Sp,
 }
 
 impl TextStyle {
-    /// As `TextStyle.Default`: unspecified color and size, which the theme or measurer resolves.
+    /// As `TextStyle.Default`: nothing set, which the theme or measurer resolves.
     pub const DEFAULT: TextStyle = TextStyle {
         color: Color::UNSPECIFIED,
         font_size: Sp::UNSPECIFIED,
-        font_weight: FontWeight::NORMAL,
+        font_weight: None,
+        font_style: None,
+        font_family: None,
+        letter_spacing: Sp::UNSPECIFIED,
+        text_decoration: None,
+        text_align: None,
         line_height: Sp::UNSPECIFIED,
     };
 
-    /// `other`'s specified fields over these, as `merge`.
+    /// `other`'s set fields over these, as `merge`.
     pub fn merge(&self, other: &TextStyle) -> TextStyle {
+        let sp = |other: Sp, this: Sp| if other.is_specified() { other } else { this };
         TextStyle {
             color: other.color.or(self.color),
-            font_size: if other.font_size.is_specified() {
-                other.font_size
-            } else {
-                self.font_size
-            },
-            font_weight: other.font_weight,
-            line_height: if other.line_height.is_specified() {
-                other.line_height
-            } else {
-                self.line_height
-            },
+            font_size: sp(other.font_size, self.font_size),
+            font_weight: other.font_weight.or(self.font_weight),
+            font_style: other.font_style.or(self.font_style),
+            font_family: other.font_family.or(self.font_family),
+            letter_spacing: sp(other.letter_spacing, self.letter_spacing),
+            text_decoration: other.text_decoration.or(self.text_decoration),
+            text_align: other.text_align.or(self.text_align),
+            line_height: sp(other.line_height, self.line_height),
         }
     }
 }
@@ -163,6 +250,11 @@ impl ComposeArg for TextStyle {
         self.color == other.color
             && self.font_size.same(&other.font_size)
             && self.font_weight == other.font_weight
+            && self.font_style == other.font_style
+            && self.font_family == other.font_family
+            && self.letter_spacing.same(&other.letter_spacing)
+            && self.text_decoration == other.text_decoration
+            && self.text_align == other.text_align
             && self.line_height.same(&other.line_height)
     }
 }
@@ -198,6 +290,8 @@ pub struct TextLayoutOptions {
     /// The paragraph's direction when its text has no strong character (the layout's), as
     /// `TextDirection.Content`'s fallback.
     pub direction: crate::alignment::LayoutDirection,
+    /// What shows when the text doesn't fit its lines or width.
+    pub overflow: TextOverflow,
 }
 
 impl Default for TextLayoutOptions {
@@ -206,6 +300,7 @@ impl Default for TextLayoutOptions {
             soft_wrap: true,
             max_lines: u32::MAX,
             direction: crate::alignment::LayoutDirection::Ltr,
+            overflow: TextOverflow::Clip,
         }
     }
 }
@@ -304,7 +399,13 @@ impl TextMeasurer for FixedTextMeasurer {
         let font_size =
             if style.font_size.is_specified() { style.font_size } else { DEFAULT_FONT_SIZE };
         let font_px = density.sp_to_px(font_size);
-        let advance = font_px * 0.5;
+        // Letter spacing widens each character's advance.
+        let spacing = if style.letter_spacing.is_specified() {
+            density.sp_to_px(style.letter_spacing)
+        } else {
+            0.0
+        };
+        let advance = font_px * 0.5 + spacing;
         let line_height = if style.line_height.is_specified() {
             density.sp_to_px(style.line_height)
         } else {
