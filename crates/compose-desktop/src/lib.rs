@@ -136,12 +136,20 @@ struct Shown {
     title: String,
     resizable: bool,
     size: WindowSize,
+    visible: bool,
+    layout_direction: compose_ui::LayoutDirection,
+    background: Color,
+    /// The next frame renders even if nothing drew (a new background).
+    force_render: bool,
+    /// The next redraw was asked for to step animations: unless it draws, nothing is presented.
+    pacing: bool,
     frames: u64,
     last_frame: Instant,
 }
 
 struct App {
-    application: Application,
+    /// `None` once the application has exited (its composition disposed).
+    application: Option<Application>,
     windows: HashMap<WindowId, Shown>,
     /// The order windows were opened in (the first is the one screenshots show).
     opened: Vec<WindowId>,
@@ -162,19 +170,17 @@ impl App {
     /// Opens the windows the application's composition has and closes the ones it lost; exits
     /// when none is left.
     fn sync_windows(&mut self, event_loop: &ActiveEventLoop) {
-        let handles = self.application.windows();
+        let Some(application) = &self.application else { return };
+        let handles = application.windows();
         if handles.is_empty() {
-            event_loop.exit();
+            self.exit(event_loop);
             return;
         }
-        // Gone or hidden: closed.
+        // Gone from the composition: closed (a hidden one stays, its composition kept).
         let gone: Vec<WindowId> = self
             .windows
             .iter()
-            .filter(|(_, shown)| {
-                !shown.handle.is_visible()
-                    || !handles.iter().any(|handle| Rc::ptr_eq(handle, &shown.handle))
-            })
+            .filter(|(_, shown)| !handles.iter().any(|handle| Rc::ptr_eq(handle, &shown.handle)))
             .map(|(id, _)| *id)
             .collect();
         for id in gone {
@@ -182,7 +188,7 @@ impl App {
         }
         for handle in handles {
             let shown = self.windows.values().any(|shown| Rc::ptr_eq(&shown.handle, &handle));
-            if !shown && handle.is_visible() {
+            if !shown {
                 self.open(event_loop, handle);
             }
         }
@@ -196,6 +202,22 @@ impl App {
             if props.resizable != shown.resizable {
                 shown.resizable = props.resizable;
                 shown.window.set_resizable(props.resizable);
+            }
+            if props.visible != shown.visible {
+                shown.visible = props.visible;
+                shown.window.set_visible(props.visible);
+                if props.visible {
+                    shown.window.request_redraw();
+                }
+            }
+            if props.layout_direction != shown.layout_direction {
+                shown.layout_direction = props.layout_direction;
+                shown.host.set_layout_direction(props.layout_direction);
+            }
+            if props.background != shown.background {
+                shown.background = props.background;
+                shown.force_render = true;
+                shown.window.request_redraw();
             }
             drop(props);
             let size = shown.handle.window_state().size();
@@ -235,7 +257,10 @@ impl App {
             &window,
             self.proxy.clone(),
         );
-        window.set_visible(true);
+        // A hidden window is made, its content composed, and shown when it turns visible.
+        if props.visible {
+            window.set_visible(true);
+        }
         window.set_ime_allowed(true);
         let context = softbuffer::Context::new(window.clone()).expect("compose-desktop: a display");
         let surface =
@@ -264,7 +289,8 @@ impl App {
         host.set_content(move || content.compose_content());
         let renderer = RasterRenderer::new(physical.width as i32, physical.height as i32);
         window.request_redraw();
-        let (title, resizable) = (props.title.clone(), props.resizable);
+        let (title, resizable, visible) = (props.title.clone(), props.resizable, props.visible);
+        let (layout_direction, background) = (props.layout_direction, props.background);
         drop(props);
         let id = window.id();
         self.opened.push(id);
@@ -284,6 +310,11 @@ impl App {
                 title,
                 resizable,
                 size,
+                visible,
+                layout_direction,
+                background,
+                force_render: false,
+                pacing: false,
                 frames: 0,
                 last_frame: Instant::now(),
             },
@@ -291,9 +322,15 @@ impl App {
     }
 
     fn redraw(&mut self, event_loop: &ActiveEventLoop, id: WindowId) {
+        // The application's state first, as Compose recomposes it before its windows: a
+        // window's content never mixes values from before and after a change.
+        if self.application.as_ref().is_some_and(|application| application.recompose()) {
+            self.sync_windows(event_loop);
+        }
         let Some(shown) = self.windows.get_mut(&id) else { return };
         let start = Instant::now();
         shown.last_frame = start;
+        let pacing = std::mem::take(&mut shown.pacing);
         let stats = shown.host.frame();
         let composed = Instant::now();
         let size = shown.window.inner_size();
@@ -304,10 +341,17 @@ impl App {
         };
         let resized = shown.renderer.size() != (size.width as i32, size.height as i32);
         shown.renderer.resize(size.width as i32, size.height as i32);
+        let render = stats.drew || resized || shown.frames == 0 || shown.force_render;
+        // A frame only stepping animations that drew nothing presents nothing.
+        if pacing && !render {
+            shown.frames += 1;
+            return;
+        }
         // Render only what changed (or a new size); present either way (the system may have
         // asked for the window's content again).
-        if stats.drew || resized || shown.frames == 0 {
-            let background = shown.handle.props.borrow().background;
+        if render {
+            shown.force_render = false;
+            let background = shown.background;
             let renderer = &mut shown.renderer;
             shown.host.with_tree(|tree| {
                 renderer.render(tree.display_list(), background, 1.0, tree.text_measurer_ref())
@@ -389,13 +433,19 @@ impl App {
         }
     }
 
-    /// Closes every window and ends the loop.
+    /// Closes every window, disposes the application's composition, and ends the loop.
     fn exit(&mut self, event_loop: &ActiveEventLoop) {
+        self.dispose();
+        event_loop.exit();
+    }
+
+    fn dispose(&mut self) {
         let opened = self.opened.clone();
         for id in opened {
             self.close(id);
         }
-        event_loop.exit();
+        self.windows.clear();
+        self.application = None;
     }
 }
 
@@ -445,12 +495,9 @@ impl ApplicationHandler<UserEvent> for App {
                 let Some(shown) = self.windows.get_mut(&id) else { return };
                 match input::handle(&mut shown.input, &mut shown.host, &event) {
                     input::Outcome::Close => shown.handle.request_close(),
-                    // Quitting asks every window, so each can keep the application open.
-                    input::Outcome::Quit => {
-                        for shown in self.windows.values() {
-                            shown.handle.request_close();
-                        }
-                    }
+                    // Quitting ends the application (on macOS the app menu's Quit takes Cmd+Q
+                    // first, and ends it the same way).
+                    input::Outcome::Quit => application::exit_application(),
                     input::Outcome::Handled => {
                         self.first_input.get_or_insert_with(Instant::now);
                         // The pointer's look where it now is.
@@ -510,13 +557,25 @@ impl ApplicationHandler<UserEvent> for App {
             self.exit(event_loop);
             return;
         }
-        // The application's state changed: its windows come and go.
-        if self.application.recompose() {
-            self.sync_windows(event_loop);
+        // The application's state changed: its windows come and go. Their properties (a size
+        // set from a handler, say) apply at every turn.
+        if let Some(application) = &self.application {
+            application.recompose();
         }
+        self.sync_windows(event_loop);
         let now = Instant::now();
         let mut next_frame = None;
-        for shown in self.windows.values() {
+        // Animations step on one window's frames (the first shown): the others redraw when
+        // what they show changes.
+        let pacer = self
+            .opened
+            .iter()
+            .find(|id| self.windows.get(id).is_some_and(|shown| shown.visible))
+            .copied();
+        for (id, shown) in self.windows.iter_mut() {
+            if !shown.visible {
+                continue;
+            }
             // A field committed or dropped its composition itself (a click, a focus change): the
             // input method starts over, so it doesn't commit the text again.
             if shown.host.take_input_method_reset() {
@@ -525,10 +584,11 @@ impl ApplicationHandler<UserEvent> for App {
             }
             if shown.host.has_pending_work() {
                 shown.window.request_redraw();
-            } else if compose_runtime::executor::has_frame_awaiters() {
+            } else if Some(*id) == pacer && compose_runtime::executor::has_frame_awaiters() {
                 // An animation: its next frame a refresh interval after the last one.
                 let due = shown.last_frame + self.frame_interval;
                 if now >= due {
+                    shown.pacing = true;
                     shown.window.request_redraw();
                 } else {
                     next_frame = Some(next_frame.map_or(due, |next: Instant| next.min(due)));
@@ -545,16 +605,17 @@ impl ApplicationHandler<UserEvent> for App {
     }
 
     fn exiting(&mut self, _: &ActiveEventLoop) {
-        let opened = self.opened.clone();
-        for id in opened {
-            self.close(id);
-        }
+        self.dispose();
     }
 }
 
 /// Runs an application of windows, as Compose Desktop's `application { … }`: `content` holds
 /// `Window`s, each opened while it's in the composition; it returns once none is left or
 /// `exit_application` is called. On the calling thread, which must be the main thread on macOS.
+///
+/// Give it a `#[composable]` function (`application(App)`): the call macros memoize the content
+/// lambdas of its `Window`s there, so a window's content recomposes only for what it reads; a
+/// plain closure's lambdas are new at each application pass.
 pub fn application(content: impl Fn() + 'static) {
     let event_loop =
         EventLoop::<UserEvent>::with_user_event().build().expect("compose-desktop: an event loop");
@@ -575,7 +636,7 @@ pub fn application(content: impl Fn() + 'static) {
         let _ = wake.send_event(UserEvent::Wake);
     });
     let mut app = App {
-        application,
+        application: Some(application),
         windows: HashMap::new(),
         opened: Vec::new(),
         stats: std::env::var_os("COMPOSE_FRAME_STATS").is_some(),

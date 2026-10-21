@@ -741,14 +741,21 @@ pub(crate) fn abandon_group() {
     try_with_runtime(|runtime| runtime.abandoned_groups = true);
 }
 
-fn insert_node(parent: NodeRef, index: u32, node: &mut dyn Any) -> NodeRef {
+fn insert_node(parent: NodeRef, index: u32, node: &mut dyn Any, node_type: &str) -> NodeRef {
     flush_node_moves();
     let applier = with_runtime(|runtime| runtime.active_applier());
     let inserted = applier
         .try_borrow_mut()
         .unwrap_or_else(|_| misuse(ComposeError::ApplierBusy))
         .insert_erased(parent, index as usize, node)
-        .unwrap_or_else(|| misuse(ComposeError::WrongNodeType));
+        .unwrap_or_else(|| {
+            panic!(
+                "compose-runtime: {} ({node_type}: a composable emitting it was called in a \
+                 composition of other nodes, as UI content in a desktop `application` outside \
+                 its `Window`s)",
+                ComposeError::WrongNodeType
+            )
+        });
     with_runtime(|runtime| runtime.set_inserted_node(inserted));
     inserted
 }
@@ -836,7 +843,9 @@ impl Composer {
     pub fn start_node<N: 'static>(&self, key: u64, factory: impl FnOnce() -> N) -> NodeRef {
         match start_group(GroupKind::Node, key, 0) {
             NodeStart::Reused(node) => node,
-            NodeStart::Insert { parent, index } => insert_node(parent, index, &mut Some(factory())),
+            NodeStart::Insert { parent, index } => {
+                insert_node(parent, index, &mut Some(factory()), std::any::type_name::<N>())
+            }
             NodeStart::NotNode => unreachable!("a node group"),
         }
     }
@@ -917,6 +926,13 @@ impl Composer {
     }
 
     /// Runs `f` with the composition's applier, as type `A`.
+    /// Whether the composition's applier is an `A`: a composable emitting `A`'s nodes can say
+    /// what's wrong when called in another kind of composition.
+    pub fn applier_is<A: Applier>(&self) -> bool {
+        let applier = applier_for_use();
+        applier.try_borrow_mut().is_ok_and(|mut applier| applier.as_any_mut().is::<A>())
+    }
+
     pub fn with_applier<A: Applier, R>(&self, f: impl FnOnce(&mut A) -> R) -> R {
         let applier = applier_for_use();
         let mut applier =

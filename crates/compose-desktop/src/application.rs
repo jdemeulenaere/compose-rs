@@ -166,6 +166,11 @@ pub fn Window(
     content: impl Fn() + 'static,
 ) {
     let composer = current();
+    assert!(
+        composer.applier_is::<WindowApplier>(),
+        "compose-desktop: a Window is composed in an `application`'s content, not in a window's \
+         content nor in other UI"
+    );
     let node = composer.start_node(key_of("compose_desktop::Window"), || None::<Rc<WindowHandle>>);
     let handle = composer.with_applier(|applier: &mut WindowApplier| applier.handle(node));
     composer.end_group();
