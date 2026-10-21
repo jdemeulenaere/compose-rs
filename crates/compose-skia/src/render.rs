@@ -79,34 +79,11 @@ pub fn draw_display_list(canvas: &Canvas, list: &DisplayList, text_measurer: &dy
                 }
             }
             DrawOp::DrawPath { path, offset, scale, paint } => {
-                let mut skia = skia_safe::PathBuilder::new();
-                for command in path.commands() {
-                    match *command {
-                        PathCommand::MoveTo(point) => {
-                            skia.move_to((point.x, point.y));
-                        }
-                        PathCommand::LineTo(point) => {
-                            skia.line_to((point.x, point.y));
-                        }
-                        PathCommand::QuadTo(control, end) => {
-                            skia.quad_to((control.x, control.y), (end.x, end.y));
-                        }
-                        PathCommand::CubicTo(first, second, end) => {
-                            skia.cubic_to((first.x, first.y), (second.x, second.y), (end.x, end.y));
-                        }
-                        PathCommand::Close => {
-                            skia.close();
-                        }
-                    }
-                }
-                skia.set_fill_type(match path.fill_type {
-                    PathFillType::NonZero => skia_safe::PathFillType::Winding,
-                    PathFillType::EvenOdd => skia_safe::PathFillType::EvenOdd,
-                });
+                let skia = skia_path(path);
                 canvas.save();
                 canvas.translate((offset.x, offset.y));
                 canvas.scale((scale.0, scale.1));
-                canvas.draw_path(&skia.detach(), &skia_paint(paint));
+                canvas.draw_path(&skia, &skia_paint(paint));
                 canvas.restore();
             }
             DrawOp::SaveLayerAlpha(alpha) => {
@@ -214,4 +191,59 @@ impl Renderer for RasterRenderer {
         draw_display_list(canvas, list, text_measurer);
         canvas.restore_to_count(count);
     }
+}
+
+thread_local! {
+    /// Skia's path of each path drawn, by its `Arc` (kept while the path lives): an icon drawn
+    /// every frame is converted once.
+    static PATHS: std::cell::RefCell<std::collections::HashMap<usize, (std::sync::Weak<compose_ui::Path>, skia_safe::Path)>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// Skia's path for `path`, converted once per path (while it lives).
+fn skia_path(path: &std::sync::Arc<compose_ui::Path>) -> skia_safe::Path {
+    let address = std::sync::Arc::as_ptr(path) as usize;
+    PATHS.with(|paths| {
+        let mut paths = paths.borrow_mut();
+        if let Some((alive, skia)) = paths.get(&address)
+            && alive.upgrade().is_some_and(|alive| std::sync::Arc::ptr_eq(&alive, path))
+        {
+            return skia.clone();
+        }
+        // Paths that are gone are forgotten as new ones come.
+        if paths.len() > 256 {
+            paths.retain(|_, (alive, _)| alive.strong_count() > 0);
+        }
+        let skia = build_skia_path(path);
+        paths.insert(address, (std::sync::Arc::downgrade(path), skia.clone()));
+        skia
+    })
+}
+
+fn build_skia_path(path: &compose_ui::Path) -> skia_safe::Path {
+    let mut skia = skia_safe::PathBuilder::new();
+    for command in path.commands() {
+        match *command {
+            PathCommand::MoveTo(point) => {
+                skia.move_to((point.x, point.y));
+            }
+            PathCommand::LineTo(point) => {
+                skia.line_to((point.x, point.y));
+            }
+            PathCommand::QuadTo(control, end) => {
+                skia.quad_to((control.x, control.y), (end.x, end.y));
+            }
+            PathCommand::CubicTo(first, second, end) => {
+                skia.cubic_to((first.x, first.y), (second.x, second.y), (end.x, end.y));
+            }
+            PathCommand::Close => {
+                skia.close();
+            }
+        }
+    }
+    skia.set_fill_type(match path.fill_type {
+        PathFillType::NonZero => skia_safe::PathFillType::Winding,
+        PathFillType::EvenOdd => skia_safe::PathFillType::EvenOdd,
+    });
+    skia.detach()
 }
