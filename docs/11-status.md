@@ -6,7 +6,7 @@ What compose-rs covers of Jetpack Compose today, and where it knowingly differs.
 
 | | Status |
 |---|---|
-| **Desktop** (macOS, Windows, Linux) | Runs: one winit window per app (`run_app`), Skia rendering on the CPU raster backend presented with softbuffer, SkParagraph text, input with IME, hover and pointer icons, the system clipboard, AccessKit for screen readers, HiDPI, right-to-left. |
+| **Desktop** (macOS, Windows, Linux) | Runs: `application` with `Window`s (or one window with `run_app`), Skia rendering on the CPU raster backend presented with softbuffer, SkParagraph text, input with IME, hover and pointer icons, the system clipboard, AccessKit for screen readers, HiDPI, right-to-left. |
 | **Android** | Designed ([07](07-platforms.md)), not built: building it needs the Android NDK and Rust's Android targets, which this environment doesn't have. |
 | **iOS, web** | Not started. |
 
@@ -29,7 +29,7 @@ What compose-rs covers of Jetpack Compose today, and where it knowingly differs.
 - **State writes during composition** panic; `remember_updated_state` is a plain cell rather than state.
 - **Ripples** are static state layers (8 % hovered, 10 % pressed or focused), not animated ripples; a `Switch`'s is on its touch target rather than around its thumb.
 - **Rendering** is on the CPU: fast at window sizes up to about 1080p (well under a millisecond to render a screen), slower at 4K. A GPU surface is planned (D93).
-- **One window** per app; Compose Desktop's `application { Window(…) }` with several windows isn't there.
+- **Windows** don't inherit the application's composition locals, and have no position, placement (maximized, minimized, fullscreen), icon, menu bar, tray, or `DialogWindow`; a `Window` can't be composed inside another window's content.
 - **Grids** keep an item's state by its row rather than its key (D144); a popup in a lazy item composed beyond the viewport shows (D136).
 - **Text** has no link annotations, no paragraph styles in spans, no selection in non-editable text (`SelectionContainer`), and text fields have no prefix, suffix, `max_lines` or `min_lines`.
 - **Animation** has no keyframes spec, and transitions have no child transitions; `AnimatedContent` keeps at most three states' contents while they animate.

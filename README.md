@@ -15,7 +15,7 @@ A design for bringing Jetpack Compose's model to Rust: positional memoization ov
 | `crates/compose-animation` | `Animatable`, animation specs and easings, `animate_*_as_state`, infinite transitions, `AnimatedVisibility` |
 | `crates/compose-test` | `ComposeTestRule`: finders, actions, assertions, event scripts |
 | `crates/compose-skia` | Skia renderer and SkParagraph text measurer |
-| `crates/compose-desktop` | `run_app`: a winit window on the main thread, with AccessKit for screen readers |
+| `crates/compose-desktop` | `application { Window(…) }` and `run_app`: winit windows on the main thread, with AccessKit for screen readers |
 | `examples/counter`, `examples/todo`, `examples/gallery` | the sample apps, with tests and event-script transcripts; the gallery tours the toolkit (`cargo run -p gallery`) |
 | `benchmarks` | criterion benchmarks (not a default member) |
 

@@ -21,7 +21,10 @@ pub(crate) struct InputState {
 pub(crate) enum Outcome {
     Handled,
     Ignored,
-    Exit,
+    /// Close the window (Cmd+W, Ctrl+W).
+    Close,
+    /// Quit the application (Cmd+Q on macOS).
+    Quit,
 }
 
 fn key_of(key: &WinitKey) -> Option<Key> {
@@ -119,7 +122,7 @@ pub(crate) fn handle(state: &mut InputState, host: &mut UiHost, event: &WindowEv
                 && let WinitKey::Character(text) = &event.logical_key
                 && (text.as_str() == "w" || (cfg!(target_os = "macos") && text.as_str() == "q"))
             {
-                return Outcome::Exit;
+                return if text.as_str() == "q" { Outcome::Quit } else { Outcome::Close };
             }
             let Some(key) = key_of(&event.logical_key) else { return Outcome::Ignored };
             let kind = if pressed { KeyEventType::KeyDown } else { KeyEventType::KeyUp };

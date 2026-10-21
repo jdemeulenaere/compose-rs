@@ -45,7 +45,8 @@ pub trait TextMeasurer {
 
 ## Desktop (`compose-desktop`)
 
-- **One thread.** `run_app` creates the winit event loop on the main thread, opens the window, owns the `Composition`, and runs everything there: no frame mailbox or input channel.
+- **One thread.** `application` creates the winit event loop on the main thread, owns the compositions, and runs everything there: no frame mailbox or input channel.
+- **Windows** are Compose Desktop's: `application(|| { Window!(on_close_request = …, title = …, state = remember_window_state(size), { … }) })`. The application's content is a composition of its own whose nodes are windows (`WindowApplier`); each `Window` in it is opened, with its content composed in the window's own `UiHost`, reading the application's state like any content, and closed when it leaves the composition (or turns `visible = false`). The close button, Cmd+W and Ctrl+W call the window's `on_close_request`, which removes it or not; Cmd+Q calls every window's. `exit_application()` ends the application, which also ends once no window is left. A `WindowState` holds the window's size: the window follows it, and it follows the user's resizing. `run_app(options, content)` is one window whose close request exits.
 - **Skia surfaces** on the GPU: Metal on macOS, Vulkan or OpenGL on Linux, Direct3D on Windows. The binaries are prebuilt by `skia-safe`, so building the app doesn't compile Skia. This is the same size trade-off Compose Desktop makes by shipping Skiko.
 - **The frame loop**, driven by winit's `about_to_wait` and `RedrawRequested`:
   1. **Events:** pointer, key and text events are dispatched; handlers run and write state, which invalidates scopes and schedules a frame.
