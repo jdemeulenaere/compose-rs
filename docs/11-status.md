@@ -18,7 +18,7 @@ What compose-rs covers of Jetpack Compose today, and where it knowingly differs.
 - **Text:** `BasicText`, `BasicTextField` (selection, IME, undo, Compose Desktop's key mappings), `TextStyle` (weight, style, family, letter spacing, decoration, alignment, line height), overflow, `AnnotatedString` spans.
 - **Input:** clicks and toggles, `FocusRequester`, keyboard options and actions, password fields, pointer events with passes, hover, pointer icons, `pointer_input` with Compose's gesture detectors, `draggable`, keys and focus (Tab order, focus requests, `bring_into_view`), semantics with actions.
 - **Windows:** `Popup`, `Dialog`, `TooltipArea`.
-- **Animation:** `Animatable`, tweens, springs, keyframe-free repeatables, `animate_*_as_state`, infinite transitions, `AnimatedVisibility`, `Crossfade`, `AnimatedContent`, `update_transition`, `animate_content_size`.
+- **Animation:** `Animatable`, tweens, springs, keyframes, repeatables, `animate_*_as_state`, infinite transitions, `AnimatedVisibility`, `Crossfade`, `AnimatedContent`, `update_transition`, `animate_content_size`.
 - **Material 3:** the theme (colors, typography, shapes, tonal elevation), `Text`, `Surface`, buttons (filled, tonal, elevated, outlined, text, icon, FAB), icons, `Checkbox`, `Switch`, `RadioButton`, `Slider`, `TextField` and `OutlinedTextField`, cards, dividers, `ListItem`, `TopAppBar`, `Scaffold`, `NavigationBar`, `TabRow`, `AlertDialog`, `DropdownMenu`, `Snackbar`, progress indicators, `PlainTooltip`, chips and badges.
 - **Testing:** `ComposeTestRule` with Compose's finders, actions and assertions, event scripts with transcripts, layout and display-list dumps.
 
@@ -32,6 +32,6 @@ What compose-rs covers of Jetpack Compose today, and where it knowingly differs.
 - **Windows** don't inherit the application's composition locals, and have no position, placement (maximized, minimized, fullscreen), icon, menu bar, tray, or `DialogWindow`; a `Window` can't be composed inside another window's content.
 - **Grids** keep an item's state by its row rather than its key (D144); a popup in a lazy item composed beyond the viewport shows (D136).
 - **Text** has no link annotations, no paragraph styles in spans, no selection in non-editable text (`SelectionContainer`), and text fields have no prefix, suffix, `max_lines` or `min_lines`.
-- **Animation** has no keyframes spec, and transitions have no child transitions; `AnimatedContent` keeps at most three states' contents while they animate.
+- **Animation** transitions have no child transitions; `AnimatedContent` keeps at most three states' contents while they animate.
 - **Material** lacks, among others, navigation drawers, bottom sheets, input chips, date and time pickers, segmented buttons and search bars.
 - **Saving state** across process death (`rememberSaveable`) has no desktop counterpart and isn't provided.

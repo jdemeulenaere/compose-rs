@@ -2,6 +2,7 @@
 //! `infinite_repeatable`, evaluated per component of an animated value's vector.
 
 use crate::easing::{Easing, FAST_OUT_SLOW_IN_EASING};
+use crate::keyframes::KeyframesSpec;
 
 /// The default duration of a `tween`, as Compose's `AnimationConstants.DefaultDurationMillis`.
 pub const DEFAULT_DURATION_MILLIS: u32 = 300;
@@ -113,12 +114,50 @@ impl SpringSpec {
     }
 }
 
+/// An animation of a fixed duration, which a repeatable plays again, as Compose's
+/// `DurationBasedAnimationSpec`.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum DurationBasedSpec {
+    Tween(TweenSpec),
+    Keyframes(KeyframesSpec),
+}
+
+impl From<TweenSpec> for DurationBasedSpec {
+    fn from(spec: TweenSpec) -> DurationBasedSpec {
+        DurationBasedSpec::Tween(spec)
+    }
+}
+
+impl From<KeyframesSpec> for DurationBasedSpec {
+    fn from(spec: KeyframesSpec) -> DurationBasedSpec {
+        DurationBasedSpec::Keyframes(spec)
+    }
+}
+
+impl DurationBasedSpec {
+    fn total_nanos(&self) -> u64 {
+        match self {
+            DurationBasedSpec::Tween(tween) => tween.total_nanos(),
+            DurationBasedSpec::Keyframes(keyframes) => keyframes.total_nanos(),
+        }
+    }
+}
+
+impl From<DurationBasedSpec> for AnimationSpec {
+    fn from(spec: DurationBasedSpec) -> AnimationSpec {
+        match spec {
+            DurationBasedSpec::Tween(tween) => AnimationSpec::Tween(tween),
+            DurationBasedSpec::Keyframes(keyframes) => AnimationSpec::Keyframes(keyframes),
+        }
+    }
+}
+
 /// An animation repeated, as Compose's `RepeatableSpec` and `InfiniteRepeatableSpec`.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct RepeatableSpec {
     /// How many times it plays; `None`: forever.
     pub iterations: Option<u32>,
-    pub animation: TweenSpec,
+    pub animation: DurationBasedSpec,
     pub repeat_mode: RepeatMode,
 }
 
@@ -141,6 +180,14 @@ pub enum AnimationSpec {
         delay_millis: u32,
     },
     Repeatable(RepeatableSpec),
+    /// Values at given times, as `KeyframesSpec`.
+    Keyframes(KeyframesSpec),
+}
+
+impl From<KeyframesSpec> for AnimationSpec {
+    fn from(spec: KeyframesSpec) -> AnimationSpec {
+        AnimationSpec::Keyframes(spec)
+    }
 }
 
 impl From<TweenSpec> for AnimationSpec {
@@ -195,15 +242,18 @@ pub fn snap(delay_millis: u32) -> AnimationSpec {
 /// `animation` played `iterations` times, as Compose's `repeatable`.
 pub fn repeatable(
     iterations: u32,
-    animation: TweenSpec,
+    animation: impl Into<DurationBasedSpec>,
     repeat_mode: RepeatMode,
 ) -> RepeatableSpec {
-    RepeatableSpec { iterations: Some(iterations.max(1)), animation, repeat_mode }
+    RepeatableSpec { iterations: Some(iterations.max(1)), animation: animation.into(), repeat_mode }
 }
 
 /// `animation` played forever, as Compose's `infiniteRepeatable`.
-pub fn infinite_repeatable(animation: TweenSpec, repeat_mode: RepeatMode) -> RepeatableSpec {
-    RepeatableSpec { iterations: None, animation, repeat_mode }
+pub fn infinite_repeatable(
+    animation: impl Into<DurationBasedSpec>,
+    repeat_mode: RepeatMode,
+) -> RepeatableSpec {
+    RepeatableSpec { iterations: None, animation: animation.into(), repeat_mode }
 }
 
 /// One frame of an animation of a vector: its values and velocities, and whether it is over.
@@ -235,6 +285,16 @@ impl AnimationSpec {
                     velocities[index] = (values[index] - previous[index]) * 1000.0;
                 }
                 Frame { values, velocities, finished: play_nanos >= tween.total_nanos() }
+            }
+            AnimationSpec::Keyframes(keyframes) => {
+                let values = keyframes.value_at(play_nanos, start, target);
+                let previous =
+                    keyframes.value_at(play_nanos.saturating_sub(1_000_000), start, target);
+                let mut velocities = [0.0; N];
+                for index in 0..N {
+                    velocities[index] = (values[index] - previous[index]) * 1000.0;
+                }
+                Frame { values, velocities, finished: play_nanos >= keyframes.total_nanos() }
             }
             AnimationSpec::Snap { delay_millis } => {
                 let finished = play_nanos >= u64::from(*delay_millis) * 1_000_000;
@@ -275,7 +335,7 @@ impl AnimationSpec {
                 } else {
                     (count + 1) * duration - play
                 };
-                let frame = AnimationSpec::Tween(repeat.animation)
+                let frame = AnimationSpec::from(repeat.animation)
                     .frame(within, start, target, velocity, threshold);
                 Frame { finished, ..frame }
             }

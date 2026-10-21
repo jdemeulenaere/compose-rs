@@ -188,3 +188,56 @@ fn an_infinite_transition_goes_back_and_forth() {
         values.iter().skip_while(|value| **value < highest).copied().fold(1.0, f32::min);
     assert!(highest > 0.9 && lowest_after_peak < 0.1, "{values:?}");
 }
+
+#[test]
+fn keyframes_pass_through_their_values_at_their_times() {
+    let spec = keyframes(160, |frames| {
+        frames.at(80, 50.0f32);
+    });
+    let (mut ui, target) = animated(spec.into());
+    target.set(100.0);
+    ui.wait_for_idle();
+    ui.advance_time_by(Duration::from_millis(16));
+    // 48 ms in: on the way from 0 to 50 (at 80 ms), linearly.
+    ui.advance_time_by(Duration::from_millis(48));
+    assert!((seen() - 30.0).abs() < 1.0, "{}", seen());
+    // 112 ms in: from 50 to the target, 100 at 160 ms.
+    ui.advance_time_by(Duration::from_millis(64));
+    assert!((seen() - 70.0).abs() < 1.0, "{}", seen());
+    ui.advance_time_by(Duration::from_millis(100));
+    assert_eq!(seen(), 100.0);
+}
+
+#[test]
+fn a_keyframe_eases_the_stretch_it_starts() {
+    let eased = keyframes(100, |frames| {
+        frames.at(0, 0.0f32).with(FAST_OUT_SLOW_IN_EASING);
+    });
+    let (mut ui, target) = animated(eased.into());
+    target.set(100.0);
+    ui.wait_for_idle();
+    ui.advance_time_by(Duration::from_millis(16));
+    ui.advance_time_by(Duration::from_millis(48));
+    // Fast out, slow in: past the linear 48 by then.
+    assert!(seen() > 55.0, "{}", seen());
+}
+
+#[test]
+fn equal_keyframes_are_one_spec() {
+    let build = || {
+        keyframes(300, |frames| {
+            frames.delay_millis = 20;
+            frames.at(100, 0.5f32).with(LINEAR_OUT_SLOW_IN_EASING);
+        })
+    };
+    assert_eq!(build(), build());
+    assert_ne!(
+        build(),
+        keyframes(300, |frames| {
+            frames.at(100, 0.6f32);
+        })
+    );
+    // Repeated, as `infiniteRepeatable(keyframes { … })`.
+    let repeated = infinite_repeatable(build(), RepeatMode::Reverse);
+    assert_eq!(repeated.animation, DurationBasedSpec::Keyframes(build()));
+}

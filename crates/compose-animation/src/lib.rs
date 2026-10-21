@@ -15,6 +15,7 @@ mod content_size;
 mod crossfade;
 mod easing;
 mod infinite;
+mod keyframes;
 mod spec;
 mod transition;
 mod vector;
@@ -34,9 +35,10 @@ pub use easing::{
     FAST_OUT_SLOW_IN_EASING, LINEAR_EASING, LINEAR_OUT_SLOW_IN_EASING,
 };
 pub use infinite::{InfiniteTransition, remember_infinite_transition};
+pub use keyframes::{KeyframeEntry, KeyframesBuilder, KeyframesSpec, keyframes};
 pub use spec::{
-    AnimationSpec, DEFAULT_DURATION_MILLIS, RepeatMode, RepeatableSpec, Spring, SpringSpec,
-    TweenSpec, infinite_repeatable, repeatable, snap, spring, spring_with, tween,
+    AnimationSpec, DEFAULT_DURATION_MILLIS, DurationBasedSpec, RepeatMode, RepeatableSpec, Spring,
+    SpringSpec, TweenSpec, infinite_repeatable, repeatable, snap, spring, spring_with, tween,
 };
 pub use transition::{Transition, update_transition};
 pub use vector::Animate;
