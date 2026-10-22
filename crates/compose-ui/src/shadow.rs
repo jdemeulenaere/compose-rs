@@ -14,8 +14,15 @@ impl Modifier {
     /// Draws the shadow of `shape` raised by `elevation` behind the content, then clips the
     /// content to `shape` if `clip`, as `Modifier.shadow(elevation, shape, clip)` (which clips
     /// by default when there is an elevation).
-    pub fn shadow(self, elevation: Dp, shape: Shape, clip: bool) -> Modifier {
-        self.shadow_with(elevation, shape, clip, DEFAULT_SHADOW_COLOR, DEFAULT_SHADOW_COLOR)
+    pub fn shadow(self, elevation: Dp) -> Modifier {
+        let clip = elevation.0 > 0.0;
+        self.shadow_with(
+            elevation,
+            Shape::Rectangle,
+            clip,
+            DEFAULT_SHADOW_COLOR,
+            DEFAULT_SHADOW_COLOR,
+        )
     }
 
     /// `shadow` with its ambient and spot colors, as `Modifier.shadow(…, ambientColor,

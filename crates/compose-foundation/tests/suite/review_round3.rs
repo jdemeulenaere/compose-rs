@@ -62,7 +62,7 @@ fn a_dialog_opened_from_a_closing_popup_gives_the_focus_back_to_the_screen() {
     #[composable]
     fn Screen(step: MutableState<u32>) {
         Column!({
-            Box!(modifier = Modifier.size(20.dp()).focusable(true).test_tag("button"));
+            Box!(modifier = Modifier.size(20.dp()).focusable().test_tag("button"));
             if step.get() == 1 {
                 Popup!(
                     on_dismiss_request = Some(move || step.set(0)),
@@ -79,7 +79,7 @@ fn a_dialog_opened_from_a_closing_popup_gives_the_focus_back_to_the_screen() {
             }
             if step.get() == 2 {
                 Dialog!(on_dismiss_request = move || step.set(0), {
-                    Box!(modifier = Modifier.size(50.dp()).focusable(true).test_tag("confirm"));
+                    Box!(modifier = Modifier.size(50.dp()).focusable().test_tag("confirm"));
                 });
             }
         });
@@ -115,7 +115,7 @@ fn an_outer_content_description_replaces_the_images_own() {
             modifier = Modifier
                 .size(24.dp())
                 .test_tag("image")
-                .semantics(false, |config| config.content_description.push("Rating".into())),
+                .semantics(|config| config.content_description.push("Rating".into())),
         );
     });
     let node = ui.on_node_with_tag("image").fetch_semantics_node();
@@ -137,15 +137,15 @@ fn a_dialog_replaced_by_another_in_one_frame_gives_the_focus_back_once_closed() 
     #[composable]
     fn Wizard(step: MutableState<u32>) {
         Column!({
-            Box!(modifier = Modifier.size(20.dp()).focusable(true).test_tag("button"));
+            Box!(modifier = Modifier.size(20.dp()).focusable().test_tag("button"));
             if step.get() == 1 {
                 Dialog!(on_dismiss_request = move || step.set(0), {
-                    Box!(modifier = Modifier.size(50.dp()).focusable(true).test_tag("a"));
+                    Box!(modifier = Modifier.size(50.dp()).focusable().test_tag("a"));
                 });
             }
             if step.get() == 2 {
                 Dialog!(on_dismiss_request = move || step.set(0), {
-                    Box!(modifier = Modifier.size(50.dp()).focusable(true).test_tag("b"));
+                    Box!(modifier = Modifier.size(50.dp()).focusable().test_tag("b"));
                 });
             }
         });

@@ -7,6 +7,7 @@ use compose::ui::{
     platform::{Renderer, TextLayoutOptions, TextMeasurer, UiHost},
 };
 use compose_skia::{RasterRenderer, SkiaTextMeasurer};
+use compose_ui::DEFAULT_SHADOW_COLOR;
 
 #[test]
 fn paragraphs_measure_wrap_and_hit_test() {
@@ -132,7 +133,13 @@ fn shadows_darken_beneath_an_elevated_shape() {
         Box(
             Modifier
                 .padding(50.dp())
-                .shadow(12.dp(), RECTANGLE_SHAPE, false)
+                .shadow_with(
+                    12.dp(),
+                    RECTANGLE_SHAPE,
+                    false,
+                    DEFAULT_SHADOW_COLOR,
+                    DEFAULT_SHADOW_COLOR,
+                )
                 .background(Color::WHITE)
                 .size(100.dp()),
             Alignment::TOP_START,

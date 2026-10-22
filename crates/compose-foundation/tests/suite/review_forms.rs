@@ -27,16 +27,13 @@ fn boxes(
             for &(tag, x, y) in spots {
                 if OFFSET_ON_THE_TARGET.with(|flag| flag.get()) {
                     Box!(
-                        modifier = Modifier
-                            .offset(x.dp(), y.dp())
-                            .size(20.dp())
-                            .focusable(true)
-                            .test_tag(tag)
+                        modifier =
+                            Modifier.offset(x.dp(), y.dp()).size(20.dp()).focusable().test_tag(tag)
                     );
                 } else {
                     // The offset on a parent: the focusable node's own bounds move.
                     Box!(modifier = Modifier.offset(x.dp(), y.dp()), {
-                        Box!(modifier = Modifier.size(20.dp()).focusable(true).test_tag(tag));
+                        Box!(modifier = Modifier.size(20.dp()).focusable().test_tag(tag));
                     });
                 }
             }
@@ -115,7 +112,7 @@ fn move_focus_in_rtl_uses_physical_directions() {
             || {
                 Row!({
                     for tag in ["first", "second"] {
-                        Box!(modifier = Modifier.size(20.dp()).focusable(true).test_tag(tag));
+                        Box!(modifier = Modifier.size(20.dp()).focusable().test_tag(tag));
                     }
                 });
             },
@@ -296,8 +293,7 @@ fn a_lazy_item_reads_the_focus_manager_and_keyboard_controller() {
                     compose_ui::LOCAL_SOFTWARE_KEYBOARD_CONTROLLER.current().is_some(),
                 ));
                 Box!(
-                    modifier =
-                        Modifier.size(20.dp()).focusable(true).test_tag(format!("item{index}"))
+                    modifier = Modifier.size(20.dp()).focusable().test_tag(format!("item{index}"))
                 );
             });
         });

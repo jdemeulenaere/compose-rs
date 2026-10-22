@@ -54,7 +54,7 @@ fn a_row_shares_its_space_by_weight() {
 
 #[test]
 fn row_arrangements_follow_compose() {
-    let arrangement = mutable_state_of(HorizontalArrangement::from(Arrangement::SpaceBetween));
+    let arrangement = mutable_state_of(HorizontalArrangement::from(Arrangement::SPACE_BETWEEN));
     let handle = arrangement.handle();
     let mut ui = ComposeTestRule::sized(IntSize::new(100, 50), move || {
         Row!(modifier = Modifier.fill_max_width(), horizontal_arrangement = handle.get(), {
@@ -63,10 +63,10 @@ fn row_arrangements_follow_compose() {
         });
     });
     assert_eq!(bounds(&mut ui, "b").left, 90.0);
-    arrangement.set(Arrangement::Center.into());
+    arrangement.set(Arrangement::CENTER.into());
     ui.wait_for_idle();
     assert_eq!((bounds(&mut ui, "a").left, bounds(&mut ui, "b").left), (40.0, 50.0));
-    arrangement.set(Arrangement::End);
+    arrangement.set(Arrangement::END);
     ui.wait_for_idle();
     assert_eq!(bounds(&mut ui, "a").left, 80.0);
 }
@@ -99,7 +99,7 @@ fn arrangements_are_per_axis_and_can_be_custom() {
         Row!(
             modifier = Modifier.fill_max_width(),
             horizontal_arrangement =
-                if handle.get() { arrangement.clone() } else { Arrangement::End },
+                if handle.get() { arrangement.clone() } else { Arrangement::END },
             {
                 Spacer(Modifier.size(10.dp()).test_tag("a"));
                 Spacer(Modifier.size(20.dp()).test_tag("b"));

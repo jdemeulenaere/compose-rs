@@ -87,7 +87,7 @@ impl GraphicsLayerNode {
 }
 
 /// A graphics layer's properties as a repaint boundary's group carries them
-/// ([`DrawGroup::layer`](crate::DrawGroup)), as a render node's: in its group's coordinates.
+/// ([`DrawGroup::layer`](crate::platform::DrawGroup)), as a render node's: in its group's coordinates.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct LayerProperties {
     /// In 0..=1.

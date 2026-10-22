@@ -135,7 +135,7 @@ fn spaced_by_keeps_overflowing_children_inside() {
 /// (`if (reverseInput && size.size == 1) current = gapSize`). Here it stays at the start.
 #[test]
 fn space_between_puts_a_single_rtl_child_at_the_end() {
-    assert_eq!(arrange(Arrangement::SpaceBetween, 100, &[10], true), [90]);
+    assert_eq!(arrange(Arrangement::SPACE_BETWEEN, 100, &[10], true), [90]);
 }
 
 // ---- BasicText ---------------------------------------------------------------------------------

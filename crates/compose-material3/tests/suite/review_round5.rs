@@ -52,7 +52,8 @@ fn show(
 ) -> Job {
     let (host, message, action) = (*host, message.to_string(), action.map(str::to_string));
     scope.borrow().as_ref().unwrap().launch(async move {
-        let result = host.show_snackbar_with(message.clone(), action, false, duration).await;
+        let result =
+            host.show_snackbar_with(message.clone(), action.map(Into::into), false, duration).await;
         RESULTS.with(|results| results.borrow_mut().push((message, result)));
     })
 }
@@ -86,7 +87,7 @@ fn cancelling_a_waiting_snackbar_does_not_let_the_next_one_jump_the_queue() {
     ui.advance_time_by(Duration::from_millis(500));
     assert_eq!(
         host.current_snackbar_data().map(|data| data.visuals.message),
-        Some("First".to_string()),
+        Some("First".into()),
         "Compose: First keeps showing for its 4 s, Third waits"
     );
     // After First's 4 s, it's dismissed and Third shows.

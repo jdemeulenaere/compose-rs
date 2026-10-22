@@ -717,7 +717,7 @@ fn two_rows_top_app_bar(bar: TwoRows) {
                 (policies.clone(), top_alpha.clone(), bottom_alpha.clone());
             Column(
                 Modifier,
-                Arrangement::Top,
+                Arrangement::TOP,
                 Alignment::START,
                 compose_runtime::callback(move |_| {
                     top_app_bar_row(
@@ -959,12 +959,12 @@ pub fn BottomAppBar(
                     .padding(window_insets)
                     .height(80.dp())
                     .padding(content_padding),
-                Arrangement::Start,
+                Arrangement::START,
                 Alignment::CENTER_VERTICALLY,
                 compose_runtime::callback(move |row: RowScope| {
                     Row(
                         Modifier.fill_max_height().weight(row, 1.0),
-                        Arrangement::Start,
+                        Arrangement::START,
                         Alignment::CENTER_VERTICALLY,
                         actions.clone(),
                     );
@@ -988,7 +988,7 @@ pub fn BottomAppBar(
 fn actions_row(actions: compose_runtime::Callback<dyn Fn(RowScope)>) -> compose_runtime::Callback {
     compose_runtime::remember_keyed(actions.clone(), move || {
         compose_runtime::callback(move || {
-            Row(Modifier, Arrangement::End, Alignment::CENTER_VERTICALLY, actions.clone());
+            Row(Modifier, Arrangement::END, Alignment::CENTER_VERTICALLY, actions.clone());
         })
     })
 }

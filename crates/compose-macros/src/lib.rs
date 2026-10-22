@@ -29,7 +29,7 @@ mod golden;
 /// ```
 ///
 /// - The function gets a restart group keyed on its declaration path. Its arguments are kept
-///   and compared with [`ComposeArg::same`] on the next pass: when every argument is the same and
+///   and compared with `ComposeArg::same` on the next pass: when every argument is the same and
 ///   its scope isn't invalid, the body is skipped. Invalidated, it restarts on its own with the
 ///   kept arguments.
 /// - Branches, match arms and loops containing likely composable calls get region groups, so

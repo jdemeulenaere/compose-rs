@@ -573,36 +573,36 @@ pub trait LazyItemModifiers {
     /// As large as the list's viewport, as `fillParentMaxSize()`.
     fn fill_parent_max_size(self, scope: &LazyItemScope) -> Modifier;
     /// `fraction` of the viewport's width, as `fillParentMaxWidth(fraction)`.
-    fn fill_parent_max_width_fraction(self, scope: &LazyItemScope, fraction: f32) -> Modifier;
-    fn fill_parent_max_height_fraction(self, scope: &LazyItemScope, fraction: f32) -> Modifier;
-    fn fill_parent_max_size_fraction(self, scope: &LazyItemScope, fraction: f32) -> Modifier;
+    fn fill_parent_max_width_with(self, scope: &LazyItemScope, fraction: f32) -> Modifier;
+    fn fill_parent_max_height_with(self, scope: &LazyItemScope, fraction: f32) -> Modifier;
+    fn fill_parent_max_size_with(self, scope: &LazyItemScope, fraction: f32) -> Modifier;
 }
 
 impl LazyItemModifiers for Modifier {
     fn fill_parent_max_width(self, scope: &LazyItemScope) -> Modifier {
-        self.fill_parent_max_width_fraction(scope, 1.0)
+        self.fill_parent_max_width_with(scope, 1.0)
     }
     fn fill_parent_max_height(self, scope: &LazyItemScope) -> Modifier {
-        self.fill_parent_max_height_fraction(scope, 1.0)
+        self.fill_parent_max_height_with(scope, 1.0)
     }
     fn fill_parent_max_size(self, scope: &LazyItemScope) -> Modifier {
-        self.fill_parent_max_size_fraction(scope, 1.0)
+        self.fill_parent_max_size_with(scope, 1.0)
     }
-    fn fill_parent_max_width_fraction(self, scope: &LazyItemScope, fraction: f32) -> Modifier {
+    fn fill_parent_max_width_with(self, scope: &LazyItemScope, fraction: f32) -> Modifier {
         self.then_custom(ParentSizeElement {
             parent: scope.parent_size.clone(),
             width: Some(fraction),
             height: None,
         })
     }
-    fn fill_parent_max_height_fraction(self, scope: &LazyItemScope, fraction: f32) -> Modifier {
+    fn fill_parent_max_height_with(self, scope: &LazyItemScope, fraction: f32) -> Modifier {
         self.then_custom(ParentSizeElement {
             parent: scope.parent_size.clone(),
             width: None,
             height: Some(fraction),
         })
     }
-    fn fill_parent_max_size_fraction(self, scope: &LazyItemScope, fraction: f32) -> Modifier {
+    fn fill_parent_max_size_with(self, scope: &LazyItemScope, fraction: f32) -> Modifier {
         self.then_custom(ParentSizeElement {
             parent: scope.parent_size.clone(),
             width: Some(fraction),
@@ -662,7 +662,7 @@ impl compose_ui::LayoutModifierNode for ParentSizeElement {
         let parent = self.parent.size.get();
         let size = |fraction: Option<f32>, parent: i32| match fraction {
             Some(fraction) if parent != Constraints::INFINITY => {
-                Some(compose_ui::round_to_int(parent as f32 * fraction).max(0))
+                Some(compose_ui::platform::round_to_int(parent as f32 * fraction).max(0))
             }
             _ => None,
         };
@@ -806,7 +806,7 @@ impl PartialEq for ListInfo {
 /// A vertical lazy list, as Compose's `LazyColumn`. `reverse_layout` lays the items out from
 /// the bottom (the first one there, scrolled from there); the arrangement stays from the top,
 /// as Compose's (whose default becomes `Arrangement.Bottom` when reversed: pass
-/// `Arrangement::Bottom` here). `user_scroll_enabled = false` keeps drags and the wheel from
+/// `Arrangement::BOTTOM` here). `user_scroll_enabled = false` keeps drags and the wheel from
 /// scrolling it (the state still does).
 #[composable(non_restartable)]
 #[allow(non_snake_case)]
@@ -815,7 +815,7 @@ pub fn LazyColumn(
     #[default(crate::remember_lazy_list_state(0, 0))] state: LazyListState,
     #[default(crate::layout::PaddingValues::ZERO)] content_padding: PaddingValues,
     #[default(false)] reverse_layout: bool,
-    #[default(crate::layout::Arrangement::Top)] vertical_arrangement: impl Into<VerticalArrangement>,
+    #[default(crate::layout::Arrangement::TOP)] vertical_arrangement: impl Into<VerticalArrangement>,
     #[default(crate::Alignment::START)] horizontal_alignment: HorizontalAlignment,
     #[default(true)] user_scroll_enabled: bool,
     content: impl Fn(LazyListScope) + 'static,
@@ -842,7 +842,7 @@ pub fn LazyRow(
     #[default(crate::remember_lazy_list_state(0, 0))] state: LazyListState,
     #[default(crate::layout::PaddingValues::ZERO)] content_padding: PaddingValues,
     #[default(false)] reverse_layout: bool,
-    #[default(crate::layout::Arrangement::Start)] horizontal_arrangement: impl Into<
+    #[default(crate::layout::Arrangement::START)] horizontal_arrangement: impl Into<
         HorizontalArrangement,
     >,
     #[default(crate::Alignment::TOP)] vertical_alignment: VerticalAlignment,

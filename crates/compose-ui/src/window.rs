@@ -170,7 +170,7 @@ pub fn PopupWithPositionProvider(
             }
             let mut modifier = Modifier.overlay(position_provider.clone(), properties.focusable);
             if properties.focusable {
-                modifier = modifier.focusable(true);
+                modifier = modifier.focusable();
             }
             // A focusable popup takes back (Escape on desktop) before what's beneath, as on
             // Android a popup window that takes focus gets the back key, and dismisses if
@@ -231,7 +231,7 @@ pub fn Dialog(
                     on_press: false,
                     modal: true,
                 })
-                .focusable(true);
+                .focusable();
             // A dialog is a window of its own: back (Escape on desktop) goes to it, and to the
             // handlers in it, before what's beneath, and never past it: it takes back while
             // shown, dismissing only if `dismiss_on_back_press`, as Compose's dialog window.
@@ -247,7 +247,7 @@ pub fn Dialog(
             let content = compose_runtime::callback(move || {
                 let content = content.clone();
                 Layout(
-                    Modifier.semantics(false, |config| config.is_dialog = true),
+                    Modifier.semantics(|config| config.is_dialog = true),
                     stack.clone(),
                     compose_runtime::callback(move || content()),
                 );

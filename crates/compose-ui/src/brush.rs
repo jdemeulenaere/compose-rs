@@ -97,6 +97,12 @@ impl From<&[(f32, Color)]> for ColorStops {
     }
 }
 
+impl From<Vec<(f32, Color)>> for ColorStops {
+    fn from(color_stops: Vec<(f32, Color)>) -> ColorStops {
+        ColorStops::from(&color_stops[..])
+    }
+}
+
 impl<const N: usize> From<&[(f32, Color); N]> for ColorStops {
     fn from(color_stops: &[(f32, Color); N]) -> ColorStops {
         ColorStops::from(&color_stops[..])
@@ -136,6 +142,54 @@ impl Gradient {
 }
 
 impl Brush {
+    /// Colors evenly spread (or at their stops) along the drawing's diagonal, as
+    /// `Brush.linearGradient(colors)`.
+    pub fn linear_gradient(colors: impl Into<ColorStops>) -> Brush {
+        Brush::linear_gradient_with(colors, Offset::ZERO, Offset::INFINITE, TileMode::Clamp)
+    }
+
+    /// Colors left to right across the drawing, as `Brush.horizontalGradient(colors)`.
+    pub fn horizontal_gradient(colors: impl Into<ColorStops>) -> Brush {
+        Brush::horizontal_gradient_with(colors, 0.0, f32::INFINITY, TileMode::Clamp)
+    }
+
+    /// Colors top to bottom across the drawing, as `Brush.verticalGradient(colors)`.
+    pub fn vertical_gradient(colors: impl Into<ColorStops>) -> Brush {
+        Brush::vertical_gradient_with(colors, 0.0, f32::INFINITY, TileMode::Clamp)
+    }
+
+    /// Colors from the drawing's center out to half its smaller side, as
+    /// `Brush.radialGradient(colors)`.
+    pub fn radial_gradient(colors: impl Into<ColorStops>) -> Brush {
+        Brush::radial_gradient_with(colors, Offset::UNSPECIFIED, f32::INFINITY, TileMode::Clamp)
+    }
+
+    /// Colors around the drawing's center, as `Brush.sweepGradient(colors)`.
+    pub fn sweep_gradient(colors: impl Into<ColorStops>) -> Brush {
+        Brush::sweep_gradient_with(colors, Offset::UNSPECIFIED)
+    }
+
+    /// This brush at `alpha` (0 to 1) of its opacity: each color's alpha multiplied, as the
+    /// `alpha` Compose's `background(brush, shape, alpha)` and draw calls take.
+    pub fn with_alpha(self, alpha: f32) -> Brush {
+        let fade =
+            |color: Color| color.with_alpha(color.alpha() as f32 / 255.0 * alpha.clamp(0.0, 1.0));
+        let faded = |gradient: Gradient| Gradient {
+            colors: gradient.colors.iter().map(|color| fade(*color)).collect(),
+            ..gradient
+        };
+        match self {
+            Brush::Solid(color) => Brush::Solid(fade(color)),
+            Brush::Linear { gradient, start, end } => {
+                Brush::Linear { gradient: faded(gradient), start, end }
+            }
+            Brush::Radial { gradient, center, radius } => {
+                Brush::Radial { gradient: faded(gradient), center, radius }
+            }
+            Brush::Sweep { gradient, center } => Brush::Sweep { gradient: faded(gradient), center },
+        }
+    }
+
     /// A solid color, as `SolidColor(color)`.
     pub fn solid(color: Color) -> Brush {
         Brush::Solid(color)
@@ -144,7 +198,7 @@ impl Brush {
     /// Colors from `start` to `end`, as `Brush.linearGradient(colors, start, end, tileMode)`
     /// (or `colorStops`: each color at its stop) (Compose's defaults: `Offset::ZERO` to `Offset::INFINITE`, the
     /// drawing's diagonal, `TileMode::Clamp`).
-    pub fn linear_gradient(
+    pub fn linear_gradient_with(
         colors: impl Into<ColorStops>,
         start: Offset,
         end: Offset,
@@ -155,13 +209,13 @@ impl Brush {
 
     /// A left-to-right gradient from `start_x` to `end_x`, as `Brush.horizontalGradient`
     /// (Compose's defaults: 0 to `f32::INFINITY`, the drawing's width).
-    pub fn horizontal_gradient(
+    pub fn horizontal_gradient_with(
         colors: impl Into<ColorStops>,
         start_x: f32,
         end_x: f32,
         tile_mode: TileMode,
     ) -> Brush {
-        Brush::linear_gradient(
+        Brush::linear_gradient_with(
             colors,
             Offset::new(start_x, 0.0),
             Offset::new(end_x, 0.0),
@@ -170,13 +224,13 @@ impl Brush {
     }
 
     /// A top-to-bottom gradient from `start_y` to `end_y`, as `Brush.verticalGradient`.
-    pub fn vertical_gradient(
+    pub fn vertical_gradient_with(
         colors: impl Into<ColorStops>,
         start_y: f32,
         end_y: f32,
         tile_mode: TileMode,
     ) -> Brush {
-        Brush::linear_gradient(
+        Brush::linear_gradient_with(
             colors,
             Offset::new(0.0, start_y),
             Offset::new(0.0, end_y),
@@ -187,7 +241,7 @@ impl Brush {
     /// Colors evenly spread from `center` out to `radius`, as `Brush.radialGradient`
     /// (Compose's defaults: `Offset::UNSPECIFIED`, the drawing's center, and `f32::INFINITY`,
     /// half its smaller side).
-    pub fn radial_gradient(
+    pub fn radial_gradient_with(
         colors: impl Into<ColorStops>,
         center: Offset,
         radius: f32,
@@ -197,7 +251,7 @@ impl Brush {
     }
 
     /// Colors around `center`, clockwise from 3 o'clock, as `Brush.sweepGradient`.
-    pub fn sweep_gradient(colors: impl Into<ColorStops>, center: Offset) -> Brush {
+    pub fn sweep_gradient_with(colors: impl Into<ColorStops>, center: Offset) -> Brush {
         Brush::Sweep { gradient: Gradient::new(colors.into(), TileMode::Clamp), center }
     }
 

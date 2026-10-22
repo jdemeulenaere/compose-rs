@@ -36,7 +36,7 @@ impl ProgressIndicatorDefaults {
 
 /// How the progress is read: a value (determinate) or none (indeterminate).
 fn progress_semantics(modifier: Modifier, progress: Option<f32>) -> Modifier {
-    modifier.semantics(true, move |config| {
+    modifier.semantics_with(true, move |config| {
         config.progress_bar_range_info = Some(ProgressBarRangeInfo {
             current: progress.map_or(0.0, |progress| progress.clamp(0.0, 1.0)),
             range: if progress.is_some() { (0.0, 1.0) } else { (0.0, 0.0) },

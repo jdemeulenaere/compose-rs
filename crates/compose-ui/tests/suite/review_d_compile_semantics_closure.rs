@@ -17,7 +17,7 @@ use compose_ui::*;
 #[composable]
 fn Labelled() {
     Layout(
-        Modifier.semantics(false, |config| config.text.push("label".into())),
+        Modifier.semantics(|config| config.text.push("label".into())),
         empty_measure_policy(),
         callback(|| {}),
     );

@@ -66,18 +66,18 @@ fn padding_and_size_take_each_overloads_arguments() {
 fn aspect_ratio_sizes_from_the_width_or_the_height_first() {
     let mut ui = ComposeTestRule::sized(IntSize::new(300, 300), || {
         Column!({
-            Box!(modifier = Modifier.width(100.dp()).aspect_ratio(2.0, false).test_tag("wide"));
+            Box!(modifier = Modifier.width(100.dp()).aspect_ratio(2.0).test_tag("wide"));
             Box!(
                 modifier = Modifier
                     .size((100.dp(), 30.dp()))
-                    .wrap_content_size(Alignment::TOP_START, false)
-                    .aspect_ratio(2.0, true)
+                    .wrap_content_size_with(Alignment::TOP_START, false)
+                    .aspect_ratio_with(2.0, true)
                     .test_tag("height first")
             );
             Box!(
                 modifier = Modifier
                     .size_in(SizeSpec::bounds(0.dp(), 0.dp(), 100.dp(), 30.dp()))
-                    .aspect_ratio(2.0, false)
+                    .aspect_ratio(2.0)
                     .test_tag("bounded")
             );
         });
@@ -98,21 +98,21 @@ fn wrap_content_aligns_the_content_in_the_size_imposed() {
             Box!(
                 modifier = Modifier
                     .size(100.dp())
-                    .wrap_content_size(Alignment::CENTER, false)
+                    .wrap_content_size_with(Alignment::CENTER, false)
                     .size(20.dp())
                     .test_tag("centered")
             );
             Box!(
                 modifier = Modifier
                     .size(100.dp())
-                    .wrap_content_width(Alignment::END, false)
+                    .wrap_content_width_with(Alignment::END, false)
                     .width(20.dp())
                     .test_tag("end")
             );
             Box!(
                 modifier = Modifier
                     .size(50.dp())
-                    .wrap_content_height(Alignment::TOP, true)
+                    .wrap_content_height_with(Alignment::TOP, true)
                     .height(80.dp())
                     .test_tag("unbounded")
             );
@@ -403,7 +403,7 @@ fn hoverable_reports_the_mouse_over_it() {
     let source = MutableInteractionSource::new();
     let given = source.clone();
     let mut ui = ComposeTestRule::sized(IntSize::new(300, 300), move || {
-        Box!(modifier = Modifier.size(50.dp()).hoverable(given.clone(), true));
+        Box!(modifier = Modifier.size(50.dp()).hoverable(given.clone()));
     });
     assert!(!source.is_hovered());
     ui.host().send_pointer(PointerEvent::moved(Offset::new(10.0, 10.0), false));

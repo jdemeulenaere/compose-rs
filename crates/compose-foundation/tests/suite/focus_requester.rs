@@ -42,7 +42,7 @@ fn a_click_moves_focus_to_another_node() {
                 modifier = Modifier
                     .size(20.dp())
                     .focus_requester(requester)
-                    .focusable(true)
+                    .focusable()
                     .test_tag("target")
             );
         });
@@ -59,7 +59,7 @@ fn a_requester_without_a_node_does_nothing() {
     let attached = requester;
     let mut ui = compose_test(move || {
         if handle.get() {
-            Box!(modifier = Modifier.focus_requester(attached).focusable(true));
+            Box!(modifier = Modifier.focus_requester(attached).focusable());
         }
     });
     shown.set(false);

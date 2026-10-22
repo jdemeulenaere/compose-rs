@@ -252,7 +252,7 @@ pub struct Paint {
     /// A stroke's ends.
     pub cap: StrokeCap,
     /// The shader, in the display list it's recorded in (`DisplayList::shaders`).
-    pub shader: Option<crate::brush::ShaderIndex>,
+    pub(crate) shader: Option<crate::brush::ShaderIndex>,
 }
 
 impl Paint {
@@ -273,6 +273,18 @@ impl Paint {
     /// The same paint at `alpha` (0 to 1) of its opacity, as `Paint.alpha` and the draw calls'
     /// `alpha`: its color's alpha multiplied. A brush paint's gradient keeps the alpha given to
     /// `brush_paint` (only its fallback color changes): pass the alpha there.
+    /// The shader a brush paint names, in the display list it's recorded in
+    /// (`DisplayList::shaders`): for hosts.
+    pub fn shader(&self) -> Option<crate::brush::ShaderIndex> {
+        self.shader
+    }
+
+    /// This paint naming `shader` of the display list it goes in (a platform's shader index:
+    /// `DrawScope::brush_paint` is the app-facing way).
+    pub fn with_shader(self, shader: crate::brush::ShaderIndex) -> Paint {
+        Paint { shader: Some(shader), ..self }
+    }
+
     pub fn with_alpha(self, alpha: f32) -> Paint {
         let opacity = self.color.alpha() as f32 / 255.0 * alpha.clamp(0.0, 1.0);
         Paint { color: self.color.with_alpha(opacity), ..self }

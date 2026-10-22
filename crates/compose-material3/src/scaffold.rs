@@ -247,7 +247,7 @@ pub fn Card(
         compose_runtime::callback(move || {
             Column(
                 Modifier,
-                compose_foundation::layout::Arrangement::Top,
+                compose_foundation::layout::Arrangement::TOP,
                 compose_ui::Alignment::START,
                 content.clone(),
             );

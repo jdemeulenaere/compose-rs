@@ -1,7 +1,7 @@
 //! The composition runtime of compose-rs, as Jetpack Compose's `androidx.compose.runtime`: a
 //! slot table of keyed groups, a composer that generated code drives, restart scopes, observable
 //! state, `remember`, effects and compositions. It knows nothing about UI; it talks to a node
-//! tree through the [`Applier`] trait.
+//! tree through the [`Applier`](platform::Applier) trait.
 //!
 //! See `docs/04-runtime.md` and `docs/05-state.md` for the design.
 //!

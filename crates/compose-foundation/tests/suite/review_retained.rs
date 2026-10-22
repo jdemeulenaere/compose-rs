@@ -198,7 +198,7 @@ fn a_text_field_in_a_boundary_draws_its_cursor_and_selection() {
                     modifier = Modifier.fill_max_width().test_tag("field"),
                 );
             });
-            Box!(modifier = Modifier.focusable(true).test_tag("other").size(20.dp()));
+            Box!(modifier = Modifier.focusable().test_tag("other").size(20.dp()));
         });
     });
     let selection = |ui: &mut ComposeTestRule| ui.dump_display_list().contains("#664286F4");

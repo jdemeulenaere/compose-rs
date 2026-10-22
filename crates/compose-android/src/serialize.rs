@@ -21,7 +21,8 @@ use std::sync::{Arc, Weak};
 
 use compose_ui::{
     Color, ImageBitmap, Offset, Outline, Paint, PaintStyle, Path, PathCommand, PathFillType, Rect,
-    Shader, StrokeCap, TileMode,
+    StrokeCap, TileMode,
+    platform::Shader,
     platform::{DisplayList, DrawGroup, DrawOp},
 };
 
@@ -118,7 +119,7 @@ impl Writer {
     /// is that color at the shader's alpha, with no shader.
     fn paint(&mut self, paint: &Paint, shaders: &[Shader], alpha: f32) {
         let shading = paint
-            .shader
+            .shader()
             .and_then(|index| shaders.get(index.0 as usize))
             .map_or(Shading::Color, shading);
         let color = match shading {
@@ -264,7 +265,7 @@ fn shading(shader: &Shader) -> Shading<'_> {
 
 /// A gradient's mean color over 0 to 1 (unpremultiplied channels, each stretch between two
 /// stops its colors' mean, the ends their color), as Skia's `average_gradient_color`.
-fn average_color(gradient: &compose_ui::Gradient) -> Color {
+fn average_color(gradient: &compose_ui::platform::Gradient) -> Color {
     let colors: Vec<[f32; 4]> = gradient
         .colors
         .iter()
@@ -888,7 +889,7 @@ fn write_op(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use compose_ui::Gradient;
+    use compose_ui::platform::Gradient;
 
     fn read_u32(bytes: &[u8], at: usize) -> u32 {
         u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap())
@@ -1072,7 +1073,7 @@ mod tests {
 
     fn gradient_rect(list: &mut DisplayList, shader: Shader) {
         let mut paint = Paint::fill(Color::BLACK);
-        paint.shader = Some(list.push_shader(shader));
+        paint = paint.with_shader(list.push_shader(shader));
         list.push(DrawOp::DrawRect(Rect::new(0.0, 0.0, 10.0, 10.0), paint));
     }
 
@@ -1153,7 +1154,7 @@ mod tests {
             alpha: 0.5,
         };
         let mut paint = Paint::fill(Color::from_argb(0x8011_2233));
-        paint.shader = Some(list.push_shader(shader));
+        paint = paint.with_shader(list.push_shader(shader));
         list.push(DrawOp::DrawRect(Rect::new(0.0, 0.0, 10.0, 10.0), paint));
         let (mut resources, mut out) = (Resources::default(), Writer::default());
         write_display_list(&list, &mut resources, &mut GroupCache::default(), &mut out);

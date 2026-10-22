@@ -5,7 +5,7 @@ use compose::runtime::*;
 
 #[composable]
 fn Bar() {
-    Row!(horizontal_arrangement = Arrangement::Top, {});
+    Row!(horizontal_arrangement = Arrangement::TOP, {});
 }
 
 fn main() {}

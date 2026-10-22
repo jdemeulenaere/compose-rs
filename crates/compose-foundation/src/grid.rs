@@ -245,7 +245,9 @@ impl GridItems {
 
 /// A vertically scrolling grid, as Compose's `LazyVerticalGrid`: `columns` cut its width
 /// (inside `content_padding`) into equal cells, `horizontal_arrangement` between them, and its
-/// items fill rows from the start, composed lazily row by row.
+/// items fill rows from the start, composed lazily row by row. Cells are equal and fill the
+/// width, so `horizontal_arrangement` gives only its spacing (a custom arrangement's `arrange`
+/// isn't asked: there is no free space to place).
 #[composable]
 #[allow(non_snake_case)]
 pub fn LazyVerticalGrid(
@@ -253,8 +255,8 @@ pub fn LazyVerticalGrid(
     #[default(crate::Modifier)] modifier: Modifier,
     #[default(crate::remember_lazy_grid_state(0, 0))] state: LazyGridState,
     #[default(crate::layout::PaddingValues::ZERO)] content_padding: PaddingValues,
-    #[default(crate::layout::Arrangement::Top)] vertical_arrangement: impl Into<VerticalArrangement>,
-    #[default(crate::layout::Arrangement::Start)] horizontal_arrangement: impl Into<
+    #[default(crate::layout::Arrangement::TOP)] vertical_arrangement: impl Into<VerticalArrangement>,
+    #[default(crate::layout::Arrangement::START)] horizontal_arrangement: impl Into<
         HorizontalArrangement,
     >,
     content: impl Fn(LazyGridScope) + 'static,

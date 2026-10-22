@@ -9,7 +9,7 @@ mod window_insets;
 use std::rc::Rc;
 
 use compose_runtime::{composable, remember_keyed};
-use compose_ui::round_to_int;
+use compose_ui::platform::round_to_int;
 use compose_ui::{
     Alignment, Constraints, HorizontalAlignment, Layout, Measurable, MeasurePolicy, MeasureResult,
     MeasureScope, Modifier, ParentAlignment, Placeable, VerticalAlignment, empty_measure_policy,
@@ -101,7 +101,7 @@ impl AxisConstraints {
 /// without weight measured first with the space left, then the weighted ones sharing what
 /// remains in proportion; placed by the arrangement along the main axis and by their alignment
 /// across it.
-pub struct RowColumnMeasurePolicy {
+pub(crate) struct RowColumnMeasurePolicy {
     orientation: Orientation,
     arrangement: MainAxisArrangement,
     /// A `Row`'s vertical bias or a `Column`'s horizontal bias.
@@ -380,7 +380,7 @@ pub fn Canvas(modifier: Modifier, on_draw: impl Fn(&mut compose_ui::DrawScope<'_
 #[composable]
 pub fn Row(
     #[default(crate::Modifier)] modifier: Modifier,
-    #[default(crate::layout::Arrangement::Start)] horizontal_arrangement: impl Into<
+    #[default(crate::layout::Arrangement::START)] horizontal_arrangement: impl Into<
         HorizontalArrangement,
     >,
     #[default(crate::Alignment::TOP)] vertical_alignment: VerticalAlignment,
@@ -400,7 +400,7 @@ pub fn Row(
 #[composable]
 pub fn Column(
     #[default(crate::Modifier)] modifier: Modifier,
-    #[default(crate::layout::Arrangement::Top)] vertical_arrangement: impl Into<VerticalArrangement>,
+    #[default(crate::layout::Arrangement::TOP)] vertical_arrangement: impl Into<VerticalArrangement>,
     #[default(crate::Alignment::START)] horizontal_alignment: HorizontalAlignment,
     content: impl Fn(ColumnScope) + 'static,
 ) {
@@ -418,7 +418,7 @@ pub fn Column(
 
 /// `Box`'s measure policy, as Compose's: children stacked, each aligned by its own `align` or
 /// the box's content alignment; the box as large as its largest child, within its constraints.
-pub struct BoxMeasurePolicy {
+pub(crate) struct BoxMeasurePolicy {
     alignment: Alignment,
     propagate_min_constraints: bool,
 }

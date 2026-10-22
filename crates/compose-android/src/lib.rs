@@ -1,7 +1,7 @@
 //! compose-rs on Android (docs/07-platforms.md, "Android"): a Kotlin `ComposeRsView` (a plain
 //! `View`, so it composes inside Kotlin Compose with `AndroidView`) hosts a composition here.
 //!
-//! - **Frames:** on a Choreographer frame, Kotlin calls [`frame`](bridge) once: this
+//! - **Frames:** on a Choreographer frame, Kotlin calls `frame` (in the bridge) once: this
 //!   recomposes, lays out and draws, writing the display list into a buffer. In `onDraw`,
 //!   Kotlin takes the buffer and replays it on the view's `Canvas` (hardware-accelerated: the
 //!   system draws it on the GPU). No Skia is shipped.

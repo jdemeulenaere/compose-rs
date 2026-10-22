@@ -89,7 +89,7 @@ fn the_first_visible_item_is_kept_by_key_when_items_are_inserted_before_it() {
     assert_eq!(top(&mut ui, "key 10"), 0.0, "the row at the top moved");
 }
 
-/// Input: a 100 px `LazyColumn` with `vertical_arrangement = Arrangement::Bottom` and two
+/// Input: a 100 px `LazyColumn` with `vertical_arrangement = Arrangement::BOTTOM` and two
 /// 20 px items (a chat-style list).
 ///
 /// Compose: the arrangement places the items when they don't fill the viewport
@@ -102,7 +102,7 @@ fn the_arrangement_places_items_that_do_not_fill_the_list() {
     let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), || {
         LazyColumn!(
             modifier = Modifier.size((100.dp(), 100.dp())),
-            vertical_arrangement = Arrangement::Bottom,
+            vertical_arrangement = Arrangement::BOTTOM,
             |scope: LazyListScope| {
                 scope.items(2, |index| {
                     Box!(

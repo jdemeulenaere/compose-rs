@@ -42,10 +42,10 @@ fn chip(
     let typography = MaterialTheme::typography();
     let mut surface = minimum_interactive_component_size(modifier)
         .size_in(SizeSpec::bounds(Dp::UNSPECIFIED, 32.dp(), Dp::UNSPECIFIED, Dp::UNSPECIFIED))
-        .background_with(look.container, shape, 1.0)
+        .background_with(look.container, shape)
         .clip(shape);
     if let Some(border) = look.border {
-        surface = surface.border(border.width, border.color, shape);
+        surface = surface.border_with(border.width, border.color, shape);
     }
     surface = surface.clickable_with(
         ClickableOptions {
@@ -57,7 +57,7 @@ fn chip(
         on_click,
     );
     if let Some(selected) = selected {
-        surface = surface.semantics(false, move |config| config.selected = Some(selected));
+        surface = surface.semantics(move |config| config.selected = Some(selected));
     }
     let start = if leading_icon.is_some() { 8.dp() } else { 16.dp() };
     let end = if trailing_icon.is_some() { 8.dp() } else { 16.dp() };
@@ -223,7 +223,7 @@ pub fn Badge(
     let size = if content.is_some() { 16.dp() } else { 6.dp() };
     let modifier = modifier
         .size_in(SizeSpec::bounds(size, size, Dp::UNSPECIFIED, Dp::UNSPECIFIED))
-        .background_with(container_color, pill, 1.0)
+        .background_with(container_color, pill)
         .clip(pill);
     match content {
         Some(content) => {

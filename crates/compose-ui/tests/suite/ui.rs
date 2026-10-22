@@ -106,7 +106,7 @@ fn modifier_order_decides_what_is_drawn_where() {
                     .size(20.dp())
                     .clip(Shape::Rounded([CornerSize::Dp(4.dp()); 4]))
                     .background(Color::GREEN)
-                    .border(2.dp(), Color::BLACK, RECTANGLE_SHAPE),
+                    .border(2.dp(), Color::BLACK),
             );
         });
     });
@@ -136,7 +136,11 @@ fn a_transparent_paint_records_nothing() {
             Leaf(Modifier.background(Color::TRANSPARENT).size(10.dp()));
             Leaf(
                 Modifier
-                    .border(1.dp(), Color::TRANSPARENT, Shape::Rounded([CornerSize::Dp(4.dp()); 4]))
+                    .border_with(
+                        1.dp(),
+                        Color::TRANSPARENT,
+                        Shape::Rounded([CornerSize::Dp(4.dp()); 4]),
+                    )
                     .size(10.dp()),
             );
             Leaf(Modifier.size(10.dp()).draw_behind(|scope| {
@@ -416,7 +420,7 @@ fn key_events_bubble_from_the_focused_node_until_consumed() {
                             log(format!("inner {:?}", event.key));
                             event.key == Key::Character('a')
                         })
-                        .focusable(true)
+                        .focusable()
                         .size(10.dp()),
                 );
             }

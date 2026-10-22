@@ -271,7 +271,7 @@ fn AutoItem(index: usize) {
         modifier = Modifier
             .size((100.dp(), 20.dp()))
             .focus_requester(requester)
-            .focusable(true)
+            .focusable()
             .test_tag(format!("row {index}"))
     );
 }

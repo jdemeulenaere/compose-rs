@@ -492,7 +492,7 @@ pub fn ModalDrawerSheet(
                 Dp::UNSPECIFIED,
             ))
             .fill_max_height()
-            .semantics(false, |config| config.content_description.push("Navigation menu".into())),
+            .semantics(|config| config.content_description.push("Navigation menu".into())),
         drawer_shape,
         drawer_container_color,
         content_color,
@@ -502,7 +502,7 @@ pub fn ModalDrawerSheet(
         compose_runtime::callback(move || {
             Column(
                 Modifier.fill_max_height(),
-                compose_foundation::layout::Arrangement::Top,
+                compose_foundation::layout::Arrangement::TOP,
                 Alignment::START,
                 content.clone(),
             );
@@ -578,7 +578,7 @@ pub fn NavigationDrawerItem(
     let row_modifier = modifier
         .size_in(SizeSpec::bounds(Dp::UNSPECIFIED, 56.dp(), Dp::UNSPECIFIED, Dp::UNSPECIFIED))
         .fill_max_width()
-        .background_with(container, pill, 1.0)
+        .background_with(container, pill)
         .clip(pill)
         .clickable_with(
             ClickableOptions {
@@ -588,12 +588,12 @@ pub fn NavigationDrawerItem(
             },
             on_click,
         )
-        .semantics(false, move |config| config.selected = Some(selected))
+        .semantics(move |config| config.selected = Some(selected))
         .padding((16.dp(), 0.dp(), 24.dp(), 0.dp()));
     let (label, icon, badge) = (label.clone(), icon.clone(), badge.clone());
     Row(
         row_modifier,
-        compose_foundation::layout::Arrangement::Start,
+        compose_foundation::layout::Arrangement::START,
         Alignment::CENTER_VERTICALLY,
         compose_runtime::callback(move |row| {
             if let Some(icon) = icon.clone() {

@@ -174,34 +174,33 @@ impl Modifier {
 
     /// Fills the bounds behind the content with a color or a brush, as `Modifier.background`.
     pub fn background(self, brush: impl Into<Brush>) -> Modifier {
-        self.background_of(brush.into(), Shape::Rectangle, 1.0)
+        self.background_of(brush.into(), Shape::Rectangle)
     }
 
-    /// `background` in `shape`, at `alpha`, as `Modifier.background(brush, shape, alpha)` (and
-    /// `background(color, shape)`: an alpha of 1).
-    pub fn background_with(self, brush: impl Into<Brush>, shape: Shape, alpha: f32) -> Modifier {
-        self.background_of(brush.into(), shape, alpha)
+    /// `background` in `shape`, as `Modifier.background(color, shape)` and `background(brush,
+    /// shape)`; Compose's `alpha` is the brush's (`brush.with_alpha(alpha)`).
+    pub fn background_with(self, brush: impl Into<Brush>, shape: Shape) -> Modifier {
+        self.background_of(brush.into(), shape)
     }
 
-    fn background_of(self, brush: Brush, shape: Shape, alpha: f32) -> Modifier {
+    fn background_of(self, brush: Brush, shape: Shape) -> Modifier {
         match brush {
-            Brush::Solid(color) => {
-                let color = if alpha < 1.0 {
-                    color.with_alpha(color.alpha() as f32 / 255.0 * alpha.max(0.0))
-                } else {
-                    color
-                };
-                self.then_element(Element::Background(color, shape))
-            }
+            Brush::Solid(color) => self.then_element(Element::Background(color, shape)),
             brush => self.then_custom(crate::draw_modifiers::BackgroundBrushElement {
                 brush,
                 shape,
-                alpha,
+                alpha: 1.0,
             }),
         }
     }
 
-    pub fn border(self, width: Dp, color: Color, shape: Shape) -> Modifier {
+    /// A border of `width` and `color` around the bounds, as `Modifier.border(width, color)`.
+    pub fn border(self, width: Dp, color: Color) -> Modifier {
+        self.border_with(width, color, Shape::Rectangle)
+    }
+
+    /// `border` in `shape`, as `Modifier.border_with(width, color, shape)`.
+    pub fn border_with(self, width: Dp, color: Color, shape: Shape) -> Modifier {
         self.then_element(Element::Border(width, color, shape))
     }
 
@@ -286,14 +285,13 @@ impl Modifier {
         options: ClickableOptions,
         on_click: impl IntoCallback<dyn Fn()>,
     ) -> Modifier {
-        self.semantics(false, |config| config.selected = Some(selected))
-            .clickable_with(options, on_click)
+        self.semantics(|config| config.selected = Some(selected)).clickable_with(options, on_click)
     }
 
     /// Groups selectable items (radio buttons) for accessibility, as
     /// `Modifier.selectableGroup`.
     pub fn selectable_group(self) -> Modifier {
-        self.semantics(false, |config| config.selectable_group = true)
+        self.semantics(|config| config.selectable_group = true)
     }
 
     /// A click, a double click and a long press, as `Modifier.combinedClickable`: with
@@ -340,13 +338,26 @@ impl Modifier {
     pub fn hoverable(
         self,
         interaction_source: crate::interaction::MutableInteractionSource,
+    ) -> Modifier {
+        self.hoverable_with(interaction_source, true)
+    }
+
+    /// `hoverable` with `enabled`, as `Modifier.hoverable_with(interactionSource, enabled)`.
+    pub fn hoverable_with(
+        self,
+        interaction_source: crate::interaction::MutableInteractionSource,
         enabled: bool,
     ) -> Modifier {
         self.then_custom(crate::nodes::HoverableElement { interaction_source, enabled })
     }
 
-    /// Makes the element a focus target, as `Modifier.focusable`.
-    pub fn focusable(self, enabled: bool) -> Modifier {
+    /// Makes the element a focus target, as `Modifier.focusable()`.
+    pub fn focusable(self) -> Modifier {
+        self.focusable_with(true)
+    }
+
+    /// `focusable` with `enabled`, as `Modifier.focusable_with(enabled)` (no interaction source yet).
+    pub fn focusable_with(self, enabled: bool) -> Modifier {
         self.then_element(Element::Focusable(enabled))
     }
 
@@ -375,7 +386,12 @@ impl Modifier {
     /// Semantics properties, as `Modifier.semantics`; `merge_descendants` merges the
     /// descendants' semantics into this node, as a button merges its label. `properties` runs
     /// at once and its result is kept as a value, so an unchanged modifier stays `same`.
-    pub fn semantics(
+    pub fn semantics(self, properties: impl FnOnce(&mut SemanticsConfiguration)) -> Modifier {
+        self.semantics_with(false, properties)
+    }
+
+    /// `semantics` with `merge_descendants`, as `Modifier.semantics(mergeDescendants)`.
+    pub fn semantics_with(
         self,
         merge_descendants: bool,
         properties: impl FnOnce(&mut SemanticsConfiguration),
@@ -391,7 +407,7 @@ impl Modifier {
         self,
         properties: impl FnOnce(&mut SemanticsConfiguration),
     ) -> Modifier {
-        self.semantics(false, |config| {
+        self.semantics(|config| {
             properties(config);
             config.clear_descendants = true;
         })

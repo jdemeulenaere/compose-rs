@@ -5,6 +5,7 @@ use compose_foundation::layout::Box;
 use compose_foundation::{BasicText, BorderStroke};
 use compose_runtime::{CompositionLocalProvider, composable};
 use compose_ui::ClickableOptions;
+use compose_ui::DEFAULT_SHADOW_COLOR;
 use compose_ui::{
     Alignment, Color, Dp, DrawModifierNode, DrawScope, FontWeight, Modifier, ModifierNode,
     ModifierNodeElement, MutableInteractionSource, Offset, Paint, Rect, Role, Shape, SharedString,
@@ -94,10 +95,11 @@ pub(crate) fn surface_modifier(
     border: Option<BorderStroke>,
     shadow_elevation: Dp,
 ) -> Modifier {
-    let modifier =
-        modifier.shadow(shadow_elevation, shape, false).background_with(color, shape, 1.0);
+    let modifier = modifier
+        .shadow_with(shadow_elevation, shape, false, DEFAULT_SHADOW_COLOR, DEFAULT_SHADOW_COLOR)
+        .background_with(color, shape);
     let modifier = match border {
-        Some(border) => modifier.border(border.width, border.color, shape),
+        Some(border) => modifier.border_with(border.width, border.color, shape),
         None => modifier,
     };
     modifier.clip(shape)
@@ -357,7 +359,7 @@ pub(crate) fn surface(
                 );
             match click.selected {
                 Some(selected) => {
-                    modifier.semantics(false, move |config| config.selected = Some(selected))
+                    modifier.semantics(move |config| config.selected = Some(selected))
                 }
                 None => modifier,
             }
@@ -476,13 +478,20 @@ pub fn Checkbox(
     // As Compose's: the touch target only with a callback, then a 20 dp box whatever the size.
     let modifier = match on_checked_change {
         Some(on_checked_change) => {
+            // A circle around the box, as Compose's `ripple(bounded = false, 20.dp)`.
+            let indication = compose_ui::Indication::unbounded(
+                if checked { colors.checked_box_color } else { colors.unchecked_border_color },
+                20.dp(),
+            );
+            let options = ClickableOptions {
+                enabled,
+                role: Some(Role::Checkbox),
+                indication,
+                ..ClickableOptions::DEFAULT
+            };
             minimum_interactive_component_size(modifier.toggleable_with(
                 checked,
-                ClickableOptions { enabled, role: Some(Role::Checkbox), indication: // A circle around the box, as Compose's `ripple(bounded = false, 20.dp)`.
-                compose_ui::Indication::unbounded(
-                    if checked { colors.checked_box_color } else { colors.unchecked_border_color },
-                    20.dp(),
-                ), ..ClickableOptions::DEFAULT },
+                options,
                 on_checked_change,
             ))
         }

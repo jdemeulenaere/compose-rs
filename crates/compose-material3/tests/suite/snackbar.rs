@@ -39,7 +39,9 @@ fn show(
 ) {
     let (host, message, action) = (*host, message.to_string(), action.map(str::to_string));
     scope.borrow().as_ref().unwrap().launch(async move {
-        let result = host.show_snackbar_with(message, action, false, SnackbarDuration::Short).await;
+        let result = host
+            .show_snackbar_with(message, action.map(Into::into), false, SnackbarDuration::Short)
+            .await;
         RESULTS.with(|results| results.borrow_mut().push(result));
     });
 }
@@ -99,7 +101,7 @@ fn cancelling_show_snackbar_takes_it_away_and_lets_the_next_show() {
 #[test]
 fn a_message_alone_is_a_short_snackbar() {
     let visuals = SnackbarVisuals::from("Saved");
-    assert_eq!(visuals.message, "Saved");
+    assert_eq!(visuals.message.as_str(), "Saved");
     assert_eq!(visuals.action_label, None);
     assert!(!visuals.with_dismiss_action);
     assert_eq!(visuals.duration, SnackbarDuration::Short);

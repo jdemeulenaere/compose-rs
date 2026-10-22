@@ -29,7 +29,7 @@ fn grid() -> (ComposeTestRule, compose_ui::FocusManager) {
                         Box!(
                             modifier = Modifier
                                 .size(20.dp())
-                                .focusable(true)
+                                .focusable()
                                 .test_tag(format!("{column},{row}"))
                         );
                     }

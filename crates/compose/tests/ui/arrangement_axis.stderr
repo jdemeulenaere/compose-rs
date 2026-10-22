@@ -1,7 +1,7 @@
 error[E0277]: the trait bound `HorizontalArrangement: From<VerticalArrangement>` is not satisfied
  --> tests/ui/arrangement_axis.rs:8:35
   |
-8 |     Row!(horizontal_arrangement = Arrangement::Top, {});
+8 |     Row!(horizontal_arrangement = Arrangement::TOP, {});
   |     ------------------------------^^^^^^^^^^^^^^^^-----
   |     |                             |
   |     |                             the trait `From<VerticalArrangement>` is not implemented for `HorizontalArrangement`

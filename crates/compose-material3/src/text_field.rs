@@ -320,7 +320,7 @@ fn decorated_field(
                 .on_focus_changed(move |now| focused.set(now));
             container = match variant {
                 Variant::Filled => {
-                    container.background_with(container_color, TextFieldDefaults::shape(), 1.0)
+                    container.background_with(container_color, TextFieldDefaults::shape())
                 }
                 Variant::Outlined => {
                     let thickness = if is_focused {
@@ -330,18 +330,16 @@ fn decorated_field(
                     };
                     let shape = OutlinedTextFieldDefaults::shape();
                     let (label_width, label_start) = (label_width.clone(), label_start.clone());
-                    container.background_with(container_color, shape, 1.0).draw_behind(
-                        move |scope| {
-                            draw_notched_outline(
-                                scope,
-                                shape,
-                                thickness,
-                                indicator,
-                                label_start.get(),
-                                if has_label { label_width.get() * progress } else { 0.0 },
-                            )
-                        },
-                    )
+                    container.background_with(container_color, shape).draw_behind(move |scope| {
+                        draw_notched_outline(
+                            scope,
+                            shape,
+                            thickness,
+                            indicator,
+                            label_start.get(),
+                            if has_label { label_width.get() * progress } else { 0.0 },
+                        )
+                    })
                 }
             };
             let layout = DecorationLayout {
@@ -488,7 +486,7 @@ fn decorated_field(
     };
     // In error, the field says so, as Compose's `semantics { error(…) }`.
     let modifier = if is_error {
-        modifier.semantics(false, |config| config.error = Some("Invalid input".into()))
+        modifier.semantics(|config| config.error = Some("Invalid input".into()))
     } else {
         modifier
     };

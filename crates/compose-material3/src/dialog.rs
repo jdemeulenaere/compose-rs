@@ -68,7 +68,7 @@ pub fn AlertDialog(
                     );
                     Column(
                         Modifier.padding(24.dp()),
-                        Arrangement::Top,
+                        Arrangement::TOP,
                         compose_ui::Alignment::START,
                         compose_runtime::callback(move |column: ColumnScope| {
                             if let Some(icon) = icon.clone() {

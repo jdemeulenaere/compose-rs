@@ -173,7 +173,7 @@ fn navigation_item(
             },
             on_click,
         )
-        .semantics(false, move |config| config.selected = Some(selected));
+        .semantics(move |config| config.selected = Some(selected));
     let (icon, label) = (icon.clone(), label.clone());
     let (pill_width, pill_height) = pill_size;
     Layout(
@@ -185,7 +185,7 @@ fn navigation_item(
             Box(
                 Modifier
                     .size_in(SizeSpec::bounds(pill_width, pill_height, pill_width, pill_height))
-                    .background_with(indicator, pill, 1.0)
+                    .background_with(indicator, pill)
                     .draw_behind(move |scope| {
                         // Read while drawing: a press, focus or hover draws again only.
                         // Material's state layers: pressed and focused 10 %, hovered 8 %.

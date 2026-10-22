@@ -306,15 +306,20 @@ pub fn RadioButton(
 ) {
     let color = if selected { colors.selected_color } else { colors.unselected_color };
     let modifier = match on_click {
-        Some(on_click) => minimum_interactive_component_size(modifier.clickable_with(
-            ClickableOptions { enabled, role: Some(Role::RadioButton), indication: // A circle around the button, as Compose's `ripple(bounded = false, 20.dp)`.
-            compose_ui::Indication::unbounded(color, 20.dp()), ..ClickableOptions::DEFAULT },
-            on_click,
-        )),
+        Some(on_click) => {
+            // A circle around the button, as Compose's `ripple(bounded = false, 20.dp)`.
+            let options = ClickableOptions {
+                enabled,
+                role: Some(Role::RadioButton),
+                indication: compose_ui::Indication::unbounded(color, 20.dp()),
+                ..ClickableOptions::DEFAULT
+            };
+            minimum_interactive_component_size(modifier.clickable_with(options, on_click))
+        }
         None => modifier,
     };
     let modifier = modifier
-        .semantics(false, move |config| config.selected = Some(selected))
+        .semantics(move |config| config.selected = Some(selected))
         .padding(2.dp())
         .required_size((20.dp(), 20.dp()))
         .then_custom(RadioElement { selected, enabled, colors });

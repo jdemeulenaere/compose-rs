@@ -59,13 +59,18 @@ mod window;
 /// list and feed input. Not for apps, and not covered by semver: these change with the hosts
 /// (D260).
 pub mod platform {
+    pub use crate::brush::{Gradient, Shader, ShaderIndex};
     pub use crate::clipboard::MemoryClipboard;
     pub use crate::configuration::{Insets, LOCAL_PLATFORM_WINDOW_INSETS, PlatformWindowInsets};
     pub use crate::display_list::{DisplayList, DrawGroup, DrawOp, Renderer};
+    pub use crate::graphics_layer::LayerProperties;
     pub use crate::host::{FrameStats, LOCAL_CONSTRAINTS_HINT, UiHost};
     pub use crate::image::{ImageDecoder, set_image_decoder};
+    pub use crate::input::Action;
+    pub use crate::layout::StackMeasurePolicy;
     pub use crate::layout::emit_layout_node;
     pub use crate::modifier::shared_custom_modifier;
+    pub use crate::nested_scroll::NestedScrollChain;
     pub use crate::pointer_input::{PointerInputDriver, run_soon};
     pub use crate::semantics::SemanticsNode;
     pub use crate::text::{
@@ -73,6 +78,7 @@ pub mod platform {
         TextMeasurer, TextPosition,
     };
     pub use crate::tree::{LayoutNode, NodeId, UiTree};
+    pub use crate::unit::round_to_int;
 
     /// Trace sections around a frame's phases, for the platform's tracer.
     pub mod trace {
@@ -85,7 +91,7 @@ pub use alignment::{
 };
 pub use annotated::{AnnotatedString, AnnotatedStringBuilder, SpanRange, SpanStyle};
 pub use back::{BackHandler, LOCAL_ON_BACK_PRESSED_DISPATCHER, OnBackPressedDispatcher};
-pub use brush::{Brush, ColorStops, Gradient, Shader, ShaderIndex, TileMode};
+pub use brush::{Brush, ColorStops, TileMode};
 pub use clipboard::Clipboard;
 pub use configuration::{
     Configuration, HostEvents, HostProps, LOCAL_CONFIGURATION, LOCAL_HOST_EVENTS, LOCAL_HOST_PROPS,
@@ -102,17 +108,17 @@ pub use focus_requester::FocusRequester;
 pub use graphics::{
     Color, CornerSize, Outline, Paint, PaintStyle, RECTANGLE_SHAPE, Shape, StrokeCap,
 };
-pub use graphics_layer::{GraphicsLayerScope, LayerProperties, TransformOrigin};
+pub use graphics_layer::{GraphicsLayerScope, TransformOrigin};
 pub use host::LOCAL_DENSITY;
 pub use image::{ImageBitmap, decode_image_bytes, remember_image_resource};
 pub use input::{
-    Action, EventContext, Key, KeyEvent, KeyEventType, KeyModifiers, PointerEvent,
-    PointerEventPass, PointerEventType, PointerIcon, PointerId, PointerType,
+    EventContext, Key, KeyEvent, KeyEventType, KeyModifiers, PointerEvent, PointerEventPass,
+    PointerEventType, PointerIcon, PointerId, PointerType,
 };
 pub use interaction::MutableInteractionSource;
 pub use layout::{
     EmptyMeasurePolicy, Layout, Measurable, MeasurePolicy, MeasureResult, MeasureScope, Placeable,
-    StackMeasurePolicy, empty_measure_policy, measure_policy,
+    empty_measure_policy, measure_policy,
 };
 pub use layout_callbacks::{GlobalPositionAwareModifierNode, LayoutCoordinates};
 pub use modifier::{
@@ -121,7 +127,7 @@ pub use modifier::{
     ModifierNode, ModifierNodeElement, PaddingValues, ParentAlignment, ParentData,
     PointerInputModifierNode, RowScope, SemanticsModifierNode, SizeSpec, WeightScope,
 };
-pub use nested_scroll::{NestedScrollChain, NestedScrollConnection, NestedScrollSource};
+pub use nested_scroll::{NestedScrollConnection, NestedScrollSource};
 pub use overlay::{PopupPositionProvider, WindowPosition};
 pub use path::{ImageVector, Path, PathCommand, PathError, PathFillType};
 pub use pointer_input::{
@@ -140,9 +146,7 @@ pub use text::{
 };
 pub use text_input::{ImeAction, ImeOptions, KeyboardCapitalization, KeyboardType};
 pub use text_selection::Selectable;
-pub use unit::{
-    Density, Dp, DpSize, IntOffset, IntSize, Offset, Rect, Size, Sp, UnitExt, round_to_int,
-};
+pub use unit::{Density, Dp, DpSize, IntOffset, IntSize, Offset, Rect, Size, Sp, UnitExt};
 pub use window::{
     AlignmentOffsetPositionProvider, Dialog, DialogProperties, Popup, PopupProperties,
     PopupWithPositionProvider,

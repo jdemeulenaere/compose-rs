@@ -46,7 +46,7 @@ fn a_sliders_own_state_description_is_kept() {
                 modifier = Modifier
                     .width(200.dp())
                     .test_tag("slider")
-                    .semantics(false, |config| config.state_description = Some("Loud".into())),
+                    .semantics(|config| config.state_description = Some("Loud".into())),
             );
         });
     });

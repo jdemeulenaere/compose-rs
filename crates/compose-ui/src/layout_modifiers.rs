@@ -18,7 +18,13 @@ impl Modifier {
     /// # Panics
     ///
     /// If `ratio` isn't positive.
-    pub fn aspect_ratio(self, ratio: f32, match_height_constraints_first: bool) -> Modifier {
+    pub fn aspect_ratio(self, ratio: f32) -> Modifier {
+        self.aspect_ratio_with(ratio, false)
+    }
+
+    /// `aspect_ratio` with `match_height_constraints_first`, as
+    /// `Modifier.aspectRatio(ratio, matchHeightConstraintsFirst)`.
+    pub fn aspect_ratio_with(self, ratio: f32, match_height_constraints_first: bool) -> Modifier {
         assert!(ratio > 0.0, "compose-ui: aspect_ratio must be positive, was {ratio}");
         self.then_custom(LayoutData(AspectRatio { ratio, match_height_constraints_first }))
     }
@@ -26,7 +32,13 @@ impl Modifier {
     /// Lets the content take its own width, aligned by `align` in the width the constraints
     /// impose, as `Modifier.wrapContentWidth(align, unbounded)`; `unbounded`, it may be wider
     /// than the maximum.
-    pub fn wrap_content_width(self, align: HorizontalAlignment, unbounded: bool) -> Modifier {
+    pub fn wrap_content_width(self) -> Modifier {
+        self.wrap_content_width_with(Alignment::CENTER_HORIZONTALLY, false)
+    }
+
+    /// `wrap_content_width` with `align` and `unbounded`, as `Modifier.wrapContentWidth(align,
+    /// unbounded)`.
+    pub fn wrap_content_width_with(self, align: HorizontalAlignment, unbounded: bool) -> Modifier {
         let wrap = WrapContent {
             horizontal: true,
             vertical: false,
@@ -37,7 +49,12 @@ impl Modifier {
     }
 
     /// As `wrap_content_width`, for the height, as `Modifier.wrapContentHeight`.
-    pub fn wrap_content_height(self, align: VerticalAlignment, unbounded: bool) -> Modifier {
+    pub fn wrap_content_height(self) -> Modifier {
+        self.wrap_content_height_with(Alignment::CENTER_VERTICALLY, false)
+    }
+
+    /// `wrap_content_height` with `align` and `unbounded`.
+    pub fn wrap_content_height_with(self, align: VerticalAlignment, unbounded: bool) -> Modifier {
         let wrap = WrapContent {
             horizontal: false,
             vertical: true,
@@ -48,7 +65,12 @@ impl Modifier {
     }
 
     /// As `wrap_content_width`, for both directions, as `Modifier.wrapContentSize`.
-    pub fn wrap_content_size(self, align: Alignment, unbounded: bool) -> Modifier {
+    pub fn wrap_content_size(self) -> Modifier {
+        self.wrap_content_size_with(Alignment::CENTER, false)
+    }
+
+    /// `wrap_content_size` with `align` and `unbounded`.
+    pub fn wrap_content_size_with(self, align: Alignment, unbounded: bool) -> Modifier {
         self.then_custom(LayoutData(WrapContent {
             horizontal: true,
             vertical: true,

@@ -30,7 +30,9 @@ pub use script::{check_script, run_script};
 
 /// Hooks tests count composable runs with (the runtime keeps them in its unstable `platform`
 /// module; tests reach them here).
-pub use compose_runtime::platform::{RecompositionCounts, bodies_run};
+pub use compose_runtime::platform::{
+    RecompositionCounts, bodies_run, live_state_count, recomposition_counts, track_recompositions,
+};
 
 /// The default test root: a phone-sized window at density 1.
 pub const DEFAULT_SIZE: IntSize = IntSize::new(400, 800);

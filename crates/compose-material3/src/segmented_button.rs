@@ -276,7 +276,7 @@ pub fn SegmentedButton(
             Dp::UNSPECIFIED,
             Dp::UNSPECIFIED,
         ))
-        .semantics(false, |config| config.role = Some(Role::RadioButton));
+        .semantics(|config| config.role = Some(Role::RadioButton));
     let content = compose_runtime::callback(move || {
         let (icon, label) = (icon.clone(), label.clone());
         Layout(

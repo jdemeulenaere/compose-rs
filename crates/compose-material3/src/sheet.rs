@@ -226,7 +226,7 @@ impl BottomSheetDefaults {
     pub fn drag_handle() {
         let color = MaterialTheme::color_scheme().on_surface_variant.with_alpha(0.4);
         crate::components::Surface(
-            Modifier.padding((Dp(0.0), 22.dp())).semantics(false, |config| {
+            Modifier.padding((Dp(0.0), 22.dp())).semantics(|config| {
                 config.content_description.push("Drag handle".into());
             }),
             MaterialTheme::shapes().extra_large,
@@ -438,7 +438,7 @@ pub fn ModalBottomSheet(
             move |velocity| settle(velocity),
         )
         .nested_scroll(connection)
-        .semantics(false, |config| config.content_description.push("Bottom sheet".into()));
+        .semantics(|config| config.content_description.push("Bottom sheet".into()));
     compose_ui::PopupWithPositionProvider(
         provider,
         Some(back),
@@ -484,7 +484,7 @@ pub fn ModalBottomSheet(
                             let content = content.clone();
                             Column(
                                 Modifier.fill_max_width().padding(content_window_insets),
-                                compose_foundation::layout::Arrangement::Top,
+                                compose_foundation::layout::Arrangement::TOP,
                                 Alignment::START,
                                 compose_runtime::callback(move |column: ColumnScope| {
                                     if let Some(drag_handle) = drag_handle.clone() {

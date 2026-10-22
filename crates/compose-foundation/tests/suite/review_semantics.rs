@@ -46,7 +46,7 @@ fn an_outer_semantics_modifier_wins_over_an_inner_one() {
         Box!(
             modifier = Modifier
                 .test_tag("tab")
-                .semantics(false, |config| config.role = Some(Role::Tab))
+                .semantics(|config| config.role = Some(Role::Tab))
                 .clickable_with(
                     ClickableOptions { role: Some(Role::Button), ..ClickableOptions::DEFAULT },
                     || {}

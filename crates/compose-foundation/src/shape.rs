@@ -3,7 +3,7 @@
 use compose_ui::{CornerSize, Dp, Shape};
 
 /// Rounded corners, as `RoundedCornerShape`'s overloads: `RoundedCornerShape(8.dp())` for every
-/// corner, `RoundedCornerShape(CornerSize::Percent(50.0))` in percent of the shorter side, and
+/// corner, `RoundedCornerShape(50)` in percent of the shorter side (or a `CornerSize`), and
 /// `RoundedCornerShape((top_start, top_end, bottom_end, bottom_start))` in `Dp` or
 /// `CornerSize`s, each corner its own.
 pub fn RoundedCornerShape(corners: impl RoundedCorners) -> Shape {
@@ -19,6 +19,13 @@ pub trait RoundedCorners {
 impl RoundedCorners for Dp {
     fn corner_sizes(self) -> [CornerSize; 4] {
         [CornerSize::Dp(self); 4]
+    }
+}
+
+impl RoundedCorners for i32 {
+    /// Percent of the shorter side, as `RoundedCornerShape(percent: Int)`.
+    fn corner_sizes(self) -> [CornerSize; 4] {
+        [CornerSize::Percent(self as f32); 4]
     }
 }
 

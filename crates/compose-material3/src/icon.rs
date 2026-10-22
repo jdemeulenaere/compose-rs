@@ -27,7 +27,7 @@ pub fn Icon(
 ) {
     let (width, height) = (image_vector.default_width, image_vector.default_height);
     let modifier = match content_description {
-        Some(description) => modifier.semantics(false, move |config| {
+        Some(description) => modifier.semantics(move |config| {
             config.content_description.push(description.into());
             config.role = Some(Role::Image);
         }),
@@ -304,7 +304,7 @@ pub fn IconToggleButton(
             },
             move || on_checked_change(!checked),
         )
-        .semantics(false, move |config| config.toggleable_state = Some(checked.into()));
+        .semantics(move |config| config.toggleable_state = Some(checked.into()));
     CompositionLocalProvider(LOCAL_CONTENT_COLOR.provides(color), || {
         Box(
             modifier.clone(),

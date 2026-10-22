@@ -43,9 +43,9 @@ fn keys_pressed_in_a_dialog_do_not_reach_the_handlers_around_it() {
                 false
             }),
             {
-                Box!(modifier = Modifier.size(20.dp()).focusable(true).test_tag("behind"));
+                Box!(modifier = Modifier.size(20.dp()).focusable().test_tag("behind"));
                 Dialog!(on_dismiss_request = || {}, {
-                    Box!(modifier = Modifier.size(50.dp()).focusable(true).test_tag("in"));
+                    Box!(modifier = Modifier.size(50.dp()).focusable().test_tag("in"));
                 });
             }
         );
@@ -127,15 +127,15 @@ fn passes_a_dialog_replaced_by_another_in_one_frame_gives_the_focus_back_once_cl
         let step = remember(|| mutable_state_of(0u32));
         STEP.with(|cell| *cell.borrow_mut() = Some(step));
         Column!({
-            Box!(modifier = Modifier.size(20.dp()).focusable(true).test_tag("button"));
+            Box!(modifier = Modifier.size(20.dp()).focusable().test_tag("button"));
             if step.get() == 1 {
                 Dialog!(on_dismiss_request = move || step.set(0), {
-                    Box!(modifier = Modifier.size(50.dp()).focusable(true).test_tag("a"));
+                    Box!(modifier = Modifier.size(50.dp()).focusable().test_tag("a"));
                 });
             }
             if step.get() == 2 {
                 Dialog!(on_dismiss_request = move || step.set(0), {
-                    Box!(modifier = Modifier.size(50.dp()).focusable(true).test_tag("b"));
+                    Box!(modifier = Modifier.size(50.dp()).focusable().test_tag("b"));
                 });
             }
         });
@@ -162,8 +162,8 @@ fn tab_from_the_last_focusable_of_a_dialog_wraps_to_its_first() {
     let mut ui = ComposeTestRule::sized(IntSize::new(300, 300), || {
         Dialog!(on_dismiss_request = || {}, {
             Column!({
-                Box!(modifier = Modifier.size(20.dp()).focusable(true).test_tag("in 1"));
-                Box!(modifier = Modifier.size(20.dp()).focusable(true).test_tag("in 2"));
+                Box!(modifier = Modifier.size(20.dp()).focusable().test_tag("in 1"));
+                Box!(modifier = Modifier.size(20.dp()).focusable().test_tag("in 2"));
             });
         });
     });
@@ -184,7 +184,7 @@ fn a_popup_that_stops_being_focusable_gives_the_focus_back() {
         let focusable = remember(|| mutable_state_of(false));
         FOCUSABLE.with(|cell| *cell.borrow_mut() = Some(focusable));
         Column!({
-            Box!(modifier = Modifier.size(20.dp()).focusable(true).test_tag("button"));
+            Box!(modifier = Modifier.size(20.dp()).focusable().test_tag("button"));
             Popup!(
                 on_dismiss_request = || {},
                 properties =
@@ -216,7 +216,7 @@ fn escape_dismisses_a_dialog_after_its_focus_was_cleared() {
     let mut ui = ComposeTestRule::sized(IntSize::new(300, 300), move || {
         if handle.get() {
             Dialog!(on_dismiss_request = move || handle.set(false), {
-                Box!(modifier = Modifier.size(50.dp()).focusable(true).test_tag("field"));
+                Box!(modifier = Modifier.size(50.dp()).focusable().test_tag("field"));
             });
         }
     });
@@ -244,11 +244,11 @@ fn passes_nested_dialogs_give_the_focus_back_in_turn() {
         OUTER.with(|cell| *cell.borrow_mut() = Some(outer));
         INNER.with(|cell| *cell.borrow_mut() = Some(inner));
         Column!({
-            Box!(modifier = Modifier.size(20.dp()).focusable(true).test_tag("button"));
+            Box!(modifier = Modifier.size(20.dp()).focusable().test_tag("button"));
             if outer.get() {
                 Dialog!(on_dismiss_request = move || outer.set(false), {
                     Column!({
-                        Box!(modifier = Modifier.size(20.dp()).focusable(true).test_tag("field"));
+                        Box!(modifier = Modifier.size(20.dp()).focusable().test_tag("field"));
                         if inner.get() {
                             Dialog!(on_dismiss_request = move || inner.set(false), {
                                 Box!(modifier = Modifier.size(20.dp()).test_tag("inner"));

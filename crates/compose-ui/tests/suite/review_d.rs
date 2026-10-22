@@ -173,7 +173,7 @@ fn a_click_outside_a_rounded_clip_does_not_click() {
 fn a_focused_node_that_becomes_unfocusable_loses_focus() {
     let enabled = mutable_state_of(true);
     let handle = enabled.handle();
-    let mut host = host(move || Leaf(Modifier.size(10.dp()).focusable(handle.get())));
+    let mut host = host(move || Leaf(Modifier.size(10.dp()).focusable_with(handle.get())));
     host.send_key(KeyEvent::down(Key::Tab));
     assert!(host.with_tree(|tree| tree.focused()).is_some());
     enabled.set(false);
@@ -208,7 +208,7 @@ fn a_focus_target_inserted_before_the_focused_one_doesnt_leave_it_focused() {
     let handle = extra.handle();
     let mut host = host(move || {
         Column!({
-            let modifier = if handle.get() { Modifier.focusable(true) } else { Modifier };
+            let modifier = if handle.get() { Modifier.focusable() } else { Modifier };
             Leaf(modifier.size(10.dp()).clickable(|| {}));
             Leaf(Modifier.size(10.dp()).clickable(|| {}));
         });
@@ -271,7 +271,7 @@ fn on_focus_changed_reports_the_initial_state() {
             Modifier
                 .size(10.dp())
                 .on_focus_changed(|focused| log(format!("focused {focused}")))
-                .focusable(true),
+                .focusable(),
         );
     });
     assert_eq!(take_log(), ["focused false"]);
@@ -284,7 +284,7 @@ fn on_focus_changed_reports_the_initial_state() {
 #[test]
 fn on_key_event_after_focusable_receives_keys() {
     let mut host = host(|| {
-        Leaf(Modifier.size(10.dp()).focusable(true).on_key_event(|event: KeyEvent| {
+        Leaf(Modifier.size(10.dp()).focusable().on_key_event(|event: KeyEvent| {
             log(format!("{:?}", event.key));
             true
         }));
@@ -394,7 +394,7 @@ fn a_semantics_modifier_lets_its_receiver_skip() {
         static RUNS: Cell<u32> = const { Cell::new(0) };
     }
     fn labelled() -> Modifier {
-        Modifier.size(10.dp()).semantics(false, |config| config.text.push("label".into()))
+        Modifier.size(10.dp()).semantics(|config| config.text.push("label".into()))
     }
     #[composable]
     fn Receiver(modifier: Modifier) {
@@ -421,7 +421,7 @@ fn a_semantics_modifier_lets_its_receiver_skip() {
 /// half the side but keeps the full stroke width, so a thick border paints outside the node.
 #[test]
 fn a_thick_border_stays_inside_the_node() {
-    let host = host(|| Leaf(Modifier.size(10.dp()).border(30.dp(), Color::BLACK, RECTANGLE_SHAPE)));
+    let host = host(|| Leaf(Modifier.size(10.dp()).border(30.dp(), Color::BLACK)));
     for op in &host.display_list().ops {
         if let DrawOp::DrawRect(rect, paint) = op {
             let half = match paint.style {
@@ -514,9 +514,12 @@ fn constraints_offset_adds_as_in_compose() {
 #[test]
 fn a_merging_node_takes_its_descendants_focus() {
     let mut host = host(|| {
-        Stack!(modifier = Modifier.semantics(true, |config| config.text.push("row".into())), {
-            Leaf(Modifier.size(10.dp()).focusable(true));
-        });
+        Stack!(
+            modifier = Modifier.semantics_with(true, |config| config.text.push("row".into())),
+            {
+                Leaf(Modifier.size(10.dp()).focusable());
+            }
+        );
     });
     host.send_key(KeyEvent::down(Key::Tab));
     host.frame();

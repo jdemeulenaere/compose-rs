@@ -245,11 +245,11 @@ pub fn SwipeToDismissBox(
         compose_runtime::callback(move || {
             Row(
                 Modifier,
-                Arrangement::Start,
+                Arrangement::START,
                 Alignment::CENTER_VERTICALLY,
                 background_content.clone(),
             );
-            Row(Modifier, Arrangement::Start, Alignment::CENTER_VERTICALLY, content.clone());
+            Row(Modifier, Arrangement::START, Alignment::CENTER_VERTICALLY, content.clone());
         }),
     );
 }

@@ -292,7 +292,7 @@ pub fn Button(
                             Dp::UNSPECIFIED,
                         ))
                         .padding(content_padding),
-                    Arrangement::Center.into(),
+                    Arrangement::CENTER.into(),
                     Alignment::CENTER_VERTICALLY,
                     content.clone(),
                 );

@@ -90,7 +90,7 @@ pub fn BasicTextField(
     crate::layout::Box(
         // An I-beam over the field, as Compose Desktop's text fields.
         modifier
-            .semantics(true, |_| {})
+            .semantics_with(true, |_| {})
             .then_custom(FocusOnTap)
             .pointer_hover_icon(compose_ui::PointerIcon::Text),
         crate::Alignment::TOP_START,

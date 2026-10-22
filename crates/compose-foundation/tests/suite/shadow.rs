@@ -11,11 +11,8 @@ use compose_ui::{Color, IntSize, Outline, Rect, UnitExt, platform::DrawOp};
 fn a_shadow_is_drawn_behind_the_clipped_content() {
     let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), || {
         Box!(
-            modifier = Modifier
-                .padding(10.dp())
-                .shadow(4.dp(), RECTANGLE_SHAPE, true)
-                .background(Color::WHITE)
-                .size(50.dp())
+            modifier =
+                Modifier.padding(10.dp()).shadow(4.dp()).background(Color::WHITE).size(50.dp())
         );
     });
     let list = ui.host().display_list();
@@ -37,7 +34,7 @@ fn a_shadow_is_drawn_behind_the_clipped_content() {
 #[test]
 fn no_elevation_draws_no_shadow() {
     let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), || {
-        Box!(modifier = Modifier.shadow(0.dp(), RECTANGLE_SHAPE, false).size(50.dp()));
+        Box!(modifier = Modifier.shadow(0.dp()).size(50.dp()));
     });
     let list = ui.host().display_list();
     assert!(!list.ops.iter().any(|op| matches!(op, DrawOp::DrawShadow { .. })));

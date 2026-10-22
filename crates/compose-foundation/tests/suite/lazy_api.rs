@@ -114,7 +114,7 @@ fn fill_parent_max_size_takes_the_viewport_less_the_padding() {
                 scope.items_list(vec![()], |item_scope, _| {
                     Box!(
                         modifier = Modifier
-                            .fill_parent_max_width_fraction(&item_scope, 0.5)
+                            .fill_parent_max_width_with(&item_scope, 0.5)
                             .height(10.dp())
                             .test_tag("half")
                     );
@@ -152,7 +152,7 @@ fn a_reversed_list_starts_at_the_bottom_and_scrolls_up() {
     let state = LazyListState::new(0, 0);
     let given = *state;
     let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || {
-        Numbers(true, Arrangement::Top, 10, given)
+        Numbers(true, Arrangement::TOP, 10, given)
     });
     assert_eq!(top_of(&mut ui, "0"), 70.0);
     assert_eq!(top_of(&mut ui, "1"), 40.0);
@@ -183,13 +183,13 @@ fn a_reversed_list_starts_at_the_bottom_and_scrolls_up() {
 #[test]
 fn a_short_reversed_list_is_arranged_from_the_top_in_reverse_order() {
     let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), || {
-        Numbers(true, Arrangement::Top, 2, remember(|| LazyListState::new(0, 0)))
+        Numbers(true, Arrangement::TOP, 2, remember(|| LazyListState::new(0, 0)))
     });
     // As Compose's: (top) 1 0 … (bottom).
     assert_eq!(top_of(&mut ui, "1"), 0.0);
     assert_eq!(top_of(&mut ui, "0"), 30.0);
     let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), || {
-        Numbers(true, Arrangement::Bottom, 2, remember(|| LazyListState::new(0, 0)))
+        Numbers(true, Arrangement::BOTTOM, 2, remember(|| LazyListState::new(0, 0)))
     });
     assert_eq!(top_of(&mut ui, "0"), 70.0);
     assert_eq!(top_of(&mut ui, "1"), 40.0);
@@ -209,7 +209,7 @@ fn a_reversed_list_brings_a_focused_item_into_view() {
                     Box!(
                         modifier = Modifier
                             .size((100.dp(), 30.dp()))
-                            .focusable(true)
+                            .focusable()
                             .test_tag(format!("{index}"))
                     );
                 });

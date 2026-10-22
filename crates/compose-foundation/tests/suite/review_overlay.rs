@@ -33,12 +33,12 @@ fn bounds(ui: &mut ComposeTestRule, tag: &str) -> compose_ui::Rect {
 fn tab_in_a_dialog_never_moves_the_focus_behind_it() {
     let mut ui = ComposeTestRule::sized(IntSize::new(300, 300), || {
         Column!({
-            Box!(modifier = Modifier.size(20.dp()).focusable(true).test_tag("behind 1"));
-            Box!(modifier = Modifier.size(20.dp()).focusable(true).test_tag("behind 2"));
+            Box!(modifier = Modifier.size(20.dp()).focusable().test_tag("behind 1"));
+            Box!(modifier = Modifier.size(20.dp()).focusable().test_tag("behind 2"));
             Dialog!(on_dismiss_request = || {}, {
                 Column!({
-                    Box!(modifier = Modifier.size(20.dp()).focusable(true).test_tag("in 1"));
-                    Box!(modifier = Modifier.size(20.dp()).focusable(true).test_tag("in 2"));
+                    Box!(modifier = Modifier.size(20.dp()).focusable().test_tag("in 1"));
+                    Box!(modifier = Modifier.size(20.dp()).focusable().test_tag("in 2"));
                 });
             });
         });
@@ -64,7 +64,7 @@ fn the_focus_comes_back_to_what_had_it_once_a_dialog_is_dismissed() {
         let open = remember(|| mutable_state_of(false));
         OPEN.with(|cell| *cell.borrow_mut() = Some(open));
         Column!({
-            Box!(modifier = Modifier.size(20.dp()).focusable(true).test_tag("button"));
+            Box!(modifier = Modifier.size(20.dp()).focusable().test_tag("button"));
             if open.get() {
                 Dialog!(on_dismiss_request = move || open.set(false), {
                     Box!(modifier = Modifier.size(50.dp()).test_tag("dialog"));

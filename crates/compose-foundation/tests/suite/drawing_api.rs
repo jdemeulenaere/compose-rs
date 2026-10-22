@@ -123,18 +123,17 @@ fn a_brush_paints_a_gradient_in_the_drawings_coordinates() {
             Box!(modifier = Modifier.size(10.dp()));
             Box!(
                 modifier = Modifier.size((100.dp(), 50.dp())).background_with(
-                    Brush::horizontal_gradient(
+                    Brush::horizontal_gradient_with(
                         [Color::RED, Color::BLUE],
                         0.0,
                         f32::INFINITY,
                         TileMode::Clamp
                     ),
-                    RECTANGLE_SHAPE,
-                    1.0
+                    RECTANGLE_SHAPE
                 )
             );
             Canvas(Modifier.size(40.dp()), |scope| {
-                let brush = Brush::radial_gradient(
+                let brush = Brush::radial_gradient_with(
                     [(0.0, Color::WHITE), (0.5, Color::BLACK)],
                     Offset::UNSPECIFIED,
                     f32::INFINITY,
@@ -164,7 +163,7 @@ fn a_brush_paints_a_gradient_in_the_drawings_coordinates() {
     );
     // A renderer without shaders paints the average.
     let fallback = ui.host().display_list().ops.iter().find_map(|op| match op {
-        compose_ui::platform::DrawOp::DrawRect(_, paint) if paint.shader.is_some() => {
+        compose_ui::platform::DrawOp::DrawRect(_, paint) if paint.shader().is_some() => {
             Some(paint.color)
         }
         _ => None,
@@ -178,22 +177,20 @@ fn gradients_in_repaint_boundaries_keep_their_shaders_when_spliced() {
     let handle = shift.handle();
     let mut ui = ComposeTestRule::sized(IntSize::new(300, 300), move || {
         let gradient = |colors: [Color; 2]| {
-            Brush::vertical_gradient(colors, 0.0, f32::INFINITY, TileMode::Clamp)
+            Brush::vertical_gradient_with(colors, 0.0, f32::INFINITY, TileMode::Clamp)
         };
         Column!(modifier = Modifier.offset(0.dp(), handle.get().dp()), {
             Box!(
-                modifier = Modifier.repaint_boundary().size(10.dp()).background_with(
-                    gradient([Color::RED, Color::GREEN]),
-                    RECTANGLE_SHAPE,
-                    1.0
-                )
+                modifier = Modifier
+                    .repaint_boundary()
+                    .size(10.dp())
+                    .background_with(gradient([Color::RED, Color::GREEN]), RECTANGLE_SHAPE)
             );
             Box!(
-                modifier = Modifier.repaint_boundary().size(10.dp()).background_with(
-                    gradient([Color::BLUE, Color::BLACK]),
-                    RECTANGLE_SHAPE,
-                    1.0
-                )
+                modifier = Modifier
+                    .repaint_boundary()
+                    .size(10.dp())
+                    .background_with(gradient([Color::BLUE, Color::BLACK]), RECTANGLE_SHAPE)
             );
         });
     });
@@ -204,7 +201,7 @@ fn gradients_in_repaint_boundaries_keep_their_shaders_when_spliced() {
             .ops
             .iter()
             .filter_map(|op| match op {
-                compose_ui::platform::DrawOp::DrawRect(_, paint) => paint.shader,
+                compose_ui::platform::DrawOp::DrawRect(_, paint) => paint.shader(),
                 _ => None,
             })
             .map(|index| list.shaders[index.0 as usize].gradient().colors[0])

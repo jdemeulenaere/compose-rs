@@ -14,8 +14,8 @@ use compose_runtime::{
 use compose_ui::{
     Constraints, DrawModifierNode, DrawScope, EventContext, IntSize, LayoutModifierNode,
     Measurable, MeasureResult, MeasureScope, Modifier, ModifierNode, ModifierNodeElement,
-    NestedScrollChain, NestedScrollConnection, NestedScrollSource, Offset, Outline, PointerEvent,
-    PointerEventPass, PointerEventType, PointerId, PointerInputModifierNode, Rect,
+    NestedScrollConnection, NestedScrollSource, Offset, Outline, PointerEvent, PointerEventPass,
+    PointerEventType, PointerId, PointerInputModifierNode, Rect, platform::NestedScrollChain,
 };
 
 /// How far content is scrolled, in pixels, and how far it can be, as Compose's `ScrollState`:

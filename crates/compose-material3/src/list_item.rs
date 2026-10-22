@@ -72,7 +72,7 @@ pub fn ListItem(
     let typography = MaterialTheme::typography();
     // One node for the item, its texts merged, as Compose's.
     Surface(
-        modifier.semantics(true, |_| {}),
+        modifier.semantics_with(true, |_| {}),
         compose_ui::RECTANGLE_SHAPE,
         colors.container_color,
         Color::UNSPECIFIED,
@@ -97,7 +97,7 @@ pub fn ListItem(
                         Dp::UNSPECIFIED,
                     ))
                     .padding((16.dp(), vertical, 24.dp(), vertical)),
-                Arrangement::Start,
+                Arrangement::START,
                 alignment,
                 compose_runtime::callback(move |row: RowScope| {
                     if let Some(leading) = leading.clone() {
@@ -120,7 +120,7 @@ pub fn ListItem(
                         (headline.clone(), overline.clone(), supporting.clone());
                     Column(
                         Modifier.weight(row, 1.0),
-                        Arrangement::Top,
+                        Arrangement::TOP,
                         Alignment::START,
                         compose_runtime::callback(move |_| {
                             if let Some(overline) = overline.clone() {

@@ -3,6 +3,7 @@
 //! whether the action was performed), each for its duration.
 
 use compose_runtime::{ObjectHandle, Owned};
+use compose_ui::SharedString;
 use std::cell::{Cell, RefCell};
 use std::future::Future;
 use std::pin::Pin;
@@ -53,15 +54,15 @@ pub enum SnackbarResult {
 /// What a snackbar shows, as Compose's `SnackbarVisuals`.
 #[derive(Clone, PartialEq, Debug)]
 pub struct SnackbarVisuals {
-    pub message: String,
-    pub action_label: Option<String>,
+    pub message: SharedString,
+    pub action_label: Option<SharedString>,
     pub with_dismiss_action: bool,
     pub duration: SnackbarDuration,
 }
 
-impl From<String> for SnackbarVisuals {
+impl From<SharedString> for SnackbarVisuals {
     /// A message alone, shown for `SnackbarDuration::Short`, as `showSnackbar(message)`.
-    fn from(message: String) -> SnackbarVisuals {
+    fn from(message: SharedString) -> SnackbarVisuals {
         SnackbarVisuals {
             message,
             action_label: None,
@@ -71,11 +72,19 @@ impl From<String> for SnackbarVisuals {
     }
 }
 
-impl From<&str> for SnackbarVisuals {
-    fn from(message: &str) -> SnackbarVisuals {
-        SnackbarVisuals::from(message.to_owned())
-    }
+/// A message alone from what a text parameter takes (D263: a `&'static str`, a `String` or
+/// `&String`, an `Rc<str>`, a `SharedString` or `&SharedString`).
+macro_rules! message_visuals {
+    ($($type:ty),*) => {
+        $(impl From<$type> for SnackbarVisuals {
+            fn from(message: $type) -> SnackbarVisuals {
+                SnackbarVisuals::from(SharedString::from(message))
+            }
+        })*
+    };
 }
+
+message_visuals!(&'static str, String, &String, Rc<str>, &SharedString);
 
 /// A snackbar being shown, as Compose's `SnackbarData`: its visuals, and how to end it.
 #[derive(Clone)]
@@ -244,8 +253,8 @@ impl SnackbarHostState {
     /// actionLabel, withDismissAction, duration)`.
     pub async fn show_snackbar_with(
         &self,
-        message: impl Into<String>,
-        action_label: Option<String>,
+        message: impl Into<SharedString>,
+        action_label: Option<SharedString>,
         with_dismiss_action: bool,
         duration: SnackbarDuration,
     ) -> SnackbarResult {
@@ -507,13 +516,13 @@ impl compose_ui::MeasurePolicy for SnackbarLayout {
 }
 
 /// `text` in the text style and content color around it, as `Text(text)`.
-fn themed_text(text: String) {
+fn themed_text(text: SharedString) {
     let style = compose_ui::TextStyle {
         color: LOCAL_TEXT_STYLE.current().color.or(LOCAL_CONTENT_COLOR.current()),
         ..LOCAL_TEXT_STYLE.current()
     };
     compose_foundation::BasicText(
-        text.into(),
+        text,
         Modifier,
         style,
         None,

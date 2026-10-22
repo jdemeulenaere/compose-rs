@@ -34,11 +34,8 @@ fn a_requester_moved_to_an_earlier_node_still_focuses() {
         Column!({
             if !handle.get() {
                 Box!(
-                    modifier = Modifier
-                        .size(20.dp())
-                        .focus_requester(requester)
-                        .focusable(true)
-                        .test_tag("a")
+                    modifier =
+                        Modifier.size(20.dp()).focus_requester(requester).focusable().test_tag("a")
                 );
             }
             Box!(
@@ -48,11 +45,8 @@ fn a_requester_moved_to_an_earlier_node_still_focuses() {
             );
             if handle.get() {
                 Box!(
-                    modifier = Modifier
-                        .size(20.dp())
-                        .focus_requester(requester)
-                        .focusable(true)
-                        .test_tag("b")
+                    modifier =
+                        Modifier.size(20.dp()).focus_requester(requester).focusable().test_tag("b")
                 );
             }
         });
@@ -82,16 +76,13 @@ fn a_requester_on_two_nodes_survives_removing_one() {
         Column!({
             if handle.get() {
                 Box!(
-                    modifier = Modifier
-                        .size(20.dp())
-                        .focus_requester(attached)
-                        .focusable(true)
-                        .test_tag("a")
+                    modifier =
+                        Modifier.size(20.dp()).focus_requester(attached).focusable().test_tag("a")
                 );
             }
             Box!(
                 modifier =
-                    Modifier.size(20.dp()).focus_requester(attached).focusable(true).test_tag("b")
+                    Modifier.size(20.dp()).focus_requester(attached).focusable().test_tag("b")
             );
         });
     });

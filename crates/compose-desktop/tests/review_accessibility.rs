@@ -50,7 +50,7 @@ fn a_selected_radio_button_is_checked() {
                     ClickableOptions { role: Some(Role::RadioButton), ..ClickableOptions::DEFAULT },
                     || {}
                 )
-                .semantics(false, |config| config.selected = Some(true)),
+                .semantics(|config| config.selected = Some(true)),
         );
     });
     let update = accessibility::tree_update(&host, "App");

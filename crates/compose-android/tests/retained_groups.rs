@@ -411,7 +411,7 @@ fn last_shader_index(serialized: &Serialized) -> u32 {
             .iter()
             .rev()
             .find_map(|op| match op {
-                DrawOp::DrawRect(_, paint) => paint.shader,
+                DrawOp::DrawRect(_, paint) => paint.shader(),
                 _ => None,
             })
             .expect("a gradient")
@@ -435,7 +435,7 @@ fn a_copied_record_keeps_its_gradient_when_the_lists_shaders_shift() {
                 Leaf(
                     clipped_gradient(move || {
                         if handle.get() {
-                            Brush::vertical_gradient(
+                            Brush::vertical_gradient_with(
                                 [Color::BLACK, Color::WHITE],
                                 0.0,
                                 f32::INFINITY,
@@ -451,7 +451,7 @@ fn a_copied_record_keeps_its_gradient_when_the_lists_shaders_shift() {
                     Modifier
                         .repaint_boundary()
                         .then(clipped_gradient(|| {
-                            Brush::linear_gradient(
+                            Brush::linear_gradient_with(
                                 [(0.0, Color::RED), (0.3, Color::GREEN), (1.0, Color::BLUE)],
                                 Offset::ZERO,
                                 Offset::INFINITE,

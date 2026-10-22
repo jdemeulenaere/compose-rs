@@ -21,11 +21,11 @@ fn round_rect(bounds: &Rect, radii: &[f32; 4]) -> RRect {
 /// the operation applies before drawing, so the gradient stays in the list's coordinates).
 fn skia_paint_with(
     paint: &Paint,
-    shaders: &[compose_ui::Shader],
+    shaders: &[compose_ui::platform::Shader],
     local: Option<&skia_safe::Matrix>,
 ) -> skia_safe::Paint {
     let mut skia = skia_paint(paint);
-    if let Some(shader) = paint.shader.and_then(|index| shaders.get(index.0 as usize))
+    if let Some(shader) = paint.shader().and_then(|index| shaders.get(index.0 as usize))
         && let Some(skia_shader) = skia_shader(shader, local)
     {
         // The shader paints; the paint's alpha is the brush's.
@@ -37,10 +37,10 @@ fn skia_paint_with(
 }
 
 fn skia_shader(
-    shader: &compose_ui::Shader,
+    shader: &compose_ui::platform::Shader,
     local: Option<&skia_safe::Matrix>,
 ) -> Option<skia_safe::Shader> {
-    use compose_ui::Shader;
+    use compose_ui::platform::Shader;
     use skia_safe::gradient::{Colors, Gradient, Interpolation, shaders};
     let gradient = shader.gradient();
     let mut colors: Vec<skia_safe::Color4f> = gradient
@@ -160,7 +160,7 @@ pub fn draw_display_list(canvas: &Canvas, list: &DisplayList, text_measurer: &dy
                 canvas.scale((scale.0, scale.1));
                 // The gradient stays where it was given, outside the path's scale and offset.
                 let local =
-                    (paint.shader.is_some() && scale.0 != 0.0 && scale.1 != 0.0).then(|| {
+                    (paint.shader().is_some() && scale.0 != 0.0 && scale.1 != 0.0).then(|| {
                         let mut local = skia_safe::Matrix::scale((1.0 / scale.0, 1.0 / scale.1));
                         local.pre_translate((-offset.x, -offset.y));
                         local
