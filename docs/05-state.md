@@ -49,7 +49,7 @@ impl<T> MutableState<T> {
 }
 ```
 
-- **Reads** register the current recompose scope, the thread-local one set during a pass. Readers are deduplicated, and stale readers are pruned when their scope is gone.
+- **Reads** register the current recompose scope, the thread-local one set during a pass, with the scope's run (its epoch): a reader is current while its scope hasn't run again. A read searches only the cell's 8 latest readers for its scope, so a cell read by thousands of scopes (a composition local every layout node reads) doesn't make composing quadratic; a scope found further back is recorded again. A write invalidates every current reader once (invalidating a scope twice does nothing more), so copies change nothing, and drops the stale ones. When the readers fill their room, a compaction drops the stale ones and the copies, and makes room if more than half is still in use (D310): a cell's room holds less than four records per scope reading it at once (four to start with), at a constant amortized cost per read.
 - **Writes** invalidate the readers and ask the host for a frame. The default policy (`T: PartialEq`) skips a write equal to the current value, as Compose's `structuralEqualityPolicy` does. `edit` always invalidates.
 - **Writes during composition are a misuse.** In debug builds they panic with the location. Composition is a pure function of state. Compose allows backward writes with caveats; this design keeps the stricter rule until a use case appears.
 - **`with` and `edit` borrow the value through a run-time borrow flag**, like a `RefCell`. Nested conflicting access panics with both locations. Compose has no equivalent, because the JVM shares references; in Rust the arena makes it necessary.

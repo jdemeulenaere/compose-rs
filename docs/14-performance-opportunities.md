@@ -27,7 +27,7 @@ Gain over cost, best first.
 | 2 | **Android: the spinner's round cap** (`IndeterminateCircularProgressIndicator`, as Material 3 1.4) | Animation RenderThread work −44 ms (544.4 → 500.1, −8.1 %) | measured, 3 runs | S, none | the default cap's look, on every platform (Compose's own default); the determinate indicator keeps `Butt` | `perf/frame-roundcap` |
 | 3 | **Android: replay without interpreted calls** (floats as int bits, one reused buffer, sizes tracked in Kotlin, no host wake for frame awaiters) | Animation main work −16.8 ms (213.9 → 197.1, −7.9 %); scroll −12 ms (−2.6 %, ranges overlap) | measured, 3 runs, on a build whose JIT compiles no framework methods (smaller where it does) | S, low | internal JNI signatures; the executor skips the host wake for `dispatch_frame`'s wakes on every host (a thread-wide flag: not reset if a waker panics, and it would also skip another thread's executor's wake) | `perf/frame-replay` |
 | 4 | **Android: stripping, then a release profile.** (a) AGP strips the library once `ndkVersion` is set (**fixed**: D301); (b) `[profile.android]`: fat LTO, one codegen unit, `panic = "abort"` | (a) APK 3.24 → 1.99 MB (−39 %); (b) → 1.50 MB (−54 % in all, below Compose's 1.74 MB), code PSS −0.3 MB, Rust frame section −4 to −8 %, main work −3 to −4 % (about the noise); startup unchanged | measured | (a) none, but `ndkVersion` pins one NDK every developer needs. (b) S; as prototyped every Android build uses it (debug too): clean 6.9 → 9.2 s, a material3 edit rebuilds the library in 4.6 s instead of 1.9 | (b) more panics abort the process: those of cancelled background tasks, and in drops and wakes on the pool's threads; Android only | `perf/startup-release-profile` |
-| 5 | **Runtime: state readers and composition locals** (a read searches a cell's 8 latest readers; a local read walks provider groups only) | Headless big-screen first frame −39 % (7.04 → 4.32 ms), composition −44 %; feed first frame −21 %. On the device, with #2–#4 and #7 (one traced start): big composition 22.1 → 16.5 ms | measured headless, 3–5 rounds | S/M, low | none (a cell can hold duplicate readers until they're stale) | `perf/runtime-compose` |
+| 5 | **Runtime: state readers and composition locals** (a read searches a cell's 8 latest readers; a local read walks provider groups only) | Headless big-screen first frame −39 % (7.04 → 4.32 ms), composition −44 %; feed first frame −21 %. On the device, with #2–#4 and #7 (one traced start): big composition 22.1 → 16.5 ms | measured headless, 3–5 rounds | S/M, low | none (the prototype's copies of readers are now compacted: D310) | `perf/runtime-compose`; made production-ready as D310 |
 | 6 | **Build: build-only dependencies at opt-level 0** in the dev profile (**fixed**: D303) | Clean debug build of todo 11.8 → 8.6 s (median; −27 %, means −24 %), workspace `test --no-run` 16.1 → 12.6 s (−22 %); edit loop unchanged | measured, 3 runs | S (Cargo.toml; the list needs upkeep) | none | `perf/build-dev-profile` |
 | 7 | **Android: startup warm-ups** (an ALPHA_8 bitmap's texture upload, and two StaticLayouts on a thread, when the first `ComposeRsView` is made) | TotalTime feed −4.0 ms (se 1.1, −4 %); big −2.2 ms (se 1.2, −1 %, not significant); the first `doFrame` 26.0 → 21.5 ms | measured, n = 36 | S; `activityResume` grows by about 1 ms | none | `perf/startup-text-warmup` |
 | 8 | **Android: a Baseline Profile for the Kotlin glue** | For installs that aren't fully compiled (Play), at most: replay +25–30 % and main work +5 % recovered; startup unchanged | measured (`-m verify` against `speed`) | S | none | `perf/startup-compilation-modes` |
@@ -271,7 +271,7 @@ Exact or chunked growth of the groups and the arena would save about 1.7 MB of a
 - Every layout node reads `LOCAL_LAYOUT_DIRECTION`, so that local's state cell gathers thousands of readers.
   - Each new read searched all of them (`register_read`, crates/compose-runtime/src/state.rs): 23 % of the big screen's first frame.
   - Each local read also walked 60–90 ancestor groups to find its provider (crates/compose-runtime/src/local.rs).
-- The fixes:
+- The prototype's fixes (`perf/runtime-compose`; what ships differs, see "Made production-ready" below):
   - search a cell's 8 latest readers only. A scope found further back is recorded again. The copies are harmless (invalidating a scope twice does nothing more), and they're pruned once the scope recomposes; until then a scope that reads one cell many times, with other readers in between, holds a copy per read;
   - give frames and groups a link to the nearest provider group.
 - A local read with its provider 60 groups up goes 133 → 20.5 ns.
@@ -283,9 +283,28 @@ Exact or chunked growth of the groups and the arena would save about 1.7 MB of a
 | feed first frame | 287 | 273 | 238 | 228 (−21 %) |
 | animation frame, feed drag, lazy scroll | 1.46, 2.12, 18.1 | | | unchanged |
 
-A second session, main against both fixes plus a tighter walk over clean siblings (`perf/runtime-compose`, 3 rounds), gave 7,051 → 4,318 µs (big) and 280 → 227 µs (feed). Criterion's counter click went 244 → 252 ns (+3 %: a frame grows from 56 to 64 bytes).
+A second session, main against both fixes plus a tighter walk over clean siblings (`perf/runtime-compose`, 3 rounds), gave 7,051 → 4,318 µs (big) and 280 → 227 µs (feed). Criterion's counter click went 244 → 252 ns (+3 %; the prototype attributed it to a frame growing from 56 to 64 bytes, but D310 keeps frames at 56 bytes and measures the same +3 %).
 
 All 1,044 tests of the runtime, UI, foundation, Material, animation, feed and todo crates pass. On the device, composing the big screen takes 22 ms. The device is 3.45× the Mac's warm run, but only 1.5× its first, cold run (`perf/text-analysis`), so the headless −44 % says little about the device. The full benchmark ("Combined") measured 22.1 → 16.5 ms in one traced start, with the release profile also in.
+
+**Made production-ready (D310).** Two changes to the prototype:
+- A cell's copies of readers are bounded. When its readers fill their room, a compaction drops the stale ones and the copies, then doubles the room only if more than half is still in use. The room holds less than four records per scope reading the cell at once (four to start with), at a constant amortized cost per read. The prototype kept copies until they went stale: their number grew with reads rather than scopes, and without bound for a scope whose epoch doesn't move.
+- The nearest provider is recorded in each group when it is allocated (a group's ancestors never change), not in each frame: `Frame` stays 56 bytes and `Group` 144.
+
+Measured with criterion: new benches `first frame, feed` and `first frame, big screen` in `ui` (as the probe's), and three in `runtime`. Main (152a608) against D310, 3 interleaved rounds (ABBA), medians of the rounds' estimates:
+
+| Bench | main | D310 |
+|---|---|---|
+| first frame, big screen | 7.73 ms | 4.91 ms (−36 %) |
+| first frame, feed | 294 µs | 247 µs (−16 %) |
+| 1,000 local reads, the provider 60 groups up (recompose) | 145 µs | 26.5 µs (−82 %) |
+| initial composition of 2,000 readers of one state | 9.82 ms | 0.335 ms (−97 %) |
+| write a state 2,000 readers read (recompose all) | 1.78 ms | 0.228 ms (−87 %) |
+| toggle 1 of 1,000 rows (runtime) | 2.82 µs | 2.57 µs (−9 %, the walk's tight loop) |
+| counter click (runtime) | 248 ns | 255 ns (+3 %) |
+| others (initial composition of rows, keyed reorders, ui frames) | | within −5 to +2.4 % |
+
+A first session with the prototype's frame link gave the same picture (big screen 7.37 → 4.63 ms, −37 %; counter click +2.9 %), so the counter click's +3 % doesn't come from the frame's size.
 
 **Per-operation costs** (one scope recomposed doing 1,000 of each):
 

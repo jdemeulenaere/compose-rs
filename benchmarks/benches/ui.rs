@@ -168,5 +168,40 @@ fn lazy_scroll_frame(criterion: &mut Criterion) {
     });
 }
 
-criterion_group!(benches, ui, desktop_frame, animation_frame, lazy_scroll_frame);
+/// The first frame of a new phone-sized host: composing, measuring and drawing everything in
+/// view. The feed (a lazy list's posts in view) and its big screen (200 posts in a scrolling
+/// column, all composed: thousands of layout nodes reading the same composition locals, the
+/// case docs/14's #5 made linear). The host's creation and drop aren't timed.
+fn first_frame(criterion: &mut Criterion) {
+    use compose::runtime::platform;
+    use compose::ui::{
+        Density,
+        platform::{FixedTextMeasurer, UiHost},
+    };
+    let screens: [(&str, fn()); 2] =
+        [("feed", compose_rs_feed::Feed), ("big screen", compose_rs_feed::BigScreen)];
+    for (name, content) in screens {
+        platform::set_manual_clock(platform::now_nanos());
+        let frame = || {
+            let mut host = UiHost::new(
+                IntSize::new(1080, 2400),
+                Density::new(2.625),
+                Box::new(FixedTextMeasurer::new()),
+            );
+            host.set_content(content);
+            let start = Instant::now();
+            host.frame();
+            let elapsed = start.elapsed();
+            // Untimed: what effects launched, then the drop.
+            host.settle(10);
+            drop(host);
+            elapsed
+        };
+        criterion.bench_function(&format!("first frame, {name}"), |bench| {
+            bench.iter_custom(|iterations| (0..iterations).map(|_| frame()).sum())
+        });
+    }
+}
+
+criterion_group!(benches, ui, desktop_frame, animation_frame, lazy_scroll_frame, first_frame);
 criterion_main!(benches);

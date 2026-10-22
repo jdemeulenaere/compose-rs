@@ -22,8 +22,8 @@ use std::rc::Rc;
 use crate::applier::{Applier, NodeRef};
 use crate::error::{ComposeError, misuse};
 use crate::runtime::{DeferredEffect, Runtime, remove_siblings, try_with_runtime, with_runtime};
-use crate::scope::{RecomposeScope, ScopeId};
-use crate::slot_table::{GroupKind, NONE, Slot, SlotValue};
+use crate::scope::{RecomposeScope, ScopeId, Scopes};
+use crate::slot_table::{GroupKind, NONE, Slot, SlotTable, SlotValue};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum Mode {
@@ -102,6 +102,30 @@ impl PartialEq for Identity {
             _ => false,
         }
     }
+}
+
+/// Moves a walking frame's cursor past its clean children: neither dirty nor an invalid scope's,
+/// so nothing in them runs. A tight loop, as a walk to one changed item of a long list passes
+/// over all the others.
+fn pass_clean_siblings(walking: &mut Frame, table: &SlotTable, scopes: &Scopes) {
+    debug_assert_eq!(walking.mode, Mode::Walk);
+    let (mut cursor, mut node_index, mut last_placed) =
+        (walking.cursor, walking.node_index, walking.last_placed);
+    while cursor != NONE {
+        let group = &table[cursor];
+        if group.dirty
+            || (group.kind == GroupKind::Restart
+                && scopes.get(group.scope).is_some_and(|scope| scope.invalid))
+        {
+            break;
+        }
+        node_index += group.node_count;
+        last_placed = cursor;
+        cursor = group.next_sibling;
+    }
+    walking.cursor = cursor;
+    walking.node_index = node_index;
+    walking.last_placed = last_placed;
 }
 
 /// A restart group's kept arguments, when it has any.
@@ -385,6 +409,7 @@ impl Runtime {
         let table = &mut compositions.data_mut(active.composition.index).table;
         loop {
             let top = frames.len() - 1;
+            pass_clean_siblings(&mut frames[top], table, scopes);
             let frame = frames[top];
             debug_assert_eq!(frame.mode, Mode::Walk);
             if frame.cursor == NONE {
@@ -422,34 +447,29 @@ impl Runtime {
                 walking.limit = group.next_sibling;
                 return WalkStep::Restart(restart, kept);
             }
-            if group.dirty {
-                group.dirty = false;
-                let is_node = group.kind == GroupKind::Node;
-                let node_index = if is_node { 0 } else { frame.node_index };
-                frames.push(Frame {
-                    group: child,
-                    mode: Mode::Walk,
-                    inserting: false,
-                    forced: false,
-                    skipped: true,
-                    dirty: true,
-                    cursor: group.first_child,
-                    limit: NONE,
-                    last_placed: NONE,
-                    slot_cursor: 0,
-                    node_parent: if is_node { group.node } else { frame.node_parent },
-                    node_index,
-                    node_start: node_index,
-                    scope: if group.kind == GroupKind::Restart { group.scope } else { frame.scope },
-                    saved_epoch: 0,
-                    body_started: false,
-                });
-                continue;
-            }
-            let walking = &mut frames[top];
-            walking.node_index += group.node_count;
-            walking.last_placed = child;
-            walking.cursor = group.next_sibling;
+            // Neither clean (`pass_clean_siblings`) nor invalid: dirty. The walk goes into it.
+            debug_assert!(group.dirty);
+            group.dirty = false;
+            let is_node = group.kind == GroupKind::Node;
+            let node_index = if is_node { 0 } else { frame.node_index };
+            frames.push(Frame {
+                group: child,
+                mode: Mode::Walk,
+                inserting: false,
+                forced: false,
+                skipped: true,
+                dirty: true,
+                cursor: group.first_child,
+                limit: NONE,
+                last_placed: NONE,
+                slot_cursor: 0,
+                node_parent: if is_node { group.node } else { frame.node_parent },
+                node_index,
+                node_start: node_index,
+                scope: if group.kind == GroupKind::Restart { group.scope } else { frame.scope },
+                saved_epoch: 0,
+                body_started: false,
+            });
         }
     }
 
@@ -612,6 +632,19 @@ impl Runtime {
             data.deferred.removed_values.push(old.value);
         }
         Ok(())
+    }
+
+    /// Marks the group just started as a composition local provider's, before its content runs:
+    /// the groups allocated inside it record it as their nearest provider
+    /// (`Group::enclosing_provider`), where reading a local starts.
+    pub(crate) fn mark_provider(&mut self) {
+        let composition = self.check_composing();
+        let frame = self.body_frame();
+        let group = frame.group;
+        let group = &mut self.compositions.data_mut(composition).table[group];
+        // Its children were allocated under it as a provider, or it has none yet.
+        debug_assert!(group.is_provider || group.first_child == NONE);
+        group.is_provider = true;
     }
 
     pub(crate) fn record_side_effect(&mut self, effect: DeferredEffect) {

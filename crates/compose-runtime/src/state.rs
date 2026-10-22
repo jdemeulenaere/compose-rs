@@ -223,20 +223,53 @@ fn stale(stale: Stale, used_at: &'static Location<'static>) -> ! {
     }
 }
 
+/// How many of a cell's latest readers a read searches for the reading scope.
+const RECENT_READERS: usize = 8;
+
 /// Records a read by the scope composing now, if any.
-fn register_read(entry: &mut CellEntry, scopes: &Scopes, scope: ScopeId) {
+///
+/// A cell can be read by thousands of scopes (a composition local every layout node reads):
+/// searching all its readers at each read would make composing a big screen quadratic. A read
+/// searches the latest few only, where a scope's repeated reads usually are; a scope found
+/// further back, or not at all, is recorded again. A copy is harmless: a write invalidates
+/// every current one, and invalidating a scope twice does nothing more. Copies and stale
+/// readers are dropped when the readers fill their room (`compact_readers`).
+fn register_read(entry: &mut CellEntry, scopes: &mut Scopes, scope: ScopeId) {
     let Some(epoch) = scopes.get(scope).map(|scope| scope.epoch) else {
         return;
     };
-    if let Some(reader) = entry.readers.iter_mut().rev().find(|reader| reader.scope == scope) {
+    let readers = &mut entry.readers;
+    if let Some(reader) =
+        readers.iter_mut().rev().take(RECENT_READERS).find(|reader| reader.scope == scope)
+    {
         reader.epoch = epoch;
         return;
     }
-    if entry.readers.len() == entry.readers.capacity() {
-        // Prune stale readers before growing, so cells read by short-lived scopes stay small.
-        entry.readers.retain(|reader| scopes.is_current(reader.scope, reader.epoch));
+    if readers.len() == readers.capacity() {
+        compact_readers(readers, scopes);
     }
-    entry.readers.push(Reader { scope, epoch });
+    readers.push(Reader { scope, epoch });
+}
+
+/// Drops the readers that aren't current (their scope left, or ran again without reading the
+/// cell) and the copies (the latest of each scope stays, keeping the order), then makes sure
+/// that at least half the room is free.
+///
+/// So the room holds less than four records per scope reading the cell at once (four to start
+/// with): it doubles only when, after a compaction, more than half of it holds distinct current
+/// readers, and it never shrinks. That holds whatever the scopes do: read in a loop between
+/// other readers, run every frame, come and go, or run without their epoch moving. And a
+/// compaction, linear in the readers, comes only after at least half the room's worth of new
+/// records (reads found among the latest readers record nothing): a constant cost per read.
+fn compact_readers(readers: &mut Vec<Reader>, scopes: &mut Scopes) {
+    scopes.begin_compaction();
+    // From the latest, so a scope keeps its latest record, within reach of the next search.
+    readers.reverse();
+    readers.retain(|reader| scopes.keep_reader(reader.scope, reader.epoch));
+    readers.reverse();
+    if readers.len() > readers.capacity() / 2 {
+        readers.reserve(readers.len());
+    }
 }
 
 /// Records a read observed outside composition, under the observation in progress.
@@ -905,6 +938,21 @@ impl<T: 'static> Drop for OwnedState<T> {
 #[doc(hidden)]
 pub fn live_state_count() -> usize {
     with_runtime(|runtime| runtime.cells.live_count())
+}
+
+/// The number of composition reads a state cell keeps (current, stale and repeated ones). For
+/// tests.
+#[doc(hidden)]
+pub fn state_reader_count<T: 'static>(state: MutableState<T>) -> usize {
+    with_runtime(|runtime| runtime.cells.entry(state.id).map_or(0, |entry| entry.readers.len()))
+}
+
+/// The number of composition reads a state cell has room for before it grows. For tests.
+#[doc(hidden)]
+pub fn state_reader_capacity<T: 'static>(state: MutableState<T>) -> usize {
+    with_runtime(|runtime| {
+        runtime.cells.entry(state.id).map_or(0, |entry| entry.readers.capacity())
+    })
 }
 
 // ---- Objects: what state holders keep ----------------------------------------------------------

@@ -67,6 +67,14 @@ pub(crate) struct Group {
     pub kind: GroupKind,
     /// A descendant restart group's scope is invalid: the next pass walks into this group.
     pub dirty: bool,
+    /// A composition local provider's group (`CompositionLocalProvider`), marked as it starts,
+    /// before its content allocates any group.
+    pub is_provider: bool,
+    /// The nearest provider's group above this one (`NONE` if there is none), set when the
+    /// group is allocated: a group's ancestors never change (keyed groups move among their
+    /// siblings only). Reading a local walks from provider to provider through it, past the
+    /// groups between (`CompositionLocal::current`).
+    pub enclosing_provider: u32,
     pub parent: u32,
     pub first_child: u32,
     pub next_sibling: u32,
@@ -99,6 +107,7 @@ impl SlotTable {
     }
 
     pub fn alloc(&mut self, kind: GroupKind, key: u64, data_key: u64, parent: u32) -> u32 {
+        let enclosing_provider = self.provider_at_or_above(parent);
         if let Some(index) = self.free.pop() {
             let group = &mut self.groups[index as usize];
             debug_assert!(group.kind == GroupKind::Free && group.slots.is_empty());
@@ -106,6 +115,8 @@ impl SlotTable {
             group.data_key = data_key;
             group.kind = kind;
             group.dirty = false;
+            group.is_provider = false;
+            group.enclosing_provider = enclosing_provider;
             group.parent = parent;
             group.first_child = NONE;
             group.next_sibling = NONE;
@@ -122,6 +133,8 @@ impl SlotTable {
                 data_key,
                 kind,
                 dirty: false,
+                is_provider: false,
+                enclosing_provider,
                 parent,
                 first_child: NONE,
                 next_sibling: NONE,
@@ -134,6 +147,17 @@ impl SlotTable {
                 identity: None,
             });
             index
+        }
+    }
+
+    /// The nearest provider's group at `group` or above it (`NONE` if there is none, or for
+    /// `group == NONE`): where reading a local inside `group` starts.
+    #[inline]
+    pub fn provider_at_or_above(&self, group: u32) -> u32 {
+        match self.groups.get(group as usize) {
+            Some(entry) if entry.is_provider => group,
+            Some(entry) => entry.enclosing_provider,
+            None => NONE,
         }
     }
 
