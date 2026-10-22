@@ -709,6 +709,8 @@ fn build(call: Call) -> syn::Result<TokenStream> {
             (Some(value), _) => value,
             (None, Some(default)) => match parameter.callback {
                 Some(_) => memo::probe_value(default.clone()),
+                // An `impl Into<T>` default converts too: it may be of a source type.
+                None if parameter.into => quote! { ::core::convert::Into::into(#default) },
                 None => default.clone(),
             },
             (None, None) => {

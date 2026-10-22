@@ -12,7 +12,7 @@ use compose_runtime::{ComposeArg, CompositionLocal};
 
 use crate::focus_requester::{FocusRequest, FocusRequests};
 use crate::input::Action;
-use crate::tree::{NodeId, UiTree};
+use crate::tree::{NodeId, UiTree, capability};
 use crate::unit::Rect;
 
 /// Where `FocusManager::move_focus` moves the focus, as Compose's `FocusDirection`.
@@ -180,6 +180,27 @@ impl UiTree {
         (self.focused() != before, actions)
     }
 
+    /// Where `node`'s focus target is, in the root, as Compose's `focusRect()`: the bounds its
+    /// place in the chain gives it (after an `offset` or a `padding` before it).
+    fn focus_rect(&mut self, node: NodeId) -> Rect {
+        let index = match self.focus {
+            Some(focus) if focus.node == node => Some(focus.index as usize),
+            _ => self.focus_target_index(node),
+        };
+        let value = self.node(node);
+        let Some(index) = index.filter(|_| !value.layers.is_empty()) else {
+            return self.bounds_in_root(node);
+        };
+        let layer = value.capabilities[..index]
+            .iter()
+            .filter(|bits| **bits & capability::LAYOUT != 0)
+            .count()
+            .min(value.layers.len() - 1);
+        let size = value.layers[layer].measured;
+        let origin = self.layer_origin(node, layer);
+        Rect::new(origin.x, origin.y, origin.x + size.width as f32, origin.y + size.height as f32)
+    }
+
     /// The focusable nearest the focused node in `direction`, as Compose's
     /// `TwoDimensionalFocusSearch`: among those beyond it that way, one in its beam (overlapping
     /// it across the direction) beats one out of it, else the nearest by
@@ -189,7 +210,7 @@ impl UiTree {
     fn two_dimensional_search(&mut self, direction: FocusDirection) -> Option<NodeId> {
         let focused = self.focused();
         let source = match focused {
-            Some(node) => self.bounds_in_root(node),
+            Some(node) => self.focus_rect(node),
             None => {
                 let root = self.bounds_in_root(self.root_id());
                 match direction {
@@ -205,7 +226,7 @@ impl UiTree {
             if Some(node) == focused {
                 continue;
             }
-            let candidate = self.bounds_in_root(node);
+            let candidate = self.focus_rect(node);
             if !is_candidate(&source, &candidate, direction) {
                 continue;
             }

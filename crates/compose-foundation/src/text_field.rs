@@ -60,6 +60,11 @@ pub fn BasicTextField(
     #[default(crate::Color::BLACK)] cursor_color: Color,
     #[default(crate::inner_text_field_only)] decoration_box: impl Fn(Callback) + 'static,
 ) {
+    if single_line {
+        crate::text::validate_min_max_lines(1, 1);
+    } else {
+        crate::text::validate_min_max_lines(min_lines, max_lines);
+    }
     let element: Rc<dyn ModifierNodeElement> = Rc::new(TextFieldElement {
         value,
         on_value_change,

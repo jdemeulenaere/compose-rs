@@ -62,34 +62,50 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
+/// Runs a job, its panics caught: one escaping `spawn_background`'s own catch (a result's or a
+/// capture's drop, a waker's `wake`) is reported by the panic hook and goes no further, so the
+/// thread lives on and keeps its place in the count.
+fn run(work: Work) {
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(work));
+}
+
 impl Pool {
     fn submit(&'static self, work: Work) {
         let mut state = lock(&self.state);
-        state.queue.push_back(work);
-        if state.idle >= state.queue.len() {
-            // An idle thread takes it.
+        if state.idle > state.queue.len() || state.threads >= MAX_THREADS {
+            // An idle thread takes it, or the next one free.
+            state.queue.push_back(work);
             drop(state);
             self.available.notify_one();
             return;
         }
-        if state.threads < MAX_THREADS {
-            state.threads += 1;
-            drop(state);
-            let spawned = std::thread::Builder::new()
-                .name("compose-background".into())
-                .spawn(move || self.work());
-            if spawned.is_err() {
-                // No thread to be had: the work waits for a running one (or, with none, runs
-                // here rather than never).
-                let mut state = lock(&self.state);
-                state.threads -= 1;
-                if state.threads == 0 {
-                    let work = state.queue.pop_back();
-                    drop(state);
-                    if let Some(work) = work {
-                        work();
-                    }
+        // A new thread, starting with this work.
+        state.threads += 1;
+        drop(state);
+        let first = Arc::new(Mutex::new(Some(work)));
+        let theirs = first.clone();
+        let spawned =
+            std::thread::Builder::new().name("compose-background".into()).spawn(move || {
+                let work = lock(&theirs).take();
+                drop(theirs);
+                if let Some(work) = work {
+                    run(work);
                 }
+                self.work();
+            });
+        if spawned.is_err() {
+            // No thread to be had: the work waits for a running one or, with none, runs here
+            // rather than never.
+            let Some(work) = lock(&first).take() else { return };
+            let mut state = lock(&self.state);
+            state.threads -= 1;
+            if state.threads == 0 {
+                drop(state);
+                run(work);
+            } else {
+                state.queue.push_back(work);
+                drop(state);
+                self.available.notify_one();
             }
         }
     }
@@ -102,7 +118,7 @@ impl Pool {
                 drop(state);
                 // A panicking closure's panic goes to its future (see `spawn_background`); the
                 // thread lives on.
-                work();
+                run(work);
                 state = lock(&self.state);
                 continue;
             }
@@ -174,32 +190,36 @@ pub fn spawn_background<T: Send + 'static>(
             waker.wake();
         }
     }));
-    Background { shared }
+    Background { shared, done: false }
 }
 
-/// The future of [`spawn_background`]: the closure's result.
+/// The future of [`spawn_background`]: the closure's result. Polling it again once it gave
+/// its result panics, as std's futures do.
 #[must_use = "the work's result is discarded unless awaited"]
 pub struct Background<T> {
     shared: Arc<Mutex<Shared<T>>>,
+    /// It gave its result (or its panic).
+    done: bool,
 }
 
 impl<T> Future for Background<T> {
     type Output = T;
 
-    fn poll(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<T> {
+    fn poll(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<T> {
+        assert!(!self.done, "compose-runtime: a `Background` polled after it completed");
         let mut state = lock(&self.shared);
-        match state.result.take() {
-            Some(Ok(value)) => Poll::Ready(value),
-            Some(Err(panic)) => {
-                drop(state);
-                std::panic::resume_unwind(panic)
+        let Some(result) = state.result.take() else {
+            // Under the lock, so the work storing its result sees this waker.
+            if !state.waker.as_ref().is_some_and(|waker| waker.will_wake(context.waker())) {
+                state.waker = Some(context.waker().clone());
             }
-            None => {
-                if !state.waker.as_ref().is_some_and(|waker| waker.will_wake(context.waker())) {
-                    state.waker = Some(context.waker().clone());
-                }
-                Poll::Pending
-            }
+            return Poll::Pending;
+        };
+        drop(state);
+        self.done = true;
+        match result {
+            Ok(value) => Poll::Ready(value),
+            Err(panic) => std::panic::resume_unwind(panic),
         }
     }
 }
