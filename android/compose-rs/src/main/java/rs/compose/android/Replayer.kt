@@ -44,13 +44,13 @@ internal class Replayer(private val text: TextMeasurer) {
     private val source = Rect()
     private val clip = Path()
     private val radii = FloatArray(8)
-    private val paths = SparseArray<Path>()
-    /** Each path's bounds (its control points'), in its own units. */
-    private val pathBounds = SparseArray<RectF>()
-    /** The alpha masks of small filled paths, least recently drawn first (D190). */
-    private val masks = LinkedHashMap<MaskKey, Mask>(16, 0.75f, true)
+    private val paths = SparseArray<KeptPath>()
+    /**
+     * The alpha masks of small filled paths, least recently recorded first (D190): a kept
+     * group's node draws its masks without replaying, so it doesn't touch them.
+     */
+    private val masks = LinkedHashMap<Mask, Unit>(16, 0.75f, true)
     private var maskBytes = 0
-    private val maskLookup = MaskKey(0, 0f, 0f)
     private val maskCanvas = Canvas()
     private val maskFill = Paint(Paint.ANTI_ALIAS_FLAG)
     /** Draws a mask in the path's color (an `ALPHA_8` bitmap takes the paint's). */
@@ -252,17 +252,17 @@ internal class Replayer(private val text: TextMeasurer) {
                 }
                 DRAW_PATH -> {
                     val id = buffer.getInt()
-                    val path = paths.get(id)
+                    val kept = paths.get(id)
                     val x = buffer.getFloat()
                     val y = buffer.getFloat()
                     val scaleX = buffer.getFloat()
                     val scaleY = buffer.getFloat()
                     val paint = buffer.readPaint()
-                    if (path != null && (paintStroke || !drawMask(canvas, id, path, x, y, scaleX, scaleY))) {
+                    if (kept != null && (paintStroke || !drawMask(canvas, kept, x, y, scaleX, scaleY))) {
                         canvas.save()
                         canvas.translate(x, y)
                         canvas.scale(scaleX, scaleY)
-                        canvas.drawPath(path, paint)
+                        canvas.drawPath(kept.path, paint)
                         canvas.restore()
                     }
                 }
@@ -503,36 +503,70 @@ internal class Replayer(private val text: TextMeasurer) {
         canvas.restore()
     }
 
-    /** A path's mask at a scale. */
-    private data class MaskKey(var path: Int, var scaleX: Float, var scaleY: Float)
+    /** A path, its bounds (its control points', in its units) and its masks (D190). */
+    private class KeptPath(val path: Path) {
+        private var computedBounds: RectF? = null
 
-    /** A mask and where its top left corner is, from the path's drawn origin, in pixels. */
-    private class Mask(val bitmap: Bitmap, val left: Float, val top: Float)
+        /** Computed on first use: a stroked path (a text field's outline) never needs them. */
+        val bounds: RectF
+            get() = computedBounds ?: RectF().also {
+                // `exact` is ignored (and deprecated for that) on API 31+: the control points'.
+                @Suppress("DEPRECATION")
+                path.computeBounds(it, true)
+                computedBounds = it
+            }
+
+        /** Its masks, least recently recorded first: at most [MAX_MASKS_PER_PATH]. */
+        val masks = ArrayList<Mask>(1)
+
+        /** Its mask at ([scaleX], [scaleY]), moved last, or null. */
+        fun mask(scaleX: Float, scaleY: Float): Mask? {
+            for (index in masks.indices) {
+                val mask = masks[index]
+                if (mask.scaleX == scaleX && mask.scaleY == scaleY) {
+                    if (index != masks.lastIndex) masks.add(masks.removeAt(index))
+                    return mask
+                }
+            }
+            return null
+        }
+    }
+
+    /** A path's mask at a scale, its top left corner from the path's drawn origin, in pixels. */
+    private class Mask(
+        val path: KeptPath,
+        val scaleX: Float,
+        val scaleY: Float,
+        val bitmap: Bitmap,
+        val left: Float,
+        val top: Float,
+    )
 
     /**
-     * Draws filled path [id] scaled by [scaleX] and [scaleY] at ([x], [y]) from its mask, made
-     * on first use; false (nothing drawn) when the scaled path is larger than [MAX_MASK_SIZE].
+     * Draws filled path [kept] scaled by [scaleX] and [scaleY] at ([x], [y]) from its mask,
+     * made on first use; false (nothing drawn) when the scaled path is larger than
+     * [MAX_MASK_SIZE]. A path keeps [MAX_MASKS_PER_PATH] masks: a size animating makes one per
+     * frame (as Compose's `DrawCache` draws its bitmap again), but they don't fill the cache.
      *
      * The mask is the path rasterized (anti-aliased, by the CPU) at its drawn size, its corners
      * on whole pixels from ([x], [y]): drawn where Rust placed the path (on whole pixels, as
-     * layout rounds), it covers the pixels `drawPath` would, edges anti-aliased by Skia's
-     * raster scan converter instead of the GPU's. Drawn on fractional pixels or under a scaling
-     * layer, it's filtered (bilinear), as Compose's `VectorPainter` bitmap is: keyed by scale
-     * only, a path has one mask per drawn size, not one per subpixel position.
+     * layout and an icon's centering round), it covers the pixels `drawPath` would, edges
+     * anti-aliased by Skia's raster scan converter instead of the GPU's. Drawn on fractional
+     * pixels or under a scaling layer, it's filtered (bilinear), as Compose's `VectorPainter`
+     * bitmap is: keyed by scale only, a path has one mask per drawn size, not one per
+     * subpixel position.
      */
     private fun drawMask(
         canvas: Canvas,
-        id: Int,
-        path: Path,
+        kept: KeptPath,
         x: Float,
         y: Float,
         scaleX: Float,
         scaleY: Float,
     ): Boolean {
-        maskLookup.path = id
-        maskLookup.scaleX = scaleX
-        maskLookup.scaleY = scaleY
-        val mask = masks[maskLookup] ?: makeMask(id, path, scaleX, scaleY) ?: return false
+        val mask = kept.mask(scaleX, scaleY)?.also { masks[it] }
+            ?: makeMask(kept, scaleX, scaleY)
+            ?: return false
         if (paintColor != maskPaintColor) {
             maskPaintColor = paintColor
             maskPaint.color = paintColor
@@ -541,8 +575,8 @@ internal class Replayer(private val text: TextMeasurer) {
         return true
     }
 
-    private fun makeMask(id: Int, path: Path, scaleX: Float, scaleY: Float): Mask? {
-        val bounds = pathBounds.get(id) ?: return null
+    private fun makeMask(kept: KeptPath, scaleX: Float, scaleY: Float): Mask? {
+        val bounds = kept.bounds
         val x1 = bounds.left * scaleX
         val x2 = bounds.right * scaleX
         val y1 = bounds.top * scaleY
@@ -553,46 +587,48 @@ internal class Replayer(private val text: TextMeasurer) {
         val width = (ceil(maxOf(x1, x2)) + 1f - left).toInt()
         val height = (ceil(maxOf(y1, y2)) + 1f - top).toInt()
         if (bounds.isEmpty || width !in 1..MAX_MASK_SIZE || height !in 1..MAX_MASK_SIZE) return null
-        val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ALPHA_8)
-        // Drawn pixel for pixel, whatever the canvas's density.
-        bitmap.density = Bitmap.DENSITY_NONE
-        maskCanvas.setBitmap(bitmap)
+        val drawn = Bitmap.createBitmap(width, height, Bitmap.Config.ALPHA_8)
+        maskCanvas.setBitmap(drawn)
         maskCanvas.save()
         maskCanvas.translate(-left, -top)
         maskCanvas.scale(scaleX, scaleY)
-        maskCanvas.drawPath(path, maskFill)
+        maskCanvas.drawPath(kept.path, maskFill)
         maskCanvas.restore()
         maskCanvas.setBitmap(null)
-        val mask = Mask(bitmap, left, top)
-        masks[MaskKey(id, scaleX, scaleY)] = mask
+        // An immutable copy, so the render thread uploads it once and never checks it for
+        // changes (`setImmutable` isn't public API). The drawn one was never recorded.
+        val bitmap = drawn.copy(Bitmap.Config.ALPHA_8, false)
+        drawn.recycle()
+        // Drawn pixel for pixel, whatever the canvas's density.
+        bitmap.density = Bitmap.DENSITY_NONE
+        val mask = Mask(kept, scaleX, scaleY, bitmap, left, top)
+        if (kept.masks.size == MAX_MASKS_PER_PATH) forget(kept.masks.removeAt(0))
+        kept.masks.add(mask)
+        masks[mask] = Unit
         maskBytes += bitmap.allocationByteCount
-        // The least recently drawn masks go past the budget. Not recycled: a kept group's
+        // The least recently recorded masks go past the budget. Not recycled: a kept group's
         // recording may still draw them (the garbage collector frees them after it).
-        val iterator = masks.values.iterator()
+        val iterator = masks.keys.iterator()
         while (maskBytes > MAX_MASK_BYTES && iterator.hasNext()) {
             val oldest = iterator.next()
             if (oldest === mask) break
-            maskBytes -= oldest.bitmap.allocationByteCount
             iterator.remove()
+            oldest.path.masks.remove(oldest)
+            maskBytes -= oldest.bitmap.allocationByteCount
         }
         return mask
     }
 
-    private fun dropPath(id: Int) {
-        paths.remove(id)
-        pathBounds.remove(id)
-        dropMasks(id)
+    /** Forgets [mask], taken from its path's. */
+    private fun forget(mask: Mask) {
+        masks.remove(mask)
+        maskBytes -= mask.bitmap.allocationByteCount
     }
 
-    private fun dropMasks(id: Int) {
-        val iterator = masks.entries.iterator()
-        while (iterator.hasNext()) {
-            val entry = iterator.next()
-            if (entry.key.path == id) {
-                maskBytes -= entry.value.bitmap.allocationByteCount
-                iterator.remove()
-            }
-        }
+    private fun dropPath(id: Int) {
+        val kept = paths.get(id) ?: return
+        paths.remove(id)
+        for (mask in kept.masks) forget(mask)
     }
 
     private fun definePath(buffer: ByteBuffer) {
@@ -615,12 +651,9 @@ internal class Replayer(private val text: TextMeasurer) {
                 else -> path.close()
             }
         }
-        paths.put(id, path)
-        // Its control points' bounds (`exact` is ignored, and deprecated for that, on API 31+).
-        @Suppress("DEPRECATION")
-        pathBounds.put(id, RectF().also { path.computeBounds(it, true) })
         // An id is defined once, but a stale mask must never outlive its path.
-        dropMasks(id)
+        dropPath(id)
+        paths.put(id, KeptPath(path))
     }
 
     private fun defineImage(buffer: ByteBuffer) {
@@ -642,7 +675,6 @@ internal class Replayer(private val text: TextMeasurer) {
         for (group in groups.values) group.node.discardDisplayList()
         groups.clear()
         paths.clear()
-        pathBounds.clear()
         masks.clear()
         maskBytes = 0
         for (index in 0 until images.size()) images.valueAt(index).recycle()
@@ -676,6 +708,8 @@ internal class Replayer(private val text: TextMeasurer) {
         const val MAX_MASK_SIZE = 256
         /** The masks' memory budget: 4 MB, 64 masks of 256 by 256 pixels, ~500 icons of 24 dp at 3.5x. */
         const val MAX_MASK_BYTES = 4 shl 20
+        /** The masks a path keeps, one per drawn size (D190). */
+        const val MAX_MASKS_PER_PATH = 4
 
         /**
          * The bytes of a `LAYERS` entry: its key, 8 floats, whether it clips, its clip, whether

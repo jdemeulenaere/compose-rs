@@ -74,15 +74,16 @@ impl ModifierNode for IconNode {
 }
 
 impl DrawModifierNode for IconNode {
-    /// The paths, their viewport fitted in the node (its aspect ratio kept) and centered, as
-    /// Compose's `Icon` (`ContentScale.Fit`).
+    /// The paths, their viewport fitted in the node (its aspect ratio kept) and centered on
+    /// whole pixels, as Compose's `Icon` (`ContentScale.Fit`, `Alignment.Center`'s rounding):
+    /// Android draws a small path from a mask, unfiltered there (D190).
     fn draw(&mut self, scope: &mut DrawScope<'_>) {
         let size = scope.size();
         let vector = &self.image_vector;
         let scale = (size.width / vector.viewport_width).min(size.height / vector.viewport_height);
         let offset = Offset::new(
-            (size.width - vector.viewport_width * scale) / 2.0,
-            (size.height - vector.viewport_height * scale) / 2.0,
+            centered(size.width, vector.viewport_width * scale),
+            centered(size.height, vector.viewport_height * scale),
         );
         for (path, fill) in vector.paths.iter() {
             // Tinted as `SrcIn`: the tint, as opaque as the path; untinted, the path's own
@@ -97,6 +98,12 @@ impl DrawModifierNode for IconNode {
             scope.draw_path_scaled(path, offset, (scale, scale), Paint::fill(color));
         }
     }
+}
+
+/// Where `content` is centered in `space`, as Compose's `Alignment.Center` places it: both
+/// sizes rounded to whole pixels, then the half of the difference (`roundToInt`: half up).
+fn centered(space: f32, content: f32) -> f32 {
+    ((space.round() - content.round()) / 2.0 + 0.5).floor()
 }
 
 /// An icon button, as Compose's `IconButton`: a 40 dp circular state layer in a 48 dp touch
