@@ -21,6 +21,7 @@ import android.view.HapticFeedbackConstants
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
+import android.view.ViewTreeObserver
 import android.view.WindowInsets
 import android.view.accessibility.AccessibilityManager
 import android.view.accessibility.AccessibilityNodeProvider
@@ -183,13 +184,7 @@ class ComposeRsView(context: Context, private val app: String) : View(context) {
         if (host == 0L) return
         // Given back if it's composed again (attached again, or a new view of the same id).
         savedState = ComposeRsNative.saveState(host)
-        Choreographer.getInstance().removeFrameCallback(frameCallback)
-        frameRequested = false
-        frameWanted = false
-        Choreographer.getInstance().removeFrameCallback(prefetchFrameCallback)
-        removeCallbacks(prefetchRunnable)
-        prefetchScheduled = false
-        idleTimesWithoutTime = 0
+        cancelFrames()
         ComposeRsNative.destroy(host)
         host = 0L
         drawing = null
@@ -244,6 +239,7 @@ class ComposeRsView(context: Context, private val app: String) : View(context) {
         savedState = restored
         // Already composed (restored late): composed again from the saved state.
         if (host != 0L) {
+            cancelFrames()
             ComposeRsNative.destroy(host)
             host = 0L
             drawing = null
@@ -390,9 +386,17 @@ class ComposeRsView(context: Context, private val app: String) : View(context) {
         if (visibility == VISIBLE) {
             if (frameWanted) {
                 frameWanted = false
-                Choreographer.getInstance().removeFrameCallback(frameCallback)
-                frame()
+                // Asked for as any frame, and made sooner, before the traversal showing the
+                // window draws, if one does (it dispatched this before its layout: a size changed
+                // while hidden is applied first).
+                requestFrame()
+                if (!showFramePending) {
+                    showFramePending = true
+                    viewTreeObserver.addOnPreDrawListener(showFrame)
+                }
             }
+            // Prefetch work left when the window hid (prefetch() does nothing without any).
+            schedulePrefetch()
         } else {
             if (frameRequested) {
                 Choreographer.getInstance().removeFrameCallback(frameCallback)
@@ -403,6 +407,37 @@ class ComposeRsView(context: Context, private val app: String) : View(context) {
             Choreographer.getInstance().removeFrameCallback(prefetchFrameCallback)
             removeCallbacks(prefetchRunnable)
             prefetchScheduled = false
+            idleTimesWithoutTime = 0
+        }
+    }
+
+    /** The frame missed while hidden, made before the traversal that shows the window draws. */
+    private var showFramePending = false
+    private val showFrame = object : ViewTreeObserver.OnPreDrawListener {
+        override fun onPreDraw(): Boolean {
+            viewTreeObserver.removeOnPreDrawListener(this)
+            showFramePending = false
+            if (host != 0L && frameRequested) {
+                Choreographer.getInstance().removeFrameCallback(frameCallback)
+                frame()
+            }
+            return true
+        }
+    }
+
+    /** No frame, prefetch or frame on show is waiting any more (the host goes). */
+    private fun cancelFrames() {
+        val choreographer = Choreographer.getInstance()
+        choreographer.removeFrameCallback(frameCallback)
+        frameRequested = false
+        frameWanted = false
+        choreographer.removeFrameCallback(prefetchFrameCallback)
+        removeCallbacks(prefetchRunnable)
+        prefetchScheduled = false
+        idleTimesWithoutTime = 0
+        if (showFramePending) {
+            showFramePending = false
+            viewTreeObserver.removeOnPreDrawListener(showFrame)
         }
     }
 
@@ -440,6 +475,7 @@ class ComposeRsView(context: Context, private val app: String) : View(context) {
         // A hidden window draws no frames to prepare for, as Compose's.
         if (host == 0L || windowVisibility != VISIBLE) {
             prefetchScheduled = false
+            idleTimesWithoutTime = 0
             return
         }
         // Until the next frame: the vsync after the last frame's, found from its frame time and
@@ -447,10 +483,13 @@ class ComposeRsView(context: Context, private val app: String) : View(context) {
         // (D340). The shifted time itself is the animations', not changed here.
         val refreshRate = display?.refreshRate?.coerceAtLeast(30f) ?: 60f
         val interval = (1_000_000_000 / refreshRate).toLong()
+        // (`display.refreshRate`: right after a change of rate, a frame time from before it may
+        // put the next frame up to an interval late, once.)
         val nextFrameNanos = ComposeRsNative.nextFrameNanos(frameTimeNanos, interval, frameStartedNanos)
-        if (nextFrameNanos - System.nanoTime() <= 0) {
-            // No time (the frame ran past the next vsync, or came from a layout, not a
-            // callback): tried after the next frame, which gives a fresh time; a few times at
+        if (nextFrameNanos - System.nanoTime() <= RECORD_MARGIN_NANOS) {
+            // No time, or less than the margin, which no step starts in and which would only
+            // lower Rust's estimates (the frame ran past the next vsync, or came from a layout,
+            // not a callback): tried after the next frame, which gives a fresh time; a few times at
             // most, then the next frame with prefetch work schedules it again, rather than
             // asking for every vsync for good.
             if (++idleTimesWithoutTime > MOST_IDLE_TIMES_WITHOUT_TIME) {
@@ -470,7 +509,7 @@ class ComposeRsView(context: Context, private val app: String) : View(context) {
         var workLeft = measurer.recordLaidOut(recordDeadline)
         if (!workLeft) {
             val available = nextFrameNanos - System.nanoTime()
-            workLeft = available <= 0 || prefetchAndRecord(available, recordDeadline)
+            workLeft = available <= RECORD_MARGIN_NANOS || prefetchAndRecord(available, recordDeadline)
         }
         if (!workLeft) {
             prefetchScheduled = false
