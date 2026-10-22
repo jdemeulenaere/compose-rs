@@ -53,6 +53,7 @@ pub trait TextMeasurer {
   2. **Recompose** invalid scopes.
   3. **Layout and draw** from dirty nodes, recording the display list.
   4. **Render and present** through Skia, only when something was drawn (or the window resized): the display list is rendered in place on Skia's CPU raster surface and its pixels copied straight into the window's buffer (softbuffer), so a warm frame allocates nothing.
+  5. **Prefetch** while waiting (`about_to_wait`), when no frame has work: `UiHost::prefetch` until the next frame is due (the last one plus a refresh interval; a whole interval when nothing animates), so lazy lists that scrolled compose and measure their next items; work left wakes the loop at the deadline for another try.
 
   The loop sleeps (`ControlFlow::Wait`) until there's a reason to work: an idle window costs 0% CPU. Tasks ([04](04-runtime.md)) wake it through an event-loop proxy from any thread; a pending `delay` makes it wake at its end (`WaitUntil`); and frames only animations wait for come one display refresh interval apart (the monitor's rate, 60 Hz otherwise), since the CPU raster surface has no vsync.
 - **HiDPI.** Layout is in logical pixels (`Dp`), and rendering happens at the window's scale factor.
@@ -94,6 +95,7 @@ A thin Kotlin layer (`android/compose-rs`, an AAR) and `crates/compose-android` 
 | Concern | Kotlin side | Crossings |
 |---|---|---|
 | Frames | a Choreographer callback calls `frame` (recompose, lay out, record); `onDraw` takes the bytes and replays them; the first frame is composed during the view's first layout, so the window's first frame shows the content | one per frame, one per draw |
+| Prefetch | when `frame` says lazy lists wait for idle time, the view posts a message (run once the frame is done, as Compose's `AndroidPrefetchScheduler`) calling `prefetch` with the time to the next frame (the Choreographer frame's start plus the display's refresh period); work left, or no time, tries again after the next Choreographer frame | one per idle time |
 | Drawing | `Replayer.kt`: each operation a `Canvas` call; paths and images kept by id (defined once, dropped with their owner); each paragraph recorded once into a `RenderNode`, then drawn by reference; each repaint boundary's group (graphics layers, lazy items) recorded into a `RenderNode` kept while its bytes stay the same (D154) | in the frame's buffer |
 | Touch and keys | `onTouchEvent` forwards each pointer's samples with their event times (historical ones too: a fling's velocity comes from them); `onKeyDown`/`onKeyUp` the key and its character (without Ctrl, Alt or Meta, so shortcuts are known); a wheel's `ACTION_SCROLL` | one per sample, per key |
 | Text measurement | `TextMeasurer.kt`: a `StaticLayout` per paragraph, its style runs and line options encoded in a request; metrics back through a shared buffer; offsets converted between UTF-8 and UTF-16 on the Rust side | one per laid-out paragraph |
@@ -101,7 +103,7 @@ A thin Kotlin layer (`android/compose-rs`, an AAR) and `crates/compose-android` 
 | Accessibility | `Accessibility.kt`, an `AccessibilityNodeProvider`: the merged semantics tree as virtual views (texts, roles, states, ranges, click, focus and progress actions, explore-by-touch) | when a service asks after a change |
 | Tasks | woken tasks and `delay`s become main-thread `Handler` posts (a new earliest timer wakes the host) | per tick |
 | Lifecycle and configuration | density, font scale and layout direction passed to the composition; detaching from the window disposes it | on change |
-| Tracing | the frame's phases as `ATrace` sections (`compose-rs: recompose`, `layout`, `draw`, `text layout`, `serialize`, `replay`), beside the system's in Perfetto | none |
+| Tracing | the frame's phases as `ATrace` sections (`compose-rs: recompose`, `layout`, `draw`, `text layout`, `serialize`, `replay`, `prefetch`), beside the system's in Perfetto | none |
 
 The **frame and composition thread** is Android's main thread. Choreographer drives frames only while scopes are invalid or animations run, so an idle view costs nothing. Rendering is the system's: a hardware-accelerated view's `Canvas` is recorded by the UI thread and drawn by the render thread on the GPU (Vulkan on recent devices), as Compose's is.
 

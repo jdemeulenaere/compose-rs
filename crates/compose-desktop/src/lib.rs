@@ -595,10 +595,28 @@ impl ApplicationHandler<UserEvent> for App {
                 }
             }
         }
-        // Sleep until an event, a redraw request, the next animation frame or the next
-        // `delay`'s end: an idle application costs nothing.
+        // Until the next frame, lazy lists that scrolled compose and measure the items they'll
+        // reach next (prefetch); work left waits for the next idle time.
+        let mut prefetch = None;
+        for shown in self.windows.values_mut() {
+            if !shown.visible || shown.host.has_pending_work() || !shown.host.has_prefetch_work() {
+                continue;
+            }
+            let due = shown.last_frame + self.frame_interval;
+            let animating = compose_runtime::executor::has_frame_awaiters();
+            if animating && due <= now {
+                continue;
+            }
+            // No frame coming (nothing animates): a refresh interval's time.
+            let deadline = if due > now { due } else { now + self.frame_interval };
+            if shown.host.prefetch(deadline) {
+                prefetch = Some(prefetch.map_or(deadline, |next: Instant| next.min(deadline)));
+            }
+        }
+        // Sleep until an event, a redraw request, the next animation frame, prefetch work's
+        // next idle time or the next `delay`'s end: an idle application costs nothing.
         let timer = compose_runtime::executor::next_timer().map(|wait| now + wait);
-        match [next_frame, timer].into_iter().flatten().min() {
+        match [next_frame, prefetch, timer].into_iter().flatten().min() {
             Some(deadline) => event_loop.set_control_flow(ControlFlow::WaitUntil(deadline)),
             None => event_loop.set_control_flow(ControlFlow::Wait),
         }

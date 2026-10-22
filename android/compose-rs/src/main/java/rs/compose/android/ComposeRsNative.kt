@@ -26,6 +26,12 @@ internal object ComposeRsNative {
     /** Recomposes, lays out and draws what changed: [Frame] flags, and the next timer. */
     @JvmStatic external fun frame(host: Long): Long
 
+    /**
+     * Between frames: lazy lists that scrolled compose and measure the items they'll reach next,
+     * for at most [availableNanos]. Returns whether work is left, for the next idle time.
+     */
+    @JvmStatic external fun prefetch(host: Long, availableNanos: Long): Boolean
+
     /** What `onDraw` replays: resource changes, then the last frame's display list. */
     @JvmStatic external fun takeDrawing(host: Long): ByteBuffer?
 
@@ -73,6 +79,7 @@ internal object Frame {
     const val TEXT_INPUT = 4L
     const val RESET_INPUT = 8L
     const val SEMANTICS = 16L
+    const val PREFETCH = 32L
 
     /** The milliseconds to the next timer, or -1. */
     fun nextTimer(result: Long): Long = (result shr 8) - 1

@@ -43,6 +43,9 @@ pub struct UiHost {
     layout_direction: compose_runtime::OwnedState<crate::alignment::LayoutDirection>,
     /// The window's size, the root's constraints hint (`LOCAL_CONSTRAINTS_HINT`).
     window_size: compose_runtime::OwnedState<IntSize>,
+    /// Work lazy lists ask for between frames (`prefetch`), given to content as
+    /// `LOCAL_PREFETCH_SCHEDULER`.
+    prefetch_scheduler: crate::prefetch::PrefetchScheduler,
 }
 
 /// The content, skipped when the root recomposes for a new density: only what reads
@@ -110,6 +113,7 @@ impl UiHost {
                 crate::alignment::LayoutDirection::Ltr,
             ),
             window_size: compose_runtime::mutable_state_of(size),
+            prefetch_scheduler: crate::prefetch::PrefetchScheduler::default(),
         }
     }
 
@@ -243,29 +247,37 @@ impl UiHost {
             let density = self.density.handle();
             let direction = self.layout_direction.handle();
             let window = self.window_size.handle();
+            let scheduler = self.prefetch_scheduler.clone();
             let content: compose_runtime::Callback = compose_runtime::callback(content);
             self.composition.set_content(move || {
                 let content = content.clone();
-                compose_runtime::CompositionLocalProvider(
-                    LOCAL_DENSITY.provides(density.get()),
-                    move || {
-                        compose_runtime::CompositionLocalProvider(
-                            crate::alignment::LOCAL_LAYOUT_DIRECTION.provides(direction.get()),
-                            move || {
-                                let size = window.get();
-                                compose_runtime::CompositionLocalProvider(
-                                    LOCAL_CONSTRAINTS_HINT.provides(Some(
-                                        crate::constraints::Constraints::fixed(
-                                            size.width,
-                                            size.height,
-                                        ),
-                                    )),
-                                    move || Content(content),
-                                )
-                            },
-                        )
-                    },
-                )
+                // The prefetch scheduler never changes: outermost, it's read without
+                // recomposing anything.
+                let scheduler =
+                    crate::prefetch::LOCAL_PREFETCH_SCHEDULER.provides(Some(scheduler.clone()));
+                compose_runtime::CompositionLocalProvider(scheduler, move || {
+                    let content = content.clone();
+                    compose_runtime::CompositionLocalProvider(
+                        LOCAL_DENSITY.provides(density.get()),
+                        move || {
+                            compose_runtime::CompositionLocalProvider(
+                                crate::alignment::LOCAL_LAYOUT_DIRECTION.provides(direction.get()),
+                                move || {
+                                    let size = window.get();
+                                    compose_runtime::CompositionLocalProvider(
+                                        LOCAL_CONSTRAINTS_HINT.provides(Some(
+                                            crate::constraints::Constraints::fixed(
+                                                size.width,
+                                                size.height,
+                                            ),
+                                        )),
+                                        move || Content(content),
+                                    )
+                                },
+                            )
+                        },
+                    )
+                })
             });
         }
         let mut recomposed =
@@ -326,6 +338,43 @@ impl UiHost {
             frames += 1;
         }
         frames
+    }
+
+    /// Whether prefetch requests wait for idle time: the platform then calls `prefetch` after
+    /// the frame.
+    pub fn has_prefetch_work(&self) -> bool {
+        self.prefetch_scheduler.has_requests()
+    }
+
+    /// Runs the prefetch requests until `deadline` (when the next frame should start), as
+    /// Compose's `PrefetchScheduler`: a lazy list that scrolled composes and measures the items
+    /// it will reach next, so the frame that scrolls them in finds them ready. The platform calls
+    /// it when idle between frames. Returns whether work is left, for the next idle time.
+    ///
+    /// What it composes isn't placed until the next frame, and asks for none: nothing shows, and
+    /// state stays as it was (a list's first visible item). A frame with work waiting (state
+    /// changed) goes first: nothing runs then.
+    pub fn prefetch(&mut self, deadline: std::time::Instant) -> bool {
+        if !self.has_prefetch_work() {
+            return false;
+        }
+        if self.pending_content.borrow().is_some() || self.composition.has_invalidations() {
+            return true;
+        }
+        let _prefetch = crate::trace::section(c"compose-rs: prefetch");
+        // The requests' writes are composed here: they wake nothing.
+        self.framing.set(true);
+        let more = self.prefetch_scheduler.run(&self.composition, deadline);
+        self.framing.set(false);
+        // What composition queued (listeners attached), and the effects it started.
+        let actions = self.with_tree(|tree| tree.take_pending_actions());
+        Self::run(actions);
+        executor::run_ready();
+        // What measuring wrote (a `BoxWithConstraints`' constraints) is composed in a frame.
+        if self.composition.has_invalidations() {
+            self.wake();
+        }
+        more
     }
 
     fn run(actions: Vec<Action>) {

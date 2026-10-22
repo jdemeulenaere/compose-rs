@@ -24,7 +24,7 @@ What compose-rs covers of Jetpack Compose today, and where it knowingly differs.
 
 ## Known differences
 
-- **No subcomposition.** Content that Compose composes while measuring (lazy items, `BoxWithConstraints`) is composed for what the measurement asks, then the frame recomposes and measures again (up to three rounds). `BoxWithConstraints` first composes for a hint of its constraints, so it usually composes once (D142).
+- **No subcomposition.** Content that Compose composes while measuring (lazy items, `BoxWithConstraints`) is composed for what the measurement asks, then the frame recomposes and measures again (up to three rounds). `BoxWithConstraints` first composes for a hint of its constraints, so it usually composes once (D142). A lazy list that scrolled composes and measures its next items between frames (prefetch, D155), so the frames reaching them usually compose nothing.
 - **Intrinsics** are approximated by measuring a child once to ask (`max_intrinsic_width`, `max_intrinsic_height`), where Compose has each layout's own formulas (D137).
 - **State writes during composition** panic; `remember_updated_state` is a plain cell rather than state.
 - **Ripples** are static state layers (8 % hovered, 10 % pressed or focused), not animated ripples; a `Switch`'s is on its touch target rather than around its thumb.

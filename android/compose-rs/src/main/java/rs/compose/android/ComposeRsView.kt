@@ -25,8 +25,10 @@ import android.view.inputmethod.InputMethodManager
  * any content (docs/07-platforms.md, "Embedding").
  *
  * On a Choreographer frame (asked for when the app's state changes), Rust recomposes, lays out
- * and records a display list; [onDraw] replays it on the view's (hardware) canvas. The
- * composition lives while the view is attached to a window.
+ * and records a display list; [onDraw] replays it on the view's (hardware) canvas. After a frame,
+ * until the next one should start, lazy lists that scrolled compose and measure the items they'll
+ * reach next (prefetch, as Compose's `AndroidPrefetchScheduler`). The composition lives while the
+ * view is attached to a window.
  */
 class ComposeRsView(context: Context, private val app: String) : View(context) {
     private val measurer = TextMeasurer()
@@ -36,7 +38,21 @@ class ComposeRsView(context: Context, private val app: String) : View(context) {
     private var textInput = false
     private val inputMethods = context.getSystemService(InputMethodManager::class.java)
 
-    private val frameCallback = Choreographer.FrameCallback { frame() }
+    private val frameCallback = Choreographer.FrameCallback { time ->
+        frameTimeNanos = time
+        frame()
+    }
+
+    /** The last Choreographer frame's start (`System.nanoTime`): the next is a refresh later. */
+    private var frameTimeNanos = 0L
+    private var prefetchScheduled = false
+    private val prefetchRunnable = Runnable { prefetch() }
+
+    /** Prefetch work left: tried again after the next frame. */
+    private val prefetchFrameCallback = Choreographer.FrameCallback { time ->
+        frameTimeNanos = time
+        post(prefetchRunnable)
+    }
     private val accessibility = Accessibility(this)
     private val accessibilityManager = context.getSystemService(AccessibilityManager::class.java)
     /** A change of semantics is told to accessibility services at most this often. */
@@ -96,6 +112,9 @@ class ComposeRsView(context: Context, private val app: String) : View(context) {
         if (host == 0L) return
         Choreographer.getInstance().removeFrameCallback(frameCallback)
         frameRequested = false
+        Choreographer.getInstance().removeFrameCallback(prefetchFrameCallback)
+        removeCallbacks(prefetchRunnable)
+        prefetchScheduled = false
         ComposeRsNative.destroy(host)
         host = 0L
         measurer.clear()
@@ -127,11 +146,35 @@ class ComposeRsView(context: Context, private val app: String) : View(context) {
         val result = ComposeRsNative.frame(host)
         if (result and Frame.DREW != 0L) invalidate()
         if (result and Frame.AGAIN != 0L) requestFrame()
+        if (result and Frame.PREFETCH != 0L) schedulePrefetch()
         ComposeRsRuntime.schedule(Frame.nextTimer(result))
         updateTextInput(result and Frame.TEXT_INPUT != 0L, result and Frame.RESET_INPUT != 0L)
         if (result and Frame.SEMANTICS != 0L && accessibilityManager.isEnabled && !semanticsChangePosted) {
             semanticsChangePosted = true
             postDelayed(semanticsChanged, 100)
+        }
+    }
+
+    /** Prefetches once the frame is done (a message after the Choreographer's callbacks). */
+    private fun schedulePrefetch() {
+        if (prefetchScheduled) return
+        prefetchScheduled = true
+        post(prefetchRunnable)
+    }
+
+    private fun prefetch() {
+        if (host == 0L) {
+            prefetchScheduled = false
+            return
+        }
+        // Until the next frame: a refresh interval after this one started.
+        val refreshRate = display?.refreshRate?.coerceAtLeast(30f) ?: 60f
+        val nextFrameNanos = frameTimeNanos + (1_000_000_000 / refreshRate).toLong()
+        val available = nextFrameNanos - System.nanoTime()
+        if (available > 0 && !ComposeRsNative.prefetch(host, available)) {
+            prefetchScheduled = false
+        } else {
+            Choreographer.getInstance().postFrameCallback(prefetchFrameCallback)
         }
     }
 

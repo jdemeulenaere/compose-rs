@@ -429,6 +429,8 @@ mod flags {
     pub const RESET_INPUT: i64 = 8;
     /// The semantics may have changed (a recomposition or a layout): accessibility hears it.
     pub const SEMANTICS: i64 = 16;
+    /// Prefetch work waits for idle time: the view calls `prefetch` after the frame.
+    pub const PREFETCH: i64 = 32;
 }
 
 fn next_timer_bits() -> i64 {
@@ -468,7 +470,26 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_frame(
     if stats.recomposed || stats.measured {
         result |= flags::SEMANTICS;
     }
+    if host.ui.has_prefetch_work() {
+        result |= flags::PREFETCH;
+    }
     result | next_timer_bits()
+}
+
+/// `ComposeRsNative.prefetch(host, availableNanos)`: between frames, lazy lists that scrolled
+/// compose and measure the items they'll reach next, for at most `available_nanos` (the time to
+/// the next frame). Returns whether work is left, for the next idle time.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_rs_compose_android_ComposeRsNative_prefetch(
+    _env: JNIEnv,
+    _class: JClass,
+    host: jlong,
+    available_nanos: jlong,
+) -> jboolean {
+    // SAFETY: a live host, on the main thread.
+    let host = unsafe { self::host(host) };
+    let available = std::time::Duration::from_nanos(available_nanos.max(0) as u64);
+    u8::from(host.ui.prefetch(std::time::Instant::now() + available))
 }
 
 /// `ComposeRsNative.takeDrawing(host)`: what `onDraw` replays: the resources defined or dropped

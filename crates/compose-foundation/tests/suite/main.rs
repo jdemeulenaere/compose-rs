@@ -13,6 +13,7 @@ mod hover;
 mod image;
 mod lazy;
 mod pointer_input;
+mod prefetch;
 mod review_e;
 mod review_f;
 mod review_f2;
