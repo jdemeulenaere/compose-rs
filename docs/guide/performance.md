@@ -1,0 +1,180 @@
+# Performance
+
+compose-rs does the same three phases as Compose in each frame: composition, layout, drawing. Most of Compose's performance advice applies as is: read state as late as possible, key lazy items, keep arguments stable so composables skip. This page says what compose-rs does to keep frames short, what defeats it, and how to measure. [docs/12](../12-android-performance.md) measures it against Jetpack Compose on a Pixel 8 Pro.
+
+## What's fast, and why
+
+### Skipping
+
+Every restartable composable can skip, as with Compose's strong skipping: when each argument is `same` as last time, its body doesn't run. `ComposeArg::same` is always cheap: shared data (`Rc`, state handles, callbacks, `ImmutableList`) compares by identity, small values (numbers, short strings, small enums and `#[derive(ComposeArg)]` structs) by value, and nothing compares a collection element by element. So a skip costs one comparison per argument ([State](kotlin-to-rust.md#data-models-and-skipping)).
+
+Lambdas keep their identity across passes. The transform remembers each lambda in a composable's calls and compares its captures; when they're all `same`, the call gets the lambda it got last time, and the callee can skip. This covers callbacks (`on_click = move || …`), content blocks and the callback methods of modifiers (`clickable`, `on_size_changed`, …).
+
+### Fine-grained recomposition
+
+A state read subscribes the scope that reads it, and a write recomposes those scopes only. A read inside a content block (`Button!(…, { Text!("{}", count.get()) })`) subscribes the composable that invokes the block (one inside `Button`), not the composable that wrote the block. Toggling one of 1,000 todos recomposes one row (`examples/todo`, and its test `toggling_one_item_recomposes_one_row`).
+
+### Reads while laying out and drawing
+
+State read while measuring (in a `Layout`'s policy or `Modifier.layout`) subscribes the node's layout, and state read while drawing (in `Canvas`, `draw_behind`, `draw_with_cache`'s drawing block) subscribes its drawing. A change then measures or draws again, without composing. This is Compose's deferred reads, and the most effective change to make to a screen whose state changes every frame:
+
+<!-- snippet: src/performance.rs#read_late -->
+```rust
+#[composable]
+pub fn Article(paragraphs: u32) {
+    let scroll = remember_scroll_state!();
+    Box!(modifier = Modifier.fill_max_size(), {
+        Column!(modifier = Modifier.vertical_scroll(scroll), {
+            for index in 0..paragraphs {
+                Text!("Paragraph {}", index, modifier = Modifier.padding(16.dp()));
+            }
+        });
+        // Give the child the holder (a Copy handle), not `scroll.value()`: read here, the value
+        // would recompose `Article`, its whole column included, at each scrolled pixel.
+        ProgressBar!(scroll);
+    });
+}
+
+#[composable]
+fn ProgressBar(scroll: ScrollState) {
+    let color = MaterialTheme::color_scheme().primary;
+    Box!(
+        modifier = Modifier.fill_max_width().height(4.dp()).draw_behind(move |scope| {
+            // Read while drawing: a scroll draws this bar again, and recomposes nothing.
+            let fraction = scroll.value() as f32 / scroll.max_value().max(1) as f32;
+            let size = scope.size();
+            scope.draw_rect(
+                Rect::new(0.0, 0.0, size.width * fraction, size.height),
+                Paint::fill(color),
+            );
+        })
+    );
+}
+```
+
+A `graphics_layer` block is read while drawing too, and its properties (alpha, scale, rotation, translation, clip) apply to the layer's drawing without drawing it again. On Android each layer is a render node whose properties are set on it: an animation of a layer's properties records nothing, as Compose's `graphicsLayer { }` does.
+
+<!-- snippet: src/performance.rs#deferred -->
+```rust
+#[composable]
+pub fn LiveDot() {
+    let transition = remember_infinite_transition("Live");
+    let alpha = transition.animate_float(
+        0.2,
+        1.0,
+        infinite_repeatable(tween(800).easing(LINEAR_EASING), RepeatMode::Reverse),
+    );
+    Box!(
+        modifier = Modifier
+            .size(12.dp())
+            // Read while drawing, as `graphicsLayer { alpha = … }`: an animation frame sets the
+            // layer's alpha, and nothing recomposes, measures or draws again.
+            .graphics_layer(move |layer| layer.alpha = alpha.get())
+            .background_with(Color::RED, CIRCLE_SHAPE)
+            .test_tag("dot")
+    );
+    // Not `Modifier.alpha(alpha.get())`: a read in composition recomposes this scope each frame.
+}
+```
+
+### Retained drawing and repaint boundaries
+
+A frame doesn't draw the whole screen again. Drawing is kept per repaint boundary, and a boundary draws again only when something in it changed: state its drawing read, a node in it measured or moved, a child added or removed. Graphics layers, lazy list items and top app bars are boundaries, and `Modifier.repaint_boundary()` makes one. On Android each boundary is a `RenderNode`, kept across frames and redrawn by reference.
+
+A boundary is worth adding around something that draws often (a progress indicator, a ticking clock) in an area that doesn't:
+
+<!-- snippet: src/performance.rs#repaint_boundary -->
+```rust
+#[composable]
+pub fn Syncing(items: u32) {
+    Column!({
+        Row!(
+            // The spinner draws anew every frame; a boundary keeps the rest of the screen's
+            // drawing (and, on Android, its render node) as it was.
+            modifier = Modifier.repaint_boundary(),
+            vertical_alignment = Alignment::CENTER_VERTICALLY,
+            {
+                IndeterminateCircularProgressIndicator!(modifier = Modifier.size(16.dp()));
+                Text!("Syncing {} items", items);
+            }
+        );
+        for index in 0..items {
+            Text!("Item {}", index);
+        }
+    });
+}
+```
+
+Boundaries aren't free (a render node each on Android), so don't add one to every component: the measurements behind D251 found that making every Material surface a boundary cost more than it saved.
+
+### Lazy lists and prefetch
+
+`LazyColumn`, `LazyRow` and `LazyVerticalGrid` compose and lay out only the items in view. While a list scrolls, it prefetches between frames, as Compose's prefetch does: when the main thread is idle before the next frame, it composes and measures the next item in the scroll direction, so the frame that shows the item has nothing left to compose. On the Pixel 8 Pro this took the slowest scrolling frames' main-thread time from 8.6 ms to 3.9 ms ([D156](../decisions.md), [docs/12](../12-android-performance.md)).
+
+Keys (`items_keyed`, `items_list_keyed`) keep an item's state and composition with the item when items before it come or go, so the unchanged items skip and the scroll position follows the first visible item.
+
+### No garbage collection
+
+State, slots and nodes are owned, and freed when they leave the composition. A steady frame allocates little, so there are no collector pauses. Strings shown as text are `SharedString`s, which share static strings and `Rc<str>`s without copying.
+
+## What to avoid
+
+- **Reading fast-changing state in composition.** A scroll offset, an animated value or a pointer position read in a composable's body recomposes that body every frame. Read it in a drawing, layout or `graphics_layer` block, or turn it into a coarser fact with `derived_state_of` (`first_visible_item_index() > 0`).
+- **Rebuilding shared data each pass.** `Rc::new(…)` or `ImmutableList::from(vec)` in a composable's body is a new identity at each pass, so every composable given it runs again. Keep such data in state or `remember` it, and pass the same `Rc`.
+- **Passing collections by value.** `Vec` isn't a `ComposeArg`, so a composable taking one doesn't compile as restartable. Use an `ImmutableList`, an `Rc`, or `#[compose_arg(eq)]` on a short field of a model.
+- **Unkeyed items that move.** Without keys, an item's state goes with its index: inserting at the top recomposes every item below.
+- **New measure policies and arrangements each pass.** `Layout!(measure_policy = measure_policy(…))` in a composable's body makes a new policy each time it runs, so the `Layout` can't skip. `remember` it, or `remember_keyed` it on what it uses ([Custom layouts](kotlin-to-rust.md#custom-layouts)).
+- **Drawing and layout lambdas in scopes that recompose often.** The lambdas of `draw_behind`, `draw_with_content`, `draw_with_cache`, `layout`, `graphics_layer` and `Canvas` aren't memoized: each run of the composable around them gives the node a new lambda, which draws or measures it again. Read state inside the lambda rather than capturing values read in composition, and keep such nodes in small composables.
+- **Large composables reading state at the top.** The reading scope is the unit of recomposition. Move a read into the smallest composable that needs it, or pass the state handle (or a holder such as `LazyListState`) down instead of its value.
+- **Work in composition.** A composable's body can run on any frame. Compute derived values with `remember_keyed(keys, || …)` or `derived_state_of`, and do I/O in a `LaunchedEffect` with `spawn_background`.
+- **Closures as root content.** `run_app`, `application`, `compose_test` and `ComposeRsView` should get a `#[composable]` function: in a plain closure, the transform doesn't run, so lambdas aren't memoized and branches get no groups.
+- **Measuring debug builds.** Profile release builds (`cargo run --release`); Android's `build-rust.sh` always builds release.
+
+## Profiling
+
+### Recomposition counts
+
+The test rule counts how many times each composable's body ran, which is the first thing to check when a screen does more work than expected:
+
+<!-- snippet: tests/testing.rs#recompositions -->
+```rust
+#[test]
+fn a_click_recomposes_only_the_button_content() {
+    let mut ui = compose_test(state::Counter);
+    let before = ui.recomposition_counts();
+    ui.on_node_with_text("Clicked 0 times").perform_click();
+    let ran = ui.recomposition_counts().since(&before);
+    // The text reads the count inside the button's content: `Counter` itself skips.
+    assert_eq!(ran.scopes_named("Counter"), 0, "{:?}", ran.names());
+}
+```
+
+`recomposition_counts().names()` lists every composable that ran, with its count. `compose::test` also re-exports the runtime's counters: `bodies_run`, `live_state_count` (state cells alive, for leaks) and `recomposition_counts`.
+
+### Frame timings on desktop
+
+`COMPOSE_FRAME_STATS=1 cargo run --release -p gallery` prints a line per frame: whether it recomposed (and how many bodies ran), measured and drew, and the time spent composing (with layout and drawing), rendering with Skia, presenting, and from the input that caused the frame to its presentation.
+
+### Perfetto on Android
+
+compose-rs marks its frame phases as trace sections, which show in Perfetto and Android Studio's system trace beside the system's own (`Choreographer#doFrame`, `DrawFrame`):
+
+| Section | Thread | What |
+|---|---|---|
+| `compose-rs: frame` | main | the whole Rust side of a frame |
+| `compose-rs: tasks` | main | tasks and effects due this frame, frame callbacks (animations) |
+| `compose-rs: recompose` | main | recomposition |
+| `compose-rs: layout` | main | measuring and placing |
+| `compose-rs: text layout` | main | laying out paragraphs with `StaticLayout` |
+| `compose-rs: recompose and layout again` | main | content composed for what a layout asked (lazy items, `BoxWithConstraints`) |
+| `compose-rs: draw` | main | drawing the boundaries that changed |
+| `compose-rs: serialize` | main | encoding the frame's drawing for the Kotlin side |
+| `compose-rs: take drawing` | main | handing the frame's drawing to the Kotlin side in `onDraw` |
+| `compose-rs: replay` | main | the Kotlin side recording it into render nodes (`onDraw`) |
+| `compose-rs: prefetch` | main | lazy list items composed and measured between frames |
+
+Record a trace of a release build with Perfetto's UI (record on the device, with the `gfx` and `view` atrace categories and the app's package for its sections), or with `android/bench/measure.py`, which drives the benchmark apps and summarizes frames, jank, CPU time and memory. [docs/12](../12-android-performance.md) explains the method, including why CPU time misleads on big.LITTLE cores and what to compare instead.
+
+### Benchmarks
+
+`cargo bench -p compose-benchmarks` runs criterion benchmarks of the runtime (a counter click, a toggle among 1,000 rows, skipping 1,000 children, keyed moves) and of frames (a click to a headless frame, a toggle of one of 1,000 todos, the same rendered with Skia at 2×). `benchmarks/benches/ui.rs` is a template for an app's own: it drives the app through a `ComposeTestRule` and times each frame from the event to the end of drawing.

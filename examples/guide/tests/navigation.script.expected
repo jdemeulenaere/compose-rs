@@ -1,0 +1,7 @@
+> assert "Settings"
+> click "Message 3"
+> assert_not "Settings"
+> semantics
+[0,0 400x800] 
+  [0,15 63x18] text=["Message 3"]
+  [67,4 40x40] role=Checkbox content_description=["Star"] toggle=Off clickable focusable merged

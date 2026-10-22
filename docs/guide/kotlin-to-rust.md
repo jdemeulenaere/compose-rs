@@ -1,0 +1,1574 @@
+# From Kotlin to Rust
+
+Jetpack Compose code next to its compose-rs equivalent. Each Rust sample is quoted from [`examples/guide`](../../examples/guide), where it compiles and has a test. The Kotlin is the usual Compose code for the same thing.
+
+- [Names](#names)
+- [Composables](#composables)
+- [State](#state)
+- [Side effects](#side-effects)
+- [Layouts](#layouts)
+- [Drawing](#drawing)
+- [Theming and Material 3](#theming-and-material-3)
+- [Text and text fields](#text-and-text-fields)
+- [Navigation](#navigation)
+- [Android interop](#android-interop)
+- [Testing](#testing)
+
+## Names
+
+compose-rs keeps Compose's names, parameter names, parameter order and defaults, written in Rust's case conventions:
+
+| Kotlin | compose-rs |
+|---|---|
+| `androidx.compose.runtime`, `.ui`, `.foundation`, `.foundation.layout`, `.material3`, `.animation` | `compose::runtime`, `compose::ui`, `compose::foundation`, `compose::foundation::layout`, `compose::material3`, `compose::animation` |
+| `@Composable fun Greeting(…)` | `#[composable] fn Greeting(…)`, called `Greeting!(…)` |
+| `rememberLazyListState()`, `mutableStateOf(0)` | `remember_lazy_list_state!()`, `mutable_state_of(0)` |
+| `Modifier.fillMaxWidth().padding(16.dp)` | `Modifier.fill_max_width().padding(16.dp())` |
+| `Alignment.CenterVertically`, `Arrangement.SpaceBetween`, `Color.Red` | `Alignment::CENTER_VERTICALLY`, `Arrangement::SPACE_BETWEEN`, `Color::RED` |
+| `MaterialTheme.colorScheme.primary` | `MaterialTheme::color_scheme().primary` |
+| `LocalDensity.current` | `LOCAL_DENSITY.current()` |
+| `16.dp`, `14.sp` | `16.dp()`, `14.sp()` |
+
+A wildcard import of each module is the usual start of a file, as the samples do: `use compose::runtime::*; use compose::ui::*; use compose::foundation::layout::*; use compose::material3::*;`. Each crate's `platform` module holds what hosts and toolkits use; apps don't need it, and it isn't part of the stable surface.
+
+## Composables
+
+```kotlin
+/** Greets [name]. */
+@Composable
+fun Greeting(name: String, modifier: Modifier = Modifier, excited: Boolean = false) {
+    Text("Hello, $name${if (excited) "!" else "."}", modifier = modifier)
+}
+```
+
+<!-- snippet: src/composables.rs#greeting -->
+```rust
+/// Greets `name`: a documented composable's rustdoc shows its call form and defaults.
+#[composable]
+pub fn Greeting(
+    name: impl Into<SharedString>,
+    #[default(Modifier)] modifier: Modifier,
+    #[default(false)] excited: bool,
+) {
+    let mark = if excited { "!" } else { "." };
+    Text!("Hello, {}{}", name, mark, modifier = modifier);
+}
+```
+
+A composable is a free function marked `#[composable]`. Default values are `#[default(…)]` attributes, evaluated where the composable is called. A parameter typed `impl Into<T>` takes anything that converts (`"Ada"` for a `SharedString`, the reference-counted string compose-rs uses for text); a plain `SharedString` parameter takes only a `SharedString`. `#[composable]` turns `impl Into<T>` and `impl Fn(…)` parameters into concrete types, so the composable stays a single non-generic function.
+
+### Calls
+
+Rust has no named or default arguments, so `#[composable]` also generates a call macro with the composable's name. The macro binds arguments positionally, then by name, fills in the defaults, and accepts a trailing lambda:
+
+```kotlin
+Column {
+    Greeting("Ada")
+    Greeting("Grace", excited = true)
+    Greeting(name = "Linus", modifier = Modifier.padding(8.dp))
+}
+```
+
+<!-- snippet: src/composables.rs#calls -->
+```rust
+#[composable]
+pub fn Greetings() {
+    Column!({
+        Greeting!("Ada"); // the defaults for the rest
+        Greeting!("Grace", excited = true); // positional, then named
+        Greeting!(name = "Linus", modifier = Modifier.padding(8.dp()));
+        // The function itself, every argument given: what the call macro expands to.
+        Greeting(SharedString::from("Barbara"), Modifier, false);
+    });
+}
+```
+
+`use` a composable and its macro comes with it (`use compose::material3::*` imports `Text` and `Text!`). A composable whose first parameter is text, as `Text`, takes format arguments: `Text!("Count: {}", count)` and `Text!("{count} unread")`. A documented composable's rustdoc ends with its call form, which lists the defaults:
+
+```text
+Button!(on_click, modifier = Modifier, enabled = true, …, { content })
+```
+
+### Content lambdas
+
+A composable lambda parameter is `impl Fn() + 'static`. A final block in the call is the trailing lambda, and a block given by name is a lambda too:
+
+```kotlin
+@Composable
+fun Section(title: String, content: @Composable () -> Unit) {
+    Column(Modifier.padding(8.dp)) {
+        Text(title, style = MaterialTheme.typography.titleMedium)
+        content()
+    }
+}
+
+@Composable
+fun Fruit() {
+    Section("Fruit") {
+        Text("Apple")
+        Text("Pear")
+    }
+    Section(title = "Vegetables", content = { Text("Leek") })
+}
+```
+
+<!-- snippet: src/composables.rs#content -->
+```rust
+/// A titled section: `content` is a composable lambda, as Kotlin's `content: @Composable () -> Unit`.
+#[composable]
+pub fn Section(title: impl Into<SharedString>, content: impl Fn() + 'static) {
+    Column!(modifier = Modifier.padding(8.dp()), {
+        Text!(title, style = MaterialTheme::typography().title_medium);
+        content();
+    });
+}
+
+#[composable]
+pub fn Fruit() {
+    // A final block is the trailing lambda.
+    Section!("Fruit", {
+        Text!("Apple");
+        Text!("Pear");
+    });
+    // A slot given by name takes a block too.
+    Section!(
+        title = "Vegetables",
+        content = {
+            Text!("Leek");
+        }
+    );
+}
+```
+
+Kotlin's receiver scopes (`RowScope`, `BoxScope`, `LazyListScope`) are arguments of the lambda: `Row!(|row| { … Modifier.weight(row, 1.0) … })`. A block where the scope isn't needed ignores it.
+
+### What composables can't do
+
+- **Methods and `async`.** A composable is a free function: not a method, not `async` (launch work with `LaunchedEffect`).
+- **Borrowed parameters.** A composable keeps its arguments to compare them on the next pass, and Rust can't keep a borrow. A parameter with a reference type (`&str`, `&Todo`) makes the composable non-restartable: it can't skip and runs again with its caller (Compose's `@NonRestartableComposable`). Pass owned or shared values (`SharedString`, `Rc<Todo>`) instead.
+- **Uncomparable parameters.** Every parameter of a restartable composable implements `ComposeArg`, the cheap comparison that decides skipping ([State](#data-models-and-skipping)); the compiler says which one doesn't.
+- **Values returned.** A composable may return a value (`remember_*` functions do), which makes it non-restartable, as in Compose.
+
+## State
+
+```kotlin
+@Composable
+fun Counter() {
+    var count by remember { mutableStateOf(0) }
+    Button(onClick = { count++ }) {
+        Text("Clicked $count times")
+    }
+}
+```
+
+<!-- snippet: src/state.rs#counter -->
+```rust
+#[composable]
+pub fn Counter() {
+    // The slot keeps the state; `count` is a Copy handle, captured by `move` closures.
+    let count = remember(|| mutable_state_of(0));
+    Button!(on_click = move || count.update(|c| c + 1), {
+        Text!("Clicked {} times", count.get());
+    });
+}
+```
+
+`remember(|| mutable_state_of(0))` keeps the state in the composition and returns a `MutableState<i32>`, a `Copy` handle: closures capture it with `move` and no cloning. `get()` reads (and subscribes the reading scope), `set(v)` writes, `update(|v| …)` writes from the old value, `with(|v| …)` reads by reference (for a `String` or a `Vec` that shouldn't be cloned), and `edit(|v| …)` changes it in place. Writing state while composing panics: write from handlers, effects and tasks.
+
+`mutable_state_list_of()` and `mutable_state_list_from(items)` are `mutableStateListOf`: a state holding a `Vec`, edited with `edit(|list| list.push(…))`.
+
+### `rememberSaveable`
+
+```kotlin
+var text by rememberSaveable { mutableStateOf("") }
+TextField(text, onValueChange = { text = it })
+```
+
+<!-- snippet: src/state.rs#saveable -->
+```rust
+#[composable]
+pub fn Draft() {
+    // Saved with the Android view's instance state: kept across the activity's recreation.
+    let text = remember_saveable(|| mutable_state_of(String::new()));
+    TextField!(text.get(), move |value| text.set(value), modifier = Modifier.test_tag("draft"));
+}
+```
+
+Saved values implement `Saveable`: numbers, `bool`, `char`, `String`, `Option`s, `Vec`s and tuples of them. An app's own types implement `Saveable` ([Navigation](#navigation) saves an enum), or go through a `saver(save, restore)` with `remember_saveable_with`. The state holders' `remember_*` functions (`remember_lazy_list_state!()`, `remember_scroll_state!()`) save their positions, as Compose's do.
+
+### `derivedStateOf`
+
+```kotlin
+val listState = rememberLazyListState()
+val scrolled by remember { derivedStateOf { listState.firstVisibleItemIndex > 0 } }
+```
+
+<!-- snippet: src/state.rs#derived -->
+```rust
+#[composable]
+pub fn LongList() {
+    let list = remember_lazy_list_state!();
+    // Recomposes its readers when the answer changes, not on every scrolled pixel.
+    let scrolled = remember(move || derived_state_of(move || list.first_visible_item_index() > 0));
+    Box!(modifier = Modifier.fill_max_size(), {
+        LazyColumn!(modifier = Modifier.fill_max_size(), state = list, |scope: LazyListScope| {
+            scope.items(1_000, |index| Text!("Item {}", index));
+        });
+        if scrolled.get() {
+            SmallFloatingActionButton!(on_click = move || list.scroll_to_item(0, 0), {
+                Icon!(icons::filled::keyboard_arrow_up(), Some("Back to the top"));
+            });
+        }
+    });
+}
+```
+
+The calculation's reads subscribe the derived state, not the composable; the composable that reads `scrolled.get()` recomposes only when the result changes.
+
+### State hoisting
+
+Hoisting works as in Compose: a stateless composable takes the value and a callback, and its caller owns the state.
+
+```kotlin
+@Composable
+fun Stepper(value: Int, onValueChange: (Int) -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        TextButton(onClick = { onValueChange(value - 1) }) { Text("-") }
+        Text("$value")
+        TextButton(onClick = { onValueChange(value + 1) }) { Text("+") }
+    }
+}
+
+@Composable
+fun Quantity() {
+    var quantity by rememberSaveable { mutableStateOf(1) }
+    Stepper(quantity, onValueChange = { quantity = it.coerceAtLeast(0) })
+}
+```
+
+<!-- snippet: src/state.rs#hoisting -->
+```rust
+/// Stateless: the value comes in, changes go out.
+#[composable]
+pub fn Stepper(value: i32, on_value_change: impl Fn(i32) + 'static) {
+    Row!(vertical_alignment = Alignment::CENTER_VERTICALLY, {
+        TextButton!(on_click = move || on_value_change(value - 1), {
+            Text!("-");
+        });
+        Text!("{}", value);
+        TextButton!(on_click = move || on_value_change(value + 1), {
+            Text!("+");
+        });
+    });
+}
+
+/// Stateful: owns the state, hoisted out of `Stepper`.
+#[composable]
+pub fn Quantity() {
+    let quantity = remember_saveable(|| mutable_state_of(1));
+    Stepper!(quantity.get(), move |value: i32| quantity.set(value.max(0)));
+}
+```
+
+A callback parameter is `impl Fn(A) + 'static`, and arguments are passed by value (`impl Fn(String)`, as `(String) -> Unit`); a callback taking a reference isn't supported.
+
+### State holders are `Copy` handles
+
+`DrawerState`, `SheetState`, `SnackbarHostState`, `TopAppBarState`, `SwipeToDismissBoxState`, `LazyListState`, `LazyGridState`, `ScrollState`, `CoroutineScope` and `FocusRequester` are `Copy` handles, as state is, so a handler or a task captures them as Kotlin captures a reference:
+
+```kotlin
+val drawerState = rememberDrawerState(DrawerValue.Closed)
+val scope = rememberCoroutineScope()
+ModalNavigationDrawer(drawerContent = { ModalDrawerSheet { Text("Settings") } }, drawerState = drawerState) {
+    Button(onClick = { scope.launch { drawerState.open() } }) { Text("Open the menu") }
+}
+```
+
+<!-- snippet: src/state.rs#holders -->
+```rust
+#[composable]
+pub fn Menu() {
+    let drawer = remember_drawer_state(DrawerValue::Closed); // a Copy handle, as state
+    let scope = remember_coroutine_scope(); // Copy too
+    ModalNavigationDrawer!(
+        {
+            ModalDrawerSheet!({
+                Text!("Settings", modifier = Modifier.padding(16.dp()));
+            });
+        },
+        drawer_state = drawer,
+        {
+            Button!(
+                on_click = move || {
+                    scope.launch(async move { drawer.open().await });
+                },
+                {
+                    Text!("Open the menu");
+                }
+            );
+        }
+    );
+}
+```
+
+Outside a composition (a test, an app's model), `DrawerState::new(…)` and the other constructors return the holder's owner, `Owned<DrawerState>`, which frees the holder when dropped; keep it, and copy the handle out of it (`*owner`) for closures. `let state = *DrawerState::new(…);` compiles but drops the owner at once: the handle then does nothing (with a warning in debug builds). See [D240](../decisions.md).
+
+### Values a lambda would move
+
+Kotlin passes references, so a value can be used by several lambdas and by the code after them. In Rust, a closure that uses a value by itself (`Text!(name)`) moves it. Inside the lambdas of a composable, the transform clones such captures instead (D158): a capture given by itself to a function, a method or a call macro, or named in a `move` closure or an `async move` block inside the lambda.
+
+```kotlin
+@Composable
+fun Profile(name: String, onOpen: (String) -> Unit) {
+    Card {
+        Text(name)
+        TextButton(onClick = { onOpen(name) }) { Text("Open") }
+    }
+    Text(name)
+}
+```
+
+<!-- snippet: src/state.rs#clone_on_use -->
+```rust
+#[composable]
+pub fn Profile(name: SharedString, on_open: impl Fn(SharedString) + 'static) {
+    Card!({
+        Text!(name); // in a lambda, a capture given by itself is cloned
+        TextButton!(on_click = move || on_open(name), {
+            Text!("Open");
+        });
+    });
+    // Top-level code is plain Rust: this moves `name`, so it's its last use.
+    Text!(name);
+}
+```
+
+At a composable's top level the code is plain Rust: a value given to a call or moved into a `LaunchedEffect`'s `async move` block is moved, so use it last or `.clone()` it. Captures must be `Clone`; wrap data that isn't in an `Rc`.
+
+### Data models and skipping
+
+A composable skips when every argument is the same as last time. "The same" is `ComposeArg::same`, which is always cheap: shared data (`Rc`, state handles, callbacks) compares by identity, as a JVM reference does, and small values (numbers, short strings, small enums and structs) by value. Collections are never compared element by element, so `Vec` isn't a `ComposeArg`.
+
+```kotlin
+@Immutable
+data class Contact(val id: Long, val name: String, val tags: List<String>)
+
+@Composable
+fun Contacts(contacts: ImmutableList<Contact>) {
+    Column {
+        for (contact in contacts) {
+            key(contact.id) { ContactRow(contact) }
+        }
+    }
+}
+```
+
+<!-- snippet: src/state.rs#model -->
+```rust
+/// A contact: `#[derive(ComposeArg)]` compares field by field (numbers and short strings by
+/// value, `Rc`s and state handles by identity).
+#[derive(Clone, PartialEq, ComposeArg)]
+pub struct Contact {
+    pub id: u64,
+    pub name: SharedString,
+    /// A short list, compared by value (`PartialEq`).
+    #[compose_arg(eq)]
+    pub tags: Vec<String>,
+}
+
+/// Skips when given the same list (by identity): keep the list in state, don't rebuild it.
+#[composable]
+pub fn Contacts(contacts: ImmutableList<Contact>) {
+    Column!({
+        for contact in contacts.iter() {
+            key(contact.id, || ContactRow(contact.clone()));
+        }
+    });
+}
+
+/// Skips when its contact is the same.
+#[composable]
+pub fn ContactRow(contact: Contact) {
+    Text!("{} ({})", contact.name, contact.tags.join(", "));
+}
+
+#[composable]
+pub fn ContactsScreen() {
+    let contacts = remember(|| {
+        mutable_state_of(ImmutableList::from(vec![
+            Contact { id: 1, name: "Ada".into(), tags: vec!["math".into()] },
+            Contact { id: 2, name: "Grace".into(), tags: vec!["navy".into(), "cobol".into()] },
+        ]))
+    });
+    Contacts!(contacts.get());
+}
+```
+
+- `#[derive(ComposeArg)]` compares a struct field by field. `#[compose_arg(eq)]` compares a field with `PartialEq`, for a collection the model knows to be short.
+- `ImmutableList<T>` (an `Rc<[T]>`, as kotlinx's `ImmutableList`) compares by identity: a list rebuilt with the same contents is a change, so keep lists in state or `remember` them rather than rebuilding them each pass. Large data goes in an `Rc`.
+- State can live inside data: a `Todo` with an `OwnedState<bool>` field, in an `Rc<Todo>`, recomposes only its own row when toggled ([examples/todo](../../examples/todo/src/lib.rs)).
+
+## Side effects
+
+### `LaunchedEffect`
+
+```kotlin
+@Composable
+fun Countdown(from: Int) {
+    var left by remember { mutableStateOf(from) }
+    LaunchedEffect(from) {
+        left = from
+        while (left > 0) {
+            delay(1.seconds)
+            left--
+        }
+    }
+    Text("$left s")
+}
+```
+
+<!-- snippet: src/effects.rs#launched -->
+```rust
+#[composable]
+pub fn Countdown(from: u32) {
+    let left = remember(|| mutable_state_of(from));
+    // Restarted (the old task cancelled) whenever `from` changes; cancelled when this leaves.
+    LaunchedEffect(from, async move {
+        left.set(from);
+        while left.get() > 0 {
+            delay(Duration::from_secs(1)).await;
+            left.update(|seconds| seconds - 1);
+        }
+    });
+    Text!("{} s", left.get());
+}
+```
+
+The block is a future run on the UI thread's executor; `delay` and `with_frame_nanos` are its suspension points. Keys are any `ComposeArg` (a tuple for several, `()` for `Unit`). The task is cancelled by dropping it, at an `.await`.
+
+### `DisposableEffect`
+
+```kotlin
+DisposableEffect(topic) {
+    val id = bus.subscribe(topic)
+    onDispose { bus.unsubscribe(id) }
+}
+```
+
+<!-- snippet: src/effects.rs#disposable -->
+```rust
+#[composable]
+pub fn Subscription(topic: SharedString, bus: Rc<Bus>) {
+    // Subscribes after the first composition, and again (unsubscribing first) for a new topic.
+    DisposableEffect(topic.clone(), move |scope| {
+        let id = bus.subscribe(&topic);
+        scope.on_dispose(move || bus.unsubscribe(id))
+    });
+}
+```
+
+### `SideEffect`
+
+```kotlin
+Text(screen)
+SideEffect { analytics.screen = screen }
+```
+
+<!-- snippet: src/effects.rs#side_effect -->
+```rust
+#[composable]
+pub fn Tracked(screen: SharedString, analytics: Rc<Analytics>) {
+    Text!(screen.clone());
+    // After every composition of this scope that completes.
+    SideEffect(move || *analytics.screen.borrow_mut() = screen.to_string());
+}
+```
+
+`SideEffect`, `DisposableEffect` and `LaunchedEffect` take plain closures and futures, not lambdas the transform clones into: what they use is moved, so clone what's used after them.
+
+### `rememberCoroutineScope`
+
+```kotlin
+val scope = rememberCoroutineScope()
+val snackbars = remember { SnackbarHostState() }
+Button(onClick = { scope.launch { snackbars.showSnackbar("Saved") } }) { Text("Save") }
+```
+
+<!-- snippet: src/effects.rs#scope -->
+```rust
+#[composable]
+pub fn Saver() {
+    let scope = remember_coroutine_scope();
+    let snackbars = remember(SnackbarHostState::new);
+    Column!({
+        Button!(
+            on_click = move || {
+                // Launched from a handler; cancelled when `Saver` leaves the composition.
+                scope.launch(async move {
+                    snackbars.show_snackbar("Saved").await;
+                });
+            },
+            {
+                Text!("Save");
+            }
+        );
+        SnackbarHost!(snackbars);
+    });
+}
+```
+
+`produce_state(initial, key, |state| async move { … })` and `remember_updated_state(value)` are `produceState` and `rememberUpdatedState`.
+
+### Blocking work: `spawn_background`
+
+There's no `withContext(Dispatchers.IO)`. A task awaits `spawn_background(work)`, which runs a `Send` closure on a pool of threads and resumes the task on the UI thread with its result. State handles aren't `Send`: read what the work needs before, and write its result after.
+
+```kotlin
+var size by remember { mutableStateOf<Long?>(null) }
+LaunchedEffect(path) {
+    size = withContext(Dispatchers.IO) { File(path).length() }
+}
+```
+
+<!-- snippet: src/effects.rs#background -->
+```rust
+#[composable]
+pub fn FileSize(path: String) {
+    let size = remember(|| mutable_state_of(None::<u64>));
+    LaunchedEffect(path.clone(), async move {
+        // Blocking work runs on a thread pool (`Dispatchers.IO`); the closure is `Send`, so
+        // it takes plain data, not state handles. The task resumes on the UI thread.
+        let bytes = spawn_background(move || std::fs::metadata(path).ok().map(|file| file.len()));
+        size.set(bytes.await);
+    });
+    match size.get() {
+        Some(bytes) => Text!("{} bytes", bytes),
+        None => IndeterminateCircularProgressIndicator!(),
+    }
+}
+```
+
+Cancelling the task drops the result; blocking work already running isn't interrupted. To await an async client (a tokio-based HTTP client), run its runtime on a thread of its own and hand the result back through `spawn_background` or a channel.
+
+## Layouts
+
+### `Row`, `Column`, `Box`
+
+```kotlin
+@Composable
+fun Author(name: String, online: Boolean) {
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(Modifier.size(40.dp), contentAlignment = Alignment.BottomEnd) {
+            Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.primary, CircleShape))
+            if (online) Box(Modifier.size(10.dp).background(Color.Green, CircleShape))
+        }
+        Text(name, Modifier.weight(1f))
+        TextButton(onClick = {}) { Text("Follow") }
+    }
+}
+```
+
+<!-- snippet: src/layouts.rs#row_column_box -->
+```rust
+#[composable]
+pub fn Author(name: SharedString, online: bool) {
+    Row!(
+        modifier = Modifier.fill_max_width().padding((16.dp(), 8.dp())),
+        horizontal_arrangement = Arrangement::spaced_by(12.dp()),
+        vertical_alignment = Alignment::CENTER_VERTICALLY,
+        |row| {
+            Box!(modifier = Modifier.size(40.dp()), content_alignment = Alignment::BOTTOM_END, {
+                Box!(
+                    modifier = Modifier
+                        .fill_max_size()
+                        .background_with(MaterialTheme::color_scheme().primary, CIRCLE_SHAPE)
+                );
+                if online {
+                    Box!(
+                        modifier =
+                            Modifier.size(10.dp()).background_with(Color::GREEN, CIRCLE_SHAPE)
+                    );
+                }
+            });
+            // Receiver-scoped modifiers take the scope: Kotlin's `Modifier.weight(1f)` in a `RowScope`.
+            Text!(name, modifier = Modifier.weight(row, 1.0));
+            TextButton!(on_click = || {}, {
+                Text!("Follow");
+            });
+        }
+    );
+}
+```
+
+`Spacer!(modifier = Modifier.height(8.dp()))`, `BoxWithConstraints`, `Modifier.vertical_scroll(remember_scroll_state!())` and `LazyVerticalGrid` are there too.
+
+### Modifiers
+
+`Modifier` is a value; its methods chain as Kotlin's extension functions do. The names follow one rule (D263, D265):
+
+- **One method per Compose name.** Overloads that differ by an argument's type take `impl Into<…>`, with a tuple standing for several arguments: `padding(8.dp())`, `padding((16.dp(), 8.dp()))` (horizontal, vertical), `padding((start, top, end, bottom))`, `size(48.dp())`, `size((48.dp(), 24.dp()))`.
+- **Optional parameters**: the short method takes Compose's defaults for them, and `<name>_with` takes all of them, in Compose's order: `fill_max_width()` and `fill_max_width_with(0.5)`, `background(color)` and `background_with(color, shape)`, `border(width, color)` and `border_with(width, color, shape)`, `shadow(elevation)` and `shadow_with(…)`.
+- **The clickable family** (`clickable`, `toggleable`, `selectable`, `combined_clickable`) takes its optional parameters (`enabled`, `role`, `indication`, `interaction_source`) as a `ClickableOptions` struct, built by struct update from `ClickableOptions::DEFAULT`.
+
+```kotlin
+Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+Modifier.fillMaxWidth(0.5f)
+Modifier.background(Color.Red, RoundedCornerShape(8.dp))
+Modifier.border(1.dp, Color.Black, RoundedCornerShape(8.dp))
+Modifier.clickable(enabled = !selected, role = Role.Button, onClick = onClick)
+```
+
+<!-- snippet: src/layouts.rs#modifiers -->
+```rust
+#[composable]
+pub fn ModifierForms(selected: bool, on_click: impl Fn() + 'static) {
+    let shape = RoundedCornerShape(8.dp());
+    Column!({
+        // One method per Compose name; a tuple for an overload taking several values.
+        Box!(modifier = Modifier.padding(8.dp())); // padding(all)
+        Box!(modifier = Modifier.padding((16.dp(), 8.dp()))); // padding(horizontal, vertical)
+        Box!(modifier = Modifier.padding((1.dp(), 2.dp(), 3.dp(), 4.dp()))); // start, top, end, bottom
+        Box!(modifier = Modifier.size(48.dp()).size((48.dp(), 24.dp()))); // size(size), size(width, height)
+        // Compose's optional parameters: the short form takes their defaults, `_with` takes them all.
+        Box!(modifier = Modifier.fill_max_width_with(0.5)); // fillMaxWidth(fraction = 0.5f)
+        Box!(modifier = Modifier.background(Color::RED)); // background(color)
+        Box!(modifier = Modifier.background_with(Color::RED, shape)); // background(color, shape)
+        Box!(modifier = Modifier.border_with(1.dp(), Color::BLACK, shape));
+        // The clickable family's optional parameters are a struct.
+        Box!(
+            modifier = Modifier.size(48.dp()).clickable_with(
+                ClickableOptions {
+                    enabled: !selected,
+                    role: Some(Role::Button),
+                    ..ClickableOptions::DEFAULT
+                },
+                on_click,
+            )
+        );
+    });
+}
+```
+
+Order matters as in Compose: each modifier wraps the ones after it. Lambdas given to a modifier's callback methods (`clickable`, `on_size_changed`, `on_focus_changed`, …) are memoized like a composable's callback arguments when the chain starts at `Modifier`, a `modifier` parameter or a local modifier, so the chain stays the same across passes. Drawing and layout lambdas (`draw_behind`, `layout`, `graphics_layer`) aren't: a pass that runs the call again gives the node a new lambda ([Performance](performance.md#what-to-avoid)).
+
+### Arrangements and alignments
+
+`Arrangement` and `Alignment` are namespaces of constants in Rust's constant case. Arrangements are typed by axis, as Compose's: `Arrangement::START` is horizontal, `Arrangement::TOP` vertical, and `CENTER`, `SPACE_BETWEEN`, `SPACE_EVENLY`, `SPACE_AROUND` and `spaced_by(…)` either. `spaced_by` and `aligned` take a tuple for their two-argument overloads.
+
+```kotlin
+Row(horizontalArrangement = if (compact) Arrangement.End else Arrangement.spacedBy(8.dp)) { … }
+Column(
+    verticalArrangement = Arrangement.spacedBy(4.dp, Alignment.Bottom),
+    horizontalAlignment = Alignment.CenterHorizontally,
+) { … }
+```
+
+<!-- snippet: src/layouts.rs#arrangements -->
+```rust
+#[composable]
+pub fn Toolbar(compact: bool) {
+    Row!(
+        modifier = Modifier.fill_max_width(),
+        // Compose's `Arrangement.SpaceBetween`, in Rust's constant case.
+        horizontal_arrangement = Arrangement::SPACE_BETWEEN,
+        vertical_alignment = Alignment::CENTER_VERTICALLY,
+        {
+            Text!("Inbox");
+            Row!(
+                // `END` is horizontal only, `spaced_by` either way: `.into()` makes them one type.
+                horizontal_arrangement =
+                    if compact { Arrangement::END } else { Arrangement::spaced_by(8.dp()).into() },
+                {
+                    Text!("Edit");
+                    Text!("Share");
+                }
+            );
+        }
+    );
+    Column!(
+        vertical_arrangement = Arrangement::spaced_by((4.dp(), Alignment::BOTTOM)),
+        horizontal_alignment = Alignment::CENTER_HORIZONTALLY,
+        {
+            Text!("One");
+            Text!("Two");
+        }
+    );
+}
+```
+
+A custom arrangement implements `HorizontalArrangementPolicy` or `VerticalArrangementPolicy` and is wrapped with `HorizontalArrangement::custom(policy)`.
+
+### Lazy lists
+
+```kotlin
+LazyColumn(
+    Modifier.fillMaxSize(),
+    state = state,
+    contentPadding = PaddingValues(8.dp),
+    verticalArrangement = Arrangement.spacedBy(4.dp),
+) {
+    for (day in days) {
+        stickyHeader(key = day.title) {
+            Text(day.title, Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface))
+        }
+        items(day.messages, key = { it.id }) { message ->
+            Text(message.text)
+        }
+    }
+}
+```
+
+<!-- snippet: src/layouts.rs#lazy -->
+```rust
+#[derive(Clone, PartialEq)]
+pub struct Message {
+    pub id: u64,
+    pub text: SharedString,
+}
+
+#[derive(Clone, PartialEq)]
+pub struct Day {
+    pub title: SharedString,
+    pub messages: ImmutableList<Message>,
+}
+
+#[composable]
+pub fn Messages(days: ImmutableList<Day>, state: LazyListState) {
+    LazyColumn!(
+        modifier = Modifier.fill_max_size(),
+        state = state,
+        content_padding = PaddingValues::from(8.dp()),
+        vertical_arrangement = Arrangement::spaced_by(4.dp()),
+        |scope: LazyListScope| {
+            for day in days.iter() {
+                let title = day.title.clone();
+                scope.sticky_header_keyed(title.clone(), move |_item| {
+                    Text!(
+                        title.clone(),
+                        modifier = Modifier
+                            .fill_max_width()
+                            .background(MaterialTheme::color_scheme().surface)
+                    );
+                });
+                // Keys keep an item's state (and the scroll position) when items move.
+                scope.items_list_keyed(
+                    day.messages.clone(),
+                    |message| message.id,
+                    |_item, message| {
+                        Text!(&message.text);
+                    },
+                );
+            }
+        }
+    );
+}
+```
+
+The content is a closure taking the `LazyListScope`. Its methods are named apart because Rust has no overloads (D174):
+
+| Kotlin | compose-rs |
+|---|---|
+| `item { … }`, `item(key) { … }` | `scope.item(…)`, `scope.item_keyed(key, …)` |
+| `items(count) { index -> … }`, with `key = { index -> … }` | `scope.items(count, …)`, `scope.items_keyed(count, key, …)` |
+| `items(list) { item -> … }`, with `key = { item -> … }` | `scope.items_list(list, \|item_scope, item\| …)`, `scope.items_list_keyed(list, key, …)` |
+| `itemsIndexed(list) { index, item -> … }` | `scope.items_indexed(list, …)`, `scope.items_indexed_keyed(list, key, …)` |
+| `stickyHeader { … }` | `scope.sticky_header(…)`, `scope.sticky_header_keyed(key, …)` |
+| `Modifier.fillParentMaxWidth()` | `Modifier.fill_parent_max_width(&item_scope)` |
+
+The list forms take anything that converts to an `ImmutableList` (a `Vec`, a slice, an `ImmutableList`, shared without copying). Keys are any `Hash + PartialEq` value; debug builds panic on a duplicate key, as Compose throws. Items have no `contentType` and no `animateItem` ([Differences](differences.md#lazy-lists)).
+
+### Custom layouts
+
+```kotlin
+@Composable
+fun Wrap(modifier: Modifier = Modifier, content: @Composable () -> Unit) {
+    Layout(content, modifier) { measurables, constraints ->
+        // measure, then layout(width, height) { place }
+    }
+}
+```
+
+<!-- snippet: src/layouts.rs#custom_layout -->
+```rust
+/// Its children left to right, wrapping to a new line when one doesn't fit: a minimal FlowRow.
+#[composable]
+pub fn Wrap(#[default(Modifier)] modifier: Modifier, content: impl Fn() + 'static) {
+    // Remembered: a new policy each pass would be a changed argument, so `Layout` couldn't skip.
+    let policy = remember(|| {
+        measure_policy(|scope, measurables, constraints| {
+            let (mut x, mut y, mut line_height, mut width) = (0, 0, 0, 0);
+            for &measurable in measurables {
+                let placeable = scope.measure(measurable, constraints.loosen());
+                if x > 0 && x + placeable.width > constraints.max_width {
+                    (x, y, line_height) = (0, y + line_height, 0);
+                }
+                scope.place(&placeable, x, y);
+                x += placeable.width;
+                width = width.max(x);
+                line_height = line_height.max(placeable.height);
+            }
+            scope.layout(width, y + line_height)
+        })
+    });
+    Layout!(modifier = modifier, measure_policy = policy, content = content);
+}
+```
+
+`measure_policy(closure)` makes a policy of a closure, as Kotlin's lambda converts to `MeasurePolicy`. Measuring and placing go through the scope: `scope.measure(measurable, constraints)` returns a `Placeable`, `scope.place(&placeable, x, y)` places it (`place_relative` mirrors it in right-to-left layouts), and `scope.layout(width, height)` returns the result, after the placements rather than around them. `scope.density()` converts `Dp` to pixels. Intrinsic measurements are approximated ([Differences](differences.md#layout)).
+
+### `Modifier.layout`
+
+A Kotlin extension function on `Modifier` is a trait implemented for `Modifier` (as foundation's `ScrollModifiers` and `LazyItemModifiers` are):
+
+```kotlin
+fun Modifier.indent(level: Int) = layout { measurable, constraints ->
+    val indent = 16.dp.roundToPx() * level
+    val placeable = measurable.measure(constraints.offset(horizontal = -indent))
+    layout(placeable.width + indent, placeable.height) { placeable.place(indent, 0) }
+}
+```
+
+<!-- snippet: src/layouts.rs#layout_modifier -->
+```rust
+/// `Modifier.indent(level)`, as a Kotlin extension function: a trait on `Modifier`.
+pub trait IndentModifier {
+    fn indent(self, level: u32) -> Modifier;
+}
+
+impl IndentModifier for Modifier {
+    fn indent(self, level: u32) -> Modifier {
+        self.layout(move |scope, measurable, constraints| {
+            let indent = scope.density().round_to_px(16.dp()) * level as i32;
+            let inner =
+                Constraints { max_width: (constraints.max_width - indent).max(0), ..constraints };
+            let placeable = scope.measure(measurable, inner.loosen());
+            scope.place(&placeable, indent, 0);
+            scope.layout(placeable.width + indent, placeable.height)
+        })
+    }
+}
+```
+
+For a modifier with state of its own, implement `ModifierNodeElement` and `ModifierNode` (Compose's `Modifier.Node`) and add it with `Modifier.then_custom(element)`; there's no `Modifier.composed`.
+
+## Drawing
+
+### `Canvas`
+
+```kotlin
+@Composable
+fun Gauge(fraction: Float) {
+    val track = MaterialTheme.colorScheme.surfaceVariant
+    val progress = MaterialTheme.colorScheme.primary
+    Canvas(Modifier.size(96.dp)) {
+        val stroke = 8.dp.toPx()
+        val style = Stroke(stroke, cap = StrokeCap.Round)
+        val inset = Size(size.width - stroke, size.height - stroke)
+        drawArc(track, 135f, 270f, false, Offset(stroke / 2, stroke / 2), inset, style = style)
+        drawArc(progress, 135f, 270f * fraction, false, Offset(stroke / 2, stroke / 2), inset, style = style)
+    }
+}
+```
+
+<!-- snippet: src/drawing.rs#canvas -->
+```rust
+#[composable]
+pub fn Gauge(fraction: f32) {
+    let track = MaterialTheme::color_scheme().surface_variant;
+    let progress = MaterialTheme::color_scheme().primary;
+    Canvas(Modifier.size(96.dp()).test_tag("gauge"), move |scope| {
+        let stroke = scope.density().to_px(8.dp());
+        let size = scope.size();
+        let oval = Rect::new(
+            stroke / 2.0,
+            stroke / 2.0,
+            size.width - stroke / 2.0,
+            size.height - stroke / 2.0,
+        );
+        scope.draw_arc(oval, 135.0, 270.0, Paint::stroke_with(track, stroke, StrokeCap::Round));
+        let sweep = 270.0 * fraction.clamp(0.0, 1.0);
+        scope.draw_arc(oval, 135.0, sweep, Paint::stroke_with(progress, stroke, StrokeCap::Round));
+    });
+}
+```
+
+`Canvas` is a plain function (its lambda takes a borrowed `DrawScope`, which a composable's parameters can't name), called without `!`. `DrawScope`'s calls take the geometry first and a `Paint` last (`Paint::fill(color)`, `Paint::stroke(color, width)`, `Paint::stroke_with(color, width, cap)`, `.with_alpha(a)`), where Compose takes the color or brush first. Transforms and clips are scoped by a closure: `scope.rotate(degrees, pivot, |scope| …)`, `translate`, `scale`, `inset`, `clip_rect`, `clip_path`. There's no `drawText` ([Differences](differences.md#drawing-and-graphics)).
+
+### `drawBehind` and `drawWithContent`
+
+```kotlin
+Text(label, Modifier.drawBehind { drawRoundRect(color, cornerRadius = CornerRadius(size.height / 2)) }.padding(8.dp, 2.dp))
+
+Box(Modifier.drawWithContent {
+    drawContent()
+    drawRect(Color.Black.copy(alpha = 0.3f))
+}) { content() }
+```
+
+<!-- snippet: src/drawing.rs#draw_behind -->
+```rust
+#[composable]
+pub fn Badge(label: SharedString) {
+    let color = MaterialTheme::color_scheme().error_container;
+    Text!(
+        label,
+        modifier = Modifier
+            .draw_behind(move |scope| {
+                let radius = scope.size().height / 2.0;
+                scope.draw_round_rect(scope.bounds(), [radius; 4], Paint::fill(color));
+            })
+            .padding((8.dp(), 2.dp()))
+    );
+}
+
+#[composable]
+pub fn Dimmed(content: impl Fn() + 'static) {
+    Box!(
+        modifier = Modifier.draw_with_content(|scope| {
+            scope.draw_content(); // the content first, then a scrim over it
+            let bounds = scope.bounds();
+            scope.draw_rect(bounds, Paint::fill(Color::BLACK.with_alpha(0.3)));
+        }),
+        {
+            content();
+        }
+    );
+}
+```
+
+### `drawWithCache`
+
+<!-- snippet: src/drawing.rs#draw_with_cache -->
+```rust
+#[composable]
+pub fn Ribbon() {
+    Box!(
+        modifier = Modifier.size((120.dp(), 48.dp())).draw_with_cache(|cache| {
+            // Runs again only for a new size (or density, direction, or state it read).
+            let size = cache.size();
+            let mut path = Path::new();
+            path.move_to(0.0, 0.0);
+            path.line_to(size.width, 0.0);
+            path.line_to(size.width - size.height / 2.0, size.height / 2.0);
+            path.line_to(size.width, size.height);
+            path.line_to(0.0, size.height);
+            path.close();
+            let brush = Brush::horizontal_gradient([
+                Color::from_argb(0xFF6750A4),
+                Color::from_argb(0xFF7D5260),
+            ]);
+            // Runs at each draw, with what the cache built.
+            cache.on_draw_behind(move |scope| {
+                let paint = scope.brush_paint(&brush, 1.0, PaintStyle::Fill);
+                scope.draw_path(&path, paint);
+            })
+        })
+    );
+}
+```
+
+As in Compose, the cache block runs again for a new size, density or layout direction, or when state it read changes; the drawing block runs at each draw, and state it reads draws again without rebuilding.
+
+### Brushes
+
+```kotlin
+Modifier.background(Brush.horizontalGradient(listOf(Color.Red, Color.Blue)))
+Modifier.background(Brush.radialGradient(listOf(Color.White, Color.Black)), CircleShape, alpha = 0.5f)
+Modifier.background(Brush.linearGradient(0f to Color.Red, 0.3f to Color.Yellow, 1f to Color.Blue))
+```
+
+<!-- snippet: src/drawing.rs#brushes -->
+```rust
+#[composable]
+pub fn Gradients() {
+    Column!(vertical_arrangement = Arrangement::spaced_by(8.dp()), {
+        // A brush where Compose takes one: `background(brush)`, `background(brush, shape)`.
+        Box!(
+            modifier = Modifier
+                .size((96.dp(), 32.dp()))
+                .background(Brush::horizontal_gradient([Color::RED, Color::BLUE]))
+        );
+        Box!(
+            modifier = Modifier.size(64.dp()).background_with(
+                Brush::radial_gradient([Color::WHITE, Color::BLACK]).with_alpha(0.5),
+                CIRCLE_SHAPE
+            )
+        );
+        // Stops and every parameter: `Brush.linearGradient(0f to red, 1f to blue, start, end, tileMode)`.
+        Box!(
+            modifier = Modifier.size(64.dp()).background(Brush::linear_gradient_with(
+                [(0.0, Color::RED), (0.3, Color::YELLOW), (1.0, Color::BLUE)],
+                Offset::ZERO,
+                Offset::INFINITE,
+                TileMode::Clamp,
+            ))
+        );
+    });
+}
+```
+
+In a `DrawScope`, `scope.brush_paint(&brush, alpha, style)` makes a paint of a brush. `background_with(brush, shape)` has no `alpha` parameter: `brush.with_alpha(alpha)` gives the same pixels.
+
+## Theming and Material 3
+
+```kotlin
+@Composable
+fun AppTheme(content: @Composable () -> Unit) {
+    val base = if (isSystemInDarkTheme()) darkColorScheme() else lightColorScheme()
+    MaterialTheme(
+        colorScheme = base.copy(primary = Brand),
+        typography = Typography().run { copy(titleLarge = titleLarge.copy(fontWeight = FontWeight.Bold)) },
+        content = content,
+    )
+}
+```
+
+<!-- snippet: src/theming.rs#theme -->
+```rust
+const BRAND: Color = Color::from_argb(0xFF006A6A);
+
+#[composable]
+pub fn AppTheme(content: impl Fn() + 'static) {
+    let base = if is_system_in_dark_theme() { dark_color_scheme() } else { light_color_scheme() };
+    // Struct update syntax where Kotlin names `lightColorScheme(primary = …)`'s arguments.
+    let color_scheme = ColorScheme { primary: BRAND, ..base };
+    let typography = MaterialTheme::typography();
+    let typography = Typography {
+        title_large: TextStyle { font_weight: Some(FontWeight::BOLD), ..typography.title_large },
+        ..typography
+    };
+    MaterialTheme!(color_scheme = color_scheme, typography = typography, content = content);
+}
+```
+
+Where Kotlin calls a constructor or `copy` with named arguments (`lightColorScheme(primary = …)`, `ButtonDefaults.buttonColors(containerColor = …)`, `TextStyle(fontWeight = …)`), Rust uses struct update syntax from the default: `ColorScheme { primary, ..base }`, `ButtonColors { container_color, ..ButtonDefaults::button_colors() }`, `TextStyle { font_weight, ..TextStyle::DEFAULT }`.
+
+<!-- snippet: src/theming.rs#theme_reads -->
+```rust
+#[composable]
+pub fn Banner(text: SharedString) {
+    // `MaterialTheme.colorScheme`, `.typography`, `.shapes`: reads of composition locals.
+    let colors = MaterialTheme::color_scheme();
+    Surface!(color = colors.primary_container, shape = MaterialTheme::shapes().medium, {
+        Text!(
+            text,
+            modifier = Modifier.padding(16.dp()),
+            style = MaterialTheme::typography().title_large
+        );
+    });
+}
+```
+
+### Composition locals
+
+```kotlin
+val LocalSpacing = compositionLocalOf { 8.dp }
+
+CompositionLocalProvider(LocalSpacing provides 16.dp) {
+    Column(verticalArrangement = Arrangement.spacedBy(LocalSpacing.current)) { … }
+}
+```
+
+<!-- snippet: src/theming.rs#local -->
+```rust
+/// A composition local of the app's own: `compositionLocalOf { 8.dp }`.
+pub static LOCAL_SPACING: CompositionLocal<Dp> = CompositionLocal::new("LocalSpacing", || Dp(8.0));
+
+#[composable]
+pub fn Spaced() {
+    CompositionLocalProvider(LOCAL_SPACING.provides(16.dp()), || {
+        Column!(vertical_arrangement = Arrangement::spaced_by(LOCAL_SPACING.current()), {
+            Text!("One");
+            Text!("Two");
+        });
+    });
+}
+```
+
+A local is a `static`, named by its name and type together. `CompositionLocalProvider` is a plain function taking one value; nest providers for several.
+
+### Components
+
+Material's components take Compose's parameters, in Compose's order:
+
+```kotlin
+Scaffold(
+    topBar = {
+        TopAppBar(title = { Text("Notes") }, actions = {
+            IconButton(onClick = { notes = 0 }) { Icon(Icons.Filled.Delete, "Delete all") }
+        })
+    },
+    snackbarHost = { SnackbarHost(snackbars) },
+    floatingActionButton = {
+        FloatingActionButton(onClick = { … }) { Icon(Icons.Filled.Add, "Add a note") }
+    },
+) { padding -> … }
+```
+
+<!-- snippet: src/theming.rs#scaffold -->
+```rust
+#[composable]
+pub fn Notes() {
+    let notes = remember_saveable(|| mutable_state_of(0u32));
+    let snackbars = remember(SnackbarHostState::new);
+    let scope = remember_coroutine_scope();
+    AppTheme!({
+        Scaffold!(
+            top_bar = {
+                TopAppBar!(
+                    { Text!("Notes") },
+                    actions = |_row| {
+                        IconButton!(on_click = move || notes.set(0), {
+                            Icon!(icons::filled::delete(), Some("Delete all"));
+                        });
+                    }
+                );
+            },
+            snackbar_host = {
+                SnackbarHost!(snackbars);
+            },
+            floating_action_button = {
+                FloatingActionButton!(
+                    on_click = move || {
+                        notes.update(|count| count + 1);
+                        scope.launch(async move {
+                            snackbars.show_snackbar("Note added").await;
+                        });
+                    },
+                    {
+                        Icon!(icons::filled::add(), Some("Add a note"));
+                    }
+                );
+            },
+            |padding: PaddingValues| {
+                Column!(modifier = Modifier.padding(padding).padding(16.dp()), {
+                    Text!("{} notes", notes.get());
+                    // Colors, as other `…Defaults`, change by struct update.
+                    Button!(
+                        on_click = move || notes.set(0),
+                        enabled = notes.get() > 0,
+                        colors = ButtonColors {
+                            container_color: MaterialTheme::color_scheme().error,
+                            ..ButtonDefaults::button_colors()
+                        },
+                        {
+                            Text!("Clear");
+                        }
+                    );
+                });
+            }
+        );
+    });
+}
+```
+
+- A slot given by name takes a block (`top_bar = { … }`); an optional slot (`Option<impl Fn()>`) takes `Some(|| …)` or a block (`label = Some(|| Text!("Name"))`).
+- Icons are `icons::filled::add()` and the rest of material-icons-core's filled set (`Icons.Default` is `icons::default`).
+- Overloads Kotlin distinguishes by parameters have their own names: `Surface(onClick = …)` is `ClickableSurface`, `Surface(selected = …, onClick = …)` is `SelectableSurface`, `Text(AnnotatedString)` is `AnnotatedText`, an indeterminate `CircularProgressIndicator()` is `IndeterminateCircularProgressIndicator`.
+- `TopAppBarDefaults::enter_always_scroll_behavior()` and its siblings take no arguments, and a bar's scroll behavior is connected with `Modifier.nested_scroll(behavior.nested_scroll_connection())`, as in Compose.
+
+Animations (`animate_float_as_state!`, `AnimatedVisibility!`, `Crossfade!`, `AnimatedContent!`, `remember_infinite_transition`, `Animatable`) are in `compose::animation`, with Compose's specs (`tween(ms)`, `spring()`, `keyframes`).
+
+## Text and text fields
+
+```kotlin
+Column {
+    Text(title, style = MaterialTheme.typography.headlineSmall, maxLines = 1)
+    Text(summary, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 3, overflow = TextOverflow.Ellipsis)
+    val count = 3
+    Text("$count unread", fontWeight = FontWeight.Bold)
+}
+```
+
+<!-- snippet: src/text.rs#text -->
+```rust
+#[composable]
+pub fn Headline(title: SharedString, summary: SharedString) {
+    Column!({
+        Text!(title, style = MaterialTheme::typography().headline_small, max_lines = 1);
+        Text!(
+            summary,
+            color = MaterialTheme::color_scheme().on_surface_variant,
+            max_lines = 3,
+            overflow = TextOverflow::Ellipsis,
+        );
+        // Format arguments, as `format!`: inline names too.
+        let count = 3;
+        Text!("{count} unread", font_weight = Some(FontWeight::BOLD));
+    });
+}
+```
+
+Styled text is built as with `buildAnnotatedString`:
+
+<!-- snippet: src/text.rs#annotated -->
+```rust
+#[composable]
+pub fn Terms() {
+    // `buildAnnotatedString { append(…); withStyle(…) { append(…) } }`
+    let text = AnnotatedString::build(|text| {
+        text.append("By joining, you accept the ");
+        let bold = SpanStyle { font_weight: Some(FontWeight::BOLD), ..SpanStyle::default() };
+        text.with_style(bold, |text| {
+            text.append("rules");
+        });
+        text.append(".");
+    });
+    AnnotatedText!(text); // Material's `Text(AnnotatedString)`
+}
+```
+
+Selection is opt-in, as in Compose: `SelectionContainer!({ … })` and `DisableSelection!({ … })`.
+
+### Text fields, the keyboard and focus
+
+```kotlin
+@Composable
+fun JoinNetwork(onJoin: (String, String) -> Unit) {
+    var network by rememberSaveable { mutableStateOf("") }
+    var passphrase by remember { mutableStateOf("") }
+    val networkField = remember { FocusRequester() }
+    val focusManager = LocalFocusManager.current
+    val join = {
+        focusManager.clearFocus()
+        onJoin(network, passphrase)
+    }
+    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        OutlinedTextField(
+            network, { network = it },
+            Modifier.focusRequester(networkField),
+            label = { Text("Network") },
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
+        )
+        OutlinedTextField(
+            passphrase, { passphrase = it },
+            label = { Text("Passphrase") },
+            singleLine = true,
+            visualTransformation = PasswordVisualTransformation(),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Done),
+            keyboardActions = KeyboardActions(onDone = { join() }),
+        )
+        Button(onClick = join, enabled = network.isNotEmpty()) { Text("Join") }
+    }
+    LaunchedEffect(Unit) { networkField.requestFocus() }
+}
+```
+
+<!-- snippet: src/text.rs#fields -->
+```rust
+#[composable]
+pub fn JoinNetwork(on_join: impl Fn(String, String) + 'static) {
+    let network = remember_saveable(|| mutable_state_of(String::new()));
+    let passphrase = remember(|| mutable_state_of(String::new()));
+    let network_field = remember(FocusRequester::new);
+    let focus_manager = LOCAL_FOCUS_MANAGER.current();
+    let join = callback(move || {
+        focus_manager.clear_focus(false); // hides the soft keyboard with the focus
+        on_join(network.get(), passphrase.get());
+    });
+    Column!(
+        modifier = Modifier.padding(16.dp()),
+        vertical_arrangement = Arrangement::spaced_by(8.dp()),
+        {
+            OutlinedTextField!(
+                network.get(),
+                move |value| network.set(value),
+                modifier = Modifier.focus_requester(network_field).test_tag("network"),
+                label = Some(|| Text!("Network")),
+                single_line = true,
+                // `Next`'s default action moves the focus to the next field.
+                keyboard_options =
+                    KeyboardOptions { ime_action: ImeAction::Next, ..KeyboardOptions::DEFAULT },
+            );
+            OutlinedTextField!(
+                passphrase.get(),
+                move |value| passphrase.set(value),
+                modifier = Modifier.test_tag("passphrase"),
+                label = Some(|| Text!("Passphrase")),
+                single_line = true,
+                visual_transformation = PasswordVisualTransformation::new(),
+                keyboard_options = KeyboardOptions {
+                    keyboard_type: KeyboardType::Password,
+                    ime_action: ImeAction::Done,
+                    ..KeyboardOptions::DEFAULT
+                },
+                keyboard_actions = KeyboardActions::new().on_done(move || join()),
+            );
+            Button!(on_click = join, enabled = !network.get().is_empty(), {
+                Text!("Join");
+            });
+        }
+    );
+    // Focus the first field once shown, as `LaunchedEffect(Unit) { requester.requestFocus() }`.
+    LaunchedEffect((), async move {
+        network_field.request_focus();
+    });
+}
+```
+
+- Text fields take the value and a callback with the new value (`TextField(value, onValueChange)`), as Compose's `String` overloads; there's no `TextFieldState` or `TextFieldValue` overload.
+- `KeyboardOptions` is built by struct update from `KeyboardOptions::DEFAULT`, and `KeyboardActions` with `KeyboardActions::new().on_done(…)` and its siblings. Without an action, `Next` and `Previous` move the focus and `Done` hides the keyboard, as in Compose. On Android the soft keyboard follows the options (type, action key, capitalization, auto-correction); on desktop the action is Enter.
+- `callback(closure)` makes a memoized callback in a composable's body, to pass on or call from several places (`join` above).
+- `LOCAL_FOCUS_MANAGER.current()` moves (`move_focus(FocusDirection::Next)`) and clears the focus, `LOCAL_SOFTWARE_KEYBOARD_CONTROLLER.current()` (an `Option`) shows and hides the keyboard, and `Modifier.on_focus_changed(…)`, `focusable()` and `on_key_event(…)` are Compose's. Their requests apply after the current event or at the next frame.
+
+## Navigation
+
+There's no Navigation Compose (`NavHost`, `NavController`, routes) yet. A small app keeps its own back stack: an enum of destinations in a saved list, a `match` on the top, and a `BackHandler` that pops.
+
+```kotlin
+NavHost(navController, startDestination = "inbox") {
+    composable("inbox") {
+        Inbox(onOpen = { id -> navController.navigate("message/$id") },
+              onSettings = { navController.navigate("settings") })
+    }
+    composable("message/{id}") { entry -> MessageScreen(entry.arguments!!.getInt("id")) }
+    composable("settings") { SettingsScreen() }
+}
+```
+
+<!-- snippet: src/navigation.rs#screens -->
+```rust
+/// The app's destinations: Navigation Compose's routes, as an enum.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Screen {
+    Inbox,
+    Message(u32),
+    Settings,
+}
+
+/// Saved as a number, so the back stack survives the activity's recreation.
+impl Saveable for Screen {
+    fn save(&self) -> SavedValue {
+        SavedValue::Int(match *self {
+            Screen::Inbox => -1,
+            Screen::Settings => -2,
+            Screen::Message(id) => i64::from(id),
+        })
+    }
+
+    fn restore(saved: &SavedValue) -> Option<Screen> {
+        match *saved {
+            SavedValue::Int(-1) => Some(Screen::Inbox),
+            SavedValue::Int(-2) => Some(Screen::Settings),
+            SavedValue::Int(id) => u32::try_from(id).ok().map(Screen::Message),
+            _ => None,
+        }
+    }
+}
+```
+
+<!-- snippet: src/navigation.rs#app -->
+```rust
+#[composable]
+pub fn App() {
+    // The back stack: a saved list of destinations, the current one last.
+    let back_stack = remember_saveable(|| mutable_state_of(vec![Screen::Inbox]));
+    let navigate = callback(move |screen: Screen| back_stack.edit(|stack| stack.push(screen)));
+    // Back pops the stack while there's somewhere to go back to; at the root, back leaves the
+    // app (or goes to the Kotlin UI around it).
+    BackHandler!(
+        enabled = back_stack.with(|stack| stack.len() > 1),
+        on_back = move || {
+            back_stack.edit(|stack| stack.pop());
+        }
+    );
+    let current = back_stack.with(|stack| *stack.last().expect("the stack has its root"));
+    match current {
+        Screen::Inbox => Inbox!(
+            on_open = move |id: u32| navigate(Screen::Message(id)),
+            on_settings = move || navigate(Screen::Settings)
+        ),
+        // A key per message: each message's screen gets its own remembered state.
+        Screen::Message(id) => key(id, || MessageScreen!(id)),
+        Screen::Settings => SettingsScreen!(),
+    }
+}
+```
+
+What this pattern doesn't do that `NavHost` does:
+
+- **A screen's state goes when it leaves.** Only the top screen is composed, so a screen under it loses its `remember` and `remember_saveable` values (its scroll position included) when another is pushed; Compose's back stack entries keep theirs. Hoist what must survive into the composable holding the stack (`let inbox_list = remember_lazy_list_state!();` there, passed down), or into the stack's entries.
+- **No transitions.** Wrap the `match` in `AnimatedContent!(current, …)` or `Crossfade!` for one.
+- **No deep links or arguments bundles**: the enum is the route and its arguments.
+
+Back goes to the innermost enabled `BackHandler`: those in dialogs, bottom sheets and menus first, then the one composed last. While none is enabled, back leaves the app. Escape is back on desktop.
+
+## Android interop
+
+The Rust app reads what Kotlin passes through composition locals the host provides:
+
+```kotlin
+val view = ComposeRsView(context, "embedded")
+view.setProp("user", "ada")              // also Double, Int and Boolean values
+view.setOnEventListener { name, payload ->
+    if (name == "sign_out") signOut()
+}
+```
+
+<!-- snippet: src/interop.rs#embedded -->
+```rust
+#[composable]
+pub fn Embedded() {
+    // What Kotlin passes with `ComposeRsView.setProp`, and the listener of `setOnEventListener`.
+    let props = LOCAL_HOST_PROPS.current();
+    let events = LOCAL_HOST_EVENTS.current();
+    // A read of a property recomposes this scope when Kotlin sets it again.
+    let user = props.string("user");
+    let color_scheme =
+        if is_system_in_dark_theme() { dark_color_scheme() } else { light_color_scheme() };
+    MaterialTheme!(color_scheme = color_scheme, {
+        // The view reports the window's insets: keep the content clear of the system bars.
+        Surface!(modifier = Modifier.fill_max_size(), {
+            Column!(modifier = Modifier.safe_drawing_padding().padding(16.dp()), {
+                Text!("Signed in as {}", user.as_deref().unwrap_or("nobody"));
+                Button!(
+                    on_click = move || {
+                        events.send("sign_out", "");
+                    },
+                    {
+                        Text!("Sign out");
+                    }
+                );
+            });
+        });
+    });
+}
+```
+
+- **Properties** (`LOCAL_HOST_PROPS`) are text, numbers or booleans by name (`props.string(…)`, `number(…)`, `boolean(…)`); reading one subscribes the reader, so a new value from Kotlin recomposes it. **Events** (`LOCAL_HOST_EVENTS`) are a name and a text payload, posted to the listener on the main thread. For anything richer, encode it as text (JSON) or call into your own JNI.
+- **Back**: `BackHandler`s get the system back while one is enabled; the view intercepts back only then, through the AndroidX `OnBackPressedDispatcher` when the activity has one (so it orders with Kotlin's `BackHandler`s), else the platform's.
+- **Insets**: the view reports the window's insets (system bars, the keyboard, cutouts). `Modifier.safe_drawing_padding()`, `system_bars_padding()`, `ime_padding()` and `window_insets_padding(WindowInsets::…)` are Compose's. Material's `Scaffold` and bars take their insets as `PaddingValues` (`content_window_insets = WindowInsets::safe_drawing().as_padding_values()`), zero by default.
+- **Dark theme and configuration**: `is_system_in_dark_theme()` and `LOCAL_CONFIGURATION` follow the activity's configuration.
+- **Saved state**: `remember_saveable` values (and the saveable state holders) are saved with the view's instance state, and restored when the activity is recreated, after a rotation or the process's death.
+- **Images**: `remember_image_resource(include_bytes!("photo.png"))` decodes an image bundled in the Rust library (with `BitmapFactory` on Android, Skia on desktop), and `Image!(bitmap, Some("description"))` shows it.
+
+<!-- snippet: src/interop.rs#configuration -->
+```rust
+#[composable]
+pub fn Adaptive() {
+    // `LocalConfiguration.current`: the window's size in dp, orientation, font scale, night mode.
+    let configuration = LOCAL_CONFIGURATION.current();
+    if configuration.screen_width_dp >= 600.0 {
+        Text!("Two panes");
+    } else {
+        Text!("One pane");
+    }
+}
+```
+
+## Testing
+
+`compose::test` (the facade's `test` feature, for dev-dependencies) is `androidx.compose.ui.test`: a rule over a headless host, with finders through the semantics tree, actions that send real input events, and assertions.
+
+```kotlin
+@get:Rule val rule = createComposeRule()
+
+@Test fun openingAMessageAndGoingBack() {
+    rule.setContent { App() }
+    rule.onNodeWithText("Message 3").performClick()
+    rule.onNodeWithContentDescription("Star").performClick().assertIsOn()
+    Espresso.pressBack()
+    rule.onNodeWithText("Message 3").assertExists()
+}
+```
+
+<!-- snippet: tests/testing.rs#rule -->
+```rust
+#[test]
+fn opening_a_message_and_going_back() {
+    let mut ui = compose_test(navigation::App); // `createComposeRule()` + `setContent { App() }`
+    ui.on_node_with_text("Message 3").perform_click();
+    ui.on_node_with_content_description("Star").perform_click().assert_is_on();
+    assert_eq!(ui.count_nodes(&has_role(Role::Checkbox)), 1); // a toggle button is a checkbox
+    ui.host().on_back_pressed(); // the system back
+    ui.wait_for_idle();
+    ui.on_node_with_text("Message 3").assert_exists();
+    ui.on_node(has_text("Settings").and(has_click_action())).assert_is_enabled();
+}
+```
+
+Finders: `on_node_with_text`, `on_node_with_tag` (`Modifier.test_tag`), `on_node_with_content_description`, `on_node(matcher)` and `on_all_nodes(matcher, index)`, with matchers combined by `and` and `or`. Actions: `perform_click`, `perform_text_input`, `perform_key_press`, `perform_semantics_action`, `request_focus`, and on the rule `type_text`, `press_key`. Dumps for debugging: `dump_tree()`, `dump_semantics()`, `dump_display_list()`.
+
+Recomposition counts check what an event recomposed, which Compose tests can't easily do:
+
+<!-- snippet: tests/testing.rs#recompositions -->
+```rust
+#[test]
+fn a_click_recomposes_only_the_button_content() {
+    let mut ui = compose_test(state::Counter);
+    let before = ui.recomposition_counts();
+    ui.on_node_with_text("Clicked 0 times").perform_click();
+    let ran = ui.recomposition_counts().since(&before);
+    // The text reads the count inside the button's content: `Counter` itself skips.
+    assert_eq!(ran.scopes_named("Counter"), 0, "{:?}", ran.names());
+}
+```
+
+The rule's clock advances by itself while waiting for idle, as `mainClock.autoAdvance`; a rule made with `with_manual_clock` advances only when told:
+
+<!-- snippet: tests/testing.rs#clock -->
+```rust
+#[test]
+fn the_countdown_counts_down_on_the_test_clock() {
+    // `mainClock.autoAdvance = false`: time moves only when the test says.
+    let mut ui = ComposeTestRule::with_manual_clock(|| effects::Countdown(3));
+    ui.on_node_with_text("3 s").assert_exists();
+    ui.advance_time_by(Duration::from_secs(1));
+    ui.on_node_with_text("2 s").assert_exists();
+    // `compose_test`'s clock advances by itself: waiting for idle runs through the delays.
+    let mut ui = compose_test(|| effects::Countdown(3));
+    ui.on_node_with_text("0 s").assert_exists();
+}
+```
+
+`ui.host()` is the headless `UiHost` the rule drives: the core every platform wraps. It takes window-level input and lifecycle calls (`on_back_pressed`, `save_state` and `restore_state`, `props()`, `set_configuration`, `perform_ime_action`, `send_pointer`, `resize`). It's in `compose::ui::platform`, outside the stable surface.
+
+<!-- snippet: tests/testing.rs#host -->
+```rust
+#[test]
+fn the_back_stack_survives_recreation() {
+    // The headless host the test rule wraps: what an Android view or a desktop window drives.
+    let mut ui = compose_test(navigation::App);
+    ui.on_node_with_text("Message 3").perform_click();
+    // What the Android view saves in its instance state when the activity goes away…
+    let saved = ui.host().save_state();
+    drop(ui);
+    // …and gives a new composition when it's recreated.
+    let host = UiHost::headless(400, 800);
+    host.restore_state(saved);
+    let mut ui = ComposeTestRule::with_host(host, navigation::App);
+    ui.on_node_with_content_description("Star").assert_exists(); // still on the message
+    assert!(ui.host().on_back_pressed());
+    ui.wait_for_idle();
+    ui.on_node_with_text("Message 3").assert_exists(); // and back goes to the inbox
+}
+```
+
+Event scripts replay a session from a text file and compare its transcript (each command and what it printed) with an expected file, as the examples' tests do (`examples/counter/tests/counter.script`):
+
+<!-- snippet: tests/navigation.script -->
+```text
+# The inbox, then a message: its screen replaces the inbox.
+assert "Settings"
+click "Message 3"
+assert_not "Settings"
+semantics
+```
+
+<!-- snippet: tests/testing.rs#script -->
+```rust
+#[test]
+fn the_session_matches_its_transcript() {
+    let mut ui = compose_test(navigation::App);
+    // Runs tests/navigation.script and compares the transcript with navigation.script.expected
+    // (`UPDATE_SCRIPTS=1 cargo test` writes it).
+    check_script(&mut ui, concat!(env!("CARGO_MANIFEST_DIR"), "/tests/navigation.script"));
+}
+```
+
+The commands are `click "text"` or `click tag:name`, `type tag:name "text"`, `key Tab`, `assert "text"`, `assert_not "text"`, `frame`, `dump`, `semantics` and `display`. On Android, the Kotlin side can be tested with Compose's own test rule around the `ComposeRsView`; the Rust side is tested headless, as above.

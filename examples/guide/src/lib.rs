@@ -1,0 +1,20 @@
+//! The samples of the developer guide (`docs/guide/`), one module per section. The guide quotes
+//! the regions between `// ANCHOR: name` and `// ANCHOR_END: name` lines;
+//! `tests/snippets.rs` checks that every quote matches its region (`UPDATE_GUIDE=1 cargo test
+//! -p guide --test snippets` rewrites the quotes from the sources), and the other tests run the
+//! samples.
+
+#![allow(non_snake_case)]
+
+pub mod android;
+pub mod composables;
+pub mod drawing;
+pub mod effects;
+pub mod getting_started;
+pub mod interop;
+pub mod layouts;
+pub mod navigation;
+pub mod performance;
+pub mod state;
+pub mod text;
+pub mod theming;

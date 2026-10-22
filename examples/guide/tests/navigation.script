@@ -1,0 +1,5 @@
+# The inbox, then a message: its screen replaces the inbox.
+assert "Settings"
+click "Message 3"
+assert_not "Settings"
+semantics
