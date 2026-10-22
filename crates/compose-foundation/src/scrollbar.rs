@@ -80,7 +80,7 @@ impl ScrollbarAdapter for LazyListAdapter {
 /// An adapter for a scroll state, as `rememberScrollbarAdapter(scrollState)`.
 #[composable(non_restartable)]
 pub fn remember_scrollbar_adapter(scroll_state: ScrollState) -> Rc<dyn ScrollbarAdapter> {
-    compose_runtime::remember_keyed(scroll_state.clone(), || {
+    compose_runtime::remember_keyed(scroll_state, || {
         Rc::new(ScrollStateAdapter(scroll_state)) as Rc<dyn ScrollbarAdapter>
     })
 }
@@ -90,7 +90,7 @@ pub fn remember_scrollbar_adapter(scroll_state: ScrollState) -> Rc<dyn Scrollbar
 pub fn remember_lazy_list_scrollbar_adapter(
     lazy_list_state: LazyListState,
 ) -> Rc<dyn ScrollbarAdapter> {
-    compose_runtime::remember_keyed(lazy_list_state.clone(), || {
+    compose_runtime::remember_keyed(lazy_list_state, || {
         Rc::new(LazyListAdapter(lazy_list_state)) as Rc<dyn ScrollbarAdapter>
     })
 }

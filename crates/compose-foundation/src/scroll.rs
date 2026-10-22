@@ -8,7 +8,7 @@
 use std::rc::Rc;
 
 use compose_runtime::{
-    ComposeArg, CoroutineScope, Job, MutableState, OwnedState, composable, mutable_state_of,
+    ComposeArg, CoroutineScope, Job, MutableState, Owned, OwnedState, composable, mutable_state_of,
     with_frame_nanos,
 };
 use compose_ui::{
@@ -20,27 +20,46 @@ use compose_ui::{
 
 /// How far content is scrolled, in pixels, and how far it can be, as Compose's `ScrollState`:
 /// state, so reading it in composition recomposes on scrolls, and setting it scrolls.
-#[derive(Clone)]
+///
+/// A `Copy` handle of its states (D240): [`new`](Self::new) returns its owner, and
+/// [`remember_scroll_state`] keeps that in the composition.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct ScrollState {
-    owner: Rc<(OwnedState<i32>, OwnedState<i32>)>,
+    value: MutableState<i32>,
+    max: MutableState<i32>,
     /// The viewport's length along the axis, as last laid out (for scrollbars).
-    viewport: Rc<OwnedState<i32>>,
+    viewport: MutableState<i32>,
+}
+
+/// What a `ScrollState`'s owner keeps.
+struct ScrollStates {
+    _value: OwnedState<i32>,
+    _max: OwnedState<i32>,
+    _viewport: OwnedState<i32>,
 }
 
 impl ScrollState {
-    pub fn new(initial: i32) -> ScrollState {
-        ScrollState {
-            owner: Rc::new((mutable_state_of(initial.max(0)), mutable_state_of(i32::MAX))),
-            viewport: Rc::new(mutable_state_of(0)),
-        }
+    #[track_caller]
+    pub fn new(initial: i32) -> Owned<ScrollState> {
+        let states = ScrollStates {
+            _value: mutable_state_of(initial.max(0)),
+            _max: mutable_state_of(i32::MAX),
+            _viewport: mutable_state_of(0),
+        };
+        let state = ScrollState {
+            value: states._value.handle(),
+            max: states._max.handle(),
+            viewport: states._viewport.handle(),
+        };
+        Owned::new(states, move |_| state)
     }
 
     fn value_state(&self) -> MutableState<i32> {
-        self.owner.0.handle()
+        self.value
     }
 
     fn max_state(&self) -> MutableState<i32> {
-        self.owner.1.handle()
+        self.max
     }
 
     /// The scroll offset, in pixels.
@@ -68,7 +87,7 @@ impl ScrollState {
 
 impl ComposeArg for ScrollState {
     fn same(&self, other: &Self) -> bool {
-        Rc::ptr_eq(&self.owner, &other.owner)
+        self == other
     }
 }
 
@@ -77,7 +96,9 @@ impl ComposeArg for ScrollState {
 #[composable(non_restartable)]
 pub fn remember_scroll_state() -> ScrollState {
     let saver = compose_runtime::saver(
-        |state: &ScrollState| Some(compose_runtime::SavedValue::Int(i64::from(state.value()))),
+        |state: &Owned<ScrollState>| {
+            Some(compose_runtime::SavedValue::Int(i64::from(state.value())))
+        },
         |saved| match saved {
             compose_runtime::SavedValue::Int(value) => Some(ScrollState::new(*value as i32)),
             _ => None,
@@ -112,7 +133,7 @@ struct ScrollElement {
 impl ModifierNodeElement for ScrollElement {
     fn create(&self) -> Box<dyn ModifierNode> {
         Box::new(ScrollNode {
-            state: self.state.clone(),
+            state: self.state,
             vertical: self.vertical,
             drag: DragScroller::default(),
             fraction: 0.0,
@@ -123,7 +144,7 @@ impl ModifierNodeElement for ScrollElement {
 
     fn update(&self, node: &mut dyn ModifierNode) {
         if let Some(node) = node.downcast_mut::<ScrollNode>() {
-            node.state = self.state.clone();
+            node.state = self.state;
             node.vertical = self.vertical;
         }
     }
@@ -400,10 +421,10 @@ impl PointerInputModifierNode for ScrollNode {
         _bounds: IntSize,
         context: &mut EventContext<'_>,
     ) {
-        let (vertical, state) = (self.vertical, self.state.clone());
+        let (vertical, state) = (self.vertical, self.state);
         let fraction = &mut self.fraction;
         let reverse = !vertical && context.layout_direction() == compose_ui::LayoutDirection::Rtl;
-        let flung = state.clone();
+        let flung = state;
         self.drag.on_pointer_event(
             event,
             pass,
@@ -413,7 +434,6 @@ impl PointerInputModifierNode for ScrollNode {
             |delta| scroll_state_by(&state, delta, fraction),
             move || {
                 let fraction = std::cell::Cell::new(0.0f32);
-                let flung = flung.clone();
                 Rc::new(move |delta| {
                     let mut left = fraction.get();
                     let used = scroll_state_by(&flung, delta, &mut left);

@@ -68,9 +68,9 @@ fn an_initial_position_survives_an_empty_first_layout() {
     let keys = mutable_state_of(Vec::<u32>::new());
     let handle = keys.handle();
     let state = LazyListState::new(10, 5);
-    let given = state.clone();
+    let given = *state;
     let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || {
-        KeyedRows(given.clone(), Rc::new(handle.get()), false)
+        KeyedRows(given, Rc::new(handle.get()), false)
     });
     keys.set((0..100).collect());
     ui.wait_for_idle();
@@ -94,9 +94,9 @@ fn a_list_emptied_and_refilled_starts_at_its_top() {
     let keys = mutable_state_of((0..100u32).collect::<Vec<_>>());
     let handle = keys.handle();
     let state = LazyListState::new(50, 0);
-    let given = state.clone();
+    let given = *state;
     let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || {
-        KeyedRows(given.clone(), Rc::new(handle.get()), false)
+        KeyedRows(given, Rc::new(handle.get()), false)
     });
     assert_eq!(top(&mut ui, "key 50"), 0.0);
     keys.set(Vec::new());
@@ -123,12 +123,12 @@ fn a_focused_item_stays_pinned_when_items_are_inserted_before_it() {
     let text = mutable_state_of(String::new());
     let field = text.handle();
     let state = LazyListState::new(0, 0);
-    let given = state.clone();
+    let given = *state;
     let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || {
         let keys = Rc::new(handle.get());
         LazyColumn!(
             modifier = Modifier.size_wh(100.dp(), 100.dp()),
-            state = given.clone(),
+            state = given,
             |scope: LazyListScope| {
                 let (by_index, labels) = (keys.clone(), keys.clone());
                 scope.items_keyed(
@@ -181,9 +181,9 @@ fn removing_the_focused_item_releases_its_pin() {
     let keys = mutable_state_of((0..1000u32).collect::<Vec<_>>());
     let handle = keys.handle();
     let state = LazyListState::new(0, 0);
-    let given = state.clone();
+    let given = *state;
     let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || {
-        KeyedRows(given.clone(), Rc::new(handle.get()), true)
+        KeyedRows(given, Rc::new(handle.get()), true)
     });
     ui.press_key(Key::Tab);
     ui.on_node_with_tag("key 0").assert_is_focused();
@@ -212,7 +212,7 @@ fn removing_the_first_visible_of_a_million_rows_does_not_look_up_every_key() {
     let removed = mutable_state_of(false);
     let handle = removed.handle();
     let state = LazyListState::new(500_000, 0);
-    let given = state.clone();
+    let given = *state;
     let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || {
         // The data: 0..1_000_000, without 500_000 once removed.
         let removed = handle.get();
@@ -222,7 +222,7 @@ fn removing_the_first_visible_of_a_million_rows_does_not_look_up_every_key() {
         };
         LazyColumn!(
             modifier = Modifier.size_wh(100.dp(), 100.dp()),
-            state = given.clone(),
+            state = given,
             |scope: LazyListScope| {
                 scope.items_keyed(
                     rows,
@@ -265,11 +265,11 @@ fn removing_the_first_visible_of_a_million_rows_does_not_look_up_every_key() {
 #[test]
 fn small_items_do_not_make_a_scroll_compose_a_hundred_items() {
     let state = LazyListState::new(1000, 0);
-    let given = state.clone();
+    let given = *state;
     let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || {
         LazyColumn!(
             modifier = Modifier.size_wh(100.dp(), 100.dp()),
-            state = given.clone(),
+            state = given,
             |scope: LazyListScope| {
                 scope.items(2000, |index| {
                     count();
@@ -311,11 +311,11 @@ fn small_items_do_not_make_a_scroll_compose_a_hundred_items() {
 #[test]
 fn a_tremor_within_the_slop_is_a_click() {
     let state = LazyListState::new(0, 0);
-    let given = state.clone();
+    let given = *state;
     let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || {
         LazyColumn!(
             modifier = Modifier.size_wh(100.dp(), 100.dp()),
-            state = given.clone(),
+            state = given,
             |scope: LazyListScope| {
                 scope.items(1000, |index| {
                     Box!(
@@ -384,9 +384,9 @@ fn tab_reaches_a_row_past_three_unfocusable_items() {
 #[test]
 fn two_tabs_before_a_frame_scroll_the_second_row_just_into_view() {
     let state = LazyListState::new(0, 0);
-    let given = state.clone();
+    let given = *state;
     let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || {
-        KeyedRows(given.clone(), Rc::new((0..1000).collect()), true)
+        KeyedRows(given, Rc::new((0..1000).collect()), true)
     });
     ui.on_node_with_tag("key 4").request_focus();
     ui.wait_for_idle();
@@ -412,16 +412,12 @@ fn two_tabs_before_a_frame_scroll_the_second_row_just_into_view() {
 fn the_wheel_delta_past_the_end_of_a_long_nested_list_scrolls_its_parent() {
     let outer = ScrollState::new(0);
     let state = LazyListState::new(0, 0);
-    let (given_outer, given) = (outer.clone(), state.clone());
+    let (given_outer, given) = (*outer, *state);
     let mut ui = ComposeTestRule::sized(IntSize::new(100, 100), move || {
-        let given = given.clone();
-        Column!(
-            modifier = Modifier.size_wh(100.dp(), 100.dp()).vertical_scroll(given_outer.clone()),
-            {
-                KeyedRows(given.clone(), Rc::new((0..20).collect()), false);
-                Spacer(Modifier.size_wh(100.dp(), 200.dp()));
-            }
-        );
+        Column!(modifier = Modifier.size_wh(100.dp(), 100.dp()).vertical_scroll(given_outer), {
+            KeyedRows(given, Rc::new((0..20).collect()), false);
+            Spacer(Modifier.size_wh(100.dp(), 200.dp()));
+        });
     });
     ui.host().send_pointer(PointerEvent::scroll(Offset::new(50.0, 50.0), Offset::new(0.0, 1000.0)));
     ui.wait_for_idle();
@@ -440,9 +436,9 @@ fn the_wheel_delta_past_the_end_of_a_long_nested_list_scrolls_its_parent() {
 #[test]
 fn a_long_scroll_by_is_drawn_in_one_frame() {
     let state = LazyListState::new(0, 0);
-    let given = state.clone();
+    let given = *state;
     let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || {
-        KeyedRows(given.clone(), Rc::new((0..5000).collect()), false)
+        KeyedRows(given, Rc::new((0..5000).collect()), false)
     });
     state.scroll_by(30_000.0);
     ui.host().frame();
@@ -461,7 +457,7 @@ fn a_long_scroll_by_is_drawn_in_one_frame() {
 #[test]
 fn the_touch_slop_is_in_dp() {
     let state = LazyListState::new(0, 0);
-    let given = state.clone();
+    let given = *state;
     let mut ui = compose_test_with(
         IntSize::new(400, 400),
         compose_ui::Density::new(2.0),
@@ -469,7 +465,7 @@ fn the_touch_slop_is_in_dp() {
         move || {
             LazyColumn!(
                 modifier = Modifier.size_wh(100.dp(), 100.dp()),
-                state = given.clone(),
+                state = given,
                 |scope: LazyListScope| {
                     scope.items(1000, |index| {
                         Box!(
@@ -508,11 +504,11 @@ fn the_touch_slop_is_in_dp() {
 #[test]
 fn a_scroll_frame_does_not_walk_every_item_interval() {
     let state = LazyListState::new(0, 0);
-    let given = state.clone();
+    let given = *state;
     let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || {
         LazyColumn!(
             modifier = Modifier.size_wh(100.dp(), 100.dp()),
-            state = given.clone(),
+            state = given,
             |scope: LazyListScope| {
                 for index in 0..1_000_000usize {
                     scope.item(move || {

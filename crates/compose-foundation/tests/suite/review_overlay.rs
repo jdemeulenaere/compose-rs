@@ -92,7 +92,7 @@ fn opening_a_dialog_inside_a_scrolled_column_does_not_scroll_it() {
     let mut ui = ComposeTestRule::sized(IntSize::new(300, 300), || {
         let state = remember_scroll_state();
         let open = remember(|| mutable_state_of(false));
-        STATE.with(|cell| *cell.borrow_mut() = Some(state.clone()));
+        STATE.with(|cell| *cell.borrow_mut() = Some(state));
         OPEN.with(|cell| *cell.borrow_mut() = Some(open));
         // A 100 px viewport, 100 px down the window.
         Column!(
@@ -114,7 +114,7 @@ fn opening_a_dialog_inside_a_scrolled_column_does_not_scroll_it() {
             }
         );
     });
-    let state = STATE.with(|cell| cell.borrow().clone().unwrap());
+    let state = STATE.with(|cell| (*cell.borrow()).unwrap());
     state.scroll_to(400);
     ui.wait_for_idle();
     assert_eq!(state.value(), 400);
@@ -184,7 +184,7 @@ fn passes_a_popup_follows_its_anchor_when_it_scrolls() {
     thread_local! { static STATE: RefCell<Option<ScrollState>> = const { RefCell::new(None) }; }
     let mut ui = ComposeTestRule::sized(IntSize::new(300, 300), || {
         let state = remember_scroll_state();
-        STATE.with(|cell| *cell.borrow_mut() = Some(state.clone()));
+        STATE.with(|cell| *cell.borrow_mut() = Some(state));
         Column!(modifier = Modifier.fill_max_size().vertical_scroll(state), {
             for index in 0..20 {
                 Box!(modifier = Modifier.size_wh(100.dp(), 50.dp()), {
@@ -198,7 +198,7 @@ fn passes_a_popup_follows_its_anchor_when_it_scrolls() {
         });
     });
     assert_eq!(bounds(&mut ui, "popup").top, 155.0);
-    STATE.with(|cell| cell.borrow().clone().unwrap()).scroll_to(100);
+    STATE.with(|cell| (*cell.borrow()).unwrap()).scroll_to(100);
     ui.wait_for_idle();
     assert_eq!(bounds(&mut ui, "popup").top, 55.0);
 }
@@ -361,11 +361,11 @@ fn passes_a_dialogs_new_dismiss_callback_is_the_one_called() {
 fn a_popup_in_a_lazy_item_scrolled_out_of_view_is_gone() {
     thread_local! { static CLICKS: Cell<u32> = const { Cell::new(0) }; }
     let state = LazyListState::new(0, 0);
-    let given = state.clone();
+    let given = *state;
     let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || {
         LazyColumn!(
             modifier = Modifier.size_wh(100.dp(), 100.dp()),
-            state = given.clone(),
+            state = given,
             |scope: LazyListScope| {
                 scope.items(100, |index| {
                     Box!(modifier = Modifier.size_wh(100.dp(), 20.dp()), {
@@ -401,11 +401,11 @@ fn a_popup_in_a_lazy_item_scrolled_out_of_view_is_gone() {
 fn a_popup_in_a_lazy_item_composed_beyond_the_viewport_takes_no_taps() {
     thread_local! { static CLICKS: Cell<u32> = const { Cell::new(0) }; }
     let state = LazyListState::new(0, 0);
-    let given = state.clone();
+    let given = *state;
     let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || {
         LazyColumn!(
             modifier = Modifier.size_wh(100.dp(), 100.dp()),
-            state = given.clone(),
+            state = given,
             |scope: LazyListScope| {
                 scope.items(100, |index| {
                     Box!(modifier = Modifier.size_wh(100.dp(), 20.dp()), {

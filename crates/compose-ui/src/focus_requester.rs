@@ -1,7 +1,8 @@
 //! `FocusRequester`, as Compose's: a handle application code moves focus with, attached to a
 //! node by `Modifier.focus_requester`.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::rc::{Rc, Weak};
 
 use compose_runtime::ComposeArg;
@@ -22,32 +23,44 @@ pub(crate) struct FocusRequests {
 /// `FocusRequester`: `remember(FocusRequester::new)`, then `request_focus()` from a callback or
 /// an effect. The focus goes to the node's focus target or the first one below it, scrolled
 /// into view, once the tree is free: after the event that asked, or at the next frame.
-#[derive(Clone, Default)]
+///
+/// A `Copy` id (D240): the nodes it's attached to are kept by the thread's registry while
+/// they're attached, so it owns nothing and is never stale.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct FocusRequester {
-    inner: Rc<RequesterInner>,
+    id: u64,
 }
 
-#[derive(Default)]
-struct RequesterInner {
-    /// The trees and nodes it's attached to, first attached first.
-    owners: RefCell<Vec<(Weak<FocusRequests>, NodeId)>>,
+/// The trees and nodes a requester is attached to, first attached first.
+type Attachments = Vec<(Weak<FocusRequests>, NodeId)>;
+
+thread_local! {
+    /// Each requester's attachments: only those attached somewhere have an entry.
+    static ATTACHED: RefCell<HashMap<u64, Attachments>> = RefCell::new(HashMap::new());
+    static NEXT_ID: Cell<u64> = const { Cell::new(0) };
+}
+
+impl Default for FocusRequester {
+    fn default() -> FocusRequester {
+        FocusRequester::new()
+    }
 }
 
 impl FocusRequester {
     pub fn new() -> FocusRequester {
-        FocusRequester::default()
+        let id = NEXT_ID.with(|next| next.replace(next.get() + 1));
+        FocusRequester { id }
     }
 
     /// Moves focus to its node (the first it was attached to, if several), as
     /// `requestFocus()`. Returns whether it's attached to one (a requester whose node isn't
     /// composed does nothing).
     pub fn request_focus(&self) -> bool {
-        let owner = self
-            .inner
-            .owners
-            .borrow()
-            .iter()
-            .find_map(|(requests, node)| Some((requests.upgrade()?, *node)));
+        let owner = ATTACHED.with(|attached| {
+            attached.borrow().get(&self.id).and_then(|owners| {
+                owners.iter().find_map(|(requests, node)| Some((requests.upgrade()?, *node)))
+            })
+        });
         let Some((requests, node)) = owner else { return false };
         requests.pending.borrow_mut().push(node);
         let wake = requests.wake.borrow().clone();
@@ -58,20 +71,32 @@ impl FocusRequester {
     }
 
     fn attach(&self, requests: &Weak<FocusRequests>, node: NodeId) {
-        let mut owners = self.inner.owners.borrow_mut();
-        if !owners.iter().any(|(tree, at)| *at == node && tree.ptr_eq(requests)) {
-            owners.push((requests.clone(), node));
-        }
+        ATTACHED.with(|attached| {
+            let mut attached = attached.borrow_mut();
+            let owners = attached.entry(self.id).or_default();
+            if !owners.iter().any(|(tree, at)| *at == node && tree.ptr_eq(requests)) {
+                owners.push((requests.clone(), node));
+            }
+        });
     }
 
     fn detach(&self, requests: &Weak<FocusRequests>, node: NodeId) {
-        self.inner.owners.borrow_mut().retain(|(tree, at)| !(*at == node && tree.ptr_eq(requests)));
+        // Not at all once the thread's registry is gone (a tree dropped as the thread exits).
+        let _ = ATTACHED.try_with(|attached| {
+            let mut attached = attached.borrow_mut();
+            if let Some(owners) = attached.get_mut(&self.id) {
+                owners.retain(|(tree, at)| !(*at == node && tree.ptr_eq(requests)));
+                if owners.is_empty() {
+                    attached.remove(&self.id);
+                }
+            }
+        });
     }
 }
 
 impl ComposeArg for FocusRequester {
     fn same(&self, other: &Self) -> bool {
-        Rc::ptr_eq(&self.inner, &other.inner)
+        self == other
     }
 }
 
@@ -109,7 +134,7 @@ impl FocusRequesterNode {
 
 impl ModifierNodeElement for FocusRequesterElement {
     fn create(&self) -> Box<dyn ModifierNode> {
-        Box::new(FocusRequesterNode { requester: self.0.clone(), owner: None })
+        Box::new(FocusRequesterNode { requester: self.0, owner: None })
     }
     fn update(&self, node: &mut dyn ModifierNode) {
         if let Some(node) = node.downcast_mut::<FocusRequesterNode>()
@@ -119,7 +144,7 @@ impl ModifierNodeElement for FocusRequesterElement {
                 node.requester.detach(requests, *at);
                 self.0.attach(requests, *at);
             }
-            node.requester = self.0.clone();
+            node.requester = self.0;
         }
     }
     fn same(&self, other: &dyn ModifierNodeElement) -> bool {
@@ -135,5 +160,28 @@ impl ModifierNode for FocusRequesterNode {
         if let Some((requests, at)) = self.owner.take() {
             self.requester.detach(&requests, at);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A requester owns nothing: the registry has it only while it's attached, so requesters
+    /// made and dropped leave nothing behind.
+    #[test]
+    fn a_requester_is_registered_only_while_attached() {
+        let requester = FocusRequester::new();
+        let requests = Rc::new(FocusRequests::default());
+        let tree = Rc::downgrade(&requests);
+        let node = NodeId::from_bits(7);
+        assert!(!requester.request_focus());
+        requester.attach(&tree, node);
+        assert!(requester.request_focus());
+        assert_eq!(*requests.pending.borrow(), [node]);
+        requester.detach(&tree, node);
+        assert!(ATTACHED.with(|attached| attached.borrow().is_empty()));
+        assert!(!requester.request_focus());
+        assert_ne!(FocusRequester::new(), requester);
     }
 }

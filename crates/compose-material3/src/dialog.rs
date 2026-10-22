@@ -283,7 +283,7 @@ pub fn DropdownMenu(
             PopupProperties { focusable: true, ..PopupProperties::default() },
             compose_runtime::callback(move || {
                 let (modifier, content, column, scroll) =
-                    (modifier.clone(), content.clone(), column.clone(), scroll.clone());
+                    (modifier.clone(), content.clone(), column.clone(), scroll);
                 Surface(
                     Modifier,
                     MaterialTheme::shapes().extra_small,
@@ -301,7 +301,7 @@ pub fn DropdownMenu(
                             modifier
                                 .clone()
                                 .padding_horizontal_vertical(0.dp(), 8.dp())
-                                .vertical_scroll(scroll.clone()),
+                                .vertical_scroll(scroll),
                             column.clone(),
                             compose_runtime::callback(move || content(ColumnScope::__new())),
                         );

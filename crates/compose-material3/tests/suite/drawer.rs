@@ -6,9 +6,9 @@ use std::time::Duration;
 
 use compose_foundation::layout::*;
 use compose_material3::*;
-use compose_runtime::{composable, remember_coroutine_scope};
+use compose_runtime::{MutableState, composable, mutable_state_of, remember_coroutine_scope};
 use compose_test::*;
-use compose_ui::{IntSize, Modifier, Offset, PointerEvent};
+use compose_ui::{BackHandler, IntSize, Modifier, Offset, PointerEvent};
 
 #[composable]
 fn App(state: DrawerState) {
@@ -26,13 +26,11 @@ fn App(state: DrawerState) {
                     NavigationDrawerItem!({ Text!("Outbox") }, false, || {});
                 });
             },
-            drawer_state = state.clone(),
+            drawer_state = state,
             {
                 Box!(modifier = Modifier.fill_max_size(), {
-                    let (state, scope) = (state.clone(), scope.clone());
                     Button!(
                         move || {
-                            let state = state.clone();
                             scope.launch(async move { state.open().await });
                         },
                         modifier = Modifier.test_tag("open"),
@@ -51,8 +49,8 @@ fn sheet_left(ui: &mut ComposeTestRule) -> f32 {
 #[test]
 fn the_drawer_slides_in_and_the_scrim_closes_it() {
     let state = DrawerState::new(DrawerValue::Closed);
-    let given = state.clone();
-    let mut ui = ComposeTestRule::sized(IntSize::new(800, 600), move || App(given.clone()));
+    let given = *state;
+    let mut ui = ComposeTestRule::sized(IntSize::new(800, 600), move || App(given));
     ui.set_auto_advance(false);
     ui.on_node_with_tag("sheet").assert_does_not_exist();
     ui.on_node_with_tag("open").perform_click();
@@ -76,8 +74,8 @@ fn the_drawer_slides_in_and_the_scrim_closes_it() {
 #[test]
 fn dragging_the_sheet_to_the_start_closes_it() {
     let state = DrawerState::new(DrawerValue::Open);
-    let given = state.clone();
-    let mut ui = ComposeTestRule::sized(IntSize::new(800, 600), move || App(given.clone()));
+    let given = *state;
+    let mut ui = ComposeTestRule::sized(IntSize::new(800, 600), move || App(given));
     ui.set_auto_advance(false);
     assert_eq!(sheet_left(&mut ui), 0.0);
     let start = Offset::new(300.0, 500.0);
@@ -90,5 +88,64 @@ fn dragging_the_sheet_to_the_start_closes_it() {
     assert!(dragged < -150.0, "{dragged}");
     ui.host().send_pointer(PointerEvent::release(Offset::new(100.0, 500.0)));
     ui.advance_time_by(Duration::from_millis(400));
+    assert!(state.is_closed());
+}
+
+#[test]
+fn back_closes_an_open_drawer_and_passes_through_a_closed_one() {
+    let state = DrawerState::new(DrawerValue::Closed);
+    let given = *state;
+    let mut ui = ComposeTestRule::sized(IntSize::new(800, 600), move || App(given));
+    ui.set_auto_advance(false);
+    // Closed: back isn't taken (Android leaves the app).
+    assert!(!ui.host().has_enabled_back_handlers());
+    assert!(!ui.host().on_back_pressed());
+    ui.on_node_with_tag("open").perform_click();
+    ui.advance_time_by(Duration::from_millis(400));
+    assert!(state.is_open());
+    assert!(ui.host().has_enabled_back_handlers());
+    assert!(ui.host().on_back_pressed());
+    ui.advance_time_by(Duration::from_millis(400));
+    assert!(state.is_closed());
+    ui.on_node_with_tag("sheet").assert_does_not_exist();
+    assert!(!ui.host().has_enabled_back_handlers());
+}
+
+#[composable]
+fn AppWithBackHandler(state: DrawerState, log: MutableState<u32>) {
+    MaterialTheme!({
+        ModalNavigationDrawer!(
+            {
+                ModalDrawerSheet!(modifier = Modifier.test_tag("sheet"), {
+                    Text!("Inbox");
+                });
+            },
+            drawer_state = state,
+            {
+                BackHandler!(on_back = move || log.update(|count| count + 1));
+                Box!(modifier = Modifier.fill_max_size());
+            }
+        );
+    });
+}
+
+/// The content's own handler gets back while the drawer is closed; the open drawer's goes
+/// first, as Compose's drawer sheet's handler (composed after the content).
+#[test]
+fn an_open_drawer_takes_back_before_the_content() {
+    let state = DrawerState::new(DrawerValue::Closed);
+    let owner = mutable_state_of(0u32);
+    let log = owner.handle();
+    let given = *state;
+    let mut ui =
+        ComposeTestRule::sized(IntSize::new(800, 600), move || AppWithBackHandler(given, log));
+    ui.set_auto_advance(false);
+    assert!(ui.host().on_back_pressed());
+    assert_eq!(log.get(), 1);
+    state.snap_to(DrawerValue::Open);
+    ui.advance_time_by(Duration::from_millis(16));
+    assert!(ui.host().on_back_pressed());
+    ui.advance_time_by(Duration::from_millis(400));
+    assert_eq!(log.get(), 1, "the content got back while the drawer was open");
     assert!(state.is_closed());
 }

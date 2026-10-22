@@ -27,16 +27,15 @@ use compose_ui::{IntSize, Key, UnitExt};
 #[test]
 fn tab_into_a_scrolled_list_focuses_its_first_row_in_view() {
     let state = LazyListState::new(50, 0);
-    let given = state.clone();
+    let given = *state;
     let mut ui = ComposeTestRule::sized(IntSize::new(200, 300), move || {
-        let given = given.clone();
         Column!({
             Box!(
                 modifier = Modifier.size_wh(100.dp(), 20.dp()).clickable(|| {}).test_tag("before")
             );
             LazyColumn!(
                 modifier = Modifier.size_wh(100.dp(), 100.dp()),
-                state = given.clone(),
+                state = given,
                 |scope: LazyListScope| {
                     scope.items(1000, |index| {
                         Box!(

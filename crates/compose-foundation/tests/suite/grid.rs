@@ -60,17 +60,13 @@ fn a_fixed_grid_fills_its_rows_with_equal_cells() {
 #[test]
 fn an_adaptive_grid_fits_as_many_columns_as_it_can_and_composes_lazily() {
     let state = LazyGridState::new(0, 0);
-    let given = state.clone();
+    let given = *state;
     let mut ui = ComposeTestRule::sized(IntSize::new(350, 200), move || {
-        LazyVerticalGrid!(
-            GridCells::Adaptive(100.dp()),
-            state = given.clone(),
-            |scope: LazyGridScope| {
-                scope.items(300, |index| {
-                    Box!(modifier = Modifier.height(100.dp()).test_tag(format!("{index}")));
-                });
-            }
-        );
+        LazyVerticalGrid!(GridCells::Adaptive(100.dp()), state = given, |scope: LazyGridScope| {
+            scope.items(300, |index| {
+                Box!(modifier = Modifier.height(100.dp()).test_tag(format!("{index}")));
+            });
+        });
     });
     // Three columns of 116 or 117.
     assert_eq!(bounds(&mut ui, "2").left, 234.0);

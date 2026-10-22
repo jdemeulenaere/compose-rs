@@ -17,13 +17,11 @@ thread_local! {
 
 fn screen(host: SnackbarHostState, scope: Rc<RefCell<Option<CoroutineScope>>>) -> impl Fn() {
     move || {
-        let host = host.clone();
         let coroutines = remember_coroutine_scope();
-        *scope.borrow_mut() = Some(coroutines.clone());
+        *scope.borrow_mut() = Some(coroutines);
         MaterialTheme!({
-            let host = host.clone();
             Scaffold!(
-                snackbar_host = move || SnackbarHost!(host.clone()),
+                snackbar_host = move || SnackbarHost!(host),
                 floating_action_button = || {
                     FloatingActionButton!(|| {}, modifier = Modifier.test_tag("fab"), {});
                 },
@@ -39,7 +37,7 @@ fn show(
     message: &str,
     action: Option<&str>,
 ) {
-    let (host, message, action) = (host.clone(), message.to_string(), action.map(str::to_string));
+    let (host, message, action) = (*host, message.to_string(), action.map(str::to_string));
     scope.borrow().as_ref().unwrap().launch(async move {
         let result = host.show_snackbar(message, action, false, SnackbarDuration::Short).await;
         RESULTS.with(|results| results.borrow_mut().push(result));
@@ -51,7 +49,7 @@ fn snackbars_show_one_at_a_time_for_their_duration() {
     RESULTS.with(|results| results.borrow_mut().clear());
     let host = SnackbarHostState::new();
     let scope = Rc::new(RefCell::new(None));
-    let mut ui = ComposeTestRule::with_manual_clock(screen(host.clone(), scope.clone()));
+    let mut ui = ComposeTestRule::with_manual_clock(screen(*host, scope.clone()));
     show(&scope, &host, "First", None);
     show(&scope, &host, "Second", Some("Undo"));
     ui.advance_time_by(Duration::from_millis(500));
@@ -81,9 +79,9 @@ fn cancelling_show_snackbar_takes_it_away_and_lets_the_next_show() {
     RESULTS.with(|results| results.borrow_mut().clear());
     let host = SnackbarHostState::new();
     let scope = Rc::new(RefCell::new(None));
-    let mut ui = ComposeTestRule::with_manual_clock(screen(host.clone(), scope.clone()));
+    let mut ui = ComposeTestRule::with_manual_clock(screen(*host, scope.clone()));
     let job = {
-        let host = host.clone();
+        let host = *host;
         scope.borrow().as_ref().unwrap().launch(async move {
             host.show_snackbar("Cancelled", None, false, SnackbarDuration::Indefinite).await;
         })

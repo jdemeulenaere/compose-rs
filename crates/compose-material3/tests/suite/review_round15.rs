@@ -29,7 +29,7 @@ fn Drawer(state: DrawerState, gestures_enabled: bool) {
     MaterialTheme!({
         ModalNavigationDrawer!(
             { Sheet() },
-            drawer_state = state.clone(),
+            drawer_state = state,
             gestures_enabled = gestures_enabled,
             {
                 Box!(modifier = Modifier.fill_max_size().test_tag("content"));
@@ -43,12 +43,10 @@ fn Drawer(state: DrawerState, gestures_enabled: bool) {
 fn Opener(state: DrawerState) {
     let scope = remember_coroutine_scope();
     MaterialTheme!({
-        ModalNavigationDrawer!({ Sheet() }, drawer_state = state.clone(), {
+        ModalNavigationDrawer!({ Sheet() }, drawer_state = state, {
             Box!(modifier = Modifier.fill_max_size(), {
-                let (state, scope) = (state.clone(), scope.clone());
                 Button!(
                     move || {
-                        let state = state.clone();
                         scope.launch(async move { state.open().await });
                     },
                     modifier = Modifier.test_tag("open"),
@@ -81,9 +79,8 @@ fn click(ui: &mut ComposeTestRule, at: Offset) {
 #[test]
 fn dragging_the_content_opens_a_closed_drawer() {
     let state = DrawerState::new(DrawerValue::Closed);
-    let given = state.clone();
-    let mut ui =
-        ComposeTestRule::sized(IntSize::new(800, 600), move || Drawer(given.clone(), true));
+    let given = *state;
+    let mut ui = ComposeTestRule::sized(IntSize::new(800, 600), move || Drawer(given, true));
     ui.set_auto_advance(false);
     ui.host().send_pointer(PointerEvent::press(Offset::new(20.0, 300.0)));
     for x in [60.0, 140.0, 260.0, 420.0] {
@@ -108,9 +105,8 @@ fn dragging_the_content_opens_a_closed_drawer() {
 #[test]
 fn a_fast_fling_towards_the_start_closes_the_drawer() {
     let state = DrawerState::new(DrawerValue::Open);
-    let given = state.clone();
-    let mut ui =
-        ComposeTestRule::sized(IntSize::new(800, 600), move || Drawer(given.clone(), true));
+    let given = *state;
+    let mut ui = ComposeTestRule::sized(IntSize::new(800, 600), move || Drawer(given, true));
     ui.set_auto_advance(false);
     ui.host().send_pointer(PointerEvent::press(Offset::new(300.0, 500.0)));
     for x in [280.0, 260.0, 240.0] {
@@ -132,9 +128,8 @@ fn a_fast_fling_towards_the_start_closes_the_drawer() {
 #[test]
 fn the_scrim_does_not_close_the_drawer_when_gestures_are_disabled() {
     let state = DrawerState::new(DrawerValue::Open);
-    let given = state.clone();
-    let mut ui =
-        ComposeTestRule::sized(IntSize::new(800, 600), move || Drawer(given.clone(), false));
+    let given = *state;
+    let mut ui = ComposeTestRule::sized(IntSize::new(800, 600), move || Drawer(given, false));
     ui.set_auto_advance(false);
     click(&mut ui, Offset::new(600.0, 300.0));
     ui.advance_time_by(Duration::from_millis(500));
@@ -155,8 +150,8 @@ fn the_scrim_does_not_close_the_drawer_when_gestures_are_disabled() {
 #[test]
 fn the_current_value_stays_closed_while_the_drawer_opens() {
     let state = DrawerState::new(DrawerValue::Closed);
-    let given = state.clone();
-    let mut ui = ComposeTestRule::sized(IntSize::new(800, 600), move || Opener(given.clone()));
+    let given = *state;
+    let mut ui = ComposeTestRule::sized(IntSize::new(800, 600), move || Opener(given));
     ui.set_auto_advance(false);
     ui.on_node_with_tag("open").perform_click();
     ui.advance_time_by(Duration::from_millis(64));
@@ -169,7 +164,7 @@ fn the_current_value_stays_closed_while_the_drawer_opens() {
 #[composable]
 fn TwoRoots(state: DrawerState) {
     MaterialTheme!({
-        ModalNavigationDrawer!({ Sheet() }, drawer_state = state.clone(), {
+        ModalNavigationDrawer!({ Sheet() }, drawer_state = state, {
             Box!(modifier = Modifier.fill_max_size());
             Box!(modifier = Modifier.size(20.dp()).test_tag("badge"));
         });
@@ -188,8 +183,8 @@ fn TwoRoots(state: DrawerState) {
 #[test]
 fn content_with_two_root_nodes_still_shows_the_sheet() {
     let state = DrawerState::new(DrawerValue::Open);
-    let given = state.clone();
-    let mut ui = ComposeTestRule::sized(IntSize::new(800, 600), move || TwoRoots(given.clone()));
+    let given = *state;
+    let mut ui = ComposeTestRule::sized(IntSize::new(800, 600), move || TwoRoots(given));
     ui.wait_for_idle();
     let sheet = sheet_bounds(&mut ui);
     assert_eq!((sheet.left, sheet.width(), sheet.height()), (0.0, 360.0, 600.0));
@@ -199,7 +194,7 @@ fn content_with_two_root_nodes_still_shows_the_sheet() {
 fn InColumn(state: DrawerState) {
     MaterialTheme!({
         Column!({
-            ModalNavigationDrawer!({ Sheet() }, drawer_state = state.clone(), {
+            ModalNavigationDrawer!({ Sheet() }, drawer_state = state, {
                 Text!("Hello");
             });
         });
@@ -216,8 +211,8 @@ fn InColumn(state: DrawerState) {
 #[test]
 fn the_drawer_fills_the_space_whatever_its_content() {
     let state = DrawerState::new(DrawerValue::Open);
-    let given = state.clone();
-    let mut ui = ComposeTestRule::sized(IntSize::new(800, 600), move || InColumn(given.clone()));
+    let given = *state;
+    let mut ui = ComposeTestRule::sized(IntSize::new(800, 600), move || InColumn(given));
     ui.wait_for_idle();
     let sheet = sheet_bounds(&mut ui);
     assert_eq!((sheet.width(), sheet.height()), (360.0, 600.0));
@@ -236,9 +231,8 @@ fn the_drawer_fills_the_space_whatever_its_content() {
 #[test]
 fn right_to_left_the_sheets_rounded_corners_face_the_content() {
     let state = DrawerState::new(DrawerValue::Open);
-    let given = state.clone();
-    let mut ui =
-        ComposeTestRule::sized(IntSize::new(800, 600), move || Drawer(given.clone(), true));
+    let given = *state;
+    let mut ui = ComposeTestRule::sized(IntSize::new(800, 600), move || Drawer(given, true));
     ui.host().set_layout_direction(LayoutDirection::Rtl);
     ui.wait_for_idle();
     assert_eq!(sheet_bounds(&mut ui).left, 440.0);
@@ -301,7 +295,7 @@ fn Clicked(state: DrawerState, clicks: compose_runtime::MutableState<u32>) {
                     );
                 });
             },
-            drawer_state = state.clone(),
+            drawer_state = state,
             {
                 Box!(modifier = Modifier.fill_max_size());
             }
@@ -324,9 +318,8 @@ fn Clicked(state: DrawerState, clicks: compose_runtime::MutableState<u32>) {
 fn swiping_the_drawer_closed_from_an_item_does_not_click_it() {
     let state = DrawerState::new(DrawerValue::Open);
     let clicks = compose_runtime::mutable_state_of(0u32);
-    let (given, counted) = (state.clone(), *clicks);
-    let mut ui =
-        ComposeTestRule::sized(IntSize::new(800, 600), move || Clicked(given.clone(), counted));
+    let (given, counted) = (*state, *clicks);
+    let mut ui = ComposeTestRule::sized(IntSize::new(800, 600), move || Clicked(given, counted));
     ui.set_auto_advance(false);
     ui.host().send_pointer(PointerEvent::press(Offset::new(200.0, 28.0)));
     for x in [180.0, 120.0, 60.0, 0.0] {
@@ -352,9 +345,8 @@ fn swiping_the_drawer_closed_from_an_item_does_not_click_it() {
 fn tab_never_focuses_the_scrim() {
     let state = DrawerState::new(DrawerValue::Open);
     let clicks = compose_runtime::mutable_state_of(0u32);
-    let (given, counted) = (state.clone(), *clicks);
-    let mut ui =
-        ComposeTestRule::sized(IntSize::new(800, 600), move || Clicked(given.clone(), counted));
+    let (given, counted) = (*state, *clicks);
+    let mut ui = ComposeTestRule::sized(IntSize::new(800, 600), move || Clicked(given, counted));
     ui.wait_for_idle();
     for _ in 0..2 {
         ui.press_key(compose_ui::Key::Tab);

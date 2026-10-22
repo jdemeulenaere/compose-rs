@@ -26,6 +26,8 @@ pub fn mutable_state_of_with<T: 'static>(value: T, policy: impl MutationPolicy<T
 pub fn mutable_state_list_of<T: 'static>() -> OwnedState<Vec<T>>;   // Compose's mutableStateListOf(): edits always invalidate
 ```
 
+State holders (`DrawerState`, `LazyListState`, `CoroutineScope`, …) are `Copy` handles into the same arena ([State holders](#state-holders)).
+
 - **Cells live in a per-thread generational arena.** A handle is an index plus a generation, and a handle of a freed cell is detected, never dereferenced. A cell is an `Rc` in the arena: an access clones it out and releases the runtime before touching the value, so a cell freed during a `with` stays alive until the `with` returns.
 - **`OwnedState<T>` derefs to its `MutableState<T>`**, so `todo.done.get()` works on the owner directly, and `todo.done.handle()` gives the `Copy` handle a closure captures.
 - **`remember(|| mutable_state_of(0))` returns the handle**, and the slot keeps the owner ([04](04-runtime.md)). This is the common case, and it reads like Kotlin.
@@ -80,6 +82,31 @@ A handle can outlive its cell: a handler captures `done`, then the `Todo` is rem
 | **R3** where captures may go | Not enforceable at compile time in Rust, since closures can go anywhere `'static`. The fallback is `try_get`/`try_set` for code that keeps handles outside the UI tree, and a panic naming the cell's creation site otherwise. Capturing an `Rc<Todo>` instead of a handle keeps the data alive, so it can never be stale. That's the recommended pattern for long-lived callbacks. |
 
 **Reference cycles.** A closure that captures an `Rc<Todo>` and is stored inside that same `Todo`'s state would leak. That's the usual `Rc` caveat. Handles never form cycles, because they're plain indices.
+
+## State holders
+
+Compose's state holder classes (`DrawerState`, `SheetState`, `SnackbarHostState`, `TopAppBarState`, `SwipeToDismissBoxState`, `LazyListState`, `LazyGridState`, `ScrollState`, `CoroutineScope`) are `Copy` handles too, as `MutableState` is (D240), so closures and async blocks capture them without `.clone()`:
+
+```rust
+/// A Copy handle to an object in the same arena as state cells (not observable itself).
+pub struct ObjectHandle<T: 'static> { … }       // get() -> Rc<T>; try_get(); is_alive()
+
+/// Owns an object, as OwnedState owns a cell, and derefs to its handle H.
+pub struct Owned<H: Copy + 'static> { … }
+impl<H: Copy> Owned<H> {
+    pub fn new<T: 'static>(object: T, handle: impl FnOnce(ObjectHandle<T>) -> H) -> Owned<H>;
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct DrawerState { object: ObjectHandle<DrawerInner> }
+impl DrawerState { pub fn new(initial_value: DrawerValue) -> Owned<DrawerState>; … }
+```
+
+- **`remember(|| DrawerState::new(…))` returns the handle**, and the slot keeps the `Owned` (`Remember for Owned<H>`), as for `OwnedState`; `remember_drawer_state` and the other `remember_*` functions do that. `remember_saveable_with` takes a saver of `Owned<H>` (`LazyListState::saver()`).
+- **The rules are a state's.** Forgotten, the object is retired and freed at the end of the next pass (R2); a handle used after that panics naming the object's type and where it was made (R3). A holder's async methods (`open`, `show_snackbar`) take the object's `Rc` when they start, so a running animation ends even if the owner went meanwhile.
+- **Outside a composition** (tests, an app's model), `DrawerState::new` returns the owner, which derefs to the handle: keep it, and copy the handle out (`*state`) for closures. `CoroutineScope::new().launch(…)` drops its owner at once, which doesn't cancel the task.
+- **A holder of states only** (`ScrollState`) keeps its states' handles in the handle itself, so reading it costs a state read; others look their object up in the arena (an index, a generation check, an `Rc` clone: a few nanoseconds).
+- **`FocusRequester`** owns nothing: it's a `Copy` id, and the nodes it's attached to are kept by a registry while attached (D240).
 
 ## Derived state
 

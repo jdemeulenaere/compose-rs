@@ -121,12 +121,7 @@ pub fn GalleryWith(about: bool) {
                             vertical_arrangement = Arrangement::spaced_by(12.dp()),
                             |column| {
                                 Controls(cards);
-                                Cards(
-                                    cards.get(),
-                                    query.get(),
-                                    list.clone(),
-                                    Modifier.weight(column, 1.0),
-                                );
+                                Cards(cards.get(), query.get(), list, Modifier.weight(column, 1.0));
                             }
                         );
                     }

@@ -334,14 +334,13 @@ fn a_content_layer_around_a_nested_lifted_layer() {
 fn a_scrolled_lazy_list_keeps_its_records_sound() {
     use compose_foundation::LazyListState;
     let state = LazyListState::new(0, 0);
-    let given = state.clone();
+    let given = *state;
     let tick = mutable_state_of(0u32);
     let tick_handle = tick.handle();
     let mut checked = Checked::new(move || {
-        let tick_handle = tick_handle;
         compose_foundation::LazyColumn(
             Modifier.size_wh(100.dp(), 100.dp()),
-            given.clone(),
+            given,
             compose_foundation::layout::PaddingValues::ZERO,
             false,
             compose_foundation::layout::Arrangement::TOP,

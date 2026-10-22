@@ -57,14 +57,8 @@ fn Screen(kind: u8, small: bool, content: u8) {
             },
             |padding: PaddingValues| {
                 let modifier = match content {
-                    0 => Modifier
-                        .padding_values(padding)
-                        .fill_max_size()
-                        .vertical_scroll(scroll.clone()),
-                    1 => Modifier
-                        .fill_max_size()
-                        .vertical_scroll(scroll.clone())
-                        .padding_values(padding),
+                    0 => Modifier.padding_values(padding).fill_max_size().vertical_scroll(scroll),
+                    1 => Modifier.fill_max_size().vertical_scroll(scroll).padding_values(padding),
                     _ => Modifier.padding_values(padding).fill_max_size(),
                 };
                 Column!(modifier = modifier, {
@@ -237,7 +231,7 @@ fn SheetApp(state: SheetState, shown: MutableState<bool>, content_height: f32) {
     MaterialTheme!({
         Box!(modifier = Modifier.fill_max_size(), {
             if shown.get() {
-                ModalBottomSheet!(move || shown.set(false), sheet_state = state.clone(), {
+                ModalBottomSheet!(move || shown.set(false), sheet_state = state, {
                     Box!(
                         modifier = Modifier
                             .fill_max_width()
@@ -257,7 +251,7 @@ fn sheet(
     let owner = mutable_state_of(true);
     let shown = owner.handle();
     let mut ui = ComposeTestRule::sized(IntSize::new(400, 600), move || {
-        SheetApp(state.clone(), shown, content_height)
+        SheetApp(state, shown, content_height)
     });
     ui.set_auto_advance(false);
     ui.advance_time_by(Duration::from_millis(600));
@@ -275,7 +269,7 @@ fn sheet(
 fn the_scrim_asks_confirm_value_change_before_hiding_the_sheet() {
     let state =
         SheetState::new(true, SheetValue::Hidden, |value| value != SheetValue::Hidden, false);
-    let (mut ui, shown, _owner) = sheet(state.clone(), 200.0);
+    let (mut ui, shown, _owner) = sheet(*state, 200.0);
     assert_eq!(state.current_value(), SheetValue::Expanded);
     ui.host().send_pointer(PointerEvent::press(Offset::new(200.0, 100.0)));
     ui.host().send_pointer(PointerEvent::release(Offset::new(200.0, 100.0)));
@@ -293,10 +287,10 @@ fn the_scrim_asks_confirm_value_change_before_hiding_the_sheet() {
 #[test]
 fn back_on_an_expanded_sheet_takes_it_half_way_first() {
     let state = SheetState::new(false, SheetValue::Hidden, |_| true, false);
-    let (mut ui, shown, _owner) = sheet(state.clone(), 500.0);
+    let (mut ui, shown, _owner) = sheet(*state, 500.0);
     assert_eq!(state.current_value(), SheetValue::PartiallyExpanded);
     let scope = CoroutineScope::new();
-    let expanding = state.clone();
+    let expanding = *state;
     scope.launch(async move { expanding.expand().await });
     ui.advance_time_by(Duration::from_millis(600));
     assert_eq!(state.current_value(), SheetValue::Expanded);
@@ -312,7 +306,7 @@ fn back_on_an_expanded_sheet_takes_it_half_way_first() {
 fn SwipeApp(state: SwipeToDismissBoxState) {
     MaterialTheme!({
         SwipeToDismissBox!(
-            state.clone(),
+            state,
             |_| {
                 Box!(modifier = Modifier.fill_max_size());
             },
@@ -343,8 +337,8 @@ fn swipe(ui: &mut ComposeTestRule, y: f32, xs: &[f32]) {
 #[test]
 fn a_dismissed_item_cant_be_dragged_back() {
     let state = SwipeToDismissBoxState::new(SwipeToDismissBoxValue::Settled, |_| true, |_| 56.0);
-    let given = state.clone();
-    let mut ui = ComposeTestRule::sized(IntSize::new(400, 600), move || SwipeApp(given.clone()));
+    let given = *state;
+    let mut ui = ComposeTestRule::sized(IntSize::new(400, 600), move || SwipeApp(given));
     ui.set_auto_advance(false);
     let item = bounds(&mut ui, "item");
     let y = (item.top + item.bottom) / 2.0;
@@ -372,8 +366,8 @@ fn a_dismissed_item_cant_be_dragged_back() {
 #[test]
 fn the_dismiss_direction_is_logical_right_to_left() {
     let state = SwipeToDismissBoxState::new(SwipeToDismissBoxValue::Settled, |_| true, |_| 56.0);
-    let given = state.clone();
-    let mut ui = ComposeTestRule::sized(IntSize::new(400, 600), move || SwipeApp(given.clone()));
+    let given = *state;
+    let mut ui = ComposeTestRule::sized(IntSize::new(400, 600), move || SwipeApp(given));
     ui.host().set_layout_direction(LayoutDirection::Rtl);
     ui.set_auto_advance(false);
     ui.advance_time_by(Duration::from_millis(100));

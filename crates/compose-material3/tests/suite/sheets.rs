@@ -22,7 +22,7 @@ fn SheetApp(state: SheetState, shown: MutableState<bool>, content_height: f32) {
     MaterialTheme!({
         Box!(modifier = Modifier.fill_max_size(), {
             if shown.get() {
-                ModalBottomSheet!(move || shown.set(false), sheet_state = state.clone(), {
+                ModalBottomSheet!(move || shown.set(false), sheet_state = state, {
                     Box!(
                         modifier = Modifier
                             .fill_max_width()
@@ -38,13 +38,13 @@ fn SheetApp(state: SheetState, shown: MutableState<bool>, content_height: f32) {
 /// A 400 by 600 window showing a sheet of `content_height` dp (and its 48 dp drag handle).
 fn sheet(
     content_height: f32,
-) -> (ComposeTestRule, SheetState, MutableState<bool>, Rc<dyn std::any::Any>) {
+) -> (ComposeTestRule, Owned<SheetState>, MutableState<bool>, Rc<dyn std::any::Any>) {
     let state = SheetState::new(false, SheetValue::Hidden, |_| true, false);
     let owner = mutable_state_of(true);
     let shown = owner.handle();
-    let given = state.clone();
+    let given = *state;
     let mut ui = ComposeTestRule::sized(IntSize::new(400, 600), move || {
-        SheetApp(given.clone(), shown, content_height)
+        SheetApp(given, shown, content_height)
     });
     ui.set_auto_advance(false);
     ui.advance_time_by(Duration::from_millis(600));
@@ -64,7 +64,7 @@ fn a_short_sheet_shows_expanded_and_a_tall_one_half_way() {
     assert_eq!(state.current_value(), SheetValue::PartiallyExpanded);
     assert_eq!(bounds(&mut ui, "content").top, 300.0 + 48.0);
     let scope = CoroutineScope::new();
-    let expanding = state.clone();
+    let expanding = *state;
     scope.launch(async move { expanding.expand().await });
     ui.advance_time_by(Duration::from_millis(600));
     assert_eq!(state.current_value(), SheetValue::Expanded);
@@ -76,10 +76,9 @@ fn the_sheet_slides_up_as_it_shows() {
     let state = SheetState::new(true, SheetValue::Hidden, |_| true, false);
     let owner = mutable_state_of(false);
     let shown = owner.handle();
-    let given = state.clone();
-    let mut ui = ComposeTestRule::sized(IntSize::new(400, 600), move || {
-        SheetApp(given.clone(), shown, 200.0)
-    });
+    let given = *state;
+    let mut ui =
+        ComposeTestRule::sized(IntSize::new(400, 600), move || SheetApp(given, shown, 200.0));
     ui.set_auto_advance(false);
     shown.set(true);
     ui.advance_time_by(Duration::from_millis(100));
@@ -132,11 +131,33 @@ fn the_scrim_and_escape_dismiss_the_sheet() {
     assert!(!shown.get());
 }
 
+/// Android's back (not only Escape) takes an expanded sheet half way, then hides it and
+/// dismisses it; while the sheet shows, back never leaves the app.
+#[test]
+fn back_partially_expands_then_dismisses_the_sheet() {
+    let (mut ui, state, shown, _owner) = sheet(500.0);
+    assert_eq!(state.current_value(), SheetValue::PartiallyExpanded);
+    let scope = CoroutineScope::new();
+    let expanding = *state;
+    scope.launch(async move { expanding.expand().await });
+    ui.advance_time_by(Duration::from_millis(600));
+    assert_eq!(state.current_value(), SheetValue::Expanded);
+    assert!(ui.host().has_enabled_back_handlers());
+    assert!(ui.host().on_back_pressed());
+    ui.advance_time_by(Duration::from_millis(600));
+    assert_eq!(state.current_value(), SheetValue::PartiallyExpanded);
+    assert!(shown.get());
+    assert!(ui.host().on_back_pressed());
+    ui.advance_time_by(Duration::from_millis(600));
+    assert!(!shown.get());
+    assert!(!ui.host().has_enabled_back_handlers());
+}
+
 #[composable]
 fn SwipeApp(state: SwipeToDismissBoxState) {
     MaterialTheme!({
         SwipeToDismissBox!(
-            state.clone(),
+            state,
             |_| {
                 Box!(modifier = Modifier.fill_max_size().test_tag("background"));
             },
@@ -160,8 +181,8 @@ fn a_swipe_past_the_threshold_dismisses_and_a_short_one_settles_back() {
         },
         |_| 56.0,
     );
-    let given = state.clone();
-    let mut ui = ComposeTestRule::sized(IntSize::new(400, 600), move || SwipeApp(given.clone()));
+    let given = *state;
+    let mut ui = ComposeTestRule::sized(IntSize::new(400, 600), move || SwipeApp(given));
     ui.set_auto_advance(false);
     let item = bounds(&mut ui, "item");
     assert_eq!(item.left, 0.0);
@@ -201,7 +222,7 @@ fn a_swipe_past_the_threshold_dismisses_and_a_short_one_settles_back() {
     assert!(ASKED.with(Cell::get) >= 2);
     // Reset brings it back.
     let scope = CoroutineScope::new();
-    let resetting = state.clone();
+    let resetting = *state;
     scope.launch(async move { resetting.reset().await });
     ui.advance_time_by(Duration::from_secs(1));
     assert_eq!(bounds(&mut ui, "item").left, 0.0);
@@ -210,7 +231,7 @@ fn a_swipe_past_the_threshold_dismisses_and_a_short_one_settles_back() {
 #[composable]
 fn ScrollingSheetApp(state: SheetState) {
     MaterialTheme!({
-        ModalBottomSheet!(|| {}, sheet_state = state.clone(), {
+        ModalBottomSheet!(|| {}, sheet_state = state, {
             Column!(
                 modifier = Modifier.fill_max_width().vertical_scroll(remember_scroll_state()),
                 {
@@ -227,9 +248,8 @@ fn ScrollingSheetApp(state: SheetState) {
 #[test]
 fn the_contents_scrolls_drag_the_sheet_first() {
     let state = SheetState::new(false, SheetValue::Hidden, |_| true, false);
-    let given = state.clone();
-    let mut ui =
-        ComposeTestRule::sized(IntSize::new(400, 600), move || ScrollingSheetApp(given.clone()));
+    let given = *state;
+    let mut ui = ComposeTestRule::sized(IntSize::new(400, 600), move || ScrollingSheetApp(given));
     ui.set_auto_advance(false);
     ui.advance_time_by(Duration::from_millis(600));
     assert_eq!(state.current_value(), SheetValue::PartiallyExpanded);

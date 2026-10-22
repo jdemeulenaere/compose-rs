@@ -68,9 +68,9 @@ pub use saveable::{
 };
 pub use scope::RecomposeScope;
 pub use state::{
-    MutableState, MutationPolicy, NeverEqualPolicy, OwnedState, State, StructuralEqualityPolicy,
-    live_state_count, mutable_state_list_from, mutable_state_list_of, mutable_state_of,
-    mutable_state_of_with, never_equal_policy, structural_equality_policy,
+    MutableState, MutationPolicy, NeverEqualPolicy, ObjectHandle, Owned, OwnedState, State,
+    StructuralEqualityPolicy, live_state_count, mutable_state_list_from, mutable_state_list_of,
+    mutable_state_of, mutable_state_of_with, never_equal_policy, structural_equality_policy,
 };
 
 /// The number of composable bodies run on this thread so far (restart groups that didn't skip).

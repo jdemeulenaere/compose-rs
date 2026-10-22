@@ -36,13 +36,13 @@ fn a_scrollbar_in_its_own_layer_follows_the_content_in_the_frame_laying_it_out()
     fn scene(count: MutableState<usize>) {
         let state = remember(|| ScrollState::new(0));
         Row!(modifier = Modifier.fill_max_size(), |row: RowScope| {
-            let scrolled = state.clone();
+            let scrolled = state;
             Column!(modifier = Modifier.weight(row, 1.0).vertical_scroll(scrolled), {
                 for _ in 0..count.get() {
                     Box!(modifier = Modifier.size(50.dp()));
                 }
             });
-            let adapter = remember_scrollbar_adapter(state.clone());
+            let adapter = remember_scrollbar_adapter(state);
             VerticalScrollbar!(adapter, modifier = Modifier.repaint_boundary().fill_max_height());
         });
     }
@@ -64,14 +64,12 @@ fn a_scrollbar_in_its_own_layer_follows_the_content_in_the_frame_laying_it_out()
 #[test]
 fn lazy_items_drawing_the_scroll_draw_it_in_the_frame_laying_it_out() {
     fn scene(state: LazyListState) {
-        let list = state.clone();
+        let list = state;
         LazyColumn!(
             modifier = Modifier.size_wh(100.dp(), 100.dp()),
             state = state,
             |scope: LazyListScope| {
-                let list = list.clone();
                 scope.items(50, move |_| {
-                    let list = list.clone();
                     Box!(
                         modifier = Modifier
                             .draw_behind(move |scope| {
@@ -88,15 +86,14 @@ fn lazy_items_drawing_the_scroll_draw_it_in_the_frame_laying_it_out() {
         );
     }
     let state = LazyListState::new(0, 0);
-    let given = state.clone();
-    let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || scene(given.clone()));
+    let given = *state;
+    let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || scene(given));
     assert!(state.scroll_by(13.0));
     ui.host().frame();
     assert_eq!(state.first_visible_item_scroll_offset(), 13);
     let incremental = dump(&ui.host().display_list());
     let fresh_state = LazyListState::new(0, 13);
-    let mut fresh =
-        ComposeTestRule::sized(IntSize::new(200, 200), move || scene(fresh_state.clone()));
+    let mut fresh = ComposeTestRule::sized(IntSize::new(200, 200), move || scene(*fresh_state));
     assert_eq!(incremental, dump(&fresh.host().display_list()), "items drawn at offset 0");
 }
 

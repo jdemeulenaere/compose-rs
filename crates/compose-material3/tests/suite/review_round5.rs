@@ -24,15 +24,13 @@ thread_local! {
 
 fn screen(host: SnackbarHostState, scope: Rc<RefCell<Option<CoroutineScope>>>) -> impl Fn() {
     move || {
-        let host = host.clone();
         let coroutines = remember_coroutine_scope();
-        *scope.borrow_mut() = Some(coroutines.clone());
+        *scope.borrow_mut() = Some(coroutines);
         MaterialTheme!({
             SCHEME.with(|cell| cell.set(Some(MaterialTheme::color_scheme())));
-            let host = host.clone();
             Scaffold!(
                 snackbar_host = move || SnackbarHost!(
-                    host.clone(),
+                    host,
                     snackbar = Some(|data: SnackbarData| {
                         Snackbar!(data, modifier = Modifier.test_tag("bar"));
                     })
@@ -50,7 +48,7 @@ fn show(
     action: Option<&str>,
     duration: SnackbarDuration,
 ) -> Job {
-    let (host, message, action) = (host.clone(), message.to_string(), action.map(str::to_string));
+    let (host, message, action) = (*host, message.to_string(), action.map(str::to_string));
     scope.borrow().as_ref().unwrap().launch(async move {
         let result = host.show_snackbar(message.clone(), action, false, duration).await;
         RESULTS.with(|results| results.borrow_mut().push((message, result)));
@@ -76,7 +74,7 @@ fn cancelling_a_waiting_snackbar_does_not_let_the_next_one_jump_the_queue() {
     RESULTS.with(|results| results.borrow_mut().clear());
     let host = SnackbarHostState::new();
     let scope = Rc::new(RefCell::new(None));
-    let mut ui = ComposeTestRule::with_manual_clock(screen(host.clone(), scope.clone()));
+    let mut ui = ComposeTestRule::with_manual_clock(screen(*host, scope.clone()));
     show(&scope, &host, "First", None, SnackbarDuration::Short);
     let second = show(&scope, &host, "Second", None, SnackbarDuration::Short);
     show(&scope, &host, "Third", None, SnackbarDuration::Short);
@@ -102,22 +100,20 @@ fn passes_a_snackbar_shown_from_an_effect_that_leaves_goes_with_it() {
     #[composable]
     fn Screen(host: SnackbarHostState, asking: MutableState<bool>) {
         MaterialTheme!({
-            let host = host.clone();
             if asking.get() {
-                let host = host.clone();
                 LaunchedEffect((), async move {
                     host.show_snackbar("Asked", None, false, SnackbarDuration::Indefinite).await;
                 });
             }
-            Scaffold!(snackbar_host = move || SnackbarHost!(host.clone()), |_padding| {});
+            Scaffold!(snackbar_host = move || SnackbarHost!(host), |_padding| {});
         });
     }
     let host = SnackbarHostState::new();
     let asking = mutable_state_of(true);
     let handle = asking.handle();
     let mut ui = ComposeTestRule::with_manual_clock({
-        let host = host.clone();
-        move || Screen(host.clone(), handle)
+        let host = *host;
+        move || Screen(host, handle)
     });
     ui.advance_time_by(Duration::from_millis(500));
     ui.on_node_with_text("Asked").assert_exists();
@@ -179,7 +175,7 @@ fn a_snackbars_action_is_in_the_inverse_primary_color() {
         DEFAULT_SIZE,
         Density::default(),
         Box::new(Recording { inner: FixedTextMeasurer::new(), log: log.clone() }),
-        screen(host.clone(), scope.clone()),
+        screen(*host, scope.clone()),
     );
     show(&scope, &host, "Deleted", Some("Undo"), SnackbarDuration::Indefinite);
     ui.wait_for_idle();
@@ -201,7 +197,7 @@ fn a_snackbar_is_at_most_600_dp_wide() {
         IntSize::new(1200, 800),
         Density::default(),
         Box::new(FixedTextMeasurer::new()),
-        screen(host.clone(), scope.clone()),
+        screen(*host, scope.clone()),
     );
     show(&scope, &host, "Saved", None, SnackbarDuration::Indefinite);
     ui.wait_for_idle();
@@ -221,7 +217,7 @@ fn a_two_line_snackbar_is_at_least_68_dp_high() {
         DEFAULT_SIZE,
         Density::default(),
         Box::new(FixedTextMeasurer::new()),
-        screen(host.clone(), scope.clone()),
+        screen(*host, scope.clone()),
     );
     let message = "This message is long enough that it wraps onto a second line";
     show(&scope, &host, message, None, SnackbarDuration::Indefinite);
@@ -331,9 +327,9 @@ fn a_disabled_elevated_card_keeps_its_1_dp_shadow() {
 fn a_snackbars_dismiss_button_is_at_its_end() {
     let host = SnackbarHostState::new();
     let scope = Rc::new(RefCell::new(None));
-    let mut ui = compose_test(screen(host.clone(), scope.clone()));
+    let mut ui = compose_test(screen(*host, scope.clone()));
     {
-        let host = host.clone();
+        let host = *host;
         scope.borrow().as_ref().unwrap().launch(async move {
             host.show_snackbar("Saved", None, true, SnackbarDuration::Indefinite).await;
         });

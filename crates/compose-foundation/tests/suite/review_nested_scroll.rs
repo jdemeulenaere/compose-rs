@@ -46,11 +46,11 @@ fn connection() -> Rc<TakesTheRest> {
 }
 
 fn outer() -> ScrollState {
-    OUTER.with(|cell| cell.borrow().clone().expect("composed"))
+    OUTER.with(|cell| (*cell.borrow()).expect("composed"))
 }
 
 fn inner() -> ScrollState {
-    INNER.with(|cell| cell.borrow().clone().expect("composed"))
+    INNER.with(|cell| (*cell.borrow()).expect("composed"))
 }
 
 /// In a 100 by 300 window: an outer scrolling column (a 100 px header, an inner scrolling
@@ -60,8 +60,8 @@ fn inner() -> ScrollState {
 fn Nested(connected: bool) {
     let outer = remember_scroll_state();
     let inner = remember_scroll_state();
-    OUTER.with(|cell| *cell.borrow_mut() = Some(outer.clone()));
-    INNER.with(|cell| *cell.borrow_mut() = Some(inner.clone()));
+    OUTER.with(|cell| *cell.borrow_mut() = Some(outer));
+    INNER.with(|cell| *cell.borrow_mut() = Some(inner));
     let around = if connected {
         let connection: Rc<dyn NestedScrollConnection> = connection();
         Modifier.fill_max_size().nested_scroll(connection)
@@ -69,11 +69,10 @@ fn Nested(connected: bool) {
         Modifier.fill_max_size()
     };
     Column!(modifier = around, {
-        Column!(modifier = Modifier.fill_max_size().vertical_scroll(outer.clone()), {
+        Column!(modifier = Modifier.fill_max_size().vertical_scroll(outer), {
             Spacer(Modifier.fill_max_width().height(100.dp()));
             Column!(
-                modifier =
-                    Modifier.fill_max_width().height(100.dp()).vertical_scroll(inner.clone()),
+                modifier = Modifier.fill_max_width().height(100.dp()).vertical_scroll(inner),
                 {
                     for _ in 0..10 {
                         Spacer(Modifier.fill_max_width().height(50.dp()));
@@ -169,7 +168,7 @@ fn Recorded() {
         RECORDER.with(|cell| cell.borrow().clone().expect("set"));
     let state = remember_scroll_state();
     Column!(modifier = Modifier.fill_max_size().nested_scroll(recorder), {
-        Column!(modifier = Modifier.fill_max_size().vertical_scroll(state.clone()), {
+        Column!(modifier = Modifier.fill_max_size().vertical_scroll(state), {
             // 3,250 px in 300: 2,950 to scroll.
             for _ in 0..65 {
                 Spacer(Modifier.fill_max_width().height(50.dp()));

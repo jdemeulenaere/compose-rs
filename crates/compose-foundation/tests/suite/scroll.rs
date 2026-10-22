@@ -18,7 +18,7 @@ thread_local! {
 #[composable]
 fn List() {
     let state = remember_scroll_state();
-    STATE.with(|cell| *cell.borrow_mut() = Some(state.clone()));
+    STATE.with(|cell| *cell.borrow_mut() = Some(state));
     Column!(modifier = Modifier.fill_max_size().vertical_scroll(state), {
         for index in 0..20u32 {
             Spacer(
@@ -37,7 +37,7 @@ fn top(ui: &mut ComposeTestRule, index: u32) -> f32 {
 }
 
 fn state() -> ScrollState {
-    STATE.with(|cell| cell.borrow().clone().expect("composed"))
+    STATE.with(|cell| (*cell.borrow()).expect("composed"))
 }
 
 #[test]

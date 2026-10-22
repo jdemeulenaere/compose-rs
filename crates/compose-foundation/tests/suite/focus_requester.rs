@@ -13,14 +13,14 @@ fn an_effect_focuses_a_field_when_it_shows() {
     let mut ui = compose_test(|| {
         let requester = remember(FocusRequester::new);
         let text = remember(|| mutable_state_of(String::new()));
-        let shown = requester.clone();
+        let shown = requester;
         LaunchedEffect((), async move {
             shown.request_focus();
         });
         BasicTextField!(
             text.get(),
             move |value: String| text.set(value),
-            modifier = Modifier.focus_requester(requester.clone()).test_tag("field")
+            modifier = Modifier.focus_requester(requester).test_tag("field")
         );
     });
     ui.wait_for_idle();
@@ -31,9 +31,8 @@ fn an_effect_focuses_a_field_when_it_shows() {
 fn a_click_moves_focus_to_another_node() {
     let mut ui = compose_test(|| {
         let requester = remember(FocusRequester::new);
-        let target = requester.clone();
+        let target = requester;
         Column!({
-            let target = target.clone();
             Box!(
                 modifier = Modifier.size(20.dp()).test_tag("button").clickable(move || {
                     target.request_focus();
@@ -42,7 +41,7 @@ fn a_click_moves_focus_to_another_node() {
             Box!(
                 modifier = Modifier
                     .size(20.dp())
-                    .focus_requester(requester.clone())
+                    .focus_requester(requester)
                     .focusable(true)
                     .test_tag("target")
             );
@@ -57,10 +56,10 @@ fn a_requester_without_a_node_does_nothing() {
     let requester = FocusRequester::new();
     let shown = mutable_state_of(true);
     let handle = shown.handle();
-    let attached = requester.clone();
+    let attached = requester;
     let mut ui = compose_test(move || {
         if handle.get() {
-            Box!(modifier = Modifier.focus_requester(attached.clone()).focusable(true));
+            Box!(modifier = Modifier.focus_requester(attached).focusable(true));
         }
     });
     shown.set(false);

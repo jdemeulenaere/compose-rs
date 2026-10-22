@@ -906,3 +906,138 @@ impl<T: 'static> Drop for OwnedState<T> {
 pub fn live_state_count() -> usize {
     with_runtime(|runtime| runtime.cells.live_count())
 }
+
+// ---- Objects: what state holders keep ----------------------------------------------------------
+
+/// A `Copy` handle to an object in the thread's cell arena: what a state holder (`DrawerState`,
+/// `LazyListState`, `CoroutineScope`, …) wraps, so closures capture it without clones, as they
+/// capture a [`MutableState`]. An [`Owned`] owns the object (in a `remember` slot, or in data);
+/// once that is dropped, the object is freed at the end of the next pass (rule R2), and using
+/// the handle then panics naming where the object was made (rule R3). Reading it observes
+/// nothing (the object's own states do).
+pub struct ObjectHandle<T: 'static> {
+    id: StateId,
+    _marker: PhantomData<*const T>,
+}
+
+impl<T: 'static> Clone for ObjectHandle<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<T: 'static> Copy for ObjectHandle<T> {}
+
+impl<T: 'static> PartialEq for ObjectHandle<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+    }
+}
+
+impl<T: 'static> Eq for ObjectHandle<T> {}
+
+impl<T: 'static> Hash for ObjectHandle<T> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.id.hash(state)
+    }
+}
+
+impl<T: 'static> fmt::Debug for ObjectHandle<T> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "ObjectHandle({}v{})", self.id.index, self.id.generation)
+    }
+}
+
+impl<T: 'static> ObjectHandle<T> {
+    /// The object: an `Rc`, so an async method keeps it across its `.await`s.
+    ///
+    /// # Panics
+    ///
+    /// If the object was freed (its owner dropped before the last pass ended).
+    #[track_caller]
+    pub fn get(&self) -> Rc<T> {
+        let at = Location::caller();
+        match self.lookup() {
+            Ok(object) => object,
+            Err(error) => stale_object(error, std::any::type_name::<T>(), at),
+        }
+    }
+
+    /// The object, or `None` if it was freed.
+    pub fn try_get(&self) -> Option<Rc<T>> {
+        self.lookup().ok()
+    }
+
+    /// Whether the object is still live.
+    pub fn is_alive(&self) -> bool {
+        self.lookup().is_ok()
+    }
+
+    fn lookup(&self) -> Result<Rc<T>, Stale> {
+        let cell = try_with_runtime(|runtime| {
+            runtime.cells.entry(self.id).map(|entry| entry.cell.clone().expect("a live cell"))
+        })
+        .unwrap_or(Err(Stale { created_at: None }))?;
+        Ok(cell.downcast::<T>().unwrap_or_else(|_| {
+            panic!("compose-runtime: object handle of the wrong type");
+        }))
+    }
+}
+
+#[cold]
+#[track_caller]
+fn stale_object(stale: Stale, type_name: &str, used_at: &'static Location<'static>) -> ! {
+    match stale.created_at {
+        Some(created_at) => panic!(
+            "compose-runtime: {type_name} made at {created_at} was used at {used_at} after it \
+             was freed: its owner (a `remember` slot, or an `Owned`) was dropped (rule R3)"
+        ),
+        None => panic!(
+            "compose-runtime: {type_name} used at {used_at} was freed: its owner (a `remember` \
+             slot, or an `Owned`) was dropped (rule R3)"
+        ),
+    }
+}
+
+/// Owns an object in the thread's cell arena, as [`OwnedState`] owns a state cell, and derefs
+/// to its `Copy` handle `H`: `DrawerState::new(…)` is an `Owned<DrawerState>`. Not `Copy`;
+/// dropping it retires the object, which is freed at the end of the next pass (rule R2), or at
+/// once if no composition exists on the thread. `remember` keeps it and returns the handle.
+pub struct Owned<H: Copy + 'static> {
+    handle: H,
+    object: StateId,
+}
+
+impl<H: Copy + 'static> Owned<H> {
+    /// Moves `object` into the arena, owned by the result, whose handle `handle` makes from the
+    /// object's (a state holder wrapping it).
+    #[track_caller]
+    pub fn new<T: 'static>(object: T, handle: impl FnOnce(ObjectHandle<T>) -> H) -> Owned<H> {
+        let id = alloc_cell(Rc::new(object), Location::caller());
+        Owned { handle: handle(ObjectHandle { id, _marker: PhantomData }), object: id }
+    }
+
+    /// The `Copy` handle, for closures.
+    pub fn handle(&self) -> H {
+        self.handle
+    }
+}
+
+impl<H: Copy + 'static> Deref for Owned<H> {
+    type Target = H;
+    fn deref(&self) -> &H {
+        &self.handle
+    }
+}
+
+impl<H: Copy + fmt::Debug + 'static> fmt::Debug for Owned<H> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "Owned({:?})", self.handle)
+    }
+}
+
+impl<H: Copy + 'static> Drop for Owned<H> {
+    fn drop(&mut self) {
+        retire(self.object);
+    }
+}

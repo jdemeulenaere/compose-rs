@@ -5,7 +5,7 @@ use std::cell::{Cell, RefCell};
 use std::hash::Hash;
 use std::rc::Rc;
 
-use compose_runtime::{ComposeArg, composable, hash_key};
+use compose_runtime::{ComposeArg, ObjectHandle, Owned, composable, hash_key};
 use compose_ui::{Alignment, Dp, Modifier, PaddingValues};
 
 use crate::layout::{Arrangement, Box, BoxWithConstraints, BoxWithConstraintsScope};
@@ -41,32 +41,49 @@ impl GridCells {
 }
 
 /// A grid's scroll position, as Compose's `LazyGridState`: in items (a row holds several).
-#[derive(Clone)]
+///
+/// A `Copy` handle (D240): [`new`](Self::new) returns its owner, and
+/// [`remember_lazy_grid_state`] keeps that in the composition.
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct LazyGridState {
     list: LazyListState,
+    object: ObjectHandle<GridInner>,
+}
+
+struct GridInner {
+    _list: Owned<LazyListState>,
     /// The columns of the last composition (0 before the first).
-    columns: Rc<Cell<usize>>,
+    columns: Cell<usize>,
     /// An item to scroll to once the columns are known, and the pixels into its row.
-    pending: Rc<Cell<Option<(usize, i32)>>>,
+    pending: Cell<Option<(usize, i32)>>,
 }
 
 impl LazyGridState {
     /// Scrolled to item `first_visible_item_index`'s row, `first_visible_item_scroll_offset`
     /// pixels into it.
-    pub fn new(first_visible_item_index: usize, first_visible_item_scroll_offset: i32) -> Self {
-        LazyGridState {
-            list: LazyListState::new(0, 0),
-            columns: Rc::new(Cell::new(0)),
-            pending: Rc::new(Cell::new(Some((
-                first_visible_item_index,
-                first_visible_item_scroll_offset,
-            )))),
-        }
+    #[track_caller]
+    pub fn new(
+        first_visible_item_index: usize,
+        first_visible_item_scroll_offset: i32,
+    ) -> Owned<LazyGridState> {
+        let list = LazyListState::new(0, 0);
+        let handle = *list;
+        let inner = GridInner {
+            _list: list,
+            columns: Cell::new(0),
+            pending: Cell::new(Some((first_visible_item_index, first_visible_item_scroll_offset))),
+        };
+        Owned::new(inner, |object| LazyGridState { list: handle, object })
+    }
+
+    #[track_caller]
+    fn inner(&self) -> Rc<GridInner> {
+        self.object.get()
     }
 
     /// The first item of the first visible row, as `firstVisibleItemIndex`.
     pub fn first_visible_item_index(&self) -> usize {
-        self.list.first_visible_item_index() * self.columns.get().max(1)
+        self.list.first_visible_item_index() * self.inner().columns.get().max(1)
     }
 
     pub fn first_visible_item_scroll_offset(&self) -> i32 {
@@ -75,9 +92,10 @@ impl LazyGridState {
 
     /// Scrolls to the row of item `index`, as `scrollToItem`.
     pub fn scroll_to_item(&self, index: usize, scroll_offset: i32) {
-        match self.columns.get() {
+        let inner = self.inner();
+        match inner.columns.get() {
             // Not composed yet: once the columns are known.
-            0 => self.pending.set(Some((index, scroll_offset))),
+            0 => inner.pending.set(Some((index, scroll_offset))),
             columns => self.list.scroll_to_item(index / columns, scroll_offset),
         }
     }
@@ -98,17 +116,17 @@ impl LazyGridState {
 
 impl ComposeArg for LazyGridState {
     fn same(&self, other: &Self) -> bool {
-        Rc::ptr_eq(&self.columns, &other.columns)
+        self == other
     }
 }
 
 impl LazyGridState {
     /// Saves the first visible item and its offset, as Compose's `LazyGridState.Saver`.
-    pub fn saver() -> impl compose_runtime::Saver<LazyGridState> {
+    pub fn saver() -> impl compose_runtime::Saver<Owned<LazyGridState>> {
         use compose_runtime::Saveable;
         compose_runtime::saver(
-            |state: &LazyGridState| {
-                let position = state.pending.get().unwrap_or_else(|| {
+            |state: &Owned<LazyGridState>| {
+                let position = state.inner().pending.get().unwrap_or_else(|| {
                     (state.first_visible_item_index(), state.first_visible_item_scroll_offset())
                 });
                 Some(position.save())
@@ -260,8 +278,9 @@ pub fn LazyVerticalGrid(
             ));
             // A new column count keeps the first item in view (and its row's offset), as
             // Compose's; the first count applies a scroll asked for before it.
-            let before = state.columns.replace(count);
-            if let Some((item, offset)) = state.pending.take() {
+            let inner = state.inner();
+            let before = inner.columns.replace(count);
+            if let Some((item, offset)) = inner.pending.take() {
                 state.list.set_position_quietly(item / count, offset);
             } else if before != 0 && before != count {
                 let (row, offset) = state.list.position_untracked();
@@ -271,7 +290,7 @@ pub fn LazyVerticalGrid(
             let items = items.clone();
             LazyColumn(
                 Modifier.fill_max_size(),
-                state.list.clone(),
+                state.list,
                 content_padding,
                 false,
                 vertical_arrangement,

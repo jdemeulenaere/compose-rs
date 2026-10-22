@@ -35,10 +35,10 @@ fn List(state: LazyListState) {
     );
 }
 
-fn list() -> (ComposeTestRule, LazyListState) {
+fn list() -> (ComposeTestRule, Owned<LazyListState>) {
     let state = LazyListState::new(0, 0);
-    let given = state.clone();
-    let ui = ComposeTestRule::sized(IntSize::new(200, 200), move || List(given.clone()));
+    let given = *state;
+    let ui = ComposeTestRule::sized(IntSize::new(200, 200), move || List(given));
     (ui, state)
 }
 

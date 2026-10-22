@@ -29,18 +29,17 @@ fn a_requester_moved_to_an_earlier_node_still_focuses() {
     let handle = late.handle();
     let mut ui = compose_test(move || {
         let requester = remember(FocusRequester::new);
-        let target = requester.clone();
+        let target = requester;
         Column!({
             if !handle.get() {
                 Box!(
                     modifier = Modifier
                         .size(20.dp())
-                        .focus_requester(requester.clone())
+                        .focus_requester(requester)
                         .focusable(true)
                         .test_tag("a")
                 );
             }
-            let target = target.clone();
             Box!(
                 modifier = Modifier.size(20.dp()).test_tag("button").clickable(move || {
                     target.request_focus();
@@ -50,7 +49,7 @@ fn a_requester_moved_to_an_earlier_node_still_focuses() {
                 Box!(
                     modifier = Modifier
                         .size(20.dp())
-                        .focus_requester(requester.clone())
+                        .focus_requester(requester)
                         .focusable(true)
                         .test_tag("b")
                 );
@@ -77,25 +76,21 @@ fn a_requester_on_two_nodes_survives_removing_one() {
     let shown = mutable_state_of(true);
     let handle = shown.handle();
     let requester = FocusRequester::new();
-    let attached = requester.clone();
+    let attached = requester;
     let mut ui = compose_test(move || {
-        let attached = attached.clone();
         Column!({
             if handle.get() {
                 Box!(
                     modifier = Modifier
                         .size(20.dp())
-                        .focus_requester(attached.clone())
+                        .focus_requester(attached)
                         .focusable(true)
                         .test_tag("a")
                 );
             }
             Box!(
-                modifier = Modifier
-                    .size(20.dp())
-                    .focus_requester(attached.clone())
-                    .focusable(true)
-                    .test_tag("b")
+                modifier =
+                    Modifier.size(20.dp()).focus_requester(attached).focusable(true).test_tag("b")
             );
         });
     });

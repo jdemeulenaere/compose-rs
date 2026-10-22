@@ -46,7 +46,7 @@ struct ContentSizeNode {
     size: Option<Animatable<Size>>,
     /// The content's size the animation goes to.
     target: Option<IntSize>,
-    scope: CoroutineScope,
+    scope: compose_runtime::Owned<CoroutineScope>,
 }
 
 impl ModifierNodeElement for ContentSizeElement {

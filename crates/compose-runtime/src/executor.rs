@@ -22,6 +22,8 @@ use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Wake, Waker};
 use std::time::{Duration, Instant};
 
+use crate::state::{ObjectHandle, Owned};
+
 type BoxedTask = Pin<Box<dyn Future<Output = ()>>>;
 
 /// A task's slot: generational, so a waker of a finished task can't poll its successor.
@@ -537,11 +539,22 @@ impl Job {
     }
 }
 
+/// Starts `future` as a task of no scope (an effect's), as `launch` on a scope of its own.
+pub(crate) fn launch(future: impl Future<Output = ()> + 'static) -> Job {
+    Job { key: spawn(Box::pin(future)) }
+}
+
 /// Where tasks are launched, as Compose's `CoroutineScope`: a scope from
 /// [`remember_coroutine_scope`] cancels its tasks when it leaves the composition.
-#[derive(Clone)]
+///
+/// A `Copy` handle (D240), as a state handle: its owner is the `remember` slot (or the
+/// [`Owned`] that [`new`](Self::new) returns), and launching in a scope freed since panics,
+/// naming where it was made (a forgotten scope is cancelled until then).
+///
+/// [`remember_coroutine_scope`]: crate::remember_coroutine_scope
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct CoroutineScope {
-    inner: Rc<ScopeInner>,
+    inner: ObjectHandle<ScopeInner>,
 }
 
 struct ScopeInner {
@@ -550,50 +563,47 @@ struct ScopeInner {
 }
 
 impl CoroutineScope {
-    /// A scope of its own, cancelled only by [`cancel`](Self::cancel).
-    pub fn new() -> CoroutineScope {
-        CoroutineScope {
-            inner: Rc::new(ScopeInner {
-                jobs: RefCell::new(Vec::new()),
-                cancelled: Cell::new(false),
-            }),
-        }
+    /// A scope of its own, cancelled only by [`cancel`](Self::cancel), owned by the result:
+    /// launch through it, or copy its handle out (`*scope`) while it lives. Dropping it doesn't
+    /// cancel the tasks it launched.
+    #[track_caller]
+    pub fn new() -> Owned<CoroutineScope> {
+        let inner = ScopeInner { jobs: RefCell::new(Vec::new()), cancelled: Cell::new(false) };
+        Owned::new(inner, |inner| CoroutineScope { inner })
     }
 
     /// Starts `future` as a task of this scope, as `scope.launch { … }`. In a cancelled scope it
     /// never runs.
+    #[track_caller]
     pub fn launch(&self, future: impl Future<Output = ()> + 'static) -> Job {
-        if self.inner.cancelled.get() {
+        let inner = self.inner.get();
+        if inner.cancelled.get() {
             // A job that is already over.
             let key = spawn(Box::pin(async {}));
             cancel(key);
             return Job { key };
         }
         let job = Job { key: spawn(Box::pin(future)) };
-        let mut jobs = self.inner.jobs.borrow_mut();
+        let mut jobs = inner.jobs.borrow_mut();
         jobs.retain(Job::is_active);
         jobs.push(job);
         job
     }
 
-    /// Cancels the scope's tasks, and those it launches later.
+    /// Cancels the scope's tasks, and those it launches later. A freed scope has nothing left
+    /// to cancel.
     pub fn cancel(&self) {
-        self.inner.cancelled.set(true);
-        let jobs = std::mem::take(&mut *self.inner.jobs.borrow_mut());
+        let Some(inner) = self.inner.try_get() else { return };
+        inner.cancelled.set(true);
+        let jobs = std::mem::take(&mut *inner.jobs.borrow_mut());
         for job in jobs {
             job.cancel();
         }
     }
 
-    /// Whether the scope is still active.
+    /// Whether the scope is still active (not cancelled, nor freed).
     pub fn is_active(&self) -> bool {
-        !self.inner.cancelled.get()
-    }
-}
-
-impl Default for CoroutineScope {
-    fn default() -> CoroutineScope {
-        CoroutineScope::new()
+        self.inner.try_get().is_some_and(|inner| !inner.cancelled.get())
     }
 }
 
@@ -605,6 +615,6 @@ impl std::fmt::Debug for CoroutineScope {
 
 impl crate::ComposeArg for CoroutineScope {
     fn same(&self, other: &CoroutineScope) -> bool {
-        Rc::ptr_eq(&self.inner, &other.inner)
+        self == other
     }
 }

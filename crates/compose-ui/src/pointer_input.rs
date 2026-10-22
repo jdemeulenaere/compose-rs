@@ -559,7 +559,7 @@ type Block = Rc<dyn Fn(PointerInputScope) -> Pin<Box<dyn Future<Output = ()>>>>;
 pub struct PointerInputDriver {
     block: Block,
     scope: PointerInputScope,
-    coroutines: CoroutineScope,
+    coroutines: compose_runtime::Owned<CoroutineScope>,
     /// The block's task: `None` until the first event (and after a stop); a finished one
     /// stays, so a block that returned isn't run again.
     job: Option<Job>,

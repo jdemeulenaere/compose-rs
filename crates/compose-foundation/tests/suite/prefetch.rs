@@ -54,12 +54,12 @@ fn List(state: LazyListState) {
 }
 
 /// A list of 20 px rows in a 100 px viewport, from item `first`.
-fn list(first: usize) -> (ComposeTestRule, LazyListState) {
+fn list(first: usize) -> (ComposeTestRule, Owned<LazyListState>) {
     COMPOSED.with(|composed| composed.borrow_mut().clear());
     LIVE.with(|live| live.borrow_mut().clear());
     let state = LazyListState::new(first, 0);
-    let given = state.clone();
-    let ui = ComposeTestRule::sized(IntSize::new(200, 200), move || List(given.clone()));
+    let given = *state;
+    let ui = ComposeTestRule::sized(IntSize::new(200, 200), move || List(given));
     (ui, state)
 }
 
@@ -216,12 +216,12 @@ fn a_grid_prefetches_its_next_rows() {
     COMPOSED.with(|composed| composed.borrow_mut().clear());
     LIVE.with(|live| live.borrow_mut().clear());
     let state = LazyGridState::new(0, 0);
-    let given = state.clone();
+    let given = *state;
     let mut ui = ComposeTestRule::sized(IntSize::new(300, 300), move || {
         LazyVerticalGrid!(
             GridCells::Fixed(3),
             modifier = Modifier.size_wh(300.dp(), 100.dp()),
-            state = given.clone(),
+            state = given,
             |scope: LazyGridScope| {
                 scope.items(300, Row);
             }
@@ -287,16 +287,16 @@ fn text_layouts() -> usize {
 }
 
 /// The list of `list`, measuring text with `CountingMeasurer`.
-fn counted_list() -> (ComposeTestRule, LazyListState) {
+fn counted_list() -> (ComposeTestRule, Owned<LazyListState>) {
     COMPOSED.with(|composed| composed.borrow_mut().clear());
     LIVE.with(|live| live.borrow_mut().clear());
     let state = LazyListState::new(0, 0);
-    let given = state.clone();
+    let given = *state;
     let ui = compose_test_with(
         IntSize::new(200, 200),
         compose_ui::Density::default(),
         Box::new(CountingMeasurer(compose_ui::FixedTextMeasurer::new())),
-        move || List(given.clone()),
+        move || List(given),
     );
     (ui, state)
 }
@@ -428,8 +428,8 @@ fn dump_without_paragraphs(list: &compose_ui::DisplayList) -> String {
 fn a_frame_revealing_prefetched_items_draws_only_them() {
     DRAWN.with(|drawn| drawn.borrow_mut().clear());
     let state = LazyListState::new(0, 0);
-    let given = state.clone();
-    let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || PaintedList(given.clone()));
+    let given = *state;
+    let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || PaintedList(given));
     state.scroll_by(30.0);
     ui.wait_for_idle();
     let before = row_groups(&ui.host().display_list());
@@ -477,7 +477,7 @@ fn a_frame_revealing_prefetched_items_draws_only_them() {
     assert_eq!(position, (3, 10));
     let fresh_state = LazyListState::new(position.0, position.1);
     let mut fresh =
-        ComposeTestRule::sized(IntSize::new(200, 200), move || PaintedList(fresh_state.clone()));
+        ComposeTestRule::sized(IntSize::new(200, 200), move || PaintedList(*fresh_state));
     assert_eq!(
         dump_without_paragraphs(&list),
         dump_without_paragraphs(&fresh.host().display_list()),
