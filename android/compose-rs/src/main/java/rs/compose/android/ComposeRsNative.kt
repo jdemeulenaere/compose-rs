@@ -33,8 +33,16 @@ internal object ComposeRsNative {
      */
     @JvmStatic external fun prefetch(host: Long, availableNanos: Long): Boolean
 
-    /** What `onDraw` replays: resource changes, then the last frame's display list. */
-    @JvmStatic external fun takeDrawing(host: Long): ByteBuffer?
+    /**
+     * What `onDraw` replays (resource changes, then the last frame's display list) is ready in
+     * [drawingBuffer]: its length, with [NEW_DRAWING_BUFFER] set when that buffer moved.
+     */
+    @JvmStatic external fun takeDrawing(host: Long): Long
+
+    /** A buffer over the drawing's memory, until [takeDrawing] says it moved. */
+    @JvmStatic external fun drawingBuffer(host: Long): ByteBuffer?
+
+    const val NEW_DRAWING_BUFFER = 1L shl 32
 
     /** Action 0 down, 1 move, 2 up, 3 cancel; [age]: how long ago it happened (ns). */
     @JvmStatic external fun touch(host: Long, action: Int, pointer: Int, x: Float, y: Float, age: Long)

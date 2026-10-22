@@ -57,7 +57,7 @@ internal class TextMeasurer {
 
     private fun readStyle(request: ByteBuffer): Style {
         val color = request.getInt()
-        val fontPx = request.getFloat()
+        val fontPx = request.float()
         val weight = request.getInt()
         val italic = request.get().toInt() != 0
         val family = request.get().toInt()
@@ -74,10 +74,10 @@ internal class TextMeasurer {
             italic = italic,
             family = family,
             familyName = name,
-            letterSpacingPx = request.getFloat(),
+            letterSpacingPx = request.float(),
             decoration = request.get().toInt(),
         )
-        return Style(paint, lineHeightPx = request.getFloat(), background = request.getInt())
+        return Style(paint, lineHeightPx = request.float(), background = request.getInt())
     }
 
     private fun typeface(style: PaintStyle): Typeface {
@@ -191,16 +191,16 @@ internal class TextMeasurer {
         // StaticLayout limits the lines only when it ellipsizes: the rest are cut here, as
         // Compose's `TextLayout` does (the text is clipped to its height).
         val lines = layout.lineCount.coerceIn(1, maxLines.coerceAtLeast(1))
-        results.putFloat(0, width.toFloat())
-        results.putFloat(4, layout.getLineBottom(lines - 1).toFloat())
-        results.putFloat(8, layout.getLineBaseline(0).toFloat())
-        results.putFloat(12, layout.getLineBaseline(lines - 1).toFloat())
-        results.putFloat(16, lines.toFloat())
+        results.putInt(0, width.toFloat().toRawBits())
+        results.putInt(4, (layout.getLineBottom(lines - 1).toFloat()).toRawBits())
+        results.putInt(8, (layout.getLineBaseline(0).toFloat()).toRawBits())
+        results.putInt(12, (layout.getLineBaseline(lines - 1).toFloat()).toRawBits())
+        results.putInt(16, lines.toFloat().toRawBits())
         // Lines past max lines, cut or ellipsized, as Compose's `TextLayout.didExceedMaxLines`
         // (API 26+: the line count passes max lines unless it ellipsizes, which marks the last).
         val lastEllipsized = layout.lineCount > 0 && layout.getEllipsisCount(layout.lineCount - 1) > 0
         val exceeded = layout.lineCount > maxLines || lastEllipsized
-        results.putFloat(20, if (exceeded) 1f else 0f)
+        results.putInt(20, (if (exceeded) 1f else 0f).toRawBits())
     }
 
     fun hitTest(handle: Int, x: Float, y: Float): Int {
@@ -214,10 +214,10 @@ internal class TextMeasurer {
         val at = offset.coerceIn(0, layout.text.length)
         val line = layout.getLineForOffset(at)
         val x = layout.getPrimaryHorizontal(at)
-        results.putFloat(0, x)
-        results.putFloat(4, layout.getLineTop(line).toFloat())
-        results.putFloat(8, x)
-        results.putFloat(12, layout.getLineBottom(line).toFloat())
+        results.putInt(0, x.toRawBits())
+        results.putInt(4, (layout.getLineTop(line).toFloat()).toRawBits())
+        results.putInt(8, x.toRawBits())
+        results.putInt(12, (layout.getLineBottom(line).toFloat()).toRawBits())
     }
 
     fun release(handle: Int) {
@@ -255,9 +255,9 @@ internal class TextMeasurer {
      * Draws paragraph [handle] with its top left at ([x], [y]): on a hardware canvas, its
      * render node, recorded the first time (a paragraph never changes once laid out).
      */
-    fun draw(canvas: Canvas, handle: Int, x: Float, y: Float) {
+    fun draw(canvas: Canvas, hardware: Boolean, handle: Int, x: Float, y: Float) {
         val layout = layouts.get(handle) ?: return
-        if (!canvas.isHardwareAccelerated) {
+        if (!hardware) {
             canvas.save()
             canvas.translate(x, y)
             layout.draw(canvas)

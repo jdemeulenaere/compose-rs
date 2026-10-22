@@ -49,6 +49,8 @@ import android.view.inputmethod.InputMethodManager
 class ComposeRsView(context: Context, private val app: String) : View(context) {
     private val measurer = TextMeasurer()
     private val replayer = Replayer(measurer)
+    /** Over the Rust host's drawing (see [ComposeRsNative.takeDrawing]). */
+    private var drawing: java.nio.ByteBuffer? = null
     private var host = 0L
     private var frameRequested = false
     private var textInput = false
@@ -170,6 +172,7 @@ class ComposeRsView(context: Context, private val app: String) : View(context) {
         prefetchScheduled = false
         ComposeRsNative.destroy(host)
         host = 0L
+        drawing = null
         measurer.clear()
         replayer.clear()
         if (textInput) {
@@ -223,6 +226,7 @@ class ComposeRsView(context: Context, private val app: String) : View(context) {
         if (host != 0L) {
             ComposeRsNative.destroy(host)
             host = 0L
+            drawing = null
             measurer.clear()
             replayer.clear()
             create()
@@ -409,7 +413,12 @@ class ComposeRsView(context: Context, private val app: String) : View(context) {
 
     override fun onDraw(canvas: Canvas) {
         if (host == 0L) return
-        val drawing = ComposeRsNative.takeDrawing(host) ?: return
+        val taken = ComposeRsNative.takeDrawing(host)
+        if (taken and ComposeRsNative.NEW_DRAWING_BUFFER != 0L || drawing == null) {
+            drawing = ComposeRsNative.drawingBuffer(host)
+        }
+        val drawing = drawing ?: return
+        drawing.limit((taken and 0xFFFFFFFFL).toInt())
         Trace.beginSection("compose-rs: replay")
         replayer.replay(canvas, drawing)
         Trace.endSection()

@@ -120,7 +120,7 @@ D270's effect, measured on its own (same device, the APKs before and after it al
 
 ## Next steps
 
-[14](14-performance-opportunities.md) measures these three, and what else is left (the animation's RenderThread gap was mostly the spinner's square cap).
+[14](14-performance-opportunities.md) measures these three, and what else is left (the animation's RenderThread gap was mostly the spinner's square cap). Since then, the replay calls no framework method the boot image leaves interpreted (D321): the animation's main thread does 5 % less work.
 
 - **The animation's RenderThread**: even with Compose's (540 ms against 535 ms of work), where round 1 did 505 ms. Done: it was the spinner's square cap, a stroked path each frame; with Material 3 1.4's round cap (D320) it does 492 ms, and its per-frame p99 went from 5.64 to 5.20 ms.
 - **Text layout in batches**: laying out paragraphs in batches (one JNI crossing for many) would shorten the big screen's first frame (46 ms of layout, most of it text) and the prefetch of each item.
