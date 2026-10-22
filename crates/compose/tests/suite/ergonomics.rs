@@ -382,3 +382,41 @@ fn optional_callbacks_take_a_lambda_or_none() {
     });
     assert_eq!(take_log(), ["no label", "label", "changed 7", "no label"]);
 }
+
+#[test]
+fn an_impl_into_parameter_converts_what_the_call_macro_is_given() {
+    #[derive(Clone, PartialEq, Debug)]
+    struct Meters(f32);
+    impl From<u32> for Meters {
+        fn from(value: u32) -> Meters {
+            Meters(value as f32)
+        }
+    }
+    impl ComposeArg for Meters {
+        fn same(&self, other: &Self) -> bool {
+            self == other
+        }
+    }
+    // Restartable: it takes a `Meters`, the call macro converts.
+    #[composable]
+    fn Distance(#[default(Meters(0.5))] length: impl Into<Meters>) {
+        log(format!("{length:?}"));
+    }
+    // Inline: it stays generic.
+    #[composable(non_restartable)]
+    fn InlineDistance(length: impl Into<Meters>) {
+        log(format!("{:?}", length.into()));
+    }
+    let composition = composition();
+    composition.set_content(|| {
+        Distance!();
+        Distance!(3u32);
+        Distance!(length = Meters(1.5));
+        Distance(Meters(2.0));
+        InlineDistance!(4u32);
+    });
+    assert_eq!(
+        take_log(),
+        ["Meters(0.5)", "Meters(3.0)", "Meters(1.5)", "Meters(2.0)", "Meters(4.0)"]
+    );
+}

@@ -69,3 +69,53 @@ fn supporting_text_and_errors_show_below_in_the_error_color() {
     let list = ui.dump_display_list();
     assert!(list.contains(&format!("{:?}", error)), "{list}");
 }
+
+#[test]
+fn a_prefix_and_a_suffix_go_around_the_text() {
+    let mut ui = compose_test(|| {
+        MaterialTheme!({
+            TextField!(
+                "12".to_string(),
+                |_| {},
+                modifier = Modifier.test_tag("field"),
+                prefix = Some(|| Text!("$", modifier = Modifier.test_tag("prefix"))),
+                suffix = Some(|| Text!("kg", modifier = Modifier.test_tag("suffix"))),
+                single_line = true,
+            );
+        });
+    });
+    let field = bounds(&mut ui, "field");
+    let prefix = bounds(&mut ui, "prefix");
+    let suffix = bounds(&mut ui, "suffix");
+    // 16 dp in at the start and the end, on the text's line.
+    assert_eq!(prefix.left - field.left, 16.0);
+    assert_eq!(field.right - suffix.right, 16.0);
+    assert_eq!(prefix.top, suffix.top);
+    assert_eq!((prefix.top + prefix.bottom) / 2.0, (field.top + field.bottom) / 2.0);
+}
+
+#[test]
+fn a_multi_line_field_is_between_min_lines_and_max_lines_high() {
+    let value = compose_runtime::mutable_state_of(String::new());
+    let handle = value.handle();
+    let mut ui = compose_test(move || {
+        MaterialTheme!({
+            OutlinedTextField!(
+                handle.get(),
+                |_| {},
+                modifier = Modifier.test_tag("field"),
+                max_lines = 4,
+                min_lines = 3,
+            );
+        });
+    });
+    // 16 dp above and below the body-large lines (24 sp each).
+    let height = |ui: &mut ComposeTestRule| {
+        let field = bounds(ui, "field");
+        field.bottom - field.top
+    };
+    assert_eq!(height(&mut ui), 32.0 + 3.0 * 24.0);
+    value.set(String::from("1\n2\n3\n4\n5\n6"));
+    ui.wait_for_idle();
+    assert_eq!(height(&mut ui), 32.0 + 4.0 * 24.0);
+}

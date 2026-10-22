@@ -51,7 +51,9 @@ impl OutlinedTextFieldDefaults {
 /// A filled text field, as Compose's `TextField`: a container with an indicator line (2 dp
 /// focused), a label resting in the field that floats above the text when focused or filled,
 /// a placeholder while focused and empty, optional leading and trailing icons (in 48 dp
-/// boxes), and supporting text below; `is_error` shows it all in the error color.
+/// boxes), a prefix and a suffix around the text (shown with the floated label), and
+/// supporting text below; `is_error` shows it all in the error color. A multi-line field is
+/// between `min_lines` and `max_lines` lines high.
 #[composable]
 #[allow(non_snake_case)]
 pub fn TextField(
@@ -65,12 +67,16 @@ pub fn TextField(
     #[default(None)] placeholder: Option<impl Fn() + 'static>,
     #[default(None)] leading_icon: Option<impl Fn() + 'static>,
     #[default(None)] trailing_icon: Option<impl Fn() + 'static>,
+    #[default(None)] prefix: Option<impl Fn() + 'static>,
+    #[default(None)] suffix: Option<impl Fn() + 'static>,
     #[default(None)] supporting_text: Option<impl Fn() + 'static>,
     #[default(false)] is_error: bool,
-    #[default(crate::VisualTransformation::NONE)] visual_transformation: VisualTransformation,
+    #[default(crate::VisualTransformation::NONE)] visual_transformation: impl Into<VisualTransformation>,
     #[default(crate::KeyboardOptions::DEFAULT)] keyboard_options: KeyboardOptions,
     #[default(crate::KeyboardActions::new())] keyboard_actions: KeyboardActions,
     #[default(false)] single_line: bool,
+    #[default(u32::MAX)] max_lines: u32,
+    #[default(1)] min_lines: u32,
     #[default(crate::TextFieldDefaults::colors())] colors: TextFieldColors,
 ) {
     decorated_field(
@@ -86,6 +92,8 @@ pub fn TextField(
             placeholder: placeholder.map(compose_runtime::callback),
             leading_icon: leading_icon.map(compose_runtime::callback),
             trailing_icon: trailing_icon.map(compose_runtime::callback),
+            prefix: prefix.map(compose_runtime::callback),
+            suffix: suffix.map(compose_runtime::callback),
             supporting_text: supporting_text.map(compose_runtime::callback),
         },
         is_error,
@@ -93,13 +101,14 @@ pub fn TextField(
         keyboard_options,
         keyboard_actions,
         single_line,
+        (max_lines, min_lines),
         colors,
     );
 }
 
 /// An outlined text field, as Compose's `OutlinedTextField`: an outline (2 dp focused) whose
 /// top edge the floated label sits on, cut around it, 8 dp above the field for it; with the
-/// filled field's icons, supporting text and error state.
+/// filled field's icons, prefix and suffix, supporting text, error state and line bounds.
 #[composable]
 #[allow(non_snake_case)]
 pub fn OutlinedTextField(
@@ -113,12 +122,16 @@ pub fn OutlinedTextField(
     #[default(None)] placeholder: Option<impl Fn() + 'static>,
     #[default(None)] leading_icon: Option<impl Fn() + 'static>,
     #[default(None)] trailing_icon: Option<impl Fn() + 'static>,
+    #[default(None)] prefix: Option<impl Fn() + 'static>,
+    #[default(None)] suffix: Option<impl Fn() + 'static>,
     #[default(None)] supporting_text: Option<impl Fn() + 'static>,
     #[default(false)] is_error: bool,
-    #[default(crate::VisualTransformation::NONE)] visual_transformation: VisualTransformation,
+    #[default(crate::VisualTransformation::NONE)] visual_transformation: impl Into<VisualTransformation>,
     #[default(crate::KeyboardOptions::DEFAULT)] keyboard_options: KeyboardOptions,
     #[default(crate::KeyboardActions::new())] keyboard_actions: KeyboardActions,
     #[default(false)] single_line: bool,
+    #[default(u32::MAX)] max_lines: u32,
+    #[default(1)] min_lines: u32,
     #[default(crate::OutlinedTextFieldDefaults::colors())] colors: TextFieldColors,
 ) {
     decorated_field(
@@ -134,6 +147,8 @@ pub fn OutlinedTextField(
             placeholder: placeholder.map(compose_runtime::callback),
             leading_icon: leading_icon.map(compose_runtime::callback),
             trailing_icon: trailing_icon.map(compose_runtime::callback),
+            prefix: prefix.map(compose_runtime::callback),
+            suffix: suffix.map(compose_runtime::callback),
             supporting_text: supporting_text.map(compose_runtime::callback),
         },
         is_error,
@@ -141,6 +156,7 @@ pub fn OutlinedTextField(
         keyboard_options,
         keyboard_actions,
         single_line,
+        (max_lines, min_lines),
         colors,
     );
 }
@@ -158,6 +174,8 @@ struct Slots {
     placeholder: Option<Callback>,
     leading_icon: Option<Callback>,
     trailing_icon: Option<Callback>,
+    prefix: Option<Callback>,
+    suffix: Option<Callback>,
     supporting_text: Option<Callback>,
 }
 
@@ -187,6 +205,7 @@ fn decorated_field(
     keyboard_options: KeyboardOptions,
     keyboard_actions: KeyboardActions,
     single_line: bool,
+    (max_lines, min_lines): (u32, u32),
     colors: TextFieldColors,
 ) {
     let focused = remember(|| mutable_state_of(false));
@@ -261,6 +280,16 @@ fn decorated_field(
         ],
     );
     let cursor_color = if is_error { colors.error_cursor_color } else { colors.cursor_color };
+    // The prefix and suffix in the text's style, shown as the label floats (or always, without
+    // a label), as Compose's `prefixSuffixAlpha`.
+    let prefix_style = TextStyle {
+        color: if enabled { colors.prefix_color } else { colors.disabled_prefix_color },
+        ..text_style
+    };
+    let suffix_style = TextStyle {
+        color: if enabled { colors.suffix_color } else { colors.disabled_suffix_color },
+        ..text_style
+    };
     // The label's style, from the body-large text's to the small one's as it floats.
     let label_style = lerp_style(&typography.body_large, &typography.body_small, progress);
     let container_color =
@@ -268,6 +297,7 @@ fn decorated_field(
     let placeholder_color =
         if enabled { colors.placeholder_color } else { colors.disabled_placeholder_color };
     let has_label = slots.label.is_some();
+    let prefix_suffix_alpha = if has_label { progress } else { 1.0 };
     // Shown while the field is empty and its label floated (or it has none), as Compose's.
     let show_placeholder = empty && slots.placeholder.is_some() && (!has_label || is_focused);
     let floated_label_height = typography.body_small.line_height;
@@ -318,6 +348,8 @@ fn decorated_field(
                 has_trailing: slots.trailing_icon.is_some(),
                 has_label,
                 has_placeholder: show_placeholder,
+                has_prefix: slots.prefix.is_some(),
+                has_suffix: slots.suffix.is_some(),
                 single_line,
                 progress,
                 floated_label_height,
@@ -373,6 +405,28 @@ fn decorated_field(
                             },
                         );
                     });
+                }
+                // As Compose's `PrefixSuffixTextPadding`: 2 dp between them and the text.
+                for (content, style, padding) in [
+                    (&slots.prefix, prefix_style, (0.dp(), 2.dp())),
+                    (&slots.suffix, suffix_style, (2.dp(), 0.dp())),
+                ] {
+                    if let Some(content) = content.clone() {
+                        CompositionLocalProvider(LOCAL_TEXT_STYLE.provides(style), || {
+                            let content = content.clone();
+                            Box(
+                                Modifier.alpha(prefix_suffix_alpha).padding_sides(
+                                    padding.0,
+                                    0.dp(),
+                                    padding.1,
+                                    0.dp(),
+                                ),
+                                Alignment::TOP_START,
+                                false,
+                                compose_runtime::callback(move |_| content()),
+                            );
+                        });
+                    }
                 }
                 inner_text_field();
                 if variant == Variant::Filled {
@@ -446,6 +500,8 @@ fn decorated_field(
         keyboard_options,
         keyboard_actions,
         single_line,
+        max_lines,
+        min_lines,
         visual_transformation,
         cursor_color,
         compose_runtime::callback(decoration),
@@ -464,7 +520,7 @@ fn lerp_style(from: &TextStyle, to: &TextStyle, fraction: f32) -> TextStyle {
 }
 
 #[derive(Clone, Copy, PartialEq)]
-struct LayoutKey((Variant, [bool; 5], u32));
+struct LayoutKey((Variant, [bool; 7], u32));
 
 impl compose_runtime::ComposeArg for LayoutKey {
     fn same(&self, other: &Self) -> bool {
@@ -474,7 +530,8 @@ impl compose_runtime::ComposeArg for LayoutKey {
 
 /// The decoration's layout, as Compose's `TextFieldMeasurePolicy` and
 /// `OutlinedTextFieldMeasurePolicy`: the leading and trailing icons (if any), the label (if
-/// any), the placeholder (if shown), the text field, then (filled) the indicator line. 16 dp at
+/// any), the placeholder (if shown), the prefix and suffix (if any), the text field, then
+/// (filled) the indicator line. The prefix is before the text, the suffix at the end. 16 dp at
 /// the sides (4 dp beside an icon, as `HorizontalIconPadding` takes 12 of them); a filled field
 /// 8 dp above and below with a label (16 dp without), its text below where the floated label
 /// goes; an outlined field 16 dp above and below, its floated label centered on the top edge,
@@ -486,6 +543,8 @@ struct DecorationLayout {
     has_trailing: bool,
     has_label: bool,
     has_placeholder: bool,
+    has_prefix: bool,
+    has_suffix: bool,
     single_line: bool,
     progress: f32,
     floated_label_height: compose_ui::Sp,
@@ -496,7 +555,7 @@ struct DecorationLayout {
 }
 
 impl DecorationLayout {
-    fn key(&self) -> (Variant, [bool; 5], u32) {
+    fn key(&self) -> (Variant, [bool; 7], u32) {
         (
             self.variant,
             [
@@ -504,6 +563,8 @@ impl DecorationLayout {
                 self.has_trailing,
                 self.has_label,
                 self.has_placeholder,
+                self.has_prefix,
+                self.has_suffix,
                 self.single_line,
             ],
             self.progress.to_bits(),
@@ -529,6 +590,8 @@ impl MeasurePolicy for DecorationLayout {
         let trailing = if self.has_trailing { children.next() } else { None };
         let label = if self.has_label { children.next() } else { None };
         let placeholder = if self.has_placeholder { children.next() } else { None };
+        let prefix = if self.has_prefix { children.next() } else { None };
+        let suffix = if self.has_suffix { children.next() } else { None };
         let Some(text) = children.next() else {
             return scope.layout(constraints.min_width, constraints.min_height);
         };
@@ -550,17 +613,26 @@ impl MeasurePolicy for DecorationLayout {
         } else {
             0
         };
-        let mut text_constraints = constraints.offset(-start - end, -2 * vertical - label_room);
+        let prefix = prefix.map(|prefix| scope.measure(prefix, loose.offset(0, -label_room)));
+        let suffix = suffix.map(|suffix| scope.measure(suffix, loose.offset(0, -label_room)));
+        let prefix_width = prefix.map_or(0, |prefix| prefix.width);
+        let suffix_width = suffix.map_or(0, |suffix| suffix.width);
+        let mut text_constraints = constraints
+            .offset(-start - end - prefix_width - suffix_width, -2 * vertical - label_room);
         text_constraints.min_height = 0;
         let text = scope.measure(text, text_constraints);
-        let placeholder =
-            placeholder.map(|placeholder| scope.measure(placeholder, loose.offset(0, -label_room)));
-        let content_width = text
-            .width
-            .max(label.map_or(0, |label| label.width))
-            .max(placeholder.map_or(0, |placeholder| placeholder.width));
-        let content_height =
-            text.height.max(placeholder.map_or(0, |placeholder| placeholder.height));
+        let placeholder = placeholder.map(|placeholder| {
+            scope.measure(placeholder, loose.offset(-prefix_width - suffix_width, -label_room))
+        });
+        let content_width = (prefix_width
+            + text.width.max(placeholder.map_or(0, |placeholder| placeholder.width))
+            + suffix_width)
+            .max(label.map_or(0, |label| label.width));
+        let content_height = text
+            .height
+            .max(placeholder.map_or(0, |placeholder| placeholder.height))
+            .max(prefix.map_or(0, |prefix| prefix.height))
+            .max(suffix.map_or(0, |suffix| suffix.height));
         let icons_height =
             leading.map_or(0, |icon| icon.height).max(trailing.map_or(0, |icon| icon.height));
         let width = constraints.constrain_width(start + content_width + end);
@@ -598,15 +670,19 @@ impl MeasurePolicy for DecorationLayout {
             self.label_start.set(x as f32);
             scope.place_relative(label, x, y);
         }
+        // Centered on a single line without a filled field's label, else where the text is.
+        let centered = !(self.has_label && !outlined) && self.single_line;
+        let y_of = |item_height: i32| if centered { (height - item_height) / 2 } else { text_y };
         if let Some(placeholder) = &placeholder {
-            let y = if (self.has_label && !outlined) || !self.single_line {
-                text_y
-            } else {
-                (height - placeholder.height) / 2
-            };
-            scope.place_relative(placeholder, start, y);
+            scope.place_relative(placeholder, start + prefix_width, y_of(placeholder.height));
         }
-        scope.place_relative(&text, start, text_y);
+        if let Some(prefix) = &prefix {
+            scope.place_relative(prefix, start, y_of(prefix.height));
+        }
+        if let Some(suffix) = &suffix {
+            scope.place_relative(suffix, width - end - suffix.width, y_of(suffix.height));
+        }
+        scope.place_relative(&text, start + prefix_width, text_y);
         if let Some(indicator) = indicator {
             let indicator = scope.measure(indicator, Constraints::new(width, width, 0, height));
             scope.place_relative(&indicator, 0, height - indicator.height);

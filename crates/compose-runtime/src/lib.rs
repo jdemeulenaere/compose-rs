@@ -19,6 +19,7 @@ extern crate self as compose;
 #[path = "private.rs"]
 pub mod __private;
 mod applier;
+mod background;
 mod callback;
 mod compose_arg;
 mod composer;
@@ -40,6 +41,7 @@ mod slot_table;
 mod state;
 
 pub use applier::{Applier, NodeRef};
+pub use background::{Background, spawn_background};
 pub use callback::{Callback, IntoCallback, IntoOptionalCallback, callback};
 pub use compose_arg::ComposeArg;
 pub use compose_macros::{ComposeArg, composable};

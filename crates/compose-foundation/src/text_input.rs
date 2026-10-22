@@ -5,51 +5,47 @@ use std::rc::Rc;
 
 use compose_runtime::{Callback, ComposeArg};
 
-/// The action a single-line field's Enter (an input method's action key) performs, as Compose's
-/// `ImeAction`.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
-pub enum ImeAction {
-    /// The platform's default: on desktop, none.
-    #[default]
-    Default,
-    None,
-    Go,
-    Search,
-    Send,
-    /// Moves focus back.
-    Previous,
-    /// Moves focus on.
-    Next,
-    Done,
-}
-
-/// The kind of text a field takes, as Compose's `KeyboardType`: a hint for on-screen keyboards
-/// (desktop keyboards ignore it).
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
-pub enum KeyboardType {
-    #[default]
-    Text,
-    Ascii,
-    Number,
-    Phone,
-    Uri,
-    Email,
-    Password,
-    NumberPassword,
-    Decimal,
-}
+pub use compose_ui::text_input::{ImeAction, ImeOptions, KeyboardCapitalization, KeyboardType};
 
 /// A field's keyboard, as Compose's `KeyboardOptions`:
-/// `KeyboardOptions { ime_action: ImeAction::Done, ..KeyboardOptions::DEFAULT }`.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+/// `KeyboardOptions { ime_action: ImeAction::Done, ..KeyboardOptions::DEFAULT }`. On-screen
+/// keyboards read them (`UiHost::text_input_options`); desktop keyboards ignore all but the
+/// action.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct KeyboardOptions {
+    /// What the keyboard capitalizes on its own.
+    pub capitalization: KeyboardCapitalization,
+    /// Whether the keyboard may correct words as they're typed (Compose's `autoCorrectEnabled`,
+    /// true when unspecified).
+    pub auto_correct_enabled: bool,
     pub keyboard_type: KeyboardType,
     pub ime_action: ImeAction,
 }
 
 impl KeyboardOptions {
-    pub const DEFAULT: KeyboardOptions =
-        KeyboardOptions { keyboard_type: KeyboardType::Text, ime_action: ImeAction::Default };
+    pub const DEFAULT: KeyboardOptions = KeyboardOptions {
+        capitalization: KeyboardCapitalization::None,
+        auto_correct_enabled: true,
+        keyboard_type: KeyboardType::Text,
+        ime_action: ImeAction::Default,
+    };
+
+    /// What the field asks of the input method, as Compose's `toImeOptions(singleLine)`.
+    pub fn to_ime_options(&self, single_line: bool) -> ImeOptions {
+        ImeOptions {
+            single_line,
+            capitalization: self.capitalization,
+            auto_correct: self.auto_correct_enabled,
+            keyboard_type: self.keyboard_type,
+            ime_action: self.ime_action,
+        }
+    }
+}
+
+impl Default for KeyboardOptions {
+    fn default() -> Self {
+        KeyboardOptions::DEFAULT
+    }
 }
 
 impl ComposeArg for KeyboardOptions {
@@ -59,7 +55,8 @@ impl ComposeArg for KeyboardOptions {
 }
 
 /// What a field's actions do, as Compose's `KeyboardActions`: the one for its `ime_action` runs
-/// on Enter in a single-line field. Without one, `Next` and `Previous` move focus, as Compose's
+/// on Enter in a single-line field, or when the input method's action key is pressed. Without
+/// one, `Next` and `Previous` move focus and `Done` hides the on-screen keyboard, as Compose's
 /// default actions; the others do nothing.
 #[derive(Clone, Default)]
 pub struct KeyboardActions {

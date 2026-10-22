@@ -35,7 +35,7 @@ fn password_field(value: Rc<RefCell<String>>) -> ComposeTestRule {
             },
             modifier = Modifier.size_wh(200.dp(), 40.dp()).test_tag("field"),
             single_line = true,
-            visual_transformation = PasswordVisualTransformation::new().into()
+            visual_transformation = PasswordVisualTransformation::new()
         );
     })
 }

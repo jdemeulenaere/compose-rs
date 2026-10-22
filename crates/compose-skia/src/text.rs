@@ -158,6 +158,10 @@ impl TextMeasurer for SkiaTextMeasurer {
         self.entry(paragraph).metrics
     }
 
+    fn did_exceed_max_lines(&self, paragraph: ParagraphHandle) -> bool {
+        self.entry(paragraph).paragraph.did_exceed_max_lines()
+    }
+
     fn is_right_to_left(&self, paragraph: ParagraphHandle) -> bool {
         self.entry(paragraph).right_to_left
     }

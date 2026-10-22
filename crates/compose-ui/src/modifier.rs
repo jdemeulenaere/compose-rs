@@ -988,4 +988,18 @@ pub trait KeyInputModifierNode {
     fn text_input_area(&self) -> Option<crate::unit::Rect> {
         None
     }
+    /// What the node asks of an on-screen keyboard while it takes text (`text_input_area` is
+    /// `Some`), as Compose's `ImeOptions`. `None` for the defaults.
+    fn ime_options(&self) -> Option<crate::text_input::ImeOptions> {
+        None
+    }
+    /// The input method's action key (Android's editor action) was pressed, as Compose's
+    /// `onImeActionPerformed`. Returning true consumes it.
+    fn on_ime_action(
+        &mut self,
+        _action: crate::text_input::ImeAction,
+        _context: &mut EventContext<'_>,
+    ) -> bool {
+        false
+    }
 }

@@ -292,6 +292,30 @@ pub struct ParagraphMetrics {
     pub line_count: u32,
 }
 
+/// What a text's layout came to, as Compose's `TextLayoutResult` (a snapshot of its metrics,
+/// without its queries): what `on_text_layout` hears after each new layout.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct TextLayoutResult {
+    /// The text's size: the paragraph's, coerced into the constraints.
+    pub size: IntSize,
+    /// The lines laid out (at most `max_lines`).
+    pub line_count: u32,
+    pub first_baseline: f32,
+    pub last_baseline: f32,
+    /// The paragraph is wider than `size`.
+    pub did_overflow_width: bool,
+    /// The paragraph is taller than `size`, or had more lines than `max_lines`.
+    pub did_overflow_height: bool,
+}
+
+impl TextLayoutResult {
+    /// The text doesn't fit: it's clipped, ellipsized or drawn past its bounds, as Compose's
+    /// `hasVisualOverflow`.
+    pub fn has_visual_overflow(&self) -> bool {
+        self.did_overflow_width || self.did_overflow_height
+    }
+}
+
 /// A position in a text, for hit testing (selection, the cursor).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct TextPosition {
@@ -346,6 +370,11 @@ pub trait TextMeasurer: std::any::Any {
         self.layout(text.as_str(), style, options, constraints, density)
     }
     fn metrics(&self, paragraph: ParagraphHandle) -> ParagraphMetrics;
+    /// Whether the text had more lines than its `max_lines` (cut or ellipsized), as
+    /// `Paragraph.didExceedMaxLines`. The default says no (a measurer that can't tell).
+    fn did_exceed_max_lines(&self, _paragraph: ParagraphHandle) -> bool {
+        false
+    }
     fn hit_test(&self, paragraph: ParagraphHandle, position: Offset) -> TextPosition;
     /// Whether the paragraph runs right to left (its first strong character's direction), as
     /// `TextLayoutResult.getParagraphDirection`: Left and Right move the other way.
@@ -397,6 +426,7 @@ struct FixedParagraph {
     advance: f32,
     line_height: f32,
     size: IntSize,
+    exceeded_max_lines: bool,
 }
 
 impl FixedTextMeasurer {
@@ -483,6 +513,7 @@ impl TextMeasurer for FixedTextMeasurer {
         } else {
             options.max_lines
         };
+        let exceeded_max_lines = lines.len() > max_lines.max(1) as usize;
         lines.truncate(max_lines.max(1) as usize);
         // As Compose: the width the text was laid out at when wrapping (its own width, the
         // widest hard line, when narrower), the lines' height; the layout coerces it into its
@@ -496,8 +527,14 @@ impl TextMeasurer for FixedTextMeasurer {
         };
         let size =
             IntSize::new(width.ceil() as i32, (lines.len() as f32 * line_height).ceil() as i32);
-        let paragraph =
-            FixedParagraph { text: text.to_string(), lines, advance, line_height, size };
+        let paragraph = FixedParagraph {
+            text: text.to_string(),
+            lines,
+            advance,
+            line_height,
+            size,
+            exceeded_max_lines,
+        };
         match self.free.pop() {
             Some(index) => {
                 self.paragraphs[index as usize] = Some(paragraph);
@@ -520,6 +557,10 @@ impl TextMeasurer for FixedTextMeasurer {
                 + paragraph.line_height * (paragraph.lines.len().max(1) - 1) as f32,
             line_count: paragraph.lines.len() as u32,
         }
+    }
+
+    fn did_exceed_max_lines(&self, handle: ParagraphHandle) -> bool {
+        self.paragraph(handle).exceeded_max_lines
     }
 
     fn hit_test(&self, handle: ParagraphHandle, position: Offset) -> TextPosition {

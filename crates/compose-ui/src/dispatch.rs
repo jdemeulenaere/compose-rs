@@ -363,6 +363,10 @@ impl UiTree {
             self.invalidate_draw_of(node);
         }
         self.input_method_reset |= requests.reset_input_method;
+        if let Some(show) = requests.software_keyboard {
+            self.focus_requests.software_keyboard.set(Some(show));
+            self.focus_requests.wake();
+        }
         for node in requests.measure {
             self.invalidate_measure(node);
         }
@@ -529,6 +533,36 @@ impl UiTree {
         cursor: Option<(usize, usize)>,
     ) -> (bool, Vec<Action>) {
         self.dispatch_to_key_path(|handler, context| handler.on_preedit(text, cursor, context))
+    }
+
+    /// Sends an input method's action key to the focused node and its ancestors until one takes
+    /// it.
+    pub fn dispatch_ime_action(
+        &mut self,
+        action: crate::text_input::ImeAction,
+    ) -> (bool, Vec<Action>) {
+        self.dispatch_to_key_path(|handler, context| handler.on_ime_action(action, context))
+    }
+
+    /// What the focused node taking text asks of an on-screen keyboard: its `ImeOptions`, the
+    /// defaults if it gives none, `None` if no focused node takes text.
+    pub fn text_input_options(&mut self) -> Option<crate::text_input::ImeOptions> {
+        let mut next = self.focused();
+        while let Some(node) = next {
+            next = self.node(node).parent;
+            for index in (0..self.node(node).chain.len()).rev() {
+                if self.node(node).capabilities[index] & capability::KEY == 0 {
+                    continue;
+                }
+                let handler = self.get_mut(node)?.chain[index].as_key_input();
+                if let Some(handler) = handler
+                    && handler.text_input_area().is_some()
+                {
+                    return Some(handler.ime_options().unwrap_or_default());
+                }
+            }
+        }
+        None
     }
 
     /// Where the focused node takes text, in the root: where an input method's candidate window

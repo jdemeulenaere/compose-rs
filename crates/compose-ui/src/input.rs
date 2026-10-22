@@ -250,6 +250,8 @@ pub(crate) struct Requests {
     pub(crate) draw: Vec<NodeId>,
     pub(crate) measure: Vec<NodeId>,
     pub(crate) reset_input_method: bool,
+    /// Show (true) or hide (false) the on-screen keyboard.
+    pub(crate) software_keyboard: Option<bool>,
 }
 
 impl EventContext<'_> {
@@ -296,6 +298,17 @@ impl EventContext<'_> {
     /// Clears focus, as `FocusManager.clearFocus`.
     pub fn clear_focus(&mut self) {
         self.requests.clear_focus = true;
+    }
+
+    /// Asks the platform to show its on-screen keyboard, as `SoftwareKeyboardController.show`.
+    pub fn show_software_keyboard(&mut self) {
+        self.requests.software_keyboard = Some(true);
+    }
+
+    /// Asks the platform to hide its on-screen keyboard, as `SoftwareKeyboardController.hide`
+    /// (a text field's default `Done` action).
+    pub fn hide_software_keyboard(&mut self) {
+        self.requests.software_keyboard = Some(false);
     }
 
     /// The node's drawing changed: what it draws in (its repaint boundary) draws again.

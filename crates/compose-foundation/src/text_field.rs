@@ -37,6 +37,12 @@ const CURSOR_WIDTH: compose_ui::Dp = compose_ui::Dp(2.0);
 /// is part of the field: `modifier` applies around it, the field is one semantics node with
 /// it (`mergeDescendants`, as `CoreTextField`), and a tap anywhere in it focuses the field and
 /// puts the cursor at the offset nearest to the tap.
+///
+/// A multi-line field is between `min_lines` and `max_lines` lines high, as Compose's
+/// `heightInLines` (a single line is one line high); its text scrolls within. The keyboard's
+/// action key (Enter in a single line, or the input method's) runs `keyboard_actions`' action
+/// for `keyboard_options.ime_action`, or by default moves the focus (`Next`, `Previous`) or
+/// hides the on-screen keyboard (`Done`).
 #[composable]
 pub fn BasicTextField(
     value: String,
@@ -48,7 +54,9 @@ pub fn BasicTextField(
     #[default(crate::KeyboardOptions::DEFAULT)] keyboard_options: KeyboardOptions,
     #[default(crate::KeyboardActions::new())] keyboard_actions: KeyboardActions,
     #[default(false)] single_line: bool,
-    #[default(crate::VisualTransformation::NONE)] visual_transformation: VisualTransformation,
+    #[default(u32::MAX)] max_lines: u32,
+    #[default(1)] min_lines: u32,
+    #[default(crate::VisualTransformation::NONE)] visual_transformation: impl Into<VisualTransformation>,
     #[default(crate::Color::BLACK)] cursor_color: Color,
     #[default(crate::inner_text_field_only)] decoration_box: impl Fn(Callback) + 'static,
 ) {
@@ -59,6 +67,8 @@ pub fn BasicTextField(
         read_only,
         style: text_style,
         single_line,
+        max_lines,
+        min_lines,
         cursor_color,
         keyboard_options,
         keyboard_actions,
@@ -96,6 +106,10 @@ pub struct TextFieldElement {
     pub read_only: bool,
     pub style: TextStyle,
     pub single_line: bool,
+    /// The most lines' height a multi-line field takes (its text scrolls past them).
+    pub max_lines: u32,
+    /// The fewest lines' height a multi-line field takes.
+    pub min_lines: u32,
     pub cursor_color: Color,
     pub keyboard_options: KeyboardOptions,
     pub keyboard_actions: KeyboardActions,
@@ -117,6 +131,9 @@ impl ModifierNodeElement for TextFieldElement {
             read_only: self.read_only,
             style: self.style,
             single_line: self.single_line,
+            max_lines: self.max_lines,
+            min_lines: self.min_lines,
+            line_bounds: None,
             cursor_color: self.cursor_color,
             focused: false,
             press: None,
@@ -164,10 +181,19 @@ impl ModifierNodeElement for TextFieldElement {
                 node.redo.clear();
                 node.last_typing = None;
             }
+            if node.style != self.style {
+                node.line_bounds = None;
+            }
             node.style = self.style;
             node.single_line = self.single_line;
             node.visual_transformation = self.visual_transformation.clone();
             node.invalidate_paragraph();
+        }
+        if node.max_lines != self.max_lines || node.min_lines != self.min_lines {
+            node.max_lines = self.max_lines;
+            node.min_lines = self.min_lines;
+            node.line_bounds = None;
+            node.constraints = None;
         }
         node.on_value_change = self.on_value_change.clone();
         node.enabled = self.enabled;
@@ -185,6 +211,8 @@ impl ModifierNodeElement for TextFieldElement {
                 && other.read_only == self.read_only
                 && other.style == self.style
                 && other.single_line == self.single_line
+                && other.max_lines == self.max_lines
+                && other.min_lines == self.min_lines
                 && other.cursor_color == self.cursor_color
                 && other.keyboard_options == self.keyboard_options
                 && other.keyboard_actions.same(&self.keyboard_actions)
@@ -288,6 +316,10 @@ pub struct TextFieldNode {
     read_only: bool,
     style: TextStyle,
     single_line: bool,
+    max_lines: u32,
+    min_lines: u32,
+    /// The heights of `min_lines` and `max_lines` lines, at the density they were measured at.
+    line_bounds: Option<(compose_ui::Density, i32, i32)>,
     cursor_color: Color,
     focused: bool,
     press: Option<Press>,
@@ -646,6 +678,48 @@ impl ModifierNode for TextFieldNode {
     }
 }
 
+impl TextFieldNode {
+    /// The fewest and most pixels high the field's text may be: from `min_lines` and
+    /// `max_lines` in a multi-line field, any height in a single line.
+    fn line_bounds(&mut self, scope: &mut MeasureScope<'_>) -> (i32, i32) {
+        if self.single_line || (self.min_lines <= 1 && self.max_lines == u32::MAX) {
+            return (0, i32::MAX);
+        }
+        let density = scope.density();
+        if let Some((at, min, max)) = self.line_bounds
+            && at == density
+        {
+            return (min, max);
+        }
+        let min = if self.min_lines > 1 {
+            crate::text::height_of_lines(scope, &self.style, self.min_lines)
+        } else {
+            0
+        };
+        let max = if self.max_lines == u32::MAX {
+            i32::MAX
+        } else {
+            crate::text::height_of_lines(scope, &self.style, self.max_lines.max(self.min_lines))
+        };
+        self.line_bounds = Some((density, min, max));
+        (min, max)
+    }
+
+    /// Performs `action`, as Compose's `onImeActionPerformed`: the field's action for it, or
+    /// Compose's default (`Next` and `Previous` move the focus, `Done` hides the on-screen
+    /// keyboard). Returns whether something was done.
+    fn perform_ime_action(&mut self, action: ImeAction, context: &mut EventContext<'_>) -> bool {
+        match (self.keyboard_actions.action(action), action) {
+            (Some(callback), _) => context.call(callback),
+            (None, ImeAction::Next) => context.move_focus(true),
+            (None, ImeAction::Previous) => context.move_focus(false),
+            (None, ImeAction::Done) => context.hide_software_keyboard(),
+            _ => return false,
+        }
+        true
+    }
+}
+
 /// Moves `scroll` (along one axis) so `[start, end)` is inside `[0, visible)`, within
 /// `[0, max]`.
 fn scroll_into_view(scroll: f32, start: f32, end: f32, visible: f32, max: f32) -> f32 {
@@ -769,8 +843,13 @@ impl LayoutModifierNode for TextFieldNode {
             }
         }
         let metrics = scope.text_measurer().metrics(paragraph);
-        let size = constraints
-            .constrain(IntSize::new(metrics.size.width + cursor_width, metrics.size.height));
+        // A multi-line field between `min_lines` and `max_lines` lines high, as Compose's
+        // `heightInLines`.
+        let (min_height, max_height) = self.line_bounds(scope);
+        let size = constraints.constrain(IntSize::new(
+            metrics.size.width + cursor_width,
+            metrics.size.height.max(min_height).min(max_height),
+        ));
         self.overflows =
             metrics.size.width + cursor_width > size.width || metrics.size.height > size.height;
         // The text scrolls to keep the cursor in view, as Compose's: sideways on a single line,
@@ -1171,14 +1250,7 @@ impl KeyInputModifierNode for TextFieldNode {
             }
             // A single line's Enter performs its action, as Compose's `onImeActionPerformed`.
             Key::Enter | Key::NumPadEnter if self.single_line => {
-                let ime_action = self.keyboard_options.ime_action;
-                match (self.keyboard_actions.action(ime_action), ime_action) {
-                    (Some(action), _) => context.call(action),
-                    (None, ImeAction::Next) => context.move_focus(true),
-                    (None, ImeAction::Previous) => context.move_focus(false),
-                    _ => return false,
-                }
-                true
+                self.perform_ime_action(self.keyboard_options.ime_action, context)
             }
             _ => false,
         }
@@ -1210,6 +1282,25 @@ impl KeyInputModifierNode for TextFieldNode {
             context.invalidate_measure();
         }
         true
+    }
+
+    fn ime_options(&self) -> Option<compose_ui::ImeOptions> {
+        Some(self.keyboard_options.to_ime_options(self.single_line))
+    }
+
+    /// The input method's action key: the field's action for it (whichever the keyboard showed,
+    /// as Compose's), committing a composition first.
+    fn on_ime_action(&mut self, action: ImeAction, context: &mut EventContext<'_>) -> bool {
+        if !self.enabled {
+            return false;
+        }
+        self.commit_composition(context);
+        // Android's default action key is `Done` for a single line.
+        let action = match action {
+            ImeAction::Default if self.single_line => ImeAction::Done,
+            action => action,
+        };
+        self.perform_ime_action(action, context)
     }
 
     fn text_input_area(&self) -> Option<Rect> {

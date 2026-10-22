@@ -212,6 +212,13 @@ impl MeasureScope<'_> {
         size
     }
 
+    /// Runs `action` after the layout, outside the tree, as the layout callbacks
+    /// (`on_size_changed`) run: a text's `on_text_layout`. What it writes is laid out within the
+    /// frame (D172).
+    pub fn run_after_layout(&mut self, action: impl FnOnce() + 'static) {
+        self.tree.layout_callbacks.push(crate::input::Action::Run(Box::new(action)));
+    }
+
     /// Whether this measurement only asks an intrinsic size (`max_intrinsic_width` measuring
     /// a child to ask): what it measures isn't the layout's.
     pub fn is_intrinsic_probe(&self) -> bool {

@@ -485,9 +485,11 @@ fn themed_text(text: String) {
         text.into(),
         Modifier,
         style,
+        None,
         compose_ui::TextOverflow::Clip,
         true,
         u32::MAX,
+        1,
     );
 }
 

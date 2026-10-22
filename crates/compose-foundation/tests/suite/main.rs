@@ -8,6 +8,7 @@ mod drawing_api;
 mod effects;
 mod fling;
 mod focus_requester;
+mod forms;
 mod foundation;
 mod grid;
 mod hover;

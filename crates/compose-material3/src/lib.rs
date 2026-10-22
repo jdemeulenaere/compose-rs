@@ -104,8 +104,8 @@ pub use theme::{
 // What the defaults of the composables name through `crate::`.
 #[doc(hidden)]
 pub use compose_foundation::{
-    ImeAction, KeyboardActions, KeyboardOptions, KeyboardType, PasswordVisualTransformation,
-    ScrollState, VisualTransformation, remember_scroll_state,
+    ImeAction, KeyboardActions, KeyboardCapitalization, KeyboardOptions, KeyboardType,
+    PasswordVisualTransformation, ScrollState, VisualTransformation, remember_scroll_state,
 };
 pub use compose_ui::{
     AnnotatedString, Color, Dp, FontFamily, FontStyle, IntOffset, Modifier, RECTANGLE_SHAPE, Sp,

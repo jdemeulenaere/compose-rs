@@ -24,6 +24,8 @@ struct Parameter {
     callback: Option<usize>,
     /// The same, for an optional callback parameter (`Option<impl Fn(…)>`).
     optional: Option<usize>,
+    /// An `impl Into<T>` parameter: what it's given is converted.
+    into: bool,
     default: Option<TokenStream>,
 }
 
@@ -47,7 +49,7 @@ impl Parse for Parameter {
         } else {
             None
         };
-        Ok(Parameter { name, callback, optional, default })
+        Ok(Parameter { name, callback, optional, into: kind == "into", default })
     }
 }
 
@@ -678,6 +680,11 @@ fn build(call: Call) -> syn::Result<TokenStream> {
             }
             // A `#[format]` parameter converts whatever it is given (`Text!(title)`).
             None if format && index == 0 => {
+                let value = shared_value(argument.into_value(), &mentions);
+                quote! { ::core::convert::Into::into(#value) }
+            }
+            // An `impl Into<T>` parameter converts what it's given.
+            None if parameter.into => {
                 let value = shared_value(argument.into_value(), &mentions);
                 quote! { ::core::convert::Into::into(#value) }
             }
