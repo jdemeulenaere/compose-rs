@@ -178,6 +178,55 @@ fn the_default_actions_move_the_focus_and_hide_the_keyboard() {
     assert_eq!(ui.host().take_software_keyboard_request(), Some(false));
 }
 
+/// As Compose's `tapToFocus`: a tap on the focused field asks for the keyboard again (after
+/// `Done` hid it), on its text or on its decoration; a desktop host just ignores the request.
+#[test]
+fn a_tap_on_the_focused_field_asks_for_the_keyboard() {
+    let mut ui = field(KeyboardOptions::DEFAULT, KeyboardActions::new(), true);
+    ui.on_node_with_tag("first").perform_click().assert_is_focused();
+    // Focusing shows it anyway (the platform shows it for a newly focused field).
+    let _ = ui.host().take_software_keyboard_request();
+    assert!(ui.host().perform_ime_action(ImeAction::Done));
+    assert_eq!(ui.host().take_software_keyboard_request(), Some(false));
+    ui.on_node_with_tag("first").perform_click().assert_is_focused();
+    assert_eq!(ui.host().take_software_keyboard_request(), Some(true));
+
+    // A tap on the padding of a decoration around the text.
+    let mut ui = compose_test(|| {
+        let text = remember(|| mutable_state_of(String::new()));
+        BasicTextField!(
+            text.get(),
+            move |new: String| text.set(new),
+            modifier = Modifier.size_wh(200.dp(), 80.dp()).test_tag("field"),
+            single_line = true,
+            decoration_box = |inner_text_field: compose_runtime::Callback| {
+                Box!(modifier = Modifier.padding(30.dp()), { inner_text_field() });
+            }
+        );
+    });
+    ui.on_node_with_tag("field").request_focus();
+    assert!(ui.host().perform_ime_action(ImeAction::Done));
+    assert_eq!(ui.host().take_software_keyboard_request(), Some(false));
+    let padding = compose_ui::Offset::new(5.0, 5.0);
+    ui.host().send_pointer(compose_ui::PointerEvent::press(padding));
+    ui.host().send_pointer(compose_ui::PointerEvent::release(padding));
+    ui.wait_for_idle();
+    ui.on_node_with_tag("field").assert_is_focused();
+    assert_eq!(ui.host().take_software_keyboard_request(), Some(true));
+
+    // A read-only field doesn't.
+    let mut ui = compose_test(|| {
+        BasicTextField!(
+            String::from("fixed"),
+            |_: String| {},
+            modifier = Modifier.size_wh(200.dp(), 40.dp()).test_tag("field"),
+            read_only = true
+        );
+    });
+    ui.on_node_with_tag("field").perform_click().perform_click();
+    assert_eq!(ui.host().take_software_keyboard_request(), None);
+}
+
 #[test]
 fn a_password_field_takes_its_transformation_without_into() {
     let mut ui = compose_test(|| {
