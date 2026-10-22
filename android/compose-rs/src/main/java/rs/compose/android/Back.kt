@@ -34,19 +34,21 @@ internal interface BackRegistration {
         fun create(view: View, onBack: () -> Unit): BackRegistration {
             val activity = view.context.activity()
             if (activity != null && androidXPresent) {
-                AndroidXBack.register(activity, onBack)?.let { return it }
+                try {
+                    AndroidXBack.register(activity, onBack)?.let { return it }
+                } catch (_: NoClassDefFoundError) {
+                    // The app has no AndroidX activity (or R8 removed it): the platform's way.
+                    androidXPresent = false
+                }
             }
             return PlatformBack(view, onBack)
         }
 
-        private val androidXPresent: Boolean by lazy {
-            try {
-                Class.forName("androidx.activity.OnBackPressedDispatcherOwner")
-                true
-            } catch (_: ClassNotFoundException) {
-                false
-            }
-        }
+        /**
+         * Whether AndroidX's activity classes may be there: found by referring to them directly
+         * (so R8 keeps and renames them consistently), a `NoClassDefFoundError` meaning not.
+         */
+        private var androidXPresent = true
     }
 }
 
@@ -61,7 +63,8 @@ internal fun Context.activity(): Activity? {
 
 /** The window's `OnBackInvokedDispatcher` (API 33+), and back keys reaching the view. */
 private class PlatformBack(private val view: View, private val onBack: () -> Unit) : BackRegistration {
-    private var registered: Any? = null
+    /** The dispatcher it registered with and its callback (API 33+), unregistered from it. */
+    private var registered: Pair<Any, Any>? = null
     private var enabled = false
 
     override val handlesKeys: Boolean
@@ -70,14 +73,14 @@ private class PlatformBack(private val view: View, private val onBack: () -> Uni
     override fun setEnabled(enabled: Boolean) {
         this.enabled = enabled
         if (Build.VERSION.SDK_INT < 33) return
-        val dispatcher = view.findOnBackInvokedDispatcher() ?: return
-        val current = registered as OnBackInvokedCallback?
+        val current = registered
         if (enabled && current == null) {
+            val dispatcher = view.findOnBackInvokedDispatcher() ?: return
             val callback = OnBackInvokedCallback { onBack() }
             dispatcher.registerOnBackInvokedCallback(OnBackInvokedDispatcher.PRIORITY_DEFAULT, callback)
-            registered = callback
+            registered = dispatcher to callback
         } else if (!enabled && current != null) {
-            dispatcher.unregisterOnBackInvokedCallback(current)
+            (current.first as OnBackInvokedDispatcher).unregisterOnBackInvokedCallback(current.second as OnBackInvokedCallback)
             registered = null
         }
     }
@@ -85,7 +88,10 @@ private class PlatformBack(private val view: View, private val onBack: () -> Uni
     override fun remove() = setEnabled(false)
 
     override fun passOn() {
-        // Nothing enabled any more (the handler went in the meantime): the next back goes on.
+        // The content's handler went in the meantime: this back goes to the activity, as it
+        // would have without the callback (its default finishes it).
         setEnabled(false)
+        @Suppress("DEPRECATION")
+        view.context.activity()?.onBackPressed()
     }
 }

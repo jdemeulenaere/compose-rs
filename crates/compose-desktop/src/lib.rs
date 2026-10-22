@@ -644,7 +644,7 @@ impl ApplicationHandler<UserEvent> for App {
 /// lambdas of its `Window`s there, so a window's content recomposes only for what it reads; a
 /// plain closure's lambdas are new at each application pass.
 pub fn application(content: impl Fn() + 'static) {
-    // `decode_image_bytes` and `image_resource` decode with Skia.
+    // `decode_image_bytes` and `remember_image_resource` decode with Skia.
     compose_ui::set_image_decoder(Arc::new(compose_skia::SkiaImageDecoder));
     let event_loop =
         EventLoop::<UserEvent>::with_user_event().build().expect("compose-desktop: an event loop");

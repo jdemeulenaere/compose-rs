@@ -24,7 +24,7 @@ use std::rc::Rc;
 use crate::local::CompositionLocal;
 use crate::remember::{Remember, RememberObserver, remember_observer};
 use crate::runtime::with_runtime;
-use crate::slot_table::NONE;
+use crate::slot_table::{GroupKind, NONE};
 use crate::state::{OwnedState, mutable_state_of};
 
 /// A saved value: what a platform's saved state (an Android `Bundle`) can hold.
@@ -448,8 +448,8 @@ impl SaveableStateRegistry {
         !self.inner.providers.borrow().is_empty()
     }
 
-    /// Every registered value's saved form, by key, as Compose's `performSave`. Values whose
-    /// saver saved nothing are left out.
+    /// Every registered value's saved form, by key, and the values restored and not yet taken
+    /// back, as Compose's `performSave`. Values whose saver saved nothing are left out.
     pub fn perform_save(&self) -> SavedState {
         // The providers are called without the borrow: they read state, user code.
         let providers: Vec<(u64, Vec<Provider>)> = self
@@ -461,11 +461,21 @@ impl SaveableStateRegistry {
                 (*key, entries.iter().map(|(_, provider)| provider.clone()).collect())
             })
             .collect();
-        let mut values = HashMap::new();
+        // What was restored and not yet taken back is saved again (a pane not composed in this
+        // configuration gets its values back in the next), as Compose's `performSave`.
+        let mut values: HashMap<u64, Vec<SavedValue>> = self
+            .inner
+            .restored
+            .borrow()
+            .iter()
+            .map(|(key, values)| (*key, values.iter().cloned().collect()))
+            .collect();
         for (key, providers) in providers {
             let saved: Vec<SavedValue> =
                 providers.iter().filter_map(|provider| provider()).collect();
-            if !saved.is_empty() {
+            if saved.is_empty() {
+                values.remove(&key);
+            } else {
                 values.insert(key, saved);
             }
         }
@@ -514,7 +524,27 @@ pub fn current_composite_key_hash() -> u64 {
         let mut hash = 0u64;
         while group != NONE {
             let entry = &table[group];
-            hash = hash.rotate_left(3) ^ entry.key ^ entry.data_key.rotate_left(29);
+            // Groups of one key under one parent (two calls of a composable: keys here are per
+            // composable, where Compose's are per call site) are told apart by their order among
+            // themselves; a `key(…)` group by its key alone.
+            let mut ordinal = 0u64;
+            if entry.kind != GroupKind::Movable && entry.parent != NONE {
+                let mut sibling = table[entry.parent].first_child;
+                while sibling != NONE && sibling != group {
+                    let other = &table[sibling];
+                    if other.key == entry.key
+                        && other.data_key == entry.data_key
+                        && other.kind == entry.kind
+                    {
+                        ordinal += 1;
+                    }
+                    sibling = other.next_sibling;
+                }
+            }
+            hash = hash.rotate_left(3)
+                ^ entry.key
+                ^ entry.data_key.rotate_left(29)
+                ^ ordinal.wrapping_mul(0x9e37_79b9_7f4a_7c15);
             group = entry.parent;
         }
         hash

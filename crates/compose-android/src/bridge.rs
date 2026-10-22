@@ -379,7 +379,8 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_create<'local>(
         };
         check(&mut env, "ComposeRsView.requestFrame");
     });
-    // The content's events go to the view's listener.
+    // The content's events go to the view, which posts them to its listener: Kotlin code
+    // never runs inside this call into Rust (it could call into the host again).
     let dispatch_event =
         method(&mut env, &view, "dispatchHostEvent", "(Ljava/lang/String;Ljava/lang/String;)V");
     let event_view = view_ref.clone();

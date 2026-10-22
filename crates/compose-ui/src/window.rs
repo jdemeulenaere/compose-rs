@@ -172,16 +172,16 @@ pub fn PopupWithPositionProvider(
             if properties.focusable {
                 modifier = modifier.focusable(true);
             }
-            // Back (Escape on desktop) dismisses a focusable popup, as on Android a popup
-            // window that takes focus gets the back key; it comes before what's beneath.
+            // A focusable popup takes back (Escape on desktop) before what's beneath, as on
+            // Android a popup window that takes focus gets the back key, and dismisses if
+            // `dismiss_on_back_press`; back never goes past it while it shows.
             let layer = crate::back::LOCAL_BACK_LAYER.current() + u32::from(properties.focusable);
-            if properties.focusable
-                && properties.dismiss_on_back_press
-                && let Some(dismiss) = on_dismiss_request.clone()
-            {
+            if properties.focusable {
+                let on_back =
+                    back_dismissal(on_dismiss_request.clone(), properties.dismiss_on_back_press);
                 compose_runtime::CompositionLocalProvider(
                     crate::back::LOCAL_BACK_LAYER.provides(layer),
-                    move || crate::back::BackHandler(true, dismiss),
+                    move || crate::back::BackHandler(true, on_back),
                 );
             }
             let content = content.clone();
@@ -233,13 +233,13 @@ pub fn Dialog(
                 })
                 .focusable(true);
             // A dialog is a window of its own: back (Escape on desktop) goes to it, and to the
-            // handlers in it, before what's beneath.
+            // handlers in it, before what's beneath, and never past it: it takes back while
+            // shown, dismissing only if `dismiss_on_back_press`, as Compose's dialog window.
             let layer = crate::back::LOCAL_BACK_LAYER.current() + 1;
-            let on_back = dismiss.clone();
-            let enabled = properties.dismiss_on_back_press;
+            let on_back = back_dismissal(Some(dismiss.clone()), properties.dismiss_on_back_press);
             compose_runtime::CompositionLocalProvider(
                 crate::back::LOCAL_BACK_LAYER.provides(layer),
-                move || crate::back::BackHandler(enabled, on_back),
+                move || crate::back::BackHandler(true, on_back),
             );
             let content = content.clone();
             let stack = stack.clone();
@@ -482,5 +482,14 @@ impl PointerInputModifierNode for DismissOnClickNode {
 
     fn on_cancel_pointer_input(&mut self) {
         self.pressed_outside = false;
+    }
+}
+
+/// What back does in a dialog or a focusable popup: dismiss it if it may (`dismiss`), else
+/// nothing (it still takes back from what's beneath).
+fn back_dismissal(dismiss: Option<Callback>, dismiss_on_back_press: bool) -> Callback {
+    match dismiss.filter(|_| dismiss_on_back_press) {
+        Some(dismiss) => dismiss,
+        None => compose_runtime::callback(|| {}),
     }
 }

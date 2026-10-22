@@ -63,7 +63,9 @@ pub use graphics::{
 };
 pub use graphics_layer::{GraphicsLayerScope, LayerProperties, TransformOrigin};
 pub use host::{FrameStats, LOCAL_CONSTRAINTS_HINT, LOCAL_DENSITY, UiHost};
-pub use image::{ImageBitmap, ImageDecoder, decode_image_bytes, image_resource, set_image_decoder};
+pub use image::{
+    ImageBitmap, ImageDecoder, decode_image_bytes, remember_image_resource, set_image_decoder,
+};
 pub use input::{
     Action, EventContext, Key, KeyEvent, KeyEventType, KeyModifiers, PointerEvent,
     PointerEventPass, PointerEventType, PointerIcon, PointerId, PointerType,

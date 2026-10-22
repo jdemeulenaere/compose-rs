@@ -96,7 +96,7 @@ fn back_dismisses_a_dialog_before_handlers_composed_after_it() {
 }
 
 #[test]
-fn a_dialog_that_ignores_back_does_not_take_it() {
+fn a_dialog_that_ignores_back_takes_it_without_dismissing() {
     let mut ui = compose_test(|| {
         Dialog!(
             on_dismiss_request = || log("dismissed"),
@@ -109,8 +109,9 @@ fn a_dialog_that_ignores_back_does_not_take_it() {
             }
         );
     });
-    assert!(!ui.host().has_enabled_back_handlers());
-    assert!(!ui.host().on_back_pressed());
+    // Taken (nothing beneath gets it, the activity doesn't finish), not dismissed.
+    assert!(ui.host().has_enabled_back_handlers());
+    assert!(ui.host().on_back_pressed());
     assert_eq!(take_log(), Vec::<&str>::new());
 }
 
@@ -467,7 +468,7 @@ fn images_decode_with_the_platform_decoder() {
     assert!(compose_ui::decode_image_bytes(b"not an image").is_none());
     thread_local! { static DECODED: RefCell<Vec<ImageBitmap>> = const { RefCell::new(Vec::new()) }; }
     let mut ui = compose_test(|| {
-        let image = compose_ui::image_resource(&PIXEL).expect("decoded");
+        let image = compose_ui::remember_image_resource(&PIXEL).expect("decoded");
         DECODED.with(|decoded| decoded.borrow_mut().push(image));
         let recompose = remember(|| mutable_state_of(0));
         BasicText!("{}", recompose.get());
@@ -482,3 +483,6 @@ fn images_decode_with_the_platform_decoder() {
         assert!(decoded[0].same_image(&decoded[1]));
     });
 }
+
+#[path = "platform_review.rs"]
+mod review;

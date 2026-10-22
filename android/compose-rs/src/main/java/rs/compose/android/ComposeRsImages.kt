@@ -2,6 +2,7 @@ package rs.compose.android
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.ColorSpace
 
 /**
  * The platform's image decoder for compose-rs (`compose_ui::decode_image_bytes`,
@@ -15,6 +16,8 @@ object ComposeRsImages {
         val options = BitmapFactory.Options().apply {
             inPreferredConfig = Bitmap.Config.ARGB_8888
             inPremultiplied = true
+            // Colors as compose-rs draws them (sRGB), whatever profile the image carries.
+            inPreferredColorSpace = ColorSpace.get(ColorSpace.Named.SRGB)
         }
         val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options) ?: return null
         if (bitmap.config == Bitmap.Config.ARGB_8888) return bitmap

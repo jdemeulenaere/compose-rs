@@ -1,6 +1,6 @@
 //! Bitmaps, as Compose's `ImageBitmap`: pixels drawn by the display list's `DrawImage`, decoded
 //! by the platform's [`ImageDecoder`] (Skia on desktop, `BitmapFactory` on Android), which apps
-//! reach through [`decode_image_bytes`] and [`image_resource`].
+//! reach through [`decode_image_bytes`] and [`remember_image_resource`].
 
 use std::sync::{Arc, RwLock};
 
@@ -103,8 +103,9 @@ pub fn decode_image_bytes(bytes: &[u8]) -> Option<ImageBitmap> {
 
 /// An image bundled with the app (`include_bytes!("icon.png")`), decoded once where it's
 /// composed, as Compose's `ImageBitmap.imageResource(id)`: `None` if the platform can't decode
-/// it.
-pub fn image_resource(bytes: &'static [u8]) -> Option<ImageBitmap> {
+/// it. Named `remember_…` as it takes a slot: `#[composable]` puts a group around a call by that
+/// name in a branch, so calling it conditionally keeps later state in place.
+pub fn remember_image_resource(bytes: &'static [u8]) -> Option<ImageBitmap> {
     compose_runtime::remember_keyed((bytes.as_ptr() as usize, bytes.len()), || {
         decode_image_bytes(bytes)
     })

@@ -7,6 +7,8 @@ import android.content.res.Configuration
 import android.graphics.Canvas
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.os.Parcelable
 import android.os.SystemClock
 import android.os.Trace
@@ -86,6 +88,7 @@ class ComposeRsView(context: Context, private val app: String) : View(context) {
     /** The properties given to the content, set again on each composition. */
     private val props = LinkedHashMap<String, Any>()
     private var eventListener: OnEventListener? = null
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     /** Receives the events the content sends (`LOCAL_HOST_EVENTS`). */
     fun interface OnEventListener {
@@ -279,7 +282,10 @@ class ComposeRsView(context: Context, private val app: String) : View(context) {
         }
     }
 
-    /** Sets the property [name] for the content (`LOCAL_HOST_PROPS`), recomposing its readers. */
+    /**
+     * Sets the property [name] for the content (`LOCAL_HOST_PROPS`), recomposing its readers.
+     * Any thread: from another, it's posted to the main thread.
+     */
     fun setProp(name: String, value: String) = putProp(name, value)
 
     fun setProp(name: String, value: Double) = putProp(name, value)
@@ -288,12 +294,22 @@ class ComposeRsView(context: Context, private val app: String) : View(context) {
 
     fun setProp(name: String, value: Boolean) = putProp(name, value)
 
+    /** Removes the property [name]. On the main thread (or posted to it). */
     fun removeProp(name: String) {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            mainHandler.post { removeProp(name) }
+            return
+        }
         props.remove(name)
         if (host != 0L) ComposeRsNative.setProp(host, name, 0, null, 0.0)
     }
 
+    /** A property set from another thread is posted to the main thread, where Rust runs. */
     private fun putProp(name: String, value: Any) {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            mainHandler.post { putProp(name, value) }
+            return
+        }
         props[name] = value
         if (host != 0L) sendProp(name, value)
     }
@@ -311,9 +327,13 @@ class ComposeRsView(context: Context, private val app: String) : View(context) {
         eventListener = listener
     }
 
-    /** An event from the content (Rust calls it). */
+    /**
+     * An event from the content (Rust calls it, in the middle of a call into Rust): delivered
+     * from the main looper once that call returned, so the listener may call into the view
+     * (set a property, detach it) without re-entering Rust.
+     */
     fun dispatchHostEvent(name: String, payload: String) {
-        eventListener?.onEvent(name, payload)
+        mainHandler.post { eventListener?.onEvent(name, payload) }
     }
 
     /** Asks for a frame (Rust calls it when the app's state changes). */

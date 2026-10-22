@@ -62,11 +62,18 @@ fn copy_pixels(env: &mut JNIEnv, bitmap: &JObject) -> Option<ImageBitmap> {
     let width = env.call_method(bitmap, "getWidth", "()I", &[]).and_then(|value| value.i()).ok()?;
     let height =
         env.call_method(bitmap, "getHeight", "()I", &[]).and_then(|value| value.i()).ok()?;
+    let row_bytes =
+        env.call_method(bitmap, "getRowBytes", "()I", &[]).and_then(|value| value.i()).ok()?;
     let image = (|| {
         if width <= 0 || height <= 0 || width as u64 * height as u64 > MAX_PIXELS {
             return None;
         }
-        let mut pixels = vec![0u8; width as usize * height as usize * 4];
+        let (width, height, row_bytes) = (width as usize, height as usize, row_bytes as usize);
+        // Rows may be padded: copied with their stride, then packed.
+        if row_bytes < width * 4 {
+            return None;
+        }
+        let mut pixels = vec![0u8; row_bytes * height];
         // SAFETY: Kotlin writes the pixels during the call only; the vector outlives it.
         let buffer =
             unsafe { env.new_direct_byte_buffer(pixels.as_mut_ptr(), pixels.len()) }.ok()?;
@@ -77,6 +84,12 @@ fn copy_pixels(env: &mut JNIEnv, bitmap: &JObject) -> Option<ImageBitmap> {
             &[JValue::Object(&buffer)],
         )
         .ok()?;
+        if row_bytes != width * 4 {
+            for row in 1..height {
+                pixels.copy_within(row * row_bytes..row * row_bytes + width * 4, row * width * 4);
+            }
+            pixels.truncate(width * height * 4);
+        }
         Some(ImageBitmap::from_rgba_premultiplied(width as u32, height as u32, pixels))
     })();
     // A failed copy's exception is logged and cleared before calling again.
