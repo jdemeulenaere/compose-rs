@@ -19,7 +19,7 @@ use crate::serialize::Writer;
 pub trait TextBackend: 'static {
     /// Lays out paragraph `handle` (replacing one of the same handle): `text` with `request`
     /// (see `encode_request`), returning its metrics.
-    fn layout(&mut self, handle: u32, text: &str, request: &[u8]) -> ParagraphMetrics;
+    fn layout(&mut self, handle: u32, text: &str, request: &[u8]) -> LaidOut;
     /// The UTF-16 offset nearest to `position`.
     fn hit_test(&self, handle: u32, position: Offset) -> usize;
     /// The cursor before UTF-16 offset `offset`: its top, bottom and x.
@@ -27,9 +27,17 @@ pub trait TextBackend: 'static {
     fn release(&mut self, handle: u32);
 }
 
+/// What a backend's layout gives back.
+#[derive(Clone, Copy, Debug)]
+pub struct LaidOut {
+    pub metrics: ParagraphMetrics,
+    /// The text had more lines than its max lines (cut or ellipsized).
+    pub did_exceed_max_lines: bool,
+}
+
 struct Entry {
     text: String,
-    metrics: ParagraphMetrics,
+    laid_out: LaidOut,
     right_to_left: bool,
 }
 
@@ -90,8 +98,8 @@ impl<B: TextBackend> AndroidTextMeasurer<B> {
             density,
             right_to_left,
         );
-        let metrics = self.backend.layout(handle, text, &self.request.bytes);
-        self.paragraphs.insert(handle, Entry { text: text.to_string(), metrics, right_to_left });
+        let laid_out = self.backend.layout(handle, text, &self.request.bytes);
+        self.paragraphs.insert(handle, Entry { text: text.to_string(), laid_out, right_to_left });
         ParagraphHandle(handle as u64)
     }
 }
@@ -121,7 +129,11 @@ impl<B: TextBackend> TextMeasurer for AndroidTextMeasurer<B> {
     }
 
     fn metrics(&self, paragraph: ParagraphHandle) -> ParagraphMetrics {
-        self.entry(paragraph).metrics
+        self.entry(paragraph).laid_out.metrics
+    }
+
+    fn did_exceed_max_lines(&self, paragraph: ParagraphHandle) -> bool {
+        self.entry(paragraph).laid_out.did_exceed_max_lines
     }
 
     fn is_right_to_left(&self, paragraph: ParagraphHandle) -> bool {
@@ -154,7 +166,7 @@ impl<B: TextBackend> TextMeasurer for AndroidTextMeasurer<B> {
             let (left, right) = (start.left.min(end.left), start.left.max(end.left));
             return vec![Rect::new(left, start.top, right, start.bottom.max(end.bottom))];
         }
-        let width = self.entry(paragraph).metrics.size.width as f32;
+        let width = self.entry(paragraph).laid_out.metrics.size.width as f32;
         let mut rects = vec![Rect::new(start.left, start.top, width, start.bottom)];
         if end.top > start.bottom {
             rects.push(Rect::new(0.0, start.bottom, width, end.top));
@@ -316,15 +328,19 @@ mod tests {
     }
 
     impl TextBackend for Fake {
-        fn layout(&mut self, handle: u32, text: &str, request: &[u8]) -> ParagraphMetrics {
+        fn layout(&mut self, handle: u32, text: &str, request: &[u8]) -> LaidOut {
             self.live.insert(handle);
             self.requests.push(request.to_vec());
             let units = text.encode_utf16().count() as i32;
-            ParagraphMetrics {
-                size: IntSize::new(units * 10, 20),
-                first_baseline: 16.0,
-                last_baseline: 16.0,
-                line_count: 1,
+            LaidOut {
+                metrics: ParagraphMetrics {
+                    size: IntSize::new(units * 10, 20),
+                    first_baseline: 16.0,
+                    last_baseline: 16.0,
+                    line_count: 1,
+                },
+                // A new line is one too many.
+                did_exceed_max_lines: text.contains('\n'),
             }
         }
         fn hit_test(&self, _handle: u32, position: Offset) -> usize {
@@ -336,6 +352,18 @@ mod tests {
         fn release(&mut self, handle: u32) {
             self.live.remove(&handle);
         }
+    }
+
+    #[test]
+    fn whether_lines_were_cut_is_the_backends() {
+        let mut measurer = AndroidTextMeasurer::new(Fake::default());
+        let density = Density::new(1.0);
+        let options = TextLayoutOptions { max_lines: 1, ..TextLayoutOptions::default() };
+        let constraints = Constraints::new(0, 300, 0, 300);
+        let one = measurer.layout("one", &TextStyle::DEFAULT, options, constraints, &density);
+        let two = measurer.layout("one\ntwo", &TextStyle::DEFAULT, options, constraints, &density);
+        assert!(!measurer.did_exceed_max_lines(one));
+        assert!(measurer.did_exceed_max_lines(two));
     }
 
     #[test]

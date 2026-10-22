@@ -9,7 +9,7 @@ use std::rc::Rc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use compose_android::serialize::{GroupCache, Resources, Writer, tag, write_display_list};
-use compose_android::text::{AndroidTextMeasurer, TextBackend};
+use compose_android::text::{AndroidTextMeasurer, LaidOut, TextBackend};
 use compose_runtime::executor;
 use compose_ui::*;
 
@@ -24,17 +24,18 @@ struct SharedRecording {
 }
 
 impl TextBackend for SharedRecording {
-    fn layout(&mut self, _handle: u32, text: &str, request: &[u8]) -> ParagraphMetrics {
+    fn layout(&mut self, _handle: u32, text: &str, request: &[u8]) -> LaidOut {
         self.requests.borrow_mut().push(request.to_vec());
         let units = text.encode_utf16().count();
         let per_line = self.per_line.max(1);
         let lines = units.div_ceil(per_line).max(1);
-        ParagraphMetrics {
+        let metrics = ParagraphMetrics {
             size: IntSize::new((units.min(per_line) * 10) as i32, (lines * 20) as i32),
             first_baseline: 16.0,
             last_baseline: (lines - 1) as f32 * 20.0 + 16.0,
             line_count: lines as u32,
-        }
+        };
+        LaidOut { metrics, did_exceed_max_lines: false }
     }
     fn hit_test(&self, _handle: u32, _position: Offset) -> usize {
         0

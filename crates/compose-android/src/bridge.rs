@@ -21,7 +21,7 @@ use jni::signature::{Primitive, ReturnType};
 use jni::sys::{jboolean, jdouble, jfloat, jint, jlong, jobject};
 
 use crate::serialize::{GroupCache, Resources, Writer, write_display_list};
-use crate::text::{AndroidTextMeasurer, TextBackend};
+use crate::text::{AndroidTextMeasurer, LaidOut, TextBackend};
 
 static VM: OnceLock<JavaVM> = OnceLock::new();
 /// `ComposeRsNative`'s class and its `wake` method: what a task woken on any thread calls.
@@ -140,7 +140,7 @@ impl JniText {
 }
 
 impl TextBackend for JniText {
-    fn layout(&mut self, handle: u32, text: &str, request: &[u8]) -> ParagraphMetrics {
+    fn layout(&mut self, handle: u32, text: &str, request: &[u8]) -> LaidOut {
         self.clear_results();
         let mut env = main_env();
         let _ = env.with_local_frame(4, |env| -> jni::errors::Result<()> {
@@ -164,11 +164,14 @@ impl TextBackend for JniText {
             Ok(())
         });
         check(&mut env, "TextMeasurer.layout");
-        ParagraphMetrics {
-            size: IntSize::new(self.result(0) as i32, self.result(1) as i32),
-            first_baseline: self.result(2),
-            last_baseline: self.result(3),
-            line_count: self.result(4) as u32,
+        LaidOut {
+            metrics: ParagraphMetrics {
+                size: IntSize::new(self.result(0) as i32, self.result(1) as i32),
+                first_baseline: self.result(2),
+                last_baseline: self.result(3),
+                line_count: self.result(4) as u32,
+            },
+            did_exceed_max_lines: self.result(5) != 0.0,
         }
     }
 
@@ -273,6 +276,8 @@ struct Host {
     semantics: Writer,
     /// Nothing has been drawn yet.
     first: bool,
+    /// The focused field's options the last frame saw: a change restarts the input method.
+    ime_options: Option<compose_ui::ImeOptions>,
 }
 
 /// The host behind a pointer Kotlin keeps.
@@ -418,6 +423,7 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_create<'local>(
         drawing: Writer { bytes: Vec::with_capacity(4096) },
         semantics: Writer::default(),
         first: true,
+        ime_options: None,
     });
     Box::into_raw(host) as jlong
 }
@@ -459,8 +465,8 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_setDensity(
     unsafe { self::host(host) }.ui.set_density(Density { density, font_scale });
 }
 
-/// What `frame` returns: flags in the low byte, and the milliseconds to the next `delay`'s end
-/// plus one (0: none) above them.
+/// What `frame` returns: flags in the low 16 bits, and the milliseconds to the next `delay`'s
+/// end plus one (0: none) above them.
 mod flags {
     /// The display list changed: the view invalidates.
     pub const DREW: i64 = 1;
@@ -468,7 +474,8 @@ mod flags {
     pub const AGAIN: i64 = 2;
     /// A text field has focus: the soft keyboard shows.
     pub const TEXT_INPUT: i64 = 4;
-    /// A field committed or dropped its composition itself: the input method restarts.
+    /// A field committed or dropped its composition itself, or the focused field's options
+    /// changed: the input method restarts.
     pub const RESET_INPUT: i64 = 8;
     /// The semantics may have changed (a recomposition or a layout): accessibility hears it.
     pub const SEMANTICS: i64 = 16;
@@ -476,11 +483,18 @@ mod flags {
     pub const PREFETCH: i64 = 32;
     /// A `BackHandler` is enabled: the view intercepts back (otherwise the activity gets it).
     pub const BACK: i64 = 64;
+    /// The content asked for the soft keyboard (`SoftwareKeyboardController::show`).
+    pub const SHOW_KEYBOARD: i64 = 128;
+    /// The content asked to hide the soft keyboard (a field's `Done`, `hide()`).
+    pub const HIDE_KEYBOARD: i64 = 256;
+    /// Where the timer's milliseconds start.
+    pub const TIMER_SHIFT: u32 = 16;
 }
 
 fn next_timer_bits() -> i64 {
     // Rounded up: a tick never comes before the timer ends (and spins).
-    executor::next_timer().map_or(0, |wait| (wait.as_nanos().div_ceil(1_000_000) as i64 + 1) << 8)
+    executor::next_timer()
+        .map_or(0, |wait| (wait.as_nanos().div_ceil(1_000_000) as i64 + 1) << flags::TIMER_SHIFT)
 }
 
 /// `ComposeRsNative.frame(host)`: recomposes, lays out and draws what changed.
@@ -506,11 +520,17 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_frame(
     if host.ui.has_pending_work() || executor::has_frame_awaiters() {
         result |= flags::AGAIN;
     }
-    if host.ui.text_input_area().is_some() {
+    let input = crate::input_method::take_text_input_state(&host.ui, &mut host.ime_options);
+    if input.active {
         result |= flags::TEXT_INPUT;
     }
-    if host.ui.take_input_method_reset() {
+    if input.restart {
         result |= flags::RESET_INPUT;
+    }
+    match input.keyboard {
+        Some(true) => result |= flags::SHOW_KEYBOARD,
+        Some(false) => result |= flags::HIDE_KEYBOARD,
+        None => {}
     }
     if stats.recomposed || stats.measured {
         result |= flags::SEMANTICS;
@@ -628,14 +648,14 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_setRtl(
     });
 }
 
-/// `ComposeRsNative.textInputKind(host)`: the focused text field's kind (1: a password), for
-/// the keyboard's input type.
+/// `ComposeRsNative.textInputOptions(host)`: the focused text field's `EditorInfo`, its
+/// `imeOptions` in the high 32 bits and its `inputType` in the low ones (`input_method.rs`).
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_rs_compose_android_ComposeRsNative_textInputKind(
+pub extern "system" fn Java_rs_compose_android_ComposeRsNative_textInputOptions(
     _env: JNIEnv,
     _class: JClass,
     host: jlong,
-) -> jint {
+) -> jlong {
     // SAFETY: a live host, on the main thread.
     let host = unsafe { self::host(host) };
     fn password(node: &compose_ui::SemanticsNode) -> Option<bool> {
@@ -644,7 +664,23 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_textInputKind(
         }
         node.children.iter().find_map(password)
     }
-    jint::from(password(&host.ui.semantics_tree(true)).unwrap_or(false))
+    let options = host.ui.text_input_options().unwrap_or_default();
+    let masks_password = password(&host.ui.semantics_tree(true)).unwrap_or(false);
+    crate::input_method::editor_info(options, masks_password).pack()
+}
+
+/// `ComposeRsNative.performEditorAction(host, action)`: the soft keyboard's action key
+/// (`EditorInfo.IME_ACTION_*`), for the focused field. Returns whether it took it.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_rs_compose_android_ComposeRsNative_performEditorAction(
+    _env: JNIEnv,
+    _class: JClass,
+    host: jlong,
+    action: jint,
+) -> jboolean {
+    // SAFETY: a live host, on the main thread.
+    let host = unsafe { self::host(host) };
+    u8::from(host.ui.perform_ime_action(crate::input_method::ime_action(action)))
 }
 
 /// `ComposeRsNative.nextTimer()`: the milliseconds to the next `delay`'s end (rounded up), or

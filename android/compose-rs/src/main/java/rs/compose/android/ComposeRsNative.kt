@@ -49,8 +49,14 @@ internal object ComposeRsNative {
 
     @JvmStatic external fun setRtl(host: Long, rtl: Boolean)
 
-    /** The focused text field's kind: 1 a password. */
-    @JvmStatic external fun textInputKind(host: Long): Int
+    /**
+     * The focused text field's `EditorInfo` (`input_method.rs`): `imeOptions` in the high 32 bits,
+     * `inputType` in the low ones.
+     */
+    @JvmStatic external fun textInputOptions(host: Long): Long
+
+    /** The soft keyboard's action key (`EditorInfo.IME_ACTION_*`): whether the field took it. */
+    @JvmStatic external fun performEditorAction(host: Long, action: Int): Boolean
 
     /** The milliseconds to the next timer's end, or -1. */
     @JvmStatic external fun nextTimer(): Long
@@ -109,7 +115,9 @@ internal object Frame {
     const val SEMANTICS = 16L
     const val PREFETCH = 32L
     const val BACK = 64L
+    const val SHOW_KEYBOARD = 128L
+    const val HIDE_KEYBOARD = 256L
 
     /** The milliseconds to the next timer, or -1. */
-    fun nextTimer(result: Long): Long = (result shr 8) - 1
+    fun nextTimer(result: Long): Long = (result shr 16) - 1
 }

@@ -16,6 +16,7 @@
 
 pub mod accessibility;
 mod image;
+pub mod input_method;
 pub mod serialize;
 pub mod text;
 

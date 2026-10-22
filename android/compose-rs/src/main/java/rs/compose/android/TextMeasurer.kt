@@ -196,6 +196,11 @@ internal class TextMeasurer {
         results.putFloat(8, layout.getLineBaseline(0).toFloat())
         results.putFloat(12, layout.getLineBaseline(lines - 1).toFloat())
         results.putFloat(16, lines.toFloat())
+        // Lines past max lines, cut or ellipsized, as Compose's `TextLayout.didExceedMaxLines`
+        // (API 26+: the line count passes max lines unless it ellipsizes, which marks the last).
+        val lastEllipsized = layout.lineCount > 0 && layout.getEllipsisCount(layout.lineCount - 1) > 0
+        val exceeded = layout.lineCount > maxLines || lastEllipsized
+        results.putFloat(20, if (exceeded) 1f else 0f)
     }
 
     fun hitTest(handle: Int, x: Float, y: Float): Int {

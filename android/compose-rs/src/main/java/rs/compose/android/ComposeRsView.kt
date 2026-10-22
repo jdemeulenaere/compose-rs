@@ -12,7 +12,6 @@ import android.os.Looper
 import android.os.Parcelable
 import android.os.SystemClock
 import android.os.Trace
-import android.text.InputType
 import android.view.Choreographer
 import android.view.KeyEvent
 import android.view.MotionEvent
@@ -353,6 +352,13 @@ class ComposeRsView(context: Context, private val app: String) : View(context) {
         updateBack(result and Frame.BACK != 0L)
         ComposeRsRuntime.schedule(Frame.nextTimer(result))
         updateTextInput(result and Frame.TEXT_INPUT != 0L, result and Frame.RESET_INPUT != 0L)
+        // What the content asked of the keyboard (after the frame's events, which woke it).
+        if (result and Frame.SHOW_KEYBOARD != 0L && textInput) {
+            requestFocus()
+            inputMethods.showSoftInput(this, 0)
+        } else if (result and Frame.HIDE_KEYBOARD != 0L) {
+            inputMethods.hideSoftInputFromWindow(windowToken, 0)
+        }
         if (result and Frame.SEMANTICS != 0L && accessibilityManager.isEnabled && !semanticsChangePosted) {
             semanticsChangePosted = true
             postDelayed(semanticsChanged, 100)
@@ -563,17 +569,23 @@ class ComposeRsView(context: Context, private val app: String) : View(context) {
 
     override fun onCheckIsTextEditor(): Boolean = textInput
 
+    /**
+     * The focused field's keyboard: its type, action key, capitalization, auto-correction and
+     * lines, as Compose's `EditorInfo.update` (computed in Rust, `input_method.rs`).
+     */
     override fun onCreateInputConnection(info: EditorInfo): InputConnection? {
         if (!textInput || host == 0L) return null
-        val kind = ComposeRsNative.textInputKind(host)
-        info.inputType = if (kind and 1 != 0) {
-            // A password: no suggestions learned from it.
-            InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
-        } else {
-            InputType.TYPE_CLASS_TEXT
-        }
-        info.imeOptions = EditorInfo.IME_FLAG_NO_FULLSCREEN or EditorInfo.IME_FLAG_NO_EXTRACT_UI
+        val options = ComposeRsNative.textInputOptions(host)
+        info.inputType = options.toInt()
+        info.imeOptions = (options shr 32).toInt()
         return ComposeRsInputConnection(this)
+    }
+
+    /** The keyboard's action key: the field's action for it (its `KeyboardActions`). */
+    internal fun performEditorAction(action: Int) {
+        if (host == 0L) return
+        ComposeRsNative.performEditorAction(host, action)
+        ComposeRsRuntime.schedule(ComposeRsNative.nextTimer())
     }
 
     // ---- The clipboard (Rust calls these) ------------------------------------------------
@@ -644,6 +656,16 @@ internal class ComposeRsInputConnection(private val view: ComposeRsView) : BaseI
 
     override fun sendKeyEvent(event: KeyEvent): Boolean {
         view.sendKey(event)
+        return true
+    }
+
+    /**
+     * The keyboard's action key (Done, Search, Next…), as Compose's `RecordingInputConnection`:
+     * always taken. (Enter, which keyboards send as a key, performs a single line's action in
+     * the field itself.)
+     */
+    override fun performEditorAction(editorAction: Int): Boolean {
+        view.performEditorAction(editorAction)
         return true
     }
 

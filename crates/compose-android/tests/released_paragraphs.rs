@@ -23,7 +23,7 @@ use std::time::{Duration, Instant};
 use compose_android::serialize::{
     GroupCache, LAYER_ENTRY_BYTES, Resources, Writer, operand_bytes, tag, write_display_list,
 };
-use compose_android::text::{AndroidTextMeasurer, TextBackend};
+use compose_android::text::{AndroidTextMeasurer, LaidOut, TextBackend};
 use compose_foundation::layout::*;
 use compose_foundation::*;
 use compose_runtime::{mutable_state_of, remember};
@@ -37,16 +37,17 @@ struct Live(Rc<RefCell<HashSet<u32>>>);
 
 impl TextBackend for Live {
     /// 8 px per UTF-16 unit, wrapped at 160 px, lines 20 px high.
-    fn layout(&mut self, handle: u32, text: &str, _request: &[u8]) -> ParagraphMetrics {
+    fn layout(&mut self, handle: u32, text: &str, _request: &[u8]) -> LaidOut {
         self.0.borrow_mut().insert(handle);
         let units = text.encode_utf16().count().max(1);
         let lines = units.div_ceil(20);
-        ParagraphMetrics {
+        let metrics = ParagraphMetrics {
             size: IntSize::new((units.min(20) * 8) as i32, (lines * 20) as i32),
             first_baseline: 16.0,
             last_baseline: (lines - 1) as f32 * 20.0 + 16.0,
             line_count: lines as u32,
-        }
+        };
+        LaidOut { metrics, did_exceed_max_lines: false }
     }
     fn hit_test(&self, _handle: u32, _position: Offset) -> usize {
         0
