@@ -28,6 +28,9 @@ pub struct PointerInputChange {
     pub kind: PointerEventType,
     pub id: PointerId,
     pub position: Offset,
+    /// Where the pointer was at its previous event, in the node as it's laid out now (so the
+    /// node's own moves in between don't count), as `previousPosition`.
+    pub previous_position: Offset,
     /// Whether the pointer is down after this event.
     pub pressed: bool,
     pub scroll_delta: Offset,
@@ -37,6 +40,11 @@ pub struct PointerInputChange {
 }
 
 impl PointerInputChange {
+    /// How far the pointer moved since its previous event, as `positionChange()`.
+    pub fn position_change(&self) -> Offset {
+        self.position - self.previous_position
+    }
+
     /// Marks the event used: handlers after this one see it consumed, as `consume()`.
     pub fn consume(&self) {
         self.consumed.set(true);
@@ -65,6 +73,7 @@ impl std::fmt::Debug for PointerInputChange {
 /// The event being delivered, while the block's task is polled.
 struct Delivery {
     event: PointerEvent,
+    previous_position: Offset,
     pass: PointerEventPass,
     taken: bool,
     consumed: Rc<Cell<bool>>,
@@ -82,6 +91,8 @@ struct ScopeInner {
     deferred: RefCell<Vec<Box<dyn FnOnce()>>>,
     /// An event is being dispatched to the block.
     dispatching: Cell<bool>,
+    /// Each pointer's last position in the window.
+    last_positions: RefCell<Vec<(PointerId, Offset)>>,
 }
 
 /// What a `pointer_input` block works with, as Compose's `PointerInputScope` and
@@ -509,6 +520,7 @@ impl Future for AwaitPointerEvent {
                     kind: event.kind,
                     id: event.pointer,
                     position: event.position,
+                    previous_position: delivery.previous_position,
                     pressed: event.pressed,
                     scroll_delta: event.scroll_delta,
                     uptime_millis: delivery.uptime_millis,
@@ -612,8 +624,23 @@ impl PointerInputDriver {
             }
         };
         let consumed = Rc::new(Cell::new(event.consumed));
+        // The previous position where the node is now: the window's positions' difference.
+        let in_window = context.pointer_position().unwrap_or(event.position);
+        let previous_position = {
+            let mut last = inner.last_positions.borrow_mut();
+            let found =
+                last.iter().find(|(pointer, _)| *pointer == event.pointer).map(|&(_, at)| at);
+            if pass == PointerEventPass::Final {
+                last.retain(|(pointer, _)| *pointer != event.pointer);
+                if event.kind != PointerEventType::Release {
+                    last.push((event.pointer, in_window));
+                }
+            }
+            event.position - (in_window - found.unwrap_or(in_window))
+        };
         inner.delivery.replace(Some(Delivery {
             event: *event,
+            previous_position,
             pass,
             taken: false,
             consumed: consumed.clone(),

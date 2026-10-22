@@ -13,6 +13,7 @@ use compose_ui::{
     MeasurePolicy, MeasureResult, MeasureScope, Modifier, PaddingValues, PopupPositionProvider,
     PopupProperties, Rect, Shape, UnitExt,
 };
+use compose_ui::{NestedScrollConnection, NestedScrollSource, Offset};
 
 use crate::anchored::Anchored;
 use crate::theme::MaterialTheme;
@@ -25,6 +26,16 @@ pub enum SheetValue {
     PartiallyExpanded,
 }
 
+impl SheetValue {
+    fn from_key(key: u8) -> SheetValue {
+        match key {
+            0 => SheetValue::Hidden,
+            1 => SheetValue::Expanded,
+            _ => SheetValue::PartiallyExpanded,
+        }
+    }
+}
+
 impl ComposeArg for SheetValue {
     fn same(&self, other: &Self) -> bool {
         self == other
@@ -32,7 +43,7 @@ impl ComposeArg for SheetValue {
 }
 
 struct SheetInner {
-    anchored: Anchored<SheetValue>,
+    anchored: Anchored,
     skip_partially_expanded: bool,
     skip_hidden_state: bool,
 }
@@ -57,7 +68,11 @@ impl SheetState {
         let spec = AnimationSpec::from(tween(300).easing(FAST_OUT_SLOW_IN_EASING));
         SheetState {
             inner: Rc::new(SheetInner {
-                anchored: Anchored::new(initial_value, Box::new(confirm_value_change), spec),
+                anchored: Anchored::new(
+                    initial_value as u8,
+                    Box::new(move |key| confirm_value_change(SheetValue::from_key(key))),
+                    spec,
+                ),
                 skip_partially_expanded,
                 skip_hidden_state,
             }),
@@ -66,12 +81,12 @@ impl SheetState {
 
     /// Where it last settled (a state read), as `currentValue`.
     pub fn current_value(&self) -> SheetValue {
-        self.inner.anchored.current_value()
+        SheetValue::from_key(self.inner.anchored.current_value())
     }
 
     /// Where it's going (a state read), as `targetValue`.
     pub fn target_value(&self) -> SheetValue {
-        self.inner.anchored.target_value()
+        SheetValue::from_key(self.inner.anchored.target_value())
     }
 
     /// Whether it's showing, as `isVisible`.
@@ -81,12 +96,12 @@ impl SheetState {
 
     /// Whether it can rest expanded, as `hasExpandedState`.
     pub fn has_expanded_state(&self) -> bool {
-        self.inner.anchored.has_anchor(SheetValue::Expanded)
+        self.inner.anchored.has_anchor(SheetValue::Expanded as u8)
     }
 
     /// Whether it can rest half way, as `hasPartiallyExpandedState`.
     pub fn has_partially_expanded_state(&self) -> bool {
-        self.inner.anchored.has_anchor(SheetValue::PartiallyExpanded)
+        self.inner.anchored.has_anchor(SheetValue::PartiallyExpanded as u8)
     }
 
     /// Its top's offset from the top of the window, in pixels (a state read; NaN before it's
@@ -102,31 +117,31 @@ impl SheetState {
         } else {
             SheetValue::Expanded
         };
-        self.inner.anchored.animate_to(value).await;
+        self.inner.anchored.animate_to(value as u8).await;
     }
 
     /// Hides it, as `hide()` (not with `skip_hidden_state`).
     pub async fn hide(&self) {
         if !self.inner.skip_hidden_state {
-            self.inner.anchored.animate_to(SheetValue::Hidden).await;
+            self.inner.anchored.animate_to(SheetValue::Hidden as u8).await;
         }
     }
 
     /// Expands it, as `expand()`.
     pub async fn expand(&self) {
-        self.inner.anchored.animate_to(SheetValue::Expanded).await;
+        self.inner.anchored.animate_to(SheetValue::Expanded as u8).await;
     }
 
     /// Takes it half way, as `partialExpand()` (not with `skip_partially_expanded`).
     pub async fn partial_expand(&self) {
         if !self.inner.skip_partially_expanded {
-            self.inner.anchored.animate_to(SheetValue::PartiallyExpanded).await;
+            self.inner.anchored.animate_to(SheetValue::PartiallyExpanded as u8).await;
         }
     }
 
     /// At `value` at once, as `snapTo`.
     pub fn snap_to(&self, value: SheetValue) {
-        self.inner.anchored.snap_to(value);
+        self.inner.anchored.snap_to(value as u8);
     }
 }
 
@@ -197,6 +212,49 @@ impl BottomSheetDefaults {
     }
 }
 
+/// The sheet's part in its content's scrolls.
+struct SheetConnection {
+    state: SheetState,
+    settle: std::cell::RefCell<Rc<dyn Fn(f32)>>,
+}
+
+impl NestedScrollConnection for SheetConnection {
+    /// Scrolling the content up drags the sheet up first, as far as it goes.
+    fn on_pre_scroll(&self, available: Offset, source: NestedScrollSource) -> Offset {
+        if available.y < 0.0 && source == NestedScrollSource::UserInput {
+            Offset::new(0.0, self.state.inner.anchored.drag_by(available.y))
+        } else {
+            Offset::ZERO
+        }
+    }
+
+    /// What the content leaves scrolling down (it's at its top) drags the sheet down.
+    fn on_post_scroll(&self, _: Offset, available: Offset, source: NestedScrollSource) -> Offset {
+        if source == NestedScrollSource::UserInput {
+            Offset::new(0.0, self.state.inner.anchored.drag_by(available.y))
+        } else {
+            Offset::ZERO
+        }
+    }
+
+    /// A fling up while the sheet isn't at its top settles the sheet instead.
+    fn on_pre_fling(&self, available: Offset) -> Offset {
+        let anchored = &self.state.inner.anchored;
+        if available.y < 0.0 && anchored.offset() > anchored.bounds().0 {
+            (self.settle.borrow())(available.y);
+            available
+        } else {
+            Offset::ZERO
+        }
+    }
+
+    /// After the content's fling (or a drag let go), the sheet settles.
+    fn on_post_fling(&self, _: Offset, available: Offset) -> Offset {
+        (self.settle.borrow())(available.y);
+        available
+    }
+}
+
 /// The window's top start, for the sheet's overlay.
 struct AtWindowTop;
 
@@ -246,7 +304,7 @@ pub fn ModalBottomSheet(
         let (state, scope, on_dismiss) =
             (sheet_state.clone(), scope.clone(), on_dismiss_request.clone());
         compose_runtime::callback(move || {
-            if !state.inner.anchored.confirm(SheetValue::Hidden) {
+            if !state.inner.anchored.confirm(SheetValue::Hidden as u8) {
                 return;
             }
             let (state, on_dismiss) = (state.clone(), on_dismiss.clone());
@@ -282,7 +340,7 @@ pub fn ModalBottomSheet(
         let (state, scope, on_dismiss) = (sheet_state.clone(), scope.clone(), on_dismiss_request);
         let positional = density.to_px(POSITIONAL_THRESHOLD);
         let threshold = density.to_px(VELOCITY_THRESHOLD);
-        move |velocity: f32| {
+        Rc::new(move |velocity: f32| {
             let (state, on_dismiss) = (state.clone(), on_dismiss.clone());
             scope.launch(async move {
                 state.inner.anchored.settle(velocity, &|_| positional, threshold).await;
@@ -290,12 +348,25 @@ pub fn ModalBottomSheet(
                     on_dismiss();
                 }
             });
-        }
+        }) as Rc<dyn Fn(f32)>
     };
+    // The content's scrolls drag the sheet within its anchors first (up) or after it (down),
+    // and its flings settle it, as Compose's `ConsumeSwipeWithinBottomSheetBoundsNestedScroll
+    // Connection`.
+    let connection = {
+        let (state, settle) = (sheet_state.clone(), settle.clone());
+        compose_runtime::remember_keyed(sheet_state.clone(), move || {
+            Rc::new(SheetConnection { state, settle: std::cell::RefCell::new(settle) })
+        })
+    };
+    *connection.settle.borrow_mut() = settle.clone();
+    let connection: Rc<dyn NestedScrollConnection> = connection;
     let drag = {
         let state = sheet_state.clone();
         compose_runtime::remember_keyed(sheet_state.clone(), move || {
-            DraggableState::new(move |delta| state.inner.anchored.drag_by(delta))
+            DraggableState::new(move |delta| {
+                state.inner.anchored.drag_by(delta);
+            })
         })
     };
     let policy = {
@@ -319,7 +390,15 @@ pub fn ModalBottomSheet(
         dismiss_on_click_outside: false,
     };
     let sheet_modifier = modifier
-        .draggable(drag, Orientation::Vertical, true, false, |_| {}, settle)
+        .draggable(
+            drag,
+            Orientation::Vertical,
+            true,
+            false,
+            |_| {},
+            move |velocity| settle(velocity),
+        )
+        .nested_scroll(connection)
         .semantics(false, |config| config.content_description.push("Bottom sheet".into()));
     compose_ui::PopupWithPositionProvider(
         provider,
@@ -422,7 +501,9 @@ impl MeasurePolicy for SheetLayout {
         if sheet_height != 0.0 {
             anchors.push((SheetValue::Expanded, (full - sheet_height).max(0.0)));
         }
-        inner.anchored.update_anchors(anchors);
+        inner
+            .anchored
+            .update_anchors(anchors.into_iter().map(|(value, at)| (value as u8, at)).collect());
         // Read while measuring: a frame of the slide places the sheet again only.
         let offset = inner.anchored.offset();
         let top = if offset.is_nan() { full } else { offset };

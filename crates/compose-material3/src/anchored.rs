@@ -6,25 +6,29 @@ use std::cell::{Cell, RefCell};
 use compose_animation::{Animatable, AnimationEndReason, AnimationSpec};
 use compose_runtime::{OwnedState, mutable_state_of};
 
-pub(crate) struct Anchored<T: Copy + PartialEq + 'static> {
+/// The values are keys (`u8`, each component's enum as its discriminant), so this is compiled
+/// once.
+pub(crate) type Key = u8;
+
+pub(crate) struct Anchored {
     /// The offset while dragged or animated (pixels).
     offset: Animatable<f32>,
     /// At rest at `current`'s anchor (wherever the layout puts it), not at `offset`.
     resting: Cell<bool>,
     /// The values and their offsets, as the last layout found them.
-    anchors: RefCell<Vec<(T, f32)>>,
-    current: OwnedState<T>,
-    target: OwnedState<T>,
-    confirm_value_change: Box<dyn Fn(T) -> bool>,
+    anchors: RefCell<Vec<(Key, f32)>>,
+    current: OwnedState<Key>,
+    target: OwnedState<Key>,
+    confirm_value_change: Box<dyn Fn(Key) -> bool>,
     spec: AnimationSpec,
 }
 
-impl<T: Copy + PartialEq + 'static> Anchored<T> {
+impl Anchored {
     pub fn new(
-        initial: T,
-        confirm_value_change: Box<dyn Fn(T) -> bool>,
+        initial: Key,
+        confirm_value_change: Box<dyn Fn(Key) -> bool>,
         spec: AnimationSpec,
-    ) -> Anchored<T> {
+    ) -> Anchored {
         Anchored {
             offset: Animatable::new(0.0),
             resting: Cell::new(true),
@@ -37,26 +41,26 @@ impl<T: Copy + PartialEq + 'static> Anchored<T> {
     }
 
     /// Where it last settled (a state read), as `currentValue`.
-    pub fn current_value(&self) -> T {
+    pub fn current_value(&self) -> Key {
         self.current.get()
     }
 
     /// Where it's going, or the anchor it's been dragged nearest (a state read), as
     /// `targetValue`.
-    pub fn target_value(&self) -> T {
+    pub fn target_value(&self) -> Key {
         self.target.get()
     }
 
-    pub fn position_of(&self, value: T) -> Option<f32> {
+    pub fn position_of(&self, value: Key) -> Option<f32> {
         self.anchors.borrow().iter().find(|(anchor, _)| *anchor == value).map(|&(_, at)| at)
     }
 
     /// Whether `confirm_value_change` lets it go to `value`.
-    pub fn confirm(&self, value: T) -> bool {
+    pub fn confirm(&self, value: Key) -> bool {
         (self.confirm_value_change)(value)
     }
 
-    pub fn has_anchor(&self, value: T) -> bool {
+    pub fn has_anchor(&self, value: Key) -> bool {
         self.position_of(value).is_some()
     }
 
@@ -72,17 +76,18 @@ impl<T: Copy + PartialEq + 'static> Anchored<T> {
 
     /// The anchors the layout found: kept for drags and animations (the offset at rest follows
     /// them).
-    pub fn update_anchors(&self, anchors: Vec<(T, f32)>) {
+    pub fn update_anchors(&self, anchors: Vec<(Key, f32)>) {
         if *self.anchors.borrow() != anchors {
             *self.anchors.borrow_mut() = anchors;
         }
     }
 
-    /// Moves by `delta` pixels, within the anchors, as a drag's `dispatchRawDelta`.
-    pub fn drag_by(&self, delta: f32) {
+    /// Moves by `delta` pixels, within the anchors, as a drag's `dispatchRawDelta`; returns
+    /// how far it moved.
+    pub fn drag_by(&self, delta: f32) -> f32 {
         let start = self.offset();
         if start.is_nan() {
-            return;
+            return 0.0;
         }
         let (min, max) = self.bounds();
         let offset = (start + delta).clamp(min, max);
@@ -93,16 +98,18 @@ impl<T: Copy + PartialEq + 'static> Anchored<T> {
         {
             self.target.set(nearest);
         }
+        offset - start
     }
 
-    fn bounds(&self) -> (f32, f32) {
+    /// The lowest and highest anchors.
+    pub fn bounds(&self) -> (f32, f32) {
         let anchors = self.anchors.borrow();
         let min = anchors.iter().map(|&(_, at)| at).fold(f32::INFINITY, f32::min);
         let max = anchors.iter().map(|&(_, at)| at).fold(f32::NEG_INFINITY, f32::max);
         (min, max)
     }
 
-    fn nearest(&self, offset: f32) -> Option<T> {
+    fn nearest(&self, offset: f32) -> Option<Key> {
         let anchors = self.anchors.borrow();
         anchors
             .iter()
@@ -112,7 +119,7 @@ impl<T: Copy + PartialEq + 'static> Anchored<T> {
 
     /// The closest anchor at or past `offset` upwards (greater offsets) or downwards, as
     /// `closestAnchor(position, searchUpwards)`.
-    fn closest(&self, offset: f32, upwards: bool) -> Option<T> {
+    fn closest(&self, offset: f32, upwards: bool) -> Option<Key> {
         let anchors = self.anchors.borrow();
         anchors
             .iter()
@@ -123,7 +130,7 @@ impl<T: Copy + PartialEq + 'static> Anchored<T> {
 
     /// Animates to `value`'s anchor (once a layout has found it), as `animateTo`; settled
     /// there when the animation finishes.
-    pub async fn animate_to(&self, value: T) {
+    pub async fn animate_to(&self, value: Key) {
         // Before the first layout, wait for it (a few frames at most).
         for _ in 0..8 {
             if self.position_of(value).is_some() && !self.offset().is_nan() {
@@ -150,7 +157,7 @@ impl<T: Copy + PartialEq + 'static> Anchored<T> {
     }
 
     /// At `value` at once, as `snapTo`.
-    pub fn snap_to(&self, value: T) {
+    pub fn snap_to(&self, value: Key) {
         if let Some(at) = self.position_of(value) {
             self.offset.snap_to(at);
         }
@@ -158,7 +165,7 @@ impl<T: Copy + PartialEq + 'static> Anchored<T> {
         self.settle_at(value);
     }
 
-    fn settle_at(&self, value: T) {
+    fn settle_at(&self, value: Key) {
         self.resting.set(true);
         self.target.set(value);
         self.current.set(value);
@@ -190,11 +197,11 @@ impl<T: Copy + PartialEq + 'static> Anchored<T> {
     fn compute_target(
         &self,
         offset: f32,
-        current: T,
+        current: Key,
         velocity: f32,
         positional_threshold: &dyn Fn(f32) -> f32,
         velocity_threshold: f32,
-    ) -> T {
+    ) -> Key {
         let Some(at) = self.position_of(current) else { return current };
         if offset.is_nan() || at == offset {
             return current;
