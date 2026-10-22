@@ -5,6 +5,7 @@
 
 #![allow(non_snake_case)]
 
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -74,20 +75,45 @@ fn read(bytes: &[u8]) -> (Vec<Layer>, Vec<Item>) {
             at += LAYER_ENTRY_BYTES;
         }
     }
-    (layers, read_items(bytes, at, bytes.len()))
+    // The groups' records (D323), then the frame's operations.
+    let mut records = HashMap::new();
+    while bytes.get(at) == Some(&tag::GROUP) {
+        let (key, version) = (u64_at(bytes, at + 1), u64_at(bytes, at + 9));
+        let length = u32_at(bytes, at + 17) as usize;
+        at += 21;
+        assert!(records.insert(key, (version, at, at + length)).is_none(), "one record a group");
+        at += length;
+    }
+    let mut drawn = HashSet::new();
+    let items = read_items(bytes, at, bytes.len(), &records, &mut drawn);
+    assert_eq!(drawn.len(), records.len(), "every record is drawn once");
+    (layers, items)
 }
 
-fn read_items(bytes: &[u8], mut at: usize, end: usize) -> Vec<Item> {
+/// The operations in `bytes[at..end]`, each `GROUP_REF` read as its group's record (from
+/// `records`: version, content's start and end), which `drawn` gains.
+fn read_items(
+    bytes: &[u8],
+    mut at: usize,
+    end: usize,
+    records: &HashMap<u64, (u64, usize, usize)>,
+    drawn: &mut HashSet<u64>,
+) -> Vec<Item> {
     let mut items = Vec::new();
     while at < end {
         let op = bytes[at];
         at += 1;
-        if op == tag::GROUP {
-            let (key, version) = (u64_at(bytes, at), u64_at(bytes, at + 8));
-            let length = u32_at(bytes, at + 16) as usize;
-            at += 20;
-            items.push(Item::Group { key, version, content: read_items(bytes, at, at + length) });
-            at += length;
+        assert_ne!(op, tag::GROUP, "a record among the operations");
+        if op == tag::GROUP_REF {
+            let key = u64_at(bytes, at);
+            at += 8;
+            let &(version, from, to) = records.get(&key).expect("a drawn group's record");
+            assert!(drawn.insert(key), "a group drawn twice");
+            items.push(Item::Group {
+                key,
+                version,
+                content: read_items(bytes, from, to, records, drawn),
+            });
         } else {
             items.push(Item::Operation(op));
             at += operand_bytes(bytes, at - 1);
@@ -95,6 +121,22 @@ fn read_items(bytes: &[u8], mut at: usize, end: usize) -> Vec<Item> {
     }
     assert_eq!(at, end, "a record's length is its content's");
     items
+}
+
+/// `bytes` with each record's version zeroed: what a write with nothing cached gives too, whose
+/// records carry the display list's versions where cached ones keep older ones (D323).
+fn unversioned_bytes(bytes: &[u8]) -> Vec<u8> {
+    let mut bytes = bytes.to_vec();
+    let mut at = if bytes.first() == Some(&tag::LAYERS) {
+        5 + u32_at(&bytes, 1) as usize * LAYER_ENTRY_BYTES
+    } else {
+        0
+    };
+    while bytes.get(at) == Some(&tag::GROUP) {
+        bytes[at + 9..at + 17].fill(0);
+        at += 21 + u32_at(&bytes, at + 17) as usize;
+    }
+    bytes
 }
 
 /// Where the first `op` is, groups' contents included.
@@ -107,7 +149,7 @@ fn find(bytes: &[u8], op: u8) -> Option<usize> {
     while at < bytes.len() {
         match bytes[at] {
             found if found == op => return Some(at),
-            // Into the group's content.
+            // Into the record's content.
             tag::GROUP => at += 21,
             _ => at += 1 + operand_bytes(bytes, at),
         }
@@ -339,13 +381,13 @@ fn a_layer_only_frame_changes_only_the_layers_section() {
     assert_eq!((layers_after[0].alpha, layers_after[0].rotation), (0.25, 67.5));
     let section = 5 + LAYER_ENTRY_BYTES;
     assert_eq!(after[section..], before[section..], "the records' bytes changed");
-    assert_eq!(serialized.cache.copied(), 1, "the outer record (holding the layer's) is copied");
+    assert_eq!(serialized.cache.copied(), 2, "both records are copied");
     assert_eq!(after, serialized.fresh(), "the cached records differ from fresh ones");
 }
 
 /// Copied records are the bytes writing them again would give, across frames where one group
-/// changes (its parent's version with it) and its sibling doesn't; a gone group leaves the
-/// cache.
+/// changes and its sibling doesn't; its parent, whose bytes stay (it names the group by key),
+/// keeps its version (D323); a gone group leaves the cache.
 #[test]
 fn cached_records_are_the_bytes_written_afresh() {
     let color = mutable_state_of(Color::RED);
@@ -379,15 +421,16 @@ fn cached_records_are_the_bytes_written_afresh() {
     color.set(Color::GREEN);
     let second = serialized.frame();
     assert_eq!(serialized.cache.copied(), 2, "the unchanged sibling and the other group");
-    assert_eq!(second, serialized.fresh());
+    assert_eq!(serialized.cache.unchanged(), 1, "the parent, written again, is the same bytes");
+    assert_eq!(unversioned_bytes(&second), unversioned_bytes(&serialized.fresh()));
     let now = groups(&read(&second).1);
-    assert_ne!(now[0], (outer, outer_version), "a nested change changes its parent's version");
+    assert_eq!(now[0], (outer, outer_version), "a nested change keeps its parent's version");
     assert_ne!(now[1], (changing, changing_version));
     assert_eq!(now[2], (still, still_version));
     assert_eq!(now[3].0, other);
     shown.set(false);
     let third = serialized.frame();
-    assert_eq!(third, serialized.fresh());
+    assert_eq!(unversioned_bytes(&third), unversioned_bytes(&serialized.fresh()));
     assert_eq!(serialized.cache.len(), 3, "the gone group's record is dropped");
 }
 
@@ -528,8 +571,9 @@ fn a_layer_around_a_group_is_not_folded_into_it() {
             Item::Operation(tag::RESTORE),
         ]
     );
-    // The rect's color, whole: after the layer (5 bytes) and the header (21) and its bounds.
-    assert_eq!(u32_at(&out.bytes, 5 + 21 + 1 + 16), 0xFF00_0000);
+    // The rect's color, whole: in the group's record, first (D323), after its header (21
+    // bytes), the rect's tag and its bounds.
+    assert_eq!(u32_at(&out.bytes, 21 + 1 + 16), 0xFF00_0000);
 }
 
 /// A group with a layer, by hand: its record is its content where its boundary is, its layer

@@ -103,8 +103,11 @@ pub fn IndeterminateCircularProgressIndicator(
             RepeatMode::Restart,
         ),
     );
+    // A repaint boundary of its own: it draws again every frame, what's around it needn't
+    // (D323).
     let modifier = progress_semantics(modifier, None)
-        .size(ProgressIndicatorDefaults::CIRCULAR_INDICATOR_DIAMETER);
+        .size(ProgressIndicatorDefaults::CIRCULAR_INDICATOR_DIAMETER)
+        .repaint_boundary();
     compose_foundation::layout::Canvas(modifier, move |scope| {
         let stroke = scope.density().to_px(stroke_width);
         let size = scope.size().width.min(scope.size().height);
@@ -188,7 +191,8 @@ pub fn IndeterminateLinearProgressIndicator(
         LINEAR_DURATION as f32,
         infinite_repeatable(tween(LINEAR_DURATION).easing(Easing::Linear), RepeatMode::Restart),
     );
-    let modifier = linear_size(progress_semantics(modifier, None));
+    // Its own repaint boundary, as the circular one's.
+    let modifier = linear_size(progress_semantics(modifier, None)).repaint_boundary();
     compose_foundation::layout::Canvas(modifier, move |scope| {
         let rtl = scope.layout_direction() == compose_ui::LayoutDirection::Rtl;
         draw_line_fraction(scope, 0.0, 1.0, track_color, stroke_cap, rtl);

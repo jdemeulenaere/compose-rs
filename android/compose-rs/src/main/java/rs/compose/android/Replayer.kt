@@ -43,10 +43,12 @@ internal inline fun ByteBuffer.floatAt(index: Int): Float = Float.fromBits(getIn
  * a frame drawing the same gradients builds none.
  *
  * A group (a repaint boundary: a graphics layer, a lazy item) is recorded into a `RenderNode`
- * of its own, kept by its key and version (D157). Rust gives a group a new version whenever
- * what it draws changes, a nested group's change included, so a key and a version always come
- * with the same bytes: a frame where a group is unchanged (it scrolled, or something beside it
- * animates) draws its node, its bytes skipped unread, nested groups' records included.
+ * of its own, kept by its key and version (D157). Rust gives a group's record a new version
+ * whenever its bytes change, so a key and a version always come with the same bytes: a frame
+ * where a group is unchanged (it scrolled, or something beside it animates) draws its node,
+ * its bytes skipped unread. A record names the groups drawn in it (`GROUP_REF`): their nodes
+ * are drawn by reference, recorded from their own records (D323), so a group whose nested
+ * group changed keeps its recording.
  *
  * A graphics layer's properties (alpha, transform, clip) are in no group's bytes: the frame's
  * `LAYERS` section lists them for every group that has a layer, nested ones in kept parents
@@ -200,10 +202,6 @@ internal class Replayer(private val text: TextMeasurer) {
             node.setPosition(0, 0, width, height)
         }
 
-        /** The groups drawn inside it: kept as long as it is. */
-        val children = ArrayList<Group>()
-        /** Gone: its node went back to the pool (a parent's [children] may still name it). */
-        var removed = false
     }
 
     private val groups = HashMap<Long, Group>()
@@ -212,10 +210,10 @@ internal class Replayer(private val text: TextMeasurer) {
     private var frame = 0
     private var width = 1
     private var height = 1
-    /** The groups met in the group being recorded (null outside any). */
-    private var children: ArrayList<Group>? = null
     /** In a software draw: where each group's `LAYERS` entry is in the buffer. */
     private val softwareLayers = HashMap<Long, Int>()
+    /** In a software draw: where each group's record is in the buffer (its content's start). */
+    private val softwareGroups = HashMap<Long, Int>()
     private val clipBounds = Rect()
     /** An unknown operation was met: the rest can't be read. */
     private var unreadable = false
@@ -225,7 +223,6 @@ internal class Replayer(private val text: TextMeasurer) {
     fun replay(canvas: Canvas, buffer: ByteBuffer) {
         buffer.order(ByteOrder.LITTLE_ENDIAN)
         buffer.position(0)
-        children = null
         unreadable = false
         // Read once a frame: `isHardwareAccelerated` isn't compiled in the boot image.
         hardware = canvas.isHardwareAccelerated
@@ -233,6 +230,7 @@ internal class Replayer(private val text: TextMeasurer) {
             // A software draw (a snapshot) replays everything, layers applied as operations,
             // and leaves the groups alone: the window's last frame still draws their nodes.
             softwareLayers.clear()
+            softwareGroups.clear()
             replay(canvas, buffer, buffer.limit())
             return
         }
@@ -244,11 +242,10 @@ internal class Replayer(private val text: TextMeasurer) {
         while (iterator.hasNext()) {
             val group = iterator.next()
             if (group.frame != frame) {
-                // Gone: this frame didn't draw it, so no recording drawn from now on does.
+                // Gone: this frame has no record of it, so no recording drawn from now on draws
+                // it (one that did changed, and was recorded again).
                 iterator.remove()
                 if (group.layered) resetLayer(group.node)
-                group.removed = true
-                group.children.clear()
                 pool.recycle(group.node)
             } else if (group.layered && group.layerFrame != frame) {
                 // No longer a layer. (Properties set after drawing the node still apply: the
@@ -372,9 +369,12 @@ internal class Replayer(private val text: TextMeasurer) {
                     val version = buffer.getLong()
                     val length = buffer.getInt()
                     val from = buffer.position()
-                    group(canvas, buffer, key, version, from + length)
+                    group(buffer, key, version, from + length)
                     buffer.position(from + length)
+                    // A record cut short (not kept as its version) leaves the rest readable.
+                    unreadable = false
                 }
+                GROUP_REF -> drawGroup(canvas, buffer, buffer.getLong())
                 LAYERS -> layers(hardware, buffer)
                 DEFINE_PATH -> definePath(buffer)
                 DROP_PATH -> dropPath(buffer.getInt())
@@ -391,35 +391,23 @@ internal class Replayer(private val text: TextMeasurer) {
     }
 
     /**
-     * Draws group [key] at [version], its content the bytes up to [end]: its kept node if it
-     * holds that version's recording (whole: the system drops recordings when the window
-     * hides), else recorded from them first.
+     * The record of group [key] at [version], its content the bytes up to [end]: its node is
+     * recorded from them, unless it holds that version's recording already (whole: the system
+     * drops recordings when the window hides). Drawn where a `GROUP_REF` names it. In a
+     * software draw, where it is, for [drawGroup].
      */
-    private fun group(canvas: Canvas, buffer: ByteBuffer, key: Long, version: Long, end: Int) {
+    private fun group(buffer: ByteBuffer, key: Long, version: Long, end: Int) {
         if (!hardware) {
-            // Its layer as the operations Rust left out: transform, clip, alpha layer.
-            val save = canvas.save()
-            softwareLayers[key]?.let { at -> applyLayer(canvas, buffer, at) }
-            replay(canvas, buffer, end)
-            canvas.restoreToCount(save)
+            softwareGroups[key] = buffer.position()
             return
         }
         val group = groups.getOrPut(key) { Group(pool.obtain()) }
-        children?.add(group)
-        if (group.version == version && recorded(group)) {
-            // The same bytes as recorded, nested groups' included: their versions are too.
-            keep(group)
-            canvas.drawRenderNode(group.node)
-            return
-        }
         group.frame = frame
+        if (group.version == version && group.node.hasDisplayList()) return
         // Matches nothing until recorded whole.
         group.version = -1L
         // A layer's node has its bounds already (setLayer).
         if (!group.layered) group.setPosition(width, height)
-        val outer = children
-        group.children.clear()
-        children = group.children
         // Its size is a hint: what's recorded past it is kept, as a view's children drawn past
         // its bounds are.
         val recording =
@@ -428,32 +416,31 @@ internal class Replayer(private val text: TextMeasurer) {
             replay(recording, buffer, end)
         } finally {
             group.node.endRecording()
-            children = outer
         }
         // A recording cut short by an unknown operation isn't that version's.
         if (!unreadable) group.version = version
-        canvas.drawRenderNode(group.node)
     }
 
     /**
-     * Whether [group] and the groups inside it still have their recordings: the system drops
-     * them all when the window hides (`destroyHardwareResources`).
+     * Draws group [key] on [canvas]: its node (recorded from its record, which comes first), or
+     * in a software draw its record's operations, under its layer's.
      */
-    private fun recorded(group: Group): Boolean {
-        if (group.removed || !group.node.hasDisplayList()) return false
-        // By index: an iterator a frame for every kept group adds up.
-        val children = group.children
-        for (index in children.indices) {
-            if (!recorded(children[index])) return false
+    private fun drawGroup(canvas: Canvas, buffer: ByteBuffer, key: Long) {
+        if (hardware) {
+            // Made here if new: a parent's record comes before those of the groups in it, which
+            // are recorded later in this frame (its node is drawn by reference).
+            canvas.drawRenderNode(groups.getOrPut(key) { Group(pool.obtain()) }.node)
+            return
         }
-        return true
-    }
-
-    /** Marks [group] and the groups inside it drawn this frame. */
-    private fun keep(group: Group) {
-        group.frame = frame
-        val children = group.children
-        for (index in children.indices) keep(children[index])
+        val from = softwareGroups[key] ?: return
+        val position = buffer.position()
+        // Its layer as the operations Rust left out: transform, clip, alpha layer.
+        val save = canvas.save()
+        softwareLayers[key]?.let { at -> applyLayer(canvas, buffer, at) }
+        buffer.position(from)
+        replay(canvas, buffer, from + buffer.getInt(from - 4))
+        canvas.restoreToCount(save)
+        buffer.position(position)
     }
 
     /**
@@ -944,6 +931,7 @@ internal class Replayer(private val text: TextMeasurer) {
         const val GROUP = 15
         const val LAYERS = 16
         const val CLIP_PATH = 17
+        const val GROUP_REF = 18
         const val DEFINE_PATH = 20
         const val DROP_PATH = 21
         const val DEFINE_IMAGE = 22

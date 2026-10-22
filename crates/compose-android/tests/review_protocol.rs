@@ -296,7 +296,7 @@ fn a_nested_layer_crossing_its_thresholds() {
         rotation.set(next_rotation);
         clip.set(next_clip);
         checked.frame();
-        assert_eq!(checked.cache.copied(), 1, "a layer-only frame copies the outer record");
+        assert_eq!(checked.cache.copied(), 2, "a layer-only frame copies both records");
     }
 }
 
