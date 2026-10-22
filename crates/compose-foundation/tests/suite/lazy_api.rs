@@ -4,8 +4,6 @@
 
 #![allow(non_snake_case)]
 
-use std::rc::Rc;
-
 use compose_foundation::layout::*;
 use compose_foundation::*;
 use compose_runtime::*;
@@ -19,7 +17,7 @@ fn top_of(ui: &mut ComposeTestRule, tag: &str) -> f32 {
 #[test]
 fn items_over_a_list_get_each_item_and_its_index() {
     let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), || {
-        let fruits: Rc<[&'static str]> = Rc::from(["apple", "pear"]);
+        let fruits: ImmutableList<&'static str> = ImmutableList::from(["apple", "pear"]);
         LazyColumn!(modifier = Modifier.size_wh(100.dp(), 100.dp()), |scope: LazyListScope| {
             scope.items_list(fruits.clone(), |_, fruit: &&str| {
                 BasicText!("{}", fruit);

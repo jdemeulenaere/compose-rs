@@ -78,8 +78,9 @@ pub fn call(input: TokenStream) -> TokenStream {
 }
 
 /// Derives `ComposeArg` field by field: `Rc` fields compare by identity, small fields by value.
-/// Enums compare variant and fields. The Rust analogue of a stable data class.
-#[proc_macro_derive(ComposeArg)]
+/// Enums compare variant and fields. The Rust analogue of a stable data class. A field marked
+/// `#[compose_arg(eq)]` is compared with `PartialEq` instead (a short `Vec<String>`).
+#[proc_macro_derive(ComposeArg, attributes(compose_arg))]
 pub fn derive_compose_arg(input: TokenStream) -> TokenStream {
     derive::expand(input.into()).into()
 }

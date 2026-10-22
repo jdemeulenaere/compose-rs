@@ -107,14 +107,13 @@ pub fn TodoAppWith(initial_items: u64) {
         }));
         LazyColumn!(
             modifier = Modifier.weight(column, 1.0).fill_max_width(),
-            state = list_state.clone(),
+            state = list_state,
             |scope: LazyListScope| {
-                let (keys, rows) = (shown.clone(), shown.clone());
                 scope.items_keyed(
                     shown.len(),
-                    move |index| keys[index].id,
+                    move |index| shown[index].id,
                     move |index| {
-                        let todo = rows[index].clone();
+                        let todo = shown[index].clone();
                         let id = todo.id;
                         TodoRow!(
                             todo = todo,
@@ -137,7 +136,7 @@ fn TodoRow(todo: Rc<Todo>, on_remove: impl Fn() + 'static) {
         |row| {
             let done = todo.done.handle(); // Copy handle for the 'static handler
             Checkbox!(checked = done.get(), on_checked_change = move |checked| done.set(checked));
-            Text!(todo.title.clone(), modifier = Modifier.weight(row, 1.0));
+            Text!(&todo.title, modifier = Modifier.weight(row, 1.0));
             Button!(on_click = on_remove, {
                 Text!("Remove");
             });
@@ -149,7 +148,6 @@ fn TodoRow(todo: Rc<Todo>, on_remove: impl Fn() + 'static) {
 fn FilterRow(selected: Filter, on_select: impl Fn(Filter) + 'static) {
     Row!(horizontal_arrangement = Arrangement::spaced_by(8.dp()), |_row| {
         for filter in [Filter::All, Filter::Active, Filter::Done] {
-            let on_select = on_select.clone();
             Button!(on_click = move || on_select(filter), enabled = filter != selected, {
                 Text!("{:?}", filter);
             });

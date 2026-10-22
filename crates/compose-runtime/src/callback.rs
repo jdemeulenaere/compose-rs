@@ -84,6 +84,17 @@ macro_rules! closures {
                 Callback(Rc::new(self))
             }
         }
+
+        impl<Function, Output, $($argument),*> IntoOptionalCallback<dyn Fn($($argument),*) -> Output>
+            for Function
+        where
+            Function: Fn($($argument),*) -> Output + 'static,
+        {
+            #[inline]
+            fn into_optional_callback(self) -> Option<Callback<dyn Fn($($argument),*) -> Output>> {
+                Some(Callback(Rc::new(self)))
+            }
+        }
     };
 }
 
@@ -110,13 +121,44 @@ pub fn to_callback<F: ?Sized, C: IntoCallback<F> + Clone>(function: &C) -> Callb
     function.clone().into_callback()
 }
 
-/// Converts an optional function into an optional callback: what call macros apply to an
-/// optional callback argument that isn't a lambda (`if editable { Some(move || …) } else { None }`).
+/// What converts into an optional callback, as Kotlin passes a lambda for a nullable one: an
+/// `Option` of a function, a callback, or a closure.
+pub trait IntoOptionalCallback<F: ?Sized> {
+    fn into_optional_callback(self) -> Option<Callback<F>>;
+}
+
+impl<F: ?Sized, C: IntoCallback<F>> IntoOptionalCallback<F> for Option<C> {
+    #[inline]
+    fn into_optional_callback(self) -> Option<Callback<F>> {
+        self.map(IntoCallback::into_callback)
+    }
+}
+
+impl<F: ?Sized> IntoOptionalCallback<F> for Callback<F> {
+    #[inline]
+    fn into_optional_callback(self) -> Option<Callback<F>> {
+        Some(self)
+    }
+}
+
+/// Converts into an optional callback: what call macros apply to an optional callback argument
+/// that isn't a lambda (`if editable { Some(move || …) } else { None }`, a callback forwarded by
+/// name).
 #[inline]
-pub fn optional_callback<F: ?Sized, C: IntoCallback<F>>(
-    function: Option<C>,
+pub fn optional_callback<F: ?Sized, C: IntoOptionalCallback<F>>(
+    function: C,
 ) -> Option<Callback<F>> {
-    function.map(IntoCallback::into_callback)
+    function.into_optional_callback()
+}
+
+/// A clone of a lambda's capture, where the lambda would move it: what `#[composable]` passes for
+/// a capture given by itself as an argument (`Text!(name)`), and gives a `move` closure or an
+/// `async move` block for the captures it names. A lambda runs again, so it can't give its
+/// captures away.
+#[doc(hidden)]
+#[inline]
+pub fn reuse<T: Clone>(capture: &T) -> T {
+    capture.clone()
 }
 
 // ---- Memoization -----------------------------------------------------------------------------
@@ -405,6 +447,33 @@ fn set_lambda_slot(position: SlotPosition, stored: Rc<dyn Any>, type_name: &'sta
 /// The non-generic part of a probe: reserves the next slot when composing.
 fn lambda_slot(type_id: TypeId) -> Option<(SlotPosition, Option<Rc<dyn Any>>)> {
     with_runtime(|runtime| runtime.is_composing().then(|| runtime.slot_next(type_id)))
+}
+
+/// An optional callback given by name (a function, a callback, a closure or an `Option` of one),
+/// memoized on the value itself as [`LambdaProbe::resolve_cloned`] does for a required one: the
+/// same value passes the same callback every pass, so the callee can skip. A hit clones nothing.
+pub fn optional_lambda<K: LambdaKeys, F: ?Sized + 'static, C: IntoOptionalCallback<F> + Clone>(
+    site: u64,
+    keys: K,
+    value: &C,
+) -> Option<Callback<F>> {
+    let Some((position, existing)) =
+        lambda_slot(TypeId::of::<(u64, K::Owned, Option<Callback<F>>)>())
+    else {
+        return value.clone().into_optional_callback();
+    };
+    if let Some(existing) = existing
+        && let Some((kept_site, kept, callback)) =
+            existing.downcast_ref::<(u64, K::Owned, Option<Callback<F>>)>()
+        && *kept_site == site
+        && keys.same(kept)
+    {
+        return callback.clone();
+    }
+    let callback = value.clone().into_optional_callback();
+    let stored: Rc<dyn Any> = Rc::new((site, keys.to_owned(), callback.clone()));
+    set_lambda_slot(position, stored, type_name::<(u64, K::Owned, Option<Callback<F>>)>());
+    callback
 }
 
 /// Looks up the lambda remembered at this position: if its captures are all `same` as `keys`,

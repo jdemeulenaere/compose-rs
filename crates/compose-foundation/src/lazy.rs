@@ -19,7 +19,7 @@ use std::rc::{Rc, Weak};
 use std::time::Instant;
 
 use compose_runtime::{
-    ComposeArg, OwnedState, composable, hash_key, key, mutable_state_of, remember,
+    ComposeArg, ImmutableList, OwnedState, composable, hash_key, key, mutable_state_of, remember,
 };
 use compose_ui::{
     Alignment, Constraints, Dp, EventContext, HorizontalAlignment, IntSize, Layout, Measurable,
@@ -375,11 +375,11 @@ impl LazyListScope {
         self.push(Interval::keyed(count, key, Rc::new(content)));
     }
 
-    /// An item for each of `items`, as `items(items: List<T>) { item -> … }`: a `Vec`, a
+    /// slice or an array (copied), or an `ImmutableList` (shared).
     /// slice (cloned) or an `Rc<[T]>` (shared, as an `ImmutableList`).
     pub fn items_list<T: 'static>(
         &self,
-        items: impl Into<Rc<[T]>>,
+        items: impl Into<ImmutableList<T>>,
         content: impl Fn(LazyItemScope, &T) + 'static,
     ) {
         let (items, scope) = (items.into(), self.item_scope.clone());
@@ -393,7 +393,7 @@ impl LazyListScope {
     /// `items_list` with keys, as `items(items, key = { item -> … })`.
     pub fn items_list_keyed<T: 'static, K: Hash + PartialEq + 'static>(
         &self,
-        items: impl Into<Rc<[T]>>,
+        items: impl Into<ImmutableList<T>>,
         key: impl Fn(&T) -> K + 'static,
         content: impl Fn(LazyItemScope, &T) + 'static,
     ) {
@@ -409,7 +409,7 @@ impl LazyListScope {
     /// An item for each of `items`, with its index, as `itemsIndexed(items) { index, item -> … }`.
     pub fn items_indexed<T: 'static>(
         &self,
-        items: impl Into<Rc<[T]>>,
+        items: impl Into<ImmutableList<T>>,
         content: impl Fn(LazyItemScope, usize, &T) + 'static,
     ) {
         let (items, scope) = (items.into(), self.item_scope.clone());
@@ -422,7 +422,7 @@ impl LazyListScope {
     /// `items_indexed` with keys, as `itemsIndexed(items, key = { index, item -> … })`.
     pub fn items_indexed_keyed<T: 'static, K: Hash + PartialEq + 'static>(
         &self,
-        items: impl Into<Rc<[T]>>,
+        items: impl Into<ImmutableList<T>>,
         key: impl Fn(usize, &T) -> K + 'static,
         content: impl Fn(LazyItemScope, usize, &T) + 'static,
     ) {

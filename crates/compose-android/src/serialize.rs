@@ -6,13 +6,18 @@
 //! first use) and dropped when the last frame using them is gone, so a frame names them by id.
 //! Their definitions wait until the Kotlin side takes them with the frame it draws, so a frame
 //! drawn twice or skipped loses none; one dropped before it was taken is cancelled.
+//!
+//! A repaint boundary's group is a `GROUP` record carrying its key and version, which the
+//! replayer keeps a render node by; a graphics layer's properties are in a `LAYERS` section
+//! before the operations, not in any record, so a key and a version are always the same bytes,
+//! copied from a [`GroupCache`] while the version stays (D157).
 
 use std::collections::HashMap;
 use std::sync::{Arc, Weak};
 
 use compose_ui::{
-    Color, DisplayList, DrawOp, ImageBitmap, Offset, Outline, Paint, PaintStyle, Path, PathCommand,
-    PathFillType, Rect, StrokeCap,
+    Color, DisplayList, DrawGroup, DrawOp, ImageBitmap, Offset, Outline, Paint, PaintStyle, Path,
+    PathCommand, PathFillType, Rect, StrokeCap,
 };
 
 /// The operations' tags, as `Replayer.kt` reads them.
@@ -32,9 +37,17 @@ pub mod tag {
     pub const DRAW_SHADOW: u8 = 12;
     pub const DRAW_ARC: u8 = 13;
     pub const DRAW_PATH: u8 = 14;
-    /// A repaint boundary's operations: its key (u64), their length in bytes (u32), then
-    /// them. The replayer keeps their recording while they stay the same.
+    /// A repaint boundary's record: its key (u64), its version (u64), its content's length in
+    /// bytes (u32), then its content (its layer's operations left out). The same key and
+    /// version are always the same bytes: the replayer keeps the group's render node by them.
     pub const GROUP: u8 = 15;
+    /// The layer properties of the groups that have a layer, before the operations: a count
+    /// (u32), then per group its key (u64), alpha, pivot (x, y), scale (x, y), rotation
+    /// (degrees), translation (x, y) (f32s), whether it clips (u8) and its clip (left, top,
+    /// right, bottom; zeros if it doesn't), then whether its alpha composites its content
+    /// offscreen (u8; 0 for one drawing, faded instead), then its bounds (left, top, right,
+    /// bottom): `LAYER_ENTRY_BYTES` each.
+    pub const LAYERS: u8 = 16;
     pub const DEFINE_PATH: u8 = 20;
     pub const DROP_PATH: u8 = 21;
     pub const DEFINE_IMAGE: u8 = 22;
@@ -343,146 +356,314 @@ fn faded(paint: &Paint, alpha: f32) -> Paint {
     Paint { color: Color::from_argb((faded << 24) | (argb & 0x00FF_FFFF)), ..*paint }
 }
 
-/// Writes `list` into `out` (cleared first), defining in `resources` the paths and images it
-/// uses.
-pub fn write_display_list(list: &DisplayList, resources: &mut Resources, out: &mut Writer) {
-    out.bytes.clear();
-    // Layers folded into their one drawing's paint: where each ends, and its alpha.
-    let mut folds: Vec<(usize, f32)> = Vec::new();
-    // The groups, outer before inner (they nest), and the open ones: where each ends and
-    // where its length goes.
-    // Of two with the same range, the outer one was drawn last.
-    let mut groups: Vec<_> =
-        list.groups.iter().enumerate().filter(|(_, group)| group.start < group.end).collect();
-    groups.sort_by_key(|&(index, group)| {
-        (group.start, std::cmp::Reverse(group.end), std::cmp::Reverse(index))
-    });
-    let mut groups = groups.into_iter().map(|(_, group)| group).peekable();
-    let mut open: Vec<(usize, usize)> = Vec::new();
-    for (index, op) in list.ops.iter().enumerate() {
-        while folds.last().is_some_and(|(end, _)| *end < index) {
-            folds.pop();
-        }
-        close_groups(&mut open, index, out);
-        while let Some(group) = groups.next_if(|group| group.start == index) {
-            out.u8(tag::GROUP);
-            out.u32(group.key as u32);
-            out.u32((group.key >> 32) as u32);
-            open.push((group.end, out.bytes.len()));
-            out.u32(0);
-        }
-        let alpha: f32 = folds.iter().map(|(_, alpha)| alpha).product();
-        let faded_paint = |paint: &Paint| faded(paint, alpha);
-        if let DrawOp::SaveLayerAlpha(layer_alpha) = op
-            && let Some(end) = foldable_layer(&list.ops, index)
-        {
-            folds.push((end, *layer_alpha));
-            out.u8(tag::SAVE);
-            continue;
-        }
-        match op {
-            DrawOp::Save => out.u8(tag::SAVE),
-            DrawOp::Restore => out.u8(tag::RESTORE),
-            DrawOp::Translate(offset) => {
-                out.u8(tag::TRANSLATE);
-                out.offset(*offset);
-            }
-            DrawOp::ClipRect(rect) => {
-                out.u8(tag::CLIP_RECT);
-                out.rect(rect);
-            }
-            DrawOp::ClipRoundRect(rect, radii) => {
-                out.u8(tag::CLIP_ROUND_RECT);
-                out.rect(rect);
-                out.radii(radii);
-            }
-            DrawOp::DrawRect(rect, paint) => {
-                out.u8(tag::DRAW_RECT);
-                out.rect(rect);
-                out.paint(&faded_paint(paint));
-            }
-            DrawOp::DrawRoundRect(rect, radii, paint) => {
-                out.u8(tag::DRAW_ROUND_RECT);
-                out.rect(rect);
-                out.radii(radii);
-                out.paint(&faded_paint(paint));
-            }
-            DrawOp::DrawLine(from, to, paint) => {
-                out.u8(tag::DRAW_LINE);
-                out.offset(*from);
-                out.offset(*to);
-                out.paint(&faded_paint(paint));
-            }
-            DrawOp::DrawParagraph(handle, offset) => {
-                out.u8(tag::DRAW_PARAGRAPH);
-                out.u32(handle.0 as u32);
-                out.offset(*offset);
-            }
-            DrawOp::SaveLayerAlpha(alpha) => {
-                out.u8(tag::SAVE_LAYER_ALPHA);
-                out.f32(*alpha);
-            }
-            DrawOp::Transform { pivot, scale, rotation, translation } => {
-                out.u8(tag::TRANSFORM);
-                out.offset(*pivot);
-                out.f32(scale.0);
-                out.f32(scale.1);
-                out.f32(*rotation);
-                out.offset(*translation);
-            }
-            DrawOp::DrawImage { image, src, dst, alpha } => {
-                let id = resources.image_id(image);
-                out.u8(tag::DRAW_IMAGE);
-                out.u32(id);
-                out.rect(src);
-                out.rect(dst);
-                out.f32(*alpha);
-            }
-            DrawOp::DrawShadow { outline, elevation, light, light_radius, ambient, spot } => {
-                out.u8(tag::DRAW_SHADOW);
-                out.outline(outline);
-                out.f32(*elevation);
-                out.f32(light.0);
-                out.f32(light.1);
-                out.f32(light.2);
-                out.f32(*light_radius);
-                out.color(*ambient);
-                out.color(*spot);
-            }
-            DrawOp::DrawArc { oval, start_angle, sweep_angle, use_center, paint } => {
-                out.u8(tag::DRAW_ARC);
-                out.rect(oval);
-                out.f32(*start_angle);
-                out.f32(*sweep_angle);
-                out.u8(u8::from(*use_center));
-                out.paint(&faded_paint(paint));
-            }
-            DrawOp::DrawPath { path, offset, scale, paint } => {
-                let id = resources.path_id(path);
-                out.u8(tag::DRAW_PATH);
-                out.u32(id);
-                out.offset(*offset);
-                out.f32(scale.0);
-                out.f32(scale.1);
-                out.paint(&faded_paint(paint));
-            }
-            // TODO(android): clip to the path (a `CLIP_PATH` tag replayed with
-            // `Canvas.clipPath`); skipped for now, so what follows isn't clipped.
-            DrawOp::ClipPath { .. } => {}
-        }
-    }
-    close_groups(&mut open, usize::MAX, out);
+/// Each group's record (its `GROUP` header and content) as last written, by key: a group whose
+/// version is the same is copied instead of written again (D157). Its bytes hold its nested
+/// groups' records and no layer's properties (they are the `LAYERS` section's), so a key and a
+/// version always give the same bytes (`DrawGroup`: a key with the same version draws the same;
+/// the paths and images it draws keep their ids while it holds them).
+#[derive(Default)]
+pub struct GroupCache {
+    records: HashMap<u64, CachedGroup>,
+    /// The current write: a record neither written nor copied by it is dropped after it.
+    generation: u64,
+    /// How many records the last write copied, not counting the ones inside them.
+    copied: usize,
+    /// How many records the last write wrote afresh.
+    written: usize,
 }
 
-/// Closes the open groups ending at or before `index`, writing their lengths.
-fn close_groups(open: &mut Vec<(usize, usize)>, index: usize, out: &mut Writer) {
-    while let Some(&(end, at)) = open.last() {
-        if end > index {
-            break;
+#[derive(Default)]
+struct CachedGroup {
+    version: u64,
+    bytes: Vec<u8>,
+    generation: u64,
+}
+
+impl GroupCache {
+    /// How many groups' records it holds.
+    pub fn len(&self) -> usize {
+        self.records.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.records.is_empty()
+    }
+
+    /// How many records the last write copied, not counting the ones inside them.
+    pub fn copied(&self) -> usize {
+        self.copied
+    }
+
+    /// How many records the last write wrote afresh (a new version each: Kotlin records them).
+    pub fn written(&self) -> usize {
+        self.written
+    }
+}
+
+/// The bytes of one entry of the `LAYERS` section.
+pub const LAYER_ENTRY_BYTES: usize = 8 + 8 * 4 + 1 + 4 * 4 + 1 + 4 * 4;
+
+/// Writes `list` into `out` (cleared first), defining in `resources` the paths and images it
+/// uses, and copying from `cache` the records of the groups whose version it holds.
+///
+/// The bytes are a `LAYERS` section (if a group has a layer), then the operations, each group a
+/// `GROUP` record in place of its operations, its layer's operations (`layer_start..start`,
+/// `end..layer_end`) left out: its layer is its `LAYERS` entry, which a replayer keeping a
+/// render node per group sets on that node each frame, nested groups' included.
+pub fn write_display_list(
+    list: &DisplayList,
+    resources: &mut Resources,
+    cache: &mut GroupCache,
+    out: &mut Writer,
+) {
+    out.bytes.clear();
+    cache.generation += 1;
+    cache.copied = 0;
+    cache.written = 0;
+    write_layers(list, out);
+    // The groups, outer before inner (they nest): of two with the same range, the outer one
+    // was drawn last (a stable sort of the reversed list keeps it first).
+    let mut groups: Vec<&DrawGroup> =
+        list.groups.iter().rev().filter(|group| group.start < group.end).collect();
+    groups.sort_by_key(|group| (group.layer_start, std::cmp::Reverse(group.layer_end)));
+    let mut serializer = Serializer {
+        ops: &list.ops,
+        groups: groups.into_iter().peekable(),
+        folds: Vec::new(),
+        resources,
+        cache,
+        out,
+    };
+    serializer.write_range(0, list.ops.len());
+    let generation = cache.generation;
+    cache.records.retain(|_, record| record.generation == generation);
+}
+
+/// The `LAYERS` section: every group's layer, if one has one.
+fn write_layers(list: &DisplayList, out: &mut Writer) {
+    let layered = |group: &&DrawGroup| group.start < group.end && group.layer.is_some();
+    let count = list.groups.iter().filter(layered).count();
+    if count == 0 {
+        return;
+    }
+    out.u8(tag::LAYERS);
+    out.u32(count as u32);
+    for group in list.groups.iter().filter(layered) {
+        let layer = group.layer.expect("a layer");
+        out.u32(group.key as u32);
+        out.u32((group.key >> 32) as u32);
+        out.f32(layer.alpha);
+        out.offset(layer.pivot);
+        out.f32(layer.scale.0);
+        out.f32(layer.scale.1);
+        out.f32(layer.rotation);
+        out.offset(layer.translation);
+        out.u8(u8::from(layer.clip.is_some()));
+        out.rect(&layer.clip.unwrap_or(Rect::new(0.0, 0.0, 0.0, 0.0)));
+        out.u8(u8::from(overlapping(list, group)));
+        out.rect(&layer.bounds);
+    }
+}
+
+/// Whether `group`'s alpha (below 1) must composite its content offscreen: unless it is one
+/// drawing with a paint and no group (as a folded layer, D153), which a render node fades
+/// without a layer (`setHasOverlappingRendering(false)`).
+fn overlapping(list: &DisplayList, group: &DrawGroup) -> bool {
+    // Its alpha's layer is the last of its layer's operations.
+    let Some(alpha_layer) = group.start.checked_sub(1).filter(|at| *at >= group.layer_start) else {
+        return true;
+    };
+    if !matches!(list.ops[alpha_layer], DrawOp::SaveLayerAlpha(_))
+        || foldable_layer(&list.ops, alpha_layer).is_none()
+    {
+        return true;
+    }
+    list.groups.iter().any(|inner| {
+        inner.key != group.key
+            && inner.start < inner.end
+            && group.start <= inner.layer_start
+            && inner.layer_end <= group.end
+    })
+}
+
+/// One write of a display list.
+struct Serializer<'a> {
+    ops: &'a [DrawOp],
+    /// The groups not written yet, by where they start.
+    groups: std::iter::Peekable<std::vec::IntoIter<&'a DrawGroup>>,
+    /// Layers folded into their one drawing's paint: where each ends, and its alpha.
+    folds: Vec<(usize, f32)>,
+    resources: &'a mut Resources,
+    cache: &'a mut GroupCache,
+    out: &'a mut Writer,
+}
+
+impl Serializer<'_> {
+    /// Writes `ops[from..to]`, each group in it as its record.
+    fn write_range(&mut self, from: usize, to: usize) {
+        let mut index = from;
+        while index < to {
+            while self.folds.last().is_some_and(|(end, _)| *end < index) {
+                self.folds.pop();
+            }
+            if let Some(group) = self.groups.next_if(|group| group.layer_start <= index) {
+                debug_assert_eq!(group.layer_start, index, "groups nest");
+                self.write_group(group);
+                index = group.layer_end.max(index + 1);
+                continue;
+            }
+            // A layer holding one drawing and no group: a folded alpha inside a group's record
+            // would change it without changing its version.
+            if let DrawOp::SaveLayerAlpha(alpha) = self.ops[index]
+                && let Some(end) = foldable_layer(self.ops, index)
+                && self.groups.peek().is_none_or(|group| group.layer_start > end)
+            {
+                self.folds.push((end, alpha));
+                self.out.u8(tag::SAVE);
+                index += 1;
+                continue;
+            }
+            let alpha: f32 = self.folds.iter().map(|(_, alpha)| alpha).product();
+            write_op(&self.ops[index], alpha, self.resources, self.out);
+            index += 1;
         }
-        open.pop();
-        let length = (out.bytes.len() - at - 4) as u32;
-        out.bytes[at..at + 4].copy_from_slice(&length.to_le_bytes());
+    }
+
+    /// Writes `group`'s record: copied if the cache has its version, else its header and its
+    /// content (`start..end`: its layer's operations left out).
+    fn write_group(&mut self, group: &DrawGroup) {
+        let generation = self.cache.generation;
+        if let Some(record) = self.cache.records.get_mut(&group.key)
+            && record.version == group.version
+        {
+            record.generation = generation;
+            self.out.bytes.extend_from_slice(&record.bytes);
+            self.cache.copied += 1;
+            // The groups inside it are in its bytes, and stay cached.
+            while let Some(inner) = self.groups.next_if(|inner| inner.layer_start < group.layer_end)
+            {
+                if let Some(record) = self.cache.records.get_mut(&inner.key) {
+                    record.generation = generation;
+                }
+            }
+            return;
+        }
+        self.cache.written += 1;
+        let at = self.out.bytes.len();
+        self.out.u8(tag::GROUP);
+        self.out.u32(group.key as u32);
+        self.out.u32((group.key >> 32) as u32);
+        self.out.u32(group.version as u32);
+        self.out.u32((group.version >> 32) as u32);
+        let length_at = self.out.bytes.len();
+        self.out.u32(0);
+        // No fold spans a group's edge: the ones open here end before it.
+        let folds = std::mem::take(&mut self.folds);
+        self.write_range(group.start, group.end);
+        self.folds = folds;
+        let length = (self.out.bytes.len() - length_at - 4) as u32;
+        self.out.bytes[length_at..length_at + 4].copy_from_slice(&length.to_le_bytes());
+        let record = self.cache.records.entry(group.key).or_default();
+        record.version = group.version;
+        record.generation = generation;
+        record.bytes.clear();
+        record.bytes.extend_from_slice(&self.out.bytes[at..]);
+    }
+}
+
+/// Writes `op`, its paint faded by `alpha` (the folded layers around it).
+fn write_op(op: &DrawOp, alpha: f32, resources: &mut Resources, out: &mut Writer) {
+    let faded_paint = |paint: &Paint| faded(paint, alpha);
+    match op {
+        DrawOp::Save => out.u8(tag::SAVE),
+        DrawOp::Restore => out.u8(tag::RESTORE),
+        DrawOp::Translate(offset) => {
+            out.u8(tag::TRANSLATE);
+            out.offset(*offset);
+        }
+        DrawOp::ClipRect(rect) => {
+            out.u8(tag::CLIP_RECT);
+            out.rect(rect);
+        }
+        DrawOp::ClipRoundRect(rect, radii) => {
+            out.u8(tag::CLIP_ROUND_RECT);
+            out.rect(rect);
+            out.radii(radii);
+        }
+        DrawOp::DrawRect(rect, paint) => {
+            out.u8(tag::DRAW_RECT);
+            out.rect(rect);
+            out.paint(&faded_paint(paint));
+        }
+        DrawOp::DrawRoundRect(rect, radii, paint) => {
+            out.u8(tag::DRAW_ROUND_RECT);
+            out.rect(rect);
+            out.radii(radii);
+            out.paint(&faded_paint(paint));
+        }
+        DrawOp::DrawLine(from, to, paint) => {
+            out.u8(tag::DRAW_LINE);
+            out.offset(*from);
+            out.offset(*to);
+            out.paint(&faded_paint(paint));
+        }
+        DrawOp::DrawParagraph(handle, offset) => {
+            out.u8(tag::DRAW_PARAGRAPH);
+            out.u32(handle.0 as u32);
+            out.offset(*offset);
+        }
+        DrawOp::SaveLayerAlpha(alpha) => {
+            out.u8(tag::SAVE_LAYER_ALPHA);
+            out.f32(*alpha);
+        }
+        DrawOp::Transform { pivot, scale, rotation, translation } => {
+            out.u8(tag::TRANSFORM);
+            out.offset(*pivot);
+            out.f32(scale.0);
+            out.f32(scale.1);
+            out.f32(*rotation);
+            out.offset(*translation);
+        }
+        DrawOp::DrawImage { image, src, dst, alpha } => {
+            let id = resources.image_id(image);
+            out.u8(tag::DRAW_IMAGE);
+            out.u32(id);
+            out.rect(src);
+            out.rect(dst);
+            out.f32(*alpha);
+        }
+        DrawOp::DrawShadow { outline, elevation, light, light_radius, ambient, spot } => {
+            out.u8(tag::DRAW_SHADOW);
+            out.outline(outline);
+            out.f32(*elevation);
+            out.f32(light.0);
+            out.f32(light.1);
+            out.f32(light.2);
+            out.f32(*light_radius);
+            out.color(*ambient);
+            out.color(*spot);
+        }
+        DrawOp::DrawArc { oval, start_angle, sweep_angle, use_center, paint } => {
+            out.u8(tag::DRAW_ARC);
+            out.rect(oval);
+            out.f32(*start_angle);
+            out.f32(*sweep_angle);
+            out.u8(u8::from(*use_center));
+            out.paint(&faded_paint(paint));
+        }
+        DrawOp::DrawPath { path, offset, scale, paint } => {
+            let id = resources.path_id(path);
+            out.u8(tag::DRAW_PATH);
+            out.u32(id);
+            out.offset(*offset);
+            out.f32(scale.0);
+            out.f32(scale.1);
+            out.paint(&faded_paint(paint));
+        }
+        // TODO(android): clip to the path (a `CLIP_PATH` tag replayed with `Canvas.clipPath`);
+        // skipped for now, so what follows isn't clipped. (Gradients: `Paint::shader` isn't
+        // written either; `paint.color` is the gradient's average, D175.)
+        DrawOp::ClipPath { .. } => {}
     }
 }
 
@@ -499,7 +680,7 @@ mod tests {
         let mut list = DisplayList::default();
         list.push(DrawOp::DrawRect(Rect::new(1.0, 2.0, 3.0, 4.0), Paint::fill(Color::BLACK)));
         let (mut resources, mut out) = (Resources::default(), Writer::default());
-        write_display_list(&list, &mut resources, &mut out);
+        write_display_list(&list, &mut resources, &mut GroupCache::default(), &mut out);
         // Tag, 4 floats, color, style, width, cap.
         assert_eq!(out.bytes.len(), 1 + 16 + 4 + 1 + 4 + 1);
         assert_eq!(out.bytes[0], tag::DRAW_RECT);
@@ -517,7 +698,7 @@ mod tests {
         // After it, the paint is whole again.
         list.push(DrawOp::DrawRect(Rect::new(0.0, 0.0, 4.0, 4.0), Paint::fill(Color::BLACK)));
         let (mut resources, mut out) = (Resources::default(), Writer::default());
-        write_display_list(&list, &mut resources, &mut out);
+        write_display_list(&list, &mut resources, &mut GroupCache::default(), &mut out);
         assert_eq!(out.bytes[0], tag::SAVE);
         // Save, clip (17 bytes), then the rect: its color at 1 + 17 + 1 + 16.
         assert_eq!(read_u32(&out.bytes, 35), 0x8000_0000);
@@ -527,7 +708,7 @@ mod tests {
         // Two drawings: a layer, as their overlap must fade together.
         list.ops
             .insert(3, DrawOp::DrawRect(Rect::new(1.0, 1.0, 2.0, 2.0), Paint::fill(Color::WHITE)));
-        write_display_list(&list, &mut resources, &mut out);
+        write_display_list(&list, &mut resources, &mut GroupCache::default(), &mut out);
         assert_eq!(out.bytes[0], tag::SAVE_LAYER_ALPHA);
     }
 
@@ -542,6 +723,7 @@ mod tests {
         // inner first, as drawing closes them.
         list.groups.push(compose_ui::DrawGroup {
             key: 2,
+            version: 7,
             start: 1,
             end: 2,
             layer_start: 1,
@@ -565,18 +747,19 @@ mod tests {
             ..Default::default()
         });
         let (mut resources, mut out) = (Resources::default(), Writer::default());
-        write_display_list(&list, &mut resources, &mut out);
+        write_display_list(&list, &mut resources, &mut GroupCache::default(), &mut out);
         let rect_bytes = 1 + 16 + 4 + 1 + 4 + 1;
-        let header = 1 + 8 + 4;
+        let header = 1 + 8 + 8 + 4;
         let bytes = &out.bytes;
         assert_eq!(bytes.len(), 2 * header + 3 * rect_bytes);
         assert_eq!(bytes[0], tag::GROUP);
         assert_eq!((read_u32(bytes, 1), read_u32(bytes, 5)), (1, 1 << 8));
-        assert_eq!(read_u32(bytes, 9) as usize, header + 3 * rect_bytes);
+        assert_eq!(read_u32(bytes, 17) as usize, header + 3 * rect_bytes);
         let inner = header + rect_bytes;
         assert_eq!(bytes[inner], tag::GROUP);
         assert_eq!(read_u32(bytes, inner + 1), 2);
-        assert_eq!(read_u32(bytes, inner + 9) as usize, rect_bytes);
+        assert_eq!((read_u32(bytes, inner + 9), read_u32(bytes, inner + 13)), (7, 0), "version");
+        assert_eq!(read_u32(bytes, inner + 17) as usize, rect_bytes);
         assert_eq!(bytes[inner + header], tag::DRAW_RECT);
     }
 
@@ -602,9 +785,9 @@ mod tests {
             ..Default::default()
         });
         let (mut resources, mut out) = (Resources::default(), Writer::default());
-        write_display_list(&list, &mut resources, &mut out);
+        write_display_list(&list, &mut resources, &mut GroupCache::default(), &mut out);
         assert_eq!((out.bytes[0], read_u32(&out.bytes, 1)), (tag::GROUP, 2));
-        assert_eq!((out.bytes[13], read_u32(&out.bytes, 14)), (tag::GROUP, 1));
+        assert_eq!((out.bytes[21], read_u32(&out.bytes, 22)), (tag::GROUP, 1));
     }
 
     /// A folded layer's `Save` opens the group as any operation does.
@@ -623,10 +806,10 @@ mod tests {
             ..Default::default()
         });
         let (mut resources, mut out) = (Resources::default(), Writer::default());
-        write_display_list(&list, &mut resources, &mut out);
+        write_display_list(&list, &mut resources, &mut GroupCache::default(), &mut out);
         assert_eq!(out.bytes[0], tag::GROUP);
-        assert_eq!(read_u32(&out.bytes, 9) as usize, out.bytes.len() - 13);
-        assert_eq!(out.bytes[13], tag::SAVE);
+        assert_eq!(read_u32(&out.bytes, 17) as usize, out.bytes.len() - 21);
+        assert_eq!(out.bytes[21], tag::SAVE);
     }
 
     #[test]
@@ -642,12 +825,12 @@ mod tests {
         list.push(op.clone());
         list.push(op);
         let (mut resources, mut out) = (Resources::default(), Writer::default());
-        write_display_list(&list, &mut resources, &mut out);
+        write_display_list(&list, &mut resources, &mut GroupCache::default(), &mut out);
         let mut pending = Writer::default();
         resources.write_pending(&mut pending);
         assert_eq!(pending.bytes[0], tag::DEFINE_PATH);
         // Drawn again: nothing new to define.
-        write_display_list(&list, &mut resources, &mut out);
+        write_display_list(&list, &mut resources, &mut GroupCache::default(), &mut out);
         assert!(!resources.has_pending());
         drop(list);
         drop(path);

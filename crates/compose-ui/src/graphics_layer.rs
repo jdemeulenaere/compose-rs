@@ -100,6 +100,9 @@ pub struct LayerProperties {
     pub translation: Offset,
     /// The bounds it clips its content to (after its transform), if it clips.
     pub clip: Option<Rect>,
+    /// Its bounds: its size at its origin (a render node's position; an offscreen layer for
+    /// its alpha is bounded by them on Android, as Compose's).
+    pub bounds: Rect,
 }
 
 impl LayerProperties {
@@ -109,15 +112,15 @@ impl LayerProperties {
             size.width * layer.transform_origin.pivot_fraction_x,
             size.height * layer.transform_origin.pivot_fraction_y,
         );
+        let bounds = Rect::new(origin.x, origin.y, origin.x + size.width, origin.y + size.height);
         LayerProperties {
             alpha: layer.alpha.clamp(0.0, 1.0),
             pivot: pivot + origin,
             scale: (layer.scale_x, layer.scale_y),
             rotation: layer.rotation_z,
             translation: Offset::new(layer.translation_x, layer.translation_y),
-            clip: layer.clip.then(|| {
-                Rect::new(origin.x, origin.y, origin.x + size.width, origin.y + size.height)
-            }),
+            clip: layer.clip.then_some(bounds),
+            bounds,
         }
     }
 

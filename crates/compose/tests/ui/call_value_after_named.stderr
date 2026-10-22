@@ -1,0 +1,5 @@
+error: positional arguments come before named ones; only the trailing lambda (`{ … }`) may follow them
+  --> tests/ui/call_value_after_named.rs:18:28
+   |
+18 |     Card!(enabled = false, handle_click);
+   |                            ^^^^^^^^^^^^

@@ -8,7 +8,7 @@ use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use compose_android::serialize::{Resources, Writer, tag, write_display_list};
+use compose_android::serialize::{GroupCache, Resources, Writer, tag, write_display_list};
 use compose_android::text::{AndroidTextMeasurer, TextBackend};
 use compose_runtime::executor;
 use compose_ui::*;
@@ -128,7 +128,7 @@ fn pending_resources_stay_bounded_while_frames_go_undrawn() {
         let image = ImageBitmap::from_rgba_premultiplied(64, 64, vec![255; frame_bytes]);
         let mut list = DisplayList::default();
         list.push(image_op(image));
-        write_display_list(&list, &mut resources, &mut out);
+        write_display_list(&list, &mut resources, &mut GroupCache::default(), &mut out);
         drop(list);
         resources.collect();
     }
@@ -154,7 +154,7 @@ fn an_empty_image_never_reaches_kotlin_as_a_short_definition() {
     let mut out = Writer::default();
     let mut list = DisplayList::default();
     list.push(image_op(ImageBitmap::from_rgba_premultiplied(0, 0, Vec::new())));
-    write_display_list(&list, &mut resources, &mut out);
+    write_display_list(&list, &mut resources, &mut GroupCache::default(), &mut out);
     let mut taken = Writer::default();
     resources.write_pending(&mut taken);
     let pending = &taken.bytes;
