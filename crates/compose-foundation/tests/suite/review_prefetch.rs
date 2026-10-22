@@ -200,34 +200,30 @@ fn after_a_slow_item_an_idle_time_shorter_than_it_is_left_alone() {
     assert_eq!(total_compositions(), before, "an item started in 20 ms after one took 40");
 }
 
-/// Input: items that each take 8 ms to compose, then five idle times of 3 ms (heavy frames),
-/// then one of 6 ms.
+/// Input: items that each take 20 ms to compose, timed a few times, then six idle times of
+/// 14 ms (heavy frames; on a phone, 4–6 ms measurements and 3 ms idle times).
 ///
 /// Lowering the estimate by a quarter after each idle time too short for the step takes it
-/// from 8 to 1.9 ms in five short idle times: the 6 ms one then starts an item, which overruns
-/// it by 2 ms. An idle time shorter than half the estimate says little about the step: it
-/// lowers the estimate by a sixteenth only, so one slow item still can't stop prefetching for
-/// good (`one_slow_item_does_not_disable_prefetch_for_good`) but heavy frames don't wear it
-/// down within a few (D341).
+/// from 20 to 11 ms in two of them: the third starts an item, which overruns it by 6 ms, and
+/// the cycle repeats once the item is timed. A miss teaches nothing about a step timed
+/// often: its average is lowered by a sixteenth only, and the recent maximum no further than
+/// it (an outlier's fades fast: `one_slow_item_does_not_disable_prefetch_for_good`) (D341).
 #[test]
-fn idle_times_far_too_short_for_a_step_do_not_wear_its_estimate_down() {
+fn idle_times_too_short_for_a_steady_step_do_not_wear_its_estimate_down() {
     let (mut ui, state) = list(0);
-    ITEM_MILLIS.with(|millis| millis.set(8));
-    state.scroll_by(30.0);
-    ui.wait_for_idle();
-    ui.host().prefetch(later());
-    for _ in 0..5 {
+    ITEM_MILLIS.with(|millis| millis.set(20));
+    for _ in 0..3 {
+        state.scroll_by(20.0);
+        ui.wait_for_idle();
+        ui.host().prefetch(later());
+    }
+    for millis in [14; 6] {
         state.scroll_by(20.0);
         ui.wait_for_idle();
         let before = total_compositions();
-        ui.host().prefetch(Instant::now() + Duration::from_millis(3));
-        assert_eq!(total_compositions(), before, "an 8 ms item started in 3 ms");
+        ui.host().prefetch(Instant::now() + Duration::from_millis(millis));
+        assert_eq!(total_compositions(), before, "a 20 ms item started in {millis} ms");
     }
-    state.scroll_by(20.0);
-    ui.wait_for_idle();
-    let before = total_compositions();
-    ui.host().prefetch(Instant::now() + Duration::from_millis(6));
-    assert_eq!(total_compositions(), before, "an 8 ms item started in 6 ms");
 }
 
 /// Input: a list that scrolled, then an idle time of 0.2 ms, before any item was timed.

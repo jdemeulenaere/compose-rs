@@ -171,7 +171,12 @@ struct Prefetch {
 struct StepCost {
     average: u64,
     peak: u64,
+    /// Steps timed (up to `SETTLED_STEPS`): an average of fewer may be one outlier.
+    timed: u32,
 }
+
+/// Steps timed after which an average is the step's cost rather than its first samples.
+const SETTLED_STEPS: u32 = 4;
 
 impl StepCost {
     /// How long the next step is expected to take.
@@ -181,32 +186,31 @@ impl StepCost {
 
     /// With a step that took `nanos`.
     fn timed(self, nanos: u64) -> StepCost {
-        let average = if self.average == 0 { nanos } else { self.average / 4 * 3 + nanos / 4 };
-        StepCost { average, peak: nanos.max(self.peak - self.peak / 8) }
-    }
-
-    /// Lowered by a quarter, after an idle time too short for it: one slow step (or a run of
-    /// short idle times) doesn't keep the list from prefetching for good.
-    fn lowered(self) -> StepCost {
-        StepCost { average: self.average / 4 * 3, peak: self.peak / 4 * 3 }
-    }
-
-    /// After the step didn't fit the `available` time, as the `first` step of its idle time
-    /// or not. Kept if steps before it took the time: the next idle time may fit it whole
-    /// (lowering it then let a 5 ms measurement start with 3 ms left after a composition, on the
-    /// Pixel 8 Pro). Lowered by a quarter if the idle time was a real chance for it (half its
-    /// estimate at least), by a sixteenth if it was far shorter: an outlier (one slow item
-    /// among the first timed) still fades, so it can't stop prefetching for good, but heavy
-    /// frames' short idle times don't wear a steady slow step's estimate down within a few
-    /// frames until an idle time it overruns starts it.
-    fn missed(self, first: bool, available: u64) -> StepCost {
-        if !first {
-            self
-        } else if available.saturating_mul(2) >= self.estimate() {
-            self.lowered()
-        } else {
-            StepCost { average: self.average / 16 * 15, peak: self.peak / 16 * 15 }
+        let average = if self.timed == 0 { nanos } else { self.average / 4 * 3 + nanos / 4 };
+        StepCost {
+            average,
+            peak: nanos.max(self.peak - self.peak / 8),
+            timed: (self.timed + 1).min(SETTLED_STEPS),
         }
+    }
+
+    /// After the step didn't fit the time left, as the `first` step of its idle time or not.
+    /// Kept if steps before it took the time: the next idle time may fit it whole (lowering it
+    /// then let a 5 ms measurement start with 3 ms left after a composition, on the Pixel 8
+    /// Pro). Otherwise lowered, so nothing keeps the list from prefetching for good, but a miss
+    /// teaches nothing about the step's cost, so slowly where that cost is known: the recent
+    /// maximum by a quarter, down to the average (an outlier fades within a few idle times);
+    /// the average by a quarter while it rests on fewer than `SETTLED_STEPS` steps (it may be
+    /// one outlier), by a sixteenth after (heavy frames' short idle times would otherwise
+    /// wear a steady slow step's estimate down in two or three frames, until one it overruns
+    /// starts it).
+    fn missed(self, first: bool) -> StepCost {
+        if !first {
+            return self;
+        }
+        let average =
+            if self.timed < SETTLED_STEPS { self.average / 4 * 3 } else { self.average / 16 * 15 };
+        StepCost { average, peak: average.max(self.peak / 4 * 3), timed: self.timed }
     }
 }
 
@@ -1639,8 +1643,10 @@ impl PrefetchRequest for LazyListPrefetch {
                             break;
                         }
                     }
+                    // Timed only when it measured: an item gone in the meantime would lower
+                    // the estimate with a sample of nothing.
+                    time(&prefetch.measure_cost, start);
                 }
-                time(&prefetch.measure_cost, start);
                 prefetch.to_measure.set(None);
                 first = false;
                 continue;
@@ -1690,13 +1696,13 @@ impl Prefetch {
 
 /// Whether the time left exceeds the step's estimate by `PREFETCH_MARGIN_NANOS`. If not, the
 /// estimate may be lowered ([`StepCost::missed`]). `first`: no step of this request ran in this
-/// idle time (another list's may have).
+/// idle time (another list's may have: it then counts as a miss of this one's).
 fn fits(scope: &PrefetchRequestScope<'_>, cost: &Cell<StepCost>, first: bool) -> bool {
     let available = scope.available_time_nanos();
     if available > cost.get().estimate().saturating_add(PREFETCH_MARGIN_NANOS) {
         return true;
     }
-    cost.set(cost.get().missed(first, available));
+    cost.set(cost.get().missed(first));
     false
 }
 
@@ -1861,6 +1867,7 @@ mod tests {
         cost = cost.timed(8 * MS);
         // The average says 3.5 ms; the step that took 8 ms says the next may too.
         assert_eq!(cost.average, 3_500_000);
+        assert_eq!(cost.timed, super::SETTLED_STEPS);
         assert_eq!(cost.estimate(), 8 * MS);
     }
 
@@ -1879,13 +1886,13 @@ mod tests {
     }
 
     #[test]
-    fn an_idle_time_too_short_lowers_both_by_a_quarter() {
-        let cost = StepCost::default().timed(4 * MS).timed(8 * MS).lowered();
-        assert_eq!(cost, StepCost { average: 3_750_000, peak: 6 * MS });
-        // Lowered enough times, it fits any idle time again.
+    fn a_miss_lowers_an_unsettled_estimate_by_a_quarter() {
+        let cost = StepCost::default().timed(4 * MS).timed(8 * MS).missed(true);
+        assert_eq!((cost.average, cost.peak), (3_750_000, 6 * MS));
+        // Missed enough times, it fits any idle time again.
         let mut cost = cost;
         for _ in 0..40 {
-            cost = cost.lowered();
+            cost = cost.missed(true);
         }
         assert!(cost.estimate() < 1_000);
     }
@@ -1893,26 +1900,41 @@ mod tests {
     #[test]
     fn a_step_short_of_time_after_others_keeps_its_estimate() {
         let cost = StepCost::default().timed(5 * MS);
-        assert_eq!(cost.missed(false, 4 * MS), cost, "the next idle time may fit it whole");
-        assert_eq!(cost.missed(true, 4 * MS), cost.lowered(), "its idle time was too short");
+        assert_eq!(cost.missed(false), cost, "the next idle time may fit it whole");
+        assert!(cost.missed(true).estimate() < cost.estimate());
     }
 
     #[test]
-    fn an_idle_time_far_too_short_says_little_about_a_step() {
-        // Steady 4 ms steps: 1 ms idle times barely lower the estimate.
-        let steady = StepCost::default().timed(4 * MS).timed(4 * MS);
-        let mut worn = steady;
-        for _ in 0..5 {
-            worn = worn.missed(true, MS);
+    fn misses_wear_a_steady_steps_estimate_down_slowly() {
+        let mut steady = StepCost::default();
+        for _ in 0..8 {
+            steady = steady.timed(4 * MS);
         }
-        // A sixteenth each: a 3 ms idle time still doesn't start it (a quarter each: 1.0 ms).
-        assert!(worn.estimate() + PREFETCH_MARGIN_NANOS > 3 * MS, "{worn:?}");
-        assert_eq!(steady.missed(true, 2 * MS), steady.lowered(), "half of it: a chance");
-        // However short the idle times, the estimate fades: nothing stops prefetching for good.
-        let mut outlier = StepCost::default().timed(40 * MS);
+        for _ in 0..4 {
+            steady = steady.missed(true);
+        }
+        // A sixteenth each: a 3 ms idle time still doesn't start it (a quarter each: 1.3 ms).
+        assert!(steady.estimate() + PREFETCH_MARGIN_NANOS > 3 * MS, "{steady:?}");
+        // But it fades, however short the idle times: nothing stops prefetching for good.
         for _ in 0..100 {
-            outlier = outlier.missed(true, MS);
+            steady = steady.missed(true);
         }
-        assert!(outlier.estimate() < MS, "{outlier:?}");
+        assert!(steady.estimate() < MS, "{steady:?}");
+    }
+
+    #[test]
+    fn an_outliers_maximum_fades_fast() {
+        let mut cost = StepCost::default();
+        for _ in 0..8 {
+            cost = cost.timed(MS);
+        }
+        cost = cost.timed(40 * MS);
+        assert_eq!(cost.estimate(), 40 * MS);
+        for _ in 0..6 {
+            cost = cost.missed(true);
+        }
+        // Down to the average (10.75 ms, lowered by a sixteenth each).
+        assert_eq!(cost.peak, cost.average);
+        assert!(cost.estimate() < 11 * MS, "{cost:?}");
     }
 }
