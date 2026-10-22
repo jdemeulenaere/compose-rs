@@ -42,7 +42,14 @@ sudo pacman -S base-devel freetype2 fontconfig                                  
 
 ### Android apps
 
-Needs the Android SDK and NDK (`ANDROID_HOME`, or `~/Library/Android/sdk` on macOS), Rust's `aarch64-linux-android` target (`rustup target add aarch64-linux-android`), JDK 17 or newer, and an arm64 device connected with adb. The Gradle wrapper (`android/gradlew`) fetches Gradle itself, and builds the Rust library with `android/build-rust.sh`.
+Needs the Android SDK (`ANDROID_HOME`, or `~/Library/Android/sdk` on macOS), JDK 17 or newer, and an arm64 device connected with adb. The Gradle wrapper (`android/gradlew`) fetches Gradle itself, and builds the Rust library with `android/build-rust.sh`, which needs the NDK and Rust's Android target:
+
+```bash
+"$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;27.2.12479018" platform-tools   # or Android Studio's SDK Manager: SDK Tools > NDK (Side by side)
+rustup target add aarch64-linux-android
+```
+
+`build-rust.sh` uses the newest NDK under `$ANDROID_HOME/ndk/`, or the one `ANDROID_NDK_HOME` names.
 
 ```bash
 android/gradlew -p android :demo:installDebug    # the gallery, todo and counter in Kotlin Compose tabs

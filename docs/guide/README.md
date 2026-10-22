@@ -149,7 +149,7 @@ compose-rs runs in a plain Android `View`, `ComposeRsView`. It can be an activit
 You need:
 
 - a macOS or Linux machine to build on: `build-rust.sh` is a POSIX shell script;
-- the Android SDK and NDK. The script finds the SDK through `ANDROID_HOME` (or `ANDROID_SDK_ROOT`), falling back to macOS's default location, and doesn't read Gradle's `local.properties`: on Linux, set `ANDROID_HOME`. It takes the NDK from `ANDROID_NDK_HOME`, or the newest under the SDK's `ndk/`;
+- the Android SDK and NDK. The script finds the SDK through `ANDROID_HOME` (or `ANDROID_SDK_ROOT`), falling back to macOS's default location, and doesn't read Gradle's `local.properties`: on Linux, set `ANDROID_HOME`. It takes the NDK from `ANDROID_NDK_HOME`, or the newest under the SDK's `ndk/`. Install one with `"$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;27.2.12479018"` (the version compose-rs is built with) or Android Studio's SDK Manager (SDK Tools, NDK (Side by side));
 - the Rust target: `rustup target add aarch64-linux-android`;
 - JDK 17 or newer. The Gradle wrapper (`android/gradlew`) fetches Gradle 9.6, which loads the Android Gradle plugin 9.4 (whose built-in Kotlin support compiles the Kotlin) and the Kotlin Compose compiler plugin 2.4; Android Studio opens the `android/` project with the same wrapper.
 
