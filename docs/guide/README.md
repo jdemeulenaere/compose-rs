@@ -9,7 +9,7 @@ This guide is for Android developers who know Jetpack Compose. It takes you from
 
 The samples quoted in the guide are in [`examples/guide`](../../examples/guide). `cargo test` compiles and runs them, and a test checks that every quote matches its source. The design documents in [docs/](..) explain how each part works, and [decisions.md](../decisions.md) records why.
 
-compose-rs isn't published yet. It runs on desktop (macOS, Windows, Linux) and on Android (arm64, API 29 and later).
+compose-rs isn't published yet. It runs on desktop (macOS, Windows, Linux) and on Android (arm64, API 29 and later). On Linux, the desktop build links the system's FreeType and Fontconfig: install their development packages (`libfreetype-dev` and `libfontconfig1-dev` on Debian and Ubuntu, `freetype-devel` and `fontconfig-devel` on Fedora, `freetype2` and `fontconfig` on Arch) and `pkg-config`.
 
 ## The layout of an app
 

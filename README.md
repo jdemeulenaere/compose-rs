@@ -32,6 +32,14 @@ A design for bringing Jetpack Compose's model to Rust: positional memoization ov
 cargo run -p todo      # also: counter, gallery
 ```
 
+On Linux, Skia links the system's FreeType and Fontconfig, so install their development packages first:
+
+```bash
+sudo apt install build-essential pkg-config libfreetype-dev libfontconfig1-dev   # Debian, Ubuntu
+sudo dnf install gcc-c++ pkgconf-pkg-config freetype-devel fontconfig-devel      # Fedora
+sudo pacman -S base-devel freetype2 fontconfig                                     # Arch
+```
+
 ### Android apps
 
 Needs the Android SDK and NDK (`ANDROID_HOME`, or `~/Library/Android/sdk` on macOS), Rust's `aarch64-linux-android` target (`rustup target add aarch64-linux-android`), JDK 17 or newer, and an arm64 device connected with adb. The Gradle wrapper (`android/gradlew`) fetches Gradle itself, and builds the Rust library with `android/build-rust.sh`.

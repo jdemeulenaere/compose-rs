@@ -10,6 +10,9 @@ publish.workspace = true
 compose-ui.workspace = true
 skia-safe = { version = "0.153", features = ["textlayout"] }
 
+[build-dependencies]
+pkg-config = "0.3"
+
 [dev-dependencies]
 compose = { path = "../compose", features = ["test"] }
 counter = { path = "../../examples/counter" }

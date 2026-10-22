@@ -780,6 +780,7 @@ dependencies = [
  "compose",
  "compose-ui",
  "counter",
+ "pkg-config",
  "skia-safe",
 ]
 
