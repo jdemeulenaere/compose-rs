@@ -190,6 +190,14 @@ impl StepCost {
     fn lowered(self) -> StepCost {
         StepCost { average: self.average / 4 * 3, peak: self.peak / 4 * 3 }
     }
+
+    /// After the step didn't fit the time left: lowered if it was the `first` step of the idle
+    /// time (the idle time was too short for it), kept if steps before it took the time (the
+    /// next idle time may fit it whole; lowering it then let a 5 ms measurement start with 3 ms
+    /// left after a composition, on the Pixel 8 Pro).
+    fn missed(self, first: bool) -> StepCost {
+        if first { self.lowered() } else { self }
+    }
 }
 
 impl LazyListState {
@@ -1597,10 +1605,13 @@ impl PrefetchRequest for LazyListPrefetch {
     fn execute(&self, scope: &mut PrefetchRequestScope<'_>) -> bool {
         let Some(state) = self.state.upgrade() else { return false };
         let prefetch = &state.prefetch;
+        // A step that doesn't fit after others in the same idle time may fit the next one
+        // whole: its estimate is lowered only when it's the first.
+        let mut first = true;
         loop {
             // An item composed ahead is measured first.
             if let Some(index) = prefetch.to_measure.get() {
-                if !fits(scope, &prefetch.measure_cost) {
+                if !fits(scope, &prefetch.measure_cost, first) {
                     return false;
                 }
                 let _section =
@@ -1621,10 +1632,11 @@ impl PrefetchRequest for LazyListPrefetch {
                 }
                 time(&prefetch.measure_cost, start);
                 prefetch.to_measure.set(None);
+                first = false;
                 continue;
             }
             let Some((range, ahead)) = prefetch.next(state.composed.get()) else { return false };
-            if !fits(scope, &prefetch.compose_cost) {
+            if !fits(scope, &prefetch.compose_cost, first) {
                 return false;
             }
             let section = compose_ui::platform::trace::section(c"compose-rs: prefetch compose");
@@ -1634,6 +1646,7 @@ impl PrefetchRequest for LazyListPrefetch {
             time(&prefetch.compose_cost, began);
             drop(section);
             prefetch.to_measure.set(ahead);
+            first = false;
         }
     }
 }
@@ -1665,14 +1678,14 @@ impl Prefetch {
     }
 }
 
-/// Whether the time left exceeds the step's estimate by `PREFETCH_MARGIN_NANOS`. If not, the
-/// estimate is lowered ([`StepCost::lowered`]).
-fn fits(scope: &PrefetchRequestScope<'_>, cost: &Cell<StepCost>) -> bool {
+/// Whether the time left exceeds the step's estimate by `PREFETCH_MARGIN_NANOS`. If not, and
+/// the step is the `first` of its idle time, the estimate is lowered ([`StepCost::missed`]).
+fn fits(scope: &PrefetchRequestScope<'_>, cost: &Cell<StepCost>, first: bool) -> bool {
     let estimate = cost.get().estimate();
     if scope.available_time_nanos() > estimate.saturating_add(PREFETCH_MARGIN_NANOS) {
         return true;
     }
-    cost.set(cost.get().lowered());
+    cost.set(cost.get().missed(first));
     false
 }
 
@@ -1864,5 +1877,12 @@ mod tests {
             cost = cost.lowered();
         }
         assert!(cost.estimate() < 1_000);
+    }
+
+    #[test]
+    fn a_step_short_of_time_after_others_keeps_its_estimate() {
+        let cost = StepCost::default().timed(5 * MS);
+        assert_eq!(cost.missed(false), cost, "the next idle time may fit it whole");
+        assert_eq!(cost.missed(true), cost.lowered(), "its idle time was too short for it");
     }
 }
