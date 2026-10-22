@@ -2,6 +2,8 @@
 
 A design for bringing Jetpack Compose's model to Rust: positional memoization over a slot table, a compiler-style transform that makes composables skippable and restartable, observable state, `Modifier.Node`-style modifiers, and Compose's layout model and API names, on desktop and Android.
 
+> **Disclaimer:** this is not an officially supported Google product, and it is not affiliated with or endorsed by the Jetpack Compose team. Jetpack Compose and Android are trademarks of Google LLC.
+
 **Status:** phases A to F of the [roadmap](docs/10-roadmap.md) are implemented: the runtime (`crates/compose-runtime`), the `#[composable]` transform with call macros and lambda memoization (`crates/compose-macros`), the UI core (`crates/compose-ui`), the toolkit (`crates/compose-foundation`, `crates/compose-material3`), the test rule (`crates/compose-test`), Skia rendering and text (`crates/compose-skia`), desktop windows (`crates/compose-desktop`), and the counter and todo apps (`examples/`, `cargo run -p todo`). Beyond the first milestone (phase H): `LaunchedEffect` and coroutine scopes on a UI-thread executor with `delay` and a frame clock, `derived_state_of`, `LazyColumn`/`LazyRow`/`LazyVerticalGrid`, `BoxWithConstraints`, `compose-animation` (`Animatable`, specs, `animate_*_as_state`, `AnimatedVisibility`, `Crossfade`), popups and dialogs, images, custom drawing (`Canvas`, `draw_behind`, `draw_with_content`), shadows and tonal elevation, rich text (`TextStyle`, `AnnotatedString`), right-to-left layout, and accessibility on desktop through AccessKit. Android (phase G) runs: `ComposeRsView` embeds a compose-rs app in an Android or Kotlin Compose UI ([docs/12](docs/12-android-performance.md) compares it with Jetpack Compose on a Pixel 8 Pro: it starts faster, holds a third less memory after start and does less main-thread work per frame). [docs/11-status.md](docs/11-status.md) lists what's covered and the known differences from Compose. `cargo test` runs everything; `cargo bench -p compose-benchmarks` runs the runtime and frame benchmarks (toggling one of 1,000 todos in a `LazyColumn`: about 0.19 ms a headless frame with all 1,000 in view, about 0.31 ms from input to Skia-rendered pixels at 2× in a 480 × 640 dp window; an edit to the todo app rebuilds in about 0.5 s).
 
 | Crate | Contents |
@@ -23,8 +25,34 @@ A design for bringing Jetpack Compose's model to Rust: positional memoization ov
 
 ## Getting started
 
+### Desktop apps
+
 ```bash
-cargo run -p todo
+cargo run -p todo      # also: counter, gallery
+```
+
+### Android apps
+
+Needs the Android SDK and NDK (`ANDROID_HOME`, or `~/Library/Android/sdk` on macOS), Rust's `aarch64-linux-android` target (`rustup target add aarch64-linux-android`), JDK 17 and Gradle 9, and an arm64 device connected with adb. Gradle builds the Rust library with `android/build-rust.sh`.
+
+```bash
+gradle -p android :demo:installDebug    # the gallery, todo and counter in Kotlin Compose tabs
+adb shell am start -n rs.compose.demo/.MainActivity
+```
+
+### Tests and benchmarks
+
+```bash
+cargo test                                           # everything
+cargo bench -p compose-benchmarks                    # runtime and frame benchmarks (criterion)
+```
+
+The Android comparison with Jetpack Compose ([docs/12](docs/12-android-performance.md)) installs both versions of the feed app, then measures them with Perfetto; `measure.py` needs a [trace_processor_shell](https://perfetto.dev/docs/analysis/trace-processor) binary:
+
+```bash
+gradle -p android :bench-compose:installRelease :bench-rs:installRelease
+python3 android/bench/measure.py --trace-processor path/to/trace_processor_shell --out bench-out
+python3 android/bench/summarize.py bench-out/report.json
 ```
 
 The [developer guide](docs/guide/README.md) walks through a desktop app and an Android app.
