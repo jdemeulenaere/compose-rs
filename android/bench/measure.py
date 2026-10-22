@@ -2,7 +2,23 @@
 """Measures the benchmark apps (bench-compose: Kotlin Compose; bench-rs: compose-rs) on a
 connected device, interleaving the two apps run by run, and writes a JSON report.
 
-    measure.py --trace-processor PATH --out DIR [--runs N]
+    measure.py --trace-processor PATH --out DIR [--runs N] [--compile MODE] [--allow-stale]
+
+Before measuring, the installed APKs are checked against the ones built in this checkout
+(android/bench-*/build/outputs/apk/release/): each native library's SHA-1 must match, or the run
+stops (--allow-stale measures anyway). The report records each APK's size and SHA-1 and its
+libraries', and each app's ART compilation state (`dumpsys package dexopt`) at the start and the
+end of the run.
+
+--compile (`cmd package compile -m MODE -f`, before measuring):
+  speed          (default) everything compiled ahead of time; docs/12's rounds 1 to 3 used it
+  speed-profile  each app is reset, run through its screens so ART records a profile, then
+                 compiled from that profile: what a Baseline or Cloud Profile gives a Play
+                 install, with an app image. Compose's feed starts faster this way than with
+                 speed (docs/14). compose-rs's Kotlin glue leaves no profile worth compiling, so
+                 its state stays verify (the dexopt log shows it): its startup doesn't depend on
+                 it, but its replay runs JIT code
+  verify         no ahead-of-time code: a fresh install with no profile
 
 Scenarios (docs/12-android-performance.md):
   startup      cold starts of the feed and of the big screen (`am start -W`: TotalTime), and a
@@ -13,14 +29,22 @@ Scenarios (docs/12-android-performance.md):
 """
 
 import argparse
+import hashlib
 import json
 import os
 import re
 import statistics
 import subprocess
 import time
+import zipfile
 
 APPS = {"compose": "rs.compose.bench.compose", "rs": "rs.compose.bench.rs"}
+# Where Gradle puts each app's release APK, relative to android/.
+BUILT_APKS = {
+    "compose": "bench-compose/build/outputs/apk/release/bench-compose-release.apk",
+    "rs": "bench-rs/build/outputs/apk/release/bench-rs-release.apk",
+}
+ANDROID_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def adb(*args, check=True):
@@ -49,6 +73,137 @@ def cold_start(package, screen):
     output = start(package, screen)
     match = re.search(r"TotalTime: (\d+)", output)
     return int(match.group(1)) if match else None
+
+
+def apk_summary(path):
+    """An APK's size and SHA-1, and each native library's."""
+    digest = hashlib.sha1()
+    with open(path, "rb") as file:
+        for block in iter(lambda: file.read(1 << 20), b""):
+            digest.update(block)
+    libraries = {}
+    with zipfile.ZipFile(path) as archive:
+        for entry in archive.infolist():
+            if entry.filename.startswith("lib/") and entry.filename.endswith(".so"):
+                libraries[entry.filename] = {
+                    "bytes": entry.file_size,
+                    "sha1": hashlib.sha1(archive.read(entry)).hexdigest(),
+                }
+    return {"bytes": os.path.getsize(path), "sha1": digest.hexdigest(), "libraries": libraries}
+
+
+def base_apk_path(pm_path_output):
+    """The base APK's path on the device, from `pm path`'s `package:/data/app/.../base.apk`."""
+    paths = [line.strip()[len("package:"):] for line in pm_path_output.splitlines()
+             if line.strip().startswith("package:")]
+    bases = [path for path in paths if path.endswith("/base.apk")]
+    return (bases or paths or [None])[0]
+
+
+def compare_apks(installed, built):
+    """What differs between the installed APK and the built one (nothing if none was built)."""
+    if built is None:
+        return []
+    problems = []
+    if installed["libraries"] != built["libraries"]:
+        def short(apk):
+            return {name: value["sha1"][:12] for name, value in apk["libraries"].items()}
+        problems.append(f"libraries {short(installed)} installed, {short(built)} built")
+    if installed["sha1"] != built["sha1"]:
+        problems.append(f"APK {installed['sha1'][:12]} installed, {built['sha1'][:12]} built")
+    return problems
+
+
+def check_apks(out_dir, allow_stale):
+    """Pulls each installed APK and records its size and checksums. Stops if its libraries
+    aren't those of the APK built in this checkout, unless allow_stale; warns if only the rest
+    of the APK differs."""
+    apks = {}
+    for name, package in APPS.items():
+        device_path = base_apk_path(shell(f"pm path {package}"))
+        if device_path is None:
+            raise SystemExit(f"{package} isn't installed")
+        local = os.path.join(out_dir, f"installed-{package}.apk")
+        adb("pull", device_path, local)
+        installed = apk_summary(local)
+        os.remove(local)
+        built_path = os.path.join(ANDROID_DIR, BUILT_APKS[name])
+        built = apk_summary(built_path) if os.path.exists(built_path) else None
+        problems = compare_apks(installed, built)
+        apks[name] = {"installed": installed, "built": built, "built_path": built_path,
+                      "problems": problems}
+        print(f"apk {name}: {installed['bytes']} bytes, sha1 {installed['sha1'][:12]}; "
+              + ", ".join(f"{library} {value['bytes']} bytes, sha1 {value['sha1'][:12]}"
+                          for library, value in installed["libraries"].items()))
+        if built is None:
+            print(f"apk {name}: no APK built at {built_path}: recorded the installed one only")
+        elif problems and (allow_stale or installed["libraries"] == built["libraries"]):
+            print(f"apk {name}: WARNING: not the APK built at {built_path}: {'; '.join(problems)}")
+        elif problems:
+            raise SystemExit(f"{package}: the installed APK isn't the one built at {built_path}: "
+                             f"{'; '.join(problems)}. Install it again, or pass --allow-stale.")
+    return apks
+
+
+def dexopt_states(output):
+    """Each package's compilation states from `dumpsys package dexopt`: one per APK and
+    instruction set, as {"path", "isa", "status", "reason"}."""
+    states = {}
+    package = path = None
+    for line in output.splitlines():
+        stripped = line.strip()
+        header = re.fullmatch(r"\[([\w.]+)\]", stripped)
+        if header:
+            package, path = header.group(1), None
+            states.setdefault(package, [])
+            continue
+        if package is None:
+            continue
+        if stripped.startswith("path:"):
+            path = stripped[len("path:"):].strip()
+            continue
+        state = re.match(r"([\w-]+): \[status=([^\]]+)\] \[reason=([^\]]+)\]", stripped)
+        if state:
+            states[package].append({"path": path, "isa": state.group(1),
+                                    "status": state.group(2), "reason": state.group(3)})
+    return states
+
+
+def log_dexopt(when):
+    """The apps' compilation states (`dumpsys package dexopt`), printed and returned."""
+    states = dexopt_states(shell("dumpsys package dexopt"))
+    apps = {name: states.get(package, []) for name, package in APPS.items()}
+    for name, app_states in apps.items():
+        print(f"dexopt {when} {name}: " + (", ".join(
+            f"{state['isa']} {state['status']} ({state['reason']})" for state in app_states)
+            or "not found"))
+    return apps
+
+
+def train(package):
+    """Runs the app's screens from a reset, so ART's profile saver records what they run."""
+    shell(f"cmd package compile --reset {package}")
+    for screen in ("feed", "big", "feed_animated"):
+        stop(package)
+        time.sleep(1.0)
+        start(package, screen)
+        time.sleep(2)
+        if screen == "feed":
+            for flick in range(6):
+                swipe(up=flick % 4 != 3)
+                time.sleep(1.0)
+        time.sleep(3)
+    shell("input keyevent KEYCODE_HOME")
+    # The profile saver writes the profile a few seconds after the app goes to the background.
+    time.sleep(12)
+    stop(package)
+
+
+def compile_apps(mode):
+    for package in APPS.values():
+        if mode == "speed-profile":
+            train(package)
+        shell(f"cmd package compile -m {mode} -f {package}")
 
 
 def meminfo(package):
@@ -320,22 +475,28 @@ def swipe(up):
 
 
 def main():
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--trace-processor", required=True)
     parser.add_argument("--out", required=True)
     parser.add_argument("--runs", type=int, default=10)
+    parser.add_argument("--compile", choices=["speed", "speed-profile", "verify"],
+                        default="speed", help="the apps' ART compilation filter (see above)")
+    parser.add_argument("--allow-stale", action="store_true",
+                        help="measure even if the installed APKs aren't the ones built here")
     arguments = parser.parse_args()
     os.makedirs(arguments.out, exist_ok=True)
     tp = arguments.trace_processor
     capacities = cpu_capacities()
     report = {"device": shell("getprop ro.product.model").strip(),
-              "android": shell("getprop ro.build.version.release").strip()}
+              "android": shell("getprop ro.build.version.release").strip(),
+              "compile": arguments.compile}
+    report["apks"] = check_apks(arguments.out, arguments.allow_stale)
 
-    # Both apps fully compiled ahead of time: Compose at its best.
-    for package in APPS.values():
-        shell(f"cmd package compile -m speed -f {package}")
     shell("input keyevent KEYCODE_WAKEUP")
     shell("wm dismiss-keyguard")
+    compile_apps(arguments.compile)
+    report["dexopt"] = {"start": log_dexopt("start")}
 
     # Startup: cold starts, interleaved.
     startup = {name: {"feed": [], "big": []} for name in APPS}
@@ -405,6 +566,8 @@ def main():
 
     for package in APPS.values():
         stop(package)
+    # A background dexopt job can recompile an app during a run.
+    report["dexopt"]["end"] = log_dexopt("end")
     with open(os.path.join(arguments.out, "report.json"), "w") as file:
         json.dump(report, file, indent=1)
     print("wrote", os.path.join(arguments.out, "report.json"))

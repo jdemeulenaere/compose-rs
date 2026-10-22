@@ -6,6 +6,8 @@ plugins {
 android {
     namespace = "rs.compose.demo"
     compileSdk = 36
+    // Pinned (README.md): the Android Gradle plugin strips native libraries only when it's set.
+    ndkVersion = "27.2.12479018"
     defaultConfig {
         applicationId = "rs.compose.demo"
         minSdk = 29
@@ -27,15 +29,32 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-    sourceSets["main"].jniLibs.directories.add("build/rustJniLibs")
 }
 
-// The examples' Rust library (examples/android-demo), built for arm64 by cargo.
-val buildRust = tasks.register<Exec>("buildRust") {
-    val output = layout.buildDirectory.dir("rustJniLibs").get().asFile
-    commandLine(rootDir.resolve("build-rust.sh").path, "android-demo", "compose_rs_demo", output.path)
+// Builds the examples' Rust library (examples/android-demo) for arm64 with build-rust.sh.
+// Each variant's jniLibs take the task's output directory, so Gradle runs it before merging the
+// native libraries and packages the library it built (an Exec task without declared outputs,
+// run before preBuild, sometimes left the previous build's library in the APK).
+// Never up to date: cargo decides what to rebuild.
+abstract class BuildRust : Exec() {
+    @get:OutputDirectory
+    abstract val outputDirectory: DirectoryProperty
 }
-tasks.named("preBuild") { dependsOn(buildRust) }
+
+androidComponents {
+    onVariants { variant ->
+        val name = "buildRust" + variant.name.replaceFirstChar(Char::uppercase)
+        val buildRust = tasks.register<BuildRust>(name) {
+            val output = outputDirectory
+            executable = rootDir.resolve("build-rust.sh").path
+            args("android-demo", "compose_rs_demo")
+            argumentProviders.add(CommandLineArgumentProvider { listOf(output.get().asFile.path) })
+            environment("ANDROID_NDK_VERSION", android.ndkVersion)
+            outputs.upToDateWhen { false }
+        }
+        variant.sources.jniLibs?.addGeneratedSourceDirectory(buildRust, BuildRust::outputDirectory)
+    }
+}
 
 dependencies {
     implementation(project(":compose-rs"))

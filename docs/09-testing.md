@@ -35,7 +35,7 @@ fn counting_to_three() {
   - a slot-table operation O(1) amortized;
   - a skipped composable costing one comparison per argument.
 - **Compile-time benchmarks** (planned). Compile speed is a design criterion, so it's measured: generate crates with 256, 1,024 and 4,096 composables, branches and lambdas, measure `cargo build` time and macro expansion size, and assert near-linear growth.
-- **The edit loop** (planned). A benchmark builds the sample app, touches one composable, and times the incremental rebuild, with and without dynamic linking of the framework. It guards the 1–3 s target of [08](08-fast-builds.md).
+- **The edit loop** (planned). A benchmark builds the sample app, touches one composable, and times the incremental rebuild. It guards the 1–3 s target of [08](08-fast-builds.md).
 
 ## Android
 

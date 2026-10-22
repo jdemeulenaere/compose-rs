@@ -36,5 +36,34 @@ split-debuginfo = "unpacked"
 opt-level = 1
 debug = false
 
+# `package."*"` also applies to build scripts' dependencies, which only run during the build:
+# compiling skia-bindings' build tools (bindgen, regex, clang-sys, cc, ...) at opt-level 1 made a
+# clean debug build slower than a release build. Back to opt-level 0, as a release build compiles
+# them. syn, quote and proc-macro2 stay at 1: they run in every expansion of #[composable].
+[profile.dev.package.prettyplease]
+opt-level = 0
+[profile.dev.package.bindgen]
+opt-level = 0
+[profile.dev.package.clang-sys]
+opt-level = 0
+[profile.dev.package.regex-automata]
+opt-level = 0
+[profile.dev.package.regex-syntax]
+opt-level = 0
+[profile.dev.package.aho-corasick]
+opt-level = 0
+[profile.dev.package.cc]
+opt-level = 0
+[profile.dev.package.toml]
+opt-level = 0
+[profile.dev.package.serde_json]
+opt-level = 0
+[profile.dev.package.tar]
+opt-level = 0
+[profile.dev.package.nom]
+opt-level = 0
+[profile.dev.package.cexpr]
+opt-level = 0
+
 [profile.bench]
 debug = "line-tables-only"

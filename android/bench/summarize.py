@@ -20,3 +20,12 @@ for scenario in ("scroll", "animation"):
         runs = r[scenario][app]
         g = [x["gfxinfo"] for x in runs]; t = [x["trace"] for x in runs]
         print(f"{scenario} {app}: gfx frames {med([x.get('frames',0) for x in g])}, janky {med([x.get('janky',0) for x in g])}, p50 {med([x.get('p50',0) for x in g])} p90 {med([x.get('p90',0) for x in g])} p99 {med([x.get('p99',0) for x in g])} | timeline frames {med([x['frames'] for x in t])}, janky {med([x['janky_frames'] for x in t])} kinds {[x['jank_kinds'] for x in t]} | main p50 {med([x['main_thread_frame_ms']['p50'] or 0 for x in t]):.2f} p90 {med([x['main_thread_frame_ms']['p90'] or 0 for x in t]):.2f} p99 {med([x['main_thread_frame_ms']['p99'] or 0 for x in t]):.2f} max {med([x['main_thread_frame_ms']['max'] or 0 for x in t]):.1f} | render p50 {med([x['render_thread_frame_ms']['p50'] or 0 for x in t]):.2f} p90 {med([x['render_thread_frame_ms']['p90'] or 0 for x in t]):.2f} | cpu main {med([x['cpu_ms'].get('main',0) for x in t]):.0f}ms render {med([x['cpu_ms'].get('render',0) for x in t]):.0f}ms | work main {med([(x.get('work_ms') or {}).get('main',0) for x in t]):.0f}ms render {med([(x.get('work_ms') or {}).get('render',0) for x in t]):.0f}ms")
+# Reports from before measure.py recorded them have no "compile", "apks" or "dexopt".
+print("compile", r.get("compile", "speed (not recorded)"))
+for app, apk in r.get("apks", {}).items():
+    installed = apk["installed"]
+    libraries = ", ".join(f"{name} {value['bytes']} bytes sha1 {value['sha1'][:12]}" for name, value in installed["libraries"].items())
+    print(f"apk {app}: {installed['bytes']} bytes, sha1 {installed['sha1'][:12]}; {libraries}" + (f"; WARNING {apk['problems']}" if apk["problems"] else ""))
+for when, apps in r.get("dexopt", {}).items():
+    for app, states in apps.items():
+        print(f"dexopt {when} {app}: " + (", ".join(f"{s['isa']} {s['status']} ({s['reason']})" for s in states) or "not found"))

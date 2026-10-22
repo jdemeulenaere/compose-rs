@@ -1,6 +1,6 @@
 # 14. Performance opportunities: what's left, measured
 
-Where compose-rs can still get faster, smaller or quicker to build, after round 3 of [12](12-android-performance.md). Each opportunity was measured with a prototype where feasible, or estimated from profiles with the reasoning shown. Small and negative results are reported too. This is an analysis, not a change: nothing here is merged. The prototypes are kept on `perf/*` branches, each with its raw measurements and a `README.txt` of exact commands under `perf-results/<branch>/` (see "Branches" below).
+Where compose-rs can still get faster, smaller or quicker to build, after round 3 of [12](12-android-performance.md). Each opportunity was measured with a prototype where feasible, or estimated from profiles with the reasoning shown. Small and negative results are reported too. This is an analysis, not a change: the prototypes aren't merged. Since then, the build and benchmark fixes below were made: stripping (#4a, D301), the stale library (D300), benchmark hygiene (D302), build-only dependencies at opt-level 0 (#6, D303), and the corrections to docs/08 (D304) and docs/12; each is marked **Fixed** where it's discussed. The prototypes are kept on `perf/*` branches, each with its raw measurements and a `README.txt` of exact commands under `perf-results/<branch>/` (see "Branches" below).
 
 **Short answer.**
 - **Desktop** has the one big gain left. A Metal surface takes 70 % off the app's CPU time per animated frame in a 2560 × 1324 window (6.8 → 2.0 ms), and 37 % off the app's and the window server's together (10.0 → 6.3 ms a frame). At that size, a click's time to present goes from 16.4 ms (median of 3; 7.0–16.9) to 1.3 ms. Today's CPU path spends most of each frame not rasterizing but presenting: Core Animation converts the frame's colour space on the CPU.
@@ -8,10 +8,10 @@ Where compose-rs can still get faster, smaller or quicker to build, after round 
   - a round cap on the spinner: −8 % of the animation's RenderThread work;
   - a replay without interpreted framework calls: −8 % of its main-thread work;
   - two runtime fixes that remove a quadratic scan when composing big screens: −39 % of the big screen's first frame headless;
-  - stripping the library, which the build silently skips today: the APK goes from 3.2 to 2.0 MB at no cost; with a release profile (LTO, `panic = "abort"`), 1.5 MB.
+  - stripping the library, which the build silently skipped: the APK goes from 3.2 to 2.0 MB at no cost (**fixed**: D301); with a release profile (LTO, `panic = "abort"`), 1.5 MB.
   - **Together**, measured with the full benchmark ("Combined" below; the two sessions ran one after the other, not interleaved): the animation's main-thread work goes from 210 to 196 ms and its RenderThread work from 547 to 492 ms (Compose: 248–260 and 534–544). `big` starts in 166 ms instead of 181 (Compose: 222–224), and the APK is 1.5 MB. An interleaved A/B of the frame changes alone (#2, #3 and the spinner boundary) agrees: 209.7 → 194.0 ms and 546.6 → 496.5 ms.
 - **Text** on Android is 84 % platform work that any approach pays. Batching JNI calls would save at most 2.6 ms of the big screen's 110 ms first frame.
-- **Build times:** the edit loop is at its floor (about 0.45 s). Clean debug builds can lose 27 %.
+- **Build times:** the edit loop is at its floor (about 0.45 s). Clean debug builds can lose 27 % (**fixed**: D303).
 
 ## Ranking
 
@@ -26,9 +26,9 @@ Gain over cost, best first.
 | 1 | **Desktop: GPU surface** (Skia on Metal; D3D or GL elsewhere) | App CPU per animated frame at 2560 × 1324: 6.79 → 2.04 ms (−70 %); click → present 16.4 [7.0–16.9] → 1.30 [1.14–1.55] ms. WindowServer's CPU per frame rises 3.2 → 4.2 ms, so app and WindowServer together go 10.0 → 6.3 ms (−37 %) | measured, 3 runs each (medians) | M per platform: a raster fallback, resizing, device loss, unsafe code in compose-desktop; the prototype has no colour management | none in the API; colours need the layer's colour space set (cost not measured); its lower frame rate (122 against 142 fps) is unexplained | `perf/desktop-metal` |
 | 2 | **Android: the spinner's round cap** (`IndeterminateCircularProgressIndicator`, as Material 3 1.4) | Animation RenderThread work −44 ms (544.4 → 500.1, −8.1 %) | measured, 3 runs | S, none | the default cap's look, on every platform (Compose's own default); the determinate indicator keeps `Butt` | `perf/frame-roundcap` |
 | 3 | **Android: replay without interpreted calls** (floats as int bits, one reused buffer, sizes tracked in Kotlin, no host wake for frame awaiters) | Animation main work −16.8 ms (213.9 → 197.1, −7.9 %); scroll −12 ms (−2.6 %, ranges overlap) | measured, 3 runs, on a build whose JIT compiles no framework methods (smaller where it does) | S, low | internal JNI signatures; the executor skips the host wake for `dispatch_frame`'s wakes on every host (a thread-wide flag: not reset if a waker panics, and it would also skip another thread's executor's wake) | `perf/frame-replay` |
-| 4 | **Android: stripping, then a release profile.** (a) AGP strips the library once `ndkVersion` is set; (b) `[profile.android]`: fat LTO, one codegen unit, `panic = "abort"` | (a) APK 3.24 → 1.99 MB (−39 %); (b) → 1.50 MB (−54 % in all, below Compose's 1.74 MB), code PSS −0.3 MB, Rust frame section −4 to −8 %, main work −3 to −4 % (about the noise); startup unchanged | measured | (a) none, but `ndkVersion` pins one NDK every developer needs. (b) S; as prototyped every Android build uses it (debug too): clean 6.9 → 9.2 s, a material3 edit rebuilds the library in 4.6 s instead of 1.9 | (b) more panics abort the process: those of cancelled background tasks, and in drops and wakes on the pool's threads; Android only | `perf/startup-release-profile` |
+| 4 | **Android: stripping, then a release profile.** (a) AGP strips the library once `ndkVersion` is set (**fixed**: D301); (b) `[profile.android]`: fat LTO, one codegen unit, `panic = "abort"` | (a) APK 3.24 → 1.99 MB (−39 %); (b) → 1.50 MB (−54 % in all, below Compose's 1.74 MB), code PSS −0.3 MB, Rust frame section −4 to −8 %, main work −3 to −4 % (about the noise); startup unchanged | measured | (a) none, but `ndkVersion` pins one NDK every developer needs. (b) S; as prototyped every Android build uses it (debug too): clean 6.9 → 9.2 s, a material3 edit rebuilds the library in 4.6 s instead of 1.9 | (b) more panics abort the process: those of cancelled background tasks, and in drops and wakes on the pool's threads; Android only | `perf/startup-release-profile` |
 | 5 | **Runtime: state readers and composition locals** (a read searches a cell's 8 latest readers; a local read walks provider groups only) | Headless big-screen first frame −39 % (7.04 → 4.32 ms), composition −44 %; feed first frame −21 %. On the device, with #2–#4 and #7 (one traced start): big composition 22.1 → 16.5 ms | measured headless, 3–5 rounds | S/M, low | none (a cell can hold duplicate readers until they're stale) | `perf/runtime-compose` |
-| 6 | **Build: build-only dependencies at opt-level 0** in the dev profile | Clean debug build of todo 11.8 → 8.6 s (median; −27 %, means −24 %), workspace `test --no-run` 16.1 → 12.6 s (−22 %); edit loop unchanged | measured, 3 runs | S (Cargo.toml; the list needs upkeep) | none | `perf/build-dev-profile` |
+| 6 | **Build: build-only dependencies at opt-level 0** in the dev profile (**fixed**: D303) | Clean debug build of todo 11.8 → 8.6 s (median; −27 %, means −24 %), workspace `test --no-run` 16.1 → 12.6 s (−22 %); edit loop unchanged | measured, 3 runs | S (Cargo.toml; the list needs upkeep) | none | `perf/build-dev-profile` |
 | 7 | **Android: startup warm-ups** (an ALPHA_8 bitmap's texture upload, and two StaticLayouts on a thread, when the first `ComposeRsView` is made) | TotalTime feed −4.0 ms (se 1.1, −4 %); big −2.2 ms (se 1.2, −1 %, not significant); the first `doFrame` 26.0 → 21.5 ms | measured, n = 36 | S; `activityResume` grows by about 1 ms | none | `perf/startup-text-warmup` |
 | 8 | **Android: a Baseline Profile for the Kotlin glue** | For installs that aren't fully compiled (Play), at most: replay +25–30 % and main work +5 % recovered; startup unchanged | measured (`-m verify` against `speed`) | S | none | `perf/startup-compilation-modes` |
 | 9 | **Desktop: present without the colour conversion** (tag the image with the window's colour space; properly, an IOSurface-backed layer) | Present 5.37 → 0.09 ms at 2560 × 1324; app CPU per frame 6.79 → 3.64 ms | measured (tagging, with the alpha pass also off), estimated (IOSurface) | S–M (a softbuffer fork or our own layer code); with #1, it matters mainly as the raster fallback | tagging turns off colour management, so it can't ship as measured | `perf/desktop-present` |
@@ -41,7 +41,7 @@ Small, negative or not worth doing: see "What isn't worth doing".
 
 ## Method
 
-- **Android:** Pixel 8 Pro, Android 16 (`user` build), apps compiled with `cmd package compile -m speed -f` unless stated. Each prototype was A/B tested against main (9f80586), with APKs alternated run by run, each installed APK checked by SHA-1, and each APK's packaged library checked.
+- **Android:** Pixel 8 Pro, Android 16 (`user` build), apps compiled with `cmd package compile -m speed -f` unless stated. Each prototype was A/B tested against main (9f80586), with APKs alternated run by run, each installed APK checked by SHA-1, and each APK's packaged library checked (measure.py now does both: D302).
   - **Work metric:** CPU time scaled by each core's frequency and capacity ([12](12-android-performance.md), "Method"), from Perfetto traces, plus `compose-rs:` section averages.
   - **Scenarios:** measure.py's: 10 s of the animated feed untouched, 10 flings, cold starts.
   - **Profiles:** simpleperf, symbolized with the unstripped library.
@@ -212,9 +212,9 @@ compose-rs's `speed-profile` row is really `verify`: its training runs left no p
 
 Its frames do. Under `verify` (the glue run by the JIT and the interpreter), the replay is 25–30 % slower and main work 5 % higher: 216.9 → 228.3 ms animating, 459 → 484 ms scrolling. A Baseline Profile for `rs.compose.android.*` (#8), shipped with the library, would give Play installs the `speed` numbers. That gain is an upper bound: on a build whose JIT compiles the hot glue sooner, `verify` would be closer to `speed`.
 
-docs/12 calls `-m speed` "Compose's best case". For the feed's startup it isn't: with a profile, Compose starts in 113.5 ms (its app image), against 129 ms with `speed`. compose-rs still starts first (105.5 ms), by 8 ms rather than the 23.5 ms of the same session's `speed` row.
+docs/12 called `-m speed` "Compose's best case" (**fixed**: docs/12 now cites this; `measure.py --compile speed-profile` measures it, D302). For the feed's startup it isn't: with a profile, Compose starts in 113.5 ms (its app image), against 129 ms with `speed`. compose-rs still starts first (105.5 ms), by 8 ms rather than the 23.5 ms of the same session's `speed` row.
 
-**The library (#4).** The workspace has no `[profile.release]`, and the bench app sets no `ndkVersion`, so the Android Gradle plugin silently skips stripping. Today's APK therefore ships 1.25 MB of symbol tables, which are never mapped. The prototype adds `[profile.android]` (fat LTO, one codegen unit, `panic = "abort"`) and sets `ndkVersion`, so AGP strips and the unstripped copy stays in `build/intermediates` for profilers.
+**The library (#4).** The workspace has no `[profile.release]`, and the bench app set no `ndkVersion`, so the Android Gradle plugin silently skipped stripping (**fixed**: D301 pins `ndkVersion`; bench-rs's APK is now 1,985,087 bytes, its `.so` 1,883,512). Today's APK therefore ships 1.25 MB of symbol tables, which are never mapped. The prototype adds `[profile.android]` (fat LTO, one codegen unit, `panic = "abort"`) and sets `ndkVersion`, so AGP strips and the unstripped copy stays in `build/intermediates` for profilers.
 
 | | main | prototype |
 |---|---|---|
@@ -228,7 +228,7 @@ docs/12 calls `-m speed` "Compose's best case". For the feed's startup it isn't:
 | Clean build of the Android library (M4 Pro) | 6.9 s | 9.2 s |
 | Rebuild after an edit to feed / to compose-material3 (medians of 3) | 0.40 / 1.9 s | 0.52 / 4.6 s |
 
-The build costs are measured on `perf/combined` (`perf-results/perf-combined/build-cost.txt`). As prototyped, `build-rust.sh` always builds with the new profile, so every Android build pays them, debug builds and the demo app included. A production version would choose the profile per Gradle variant (not prototyped). Stripping alone (setting `ndkVersion`) takes the APK to 1.99 MB with no build cost, but pins the NDK version every developer must install (build-rust.sh otherwise takes the newest).
+The build costs are measured on `perf/combined` (`perf-results/perf-combined/build-cost.txt`). As prototyped, `build-rust.sh` always builds with the new profile, so every Android build pays them, debug builds and the demo app included. A production version would choose the profile per Gradle variant (not prototyped). Stripping alone (setting `ndkVersion`) takes the APK to 1.99 MB with no build cost, but pins the NDK version every developer must install (build-rust.sh took the newest; since D301 it prefers the pinned one).
 
 Other options:
 - `opt-level = "s"`: on top of the prototype, 45 KB smaller (APK 1.497 → 1.452 MB) and frames 11–13 % slower (0.204 → 0.230 ms, 0.227 → 0.251 ms). `"s"` or `"z"` alone, against stripping only: 0.14–0.18 MB smaller, frames about 8 % slower.
@@ -381,7 +381,7 @@ Clean builds (seconds, 3 runs, `CARGO_INCREMENTAL=0`, Skia's binaries from a loc
 
 **A clean debug build is slower than a release build.** `[profile.dev.package."*"] opt-level = 1` also applies to build-script dependencies, and it outranks `[profile.dev.build-override]`. So bindgen, regex, clang-sys and cc compile optimized in debug builds only, on the critical path: proc-macro2 → syn (6.1 s) → prettyplease → bindgen (5.1 s) → skia-bindings' build script → skia-safe → the app.
 - bindgen is compiled although Skia's binaries are prebuilt: it's a non-optional build dependency of skia-bindings, whose script then runs in 0.3 s.
-- The fix (#6) lists those crates at opt-level 0, keeping syn, quote and proc-macro2 at 1: at 0 they slow every `#[composable]` expansion (material3's 67 → 115 ms).
+- The fix (#6, **applied**: D303) lists those crates at opt-level 0, keeping syn, quote and proc-macro2 at 1: at 0 they slow every `#[composable]` expansion (material3's 67 → 115 ms).
 - The list needs upkeep when skia-bindings' build dependencies change.
 - compose-rs's own crates are small in clean builds: compose-ui 1.1 s, compose-macros 1.2, material3 0.85 in debug; compose-ui 2.4 s in release.
 
@@ -406,7 +406,7 @@ Macro expansion is 8–13 % of a crate's clean compilation, but 23 % of an incre
 - Drop glue is 4–5 % of each crate's LLVM IR.
 - Callback memoization (`lambda_probe`, `resolve_lazy_*`, `store_callback`) is 16–20 % of an app crate's, already instantiated per signature rather than per lambda. Halving it would save about 2 % of a gallery edit.
 
-Two corrections to docs/08:
+Two corrections to docs/08 (**made**: D304):
 - Its `compose/dynamic` feature doesn't exist. A prototype (`perf/build-dynamic`: a `compose-dylib` crate, as `bevy_dylib`) saves 50–80 ms on app edits (todo 0.45 → 0.39 s) and costs about 0.5 s on framework edits (a 39 MB dylib to relink). docs/08's premise that relinking dominates an untuned rebuild ("5–15 s untuned, 1–3 s tuned", restarting the app included) doesn't hold on macOS, where Apple's linker links the static 28 MB binary in 0.12 s.
 - Call macros aren't purely declarative: `Name!` forwards to the `call!` proc macro.
 
@@ -460,7 +460,7 @@ With these changes, compose-rs's animation does about 25 % less main-thread work
 
 ## Caveats
 
-- **Gradle can package a stale Rust library.** The `buildRust` task declares no outputs; twice during this work an APK held the previous build's `.so`. Every measured APK's library was checked (sha of the packaged `.so`). The fix is to declare the task's outputs and feed `jniLibs` from them.
+- **Gradle could package a stale Rust library.** The `buildRust` task declared no outputs; twice during this work an APK held the previous build's `.so`. Every measured APK's library was checked (sha of the packaged `.so`). **Fixed** (D300): the task's output directory is each variant's generated `jniLibs`, and measure.py checks the installed libraries against the built ones (D302).
 - **No JIT for framework methods on this build:** compiled with `-m speed`, neither app showed JIT-compiled code (Android 16, `husky_beta` canary build), so framework methods missing from the boot image stayed interpreted. On builds where the JIT compiles hot framework methods, #3's gain would be smaller. Under `-m verify` the app's own glue does run JIT code (#8).
 - **Benchmark text repeats** (271 distinct paragraphs of 1,201), which favours any width cache (#11).
 - **Desktop** was measured on a 1× display: 2× and 4K come from the headless renderer bench.

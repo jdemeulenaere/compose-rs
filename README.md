@@ -49,7 +49,7 @@ Needs the Android SDK (`ANDROID_HOME`, or `~/Library/Android/sdk` on macOS), JDK
 rustup target add aarch64-linux-android
 ```
 
-`build-rust.sh` uses the newest NDK under `$ANDROID_HOME/ndk/`, or the one `ANDROID_NDK_HOME` names.
+The NDK version is pinned: the apps' `ndkVersion` is 27.2.12479018, the NDK the Android Gradle plugin strips the Rust library with (without it, it packages the library unstripped). `build-rust.sh` links with the NDK `ANDROID_NDK_HOME` names, else that version under `$ANDROID_HOME/ndk/`, else the newest there, with a warning.
 
 ```bash
 android/gradlew -p android :demo:installDebug    # the gallery, todo and counter in Kotlin Compose tabs

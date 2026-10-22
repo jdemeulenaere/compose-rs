@@ -74,6 +74,6 @@ That's roughly 33–43k lines. The macro is where most of the risk and time will
 ## Risks
 
 1. **The macro's syntactic limits.** Recognising composable calls by name (a PascalCase function or a `!`-call) and finding captures syntactically can be wrong in edge cases: shadowing, macros inside closures. Mitigation: be conservative; a wrong guess may cost a skip but must never break correctness. See [03](03-composable-macro.md).
-2. **The edit loop.** Without hot reload, every change is a rebuild and restart, and an untuned setup can take 5–15 s. Mitigation: the framework's own build rules, dynamic linking in development, and a guide for apps ([08](08-fast-builds.md)); an edit-loop benchmark watches it.
+2. **The edit loop.** Without hot reload, every change is a rebuild and restart, and an untuned setup can take 5–15 s. Mitigation: the framework's own build rules and a guide for apps ([08](08-fast-builds.md)); an edit-loop benchmark watches it.
 3. **Ergonomics under the borrow checker.** Handlers are `'static`, so they capture `Copy` handles or `Rc`s, never borrows. `Copy` state handles make the common case clean; the rest needs a visible `.clone()` or `.handle()`.
 4. **IDE support for call macros.** rust-analyzer expands proc and declarative macros, but completion inside `Button!(…)` is weaker than in a plain call. Mitigation: every composable stays callable as a plain function with all its arguments.

@@ -149,7 +149,7 @@ compose-rs runs in a plain Android `View`, `ComposeRsView`. It can be an activit
 You need:
 
 - a macOS or Linux machine to build on: `build-rust.sh` is a POSIX shell script;
-- the Android SDK and NDK. The script finds the SDK through `ANDROID_HOME` (or `ANDROID_SDK_ROOT`), falling back to macOS's default location, and doesn't read Gradle's `local.properties`: on Linux, set `ANDROID_HOME`. It takes the NDK from `ANDROID_NDK_HOME`, or the newest under the SDK's `ndk/`. Install one with `"$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;27.2.12479018"` (the version compose-rs is built with) or Android Studio's SDK Manager (SDK Tools, NDK (Side by side));
+- the Android SDK and NDK. The script finds the SDK through `ANDROID_HOME` (or `ANDROID_SDK_ROOT`), falling back to macOS's default location, and doesn't read Gradle's `local.properties`: on Linux, set `ANDROID_HOME`. The NDK version is pinned: install 27.2.12479018, the apps' `ndkVersion`, with `"$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;27.2.12479018"` or Android Studio's SDK Manager (SDK Tools, NDK (Side by side)). The Android Gradle plugin strips the Rust library with that NDK, and packages it unstripped, about 1.2 MB bigger, when `ndkVersion` isn't set. The script links with the NDK `ANDROID_NDK_HOME` names, else that version, else the newest under the SDK's `ndk/`, with a warning;
 - the Rust target: `rustup target add aarch64-linux-android`;
 - JDK 17 or newer. The Gradle wrapper (`android/gradlew`) fetches Gradle 9.6, which loads the Android Gradle plugin 9.4 (whose built-in Kotlin support compiles the Kotlin) and the Kotlin Compose compiler plugin 2.4; Android Studio opens the `android/` project with the same wrapper.
 
@@ -190,20 +190,37 @@ The Kotlin side is the `android/compose-rs` library module: `ComposeRsView` and 
 
 ```kotlin
 android {
+    ndkVersion = "27.2.12479018"   // the NDK that strips the library
     defaultConfig { minSdk = 29 }
-    sourceSets["main"].jniLibs.directories.add("build/rustJniLibs")
 }
 
-val buildRust = tasks.register<Exec>("buildRust") {
-    val output = layout.buildDirectory.dir("rustJniLibs").get().asFile
-    commandLine(rootDir.resolve("build-rust.sh").path, "hello-android", "hello_android", output.path)
+// Never up to date: cargo decides what to rebuild.
+abstract class BuildRust : Exec() {
+    @get:OutputDirectory
+    abstract val outputDirectory: DirectoryProperty
 }
-tasks.named("preBuild") { dependsOn(buildRust) }
+
+androidComponents {
+    onVariants { variant ->
+        val name = "buildRust" + variant.name.replaceFirstChar(Char::uppercase)
+        val buildRust = tasks.register<BuildRust>(name) {
+            val output = outputDirectory
+            executable = rootDir.resolve("build-rust.sh").path
+            args("hello-android", "hello_android")
+            argumentProviders.add(CommandLineArgumentProvider { listOf(output.get().asFile.path) })
+            environment("ANDROID_NDK_VERSION", android.ndkVersion)
+            outputs.upToDateWhen { false }
+        }
+        variant.sources.jniLibs?.addGeneratedSourceDirectory(buildRust, BuildRust::outputDirectory)
+    }
+}
 
 dependencies {
     implementation(project(":compose-rs"))
 }
 ```
+
+The task's output directory is the variant's generated `jniLibs`, so Gradle runs it before merging and packaging the native libraries, and packages the library it built. (A plain `Exec` task without declared outputs, run before `preBuild`, sometimes left the previous build's library in the APK.)
 
 `build-rust.sh` runs `cargo build --release --target aarch64-linux-android -p <package>` with the NDK's linker (no `cargo-ndk` needed), then copies the library where Gradle packages it.
 

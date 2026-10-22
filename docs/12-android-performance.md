@@ -10,11 +10,11 @@ A social feed (`examples/feed` for compose-rs, `android/bench-compose` for Kotli
 - **`feed_animated`**: the same, with a header card whose indeterminate `CircularProgressIndicator`, pulsing dot (alpha) and turning star (rotation) animate forever.
 - **`big`**: 200 posts in a `Column` with `verticalScroll`, all composed at once: the cost of a big screen.
 
-The Kotlin app follows Compose's performance guidance: an `@Immutable` data class, keys on lazy items, animated values read only inside `graphicsLayer { }` (deferred reads, so an animation frame neither recomposes nor relayouts), and a release build minified with R8. The compose-rs app reads its animated values while drawing too (`graphics_layer(|layer| …)`), and is a plain `Activity` holding a `ComposeRsView` (no AndroidX). Both apps are compiled ahead of time (`cmd package compile -m speed`) before measuring, Compose's best case.
+The Kotlin app follows Compose's performance guidance: an `@Immutable` data class, keys on lazy items, animated values read only inside `graphicsLayer { }` (deferred reads, so an animation frame neither recomposes nor relayouts), and a release build minified with R8. The compose-rs app reads its animated values while drawing too (`graphics_layer(|layer| …)`), and is a plain `Activity` holding a `ComposeRsView` (no AndroidX). Both apps are compiled ahead of time (`cmd package compile -m speed`) before measuring; rounds 1 to 3 used `speed` for both apps. That isn't Compose's best case for startup: with a profile (`-m speed-profile`, as a Baseline or Cloud Profile gives, with an app image), Compose's feed starts in 113.5 ms against 129 ms with `speed`, so compose-rs (105.5 ms) leads by 8 ms rather than 23.5 ([14](14-performance-opportunities.md), "Compilation modes"; compose-rs's startup doesn't depend on the mode). `measure.py --compile speed-profile` measures that way.
 
 ## Method
 
-`android/bench/measure.py` drives a connected device over adb, interleaving the two apps run by run, and writes a JSON report (`android/bench/results/`); `summarize.py` prints it.
+`android/bench/measure.py` drives a connected device over adb, interleaving the two apps run by run, and writes a JSON report (`android/bench/results/`); `summarize.py` prints it. Since D302, it first checks that the installed APKs' native libraries are those built in the checkout (and stops if not), and records each APK's size and SHA-1, the compilation filter (`--compile`, `speed` by default) and each app's compilation state (`dumpsys package dexopt`) at the start and the end of the run. Its parsing is tested on captured output: `python3 android/bench/test_measure.py`.
 
 - **Startup**: 15 cold starts of each screen per app (`am force-stop`, then `am start -W`: `TotalTime`, from the launch to the first frame drawn). One cold start of each is also traced with Perfetto, to break the first frame down.
 - **Memory**: `dumpsys meminfo` 5 s after start, and again after scrolling (3 runs). Calling it runs the app's garbage collector, so the first measurement resets what the second counts.
@@ -46,6 +46,8 @@ Since round 2:
 | `big`: 200 posts at once | 225 ms | **179 ms** (−20 %; 178 ms) |
 | `big`: the first frame's main thread (`traversal`) | 164 ms | **110 ms** (106 ms) |
 
+Compose's numbers are under `speed`. With a profile (`speed-profile`), its feed starts sooner: 113.5 ms against 129 in another session, where compose-rs's took 105.5 ms; `big` didn't change (229 against 227 ms) ([14](14-performance-opportunities.md)).
+
 In compose-rs's first `big` frame (110 ms): composing 200 posts takes 22 ms, laying them out 46 ms (most of it laying out 1,200 paragraphs with `StaticLayout` through JNI), drawing and serializing the display list 1 ms, and replaying it on the `Canvas` 24 ms (recording each paragraph into its `RenderNode`); the rest is the view system's traversal around them. Compose records its first `big` frame's drawing in 36 ms (`Record View#draw()`). `bindApplication` is shorter too (10 ms against 16 to 19 ms): there is no Compose runtime to initialize.
 
 ### Memory
@@ -61,7 +63,7 @@ In compose-rs's first `big` frame (110 ms): composing 200 posts takes 22 ms, lay
 | of which Java heap | **4.6 MB** | 6.1 MB |
 | of which native heap | 12.5 MB | 12.5 MB (12.1 MB) |
 | of which graphics | 56.7 MB | **55.3 MB** |
-| APK (release) | 1.7 MB (minified) | 3.1 MB (with the 3.0 MB `.so` uncompressed inside; 2.4 MB in round 2) |
+| APK (release) | 1.7 MB (minified) | 3.1 MB (with the 3.0 MB `.so` uncompressed inside; 2.4 MB in round 2). Unstripped: since D301 the library is stripped, 1.9 MB (1.8 MB `.so`) |
 
 After start, compose-rs holds a third less: its code is a native library rather than Compose's dex and runtime, and its graphics memory is 11 MB smaller, most likely because the GPU keeps no path atlas or stencil buffer for the icons, drawn from masks (D190; round 1 held 26.2 MB). The code mapped grew by 0.3 MB with the library. After scrolling, both are dominated by graphics memory (the render thread's caches: about 56 MB each). The rest depends on when the garbage collector last ran: `dumpsys meminfo` itself collects in the app (`Runtime.gc` in its path; a second call right after reads 10–13 MB less for both apps), so the measurement after scrolling counts what the 10 flings left for the collector. Compose's numbers swing with it (85 to 90 MB in this run, up to 112 MB in earlier ones: its Java heap holds 4 to 20 MB of garbage, as it allocates on every frame); compose-rs's stay within 80.6 to 81.7 MB.
 
