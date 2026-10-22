@@ -7,9 +7,9 @@
 //! metrics, its direction) costs no crossing.
 
 use compose_ui::{
-    AnnotatedString, Color, Constraints, Density, FontFamily, LayoutDirection, Offset,
-    ParagraphHandle, ParagraphMetrics, Rect, TextAlign, TextLayoutOptions, TextMeasurer,
-    TextOverflow, TextPosition, TextStyle,
+    AnnotatedString, Color, Constraints, Density, FontFamily, LayoutDirection, Offset, Rect,
+    TextAlign, TextOverflow, TextStyle,
+    platform::{ParagraphHandle, ParagraphMetrics, TextLayoutOptions, TextMeasurer, TextPosition},
 };
 use std::collections::HashMap;
 
@@ -87,7 +87,7 @@ impl<B: TextBackend> AndroidTextMeasurer<B> {
         self.next = self.next.wrapping_add(1);
         let right_to_left =
             first_strong_is_rtl(text).unwrap_or(options.direction == LayoutDirection::Rtl);
-        let _layout = compose_ui::trace::section(c"compose-rs: text layout");
+        let _layout = compose_ui::platform::trace::section(c"compose-rs: text layout");
         encode_request(
             &mut self.request,
             text,
@@ -260,6 +260,7 @@ fn encode_request(
         Some(TextAlign::Right) => normal(right_to_left),
         Some(TextAlign::Center) => 2,
         Some(TextAlign::Justify) => 3,
+        Some(_) => 0,
     });
     out.u8(u8::from(right_to_left));
     out.u32(constraints.min_width as u32);
@@ -282,7 +283,7 @@ fn encode_style(out: &mut Writer, style: &TextStyle, background: Color, density:
     let font_size = if style.font_size.is_specified() {
         style.font_size
     } else {
-        compose_ui::text::DEFAULT_FONT_SIZE
+        compose_ui::platform::DEFAULT_FONT_SIZE
     };
     let font_px = density.sp_to_px(font_size);
     out.u32(color.argb());

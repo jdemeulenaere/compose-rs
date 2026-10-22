@@ -18,6 +18,7 @@ use compose_android::serialize::{
     GroupCache, LAYER_ENTRY_BYTES, Resources, Writer, operand_bytes, tag, write_display_list,
 };
 use compose_runtime::*;
+use compose_ui::platform::*;
 use compose_ui::*;
 
 fn u32_at(bytes: &[u8], at: usize) -> u32 {

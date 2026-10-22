@@ -12,6 +12,7 @@
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 
+use compose::runtime::platform::*;
 use compose::runtime::*;
 
 struct Counting;

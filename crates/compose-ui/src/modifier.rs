@@ -32,7 +32,7 @@ pub struct Modifier {
 pub const Modifier: Modifier = Modifier { elements: SmallVec::new_const() };
 
 impl Modifier {
-    pub fn elements(&self) -> &[Element] {
+    pub(crate) fn elements(&self) -> &[Element] {
         &self.elements
     }
 
@@ -41,7 +41,7 @@ impl Modifier {
     }
 
     /// This chain followed by `element`.
-    pub fn then_element(mut self, element: Element) -> Modifier {
+    pub(crate) fn then_element(mut self, element: Element) -> Modifier {
         self.elements.push(element);
         self
     }
@@ -423,6 +423,12 @@ impl Modifier {
     }
 }
 
+/// A modifier of one user-defined element shared by reference: for a toolkit whose element
+/// must stay the same object across recompositions (foundation's text field).
+pub fn shared_custom_modifier(element: Rc<dyn ModifierNodeElement>) -> Modifier {
+    Modifier.then_element(Element::Custom(element))
+}
+
 impl ComposeArg for Modifier {
     fn same(&self, other: &Self) -> bool {
         self.elements.len() == other.elements.len()
@@ -501,7 +507,7 @@ impl SizeSpec {
 
 /// `fill_max_*` fractions, per axis.
 #[derive(Clone, Copy, PartialEq, Debug)]
-pub struct Fill {
+pub(crate) struct Fill {
     pub horizontal: Option<f32>,
     pub vertical: Option<f32>,
 }
@@ -635,7 +641,7 @@ impl From<Color> for Indication {
 
 /// `clickable`'s data.
 #[derive(Clone)]
-pub struct Clickable {
+pub(crate) struct Clickable {
     pub enabled: bool,
     pub role: Option<Role>,
     /// The state layer, drawn at 10% while pressed or focused (Material's indication).
@@ -647,7 +653,7 @@ pub struct Clickable {
 
 /// `toggleable`'s data.
 #[derive(Clone)]
-pub struct Toggleable {
+pub(crate) struct Toggleable {
     pub value: bool,
     pub enabled: bool,
     pub role: Option<Role>,
@@ -658,7 +664,7 @@ pub struct Toggleable {
 
 /// One modifier element: plain data, compared on recomposition to update its node in place.
 #[derive(Clone)]
-pub enum Element {
+pub(crate) enum Element {
     Padding(PaddingValues),
     Offset(Dp, Dp),
     MinimumTouchTarget(Dp),
@@ -683,7 +689,7 @@ pub enum Element {
 
 impl Element {
     /// Whether `other` is the same kind of element, so its node can be updated in place.
-    pub fn same_kind(&self, other: &Element) -> bool {
+    pub(crate) fn same_kind(&self, other: &Element) -> bool {
         match (self, other) {
             (Element::Custom(a), Element::Custom(b)) => (**a).type_id() == (**b).type_id(),
             _ => std::mem::discriminant(self) == std::mem::discriminant(other),
@@ -691,7 +697,7 @@ impl Element {
     }
 
     /// Whether `other` is equal: then its node needs no update.
-    pub fn same(&self, other: &Element) -> bool {
+    pub(crate) fn same(&self, other: &Element) -> bool {
         use Element::*;
         match (self, other) {
             (Padding(a), Padding(b)) => a == b,

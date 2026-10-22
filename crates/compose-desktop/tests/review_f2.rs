@@ -7,7 +7,7 @@
 #[path = "../src/input.rs"]
 mod input;
 
-use compose_ui::{Density, IntSize, Modifier, UiHost, UnitExt};
+use compose_ui::{Density, IntSize, Modifier, UnitExt, platform::UiHost};
 use winit::event::{Ime, WindowEvent};
 
 /// The field's editable text, from the semantics tree.
@@ -27,7 +27,7 @@ fn focused_field() -> UiHost {
     let mut host = UiHost::new(
         IntSize::new(300, 100),
         Density::default(),
-        Box::new(compose_ui::FixedTextMeasurer::new()),
+        Box::new(compose_ui::platform::FixedTextMeasurer::new()),
     );
     host.set_content(|| {
         let text = compose_runtime::remember(|| compose_runtime::mutable_state_of(String::new()));

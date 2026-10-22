@@ -5,6 +5,7 @@
 
 use std::cell::{Cell, RefCell};
 
+use compose::runtime::platform::*;
 use compose::runtime::*;
 
 static LOCAL_NAME: CompositionLocal<&'static str> =

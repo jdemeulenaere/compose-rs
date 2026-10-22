@@ -8,7 +8,7 @@
 
 use std::rc::Rc;
 
-use compose_runtime::{composable, current};
+use compose_runtime::{composable, platform::current};
 
 use crate::alignment::LayoutDirection;
 use crate::constraints::Constraints;
@@ -123,7 +123,7 @@ impl MeasureScope<'_> {
 
     /// The window's insets (system bars, the keyboard, a cutout), as the platform reports them:
     /// a read observed as state is, so a change measures this node again.
-    pub fn window_insets(&self) -> crate::platform::PlatformWindowInsets {
+    pub fn window_insets(&self) -> crate::configuration::PlatformWindowInsets {
         self.tree.window_insets.map(|state| state.get()).unwrap_or_default()
     }
 

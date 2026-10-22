@@ -13,8 +13,8 @@ use accesskit::{Node, NodeId as AccessNodeId, Toggled, TreeUpdate};
 use compose_foundation::layout::*;
 use compose_foundation::*;
 use compose_ui::{
-    Density, Dialog, FixedTextMeasurer, ImageBitmap, IntSize, Popup, PopupProperties, Role, UiHost,
-    UnitExt,
+    Density, Dialog, ImageBitmap, IntSize, Popup, PopupProperties, Role, UnitExt,
+    platform::{FixedTextMeasurer, UiHost},
 };
 
 fn host(content: impl Fn() + 'static) -> UiHost {

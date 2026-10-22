@@ -536,7 +536,7 @@ impl Future for AwaitPointerEvent {
 /// `with_timeout`'s future: the first of the work and the delay.
 struct Timeout<'a, F> {
     future: Pin<&'a mut F>,
-    delay: compose_runtime::executor::Delay,
+    delay: compose_runtime::platform::Delay,
 }
 
 impl<F: Future> Future for Timeout<'_, F> {
@@ -619,7 +619,7 @@ impl PointerInputDriver {
             Some(job) => job,
             None => {
                 let job = self.coroutines.launch((self.block)(self.scope.clone()));
-                compose_runtime::executor::poll_now(job);
+                compose_runtime::platform::poll_now(job);
                 self.job = Some(job);
                 job
             }
@@ -648,10 +648,10 @@ impl PointerInputDriver {
             uptime_millis: if event.time_nanos != 0 {
                 event.time_nanos / 1_000_000
             } else {
-                compose_runtime::executor::now_nanos() / 1_000_000
+                compose_runtime::platform::now_nanos() / 1_000_000
             },
         }));
-        compose_runtime::executor::poll_now(job);
+        compose_runtime::platform::poll_now(job);
         inner.delivery.replace(None);
         inner.dispatching.set(false);
         if consumed.get() {

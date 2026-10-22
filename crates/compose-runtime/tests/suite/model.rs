@@ -21,6 +21,7 @@ use std::collections::{BTreeSet, HashSet};
 use std::fmt::{self, Write as _};
 use std::rc::Rc;
 
+use compose_runtime::platform::*;
 use compose_runtime::*;
 
 // ---- The data and the composables ----------------------------------------------------------

@@ -4,7 +4,10 @@
 use std::fmt::{self, Write as _};
 use std::rc::Rc;
 
-use compose_runtime::{Applier, ComposeArg, NodeRef};
+use compose_runtime::{
+    ComposeArg,
+    platform::{Applier, NodeRef},
+};
 use smallvec::SmallVec;
 
 use crate::display_list::DisplayList;
@@ -77,15 +80,15 @@ impl fmt::Debug for NodeId {
 
 /// What a chain entry can do, cached when the chain changes.
 pub(crate) mod capability {
-    pub const LAYOUT: u8 = 1;
-    pub const DRAW: u8 = 2;
-    pub const POINTER: u8 = 4;
-    pub const SEMANTICS: u8 = 8;
-    pub const FOCUS: u8 = 16;
-    pub const KEY: u8 = 32;
-    pub const FOCUS_EVENT: u8 = 64;
+    pub(crate) const LAYOUT: u8 = 1;
+    pub(crate) const DRAW: u8 = 2;
+    pub(crate) const POINTER: u8 = 4;
+    pub(crate) const SEMANTICS: u8 = 8;
+    pub(crate) const FOCUS: u8 = 16;
+    pub(crate) const KEY: u8 = 32;
+    pub(crate) const FOCUS_EVENT: u8 = 64;
     /// A user-defined element's node: its measuring and drawing are observed for state reads.
-    pub const CUSTOM: u8 = 128;
+    pub(crate) const CUSTOM: u8 = 128;
 }
 
 fn capabilities_of(node: &mut dyn ModifierNode) -> u8 {
@@ -258,7 +261,7 @@ pub struct UiTree {
     /// Where the mouse is, in the root, while it's in the window and no button is held.
     pub(crate) mouse: Option<crate::unit::Offset>,
     /// Observes the state measure policies and custom nodes read (D71), keyed by node.
-    pub(crate) observer: Option<Rc<compose_runtime::ReadObserver>>,
+    pub(crate) observer: Option<Rc<compose_runtime::platform::ReadObserver>>,
     pub(crate) measure_runs: u64,
     /// What `FocusRequester`s attached to this tree's nodes asked for.
     pub(crate) focus_requests: Rc<crate::focus_requester::FocusRequests>,
@@ -279,7 +282,7 @@ pub struct UiTree {
     /// The window's insets, the host's state: read while measuring (insets paddings), so a
     /// change measures their readers again.
     pub(crate) window_insets:
-        Option<compose_runtime::MutableState<crate::platform::PlatformWindowInsets>>,
+        Option<compose_runtime::MutableState<crate::configuration::PlatformWindowInsets>>,
 }
 
 impl UiTree {
@@ -324,7 +327,7 @@ impl UiTree {
     /// The host's window insets state, which `MeasureScope::window_insets` reads.
     pub fn set_window_insets_state(
         &mut self,
-        state: compose_runtime::MutableState<crate::platform::PlatformWindowInsets>,
+        state: compose_runtime::MutableState<crate::configuration::PlatformWindowInsets>,
     ) {
         self.window_insets = Some(state);
     }
@@ -514,7 +517,7 @@ impl UiTree {
 
     /// Observes the state policies and custom nodes read while measuring and drawing, so a
     /// write measures or draws them again (D71). `observer` calls back when one happens.
-    pub fn set_read_observer(&mut self, observer: compose_runtime::ReadObserver) {
+    pub fn set_read_observer(&mut self, observer: compose_runtime::platform::ReadObserver) {
         self.observer = Some(Rc::new(observer));
     }
 

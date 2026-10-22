@@ -129,7 +129,7 @@ struct DrawWithCacheNode {
     cached: Option<(CacheKey, DrawResult)>,
     stale: Rc<std::cell::Cell<bool>>,
     version: compose_runtime::OwnedState<u64>,
-    observer: Option<compose_runtime::ReadObserver>,
+    observer: Option<compose_runtime::platform::ReadObserver>,
 }
 
 type CacheKey = (crate::unit::Size, crate::unit::Density, crate::alignment::LayoutDirection);
@@ -183,7 +183,7 @@ impl DrawWithCacheNode {
         }
         let observer = self.observer.get_or_insert_with(|| {
             let (stale, version) = (self.stale.clone(), self.version.handle());
-            compose_runtime::ReadObserver::new(move || {
+            compose_runtime::platform::ReadObserver::new(move || {
                 stale.set(true);
                 version.update(|version| version.wrapping_add(1));
             })

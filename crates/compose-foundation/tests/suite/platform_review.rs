@@ -234,7 +234,7 @@ fn OptionalIcon() {
 
 #[test]
 fn an_optional_image_resource_does_not_reset_later_state() {
-    compose_ui::set_image_decoder(Arc::new(FakeDecoder));
+    compose_ui::platform::set_image_decoder(Arc::new(FakeDecoder));
     let mut ui = compose_test(OptionalIcon);
     AFTER.get().unwrap().set(5);
     ui.wait_for_idle();

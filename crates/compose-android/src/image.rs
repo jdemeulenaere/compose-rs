@@ -1,4 +1,4 @@
-//! The platform's image decoder on Android (`compose_ui::set_image_decoder`): `BitmapFactory`,
+//! The platform's image decoder on Android (`compose_ui::platform::set_image_decoder`): `BitmapFactory`,
 //! through `ComposeRsImages.kt`. The bitmap's premultiplied RGBA pixels are copied into an
 //! `ImageBitmap` (one copy, by `copyPixelsToBuffer` into a buffer Rust owns), which the display
 //! list's image resources then send to the replayer as any other (D224).
@@ -25,13 +25,13 @@ pub(crate) fn install(env: &mut JNIEnv) {
         return;
     };
     let Ok(class) = env.new_global_ref(class) else { return };
-    compose_ui::set_image_decoder(Arc::new(AndroidImageDecoder { class, decode }));
+    compose_ui::platform::set_image_decoder(Arc::new(AndroidImageDecoder { class, decode }));
 }
 
 /// The largest image decoded, in pixels: a gigabyte of pixels, as the desktop decoder's.
 const MAX_PIXELS: u64 = 1 << 28;
 
-impl compose_ui::ImageDecoder for AndroidImageDecoder {
+impl compose_ui::platform::ImageDecoder for AndroidImageDecoder {
     fn decode(&self, bytes: &[u8]) -> Option<ImageBitmap> {
         // Any thread: attached (as a daemon, so it never blocks the VM's exit) if it isn't.
         let mut env = crate::bridge::vm().attach_current_thread_as_daemon().ok()?;

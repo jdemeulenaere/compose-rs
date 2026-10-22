@@ -245,6 +245,7 @@ impl compose_runtime::ComposeArg for StrokeCap {
 /// A paint with a `shader` (a gradient, from `DrawScope::brush_paint`) paints with it; its
 /// `color` is then the gradient's average, what a renderer without shaders paints instead.
 #[derive(Clone, Copy, PartialEq, Debug)]
+#[non_exhaustive]
 pub struct Paint {
     pub color: Color,
     pub style: PaintStyle,

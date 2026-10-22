@@ -4,7 +4,7 @@
 use compose_foundation::layout::*;
 use compose_foundation::*;
 use compose_test::*;
-use compose_ui::{DrawOp, IntSize, Offset, PointerEvent, UnitExt};
+use compose_ui::{IntSize, Offset, PointerEvent, UnitExt, platform::DrawOp};
 
 fn layer_alpha(ui: &mut ComposeTestRule) -> Option<u8> {
     ui.host().display_list().ops.iter().find_map(|op| match op {

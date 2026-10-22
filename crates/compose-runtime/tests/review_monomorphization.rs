@@ -12,6 +12,7 @@ use std::rc::Rc;
 use compose_runtime::__private::{
     ArgProbe, Callback, KeyedProbe as _, lambda_probe, resolve_lazy_0,
 };
+use compose_runtime::platform::*;
 use compose_runtime::*;
 
 type Tree = NodeTree<String>;

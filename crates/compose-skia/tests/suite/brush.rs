@@ -4,8 +4,8 @@
 use std::sync::Arc;
 
 use compose::ui::{
-    Brush, Color, DisplayList, DrawOp, FixedTextMeasurer, Offset, Paint, Path, Rect, Renderer,
-    Size, TileMode,
+    Brush, Color, Offset, Paint, Path, Rect, Size, TileMode,
+    platform::{DisplayList, DrawOp, FixedTextMeasurer, Renderer},
 };
 use compose_skia::RasterRenderer;
 

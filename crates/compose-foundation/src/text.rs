@@ -6,8 +6,9 @@ use compose_runtime::{Callback, composable};
 use compose_ui::{
     AnnotatedString, Constraints, DetachContext, DrawModifierNode, DrawScope, Layout,
     LayoutModifierNode, Measurable, MeasureResult, MeasureScope, Modifier, ModifierNode,
-    ModifierNodeElement, Offset, ParagraphHandle, SemanticsConfiguration, SemanticsModifierNode,
-    SharedString, TextLayoutOptions, TextLayoutResult, TextStyle, empty_measure_policy,
+    ModifierNodeElement, Offset, SemanticsConfiguration, SemanticsModifierNode, SharedString,
+    TextLayoutResult, TextStyle, empty_measure_policy,
+    platform::{ParagraphHandle, TextLayoutOptions},
 };
 
 /// Under `DisableSelection`: texts a `SelectionContainer` leaves out.
@@ -112,7 +113,7 @@ fn emit_text(
 }
 
 /// The modifier element of a text: its string, style and line options.
-pub struct TextElement {
+pub(crate) struct TextElement {
     pub text: AnnotatedString,
     pub style: TextStyle,
     pub options: TextLayoutOptions,
@@ -240,7 +241,7 @@ impl ModifierNodeElement for TextElement {
 }
 
 /// A text's node: its laid-out paragraph, kept while the text, style and constraints hold.
-pub struct TextNode {
+pub(crate) struct TextNode {
     text: AnnotatedString,
     style: TextStyle,
     options: TextLayoutOptions,
@@ -422,7 +423,7 @@ impl compose_ui::Selectable for TextNode {
     fn offset_at(
         &self,
         position: Offset,
-        measurer: &mut dyn compose_ui::TextMeasurer,
+        measurer: &mut dyn compose_ui::platform::TextMeasurer,
     ) -> Option<usize> {
         let paragraph = self.paragraph?;
         let text = self.text.text.as_str();
@@ -445,7 +446,7 @@ impl compose_ui::Selectable for TextNode {
     fn set_selection(
         &mut self,
         range: Option<std::ops::Range<usize>>,
-        measurer: &mut dyn compose_ui::TextMeasurer,
+        measurer: &mut dyn compose_ui::platform::TextMeasurer,
     ) -> bool {
         let range = range.filter(|range| !range.is_empty());
         if range == self.selection {

@@ -170,37 +170,40 @@ thread_local! {
 }
 
 /// The fixed measurer, counting paragraph layouts.
-struct CountingMeasurer(compose_ui::FixedTextMeasurer);
+struct CountingMeasurer(compose_ui::platform::FixedTextMeasurer);
 
-impl compose_ui::TextMeasurer for CountingMeasurer {
+impl compose_ui::platform::TextMeasurer for CountingMeasurer {
     fn layout(
         &mut self,
         text: &str,
         style: &TextStyle,
-        options: compose_ui::TextLayoutOptions,
+        options: compose_ui::platform::TextLayoutOptions,
         constraints: Constraints,
         density: &Density,
-    ) -> compose_ui::ParagraphHandle {
+    ) -> compose_ui::platform::ParagraphHandle {
         LAYOUTS.with(|count| count.set(count.get() + 1));
         self.0.layout(text, style, options, constraints, density)
     }
-    fn metrics(&self, paragraph: compose_ui::ParagraphHandle) -> compose_ui::ParagraphMetrics {
+    fn metrics(
+        &self,
+        paragraph: compose_ui::platform::ParagraphHandle,
+    ) -> compose_ui::platform::ParagraphMetrics {
         self.0.metrics(paragraph)
     }
     fn hit_test(
         &self,
-        paragraph: compose_ui::ParagraphHandle,
+        paragraph: compose_ui::platform::ParagraphHandle,
         position: compose_ui::Offset,
-    ) -> compose_ui::TextPosition {
+    ) -> compose_ui::platform::TextPosition {
         self.0.hit_test(paragraph, position)
     }
-    fn cursor_rect(&self, paragraph: compose_ui::ParagraphHandle, offset: usize) -> Rect {
+    fn cursor_rect(&self, paragraph: compose_ui::platform::ParagraphHandle, offset: usize) -> Rect {
         self.0.cursor_rect(paragraph, offset)
     }
-    fn text(&self, paragraph: compose_ui::ParagraphHandle) -> &str {
+    fn text(&self, paragraph: compose_ui::platform::ParagraphHandle) -> &str {
         self.0.text(paragraph)
     }
-    fn release(&mut self, paragraph: compose_ui::ParagraphHandle) {
+    fn release(&mut self, paragraph: compose_ui::platform::ParagraphHandle) {
         self.0.release(paragraph)
     }
 }
@@ -218,7 +221,7 @@ fn a_default_styled_text_is_not_laid_out_again_when_only_its_modifier_changes() 
     let mut ui = compose_test_with(
         IntSize::new(200, 200),
         Density::default(),
-        Box::new(CountingMeasurer(compose_ui::FixedTextMeasurer::new())),
+        Box::new(CountingMeasurer(compose_ui::platform::FixedTextMeasurer::new())),
         move || {
             let color = if handle.get() { Color::RED } else { Color::BLUE };
             BasicText!("hello", modifier = Modifier.background(color));

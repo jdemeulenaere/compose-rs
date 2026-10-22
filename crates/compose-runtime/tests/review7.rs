@@ -4,6 +4,7 @@
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicI64, Ordering};
 
+use compose_runtime::platform::*;
 use compose_runtime::*;
 
 // ---- Test support --------------------------------------------------------------------------

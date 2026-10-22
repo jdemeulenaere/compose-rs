@@ -61,7 +61,7 @@ fn allocations() -> u64 {
 use compose_foundation::layout::*;
 use compose_material3::*;
 use compose_runtime::*;
-use compose_ui::UiHost;
+use compose_ui::platform::UiHost;
 
 #[composable]
 fn Screen(checked: MutableState<bool>) {

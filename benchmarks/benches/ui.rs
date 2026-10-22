@@ -50,8 +50,8 @@ fn ui(criterion: &mut Criterion) {
 /// measure, record and render with Skia's CPU raster backend. Input to rendered pixels, without
 /// the window system's present.
 fn desktop_frame(criterion: &mut Criterion) {
-    use compose::ui::{Color, Density, Renderer};
-    let host = compose::ui::UiHost::new(
+    use compose::ui::{Color, Density, platform::Renderer};
+    let host = compose::ui::platform::UiHost::new(
         IntSize::new(960, 1280),
         Density::new(2.0),
         Box::new(compose_skia::SkiaTextMeasurer::new()),
@@ -79,10 +79,13 @@ fn desktop_frame(criterion: &mut Criterion) {
 /// on screen, the same header): the frame's work besides the header (drawing the posts) is what
 /// retained drawing per repaint boundary skips.
 fn animation_frame(criterion: &mut Criterion) {
-    use compose::runtime::executor;
-    use compose::ui::{Density, FixedTextMeasurer, UiHost};
+    use compose::runtime::platform;
+    use compose::ui::{
+        Density,
+        platform::{FixedTextMeasurer, UiHost},
+    };
     for (name, height) in [("phone", 2400), ("four phones tall", 9600)] {
-        executor::set_manual_clock(executor::now_nanos());
+        platform::set_manual_clock(platform::now_nanos());
         let mut host = UiHost::new(
             IntSize::new(1080, height),
             Density::new(2.625),
@@ -90,7 +93,7 @@ fn animation_frame(criterion: &mut Criterion) {
         );
         host.set_content(compose_rs_feed::FeedAnimated);
         let frame = |host: &mut UiHost| {
-            executor::advance_clock(Duration::from_millis(16));
+            platform::advance_clock(Duration::from_millis(16));
             let start = Instant::now();
             host.frame();
             start.elapsed()
@@ -98,7 +101,7 @@ fn animation_frame(criterion: &mut Criterion) {
         for _ in 0..10 {
             frame(&mut host);
         }
-        executor::advance_clock(Duration::from_millis(16));
+        platform::advance_clock(Duration::from_millis(16));
         assert!(host.frame().drew, "an animation frame draws");
         let title = format!("feed_animated frame, {name}");
         criterion.bench_function(&title, |bench| {

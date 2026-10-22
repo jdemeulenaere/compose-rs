@@ -13,10 +13,10 @@
 mod matcher;
 mod script;
 
-use compose_runtime::executor;
+use compose_runtime::platform;
 use compose_ui::{
-    Density, FixedTextMeasurer, IntSize, Key, KeyEvent, NodeId, PointerEvent, SemanticsAction,
-    SemanticsNode, TextMeasurer, UiHost,
+    Density, IntSize, Key, KeyEvent, PointerEvent, SemanticsAction,
+    platform::{FixedTextMeasurer, NodeId, SemanticsNode, TextMeasurer, UiHost},
 };
 
 pub use matcher::{
@@ -24,6 +24,10 @@ pub use matcher::{
     has_text_containing, is_enabled, is_focusable, is_focused, is_not_enabled,
 };
 pub use script::{check_script, run_script};
+
+/// Hooks tests count composable runs with (the runtime keeps them in its unstable `platform`
+/// module; tests reach them here).
+pub use compose_runtime::platform::{RecompositionCounts, bodies_run};
 
 /// The default test root: a phone-sized window at density 1.
 pub const DEFAULT_SIZE: IntSize = IntSize::new(400, 800);
@@ -60,9 +64,9 @@ pub fn compose_test_with(
 
 impl ComposeTestRule {
     pub fn with_host(host: UiHost, content: impl Fn() + 'static) -> ComposeTestRule {
-        compose_runtime::track_recompositions(true);
+        compose_runtime::platform::track_recompositions(true);
         // The test's main clock: time moves only as the rule advances it.
-        executor::set_manual_clock(executor::now_nanos());
+        platform::set_manual_clock(platform::now_nanos());
         let mut rule = ComposeTestRule { host, auto_advance: true };
         rule.host.set_content(content);
         rule.wait_for_idle();
@@ -72,8 +76,8 @@ impl ComposeTestRule {
     /// A test rule whose clock moves only by `advance_time_by`, as a test that sets
     /// `mainClock.autoAdvance = false` before its content: animations and delays wait for it.
     pub fn with_manual_clock(content: impl Fn() + 'static) -> ComposeTestRule {
-        compose_runtime::track_recompositions(true);
-        executor::set_manual_clock(executor::now_nanos());
+        compose_runtime::platform::track_recompositions(true);
+        platform::set_manual_clock(platform::now_nanos());
         let host = UiHost::headless(DEFAULT_SIZE.width, DEFAULT_SIZE.height);
         let mut rule = ComposeTestRule { host, auto_advance: false };
         rule.host.set_content(content);
@@ -95,18 +99,18 @@ impl ComposeTestRule {
     /// animation) moves the clock one frame on, and pending `delay`s end: time passes until the
     /// UI is idle, up to a minute of test time.
     pub fn wait_for_idle(&mut self) {
-        let start = executor::now_nanos();
+        let start = platform::now_nanos();
         let mut frames = 0;
         loop {
-            let elapsed = std::time::Duration::from_nanos(executor::now_nanos() - start);
+            let elapsed = std::time::Duration::from_nanos(platform::now_nanos() - start);
             assert!(
                 elapsed <= IDLE_TIMEOUT && frames < 100_000,
                 "compose-test: the UI never became idle ({frames} frames, {elapsed:?} of test \
                  time): an animation or a task that never ends?"
             );
             // A frame a task waits for (an animation) is the next one, a frame later.
-            if self.auto_advance && executor::has_frame_awaiters() {
-                executor::advance_clock(FRAME_DURATION);
+            if self.auto_advance && platform::has_frame_awaiters() {
+                platform::advance_clock(FRAME_DURATION);
                 self.host.frame();
                 frames += 1;
                 continue;
@@ -120,14 +124,14 @@ impl ComposeTestRule {
                 return;
             }
             // Only delays are left: time moves on to the next one's end.
-            match executor::next_timer_deadline() {
+            match platform::next_timer_deadline() {
                 Some(deadline) => {
-                    let now = executor::now_nanos();
-                    executor::advance_clock(std::time::Duration::from_nanos(
+                    let now = platform::now_nanos();
+                    platform::advance_clock(std::time::Duration::from_nanos(
                         deadline.saturating_sub(now),
                     ));
-                    executor::fire_timers();
-                    executor::run_ready();
+                    platform::fire_timers();
+                    platform::run_ready();
                 }
                 None => return,
             }
@@ -143,26 +147,26 @@ impl ComposeTestRule {
 
     /// The test clock's time in milliseconds, as `mainClock.currentTime`.
     pub fn current_time_millis(&self) -> u64 {
-        executor::now_nanos() / 1_000_000
+        platform::now_nanos() / 1_000_000
     }
 
     /// Moves the clock `duration` on, a frame at a time, running the frames and tasks due on the
     /// way, as `mainClock.advanceTimeBy`.
     pub fn advance_time_by(&mut self, duration: std::time::Duration) {
         // Frames come every 16 ms; each `delay` ends at its own deadline in between.
-        let end = executor::now_nanos() + duration.as_nanos() as u64;
+        let end = platform::now_nanos() + duration.as_nanos() as u64;
         let frame = FRAME_DURATION.as_nanos() as u64;
-        let mut next_frame = executor::now_nanos() + frame;
+        let mut next_frame = platform::now_nanos() + frame;
         loop {
-            let now = executor::now_nanos();
-            let next = executor::next_timer_deadline()
+            let now = platform::now_nanos();
+            let next = platform::next_timer_deadline()
                 .filter(|deadline| *deadline > now)
                 .unwrap_or(u64::MAX)
                 .min(next_frame)
                 .min(end);
-            executor::advance_clock(std::time::Duration::from_nanos(next - now));
-            executor::fire_timers();
-            executor::run_ready();
+            platform::advance_clock(std::time::Duration::from_nanos(next - now));
+            platform::fire_timers();
+            platform::run_ready();
             if next == next_frame {
                 next_frame += frame;
                 if self.host.needs_frame() {
@@ -241,8 +245,8 @@ impl ComposeTestRule {
     }
 
     /// Body runs per composable so far on this thread: `since` a snapshot, `scopes_named`.
-    pub fn recomposition_counts(&self) -> compose_runtime::RecompositionCounts {
-        compose_runtime::recomposition_counts()
+    pub fn recomposition_counts(&self) -> compose_runtime::platform::RecompositionCounts {
+        compose_runtime::platform::recomposition_counts()
     }
 
     // ---- Dumps ------------------------------------------------------------------------------

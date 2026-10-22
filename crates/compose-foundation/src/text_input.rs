@@ -5,7 +5,7 @@ use std::rc::Rc;
 
 use compose_runtime::{Callback, ComposeArg};
 
-pub use compose_ui::text_input::{ImeAction, ImeOptions, KeyboardCapitalization, KeyboardType};
+pub use compose_ui::{ImeAction, ImeOptions, KeyboardCapitalization, KeyboardType};
 
 /// A field's keyboard, as Compose's `KeyboardOptions`:
 /// `KeyboardOptions { ime_action: ImeAction::Done, ..KeyboardOptions::DEFAULT }`. On-screen
@@ -108,7 +108,7 @@ impl KeyboardActions {
             ImeAction::Previous => self.on_previous.as_ref(),
             ImeAction::Search => self.on_search.as_ref(),
             ImeAction::Send => self.on_send.as_ref(),
-            ImeAction::Default | ImeAction::None => None,
+            _ => None,
         }
     }
 }

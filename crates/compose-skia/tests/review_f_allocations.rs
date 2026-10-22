@@ -5,7 +5,10 @@ use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 use std::time::Instant;
 
-use compose::ui::{Color, Density, IntSize, Renderer, UiHost};
+use compose::ui::{
+    Color, Density, IntSize,
+    platform::{Renderer, UiHost},
+};
 use compose_skia::{RasterRenderer, SkiaTextMeasurer};
 
 struct Counting;

@@ -65,6 +65,7 @@ fn live_bytes() -> i64 {
 }
 
 use compose_runtime::*;
+use compose_ui::platform::*;
 use compose_ui::*;
 use support::*;
 

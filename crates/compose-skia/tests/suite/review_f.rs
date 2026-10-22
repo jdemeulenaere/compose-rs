@@ -14,12 +14,12 @@ use compose::foundation::*;
 use compose::runtime::*;
 use compose::test::*;
 use compose::ui::{
-    Color, Constraints, Density, DisplayList, DrawOp, IntSize, Key, Offset, Paint, Rect, Renderer,
-    TextLayoutOptions, TextMeasurer, TextStyle,
+    Color, Constraints, Density, IntSize, Key, Offset, Paint, Rect, TextStyle,
+    platform::{DisplayList, DrawOp, Renderer, TextLayoutOptions, TextMeasurer},
 };
 use compose_skia::{RasterRenderer, SkiaTextMeasurer};
 
-fn layout(measurer: &mut SkiaTextMeasurer, text: &str) -> compose::ui::ParagraphHandle {
+fn layout(measurer: &mut SkiaTextMeasurer, text: &str) -> compose::ui::platform::ParagraphHandle {
     measurer.layout(
         text,
         &TextStyle::DEFAULT,

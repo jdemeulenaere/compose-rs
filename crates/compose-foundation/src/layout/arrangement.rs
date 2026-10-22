@@ -67,7 +67,7 @@ impl Arrangement {
             let mut position = start;
             for index in 0..count {
                 let index = if reverse { count - 1 - index } else { index };
-                positions[index] = compose_ui::unit::round_to_int(position);
+                positions[index] = compose_ui::round_to_int(position);
                 position += sizes[index] as f32 + gap;
             }
         };
@@ -112,7 +112,7 @@ impl Arrangement {
                         (SpacedAlignment::Center, _) => free / 2.0,
                         _ => free,
                     };
-                    let shift = compose_ui::unit::round_to_int(shift);
+                    let shift = compose_ui::round_to_int(shift);
                     for position in positions.iter_mut().take(count) {
                         *position += shift;
                     }

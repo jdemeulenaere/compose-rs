@@ -94,7 +94,7 @@ fn drag(ui: &mut ComposeTestRule, from: f32, to: &[f32], step: u64) {
 /// A quick finger's flick through `to`, its events 10 ms apart at their times, released at the
 /// last; no frame in between.
 fn flick(ui: &mut ComposeTestRule, from: f32, to: &[f32]) {
-    let start = compose_runtime::executor::now_nanos();
+    let start = compose_runtime::platform::now_nanos();
     ui.host().send_pointer(touch(PointerEvent::press(Offset::new(200.0, from))).at_time(start));
     let mut at = start;
     for &y in to {

@@ -102,7 +102,7 @@ pub fn Popup(
     #[default(crate::Alignment::TOP_START)] alignment: Alignment,
     #[default(crate::IntOffset::ZERO)] offset: IntOffset,
     #[default(None)] on_dismiss_request: Option<impl Fn() + 'static>,
-    #[default(crate::window::PopupProperties::default())] properties: PopupProperties,
+    #[default(crate::PopupProperties::default())] properties: PopupProperties,
     content: impl Fn() + 'static,
 ) {
     let provider =
@@ -137,7 +137,7 @@ impl PopupPositionProvider for SharedProvider {
 pub fn PopupWithPositionProvider(
     position_provider: Rc<dyn PopupPositionProvider>,
     #[default(None)] on_dismiss_request: Option<impl Fn() + 'static>,
-    #[default(crate::window::PopupProperties::default())] properties: PopupProperties,
+    #[default(crate::PopupProperties::default())] properties: PopupProperties,
     content: impl Fn() + 'static,
 ) {
     let host = remember(|| Rc::new(HostLayout) as Rc<dyn MeasurePolicy>);
@@ -202,7 +202,7 @@ pub fn PopupWithPositionProvider(
 #[allow(non_snake_case)]
 pub fn Dialog(
     on_dismiss_request: impl Fn() + 'static,
-    #[default(crate::window::DialogProperties::default())] properties: DialogProperties,
+    #[default(crate::DialogProperties::default())] properties: DialogProperties,
     content: impl Fn() + 'static,
 ) {
     let host = remember(|| Rc::new(HostLayout) as Rc<dyn MeasurePolicy>);

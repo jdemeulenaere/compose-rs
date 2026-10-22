@@ -142,7 +142,7 @@ fn composing_tree_requests() -> Weak<FocusRequests> {
     if !compose_runtime::is_composing() {
         return Weak::new();
     }
-    let composer = compose_runtime::current();
+    let composer = compose_runtime::platform::current();
     if !composer.applier_is::<UiTree>() {
         return Weak::new();
     }

@@ -281,7 +281,7 @@ pub fn SnackbarHost(
             if let Some(data) = current
                 && let Some(millis) = data.visuals.duration.millis()
             {
-                compose_runtime::executor::delay(std::time::Duration::from_millis(millis)).await;
+                compose_runtime::delay(std::time::Duration::from_millis(millis)).await;
                 data.dismiss();
             }
         }

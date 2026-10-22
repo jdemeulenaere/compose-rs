@@ -9,7 +9,7 @@ use compose_foundation::layout::*;
 use compose_material3::*;
 use compose_runtime::*;
 use compose_test::*;
-use compose_ui::{Color, DrawOp, IntSize, Modifier, Offset, PointerEvent, Rect, UnitExt};
+use compose_ui::{Color, IntSize, Modifier, Offset, PointerEvent, Rect, UnitExt, platform::DrawOp};
 
 thread_local! {
     static SEEN: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };

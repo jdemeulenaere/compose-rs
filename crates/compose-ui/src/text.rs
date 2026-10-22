@@ -178,6 +178,7 @@ impl std::ops::BitOr for TextDecoration {
 /// How lines sit in a paragraph's width, as `TextAlign`: `Start` and `End` follow the text's
 /// direction.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[non_exhaustive]
 pub enum TextAlign {
     Left,
     Right,
@@ -189,6 +190,7 @@ pub enum TextAlign {
 
 /// What shows when text doesn't fit, as `TextOverflow`.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
+#[non_exhaustive]
 pub enum TextOverflow {
     /// Cut at the bounds.
     #[default]

@@ -178,7 +178,7 @@ fn a_pinned_bar_stays_and_takes_the_scrolled_color() {
             .ops
             .iter()
             .filter_map(|op| match op {
-                compose_ui::DrawOp::DrawRect(_, paint) => Some(paint.color),
+                compose_ui::platform::DrawOp::DrawRect(_, paint) => Some(paint.color),
                 _ => None,
             })
             .collect::<Vec<_>>()

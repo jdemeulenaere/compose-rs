@@ -1,0 +1,87 @@
+//! Host and platform plumbing: what hosts (compose-ui's `UiHost`, compose-test) and other
+//! appliers use to drive compositions and the UI thread's executor, and the hooks tests count
+//! with. Not for apps, and not covered by semver: these change with the hosts (D260). Apps'
+//! tests reach the hooks through `compose::test`.
+
+pub use crate::applier::{Applier, NodeRef};
+pub use crate::composer::{Composer, KeptArguments, current};
+pub use crate::derived::flush_derived_states;
+pub use crate::executor::{
+    Delay, WithFrame, advance_clock, dispatch_frame, fire_timers, has_frame_awaiters,
+    has_ready_tasks, next_timer, next_timer_deadline, now_nanos, poll_now, run_ready,
+    set_manual_clock, set_wake_handler,
+};
+pub use crate::node_tree::NodeTree;
+pub use crate::observe::ReadObserver;
+pub use crate::state::live_state_count;
+
+/// The number of live recompose scopes on this thread. For tests.
+pub fn live_scope_count() -> usize {
+    crate::runtime::with_runtime(|runtime| runtime.scopes.live_count())
+}
+
+/// The number of composable bodies run on this thread so far (restart groups that didn't skip).
+/// For tests and frame statistics.
+pub fn bodies_run() -> u64 {
+    crate::runtime::with_runtime(|runtime| runtime.bodies_run)
+}
+
+/// Starts (or stops) counting body runs per composable on this thread, for
+/// [`recomposition_counts`]. For tests and tools; off by default.
+pub fn track_recompositions(enabled: bool) {
+    crate::runtime::with_runtime(|runtime| {
+        if enabled {
+            runtime.recomposition_counts.get_or_insert_with(Default::default);
+        } else {
+            runtime.recomposition_counts = None;
+        }
+    })
+}
+
+/// How many times each composable's body ran since tracking started.
+pub fn recomposition_counts() -> RecompositionCounts {
+    RecompositionCounts(crate::runtime::with_runtime(|runtime| {
+        runtime.recomposition_counts.clone().unwrap_or_default()
+    }))
+}
+
+/// Body runs per composable, by the type name of its restart closure.
+#[derive(Clone, Debug, Default)]
+pub struct RecompositionCounts(std::collections::HashMap<&'static str, u64>);
+
+impl RecompositionCounts {
+    /// The runs since `before`.
+    pub fn since(&self, before: &RecompositionCounts) -> RecompositionCounts {
+        RecompositionCounts(
+            self.0
+                .iter()
+                .map(|(name, count)| (*name, count - before.0.get(name).copied().unwrap_or(0)))
+                .filter(|(_, count)| *count > 0)
+                .collect(),
+        )
+    }
+
+    /// The runs of composables named `name` (the function's own name, any module).
+    pub fn scopes_named(&self, name: &str) -> u64 {
+        self.0
+            .iter()
+            .filter(|(full, _)| composable_name(full) == name)
+            .map(|(_, count)| count)
+            .sum()
+    }
+
+    /// Every composable that ran, by name, sorted.
+    pub fn names(&self) -> Vec<(&'static str, u64)> {
+        let mut names: Vec<(&'static str, u64)> =
+            self.0.iter().map(|(full, count)| (composable_name(full), *count)).collect();
+        names.sort();
+        names
+    }
+}
+
+/// `TodoRow` from `app::screen::TodoRow::{{closure}}`.
+fn composable_name(full: &'static str) -> &'static str {
+    let path = full.split('<').next().unwrap_or(full);
+    let path = path.strip_suffix("::{{closure}}").unwrap_or(path);
+    path.rsplit("::").next().unwrap_or(path)
+}

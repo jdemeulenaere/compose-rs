@@ -14,9 +14,10 @@ use compose_foundation::*;
 use compose_runtime::*;
 use compose_test::*;
 use compose_ui::{
-    BackHandler, Configuration, Density, Dialog, ImageBitmap, ImageDecoder, Insets, IntSize, Key,
-    LOCAL_CONFIGURATION, LOCAL_HOST_EVENTS, LOCAL_HOST_PROPS, PlatformWindowInsets, Popup,
-    PopupProperties, PropValue, ScreenOrientation, UiHost, UnitExt,
+    BackHandler, Configuration, Density, Dialog, ImageBitmap, IntSize, Key, LOCAL_CONFIGURATION,
+    LOCAL_HOST_EVENTS, LOCAL_HOST_PROPS, Popup, PopupProperties, PropValue, ScreenOrientation,
+    UnitExt,
+    platform::{ImageDecoder, Insets, PlatformWindowInsets, UiHost},
 };
 
 thread_local! {
@@ -462,7 +463,7 @@ impl ImageDecoder for FakeDecoder {
 #[test]
 fn images_decode_with_the_platform_decoder() {
     static PIXEL: [u8; 3] = [2, 3, 128];
-    compose_ui::set_image_decoder(Arc::new(FakeDecoder));
+    compose_ui::platform::set_image_decoder(Arc::new(FakeDecoder));
     let image = compose_ui::decode_image_bytes(&PIXEL).expect("decoded");
     assert_eq!((image.width(), image.height()), (2, 3));
     assert!(compose_ui::decode_image_bytes(b"not an image").is_none());

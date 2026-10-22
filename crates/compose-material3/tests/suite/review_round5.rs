@@ -12,9 +12,11 @@ use compose_material3::*;
 use compose_runtime::*;
 use compose_test::*;
 use compose_ui::{
-    Color, Constraints, Density, DrawOp, FixedTextMeasurer, IntSize, Modifier, Offset,
-    ParagraphHandle, ParagraphMetrics, TextLayoutOptions, TextMeasurer, TextPosition, TextStyle,
-    UnitExt,
+    Color, Constraints, Density, IntSize, Modifier, Offset, TextStyle, UnitExt,
+    platform::{
+        DrawOp, FixedTextMeasurer, ParagraphHandle, ParagraphMetrics, TextLayoutOptions,
+        TextMeasurer, TextPosition,
+    },
 };
 
 thread_local! {

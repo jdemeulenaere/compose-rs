@@ -195,7 +195,7 @@ fn the_post_fling_gets_the_flings_velocity_where_it_stopped() {
     let mut ui = ComposeTestRule::sized(IntSize::new(100, 300), Recorded);
     ui.set_auto_advance(false);
     let touch = |event: PointerEvent| event.with_pointer(PointerId(1), PointerType::Touch);
-    let start = compose_runtime::executor::now_nanos();
+    let start = compose_runtime::platform::now_nanos();
     ui.host().send_pointer(touch(PointerEvent::press(Offset::new(50.0, 280.0))).at_time(start));
     for step in 1..=5u64 {
         let y = 280.0 - step as f32 * 50.0;

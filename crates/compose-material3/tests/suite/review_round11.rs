@@ -7,7 +7,7 @@
 use compose_foundation::layout::*;
 use compose_material3::*;
 use compose_test::*;
-use compose_ui::{DrawOp, Key, Modifier, Rect};
+use compose_ui::{Key, Modifier, Rect, platform::DrawOp};
 
 /// The rectangles drawn (filled rects and round rects), in the order drawn.
 fn drawn_rects(ui: &mut ComposeTestRule) -> Vec<String> {

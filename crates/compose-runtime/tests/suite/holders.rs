@@ -4,6 +4,7 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
+use compose_runtime::platform::*;
 use compose_runtime::*;
 
 fn new_composition() -> Composition {
@@ -114,7 +115,7 @@ fn a_forgotten_scope_is_cancelled_then_freed_and_stays_cancelled() {
         delay(std::time::Duration::from_secs(1)).await;
         log.borrow_mut().push("finished");
     });
-    executor::run_ready();
+    platform::run_ready();
     assert_eq!(*ran.borrow(), ["started"]);
     assert!(scope.is_active());
     show.set(false);
@@ -133,7 +134,7 @@ fn a_forgotten_scope_is_cancelled_then_freed_and_stays_cancelled() {
     let ran_late = Rc::new(Cell::new(false));
     let flag = ran_late.clone();
     let late = scope.launch(async move { flag.set(true) });
-    executor::run_ready();
+    platform::run_ready();
     assert!(!late.is_active());
     assert!(!ran_late.get());
 }
@@ -143,6 +144,6 @@ fn a_scope_of_its_own_dropped_at_once_keeps_its_tasks() {
     let ran = Rc::new(Cell::new(false));
     let flag = ran.clone();
     CoroutineScope::new().launch(async move { flag.set(true) });
-    executor::run_ready();
+    platform::run_ready();
     assert!(ran.get());
 }

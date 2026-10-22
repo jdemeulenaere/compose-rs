@@ -6,7 +6,10 @@
 //! index), its parent's (-1 for the root's children), its bounds in the view's pixels, flags,
 //! role, and its texts. Little-endian, as the display list.
 
-use compose_ui::{NodeId, Role, SemanticsConfiguration, SemanticsNode, ToggleableState};
+use compose_ui::{
+    Role, SemanticsConfiguration, ToggleableState,
+    platform::{NodeId, SemanticsNode},
+};
 
 use crate::serialize::Writer;
 
@@ -101,6 +104,8 @@ fn write_node(node: &SemanticsNode, parent: i32, out: &mut Writer) {
         Some(Role::Tab) => 5,
         Some(Role::Image) => 6,
         Some(Role::DropdownList) => 7,
+        // A role added later: none the platform knows.
+        Some(_) => 0,
     });
     write_string(out, &join(&config.text));
     write_string(out, &join(&config.content_description));

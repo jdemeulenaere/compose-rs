@@ -8,8 +8,8 @@ use compose_foundation::*;
 use compose_runtime::*;
 use compose_test::*;
 use compose_ui::{
-    Color, DisplayList, IntSize, Key, KeyEvent, KeyEventType, KeyModifiers, Offset, Paint,
-    PointerEvent, UnitExt,
+    Color, IntSize, Key, KeyEvent, KeyEventType, KeyModifiers, Offset, Paint, PointerEvent,
+    UnitExt, platform::DisplayList,
 };
 
 /// A display list's dump, without its paragraph handles (a fresh measurer numbers them anew).

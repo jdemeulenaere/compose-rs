@@ -13,7 +13,10 @@
 use compose::foundation::*;
 use compose::runtime::*;
 use compose::test::*;
-use compose::ui::{Density, DisplayList, DrawOp, IntSize, Key, Rect};
+use compose::ui::{
+    Density, IntSize, Key, Rect,
+    platform::{DisplayList, DrawOp},
+};
 use compose_skia::SkiaTextMeasurer;
 
 #[composable]

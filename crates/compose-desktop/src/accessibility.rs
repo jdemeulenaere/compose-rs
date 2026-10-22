@@ -2,7 +2,10 @@
 //! semantics tree (docs/07-platforms.md), and their actions sent back as semantics actions.
 
 use accesskit::{Action, ActionRequest, Node, NodeId as AccessNodeId, Rect, Toggled, TreeUpdate};
-use compose_ui::{NodeId, Role, SemanticsAction, SemanticsNode, ToggleableState, UiHost};
+use compose_ui::{
+    Role, SemanticsAction, ToggleableState,
+    platform::{NodeId, SemanticsNode, UiHost},
+};
 
 /// The whole tree, as AccessKit asks for it: the window, then the merged semantics nodes, the
 /// focus on the one holding the focused node.
@@ -55,6 +58,8 @@ fn add(node: &SemanticsNode, nodes: &mut Vec<(AccessNodeId, Node)>, visit: &mut 
         Some(Role::Tab) => accesskit::Role::Tab,
         Some(Role::Image) => accesskit::Role::Image,
         Some(Role::DropdownList) => accesskit::Role::ComboBox,
+        // A role added later: a generic container.
+        Some(_) => accesskit::Role::GenericContainer,
         None if config.is_dialog => accesskit::Role::Dialog,
         None if config.password => accesskit::Role::PasswordInput,
         None if config.editable => accesskit::Role::TextInput,
@@ -183,7 +188,7 @@ pub(crate) fn perform(host: &mut UiHost, request: &ActionRequest) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use compose_ui::{Density, FixedTextMeasurer, IntSize, Modifier, UnitExt};
+    use compose_ui::{Density, IntSize, Modifier, UnitExt, platform::FixedTextMeasurer};
 
     #[test]
     fn the_tree_has_the_window_its_nodes_and_their_actions() {

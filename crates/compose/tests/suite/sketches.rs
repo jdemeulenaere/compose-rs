@@ -7,6 +7,7 @@
 use std::fmt;
 use std::rc::Rc;
 
+use compose::runtime::platform::*;
 use compose::runtime::*;
 use toolkit::*;
 
@@ -16,6 +17,7 @@ mod toolkit {
     use std::fmt;
     use std::rc::Rc;
 
+    use compose::runtime::platform::*;
     use compose::runtime::*;
 
     pub type SharedString = Rc<str>;

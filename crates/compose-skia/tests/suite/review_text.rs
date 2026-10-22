@@ -1,8 +1,8 @@
 //! Adversarial review of styled text with SkParagraph: annotated strings' spans.
 
 use compose::ui::{
-    AnnotatedString, Color, Constraints, Density, SpanStyle, TextLayoutOptions, TextMeasurer,
-    TextStyle,
+    AnnotatedString, Color, Constraints, Density, SpanStyle, TextStyle,
+    platform::{TextLayoutOptions, TextMeasurer},
 };
 use compose_skia::SkiaTextMeasurer;
 

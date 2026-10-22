@@ -10,7 +10,8 @@ use compose::runtime::*;
 use compose::test::*;
 use compose::ui::{
     Constraints, Density, IntSize, Key, KeyEvent, KeyEventType, KeyModifiers, Offset, PointerEvent,
-    TextLayoutOptions, TextMeasurer, TextStyle, UnitExt,
+    TextStyle, UnitExt,
+    platform::{TextLayoutOptions, TextMeasurer},
 };
 use compose_skia::SkiaTextMeasurer;
 

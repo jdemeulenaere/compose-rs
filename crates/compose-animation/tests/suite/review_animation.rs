@@ -20,7 +20,7 @@ use compose_foundation::layout::*;
 use compose_foundation::*;
 use compose_runtime::*;
 use compose_test::*;
-use compose_ui::{DrawOp, UnitExt};
+use compose_ui::{UnitExt, platform::DrawOp};
 
 fn alphas(ui: &mut ComposeTestRule) -> Vec<f32> {
     ui.host()

@@ -41,7 +41,7 @@ impl std::future::Future for YieldNow {
 fn a_yielding_task_lets_the_frame_end() {
     let progress = compose_runtime::mutable_state_of(0u32);
     let handle = progress.handle();
-    let mut host = compose_ui::UiHost::headless(200, 200);
+    let mut host = compose_ui::platform::UiHost::headless(200, 200);
     host.set_content(move || {
         compose_runtime::LaunchedEffect((), async move {
             for _ in 0..100_000 {

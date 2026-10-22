@@ -6,10 +6,11 @@
 
 use std::sync::OnceLock;
 
-use compose_runtime::executor;
+use compose_runtime::platform;
 use compose_ui::{
     Density, IntSize, Key, KeyEvent, KeyEventType, KeyModifiers, LayoutDirection, Offset,
-    ParagraphMetrics, PointerEvent, PointerId, PointerType, Rect, UiHost,
+    PointerEvent, PointerId, PointerType, Rect,
+    platform::{ParagraphMetrics, UiHost},
 };
 use jni::JNIEnv;
 use jni::JavaVM;
@@ -30,7 +31,7 @@ static WAKE: OnceLock<(GlobalRef, JStaticMethodID)> = OnceLock::new();
 pub(crate) fn set_vm(vm: JavaVM) {
     install_panic_hook();
     #[cfg(target_os = "android")]
-    compose_ui::trace::set_tracer(trace_begin, trace_end);
+    compose_ui::platform::trace::set_tracer(trace_begin, trace_end);
     let _ = VM.set(vm);
     // `JNI_OnLoad` runs with the app's class loader: the decoder's class is found now, for
     // decodes on any thread later.
@@ -323,7 +324,7 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_create<'local>(
             .expect("compose-android: ComposeRsNative.wake");
         let _ = WAKE.set((class_ref, wake));
         // A task woken on any thread posts a tick to the main thread.
-        executor::set_wake_handler(|| {
+        platform::set_wake_handler(|| {
             let (Some(vm), Some((class, wake))) = (VM.get(), WAKE.get()) else { return };
             let Ok(mut env) = vm.attach_current_thread_as_daemon() else { return };
             // SAFETY: `wake` is `()V`, static, of `class`.
@@ -493,7 +494,7 @@ mod flags {
 
 fn next_timer_bits() -> i64 {
     // Rounded up: a tick never comes before the timer ends (and spins).
-    executor::next_timer()
+    platform::next_timer()
         .map_or(0, |wait| (wait.as_nanos().div_ceil(1_000_000) as i64 + 1) << flags::TIMER_SHIFT)
 }
 
@@ -506,18 +507,18 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_frame(
 ) -> jlong {
     // SAFETY: a live host, on the main thread.
     let host = unsafe { self::host(host) };
-    let _frame = compose_ui::trace::section(c"compose-rs: frame");
+    let _frame = compose_ui::platform::trace::section(c"compose-rs: frame");
     let stats = host.ui.frame();
     let mut result = 0;
     if stats.drew || host.first {
-        let _serialize = compose_ui::trace::section(c"compose-rs: serialize");
+        let _serialize = compose_ui::platform::trace::section(c"compose-rs: serialize");
         host.first = false;
         let (list, resources, groups) = (&mut host.list, &mut host.resources, &mut host.groups);
         host.ui.with_tree(|tree| write_display_list(tree.display_list(), resources, groups, list));
         host.resources.collect();
         result |= flags::DREW;
     }
-    if host.ui.has_pending_work() || executor::has_frame_awaiters() {
+    if host.ui.has_pending_work() || platform::has_frame_awaiters() {
         result |= flags::AGAIN;
     }
     let input = crate::input_method::take_text_input_state(&host.ui, &mut host.ime_options);
@@ -570,7 +571,7 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_takeDrawing(
 ) -> jobject {
     // SAFETY: a live host, on the main thread.
     let host = unsafe { self::host(host) };
-    let _take = compose_ui::trace::section(c"compose-rs: take drawing");
+    let _take = compose_ui::platform::trace::section(c"compose-rs: take drawing");
     host.drawing.bytes.clear();
     host.resources.write_pending(&mut host.drawing);
     host.drawing.bytes.extend_from_slice(&host.list.bytes);
@@ -612,7 +613,7 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_touch(
             return;
         }
     };
-    let time = executor::now_nanos().saturating_sub(age.max(0) as u64).max(1);
+    let time = platform::now_nanos().saturating_sub(age.max(0) as u64).max(1);
     host.ui.send_pointer(event.with_pointer(pointer, PointerType::Touch).at_time(time));
 }
 
@@ -658,7 +659,7 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_textInputOptions(
 ) -> jlong {
     // SAFETY: a live host, on the main thread.
     let host = unsafe { self::host(host) };
-    fn password(node: &compose_ui::SemanticsNode) -> Option<bool> {
+    fn password(node: &compose_ui::platform::SemanticsNode) -> Option<bool> {
         if node.config.focused && node.config.editable {
             return Some(node.config.password);
         }
@@ -690,7 +691,7 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_nextTimer(
     _env: JNIEnv,
     _class: JClass,
 ) -> jlong {
-    executor::next_timer().map_or(-1, |wait| wait.as_nanos().div_ceil(1_000_000) as jlong)
+    platform::next_timer().map_or(-1, |wait| wait.as_nanos().div_ceil(1_000_000) as jlong)
 }
 
 /// `ComposeRsNative.key(host, key, character, down, meta)`: a key (see `Keys` in
@@ -794,11 +795,11 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_tick(
     _env: JNIEnv,
     _class: JClass,
 ) -> jlong {
-    executor::fire_timers();
-    executor::run_ready();
-    let frames = i64::from(executor::has_frame_awaiters());
+    platform::fire_timers();
+    platform::run_ready();
+    let frames = i64::from(platform::has_frame_awaiters());
     let timer =
-        executor::next_timer().map_or(0, |wait| wait.as_nanos().div_ceil(1_000_000) as i64 + 1);
+        platform::next_timer().map_or(0, |wait| wait.as_nanos().div_ceil(1_000_000) as i64 + 1);
     (timer << 1) | frames
 }
 
@@ -925,9 +926,14 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_setWindowInsets<'
     }
     let side = |kind: usize| {
         let at = kind * 4;
-        compose_ui::Insets::new(values[at], values[at + 1], values[at + 2], values[at + 3])
+        compose_ui::platform::Insets::new(
+            values[at],
+            values[at + 1],
+            values[at + 2],
+            values[at + 3],
+        )
     };
-    host.ui.set_window_insets(compose_ui::PlatformWindowInsets {
+    host.ui.set_window_insets(compose_ui::platform::PlatformWindowInsets {
         status_bars: side(0),
         navigation_bars: side(1),
         caption_bar: side(2),

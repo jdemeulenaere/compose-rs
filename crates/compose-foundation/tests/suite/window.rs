@@ -64,9 +64,10 @@ fn a_popup_shows_over_its_anchor_takes_no_room_and_dismisses_on_a_click_outside(
     assert!(matches!(
         list.ops.iter().rev().find(|op| matches!(
             op,
-            compose_ui::DrawOp::DrawParagraph(..) | compose_ui::DrawOp::DrawRect(..)
+            compose_ui::platform::DrawOp::DrawParagraph(..)
+                | compose_ui::platform::DrawOp::DrawRect(..)
         )),
-        Some(compose_ui::DrawOp::DrawParagraph(..))
+        Some(compose_ui::platform::DrawOp::DrawParagraph(..))
     ));
     // A tap on the popup, over the clickable beneath it: the popup takes it.
     tap(&mut ui, 20.0, 60.0);

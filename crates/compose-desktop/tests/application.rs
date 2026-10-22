@@ -10,7 +10,10 @@ use std::rc::Rc;
 use compose_desktop::{Application, Window, WindowHandle, WindowSize, remember_window_state};
 use compose_foundation::*;
 use compose_runtime::{OwnedState, mutable_state_of};
-use compose_ui::{Density, FixedTextMeasurer, IntSize, UiHost};
+use compose_ui::{
+    Density, IntSize,
+    platform::{FixedTextMeasurer, UiHost},
+};
 
 /// A headless host showing `handle`'s content, as the event loop's window does.
 fn window_host(handle: &Rc<WindowHandle>) -> UiHost {

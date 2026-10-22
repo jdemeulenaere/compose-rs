@@ -9,6 +9,7 @@ use std::fmt;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::Rc;
 
+use compose_runtime::platform::*;
 use compose_runtime::*;
 
 // ---- Test support --------------------------------------------------------------------------

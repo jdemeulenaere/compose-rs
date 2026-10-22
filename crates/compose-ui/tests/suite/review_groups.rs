@@ -7,6 +7,7 @@
 use crate::support::*;
 
 use compose_runtime::*;
+use compose_ui::platform::*;
 use compose_ui::*;
 
 /// The drawings of `list`, each with the translation it's drawn at; with `isolated`, each group

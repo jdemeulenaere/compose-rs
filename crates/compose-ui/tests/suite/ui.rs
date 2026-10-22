@@ -8,7 +8,9 @@ use crate::support;
 use std::cell::Cell;
 use std::rc::Rc;
 
+use compose_runtime::platform::*;
 use compose_runtime::*;
+use compose_ui::platform::*;
 use compose_ui::*;
 use support::*;
 
@@ -592,7 +594,7 @@ fn state_read_by_a_policy_or_a_draw_node_measures_or_draws_again_without_recompo
         Layout(Modifier.then_custom(Shade(shade)), Rc::new(StateWidth(width)), callback(|| {}));
     }
     let mut host = host(Screen);
-    let bodies = compose_runtime::bodies_run();
+    let bodies = compose_runtime::platform::bodies_run();
     WIDTH.with(Cell::get).unwrap().set(42);
     assert!(host.needs_frame(), "the write asks for a frame");
     host.frame();
@@ -601,5 +603,5 @@ fn state_read_by_a_policy_or_a_draw_node_measures_or_draws_again_without_recompo
     SHADE.with(Cell::get).unwrap().set(0x22);
     host.frame();
     assert!(host.display_list().dump().contains("#FF000022"), "{}", host.display_list().dump());
-    assert_eq!(compose_runtime::bodies_run(), bodies, "no recomposition");
+    assert_eq!(compose_runtime::platform::bodies_run(), bodies, "no recomposition");
 }

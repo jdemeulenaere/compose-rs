@@ -7,6 +7,7 @@
 /// The action a single-line field's Enter (an input method's action key) performs, as Compose's
 /// `ImeAction`.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
+#[non_exhaustive]
 pub enum ImeAction {
     /// The platform's default: on desktop, none; on Android, `Done` for a single line, a new
     /// line otherwise.
@@ -26,6 +27,7 @@ pub enum ImeAction {
 /// The kind of text a field takes, as Compose's `KeyboardType`: a hint for on-screen keyboards
 /// (desktop keyboards ignore it).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
+#[non_exhaustive]
 pub enum KeyboardType {
     #[default]
     Text,
@@ -42,6 +44,7 @@ pub enum KeyboardType {
 /// What an on-screen keyboard capitalizes on its own, as Compose's `KeyboardCapitalization`
 /// (desktop keyboards ignore it).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
+#[non_exhaustive]
 pub enum KeyboardCapitalization {
     /// Nothing.
     #[default]

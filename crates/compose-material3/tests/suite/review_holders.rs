@@ -80,7 +80,7 @@ fn a_host_disposed_mid_drag_leaves_no_task_on_a_freed_drawer() {
     }
     drop(ui);
     for _ in 0..10 {
-        compose_runtime::executor::fire_timers();
-        compose_runtime::executor::run_ready();
+        compose_runtime::platform::fire_timers();
+        compose_runtime::platform::run_ready();
     }
 }

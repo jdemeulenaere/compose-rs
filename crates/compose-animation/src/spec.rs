@@ -172,6 +172,7 @@ pub enum RepeatMode {
 
 /// How a value animates to its target, as Compose's `AnimationSpec`.
 #[derive(Clone, Copy, PartialEq, Debug)]
+#[non_exhaustive]
 pub enum AnimationSpec {
     Tween(TweenSpec),
     Spring(SpringSpec),

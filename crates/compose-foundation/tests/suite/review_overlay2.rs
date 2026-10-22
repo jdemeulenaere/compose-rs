@@ -21,7 +21,7 @@ fn tap(ui: &mut ComposeTestRule, x: f32, y: f32) {
     ui.wait_for_idle();
 }
 
-fn focused(ui: &mut ComposeTestRule) -> Option<compose_ui::NodeId> {
+fn focused(ui: &mut ComposeTestRule) -> Option<compose_ui::platform::NodeId> {
     ui.host().with_tree(|tree| tree.focused())
 }
 

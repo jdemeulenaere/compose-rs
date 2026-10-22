@@ -1,6 +1,9 @@
 //! Skia review: the `DrawImage` replay and `decode_image`.
 
-use compose::ui::{Color, DisplayList, DrawOp, FixedTextMeasurer, ImageBitmap, Rect, Renderer};
+use compose::ui::{
+    Color, ImageBitmap, Rect,
+    platform::{DisplayList, DrawOp, FixedTextMeasurer, Renderer},
+};
 use compose_skia::RasterRenderer;
 
 /// A 2 × 1 bitmap: a red pixel, then a blue one (opaque, so premultiplied is plain).
@@ -105,7 +108,7 @@ fn edge_case_images_draw_and_decode() {
 fn graphics_layers_replay_through_skia() {
     use compose::foundation::layout::Box;
     use compose::runtime::composable;
-    use compose::ui::{Density, GraphicsLayerScope, IntSize, Modifier, UiHost, UnitExt};
+    use compose::ui::{Density, GraphicsLayerScope, IntSize, Modifier, UnitExt, platform::UiHost};
     use compose_skia::SkiaTextMeasurer;
     #[composable]
     #[allow(non_snake_case)]

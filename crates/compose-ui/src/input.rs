@@ -11,6 +11,7 @@ use crate::unit::Offset;
 pub struct PointerId(pub u64);
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
+#[non_exhaustive]
 pub enum PointerType {
     #[default]
     Mouse,
@@ -20,6 +21,7 @@ pub enum PointerType {
 
 /// What happened, as `PointerEventType`.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[non_exhaustive]
 pub enum PointerEventType {
     Press,
     Release,
@@ -33,6 +35,7 @@ pub enum PointerEventType {
 
 /// The mouse pointer's look, as Compose's `PointerIcon`.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
+#[non_exhaustive]
 pub enum PointerIcon {
     /// The arrow.
     #[default]
@@ -133,6 +136,7 @@ pub enum PointerEventPass {
 /// A key, as Compose's `Key`, for the keys the toolkit handles; other keys arrive as
 /// `Character` or `Other`.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[non_exhaustive]
 pub enum Key {
     Enter,
     NumPadEnter,

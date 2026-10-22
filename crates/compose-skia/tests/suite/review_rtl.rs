@@ -7,7 +7,7 @@
 use compose::foundation::*;
 use compose::runtime::*;
 use compose::test::*;
-use compose::ui::{Density, IntSize, LayoutDirection, UiHost, UnitExt};
+use compose::ui::{Density, IntSize, LayoutDirection, UnitExt, platform::UiHost};
 use compose_skia::SkiaTextMeasurer;
 
 #[composable]

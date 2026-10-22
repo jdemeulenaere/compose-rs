@@ -13,7 +13,7 @@ use compose_foundation::layout::*;
 use compose_foundation::*;
 use compose_runtime::*;
 use compose_test::*;
-use compose_ui::{DrawOp, IntSize, Rect, UnitExt};
+use compose_ui::{IntSize, Rect, UnitExt, platform::DrawOp};
 
 fn bitmap(width: u32, height: u32) -> ImageBitmap {
     ImageBitmap::from_rgba_premultiplied(width, height, vec![255; (width * height * 4) as usize])
@@ -160,7 +160,7 @@ fn a_bitmap_is_measured_in_pixels_at_density_two() {
     let mut ui = compose_test_with(
         IntSize::new(300, 300),
         compose_ui::Density::new(2.0),
-        Box::new(compose_ui::FixedTextMeasurer::default()),
+        Box::new(compose_ui::platform::FixedTextMeasurer::default()),
         move || {
             Image!(image.clone(), None, modifier = Modifier.test_tag("image"));
         },

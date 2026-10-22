@@ -461,7 +461,7 @@ fn the_touch_slop_is_in_dp() {
     let mut ui = compose_test_with(
         IntSize::new(400, 400),
         compose_ui::Density::new(2.0),
-        Box::new(compose_ui::FixedTextMeasurer::new()),
+        Box::new(compose_ui::platform::FixedTextMeasurer::new()),
         move || {
             LazyColumn!(
                 modifier = Modifier.size_wh(100.dp(), 100.dp()),

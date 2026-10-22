@@ -76,7 +76,7 @@ fn request_focus_on_a_node_without_the_action_is_not_performed() {
 /// in a dialog too, and follow a scroll.
 #[test]
 fn passes_bounds_are_in_pixels_and_follow_scrolling() {
-    use compose_ui::{Density, FixedTextMeasurer, IntSize};
+    use compose_ui::{Density, IntSize, platform::FixedTextMeasurer};
     thread_local! { static STATE: std::cell::RefCell<Option<ScrollState>> = const { std::cell::RefCell::new(None) }; }
     let mut ui = compose_test_with(
         IntSize::new(400, 400),

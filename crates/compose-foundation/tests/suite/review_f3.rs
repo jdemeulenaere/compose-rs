@@ -15,7 +15,8 @@ use compose_foundation::*;
 use compose_runtime::*;
 use compose_test::*;
 use compose_ui::{
-    DrawOp, IntSize, Key, KeyEvent, KeyEventType, KeyModifiers, Offset, PointerEvent, UnitExt,
+    IntSize, Key, KeyEvent, KeyEventType, KeyModifiers, Offset, PointerEvent, UnitExt,
+    platform::DrawOp,
 };
 
 #[composable]

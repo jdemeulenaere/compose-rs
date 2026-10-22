@@ -9,6 +9,7 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use compose_runtime::*;
+use compose_ui::platform::*;
 use compose_ui::*;
 use support::*;
 

@@ -317,7 +317,8 @@ pub fn LazyVerticalGrid(
                                 compose_runtime::callback(move || {
                                     let items = items.clone();
                                     compose_runtime::CompositionLocalProvider(
-                                        compose_ui::LOCAL_CONSTRAINTS_HINT.provides(cell_hint),
+                                        compose_ui::platform::LOCAL_CONSTRAINTS_HINT
+                                            .provides(cell_hint),
                                         move || {
                                             for column in 0..count {
                                                 let index = row * count + column;

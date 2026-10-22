@@ -42,7 +42,7 @@ fn toggling_one_item_recomposes_one_row() {
     assert_one_row(&recomposed);
 }
 
-fn assert_one_row(recomposed: &compose::runtime::RecompositionCounts) {
+fn assert_one_row(recomposed: &compose::runtime::platform::RecompositionCounts) {
     let names = recomposed.names();
     assert_eq!(recomposed.scopes_named("Checkbox"), 1, "{names:?}");
     assert_eq!(recomposed.scopes_named("TodoAppWith"), 0, "{names:?}");

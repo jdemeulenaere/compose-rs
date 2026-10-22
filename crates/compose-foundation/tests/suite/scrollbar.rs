@@ -4,7 +4,7 @@
 use compose_foundation::layout::*;
 use compose_foundation::*;
 use compose_test::*;
-use compose_ui::{DrawOp, IntSize, Offset, PointerEvent, Rect, UnitExt};
+use compose_ui::{IntSize, Offset, PointerEvent, Rect, UnitExt, platform::DrawOp};
 
 /// The thumb: the only rounded rect drawn.
 fn thumb(ui: &mut ComposeTestRule) -> Option<Rect> {

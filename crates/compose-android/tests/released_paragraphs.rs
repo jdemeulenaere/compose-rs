@@ -27,7 +27,10 @@ use compose_android::text::{AndroidTextMeasurer, LaidOut, TextBackend};
 use compose_foundation::layout::*;
 use compose_foundation::*;
 use compose_runtime::{mutable_state_of, remember};
-use compose_ui::{Density, IntSize, Offset, ParagraphMetrics, PointerEvent, Rect, UiHost, UnitExt};
+use compose_ui::{
+    Density, IntSize, Offset, PointerEvent, Rect, UnitExt,
+    platform::{ParagraphMetrics, UiHost},
+};
 
 // ---- A backend tracking the live paragraphs --------------------------------------------------
 

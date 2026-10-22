@@ -10,7 +10,9 @@ use compose_foundation::layout::*;
 use compose_material3::*;
 use compose_runtime::{composable, remember_coroutine_scope};
 use compose_test::*;
-use compose_ui::{DrawOp, IntSize, LayoutDirection, Modifier, Offset, PointerEvent, UnitExt};
+use compose_ui::{
+    IntSize, LayoutDirection, Modifier, Offset, PointerEvent, UnitExt, platform::DrawOp,
+};
 
 #[composable]
 fn Sheet() {

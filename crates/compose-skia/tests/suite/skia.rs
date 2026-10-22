@@ -3,8 +3,8 @@
 use compose::material3::light_color_scheme;
 use compose::test::*;
 use compose::ui::{
-    Color, Constraints, Density, IntSize, Offset, Renderer, TextLayoutOptions, TextMeasurer,
-    TextStyle, UiHost,
+    Color, Constraints, Density, IntSize, Offset, TextStyle,
+    platform::{Renderer, TextLayoutOptions, TextMeasurer, UiHost},
 };
 use compose_skia::{RasterRenderer, SkiaTextMeasurer};
 
@@ -86,12 +86,12 @@ fn images_decode_and_draw_with_skia() {
     use compose::ui::{Modifier, UnitExt};
     // A PNG of a red square on white, encoded by the renderer.
     let mut source = RasterRenderer::new(8, 8);
-    let mut list = compose::ui::DisplayList::default();
-    list.push(compose::ui::DrawOp::DrawRect(
+    let mut list = compose::ui::platform::DisplayList::default();
+    list.push(compose::ui::platform::DrawOp::DrawRect(
         compose::ui::Rect::new(0.0, 0.0, 4.0, 8.0),
         compose::ui::Paint::fill(Color::RED),
     ));
-    source.render(&list, Color::WHITE, 1.0, &compose::ui::FixedTextMeasurer::default());
+    source.render(&list, Color::WHITE, 1.0, &compose::ui::platform::FixedTextMeasurer::default());
     let png = source.png();
     let image = compose_skia::decode_image(&png).expect("a PNG decodes");
     assert_eq!((image.width(), image.height()), (8, 8));

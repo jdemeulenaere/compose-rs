@@ -25,8 +25,9 @@ use compose_runtime::{
 use compose_ui::{
     Alignment, Constraints, Dp, EventContext, HorizontalAlignment, IntSize, Layout, Measurable,
     MeasurePolicy, MeasureResult, MeasureScope, Modifier, ModifierNode, ModifierNodeElement,
-    NodeId, PaddingValues, Placeable, PointerEvent, PointerEventPass, PointerInputModifierNode,
+    PaddingValues, Placeable, PointerEvent, PointerEventPass, PointerInputModifierNode,
     PrefetchRequest, PrefetchRequestScope, PrefetchScheduler, Rect, VerticalAlignment,
+    platform::NodeId,
 };
 
 use crate::layout::Arrangement;
@@ -903,7 +904,7 @@ fn LazyList(
     let items = ItemsRef(items);
     // Until the list is measured, its items' likely constraints: those around it, unbounded
     // along the list.
-    let fallback = compose_ui::LOCAL_CONSTRAINTS_HINT.current().map(|around| {
+    let fallback = compose_ui::platform::LOCAL_CONSTRAINTS_HINT.current().map(|around| {
         let around = around.loosen();
         if vertical {
             Constraints::new(0, around.max_width, 0, Constraints::INFINITY)
@@ -950,7 +951,7 @@ fn LazyItems(state: LazyListState, items: ItemsRef, fallback: Option<Constraints
     let hint = inner.item_constraints.get().or(fallback);
     drop(inner);
     compose_runtime::CompositionLocalProvider(
-        compose_ui::LOCAL_CONSTRAINTS_HINT.provides(hint),
+        compose_ui::platform::LOCAL_CONSTRAINTS_HINT.provides(hint),
         || {
             for &index in &indices {
                 let item_key = items.0.key(index);

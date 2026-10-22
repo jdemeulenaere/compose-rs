@@ -3,6 +3,7 @@
 
 use std::cell::RefCell;
 
+use compose_runtime::platform::*;
 use compose_runtime::*;
 
 // ---- Test support --------------------------------------------------------------------------

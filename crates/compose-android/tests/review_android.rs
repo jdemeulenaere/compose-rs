@@ -10,7 +10,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use compose_android::serialize::{GroupCache, Resources, Writer, tag, write_display_list};
 use compose_android::text::{AndroidTextMeasurer, LaidOut, TextBackend};
-use compose_runtime::executor;
+use compose_runtime::platform;
+use compose_ui::platform::*;
 use compose_ui::*;
 
 // ---- Text: the request `TextMeasurer.kt` decodes ---------------------------------------------
@@ -195,7 +196,7 @@ fn a_timeout_started_by_a_touch_gets_a_tick() {
     let requested = frames.clone();
     host.set_frame_waker(move || requested.set(requested.get() + 1));
     static WAKES: AtomicUsize = AtomicUsize::new(0);
-    executor::set_wake_handler(|| {
+    platform::set_wake_handler(|| {
         WAKES.fetch_add(1, Ordering::SeqCst);
     });
     let long_pressed = Rc::new(Cell::new(false));
@@ -222,14 +223,14 @@ fn a_timeout_started_by_a_touch_gets_a_tick() {
     let at = Offset::new(10.0, 10.0);
     host.send_pointer(PointerEvent::press(at).with_pointer(PointerId(1), PointerType::Touch));
     host.send_pointer(PointerEvent::release(at).with_pointer(PointerId(1), PointerType::Touch));
-    executor::run_ready();
+    platform::run_ready();
     host.frame();
-    assert!(executor::next_timer().is_none(), "no timer left after the tap");
+    assert!(platform::next_timer().is_none(), "no timer left after the tap");
     frames.set(0);
     WAKES.store(0, Ordering::SeqCst);
     // A second press: the handler (already running) starts its long-press timeout.
     host.send_pointer(PointerEvent::press(at).with_pointer(PointerId(1), PointerType::Touch));
-    assert!(executor::next_timer().is_some(), "the long-press timeout is pending");
+    assert!(platform::next_timer().is_some(), "the long-press timeout is pending");
     assert!(
         frames.get() > 0 || WAKES.load(Ordering::SeqCst) > 0,
         "a timer started by a touch, with no frame asked for and no wake: Android never ticks \

@@ -478,7 +478,7 @@ impl PointerInputModifierNode for SelectionContainerNode {
                     context.requests.selection.push(SelectionRequest::Clear { container });
                     return;
                 }
-                let now = compose_runtime::executor::now_nanos();
+                let now = compose_runtime::platform::now_nanos();
                 let clicks = match self.last_press {
                     Some((at, where_, count))
                         if now.saturating_sub(at) <= MULTI_CLICK_NANOS

@@ -7,7 +7,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use compose_foundation::*;
-use compose_runtime::executor;
+use compose_runtime::platform;
 use compose_test::*;
 use compose_ui::{IntSize, Offset, PointerEvent, PointerId, PointerType, UnitExt};
 
@@ -17,7 +17,7 @@ fn touch(event: PointerEvent) -> PointerEvent {
 
 /// A quick upward swipe: 300 px in 60 ms (5,000 px/s), every 10 ms, at their times.
 fn swipe_up(ui: &mut ComposeTestRule, x: f32) {
-    let start = executor::now_nanos();
+    let start = platform::now_nanos();
     ui.host().send_pointer(touch(PointerEvent::press(Offset::new(x, 400.0))).at_time(start));
     for step in 1..=6u64 {
         let at = start + step * 10_000_000;

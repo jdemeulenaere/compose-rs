@@ -164,7 +164,9 @@ fn a_brush_paints_a_gradient_in_the_drawings_coordinates() {
     );
     // A renderer without shaders paints the average.
     let fallback = ui.host().display_list().ops.iter().find_map(|op| match op {
-        compose_ui::DrawOp::DrawRect(_, paint) if paint.shader.is_some() => Some(paint.color),
+        compose_ui::platform::DrawOp::DrawRect(_, paint) if paint.shader.is_some() => {
+            Some(paint.color)
+        }
         _ => None,
     });
     assert_eq!(fallback, Some(Color::from_argb(0xFF80_0080)));
@@ -202,7 +204,7 @@ fn gradients_in_repaint_boundaries_keep_their_shaders_when_spliced() {
             .ops
             .iter()
             .filter_map(|op| match op {
-                compose_ui::DrawOp::DrawRect(_, paint) => paint.shader,
+                compose_ui::platform::DrawOp::DrawRect(_, paint) => paint.shader,
                 _ => None,
             })
             .map(|index| list.shaders[index.0 as usize].gradient().colors[0])

@@ -8,6 +8,7 @@ use crate::text::ParagraphHandle;
 use crate::unit::{Offset, Rect};
 
 #[derive(Clone, PartialEq, Debug)]
+#[non_exhaustive]
 pub enum DrawOp {
     Save,
     Restore,

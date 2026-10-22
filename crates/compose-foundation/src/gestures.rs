@@ -7,8 +7,8 @@ use std::rc::Rc;
 use compose_runtime::{ComposeArg, composable};
 use compose_ui::{
     Axis, EventContext, IntSize, Modifier, ModifierNode, ModifierNodeElement, Offset, PointerEvent,
-    PointerEventPass, PointerEventType, PointerInputDriver, PointerInputModifierNode,
-    PointerInputScope,
+    PointerEventPass, PointerEventType, PointerInputModifierNode, PointerInputScope,
+    platform::PointerInputDriver,
 };
 
 /// An axis, as Compose's `Orientation`.
@@ -204,7 +204,7 @@ impl Drop for StopOnDrop {
     fn drop(&mut self) {
         if self.armed {
             let stopped = self.callbacks.borrow().on_drag_stopped.clone();
-            compose_ui::pointer_input::run_soon(move || stopped(0.0));
+            compose_ui::platform::run_soon(move || stopped(0.0));
         }
     }
 }

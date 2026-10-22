@@ -4,6 +4,7 @@
 #![allow(non_snake_case)]
 
 use compose::runtime::*;
+use compose::runtime::platform::*;
 use widgets::*;
 
 #[composable]

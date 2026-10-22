@@ -10,8 +10,10 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use compose_runtime::{
-    Applier, Callback, ComposeArg, Composition, NodeRef, OwnedState, SideEffect, composable,
-    current, key_of, mutable_state_of, remember,
+    Callback, ComposeArg, Composition, OwnedState, SideEffect, composable, key_of,
+    mutable_state_of,
+    platform::{Applier, NodeRef, current},
+    remember,
 };
 use compose_ui::{Color, LayoutDirection};
 

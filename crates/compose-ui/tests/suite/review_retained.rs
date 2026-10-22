@@ -9,6 +9,7 @@ use std::rc::Rc;
 use crate::support::*;
 
 use compose_runtime::*;
+use compose_ui::platform::*;
 use compose_ui::*;
 
 /// A display list's dump, without its paragraph handles (a fresh measurer numbers them anew).

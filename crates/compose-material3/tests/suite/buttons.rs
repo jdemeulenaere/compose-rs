@@ -11,7 +11,8 @@ use compose_material3::*;
 use compose_runtime::*;
 use compose_test::*;
 use compose_ui::{
-    Color, DrawOp, IntSize, Modifier, MutableInteractionSource, Offset, PointerEvent, Role, UnitExt,
+    Color, IntSize, Modifier, MutableInteractionSource, Offset, PointerEvent, Role, UnitExt,
+    platform::DrawOp,
 };
 
 fn bounds(ui: &mut ComposeTestRule, tag: &str) -> compose_ui::Rect {

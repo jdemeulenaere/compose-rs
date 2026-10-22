@@ -12,7 +12,7 @@ use std::time::Duration;
 use compose_foundation::*;
 use compose_runtime::*;
 use compose_test::*;
-use compose_ui::UiHost;
+use compose_ui::platform::UiHost;
 
 thread_local! {
     static LOG: RefCell<Vec<u64>> = const { RefCell::new(Vec::new()) };

@@ -5,7 +5,7 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use compose_runtime::{Composition, executor};
+use compose_runtime::Composition;
 
 use crate::display_list::DisplayList;
 use crate::input::{Action, KeyEvent, PointerEvent};
@@ -51,13 +51,13 @@ pub struct UiHost {
     /// Where `remember_saveable` registers (`LOCAL_SAVEABLE_STATE_REGISTRY`).
     saveable_registry: compose_runtime::SaveableStateRegistry,
     /// The platform's configuration (`LOCAL_CONFIGURATION`).
-    configuration: compose_runtime::OwnedState<crate::platform::Configuration>,
+    configuration: compose_runtime::OwnedState<crate::configuration::Configuration>,
     /// The window's insets (`LOCAL_PLATFORM_WINDOW_INSETS`, and read while measuring).
-    window_insets: compose_runtime::OwnedState<crate::platform::PlatformWindowInsets>,
+    window_insets: compose_runtime::OwnedState<crate::configuration::PlatformWindowInsets>,
     /// The platform's properties and its event listener (`LOCAL_HOST_PROPS`,
     /// `LOCAL_HOST_EVENTS`).
-    props: crate::platform::HostProps,
-    events: crate::platform::HostEvents,
+    props: crate::configuration::HostProps,
+    events: crate::configuration::HostEvents,
 }
 
 /// The content, skipped when the root recomposes for a new density: only what reads
@@ -111,10 +111,11 @@ impl UiHost {
             *tree.focus_requests.wake.borrow_mut() = Some(Rc::new(move || focus_wake()));
         });
         // Writes to state read while measuring or drawing ask for a frame, as composition's do.
-        let observer = compose_runtime::ReadObserver::new(move || request());
+        let observer = compose_runtime::platform::ReadObserver::new(move || request());
         composition.with_applier(|tree: &mut UiTree| tree.set_read_observer(observer));
-        let window_insets =
-            compose_runtime::mutable_state_of(crate::platform::PlatformWindowInsets::default());
+        let window_insets = compose_runtime::mutable_state_of(
+            crate::configuration::PlatformWindowInsets::default(),
+        );
         let insets = window_insets.handle();
         composition.with_applier(|tree: &mut UiTree| tree.set_window_insets_state(insets));
         UiHost {
@@ -133,11 +134,11 @@ impl UiHost {
             back_dispatcher: crate::back::OnBackPressedDispatcher::new(),
             saveable_registry: compose_runtime::SaveableStateRegistry::new(None),
             configuration: compose_runtime::mutable_state_of(
-                crate::platform::Configuration::from_window(size, density, false),
+                crate::configuration::Configuration::from_window(size, density, false),
             ),
             window_insets,
-            props: crate::platform::HostProps::default(),
-            events: crate::platform::HostEvents::default(),
+            props: crate::configuration::HostProps::default(),
+            events: crate::configuration::HostEvents::default(),
         }
     }
 
@@ -228,22 +229,22 @@ impl UiHost {
 
     /// The platform's configuration, which content reads as `LOCAL_CONFIGURATION` (on desktop,
     /// the window's size in dp and the system's dark mode).
-    pub fn set_configuration(&mut self, configuration: crate::platform::Configuration) {
+    pub fn set_configuration(&mut self, configuration: crate::configuration::Configuration) {
         self.configuration.set(configuration);
     }
 
-    pub fn configuration(&self) -> crate::platform::Configuration {
+    pub fn configuration(&self) -> crate::configuration::Configuration {
         self.configuration.handle().get()
     }
 
     /// The window's insets (system bars, the keyboard, a cutout), which the insets paddings and
     /// `LOCAL_PLATFORM_WINDOW_INSETS` read.
-    pub fn set_window_insets(&mut self, insets: crate::platform::PlatformWindowInsets) {
+    pub fn set_window_insets(&mut self, insets: crate::configuration::PlatformWindowInsets) {
         self.window_insets.set(insets);
     }
 
     /// The properties the platform passes to the content (`LOCAL_HOST_PROPS`).
-    pub fn props(&self) -> &crate::platform::HostProps {
+    pub fn props(&self) -> &crate::configuration::HostProps {
         &self.props
     }
 
@@ -288,7 +289,7 @@ impl UiHost {
 
     /// Whether a frame would do anything.
     pub fn needs_frame(&self) -> bool {
-        self.has_pending_work() || executor::has_frame_awaiters()
+        self.has_pending_work() || compose_runtime::platform::has_frame_awaiters()
     }
 
     /// Whether a frame would do anything besides resuming the tasks waiting for one: state
@@ -298,7 +299,7 @@ impl UiHost {
             || self.pending_content.borrow().is_some()
             || self.composition.has_invalidations()
             || self.with_tree(|tree| tree.needs_draw)
-            || executor::has_ready_tasks()
+            || compose_runtime::platform::has_ready_tasks()
             || self.with_tree(|tree| !tree.focus_requests.pending.borrow().is_empty())
     }
 
@@ -310,14 +311,14 @@ impl UiHost {
         // measures and draws: they ask for no other frame.
         self.framing.set(true);
         let tasks = crate::trace::section(c"compose-rs: tasks");
-        executor::fire_timers();
-        executor::run_ready();
+        compose_runtime::platform::fire_timers();
+        compose_runtime::platform::run_ready();
         self.handle_focus_requests();
-        executor::dispatch_frame();
+        compose_runtime::platform::dispatch_frame();
         drop(tasks);
         let compose = crate::trace::section(c"compose-rs: recompose");
         self.frame_requested.set(false);
-        let bodies = compose_runtime::bodies_run();
+        let bodies = compose_runtime::platform::bodies_run();
         let content = self.pending_content.borrow_mut().take();
         let composed = content.is_some();
         if let Some(content) = content {
@@ -355,11 +356,11 @@ impl UiHost {
                                         )),
                                         move || {
                                             compose_runtime::CompositionLocalProvider(
-                                                crate::platform::LOCAL_CONFIGURATION
+                                                crate::configuration::LOCAL_CONFIGURATION
                                                     .provides(configuration.get()),
                                                 move || {
                                                     compose_runtime::CompositionLocalProvider(
-                                                        crate::platform::LOCAL_PLATFORM_WINDOW_INSETS
+                                                        crate::configuration::LOCAL_PLATFORM_WINDOW_INSETS
                                                             .provides(insets.get()),
                                                         move || Content(content),
                                                     )
@@ -416,7 +417,7 @@ impl UiHost {
         // What composition queued (a focus lost, listeners attached), now that the tree is free.
         Self::run(actions);
         // `LaunchedEffect`s started by the pass take their first step.
-        executor::run_ready();
+        compose_runtime::platform::run_ready();
         // What the pass and its effects wrote needs the next frame.
         self.framing.set(false);
         if self.frame_requested.get() {
@@ -426,7 +427,7 @@ impl UiHost {
             recomposed,
             measured,
             drew,
-            bodies_run: compose_runtime::bodies_run() - bodies,
+            bodies_run: compose_runtime::platform::bodies_run() - bodies,
         }
     }
 
@@ -486,7 +487,7 @@ impl UiHost {
         // What composition queued (listeners attached), and the effects it started.
         let actions = self.with_tree(|tree| tree.take_pending_actions());
         Self::run(actions);
-        executor::run_ready();
+        compose_runtime::platform::run_ready();
         self.wake_if_dirty();
         more
     }
@@ -525,7 +526,7 @@ impl UiHost {
     /// Dispatches a pointer event (its position in the root), then runs the handlers' actions.
     pub fn send_pointer(&mut self, mut event: PointerEvent) {
         if event.time_nanos == 0 {
-            event.time_nanos = executor::now_nanos();
+            event.time_nanos = compose_runtime::platform::now_nanos();
         }
         let actions = self.with_tree(|tree| tree.dispatch_pointer(event));
         Self::run(actions);
@@ -659,8 +660,8 @@ struct HostLocals {
     scheduler: crate::prefetch::PrefetchScheduler,
     back_dispatcher: crate::back::OnBackPressedDispatcher,
     saveable_registry: compose_runtime::SaveableStateRegistry,
-    props: crate::platform::HostProps,
-    events: crate::platform::HostEvents,
+    props: crate::configuration::HostProps,
+    events: crate::configuration::HostEvents,
 }
 
 impl HostLocals {
@@ -675,12 +676,16 @@ impl HostLocals {
                 let registry = compose_runtime::LOCAL_SAVEABLE_STATE_REGISTRY
                     .provides(Some(self.saveable_registry.clone()));
                 Provide(registry, || {
-                    Provide(crate::platform::LOCAL_HOST_PROPS.provides(self.props.clone()), || {
-                        Provide(
-                            crate::platform::LOCAL_HOST_EVENTS.provides(self.events.clone()),
-                            content,
-                        )
-                    })
+                    Provide(
+                        crate::configuration::LOCAL_HOST_PROPS.provides(self.props.clone()),
+                        || {
+                            Provide(
+                                crate::configuration::LOCAL_HOST_EVENTS
+                                    .provides(self.events.clone()),
+                                content,
+                            )
+                        },
+                    )
                 })
             })
         })

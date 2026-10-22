@@ -2,7 +2,8 @@
 //! and input method commits, focus.
 
 use compose_ui::{
-    Key, KeyEvent, KeyEventType, KeyModifiers, Offset, PointerEvent, PointerId, PointerType, UiHost,
+    Key, KeyEvent, KeyEventType, KeyModifiers, Offset, PointerEvent, PointerId, PointerType,
+    platform::UiHost,
 };
 use winit::event::{
     ElementState, Ime, MouseButton, MouseScrollDelta, Touch, TouchPhase, WindowEvent,

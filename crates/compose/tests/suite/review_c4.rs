@@ -8,6 +8,7 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
+use compose::runtime::platform::*;
 use compose::runtime::*;
 
 thread_local! {

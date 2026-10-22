@@ -11,7 +11,7 @@ mod input;
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 
-use compose_ui::{Density, IntSize, Modifier, UiHost, UnitExt};
+use compose_ui::{Density, IntSize, Modifier, UnitExt, platform::UiHost};
 use winit::dpi::PhysicalPosition;
 use winit::event::{DeviceId, ElementState, MouseButton, WindowEvent};
 
@@ -78,7 +78,7 @@ fn focused_field(initial: &'static str, width: i32) -> UiHost {
     let mut host = UiHost::new(
         IntSize::new(300, 100),
         Density::default(),
-        Box::new(compose_ui::FixedTextMeasurer::new()),
+        Box::new(compose_ui::platform::FixedTextMeasurer::new()),
     );
     host.set_content(move || {
         let text =

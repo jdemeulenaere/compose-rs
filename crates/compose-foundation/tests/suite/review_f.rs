@@ -10,7 +10,7 @@ use compose_foundation::layout::*;
 use compose_foundation::*;
 use compose_runtime::*;
 use compose_test::*;
-use compose_ui::{IntSize, Key, KeyEvent, UiHost, UnitExt};
+use compose_ui::{IntSize, Key, KeyEvent, UnitExt, platform::UiHost};
 
 /// What compose-desktop does for a key that also types text (input.rs): the key down goes to
 /// the focused node and its ancestors, then the key's text is committed (since the fix,
@@ -156,8 +156,8 @@ fn a_text_field_in_a_clickable_row_is_a_node_of_its_own() {
 
 /// The bounds of every drawing operation of the last frame, in the root, with the clip in force
 /// (translations followed, clips intersected): what would reach the screen.
-fn painted(list: &compose_ui::DisplayList) -> Vec<(compose_ui::Rect, compose_ui::Rect)> {
-    use compose_ui::{DrawOp, Rect};
+fn painted(list: &compose_ui::platform::DisplayList) -> Vec<(compose_ui::Rect, compose_ui::Rect)> {
+    use compose_ui::{Rect, platform::DrawOp};
     let everything = Rect::new(-1e9, -1e9, 1e9, 1e9);
     let (mut x, mut y, mut clip) = (0.0f32, 0.0f32, everything);
     let mut saved = Vec::new();
@@ -198,6 +198,7 @@ fn painted(list: &compose_ui::DisplayList) -> Vec<(compose_ui::Rect, compose_ui:
             | DrawOp::DrawPath { .. }
             | DrawOp::DrawShadow { .. }
             | DrawOp::DrawArc { .. } => {}
+            _ => {}
         }
     }
     out

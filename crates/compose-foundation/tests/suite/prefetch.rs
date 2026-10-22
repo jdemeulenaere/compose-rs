@@ -243,41 +243,44 @@ thread_local! {
 }
 
 /// The fixed-advance measurer, counting the paragraphs it lays out.
-struct CountingMeasurer(compose_ui::FixedTextMeasurer);
+struct CountingMeasurer(compose_ui::platform::FixedTextMeasurer);
 
-impl compose_ui::TextMeasurer for CountingMeasurer {
+impl compose_ui::platform::TextMeasurer for CountingMeasurer {
     fn layout(
         &mut self,
         text: &str,
         style: &compose_ui::TextStyle,
-        options: compose_ui::TextLayoutOptions,
+        options: compose_ui::platform::TextLayoutOptions,
         constraints: compose_ui::Constraints,
         density: &compose_ui::Density,
-    ) -> compose_ui::ParagraphHandle {
+    ) -> compose_ui::platform::ParagraphHandle {
         TEXT_LAYOUTS.with(|layouts| layouts.set(layouts.get() + 1));
         self.0.layout(text, style, options, constraints, density)
     }
-    fn metrics(&self, paragraph: compose_ui::ParagraphHandle) -> compose_ui::ParagraphMetrics {
+    fn metrics(
+        &self,
+        paragraph: compose_ui::platform::ParagraphHandle,
+    ) -> compose_ui::platform::ParagraphMetrics {
         self.0.metrics(paragraph)
     }
     fn hit_test(
         &self,
-        paragraph: compose_ui::ParagraphHandle,
+        paragraph: compose_ui::platform::ParagraphHandle,
         position: compose_ui::Offset,
-    ) -> compose_ui::TextPosition {
+    ) -> compose_ui::platform::TextPosition {
         self.0.hit_test(paragraph, position)
     }
     fn cursor_rect(
         &self,
-        paragraph: compose_ui::ParagraphHandle,
+        paragraph: compose_ui::platform::ParagraphHandle,
         offset: usize,
     ) -> compose_ui::Rect {
         self.0.cursor_rect(paragraph, offset)
     }
-    fn text(&self, paragraph: compose_ui::ParagraphHandle) -> &str {
+    fn text(&self, paragraph: compose_ui::platform::ParagraphHandle) -> &str {
         self.0.text(paragraph)
     }
-    fn release(&mut self, paragraph: compose_ui::ParagraphHandle) {
+    fn release(&mut self, paragraph: compose_ui::platform::ParagraphHandle) {
         self.0.release(paragraph)
     }
 }
@@ -295,7 +298,7 @@ fn counted_list() -> (ComposeTestRule, Owned<LazyListState>) {
     let ui = compose_test_with(
         IntSize::new(200, 200),
         compose_ui::Density::default(),
-        Box::new(CountingMeasurer(compose_ui::FixedTextMeasurer::new())),
+        Box::new(CountingMeasurer(compose_ui::platform::FixedTextMeasurer::new())),
         move || List(given),
     );
     (ui, state)
@@ -390,11 +393,11 @@ fn PaintedList(state: LazyListState) {
 }
 
 /// Each drawn row's group (its lazy item's), by row: its key and version.
-fn row_groups(list: &compose_ui::DisplayList) -> HashMap<usize, (u64, u64)> {
+fn row_groups(list: &compose_ui::platform::DisplayList) -> HashMap<usize, (u64, u64)> {
     let mut rows = HashMap::new();
     for group in &list.groups {
         for op in &list.ops[group.start..group.end] {
-            if let compose_ui::DrawOp::DrawRect(_, paint) = op {
+            if let compose_ui::platform::DrawOp::DrawRect(_, paint) = op {
                 let index = (paint.color.argb() & 0x00FF_FFFF) as usize;
                 let first = rows.insert(index, (group.key, group.version)).is_none();
                 assert!(first, "row {index} drawn once");
@@ -405,7 +408,7 @@ fn row_groups(list: &compose_ui::DisplayList) -> HashMap<usize, (u64, u64)> {
 }
 
 /// A display list's dump, without its paragraph handles (a fresh measurer numbers them anew).
-fn dump_without_paragraphs(list: &compose_ui::DisplayList) -> String {
+fn dump_without_paragraphs(list: &compose_ui::platform::DisplayList) -> String {
     list.dump()
         .lines()
         .map(|line| match line.find("paragraph ") {

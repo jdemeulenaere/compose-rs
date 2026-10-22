@@ -11,7 +11,10 @@ mod accessibility;
 
 use compose_foundation::layout::*;
 use compose_foundation::*;
-use compose_ui::{Density, FixedTextMeasurer, IntSize, Popup, PopupProperties, UiHost, UnitExt};
+use compose_ui::{
+    Density, IntSize, Popup, PopupProperties, UnitExt,
+    platform::{FixedTextMeasurer, UiHost},
+};
 
 fn host(content: impl Fn() + 'static) -> UiHost {
     let mut host =

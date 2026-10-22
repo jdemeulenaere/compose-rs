@@ -5,6 +5,12 @@
 //! (with `graphics`, `unit` and `text`), `compose::foundation` (with `layout`) and
 //! `compose::material3` and `compose::animation` are their Compose namesakes, and, with the `test` feature, `compose::test` is
 //! `androidx.compose.ui.test`.
+//!
+//! The app-facing surface is what these modules export at their top level. Each crate also has
+//! a `platform` module (`compose::runtime::platform`, `compose::ui::platform`) with the plumbing
+//! hosts and the toolkit use: the composer, appliers, the executor's driving functions, the UI
+//! tree, display lists, text measurers. Apps don't need it, and it isn't covered by semver
+//! (D260); tests reach its counting hooks through `compose::test`.
 
 /// `androidx.compose.runtime`: composition, `remember`, state, effects, and the `#[composable]`
 /// transform.

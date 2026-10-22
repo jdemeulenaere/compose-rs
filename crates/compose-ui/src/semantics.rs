@@ -12,6 +12,7 @@ use crate::unit::{Offset, Rect};
 
 /// A node's role, as `Role`.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[non_exhaustive]
 pub enum Role {
     Button,
     Checkbox,

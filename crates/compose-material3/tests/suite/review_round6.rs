@@ -8,7 +8,7 @@ use std::time::Duration;
 use compose_material3::*;
 use compose_runtime::*;
 use compose_test::*;
-use compose_ui::{DrawOp, IntSize, Modifier};
+use compose_ui::{IntSize, Modifier, platform::DrawOp};
 
 fn indicator(ui: &mut ComposeTestRule) -> Option<(f32, f32)> {
     ui.host().display_list().ops.iter().rev().find_map(|op| match op {

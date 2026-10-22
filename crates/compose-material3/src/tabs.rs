@@ -98,7 +98,7 @@ fn tab_row(
         let density = compose_ui::LOCAL_DENSITY.current();
         LaunchedEffect(selected_tab_index, async move {
             // After the layout that placed the tabs.
-            compose_runtime::executor::with_frame_nanos(|_| ()).await;
+            compose_runtime::with_frame_nanos(|_| ()).await;
             let position = |index: usize| positions.borrow().get(index).copied();
             let Some((left, width)) = position(selected_tab_index) else { return };
             if let Some(edge) = edge_padding {
@@ -202,9 +202,9 @@ async fn scroll_with_tween(scroll: &ScrollState, target: i32) {
     if start == target {
         return;
     }
-    let began = compose_runtime::executor::with_frame_nanos(|time| time).await;
+    let began = compose_runtime::with_frame_nanos(|time| time).await;
     loop {
-        let now = compose_runtime::executor::with_frame_nanos(|time| time).await;
+        let now = compose_runtime::with_frame_nanos(|time| time).await;
         let fraction = ((now - began) as f32 / 250_000_000.0).min(1.0);
         let eased = FAST_OUT_SLOW_IN_EASING.transform(fraction);
         scroll.scroll_to(start + ((target - start) as f32 * eased).round() as i32);

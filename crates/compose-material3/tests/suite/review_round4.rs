@@ -10,7 +10,7 @@ use compose_foundation::layout::*;
 use compose_material3::*;
 use compose_runtime::*;
 use compose_test::*;
-use compose_ui::{Color, DrawOp, IntSize, Modifier, Offset};
+use compose_ui::{Color, IntSize, Modifier, Offset, platform::DrawOp};
 
 fn lines(ui: &mut ComposeTestRule) -> Vec<(Offset, Offset)> {
     ui.host()

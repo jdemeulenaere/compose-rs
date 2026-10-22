@@ -12,7 +12,10 @@ use compose_desktop::{Application, Window, WindowHandle};
 use compose_foundation::layout::*;
 use compose_foundation::*;
 use compose_runtime::mutable_state_of;
-use compose_ui::{Density, FixedTextMeasurer, IntSize, UiHost};
+use compose_ui::{
+    Density, IntSize,
+    platform::{FixedTextMeasurer, UiHost},
+};
 
 /// A headless host showing `handle`'s content, as the event loop's window does.
 fn window_host(handle: &Rc<WindowHandle>) -> UiHost {

@@ -9,7 +9,7 @@ use compose_foundation::layout::*;
 use compose_foundation::*;
 use compose_runtime::*;
 use compose_test::*;
-use compose_ui::{DrawOp, IntSize, Paint, Rect, UnitExt};
+use compose_ui::{IntSize, Paint, Rect, UnitExt, platform::DrawOp};
 
 fn fills(ui: &mut ComposeTestRule) -> Vec<Color> {
     ui.host()

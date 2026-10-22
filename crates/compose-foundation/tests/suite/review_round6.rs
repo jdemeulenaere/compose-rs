@@ -11,7 +11,7 @@ use compose_foundation::layout::*;
 use compose_foundation::*;
 use compose_runtime::*;
 use compose_test::*;
-use compose_ui::{DrawOp, IntSize, Offset, PointerEvent, Rect, UnitExt};
+use compose_ui::{IntSize, Offset, PointerEvent, Rect, UnitExt, platform::DrawOp};
 
 fn bounds(ui: &mut ComposeTestRule, tag: &str) -> Rect {
     ui.on_node_with_tag(tag).fetch_semantics_node().bounds

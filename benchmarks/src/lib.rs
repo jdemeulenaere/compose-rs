@@ -5,6 +5,7 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
+use compose_runtime::platform::*;
 use compose_runtime::*;
 
 pub type Tree = NodeTree<u64>;

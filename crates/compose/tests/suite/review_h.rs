@@ -10,7 +10,8 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Duration;
 
-use compose::runtime::executor;
+use compose::runtime::platform;
+use compose::runtime::platform::*;
 use compose::runtime::*;
 
 thread_local! {
@@ -133,10 +134,10 @@ fn a_cancelled_delay_leaves_no_timer() {
     let job = CoroutineScope::new().launch(async {
         delay(Duration::from_secs(3600)).await;
     });
-    executor::run_ready();
-    assert!(executor::next_timer().is_some(), "the task waits on its delay");
+    platform::run_ready();
+    assert!(platform::next_timer().is_some(), "the task waits on its delay");
     job.cancel();
-    assert_eq!(executor::next_timer(), None);
+    assert_eq!(platform::next_timer(), None);
 }
 
 /// Input: an animation task (`loop { with_frame_nanos(…).await }`) is cancelled between frames.
@@ -155,8 +156,8 @@ fn a_cancelled_animation_asks_for_no_frame() {
             with_frame_nanos(|_| ()).await;
         }
     });
-    executor::run_ready();
-    assert!(executor::has_frame_awaiters(), "the task waits for a frame");
+    platform::run_ready();
+    assert!(platform::has_frame_awaiters(), "the task waits for a frame");
     job.cancel();
-    assert!(!executor::has_frame_awaiters());
+    assert!(!platform::has_frame_awaiters());
 }

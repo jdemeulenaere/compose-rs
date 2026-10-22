@@ -202,7 +202,7 @@ struct Drag {
 
 /// When an event happened (its time, else now), for velocities.
 fn event_time(event: &PointerEvent) -> u64 {
-    if event.time_nanos != 0 { event.time_nanos } else { compose_runtime::executor::now_nanos() }
+    if event.time_nanos != 0 { event.time_nanos } else { compose_runtime::platform::now_nanos() }
 }
 
 /// The fastest a fling starts, as Android's `ViewConfiguration.getScaledMaximumFlingVelocity`

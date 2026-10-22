@@ -7,6 +7,7 @@ use std::cell::{Cell, RefCell};
 use std::fmt;
 use std::rc::Rc;
 
+use compose::runtime::platform::*;
 use compose::runtime::*;
 
 // ---- Test support --------------------------------------------------------------------------

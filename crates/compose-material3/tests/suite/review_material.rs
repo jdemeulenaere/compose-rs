@@ -29,7 +29,8 @@ use compose_material3::*;
 use compose_runtime::*;
 use compose_test::*;
 use compose_ui::{
-    Color, DrawOp, IntSize, Key, KeyEvent, Modifier, Offset, PaddingValues, PointerEvent, UnitExt,
+    Color, IntSize, Key, KeyEvent, Modifier, Offset, PaddingValues, PointerEvent, UnitExt,
+    platform::DrawOp,
 };
 
 fn bounds(ui: &mut ComposeTestRule, tag: &str) -> compose_ui::Rect {

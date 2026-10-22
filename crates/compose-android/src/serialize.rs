@@ -20,8 +20,9 @@ use std::collections::HashMap;
 use std::sync::{Arc, Weak};
 
 use compose_ui::{
-    Color, DisplayList, DrawGroup, DrawOp, ImageBitmap, Offset, Outline, Paint, PaintStyle, Path,
-    PathCommand, PathFillType, Rect, Shader, StrokeCap, TileMode,
+    Color, ImageBitmap, Offset, Outline, Paint, PaintStyle, Path, PathCommand, PathFillType, Rect,
+    Shader, StrokeCap, TileMode,
+    platform::{DisplayList, DrawGroup, DrawOp},
 };
 
 /// The operations' tags, as `Replayer.kt` reads them.
@@ -547,6 +548,8 @@ fn foldable_layer(ops: &[DrawOp], start: usize) -> Option<usize> {
             DrawOp::DrawParagraph(..) | DrawOp::DrawImage { .. } | DrawOp::DrawShadow { .. } => {
                 return None;
             }
+            // An op added later: not folded.
+            _ => return None,
         }
     }
     None
@@ -881,6 +884,8 @@ fn write_op(
             out.u32(id);
             out.offset(*offset);
         }
+        // An op added later: not drawn.
+        _ => {}
     }
 }
 
@@ -939,7 +944,7 @@ mod tests {
         }
         // The outer group holds ops 0..3, the inner 1..2; an empty one is left out. They come
         // inner first, as drawing closes them.
-        list.groups.push(compose_ui::DrawGroup {
+        list.groups.push(compose_ui::platform::DrawGroup {
             key: 2,
             version: 7,
             start: 1,
@@ -948,7 +953,7 @@ mod tests {
             layer_end: 2,
             ..Default::default()
         });
-        list.groups.push(compose_ui::DrawGroup {
+        list.groups.push(compose_ui::platform::DrawGroup {
             key: 3,
             start: 2,
             end: 2,
@@ -956,7 +961,7 @@ mod tests {
             layer_end: 2,
             ..Default::default()
         });
-        list.groups.push(compose_ui::DrawGroup {
+        list.groups.push(compose_ui::platform::DrawGroup {
             key: 1 << 40 | 1,
             start: 0,
             end: 3,
@@ -986,7 +991,7 @@ mod tests {
     fn of_two_groups_with_the_same_range_the_outer_opens_first() {
         let mut list = DisplayList::default();
         list.push(DrawOp::DrawRect(Rect::new(0.0, 0.0, 1.0, 1.0), Paint::fill(Color::BLACK)));
-        list.groups.push(compose_ui::DrawGroup {
+        list.groups.push(compose_ui::platform::DrawGroup {
             key: 1,
             start: 0,
             end: 1,
@@ -994,7 +999,7 @@ mod tests {
             layer_end: 1,
             ..Default::default()
         });
-        list.groups.push(compose_ui::DrawGroup {
+        list.groups.push(compose_ui::platform::DrawGroup {
             key: 2,
             start: 0,
             end: 1,
@@ -1015,7 +1020,7 @@ mod tests {
         list.push(DrawOp::SaveLayerAlpha(0.5));
         list.push(DrawOp::DrawRect(Rect::new(0.0, 0.0, 4.0, 4.0), Paint::fill(Color::BLACK)));
         list.push(DrawOp::Restore);
-        list.groups.push(compose_ui::DrawGroup {
+        list.groups.push(compose_ui::platform::DrawGroup {
             key: 7,
             start: 0,
             end: 3,
@@ -1210,7 +1215,7 @@ mod tests {
         list.push(DrawOp::ClipPath { path: path.clone(), offset: Offset::new(3.0, 4.0) });
         list.push(DrawOp::DrawRect(Rect::new(0.0, 0.0, 4.0, 4.0), Paint::fill(Color::BLACK)));
         list.push(DrawOp::Restore);
-        list.groups.push(compose_ui::DrawGroup {
+        list.groups.push(compose_ui::platform::DrawGroup {
             key: 1,
             start: 0,
             end: 4,

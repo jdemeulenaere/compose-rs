@@ -12,7 +12,7 @@ use compose_animation::*;
 use compose_foundation::layout::*;
 use compose_runtime::*;
 use compose_test::*;
-use compose_ui::{Color, DrawOp, UnitExt};
+use compose_ui::{Color, UnitExt, platform::DrawOp};
 
 /// An `updateTransition(target)` with one `animateFloat` along `tween(1000)`, its target
 /// changed from 0 to 1 and, 500 ms in, back to 0. Compose's `Transition.updateTarget` sees the

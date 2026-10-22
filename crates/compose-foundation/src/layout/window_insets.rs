@@ -8,9 +8,10 @@
 //! again, nothing recomposes), [`WindowInsets::as_padding_values`] in composition.
 
 use compose_ui::{
-    Constraints, Dp, Insets, LOCAL_DENSITY, LOCAL_LAYOUT_DIRECTION, LOCAL_PLATFORM_WINDOW_INSETS,
-    LayoutDirection, LayoutModifierNode, Measurable, MeasureResult, MeasureScope, Modifier,
-    ModifierNode, ModifierNodeElement, PaddingValues, PlatformWindowInsets,
+    Constraints, Dp, LOCAL_DENSITY, LOCAL_LAYOUT_DIRECTION, LayoutDirection, LayoutModifierNode,
+    Measurable, MeasureResult, MeasureScope, Modifier, ModifierNode, ModifierNodeElement,
+    PaddingValues,
+    platform::{Insets, LOCAL_PLATFORM_WINDOW_INSETS, PlatformWindowInsets},
 };
 
 /// Sides of the window, as Compose's `WindowInsetsSides`; combine them with `|`.

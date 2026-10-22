@@ -27,12 +27,13 @@ mod composition;
 mod derived;
 mod effects;
 mod error;
-pub mod executor;
+mod executor;
 mod hash;
 mod immutable_list;
 mod local;
 mod node_tree;
 mod observe;
+pub mod platform;
 mod remember;
 mod runtime;
 pub mod saveable;
@@ -40,14 +41,13 @@ mod scope;
 mod slot_table;
 mod state;
 
-pub use applier::{Applier, NodeRef};
 pub use background::{Background, spawn_background};
 pub use callback::{Callback, IntoCallback, IntoOptionalCallback, callback};
 pub use compose_arg::ComposeArg;
 pub use compose_macros::{ComposeArg, composable};
-pub use composer::{Composer, KeptArguments, current, current_recompose_scope};
+pub use composer::current_recompose_scope;
 pub use composition::Composition;
-pub use derived::{DerivedState, derived_state_of, derived_state_of_with, flush_derived_states};
+pub use derived::{DerivedState, derived_state_of, derived_state_of_with};
 pub use effects::{
     DisposableEffect, DisposableEffectResult, DisposableEffectScope, LaunchedEffect, SideEffect,
     UpdatedState, produce_state, remember_coroutine_scope, remember_updated_state,
@@ -57,8 +57,6 @@ pub use executor::{CoroutineScope, Job, delay, with_frame_millis, with_frame_nan
 pub use hash::{KeyHasher, hash_key, key_of};
 pub use immutable_list::ImmutableList;
 pub use local::{CompositionLocal, CompositionLocalProvider, ProvidedValue};
-pub use node_tree::NodeTree;
-pub use observe::ReadObserver;
 pub use remember::{
     Observed, Remember, RememberObserver, key, remember, remember_keyed, remember_observer,
     remember_observer_keyed,
@@ -71,85 +69,13 @@ pub use saveable::{
 pub use scope::RecomposeScope;
 pub use state::{
     MutableState, MutationPolicy, NeverEqualPolicy, ObjectHandle, Owned, OwnedState, State,
-    StructuralEqualityPolicy, live_state_count, mutable_state_list_from, mutable_state_list_of,
-    mutable_state_of, mutable_state_of_with, never_equal_policy, structural_equality_policy,
+    StructuralEqualityPolicy, mutable_state_list_from, mutable_state_list_of, mutable_state_of,
+    mutable_state_of_with, never_equal_policy, structural_equality_policy,
 };
 
-/// The number of composable bodies run on this thread so far (restart groups that didn't skip).
-/// For tests and frame statistics.
 #[doc(hidden)]
 /// Whether a composition pass is composing on this thread: state can't be written now (write
 /// from a task launched for after it instead).
 pub fn is_composing() -> bool {
     runtime::try_with_runtime(|runtime| runtime.is_composing()).unwrap_or(false)
-}
-
-pub fn bodies_run() -> u64 {
-    runtime::with_runtime(|runtime| runtime.bodies_run)
-}
-
-/// Starts (or stops) counting body runs per composable on this thread, for
-/// [`recomposition_counts`]. For tests and tools; off by default.
-pub fn track_recompositions(enabled: bool) {
-    runtime::with_runtime(|runtime| {
-        if enabled {
-            runtime.recomposition_counts.get_or_insert_with(Default::default);
-        } else {
-            runtime.recomposition_counts = None;
-        }
-    })
-}
-
-/// How many times each composable's body ran since tracking started.
-pub fn recomposition_counts() -> RecompositionCounts {
-    RecompositionCounts(runtime::with_runtime(|runtime| {
-        runtime.recomposition_counts.clone().unwrap_or_default()
-    }))
-}
-
-/// Body runs per composable, by the type name of its restart closure.
-#[derive(Clone, Debug, Default)]
-pub struct RecompositionCounts(std::collections::HashMap<&'static str, u64>);
-
-impl RecompositionCounts {
-    /// The runs since `before`.
-    pub fn since(&self, before: &RecompositionCounts) -> RecompositionCounts {
-        RecompositionCounts(
-            self.0
-                .iter()
-                .map(|(name, count)| (*name, count - before.0.get(name).copied().unwrap_or(0)))
-                .filter(|(_, count)| *count > 0)
-                .collect(),
-        )
-    }
-
-    /// The runs of composables named `name` (the function's own name, any module).
-    pub fn scopes_named(&self, name: &str) -> u64 {
-        self.0
-            .iter()
-            .filter(|(full, _)| composable_name(full) == name)
-            .map(|(_, count)| count)
-            .sum()
-    }
-
-    /// Every composable that ran, by name, sorted.
-    pub fn names(&self) -> Vec<(&'static str, u64)> {
-        let mut names: Vec<(&'static str, u64)> =
-            self.0.iter().map(|(full, count)| (composable_name(full), *count)).collect();
-        names.sort();
-        names
-    }
-}
-
-/// `TodoRow` from `app::screen::TodoRow::{{closure}}`.
-fn composable_name(full: &'static str) -> &'static str {
-    let path = full.split('<').next().unwrap_or(full);
-    let path = path.strip_suffix("::{{closure}}").unwrap_or(path);
-    path.rsplit("::").next().unwrap_or(path)
-}
-
-/// The number of live recompose scopes on this thread. For tests.
-#[doc(hidden)]
-pub fn live_scope_count() -> usize {
-    runtime::with_runtime(|runtime| runtime.scopes.live_count())
 }

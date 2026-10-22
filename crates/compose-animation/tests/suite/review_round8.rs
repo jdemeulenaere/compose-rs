@@ -11,7 +11,7 @@ use compose_animation::*;
 use compose_foundation::layout::*;
 use compose_runtime::*;
 use compose_test::*;
-use compose_ui::{Color, DrawOp, UnitExt};
+use compose_ui::{Color, UnitExt, platform::DrawOp};
 
 fn alphas(ui: &mut ComposeTestRule) -> Vec<f32> {
     ui.host()

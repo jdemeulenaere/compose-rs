@@ -2,8 +2,8 @@
 //! shaping, ICU line breaking and bidi), as Compose Desktop's (docs/07-platforms.md, "Text").
 
 use compose_ui::{
-    Constraints, Density, IntSize, Offset, ParagraphHandle, ParagraphMetrics, Rect,
-    TextLayoutOptions, TextMeasurer, TextPosition, TextStyle,
+    Constraints, Density, IntSize, Offset, Rect, TextStyle,
+    platform::{ParagraphHandle, ParagraphMetrics, TextLayoutOptions, TextMeasurer, TextPosition},
 };
 use skia_safe::textlayout::{
     FontCollection, Paragraph, ParagraphBuilder, ParagraphStyle, RectHeightStyle, RectWidthStyle,
@@ -289,6 +289,7 @@ impl SkiaTextMeasurer {
                 compose_ui::TextAlign::Justify => Align::Justify,
                 compose_ui::TextAlign::Start => Align::Start,
                 compose_ui::TextAlign::End => Align::End,
+                _ => Align::Start,
             });
         }
         // As Compose: an ellipsis without soft wrapping is one line.
@@ -367,7 +368,7 @@ fn font_px_of(style: &TextStyle, density: &Density) -> f32 {
     let font_size = if style.font_size.is_specified() {
         style.font_size
     } else {
-        compose_ui::text::DEFAULT_FONT_SIZE
+        compose_ui::platform::DEFAULT_FONT_SIZE
     };
     density.sp_to_px(font_size)
 }

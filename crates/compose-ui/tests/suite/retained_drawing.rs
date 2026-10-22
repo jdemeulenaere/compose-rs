@@ -8,6 +8,7 @@
 use crate::support::*;
 
 use compose_runtime::*;
+use compose_ui::platform::*;
 use compose_ui::*;
 
 /// The group of the node with key `key`.

@@ -6,7 +6,7 @@
 
 use compose_animation::*;
 use compose_foundation::BasicText;
-use compose_runtime::executor;
+use compose_runtime::platform;
 use compose_test::*;
 
 /// `animateFloatAsState(done / total)` with `total` 0: the target is `0f / 0f` (NaN), as a
@@ -57,15 +57,15 @@ fn a_crossfade_target_with_a_nan_field_is_one_state() {
         label: &'static str,
         value: f32,
     }
-    executor::set_manual_clock(executor::now_nanos());
-    let mut host = compose_ui::UiHost::headless(200, 200);
+    platform::set_manual_clock(platform::now_nanos());
+    let mut host = compose_ui::platform::UiHost::headless(200, 200);
     host.set_content(|| {
         Crossfade!(Reading { label: "Speed", value: f32::NAN }, |reading: Reading| {
             BasicText!("{} {}", reading.label, reading.value);
         });
     });
     for _ in 0..30 {
-        executor::advance_clock(FRAME_DURATION);
+        platform::advance_clock(FRAME_DURATION);
         host.frame();
     }
     let nodes = host.with_tree(|tree| tree.node_count());

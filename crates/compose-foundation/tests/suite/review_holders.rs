@@ -8,17 +8,19 @@ use std::time::Duration;
 use compose_foundation::layout::*;
 use compose_foundation::*;
 use compose_runtime::{
-    MutableState, SavedState, executor, mutable_state_of, remember, remember_keyed,
+    MutableState, SavedState, mutable_state_of, platform, remember, remember_keyed,
 };
 use compose_test::*;
-use compose_ui::{IntSize, Offset, PointerEvent, PointerId, PointerType, UiHost, UnitExt};
+use compose_ui::{
+    IntSize, Offset, PointerEvent, PointerId, PointerType, UnitExt, platform::UiHost,
+};
 
 fn touch(event: PointerEvent) -> PointerEvent {
     event.with_pointer(PointerId(1), PointerType::Touch)
 }
 
 fn swipe_up(ui: &mut ComposeTestRule, x: f32) {
-    let start = executor::now_nanos();
+    let start = platform::now_nanos();
     ui.host().send_pointer(touch(PointerEvent::press(Offset::new(x, 400.0))).at_time(start));
     for step in 1..=6u64 {
         let at = start + step * 10_000_000;

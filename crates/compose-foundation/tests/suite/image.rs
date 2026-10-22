@@ -6,7 +6,7 @@ use compose_foundation::layout::*;
 use compose_foundation::*;
 use compose_runtime::*;
 use compose_test::*;
-use compose_ui::{DrawOp, IntSize, Rect, UnitExt};
+use compose_ui::{IntSize, Rect, UnitExt, platform::DrawOp};
 
 fn bitmap(width: u32, height: u32) -> ImageBitmap {
     ImageBitmap::from_rgba_premultiplied(width, height, vec![255; (width * height * 4) as usize])

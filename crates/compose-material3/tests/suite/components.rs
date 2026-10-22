@@ -10,7 +10,7 @@ use compose_foundation::layout::*;
 use compose_material3::*;
 use compose_runtime::*;
 use compose_test::*;
-use compose_ui::{DrawOp, IntSize, Key, Modifier, Offset, PointerEvent, Role, UnitExt};
+use compose_ui::{IntSize, Key, Modifier, Offset, PointerEvent, Role, UnitExt, platform::DrawOp};
 
 fn bounds(ui: &mut ComposeTestRule, tag: &str) -> compose_ui::Rect {
     ui.on_node_with_tag(tag).fetch_semantics_node().bounds
@@ -352,7 +352,7 @@ fn tonal_elevation_tints_the_surface_color_and_adds_up() {
         .ops
         .iter()
         .filter_map(|op| match op {
-            compose_ui::DrawOp::DrawRect(_, paint) => Some(paint.color),
+            compose_ui::platform::DrawOp::DrawRect(_, paint) => Some(paint.color),
             _ => None,
         })
         .collect();
@@ -411,7 +411,7 @@ fn a_right_to_left_slider_runs_from_the_right() {
     assert!(
         list.ops
             .iter()
-            .any(|op| matches!(op, compose_ui::DrawOp::Transform { scale, .. } if scale.0 == -1.0)),
+            .any(|op| matches!(op, compose_ui::platform::DrawOp::Transform { scale, .. } if scale.0 == -1.0)),
         "{}",
         list.dump()
     );
@@ -419,7 +419,7 @@ fn a_right_to_left_slider_runs_from_the_right() {
 
 #[test]
 fn progress_indicators_draw_their_progress_and_animate_when_indeterminate() {
-    use compose_ui::DrawOp;
+    use compose_ui::platform::DrawOp;
     let mut ui = ComposeTestRule::with_manual_clock(|| {
         MaterialTheme!({
             Column!({
@@ -540,7 +540,7 @@ fn a_navigation_bar_shares_its_width_and_selects_on_click() {
 
 #[test]
 fn button_and_card_variants_have_their_colors_and_shadows() {
-    use compose_ui::DrawOp;
+    use compose_ui::platform::DrawOp;
     thread_local! { static SCHEME: std::cell::Cell<Option<ColorScheme>> = const { std::cell::Cell::new(None) }; }
     let mut ui = compose_test(|| {
         MaterialTheme!({
@@ -574,7 +574,7 @@ fn button_and_card_variants_have_their_colors_and_shadows() {
 
 #[test]
 fn a_text_fields_label_rests_in_it_then_floats_when_focused() {
-    use compose_ui::DrawOp;
+    use compose_ui::platform::DrawOp;
     let mut ui = ComposeTestRule::with_manual_clock(|| {
         MaterialTheme!({
             Column!({
@@ -627,7 +627,7 @@ fn a_text_fields_label_rests_in_it_then_floats_when_focused() {
 
 #[test]
 fn a_tab_row_shares_its_width_and_slides_its_indicator() {
-    use compose_ui::DrawOp;
+    use compose_ui::platform::DrawOp;
     let selected = mutable_state_of(0usize);
     let handle = selected.handle();
     let mut ui = ComposeTestRule::with_manual_clock(move || {

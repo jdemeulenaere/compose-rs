@@ -22,6 +22,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::rc::Rc;
 
+use compose::runtime::platform::*;
 use compose::runtime::*;
 use compose::ui::SharedString;
 

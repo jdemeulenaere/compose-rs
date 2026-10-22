@@ -8,6 +8,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::process::Command;
 use std::rc::{Rc, Weak};
 
+use compose::runtime::platform::*;
 use compose::runtime::*;
 
 thread_local! {

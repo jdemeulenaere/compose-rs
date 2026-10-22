@@ -18,7 +18,8 @@ use compose_foundation::*;
 use compose_runtime::{MutableState, mutable_state_of, remember};
 use compose_ui::{
     Density, ImeAction, ImeOptions, IntSize, KeyboardType, LOCAL_SOFTWARE_KEYBOARD_CONTROLLER,
-    Offset, ParagraphMetrics, PointerEvent, Rect, SoftwareKeyboardController, UiHost, UnitExt,
+    Offset, PointerEvent, Rect, SoftwareKeyboardController, UnitExt,
+    platform::{ParagraphMetrics, UiHost},
 };
 
 type Controller = Rc<RefCell<Option<SoftwareKeyboardController>>>;

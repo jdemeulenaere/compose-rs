@@ -18,9 +18,10 @@ use compose_ui::{
     Color, Constraints, DetachContext, DrawModifierNode, DrawScope, EventContext,
     FocusTargetModifierNode, IntSize, Key, KeyEvent, KeyEventType, KeyInputModifierNode, Layout,
     LayoutModifierNode, Measurable, MeasureResult, MeasureScope, Modifier, ModifierNode,
-    ModifierNodeElement, Offset, Paint, ParagraphHandle, PointerEvent, PointerEventPass,
-    PointerEventType, PointerInputModifierNode, Rect, SemanticsConfiguration,
-    SemanticsModifierNode, TextLayoutOptions, TextStyle, empty_measure_policy,
+    ModifierNodeElement, Offset, Paint, PointerEvent, PointerEventPass, PointerEventType,
+    PointerInputModifierNode, Rect, SemanticsConfiguration, SemanticsModifierNode, TextStyle,
+    empty_measure_policy,
+    platform::{ParagraphHandle, TextLayoutOptions},
 };
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -81,7 +82,7 @@ pub fn BasicTextField(
     });
     let inner_text_field = Callback::new(move || {
         Layout(
-            Modifier.then_element(compose_ui::Element::Custom(element.clone())),
+            compose_ui::platform::shared_custom_modifier(element.clone()),
             empty_measure_policy(),
             compose_runtime::callback(|| {}),
         );
@@ -104,7 +105,7 @@ pub fn inner_text_field_only(inner_text_field: Callback) {
     inner_text_field();
 }
 
-pub struct TextFieldElement {
+pub(crate) struct TextFieldElement {
     pub value: String,
     pub on_value_change: Callback<dyn Fn(String)>,
     pub enabled: bool,
@@ -304,7 +305,7 @@ struct Press {
     initial: std::ops::Range<usize>,
 }
 
-pub struct TextFieldNode {
+pub(crate) struct TextFieldNode {
     /// The text shown: `value`, with the edits made since the last frame.
     text: String,
     /// The application's value, as composition last gave it.
@@ -451,7 +452,7 @@ impl TextFieldNode {
     /// Records the state before an edit for undo: typing on from the last typed text joins its
     /// step.
     fn record_undo(&mut self, typing: bool) {
-        let now = compose_runtime::executor::now_nanos();
+        let now = compose_runtime::platform::now_nanos();
         let joins = typing
             && self.last_typing.is_some_and(|(at, cursor)| {
                 cursor == self.cursor
@@ -952,7 +953,7 @@ impl PointerInputModifierNode for TextFieldNode {
                 event.consume();
                 // A click ends a composition, which commits.
                 self.commit_composition(context);
-                let now = compose_runtime::executor::now_nanos();
+                let now = compose_runtime::platform::now_nanos();
                 let clicks = match self.last_tap {
                     Some((time, tapped, clicks))
                         if now.saturating_sub(time) < DOUBLE_CLICK_NANOS

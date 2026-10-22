@@ -79,6 +79,8 @@ pub fn editor_info(options: ImeOptions, masks_password: bool) -> EditorInfo {
         ImeAction::Search => IME_ACTION_SEARCH,
         ImeAction::Send => IME_ACTION_SEND,
         ImeAction::Done => IME_ACTION_DONE,
+        // An action added later: the keyboard's default.
+        _ => IME_ACTION_UNSPECIFIED,
     };
     let keyboard_type = match options.keyboard_type {
         KeyboardType::Text if masks_password => KeyboardType::Password,
@@ -97,6 +99,7 @@ pub fn editor_info(options: ImeOptions, masks_password: bool) -> EditorInfo {
         KeyboardType::Password => TYPE_CLASS_TEXT | TYPE_TEXT_VARIATION_PASSWORD,
         KeyboardType::NumberPassword => TYPE_CLASS_NUMBER | TYPE_NUMBER_VARIATION_PASSWORD,
         KeyboardType::Decimal => TYPE_CLASS_NUMBER | TYPE_NUMBER_FLAG_DECIMAL,
+        _ => TYPE_CLASS_TEXT,
     };
     if input_type & TYPE_MASK_CLASS == TYPE_CLASS_TEXT {
         if !options.single_line {
@@ -112,6 +115,7 @@ pub fn editor_info(options: ImeOptions, masks_password: bool) -> EditorInfo {
             KeyboardCapitalization::Characters => TYPE_TEXT_FLAG_CAP_CHARACTERS,
             KeyboardCapitalization::Words => TYPE_TEXT_FLAG_CAP_WORDS,
             KeyboardCapitalization::Sentences => TYPE_TEXT_FLAG_CAP_SENTENCES,
+            _ => 0,
         };
         if options.auto_correct {
             input_type |= TYPE_TEXT_FLAG_AUTO_CORRECT;
@@ -154,7 +158,7 @@ pub struct TextInputState {
 /// Takes what `ui` asks of the input method after a frame (the events before it having woken
 /// it), `last_options` being the focused field's options the last frame saw.
 pub fn take_text_input_state(
-    ui: &compose_ui::UiHost,
+    ui: &compose_ui::platform::UiHost,
     last_options: &mut Option<ImeOptions>,
 ) -> TextInputState {
     let options = if ui.text_input_area().is_some() { ui.text_input_options() } else { None };

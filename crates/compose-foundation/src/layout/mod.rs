@@ -9,7 +9,7 @@ mod window_insets;
 use std::rc::Rc;
 
 use compose_runtime::{composable, remember_keyed};
-use compose_ui::unit::round_to_int;
+use compose_ui::round_to_int;
 use compose_ui::{
     Alignment, Constraints, HorizontalAlignment, Layout, Measurable, MeasurePolicy, MeasureResult,
     MeasureScope, Modifier, ParentAlignment, Placeable, VerticalAlignment, empty_measure_policy,
@@ -304,7 +304,7 @@ pub fn BoxWithConstraints(
     content: impl Fn(BoxWithConstraintsScope) + 'static,
 ) {
     // First the constraints it'll likely get (`LOCAL_CONSTRAINTS_HINT`), then those it got.
-    let hint = compose_ui::LOCAL_CONSTRAINTS_HINT.current();
+    let hint = compose_ui::platform::LOCAL_CONSTRAINTS_HINT.current();
     let measured = compose_runtime::remember(|| {
         compose_runtime::mutable_state_of(hint.unwrap_or(compose_ui::Constraints::fixed(0, 0)))
     });
@@ -324,7 +324,7 @@ pub fn BoxWithConstraints(
         compose_runtime::callback(move || {
             let constraints = measured.get();
             compose_runtime::CompositionLocalProvider(
-                compose_ui::LOCAL_CONSTRAINTS_HINT.provides(Some(constraints.loosen())),
+                compose_ui::platform::LOCAL_CONSTRAINTS_HINT.provides(Some(constraints.loosen())),
                 || content(BoxWithConstraintsScope { constraints, density }),
             )
         }),

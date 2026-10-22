@@ -6,6 +6,7 @@
 use std::cell::{Cell, RefCell};
 use std::fmt;
 
+use compose::runtime::platform::*;
 use compose::runtime::*;
 
 // ---- Test support (as in review_macro2.rs) -------------------------------------------------

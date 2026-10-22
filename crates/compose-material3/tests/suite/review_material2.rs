@@ -9,7 +9,7 @@ use std::sync::Arc;
 use compose_material3::*;
 use compose_runtime::*;
 use compose_test::*;
-use compose_ui::{Color, DrawOp, ImageVector, Modifier, Paint, Path, Rect, UnitExt};
+use compose_ui::{Color, ImageVector, Modifier, Paint, Path, Rect, UnitExt, platform::DrawOp};
 
 thread_local! {
     static SCHEME: Cell<Option<ColorScheme>> = const { Cell::new(None) };

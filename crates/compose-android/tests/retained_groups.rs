@@ -13,6 +13,7 @@ use compose_android::serialize::{
     write_display_list,
 };
 use compose_runtime::*;
+use compose_ui::platform::*;
 use compose_ui::*;
 
 // ---- Reading the bytes back ------------------------------------------------------------------

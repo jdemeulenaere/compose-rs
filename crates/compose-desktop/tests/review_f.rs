@@ -13,7 +13,8 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 use compose_ui::{
-    Density, IntSize, Modifier, UiHost, UnitExt, emit_layout_node, empty_measure_policy,
+    Density, IntSize, Modifier, UnitExt, empty_measure_policy,
+    platform::{UiHost, emit_layout_node},
 };
 use winit::dpi::PhysicalPosition;
 use winit::event::{DeviceId, Touch, TouchPhase, WindowEvent};
@@ -25,7 +26,7 @@ fn clickable_host() -> (UiHost, Rc<Cell<u32>>) {
     let mut host = UiHost::new(
         IntSize::new(200, 200),
         Density::default(),
-        Box::new(compose_ui::FixedTextMeasurer::new()),
+        Box::new(compose_ui::platform::FixedTextMeasurer::new()),
     );
     host.set_content(move || {
         let counter = counter.clone();

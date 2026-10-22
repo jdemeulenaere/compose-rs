@@ -5,7 +5,7 @@
 use compose_foundation::layout::*;
 use compose_foundation::*;
 use compose_test::*;
-use compose_ui::{Color, DrawOp, IntSize, Outline, Rect, UnitExt};
+use compose_ui::{Color, IntSize, Outline, Rect, UnitExt, platform::DrawOp};
 
 #[test]
 fn a_shadow_is_drawn_behind_the_clipped_content() {

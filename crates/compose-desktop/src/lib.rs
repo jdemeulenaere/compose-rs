@@ -30,7 +30,10 @@ pub use application::{
 };
 use compose_skia::{RasterRenderer, SkiaTextMeasurer};
 pub use compose_ui::{Color, LayoutDirection};
-use compose_ui::{Density, IntSize, Renderer, UiHost};
+use compose_ui::{
+    Density, IntSize,
+    platform::{Renderer, UiHost},
+};
 use winit::application::ApplicationHandler;
 use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
@@ -79,7 +82,7 @@ impl Default for WindowOptions {
 /// opened.
 struct SystemClipboard {
     system: Option<arboard::Clipboard>,
-    fallback: compose_ui::MemoryClipboard,
+    fallback: compose_ui::platform::MemoryClipboard,
 }
 
 impl SystemClipboard {
@@ -129,7 +132,7 @@ struct Shown {
     /// The bridge to screen readers, which asks for the tree only while one is on.
     accessibility: accesskit_winit::Adapter,
     /// The focused node the accessibility tree last had.
-    accessibility_focus: Option<compose_ui::NodeId>,
+    accessibility_focus: Option<compose_ui::platform::NodeId>,
     /// The mouse pointer's look last set.
     pointer_icon: compose_ui::PointerIcon,
     /// The properties last applied to the winit window.
@@ -522,6 +525,7 @@ impl ApplicationHandler<UserEvent> for App {
                                 compose_ui::PointerIcon::Crosshair => {
                                     winit::window::CursorIcon::Crosshair
                                 }
+                                _ => winit::window::CursorIcon::Default,
                             });
                         }
                     }
@@ -560,8 +564,8 @@ impl ApplicationHandler<UserEvent> for App {
         }
         // Tasks whose `delay` ended, and the ones woken meanwhile, take their step; their state
         // writes ask for a frame.
-        compose_runtime::executor::fire_timers();
-        compose_runtime::executor::run_ready();
+        compose_runtime::platform::fire_timers();
+        compose_runtime::platform::run_ready();
         if application::take_exit_request() {
             self.exit(event_loop);
             return;
@@ -593,7 +597,7 @@ impl ApplicationHandler<UserEvent> for App {
             }
             if shown.host.has_pending_work() {
                 shown.window.request_redraw();
-            } else if Some(*id) == pacer && compose_runtime::executor::has_frame_awaiters() {
+            } else if Some(*id) == pacer && compose_runtime::platform::has_frame_awaiters() {
                 // An animation: its next frame a refresh interval after the last one.
                 let due = shown.last_frame + self.frame_interval;
                 if now >= due {
@@ -612,7 +616,7 @@ impl ApplicationHandler<UserEvent> for App {
                 continue;
             }
             let due = shown.last_frame + self.frame_interval;
-            let animating = compose_runtime::executor::has_frame_awaiters();
+            let animating = compose_runtime::platform::has_frame_awaiters();
             if animating && due <= now {
                 continue;
             }
@@ -624,7 +628,7 @@ impl ApplicationHandler<UserEvent> for App {
         }
         // Sleep until an event, a redraw request, the next animation frame, prefetch work's
         // next idle time or the next `delay`'s end: an idle application costs nothing.
-        let timer = compose_runtime::executor::next_timer().map(|wait| now + wait);
+        let timer = compose_runtime::platform::next_timer().map(|wait| now + wait);
         match [next_frame, prefetch, timer].into_iter().flatten().min() {
             Some(deadline) => event_loop.set_control_flow(ControlFlow::WaitUntil(deadline)),
             None => event_loop.set_control_flow(ControlFlow::Wait),
@@ -645,14 +649,14 @@ impl ApplicationHandler<UserEvent> for App {
 /// plain closure's lambdas are new at each application pass.
 pub fn application(content: impl Fn() + 'static) {
     // `decode_image_bytes` and `remember_image_resource` decode with Skia.
-    compose_ui::set_image_decoder(Arc::new(compose_skia::SkiaImageDecoder));
+    compose_ui::platform::set_image_decoder(Arc::new(compose_skia::SkiaImageDecoder));
     let event_loop =
         EventLoop::<UserEvent>::with_user_event().build().expect("compose-desktop: an event loop");
     let proxy = event_loop.create_proxy();
     // A task woken (from any thread), the application's state changed, or an exit asked for:
     // a turn of the loop (`about_to_wait`).
     let wake = std::sync::Mutex::new(proxy.clone());
-    compose_runtime::executor::set_wake_handler(move || {
+    compose_runtime::platform::set_wake_handler(move || {
         let _ = wake.lock().map(|proxy| proxy.send_event(UserEvent::Wake));
     });
     let application = Application::new(content);

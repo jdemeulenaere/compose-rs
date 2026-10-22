@@ -91,7 +91,7 @@ impl UiTree {
         &mut self,
         node: NodeId,
         list: &mut DisplayList,
-        observer: Option<&compose_runtime::ReadObserver>,
+        observer: Option<&compose_runtime::platform::ReadObserver>,
     ) {
         let value = self.node(node);
         if !value.placed {
@@ -121,7 +121,7 @@ impl UiTree {
         &mut self,
         node: NodeId,
         list: &mut DisplayList,
-        observer: Option<&compose_runtime::ReadObserver>,
+        observer: Option<&compose_runtime::platform::ReadObserver>,
     ) {
         let position = self.node(node).layers[0].offset;
         let position = Offset::new(position.x as f32, position.y as f32);
@@ -135,7 +135,7 @@ impl UiTree {
         &mut self,
         node: NodeId,
         list: &mut DisplayList,
-        observer: Option<&compose_runtime::ReadObserver>,
+        observer: Option<&compose_runtime::platform::ReadObserver>,
     ) {
         let origins = self.layer_origins(node);
         self.draw_chain(node, 0, 0, &origins, list, observer);
@@ -160,7 +160,7 @@ impl UiTree {
         &mut self,
         recording: &DisplayList,
         list: &mut DisplayList,
-        observer: Option<&compose_runtime::ReadObserver>,
+        observer: Option<&compose_runtime::platform::ReadObserver>,
     ) -> bool {
         let mut changed = false;
         let mut from = 0;
@@ -184,7 +184,7 @@ impl UiTree {
         &mut self,
         node: NodeId,
         list: &mut DisplayList,
-        observer: Option<&compose_runtime::ReadObserver>,
+        observer: Option<&compose_runtime::platform::ReadObserver>,
     ) -> bool {
         let Some(retained) = self.node_mut(node).retained.as_mut() else { return false };
         // Its flags are cleared once it's drawn: a panic drawing it leaves it to draw again.
@@ -258,7 +258,7 @@ impl UiTree {
     fn layer_properties(
         &mut self,
         node: NodeId,
-        observer: Option<&compose_runtime::ReadObserver>,
+        observer: Option<&compose_runtime::platform::ReadObserver>,
     ) -> Option<LayerProperties> {
         let value = self.node(node);
         let index = value.retained.as_ref()?.layer_entry? as usize;
@@ -291,7 +291,7 @@ impl UiTree {
         mut layer: usize,
         origins: &[Offset],
         list: &mut DisplayList,
-        observer: Option<&compose_runtime::ReadObserver>,
+        observer: Option<&compose_runtime::platform::ReadObserver>,
     ) {
         let density = self.density;
         let mut after: SmallVec<[(u16, u16); 4]> = SmallVec::new();

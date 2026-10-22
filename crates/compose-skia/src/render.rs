@@ -1,8 +1,8 @@
 //! Replaying display lists onto a Skia canvas (docs/07-platforms.md, "The rendering interface").
 
 use compose_ui::{
-    Color, DisplayList, DrawOp, Paint, PaintStyle, PathCommand, PathFillType, Rect, Renderer,
-    TextMeasurer,
+    Color, Paint, PaintStyle, PathCommand, PathFillType, Rect,
+    platform::{DisplayList, DrawOp, Renderer, TextMeasurer},
 };
 use skia_safe::{Canvas, ClipOp, EncodedImageFormat, Point, RRect, Surface, Vector, paint};
 
@@ -229,6 +229,8 @@ pub fn draw_display_list(canvas: &Canvas, list: &DisplayList, text_measurer: &dy
                 canvas.scale((scale.0, scale.1));
                 canvas.translate((-pivot.x, -pivot.y));
             }
+            // An op added later: not drawn.
+            _ => {}
         }
     }
     canvas.restore_to_count(start);
@@ -446,11 +448,11 @@ pub fn decode_image(bytes: &[u8]) -> Option<compose_ui::ImageBitmap> {
     Some(compose_ui::ImageBitmap::from_rgba_premultiplied(width as u32, height as u32, pixels))
 }
 
-/// The platform image decoder on desktop (`compose_ui::set_image_decoder`): Skia's codecs, as
+/// The platform image decoder on desktop (`compose_ui::platform::set_image_decoder`): Skia's codecs, as
 /// [`decode_image`].
 pub struct SkiaImageDecoder;
 
-impl compose_ui::ImageDecoder for SkiaImageDecoder {
+impl compose_ui::platform::ImageDecoder for SkiaImageDecoder {
     fn decode(&self, bytes: &[u8]) -> Option<compose_ui::ImageBitmap> {
         decode_image(bytes)
     }

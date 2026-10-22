@@ -67,9 +67,8 @@ pub use shape::{
 };
 pub use text::{
     BasicAnnotatedText, BasicText, DisableSelection, LOCAL_SELECTION_DISABLED, SelectionContainer,
-    TextElement, TextNode,
 };
-pub use text_field::{BasicTextField, TextFieldElement, TextFieldNode, inner_text_field_only};
+pub use text_field::{BasicTextField, inner_text_field_only};
 pub use text_input::{
     ImeAction, ImeOptions, KeyboardActions, KeyboardCapitalization, KeyboardOptions, KeyboardType,
     OffsetMapping, PasswordVisualTransformation, TransformedText, VisualTransform,
