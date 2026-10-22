@@ -1,6 +1,7 @@
 //! The compose integration tests in one binary, each file a module, so
 //! they build and link once (docs/08-fast-builds.md).
 
+mod clone_on_use;
 mod composables;
 mod derived;
 mod ergonomics;
@@ -46,6 +47,10 @@ mod review_c_compile_macro_generated_twins;
 mod review_c_compile_many_captures;
 mod review_c_compile_pascal_case_user_macro;
 mod review_c_compile_path_call;
+mod review_clone_on_use;
+mod review_clone_on_use_compile_fnonce_moves;
+mod review_clone_on_use_compile_given_and_borrowed;
+mod review_clone_on_use_compile_remember;
 mod review_compile_async_send;
 mod review_compile_cfg_param;
 mod review_compile_const_block;

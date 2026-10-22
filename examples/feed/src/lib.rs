@@ -141,10 +141,8 @@ pub fn BigScreen() {
             |padding: PaddingValues| {
                 let scroll = remember_scroll_state();
                 Column!(
-                    modifier = Modifier
-                        .padding_values(padding)
-                        .fill_max_size()
-                        .vertical_scroll(scroll.clone()),
+                    modifier =
+                        Modifier.padding_values(padding).fill_max_size().vertical_scroll(scroll),
                     {
                         for index in 0..BIG_POSTS {
                             key(index, move || PostCard(index));

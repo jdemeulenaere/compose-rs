@@ -1,4 +1,4 @@
-error: positional arguments come before named ones
+error: positional arguments come before named ones; only the trailing lambda (`{ … }`) may follow them
   --> tests/ui/call_positional_after_named.rs:10:22
    |
 10 |     Label!(size = 2, "x".into());

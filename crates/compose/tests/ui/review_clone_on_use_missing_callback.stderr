@@ -1,0 +1,5 @@
+error: missing argument `on_click` for `Button`
+  --> tests/ui/review_clone_on_use_missing_callback.rs:12:13
+   |
+12 |     Button!({});
+   |             ^^

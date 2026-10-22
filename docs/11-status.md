@@ -13,6 +13,7 @@ What compose-rs covers of Jetpack Compose today, and where it knowingly differs.
 ## Covered
 
 - **Runtime:** the slot table, restart scopes and skipping, `remember`, `key`, state (`mutable_state_of`, `derived_state_of`, state lists), `CompositionLocal`, `SideEffect`, `DisposableEffect`, `LaunchedEffect`, `produce_state`, `remember_updated_state`, coroutine scopes on a UI-thread executor (`delay`, `with_frame_nanos`), and a manual clock for tests.
+- **Composables in Rust:** `#[composable]` functions with call macros for named, default and trailing arguments (documented with their call form), lambdas memoized on their captures and cloning captures where they'd move them (`Text!(name)` in a content block, an `async move` in a click handler, a lazy list's item closures), `ImmutableList` and `#[compose_arg(eq)]` for lists in data models ([03](03-composable-macro.md)).
 - **Layout:** `Layout` and measure policies, `Box`, `BoxWithConstraints`, `Row`, `Column`, `Spacer`, arrangements and alignments, weights, size and padding modifiers, scrolling, `LazyColumn`, `LazyRow`, `LazyVerticalGrid`, scrollbars, right-to-left layout.
 - **Drawing:** shapes, borders, clips, graphics layers, paths and `ImageVector`, images, arcs and stroke caps, shadows, `Canvas`, `draw_behind`, `draw_with_content`.
 - **Text:** `BasicText`, `SelectionContainer` and `DisableSelection`, `BasicTextField` (selection, IME, undo, Compose Desktop's key mappings), `TextStyle` (weight, style, family, letter spacing, decoration, alignment, line height), overflow, `AnnotatedString` spans.
@@ -34,4 +35,5 @@ What compose-rs covers of Jetpack Compose today, and where it knowingly differs.
 - **Text** has no link annotations, no paragraph styles in spans, and text fields have no prefix, suffix, `max_lines` or `min_lines`.
 - **Animation** transitions have no child transitions; `AnimatedContent` keeps at most three states' contents while they animate.
 - **Material** lacks, among others, dismissible and permanent navigation drawers, navigation rails, bottom sheets, input chips, date and time pickers, segmented buttons and search bars.
+- **Values aren't references.** Kotlin passes references; here a lambda clones a capture where it would move it (D158), but at a composable's top level a value given to two calls, or moved into a `LaunchedEffect`'s `async move` before a later use, still needs `.clone()`.
 - **Saving state** across process death (`rememberSaveable`) has no desktop counterpart and isn't provided.

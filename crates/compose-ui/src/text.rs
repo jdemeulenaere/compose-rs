@@ -14,6 +14,11 @@ use crate::unit::{Density, IntSize, Offset, Sp};
 
 /// A string shared by pointer: a static literal or an `Rc<str>`. Cheap to clone; compared by
 /// pointer and length first, then by value (UI strings are short).
+///
+/// Converts from `&'static str` (kept as is), `String` and `&String` (copied into an `Rc<str>`),
+/// `Rc<str>`, `&Rc<str>` and `&SharedString` (shared). A borrowed `&str` that isn't `'static`
+/// converts through `String` (`text.to_string()`): `From<&'a str>` would conflict with the
+/// static literals' conversion, which allocates nothing.
 #[derive(Clone)]
 pub enum SharedString {
     Static(&'static str),
@@ -87,9 +92,22 @@ impl From<String> for SharedString {
     }
 }
 
+impl From<&String> for SharedString {
+    /// A copy of the text (`Text!(&name)`).
+    fn from(text: &String) -> SharedString {
+        SharedString::Shared(Rc::from(text.as_str()))
+    }
+}
+
 impl From<Rc<str>> for SharedString {
     fn from(text: Rc<str>) -> SharedString {
         SharedString::Shared(text)
+    }
+}
+
+impl From<&Rc<str>> for SharedString {
+    fn from(text: &Rc<str>) -> SharedString {
+        SharedString::Shared(text.clone())
     }
 }
 

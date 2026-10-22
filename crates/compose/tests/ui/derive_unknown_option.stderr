@@ -1,0 +1,5 @@
+error: unknown `compose_arg` option; expected `eq`
+ --> tests/ui/derive_unknown_option.rs:5:19
+  |
+5 |     #[compose_arg(deep)]
+  |                   ^^^^
