@@ -177,14 +177,15 @@ class JankTest(unittest.TestCase):
     def test_run_line(self):
         trace = {
             "jank_sides": {"app": 1, "compositor": 2, "other": 0},
-            "visibly_late_frames": 31, "late_do_frames": 15, "prefetches": 69,
+            "visibly_late_frames": 31, "late_do_frames": 15, "late_do_frames_after_work": 2,
+            "prefetches": 69,
             "buffer_stuffing": {"recovery_slices": 1216, "buffer_stuffed": 1, "occurred": True},
             "main_thread_frame_ms": {"p50": 1.1, "p90": 2.5, "p99": 7.4},
             "render_thread_frame_ms": {"p50": 2.1, "p90": 3.4, "p99": 5.2},
         }
         line = summarize.run_line(trace)
         self.assertIn("janky app 1 compositor 2 other 0", line)
-        self.assertIn("visibly late 31, late doFrames 15, prefetches 69", line)
+        self.assertIn("visibly late 31, late doFrames 15 (after work 2), prefetches 69", line)
         self.assertIn("buffer stuffing yes (1216 recovery slices, 1 stuffed)", line)
         self.assertIn("main p50 1.10 p90 2.50 p99 7.40", line)
         trace["buffer_stuffing"] = {"recovery_slices": 0, "buffer_stuffed": 0, "occurred": False}

@@ -487,6 +487,8 @@ def count(trace_processor, trace, sql):
 # A doFrame starting this long after its vsync was delayed (by idle-time work, usually): on
 # the Pixel 8 Pro they start about 1.1 ms after it.
 LATE_DO_FRAME_NS = 2_000_000
+# Work on the main thread ending this long after a vsync delays its doFrame.
+WORK_PAST_VSYNC_NS = 1_200_000
 
 
 def frame_stats(trace_processor, trace, package, capacities=None, since=0):
@@ -548,13 +550,23 @@ def frame_stats(trace_processor, trace, package, capacities=None, since=0):
         FROM slice s JOIN thread_track tt ON s.track_id = tt.id
         JOIN thread t USING (utid) JOIN process p USING (upid)
         WHERE p.name = '{package}' AND s.ts >= {since}"""
-    # doFrames that started late after their vsync (the expected timeline's start, by vsync id).
-    late_do_frames = count(trace_processor, trace, f"""
-        SELECT COUNT(*) AS n {app_slices} AND t.tid = p.pid
+    # doFrames that started late after their vsync (the expected timeline's start, by vsync
+    # id): most because the main thread woke late; some because work on it (idle-time work,
+    # input) ran past the vsync by more than a normal start's latency.
+    late = f"""{app_slices} AND t.tid = p.pid
           AND s.name GLOB 'Choreographer#doFrame [0-9]*'
           AND s.ts - (SELECT MIN(e.ts) FROM expected_frame_timeline_slice e
                       WHERE e.upid = p.upid AND e.name = SUBSTR(s.name, 23))
-              > {LATE_DO_FRAME_NS}
+              > {LATE_DO_FRAME_NS}"""
+    late_do_frames = count(trace_processor, trace, f"SELECT COUNT(*) AS n {late}")
+    late_after_work = count(trace_processor, trace, f"""
+        SELECT COUNT(*) AS n {late}
+          AND EXISTS (SELECT 1 FROM slice w WHERE w.track_id = s.track_id AND w.depth = 0
+                      AND w.name NOT GLOB 'Choreographer#*' AND w.ts < s.ts
+                      AND w.ts + w.dur > (SELECT MIN(e.ts) FROM expected_frame_timeline_slice e
+                                          WHERE e.upid = p.upid
+                                            AND e.name = SUBSTR(s.name, 23))
+                                         + {WORK_PAST_VSYNC_NS})
         """)
     prefetches = count(trace_processor, trace, f"""
         SELECT COUNT(*) AS n {app_slices} AND t.tid = p.pid AND s.name = 'compose-rs: prefetch'
@@ -577,6 +589,7 @@ def frame_stats(trace_processor, trace, package, capacities=None, since=0):
         "jank_sides": jank_sides,
         "visibly_late_frames": visibly_late,
         "late_do_frames": late_do_frames,
+        "late_do_frames_after_work": late_after_work,
         "prefetches": prefetches,
         "buffer_stuffing": {"recovery_slices": recovery, "buffer_stuffed": stuffed,
                             "occurred": recovery > 0 or stuffed > 0},

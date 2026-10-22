@@ -15,7 +15,7 @@ def run_line(trace):
     main = trace["main_thread_frame_ms"]
     render = trace["render_thread_frame_ms"]
     return (f"janky app {sides['app']} compositor {sides['compositor']} other {sides['other']}, "
-            f"visibly late {trace['visibly_late_frames']}, late doFrames {trace['late_do_frames']}, "
+            f"visibly late {trace['visibly_late_frames']}, late doFrames {trace['late_do_frames']} (after work {trace.get('late_do_frames_after_work', '?')}), "
             f"prefetches {trace['prefetches']}, buffer stuffing "
             + (f"yes ({stuffing['recovery_slices']} recovery slices, {stuffing['buffer_stuffed']} stuffed)"
                if stuffing["occurred"] else "no")
