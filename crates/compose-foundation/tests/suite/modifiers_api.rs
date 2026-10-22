@@ -379,3 +379,28 @@ fn hoverable_reports_the_mouse_over_it() {
     ui.wait_for_idle();
     assert!(!source.is_hovered());
 }
+
+#[test]
+fn a_combined_clickable_disabled_mid_press_lets_its_press_go() {
+    let enabled = mutable_state_of(true);
+    let handle = enabled.handle();
+    let mut ui = ComposeTestRule::with_manual_clock(move || {
+        Box!(
+            modifier = Modifier.size(50.dp()).combined_clickable_indicated(
+                handle.get(),
+                None,
+                Color::BLACK,
+                None,
+                None,
+                || {}
+            )
+        );
+    });
+    ui.host().send_pointer(PointerEvent::press(Offset::new(10.0, 10.0)));
+    ui.wait_for_idle();
+    assert!(ui.dump_display_list().contains("#1A000000"));
+    enabled.set(false);
+    ui.wait_for_idle();
+    ui.advance_time_by(Duration::from_millis(20));
+    assert!(!ui.dump_display_list().contains("#1A000000"), "{}", ui.dump_display_list());
+}

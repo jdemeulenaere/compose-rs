@@ -812,7 +812,16 @@ impl CombinedClickableNode {
     fn stop(&mut self) {
         self.driver.stop();
         if self.pressed.try_get() == Some(true) {
-            self.pressed.set(false);
+            // Disabled or detached by a recomposition: written once it's over (state can't
+            // be written while composing).
+            let pressed = self.pressed.handle();
+            if compose_runtime::is_composing() {
+                compose_runtime::CoroutineScope::new().launch(async move {
+                    let _ = pressed.try_set(false);
+                });
+            } else {
+                pressed.set(false);
+            }
         }
     }
 }

@@ -202,7 +202,7 @@ impl UiTree {
                 .iter()
                 .filter(|bits| **bits & capability::LAYOUT != 0)
                 .count();
-            let coordinates = self.coordinates(node, layer);
+            let coordinates = self.coordinates(node, layer, index);
             if let Some(action) = self.node_mut(node).chain[index]
                 .as_global_position_aware()
                 .and_then(|aware| aware.on_globally_positioned(coordinates))
@@ -226,18 +226,19 @@ impl UiTree {
         true
     }
 
-    /// The coordinates of layer `layer` of `node`: its bounds clipped by the clipping modifiers
-    /// around it (its own before that layer, and its ancestors').
-    fn coordinates(&self, node: NodeId, layer: usize) -> LayoutCoordinates {
+    /// The coordinates of layer `layer` of `node`, for its chain entry `entry`: its bounds
+    /// clipped by the clipping modifiers around it (its own before the entry, and its
+    /// ancestors').
+    fn coordinates(&self, node: NodeId, layer: usize, entry: usize) -> LayoutCoordinates {
         let value = self.node(node);
         let size = value.layers[layer].size;
         let origin = self.layer_origin(node, layer);
         let mut bounds = Rect::from_offset_size(origin, size.into());
-        let clip_node = |id: NodeId, before_layer: Option<usize>, bounds: &mut Rect| {
+        let clip_node = |id: NodeId, before_entry: Option<usize>, bounds: &mut Rect| {
             let value = self.node(id);
             let mut layer_of_entry = 0;
             for (index, entry) in value.chain.iter().enumerate() {
-                if before_layer.is_some_and(|before| layer_of_entry >= before) {
+                if before_entry.is_some_and(|before| index >= before) {
                     break;
                 }
                 if entry.hit_clip().is_some() {
@@ -250,7 +251,7 @@ impl UiTree {
                 }
             }
         };
-        clip_node(node, Some(layer + 1), &mut bounds);
+        clip_node(node, Some(entry), &mut bounds);
         let mut current = if value.overlay { None } else { value.parent };
         while let Some(id) = current {
             clip_node(id, None, &mut bounds);
