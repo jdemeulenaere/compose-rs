@@ -31,10 +31,17 @@ internal class TextMeasurer {
     private val layouts = SparseArray<Layout>()
     /** Each paragraph's drawing, recorded once: a frame draws the node, not the glyphs. */
     private val nodes = SparseArray<RenderNode>()
+    /** Released paragraphs' nodes, for the next ones (D195). */
+    private val pool = RenderNodePool("paragraph", NODE_POOL_CAPACITY)
     private val typefaces = HashMap<Long, Typeface>()
+    /**
+     * A paint per paragraph style, shared by the layouts of that style (a layout reads its
+     * paint and never changes it): a paint's native side otherwise waits for the collector.
+     */
+    private val paints = HashMap<Style, TextPaint>()
 
     /** A text style, as the request encodes it. */
-    private class Style(
+    private data class Style(
         val color: Int,
         val fontPx: Float,
         val weight: Int,
@@ -114,8 +121,7 @@ internal class TextMeasurer {
         val minWidth = request.getInt()
         val maxWidth = request.getInt()
         val base = readStyle(request)
-        val paint = TextPaint(TextPaint.ANTI_ALIAS_FLAG)
-        apply(paint, base)
+        val paint = paint(base)
         val runCount = request.getInt()
         val content: CharSequence = if (runCount == 0) {
             text
@@ -181,8 +187,7 @@ internal class TextMeasurer {
         if (align == 3) builder.setJustificationMode(LineBreaker.JUSTIFICATION_MODE_INTER_WORD)
         val layout = builder.build()
         layouts.put(handle, layout)
-        nodes.get(handle)?.discardDisplayList()
-        nodes.remove(handle)
+        releaseNode(handle)
         // StaticLayout limits the lines only when it ellipsizes: the rest are cut here, as
         // Compose's `TextLayout` does (the text is clipped to its height).
         val lines = layout.lineCount.coerceIn(1, maxLines.coerceAtLeast(1))
@@ -212,14 +217,33 @@ internal class TextMeasurer {
 
     fun release(handle: Int) {
         layouts.remove(handle)
-        nodes.get(handle)?.discardDisplayList()
+        releaseNode(handle)
+    }
+
+    /** Paragraph [handle]'s node back to the pool: no recording draws the paragraph again. */
+    private fun releaseNode(handle: Int) {
+        val node = nodes.get(handle) ?: return
         nodes.remove(handle)
+        pool.recycle(node)
     }
 
     fun clear() {
         layouts.clear()
         for (index in 0 until nodes.size()) nodes.valueAt(index).discardDisplayList()
         nodes.clear()
+        pool.clear()
+        paints.clear()
+    }
+
+    /** The paint of paragraphs of style [style]. */
+    private fun paint(style: Style): TextPaint {
+        paints[style]?.let { return it }
+        // Bounded: an animated style (a font size, a color) makes a new one each frame.
+        if (paints.size >= PAINT_CACHE_CAPACITY) paints.clear()
+        val paint = TextPaint(TextPaint.ANTI_ALIAS_FLAG)
+        apply(paint, style)
+        paints[style] = paint
+        return paint
     }
 
     /**
@@ -238,7 +262,7 @@ internal class TextMeasurer {
         var node = nodes.get(handle)
         // Recorded again if the system dropped its recording (the window hid).
         if (node == null || !node.hasDisplayList()) {
-            node = node ?: RenderNode("paragraph")
+            node = node ?: pool.obtain()
             // Its bounds: the layout's width and height, glyphs past them (an italic's
             // overhang, a line wider than an ellipsized width) not clipped.
             node.setPosition(0, 0, layout.width.coerceAtLeast(1), layout.height.coerceAtLeast(1))
@@ -252,5 +276,11 @@ internal class TextMeasurer {
         canvas.translate(x, y)
         canvas.drawRenderNode(node)
         canvas.restore()
+    }
+
+    private companion object {
+        /** About ten list items' paragraphs: what a fling releases before composing more. */
+        const val NODE_POOL_CAPACITY = 64
+        const val PAINT_CACHE_CAPACITY = 64
     }
 }

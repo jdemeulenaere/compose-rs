@@ -39,6 +39,8 @@ import kotlin.math.floor
 internal class Replayer(private val text: TextMeasurer) {
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val shadowPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    /** The elevation [shadowPaint]'s blur is for (0: none yet). */
+    private var shadowBlur = 0f
     private val bitmapPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
     private val rect = RectF()
     private val source = Rect()
@@ -114,11 +116,11 @@ internal class Replayer(private val text: TextMeasurer) {
      * corner: the layer's own when it's at the group's origin, as Compose's), others the
      * view's size (their bounds only limit what a change of theirs repaints, as D154's).
      */
-    private class Group {
-        val node = RenderNode("compose-rs group").apply {
-            setClipToBounds(false)
+    private class Group(val node: RenderNode) {
+        init {
+            node.setClipToBounds(false)
             // Until a layer says otherwise (setLayer): an alpha below 1 goes offscreen.
-            setHasOverlappingRendering(true)
+            node.setHasOverlappingRendering(true)
         }
         /** The version [node] holds the recording of (-1: none). */
         var version = -1L
@@ -131,15 +133,19 @@ internal class Replayer(private val text: TextMeasurer) {
         /** The `LAYERS` entry (after its key) last set on [node], while [layered]. */
         val applied = ByteArray(LAYER_ENTRY_BYTES - 8)
         /** The groups drawn inside it: kept as long as it is. */
-        var children = ArrayList<Long>()
+        val children = ArrayList<Group>()
+        /** Gone: its node went back to the pool (a parent's [children] may still name it). */
+        var removed = false
     }
 
     private val groups = HashMap<Long, Group>()
+    /** Gone groups' nodes, for new groups (D195). */
+    private val pool = RenderNodePool("compose-rs group", NODE_POOL_CAPACITY)
     private var frame = 0
     private var width = 1
     private var height = 1
     /** The groups met in the group being recorded (null outside any). */
-    private var children: ArrayList<Long>? = null
+    private var children: ArrayList<Group>? = null
     /** In a software draw: where each group's `LAYERS` entry is in the buffer. */
     private val softwareLayers = HashMap<Long, Int>()
     private val clipBounds = Rect()
@@ -166,9 +172,12 @@ internal class Replayer(private val text: TextMeasurer) {
         while (iterator.hasNext()) {
             val group = iterator.next()
             if (group.frame != frame) {
-                // Gone: this frame didn't draw it.
-                group.node.discardDisplayList()
+                // Gone: this frame didn't draw it, so no recording drawn from now on does.
                 iterator.remove()
+                if (group.layered) resetLayer(group.node)
+                group.removed = true
+                group.children.clear()
+                pool.recycle(group.node)
             } else if (group.layered && group.layerFrame != frame) {
                 // No longer a layer. (Properties set after drawing the node still apply: the
                 // render thread reads them when the frame is done.)
@@ -303,8 +312,8 @@ internal class Replayer(private val text: TextMeasurer) {
             canvas.restoreToCount(save)
             return
         }
-        children?.add(key)
-        val group = groups.getOrPut(key) { Group() }
+        val group = groups.getOrPut(key) { Group(pool.obtain()) }
+        children?.add(group)
         if (group.version == version && recorded(group)) {
             // The same bytes as recorded, nested groups' included: their versions are too.
             keep(group)
@@ -317,8 +326,8 @@ internal class Replayer(private val text: TextMeasurer) {
         // A layer's node has its bounds already (setLayer).
         if (!group.layered) group.node.setPosition(0, 0, width, height)
         val outer = children
-        val inner = ArrayList<Long>()
-        children = inner
+        group.children.clear()
+        children = group.children
         // Its size is a hint: what's recorded past it is kept, as a view's children drawn past
         // its bounds are.
         val recording =
@@ -329,7 +338,6 @@ internal class Replayer(private val text: TextMeasurer) {
             group.node.endRecording()
             children = outer
         }
-        group.children = inner
         // A recording cut short by an unknown operation isn't that version's.
         if (!unreadable) group.version = version
         canvas.drawRenderNode(group.node)
@@ -339,13 +347,21 @@ internal class Replayer(private val text: TextMeasurer) {
      * Whether [group] and the groups inside it still have their recordings: the system drops
      * them all when the window hides (`destroyHardwareResources`).
      */
-    private fun recorded(group: Group): Boolean =
-        group.node.hasDisplayList() && group.children.all { child -> groups[child]?.let(::recorded) ?: false }
+    private fun recorded(group: Group): Boolean {
+        if (group.removed || !group.node.hasDisplayList()) return false
+        // By index: an iterator a frame for every kept group adds up.
+        val children = group.children
+        for (index in children.indices) {
+            if (!recorded(children[index])) return false
+        }
+        return true
+    }
 
     /** Marks [group] and the groups inside it drawn this frame. */
     private fun keep(group: Group) {
         group.frame = frame
-        for (child in group.children) groups[child]?.let(::keep)
+        val children = group.children
+        for (index in children.indices) keep(children[index])
     }
 
     /**
@@ -359,7 +375,7 @@ internal class Replayer(private val text: TextMeasurer) {
         repeat(count) {
             val key = buffer.getLong(at)
             if (hardware) {
-                val group = groups.getOrPut(key) { Group() }
+                val group = groups.getOrPut(key) { Group(pool.obtain()) }
                 // Set only when it changed: a frame where nothing moves sets nothing.
                 if (!group.layered || !applied(group.applied, buffer, at + 8)) {
                     for (index in group.applied.indices) group.applied[index] = buffer.get(at + 8 + index)
@@ -490,7 +506,11 @@ internal class Replayer(private val text: TextMeasurer) {
         // The spot shadow: offset down, blurred by the elevation.
         val alpha = ((ambient ushr 24) + (spot ushr 24)).coerceAtMost(255)
         shadowPaint.color = (alpha shl 24) or (spot and 0xFFFFFF)
-        shadowPaint.maskFilter = BlurMaskFilter(elevation, BlurMaskFilter.Blur.NORMAL)
+        // A new filter only for a new elevation: each is a native object the collector frees.
+        if (elevation != shadowBlur) {
+            shadowBlur = elevation
+            shadowPaint.maskFilter = BlurMaskFilter(elevation, BlurMaskFilter.Blur.NORMAL)
+        }
         canvas.save()
         canvas.translate(0f, elevation / 2f)
         if (rounded) {
@@ -674,6 +694,7 @@ internal class Replayer(private val text: TextMeasurer) {
     fun clear() {
         for (group in groups.values) group.node.discardDisplayList()
         groups.clear()
+        pool.clear()
         paths.clear()
         masks.clear()
         maskBytes = 0
@@ -682,6 +703,9 @@ internal class Replayer(private val text: TextMeasurer) {
     }
 
     private companion object {
+        /** About ten list items' groups: what a fling drops before drawing new ones. */
+        const val NODE_POOL_CAPACITY = 32
+
         const val SAVE = 0
         const val RESTORE = 1
         const val TRANSLATE = 2

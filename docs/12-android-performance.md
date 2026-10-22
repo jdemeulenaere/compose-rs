@@ -17,7 +17,7 @@ The Kotlin app follows Compose's performance guidance: an `@Immutable` data clas
 `android/bench/measure.py` drives a connected device over adb, interleaving the two apps run by run, and writes a JSON report (`android/bench/results/`); `summarize.py` prints it.
 
 - **Startup**: 15 cold starts of each screen per app (`am force-stop`, then `am start -W`: `TotalTime`, from the launch to the first frame drawn). One cold start of each is also traced with Perfetto, to break the first frame down.
-- **Memory**: `dumpsys meminfo` 5 s after start, and again after scrolling (3 runs).
+- **Memory**: `dumpsys meminfo` 5 s after start, and again after scrolling (3 runs). Calling it runs the app's garbage collector, so the first measurement resets what the second counts.
 - **Scrolling**: 10 flings through the feed (`input swipe`, 120 ms each, 1.2 s apart), 3 runs per app. Frames and jank come from `dumpsys gfxinfo` and from Perfetto's FrameTimeline (SurfaceFlinger's verdict on each frame). Per-frame work comes from the app's `Choreographer#doFrame` (main thread) and `DrawFrame` (RenderThread) slices, and CPU time from the scheduler. Since time on a slow core isn't more work, "work" scales each running slice by its core's frequency (traced) and capacity: milliseconds on the fastest core at its highest frequency. The scheduler moves light threads to the little cores, so a frame's duration says as much about where it ran as about what it did.
 - **Animation**: 10 s of the animated header, untouched, 3 runs per app, measured as scrolling.
 
@@ -47,10 +47,14 @@ In compose-rs's first `big` frame (112 ms): composing 200 posts takes 19 ms, lay
 | of which code | 6.1 MB | **1.5 MB** |
 | of which Java heap | 3.6 MB | **1.3 MB** |
 | of which native heap | 7.9 MB | 8.6 MB |
-| PSS after 10 flings | **85.4 MB** | 90.2 MB (87.1 MB before groups) |
+| PSS after 10 flings | 85.4 MB | **81.2 MB** (90.2 MB before D195; 87.1 MB before groups) |
+| of which Java heap | 3.9–20.3 MB | 5.5 MB (6.6 MB before D195) |
+| of which native heap | 13.4–19.3 MB | 12.4 MB (20.8 MB before D195) |
 | APK (release) | 1.7 MB (minified) | 2.4 MB (with the 3 MB `.so` uncompressed inside) |
 
-After scrolling, both are dominated by graphics memory (the render thread's caches: about 56 MB each). compose-rs keeps more in its native and Java heaps after scrolling (20 and 7 MB against 13 and 4 MB: render nodes, the bytes of kept groups and text layouts, held by Java objects until the garbage collector runs), but it doesn't grow: over 48 flings both apps stay between 85 and 111 MB, falling back as the collector runs.
+The rows after 10 flings are a later memory-only run (3 runs each, interleaved, medians; `measure.py`'s memory scenario), with D195. After scrolling, both are dominated by graphics memory (the render thread's caches: about 57 MB each). The rest depends on when the garbage collector last ran: `dumpsys meminfo` itself collects in the app (`Runtime.gc` in its path; a second call right after reads 10–13 MB less for both apps), so the measurement after scrolling counts what the 10 flings left for the collector. Compose's numbers swing with it (85 to 112 MB over runs: its Java heap holds 4 to 20 MB of garbage, as it allocates on every frame); collected, the two apps hold about 85 (Compose) and 80 MB (compose-rs).
+
+What compose-rs kept, before D195, after 10 flings (heapprofd, and a heap profile around the collection `dumpsys meminfo` triggers): the collection freed 8.9 MB of native heap and 5 MB of Java heap. ART collects when the Java heap has grown (on this device, by 8 MB at least: `heapminfree`), and compose-rs allocates 5.5 MB on the Java heap in 10 flings (mostly `StaticLayout`'s own objects), so no collection ran, and the native objects the collector frees piled up: released paragraphs' and gone groups' render nodes (7.2 MB with the recordings the render thread last drew: `discardDisplayList` drops only the recording not yet drawn, the drawn one lives as long as the node), `StaticLayout`'s paints, line breakers and measured text (1.7 MB). Rust's own heap is small (1.5 MB in all, the composition of about 15 posts with their slots; the group cache's bytes 17 KB), and so are the Kotlin side's caches (13 groups and 80 paragraphs drawn, Android's alpha masks a few KB). D195 reuses render nodes (a released one records the next paragraph or group; its old recording is freed the first time its new one is drawn), shares a paint per text style, and walks kept groups without allocating: the native heap after 10 flings went from 20.8 to 12.4 MB and the Java heap from 6.6 to 5.5 MB, with no cost to the frame (the replay 0.27 → 0.25 ms on average, 3 and 4 traced runs; the render thread's frame a little longer, 2.70 → 2.82 ms, its runs spanning 2.62–2.86 ms: it now frees the old recordings, which the collector's threads did).
 
 ### Scrolling (10 flings, 3 runs)
 
