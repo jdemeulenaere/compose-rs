@@ -176,15 +176,21 @@ fn rows_in_view(ui: &mut ComposeTestRule) -> Vec<(usize, compose_ui::Rect)> {
     rows
 }
 
+/// The lazy items composed now.
+fn items_composed(ui: &ComposeTestRule) -> usize {
+    ui.dump_tree().lines().filter(|line| line.trim_start().starts_with("LazyItem")).count()
+}
+
 #[test]
-fn prefetch_changes_nothing_in_view() {
+fn prefetch_changes_nothing_in_view_and_composes_no_more_than_it_prefetches() {
     // Two lists scrolled alike, one prefetching between frames.
     let (mut plain, plain_state) = list(0);
     let (mut prefetched, state) = list(0);
-    for _ in 0..8 {
-        plain_state.scroll_by(15.0);
+    for frame in 0..60 {
+        let delta = if frame < 40 { 15.0 } else { -15.0 };
+        plain_state.scroll_by(delta);
         plain.wait_for_idle();
-        state.scroll_by(15.0);
+        state.scroll_by(delta);
         prefetched.wait_for_idle();
         assert_eq!(rows_in_view(&mut plain), rows_in_view(&mut prefetched));
         assert_eq!(plain_state.first_visible_item_index(), state.first_visible_item_index());
@@ -192,6 +198,13 @@ fn prefetch_changes_nothing_in_view() {
             plain_state.first_visible_item_scroll_offset(),
             state.first_visible_item_scroll_offset()
         );
+        // No more items drawn (prefetched ones aren't placed), and only those prefetched
+        // composed besides (those left behind go as without prefetch).
+        let drawn = |ui: &ComposeTestRule| ui.dump_display_list().matches("paragraph").count();
+        let (with, without) = (drawn(&prefetched), drawn(&plain));
+        assert!(with <= without, "frame {frame}: {with} items drawn, {without} without");
+        let (with, without) = (items_composed(&prefetched), items_composed(&plain));
+        assert!(with <= without + 2, "frame {frame}: {with} items composed, {without} without");
         let before = prefetched.dump_display_list();
         prefetched.host().prefetch(later());
         assert_eq!(prefetched.dump_display_list(), before);
@@ -223,4 +236,118 @@ fn a_grid_prefetches_its_next_rows() {
     assert!((last + 1..=last + 6).all(|index| compositions(index) == 1));
     assert!(!live(last + 7));
     assert_eq!(state.first_visible_item_index(), 3);
+}
+
+thread_local! {
+    static TEXT_LAYOUTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The fixed-advance measurer, counting the paragraphs it lays out.
+struct CountingMeasurer(compose_ui::FixedTextMeasurer);
+
+impl compose_ui::TextMeasurer for CountingMeasurer {
+    fn layout(
+        &mut self,
+        text: &str,
+        style: &compose_ui::TextStyle,
+        options: compose_ui::TextLayoutOptions,
+        constraints: compose_ui::Constraints,
+        density: &compose_ui::Density,
+    ) -> compose_ui::ParagraphHandle {
+        TEXT_LAYOUTS.with(|layouts| layouts.set(layouts.get() + 1));
+        self.0.layout(text, style, options, constraints, density)
+    }
+    fn metrics(&self, paragraph: compose_ui::ParagraphHandle) -> compose_ui::ParagraphMetrics {
+        self.0.metrics(paragraph)
+    }
+    fn hit_test(
+        &self,
+        paragraph: compose_ui::ParagraphHandle,
+        position: compose_ui::Offset,
+    ) -> compose_ui::TextPosition {
+        self.0.hit_test(paragraph, position)
+    }
+    fn cursor_rect(
+        &self,
+        paragraph: compose_ui::ParagraphHandle,
+        offset: usize,
+    ) -> compose_ui::Rect {
+        self.0.cursor_rect(paragraph, offset)
+    }
+    fn text(&self, paragraph: compose_ui::ParagraphHandle) -> &str {
+        self.0.text(paragraph)
+    }
+    fn release(&mut self, paragraph: compose_ui::ParagraphHandle) {
+        self.0.release(paragraph)
+    }
+}
+
+fn text_layouts() -> usize {
+    TEXT_LAYOUTS.with(std::cell::Cell::get)
+}
+
+/// The list of `list`, measuring text with `CountingMeasurer`.
+fn counted_list() -> (ComposeTestRule, LazyListState) {
+    COMPOSED.with(|composed| composed.borrow_mut().clear());
+    LIVE.with(|live| live.borrow_mut().clear());
+    let state = LazyListState::new(0, 0);
+    let given = state.clone();
+    let ui = compose_test_with(
+        IntSize::new(200, 200),
+        compose_ui::Density::default(),
+        Box::new(CountingMeasurer(compose_ui::FixedTextMeasurer::new())),
+        move || List(given.clone()),
+    );
+    (ui, state)
+}
+
+#[test]
+fn a_frame_revealing_prefetched_items_lays_out_no_text() {
+    let (mut ui, state) = counted_list();
+    state.scroll_by(30.0);
+    ui.wait_for_idle();
+    let before = text_layouts();
+    ui.host().prefetch(later());
+    assert_eq!(text_layouts(), before + 2, "the two items ahead, laid out once");
+    // A row at a time: the prefetched items come into the wanted range, then into view.
+    for _ in 0..6 {
+        let before = text_layouts();
+        state.scroll_by(20.0);
+        let stats = ui.host().frame();
+        assert_eq!(text_layouts(), before, "text laid out in the frame");
+        assert_eq!(stats.bodies_run, 0, "composed in the frame");
+        ui.host().prefetch(later());
+    }
+}
+
+#[test]
+fn a_prefetch_with_nothing_to_do_does_nothing() {
+    let (mut ui, state) = counted_list();
+    state.scroll_by(30.0);
+    ui.wait_for_idle();
+    assert!(!ui.host().prefetch(later()));
+    // A scroll within the same items wants no other: nothing is asked for.
+    state.scroll_by(5.0);
+    ui.wait_for_idle();
+    assert!(!ui.host().has_prefetch_work(), "a request with nothing to do");
+    let (layouts, live) = (text_layouts(), LIVE.with(|live| live.borrow().len()));
+    let composed: usize = COMPOSED.with(|composed| composed.borrow().values().sum());
+    assert!(!ui.host().prefetch(later()));
+    assert_eq!(text_layouts(), layouts);
+    assert_eq!(LIVE.with(|live| live.borrow().len()), live);
+    assert_eq!(COMPOSED.with(|composed| composed.borrow().values().sum::<usize>()), composed);
+}
+
+#[test]
+fn prefetch_asks_for_no_frame() {
+    let (mut ui, state) = list(0);
+    let wakes = std::rc::Rc::new(std::cell::Cell::new(0));
+    let counter = wakes.clone();
+    ui.host().set_frame_waker(move || counter.set(counter.get() + 1));
+    state.scroll_by(30.0);
+    ui.wait_for_idle();
+    let before = wakes.get();
+    assert!(!ui.host().prefetch(later()));
+    assert_eq!(wakes.get(), before, "prefetch woke the platform");
+    assert!(!ui.host().needs_frame(), "prefetch left work for a frame");
 }

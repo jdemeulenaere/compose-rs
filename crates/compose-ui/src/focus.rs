@@ -67,10 +67,26 @@ impl UiTree {
         self.focus = Some(Focus { node, index: index as u16 });
         self.tell_target(node, index, true, actions);
         self.focus_listeners_dirty = true;
-        // A focused node in a scrolling container is scrolled into view, as Compose's.
-        if scroll {
+        // A focused node in a scrolling container is scrolled into view, as Compose's; one not
+        // placed yet (a lazy item composed ahead) once the next layout places it.
+        if scroll && !self.is_laid_out(node) {
+            self.bring_into_view_after_layout = Some(node);
+        } else if scroll {
             self.bring_into_view(node);
         }
+    }
+
+    /// Whether `node` and its ancestors are placed: its bounds are where it shows.
+    pub(crate) fn is_laid_out(&self, node: NodeId) -> bool {
+        let mut current = Some(node);
+        while let Some(id) = current {
+            let value = self.node(id);
+            if !value.placed {
+                return false;
+            }
+            current = if value.overlay { None } else { value.parent };
+        }
+        true
     }
 
     /// Asks the scrolling ancestors of `node` to show it, innermost first, each shown where

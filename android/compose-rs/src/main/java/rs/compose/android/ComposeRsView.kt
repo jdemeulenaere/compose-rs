@@ -163,7 +163,8 @@ class ComposeRsView(context: Context, private val app: String) : View(context) {
     }
 
     private fun prefetch() {
-        if (host == 0L) {
+        // A hidden window draws no frames to prepare for, as Compose's.
+        if (host == 0L || windowVisibility != VISIBLE) {
             prefetchScheduled = false
             return
         }

@@ -303,6 +303,22 @@ impl UiHost {
                 tree.layout(size)
             });
         }
+        // A node focused before it was placed is shown, now that it is.
+        let shown = self.with_tree(|tree| {
+            let node = tree.bring_into_view_after_layout.take()?;
+            tree.get(node)?;
+            if !tree.is_laid_out(node) {
+                return None;
+            }
+            tree.bring_into_view(node);
+            Some(())
+        });
+        if shown.is_some() {
+            measured |= self.with_tree(|tree| {
+                tree.apply_observed_writes();
+                tree.layout(size)
+            });
+        }
         // Content that moved under a resting mouse: the hover follows it, as Compose Desktop's
         // synthetic move after a layout.
         if measured {
@@ -351,29 +367,39 @@ impl UiHost {
     /// it will reach next, so the frame that scrolls them in finds them ready. The platform calls
     /// it when idle between frames. Returns whether work is left, for the next idle time.
     ///
-    /// What it composes isn't placed until the next frame, and asks for none: nothing shows, and
-    /// state stays as it was (a list's first visible item). A frame with work waiting (state
-    /// changed) goes first: nothing runs then.
+    /// What it composes isn't placed until a frame wants it: nothing shows, state stays as it was
+    /// (a list's first visible item), and no frame is asked for. A frame with work waiting (state
+    /// changed, a scroll) goes first: nothing runs then.
     pub fn prefetch(&mut self, deadline: std::time::Instant) -> bool {
         if !self.has_prefetch_work() {
             return false;
         }
-        if self.pending_content.borrow().is_some() || self.composition.has_invalidations() {
+        if self.has_pending_work() {
             return true;
         }
         let _prefetch = crate::trace::section(c"compose-rs: prefetch");
         // The requests' writes are composed here: they wake nothing.
         self.framing.set(true);
         let more = self.prefetch_scheduler.run(&self.composition, deadline);
+        // The items composed aren't placed, and those disposed weren't: unless measuring wrote
+        // state for others (observed writes, scopes invalidated), nothing needs a frame.
+        let quiet = self.with_tree(|tree| {
+            tree.needs_draw = false;
+            tree.apply_observed_writes();
+            !tree.needs_draw
+        });
         self.framing.set(false);
+        if quiet && !self.composition.has_invalidations() {
+            self.frame_requested.set(false);
+        } else {
+            self.with_tree(|tree| tree.needs_draw = true);
+            self.wake();
+        }
         // What composition queued (listeners attached), and the effects it started.
         let actions = self.with_tree(|tree| tree.take_pending_actions());
         Self::run(actions);
         executor::run_ready();
-        // What measuring wrote (a `BoxWithConstraints`' constraints) is composed in a frame.
-        if self.composition.has_invalidations() {
-            self.wake();
-        }
+        self.wake_if_dirty();
         more
     }
 
