@@ -1,16 +1,16 @@
-//! Material 3 components: `Text`, `Surface`, the buttons, `Checkbox`, `TextField`, as
-//! Compose's, with their `…Defaults`.
+//! Material 3 components: `Text`, `Surface` (and its clickable and selectable overloads),
+//! `Checkbox`, the text fields' colors, as Compose's, with their `…Defaults`.
 
-use compose_foundation::layout::{Arrangement, Box, PaddingValues, Row, RowScope};
+use compose_foundation::layout::Box;
 use compose_foundation::{BasicText, BorderStroke};
 use compose_runtime::{CompositionLocalProvider, composable};
 use compose_ui::{
     Alignment, Color, Dp, DrawModifierNode, DrawScope, FontWeight, Modifier, ModifierNode,
-    ModifierNodeElement, Offset, Paint, Rect, Role, Shape, SharedString, SizeSpec, Sp, TextStyle,
-    UnitExt,
+    ModifierNodeElement, MutableInteractionSource, Offset, Paint, Rect, Role, Shape, SharedString,
+    Sp, TextStyle, UnitExt,
 };
 
-use crate::theme::{LOCAL_CONTENT_COLOR, LOCAL_TEXT_STYLE, MaterialTheme};
+use crate::theme::{LOCAL_CONTENT_COLOR, MaterialTheme};
 
 // ---- Text ------------------------------------------------------------------------------------
 
@@ -71,7 +71,7 @@ pub fn AnnotatedText(
 // ---- Surface ---------------------------------------------------------------------------------
 
 /// The modifiers of a surface: clipped to its shape, filled with its color, bordered.
-fn surface_modifier(
+pub(crate) fn surface_modifier(
     modifier: Modifier,
     shape: Shape,
     color: Color,
@@ -101,20 +101,164 @@ pub fn Surface(
     #[default(None)] border: Option<BorderStroke>,
     content: impl Fn() + 'static,
 ) {
+    surface(
+        modifier,
+        shape,
+        color,
+        content_color,
+        tonal_elevation,
+        shadow_elevation,
+        border,
+        None,
+        content,
+    );
+}
+
+/// A clickable surface, as Compose's `Surface(onClick, …)` overload (named apart, Rust having
+/// no overloads): at least 48 dp for touch, a state layer in its content color while pressed,
+/// focused or hovered, reported to `interaction_source`.
+#[composable]
+pub fn ClickableSurface(
+    on_click: impl Fn() + 'static,
+    #[default(crate::Modifier)] modifier: Modifier,
+    #[default(true)] enabled: bool,
+    #[default(crate::RECTANGLE_SHAPE)] shape: Shape,
+    #[default(crate::MaterialTheme::color_scheme().surface)] color: Color,
+    #[default(crate::Color::UNSPECIFIED)] content_color: Color,
+    #[default(crate::Dp(0.0))] tonal_elevation: Dp,
+    #[default(crate::Dp(0.0))] shadow_elevation: Dp,
+    #[default(None)] border: Option<BorderStroke>,
+    #[default(None)] interaction_source: Option<MutableInteractionSource>,
+    content: impl Fn() + 'static,
+) {
+    let interaction_source = remembered_interaction_source(interaction_source);
+    let click = SurfaceClick { on_click, enabled, role: None, interaction_source, selected: None };
+    surface(
+        modifier,
+        shape,
+        color,
+        content_color,
+        tonal_elevation,
+        shadow_elevation,
+        border,
+        Some(click),
+        content,
+    );
+}
+
+/// A selectable surface, as Compose's `Surface(selected, onClick, …)` overload: a clickable
+/// surface whose semantics say whether it's `selected`.
+#[composable]
+pub fn SelectableSurface(
+    selected: bool,
+    on_click: impl Fn() + 'static,
+    #[default(crate::Modifier)] modifier: Modifier,
+    #[default(true)] enabled: bool,
+    #[default(crate::RECTANGLE_SHAPE)] shape: Shape,
+    #[default(crate::MaterialTheme::color_scheme().surface)] color: Color,
+    #[default(crate::Color::UNSPECIFIED)] content_color: Color,
+    #[default(crate::Dp(0.0))] tonal_elevation: Dp,
+    #[default(crate::Dp(0.0))] shadow_elevation: Dp,
+    #[default(None)] border: Option<BorderStroke>,
+    #[default(None)] interaction_source: Option<MutableInteractionSource>,
+    content: impl Fn() + 'static,
+) {
+    let interaction_source = remembered_interaction_source(interaction_source);
+    let click = SurfaceClick {
+        on_click,
+        enabled,
+        role: None,
+        interaction_source,
+        selected: Some(selected),
+    };
+    surface(
+        modifier,
+        shape,
+        color,
+        content_color,
+        tonal_elevation,
+        shadow_elevation,
+        border,
+        Some(click),
+        content,
+    );
+}
+
+/// The given interaction source, or one remembered here (as Compose's `interactionSource ?:
+/// remember { MutableInteractionSource() }`; remembered either way, so the slots don't shift).
+pub(crate) fn remembered_interaction_source(
+    given: Option<MutableInteractionSource>,
+) -> MutableInteractionSource {
+    let own = compose_runtime::remember(MutableInteractionSource::new);
+    given.unwrap_or(own)
+}
+
+/// What makes a surface clickable.
+pub(crate) struct SurfaceClick {
+    pub on_click: compose_runtime::Callback,
+    pub enabled: bool,
+    pub role: Option<Role>,
+    pub interaction_source: MutableInteractionSource,
+    /// Whether it's selected, for a selectable surface.
+    pub selected: Option<bool>,
+}
+
+/// A surface's body, as Compose's `Surface` overloads share: the container (clickable with
+/// `click`, else taking the pointer from what's beneath), its content color and absolute tonal
+/// elevation provided, its content in a box passing its minimum size on.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn surface(
+    modifier: Modifier,
+    shape: Shape,
+    color: Color,
+    content_color: Color,
+    tonal_elevation: Dp,
+    shadow_elevation: Dp,
+    border: Option<BorderStroke>,
+    click: Option<SurfaceClick>,
+    content: compose_runtime::Callback,
+) {
     let scheme = MaterialTheme::color_scheme();
     let content_color =
         content_color.or(scheme.content_color_for(color)).or(LOCAL_CONTENT_COLOR.current());
     let elevation = Dp(LOCAL_ABSOLUTE_TONAL_ELEVATION.current().0 + tonal_elevation.0);
     let color =
         if color == scheme.surface { scheme.surface_color_at_elevation(elevation) } else { color };
-    // A surface takes the pointer: what's beneath it isn't hit, as Compose's (an empty
-    // `pointerInput`).
-    let modifier = surface_modifier(modifier, shape, color, border, shadow_elevation)
-        .then_custom(BlockPointer);
+    let modifier = match click {
+        // At least the touch target, the state layer in the content color, as Compose's
+        // clickable `Surface` (`ripple()` over `LocalContentColor`).
+        Some(click) => {
+            let modifier = surface_modifier(
+                minimum_interactive_component_size(modifier),
+                shape,
+                color,
+                border,
+                shadow_elevation,
+            )
+            .clickable_interaction(
+                click.enabled,
+                click.role,
+                content_color,
+                click.interaction_source,
+                click.on_click,
+            );
+            match click.selected {
+                Some(selected) => {
+                    modifier.semantics(false, move |config| config.selected = Some(selected))
+                }
+                None => modifier,
+            }
+        }
+        // A surface takes the pointer: what's beneath it isn't hit, as Compose's (an empty
+        // `pointerInput`).
+        None => surface_modifier(modifier, shape, color, border, shadow_elevation)
+            .then_custom(BlockPointer),
+    };
     CompositionLocalProvider(LOCAL_CONTENT_COLOR.provides(content_color), || {
         CompositionLocalProvider(LOCAL_ABSOLUTE_TONAL_ELEVATION.provides(elevation), || {
+            let content = content.clone();
             Box(
-                modifier,
+                modifier.clone(),
                 Alignment::TOP_START,
                 true,
                 compose_runtime::callback(move |_| content()),
@@ -173,233 +317,6 @@ pub const MINIMUM_INTERACTIVE_SIZE: Dp = Dp(48.0);
 /// small controls are easy to hit, as Compose's `minimumInteractiveComponentSize()`.
 pub fn minimum_interactive_component_size(modifier: Modifier) -> Modifier {
     modifier.minimum_touch_target(MINIMUM_INTERACTIVE_SIZE)
-}
-
-// ---- Buttons ---------------------------------------------------------------------------------
-
-/// A button's colors, enabled and disabled, as Compose's `ButtonColors`.
-#[derive(Clone, Copy, PartialEq, Debug)]
-pub struct ButtonColors {
-    pub container_color: Color,
-    pub content_color: Color,
-    pub disabled_container_color: Color,
-    pub disabled_content_color: Color,
-}
-
-impl compose_runtime::ComposeArg for ButtonColors {
-    fn same(&self, other: &Self) -> bool {
-        self == other
-    }
-}
-
-/// As Compose's `ButtonDefaults`.
-pub struct ButtonDefaults {}
-
-impl ButtonDefaults {
-    pub const CONTENT_PADDING: PaddingValues = PaddingValues::symmetric(Dp(24.0), Dp(8.0));
-    pub const TEXT_BUTTON_CONTENT_PADDING: PaddingValues =
-        PaddingValues::symmetric(Dp(12.0), Dp(8.0));
-    pub const MIN_WIDTH: Dp = Dp(58.0);
-    pub const MIN_HEIGHT: Dp = Dp(40.0);
-
-    /// A fully rounded pill, as `ButtonDefaults.shape`.
-    pub fn shape() -> Shape {
-        compose_foundation::CIRCLE_SHAPE
-    }
-
-    pub fn button_colors() -> ButtonColors {
-        let scheme = MaterialTheme::color_scheme();
-        ButtonColors {
-            container_color: scheme.primary,
-            content_color: scheme.on_primary,
-            disabled_container_color: scheme.on_surface.with_alpha(0.12),
-            disabled_content_color: scheme.on_surface.with_alpha(0.38),
-        }
-    }
-
-    /// The secondary container, as `filledTonalButtonColors()`.
-    pub fn filled_tonal_button_colors() -> ButtonColors {
-        let scheme = MaterialTheme::color_scheme();
-        ButtonColors {
-            container_color: scheme.secondary_container,
-            content_color: scheme.on_secondary_container,
-            disabled_container_color: scheme.on_surface.with_alpha(0.12),
-            disabled_content_color: scheme.on_surface.with_alpha(0.38),
-        }
-    }
-
-    /// The low surface container, primary text, as `elevatedButtonColors()`.
-    pub fn elevated_button_colors() -> ButtonColors {
-        let scheme = MaterialTheme::color_scheme();
-        ButtonColors {
-            container_color: scheme.surface_container_low,
-            content_color: scheme.primary,
-            disabled_container_color: scheme.on_surface.with_alpha(0.12),
-            disabled_content_color: scheme.on_surface.with_alpha(0.38),
-        }
-    }
-
-    /// An elevated button's shadow, as `elevatedButtonElevation()`'s resting elevation.
-    pub const ELEVATED_BUTTON_ELEVATION: Dp = Dp(1.0);
-
-    /// Transparent, primary text: `outlinedButtonColors` and `textButtonColors`.
-    pub fn text_button_colors() -> ButtonColors {
-        let scheme = MaterialTheme::color_scheme();
-        ButtonColors {
-            container_color: Color::TRANSPARENT,
-            content_color: scheme.primary,
-            disabled_container_color: Color::TRANSPARENT,
-            disabled_content_color: scheme.on_surface.with_alpha(0.38),
-        }
-    }
-
-    pub fn outlined_button_border(enabled: bool) -> BorderStroke {
-        let scheme = MaterialTheme::color_scheme();
-        BorderStroke::new(
-            Dp(1.0),
-            if enabled { scheme.outline } else { scheme.on_surface.with_alpha(0.12) },
-        )
-    }
-}
-
-/// A filled button, as Compose's `Button`: a clickable surface around a row of content in the
-/// label style, with a shadow of `elevation` while enabled (a simplification of Compose's
-/// `ButtonElevation`: its resting elevation).
-#[composable]
-pub fn Button(
-    on_click: impl Fn() + 'static,
-    #[default(crate::Modifier)] modifier: Modifier,
-    #[default(true)] enabled: bool,
-    #[default(crate::ButtonDefaults::shape())] shape: Shape,
-    #[default(crate::ButtonDefaults::button_colors())] colors: ButtonColors,
-    #[default(crate::Dp(0.0))] elevation: Dp,
-    #[default(None)] border: Option<BorderStroke>,
-    #[default(crate::ButtonDefaults::CONTENT_PADDING)] content_padding: PaddingValues,
-    content: impl Fn(RowScope) + 'static,
-) {
-    let (container, content_color) = if enabled {
-        (colors.container_color, colors.content_color)
-    } else {
-        (colors.disabled_container_color, colors.disabled_content_color)
-    };
-    let surface = surface_modifier(
-        minimum_interactive_component_size(modifier),
-        shape,
-        container,
-        border,
-        if enabled { elevation } else { Dp(0.0) },
-    )
-    .clickable_indicated(enabled, Some(Role::Button), content_color, on_click);
-    let label = MaterialTheme::typography().label_large;
-    CompositionLocalProvider(LOCAL_CONTENT_COLOR.provides(content_color), || {
-        CompositionLocalProvider(LOCAL_TEXT_STYLE.provides(label), || {
-            Box(
-                surface,
-                Alignment::TOP_START,
-                true,
-                compose_runtime::callback(move |_| {
-                    Row(
-                        Modifier
-                            .size_in(SizeSpec::bounds(
-                                ButtonDefaults::MIN_WIDTH,
-                                ButtonDefaults::MIN_HEIGHT,
-                                Dp::UNSPECIFIED,
-                                Dp::UNSPECIFIED,
-                            ))
-                            .padding_values(content_padding),
-                        Arrangement::Center,
-                        Alignment::CENTER_VERTICALLY,
-                        content.clone(),
-                    );
-                }),
-            );
-        });
-    });
-}
-
-/// A button in the secondary container, as Compose's `FilledTonalButton`.
-#[composable]
-pub fn FilledTonalButton(
-    on_click: impl Fn() + 'static,
-    #[default(crate::Modifier)] modifier: Modifier,
-    #[default(true)] enabled: bool,
-    content: impl Fn(RowScope) + 'static,
-) {
-    Button(
-        on_click,
-        modifier,
-        enabled,
-        ButtonDefaults::shape(),
-        ButtonDefaults::filled_tonal_button_colors(),
-        Dp(0.0),
-        None,
-        ButtonDefaults::CONTENT_PADDING,
-        content,
-    );
-}
-
-/// A button raised on a 1 dp shadow, as Compose's `ElevatedButton`.
-#[composable]
-pub fn ElevatedButton(
-    on_click: impl Fn() + 'static,
-    #[default(crate::Modifier)] modifier: Modifier,
-    #[default(true)] enabled: bool,
-    content: impl Fn(RowScope) + 'static,
-) {
-    Button(
-        on_click,
-        modifier,
-        enabled,
-        ButtonDefaults::shape(),
-        ButtonDefaults::elevated_button_colors(),
-        ButtonDefaults::ELEVATED_BUTTON_ELEVATION,
-        None,
-        ButtonDefaults::CONTENT_PADDING,
-        content,
-    );
-}
-
-/// A button with an outline and no fill, as Compose's `OutlinedButton`.
-#[composable]
-pub fn OutlinedButton(
-    on_click: impl Fn() + 'static,
-    #[default(crate::Modifier)] modifier: Modifier,
-    #[default(true)] enabled: bool,
-    content: impl Fn(RowScope) + 'static,
-) {
-    let border = ButtonDefaults::outlined_button_border(enabled);
-    Button(
-        on_click,
-        modifier,
-        enabled,
-        ButtonDefaults::shape(),
-        ButtonDefaults::text_button_colors(),
-        Dp(0.0),
-        Some(border),
-        ButtonDefaults::CONTENT_PADDING,
-        content,
-    );
-}
-
-/// A button of text alone, as Compose's `TextButton`.
-#[composable]
-pub fn TextButton(
-    on_click: impl Fn() + 'static,
-    #[default(crate::Modifier)] modifier: Modifier,
-    #[default(true)] enabled: bool,
-    content: impl Fn(RowScope) + 'static,
-) {
-    Button(
-        on_click,
-        modifier,
-        enabled,
-        ButtonDefaults::shape(),
-        ButtonDefaults::text_button_colors(),
-        Dp(0.0),
-        None,
-        ButtonDefaults::TEXT_BUTTON_CONTENT_PADDING,
-        content,
-    );
 }
 
 // ---- Checkbox --------------------------------------------------------------------------------

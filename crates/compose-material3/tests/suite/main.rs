@@ -3,6 +3,7 @@
 
 extern crate compose_runtime as compose;
 
+mod buttons;
 mod components;
 mod drawer;
 mod material;
