@@ -87,7 +87,7 @@ fn passes_bounds_are_in_pixels_and_follow_scrolling() {
         Density::new(2.0),
         Box::new(FixedTextMeasurer::new()),
         || {
-            let state = remember_scroll_state();
+            let state = remember_scroll_state!();
             STATE.with(|cell| *cell.borrow_mut() = Some(state));
             Column!(modifier = Modifier.height(50.dp()).vertical_scroll(state), {
                 Box!(

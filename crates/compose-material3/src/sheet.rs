@@ -180,7 +180,10 @@ impl ComposeArg for SheetState {
 
 /// A modal sheet's state remembered here, hidden, as `rememberModalBottomSheetState(
 /// skipPartiallyExpanded)`.
-pub fn remember_modal_bottom_sheet_state(skip_partially_expanded: bool) -> SheetState {
+#[composable(non_restartable)]
+pub fn remember_modal_bottom_sheet_state(
+    #[default(false)] skip_partially_expanded: bool,
+) -> SheetState {
     remember(|| SheetState::new(skip_partially_expanded, SheetValue::Hidden, |_| true, false))
 }
 

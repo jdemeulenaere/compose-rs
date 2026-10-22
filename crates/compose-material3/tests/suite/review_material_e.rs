@@ -37,7 +37,7 @@ fn Screen(kind: u8, small: bool, content: u8) {
             1 => TopAppBarDefaults::enter_always_scroll_behavior(),
             _ => TopAppBarDefaults::exit_until_collapsed_scroll_behavior(),
         };
-        let scroll = remember_scroll_state();
+        let scroll = remember_scroll_state!();
         Scaffold!(
             modifier = Modifier.nested_scroll(behavior.nested_scroll_connection()),
             top_bar = {

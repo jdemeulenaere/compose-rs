@@ -475,8 +475,9 @@ pub fn Box(
     Layout(modifier, policy, compose_runtime::callback(move || content(BoxScope::__new())));
 }
 
-/// Empty space of the size its modifier gives it, as Compose's `Spacer`.
+/// Empty space of the size its modifier gives it, as Compose's `Spacer` (whose modifier has no
+/// default; `Spacer!()` is an empty space of no size).
 #[composable]
-pub fn Spacer(modifier: Modifier) {
+pub fn Spacer(#[default(crate::Modifier)] modifier: Modifier) {
     Layout(modifier, empty_measure_policy(), compose_runtime::callback(|| {}));
 }

@@ -34,7 +34,7 @@ pub fn GalleryWith(about: bool) {
         let searching = remember_saveable(|| mutable_state_of(false));
         let query = remember_saveable(|| mutable_state_of(String::new()));
         let drawer = remember_drawer_state(DrawerValue::Closed);
-        let list = remember_lazy_list_state(0, 0);
+        let list = remember_lazy_list_state!();
         let scroll_behavior = TopAppBarDefaults::enter_always_scroll_behavior();
         let snackbars = remember(SnackbarHostState::new);
         let scope = remember_coroutine_scope();
@@ -100,12 +100,7 @@ pub fn GalleryWith(about: bool) {
                                 cards.set(added + 1);
                                 scope.launch(async move {
                                     snackbars
-                                        .show_snackbar(
-                                            format!("Card {added} added at the top"),
-                                            None,
-                                            false,
-                                            SnackbarDuration::Short,
-                                        )
+                                        .show_snackbar(format!("Card {added} added at the top"))
                                         .await;
                                 });
                             },

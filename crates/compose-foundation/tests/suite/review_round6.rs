@@ -119,7 +119,7 @@ fn thumb(ui: &mut ComposeTestRule) -> Option<Rect> {
 #[test]
 fn a_lazy_scrollbar_hides_when_items_with_spacing_fit() {
     let mut ui = ComposeTestRule::sized(IntSize::new(300, 230), || {
-        let list = remember_lazy_list_state(0, 0);
+        let list = remember_lazy_list_state!();
         Row!(modifier = Modifier.fill_max_size(), |row: RowScope| {
             LazyColumn!(
                 modifier = Modifier.weight(row, 1.0),

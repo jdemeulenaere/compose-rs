@@ -286,7 +286,8 @@ fn a_combined_clickable_in_a_scroll_doesnt_long_click_once_dragged() {
     let mut ui = ComposeTestRule::with_manual_clock(move || {
         let seen = seen.clone();
         Column!(
-            modifier = Modifier.size((100.dp(), 100.dp())).vertical_scroll(remember_scroll_state()),
+            modifier =
+                Modifier.size((100.dp(), 100.dp())).vertical_scroll(remember_scroll_state!()),
             {
                 let (click, long) = (seen.clone(), seen.clone());
                 Box!(

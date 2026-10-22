@@ -143,7 +143,7 @@ pub fn BigScreen() {
                 });
             },
             |padding: PaddingValues| {
-                let scroll = remember_scroll_state();
+                let scroll = remember_scroll_state!();
                 Column!(
                     modifier = Modifier.padding(padding).fill_max_size().vertical_scroll(scroll),
                     {

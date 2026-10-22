@@ -17,7 +17,7 @@ thread_local! {
 
 #[composable]
 fn List() {
-    let state = remember_scroll_state();
+    let state = remember_scroll_state!();
     STATE.with(|cell| *cell.borrow_mut() = Some(state));
     Column!(modifier = Modifier.fill_max_size().vertical_scroll(state), {
         for index in 0..20u32 {
@@ -109,4 +109,21 @@ fn setting_the_scroll_state_scrolls() {
     state().scroll_to(10_000);
     ui.wait_for_idle();
     assert_eq!(state().value(), 800, "clamped at layout");
+}
+
+/// `rememberScrollState(initial)` through its call macro, and `Spacer()` without a modifier.
+#[test]
+fn a_scroll_state_starts_at_its_initial_value() {
+    thread_local! {
+        static INITIAL: RefCell<Option<ScrollState>> = const { RefCell::new(None) };
+    }
+    let _ui = ComposeTestRule::sized(IntSize::new(100, 100), || {
+        let state = remember_scroll_state!(initial = 30);
+        INITIAL.with(|cell| *cell.borrow_mut() = Some(state));
+        Column!(modifier = Modifier.fill_max_size().vertical_scroll(state), {
+            Spacer!();
+            Spacer!(Modifier.height(500.dp()));
+        });
+    });
+    assert_eq!(INITIAL.with(|cell| (*cell.borrow()).unwrap().value()), 30);
 }

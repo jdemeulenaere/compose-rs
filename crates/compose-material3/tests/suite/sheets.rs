@@ -233,7 +233,7 @@ fn ScrollingSheetApp(state: SheetState) {
     MaterialTheme!({
         ModalBottomSheet!(|| {}, sheet_state = state, {
             Column!(
-                modifier = Modifier.fill_max_width().vertical_scroll(remember_scroll_state()),
+                modifier = Modifier.fill_max_width().vertical_scroll(remember_scroll_state!()),
                 {
                     for index in 0..40 {
                         let tag = if index == 0 { "first" } else { "other" };

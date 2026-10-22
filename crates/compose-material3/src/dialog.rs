@@ -258,7 +258,7 @@ pub fn DropdownMenu(
     on_dismiss_request: impl Fn() + 'static,
     #[default(crate::Modifier)] modifier: Modifier,
     #[default(crate::IntOffset::ZERO)] offset: IntOffset,
-    #[default(crate::remember_scroll_state())] scroll_state: compose_foundation::ScrollState,
+    #[default(crate::remember_scroll_state(0))] scroll_state: compose_foundation::ScrollState,
     content: impl Fn(ColumnScope) + 'static,
 ) {
     if expanded {

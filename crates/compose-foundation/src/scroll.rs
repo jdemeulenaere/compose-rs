@@ -101,7 +101,7 @@ impl ComposeArg for ScrollState {
 /// A scroll state kept across recompositions and saved across the host's recreation, as
 /// `rememberScrollState()` (a `rememberSaveable` of `ScrollState.Saver`).
 #[composable(non_restartable)]
-pub fn remember_scroll_state() -> ScrollState {
+pub fn remember_scroll_state(#[default(0)] initial: i32) -> ScrollState {
     let saver = compose_runtime::saver(
         |state: &Owned<ScrollState>| {
             Some(compose_runtime::SavedValue::Int(i64::from(state.value())))
@@ -111,7 +111,7 @@ pub fn remember_scroll_state() -> ScrollState {
             _ => None,
         },
     );
-    compose_runtime::remember_saveable_with(saver, || ScrollState::new(0))
+    compose_runtime::remember_saveable_with(saver, || ScrollState::new(initial))
 }
 
 /// The scrolling modifiers, on `Modifier`.

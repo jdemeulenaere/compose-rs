@@ -31,9 +31,9 @@ thread_local! {
 fn ThreeLevels() {
     MaterialTheme!({
         let behavior = TopAppBarDefaults::exit_until_collapsed_scroll_behavior();
-        let outer = remember_scroll_state();
+        let outer = remember_scroll_state!();
         OUTER.with(|cell| *cell.borrow_mut() = Some(outer));
-        let inner = remember_scroll_state();
+        let inner = remember_scroll_state!();
         Scaffold!(
             modifier = Modifier.nested_scroll(behavior.nested_scroll_connection()),
             top_bar = {
@@ -106,7 +106,7 @@ fn ScrollingSheet(state: SheetState) {
     MaterialTheme!({
         ModalBottomSheet!(|| {}, sheet_state = state, {
             Column!(
-                modifier = Modifier.fill_max_width().vertical_scroll(remember_scroll_state()),
+                modifier = Modifier.fill_max_width().vertical_scroll(remember_scroll_state!()),
                 {
                     for index in 0..40 {
                         let tag = if index == 0 { "first" } else { "other" };

@@ -59,6 +59,24 @@ pub struct SnackbarVisuals {
     pub duration: SnackbarDuration,
 }
 
+impl From<String> for SnackbarVisuals {
+    /// A message alone, shown for `SnackbarDuration::Short`, as `showSnackbar(message)`.
+    fn from(message: String) -> SnackbarVisuals {
+        SnackbarVisuals {
+            message,
+            action_label: None,
+            with_dismiss_action: false,
+            duration: SnackbarDuration::Short,
+        }
+    }
+}
+
+impl From<&str> for SnackbarVisuals {
+    fn from(message: &str) -> SnackbarVisuals {
+        SnackbarVisuals::from(message.to_owned())
+    }
+}
+
 /// A snackbar being shown, as Compose's `SnackbarData`: its visuals, and how to end it.
 #[derive(Clone)]
 pub struct SnackbarData {
@@ -218,19 +236,29 @@ impl SnackbarHostState {
     /// Shows a snackbar once those asked for before it ended, and waits for it to end, as
     /// `showSnackbar`: `ActionPerformed` if its action was clicked. Cancelling the coroutine
     /// takes it away.
-    pub async fn show_snackbar(
+    pub async fn show_snackbar(&self, visuals: impl Into<SnackbarVisuals>) -> SnackbarResult {
+        self.show(visuals.into()).await
+    }
+
+    /// `show_snackbar` with Compose's optional parameters, as `showSnackbar(message,
+    /// actionLabel, withDismissAction, duration)`.
+    pub async fn show_snackbar_with(
         &self,
         message: impl Into<String>,
         action_label: Option<String>,
         with_dismiss_action: bool,
         duration: SnackbarDuration,
     ) -> SnackbarResult {
-        let visuals = SnackbarVisuals {
+        self.show(SnackbarVisuals {
             message: message.into(),
             action_label,
             with_dismiss_action,
             duration,
-        };
+        })
+        .await
+    }
+
+    async fn show(&self, visuals: SnackbarVisuals) -> SnackbarResult {
         let done = Rc::new(Completion::default());
         // Kept while it waits: the host outlives its owner until the snackbar ends.
         let Some(host) = self.inner() else { return SnackbarResult::Dismissed };

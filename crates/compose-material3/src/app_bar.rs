@@ -142,10 +142,22 @@ impl ComposeArg for TopAppBarState {
     }
 }
 
-/// A top app bar state remembered here, as `rememberTopAppBarState()`: no limit until a bar
-/// sets it, expanded, the content at its start.
-pub fn remember_top_app_bar_state() -> TopAppBarState {
-    remember(|| TopAppBarState::new(-f32::MAX, 0.0, 0.0))
+/// A top app bar state remembered here, as `rememberTopAppBarState(initialHeightOffsetLimit,
+/// initialHeightOffset, initialContentOffset)`: by default no limit until a bar sets it,
+/// expanded, the content at its start.
+#[composable(non_restartable)]
+pub fn remember_top_app_bar_state(
+    #[default(-f32::MAX)] initial_height_offset_limit: f32,
+    #[default(0.0)] initial_height_offset: f32,
+    #[default(0.0)] initial_content_offset: f32,
+) -> TopAppBarState {
+    remember(|| {
+        TopAppBarState::new(
+            initial_height_offset_limit,
+            initial_height_offset,
+            initial_content_offset,
+        )
+    })
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -401,7 +413,7 @@ impl TopAppBarDefaults {
 fn remembered_behavior(
     make: fn(TopAppBarState, CoroutineScope) -> TopAppBarScrollBehavior,
 ) -> TopAppBarScrollBehavior {
-    let state = remember_top_app_bar_state();
+    let state = remember_top_app_bar_state!();
     let scope = remember_coroutine_scope();
     remember(move || make(state, scope))
 }

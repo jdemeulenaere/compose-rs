@@ -90,7 +90,7 @@ fn opening_a_dialog_inside_a_scrolled_column_does_not_scroll_it() {
         static OPEN: RefCell<Option<MutableState<bool>>> = const { RefCell::new(None) };
     }
     let mut ui = ComposeTestRule::sized(IntSize::new(300, 300), || {
-        let state = remember_scroll_state();
+        let state = remember_scroll_state!();
         let open = remember(|| mutable_state_of(false));
         STATE.with(|cell| *cell.borrow_mut() = Some(state));
         OPEN.with(|cell| *cell.borrow_mut() = Some(open));
@@ -183,7 +183,7 @@ fn a_popup_is_measured_with_the_new_window_size_after_a_resize() {
 fn passes_a_popup_follows_its_anchor_when_it_scrolls() {
     thread_local! { static STATE: RefCell<Option<ScrollState>> = const { RefCell::new(None) }; }
     let mut ui = ComposeTestRule::sized(IntSize::new(300, 300), || {
-        let state = remember_scroll_state();
+        let state = remember_scroll_state!();
         STATE.with(|cell| *cell.borrow_mut() = Some(state));
         Column!(modifier = Modifier.fill_max_size().vertical_scroll(state), {
             for index in 0..20 {

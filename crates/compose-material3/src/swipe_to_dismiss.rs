@@ -164,13 +164,18 @@ impl ComposeArg for SwipeToDismissBoxState {
 /// A swipe-to-dismiss state remembered here, as `rememberSwipeToDismissBoxState(initialValue,
 /// confirmValueChange)`: a swipe of 56 dp dismisses (`SwipeToDismissBoxDefaults`'s positional
 /// threshold).
+#[composable(non_restartable)]
 pub fn remember_swipe_to_dismiss_box_state(
-    initial_value: SwipeToDismissBoxValue,
-    confirm_value_change: impl Fn(SwipeToDismissBoxValue) -> bool + 'static,
+    #[default(crate::SwipeToDismissBoxValue::Settled)] initial_value: SwipeToDismissBoxValue,
+    #[default(|_| true)] confirm_value_change: impl Fn(SwipeToDismissBoxValue) -> bool + 'static,
 ) -> SwipeToDismissBoxState {
     let threshold = compose_ui::LOCAL_DENSITY.current().to_px(Dp(56.0));
     remember(move || {
-        SwipeToDismissBoxState::new(initial_value, confirm_value_change, move |_| threshold)
+        SwipeToDismissBoxState::new(
+            initial_value,
+            move |value| confirm_value_change(value),
+            move |_| threshold,
+        )
     })
 }
 

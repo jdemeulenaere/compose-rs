@@ -77,7 +77,7 @@ fn a_scrollbar_follows_a_lazy_list_and_hides_when_it_fits() {
     assert_eq!(thumb(&mut ui).map(|thumb| thumb.top.round()), Some(100.0));
     // A list that fits has no thumb.
     let mut ui = ComposeTestRule::sized(IntSize::new(300, 200), || {
-        let list = remember_lazy_list_state(0, 0);
+        let list = remember_lazy_list_state!();
         Row!(modifier = Modifier.fill_max_size(), |row: RowScope| {
             LazyColumn!(
                 modifier = Modifier.weight(row, 1.0),

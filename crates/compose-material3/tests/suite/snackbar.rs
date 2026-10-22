@@ -39,7 +39,7 @@ fn show(
 ) {
     let (host, message, action) = (*host, message.to_string(), action.map(str::to_string));
     scope.borrow().as_ref().unwrap().launch(async move {
-        let result = host.show_snackbar(message, action, false, SnackbarDuration::Short).await;
+        let result = host.show_snackbar_with(message, action, false, SnackbarDuration::Short).await;
         RESULTS.with(|results| results.borrow_mut().push(result));
     });
 }
@@ -83,7 +83,7 @@ fn cancelling_show_snackbar_takes_it_away_and_lets_the_next_show() {
     let job = {
         let host = *host;
         scope.borrow().as_ref().unwrap().launch(async move {
-            host.show_snackbar("Cancelled", None, false, SnackbarDuration::Indefinite).await;
+            host.show_snackbar_with("Cancelled", None, false, SnackbarDuration::Indefinite).await;
         })
     };
     show(&scope, &host, "Next", None);
@@ -93,4 +93,14 @@ fn cancelling_show_snackbar_takes_it_away_and_lets_the_next_show() {
     ui.advance_time_by(Duration::from_millis(500));
     ui.on_node_with_text("Cancelled").assert_does_not_exist();
     ui.on_node_with_text("Next").assert_exists();
+}
+
+/// `showSnackbar(message)`: a message alone is shown for `Short`, without an action.
+#[test]
+fn a_message_alone_is_a_short_snackbar() {
+    let visuals = SnackbarVisuals::from("Saved");
+    assert_eq!(visuals.message, "Saved");
+    assert_eq!(visuals.action_label, None);
+    assert!(!visuals.with_dismiss_action);
+    assert_eq!(visuals.duration, SnackbarDuration::Short);
 }

@@ -195,7 +195,7 @@ fn a_vertical_swipe_on_a_slider_scrolls_its_column() {
     thread_local! { static VALUE: Cell<f32> = const { Cell::new(0.2) }; }
     #[composable]
     fn Screen() {
-        let state = remember_scroll_state();
+        let state = remember_scroll_state!();
         Column!(modifier = Modifier.fill_max_size().vertical_scroll(state), {
             Spacer(Modifier.height(100.dp()));
             Slider!(

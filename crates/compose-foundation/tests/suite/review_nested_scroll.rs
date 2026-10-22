@@ -58,8 +58,8 @@ fn inner() -> ScrollState {
 /// `connected`.
 #[composable]
 fn Nested(connected: bool) {
-    let outer = remember_scroll_state();
-    let inner = remember_scroll_state();
+    let outer = remember_scroll_state!();
+    let inner = remember_scroll_state!();
     OUTER.with(|cell| *cell.borrow_mut() = Some(outer));
     INNER.with(|cell| *cell.borrow_mut() = Some(inner));
     let around = if connected {
@@ -166,7 +166,7 @@ thread_local! {
 fn Recorded() {
     let recorder: Rc<dyn NestedScrollConnection> =
         RECORDER.with(|cell| cell.borrow().clone().expect("set"));
-    let state = remember_scroll_state();
+    let state = remember_scroll_state!();
     Column!(modifier = Modifier.fill_max_size().nested_scroll(recorder), {
         Column!(modifier = Modifier.fill_max_size().vertical_scroll(state), {
             // 3,250 px in 300: 2,950 to scroll.

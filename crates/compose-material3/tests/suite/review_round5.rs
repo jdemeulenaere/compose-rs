@@ -52,7 +52,7 @@ fn show(
 ) -> Job {
     let (host, message, action) = (*host, message.to_string(), action.map(str::to_string));
     scope.borrow().as_ref().unwrap().launch(async move {
-        let result = host.show_snackbar(message.clone(), action, false, duration).await;
+        let result = host.show_snackbar_with(message.clone(), action, false, duration).await;
         RESULTS.with(|results| results.borrow_mut().push((message, result)));
     })
 }
@@ -104,7 +104,8 @@ fn passes_a_snackbar_shown_from_an_effect_that_leaves_goes_with_it() {
         MaterialTheme!({
             if asking.get() {
                 LaunchedEffect((), async move {
-                    host.show_snackbar("Asked", None, false, SnackbarDuration::Indefinite).await;
+                    host.show_snackbar_with("Asked", None, false, SnackbarDuration::Indefinite)
+                        .await;
                 });
             }
             Scaffold!(snackbar_host = move || SnackbarHost!(host), |_padding| {});
@@ -333,7 +334,7 @@ fn a_snackbars_dismiss_button_is_at_its_end() {
     {
         let host = *host;
         scope.borrow().as_ref().unwrap().launch(async move {
-            host.show_snackbar("Saved", None, true, SnackbarDuration::Indefinite).await;
+            host.show_snackbar_with("Saved", None, true, SnackbarDuration::Indefinite).await;
         });
     }
     ui.wait_for_idle();

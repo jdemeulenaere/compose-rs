@@ -305,7 +305,7 @@ fn a_lazy_list_keeps_its_position_in_a_new_host() {
 fn a_scroll_state_keeps_its_value_in_a_new_host() {
     thread_local! { static STATE: RefCell<Option<ScrollState>> = const { RefCell::new(None) }; }
     let content = || {
-        let state = remember_scroll_state();
+        let state = remember_scroll_state!();
         STATE.with(|cell| *cell.borrow_mut() = Some(state));
         Column!(modifier = Modifier.size((100.dp(), 100.dp())).vertical_scroll(state), {
             Box!(modifier = Modifier.size((100.dp(), 1000.dp())));
