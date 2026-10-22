@@ -1733,8 +1733,9 @@ NavHost(navController, startDestination = Inbox) {
 
 <!-- snippet: src/navigation.rs#screens -->
 ```rust
-/// The app's destinations: Navigation Compose's routes, as an enum.
-#[derive(Clone, Copy, PartialEq, Debug)]
+/// The app's destinations: Navigation Compose's routes, as an enum (`ComposeArg`, so a
+/// composable can take one).
+#[derive(Clone, Copy, PartialEq, Debug, ComposeArg)]
 pub enum Screen {
     Inbox,
     Message(u32),
@@ -1783,11 +1784,29 @@ pub fn App() {
 - **The back stack.** `nav_controller.navigate(destination)` pushes; `pop_back_stack()` pops (and returns `false` at the start destination, which stays); `pop_back_stack_to(&destination, inclusive)` is `popBackStack(route, inclusive)`. `navigate_with(destination, NavOptions { pop_up_to: Some(Screen::Inbox), launch_single_top: true, ..NavOptions::default() })` is `navigate(route) { popUpTo(Inbox); launchSingleTop = true }`. `current_destination()`, `current_back_stack_entry()`, `previous_back_stack_entry()` and `current_back_stack()` are state reads: what reads them recomposes when the stack changes. Navigate from event handlers, not while composing.
 - **Saved state.** `remember_nav_controller(start_destination)` saves the stack, so destinations implement `Saveable`. Each entry's content is in a `SaveableStateProvider` of its own: its `remember_saveable` values (its lists' scroll positions too) are kept while it's on the stack, come back when it shows again, survive the process's death with the stack, and go when it's popped. `remember` values go when another entry shows, as in Compose.
 - **Back.** The `NavHost` pops on back while there's an entry under the top one; at the start destination, back leaves the app (or goes to the Kotlin UI around it). A screen's own `BackHandler` goes first.
-- **Transitions.** None by default: `NavHost!(nav_controller, enter_transition = fade_in(), exit_transition = fade_out(), …)` fades, as Compose's default does; any `EnterTransition` and `ExitTransition` go.
+- **Transitions.** None by default: `NavHost!(nav_controller, enter_transition = fade_in(), exit_transition = fade_out(), …)` fades, as Compose's default does; any `EnterTransition` and `ExitTransition` go. A screen fading out takes no back: its `BackHandler`s are disabled (`LOCAL_BACK_HANDLERS_ENABLED`), as Navigation Compose's entries that aren't resumed.
+- **Navigate from handlers and effects.** `navigate` writes state, which composition can't (debug builds panic); a redirect goes in a `LaunchedEffect`:
+
+<!-- snippet: src/navigation.rs#redirect -->
+```rust
+/// Sends the user to `to` as soon as it shows, in place of itself. Navigating writes state, so
+/// it goes in an effect or an event handler, never in a composable's body (debug builds panic).
+#[composable]
+pub fn Redirect(nav_controller: NavController<Screen>, to: Screen) {
+    LaunchedEffect((), async move {
+        nav_controller.navigate_with(
+            to,
+            NavOptions { pop_up_to: Some(Screen::Inbox), ..NavOptions::default() },
+        );
+    });
+}
+```
+
 
 What's different from Navigation Compose:
 
 - `remember_nav_controller` takes the start destination (`NavHost` takes it in Compose), so the stack is never empty.
+- Entry ids are random 64-bit numbers rather than UUID strings; destinations that a composable takes implement `ComposeArg` (`#[derive(ComposeArg)]`).
 - Destinations are compared with `==`: `launch_single_top` keeps the top entry only when it's equal (Compose's compares the route and replaces the arguments), and `pop_up_to` finds the topmost entry equal to it.
 - There are no nested graphs, deep links, dialog destinations, per-entry `ViewModel`s or lifecycles, and no `saveState`/`restoreState` for bottom navigation's tabs.
 

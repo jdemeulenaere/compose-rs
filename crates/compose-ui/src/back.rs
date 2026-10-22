@@ -96,6 +96,13 @@ impl OnBackPressedDispatcher {
 pub static LOCAL_ON_BACK_PRESSED_DISPATCHER: CompositionLocal<Option<OnBackPressedDispatcher>> =
     CompositionLocal::new("LocalOnBackPressedDispatcher", || None);
 
+/// Whether the `BackHandler`s of the content may take back: `false` disables them all, as
+/// Navigation Compose's back stack entries that aren't resumed (an entry fading out, under a
+/// `NavHost` transition) disable theirs through their lifecycle. A container providing it
+/// provides `false` inside content already disabled.
+pub static LOCAL_BACK_HANDLERS_ENABLED: CompositionLocal<bool> =
+    CompositionLocal::new("LocalBackHandlersEnabled", || true);
+
 /// How many dialogs or focusable popups the content is in: their handlers go first.
 pub(crate) static LOCAL_BACK_LAYER: CompositionLocal<u32> =
     CompositionLocal::new("LocalBackLayer", || 0);
@@ -123,10 +130,12 @@ impl RememberObserver for BackRegistration {
 /// Calls `on_back` when the user goes back (Android's back gesture or button, Escape on
 /// desktop) while `enabled`, as AndroidX's `BackHandler`: the innermost enabled handler gets
 /// it (those in dialogs and focusable popups first, then the one composed last). While any is
-/// enabled, back doesn't leave the app.
+/// enabled, back doesn't leave the app. Where [`LOCAL_BACK_HANDLERS_ENABLED`] is `false`, it's
+/// disabled.
 #[composable]
 #[allow(non_snake_case)]
 pub fn BackHandler(#[default(true)] enabled: bool, on_back: impl Fn() + 'static) {
+    let enabled = enabled && LOCAL_BACK_HANDLERS_ENABLED.current();
     let registration = remember_observer(|| {
         let dispatcher = LOCAL_ON_BACK_PRESSED_DISPATCHER.current();
         let layer = LOCAL_BACK_LAYER.current();

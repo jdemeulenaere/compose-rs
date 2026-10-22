@@ -136,6 +136,27 @@ impl TopAppBarState {
     }
 }
 
+impl TopAppBarState {
+    /// Saves its height offset limit, height offset and content offset, as Compose's
+    /// `TopAppBarState.Saver`.
+    pub fn saver() -> impl compose_runtime::Saver<Owned<TopAppBarState>> {
+        use compose_runtime::Saveable;
+        compose_runtime::saver(
+            |state: &Owned<TopAppBarState>| {
+                state.inner()?;
+                Some(
+                    (state.height_offset_limit(), state.height_offset(), state.content_offset())
+                        .save(),
+                )
+            },
+            |saved| {
+                <(f32, f32, f32)>::restore(saved)
+                    .map(|(limit, height, content)| TopAppBarState::new(limit, height, content))
+            },
+        )
+    }
+}
+
 impl ComposeArg for TopAppBarState {
     fn same(&self, other: &Self) -> bool {
         self == other
@@ -145,13 +166,15 @@ impl ComposeArg for TopAppBarState {
 /// A top app bar state remembered here, as `rememberTopAppBarState(initialHeightOffsetLimit,
 /// initialHeightOffset, initialContentOffset)`: by default no limit until a bar sets it,
 /// expanded, the content at its start.
+/// Saved across the host's recreation (a `rememberSaveable`, as Compose's), and kept by a
+/// `SaveableStateProvider`: a bar collapsed on a screen is collapsed when it shows again.
 #[composable(non_restartable)]
 pub fn remember_top_app_bar_state(
     #[default(-f32::MAX)] initial_height_offset_limit: f32,
     #[default(0.0)] initial_height_offset: f32,
     #[default(0.0)] initial_content_offset: f32,
 ) -> TopAppBarState {
-    remember(|| {
+    compose_runtime::remember_saveable_with(TopAppBarState::saver(), || {
         TopAppBarState::new(
             initial_height_offset_limit,
             initial_height_offset,

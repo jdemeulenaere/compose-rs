@@ -5,12 +5,12 @@ use std::rc::Rc;
 
 use compose_animation::{AnimatedContent, EnterTransition, ExitTransition};
 use compose_runtime::{
-    Callback, ComposeArg, SaveableStateHolder, SideEffect, composable, remember, remember_keyed,
-    remember_saveable_state_holder,
+    Callback, ComposeArg, Saveable, SaveableStateHolder, SideEffect, composable, remember_keyed,
+    remember_saveable_state_holder, remember_saveable_with, saver,
 };
 use compose_ui::{
-    Alignment, BackHandler, Constraints, IntSize, Layout, Measurable, MeasurePolicy, MeasureResult,
-    MeasureScope, Modifier,
+    Alignment, BackHandler, Constraints, IntSize, LOCAL_BACK_HANDLERS_ENABLED, Layout, Measurable,
+    MeasurePolicy, MeasureResult, MeasureScope, Modifier,
 };
 
 use crate::controller::{NavBackStackEntry, NavController};
@@ -27,7 +27,11 @@ use crate::controller::{NavBackStackEntry, NavController};
 ///   before the content, so the content's own handlers go first); at the start destination,
 ///   back leaves the app.
 /// - `enter_transition` and `exit_transition` animate the change of entry (`fade_in()` and
-///   `fade_out()`, Compose's default, for instance); by default it changes at once.
+///   `fade_out()`, Compose's default, for instance); by default it changes at once. An entry
+///   leaving takes no back: its `BackHandler`s are disabled ([`LOCAL_BACK_HANDLERS_ENABLED`]),
+///   as Navigation Compose's entries that aren't resumed.
+/// - Navigate from event handlers and effects, not while composing (a state write during
+///   composition panics in debug builds): a redirect goes in a `LaunchedEffect`.
 ///
 /// ```ignore
 /// let nav_controller = remember_nav_controller(Screen::Inbox);
@@ -48,16 +52,26 @@ pub fn NavHost<D: Clone + PartialEq + 'static>(
 ) {
     let holder = remember_saveable_state_holder();
     let back_stack = nav_controller.current_back_stack();
+    // A controller whose owner went: nothing to show.
+    let Some(entry) = back_stack.last().cloned() else { return };
     BackHandler(
         back_stack.len() > 1,
         compose_runtime::callback(move || {
             nav_controller.pop_back_stack();
         }),
     );
-    // The state of entries popped since the last pass goes (an entry popped while it fades out
-    // keeps its state until it's gone, and leaves none behind).
+    // The state of entries gone from the stack since the last pass goes (an entry popped while
+    // it fades out keeps its state until it's gone, and leaves none behind). The ids are saved
+    // with the holder: in a new process, the first pass removes those of a stack that couldn't
+    // be restored, or of a controller replaced since.
     let ids: Vec<u64> = back_stack.iter().map(|entry| entry.id).collect();
-    let kept = remember(|| Rc::new(RefCell::new(Vec::<u64>::new())));
+    let kept = remember_saveable_with(
+        saver(
+            |kept: &Rc<RefCell<Vec<u64>>>| Some(kept.borrow().save()),
+            |saved| Vec::<u64>::restore(saved).map(|ids| Rc::new(RefCell::new(ids))),
+        ),
+        || Rc::new(RefCell::new(Vec::<u64>::new())),
+    );
     SideEffect(move || {
         let mut kept = kept.borrow_mut();
         for id in kept.iter().filter(|id| !ids.contains(id)) {
@@ -65,7 +79,6 @@ pub fn NavHost<D: Clone + PartialEq + 'static>(
         }
         *kept = ids;
     });
-    let entry = back_stack.last().expect("a back stack is never empty").clone();
     if enter_transition == EnterTransition::NONE && exit_transition == ExitTransition::NONE {
         let policy = remember_keyed(AlignmentKey(content_alignment), || {
             Rc::new(EntryLayout { alignment: content_alignment }) as Rc<dyn MeasurePolicy>
@@ -73,7 +86,9 @@ pub fn NavHost<D: Clone + PartialEq + 'static>(
         Layout(
             modifier,
             policy,
-            compose_runtime::callback(move || EntryContent(holder, entry.clone(), &content)),
+            compose_runtime::callback(move || {
+                holder.SaveableStateProvider(entry.id, || content(entry.destination.clone()));
+            }),
         );
     } else {
         AnimatedContent(
@@ -85,20 +100,29 @@ pub fn NavHost<D: Clone + PartialEq + 'static>(
             content_alignment,
             "NavHost",
             compose_runtime::callback(move |entry: NavBackStackEntry<D>| {
-                EntryContent(holder, entry, &content)
+                AnimatedEntry(nav_controller, holder, entry, &content)
             }),
         );
     }
 }
 
-/// An entry's content, with its saveable state.
+/// An entry's content in `AnimatedContent`, with its saveable state; its back handlers enabled
+/// only while it's the top entry (one fading out takes no back).
 #[allow(non_snake_case)]
-fn EntryContent<D: Clone + 'static>(
+fn AnimatedEntry<D: Clone + PartialEq + 'static>(
+    nav_controller: NavController<D>,
     holder: SaveableStateHolder,
     entry: NavBackStackEntry<D>,
     content: &Callback<dyn Fn(D)>,
 ) {
-    holder.SaveableStateProvider(entry.id, || content(entry.destination));
+    let top = nav_controller.is_top(entry.id);
+    let enabled = top && LOCAL_BACK_HANDLERS_ENABLED.current();
+    compose_runtime::CompositionLocalProvider(
+        LOCAL_BACK_HANDLERS_ENABLED.provides(enabled),
+        || {
+            holder.SaveableStateProvider(entry.id, || content(entry.destination));
+        },
+    );
 }
 
 #[derive(Clone, Copy, PartialEq)]

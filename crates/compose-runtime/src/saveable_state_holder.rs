@@ -99,8 +99,10 @@ impl SaveableStateHolder {
     /// Composes `content` with the saveable state kept under `key`, as Compose's
     /// `SaveableStateProvider`: what its `remember_saveable` calls remember is kept by the
     /// holder when it leaves the composition, and given back when content with `key` comes
-    /// back. Content with one key is composed at one place at a time. Like `key(…)`, it's a
-    /// keyed group: its content's state follows the key.
+    /// back. Content with one key is composed at one place at a time (debug builds panic
+    /// otherwise, as Compose throws). Content that leaves one place and comes in at another in
+    /// one pass starts without its state (the new place composes before the old one saves), as
+    /// in Compose. Like `key(…)`, it's a keyed group: its content's state follows the key.
     #[allow(non_snake_case)]
     #[track_caller]
     pub fn SaveableStateProvider(&self, key: impl Hash, content: impl FnOnce()) {
@@ -201,11 +203,17 @@ impl RememberObserver for ProviderEntry {
         holder.saved_states.borrow_mut().remove(&self.key);
         let previous = holder.active.borrow_mut().insert(self.key, self.active.clone());
         if previous.is_some() {
-            log::warn!(
-                "SaveableStateProvider: the key {:#x} is composed at two places at once; the \
-                 state of the last one composed is kept",
+            // A programming error, as Compose's `require`: debug builds panic (once the pass
+            // is applied), release builds keep the state of the last one composed.
+            let message = format!(
+                "SaveableStateProvider: the key {:#x} is composed at two places at once (each \
+                 key's content must be composed at one place at a time)",
                 self.key
             );
+            if cfg!(debug_assertions) {
+                panic!("{message}");
+            }
+            log::warn!("{message}; the state of the last one composed is kept");
         }
     }
 

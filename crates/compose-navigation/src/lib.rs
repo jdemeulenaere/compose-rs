@@ -2,7 +2,7 @@
 //! holds a back stack of the app's destinations, values of its own type (an enum, typically,
 //! rather than string routes), and a [`NavHost`] shows the top one, each entry's saveable state
 //! kept while it's on the stack. Back pops the stack. The stack is saved across the host's
-//! recreation ([`remember_nav_controller`]). See D290 to D292 in docs/decisions.md.
+//! recreation ([`remember_nav_controller`]). See D290 to D293 in docs/decisions.md.
 
 #![forbid(unsafe_code)]
 // Every type reachable from the public API can be named (D260): a type in a private

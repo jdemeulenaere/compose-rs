@@ -95,7 +95,10 @@ pub use alignment::{
     Alignment, HorizontalAlignment, LOCAL_LAYOUT_DIRECTION, LayoutDirection, VerticalAlignment,
 };
 pub use annotated::{AnnotatedString, AnnotatedStringBuilder, SpanRange, SpanStyle};
-pub use back::{BackHandler, LOCAL_ON_BACK_PRESSED_DISPATCHER, OnBackPressedDispatcher};
+pub use back::{
+    BackHandler, LOCAL_BACK_HANDLERS_ENABLED, LOCAL_ON_BACK_PRESSED_DISPATCHER,
+    OnBackPressedDispatcher,
+};
 pub use brush::{Brush, ColorStops, TileMode};
 pub use clipboard::{ClipboardManager, LOCAL_CLIPBOARD_MANAGER};
 pub use configuration::{

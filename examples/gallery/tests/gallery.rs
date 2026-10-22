@@ -78,3 +78,26 @@ fn a_card_opens_its_screen_and_back_returns_to_the_tour_as_it_was() {
     // At the tour, back isn't taken: it leaves the app.
     assert!(!ui.host().has_enabled_back_handlers());
 }
+
+#[test]
+fn the_top_bar_comes_back_from_a_card_as_it_was_left() {
+    use compose::ui::{Offset, PointerEvent};
+    let mut ui = ComposeTestRule::with_manual_clock(gallery::Gallery);
+    let step = std::time::Duration::from_millis(500);
+    let menu_top =
+        |ui: &mut ComposeTestRule| ui.on_node(described("Menu")).fetch_semantics_node().bounds.top;
+    let expanded = menu_top(&mut ui);
+    // The cards scroll, the bar slides partly away (enter always).
+    let card = ui.on_node_with_text("Card 18").fetch_semantics_node().center();
+    ui.host().send_pointer(PointerEvent::scroll(card, Offset::new(0.0, 30.0)));
+    ui.advance_time_by(step);
+    let scrolled = menu_top(&mut ui);
+    assert!(scrolled < expanded, "{scrolled} < {expanded}");
+    ui.on_node_with_text("Card 17").perform_click();
+    ui.advance_time_by(step);
+    ui.on_node_with_text("Not liked yet").assert_exists();
+    assert!(ui.host().on_back_pressed());
+    ui.advance_time_by(step);
+    // The bar's state (`remember_top_app_bar_state`) is saveable, as Compose's: kept.
+    assert_eq!(menu_top(&mut ui), scrolled);
+}

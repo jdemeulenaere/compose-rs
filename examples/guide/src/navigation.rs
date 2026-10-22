@@ -7,8 +7,9 @@ use compose::navigation::*;
 use compose::runtime::*;
 
 // ANCHOR: screens
-/// The app's destinations: Navigation Compose's routes, as an enum.
-#[derive(Clone, Copy, PartialEq, Debug)]
+/// The app's destinations: Navigation Compose's routes, as an enum (`ComposeArg`, so a
+/// composable can take one).
+#[derive(Clone, Copy, PartialEq, Debug, ComposeArg)]
 pub enum Screen {
     Inbox,
     Message(u32),
@@ -52,6 +53,20 @@ pub fn App() {
     });
 }
 // ANCHOR_END: app
+
+// ANCHOR: redirect
+/// Sends the user to `to` as soon as it shows, in place of itself. Navigating writes state, so
+/// it goes in an effect or an event handler, never in a composable's body (debug builds panic).
+#[composable]
+pub fn Redirect(nav_controller: NavController<Screen>, to: Screen) {
+    LaunchedEffect((), async move {
+        nav_controller.navigate_with(
+            to,
+            NavOptions { pop_up_to: Some(Screen::Inbox), ..NavOptions::default() },
+        );
+    });
+}
+// ANCHOR_END: redirect
 
 #[composable]
 pub fn Inbox(on_open: impl Fn(u32) + 'static, on_settings: impl Fn() + 'static) {

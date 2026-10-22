@@ -113,5 +113,60 @@ fn animation_frame(criterion: &mut Criterion) {
     }
 }
 
-criterion_group!(benches, ui, desktop_frame, animation_frame);
+thread_local! {
+    static LIST: std::cell::Cell<Option<compose::foundation::LazyListState>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// A 100,000-item list, 50 dp items in 400 dp, each in its `SaveableStateProvider` (D290).
+#[compose::runtime::composable]
+#[allow(non_snake_case)]
+fn BigList() {
+    use compose::foundation::layout::*;
+    use compose::foundation::*;
+    use compose::ui::{Modifier, UnitExt};
+    let state = remember_lazy_list_state!();
+    LIST.set(Some(state));
+    LazyColumn!(
+        modifier = Modifier.size((100.dp(), 400.dp())),
+        state = state,
+        |scope: LazyListScope| {
+            scope.items_keyed(
+                100_000,
+                |index| index as u32,
+                |index| {
+                    Box!(modifier = Modifier.size((100.dp(), 50.dp())), {
+                        BasicText!("item {index}");
+                    });
+                },
+            );
+        }
+    );
+}
+
+/// Scrolling a long lazy list: each frame scrolls 100 px, composing about two items and
+/// releasing two.
+fn lazy_scroll_frame(criterion: &mut Criterion) {
+    let mut ui = compose_test(BigList);
+    let list = LIST.get().expect("the list composed");
+    let mut frame = move || {
+        // Back to the top, untimed, before the end.
+        if list.first_visible_item_index() > 90_000 {
+            list.scroll_to_item(0, 0);
+            ui.wait_for_idle();
+        }
+        let start = Instant::now();
+        list.scroll_by(100.0);
+        ui.wait_for_idle();
+        start.elapsed()
+    };
+    for _ in 0..500 {
+        frame();
+    }
+    criterion.bench_function("scroll a 100,000-item lazy list, frame", |bench| {
+        bench.iter_custom(|iterations| (0..iterations).map(|_| frame()).sum())
+    });
+}
+
+criterion_group!(benches, ui, desktop_frame, animation_frame, lazy_scroll_frame);
 criterion_main!(benches);

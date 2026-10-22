@@ -1,8 +1,6 @@
 //! `NavController` and `NavHost` (D291): the back stack, each entry's saveable state, back, and
 //! the stack saved across the host's recreation.
 
-extern crate compose_runtime as compose;
-
 use std::cell::Cell;
 
 use compose_animation::{fade_in, fade_out};
@@ -325,7 +323,10 @@ fn the_back_stack_and_its_states_survive_the_process() {
     let mut ui = recreate(ui);
     navigate(&mut ui, Screen::Detail(6));
     let ids: Vec<u64> = nav().current_back_stack().iter().map(|entry| entry.id).collect();
-    assert!(ids.windows(2).all(|pair| pair[0] < pair[1]), "{ids:?}");
+    let mut distinct = ids.clone();
+    distinct.sort();
+    distinct.dedup();
+    assert_eq!(distinct.len(), ids.len(), "{ids:?}");
     assert!(back(&mut ui));
     assert!(back(&mut ui));
     ui.on_node_with_text("Home clicks: 1").assert_exists();

@@ -202,6 +202,21 @@ fn enter_always_comes_back_as_soon_as_the_content_scrolls_back() {
 }
 
 #[test]
+fn a_collapsed_bar_stays_collapsed_in_a_new_host() {
+    let mut ui = ComposeTestRule::sized(IntSize::new(400, 600), || Screen(1, true));
+    ui.set_auto_advance(false);
+    wheel(&mut ui, 300.0);
+    assert_eq!(height(&mut ui), 0.0);
+    // `remember_top_app_bar_state` is saveable, as Compose's (D293).
+    let saved = ui.host().save_state();
+    drop(ui);
+    let host = compose_ui::platform::UiHost::headless(400, 600);
+    host.restore_state(saved);
+    let mut ui = ComposeTestRule::with_host(host, || Screen(1, true));
+    assert_eq!(height(&mut ui), 0.0);
+}
+
+#[test]
 fn a_pinned_bar_stays_and_takes_the_scrolled_color() {
     let mut ui = ComposeTestRule::sized(IntSize::new(400, 600), || Screen(0, true));
     ui.set_auto_advance(false);

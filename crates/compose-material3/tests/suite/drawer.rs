@@ -111,6 +111,25 @@ fn back_closes_an_open_drawer_and_passes_through_a_closed_one() {
     assert!(!ui.host().has_enabled_back_handlers());
 }
 
+#[test]
+fn an_open_drawer_stays_open_in_a_new_host() {
+    // `remember_drawer_state` is saveable, as Compose's (D293).
+    let content = || {
+        let state = remember_drawer_state(DrawerValue::Closed);
+        App(state);
+    };
+    let mut ui = ComposeTestRule::sized(IntSize::new(800, 600), content);
+    ui.on_node_with_tag("open").perform_click();
+    ui.on_node_with_tag("sheet").assert_exists();
+    let saved = ui.host().save_state();
+    drop(ui);
+    let host = compose_ui::platform::UiHost::headless(800, 600);
+    host.restore_state(saved);
+    let mut ui = ComposeTestRule::with_host(host, content);
+    ui.on_node_with_tag("sheet").assert_exists();
+    assert!(ui.host().has_enabled_back_handlers());
+}
+
 #[composable]
 fn AppWithBackHandler(state: DrawerState, log: MutableState<u32>) {
     MaterialTheme!({

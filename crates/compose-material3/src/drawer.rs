@@ -164,10 +164,33 @@ impl ComposeArg for DrawerState {
     }
 }
 
-/// A drawer state remembered at its call site, as `rememberDrawerState(initialValue)`.
+impl DrawerState {
+    /// Saves whether it's open, as Compose's `DrawerState.Saver` (its current value).
+    pub fn saver() -> impl compose_runtime::Saver<Owned<DrawerState>> {
+        compose_runtime::saver(
+            |state: &Owned<DrawerState>| {
+                state.inner()?;
+                Some(compose_runtime::SavedValue::Bool(state.current_value() == DrawerValue::Open))
+            },
+            |saved| match saved {
+                compose_runtime::SavedValue::Bool(open) => Some(DrawerState::new(if *open {
+                    DrawerValue::Open
+                } else {
+                    DrawerValue::Closed
+                })),
+                _ => None,
+            },
+        )
+    }
+}
+
+/// A drawer state remembered at its call site, as `rememberDrawerState(initialValue)`: saved
+/// across the host's recreation (a `rememberSaveable`, as Compose's).
 #[composable(non_restartable)]
 pub fn remember_drawer_state(initial_value: DrawerValue) -> DrawerState {
-    remember(|| DrawerState::new(initial_value))
+    compose_runtime::remember_saveable_with(DrawerState::saver(), || {
+        DrawerState::new(initial_value)
+    })
 }
 
 /// As Compose's `DrawerDefaults`.

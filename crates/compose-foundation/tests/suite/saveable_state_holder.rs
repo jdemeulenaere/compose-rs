@@ -210,3 +210,44 @@ fn lazy_items_keep_their_saveable_state_when_scrolled_away() {
     scroll_to(&mut ui, 50);
     ui.on_node_with_text("item 51: 1").assert_exists();
 }
+
+#[test]
+fn lazy_grid_cells_keep_their_saveable_state_when_scrolled_away() {
+    thread_local! { static GRID: Cell<Option<LazyGridState>> = const { Cell::new(None) }; }
+    // The grid's rows are a lazy list's items: each row's provider keeps its cells' state.
+    let content = || {
+        let state = remember_lazy_grid_state!();
+        GRID.set(Some(state));
+        LazyVerticalGrid!(
+            GridCells::Fixed(3),
+            modifier = Modifier.size((300.dp(), 200.dp())),
+            state = state,
+            |scope: LazyGridScope| {
+                scope.items(300, |index| {
+                    let clicks = remember_saveable(|| mutable_state_of(0u32));
+                    Box!(
+                        modifier = Modifier
+                            .height(50.dp())
+                            .clickable(move || clicks.update(|count| count + 1))
+                            .test_tag(format!("cell {index}")),
+                        {
+                            BasicText!("cell {index}: {}", clicks.get());
+                        }
+                    );
+                });
+            }
+        );
+    };
+    let mut ui = compose_test(content);
+    ui.on_node_with_tag("cell 4").perform_click();
+    ui.on_node_with_tag("cell 5").perform_click();
+    ui.on_node_with_tag("cell 5").perform_click();
+    GRID.get().unwrap().scroll_to_item(150, 0);
+    ui.wait_for_idle();
+    ui.on_node_with_tag("cell 4").assert_does_not_exist();
+    GRID.get().unwrap().scroll_to_item(0, 0);
+    ui.wait_for_idle();
+    ui.on_node_with_text("cell 3: 0").assert_exists();
+    ui.on_node_with_text("cell 4: 1").assert_exists();
+    ui.on_node_with_text("cell 5: 2").assert_exists();
+}
