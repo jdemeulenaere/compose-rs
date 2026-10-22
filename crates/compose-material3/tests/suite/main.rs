@@ -28,3 +28,4 @@ mod review_rtl;
 mod review_semantics_material;
 mod snackbar;
 mod text_field;
+mod app_bars;
