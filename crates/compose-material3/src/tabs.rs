@@ -46,7 +46,9 @@ pub fn TabRow(
     #[default(crate::TabRowDefaults::content_color())] content_color: Color,
     tabs: impl Fn() + 'static,
 ) {
-    // Each tab's left and width, as the last layout placed them.
+    // Each tab's left and width, as the last layout placed them. Not state: the row's layout
+    // writes them and the same node's drawing reads them, so measuring the row draws it again
+    // (a reader in another repaint boundary would draw stale positions, docs/06).
     let positions = remember(|| Rc::new(RefCell::new(Vec::<(f32, f32)>::new())));
     // The indicator while it slides: left in `x`, width in `y`.
     let indicator = remember(|| Animatable::new(Offset::new(f32::NAN, 0.0)));

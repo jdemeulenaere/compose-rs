@@ -272,7 +272,9 @@ fn decorated_field(
     let show_placeholder = empty && slots.placeholder.is_some() && (!has_label || is_focused);
     let floated_label_height = typography.body_small.line_height;
     let supporting_style = typography.body_small;
-    // Remembered: the layout (remembered too) writes it, the outline reads it.
+    // Remembered: the layout (remembered too) writes it, the outline reads it. Not state: the
+    // outline draws in the node the layout measures, so measuring it draws it again (a reader
+    // in another repaint boundary would draw a stale cut, docs/06).
     let label_width = remember(|| Rc::new(std::cell::Cell::new(0.0f32)));
     let label_start = remember(|| Rc::new(std::cell::Cell::new(0.0f32)));
     let decoration = {

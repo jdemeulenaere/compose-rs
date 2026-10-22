@@ -14,9 +14,28 @@ use crate::nodes;
 use crate::text::TextMeasurer;
 use crate::unit::{Density, IntOffset, IntSize, Offset};
 
-/// The key `node`'s measuring (or drawing) reads are observed under.
-pub(crate) fn observation_key(node: NodeId, draw: bool) -> u64 {
-    node.to_ref().bits() & !(1 << 63) | (draw as u64) << 63
+/// What a node's observed reads were made for: measuring it, drawing it, or (a graphics
+/// layer's block) its layer's properties, which change without drawing it again.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Observation {
+    Measure = 0,
+    Draw = 1,
+    Layer = 2,
+}
+
+/// The key `node`'s reads for `observation` are observed under: the kind in the top two bits.
+pub(crate) fn observation_key(node: NodeId, observation: Observation) -> u64 {
+    node.to_ref().bits() & !(3 << 62) | (observation as u64) << 62
+}
+
+/// The node and the kind of observation `observation_key` made `key` of.
+fn observation_of(key: u64) -> (NodeId, Observation) {
+    let observation = match key >> 62 {
+        0 => Observation::Measure,
+        1 => Observation::Draw,
+        _ => Observation::Layer,
+    };
+    (NodeId::from_ref(NodeRef::new(key & !(3 << 62))), observation)
 }
 
 /// What an event handler reaches besides its node: the text measurer and the clipboard.
@@ -149,6 +168,8 @@ pub struct LayoutNode {
     /// When its parent last placed it: children are drawn, and hit, in placement order, as
     /// Compose's (a scaffold's bars over its content).
     pub(crate) place_order: u64,
+    /// What it drew last, if it's a repaint boundary (render.rs).
+    pub(crate) retained: Option<Box<crate::render::RetainedDrawing>>,
 }
 
 impl LayoutNode {
@@ -175,6 +196,7 @@ impl LayoutNode {
             overlay: false,
             overlay_origin: crate::unit::Offset::ZERO,
             place_order: 0,
+            retained: None,
         }
     }
 
@@ -203,7 +225,14 @@ pub struct UiTree {
     pub(crate) clipboard: Box<dyn crate::clipboard::Clipboard>,
     pub(crate) density: Density,
     pub(crate) display_list: DisplayList,
+    /// What's drawn outside any repaint boundary, the boundaries in it by reference: recorded
+    /// each draw, kept for its capacity.
+    pub(crate) root_recording: DisplayList,
+    /// Something to draw: a boundary to draw again, a layer's properties, or what's outside any
+    /// boundary.
     pub(crate) needs_draw: bool,
+    /// The last version given to a repaint boundary's operations (`DrawGroup::version`).
+    pub(crate) draw_version: u64,
     /// A handler asked for the platform's input method to be reset.
     pub(crate) input_method_reset: bool,
     pub(crate) focus: Option<crate::focus::Focus>,
@@ -246,7 +275,9 @@ impl UiTree {
             clipboard: Box::new(crate::clipboard::MemoryClipboard::default()),
             density,
             display_list: DisplayList::default(),
+            root_recording: DisplayList::default(),
             needs_draw: true,
+            draw_version: 0,
             input_method_reset: false,
             focus: None,
             focus_listeners_dirty: false,
@@ -296,7 +327,7 @@ impl UiTree {
                     node.subtree_needs_measure = true;
                 }
             }
-            self.needs_draw = true;
+            self.invalidate_draw();
         }
     }
 
@@ -378,7 +409,7 @@ impl UiTree {
 
     /// Marks `node` for measuring, and its ancestors as having a descendant to measure.
     pub fn invalidate_measure(&mut self, node: NodeId) {
-        self.needs_draw = true;
+        self.invalidate_draw_of(node);
         let Some(value) = self.get_mut(node) else { return };
         value.needs_measure = true;
         let mut parent = value.parent;
@@ -389,8 +420,51 @@ impl UiTree {
         }
     }
 
+    /// Draws everything again: every repaint boundary too.
     pub fn invalidate_draw(&mut self) {
         self.needs_draw = true;
+        for slot in &mut self.slots {
+            if let Some(retained) = slot.node.as_mut().and_then(|node| node.retained.as_mut()) {
+                retained.dirty = true;
+                retained.layer_dirty = true;
+            }
+        }
+    }
+
+    /// Draws again what `node` draws in: the nearest repaint boundary at or above it, if any
+    /// (what's outside every boundary is drawn each draw). An overlay is drawn at the root,
+    /// outside its ancestors.
+    pub(crate) fn invalidate_draw_of(&mut self, node: NodeId) {
+        self.needs_draw = true;
+        let mut current = Some(node);
+        while let Some(id) = current {
+            let Some(value) = self.get_mut(id) else { return };
+            if let Some(retained) = &mut value.retained {
+                retained.dirty = true;
+                return;
+            }
+            if value.overlay {
+                return;
+            }
+            current = value.parent;
+        }
+    }
+
+    /// Layer `layer` of `node` moved: draws again what draws the move, its parent for its
+    /// position (layer 0), itself for an inner layer. A boundary's own position is its
+    /// parent's: moving it keeps what it drew.
+    pub(crate) fn invalidate_position(&mut self, node: NodeId, layer: usize) {
+        if layer > 0 {
+            self.invalidate_draw_of(node);
+            return;
+        }
+        self.needs_draw = true;
+        if let Some(value) = self.get(node)
+            && !value.overlay
+            && let Some(parent) = value.parent
+        {
+            self.invalidate_draw_of(parent);
+        }
     }
 
     /// Observes the state policies and custom nodes read while measuring and drawing, so a
@@ -403,12 +477,19 @@ impl UiTree {
     pub fn apply_observed_writes(&mut self) {
         let Some(observer) = self.observer.clone() else { return };
         observer.drain_invalidated(|key| {
-            let draw = key >> 63 == 1;
-            let node = NodeId::from_ref(NodeRef::new(key & !(1 << 63)));
-            if draw {
-                self.needs_draw = true;
-            } else if self.get(node).is_some() {
-                self.invalidate_measure(node);
+            let (node, observation) = observation_of(key);
+            match observation {
+                Observation::Measure if self.get(node).is_some() => self.invalidate_measure(node),
+                Observation::Measure => {}
+                Observation::Draw => self.invalidate_draw_of(node),
+                Observation::Layer => {
+                    // Its layer's properties only: its content and version stay.
+                    self.needs_draw = true;
+                    let value = self.get_mut(node);
+                    if let Some(retained) = value.and_then(|value| value.retained.as_mut()) {
+                        retained.layer_dirty = true;
+                    }
+                }
             }
         });
     }
@@ -562,10 +643,36 @@ impl UiTree {
                 value.layout_indices.push(index as u16);
             }
         }
+        // A repaint boundary keeps what it draws: its layer's properties apart if its first
+        // drawing modifier is a graphics layer.
+        let boundary = value.chain.iter().any(|entry| entry.is_repaint_boundary());
+        let layer_entry = value
+            .chain
+            .iter()
+            .position(|entry| {
+                entry.downcast_ref::<crate::graphics_layer::GraphicsLayerNode>().is_some()
+            })
+            .filter(|&index| {
+                value.capabilities[..index].iter().all(|bits| bits & capability::DRAW == 0)
+            })
+            .map(|index| index as u16);
+        let mut parent_draws_differently = boundary != value.retained.is_some();
+        match &mut value.retained {
+            Some(retained) if boundary => {
+                retained.layer_entry = layer_entry;
+                retained.dirty = true;
+                retained.layer_dirty = true;
+            }
+            _ if boundary => {
+                value.retained = Some(Box::new(crate::render::RetainedDrawing::new(layer_entry)))
+            }
+            _ => value.retained = None,
+        }
         let overlay = value
             .chain
             .iter()
             .any(|entry| entry.downcast_ref::<crate::overlay::OverlayNode>().is_some());
+        let parent = value.parent;
         if overlay != value.overlay {
             value.overlay = overlay;
             if overlay {
@@ -574,6 +681,11 @@ impl UiTree {
                 self.overlays.retain(|existing| *existing != node);
             }
             self.needs_draw = true;
+            parent_draws_differently = true;
+        }
+        // Its parent draws it otherwise: by reference, in place, or not (an overlay).
+        if parent_draws_differently && let Some(parent) = parent {
+            self.invalidate_draw_of(parent);
         }
         let value = self.node_mut(node);
         for element in value.modifier.elements() {
@@ -692,8 +804,9 @@ impl UiTree {
             self.free.push(id.index);
             stack.extend(value.children.iter().map(|child| child.node));
             if let Some(observer) = &self.observer {
-                observer.forget(observation_key(id, false));
-                observer.forget(observation_key(id, true));
+                observer.forget(observation_key(id, Observation::Measure));
+                observer.forget(observation_key(id, Observation::Draw));
+                observer.forget(observation_key(id, Observation::Layer));
             }
             if self.focused() == Some(id) {
                 self.focus = None;

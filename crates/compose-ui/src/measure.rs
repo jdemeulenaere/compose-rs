@@ -6,7 +6,7 @@ use std::panic::{self, AssertUnwindSafe};
 use crate::constraints::Constraints;
 use crate::layout::{Measurable, MeasureResult, MeasureScope};
 use crate::nodes::Taken;
-use crate::tree::{Layer, NodeId, UiTree, capability, observation_key};
+use crate::tree::{Layer, NodeId, Observation, UiTree, capability, observation_key};
 use crate::unit::{IntOffset, IntSize};
 
 impl UiTree {
@@ -159,6 +159,8 @@ impl UiTree {
         value.needs_measure = false;
         value.subtree_needs_measure = false;
         value.constraints = Some(constraints);
+        // Measured, it draws again.
+        self.invalidate_draw_of(node);
         self.measure_layer(node, 0, constraints)
     }
 
@@ -217,7 +219,9 @@ impl UiTree {
                     )
                 };
                 let result = match &observer {
-                    Some(observer) => observer.observe(observation_key(node, false), measure),
+                    Some(observer) => {
+                        observer.observe(observation_key(node, Observation::Measure), measure)
+                    }
                     None => measure(),
                 };
                 relative = scope.relative;
@@ -241,9 +245,10 @@ impl UiTree {
             let result = panic::catch_unwind(AssertUnwindSafe(|| {
                 let mut scope = MeasureScope { tree: &mut *self, node, run, relative: Vec::new() };
                 let result = match &observer {
-                    Some(observer) => observer.observe(observation_key(node, false), || {
-                        policy.measure(&mut scope, &children, constraints)
-                    }),
+                    Some(observer) => observer
+                        .observe(observation_key(node, Observation::Measure), || {
+                            policy.measure(&mut scope, &children, constraints)
+                        }),
                     None => policy.measure(&mut scope, &children, constraints),
                 };
                 relative = scope.relative;
@@ -260,7 +265,11 @@ impl UiTree {
         value.measured = measured;
         value.size = size;
         // A new measured size within the same coerced one moves the centering.
-        value.offset = value.position + centering(value);
+        let offset = value.position + centering(value);
+        if value.offset != offset {
+            value.offset = offset;
+            self.invalidate_position(node, layer);
+        }
         size
     }
 
@@ -289,7 +298,11 @@ impl UiTree {
             let position = IntOffset::new(width - at.x - placeable.width, at.y);
             let entry = &mut self.node_mut(measurable.node).layers[measurable.layer as usize];
             entry.position = position;
-            entry.offset = position + centering(entry);
+            let offset = position + centering(entry);
+            if entry.offset != offset {
+                entry.offset = offset;
+                self.invalidate_position(measurable.node, measurable.layer as usize);
+            }
         }
     }
 
@@ -305,12 +318,17 @@ impl UiTree {
         let value = self.node_mut(node);
         let entry = &mut value.layers[layer];
         entry.position = position;
-        entry.offset = position + centering(entry);
+        let offset = position + centering(entry);
+        let moved = entry.offset != offset;
+        entry.offset = offset;
         if layer == 0 {
             value.placed = true;
             self.place_serial += 1;
             let serial = self.place_serial;
             self.node_mut(node).place_order = serial;
+        }
+        if moved {
+            self.invalidate_position(node, layer);
         }
     }
 }

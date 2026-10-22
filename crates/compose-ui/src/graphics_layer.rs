@@ -1,15 +1,19 @@
 //! `Modifier.graphics_layer`, as Compose's `graphicsLayer`: alpha, scale, rotation and
 //! translation applied to a node's drawing, without layout. Its block runs while drawing, so
-//! state it reads (an animation's value) redraws the node without recomposing or measuring it.
+//! state it reads (an animation's value) changes the drawing without recomposing or measuring.
+//! A layer that is its node's first drawing modifier gives its properties to its repaint
+//! boundary's group, as a render node's (render.rs): a write to what its block read changes
+//! them without drawing the content again.
 //!
 //! Hit testing doesn't follow the transform yet: a scaled or translated node takes pointer
 //! events at its laid-out bounds.
 
 use std::rc::Rc;
 
+use crate::display_list::{DisplayList, DrawOp};
 use crate::draw::DrawScope;
 use crate::modifier::{DrawModifierNode, Modifier, ModifierNode, ModifierNodeElement};
-use crate::unit::Offset;
+use crate::unit::{Offset, Rect, Size};
 
 /// Where a layer scales and rotates around, as fractions of its size, as `TransformOrigin`.
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -62,10 +66,91 @@ enum Layer {
 
 struct GraphicsLayerElement(Layer);
 
-struct GraphicsLayerNode {
+pub(crate) struct GraphicsLayerNode {
     layer: Layer,
     /// Saves `draw` made, for `draw_after` to restore.
     saves: u8,
+}
+
+impl GraphicsLayerNode {
+    /// Its properties: its block's, run now (reading state the caller observes).
+    pub(crate) fn scope(&self) -> GraphicsLayerScope {
+        match &self.layer {
+            Layer::Fixed(layer) => *layer,
+            Layer::Block(block) => {
+                let mut layer = GraphicsLayerScope::default();
+                block(&mut layer);
+                layer
+            }
+        }
+    }
+}
+
+/// A graphics layer's properties as a repaint boundary's group carries them
+/// ([`DrawGroup::layer`](crate::DrawGroup)), as a render node's: in its group's coordinates.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct LayerProperties {
+    /// In 0..=1.
+    pub alpha: f32,
+    /// Where it scales and rotates around.
+    pub pivot: Offset,
+    pub scale: (f32, f32),
+    /// Degrees, clockwise.
+    pub rotation: f32,
+    pub translation: Offset,
+    /// The bounds it clips its content to (after its transform), if it clips.
+    pub clip: Option<Rect>,
+}
+
+impl LayerProperties {
+    /// `layer`'s properties for a layer at `origin` in its group, of `size`.
+    pub(crate) fn new(layer: &GraphicsLayerScope, origin: Offset, size: Size) -> LayerProperties {
+        let pivot = Offset::new(
+            size.width * layer.transform_origin.pivot_fraction_x,
+            size.height * layer.transform_origin.pivot_fraction_y,
+        );
+        LayerProperties {
+            alpha: layer.alpha.clamp(0.0, 1.0),
+            pivot: pivot + origin,
+            scale: (layer.scale_x, layer.scale_y),
+            rotation: layer.rotation_z,
+            translation: Offset::new(layer.translation_x, layer.translation_y),
+            clip: layer.clip.then(|| {
+                Rect::new(origin.x, origin.y, origin.x + size.width, origin.y + size.height)
+            }),
+        }
+    }
+
+    fn transforms(&self) -> bool {
+        self.scale != (1.0, 1.0) || self.rotation != 0.0 || self.translation != Offset::ZERO
+    }
+
+    /// Records the operations applying it to what follows (a group's `layer_start..start`):
+    /// returns how many restores end it.
+    pub(crate) fn push_operations(&self, list: &mut DisplayList) -> u8 {
+        let mut saves = 0;
+        let transforms = self.transforms();
+        if transforms || self.clip.is_some() {
+            list.push(DrawOp::Save);
+            saves += 1;
+        }
+        if transforms {
+            list.push(DrawOp::Transform {
+                pivot: self.pivot,
+                scale: self.scale,
+                rotation: self.rotation,
+                translation: self.translation,
+            });
+        }
+        if let Some(clip) = self.clip {
+            list.push(DrawOp::ClipRect(clip));
+        }
+        if self.alpha < 1.0 {
+            list.push(DrawOp::SaveLayerAlpha(self.alpha));
+            saves += 1;
+        }
+        saves
+    }
 }
 
 impl ModifierNodeElement for GraphicsLayerElement {
@@ -138,46 +223,12 @@ impl Modifier {
 }
 
 impl DrawModifierNode for GraphicsLayerNode {
+    /// A layer its node draws before applies its properties here, in its node's content (its
+    /// block's reads draw the node again); otherwise its group does (render.rs), and this and
+    /// `draw_after` aren't called.
     fn draw(&mut self, scope: &mut DrawScope<'_>) {
-        let layer = match &self.layer {
-            Layer::Fixed(layer) => *layer,
-            Layer::Block(block) => {
-                let mut layer = GraphicsLayerScope::default();
-                block(&mut layer);
-                layer
-            }
-        };
-        self.saves = 0;
-        let transformed = layer.scale_x != 1.0
-            || layer.scale_y != 1.0
-            || layer.rotation_z != 0.0
-            || layer.translation_x != 0.0
-            || layer.translation_y != 0.0;
-        if transformed || layer.clip {
-            scope.save();
-            self.saves += 1;
-        }
-        if transformed {
-            let size = scope.size();
-            let pivot = Offset::new(
-                size.width * layer.transform_origin.pivot_fraction_x,
-                size.height * layer.transform_origin.pivot_fraction_y,
-            );
-            scope.transform(
-                pivot,
-                (layer.scale_x, layer.scale_y),
-                layer.rotation_z,
-                Offset::new(layer.translation_x, layer.translation_y),
-            );
-        }
-        if layer.clip {
-            let bounds = scope.bounds();
-            scope.clip_outline(crate::graphics::Outline::Rectangle(bounds));
-        }
-        if layer.alpha < 1.0 {
-            scope.save_layer_alpha(layer.alpha.max(0.0));
-            self.saves += 1;
-        }
+        let properties = LayerProperties::new(&self.scope(), scope.origin, scope.size);
+        self.saves = properties.push_operations(scope.list);
     }
 
     fn draw_after(&mut self, scope: &mut DrawScope<'_>) {
@@ -189,7 +240,8 @@ impl DrawModifierNode for GraphicsLayerNode {
 
 impl Modifier {
     /// Applies `block`'s layer properties to the drawing, as `Modifier.graphicsLayer { … }`.
-    /// The block runs while drawing: state it reads redraws the node only. The block isn't
+    /// The block runs while drawing: state it reads changes the layer's properties only (or, after
+    /// a drawing modifier, draws its node again). The block isn't
     /// memoized: build the modifier in a `remember` (or pass fixed values to
     /// [`graphics_layer_with`](Modifier::graphics_layer_with)) so a callee given it can skip.
     pub fn graphics_layer(self, block: impl Fn(&mut GraphicsLayerScope) + 'static) -> Modifier {

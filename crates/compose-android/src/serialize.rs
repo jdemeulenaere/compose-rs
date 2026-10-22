@@ -536,9 +536,30 @@ mod tests {
         }
         // The outer group holds ops 0..3, the inner 1..2; an empty one is left out. They come
         // inner first, as drawing closes them.
-        list.groups.push(compose_ui::DrawGroup { key: 2, start: 1, end: 2 });
-        list.groups.push(compose_ui::DrawGroup { key: 3, start: 2, end: 2 });
-        list.groups.push(compose_ui::DrawGroup { key: 1 << 40 | 1, start: 0, end: 3 });
+        list.groups.push(compose_ui::DrawGroup {
+            key: 2,
+            start: 1,
+            end: 2,
+            layer_start: 1,
+            layer_end: 2,
+            ..Default::default()
+        });
+        list.groups.push(compose_ui::DrawGroup {
+            key: 3,
+            start: 2,
+            end: 2,
+            layer_start: 2,
+            layer_end: 2,
+            ..Default::default()
+        });
+        list.groups.push(compose_ui::DrawGroup {
+            key: 1 << 40 | 1,
+            start: 0,
+            end: 3,
+            layer_start: 0,
+            layer_end: 3,
+            ..Default::default()
+        });
         let (mut resources, mut out) = (Resources::default(), Writer::default());
         write_display_list(&list, &mut resources, &mut out);
         let rect_bytes = 1 + 16 + 4 + 1 + 4 + 1;
@@ -560,8 +581,22 @@ mod tests {
     fn of_two_groups_with_the_same_range_the_outer_opens_first() {
         let mut list = DisplayList::default();
         list.push(DrawOp::DrawRect(Rect::new(0.0, 0.0, 1.0, 1.0), Paint::fill(Color::BLACK)));
-        list.groups.push(compose_ui::DrawGroup { key: 1, start: 0, end: 1 });
-        list.groups.push(compose_ui::DrawGroup { key: 2, start: 0, end: 1 });
+        list.groups.push(compose_ui::DrawGroup {
+            key: 1,
+            start: 0,
+            end: 1,
+            layer_start: 0,
+            layer_end: 1,
+            ..Default::default()
+        });
+        list.groups.push(compose_ui::DrawGroup {
+            key: 2,
+            start: 0,
+            end: 1,
+            layer_start: 0,
+            layer_end: 1,
+            ..Default::default()
+        });
         let (mut resources, mut out) = (Resources::default(), Writer::default());
         write_display_list(&list, &mut resources, &mut out);
         assert_eq!((out.bytes[0], read_u32(&out.bytes, 1)), (tag::GROUP, 2));
@@ -575,7 +610,14 @@ mod tests {
         list.push(DrawOp::SaveLayerAlpha(0.5));
         list.push(DrawOp::DrawRect(Rect::new(0.0, 0.0, 4.0, 4.0), Paint::fill(Color::BLACK)));
         list.push(DrawOp::Restore);
-        list.groups.push(compose_ui::DrawGroup { key: 7, start: 0, end: 3 });
+        list.groups.push(compose_ui::DrawGroup {
+            key: 7,
+            start: 0,
+            end: 3,
+            layer_start: 0,
+            layer_end: 3,
+            ..Default::default()
+        });
         let (mut resources, mut out) = (Resources::default(), Writer::default());
         write_display_list(&list, &mut resources, &mut out);
         assert_eq!(out.bytes[0], tag::GROUP);

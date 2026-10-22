@@ -246,7 +246,8 @@ pub(crate) struct Requests {
     pub(crate) move_focus: Option<bool>,
     /// Text selection gestures and commands.
     pub(crate) selection: Vec<crate::text_selection::SelectionRequest>,
-    pub(crate) draw: bool,
+    /// Nodes whose drawing changed.
+    pub(crate) draw: Vec<NodeId>,
     pub(crate) measure: Vec<NodeId>,
     pub(crate) reset_input_method: bool,
 }
@@ -297,9 +298,9 @@ impl EventContext<'_> {
         self.requests.clear_focus = true;
     }
 
-    /// The node's drawing changed.
+    /// The node's drawing changed: what it draws in (its repaint boundary) draws again.
     pub fn invalidate_draw(&mut self) {
-        self.requests.draw = true;
+        self.requests.draw.push(self.node);
     }
 
     /// The node's measurement changed.
