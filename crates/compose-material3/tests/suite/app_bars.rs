@@ -53,6 +53,40 @@ fn a_top_app_bar_is_64_dp_its_title_after_the_navigation_icon() {
     assert!(((centered.left + centered.right) / 2.0 - 200.0).abs() <= 1.0, "{centered:?}");
 }
 
+/// A top app bar is a repaint boundary, as Compose's (its `Surface` clips with a graphics
+/// layer): a frame drawing something else again (an animation beside it) keeps the bar's
+/// drawing instead of drawing, sending and replaying it again.
+#[test]
+fn a_top_app_bar_keeps_its_drawing_while_what_is_beside_it_draws_again() {
+    let tick = mutable_state_of(0u32);
+    let handle = tick.handle();
+    let mut ui = ComposeTestRule::sized(IntSize::new(400, 600), move || {
+        MaterialTheme!({
+            Column!({
+                TopAppBar!({ Text!("Bar") });
+                Box!(
+                    modifier = Modifier.size(10.dp()).draw_behind(move |scope| {
+                        let alpha = (handle.get() % 2) as f32 * 0.5 + 0.5;
+                        let color = compose_ui::Color::BLACK.with_alpha(alpha);
+                        scope.draw_rect(scope.bounds(), compose_ui::Paint::fill(color));
+                    })
+                );
+            });
+        });
+    });
+    let before = ui.host().display_list();
+    assert_eq!(before.groups.len(), 1, "the bar is a group: {}", ui.dump_display_list());
+    tick.set(1);
+    ui.wait_for_idle();
+    let after = ui.host().display_list();
+    assert_ne!(before.ops, after.ops, "the box drew again");
+    assert_eq!(
+        (after.groups[0].key, after.groups[0].version),
+        (before.groups[0].key, before.groups[0].version),
+        "the bar kept its drawing"
+    );
+}
+
 /// A scaffold whose content scrolls under a bar of `kind` (0 pinned, 1 enter-always, 2
 /// exit-until-collapsed), medium unless `small`.
 #[composable]

@@ -8,6 +8,13 @@ use crate::path::Path;
 use crate::text::ParagraphHandle;
 use crate::unit::{Density, Offset, Rect, Size};
 
+/// Whether `paint` draws nothing: a transparent color and no shader (Material's transparent
+/// containers). Its drawing isn't recorded, as Skia drops it (`SkPaint::nothingToDraw`): a
+/// frame doesn't copy, send and replay it.
+fn draws_nothing(paint: &Paint) -> bool {
+    paint.color.alpha() == 0 && paint.shader.is_none()
+}
+
 /// What a draw node draws with, as `DrawScope`: its size, in pixels, and the display list.
 /// Coordinates are the node's own: (0, 0) is its top left.
 pub struct DrawScope<'a> {
@@ -48,11 +55,17 @@ impl DrawScope<'_> {
     }
 
     pub fn draw_rect(&mut self, rect: Rect, paint: Paint) {
+        if draws_nothing(&paint) {
+            return;
+        }
         let rect = self.to_list(rect);
         self.list.push(DrawOp::DrawRect(rect, paint));
     }
 
     pub fn draw_round_rect(&mut self, rect: Rect, radii: [f32; 4], paint: Paint) {
+        if draws_nothing(&paint) {
+            return;
+        }
         let rect = self.to_list(rect);
         self.list.push(DrawOp::DrawRoundRect(rect, radii, paint));
     }
@@ -86,6 +99,9 @@ impl DrawScope<'_> {
         use_center: bool,
         paint: Paint,
     ) {
+        if draws_nothing(&paint) {
+            return;
+        }
         let oval = self.to_list(oval);
         self.list.push(DrawOp::DrawArc { oval, start_angle, sweep_angle, use_center, paint });
     }
@@ -197,6 +213,9 @@ impl DrawScope<'_> {
     }
 
     pub fn draw_line(&mut self, from: Offset, to: Offset, paint: Paint) {
+        if draws_nothing(&paint) {
+            return;
+        }
         let (from, to) = (from + self.origin, to + self.origin);
         self.list.push(DrawOp::DrawLine(from, to, paint));
     }
@@ -273,6 +292,9 @@ impl DrawScope<'_> {
         scale: (f32, f32),
         paint: Paint,
     ) {
+        if draws_nothing(&paint) {
+            return;
+        }
         let offset = offset + self.origin;
         self.list.push(DrawOp::DrawPath { path: path.shared(), offset, scale, paint });
     }

@@ -125,6 +125,38 @@ translate 0 -40
     );
 }
 
+/// A paint that draws nothing (a transparent color, no shader: Material's transparent
+/// containers) records nothing, as Skia drops it: a frame doesn't copy, send and replay it.
+#[test]
+fn a_transparent_paint_records_nothing() {
+    let host = host(|| {
+        Column!({
+            Leaf(Modifier.background(Color::TRANSPARENT).size(10.dp()));
+            Leaf(
+                Modifier
+                    .border(1.dp(), Color::TRANSPARENT, Shape::Rounded([CornerSize::Dp(4.dp()); 4]))
+                    .size(10.dp()),
+            );
+            Leaf(Modifier.size(10.dp()).draw_behind(|scope| {
+                let paint = Paint::fill(Color::TRANSPARENT);
+                scope.draw_line(Offset::ZERO, Offset::new(5.0, 5.0), paint);
+                scope.draw_circle(Offset::new(5.0, 5.0), 5.0, paint);
+                scope.draw_path(&Path::new(), paint);
+                // A color whose alpha isn't 0 is drawn.
+                scope.draw_rect(scope.bounds(), Paint::fill(Color::from_argb(0x0100_0000)));
+            }));
+        });
+    });
+    assert_eq!(
+        host.display_list().dump(),
+        "\
+translate 0 20
+rect 0,0 10x10 #01000000
+translate 0 -20
+"
+    );
+}
+
 /// A repaint boundary's operations are a group, in its own coordinates (after its position):
 /// a translation outside it isn't merged into one inside, so the group stays the same when
 /// only its position changes.
