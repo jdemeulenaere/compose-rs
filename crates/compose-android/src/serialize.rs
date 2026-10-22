@@ -113,9 +113,20 @@ impl Writer {
     }
     /// Color, style (0 fill, 1 stroke), stroke width, cap (0 butt, 1 round, 2 square), then
     /// its shader (from `shaders`): see [`Writer::shader`]. Faded by `alpha` (folded layers'):
-    /// its color's alpha, or its shader's.
+    /// its color's alpha, or its shader's. A gradient that is a solid color (see [`shading`])
+    /// is that color at the shader's alpha, with no shader.
     fn paint(&mut self, paint: &Paint, shaders: &[Shader], alpha: f32) {
-        self.color(faded(paint, alpha).color);
+        let shading = paint
+            .shader
+            .and_then(|index| shaders.get(index.0 as usize))
+            .map_or(Shading::Color, shading);
+        let color = match shading {
+            Shading::Solid(color, opacity) => {
+                color.with_alpha(color.alpha() as f32 / 255.0 * opacity.clamp(0.0, 1.0))
+            }
+            Shading::Color | Shading::Gradient(_) => paint.color,
+        };
+        self.color(faded(color, alpha));
         match paint.style {
             PaintStyle::Fill => {
                 self.u8(0);
@@ -131,10 +142,11 @@ impl Writer {
             StrokeCap::Round => 1,
             StrokeCap::Square => 2,
         });
-        let shader = paint.shader.and_then(|index| shaders.get(index.0 as usize));
-        match shader.filter(|shader| buildable(shader)) {
-            Some(shader) => self.shader(shader, shader.alpha() * alpha.clamp(0.0, 1.0)),
-            None => self.u8(shader::NONE),
+        match shading {
+            Shading::Gradient(shader) => {
+                self.shader(shader, shader.alpha() * alpha.clamp(0.0, 1.0));
+            }
+            Shading::Color | Shading::Solid(..) => self.u8(shader::NONE),
         }
     }
     /// A shader's definition, then its alpha: its kind (a [`shader`] constant), tile mode (0
@@ -206,19 +218,83 @@ impl Writer {
     }
 }
 
-/// Whether Android can build `shader`'s gradient (a constructor throws for a radius not above
-/// 0): colors, finite positions and a positive radius. Without, the paint's color paints (the
-/// gradient's average, D175), as compose-skia's paint does when Skia makes no shader.
-fn buildable(shader: &Shader) -> bool {
+/// What paints a paint with a shader on Android.
+enum Shading<'a> {
+    /// The paint's color (no shader, or one Skia doesn't make: the gradient's average, D175).
+    Color,
+    /// The gradient.
+    Gradient(&'a Shader),
+    /// A solid color at an alpha (the shader's): a degenerate gradient.
+    Solid(Color, f32),
+}
+
+/// A radius Skia takes for none (`SkGradientShader`'s `kDegenerateThreshold`).
+const DEGENERATE_RADIUS: f32 = 1.0 / (1 << 15) as f32;
+
+/// How `shader` paints, as compose-skia's Skia draws it: no colors, a position not finite or a
+/// negative radius make no shader (the paint's color paints); a radius of (nearly) 0, which
+/// Android's `RadialGradient` refuses, is Skia's degenerate gradient: its last color when
+/// clamped, its average when repeated or mirrored, nothing with decal.
+fn shading(shader: &Shader) -> Shading<'_> {
     let finite = |offset: &Offset| offset.x.is_finite() && offset.y.is_finite();
-    !shader.gradient().colors.is_empty()
-        && match shader {
-            Shader::LinearGradient { from, to, .. } => finite(from) && finite(to),
-            Shader::RadialGradient { center, radius, .. } => {
-                finite(center) && radius.is_finite() && *radius > 0.0
-            }
-            Shader::SweepGradient { center, .. } => finite(center),
+    let gradient = shader.gradient();
+    if gradient.colors.is_empty() {
+        return Shading::Color;
+    }
+    match shader {
+        Shader::LinearGradient { from, to, .. } if !finite(from) || !finite(to) => Shading::Color,
+        Shader::RadialGradient { center, radius, .. }
+            if !finite(center) || !radius.is_finite() || *radius < 0.0 =>
+        {
+            Shading::Color
         }
+        Shader::RadialGradient { radius, .. } if *radius <= DEGENERATE_RADIUS => {
+            let color = match gradient.tile_mode {
+                TileMode::Clamp => *gradient.colors.last().expect("colors"),
+                TileMode::Repeated | TileMode::Mirror => average_color(gradient),
+                TileMode::Decal => Color::TRANSPARENT,
+            };
+            Shading::Solid(color, shader.alpha())
+        }
+        Shader::SweepGradient { center, .. } if !finite(center) => Shading::Color,
+        _ => Shading::Gradient(shader),
+    }
+}
+
+/// A gradient's mean color over 0 to 1 (unpremultiplied channels, each stretch between two
+/// stops its colors' mean, the ends their color), as Skia's `average_gradient_color`.
+fn average_color(gradient: &compose_ui::Gradient) -> Color {
+    let colors: Vec<[f32; 4]> = gradient
+        .colors
+        .iter()
+        .map(|color| [color.alpha(), color.red(), color.green(), color.blue()].map(f32::from))
+        .collect();
+    let colors = if colors.len() == 1 { vec![colors[0]; 2] } else { colors };
+    let count = colors.len();
+    let stops: Vec<f32> = match gradient.stops.as_deref().filter(|stops| stops.len() == count) {
+        Some(stops) => stops.to_vec(),
+        None => (0..count).map(|index| index as f32 / (count - 1) as f32).collect(),
+    };
+    let mut sum = [0.0f32; 4];
+    let mut add = |color: [f32; 4], weight: f32| {
+        for (total, channel) in sum.iter_mut().zip(color) {
+            *total += channel * weight;
+        }
+    };
+    let first = stops[0].clamp(0.0, 1.0);
+    add(colors[0], first);
+    let mut previous = first;
+    for index in 1..count {
+        let stop = stops[index].clamp(previous, 1.0);
+        let middle = std::array::from_fn(|channel| {
+            (colors[index - 1][channel] + colors[index][channel]) / 2.0
+        });
+        add(middle, stop - previous);
+        previous = stop;
+    }
+    add(colors[count - 1], 1.0 - previous);
+    let [alpha, red, green, blue] = sum.map(|value| value.round().clamp(0.0, 255.0) as u32);
+    Color::from_argb(alpha << 24 | red << 16 | green << 8 | blue)
 }
 
 /// A resource change the Kotlin side hasn't taken yet.
@@ -476,14 +552,14 @@ fn foldable_layer(ops: &[DrawOp], start: usize) -> Option<usize> {
     None
 }
 
-/// `paint` with its color's alpha multiplied by `alpha`.
-fn faded(paint: &Paint, alpha: f32) -> Paint {
+/// `color` with its alpha multiplied by `alpha`.
+fn faded(color: Color, alpha: f32) -> Color {
     if alpha >= 1.0 {
-        return *paint;
+        return color;
     }
-    let argb = paint.color.argb();
+    let argb = color.argb();
     let faded = ((argb >> 24) as f32 * alpha.clamp(0.0, 1.0)).round() as u32;
-    Paint { color: Color::from_argb((faded << 24) | (argb & 0x00FF_FFFF)), ..*paint }
+    Color::from_argb((faded << 24) | (argb & 0x00FF_FFFF))
 }
 
 /// Each group's record (its `GROUP` header and content) as last written, by key: a group whose
@@ -1040,10 +1116,9 @@ mod tests {
         assert_eq!(bytes.len(), at + 20);
     }
 
-    /// One color is a solid color (written twice, its stop left out); a radial gradient with no
-    /// radius, which Android can't build, is the paint's color (the gradient's average).
+    /// One color is a solid color (written twice, its stop left out).
     #[test]
-    fn degenerate_gradients_draw_as_compose_skia_draws_them() {
+    fn one_color_is_written_twice() {
         let mut list = DisplayList::default();
         gradient_rect(
             &mut list,
@@ -1063,11 +1138,41 @@ mod tests {
         assert_eq!(read_u32(&out.bytes, at), 2);
         assert_eq!(read_u32(&out.bytes, at + 4), read_u32(&out.bytes, at + 8));
         assert_eq!(read_u32(&out.bytes, at + 12), 0, "no stops");
-        let Shader::RadialGradient { radius, .. } = &mut list.shaders[0] else { unreachable!() };
-        *radius = 0.0;
+    }
+
+    /// The color and shader kind a radial gradient of `radius` and `tile_mode` is written with,
+    /// at alpha 0.5: red, then green from 0.5 on, then blue at 0.75.
+    fn radial_written(radius: f32, tile_mode: TileMode) -> (Color, u8) {
+        let mut list = DisplayList::default();
+        let colors = [Color::RED, Color::GREEN, Color::BLUE];
+        let shader = Shader::RadialGradient {
+            gradient: gradient(&colors, Some(&[0.5, 0.75, 0.75]), tile_mode),
+            center: Offset::new(5.0, 5.0),
+            radius,
+            alpha: 0.5,
+        };
+        let mut paint = Paint::fill(Color::from_argb(0x8011_2233));
+        paint.shader = Some(list.push_shader(shader));
+        list.push(DrawOp::DrawRect(Rect::new(0.0, 0.0, 10.0, 10.0), paint));
+        let (mut resources, mut out) = (Resources::default(), Writer::default());
         write_display_list(&list, &mut resources, &mut GroupCache::default(), &mut out);
-        assert_eq!(out.bytes.len(), RECT_BEFORE_SHADER + 1);
-        assert_eq!(out.bytes[RECT_BEFORE_SHADER], shader::NONE);
+        (Color::from_argb(read_u32(&out.bytes, 17)), out.bytes[RECT_BEFORE_SHADER])
+    }
+
+    /// A radial gradient with no radius, which Android's `RadialGradient` refuses, is Skia's
+    /// degenerate gradient (a solid color at the shader's alpha); a negative radius is no shader
+    /// in Skia (the paint's color paints).
+    #[test]
+    fn a_radial_gradient_without_a_radius_is_skias_degenerate_gradient() {
+        assert_eq!(radial_written(0.0, TileMode::Clamp), (Color::BLUE.with_alpha(0.5), 0));
+        // Red over half, red to green over a quarter, green to blue at once, blue past it:
+        // (0.5 + 0.125) of red, 0.125 of green, 0.25 of blue.
+        let average = Color::from_argb(0x809F_2040);
+        assert_eq!(radial_written(0.0, TileMode::Repeated), (average, 0));
+        assert_eq!(radial_written(1e-6, TileMode::Mirror), (average, 0));
+        assert_eq!(radial_written(0.0, TileMode::Decal), (Color::TRANSPARENT, 0));
+        assert_eq!(radial_written(-1.0, TileMode::Clamp), (Color::from_argb(0x8011_2233), 0));
+        assert_eq!(radial_written(1.0, TileMode::Clamp).1, shader::RADIAL);
     }
 
     /// A layer folded into a gradient's paint multiplies the shader's alpha (what Android's

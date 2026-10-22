@@ -83,3 +83,40 @@ fn a_path_clip_keeps_what_is_inside_it() {
     assert_eq!(renderer.pixel(10, 10), Color::RED);
     assert_eq!(renderer.pixel(90, 90), Color::WHITE);
 }
+
+/// A radial gradient without a radius is a solid color: its last color when clamped, nothing
+/// with decal (what Android's serializer writes instead of a gradient, D210).
+#[test]
+fn a_radial_gradient_without_a_radius_is_solid() {
+    let draw = |tile_mode: TileMode| {
+        let mut list = DisplayList::default();
+        let brush =
+            Brush::radial_gradient(&[Color::RED, Color::BLUE], Offset::ZERO, 0.0, tile_mode);
+        let paint = gradient_paint(&mut list, &brush, Size::new(100.0, 100.0), Offset::ZERO);
+        list.push(DrawOp::DrawRect(Rect::new(0.0, 0.0, 100.0, 100.0), paint));
+        render(&list).pixel(50, 50)
+    };
+    assert_eq!(draw(TileMode::Clamp), Color::BLUE);
+    assert_eq!(draw(TileMode::Decal), Color::WHITE);
+}
+
+/// Colors are interpolated premultiplied, as Android's gradients (HWUI's
+/// `kInterpolateColorsInPremul_Flag`) and Skiko's default: halfway from transparent to red is
+/// red at half alpha (pink over white), not a darker red at half alpha.
+#[test]
+fn a_gradient_interpolates_premultiplied_colors() {
+    let mut list = DisplayList::default();
+    let brush = Brush::horizontal_gradient(
+        &[Color::TRANSPARENT, Color::RED],
+        0.0,
+        f32::INFINITY,
+        TileMode::Clamp,
+    );
+    let paint = gradient_paint(&mut list, &brush, Size::new(100.0, 100.0), Offset::ZERO);
+    list.push(DrawOp::DrawRect(Rect::new(0.0, 0.0, 100.0, 100.0), paint));
+    let mut renderer = render(&list);
+    // Half red over white: (255, 128, 128); unpremultiplied would give (191, 128, 128).
+    let middle = renderer.pixel(50, 50);
+    assert!(middle.red() > 245, "{middle:?}");
+    assert!((115..140).contains(&middle.green()), "{middle:?}");
+}

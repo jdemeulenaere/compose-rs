@@ -248,7 +248,10 @@ internal class Replayer(private val text: TextMeasurer) {
                     val kept = paths.get(buffer.getInt())
                     val x = buffer.getFloat()
                     val y = buffer.getFloat()
-                    if (kept != null) {
+                    if (kept == null) {
+                        // An unknown path clips everything out rather than nothing.
+                        canvas.clipRect(0f, 0f, 0f, 0f)
+                    } else {
                         if (x == 0f && y == 0f) {
                             canvas.clipPath(kept.path)
                         } else {
@@ -601,8 +604,12 @@ internal class Replayer(private val text: TextMeasurer) {
         val stopCount = getInt(stopsAt)
         val end = stopsAt + 4 + 4 * stopCount
         position(end)
-        for (index in 0 until shaderCount) {
-            if (shaderMatches(index, this, start, end, x, y, scaleX, scaleY)) return shaders[index]
+        // A NaN transform matches no key (NaN isn't equal to itself): built, never kept.
+        val cacheable = !x.isNaN() && !y.isNaN() && !scaleX.isNaN() && !scaleY.isNaN()
+        if (cacheable) {
+            for (index in 0 until shaderCount) {
+                if (shaderMatches(index, this, start, end, x, y, scaleX, scaleY)) return shaders[index]
+            }
         }
         val colors = IntArray(colorCount) { getInt(colorsAt + 4 + it * 4) }
         val stops = if (stopCount == 0) null else FloatArray(stopCount) { getFloat(stopsAt + 4 + it * 4) }
@@ -633,6 +640,7 @@ internal class Replayer(private val text: TextMeasurer) {
             local.preTranslate(-x, -y)
             shader.setLocalMatrix(local)
         }
+        if (!cacheable) return shader
         val at = if (shaderCount < SHADER_CACHE_CAPACITY) shaderCount++ else shaderNext.also {
             shaderNext = (shaderNext + 1) % SHADER_CACHE_CAPACITY
         }
