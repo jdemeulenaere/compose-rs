@@ -697,6 +697,7 @@ dependencies = [
  "compose-skia",
  "counter",
  "criterion",
+ "feed",
  "todo",
 ]
 

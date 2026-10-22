@@ -3,6 +3,7 @@
 
 extern crate compose_runtime as compose;
 
+mod retained_drawing;
 mod review_d;
 mod review_d2;
 mod review_d_compile_semantics_closure;

@@ -146,7 +146,9 @@ impl UiTree {
         // Not its focus requests: a target answering focus with focus would loop.
         requests.focus = None;
         requests.clear_focus = false;
-        self.needs_draw |= requests.draw;
+        for node in requests.draw {
+            self.invalidate_draw_of(node);
+        }
         self.input_method_reset |= requests.reset_input_method;
         for node in requests.measure {
             self.invalidate_measure(node);
@@ -182,7 +184,9 @@ impl UiTree {
             };
             target.on_focus_tap(tap - origin, &mut context);
         }
-        self.needs_draw |= requests.draw;
+        for node in requests.draw {
+            self.invalidate_draw_of(node);
+        }
         self.input_method_reset |= requests.reset_input_method;
         for node in requests.measure {
             self.invalidate_measure(node);

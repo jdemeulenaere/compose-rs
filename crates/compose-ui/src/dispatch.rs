@@ -337,14 +337,16 @@ impl UiTree {
                     && let Some(handler) = value.chain[entry.index as usize].as_pointer_input()
                 {
                     handler.on_cancel_pointer_input();
+                    // A gesture's drawing (a press, a drag) ends without a context to say so.
+                    self.invalidate_draw_of(entry.node);
                 }
             }
         }
     }
 
     pub(crate) fn apply_requests(&mut self, requests: Requests, actions: &mut Vec<Action>) {
-        if requests.draw {
-            self.needs_draw = true;
+        for node in requests.draw {
+            self.invalidate_draw_of(node);
         }
         self.input_method_reset |= requests.reset_input_method;
         for node in requests.measure {

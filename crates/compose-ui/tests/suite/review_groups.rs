@@ -52,7 +52,7 @@ fn drawings(list: &DisplayList, isolated: bool) -> Vec<String> {
 }
 
 /// Each group: nested in the others, its saves balanced, its translations net zero.
-fn check_groups(list: &DisplayList) {
+pub(crate) fn check_groups(list: &DisplayList) {
     let dump = list.dump();
     for group in &list.groups {
         assert!(group.start < group.end && group.end <= list.ops.len(), "{group:?}\n{dump}");
