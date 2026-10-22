@@ -3,8 +3,9 @@
 //! This facade re-exports the framework's crates as modules mirroring Compose's packages:
 //! `compose::runtime` is `androidx.compose.runtime`, `compose::ui` is `androidx.compose.ui`
 //! (with `graphics`, `unit` and `text`), `compose::foundation` (with `layout`) and
-//! `compose::material3` and `compose::animation` are their Compose namesakes, and, with the `test` feature, `compose::test` is
-//! `androidx.compose.ui.test`.
+//! `compose::material3` and `compose::animation` are their Compose namesakes,
+//! `compose::navigation` is Navigation Compose's `androidx.navigation.compose`, and, with the
+//! `test` feature, `compose::test` is `androidx.compose.ui.test`.
 //!
 //! The app-facing surface is what these modules export at their top level. Each crate also has
 //! a `platform` module (`compose::runtime::platform`, `compose::ui::platform`) with the plumbing
@@ -35,6 +36,12 @@ pub mod foundation {
 /// `animate_*_as_state`, infinite transitions.
 pub mod animation {
     pub use compose_animation::*;
+}
+
+/// `androidx.navigation.compose`: `NavController`, `NavHost` and `remember_nav_controller`, with
+/// typed destinations.
+pub mod navigation {
+    pub use compose_navigation::*;
 }
 
 /// `androidx.compose.material3`: `MaterialTheme`, `Text`, `Surface`, the buttons, `Checkbox`,

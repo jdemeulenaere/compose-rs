@@ -19,8 +19,8 @@ use std::rc::{Rc, Weak};
 use std::time::Instant;
 
 use compose_runtime::{
-    ComposeArg, ImmutableList, ObjectHandle, Owned, OwnedState, composable, hash_key, key,
-    mutable_state_of, remember,
+    ComposeArg, ImmutableList, ObjectHandle, Owned, OwnedState, SaveableStateHolder, composable,
+    hash_key, key, mutable_state_of, remember,
 };
 use compose_ui::{
     Alignment, Constraints, Dp, EventContext, HorizontalAlignment, IntSize, Layout, Measurable,
@@ -904,6 +904,9 @@ fn LazyList(
         enabled: user_scroll_enabled,
     });
     let items = ItemsRef(items);
+    // The items' saveable state, kept by key while they're scrolled away, as Compose's
+    // `LazySaveableStateHolder` (D290).
+    let holder = compose_runtime::remember_saveable_state_holder();
     // Until the list is measured, its items' likely constraints: those around it, unbounded
     // along the list.
     let fallback = compose_ui::platform::LOCAL_CONSTRAINTS_HINT.current().map(|around| {
@@ -917,7 +920,7 @@ fn LazyList(
     Layout(
         modifier,
         policy,
-        compose_runtime::callback(move || LazyItems(state, items.clone(), fallback)),
+        compose_runtime::callback(move || LazyItems(state, items.clone(), holder, fallback)),
     );
 }
 
@@ -925,7 +928,12 @@ fn LazyList(
 /// and not the list's caller; each item skips when it stays.
 #[composable]
 #[allow(non_snake_case)]
-fn LazyItems(state: LazyListState, items: ItemsRef, fallback: Option<Constraints>) {
+fn LazyItems(
+    state: LazyListState,
+    items: ItemsRef,
+    holder: SaveableStateHolder,
+    fallback: Option<Constraints>,
+) {
     let inner = state.inner_or_detached();
     let (start, end) = inner.composed.get();
     let count = items.0.count;
@@ -958,16 +966,19 @@ fn LazyItems(state: LazyListState, items: ItemsRef, fallback: Option<Constraints
             for &index in &indices {
                 let item_key = items.0.key(index);
                 let (state, items) = (state, items.clone());
-                key(item_key, move || LazyItem(index, state, items.clone()));
+                key(item_key, move || LazyItem(index, state, items.clone(), holder));
             }
         },
     );
 }
 
 /// One item: a layout node around its content, which pins the item while it holds the focus.
+/// Its content is in a `SaveableStateProvider` of its key: scrolled away and back, it gets its
+/// saveable state back (inside the item, which skips when it stays: a pass that only scrolls
+/// doesn't run the provider again).
 #[composable]
 #[allow(non_snake_case)]
-fn LazyItem(index: usize, state: LazyListState, items: ItemsRef) {
+fn LazyItem(index: usize, state: LazyListState, items: ItemsRef, holder: SaveableStateHolder) {
     let policy = remember(|| Rc::new(ItemLayout) as Rc<dyn MeasurePolicy>);
     let pinned = state.inner_or_detached().pinned.handle();
     let item_key = items.0.key(index);
@@ -988,7 +999,7 @@ fn LazyItem(index: usize, state: LazyListState, items: ItemsRef) {
         policy,
         compose_runtime::callback(move || {
             if let Some((interval, local)) = items.0.find(index) {
-                (interval.content)(local);
+                holder.SaveableStateProvider(item_key, || (interval.content)(local));
             }
         }),
     );

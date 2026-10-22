@@ -21,6 +21,8 @@ use std::collections::{HashMap, VecDeque};
 use std::marker::PhantomData;
 use std::rc::Rc;
 
+pub use crate::saveable_state_holder::{SaveableStateHolder, remember_saveable_state_holder};
+
 use crate::local::CompositionLocal;
 use crate::remember::{Remember, RememberObserver, remember_observer};
 use crate::runtime::with_runtime;
@@ -451,6 +453,10 @@ impl SaveableStateRegistry {
     /// Every registered value's saved form, by key, and the values restored and not yet taken
     /// back, as Compose's `performSave`. Values whose saver saved nothing are left out.
     pub fn perform_save(&self) -> SavedState {
+        // Nothing to save (a lazy list item without saveable state, as it scrolls away).
+        if self.inner.providers.borrow().is_empty() && self.inner.restored.borrow().is_empty() {
+            return SavedState::default();
+        }
         // The providers are called without the borrow: they read state, user code.
         let providers: Vec<(u64, Vec<Provider>)> = self
             .inner
@@ -511,7 +517,10 @@ pub static LOCAL_SAVEABLE_STATE_REGISTRY: CompositionLocal<Option<SaveableStateR
 
 /// A hash of the keys of the groups from the composition's root to the composable composing
 /// now, as Compose's `currentCompositeKeyHash`: the same at the same place of the same
-/// composition in another process, which is how saved values find their place again.
+/// composition in another process, which is how saved values find their place again. Inside a
+/// [`SaveableStateProvider`](crate::SaveableStateHolder::SaveableStateProvider), the groups
+/// from the innermost provider's (unlike Compose's: its provider's registry is its values'
+/// alone, so they're found wherever the provider moves).
 ///
 /// # Panics
 ///
@@ -545,6 +554,13 @@ pub fn current_composite_key_hash() -> u64 {
                 ^ entry.key
                 ^ entry.data_key.rotate_left(29)
                 ^ ordinal.wrapping_mul(0x9e37_79b9_7f4a_7c15);
+            // A `SaveableStateProvider`'s values are found by their place within it, wherever
+            // it is: its registry is theirs alone (D290).
+            if entry.kind == GroupKind::Movable
+                && entry.key == crate::saveable_state_holder::PROVIDER_GROUP
+            {
+                break;
+            }
             group = entry.parent;
         }
         hash

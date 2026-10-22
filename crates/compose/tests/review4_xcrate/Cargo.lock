@@ -17,6 +17,7 @@ dependencies = [
  "compose-animation",
  "compose-foundation",
  "compose-material3",
+ "compose-navigation",
  "compose-runtime",
  "compose-ui",
  "log",
@@ -54,6 +55,15 @@ version = "0.1.0"
 dependencies = [
  "compose-animation",
  "compose-foundation",
+ "compose-runtime",
+ "compose-ui",
+]
+
+[[package]]
+name = "compose-navigation"
+version = "0.1.0"
+dependencies = [
+ "compose-animation",
  "compose-runtime",
  "compose-ui",
 ]

@@ -27,7 +27,7 @@ An app in a repository of its own works the same way, with its own workspace, pa
 
 ## A desktop app
 
-An app depends on the `compose` facade crate. Its modules mirror Compose's packages: `compose::runtime`, `compose::ui`, `compose::foundation` (and `foundation::layout`), `compose::material3` and `compose::animation`. The `desktop` feature adds `compose::desktop`, which opens windows; the `test` feature adds `compose::test`, the test rule.
+An app depends on the `compose` facade crate. Its modules mirror Compose's packages: `compose::runtime`, `compose::ui`, `compose::foundation` (and `foundation::layout`), `compose::material3`, `compose::animation` and `compose::navigation`. The `desktop` feature adds `compose::desktop`, which opens windows; the `test` feature adds `compose::test`, the test rule.
 
 Keep the composables in a library and the window in a binary behind a feature, so the Android library can use the composables without the desktop dependencies. `examples/hello/Cargo.toml`:
 

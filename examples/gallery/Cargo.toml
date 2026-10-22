@@ -1,6 +1,6 @@
 [package]
 name = "gallery"
-description = "A tour of the toolkit: Material components, lazy lists and animations."
+description = "A tour of the toolkit: Material components, lazy lists, animations and navigation."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

@@ -49,3 +49,32 @@ fn the_menu_opens_the_drawer() {
     ui.advance_time_by(std::time::Duration::from_millis(400));
     ui.on_node_with_text("OK").assert_exists();
 }
+
+#[test]
+fn a_card_opens_its_screen_and_back_returns_to_the_tour_as_it_was() {
+    let mut ui = ComposeTestRule::with_manual_clock(gallery::Gallery);
+    let step = std::time::Duration::from_millis(500);
+    ui.on_node(described("Add a card")).perform_click();
+    ui.advance_time_by(step);
+    ui.on_node_with_text("Card 19").perform_click();
+    ui.advance_time_by(step);
+    // The card's screen replaces the tour.
+    ui.on_node_with_text("Cards: 21").assert_does_not_exist();
+    ui.on_node_with_text("Not liked yet").assert_exists();
+    ui.on_node(described("Like")).perform_click();
+    ui.advance_time_by(step);
+    ui.on_node_with_text("Liked").assert_exists();
+    // Back returns to the tour, its saved state (the added card) kept.
+    assert!(ui.host().on_back_pressed());
+    ui.advance_time_by(step);
+    ui.on_node_with_text("Cards: 21").assert_exists();
+    // So does the top bar's arrow; the card's screen opens anew.
+    ui.on_node_with_text("Card 19").perform_click();
+    ui.advance_time_by(step);
+    ui.on_node_with_text("Not liked yet").assert_exists();
+    ui.on_node(described("Back")).perform_click();
+    ui.advance_time_by(step);
+    ui.on_node_with_text("Cards: 21").assert_exists();
+    // At the tour, back isn't taken: it leaves the app.
+    assert!(!ui.host().has_enabled_back_handlers());
+}

@@ -1,8 +1,8 @@
 [workspace]
 resolver = "3"
-members = ["crates/compose", "crates/compose-macros", "crates/compose-runtime", "crates/compose-ui", "crates/compose-foundation", "crates/compose-material3", "crates/compose-animation", "crates/compose-test", "crates/compose-skia", "crates/compose-desktop", "crates/compose-android", "examples/counter", "examples/todo", "examples/gallery", "examples/android-demo", "examples/feed", "examples/guide", "benchmarks"]
+members = ["crates/compose", "crates/compose-macros", "crates/compose-runtime", "crates/compose-ui", "crates/compose-foundation", "crates/compose-material3", "crates/compose-animation", "crates/compose-navigation", "crates/compose-test", "crates/compose-skia", "crates/compose-desktop", "crates/compose-android", "examples/counter", "examples/todo", "examples/gallery", "examples/android-demo", "examples/feed", "examples/guide", "benchmarks"]
 # The benchmarks pull in criterion; keep them out of a plain `cargo build` / `cargo test`.
-default-members = ["crates/compose", "crates/compose-macros", "crates/compose-runtime", "crates/compose-ui", "crates/compose-foundation", "crates/compose-material3", "crates/compose-animation", "crates/compose-test", "crates/compose-android", "examples/counter", "examples/todo", "examples/gallery", "examples/guide"]
+default-members = ["crates/compose", "crates/compose-macros", "crates/compose-runtime", "crates/compose-ui", "crates/compose-foundation", "crates/compose-material3", "crates/compose-animation", "crates/compose-navigation", "crates/compose-test", "crates/compose-android", "examples/counter", "examples/todo", "examples/gallery", "examples/guide"]
 
 [workspace.package]
 version = "0.1.0"
@@ -21,6 +21,7 @@ compose-android = { path = "crates/compose-android" }
 compose-foundation = { path = "crates/compose-foundation" }
 compose-material3 = { path = "crates/compose-material3" }
 compose-animation = { path = "crates/compose-animation" }
+compose-navigation = { path = "crates/compose-navigation" }
 # The logging facade (D280): what compose-rs logs through, and apps too.
 log = "0.4"
 

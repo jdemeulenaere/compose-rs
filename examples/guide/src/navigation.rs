@@ -1,10 +1,10 @@
-//! Navigation without a NavHost (docs/guide/kotlin-to-rust.md, "Navigation").
+//! Navigation with a NavHost (docs/guide/kotlin-to-rust.md, "Navigation").
 
 use compose::foundation::layout::*;
 use compose::foundation::{LazyColumn, LazyListScope};
 use compose::material3::*;
+use compose::navigation::*;
 use compose::runtime::*;
-use compose::ui::*;
 
 // ANCHOR: screens
 /// The app's destinations: Navigation Compose's routes, as an enum.
@@ -39,27 +39,17 @@ impl Saveable for Screen {
 // ANCHOR: app
 #[composable]
 pub fn App() {
-    // The back stack: a saved list of destinations, the current one last.
-    let back_stack = remember_saveable(|| mutable_state_of(vec![Screen::Inbox]));
-    let navigate = callback(move |screen: Screen| back_stack.edit(|stack| stack.push(screen)));
-    // Back pops the stack while there's somewhere to go back to; at the root, back leaves the
-    // app (or goes to the Kotlin UI around it).
-    BackHandler!(
-        enabled = back_stack.with(|stack| stack.len() > 1),
-        on_back = move || {
-            back_stack.edit(|stack| stack.pop());
-        }
-    );
-    let current = back_stack.with(|stack| *stack.last().expect("the stack has its root"));
-    match current {
+    // The back stack, starting at the inbox: saved, so it survives the activity's recreation.
+    let nav_controller = remember_nav_controller(Screen::Inbox);
+    // Shows the top entry; back pops the stack, and leaves the app at the inbox.
+    NavHost!(nav_controller, move |screen: Screen| match screen {
         Screen::Inbox => Inbox!(
-            on_open = move |id: u32| navigate(Screen::Message(id)),
-            on_settings = move || navigate(Screen::Settings)
+            on_open = move |id: u32| nav_controller.navigate(Screen::Message(id)),
+            on_settings = move || nav_controller.navigate(Screen::Settings)
         ),
-        // A key per message: each message's screen gets its own remembered state.
-        Screen::Message(id) => key(id, || MessageScreen!(id)),
+        Screen::Message(id) => MessageScreen!(id),
         Screen::Settings => SettingsScreen!(),
-    }
+    });
 }
 // ANCHOR_END: app
 

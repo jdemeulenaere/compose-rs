@@ -30,7 +30,7 @@ The known differences from Jetpack Compose that an app will run into, distilled 
 - **No snapshot isolation.** Writes are seen at once; there's no `Snapshot` API, no `snapshotFlow`, and no Flow integration (`collectAsState`): collect in a `LaunchedEffect` and write state ([docs/05](../05-state.md#snapshots)).
 - **Coroutines are Rust futures** on a UI-thread executor, with `delay`, `with_frame_nanos` and cancellation by dropping. There are no dispatchers: blocking work goes through `spawn_background`, a thread pool taking a `Send` closure, and work already running isn't interrupted when its task is cancelled (D231). State handles are `!Send`: everything touching state runs on the UI thread.
 - **No subcomposition.** Content Compose composes while measuring (lazy items, `BoxWithConstraints`) is composed for what the measurement asks, then the frame recomposes and measures again, up to three rounds. `BoxWithConstraints` usually composes once, from a hint of its constraints (D142); lazy lists compose ahead between frames (D156). There's no `SubcomposeLayout`.
-- **`remember_saveable`** takes no `inputs` or `key`. Values in lazy items scrolled out of the composition aren't kept, and there's no `rememberSaveableStateHolder`; a restored `OwnedState` compares structurally whatever its policy was. The desktop host saves nothing, as a window is never recreated (D223).
+- **`remember_saveable`** takes no `inputs` or `key`. A `SaveableStateProvider`'s values are found by their place within it, so content coming back under another parent finds them (D290); a restored `OwnedState` compares structurally whatever its policy was. The desktop host saves nothing, as a window is never recreated (D223).
 
 ## Layout
 
@@ -63,7 +63,7 @@ The known differences from Jetpack Compose that an app will run into, distilled 
 
 ## Navigation and platform
 
-- **No Navigation Compose.** There's no `NavHost`: keep a back stack in a saved list and `match` on its top ([Navigation](kotlin-to-rust.md#navigation)). Screens under the top aren't composed, so their state goes when another is pushed.
+- **A smaller Navigation Compose** ([Navigation](kotlin-to-rust.md#navigation)). Destinations are values of the app's own type (an enum), not routes, compared with `==`: `launch_single_top` keeps the top entry only when it's equal, where Compose compares routes and replaces the arguments. `remember_nav_controller` takes the start destination, and the start destination is never popped. There are no nested graphs, deep links, dialog destinations, per-entry `ViewModel`s or lifecycles, nor `saveState`/`restoreState`; `NavHost` has no transition by default (Compose fades) and the same one both ways (D291).
 - **No predictive back** (`PredictiveBackHandler`, back progress). `BackHandler` takes back on Android and Escape on desktop; dialogs, sheets and menus take it first (D220, D221).
 - **Embedding goes one way.** A `ComposeRsView` can be inside a Kotlin UI, but compose-rs content can't host Android views or Kotlin composables (no `AndroidView` in Rust). Kotlin and Rust exchange properties and text events (D226).
 - **Overlays stay in the view.** Popups, dialogs, menus, bottom sheets and tooltips are nodes of the app's one tree, drawn over its content (D130), not windows of their own: in a `ComposeRsView` that's part of a Kotlin screen, they're confined to the view's bounds, and a dialog's scrim covers the view, not the screen.

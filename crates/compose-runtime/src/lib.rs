@@ -40,6 +40,7 @@ pub mod platform;
 mod remember;
 mod runtime;
 pub mod saveable;
+mod saveable_state_holder;
 mod scope;
 mod slot_table;
 mod state;
@@ -69,6 +70,7 @@ pub use saveable::{
     SaveableStateRegistry, SavedState, SavedValue, Saver, current_composite_key_hash,
     remember_saveable, remember_saveable_with, saver,
 };
+pub use saveable_state_holder::{SaveableStateHolder, remember_saveable_state_holder};
 pub use scope::RecomposeScope;
 pub use state::{
     MutableState, MutationPolicy, NeverEqualPolicy, ObjectHandle, Owned, OwnedState, State,

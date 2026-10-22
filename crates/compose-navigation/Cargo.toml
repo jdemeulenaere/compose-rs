@@ -1,0 +1,16 @@
+[package]
+name = "compose-navigation"
+description = "compose-rs's navigation, as Navigation Compose (androidx.navigation.compose): a NavController's back stack of typed destinations and a NavHost keeping each entry's saveable state."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+compose-runtime.workspace = true
+compose-ui.workspace = true
+compose-animation.workspace = true
+
+[dev-dependencies]
+compose-test.workspace = true
+compose-foundation.workspace = true

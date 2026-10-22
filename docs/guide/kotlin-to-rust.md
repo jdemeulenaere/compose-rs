@@ -27,7 +27,7 @@ compose-rs keeps Compose's names, parameter names, parameter order and defaults,
 
 | Kotlin | compose-rs |
 |---|---|
-| `androidx.compose.runtime`, `.ui`, `.foundation`, `.foundation.layout`, `.material3`, `.animation` | `compose::runtime`, `compose::ui`, `compose::foundation`, `compose::foundation::layout`, `compose::material3`, `compose::animation` |
+| `androidx.compose.runtime`, `.ui`, `.foundation`, `.foundation.layout`, `.material3`, `.animation`; `androidx.navigation.compose` | `compose::runtime`, `compose::ui`, `compose::foundation`, `compose::foundation::layout`, `compose::material3`, `compose::animation`; `compose::navigation` |
 | `@Composable fun Greeting(…)` | `#[composable] fn Greeting(…)`, called `Greeting!(…)` |
 | `rememberLazyListState()`, `mutableStateOf(0)` | `remember_lazy_list_state!()`, `mutable_state_of(0)` |
 | `Modifier.fillMaxWidth().padding(16.dp)` | `Modifier.fill_max_width().padding(16.dp())` |
@@ -41,7 +41,7 @@ A file usually starts with a wildcard import of each module it uses, as the samp
 - `use compose::runtime::*;` (`remember`, state, effects, `#[composable]`),
 - `use compose::ui::*;` (`Modifier`, units, colors, drawing),
 - `use compose::foundation::*;` and `use compose::foundation::layout::*;` (lazy lists, scrolling, text fields; `Row`, `Column`, `Box`),
-- `use compose::material3::*;` and `use compose::animation::*;` as needed.
+- `use compose::material3::*;`, `use compose::animation::*;` and `use compose::navigation::*;` as needed.
 
 Each crate's `platform` module holds what hosts and toolkits use; apps don't need it, and it isn't part of the stable surface.
 
@@ -1713,18 +1713,21 @@ pub fn Loading(loading: bool) {
 
 ## Navigation
 
-There's no Navigation Compose (`NavHost`, `NavController`, routes) yet. A small app keeps its own back stack: an enum of destinations in a saved list, a `match` on the top, and a `BackHandler` that pops.
+`compose::navigation` is a small Navigation Compose: a `NavController` holds a back stack of destinations, and a `NavHost` shows the top one. Destinations are values of the app's own type, an enum typically, rather than routes: a `match` takes the place of the graph builder, and an enum variant's fields are its arguments.
 
 ```kotlin
-NavHost(navController, startDestination = "inbox") {
-    composable("inbox") {
-        Inbox(onOpen = { id -> navController.navigate("message/$id") },
-              onSettings = { navController.navigate("settings") })
+@Serializable object Inbox
+@Serializable data class Message(val id: Int)
+@Serializable object Settings
+
+val navController = rememberNavController()
+NavHost(navController, startDestination = Inbox) {
+    composable<Inbox> {
+        Inbox(onOpen = { id -> navController.navigate(Message(id)) },
+              onSettings = { navController.navigate(Settings) })
     }
-    composable("message/{id}", arguments = listOf(navArgument("id") { type = NavType.IntType })) { entry ->
-        MessageScreen(entry.arguments!!.getInt("id"))
-    }
-    composable("settings") { SettingsScreen() }
+    composable<Message> { entry -> MessageScreen(entry.toRoute<Message>().id) }
+    composable<Settings> { SettingsScreen() }
 }
 ```
 
@@ -1763,35 +1766,32 @@ impl Saveable for Screen {
 ```rust
 #[composable]
 pub fn App() {
-    // The back stack: a saved list of destinations, the current one last.
-    let back_stack = remember_saveable(|| mutable_state_of(vec![Screen::Inbox]));
-    let navigate = callback(move |screen: Screen| back_stack.edit(|stack| stack.push(screen)));
-    // Back pops the stack while there's somewhere to go back to; at the root, back leaves the
-    // app (or goes to the Kotlin UI around it).
-    BackHandler!(
-        enabled = back_stack.with(|stack| stack.len() > 1),
-        on_back = move || {
-            back_stack.edit(|stack| stack.pop());
-        }
-    );
-    let current = back_stack.with(|stack| *stack.last().expect("the stack has its root"));
-    match current {
+    // The back stack, starting at the inbox: saved, so it survives the activity's recreation.
+    let nav_controller = remember_nav_controller(Screen::Inbox);
+    // Shows the top entry; back pops the stack, and leaves the app at the inbox.
+    NavHost!(nav_controller, move |screen: Screen| match screen {
         Screen::Inbox => Inbox!(
-            on_open = move |id: u32| navigate(Screen::Message(id)),
-            on_settings = move || navigate(Screen::Settings)
+            on_open = move |id: u32| nav_controller.navigate(Screen::Message(id)),
+            on_settings = move || nav_controller.navigate(Screen::Settings)
         ),
-        // A key per message: each message's screen gets its own remembered state.
-        Screen::Message(id) => key(id, || MessageScreen!(id)),
+        Screen::Message(id) => MessageScreen!(id),
         Screen::Settings => SettingsScreen!(),
-    }
+    });
 }
 ```
 
-What this pattern doesn't do that `NavHost` does:
+- **The back stack.** `nav_controller.navigate(destination)` pushes; `pop_back_stack()` pops (and returns `false` at the start destination, which stays); `pop_back_stack_to(&destination, inclusive)` is `popBackStack(route, inclusive)`. `navigate_with(destination, NavOptions { pop_up_to: Some(Screen::Inbox), launch_single_top: true, ..NavOptions::default() })` is `navigate(route) { popUpTo(Inbox); launchSingleTop = true }`. `current_destination()`, `current_back_stack_entry()`, `previous_back_stack_entry()` and `current_back_stack()` are state reads: what reads them recomposes when the stack changes. Navigate from event handlers, not while composing.
+- **Saved state.** `remember_nav_controller(start_destination)` saves the stack, so destinations implement `Saveable`. Each entry's content is in a `SaveableStateProvider` of its own: its `remember_saveable` values (its lists' scroll positions too) are kept while it's on the stack, come back when it shows again, survive the process's death with the stack, and go when it's popped. `remember` values go when another entry shows, as in Compose.
+- **Back.** The `NavHost` pops on back while there's an entry under the top one; at the start destination, back leaves the app (or goes to the Kotlin UI around it). A screen's own `BackHandler` goes first.
+- **Transitions.** None by default: `NavHost!(nav_controller, enter_transition = fade_in(), exit_transition = fade_out(), …)` fades, as Compose's default does; any `EnterTransition` and `ExitTransition` go.
 
-- **A screen's state goes when it leaves.** Only the top screen is composed, so a screen under it loses its `remember` and `remember_saveable` values (its scroll position included) when another is pushed; Compose's back stack entries keep theirs. Hoist what must survive into the composable holding the stack (`let inbox_list = remember_lazy_list_state!();` there, passed down), or into the stack's entries.
-- **No transitions.** Wrap the `match` in `AnimatedContent!(current, …)` or `Crossfade!` for one.
-- **No deep links or arguments bundles**: the enum is the route and its arguments.
+What's different from Navigation Compose:
+
+- `remember_nav_controller` takes the start destination (`NavHost` takes it in Compose), so the stack is never empty.
+- Destinations are compared with `==`: `launch_single_top` keeps the top entry only when it's equal (Compose's compares the route and replaces the arguments), and `pop_up_to` finds the topmost entry equal to it.
+- There are no nested graphs, deep links, dialog destinations, per-entry `ViewModel`s or lifecycles, and no `saveState`/`restoreState` for bottom navigation's tabs.
+
+Without a `NavHost`, a back stack is a `remember_saveable(|| mutable_state_of(vec![Screen::Inbox]))`, a `match` on its last entry and a `BackHandler` that pops; but then a screen under the top loses its state. `remember_saveable_state_holder()` (`compose::runtime`, Compose's `rememberSaveableStateHolder`) keeps it for content of your own: `holder.SaveableStateProvider(key, || …)` around each screen or tab, and `holder.remove_state(key)` when one is gone for good.
 
 Back goes to the innermost enabled `BackHandler`: those in dialogs, bottom sheets and menus first, then the one composed last. While none is enabled, back leaves the app. Escape is back on desktop.
 
