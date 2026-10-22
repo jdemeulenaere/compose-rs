@@ -25,8 +25,13 @@ Scenarios (docs/12-android-performance.md):
   startup      cold starts of the feed and of the big screen (`am start -W`: TotalTime), and a
                Perfetto trace of a cold start of each for the first frame's breakdown
   memory       PSS and its parts (`dumpsys meminfo`) after start, and after scrolling
-  scroll       10 flings through the feed: frames (`dumpsys gfxinfo`) and jank (FrameTimeline)
+  scroll       10 flings through the feed, after a warm-up swipe left out: frames
+               (`dumpsys gfxinfo`) and jank (FrameTimeline: the app's or the compositor's, and
+               frames presented at another vsync than expected), doFrames starting late,
+               compose-rs's prefetches, and whether Choreographer recovered from buffer stuffing
   animation    10 s of the animated header, no input: the same
+
+Before each run, our other apps (`rs.compose.*`) are force-stopped (D343).
 """
 
 import argparse
@@ -40,6 +45,8 @@ import time
 import zipfile
 
 APPS = {"compose": "rs.compose.bench.compose", "rs": "rs.compose.bench.rs"}
+# Our apps' packages: those not under test are stopped before each run.
+OUR_PREFIX = "rs.compose."
 # Where Gradle puts each app's release APK, relative to android/.
 BUILT_APKS = {
     "compose": "bench-compose/build/outputs/apk/release/bench-compose-release.apk",
@@ -68,8 +75,29 @@ def stop(package):
     shell(f"am force-stop {package}")
 
 
-def cold_start(package, screen):
+def packages_to_stop(pm_list_output, package):
+    """Our other apps (`rs.compose.*`, from `pm list packages`' `package:<name>` lines): all but
+    `package`, the one under test."""
+    names = [line.strip()[len("package:"):] for line in pm_list_output.splitlines()
+             if line.strip().startswith("package:")]
+    return sorted(name for name in names if name.startswith(OUR_PREFIX) and name != package)
+
+
+def stop_all_but(package):
+    """Force-stops our other apps, so none runs beside the one measured: the other benchmark
+    app left cached by the run before, the demo's animation in the background (D343)."""
+    for other in packages_to_stop(shell(f"pm list packages {OUR_PREFIX}"), package):
+        stop(other)
+
+
+def fresh(package):
+    """`package` stopped, and our other apps too: each run starts from the same state."""
+    stop_all_but(package)
     stop(package)
+
+
+def cold_start(package, screen):
+    fresh(package)
     time.sleep(1.0)
     output = start(package, screen)
     match = re.search(r"TotalTime: (\d+)", output)
@@ -358,10 +386,11 @@ def cpu_capacities():
     return capacities
 
 
-def work_ms(trace_processor, trace, package, capacities):
+def work_ms(trace_processor, trace, package, capacities, since=0):
     """The main thread's and RenderThread's work as milliseconds on the fastest core at its
     highest frequency: each running slice's time scaled by its core's frequency and capacity.
-    Unlike time, it doesn't grow when the scheduler moves light work to slower cores."""
+    Unlike time, it doesn't grow when the scheduler moves light work to slower cores. From
+    `since` (a trace timestamp) on."""
     if not capacities:
         return None
     scale = " ".join(
@@ -379,7 +408,7 @@ def work_ms(trace_processor, trace, package, capacities):
           SELECT s.ts, s.dur, s.cpu,
                  CASE WHEN t.name = 'RenderThread' THEN 'render' ELSE 'main' END AS thread
           FROM sched s JOIN thread t USING (utid) JOIN process p USING (upid)
-          WHERE p.name = '{package}' AND s.dur > 0
+          WHERE p.name = '{package}' AND s.dur > 0 AND s.ts >= {since}
             AND (t.tid = p.pid OR t.name = 'RenderThread');
         CREATE VIRTUAL TABLE joined USING SPAN_JOIN(running PARTITIONED cpu,
           frequencies PARTITIONED cpu);
@@ -396,22 +425,91 @@ def work_ms(trace_processor, trace, package, capacities):
     return work
 
 
-def frame_stats(trace_processor, trace, package, capacities=None):
-    """FrameTimeline jank and the app's main thread and RenderThread time per frame."""
+# FrameTimeline's jank types (a frame may have several, comma-separated), by whose they are.
+APP_JANK = {"App Deadline Missed", "App Resynced Jitter"}
+COMPOSITOR_JANK = {"SurfaceFlinger CPU Deadline Missed", "SurfaceFlinger GPU Deadline Missed",
+                   "SurfaceFlinger Scheduling", "SurfaceFlinger Stuffing", "Prediction Error",
+                   "Display HAL"}
+
+
+def jank_side(jank_type):
+    """Whose a frame's jank is: "app" (the app missed its deadline), "compositor" (SurfaceFlinger
+    or the display: its deadlines, its predictions, its scheduling), "other" (unknown, dropped),
+    or None for no jank. Buffer stuffing alone (the app's frames queued ahead, presented late
+    but on cadence) isn't counted as jank, as before."""
+    kinds = {kind.strip() for kind in jank_type.split(",")} - {"None", "Buffer Stuffing", ""}
+    if not kinds:
+        return None
+    if kinds & APP_JANK:
+        return "app"
+    if kinds & COMPOSITOR_JANK:
+        return "compositor"
+    return "other"
+
+
+# Present types of a frame shown at another vsync than expected, or not at all.
+VISIBLY_LATE = ("Late Present", "Early Present", "Dropped Frame")
+
+
+def measured_since(input_timestamps, gap_ns=500_000_000):
+    """Where the measured gestures start: the first input event after the first pause of more
+    than `gap_ns` (the warm-up swipe's events come before it), or 0 (the trace's start)
+    without one."""
+    ordered = sorted(input_timestamps)
+    for before, after in zip(ordered, ordered[1:]):
+        if after - before > gap_ns:
+            return after
+    return 0
+
+
+def input_timestamps(trace_processor, trace, package):
+    """When the app's main thread got each input event."""
+    rows = query(
+        trace_processor,
+        trace,
+        f"""
+        SELECT s.ts AS ts FROM slice s
+        JOIN thread_track tt ON s.track_id = tt.id
+        JOIN thread t USING (utid) JOIN process p USING (upid)
+        WHERE p.name = '{package}' AND t.tid = p.pid AND s.name LIKE 'deliverInputEvent%'
+        """,
+    )
+    return [int(row["ts"]) for row in rows if row.get("ts", "").isdigit()]
+
+
+def count(trace_processor, trace, sql):
+    """The `n` of a query's one row (0 if none)."""
+    rows = query(trace_processor, trace, sql)
+    value = rows[0].get("n", "") if rows else ""
+    return int(value) if value.isdigit() else 0
+
+
+# A doFrame starting this long after its vsync was delayed (by idle-time work, usually): on
+# the Pixel 8 Pro they start about 1.1 ms after it.
+LATE_DO_FRAME_NS = 2_000_000
+
+
+def frame_stats(trace_processor, trace, package, capacities=None, since=0):
+    """FrameTimeline jank and the app's main thread and RenderThread time per frame, from
+    `since` (a trace timestamp: after a warm-up) on."""
     timeline = query(
         trace_processor,
         trace,
         f"""
-        SELECT a.dur AS dur, a.jank_type AS jank
+        SELECT a.dur AS dur, a.jank_type AS jank, a.present_type AS present
         FROM actual_frame_timeline_slice a JOIN process p USING (upid)
-        WHERE p.name = '{package}'
+        WHERE p.name = '{package}' AND a.ts >= {since}
         """,
     )
     jank_kinds = {}
+    jank_sides = {"app": 0, "compositor": 0, "other": 0}
     for row in timeline:
-        if row["jank"] not in ("None", "Buffer Stuffing"):
+        side = jank_side(row["jank"])
+        if side:
             jank_kinds[row["jank"]] = jank_kinds.get(row["jank"], 0) + 1
+            jank_sides[side] += 1
     janky = sum(jank_kinds.values())
+    visibly_late = sum(row.get("present") in VISIBLY_LATE for row in timeline)
 
     def durations(thread_condition, name_condition):
         rows = query(
@@ -422,6 +520,7 @@ def frame_stats(trace_processor, trace, package, capacities=None):
             JOIN thread_track tt ON s.track_id = tt.id
             JOIN thread t USING (utid) JOIN process p USING (upid)
             WHERE p.name = '{package}' AND {thread_condition} AND {name_condition}
+              AND s.ts >= {since}
             """,
         )
         return [int(row["dur"]) / 1e6 for row in rows if row.get("dur", "").isdigit()]
@@ -435,7 +534,7 @@ def frame_stats(trace_processor, trace, package, capacities=None):
         f"""
         SELECT t.name AS thread, SUM(ts.dur) AS running FROM thread_state ts
         JOIN thread t USING (utid) JOIN process p USING (upid)
-        WHERE p.name = '{package}' AND ts.state = 'Running'
+        WHERE p.name = '{package}' AND ts.state = 'Running' AND ts.ts >= {since}
           AND (t.tid = p.pid OR t.name = 'RenderThread')
         GROUP BY t.utid
         """,
@@ -445,10 +544,42 @@ def frame_stats(trace_processor, trace, package, capacities=None):
         if row.get("running", "").isdigit():
             kind = "render" if row["thread"] == "RenderThread" else "main"
             cpu_ms[kind] += int(row["running"]) / 1e6
+    app_slices = f"""
+        FROM slice s JOIN thread_track tt ON s.track_id = tt.id
+        JOIN thread t USING (utid) JOIN process p USING (upid)
+        WHERE p.name = '{package}' AND s.ts >= {since}"""
+    # doFrames that started late after their vsync (the expected timeline's start, by vsync id).
+    late_do_frames = count(trace_processor, trace, f"""
+        SELECT COUNT(*) AS n {app_slices} AND t.tid = p.pid
+          AND s.name GLOB 'Choreographer#doFrame [0-9]*'
+          AND s.ts - (SELECT MIN(e.ts) FROM expected_frame_timeline_slice e
+                      WHERE e.upid = p.upid AND e.name = SUBSTR(s.name, 23))
+              > {LATE_DO_FRAME_NS}
+        """)
+    prefetches = count(trace_processor, trace, f"""
+        SELECT COUNT(*) AS n {app_slices} AND t.tid = p.pid AND s.name = 'compose-rs: prefetch'
+        """)
+    # Android 16's Choreographer after a display stall: frame times an interval back until the
+    # app goes idle (an async track of the app's), and "buffer stuffed" slices.
+    recovery = count(trace_processor, trace, f"""
+        SELECT COUNT(s.id) AS n FROM process_track pt JOIN process p USING (upid)
+        JOIN slice s ON s.track_id = pt.id
+        WHERE p.name = '{package}' AND pt.name = 'Buffer stuffing recovery' AND s.ts >= {since}
+        """)
+    stuffed = count(trace_processor, trace, f"""
+        SELECT COUNT(*) AS n {app_slices} AND s.name = 'buffer stuffed'
+        """)
     return {
+        "since": since,
         "frames": len(timeline),
         "janky_frames": janky,
         "jank_kinds": jank_kinds,
+        "jank_sides": jank_sides,
+        "visibly_late_frames": visibly_late,
+        "late_do_frames": late_do_frames,
+        "prefetches": prefetches,
+        "buffer_stuffing": {"recovery_slices": recovery, "buffer_stuffed": stuffed,
+                            "occurred": recovery > 0 or stuffed > 0},
         "main_thread_frame_ms": {
             "count": len(main),
             "p50": percentile(main, 0.5),
@@ -463,7 +594,7 @@ def frame_stats(trace_processor, trace, package, capacities=None):
             "p99": percentile(render, 0.99),
         },
         "cpu_ms": cpu_ms,
-        "work_ms": work_ms(trace_processor, trace, package, capacities),
+        "work_ms": work_ms(trace_processor, trace, package, capacities, since),
     }
 
 
@@ -505,6 +636,30 @@ def swipe(up):
         shell("input swipe 504 1800 504 500 120")
     else:
         shell("input swipe 504 500 504 1800 120")
+
+
+def scroll_run(trace_processor, out_dir, package, name, run, capacities):
+    """One traced run of 10 flings through the feed, after a warm-up swipe: the display, idle
+    since the app started, resyncs its vsync on the first input, which FrameTimeline counts as
+    jank no app causes. The warm-up's frames are left out of the stats (from the first input
+    after it), and gfxinfo is reset after it. Returns the memory after start, and the stats."""
+    fresh(package)
+    time.sleep(1.0)
+    start(package, "feed")
+    time.sleep(5)
+    after_start = meminfo(package)
+    process, path = start_trace(package, 18000, f"scroll-{name}-{run}")
+    swipe(up=True)
+    time.sleep(1.2)
+    gfxinfo(package, reset=True)
+    for flick in range(10):
+        swipe(up=flick % 4 != 3)
+        time.sleep(1.2)
+    trace = finish_trace(process, path, out_dir)
+    since = measured_since(input_timestamps(trace_processor, trace, package))
+    stats = {"gfxinfo": gfxinfo(package),
+             "trace": frame_stats(trace_processor, trace, package, capacities, since)}
+    return after_start, stats
 
 
 def main():
@@ -550,7 +705,7 @@ def main():
     for name, package in APPS.items():
         first[name] = {}
         for screen in ("feed", "big"):
-            stop(package)
+            fresh(package)
             time.sleep(1.0)
             process, path = start_trace(package, 5000, f"start-{name}-{screen}")
             start(package, screen, wait=False)
@@ -564,18 +719,8 @@ def main():
     scroll = {name: [] for name in APPS}
     for run in range(3):
         for name, package in APPS.items():
-            stop(package)
-            time.sleep(1.0)
-            start(package, "feed")
-            time.sleep(5)
-            memory[name]["after_start"].append(meminfo(package))
-            gfxinfo(package, reset=True)
-            process, path = start_trace(package, 16000, f"scroll-{name}-{run}")
-            for flick in range(10):
-                swipe(up=flick % 4 != 3)
-                time.sleep(1.2)
-            trace = finish_trace(process, path, arguments.out)
-            stats = {"gfxinfo": gfxinfo(package), "trace": frame_stats(tp, trace, package, capacities)}
+            after_start, stats = scroll_run(tp, arguments.out, package, name, run, capacities)
+            memory[name]["after_start"].append(after_start)
             scroll[name].append(stats)
             memory[name]["after_scroll"].append(meminfo(package))
             print("scroll", name, run, json.dumps(stats))
@@ -586,7 +731,7 @@ def main():
     animation = {name: [] for name in APPS}
     for run in range(3):
         for name, package in APPS.items():
-            stop(package)
+            fresh(package)
             time.sleep(1.0)
             start(package, "feed_animated")
             time.sleep(3)

@@ -7,6 +7,7 @@ import unittest
 import zipfile
 
 import measure
+import summarize
 
 # `dumpsys package dexopt` on a Pixel 8 Pro, Android 16 (ART Service), shortened.
 DEXOPT_ART_SERVICE = """\
@@ -135,6 +136,61 @@ class ApkTest(unittest.TestCase):
             self.assertEqual(len(dex), 1)
             self.assertTrue(dex[0].startswith("APK"), dex)
             self.assertEqual(measure.compare_apks(built, None, "arm64-v8a"), (False, []))
+
+
+class HygieneTest(unittest.TestCase):
+    def test_our_other_apps_are_stopped(self):
+        output = ("package:rs.compose.bench.rs\n"
+                  "package:rs.compose.demo\n"
+                  "package:rs.compose.bench.compose\n"
+                  "package:com.google.android.apps.photos\n")
+        self.assertEqual(measure.packages_to_stop(output, "rs.compose.bench.rs"),
+                         ["rs.compose.bench.compose", "rs.compose.demo"])
+        self.assertEqual(measure.packages_to_stop("", "rs.compose.bench.rs"), [])
+
+    def test_the_warm_up_is_left_out(self):
+        ms = 1_000_000
+        warm_up = [1000 * ms + step * 8 * ms for step in range(15)]
+        flings = [2500 * ms + step * 8 * ms for step in range(15)]
+        flings += [3800 * ms + step * 8 * ms for step in range(15)]
+        self.assertEqual(measure.measured_since(flings + warm_up), 2500 * ms)
+        # No pause: no warm-up to leave out.
+        self.assertEqual(measure.measured_since(warm_up), 0)
+        self.assertEqual(measure.measured_since([]), 0)
+
+
+class JankTest(unittest.TestCase):
+    def test_sides(self):
+        side = measure.jank_side
+        self.assertIsNone(side("None"))
+        self.assertIsNone(side("Buffer Stuffing"))
+        self.assertEqual(side("App Deadline Missed"), "app")
+        self.assertEqual(side("App Deadline Missed, Buffer Stuffing"), "app")
+        self.assertEqual(side("Prediction Error"), "compositor")
+        self.assertEqual(side("SurfaceFlinger CPU Deadline Missed"), "compositor")
+        self.assertEqual(side("Display HAL, Buffer Stuffing"), "compositor")
+        # Both: the app's, as it missed its own deadline.
+        self.assertEqual(side("SurfaceFlinger Scheduling, App Deadline Missed"), "app")
+        self.assertEqual(side("Unknown"), "other")
+        self.assertEqual(side("Dropped Frame"), "other")
+
+    def test_run_line(self):
+        trace = {
+            "jank_sides": {"app": 1, "compositor": 2, "other": 0},
+            "visibly_late_frames": 31, "late_do_frames": 15, "prefetches": 69,
+            "buffer_stuffing": {"recovery_slices": 1216, "buffer_stuffed": 1, "occurred": True},
+            "main_thread_frame_ms": {"p50": 1.1, "p90": 2.5, "p99": 7.4},
+            "render_thread_frame_ms": {"p50": 2.1, "p90": 3.4, "p99": 5.2},
+        }
+        line = summarize.run_line(trace)
+        self.assertIn("janky app 1 compositor 2 other 0", line)
+        self.assertIn("visibly late 31, late doFrames 15, prefetches 69", line)
+        self.assertIn("buffer stuffing yes (1216 recovery slices, 1 stuffed)", line)
+        self.assertIn("main p50 1.10 p90 2.50 p99 7.40", line)
+        trace["buffer_stuffing"] = {"recovery_slices": 0, "buffer_stuffed": 0, "occurred": False}
+        self.assertIn("buffer stuffing no |", summarize.run_line(trace))
+        # Reports from before D343 have none of it.
+        self.assertIsNone(summarize.run_line({"frames": 3}))
 
 
 if __name__ == "__main__":
