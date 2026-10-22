@@ -15,7 +15,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use compose_android::serialize::{
-    GroupCache, LAYER_ENTRY_BYTES, Resources, Writer, tag, write_display_list,
+    GroupCache, LAYER_ENTRY_BYTES, Resources, Writer, operand_bytes, tag, write_display_list,
 };
 use compose_runtime::*;
 use compose_ui::*;
@@ -26,27 +26,6 @@ fn u32_at(bytes: &[u8], at: usize) -> u32 {
 
 fn u64_at(bytes: &[u8], at: usize) -> u64 {
     u64::from_le_bytes(bytes[at..at + 8].try_into().unwrap())
-}
-
-const PAINT: usize = 4 + 1 + 4 + 1;
-
-fn operands(op: u8) -> usize {
-    match op {
-        tag::SAVE | tag::RESTORE => 0,
-        tag::TRANSLATE => 8,
-        tag::CLIP_RECT => 16,
-        tag::CLIP_ROUND_RECT => 32,
-        tag::DRAW_RECT | tag::DRAW_LINE => 16 + PAINT,
-        tag::DRAW_ROUND_RECT => 32 + PAINT,
-        tag::DRAW_PARAGRAPH => 12,
-        tag::SAVE_LAYER_ALPHA => 4,
-        tag::TRANSFORM => 28,
-        tag::DRAW_IMAGE => 4 + 32 + 4,
-        tag::DRAW_SHADOW => 1 + 32 + 4 + 12 + 4 + 8,
-        tag::DRAW_ARC => 16 + 8 + 1 + PAINT,
-        tag::DRAW_PATH => 4 + 16 + PAINT,
-        other => panic!("unknown tag {other}"),
-    }
 }
 
 /// A record: its key, its version, its bytes from its tag to its end.
@@ -79,7 +58,7 @@ fn records_in(bytes: &[u8], mut at: usize, end: usize, out: &mut Vec<Record>) {
             records_in(bytes, at + 21, at + 21 + length, out);
             at += 21 + length;
         } else {
-            at += 1 + operands(op);
+            at += 1 + operand_bytes(bytes, at);
         }
     }
     assert_eq!(at, end, "a record's length is its content's");

@@ -9,31 +9,8 @@ use std::collections::HashMap;
 use compose::test::*;
 use compose::ui::{Density, IntSize};
 use compose_android::serialize::{
-    GroupCache, LAYER_ENTRY_BYTES, Resources, Writer, tag, write_display_list,
+    GroupCache, LAYER_ENTRY_BYTES, Resources, Writer, operand_bytes, tag, write_display_list,
 };
-
-/// The bytes of a paint: color, style, width, cap.
-const PAINT: usize = 4 + 1 + 4 + 1;
-
-/// An operation's operand bytes.
-fn operands(op: u8) -> usize {
-    match op {
-        tag::SAVE | tag::RESTORE => 0,
-        tag::TRANSLATE => 8,
-        tag::CLIP_RECT => 16,
-        tag::CLIP_ROUND_RECT => 32,
-        tag::DRAW_RECT | tag::DRAW_LINE => 16 + PAINT,
-        tag::DRAW_ROUND_RECT => 32 + PAINT,
-        tag::DRAW_PARAGRAPH => 12,
-        tag::SAVE_LAYER_ALPHA => 4,
-        tag::TRANSFORM => 28,
-        tag::DRAW_IMAGE => 4 + 32 + 4,
-        tag::DRAW_SHADOW => 1 + 32 + 4 + 12 + 4 + 8,
-        tag::DRAW_ARC => 16 + 8 + 1 + PAINT,
-        tag::DRAW_PATH => 4 + 16 + PAINT,
-        other => panic!("unknown tag {other}"),
-    }
-}
 
 fn u32_at(bytes: &[u8], at: usize) -> u32 {
     u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap())
@@ -67,8 +44,9 @@ fn replay(
             }
             at += 21 + length;
         } else {
-            read += 1 + operands(op);
-            at += 1 + operands(op);
+            let length = 1 + operand_bytes(bytes, at);
+            read += length;
+            at += length;
         }
     }
     read

@@ -3,11 +3,17 @@ package rs.compose.android
 import android.graphics.Bitmap
 import android.graphics.BlurMaskFilter
 import android.graphics.Canvas
+import android.graphics.LinearGradient
+import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.Path
+import android.graphics.RadialGradient
 import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.RenderNode
+import android.graphics.Shader
+import android.graphics.SweepGradient
+import android.os.Build
 import android.util.SparseArray
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -21,6 +27,9 @@ import kotlin.math.floor
  * filled path is drawn from an alpha mask rasterized once per scale (D190), as Compose's
  * `VectorPainter` draws an icon from a cached bitmap: the GPU draws a textured quad instead of
  * rendering the path (through a scratch atlas, an extra render pass, every frame).
+ *
+ * A gradient comes whole in each paint drawing it (D210): its `Shader` is kept by its bytes, so
+ * a frame drawing the same gradients builds none.
  *
  * A group (a repaint boundary: a graphics layer, a lazy item) is recorded into a `RenderNode`
  * of its own, kept by its key and version (D157). Rust gives a group a new version whenever
@@ -47,6 +56,15 @@ internal class Replayer(private val text: TextMeasurer) {
     private val blurFilters = arrayOfNulls<BlurMaskFilter>(BLUR_CACHE_CAPACITY)
     private var blurCount = 0
     private var blurNext = 0
+    /**
+     * Gradients by their bytes (kind to stops) and local transform (x, y, scale x, scale y
+     * each), kept as the blur filters are: a frame's gradients are built once, not each frame.
+     */
+    private val shaderKeys = arrayOfNulls<ByteArray>(SHADER_CACHE_CAPACITY)
+    private val shaderLocals = FloatArray(SHADER_CACHE_CAPACITY * 4)
+    private val shaders = arrayOfNulls<Shader>(SHADER_CACHE_CAPACITY)
+    private var shaderCount = 0
+    private var shaderNext = 0
     private val bitmapPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
     private val rect = RectF()
     private val source = Rect()
@@ -86,12 +104,29 @@ internal class Replayer(private val text: TextMeasurer) {
     private var paintStroke = false
     private var paintWidth = 0f
     private var paintCap = 0
+    private var paintShader: Shader? = null
 
-    private fun ByteBuffer.readPaint(): Paint {
-        val color = getInt()
+    /**
+     * Reads a paint: color, style, width, cap, then its shader (a kind; for a gradient, its
+     * definition and alpha). A drawing scaled by ([scaleX], [scaleY]) then moved by ([x], [y])
+     * (a path's) has its gradient moved back, as compose-skia's: a gradient is in the list's
+     * coordinates.
+     */
+    private fun ByteBuffer.readPaint(x: Float = 0f, y: Float = 0f, scaleX: Float = 1f, scaleY: Float = 1f): Paint {
+        var color = getInt()
         val stroke = get().toInt() != 0
         val width = getFloat()
         val cap = get().toInt()
+        val kind = get().toInt()
+        val shader = if (kind == SHADER_NONE) null else readShader(kind, x, y, scaleX, scaleY)
+        if (shader != null) {
+            // The shader paints; the paint's alpha is the gradient's, as compose-skia's.
+            color = (getFloat().coerceIn(0f, 1f) * 255f + 0.5f).toInt() shl 24
+        }
+        if (shader !== paintShader) {
+            paintShader = shader
+            paint.shader = shader
+        }
         if (color != paintColor) {
             paintColor = color
             paint.color = color
@@ -209,6 +244,21 @@ internal class Replayer(private val text: TextMeasurer) {
                     clip.addRoundRect(rect, buffer.readRadii(), Path.Direction.CW)
                     canvas.clipPath(clip)
                 }
+                CLIP_PATH -> {
+                    val kept = paths.get(buffer.getInt())
+                    val x = buffer.getFloat()
+                    val y = buffer.getFloat()
+                    if (kept != null) {
+                        if (x == 0f && y == 0f) {
+                            canvas.clipPath(kept.path)
+                        } else {
+                            // Moved by a copy, not the canvas: translating back could leave a
+                            // rounding error in the matrix.
+                            kept.path.offset(x, y, clip)
+                            canvas.clipPath(clip)
+                        }
+                    }
+                }
                 DRAW_RECT -> {
                     buffer.readRect(rect)
                     canvas.drawRect(rect, buffer.readPaint())
@@ -272,8 +322,10 @@ internal class Replayer(private val text: TextMeasurer) {
                     val y = buffer.getFloat()
                     val scaleX = buffer.getFloat()
                     val scaleY = buffer.getFloat()
-                    val paint = buffer.readPaint()
-                    if (kept != null && (paintStroke || !drawMask(canvas, kept, x, y, scaleX, scaleY))) {
+                    val paint = buffer.readPaint(x, y, scaleX, scaleY)
+                    // A mask is tinted by a color: a gradient draws the path.
+                    val masked = !paintStroke && paintShader == null
+                    if (kept != null && (!masked || !drawMask(canvas, kept, x, y, scaleX, scaleY))) {
                         canvas.save()
                         canvas.translate(x, y)
                         canvas.scale(scaleX, scaleY)
@@ -526,6 +578,95 @@ internal class Replayer(private val text: TextMeasurer) {
         canvas.restore()
     }
 
+    /**
+     * The gradient whose definition starts at the [kind] byte just read, at the buffer's
+     * position after it (left after it, before its alpha): kept by its bytes and its local
+     * transform (a path's scale and offset, see [readPaint]), built if new. An unknown kind
+     * makes the rest unreadable.
+     */
+    private fun ByteBuffer.readShader(kind: Int, x: Float, y: Float, scaleX: Float, scaleY: Float): Shader? {
+        val start = position() - 1
+        val geometry = when (kind) {
+            SHADER_LINEAR -> 16
+            SHADER_RADIAL -> 12
+            SHADER_SWEEP -> 8
+            else -> {
+                unreadable = true
+                return null
+            }
+        }
+        val colorsAt = start + 2 + geometry
+        val colorCount = getInt(colorsAt)
+        val stopsAt = colorsAt + 4 + 4 * colorCount
+        val stopCount = getInt(stopsAt)
+        val end = stopsAt + 4 + 4 * stopCount
+        position(end)
+        for (index in 0 until shaderCount) {
+            if (shaderMatches(index, this, start, end, x, y, scaleX, scaleY)) return shaders[index]
+        }
+        val colors = IntArray(colorCount) { getInt(colorsAt + 4 + it * 4) }
+        val stops = if (stopCount == 0) null else FloatArray(stopCount) { getFloat(stopsAt + 4 + it * 4) }
+        val tileMode = when (get(start + 1).toInt()) {
+            1 -> Shader.TileMode.REPEAT
+            2 -> Shader.TileMode.MIRROR
+            // Transparent past the ends: API 31+, clamped below.
+            3 -> if (Build.VERSION.SDK_INT >= 31) Shader.TileMode.DECAL else Shader.TileMode.CLAMP
+            else -> Shader.TileMode.CLAMP
+        }
+        val shader = when (kind) {
+            SHADER_LINEAR -> LinearGradient(
+                getFloat(start + 2),
+                getFloat(start + 6),
+                getFloat(start + 10),
+                getFloat(start + 14),
+                colors,
+                stops,
+                tileMode,
+            )
+            SHADER_RADIAL ->
+                RadialGradient(getFloat(start + 2), getFloat(start + 6), getFloat(start + 10), colors, stops, tileMode)
+            else -> SweepGradient(getFloat(start + 2), getFloat(start + 6), colors, stops)
+        }
+        if ((x != 0f || y != 0f || scaleX != 1f || scaleY != 1f) && scaleX != 0f && scaleY != 0f) {
+            val local = Matrix()
+            local.setScale(1f / scaleX, 1f / scaleY)
+            local.preTranslate(-x, -y)
+            shader.setLocalMatrix(local)
+        }
+        val at = if (shaderCount < SHADER_CACHE_CAPACITY) shaderCount++ else shaderNext.also {
+            shaderNext = (shaderNext + 1) % SHADER_CACHE_CAPACITY
+        }
+        shaderKeys[at] = ByteArray(end - start) { get(start + it) }
+        shaderLocals[at * 4] = x
+        shaderLocals[at * 4 + 1] = y
+        shaderLocals[at * 4 + 2] = scaleX
+        shaderLocals[at * 4 + 3] = scaleY
+        shaders[at] = shader
+        return shader
+    }
+
+    /** Whether kept shader [index] is the definition from [start] to [end] with that transform. */
+    private fun shaderMatches(
+        index: Int,
+        buffer: ByteBuffer,
+        start: Int,
+        end: Int,
+        x: Float,
+        y: Float,
+        scaleX: Float,
+        scaleY: Float,
+    ): Boolean {
+        val key = shaderKeys[index]!!
+        if (key.size != end - start) return false
+        val local = index * 4
+        if (shaderLocals[local] != x || shaderLocals[local + 1] != y) return false
+        if (shaderLocals[local + 2] != scaleX || shaderLocals[local + 3] != scaleY) return false
+        for (offset in key.indices) {
+            if (key[offset] != buffer.get(start + offset)) return false
+        }
+        return true
+    }
+
     /** The blur filter for [elevation], made once while it's among the last few used. */
     private fun blur(elevation: Float): BlurMaskFilter {
         for (index in 0 until blurCount) {
@@ -717,6 +858,12 @@ internal class Replayer(private val text: TextMeasurer) {
         maskBytes = 0
         for (index in 0 until images.size()) images.valueAt(index).recycle()
         images.clear()
+        shaderKeys.fill(null)
+        shaders.fill(null)
+        shaderCount = 0
+        shaderNext = 0
+        paintShader = null
+        paint.shader = null
     }
 
     private companion object {
@@ -724,6 +871,8 @@ internal class Replayer(private val text: TextMeasurer) {
         const val NODE_POOL_CAPACITY = 32
         /** Elevations whose blur filters are kept: Material's levels, and an animated one. */
         const val BLUR_CACHE_CAPACITY = 8
+        /** Gradients kept: a screen's few, and an animated one. */
+        const val SHADER_CACHE_CAPACITY = 16
 
         const val SAVE = 0
         const val RESTORE = 1
@@ -742,10 +891,16 @@ internal class Replayer(private val text: TextMeasurer) {
         const val DRAW_PATH = 14
         const val GROUP = 15
         const val LAYERS = 16
+        const val CLIP_PATH = 17
         const val DEFINE_PATH = 20
         const val DROP_PATH = 21
         const val DEFINE_IMAGE = 22
         const val DROP_IMAGE = 23
+
+        const val SHADER_NONE = 0
+        const val SHADER_LINEAR = 1
+        const val SHADER_RADIAL = 2
+        const val SHADER_SWEEP = 3
 
         /** The largest path (scaled, in pixels each way) drawn from a mask (D190). */
         const val MAX_MASK_SIZE = 256

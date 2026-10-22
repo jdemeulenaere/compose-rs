@@ -9,7 +9,8 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use compose_android::serialize::{
-    GroupCache, LAYER_ENTRY_BYTES, Resources, Writer, tag, write_display_list,
+    GroupCache, LAYER_ENTRY_BYTES, Resources, Writer, operand_bytes, shader, tag,
+    write_display_list,
 };
 use compose_runtime::*;
 use compose_ui::*;
@@ -47,29 +48,6 @@ fn u64_at(bytes: &[u8], at: usize) -> u64 {
 
 fn f32_at(bytes: &[u8], at: usize) -> f32 {
     f32::from_le_bytes(bytes[at..at + 4].try_into().unwrap())
-}
-
-/// The bytes of a paint: color, style, width, cap.
-const PAINT: usize = 4 + 1 + 4 + 1;
-
-/// An operation's operand bytes.
-fn operands(op: u8) -> usize {
-    match op {
-        tag::SAVE | tag::RESTORE => 0,
-        tag::TRANSLATE => 8,
-        tag::CLIP_RECT => 16,
-        tag::CLIP_ROUND_RECT => 32,
-        tag::DRAW_RECT | tag::DRAW_LINE => 16 + PAINT,
-        tag::DRAW_ROUND_RECT => 32 + PAINT,
-        tag::DRAW_PARAGRAPH => 12,
-        tag::SAVE_LAYER_ALPHA => 4,
-        tag::TRANSFORM => 28,
-        tag::DRAW_IMAGE => 4 + 32 + 4,
-        tag::DRAW_SHADOW => 1 + 32 + 4 + 12 + 4 + 8,
-        tag::DRAW_ARC => 16 + 8 + 1 + PAINT,
-        tag::DRAW_PATH => 4 + 16 + PAINT,
-        other => panic!("unknown tag {other}"),
-    }
 }
 
 /// The `LAYERS` section (if any) and the operations after it.
@@ -111,7 +89,7 @@ fn read_items(bytes: &[u8], mut at: usize, end: usize) -> Vec<Item> {
             at += length;
         } else {
             items.push(Item::Operation(op));
-            at += operands(op);
+            at += operand_bytes(bytes, at - 1);
         }
     }
     assert_eq!(at, end, "a record's length is its content's");
@@ -130,7 +108,7 @@ fn find(bytes: &[u8], op: u8) -> Option<usize> {
             found if found == op => return Some(at),
             // Into the group's content.
             tag::GROUP => at += 21,
-            other => at += 1 + operands(other),
+            _ => at += 1 + operand_bytes(bytes, at),
         }
     }
     None
@@ -410,6 +388,103 @@ fn cached_records_are_the_bytes_written_afresh() {
     let third = serialized.frame();
     assert_eq!(third, serialized.fresh());
     assert_eq!(serialized.cache.len(), 3, "the gone group's record is dropped");
+}
+
+/// A leaf clipped to a triangle and filled with `brush`.
+fn clipped_gradient(brush: impl Fn() -> Brush + 'static) -> Modifier {
+    Modifier.draw_behind(move |scope| {
+        let triangle = Arc::new(Path::from_svg("M0,0 L10,0 L0,10 Z").unwrap());
+        let paint = scope.brush_paint(&brush(), 1.0, PaintStyle::Fill);
+        scope.clip_path(&triangle, |scope| {
+            let bounds = scope.bounds();
+            scope.draw_rect(bounds, paint);
+        });
+    })
+}
+
+/// The index of the shader the boundary drawn last paints with, in the list.
+fn last_shader_index(serialized: &Serialized) -> u32 {
+    serialized.host.with_tree(|tree| {
+        let list = tree.display_list();
+        list.ops
+            .iter()
+            .rev()
+            .find_map(|op| match op {
+                DrawOp::DrawRect(_, paint) => paint.shader,
+                _ => None,
+            })
+            .expect("a gradient")
+            .0
+    })
+}
+
+/// A retained boundary's gradient is in its record whole (D210), not as its index in the list:
+/// spliced after a sibling that stops painting a gradient, its index changes while its version
+/// doesn't, and the copied record is still the bytes a fresh write gives. Its clip path names
+/// its path, which keeps its id.
+#[test]
+fn a_copied_record_keeps_its_gradient_when_the_lists_shaders_shift() {
+    let sibling_gradient = mutable_state_of(true);
+    let handle = sibling_gradient.handle();
+    let mut serialized = Serialized::new(move || {
+        Layout(
+            Modifier,
+            stack(),
+            callback(move || {
+                Leaf(
+                    clipped_gradient(move || {
+                        if handle.get() {
+                            Brush::vertical_gradient(
+                                &[Color::BLACK, Color::WHITE],
+                                0.0,
+                                f32::INFINITY,
+                                TileMode::Clamp,
+                            )
+                        } else {
+                            Brush::solid(Color::BLACK)
+                        }
+                    })
+                    .size(10.dp()),
+                );
+                Leaf(
+                    Modifier
+                        .repaint_boundary()
+                        .then(clipped_gradient(|| {
+                            Brush::linear_gradient_stops(
+                                &[(0.0, Color::RED), (0.3, Color::GREEN), (1.0, Color::BLUE)],
+                                Offset::ZERO,
+                                Offset::INFINITE,
+                                TileMode::Mirror,
+                            )
+                        }))
+                        .size(10.dp()),
+                );
+            }),
+        );
+    });
+    let first = serialized.frame();
+    assert_eq!(last_shader_index(&serialized), 1);
+    let (_, items) = read(&first);
+    let [(key, version)] = groups(&items)[..] else { panic!("{items:?}") };
+    let operations = all_operations(&items);
+    assert_eq!(operations.iter().filter(|op| **op == tag::CLIP_PATH).count(), 2);
+    sibling_gradient.set(false);
+    let second = serialized.frame();
+    assert_eq!(last_shader_index(&serialized), 0, "the splice shifted the boundary's index");
+    assert_eq!(groups(&read(&second).1), [(key, version)], "the boundary kept its version");
+    assert_eq!(serialized.cache.copied(), 1);
+    assert_eq!(second, serialized.fresh());
+    // The record holds the gradient: its stops, its tile mode (mirror) and its end (the leaf's
+    // far corner, 10 dp at density 1).
+    let record = find(&second, tag::GROUP).unwrap();
+    let shader_at = find(&second[record..], tag::DRAW_RECT).unwrap() + record + 1 + 16 + 10;
+    assert_eq!(&second[shader_at..shader_at + 2], [shader::LINEAR, 2]);
+    let end = (f32_at(&second, shader_at + 10), f32_at(&second, shader_at + 14));
+    assert_eq!(end.0 - f32_at(&second, shader_at + 2), 10.0);
+    assert_eq!(end.1 - f32_at(&second, shader_at + 6), 10.0);
+    let stops_at = shader_at + 18 + 4 + 3 * 4;
+    assert_eq!(u32_at(&second, stops_at), 3);
+    assert_eq!(f32_at(&second, stops_at + 8), 0.3);
 }
 
 /// A `SaveLayerAlpha` around a group isn't folded into the group's drawing: the folded alpha
