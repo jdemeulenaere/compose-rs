@@ -71,7 +71,7 @@ pub fn Quantity() {
 // ANCHOR: holders
 #[composable]
 pub fn Menu() {
-    let drawer = remember_drawer_state(DrawerValue::Closed); // a Copy handle, as state
+    let drawer = remember_drawer_state!(DrawerValue::Closed); // a Copy handle, as state
     let scope = remember_coroutine_scope(); // Copy too
     ModalNavigationDrawer!(
         {
@@ -125,7 +125,7 @@ pub struct Contact {
 pub fn Contacts(contacts: ImmutableList<Contact>) {
     Column!({
         for contact in contacts.iter() {
-            key(contact.id, || ContactRow(contact.clone()));
+            key(contact.id, || ContactRow!(contact.clone()));
         }
     });
 }

@@ -1,21 +1,35 @@
 # compose-rs for Jetpack Compose developers
 
-This guide is for Android developers who know Jetpack Compose and want to write a compose-rs app. compose-rs follows Compose's model and names closely, so most of what you know carries over. The guide covers what's different.
+This guide is for Android developers who know Jetpack Compose. It takes you from an empty crate to a desktop app and an Android app with tests, then maps Compose's APIs one by one to compose-rs's: composables, state, effects, layouts, drawing, Material 3, text, navigation, gestures, animation, Android interop and testing. compose-rs follows Compose's model and names closely, so most of what you know carries over; the guide shows how it's written in Rust, and where it differs.
 
 - **Getting started** (this page): a desktop app, an Android app, and their tests.
-- **[From Kotlin to Rust](kotlin-to-rust.md)**: Compose code side by side with compose-rs code, from composables and state to navigation, Android interop and testing.
+- **[From Kotlin to Rust](kotlin-to-rust.md)**: Compose code side by side with compose-rs code.
 - **[Performance](performance.md)**: what's fast and why, what to avoid, and how to profile.
 - **[Differences from Compose](differences.md)**: the known differences an app will run into.
 
-The design documents in [docs/](..) explain how each part works, and [decisions.md](../decisions.md) records why. The samples quoted in the guide are in [`examples/guide`](../../examples/guide). `cargo test` compiles and runs them, and a test checks that every quote matches its source.
+The samples quoted in the guide are in [`examples/guide`](../../examples/guide). `cargo test` compiles and runs them, and a test checks that every quote matches its source. The design documents in [docs/](..) explain how each part works, and [decisions.md](../decisions.md) records why.
 
-compose-rs isn't published yet. Apps depend on the crates by path, as the examples do. It runs on desktop (macOS, Windows, Linux) and on Android (arm64, API 29 and later).
+compose-rs isn't published yet. It runs on desktop (macOS, Windows, Linux) and on Android (arm64, API 29 and later).
+
+## The layout of an app
+
+This page builds an app called `hello` inside the compose-rs repository, as the examples are, so that its crates depend on the framework by path and Android's build script finds them:
+
+```text
+compose-rs/
+├── Cargo.toml                 # the workspace: add examples/hello and examples/hello-android to its members
+├── examples/hello/            # the app: its composables (a library) and its desktop window (a binary)
+├── examples/hello-android/    # the Android library: names the app's root composables for ComposeRsView
+└── android/hello/             # the Kotlin app: a copy of android/demo
+```
+
+An app in a repository of its own works the same way, with its own workspace, paths to a compose-rs checkout, and its own copy of `android/build-rust.sh` (see [Gradle](#2-gradle)).
 
 ## A desktop app
 
-An app depends on the `compose` facade crate. Its modules mirror Compose's packages: `compose::runtime`, `compose::ui`, `compose::foundation` (and `foundation::layout`), `compose::material3` and `compose::animation`. The `desktop` feature adds `compose::desktop`, which opens windows. The `test` feature adds `compose::test`, the test rule.
+An app depends on the `compose` facade crate. Its modules mirror Compose's packages: `compose::runtime`, `compose::ui`, `compose::foundation` (and `foundation::layout`), `compose::material3` and `compose::animation`. The `desktop` feature adds `compose::desktop`, which opens windows; the `test` feature adds `compose::test`, the test rule.
 
-Keep the composables in a library and the window in a binary behind a feature, so the same library can later be built for Android without the desktop dependencies:
+Keep the composables in a library and the window in a binary behind a feature, so the Android library can use the composables without the desktop dependencies. `examples/hello/Cargo.toml`:
 
 ```toml
 [package]
@@ -32,13 +46,13 @@ path = "src/main.rs"
 required-features = ["desktop"]
 
 [dependencies]
-compose = { path = "../compose-rs/crates/compose" }
+compose = { path = "../../crates/compose" }
 
 [dev-dependencies]
-compose = { path = "../compose-rs/crates/compose", features = ["test"] }
+compose = { path = "../../crates/compose", features = ["test"] }
 ```
 
-A composable is a function marked `#[composable]`. Calls to other composables go through call macros (`Column!(…)`, `Text!(…)`), which take Compose's named and default arguments and its trailing lambda:
+A composable is a function marked `#[composable]`. Calls to other composables go through call macros (`Column!(…)`, `Text!(…)`), which take Compose's named and default arguments and its trailing lambda. `examples/hello/src/lib.rs`:
 
 <!-- snippet: src/getting_started.rs#hello -->
 ```rust
@@ -72,32 +86,40 @@ pub fn Hello() {
 }
 ```
 
-`run_app` opens one window and runs until it's closed. Give it a `#[composable]` function rather than a closure with calls inside: the transform only sees code inside composable functions.
+`run_app` opens one window and runs until it's closed. Give it a `#[composable]` function: the transform only sees code inside composable functions.
 
 <!-- snippet: src/main.rs#main -->
 ```rust
+// examples/hello/src/main.rs
 use compose::desktop::{WindowOptions, run_app};
 
 fn main() {
     run_app(
         WindowOptions { title: "Hello".into(), size: (360, 240).into(), ..Default::default() },
-        guide::getting_started::Hello,
+        hello::Hello,
     );
 }
 ```
 
-In this repository, `cargo run -p guide` runs this app, and `cargo run -p gallery` runs a tour of the toolkit. For several windows, `compose::desktop::application` takes a composable whose `Window!(on_close_request = …, title = …, { … })` calls each open a window while they're in the composition, as Compose Desktop's `application { Window(…) }`.
+`cargo run -p hello` runs it. In this repository, `cargo run -p guide` runs the same app, and `cargo run -p gallery` a tour of the toolkit.
 
-Environment variables help while developing: `COMPOSE_FRAME_STATS=1` prints each frame's timings, `COMPOSE_SCREENSHOT=out.png` writes the last frame to a file when the app exits, and `COMPOSE_EXIT_AFTER_FRAMES=n` exits after `n` frames.
+For several windows, `compose::desktop::application` takes a composable whose `Window!(on_close_request = …, title = …, { … })` calls each open a window while they're in the composition, as Compose Desktop's `application { Window(…) }`.
+
+Environment variables help while developing:
+
+- `COMPOSE_FRAME_STATS=1` prints each frame's timings;
+- `COMPOSE_SCREENSHOT=out.png` writes the last frame to a file when the app exits;
+- `COMPOSE_EXIT_AFTER_FRAMES=n` exits after `n` frames.
 
 ### Testing it
 
 `compose_test` composes the app in a headless window and returns a test rule with Compose's finders, actions and assertions. Each action runs frames until the UI is idle, as Compose's rule does.
 
-<!-- snippet: tests/getting_started.rs#test -->
+<!-- snippet: tests/suite/getting_started.rs#test -->
 ```rust
+// examples/hello/tests/hello.rs
 use compose::test::*;
-use guide::getting_started::Hello;
+use hello::Hello;
 
 #[test]
 fn greets_by_name() {
@@ -108,11 +130,17 @@ fn greets_by_name() {
 }
 ```
 
-`cargo test` runs it. Text is measured with a fixed-advance measurer in tests (every character the same width), so layouts are deterministic on every machine. The [testing section](kotlin-to-rust.md#testing) covers recomposition counts, the test clock, saved state and event scripts.
+`cargo test` runs it. Text is measured with a fixed-advance measurer in tests (every character the same width), so layouts are the same on every machine. The [testing section](kotlin-to-rust.md#testing) covers recomposition counts, the test clock, saved state and event scripts.
 
 ### The edit loop
 
-There's no hot reload or live preview. An edit is an incremental build and a restart, which takes about a second or two for a small app crate. Keep the composables you're editing in a small crate and stable code in other crates of the workspace. [docs/08](../08-fast-builds.md) covers the profile, linker and crate layout that keep rebuilds fast.
+There's no hot reload or live preview: an edit is an incremental build and a restart. With the repository's dev profile, an edit to the todo example rebuilds in about half a second. [docs/08](../08-fast-builds.md) estimates the whole loop, from the edit to the running app:
+
+- 1 to 3 s for a small app crate in a tuned setup (docs/08's profile, a fast linker, small crates);
+- 5 to 15 s untuned, mostly relinking;
+- 10 to 30 s to a running app on an Android device (the Rust build, Gradle's packaging, installing and launching).
+
+Keep the composables you're editing in a small crate, and stable code in other crates of the workspace.
 
 ## An Android app
 
@@ -120,19 +148,21 @@ compose-rs runs in a plain Android `View`, `ComposeRsView`. It can be an activit
 
 You need:
 
-- the Android SDK and NDK (found through `ANDROID_HOME` and `ANDROID_NDK_HOME`, or the newest NDK under `$ANDROID_HOME/ndk`);
+- a macOS or Linux machine to build on: `build-rust.sh` is a POSIX shell script;
+- the Android SDK and NDK. The script finds the SDK through `ANDROID_HOME` (or `ANDROID_SDK_ROOT`), falling back to macOS's default location, and doesn't read Gradle's `local.properties`: on Linux, set `ANDROID_HOME`. It takes the NDK from `ANDROID_NDK_HOME`, or the newest under the SDK's `ndk/`;
 - the Rust target: `rustup target add aarch64-linux-android`;
-- Gradle, from Android Studio or installed (the repository has no Gradle wrapper).
+- Gradle with the Android Gradle plugin 9.4 (whose built-in Kotlin support compiles the Kotlin), the Kotlin Compose compiler plugin 2.4 for Kotlin Compose screens, and JDK 17. Android Studio provides them; the repository has no Gradle wrapper.
 
-Only arm64 devices are built for (64-bit phones and the arm64 emulator images). The minimum SDK is 29.
+Only arm64 devices are built for (64-bit phones and the arm64 emulator images). The minimum SDK is 29, compiled against SDK 36.
 
 ### 1. The Rust library
 
-The Android library is a crate of its own, of type `cdylib`, depending on the app's library without its desktop feature. As `examples/android-demo` does, in the repository's workspace:
+The Android library is a crate of its own, of type `cdylib`, depending on the app's library without its desktop feature, as `examples/android-demo` does. `examples/hello-android/Cargo.toml`:
 
 ```toml
 [package]
 name = "hello-android"
+edition = "2024"
 
 [lib]
 name = "hello_android"   # libhello_android.so
@@ -148,16 +178,15 @@ Its `lib.rs` names the root composables that a `ComposeRsView` can show, with `c
 
 <!-- snippet: src/android.rs#export_apps -->
 ```rust
+// examples/hello-android/src/lib.rs
 compose_android::export_apps! {
-    "hello" => crate::getting_started::Hello,
-    "navigation" => crate::navigation::App,
-    "embedded" => crate::interop::Embedded,
+    "hello" => hello::Hello,
 }
 ```
 
 ### 2. Gradle
 
-The Kotlin side is the `android/compose-rs` library module: `ComposeRsView` and its glue, without dependencies on AndroidX. Include it in your project's `settings.gradle.kts`, and build the Rust library before each build of the app with `android/build-rust.sh <cargo package> <library name> <jniLibs directory>`, as `android/demo/build.gradle.kts` does:
+The Kotlin side is the `android/compose-rs` library module: `ComposeRsView` and its glue, without dependencies on AndroidX. Copy `android/demo` to `android/hello` and add `include(":hello")` to `android/settings.gradle.kts`, which already includes `:compose-rs`. The app's `build.gradle.kts` builds the Rust library before each build, with `build-rust.sh <cargo package> <library name> <jniLibs directory>`:
 
 ```kotlin
 android {
@@ -176,21 +205,35 @@ dependencies {
 }
 ```
 
-`build-rust.sh` runs `cargo build --release --target aarch64-linux-android -p <package>` with the NDK's linker (no `cargo-ndk` needed) and copies the library where Gradle packages it. It builds in the compose-rs workspace (the directory above the script), so it builds packages of that workspace, as the examples are. For an app in a workspace of its own, copy the script and change the directory it builds in, and point Gradle at the library module with `project(":compose-rs").projectDir = file("…/compose-rs/android/compose-rs")`.
+`build-rust.sh` runs `cargo build --release --target aarch64-linux-android -p <package>` with the NDK's linker (no `cargo-ndk` needed), then copies the library where Gradle packages it.
+
+It builds in the compose-rs workspace, the directory above the script, so the package must be one of that workspace's members. An app in a repository of its own copies the script and changes the directory it builds in, and points Gradle at the library module: `project(":compose-rs").projectDir = file("…/compose-rs/android/compose-rs")`.
 
 ### 3. The activity
 
-Load the library once, then create views by app name. In a plain activity:
+Load the library once per process, in the `Application` (declared with `android:name=".HelloApplication"` in the manifest):
+
+```kotlin
+class HelloApplication : Application() {
+    override fun onCreate() {
+        super.onCreate()
+        ComposeRsRuntime.loadLibrary("hello_android")
+    }
+}
+```
+
+Then create views by app name. In a plain activity:
 
 ```kotlin
 class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        ComposeRsRuntime.loadLibrary("hello_android")
         setContentView(ComposeRsView(this, "hello"))
     }
 }
 ```
+
+With `targetSdk` 35 and later, the window is edge to edge, so this view draws under the status and navigation bars. The view reports the window's insets to the app: pad its root with `Modifier.safe_drawing_padding()` (as the [interop sample](kotlin-to-rust.md#android-interop) does), or give Material's `Scaffold` its `content_window_insets`.
 
 In a Kotlin Compose screen, through `AndroidView`:
 
@@ -198,7 +241,7 @@ In a Kotlin Compose screen, through `AndroidView`:
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        ComposeRsRuntime.loadLibrary("hello_android")
+        enableEdgeToEdge()
         setContent {
             MaterialTheme {
                 Column(Modifier.safeDrawingPadding()) {
@@ -214,17 +257,17 @@ class MainActivity : ComponentActivity() {
 }
 ```
 
-The view composes its app while it's attached to a window. It saves the app's `remember_saveable` values in its instance state, which needs a view id: it takes `R.id.compose_rs_view` unless it has one, so two views in one window need ids of their own. Back goes to the app's `BackHandler`s while one is enabled, then to the activity. Kotlin passes properties with `setProp` and hears events with `setOnEventListener` ([Android interop](kotlin-to-rust.md#android-interop)).
+Here Kotlin already keeps the content clear of the bars. The view still gets the whole window's insets, wherever it is, so the Rust app shouldn't pad for them again: the two paddings would add up.
+
+What the view does for its app:
+
+- It composes the app while it's attached to a window.
+- It saves the app's `remember_saveable` values in its instance state, which needs a view id. It takes `R.id.compose_rs_view` unless it has one, so two views in one window need ids of their own.
+- Back goes to the app's `BackHandler`s while one is enabled, then to the activity.
+- Kotlin passes properties with `setProp` and hears events with `setOnEventListener` ([Android interop](kotlin-to-rust.md#android-interop)).
 
 ### 4. Build and run
 
-The demo is a working template: `examples/android-demo` is its Rust library (the counter, todo and gallery examples) and `android/demo` its Kotlin app, which shows each example in a tab of a Kotlin Compose screen. From `android/`, with a device connected:
+The demo is a working template: `examples/android-demo` is its Rust library (the counter, todo and gallery examples) and `android/demo` its Kotlin app, which shows each example in a tab of a Kotlin Compose screen. From `android/`, with a device connected, `gradle :demo:installDebug` builds and installs it (`gradle :hello:installDebug` for the app above).
 
-```bash
-gradle :demo:installDebug
-adb shell am start -n rs.compose.demo/.MainActivity
-```
-
-To start your own app in this repository, copy `examples/android-demo` and `android/demo`, rename the crate, the library and the Android package, and add them to the workspace's members and to `android/settings.gradle.kts`.
-
-A Rust panic aborts the app at the JNI boundary; its message is in `adb logcat`, under the tag `compose-rs`. Perfetto traces show compose-rs's frame phases ([Performance](performance.md#profiling)).
+A Rust panic aborts the app at the JNI boundary; its message is in logcat under the tag `compose-rs`. [Logging](kotlin-to-rust.md#logging-on-android) covers the app's own messages, and [Profiling](performance.md#profiling) Perfetto traces of compose-rs's frame phases.

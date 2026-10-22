@@ -6,7 +6,15 @@ compose-rs does the same three phases as Compose in each frame: composition, lay
 
 ### Skipping
 
-Every restartable composable can skip, as with Compose's strong skipping: when each argument is `same` as last time, its body doesn't run. `ComposeArg::same` is always cheap: shared data (`Rc`, state handles, callbacks, `ImmutableList`) compares by identity, small values (numbers, short strings, small enums and `#[derive(ComposeArg)]` structs) by value, and nothing compares a collection element by element. So a skip costs one comparison per argument ([State](kotlin-to-rust.md#data-models-and-skipping)).
+Every restartable composable can skip, as with Compose's strong skipping: when each argument is `same` as last time, its body doesn't run.
+
+`ComposeArg::same` is always cheap:
+
+- shared data (`Rc`, state handles, callbacks, `ImmutableList`) compares by identity;
+- small values (numbers, short strings, small enums and `#[derive(ComposeArg)]` structs) compare by value;
+- nothing compares a collection element by element.
+
+So a skip costs one comparison per argument ([State](kotlin-to-rust.md#data-models-and-skipping)).
 
 Lambdas keep their identity across passes. The transform remembers each lambda in a composable's calls and compares its captures; when they're all `same`, the call gets the lambda it got last time, and the callee can skip. This covers callbacks (`on_click = move || …`), content blocks and the callback methods of modifiers (`clickable`, `on_size_changed`, …).
 
@@ -79,7 +87,9 @@ pub fn LiveDot() {
 
 ### Retained drawing and repaint boundaries
 
-A frame doesn't draw the whole screen again. Drawing is kept per repaint boundary, and a boundary draws again only when something in it changed: state its drawing read, a node in it measured or moved, a child added or removed. Graphics layers, lazy list items and top app bars are boundaries, and `Modifier.repaint_boundary()` makes one. On Android each boundary is a `RenderNode`, kept across frames and redrawn by reference.
+A frame doesn't record the whole screen's drawing again. Drawing is kept per repaint boundary, and a boundary draws again only when something in it changed: state its drawing read, a node in it measured or moved, a child added or removed. Graphics layers, lazy list items and top app bars are boundaries, and `Modifier.repaint_boundary()` makes one.
+
+What the platform does with the kept drawing differs. On Android each boundary is a `RenderNode`, kept across frames and drawn by reference, so the GPU replays what didn't change. On desktop the CPU renderer rasterizes the whole window again for each frame that drew anything; what boundaries save there is the recording.
 
 A boundary is worth adding around something that draws often (a progress indicator, a ticking clock) in an area that doesn't:
 
@@ -88,16 +98,14 @@ A boundary is worth adding around something that draws often (a progress indicat
 #[composable]
 pub fn Syncing(items: u32) {
     Column!({
-        Row!(
-            // The spinner draws anew every frame; a boundary keeps the rest of the screen's
-            // drawing (and, on Android, its render node) as it was.
-            modifier = Modifier.repaint_boundary(),
-            vertical_alignment = Alignment::CENTER_VERTICALLY,
-            {
-                IndeterminateCircularProgressIndicator!(modifier = Modifier.size(16.dp()));
-                Text!("Syncing {} items", items);
-            }
-        );
+        Row!(vertical_alignment = Alignment::CENTER_VERTICALLY, {
+            // The spinner draws anew every frame; a boundary around it keeps the rest of the
+            // screen's drawing (and, on Android, its render node) as it was.
+            IndeterminateCircularProgressIndicator!(
+                modifier = Modifier.size(16.dp()).repaint_boundary()
+            );
+            Text!("Syncing {} items", items);
+        });
         for index in 0..items {
             Text!("Item {}", index);
         }
@@ -105,11 +113,13 @@ pub fn Syncing(items: u32) {
 }
 ```
 
-Boundaries aren't free (a render node each on Android), so don't add one to every component: the measurements behind D251 found that making every Material surface a boundary cost more than it saved.
+Boundaries aren't free, so don't add one to every component. On Android each is a render node, and nested boundaries are nested render nodes: D251 made the top app bars boundaries, but kept other Material surfaces plain clips, as making every surface a boundary would nest a render node inside each lazy item's.
 
 ### Lazy lists and prefetch
 
-`LazyColumn`, `LazyRow` and `LazyVerticalGrid` compose and lay out only the items in view. While a list scrolls, it prefetches between frames, as Compose's prefetch does: when the main thread is idle before the next frame, it composes and measures the next item in the scroll direction, so the frame that shows the item has nothing left to compose. On the Pixel 8 Pro this took the slowest scrolling frames' main-thread time from 8.6 ms to 3.9 ms ([D156](../decisions.md), [docs/12](../12-android-performance.md)).
+`LazyColumn`, `LazyRow` and `LazyVerticalGrid` compose and lay out only the items in view.
+
+While a list scrolls, it prefetches between frames, as Compose's prefetch does: when the main thread is idle before the next frame, it composes and measures the next item in the scroll direction, so the frame that shows the item has nothing left to compose. On the Pixel 8 Pro this took the main thread's time per frame while scrolling, at the 99th percentile, from 8.6 ms to 3.9 ms ([D156](../decisions.md), [docs/12](../12-android-performance.md)).
 
 Keys (`items_keyed`, `items_list_keyed`) keep an item's state and composition with the item when items before it come or go, so the unchanged items skip and the scroll position follows the first visible item.
 
@@ -127,7 +137,7 @@ State, slots and nodes are owned, and freed when they leave the composition. A s
 - **Drawing and layout lambdas in scopes that recompose often.** The lambdas of `draw_behind`, `draw_with_content`, `draw_with_cache`, `layout`, `graphics_layer` and `Canvas` aren't memoized: each run of the composable around them gives the node a new lambda, which draws or measures it again. Read state inside the lambda rather than capturing values read in composition, and keep such nodes in small composables.
 - **Large composables reading state at the top.** The reading scope is the unit of recomposition. Move a read into the smallest composable that needs it, or pass the state handle (or a holder such as `LazyListState`) down instead of its value.
 - **Work in composition.** A composable's body can run on any frame. Compute derived values with `remember_keyed(keys, || …)` or `derived_state_of`, and do I/O in a `LaunchedEffect` with `spawn_background`.
-- **Closures as root content.** `run_app`, `application`, `compose_test` and `ComposeRsView` should get a `#[composable]` function: in a plain closure, the transform doesn't run, so lambdas aren't memoized and branches get no groups.
+- **Composable calls in a root closure.** `run_app`, `application` and `compose_test` take root content that the transform doesn't see. Give them a `#[composable]` function, or a closure that only calls one (`move || TodoAppWith(items)`): calls, branches and lambdas written in the closure itself get no memoization and no groups.
 - **Measuring debug builds.** Profile release builds (`cargo run --release`); Android's `build-rust.sh` always builds release.
 
 ## Profiling
@@ -136,7 +146,7 @@ State, slots and nodes are owned, and freed when they leave the composition. A s
 
 The test rule counts how many times each composable's body ran, which is the first thing to check when a screen does more work than expected:
 
-<!-- snippet: tests/testing.rs#recompositions -->
+<!-- snippet: tests/suite/testing.rs#recompositions -->
 ```rust
 #[test]
 fn a_click_recomposes_only_the_button_content() {

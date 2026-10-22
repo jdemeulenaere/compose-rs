@@ -121,6 +121,8 @@ pub fn Messages(days: ImmutableList<Day>, state: LazyListState) {
         vertical_arrangement = Arrangement::spaced_by(4.dp()),
         |scope: LazyListScope| {
             for day in days.iter() {
+                // `title` is made here, not captured: it moves into the closure as in plain
+                // Rust (D158 clones only the lambda's captures), hence the clone for the key.
                 let title = day.title.clone();
                 scope.sticky_header_keyed(title.clone(), move |_item| {
                     Text!(

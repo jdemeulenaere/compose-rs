@@ -5,15 +5,23 @@ The known differences from Jetpack Compose that an app will run into, distilled 
 ## The language
 
 - **Call macros instead of named and default arguments.** A composable is called through its macro (`Text!(…)`), which takes positional, then named arguments, fills in defaults and takes a trailing lambda. The function itself takes every argument (D163, D164; [docs/03](../03-composable-macro.md#named-default-and-trailing-arguments-the-call-macro)). A parameter typed `impl Into<T>` converts what it's given; a plain `T` parameter takes only a `T` (D232).
-- **Overloads have names of their own.** Rust has no overloading: a Compose function with optional parameters is `<name>` (Compose's defaults) and `<name>_with` (all of them); overloads differing by a type take a tuple or `impl Into` (`padding((16.dp(), 8.dp()))`); the clickable family takes `ClickableOptions` (D263, D265). Composable overloads are named after what they add: `ClickableSurface`, `SelectableSurface`, `AnnotatedText`, `IndeterminateCircularProgressIndicator` (D181). Lazy list forms are `items`, `items_keyed`, `items_list`, `items_indexed`, … (D174).
+- **Overloads have names of their own**, as Rust has no overloading:
+  - a function with optional parameters is `<name>` (Compose's defaults) and `<name>_with` (all of them);
+  - overloads differing by a type take a tuple or `impl Into` (`padding((16.dp(), 8.dp()))`);
+  - the clickable family takes `ClickableOptions` (D263, D265);
+  - composable overloads are named after what they add: `ClickableSurface`, `SelectableSurface`, `AnnotatedText`, `IndeterminateCircularProgressIndicator` (D181);
+  - lazy list forms are `items`, `items_keyed`, `items_list`, `items_indexed`, … (D174).
 - **Struct update instead of named arguments of constructors.** `ColorScheme { primary, ..base }`, `ButtonColors { container_color, ..ButtonDefaults::button_colors() }`, `KeyboardOptions { ime_action, ..KeyboardOptions::DEFAULT }` (D180, D261). A default that depends on another parameter (an outlined button's border reading `enabled`) is an `Option` whose `None` is Compose's default.
 - **Constants in Rust's case, arrangements typed by axis.** `Alignment::CENTER_VERTICALLY`, `Arrangement::SPACE_BETWEEN`. `Row` takes a horizontal arrangement only; mixing kinds in one expression needs `.into()`. There's no `Arrangement.Absolute` (D262). A reversed lazy list's default arrangement stays `TOP` (Compose's becomes `Bottom`): pass `Arrangement::BOTTOM` (D171).
 - **Values aren't references.** Inside a composable's lambdas, the transform clones a capture where Rust would move it (D158, D159), but a composable's top-level code is plain Rust: a value given to two calls, or moved into a `LaunchedEffect`'s `async move` before a later use, needs `.clone()`. Lambda captures must be `Clone` (D115).
-- **State holders are `Copy` handles.** `DrawerState`, `LazyListState`, `SnackbarHostState`, `CoroutineScope` and the other holders are copied, never cloned. Made outside a composition, a holder's `new` returns its owner (`Owned<H>`), which must be kept: `*DrawerState::new(…)` is a handle stale from the start. A holder used after its owner went does nothing, with a warning in debug builds; a `MutableState` used after its cell was freed panics (D240, [docs/05](../05-state.md)).
+- **State holders are `Copy` handles** (D240, [docs/05](../05-state.md)):
+  - `DrawerState`, `LazyListState`, `SnackbarHostState`, `CoroutineScope` and the other holders are copied, never cloned;
+  - made outside a composition, a holder's `new` returns its owner (`Owned<H>`), which must be kept: `*DrawerState::new(…)` is a handle stale from the start;
+  - a holder used after its owner went does nothing, with a warning in debug builds, but a `MutableState` used after its cell was freed panics.
 - **Borrowed parameters make a composable non-restartable**, and callbacks can't take references (`impl Fn(&str)`): take owned values ([docs/03](../03-composable-macro.md#borrowed-parameters)).
 - **Skipping compares cheaply, never deeply.** `Vec` isn't a `ComposeArg`; pass an `ImmutableList` (compared by identity), an `Rc`, or mark a short field `#[compose_arg(eq)]` (D160). There's no stability inference and no `@Stable`/`@Immutable`.
 - **Content lambdas have no restart scope of their own.** State read in a content block recomposes the composable that invokes the block (usually a layout doing little), where Compose recomposes the lambda alone ([docs/03](../03-composable-macro.md#composable-lambdas-content)).
-- **Give hosts a composable function.** The transform runs on `#[composable]` functions only: a closure given to `run_app`, `application` or `compose_test` gets no memoized lambdas and no groups around its branches.
+- **Root content is plain Rust.** The transform runs on `#[composable]` functions only: give `run_app`, `application` and `compose_test` a composable function, or a closure that only calls one. Calls, branches and lambdas written in the closure itself get no memoization and no groups.
 - **Composables are free functions**: not methods, not `async`, no `&mut` parameters.
 
 ## Runtime and state
@@ -35,7 +43,7 @@ The known differences from Jetpack Compose that an app will run into, distilled 
 ## Lazy lists
 
 - No `animateItem` (placement and fade animations) and no `contentType`: items are reused by key only.
-- `LazyVerticalGrid` has no `reverse_layout` or `user_scroll_enabled`, and keeps an item's state by its row rather than its key, so items inserted before others move state between rows (D144). There's no `LazyHorizontalGrid` or staggered grid.
+- `LazyVerticalGrid` has no `reverse_layout` or `user_scroll_enabled`, and keeps an item's state by its row rather than its key, so items inserted before others move state between rows (D144).
 - A popup in a lazy item composed beyond the viewport shows where the item is placed (D136).
 
 ## Drawing and graphics
@@ -50,12 +58,18 @@ The known differences from Jetpack Compose that an app will run into, distilled 
 - **Text** has no link annotations and no paragraph styles in spans. `TextLayoutResult` is a snapshot of the layout's metrics, without Compose's queries (`getLineForOffset`, `getBoundingBox`) (D233). Text fields take a `String` value and have no `on_text_layout`, and there's no `TextFieldState` or `TextFieldValue` overload.
 - **Focus requests are asynchronous**: `FocusManager` and `FocusRequester` requests apply after the current event or at the next frame, so `move_focus` says whether a tree was there to ask, not whether the focus moved. Arrow keys don't move the focus, as on desktop Compose (D230).
 - **Semantics** have no custom actions or pane titles, so a bottom sheet's drag handle offers no expand, collapse or dismiss actions to accessibility services.
+- **Content descriptions of icons and images are `&'static str`** (`Icon!(icon, Some("Search"))`): a description built at run time goes through `Modifier.semantics` ([Accessibility](kotlin-to-rust.md#accessibility-and-semantics)).
+- **Fonts are the system's**: `FontFamily` names a system family (`SansSerif`, `Serif`, `Monospace`, `Cursive`, `Named("…")`); custom font files can't be loaded.
 
 ## Navigation and platform
 
 - **No Navigation Compose.** There's no `NavHost`: keep a back stack in a saved list and `match` on its top ([Navigation](kotlin-to-rust.md#navigation)). Screens under the top aren't composed, so their state goes when another is pushed.
 - **No predictive back** (`PredictiveBackHandler`, back progress). `BackHandler` takes back on Android and Escape on desktop; dialogs, sheets and menus take it first (D220, D221).
 - **Embedding goes one way.** A `ComposeRsView` can be inside a Kotlin UI, but compose-rs content can't host Android views or Kotlin composables (no `AndroidView` in Rust). Kotlin and Rust exchange properties and text events (D226).
+- **Overlays stay in the view.** Popups, dialogs, menus, bottom sheets and tooltips are nodes of the app's one tree, drawn over its content (D130), not windows of their own: in a `ComposeRsView` that's part of a Kotlin screen, they're confined to the view's bounds, and a dialog's scrim covers the view, not the screen.
+- **No platform locals.** There's no `LocalContext`, `LocalUriHandler`, `LocalClipboardManager`, `LocalHapticFeedback`, `LocalLifecycleOwner` or `ViewModel`. Send Kotlin an event (`LOCAL_HOST_EVENTS`) to open a link, vibrate or start an activity, and pass what Rust needs back as properties (`LOCAL_HOST_PROPS`). Text fields use the system clipboard themselves.
+- **No Android resources.** There are no `R.string`, `R.drawable` or resource qualifiers, so no localization through resources: bundle images with `include_bytes!`, and pass localized strings from Kotlin as properties or keep them in Rust.
+- **No logging API.** On Android, `println!` goes nowhere, and compose-rs's own debug warnings print to standard error in debug builds only, which Android's build never makes. Log through the `log` facade with an Android backend (the `android_logger` crate) ([Logging](kotlin-to-rust.md#logging-on-android)).
 - **Android**: arm64 only, API 29 and later.
 - **Desktop windows** don't inherit the application's composition locals, and have no position, placement (maximized, minimized, fullscreen), icon, menu bar, tray or `DialogWindow`; a `Window` can't be composed inside another window's content.
 - **No iOS or web.**
@@ -64,4 +78,11 @@ The known differences from Jetpack Compose that an app will run into, distilled 
 ## Animation and Material
 
 - **Transitions** have no child transitions; `AnimatedContent` keeps at most three states' contents while they animate.
-- **Material 3 lacks**, among others, dismissible and permanent navigation drawers, `BottomSheetScaffold` and standard bottom sheets, input chips, date and time pickers, search bars, exposed dropdown menus, multi-choice segmented buttons, the toggleable `Surface` overload, the content overloads of `ExtendedFloatingActionButton` and `BottomAppBar`, and the bottom app bar's scroll behavior. A top app bar's scroll behavior has no fling decay before it settles, and dragging the bar itself doesn't collapse it (D186). The icons are material-icons-core's filled set (D187).
+- **Material 3 lacks**, among others:
+  - dismissible and permanent navigation drawers, `BottomSheetScaffold` and standard bottom sheets;
+  - input chips, date and time pickers, search bars, exposed dropdown menus, multi-choice segmented buttons;
+  - the toggleable `Surface` overload, the content overloads of `ExtendedFloatingActionButton` and `BottomAppBar`, and the bottom app bar's scroll behavior.
+- **Top app bars' scroll behaviors** have no fling decay before they settle, and dragging the bar itself doesn't collapse it (D186).
+- **Icons** are material-icons-core's filled set (D187).
+- **No dynamic color**: there's no `dynamicLightColorScheme`/`dynamicDarkColorScheme` reading the wallpaper's colors; pass them from Kotlin as properties if you need them.
+- **Missing foundation pieces**: no `HorizontalPager`/`VerticalPager`, no pull to refresh, no `movableContentOf`, no `LazyHorizontalGrid` or staggered grids.

@@ -2,8 +2,9 @@
 //! `<!-- snippet: src/state.rs#counter -->` before a fenced block says the block quotes the region
 //! between `// ANCHOR: counter` and `// ANCHOR_END: counter` in `examples/guide/src/state.rs`
 //! (a path without `#name` quotes the whole file). This test fails when a quote differs from its
-//! region or a region isn't quoted; `UPDATE_GUIDE=1 cargo test -p guide --test snippets`
-//! rewrites the quotes from the sources.
+//! region, a region isn't quoted, or a `rust` block has no marker (so every Rust sample in the
+//! guide compiles); `UPDATE_GUIDE=1 cargo test -p guide snippets` rewrites the quotes from the
+//! sources.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -59,7 +60,7 @@ fn dedent(lines: &[&str]) -> String {
 /// Every anchored region of the guide crate's sources, as `path#name`.
 fn all_regions() -> BTreeMap<String, String> {
     let mut found = BTreeMap::new();
-    for directory in ["src", "tests"] {
+    for directory in ["src", "tests/suite"] {
         let mut paths: Vec<_> = fs::read_dir(crate_dir().join(directory))
             .unwrap()
             .map(|entry| entry.unwrap().path())
@@ -134,6 +135,44 @@ fn check_page(
         }
     }
     (references, mismatches)
+}
+
+/// The lines (1-based) of `rust` blocks without a marker before them.
+fn unmarked_rust_blocks(text: &str) -> Vec<usize> {
+    let lines: Vec<&str> = text.lines().collect();
+    let mut unmarked = Vec::new();
+    let mut in_block = false;
+    for (index, line) in lines.iter().enumerate() {
+        if !line.starts_with("```") {
+            continue;
+        }
+        if in_block {
+            in_block = false;
+            continue;
+        }
+        in_block = true;
+        let marked = index > 0 && lines[index - 1].starts_with(MARKER);
+        if line.starts_with("```rust") && !marked {
+            unmarked.push(index + 1);
+        }
+    }
+    unmarked
+}
+
+#[test]
+fn every_rust_block_quotes_a_compiled_sample() {
+    let mut unmarked = Vec::new();
+    for entry in fs::read_dir(guide_dir()).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().is_some_and(|extension| extension == "md") {
+            let text = fs::read_to_string(&path).unwrap();
+            for line in unmarked_rust_blocks(&text) {
+                unmarked.push(format!("{}:{line}", path.display()));
+            }
+        }
+    }
+    assert!(unmarked.is_empty(), "`rust` blocks without a snippet marker: {unmarked:?}");
+    assert_eq!(unmarked_rust_blocks("```kotlin\nx\n```\n```rust\ny\n```\n"), [4]);
 }
 
 #[test]

@@ -1,11 +1,13 @@
-//! The Android entry point (docs/guide/README.md, "Android"): the root composables a
-//! `ComposeRsView` shows by name. An app's Android library is a `cdylib` crate whose `lib.rs`
-//! has this macro; here it's in the guide's library so that it compiles with the rest.
+//! The Android entry point (docs/guide/README.md, "An Android app"): the root composables a
+//! `ComposeRsView` shows by name. In the guide's layout this is the `lib.rs` of
+//! `examples/hello-android`, where `hello` is the app's library crate; here the macro is in the
+//! guide's library, with `hello` naming the module that plays its part, so that it compiles.
+
+use crate::getting_started as hello;
 
 // ANCHOR: export_apps
+// examples/hello-android/src/lib.rs
 compose_android::export_apps! {
-    "hello" => crate::getting_started::Hello,
-    "navigation" => crate::navigation::App,
-    "embedded" => crate::interop::Embedded,
+    "hello" => hello::Hello,
 }
 // ANCHOR_END: export_apps

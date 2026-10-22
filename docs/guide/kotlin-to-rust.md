@@ -10,8 +10,15 @@ Jetpack Compose code next to its compose-rs equivalent. Each Rust sample is quot
 - [Drawing](#drawing)
 - [Theming and Material 3](#theming-and-material-3)
 - [Text and text fields](#text-and-text-fields)
+- [Dialogs](#dialogs)
+- [Selectable lists](#selectable-lists)
+- [Accessibility and semantics](#accessibility-and-semantics)
+- [Gestures](#gestures)
+- [Images](#images)
+- [Animation](#animation)
 - [Navigation](#navigation)
 - [Android interop](#android-interop)
+- [Logging on Android](#logging-on-android)
 - [Testing](#testing)
 
 ## Names
@@ -29,7 +36,14 @@ compose-rs keeps Compose's names, parameter names, parameter order and defaults,
 | `LocalDensity.current` | `LOCAL_DENSITY.current()` |
 | `16.dp`, `14.sp` | `16.dp()`, `14.sp()` |
 
-A wildcard import of each module is the usual start of a file, as the samples do: `use compose::runtime::*; use compose::ui::*; use compose::foundation::layout::*; use compose::material3::*;`. Each crate's `platform` module holds what hosts and toolkits use; apps don't need it, and it isn't part of the stable surface.
+A file usually starts with a wildcard import of each module it uses, as the samples do:
+
+- `use compose::runtime::*;` (`remember`, state, effects, `#[composable]`),
+- `use compose::ui::*;` (`Modifier`, units, colors, drawing),
+- `use compose::foundation::*;` and `use compose::foundation::layout::*;` (lazy lists, scrolling, text fields; `Row`, `Column`, `Box`),
+- `use compose::material3::*;` and `use compose::animation::*;` as needed.
+
+Each crate's `platform` module holds what hosts and toolkits use; apps don't need it, and it isn't part of the stable surface.
 
 ## Composables
 
@@ -55,7 +69,11 @@ pub fn Greeting(
 }
 ```
 
-A composable is a free function marked `#[composable]`. Default values are `#[default(…)]` attributes, evaluated where the composable is called. A parameter typed `impl Into<T>` takes anything that converts (`"Ada"` for a `SharedString`, the reference-counted string compose-rs uses for text); a plain `SharedString` parameter takes only a `SharedString`. `#[composable]` turns `impl Into<T>` and `impl Fn(…)` parameters into concrete types, so the composable stays a single non-generic function.
+A composable is a free function marked `#[composable]`. Default values are `#[default(…)]` attributes, evaluated where the composable is called.
+
+A parameter typed `impl Into<T>` takes anything that converts: `"Ada"` for a `SharedString`, the reference-counted string compose-rs uses for text. A plain `SharedString` parameter takes only a `SharedString`.
+
+`#[composable]` turns `impl Into<T>` and `impl Fn(…)` parameters into concrete types, so the composable stays a single non-generic function.
 
 ### Calls
 
@@ -173,7 +191,15 @@ pub fn Counter() {
 }
 ```
 
-`remember(|| mutable_state_of(0))` keeps the state in the composition and returns a `MutableState<i32>`, a `Copy` handle: closures capture it with `move` and no cloning. `get()` reads (and subscribes the reading scope), `set(v)` writes, `update(|v| …)` writes from the old value, `with(|v| …)` reads by reference (for a `String` or a `Vec` that shouldn't be cloned), and `edit(|v| …)` changes it in place. Writing state while composing panics: write from handlers, effects and tasks.
+`remember(|| mutable_state_of(0))` keeps the state in the composition and returns a `MutableState<i32>`, a `Copy` handle: closures capture it with `move` and no cloning. Its methods:
+
+- `get()` reads a copy, and subscribes the reading scope;
+- `with(|v| …)` reads by reference, for a `String` or a `Vec` that shouldn't be cloned;
+- `set(v)` writes, recomposing the readers unless the value is equal;
+- `update(|v| …)` writes from the old value;
+- `edit(|v| …)` changes it in place, and always recomposes the readers.
+
+Writing state while composing panics: write from handlers, effects and tasks.
 
 `mutable_state_list_of()` and `mutable_state_list_from(items)` are `mutableStateListOf`: a state holding a `Vec`, edited with `edit(|list| list.push(…))`.
 
@@ -288,7 +314,7 @@ ModalNavigationDrawer(drawerContent = { ModalDrawerSheet { Text("Settings") } },
 ```rust
 #[composable]
 pub fn Menu() {
-    let drawer = remember_drawer_state(DrawerValue::Closed); // a Copy handle, as state
+    let drawer = remember_drawer_state!(DrawerValue::Closed); // a Copy handle, as state
     let scope = remember_coroutine_scope(); // Copy too
     ModalNavigationDrawer!(
         {
@@ -311,7 +337,9 @@ pub fn Menu() {
 }
 ```
 
-Outside a composition (a test, an app's model), `DrawerState::new(…)` and the other constructors return the holder's owner, `Owned<DrawerState>`, which frees the holder when dropped; keep it, and copy the handle out of it (`*owner`) for closures. `let state = *DrawerState::new(…);` compiles but drops the owner at once: the handle then does nothing (with a warning in debug builds). See [D240](../decisions.md).
+Outside a composition (a test, an app's model), `DrawerState::new(…)` and the other holders' constructors return the holder's owner, `Owned<DrawerState>`, which frees the holder when dropped. Keep the owner, and copy the handle out of it (`*owner`) for closures.
+
+`let state = *DrawerState::new(…);` compiles but drops the owner at once: the handle then does nothing (with a warning in debug builds). `FocusRequester` is the exception: it owns nothing, and `FocusRequester::new()` returns the handle itself. See [D240](../decisions.md).
 
 ### Values a lambda would move
 
@@ -343,7 +371,7 @@ pub fn Profile(name: SharedString, on_open: impl Fn(SharedString) + 'static) {
 }
 ```
 
-At a composable's top level the code is plain Rust: a value given to a call or moved into a `LaunchedEffect`'s `async move` block is moved, so use it last or `.clone()` it. Captures must be `Clone`; wrap data that isn't in an `Rc`.
+Only the lambda's captures are cloned, not values the lambda makes itself: a local declared inside a lambda moves into a closure as in plain Rust ([Lazy lists](#lazy-lists) clones one for that reason). At a composable's top level the code is plain Rust too: a value given to a call or moved into a `LaunchedEffect`'s `async move` block is moved, so use it last or `.clone()` it. Captures must be `Clone`; wrap data that isn't in an `Rc`.
 
 ### Data models and skipping
 
@@ -381,7 +409,7 @@ pub struct Contact {
 pub fn Contacts(contacts: ImmutableList<Contact>) {
     Column!({
         for contact in contacts.iter() {
-            key(contact.id, || ContactRow(contact.clone()));
+            key(contact.id, || ContactRow!(contact.clone()));
         }
     });
 }
@@ -444,7 +472,7 @@ pub fn Countdown(from: u32) {
 }
 ```
 
-The block is a future run on the UI thread's executor; `delay` and `with_frame_nanos` are its suspension points. Keys are any `ComposeArg` (a tuple for several, `()` for `Unit`). The task is cancelled by dropping it, at an `.await`.
+The block is a Rust future, run as a task on the UI thread's executor. It suspends at each `.await`: on `delay`, on `with_frame_nanos` (the next frame), on `spawn_background`, or on any other future. Keys are any `ComposeArg` (a tuple for several, `()` for `Unit`). Cancelling the task drops the future, so it stops at the `.await` it was waiting on.
 
 ### `DisposableEffect`
 
@@ -548,7 +576,14 @@ pub fn FileSize(path: String) {
 }
 ```
 
-Cancelling the task drops the result; blocking work already running isn't interrupted. To await an async client (a tokio-based HTTP client), run its runtime on a thread of its own and hand the result back through `spawn_background` or a channel.
+Cancelling the task drops the result; blocking work already running isn't interrupted.
+
+An async client built on tokio (an HTTP client, a database driver) needs a tokio runtime: build one at startup on threads of its own, and keep its `Handle`. A task on the UI thread then awaits its work in one of two ways:
+
+- `handle.spawn(async move { client.get(url).send().await })` returns a tokio `JoinHandle`, which is a future any executor can await: `let response = join.await;` in a `LaunchedEffect`. A `tokio::sync::oneshot` receiver works the same way. The executor's wakers work from any thread, so the runtime's threads wake the UI task.
+- `spawn_background(move || handle.block_on(request))` runs it on the background pool, which holds a pool thread while the request runs.
+
+Either way, what comes back must be `Send`, and the UI task writes it to state.
 
 ## Layouts
 
@@ -653,7 +688,9 @@ pub fn ModifierForms(selected: bool, on_click: impl Fn() + 'static) {
 }
 ```
 
-Order matters as in Compose: each modifier wraps the ones after it. Lambdas given to a modifier's callback methods (`clickable`, `on_size_changed`, `on_focus_changed`, …) are memoized like a composable's callback arguments when the chain starts at `Modifier`, a `modifier` parameter or a local modifier, so the chain stays the same across passes. Drawing and layout lambdas (`draw_behind`, `layout`, `graphics_layer`) aren't: a pass that runs the call again gives the node a new lambda ([Performance](performance.md#what-to-avoid)).
+Order matters as in Compose: each modifier wraps the ones after it.
+
+Lambdas given to a modifier's callback methods (`clickable`, `on_size_changed`, `on_focus_changed`, …) are memoized like a composable's callback arguments when the chain starts at `Modifier`, a `modifier` parameter or a local modifier, so the chain stays the same across passes. Drawing and layout lambdas (`draw_behind`, `layout`, `graphics_layer`) aren't: a pass that runs the call again gives the node a new lambda ([Performance](performance.md#what-to-avoid)).
 
 ### Arrangements and alignments
 
@@ -745,6 +782,8 @@ pub fn Messages(days: ImmutableList<Day>, state: LazyListState) {
         vertical_arrangement = Arrangement::spaced_by(4.dp()),
         |scope: LazyListScope| {
             for day in days.iter() {
+                // `title` is made here, not captured: it moves into the closure as in plain
+                // Rust (D158 clones only the lambda's captures), hence the clone for the key.
                 let title = day.title.clone();
                 scope.sticky_header_keyed(title.clone(), move |_item| {
                     Text!(
@@ -818,7 +857,14 @@ pub fn Wrap(#[default(Modifier)] modifier: Modifier, content: impl Fn() + 'stati
 }
 ```
 
-`measure_policy(closure)` makes a policy of a closure, as Kotlin's lambda converts to `MeasurePolicy`. Measuring and placing go through the scope: `scope.measure(measurable, constraints)` returns a `Placeable`, `scope.place(&placeable, x, y)` places it (`place_relative` mirrors it in right-to-left layouts), and `scope.layout(width, height)` returns the result, after the placements rather than around them. `scope.density()` converts `Dp` to pixels. Intrinsic measurements are approximated ([Differences](differences.md#layout)).
+`measure_policy(closure)` makes a policy of a closure, as Kotlin's lambda converts to `MeasurePolicy`. Measuring and placing go through the scope:
+
+- `scope.measure(measurable, constraints)` returns a `Placeable`;
+- `scope.place(&placeable, x, y)` places it (`place_relative` mirrors it in right-to-left layouts);
+- `scope.layout(width, height)` returns the result, after the placements rather than around them;
+- `scope.density()` converts `Dp` to pixels.
+
+Intrinsic measurements are approximated ([Differences](differences.md#layout)).
 
 ### `Modifier.layout`
 
@@ -896,7 +942,11 @@ pub fn Gauge(fraction: f32) {
 }
 ```
 
-`Canvas` is a plain function (its lambda takes a borrowed `DrawScope`, which a composable's parameters can't name), called without `!`. `DrawScope`'s calls take the geometry first and a `Paint` last (`Paint::fill(color)`, `Paint::stroke(color, width)`, `Paint::stroke_with(color, width, cap)`, `.with_alpha(a)`), where Compose takes the color or brush first. Transforms and clips are scoped by a closure: `scope.rotate(degrees, pivot, |scope| …)`, `translate`, `scale`, `inset`, `clip_rect`, `clip_path`. There's no `drawText` ([Differences](differences.md#drawing-and-graphics)).
+`Canvas` is a plain function, called without `!`: its lambda takes a borrowed `DrawScope`, which a composable's parameters can't name.
+
+- `DrawScope`'s calls take the geometry first and a `Paint` last, where Compose takes the color or brush first: `Paint::fill(color)`, `Paint::stroke(color, width)`, `Paint::stroke_with(color, width, cap)`, and `.with_alpha(a)` on either.
+- Transforms and clips are scoped by a closure: `scope.rotate(degrees, pivot, |scope| …)`, `translate`, `scale`, `inset`, `clip_rect`, `clip_path`.
+- There's no `drawText` ([Differences](differences.md#drawing-and-graphics)).
 
 ### `drawBehind` and `drawWithContent`
 
@@ -941,6 +991,21 @@ pub fn Dimmed(content: impl Fn() + 'static) {
 ```
 
 ### `drawWithCache`
+
+```kotlin
+Box(Modifier.size(120.dp, 48.dp).drawWithCache {
+    val path = Path().apply {
+        moveTo(0f, 0f)
+        lineTo(size.width, 0f)
+        lineTo(size.width - size.height / 2, size.height / 2)
+        lineTo(size.width, size.height)
+        lineTo(0f, size.height)
+        close()
+    }
+    val brush = Brush.horizontalGradient(listOf(Color(0xFF6750A4), Color(0xFF7D5260)))
+    onDrawBehind { drawPath(path, brush) }
+})
+```
 
 <!-- snippet: src/drawing.rs#draw_with_cache -->
 ```rust
@@ -1036,7 +1101,7 @@ pub fn AppTheme(content: impl Fn() + 'static) {
     let base = if is_system_in_dark_theme() { dark_color_scheme() } else { light_color_scheme() };
     // Struct update syntax where Kotlin names `lightColorScheme(primary = …)`'s arguments.
     let color_scheme = ColorScheme { primary: BRAND, ..base };
-    let typography = MaterialTheme::typography();
+    let typography = Typography::default(); // Compose's `Typography()`
     let typography = Typography {
         title_large: TextStyle { font_weight: Some(FontWeight::BOLD), ..typography.title_large },
         ..typography
@@ -1170,8 +1235,6 @@ pub fn Notes() {
 - Icons are `icons::filled::add()` and the rest of material-icons-core's filled set (`Icons.Default` is `icons::default`).
 - Overloads Kotlin distinguishes by parameters have their own names: `Surface(onClick = …)` is `ClickableSurface`, `Surface(selected = …, onClick = …)` is `SelectableSurface`, `Text(AnnotatedString)` is `AnnotatedText`, an indeterminate `CircularProgressIndicator()` is `IndeterminateCircularProgressIndicator`.
 - `TopAppBarDefaults::enter_always_scroll_behavior()` and its siblings take no arguments, and a bar's scroll behavior is connected with `Modifier.nested_scroll(behavior.nested_scroll_connection())`, as in Compose.
-
-Animations (`animate_float_as_state!`, `AnimatedVisibility!`, `Crossfade!`, `AnimatedContent!`, `remember_infinite_transition`, `Animatable`) are in `compose::animation`, with Compose's specs (`tween(ms)`, `spring()`, `keyframes`).
 
 ## Text and text fields
 
@@ -1316,6 +1379,338 @@ pub fn JoinNetwork(on_join: impl Fn(String, String) + 'static) {
 - `callback(closure)` makes a memoized callback in a composable's body, to pass on or call from several places (`join` above).
 - `LOCAL_FOCUS_MANAGER.current()` moves (`move_focus(FocusDirection::Next)`) and clears the focus, `LOCAL_SOFTWARE_KEYBOARD_CONTROLLER.current()` (an `Option`) shows and hides the keyboard, and `Modifier.on_focus_changed(…)`, `focusable()` and `on_key_event(…)` are Compose's. Their requests apply after the current event or at the next frame.
 
+## Dialogs
+
+```kotlin
+var confirming by remember { mutableStateOf(false) }
+TextButton(onClick = { confirming = true }) { Text("Delete…") }
+if (confirming) {
+    AlertDialog(
+        onDismissRequest = { confirming = false },
+        confirmButton = { TextButton(onClick = { confirming = false; onDelete() }) { Text("Delete") } },
+        dismissButton = { TextButton(onClick = { confirming = false }) { Text("Cancel") } },
+        title = { Text("Delete the note?") },
+        text = { Text("It can't be restored.") },
+    )
+}
+```
+
+<!-- snippet: src/components.rs#dialog -->
+```rust
+#[composable]
+pub fn DeleteNote(on_delete: impl Fn() + 'static) {
+    let confirming = remember(|| mutable_state_of(false));
+    TextButton!(on_click = move || confirming.set(true), {
+        Text!("Delete…");
+    });
+    // In the composition while it shows, as in Compose.
+    if confirming.get() {
+        AlertDialog!(
+            on_dismiss_request = move || confirming.set(false),
+            confirm_button = {
+                TextButton!(
+                    on_click = move || {
+                        confirming.set(false);
+                        on_delete();
+                    },
+                    {
+                        Text!("Delete");
+                    }
+                );
+            },
+            dismiss_button = {
+                TextButton!(on_click = move || confirming.set(false), {
+                    Text!("Cancel");
+                });
+            },
+            title = {
+                Text!("Delete the note?");
+            },
+            text = {
+                Text!("It can't be restored.");
+            },
+        );
+    }
+}
+```
+
+A dialog shows while it's in the composition, as in Compose. Back, Escape and a tap on the scrim call `on_dismiss_request`. `Dialog!` (compose-ui) shows any content as a dialog, `Popup!` places content over the window, and `DropdownMenu!`, `ModalBottomSheet!` and `PlainTooltip!` (in a `TooltipArea!`) are Material's. All of them are drawn inside the window: on Android, inside the `ComposeRsView` ([Differences](differences.md#navigation-and-platform)).
+
+## Selectable lists
+
+```kotlin
+Column(Modifier.selectableGroup()) {
+    sizes.forEachIndexed { index, size ->
+        ListItem(
+            headlineContent = { Text(size) },
+            modifier = Modifier.selectable(index == selected, role = Role.RadioButton, onClick = { onSelect(index) }),
+            leadingContent = { RadioButton(index == selected, onClick = null) },
+        )
+    }
+}
+```
+
+<!-- snippet: src/components.rs#selectable -->
+```rust
+const SIZES: [&str; 3] = ["Small", "Medium", "Large"];
+
+#[composable]
+pub fn SizePicker(selected: usize, on_select: impl Fn(usize) + 'static) {
+    // One group for accessibility: "1 of 3"-style navigation between the options.
+    Column!(modifier = Modifier.selectable_group(), {
+        for (index, size) in SIZES.into_iter().enumerate() {
+            ListItem!(
+                headline_content = {
+                    Text!(size);
+                },
+                // The whole row selects, as a radio button.
+                modifier = Modifier.selectable_with(
+                    index == selected,
+                    ClickableOptions { role: Some(Role::RadioButton), ..ClickableOptions::DEFAULT },
+                    move || on_select(index),
+                ),
+                // `None`: the row handles the click, not the button.
+                leading_content = Some(move || RadioButton!(index == selected, None::<fn()>)),
+            );
+        }
+    });
+}
+```
+
+An optional callback (`onClick = null`) is `None`; a bare `None` needs its type (`None::<fn()>`), as Rust can't infer it. `Modifier.toggleable` and `Checkbox!(checked, None::<fn(bool)>)` make a checkable row the same way.
+
+## Accessibility and semantics
+
+compose-rs builds Compose's semantics tree, which tests query and the platforms' screen readers read: AccessKit on desktop, an `AccessibilityNodeProvider` on Android. Components set their semantics as Compose's do; `Modifier.semantics`, `semantics_with(merge_descendants, …)` and `clear_and_set_semantics` add or replace them:
+
+```kotlin
+Row(Modifier.clearAndSetSemantics { contentDescription = "$stars of 5 stars" }) {
+    repeat(5) { index -> Icon(Icons.Filled.Star, null, tint = if (index < stars) primary else outlineVariant) }
+}
+
+Row(Modifier.fillMaxWidth().toggleable(on, role = Role.Switch, onValueChange = onChange)) {
+    Text(label, Modifier.weight(1f))
+    Switch(on, onCheckedChange = null)
+}
+```
+
+<!-- snippet: src/accessibility.rs#semantics -->
+```rust
+#[composable]
+pub fn Rating(stars: u32) {
+    let colors = MaterialTheme::color_scheme();
+    Row!(
+        // One description for the row instead of five unlabeled icons.
+        modifier = Modifier.clear_and_set_semantics(move |config| {
+            config.content_description.push(format!("{stars} of 5 stars").into());
+        }),
+        {
+            for index in 0..5 {
+                let tint = if index < stars { colors.primary } else { colors.outline_variant };
+                Icon!(icons::filled::star(), None, tint = tint);
+            }
+        }
+    );
+}
+
+#[composable]
+pub fn Setting(label: SharedString, on: bool, on_change: impl Fn(bool) + 'static) {
+    Row!(
+        // A row read as one control, toggled as a switch: `Modifier.toggleable(role = Switch)`.
+        modifier = Modifier.fill_max_width().toggleable_with(
+            on,
+            ClickableOptions { role: Some(Role::Switch), ..ClickableOptions::DEFAULT },
+            on_change,
+        ),
+        vertical_alignment = Alignment::CENTER_VERTICALLY,
+        |row| {
+            Text!(label, modifier = Modifier.weight(row, 1.0));
+            Switch!(on, None::<fn(bool)>);
+        }
+    );
+}
+```
+
+The semantics block gets a `SemanticsConfiguration` whose fields are Compose's properties (`content_description`, `role`, `state_description`, `selected`, `disabled`, `test_tag`, …). `Icon!` and `Image!` take their content description as a `&'static str`: for a description built at run time, set it with `Modifier.semantics`. There are no custom accessibility actions or pane titles yet.
+
+## Gestures
+
+`Modifier.pointer_input(key, |scope| async move { … })` runs a coroutine over the pointer events, as `Modifier.pointerInput(key) { … }`, with Compose's detectors: `detect_tap_gestures` and `detect_drag_gestures`, configured by builders (`TapGestures::default().on_double_tap(…)`), and `await_pointer_event` for your own.
+
+```kotlin
+Box(Modifier.size(160.dp).background(Color.LightGray).pointerInput(Unit) {
+    detectTapGestures(onDoubleTap = { liked = !liked })
+}, contentAlignment = Alignment.Center) {
+    if (liked) Icon(Icons.Filled.Favorite, "Liked")
+}
+```
+
+<!-- snippet: src/gestures.rs#tap -->
+```rust
+#[composable]
+pub fn Photo() {
+    let liked = remember(|| mutable_state_of(false));
+    Box!(
+        modifier = Modifier.size(160.dp()).background(Color::LIGHT_GRAY).pointer_input(
+            (),
+            move |scope| async move {
+                // `detectTapGestures(onDoubleTap = { … })`, in a coroutine per pointer input.
+                let gestures =
+                    TapGestures::default().on_double_tap(move |_| liked.set(!liked.get()));
+                scope.detect_tap_gestures(gestures).await;
+            }
+        ),
+        content_alignment = Alignment::CENTER,
+        {
+            if liked.get() {
+                Icon!(icons::filled::favorite(), Some("Liked"));
+            }
+        }
+    );
+}
+```
+
+`Modifier.draggable` takes a `DraggableState` and every one of Compose's parameters:
+
+```kotlin
+var offset by remember { mutableFloatStateOf(0f) }
+Card(Modifier.fillMaxWidth()
+    .graphicsLayer { translationX = offset }
+    .draggable(
+        rememberDraggableState { delta -> offset += delta },
+        Orientation.Horizontal,
+        onDragStopped = { if (abs(offset) > 150f) onDismiss(); offset = 0f },
+    )) { Text("Swipe me away", Modifier.padding(16.dp)) }
+```
+
+<!-- snippet: src/gestures.rs#drag -->
+```rust
+#[composable]
+pub fn SwipeAway(on_dismiss: impl Fn() + 'static) {
+    let offset = remember(|| mutable_state_of(0.0f32));
+    let state = remember_draggable_state!(move |delta: f32| offset.update(|x| x + delta));
+    Card!(
+        modifier = Modifier
+            .fill_max_width()
+            // Read while drawing: dragging moves the card without recomposing it.
+            .graphics_layer(move |layer| layer.translation_x = offset.get())
+            .draggable(
+                state,
+                Orientation::Horizontal,
+                true,
+                false,
+                |_start| {},
+                move |_velocity| {
+                    if offset.get().abs() > 150.0 {
+                        on_dismiss();
+                    }
+                    offset.set(0.0);
+                }
+            ),
+        {
+            Text!("Swipe me away", modifier = Modifier.padding(16.dp()));
+        }
+    );
+}
+```
+
+Material's `SwipeToDismissBox!` does this with anchors and animation. `Modifier.combined_clickable` handles double clicks and long presses, `Modifier.vertical_scroll` and `horizontal_scroll` scroll, and `Modifier.nested_scroll` takes part in nested scrolling.
+
+## Images
+
+```kotlin
+Image(
+    ImageBitmap.imageResource(R.drawable.avatar), "Avatar",
+    Modifier.size(48.dp).clip(CircleShape), contentScale = ContentScale.Crop,
+)
+```
+
+<!-- snippet: src/images.rs#image -->
+```rust
+#[composable]
+pub fn Avatar() {
+    // Bundled in the library and decoded once where it's composed (`ImageBitmap.imageResource`).
+    // `None` when the platform can't decode it (and in headless tests, which have no decoder).
+    let bitmap = remember_image_resource(include_bytes!("checkers.png"));
+    let modifier = Modifier.size(48.dp()).clip(CIRCLE_SHAPE);
+    if let Some(bitmap) = bitmap {
+        Image!(bitmap, Some("Avatar"), modifier = modifier, content_scale = ContentScale::Crop);
+    } else {
+        Box!(modifier = modifier.background(MaterialTheme::color_scheme().primary_container));
+    }
+}
+```
+
+There are no Android resources: an image is bundled in the Rust library with `include_bytes!`, decoded by the platform (`BitmapFactory` on Android, Skia on desktop). `decode_image_bytes(&bytes)` decodes bytes from elsewhere (a file, the network), returning an `Option<ImageBitmap>`. Vector icons are `ImageVector`s, drawn by `Icon!`.
+
+## Animation
+
+`compose::animation` has Compose's animation APIs, with its specs (`tween(ms)`, `spring()`, `keyframes`, `infinite_repeatable`) and easings:
+
+```kotlin
+var expanded by rememberSaveable { mutableStateOf(false) }
+val rotation by animateFloatAsState(if (expanded) 180f else 0f)
+Card(Modifier.fillMaxWidth().clickable { expanded = !expanded }) {
+    Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(title, Modifier.weight(1f))
+        Icon(Icons.Filled.KeyboardArrowDown, "Expand", Modifier.graphicsLayer { rotationZ = rotation })
+    }
+    AnimatedVisibility(expanded) { Text(body, Modifier.padding(16.dp)) }
+}
+```
+
+<!-- snippet: src/animation.rs#as_state -->
+```rust
+#[composable]
+pub fn Expandable(title: SharedString, body: SharedString) {
+    let expanded = remember_saveable(|| mutable_state_of(false));
+    // `animateFloatAsState(if (expanded) 180f else 0f)`: a `State<f32>` moving to its target.
+    let rotation = animate_float_as_state!(if expanded.get() { 180.0 } else { 0.0 });
+    Card!(modifier = Modifier.fill_max_width().clickable(move || expanded.set(!expanded.get())), {
+        Row!(
+            modifier = Modifier.padding(16.dp()),
+            vertical_alignment = Alignment::CENTER_VERTICALLY,
+            |row| {
+                Text!(title, modifier = Modifier.weight(row, 1.0));
+                Icon!(
+                    icons::filled::keyboard_arrow_down(),
+                    Some("Expand"),
+                    // Read while drawing: the animation's frames don't recompose.
+                    modifier =
+                        Modifier.graphics_layer(move |layer| layer.rotation_z = rotation.get())
+                );
+            }
+        );
+        // Fades and expands in, shrinks and fades out, as Compose's defaults.
+        AnimatedVisibility!(expanded.get(), {
+            Text!(body, modifier = Modifier.padding(16.dp()));
+        });
+    });
+}
+```
+
+```kotlin
+Crossfade(loading) { loading ->
+    if (loading) CircularProgressIndicator() else Text("Loaded")
+}
+```
+
+<!-- snippet: src/animation.rs#crossfade -->
+```rust
+#[composable]
+pub fn Loading(loading: bool) {
+    Crossfade!(loading, |loading: bool| {
+        if loading {
+            IndeterminateCircularProgressIndicator!();
+        } else {
+            Text!("Loaded");
+        }
+    });
+}
+```
+
+`animate_dp_as_state!`, `animate_color_as_state!` and `animate_int_as_state!` animate other values; `AnimatedContent!`, `update_transition`, `Modifier.animate_content_size()` and `Animatable` (driven from a `LaunchedEffect`) are there too. `remember_infinite_transition` runs forever ([Performance](performance.md#reads-while-laying-out-and-drawing) shows one). Tests drive animations with the test clock ([Testing](#testing)).
+
 ## Navigation
 
 There's no Navigation Compose (`NavHost`, `NavController`, routes) yet. A small app keeps its own back stack: an enum of destinations in a saved list, a `match` on the top, and a `BackHandler` that pops.
@@ -1326,7 +1721,9 @@ NavHost(navController, startDestination = "inbox") {
         Inbox(onOpen = { id -> navController.navigate("message/$id") },
               onSettings = { navController.navigate("settings") })
     }
-    composable("message/{id}") { entry -> MessageScreen(entry.arguments!!.getInt("id")) }
+    composable("message/{id}", arguments = listOf(navArgument("id") { type = NavType.IntType })) { entry ->
+        MessageScreen(entry.arguments!!.getInt("id"))
+    }
     composable("settings") { SettingsScreen() }
 }
 ```
@@ -1440,12 +1837,14 @@ pub fn Embedded() {
 }
 ```
 
-- **Properties** (`LOCAL_HOST_PROPS`) are text, numbers or booleans by name (`props.string(…)`, `number(…)`, `boolean(…)`); reading one subscribes the reader, so a new value from Kotlin recomposes it. **Events** (`LOCAL_HOST_EVENTS`) are a name and a text payload, posted to the listener on the main thread. For anything richer, encode it as text (JSON) or call into your own JNI.
+- **Properties** (`LOCAL_HOST_PROPS`) are text, numbers or booleans by name (`props.string(…)`, `number(…)`, `boolean(…)`). Reading one subscribes the reader, so a new value from Kotlin recomposes it.
+- **Events** (`LOCAL_HOST_EVENTS`) are a name and a text payload, posted to the listener on the main thread. For anything richer, encode it as text (JSON) or call into your own JNI.
+- **Platform services** have no locals: there's no `LocalContext`, `LocalUriHandler`, clipboard manager, haptics, lifecycle owner or `ViewModel`. Ask Kotlin through an event (`events.send("open_url", url)`) and let it do the work, passing results back as properties.
 - **Back**: `BackHandler`s get the system back while one is enabled; the view intercepts back only then, through the AndroidX `OnBackPressedDispatcher` when the activity has one (so it orders with Kotlin's `BackHandler`s), else the platform's.
 - **Insets**: the view reports the window's insets (system bars, the keyboard, cutouts). `Modifier.safe_drawing_padding()`, `system_bars_padding()`, `ime_padding()` and `window_insets_padding(WindowInsets::…)` are Compose's. Material's `Scaffold` and bars take their insets as `PaddingValues` (`content_window_insets = WindowInsets::safe_drawing().as_padding_values()`), zero by default.
+- **Insets when embedded**: the view gets the whole window's insets wherever it is. When the Kotlin UI around it already pads for them (`Modifier.safeDrawingPadding()` on a parent), don't pad again in Rust, or the paddings add up.
 - **Dark theme and configuration**: `is_system_in_dark_theme()` and `LOCAL_CONFIGURATION` follow the activity's configuration.
 - **Saved state**: `remember_saveable` values (and the saveable state holders) are saved with the view's instance state, and restored when the activity is recreated, after a rotation or the process's death.
-- **Images**: `remember_image_resource(include_bytes!("photo.png"))` decodes an image bundled in the Rust library (with `BitmapFactory` on Android, Skia on desktop), and `Image!(bitmap, Some("description"))` shows it.
 
 <!-- snippet: src/interop.rs#configuration -->
 ```rust
@@ -1460,6 +1859,12 @@ pub fn Adaptive() {
     }
 }
 ```
+
+## Logging on Android
+
+`println!` and `eprintln!` go nowhere on Android: a process's standard output and error aren't connected to logcat. compose-rs has no logging API of its own. Its debug-build warnings (a state holder used after it was freed, D240) are printed to standard error, and `build-rust.sh` builds release libraries, so they don't show on Android at all.
+
+To log from an app, use the `log` facade with an Android backend, such as the `android_logger` crate initialized at startup; or send an event to Kotlin and log there. A panic's message goes to logcat under the tag `compose-rs` before the app aborts.
 
 ## Testing
 
@@ -1477,7 +1882,7 @@ pub fn Adaptive() {
 }
 ```
 
-<!-- snippet: tests/testing.rs#rule -->
+<!-- snippet: tests/suite/testing.rs#rule -->
 ```rust
 #[test]
 fn opening_a_message_and_going_back() {
@@ -1496,7 +1901,7 @@ Finders: `on_node_with_text`, `on_node_with_tag` (`Modifier.test_tag`), `on_node
 
 Recomposition counts check what an event recomposed, which Compose tests can't easily do:
 
-<!-- snippet: tests/testing.rs#recompositions -->
+<!-- snippet: tests/suite/testing.rs#recompositions -->
 ```rust
 #[test]
 fn a_click_recomposes_only_the_button_content() {
@@ -1511,7 +1916,7 @@ fn a_click_recomposes_only_the_button_content() {
 
 The rule's clock advances by itself while waiting for idle, as `mainClock.autoAdvance`; a rule made with `with_manual_clock` advances only when told:
 
-<!-- snippet: tests/testing.rs#clock -->
+<!-- snippet: tests/suite/testing.rs#clock -->
 ```rust
 #[test]
 fn the_countdown_counts_down_on_the_test_clock() {
@@ -1528,7 +1933,7 @@ fn the_countdown_counts_down_on_the_test_clock() {
 
 `ui.host()` is the headless `UiHost` the rule drives: the core every platform wraps. It takes window-level input and lifecycle calls (`on_back_pressed`, `save_state` and `restore_state`, `props()`, `set_configuration`, `perform_ime_action`, `send_pointer`, `resize`). It's in `compose::ui::platform`, outside the stable surface.
 
-<!-- snippet: tests/testing.rs#host -->
+<!-- snippet: tests/suite/testing.rs#host -->
 ```rust
 #[test]
 fn the_back_stack_survives_recreation() {
@@ -1560,7 +1965,7 @@ assert_not "Settings"
 semantics
 ```
 
-<!-- snippet: tests/testing.rs#script -->
+<!-- snippet: tests/suite/testing.rs#script -->
 ```rust
 #[test]
 fn the_session_matches_its_transcript() {

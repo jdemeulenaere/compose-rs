@@ -66,16 +66,14 @@ fn ProgressBar(scroll: ScrollState) {
 #[composable]
 pub fn Syncing(items: u32) {
     Column!({
-        Row!(
-            // The spinner draws anew every frame; a boundary keeps the rest of the screen's
-            // drawing (and, on Android, its render node) as it was.
-            modifier = Modifier.repaint_boundary(),
-            vertical_alignment = Alignment::CENTER_VERTICALLY,
-            {
-                IndeterminateCircularProgressIndicator!(modifier = Modifier.size(16.dp()));
-                Text!("Syncing {} items", items);
-            }
-        );
+        Row!(vertical_alignment = Alignment::CENTER_VERTICALLY, {
+            // The spinner draws anew every frame; a boundary around it keeps the rest of the
+            // screen's drawing (and, on Android, its render node) as it was.
+            IndeterminateCircularProgressIndicator!(
+                modifier = Modifier.size(16.dp()).repaint_boundary()
+            );
+            Text!("Syncing {} items", items);
+        });
         for index in 0..items {
             Text!("Item {}", index);
         }

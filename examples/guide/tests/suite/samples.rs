@@ -417,3 +417,115 @@ fn the_spinner_is_in_a_repaint_boundary() {
     ui.advance_time_by_frame();
     ui.on_node_with_text("Syncing 3 items").assert_exists();
 }
+
+// ---- Dialogs and selectable lists ------------------------------------------------------------
+
+#[composable]
+fn Deleting(deleted: MutableState<u32>) {
+    components::DeleteNote!(move || deleted.update(|count| count + 1));
+}
+
+#[test]
+fn the_dialog_confirms_or_cancels() {
+    let deleted = mutable_state_of(0);
+    let handle = deleted.handle();
+    let mut ui = compose_test(move || Deleting(handle));
+    ui.on_node_with_text("Delete…").perform_click();
+    ui.on_node_with_text("Delete the note?").assert_exists();
+    ui.on_node_with_text("Cancel").perform_click();
+    ui.on_node_with_text("Delete the note?").assert_does_not_exist();
+    ui.on_node_with_text("Delete…").perform_click();
+    ui.on_node_with_text("Delete").perform_click();
+    assert_eq!(deleted.get(), 1);
+    ui.on_node_with_text("Delete the note?").assert_does_not_exist();
+}
+
+#[composable]
+fn Picking(size: MutableState<usize>) {
+    components::SizePicker!(size.get(), move |index: usize| size.set(index));
+}
+
+#[test]
+fn a_row_selects_its_option() {
+    let size = mutable_state_of(0);
+    let handle = size.handle();
+    let mut ui = compose_test(move || Picking(handle));
+    assert_eq!(ui.count_nodes(&has_role(Role::RadioButton)), 3);
+    ui.on_node_with_text("Large").perform_click();
+    assert_eq!(size.get(), 2);
+}
+
+// ---- Accessibility, gestures, images, animation -----------------------------------------------
+
+#[test]
+fn the_rating_reads_as_one_description() {
+    let mut ui = compose_test(|| accessibility::Rating(3));
+    ui.on_node_with_content_description("3 of 5 stars").assert_exists();
+}
+
+#[composable]
+fn Toggled(on: MutableState<bool>) {
+    accessibility::Setting!("Wi-Fi".into(), on.get(), move |value: bool| on.set(value));
+}
+
+#[test]
+fn the_setting_row_is_a_switch() {
+    let on = mutable_state_of(false);
+    let handle = on.handle();
+    let mut ui = compose_test(move || Toggled(handle));
+    ui.on_node(has_role(Role::Switch).and(has_text("Wi-Fi"))).perform_click();
+    assert!(on.get());
+}
+
+#[test]
+fn a_double_tap_likes_the_photo() {
+    // A manual clock: an auto-advancing one would run out the double-tap timeout between taps.
+    let mut ui = ComposeTestRule::with_manual_clock(gestures::Photo);
+    let center = Offset::new(80.0, 80.0);
+    for _ in 0..2 {
+        ui.host().send_pointer(PointerEvent::press(center));
+        ui.wait_for_idle();
+        ui.host().send_pointer(PointerEvent::release(center));
+        ui.wait_for_idle();
+        ui.advance_time_by(Duration::from_millis(100));
+    }
+    ui.on_node_with_content_description("Liked").assert_exists();
+}
+
+#[composable]
+fn Swiping(dismissed: MutableState<bool>) {
+    gestures::SwipeAway!(move || dismissed.set(true));
+}
+
+#[test]
+fn a_long_swipe_dismisses() {
+    let dismissed = mutable_state_of(false);
+    let handle = dismissed.handle();
+    let mut ui = compose_test(move || Swiping(handle));
+    ui.host().send_pointer(PointerEvent::press(Offset::new(50.0, 20.0)));
+    for step in 1..=10 {
+        let to = Offset::new(50.0 + 25.0 * step as f32, 20.0);
+        ui.host().send_pointer(PointerEvent::moved(to, true));
+    }
+    ui.host().send_pointer(PointerEvent::release(Offset::new(300.0, 20.0)));
+    ui.wait_for_idle();
+    assert!(dismissed.get());
+}
+
+#[test]
+fn the_avatar_falls_back_without_a_decoder() {
+    let ui = compose_test(images::Avatar);
+    assert!(!ui.dump_display_list().contains("image"), "{}", ui.dump_display_list());
+}
+
+#[test]
+fn the_card_expands() {
+    let mut ui = compose_test(|| {
+        animation::Expandable(SharedString::from("Title"), SharedString::from("Body"))
+    });
+    ui.on_node_with_text("Body").assert_does_not_exist();
+    ui.on_node_with_text("Title").perform_click();
+    ui.on_node_with_text("Body").assert_exists();
+    let mut ui = compose_test(|| animation::Loading(false));
+    ui.on_node_with_text("Loaded").assert_exists();
+}

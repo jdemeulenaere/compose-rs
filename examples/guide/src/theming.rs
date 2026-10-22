@@ -14,7 +14,7 @@ pub fn AppTheme(content: impl Fn() + 'static) {
     let base = if is_system_in_dark_theme() { dark_color_scheme() } else { light_color_scheme() };
     // Struct update syntax where Kotlin names `lightColorScheme(primary = …)`'s arguments.
     let color_scheme = ColorScheme { primary: BRAND, ..base };
-    let typography = MaterialTheme::typography();
+    let typography = Typography::default(); // Compose's `Typography()`
     let typography = Typography {
         title_large: TextStyle { font_weight: Some(FontWeight::BOLD), ..typography.title_large },
         ..typography

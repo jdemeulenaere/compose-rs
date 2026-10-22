@@ -1,6 +1,12 @@
+//! The first test (docs/guide/README.md). In the guide's layout this is a test of
+//! `examples/hello`, whose library is `hello`; here `hello` names the module that plays its part.
+
+use guide::getting_started as hello;
+
 // ANCHOR: test
+// examples/hello/tests/hello.rs
 use compose::test::*;
-use guide::getting_started::Hello;
+use hello::Hello;
 
 #[test]
 fn greets_by_name() {
