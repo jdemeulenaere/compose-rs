@@ -269,7 +269,11 @@ pub fn ModalNavigationDrawer(
                                 compose_ui::Paint::fill(scrim_color.with_alpha(alpha)),
                             );
                         })
-                        .then_custom(ScrimElement { close, enabled: gestures_enabled }),
+                        .then_custom(ScrimElement {
+                            close,
+                            enabled: gestures_enabled,
+                            description: "Close navigation menu",
+                        }),
                     Alignment::TOP_START,
                     false,
                     compose_runtime::callback(|_| {}),
@@ -288,14 +292,17 @@ pub fn ModalNavigationDrawer(
 
 /// The scrim's input: a click closes the drawer (with gestures enabled), as Compose's scrim's
 /// `detectTapGestures`; it takes the pointer from the content beneath, and is no focus stop.
-struct ScrimElement {
-    close: compose_runtime::Callback,
-    enabled: bool,
+/// Bottom sheets' scrims are the same, with their own `description`.
+pub(crate) struct ScrimElement {
+    pub close: compose_runtime::Callback,
+    pub enabled: bool,
+    pub description: &'static str,
 }
 
 struct ScrimNode {
     close: compose_runtime::Callback,
     enabled: bool,
+    description: &'static str,
     pressed: Option<compose_ui::PointerId>,
 }
 
@@ -304,6 +311,7 @@ impl compose_ui::ModifierNodeElement for ScrimElement {
         std::boxed::Box::new(ScrimNode {
             close: self.close.clone(),
             enabled: self.enabled,
+            description: self.description,
             pressed: None,
         })
     }
@@ -311,12 +319,15 @@ impl compose_ui::ModifierNodeElement for ScrimElement {
         if let Some(node) = node.downcast_mut::<ScrimNode>() {
             node.close = self.close.clone();
             node.enabled = self.enabled;
+            node.description = self.description;
         }
     }
     fn same(&self, other: &dyn compose_ui::ModifierNodeElement) -> bool {
-        other
-            .downcast_ref::<ScrimElement>()
-            .is_some_and(|other| other.close.ptr_eq(&self.close) && other.enabled == self.enabled)
+        other.downcast_ref::<ScrimElement>().is_some_and(|other| {
+            other.close.ptr_eq(&self.close)
+                && other.enabled == self.enabled
+                && other.description == self.description
+        })
     }
     fn name(&self) -> &'static str {
         "drawer_scrim"
@@ -376,7 +387,7 @@ impl compose_ui::PointerInputModifierNode for ScrimNode {
 
 impl compose_ui::SemanticsModifierNode for ScrimNode {
     fn apply_semantics(&self, config: &mut compose_ui::SemanticsConfiguration) {
-        config.content_description.push("Close navigation menu".into());
+        config.content_description.push(self.description.into());
         config.clickable |= self.enabled;
     }
 

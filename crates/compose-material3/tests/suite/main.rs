@@ -3,6 +3,7 @@
 
 extern crate compose_runtime as compose;
 
+mod app_bars;
 mod buttons;
 mod components;
 mod drawer;
@@ -26,6 +27,7 @@ mod review_round6;
 mod review_round8;
 mod review_rtl;
 mod review_semantics_material;
+mod segments_and_rails;
+mod sheets;
 mod snackbar;
 mod text_field;
-mod app_bars;

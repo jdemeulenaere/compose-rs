@@ -1,9 +1,10 @@
-//! `NavigationBar` and `NavigationBarItem`, as Compose's Material 3: a bar of destinations at
-//! the bottom of a screen, the selected one's icon in a pill.
+//! `NavigationBar` and `NavigationBarItem`, `NavigationRail` and `NavigationRailItem`, as
+//! Compose's Material 3: a bar of destinations at the bottom of a screen or a rail at its side,
+//! the selected one's icon in a pill.
 
 use std::rc::Rc;
 
-use compose_foundation::layout::{Arrangement, Box, Row, RowScope};
+use compose_foundation::layout::{Arrangement, Box, Column, ColumnScope, Row, RowScope};
 use compose_runtime::{CompositionLocalProvider, composable, remember};
 use compose_ui::{
     Alignment, Color, Constraints, Dp, Layout, Measurable, MeasurePolicy, MeasureResult,
@@ -111,27 +112,57 @@ pub fn NavigationBarItem(
     #[default(None)] label: Option<impl Fn() + 'static>,
     #[default(true)] always_show_label: bool,
     #[default(crate::NavigationBarItemDefaults::colors())] colors: NavigationBarItemColors,
+    #[default(None)] interaction_source: Option<compose_ui::MutableInteractionSource>,
 ) {
-    let (icon_color, text_color) = match (enabled, selected) {
-        (false, _) => (colors.disabled_icon_color, colors.disabled_text_color),
-        (true, true) => (colors.selected_icon_color, colors.selected_text_color),
-        (true, false) => (colors.unselected_icon_color, colors.unselected_text_color),
-    };
     let show_label = label.is_some() && (always_show_label || selected);
     let policy = {
         compose_runtime::remember_keyed(show_label, move || {
             Rc::new(NavigationBarItemLayout { label: show_label }) as Rc<dyn MeasurePolicy>
         })
     };
+    let interaction_source = crate::components::remembered_interaction_source(interaction_source);
+    navigation_item(
+        modifier.weight(scope, 1.0).fill_max_height(),
+        policy,
+        selected,
+        on_click,
+        icon,
+        enabled,
+        label,
+        show_label,
+        colors,
+        interaction_source,
+        (64.dp(), 32.dp()),
+    );
+}
+
+/// A navigation bar's or rail's item: clickable (a tab, selected or not, its press shown on
+/// the pill only), the pill (the indicator when selected), the icon over it, the label.
+#[allow(clippy::too_many_arguments)]
+fn navigation_item(
+    modifier: Modifier,
+    policy: Rc<dyn MeasurePolicy>,
+    selected: bool,
+    on_click: compose_runtime::Callback,
+    icon: compose_runtime::Callback,
+    enabled: bool,
+    label: Option<compose_runtime::Callback>,
+    show_label: bool,
+    colors: NavigationBarItemColors,
+    interaction: compose_ui::MutableInteractionSource,
+    pill_size: (Dp, Dp),
+) {
+    let (icon_color, text_color) = match (enabled, selected) {
+        (false, _) => (colors.disabled_icon_color, colors.disabled_text_color),
+        (true, true) => (colors.selected_icon_color, colors.selected_text_color),
+        (true, false) => (colors.unselected_icon_color, colors.unselected_text_color),
+    };
     let pill = remember(|| Shape::Rounded([compose_ui::CornerSize::Percent(50.0); 4]));
     let indicator = if selected { colors.selected_indicator_color } else { Color::TRANSPARENT };
     let typography = MaterialTheme::typography();
     // The press, focus and hover show on the pill only, as Compose's
     // (`selectable(indication = null)`, the pill's own ripple).
-    let interaction = remember(compose_ui::MutableInteractionSource::new);
     let modifier = modifier
-        .weight(scope, 1.0)
-        .fill_max_height()
         .clickable_interaction(
             enabled,
             Some(Role::Tab),
@@ -141,6 +172,7 @@ pub fn NavigationBarItem(
         )
         .semantics(false, move |config| config.selected = Some(selected));
     let (icon, label) = (icon.clone(), label.clone());
+    let (pill_width, pill_height) = pill_size;
     Layout(
         modifier,
         policy,
@@ -149,7 +181,7 @@ pub fn NavigationBarItem(
             let (pressed, pill_shape) = (interaction.clone(), pill);
             Box(
                 Modifier
-                    .size_in(SizeSpec::bounds(64.dp(), 32.dp(), 64.dp(), 32.dp()))
+                    .size_in(SizeSpec::bounds(pill_width, pill_height, pill_width, pill_height))
                     .background_shape(indicator, pill)
                     .draw_behind(move |scope| {
                         // Read while drawing: a press, focus or hover draws again only.
@@ -242,5 +274,164 @@ impl MeasurePolicy for NavigationBarItemLayout {
 
     fn debug_name(&self) -> &'static str {
         "NavigationBarItem"
+    }
+}
+
+// ---- NavigationRail --------------------------------------------------------------------------
+
+/// As Compose's `NavigationRailDefaults`.
+pub struct NavigationRailDefaults;
+
+impl NavigationRailDefaults {
+    /// The surface, as `ContainerColor`.
+    pub fn container_color() -> Color {
+        MaterialTheme::color_scheme().surface
+    }
+
+    /// As `windowInsets`: none until hosts report them.
+    pub fn window_insets() -> compose_ui::PaddingValues {
+        compose_ui::PaddingValues::ZERO
+    }
+}
+
+/// A navigation rail item's colors, as Compose's `NavigationRailItemColors` (the navigation
+/// bar's roles).
+pub type NavigationRailItemColors = NavigationBarItemColors;
+
+/// As Compose's `NavigationRailItemDefaults`.
+pub struct NavigationRailItemDefaults;
+
+impl NavigationRailItemDefaults {
+    /// From the theme, as `NavigationRailItemDefaults.colors()`.
+    pub fn colors() -> NavigationRailItemColors {
+        NavigationBarItemDefaults::colors()
+    }
+}
+
+/// A rail of destinations at the side of a screen, as Compose's `NavigationRail`: at least 80 dp
+/// wide, as tall as allowed, its optional header (a FAB, a menu) then 8 dp, then the items,
+/// 4 dp apart and from the ends, centered across.
+#[composable]
+#[allow(non_snake_case)]
+pub fn NavigationRail(
+    #[default(crate::Modifier)] modifier: Modifier,
+    #[default(crate::NavigationRailDefaults::container_color())] container_color: Color,
+    #[default(crate::Color::UNSPECIFIED)] content_color: Color,
+    #[default(None)] header: Option<impl Fn(ColumnScope) + 'static>,
+    #[default(crate::NavigationRailDefaults::window_insets())]
+    window_insets: compose_ui::PaddingValues,
+    content: impl Fn(ColumnScope) + 'static,
+) {
+    Surface(
+        modifier,
+        compose_ui::RECTANGLE_SHAPE,
+        container_color,
+        content_color,
+        Dp(0.0),
+        Dp(0.0),
+        None,
+        compose_runtime::callback(move || {
+            let (header, content) = (header.clone(), content.clone());
+            Column(
+                Modifier
+                    .fill_max_height()
+                    .padding_values(window_insets)
+                    .size_in(SizeSpec::bounds(
+                        80.dp(),
+                        Dp::UNSPECIFIED,
+                        Dp::UNSPECIFIED,
+                        Dp::UNSPECIFIED,
+                    ))
+                    .padding_horizontal_vertical(Dp(0.0), 4.dp()),
+                Arrangement::spaced_by(4.dp()),
+                Alignment::CENTER_HORIZONTALLY,
+                compose_runtime::callback(move |column: ColumnScope| {
+                    if let Some(header) = header.clone() {
+                        header(column);
+                        compose_foundation::layout::Spacer(Modifier.height(8.dp()));
+                    }
+                    content(column);
+                }),
+            );
+        }),
+    );
+}
+
+/// A destination of a `NavigationRail`, as Compose's `NavigationRailItem`: its icon on a 56 by
+/// 32 dp pill when selected, its label (label-medium) 4 dp below; 56 dp wide, 56 dp high
+/// without a label (the pill a 56 dp circle), 60 with one; clicking selects it.
+#[composable]
+#[allow(non_snake_case)]
+pub fn NavigationRailItem(
+    selected: bool,
+    on_click: impl Fn() + 'static,
+    icon: impl Fn() + 'static,
+    #[default(crate::Modifier)] modifier: Modifier,
+    #[default(true)] enabled: bool,
+    #[default(None)] label: Option<impl Fn() + 'static>,
+    #[default(true)] always_show_label: bool,
+    #[default(crate::NavigationRailItemDefaults::colors())] colors: NavigationRailItemColors,
+    #[default(None)] interaction_source: Option<compose_ui::MutableInteractionSource>,
+) {
+    let show_label = label.is_some() && (always_show_label || selected);
+    let policy = compose_runtime::remember_keyed(show_label, move || {
+        Rc::new(NavigationRailItemLayout { label: show_label }) as Rc<dyn MeasurePolicy>
+    });
+    let interaction_source = crate::components::remembered_interaction_source(interaction_source);
+    navigation_item(
+        modifier,
+        policy,
+        selected,
+        on_click,
+        icon,
+        enabled,
+        label,
+        show_label,
+        colors,
+        interaction_source,
+        (56.dp(), if show_label { 32.dp() } else { 56.dp() }),
+    );
+}
+
+/// The pill, the icon centered on it, and the label 4 dp below, centered across; the whole
+/// centered down at least 56 dp (4 dp at least above and below), as Compose's
+/// `NavigationRailItem`'s layout.
+struct NavigationRailItemLayout {
+    label: bool,
+}
+
+impl MeasurePolicy for NavigationRailItemLayout {
+    fn measure(
+        &self,
+        scope: &mut MeasureScope<'_>,
+        measurables: &[Measurable],
+        constraints: Constraints,
+    ) -> MeasureResult {
+        let density = scope.density();
+        let loose = constraints.loosen();
+        let pill = scope.measure(measurables[0], loose);
+        let icon = scope.measure(measurables[1], loose);
+        let label = measurables.get(2).map(|&label| scope.measure(label, loose));
+        let minimum = density.round_to_px(56.dp());
+        let gap = density.round_to_px(4.dp());
+        let shown = label.as_ref().filter(|_| self.label);
+        let content = pill.height + shown.map_or(0, |label| gap + label.height);
+        let padding = ((minimum - content) / 2).max(if shown.is_some() { gap } else { 0 });
+        let height = constraints.constrain_height(content + 2 * padding);
+        let width = constraints.constrain_width(
+            pill.width.max(minimum).max(label.as_ref().map_or(0, |label| label.width)),
+        );
+        let center = |child_width: i32| (width - child_width) / 2;
+        let top = (height - content) / 2;
+        scope.place_relative(&pill, center(pill.width), top);
+        scope.place_relative(&icon, center(icon.width), top + (pill.height - icon.height) / 2);
+        if let Some(label) = &label {
+            scope.place_relative(label, center(label.width), top + pill.height + gap);
+        }
+        scope.layout(width, height)
+    }
+
+    fn debug_name(&self) -> &'static str {
+        "NavigationRailItem"
     }
 }

@@ -100,7 +100,8 @@ fn Screen(kind: u8, small: bool) {
 }
 
 fn wheel(ui: &mut ComposeTestRule, delta: f32) {
-    ui.host().send_pointer(PointerEvent::scroll(Offset::new(200.0, 400.0), Offset::new(0.0, delta)));
+    ui.host()
+        .send_pointer(PointerEvent::scroll(Offset::new(200.0, 400.0), Offset::new(0.0, delta)));
     ui.advance_time_by(Duration::from_millis(32));
 }
 
