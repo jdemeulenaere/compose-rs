@@ -34,6 +34,7 @@ struct Layer {
     translation: (f32, f32),
     clip: Option<(f32, f32, f32, f32)>,
     overlapping: bool,
+    bounds: (f32, f32, f32, f32),
 }
 
 fn u32_at(bytes: &[u8], at: usize) -> u32 {
@@ -89,6 +90,7 @@ fn read(bytes: &[u8]) -> (Vec<Layer>, Vec<Item>) {
                 translation: (f(32), f(36)),
                 clip: (bytes[at + 40] != 0).then(|| (f(41), f(45), f(49), f(53))),
                 overlapping: bytes[at + 57] != 0,
+                bounds: (f(58), f(62), f(66), f(70)),
             });
             at += LAYER_ENTRY_BYTES;
         }
@@ -255,6 +257,7 @@ fn a_lifted_layer_is_its_layers_entry_not_operations() {
             clip: Some((0.0, 0.0, 20.0, 20.0)),
             // One drawing: faded, no offscreen layer.
             overlapping: false,
+            bounds: (0.0, 0.0, 20.0, 20.0),
         }]
     );
     assert_eq!(groups(&items), [(group.key, group.version)]);
@@ -266,6 +269,28 @@ fn a_lifted_layer_is_its_layers_entry_not_operations() {
     }
     let Item::Group { content, .. } = &items[0] else { panic!("{items:?}") };
     assert_eq!(content, &[Item::Operation(tag::DRAW_RECT)]);
+}
+
+/// A layer's bounds (its render node's, bounding its alpha's offscreen layer) are its size at
+/// its origin in the group: after the padding before it, and its pivot their center.
+#[test]
+fn a_layers_bounds_are_its_size_at_its_origin() {
+    let mut serialized = Serialized::new(|| {
+        Leaf(
+            Modifier
+                .padding(4.dp())
+                .graphics_layer_with(GraphicsLayerScope {
+                    alpha: 0.5,
+                    ..GraphicsLayerScope::default()
+                })
+                .then(painted(|| Color::RED))
+                .size(20.dp()),
+        );
+    });
+    let (layers, _) = read(&serialized.frame());
+    assert_eq!(layers.len(), 1);
+    assert_eq!(layers[0].bounds, (4.0, 4.0, 24.0, 24.0));
+    assert_eq!(layers[0].pivot, (14.0, 14.0));
 }
 
 /// A faded layer drawing two things (they may overlap) or holding a group composites
@@ -452,6 +477,7 @@ fn a_record_takes_its_layers_operations_place() {
             rotation: 0.0,
             translation: Offset::ZERO,
             clip: None,
+            bounds: Rect::new(0.0, 0.0, 4.0, 4.0),
         }),
     });
     let (mut resources, mut out) = (Resources::default(), Writer::default());

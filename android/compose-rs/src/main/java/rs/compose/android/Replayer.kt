@@ -94,15 +94,14 @@ internal class Replayer(private val text: TextMeasurer) {
     }
 
     /**
-     * A group's render node.
-     *
-     * The node's origin is [MARGIN] pixels up and left of the group's (its recording starts by
-     * moving back), so its bounds hold what the group draws on either side of its origin: an
-     * alpha below 1 draws the node into an offscreen layer clipped to its bounds.
+     * A group's render node. Its origin is the group's; what it draws outside its bounds isn't
+     * clipped (`setClipToBounds(false)`), except by an alpha's offscreen layer, which they bound.
+     * A layer's node has the layer's bounds (from the group's origin to the layer's far
+     * corner: the layer's own when it's at the group's origin, as Compose's), others the
+     * view's size (their bounds only limit what a change of theirs repaints, as D154's).
      */
     private class Group {
         val node = RenderNode("compose-rs group").apply {
-            setPosition(-MARGIN, -MARGIN, MARGIN, MARGIN)
             setClipToBounds(false)
             // Until a layer says otherwise (setLayer): an alpha below 1 goes offscreen.
             setHasOverlappingRendering(true)
@@ -113,14 +112,18 @@ internal class Replayer(private val text: TextMeasurer) {
         var frame = 0
         /** The last frame whose `LAYERS` section listed it. */
         var layerFrame = 0
-        /** Its node has a layer's properties (else they're the identity). */
+        /** Its node has a layer's properties, [applied] (else they're the identity). */
         var layered = false
+        /** The `LAYERS` entry (after its key) last set on [node], while [layered]. */
+        val applied = ByteArray(LAYER_ENTRY_BYTES - 8)
         /** The groups drawn inside it: kept as long as it is. */
         var children = ArrayList<Long>()
     }
 
     private val groups = HashMap<Long, Group>()
     private var frame = 0
+    private var width = 1
+    private var height = 1
     /** The groups met in the group being recorded (null outside any). */
     private var children: ArrayList<Long>? = null
     /** In a software draw: where each group's `LAYERS` entry is in the buffer. */
@@ -142,6 +145,8 @@ internal class Replayer(private val text: TextMeasurer) {
             return
         }
         frame++
+        width = canvas.width.coerceAtLeast(1)
+        height = canvas.height.coerceAtLeast(1)
         replay(canvas, buffer, buffer.limit())
         val iterator = groups.values.iterator()
         while (iterator.hasNext()) {
@@ -154,6 +159,7 @@ internal class Replayer(private val text: TextMeasurer) {
                 // No longer a layer. (Properties set after drawing the node still apply: the
                 // render thread reads them when the frame is done.)
                 resetLayer(group.node)
+                group.node.setPosition(0, 0, width, height)
                 group.layered = false
             }
         }
@@ -293,20 +299,24 @@ internal class Replayer(private val text: TextMeasurer) {
         group.frame = frame
         // Matches nothing until recorded whole.
         group.version = -1L
+        // A layer's node has its bounds already (setLayer).
+        if (!group.layered) group.node.setPosition(0, 0, width, height)
         val outer = children
         val inner = ArrayList<Long>()
         children = inner
-        val recording = group.node.beginRecording(2 * MARGIN, 2 * MARGIN)
+        // Its size is a hint: what's recorded past it is kept, as a view's children drawn past
+        // its bounds are.
+        val recording =
+            group.node.beginRecording(group.node.width.coerceAtLeast(1), group.node.height.coerceAtLeast(1))
         try {
-            // From the node's origin to the group's.
-            recording.translate(MARGIN.toFloat(), MARGIN.toFloat())
             replay(recording, buffer, end)
         } finally {
             group.node.endRecording()
             children = outer
         }
         group.children = inner
-        group.version = version
+        // A recording cut short by an unknown operation isn't that version's.
+        if (!unreadable) group.version = version
         canvas.drawRenderNode(group.node)
     }
 
@@ -335,9 +345,13 @@ internal class Replayer(private val text: TextMeasurer) {
             val key = buffer.getLong(at)
             if (hardware) {
                 val group = groups.getOrPut(key) { Group() }
-                setLayer(group.node, buffer, at + 8)
+                // Set only when it changed: a frame where nothing moves sets nothing.
+                if (!group.layered || !applied(group.applied, buffer, at + 8)) {
+                    for (index in group.applied.indices) group.applied[index] = buffer.get(at + 8 + index)
+                    setLayer(group.node, buffer, at + 8)
+                    group.layered = true
+                }
                 group.layerFrame = frame
-                group.layered = true
             } else {
                 softwareLayers[key] = at + 8
             }
@@ -346,17 +360,27 @@ internal class Replayer(private val text: TextMeasurer) {
         buffer.position(at)
     }
 
+    /** Whether [applied] holds the `LAYERS` entry at [at] (after its key). */
+    private fun applied(applied: ByteArray, buffer: ByteBuffer, at: Int): Boolean {
+        for (index in applied.indices) {
+            if (applied[index] != buffer.get(at + index)) return false
+        }
+        return true
+    }
+
     /**
      * Sets the layer at [at] (a `LAYERS` entry after its key: alpha, pivot, scale, rotation,
-     * translation, clip, overlapping) on [node]. A node scales and rotates around its pivot
-     * then translates, clips in its own coordinates and applies its alpha last, as the
-     * operations Rust left out (`Transform`, `ClipRect`, `SaveLayerAlpha`); the pivot and clip
-     * move by [MARGIN] (the node's origin is the group's moved by it).
+     * translation, clip, overlapping, bounds) on [node]. A node scales and rotates around its
+     * pivot then translates, clips in its own coordinates and applies its alpha last, as the
+     * operations Rust left out (`Transform`, `ClipRect`, `SaveLayerAlpha`). Its position is the
+     * group's origin (a recording doesn't depend on the layer's offset, which can change
+     * without the group's version) to the layer's far corner.
      */
     private fun setLayer(node: RenderNode, buffer: ByteBuffer, at: Int) {
+        node.setPosition(0, 0, ceil(buffer.getFloat(at + 58)).toInt(), ceil(buffer.getFloat(at + 62)).toInt())
         node.setAlpha(buffer.getFloat(at))
-        node.setPivotX(buffer.getFloat(at + 4) + MARGIN)
-        node.setPivotY(buffer.getFloat(at + 8) + MARGIN)
+        node.setPivotX(buffer.getFloat(at + 4))
+        node.setPivotY(buffer.getFloat(at + 8))
         node.setScaleX(buffer.getFloat(at + 12))
         node.setScaleY(buffer.getFloat(at + 16))
         node.setRotationZ(buffer.getFloat(at + 20))
@@ -365,10 +389,10 @@ internal class Replayer(private val text: TextMeasurer) {
         if (buffer.get(at + 32).toInt() != 0) {
             // Whole pixels: a layer's bounds are its node's (whole) size at its (whole) offset.
             clipBounds.set(
-                floor(buffer.getFloat(at + 33)).toInt() + MARGIN,
-                floor(buffer.getFloat(at + 37)).toInt() + MARGIN,
-                ceil(buffer.getFloat(at + 41)).toInt() + MARGIN,
-                ceil(buffer.getFloat(at + 45)).toInt() + MARGIN,
+                floor(buffer.getFloat(at + 33)).toInt(),
+                floor(buffer.getFloat(at + 37)).toInt(),
+                ceil(buffer.getFloat(at + 41)).toInt(),
+                ceil(buffer.getFloat(at + 45)).toInt(),
             )
             node.setClipRect(clipBounds)
         } else {
@@ -410,7 +434,14 @@ internal class Replayer(private val text: TextMeasurer) {
             )
         }
         if (alpha < 1f) {
-            canvas.saveLayerAlpha(null, (alpha.coerceIn(0f, 1f) * 255f + 0.5f).toInt())
+            // Bounded as the node's offscreen layer is.
+            canvas.saveLayerAlpha(
+                0f,
+                0f,
+                ceil(buffer.getFloat(at + 58)),
+                ceil(buffer.getFloat(at + 62)),
+                (alpha.coerceIn(0f, 1f) * 255f + 0.5f).toInt(),
+            )
         }
     }
 
@@ -528,11 +559,8 @@ internal class Replayer(private val text: TextMeasurer) {
 
         /**
          * The bytes of a `LAYERS` entry: its key, 8 floats, whether it clips, its clip, whether
-         * it overlaps.
+         * it overlaps, its bounds.
          */
-        const val LAYER_ENTRY_BYTES = 8 + 8 * 4 + 1 + 4 * 4 + 1
-
-        /** How far a group's node reaches past the group's origin, each way (see [Group]). */
-        const val MARGIN = 1 shl 14
+        const val LAYER_ENTRY_BYTES = 8 + 8 * 4 + 1 + 4 * 4 + 1 + 4 * 4
     }
 }

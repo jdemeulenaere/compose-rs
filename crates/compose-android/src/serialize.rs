@@ -45,7 +45,8 @@ pub mod tag {
     /// (u32), then per group its key (u64), alpha, pivot (x, y), scale (x, y), rotation
     /// (degrees), translation (x, y) (f32s), whether it clips (u8) and its clip (left, top,
     /// right, bottom; zeros if it doesn't), then whether its alpha composites its content
-    /// offscreen (u8; 0 for one drawing, faded instead): `LAYER_ENTRY_BYTES` each.
+    /// offscreen (u8; 0 for one drawing, faded instead), then its bounds (left, top, right,
+    /// bottom): `LAYER_ENTRY_BYTES` each.
     pub const LAYERS: u8 = 16;
     pub const DEFINE_PATH: u8 = 20;
     pub const DROP_PATH: u8 = 21;
@@ -366,6 +367,8 @@ pub struct GroupCache {
     generation: u64,
     /// How many records the last write copied, not counting the ones inside them.
     copied: usize,
+    /// How many records the last write wrote afresh.
+    written: usize,
 }
 
 #[derive(Default)]
@@ -389,10 +392,15 @@ impl GroupCache {
     pub fn copied(&self) -> usize {
         self.copied
     }
+
+    /// How many records the last write wrote afresh (a new version each: Kotlin records them).
+    pub fn written(&self) -> usize {
+        self.written
+    }
 }
 
 /// The bytes of one entry of the `LAYERS` section.
-pub const LAYER_ENTRY_BYTES: usize = 8 + 8 * 4 + 1 + 4 * 4 + 1;
+pub const LAYER_ENTRY_BYTES: usize = 8 + 8 * 4 + 1 + 4 * 4 + 1 + 4 * 4;
 
 /// Writes `list` into `out` (cleared first), defining in `resources` the paths and images it
 /// uses, and copying from `cache` the records of the groups whose version it holds.
@@ -410,6 +418,7 @@ pub fn write_display_list(
     out.bytes.clear();
     cache.generation += 1;
     cache.copied = 0;
+    cache.written = 0;
     write_layers(list, out);
     // The groups, outer before inner (they nest): of two with the same range, the outer one
     // was drawn last (a stable sort of the reversed list keeps it first).
@@ -451,6 +460,7 @@ fn write_layers(list: &DisplayList, out: &mut Writer) {
         out.u8(u8::from(layer.clip.is_some()));
         out.rect(&layer.clip.unwrap_or(Rect::new(0.0, 0.0, 0.0, 0.0)));
         out.u8(u8::from(overlapping(list, group)));
+        out.rect(&layer.bounds);
     }
 }
 
@@ -537,6 +547,7 @@ impl Serializer<'_> {
             }
             return;
         }
+        self.cache.written += 1;
         let at = self.out.bytes.len();
         self.out.u8(tag::GROUP);
         self.out.u32(group.key as u32);
