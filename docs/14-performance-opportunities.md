@@ -10,7 +10,7 @@ Where compose-rs can still get faster, smaller or quicker to build, after round 
   - two runtime fixes that remove a quadratic scan when composing big screens: −39 % of the big screen's first frame headless;
   - stripping the library, which the build silently skipped: the APK goes from 3.2 to 2.0 MB at no cost (**fixed**: D301); with a release profile (LTO, `panic = "abort"`), 1.5 MB.
   - **Together**, measured with the full benchmark ("Combined" below; the two sessions ran one after the other, not interleaved): the animation's main-thread work goes from 210 to 196 ms and its RenderThread work from 547 to 492 ms (Compose: 248–260 and 534–544). `big` starts in 166 ms instead of 181 (Compose: 222–224), and the APK is 1.5 MB. An interleaved A/B of the frame changes alone (#2, #3 and the spinner boundary) agrees: 209.7 → 194.0 ms and 546.6 → 496.5 ms.
-- **Text** on Android is 84 % platform work that any approach pays. Batching JNI calls would save at most 2.6 ms of the big screen's 110 ms first frame.
+- **Text** on Android is 84 % platform work that any approach pays. Batching JNI calls would save at most 2.6 ms of the big screen's 110 ms first frame. Laying out single lines with `BoringLayout`, as Compose does (**done**: D330), takes 29 % off text layout: the big screen's first `doFrame` goes from 104.8 to 90.3 ms.
 - **Build times:** the edit loop is at its floor (about 0.45 s). Clean debug builds can lose 27 % (**fixed**: D303).
 
 ## Ranking
@@ -35,6 +35,7 @@ Gain over cost, best first.
 | 10 | **Android: records that reference nested groups by key**, so a parent's version doesn't change with a nested group's content. **Done** (D323) | Animation main work −5 to −10 ms (−3 to −5 %) on top of #3; as shipped (with the indeterminate indicators as repaint boundaries), −6.6 ms (−3.3 %), main p50 / p90 −6 / −7 %, p99 unchanged | estimated ("Nested groups"); as shipped, measured, 4 runs | M–L, medium | none (the indeterminate indicators are repaint boundaries of their own) | — |
 | 11 | **Android: text widths and paragraph recording on worker threads** | Big first frame main work 94.0 → 79.0 ms (−16 %), TotalTime 182 → 174 ms; scroll main work −19 ms, p99 3.53 → 3.08 ms; costs 50 ms (big) and 440 ms (scroll) of worker CPU | measured, n = 10 and 4 | M–L, threading risk; the prototype isn't production-ready (see "Android: text and the big screen") | none | `perf/text-combined` |
 | 12 | **Android: fewer Java allocations per frame** | Per animation frame 17.2 → 4.2 Java objects; −0.48 MB allocated over start and 10 flings; Java heap PSS after flings 5.40 → 4.86 MB (single runs); no frame-time gain | measured | S | none | `perf/startup-java-allocs` |
+| 14 | **Android: `BoringLayout` for single lines** (Compose's `TextLayout` choice). **Done** (D330) | Big first frame: text layout 41.3 → 29.3 ms (−29 %), `doFrame` 104.8 → 90.3 ms (−14 %), TotalTime 167 → 158 ms; scroll main work 460 → 431 ms (−6.4 %), frame percentiles unchanged | measured, interleaved: 12 traced and 18 untraced starts, 4 scroll runs each | S, low (checked against `StaticLayout` on API 36 only) | letter-spaced texts at their own width are 1 px wider, as Compose's | — |
 | 13 | **Memory: exact or chunked growth** of the slot table's groups and the node arena | Big screen's Rust heap −1.7 MB allocated of 17.9 (unused capacity, so maybe not resident: the PSS saving is unmeasured; its PSS is 69.8 MB); no transient 2× copy when growing | estimated (heapprofd) | S–M | none | — |
 
 Small, negative or not worth doing: see "What isn't worth doing".
@@ -242,6 +243,37 @@ Every prototype's screenshots match the baseline pixel for pixel.
   - The typefaces map became concurrent, and the workers' paints duplicate the main thread's.
   - Its width map is never trimmed.
   - Hints aren't deduplicated in Rust, and D's hints for texts whose constraints leave no choice are never consumed (a leak).
+
+### `BoringLayout` for single lines (#14, done: D330)
+
+Compose's `TextLayout` lays out a text with `BoringLayout` when `BoringLayout.isBoring` returns metrics (one line: no new line, tab, emoji, character that could be right to left, paragraph span, or right-to-left direction) and the line fits its width; the metrics' width is the text's own width, so `getDesiredWidth` isn't called. `TextMeasurer.kt` now does the same on API 33+, with two differences from Compose. A line height is applied to the boring metrics as `LineHeightSpan.Standard` would apply it to the line (Compose's own span rules these texts out, and every Material 3 text has a line height). Below API 33, `BoringLayout` can't use fallback line spacing, so it isn't used. Letter-spaced texts get Compose's half pixel (b/173574230). Without it, a `StaticLayout` can break or ellipsize a line at its own measured width: the check below found 31 such cases among 3,769, and the old code had that bug.
+
+How many paragraphs take it: about 5 in 6. In the feed, 917 of the first 1,100 paragraphs (start and 10 flings); on the big screen, 1,000 of 1,200 (the rest are wrapped bodies).
+
+**Same results.** A debuggable app checks each `BoringLayout` against the `StaticLayout` it replaces, in everything Rust reads: size, line count, baselines, ellipsis, each offset's cursor position, and hit tests at and between them. On a difference it logs it and keeps the `StaticLayout`. On the Pixel 8 Pro, an instrumented build also compared software-drawn pixels:
+- every feed and big-screen paragraph matched;
+- so did 3,769 random cases: Latin, CJK, Devanagari, Thai, Greek and Cyrillic text; runs with other sizes and backgrounds; underline and strike-through; letter spacing of ±; line heights of 7–100 px; every alignment and justify; ellipsis; 1, 2 or unlimited lines; and widths at +0, +1 and +37 px.
+
+Screenshots of the feed and the big screen are byte-identical to the baseline's. Not checked: API 33–35, where the debug check is the safeguard.
+
+Measured against 84a79be. APKs alternated, each install checked by SHA-1 and compiled `speed`. Results are means [min–max]; startup values are medians.
+
+| | before | after |
+|---|---|---|
+| Big first frame: `compose-rs: text layout` (1,201 paragraphs) | 41.3 ms | **29.3 ms** (−29 %) |
+| Big first frame: `doFrame` (main work) | 104.8 (87.5) ms | **90.3 (73.0) ms** (−14 %) |
+| Big first frame: `compose-rs: replay` | 21.9 ms | 19.8 ms |
+| TotalTime big / feed (18 starts each) | 167 / 101 ms | **158** / 102 ms |
+| Scroll: main work (4 runs) | 460.3 [447.4–471.4] ms | **430.9** [407.9–439.6] ms (−6.4 %) |
+| Scroll: `compose-rs: text layout` per paragraph, `prefetch` per call | 383, 2,053 µs | 270, 1,703 µs |
+| Scroll: main per frame p50 / p90 / p99 | 1.23 / 1.80 / 2.92 ms | 1.23 / 1.79 / 2.95 ms |
+| Scroll: RenderThread work | 789.0 [762.3–807.6] ms | 778.8 [751.5–797.5] ms |
+| Scroll: RenderThread per frame p50 / p90 / p99 | 2.74 / 3.77 / 5.33 ms | 2.75 / 3.73 / 5.49 ms |
+| Janky frames a run | 0.5 | 0.75 |
+
+Scrolling lays out text while prefetching, in idle time. So the scroll's gain is in total main-thread work, not in frame percentiles; RenderThread and jank stay within the runs' spread.
+
+A wrapped paragraph at a fixed width now pays `isBoring`'s measure before its `StaticLayout`, as in Compose. Minikin's word cache makes the second measure cheap, and the big screen's 200 bodies are included in the numbers above.
 
 ## Android: startup
 
