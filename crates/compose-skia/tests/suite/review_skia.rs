@@ -208,3 +208,34 @@ fn a_frames_groups_draw_what_its_flattened_list_does() {
     assert!(groups >= 3, "{groups} groups");
     assert_eq!(walked.pixels(), flattened.pixels());
 }
+
+/// A group's content is drawn in a save of its own, as a render node on Android: a clip or a
+/// move it leaves unbalanced (no layer saving around it) doesn't reach what's drawn after it.
+#[test]
+fn a_groups_unbalanced_clip_stays_in_the_group() {
+    use compose::ui::platform::{Boundary, DrawGroup};
+    use compose::ui::{Offset, Paint};
+    let rect = |left: f32, color| {
+        DrawOp::DrawRect(Rect::new(left, 0.0, left + 10.0, 10.0), Paint::fill(color))
+    };
+    let mut content = DisplayList::default();
+    content.push(DrawOp::ClipRect(Rect::new(0.0, 0.0, 5.0, 5.0)));
+    content.push(DrawOp::Translate(Offset::new(1.0, 1.0)));
+    content.push(rect(0.0, Color::BLUE));
+    let mut list = DisplayList::default();
+    list.boundaries.push(Boundary { at: 0, key: 1 });
+    list.push(rect(10.0, Color::RED));
+    list.groups.push(DrawGroup {
+        key: 1,
+        version: 1,
+        layer: None,
+        content: std::sync::Arc::new(content),
+        descendants: 0,
+        empty: false,
+    });
+    let mut renderer = RasterRenderer::new(20, 20);
+    renderer.render(&list, Color::WHITE, 1.0, &FixedTextMeasurer::default());
+    assert_eq!(renderer.pixel(3, 3), Color::BLUE);
+    assert_eq!(renderer.pixel(7, 7), Color::WHITE, "clipped inside the group");
+    assert_eq!(renderer.pixel(10, 0), Color::RED, "neither clipped nor moved after it");
+}

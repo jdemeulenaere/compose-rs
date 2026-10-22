@@ -741,8 +741,8 @@ impl<'a> Serializer<'a> {
         let mut boundary = 0;
         for index in 0..ops.len() {
             while boundaries.get(boundary).is_some_and(|boundary| boundary.at <= index) {
+                self.write_group(boundaries[boundary].key);
                 boundary += 1;
-                self.write_group();
             }
             while self.folds.last().is_some_and(|(end, _)| *end < index) {
                 self.folds.pop();
@@ -760,8 +760,8 @@ impl<'a> Serializer<'a> {
             let alpha: f32 = self.folds.iter().map(|(_, alpha)| alpha).product();
             write_op(&ops[index], alpha, &recording.shaders, self.resources, self.out);
         }
-        for _ in boundary..boundaries.len() {
-            self.write_group();
+        for rest in &boundaries[boundary..] {
+            self.write_group(rest.key);
         }
     }
 
@@ -780,11 +780,17 @@ impl<'a> Serializer<'a> {
         false
     }
 
-    /// Writes the next group's record: copied if the cache has its version (its operations
-    /// untouched), else its header and its content (its layer's operations left out).
-    fn write_group(&mut self) {
+    /// Writes the next group's record, the one of the boundary of `key`: copied if the cache has
+    /// its version (its operations untouched), else its header and its content (its layer's
+    /// operations left out).
+    fn write_group(&mut self, key: u64) {
         let groups: &'a [DrawGroup] = self.groups;
-        let Some(group) = groups.get(self.next) else { return };
+        let group = groups.get(self.next);
+        debug_assert!(
+            group.is_some_and(|group| group.key == key),
+            "the frame's groups don't match its boundaries"
+        );
+        let Some(group) = group else { return };
         self.next += 1;
         let nested = self.next..self.next + group.descendants;
         if group.empty {

@@ -695,6 +695,7 @@ name = "compose-benchmarks"
 version = "0.1.0"
 dependencies = [
  "compose",
+ "compose-android",
  "compose-runtime",
  "compose-skia",
  "counter",

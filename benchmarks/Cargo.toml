@@ -16,6 +16,7 @@ counter = { path = "../examples/counter" }
 todo = { path = "../examples/todo" }
 feed = { path = "../examples/feed" }
 compose-skia = { path = "../crates/compose-skia" }
+compose-android = { path = "../crates/compose-android" }
 
 [[bench]]
 name = "runtime"

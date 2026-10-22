@@ -370,7 +370,7 @@ fn flatten_into(
     for boundary in &recording.boundaries {
         let at = boundary.at.clamp(from, recording.ops.len());
         extend_shifted(&mut flat.ops, &recording.ops[from..at], base);
-        flatten_group(groups, next, flat);
+        flatten_group(boundary, groups, next, flat);
         from = at;
     }
     extend_shifted(&mut flat.ops, &recording.ops[from..], base);
@@ -378,8 +378,18 @@ fn flatten_into(
 
 /// Appends the group at `next` (and the ones nested in it) to `flat`: its layer's operations
 /// around its content, none if it draws nothing.
-fn flatten_group(groups: &[DrawGroup], next: &mut usize, flat: &mut FlatDisplayList) {
-    let Some(group) = groups.get(*next) else { return };
+fn flatten_group(
+    boundary: &Boundary,
+    groups: &[DrawGroup],
+    next: &mut usize,
+    flat: &mut FlatDisplayList,
+) {
+    let group = groups.get(*next);
+    debug_assert!(
+        group.is_some_and(|group| group.key == boundary.key),
+        "the frame's groups don't match its boundaries"
+    );
+    let Some(group) = group else { return };
     *next += 1;
     let layer_start = flat.ops.len();
     if let Some(layer) = group.layer {

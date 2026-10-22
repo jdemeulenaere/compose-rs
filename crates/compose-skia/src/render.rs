@@ -2,7 +2,7 @@
 
 use compose_ui::{
     Color, Paint, PaintStyle, PathCommand, PathFillType, Rect,
-    platform::{DisplayList, DrawGroup, DrawOp, Renderer, TextMeasurer},
+    platform::{Boundary, DisplayList, DrawGroup, DrawOp, Renderer, TextMeasurer},
 };
 use skia_safe::{Canvas, ClipOp, EncodedImageFormat, Point, RRect, Surface, Vector, paint};
 
@@ -132,20 +132,26 @@ impl Walk<'_> {
         let start = self.canvas.save_count();
         let mut boundaries = recording.boundaries.iter().peekable();
         for (index, op) in recording.ops.iter().enumerate() {
-            while boundaries.next_if(|boundary| boundary.at <= index).is_some() {
-                self.group();
+            while let Some(boundary) = boundaries.next_if(|boundary| boundary.at <= index) {
+                self.group(boundary);
             }
             draw_op(self.canvas, op, &recording.shaders, self.measurer, start);
         }
-        for _ in boundaries {
-            self.group();
+        for boundary in boundaries {
+            self.group(boundary);
         }
         self.canvas.restore_to_count(start);
     }
 
-    /// Draws the next group: its layer's operations, then its content.
-    fn group(&mut self) {
-        let Some(group) = self.groups.get(self.next) else { return };
+    /// Draws the next group, `boundary`'s: its layer's operations, then its content in a save
+    /// of its own (as a render node: a clip or a move it leaves unbalanced stays in it).
+    fn group(&mut self, boundary: &Boundary) {
+        let group = self.groups.get(self.next);
+        debug_assert!(
+            group.is_some_and(|group| group.key == boundary.key),
+            "the frame's groups don't match its boundaries"
+        );
+        let Some(group) = group else { return };
         self.next += 1;
         if group.empty {
             self.next += group.descendants;
@@ -157,6 +163,7 @@ impl Walk<'_> {
                 draw_op(self.canvas, &op, &[], self.measurer, start);
             }
         }
+        self.canvas.save();
         self.recording(&group.content);
         self.canvas.restore_to_count(start);
     }
