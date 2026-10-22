@@ -32,6 +32,36 @@ pub trait MeasurePolicy: 'static {
     }
 }
 
+/// A closure measures as a policy, as a Kotlin lambda converts to the `MeasurePolicy` fun
+/// interface: `Layout!(modifier, measure_policy(|scope, measurables, constraints| …), …)`.
+impl<F> MeasurePolicy for F
+where
+    F: Fn(&mut MeasureScope<'_>, &[Measurable], Constraints) -> MeasureResult + 'static,
+{
+    fn measure(
+        &self,
+        scope: &mut MeasureScope<'_>,
+        measurables: &[Measurable],
+        constraints: Constraints,
+    ) -> MeasureResult {
+        self(scope, measurables, constraints)
+    }
+
+    fn debug_name(&self) -> &'static str {
+        "Layout"
+    }
+}
+
+/// `measure` as a policy for `Layout`, as Compose's `MeasurePolicy { measurables, constraints
+/// -> … }`: the closure's argument types are inferred. A new closure is a new policy (the node
+/// is measured again), as a Kotlin lambda capturing what changed; `remember` one that doesn't
+/// change.
+pub fn measure_policy(
+    measure: impl Fn(&mut MeasureScope<'_>, &[Measurable], Constraints) -> MeasureResult + 'static,
+) -> Rc<dyn MeasurePolicy> {
+    Rc::new(measure)
+}
+
 /// Something to measure: a child of the node being measured, or, for a layout modifier, the
 /// content it wraps (the rest of the chain and the node's own policy).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

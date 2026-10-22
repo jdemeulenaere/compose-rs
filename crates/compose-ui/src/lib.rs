@@ -10,6 +10,7 @@ extern crate compose_runtime as compose;
 
 pub mod alignment;
 pub mod annotated;
+pub mod brush;
 pub mod clipboard;
 pub mod constraints;
 mod dispatch;
@@ -48,10 +49,11 @@ pub use alignment::{
     Alignment, HorizontalAlignment, LOCAL_LAYOUT_DIRECTION, LayoutDirection, VerticalAlignment,
 };
 pub use annotated::{AnnotatedString, AnnotatedStringBuilder, SpanRange, SpanStyle};
+pub use brush::{Brush, Gradient, Shader, ShaderIndex, TileMode};
 pub use clipboard::{Clipboard, MemoryClipboard};
 pub use constraints::Constraints;
 pub use display_list::{DisplayList, DrawGroup, DrawOp, Renderer};
-pub use draw::DrawScope;
+pub use draw::{DrawScope, SharedPath};
 pub use focus_requester::FocusRequester;
 pub use graphics::{
     Color, CornerSize, Outline, Paint, PaintStyle, RECTANGLE_SHAPE, Shape, StrokeCap,
@@ -66,7 +68,7 @@ pub use input::{
 pub use interaction::MutableInteractionSource;
 pub use layout::{
     EmptyMeasurePolicy, Layout, Measurable, MeasurePolicy, MeasureResult, MeasureScope, Placeable,
-    StackMeasurePolicy, emit_layout_node, empty_measure_policy,
+    StackMeasurePolicy, emit_layout_node, empty_measure_policy, measure_policy,
 };
 pub use layout_callbacks::{GlobalPositionAwareModifierNode, LayoutCoordinates};
 pub use modifier::{

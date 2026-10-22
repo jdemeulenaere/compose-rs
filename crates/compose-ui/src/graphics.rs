@@ -241,17 +241,22 @@ impl compose_runtime::ComposeArg for StrokeCap {
 }
 
 /// What a draw operation paints with, as a subset of Compose's `Paint`.
+///
+/// A paint with a `shader` (a gradient, from `DrawScope::brush_paint`) paints with it; its
+/// `color` is then the gradient's average, what a renderer without shaders paints instead.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Paint {
     pub color: Color,
     pub style: PaintStyle,
     /// A stroke's ends.
     pub cap: StrokeCap,
+    /// The shader, in the display list it's recorded in (`DisplayList::shaders`).
+    pub shader: Option<crate::brush::ShaderIndex>,
 }
 
 impl Paint {
     pub fn fill(color: Color) -> Paint {
-        Paint { color, style: PaintStyle::Fill, cap: StrokeCap::Butt }
+        Paint { color, style: PaintStyle::Fill, cap: StrokeCap::Butt, shader: None }
     }
 
     /// A stroke `width` pixels wide, its ends flat, as `Stroke(width)`.
@@ -261,7 +266,14 @@ impl Paint {
 
     /// A stroke with `cap` ends, as `Stroke(width, cap = …)`.
     pub fn stroke_capped(color: Color, width: f32, cap: StrokeCap) -> Paint {
-        Paint { color, style: PaintStyle::Stroke(width), cap }
+        Paint { color, style: PaintStyle::Stroke(width), cap, shader: None }
+    }
+
+    /// The same paint at `alpha` (0 to 1) of its opacity, as `Paint.alpha` and the draw calls'
+    /// `alpha`: its color's alpha multiplied (a brush's alpha is given to `brush_paint`).
+    pub fn with_alpha(self, alpha: f32) -> Paint {
+        let opacity = self.color.alpha() as f32 / 255.0 * alpha.clamp(0.0, 1.0);
+        Paint { color: self.color.with_alpha(opacity), ..self }
     }
 }
 

@@ -317,6 +317,7 @@ fn foldable_layer(ops: &[DrawOp], start: usize) -> Option<usize> {
             DrawOp::Translate(_)
             | DrawOp::ClipRect(_)
             | DrawOp::ClipRoundRect(..)
+            | DrawOp::ClipPath { .. }
             | DrawOp::Transform { .. } => {}
             DrawOp::DrawRect(..)
             | DrawOp::DrawRoundRect(..)
@@ -465,6 +466,9 @@ pub fn write_display_list(list: &DisplayList, resources: &mut Resources, out: &m
                 out.f32(scale.1);
                 out.paint(&faded_paint(paint));
             }
+            // TODO(android): clip to the path (a `CLIP_PATH` tag replayed with
+            // `Canvas.clipPath`); skipped for now, so what follows isn't clipped.
+            DrawOp::ClipPath { .. } => {}
         }
     }
     close_groups(&mut open, usize::MAX, out);
