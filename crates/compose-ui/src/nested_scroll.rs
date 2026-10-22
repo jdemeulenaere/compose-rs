@@ -87,6 +87,13 @@ impl NestedScrollChain {
         NestedScrollChain { connections: connections.into() }
     }
 
+    /// Adds `connection` for the nodes inside the one handling the pointer event, during its
+    /// initial pass: a scrollable, a nested-scroll parent of the scrollables inside it, as
+    /// Compose's `ScrollingLogic`.
+    pub fn enter(connection: Rc<dyn NestedScrollConnection>) {
+        PASSED.with(|passed| passed.borrow_mut().push(connection));
+    }
+
     pub fn is_empty(&self) -> bool {
         self.connections.is_empty()
     }
@@ -175,6 +182,10 @@ struct NestedScrollNode {
 impl ModifierNode for NestedScrollNode {
     fn as_pointer_input(&mut self) -> Option<&mut dyn PointerInputModifierNode> {
         Some(self)
+    }
+    /// Not hit itself: it hears the events of what's hit inside it.
+    fn is_pointer_observer(&self) -> bool {
+        true
     }
 }
 

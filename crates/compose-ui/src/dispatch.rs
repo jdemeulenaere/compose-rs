@@ -17,6 +17,18 @@ pub(crate) struct HitEntry {
     pub(crate) index: u16,
     pub(crate) layer: u16,
     pub(crate) version: u32,
+    /// An observer: on the path only if something inside it is hit.
+    pub(crate) observer: bool,
+}
+
+/// Whether the entries pushed from `start` hit anything but observers; if not, they're dropped.
+fn hit_since(path: &mut Vec<HitEntry>, start: usize) -> bool {
+    if path[start..].iter().any(|entry| !entry.observer) {
+        true
+    } else {
+        path.truncate(start);
+        false
+    }
 }
 
 fn contains(size: IntSize, point: Offset) -> bool {
@@ -80,7 +92,7 @@ impl UiTree {
                         .contains(local - origins[layer])
                     {
                         // Outside the clip: nothing after it, nor the children, is hit.
-                        return path.len() > start;
+                        return hit_since(path, start);
                     }
                 }
                 if bits & capability::POINTER != 0
@@ -91,6 +103,7 @@ impl UiTree {
                         index: index as u16,
                         layer: layer as u16,
                         version: value.chain_version,
+                        observer: value.chain[index].is_pointer_observer(),
                     });
                 }
                 if bits & capability::LAYOUT != 0 {
@@ -113,7 +126,7 @@ impl UiTree {
                 break;
             }
         }
-        path.len() > start
+        hit_since(path, start)
     }
 
     /// Dispatches a pointer event at `position` in the root. A press captures its hit path:

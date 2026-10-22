@@ -202,8 +202,13 @@ struct ScrollConnection {
 }
 
 impl NestedScrollConnection for ScrollConnection {
-    fn on_pre_scroll(&self, available: Offset, _source: NestedScrollSource) -> Offset {
+    fn on_pre_scroll(&self, available: Offset, source: NestedScrollSource) -> Offset {
         let state = &self.state;
+        // A new drag or wheel turn stops a settle going on, as Compose's (its fling's
+        // coroutine is cancelled).
+        if source == NestedScrollSource::UserInput && state.inner.height_offset.is_running() {
+            state.inner.height_offset.stop();
+        }
         let collapses = match self.kind {
             ScrollKind::Pinned => false,
             ScrollKind::EnterAlways => true,

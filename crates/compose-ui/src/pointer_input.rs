@@ -589,6 +589,7 @@ impl PointerInputDriver {
             job.cancel();
         }
         self.scope.inner.pressed.borrow_mut().clear();
+        self.scope.inner.last_positions.borrow_mut().clear();
     }
 
     /// Delivers `event`, in `pass`, to the block (starting it at the first event).
