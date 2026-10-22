@@ -34,10 +34,10 @@ cargo run -p todo      # also: counter, gallery
 
 ### Android apps
 
-Needs the Android SDK and NDK (`ANDROID_HOME`, or `~/Library/Android/sdk` on macOS), Rust's `aarch64-linux-android` target (`rustup target add aarch64-linux-android`), JDK 17 and Gradle 9, and an arm64 device connected with adb. Gradle builds the Rust library with `android/build-rust.sh`.
+Needs the Android SDK and NDK (`ANDROID_HOME`, or `~/Library/Android/sdk` on macOS), Rust's `aarch64-linux-android` target (`rustup target add aarch64-linux-android`), JDK 17 or newer, and an arm64 device connected with adb. The Gradle wrapper (`android/gradlew`) fetches Gradle itself, and builds the Rust library with `android/build-rust.sh`.
 
 ```bash
-gradle -p android :demo:installDebug    # the gallery, todo and counter in Kotlin Compose tabs
+android/gradlew -p android :demo:installDebug    # the gallery, todo and counter in Kotlin Compose tabs
 adb shell am start -n rs.compose.demo/.MainActivity
 ```
 
@@ -51,7 +51,7 @@ cargo bench -p compose-benchmarks                    # runtime and frame benchma
 The Android comparison with Jetpack Compose ([docs/12](docs/12-android-performance.md)) installs both versions of the feed app, then measures them with Perfetto; `measure.py` needs a [trace_processor_shell](https://perfetto.dev/docs/analysis/trace-processor) binary:
 
 ```bash
-gradle -p android :bench-compose:installRelease :bench-rs:installRelease
+android/gradlew -p android :bench-compose:installRelease :bench-rs:installRelease
 python3 android/bench/measure.py --trace-processor path/to/trace_processor_shell --out bench-out
 python3 android/bench/summarize.py bench-out/report.json
 ```

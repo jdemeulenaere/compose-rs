@@ -151,7 +151,7 @@ You need:
 - a macOS or Linux machine to build on: `build-rust.sh` is a POSIX shell script;
 - the Android SDK and NDK. The script finds the SDK through `ANDROID_HOME` (or `ANDROID_SDK_ROOT`), falling back to macOS's default location, and doesn't read Gradle's `local.properties`: on Linux, set `ANDROID_HOME`. It takes the NDK from `ANDROID_NDK_HOME`, or the newest under the SDK's `ndk/`;
 - the Rust target: `rustup target add aarch64-linux-android`;
-- Gradle with the Android Gradle plugin 9.4 (whose built-in Kotlin support compiles the Kotlin), the Kotlin Compose compiler plugin 2.4 for Kotlin Compose screens, and JDK 17. Android Studio provides them; the repository has no Gradle wrapper.
+- JDK 17 or newer. The Gradle wrapper (`android/gradlew`) fetches Gradle 9.6, which loads the Android Gradle plugin 9.4 (whose built-in Kotlin support compiles the Kotlin) and the Kotlin Compose compiler plugin 2.4; Android Studio opens the `android/` project with the same wrapper.
 
 Only arm64 devices are built for (64-bit phones and the arm64 emulator images). The minimum SDK is 29, compiled against SDK 36.
 
@@ -268,6 +268,6 @@ What the view does for its app:
 
 ### 4. Build and run
 
-The demo is a working template: `examples/android-demo` is its Rust library (the counter, todo and gallery examples) and `android/demo` its Kotlin app, which shows each example in a tab of a Kotlin Compose screen. From `android/`, with a device connected, `gradle :demo:installDebug` builds and installs it (`gradle :hello:installDebug` for the app above).
+The demo is a working template: `examples/android-demo` is its Rust library (the counter, todo and gallery examples) and `android/demo` its Kotlin app, which shows each example in a tab of a Kotlin Compose screen. From `android/`, with a device connected, `./gradlew :demo:installDebug` builds and installs it (`./gradlew :hello:installDebug` for the app above).
 
 A Rust panic aborts the app at the JNI boundary; its message is in logcat under the tag `compose-rs`. [Logging](kotlin-to-rust.md#logging) covers the app's own messages, and [Profiling](performance.md#profiling) Perfetto traces of compose-rs's frame phases.
