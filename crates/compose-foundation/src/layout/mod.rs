@@ -16,7 +16,11 @@ use compose_ui::{
 };
 use smallvec_free::Buffer;
 
-pub use arrangement::{Arrangement, SpacedAlignment};
+pub(crate) use arrangement::MainAxisArrangement;
+pub use arrangement::{
+    AlignedBy, Arrangement, HorizontalArrangement, HorizontalArrangementPolicy,
+    HorizontalOrVerticalArrangement, SpacedBy, VerticalArrangement, VerticalArrangementPolicy,
+};
 pub use compose_ui::{BoxScope, ColumnScope, PaddingValues, RowScope, SizeSpec};
 pub use window_insets::{WindowInsets, WindowInsetsModifiers, WindowInsetsSides};
 
@@ -99,7 +103,7 @@ impl AxisConstraints {
 /// across it.
 pub struct RowColumnMeasurePolicy {
     orientation: Orientation,
-    arrangement: Arrangement,
+    arrangement: MainAxisArrangement,
     /// A `Row`'s vertical bias or a `Column`'s horizontal bias.
     cross_bias: f32,
 }
@@ -376,14 +380,16 @@ pub fn Canvas(modifier: Modifier, on_draw: impl Fn(&mut compose_ui::DrawScope<'_
 #[composable]
 pub fn Row(
     #[default(crate::Modifier)] modifier: Modifier,
-    #[default(crate::layout::Arrangement::Start)] horizontal_arrangement: Arrangement,
+    #[default(crate::layout::Arrangement::Start)] horizontal_arrangement: impl Into<
+        HorizontalArrangement,
+    >,
     #[default(crate::Alignment::TOP)] vertical_alignment: VerticalAlignment,
     content: impl Fn(RowScope) + 'static,
 ) {
-    let policy = remember_keyed((horizontal_arrangement, vertical_alignment), || {
+    let policy = remember_keyed((horizontal_arrangement.clone(), vertical_alignment), || {
         Rc::new(RowColumnMeasurePolicy {
             orientation: Orientation::Horizontal,
-            arrangement: horizontal_arrangement,
+            arrangement: horizontal_arrangement.0,
             cross_bias: vertical_alignment.bias,
         }) as Rc<dyn MeasurePolicy>
     });
@@ -394,14 +400,14 @@ pub fn Row(
 #[composable]
 pub fn Column(
     #[default(crate::Modifier)] modifier: Modifier,
-    #[default(crate::layout::Arrangement::Start)] vertical_arrangement: Arrangement,
+    #[default(crate::layout::Arrangement::Top)] vertical_arrangement: impl Into<VerticalArrangement>,
     #[default(crate::Alignment::START)] horizontal_alignment: HorizontalAlignment,
     content: impl Fn(ColumnScope) + 'static,
 ) {
-    let policy = remember_keyed((vertical_arrangement, horizontal_alignment), || {
+    let policy = remember_keyed((vertical_arrangement.clone(), horizontal_alignment), || {
         Rc::new(RowColumnMeasurePolicy {
             orientation: Orientation::Vertical,
-            arrangement: vertical_arrangement,
+            arrangement: vertical_arrangement.0,
             cross_bias: horizontal_alignment.bias,
         }) as Rc<dyn MeasurePolicy>
     });

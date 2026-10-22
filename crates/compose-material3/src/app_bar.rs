@@ -702,7 +702,7 @@ fn two_rows_top_app_bar(bar: TwoRows) {
                 (policies.clone(), top_alpha.clone(), bottom_alpha.clone());
             Column(
                 Modifier,
-                Arrangement::TOP,
+                Arrangement::Top,
                 Alignment::START,
                 compose_runtime::callback(move |_| {
                     top_app_bar_row(

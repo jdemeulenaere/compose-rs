@@ -344,7 +344,7 @@ fn a_scrolled_lazy_list_keeps_its_records_sound() {
             given,
             compose_foundation::layout::PaddingValues::ZERO,
             false,
-            compose_foundation::layout::Arrangement::TOP,
+            compose_foundation::layout::Arrangement::Top,
             compose_foundation::Alignment::START,
             true,
             callback(move |scope: compose_foundation::LazyListScope| {

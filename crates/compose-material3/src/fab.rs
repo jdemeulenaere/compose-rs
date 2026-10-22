@@ -292,7 +292,7 @@ pub fn ExtendedFloatingActionButton(
                         Dp::UNSPECIFIED,
                     ))
                     .padding_sides(start, Dp(0.0), end, Dp(0.0)),
-                if expanded { Arrangement::Start } else { Arrangement::Center },
+                if expanded { Arrangement::Start } else { Arrangement::Center.into() },
                 Alignment::CENTER_VERTICALLY,
                 compose_runtime::callback(move |_| {
                     icon();

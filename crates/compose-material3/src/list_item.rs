@@ -120,7 +120,7 @@ pub fn ListItem(
                         (headline.clone(), overline.clone(), supporting.clone());
                     Column(
                         Modifier.weight(row, 1.0),
-                        Arrangement::TOP,
+                        Arrangement::Top,
                         Alignment::START,
                         compose_runtime::callback(move |_| {
                             if let Some(overline) = overline.clone() {

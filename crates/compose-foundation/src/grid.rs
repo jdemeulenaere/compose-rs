@@ -8,7 +8,9 @@ use std::rc::Rc;
 use compose_runtime::{ComposeArg, ObjectHandle, Owned, composable, hash_key};
 use compose_ui::{Alignment, Dp, Modifier, PaddingValues};
 
-use crate::layout::{Arrangement, Box, BoxWithConstraints, BoxWithConstraintsScope};
+use crate::layout::{
+    Box, BoxWithConstraints, BoxWithConstraintsScope, HorizontalArrangement, VerticalArrangement,
+};
 use crate::lazy::{LazyColumn, LazyListScope, LazyListState};
 
 /// How a grid's width is cut into columns, as Compose's `GridCells`.
@@ -251,8 +253,10 @@ pub fn LazyVerticalGrid(
     #[default(crate::Modifier)] modifier: Modifier,
     #[default(crate::remember_lazy_grid_state(0, 0))] state: LazyGridState,
     #[default(crate::layout::PaddingValues::ZERO)] content_padding: PaddingValues,
-    #[default(crate::layout::Arrangement::TOP)] vertical_arrangement: Arrangement,
-    #[default(crate::layout::Arrangement::Start)] horizontal_arrangement: Arrangement,
+    #[default(crate::layout::Arrangement::Top)] vertical_arrangement: impl Into<VerticalArrangement>,
+    #[default(crate::layout::Arrangement::Start)] horizontal_arrangement: impl Into<
+        HorizontalArrangement,
+    >,
     content: impl Fn(LazyGridScope) + 'static,
 ) {
     let scope = LazyGridScope::default();
@@ -268,7 +272,7 @@ pub fn LazyVerticalGrid(
         compose_runtime::callback(move |box_scope: BoxWithConstraintsScope| {
             let padding = density.round_to_px(content_padding.start)
                 + density.round_to_px(content_padding.end);
-            let spacing = horizontal_arrangement.spacing(&density);
+            let spacing = density.round_to_px(horizontal_arrangement.spacing());
             let available = (box_scope.constraints.max_width - padding).max(0);
             let count = columns.count(available, spacing, density);
             // The cells' constraints, for those composing for theirs (`BoxWithConstraints`).

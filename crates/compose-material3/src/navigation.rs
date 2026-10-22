@@ -51,7 +51,7 @@ pub fn NavigationBar(
         compose_runtime::callback(move || {
             Row(
                 Modifier.fill_max_width().height(80.dp()),
-                Arrangement::spaced_by(8.dp()),
+                Arrangement::spaced_by(8.dp()).into(),
                 Alignment::CENTER_VERTICALLY,
                 content.clone(),
             );
@@ -344,7 +344,7 @@ pub fn NavigationRail(
                     ))
                     .padding_horizontal_vertical(Dp(0.0), 4.dp())
                     .selectable_group(),
-                Arrangement::spaced_by(4.dp()),
+                Arrangement::spaced_by(4.dp()).into(),
                 Alignment::CENTER_HORIZONTALLY,
                 compose_runtime::callback(move |column: ColumnScope| {
                     if let Some(header) = header.clone() {

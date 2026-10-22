@@ -57,7 +57,7 @@ fn chip(
             (label.clone(), leading_icon.clone(), trailing_icon.clone());
         Row(
             surface.clone().padding_sides(start, 0.dp(), end, 0.dp()),
-            Arrangement::spaced_by(8.dp()),
+            Arrangement::spaced_by(8.dp()).into(),
             Alignment::CENTER_VERTICALLY,
             compose_runtime::callback(move |_| {
                 if let Some(leading) = leading.clone() {

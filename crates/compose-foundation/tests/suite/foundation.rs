@@ -54,7 +54,7 @@ fn a_row_shares_its_space_by_weight() {
 
 #[test]
 fn row_arrangements_follow_compose() {
-    let arrangement = mutable_state_of(Arrangement::SpaceBetween);
+    let arrangement = mutable_state_of(HorizontalArrangement::from(Arrangement::SpaceBetween));
     let handle = arrangement.handle();
     let mut ui = ComposeTestRule::sized(IntSize::new(100, 50), move || {
         Row!(modifier = Modifier.fill_max_width(), horizontal_arrangement = handle.get(), {
@@ -63,12 +63,61 @@ fn row_arrangements_follow_compose() {
         });
     });
     assert_eq!(bounds(&mut ui, "b").left, 90.0);
-    arrangement.set(Arrangement::Center);
+    arrangement.set(Arrangement::Center.into());
     ui.wait_for_idle();
     assert_eq!((bounds(&mut ui, "a").left, bounds(&mut ui, "b").left), (40.0, 50.0));
     arrangement.set(Arrangement::End);
     ui.wait_for_idle();
     assert_eq!(bounds(&mut ui, "a").left, 80.0);
+}
+
+/// A row to the end, then by a custom arrangement (as an object implementing Compose's
+/// `Arrangement.Horizontal`), and a column aligned to its bottom.
+#[test]
+fn arrangements_are_per_axis_and_can_be_custom() {
+    struct Reversed;
+    impl HorizontalArrangementPolicy for Reversed {
+        fn arrange(
+            &self,
+            _: &compose_ui::Density,
+            total_size: i32,
+            sizes: &[i32],
+            _: compose_ui::LayoutDirection,
+            out_positions: &mut [i32],
+        ) {
+            let mut end = total_size;
+            for (index, size) in sizes.iter().enumerate() {
+                end -= size;
+                out_positions[index] = end;
+            }
+        }
+    }
+    let custom = mutable_state_of(false);
+    let handle = custom.handle();
+    let mut ui = ComposeTestRule::sized(IntSize::new(100, 100), move || {
+        let arrangement = remember(|| HorizontalArrangement::custom(Reversed));
+        Row!(
+            modifier = Modifier.fill_max_width(),
+            horizontal_arrangement =
+                if handle.get() { arrangement.clone() } else { Arrangement::End },
+            {
+                Spacer(Modifier.size(10.dp()).test_tag("a"));
+                Spacer(Modifier.size(20.dp()).test_tag("b"));
+            }
+        );
+        Column!(
+            modifier = Modifier.fill_max_size(),
+            vertical_arrangement = Arrangement::aligned(Alignment::BOTTOM),
+            {
+                Spacer(Modifier.size(10.dp()).test_tag("c"));
+            }
+        );
+    });
+    assert_eq!((bounds(&mut ui, "a").left, bounds(&mut ui, "b").left), (70.0, 80.0));
+    assert_eq!(bounds(&mut ui, "c").top, 90.0);
+    custom.set(true);
+    ui.wait_for_idle();
+    assert_eq!((bounds(&mut ui, "a").left, bounds(&mut ui, "b").left), (90.0, 70.0));
 }
 
 #[test]

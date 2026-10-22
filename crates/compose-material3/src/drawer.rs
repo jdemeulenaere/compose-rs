@@ -501,7 +501,7 @@ pub fn ModalDrawerSheet(
         compose_runtime::callback(move || {
             Column(
                 Modifier.fill_max_height(),
-                compose_foundation::layout::Arrangement::Start,
+                compose_foundation::layout::Arrangement::Top,
                 Alignment::START,
                 content.clone(),
             );

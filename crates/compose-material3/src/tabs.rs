@@ -334,7 +334,7 @@ pub fn Tab(
             let (text, icon) = (text.clone(), icon.clone());
             Column(
                 modifier.clone(),
-                Arrangement::Center,
+                Arrangement::Center.into(),
                 Alignment::CENTER_HORIZONTALLY,
                 compose_runtime::callback(move |_| {
                     if let Some(icon) = icon.clone() {

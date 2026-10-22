@@ -18,10 +18,15 @@ fn bounds(ui: &mut ComposeTestRule, tag: &str) -> Rect {
     ui.on_node_with_tag(tag).fetch_semantics_node().bounds
 }
 
-fn arrange(arrangement: Arrangement, total: i32, sizes: &[i32], rtl: bool) -> Vec<i32> {
+fn arrange(
+    arrangement: impl Into<HorizontalArrangement>,
+    total: i32,
+    sizes: &[i32],
+    rtl: bool,
+) -> Vec<i32> {
     let mut positions = vec![0; sizes.len()];
     let direction = if rtl { LayoutDirection::Rtl } else { LayoutDirection::Ltr };
-    arrangement.arrange(total, sizes, direction, &Density::default(), &mut positions);
+    arrangement.into().arrange(&Density::default(), total, sizes, direction, &mut positions);
     positions
 }
 
@@ -117,7 +122,7 @@ fn spaced_by_keeps_overflowing_children_inside() {
     assert_eq!(arrange(Arrangement::spaced_by(10.dp()), 100, &[60, 50], false), [0, 50]);
     assert_eq!(
         arrange(
-            Arrangement::spaced_by_aligned(10.dp(), SpacedAlignment::Center),
+            Arrangement::spaced_by((10.dp(), Alignment::CENTER_HORIZONTALLY)),
             100,
             &[60, 60],
             false

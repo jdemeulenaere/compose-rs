@@ -133,7 +133,7 @@ fn fill_parent_max_size_takes_the_viewport_less_the_padding() {
 }
 
 #[composable]
-fn Numbers(reverse: bool, arrangement: Arrangement, count: usize, state: LazyListState) {
+fn Numbers(reverse: bool, arrangement: VerticalArrangement, count: usize, state: LazyListState) {
     LazyColumn!(
         modifier = Modifier.size_wh(100.dp(), 100.dp()),
         state = state,
@@ -152,7 +152,7 @@ fn a_reversed_list_starts_at_the_bottom_and_scrolls_up() {
     let state = LazyListState::new(0, 0);
     let given = *state;
     let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || {
-        Numbers(true, Arrangement::TOP, 10, given)
+        Numbers(true, Arrangement::Top, 10, given)
     });
     assert_eq!(top_of(&mut ui, "0"), 70.0);
     assert_eq!(top_of(&mut ui, "1"), 40.0);
@@ -183,13 +183,13 @@ fn a_reversed_list_starts_at_the_bottom_and_scrolls_up() {
 #[test]
 fn a_short_reversed_list_is_arranged_from_the_top_in_reverse_order() {
     let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), || {
-        Numbers(true, Arrangement::TOP, 2, remember(|| LazyListState::new(0, 0)))
+        Numbers(true, Arrangement::Top, 2, remember(|| LazyListState::new(0, 0)))
     });
     // As Compose's: (top) 1 0 … (bottom).
     assert_eq!(top_of(&mut ui, "1"), 0.0);
     assert_eq!(top_of(&mut ui, "0"), 30.0);
     let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), || {
-        Numbers(true, Arrangement::BOTTOM, 2, remember(|| LazyListState::new(0, 0)))
+        Numbers(true, Arrangement::Bottom, 2, remember(|| LazyListState::new(0, 0)))
     });
     assert_eq!(top_of(&mut ui, "0"), 70.0);
     assert_eq!(top_of(&mut ui, "1"), 40.0);

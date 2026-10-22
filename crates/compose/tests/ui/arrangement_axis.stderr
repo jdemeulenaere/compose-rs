@@ -1,0 +1,17 @@
+error[E0277]: the trait bound `HorizontalArrangement: From<VerticalArrangement>` is not satisfied
+ --> tests/ui/arrangement_axis.rs:8:35
+  |
+8 |     Row!(horizontal_arrangement = Arrangement::Top, {});
+  |     ------------------------------^^^^^^^^^^^^^^^^-----
+  |     |                             |
+  |     |                             the trait `From<VerticalArrangement>` is not implemented for `HorizontalArrangement`
+  |     required by a bound introduced by this call
+  |
+help: the trait `From<VerticalArrangement>` is not implemented for `HorizontalArrangement`
+      but trait `From<HorizontalOrVerticalArrangement>` is implemented for it
+ --> $WORKSPACE/crates/compose-foundation/src/layout/arrangement.rs
+  |
+  | impl From<HorizontalOrVerticalArrangement> for HorizontalArrangement {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  = help: for that trait implementation, expected `HorizontalOrVerticalArrangement`, found `VerticalArrangement`
+  = note: required for `VerticalArrangement` to implement `Into<HorizontalArrangement>`

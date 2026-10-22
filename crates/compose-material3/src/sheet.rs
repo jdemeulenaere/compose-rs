@@ -481,7 +481,7 @@ pub fn ModalBottomSheet(
                             let content = content.clone();
                             Column(
                                 Modifier.fill_max_width().padding_values(content_window_insets),
-                                compose_foundation::layout::Arrangement::TOP,
+                                compose_foundation::layout::Arrangement::Top,
                                 Alignment::START,
                                 compose_runtime::callback(move |column: ColumnScope| {
                                     if let Some(drag_handle) = drag_handle.clone() {

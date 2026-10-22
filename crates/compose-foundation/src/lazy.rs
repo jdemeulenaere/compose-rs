@@ -30,7 +30,7 @@ use compose_ui::{
     platform::NodeId,
 };
 
-use crate::layout::Arrangement;
+use crate::layout::{HorizontalArrangement, MainAxisArrangement, VerticalArrangement};
 use crate::scroll::{DragScroller, bring_into_view_delta};
 
 /// Items composed beyond the viewport on each side, ready when scrolling reaches them, and
@@ -786,7 +786,7 @@ struct ListInfo {
     padding: PaddingValues,
     /// Laid out from the end: the first item at the bottom (the right of a row).
     reverse: bool,
-    arrangement: Arrangement,
+    arrangement: MainAxisArrangement,
     /// The items' alignment across the list: its horizontal bias for a column, its vertical
     /// one for a row.
     alignment: Alignment,
@@ -806,7 +806,7 @@ impl PartialEq for ListInfo {
 /// A vertical lazy list, as Compose's `LazyColumn`. `reverse_layout` lays the items out from
 /// the bottom (the first one there, scrolled from there); the arrangement stays from the top,
 /// as Compose's (whose default becomes `Arrangement.Bottom` when reversed: pass
-/// `Arrangement::BOTTOM` here). `user_scroll_enabled = false` keeps drags and the wheel from
+/// `Arrangement::Bottom` here). `user_scroll_enabled = false` keeps drags and the wheel from
 /// scrolling it (the state still does).
 #[composable(non_restartable)]
 #[allow(non_snake_case)]
@@ -815,7 +815,7 @@ pub fn LazyColumn(
     #[default(crate::remember_lazy_list_state(0, 0))] state: LazyListState,
     #[default(crate::layout::PaddingValues::ZERO)] content_padding: PaddingValues,
     #[default(false)] reverse_layout: bool,
-    #[default(crate::layout::Arrangement::TOP)] vertical_arrangement: Arrangement,
+    #[default(crate::layout::Arrangement::Top)] vertical_arrangement: impl Into<VerticalArrangement>,
     #[default(crate::Alignment::START)] horizontal_alignment: HorizontalAlignment,
     #[default(true)] user_scroll_enabled: bool,
     content: impl Fn(LazyListScope) + 'static,
@@ -826,7 +826,7 @@ pub fn LazyColumn(
         content_padding,
         true,
         reverse_layout,
-        vertical_arrangement,
+        vertical_arrangement.into().0,
         Alignment::new(horizontal_alignment.bias, -1.0),
         user_scroll_enabled,
         content,
@@ -842,7 +842,9 @@ pub fn LazyRow(
     #[default(crate::remember_lazy_list_state(0, 0))] state: LazyListState,
     #[default(crate::layout::PaddingValues::ZERO)] content_padding: PaddingValues,
     #[default(false)] reverse_layout: bool,
-    #[default(crate::layout::Arrangement::Start)] horizontal_arrangement: Arrangement,
+    #[default(crate::layout::Arrangement::Start)] horizontal_arrangement: impl Into<
+        HorizontalArrangement,
+    >,
     #[default(crate::Alignment::TOP)] vertical_alignment: VerticalAlignment,
     #[default(true)] user_scroll_enabled: bool,
     content: impl Fn(LazyListScope) + 'static,
@@ -853,7 +855,7 @@ pub fn LazyRow(
         content_padding,
         false,
         reverse_layout,
-        horizontal_arrangement,
+        horizontal_arrangement.into().0,
         Alignment::new(-1.0, vertical_alignment.bias),
         user_scroll_enabled,
         content,
@@ -868,7 +870,7 @@ fn LazyList(
     content_padding: PaddingValues,
     vertical: bool,
     reverse: bool,
-    arrangement: Arrangement,
+    arrangement: MainAxisArrangement,
     alignment: Alignment,
     user_scroll_enabled: bool,
     content: impl Fn(LazyListScope) + 'static,
