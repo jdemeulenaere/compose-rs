@@ -4,6 +4,7 @@
 //! `Modifier` (docs/06-ui.md).
 
 mod arrangement;
+mod window_insets;
 
 use std::rc::Rc;
 
@@ -17,6 +18,7 @@ use smallvec_free::Buffer;
 
 pub use arrangement::{Arrangement, SpacedAlignment};
 pub use compose_ui::{BoxScope, ColumnScope, PaddingValues, RowScope, SizeSpec};
+pub use window_insets::{WindowInsets, WindowInsetsModifiers, WindowInsetsSides};
 
 /// Scratch space for a policy's children, without allocating for up to 16 of them.
 mod smallvec_free {

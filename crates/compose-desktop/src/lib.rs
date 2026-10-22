@@ -274,6 +274,7 @@ impl App {
         );
         host.with_tree(|tree| tree.set_clipboard(Box::new(SystemClipboard::new())));
         host.set_layout_direction(props.layout_direction);
+        update_configuration(&mut host, &window);
         let waker = window.clone();
         host.set_frame_waker(move || waker.request_redraw());
         if !self.started {
@@ -472,6 +473,7 @@ impl ApplicationHandler<UserEvent> for App {
             WindowEvent::Resized(size) => {
                 if let Some(shown) = self.windows.get_mut(&id) {
                     shown.host.resize(IntSize::new(size.width as i32, size.height as i32));
+                    update_configuration(&mut shown.host, &shown.window);
                     // The window's state follows the user's resize.
                     let scale = shown.window.scale_factor() as f32;
                     let logical = WindowSize {
@@ -489,6 +491,13 @@ impl ApplicationHandler<UserEvent> for App {
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
                 if let Some(shown) = self.windows.get_mut(&id) {
                     shown.host.set_density(Density::new(scale_factor as f32));
+                    update_configuration(&mut shown.host, &shown.window);
+                }
+            }
+            // The system's appearance changed: `is_system_in_dark_theme` follows.
+            WindowEvent::ThemeChanged(_) => {
+                if let Some(shown) = self.windows.get_mut(&id) {
+                    update_configuration(&mut shown.host, &shown.window);
                 }
             }
             event => {
@@ -635,6 +644,8 @@ impl ApplicationHandler<UserEvent> for App {
 /// lambdas of its `Window`s there, so a window's content recomposes only for what it reads; a
 /// plain closure's lambdas are new at each application pass.
 pub fn application(content: impl Fn() + 'static) {
+    // `decode_image_bytes` and `image_resource` decode with Skia.
+    compose_ui::set_image_decoder(Arc::new(compose_skia::SkiaImageDecoder));
     let event_loop =
         EventLoop::<UserEvent>::with_user_event().build().expect("compose-desktop: an event loop");
     let proxy = event_loop.create_proxy();
@@ -688,4 +699,18 @@ pub fn run_app(options: WindowOptions, content: impl Fn() + 'static) {
             content.clone(),
         );
     });
+}
+
+/// The window's configuration for its content (`LOCAL_CONFIGURATION`): its size in dp, its
+/// density, and the system's appearance as winit reports it (light when unknown). Desktop
+/// windows have no insets: they stay zero.
+fn update_configuration(host: &mut UiHost, window: &winit::window::Window) {
+    let physical = window.inner_size();
+    let dark = window.theme() == Some(winit::window::Theme::Dark);
+    let density = Density::new(window.scale_factor() as f32);
+    host.set_configuration(compose_ui::Configuration::from_window(
+        IntSize::new(physical.width as i32, physical.height as i32),
+        density,
+        dark,
+    ));
 }

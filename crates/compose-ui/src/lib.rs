@@ -10,6 +10,7 @@ extern crate compose_runtime as compose;
 
 pub mod alignment;
 pub mod annotated;
+pub mod back;
 pub mod brush;
 pub mod clipboard;
 pub mod constraints;
@@ -33,6 +34,7 @@ pub mod modifier;
 mod nodes;
 pub mod overlay;
 pub mod path;
+pub mod platform;
 pub mod pointer_input;
 pub mod prefetch;
 mod render;
@@ -49,6 +51,7 @@ pub use alignment::{
     Alignment, HorizontalAlignment, LOCAL_LAYOUT_DIRECTION, LayoutDirection, VerticalAlignment,
 };
 pub use annotated::{AnnotatedString, AnnotatedStringBuilder, SpanRange, SpanStyle};
+pub use back::{BackHandler, LOCAL_ON_BACK_PRESSED_DISPATCHER, OnBackPressedDispatcher};
 pub use brush::{Brush, Gradient, Shader, ShaderIndex, TileMode};
 pub use clipboard::{Clipboard, MemoryClipboard};
 pub use constraints::Constraints;
@@ -60,7 +63,7 @@ pub use graphics::{
 };
 pub use graphics_layer::{GraphicsLayerScope, LayerProperties, TransformOrigin};
 pub use host::{FrameStats, LOCAL_CONSTRAINTS_HINT, LOCAL_DENSITY, UiHost};
-pub use image::ImageBitmap;
+pub use image::{ImageBitmap, ImageDecoder, decode_image_bytes, image_resource, set_image_decoder};
 pub use input::{
     Action, EventContext, Key, KeyEvent, KeyEventType, KeyModifiers, PointerEvent,
     PointerEventPass, PointerEventType, PointerIcon, PointerId, PointerType,
@@ -79,6 +82,11 @@ pub use modifier::{
 };
 pub use overlay::{PopupPositionProvider, WindowPosition};
 pub use path::{ImageVector, Path, PathCommand, PathError, PathFillType};
+pub use platform::{
+    Configuration, HostEvents, HostProps, Insets, LOCAL_CONFIGURATION, LOCAL_HOST_EVENTS,
+    LOCAL_HOST_PROPS, LOCAL_PLATFORM_WINDOW_INSETS, PlatformWindowInsets, PropValue,
+    ScreenOrientation,
+};
 pub use pointer_input::{
     Axis, DragGestures, PointerInputChange, PointerInputDriver, PointerInputScope, TapGestures,
 };

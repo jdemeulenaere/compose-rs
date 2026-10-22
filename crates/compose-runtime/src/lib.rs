@@ -34,6 +34,7 @@ mod node_tree;
 mod observe;
 mod remember;
 mod runtime;
+pub mod saveable;
 mod scope;
 mod slot_table;
 mod state;
@@ -59,6 +60,11 @@ pub use observe::ReadObserver;
 pub use remember::{
     Observed, Remember, RememberObserver, key, remember, remember_keyed, remember_observer,
     remember_observer_keyed,
+};
+pub use saveable::{
+    AutoSaver, LOCAL_SAVEABLE_STATE_REGISTRY, RegistryEntry, RememberSaveable, Saveable,
+    SaveableStateRegistry, SavedState, SavedValue, Saver, current_composite_key_hash,
+    remember_saveable, remember_saveable_with, saver,
 };
 pub use scope::RecomposeScope;
 pub use state::{

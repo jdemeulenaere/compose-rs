@@ -15,6 +15,7 @@ internal object ComposeRsNative {
         density: Float,
         fontScale: Float,
         rtl: Boolean,
+        saved: ByteArray?,
     ): Long
 
     @JvmStatic external fun destroy(host: Long)
@@ -62,6 +63,33 @@ internal object ComposeRsNative {
     /** An accessibility action on virtual view [id]: 0 click, 1 focus, 2 set progress. */
     @JvmStatic external fun performAction(host: Long, id: Int, action: Int, value: Float): Boolean
 
+    /** What the content's `remember_saveable`s hold, for the saved instance state, or null. */
+    @JvmStatic external fun saveState(host: Long): ByteArray?
+
+    /** The user went back: whether a `BackHandler` took it. */
+    @JvmStatic external fun onBackPressed(host: Long): Boolean
+
+    /** Android's `Configuration`, as the content's `LOCAL_CONFIGURATION`. */
+    @JvmStatic
+    external fun setConfiguration(
+        host: Long,
+        widthDp: Int,
+        heightDp: Int,
+        landscape: Boolean,
+        fontScale: Float,
+        density: Float,
+        night: Boolean,
+    )
+
+    /**
+     * The window's insets in pixels, 4 per kind (left, top, right, bottom): status bars,
+     * navigation bars, caption bar, keyboard, display cutout.
+     */
+    @JvmStatic external fun setWindowInsets(host: Long, insets: IntArray)
+
+    /** A property for the content: [kind] 0 removes it, 1 is [text], 2 [number], 3 a boolean. */
+    @JvmStatic external fun setProp(host: Long, name: String, kind: Int, text: String?, number: Double)
+
     /** Runs the timers due and the tasks woken: the next timer, and whether frames are wanted. */
     @JvmStatic external fun tick(): Long
 
@@ -80,6 +108,7 @@ internal object Frame {
     const val RESET_INPUT = 8L
     const val SEMANTICS = 16L
     const val PREFETCH = 32L
+    const val BACK = 64L
 
     /** The milliseconds to the next timer, or -1. */
     fun nextTimer(result: Long): Long = (result shr 8) - 1

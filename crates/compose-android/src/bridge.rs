@@ -14,10 +14,11 @@ use compose_ui::{
 use jni::JNIEnv;
 use jni::JavaVM;
 use jni::objects::{
-    GlobalRef, JByteBuffer, JClass, JMethodID, JObject, JStaticMethodID, JString, JValue,
+    GlobalRef, JByteArray, JByteBuffer, JClass, JIntArray, JMethodID, JObject, JStaticMethodID,
+    JString, JValue,
 };
 use jni::signature::{Primitive, ReturnType};
-use jni::sys::{jboolean, jfloat, jint, jlong, jobject};
+use jni::sys::{jboolean, jdouble, jfloat, jint, jlong, jobject};
 
 use crate::serialize::{GroupCache, Resources, Writer, write_display_list};
 use crate::text::{AndroidTextMeasurer, TextBackend};
@@ -31,6 +32,12 @@ pub(crate) fn set_vm(vm: JavaVM) {
     #[cfg(target_os = "android")]
     compose_ui::trace::set_tracer(trace_begin, trace_end);
     let _ = VM.set(vm);
+    // `JNI_OnLoad` runs with the app's class loader: the decoder's class is found now, for
+    // decodes on any thread later.
+    if let Ok(mut env) = self::vm().get_env() {
+        crate::image::install(&mut env);
+        check(&mut env, "ComposeRsImages");
+    }
 }
 
 #[cfg(target_os = "android")]
@@ -52,7 +59,7 @@ fn trace_end() {
     unsafe { ATrace_endSection() };
 }
 
-fn vm() -> &'static JavaVM {
+pub(crate) fn vm() -> &'static JavaVM {
     VM.get().expect("compose-android: JNI_OnLoad ran (export_apps!)")
 }
 
@@ -95,7 +102,7 @@ fn install_panic_hook() {
 }
 
 /// Logs and clears a pending Java exception (a Kotlin callback that threw).
-fn check(env: &mut JNIEnv, what: &str) {
+pub(crate) fn check(env: &mut JNIEnv, what: &str) {
     if env.exception_check().unwrap_or(false) {
         let _ = env.exception_describe();
         let _ = env.exception_clear();
@@ -286,8 +293,10 @@ fn method(env: &mut JNIEnv, object: &JObject, name: &str, signature: &str) -> JM
 }
 
 /// `ComposeRsNative.create(view, measurer, results, app, width, height, density, fontScale,
-/// rtl)`: a composition of the app named `app`, in a view `width` × `height` pixels.
+/// rtl, saved)`: a composition of the app named `app`, in a view `width` × `height` pixels,
+/// its `remember_saveable`s given back what an earlier host saved (`saved`, or null).
 #[unsafe(no_mangle)]
+#[allow(clippy::too_many_arguments)]
 pub extern "system" fn Java_rs_compose_android_ComposeRsNative_create<'local>(
     mut env: JNIEnv<'local>,
     class: JClass<'local>,
@@ -300,6 +309,7 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_create<'local>(
     density: jfloat,
     font_scale: jfloat,
     rtl: jboolean,
+    saved: JByteArray<'local>,
 ) -> jlong {
     if WAKE.get().is_none() {
         let class_ref = env.new_global_ref(&class).expect("compose-android: a global ref");
@@ -369,6 +379,35 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_create<'local>(
         };
         check(&mut env, "ComposeRsView.requestFrame");
     });
+    // The content's events go to the view's listener.
+    let dispatch_event =
+        method(&mut env, &view, "dispatchHostEvent", "(Ljava/lang/String;Ljava/lang/String;)V");
+    let event_view = view_ref.clone();
+    ui.set_event_listener(move |name, payload| {
+        let mut env = main_env();
+        let _ = env.with_local_frame(4, |env| -> jni::errors::Result<()> {
+            let name = env.new_string(name)?;
+            let payload = env.new_string(payload)?;
+            // SAFETY: `dispatchHostEvent` is `(Ljava/lang/String;Ljava/lang/String;)V`.
+            unsafe {
+                env.call_method_unchecked(
+                    &event_view,
+                    dispatch_event,
+                    ReturnType::Primitive(Primitive::Void),
+                    &[JValue::Object(&name).as_jni(), JValue::Object(&payload).as_jni()],
+                )?;
+            }
+            Ok(())
+        });
+        check(&mut env, "ComposeRsView.dispatchHostEvent");
+    });
+    // What an earlier host saved (a configuration change, the process recreated).
+    if !saved.is_null()
+        && let Ok(bytes) = env.convert_byte_array(&saved)
+        && let Some(state) = compose_runtime::SavedState::from_bytes(&bytes)
+    {
+        ui.restore_state(state);
+    }
     ui.set_content(content);
     let host = Box::new(Host {
         ui,
@@ -434,6 +473,8 @@ mod flags {
     pub const SEMANTICS: i64 = 16;
     /// Prefetch work waits for idle time: the view calls `prefetch` after the frame.
     pub const PREFETCH: i64 = 32;
+    /// A `BackHandler` is enabled: the view intercepts back (otherwise the activity gets it).
+    pub const BACK: i64 = 64;
 }
 
 fn next_timer_bits() -> i64 {
@@ -472,6 +513,9 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_frame(
     }
     if stats.recomposed || stats.measured {
         result |= flags::SEMANTICS;
+    }
+    if host.ui.has_enabled_back_handlers() {
+        result |= flags::BACK;
     }
     if host.ui.has_prefetch_work() {
         result |= flags::PREFETCH;
@@ -763,4 +807,126 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_performAction(
         _ => return 0,
     };
     u8::from(host.ui.perform_semantics_action(node, action))
+}
+
+/// `ComposeRsNative.saveState(host)`: what the content's `remember_saveable`s hold, as bytes
+/// for the view's saved instance state (null when there's nothing to save).
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_rs_compose_android_ComposeRsNative_saveState<'local>(
+    env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    host: jlong,
+) -> jobject {
+    // SAFETY: a live host, on the main thread.
+    let host = unsafe { self::host(host) };
+    let state = host.ui.save_state();
+    if state.is_empty() {
+        return std::ptr::null_mut();
+    }
+    env.byte_array_from_slice(&state.to_bytes())
+        .map_or(std::ptr::null_mut(), |array| array.into_raw())
+}
+
+/// `ComposeRsNative.onBackPressed(host)`: the user went back; the innermost enabled
+/// `BackHandler` gets it. Returns whether one did.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_rs_compose_android_ComposeRsNative_onBackPressed(
+    _env: JNIEnv,
+    _class: JClass,
+    host: jlong,
+) -> jboolean {
+    // SAFETY: a live host, on the main thread.
+    let host = unsafe { self::host(host) };
+    u8::from(host.ui.on_back_pressed())
+}
+
+/// `ComposeRsNative.setConfiguration(host, widthDp, heightDp, landscape, fontScale, density,
+/// night)`: Android's `Configuration`, as `LOCAL_CONFIGURATION`.
+#[unsafe(no_mangle)]
+#[allow(clippy::too_many_arguments)]
+pub extern "system" fn Java_rs_compose_android_ComposeRsNative_setConfiguration(
+    _env: JNIEnv,
+    _class: JClass,
+    host: jlong,
+    width_dp: jint,
+    height_dp: jint,
+    landscape: jboolean,
+    font_scale: jfloat,
+    density: jfloat,
+    night: jboolean,
+) {
+    // SAFETY: a live host, on the main thread.
+    let host = unsafe { self::host(host) };
+    host.ui.set_configuration(compose_ui::Configuration {
+        screen_width_dp: width_dp as f32,
+        screen_height_dp: height_dp as f32,
+        orientation: if landscape != 0 {
+            compose_ui::ScreenOrientation::Landscape
+        } else {
+            compose_ui::ScreenOrientation::Portrait
+        },
+        font_scale,
+        density,
+        night_mode: night != 0,
+    });
+}
+
+/// `ComposeRsNative.setWindowInsets(host, insets)`: the window's insets in pixels, 4 per kind
+/// (left, top, right, bottom): status bars, navigation bars, caption bar, keyboard, cutout.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_rs_compose_android_ComposeRsNative_setWindowInsets<'local>(
+    env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    host: jlong,
+    insets: JIntArray<'local>,
+) {
+    // SAFETY: a live host, on the main thread.
+    let host = unsafe { self::host(host) };
+    let mut values = [0; 20];
+    if env.get_int_array_region(&insets, 0, &mut values).is_err() {
+        return;
+    }
+    let side = |kind: usize| {
+        let at = kind * 4;
+        compose_ui::Insets::new(values[at], values[at + 1], values[at + 2], values[at + 3])
+    };
+    host.ui.set_window_insets(compose_ui::PlatformWindowInsets {
+        status_bars: side(0),
+        navigation_bars: side(1),
+        caption_bar: side(2),
+        ime: side(3),
+        display_cutout: side(4),
+    });
+}
+
+/// `ComposeRsNative.setProp(host, name, kind, text, number)`: a property for the content
+/// (`LOCAL_HOST_PROPS`): kind 0 removes it, 1 is `text`, 2 `number`, 3 a boolean (`number`
+/// not 0).
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_rs_compose_android_ComposeRsNative_setProp<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    host: jlong,
+    name: JString<'local>,
+    kind: jint,
+    text: JString<'local>,
+    number: jdouble,
+) {
+    // SAFETY: a live host, on the main thread.
+    let host = unsafe { self::host(host) };
+    let Ok(name) = env.get_string(&name).map(String::from) else { return };
+    let value = match kind {
+        1 => {
+            let text: String = if text.is_null() {
+                String::new()
+            } else {
+                env.get_string(&text).map(Into::into).unwrap_or_default()
+            };
+            Some(compose_ui::PropValue::Text(text.into()))
+        }
+        2 => Some(compose_ui::PropValue::Number(number)),
+        3 => Some(compose_ui::PropValue::Bool(number != 0.0)),
+        _ => None,
+    };
+    host.ui.props().set(&name, value);
 }

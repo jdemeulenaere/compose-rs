@@ -8,7 +8,7 @@
 use compose::animation::*;
 use compose::foundation::layout::*;
 use compose::foundation::{
-    LazyColumn, LazyListScope, TooltipArea, VerticalScrollbar,
+    LazyColumn, LazyListScope, TooltipArea, VerticalScrollbar, is_system_in_dark_theme,
     remember_lazy_list_scrollbar_adapter, remember_lazy_list_state,
 };
 use compose::material3::*;
@@ -23,12 +23,15 @@ pub fn Gallery() {
 /// The gallery, with its "About" dialog open from the start if `about`.
 #[composable]
 pub fn GalleryWith(about: bool) {
-    MaterialTheme!({
+    // The dark scheme when the system's dark theme is on, as Compose apps pick theirs.
+    let color_scheme =
+        if is_system_in_dark_theme() { dark_color_scheme() } else { light_color_scheme() };
+    MaterialTheme!(color_scheme = color_scheme, {
         let cards = remember(|| mutable_state_of(FIRST_CARDS));
         let menu = remember(|| mutable_state_of(false));
-        let dialog = remember(|| mutable_state_of(about));
-        let searching = remember(|| mutable_state_of(false));
-        let query = remember(|| mutable_state_of(String::new()));
+        let dialog = remember_saveable(|| mutable_state_of(about));
+        let searching = remember_saveable(|| mutable_state_of(false));
+        let query = remember_saveable(|| mutable_state_of(String::new()));
         let drawer = remember_drawer_state(DrawerValue::Closed);
         let snackbars = remember(SnackbarHostState::new);
         let scope = remember_coroutine_scope();

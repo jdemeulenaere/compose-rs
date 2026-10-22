@@ -15,6 +15,7 @@ mod image;
 mod lazy;
 mod lazy_api;
 mod modifiers_api;
+mod platform;
 mod pointer_input;
 mod prefetch;
 mod review_api_d;

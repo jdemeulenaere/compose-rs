@@ -55,7 +55,8 @@ pub fn TodoAppWith(initial_items: u64) {
             Rc::new(Todo { id, title: format!("Item {id}").into(), done: mutable_state_of(false) })
         }))
     });
-    let draft = remember(|| mutable_state_of(String::new()));
+    // What's typed survives the activity's recreation, as `rememberSaveable` keeps it.
+    let draft = remember_saveable(|| mutable_state_of(String::new()));
     let filter = remember(|| mutable_state_of(Filter::All));
     let next_id = remember(|| mutable_state_of(initial_items));
     let list_state = remember_lazy_list_state!();

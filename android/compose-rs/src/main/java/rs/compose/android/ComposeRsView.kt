@@ -5,6 +5,9 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.res.Configuration
 import android.graphics.Canvas
+import android.os.Build
+import android.os.Bundle
+import android.os.Parcelable
 import android.os.SystemClock
 import android.os.Trace
 import android.text.InputType
@@ -12,6 +15,7 @@ import android.view.Choreographer
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
+import android.view.WindowInsets
 import android.view.accessibility.AccessibilityManager
 import android.view.accessibility.AccessibilityNodeProvider
 import android.view.inputmethod.BaseInputConnection
@@ -29,6 +33,13 @@ import android.view.inputmethod.InputMethodManager
  * until the next one should start, lazy lists that scrolled compose and measure the items they'll
  * reach next (prefetch, as Compose's `AndroidPrefetchScheduler`). The composition lives while the
  * view is attached to a window.
+ *
+ * What the content's `remember_saveable`s hold survives the composition: kept when the view
+ * detaches (and given back when it attaches again), and saved in the view's instance state (an
+ * activity recreated for a configuration change, or after the process was killed), which needs
+ * the view to have an id: it takes `R.id.compose_rs_view` unless given another (two views in one
+ * window need ids of their own). Back goes to the content's `BackHandler`s while one is enabled.
+ * The app receives properties ([setProp]) and sends events ([setOnEventListener]).
  */
 class ComposeRsView(context: Context, private val app: String) : View(context) {
     private val measurer = TextMeasurer()
@@ -62,20 +73,49 @@ class ComposeRsView(context: Context, private val app: String) : View(context) {
         accessibility.invalidate()
     }
 
+    /** What the last composition saved (or the instance state restored), for the next one. */
+    private var savedState: ByteArray? = null
+
+    /** Back, intercepted while the content has an enabled `BackHandler`. */
+    private var back: BackRegistration? = null
+    private var backEnabled = false
+
+    /** The window's insets, 4 per kind (see [ComposeRsNative.setWindowInsets]). */
+    private val insets = IntArray(20)
+
+    /** The properties given to the content, set again on each composition. */
+    private val props = LinkedHashMap<String, Any>()
+    private var eventListener: OnEventListener? = null
+
+    /** Receives the events the content sends (`LOCAL_HOST_EVENTS`). */
+    fun interface OnEventListener {
+        fun onEvent(name: String, payload: String)
+    }
+
     init {
         isFocusable = true
         isFocusableInTouchMode = true
+        // Its instance state is saved only with an id.
+        if (id == NO_ID) id = R.id.compose_rs_view
+        setOnApplyWindowInsetsListener { _, windowInsets ->
+            updateInsets(windowInsets)
+            windowInsets
+        }
     }
 
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
         ComposeRsRuntime.attach(this)
+        requestApplyInsets()
         if (width > 0 && height > 0) create()
     }
 
     override fun onDetachedFromWindow() {
         ComposeRsRuntime.detach(this)
         destroy()
+        back?.remove()
+        back = null
+        backEnabled = false
         super.onDetachedFromWindow()
     }
 
@@ -102,7 +142,12 @@ class ComposeRsView(context: Context, private val app: String) : View(context) {
             metrics.density,
             resources.configuration.fontScale,
             layoutDirection == LAYOUT_DIRECTION_RTL,
+            savedState,
         )
+        savedState = null
+        sendConfiguration(resources.configuration)
+        ComposeRsNative.setWindowInsets(host, insets)
+        for ((name, value) in props) sendProp(name, value)
         // Composed, laid out and recorded now (during the window's layout), so the first frame
         // the window draws shows the content, as a Compose view's does.
         frame()
@@ -110,6 +155,8 @@ class ComposeRsView(context: Context, private val app: String) : View(context) {
 
     private fun destroy() {
         if (host == 0L) return
+        // Given back if it's composed again (attached again, or a new view of the same id).
+        savedState = ComposeRsNative.saveState(host)
         Choreographer.getInstance().removeFrameCallback(frameCallback)
         frameRequested = false
         Choreographer.getInstance().removeFrameCallback(prefetchFrameCallback)
@@ -129,8 +176,144 @@ class ComposeRsView(context: Context, private val app: String) : View(context) {
         super.onConfigurationChanged(configuration)
         if (host != 0L) {
             ComposeRsNative.setDensity(host, resources.displayMetrics.density, configuration.fontScale)
+            sendConfiguration(configuration)
             requestFrame()
         }
+    }
+
+    private fun sendConfiguration(configuration: Configuration) {
+        val night = configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK == Configuration.UI_MODE_NIGHT_YES
+        ComposeRsNative.setConfiguration(
+            host,
+            configuration.screenWidthDp,
+            configuration.screenHeightDp,
+            configuration.orientation == Configuration.ORIENTATION_LANDSCAPE,
+            configuration.fontScale,
+            resources.displayMetrics.density,
+            night,
+        )
+    }
+
+    // ---- Saved state ---------------------------------------------------------------------
+
+    override fun onSaveInstanceState(): Parcelable {
+        val bundle = Bundle()
+        bundle.putParcelable(SUPER_STATE, super.onSaveInstanceState())
+        val state = if (host != 0L) ComposeRsNative.saveState(host) else savedState
+        if (state != null) bundle.putByteArray(COMPOSE_RS_STATE, state)
+        return bundle
+    }
+
+    override fun onRestoreInstanceState(state: Parcelable?) {
+        if (state !is Bundle) {
+            super.onRestoreInstanceState(state)
+            return
+        }
+        @Suppress("DEPRECATION")
+        super.onRestoreInstanceState(state.getParcelable(SUPER_STATE))
+        val restored = state.getByteArray(COMPOSE_RS_STATE) ?: return
+        savedState = restored
+        // Already composed (restored late): composed again from the saved state.
+        if (host != 0L) {
+            ComposeRsNative.destroy(host)
+            host = 0L
+            measurer.clear()
+            replayer.clear()
+            create()
+            invalidate()
+        }
+    }
+
+    // ---- Back ----------------------------------------------------------------------------
+
+    private fun updateBack(enabled: Boolean) {
+        if (enabled == backEnabled) return
+        backEnabled = enabled
+        val registration = back ?: BackRegistration.create(this) { handleBack() }.also { back = it }
+        registration.setEnabled(enabled)
+    }
+
+    private fun handleBack() {
+        if (host != 0L && ComposeRsNative.onBackPressed(host)) {
+            ComposeRsRuntime.schedule(ComposeRsNative.nextTimer())
+            return
+        }
+        // The handler went in the meantime: back goes on, to the activity.
+        backEnabled = false
+        back?.passOn()
+    }
+
+    // ---- Insets, properties and events ----------------------------------------------------
+
+    private fun updateInsets(windowInsets: WindowInsets) {
+        fun put(kind: Int, left: Int, top: Int, right: Int, bottom: Int) {
+            insets[kind * 4] = left
+            insets[kind * 4 + 1] = top
+            insets[kind * 4 + 2] = right
+            insets[kind * 4 + 3] = bottom
+        }
+        if (Build.VERSION.SDK_INT >= 30) {
+            val kinds = intArrayOf(
+                WindowInsets.Type.statusBars(),
+                WindowInsets.Type.navigationBars(),
+                WindowInsets.Type.captionBar(),
+                WindowInsets.Type.ime(),
+                WindowInsets.Type.displayCutout(),
+            )
+            for ((kind, type) in kinds.withIndex()) {
+                val value = windowInsets.getInsets(type)
+                put(kind, value.left, value.top, value.right, value.bottom)
+            }
+        } else {
+            // API 29: the system windows' insets, the status bar at the top.
+            @Suppress("DEPRECATION")
+            val system = windowInsets.systemWindowInsets
+            put(0, 0, system.top, 0, 0)
+            put(1, system.left, 0, system.right, system.bottom)
+            val cutout = windowInsets.displayCutout
+            put(4, cutout?.safeInsetLeft ?: 0, cutout?.safeInsetTop ?: 0, cutout?.safeInsetRight ?: 0, cutout?.safeInsetBottom ?: 0)
+        }
+        if (host != 0L) {
+            ComposeRsNative.setWindowInsets(host, insets)
+            requestFrame()
+        }
+    }
+
+    /** Sets the property [name] for the content (`LOCAL_HOST_PROPS`), recomposing its readers. */
+    fun setProp(name: String, value: String) = putProp(name, value)
+
+    fun setProp(name: String, value: Double) = putProp(name, value)
+
+    fun setProp(name: String, value: Int) = putProp(name, value.toDouble())
+
+    fun setProp(name: String, value: Boolean) = putProp(name, value)
+
+    fun removeProp(name: String) {
+        props.remove(name)
+        if (host != 0L) ComposeRsNative.setProp(host, name, 0, null, 0.0)
+    }
+
+    private fun putProp(name: String, value: Any) {
+        props[name] = value
+        if (host != 0L) sendProp(name, value)
+    }
+
+    private fun sendProp(name: String, value: Any) {
+        when (value) {
+            is String -> ComposeRsNative.setProp(host, name, 1, value, 0.0)
+            is Double -> ComposeRsNative.setProp(host, name, 2, null, value)
+            is Boolean -> ComposeRsNative.setProp(host, name, 3, null, if (value) 1.0 else 0.0)
+        }
+    }
+
+    /** Receives the events the content sends (`LOCAL_HOST_EVENTS.current().send(name, payload)`). */
+    fun setOnEventListener(listener: OnEventListener?) {
+        eventListener = listener
+    }
+
+    /** An event from the content (Rust calls it). */
+    fun dispatchHostEvent(name: String, payload: String) {
+        eventListener?.onEvent(name, payload)
     }
 
     /** Asks for a frame (Rust calls it when the app's state changes). */
@@ -147,6 +330,7 @@ class ComposeRsView(context: Context, private val app: String) : View(context) {
         if (result and Frame.DREW != 0L) invalidate()
         if (result and Frame.AGAIN != 0L) requestFrame()
         if (result and Frame.PREFETCH != 0L) schedulePrefetch()
+        updateBack(result and Frame.BACK != 0L)
         ComposeRsRuntime.schedule(Frame.nextTimer(result))
         updateTextInput(result and Frame.TEXT_INPUT != 0L, result and Frame.RESET_INPUT != 0L)
         if (result and Frame.SEMANTICS != 0L && accessibilityManager.isEnabled && !semanticsChangePosted) {
@@ -301,9 +485,29 @@ class ComposeRsView(context: Context, private val app: String) : View(context) {
         return consumed
     }
 
-    override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean = sendKey(event) || super.onKeyDown(keyCode, event)
+    override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
+        // The back key, where no dispatcher takes back (no AndroidX, no predictive back): the
+        // content's, on its release, while a handler is enabled.
+        if (keyCode == KeyEvent.KEYCODE_BACK) {
+            if (back?.handlesKeys == true) {
+                event.startTracking()
+                return true
+            }
+            return super.onKeyDown(keyCode, event)
+        }
+        return sendKey(event) || super.onKeyDown(keyCode, event)
+    }
 
-    override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean = sendKey(event) || super.onKeyUp(keyCode, event)
+    override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean {
+        if (keyCode == KeyEvent.KEYCODE_BACK) {
+            if (back?.handlesKeys == true && event.isTracking && !event.isCanceled) {
+                handleBack()
+                return true
+            }
+            return super.onKeyUp(keyCode, event)
+        }
+        return sendKey(event) || super.onKeyUp(keyCode, event)
+    }
 
     internal fun commitText(text: CharSequence) {
         if (host != 0L) ComposeRsNative.text(host, text.toString())
@@ -362,6 +566,11 @@ class ComposeRsView(context: Context, private val app: String) : View(context) {
     fun setClipboardText(text: String) {
         val clipboard = context.getSystemService(ClipboardManager::class.java)
         clipboard.setPrimaryClip(ClipData.newPlainText("text", text))
+    }
+
+    private companion object {
+        const val SUPER_STATE = "rs.compose.android.super"
+        const val COMPOSE_RS_STATE = "rs.compose.android.state"
     }
 }
 

@@ -15,6 +15,7 @@
 //! `JNI_OnLoad`; `ComposeRsView(context, "name")` shows one.
 
 pub mod accessibility;
+mod image;
 pub mod serialize;
 pub mod text;
 

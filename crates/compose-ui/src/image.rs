@@ -1,7 +1,8 @@
 //! Bitmaps, as Compose's `ImageBitmap`: pixels drawn by the display list's `DrawImage`, decoded
-//! by the platform (`compose_skia::decode_image` on desktop).
+//! by the platform's [`ImageDecoder`] (Skia on desktop, `BitmapFactory` on Android), which apps
+//! reach through [`decode_image_bytes`] and [`image_resource`].
 
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 /// A bitmap, as Compose's `ImageBitmap`: its size in pixels and its pixels, premultiplied RGBA,
 /// a row after another. Shared (`Arc`): a clone copies nothing, and two clones are the same
@@ -74,4 +75,37 @@ impl compose_runtime::ComposeArg for ImageBitmap {
     fn same(&self, other: &Self) -> bool {
         self.same_image(other)
     }
+}
+
+/// Decodes encoded images (PNG, JPEG, WebP, …) into bitmaps: the platform's, as the text
+/// measurer is (Skia's codecs on desktop, `BitmapFactory` on Android), set once by the host
+/// ([`set_image_decoder`]).
+pub trait ImageDecoder: Send + Sync {
+    /// The image `bytes` encode, or `None` if they're not one the platform decodes.
+    fn decode(&self, bytes: &[u8]) -> Option<ImageBitmap>;
+}
+
+/// The platform's decoder, for every thread (images may be decoded off the main thread).
+static DECODER: RwLock<Option<Arc<dyn ImageDecoder>>> = RwLock::new(None);
+
+/// Sets the decoder [`decode_image_bytes`] uses: the platform host's, at startup.
+pub fn set_image_decoder(decoder: Arc<dyn ImageDecoder>) {
+    *DECODER.write().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(decoder);
+}
+
+/// Decodes an encoded image with the platform's decoder, as Android's
+/// `BitmapFactory.decodeByteArray(…).asImageBitmap()`: `None` if the bytes aren't an image the
+/// platform decodes, or no platform set a decoder (headless tests).
+pub fn decode_image_bytes(bytes: &[u8]) -> Option<ImageBitmap> {
+    let decoder = DECODER.read().unwrap_or_else(|poisoned| poisoned.into_inner()).clone();
+    decoder?.decode(bytes)
+}
+
+/// An image bundled with the app (`include_bytes!("icon.png")`), decoded once where it's
+/// composed, as Compose's `ImageBitmap.imageResource(id)`: `None` if the platform can't decode
+/// it.
+pub fn image_resource(bytes: &'static [u8]) -> Option<ImageBitmap> {
+    compose_runtime::remember_keyed((bytes.as_ptr() as usize, bytes.len()), || {
+        decode_image_bytes(bytes)
+    })
 }

@@ -9,9 +9,7 @@ use compose_runtime::{Callback, composable, remember};
 use crate::alignment::Alignment;
 use crate::constraints::Constraints;
 use crate::graphics::Color;
-use crate::input::{
-    EventContext, Key, KeyEvent, KeyEventType, PointerEvent, PointerEventPass, PointerEventType,
-};
+use crate::input::{EventContext, PointerEvent, PointerEventPass, PointerEventType};
 use crate::layout::{Layout, Measurable, MeasurePolicy, MeasureResult, MeasureScope, Placeable};
 use crate::modifier::{Modifier, ModifierNode, ModifierNodeElement, PointerInputModifierNode};
 use crate::overlay::{PopupPositionProvider, WindowPosition};
@@ -174,14 +172,25 @@ pub fn PopupWithPositionProvider(
             if properties.focusable {
                 modifier = modifier.focusable(true);
             }
-            if properties.dismiss_on_back_press
+            // Back (Escape on desktop) dismisses a focusable popup, as on Android a popup
+            // window that takes focus gets the back key; it comes before what's beneath.
+            let layer = crate::back::LOCAL_BACK_LAYER.current() + u32::from(properties.focusable);
+            if properties.focusable
+                && properties.dismiss_on_back_press
                 && let Some(dismiss) = on_dismiss_request.clone()
             {
-                modifier = modifier
-                    .on_key_event(move |event: KeyEvent| dismiss_on_escape(&event, &dismiss));
+                compose_runtime::CompositionLocalProvider(
+                    crate::back::LOCAL_BACK_LAYER.provides(layer),
+                    move || crate::back::BackHandler(true, dismiss),
+                );
             }
             let content = content.clone();
-            Layout(modifier, stack.clone(), compose_runtime::callback(move || content()));
+            compose_runtime::CompositionLocalProvider(
+                crate::back::LOCAL_BACK_LAYER.provides(layer),
+                move || {
+                    Layout(modifier, stack.clone(), compose_runtime::callback(move || content()))
+                },
+            );
         }),
     );
 }
@@ -209,7 +218,7 @@ pub fn Dialog(
         host,
         compose_runtime::callback(move || {
             let dismiss = on_dismiss_request.clone();
-            let mut modifier = Modifier
+            let modifier = Modifier
                 .overlay(window.clone(), true)
                 .background(SCRIM)
                 .then_custom(DismissOnClick {
@@ -223,11 +232,15 @@ pub fn Dialog(
                     modal: true,
                 })
                 .focusable(true);
-            if properties.dismiss_on_back_press {
-                let dismiss = dismiss.clone();
-                modifier = modifier
-                    .on_key_event(move |event: KeyEvent| dismiss_on_escape(&event, &dismiss));
-            }
+            // A dialog is a window of its own: back (Escape on desktop) goes to it, and to the
+            // handlers in it, before what's beneath.
+            let layer = crate::back::LOCAL_BACK_LAYER.current() + 1;
+            let on_back = dismiss.clone();
+            let enabled = properties.dismiss_on_back_press;
+            compose_runtime::CompositionLocalProvider(
+                crate::back::LOCAL_BACK_LAYER.provides(layer),
+                move || crate::back::BackHandler(enabled, on_back),
+            );
             let content = content.clone();
             let stack = stack.clone();
             // The dialog's own node, as large as its content: what's marked a dialog.
@@ -239,22 +252,16 @@ pub fn Dialog(
                     compose_runtime::callback(move || content()),
                 );
             });
-            Layout(modifier, center.clone(), content);
+            compose_runtime::CompositionLocalProvider(
+                crate::back::LOCAL_BACK_LAYER.provides(layer),
+                move || Layout(modifier, center.clone(), content),
+            );
         }),
     );
 }
 
 /// The dim behind a dialog, as Material's scrim (black at 32 %).
 const SCRIM: Color = Color::from_argb(0x52000000);
-
-fn dismiss_on_escape(event: &KeyEvent, dismiss: &Callback) -> bool {
-    if event.key == Key::Escape && event.kind == KeyEventType::KeyDown {
-        dismiss();
-        true
-    } else {
-        false
-    }
-}
 
 /// A popup's host in the tree: no size; its overlays are measured with the window's.
 struct HostLayout;

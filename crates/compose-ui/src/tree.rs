@@ -276,6 +276,10 @@ pub struct UiTree {
     pub(crate) laid_out_since_callbacks: bool,
     /// Intrinsic probes in progress (`MeasureScope::max_intrinsic_width` measuring to ask).
     pub(crate) intrinsic_probes: u32,
+    /// The window's insets, the host's state: read while measuring (insets paddings), so a
+    /// change measures their readers again.
+    pub(crate) window_insets:
+        Option<compose_runtime::MutableState<crate::platform::PlatformWindowInsets>>,
 }
 
 impl UiTree {
@@ -313,7 +317,16 @@ impl UiTree {
             positioned: Vec::new(),
             laid_out_since_callbacks: false,
             intrinsic_probes: 0,
+            window_insets: None,
         }
+    }
+
+    /// The host's window insets state, which `MeasureScope::window_insets` reads.
+    pub fn set_window_insets_state(
+        &mut self,
+        state: compose_runtime::MutableState<crate::platform::PlatformWindowInsets>,
+    ) {
+        self.window_insets = Some(state);
     }
 
     /// `node`'s children's indices in drawing order, if it isn't their order (`None` when it

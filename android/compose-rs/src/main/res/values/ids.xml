@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- ComposeRsView's default id: its instance state (what remember_saveable holds) is saved only with one. -->
+    <item name="compose_rs_view" type="id" />
+</resources>

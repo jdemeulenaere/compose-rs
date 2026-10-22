@@ -1,6 +1,7 @@
 package rs.compose.demo
 
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -44,8 +45,17 @@ class MainActivity : ComponentActivity() {
                         }
                         key(apps[selected]) {
                             AndroidView(
-                                factory = { context -> ComposeRsView(context, apps[selected]) },
+                                factory = { context ->
+                                    ComposeRsView(context, apps[selected]).apply {
+                                        // The Rust app's events (a button in the counter).
+                                        setOnEventListener { name, payload ->
+                                            Toast.makeText(context, "$name: $payload", Toast.LENGTH_SHORT).show()
+                                        }
+                                    }
+                                },
                                 modifier = Modifier.fillMaxWidth().weight(1f),
+                                // A property the Rust app reads (LOCAL_HOST_PROPS): the tab.
+                                update = { view -> view.setProp("tab", "${selected + 1} of ${apps.size}") },
                             )
                         }
                     }

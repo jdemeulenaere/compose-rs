@@ -46,6 +46,18 @@ pub struct UiHost {
     /// Work lazy lists ask for between frames (`prefetch`), given to content as
     /// `LOCAL_PREFETCH_SCHEDULER`.
     prefetch_scheduler: crate::prefetch::PrefetchScheduler,
+    /// Where `BackHandler`s register (`LOCAL_ON_BACK_PRESSED_DISPATCHER`).
+    back_dispatcher: crate::back::OnBackPressedDispatcher,
+    /// Where `remember_saveable` registers (`LOCAL_SAVEABLE_STATE_REGISTRY`).
+    saveable_registry: compose_runtime::SaveableStateRegistry,
+    /// The platform's configuration (`LOCAL_CONFIGURATION`).
+    configuration: compose_runtime::OwnedState<crate::platform::Configuration>,
+    /// The window's insets (`LOCAL_PLATFORM_WINDOW_INSETS`, and read while measuring).
+    window_insets: compose_runtime::OwnedState<crate::platform::PlatformWindowInsets>,
+    /// The platform's properties and its event listener (`LOCAL_HOST_PROPS`,
+    /// `LOCAL_HOST_EVENTS`).
+    props: crate::platform::HostProps,
+    events: crate::platform::HostEvents,
 }
 
 /// The content, skipped when the root recomposes for a new density: only what reads
@@ -101,6 +113,10 @@ impl UiHost {
         // Writes to state read while measuring or drawing ask for a frame, as composition's do.
         let observer = compose_runtime::ReadObserver::new(move || request());
         composition.with_applier(|tree: &mut UiTree| tree.set_read_observer(observer));
+        let window_insets =
+            compose_runtime::mutable_state_of(crate::platform::PlatformWindowInsets::default());
+        let insets = window_insets.handle();
+        composition.with_applier(|tree: &mut UiTree| tree.set_window_insets_state(insets));
         UiHost {
             composition,
             size,
@@ -114,6 +130,14 @@ impl UiHost {
             ),
             window_size: compose_runtime::mutable_state_of(size),
             prefetch_scheduler: crate::prefetch::PrefetchScheduler::default(),
+            back_dispatcher: crate::back::OnBackPressedDispatcher::new(),
+            saveable_registry: compose_runtime::SaveableStateRegistry::new(None),
+            configuration: compose_runtime::mutable_state_of(
+                crate::platform::Configuration::from_window(size, density, false),
+            ),
+            window_insets,
+            props: crate::platform::HostProps::default(),
+            events: crate::platform::HostEvents::default(),
         }
     }
 
@@ -204,6 +228,61 @@ impl UiHost {
         self.wake();
     }
 
+    /// The platform's configuration, which content reads as `LOCAL_CONFIGURATION` (on desktop,
+    /// the window's size in dp and the system's dark mode).
+    pub fn set_configuration(&mut self, configuration: crate::platform::Configuration) {
+        self.configuration.set(configuration);
+    }
+
+    pub fn configuration(&self) -> crate::platform::Configuration {
+        self.configuration.handle().get()
+    }
+
+    /// The window's insets (system bars, the keyboard, a cutout), which the insets paddings and
+    /// `LOCAL_PLATFORM_WINDOW_INSETS` read.
+    pub fn set_window_insets(&mut self, insets: crate::platform::PlatformWindowInsets) {
+        self.window_insets.set(insets);
+    }
+
+    /// The properties the platform passes to the content (`LOCAL_HOST_PROPS`).
+    pub fn props(&self) -> &crate::platform::HostProps {
+        &self.props
+    }
+
+    /// Called with the events the content sends the platform (`LOCAL_HOST_EVENTS`): a name and
+    /// a payload.
+    pub fn set_event_listener(&self, listener: impl Fn(&str, &str) + 'static) {
+        self.events.set_listener(Some(Rc::new(listener)));
+    }
+
+    /// The user went back (Android's back gesture or button): the innermost enabled
+    /// `BackHandler` gets it. Returns whether one did; if none, the platform goes back itself
+    /// (Android's activity finishes).
+    pub fn on_back_pressed(&mut self) -> bool {
+        let handled = self.back_dispatcher.on_back_pressed();
+        self.wake_if_dirty();
+        handled
+    }
+
+    /// Whether a `BackHandler` is enabled: the platform intercepts back only then. It changes
+    /// with composition: platforms ask after each frame.
+    pub fn has_enabled_back_handlers(&self) -> bool {
+        self.back_dispatcher.has_enabled_callbacks()
+    }
+
+    /// The values `remember_saveable` registered, for the platform to keep while the host is
+    /// recreated (an Android configuration change, the process killed in the background):
+    /// `SavedState::to_bytes` makes the bytes to keep.
+    pub fn save_state(&self) -> compose_runtime::SavedState {
+        self.saveable_registry.perform_save()
+    }
+
+    /// Gives `state` (what an earlier host saved) back to the `remember_saveable` calls that
+    /// compose from now on: call it before the first frame.
+    pub fn restore_state(&self, state: compose_runtime::SavedState) {
+        self.saveable_registry.restore(state);
+    }
+
     /// Runs `f` with the tree.
     pub fn with_tree<R>(&self, f: impl FnOnce(&mut UiTree) -> R) -> R {
         self.composition.with_applier(f)
@@ -247,15 +326,20 @@ impl UiHost {
             let density = self.density.handle();
             let direction = self.layout_direction.handle();
             let window = self.window_size.handle();
-            let scheduler = self.prefetch_scheduler.clone();
+            let constants = HostLocals {
+                scheduler: self.prefetch_scheduler.clone(),
+                back_dispatcher: self.back_dispatcher.clone(),
+                saveable_registry: self.saveable_registry.clone(),
+                props: self.props.clone(),
+                events: self.events.clone(),
+            };
+            let configuration = self.configuration.handle();
+            let insets = self.window_insets.handle();
             let content: compose_runtime::Callback = compose_runtime::callback(content);
             self.composition.set_content(move || {
                 let content = content.clone();
-                // The prefetch scheduler never changes: outermost, it's read without
-                // recomposing anything.
-                let scheduler =
-                    crate::prefetch::LOCAL_PREFETCH_SCHEDULER.provides(Some(scheduler.clone()));
-                compose_runtime::CompositionLocalProvider(scheduler, move || {
+                // What never changes, outermost: read without recomposing anything.
+                constants.provide(move || {
                     let content = content.clone();
                     compose_runtime::CompositionLocalProvider(
                         LOCAL_DENSITY.provides(density.get()),
@@ -271,7 +355,19 @@ impl UiHost {
                                                 size.height,
                                             ),
                                         )),
-                                        move || Content(content),
+                                        move || {
+                                            compose_runtime::CompositionLocalProvider(
+                                                crate::platform::LOCAL_CONFIGURATION
+                                                    .provides(configuration.get()),
+                                                move || {
+                                                    compose_runtime::CompositionLocalProvider(
+                                                        crate::platform::LOCAL_PLATFORM_WINDOW_INSETS
+                                                            .provides(insets.get()),
+                                                        move || Content(content),
+                                                    )
+                                                },
+                                            )
+                                        },
                                     )
                                 },
                             )
@@ -450,10 +546,18 @@ impl UiHost {
         self.wake_if_dirty();
     }
 
-    /// Dispatches a key event to the focused node; returns whether it was consumed.
+    /// Dispatches a key event to the focused node; returns whether it was consumed. Escape
+    /// that nothing focused takes goes back (`on_back_pressed`), as a dialog window takes it
+    /// on desktop.
     pub fn send_key(&mut self, event: KeyEvent) -> bool {
         let (consumed, actions) = self.with_tree(|tree| tree.dispatch_key(event));
         Self::run(actions);
+        if !consumed
+            && event.key == crate::input::Key::Escape
+            && event.kind == crate::input::KeyEventType::KeyDown
+        {
+            return self.on_back_pressed();
+        }
         self.wake_if_dirty();
         consumed
     }
@@ -524,5 +628,38 @@ impl UiHost {
     /// The tree dump: nodes with their bounds, modifiers and semantics.
     pub fn dump_tree(&self) -> String {
         self.with_tree(|tree| tree.dump())
+    }
+}
+
+/// The root's locals that never change, provided outermost.
+struct HostLocals {
+    scheduler: crate::prefetch::PrefetchScheduler,
+    back_dispatcher: crate::back::OnBackPressedDispatcher,
+    saveable_registry: compose_runtime::SaveableStateRegistry,
+    props: crate::platform::HostProps,
+    events: crate::platform::HostEvents,
+}
+
+impl HostLocals {
+    fn provide(&self, content: impl FnOnce()) {
+        use compose_runtime::CompositionLocalProvider as Provide;
+        let scheduler =
+            crate::prefetch::LOCAL_PREFETCH_SCHEDULER.provides(Some(self.scheduler.clone()));
+        Provide(scheduler, || {
+            let dispatcher = crate::back::LOCAL_ON_BACK_PRESSED_DISPATCHER
+                .provides(Some(self.back_dispatcher.clone()));
+            Provide(dispatcher, || {
+                let registry = compose_runtime::LOCAL_SAVEABLE_STATE_REGISTRY
+                    .provides(Some(self.saveable_registry.clone()));
+                Provide(registry, || {
+                    Provide(crate::platform::LOCAL_HOST_PROPS.provides(self.props.clone()), || {
+                        Provide(
+                            crate::platform::LOCAL_HOST_EVENTS.provides(self.events.clone()),
+                            content,
+                        )
+                    })
+                })
+            })
+        })
     }
 }

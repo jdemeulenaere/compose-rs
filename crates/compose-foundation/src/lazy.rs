@@ -253,13 +253,31 @@ impl std::fmt::Debug for LazyListState {
     }
 }
 
-/// A lazy list state kept across recompositions, as `rememberLazyListState()`.
+impl LazyListState {
+    /// Saves the first visible item and its offset, as Compose's `LazyListState.Saver`.
+    pub fn saver() -> impl compose_runtime::Saver<LazyListState> {
+        use compose_runtime::Saveable;
+        compose_runtime::saver(
+            |state: &LazyListState| {
+                let (index, offset) = state.inner.position.get();
+                Some((index, offset.round() as i32).save())
+            },
+            |saved| {
+                <(usize, i32)>::restore(saved)
+                    .map(|(index, offset)| LazyListState::new(index, offset))
+            },
+        )
+    }
+}
+
+/// A lazy list state kept across recompositions and saved across the host's recreation, as
+/// `rememberLazyListState()` (a `rememberSaveable`).
 #[composable(non_restartable)]
 pub fn remember_lazy_list_state(
     #[default(0)] initial_first_visible_item_index: usize,
     #[default(0)] initial_first_visible_item_scroll_offset: i32,
 ) -> LazyListState {
-    remember(|| {
+    compose_runtime::remember_saveable_with(LazyListState::saver(), || {
         LazyListState::new(
             initial_first_visible_item_index,
             initial_first_visible_item_scroll_offset,

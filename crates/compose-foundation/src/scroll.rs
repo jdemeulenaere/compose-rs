@@ -9,7 +9,7 @@ use std::rc::Rc;
 
 use compose_runtime::{
     ComposeArg, CoroutineScope, Job, MutableState, OwnedState, composable, mutable_state_of,
-    remember, with_frame_nanos,
+    with_frame_nanos,
 };
 use compose_ui::{
     Constraints, DrawModifierNode, DrawScope, EventContext, IntSize, LayoutModifierNode,
@@ -72,10 +72,18 @@ impl ComposeArg for ScrollState {
     }
 }
 
-/// A scroll state kept across recompositions, as `rememberScrollState()`.
+/// A scroll state kept across recompositions and saved across the host's recreation, as
+/// `rememberScrollState()` (a `rememberSaveable` of `ScrollState.Saver`).
 #[composable(non_restartable)]
 pub fn remember_scroll_state() -> ScrollState {
-    remember(|| ScrollState::new(0))
+    let saver = compose_runtime::saver(
+        |state: &ScrollState| Some(compose_runtime::SavedValue::Int(i64::from(state.value()))),
+        |saved| match saved {
+            compose_runtime::SavedValue::Int(value) => Some(ScrollState::new(*value as i32)),
+            _ => None,
+        },
+    );
+    compose_runtime::remember_saveable_with(saver, || ScrollState::new(0))
 }
 
 /// The scrolling modifiers, on `Modifier`.

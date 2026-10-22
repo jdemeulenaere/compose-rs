@@ -440,3 +440,13 @@ pub fn decode_image(bytes: &[u8]) -> Option<compose_ui::ImageBitmap> {
     }
     Some(compose_ui::ImageBitmap::from_rgba_premultiplied(width as u32, height as u32, pixels))
 }
+
+/// The platform image decoder on desktop (`compose_ui::set_image_decoder`): Skia's codecs, as
+/// [`decode_image`].
+pub struct SkiaImageDecoder;
+
+impl compose_ui::ImageDecoder for SkiaImageDecoder {
+    fn decode(&self, bytes: &[u8]) -> Option<compose_ui::ImageBitmap> {
+        decode_image(bytes)
+    }
+}

@@ -9,8 +9,9 @@ use compose::ui::*;
 
 #[composable]
 pub fn Counter() {
-    // remember keeps the OwnedState in this group's slot and returns its Copy handle.
-    let count = remember(|| mutable_state_of(0));
+    // remember_saveable keeps the OwnedState in this group's slot and returns its Copy handle;
+    // its value is saved too, so it survives an Android activity's recreation (a rotation).
+    let count = remember_saveable(|| mutable_state_of(0));
 
     Column!(
         modifier = Modifier.padding(16.dp()),

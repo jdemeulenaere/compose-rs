@@ -5,7 +5,7 @@ use std::cell::{Cell, RefCell};
 use std::hash::Hash;
 use std::rc::Rc;
 
-use compose_runtime::{ComposeArg, composable, hash_key, remember};
+use compose_runtime::{ComposeArg, composable, hash_key};
 use compose_ui::{Alignment, Dp, Modifier, PaddingValues};
 
 use crate::layout::{Arrangement, Box, BoxWithConstraints, BoxWithConstraintsScope};
@@ -102,13 +102,33 @@ impl ComposeArg for LazyGridState {
     }
 }
 
-/// A grid state remembered at its call site, as `rememberLazyGridState()`.
+impl LazyGridState {
+    /// Saves the first visible item and its offset, as Compose's `LazyGridState.Saver`.
+    pub fn saver() -> impl compose_runtime::Saver<LazyGridState> {
+        use compose_runtime::Saveable;
+        compose_runtime::saver(
+            |state: &LazyGridState| {
+                let position = state.pending.get().unwrap_or_else(|| {
+                    (state.first_visible_item_index(), state.first_visible_item_scroll_offset())
+                });
+                Some(position.save())
+            },
+            |saved| {
+                <(usize, i32)>::restore(saved)
+                    .map(|(index, offset)| LazyGridState::new(index, offset))
+            },
+        )
+    }
+}
+
+/// A grid state remembered at its call site and saved across the host's recreation, as
+/// `rememberLazyGridState()` (a `rememberSaveable`).
 #[composable]
 pub fn remember_lazy_grid_state(
     #[default(0)] initial_first_visible_item_index: usize,
     #[default(0)] initial_first_visible_item_scroll_offset: i32,
 ) -> LazyGridState {
-    remember(|| {
+    compose_runtime::remember_saveable_with(LazyGridState::saver(), || {
         LazyGridState::new(
             initial_first_visible_item_index,
             initial_first_visible_item_scroll_offset,

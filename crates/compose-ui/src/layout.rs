@@ -121,6 +121,12 @@ impl MeasureScope<'_> {
         self.tree.window
     }
 
+    /// The window's insets (system bars, the keyboard, a cutout), as the platform reports them:
+    /// a read observed as state is, so a change measures this node again.
+    pub fn window_insets(&self) -> crate::platform::PlatformWindowInsets {
+        self.tree.window_insets.map(|state| state.get()).unwrap_or_default()
+    }
+
     /// The direction of the layout being measured, as `MeasureScope.layoutDirection`.
     pub fn layout_direction(&self) -> LayoutDirection {
         self.tree.node(self.node).layout_direction

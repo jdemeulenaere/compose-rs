@@ -102,7 +102,9 @@ pub fn FeedAnimated() {
 
 #[composable]
 fn FeedScreen(animated: bool) {
-    MaterialTheme!({
+    let color_scheme =
+        if is_system_in_dark_theme() { dark_color_scheme() } else { light_color_scheme() };
+    MaterialTheme!(color_scheme = color_scheme, {
         Scaffold!(
             top_bar = {
                 TopAppBar!({
@@ -131,7 +133,9 @@ fn FeedScreen(animated: bool) {
 /// The big screen: 200 posts in a scrolling column, all composed at once.
 #[composable]
 pub fn BigScreen() {
-    MaterialTheme!({
+    let color_scheme =
+        if is_system_in_dark_theme() { dark_color_scheme() } else { light_color_scheme() };
+    MaterialTheme!(color_scheme = color_scheme, {
         Scaffold!(
             top_bar = {
                 TopAppBar!({
