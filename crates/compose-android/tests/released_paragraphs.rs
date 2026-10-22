@@ -22,6 +22,7 @@ use std::time::{Duration, Instant};
 
 use compose_android::serialize::{
     GroupCache, LAYER_ENTRY_BYTES, Resources, Writer, operand_bytes, tag, write_display_list,
+    write_groups_ahead,
 };
 use compose_android::text::{AndroidTextMeasurer, LaidOut, TextBackend};
 use compose_foundation::layout::*;
@@ -128,6 +129,8 @@ struct Checked {
     kept: usize,
     /// Paragraphs released so far.
     released: usize,
+    /// Items drawn ahead so far.
+    drawn_ahead: usize,
 }
 
 impl Checked {
@@ -148,6 +151,7 @@ impl Checked {
             seen: HashMap::new(),
             kept: 0,
             released: 0,
+            drawn_ahead: 0,
         };
         checked.frame();
         checked
@@ -176,9 +180,27 @@ impl Checked {
         self.released += before.iter().filter(|handle| !live.contains(handle)).count();
     }
 
+    /// Prefetching, then the items it measured drawn and written ahead (D350): their records,
+    /// recorded by Kotlin now, are held to the same invariant as a frame's.
+    fn prefetch_and_draw_ahead(&mut self) {
+        self.prefetch();
+        while let Some(groups) = self.host.draw_ahead() {
+            let mut ahead = Writer::default();
+            write_groups_ahead(&groups, &mut self.resources, &mut self.cache, &mut ahead);
+            self.check_bytes(&ahead.bytes, "drawing ahead");
+            self.drawn_ahead += 1;
+        }
+    }
+
     fn check(&mut self, when: &str) {
+        let bytes = std::mem::take(&mut self.out.bytes);
+        self.check_bytes(&bytes, when);
+        self.out.bytes = bytes;
+    }
+
+    fn check_bytes(&mut self, bytes: &[u8], when: &str) {
         let live = self.live.0.borrow();
-        for (group, handles) in recordings(&self.out.bytes) {
+        for (group, handles) in recordings(bytes) {
             for handle in &handles {
                 assert!(
                     live.contains(handle),
@@ -290,6 +312,36 @@ fn a_scrolled_lazy_list_with_prefetch_draws_only_live_paragraphs() {
         checked.frame();
     }
     checked.assert_exercised();
+}
+
+/// The same, the items prefetched drawn ahead between frames (D350): a group recorded ahead
+/// draws only live paragraphs, and the frame placing it keeps that recording.
+#[test]
+fn a_scrolled_lazy_list_drawing_ahead_draws_only_live_paragraphs() {
+    let state = LazyListState::new(0, 0);
+    let given = *state;
+    let mut checked = Checked::new(move || {
+        LazyColumn!(
+            modifier = Modifier.size((160.dp(), 200.dp())),
+            state = given,
+            |scope: LazyListScope| {
+                scope.items(300, |index| {
+                    Column!({
+                        BasicText!("author {index}");
+                        BasicText!("a post long enough to wrap onto a second line, {index}");
+                    });
+                });
+            }
+        );
+    });
+    for step in 0..60 {
+        state.scroll_by(if step % 6 == 5 { -90.0 } else { 37.0 });
+        checked.frame();
+        checked.prefetch_and_draw_ahead();
+        checked.frame();
+    }
+    checked.assert_exercised();
+    assert!(checked.drawn_ahead > 20, "items drawn ahead: {}", checked.drawn_ahead);
 }
 
 /// A text field edited: its text laid out again on every change, beside a kept boundary.

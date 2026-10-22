@@ -60,6 +60,11 @@ impl UiTree {
     /// left to the next frame, which the write asked for (as before boundaries kept anything).
     pub fn draw(&mut self) -> bool {
         self.apply_observed_writes();
+        // Boundaries measured ahead that a platform doesn't draw ahead (or not yet) are
+        // forgotten once this frame places them, or they go.
+        if !self.measured_ahead.is_empty() {
+            self.has_draw_ahead_work();
+        }
         if !self.needs_draw {
             return false;
         }
@@ -87,6 +92,67 @@ impl UiTree {
         self.display_list = recording;
         self.needs_draw = false;
         true
+    }
+
+    /// Whether a repaint boundary measured ahead (`premeasure`) waits to be drawn ahead
+    /// ([`draw_ahead`](UiTree::draw_ahead)): those that no longer do (gone, placed, drawn) are
+    /// forgotten.
+    pub fn has_draw_ahead_work(&mut self) -> bool {
+        let mut measured = mem::take(&mut self.measured_ahead);
+        measured.retain(|node| self.waits_to_draw_ahead(*node));
+        self.measured_ahead = measured;
+        !self.measured_ahead.is_empty()
+    }
+
+    /// Forgets the boundaries measured ahead, which the frames placing them then draw: a
+    /// platform gives up drawing them ahead when an idle time with nothing else to do is too
+    /// short for one.
+    pub fn cancel_draw_ahead(&mut self) {
+        self.measured_ahead.clear();
+    }
+
+    /// How many nodes measured ahead are noted, forgetting none: for tests.
+    #[doc(hidden)]
+    pub fn measured_ahead_count(&self) -> usize {
+        self.measured_ahead.len()
+    }
+
+    /// `node` is a repaint boundary in the tree, not placed, whose content or layer changed
+    /// since it was last drawn.
+    fn waits_to_draw_ahead(&self, node: NodeId) -> bool {
+        self.get(node).is_some_and(|value| {
+            !value.placed
+                && value.parent.is_some()
+                && value
+                    .retained
+                    .as_ref()
+                    .is_some_and(|retained| retained.dirty || retained.layer_dirty)
+        })
+    }
+
+    /// Draws ahead the oldest repaint boundary measured ahead of the layout placing it
+    /// (`premeasure`: a lazy list's prefetched item) and not drawn since: its group, then the
+    /// groups nested in it, as the frame placing it would draw them. Its content is in its own
+    /// coordinates and placing it doesn't draw it again (moving a boundary marks its parent:
+    /// `invalidate_position`), so that frame shares what it drew, with its version. `None`
+    /// without such a boundary.
+    ///
+    /// Called between frames, after `prefetch`, by a platform that records groups (Android's
+    /// render nodes): the frame revealing an item then neither draws nor records it.
+    pub fn draw_ahead(&mut self) -> Option<Vec<DrawGroup>> {
+        let node = loop {
+            if self.measured_ahead.is_empty() {
+                return None;
+            }
+            let node = self.measured_ahead.remove(0);
+            if self.waits_to_draw_ahead(node) {
+                break node;
+            }
+        };
+        let observer = self.observer.clone();
+        let mut groups = Vec::new();
+        self.draw_boundary(node, &mut groups, observer.as_deref());
+        Some(groups)
     }
 
     /// Records `node`; a custom node draws under observation (`observer`), so a state write it

@@ -21,7 +21,7 @@ use jni::objects::{
 use jni::signature::{Primitive, ReturnType};
 use jni::sys::{jboolean, jdouble, jfloat, jint, jlong, jobject};
 
-use crate::serialize::{GroupCache, Resources, Writer, write_display_list};
+use crate::serialize::{GroupCache, Resources, Writer, write_display_list, write_groups_ahead};
 use crate::text::{AndroidTextMeasurer, LaidOut, TextBackend};
 
 static VM: OnceLock<JavaVM> = OnceLock::new();
@@ -271,8 +271,11 @@ struct Host {
     list: Writer,
     /// The groups' records the last frame wrote, copied while their version stays.
     groups: GroupCache,
-    /// What `take_drawing` last gave Kotlin: resource changes, then the display list.
+    /// What `take_drawing` last gave Kotlin: resource changes, then the display list (or what
+    /// `draw_ahead` last gave it: resource changes, then the records of groups drawn ahead).
     drawing: Writer,
+    /// The records of the groups `draw_ahead` drew last, kept for its capacity.
+    ahead: Writer,
     /// The memory (address, capacity) of `drawing` that Kotlin's buffer wraps.
     drawing_given: (usize, usize),
     /// What `semantics` last gave Kotlin: the semantics tree.
@@ -426,6 +429,7 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_create<'local>(
         resources: Resources::default(),
         list: Writer::default(),
         groups: GroupCache::default(),
+        ahead: Writer::default(),
         drawing: Writer { bytes: Vec::with_capacity(4096) },
         drawing_given: (0, 0),
         semantics: Writer::default(),
@@ -545,7 +549,7 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_frame(
     if host.ui.has_enabled_back_handlers() {
         result |= flags::BACK;
     }
-    if host.ui.has_prefetch_work() {
+    if host.ui.has_prefetch_work() || host.ui.has_draw_ahead_work() {
         result |= flags::PREFETCH;
     }
     result | next_timer_bits()
@@ -565,6 +569,65 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_prefetch(
     let host = unsafe { self::host(host) };
     let available = std::time::Duration::from_nanos(available_nanos.max(0) as u64);
     u8::from(host.ui.prefetch(std::time::Instant::now() + available))
+}
+
+/// `ComposeRsNative.hasDrawAhead(host)`: whether an item prefetched waits to be drawn ahead
+/// (`drawAhead`).
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_rs_compose_android_ComposeRsNative_hasDrawAhead(
+    _env: JNIEnv,
+    _class: JClass,
+    host: jlong,
+) -> jboolean {
+    // SAFETY: a live host, on the main thread.
+    let host = unsafe { self::host(host) };
+    u8::from(host.ui.has_draw_ahead_work())
+}
+
+/// `ComposeRsNative.cancelDrawAhead(host)`: gives up drawing ahead the items waiting (an idle
+/// time with nothing else to do was too short for one): the frames placing them draw them.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_rs_compose_android_ComposeRsNative_cancelDrawAhead(
+    _env: JNIEnv,
+    _class: JClass,
+    host: jlong,
+) {
+    // SAFETY: a live host, on the main thread.
+    let host = unsafe { self::host(host) };
+    host.ui.cancel_draw_ahead();
+}
+
+/// In what `drawAhead` returns: another item waits to be drawn ahead.
+const MORE_AHEAD: jlong = 1 << 33;
+
+/// `ComposeRsNative.drawAhead(host)`: between frames, draws ahead the next item prefetched and
+/// not placed yet (`UiHost::draw_ahead`) and writes its groups' records (`write_groups_ahead`)
+/// into the drawing's memory, after the resource changes not taken yet, for Kotlin to record
+/// their render nodes now: the frame placing the item copies the records, versions unchanged,
+/// and Kotlin keeps the nodes (D350). Returns the length as `takeDrawing` does (0: nothing
+/// drawn), with `MORE_AHEAD` if another item waits. The next `takeDrawing` writes the frame's
+/// drawing there again.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_rs_compose_android_ComposeRsNative_drawAhead(
+    _env: JNIEnv,
+    _class: JClass,
+    host: jlong,
+) -> jlong {
+    // SAFETY: a live host, on the main thread.
+    let host = unsafe { self::host(host) };
+    let Some(groups) = host.ui.draw_ahead() else { return 0 };
+    {
+        let _serialize = compose_ui::platform::trace::section(c"compose-rs: serialize ahead");
+        write_groups_ahead(&groups, &mut host.resources, &mut host.groups, &mut host.ahead);
+    }
+    // The recordings go back to their boundaries alone: drawn again, they record in place.
+    drop(groups);
+    host.drawing.bytes.clear();
+    host.resources.write_pending(&mut host.drawing);
+    host.drawing.bytes.extend_from_slice(&host.ahead.bytes);
+    host.drawing.bytes.reserve(1);
+    let more = if host.ui.has_draw_ahead_work() { MORE_AHEAD } else { 0 };
+    taken_drawing(&host.drawing.bytes, host.drawing_given) | more
 }
 
 /// `ComposeRsNative.nextFrameNanos(frameTimeNanos, intervalNanos, startedNanos)`: when the next

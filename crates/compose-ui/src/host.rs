@@ -492,6 +492,36 @@ impl UiHost {
         more
     }
 
+    /// Whether an item `prefetch` measured waits to be drawn ahead ([`draw_ahead`]).
+    ///
+    /// [`draw_ahead`]: UiHost::draw_ahead
+    pub fn has_draw_ahead_work(&self) -> bool {
+        self.with_tree(|tree| tree.has_draw_ahead_work())
+    }
+
+    /// Gives up drawing ahead the items waiting ([`UiTree::cancel_draw_ahead`]): the frames
+    /// placing them draw them.
+    pub fn cancel_draw_ahead(&mut self) {
+        self.with_tree(|tree| tree.cancel_draw_ahead());
+    }
+
+    /// Draws ahead, between frames, the oldest repaint boundary `prefetch` measured and no frame
+    /// placed yet (a lazy list's next item): its group, then the groups nested in it, which the
+    /// frame placing it shares, versions unchanged ([`UiTree::draw_ahead`]). For a platform
+    /// recording each group (Android's render nodes): it records them now, and that frame
+    /// records nothing new. `None` without such a boundary, or when a frame has work (it goes
+    /// first, as for `prefetch`).
+    ///
+    /// Drawing reads state observed as in a frame: a later write draws the boundary again (and a
+    /// write while drawing asks for a frame, as any).
+    pub fn draw_ahead(&mut self) -> Option<Vec<crate::display_list::DrawGroup>> {
+        if self.has_pending_work() {
+            return None;
+        }
+        let _section = crate::trace::section(c"compose-rs: draw ahead");
+        self.with_tree(|tree| tree.draw_ahead())
+    }
+
     fn run(actions: Vec<Action>) {
         for action in actions {
             action.run();

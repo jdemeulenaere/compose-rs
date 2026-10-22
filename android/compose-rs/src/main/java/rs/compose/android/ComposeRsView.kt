@@ -80,6 +80,9 @@ class ComposeRsView(context: Context, private val app: String) : View(context) {
     /** Idle times in a row that had no time before the next frame (see [prefetch]). */
     private var idleTimesWithoutTime = 0
 
+    /** How long drawing an item ahead and recording its groups takes ([recordAhead]). */
+    private val drawAheadCost = StepCost()
+
     /** Prefetch work left: tried again after the next frame. */
     private val prefetchFrameCallback = Choreographer.FrameCallback { time ->
         noteFrameTime(time)
@@ -521,9 +524,10 @@ class ComposeRsView(context: Context, private val app: String) : View(context) {
         // Recording stops a margin before it, as Rust's prefetch steps do: its estimate is an
         // average, and a recording running past the vsync delays the frame (D341).
         val recordDeadline = nextFrameNanos - RECORD_MARGIN_NANOS
-        // Paragraphs the last idle time laid out but had no time to record go first: their item
-        // is the next one shown.
-        var workLeft = measurer.recordLaidOut(recordDeadline)
+        // Paragraphs the last idle time laid out but had no time to record go first, then the
+        // groups of the items it measured: their item is the next one shown.
+        var workLeft = measurer.recordLaidOut(recordDeadline) ||
+            recordAhead(recordDeadline, firstInIdleTime = measurer.recordedLast == 0)
         if (!workLeft) {
             val available = nextFrameNanos - System.nanoTime()
             workLeft = available <= RECORD_MARGIN_NANOS || prefetchAndRecord(available, recordDeadline)
@@ -536,9 +540,10 @@ class ComposeRsView(context: Context, private val app: String) : View(context) {
     }
 
     /**
-     * Prefetches for [available] nanoseconds, then records the paragraphs it laid out until
-     * [deadlineNanos], so the frame showing their item only draws them. Returns whether work is
-     * left (prefetching, or paragraphs to record).
+     * Prefetches for [available] nanoseconds, then records the paragraphs it laid out and the
+     * groups of the items it measured until [deadlineNanos], so the frame showing their item
+     * only draws them. Returns whether work is left (prefetching, or paragraphs or groups to
+     * record).
      */
     private fun prefetchAndRecord(available: Long, deadlineNanos: Long): Boolean {
         measurer.collectingLaidOut = true
@@ -547,8 +552,51 @@ class ComposeRsView(context: Context, private val app: String) : View(context) {
         } finally {
             measurer.collectingLaidOut = false
         }
-        val recordingLeft = measurer.recordLaidOut(deadlineNanos)
+        val recordingLeft = measurer.recordLaidOut(deadlineNanos) || recordAhead(deadlineNanos, firstInIdleTime = false)
         return prefetchLeft || recordingLeft
+    }
+
+    /**
+     * Draws ahead the items a prefetch measured, oldest first, while one is expected to end
+     * before [deadlineNanos] ([drawAheadCost], as Rust's prefetch steps: D341): Rust draws an
+     * item's groups and writes their records, the replayer records their render nodes, so the
+     * frame placing the item draws them by reference without recording (D350). [firstInIdleTime]: nothing
+     * ran yet in this idle time. A step that doesn't fit after other work waits for the next idle
+     * time; one that doesn't fit an idle time of its own gives up the items waiting (the frames
+     * draw them), as Rust's prefetch gives up until the next scroll, rather than asking for every
+     * vsync until a lowered estimate lets one start and overrun it. Returns whether some are
+     * left, for the next idle time.
+     */
+    private fun recordAhead(deadlineNanos: Long, firstInIdleTime: Boolean): Boolean {
+        if (!ComposeRsNative.hasDrawAhead(host)) return false
+        Trace.beginSection("compose-rs: record ahead")
+        try {
+            var first = firstInIdleTime
+            while (true) {
+                val start = System.nanoTime()
+                if (start + drawAheadCost.estimate() >= deadlineNanos) {
+                    drawAheadCost.missed(first)
+                    if (!first) return true
+                    ComposeRsNative.cancelDrawAhead(host)
+                    return false
+                }
+                first = false
+                val taken = ComposeRsNative.drawAhead(host)
+                val length = (taken and 0xFFFFFFFFL).toInt()
+                if (length > 0) {
+                    if (taken and ComposeRsNative.NEW_DRAWING_BUFFER != 0L || drawing == null) {
+                        drawing = ComposeRsNative.drawingBuffer(host)
+                    }
+                    val buffer = drawing ?: return false
+                    buffer.limit(length)
+                    // Timed only when recorded: a step with nothing recorded is no sample.
+                    if (replayer.recordAhead(buffer)) drawAheadCost.timed(System.nanoTime() - start)
+                }
+                if (taken and ComposeRsNative.MORE_AHEAD == 0L) return false
+            }
+        } finally {
+            Trace.endSection()
+        }
     }
 
     // ---- Accessibility -------------------------------------------------------------------

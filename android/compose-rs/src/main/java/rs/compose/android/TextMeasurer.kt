@@ -451,6 +451,10 @@ internal class TextMeasurer(
     /** Paragraphs laid out while prefetching, oldest first, not recorded yet. */
     private val laidOut = IntList()
 
+    /** How many paragraphs the last [recordLaidOut] recorded. */
+    var recordedLast = 0
+        private set
+
     /** About how long recording a paragraph takes (ns), from the last ones. */
     private var recordNanos = INITIAL_RECORD_NANOS
 
@@ -465,6 +469,7 @@ internal class TextMeasurer(
      * the next idle time.
      */
     fun recordLaidOut(deadlineNanos: Long): Boolean {
+        recordedLast = 0
         if (laidOut.size == 0) return false
         Trace.beginSection("compose-rs: record paragraphs")
         var index = 0
@@ -487,6 +492,7 @@ internal class TextMeasurer(
             index++
         }
         laidOut.removeFirst(index)
+        recordedLast = recorded
         Trace.endSection()
         return laidOut.size > 0
     }

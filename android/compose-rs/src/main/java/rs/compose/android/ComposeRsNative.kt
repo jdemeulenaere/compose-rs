@@ -52,6 +52,21 @@ internal object ComposeRsNative {
 
     const val NEW_DRAWING_BUFFER = 1L shl 32
 
+    /** Whether an item prefetched waits to be drawn ahead ([drawAhead]). */
+    @JvmStatic external fun hasDrawAhead(host: Long): Boolean
+
+    /**
+     * Between frames: draws ahead the next item prefetched and not placed yet, its groups'
+     * records ready in [drawingBuffer] (after resource changes) for `Replayer.recordAhead`: their
+     * length as [takeDrawing] returns it (0: nothing drawn), with [MORE_AHEAD] if another waits.
+     */
+    @JvmStatic external fun drawAhead(host: Long): Long
+
+    const val MORE_AHEAD = 1L shl 33
+
+    /** Gives up drawing ahead the items waiting: the frames placing them draw them. */
+    @JvmStatic external fun cancelDrawAhead(host: Long)
+
     /** Action 0 down, 1 move, 2 up, 3 cancel; [age]: how long ago it happened (ns). */
     @JvmStatic external fun touch(host: Long, action: Int, pointer: Int, x: Float, y: Float, age: Long)
 

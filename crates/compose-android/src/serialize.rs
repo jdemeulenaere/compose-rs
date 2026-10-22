@@ -602,6 +602,12 @@ pub struct GroupCache {
     unchanged: usize,
     /// The groups whose layers are still to be listed (`write_layers`), kept for its capacity.
     open: Vec<usize>,
+    /// The keys of the records written ahead (`write_groups_ahead`) that no frame wrote or
+    /// copied since, by item (one write's), oldest first: kept until a frame does,
+    /// `AHEAD_CAPACITY` items at most.
+    ahead: Vec<Vec<u64>>,
+    /// How many records the last write copied that were written ahead.
+    copied_ahead: usize,
 }
 
 #[derive(Default)]
@@ -616,6 +622,8 @@ struct CachedGroup {
     /// Its content is one drawing with a paint (`single_drawing`): an alpha layer around it
     /// fades that paint, not overlapping.
     single_drawing: bool,
+    /// Written ahead, and no frame wrote or copied it since: kept though the last frame didn't.
+    ahead: bool,
 }
 
 impl GroupCache {
@@ -643,7 +651,28 @@ impl GroupCache {
     pub fn unchanged(&self) -> usize {
         self.unchanged
     }
+
+    /// How many records the last write copied that were written ahead (`write_groups_ahead`).
+    pub fn copied_ahead(&self) -> usize {
+        self.copied_ahead
+    }
+
+    /// How many records written ahead wait for a frame.
+    pub fn waiting_ahead(&self) -> usize {
+        self.ahead.iter().map(Vec::len).sum()
+    }
+
+    /// How many items' records written ahead wait for a frame.
+    pub fn items_waiting_ahead(&self) -> usize {
+        self.ahead.len()
+    }
 }
+
+/// The most items whose records written ahead wait for a frame (`write_groups_ahead`): a lazy
+/// list's prefetched items (two ahead), with room for items scrolled away before any frame
+/// showed them (their records then go oldest item first, an item's groups together however
+/// many it has).
+pub const AHEAD_CAPACITY: usize = 8;
 
 /// The bytes of one entry of the `LAYERS` section.
 pub const LAYER_ENTRY_BYTES: usize = 8 + 8 * 4 + 1 + 4 * 4 + 1 + 4 * 4;
@@ -666,55 +695,89 @@ pub fn write_display_list(
     out.bytes.clear();
     cache.generation += 1;
     cache.copied = 0;
+    cache.copied_ahead = 0;
     cache.written = 0;
     cache.unchanged = 0;
-    write_layers(list, cache, out);
+    write_layers(&list.groups, cache, out);
     let mut serializer =
-        Serializer { groups: &list.groups, folds: Vec::new(), resources, cache, out };
-    let mut index = 0;
-    while let Some(group) = list.groups.get(index) {
-        if group.empty {
-            // Nothing drawn in it either.
-            index += 1 + group.descendants;
-        } else {
-            serializer.write_group(index);
-            index += 1;
-        }
-    }
+        Serializer { groups: &list.groups, folds: Vec::new(), resources, cache, out, ahead: false };
+    serializer.write_groups();
     serializer.write_recording(list, 0);
     let generation = cache.generation;
-    cache.records.retain(|_, record| record.generation == generation);
+    // Records written ahead wait for the frame placing their group.
+    cache.records.retain(|_, record| record.generation == generation || record.ahead);
+    let records = &cache.records;
+    for item in &mut cache.ahead {
+        item.retain(|key| records.get(key).is_some_and(|record| record.ahead));
+    }
+    cache.ahead.retain(|item| !item.is_empty());
+}
+
+/// Writes into `out` (cleared first) the records of `groups`, a repaint boundary drawn ahead of
+/// the frame placing it (`UiHost::draw_ahead`: its group, then those nested in it), for the
+/// replayer to record their render nodes now: a `LAYERS` section for those with a layer, then
+/// each one's `GROUP` record, as a frame writes them. They're cached as written ahead, kept
+/// past frames that don't draw them, so the frame placing the boundary copies them, versions
+/// unchanged (a key and a version are the same bytes in both, D157), and the replayer finds
+/// their nodes recorded. At most `AHEAD_CAPACITY` items' records wait, the oldest item's dropped
+/// first (a frame then writes them again, the same bytes).
+pub fn write_groups_ahead(
+    groups: &[DrawGroup],
+    resources: &mut Resources,
+    cache: &mut GroupCache,
+    out: &mut Writer,
+) {
+    out.bytes.clear();
+    cache.copied = 0;
+    cache.copied_ahead = 0;
+    cache.written = 0;
+    cache.unchanged = 0;
+    write_layers(groups, cache, out);
+    cache.ahead.push(Vec::new());
+    let mut serializer =
+        Serializer { groups, folds: Vec::new(), resources, cache, out, ahead: true };
+    serializer.write_groups();
+    if cache.ahead.last().is_some_and(Vec::is_empty) {
+        cache.ahead.pop();
+    }
+    while cache.ahead.len() > AHEAD_CAPACITY {
+        for key in cache.ahead.remove(0) {
+            if cache.records.get(&key).is_some_and(|record| record.ahead) {
+                cache.records.remove(&key);
+            }
+        }
+    }
 }
 
 /// The `LAYERS` section: every group's layer, if one has one, each after the ones nested in it
 /// (as drawing closes them).
-fn write_layers(list: &DisplayList, cache: &mut GroupCache, out: &mut Writer) {
+fn write_layers(groups: &[DrawGroup], cache: &mut GroupCache, out: &mut Writer) {
     let layered = |group: &DrawGroup| !group.empty && group.layer.is_some();
-    let count = list.groups.iter().filter(|group| layered(group)).count();
+    let count = groups.iter().filter(|group| layered(group)).count();
     if count == 0 {
         return;
     }
     out.u8(tag::LAYERS);
     out.u32(count as u32);
     let mut open = std::mem::take(&mut cache.open);
-    for index in 0..=list.groups.len() {
+    for index in 0..=groups.len() {
         // The groups closed before this one, innermost first.
         while let Some(&last) = open.last()
-            && (index == list.groups.len() || last + list.groups[last].descendants < index)
+            && (index == groups.len() || last + groups[last].descendants < index)
         {
             open.pop();
-            write_layer(list, last, cache, out);
+            write_layer(groups, last, cache, out);
         }
-        if list.groups.get(index).is_some_and(layered) {
+        if groups.get(index).is_some_and(layered) {
             open.push(index);
         }
     }
     cache.open = open;
 }
 
-/// The `LAYERS` entry of the group at `index` of `list`'s.
-fn write_layer(list: &DisplayList, index: usize, cache: &GroupCache, out: &mut Writer) {
-    let group = &list.groups[index];
+/// The `LAYERS` entry of the group at `index` of `groups`.
+fn write_layer(groups: &[DrawGroup], index: usize, cache: &GroupCache, out: &mut Writer) {
+    let group = &groups[index];
     let layer = group.layer.expect("a layer");
     out.u32(group.key as u32);
     out.u32((group.key >> 32) as u32);
@@ -726,7 +789,7 @@ fn write_layer(list: &DisplayList, index: usize, cache: &GroupCache, out: &mut W
     out.offset(layer.translation);
     out.u8(u8::from(layer.clip.is_some()));
     out.rect(&layer.clip.unwrap_or(Rect::new(0.0, 0.0, 0.0, 0.0)));
-    out.u8(u8::from(overlapping(list, index, cache)));
+    out.u8(u8::from(overlapping(groups, index, cache)));
     out.rect(&layer.bounds);
 }
 
@@ -734,12 +797,12 @@ fn write_layer(list: &DisplayList, index: usize, cache: &GroupCache, out: &mut W
 /// unless it is one drawing with a paint and no group (as a folded layer, D153), which a render
 /// node fades without a layer (`setHasOverlappingRendering(false)`). Read from its cached
 /// record while its version stays.
-fn overlapping(list: &DisplayList, index: usize, cache: &GroupCache) -> bool {
-    let group = &list.groups[index];
+fn overlapping(groups: &[DrawGroup], index: usize, cache: &GroupCache) -> bool {
+    let group = &groups[index];
     if group.layer.is_none_or(|layer| layer.alpha >= 1.0) {
         return true;
     }
-    let nested = &list.groups[index + 1..=index + group.descendants];
+    let nested = &groups[index + 1..=index + group.descendants];
     if nested.iter().any(|inner| !inner.empty) {
         return true;
     }
@@ -760,9 +823,25 @@ struct Serializer<'a> {
     resources: &'a mut Resources,
     cache: &'a mut GroupCache,
     out: &'a mut Writer,
+    /// Writing groups drawn ahead (`write_groups_ahead`), not a frame.
+    ahead: bool,
 }
 
 impl<'a> Serializer<'a> {
+    /// Writes the record of each group that draws, outer before inner.
+    fn write_groups(&mut self) {
+        let mut index = 0;
+        while let Some(group) = self.groups.get(index) {
+            if group.empty {
+                // Nothing drawn in it either.
+                index += 1 + group.descendants;
+            } else {
+                self.write_group(index);
+                index += 1;
+            }
+        }
+    }
+
     /// Writes `recording` (the frame, or a group's content), each group drawn in it named where
     /// its boundary is; those groups are the ones from `child` on, siblings. Its paints'
     /// shaders are its own (written whole into each paint, D210).
@@ -846,6 +925,10 @@ impl<'a> Serializer<'a> {
             record.generation = generation;
             self.out.bytes.extend_from_slice(&record.bytes);
             self.cache.copied += 1;
+            if !self.ahead && record.ahead {
+                self.cache.copied_ahead += 1;
+            }
+            self.mark(group.key);
             return;
         }
         self.cache.written += 1;
@@ -885,6 +968,20 @@ impl<'a> Serializer<'a> {
         record.generation = generation;
         // Of the display list's operations, which bytes alone don't tell (a folded layer's).
         record.single_drawing = single_drawing(&group.content.ops).is_some();
+        self.mark(group.key);
+    }
+
+    /// Notes the record of `key`, just written or copied, as written ahead or by a frame.
+    fn mark(&mut self, key: u64) {
+        let Some(record) = self.cache.records.get_mut(&key) else { return };
+        if self.ahead {
+            if !record.ahead {
+                record.ahead = true;
+                self.cache.ahead.last_mut().expect("an item being written").push(key);
+            }
+        } else {
+            record.ahead = false;
+        }
     }
 }
 

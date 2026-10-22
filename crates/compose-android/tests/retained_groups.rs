@@ -5,13 +5,16 @@
 
 #![allow(non_snake_case)]
 
+// The call macros name the runtime `compose`.
+extern crate compose_runtime as compose;
+
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::Arc;
 
 use compose_android::serialize::{
-    GroupCache, LAYER_ENTRY_BYTES, Resources, Writer, operand_bytes, shader, tag,
-    write_display_list,
+    AHEAD_CAPACITY, GroupCache, LAYER_ENTRY_BYTES, Resources, Writer, operand_bytes, shader, tag,
+    write_display_list, write_groups_ahead,
 };
 use compose_runtime::*;
 use compose_ui::platform::*;
@@ -672,4 +675,186 @@ fn a_copied_record_keeps_its_paths_ids() {
     assert_eq!((pending.bytes[last], u32_at(&pending.bytes, last + 1)), (tag::DROP_PATH, defined));
     let at = find(&bytes, tag::DRAW_PATH).expect("a path drawn");
     assert_eq!(u32_at(&bytes, at + 1), new_id);
+}
+
+// ---- Groups written ahead (D350) -------------------------------------------------------------
+
+/// Each `GROUP` record in `bytes` (after a `LAYERS` section, if any): its content's bytes by
+/// key and version.
+fn records(bytes: &[u8]) -> HashMap<(u64, u64), Vec<u8>> {
+    let mut at = if bytes.first() == Some(&tag::LAYERS) {
+        5 + u32_at(bytes, 1) as usize * LAYER_ENTRY_BYTES
+    } else {
+        0
+    };
+    let mut records = HashMap::new();
+    while bytes.get(at) == Some(&tag::GROUP) {
+        let (key, version) = (u64_at(bytes, at + 1), u64_at(bytes, at + 9));
+        let length = u32_at(bytes, at + 17) as usize;
+        records.insert((key, version), bytes[at + 21..at + 21 + length].to_vec());
+        at += 21 + length;
+    }
+    records
+}
+
+/// The `LAYERS` section's keys.
+fn layer_keys(bytes: &[u8]) -> Vec<u64> {
+    if bytes.first() != Some(&tag::LAYERS) {
+        return Vec::new();
+    }
+    let count = u32_at(bytes, 1) as usize;
+    (0..count).map(|index| u64_at(bytes, 5 + index * LAYER_ENTRY_BYTES)).collect()
+}
+
+impl Serialized {
+    /// Prefetches, then writes ahead every item drawn ahead, as `bridge.rs` does between frames:
+    /// each one's bytes.
+    fn prefetch_and_write_ahead(&mut self) -> Vec<Vec<u8>> {
+        self.host.prefetch(std::time::Instant::now() + std::time::Duration::from_secs(60));
+        let mut written = Vec::new();
+        while let Some(groups) = self.host.draw_ahead() {
+            let mut out = Writer::default();
+            write_groups_ahead(&groups, &mut self.resources, &mut self.cache, &mut out);
+            assert!(self.cache.items_waiting_ahead() <= AHEAD_CAPACITY);
+            written.push(out.bytes);
+        }
+        written
+    }
+}
+
+/// A feed: a counter above a lazy list of items, each a text and a painted leaf, every third
+/// with a faded graphics layer (a nested group with a `LAYERS` entry).
+fn feed(state: compose_foundation::LazyListState, count: MutableState<u32>) {
+    use compose_foundation::{layout::*, *};
+    Column!({
+        BasicText!("count {}", count.get());
+        LazyColumn!(
+            modifier = Modifier.size((160.dp(), 150.dp())),
+            state = state,
+            |scope: LazyListScope| {
+                scope.items(300, |index| {
+                    Column!({
+                        BasicText!("author {index}");
+                        Leaf(
+                            painted(move || Color::from_argb(0xFF00_0000 | index as u32))
+                                .size((100.dp(), 10.dp())),
+                        );
+                        if index % 3 == 0 {
+                            Leaf(
+                                Modifier
+                                    .graphics_layer_with(GraphicsLayerScope {
+                                        alpha: 0.5,
+                                        ..GraphicsLayerScope::default()
+                                    })
+                                    .then(painted(|| Color::RED))
+                                    .size(10.dp()),
+                            );
+                        }
+                    });
+                });
+            }
+        );
+    });
+}
+
+/// Items drawn ahead between frames, written ahead (D350): each record is the bytes the frame
+/// placing it writes for its key and version (that frame copies it, and a write with nothing
+/// cached gives the same), kept until that frame though frames between don't draw it; the
+/// layers of those with one are listed ahead too, and again by the frame.
+#[test]
+fn groups_written_ahead_are_what_the_frame_placing_them_writes() {
+    let state = compose_foundation::LazyListState::new(0, 0);
+    let count = mutable_state_of(0u32);
+    let (given, shown) = (*state, count.handle());
+    let mut serialized = Serialized::new(move || feed(given, shown));
+    let mut ahead: HashMap<(u64, u64), Vec<u8>> = HashMap::new();
+    let (mut kept, mut copied, mut layered) = (0, 0, 0);
+    for step in 0..90 {
+        let delta = match step % 9 {
+            6 => -40.0,
+            _ => 17.0,
+        };
+        state.scroll_by(delta);
+        let bytes = serialized.frame();
+        copied += serialized.cache.copied_ahead();
+        assert_eq!(unversioned_bytes(&bytes), unversioned_bytes(&serialized.fresh()));
+        for (group, content) in records(&bytes) {
+            if let Some(written) = ahead.get(&group) {
+                assert_eq!(*written, content, "step {step}: {group:x?} as written ahead");
+                kept += 1;
+            }
+        }
+        if step % 5 == 4 {
+            // A frame placing no item: the records written ahead wait.
+            count.set(step);
+            let waiting = serialized.cache.waiting_ahead();
+            serialized.frame();
+            assert_eq!(serialized.cache.copied_ahead(), 0);
+            assert_eq!(serialized.cache.waiting_ahead(), waiting, "step {step}");
+        }
+        for written in serialized.prefetch_and_write_ahead() {
+            let records = records(&written);
+            assert!(!records.is_empty(), "an item's records");
+            layered += layer_keys(&written).len();
+            for key in layer_keys(&written) {
+                assert!(records.keys().any(|(group, _)| *group == key), "a layer of its own");
+            }
+            ahead.extend(records);
+        }
+    }
+    assert!(kept > 40, "records written ahead kept: {kept}");
+    assert!(copied > 20, "records copied from those written ahead: {copied}");
+    assert!(layered > 5, "layers listed ahead: {layered}");
+}
+
+/// At most `AHEAD_CAPACITY` records written ahead wait, the oldest dropped first: the frame
+/// drawing one dropped writes it again, with the same key, version and bytes.
+#[test]
+fn records_written_ahead_are_bounded() {
+    let group = |key: u64| {
+        let mut content = DisplayList::default();
+        content
+            .push(DrawOp::DrawRect(Rect::new(0.0, 0.0, 1.0, key as f32), Paint::fill(Color::RED)));
+        DrawGroup {
+            key,
+            version: key + 100,
+            layer: None,
+            content: Arc::new(content),
+            descendants: 0,
+            empty: false,
+        }
+    };
+    let (mut resources, mut cache) = (Resources::default(), GroupCache::default());
+    let mut written = HashMap::new();
+    for key in 1..=AHEAD_CAPACITY as u64 + 4 {
+        let mut out = Writer::default();
+        write_groups_ahead(&[group(key)], &mut resources, &mut cache, &mut out);
+        written.extend(records(&out.bytes));
+    }
+    assert_eq!(cache.waiting_ahead(), AHEAD_CAPACITY);
+    assert_eq!(cache.len(), AHEAD_CAPACITY);
+    // A frame drawing the first (dropped) and the last (waiting).
+    let mut frame = DisplayList::default();
+    for key in [1, AHEAD_CAPACITY as u64 + 4] {
+        frame.boundaries.push(Boundary { at: 0, key });
+        frame.groups.push(group(key));
+    }
+    let mut out = Writer::default();
+    write_display_list(&frame, &mut resources, &mut cache, &mut out);
+    assert_eq!((cache.copied_ahead(), cache.written()), (1, 1));
+    for (group, content) in records(&out.bytes) {
+        assert_eq!(written.get(&group), Some(&content), "{group:?}");
+    }
+    // The ones still waiting stay past this frame; the two it drew are a frame's now.
+    assert_eq!(cache.waiting_ahead(), AHEAD_CAPACITY - 1);
+    assert_eq!(cache.len(), AHEAD_CAPACITY + 1);
+
+    // The bound counts items, not groups: one item with many nested groups keeps them all.
+    let mut item: Vec<DrawGroup> = (200..240).map(group).collect();
+    item[0].descendants = item.len() - 1;
+    let mut out = Writer::default();
+    write_groups_ahead(&item, &mut resources, &mut cache, &mut out);
+    assert_eq!(records(&out.bytes).len(), 40);
+    assert_eq!(cache.items_waiting_ahead(), AHEAD_CAPACITY);
+    assert_eq!(cache.waiting_ahead(), AHEAD_CAPACITY - 1 + 40);
 }

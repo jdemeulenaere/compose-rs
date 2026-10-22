@@ -486,3 +486,225 @@ fn a_frame_revealing_prefetched_items_draws_only_them() {
         dump_without_paragraphs(&fresh.host().display_list()),
     );
 }
+
+// ---- Drawing ahead -----------------------------------------------------------------------------
+
+/// The row whose rectangle the group's own content draws, if any.
+fn row_of(group: &compose_ui::platform::DrawGroup) -> Option<usize> {
+    group.content.ops.iter().find_map(|op| match op {
+        compose_ui::platform::DrawOp::DrawRect(_, paint) => {
+            Some((paint.color.argb() & 0x00FF_FFFF) as usize)
+        }
+        _ => None,
+    })
+}
+
+/// Draws ahead every item waiting: each item's group, by row.
+fn draw_all_ahead(ui: &mut ComposeTestRule) -> HashMap<usize, compose_ui::platform::DrawGroup> {
+    let mut drawn = HashMap::new();
+    while let Some(groups) = ui.host().draw_ahead() {
+        let group = groups.into_iter().next().expect("the item's group first");
+        let row = row_of(&group).expect("a painted row");
+        assert!(drawn.insert(row, group).is_none(), "row {row} drawn ahead twice");
+    }
+    assert!(!ui.host().has_draw_ahead_work());
+    drawn
+}
+
+/// The painted list, scrolled 30 px down and prefetched: its two prefetched rows (the last
+/// drawn, plus one and two) wait to be drawn ahead.
+fn prefetched_painted_list() -> (ComposeTestRule, Owned<LazyListState>, usize) {
+    DRAWN.with(|drawn| drawn.borrow_mut().clear());
+    let state = LazyListState::new(0, 0);
+    let given = *state;
+    let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || PaintedList(given));
+    assert!(!ui.host().has_draw_ahead_work(), "nothing measured ahead yet");
+    state.scroll_by(30.0);
+    ui.wait_for_idle();
+    let last_drawn = *row_groups(&ui.host().display_list()).keys().max().unwrap();
+    assert!(!ui.host().prefetch(later()));
+    (ui, state, last_drawn)
+}
+
+/// A prefetched item is drawn ahead between frames (D350): its group is the one the frame
+/// placing it shares, same content and version, its draw code not run again; nothing is asked
+/// of a frame, and the frame's list is a fresh host's.
+#[test]
+fn a_prefetched_item_drawn_ahead_is_kept_by_the_frame_placing_it() {
+    let (mut ui, state, last_drawn) = prefetched_painted_list();
+    assert!(ui.host().has_draw_ahead_work());
+    let ahead = draw_all_ahead(&mut ui);
+    assert_eq!(ahead.len(), 2, "the two prefetched rows");
+    for row in [last_drawn + 1, last_drawn + 2] {
+        assert!(ahead.contains_key(&row), "row {row} drawn ahead");
+        assert_eq!(draws(row), 1, "row {row} drawn once");
+    }
+    assert!(ui.host().draw_ahead().is_none());
+    assert!(!ui.host().needs_frame(), "drawing ahead asks for no frame");
+
+    // Two rows on: the frame places them, drawing neither again.
+    state.scroll_by(40.0);
+    assert!(ui.host().draw_ahead().is_none(), "a frame has work");
+    ui.host().frame();
+    let list = ui.host().display_list();
+    let after = row_groups(&list);
+    for (row, group) in &ahead {
+        assert_eq!(after.get(row), Some(&(group.key, group.version)), "row {row} kept");
+        assert_eq!(draws(*row), 1, "row {row} not drawn again");
+        let shared = ui.host().with_tree(|tree| {
+            let frame = tree.display_list().groups.iter().find(|kept| kept.key == group.key);
+            frame.is_some_and(|kept| std::sync::Arc::ptr_eq(&kept.content, &group.content))
+        });
+        assert!(shared, "row {row}'s recording shared, not drawn again");
+    }
+    let fresh_state = LazyListState::new(3, 10);
+    let mut fresh =
+        ComposeTestRule::sized(IntSize::new(200, 200), move || PaintedList(*fresh_state));
+    assert_eq!(
+        dump_without_paragraphs(&list),
+        dump_without_paragraphs(&fresh.host().display_list()),
+    );
+}
+
+/// A host that doesn't draw ahead (desktop) keeps no item measured ahead once a frame places
+/// it, or once it's gone.
+#[test]
+fn items_measured_ahead_are_forgotten_once_placed_or_gone() {
+    let (mut ui, state, _) = prefetched_painted_list();
+    assert_eq!(ui.host().with_tree(|tree| tree.measured_ahead_count()), 2);
+    state.scroll_by(40.0);
+    ui.wait_for_idle();
+    // The frame placing them forgot them (asking `has_draw_ahead_work` would too).
+    assert_eq!(ui.host().with_tree(|tree| tree.measured_ahead_count()), 0, "both placed");
+    // Given up: the frames draw them.
+    let (mut ui, _, last_drawn) = prefetched_painted_list();
+    ui.host().cancel_draw_ahead();
+    assert!(!ui.host().has_draw_ahead_work());
+    assert!(ui.host().draw_ahead().is_none());
+    assert_eq!(draws(last_drawn + 1), 0);
+    let (mut ui, state, last_drawn) = prefetched_painted_list();
+    // Back up far: the items prefetched below are disposed before any is drawn ahead.
+    state.scroll_by(-30.0);
+    ui.wait_for_idle();
+    ui.host().prefetch(later());
+    assert!(!ui.host().has_draw_ahead_work(), "disposed");
+    assert!(ui.host().draw_ahead().is_none());
+    assert_eq!(draws(last_drawn + 1), 0, "a disposed item isn't drawn ahead");
+    assert_eq!(draws(last_drawn + 2), 0, "a disposed item isn't drawn ahead");
+}
+
+/// What an item drawn ahead read changes before a frame places it: the write asks for a frame
+/// (drawing ahead waits for it), and the frame placing the item draws it again.
+#[test]
+fn an_item_drawn_ahead_draws_again_when_what_it_read_changes() {
+    let tint = mutable_state_of(0u32);
+    let read = tint.handle();
+    let state = LazyListState::new(0, 0);
+    let given = *state;
+    let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || {
+        LazyColumn!(
+            modifier = Modifier.size((100.dp(), 100.dp())),
+            state = given,
+            |scope: LazyListScope| {
+                scope.items(1000, move |index| {
+                    let painted = Modifier.draw_behind(move |scope| {
+                        let color = compose_ui::Color::from_argb(
+                            0xFF00_0000 | (read.get() << 16) | index as u32,
+                        );
+                        scope.draw_rect(scope.bounds(), compose_ui::Paint::fill(color));
+                    });
+                    Box!(modifier = painted.size((100.dp(), 20.dp())));
+                });
+            }
+        );
+    });
+    state.scroll_by(30.0);
+    ui.wait_for_idle();
+    ui.host().prefetch(later());
+    let mut ahead = Vec::new();
+    while let Some(groups) = ui.host().draw_ahead() {
+        ahead.push((groups[0].key, groups[0].version));
+    }
+    assert_eq!(ahead.len(), 2);
+    tint.set(1);
+    assert!(ui.host().needs_frame(), "the write asks for a frame");
+    assert!(ui.host().draw_ahead().is_none(), "the frame goes first");
+    ui.wait_for_idle();
+    state.scroll_by(40.0);
+    ui.host().frame();
+    let list = ui.host().display_list();
+    for (key, version) in ahead {
+        let group = list.groups.iter().find(|group| group.key == key).expect("placed");
+        assert_ne!(group.version, version, "drawn again");
+        let tinted = list.ops[group.start..group.end].iter().any(|op| {
+            matches!(op, compose_ui::platform::DrawOp::DrawRect(_, paint)
+                if paint.color.argb() >> 16 & 0xFF == 1)
+        });
+        assert!(tinted, "with the new tint");
+    }
+}
+
+#[composable]
+fn KeyedList(state: LazyListState, order: MutableState<Vec<usize>>) {
+    LazyColumn!(
+        modifier = Modifier.size((100.dp(), 100.dp())),
+        state = state,
+        |scope: LazyListScope| {
+            let order = order.get();
+            let keys = order.clone();
+            scope.items_keyed(
+                order.len(),
+                move |index| keys[index],
+                move |index| PaintedRow(order[index]),
+            );
+        }
+    );
+}
+
+/// Two lists scrolled alike, back and forth, their keys reordered on the way, one drawing its
+/// prefetched items ahead: every frame draws the same.
+#[test]
+fn drawing_ahead_changes_nothing_a_frame_draws() {
+    let rule = || {
+        let state = LazyListState::new(0, 0);
+        let order = mutable_state_of((0..300).collect::<Vec<usize>>());
+        let (given, keys) = (*state, order.handle());
+        let ui = ComposeTestRule::sized(IntSize::new(200, 200), move || KeyedList(given, keys));
+        (ui, state, order)
+    };
+    let (mut plain, plain_state, plain_order) = rule();
+    let (mut ahead, state, order) = rule();
+    let mut drawn_ahead = 0;
+    for frame in 0..80 {
+        let delta = match frame % 10 {
+            7 => -35.0,
+            9 => -10.0,
+            _ => 23.0,
+        };
+        if frame % 13 == 12 {
+            // The first item in view swaps with one six rows below (prefetched, maybe drawn
+            // ahead).
+            let first = plain_state.first_visible_item_index();
+            for order in [&plain_order, &order] {
+                let mut keys = order.get();
+                keys.swap(first, first + 6);
+                order.set(keys);
+            }
+        }
+        plain_state.scroll_by(delta);
+        plain.wait_for_idle();
+        state.scroll_by(delta);
+        ahead.wait_for_idle();
+        assert_eq!(
+            dump_without_paragraphs(&plain.host().display_list()),
+            dump_without_paragraphs(&ahead.host().display_list()),
+            "frame {frame}"
+        );
+        plain.host().prefetch(later());
+        ahead.host().prefetch(later());
+        while ahead.host().draw_ahead().is_some() {
+            drawn_ahead += 1;
+        }
+    }
+    assert!(drawn_ahead > 20, "items were drawn ahead: {drawn_ahead}");
+}

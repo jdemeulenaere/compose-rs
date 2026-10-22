@@ -57,6 +57,11 @@ internal inline fun ByteBuffer.floatAt(index: Int): Float = Float.fromBits(getIn
  *
  * Every frame's buffer holds every group's bytes (Rust copies unchanged ones from a cache), so
  * a group whose recording the system dropped (the window hid) is recorded again from them.
+ *
+ * Between frames, the groups of an item a prefetch measured are recorded ahead ([recordAhead],
+ * D350) from records Rust wrote ahead, as a frame would record them: kept apart (a frame not
+ * naming them doesn't drop them) until a frame names one, which then finds its version
+ * recorded, and draws it by reference.
  */
 internal class Replayer(private val text: TextMeasurer) {
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
@@ -205,6 +210,20 @@ internal class Replayer(private val text: TextMeasurer) {
     }
 
     private val groups = HashMap<Long, Group>()
+    /**
+     * The groups recorded ahead ([recordAhead]) that no frame named yet, by key: a frame naming
+     * one takes it into [groups]. Dropped all at once when [AHEAD_ITEMS] items wait (or
+     * [AHEAD_GROUPS] groups): a kept recording draws its nested groups' nodes by reference, so a
+     * nested group's node goes only with every recording that may draw it (a frame's recordings
+     * draw no node of these: a frame takes into [groups] each node it draws).
+     */
+    private val ahead = HashMap<Long, Group>()
+    /** The items recorded ahead, by their outermost group's key (pruned of the taken ones). */
+    private val aheadItems = HashSet<Long>()
+    /** Recording ahead ([recordAhead]): groups are [ahead]'s, not the frame's. */
+    private var recordingAhead = false
+    /** The group recorded ahead draws a node of the last frame's: not kept as its version. */
+    private var drawsFrameGroup = false
     /** Gone groups' nodes, for new groups (D195). */
     private val pool = RenderNodePool("compose-rs group", NODE_POOL_CAPACITY)
     private var frame = 0
@@ -401,8 +420,11 @@ internal class Replayer(private val text: TextMeasurer) {
             softwareGroups[key] = buffer.position()
             return
         }
-        val group = groups.getOrPut(key) { Group(pool.obtain()) }
+        // Ahead, a group of the last frame's is left to the frames.
+        if (recordingAhead && groups.containsKey(key)) return
+        val group = groupOf(key)
         group.frame = frame
+        drawsFrameGroup = false
         if (group.version == version && group.node.hasDisplayList()) return
         // Matches nothing until recorded whole.
         group.version = -1L
@@ -417,8 +439,90 @@ internal class Replayer(private val text: TextMeasurer) {
         } finally {
             group.node.endRecording()
         }
-        // A recording cut short by an unknown operation isn't that version's.
-        if (!unreadable) group.version = version
+        // A recording cut short by an unknown operation isn't that version's (nor one ahead
+        // drawing a frame's node, which the frames may drop).
+        if (!unreadable && !drawsFrameGroup) group.version = version
+    }
+
+    /**
+     * Group [key]'s: a frame's, or, recording ahead, [ahead]'s (new if none). In a frame, one
+     * recorded ahead is taken into [groups]: its node is the one recordings ahead drew.
+     */
+    private fun groupOf(key: Long): Group {
+        groups[key]?.let { return it }
+        if (recordingAhead) return ahead.getOrPut(key) { Group(pool.obtain()) }
+        val group = ahead.remove(key) ?: Group(pool.obtain())
+        groups[key] = group
+        return group
+    }
+
+    /**
+     * Records ahead, between frames, the groups in [buffer] (`ComposeRsNative.drawAhead`):
+     * resource changes, then an item's `LAYERS` entries and `GROUP` records, as a frame lists
+     * and records them (D350). The frame placing the item writes the same records, versions
+     * unchanged, and finds them recorded. Without a hardware frame yet, only the resource changes
+     * are taken. Returns whether groups were recorded.
+     */
+    fun recordAhead(buffer: ByteBuffer): Boolean {
+        buffer.order(ByteOrder.LITTLE_ENDIAN)
+        buffer.position(0)
+        unreadable = false
+        val recordsGroups = frame > 0
+        if (recordsGroups) {
+            aheadItems.retainAll { ahead.containsKey(it) }
+            if (aheadItems.size >= AHEAD_ITEMS || ahead.size >= AHEAD_GROUPS) dropAhead()
+        }
+        var recorded = false
+        hardware = true
+        recordingAhead = true
+        try {
+            while (buffer.position() < buffer.limit() && !unreadable) {
+                when (buffer.get().toInt()) {
+                    GROUP -> {
+                        val key = buffer.getLong()
+                        val version = buffer.getLong()
+                        val length = buffer.getInt()
+                        val from = buffer.position()
+                        if (recordsGroups) {
+                            // The first is the item's.
+                            if (!recorded) aheadItems.add(key)
+                            recorded = true
+                            group(buffer, key, version, from + length)
+                        }
+                        buffer.position(from + length)
+                        unreadable = false
+                    }
+                    LAYERS -> if (recordsGroups) layers(true, buffer) else skipLayers(buffer)
+                    DEFINE_PATH -> definePath(buffer)
+                    DROP_PATH -> dropPath(buffer.getInt())
+                    DEFINE_IMAGE -> defineImage(buffer)
+                    DROP_IMAGE -> {
+                        val id = buffer.getInt()
+                        images.get(id)?.recycle()
+                        images.remove(id)
+                    }
+                    else -> unreadable = true
+                }
+            }
+        } finally {
+            recordingAhead = false
+            unreadable = false
+        }
+        return recorded
+    }
+
+    private fun skipLayers(buffer: ByteBuffer) {
+        buffer.position(buffer.position() + 4 + buffer.getInt(buffer.position()) * LAYER_ENTRY_BYTES)
+    }
+
+    /** Drops every group recorded ahead that no frame named. */
+    private fun dropAhead() {
+        for (group in ahead.values) {
+            if (group.layered) resetLayer(group.node)
+            pool.recycle(group.node)
+        }
+        ahead.clear()
+        aheadItems.clear()
     }
 
     /**
@@ -429,7 +533,8 @@ internal class Replayer(private val text: TextMeasurer) {
         if (hardware) {
             // Made here if new: a parent's record comes before those of the groups in it, which
             // are recorded later in this frame (its node is drawn by reference).
-            canvas.drawRenderNode(groups.getOrPut(key) { Group(pool.obtain()) }.node)
+            if (recordingAhead && groups.containsKey(key)) drawsFrameGroup = true
+            canvas.drawRenderNode(groupOf(key).node)
             return
         }
         val from = softwareGroups[key] ?: return
@@ -454,17 +559,18 @@ internal class Replayer(private val text: TextMeasurer) {
         repeat(count) {
             val key = buffer.getLong(at)
             if (hardware) {
-                val group = groups.getOrPut(key) { Group(pool.obtain()) }
+                // Ahead, a group of the last frame's is left to the frames.
+                val group = if (recordingAhead && groups.containsKey(key)) null else groupOf(key)
                 // Read in one copy, compared with what was set: a frame where nothing moves
                 // sets nothing, and a change sets only the properties that changed.
                 buffer.position(at + 8)
                 buffer.get(entry)
-                if (!group.layered || !entry.contentEquals(group.applied)) {
+                if (group != null && (!group.layered || !entry.contentEquals(group.applied))) {
                     setLayer(group, buffer, at + 8, if (group.layered) group.applied else null)
                     System.arraycopy(entry, 0, group.applied, 0, entry.size)
                     group.layered = true
                 }
-                group.layerFrame = frame
+                if (group != null) group.layerFrame = frame
             } else {
                 softwareLayers[key] = at + 8
             }
@@ -891,6 +997,9 @@ internal class Replayer(private val text: TextMeasurer) {
     fun clear() {
         for (group in groups.values) group.node.discardDisplayList()
         groups.clear()
+        for (group in ahead.values) group.node.discardDisplayList()
+        ahead.clear()
+        aheadItems.clear()
         pool.clear()
         paths.clear()
         masks.clear()
@@ -908,6 +1017,14 @@ internal class Replayer(private val text: TextMeasurer) {
     private companion object {
         /** About ten list items' groups: what a fling drops before drawing new ones. */
         const val NODE_POOL_CAPACITY = 32
+        /**
+         * The most items recorded ahead waiting for a frame, as Rust keeps their records
+         * (`AHEAD_CAPACITY`): a list's two prefetched items, with room for items scrolled away
+         * unseen.
+         */
+        const val AHEAD_ITEMS = 8
+        /** The most groups recorded ahead waiting for a frame, however few items hold them. */
+        const val AHEAD_GROUPS = 128
         /** Elevations whose blur filters are kept: Material's levels, and an animated one. */
         const val BLUR_CACHE_CAPACITY = 8
         /** Gradients kept: a screen's few, and an animated one. */

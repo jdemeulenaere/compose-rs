@@ -287,6 +287,10 @@ pub struct UiTree {
     /// change measures their readers again.
     pub(crate) window_insets:
         Option<compose_runtime::MutableState<crate::configuration::PlatformWindowInsets>>,
+    /// Nodes measured ahead of the layout placing them (`premeasure`: a lazy list's prefetched
+    /// items), oldest first: the repaint boundaries among them are drawn ahead too
+    /// (`draw_ahead`), so the frame placing them finds them drawn.
+    pub(crate) measured_ahead: Vec<NodeId>,
 }
 
 impl UiTree {
@@ -327,6 +331,7 @@ impl UiTree {
             laid_out_since_callbacks: false,
             intrinsic_probes: 0,
             window_insets: None,
+            measured_ahead: Vec::new(),
         }
     }
 

@@ -36,6 +36,7 @@ Gain over cost, best first.
 | 11 | **Android: text widths and paragraph recording on worker threads** | Big first frame main work 94.0 → 79.0 ms (−16 %), TotalTime 182 → 174 ms; scroll main work −19 ms, p99 3.53 → 3.08 ms; costs 50 ms (big) and 440 ms (scroll) of worker CPU | measured, n = 10 and 4 | M–L, threading risk; the prototype isn't production-ready (see "Android: text and the big screen") | none | `perf/text-combined` |
 | 12 | **Android: fewer Java allocations per frame** | Per animation frame 17.2 → 4.2 Java objects; −0.48 MB allocated over start and 10 flings; Java heap PSS after flings 5.40 → 4.86 MB (single runs); no frame-time gain | measured | S | none | `perf/startup-java-allocs` |
 | 14 | **Android: `BoringLayout` for single lines** (Compose's `TextLayout` choice). **Done** (D330) | Big first frame: text layout 41.3 → 29.3 ms (−29 %), `doFrame` 104.8 → 90.3 ms (−14 %), TotalTime 167 → 158 ms; scroll main work 460 → 431 ms (−6.4 %), frame percentiles unchanged | measured, interleaved: 12 traced and 18 untraced starts, 4 scroll runs each | S, low (checked against `StaticLayout` on API 36 only) | letter-spaced texts at their own width are 1 px wider, as Compose's | — |
+| 15 | **Android: a prefetched item's groups drawn and recorded ahead** (D350). **Done** | Revealing frames' `doFrame` 1.80 → 1.53 ms (replay 0.31 → 0.11 ms); scroll main p90 1.94 → 1.86 ms (−4 %), p99 and work within the spread | measured, interleaved, 10 runs each | M, low (a key and version are the same bytes either way; render nodes recorded ahead are kept apart, dropped together) | none (`UiHost::draw_ahead` for platforms recording groups) | — |
 | 13 | **Memory: exact or chunked growth** of the slot table's groups and the node arena | Big screen's Rust heap −1.7 MB allocated of 17.9 (unused capacity, so maybe not resident: the PSS saving is unmeasured; its PSS is 69.8 MB); no transient 2× copy when growing | estimated (heapprofd) | S–M | none | — |
 
 Small, negative or not worth doing: see "What isn't worth doing".
@@ -177,7 +178,7 @@ The "about 2.1 ms per item" quoted for prefetching is the wall-clock time of a `
 - other layout about 5 %;
 - `update_focus_listeners` 3.6 %.
 
-The frames that reveal an item (about 175 per run) are the slow ones: replay 1.04 ms against 0.09, `doFrame` 2.42 against 1.24 ms. Recording each paragraph's render node while prefetching (`perf/frame-eager-text`, docs/12's third next step) cuts the main thread's p90 and p99 by 15 % each (2.17 → 1.84 ms, 3.53 → 3.00 ms). But it raises total main work by 4 % (460 → 480 ms): prefetching's work rose by 33 ms to save 18 ms in frames. Some prefetched paragraphs are never shown; the rest of the difference is unexplained (the investigation's guess: the same recording costs more on the little cores, where idle-time work runs). It moves work to shorten the slowest frames; it doesn't reduce work. Recording the item's group ahead too would need Rust to draw unplaced items (M–L), for about 0.15 ms more per revealing frame.
+The frames that reveal an item (about 175 per run) are the slow ones: replay 1.04 ms against 0.09, `doFrame` 2.42 against 1.24 ms. Recording each paragraph's render node while prefetching (`perf/frame-eager-text`, docs/12's third next step) cuts the main thread's p90 and p99 by 15 % each (2.17 → 1.84 ms, 3.53 → 3.00 ms). But it raises total main work by 4 % (460 → 480 ms): prefetching's work rose by 33 ms to save 18 ms in frames. Some prefetched paragraphs are never shown; the rest of the difference is unexplained (the investigation's guess: the same recording costs more on the little cores, where idle-time work runs). It moves work to shorten the slowest frames; it doesn't reduce work. Recording the item's group ahead too would need Rust to draw unplaced items (M–L), for about 0.15 ms more per revealing frame. (Done since: D350, below.)
 
 **Done, without the extra work (D322).** The prototype recorded each paragraph inside its layout call. The production version notes the paragraphs laid out during a `prefetch` call and records them after it returns, oldest first, while a recording (a running average of the last ones, 30 µs before any, each counting for at most 1 ms) fits before the next frame's deadline, the one Rust's prefetch works to, and at least one if the deadline isn't past (so a slow recording can't stall them). It skips the paragraphs released or laid out again since (a text measured twice is two paragraphs, the first released), the ones a frame already recorded, and empty ones. What doesn't fit waits for the next idle time, before any more prefetching. Measured against D321, 4 runs each, interleaved with the prototype on top of D321 (means [min–max]):
 
@@ -191,6 +192,28 @@ The frames that reveal an item (about 175 per run) are the slow ones: replay 1.0
 | `compose-rs: replay`, `Record View#draw()` | 188, 250 µs | 105, 171 µs | 104, 168 µs |
 
 The animation (no prefetching) is unchanged: main work 198.1 → 198.1 ms, p99 2.90 → 3.02 ms (ranges overlap). Janky frames stay at about one a run either way, within the runs' spread.
+
+**The item's groups too (D350).** After the paragraphs, the same idle time draws each item a prefetch measured: Rust draws its unplaced repaint boundary (its group and the nested ones, in their own coordinates) and writes their records, cached as written ahead, and the replayer records their render nodes, kept apart until a frame names them. Placing the item draws its parent again, not it, so the frame placing it shares the recording, copies the records with their versions, and Kotlin keeps the nodes: that frame draws nothing new for the item and records nothing. A step (Rust's draw and serialization, Kotlin's recording) starts only if its estimate (D341's: average and recent maximum) fits 0.5 ms before the next frame; one that doesn't fit an idle time of its own gives up the items waiting, which the frames then draw. Measured against main (round 5's code), interleaved, 10 runs each (4 with the first version, 6 after the review's fixes; means [min–max]), both APKs carrying a marker slice in each frame that places a group the last didn't draw (the revealing frames):
+
+| Scroll (measure.py's scroll run) | main | D350 |
+|---|---|---|
+| Revealing frames (about 174 a run): `doFrame` mean | 1.80 ms | **1.53 ms** |
+| of which the replay | 0.31 ms | **0.11 ms** |
+| of which `compose-rs: frame` | 0.39 ms | 0.32 ms |
+| Revealing frames' `doFrame` p90 (first and second batch) | 2.45, 2.47 ms | **2.10, 2.12** ms |
+| Revealing frames' `doFrame` p99 (each batch about 1,000 frames) | 5.21, 3.74 ms | 3.24, 4.22 ms |
+| Other frames' `doFrame` mean | 1.35 ms | 1.36 ms |
+| Main per frame p50 / p90 / p99 | 1.28 / 1.94 [1.84–2.05] / 3.00 [2.80–3.19] ms | 1.28 / **1.86** [1.81–1.94] / 2.96 [2.77–3.05] ms |
+| RenderThread per frame p50 / p90 / p99 | 2.77 / 3.73 / 5.31 ms | 2.76 / 3.75 / 5.33 ms |
+| Main, RenderThread work | 445.0 [437.4–454.0], 776.3 [767.5–788.3] ms | 450.7 [434.5–466.8], 782.2 [766.5–805.8] ms |
+| Janky frames (FrameTimeline), the app's | 0 in 10 runs | 0 in 10 runs |
+| the compositor's | 2 (one run) | 3 (one run) |
+| `doFrame`s more than 2 ms late, a run | 8.3 [6–12] | 10.7 [6–16] |
+| of which after main-thread work | 0.6 | 0.6 |
+| Idle-time slices more than 1.2 ms past the vsync, a run | 2.3 | 2.3 |
+| `prefetch` calls, a run | 363 | 361 |
+
+The revealing frames lose 0.27 ms (−15 %), most of their excess over the other frames (0.45 → 0.17 ms), more than the 0.15 ms estimated: besides the group's recording, the replay no longer draws the paragraphs' nodes into it, and the Rust frame no longer draws the item. The main thread's p90 falls 4 %, in both batches; the p99, which more and more is the frames that compose or lay out in the frame (a fling back, which prefetching ahead in the other direction didn't reach), and the work move within the runs' spread. The late `doFrame`s are no more often behind compose-rs's idle work: on both sides each follows a `Choreographer#onVsync` that itself ran 2 to 4 ms after the vsync (the thread woke late). The full benchmark of D350 (`results/2026-10-23-pixel-8-pro-draw-ahead.json`) matches round 5 apart from it: scroll main p50 / p90 / p99 1.28 / 1.91 / 3.01 ms (1.30 / 1.92 / 3.04), work 454 and 783 ms (452, 813), one janky frame of the app's in 3 runs (a fling back composing items in its 12.9 ms frame), 12 to 20 late `doFrame`s a run (Compose's 14 to 28 in the same session), animation unchanged (no prefetching), startup 108 / 165 ms, PSS after the flings 79.5 MB.
 
 ### The four together (D320–D323): the full benchmark
 
