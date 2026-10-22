@@ -353,6 +353,10 @@ def query(trace_processor, trace, sql):
     result = subprocess.run(
         [trace_processor, "--query-string", sql, trace], capture_output=True, text=True
     )
+    # A failed query (a typo, a table a new trace processor renamed) must not read as no rows:
+    # the counts below would show it as a good result.
+    if result.returncode != 0:
+        raise RuntimeError(f"trace processor failed on {trace}: {result.stderr[-2000:]}")
     rows = []
     lines = [line for line in result.stdout.splitlines() if line.strip()]
     if not lines:
@@ -552,7 +556,8 @@ def frame_stats(trace_processor, trace, package, capacities=None, since=0):
         WHERE p.name = '{package}' AND s.ts >= {since}"""
     # doFrames that started late after their vsync (the expected timeline's start, by vsync
     # id): most because the main thread woke late; some because work on it (idle-time work,
-    # input) ran past the vsync by more than a normal start's latency.
+    # input) ran past the vsync by more than a normal start's latency. A doFrame that drew
+    # nothing has no expected timeline (about 1.5 % of them): not counted.
     late = f"""{app_slices} AND t.tid = p.pid
           AND s.name GLOB 'Choreographer#doFrame [0-9]*'
           AND s.ts - (SELECT MIN(e.ts) FROM expected_frame_timeline_slice e
