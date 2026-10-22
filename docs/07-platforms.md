@@ -65,6 +65,8 @@ pub trait TextMeasurer {
 
 ## Android (`compose-android`)
 
+compose-rs draws on Android through the public `Canvas` and `RenderNode` APIs, which HWUI then renders with Skia on the GPU; it doesn't call `libhwui` or Skia directly. [13](13-android-drawing-paths.md) explains why, what a device's `libhwui.so` exposes, and the alternatives.
+
 ### Embedding
 
 The main use is a compose-rs UI **inside an ordinary Kotlin Compose UI**:

@@ -149,6 +149,9 @@ The [examples](examples) are this code, running. The design started from [sketch
 8. [A fast edit-build loop](docs/08-fast-builds.md): no hot reload; how apps keep incremental rebuilds to seconds.
 9. [Testing](docs/09-testing.md): test rule, headless runs, event scripts, dumps, benchmarks.
 10. [Roadmap](docs/10-roadmap.md): phases and what each delivers.
+11. [Status](docs/11-status.md): what's covered, and the known differences from Compose.
+12. [Android performance](docs/12-android-performance.md): the same app in Jetpack Compose and compose-rs, measured with Perfetto.
+13. [Drawing on Android](docs/13-android-drawing-paths.md): why compose-rs draws through `Canvas` and `RenderNode`, what `libhwui.so` exposes, and the options for drawing directly.
 
 Every decision with its alternatives and revert cost is in [docs/decisions.md](docs/decisions.md).
 
