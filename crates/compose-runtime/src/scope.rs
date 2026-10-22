@@ -31,6 +31,9 @@ pub(crate) struct ScopeEntry {
     pub epoch: u32,
     /// Invalidated: its body runs in the next pass.
     pub invalid: bool,
+    /// The last compaction of a cell's readers that kept a reader of this scope: a compaction
+    /// keeps one reader per scope (`Scopes::keep_reader`).
+    compaction: u32,
 }
 
 #[derive(Default)]
@@ -39,11 +42,15 @@ pub(crate) struct Scopes {
     free: Vec<u32>,
     /// The generation of new entries (odd): after a reset, above every earlier one.
     base: u32,
+    /// The latest compaction of a cell's readers (`begin_compaction`); 0 is never one.
+    compaction: u32,
+    /// How many compactions of readers ran on this thread (for tests: their cost is bounded).
+    pub compactions: u64,
 }
 
 impl Scopes {
     pub const fn new() -> Scopes {
-        Scopes { entries: Vec::new(), free: Vec::new(), base: 1 }
+        Scopes { entries: Vec::new(), free: Vec::new(), base: 1, compaction: 0, compactions: 0 }
     }
 
     pub fn alloc(&mut self, composition: u32, group: u32) -> ScopeId {
@@ -54,6 +61,7 @@ impl Scopes {
             entry.group = group;
             entry.epoch = 0;
             entry.invalid = false;
+            entry.compaction = 0;
             ScopeId { index, generation: entry.generation }
         } else {
             let index = u32::try_from(self.entries.len()).expect("too many recompose scopes");
@@ -63,6 +71,7 @@ impl Scopes {
                 group,
                 epoch: 0,
                 invalid: false,
+                compaction: 0,
             });
             ScopeId { index, generation: self.base }
         }
@@ -87,6 +96,33 @@ impl Scopes {
     /// Whether a read recorded at `epoch` still belongs to the scope's latest run.
     pub fn is_current(&self, id: ScopeId, epoch: u32) -> bool {
         self.get(id).is_some_and(|entry| entry.epoch == epoch)
+    }
+
+    /// Starts compacting a cell's readers: [`keep_reader`](Scopes::keep_reader) then keeps one
+    /// current reader per scope.
+    pub fn begin_compaction(&mut self) {
+        self.compactions += 1;
+        self.compaction = self.compaction.wrapping_add(1);
+        if self.compaction == 0 {
+            // Wrapped: a scope's mark from 2^32 compactions ago must not read as this one's.
+            for entry in &mut self.entries {
+                entry.compaction = 0;
+            }
+            self.compaction = 1;
+        }
+    }
+
+    /// Whether a compaction keeps a reader recorded by `id` at `epoch`: it belongs to the
+    /// scope's latest run, and no other reader of the scope was kept in this compaction.
+    pub fn keep_reader(&mut self, id: ScopeId, epoch: u32) -> bool {
+        let compaction = self.compaction;
+        match self.get_mut(id) {
+            Some(entry) if entry.epoch == epoch && entry.compaction != compaction => {
+                entry.compaction = compaction;
+                true
+            }
+            _ => false,
+        }
     }
 
     pub fn set_base(&mut self, base: u32) {

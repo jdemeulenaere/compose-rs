@@ -131,3 +131,85 @@ pub fn Skipper(trigger: MutableState<u64>, children: u64) {
         Skipper(trigger, children)
     });
 }
+
+pub static LOCAL_VALUE: CompositionLocal<u64> =
+    CompositionLocal::new("benchmarks::LocalValue", || 0);
+
+/// `depth` replace groups around `content`, as the composables between a provider and a read.
+pub fn Nest(depth: u64, content: &dyn Fn()) {
+    if depth == 0 {
+        content();
+        return;
+    }
+    let composer = current();
+    composer.start_replace_group(key_of("benchmarks::Nest") ^ depth);
+    Nest(depth - 1, content);
+    composer.end_group();
+}
+
+/// `#[composable] fn LocalReader(trigger: MutableState<u64>, reads: u64)`: reads `trigger`, then
+/// [`LOCAL_VALUE`] `reads` times.
+pub fn LocalReader(trigger: MutableState<u64>, reads: u64) {
+    let composer = current();
+    composer.start_restart_group(key_of("benchmarks::LocalReader"));
+    let changed = composer.update_kept(
+        |kept: &(MutableState<u64>, u64)| !kept.0.same(&trigger) || !kept.1.same(&reads),
+        || (trigger, reads),
+    );
+    if !changed && composer.skipping() {
+        composer.skip_to_group_end();
+    } else {
+        let mut sum = trigger.get();
+        for _ in 0..reads {
+            sum = sum.wrapping_add(LOCAL_VALUE.current());
+        }
+        Leaf(sum);
+    }
+    composer.end_restart_group(|kept| {
+        let (trigger, reads) = *kept.downcast_ref::<(MutableState<u64>, u64)>().expect("kept");
+        LocalReader(trigger, reads)
+    });
+}
+
+/// `#[composable] fn SharedReader(shared: MutableState<u64>, index: u64)`: a leaf showing
+/// `shared`, as each layout node reads the layout direction.
+pub fn SharedReader(shared: MutableState<u64>, index: u64) {
+    let composer = current();
+    composer.start_restart_group(key_of("benchmarks::SharedReader"));
+    let changed = composer.update_kept(
+        |kept: &(MutableState<u64>, u64)| !kept.0.same(&shared) || !kept.1.same(&index),
+        || (shared, index),
+    );
+    if !changed && composer.skipping() {
+        composer.skip_to_group_end();
+    } else {
+        Leaf(shared.get().wrapping_add(index));
+    }
+    composer.end_restart_group(|kept| {
+        let (shared, index) = *kept.downcast_ref::<(MutableState<u64>, u64)>().expect("kept");
+        SharedReader(shared, index)
+    });
+}
+
+/// `#[composable] fn SharedReaders(shared: MutableState<u64>, children: u64)`: `children`
+/// readers of `shared`, the parent reading it too after each of them.
+pub fn SharedReaders(shared: MutableState<u64>, children: u64) {
+    let composer = current();
+    composer.start_restart_group(key_of("benchmarks::SharedReaders"));
+    let changed = composer.update_kept(
+        |kept: &(MutableState<u64>, u64)| !kept.0.same(&shared) || !kept.1.same(&children),
+        || (shared, children),
+    );
+    if !changed && composer.skipping() {
+        composer.skip_to_group_end();
+    } else {
+        for index in 0..children {
+            SharedReader(shared, index);
+            Leaf(shared.get());
+        }
+    }
+    composer.end_restart_group(|kept| {
+        let (shared, children) = *kept.downcast_ref::<(MutableState<u64>, u64)>().expect("kept");
+        SharedReaders(shared, children)
+    });
+}

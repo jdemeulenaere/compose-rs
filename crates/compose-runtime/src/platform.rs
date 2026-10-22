@@ -13,11 +13,17 @@ pub use crate::executor::{
 };
 pub use crate::node_tree::NodeTree;
 pub use crate::observe::ReadObserver;
-pub use crate::state::live_state_count;
+pub use crate::state::{live_state_count, state_reader_capacity, state_reader_count};
 
 /// The number of live recompose scopes on this thread. For tests.
 pub fn live_scope_count() -> usize {
     crate::runtime::with_runtime(|runtime| runtime.scopes.live_count())
+}
+
+/// The number of compactions of state readers run on this thread so far (each linear in the
+/// readers of one state). For tests.
+pub fn reader_compaction_count() -> u64 {
+    crate::runtime::with_runtime(|runtime| runtime.scopes.compactions)
 }
 
 /// The number of composable bodies run on this thread so far (restart groups that didn't skip).

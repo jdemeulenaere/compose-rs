@@ -5,7 +5,9 @@
 //! walks up the slot table from the group composing now to the nearest provider of the local,
 //! so a scope restarting on its own finds the same provider as when its parent composed it, and
 //! reads the cell, so a new value recomposes exactly the readers (Compose's
-//! `compositionLocalOf`).
+//! `compositionLocalOf`). The walk visits provider groups only: each group records, when it is
+//! allocated, the nearest provider's group above it (a group's ancestors never change), so a
+//! read costs the providers above it, not the groups (often dozens) between them.
 
 use std::any::TypeId;
 use std::rc::Rc;
@@ -93,7 +95,9 @@ impl<T: 'static> CompositionLocal<T> {
         let found = with_runtime(|runtime| {
             let composition = runtime.check_composing();
             let table = &runtime.compositions.data(composition).table;
-            let mut group = runtime.frames.last().map_or(NONE, |frame| frame.group);
+            // The providers around the group composing now, nearest first.
+            let composing = runtime.frames.last().map_or(NONE, |frame| frame.group);
+            let mut group = table.provider_at_or_above(composing);
             while group != NONE {
                 let entry = &table[group];
                 if entry.kind == GroupKind::Replace
@@ -103,7 +107,7 @@ impl<T: 'static> CompositionLocal<T> {
                 {
                     return Some(slot.value.to_any());
                 }
-                group = entry.parent;
+                group = entry.enclosing_provider;
             }
             None
         });
@@ -134,6 +138,7 @@ pub fn CompositionLocalProvider<T: Clone + ComposeArg + 'static>(
 fn start_provider<T: Clone + ComposeArg + 'static>(value: ProvidedValue<T>) -> ReplaceGroup {
     let ProvidedValue { id, key, value } = value;
     let group = ReplaceGroup::start(key, "compose_runtime::CompositionLocalProvider");
+    with_runtime(|runtime| runtime.mark_provider());
     let slot: Rc<ProviderSlot<T>> = remember(|| {
         Rc::new(ProviderSlot { local: id, value: mutable_state_of_with(value.clone(), SamePolicy) })
     });

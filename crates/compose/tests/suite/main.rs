@@ -6,6 +6,7 @@ mod composables;
 mod derived;
 mod ergonomics;
 mod locals;
+mod readers;
 mod review2_compile_cfg_pattern_param;
 mod review2_compile_generic_rc_derive;
 mod review2_compile_let_macro_in_loop_with_continue;

@@ -90,6 +90,44 @@ fn state_reads(c: &mut Criterion) {
     c.bench_function("state get outside composition", |b| b.iter(|| black_box(state.get())));
 }
 
+/// What composing a big screen does a lot of (docs/14, #5): reading a composition local whose
+/// provider is dozens of groups up, and reading one state from thousands of scopes (every layout
+/// node reads the layout direction).
+fn many_readers(criterion: &mut Criterion) {
+    let trigger = mutable_state_of(0u64);
+    let handle = trigger.handle();
+    let composition = Composition::new(Tree::new());
+    composition.set_content(move || {
+        CompositionLocalProvider(LOCAL_VALUE.provides(7), || {
+            Nest(60, &|| LocalReader(handle, 1000));
+        })
+    });
+    criterion.bench_function("1000 local reads, the provider 60 groups up (recompose)", |bench| {
+        bench.iter(|| {
+            trigger.update(|value| value + 1);
+            composition.recompose()
+        })
+    });
+
+    let shared = mutable_state_of(0u64);
+    let handle = shared.handle();
+    criterion.bench_function("initial composition of 2000 readers of one state", |bench| {
+        bench.iter_with_large_drop(|| {
+            let composition = Composition::new(Tree::new());
+            composition.set_content(move || SharedReaders(handle, 2000));
+            composition
+        })
+    });
+    let composition = Composition::new(Tree::new());
+    composition.set_content(move || SharedReaders(handle, 2000));
+    criterion.bench_function("write a state 2000 readers read (recompose all)", |bench| {
+        bench.iter(|| {
+            shared.update(|value| value + 1);
+            composition.recompose()
+        })
+    });
+}
+
 criterion_group!(
     benches,
     counter_click,
@@ -97,6 +135,7 @@ criterion_group!(
     skipped_composables,
     initial_composition,
     keyed_reorders,
-    state_reads
+    state_reads,
+    many_readers
 );
 criterion_main!(benches);
