@@ -21,6 +21,8 @@ compose-android = { path = "crates/compose-android" }
 compose-foundation = { path = "crates/compose-foundation" }
 compose-material3 = { path = "crates/compose-material3" }
 compose-animation = { path = "crates/compose-animation" }
+# The logging facade (D280): what compose-rs logs through, and apps too.
+log = "0.4"
 
 # Fast edit-build loop (docs/08-fast-builds.md).
 [profile.dev]

@@ -214,7 +214,7 @@ pub struct EventContext<'a> {
     pub(crate) actions: &'a mut Vec<Action>,
     pub(crate) requests: &'a mut Requests,
     pub(crate) text_measurer: &'a mut dyn crate::text::TextMeasurer,
-    pub(crate) clipboard: &'a mut dyn crate::clipboard::Clipboard,
+    pub(crate) clipboard: &'a dyn crate::clipboard::ClipboardManager,
     /// The pointer's position in the root, while handling a pointer event.
     pub(crate) pointer_position: Option<Offset>,
     pub(crate) density: crate::unit::Density,
@@ -331,8 +331,8 @@ impl EventContext<'_> {
     }
 
     /// The clipboard, for copy and paste.
-    pub fn clipboard(&mut self) -> &mut dyn crate::clipboard::Clipboard {
-        &mut *self.clipboard
+    pub fn clipboard(&self) -> &dyn crate::clipboard::ClipboardManager {
+        self.clipboard
     }
 
     /// The layout node the handler belongs to.

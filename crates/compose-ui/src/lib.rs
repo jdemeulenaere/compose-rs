@@ -35,12 +35,14 @@ mod interaction;
 mod layout;
 mod layout_callbacks;
 mod layout_modifiers;
+mod logging;
 mod measure;
 mod modifier;
 mod nested_scroll;
 mod nodes;
 mod overlay;
 mod path;
+mod platform_services;
 mod pointer_input;
 mod prefetch;
 mod render;
@@ -69,6 +71,7 @@ pub mod platform {
     pub use crate::input::Action;
     pub use crate::layout::StackMeasurePolicy;
     pub use crate::layout::emit_layout_node;
+    pub use crate::logging::{StderrLogger, default_max_level, install_stderr_logger};
     pub use crate::modifier::shared_custom_modifier;
     pub use crate::nested_scroll::NestedScrollChain;
     pub use crate::pointer_input::{PointerInputDriver, run_soon};
@@ -92,7 +95,7 @@ pub use alignment::{
 pub use annotated::{AnnotatedString, AnnotatedStringBuilder, SpanRange, SpanStyle};
 pub use back::{BackHandler, LOCAL_ON_BACK_PRESSED_DISPATCHER, OnBackPressedDispatcher};
 pub use brush::{Brush, ColorStops, TileMode};
-pub use clipboard::Clipboard;
+pub use clipboard::{ClipboardManager, LOCAL_CLIPBOARD_MANAGER};
 pub use configuration::{
     Configuration, HostEvents, HostProps, LOCAL_CONFIGURATION, LOCAL_HOST_EVENTS, LOCAL_HOST_PROPS,
     PropValue, ScreenOrientation,
@@ -130,6 +133,9 @@ pub use modifier::{
 pub use nested_scroll::{NestedScrollConnection, NestedScrollSource};
 pub use overlay::{PopupPositionProvider, WindowPosition};
 pub use path::{ImageVector, Path, PathCommand, PathError, PathFillType};
+pub use platform_services::{
+    HapticFeedback, HapticFeedbackType, LOCAL_HAPTIC_FEEDBACK, LOCAL_URI_HANDLER, UriHandler,
+};
 pub use pointer_input::{
     AwaitPointerEvent, Axis, DragGestures, PointerInputChange, PointerInputScope, TapGestures,
 };

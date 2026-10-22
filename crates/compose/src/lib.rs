@@ -55,6 +55,10 @@ pub mod desktop {
     pub use compose_desktop::*;
 }
 
+/// The `log` crate, the logging facade compose-rs logs through: `compose::log::info!("…")`
+/// reaches logcat on Android and stderr on desktop and in tests (D280).
+pub use log;
+
 /// What `#[composable]` generated code calls. Not a public API.
 #[doc(hidden)]
 pub mod __private {

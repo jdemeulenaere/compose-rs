@@ -25,6 +25,8 @@ pub mod serialize;
 pub mod text;
 
 mod bridge;
+mod logging;
+mod services;
 
 pub use jni;
 
@@ -39,6 +41,8 @@ static APPS: OnceLock<Vec<App>> = OnceLock::new();
 /// Called by `JNI_OnLoad` (see [`export_apps!`]): keeps the VM and the apps.
 pub fn on_load(vm: jni::JavaVM, apps: &[App]) -> jni::sys::jint {
     let _ = APPS.set(apps.to_vec());
+    // `log`'s records (compose-rs's warnings, the app's) go to logcat.
+    logging::install();
     bridge::set_vm(vm);
     jni::sys::JNI_VERSION_1_6
 }

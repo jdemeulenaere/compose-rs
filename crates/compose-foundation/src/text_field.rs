@@ -1172,7 +1172,7 @@ impl KeyInputModifierNode for TextFieldNode {
                     self.replace_selection("", false, context);
                 }
                 'v' if editable => {
-                    if let Some(pasted) = context.clipboard().text() {
+                    if let Some(pasted) = context.clipboard().get_text() {
                         self.insert(&pasted, false, context);
                     }
                 }

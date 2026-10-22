@@ -297,7 +297,8 @@ impl Modifier {
     /// A click, a double click and a long press, as `Modifier.combinedClickable`: with
     /// `on_double_click`, a click waits for the double-click timeout (300 ms) before calling
     /// `on_click`; with `on_long_click`, holding past the long-press timeout (400 ms) calls it
-    /// instead. Enter and Space click when focused.
+    /// instead, with `LOCAL_HAPTIC_FEEDBACK`'s `LongPress` feedback (read when made in
+    /// composition). Enter and Space click when focused.
     pub fn combined_clickable(
         self,
         on_long_click: Option<Callback<dyn Fn()>>,
@@ -328,6 +329,10 @@ impl Modifier {
                 interaction_source: options.interaction_source,
                 on_click: on_click.into_callback(),
             },
+            // A long click vibrates, as Compose's (`hapticFeedbackEnabled`, on by default).
+            haptic_feedback: on_long_click
+                .as_ref()
+                .and_then(|_| crate::platform_services::current_haptic_feedback()),
             on_long_click,
             on_double_click,
         })

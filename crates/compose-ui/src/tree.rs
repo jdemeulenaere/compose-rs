@@ -43,7 +43,7 @@ fn observation_of(key: u64) -> (NodeId, Observation) {
 
 /// What an event handler reaches besides its node: the text measurer and the clipboard.
 pub(crate) type HandlerServices<'a> =
-    (&'a mut dyn TextMeasurer, &'a mut dyn crate::clipboard::Clipboard);
+    (&'a mut dyn TextMeasurer, &'a dyn crate::clipboard::ClipboardManager);
 
 /// A node of the UI tree: a generational index, so a stale id never reaches a new node.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -228,7 +228,11 @@ pub struct UiTree {
     free: Vec<u32>,
     root: NodeId,
     pub(crate) text_measurer: Box<dyn TextMeasurer>,
-    pub(crate) clipboard: Box<dyn crate::clipboard::Clipboard>,
+    pub(crate) clipboard: Rc<dyn crate::clipboard::ClipboardManager>,
+    /// The platform's services content reaches as `LOCAL_URI_HANDLER` and
+    /// `LOCAL_HAPTIC_FEEDBACK`.
+    pub(crate) uri_handler: Rc<dyn crate::platform_services::UriHandler>,
+    pub(crate) haptic_feedback: Rc<dyn crate::platform_services::HapticFeedback>,
     pub(crate) density: Density,
     pub(crate) display_list: DisplayList,
     /// What's drawn outside any repaint boundary, the boundaries in it by reference: recorded
@@ -294,7 +298,9 @@ impl UiTree {
             free: Vec::new(),
             root: NodeId { index: 0, generation: 0 },
             text_measurer,
-            clipboard: Box::new(crate::clipboard::MemoryClipboard::default()),
+            clipboard: Rc::new(crate::clipboard::MemoryClipboard::default()),
+            uri_handler: Rc::new(crate::platform_services::LoggingUriHandler),
+            haptic_feedback: Rc::new(crate::platform_services::NoHapticFeedback),
             density,
             display_list: DisplayList::default(),
             root_recording: DisplayList::default(),
@@ -414,16 +420,17 @@ impl UiTree {
         if slot.generation != node.generation {
             return None;
         }
-        Some((slot.node.as_mut()?, (&mut *self.text_measurer, &mut *self.clipboard)))
+        Some((slot.node.as_mut()?, (&mut *self.text_measurer, &*self.clipboard)))
     }
 
-    /// Replaces the clipboard (the host gives the system's).
-    pub fn set_clipboard(&mut self, clipboard: Box<dyn crate::clipboard::Clipboard>) {
+    /// Replaces the clipboard (the host gives the system's): what text fields use, and
+    /// `LOCAL_CLIPBOARD_MANAGER`. Before composing.
+    pub fn set_clipboard(&mut self, clipboard: Rc<dyn crate::clipboard::ClipboardManager>) {
         self.clipboard = clipboard;
     }
 
-    pub fn clipboard(&mut self) -> &mut dyn crate::clipboard::Clipboard {
-        &mut *self.clipboard
+    pub fn clipboard(&self) -> Rc<dyn crate::clipboard::ClipboardManager> {
+        self.clipboard.clone()
     }
 
     pub(crate) fn node(&self, node: NodeId) -> &LayoutNode {

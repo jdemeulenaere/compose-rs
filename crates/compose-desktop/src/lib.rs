@@ -20,6 +20,7 @@ extern crate compose_runtime as compose;
 mod accessibility;
 mod application;
 mod input;
+mod services;
 
 use std::collections::HashMap;
 use std::num::NonZeroU32;
@@ -77,37 +78,6 @@ impl Default for WindowOptions {
             background: Color::WHITE,
             resizable: true,
             layout_direction: compose_ui::LayoutDirection::Ltr,
-        }
-    }
-}
-
-/// The system clipboard, through `arboard`; a clipboard in memory if the system's can't be
-/// opened.
-struct SystemClipboard {
-    system: Option<arboard::Clipboard>,
-    fallback: compose_ui::platform::MemoryClipboard,
-}
-
-impl SystemClipboard {
-    fn new() -> SystemClipboard {
-        SystemClipboard { system: arboard::Clipboard::new().ok(), fallback: Default::default() }
-    }
-}
-
-impl compose_ui::Clipboard for SystemClipboard {
-    fn text(&mut self) -> Option<String> {
-        match &mut self.system {
-            Some(system) => system.get_text().ok(),
-            None => self.fallback.text(),
-        }
-    }
-
-    fn set_text(&mut self, text: &str) {
-        match &mut self.system {
-            Some(system) => {
-                let _ = system.set_text(text);
-            }
-            None => self.fallback.set_text(text),
         }
     }
 }
@@ -278,7 +248,7 @@ impl App {
             density,
             Box::new(SkiaTextMeasurer::new()),
         );
-        host.with_tree(|tree| tree.set_clipboard(Box::new(SystemClipboard::new())));
+        host.with_tree(services::install);
         host.set_layout_direction(props.layout_direction);
         update_configuration(&mut host, &window);
         let waker = window.clone();
@@ -436,7 +406,7 @@ impl App {
         if let Some(path) = &self.screenshot
             && let Err(error) = std::fs::write(path, shown.renderer.png())
         {
-            eprintln!("compose-desktop: writing the screenshot to {}: {error}", path.display());
+            log::error!("writing the screenshot to {}: {error}", path.display());
         }
     }
 
@@ -652,6 +622,9 @@ impl ApplicationHandler<UserEvent> for App {
 /// lambdas of its `Window`s there, so a window's content recomposes only for what it reads; a
 /// plain closure's lambdas are new at each application pass.
 pub fn application(content: impl Fn() + 'static) {
+    // `log`'s records (compose-rs's warnings, the app's) go to stderr, unless the app set a
+    // logger of its own first.
+    compose_ui::platform::install_stderr_logger();
     // `decode_image_bytes` and `remember_image_resource` decode with Skia.
     compose_ui::platform::set_image_decoder(Arc::new(compose_skia::SkiaImageDecoder));
     let event_loop =

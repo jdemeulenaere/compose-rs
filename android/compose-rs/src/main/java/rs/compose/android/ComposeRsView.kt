@@ -1,10 +1,13 @@
 package rs.compose.android
 
+import android.content.ActivityNotFoundException
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
 import android.content.res.Configuration
 import android.graphics.Canvas
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -12,7 +15,9 @@ import android.os.Looper
 import android.os.Parcelable
 import android.os.SystemClock
 import android.os.Trace
+import android.util.Log
 import android.view.Choreographer
+import android.view.HapticFeedbackConstants
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
@@ -598,6 +603,53 @@ class ComposeRsView(context: Context, private val app: String) : View(context) {
     fun setClipboardText(text: String) {
         val clipboard = context.getSystemService(ClipboardManager::class.java)
         clipboard.setPrimaryClip(ClipData.newPlainText("text", text))
+    }
+
+    // ---- Links and haptics (Rust calls these: `LOCAL_URI_HANDLER`, `LOCAL_HAPTIC_FEEDBACK`) --
+
+    /**
+     * Opens [uri] with an `ACTION_VIEW` intent, as Compose's `AndroidUriHandler`. Rust calls it
+     * in the middle of a call into Rust: posted to the main looper (D226).
+     */
+    fun openUri(uri: String) {
+        mainHandler.post {
+            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(uri))
+            if (context !is android.app.Activity) intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            try {
+                context.startActivity(intent)
+            } catch (exception: ActivityNotFoundException) {
+                Log.w("compose-rs", "nothing opens $uri", exception)
+            }
+        }
+    }
+
+    /**
+     * Performs the haptic feedback of [type] (`HapticFeedbackType`'s index in Compose's order),
+     * with Compose's fallbacks before the API level that has the constant. Posted, as [openUri].
+     */
+    fun performHapticFeedbackType(type: Int) {
+        val constant = hapticFeedbackConstant(type) ?: return
+        mainHandler.post { performHapticFeedback(constant) }
+    }
+
+    private fun hapticFeedbackConstant(type: Int): Int? {
+        val sdk = Build.VERSION.SDK_INT
+        return when (type) {
+            0 -> HapticFeedbackConstants.LONG_PRESS
+            1 -> HapticFeedbackConstants.TEXT_HANDLE_MOVE
+            2 -> if (sdk >= 30) HapticFeedbackConstants.CONFIRM else HapticFeedbackConstants.VIRTUAL_KEY
+            3 -> HapticFeedbackConstants.CONTEXT_CLICK
+            4 -> if (sdk >= 30) HapticFeedbackConstants.GESTURE_END else HapticFeedbackConstants.CONTEXT_CLICK
+            5 -> if (sdk >= 34) HapticFeedbackConstants.GESTURE_THRESHOLD_ACTIVATE else HapticFeedbackConstants.CONTEXT_CLICK
+            6 -> HapticFeedbackConstants.KEYBOARD_TAP
+            7 -> if (sdk >= 30) HapticFeedbackConstants.REJECT else HapticFeedbackConstants.LONG_PRESS
+            8 -> if (sdk >= 34) HapticFeedbackConstants.SEGMENT_FREQUENT_TICK else HapticFeedbackConstants.CLOCK_TICK
+            9 -> if (sdk >= 34) HapticFeedbackConstants.SEGMENT_TICK else HapticFeedbackConstants.CLOCK_TICK
+            10 -> if (sdk >= 34) HapticFeedbackConstants.TOGGLE_OFF else HapticFeedbackConstants.VIRTUAL_KEY_RELEASE
+            11 -> if (sdk >= 34) HapticFeedbackConstants.TOGGLE_ON else HapticFeedbackConstants.VIRTUAL_KEY
+            12 -> HapticFeedbackConstants.VIRTUAL_KEY
+            else -> null
+        }
     }
 
     private companion object {

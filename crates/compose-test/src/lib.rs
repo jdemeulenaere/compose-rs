@@ -69,6 +69,8 @@ pub fn compose_test_with(
 
 impl ComposeTestRule {
     pub fn with_host(host: UiHost, content: impl Fn() + 'static) -> ComposeTestRule {
+        // What compose-rs logs (a stale handle's warning) shows in the test's output.
+        compose_ui::platform::install_stderr_logger();
         compose_runtime::platform::track_recompositions(true);
         // The test's main clock: time moves only as the rule advances it.
         platform::set_manual_clock(platform::now_nanos());
@@ -81,6 +83,7 @@ impl ComposeTestRule {
     /// A test rule whose clock moves only by `advance_time_by`, as a test that sets
     /// `mainClock.autoAdvance = false` before its content: animations and delays wait for it.
     pub fn with_manual_clock(content: impl Fn() + 'static) -> ComposeTestRule {
+        compose_ui::platform::install_stderr_logger();
         compose_runtime::platform::track_recompositions(true);
         platform::set_manual_clock(platform::now_nanos());
         let host = UiHost::headless(DEFAULT_SIZE.width, DEFAULT_SIZE.height);

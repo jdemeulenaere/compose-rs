@@ -232,8 +232,8 @@ struct JniClipboard {
     view: GlobalRef,
 }
 
-impl compose_ui::Clipboard for JniClipboard {
-    fn text(&mut self) -> Option<String> {
+impl compose_ui::ClipboardManager for JniClipboard {
+    fn get_text(&self) -> Option<String> {
         let mut env = main_env();
         let text = env
             .call_method(&self.view, "clipboardText", "()Ljava/lang/String;", &[])
@@ -246,7 +246,7 @@ impl compose_ui::Clipboard for JniClipboard {
         value
     }
 
-    fn set_text(&mut self, text: &str) {
+    fn set_text(&self, text: &str) {
         let mut env = main_env();
         if let Ok(text) = env.new_string(text) {
             let _ = env.call_method(
@@ -365,7 +365,10 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_create<'local>(
         Density { density, font_scale },
         Box::new(AndroidTextMeasurer::new(text)),
     );
-    ui.with_tree(|tree| tree.set_clipboard(Box::new(JniClipboard { view: view_ref.clone() })));
+    ui.with_tree(|tree| {
+        tree.set_clipboard(std::rc::Rc::new(JniClipboard { view: view_ref.clone() }))
+    });
+    crate::services::install(&mut env, &view, &view_ref, &ui);
     if rtl != 0 {
         ui.set_layout_direction(LayoutDirection::Rtl);
     }

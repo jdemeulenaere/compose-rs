@@ -995,7 +995,7 @@ impl<T: 'static> ObjectHandle<T> {
     }
 }
 
-/// A freed object used at `used_at`: debug builds print it once per call site.
+/// A freed object used at `used_at`: debug builds log a warning (`log::warn!`) once per call site.
 #[cold]
 fn warn_stale(stale: Stale, type_name: &str, used_at: &'static Location<'static>) {
     if !cfg!(debug_assertions) {
@@ -1018,9 +1018,9 @@ fn warn_stale(stale: Stale, type_name: &str, used_at: &'static Location<'static>
         return;
     }
     let made = stale.created_at.map_or_else(String::new, |at| format!(" made at {at}"));
-    eprintln!(
-        "compose-runtime: {type_name}{made} was used at {used_at} after its owner (a `remember` \
-         slot, or an `Owned`) was dropped; ignored (D240)"
+    log::warn!(
+        "{type_name}{made} was used at {used_at} after its owner (a `remember` slot, or an \
+         `Owned`) was dropped; ignored (D240)"
     );
 }
 

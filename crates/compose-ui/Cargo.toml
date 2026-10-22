@@ -7,5 +7,6 @@ rust-version.workspace = true
 publish.workspace = true
 
 [dependencies]
+log.workspace = true
 compose-runtime.workspace = true
 smallvec = { version = "1.13", features = ["const_new", "union"] }

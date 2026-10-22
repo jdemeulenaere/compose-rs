@@ -25,7 +25,7 @@ fn shortcut(ui: &mut ComposeTestRule, c: char) {
 }
 
 fn clipboard(ui: &mut ComposeTestRule) -> Option<String> {
-    ui.host().with_tree(|tree| tree.clipboard().text())
+    ui.host().with_tree(|tree| tree.clipboard().get_text())
 }
 
 /// Where character `index` of the text tagged `tag` starts (in its middle, vertically).

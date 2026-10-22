@@ -18,6 +18,7 @@ mod lazy_api;
 mod modifier_memoization;
 mod modifiers_api;
 mod platform;
+mod platform_services;
 mod pointer_input;
 mod prefetch;
 mod review_api_d;

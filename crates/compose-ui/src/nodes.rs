@@ -754,6 +754,8 @@ pub(crate) struct CombinedClickableElement {
     pub(crate) clickable: Clickable,
     pub(crate) on_long_click: Option<Callback<dyn Fn()>>,
     pub(crate) on_double_click: Option<Callback<dyn Fn()>>,
+    /// What a long click performs `LongPress` feedback with (`LOCAL_HAPTIC_FEEDBACK`).
+    pub(crate) haptic_feedback: Option<Rc<dyn crate::platform_services::HapticFeedback>>,
 }
 
 /// The callbacks the tap detection calls, updated in place.
@@ -765,6 +767,7 @@ struct CombinedHandlers {
     on_click: Callback<dyn Fn()>,
     on_long_click: Option<Callback<dyn Fn()>>,
     on_double_click: Option<Callback<dyn Fn()>>,
+    haptic_feedback: Option<Rc<dyn crate::platform_services::HapticFeedback>>,
 }
 
 struct CombinedClickableNode {
@@ -799,9 +802,17 @@ impl CombinedClickableNode {
                 if long {
                     let on_long = handlers.clone();
                     gestures = gestures.on_long_press(move |_| {
-                        let callback = on_long.borrow().on_long_click.clone();
+                        let (callback, haptics) = {
+                            let current = on_long.borrow();
+                            (current.on_long_click.clone(), current.haptic_feedback.clone())
+                        };
                         if let Some(callback) = callback {
                             callback();
+                            if let Some(haptics) = haptics {
+                                haptics.perform_haptic_feedback(
+                                    crate::platform_services::HapticFeedbackType::LongPress,
+                                );
+                            }
                         }
                     });
                 }
@@ -856,6 +867,7 @@ impl ModifierNodeElement for CombinedClickableElement {
             on_click: self.clickable.on_click.clone(),
             on_long_click: self.on_long_click.clone(),
             on_double_click: self.on_double_click.clone(),
+            haptic_feedback: self.haptic_feedback.clone(),
         }));
         let pressed = compose_runtime::mutable_state_of(false);
         Box::new(CombinedClickableNode {
@@ -880,6 +892,7 @@ impl ModifierNodeElement for CombinedClickableElement {
         handlers.on_click = self.clickable.on_click.clone();
         handlers.on_long_click = self.on_long_click.clone();
         handlers.on_double_click = self.on_double_click.clone();
+        handlers.haptic_feedback = self.haptic_feedback.clone();
         drop(handlers);
         if swapped {
             node.clickable.release_later();
@@ -907,6 +920,11 @@ impl ModifierNodeElement for CombinedClickableElement {
                 && a.on_click.ptr_eq(&b.on_click)
                 && same_callback(&self.on_long_click, &other.on_long_click)
                 && same_callback(&self.on_double_click, &other.on_double_click)
+                && match (&self.haptic_feedback, &other.haptic_feedback) {
+                    (Some(a), Some(b)) => Rc::ptr_eq(a, b),
+                    (None, None) => true,
+                    _ => false,
+                }
         })
     }
 

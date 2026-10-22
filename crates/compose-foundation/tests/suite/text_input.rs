@@ -67,7 +67,7 @@ fn a_password_cannot_be_copied_nor_cut() {
     shortcut(&mut ui, 'a');
     shortcut(&mut ui, 'c');
     shortcut(&mut ui, 'x');
-    assert_eq!(ui.host().with_tree(|tree| tree.clipboard().text()).as_deref(), Some("before"));
+    assert_eq!(ui.host().with_tree(|tree| tree.clipboard().get_text()).as_deref(), Some("before"));
     assert_eq!(*value.borrow(), "secret");
 }
 

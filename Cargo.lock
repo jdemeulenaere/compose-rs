@@ -667,6 +667,7 @@ dependencies = [
  "compose-runtime",
  "compose-test",
  "compose-ui",
+ "log",
  "trybuild",
 ]
 
@@ -678,6 +679,7 @@ dependencies = [
  "compose-runtime",
  "compose-ui",
  "jni 0.21.1",
+ "log",
 ]
 
 [[package]]
@@ -714,6 +716,7 @@ dependencies = [
  "compose-runtime",
  "compose-skia",
  "compose-ui",
+ "log",
  "softbuffer",
  "winit",
 ]
@@ -754,6 +757,7 @@ name = "compose-runtime"
 version = "0.1.0"
 dependencies = [
  "compose-macros",
+ "log",
 ]
 
 [[package]]
@@ -780,6 +784,7 @@ name = "compose-ui"
 version = "0.1.0"
 dependencies = [
  "compose-runtime",
+ "log",
  "smallvec",
 ]
 
