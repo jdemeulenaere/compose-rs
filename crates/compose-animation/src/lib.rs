@@ -5,6 +5,9 @@
 //! recomposes, re-measures or redraws.
 
 #![forbid(unsafe_code)]
+// Every type reachable from the public API can be named (D260): a type in a private
+// module that a public signature uses must be re-exported.
+#![deny(unnameable_types)]
 
 extern crate compose_runtime as compose;
 

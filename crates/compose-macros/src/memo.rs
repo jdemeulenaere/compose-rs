@@ -84,10 +84,25 @@ fn is_call_macro(name: &str) -> bool {
     crate::regions::is_pascal_case(name)
 }
 
-/// The modifiers whose closure arguments become callbacks (`impl IntoCallback`); others
-/// (`semantics`, a user's `then_if(cond, |m| …)`) take closures they run at once.
-const CALLBACK_MODIFIERS: &[&str] =
-    &["clickable", "clickable_with", "toggleable", "on_focus_changed", "on_key_event"];
+/// The modifiers whose closure arguments become callbacks (`impl IntoCallback`): every
+/// `Modifier` method taking one (a test in compose-foundation, `modifier_memoization`, checks
+/// each skips). Others (`semantics`, a user's `then_if(cond, |m| …)`) take closures they run
+/// at once; the drawing and layout ones (`draw_behind`, `layout`, `graphics_layer`) take
+/// closures over borrowed scopes, which a `Callback` can't name, and aren't memoized.
+const CALLBACK_MODIFIERS: &[&str] = &[
+    "clickable",
+    "clickable_with",
+    "toggleable",
+    "toggleable_with",
+    "selectable",
+    "selectable_with",
+    "combined_clickable",
+    "combined_clickable_with",
+    "on_focus_changed",
+    "on_key_event",
+    "on_size_changed",
+    "on_globally_positioned",
+];
 
 /// Whether `receiver` is a modifier chain: method calls on the path `Modifier`.
 fn is_modifier_chain(receiver: &Expr, scopes: &Scopes) -> bool {

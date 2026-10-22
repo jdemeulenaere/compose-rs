@@ -11,6 +11,9 @@
 //! `COMPOSE_EXIT_AFTER_FRAMES=n` exits after `n` frames, or once idle (for smoke tests).
 
 #![forbid(unsafe_code)]
+// Every type reachable from the public API can be named (D260): a type in a private
+// module that a public signature uses must be re-exported.
+#![deny(unnameable_types)]
 
 extern crate compose_runtime as compose;
 
@@ -525,6 +528,7 @@ impl ApplicationHandler<UserEvent> for App {
                                 compose_ui::PointerIcon::Crosshair => {
                                     winit::window::CursorIcon::Crosshair
                                 }
+                                // An icon added later (the enum is non-exhaustive).
                                 _ => winit::window::CursorIcon::Default,
                             });
                         }

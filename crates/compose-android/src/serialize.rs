@@ -548,8 +548,6 @@ fn foldable_layer(ops: &[DrawOp], start: usize) -> Option<usize> {
             DrawOp::DrawParagraph(..) | DrawOp::DrawImage { .. } | DrawOp::DrawShadow { .. } => {
                 return None;
             }
-            // An op added later: not folded.
-            _ => return None,
         }
     }
     None
@@ -884,8 +882,6 @@ fn write_op(
             out.u32(id);
             out.offset(*offset);
         }
-        // An op added later: not drawn.
-        _ => {}
     }
 }
 

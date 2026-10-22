@@ -85,10 +85,8 @@ pub(crate) fn update(element: &Element, node: &mut dyn ModifierNode) {
             if let Some(node) = node.downcast_mut::<ClickableNode>() {
                 // A source swapped or the clickable disabled mid-press: the old press is over.
                 let pressed = node.state.pressed.is_some() || node.state.keys_pressed != 0;
-                let swapped = match &node.spec {
-                    Press::Click(old) => old.interaction_source != clickable.interaction_source,
-                    Press::Toggle(_) => false,
-                };
+                let swapped =
+                    node.spec.interaction_source() != clickable.interaction_source.as_ref();
                 if pressed && (swapped || !clickable.enabled) {
                     node.release_later();
                 }
@@ -98,6 +96,12 @@ pub(crate) fn update(element: &Element, node: &mut dyn ModifierNode) {
         }
         Element::Toggleable(toggleable) => {
             if let Some(node) = node.downcast_mut::<ClickableNode>() {
+                let pressed = node.state.pressed.is_some() || node.state.keys_pressed != 0;
+                let swapped =
+                    node.spec.interaction_source() != toggleable.interaction_source.as_ref();
+                if pressed && (swapped || !toggleable.enabled) {
+                    node.release_later();
+                }
                 node.spec = Press::Toggle(toggleable.clone());
                 node.state.disable_if(!toggleable.enabled);
             }
@@ -430,6 +434,13 @@ impl Press {
         }
     }
 
+    fn interaction_source(&self) -> Option<&crate::interaction::MutableInteractionSource> {
+        match self {
+            Press::Click(clickable) => clickable.interaction_source.as_ref(),
+            Press::Toggle(toggleable) => toggleable.interaction_source.as_ref(),
+        }
+    }
+
     fn fire(&self, context: &mut EventContext<'_>) {
         match self {
             Press::Click(clickable) => context.call(&clickable.on_click),
@@ -449,6 +460,8 @@ struct PressState {
     focused: bool,
     /// A mouse is over it.
     hovered: bool,
+    /// A combined clickable's tap detection holds a press (it reports there).
+    tap_pressed: Option<Rc<std::cell::Cell<bool>>>,
 }
 
 fn key_bit(key: Key) -> u8 {
@@ -564,14 +577,8 @@ impl ClickableNode {
     /// Releases its interaction source after the composition applying a change (a state
     /// can't be written while composing): its press, focus and hover are over.
     fn release_later(&self) {
-        let active = self.state.pressed.is_some()
-            || self.state.keys_pressed != 0
-            || self.state.focused
-            || self.state.hovered;
-        if active
-            && let Press::Click(clickable) = &self.spec
-            && let Some(source) = clickable.interaction_source.clone()
-        {
+        let active = self.is_pressed() || self.state.focused || self.state.hovered;
+        if active && let Some(source) = self.spec.interaction_source().cloned() {
             compose_runtime::CoroutineScope::new().launch(async move {
                 source.set_pressed(false);
                 source.set_focused(false);
@@ -580,11 +587,16 @@ impl ClickableNode {
         }
     }
 
+    /// Pressed by a pointer, a key, or (a combined clickable) its tap detection.
+    fn is_pressed(&self) -> bool {
+        self.state.pressed.is_some()
+            || self.state.keys_pressed != 0
+            || self.state.tap_pressed.as_ref().is_some_and(|pressed| pressed.get())
+    }
+
     fn publish_press(&self) {
-        if let Press::Click(clickable) = &self.spec
-            && let Some(source) = &clickable.interaction_source
-        {
-            source.set_pressed(self.state.pressed.is_some() || self.state.keys_pressed != 0);
+        if let Some(source) = self.spec.interaction_source() {
+            source.set_pressed(self.is_pressed());
             source.set_focused(self.state.focused);
             source.set_hovered(self.state.hovered);
         }
@@ -746,6 +758,10 @@ pub(crate) struct CombinedClickableElement {
 
 /// The callbacks the tap detection calls, updated in place.
 struct CombinedHandlers {
+    /// Where the tap detection's press is reported.
+    interaction_source: Option<crate::interaction::MutableInteractionSource>,
+    /// The tap detection holds a press, for the clickable's own reports.
+    tap_pressed: Rc<std::cell::Cell<bool>>,
     on_click: Callback<dyn Fn()>,
     on_long_click: Option<Callback<dyn Fn()>>,
     on_double_click: Option<Callback<dyn Fn()>>,
@@ -802,6 +818,11 @@ impl CombinedClickableNode {
                     if pressed.try_get() != Some(down) {
                         pressed.set(down);
                     }
+                    let current = handlers.borrow();
+                    current.tap_pressed.set(down);
+                    if let Some(source) = &current.interaction_source {
+                        source.set_pressed(down);
+                    }
                 };
                 scope.detect_taps(gestures, &report).await;
             }
@@ -828,7 +849,10 @@ impl CombinedClickableNode {
 
 impl ModifierNodeElement for CombinedClickableElement {
     fn create(&self) -> Box<dyn ModifierNode> {
+        let tap_pressed = Rc::new(std::cell::Cell::new(false));
         let handlers = Rc::new(std::cell::RefCell::new(CombinedHandlers {
+            interaction_source: self.clickable.interaction_source.clone(),
+            tap_pressed: tap_pressed.clone(),
             on_click: self.clickable.on_click.clone(),
             on_long_click: self.on_long_click.clone(),
             on_double_click: self.on_double_click.clone(),
@@ -837,7 +861,7 @@ impl ModifierNodeElement for CombinedClickableElement {
         Box::new(CombinedClickableNode {
             clickable: ClickableNode {
                 spec: Press::Click(self.clickable.clone()),
-                state: PressState::default(),
+                state: PressState { tap_pressed: Some(tap_pressed), ..PressState::default() },
             },
             driver: CombinedClickableNode::driver(&handlers, pressed.handle()),
             handlers,
@@ -851,11 +875,16 @@ impl ModifierNodeElement for CombinedClickableElement {
         // Another kind of gesture to wait for: the detection starts over.
         let restart = handlers.on_long_click.is_some() != self.on_long_click.is_some()
             || handlers.on_double_click.is_some() != self.on_double_click.is_some();
+        let swapped = handlers.interaction_source != self.clickable.interaction_source;
+        handlers.interaction_source = self.clickable.interaction_source.clone();
         handlers.on_click = self.clickable.on_click.clone();
         handlers.on_long_click = self.on_long_click.clone();
         handlers.on_double_click = self.on_double_click.clone();
         drop(handlers);
-        if restart || !self.clickable.enabled {
+        if swapped {
+            node.clickable.release_later();
+        }
+        if restart || swapped || !self.clickable.enabled {
             node.stop();
         }
         node.clickable.spec = Press::Click(self.clickable.clone());
@@ -874,6 +903,7 @@ impl ModifierNodeElement for CombinedClickableElement {
             a.enabled == b.enabled
                 && a.role == b.role
                 && a.indication == b.indication
+                && a.interaction_source == b.interaction_source
                 && a.on_click.ptr_eq(&b.on_click)
                 && same_callback(&self.on_long_click, &other.on_long_click)
                 && same_callback(&self.on_double_click, &other.on_double_click)

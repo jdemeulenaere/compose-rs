@@ -15,6 +15,7 @@ mod hover;
 mod image;
 mod lazy;
 mod lazy_api;
+mod modifier_memoization;
 mod modifiers_api;
 mod platform;
 mod pointer_input;

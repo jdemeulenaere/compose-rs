@@ -14,6 +14,10 @@
 //! An app's Rust library names its root composables with [`export_apps!`], which also defines
 //! `JNI_OnLoad`; `ComposeRsView(context, "name")` shows one.
 
+// Every type reachable from the public API can be named (D260): a type in a private
+// module that a public signature uses must be re-exported.
+#![deny(unnameable_types)]
+
 pub mod accessibility;
 mod image;
 pub mod input_method;

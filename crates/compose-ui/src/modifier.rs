@@ -256,8 +256,7 @@ impl Modifier {
         self.toggleable_with(value, ClickableOptions::DEFAULT, on_value_change)
     }
 
-    /// `toggleable` with Compose's optional parameters, as `clickable_with` (an
-    /// `interaction_source` isn't reported to yet).
+    /// `toggleable` with Compose's optional parameters, as `clickable_with`.
     pub fn toggleable_with(
         self,
         value: bool,
@@ -269,6 +268,7 @@ impl Modifier {
             enabled: options.enabled,
             role: options.role,
             indication: options.indication,
+            interaction_source: options.interaction_source,
             on_value_change: on_value_change.into_callback(),
         }))
     }
@@ -314,8 +314,7 @@ impl Modifier {
         )
     }
 
-    /// `combined_clickable` with Compose's optional parameters, as `clickable_with` (an
-    /// `interaction_source` isn't reported to yet).
+    /// `combined_clickable` with Compose's optional parameters, as `clickable_with`.
     pub fn combined_clickable_with(
         self,
         options: ClickableOptions,
@@ -328,7 +327,7 @@ impl Modifier {
                 enabled: options.enabled,
                 role: options.role,
                 indication: options.indication,
-                interaction_source: None,
+                interaction_source: options.interaction_source,
                 on_click: on_click.into_callback(),
             },
             on_long_click,
@@ -691,6 +690,8 @@ pub(crate) struct Toggleable {
     pub role: Option<Role>,
     /// As `Clickable::indication`.
     pub indication: Indication,
+    /// As `Clickable::interaction_source`.
+    pub interaction_source: Option<crate::interaction::MutableInteractionSource>,
     pub on_value_change: Callback<dyn Fn(bool)>,
 }
 

@@ -229,8 +229,6 @@ pub fn draw_display_list(canvas: &Canvas, list: &DisplayList, text_measurer: &dy
                 canvas.scale((scale.0, scale.1));
                 canvas.translate((-pivot.x, -pivot.y));
             }
-            // An op added later: not drawn.
-            _ => {}
         }
     }
     canvas.restore_to_count(start);

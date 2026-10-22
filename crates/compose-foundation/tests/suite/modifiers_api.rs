@@ -440,3 +440,31 @@ fn a_combined_clickable_disabled_mid_press_lets_its_press_go() {
     ui.advance_time_by(Duration::from_millis(20));
     assert!(!ui.dump_display_list().contains("#1A000000"), "{}", ui.dump_display_list());
 }
+
+/// `ClickableOptions::interaction_source` reaches every member of the clickable family:
+/// `toggleable_with`, `selectable_with` and `combined_clickable_with` report their press too.
+#[test]
+fn the_clickable_family_reports_presses_to_its_interaction_source() {
+    for kind in 0..3 {
+        let source = MutableInteractionSource::new();
+        let given = source.clone();
+        let mut ui = compose_test(move || {
+            let options = ClickableOptions {
+                interaction_source: Some(given.clone()),
+                ..ClickableOptions::DEFAULT
+            };
+            let modifier = match kind {
+                0 => Modifier.toggleable_with(false, options, |_| {}),
+                1 => Modifier.selectable_with(false, options, || {}),
+                _ => Modifier.combined_clickable_with(options, None, None, || {}),
+            };
+            Box!(modifier = modifier.size(40.dp()));
+        });
+        ui.host().send_pointer(PointerEvent::press(Offset::new(10.0, 10.0)));
+        ui.wait_for_idle();
+        assert!(source.is_pressed(), "kind {kind}: pressed");
+        ui.host().send_pointer(PointerEvent::release(Offset::new(10.0, 10.0)));
+        ui.wait_for_idle();
+        assert!(!source.is_pressed(), "kind {kind}: released");
+    }
+}

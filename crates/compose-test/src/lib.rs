@@ -9,6 +9,9 @@
 //! ```
 
 #![forbid(unsafe_code)]
+// Every type reachable from the public API can be named (D260): a type in a private
+// module that a public signature uses must be re-exported.
+#![deny(unnameable_types)]
 
 mod matcher;
 mod script;

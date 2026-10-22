@@ -198,7 +198,6 @@ fn painted(list: &compose_ui::platform::DisplayList) -> Vec<(compose_ui::Rect, c
             | DrawOp::DrawPath { .. }
             | DrawOp::DrawShadow { .. }
             | DrawOp::DrawArc { .. } => {}
-            _ => {}
         }
     }
     out
