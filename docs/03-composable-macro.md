@@ -27,12 +27,16 @@ fn Greeting(name: SharedString, count: i32) {
             Greeting(name, count)
         });
     // Kept arguments live in one typed slot: (SharedString, i32). The tuple is built (cloned)
-    // only when an argument differs.
-    if !__composer.update_kept(
-        |kept: &(SharedString, i32)| !ComposeArg::same(&kept.0, &name) || !ComposeArg::same(&kept.1, &count),
-        || (name.clone(), count.clone()),
-    ) && __composer.skipping()
-    {
+    // only when an argument differs. `update_kept`'s steps, inline: no closures (D200).
+    let mut __compose_kept = __composer.take_kept();
+    let __compose_changed = match __compose_kept.get::<(SharedString, i32)>() {
+        Some(kept) => !ComposeArg::same(&kept.0, &name) || !ComposeArg::same(&kept.1, &count),
+        None => true,
+    };
+    if __compose_changed {
+        __compose_kept.set((name.clone(), count.clone()));
+    }
+    if !__compose_kept.put(__compose_changed) && __composer.skipping() {
         __composer.skip_to_group_end();
         return;
     }
@@ -227,4 +231,6 @@ The generated `macro_rules!` has one arm: it forwards its arguments, with a spec
 
 Measured on a crate of 1,000 composables (each with three parameters, a `remember`, a branch and a loop; debug build, Apple M-series): a one-line edit rebuilds in 0.77 s with `#[composable]`, against 0.17 s for the same functions without it, and a clean build of the crate takes 2.3 s against 0.7 s. About 0.6–0.7 ms per composable per edit (a review measured 1.04 s against 0.35 s on the same shape), plus about 0.1 ms per closure making composable calls (closures are regions): re-running the macro on every composable of the crate (proc macros aren't cached between builds) and checking the larger expanded code. Phase C code costs more per edit: a call macro about 0.05 ms, and a lambda about 0.4 ms, of which the memoization probe is about 0.1 ms and the rest the closure itself (its type, its `Callback` conversion), as in plain Rust (measured on 1,000 composables with four call macros and five lambdas each: 2.35 s per edit, against 1.9 s with the same closures unmemoized and 1.3 s without them). Building every lambda lazily from clones of its captures (D115) added about 0.15 ms per lambda (a review measured 500 composables with five lambdas each: 2.96 s per edit before, 3.34 s after). An app crate of 100 composables in that style pays about 250 ms per edit, which is why app code stays in small crates ([08](08-fast-builds.md)). Cloning captures a lambda would move and the generated call-form docs added about 30 µs per composable to the expansion (rustc's `expand_crate` for compose-material3's 50 composables: 51.7 ms before, 53.3 ms after; the gallery's: 31 ms before, 32.5 ms after, its rebuild otherwise unchanged within noise).
 
-Per composable definition, the macro generates one group, one kept tuple, one comparison per parameter, one `fn` restart pointer and one call macro. Per memoized lambda, it adds one slot and one comparison per capture. Per branch containing composable calls, one region group. Nothing is generic beyond the composable's own parameters, and the runtime functions take `&dyn Any` or plain words.
+Code generation is the other half: at `opt-level = 0` every instantiation of a generic function is a function of its own, which rustc collects, lowers and hands to LLVM, and generated code instantiates the runtime's generic entry points per composable and per call site. So these are thin shims over cores instantiated per type, or not generic at all (D200), as std's `Vec` is over `RawVec`: `remember` and `remember_keyed` match on `remembered::<T>` and call `calc` only on a miss (72 and 100 IR lines per call site, against 260 and 460 before, plus 157 and 115 per remembered type and 217 per keys type); a composable writes `update_kept`'s steps inline, so it instantiates no closures and only its kept tuple's `KeptArguments::get` and `set` (44 and 147 lines, against 330 for `update_kept`); a lambda's miss wraps it and calls `PendingLambda::store_callback`, instantiated per captures' types and signature instead of per lambda (190 lines each before); `CompositionLocalProvider` starts its provider in a function per value type. LLVM IR of each crate's own code generation (`--emit=llvm-ir`, one codegen unit), before and after: compose-material3 241.7k → 206.5k lines (−15%), compose-foundation 165.1k → 157.6k (−5%), the gallery 71.1k → 60.9k (−14%). Clean builds gain less, the type and borrow checks of the expanded bodies weighing as much as code generation: medians of three interleaved runs, material3's library 0.79 → 0.75 s and with its tests 1.90 → 1.80 s, foundation's 0.69 → 0.70 s and 2.74 → 2.64 s, the gallery's 0.36 → 0.35 s and 0.71 → 0.69 s. What remains per lambda is mostly its own: the closure, its `Rc::new`, its drop glue, and the probe per distinct captures' types (in the gallery, `lambda_probe` and `store_callback` are a fifth of the IR).
+
+Per composable definition, the macro generates one group, one kept tuple, one comparison per parameter, one `fn` restart pointer and one call macro. Per memoized lambda, it adds one slot and one comparison per capture. Per branch containing composable calls, one region group. Nothing is generic beyond the composable's own parameters and its kept tuple's `get` and `set`, and the runtime functions take `&dyn Any` or plain words.

@@ -670,8 +670,9 @@ fn transform(
                 }
             }
         };
+        // Ends with the `if` of the skip, whose block follows.
         let skip = if params.is_empty() {
-            quote! { #composer.skipping() }
+            quote! { if #composer.skipping() }
         } else {
             let comparisons = params.iter().enumerate().map(|(index, param)| {
                 let index = syn::Index::from(index);
@@ -684,11 +685,20 @@ fn transform(
                 let name = &param.name;
                 quote_spanned! { param.ty.span()=> ::compose::__private::keep(&#name) }
             });
+            // `update_kept`'s steps, inline: no closures, and nothing generic but the kept
+            // tuple's `get` and `set` (D200).
+            let arguments = Ident::new("__compose_kept", Span::mixed_site());
+            let changed = Ident::new("__compose_changed", Span::mixed_site());
             quote! {
-                !#composer.update_kept(
-                    |#kept: &(#(#types,)*)| #(#comparisons)||*,
-                    || (#(#clones,)*),
-                ) && #composer.skipping()
+                let mut #arguments = #composer.take_kept();
+                let #changed = match #arguments.get::<(#(#types,)*)>() {
+                    ::core::option::Option::Some(#kept) => #(#comparisons)||*,
+                    ::core::option::Option::None => true,
+                };
+                if #changed {
+                    #arguments.set((#(#clones,)*));
+                }
+                if !#arguments.put(#changed) && #composer.skipping()
             }
         };
         let restart_name = Ident::new("__compose_restart", Span::mixed_site());
@@ -703,7 +713,7 @@ fn transform(
                 #restart_name,
                 ::compose::__private::identity_of(&#restart_name),
             );
-            if #skip {
+            #skip {
                 #composer.skip_to_group_end();
                 return;
             }

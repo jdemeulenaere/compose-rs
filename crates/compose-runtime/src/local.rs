@@ -124,13 +124,19 @@ pub fn CompositionLocalProvider<T: Clone + ComposeArg + 'static>(
     value: ProvidedValue<T>,
     content: impl FnOnce(),
 ) {
+    // A shim, instantiated per call site: the provider's work is instantiated per value type.
+    let group = start_provider(value);
+    content();
+    drop(group);
+}
+
+/// Starts a provider's group and provides `value` in it.
+fn start_provider<T: Clone + ComposeArg + 'static>(value: ProvidedValue<T>) -> ReplaceGroup {
     let ProvidedValue { id, key, value } = value;
     let group = ReplaceGroup::start(key, "compose_runtime::CompositionLocalProvider");
     let slot: Rc<ProviderSlot<T>> = remember(|| {
         Rc::new(ProviderSlot { local: id, value: mutable_state_of_with(value.clone(), SamePolicy) })
     });
     slot.value.handle().set_while_composing(value);
-    drop(slot);
-    content();
-    drop(group);
+    group
 }

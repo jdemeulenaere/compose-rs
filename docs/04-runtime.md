@@ -32,6 +32,9 @@ impl Composer {
     /// `changed` compares the kept arguments with the new ones; `make` builds the new kept
     /// value only when they differ, so a steady-state call clones nothing.
     pub fn update_kept<K: 'static>(&self, changed: impl FnOnce(&K) -> bool, make: impl FnOnce() -> K) -> bool;
+    /// `update_kept`'s steps, which generated code writes inline (`get`, `set`, `put`): a
+    /// composable then instantiates no closures (D200).
+    pub fn take_kept(&self) -> KeptArguments;
     pub fn current_scope(&self) -> RecomposeScope;
     pub fn with_applier<A: Applier, R>(&self, f: impl FnOnce(&mut A) -> R) -> R;
     pub fn record_side_effect(&self, effect: impl FnOnce() + 'static);

@@ -17,20 +17,26 @@ fn Screen(items: Rc<Vec<u32>>, mode: Mode, content: Rc<dyn Fn()>) {
         __compose_restart,
         ::compose::__private::identity_of(&__compose_restart),
     );
-    if !__composer
-        .update_kept(
-            |__kept: &(Rc<Vec<u32>>, Mode, Rc<dyn Fn()>)| {
-                !::compose::__private::ComposeArg::same(&__kept.0, &items)
-                    || !::compose::__private::ComposeArg::same(&__kept.1, &mode)
-                    || !::compose::__private::ComposeArg::same(&__kept.2, &content)
-            },
-            || (
+    let mut __compose_kept = __composer.take_kept();
+    let __compose_changed = match __compose_kept
+        .get::<(Rc<Vec<u32>>, Mode, Rc<dyn Fn()>)>()
+    {
+        ::core::option::Option::Some(__kept) => {
+            !::compose::__private::ComposeArg::same(&__kept.0, &items)
+                || !::compose::__private::ComposeArg::same(&__kept.1, &mode)
+                || !::compose::__private::ComposeArg::same(&__kept.2, &content)
+        }
+        ::core::option::Option::None => true,
+    };
+    if __compose_changed {
+        __compose_kept
+            .set((
                 ::compose::__private::keep(&items),
                 ::compose::__private::keep(&mode),
                 ::compose::__private::keep(&content),
-            ),
-        ) && __composer.skipping()
-    {
+            ));
+    }
+    if !__compose_kept.put(__compose_changed) && __composer.skipping() {
         __composer.skip_to_group_end();
         return;
     }

@@ -760,17 +760,51 @@ fn insert_node(parent: NodeRef, index: u32, node: &mut dyn Any, node_type: &str)
     inserted
 }
 
-fn take_kept() -> Option<Rc<dyn Any>> {
-    with_runtime(|runtime| runtime.take_kept())
-}
+/// A restart group's kept arguments, taken out of the group by [`Composer::take_kept`] to compare
+/// them with new ones and replace them, then put back with [`put`](KeptArguments::put).
+///
+/// What `#[composable]` expands to instead of [`Composer::update_kept`]: the comparison is
+/// written inline, so a composable instantiates no closures and no generic function of its own
+/// beyond [`get`](KeptArguments::get) and [`set`](KeptArguments::set).
+pub struct KeptArguments(Option<Rc<dyn Any>>);
 
-fn put_kept(kept: Option<Rc<dyn Any>>, changed: bool) {
-    match with_runtime(|runtime| runtime.put_kept(kept, changed)) {
-        Ok(old) => drop(old),
-        Err((kept, error)) => {
-            drop(kept);
-            misuse(error)
+impl KeptArguments {
+    /// The kept arguments, if there are some and they are a `K`.
+    pub fn get<K: 'static>(&self) -> Option<&K> {
+        match &self.0 {
+            Some(kept) => kept.downcast_ref::<K>(),
+            None => None,
         }
+    }
+
+    /// Replaces the kept arguments with `value`: in place when nothing else holds them, so a
+    /// change allocates nothing. The old arguments drop here, outside the runtime's borrow.
+    pub fn set<K: 'static>(&mut self, value: K) {
+        if let Some(old) = self.unique()
+            && let Some(old) = old.downcast_mut::<K>()
+        {
+            *old = value;
+        } else {
+            self.0 = Some(Rc::new(value));
+        }
+    }
+
+    /// The kept arguments, if nothing else holds them.
+    fn unique(&mut self) -> Option<&mut dyn Any> {
+        Rc::get_mut(self.0.as_mut()?)
+    }
+
+    /// Puts the kept arguments back in their group; `changed` says they differ from last time's,
+    /// so the body runs. Returns `changed`.
+    pub fn put(self, changed: bool) -> bool {
+        match with_runtime(|runtime| runtime.put_kept(self.0, changed)) {
+            Ok(old) => drop(old),
+            Err((kept, error)) => {
+                drop(kept);
+                misuse(error)
+            }
+        }
+        changed
     }
 }
 
@@ -893,30 +927,21 @@ impl Composer {
         changed: impl FnOnce(&K) -> bool,
         make: impl FnOnce() -> K,
     ) -> bool {
-        let kept = take_kept();
-        let differs = match kept.as_deref().and_then(|kept| kept.downcast_ref::<K>()) {
-            Some(kept) => changed(kept),
+        let mut kept = self.take_kept();
+        let differs = match kept.get::<K>() {
+            Some(old) => changed(old),
             None => true,
         };
-        let kept = match kept {
-            Some(kept) if !differs => Some(kept),
-            Some(mut kept) => {
-                match Rc::get_mut(&mut kept).and_then(|value| value.downcast_mut::<K>()) {
-                    Some(value) => {
-                        // In place; the old arguments drop here, outside the runtime's borrow.
-                        *value = make();
-                        Some(kept)
-                    }
-                    None => {
-                        drop(kept);
-                        Some(Rc::new(make()) as Rc<dyn Any>)
-                    }
-                }
-            }
-            None => Some(Rc::new(make()) as Rc<dyn Any>),
-        };
-        put_kept(kept, differs);
-        differs
+        if differs {
+            kept.set(make());
+        }
+        kept.put(differs)
+    }
+
+    /// Takes the current restart group's kept arguments out, to compare them with new ones: the
+    /// steps of [`update_kept`](Composer::update_kept), for generated code.
+    pub fn take_kept(&self) -> KeptArguments {
+        KeptArguments(with_runtime(|runtime| runtime.take_kept()))
     }
 
     /// The recompose scope state reads register at this point.
