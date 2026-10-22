@@ -1706,7 +1706,10 @@ impl PointerInputModifierNode for LazyScrollNode {
             reverse,
             context,
             |delta| state.dispatch(delta),
-            move || Rc::new(move |delta| flung.dispatch(delta)),
+            move || {
+                let flung = flung.clone();
+                Rc::new(move |delta| flung.dispatch(delta))
+            },
         );
     }
 

@@ -13,9 +13,9 @@ use compose_runtime::{
 };
 use compose_ui::{
     Constraints, DrawModifierNode, DrawScope, EventContext, IntSize, LayoutModifierNode,
-    Measurable, MeasureResult, MeasureScope, Modifier, ModifierNode, ModifierNodeElement, Offset,
-    Outline, PointerEvent, PointerEventPass, PointerEventType, PointerId, PointerInputModifierNode,
-    Rect,
+    Measurable, MeasureResult, MeasureScope, Modifier, ModifierNode, ModifierNodeElement,
+    NestedScrollChain, NestedScrollConnection, NestedScrollSource, Offset, Outline, PointerEvent,
+    PointerEventPass, PointerEventType, PointerId, PointerInputModifierNode, Rect,
 };
 
 /// How far content is scrolled, in pixels, and how far it can be, as Compose's `ScrollState`:
@@ -133,6 +133,21 @@ impl ModifierNodeElement for ScrollElement {
 
 /// A drag in progress: the pointer, where it last was, and whether it moved past the touch slop
 /// (then it scrolls, and clicks under it are cancelled).
+impl Drag {
+    fn new(event: &PointerEvent, position: Offset, along: f32) -> Drag {
+        let mut tracker = crate::fling::VelocityTracker::default();
+        tracker.add(event_time(event), along);
+        Drag {
+            pointer: event.pointer,
+            start: position,
+            last: position,
+            scrolling: false,
+            tracker,
+            touch: event.pointer_type == compose_ui::PointerType::Touch,
+        }
+    }
+}
+
 struct Drag {
     pointer: PointerId,
     /// Where it was pressed.
@@ -157,7 +172,15 @@ const MINIMUM_FLING_DP: f32 = 50.0;
 /// Scrolls with `scroll_by` (pixels towards the end; returns those used) along a fling starting
 /// at `velocity` (pixels per second), frame by frame, until its distance is covered or an edge
 /// stops it, as Compose's default fling behaviour.
-fn fling(velocity: f32, density: f32, scroll_by: Rc<dyn Fn(f32) -> f32>) -> Job {
+///
+/// `on_end` gets the velocity left when it ends (none once its distance is covered; what an edge
+/// stopped).
+fn fling(
+    velocity: f32,
+    density: f32,
+    scroll_by: Rc<dyn Fn(f32) -> f32>,
+    on_end: impl FnOnce(f32) + 'static,
+) -> Job {
     let course = crate::fling::Fling::new(velocity, density);
     CoroutineScope::new().launch(async move {
         let start = with_frame_nanos(|time| time).await;
@@ -174,11 +197,47 @@ fn fling(velocity: f32, density: f32, scroll_by: Rc<dyn Fn(f32) -> f32>) -> Job 
             covered = target;
             let used = if delta == 0.0 { 0.0 } else { scroll_by(delta) };
             // An edge took less than asked: the fling ends there.
-            if fraction >= 1.0 || (delta - used).abs() > 0.5 {
+            if fraction >= 1.0 {
+                on_end(0.0);
+                break;
+            }
+            if (delta - used).abs() > 0.5 {
+                // Its velocity there: the spline's slope (it slows down fast), as Compose's
+                // `velocityLeft`.
+                let step = 0.01f32.min(fraction);
+                let seconds = course.duration_nanos as f32 / 1e9;
+                let slope = (course.distance_at(fraction) - course.distance_at(fraction - step))
+                    / (step * seconds).max(f32::EPSILON);
+                on_end(slope);
                 break;
             }
         }
     })
+}
+
+/// Scrolls by `delta` (pixels towards the end, before a right-to-left reversal) through the
+/// nested-scroll `chain`, as Compose's scrollables with their `NestedScrollDispatcher`: the
+/// connections around first, then `scroll_by`, then the connections again with what's left;
+/// returns what all of them used.
+pub(crate) fn dispatch_scroll(
+    chain: &NestedScrollChain,
+    vertical: bool,
+    delta: f32,
+    source: NestedScrollSource,
+    scroll_by: &mut dyn FnMut(f32) -> f32,
+) -> f32 {
+    if chain.is_empty() {
+        return scroll_by(delta);
+    }
+    // The connections' offsets are the pointer's way: the content's scroll's opposite.
+    let axis =
+        |value: f32| if vertical { Offset::new(0.0, value) } else { Offset::new(value, 0.0) };
+    let along = |offset: Offset| if vertical { offset.y } else { offset.x };
+    let before = along(chain.pre_scroll(axis(-delta), source));
+    let left = delta + before;
+    let used = if left == 0.0 { 0.0 } else { scroll_by(left) };
+    let after = along(chain.post_scroll(axis(-used), axis(-(left - used)), source));
+    used - before - after
 }
 
 /// The distance a pointer moves before a drag scrolls, as Compose's touch slop (8 dp), in
@@ -346,6 +405,7 @@ impl PointerInputModifierNode for ScrollNode {
             |delta| scroll_state_by(&state, delta, fraction),
             move || {
                 let fraction = std::cell::Cell::new(0.0f32);
+                let flung = flung.clone();
                 Rc::new(move |delta| {
                     let mut left = fraction.get();
                     let used = scroll_state_by(&flung, delta, &mut left);
@@ -382,18 +442,49 @@ fn scroll_state_by(state: &ScrollState, delta: f32, fraction: &mut f32) -> f32 {
 ///
 /// A drag is taken by the innermost scrollable once past the touch slop (its Main pass, which
 /// runs from the target outward: an outer one sees it consumed), then in the Initial pass, so
-/// what's under it sees it consumed (a click there is cancelled). A wheel delta goes to the
-/// innermost first; what it doesn't use goes on to the scrollables around it.
+/// what's under it sees it consumed (a click there is cancelled). Every delta goes through the
+/// nested-scroll connections around (D188), among them the scrollables around, each a
+/// nested-scroll parent of those inside it (its post-scroll scrolls it), as Compose's
+/// `ScrollingLogic`: what the innermost can't use scrolls the ones around it.
 #[derive(Default)]
 pub(crate) struct DragScroller {
     drag: Option<Drag>,
+    /// The pointers down on the node, with where they last were in the window: the drag
+    /// follows the first, then another when it lifts, as Compose's.
+    pressed: Vec<(PointerId, Offset)>,
     /// A fling going on: a press stops it (and does nothing else).
     fling: Option<Job>,
+    /// The nested-scroll connections around, as the last press or wheel turn found them.
+    chain: NestedScrollChain,
+    /// The axis, for a cancel's fling dispatch.
+    vertical: bool,
+}
+
+/// A scrollable as the nested-scroll parent of the scrollables inside it: what they leave
+/// scrolls it.
+struct ScrollableConnection {
+    scroll: Rc<dyn Fn(f32) -> f32>,
+    vertical: bool,
+    reverse: bool,
+}
+
+impl NestedScrollConnection for ScrollableConnection {
+    fn on_post_scroll(&self, _: Offset, available: Offset, _: NestedScrollSource) -> Offset {
+        let along = if self.vertical { available.y } else { available.x };
+        // The content scrolls the pointer's other way.
+        let delta = -along;
+        if delta == 0.0 {
+            return Offset::ZERO;
+        }
+        let used = if self.reverse { -(self.scroll)(-delta) } else { (self.scroll)(delta) };
+        if self.vertical { Offset::new(0.0, -used) } else { Offset::new(-used, 0.0) }
+    }
 }
 
 impl DragScroller {
-    /// `scroll_by` scrolls during the event; `flinger` gives a scroll a fling's task can use
-    /// later (a touch let go while moving flings, as on Android).
+    /// `scroll_by` scrolls during the event; `flinger` gives a scroll usable later, by a
+    /// fling's task (a touch let go while moving flings, as on Android) or as the nested-scroll
+    /// parent of the scrollables inside.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn on_pointer_event(
         &mut self,
@@ -403,28 +494,49 @@ impl DragScroller {
         reverse: bool,
         context: &EventContext<'_>,
         mut scroll_by: impl FnMut(f32) -> f32,
-        flinger: impl FnOnce() -> Rc<dyn Fn(f32) -> f32>,
+        flinger: impl Fn() -> Rc<dyn Fn(f32) -> f32>,
     ) {
         let slop = touch_slop(context);
+        self.vertical = vertical;
+        // The connections around: found on the way in, as a gesture or a wheel turn starts;
+        // then this scrollable is one for those inside it.
+        if pass == PointerEventPass::Initial
+            && matches!(event.kind, PointerEventType::Press | PointerEventType::Scroll)
+        {
+            self.chain = NestedScrollChain::current();
+            NestedScrollChain::enter(Rc::new(ScrollableConnection {
+                scroll: flinger(),
+                vertical,
+                reverse,
+            }));
+        }
         // A horizontal scroll in a right-to-left layout goes the other way, as Compose's
         // `reverseDirection`.
-        let mut scroll_by =
+        let mut reversed =
             move |delta: f32| if reverse { -scroll_by(-delta) } else { scroll_by(delta) };
+        let chain = self.chain.clone();
+        // Through the connections around.
+        let mut scroll_by = move |delta: f32| {
+            dispatch_scroll(&chain, vertical, delta, NestedScrollSource::UserInput, &mut reversed)
+        };
         let along_axis = move |offset: Offset| if vertical { offset.y } else { offset.x };
+        // Where the pointer is in the window: the deltas don't count the content's own moves (a
+        // bar collapsing above it), as Compose's changes compare positions in the same layout.
+        let position = context.pointer_position().unwrap_or(event.position);
         match (event.kind, pass) {
             (PointerEventType::Scroll, PointerEventPass::Main) if !event.consumed => {
                 let delta = if vertical { event.scroll_delta.y } else { event.scroll_delta.x };
                 if delta == 0.0 {
                     return;
                 }
-                let used = scroll_by(delta);
-                let left = delta - used;
+                // The scrollables and connections around had what's left along the axis.
+                scroll_by(delta);
                 if vertical {
-                    event.scroll_delta.y = left;
+                    event.scroll_delta.y = 0.0;
                 } else {
-                    event.scroll_delta.x = left;
+                    event.scroll_delta.x = 0.0;
                 }
-                if left.abs() < 0.01 {
+                if event.scroll_delta.x.abs() < 0.01 && event.scroll_delta.y.abs() < 0.01 {
                     event.consume();
                 }
             }
@@ -437,27 +549,28 @@ impl DragScroller {
                     fling.cancel();
                     event.consume();
                 }
-                let mut tracker = crate::fling::VelocityTracker::default();
-                tracker.add(event_time(event), along_axis(event.position));
-                self.drag = Some(Drag {
-                    pointer: event.pointer,
-                    start: event.position,
-                    last: event.position,
-                    scrolling: false,
-                    tracker,
-                    touch: event.pointer_type == compose_ui::PointerType::Touch,
-                });
+                self.pressed.retain(|(pointer, _)| *pointer != event.pointer);
+                self.pressed.push((event.pointer, position));
+                // Another finger joining a drag leaves it to the first.
+                if self.drag.is_none() {
+                    self.drag = Some(Drag::new(event, position, along_axis(position)));
+                }
             }
             (PointerEventType::Move, PointerEventPass::Initial) => {
+                if let Some(pressed) =
+                    self.pressed.iter_mut().find(|(pointer, _)| *pointer == event.pointer)
+                {
+                    pressed.1 = position;
+                }
                 let Some(drag) = &mut self.drag else { return };
                 if drag.pointer != event.pointer || !event.pressed {
                     return;
                 }
-                let moved = event.position - drag.last;
+                let moved = position - drag.last;
                 let along = if vertical { moved.y } else { moved.x };
-                drag.tracker.add(event_time(event), along_axis(event.position));
+                drag.tracker.add(event_time(event), along_axis(position));
                 if drag.scrolling {
-                    drag.last = event.position;
+                    drag.last = position;
                     event.consume();
                     // Dragging content up scrolls down.
                     scroll_by(-along);
@@ -468,13 +581,13 @@ impl DragScroller {
                 if drag.scrolling || drag.pointer != event.pointer || !event.pressed {
                     return;
                 }
-                drag.last = event.position;
+                drag.last = position;
                 if event.consumed {
                     // An inner scrollable or handler took it.
                     return;
                 }
                 // How far it is from the press (a tremor going back and forth isn't a drag).
-                let moved = event.position - drag.start;
+                let moved = position - drag.start;
                 let along = if vertical { moved.y } else { moved.x };
                 if along.abs() > slop {
                     drag.scrolling = true;
@@ -484,33 +597,89 @@ impl DragScroller {
                 }
             }
             (PointerEventType::Release, PointerEventPass::Initial) => {
-                if let Some(mut drag) = self.drag.take()
-                    && drag.scrolling
-                {
-                    event.consume();
-                    // A touch let go while moving: the content goes on, slowing down.
-                    drag.tracker.add(event_time(event), along_axis(event.position));
-                    let density = context.density().density;
-                    let maximum = MAXIMUM_FLING_DP * density;
-                    // The finger's velocity; the content scrolls the other way.
-                    let velocity = (-drag.tracker.velocity()).clamp(-maximum, maximum);
-                    if drag.touch && velocity.abs() > MINIMUM_FLING_DP * density {
-                        let scroll = flinger();
-                        let scroll: Rc<dyn Fn(f32) -> f32> = if reverse {
-                            Rc::new(move |delta: f32| -scroll(-delta))
-                        } else {
-                            scroll
-                        };
-                        self.fling = Some(fling(velocity, density, scroll));
-                    }
+                self.pressed.retain(|(pointer, _)| *pointer != event.pointer);
+                let Some(drag) = &mut self.drag else { return };
+                if drag.pointer != event.pointer {
+                    return;
                 }
+                // The drag goes on with a finger still down.
+                if let Some(&(pointer, at)) = self.pressed.last() {
+                    drag.pointer = pointer;
+                    drag.start = at - (drag.last - drag.start);
+                    drag.last = at;
+                    drag.tracker = crate::fling::VelocityTracker::default();
+                    drag.tracker.add(event_time(event), along_axis(at));
+                    return;
+                }
+                let Some(mut drag) = self.drag.take() else { return };
+                if !drag.scrolling {
+                    return;
+                }
+                event.consume();
+                // A touch let go while moving: the content goes on, slowing down.
+                drag.tracker.add(event_time(event), along_axis(position));
+                let density = context.density().density;
+                let maximum = MAXIMUM_FLING_DP * density;
+                // The finger's velocity; the content scrolls the other way.
+                let velocity = if drag.touch {
+                    (-drag.tracker.velocity()).clamp(-maximum, maximum)
+                } else {
+                    0.0
+                };
+                self.end(velocity, density, reverse, flinger);
             }
             _ => {}
         }
     }
 
+    /// A drag's end at `velocity` (towards the end): the connections around take their part
+    /// first, the content flings with the rest, then they hear how it ended.
+    fn end(
+        &mut self,
+        velocity: f32,
+        density: f32,
+        reverse: bool,
+        flinger: impl Fn() -> Rc<dyn Fn(f32) -> f32>,
+    ) {
+        let vertical = self.vertical;
+        let chain = self.chain.clone();
+        let axis = move |value: f32| {
+            if vertical { Offset::new(0.0, value) } else { Offset::new(value, 0.0) }
+        };
+        let along_axis = move |offset: Offset| if vertical { offset.y } else { offset.x };
+        let velocity = velocity + along_axis(chain.pre_fling(axis(-velocity)));
+        if velocity.abs() > MINIMUM_FLING_DP * density {
+            let scroll = flinger();
+            let flung = chain.clone();
+            let scroll: Rc<dyn Fn(f32) -> f32> = Rc::new(move |delta: f32| {
+                let mut reversed =
+                    |delta: f32| if reverse { -scroll(-delta) } else { scroll(delta) };
+                dispatch_scroll(
+                    &flung,
+                    vertical,
+                    delta,
+                    NestedScrollSource::SideEffect,
+                    &mut reversed,
+                )
+            });
+            let on_end = move |left: f32| {
+                chain.post_fling(axis(-(velocity - left)), axis(-left));
+            };
+            self.fling = Some(fling(velocity, density, scroll, on_end));
+        } else {
+            chain.post_fling(Offset::ZERO, axis(-velocity));
+        }
+    }
+
+    /// The gesture is cancelled: a drag going on stops without velocity, as Compose's
+    /// `onDragStopped(Zero)` (the connections around still hear it end).
     pub(crate) fn cancel(&mut self) {
-        self.drag = None;
+        self.pressed.clear();
+        if self.drag.take().is_some_and(|drag| drag.scrolling) {
+            let chain = self.chain.clone();
+            chain.pre_fling(Offset::ZERO);
+            chain.post_fling(Offset::ZERO, Offset::ZERO);
+        }
     }
 
     /// The node leaves: its fling stops.

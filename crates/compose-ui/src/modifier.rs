@@ -858,6 +858,12 @@ pub trait ModifierNode: Any {
     fn hit_clip(&self) -> Option<crate::graphics::Shape> {
         None
     }
+    /// Whether this pointer input node only watches the events passing to what's hit inside
+    /// it: it doesn't count as hit itself, so the siblings under its node are still tested
+    /// (`Modifier.nested_scroll`).
+    fn is_pointer_observer(&self) -> bool {
+        false
+    }
     /// Called when the node leaves the tree, before it's dropped: release resources here.
     fn on_detach(&mut self, _context: &mut DetachContext<'_>) {}
     /// Asked to show `rect` (in this node's coordinates; `viewport` is its size), as Compose's

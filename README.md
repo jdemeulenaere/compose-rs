@@ -11,7 +11,7 @@ A design for bringing Jetpack Compose's model to Rust: positional memoization ov
 | `crates/compose-macros` | `#[composable]` (skipping, restarts, call macros, lambda memoization), `#[derive(ComposeArg)]` |
 | `crates/compose-ui` | layout nodes, `Modifier`, `Layout`, drawing (paths, images, arcs, shadows, graphics layers), pointer and key input, focus, semantics and actions, popups and dialogs, layout direction, `UiHost` |
 | `crates/compose-foundation` | `Box`, `BoxWithConstraints`, `Column`, `Row`, `Spacer`, `Arrangement`, `BasicText`, `BasicTextField`, `Image`, `Canvas`, scrolling, `LazyColumn`, `LazyRow`, `LazyVerticalGrid`, shapes |
-| `crates/compose-material3` | `MaterialTheme`, `Text`, `Surface`, buttons, icons, `Checkbox`, `Switch`, `RadioButton`, `Slider`, `TextField`, `OutlinedTextField`, cards, `TopAppBar`, `Scaffold`, `NavigationBar`, `TabRow`, `ListItem`, `AlertDialog`, `DropdownMenu`, `Snackbar`, progress indicators |
+| `crates/compose-material3` | `MaterialTheme`, `Text`, `Surface`, buttons, icon buttons, FABs, icons, `Checkbox`, `Switch`, `RadioButton`, `Slider`, segmented buttons, `TextField`, `OutlinedTextField`, cards, top and bottom app bars with scroll behaviors, `Scaffold`, `NavigationBar`, `NavigationRail`, tab rows, `ListItem`, `AlertDialog`, `DropdownMenu`, `ModalBottomSheet`, `SwipeToDismissBox`, `Snackbar`, progress indicators |
 | `crates/compose-animation` | `Animatable`, animation specs and easings, `animate_*_as_state`, infinite transitions, `AnimatedVisibility` |
 | `crates/compose-test` | `ComposeTestRule`: finders, actions, assertions, event scripts |
 | `crates/compose-skia` | Skia renderer and SkParagraph text measurer |

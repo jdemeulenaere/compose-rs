@@ -30,6 +30,7 @@ pub mod layout_callbacks;
 mod layout_modifiers;
 mod measure;
 pub mod modifier;
+pub mod nested_scroll;
 mod nodes;
 pub mod overlay;
 pub mod path;
@@ -77,6 +78,7 @@ pub use modifier::{
     ModifierNode, ModifierNodeElement, PaddingValues, ParentAlignment, ParentData,
     PointerInputModifierNode, RowScope, SemanticsModifierNode, SizeSpec, WeightScope,
 };
+pub use nested_scroll::{NestedScrollChain, NestedScrollConnection, NestedScrollSource};
 pub use overlay::{PopupPositionProvider, WindowPosition};
 pub use path::{ImageVector, Path, PathCommand, PathError, PathFillType};
 pub use pointer_input::{

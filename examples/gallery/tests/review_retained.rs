@@ -56,6 +56,9 @@ fn the_gallerys_frames_draw_what_drawing_everything_does() {
     check_frames(&mut ui, 30, "scroll settling");
     let moved = ui.on_node_with_text("Card 15").fetch_semantics_node().bounds;
     assert!(moved.top < list.top, "scrolled: {list:?} {moved:?}");
+    // The top bar slid away with the scroll; scrolling back brings it back at once.
+    ui.host().send_pointer(PointerEvent::scroll(inside, Offset::new(0.0, -80.0)));
+    check_frames(&mut ui, 10, "top bar back");
     ui.on_node(described("Search")).perform_click();
     check_frames(&mut ui, 10, "search open");
     ui.on_node(has_text("Search the cards")).perform_text_input("1");
