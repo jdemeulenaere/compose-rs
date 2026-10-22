@@ -15,7 +15,7 @@ use compose::runtime::*;
 use compose::test::*;
 use compose::ui::{
     Density, IntSize, Key, Rect,
-    platform::{DisplayList, DrawOp},
+    platform::{DrawOp, FlatDisplayList},
 };
 use compose_skia::SkiaTextMeasurer;
 
@@ -42,7 +42,7 @@ fn hebrew() -> ComposeTestRule {
 }
 
 /// The last rectangle drawn (the focused field's cursor), in the root.
-fn cursor(list: &DisplayList) -> Rect {
+fn cursor(list: &FlatDisplayList) -> Rect {
     let (mut x, mut y) = (0.0f32, 0.0f32);
     let mut last = None;
     for op in &list.ops {

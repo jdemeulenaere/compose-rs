@@ -136,8 +136,9 @@ fn graphics_layers_replay_through_skia() {
     host.set_content(Layers);
     host.frame();
     let mut renderer = RasterRenderer::new(100, 200);
-    let list = host.display_list();
-    host.with_tree(|tree| renderer.render(&list, Color::WHITE, 1.0, tree.text_measurer()));
+    host.with_tree(|tree| {
+        renderer.render(tree.display_list(), Color::WHITE, 1.0, tree.text_measurer_ref())
+    });
     assert_eq!(renderer.pixel(28, 28), Color::RED, "scaled past its bounds");
     assert_eq!(renderer.pixel(32, 32), Color::WHITE);
     // The blue box: laid out at y 60..80 px, x 0..20, drawn at x 10..30.
@@ -145,4 +146,65 @@ fn graphics_layers_replay_through_skia() {
     assert_eq!(renderer.pixel(25, 70), Color::BLUE, "the clip moved with it");
     let faded = renderer.pixel(10, 90);
     assert!((126..=129).contains(&faded.red()), "{faded:?}");
+}
+
+/// A frame's groups, drawn from their boundaries' recordings by reference (D270), draw what
+/// the flattened list does: nested boundaries, layers (scaled, rotated, faded, clipped) and
+/// gradients in each recording (each recording's shader indices its own).
+#[test]
+fn a_frames_groups_draw_what_its_flattened_list_does() {
+    use compose::foundation::layout::{Box, Column, Row};
+    use compose::runtime::composable;
+    use compose::ui::{
+        Brush, Density, GraphicsLayerScope, IntSize, Modifier, UnitExt, platform::UiHost,
+    };
+    use compose_skia::SkiaTextMeasurer;
+    fn gradient(colors: [Color; 2]) -> Brush {
+        Brush::horizontal_gradient(colors)
+    }
+    #[composable]
+    #[allow(non_snake_case)]
+    fn Scene() {
+        Column!(modifier = Modifier.background(gradient([Color::GREEN, Color::WHITE])), {
+            Row!(modifier = Modifier.repaint_boundary(), {
+                Box!(
+                    modifier =
+                        Modifier.size(10.dp()).background(gradient([Color::RED, Color::BLUE]))
+                );
+                Box!(
+                    modifier = Modifier
+                        .size(12.dp())
+                        .graphics_layer_with(GraphicsLayerScope {
+                            alpha: 0.6,
+                            rotation_z: 20.0,
+                            scale_x: 1.5,
+                            clip: true,
+                            ..GraphicsLayerScope::default()
+                        })
+                        .background(gradient([Color::BLUE, Color::GREEN]))
+                );
+            });
+            Box!(modifier = Modifier.size(8.dp()).alpha(0.5).background(Color::BLACK), {
+                Box!(modifier = Modifier.size(4.dp()).repaint_boundary().background(Color::RED));
+            });
+        });
+    }
+    let mut host =
+        UiHost::new(IntSize::new(80, 80), Density::new(2.0), Box::new(SkiaTextMeasurer::new()));
+    host.set_content(Scene);
+    host.frame();
+    let mut walked = RasterRenderer::new(80, 80);
+    let mut flattened = RasterRenderer::new(80, 80);
+    let groups = host.with_tree(|tree| {
+        let list = tree.display_list();
+        walked.render(list, Color::WHITE, 1.0, tree.text_measurer_ref());
+        let flat = list.flatten();
+        let mut plain = DisplayList::default();
+        plain.ops = flat.ops;
+        plain.shaders = flat.shaders;
+        flattened.render(&plain, Color::WHITE, 1.0, tree.text_measurer_ref());
+        list.groups.len()
+    });
+    assert!(groups >= 3, "{groups} groups");
+    assert_eq!(walked.pixels(), flattened.pixels());
 }

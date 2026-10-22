@@ -228,7 +228,7 @@ fn a_tap_right_after_typing_does_not_select() {
 
 /// The bounds of the last rectangle drawn (the focused field's cursor) in the root, following
 /// translations.
-fn last_rect(list: &compose_ui::platform::DisplayList) -> compose_ui::Rect {
+fn last_rect(list: &compose_ui::platform::FlatDisplayList) -> compose_ui::Rect {
     use compose_ui::{Rect, platform::DrawOp};
     let (mut x, mut y) = (0.0f32, 0.0f32);
     let mut last = None;

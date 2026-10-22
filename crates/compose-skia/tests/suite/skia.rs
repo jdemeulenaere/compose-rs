@@ -57,8 +57,9 @@ fn the_counter_renders_with_skia() {
     host.set_content(counter::Counter);
     host.frame();
     let mut renderer = RasterRenderer::new(640, 400);
-    let list = host.display_list();
-    host.with_tree(|tree| renderer.render(&list, Color::WHITE, 1.0, tree.text_measurer()));
+    host.with_tree(|tree| {
+        renderer.render(tree.display_list(), Color::WHITE, 1.0, tree.text_measurer_ref())
+    });
     // The first button's fill, in the theme's primary color, at its left edge (16 dp padding,
     // then the pill's straight part).
     let button = light_color_scheme().primary;
@@ -115,8 +116,9 @@ fn images_decode_and_draw_with_skia() {
     host.set_content(move || Shown(image.clone()));
     host.frame();
     let mut renderer = RasterRenderer::new(32, 32);
-    let list = host.display_list();
-    host.with_tree(|tree| renderer.render(&list, Color::BLUE, 1.0, tree.text_measurer()));
+    host.with_tree(|tree| {
+        renderer.render(tree.display_list(), Color::BLUE, 1.0, tree.text_measurer_ref())
+    });
     assert_eq!(renderer.pixel(2, 8), Color::RED);
     assert_eq!(renderer.pixel(13, 8), Color::WHITE);
     assert_eq!(renderer.pixel(20, 20), Color::BLUE, "outside the image");
@@ -149,8 +151,9 @@ fn shadows_darken_beneath_an_elevated_shape() {
     });
     host.frame();
     let mut renderer = RasterRenderer::new(200, 200);
-    let list = host.display_list();
-    host.with_tree(|tree| renderer.render(&list, Color::WHITE, 1.0, tree.text_measurer()));
+    host.with_tree(|tree| {
+        renderer.render(tree.display_list(), Color::WHITE, 1.0, tree.text_measurer_ref())
+    });
     // Under the shape's bottom edge (the light is above), darker than the background; far
     // away, untouched.
     let below = renderer.pixel(100, 153);
@@ -235,8 +238,9 @@ fn annotated_text_draws_each_span_in_its_style() {
     );
     ui.on_node_with_text("aaaabbbb").assert_exists();
     let mut renderer = RasterRenderer::new(300, 100);
-    let list = ui.host().display_list();
-    ui.host().with_tree(|tree| renderer.render(&list, Color::WHITE, 1.0, tree.text_measurer()));
+    ui.host().with_tree(|tree| {
+        renderer.render(tree.display_list(), Color::WHITE, 1.0, tree.text_measurer_ref())
+    });
     let mut colors = std::collections::HashSet::new();
     for y in 0..40 {
         for x in 0..300 {

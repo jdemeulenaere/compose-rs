@@ -156,7 +156,9 @@ fn a_text_field_in_a_clickable_row_is_a_node_of_its_own() {
 
 /// The bounds of every drawing operation of the last frame, in the root, with the clip in force
 /// (translations followed, clips intersected): what would reach the screen.
-fn painted(list: &compose_ui::platform::DisplayList) -> Vec<(compose_ui::Rect, compose_ui::Rect)> {
+fn painted(
+    list: &compose_ui::platform::FlatDisplayList,
+) -> Vec<(compose_ui::Rect, compose_ui::Rect)> {
     use compose_ui::{Rect, platform::DrawOp};
     let everything = Rect::new(-1e9, -1e9, 1e9, 1e9);
     let (mut x, mut y, mut clip) = (0.0f32, 0.0f32, everything);

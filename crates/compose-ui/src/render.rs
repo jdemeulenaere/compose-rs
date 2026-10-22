@@ -2,14 +2,16 @@
 //!
 //! A repaint boundary keeps what it drew (`RetainedDrawing`), as Compose's layer keeps its
 //! render node's recording: a draw records what's outside every boundary, each boundary by
-//! reference, then splices in each boundary's kept operations, drawing a boundary again first
-//! only if something it drew from changed (tree.rs routes the changes: `invalidate_draw_of`).
+//! reference, then lists each boundary's group, its kept recording shared, not copied (D270),
+//! drawing a boundary again first only if something it drew from changed (tree.rs routes the
+//! changes: `invalidate_draw_of`).
 
 use std::mem;
+use std::sync::Arc;
 
 use smallvec::SmallVec;
 
-use crate::display_list::{DisplayList, DrawGroup, DrawOp};
+use crate::display_list::{Boundary, DisplayList, DrawGroup, DrawOp};
 use crate::draw::DrawScope;
 use crate::graphics_layer::{GraphicsLayerNode, LayerProperties};
 use crate::tree::{NodeId, Observation, UiTree, capability, observation_key};
@@ -18,8 +20,9 @@ use crate::unit::Offset;
 /// What a repaint boundary drew last, kept until something it drew from changes.
 pub(crate) struct RetainedDrawing {
     /// Its operations, in its own coordinates (after its position): its chain and children,
-    /// the boundaries inside it by reference (`DisplayList::boundaries`).
-    recording: DisplayList,
+    /// the boundaries inside it by reference (`DisplayList::boundaries`). Shared with the
+    /// frames drawing it (`DrawGroup::content`).
+    recording: Arc<DisplayList>,
     /// Its group's version: from the tree's counter, given anew whenever its operations, or
     /// a nested boundary's, are drawn again.
     version: u64,
@@ -37,7 +40,7 @@ pub(crate) struct RetainedDrawing {
 impl RetainedDrawing {
     pub(crate) fn new(layer_entry: Option<u16>) -> RetainedDrawing {
         RetainedDrawing {
-            recording: DisplayList::default(),
+            recording: Arc::default(),
             version: 0,
             layer_entry,
             layer: None,
@@ -61,7 +64,9 @@ impl UiTree {
             return false;
         }
         let observer = self.observer.clone();
-        let mut recording = mem::take(&mut self.root_recording);
+        // Cleared first: the last frame's groups let go of the recordings they shared, which a
+        // boundary drawn again records into in place.
+        let mut recording = mem::take(&mut self.display_list);
         recording.clear();
         self.draw_node(self.root_id(), &mut recording, observer.as_deref());
         // The overlays, over everything, each where its provider put it.
@@ -76,17 +81,17 @@ impl UiTree {
             self.draw_node(node, &mut recording, observer.as_deref());
             translate(&mut recording, negate(at));
         }
-        let mut list = mem::take(&mut self.display_list);
-        list.clear();
-        self.splice(&recording, &mut list, observer.as_deref());
-        self.display_list = list;
-        self.root_recording = recording;
+        let mut groups = mem::take(&mut recording.groups);
+        self.draw_boundaries(&recording.boundaries, &mut groups, observer.as_deref());
+        recording.groups = groups;
+        self.display_list = recording;
         self.needs_draw = false;
         true
     }
 
     /// Records `node`; a custom node draws under observation (`observer`), so a state write it
-    /// read draws again (D71). A repaint boundary is recorded by reference: `splice` draws it.
+    /// read draws again (D71). A repaint boundary is recorded by reference: `draw_boundary`
+    /// draws it.
     fn draw_node(
         &mut self,
         node: NodeId,
@@ -101,7 +106,7 @@ impl UiTree {
             let position = value.layers[0].offset;
             let position = Offset::new(position.x as f32, position.y as f32);
             translate(list, position);
-            list.boundaries.push((list.ops.len(), node));
+            list.boundaries.push(Boundary { at: list.ops.len(), key: node.to_bits() });
             // Its group's operations stay its own.
             list.merge_floor = list.ops.len();
             translate(list, negate(position));
@@ -154,43 +159,54 @@ impl UiTree {
         origins
     }
 
-    /// Appends `recording` to `list`, drawing each boundary it holds by reference
-    /// (`draw_boundary`) where it is. Returns whether one's version changed.
-    fn splice(
+    /// Appends to `groups` the group of each boundary in `boundaries` (a recording's), in
+    /// order, each followed by the ones nested in it. Returns whether one's version changed,
+    /// and whether one draws anything.
+    fn draw_boundaries(
         &mut self,
-        recording: &DisplayList,
-        list: &mut DisplayList,
+        boundaries: &[Boundary],
+        groups: &mut Vec<DrawGroup>,
         observer: Option<&compose_runtime::platform::ReadObserver>,
-    ) -> bool {
-        let mut changed = false;
-        let mut from = 0;
-        // Its shaders become the list's, its paints' indices shifted to them.
-        let base = list.shaders.len() as u32;
-        list.shaders.extend_from_slice(&recording.shaders);
-        let base = if recording.shaders.is_empty() { 0 } else { base };
-        for &(index, node) in &recording.boundaries {
-            list.extend_shifted(&recording.ops[from..index], base);
-            changed |= self.draw_boundary(node, list, observer);
-            from = index;
+    ) -> (bool, bool) {
+        let (mut changed, mut draws) = (false, false);
+        for boundary in boundaries {
+            let (version_changed, drawn) =
+                self.draw_boundary(NodeId::from_bits(boundary.key), groups, observer);
+            changed |= version_changed;
+            draws |= drawn;
         }
-        list.extend_shifted(&recording.ops[from..], base);
-        changed
+        (changed, draws)
     }
 
-    /// Appends repaint boundary `node`'s group to `list`: its layer's operations around its
-    /// content, the content drawn again first if something it drew from changed, else spliced
-    /// from what it kept, without running its draw code. Returns whether its version changed.
+    /// Appends repaint boundary `node`'s group to `groups`, then the groups nested in it: its
+    /// content drawn again first if something it drew from changed, else shared from what it
+    /// kept (not copied), without running its draw code. Returns whether its version changed,
+    /// and whether it draws anything.
     fn draw_boundary(
         &mut self,
         node: NodeId,
-        list: &mut DisplayList,
+        groups: &mut Vec<DrawGroup>,
         observer: Option<&compose_runtime::platform::ReadObserver>,
-    ) -> bool {
-        let Some(retained) = self.node_mut(node).retained.as_mut() else { return false };
+    ) -> (bool, bool) {
+        let Some(retained) = self.node_mut(node).retained.as_mut() else {
+            // No longer a boundary: an empty group keeps the frame's groups in step with the
+            // boundaries naming them.
+            groups.push(DrawGroup {
+                key: node.to_bits(),
+                version: 0,
+                layer: None,
+                content: Arc::default(),
+                descendants: 0,
+                empty: true,
+            });
+            return (false, false);
+        };
         // Its flags are cleared once it's drawn: a panic drawing it leaves it to draw again.
         let (dirty, layer_dirty) = (retained.dirty, retained.layer_dirty);
-        let mut recording = mem::take(&mut retained.recording);
         if dirty {
+            // Recorded in place: the frames that shared it are gone (`draw` clears the last).
+            let mut recording =
+                Arc::get_mut(&mut retained.recording).map(mem::take).unwrap_or_default();
             recording.clear();
             let custom = self.node(node).all_capabilities & capability::CUSTOM != 0;
             match observer.filter(|_| custom) {
@@ -199,6 +215,12 @@ impl UiTree {
                         self.draw_content(node, &mut recording, Some(observer))
                     }),
                 None => self.draw_content(node, &mut recording, observer),
+            }
+            let retained = self.node_mut(node).retained.as_mut().expect("a repaint boundary");
+            match Arc::get_mut(&mut retained.recording) {
+                Some(kept) => *kept = recording,
+                // A copy of an earlier frame still holds it.
+                None => retained.recording = Arc::new(recording),
             }
         }
         // Its size (the pivot, the clip) may have changed with its content.
@@ -211,46 +233,31 @@ impl UiTree {
         let retained = self.node_mut(node).retained.as_mut().expect("a repaint boundary");
         retained.dirty = false;
         retained.layer_dirty = false;
-        let layer = retained.layer;
-        // Its layer's operations, outside its content (`DrawGroup`).
-        let layer_start = list.ops.len();
-        list.merge_floor = layer_start;
-        let restores = layer.map_or(0, |layer| layer.push_operations(list));
-        let start = list.ops.len();
-        let nested = self.splice(&recording, list, observer);
-        let end = list.ops.len();
-        if end == start {
-            // Nothing to apply them to.
-            list.ops.truncate(layer_start);
-        } else {
-            for _ in 0..restores {
-                list.push(DrawOp::Restore);
-            }
-        }
-        let layer_end = list.ops.len();
-        list.merge_floor = layer_end;
+        let content = Arc::clone(&retained.recording);
+        let index = groups.len();
+        groups.push(DrawGroup {
+            key: node.to_bits(),
+            version: retained.version,
+            layer: retained.layer,
+            content: Arc::clone(&content),
+            descendants: 0,
+            empty: true,
+        });
+        let (nested, nested_draws) = self.draw_boundaries(&content.boundaries, groups, observer);
         let changed = dirty || nested;
         if changed {
             self.draw_version += 1;
-        }
-        let version = self.draw_version;
-        let retained = self.node_mut(node).retained.as_mut().expect("a repaint boundary");
-        retained.recording = recording;
-        if changed {
+            let version = self.draw_version;
+            let retained = self.node_mut(node).retained.as_mut().expect("a repaint boundary");
             retained.version = version;
+            groups[index].version = version;
         }
-        if end > start {
-            list.groups.push(DrawGroup {
-                key: node.to_bits(),
-                version: retained.version,
-                start,
-                end,
-                layer_start,
-                layer_end,
-                layer,
-            });
-        }
-        changed
+        let draws = !content.ops.is_empty() || nested_draws;
+        let descendants = groups.len() - index - 1;
+        let group = &mut groups[index];
+        group.descendants = descendants;
+        group.empty = !draws;
+        (changed, draws)
     }
 
     /// The properties of `node`'s graphics layer whose properties are its group's, its block

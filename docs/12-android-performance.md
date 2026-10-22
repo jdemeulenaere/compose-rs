@@ -92,6 +92,8 @@ The RenderThread shows the same effect from the other side. In round 1 its frame
 
 compose-rs's main thread is now ahead of Compose's (in round 1 it was 0.2 ms a frame behind). Each animation frame draws again only the repaint boundary whose content changed (D155), not the whole tree: the progress indicator draws a new arc each frame, so the header's group is drawn and recorded again (about 0.7 KB of display list), while the pulsing dot's alpha and the star's rotation are set as their render nodes' properties without recording anything (D157), as Compose's `graphicsLayer` does. The RenderThread does as much work as Compose's, slightly more than in round 1.
 
+Since c666311, a frame holds each kept group's recording by reference instead of copying its operations into one list (D270): Skia draws a group's content where its boundary is, and the serializer copies a kept group's record without reading its operations. Same device, the two APKs alternated, 3 runs each (averages of the `compose-rs:` sections): in the animation, `frame` 0.252 → 0.217 ms (`draw` 0.086 → 0.061, `serialize` 0.036 → 0.028; `replay` 0.198 → 0.200, unchanged: the bytes are the same); scrolling, `frame` 0.273 → 0.237 ms (`draw` 0.073 → 0.046, `serialize` 0.031 → 0.025). Headless (`cargo bench --bench ui`), the feed's animation frame went from 2.0 to 1.39 µs (4.9 to 2.0 µs four phones tall) and the todo toggle from 263 to 194 µs.
+
 ### How the gaps closed
 
 | Gap | Steps |

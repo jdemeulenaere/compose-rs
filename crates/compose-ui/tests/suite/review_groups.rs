@@ -13,7 +13,7 @@ use compose_ui::*;
 /// The drawings of `list`, each with the translation it's drawn at; with `isolated`, each group
 /// replays as Android's render node does: from its own canvas state, what it leaves (an
 /// unbalanced translation or save) dropped at its end, a restore below its start ignored.
-fn drawings(list: &DisplayList, isolated: bool) -> Vec<String> {
+fn drawings(list: &FlatDisplayList, isolated: bool) -> Vec<String> {
     let mut out = Vec::new();
     let mut at = (0.0f32, 0.0f32);
     let mut stack: Vec<(f32, f32)> = Vec::new();
@@ -53,7 +53,7 @@ fn drawings(list: &DisplayList, isolated: bool) -> Vec<String> {
 }
 
 /// Each group: nested in the others, its saves balanced, its translations net zero.
-pub(crate) fn check_groups(list: &DisplayList) {
+pub(crate) fn check_groups(list: &FlatDisplayList) {
     let dump = list.dump();
     for group in &list.groups {
         assert!(group.start < group.end && group.end <= list.ops.len(), "{group:?}\n{dump}");
@@ -107,7 +107,7 @@ pub(crate) fn check_groups(list: &DisplayList) {
     assert_eq!(drawings(list, false), drawings(list, true), "{dump}");
 }
 
-fn group_ops(list: &DisplayList, key: u64) -> Option<Vec<DrawOp>> {
+fn group_ops(list: &FlatDisplayList, key: u64) -> Option<Vec<DrawOp>> {
     list.groups
         .iter()
         .find(|group| group.key == key)

@@ -393,7 +393,7 @@ fn PaintedList(state: LazyListState) {
 }
 
 /// Each drawn row's group (its lazy item's), by row: its key and version.
-fn row_groups(list: &compose_ui::platform::DisplayList) -> HashMap<usize, (u64, u64)> {
+fn row_groups(list: &compose_ui::platform::FlatDisplayList) -> HashMap<usize, (u64, u64)> {
     let mut rows = HashMap::new();
     for group in &list.groups {
         for op in &list.ops[group.start..group.end] {
@@ -408,7 +408,7 @@ fn row_groups(list: &compose_ui::platform::DisplayList) -> HashMap<usize, (u64, 
 }
 
 /// A display list's dump, without its paragraph handles (a fresh measurer numbers them anew).
-fn dump_without_paragraphs(list: &compose_ui::platform::DisplayList) -> String {
+fn dump_without_paragraphs(list: &compose_ui::platform::FlatDisplayList) -> String {
     list.dump()
         .lines()
         .map(|line| match line.find("paragraph ") {

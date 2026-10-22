@@ -230,10 +230,9 @@ pub struct UiTree {
     pub(crate) text_measurer: Box<dyn TextMeasurer>,
     pub(crate) clipboard: Box<dyn crate::clipboard::Clipboard>,
     pub(crate) density: Density,
+    /// The last frame: what's drawn outside any repaint boundary, recorded each draw (kept for
+    /// its capacity), and the boundaries' groups, their kept recordings shared.
     pub(crate) display_list: DisplayList,
-    /// What's drawn outside any repaint boundary, the boundaries in it by reference: recorded
-    /// each draw, kept for its capacity.
-    pub(crate) root_recording: DisplayList,
     /// Something to draw: a boundary to draw again, a layer's properties, or what's outside any
     /// boundary.
     pub(crate) needs_draw: bool,
@@ -297,7 +296,6 @@ impl UiTree {
             clipboard: Box::new(crate::clipboard::MemoryClipboard::default()),
             density,
             display_list: DisplayList::default(),
-            root_recording: DisplayList::default(),
             needs_draw: true,
             draw_version: 0,
             input_method_reset: false,

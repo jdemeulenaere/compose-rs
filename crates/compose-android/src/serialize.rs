@@ -5,16 +5,16 @@
 //! Paths and images are resources: defined once (a `DefinePath` or `DefineImage` before their
 //! first use) and dropped when the last frame using them is gone, so a frame names them by id
 //! (drawn with `DRAW_PATH`, clipped to with `CLIP_PATH`). A gradient isn't a resource: a paint
-//! with a shader carries its whole definition (D210), as a shader's index is the list's (D175)
-//! and changes when a retained recording is spliced at another place, while a group's cached
-//! bytes must not.
+//! with a shader carries its whole definition (D210): a paint names a shader of its own
+//! recording's table (D175, D270), and a cached record's bytes stand on their own.
 //! Their definitions wait until the Kotlin side takes them with the frame it draws, so a frame
 //! drawn twice or skipped loses none; one dropped before it was taken is cancelled.
 //!
 //! A repaint boundary's group is a `GROUP` record carrying its key and version, which the
 //! replayer keeps a render node by; a graphics layer's properties are in a `LAYERS` section
 //! before the operations, not in any record, so a key and a version are always the same bytes,
-//! copied from a [`GroupCache`] while the version stays (D157).
+//! copied from a [`GroupCache`] while the version stays (D157), without reading the group's
+//! operations (the frame holds each group's recording by reference, D270).
 
 use std::collections::HashMap;
 use std::sync::{Arc, Weak};
@@ -523,9 +523,17 @@ fn write_path(writer: &mut Writer, id: u32, path: &Path) {
 /// gradient's: [`Writer::paint`]), without an offscreen layer (a GPU pass each frame on
 /// Android). Returns the index of its closing `Restore` if so.
 fn foldable_layer(ops: &[DrawOp], start: usize) -> Option<usize> {
+    single_drawing(&ops[start + 1..]).map(|end| start + 1 + end).filter(|end| *end < ops.len())
+}
+
+/// Whether `ops`, what an alpha layer holds (from just after its `SaveLayerAlpha`), are one
+/// drawing with a paint among saves, clips and moves: returns the index of the layer's closing
+/// `Restore` if so, or `ops.len()` if they end first, balanced (a group's content, its layer's
+/// restore after it).
+fn single_drawing(ops: &[DrawOp]) -> Option<usize> {
     let mut depth = 0usize;
     let mut drawings = 0;
-    for (index, op) in ops.iter().enumerate().skip(start + 1) {
+    for (index, op) in ops.iter().enumerate() {
         match op {
             DrawOp::Save | DrawOp::SaveLayerAlpha(_) => {
                 if matches!(op, DrawOp::SaveLayerAlpha(_)) {
@@ -544,14 +552,19 @@ fn foldable_layer(ops: &[DrawOp], start: usize) -> Option<usize> {
             | DrawOp::DrawRoundRect(..)
             | DrawOp::DrawLine(..)
             | DrawOp::DrawArc { .. }
-            | DrawOp::DrawPath { .. } => drawings += 1,
+            | DrawOp::DrawPath { .. } => {
+                drawings += 1;
+                if drawings > 1 {
+                    return None;
+                }
+            }
             // Text, images and shadows draw what a paint's alpha doesn't reach.
             DrawOp::DrawParagraph(..) | DrawOp::DrawImage { .. } | DrawOp::DrawShadow { .. } => {
                 return None;
             }
         }
     }
-    None
+    (drawings == 1 && depth == 0).then_some(ops.len())
 }
 
 /// `color` with its alpha multiplied by `alpha`.
@@ -578,6 +591,8 @@ pub struct GroupCache {
     copied: usize,
     /// How many records the last write wrote afresh.
     written: usize,
+    /// The groups whose layers are still to be listed (`write_layers`), kept for its capacity.
+    open: Vec<usize>,
 }
 
 #[derive(Default)]
@@ -585,6 +600,9 @@ struct CachedGroup {
     version: u64,
     bytes: Vec<u8>,
     generation: u64,
+    /// Its content is one drawing with a paint (`single_drawing`): an alpha layer around it
+    /// fades that paint, not overlapping.
+    single_drawing: bool,
 }
 
 impl GroupCache {
@@ -615,9 +633,10 @@ pub const LAYER_ENTRY_BYTES: usize = 8 + 8 * 4 + 1 + 4 * 4 + 1 + 4 * 4;
 /// uses, and copying from `cache` the records of the groups whose version it holds.
 ///
 /// The bytes are a `LAYERS` section (if a group has a layer), then the operations, each group a
-/// `GROUP` record in place of its operations, its layer's operations (`layer_start..start`,
-/// `end..layer_end`) left out: its layer is its `LAYERS` entry, which a replayer keeping a
-/// render node per group sets on that node each frame, nested groups' included.
+/// `GROUP` record where its boundary is, its layer's operations left out: its layer is its
+/// `LAYERS` entry, which a replayer keeping a render node per group sets on that node each
+/// frame, nested groups' included. A cached group's record is copied without reading its
+/// operations (D270): only groups drawn again are walked.
 pub fn write_display_list(
     list: &DisplayList,
     resources: &mut Resources,
@@ -628,121 +647,150 @@ pub fn write_display_list(
     cache.generation += 1;
     cache.copied = 0;
     cache.written = 0;
-    write_layers(list, out);
-    // The groups, outer before inner (they nest): of two with the same range, the outer one
-    // was drawn last (a stable sort of the reversed list keeps it first).
-    let mut groups: Vec<&DrawGroup> =
-        list.groups.iter().rev().filter(|group| group.start < group.end).collect();
-    groups.sort_by_key(|group| (group.layer_start, std::cmp::Reverse(group.layer_end)));
-    let mut serializer = Serializer {
-        ops: &list.ops,
-        shaders: &list.shaders,
-        groups: groups.into_iter().peekable(),
-        folds: Vec::new(),
-        resources,
-        cache,
-        out,
-    };
-    serializer.write_range(0, list.ops.len());
+    write_layers(list, cache, out);
+    let mut serializer =
+        Serializer { groups: &list.groups, next: 0, folds: Vec::new(), resources, cache, out };
+    serializer.write_recording(list);
     let generation = cache.generation;
     cache.records.retain(|_, record| record.generation == generation);
 }
 
-/// The `LAYERS` section: every group's layer, if one has one.
-fn write_layers(list: &DisplayList, out: &mut Writer) {
-    let layered = |group: &&DrawGroup| group.start < group.end && group.layer.is_some();
-    let count = list.groups.iter().filter(layered).count();
+/// The `LAYERS` section: every group's layer, if one has one, each after the ones nested in it
+/// (as drawing closes them).
+fn write_layers(list: &DisplayList, cache: &mut GroupCache, out: &mut Writer) {
+    let layered = |group: &DrawGroup| !group.empty && group.layer.is_some();
+    let count = list.groups.iter().filter(|group| layered(group)).count();
     if count == 0 {
         return;
     }
     out.u8(tag::LAYERS);
     out.u32(count as u32);
-    for group in list.groups.iter().filter(layered) {
-        let layer = group.layer.expect("a layer");
-        out.u32(group.key as u32);
-        out.u32((group.key >> 32) as u32);
-        out.f32(layer.alpha);
-        out.offset(layer.pivot);
-        out.f32(layer.scale.0);
-        out.f32(layer.scale.1);
-        out.f32(layer.rotation);
-        out.offset(layer.translation);
-        out.u8(u8::from(layer.clip.is_some()));
-        out.rect(&layer.clip.unwrap_or(Rect::new(0.0, 0.0, 0.0, 0.0)));
-        out.u8(u8::from(overlapping(list, group)));
-        out.rect(&layer.bounds);
+    let mut open = std::mem::take(&mut cache.open);
+    for index in 0..=list.groups.len() {
+        // The groups closed before this one, innermost first.
+        while let Some(&last) = open.last()
+            && (index == list.groups.len() || last + list.groups[last].descendants < index)
+        {
+            open.pop();
+            write_layer(list, last, cache, out);
+        }
+        if list.groups.get(index).is_some_and(layered) {
+            open.push(index);
+        }
     }
+    cache.open = open;
 }
 
-/// Whether `group`'s alpha (below 1) must composite its content offscreen: unless it is one
-/// drawing with a paint and no group (as a folded layer, D153), which a render node fades
-/// without a layer (`setHasOverlappingRendering(false)`).
-fn overlapping(list: &DisplayList, group: &DrawGroup) -> bool {
-    // Its alpha's layer is the last of its layer's operations.
-    let Some(alpha_layer) = group.start.checked_sub(1).filter(|at| *at >= group.layer_start) else {
-        return true;
-    };
-    if !matches!(list.ops[alpha_layer], DrawOp::SaveLayerAlpha(_))
-        || foldable_layer(&list.ops, alpha_layer).is_none()
-    {
+/// The `LAYERS` entry of the group at `index` of `list`'s.
+fn write_layer(list: &DisplayList, index: usize, cache: &GroupCache, out: &mut Writer) {
+    let group = &list.groups[index];
+    let layer = group.layer.expect("a layer");
+    out.u32(group.key as u32);
+    out.u32((group.key >> 32) as u32);
+    out.f32(layer.alpha);
+    out.offset(layer.pivot);
+    out.f32(layer.scale.0);
+    out.f32(layer.scale.1);
+    out.f32(layer.rotation);
+    out.offset(layer.translation);
+    out.u8(u8::from(layer.clip.is_some()));
+    out.rect(&layer.clip.unwrap_or(Rect::new(0.0, 0.0, 0.0, 0.0)));
+    out.u8(u8::from(overlapping(list, index, cache)));
+    out.rect(&layer.bounds);
+}
+
+/// Whether the alpha (below 1) of the group at `index` must composite its content offscreen:
+/// unless it is one drawing with a paint and no group (as a folded layer, D153), which a render
+/// node fades without a layer (`setHasOverlappingRendering(false)`). Read from its cached
+/// record while its version stays.
+fn overlapping(list: &DisplayList, index: usize, cache: &GroupCache) -> bool {
+    let group = &list.groups[index];
+    if group.layer.is_none_or(|layer| layer.alpha >= 1.0) {
         return true;
     }
-    list.groups.iter().any(|inner| {
-        inner.key != group.key
-            && inner.start < inner.end
-            && group.start <= inner.layer_start
-            && inner.layer_end <= group.end
-    })
+    let nested = &list.groups[index + 1..=index + group.descendants];
+    if nested.iter().any(|inner| !inner.empty) {
+        return true;
+    }
+    let single = match cache.records.get(&group.key) {
+        Some(record) if record.version == group.version => record.single_drawing,
+        _ => single_drawing(&group.content.ops).is_some(),
+    };
+    !single
 }
 
 /// One write of a display list.
 struct Serializer<'a> {
-    ops: &'a [DrawOp],
-    /// The shaders the paints name (written whole into each paint, D210).
-    shaders: &'a [Shader],
-    /// The groups not written yet, by where they start.
-    groups: std::iter::Peekable<std::vec::IntoIter<&'a DrawGroup>>,
-    /// Layers folded into their one drawing's paint: where each ends, and its alpha.
+    /// The frame's groups, the one at `next` written at the next boundary.
+    groups: &'a [DrawGroup],
+    next: usize,
+    /// Layers folded into their one drawing's paint: where each ends (in the recording being
+    /// written), and its alpha.
     folds: Vec<(usize, f32)>,
     resources: &'a mut Resources,
     cache: &'a mut GroupCache,
     out: &'a mut Writer,
 }
 
-impl Serializer<'_> {
-    /// Writes `ops[from..to]`, each group in it as its record.
-    fn write_range(&mut self, from: usize, to: usize) {
-        let mut index = from;
-        while index < to {
+impl<'a> Serializer<'a> {
+    /// Writes `recording` (the frame, or a group's content), each group where its boundary is,
+    /// as its record. Its paints' shaders are its own (written whole into each paint, D210).
+    fn write_recording(&mut self, recording: &DisplayList) {
+        let ops = &recording.ops;
+        let boundaries = &recording.boundaries;
+        let mut boundary = 0;
+        for index in 0..ops.len() {
+            while boundaries.get(boundary).is_some_and(|boundary| boundary.at <= index) {
+                boundary += 1;
+                self.write_group();
+            }
             while self.folds.last().is_some_and(|(end, _)| *end < index) {
                 self.folds.pop();
             }
-            if let Some(group) = self.groups.next_if(|group| group.layer_start <= index) {
-                debug_assert_eq!(group.layer_start, index, "groups nest");
-                self.write_group(group);
-                index = group.layer_end.max(index + 1);
-                continue;
-            }
             // A layer holding one drawing and no group: a folded alpha inside a group's record
             // would change it without changing its version.
-            if let DrawOp::SaveLayerAlpha(alpha) = self.ops[index]
-                && let Some(end) = foldable_layer(self.ops, index)
-                && self.groups.peek().is_none_or(|group| group.layer_start > end)
+            if let DrawOp::SaveLayerAlpha(alpha) = ops[index]
+                && let Some(end) = foldable_layer(ops, index)
+                && !self.draws_before(&boundaries[boundary..], end)
             {
                 self.folds.push((end, alpha));
                 self.out.u8(tag::SAVE);
-                index += 1;
                 continue;
             }
             let alpha: f32 = self.folds.iter().map(|(_, alpha)| alpha).product();
-            write_op(&self.ops[index], alpha, self.shaders, self.resources, self.out);
-            index += 1;
+            write_op(&ops[index], alpha, &recording.shaders, self.resources, self.out);
+        }
+        for _ in boundary..boundaries.len() {
+            self.write_group();
         }
     }
 
-    /// Writes `group`'s record: copied if the cache has its version, else its header and its
-    /// content (`start..end`: its layer's operations left out).
-    fn write_group(&mut self, group: &DrawGroup) {
+    /// Whether a group that draws is drawn at one of `boundaries` (the next ones) before
+    /// operation `end`.
+    fn draws_before(&self, boundaries: &[compose_ui::platform::Boundary], end: usize) -> bool {
+        let inside = boundaries.iter().take_while(|boundary| boundary.at <= end).count();
+        let mut next = self.next;
+        for _ in 0..inside {
+            let Some(group) = self.groups.get(next) else { return false };
+            if !group.empty {
+                return true;
+            }
+            next += 1 + group.descendants;
+        }
+        false
+    }
+
+    /// Writes the next group's record: copied if the cache has its version (its operations
+    /// untouched), else its header and its content (its layer's operations left out).
+    fn write_group(&mut self) {
+        let groups: &'a [DrawGroup] = self.groups;
+        let Some(group) = groups.get(self.next) else { return };
+        self.next += 1;
+        let nested = self.next..self.next + group.descendants;
+        if group.empty {
+            self.next = nested.end;
+            return;
+        }
         let generation = self.cache.generation;
         if let Some(record) = self.cache.records.get_mut(&group.key)
             && record.version == group.version
@@ -751,12 +799,12 @@ impl Serializer<'_> {
             self.out.bytes.extend_from_slice(&record.bytes);
             self.cache.copied += 1;
             // The groups inside it are in its bytes, and stay cached.
-            while let Some(inner) = self.groups.next_if(|inner| inner.layer_start < group.layer_end)
-            {
+            for inner in &groups[nested.clone()] {
                 if let Some(record) = self.cache.records.get_mut(&inner.key) {
                     record.generation = generation;
                 }
             }
+            self.next = nested.end;
             return;
         }
         self.cache.written += 1;
@@ -770,13 +818,14 @@ impl Serializer<'_> {
         self.out.u32(0);
         // No fold spans a group's edge: the ones open here end before it.
         let folds = std::mem::take(&mut self.folds);
-        self.write_range(group.start, group.end);
+        self.write_recording(&group.content);
         self.folds = folds;
         let length = (self.out.bytes.len() - length_at - 4) as u32;
         self.out.bytes[length_at..length_at + 4].copy_from_slice(&length.to_le_bytes());
         let record = self.cache.records.entry(group.key).or_default();
         record.version = group.version;
         record.generation = generation;
+        record.single_drawing = single_drawing(&group.content.ops).is_some();
         record.bytes.clear();
         record.bytes.extend_from_slice(&self.out.bytes[at..]);
     }
@@ -895,6 +944,24 @@ mod tests {
         u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap())
     }
 
+    /// Draws the group of `key` at the end of `recording`.
+    fn boundary(recording: &mut DisplayList, key: u64) {
+        recording.boundaries.push(compose_ui::platform::Boundary { at: recording.ops.len(), key });
+    }
+
+    /// A group of `key` and `version` drawing `content`, the next `descendants` groups nested
+    /// in it.
+    fn group(key: u64, version: u64, content: DisplayList, descendants: usize) -> DrawGroup {
+        DrawGroup {
+            key,
+            version,
+            layer: None,
+            empty: content.ops.is_empty() && descendants == 0,
+            content: Arc::new(content),
+            descendants,
+        }
+    }
+
     #[test]
     fn a_rect_is_its_tag_bounds_and_paint() {
         let mut list = DisplayList::default();
@@ -935,37 +1002,21 @@ mod tests {
     #[test]
     fn groups_nest_and_carry_their_length() {
         let rect = || DrawOp::DrawRect(Rect::new(0.0, 0.0, 1.0, 1.0), Paint::fill(Color::BLACK));
+        // The outer group holds a rect, the inner one, an empty one (left out), and a rect.
+        let mut outer = DisplayList::default();
+        outer.push(rect());
+        boundary(&mut outer, 2);
+        boundary(&mut outer, 3);
+        outer.push(rect());
+        let mut inner = DisplayList::default();
+        inner.push(rect());
         let mut list = DisplayList::default();
-        for _ in 0..3 {
-            list.push(rect());
-        }
-        // The outer group holds ops 0..3, the inner 1..2; an empty one is left out. They come
-        // inner first, as drawing closes them.
-        list.groups.push(compose_ui::platform::DrawGroup {
-            key: 2,
-            version: 7,
-            start: 1,
-            end: 2,
-            layer_start: 1,
-            layer_end: 2,
-            ..Default::default()
-        });
-        list.groups.push(compose_ui::platform::DrawGroup {
-            key: 3,
-            start: 2,
-            end: 2,
-            layer_start: 2,
-            layer_end: 2,
-            ..Default::default()
-        });
-        list.groups.push(compose_ui::platform::DrawGroup {
-            key: 1 << 40 | 1,
-            start: 0,
-            end: 3,
-            layer_start: 0,
-            layer_end: 3,
-            ..Default::default()
-        });
+        boundary(&mut list, 1 << 40 | 1);
+        list.groups = vec![
+            group(1 << 40 | 1, 0, outer, 2),
+            group(2, 7, inner, 0),
+            group(3, 0, DisplayList::default(), 0),
+        ];
         let (mut resources, mut out) = (Resources::default(), Writer::default());
         write_display_list(&list, &mut resources, &mut GroupCache::default(), &mut out);
         let rect_bytes = 1 + 16 + 4 + 1 + 4 + 1 + 1;
@@ -983,27 +1034,43 @@ mod tests {
         assert_eq!(bytes[inner + header], tag::DRAW_RECT);
     }
 
-    /// A boundary holding only a boundary: the same range, the outer one (drawn last) first.
+    /// A group whose version the cache holds is its cached record: its operations aren't read
+    /// (D270), nor are its nested groups'.
     #[test]
-    fn of_two_groups_with_the_same_range_the_outer_opens_first() {
+    fn a_cached_group_is_copied_without_reading_its_operations() {
+        let rect = |color| DrawOp::DrawRect(Rect::new(0.0, 0.0, 1.0, 1.0), Paint::fill(color));
+        let frame = |color| {
+            let mut inner = DisplayList::default();
+            inner.push(rect(color));
+            let mut outer = DisplayList::default();
+            boundary(&mut outer, 2);
+            let mut list = DisplayList::default();
+            boundary(&mut list, 1);
+            list.groups = vec![group(1, 5, outer, 1), group(2, 4, inner, 0)];
+            list
+        };
+        let (mut resources, mut cache) = (Resources::default(), GroupCache::default());
+        let mut first = Writer::default();
+        write_display_list(&frame(Color::BLACK), &mut resources, &mut cache, &mut first);
+        assert_eq!((cache.written(), cache.copied()), (2, 0));
+        // The same versions drawing something else (which a tree never does): the cache's.
+        let mut second = Writer::default();
+        write_display_list(&frame(Color::WHITE), &mut resources, &mut cache, &mut second);
+        assert_eq!((cache.written(), cache.copied()), (0, 1));
+        assert_eq!(second.bytes, first.bytes);
+        assert_eq!(cache.len(), 2, "the nested group's record stays");
+    }
+
+    /// A boundary holding only a boundary: the outer one opens first.
+    #[test]
+    fn a_group_holding_only_a_group_opens_first() {
+        let mut inner = DisplayList::default();
+        inner.push(DrawOp::DrawRect(Rect::new(0.0, 0.0, 1.0, 1.0), Paint::fill(Color::BLACK)));
+        let mut outer = DisplayList::default();
+        boundary(&mut outer, 1);
         let mut list = DisplayList::default();
-        list.push(DrawOp::DrawRect(Rect::new(0.0, 0.0, 1.0, 1.0), Paint::fill(Color::BLACK)));
-        list.groups.push(compose_ui::platform::DrawGroup {
-            key: 1,
-            start: 0,
-            end: 1,
-            layer_start: 0,
-            layer_end: 1,
-            ..Default::default()
-        });
-        list.groups.push(compose_ui::platform::DrawGroup {
-            key: 2,
-            start: 0,
-            end: 1,
-            layer_start: 0,
-            layer_end: 1,
-            ..Default::default()
-        });
+        boundary(&mut list, 2);
+        list.groups = vec![group(2, 0, outer, 1), group(1, 0, inner, 0)];
         let (mut resources, mut out) = (Resources::default(), Writer::default());
         write_display_list(&list, &mut resources, &mut GroupCache::default(), &mut out);
         assert_eq!((out.bytes[0], read_u32(&out.bytes, 1)), (tag::GROUP, 2));
@@ -1013,18 +1080,13 @@ mod tests {
     /// A folded layer's `Save` opens the group as any operation does.
     #[test]
     fn a_group_can_start_with_a_folded_layer() {
+        let mut content = DisplayList::default();
+        content.push(DrawOp::SaveLayerAlpha(0.5));
+        content.push(DrawOp::DrawRect(Rect::new(0.0, 0.0, 4.0, 4.0), Paint::fill(Color::BLACK)));
+        content.push(DrawOp::Restore);
         let mut list = DisplayList::default();
-        list.push(DrawOp::SaveLayerAlpha(0.5));
-        list.push(DrawOp::DrawRect(Rect::new(0.0, 0.0, 4.0, 4.0), Paint::fill(Color::BLACK)));
-        list.push(DrawOp::Restore);
-        list.groups.push(compose_ui::platform::DrawGroup {
-            key: 7,
-            start: 0,
-            end: 3,
-            layer_start: 0,
-            layer_end: 3,
-            ..Default::default()
-        });
+        boundary(&mut list, 7);
+        list.groups = vec![group(7, 0, content, 0)];
         let (mut resources, mut out) = (Resources::default(), Writer::default());
         write_display_list(&list, &mut resources, &mut GroupCache::default(), &mut out);
         assert_eq!(out.bytes[0], tag::GROUP);
@@ -1207,19 +1269,14 @@ mod tests {
     #[test]
     fn a_clip_path_names_its_path_and_offset() {
         let path = Arc::new(Path::from_svg("M0,0 L10,0 L10,10 Z").unwrap());
+        let mut content = DisplayList::default();
+        content.push(DrawOp::Save);
+        content.push(DrawOp::ClipPath { path: path.clone(), offset: Offset::new(3.0, 4.0) });
+        content.push(DrawOp::DrawRect(Rect::new(0.0, 0.0, 4.0, 4.0), Paint::fill(Color::BLACK)));
+        content.push(DrawOp::Restore);
         let mut list = DisplayList::default();
-        list.push(DrawOp::Save);
-        list.push(DrawOp::ClipPath { path: path.clone(), offset: Offset::new(3.0, 4.0) });
-        list.push(DrawOp::DrawRect(Rect::new(0.0, 0.0, 4.0, 4.0), Paint::fill(Color::BLACK)));
-        list.push(DrawOp::Restore);
-        list.groups.push(compose_ui::platform::DrawGroup {
-            key: 1,
-            start: 0,
-            end: 4,
-            layer_start: 0,
-            layer_end: 4,
-            ..Default::default()
-        });
+        boundary(&mut list, 1);
+        list.groups = vec![group(1, 0, content, 0)];
         let (mut resources, mut out) = (Resources::default(), Writer::default());
         write_display_list(&list, &mut resources, &mut GroupCache::default(), &mut out);
         let bytes = &out.bytes;

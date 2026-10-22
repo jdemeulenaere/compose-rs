@@ -182,10 +182,9 @@ fn repaint_boundaries_are_groups_of_their_own_operations() {
     });
     let list = host.display_list();
     assert_eq!(list.groups.len(), 2, "{}", list.dump());
-    let ops = |group: &DrawGroup| {
-        let mut part = DisplayList::default();
-        part.ops = list.ops[group.start..group.end].to_vec();
-        part.dump()
+    let ops = |group: &FlatGroup| {
+        let ops = list.ops[group.start..group.end].to_vec();
+        FlatDisplayList { ops, ..FlatDisplayList::default() }.dump()
     };
     // The first: its rect, in its own coordinates (not the move to it).
     assert_eq!(ops(&list.groups[0]), "rect 5,5 10x10 #FFFF0000\n");

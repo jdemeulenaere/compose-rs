@@ -403,10 +403,11 @@ fn clipped_gradient(brush: impl Fn() -> Brush + 'static) -> Modifier {
     })
 }
 
-/// The index of the shader the boundary drawn last paints with, in the list.
+/// The index of the shader the boundary drawn last paints with, in the flattened list (after a
+/// sibling's shaders).
 fn last_shader_index(serialized: &Serialized) -> u32 {
     serialized.host.with_tree(|tree| {
-        let list = tree.display_list();
+        let list = tree.display_list().flatten();
         list.ops
             .iter()
             .rev()
@@ -488,23 +489,34 @@ fn a_copied_record_keeps_its_gradient_when_the_lists_shaders_shift() {
     assert_eq!(f32_at(&second, stops_at + 8), 0.3);
 }
 
+/// A group of `key` and `version` drawing `content` (nothing nested), by hand.
+fn group(
+    key: u64,
+    version: u64,
+    layer: Option<LayerProperties>,
+    content: DisplayList,
+) -> DrawGroup {
+    DrawGroup {
+        key,
+        version,
+        layer,
+        empty: content.ops.is_empty(),
+        content: Arc::new(content),
+        descendants: 0,
+    }
+}
+
 /// A `SaveLayerAlpha` around a group isn't folded into the group's drawing: the folded alpha
 /// would be in the group's record, which its version doesn't cover.
 #[test]
 fn a_layer_around_a_group_is_not_folded_into_it() {
+    let mut content = DisplayList::default();
+    content.push(DrawOp::DrawRect(Rect::new(0.0, 0.0, 4.0, 4.0), Paint::fill(Color::BLACK)));
     let mut list = DisplayList::default();
     list.push(DrawOp::SaveLayerAlpha(0.5));
-    list.push(DrawOp::DrawRect(Rect::new(0.0, 0.0, 4.0, 4.0), Paint::fill(Color::BLACK)));
+    list.boundaries.push(Boundary { at: 1, key: 1 });
     list.push(DrawOp::Restore);
-    list.groups.push(DrawGroup {
-        key: 1,
-        version: 1,
-        start: 1,
-        end: 2,
-        layer_start: 1,
-        layer_end: 2,
-        layer: None,
-    });
+    list.groups.push(group(1, 1, None, content));
     let (mut resources, mut out) = (Resources::default(), Writer::default());
     write_display_list(&list, &mut resources, &mut GroupCache::default(), &mut out);
     let (_, items) = read(&out.bytes);
@@ -520,42 +532,27 @@ fn a_layer_around_a_group_is_not_folded_into_it() {
     assert_eq!(u32_at(&out.bytes, 5 + 21 + 1 + 16), 0xFF00_0000);
 }
 
-/// A group whose layer has operations, by hand: its record opens where they start, and the
-/// operations after its content (their restores) are skipped too.
+/// A group with a layer, by hand: its record is its content where its boundary is, its layer
+/// its `LAYERS` entry (no operation of it in the record).
 #[test]
-fn a_record_takes_its_layers_operations_place() {
+fn a_record_is_its_content_its_layer_an_entry() {
     let rect = || DrawOp::DrawRect(Rect::new(0.0, 0.0, 4.0, 4.0), Paint::fill(Color::BLACK));
+    let mut content = DisplayList::default();
+    content.push(rect());
     let mut list = DisplayList::default();
     list.push(DrawOp::Translate(Offset::new(2.0, 2.0)));
-    list.push(DrawOp::Save);
-    list.push(DrawOp::Transform {
+    list.boundaries.push(Boundary { at: 1, key: 9 });
+    list.push(rect());
+    let layer = LayerProperties {
+        alpha: 0.5,
         pivot: Offset::new(2.0, 2.0),
         scale: (2.0, 2.0),
         rotation: 0.0,
         translation: Offset::ZERO,
-    });
-    list.push(DrawOp::SaveLayerAlpha(0.5));
-    list.push(rect());
-    list.push(DrawOp::Restore);
-    list.push(DrawOp::Restore);
-    list.push(rect());
-    list.groups.push(DrawGroup {
-        key: 9,
-        version: 3,
-        start: 4,
-        end: 5,
-        layer_start: 1,
-        layer_end: 7,
-        layer: Some(LayerProperties {
-            alpha: 0.5,
-            pivot: Offset::new(2.0, 2.0),
-            scale: (2.0, 2.0),
-            rotation: 0.0,
-            translation: Offset::ZERO,
-            clip: None,
-            bounds: Rect::new(0.0, 0.0, 4.0, 4.0),
-        }),
-    });
+        clip: None,
+        bounds: Rect::new(0.0, 0.0, 4.0, 4.0),
+    };
+    list.groups.push(group(9, 3, Some(layer), content));
     let (mut resources, mut out) = (Resources::default(), Writer::default());
     write_display_list(&list, &mut resources, &mut GroupCache::default(), &mut out);
     let (layers, items) = read(&out.bytes);

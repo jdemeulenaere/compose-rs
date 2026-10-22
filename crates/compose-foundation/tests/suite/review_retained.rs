@@ -9,11 +9,11 @@ use compose_runtime::*;
 use compose_test::*;
 use compose_ui::{
     Color, IntSize, Key, KeyEvent, KeyEventType, KeyModifiers, Offset, Paint, PointerEvent,
-    UnitExt, platform::DisplayList,
+    UnitExt, platform::FlatDisplayList,
 };
 
 /// A display list's dump, without its paragraph handles (a fresh measurer numbers them anew).
-fn dump(list: &DisplayList) -> String {
+fn dump(list: &FlatDisplayList) -> String {
     list.dump()
         .lines()
         .map(|line| match line.find("paragraph ") {

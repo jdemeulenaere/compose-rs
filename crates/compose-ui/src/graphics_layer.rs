@@ -139,31 +139,33 @@ impl LayerProperties {
         self.scale != (1.0, 1.0) || self.rotation != 0.0 || self.translation != Offset::ZERO
     }
 
-    /// Records the operations applying it to what follows (a group's `layer_start..start`):
-    /// returns how many restores end it.
-    pub(crate) fn push_operations(&self, list: &mut DisplayList) -> u8 {
-        let mut saves = 0;
+    /// The operations applying it to what follows (before a group's content, a flattened
+    /// group's `layer_start..start`), in this order and each only if needed: `Save` (if it
+    /// transforms or clips), `Transform`, `ClipRect` and `SaveLayerAlpha` (if its alpha is
+    /// below 1). [`restores`](LayerProperties::restores) restores end them.
+    pub fn operations(&self) -> impl Iterator<Item = DrawOp> + use<> {
         let transforms = self.transforms();
-        if transforms || self.clip.is_some() {
-            list.push(DrawOp::Save);
-            saves += 1;
-        }
-        if transforms {
-            list.push(DrawOp::Transform {
-                pivot: self.pivot,
-                scale: self.scale,
-                rotation: self.rotation,
-                translation: self.translation,
-            });
-        }
-        if let Some(clip) = self.clip {
-            list.push(DrawOp::ClipRect(clip));
-        }
-        if self.alpha < 1.0 {
-            list.push(DrawOp::SaveLayerAlpha(self.alpha));
-            saves += 1;
-        }
-        saves
+        let save = (transforms || self.clip.is_some()).then_some(DrawOp::Save);
+        let transform = transforms.then_some(DrawOp::Transform {
+            pivot: self.pivot,
+            scale: self.scale,
+            rotation: self.rotation,
+            translation: self.translation,
+        });
+        let clip = self.clip.map(DrawOp::ClipRect);
+        let alpha = (self.alpha < 1.0).then_some(DrawOp::SaveLayerAlpha(self.alpha));
+        [save, transform, clip, alpha].into_iter().flatten()
+    }
+
+    /// How many restores end its [`operations`](LayerProperties::operations).
+    pub fn restores(&self) -> u8 {
+        u8::from(self.transforms() || self.clip.is_some()) + u8::from(self.alpha < 1.0)
+    }
+
+    /// Records its operations, applying it to what follows: returns how many restores end it.
+    fn push_operations(&self, list: &mut DisplayList) -> u8 {
+        list.ops.extend(self.operations());
+        self.restores()
     }
 }
 

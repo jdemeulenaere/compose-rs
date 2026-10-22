@@ -12,7 +12,7 @@ use compose_ui::platform::*;
 use compose_ui::*;
 
 /// The group of the node with key `key`.
-fn group(list: &DisplayList, key: u64) -> DrawGroup {
+fn group(list: &FlatDisplayList, key: u64) -> FlatGroup {
     *list
         .groups
         .iter()
@@ -21,20 +21,18 @@ fn group(list: &DisplayList, key: u64) -> DrawGroup {
 }
 
 /// The groups' keys, in the order they start.
-fn keys(list: &DisplayList) -> Vec<u64> {
+fn keys(list: &FlatDisplayList) -> Vec<u64> {
     let mut groups = list.groups.clone();
     groups.sort_by_key(|group| (group.start, std::cmp::Reverse(group.end)));
     groups.iter().map(|group| group.key).collect()
 }
 
-fn version(list: &DisplayList, key: u64) -> u64 {
+fn version(list: &FlatDisplayList, key: u64) -> u64 {
     group(list, key).version
 }
 
 fn dump_of(ops: &[DrawOp]) -> String {
-    let mut part = DisplayList::default();
-    part.ops = ops.to_vec();
-    part.dump()
+    FlatDisplayList { ops: ops.to_vec(), ..FlatDisplayList::default() }.dump()
 }
 
 /// A leaf filling itself with what `color` gives, logging `name` when it draws.
@@ -75,7 +73,7 @@ fn a_state_read_in_a_boundary_draws_only_that_boundary_again() {
     assert!(after.dump().contains("#FF00FF00"), "{}", after.dump());
     assert_eq!(after.dump(), fresh(|| Color::GREEN).dump());
 
-    fn fresh(color: fn() -> Color) -> DisplayList {
+    fn fresh(color: fn() -> Color) -> FlatDisplayList {
         crate::support::host(move || {
             Column!({
                 Leaf(Modifier.repaint_boundary().then(painted("first", color)).size(10.dp()));
@@ -146,7 +144,7 @@ fn an_animated_layer_changes_no_version_only_its_properties() {
     );
     assert_eq!(after.dump(), fresh(0.5, 30.0).dump());
 
-    fn fresh(alpha: f32, rotation: f32) -> DisplayList {
+    fn fresh(alpha: f32, rotation: f32) -> FlatDisplayList {
         crate::support::host(move || {
             Column!(modifier = Modifier.repaint_boundary(), {
                 Leaf(Modifier.size(10.dp()));
@@ -437,7 +435,7 @@ fn scene(knobs: Knobs) {
 
 /// The operations of `group`, without those applying the layers of the groups inside it (which
 /// a renderer takes from their `layer`): what its version stands for.
-fn versioned_ops(list: &DisplayList, group: &DrawGroup) -> Vec<DrawOp> {
+fn versioned_ops(list: &FlatDisplayList, group: &FlatGroup) -> Vec<DrawOp> {
     let skipped = |index: usize| {
         list.groups.iter().any(|inner| {
             inner.key != group.key
@@ -454,7 +452,7 @@ fn versioned_ops(list: &DisplayList, group: &DrawGroup) -> Vec<DrawOp> {
 }
 
 /// The groups' shapes, without their keys and versions (a fresh host's nodes are others).
-fn shapes(list: &DisplayList) -> Vec<(usize, usize, usize, usize, Option<LayerProperties>)> {
+fn shapes(list: &FlatDisplayList) -> Vec<(usize, usize, usize, usize, Option<LayerProperties>)> {
     let mut shapes: Vec<_> = list
         .groups
         .iter()
@@ -464,7 +462,7 @@ fn shapes(list: &DisplayList) -> Vec<(usize, usize, usize, usize, Option<LayerPr
     shapes
 }
 
-fn fresh_scene(values: [i32; 4]) -> DisplayList {
+fn fresh_scene(values: [i32; 4]) -> FlatDisplayList {
     let owned: Vec<OwnedState<i32>> = values.iter().map(|value| mutable_state_of(*value)).collect();
     let knobs = Knobs(std::array::from_fn(|index| owned[index].handle()));
     let host = host(move || scene(knobs));
@@ -524,4 +522,35 @@ fn incremental_frames_draw_what_a_fresh_draw_does() {
         }
         previous = list;
     }
+}
+
+/// A frame shares each kept boundary's recording, not a copy of its operations (D270): the
+/// next frame's group holds the same recording while the boundary isn't drawn again, a new one
+/// once it is. A frame kept past the next keeps what it drew.
+#[test]
+fn a_frame_shares_a_kept_boundarys_recording() {
+    let color = mutable_state_of(Color::RED);
+    let handle = color.handle();
+    let mut host = host(move || {
+        Column!({
+            Leaf(
+                Modifier
+                    .repaint_boundary()
+                    .then(painted("first", move || handle.get()))
+                    .size(10.dp()),
+            );
+            Leaf(Modifier.repaint_boundary().then(painted("second", || Color::BLUE)).size(10.dp()));
+        });
+    });
+    let content = |host: &compose_ui::platform::UiHost, index: usize| {
+        host.with_tree(|tree| std::sync::Arc::clone(&tree.display_list().groups[index].content))
+    };
+    let (first, second) = (content(&host, 0), content(&host, 1));
+    color.set(Color::GREEN);
+    host.frame();
+    assert!(std::sync::Arc::ptr_eq(&content(&host, 1), &second), "kept: shared");
+    assert!(!std::sync::Arc::ptr_eq(&content(&host, 0), &first), "drawn again");
+    // The recording an earlier frame still held is as it drew it.
+    assert!(matches!(first.ops[..], [DrawOp::DrawRect(_, paint)] if paint.color == Color::RED));
+    assert!(host.display_list().dump().contains("#FF00FF00"));
 }
