@@ -56,6 +56,31 @@ pub(crate) fn check_groups(list: &DisplayList) {
     let dump = list.dump();
     for group in &list.groups {
         assert!(group.start < group.end && group.end <= list.ops.len(), "{group:?}\n{dump}");
+        // A layer's operations around the content: saves and what they apply, then as many
+        // restores; none without a layer.
+        let before = &list.ops[group.layer_start..group.start];
+        let after = &list.ops[group.end..group.layer_end];
+        let saves = before
+            .iter()
+            .filter(|op| {
+                assert!(
+                    matches!(
+                        op,
+                        DrawOp::Save
+                            | DrawOp::Transform { .. }
+                            | DrawOp::ClipRect(_)
+                            | DrawOp::SaveLayerAlpha(_)
+                    ),
+                    "{group:?} applies its layer with {op:?}\n{dump}"
+                );
+                matches!(op, DrawOp::Save | DrawOp::SaveLayerAlpha(_))
+            })
+            .count();
+        assert!(after.iter().all(|op| *op == DrawOp::Restore), "{group:?}\n{dump}");
+        assert_eq!(saves, after.len(), "{group:?}\n{dump}");
+        if group.layer.is_none() {
+            assert!(before.is_empty() && after.is_empty(), "{group:?}\n{dump}");
+        }
         let (mut depth, mut x, mut y) = (0i32, 0.0f32, 0.0f32);
         for op in &list.ops[group.start..group.end] {
             match op {
