@@ -55,23 +55,23 @@
   },
   "rs": {
    "installed": {
-    "bytes": 1992303,
-    "sha1": "be91a17b1ac7aaf4e0f6e1b7948a4d0b033e15fd",
+    "bytes": 1992463,
+    "sha1": "77c98c050e32b833756943abc83422dfcc94af4d",
     "splits": 0,
     "libraries": {
      "lib/arm64-v8a/libcompose_rs_feed.so": {
-      "bytes": 1890728,
-      "sha1": "263a10ff1a0ab515d764acf6b25b171b0922ce5d"
+      "bytes": 1890888,
+      "sha1": "230b772f06c7f2f3f8a27f16b8f0ffcfb721e76a"
      }
     }
    },
    "built": {
-    "bytes": 1992303,
-    "sha1": "be91a17b1ac7aaf4e0f6e1b7948a4d0b033e15fd",
+    "bytes": 1992463,
+    "sha1": "77c98c050e32b833756943abc83422dfcc94af4d",
     "libraries": {
      "lib/arm64-v8a/libcompose_rs_feed.so": {
-      "bytes": 1890728,
-      "sha1": "263a10ff1a0ab515d764acf6b25b171b0922ce5d"
+      "bytes": 1890888,
+      "sha1": "230b772f06c7f2f3f8a27f16b8f0ffcfb721e76a"
      }
     }
    },
@@ -83,7 +83,7 @@
   "start": {
    "compose": [
     {
-     "path": "/data/app/~~RIQkgXalIxITgh2WpE7BKA==/rs.compose.bench.compose-EeFJ799cwl2jzxpOTj79UA==/base.apk",
+     "path": "/data/app/~~eP47uvFX3uE7kNC-IodSZQ==/rs.compose.bench.compose-bZfDpGq8VrLuyQrpYf7hsg==/base.apk",
      "isa": "arm64",
      "status": "speed",
      "reason": "cmdline"
@@ -91,7 +91,7 @@
    ],
    "rs": [
     {
-     "path": "/data/app/~~XAsb6MvjLjrFwTzt0_Ue-w==/rs.compose.bench.rs-jLskVYIZyfQJrM_abCDatQ==/base.apk",
+     "path": "/data/app/~~acEpCcRagB77RhtZpOzcsA==/rs.compose.bench.rs-9hFJdYC5p9vLmRhZRq_8mA==/base.apk",
      "isa": "arm64",
      "status": "speed",
      "reason": "cmdline"
@@ -101,7 +101,7 @@
   "end": {
    "compose": [
     {
-     "path": "/data/app/~~RIQkgXalIxITgh2WpE7BKA==/rs.compose.bench.compose-EeFJ799cwl2jzxpOTj79UA==/base.apk",
+     "path": "/data/app/~~eP47uvFX3uE7kNC-IodSZQ==/rs.compose.bench.compose-bZfDpGq8VrLuyQrpYf7hsg==/base.apk",
      "isa": "arm64",
      "status": "speed",
      "reason": "cmdline"
@@ -109,7 +109,7 @@
    ],
    "rs": [
     {
-     "path": "/data/app/~~XAsb6MvjLjrFwTzt0_Ue-w==/rs.compose.bench.rs-jLskVYIZyfQJrM_abCDatQ==/base.apk",
+     "path": "/data/app/~~acEpCcRagB77RhtZpOzcsA==/rs.compose.bench.rs-9hFJdYC5p9vLmRhZRq_8mA==/base.apk",
      "isa": "arm64",
      "status": "speed",
      "reason": "cmdline"
@@ -121,93 +121,93 @@
   "compose": {
    "feed": {
     "runs": [
-     157,
-     128,
-     141,
-     129,
-     135,
-     126,
-     129,
-     134,
-     146,
-     142,
+     143,
+     132,
      131,
-     133,
+     135,
+     131,
+     127,
+     128,
+     128,
      125,
+     128,
      134,
-     149
+     128,
+     127,
+     139,
+     148
     ],
-    "median": 134,
+    "median": 131,
     "min": 125,
-    "max": 157
+    "max": 148
    },
    "big": {
     "runs": [
-     229,
-     226,
-     212,
-     228,
-     234,
+     224,
      226,
      222,
-     229,
-     221,
-     236,
-     230,
-     216,
+     231,
+     222,
+     215,
      227,
-     229,
-     228
+     219,
+     246,
+     235,
+     225,
+     238,
+     232,
+     228,
+     225
     ],
-    "median": 228,
-    "min": 212,
-    "max": 236
+    "median": 226,
+    "min": 215,
+    "max": 246
    }
   },
   "rs": {
    "feed": {
     "runs": [
-     108,
-     98,
-     108,
-     103,
-     107,
-     118,
+     122,
+     110,
      112,
-     119,
-     103,
-     105,
      112,
-     124,
-     118,
-     108,
-     108
+     103,
+     95,
+     109,
+     110,
+     113,
+     112,
+     114,
+     106,
+     109,
+     106,
+     111
     ],
-    "median": 108,
-    "min": 98,
-    "max": 124
+    "median": 110,
+    "min": 95,
+    "max": 122
    },
    "big": {
     "runs": [
+     158,
      164,
-     167,
      171,
-     174,
-     164,
-     159,
-     164,
-     165,
      161,
-     168,
-     167,
+     164,
+     154,
+     174,
+     172,
+     169,
+     162,
+     161,
+     158,
      163,
      161,
-     173,
-     168
+     186
     ],
-    "median": 165,
-    "min": 159,
-    "max": 174
+    "median": 163,
+    "min": 154,
+    "max": 186
    }
   }
  },
@@ -215,124 +215,124 @@
   "compose": {
    "feed": {
     "first": {
-     "bindApplication": 16.203287,
-     "activityStart": 16.376262,
-     "activityResume": 10.78243,
-     "Choreographer#doFrame": 43.985311,
-     "traversal": 43.862304,
-     "Compose:recompose": 2.594035,
-     "measure": 11.204467,
-     "layout": 0.771809,
-     "Record View#draw()": 3.243286
+     "bindApplication": 17.148966,
+     "activityStart": 12.928914,
+     "activityResume": 9.106853,
+     "Choreographer#doFrame": 44.336873,
+     "traversal": 44.221476,
+     "Compose:recompose": 2.622884,
+     "measure": 12.011271,
+     "layout": 0.728271,
+     "Record View#draw()": 2.598918
     },
     "total_during_trace": {
-     "bindApplication": 16.203287,
-     "activityStart": 16.376262,
-     "activityResume": 10.78243,
-     "Choreographer#doFrame": 94.69588300000001,
-     "traversal": 50.497557,
-     "Compose:recompose": 5.755982,
-     "measure": 15.552610999999999,
-     "layout": 0.955891,
-     "Record View#draw()": 4.662394
+     "bindApplication": 17.148966,
+     "activityStart": 12.928914,
+     "activityResume": 9.106853,
+     "Choreographer#doFrame": 94.503294,
+     "traversal": 49.967651000000004,
+     "Compose:recompose": 6.050456,
+     "measure": 16.026694,
+     "layout": 0.8783369999999999,
+     "Record View#draw()": 3.768636
     }
    },
    "big": {
     "first": {
-     "bindApplication": 17.546793,
-     "activityStart": 17.003743,
-     "activityResume": 10.47347,
-     "Choreographer#doFrame": 167.112589,
-     "traversal": 166.995402,
-     "Compose:recompose": 2.693563,
-     "measure": 97.208497,
-     "layout": 6.894328,
-     "Record View#draw()": 35.116658
+     "bindApplication": 16.111287,
+     "activityStart": 14.622274,
+     "activityResume": 10.058431,
+     "Choreographer#doFrame": 165.998616,
+     "traversal": 165.879069,
+     "Compose:recompose": 2.614624,
+     "measure": 95.839071,
+     "layout": 7.03064,
+     "Record View#draw()": 36.558391
     },
     "total_during_trace": {
-     "bindApplication": 17.546793,
-     "activityStart": 17.003743,
-     "activityResume": 10.47347,
-     "Choreographer#doFrame": 419.834839,
-     "traversal": 252.33589700000002,
-     "Compose:recompose": 16.255208,
-     "measure": 162.276491,
-     "layout": 8.713745,
-     "Record View#draw()": 50.608479
+     "bindApplication": 16.111287,
+     "activityStart": 14.622274,
+     "activityResume": 10.058431,
+     "Choreographer#doFrame": 413.375041,
+     "traversal": 247.039347,
+     "Compose:recompose": 15.697305,
+     "measure": 158.083416,
+     "layout": 8.891846,
+     "Record View#draw()": 51.765911
     }
    }
   },
   "rs": {
    "feed": {
     "first": {
-     "bindApplication": 11.492676,
-     "activityStart": 12.708862,
-     "activityResume": 9.512695,
-     "Choreographer#doFrame": 25.249145,
-     "traversal": 25.238933,
-     "measure": 0.017985,
-     "layout": 7.029704,
-     "compose-rs: frame": 6.659343,
-     "compose-rs: recompose": 0.439738,
-     "compose-rs: layout": 2.012044,
-     "compose-rs: text layout": 0.796834,
-     "compose-rs: draw": 0.129923,
-     "compose-rs: serialize": 0.018026,
-     "Record View#draw()": 1.845826,
-     "compose-rs: replay": 1.680501
+     "bindApplication": 12.303671,
+     "activityStart": 15.593628,
+     "activityResume": 9.317342,
+     "Choreographer#doFrame": 25.465576,
+     "traversal": 25.437785,
+     "measure": 0.019002,
+     "layout": 7.221924,
+     "compose-rs: frame": 6.85087,
+     "compose-rs: recompose": 0.459391,
+     "compose-rs: layout": 2.03715,
+     "compose-rs: text layout": 0.783244,
+     "compose-rs: draw": 0.078938,
+     "compose-rs: serialize": 0.019532,
+     "Record View#draw()": 2.632039,
+     "compose-rs: replay": 2.342163
     },
     "total_during_trace": {
-     "bindApplication": 11.492676,
-     "activityStart": 12.708862,
-     "activityResume": 9.512695,
-     "Choreographer#doFrame": 25.885984999999998,
-     "traversal": 25.415325,
-     "measure": 0.034505,
-     "layout": 7.034668,
-     "compose-rs: frame": 6.752686,
-     "compose-rs: recompose": 0.442993,
-     "compose-rs: layout": 2.018269,
-     "compose-rs: text layout": 4.752521,
-     "compose-rs: draw": 0.13203900000000002,
-     "compose-rs: serialize": 0.018026,
-     "Record View#draw()": 1.845826,
-     "compose-rs: replay": 1.680501
+     "bindApplication": 12.303671,
+     "activityStart": 15.593628,
+     "activityResume": 9.317342,
+     "Choreographer#doFrame": 25.671834999999998,
+     "traversal": 25.466797000000003,
+     "measure": 0.032837,
+     "layout": 7.226482,
+     "compose-rs: frame": 6.880980999999999,
+     "compose-rs: recompose": 0.462077,
+     "compose-rs: layout": 2.043783,
+     "compose-rs: text layout": 4.8238889999999985,
+     "compose-rs: draw": 0.080688,
+     "compose-rs: serialize": 0.019532,
+     "Record View#draw()": 2.632039,
+     "compose-rs: replay": 2.342163
     }
    },
    "big": {
     "first": {
-     "bindApplication": 11.355713,
-     "activityStart": 11.027303,
-     "activityResume": 10.144978,
-     "Choreographer#doFrame": 91.620117,
-     "traversal": 91.61088,
-     "measure": 0.017904,
-     "layout": 54.109456,
-     "compose-rs: frame": 53.702963,
-     "compose-rs: recompose": 18.227417,
-     "compose-rs: layout": 34.214721,
-     "compose-rs: text layout": 0.876709,
-     "compose-rs: draw": 0.948567,
-     "compose-rs: serialize": 0.1038,
-     "Record View#draw()": 20.459025,
-     "compose-rs: replay": 20.178833
+     "bindApplication": 14.023071,
+     "activityStart": 12.131184,
+     "activityResume": 9.677734,
+     "Choreographer#doFrame": 92.076579,
+     "traversal": 92.067546,
+     "measure": 0.016724,
+     "layout": 55.208456,
+     "compose-rs: frame": 54.796143,
+     "compose-rs: recompose": 18.559855,
+     "compose-rs: layout": 35.019857,
+     "compose-rs: text layout": 0.843018,
+     "compose-rs: draw": 0.92627,
+     "compose-rs: serialize": 0.108358,
+     "Record View#draw()": 20.731811,
+     "compose-rs: replay": 20.477784
     },
     "total_during_trace": {
-     "bindApplication": 11.355713,
-     "activityStart": 11.027303,
-     "activityResume": 10.144978,
-     "Choreographer#doFrame": 92.319988,
-     "traversal": 91.640665,
-     "measure": 0.033651,
-     "layout": 54.114379,
-     "compose-rs: frame": 53.734944999999996,
-     "compose-rs: recompose": 18.230142999999998,
-     "compose-rs: layout": 34.221596999999996,
-     "compose-rs: text layout": 29.433835000000045,
-     "compose-rs: draw": 0.950968,
-     "compose-rs: serialize": 0.1038,
-     "Record View#draw()": 20.459025,
-     "compose-rs: replay": 20.178833
+     "bindApplication": 14.023071,
+     "activityStart": 12.131184,
+     "activityResume": 9.677734,
+     "Choreographer#doFrame": 92.42215999999999,
+     "traversal": 92.096313,
+     "measure": 0.033692,
+     "layout": 55.213257999999996,
+     "compose-rs: frame": 54.82605,
+     "compose-rs: recompose": 18.562134,
+     "compose-rs: layout": 35.026001,
+     "compose-rs: text layout": 30.089553999999993,
+     "compose-rs: draw": 0.928508,
+     "compose-rs: serialize": 0.108358,
+     "Record View#draw()": 20.731811,
+     "compose-rs: replay": 20.477784
     }
    }
   }
@@ -342,143 +342,143 @@
    "after_start": [
     {
      "Java Heap": 4704,
-     "Native Heap": 8408,
-     "Code": 6692,
+     "Native Heap": 8100,
+     "Code": 6704,
      "Stack": 464,
-     "Graphics": 28728,
+     "Graphics": 27316,
      "Private Other": 1764,
-     "System": 3811,
-     "Total PSS": 54571,
-     "Total RSS": 214900
+     "System": 3766,
+     "Total PSS": 52818,
+     "Total RSS": 213244
     },
     {
      "Java Heap": 3684,
-     "Native Heap": 8240,
-     "Code": 6692,
-     "Stack": 468,
+     "Native Heap": 8160,
+     "Code": 6684,
+     "Stack": 464,
      "Graphics": 28536,
      "Private Other": 1744,
-     "System": 3808,
-     "Total PSS": 53172,
-     "Total RSS": 213340
+     "System": 3751,
+     "Total PSS": 53023,
+     "Total RSS": 213252
     },
     {
      "Java Heap": 3684,
-     "Native Heap": 8024,
-     "Code": 6692,
+     "Native Heap": 8136,
+     "Code": 6700,
      "Stack": 464,
      "Graphics": 28536,
-     "Private Other": 1740,
-     "System": 3806,
-     "Total PSS": 52946,
-     "Total RSS": 213164
+     "Private Other": 1736,
+     "System": 3750,
+     "Total PSS": 53006,
+     "Total RSS": 213280
     }
    ],
    "after_scroll": [
     {
-     "Java Heap": 7456,
-     "Native Heap": 13792,
+     "Java Heap": 11124,
+     "Native Heap": 14088,
      "Code": 6684,
-     "Stack": 528,
-     "Graphics": 58188,
-     "Private Other": 2036,
-     "System": 3807,
-     "Total PSS": 92491,
-     "Total RSS": 255008
+     "Stack": 508,
+     "Graphics": 57800,
+     "Private Other": 2024,
+     "System": 3778,
+     "Total PSS": 96006,
+     "Total RSS": 258608
     },
     {
-     "Java Heap": 6032,
-     "Native Heap": 13360,
-     "Code": 6684,
-     "Stack": 532,
+     "Java Heap": 6684,
+     "Native Heap": 13552,
+     "Code": 6676,
+     "Stack": 520,
      "Graphics": 58000,
      "Private Other": 2024,
-     "System": 3821,
-     "Total PSS": 90453,
-     "Total RSS": 252784
+     "System": 3749,
+     "Total PSS": 91205,
+     "Total RSS": 253800
     },
     {
-     "Java Heap": 4500,
-     "Native Heap": 13096,
-     "Code": 6684,
-     "Stack": 524,
-     "Graphics": 58004,
-     "Private Other": 2024,
-     "System": 3802,
-     "Total PSS": 88634,
-     "Total RSS": 251060
+     "Java Heap": 7600,
+     "Native Heap": 13556,
+     "Code": 6692,
+     "Stack": 512,
+     "Graphics": 57996,
+     "Private Other": 2020,
+     "System": 3742,
+     "Total PSS": 92118,
+     "Total RSS": 254636
     }
    ]
   },
   "rs": {
    "after_start": [
     {
-     "Java Heap": 1300,
-     "Native Heap": 8276,
-     "Code": 2352,
-     "Stack": 492,
-     "Graphics": 17424,
-     "Private Other": 1088,
-     "System": 3666,
-     "Total PSS": 34598,
-     "Total RSS": 191308
-    },
-    {
-     "Java Heap": 1300,
-     "Native Heap": 8264,
-     "Code": 2344,
-     "Stack": 512,
-     "Graphics": 17424,
-     "Private Other": 1092,
-     "System": 3666,
-     "Total PSS": 34602,
-     "Total RSS": 191304
-    },
-    {
-     "Java Heap": 1296,
+     "Java Heap": 1304,
      "Native Heap": 8256,
      "Code": 2336,
      "Stack": 492,
      "Graphics": 17424,
+     "Private Other": 1092,
+     "System": 3594,
+     "Total PSS": 34498,
+     "Total RSS": 191288
+    },
+    {
+     "Java Heap": 1304,
+     "Native Heap": 8148,
+     "Code": 2416,
+     "Stack": 512,
+     "Graphics": 17424,
      "Private Other": 1096,
-     "System": 3666,
-     "Total PSS": 34566,
-     "Total RSS": 191268
+     "System": 3594,
+     "Total PSS": 34494,
+     "Total RSS": 191292
+    },
+    {
+     "Java Heap": 1304,
+     "Native Heap": 8264,
+     "Code": 2416,
+     "Stack": 492,
+     "Graphics": 17424,
+     "Private Other": 1096,
+     "System": 3594,
+     "Total PSS": 34590,
+     "Total RSS": 191376
     }
    ],
    "after_scroll": [
     {
-     "Java Heap": 5180,
-     "Native Heap": 12000,
-     "Code": 2364,
-     "Stack": 544,
-     "Graphics": 56376,
-     "Private Other": 1184,
-     "System": 3658,
-     "Total PSS": 81306,
-     "Total RSS": 240148
-    },
-    {
-     "Java Heap": 5184,
-     "Native Heap": 12124,
-     "Code": 2356,
-     "Stack": 560,
+     "Java Heap": 5188,
+     "Native Heap": 12080,
+     "Code": 2348,
+     "Stack": 540,
      "Graphics": 57608,
      "Private Other": 1196,
-     "System": 3659,
-     "Total PSS": 82687,
-     "Total RSS": 241520
+     "System": 3586,
+     "Total PSS": 82546,
+     "Total RSS": 241468
     },
     {
-     "Java Heap": 5184,
-     "Native Heap": 12064,
-     "Code": 2348,
-     "Stack": 544,
-     "Graphics": 57608,
+     "Java Heap": 5180,
+     "Native Heap": 11700,
+     "Code": 2428,
+     "Stack": 560,
+     "Graphics": 56376,
+     "Private Other": 1192,
+     "System": 3585,
+     "Total PSS": 81021,
+     "Total RSS": 239952
+    },
+    {
+     "Java Heap": 5192,
+     "Native Heap": 12036,
+     "Code": 2428,
+     "Stack": 556,
+     "Graphics": 56376,
      "Private Other": 1208,
-     "System": 3659,
-     "Total PSS": 82615,
-     "Total RSS": 241448
+     "System": 3585,
+     "Total PSS": 81381,
+     "Total RSS": 240300
     }
    ]
   }
@@ -487,61 +487,7 @@
   "compose": [
    {
     "gfxinfo": {
-     "frames": 1781,
-     "janky": 0,
-     "p50": 5,
-     "p90": 7,
-     "p95": 8,
-     "p99": 10,
-     "gpu_p50": 2,
-     "gpu_p90": 2,
-     "gpu_p99": 3
-    },
-    "trace": {
-     "since": 86004853965364,
-     "frames": 1766,
-     "janky_frames": 0,
-     "jank_kinds": {},
-     "jank_sides": {
-      "app": 0,
-      "compositor": 0,
-      "other": 0
-     },
-     "visibly_late_frames": 0,
-     "late_do_frames": 22,
-     "late_do_frames_after_work": 1,
-     "prefetches": 0,
-     "buffer_stuffing": {
-      "recovery_slices": 0,
-      "buffer_stuffed": 0,
-      "occurred": false
-     },
-     "main_thread_frame_ms": {
-      "count": 1789,
-      "p50": 1.497803,
-      "p90": 3.011353,
-      "p99": 6.624064,
-      "max": 10.950846
-     },
-     "render_thread_frame_ms": {
-      "count": 1780,
-      "p50": 2.081136,
-      "p90": 3.291667,
-      "p99": 4.553792
-     },
-     "cpu_ms": {
-      "main": 4330.574525,
-      "render": 4260.609244
-     },
-     "work_ms": {
-      "main": 867.602378,
-      "render": 889.483505
-     }
-    }
-   },
-   {
-    "gfxinfo": {
-     "frames": 1783,
+     "frames": 1778,
      "janky": 0,
      "p50": 5,
      "p90": 7,
@@ -552,8 +498,118 @@
      "gpu_p99": 3
     },
     "trace": {
-     "since": 86074632600408,
+     "since": 88398516115459,
+     "frames": 1762,
+     "janky_frames": 0,
+     "jank_kinds": {},
+     "jank_sides": {
+      "app": 0,
+      "compositor": 0,
+      "other": 0
+     },
+     "visibly_late_frames": 0,
+     "late_do_frames": 28,
+     "late_do_frames_after_work": 7,
+     "prefetches": 0,
+     "buffer_stuffing": {
+      "recovery_slices": 0,
+      "buffer_stuffed": 0,
+      "occurred": false
+     },
+     "main_thread_frame_ms": {
+      "count": 1789,
+      "p50": 1.556356,
+      "p90": 3.217814,
+      "p99": 6.879923,
+      "max": 9.863688
+     },
+     "render_thread_frame_ms": {
+      "count": 1780,
+      "p50": 2.204346,
+      "p90": 3.556355,
+      "p99": 5.166748
+     },
+     "cpu_ms": {
+      "main": 4561.806678,
+      "render": 4526.527728
+     },
+     "work_ms": {
+      "main": 810.661879,
+      "render": 852.504297
+     }
+    }
+   },
+   {
+    "gfxinfo": {
+     "frames": 1788,
+     "janky": 1,
+     "p50": 5,
+     "p90": 7,
+     "p95": 8,
+     "p99": 11,
+     "gpu_p50": 2,
+     "gpu_p90": 2,
+     "gpu_p99": 3
+    },
+    "trace": {
+     "since": 88467727624933,
      "frames": 1765,
+     "janky_frames": 1,
+     "jank_kinds": {
+      "App Deadline Missed": 1
+     },
+     "jank_sides": {
+      "app": 1,
+      "compositor": 0,
+      "other": 0
+     },
+     "visibly_late_frames": 2,
+     "late_do_frames": 32,
+     "late_do_frames_after_work": 9,
+     "prefetches": 0,
+     "buffer_stuffing": {
+      "recovery_slices": 0,
+      "buffer_stuffed": 0,
+      "occurred": false
+     },
+     "main_thread_frame_ms": {
+      "count": 1785,
+      "p50": 1.556071,
+      "p90": 3.180053,
+      "p99": 7.13444,
+      "max": 13.038167
+     },
+     "render_thread_frame_ms": {
+      "count": 1775,
+      "p50": 2.11617,
+      "p90": 3.374674,
+      "p99": 5.180827
+     },
+     "cpu_ms": {
+      "main": 4476.66786,
+      "render": 4340.8119
+     },
+     "work_ms": {
+      "main": 881.537652,
+      "render": 893.197928
+     }
+    }
+   },
+   {
+    "gfxinfo": {
+     "frames": 1806,
+     "janky": 0,
+     "p50": 5,
+     "p90": 7,
+     "p95": 8,
+     "p99": 11,
+     "gpu_p50": 2,
+     "gpu_p90": 2,
+     "gpu_p99": 3
+    },
+    "trace": {
+     "since": 88536709454678,
+     "frames": 1778,
      "janky_frames": 0,
      "jank_kinds": {},
      "jank_sides": {
@@ -563,7 +619,7 @@
      },
      "visibly_late_frames": 0,
      "late_do_frames": 22,
-     "late_do_frames_after_work": 6,
+     "late_do_frames_after_work": 4,
      "prefetches": 0,
      "buffer_stuffing": {
       "recovery_slices": 0,
@@ -571,79 +627,25 @@
       "occurred": false
      },
      "main_thread_frame_ms": {
-      "count": 1789,
-      "p50": 1.44515,
-      "p90": 3.12675,
-      "p99": 7.178833,
-      "max": 10.573282
+      "count": 1799,
+      "p50": 1.532267,
+      "p90": 3.275757,
+      "p99": 7.026571,
+      "max": 12.494466
      },
      "render_thread_frame_ms": {
-      "count": 1781,
-      "p50": 1.962606,
-      "p90": 3.185547,
-      "p99": 5.125041
+      "count": 1790,
+      "p50": 2.134888,
+      "p90": 3.563029,
+      "p99": 4.968872
      },
      "cpu_ms": {
-      "main": 4295.685714,
-      "render": 4124.468124
+      "main": 4545.429495,
+      "render": 4466.770977
      },
      "work_ms": {
-      "main": 910.233167,
-      "render": 943.799942
-     }
-    }
-   },
-   {
-    "gfxinfo": {
-     "frames": 1778,
-     "janky": 0,
-     "p50": 5,
-     "p90": 7,
-     "p95": 8,
-     "p99": 10,
-     "gpu_p50": 2,
-     "gpu_p90": 2,
-     "gpu_p99": 3
-    },
-    "trace": {
-     "since": 86144303000466,
-     "frames": 1757,
-     "janky_frames": 0,
-     "jank_kinds": {},
-     "jank_sides": {
-      "app": 0,
-      "compositor": 0,
-      "other": 0
-     },
-     "visibly_late_frames": 0,
-     "late_do_frames": 13,
-     "late_do_frames_after_work": 3,
-     "prefetches": 0,
-     "buffer_stuffing": {
-      "recovery_slices": 0,
-      "buffer_stuffed": 0,
-      "occurred": false
-     },
-     "main_thread_frame_ms": {
-      "count": 1786,
-      "p50": 1.575154,
-      "p90": 3.234741,
-      "p99": 6.306722,
-      "max": 8.448975
-     },
-     "render_thread_frame_ms": {
-      "count": 1776,
-      "p50": 2.273112,
-      "p90": 3.603597,
-      "p99": 5.313273
-     },
-     "cpu_ms": {
-      "main": 4594.749907,
-      "render": 4588.133205
-     },
-     "work_ms": {
-      "main": 836.53882,
-      "render": 864.231473
+      "main": 843.871603,
+      "render": 877.601556
      }
     }
    }
@@ -651,73 +653,19 @@
   "rs": [
    {
     "gfxinfo": {
-     "frames": 1776,
+     "frames": 1783,
      "janky": 0,
      "p50": 5,
      "p90": 6,
-     "p95": 6,
+     "p95": 7,
      "p99": 8,
      "gpu_p50": 2,
      "gpu_p90": 2,
      "gpu_p99": 3
     },
     "trace": {
-     "since": 86039930816537,
-     "frames": 1758,
-     "janky_frames": 0,
-     "jank_kinds": {},
-     "jank_sides": {
-      "app": 0,
-      "compositor": 0,
-      "other": 0
-     },
-     "visibly_late_frames": 0,
-     "late_do_frames": 4,
-     "late_do_frames_after_work": 1,
-     "prefetches": 371,
-     "buffer_stuffing": {
-      "recovery_slices": 0,
-      "buffer_stuffed": 0,
-      "occurred": false
-     },
-     "main_thread_frame_ms": {
-      "count": 1784,
-      "p50": 1.29598,
-      "p90": 1.887207,
-      "p99": 2.932291,
-      "max": 5.410889
-     },
-     "render_thread_frame_ms": {
-      "count": 1759,
-      "p50": 2.78357,
-      "p90": 3.799967,
-      "p99": 5.285523
-     },
-     "cpu_ms": {
-      "main": 3504.158951,
-      "render": 5221.971354
-     },
-     "work_ms": {
-      "main": 436.832605,
-      "render": 789.484848
-     }
-    }
-   },
-   {
-    "gfxinfo": {
-     "frames": 1781,
-     "janky": 0,
-     "p50": 5,
-     "p90": 6,
-     "p95": 6,
-     "p99": 8,
-     "gpu_p50": 2,
-     "gpu_p90": 2,
-     "gpu_p99": 3
-    },
-    "trace": {
-     "since": 86109689632367,
-     "frames": 1766,
+     "since": 88433317336871,
+     "frames": 1763,
      "janky_frames": 0,
      "jank_kinds": {},
      "jank_sides": {
@@ -735,31 +683,31 @@
       "occurred": false
      },
      "main_thread_frame_ms": {
-      "count": 1790,
-      "p50": 1.292033,
-      "p90": 1.946493,
-      "p99": 2.850382,
-      "max": 10.201986
+      "count": 1792,
+      "p50": 1.276977,
+      "p90": 1.886475,
+      "p99": 3.040446,
+      "max": 10.119547
      },
      "render_thread_frame_ms": {
-      "count": 1767,
-      "p50": 2.723795,
-      "p90": 3.716716,
-      "p99": 5.451904
+      "count": 1765,
+      "p50": 2.610555,
+      "p90": 3.756306,
+      "p99": 5.758789
      },
      "cpu_ms": {
-      "main": 3435.462704,
-      "render": 5107.571223
+      "main": 3412.534532,
+      "render": 4965.814255
      },
      "work_ms": {
-      "main": 451.935348,
-      "render": 794.138327
+      "main": 465.729507,
+      "render": 816.496485
      }
     }
    },
    {
     "gfxinfo": {
-     "frames": 1788,
+     "frames": 1777,
      "janky": 0,
      "p50": 5,
      "p90": 6,
@@ -770,8 +718,8 @@
      "gpu_p99": 3
     },
     "trace": {
-     "since": 86180612306718,
-     "frames": 1765,
+     "since": 88502237160553,
+     "frames": 1758,
      "janky_frames": 0,
      "jank_kinds": {},
      "jank_sides": {
@@ -782,7 +730,61 @@
      "visibly_late_frames": 0,
      "late_do_frames": 10,
      "late_do_frames_after_work": 0,
-     "prefetches": 369,
+     "prefetches": 365,
+     "buffer_stuffing": {
+      "recovery_slices": 0,
+      "buffer_stuffed": 0,
+      "occurred": false
+     },
+     "main_thread_frame_ms": {
+      "count": 1788,
+      "p50": 1.301636,
+      "p90": 1.918213,
+      "p99": 3.112142,
+      "max": 5.297079
+     },
+     "render_thread_frame_ms": {
+      "count": 1759,
+      "p50": 2.724447,
+      "p90": 3.837687,
+      "p99": 5.678914
+     },
+     "cpu_ms": {
+      "main": 3451.657077,
+      "render": 5114.099288
+     },
+     "work_ms": {
+      "main": 451.838761,
+      "render": 797.39764
+     }
+    }
+   },
+   {
+    "gfxinfo": {
+     "frames": 1777,
+     "janky": 0,
+     "p50": 5,
+     "p90": 6,
+     "p95": 7,
+     "p99": 8,
+     "gpu_p50": 2,
+     "gpu_p90": 2,
+     "gpu_p99": 3
+    },
+    "trace": {
+     "since": 88571370505517,
+     "frames": 1760,
+     "janky_frames": 0,
+     "jank_kinds": {},
+     "jank_sides": {
+      "app": 0,
+      "compositor": 0,
+      "other": 0
+     },
+     "visibly_late_frames": 0,
+     "late_do_frames": 9,
+     "late_do_frames_after_work": 0,
+     "prefetches": 370,
      "buffer_stuffing": {
       "recovery_slices": 0,
       "buffer_stuffed": 0,
@@ -790,24 +792,24 @@
      },
      "main_thread_frame_ms": {
       "count": 1789,
-      "p50": 1.297079,
-      "p90": 1.858073,
-      "p99": 2.908569,
-      "max": 5.291585
+      "p50": 1.320516,
+      "p90": 2.024414,
+      "p99": 2.921265,
+      "max": 5.650309
      },
      "render_thread_frame_ms": {
-      "count": 1765,
-      "p50": 2.750082,
-      "p90": 3.792928,
-      "p99": 5.656128
+      "count": 1762,
+      "p50": 2.712891,
+      "p90": 3.806844,
+      "p99": 5.610189
      },
      "cpu_ms": {
-      "main": 3448.456207,
-      "render": 5120.384388
+      "main": 3459.202824,
+      "render": 5045.323938
      },
      "work_ms": {
-      "main": 450.077639,
-      "render": 811.157813
+      "main": 452.323403,
+      "render": 813.287872
      }
     }
    }
@@ -817,61 +819,7 @@
   "compose": [
    {
     "gfxinfo": {
-     "frames": 1334,
-     "janky": 0,
-     "p50": 5,
-     "p90": 6,
-     "p95": 7,
-     "p99": 11,
-     "gpu_p50": 2,
-     "gpu_p90": 2,
-     "gpu_p99": 8
-    },
-    "trace": {
-     "since": 0,
-     "frames": 1198,
-     "janky_frames": 0,
-     "jank_kinds": {},
-     "jank_sides": {
-      "app": 0,
-      "compositor": 0,
-      "other": 0
-     },
-     "visibly_late_frames": 1198,
-     "late_do_frames": 3,
-     "late_do_frames_after_work": 1,
-     "prefetches": 0,
-     "buffer_stuffing": {
-      "recovery_slices": 1197,
-      "buffer_stuffed": 1,
-      "occurred": true
-     },
-     "main_thread_frame_ms": {
-      "count": 1197,
-      "p50": 1.567708,
-      "p90": 2.118693,
-      "p99": 2.983805,
-      "max": 4.481405
-     },
-     "render_thread_frame_ms": {
-      "count": 1196,
-      "p50": 3.030965,
-      "p90": 4.166829,
-      "p99": 5.775106
-     },
-     "cpu_ms": {
-      "main": 2126.965726,
-      "render": 3846.282697
-     },
-     "work_ms": {
-      "main": 258.531894,
-      "render": 540.742969
-     }
-    }
-   },
-   {
-    "gfxinfo": {
-     "frames": 1340,
+     "frames": 1329,
      "janky": 0,
      "p50": 5,
      "p90": 6,
@@ -883,7 +831,7 @@
     },
     "trace": {
      "since": 0,
-     "frames": 1203,
+     "frames": 1204,
      "janky_frames": 0,
      "jank_kinds": {},
      "jank_sides": {
@@ -891,118 +839,8 @@
       "compositor": 0,
       "other": 0
      },
-     "visibly_late_frames": 0,
-     "late_do_frames": 10,
-     "late_do_frames_after_work": 2,
-     "prefetches": 0,
-     "buffer_stuffing": {
-      "recovery_slices": 0,
-      "buffer_stuffed": 0,
-      "occurred": false
-     },
-     "main_thread_frame_ms": {
-      "count": 1197,
-      "p50": 1.543457,
-      "p90": 2.153971,
-      "p99": 3.140951,
-      "max": 4.711955
-     },
-     "render_thread_frame_ms": {
-      "count": 1194,
-      "p50": 3.000773,
-      "p90": 4.014526,
-      "p99": 5.430094
-     },
-     "cpu_ms": {
-      "main": 2050.173647,
-      "render": 3774.952537
-     },
-     "work_ms": {
-      "main": 257.469018,
-      "render": 519.141727
-     }
-    }
-   },
-   {
-    "gfxinfo": {
-     "frames": 1349,
-     "janky": 0,
-     "p50": 5,
-     "p90": 6,
-     "p95": 7,
-     "p99": 8,
-     "gpu_p50": 2,
-     "gpu_p90": 2,
-     "gpu_p99": 3
-    },
-    "trace": {
-     "since": 0,
-     "frames": 1206,
-     "janky_frames": 0,
-     "jank_kinds": {},
-     "jank_sides": {
-      "app": 0,
-      "compositor": 0,
-      "other": 0
-     },
-     "visibly_late_frames": 0,
-     "late_do_frames": 6,
-     "late_do_frames_after_work": 1,
-     "prefetches": 0,
-     "buffer_stuffing": {
-      "recovery_slices": 0,
-      "buffer_stuffed": 0,
-      "occurred": false
-     },
-     "main_thread_frame_ms": {
-      "count": 1197,
-      "p50": 1.520752,
-      "p90": 2.071208,
-      "p99": 3.01884,
-      "max": 4.934855
-     },
-     "render_thread_frame_ms": {
-      "count": 1202,
-      "p50": 2.897949,
-      "p90": 4.086223,
-      "p99": 5.722737
-     },
-     "cpu_ms": {
-      "main": 2041.944812,
-      "render": 3699.9400610000002
-     },
-     "work_ms": {
-      "main": 261.451931,
-      "render": 535.776285
-     }
-    }
-   }
-  ],
-  "rs": [
-   {
-    "gfxinfo": {
-     "frames": 1346,
-     "janky": 0,
-     "p50": 5,
-     "p90": 6,
-     "p95": 6,
-     "p99": 7,
-     "gpu_p50": 2,
-     "gpu_p90": 2,
-     "gpu_p99": 3
-    },
-    "trace": {
-     "since": 0,
-     "frames": 1206,
-     "janky_frames": 0,
-     "jank_kinds": {},
-     "jank_sides": {
-      "app": 0,
-      "compositor": 0,
-      "other": 0
-     },
-     "visibly_late_frames": 0,
-     "late_do_frames": 14,
+     "visibly_late_frames": 1204,
+     "late_do_frames": 4,
      "late_do_frames_after_work": 0,
      "prefetches": 0,
      "buffer_stuffing": {
@@ -1012,42 +850,42 @@
      },
      "main_thread_frame_ms": {
       "count": 1201,
-      "p50": 1.202962,
-      "p90": 1.757487,
-      "p99": 2.930461,
-      "max": 34.221802
+      "p50": 1.596884,
+      "p90": 2.26774,
+      "p99": 3.283692,
+      "max": 4.782674
      },
      "render_thread_frame_ms": {
-      "count": 1200,
-      "p50": 2.642863,
-      "p90": 3.431559,
-      "p99": 4.943278
+      "count": 1201,
+      "p50": 3.040079,
+      "p90": 4.324097,
+      "p99": 6.133179
      },
      "cpu_ms": {
-      "main": 1582.529238,
-      "render": 3323.20954
+      "main": 2124.139758,
+      "render": 3865.741254
      },
      "work_ms": {
-      "main": 188.712247,
-      "render": 494.84433
+      "main": 253.656614,
+      "render": 547.229855
      }
     }
    },
    {
     "gfxinfo": {
-     "frames": 1340,
+     "frames": 1350,
      "janky": 0,
      "p50": 5,
      "p90": 6,
-     "p95": 6,
-     "p99": 7,
+     "p95": 7,
+     "p99": 8,
      "gpu_p50": 2,
      "gpu_p90": 2,
      "gpu_p99": 3
     },
     "trace": {
      "since": 0,
-     "frames": 1201,
+     "frames": 1206,
      "janky_frames": 0,
      "jank_kinds": {},
      "jank_sides": {
@@ -1057,6 +895,116 @@
      },
      "visibly_late_frames": 0,
      "late_do_frames": 5,
+     "late_do_frames_after_work": 1,
+     "prefetches": 0,
+     "buffer_stuffing": {
+      "recovery_slices": 0,
+      "buffer_stuffed": 0,
+      "occurred": false
+     },
+     "main_thread_frame_ms": {
+      "count": 1199,
+      "p50": 1.560709,
+      "p90": 2.209391,
+      "p99": 3.056193,
+      "max": 3.520834
+     },
+     "render_thread_frame_ms": {
+      "count": 1201,
+      "p50": 2.900838,
+      "p90": 4.095459,
+      "p99": 5.808227
+     },
+     "cpu_ms": {
+      "main": 2128.217478,
+      "render": 3684.484645
+     },
+     "work_ms": {
+      "main": 257.967942,
+      "render": 535.151387
+     }
+    }
+   },
+   {
+    "gfxinfo": {
+     "frames": 1356,
+     "janky": 0,
+     "p50": 5,
+     "p90": 6,
+     "p95": 7,
+     "p99": 8,
+     "gpu_p50": 2,
+     "gpu_p90": 2,
+     "gpu_p99": 3
+    },
+    "trace": {
+     "since": 0,
+     "frames": 1207,
+     "janky_frames": 0,
+     "jank_kinds": {},
+     "jank_sides": {
+      "app": 0,
+      "compositor": 0,
+      "other": 0
+     },
+     "visibly_late_frames": 1207,
+     "late_do_frames": 10,
+     "late_do_frames_after_work": 3,
+     "prefetches": 0,
+     "buffer_stuffing": {
+      "recovery_slices": 0,
+      "buffer_stuffed": 0,
+      "occurred": false
+     },
+     "main_thread_frame_ms": {
+      "count": 1195,
+      "p50": 1.557129,
+      "p90": 2.248657,
+      "p99": 3.593994,
+      "max": 4.697591
+     },
+     "render_thread_frame_ms": {
+      "count": 1197,
+      "p50": 2.804768,
+      "p90": 3.974772,
+      "p99": 5.496623
+     },
+     "cpu_ms": {
+      "main": 2138.427301,
+      "render": 3544.65744
+     },
+     "work_ms": {
+      "main": 261.24393,
+      "render": 543.920117
+     }
+    }
+   }
+  ],
+  "rs": [
+   {
+    "gfxinfo": {
+     "frames": 1353,
+     "janky": 0,
+     "p50": 5,
+     "p90": 5,
+     "p95": 6,
+     "p99": 7,
+     "gpu_p50": 2,
+     "gpu_p90": 2,
+     "gpu_p99": 2
+    },
+    "trace": {
+     "since": 0,
+     "frames": 1210,
+     "janky_frames": 0,
+     "jank_kinds": {},
+     "jank_sides": {
+      "app": 0,
+      "compositor": 0,
+      "other": 0
+     },
+     "visibly_late_frames": 0,
+     "late_do_frames": 6,
      "late_do_frames_after_work": 0,
      "prefetches": 0,
      "buffer_stuffing": {
@@ -1065,31 +1013,31 @@
       "occurred": false
      },
      "main_thread_frame_ms": {
-      "count": 1194,
-      "p50": 1.21106,
-      "p90": 1.691894,
-      "p99": 2.794433,
-      "max": 4.180094
+      "count": 1204,
+      "p50": 1.203247,
+      "p90": 1.693197,
+      "p99": 2.764689,
+      "max": 4.335002
      },
      "render_thread_frame_ms": {
-      "count": 1194,
-      "p50": 2.616902,
-      "p90": 3.493042,
-      "p99": 5.309407
+      "count": 1204,
+      "p50": 2.6486,
+      "p90": 3.368245,
+      "p99": 4.87907
      },
      "cpu_ms": {
-      "main": 1588.236759,
-      "render": 3319.638955
+      "main": 1562.684616,
+      "render": 3363.579957
      },
      "work_ms": {
-      "main": 190.164005,
-      "render": 497.614829
+      "main": 189.982253,
+      "render": 496.474287
      }
     }
    },
    {
     "gfxinfo": {
-     "frames": 1338,
+     "frames": 1348,
      "janky": 0,
      "p50": 5,
      "p90": 6,
@@ -1101,7 +1049,61 @@
     },
     "trace": {
      "since": 0,
-     "frames": 1205,
+     "frames": 1202,
+     "janky_frames": 0,
+     "jank_kinds": {},
+     "jank_sides": {
+      "app": 0,
+      "compositor": 0,
+      "other": 0
+     },
+     "visibly_late_frames": 0,
+     "late_do_frames": 8,
+     "late_do_frames_after_work": 1,
+     "prefetches": 0,
+     "buffer_stuffing": {
+      "recovery_slices": 0,
+      "buffer_stuffed": 0,
+      "occurred": false
+     },
+     "main_thread_frame_ms": {
+      "count": 1198,
+      "p50": 1.211019,
+      "p90": 1.657592,
+      "p99": 2.747721,
+      "max": 6.767171
+     },
+     "render_thread_frame_ms": {
+      "count": 1197,
+      "p50": 2.621175,
+      "p90": 3.378906,
+      "p99": 5.130086
+     },
+     "cpu_ms": {
+      "main": 1579.777602,
+      "render": 3284.34901
+     },
+     "work_ms": {
+      "main": 190.825294,
+      "render": 505.08804
+     }
+    }
+   },
+   {
+    "gfxinfo": {
+     "frames": 1347,
+     "janky": 0,
+     "p50": 5,
+     "p90": 6,
+     "p95": 6,
+     "p99": 7,
+     "gpu_p50": 2,
+     "gpu_p90": 2,
+     "gpu_p99": 3
+    },
+    "trace": {
+     "since": 0,
+     "frames": 1204,
      "janky_frames": 0,
      "jank_kinds": {},
      "jank_sides": {
@@ -1119,25 +1121,25 @@
       "occurred": false
      },
      "main_thread_frame_ms": {
-      "count": 1197,
-      "p50": 1.19987,
-      "p90": 1.680095,
-      "p99": 2.890381,
-      "max": 4.650024
+      "count": 1199,
+      "p50": 1.216756,
+      "p90": 1.83435,
+      "p99": 3.088216,
+      "max": 4.692587
      },
      "render_thread_frame_ms": {
-      "count": 1202,
-      "p50": 2.668904,
-      "p90": 3.516398,
-      "p99": 5.207275
+      "count": 1198,
+      "p50": 2.644287,
+      "p90": 3.454956,
+      "p99": 5.028076
      },
      "cpu_ms": {
-      "main": 1551.164912,
-      "render": 3393.7048800000002
+      "main": 1557.18361,
+      "render": 3340.687251
      },
      "work_ms": {
-      "main": 189.054402,
-      "render": 507.859738
+      "main": 187.004543,
+      "render": 500.945509
      }
     }
    }

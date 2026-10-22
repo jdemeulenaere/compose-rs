@@ -159,6 +159,13 @@ class HygieneTest(unittest.TestCase):
         self.assertEqual(measure.measured_since([]), 0)
 
 
+class QueryTest(unittest.TestCase):
+    def test_a_failed_query_stops_the_run(self):
+        # A trace processor exiting with an error must not read as no rows (zero counts).
+        with self.assertRaises(RuntimeError):
+            measure.query("false", "trace", "SELECT 1")
+
+
 class JankTest(unittest.TestCase):
     def test_sides(self):
         side = measure.jank_side

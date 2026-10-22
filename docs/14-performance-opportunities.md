@@ -214,27 +214,27 @@ The scroll's RenderThread rose in this pair of sessions (779 → 809 ms, p99 5.3
 Round 4's traces showed three problems no average shows.
 
 - **Buffer stuffing recovery stopped prefetching (D340).** After a display stall, Android 16's Choreographer enters "buffer stuffing recovery" and hands every frame callback its vsync's time less an interval until the app goes idle, which a fling never does. The idle-time budget was the frame time plus an interval, so it was always past: the view re-posted a vsync callback every frame and never called Rust. In the round 4 run that hit it, there were no prefetches for 10 s and 120 compositions in frames (main p99 7.35 ms against about 3.1). The budget now runs to the vsync after the last one at or before the callback's start, on the frame time's phase.
-- **Idle work ran past the vsync (D341).** About 1 % of the idle-time slices ended more than 1.2 ms past the vsync. Each was an item's measurement (its six text layouts, the first one cold, 4–6 ms) started with 3–4 ms left, because the running average (about 2.2 ms) said it fit. A step now needs the larger of the average and the recent maximum (fading by an eighth per step), plus 0.5 ms. The estimate is lowered only when the step was the idle time's first. In a first version that lowered it on every miss, the measurements still started after a composition; that version took the slices past the vsync from 31 to 17 a run, against 39 to 11 for the version shipped.
+- **Idle work ran past the vsync (D341).** About 1 % of the idle-time slices ended more than 1.2 ms past the vsync. Each was an item's measurement (its six text layouts, the first one cold, 4–6 ms) started with 3–4 ms left, because the running average (about 2.2 ms) said it fit. A step now needs the larger of the average and the recent maximum (fading by an eighth per step), plus 0.5 ms. A miss lowers the estimate only when the step was its idle time's first, and slowly once the step was timed a few times: two reviews found that lowering it by a quarter on every miss let the measurements start after a composition, or after two or three short idle times.
 - **A hidden view kept animating (D342).** The demo, in the background, ran a frame on every vsync (about 1 ms each) without drawing.
 
 Measured on the Pixel 8 Pro, with main at 0757e61 (with D330) and the branch alternated run by run, 4 runs each (means [min–max]):
 
 | Scroll (measure.py's scroll run, D343) | main | branch |
 |---|---|---|
-| Idle-time slices ending past the vsync, a run | 39.3 [35–43] | **11.3** [7–14] |
-| of which more than 1.2 ms past | 9.0 [7–10] | **1.8** [1–3] |
-| The latest past the vsync | 2.3–3.8 ms | 1.4–2.7 ms |
-| `doFrame`s more than 2 ms late after main-thread work, a run | 2.8 [2–5] | **0.5** [0–1] |
-| `doFrame`s more than 2 ms late (most woke late) | 11.0 [8–16] | 12.3 [7–18] |
-| `prefetch` calls | 351 | 360 |
-| Main per frame p50 / p90 / p99 | 1.28 / 1.97 / 3.03 ms | 1.28 / 1.93 / 2.96 ms |
-| RenderThread per frame p50 / p90 / p99 | 2.77 / 3.72 / 5.30 ms | 2.82 / 3.88 / 5.51 ms (one run's p99 6.49) |
-| Main, RenderThread work | 438.0, 772.7 ms | 433.4, 778.1 ms |
-| Janky frames (FrameTimeline) | 0, 0, 0, 1 (the app's) | 2 (the compositor's), 0, 0, 0 |
+| Idle-time slices ending past the vsync, a run | 38.8 [37–40] | **16.5** [13–19] |
+| of which more than 1.2 ms past | 9.0 [6–11] | **2.0** [1–3] |
+| The latest past the vsync | 1.6–3.2 ms | 1.4–2.7 ms |
+| `doFrame`s more than 2 ms late after main-thread work, a run | 3.3 [0–6] | **1.0** [1–1] |
+| `doFrame`s more than 2 ms late (most woke late) | 17.5 [15–19] | 15.0 [9–20] |
+| `prefetch` calls | 352 | 365 |
+| Main per frame p50 / p90 / p99 | 1.28 / 1.94 / 3.05 ms | 1.28 / 1.98 / 3.16 ms |
+| RenderThread per frame p50 / p90 / p99 | 2.77 / 3.80 / 5.27 ms | 2.78 / 3.83 / 5.55 ms |
+| Main, RenderThread work | 441.8, 780.5 ms | 436.0, 776.1 ms |
+| Janky frames (FrameTimeline) | 0, 1 (the app's), 0, 0 | 0, 0, 0, 0 |
 
-Fewer slices run past the vsync, and those that do run past it by less; the slowest main-thread frames don't grow, though more measurements wait for a whole idle time. The RenderThread's differences are within its runs' spread, and its work is the same.
+Fewer idle-time slices run past the vsync, by less, and fewer frames start late because of them. The percentiles' differences are within the runs' spread (main p99 2.88–3.26 against 3.05–3.35 ms; the earlier versions of the branch measured 2.96 and 3.01 against main's 3.03 and 3.02 in the same way), and the work is the same. More measurements wait for a whole idle time, so some may be done in a frame instead; the slowest frames would show it, and they move by less than their spread.
 
-**Buffer stuffing, simulated.** None of these runs entered recovery, so it was simulated: both APKs were built with every frame callback's time shifted back an interval, as recovery does (a temporary patch, not committed), 2 runs each:
+**Buffer stuffing, simulated.** None of these runs entered recovery, so it was simulated: both APKs were built with every frame callback's time shifted back an interval, as recovery does (a temporary patch, not committed), 2 runs each (the branch before the reviews' estimate changes, which don't touch the budget):
 
 | | main, shifted | branch, shifted |
 |---|---|---|
@@ -250,18 +250,18 @@ main reproduces the round 4 run (p99 7.35 ms, no prefetch); the branch prefetche
 
 | compose-rs | round 4 | this run | Compose, this run |
 |---|---|---|---|
-| Scroll: janky frames, per run | 1, 3, 1 | **0, 0, 0** | 0, 0, 0 |
-| Scroll: main per frame p50 / p90 / p99 | 1.23 / 1.90 / 3.11 ms | 1.30 / 1.89 / 2.91 ms | 1.50 / 3.13 / 6.62 ms |
-| Scroll: RenderThread per frame p50 / p90 | 2.74 / 3.70 ms | 2.75 / 3.79 ms | 2.08 / 3.29 ms |
-| Scroll: main, RenderThread work | 477, 786 ms | 450, 794 ms | 868, 889 ms |
-| Scroll: frame time p50 / p90 / p99 (gfxinfo) | 5 / 6 / 8 ms | 5 / 6 / 8 ms | 5 / 7 / 10 ms |
-| Animation: main per frame p50 / p90 / p99 | 1.20 / 1.79 / 2.98 ms | 1.20 / 1.69 / 2.89 ms | 1.54 / 2.12 / 3.02 ms |
-| Animation: RenderThread p50 / p90 | 2.63 / 3.56 ms | 2.64 / 3.49 ms | 3.00 / 4.09 ms |
-| Animation: main, RenderThread work | 190, 517 ms | 189, 498 ms | 259, 536 ms |
-| Startup feed / big | 107 / 174 ms | 108 / 165 ms | 134 / 228 ms |
-| PSS after 10 flings | 81.2 MB | 80.7 MB | 88.3 MB |
+| Scroll: janky frames, per run | 1, 3, 1 | **0, 0, 0** | 0, 1, 0 (the app's) |
+| Scroll: main per frame p50 / p90 / p99 | 1.23 / 1.90 / 3.11 ms | 1.30 / 1.92 / 3.04 ms | 1.56 / 3.22 / 7.03 ms |
+| Scroll: RenderThread per frame p50 / p90 | 2.74 / 3.70 ms | 2.71 / 3.81 ms | 2.13 / 3.56 ms |
+| Scroll: main, RenderThread work | 477, 786 ms | 452, 813 ms | 844, 878 ms |
+| Scroll: frame time p50 / p90 / p99 (gfxinfo) | 5 / 6 / 8 ms | 5 / 6 / 8 ms | 5 / 7 / 11 ms |
+| Animation: main per frame p50 / p90 / p99 | 1.20 / 1.79 / 2.98 ms | 1.21 / 1.69 / 2.76 ms | 1.56 / 2.25 / 3.28 ms |
+| Animation: RenderThread p50 / p90 | 2.63 / 3.56 ms | 2.64 / 3.38 ms | 2.90 / 4.10 ms |
+| Animation: main, RenderThread work | 190, 517 ms | 190, 501 ms | 258, 544 ms |
+| Startup feed / big | 107 / 174 ms | 110 / 163 ms | 131 / 226 ms |
+| PSS after 10 flings | 81.2 MB | 79.5 MB | 90.0 MB |
 
-No run of either app had a janky frame in the scroll or the animation. No compose-rs run entered buffer stuffing recovery. One of Compose's animation runs did: all 1,198 of its frames were presented a vsync late, on cadence, so FrameTimeline counted none as janky. The scroll's p99 and its work owe part of their drop to D330 (BoringLayout), merged in between, as does `big`'s startup. The round 4 run that entered recovery (p99 7.35 ms) set its median, though, and measure.py now leaves out the warm-up swipe, so the jank counts aren't comparable one for one either.
+compose-rs had no janky frame in any run, and no run of either app entered buffer stuffing recovery. Two of Compose's animation runs had every frame presented a vsync late, on cadence, which FrameTimeline doesn't count as jank. The round 4 run that entered recovery (p99 7.35 ms) set nothing in round 4's medians; the scroll's lower main work and `big`'s startup owe more to D330 (BoringLayout), merged in between, than to these changes. measure.py now leaves out the warm-up swipe, so the jank counts aren't comparable one for one. Two earlier full runs of the branch, before the reviews' fixes, had no janky frame of compose-rs's either, apart from 3 of the compositor's in one run.
 
 ## Android: text and the big screen
 
