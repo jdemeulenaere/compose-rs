@@ -1,31 +1,44 @@
 package rs.compose.android
 
+import android.annotation.TargetApi
 import android.graphics.Canvas
 import android.graphics.RenderNode
 import android.graphics.Typeface
 import android.graphics.text.LineBreaker
+import android.os.Build
 import android.os.Trace
+import android.text.BoringLayout
 import android.text.Layout
 import android.text.SpannableString
 import android.text.Spanned
 import android.text.StaticLayout
+import android.text.TextDirectionHeuristic
 import android.text.TextDirectionHeuristics
 import android.text.TextPaint
 import android.text.TextUtils
 import android.text.style.BackgroundColorSpan
 import android.text.style.LineHeightSpan
 import android.text.style.MetricAffectingSpan
+import android.util.Log
 import android.util.SparseArray
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import kotlin.math.ceil
 
 /**
- * Paragraphs laid out with `StaticLayout` for compose-rs (`crates/compose-android/src/text.rs`),
- * kept by handle to draw them. Rust sends a layout request (style runs and line options, see
+ * Paragraphs laid out for compose-rs (`crates/compose-android/src/text.rs`), as Compose's
+ * `TextLayout`: a `BoringLayout` for a single left-to-right line that fits, else a
+ * `StaticLayout` (D330); kept by handle to draw them. Rust sends a layout request (style runs and line options, see
  * `encode_request`) and reads the metrics back from [results].
  */
-internal class TextMeasurer {
+internal class TextMeasurer(
+    /**
+     * Whether each `BoringLayout` is checked against the `StaticLayout` it stands for (debuggable
+     * apps, D330): a debug build lays out each single line twice, and its hit tests and cursor
+     * positions too (quadratic in the line's length).
+     */
+    private val checkBoring: Boolean = false,
+) {
     /** Floats Rust reads after a call: a layout's metrics, or a cursor's rectangle. */
     val results: ByteBuffer = ByteBuffer.allocateDirect(32).order(ByteOrder.nativeOrder())
 
@@ -124,6 +137,7 @@ internal class TextMeasurer {
         val base = readStyle(request)
         val paint = paint(base.paint)
         val runCount = request.getInt()
+        var letterSpaced = paint.letterSpacing != 0f
         val content: CharSequence = if (runCount == 0) {
             text
         } else {
@@ -134,6 +148,7 @@ internal class TextMeasurer {
                 val style = readStyle(request)
                 if (start < end) {
                     spannable.setSpan(RunSpan(style.paint), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                    if (style.paint.fontPx > 0f && style.paint.letterSpacingPx != 0f) letterSpaced = true
                     if (style.background != 0) {
                         spannable.setSpan(
                             BackgroundColorSpan(style.background),
@@ -146,47 +161,57 @@ internal class TextMeasurer {
             }
             spannable
         }
-        val text = if (base.lineHeightPx > 0f && content.isNotEmpty()) {
-            val spannable = content as? SpannableString ?: SpannableString(content)
-            spannable.setSpan(
-                LineHeightSpan.Standard(base.lineHeightPx.toInt().coerceAtLeast(1)),
-                0,
-                spannable.length,
-                Spanned.SPAN_INCLUSIVE_INCLUSIVE,
-            )
-            spannable
+        // A line height over every line (LineHeightSpan.Standard's), none on an empty text.
+        val lineHeight = if (base.lineHeightPx > 0f && content.isNotEmpty()) {
+            base.lineHeightPx.toInt().coerceAtLeast(1)
         } else {
-            content
+            0
         }
+        // The direction Rust decided (its first strong character's), for the whole text, as the
+        // desktop measurer: alignment and the cursor's movement agree with what's drawn.
+        val direction = if (rtl) TextDirectionHeuristics.RTL else TextDirectionHeuristics.LTR
+        // One line of left-to-right text has boring metrics (D330): its width, in one measure.
+        val boring = boringMetrics(content, paint, direction, lineHeight)
         // The width to break lines at, as the desktop measurer: the constraint when wrapping
         // (or ellipsizing), else the text's own; then the text's width, kept in the constraints.
         val bounded = maxWidth != Int.MAX_VALUE
         val available = if ((softWrap || ellipsis) && bounded) maxWidth else Int.MAX_VALUE
-        // The text's own width is a second measure of all of it: only when the constraints
-        // leave a choice.
-        val width = if (minWidth == available) {
-            available
-        } else {
-            ceil(Layout.getDesiredWidth(text, paint)).toInt().coerceIn(minWidth, available)
+        // The text's own width, as Compose's `LayoutIntrinsics.maxIntrinsicWidth`: the boring
+        // line's, else a second measure of all of it (only when the constraints leave a choice),
+        // half a pixel wider with letter spacing (b/173574230: else a StaticLayout can break the
+        // line it measured, or ellipsize it).
+        val boringWidth = if (boring == null) 0f else intrinsicWidth(boring.width.toFloat(), letterSpaced)
+        val width = when {
+            minWidth == available -> available
+            boring != null -> ceil(boringWidth).toInt().coerceIn(minWidth, available)
+            else -> {
+                val desired = intrinsicWidth(ceil(Layout.getDesiredWidth(content, paint)), letterSpaced)
+                ceil(desired).toInt().coerceIn(minWidth, available)
+            }
         }
         val alignment = when (align) {
             1 -> Layout.Alignment.ALIGN_OPPOSITE
             2 -> Layout.Alignment.ALIGN_CENTER
             else -> Layout.Alignment.ALIGN_NORMAL
         }
-        val builder = StaticLayout.Builder.obtain(text, 0, text.length, paint, width.coerceAtLeast(0))
-            .setAlignment(alignment)
-            // The direction Rust decided (its first strong character's), for the whole text, as
-            // the desktop measurer: alignment and the cursor's movement agree with what's drawn.
-            .setTextDirection(if (rtl) TextDirectionHeuristics.RTL else TextDirectionHeuristics.LTR)
-            .setIncludePad(false)
-            .setUseLineSpacingFromFallbacks(true)
-            .setBreakStrategy(LineBreaker.BREAK_STRATEGY_SIMPLE)
-            .setHyphenationFrequency(Layout.HYPHENATION_FREQUENCY_NONE)
-            .setMaxLines(maxLines)
-        if (ellipsis) builder.setEllipsize(TextUtils.TruncateAt.END)
-        if (align == 3) builder.setJustificationMode(LineBreaker.JUSTIFICATION_MODE_INTER_WORD)
-        val layout = builder.build()
+        // As Compose's `TextLayout`: a `BoringLayout` when the boring line fits the width, else
+        // a `StaticLayout`.
+        val layout = if (Build.VERSION.SDK_INT >= 33 && boring != null && boringWidth <= width) {
+            val layout = boringLayout(content, paint, width, alignment, boring)
+            if (checkBoring) {
+                val static = staticLayout(
+                    withLineHeight(SpannableString(content), lineHeight),
+                    paint, width, alignment, direction, maxLines, ellipsis, align,
+                )
+                // A difference is logged, and the StaticLayout kept (as before D330).
+                if (sameLayout(layout, static, paint)) layout else static
+            } else {
+                layout
+            }
+        } else {
+            val text = withLineHeight(content, lineHeight)
+            staticLayout(text, paint, width.coerceAtLeast(0), alignment, direction, maxLines, ellipsis, align)
+        }
         layouts.put(handle, layout)
         releaseNode(handle)
         if (collectingLaidOut) laidOut.add(handle)
@@ -203,6 +228,133 @@ internal class TextMeasurer {
         val lastEllipsized = layout.lineCount > 0 && layout.getEllipsisCount(layout.lineCount - 1) > 0
         val exceeded = layout.lineCount > maxLines || lastEllipsized
         results.putInt(20, (if (exceeded) 1f else 0f).toRawBits())
+    }
+
+    /**
+     * [text]'s metrics as a single boring line, or null: as Compose's `BoringLayoutFactory33`
+     * (`BoringLayout.isBoring` with fallback line spacing, which says no to a text with a new
+     * line, a tab, a surrogate pair (emoji), a character that could be right to left, a
+     * paragraph span, or that [direction] calls right to left). API 33+ only: below it, a
+     * `BoringLayout` can't use fallback fonts' line spacing as the `StaticLayout` does, so a line
+     * with a taller fallback font (CJK) would be shorter (Compose accepts that difference).
+     *
+     * A [lineHeight] (px, 0 for none) is applied to the metrics as the `StaticLayout`'s
+     * `LineHeightSpan.Standard` would apply it to its single line, rather than ruling the text
+     * out as Compose's `LineHeightStyleSpan` does (its trimming and alignment are not ours; D330).
+     */
+    private fun boringMetrics(
+        text: CharSequence,
+        paint: TextPaint,
+        direction: TextDirectionHeuristic,
+        lineHeight: Int,
+    ): BoringLayout.Metrics? {
+        if (Build.VERSION.SDK_INT < 33) return null
+        val metrics = BoringLayout.isBoring(text, paint, direction, true, null) ?: return null
+        // LineHeightSpan.Standard.chooseHeight, to the line's ascent and descent.
+        val height = metrics.descent - metrics.ascent
+        if (lineHeight > 0 && height > 0) {
+            val ratio = lineHeight * 1.0f / height
+            metrics.descent = Math.round(metrics.descent * ratio)
+            metrics.ascent = metrics.descent - lineHeight
+        }
+        return metrics
+    }
+
+    /** [width] as Compose's `maxIntrinsicWidth`: half a pixel more for [letterSpaced] text. */
+    private fun intrinsicWidth(width: Float, letterSpaced: Boolean): Float =
+        if (letterSpaced && width != 0f) width + 0.5f else width
+
+    /** [content] with a [lineHeight] span over it (px; none when 0), as a `StaticLayout` takes it. */
+    private fun withLineHeight(content: CharSequence, lineHeight: Int): CharSequence {
+        if (lineHeight == 0) return content
+        val spannable = content as? SpannableString ?: SpannableString(content)
+        spannable.setSpan(LineHeightSpan.Standard(lineHeight), 0, spannable.length, Spanned.SPAN_INCLUSIVE_INCLUSIVE)
+        return spannable
+    }
+
+    /**
+     * A `BoringLayout` of [text], as Compose's `BoringLayoutFactory33.create` (no line spacing,
+     * no padding, fallback line spacing). Without ellipsis: its line fits [width], so there is
+     * nothing to cut (Compose passes it, and `TextUtils.ellipsize` measures the text again to find
+     * that out).
+     */
+    @TargetApi(33)
+    private fun boringLayout(
+        text: CharSequence,
+        paint: TextPaint,
+        width: Int,
+        alignment: Layout.Alignment,
+        metrics: BoringLayout.Metrics,
+    ): Layout = BoringLayout(text, paint, width, alignment, 1f, 0f, metrics, false, null, width, true)
+
+    private fun staticLayout(
+        text: CharSequence,
+        paint: TextPaint,
+        width: Int,
+        alignment: Layout.Alignment,
+        direction: TextDirectionHeuristic,
+        maxLines: Int,
+        ellipsis: Boolean,
+        align: Int,
+    ): Layout {
+        val builder = StaticLayout.Builder.obtain(text, 0, text.length, paint, width)
+            .setAlignment(alignment)
+            .setTextDirection(direction)
+            .setIncludePad(false)
+            .setUseLineSpacingFromFallbacks(true)
+            .setBreakStrategy(LineBreaker.BREAK_STRATEGY_SIMPLE)
+            .setHyphenationFrequency(Layout.HYPHENATION_FREQUENCY_NONE)
+            .setMaxLines(maxLines)
+        if (ellipsis) builder.setEllipsize(TextUtils.TruncateAt.END)
+        if (align == 3) builder.setJustificationMode(LineBreaker.JUSTIFICATION_MODE_INTER_WORD)
+        return builder.build()
+    }
+
+    /**
+     * In debuggable apps ([checkBoring]): whether the `BoringLayout` [boring] answers as the
+     * `StaticLayout` [static] of the same text (with its line height span) and width does, in
+     * everything Rust reads or the drawing uses: size, lines, baselines, ellipsis, direction,
+     * each offset's position, the offset at each of those positions and between them, and the
+     * boring line's width against `getDesiredWidth`'s. Each difference is logged.
+     */
+    private fun sameLayout(boring: Layout, static: Layout, paint: TextPaint): Boolean {
+        val text = boring.text
+        var same = true
+        fun differs(what: String, a: Any, b: Any) {
+            same = false
+            Log.e(TAG, "BoringLayout differs from StaticLayout in $what ($a, $b) for \"$text\"")
+        }
+        fun compare(what: String, a: Int, b: Int) {
+            if (a != b) differs(what, a, b)
+        }
+        compare("width", boring.width, static.width)
+        compare("height", boring.height, static.height)
+        compare("line count", boring.lineCount, static.lineCount)
+        compare("top", boring.getLineTop(0), static.getLineTop(0))
+        compare("bottom", boring.getLineBottom(0), static.getLineBottom(0))
+        compare("baseline", boring.getLineBaseline(0), static.getLineBaseline(0))
+        compare("ellipsis", boring.getEllipsisCount(0), static.getEllipsisCount(0))
+        compare("line end", boring.getLineEnd(0), static.getLineEnd(0))
+        compare("direction", boring.getParagraphDirection(0), static.getParagraphDirection(0))
+        compare(
+            "desired width",
+            ceil(boring.getLineWidth(0)).toInt(),
+            ceil(Layout.getDesiredWidth(text, paint)).toInt(),
+        )
+        var previous = -2f
+        for (offset in 0..text.length) {
+            val x = boring.getPrimaryHorizontal(offset)
+            val expected = static.getPrimaryHorizontal(offset)
+            // Compared as primitives: 0f and -0f are the same position.
+            if (x != expected) differs("offset $offset's position", x, expected)
+            for (at in floatArrayOf(x, (previous + x) / 2f)) {
+                compare("the offset at $at", boring.getOffsetForHorizontal(0, at), static.getOffsetForHorizontal(0, at))
+            }
+            previous = x
+        }
+        val end = boring.width + 2f
+        compare("the offset at $end", boring.getOffsetForHorizontal(0, end), static.getOffsetForHorizontal(0, end))
+        return same
     }
 
     fun hitTest(handle: Int, x: Float, y: Float): Int {
@@ -340,6 +492,7 @@ internal class TextMeasurer {
     }
 
     private companion object {
+        const val TAG = "compose-rs"
         /** About ten list items' paragraphs: what a fling releases before composing more. */
         const val NODE_POOL_CAPACITY = 64
         const val PAINT_CACHE_CAPACITY = 64

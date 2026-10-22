@@ -4,6 +4,7 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ApplicationInfo
 import android.content.res.Configuration
 import android.graphics.Canvas
 import android.net.Uri
@@ -48,7 +49,8 @@ import android.view.inputmethod.InputMethodManager
  * The app receives properties ([setProp]) and sends events ([setOnEventListener]).
  */
 class ComposeRsView(context: Context, private val app: String) : View(context) {
-    private val measurer = TextMeasurer()
+    private val measurer =
+        TextMeasurer(checkBoring = context.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0)
     private val replayer = Replayer(measurer)
     /** Over the Rust host's drawing (see [ComposeRsNative.takeDrawing]). */
     private var drawing: java.nio.ByteBuffer? = null
