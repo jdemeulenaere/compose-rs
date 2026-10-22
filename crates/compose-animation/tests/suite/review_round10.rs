@@ -121,7 +121,7 @@ fn a_content_keeps_its_exit_when_the_state_changes_again() {
             |value: i32| {
                 Box!(
                     modifier = Modifier
-                        .size_wh(50.dp(), 20.dp())
+                        .size((50.dp(), 20.dp()))
                         .background(Color::BLACK)
                         .test_tag(format!("{value}"))
                 );

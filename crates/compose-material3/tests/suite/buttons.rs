@@ -61,7 +61,7 @@ fn a_button_takes_its_shape_colors_border_and_padding() {
                 border = Some(BorderStroke::new(2.dp(), Color::BLUE)),
                 content_padding = PaddingValues::all(0.dp()),
                 {
-                    Spacer!(Modifier.size_wh(100.dp(), 20.dp()));
+                    Spacer!(Modifier.size((100.dp(), 20.dp())));
                 }
             );
         });
@@ -81,10 +81,10 @@ fn the_default_paddings_and_minimum_sizes_are_composes() {
         MaterialTheme!({
             Column!({
                 Button!(|| {}, modifier = Modifier.test_tag("filled"), {
-                    Spacer!(Modifier.size_wh(100.dp(), 20.dp()));
+                    Spacer!(Modifier.size((100.dp(), 20.dp())));
                 });
                 TextButton!(|| {}, modifier = Modifier.test_tag("text"), {
-                    Spacer!(Modifier.size_wh(100.dp(), 20.dp()));
+                    Spacer!(Modifier.size((100.dp(), 20.dp())));
                 });
                 OutlinedButton!(|| {}, modifier = Modifier.test_tag("small"), {});
             });
@@ -319,9 +319,7 @@ fn ScaffoldWith(position: FabPosition, bottom_bar: bool, insets: PaddingValues) 
             floating_action_button_position = position,
             content_window_insets = insets,
             |padding: PaddingValues| {
-                Box!(
-                    modifier = Modifier.padding_values(padding).fill_max_size().test_tag("content")
-                );
+                Box!(modifier = Modifier.padding(padding).fill_max_size().test_tag("content"));
             }
         );
     });

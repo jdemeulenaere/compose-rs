@@ -195,7 +195,7 @@ fn enter_runs_the_action_once_and_ime_action_on_a_read_only_field() {
         BasicTextField!(
             String::from("x"),
             |_: String| {},
-            modifier = Modifier.size_wh(200.dp(), 40.dp()).test_tag("f"),
+            modifier = Modifier.size((200.dp(), 40.dp())).test_tag("f"),
             read_only = true,
             single_line = true,
             keyboard_actions =
@@ -217,7 +217,7 @@ fn clearing_a_focused_fields_focus_reports_no_options() {
         BasicTextField!(
             text.get(),
             move |new: String| text.set(new),
-            modifier = Modifier.size_wh(200.dp(), 40.dp()).test_tag("f")
+            modifier = Modifier.size((200.dp(), 40.dp())).test_tag("f")
         );
     });
     let manager = manager.borrow().clone().unwrap();
@@ -288,22 +288,19 @@ fn a_lazy_item_reads_the_focus_manager_and_keyboard_controller() {
     let taken = managers.clone();
     let mut ui = compose_test(move || {
         let taken = taken.clone();
-        LazyColumn!(
-            modifier = Modifier.size_wh(100.dp(), 100.dp()),
-            move |scope: LazyListScope| {
-                let taken = taken.clone();
-                scope.items(3, move |index| {
-                    taken.borrow_mut().push((
-                        LOCAL_FOCUS_MANAGER.current(),
-                        compose_ui::LOCAL_SOFTWARE_KEYBOARD_CONTROLLER.current().is_some(),
-                    ));
-                    Box!(
-                        modifier =
-                            Modifier.size(20.dp()).focusable(true).test_tag(format!("item{index}"))
-                    );
-                });
-            }
-        );
+        LazyColumn!(modifier = Modifier.size((100.dp(), 100.dp())), move |scope: LazyListScope| {
+            let taken = taken.clone();
+            scope.items(3, move |index| {
+                taken.borrow_mut().push((
+                    LOCAL_FOCUS_MANAGER.current(),
+                    compose_ui::LOCAL_SOFTWARE_KEYBOARD_CONTROLLER.current().is_some(),
+                ));
+                Box!(
+                    modifier =
+                        Modifier.size(20.dp()).focusable(true).test_tag(format!("item{index}"))
+                );
+            });
+        });
     });
     let (manager, has_controller) = managers.borrow().first().cloned().expect("an item composed");
     assert!(has_controller);

@@ -15,7 +15,7 @@ use compose_ui::{UnitExt, platform::DrawOp};
 fn Panel(visible: MutableState<bool>, enter: EnterTransition, exit: ExitTransition) {
     Column!({
         AnimatedVisibility!(visible.get(), enter = enter, exit = exit, {
-            Box!(modifier = Modifier.size_wh(100.dp(), 40.dp()).test_tag("panel"), {
+            Box!(modifier = Modifier.size((100.dp(), 40.dp())).test_tag("panel"), {
                 BasicText!("details");
             });
         });

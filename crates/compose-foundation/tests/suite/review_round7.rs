@@ -443,12 +443,9 @@ fn draggable_calls_its_newest_callbacks() {
 #[test]
 fn the_tooltip_stays_while_the_pointer_is_on_it_inside_the_area() {
     let mut ui = ComposeTestRule::with_manual_clock(|| {
-        TooltipArea!(
-            || Box!(modifier = Modifier.size_wh(100.dp(), 50.dp()).test_tag("tooltip")),
-            {
-                Box!(modifier = Modifier.size(300.dp()).test_tag("area"));
-            }
-        );
+        TooltipArea!(|| Box!(modifier = Modifier.size((100.dp(), 50.dp())).test_tag("tooltip")), {
+            Box!(modifier = Modifier.size(300.dp()).test_tag("area"));
+        });
     });
     send(&mut ui, PointerEvent::moved(Offset::new(50.0, 50.0), false));
     ui.advance_time_by(Duration::from_millis(600));
@@ -470,11 +467,11 @@ fn the_tooltip_stays_while_the_pointer_is_on_it_inside_the_area() {
 fn a_tooltip_without_room_below_the_pointer_shows_above_it() {
     let mut ui = ComposeTestRule::with_manual_clock(|| {
         Column!({
-            Box!(modifier = Modifier.size_wh(400.dp(), 700.dp()));
+            Box!(modifier = Modifier.size((400.dp(), 700.dp())));
             TooltipArea!(
-                || Box!(modifier = Modifier.size_wh(100.dp(), 50.dp()).test_tag("tooltip")),
+                || Box!(modifier = Modifier.size((100.dp(), 50.dp())).test_tag("tooltip")),
                 {
-                    Box!(modifier = Modifier.size_wh(400.dp(), 100.dp()));
+                    Box!(modifier = Modifier.size((400.dp(), 100.dp())));
                 }
             );
         });

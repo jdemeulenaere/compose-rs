@@ -1,6 +1,7 @@
 //! Chips and badges, as Compose's Material 3: `AssistChip`, `FilterChip`, `SuggestionChip`,
 //! `Badge` and `BadgedBox`.
 
+use compose_ui::ClickableOptions;
 use std::rc::Rc;
 
 use compose_foundation::BorderStroke;
@@ -41,12 +42,20 @@ fn chip(
     let typography = MaterialTheme::typography();
     let mut surface = minimum_interactive_component_size(modifier)
         .size_in(SizeSpec::bounds(Dp::UNSPECIFIED, 32.dp(), Dp::UNSPECIFIED, Dp::UNSPECIFIED))
-        .background_shape(look.container, shape)
+        .background_with(look.container, shape, 1.0)
         .clip(shape);
     if let Some(border) = look.border {
         surface = surface.border(border.width, border.color, shape);
     }
-    surface = surface.clickable_indicated(enabled, Some(role), look.label, on_click);
+    surface = surface.clickable_with(
+        ClickableOptions {
+            enabled,
+            role: Some(role),
+            indication: look.label.into(),
+            ..ClickableOptions::DEFAULT
+        },
+        on_click,
+    );
     if let Some(selected) = selected {
         surface = surface.semantics(false, move |config| config.selected = Some(selected));
     }
@@ -56,7 +65,7 @@ fn chip(
         let (label, leading, trailing) =
             (label.clone(), leading_icon.clone(), trailing_icon.clone());
         Row(
-            surface.clone().padding_sides(start, 0.dp(), end, 0.dp()),
+            surface.clone().padding((start, 0.dp(), end, 0.dp())),
             Arrangement::spaced_by(8.dp()).into(),
             Alignment::CENTER_VERTICALLY,
             compose_runtime::callback(move |_| {
@@ -214,7 +223,7 @@ pub fn Badge(
     let size = if content.is_some() { 16.dp() } else { 6.dp() };
     let modifier = modifier
         .size_in(SizeSpec::bounds(size, size, Dp::UNSPECIFIED, Dp::UNSPECIFIED))
-        .background_shape(container_color, pill)
+        .background_with(container_color, pill, 1.0)
         .clip(pill);
     match content {
         Some(content) => {
@@ -222,7 +231,7 @@ pub fn Badge(
                 CompositionLocalProvider(LOCAL_TEXT_STYLE.provides(typography.label_small), || {
                     let content = content.clone();
                     Box(
-                        modifier.clone().padding_horizontal_vertical(4.dp(), 0.dp()),
+                        modifier.clone().padding((4.dp(), 0.dp())),
                         Alignment::CENTER,
                         false,
                         compose_runtime::callback(move |_| content()),

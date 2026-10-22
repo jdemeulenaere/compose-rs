@@ -33,7 +33,7 @@ fn pixel() -> ImageBitmap {
 fn a_dialogs_semantics_node_has_its_contents_bounds() {
     let mut ui = ComposeTestRule::sized(IntSize::new(400, 400), || {
         Dialog!(on_dismiss_request = || {}, {
-            Box!(modifier = Modifier.size_wh(100.dp(), 50.dp()).test_tag("content"));
+            Box!(modifier = Modifier.size((100.dp(), 50.dp())).test_tag("content"));
         });
     });
     let content = ui.on_node_with_tag("content").fetch_semantics_node().bounds;

@@ -40,7 +40,7 @@ fn start_alignments_and_padding_are_at_the_right() {
             Box!(
                 modifier = Modifier
                     .fill_max_width()
-                    .padding_sides(10.dp(), 0.dp(), 30.dp(), 0.dp())
+                    .padding((10.dp(), 0.dp(), 30.dp(), 0.dp()))
                     .height(10.dp())
                     .test_tag("padded")
             );
@@ -66,12 +66,9 @@ fn start_alignments_and_padding_are_at_the_right() {
 #[test]
 fn padding_insets_the_content_from_the_start_on_the_right() {
     let mut ui = rtl(|| {
-        Box!(
-            modifier = Modifier.width(100.dp()).padding_sides(10.dp(), 0.dp(), 30.dp(), 0.dp()),
-            {
-                Box!(modifier = Modifier.fill_max_width().height(10.dp()).test_tag("content"));
-            }
-        );
+        Box!(modifier = Modifier.width(100.dp()).padding((10.dp(), 0.dp(), 30.dp(), 0.dp())), {
+            Box!(modifier = Modifier.fill_max_width().height(10.dp()).test_tag("content"));
+        });
     });
     let content = ui.on_node_with_tag("content").fetch_semantics_node().bounds;
     assert_eq!((content.left, content.right), (130.0, 190.0));

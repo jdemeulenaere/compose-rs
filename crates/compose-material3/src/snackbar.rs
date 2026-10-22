@@ -524,7 +524,7 @@ pub fn PlainTooltip(
                 Box(
                     Modifier
                         .size_in(SizeSpec::bounds(40.dp(), 24.dp(), 200.dp(), Dp::UNSPECIFIED))
-                        .padding_horizontal_vertical(8.dp(), 4.dp()),
+                        .padding((8.dp(), 4.dp())),
                     Alignment::CENTER_START,
                     false,
                     compose_runtime::callback(move |_| content()),

@@ -20,10 +20,10 @@ use support::*;
 fn layouts_measure_and_place_with_modifiers() {
     let host = host(|| {
         Column!(modifier = Modifier.padding(10.dp()), {
-            Leaf(Modifier.size_wh(30.dp(), 20.dp()));
+            Leaf(Modifier.size((30.dp(), 20.dp())));
             Row!({
                 Leaf(Modifier.size(5.dp()));
-                Leaf(Modifier.padding_horizontal_vertical(2.dp(), 1.dp()).size(10.dp()));
+                Leaf(Modifier.padding((2.dp(), 1.dp())).size(10.dp()));
             });
         });
     });
@@ -52,9 +52,9 @@ fn size_modifiers_follow_compose() {
             Leaf(Modifier.width(300.dp()).height(4.dp()));
             // Fills the width.
             Leaf(Modifier.fill_max_width().height(4.dp()));
-            Leaf(Modifier.fill_max_width_fraction(0.25).height(4.dp()));
+            Leaf(Modifier.fill_max_width_with(0.25).height(4.dp()));
             // Required: measured at 300, seen at 200, centered.
-            Leaf(Modifier.required_size(300.dp(), 4.dp()));
+            Leaf(Modifier.required_size((300.dp(), 4.dp())));
             // Bounds: at least 10 wide.
             Leaf(Modifier.size_in(SizeSpec::bounds(
                 10.dp(),
@@ -244,7 +244,10 @@ fn the_innermost_clickable_takes_the_click_and_the_topmost_sibling_is_hit() {
 fn a_disabled_clickable_ignores_clicks_and_its_parent_gets_them() {
     let mut host = host(|| {
         Stack!(modifier = Modifier.clickable(|| log("parent")), {
-            Leaf(Modifier.size(20.dp()).clickable_with(false, None, || log("child")));
+            Leaf(Modifier.size(20.dp()).clickable_with(
+                ClickableOptions { enabled: false, ..ClickableOptions::DEFAULT },
+                || log("child"),
+            ));
         });
     });
     click(&mut host, 5.0, 5.0);
@@ -301,10 +304,9 @@ fn toggleable_calls_back_with_the_new_value() {
     let checked = mutable_state_of(false);
     let handle = checked.handle();
     let mut host = host(move || {
-        Leaf(Modifier.size(20.dp()).toggleable(
+        Leaf(Modifier.size(20.dp()).toggleable_with(
             handle.get(),
-            true,
-            Some(Role::Checkbox),
+            ClickableOptions { role: Some(Role::Checkbox), ..ClickableOptions::DEFAULT },
             move |value| handle.set(value),
         ));
     });
@@ -330,7 +332,10 @@ fn tab_moves_focus_through_clickables_and_enter_clicks() {
                     .clickable(|| log("a")),
             );
             Leaf(Modifier.size(10.dp()).clickable(|| log("b")));
-            Leaf(Modifier.size(10.dp()).clickable_with(false, None, || log("disabled")));
+            Leaf(Modifier.size(10.dp()).clickable_with(
+                ClickableOptions { enabled: false, ..ClickableOptions::DEFAULT },
+                || log("disabled"),
+            ));
         });
     });
     assert!(host.send_key(KeyEvent::down(Key::Tab)));
@@ -449,7 +454,7 @@ fn a_size_change_remeasures_up_to_the_first_ancestor_whose_size_holds() {
             // A fixed-size box: its size holds whatever its content does.
             Stack!(modifier = Modifier.size(50.dp()), {
                 Column!({
-                    Leaf(Modifier.size_wh((handle.get() as f32).dp(), 5.dp()));
+                    Leaf(Modifier.size(((handle.get() as f32).dp(), 5.dp())));
                     Leaf(Modifier.size(5.dp()));
                 });
             });

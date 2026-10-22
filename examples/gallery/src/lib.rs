@@ -47,7 +47,7 @@ pub fn GalleryWith(about: bool) {
                 ModalDrawerSheet!({
                     Text!(
                         "compose-rs",
-                        modifier = Modifier.padding_sides(28.dp(), 24.dp(), 16.dp(), 16.dp()),
+                        modifier = Modifier.padding((28.dp(), 24.dp(), 16.dp(), 16.dp())),
                         style = MaterialTheme::typography().title_medium
                     );
                     NavigationDrawerItem!(
@@ -116,8 +116,7 @@ pub fn GalleryWith(about: bool) {
                             AboutDialog(dialog);
                         }
                         Column!(
-                            modifier =
-                                Modifier.padding_values(padding).padding(16.dp()).fill_max_size(),
+                            modifier = Modifier.padding(padding).padding(16.dp()).fill_max_size(),
                             vertical_arrangement = Arrangement::spaced_by(12.dp()),
                             |column| {
                                 Controls(cards);
@@ -302,7 +301,7 @@ fn Cards(count: u32, query: String, list: LazyListState, modifier: Modifier) {
         let adapter = remember_lazy_list_scrollbar_adapter(list);
         VerticalScrollbar!(
             adapter,
-            modifier = Modifier.fill_max_height().padding_sides(4.dp(), 0.dp(), 0.dp(), 0.dp())
+            modifier = Modifier.fill_max_height().padding((4.dp(), 0.dp(), 0.dp(), 0.dp()))
         );
     });
 }
@@ -339,7 +338,7 @@ fn Controls(cards: MutableState<u32>) {
     });
     Slider!(level.get(), move |value| level.set(value));
     Row!(
-        modifier = Modifier.padding_horizontal_vertical(0.dp(), 8.dp()),
+        modifier = Modifier.padding((0.dp(), 8.dp())),
         horizontal_arrangement = Arrangement::spaced_by(16.dp()),
         vertical_alignment = Alignment::CENTER_VERTICALLY,
         |row: RowScope| {

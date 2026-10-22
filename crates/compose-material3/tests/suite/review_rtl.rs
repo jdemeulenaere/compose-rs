@@ -46,7 +46,7 @@ fn Growing(wide: MutableState<bool>) {
         {
             Box!(
                 modifier = Modifier
-                    .size_wh(if wide.get() { 100.dp() } else { 50.dp() }, 20.dp())
+                    .size((if wide.get() { 100.dp() } else { 50.dp() }, 20.dp()))
                     .test_tag("content")
             );
         }
@@ -94,7 +94,7 @@ fn Screen() {
                 );
             },
             |padding: PaddingValues| {
-                Column!(modifier = Modifier.padding_values(padding), {
+                Column!(modifier = Modifier.padding(padding), {
                     TextField!(
                         String::from("abc"),
                         |_| {},

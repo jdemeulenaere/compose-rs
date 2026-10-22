@@ -320,7 +320,7 @@ fn decorated_field(
                 .on_focus_changed(move |now| focused.set(now));
             container = match variant {
                 Variant::Filled => {
-                    container.background_shape(container_color, TextFieldDefaults::shape())
+                    container.background_with(container_color, TextFieldDefaults::shape(), 1.0)
                 }
                 Variant::Outlined => {
                     let thickness = if is_focused {
@@ -330,16 +330,18 @@ fn decorated_field(
                     };
                     let shape = OutlinedTextFieldDefaults::shape();
                     let (label_width, label_start) = (label_width.clone(), label_start.clone());
-                    container.background_shape(container_color, shape).draw_behind(move |scope| {
-                        draw_notched_outline(
-                            scope,
-                            shape,
-                            thickness,
-                            indicator,
-                            label_start.get(),
-                            if has_label { label_width.get() * progress } else { 0.0 },
-                        )
-                    })
+                    container.background_with(container_color, shape, 1.0).draw_behind(
+                        move |scope| {
+                            draw_notched_outline(
+                                scope,
+                                shape,
+                                thickness,
+                                indicator,
+                                label_start.get(),
+                                if has_label { label_width.get() * progress } else { 0.0 },
+                            )
+                        },
+                    )
                 }
             };
             let layout = DecorationLayout {
@@ -415,12 +417,12 @@ fn decorated_field(
                         CompositionLocalProvider(LOCAL_TEXT_STYLE.provides(style), || {
                             let content = content.clone();
                             Box(
-                                Modifier.alpha(prefix_suffix_alpha).padding_sides(
+                                Modifier.alpha(prefix_suffix_alpha).padding((
                                     padding.0,
                                     0.dp(),
                                     padding.1,
                                     0.dp(),
-                                ),
+                                )),
                                 Alignment::TOP_START,
                                 false,
                                 compose_runtime::callback(move |_| content()),
@@ -456,12 +458,12 @@ fn decorated_field(
                                         || {
                                             let supporting_text = supporting_text.clone();
                                             Box(
-                                                Modifier.padding_sides(
+                                                Modifier.padding((
                                                     16.dp(),
                                                     4.dp(),
                                                     16.dp(),
                                                     0.dp(),
-                                                ),
+                                                )),
                                                 Alignment::TOP_START,
                                                 false,
                                                 compose_runtime::callback(move |_| {
@@ -481,7 +483,7 @@ fn decorated_field(
     };
     // Room above an outlined field for its floated label, as `OutlinedTextFieldTopPadding`.
     let modifier = match variant {
-        Variant::Outlined if has_label => modifier.padding_sides(0.dp(), 8.dp(), 0.dp(), 0.dp()),
+        Variant::Outlined if has_label => modifier.padding((0.dp(), 8.dp(), 0.dp(), 0.dp())),
         _ => modifier,
     };
     // In error, the field says so, as Compose's `semantics { error(…) }`.

@@ -16,7 +16,7 @@ fn EmptyField() {
     BasicTextField!(
         value = text.get(),
         on_value_change = move |value| text.set(value),
-        modifier = Modifier.size_wh(200.dp(), 40.dp()).test_tag("field"),
+        modifier = Modifier.size((200.dp(), 40.dp())).test_tag("field"),
         single_line = true,
     );
 }

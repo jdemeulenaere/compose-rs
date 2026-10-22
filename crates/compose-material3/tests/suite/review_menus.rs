@@ -18,8 +18,7 @@ fn bounds(ui: &mut ComposeTestRule, tag: &str) -> compose_ui::Rect {
 fn Anchored(start: i32, top: i32, items: usize) {
     MaterialTheme!({
         Box!(
-            modifier =
-                Modifier.padding_sides((start as f32).dp(), (top as f32).dp(), 0.dp(), 0.dp()),
+            modifier = Modifier.padding(((start as f32).dp(), (top as f32).dp(), 0.dp(), 0.dp())),
             {
                 Box!(modifier = Modifier.size(40.dp()).test_tag("anchor"), {
                     DropdownMenu!(true, || {}, modifier = Modifier.test_tag("menu"), {

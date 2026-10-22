@@ -5,6 +5,7 @@
 use compose_foundation::layout::Box;
 use compose_foundation::{BorderStroke, CIRCLE_SHAPE};
 use compose_runtime::{CompositionLocalProvider, composable};
+use compose_ui::ClickableOptions;
 use compose_ui::{
     Alignment, Color, Dp, DrawModifierNode, DrawScope, ImageVector, Modifier, ModifierNode,
     ModifierNodeElement, MutableInteractionSource, Offset, Paint, Role, Shape, UnitExt,
@@ -33,7 +34,7 @@ pub fn Icon(
         None => modifier,
     };
     compose_foundation::layout::Spacer(
-        modifier.size_wh(width, height).then_custom(IconElement { image_vector, tint }),
+        modifier.size((width, height)).then_custom(IconElement { image_vector, tint }),
     );
 }
 
@@ -253,19 +254,18 @@ pub fn IconButton(
 ) {
     let color = colors.content_color(enabled);
     let mut modifier = minimum_interactive_component_size(modifier)
-        .size_wh(40.dp(), 40.dp())
+        .size((40.dp(), 40.dp()))
         .clip(CIRCLE_SHAPE)
         .background(colors.container_color(enabled));
-    modifier = match interaction_source {
-        Some(interaction_source) => modifier.clickable_interaction(
+    modifier = modifier.clickable_with(
+        ClickableOptions {
             enabled,
-            Some(Role::Button),
-            color,
+            role: Some(Role::Button),
+            indication: color.into(),
             interaction_source,
-            on_click,
-        ),
-        None => modifier.clickable_indicated(enabled, Some(Role::Button), color, on_click),
-    };
+        },
+        on_click,
+    );
     CompositionLocalProvider(LOCAL_CONTENT_COLOR.provides(color), || {
         Box(
             modifier.clone(),
@@ -292,14 +292,16 @@ pub fn IconToggleButton(
     let interaction_source = crate::components::remembered_interaction_source(interaction_source);
     let color = colors.content_color(enabled, checked);
     let modifier = minimum_interactive_component_size(modifier)
-        .size_wh(40.dp(), 40.dp())
+        .size((40.dp(), 40.dp()))
         .clip(CIRCLE_SHAPE)
         .background(colors.container_color(enabled, checked))
-        .clickable_interaction(
-            enabled,
-            Some(Role::Checkbox),
-            color,
-            interaction_source,
+        .clickable_with(
+            ClickableOptions {
+                enabled,
+                role: Some(Role::Checkbox),
+                indication: color.into(),
+                interaction_source: Some(interaction_source),
+            },
             move || on_checked_change(!checked),
         )
         .semantics(false, move |config| config.toggleable_state = Some(checked.into()));

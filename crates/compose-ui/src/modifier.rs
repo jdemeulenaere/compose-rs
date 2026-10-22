@@ -10,6 +10,7 @@ use compose_runtime::{Callback, ComposeArg, IntoCallback};
 use smallvec::SmallVec;
 
 use crate::alignment::{Alignment, HorizontalAlignment, VerticalAlignment};
+use crate::brush::Brush;
 use crate::constraints::Constraints;
 use crate::draw::DrawScope;
 use crate::graphics::{Color, Shape};
@@ -17,7 +18,7 @@ use crate::input::{EventContext, KeyEvent, PointerEvent, PointerEventPass};
 use crate::layout::{Measurable, MeasureResult, MeasureScope};
 use crate::semantics::{Role, SemanticsConfiguration};
 use crate::text::SharedString;
-use crate::unit::{Dp, IntSize};
+use crate::unit::{Dp, DpSize, IntSize};
 
 /// A chain of modifier elements, in call order: `Modifier.padding(8.dp()).background(…)` pads,
 /// then draws the background inside the padding.
@@ -59,19 +60,14 @@ impl Modifier {
 
     // ---- Layout -----------------------------------------------------------------------------
 
-    pub fn padding(self, all: Dp) -> Modifier {
-        self.padding_values(PaddingValues::all(all))
+    /// Space around the content, as `Modifier.padding`'s overloads: `padding(8.dp())` on every
+    /// side, `padding((16.dp(), 8.dp()))` horizontally and vertically, and
+    /// `padding(PaddingValues { start: 8.dp(), ..PaddingValues::ZERO })` per side.
+    pub fn padding(self, padding: impl Into<PaddingValues>) -> Modifier {
+        self.padding_of(padding.into())
     }
 
-    pub fn padding_horizontal_vertical(self, horizontal: Dp, vertical: Dp) -> Modifier {
-        self.padding_values(PaddingValues::symmetric(horizontal, vertical))
-    }
-
-    pub fn padding_sides(self, start: Dp, top: Dp, end: Dp, bottom: Dp) -> Modifier {
-        self.padding_values(PaddingValues::new(start, top, end, bottom))
-    }
-
-    pub fn padding_values(self, padding: PaddingValues) -> Modifier {
+    fn padding_of(self, padding: PaddingValues) -> Modifier {
         self.then_element(Element::Padding(padding))
     }
 
@@ -86,12 +82,11 @@ impl Modifier {
         self.then_element(Element::Offset(x, y))
     }
 
-    pub fn size(self, size: Dp) -> Modifier {
-        self.size_in(SizeSpec::exact(size, size, false))
-    }
-
-    pub fn size_wh(self, width: Dp, height: Dp) -> Modifier {
-        self.size_in(SizeSpec::exact(width, height, false))
+    /// A size within the incoming constraints, as `Modifier.size`'s overloads: `size(40.dp())`
+    /// square, `size((100.dp(), 50.dp()))` or a `DpSize` for a width and a height.
+    pub fn size(self, size: impl Into<DpSize>) -> Modifier {
+        let size = size.into();
+        self.size_in(SizeSpec::exact(size.width, size.height, false))
     }
 
     pub fn width(self, width: Dp) -> Modifier {
@@ -102,9 +97,11 @@ impl Modifier {
         self.size_in(SizeSpec::exact(Dp::UNSPECIFIED, height, false))
     }
 
-    /// Exact sizes, overriding the incoming constraints, as `Modifier.requiredSize`.
-    pub fn required_size(self, width: Dp, height: Dp) -> Modifier {
-        self.size_in(SizeSpec::exact(width, height, true))
+    /// Exact sizes, overriding the incoming constraints, as `Modifier.requiredSize`'s overloads
+    /// (as `size`).
+    pub fn required_size(self, size: impl Into<DpSize>) -> Modifier {
+        let size = size.into();
+        self.size_in(SizeSpec::exact(size.width, size.height, true))
     }
 
     /// Bounds on the size, as `Modifier.sizeIn` (`Dp::UNSPECIFIED` for no bound).
@@ -124,26 +121,30 @@ impl Modifier {
     }
 
     pub fn fill_max_width(self) -> Modifier {
-        self.fill_max_width_fraction(1.0)
+        self.fill_max_width_with(1.0)
     }
 
     pub fn fill_max_height(self) -> Modifier {
-        self.fill_max_height_fraction(1.0)
+        self.fill_max_height_with(1.0)
     }
 
     pub fn fill_max_size(self) -> Modifier {
-        self.fill_max_size_fraction(1.0)
+        self.fill_max_size_with(1.0)
     }
 
-    pub fn fill_max_width_fraction(self, fraction: f32) -> Modifier {
+    /// `fill_max_width` with its `fraction` of the maximum width, as
+    /// `Modifier.fillMaxWidth(fraction)`.
+    pub fn fill_max_width_with(self, fraction: f32) -> Modifier {
         self.then_element(Element::Fill(Fill { horizontal: Some(fraction), vertical: None }))
     }
 
-    pub fn fill_max_height_fraction(self, fraction: f32) -> Modifier {
+    /// `fill_max_height` with its `fraction`, as `Modifier.fillMaxHeight(fraction)`.
+    pub fn fill_max_height_with(self, fraction: f32) -> Modifier {
         self.then_element(Element::Fill(Fill { horizontal: None, vertical: Some(fraction) }))
     }
 
-    pub fn fill_max_size_fraction(self, fraction: f32) -> Modifier {
+    /// `fill_max_size` with its `fraction`, as `Modifier.fillMaxSize(fraction)`.
+    pub fn fill_max_size_with(self, fraction: f32) -> Modifier {
         self.then_element(Element::Fill(Fill {
             horizontal: Some(fraction),
             vertical: Some(fraction),
@@ -151,12 +152,13 @@ impl Modifier {
     }
 
     /// A share of the remaining space in a `Row` or `Column`, as `RowScope.weight`.
-    pub fn weight(self, _scope: impl WeightScope, weight: f32) -> Modifier {
-        self.weight_filled(_scope, weight, true)
+    pub fn weight(self, scope: impl WeightScope, weight: f32) -> Modifier {
+        self.weight_with(scope, weight, true)
     }
 
-    /// `weight` with `fill`: whether the child must take its whole share.
-    pub fn weight_filled(self, _scope: impl WeightScope, weight: f32, fill: bool) -> Modifier {
+    /// `weight` with `fill`: whether the child must take its whole share, as
+    /// `Modifier.weight(weight, fill)`.
+    pub fn weight_with(self, _scope: impl WeightScope, weight: f32, fill: bool) -> Modifier {
         assert!(weight > 0.0, "compose-ui: weight must be positive, was {weight}");
         // As Compose: an infinite weight is the largest finite one.
         self.then_element(Element::Weight(weight.min(f32::MAX), fill))
@@ -170,12 +172,33 @@ impl Modifier {
 
     // ---- Drawing ----------------------------------------------------------------------------
 
-    pub fn background(self, color: Color) -> Modifier {
-        self.background_shape(color, Shape::Rectangle)
+    /// Fills the bounds behind the content with a color or a brush, as `Modifier.background`.
+    pub fn background(self, brush: impl Into<Brush>) -> Modifier {
+        self.background_of(brush.into(), Shape::Rectangle, 1.0)
     }
 
-    pub fn background_shape(self, color: Color, shape: Shape) -> Modifier {
-        self.then_element(Element::Background(color, shape))
+    /// `background` in `shape`, at `alpha`, as `Modifier.background(brush, shape, alpha)` (and
+    /// `background(color, shape)`: an alpha of 1).
+    pub fn background_with(self, brush: impl Into<Brush>, shape: Shape, alpha: f32) -> Modifier {
+        self.background_of(brush.into(), shape, alpha)
+    }
+
+    fn background_of(self, brush: Brush, shape: Shape, alpha: f32) -> Modifier {
+        match brush {
+            Brush::Solid(color) => {
+                let color = if alpha < 1.0 {
+                    color.with_alpha(color.alpha() as f32 / 255.0 * alpha.max(0.0))
+                } else {
+                    color
+                };
+                self.then_element(Element::Background(color, shape))
+            }
+            brush => self.then_custom(crate::draw_modifiers::BackgroundBrushElement {
+                brush,
+                shape,
+                alpha,
+            }),
+        }
     }
 
     pub fn border(self, width: Dp, color: Color, shape: Shape) -> Modifier {
@@ -204,52 +227,22 @@ impl Modifier {
     /// Calls `on_click` on a press released inside, and on Enter or Space when focused, as
     /// `Modifier.clickable`.
     pub fn clickable(self, on_click: impl IntoCallback<dyn Fn()>) -> Modifier {
-        self.clickable_with(true, None, on_click)
+        self.clickable_with(ClickableOptions::DEFAULT, on_click)
     }
 
+    /// `clickable` with Compose's optional parameters (`enabled`, `role`, `indication`,
+    /// `interaction_source`): `Modifier.clickable_with(ClickableOptions { role:
+    /// Some(Role::Button), ..ClickableOptions::DEFAULT }, on_click)`.
     pub fn clickable_with(
         self,
-        enabled: bool,
-        role: Option<Role>,
-        on_click: impl IntoCallback<dyn Fn()>,
-    ) -> Modifier {
-        self.clickable_indicated(enabled, role, Indication::NONE, on_click)
-    }
-
-    /// `clickable_with` drawing a state layer of `indication` while pressed or focused, as
-    /// Compose's `clickable(indication = …)` with Material's ripple (without its animation).
-    pub fn clickable_indicated(
-        self,
-        enabled: bool,
-        role: Option<Role>,
-        indication: impl Into<Indication>,
+        options: ClickableOptions,
         on_click: impl IntoCallback<dyn Fn()>,
     ) -> Modifier {
         self.then_element(Element::Clickable(Clickable {
-            enabled,
-            role,
-            indication: indication.into(),
-            interaction_source: None,
-            on_click: on_click.into_callback(),
-        }))
-    }
-
-    /// `clickable_indicated` reporting its press to `interaction_source`, as
-    /// `clickable(interactionSource, indication)`: with an unspecified `indication`, something
-    /// else shows the press.
-    pub fn clickable_interaction(
-        self,
-        enabled: bool,
-        role: Option<Role>,
-        indication: impl Into<Indication>,
-        interaction_source: crate::interaction::MutableInteractionSource,
-        on_click: impl IntoCallback<dyn Fn()>,
-    ) -> Modifier {
-        self.then_element(Element::Clickable(Clickable {
-            enabled,
-            role,
-            indication: indication.into(),
-            interaction_source: Some(interaction_source),
+            enabled: options.enabled,
+            role: options.role,
+            indication: options.indication,
+            interaction_source: options.interaction_source,
             on_click: on_click.into_callback(),
         }))
     }
@@ -258,54 +251,43 @@ impl Modifier {
     pub fn toggleable(
         self,
         value: bool,
-        enabled: bool,
-        role: Option<Role>,
         on_value_change: impl IntoCallback<dyn Fn(bool)>,
     ) -> Modifier {
-        self.toggleable_indicated(value, enabled, role, Indication::NONE, on_value_change)
+        self.toggleable_with(value, ClickableOptions::DEFAULT, on_value_change)
     }
 
-    /// `toggleable` drawing a state layer of `indication`, as `clickable_indicated`.
-    pub fn toggleable_indicated(
+    /// `toggleable` with Compose's optional parameters, as `clickable_with` (an
+    /// `interaction_source` isn't reported to yet).
+    pub fn toggleable_with(
         self,
         value: bool,
-        enabled: bool,
-        role: Option<Role>,
-        indication: impl Into<Indication>,
+        options: ClickableOptions,
         on_value_change: impl IntoCallback<dyn Fn(bool)>,
     ) -> Modifier {
         self.then_element(Element::Toggleable(Toggleable {
             value,
-            enabled,
-            role,
-            indication: indication.into(),
+            enabled: options.enabled,
+            role: options.role,
+            indication: options.indication,
             on_value_change: on_value_change.into_callback(),
         }))
     }
 
     /// A selectable item (a radio button, a tab): a click calls `on_click`, and its semantics
     /// say whether it's `selected`, as `Modifier.selectable`.
-    pub fn selectable(
-        self,
-        selected: bool,
-        enabled: bool,
-        role: Option<Role>,
-        on_click: impl IntoCallback<dyn Fn()>,
-    ) -> Modifier {
-        self.selectable_indicated(selected, enabled, role, Indication::NONE, on_click)
+    pub fn selectable(self, selected: bool, on_click: impl IntoCallback<dyn Fn()>) -> Modifier {
+        self.selectable_with(selected, ClickableOptions::DEFAULT, on_click)
     }
 
-    /// `selectable` drawing a state layer of `indication`, as `clickable_indicated`.
-    pub fn selectable_indicated(
+    /// `selectable` with Compose's optional parameters, as `clickable_with`.
+    pub fn selectable_with(
         self,
         selected: bool,
-        enabled: bool,
-        role: Option<Role>,
-        indication: impl Into<Indication>,
+        options: ClickableOptions,
         on_click: impl IntoCallback<dyn Fn()>,
     ) -> Modifier {
         self.semantics(false, |config| config.selected = Some(selected))
-            .clickable_indicated(enabled, role, indication, on_click)
+            .clickable_with(options, on_click)
     }
 
     /// Groups selectable items (radio buttons) for accessibility, as
@@ -320,38 +302,32 @@ impl Modifier {
     /// instead. Enter and Space click when focused.
     pub fn combined_clickable(
         self,
-        enabled: bool,
-        role: Option<Role>,
         on_long_click: Option<Callback<dyn Fn()>>,
         on_double_click: Option<Callback<dyn Fn()>>,
         on_click: impl IntoCallback<dyn Fn()>,
     ) -> Modifier {
-        self.combined_clickable_indicated(
-            enabled,
-            role,
-            Indication::NONE,
+        self.combined_clickable_with(
+            ClickableOptions::DEFAULT,
             on_long_click,
             on_double_click,
             on_click,
         )
     }
 
-    /// `combined_clickable` drawing a state layer of `indication` while pressed, focused or
-    /// hovered, as `clickable_indicated`.
-    pub fn combined_clickable_indicated(
+    /// `combined_clickable` with Compose's optional parameters, as `clickable_with` (an
+    /// `interaction_source` isn't reported to yet).
+    pub fn combined_clickable_with(
         self,
-        enabled: bool,
-        role: Option<Role>,
-        indication: impl Into<Indication>,
+        options: ClickableOptions,
         on_long_click: Option<Callback<dyn Fn()>>,
         on_double_click: Option<Callback<dyn Fn()>>,
         on_click: impl IntoCallback<dyn Fn()>,
     ) -> Modifier {
         self.then_custom(crate::nodes::CombinedClickableElement {
             clickable: Clickable {
-                enabled,
-                role,
-                indication: indication.into(),
+                enabled: options.enabled,
+                role: options.role,
+                indication: options.indication,
                 interaction_source: None,
                 on_click: on_click.into_callback(),
             },
@@ -446,7 +422,42 @@ impl fmt::Debug for Modifier {
     }
 }
 
-/// Padding in `Dp`, as `PaddingValues`.
+/// What `clickable_with`, `toggleable_with`, `selectable_with` and `combined_clickable_with`
+/// take beyond their required parameters: Compose's optional ones, built by struct update from
+/// `DEFAULT` (D261, D263).
+#[derive(Clone, PartialEq)]
+pub struct ClickableOptions {
+    /// Whether it reacts to input (and says so to accessibility), as `enabled`.
+    pub enabled: bool,
+    /// What it is to accessibility, as `role`.
+    pub role: Option<Role>,
+    /// The state layer drawn while pressed or focused (Material's ripple, without its
+    /// animation), as `indication`; `Indication::NONE` draws none.
+    pub indication: Indication,
+    /// Where its press is reported, as `interactionSource`: with `Indication::NONE`, something
+    /// else shows the press.
+    pub interaction_source: Option<crate::interaction::MutableInteractionSource>,
+}
+
+impl ClickableOptions {
+    /// Compose's defaults: enabled, no role, no indication, no interaction source.
+    pub const DEFAULT: ClickableOptions = ClickableOptions {
+        enabled: true,
+        role: None,
+        indication: Indication::NONE,
+        interaction_source: None,
+    };
+}
+
+impl Default for ClickableOptions {
+    fn default() -> Self {
+        ClickableOptions::DEFAULT
+    }
+}
+
+/// Padding in `Dp`, as `PaddingValues`: `PaddingValues::from(8.dp())` on every side,
+/// `PaddingValues::from((16.dp(), 8.dp()))` horizontally and vertically, or per side by struct
+/// update, `PaddingValues { start: 8.dp(), ..PaddingValues::ZERO }` (Compose's zero defaults).
 #[derive(Clone, Copy, PartialEq, Debug, Default)]
 pub struct PaddingValues {
     pub start: Dp,
@@ -469,6 +480,27 @@ impl PaddingValues {
 
     pub const fn symmetric(horizontal: Dp, vertical: Dp) -> PaddingValues {
         PaddingValues::new(horizontal, vertical, horizontal, vertical)
+    }
+}
+
+impl From<Dp> for PaddingValues {
+    /// The same padding on every side, as `PaddingValues(all)`.
+    fn from(all: Dp) -> PaddingValues {
+        PaddingValues::all(all)
+    }
+}
+
+impl From<(Dp, Dp, Dp, Dp)> for PaddingValues {
+    /// Start, top, end and bottom padding, as `PaddingValues(start, top, end, bottom)`.
+    fn from((start, top, end, bottom): (Dp, Dp, Dp, Dp)) -> PaddingValues {
+        PaddingValues::new(start, top, end, bottom)
+    }
+}
+
+impl From<(Dp, Dp)> for PaddingValues {
+    /// Horizontal and vertical padding, as `PaddingValues(horizontal, vertical)`.
+    fn from((horizontal, vertical): (Dp, Dp)) -> PaddingValues {
+        PaddingValues::symmetric(horizontal, vertical)
     }
 }
 

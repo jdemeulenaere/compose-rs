@@ -285,6 +285,33 @@ pub struct Size {
     pub height: f32,
 }
 
+/// A width and a height in `Dp`, as Compose's `DpSize`: what `Modifier.size` takes, from a
+/// `Dp` (square) or a `(width, height)` tuple.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct DpSize {
+    pub width: Dp,
+    pub height: Dp,
+}
+
+impl DpSize {
+    pub const fn new(width: Dp, height: Dp) -> DpSize {
+        DpSize { width, height }
+    }
+}
+
+impl From<Dp> for DpSize {
+    /// A square.
+    fn from(size: Dp) -> DpSize {
+        DpSize::new(size, size)
+    }
+}
+
+impl From<(Dp, Dp)> for DpSize {
+    fn from((width, height): (Dp, Dp)) -> DpSize {
+        DpSize::new(width, height)
+    }
+}
+
 impl Size {
     pub const ZERO: Size = Size { width: 0.0, height: 0.0 };
 

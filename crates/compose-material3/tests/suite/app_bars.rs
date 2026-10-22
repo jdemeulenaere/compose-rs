@@ -84,7 +84,7 @@ fn Screen(kind: u8, small: bool) {
             |padding: PaddingValues| {
                 Column!(
                     modifier = Modifier
-                        .padding_values(padding)
+                        .padding(padding)
                         .fill_max_size()
                         .vertical_scroll(scroll)
                         .test_tag("content"),

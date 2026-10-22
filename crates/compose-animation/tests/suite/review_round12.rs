@@ -51,7 +51,7 @@ fn an_exit_after_a_finished_part_keeps_that_parts_spec() {
             {
                 Box!(
                     modifier = Modifier
-                        .size_wh(50.dp(), 20.dp())
+                        .size((50.dp(), 20.dp()))
                         .background(Color::BLACK)
                         .test_tag("panel")
                 );

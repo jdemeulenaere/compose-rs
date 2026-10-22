@@ -65,7 +65,7 @@ fn host(kind: MutableState<KeyboardType>, controller: Controller) -> UiHost {
             BasicTextField!(
                 first.get(),
                 move |new: String| first.set(new),
-                modifier = Modifier.size_wh(160.dp(), 40.dp()),
+                modifier = Modifier.size((160.dp(), 40.dp())),
                 keyboard_options = KeyboardOptions {
                     keyboard_type: KeyboardType::Email,
                     ime_action: ImeAction::Next,
@@ -76,7 +76,7 @@ fn host(kind: MutableState<KeyboardType>, controller: Controller) -> UiHost {
             BasicTextField!(
                 second.get(),
                 move |new: String| second.set(new),
-                modifier = Modifier.size_wh(160.dp(), 40.dp()),
+                modifier = Modifier.size((160.dp(), 40.dp())),
                 keyboard_options = KeyboardOptions {
                     keyboard_type: kind.get(),
                     ime_action: ImeAction::Done,

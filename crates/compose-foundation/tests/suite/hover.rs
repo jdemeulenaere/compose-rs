@@ -4,6 +4,7 @@
 use compose_foundation::layout::*;
 use compose_foundation::*;
 use compose_test::*;
+use compose_ui::ClickableOptions;
 use compose_ui::{IntSize, Offset, PointerEvent, UnitExt, platform::DrawOp};
 
 fn layer_alpha(ui: &mut ComposeTestRule) -> Option<u8> {
@@ -20,8 +21,10 @@ fn hovering_a_clickable_shows_its_state_layer() {
     let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), || {
         Column!({
             Box!(
-                modifier =
-                    Modifier.size(50.dp()).clickable_indicated(true, None, Color::RED, || {})
+                modifier = Modifier.size(50.dp()).clickable_with(
+                    ClickableOptions { indication: Color::RED.into(), ..ClickableOptions::DEFAULT },
+                    || {}
+                )
             );
             Box!(modifier = Modifier.size(50.dp()));
         });
@@ -53,7 +56,7 @@ fn hovering_a_clickable_shows_its_state_layer() {
 fn a_text_field_shows_an_i_beam() {
     let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), || {
         Column!({
-            BasicTextField!(String::new(), |_| {}, modifier = Modifier.size_wh(100.dp(), 30.dp()));
+            BasicTextField!(String::new(), |_| {}, modifier = Modifier.size((100.dp(), 30.dp())));
             Box!(
                 modifier = Modifier.size(50.dp()).pointer_hover_icon(compose_ui::PointerIcon::Hand)
             );

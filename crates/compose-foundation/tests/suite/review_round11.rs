@@ -30,24 +30,22 @@ fn tab_into_a_scrolled_list_focuses_its_first_row_in_view() {
     let given = *state;
     let mut ui = ComposeTestRule::sized(IntSize::new(200, 300), move || {
         Column!({
-            Box!(
-                modifier = Modifier.size_wh(100.dp(), 20.dp()).clickable(|| {}).test_tag("before")
-            );
+            Box!(modifier = Modifier.size((100.dp(), 20.dp())).clickable(|| {}).test_tag("before"));
             LazyColumn!(
-                modifier = Modifier.size_wh(100.dp(), 100.dp()),
+                modifier = Modifier.size((100.dp(), 100.dp())),
                 state = given,
                 |scope: LazyListScope| {
                     scope.items(1000, |index| {
                         Box!(
                             modifier = Modifier
-                                .size_wh(100.dp(), 20.dp())
+                                .size((100.dp(), 20.dp()))
                                 .clickable(|| {})
                                 .test_tag(format!("row {index}"))
                         );
                     });
                 }
             );
-            Box!(modifier = Modifier.size_wh(100.dp(), 20.dp()).clickable(|| {}).test_tag("after"));
+            Box!(modifier = Modifier.size((100.dp(), 20.dp())).clickable(|| {}).test_tag("after"));
         });
     });
     ui.on_node_with_tag("before").request_focus().assert_is_focused();

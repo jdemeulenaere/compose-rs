@@ -25,7 +25,7 @@ fn gradient_paint(list: &mut DisplayList, brush: &Brush, size: Size, origin: Off
 fn a_horizontal_gradient_goes_from_its_first_color_to_its_last() {
     let mut list = DisplayList::default();
     let brush =
-        Brush::horizontal_gradient(&[Color::RED, Color::BLUE], 0.0, f32::INFINITY, TileMode::Clamp);
+        Brush::horizontal_gradient([Color::RED, Color::BLUE], 0.0, f32::INFINITY, TileMode::Clamp);
     let paint = gradient_paint(&mut list, &brush, Size::new(100.0, 100.0), Offset::ZERO);
     list.push(DrawOp::DrawRect(Rect::new(0.0, 0.0, 100.0, 100.0), paint));
     let mut renderer = render(&list);
@@ -41,7 +41,7 @@ fn a_horizontal_gradient_goes_from_its_first_color_to_its_last() {
 fn a_radial_gradient_and_a_shaded_path_stay_in_the_lists_coordinates() {
     let mut list = DisplayList::default();
     let brush = Brush::radial_gradient(
-        &[Color::BLACK, Color::WHITE],
+        [Color::BLACK, Color::WHITE],
         Offset::UNSPECIFIED,
         f32::INFINITY,
         TileMode::Clamp,
@@ -90,8 +90,7 @@ fn a_path_clip_keeps_what_is_inside_it() {
 fn a_radial_gradient_without_a_radius_is_solid() {
     let draw = |tile_mode: TileMode| {
         let mut list = DisplayList::default();
-        let brush =
-            Brush::radial_gradient(&[Color::RED, Color::BLUE], Offset::ZERO, 0.0, tile_mode);
+        let brush = Brush::radial_gradient([Color::RED, Color::BLUE], Offset::ZERO, 0.0, tile_mode);
         let paint = gradient_paint(&mut list, &brush, Size::new(100.0, 100.0), Offset::ZERO);
         list.push(DrawOp::DrawRect(Rect::new(0.0, 0.0, 100.0, 100.0), paint));
         render(&list).pixel(50, 50)
@@ -107,7 +106,7 @@ fn a_radial_gradient_without_a_radius_is_solid() {
 fn a_gradient_interpolates_premultiplied_colors() {
     let mut list = DisplayList::default();
     let brush = Brush::horizontal_gradient(
-        &[Color::TRANSPARENT, Color::RED],
+        [Color::TRANSPARENT, Color::RED],
         0.0,
         f32::INFINITY,
         TileMode::Clamp,

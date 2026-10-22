@@ -80,7 +80,7 @@ fn Item(index: usize) {
 #[composable]
 fn List(state: LazyListState) {
     LazyColumn!(
-        modifier = Modifier.size_wh(100.dp(), 100.dp()),
+        modifier = Modifier.size((100.dp(), 100.dp())),
         state = state,
         |scope: LazyListScope| {
             scope.items(1000, |index| Item(index));
@@ -170,10 +170,10 @@ fn one_slow_item_does_not_disable_prefetch_for_good() {
 #[composable]
 fn Cells(row: usize) {
     COMPOSED.with(|map| *map.borrow_mut().entry(row).or_insert(0) += 1);
-    LazyRow!(modifier = Modifier.size_wh(100.dp(), 20.dp()), |scope: LazyListScope| {
+    LazyRow!(modifier = Modifier.size((100.dp(), 20.dp())), |scope: LazyListScope| {
         scope.items(20, |_cell| {
             CELLS.with(|cells| cells.set(cells.get() + 1));
-            Box!(modifier = Modifier.size_wh(30.dp(), 20.dp()));
+            Box!(modifier = Modifier.size((30.dp(), 20.dp())));
         });
     });
 }
@@ -193,7 +193,7 @@ fn a_prefetched_row_of_a_nested_lazy_row_is_composed_ahead() {
     let given = *state;
     let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || {
         LazyColumn!(
-            modifier = Modifier.size_wh(100.dp(), 100.dp()),
+            modifier = Modifier.size((100.dp(), 100.dp())),
             state = given,
             |scope: LazyListScope| {
                 scope.items(100, Cells);
@@ -228,12 +228,12 @@ fn a_prefetched_box_with_constraints_is_ready_for_the_frame() {
     let given = *state;
     let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || {
         LazyColumn!(
-            modifier = Modifier.size_wh(100.dp(), 100.dp()),
+            modifier = Modifier.size((100.dp(), 100.dp())),
             state = given,
             |scope: LazyListScope| {
                 scope.items(100, |index| {
                     BoxWithConstraints!(
-                        modifier = Modifier.size_wh(100.dp(), 20.dp()),
+                        modifier = Modifier.size((100.dp(), 20.dp())),
                         move |constraints: BoxWithConstraintsScope| {
                             let _ = constraints.max_height();
                             COMPOSED.with(|map| *map.borrow_mut().entry(index).or_insert(0) += 1);
@@ -269,7 +269,7 @@ fn AutoItem(index: usize) {
     }
     Box!(
         modifier = Modifier
-            .size_wh(100.dp(), 20.dp())
+            .size((100.dp(), 20.dp()))
             .focus_requester(requester)
             .focusable(true)
             .test_tag(format!("row {index}"))
@@ -282,7 +282,7 @@ fn auto_list() -> (ComposeTestRule, Owned<LazyListState>) {
     let given = *state;
     let ui = ComposeTestRule::sized(IntSize::new(200, 200), move || {
         LazyColumn!(
-            modifier = Modifier.size_wh(100.dp(), 100.dp()),
+            modifier = Modifier.size((100.dp(), 100.dp())),
             state = given,
             |scope: LazyListScope| {
                 scope.items(1000, AutoItem);

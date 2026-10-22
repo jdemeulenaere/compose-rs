@@ -25,7 +25,7 @@ fn Editor(initial: &'static str, single_line: bool) {
     BasicTextField!(
         value = text.get(),
         on_value_change = move |value| text.set(value),
-        modifier = Modifier.size_wh(200.dp(), 40.dp()).test_tag("field"),
+        modifier = Modifier.size((200.dp(), 40.dp())).test_tag("field"),
         single_line = single_line,
     );
 }
@@ -110,13 +110,13 @@ fn losing_focus_keeps_the_composed_text() {
             BasicTextField!(
                 value = first.get(),
                 on_value_change = move |value| first.set(value),
-                modifier = Modifier.size_wh(200.dp(), 40.dp()).test_tag("first"),
+                modifier = Modifier.size((200.dp(), 40.dp())).test_tag("first"),
                 single_line = true,
             );
             BasicTextField!(
                 value = second.get(),
                 on_value_change = move |value| second.set(value),
-                modifier = Modifier.size_wh(200.dp(), 40.dp()).test_tag("second"),
+                modifier = Modifier.size((200.dp(), 40.dp())).test_tag("second"),
                 single_line = true,
             );
         });

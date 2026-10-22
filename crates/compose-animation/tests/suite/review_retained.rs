@@ -34,12 +34,12 @@ fn check_frames(ui: &mut ComposeTestRule, frames: usize, what: &str) {
 #[composable]
 fn Scene(page: MutableState<u32>, visible: MutableState<bool>) {
     Column!(modifier = Modifier.repaint_boundary(), {
-        Box!(modifier = Modifier.repaint_boundary().size_wh(60.dp(), 20.dp()), {
+        Box!(modifier = Modifier.repaint_boundary().size((60.dp(), 20.dp())), {
             Crossfade!(page.get(), animation_spec = tween(100).easing(LINEAR_EASING), |page| {
                 Box!(
                     modifier = Modifier
                         .background(Color::from_argb(0xFF00_0000 | (page * 0x40)))
-                        .size_wh(60.dp(), 20.dp())
+                        .size((60.dp(), 20.dp()))
                 );
             });
         });
@@ -50,10 +50,8 @@ fn Scene(page: MutableState<u32>, visible: MutableState<bool>) {
             exit = fade_out() + scale_out(0.5),
             {
                 Box!(
-                    modifier = Modifier
-                        .repaint_boundary()
-                        .background(Color::RED)
-                        .size_wh(40.dp(), 10.dp())
+                    modifier =
+                        Modifier.repaint_boundary().background(Color::RED).size((40.dp(), 10.dp()))
                 );
             }
         );
@@ -63,7 +61,7 @@ fn Scene(page: MutableState<u32>, visible: MutableState<bool>) {
             enter = fade_in() + expand_vertically(),
             exit = fade_out() + shrink_vertically(),
             {
-                Box!(modifier = Modifier.background(Color::GREEN).size_wh(40.dp(), 30.dp()));
+                Box!(modifier = Modifier.background(Color::GREEN).size((40.dp(), 30.dp())));
             }
         );
         Box!(modifier = Modifier.repaint_boundary().background(Color::BLUE).size(8.dp()));

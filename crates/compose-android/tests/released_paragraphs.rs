@@ -271,7 +271,7 @@ fn a_scrolled_lazy_list_with_prefetch_draws_only_live_paragraphs() {
     let given = *state;
     let mut checked = Checked::new(move || {
         LazyColumn!(
-            modifier = Modifier.size_wh(160.dp(), 200.dp()),
+            modifier = Modifier.size((160.dp(), 200.dp())),
             state = given,
             |scope: LazyListScope| {
                 scope.items(300, |index| {
@@ -303,7 +303,7 @@ fn an_edited_text_field_draws_only_live_paragraphs() {
                 BasicTextField!(
                     text.get(),
                     move |new: String| text.set(new),
-                    modifier = Modifier.size_wh(160.dp(), 40.dp())
+                    modifier = Modifier.size((160.dp(), 40.dp()))
                 );
             });
         });

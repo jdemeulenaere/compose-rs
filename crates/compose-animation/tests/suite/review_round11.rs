@@ -53,7 +53,7 @@ fn a_content_coming_back_while_it_leaves_springs_back_at_once() {
             |value: i32| {
                 Box!(
                     modifier = Modifier
-                        .size_wh(50.dp(), 20.dp())
+                        .size((50.dp(), 20.dp()))
                         .background(Color::BLACK)
                         .test_tag(format!("{value}"))
                 );

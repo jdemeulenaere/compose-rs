@@ -86,7 +86,7 @@ fn focused_field(initial: &'static str, width: i32) -> UiHost {
         compose_foundation::BasicTextField(
             text.get(),
             compose_runtime::callback(move |value: String| text.set(value)),
-            Modifier.size_wh(width.dp(), 40.dp()).test_tag("field"),
+            Modifier.size((width.dp(), 40.dp())).test_tag("field"),
             true,
             false,
             compose_ui::TextStyle::DEFAULT,

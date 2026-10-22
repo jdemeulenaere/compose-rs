@@ -62,17 +62,6 @@ impl Modifier {
     ) -> Modifier {
         self.then_custom(DrawWithCacheElement(Rc::new(on_build_draw_cache)))
     }
-
-    /// Fills `shape` with `brush` at `alpha` behind the content, as `Modifier.background(brush,
-    /// shape, alpha)`.
-    pub fn background_brush(
-        self,
-        brush: crate::brush::Brush,
-        shape: crate::graphics::Shape,
-        alpha: f32,
-    ) -> Modifier {
-        self.then_custom(BackgroundBrushElement { brush, shape, alpha })
-    }
 }
 
 /// What `draw_with_cache`'s block works with, as Compose's `CacheDrawScope`.
@@ -214,12 +203,12 @@ impl DrawModifierNode for DrawWithCacheNode {
     }
 }
 
-/// `background_brush`'s element and node in one.
+/// `background`'s element and node in one, for a gradient brush.
 #[derive(Clone, PartialEq)]
-struct BackgroundBrushElement {
-    brush: crate::brush::Brush,
-    shape: crate::graphics::Shape,
-    alpha: f32,
+pub(crate) struct BackgroundBrushElement {
+    pub(crate) brush: crate::brush::Brush,
+    pub(crate) shape: crate::graphics::Shape,
+    pub(crate) alpha: f32,
 }
 
 impl ModifierNodeElement for BackgroundBrushElement {

@@ -280,7 +280,7 @@ pub fn SegmentedButton(
     let content = compose_runtime::callback(move || {
         let (icon, label) = (icon.clone(), label.clone());
         Layout(
-            Modifier.padding_values(crate::ButtonDefaults::TEXT_BUTTON_CONTENT_PADDING),
+            Modifier.padding(crate::ButtonDefaults::TEXT_BUTTON_CONTENT_PADDING),
             policy.clone(),
             compose_runtime::callback(move || {
                 let icon = icon.clone();

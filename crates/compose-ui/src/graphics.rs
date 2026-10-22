@@ -262,11 +262,11 @@ impl Paint {
 
     /// A stroke `width` pixels wide, its ends flat, as `Stroke(width)`.
     pub fn stroke(color: Color, width: f32) -> Paint {
-        Paint::stroke_capped(color, width, StrokeCap::Butt)
+        Paint::stroke_with(color, width, StrokeCap::Butt)
     }
 
     /// A stroke with `cap` ends, as `Stroke(width, cap = …)`.
-    pub fn stroke_capped(color: Color, width: f32, cap: StrokeCap) -> Paint {
+    pub fn stroke_with(color: Color, width: f32, cap: StrokeCap) -> Paint {
         Paint { color, style: PaintStyle::Stroke(width), cap, shader: None }
     }
 

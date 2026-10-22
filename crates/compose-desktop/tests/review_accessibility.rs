@@ -12,6 +12,7 @@ mod accessibility;
 use accesskit::{Node, NodeId as AccessNodeId, Toggled, TreeUpdate};
 use compose_foundation::layout::*;
 use compose_foundation::*;
+use compose_ui::ClickableOptions;
 use compose_ui::{
     Density, Dialog, ImageBitmap, IntSize, Popup, PopupProperties, Role, UnitExt,
     platform::{FixedTextMeasurer, UiHost},
@@ -45,7 +46,10 @@ fn a_selected_radio_button_is_checked() {
         Box!(
             modifier = Modifier
                 .size(20.dp())
-                .clickable_with(true, Some(Role::RadioButton), || {})
+                .clickable_with(
+                    ClickableOptions { role: Some(Role::RadioButton), ..ClickableOptions::DEFAULT },
+                    || {}
+                )
                 .semantics(false, |config| config.selected = Some(true)),
         );
     });

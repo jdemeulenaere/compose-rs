@@ -5,6 +5,7 @@
 
 #![allow(non_snake_case)]
 
+use compose_ui::ClickableOptions;
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Duration;
@@ -31,6 +32,36 @@ fn click(ui: &mut ComposeTestRule, x: f32, y: f32) {
     ui.wait_for_idle();
 }
 
+/// Compose's overloads as one method each: `padding(all)`, `padding(horizontal, vertical)`,
+/// `padding(start, top, end, bottom)` (zero defaults), `size(size)`, `size(width, height)`.
+#[test]
+fn padding_and_size_take_each_overloads_arguments() {
+    let mut ui = ComposeTestRule::sized(IntSize::new(300, 300), || {
+        Column!({
+            Box!(modifier = Modifier.test_tag("all").padding(4.dp()).size(10.dp()));
+            Box!(
+                modifier =
+                    Modifier.test_tag("hv").padding((8.dp(), 2.dp())).size((20.dp(), 10.dp()))
+            );
+            Box!(
+                modifier = Modifier
+                    .test_tag("start")
+                    .padding(PaddingValues { start: 6.dp(), ..PaddingValues::ZERO })
+                    .size(compose_ui::DpSize::new(10.dp(), 5.dp()))
+            );
+            Box!(modifier = Modifier.test_tag("sides").padding((1.dp(), 2.dp(), 3.dp(), 4.dp())));
+        });
+    });
+    let size = |ui: &mut ComposeTestRule, tag| {
+        let bounds = bounds(ui, tag);
+        (bounds.width(), bounds.height())
+    };
+    assert_eq!(size(&mut ui, "all"), (18.0, 18.0));
+    assert_eq!(size(&mut ui, "hv"), (36.0, 14.0));
+    assert_eq!(size(&mut ui, "start"), (16.0, 5.0));
+    assert_eq!(size(&mut ui, "sides"), (4.0, 6.0));
+}
+
 #[test]
 fn aspect_ratio_sizes_from_the_width_or_the_height_first() {
     let mut ui = ComposeTestRule::sized(IntSize::new(300, 300), || {
@@ -38,7 +69,7 @@ fn aspect_ratio_sizes_from_the_width_or_the_height_first() {
             Box!(modifier = Modifier.width(100.dp()).aspect_ratio(2.0, false).test_tag("wide"));
             Box!(
                 modifier = Modifier
-                    .size_wh(100.dp(), 30.dp())
+                    .size((100.dp(), 30.dp()))
                     .wrap_content_size(Alignment::TOP_START, false)
                     .aspect_ratio(2.0, true)
                     .test_tag("height first")
@@ -137,7 +168,7 @@ fn on_size_changed_reports_the_first_size_and_each_change() {
                 .on_size_changed(move |size: IntSize| {
                     seen.borrow_mut().push(format!("{}x{}", size.width, size.height));
                 })
-                .size_wh(handle.get().dp(), 20.dp())
+                .size((handle.get().dp(), 20.dp()))
         );
     });
     assert_eq!(*log.borrow(), vec!["10x20"]);
@@ -174,16 +205,16 @@ fn on_globally_positioned_reports_the_layer_after_it_and_follows_a_scroll() {
     let scroll = *state;
     let mut ui = ComposeTestRule::sized(IntSize::new(300, 300), move || {
         let seen = seen.clone();
-        Column!(modifier = Modifier.size_wh(100.dp(), 100.dp()).vertical_scroll(scroll), {
+        Column!(modifier = Modifier.size((100.dp(), 100.dp())).vertical_scroll(scroll), {
             let seen = seen.clone();
-            Box!(modifier = Modifier.size_wh(100.dp(), 80.dp()));
+            Box!(modifier = Modifier.size((100.dp(), 80.dp())));
             Box!(
                 modifier = Modifier
                     .padding(10.dp())
                     .on_globally_positioned(move |coordinates: LayoutCoordinates| {
                         seen.borrow_mut().push(coordinates)
                     })
-                    .size_wh(50.dp(), 40.dp())
+                    .size((50.dp(), 40.dp()))
             );
         });
     });
@@ -238,11 +269,9 @@ fn Combined(log: Log, double: bool) {
         modifier = Modifier
             .size(50.dp())
             .combined_clickable(
-                true,
-                None,
                 Some(callback(move || long.borrow_mut().push("long".into()))),
                 double.then(|| callback(move || double_click.borrow_mut().push("double".into()))),
-                move || click.borrow_mut().push("click".into()),
+                move || click.borrow_mut().push("click".into())
             )
             .test_tag("target")
     );
@@ -291,10 +320,8 @@ fn combined_clickable_without_double_click_clicks_at_the_release() {
 fn combined_clickable_shows_its_indication_while_pressed() {
     let mut ui = ComposeTestRule::with_manual_clock(|| {
         Box!(
-            modifier = Modifier.size(50.dp()).combined_clickable_indicated(
-                true,
-                None,
-                Color::BLACK,
+            modifier = Modifier.size(50.dp()).combined_clickable_with(
+                ClickableOptions { indication: Color::BLACK.into(), ..ClickableOptions::DEFAULT },
                 None,
                 None,
                 || {}
@@ -320,10 +347,12 @@ fn selectable_and_selectable_group_set_their_semantics() {
                 Box!(
                     modifier = Modifier
                         .size(20.dp())
-                        .selectable(
+                        .selectable_with(
                             handle.get() == index,
-                            true,
-                            Some(Role::RadioButton),
+                            ClickableOptions {
+                                role: Some(Role::RadioButton),
+                                ..ClickableOptions::DEFAULT
+                            },
                             move || { handle.set(index) }
                         )
                         .test_tag(format!("option {index}"))
@@ -391,10 +420,12 @@ fn a_combined_clickable_disabled_mid_press_lets_its_press_go() {
     let handle = enabled.handle();
     let mut ui = ComposeTestRule::with_manual_clock(move || {
         Box!(
-            modifier = Modifier.size(50.dp()).combined_clickable_indicated(
-                handle.get(),
-                None,
-                Color::BLACK,
+            modifier = Modifier.size(50.dp()).combined_clickable_with(
+                ClickableOptions {
+                    enabled: handle.get(),
+                    indication: Color::BLACK.into(),
+                    ..ClickableOptions::DEFAULT
+                },
                 None,
                 None,
                 || {}

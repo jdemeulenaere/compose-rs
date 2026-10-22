@@ -2,6 +2,7 @@
 //! Compose's Material 3: a bar of destinations at the bottom of a screen or a rail at its side,
 //! the selected one's icon in a pill.
 
+use compose_ui::ClickableOptions;
 use std::rc::Rc;
 
 use compose_foundation::layout::{Arrangement, Box, Column, ColumnScope, Row, RowScope};
@@ -163,11 +164,13 @@ fn navigation_item(
     // The press, focus and hover show on the pill only, as Compose's
     // (`selectable(indication = null)`, the pill's own ripple).
     let modifier = modifier
-        .clickable_interaction(
-            enabled,
-            Some(Role::Tab),
-            Color::UNSPECIFIED,
-            interaction.clone(),
+        .clickable_with(
+            ClickableOptions {
+                enabled,
+                role: Some(Role::Tab),
+                indication: Color::UNSPECIFIED.into(),
+                interaction_source: Some(interaction.clone()),
+            },
             on_click,
         )
         .semantics(false, move |config| config.selected = Some(selected));
@@ -182,7 +185,7 @@ fn navigation_item(
             Box(
                 Modifier
                     .size_in(SizeSpec::bounds(pill_width, pill_height, pill_width, pill_height))
-                    .background_shape(indicator, pill)
+                    .background_with(indicator, pill, 1.0)
                     .draw_behind(move |scope| {
                         // Read while drawing: a press, focus or hover draws again only.
                         // Material's state layers: pressed and focused 10 %, hovered 8 %.
@@ -335,14 +338,14 @@ pub fn NavigationRail(
             Column(
                 Modifier
                     .fill_max_height()
-                    .padding_values(window_insets)
+                    .padding(window_insets)
                     .size_in(SizeSpec::bounds(
                         80.dp(),
                         Dp::UNSPECIFIED,
                         Dp::UNSPECIFIED,
                         Dp::UNSPECIFIED,
                     ))
-                    .padding_horizontal_vertical(Dp(0.0), 4.dp())
+                    .padding((Dp(0.0), 4.dp()))
                     .selectable_group(),
                 Arrangement::spaced_by(4.dp()).into(),
                 Alignment::CENTER_HORIZONTALLY,

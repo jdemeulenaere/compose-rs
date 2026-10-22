@@ -46,7 +46,7 @@ fn animated_content_new_content_runs_its_enter_transition() {
             |value: i32| {
                 Box!(
                     modifier = Modifier
-                        .size_wh(50.dp(), 20.dp())
+                        .size((50.dp(), 20.dp()))
                         .background(Color::BLACK)
                         .test_tag(format!("{value}"))
                 );
@@ -74,7 +74,7 @@ fn animated_content_new_content_runs_its_enter_transition() {
 #[test]
 fn animated_content_measures_contents_with_its_constraints() {
     let mut ui = ComposeTestRule::with_manual_clock(|| {
-        AnimatedContent!(0, modifier = Modifier.size_wh(200.dp(), 100.dp()), |_value: i32| {
+        AnimatedContent!(0, modifier = Modifier.size((200.dp(), 100.dp())), |_value: i32| {
             Box!(modifier = Modifier.test_tag("screen"));
         });
     });
@@ -98,7 +98,7 @@ fn animated_content_returning_state_keeps_its_content() {
             if value == 0 {
                 remember(|| seen.set(seen.get() + 1));
             }
-            Box!(modifier = Modifier.size_wh(50.dp(), 20.dp()).test_tag(format!("{value}")));
+            Box!(modifier = Modifier.size((50.dp(), 20.dp())).test_tag(format!("{value}")));
         });
     });
     assert_eq!(created.get(), 1);
@@ -133,7 +133,7 @@ fn transition_is_running_is_observable() {
         // The value is read only while drawing.
         Box!(
             modifier = Modifier
-                .size_wh(10.dp(), 10.dp())
+                .size((10.dp(), 10.dp()))
                 .graphics_layer(move |layer| layer.alpha = alpha.get())
         );
     });

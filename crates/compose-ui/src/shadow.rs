@@ -15,12 +15,12 @@ impl Modifier {
     /// content to `shape` if `clip`, as `Modifier.shadow(elevation, shape, clip)` (which clips
     /// by default when there is an elevation).
     pub fn shadow(self, elevation: Dp, shape: Shape, clip: bool) -> Modifier {
-        self.shadow_colored(elevation, shape, clip, DEFAULT_SHADOW_COLOR, DEFAULT_SHADOW_COLOR)
+        self.shadow_with(elevation, shape, clip, DEFAULT_SHADOW_COLOR, DEFAULT_SHADOW_COLOR)
     }
 
     /// `shadow` with its ambient and spot colors, as `Modifier.shadow(…, ambientColor,
     /// spotColor)`.
-    pub fn shadow_colored(
+    pub fn shadow_with(
         self,
         elevation: Dp,
         shape: Shape,

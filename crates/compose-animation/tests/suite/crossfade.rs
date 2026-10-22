@@ -56,7 +56,7 @@ fn a_content_size_animates_to_its_new_size() {
                 modifier = Modifier.animate_content_size_with(tween(100).easing(LINEAR_EASING)),
                 {
                     Spacer(
-                        Modifier.size_wh(50.dp(), if expanded.get() { 100.dp() } else { 20.dp() }),
+                        Modifier.size((50.dp(), if expanded.get() { 100.dp() } else { 20.dp() })),
                     );
                 }
             );

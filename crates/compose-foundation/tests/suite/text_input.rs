@@ -33,7 +33,7 @@ fn password_field(value: Rc<RefCell<String>>) -> ComposeTestRule {
                 *value.borrow_mut() = new.clone();
                 text.set(new);
             },
-            modifier = Modifier.size_wh(200.dp(), 40.dp()).test_tag("field"),
+            modifier = Modifier.size((200.dp(), 40.dp())).test_tag("field"),
             single_line = true,
             visual_transformation = PasswordVisualTransformation::new()
         );
@@ -81,7 +81,7 @@ fn enter_in_a_single_line_field_performs_its_action() {
         BasicTextField!(
             text.get(),
             move |new: String| text.set(new),
-            modifier = Modifier.size_wh(200.dp(), 40.dp()).test_tag("field"),
+            modifier = Modifier.size((200.dp(), 40.dp())).test_tag("field"),
             keyboard_options =
                 KeyboardOptions { ime_action: ImeAction::Search, ..KeyboardOptions::DEFAULT },
             keyboard_actions = KeyboardActions::new().on_search(move || {
@@ -104,7 +104,7 @@ fn next_without_an_action_moves_focus_on() {
                 BasicTextField!(
                     text.get(),
                     move |new: String| text.set(new),
-                    modifier = Modifier.size_wh(200.dp(), 40.dp()).test_tag(tag),
+                    modifier = Modifier.size((200.dp(), 40.dp())).test_tag(tag),
                     keyboard_options =
                         KeyboardOptions { ime_action: ImeAction::Next, ..KeyboardOptions::DEFAULT },
                     single_line = true
@@ -130,7 +130,7 @@ fn enter_in_a_multi_line_field_types_a_new_line() {
                 *seen.borrow_mut() = new.clone();
                 text.set(new);
             },
-            modifier = Modifier.size_wh(200.dp(), 80.dp()).test_tag("field"),
+            modifier = Modifier.size((200.dp(), 80.dp())).test_tag("field"),
             keyboard_options =
                 KeyboardOptions { ime_action: ImeAction::Done, ..KeyboardOptions::DEFAULT },
             keyboard_actions =

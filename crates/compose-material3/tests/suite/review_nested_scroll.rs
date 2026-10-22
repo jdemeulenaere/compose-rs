@@ -45,8 +45,7 @@ fn ThreeLevels() {
             },
             move |padding: PaddingValues| {
                 Column!(
-                    modifier =
-                        Modifier.padding_values(padding).fill_max_size().vertical_scroll(outer),
+                    modifier = Modifier.padding(padding).fill_max_size().vertical_scroll(outer),
                     {
                         Spacer(Modifier.fill_max_width().height(400.dp()));
                         Column!(

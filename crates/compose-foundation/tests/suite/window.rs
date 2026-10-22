@@ -26,14 +26,14 @@ fn tap(ui: &mut ComposeTestRule, x: f32, y: f32) {
 #[composable]
 fn Screen(open: MutableState<bool>) {
     Column!({
-        Box!(modifier = Modifier.size_wh(100.dp(), 40.dp()).test_tag("anchor"), {
+        Box!(modifier = Modifier.size((100.dp(), 40.dp())).test_tag("anchor"), {
             if open.get() {
                 Popup!(
                     alignment = Alignment::TOP_START,
                     offset = IntOffset::new(0, 44),
                     on_dismiss_request = move || open.set(false),
                     {
-                        Box!(modifier = Modifier.size_wh(80.dp(), 60.dp()).test_tag("popup"), {
+                        Box!(modifier = Modifier.size((80.dp(), 60.dp())).test_tag("popup"), {
                             BasicText!("menu");
                         });
                     }
@@ -42,7 +42,7 @@ fn Screen(open: MutableState<bool>) {
         });
         Box!(
             modifier = Modifier
-                .size_wh(200.dp(), 100.dp())
+                .size((200.dp(), 100.dp()))
                 .clickable(|| CLICKS.with(|clicks| clicks.set(clicks.get() + 1)))
                 .test_tag("below"),
         );
@@ -94,7 +94,7 @@ fn a_dialog_is_modal_takes_the_focus_and_dismisses_on_escape() {
             {
                 if open.get() {
                     Dialog!(on_dismiss_request = move || open.set(false), {
-                        Box!(modifier = Modifier.size_wh(100.dp(), 50.dp()).test_tag("dialog"), {
+                        Box!(modifier = Modifier.size((100.dp(), 50.dp())).test_tag("dialog"), {
                             BasicText!("Sure?");
                         });
                     });

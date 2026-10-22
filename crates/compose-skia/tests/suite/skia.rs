@@ -105,7 +105,7 @@ fn images_decode_and_draw_with_skia() {
         compose::foundation::Image!(
             image,
             None,
-            modifier = Modifier.size_wh(16.dp(), 16.dp()),
+            modifier = Modifier.size((16.dp(), 16.dp())),
             content_scale = compose::foundation::ContentScale::FillBounds,
         );
     }

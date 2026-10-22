@@ -87,7 +87,7 @@ fn focusing_an_item_past_the_left_of_a_right_to_left_lazy_row_brings_it_into_vie
     let given = *state;
     let mut ui = rtl(move || {
         LazyRow!(
-            modifier = Modifier.size_wh(100.dp(), 30.dp()),
+            modifier = Modifier.size((100.dp(), 30.dp())),
             state = given,
             |scope: LazyListScope| {
                 scope.items(10, |index| {
@@ -122,11 +122,11 @@ fn focusing_an_item_past_the_left_of_a_right_to_left_lazy_row_brings_it_into_vie
 fn a_centered_lazy_column_item_rounds_as_in_left_to_right() {
     let mut ui = rtl(|| {
         LazyColumn!(
-            modifier = Modifier.size_wh(105.dp(), 100.dp()),
+            modifier = Modifier.size((105.dp(), 100.dp())),
             horizontal_alignment = Alignment::CENTER_HORIZONTALLY,
             |scope: LazyListScope| {
                 scope.item(|| {
-                    Box!(modifier = Modifier.size_wh(100.dp(), 20.dp()).test_tag("item"));
+                    Box!(modifier = Modifier.size((100.dp(), 20.dp())).test_tag("item"));
                 });
             }
         );

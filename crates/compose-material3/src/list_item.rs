@@ -96,7 +96,7 @@ pub fn ListItem(
                         Dp::UNSPECIFIED,
                         Dp::UNSPECIFIED,
                     ))
-                    .padding_sides(16.dp(), vertical, 24.dp(), vertical),
+                    .padding((16.dp(), vertical, 24.dp(), vertical)),
                 Arrangement::Start,
                 alignment,
                 compose_runtime::callback(move |row: RowScope| {
@@ -105,7 +105,7 @@ pub fn ListItem(
                             LOCAL_CONTENT_COLOR.provides(colors.leading_icon_color),
                             || {
                                 Box(
-                                    Modifier.padding_sides(0.dp(), 0.dp(), 16.dp(), 0.dp()),
+                                    Modifier.padding((0.dp(), 0.dp(), 16.dp(), 0.dp())),
                                     Alignment::CENTER,
                                     false,
                                     compose_runtime::callback({
@@ -144,7 +144,7 @@ pub fn ListItem(
                                     LOCAL_TEXT_STYLE.provides(typography.label_small),
                                     || {
                                         Box(
-                                            Modifier.padding_sides(16.dp(), 0.dp(), 0.dp(), 0.dp()),
+                                            Modifier.padding((16.dp(), 0.dp(), 0.dp(), 0.dp())),
                                             Alignment::CENTER,
                                             false,
                                             compose_runtime::callback({

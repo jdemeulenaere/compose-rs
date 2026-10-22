@@ -66,7 +66,7 @@ fn lazy_items_drawing_the_scroll_draw_it_in_the_frame_laying_it_out() {
     fn scene(state: LazyListState) {
         let list = state;
         LazyColumn!(
-            modifier = Modifier.size_wh(100.dp(), 100.dp()),
+            modifier = Modifier.size((100.dp(), 100.dp())),
             state = state,
             |scope: LazyListScope| {
                 scope.items(50, move |_| {
@@ -79,7 +79,7 @@ fn lazy_items_drawing_the_scroll_draw_it_in_the_frame_laying_it_out() {
                                     Paint::fill(Color::RED),
                                 );
                             })
-                            .size_wh(100.dp(), 20.dp())
+                            .size((100.dp(), 20.dp()))
                     );
                 });
             }
@@ -102,7 +102,7 @@ fn lazy_items_drawing_the_scroll_draw_it_in_the_frame_laying_it_out() {
 #[test]
 fn lazy_items_changing_draw_what_a_fresh_list_does() {
     fn scene(items: MutableState<Vec<u32>>) {
-        LazyColumn!(modifier = Modifier.size_wh(100.dp(), 100.dp()), |scope: LazyListScope| {
+        LazyColumn!(modifier = Modifier.size((100.dp(), 100.dp())), |scope: LazyListScope| {
             let items = items.get();
             let keys = items.clone();
             scope.items_keyed(
@@ -113,7 +113,7 @@ fn lazy_items_changing_draw_what_a_fresh_list_does() {
                     Box!(
                         modifier = Modifier
                             .background(Color::from_argb(0xFF00_0000 | (value * 0x0101)))
-                            .size_wh(100.dp(), (10 + value % 3 * 5).dp()),
+                            .size((100.dp(), (10 + value % 3 * 5).dp())),
                         {
                             BasicText!("item {}", value);
                         }

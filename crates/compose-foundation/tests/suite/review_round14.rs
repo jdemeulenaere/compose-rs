@@ -156,7 +156,7 @@ fn scrolling_a_lazy_list_keeps_the_selection_on_its_item() {
     let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || {
         SelectionContainer!({
             LazyColumn!(
-                modifier = Modifier.size_wh(100.dp(), 100.dp()),
+                modifier = Modifier.size((100.dp(), 100.dp())),
                 state = given,
                 |scope: LazyListScope| {
                     scope.items(100, |index| {

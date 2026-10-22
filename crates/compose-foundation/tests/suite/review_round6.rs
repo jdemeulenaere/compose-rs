@@ -4,6 +4,7 @@
 
 #![allow(non_snake_case)]
 
+use compose_ui::ClickableOptions;
 use std::cell::Cell;
 use std::rc::Rc;
 
@@ -192,8 +193,15 @@ fn a_hovered_clickable_whose_modifiers_change_still_hears_exit() {
             let modifier = Modifier.size(50.dp());
             let modifier = if handle.get() { modifier.padding(1.dp()) } else { modifier };
             Box!(
-                modifier =
-                    modifier.clickable_indicated(true, None, Color::RED, || {}).size(48.dp())
+                modifier = modifier
+                    .clickable_with(
+                        ClickableOptions {
+                            indication: Color::RED.into(),
+                            ..ClickableOptions::DEFAULT
+                        },
+                        || {}
+                    )
+                    .size(48.dp())
             );
             Box!(modifier = Modifier.size(50.dp()));
         });
@@ -221,10 +229,8 @@ fn scrolling_under_a_resting_mouse_moves_the_hover() {
                 // Each item's state layer told apart by its green.
                 let color = Color::from_rgb(255, index as u8, 0);
                 Box!(
-                    modifier = Modifier.fill_max_width().height(50.dp()).clickable_indicated(
-                        true,
-                        None,
-                        color,
+                    modifier = Modifier.fill_max_width().height(50.dp()).clickable_with(
+                        ClickableOptions { indication: color.into(), ..ClickableOptions::DEFAULT },
                         || {}
                     )
                 );
@@ -414,26 +420,30 @@ fn passes_hover_moves_at_the_release_of_a_drag() {
     let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), || {
         Column!({
             Box!(
-                modifier = Modifier.size(50.dp()).clickable_indicated(
-                    true,
-                    None,
-                    Color::from_rgb(255, 1, 0),
+                modifier = Modifier.size(50.dp()).clickable_with(
+                    ClickableOptions {
+                        indication: Color::from_rgb(255, 1, 0).into(),
+                        ..ClickableOptions::DEFAULT
+                    },
                     || {}
                 )
             );
             Box!(
-                modifier = Modifier.size(50.dp()).clickable_indicated(
-                    true,
-                    None,
-                    Color::from_rgb(255, 2, 0),
+                modifier = Modifier.size(50.dp()).clickable_with(
+                    ClickableOptions {
+                        indication: Color::from_rgb(255, 2, 0).into(),
+                        ..ClickableOptions::DEFAULT
+                    },
                     || {}
                 )
             );
             Box!(
-                modifier = Modifier.size(50.dp()).clickable_indicated(
-                    false,
-                    None,
-                    Color::from_rgb(255, 3, 0),
+                modifier = Modifier.size(50.dp()).clickable_with(
+                    ClickableOptions {
+                        enabled: false,
+                        indication: Color::from_rgb(255, 3, 0).into(),
+                        ..ClickableOptions::DEFAULT
+                    },
                     || {}
                 )
             );

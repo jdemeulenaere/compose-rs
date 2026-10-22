@@ -7,7 +7,7 @@ use compose_runtime::{ComposeArg, OwnedState};
 
 /// A clickable's press, focus and hover, shared, as Compose's `MutableInteractionSource` with
 /// `collectIsPressedAsState`, `collectIsFocusedAsState` and `collectIsHoveredAsState`. Remember
-/// one and give it to `Modifier.clickable_interaction`.
+/// one and give it to `Modifier.clickable_with`.
 #[derive(Clone)]
 pub struct MutableInteractionSource {
     pressed: Rc<OwnedState<bool>>,

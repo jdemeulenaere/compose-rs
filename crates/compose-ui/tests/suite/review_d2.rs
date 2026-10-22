@@ -102,14 +102,14 @@ fn a_layout_modifier_measuring_its_content_twice_is_rejected_or_stays_correct() 
     let handle = width.handle();
     let mut changed = host(move || {
         Column!(modifier = Modifier.then_custom(MeasureContentTwice), {
-            Leaf(Modifier.size_wh(handle.get().dp(), 5.dp()));
+            Leaf(Modifier.size((handle.get().dp(), 5.dp())));
         });
     });
     width.set(30.0);
     changed.frame();
     let fresh = host(|| {
         Column!(modifier = Modifier.then_custom(MeasureContentTwice), {
-            Leaf(Modifier.size_wh(30.dp(), 5.dp()));
+            Leaf(Modifier.size((30.dp(), 5.dp())));
         });
     });
     // Fresh: the node is 30 wide. Incremental: still 20.

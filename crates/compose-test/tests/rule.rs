@@ -25,7 +25,14 @@ fn Counter() {
         );
         Row!(
             modifier = Modifier
-                .clickable_with(count.get() > 0, Some(Role::Button), move || count.set(0))
+                .clickable_with(
+                    ClickableOptions {
+                        enabled: count.get() > 0,
+                        role: Some(Role::Button),
+                        ..ClickableOptions::DEFAULT
+                    },
+                    move || count.set(0)
+                )
                 .test_tag("reset"),
             {
                 Text!("Reset");

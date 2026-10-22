@@ -43,7 +43,7 @@ fn a_spaced_row_leaves_room_for_its_spacing_when_measuring() {
             modifier = Modifier.fill_max_width(),
             horizontal_arrangement = Arrangement::spaced_by(10.dp()),
             {
-                Spacer(Modifier.size_wh(60.dp(), 10.dp()).test_tag("a"));
+                Spacer(Modifier.size((60.dp(), 10.dp())).test_tag("a"));
                 Spacer(Modifier.fill_max_width().height(10.dp()).test_tag("b"));
             }
         );
@@ -58,7 +58,7 @@ fn a_spaced_row_leaves_room_for_its_spacing_when_measuring() {
 fn a_row_with_only_unfilled_weights_wraps_its_children() {
     let mut ui = ComposeTestRule::sized(IntSize::new(100, 50), || {
         Row!(modifier = Modifier.test_tag("row"), |row| {
-            Spacer(Modifier.weight_filled(row, 1.0, false).size(10.dp()));
+            Spacer(Modifier.weight_with(row, 1.0, false).size(10.dp()));
         });
     });
     assert_eq!(bounds(&mut ui, "row").width(), 10.0);

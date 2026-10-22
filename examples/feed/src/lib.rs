@@ -113,7 +113,7 @@ fn FeedScreen(animated: bool) {
             },
             |padding: PaddingValues| {
                 LazyColumn!(
-                    modifier = Modifier.padding_values(padding).fill_max_size(),
+                    modifier = Modifier.padding(padding).fill_max_size(),
                     move |scope: LazyListScope| {
                         if animated {
                             scope.item(LiveHeader);
@@ -145,8 +145,7 @@ pub fn BigScreen() {
             |padding: PaddingValues| {
                 let scroll = remember_scroll_state();
                 Column!(
-                    modifier =
-                        Modifier.padding_values(padding).fill_max_size().vertical_scroll(scroll),
+                    modifier = Modifier.padding(padding).fill_max_size().vertical_scroll(scroll),
                     {
                         for index in 0..BIG_POSTS {
                             key(index, move || PostCard(index));
@@ -174,7 +173,7 @@ fn LiveHeader() {
         infinite_repeatable(tween(2000).easing(LINEAR_EASING), RepeatMode::Restart),
     );
     let scheme = MaterialTheme::color_scheme();
-    Card!(modifier = Modifier.fill_max_width().padding_horizontal_vertical(16.dp(), 8.dp()), {
+    Card!(modifier = Modifier.fill_max_width().padding((16.dp(), 8.dp())), {
         Row!(
             modifier = Modifier.padding(16.dp()),
             horizontal_arrangement = Arrangement::spaced_by(16.dp()),
@@ -206,7 +205,7 @@ fn PostCard(index: u32) {
     let post = Post::of(index);
     let scheme = MaterialTheme::color_scheme();
     let typography = MaterialTheme::typography();
-    Card!(modifier = Modifier.fill_max_width().padding_horizontal_vertical(16.dp(), 4.dp()), {
+    Card!(modifier = Modifier.fill_max_width().padding((16.dp(), 4.dp())), {
         Column!(modifier = Modifier.padding(16.dp()), {
             Row!(vertical_alignment = Alignment::CENTER_VERTICALLY, {
                 Box!(

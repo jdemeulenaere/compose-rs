@@ -57,9 +57,9 @@ fn Screen(kind: u8, small: bool, content: u8) {
             },
             |padding: PaddingValues| {
                 let modifier = match content {
-                    0 => Modifier.padding_values(padding).fill_max_size().vertical_scroll(scroll),
-                    1 => Modifier.fill_max_size().vertical_scroll(scroll).padding_values(padding),
-                    _ => Modifier.padding_values(padding).fill_max_size(),
+                    0 => Modifier.padding(padding).fill_max_size().vertical_scroll(scroll),
+                    1 => Modifier.fill_max_size().vertical_scroll(scroll).padding(padding),
+                    _ => Modifier.padding(padding).fill_max_size(),
                 };
                 Column!(modifier = modifier, {
                     for index in 0..40 {

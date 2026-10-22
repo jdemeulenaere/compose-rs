@@ -291,7 +291,7 @@ pub fn ExtendedFloatingActionButton(
                         Dp::UNSPECIFIED,
                         Dp::UNSPECIFIED,
                     ))
-                    .padding_sides(start, Dp(0.0), end, Dp(0.0)),
+                    .padding((start, Dp(0.0), end, Dp(0.0))),
                 if expanded { Arrangement::Start } else { Arrangement::Center.into() },
                 Alignment::CENTER_VERTICALLY,
                 compose_runtime::callback(move |_| {
@@ -307,7 +307,7 @@ pub fn ExtendedFloatingActionButton(
                         compose_runtime::callback(move || {
                             let text = text.clone();
                             Box(
-                                Modifier.padding_sides(12.dp(), Dp(0.0), Dp(0.0), Dp(0.0)),
+                                Modifier.padding((12.dp(), Dp(0.0), Dp(0.0), Dp(0.0))),
                                 Alignment::CENTER_START,
                                 false,
                                 compose_runtime::callback(move |_| text()),

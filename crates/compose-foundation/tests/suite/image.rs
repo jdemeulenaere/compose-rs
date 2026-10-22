@@ -57,7 +57,7 @@ fn a_large_image_shrinks_to_its_constraints_keeping_its_aspect_ratio() {
 
 #[composable]
 fn Scaled(image: ImageBitmap, scale: ContentScale) {
-    Image!(image, None, modifier = Modifier.size_wh(100.dp(), 100.dp()), content_scale = scale);
+    Image!(image, None, modifier = Modifier.size((100.dp(), 100.dp())), content_scale = scale);
 }
 
 #[test]
@@ -103,7 +103,7 @@ fn the_alignment_and_alpha_are_applied() {
         Image(
             image.clone(),
             None,
-            Modifier.size_wh(100.dp(), 50.dp()),
+            Modifier.size((100.dp(), 50.dp())),
             Alignment::BOTTOM_END,
             ContentScale::None,
             0.5,

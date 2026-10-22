@@ -199,10 +199,7 @@ fn a_scaffold_pads_its_content_and_places_its_bars() {
                     });
                 },
                 |padding: compose_ui::PaddingValues| {
-                    Box!(
-                        modifier =
-                            Modifier.padding_values(padding).fill_max_size().test_tag("content")
-                    );
+                    Box!(modifier = Modifier.padding(padding).fill_max_size().test_tag("content"));
                 }
             );
         });

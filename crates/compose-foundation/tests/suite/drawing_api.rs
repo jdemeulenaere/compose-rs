@@ -1,6 +1,6 @@
 //! Custom layout and drawing ergonomics: a closure as a measure policy, `DrawScope`'s circles,
 //! ovals, pie arcs, scoped transforms and clips, `draw_path` over a borrowed `Path`, paint
-//! alpha, brushes (`brush_paint`, `background_brush`) and `draw_with_cache`.
+//! alpha, brushes (`brush_paint`, `background` with a brush) and `draw_with_cache`.
 
 #![allow(non_snake_case)]
 
@@ -122,9 +122,9 @@ fn a_brush_paints_a_gradient_in_the_drawings_coordinates() {
         Column!({
             Box!(modifier = Modifier.size(10.dp()));
             Box!(
-                modifier = Modifier.size_wh(100.dp(), 50.dp()).background_brush(
+                modifier = Modifier.size((100.dp(), 50.dp())).background_with(
                     Brush::horizontal_gradient(
-                        &[Color::RED, Color::BLUE],
+                        [Color::RED, Color::BLUE],
                         0.0,
                         f32::INFINITY,
                         TileMode::Clamp
@@ -134,8 +134,8 @@ fn a_brush_paints_a_gradient_in_the_drawings_coordinates() {
                 )
             );
             Canvas(Modifier.size(40.dp()), |scope| {
-                let brush = Brush::radial_gradient_stops(
-                    &[(0.0, Color::WHITE), (0.5, Color::BLACK)],
+                let brush = Brush::radial_gradient(
+                    [(0.0, Color::WHITE), (0.5, Color::BLACK)],
                     Offset::UNSPECIFIED,
                     f32::INFINITY,
                     TileMode::Mirror,
@@ -178,18 +178,18 @@ fn gradients_in_repaint_boundaries_keep_their_shaders_when_spliced() {
     let handle = shift.handle();
     let mut ui = ComposeTestRule::sized(IntSize::new(300, 300), move || {
         let gradient = |colors: [Color; 2]| {
-            Brush::vertical_gradient(&colors, 0.0, f32::INFINITY, TileMode::Clamp)
+            Brush::vertical_gradient(colors, 0.0, f32::INFINITY, TileMode::Clamp)
         };
         Column!(modifier = Modifier.offset(0.dp(), handle.get().dp()), {
             Box!(
-                modifier = Modifier.repaint_boundary().size(10.dp()).background_brush(
+                modifier = Modifier.repaint_boundary().size(10.dp()).background_with(
                     gradient([Color::RED, Color::GREEN]),
                     RECTANGLE_SHAPE,
                     1.0
                 )
             );
             Box!(
-                modifier = Modifier.repaint_boundary().size(10.dp()).background_brush(
+                modifier = Modifier.repaint_boundary().size(10.dp()).background_with(
                     gradient([Color::BLUE, Color::BLACK]),
                     RECTANGLE_SHAPE,
                     1.0
@@ -229,7 +229,7 @@ fn draw_with_cache_builds_again_only_for_a_new_size_or_state_it_read() {
         let counted = counted.clone();
         Box!(
             modifier =
-                Modifier.size_wh(width_handle.get().dp(), 20.dp()).draw_with_cache(move |cache| {
+                Modifier.size((width_handle.get().dp(), 20.dp())).draw_with_cache(move |cache| {
                     counted.set(counted.get() + 1);
                     let size = cache.size();
                     // Read by the cache's block: a change builds it again.

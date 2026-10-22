@@ -105,7 +105,7 @@ fn field(
                 BasicTextField!(
                     text.get(),
                     move |new: String| text.set(new),
-                    modifier = Modifier.size_wh(200.dp(), 40.dp()).test_tag(tag),
+                    modifier = Modifier.size((200.dp(), 40.dp())).test_tag(tag),
                     keyboard_options = keyboard_options,
                     keyboard_actions = keyboard_actions.clone(),
                     single_line = single_line
@@ -197,7 +197,7 @@ fn a_tap_on_the_focused_field_asks_for_the_keyboard() {
         BasicTextField!(
             text.get(),
             move |new: String| text.set(new),
-            modifier = Modifier.size_wh(200.dp(), 80.dp()).test_tag("field"),
+            modifier = Modifier.size((200.dp(), 80.dp())).test_tag("field"),
             single_line = true,
             decoration_box = |inner_text_field: compose_runtime::Callback| {
                 Box!(modifier = Modifier.padding(30.dp()), { inner_text_field() });
@@ -219,7 +219,7 @@ fn a_tap_on_the_focused_field_asks_for_the_keyboard() {
         BasicTextField!(
             String::from("fixed"),
             |_: String| {},
-            modifier = Modifier.size_wh(200.dp(), 40.dp()).test_tag("field"),
+            modifier = Modifier.size((200.dp(), 40.dp())).test_tag("field"),
             read_only = true
         );
     });

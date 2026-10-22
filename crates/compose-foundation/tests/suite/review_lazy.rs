@@ -33,12 +33,12 @@ fn top(ui: &mut ComposeTestRule, tag: &str) -> f32 {
 #[composable]
 fn Rows(state: LazyListState, count: usize) {
     LazyColumn!(
-        modifier = Modifier.size_wh(100.dp(), 100.dp()),
+        modifier = Modifier.size((100.dp(), 100.dp())),
         state = state,
         |scope: LazyListScope| {
             scope.items(count, |index| {
                 Box!(
-                    modifier = Modifier.size_wh(100.dp(), 20.dp()).test_tag(format!("row {index}"))
+                    modifier = Modifier.size((100.dp(), 20.dp())).test_tag(format!("row {index}"))
                 );
             });
         }
@@ -64,7 +64,7 @@ fn the_first_visible_item_is_kept_by_key_when_items_are_inserted_before_it() {
     let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || {
         let keys = std::rc::Rc::new(handle.get());
         LazyColumn!(
-            modifier = Modifier.size_wh(100.dp(), 100.dp()),
+            modifier = Modifier.size((100.dp(), 100.dp())),
             state = given,
             |scope: LazyListScope| {
                 let (by_index, labels) = (keys.clone(), keys.clone());
@@ -75,7 +75,7 @@ fn the_first_visible_item_is_kept_by_key_when_items_are_inserted_before_it() {
                         let key = labels[index];
                         Box!(
                             modifier =
-                                Modifier.size_wh(100.dp(), 20.dp()).test_tag(format!("key {key}"))
+                                Modifier.size((100.dp(), 20.dp())).test_tag(format!("key {key}"))
                         );
                     },
                 );
@@ -101,13 +101,13 @@ fn the_first_visible_item_is_kept_by_key_when_items_are_inserted_before_it() {
 fn the_arrangement_places_items_that_do_not_fill_the_list() {
     let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), || {
         LazyColumn!(
-            modifier = Modifier.size_wh(100.dp(), 100.dp()),
+            modifier = Modifier.size((100.dp(), 100.dp())),
             vertical_arrangement = Arrangement::Bottom,
             |scope: LazyListScope| {
                 scope.items(2, |index| {
                     Box!(
                         modifier =
-                            Modifier.size_wh(100.dp(), 20.dp()).test_tag(format!("row {index}"))
+                            Modifier.size((100.dp(), 20.dp())).test_tag(format!("row {index}"))
                     );
                 });
             }
@@ -134,15 +134,14 @@ fn scrolling_back_past_the_composed_items_moves_by_the_distance_asked() {
     let given = *state;
     let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || {
         LazyColumn!(
-            modifier = Modifier.size_wh(100.dp(), 100.dp()),
+            modifier = Modifier.size((100.dp(), 100.dp())),
             state = given,
             |scope: LazyListScope| {
                 scope.items(1000, |index| {
                     let height = if index % 4 == 0 { 50 } else { 10 };
                     Box!(
-                        modifier = Modifier
-                            .size_wh(100.dp(), height.dp())
-                            .test_tag(format!("row {index}"))
+                        modifier =
+                            Modifier.size((100.dp(), height.dp())).test_tag(format!("row {index}"))
                     );
                 });
             }
@@ -193,8 +192,8 @@ fn a_slow_drag_scrolls() {
     let state = ScrollState::new(0);
     let given = *state;
     let mut ui = ComposeTestRule::sized(IntSize::new(100, 100), move || {
-        Column!(modifier = Modifier.size_wh(100.dp(), 100.dp()).vertical_scroll(given), {
-            Spacer(Modifier.size_wh(100.dp(), 300.dp()));
+        Column!(modifier = Modifier.size((100.dp(), 100.dp())).vertical_scroll(given), {
+            Spacer(Modifier.size((100.dp(), 300.dp())));
         });
     });
     let host = ui.host();
@@ -223,9 +222,9 @@ fn a_drag_in_a_nested_lazy_list_scrolls_only_the_list() {
     let state = LazyListState::new(0, 0);
     let (given_outer, given) = (*outer, *state);
     let mut ui = ComposeTestRule::sized(IntSize::new(100, 100), move || {
-        Column!(modifier = Modifier.size_wh(100.dp(), 100.dp()).vertical_scroll(given_outer), {
+        Column!(modifier = Modifier.size((100.dp(), 100.dp())).vertical_scroll(given_outer), {
             Rows(given, 1000);
-            Spacer(Modifier.size_wh(100.dp(), 200.dp()));
+            Spacer(Modifier.size((100.dp(), 200.dp())));
         });
     });
     let host = ui.host();
@@ -256,13 +255,13 @@ fn scrolling_does_not_recompose_the_caller_of_the_list() {
     fn Screen(state: LazyListState) {
         count();
         LazyColumn!(
-            modifier = Modifier.size_wh(100.dp(), 100.dp()),
+            modifier = Modifier.size((100.dp(), 100.dp())),
             state = state,
             |scope: LazyListScope| {
                 scope.items(1000, |index| {
                     Box!(
                         modifier =
-                            Modifier.size_wh(100.dp(), 20.dp()).test_tag(format!("row {index}"))
+                            Modifier.size((100.dp(), 20.dp())).test_tag(format!("row {index}"))
                     );
                 });
             }
@@ -295,14 +294,14 @@ fn scrolling_one_row_composes_only_the_rows_coming_into_range() {
     let given = *state;
     let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || {
         LazyColumn!(
-            modifier = Modifier.size_wh(100.dp(), 100.dp()),
+            modifier = Modifier.size((100.dp(), 100.dp())),
             state = given,
             |scope: LazyListScope| {
                 scope.items(1000, |index| {
                     count();
                     Box!(
                         modifier =
-                            Modifier.size_wh(100.dp(), 20.dp()).test_tag(format!("row {index}"))
+                            Modifier.size((100.dp(), 20.dp())).test_tag(format!("row {index}"))
                     );
                 });
             }
@@ -332,15 +331,14 @@ fn a_jump_fills_the_viewport_in_one_frame() {
     let given = *state;
     let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || {
         LazyColumn!(
-            modifier = Modifier.size_wh(100.dp(), 100.dp()),
+            modifier = Modifier.size((100.dp(), 100.dp())),
             state = given,
             |scope: LazyListScope| {
                 scope.items(1000, |index| {
                     let height = if index < 10 { 100 } else { 2 };
                     Box!(
-                        modifier = Modifier
-                            .size_wh(100.dp(), height.dp())
-                            .test_tag(format!("row {index}"))
+                        modifier =
+                            Modifier.size((100.dp(), height.dp())).test_tag(format!("row {index}"))
                     );
                 });
             }
@@ -365,11 +363,11 @@ fn a_jump_fills_the_viewport_in_one_frame() {
 #[test]
 fn tab_moves_focus_past_the_rows_in_view() {
     let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), || {
-        LazyColumn!(modifier = Modifier.size_wh(100.dp(), 100.dp()), |scope: LazyListScope| {
+        LazyColumn!(modifier = Modifier.size((100.dp(), 100.dp())), |scope: LazyListScope| {
             scope.items(1000, |index| {
                 Box!(
                     modifier = Modifier
-                        .size_wh(100.dp(), 20.dp())
+                        .size((100.dp(), 20.dp()))
                         .clickable(|| {})
                         .test_tag(format!("row {index}"))
                 );
@@ -400,20 +398,20 @@ fn a_focused_item_scrolled_out_of_view_keeps_focus() {
     let handle = text.handle();
     let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || {
         LazyColumn!(
-            modifier = Modifier.size_wh(100.dp(), 100.dp()),
+            modifier = Modifier.size((100.dp(), 100.dp())),
             state = given,
             |scope: LazyListScope| {
                 scope.item(move || {
                     BasicTextField!(
                         value = handle.get(),
                         on_value_change = move |value| handle.set(value),
-                        modifier = Modifier.size_wh(100.dp(), 20.dp()).test_tag("field"),
+                        modifier = Modifier.size((100.dp(), 20.dp())).test_tag("field"),
                     );
                 });
                 scope.items(1000, |index| {
                     Box!(
                         modifier =
-                            Modifier.size_wh(100.dp(), 20.dp()).test_tag(format!("row {index}"))
+                            Modifier.size((100.dp(), 20.dp())).test_tag(format!("row {index}"))
                     );
                 });
             }
@@ -484,9 +482,9 @@ fn the_wheel_delta_a_nested_lazy_list_leaves_scrolls_its_parent() {
     let state = LazyListState::new(0, 0);
     let (given_outer, given) = (*outer, *state);
     let mut ui = ComposeTestRule::sized(IntSize::new(100, 100), move || {
-        Column!(modifier = Modifier.size_wh(100.dp(), 100.dp()).vertical_scroll(given_outer), {
+        Column!(modifier = Modifier.size((100.dp(), 100.dp())).vertical_scroll(given_outer), {
             Rows(given, 6);
-            Spacer(Modifier.size_wh(100.dp(), 200.dp()));
+            Spacer(Modifier.size((100.dp(), 200.dp())));
         });
     });
     ui.host().send_pointer(PointerEvent::scroll(Offset::new(50.0, 50.0), Offset::new(0.0, 100.0)));

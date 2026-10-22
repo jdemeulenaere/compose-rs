@@ -71,7 +71,7 @@ fn a_state_written_while_laying_out_is_drawn_by_a_clean_boundary_in_that_frame()
             Layout(
                 Modifier,
                 policy.clone(),
-                callback(move || Leaf(Modifier.size_wh(10.dp(), height.get().dp()))),
+                callback(move || Leaf(Modifier.size((10.dp(), height.get().dp())))),
             );
             Leaf(
                 Modifier
@@ -112,7 +112,7 @@ fn a_hover_found_by_the_frames_layout_is_drawn_by_a_clean_boundary_in_that_frame
     // Made once, so the recomposition moving them gives them the same modifiers.
     fn scene(gap: MutableState<i32>, clickable: Modifier, pill: Modifier) {
         Column!({
-            Leaf(Modifier.size_wh(10.dp(), gap.get().dp()));
+            Leaf(Modifier.size((10.dp(), gap.get().dp())));
             Leaf(clickable.clone());
             Leaf(pill.clone());
         });
@@ -121,7 +121,14 @@ fn a_hover_found_by_the_frames_layout_is_drawn_by_a_clean_boundary_in_that_frame
     let gap_handle = gap.handle();
     let source = MutableInteractionSource::new();
     let clickable = Modifier
-        .clickable_interaction(true, None, Color::UNSPECIFIED, source.clone(), || {})
+        .clickable_with(
+            ClickableOptions {
+                indication: Color::UNSPECIFIED.into(),
+                interaction_source: Some(source.clone()),
+                ..ClickableOptions::DEFAULT
+            },
+            || {},
+        )
         .size(10.dp());
     let shown = source.clone();
     let pill = Modifier
@@ -169,7 +176,7 @@ fn switching_to_right_to_left_draws_what_a_fresh_right_to_left_draw_does() {
                                 fill(Color::BLUE),
                             );
                         })
-                        .padding_sides(1.dp(), 0.dp(), 3.dp(), 0.dp())
+                        .padding((1.dp(), 0.dp(), 3.dp(), 0.dp()))
                         .background(Color::BLACK)
                         .size(8.dp()),
                 );
@@ -193,7 +200,7 @@ fn a_popup_inside_a_boundary_draws_what_a_fresh_draw_does() {
     fn scene(knobs: [MutableState<i32>; 3]) {
         let [inside, moved, popup] = knobs;
         Column!(modifier = Modifier.repaint_boundary(), {
-            Leaf(Modifier.size_wh(10.dp(), moved.get().dp()));
+            Leaf(Modifier.size((10.dp(), moved.get().dp())));
             Column!(modifier = Modifier.repaint_boundary(), {
                 Leaf(
                     Modifier
@@ -339,7 +346,7 @@ fn nested_lifted_layers_draw_what_a_fresh_draw_does() {
                             let bounds = scope.bounds();
                             scope.draw_rect(bounds, fill(tint(content.get())));
                         })
-                        .size_wh(4.dp(), (content.get() % 3 + 2).dp()),
+                        .size((4.dp(), (content.get() % 3 + 2).dp())),
                 );
             }
         );

@@ -62,9 +62,7 @@ pub use scrollbar::{
     HorizontalScrollbar, LOCAL_SCROLLBAR_STYLE, ScrollbarAdapter, ScrollbarStyle,
     VerticalScrollbar, remember_lazy_list_scrollbar_adapter, remember_scrollbar_adapter,
 };
-pub use shape::{
-    CIRCLE_SHAPE, RoundedCornerShape, RoundedCornerShapeEach, RoundedCornerShapePercent,
-};
+pub use shape::{CIRCLE_SHAPE, RoundedCornerShape, RoundedCorners};
 pub use text::{
     BasicAnnotatedText, BasicText, DisableSelection, LOCAL_SELECTION_DISABLED, SelectionContainer,
 };

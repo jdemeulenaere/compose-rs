@@ -291,7 +291,7 @@ pub fn Button(
                             Dp::UNSPECIFIED,
                             Dp::UNSPECIFIED,
                         ))
-                        .padding_values(content_padding),
+                        .padding(content_padding),
                     Arrangement::Center.into(),
                     Alignment::CENTER_VERTICALLY,
                     content.clone(),

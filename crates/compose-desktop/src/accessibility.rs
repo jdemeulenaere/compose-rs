@@ -188,7 +188,9 @@ pub(crate) fn perform(host: &mut UiHost, request: &ActionRequest) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use compose_ui::{Density, IntSize, Modifier, UnitExt, platform::FixedTextMeasurer};
+    use compose_ui::{
+        ClickableOptions, Density, IntSize, Modifier, UnitExt, platform::FixedTextMeasurer,
+    };
 
     #[test]
     fn the_tree_has_the_window_its_nodes_and_their_actions() {
@@ -204,9 +206,8 @@ mod tests {
         host.set_content(move || {
             let counted = counted.clone();
             compose_foundation::layout::Box(
-                Modifier.size_wh(80.dp(), 30.dp()).clickable_with(
-                    true,
-                    Some(Role::Button),
+                Modifier.size((80.dp(), 30.dp())).clickable_with(
+                    ClickableOptions { role: Some(Role::Button), ..ClickableOptions::DEFAULT },
                     move || counted.set(counted.get() + 1),
                 ),
                 compose_ui::Alignment::TOP_START,

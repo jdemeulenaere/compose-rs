@@ -1,4 +1,4 @@
-//! Fifth review round: `MutableInteractionSource` with `clickable_interaction`, and
+//! Fifth review round: `MutableInteractionSource` with `clickable_with`, and
 //! `clear_and_set_semantics`, against Jetpack Compose. Each test states the input, what Compose
 //! does, and what happens instead.
 
@@ -8,6 +8,7 @@ use compose_foundation::layout::*;
 use compose_foundation::*;
 use compose_runtime::*;
 use compose_test::*;
+use compose_ui::ClickableOptions;
 use compose_ui::{MutableInteractionSource, Offset, PointerEvent, UnitExt};
 
 #[composable]
@@ -19,12 +20,14 @@ fn Pressable(
     if shown.get() {
         Box!(
             modifier = Modifier
-                .clickable_interaction(
-                    enabled.get(),
-                    None,
-                    compose_ui::Color::UNSPECIFIED,
-                    source.clone(),
-                    || {},
+                .clickable_with(
+                    ClickableOptions {
+                        enabled: enabled.get(),
+                        indication: compose_ui::Color::UNSPECIFIED.into(),
+                        interaction_source: Some(source.clone()),
+                        ..ClickableOptions::DEFAULT
+                    },
+                    || {}
                 )
                 .size(40.dp()),
         );

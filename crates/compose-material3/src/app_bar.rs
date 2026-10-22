@@ -599,7 +599,7 @@ fn single_row_top_app_bar(
         None,
         compose_runtime::callback(move || {
             top_app_bar_row(
-                Modifier.padding_values(window_insets),
+                Modifier.padding(window_insets),
                 policy.clone(),
                 title.clone(),
                 title_style,
@@ -706,7 +706,7 @@ fn two_rows_top_app_bar(bar: TwoRows) {
                 Alignment::START,
                 compose_runtime::callback(move |_| {
                     top_app_bar_row(
-                        Modifier.padding_values(window_insets).clip_to_bounds(),
+                        Modifier.padding(window_insets).clip_to_bounds(),
                         policies.0.clone(),
                         title.clone(),
                         small_title_style,
@@ -718,7 +718,7 @@ fn two_rows_top_app_bar(bar: TwoRows) {
                     );
                     top_app_bar_row(
                         Modifier
-                            .padding_values(PaddingValues::new(
+                            .padding(PaddingValues::new(
                                 window_insets.start,
                                 Dp(0.0),
                                 window_insets.end,
@@ -762,13 +762,12 @@ fn top_app_bar_row(
         policy,
         compose_runtime::callback(move || {
             bar_slot(
-                Modifier.padding_sides(HORIZONTAL_PADDING, Dp(0.0), Dp(0.0), Dp(0.0)),
+                Modifier.padding((HORIZONTAL_PADDING, Dp(0.0), Dp(0.0), Dp(0.0))),
                 colors.navigation_icon_content_color,
                 None,
                 navigation_icon.clone(),
             );
-            let mut title_modifier =
-                Modifier.padding_horizontal_vertical(HORIZONTAL_PADDING, 0.dp());
+            let mut title_modifier = Modifier.padding((HORIZONTAL_PADDING, 0.dp()));
             if hide_title_semantics {
                 title_modifier = title_modifier.clear_and_set_semantics(|_| {});
             }
@@ -782,7 +781,7 @@ fn top_app_bar_row(
                 Some(title.clone()),
             );
             bar_slot(
-                Modifier.padding_sides(Dp(0.0), Dp(0.0), HORIZONTAL_PADDING, Dp(0.0)),
+                Modifier.padding((Dp(0.0), Dp(0.0), HORIZONTAL_PADDING, Dp(0.0))),
                 colors.action_icon_content_color,
                 None,
                 actions.clone(),
@@ -942,9 +941,9 @@ pub fn BottomAppBar(
             Row(
                 Modifier
                     .fill_max_width()
-                    .padding_values(window_insets)
+                    .padding(window_insets)
                     .height(80.dp())
-                    .padding_values(content_padding),
+                    .padding(content_padding),
                 Arrangement::Start,
                 Alignment::CENTER_VERTICALLY,
                 compose_runtime::callback(move |row: RowScope| {
@@ -958,12 +957,7 @@ pub fn BottomAppBar(
                         Box(
                             // `FABVerticalPadding` and `FABHorizontalPadding`: 12 and 16 dp from
                             // the bar's edges, its 4 dp content padding included.
-                            Modifier.fill_max_height().padding_sides(
-                                Dp(0.0),
-                                8.dp(),
-                                12.dp(),
-                                Dp(0.0),
-                            ),
+                            Modifier.fill_max_height().padding((Dp(0.0), 8.dp(), 12.dp(), Dp(0.0))),
                             Alignment::TOP_START,
                             false,
                             compose_runtime::callback(move |_| fab()),

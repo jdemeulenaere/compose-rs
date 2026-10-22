@@ -180,15 +180,15 @@ fn modifier_of(spec: &Spec) -> Modifier {
     }
     // Outermost, so the node's own size may exceed its constraints.
     if let Some(required) = spec.required {
-        modifier = modifier.required_size((required as f32).dp(), (required as f32).dp());
+        modifier = modifier.required_size(((required as f32).dp(), (required as f32).dp()));
     }
     modifier =
         modifier.offset((spec.offset as f32).dp(), 0.dp()).padding((spec.padding as f32).dp());
     if spec.fill {
-        modifier = modifier.fill_max_width_fraction(0.5);
+        modifier = modifier.fill_max_width_with(0.5);
     }
     match (spec.width, spec.height) {
-        (Some(width), Some(height)) => modifier.size_wh((width as f32).dp(), (height as f32).dp()),
+        (Some(width), Some(height)) => modifier.size(((width as f32).dp(), (height as f32).dp())),
         (Some(width), None) => modifier.width((width as f32).dp()),
         (None, Some(height)) => modifier.height((height as f32).dp()),
         (None, None) => modifier,

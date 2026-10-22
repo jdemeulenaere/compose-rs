@@ -19,7 +19,7 @@ thread_local! {
 #[composable]
 fn Row(index: usize) {
     COMPOSED.with(|composed| composed.set(composed.get() + 1));
-    Box!(modifier = Modifier.size_wh(100.dp(), 20.dp()).test_tag(format!("row {index}")), {
+    Box!(modifier = Modifier.size((100.dp(), 20.dp())).test_tag(format!("row {index}")), {
         BasicText!("item {}", index);
     });
 }
@@ -27,7 +27,7 @@ fn Row(index: usize) {
 #[composable]
 fn List(state: LazyListState) {
     LazyColumn!(
-        modifier = Modifier.size_wh(100.dp(), 100.dp()),
+        modifier = Modifier.size((100.dp(), 100.dp())),
         state = state,
         |scope: LazyListScope| {
             scope.items(1000, |index| Row(index));
@@ -105,7 +105,7 @@ fn keyed_items_keep_their_state_when_items_before_them_go() {
         let count = remember(|| mutable_state_of(0));
         Box!(
             modifier = Modifier
-                .size_wh(100.dp(), 20.dp())
+                .size((100.dp(), 20.dp()))
                 .clickable(move || count.update(|count| count + 1))
                 .test_tag(label.clone()),
             {
@@ -117,7 +117,7 @@ fn keyed_items_keep_their_state_when_items_before_them_go() {
     let handle = items.handle();
     let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || {
         let items = Rc::new(handle.get());
-        LazyColumn!(modifier = Modifier.size_wh(100.dp(), 100.dp()), |scope: LazyListScope| {
+        LazyColumn!(modifier = Modifier.size((100.dp(), 100.dp())), |scope: LazyListScope| {
             let (keys, labels) = (items.clone(), items.clone());
             scope.items_keyed(
                 items.len(),
@@ -142,17 +142,17 @@ fn keyed_items_keep_their_state_when_items_before_them_go() {
 fn a_lazy_row_lays_out_sideways_with_padding_and_spacing() {
     let mut ui = ComposeTestRule::sized(IntSize::new(300, 100), || {
         LazyRow!(
-            modifier = Modifier.size_wh(200.dp(), 50.dp()),
+            modifier = Modifier.size((200.dp(), 50.dp())),
             content_padding = PaddingValues::new(10.dp(), 0.dp(), 10.dp(), 0.dp()),
             horizontal_arrangement = Arrangement::spaced_by(5.dp()),
             |scope: LazyListScope| {
                 scope.item(|| {
-                    Box!(modifier = Modifier.size_wh(40.dp(), 40.dp()).test_tag("first"));
+                    Box!(modifier = Modifier.size((40.dp(), 40.dp())).test_tag("first"));
                 });
                 scope.items(50, |index| {
                     Box!(
                         modifier =
-                            Modifier.size_wh(40.dp(), 40.dp()).test_tag(format!("cell {index}"))
+                            Modifier.size((40.dp(), 40.dp())).test_tag(format!("cell {index}"))
                     );
                 });
             }

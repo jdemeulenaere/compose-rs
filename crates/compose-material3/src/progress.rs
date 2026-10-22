@@ -62,10 +62,10 @@ pub fn CircularProgressIndicator(
         let stroke = scope.density().to_px(stroke_width);
         let oval = inset_oval(scope.size().width.min(scope.size().height), stroke);
         if track_color.alpha() > 0 {
-            scope.draw_arc(oval, 0.0, 360.0, Paint::stroke_capped(track_color, stroke, stroke_cap));
+            scope.draw_arc(oval, 0.0, 360.0, Paint::stroke_with(track_color, stroke, stroke_cap));
         }
         let sweep = progress.clamp(0.0, 1.0) * 360.0;
-        scope.draw_arc(oval, -90.0, sweep, Paint::stroke_capped(color, stroke, stroke_cap));
+        scope.draw_arc(oval, -90.0, sweep, Paint::stroke_with(color, stroke, stroke_cap));
     });
 }
 
@@ -98,7 +98,7 @@ pub fn IndeterminateCircularProgressIndicator(
         let size = scope.size().width.min(scope.size().height);
         let oval = inset_oval(size, stroke);
         if track_color.alpha() > 0 {
-            scope.draw_arc(oval, 0.0, 360.0, Paint::stroke_capped(track_color, stroke, stroke_cap));
+            scope.draw_arc(oval, 0.0, 360.0, Paint::stroke_with(track_color, stroke, stroke_cap));
         }
         let (start, sweep) = circular_indeterminate_angles(time.get());
         // A cap past the arc's ends: the arc starts that much later, as Compose's.
@@ -111,7 +111,7 @@ pub fn IndeterminateCircularProgressIndicator(
             oval,
             start + cap_offset,
             sweep.max(0.1),
-            Paint::stroke_capped(color, stroke, stroke_cap),
+            Paint::stroke_with(color, stroke, stroke_cap),
         );
     });
 }
@@ -217,10 +217,10 @@ const SECOND_TAIL: LineEnd =
 
 /// 240 by 4 dp unless the modifier says otherwise, as Compose's.
 fn linear_size(modifier: Modifier) -> Modifier {
-    modifier.size_wh(
+    modifier.size((
         ProgressIndicatorDefaults::LINEAR_INDICATOR_WIDTH,
         ProgressIndicatorDefaults::LINEAR_INDICATOR_HEIGHT,
-    )
+    ))
 }
 
 /// A line across the node's middle from `start` to `end` (fractions of its width, from its
@@ -250,7 +250,7 @@ fn draw_line_fraction(
     scope.draw_line(
         Offset::new(from, y),
         Offset::new(to, y),
-        Paint::stroke_capped(color, stroke, cap),
+        Paint::stroke_with(color, stroke, cap),
     );
 }
 

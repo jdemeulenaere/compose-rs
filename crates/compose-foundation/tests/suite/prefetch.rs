@@ -37,7 +37,7 @@ fn Row(index: usize) {
             LIVE.with(|live| live.borrow_mut().remove(&index));
         })
     });
-    Box!(modifier = Modifier.size_wh(100.dp(), 20.dp()).test_tag(format!("row {index}")), {
+    Box!(modifier = Modifier.size((100.dp(), 20.dp())).test_tag(format!("row {index}")), {
         BasicText!("item {}", index);
     });
 }
@@ -45,7 +45,7 @@ fn Row(index: usize) {
 #[composable]
 fn List(state: LazyListState) {
     LazyColumn!(
-        modifier = Modifier.size_wh(100.dp(), 100.dp()),
+        modifier = Modifier.size((100.dp(), 100.dp())),
         state = state,
         |scope: LazyListScope| {
             scope.items(1000, |index| Row(index));
@@ -220,7 +220,7 @@ fn a_grid_prefetches_its_next_rows() {
     let mut ui = ComposeTestRule::sized(IntSize::new(300, 300), move || {
         LazyVerticalGrid!(
             GridCells::Fixed(3),
-            modifier = Modifier.size_wh(300.dp(), 100.dp()),
+            modifier = Modifier.size((300.dp(), 100.dp())),
             state = given,
             |scope: LazyGridScope| {
                 scope.items(300, Row);
@@ -376,7 +376,7 @@ fn PaintedRow(index: usize) {
         let bounds = scope.bounds();
         scope.draw_rect(bounds, compose_ui::Paint::fill(row_color(index)));
     });
-    Box!(modifier = painted.size_wh(100.dp(), 20.dp()), {
+    Box!(modifier = painted.size((100.dp(), 20.dp())), {
         BasicText!("item {}", index);
     });
 }
@@ -384,7 +384,7 @@ fn PaintedRow(index: usize) {
 #[composable]
 fn PaintedList(state: LazyListState) {
     LazyColumn!(
-        modifier = Modifier.size_wh(100.dp(), 100.dp()),
+        modifier = Modifier.size((100.dp(), 100.dp())),
         state = state,
         |scope: LazyListScope| {
             scope.items(1000, |index| PaintedRow(index));

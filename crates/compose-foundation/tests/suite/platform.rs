@@ -280,11 +280,11 @@ fn a_lazy_list_keeps_its_position_in_a_new_host() {
         let state = remember_lazy_list_state!();
         STATE.with(|cell| *cell.borrow_mut() = Some(state));
         LazyColumn!(
-            modifier = Modifier.size_wh(100.dp(), 200.dp()),
+            modifier = Modifier.size((100.dp(), 200.dp())),
             state = state,
             |scope: LazyListScope| {
                 scope.items(100, |index| {
-                    Box!(modifier = Modifier.size_wh(100.dp(), 50.dp()), {
+                    Box!(modifier = Modifier.size((100.dp(), 50.dp())), {
                         BasicText!("item {index}");
                     });
                 });
@@ -307,8 +307,8 @@ fn a_scroll_state_keeps_its_value_in_a_new_host() {
     let content = || {
         let state = remember_scroll_state();
         STATE.with(|cell| *cell.borrow_mut() = Some(state));
-        Column!(modifier = Modifier.size_wh(100.dp(), 100.dp()).vertical_scroll(state), {
-            Box!(modifier = Modifier.size_wh(100.dp(), 1000.dp()));
+        Column!(modifier = Modifier.size((100.dp(), 100.dp())).vertical_scroll(state), {
+            Box!(modifier = Modifier.size((100.dp(), 1000.dp())));
         });
     };
     let mut ui = compose_test(content);

@@ -1,5 +1,6 @@
 //! `AlertDialog`, `DropdownMenu` and `DropdownMenuItem`, as Compose's Material 3.
 
+use compose_ui::ClickableOptions;
 use std::rc::Rc;
 
 use compose_foundation::ScrollModifiers as _;
@@ -80,7 +81,7 @@ pub fn AlertDialog(
                                                     column,
                                                     compose_ui::Alignment::CENTER_HORIZONTALLY,
                                                 )
-                                                .padding_sides(0.dp(), 0.dp(), 0.dp(), 16.dp()),
+                                                .padding((0.dp(), 0.dp(), 0.dp(), 16.dp())),
                                             Alignment::CENTER,
                                             false,
                                             compose_runtime::callback({
@@ -105,14 +106,12 @@ pub fn AlertDialog(
                                                     compose_ui::Alignment::START
                                                 };
                                                 Box(
-                                                    Modifier
-                                                        .align(column, alignment)
-                                                        .padding_sides(
-                                                            0.dp(),
-                                                            0.dp(),
-                                                            0.dp(),
-                                                            16.dp(),
-                                                        ),
+                                                    Modifier.align(column, alignment).padding((
+                                                        0.dp(),
+                                                        0.dp(),
+                                                        0.dp(),
+                                                        16.dp(),
+                                                    )),
                                                     Alignment::TOP_START,
                                                     false,
                                                     compose_runtime::callback({
@@ -136,13 +135,8 @@ pub fn AlertDialog(
                                                 // buttons have their room.
                                                 Box(
                                                     Modifier
-                                                        .weight_filled(column, 1.0, false)
-                                                        .padding_sides(
-                                                            0.dp(),
-                                                            0.dp(),
-                                                            0.dp(),
-                                                            24.dp(),
-                                                        ),
+                                                        .weight_with(column, 1.0, false)
+                                                        .padding((0.dp(), 0.dp(), 0.dp(), 24.dp())),
                                                     Alignment::TOP_START,
                                                     false,
                                                     compose_runtime::callback({
@@ -298,10 +292,7 @@ pub fn DropdownMenu(
                         // The modifier on the items' column, its 8 dp padding outside the
                         // scroll, as Compose's `DropdownMenuContent`.
                         Layout(
-                            modifier
-                                .clone()
-                                .padding_horizontal_vertical(0.dp(), 8.dp())
-                                .vertical_scroll(scroll),
+                            modifier.clone().padding((0.dp(), 8.dp())).vertical_scroll(scroll),
                             column.clone(),
                             compose_runtime::callback(move || content(ColumnScope::__new())),
                         );
@@ -381,7 +372,10 @@ pub fn DropdownMenuItem(
         })
     };
     let modifier = modifier
-        .clickable_indicated(enabled, None, color, on_click)
+        .clickable_with(
+            ClickableOptions { enabled, indication: color.into(), ..ClickableOptions::DEFAULT },
+            on_click,
+        )
         .fill_max_width()
         .size_in(compose_ui::SizeSpec::bounds(
             Dp::UNSPECIFIED,
@@ -389,7 +383,7 @@ pub fn DropdownMenuItem(
             Dp::UNSPECIFIED,
             Dp::UNSPECIFIED,
         ))
-        .padding_horizontal_vertical(12.dp(), 0.dp());
+        .padding((12.dp(), 0.dp()));
     CompositionLocalProvider(LOCAL_CONTENT_COLOR.provides(color), || {
         CompositionLocalProvider(LOCAL_TEXT_STYLE.provides(label), || {
             let (text, leading, trailing) =

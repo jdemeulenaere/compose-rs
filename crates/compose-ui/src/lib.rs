@@ -82,7 +82,7 @@ pub use alignment::{
 };
 pub use annotated::{AnnotatedString, AnnotatedStringBuilder, SpanRange, SpanStyle};
 pub use back::{BackHandler, LOCAL_ON_BACK_PRESSED_DISPATCHER, OnBackPressedDispatcher};
-pub use brush::{Brush, Gradient, Shader, ShaderIndex, TileMode};
+pub use brush::{Brush, ColorStops, Gradient, Shader, ShaderIndex, TileMode};
 pub use clipboard::Clipboard;
 pub use configuration::{
     Configuration, HostEvents, HostProps, LOCAL_CONFIGURATION, LOCAL_HOST_EVENTS, LOCAL_HOST_PROPS,
@@ -112,10 +112,10 @@ pub use layout::{
 };
 pub use layout_callbacks::{GlobalPositionAwareModifierNode, LayoutCoordinates};
 pub use modifier::{
-    AlignScope, BoxScope, ColumnScope, DetachContext, DrawModifierNode, FocusTargetModifierNode,
-    Indication, KeyInputModifierNode, LayoutModifierNode, Modifier, ModifierNode,
-    ModifierNodeElement, PaddingValues, ParentAlignment, ParentData, PointerInputModifierNode,
-    RowScope, SemanticsModifierNode, SizeSpec, WeightScope,
+    AlignScope, BoxScope, ClickableOptions, ColumnScope, DetachContext, DrawModifierNode,
+    FocusTargetModifierNode, Indication, KeyInputModifierNode, LayoutModifierNode, Modifier,
+    ModifierNode, ModifierNodeElement, PaddingValues, ParentAlignment, ParentData,
+    PointerInputModifierNode, RowScope, SemanticsModifierNode, SizeSpec, WeightScope,
 };
 pub use nested_scroll::{NestedScrollChain, NestedScrollConnection, NestedScrollSource};
 pub use overlay::{PopupPositionProvider, WindowPosition};
@@ -134,7 +134,9 @@ pub use text::{
 };
 pub use text_input::{ImeAction, ImeOptions, KeyboardCapitalization, KeyboardType};
 pub use text_selection::Selectable;
-pub use unit::{Density, Dp, IntOffset, IntSize, Offset, Rect, Size, Sp, UnitExt, round_to_int};
+pub use unit::{
+    Density, Dp, DpSize, IntOffset, IntSize, Offset, Rect, Size, Sp, UnitExt, round_to_int,
+};
 pub use window::{
     AlignmentOffsetPositionProvider, Dialog, DialogProperties, Popup, PopupProperties,
     PopupWithPositionProvider,

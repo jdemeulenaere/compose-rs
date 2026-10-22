@@ -97,13 +97,13 @@ fn opening_a_dialog_inside_a_scrolled_column_does_not_scroll_it() {
         // A 100 px viewport, 100 px down the window.
         Column!(
             modifier = Modifier
-                .padding_sides(0.dp(), 100.dp(), 0.dp(), 0.dp())
-                .size_wh(100.dp(), 100.dp())
+                .padding((0.dp(), 100.dp(), 0.dp(), 0.dp()))
+                .size((100.dp(), 100.dp()))
                 .vertical_scroll(state),
             {
                 for index in 0..20 {
                     Box!(
-                        modifier = Modifier.size_wh(100.dp(), 50.dp()).test_tag(format!("{index}"))
+                        modifier = Modifier.size((100.dp(), 50.dp())).test_tag(format!("{index}"))
                     );
                     if index == 10 && open.get() {
                         Dialog!(on_dismiss_request = move || open.set(false), {
@@ -187,7 +187,7 @@ fn passes_a_popup_follows_its_anchor_when_it_scrolls() {
         STATE.with(|cell| *cell.borrow_mut() = Some(state));
         Column!(modifier = Modifier.fill_max_size().vertical_scroll(state), {
             for index in 0..20 {
-                Box!(modifier = Modifier.size_wh(100.dp(), 50.dp()), {
+                Box!(modifier = Modifier.size((100.dp(), 50.dp())), {
                     if index == 3 {
                         Popup!(offset = IntOffset::new(5, 5), {
                             Box!(modifier = Modifier.size(10.dp()).test_tag("popup"));
@@ -364,11 +364,11 @@ fn a_popup_in_a_lazy_item_scrolled_out_of_view_is_gone() {
     let given = *state;
     let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || {
         LazyColumn!(
-            modifier = Modifier.size_wh(100.dp(), 100.dp()),
+            modifier = Modifier.size((100.dp(), 100.dp())),
             state = given,
             |scope: LazyListScope| {
                 scope.items(100, |index| {
-                    Box!(modifier = Modifier.size_wh(100.dp(), 20.dp()), {
+                    Box!(modifier = Modifier.size((100.dp(), 20.dp())), {
                         if index == 0 {
                             Popup!(offset = IntOffset::new(120, 0), {
                                 Box!(
@@ -404,11 +404,11 @@ fn a_popup_in_a_lazy_item_composed_beyond_the_viewport_takes_no_taps() {
     let given = *state;
     let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || {
         LazyColumn!(
-            modifier = Modifier.size_wh(100.dp(), 100.dp()),
+            modifier = Modifier.size((100.dp(), 100.dp())),
             state = given,
             |scope: LazyListScope| {
                 scope.items(100, |index| {
-                    Box!(modifier = Modifier.size_wh(100.dp(), 20.dp()), {
+                    Box!(modifier = Modifier.size((100.dp(), 20.dp())), {
                         if index == 6 {
                             Popup!(offset = IntOffset::new(120, 0), {
                                 Box!(

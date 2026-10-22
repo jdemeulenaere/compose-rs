@@ -53,7 +53,7 @@ fn space_types_a_space_in_a_field_inside_a_clickable() {
                 BasicTextField!(
                     value = text.get(),
                     on_value_change = move |value| text.set(value),
-                    modifier = Modifier.size_wh(200.dp(), 40.dp()).test_tag("field"),
+                    modifier = Modifier.size((200.dp(), 40.dp())).test_tag("field"),
                 );
             }
         );
@@ -90,7 +90,7 @@ fn an_ancestors_shortcut_does_not_take_keys_typed_into_a_field() {
                 BasicTextField!(
                     value = text.get(),
                     on_value_change = move |value| text.set(value),
-                    modifier = Modifier.size_wh(200.dp(), 40.dp()).test_tag("field"),
+                    modifier = Modifier.size((200.dp(), 40.dp())).test_tag("field"),
                 );
             }
         );
@@ -141,7 +141,7 @@ fn a_text_field_in_a_clickable_row_is_a_node_of_its_own() {
             BasicTextField!(
                 value = String::from("note"),
                 on_value_change = |_| {},
-                modifier = Modifier.size_wh(200.dp(), 40.dp()).test_tag("field"),
+                modifier = Modifier.size((200.dp(), 40.dp())).test_tag("field"),
                 enabled = false,
             );
         });
@@ -268,12 +268,12 @@ fn tab_types_a_tab_in_a_multi_line_field() {
             BasicTextField!(
                 value = first.get(),
                 on_value_change = move |value| first.set(value),
-                modifier = Modifier.size_wh(200.dp(), 40.dp()).test_tag("first"),
+                modifier = Modifier.size((200.dp(), 40.dp())).test_tag("first"),
             );
             BasicTextField!(
                 value = second.get(),
                 on_value_change = move |value| second.set(value),
-                modifier = Modifier.size_wh(200.dp(), 40.dp()).test_tag("second"),
+                modifier = Modifier.size((200.dp(), 40.dp())).test_tag("second"),
             );
         });
     }

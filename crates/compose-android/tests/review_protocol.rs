@@ -340,7 +340,7 @@ fn a_scrolled_lazy_list_keeps_its_records_sound() {
     let tick_handle = tick.handle();
     let mut checked = Checked::new(move || {
         compose_foundation::LazyColumn(
-            Modifier.size_wh(100.dp(), 100.dp()),
+            Modifier.size((100.dp(), 100.dp())),
             given,
             compose_foundation::layout::PaddingValues::ZERO,
             false,
@@ -361,7 +361,7 @@ fn a_scrolled_lazy_list_keeps_its_records_sound() {
                                     };
                             })
                             .then(painted(color))
-                            .size_wh(100.dp(), 20.dp()),
+                            .size((100.dp(), 20.dp())),
                     );
                 });
             }),

@@ -18,7 +18,7 @@ fn top_of(ui: &mut ComposeTestRule, tag: &str) -> f32 {
 fn items_over_a_list_get_each_item_and_its_index() {
     let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), || {
         let fruits: ImmutableList<&'static str> = ImmutableList::from(["apple", "pear"]);
-        LazyColumn!(modifier = Modifier.size_wh(100.dp(), 100.dp()), |scope: LazyListScope| {
+        LazyColumn!(modifier = Modifier.size((100.dp(), 100.dp())), |scope: LazyListScope| {
             scope.items_list(fruits.clone(), |_, fruit: &&str| {
                 BasicText!("{}", fruit);
             });
@@ -42,7 +42,7 @@ fn keyed_list_items_keep_their_state_when_items_before_them_go() {
         let count = remember(|| mutable_state_of(0));
         Box!(
             modifier = Modifier
-                .size_wh(100.dp(), 20.dp())
+                .size((100.dp(), 20.dp()))
                 .clickable(move || count.update(|count| count + 1))
                 .test_tag(label.clone()),
             {
@@ -54,7 +54,7 @@ fn keyed_list_items_keep_their_state_when_items_before_them_go() {
     let handle = items.handle();
     let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || {
         let items = handle.get();
-        LazyColumn!(modifier = Modifier.size_wh(100.dp(), 100.dp()), |scope: LazyListScope| {
+        LazyColumn!(modifier = Modifier.size((100.dp(), 100.dp())), |scope: LazyListScope| {
             scope.items_list_keyed(
                 items.clone(),
                 |item: &String| item.clone(),
@@ -75,14 +75,14 @@ fn keyed_list_items_keep_their_state_when_items_before_them_go() {
 fn a_lazy_column_aligns_its_items_with_a_horizontal_alignment() {
     let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), || {
         LazyColumn!(
-            modifier = Modifier.size_wh(100.dp(), 100.dp()),
+            modifier = Modifier.size((100.dp(), 100.dp())),
             horizontal_alignment = Alignment::CENTER_HORIZONTALLY,
             |scope: LazyListScope| {
                 scope.item(|| Box!(modifier = Modifier.size(40.dp()).test_tag("item")));
             }
         );
         LazyRow!(
-            modifier = Modifier.size_wh(100.dp(), 100.dp()).offset(0.dp(), 100.dp()),
+            modifier = Modifier.size((100.dp(), 100.dp())).offset(0.dp(), 100.dp()),
             vertical_alignment = Alignment::BOTTOM,
             |scope: LazyListScope| {
                 scope.item(|| Box!(modifier = Modifier.size(40.dp()).test_tag("cell")));
@@ -99,7 +99,7 @@ fn fill_parent_max_size_takes_the_viewport_less_the_padding() {
     let handle = height.handle();
     let mut ui = ComposeTestRule::sized(IntSize::new(300, 300), move || {
         LazyColumn!(
-            modifier = Modifier.size_wh(100.dp(), handle.get().dp()),
+            modifier = Modifier.size((100.dp(), handle.get().dp())),
             content_padding = PaddingValues::all(10.dp()),
             |scope: LazyListScope| {
                 let item_scope = scope.item_scope();
@@ -135,13 +135,13 @@ fn fill_parent_max_size_takes_the_viewport_less_the_padding() {
 #[composable]
 fn Numbers(reverse: bool, arrangement: VerticalArrangement, count: usize, state: LazyListState) {
     LazyColumn!(
-        modifier = Modifier.size_wh(100.dp(), 100.dp()),
+        modifier = Modifier.size((100.dp(), 100.dp())),
         state = state,
         reverse_layout = reverse,
         vertical_arrangement = arrangement,
         |scope: LazyListScope| {
             scope.items(count, |index| {
-                Box!(modifier = Modifier.size_wh(100.dp(), 30.dp()).test_tag(format!("{index}")));
+                Box!(modifier = Modifier.size((100.dp(), 30.dp())).test_tag(format!("{index}")));
             });
         }
     );
@@ -201,14 +201,14 @@ fn a_reversed_list_brings_a_focused_item_into_view() {
     let given = *state;
     let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || {
         LazyColumn!(
-            modifier = Modifier.size_wh(100.dp(), 100.dp()),
+            modifier = Modifier.size((100.dp(), 100.dp())),
             state = given,
             reverse_layout = true,
             |scope: LazyListScope| {
                 scope.items(10, |index| {
                     Box!(
                         modifier = Modifier
-                            .size_wh(100.dp(), 30.dp())
+                            .size((100.dp(), 30.dp()))
                             .focusable(true)
                             .test_tag(format!("{index}"))
                     );
@@ -228,13 +228,13 @@ fn a_list_with_user_scrolling_disabled_ignores_the_wheel_but_not_its_state() {
     let given = *state;
     let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || {
         LazyColumn!(
-            modifier = Modifier.size_wh(100.dp(), 100.dp()),
+            modifier = Modifier.size((100.dp(), 100.dp())),
             state = given,
             user_scroll_enabled = false,
             |scope: LazyListScope| {
                 scope.items(10, |index| {
                     Box!(
-                        modifier = Modifier.size_wh(100.dp(), 30.dp()).test_tag(format!("{index}"))
+                        modifier = Modifier.size((100.dp(), 30.dp())).test_tag(format!("{index}"))
                     );
                 });
             }
@@ -251,14 +251,14 @@ fn a_list_with_user_scrolling_disabled_ignores_the_wheel_but_not_its_state() {
 #[composable]
 fn Sections(state: LazyListState) {
     LazyColumn!(
-        modifier = Modifier.size_wh(100.dp(), 100.dp()),
+        modifier = Modifier.size((100.dp(), 100.dp())),
         state = state,
         |scope: LazyListScope| {
             for section in ["A", "B"] {
                 scope.sticky_header(move |_| {
                     Box!(
                         modifier = Modifier
-                            .size_wh(100.dp(), 20.dp())
+                            .size((100.dp(), 20.dp()))
                             .background(Color::RED)
                             .test_tag(section)
                     );
@@ -266,7 +266,7 @@ fn Sections(state: LazyListState) {
                 scope.items(10, move |index| {
                     Box!(
                         modifier = Modifier
-                            .size_wh(100.dp(), 30.dp())
+                            .size((100.dp(), 30.dp()))
                             .background(Color::GRAY)
                             .test_tag(format!("{section}{index}"))
                     );
@@ -318,7 +318,7 @@ fn a_sticky_header_far_behind_is_composed_and_drawn_over_the_items() {
 #[should_panic(expected = "have the same key")]
 fn duplicate_keys_panic_in_debug_builds() {
     let _ui = ComposeTestRule::sized(IntSize::new(200, 200), || {
-        LazyColumn!(modifier = Modifier.size_wh(100.dp(), 100.dp()), |scope: LazyListScope| {
+        LazyColumn!(modifier = Modifier.size((100.dp(), 100.dp())), |scope: LazyListScope| {
             scope.items_keyed(
                 3,
                 |index| index.min(1),

@@ -55,17 +55,63 @@ pub struct Gradient {
     pub tile_mode: TileMode,
 }
 
-impl Gradient {
-    fn new(colors: &[Color], tile_mode: TileMode) -> Gradient {
-        Gradient { colors: colors.into(), stops: None, tile_mode }
-    }
+/// A gradient's colors, evenly spread or each at its stop (from 0 to 1): what the gradient
+/// constructors take, from `&[Color]` or `&[(f32, Color)]` (arrays and vectors too), as
+/// Compose's `colors` and `colorStops` overloads.
+#[derive(Clone, PartialEq, Debug)]
+pub struct ColorStops {
+    colors: Arc<[Color]>,
+    stops: Option<Arc<[f32]>>,
+}
 
-    fn with_stops(color_stops: &[(f32, Color)], tile_mode: TileMode) -> Gradient {
-        Gradient {
+impl From<&[Color]> for ColorStops {
+    fn from(colors: &[Color]) -> ColorStops {
+        ColorStops { colors: colors.into(), stops: None }
+    }
+}
+
+impl<const N: usize> From<&[Color; N]> for ColorStops {
+    fn from(colors: &[Color; N]) -> ColorStops {
+        ColorStops::from(&colors[..])
+    }
+}
+
+impl<const N: usize> From<[Color; N]> for ColorStops {
+    fn from(colors: [Color; N]) -> ColorStops {
+        ColorStops::from(&colors[..])
+    }
+}
+
+impl From<Vec<Color>> for ColorStops {
+    fn from(colors: Vec<Color>) -> ColorStops {
+        ColorStops { colors: colors.into(), stops: None }
+    }
+}
+
+impl From<&[(f32, Color)]> for ColorStops {
+    fn from(color_stops: &[(f32, Color)]) -> ColorStops {
+        ColorStops {
             colors: color_stops.iter().map(|(_, color)| *color).collect(),
             stops: Some(color_stops.iter().map(|(stop, _)| *stop).collect()),
-            tile_mode,
         }
+    }
+}
+
+impl<const N: usize> From<&[(f32, Color); N]> for ColorStops {
+    fn from(color_stops: &[(f32, Color); N]) -> ColorStops {
+        ColorStops::from(&color_stops[..])
+    }
+}
+
+impl<const N: usize> From<[(f32, Color); N]> for ColorStops {
+    fn from(color_stops: [(f32, Color); N]) -> ColorStops {
+        ColorStops::from(&color_stops[..])
+    }
+}
+
+impl Gradient {
+    fn new(colors: ColorStops, tile_mode: TileMode) -> Gradient {
+        Gradient { colors: colors.colors, stops: colors.stops, tile_mode }
     }
 
     /// The colors' average (each channel, alpha weighted), what a renderer without shaders
@@ -95,32 +141,22 @@ impl Brush {
         Brush::Solid(color)
     }
 
-    /// Colors evenly spread from `start` to `end`, as `Brush.linearGradient(colors, start,
-    /// end, tileMode)` (Compose's defaults: `Offset::ZERO` to `Offset::INFINITE`, the
+    /// Colors from `start` to `end`, as `Brush.linearGradient(colors, start, end, tileMode)`
+    /// (or `colorStops`: each color at its stop) (Compose's defaults: `Offset::ZERO` to `Offset::INFINITE`, the
     /// drawing's diagonal, `TileMode::Clamp`).
     pub fn linear_gradient(
-        colors: &[Color],
+        colors: impl Into<ColorStops>,
         start: Offset,
         end: Offset,
         tile_mode: TileMode,
     ) -> Brush {
-        Brush::Linear { gradient: Gradient::new(colors, tile_mode), start, end }
-    }
-
-    /// `linear_gradient` with each color at its stop, as `linearGradient(vararg colorStops)`.
-    pub fn linear_gradient_stops(
-        color_stops: &[(f32, Color)],
-        start: Offset,
-        end: Offset,
-        tile_mode: TileMode,
-    ) -> Brush {
-        Brush::Linear { gradient: Gradient::with_stops(color_stops, tile_mode), start, end }
+        Brush::Linear { gradient: Gradient::new(colors.into(), tile_mode), start, end }
     }
 
     /// A left-to-right gradient from `start_x` to `end_x`, as `Brush.horizontalGradient`
     /// (Compose's defaults: 0 to `f32::INFINITY`, the drawing's width).
     pub fn horizontal_gradient(
-        colors: &[Color],
+        colors: impl Into<ColorStops>,
         start_x: f32,
         end_x: f32,
         tile_mode: TileMode,
@@ -135,7 +171,7 @@ impl Brush {
 
     /// A top-to-bottom gradient from `start_y` to `end_y`, as `Brush.verticalGradient`.
     pub fn vertical_gradient(
-        colors: &[Color],
+        colors: impl Into<ColorStops>,
         start_y: f32,
         end_y: f32,
         tile_mode: TileMode,
@@ -152,27 +188,17 @@ impl Brush {
     /// (Compose's defaults: `Offset::UNSPECIFIED`, the drawing's center, and `f32::INFINITY`,
     /// half its smaller side).
     pub fn radial_gradient(
-        colors: &[Color],
+        colors: impl Into<ColorStops>,
         center: Offset,
         radius: f32,
         tile_mode: TileMode,
     ) -> Brush {
-        Brush::Radial { gradient: Gradient::new(colors, tile_mode), center, radius }
-    }
-
-    /// `radial_gradient` with each color at its stop.
-    pub fn radial_gradient_stops(
-        color_stops: &[(f32, Color)],
-        center: Offset,
-        radius: f32,
-        tile_mode: TileMode,
-    ) -> Brush {
-        Brush::Radial { gradient: Gradient::with_stops(color_stops, tile_mode), center, radius }
+        Brush::Radial { gradient: Gradient::new(colors.into(), tile_mode), center, radius }
     }
 
     /// Colors around `center`, clockwise from 3 o'clock, as `Brush.sweepGradient`.
-    pub fn sweep_gradient(colors: &[Color], center: Offset) -> Brush {
-        Brush::Sweep { gradient: Gradient::new(colors, TileMode::Clamp), center }
+    pub fn sweep_gradient(colors: impl Into<ColorStops>, center: Offset) -> Brush {
+        Brush::Sweep { gradient: Gradient::new(colors.into(), TileMode::Clamp), center }
     }
 
     /// The shader painting this brush over a drawing of `size` whose top left is at `origin`

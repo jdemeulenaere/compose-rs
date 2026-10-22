@@ -38,7 +38,7 @@ fn alphas(ui: &mut ComposeTestRule) -> Vec<f32> {
 fn Panel(visible: MutableState<bool>, enter: EnterTransition, exit: ExitTransition) {
     Column!({
         AnimatedVisibility!(visible.get(), enter = enter, exit = exit, {
-            Box!(modifier = Modifier.size_wh(100.dp(), 40.dp()).test_tag("panel"), {
+            Box!(modifier = Modifier.size((100.dp(), 40.dp())).test_tag("panel"), {
                 BasicText!("details");
             });
         });
@@ -165,7 +165,7 @@ fn animate_content_size_defaults_to_a_medium_low_spring() {
     fn Expanding(expanded: MutableState<bool>) {
         Column!({
             Box!(modifier = Modifier.animate_content_size(), {
-                Spacer(Modifier.size_wh(50.dp(), if expanded.get() { 100.dp() } else { 20.dp() }));
+                Spacer(Modifier.size((50.dp(), if expanded.get() { 100.dp() } else { 20.dp() })));
             });
             BasicText!("below", modifier = Modifier.test_tag("below"));
         });

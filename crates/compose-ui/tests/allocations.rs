@@ -74,7 +74,7 @@ use support::*;
 #[composable]
 fn Bar(color: MutableState<bool>, width: MutableState<u32>) {
     let color = if color.get() { Color::RED } else { Color::BLUE };
-    Leaf(Modifier.size_wh((width.get() as f32).dp(), 10.dp()).background(color));
+    Leaf(Modifier.size(((width.get() as f32).dp(), 10.dp())).background(color));
 }
 
 #[composable]

@@ -20,10 +20,10 @@ fn a_column_arranges_and_aligns_its_children() {
             vertical_arrangement = Arrangement::spaced_by(10.dp()),
             horizontal_alignment = Alignment::CENTER_HORIZONTALLY,
             |column| {
-                Spacer(Modifier.size_wh(20.dp(), 10.dp()).test_tag("a"));
-                Spacer(Modifier.size_wh(40.dp(), 10.dp()).test_tag("b"));
+                Spacer(Modifier.size((20.dp(), 10.dp())).test_tag("a"));
+                Spacer(Modifier.size((40.dp(), 10.dp())).test_tag("b"));
                 Spacer(
-                    Modifier.size_wh(40.dp(), 10.dp()).align(column, Alignment::END).test_tag("c"),
+                    Modifier.size((40.dp(), 10.dp())).align(column, Alignment::END).test_tag("c"),
                 );
             }
         );
@@ -40,7 +40,7 @@ fn a_row_shares_its_space_by_weight() {
             modifier = Modifier.fill_max_width(),
             vertical_alignment = Alignment::CENTER_VERTICALLY,
             |row| {
-                Spacer(Modifier.size_wh(10.dp(), 20.dp()).test_tag("fixed"));
+                Spacer(Modifier.size((10.dp(), 20.dp())).test_tag("fixed"));
                 Spacer(Modifier.weight(row, 1.0).height(10.dp()).test_tag("one"));
                 Spacer(Modifier.weight(row, 2.0).height(10.dp()).test_tag("two"));
             }

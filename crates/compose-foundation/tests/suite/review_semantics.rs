@@ -6,6 +6,7 @@
 use compose_foundation::layout::*;
 use compose_foundation::*;
 use compose_test::*;
+use compose_ui::ClickableOptions;
 use compose_ui::{ImageBitmap, Role, SemanticsAction, UnitExt};
 
 fn pixel() -> ImageBitmap {
@@ -46,7 +47,10 @@ fn an_outer_semantics_modifier_wins_over_an_inner_one() {
             modifier = Modifier
                 .test_tag("tab")
                 .semantics(false, |config| config.role = Some(Role::Tab))
-                .clickable_with(true, Some(Role::Button), || {})
+                .clickable_with(
+                    ClickableOptions { role: Some(Role::Button), ..ClickableOptions::DEFAULT },
+                    || {}
+                )
                 .size(20.dp()),
         );
     });

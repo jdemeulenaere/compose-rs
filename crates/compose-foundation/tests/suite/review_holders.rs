@@ -126,7 +126,7 @@ fn a_lazy_grid_keeps_its_position_in_a_new_host() {
         GRID.set(Some(state));
         LazyVerticalGrid!(
             GridCells::Fixed(3),
-            modifier = Modifier.size_wh(150.dp(), 200.dp()),
+            modifier = Modifier.size((150.dp(), 200.dp())),
             state = state,
             |scope: LazyGridScope| {
                 scope.items(300, |index| {

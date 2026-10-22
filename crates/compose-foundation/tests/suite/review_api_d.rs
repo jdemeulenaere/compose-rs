@@ -137,7 +137,7 @@ fn a_size_written_by_on_size_changed_and_read_by_a_measurement_is_laid_out_in_th
         Column!({
             Box!(
                 modifier = Modifier
-                    .size_wh(handle.get().dp(), 10.dp())
+                    .size((handle.get().dp(), 10.dp()))
                     .on_size_changed(move |size: IntSize| follow.set(size.width))
             );
             Box!(modifier = follower.clone().test_tag("follower"));
@@ -188,7 +188,7 @@ fn on_globally_positioned_includes_a_graphics_layer_translation() {
 #[test]
 fn a_user_key_never_equals_an_unkeyed_items_default_key() {
     let _ui = ComposeTestRule::sized(IntSize::new(200, 200), || {
-        LazyColumn!(modifier = Modifier.size_wh(100.dp(), 100.dp()), |scope: LazyListScope| {
+        LazyColumn!(modifier = Modifier.size((100.dp(), 100.dp())), |scope: LazyListScope| {
             scope.items(2, |_| {
                 Box!(modifier = Modifier.size(10.dp()));
             });
@@ -206,18 +206,18 @@ fn a_user_key_never_equals_an_unkeyed_items_default_key() {
 #[composable]
 fn ReversedSections(state: LazyListState) {
     LazyColumn!(
-        modifier = Modifier.size_wh(100.dp(), 100.dp()),
+        modifier = Modifier.size((100.dp(), 100.dp())),
         state = state,
         reverse_layout = true,
         |scope: LazyListScope| {
             for section in ["A", "B"] {
                 scope.sticky_header(move |_| {
-                    Box!(modifier = Modifier.size_wh(100.dp(), 20.dp()).test_tag(section));
+                    Box!(modifier = Modifier.size((100.dp(), 20.dp())).test_tag(section));
                 });
                 scope.items(10, move |index| {
                     Box!(
                         modifier = Modifier
-                            .size_wh(100.dp(), 30.dp())
+                            .size((100.dp(), 30.dp()))
                             .test_tag(format!("{section}{index}"))
                     );
                 });
@@ -251,15 +251,15 @@ fn a_sticky_header_survives_prefetch_between_frames() {
     let given = *state;
     let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || {
         LazyColumn!(
-            modifier = Modifier.size_wh(100.dp(), 100.dp()),
+            modifier = Modifier.size((100.dp(), 100.dp())),
             state = given,
             |scope: LazyListScope| {
                 scope.sticky_header(|_| {
-                    Box!(modifier = Modifier.size_wh(100.dp(), 20.dp()).test_tag("header"));
+                    Box!(modifier = Modifier.size((100.dp(), 20.dp())).test_tag("header"));
                 });
                 scope.items(50, |index| {
                     Box!(
-                        modifier = Modifier.size_wh(100.dp(), 30.dp()).test_tag(format!("{index}"))
+                        modifier = Modifier.size((100.dp(), 30.dp())).test_tag(format!("{index}"))
                     );
                 });
             }
@@ -286,17 +286,14 @@ fn a_combined_clickable_in_a_scroll_doesnt_long_click_once_dragged() {
     let mut ui = ComposeTestRule::with_manual_clock(move || {
         let seen = seen.clone();
         Column!(
-            modifier =
-                Modifier.size_wh(100.dp(), 100.dp()).vertical_scroll(remember_scroll_state()),
+            modifier = Modifier.size((100.dp(), 100.dp())).vertical_scroll(remember_scroll_state()),
             {
                 let (click, long) = (seen.clone(), seen.clone());
                 Box!(
-                    modifier = Modifier.size_wh(100.dp(), 300.dp()).combined_clickable(
-                        true,
-                        None,
+                    modifier = Modifier.size((100.dp(), 300.dp())).combined_clickable(
                         Some(callback(move || long.borrow_mut().push("long".into()))),
                         None,
-                        move || click.borrow_mut().push("click".into()),
+                        move || click.borrow_mut().push("click".into())
                     )
                 );
             }

@@ -298,13 +298,13 @@ fn a_disabled_card_dims_its_content() {
 
 /// Compose's `FloatingActionButton` is at least 56 dp (`Modifier.defaultMinSize(56.dp, 56.dp)`
 /// around its content), so wider content (an icon and a label in a row) widens it. Here it is
-/// exactly 56 dp (`size_wh(56, 56)`): a 120 dp wide content is clipped to 56 dp.
+/// exactly 56 dp (`size((56, 56))`): a 120 dp wide content is clipped to 56 dp.
 #[test]
 fn a_floating_action_button_grows_with_its_content() {
     let mut ui = compose_test(|| {
         MaterialTheme!({
             FloatingActionButton!(on_click = || {}, modifier = Modifier.test_tag("fab"), {
-                Box!(modifier = Modifier.size_wh(120.dp(), 24.dp()));
+                Box!(modifier = Modifier.size((120.dp(), 24.dp())));
             });
         });
     });
@@ -364,7 +364,7 @@ fn a_disabled_checked_switch_has_materials_disabled_colors() {
 #[test]
 fn an_icon_keeps_its_aspect_ratio() {
     let mut ui = compose_test(|| {
-        Icon!(icons::filled::add(), None, modifier = Modifier.size_wh(48.dp(), 24.dp()));
+        Icon!(icons::filled::add(), None, modifier = Modifier.size((48.dp(), 24.dp())));
     });
     let (offset, scale) = ui
         .host()
@@ -386,7 +386,7 @@ fn an_icon_keeps_its_aspect_ratio() {
 #[test]
 fn an_icon_is_centered_on_whole_pixels() {
     let mut ui = compose_test(|| {
-        Icon!(icons::filled::add(), None, modifier = Modifier.size_wh(37.dp(), 30.dp()));
+        Icon!(icons::filled::add(), None, modifier = Modifier.size((37.dp(), 30.dp())));
     });
     let (offset, scale) = ui
         .host()

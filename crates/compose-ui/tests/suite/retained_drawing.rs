@@ -232,7 +232,7 @@ fn moving_a_boundary_changes_not_its_version() {
     let mut host = host(move || {
         let boundary = boundary.clone();
         Column!(modifier = Modifier.repaint_boundary(), {
-            Leaf(Modifier.size_wh(10.dp(), handle.get().dp()));
+            Leaf(Modifier.size((10.dp(), handle.get().dp())));
             Leaf(boundary.clone());
         });
     });
@@ -257,7 +257,7 @@ fn a_remeasure_or_a_new_child_inside_a_boundary_draws_it_again() {
     let mut host = host(move || {
         Column!({
             Column!(modifier = Modifier.repaint_boundary(), {
-                Leaf(Modifier.background(Color::RED).size_wh(10.dp(), height_handle.get().dp()));
+                Leaf(Modifier.background(Color::RED).size((10.dp(), height_handle.get().dp())));
                 if shown_handle.get() {
                     Leaf(Modifier.background(Color::GREEN).size(4.dp()));
                 }
@@ -289,7 +289,13 @@ fn an_indication_inside_a_boundary_draws_it_again() {
             Leaf(
                 Modifier
                     .repaint_boundary()
-                    .clickable_indicated(true, None, Indication::bounded(Color::RED), || {})
+                    .clickable_with(
+                        ClickableOptions {
+                            indication: Indication::bounded(Color::RED),
+                            ..ClickableOptions::DEFAULT
+                        },
+                        || {},
+                    )
                     .background(Color::GREEN)
                     .size(10.dp()),
             );
@@ -355,7 +361,7 @@ fn scene(knobs: Knobs) {
     let [a, b, c, d] = knobs.0;
     Column!(modifier = Modifier.repaint_boundary().padding(2.dp()), {
         Leaf(Modifier.repaint_boundary().then(painted("a", move || tint(a.get()))).size(6.dp()));
-        Leaf(Modifier.background(Color::BLUE).size_wh(5.dp(), b.get().dp()));
+        Leaf(Modifier.background(Color::BLUE).size((5.dp(), b.get().dp())));
         Row!(
             modifier = Modifier.padding(1.dp()).graphics_layer(move |layer| {
                 layer.alpha = c.get() as f32 / 10.0;
@@ -367,7 +373,7 @@ fn scene(knobs: Knobs) {
                     Modifier
                         .repaint_boundary()
                         .then(painted("d", move || tint(d.get())))
-                        .size_wh(4.dp(), (d.get() % 4 + 2).dp()),
+                        .size((4.dp(), (d.get() % 4 + 2).dp())),
                 );
                 if d.get() % 3 != 0 {
                     Leaf(Modifier.background(Color::GREEN).size(3.dp()));
@@ -411,7 +417,7 @@ fn scene(knobs: Knobs) {
                 Modifier
                     .repaint_boundary()
                     .background(Color::BLUE)
-                    .required_size((d.get() * 2 + 4).dp(), 6.dp()),
+                    .required_size(((d.get() * 2 + 4).dp(), 6.dp())),
             );
         });
         Leaf(

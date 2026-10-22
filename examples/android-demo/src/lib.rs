@@ -29,15 +29,11 @@ pub fn HostedCounter() {
         Text!(
             "In the Kotlin tab {}",
             tab.as_deref().unwrap_or("?"),
-            modifier = Modifier.padding_sides(16.dp(), 16.dp(), 16.dp(), 0.dp()),
+            modifier = Modifier.padding((16.dp(), 16.dp(), 16.dp(), 0.dp())),
         );
-        TextButton!(
-            on_click = send.clone(),
-            modifier = Modifier.padding_horizontal_vertical(8.dp(), 0.dp()),
-            {
-                Text!("Send an event to Kotlin");
-            }
-        );
+        TextButton!(on_click = send.clone(), modifier = Modifier.padding((8.dp(), 0.dp())), {
+            Text!("Send an event to Kotlin");
+        });
         counter::Counter();
     });
 }

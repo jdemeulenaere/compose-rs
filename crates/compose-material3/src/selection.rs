@@ -2,6 +2,7 @@
 
 use compose_animation::{Animatable, spring, tween};
 use compose_runtime::{Callback, CoroutineScope, composable};
+use compose_ui::ClickableOptions;
 use compose_ui::{
     Color, Constraints, DrawModifierNode, DrawScope, EventContext, FocusTargetModifierNode,
     IntSize, Key, KeyEvent, KeyEventType, KeyInputModifierNode, LayoutModifierNode, Measurable,
@@ -85,19 +86,27 @@ pub fn Switch(
     #[default(crate::SwitchDefaults::colors())] colors: SwitchColors,
 ) {
     let modifier = match on_checked_change {
-        Some(on_checked_change) => {
-            minimum_interactive_component_size(modifier.toggleable_indicated(
+        Some(on_checked_change) => minimum_interactive_component_size(
+            modifier.toggleable_with(
                 checked,
-                enabled,
-                Some(Role::Switch),
-                if checked { colors.checked_track_color } else { colors.unchecked_thumb_color },
+                ClickableOptions {
+                    enabled,
+                    role: Some(Role::Switch),
+                    indication: if checked {
+                        colors.checked_track_color
+                    } else {
+                        colors.unchecked_thumb_color
+                    }
+                    .into(),
+                    ..ClickableOptions::DEFAULT
+                },
                 on_checked_change,
-            ))
-        }
+            ),
+        ),
         None => modifier,
     };
     compose_foundation::layout::Spacer(
-        modifier.required_size(52.dp(), 32.dp()).then_custom(SwitchElement {
+        modifier.required_size((52.dp(), 32.dp())).then_custom(SwitchElement {
             checked,
             enabled,
             colors,
@@ -297,11 +306,9 @@ pub fn RadioButton(
 ) {
     let color = if selected { colors.selected_color } else { colors.unselected_color };
     let modifier = match on_click {
-        Some(on_click) => minimum_interactive_component_size(modifier.clickable_indicated(
-            enabled,
-            Some(Role::RadioButton),
-            // A circle around the button, as Compose's `ripple(bounded = false, 20.dp)`.
-            compose_ui::Indication::unbounded(color, 20.dp()),
+        Some(on_click) => minimum_interactive_component_size(modifier.clickable_with(
+            ClickableOptions { enabled, role: Some(Role::RadioButton), indication: // A circle around the button, as Compose's `ripple(bounded = false, 20.dp)`.
+            compose_ui::Indication::unbounded(color, 20.dp()), ..ClickableOptions::DEFAULT },
             on_click,
         )),
         None => modifier,
@@ -309,7 +316,7 @@ pub fn RadioButton(
     let modifier = modifier
         .semantics(false, move |config| config.selected = Some(selected))
         .padding(2.dp())
-        .required_size(20.dp(), 20.dp())
+        .required_size((20.dp(), 20.dp()))
         .then_custom(RadioElement { selected, enabled, colors });
     compose_foundation::layout::Spacer(modifier);
 }

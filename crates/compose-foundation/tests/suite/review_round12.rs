@@ -8,6 +8,7 @@ use compose_foundation::layout::*;
 use compose_foundation::*;
 use compose_runtime::{mutable_state_of, remember};
 use compose_test::*;
+use compose_ui::ClickableOptions;
 use compose_ui::{
     FocusRequester, IntSize, Key, MutableInteractionSource, Offset, PointerEvent, UnitExt,
 };
@@ -141,7 +142,7 @@ fn tab_reaches_a_clickable_offset_out_of_its_parent() {
 /// focus and tells it so; the clickable publishes its press and focus to the interaction
 /// source at once (`publish_press`, unlike `release_later` on removal), writing a state while
 /// composition applies its changes: debug builds panic ("state written ... during
-/// composition"). A NavigationBarItem or any `clickable_interaction` disabled while focused
+/// composition"). A NavigationBarItem or any `clickable_with` disabled while focused
 /// (a "Submit" button disabled once clicked from the keyboard) crashes.
 #[test]
 fn disabling_a_focused_clickable_with_a_source_unfocuses_it() {
@@ -151,11 +152,13 @@ fn disabling_a_focused_clickable_with_a_source_unfocuses_it() {
     let given = source.clone();
     let mut ui = compose_test(move || {
         Box!(
-            modifier = Modifier.size(20.dp()).test_tag("box").clickable_interaction(
-                handle.get(),
-                None,
-                Color::RED,
-                given.clone(),
+            modifier = Modifier.size(20.dp()).test_tag("box").clickable_with(
+                ClickableOptions {
+                    enabled: handle.get(),
+                    indication: Color::RED.into(),
+                    interaction_source: Some(given.clone()),
+                    ..ClickableOptions::DEFAULT
+                },
                 || {}
             )
         );
@@ -211,7 +214,7 @@ fn a_double_click_selects_a_word_of_the_transformed_text() {
         BasicTextField!(
             text.get(),
             move |new: String| text.set(new),
-            modifier = Modifier.size_wh(200.dp(), 40.dp()).test_tag("field"),
+            modifier = Modifier.size((200.dp(), 40.dp())).test_tag("field"),
             single_line = true,
             visual_transformation = VisualTransformation::new(CardGrouping)
         );

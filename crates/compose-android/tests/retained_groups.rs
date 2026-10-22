@@ -436,7 +436,7 @@ fn a_copied_record_keeps_its_gradient_when_the_lists_shaders_shift() {
                     clipped_gradient(move || {
                         if handle.get() {
                             Brush::vertical_gradient(
-                                &[Color::BLACK, Color::WHITE],
+                                [Color::BLACK, Color::WHITE],
                                 0.0,
                                 f32::INFINITY,
                                 TileMode::Clamp,
@@ -451,8 +451,8 @@ fn a_copied_record_keeps_its_gradient_when_the_lists_shaders_shift() {
                     Modifier
                         .repaint_boundary()
                         .then(clipped_gradient(|| {
-                            Brush::linear_gradient_stops(
-                                &[(0.0, Color::RED), (0.3, Color::GREEN), (1.0, Color::BLUE)],
+                            Brush::linear_gradient(
+                                [(0.0, Color::RED), (0.3, Color::GREEN), (1.0, Color::BLUE)],
                                 Offset::ZERO,
                                 Offset::INFINITE,
                                 TileMode::Mirror,

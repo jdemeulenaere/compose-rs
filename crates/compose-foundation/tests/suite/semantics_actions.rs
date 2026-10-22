@@ -6,6 +6,7 @@ use compose_foundation::layout::*;
 use compose_foundation::*;
 use compose_runtime::*;
 use compose_test::*;
+use compose_ui::ClickableOptions;
 use compose_ui::{SemanticsAction, UnitExt};
 
 #[test]
@@ -17,21 +18,23 @@ fn on_click_clicks_and_toggles_without_input() {
         Column!({
             Box!(
                 modifier = Modifier
-                    .size_wh(50.dp(), 20.dp())
+                    .size((50.dp(), 20.dp()))
                     .clickable(move || count_handle.set(count_handle.get() + 1))
                     .test_tag("button"),
             );
             Box!(
                 modifier = Modifier
-                    .size_wh(50.dp(), 20.dp())
-                    .toggleable(checked_handle.get(), true, None, move |value| checked_handle
-                        .set(value))
+                    .size((50.dp(), 20.dp()))
+                    .toggleable(checked_handle.get(), move |value| checked_handle.set(value))
                     .test_tag("toggle"),
             );
             Box!(
                 modifier = Modifier
-                    .size_wh(50.dp(), 20.dp())
-                    .clickable_with(false, None, || panic!("disabled"))
+                    .size((50.dp(), 20.dp()))
+                    .clickable_with(
+                        ClickableOptions { enabled: false, ..ClickableOptions::DEFAULT },
+                        || panic!("disabled")
+                    )
                     .test_tag("disabled"),
             );
         });
@@ -47,7 +50,7 @@ fn on_click_clicks_and_toggles_without_input() {
 #[test]
 fn request_focus_focuses_the_node() {
     let mut ui = compose_test(|| {
-        Box!(modifier = Modifier.size_wh(50.dp(), 20.dp()).clickable(|| {}).test_tag("button"));
+        Box!(modifier = Modifier.size((50.dp(), 20.dp())).clickable(|| {}).test_tag("button"));
     });
     ui.on_node_with_tag("button").perform_semantics_action(SemanticsAction::RequestFocus);
     ui.on_node_with_tag("button").assert_is_focused();

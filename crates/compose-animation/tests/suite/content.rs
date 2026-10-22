@@ -16,7 +16,7 @@ fn Counter(count: MutableState<i32>) {
     AnimatedContent!(count.get(), modifier = Modifier.test_tag("container"), |value: i32| {
         Box!(
             modifier =
-                Modifier.size_wh((50 + value * 50).dp(), 20.dp()).test_tag(format!("{value}")),
+                Modifier.size(((50 + value * 50).dp(), 20.dp())).test_tag(format!("{value}")),
             {
                 BasicText!("{}", value);
             }
@@ -77,7 +77,7 @@ fn a_transition_animates_its_values_together_then_reaches_its_target() {
         let alpha = transition
             .animate_float(|_, _| tween(200).into(), |&open| if open { 1.0 } else { 0.5 });
         report.set((width.get().0, transition.current_state(), transition.is_running()));
-        Box!(modifier = Modifier.size_wh(width.get(), 10.dp()).alpha(alpha.get()).test_tag("box"));
+        Box!(modifier = Modifier.size((width.get(), 10.dp())).alpha(alpha.get()).test_tag("box"));
     });
     assert_eq!(seen.get(), (100.0, false, false));
     expanded.set(true);

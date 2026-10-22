@@ -1,6 +1,7 @@
 //! `TabRow`, `ScrollableTabRow` and `Tab`, as Compose's Material 3: tabs sharing a row's width
 //! (or scrolling), the selected one underlined by an indicator that slides to it.
 
+use compose_ui::ClickableOptions;
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -327,7 +328,15 @@ pub fn Tab(
     let modifier = modifier
         .fill_max_width()
         .size_in(SizeSpec::bounds(Dp::UNSPECIFIED, height, Dp::UNSPECIFIED, Dp::UNSPECIFIED))
-        .clickable_indicated(enabled, Some(Role::Tab), selected_content_color, on_click)
+        .clickable_with(
+            ClickableOptions {
+                enabled,
+                role: Some(Role::Tab),
+                indication: selected_content_color.into(),
+                ..ClickableOptions::DEFAULT
+            },
+            on_click,
+        )
         .semantics(false, move |config| config.selected = Some(selected));
     CompositionLocalProvider(LOCAL_CONTENT_COLOR.provides(color), || {
         CompositionLocalProvider(LOCAL_TEXT_STYLE.provides(typography.title_small), || {
@@ -342,7 +351,7 @@ pub fn Tab(
                     }
                     if let Some(text) = text.clone() {
                         Box(
-                            Modifier.padding_horizontal_vertical(16.dp(), 0.dp()),
+                            Modifier.padding((16.dp(), 0.dp())),
                             Alignment::CENTER,
                             false,
                             compose_runtime::callback(move |_| text()),

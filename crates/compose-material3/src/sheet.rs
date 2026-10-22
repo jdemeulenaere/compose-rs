@@ -223,7 +223,7 @@ impl BottomSheetDefaults {
     pub fn drag_handle() {
         let color = MaterialTheme::color_scheme().on_surface_variant.with_alpha(0.4);
         crate::components::Surface(
-            Modifier.padding_horizontal_vertical(Dp(0.0), 22.dp()).semantics(false, |config| {
+            Modifier.padding((Dp(0.0), 22.dp())).semantics(false, |config| {
                 config.content_description.push("Drag handle".into());
             }),
             MaterialTheme::shapes().extra_large,
@@ -233,7 +233,7 @@ impl BottomSheetDefaults {
             Dp(0.0),
             None,
             compose_runtime::callback(|| {
-                compose_foundation::layout::Spacer(Modifier.size_wh(32.dp(), 4.dp()));
+                compose_foundation::layout::Spacer(Modifier.size((32.dp(), 4.dp())));
             }),
         );
     }
@@ -480,7 +480,7 @@ pub fn ModalBottomSheet(
                             let drag_handle = drag_handle.clone();
                             let content = content.clone();
                             Column(
-                                Modifier.fill_max_width().padding_values(content_window_insets),
+                                Modifier.fill_max_width().padding(content_window_insets),
                                 compose_foundation::layout::Arrangement::Top,
                                 Alignment::START,
                                 compose_runtime::callback(move |column: ColumnScope| {

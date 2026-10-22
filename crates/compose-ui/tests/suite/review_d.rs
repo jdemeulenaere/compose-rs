@@ -33,14 +33,14 @@ fn a_required_size_change_in_a_fixed_parent_recenters_the_child() {
     let handle = width.handle();
     let mut changed = host(move || {
         Stack!(modifier = Modifier.size(50.dp()), {
-            Leaf(Modifier.required_size(handle.get().dp(), 10.dp()));
+            Leaf(Modifier.required_size((handle.get().dp(), 10.dp())));
         });
     });
     width.set(120.0);
     changed.frame();
     let fresh = host(|| {
         Stack!(modifier = Modifier.size(50.dp()), {
-            Leaf(Modifier.required_size(120.dp(), 10.dp()));
+            Leaf(Modifier.required_size((120.dp(), 10.dp())));
         });
     });
     // Fresh: the leaf at x = (50 - 120) / 2 = -35. Incremental: still at -25.
@@ -79,7 +79,7 @@ fn measuring_a_child_twice_is_rejected_or_stays_correct() {
         Layout(
             Modifier,
             POLICY.with(Rc::clone),
-            callback(move || Leaf(Modifier.size_wh(handle.get().dp(), 5.dp()))),
+            callback(move || Leaf(Modifier.size((handle.get().dp(), 5.dp())))),
         );
     });
     width.set(30.0);
@@ -88,7 +88,7 @@ fn measuring_a_child_twice_is_rejected_or_stays_correct() {
         Layout(
             Modifier,
             POLICY.with(Rc::clone),
-            callback(|| Leaf(Modifier.size_wh(30.dp(), 5.dp()))),
+            callback(|| Leaf(Modifier.size((30.dp(), 5.dp())))),
         );
     });
     // Fresh: the parent is 30 wide. Incremental: still 20.
@@ -188,7 +188,10 @@ fn a_focused_clickable_that_is_disabled_loses_focus() {
     let enabled = mutable_state_of(true);
     let handle = enabled.handle();
     let mut host = host(move || {
-        Leaf(Modifier.size(10.dp()).clickable_with(handle.get(), None, || {}));
+        Leaf(Modifier.size(10.dp()).clickable_with(
+            ClickableOptions { enabled: handle.get(), ..ClickableOptions::DEFAULT },
+            || {},
+        ));
     });
     host.send_key(KeyEvent::down(Key::Tab));
     enabled.set(false);
@@ -553,7 +556,7 @@ fn keyed_children_follow_random_edits() {
         let list = shared.borrow().clone();
         Column!({
             for &item in &list {
-                key(item, || Leaf(Modifier.size_wh(1.dp(), (item as f32 + 1.0).dp())));
+                key(item, || Leaf(Modifier.size((1.dp(), (item as f32 + 1.0).dp()))));
             }
         });
     });

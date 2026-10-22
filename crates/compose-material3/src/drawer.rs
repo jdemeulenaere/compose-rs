@@ -3,6 +3,7 @@
 //! `NavigationDrawerItem`.
 
 use compose_runtime::{ObjectHandle, Owned};
+use compose_ui::ClickableOptions;
 use std::rc::Rc;
 
 use compose_animation::{Animatable, tween};
@@ -544,7 +545,7 @@ impl NavigationDrawerItemDefaults {
 
     /// The padding around an item in a sheet, as `ItemPadding` (12 dp at the sides).
     pub fn item_padding(modifier: Modifier) -> Modifier {
-        modifier.padding_horizontal_vertical(12.dp(), 0.dp())
+        modifier.padding((12.dp(), 0.dp()))
     }
 }
 
@@ -577,11 +578,18 @@ pub fn NavigationDrawerItem(
     let row_modifier = modifier
         .size_in(SizeSpec::bounds(Dp::UNSPECIFIED, 56.dp(), Dp::UNSPECIFIED, Dp::UNSPECIFIED))
         .fill_max_width()
-        .background_shape(container, pill)
+        .background_with(container, pill, 1.0)
         .clip(pill)
-        .clickable_indicated(true, Some(Role::Tab), text_color, on_click)
+        .clickable_with(
+            ClickableOptions {
+                role: Some(Role::Tab),
+                indication: text_color.into(),
+                ..ClickableOptions::DEFAULT
+            },
+            on_click,
+        )
         .semantics(false, move |config| config.selected = Some(selected))
-        .padding_sides(16.dp(), 0.dp(), 24.dp(), 0.dp());
+        .padding((16.dp(), 0.dp(), 24.dp(), 0.dp()));
     let (label, icon, badge) = (label.clone(), icon.clone(), badge.clone());
     Row(
         row_modifier,

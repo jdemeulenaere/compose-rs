@@ -163,7 +163,7 @@ fn a_moved_boundary_keeps_its_operations() {
     let handle = height.handle();
     let mut host = host(move || {
         Column!({
-            Leaf(Modifier.size_wh(10.dp(), handle.get().dp()));
+            Leaf(Modifier.size((10.dp(), handle.get().dp())));
             Leaf(Modifier.repaint_boundary().padding(2.dp()).background(Color::RED).size(5.dp()));
         });
     });
