@@ -27,35 +27,43 @@ compose-rs's frame phases show in the traces as `compose-rs: recompose`, `layout
 
 ## Results
 
-Pixel 8 Pro, Android 16, October 2026. Medians. "Round 2" is compose-rs at 097759b (`results/2026-10-22-pixel-8-pro-round-2.json`). "Round 1" is the version this document first reported (7550e31), measured again in the same session with the work metric (`results/2026-10-22-pixel-8-pro-round-2-baseline.json`); its numbers are quoted in parentheses where they show the change. Compose's numbers are from the round 2 run; they differ from its round 1 run by a few percent.
+Pixel 8 Pro, Android 16, October 2026. Medians. "Round 3" is compose-rs at f79a7ab (`results/2026-10-22-pixel-8-pro-round-3.json`), the current results. "Round 2" is compose-rs at 097759b (`results/2026-10-22-pixel-8-pro-round-2.json`); its numbers are quoted in parentheses where they show the change. "Round 1" is the version this document first reported (7550e31, `results/2026-10-22-pixel-8-pro-round-2-baseline.json`, measured again with the work metric). Compose's numbers are from the round 3 run; they differ from its round 2 run by a few percent.
+
+Since round 2:
+
+- **D251**: a paint that draws nothing (a transparent color, no shader) records nothing, and top app bars are repaint boundaries. Material 3's top app bar had made the animated frame about 10 % slower after round 2 (a transparent background and its clip drawn, sent and replayed every frame); this brought it back.
+- **D270**: the display list is a tree: a frame holds each kept group's recording by reference instead of copying its operations into one list each frame. Rust's frame is about 14 % shorter on the device, about 30 % headless (below).
+- **D240**: state holders (`LazyListState`, `ScrollState`, …) are `Copy` handles.
+- **D188**: nested scrolling: scrollables dispatch each delta to the connections around them.
+- Features with no performance intent: forms, platform APIs, logging (the APK grew from 2.4 to 3.1 MB).
 
 ### Startup: launch to the first frame with content
 
 | | Kotlin Compose | compose-rs |
 |---|---|---|
-| `feed` (`TotalTime`) | 128 ms | **110 ms** (−14 %; round 1: 114 ms) |
-| `feed`: the first frame's main thread (`traversal`) | 44 ms | **25 ms** (33 ms) |
-| `big`: 200 posts at once | 226 ms | **178 ms** (−21 %; 186 ms) |
-| `big`: the first frame's main thread (`traversal`) | 169 ms | **106 ms** (112 ms) |
+| `feed` (`TotalTime`) | 129 ms | **107 ms** (−17 %; round 2: 110 ms) |
+| `feed`: the first frame's main thread (`traversal`) | 44 ms | **24 ms** (25 ms) |
+| `big`: 200 posts at once | 225 ms | **179 ms** (−20 %; 178 ms) |
+| `big`: the first frame's main thread (`traversal`) | 164 ms | **110 ms** (106 ms) |
 
-In compose-rs's first `big` frame (106 ms): composing 200 posts takes 20 ms, laying them out 46 ms (42 ms of it laying out 1,200 paragraphs with `StaticLayout` through JNI), drawing and serializing the display list 1 ms, and replaying it on the `Canvas` 23 ms (recording each paragraph into its `RenderNode`); the rest is the view system's traversal around them. Compose records its first `big` frame's drawing in 37 ms (`Record View#draw()`). `bindApplication` is shorter too (10 ms against 16 ms): there is no Compose runtime to initialize.
+In compose-rs's first `big` frame (110 ms): composing 200 posts takes 22 ms, laying them out 46 ms (most of it laying out 1,200 paragraphs with `StaticLayout` through JNI), drawing and serializing the display list 1 ms, and replaying it on the `Canvas` 24 ms (recording each paragraph into its `RenderNode`); the rest is the view system's traversal around them. Compose records its first `big` frame's drawing in 36 ms (`Record View#draw()`). `bindApplication` is shorter too (10 ms against 16 to 19 ms): there is no Compose runtime to initialize.
 
 ### Memory
 
 | | Kotlin Compose | compose-rs |
 |---|---|---|
-| PSS after start | 51.4 MB | **32.7 MB** (−36 %; round 1: 42.5 MB) |
-| of which code | 6.1 MB | **1.6 MB** |
-| of which Java heap | 3.6 MB | **1.3 MB** |
-| of which native heap | 8.1 MB | **7.9 MB** (8.5 MB) |
-| of which graphics | 28.1 MB | **17.0 MB** (26.2 MB) |
-| PSS after 10 flings | 85.6 MB | **80.9 MB** (90.1 MB) |
-| of which Java heap | **3.9 MB** | 6.1 MB (7.1 MB) |
-| of which native heap | 12.6 MB | **12.1 MB** (20.1 MB) |
-| of which graphics | 56.8 MB | 56.3 MB |
-| APK (release) | 1.7 MB (minified) | 2.4 MB (with the 3 MB `.so` uncompressed inside) |
+| PSS after start | 51.3 MB | **33.2 MB** (−35 %; round 2: 32.7 MB) |
+| of which code | 6.1 MB | **1.9 MB** (1.6 MB) |
+| of which Java heap | 3.6 MB | **1.4 MB** |
+| of which native heap | **8.0 MB** | 8.1 MB (7.9 MB) |
+| of which graphics | 27.9 MB | **17.0 MB** |
+| PSS after 10 flings | 85.8 MB | **80.8 MB** (80.9 MB) |
+| of which Java heap | **4.6 MB** | 6.1 MB |
+| of which native heap | 12.5 MB | 12.5 MB (12.1 MB) |
+| of which graphics | 56.7 MB | **55.3 MB** |
+| APK (release) | 1.7 MB (minified) | 3.1 MB (with the 3.0 MB `.so` uncompressed inside; 2.4 MB in round 2) |
 
-After start, compose-rs holds a third less: its code is a native library rather than Compose's dex and runtime, and its graphics memory fell by 9 MB since round 1, most likely because the GPU no longer keeps the path atlas and stencil buffer it drew the icons with (D190). After scrolling, both are dominated by graphics memory (the render thread's caches: about 56 MB each). The rest depends on when the garbage collector last ran: `dumpsys meminfo` itself collects in the app (`Runtime.gc` in its path; a second call right after reads 10–13 MB less for both apps), so the measurement after scrolling counts what the 10 flings left for the collector. Compose's numbers swing with it (85 to 88 MB in this run, up to 112 MB in earlier ones: its Java heap holds 4 to 20 MB of garbage, as it allocates on every frame).
+After start, compose-rs holds a third less: its code is a native library rather than Compose's dex and runtime, and its graphics memory is 11 MB smaller, most likely because the GPU keeps no path atlas or stencil buffer for the icons, drawn from masks (D190; round 1 held 26.2 MB). The code mapped grew by 0.3 MB with the library. After scrolling, both are dominated by graphics memory (the render thread's caches: about 56 MB each). The rest depends on when the garbage collector last ran: `dumpsys meminfo` itself collects in the app (`Runtime.gc` in its path; a second call right after reads 10–13 MB less for both apps), so the measurement after scrolling counts what the 10 flings left for the collector. Compose's numbers swing with it (85 to 90 MB in this run, up to 112 MB in earlier ones: its Java heap holds 4 to 20 MB of garbage, as it allocates on every frame); compose-rs's stay within 80.6 to 81.7 MB.
 
 In round 1, compose-rs's native heap after scrolling held 8.9 MB waiting for the collector, 7.2 MB of it render nodes: a dropped `RenderNode` frees its native side (the recording the render thread last drew included) only when collected, and ART collects on Java heap growth (8 MB at least on this device), which compose-rs's frames rarely reach. D195 reuses render nodes through pools (a released paragraph's or gone group's node records the next one, and its old recording is freed the first time the new one is drawn) and shares a paint per text style: the native heap after 10 flings went from 20.1 to 12.1 MB, with no cost to the frame. Rust's own heap is small (about 1.5 MB, the composition of about 15 posts with their slots).
 
@@ -63,57 +71,57 @@ In round 1, compose-rs's native heap after scrolling held 8.9 MB waiting for the
 
 | | Kotlin Compose | compose-rs |
 |---|---|---|
-| Frames (gfxinfo) | 1,761 | 1,747 |
-| Janky frames (FrameTimeline), per run | 0, 3, 4 | **1, 0, 1** |
-| Frame time p50 / p90 / p99 (gfxinfo) | 5 / 7 / 11 ms | 5 / **6** / **8** ms (round 1: 5 / 7 / 12 ms) |
-| Main thread per frame p50 / p90 / p99 | 1.46 / 3.18 / 6.67 ms | **1.34** / **2.32** / **3.94** ms (1.12 / 3.11 / 8.57 ms) |
-| RenderThread per frame p50 / p90 | **2.20** / **3.37** ms | 2.76 / 3.88 ms (1.82 / 3.06 ms) |
-| Main thread CPU time | 4.17 s | **3.44 s** (2.86 s) |
-| RenderThread CPU time | **4.33 s** | 5.08 s (3.64 s) |
-| Main thread work | 803 ms | **475 ms** (−41 %; 667 ms) |
-| RenderThread work | 851 ms | **774 ms** (−9 %; 970 ms) |
+| Frames (gfxinfo) | 1,770 | 1,768 |
+| Janky frames (FrameTimeline), per run | 0, 1, 3 | **0, 0, 0** (round 2: 1, 0, 1) |
+| Frame time p50 / p90 / p99 (gfxinfo) | 5 / 7 / 10 ms | 5 / **6** / **8** ms |
+| Main thread per frame p50 / p90 / p99 | 1.44 / 3.08 / 6.50 ms | **1.25** / **2.20** / **3.74** ms (1.34 / 2.32 / 3.94 ms) |
+| RenderThread per frame p50 / p90 | **2.13** / **3.43** ms | 2.67 / 3.73 ms (2.76 / 3.88 ms) |
+| Main thread CPU time | 4.06 s | **3.25 s** (3.44 s) |
+| RenderThread CPU time | **4.26 s** | 4.89 s (5.08 s) |
+| Main thread work | 827 ms | **477 ms** (−42 %; 475 ms) |
+| RenderThread work | 862 ms | **779 ms** (−10 %; 774 ms) |
 
-Both scroll at 120 Hz with a few janky frames in 1,700: Compose's were missed app deadlines (5) and display or SurfaceFlinger delays (2), compose-rs's one missed deadline and one prediction error. compose-rs's main thread does 41 % less work than Compose's, and its slowest frames are now well under Compose's (p99 3.9 ms against 6.7 ms; 8.6 ms in round 1): prefetching composes and lays out the next item between frames, so the frame that reveals it composes nothing and lays no text out. Its median frame and its CPU time look longer than in round 1, though it does 29 % less work: without long frames, the scheduler keeps the main thread and the RenderThread on the little cores.
+Both scroll at 120 Hz. compose-rs had no janky frame in the three runs; Compose had 4 (one missed app deadline, two prediction errors, one SurfaceFlinger scheduling delay). compose-rs's main thread does 42 % less work than Compose's, and its slowest frames are well under Compose's (p99 3.7 ms against 6.5 ms; 8.6 ms in round 1): prefetching composes and lays out the next item between frames (D156), so the frame that reveals it composes nothing and lays no text out. Since round 2 its frames are a little shorter and its CPU time lower, for the same work (477 against 475 ms; 458 to 501 ms across this round's runs): D270's saving, 0.036 ms of a frame's `compose-rs:` sections, is within the spread between runs.
 
-The RenderThread shows the same effect from the other side. In round 1 its frames were shorter than Compose's (1.82 ms against 2.21 ms in that run) but it did more work (970 ms against 843 ms): its long frames brought the ADPF boost, and at a raised frequency the same frame takes more cycles (memory doesn't speed up with the core). Now its frames take longer than Compose's and it does 9 % less work: kept groups record nothing again, icons are drawn from masks (one GPU render pass a frame instead of two, no path stencil operations), and the boost no longer comes.
+The RenderThread's frames take longer than Compose's (p50 2.67 against 2.13 ms) though it does 10 % less work: without long frames, the scheduler keeps it on the little cores and ADPF doesn't raise their frequency (see "Method"). Round 1 showed the opposite: shorter frames than Compose's but more work (970 ms against 843 ms), its long frames bringing the boost. Kept groups record nothing, and icons are drawn from masks (one GPU render pass a frame instead of two, no path stencil operations).
 
 ### Animation (10 s of the animated header)
 
 | | Kotlin Compose | compose-rs |
 |---|---|---|
-| Janky frames (FrameTimeline), per run | 1, 0, 0 | **0, 0, 0** |
+| Janky frames (FrameTimeline), per run | 0, 0, 0 | 0, 0, 0 |
 | Frame time p50 / p90 / p99 (gfxinfo) | 5 / 6 / 8 ms | 5 / 6 / 8 ms |
-| Main thread per frame p50 / p90 / p99 | 1.47 / 2.12 / 3.15 ms | **1.38** / **2.03** / **3.04** ms (round 1: 1.66 / 2.38 / 3.34 ms) |
-| RenderThread per frame p50 / p90 | 2.94 / 3.98 ms | 2.93 / **3.85** ms (2.88 / 3.99 ms) |
-| Main thread CPU over 10 s | 1.95 s | **1.74 s** (2.09 s) |
-| RenderThread CPU over 10 s | 3.72 s | **3.67 s** (3.68 s) |
-| Main thread work | 249 ms | **217 ms** (−13 %; 251 ms) |
-| RenderThread work | **533 ms** | 535 ms (505 ms) |
+| Main thread per frame p50 / p90 / p99 | 1.48 / 2.13 / **3.06** ms | **1.32** / **1.95** / 3.12 ms (round 2: 1.38 / 2.03 / 3.04 ms) |
+| RenderThread per frame p50 / p90 | 2.97 / 3.99 ms | **2.92** / **3.86** ms (2.93 / 3.85 ms) |
+| Main thread CPU over 10 s | 1.96 s | **1.66 s** (1.74 s) |
+| RenderThread CPU over 10 s | 3.72 s | **3.64 s** (3.67 s) |
+| Main thread work | 251 ms | **211 ms** (−16 %; 217 ms) |
+| RenderThread work | 535 ms | 540 ms (535 ms) |
 
-compose-rs's main thread is now ahead of Compose's (in round 1 it was 0.2 ms a frame behind). Each animation frame draws again only the repaint boundary whose content changed (D155), not the whole tree: the progress indicator draws a new arc each frame, so the header's group is drawn and recorded again (about 0.7 KB of display list), while the pulsing dot's alpha and the star's rotation are set as their render nodes' properties without recording anything (D157), as Compose's `graphicsLayer` does. The RenderThread does as much work as Compose's, slightly more than in round 1.
+compose-rs's main thread does 16 % less work than Compose's. Each animation frame draws again only the repaint boundary whose content changed (D155), not the whole tree: the progress indicator draws a new arc each frame, so the header's group is drawn and recorded again (about 0.7 KB of display list), while the pulsing dot's alpha and the star's rotation are set as their render nodes' properties without recording anything (D157), as Compose's `graphicsLayer` does. The RenderThread's work is even with Compose's: 540 against 535 ms, within the spread between runs (535 to 542 ms for compose-rs, 528 to 544 ms for Compose). It is the one measure of work where compose-rs isn't ahead.
 
-Since c666311, a frame holds each kept group's recording by reference instead of copying its operations into one list (D270): Skia draws a group's content where its boundary is, and the serializer copies a kept group's record without reading its operations. Same device, the two APKs alternated, 3 runs each (averages of the `compose-rs:` sections): in the animation, `frame` 0.252 → 0.217 ms (`draw` 0.086 → 0.061, `serialize` 0.036 → 0.028; `replay` 0.198 → 0.200, unchanged: the bytes are the same); scrolling, `frame` 0.273 → 0.237 ms (`draw` 0.073 → 0.046, `serialize` 0.031 → 0.025). Headless (`cargo bench --bench ui`), the feed's animation frame went from 2.0 to 1.39 µs (4.9 to 2.0 µs four phones tall) and the todo toggle from 263 to 194 µs.
+D270's effect, measured on its own (same device, the APKs before and after it alternated, 3 runs each, averages of the `compose-rs:` sections): in the animation, `frame` 0.252 → 0.217 ms (`draw` 0.086 → 0.061, `serialize` 0.036 → 0.028; `replay` 0.198 → 0.200, unchanged: the bytes are the same); scrolling, `frame` 0.273 → 0.237 ms (`draw` 0.073 → 0.046, `serialize` 0.031 → 0.025). Skia draws a group's content where its boundary is, and the serializer copies a kept group's record without reading its operations. Headless (`cargo bench --bench ui`), the feed's animation frame went from 2.0 to 1.39 µs (4.9 to 2.0 µs four phones tall) and the todo toggle from 263 to 194 µs.
 
 ### How the gaps closed
 
 | Gap | Steps |
 |---|---|
-| Animation, main thread per frame (Compose: 1.47 ms) | 3.1 ms at first (`results/…-baseline.json`); 2.0 ms with each paragraph recorded once into a `RenderNode`, `Paint` properties set only on change and a layer's alpha folded into its one drawing (D153); 1.66 ms with each repaint boundary's group kept in a render node (D154, round 1); 1.38 ms with retained drawing and layer properties on render nodes (D155, D157) |
-| Scrolling, main thread p99 (Compose: 6.67 ms) | 8.57 ms in round 1; 3.94 ms with prefetching (D156) |
-| Scrolling, RenderThread work (Compose: 851 ms) | 970 ms in round 1; 774 ms with retained groups, icon masks (D190) and no boost |
-| PSS after 10 flings (Compose: 85.6 MB) | 87.1 MB before groups, 90.1 MB in round 1; 80.9 MB with render nodes reused (D195) |
+| Animation, main thread per frame (Compose: 1.48 ms) | 3.1 ms at first (`results/…-baseline.json`); 2.0 ms with each paragraph recorded once into a `RenderNode`, `Paint` properties set only on change and a layer's alpha folded into its one drawing (D153); 1.66 ms with each repaint boundary's group kept in a render node (D154, round 1); 1.38 ms with retained drawing and layer properties on render nodes (D155, D157, round 2); 1.32 ms with the display list as a tree (D270, round 3) |
+| Scrolling, main thread p99 (Compose: 6.50 ms) | 8.57 ms in round 1; 3.94 ms with prefetching (D156, round 2); 3.74 ms in round 3 |
+| Scrolling, RenderThread work (Compose: 862 ms) | 970 ms in round 1; 774 ms with retained groups, icon masks (D190) and no boost (round 2); 779 ms in round 3 |
+| PSS after 10 flings (Compose: 85.8 MB) | 87.1 MB before groups, 90.1 MB in round 1; 80.9 MB with render nodes reused (D195, round 2); 80.8 MB in round 3 |
 
 ## What made the difference
 
 - **Startup and the big screen**: compose-rs composes and lays out natively, without class loading, JIT warm-up or a Kotlin runtime to initialize; the big screen's first frame is about a third faster.
-- **Memory**: the app's code is a 3 MB native library rather than Compose's dex and runtime (4.5 MB less code mapped, 2.3 MB less Java heap); icons drawn from masks need no GPU path atlas (D190); render nodes are reused rather than left to the garbage collector (D195).
-- **Per-frame work on the main thread**: each repaint boundary keeps its operations and a version, and draws again only when something it drew from changed (D155); Android keeps a render node per group by key and version and sets graphics layers' properties on them (D157), so a layer-only change records nothing, as in Compose. Lazy lists compose and premeasure their next item when the main thread is idle (D156), which takes composition and text layout out of the scrolled frames.
+- **Memory**: the app's code is a 3 MB native library rather than Compose's dex and runtime (4.2 MB less code mapped, 2.2 MB less Java heap); icons drawn from masks need no GPU path atlas (D190); render nodes are reused rather than left to the garbage collector (D195).
+- **Per-frame work on the main thread**: each repaint boundary keeps its recording and a version, and draws again only when something it drew from changed (D155); a frame holds the kept recordings by reference, without copying them (D270); Android keeps a render node per group by key and version and sets graphics layers' properties on them (D157), so a layer-only change records nothing, as in Compose. Lazy lists compose and premeasure their next item when the main thread is idle (D156), which takes composition and text layout out of the scrolled frames.
 - **Per-frame work on the RenderThread**: kept groups are drawn by reference, small filled paths are drawn from cached alpha masks (one GPU render pass a frame instead of two, no path stencil operations: D190), and without long frames Android no longer boosts the cores.
 
 ## Next steps
 
-- **The animation's RenderThread**: it is even with Compose's (535 ms against 533 ms of work) and did a little less in round 1 (505 ms); comparing the two rounds' `DrawFrame` slices would show what a frame draws more of now.
-- **Text layout in batches**: laying out paragraphs in batches (one JNI crossing for many) would shorten the big screen's first frame (42 ms of text layout) and the prefetch of each item.
+- **The animation's RenderThread**: even with Compose's (540 ms against 535 ms of work), where round 1 did 505 ms; comparing the rounds' `DrawFrame` slices would show what a frame draws more of now.
+- **Text layout in batches**: laying out paragraphs in batches (one JNI crossing for many) would shorten the big screen's first frame (46 ms of layout, most of it text) and the prefetch of each item.
 - **Recording prefetched items ahead**: prefetching composes and measures an item between frames, but the frame that reveals it still records its group and its paragraphs' render nodes; recording them while idle too would leave that frame only drawing render nodes.
 
 Flings are comparable by construction: compose-rs's fling follows Android's `OverScroller` spline from the release velocity, the curve of Compose's default fling behaviour on Android.
