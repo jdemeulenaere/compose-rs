@@ -38,10 +38,10 @@ internal class TextMeasurer {
      * A paint per paragraph style, shared by the layouts of that style (a layout reads its
      * paint and never changes it): a paint's native side otherwise waits for the collector.
      */
-    private val paints = HashMap<Style, TextPaint>()
+    private val paints = HashMap<PaintStyle, TextPaint>()
 
-    /** A text style, as the request encodes it. */
-    private data class Style(
+    /** What of a text style its paint holds: the key of [paints]. */
+    private data class PaintStyle(
         val color: Int,
         val fontPx: Float,
         val weight: Int,
@@ -50,9 +50,10 @@ internal class TextMeasurer {
         val familyName: String?,
         val letterSpacingPx: Float,
         val decoration: Int,
-        val lineHeightPx: Float,
-        val background: Int,
     )
+
+    /** A text style, as the request encodes it: its paint's part, and the spans'. */
+    private class Style(val paint: PaintStyle, val lineHeightPx: Float, val background: Int)
 
     private fun readStyle(request: ByteBuffer): Style {
         val color = request.getInt()
@@ -66,7 +67,7 @@ internal class TextMeasurer {
             request.get(bytes)
             name = String(bytes, Charsets.UTF_8)
         }
-        return Style(
+        val paint = PaintStyle(
             color = color,
             fontPx = fontPx,
             weight = weight,
@@ -75,12 +76,11 @@ internal class TextMeasurer {
             familyName = name,
             letterSpacingPx = request.getFloat(),
             decoration = request.get().toInt(),
-            lineHeightPx = request.getFloat(),
-            background = request.getInt(),
         )
+        return Style(paint, lineHeightPx = request.getFloat(), background = request.getInt())
     }
 
-    private fun typeface(style: Style): Typeface {
+    private fun typeface(style: PaintStyle): Typeface {
         val key = (style.family.toLong() shl 40) or (style.weight.toLong() shl 8) or
             (if (style.italic) 1L else 0L) or ((style.familyName?.hashCode()?.toLong() ?: 0L) shl 48)
         return typefaces.getOrPut(key) {
@@ -95,7 +95,7 @@ internal class TextMeasurer {
         }
     }
 
-    private fun apply(paint: TextPaint, style: Style) {
+    private fun apply(paint: TextPaint, style: PaintStyle) {
         paint.color = style.color
         paint.textSize = style.fontPx
         paint.typeface = typeface(style)
@@ -105,7 +105,7 @@ internal class TextMeasurer {
     }
 
     /** A run's style over the paragraph's. */
-    private inner class RunSpan(private val style: Style) : MetricAffectingSpan() {
+    private inner class RunSpan(private val style: PaintStyle) : MetricAffectingSpan() {
         override fun updateDrawState(paint: TextPaint) = apply(paint, style)
 
         override fun updateMeasureState(paint: TextPaint) = apply(paint, style)
@@ -121,7 +121,7 @@ internal class TextMeasurer {
         val minWidth = request.getInt()
         val maxWidth = request.getInt()
         val base = readStyle(request)
-        val paint = paint(base)
+        val paint = paint(base.paint)
         val runCount = request.getInt()
         val content: CharSequence = if (runCount == 0) {
             text
@@ -132,7 +132,7 @@ internal class TextMeasurer {
                 val end = request.getInt()
                 val style = readStyle(request)
                 if (start < end) {
-                    spannable.setSpan(RunSpan(style), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                    spannable.setSpan(RunSpan(style.paint), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
                     if (style.background != 0) {
                         spannable.setSpan(
                             BackgroundColorSpan(style.background),
@@ -236,7 +236,7 @@ internal class TextMeasurer {
     }
 
     /** The paint of paragraphs of style [style]. */
-    private fun paint(style: Style): TextPaint {
+    private fun paint(style: PaintStyle): TextPaint {
         paints[style]?.let { return it }
         // Bounded: an animated style (a font size, a color) makes a new one each frame.
         if (paints.size >= PAINT_CACHE_CAPACITY) paints.clear()

@@ -39,8 +39,14 @@ import kotlin.math.floor
 internal class Replayer(private val text: TextMeasurer) {
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val shadowPaint = Paint(Paint.ANTI_ALIAS_FLAG)
-    /** The elevation [shadowPaint]'s blur is for (0: none yet). */
-    private var shadowBlur = 0f
+    /**
+     * Blur filters by elevation (a filter is a native object the collector frees): a few
+     * elevations, kept in arrays so a lookup boxes nothing, the oldest replaced when full.
+     */
+    private val blurElevations = FloatArray(BLUR_CACHE_CAPACITY)
+    private val blurFilters = arrayOfNulls<BlurMaskFilter>(BLUR_CACHE_CAPACITY)
+    private var blurCount = 0
+    private var blurNext = 0
     private val bitmapPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
     private val rect = RectF()
     private val source = Rect()
@@ -506,11 +512,8 @@ internal class Replayer(private val text: TextMeasurer) {
         // The spot shadow: offset down, blurred by the elevation.
         val alpha = ((ambient ushr 24) + (spot ushr 24)).coerceAtMost(255)
         shadowPaint.color = (alpha shl 24) or (spot and 0xFFFFFF)
-        // A new filter only for a new elevation: each is a native object the collector frees.
-        if (elevation != shadowBlur) {
-            shadowBlur = elevation
-            shadowPaint.maskFilter = BlurMaskFilter(elevation, BlurMaskFilter.Blur.NORMAL)
-        }
+        val blur = blur(elevation)
+        if (shadowPaint.maskFilter !== blur) shadowPaint.maskFilter = blur
         canvas.save()
         canvas.translate(0f, elevation / 2f)
         if (rounded) {
@@ -521,6 +524,20 @@ internal class Replayer(private val text: TextMeasurer) {
             canvas.drawRect(rect, shadowPaint)
         }
         canvas.restore()
+    }
+
+    /** The blur filter for [elevation], made once while it's among the last few used. */
+    private fun blur(elevation: Float): BlurMaskFilter {
+        for (index in 0 until blurCount) {
+            if (blurElevations[index] == elevation) return blurFilters[index]!!
+        }
+        val filter = BlurMaskFilter(elevation, BlurMaskFilter.Blur.NORMAL)
+        val at = if (blurCount < BLUR_CACHE_CAPACITY) blurCount++ else blurNext.also {
+            blurNext = (blurNext + 1) % BLUR_CACHE_CAPACITY
+        }
+        blurElevations[at] = elevation
+        blurFilters[at] = filter
+        return filter
     }
 
     /** A path, its bounds (its control points', in its units) and its masks (D190). */
@@ -705,6 +722,8 @@ internal class Replayer(private val text: TextMeasurer) {
     private companion object {
         /** About ten list items' groups: what a fling drops before drawing new ones. */
         const val NODE_POOL_CAPACITY = 32
+        /** Elevations whose blur filters are kept: Material's levels, and an animated one. */
+        const val BLUR_CACHE_CAPACITY = 8
 
         const val SAVE = 0
         const val RESTORE = 1
