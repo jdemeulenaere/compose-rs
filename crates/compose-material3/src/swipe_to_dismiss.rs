@@ -78,7 +78,7 @@ impl SwipeToDismissBoxState {
         self.inner.anchored.offset()
     }
 
-    /// Which way it's being swiped, from the offset's sign, as `dismissDirection`.
+    /// Which way it's being swiped, from the (logical) offset's sign, as `dismissDirection`.
     pub fn dismiss_direction(&self) -> SwipeToDismissBoxValue {
         let offset = self.require_offset();
         if offset == 0.0 || offset.is_nan() {
@@ -158,6 +158,7 @@ pub fn SwipeToDismissBox(
 ) {
     let scope = remember_coroutine_scope();
     let density = compose_ui::LOCAL_DENSITY.current();
+    let rtl = compose_ui::LOCAL_LAYOUT_DIRECTION.current() == LayoutDirection::Rtl;
     let drag = {
         let state = state.clone();
         compose_runtime::remember_keyed(state.clone(), move || {
@@ -189,7 +190,16 @@ pub fn SwipeToDismissBox(
         )
     };
     Layout(
-        modifier.draggable(drag, Orientation::Horizontal, gestures_enabled, false, |_| {}, settle),
+        // Dragged only while in place, as Compose's (a dismissed item stays away); the offset is
+        // logical (towards the end positive), so a right-to-left drag is reversed.
+        modifier.draggable(
+            drag,
+            Orientation::Horizontal,
+            gestures_enabled && state.current_value() == SwipeToDismissBoxValue::Settled,
+            rtl,
+            |_| {},
+            settle,
+        ),
         policy,
         compose_runtime::callback(move || {
             Row(
@@ -203,9 +213,9 @@ pub fn SwipeToDismissBox(
     );
 }
 
-/// The background behind, as large as the content; the content at the state's offset. The
-/// anchors: in place, and a width away each way enabled (towards the end: right, or left in a
-/// right-to-left layout).
+/// The background behind, as large as the content; the content at the state's (logical)
+/// offset. The anchors: in place, and a width away each way enabled (towards the end positive,
+/// placed mirrored in a right-to-left layout).
 struct SwipeLayout {
     state: SwipeToDismissBoxState,
     start_to_end: bool,
@@ -226,8 +236,7 @@ impl MeasurePolicy for SwipeLayout {
         let background =
             scope.measure(*background, Constraints::fixed(content.width, content.height));
         let width = content.width as f32;
-        let towards_end =
-            if scope.layout_direction() == LayoutDirection::Rtl { -width } else { width };
+        let towards_end = width;
         let mut anchors = vec![(SwipeToDismissBoxValue::Settled, 0.0)];
         if self.start_to_end {
             anchors.push((SwipeToDismissBoxValue::StartToEnd, towards_end));
@@ -241,7 +250,8 @@ impl MeasurePolicy for SwipeLayout {
         let offset = anchored.offset();
         let offset = if offset.is_nan() { 0 } else { offset.round() as i32 };
         scope.place(&background, 0, 0);
-        scope.place(&content, offset, 0);
+        // Mirrored in a right-to-left layout: towards the end is left there.
+        scope.place_relative(&content, offset, 0);
         scope.layout(content.width, content.height)
     }
 

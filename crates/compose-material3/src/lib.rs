@@ -20,7 +20,6 @@ mod fab;
 mod icon;
 mod list_item;
 mod navigation;
-mod nested_scroll;
 mod progress;
 mod scaffold;
 mod segmented_button;
@@ -67,7 +66,6 @@ pub use navigation::{
     NavigationBarItemDefaults, NavigationRail, NavigationRailDefaults, NavigationRailItem,
     NavigationRailItemColors, NavigationRailItemDefaults,
 };
-pub use nested_scroll::{NestedScrollConnection, NestedScrollModifier, NestedScrollSource};
 pub use progress::{
     CircularProgressIndicator, IndeterminateCircularProgressIndicator,
     IndeterminateLinearProgressIndicator, LinearProgressIndicator, ProgressIndicatorDefaults,

@@ -15,8 +15,8 @@ use compose_ui::{
     MeasureScope, Modifier, Offset, PaddingValues, TextStyle, UnitExt,
 };
 
-use crate::nested_scroll::{NestedScrollConnection, NestedScrollSource};
 use crate::theme::{LOCAL_CONTENT_COLOR, LOCAL_TEXT_STYLE, MaterialTheme};
+use compose_ui::{NestedScrollConnection, NestedScrollSource};
 
 // ---- State and scroll behaviors -------------------------------------------------------------
 
@@ -903,7 +903,7 @@ impl BottomAppBarDefaults {
 }
 
 /// A bottom app bar, as Compose's `BottomAppBar(actions, …)`: 80 dp high, the actions in a row
-/// at the start, the floating action button at the end (12 dp down, 16 dp in).
+/// at the start, the floating action button at the end (12 dp from the top, 16 dp from the end).
 #[composable]
 pub fn BottomAppBar(
     actions: impl Fn(RowScope) + 'static,
@@ -943,10 +943,12 @@ pub fn BottomAppBar(
                     );
                     if let Some(fab) = fab.clone() {
                         Box(
+                            // `FABVerticalPadding` and `FABHorizontalPadding`: 12 and 16 dp from
+                            // the bar's edges, its 4 dp content padding included.
                             Modifier.fill_max_height().padding_sides(
                                 Dp(0.0),
+                                8.dp(),
                                 12.dp(),
-                                16.dp(),
                                 Dp(0.0),
                             ),
                             Alignment::TOP_START,

@@ -13,9 +13,9 @@ use compose_runtime::{
 };
 use compose_ui::{
     Constraints, DrawModifierNode, DrawScope, EventContext, IntSize, LayoutModifierNode,
-    Measurable, MeasureResult, MeasureScope, Modifier, ModifierNode, ModifierNodeElement, Offset,
-    Outline, PointerEvent, PointerEventPass, PointerEventType, PointerId, PointerInputModifierNode,
-    Rect,
+    Measurable, MeasureResult, MeasureScope, Modifier, ModifierNode, ModifierNodeElement,
+    NestedScrollChain, NestedScrollSource, Offset, Outline, PointerEvent, PointerEventPass,
+    PointerEventType, PointerId, PointerInputModifierNode, Rect,
 };
 
 /// How far content is scrolled, in pixels, and how far it can be, as Compose's `ScrollState`:
@@ -157,7 +157,15 @@ const MINIMUM_FLING_DP: f32 = 50.0;
 /// Scrolls with `scroll_by` (pixels towards the end; returns those used) along a fling starting
 /// at `velocity` (pixels per second), frame by frame, until its distance is covered or an edge
 /// stops it, as Compose's default fling behaviour.
-fn fling(velocity: f32, density: f32, scroll_by: Rc<dyn Fn(f32) -> f32>) -> Job {
+///
+/// `on_end` gets the velocity left when it ends (none once its distance is covered; what an edge
+/// stopped).
+fn fling(
+    velocity: f32,
+    density: f32,
+    scroll_by: Rc<dyn Fn(f32) -> f32>,
+    on_end: impl FnOnce(f32) + 'static,
+) -> Job {
     let course = crate::fling::Fling::new(velocity, density);
     CoroutineScope::new().launch(async move {
         let start = with_frame_nanos(|time| time).await;
@@ -174,11 +182,41 @@ fn fling(velocity: f32, density: f32, scroll_by: Rc<dyn Fn(f32) -> f32>) -> Job 
             covered = target;
             let used = if delta == 0.0 { 0.0 } else { scroll_by(delta) };
             // An edge took less than asked: the fling ends there.
-            if fraction >= 1.0 || (delta - used).abs() > 0.5 {
+            if fraction >= 1.0 {
+                on_end(0.0);
+                break;
+            }
+            if (delta - used).abs() > 0.5 {
+                on_end(velocity * (1.0 - fraction));
                 break;
             }
         }
     })
+}
+
+/// Scrolls by `delta` (pixels towards the end, before a right-to-left reversal) through the
+/// nested-scroll `chain`, as Compose's scrollables with their `NestedScrollDispatcher`: the
+/// connections around first, then `scroll_by`, then the connections again with what's left;
+/// returns what all of them used.
+pub(crate) fn dispatch_scroll(
+    chain: &NestedScrollChain,
+    vertical: bool,
+    delta: f32,
+    source: NestedScrollSource,
+    scroll_by: &mut dyn FnMut(f32) -> f32,
+) -> f32 {
+    if chain.is_empty() {
+        return scroll_by(delta);
+    }
+    // The connections' offsets are the pointer's way: the content's scroll's opposite.
+    let axis =
+        |value: f32| if vertical { Offset::new(0.0, value) } else { Offset::new(value, 0.0) };
+    let along = |offset: Offset| if vertical { offset.y } else { offset.x };
+    let before = along(chain.pre_scroll(axis(-delta), source));
+    let left = delta + before;
+    let used = if left == 0.0 { 0.0 } else { scroll_by(left) };
+    let after = along(chain.post_scroll(axis(-used), axis(-(left - used)), source));
+    used - before - after
 }
 
 /// The distance a pointer moves before a drag scrolls, as Compose's touch slop (8 dp), in
@@ -389,6 +427,8 @@ pub(crate) struct DragScroller {
     drag: Option<Drag>,
     /// A fling going on: a press stops it (and does nothing else).
     fling: Option<Job>,
+    /// The nested-scroll connections around, as the last press or wheel turn found them.
+    chain: NestedScrollChain,
 }
 
 impl DragScroller {
@@ -406,11 +446,25 @@ impl DragScroller {
         flinger: impl FnOnce() -> Rc<dyn Fn(f32) -> f32>,
     ) {
         let slop = touch_slop(context);
+        // The connections around: found on the way in, as a gesture or a wheel turn starts.
+        if pass == PointerEventPass::Initial
+            && matches!(event.kind, PointerEventType::Press | PointerEventType::Scroll)
+        {
+            self.chain = NestedScrollChain::current();
+        }
         // A horizontal scroll in a right-to-left layout goes the other way, as Compose's
         // `reverseDirection`.
-        let mut scroll_by =
+        let mut reversed =
             move |delta: f32| if reverse { -scroll_by(-delta) } else { scroll_by(delta) };
+        let chain = self.chain.clone();
+        // Through the connections around.
+        let mut scroll_by = move |delta: f32| {
+            dispatch_scroll(&chain, vertical, delta, NestedScrollSource::UserInput, &mut reversed)
+        };
         let along_axis = move |offset: Offset| if vertical { offset.y } else { offset.x };
+        // Where the pointer is in the window: the deltas don't count the content's own moves (a
+        // bar collapsing above it), as Compose's changes compare positions in the same layout.
+        let position = context.pointer_position().unwrap_or(event.position);
         match (event.kind, pass) {
             (PointerEventType::Scroll, PointerEventPass::Main) if !event.consumed => {
                 let delta = if vertical { event.scroll_delta.y } else { event.scroll_delta.x };
@@ -438,11 +492,11 @@ impl DragScroller {
                     event.consume();
                 }
                 let mut tracker = crate::fling::VelocityTracker::default();
-                tracker.add(event_time(event), along_axis(event.position));
+                tracker.add(event_time(event), along_axis(position));
                 self.drag = Some(Drag {
                     pointer: event.pointer,
-                    start: event.position,
-                    last: event.position,
+                    start: position,
+                    last: position,
                     scrolling: false,
                     tracker,
                     touch: event.pointer_type == compose_ui::PointerType::Touch,
@@ -453,11 +507,11 @@ impl DragScroller {
                 if drag.pointer != event.pointer || !event.pressed {
                     return;
                 }
-                let moved = event.position - drag.last;
+                let moved = position - drag.last;
                 let along = if vertical { moved.y } else { moved.x };
-                drag.tracker.add(event_time(event), along_axis(event.position));
+                drag.tracker.add(event_time(event), along_axis(position));
                 if drag.scrolling {
-                    drag.last = event.position;
+                    drag.last = position;
                     event.consume();
                     // Dragging content up scrolls down.
                     scroll_by(-along);
@@ -468,13 +522,13 @@ impl DragScroller {
                 if drag.scrolling || drag.pointer != event.pointer || !event.pressed {
                     return;
                 }
-                drag.last = event.position;
+                drag.last = position;
                 if event.consumed {
                     // An inner scrollable or handler took it.
                     return;
                 }
                 // How far it is from the press (a tremor going back and forth isn't a drag).
-                let moved = event.position - drag.start;
+                let moved = position - drag.start;
                 let along = if vertical { moved.y } else { moved.x };
                 if along.abs() > slop {
                     drag.scrolling = true;
@@ -489,19 +543,42 @@ impl DragScroller {
                 {
                     event.consume();
                     // A touch let go while moving: the content goes on, slowing down.
-                    drag.tracker.add(event_time(event), along_axis(event.position));
+                    drag.tracker.add(event_time(event), along_axis(position));
                     let density = context.density().density;
                     let maximum = MAXIMUM_FLING_DP * density;
                     // The finger's velocity; the content scrolls the other way.
-                    let velocity = (-drag.tracker.velocity()).clamp(-maximum, maximum);
-                    if drag.touch && velocity.abs() > MINIMUM_FLING_DP * density {
+                    let velocity = if drag.touch {
+                        (-drag.tracker.velocity()).clamp(-maximum, maximum)
+                    } else {
+                        0.0
+                    };
+                    // The connections around take their part first, then hear how it ended.
+                    let chain = self.chain.clone();
+                    let axis = move |value: f32| {
+                        if vertical { Offset::new(0.0, value) } else { Offset::new(value, 0.0) }
+                    };
+                    let velocity = velocity + along_axis(chain.pre_fling(axis(-velocity)));
+                    if velocity.abs() > MINIMUM_FLING_DP * density {
                         let scroll = flinger();
-                        let scroll: Rc<dyn Fn(f32) -> f32> = if reverse {
-                            Rc::new(move |delta: f32| -scroll(-delta))
-                        } else {
-                            scroll
+                        let flung = chain.clone();
+                        let scroll: Rc<dyn Fn(f32) -> f32> = Rc::new(move |delta: f32| {
+                            let mut reversed = |delta: f32| {
+                                if reverse { -scroll(-delta) } else { scroll(delta) }
+                            };
+                            dispatch_scroll(
+                                &flung,
+                                vertical,
+                                delta,
+                                NestedScrollSource::SideEffect,
+                                &mut reversed,
+                            )
+                        });
+                        let on_end = move |left: f32| {
+                            chain.post_fling(axis(-(velocity - left)), axis(-left));
                         };
-                        self.fling = Some(fling(velocity, density, scroll));
+                        self.fling = Some(fling(velocity, density, scroll, on_end));
+                    } else {
+                        chain.post_fling(Offset::ZERO, axis(-velocity));
                     }
                 }
             }

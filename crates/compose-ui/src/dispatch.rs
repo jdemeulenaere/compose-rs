@@ -120,6 +120,7 @@ impl UiTree {
     /// the pointer's moves and its release go to the same nodes. Returns the actions handlers
     /// queued, to run once the tree is free.
     pub fn dispatch_pointer(&mut self, mut event: PointerEvent) -> Vec<Action> {
+        crate::nested_scroll::begin_pointer_event();
         let position = event.position;
         let captured = self.captures.iter().position(|(pointer, _)| *pointer == event.pointer);
         let path = match (event.kind, captured) {

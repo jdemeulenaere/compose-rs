@@ -51,6 +51,11 @@ impl<T: Copy + PartialEq + 'static> Anchored<T> {
         self.anchors.borrow().iter().find(|(anchor, _)| *anchor == value).map(|&(_, at)| at)
     }
 
+    /// Whether `confirm_value_change` lets it go to `value`.
+    pub fn confirm(&self, value: T) -> bool {
+        (self.confirm_value_change)(value)
+    }
+
     pub fn has_anchor(&self, value: T) -> bool {
         self.position_of(value).is_some()
     }

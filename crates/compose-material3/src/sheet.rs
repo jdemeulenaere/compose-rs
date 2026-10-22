@@ -240,10 +240,15 @@ pub fn ModalBottomSheet(
         LaunchedEffect(sheet_state.clone(), async move { state.show().await });
     }
     // Hides the sheet, then tells the caller.
+    // The scrim hides the sheet (if `confirm_value_change` lets it), then tells the caller, as
+    // Compose's `animateToDismiss`.
     let dismiss = {
         let (state, scope, on_dismiss) =
             (sheet_state.clone(), scope.clone(), on_dismiss_request.clone());
         compose_runtime::callback(move || {
+            if !state.inner.anchored.confirm(SheetValue::Hidden) {
+                return;
+            }
             let (state, on_dismiss) = (state.clone(), on_dismiss.clone());
             scope.launch(async move {
                 state.hide().await;
@@ -251,6 +256,26 @@ pub fn ModalBottomSheet(
                     on_dismiss();
                 }
             });
+        })
+    };
+    // Back (Escape) takes an expanded sheet that can rest half way there, else hides it and
+    // tells the caller, as Compose's sheet dialog's `onDismissRequest`.
+    let back = {
+        let (state, scope, on_dismiss) =
+            (sheet_state.clone(), scope.clone(), on_dismiss_request.clone());
+        compose_runtime::callback(move || {
+            let (state, on_dismiss) = (state.clone(), on_dismiss.clone());
+            if state.current_value() == SheetValue::Expanded && state.has_partially_expanded_state()
+            {
+                scope.launch(async move { state.partial_expand().await });
+            } else {
+                scope.launch(async move {
+                    state.hide().await;
+                    if !state.is_visible() {
+                        on_dismiss();
+                    }
+                });
+            }
         })
     };
     let settle = {
@@ -298,7 +323,7 @@ pub fn ModalBottomSheet(
         .semantics(false, |config| config.content_description.push("Bottom sheet".into()));
     compose_ui::PopupWithPositionProvider(
         provider,
-        Some(dismiss.clone()),
+        Some(back),
         properties,
         compose_runtime::callback(move || {
             let (dismiss, content, drag_handle) =

@@ -236,8 +236,8 @@ fn a_bottom_app_bar_is_80_dp_its_fab_at_the_end() {
     let bar = bounds(&mut ui, "bar");
     assert_eq!((bar.width(), bar.height()), (400.0, 80.0));
     let fab = bounds(&mut ui, "fab");
-    // 12 dp below the bar's 4 dp padding, 16 dp from its end (and its 4 dp).
-    assert_eq!((fab.right, fab.top), (400.0 - 4.0 - 16.0, 4.0 + 12.0));
+    // 12 dp from the bar's top and 16 dp from its end, its 4 dp padding included.
+    assert_eq!((fab.right, fab.top), (400.0 - 16.0, 12.0));
     // The action at the start, after the 4 dp padding (and its touch target's 4).
     assert_eq!(bounds(&mut ui, "action").left, 8.0);
 }
