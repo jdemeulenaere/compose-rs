@@ -22,6 +22,8 @@ thread_local! {
     static MEASURED: RefCell<HashMap<usize, usize>> = RefCell::new(HashMap::new());
     static CELLS: Cell<usize> = const { Cell::new(0) };
     static SLOW: Cell<Option<usize>> = const { Cell::new(None) };
+    /// How long composing every item takes (ms).
+    static ITEM_MILLIS: Cell<u64> = const { Cell::new(0) };
 }
 
 fn reset() {
@@ -29,6 +31,7 @@ fn reset() {
     MEASURED.with(|map| map.borrow_mut().clear());
     CELLS.with(|cells| cells.set(0));
     SLOW.with(|slow| slow.set(None));
+    ITEM_MILLIS.with(|millis| millis.set(0));
 }
 
 fn compositions(index: usize) -> usize {
@@ -68,6 +71,10 @@ fn Item(index: usize) {
     if SLOW.with(|slow| slow.get()) == Some(index) {
         SLOW.with(|slow| slow.set(None));
         std::thread::sleep(Duration::from_millis(40));
+    }
+    let millis = ITEM_MILLIS.with(|millis| millis.get());
+    if millis > 0 {
+        std::thread::sleep(Duration::from_millis(millis));
     }
     let policy = remember(|| Rc::new(Counting(index)) as Rc<dyn MeasurePolicy>);
     compose_ui::Layout(
@@ -191,6 +198,36 @@ fn after_a_slow_item_an_idle_time_shorter_than_it_is_left_alone() {
     let before = total_compositions();
     ui.host().prefetch(Instant::now() + Duration::from_millis(20));
     assert_eq!(total_compositions(), before, "an item started in 20 ms after one took 40");
+}
+
+/// Input: items that each take 8 ms to compose, then five idle times of 3 ms (heavy frames),
+/// then one of 6 ms.
+///
+/// Lowering the estimate by a quarter after each idle time too short for the step takes it
+/// from 8 to 1.9 ms in five short idle times: the 6 ms one then starts an item, which overruns
+/// it by 2 ms. An idle time shorter than half the estimate says little about the step: it
+/// lowers the estimate by a sixteenth only, so one slow item still can't stop prefetching for
+/// good (`one_slow_item_does_not_disable_prefetch_for_good`) but heavy frames don't wear it
+/// down within a few (D341).
+#[test]
+fn idle_times_far_too_short_for_a_step_do_not_wear_its_estimate_down() {
+    let (mut ui, state) = list(0);
+    ITEM_MILLIS.with(|millis| millis.set(8));
+    state.scroll_by(30.0);
+    ui.wait_for_idle();
+    ui.host().prefetch(later());
+    for _ in 0..5 {
+        state.scroll_by(20.0);
+        ui.wait_for_idle();
+        let before = total_compositions();
+        ui.host().prefetch(Instant::now() + Duration::from_millis(3));
+        assert_eq!(total_compositions(), before, "an 8 ms item started in 3 ms");
+    }
+    state.scroll_by(20.0);
+    ui.wait_for_idle();
+    let before = total_compositions();
+    ui.host().prefetch(Instant::now() + Duration::from_millis(6));
+    assert_eq!(total_compositions(), before, "an 8 ms item started in 6 ms");
 }
 
 /// Input: a list that scrolled, then an idle time of 0.2 ms, before any item was timed.

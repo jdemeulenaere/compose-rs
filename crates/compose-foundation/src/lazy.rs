@@ -191,12 +191,22 @@ impl StepCost {
         StepCost { average: self.average / 4 * 3, peak: self.peak / 4 * 3 }
     }
 
-    /// After the step didn't fit the time left: lowered if it was the `first` step of the idle
-    /// time (the idle time was too short for it), kept if steps before it took the time (the
-    /// next idle time may fit it whole; lowering it then let a 5 ms measurement start with 3 ms
-    /// left after a composition, on the Pixel 8 Pro).
-    fn missed(self, first: bool) -> StepCost {
-        if first { self.lowered() } else { self }
+    /// After the step didn't fit the `available` time, as the `first` step of its idle time
+    /// or not. Kept if steps before it took the time: the next idle time may fit it whole
+    /// (lowering it then let a 5 ms measurement start with 3 ms left after a composition, on the
+    /// Pixel 8 Pro). Lowered by a quarter if the idle time was a real chance for it (half its
+    /// estimate at least), by a sixteenth if it was far shorter: an outlier (one slow item
+    /// among the first timed) still fades, so it can't stop prefetching for good, but heavy
+    /// frames' short idle times don't wear a steady slow step's estimate down within a few
+    /// frames until an idle time it overruns starts it.
+    fn missed(self, first: bool, available: u64) -> StepCost {
+        if !first {
+            self
+        } else if available.saturating_mul(2) >= self.estimate() {
+            self.lowered()
+        } else {
+            StepCost { average: self.average / 16 * 15, peak: self.peak / 16 * 15 }
+        }
     }
 }
 
@@ -1678,14 +1688,15 @@ impl Prefetch {
     }
 }
 
-/// Whether the time left exceeds the step's estimate by `PREFETCH_MARGIN_NANOS`. If not, and
-/// the step is the `first` of its idle time, the estimate is lowered ([`StepCost::missed`]).
+/// Whether the time left exceeds the step's estimate by `PREFETCH_MARGIN_NANOS`. If not, the
+/// estimate may be lowered ([`StepCost::missed`]). `first`: no step of this request ran in this
+/// idle time (another list's may have).
 fn fits(scope: &PrefetchRequestScope<'_>, cost: &Cell<StepCost>, first: bool) -> bool {
-    let estimate = cost.get().estimate();
-    if scope.available_time_nanos() > estimate.saturating_add(PREFETCH_MARGIN_NANOS) {
+    let available = scope.available_time_nanos();
+    if available > cost.get().estimate().saturating_add(PREFETCH_MARGIN_NANOS) {
         return true;
     }
-    cost.set(cost.get().missed(first));
+    cost.set(cost.get().missed(first, available));
     false
 }
 
@@ -1835,7 +1846,7 @@ impl PointerInputModifierNode for LazyScrollNode {
 
 #[cfg(test)]
 mod tests {
-    use super::StepCost;
+    use super::{PREFETCH_MARGIN_NANOS, StepCost};
 
     const MS: u64 = 1_000_000;
 
@@ -1882,7 +1893,26 @@ mod tests {
     #[test]
     fn a_step_short_of_time_after_others_keeps_its_estimate() {
         let cost = StepCost::default().timed(5 * MS);
-        assert_eq!(cost.missed(false), cost, "the next idle time may fit it whole");
-        assert_eq!(cost.missed(true), cost.lowered(), "its idle time was too short for it");
+        assert_eq!(cost.missed(false, 4 * MS), cost, "the next idle time may fit it whole");
+        assert_eq!(cost.missed(true, 4 * MS), cost.lowered(), "its idle time was too short");
+    }
+
+    #[test]
+    fn an_idle_time_far_too_short_says_little_about_a_step() {
+        // Steady 4 ms steps: 1 ms idle times barely lower the estimate.
+        let steady = StepCost::default().timed(4 * MS).timed(4 * MS);
+        let mut worn = steady;
+        for _ in 0..5 {
+            worn = worn.missed(true, MS);
+        }
+        // A sixteenth each: a 3 ms idle time still doesn't start it (a quarter each: 1.0 ms).
+        assert!(worn.estimate() + PREFETCH_MARGIN_NANOS > 3 * MS, "{worn:?}");
+        assert_eq!(steady.missed(true, 2 * MS), steady.lowered(), "half of it: a chance");
+        // However short the idle times, the estimate fades: nothing stops prefetching for good.
+        let mut outlier = StepCost::default().timed(40 * MS);
+        for _ in 0..100 {
+            outlier = outlier.missed(true, MS);
+        }
+        assert!(outlier.estimate() < MS, "{outlier:?}");
     }
 }
