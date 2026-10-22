@@ -90,19 +90,44 @@ pub trait Renderer {
 pub struct DisplayList {
     pub ops: Vec<DrawOp>,
     /// The operations each repaint boundary drew (`Modifier.repaint_boundary`, graphics
-    /// layers, lazy items), in its own coordinates, keyed by its node: a renderer can keep a
-    /// group's recording while its operations stay the same (Android's render nodes).
+    /// layers, lazy items), in its own coordinates, keyed by its node, with a version: a
+    /// renderer can keep a group's recording while its version stays the same (Android's
+    /// render nodes).
     pub groups: Vec<DrawGroup>,
     /// A translation before this index isn't merged into: a group's operations stay its own.
     pub(crate) merge_floor: usize,
+    /// In a recording a repaint boundary keeps (render.rs): the boundaries drawn inside it, by
+    /// reference, each before the operation at its index.
+    pub(crate) boundaries: Vec<(usize, crate::tree::NodeId)>,
 }
 
-/// A repaint boundary's operations: `ops[start..end]`, keyed by its node.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+/// A repaint boundary's operations: its content `ops[start..end]`, in its node's coordinates,
+/// keyed by its node.
+///
+/// A boundary whose node's first drawing modifier is a graphics layer has the layer's
+/// properties in `layer` (as Compose's `graphicsLayer` sets its render node's), applied by the
+/// operations just outside its content: `ops[layer_start..start]` before it, which are, in this
+/// order and each only if needed, `Save` (if it transforms or clips), `Transform` (if it
+/// scales, rotates or moves), `ClipRect` (if it clips to its bounds) and `SaveLayerAlpha` (if
+/// its alpha is below 1); and `ops[end..layer_end]` after it, a `Restore` for each save. A
+/// renderer that ignores groups draws them as any other operations (Skia); one that keeps a
+/// recording per group skips them and applies `layer` as its render node's properties
+/// (Android). Without a layer, `layer_start == start` and `layer_end == end`.
+///
+/// `version` comes from a counter of the tree, bumped whenever the group's content is drawn
+/// again or a group inside it changed version: the content is the same while it is, except for
+/// the operations applying the layers of groups inside it, which their own `layer` carries. A
+/// change of a layer's properties alone (an animated alpha or rotation) changes no version,
+/// neither its own nor its parents'. A key with the same version never draws something else.
+#[derive(Clone, Copy, PartialEq, Debug, Default)]
 pub struct DrawGroup {
     pub key: u64,
+    pub version: u64,
     pub start: usize,
     pub end: usize,
+    pub layer_start: usize,
+    pub layer_end: usize,
+    pub layer: Option<crate::graphics_layer::LayerProperties>,
 }
 
 impl DisplayList {
@@ -110,6 +135,7 @@ impl DisplayList {
         self.ops.clear();
         self.groups.clear();
         self.merge_floor = 0;
+        self.boundaries.clear();
     }
 
     pub fn push(&mut self, op: DrawOp) {

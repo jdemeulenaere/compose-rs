@@ -152,8 +152,13 @@ fn repaint_boundaries_are_groups_of_their_own_operations() {
     // The first: its rect, in its own coordinates (not the move to it).
     assert_eq!(ops(&list.groups[0]), "rect 5,5 10x10 #FFFF0000\n");
     assert!(matches!(list.ops[list.groups[0].start - 1], DrawOp::Translate(_)));
-    // The layer's, its alpha included.
-    assert!(ops(&list.groups[1]).starts_with("save layer alpha 0.5"), "{}", ops(&list.groups[1]));
+    // The layer's: its content, its alpha a property applied just outside it.
+    let layer = list.groups[1];
+    assert_eq!(ops(&layer), "rect 0,0 10x10 #FF0000FF\n");
+    assert_eq!(layer.layer.map(|layer| layer.alpha), Some(0.5));
+    assert_eq!(list.ops[layer.layer_start..layer.start], [DrawOp::SaveLayerAlpha(0.5)]);
+    assert_eq!(list.ops[layer.end..layer.layer_end], [DrawOp::Restore]);
+    assert_eq!(list.groups[0].layer, None);
     assert_ne!(list.groups[0].key, list.groups[1].key);
 }
 

@@ -31,6 +31,7 @@ mod nodes;
 pub mod overlay;
 pub mod path;
 pub mod pointer_input;
+pub mod prefetch;
 mod render;
 pub mod semantics;
 pub mod shadow;
@@ -53,7 +54,7 @@ pub use focus_requester::FocusRequester;
 pub use graphics::{
     Color, CornerSize, Outline, Paint, PaintStyle, RECTANGLE_SHAPE, Shape, StrokeCap,
 };
-pub use graphics_layer::{GraphicsLayerScope, TransformOrigin};
+pub use graphics_layer::{GraphicsLayerScope, LayerProperties, TransformOrigin};
 pub use host::{FrameStats, LOCAL_CONSTRAINTS_HINT, LOCAL_DENSITY, UiHost};
 pub use image::ImageBitmap;
 pub use input::{
@@ -75,6 +76,9 @@ pub use overlay::{PopupPositionProvider, WindowPosition};
 pub use path::{ImageVector, Path, PathCommand, PathError, PathFillType};
 pub use pointer_input::{
     Axis, DragGestures, PointerInputChange, PointerInputDriver, PointerInputScope, TapGestures,
+};
+pub use prefetch::{
+    LOCAL_PREFETCH_SCHEDULER, PrefetchRequest, PrefetchRequestScope, PrefetchScheduler,
 };
 pub use semantics::{
     ProgressBarRangeInfo, Role, SemanticsAction, SemanticsConfiguration, SemanticsNode,

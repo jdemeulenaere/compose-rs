@@ -162,3 +162,27 @@ fn a_lazy_row_lays_out_sideways_with_padding_and_spacing() {
     assert_eq!(ui.on_node_with_tag("cell 0").fetch_semantics_node().bounds.left, 55.0);
     ui.on_node_with_tag("cell 10").assert_does_not_exist();
 }
+
+/// Scrolling moves the items without drawing them again: each item's repaint boundary keeps
+/// what it drew and its version (docs/06-ui.md, "Repaint boundaries").
+#[test]
+fn scrolling_keeps_what_the_items_drew() {
+    let (mut ui, state) = list();
+    let before = ui.host().display_list();
+    assert!(before.groups.len() >= 5, "{}", before.dump());
+    // Less than an item: the same items, moved.
+    assert!(state.scroll_by(13.0));
+    ui.wait_for_idle();
+    assert_eq!(state.first_visible_item_scroll_offset(), 13);
+    let after = ui.host().display_list();
+    let mut kept = 0;
+    for group in &after.groups {
+        if let Some(earlier) = before.groups.iter().find(|earlier| earlier.key == group.key) {
+            assert_eq!(group.version, earlier.version, "{group:?} drawn again");
+            assert_eq!(after.ops[group.start..group.end], before.ops[earlier.start..earlier.end]);
+            kept += 1;
+        }
+    }
+    assert!(kept >= 5, "{kept} items kept\n{}", after.dump());
+    assert_ne!(after.dump(), before.dump());
+}

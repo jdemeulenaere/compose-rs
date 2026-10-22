@@ -357,19 +357,16 @@ impl UiTree {
         if span.is_none() {
             self.text_selection = None;
         }
-        let mut changed = false;
         for (order, entry) in entries.iter().enumerate() {
             let range = span.and_then(|span| range_of(span, order));
             let text = self.selectable_text(entry.node, entry.index);
             let range = range.map(|range| clamp(&text, range));
             if let Some((value, (measurer, _))) = self.node_and_measurer(entry.node)
                 && let Some(selectable) = value.chain[entry.index].as_selectable()
+                && selectable.set_selection(range, measurer)
             {
-                changed |= selectable.set_selection(range, measurer);
+                self.invalidate_draw_of(entry.node);
             }
-        }
-        if changed {
-            self.needs_draw = true;
         }
     }
 

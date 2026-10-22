@@ -73,5 +73,41 @@ fn desktop_frame(criterion: &mut Criterion) {
     report_p99("toggle 1 of 1000 todos, rendered at 2x", samples);
 }
 
-criterion_group!(benches, ui, desktop_frame);
+/// An animation frame of the feed's animated header (a spinner drawn again, a pulsing dot's alpha
+/// and a turning star's rotation, each read while drawing) over the posts a lazy list shows, as
+/// docs/12's `feed_animated` on a phone, and in a window four phones tall (four times the posts
+/// on screen, the same header): the frame's work besides the header (drawing the posts) is what
+/// retained drawing per repaint boundary skips.
+fn animation_frame(criterion: &mut Criterion) {
+    use compose::runtime::executor;
+    use compose::ui::{Density, FixedTextMeasurer, UiHost};
+    for (name, height) in [("phone", 2400), ("four phones tall", 9600)] {
+        executor::set_manual_clock(executor::now_nanos());
+        let mut host = UiHost::new(
+            IntSize::new(1080, height),
+            Density::new(2.625),
+            Box::new(FixedTextMeasurer::new()),
+        );
+        host.set_content(compose_rs_feed::FeedAnimated);
+        let frame = |host: &mut UiHost| {
+            executor::advance_clock(Duration::from_millis(16));
+            let start = Instant::now();
+            host.frame();
+            start.elapsed()
+        };
+        for _ in 0..10 {
+            frame(&mut host);
+        }
+        executor::advance_clock(Duration::from_millis(16));
+        assert!(host.frame().drew, "an animation frame draws");
+        let title = format!("feed_animated frame, {name}");
+        criterion.bench_function(&title, |bench| {
+            bench.iter_custom(|iterations| (0..iterations).map(|_| frame(&mut host)).sum())
+        });
+        let samples = (0..500).map(|_| frame(&mut host)).collect();
+        report_p99(&title, samples);
+    }
+}
+
+criterion_group!(benches, ui, desktop_frame, animation_frame);
 criterion_main!(benches);
