@@ -80,6 +80,12 @@ impl MeasureScope<'_> {
         self.tree.density
     }
 
+    /// The node being measured: what a lazy list premeasures its next items under
+    /// (`PrefetchRequestScope::premeasure`).
+    pub fn node_id(&self) -> NodeId {
+        self.node
+    }
+
     /// The window's (the root's) size: what popups and dialogs are measured within.
     pub fn window_size(&self) -> IntSize {
         self.tree.window

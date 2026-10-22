@@ -7,19 +7,25 @@
 //! within the same frame (`UiHost::frame`), so scrolling shows no empty frame. The items are
 //! composed by a restartable composable of their own, each item one too: a scroll recomposes
 //! neither the list's caller nor the items that stay.
+//!
+//! After a scroll, the next items in its direction are composed and measured between frames
+//! (prefetch, as Compose's `LazyListPrefetchStrategy`), so the frame reaching them finds them
+//! ready.
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::hash::Hash;
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
+use std::time::Instant;
 
 use compose_runtime::{
     ComposeArg, OwnedState, composable, hash_key, key, mutable_state_of, remember,
 };
 use compose_ui::{
     Alignment, Constraints, Dp, EventContext, IntSize, Layout, Measurable, MeasurePolicy,
-    MeasureResult, MeasureScope, Modifier, ModifierNode, ModifierNodeElement, PaddingValues,
-    Placeable, PointerEvent, PointerEventPass, PointerInputModifierNode, Rect,
+    MeasureResult, MeasureScope, Modifier, ModifierNode, ModifierNodeElement, NodeId,
+    PaddingValues, Placeable, PointerEvent, PointerEventPass, PointerInputModifierNode,
+    PrefetchRequest, PrefetchRequestScope, PrefetchScheduler, Rect,
 };
 
 use crate::layout::Arrangement;
@@ -34,6 +40,10 @@ const MOST_MISSING: usize = 200;
 
 /// How far from its last index an item is looked for by key.
 const KEY_WINDOW: usize = 100;
+
+/// Items composed and measured between frames beyond those the layout wants, in the scroll
+/// direction.
+const PREFETCH_AHEAD: usize = 2;
 
 /// Where a lazy list is scrolled, as Compose's `LazyListState`: the first visible item and how
 /// far it is scrolled off. Reading them in composition recomposes on scrolls.
@@ -81,6 +91,26 @@ struct LazyListInner {
     /// How far the list can scroll each way, as last laid out (infinite: not known).
     room_backward: Cell<f32>,
     room_forward: Cell<f32>,
+    prefetch: Prefetch,
+}
+
+/// What prefetching works from, as last laid out, and what it learned.
+#[derive(Default)]
+struct Prefetch {
+    /// The list's node, its item count and the items its layout wants composed.
+    node: Cell<Option<NodeId>>,
+    count: Cell<usize>,
+    wanted: Cell<(usize, usize)>,
+    /// The last scroll went towards the end.
+    forward: Cell<bool>,
+    /// The request waiting in the scheduler, if any.
+    request: RefCell<Weak<LazyListPrefetch>>,
+    /// An item composed ahead, to measure next.
+    to_measure: Cell<Option<usize>>,
+    /// How long composing and measuring an item take, on average (nanoseconds): an idle time
+    /// too short for them is left alone, as Compose's.
+    compose_nanos: Cell<u64>,
+    measure_nanos: Cell<u64>,
 }
 
 impl LazyListState {
@@ -116,6 +146,7 @@ impl LazyListState {
                     offset as f32
                 }),
                 room_forward: Cell::new(f32::INFINITY),
+                prefetch: Prefetch::default(),
             }),
         }
     }
@@ -160,6 +191,8 @@ impl LazyListState {
             inner.room_forward.set(inner.room_forward.get() - used);
             inner.room_backward.set(inner.room_backward.get() + used);
             inner.pending.set(inner.pending.get() + used);
+            // Prefetch goes the way the list was scrolled (not the way a layout steps back).
+            inner.prefetch.forward.set(used > 0.0);
             inner.remeasure.update(|count| count.wrapping_add(1));
         }
         used
@@ -423,9 +456,14 @@ fn LazyList(
     };
     let policy = {
         let state = state.clone();
-        compose_runtime::remember_keyed((state.clone(), InfoKey(info.clone())), || {
-            Rc::new(LazyListLayout { state: state.inner.clone(), info }) as Rc<dyn MeasurePolicy>
-        })
+        let scheduler = compose_ui::LOCAL_PREFETCH_SCHEDULER.current();
+        compose_runtime::remember_keyed(
+            (state.clone(), InfoKey(info.clone()), scheduler.clone()),
+            || {
+                Rc::new(LazyListLayout { state: state.inner.clone(), info, scheduler })
+                    as Rc<dyn MeasurePolicy>
+            },
+        )
     };
     let modifier = modifier
         .clip(compose_ui::RECTANGLE_SHAPE)
@@ -552,6 +590,8 @@ impl ComposeArg for InfoKey {
 struct LazyListLayout {
     state: Rc<LazyListInner>,
     info: ListInfo,
+    /// Where it asks for the items after a scroll to be prefetched.
+    scheduler: Option<PrefetchScheduler>,
 }
 
 /// Measures an item by index (once), recording its size; `None` if it isn't composed.
@@ -571,6 +611,7 @@ impl MeasurePolicy for LazyListLayout {
         let info = &self.info;
         let vertical = info.vertical;
         let density = scope.density();
+        let node = scope.node_id();
         // A row is laid out left to right, and `place_relative` mirrors it in a right-to-left
         // layout; a column's items align in the direction and are placed as they are, as
         // Compose's (so a centered item rounds as in left to right).
@@ -639,7 +680,8 @@ impl MeasurePolicy for LazyListLayout {
         // The position, with the scrolling asked for; the first visible item found again by
         // its key if items came or went before it.
         let (mut index, offset) = state.position.get();
-        let mut offset = offset + state.pending.replace(0.0);
+        let scrolled = state.pending.replace(0.0);
+        let mut offset = offset + scrolled;
         // Kept to what pixel arithmetic holds (a jump to `i32::MAX` into an item, an infinite
         // scroll): the end clamps it on to where the list ends.
         const MOST_OFFSET: f32 = 1.0e9;
@@ -820,8 +862,43 @@ impl MeasurePolicy for LazyListLayout {
         let covers = composed_start <= wanted_start && composed_end >= wanted_end;
         let too_many =
             composed_start + 2 * beyond < wanted_start || composed_end > wanted_end + 2 * beyond;
+        let prefetch = &state.prefetch;
+        let mut composed = (composed_start, composed_end);
         if !covers || too_many {
-            state.composed.set((wanted_start, wanted_end));
+            // Items prefetched ahead in the scroll direction stay.
+            composed = if prefetch.forward.get() {
+                let end =
+                    if composed_end > wanted_end && composed_end <= wanted_end + PREFETCH_AHEAD {
+                        composed_end
+                    } else {
+                        wanted_end
+                    };
+                (wanted_start, end)
+            } else {
+                let start = if composed_start < wanted_start
+                    && composed_start + PREFETCH_AHEAD >= wanted_start
+                {
+                    composed_start
+                } else {
+                    wanted_start
+                };
+                (start, wanted_end)
+            };
+            state.composed.set(composed);
+        }
+        // After a scroll, the next items in its direction are composed between frames (and
+        // those left behind disposed), if any are to be.
+        prefetch.node.set(Some(node));
+        prefetch.count.set(count);
+        prefetch.wanted.set((wanted_start, wanted_end));
+        if scrolled != 0.0
+            && let Some(scheduler) = &self.scheduler
+            && prefetch.next(composed).is_some()
+            && prefetch.request.borrow().upgrade().is_none()
+        {
+            let request = Rc::new(LazyListPrefetch { state: Rc::downgrade(state) });
+            *prefetch.request.borrow_mut() = Rc::downgrade(&request);
+            scheduler.schedule_prefetch(request);
         }
         state.position.set((index, offset));
         if count > 0 {
@@ -838,11 +915,24 @@ impl MeasurePolicy for LazyListLayout {
             state.first_offset.set(rounded.1);
         }
         // The composed items out of view are placed too (clipped away), so focus can move to
-        // them and a focused item scrolled away keeps its node.
+        // them and a focused item scrolled away keeps its node; those composed beyond the ones
+        // wanted (prefetched) aren't, as Compose's: nothing draws them until they're wanted.
+        // A focused one among those is placed, next to the others: focus scrolls it in.
+        let (mut placed_start, mut placed_end) =
+            (composed_start.max(wanted_start), composed_end.min(wanted_end));
+        if let Some(key) = state.pinned.get()
+            && let Some(pinned) = info.items.index_of(key, state.pinned_near.get())
+        {
+            if (placed_end..composed_end).contains(&pinned) {
+                placed_end = pinned + 1;
+            } else if (composed_start..placed_start).contains(&pinned) {
+                placed_start = pinned;
+            }
+        }
         let mut beyond: Vec<(Placeable, i32)> = Vec::new();
         let mut main =
             placed.last().map_or(before, |(placeable, main)| main + main_of(placeable) + spacing);
-        for next in end_index..composed_end.min(count) {
+        for next in end_index..placed_end.min(count) {
             if let Some(placeable) = measure(next, &mut sizes) {
                 beyond.push((placeable, main));
                 main += main_of(&placeable) + spacing;
@@ -851,7 +941,7 @@ impl MeasurePolicy for LazyListLayout {
         // How far the list can scroll each way: known when the composed items reach its ends.
         let extent_end = main - spacing + after;
         let mut main = placed.first().map_or(before, |(_, main)| *main);
-        for previous in (composed_start.min(index)..index).rev() {
+        for previous in (placed_start.min(index)..index).rev() {
             if let Some(placeable) = measure(previous, &mut sizes) {
                 main -= main_of(&placeable) + spacing;
                 beyond.push((placeable, main));
@@ -859,20 +949,20 @@ impl MeasurePolicy for LazyListLayout {
         }
         let extent_start = main - before;
         let pending = state.pending.get();
-        let reaches_start = (index == 0 || composed_start == 0) && wanted_before == 0;
+        let reaches_start = (index == 0 || placed_start == 0) && wanted_before == 0;
         // Not reaching an end: estimated from the average size (a nested list's wheel delta
         // it can't use goes on to its parent).
         let average = average_size(&sizes) as f32 + spacing as f32;
         state.room_backward.set(if reaches_start {
             (-extent_start) as f32 + pending
         } else {
-            (composed_start.min(index) as f32 * average - extent_start as f32 + pending).max(1.0)
+            (placed_start.min(index) as f32 * average - extent_start as f32 + pending).max(1.0)
         });
-        let reaches_end = !missing && (end_index == count || composed_end >= count);
+        let reaches_end = !missing && (end_index == count || placed_end >= count);
         state.room_forward.set(if reaches_end {
             (extent_end.max(content_end) - main_max).max(0) as f32 - pending
         } else {
-            let after_composed = count.saturating_sub(composed_end.max(end_index)) as f32 * average;
+            let after_composed = count.saturating_sub(placed_end.max(end_index)) as f32 * average;
             (after_composed + (extent_end.max(content_end) - main_max) as f32 - pending).max(1.0)
         });
         let children = state.children.borrow().clone();
@@ -944,6 +1034,100 @@ fn average_size(sizes: &HashMap<usize, i32>) -> i32 {
         return 1;
     }
     (sizes.values().map(|size| i64::from(*size)).sum::<i64>() / sizes.len() as i64).max(1) as i32
+}
+
+/// The items a lazy list will scroll to next, composed and measured between frames, as
+/// Compose's `LazyListPrefetchStrategy`: one at a time, up to `PREFETCH_AHEAD` beyond those its
+/// layout wants, while the idle time left exceeds what an item took on average. Short of time,
+/// it gives up until the list scrolls again (which asks anew), rather than waking the platform
+/// at every frame for an item that may never fit.
+struct LazyListPrefetch {
+    state: Weak<LazyListInner>,
+}
+
+impl PrefetchRequest for LazyListPrefetch {
+    fn execute(&self, scope: &mut PrefetchRequestScope<'_>) -> bool {
+        let Some(state) = self.state.upgrade() else { return false };
+        let prefetch = &state.prefetch;
+        loop {
+            // An item composed ahead is measured first.
+            if let Some(index) = prefetch.to_measure.get() {
+                if !fits(scope, &prefetch.measure_nanos) {
+                    return false;
+                }
+                let start = Instant::now();
+                let child = state.children.borrow().iter().position(|composed| *composed == index);
+                if let (Some(node), Some(child), Some(constraints)) =
+                    (prefetch.node.get(), child, state.item_constraints.get())
+                {
+                    // What measuring it wrote (a nested list's items, a `BoxWithConstraints`'
+                    // constraints) is composed and measured too, as a frame's rounds do.
+                    for _ in 0..3 {
+                        scope.premeasure(node, child, constraints);
+                        if !scope.recompose() {
+                            break;
+                        }
+                    }
+                }
+                average(&prefetch.measure_nanos, start);
+                prefetch.to_measure.set(None);
+                continue;
+            }
+            let Some((range, ahead)) = prefetch.next(state.composed.get()) else { return false };
+            if !fits(scope, &prefetch.compose_nanos) {
+                return false;
+            }
+            let began = Instant::now();
+            state.composed.set(range);
+            scope.recompose();
+            average(&prefetch.compose_nanos, began);
+            prefetch.to_measure.set(ahead);
+        }
+    }
+}
+
+impl Prefetch {
+    /// What to compose next between frames, from the `composed` range: one more item ahead in
+    /// the scroll direction (up to `PREFETCH_AHEAD` beyond those the layout wants), and none of
+    /// those behind it doesn't want, as a frame composing the item would have left them. The
+    /// range, and the item ahead (to measure next); `None` when nothing is to be done, or when
+    /// the composed items don't cover the wanted ones (the frame composes those).
+    fn next(&self, composed: (usize, usize)) -> Option<((usize, usize), Option<usize>)> {
+        let (start, end) = composed;
+        let (wanted_start, wanted_end) = self.wanted.get();
+        if start > wanted_start || end < wanted_end {
+            return None;
+        }
+        if self.forward.get() {
+            let ahead = (end < self.count.get().min(wanted_end + PREFETCH_AHEAD)).then_some(end);
+            let behind = start < wanted_start;
+            (ahead.is_some() || behind)
+                .then(|| ((wanted_start, end + usize::from(ahead.is_some())), ahead))
+        } else {
+            let ahead = (start > wanted_start.saturating_sub(PREFETCH_AHEAD))
+                .then(|| start.checked_sub(1))
+                .flatten();
+            let behind = end > wanted_end;
+            (ahead.is_some() || behind).then(|| ((ahead.unwrap_or(start), wanted_end), ahead))
+        }
+    }
+}
+
+/// Whether the time left exceeds `average`. If not, the average is lowered, so one slow item
+/// (a cold cache) doesn't keep the list from prefetching for good.
+fn fits(scope: &PrefetchRequestScope<'_>, average: &Cell<u64>) -> bool {
+    if scope.available_time_nanos() > average.get() {
+        return true;
+    }
+    average.set(average.get() / 4 * 3);
+    false
+}
+
+/// Adds the time since `start` to the running `average`, as Compose's prefetch averages.
+fn average(average: &Cell<u64>, start: Instant) {
+    let new = start.elapsed().as_nanos() as u64;
+    let current = average.get();
+    average.set(if current == 0 { new } else { current / 4 * 3 + new / 4 });
 }
 
 /// The contiguous range of composed items (the children but a pinned one out of it).
