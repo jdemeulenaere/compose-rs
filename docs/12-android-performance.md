@@ -18,7 +18,7 @@ The Kotlin app follows Compose's performance guidance: an `@Immutable` data clas
 
 - **Startup**: 15 cold starts of each screen per app (`am force-stop`, then `am start -W`: `TotalTime`, from the launch to the first frame drawn). One cold start of each is also traced with Perfetto, to break the first frame down.
 - **Memory**: `dumpsys meminfo` 5 s after start, and again after scrolling (3 runs).
-- **Scrolling**: 10 flings through the feed (`input swipe`, 120 ms each, 1.2 s apart), 3 runs per app. Frames and jank come from `dumpsys gfxinfo` and from Perfetto's FrameTimeline (SurfaceFlinger's verdict on each frame). Per-frame work comes from the app's `Choreographer#doFrame` (main thread) and `DrawFrame` (RenderThread) slices, and CPU time from the scheduler.
+- **Scrolling**: 10 flings through the feed (`input swipe`, 120 ms each, 1.2 s apart), 3 runs per app. Frames and jank come from `dumpsys gfxinfo` and from Perfetto's FrameTimeline (SurfaceFlinger's verdict on each frame). Per-frame work comes from the app's `Choreographer#doFrame` (main thread) and `DrawFrame` (RenderThread) slices, and CPU time from the scheduler. Since time on a slow core isn't more work, "work" scales each running slice by its core's frequency (traced) and capacity: milliseconds on the fastest core at its highest frequency. The scheduler moves light threads to the little cores, so a frame's duration says as much about where it ran as about what it did.
 - **Animation**: 10 s of the animated header, untouched, 3 runs per app, measured as scrolling.
 
 compose-rs's frame phases show in the traces as `compose-rs: recompose`, `layout`, `text layout`, `draw`, `serialize` and `replay` sections, beside the system's.

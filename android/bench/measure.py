@@ -97,6 +97,8 @@ data_sources {{ config {{ name: "linux.ftrace" ftrace_config {{
     ftrace_events: "sched/sched_wakeup"
     ftrace_events: "task/task_newtask"
     ftrace_events: "task/task_rename"
+    ftrace_events: "power/cpu_frequency"
+    ftrace_events: "power/cpu_idle"
     atrace_categories: "view"
     atrace_categories: "gfx"
     atrace_categories: "am"
@@ -154,7 +156,59 @@ def percentile(values, fraction):
     return ordered[index]
 
 
-def frame_stats(trace_processor, trace, package):
+def cpu_capacities():
+    """Each CPU's capacity (the fastest core's is 1024) and its highest frequency, in kHz."""
+    output = shell(
+        "for c in /sys/devices/system/cpu/cpu[0-9]*; do echo ${c##*cpu} "
+        "$(cat $c/cpu_capacity) $(cat $c/cpufreq/cpuinfo_max_freq); done"
+    )
+    capacities = {}
+    for line in output.split("\n"):
+        parts = line.split()
+        if len(parts) == 3 and all(part.isdigit() for part in parts):
+            capacities[int(parts[0])] = (int(parts[1]), int(parts[2]))
+    return capacities
+
+
+def work_ms(trace_processor, trace, package, capacities):
+    """The main thread's and RenderThread's work as milliseconds on the fastest core at its
+    highest frequency: each running slice's time scaled by its core's frequency and capacity.
+    Unlike time, it doesn't grow when the scheduler moves light work to slower cores."""
+    if not capacities:
+        return None
+    scale = " ".join(
+        f"WHEN {cpu} THEN {capacity / 1024.0} / {max_freq}"
+        for cpu, (capacity, max_freq) in capacities.items()
+    )
+    rows = query(
+        trace_processor,
+        trace,
+        f"""
+        INCLUDE PERFETTO MODULE linux.cpu.frequency;
+        CREATE PERFETTO TABLE frequencies AS
+          SELECT ts, dur, cpu, freq FROM cpu_frequency_counters WHERE dur > 0;
+        CREATE PERFETTO TABLE running AS
+          SELECT s.ts, s.dur, s.cpu,
+                 CASE WHEN t.name = 'RenderThread' THEN 'render' ELSE 'main' END AS thread
+          FROM sched s JOIN thread t USING (utid) JOIN process p USING (upid)
+          WHERE p.name = '{package}' AND s.dur > 0
+            AND (t.tid = p.pid OR t.name = 'RenderThread');
+        CREATE VIRTUAL TABLE joined USING SPAN_JOIN(running PARTITIONED cpu,
+          frequencies PARTITIONED cpu);
+        SELECT thread, SUM(dur * freq * (CASE cpu {scale} END)) / 1e6 AS work
+        FROM joined GROUP BY thread
+        """,
+    )
+    work = {"main": 0.0, "render": 0.0}
+    for row in rows:
+        try:
+            work[row["thread"]] = float(row["work"])
+        except (KeyError, ValueError):
+            pass
+    return work
+
+
+def frame_stats(trace_processor, trace, package, capacities=None):
     """FrameTimeline jank and the app's main thread and RenderThread time per frame."""
     timeline = query(
         trace_processor,
@@ -221,6 +275,7 @@ def frame_stats(trace_processor, trace, package):
             "p99": percentile(render, 0.99),
         },
         "cpu_ms": cpu_ms,
+        "work_ms": work_ms(trace_processor, trace, package, capacities),
     }
 
 
@@ -272,6 +327,7 @@ def main():
     arguments = parser.parse_args()
     os.makedirs(arguments.out, exist_ok=True)
     tp = arguments.trace_processor
+    capacities = cpu_capacities()
     report = {"device": shell("getprop ro.product.model").strip(),
               "android": shell("getprop ro.build.version.release").strip()}
 
@@ -324,7 +380,7 @@ def main():
                 swipe(up=flick % 4 != 3)
                 time.sleep(1.2)
             trace = finish_trace(process, path, arguments.out)
-            stats = {"gfxinfo": gfxinfo(package), "trace": frame_stats(tp, trace, package)}
+            stats = {"gfxinfo": gfxinfo(package), "trace": frame_stats(tp, trace, package, capacities)}
             scroll[name].append(stats)
             memory[name]["after_scroll"].append(meminfo(package))
             print("scroll", name, run, json.dumps(stats))
@@ -342,7 +398,7 @@ def main():
             gfxinfo(package, reset=True)
             process, path = start_trace(package, 10000, f"animation-{name}-{run}")
             trace = finish_trace(process, path, arguments.out)
-            stats = {"gfxinfo": gfxinfo(package), "trace": frame_stats(tp, trace, package)}
+            stats = {"gfxinfo": gfxinfo(package), "trace": frame_stats(tp, trace, package, capacities)}
             animation[name].append(stats)
             print("animation", name, run, json.dumps(stats))
     report["animation"] = animation
