@@ -600,8 +600,10 @@ fn single_row_top_app_bar(
         let color = colors.container_color(fraction.get());
         scope.draw_rect(scope.bounds(), compose_ui::Paint::fill(color));
     });
+    // A repaint boundary, as Compose's bar is a layer (its `Surface` clips with one): a frame
+    // drawing what's around it again keeps the bar's drawing (D251).
     crate::components::surface(
-        modifier.then(container),
+        modifier.repaint_boundary().then(container),
         compose_ui::RECTANGLE_SHAPE,
         Color::TRANSPARENT,
         colors.title_content_color,
@@ -698,8 +700,9 @@ fn two_rows_top_app_bar(bar: TwoRows) {
     let TwoRows { title, title_style, small_title_style, navigation_icon, actions, .. } = bar;
     let actions = actions_row(actions);
     let window_insets = bar.window_insets;
+    // A repaint boundary, as the small bar (D251).
     crate::components::surface(
-        bar.modifier.then(container),
+        bar.modifier.repaint_boundary().then(container),
         compose_ui::RECTANGLE_SHAPE,
         Color::TRANSPARENT,
         colors.title_content_color,
