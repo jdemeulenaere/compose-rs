@@ -165,6 +165,19 @@ The "about 2.1 ms per item" quoted for prefetching is the wall-clock time of a `
 
 The frames that reveal an item (about 175 per run) are the slow ones: replay 1.04 ms against 0.09, `doFrame` 2.42 against 1.24 ms. Recording each paragraph's render node while prefetching (`perf/frame-eager-text`, docs/12's third next step) cuts the main thread's p90 and p99 by 15 % each (2.17 → 1.84 ms, 3.53 → 3.00 ms). But it raises total main work by 4 % (460 → 480 ms): prefetching's work rose by 33 ms to save 18 ms in frames. Some prefetched paragraphs are never shown; the rest of the difference is unexplained (the investigation's guess: the same recording costs more on the little cores, where idle-time work runs). It moves work to shorten the slowest frames; it doesn't reduce work. Recording the item's group ahead too would need Rust to draw unplaced items (M–L), for about 0.15 ms more per revealing frame.
 
+**Done, without the extra work (D322).** The prototype recorded each paragraph inside its layout call. The production version notes the paragraphs laid out during a `prefetch` call and records them after it returns, oldest first, while a recording (a running average of the last ones, 30 µs before any, each counting for at most 1 ms) fits before the next frame's deadline, the one Rust's prefetch works to, and at least one if the deadline isn't past (so a slow recording can't stall them). It skips the paragraphs released or laid out again since (a text measured twice is two paragraphs, the first released), the ones a frame already recorded, and empty ones. What doesn't fit waits for the next idle time, before any more prefetching. Measured against D321, 4 runs each, interleaved with the prototype on top of D321 (means [min–max]):
+
+| Scroll | before | prototype | shipped |
+|---|---|---|---|
+| Main per frame p50 / p90 / p99 | 1.26 / 2.28 / 3.63 ms | 1.30 / 2.01 / 3.13 ms | 1.28 / **1.94 / 3.05** ms (−15 %, −16 %) |
+| Main work | 473.1 [464.4–479.6] ms | 481.6 [475.4–484.2] ms (+1.8 %) | 473.9 [465.2–481.3] ms (+0.2 %) |
+| RenderThread work | 775.3 ms | 775.5 ms | 776.3 ms |
+| RenderThread per frame p50 / p90 / p99 | 2.73 / 3.69 / 5.49 ms | 2.80 / 3.83 / 5.44 ms | 2.78 / 3.73 / 5.46 ms |
+| Janky frames a run | 0.75 | 0.5 | 1.0 |
+| `compose-rs: replay`, `Record View#draw()` | 188, 250 µs | 105, 171 µs | 104, 168 µs |
+
+The animation (no prefetching) is unchanged: main work 198.1 → 198.1 ms, p99 2.90 → 3.02 ms (ranges overlap). Janky frames stay at about one a run either way, within the runs' spread.
+
 ## Android: text and the big screen
 
 The `big` screen's first frame (110 ms of main thread) lays out 1,201 paragraphs. Each paragraph is laid out exactly once: no intrinsics and no second measure. Each costs about 35 µs: one JNI call, one `NewStringUTF`, one direct buffer, one `getDesiredWidth` and one `StaticLayout`. simpleperf (3 cold starts, dwarf call graphs) splits the samples:
@@ -473,7 +486,6 @@ With these changes, compose-rs's animation does about 25 % less main-thread work
 | `PrecomputedText` per paragraph | big first frame +7 ms (text-precomputed) |
 | Skipping `getDesiredWidth` when a line wraps | flat: the shaping moves (text-wrap-first) |
 | Recording paragraphs on workers while laying out | contention: text layout +18 ms (text-async-record, C) |
-| Recording prefetched paragraphs ahead (docs/12's next step) | p99 −15 %, but total main work +4 % (frame-eager-text) |
 | The spinner as a repaint boundary alone | no change (frame-spinner-boundary); needs #10 |
 | Dropping the per-paragraph render node | at most 4.5 ms of the big frame, and the animation frames that re-record groups would pay (D153) |
 | `RegisterNatives`, lazier initialization at startup | under 0.2 ms and 0.3 ms |

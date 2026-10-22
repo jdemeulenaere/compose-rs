@@ -124,6 +124,6 @@ D270's effect, measured on its own (same device, the APKs before and after it al
 
 - **The animation's RenderThread**: even with Compose's (540 ms against 535 ms of work), where round 1 did 505 ms. Done: it was the spinner's square cap, a stroked path each frame; with Material 3 1.4's round cap (D320) it does 492 ms, and its per-frame p99 went from 5.64 to 5.20 ms.
 - **Text layout in batches**: laying out paragraphs in batches (one JNI crossing for many) would shorten the big screen's first frame (46 ms of layout, most of it text) and the prefetch of each item.
-- **Recording prefetched items ahead**: prefetching composes and measures an item between frames, but the frame that reveals it still records its group and its paragraphs' render nodes; recording them while idle too would leave that frame only drawing render nodes.
+- **Recording prefetched items ahead**: prefetching composes and measures an item between frames, but the frame that reveals it still records its group and its paragraphs' render nodes; recording them while idle too would leave that frame only drawing render nodes. The paragraphs are done (D322): the scroll's main-thread p90 and p99 went from 2.28 and 3.63 ms to 1.94 and 3.05 ms, with the same work. The group is left: Rust would have to draw unplaced items.
 
 Flings are comparable by construction: compose-rs's fling follows Android's `OverScroller` spline from the release velocity, the curve of Compose's default fling behaviour on Android.

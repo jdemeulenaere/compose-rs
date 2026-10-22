@@ -389,12 +389,34 @@ class ComposeRsView(context: Context, private val app: String) : View(context) {
         // Until the next frame: a refresh interval after this one started.
         val refreshRate = display?.refreshRate?.coerceAtLeast(30f) ?: 60f
         val nextFrameNanos = frameTimeNanos + (1_000_000_000 / refreshRate).toLong()
-        val available = nextFrameNanos - System.nanoTime()
-        if (available > 0 && !ComposeRsNative.prefetch(host, available)) {
+        // Paragraphs the last idle time laid out but had no time to record go first: their item
+        // is the next one shown.
+        var workLeft = measurer.recordLaidOut(nextFrameNanos)
+        if (!workLeft) {
+            val available = nextFrameNanos - System.nanoTime()
+            workLeft = available <= 0 || prefetchAndRecord(available, nextFrameNanos)
+        }
+        if (!workLeft) {
             prefetchScheduled = false
         } else {
             Choreographer.getInstance().postFrameCallback(prefetchFrameCallback)
         }
+    }
+
+    /**
+     * Prefetches for [available] nanoseconds, then records the paragraphs it laid out until
+     * [deadlineNanos], so the frame showing their item only draws them. Returns whether work is
+     * left (prefetching, or paragraphs to record).
+     */
+    private fun prefetchAndRecord(available: Long, deadlineNanos: Long): Boolean {
+        measurer.collectingLaidOut = true
+        val prefetchLeft = try {
+            ComposeRsNative.prefetch(host, available)
+        } finally {
+            measurer.collectingLaidOut = false
+        }
+        val recordingLeft = measurer.recordLaidOut(deadlineNanos)
+        return prefetchLeft || recordingLeft
     }
 
     // ---- Accessibility -------------------------------------------------------------------
