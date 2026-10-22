@@ -1021,6 +1021,11 @@ impl PointerInputModifierNode for TextFieldNode {
                     return;
                 }
                 event.consume();
+                // A tap on the field already focused asks for the on-screen keyboard (hidden by
+                // `Done`, say), as Compose's `tapToFocus`; focusing it shows it anyway.
+                if self.focused && !press.dragging && !self.read_only {
+                    context.show_software_keyboard();
+                }
                 context.request_focus();
                 self.preferred_x = None;
                 if press.dragging || press.unit != Unit::Character {
@@ -1052,9 +1057,13 @@ impl FocusTargetModifierNode for TextFieldNode {
     }
 
     /// A tap on a decoration around the field (a Material container's padding) puts the cursor
-    /// nearest it.
+    /// nearest it, and asks for the on-screen keyboard as a tap on the text does (it may have
+    /// been focused already, its keyboard hidden).
     fn on_focus_tap(&mut self, position: Offset, context: &mut EventContext<'_>) {
         self.commit_composition(context);
+        if !self.read_only {
+            context.show_software_keyboard();
+        }
         match self.offset_at(position + self.scroll, context) {
             Some(offset) => {
                 self.cursor = offset;

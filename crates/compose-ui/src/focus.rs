@@ -208,6 +208,11 @@ impl UiTree {
             self.invalidate_draw_of(node);
         }
         self.input_method_reset |= requests.reset_input_method;
+        // A field asking for the on-screen keyboard, as on a tap (the host wakes for it).
+        if let Some(show) = requests.software_keyboard {
+            self.focus_requests.software_keyboard.set(Some(show));
+            self.focus_requests.wake();
+        }
         for node in requests.measure {
             self.invalidate_measure(node);
         }
