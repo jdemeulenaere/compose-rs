@@ -153,6 +153,10 @@ impl UiTree {
         for node in requests.measure {
             self.invalidate_measure(node);
         }
+        // Its selection requests: a selection container losing the focus clears its selection.
+        for request in requests.selection {
+            self.handle_selection(request);
+        }
     }
 
     /// Tells the focused target where the tap that focused it was.
@@ -190,6 +194,10 @@ impl UiTree {
         self.input_method_reset |= requests.reset_input_method;
         for node in requests.measure {
             self.invalidate_measure(node);
+        }
+        // Its selection requests: a selection container losing the focus clears its selection.
+        for request in requests.selection {
+            self.handle_selection(request);
         }
     }
 

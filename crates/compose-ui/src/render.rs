@@ -50,7 +50,13 @@ impl RetainedDrawing {
 impl UiTree {
     /// Records the display list, if anything changed since the last draw. Returns whether it
     /// did.
+    ///
+    /// State written since the frame last applied observed writes (by layout itself: a lazy
+    /// list's or a scroll's measured state, a hover the layout moved) is applied first, so a
+    /// kept boundary drawing it is drawn again in this frame. A measurement it invalidates is
+    /// left to the next frame, which the write asked for (as before boundaries kept anything).
     pub fn draw(&mut self) -> bool {
+        self.apply_observed_writes();
         if !self.needs_draw {
             return false;
         }

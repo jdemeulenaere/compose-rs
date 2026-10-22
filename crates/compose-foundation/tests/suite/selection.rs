@@ -7,7 +7,7 @@ use std::time::Duration;
 use compose_foundation::layout::*;
 use compose_foundation::*;
 use compose_test::*;
-use compose_ui::{Key, KeyEvent, KeyEventType, KeyModifiers, Offset, PointerEvent};
+use compose_ui::{Key, KeyEvent, KeyEventType, KeyModifiers, Offset, PointerEvent, UnitExt};
 
 /// The fixed-advance measurer's character width at the default 14 sp.
 const ADVANCE: f32 = 7.0;
@@ -103,4 +103,28 @@ fn a_selection_is_highlighted_and_a_click_clears_it() {
     ui.wait_for_idle();
     assert_eq!(ui.host().with_tree(|tree| tree.selected_text()), None);
     assert!(!ui.dump_display_list().contains("#664286F4"));
+}
+
+/// A container losing the focus (to another focus target, without a press) clears its
+/// selection, as Compose's `SelectionContainer` does on blur.
+#[test]
+fn losing_the_focus_clears_the_selection() {
+    let mut ui = ComposeTestRule::with_manual_clock(|| {
+        Column!({
+            SelectionContainer!({
+                BasicText!("Hello world", modifier = Modifier.test_tag("first"));
+            });
+            Box!(modifier = Modifier.size(20.dp()).clickable(|| {}).test_tag("other"));
+        });
+    });
+    let from = at(&mut ui, "first", 0);
+    let to = at(&mut ui, "first", 5);
+    ui.host().send_pointer(PointerEvent::press(from));
+    ui.host().send_pointer(PointerEvent::moved(to, true));
+    ui.host().send_pointer(PointerEvent::release(to));
+    ui.wait_for_idle();
+    assert_eq!(ui.host().with_tree(|tree| tree.selected_text()).as_deref(), Some("Hello"));
+    ui.on_node_with_tag("other").request_focus();
+    ui.wait_for_idle();
+    assert_eq!(ui.host().with_tree(|tree| tree.selected_text()), None);
 }
