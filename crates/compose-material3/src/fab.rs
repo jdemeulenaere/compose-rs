@@ -11,7 +11,7 @@ use compose_ui::{
     Alignment, Color, Dp, Modifier, MutableInteractionSource, Role, Shape, SizeSpec, UnitExt,
 };
 
-use crate::components::{SurfaceClick, remembered_interaction_source, surface};
+use crate::components::{Elevations, SurfaceClick, remembered_interaction_source, surface};
 use crate::theme::{LOCAL_TEXT_STYLE, MaterialTheme};
 
 /// A floating action button's elevation in each of its states, as Compose's
@@ -130,13 +130,20 @@ fn fab(
     content: compose_runtime::Callback,
 ) {
     let interaction_source = remembered_interaction_source(interaction_source);
-    let shadow = elevation.shadow_elevation(&interaction_source);
     let click = SurfaceClick {
         on_click,
         enabled: true,
         role: Some(Role::Button),
         interaction_source,
         selected: None,
+        // The shadow follows the press and hover while drawing.
+        elevations: Some(Elevations {
+            default: elevation.default_elevation,
+            pressed: elevation.pressed_elevation,
+            focused: elevation.focused_elevation,
+            hovered: elevation.hovered_elevation,
+            disabled: elevation.default_elevation,
+        }),
     };
     let label = MaterialTheme::typography().label_large;
     surface(
@@ -145,7 +152,7 @@ fn fab(
         container_color,
         content_color,
         elevation.tonal_elevation(),
-        shadow,
+        Dp(0.0),
         None,
         Some(click),
         compose_runtime::callback(move || {

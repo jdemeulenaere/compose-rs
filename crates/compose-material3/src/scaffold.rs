@@ -219,14 +219,21 @@ pub fn Card(
     } else {
         (colors.disabled_container_color, colors.disabled_content_color)
     };
-    let shadow =
-        elevation.shadow_elevation(enabled, on_click.is_some().then_some(&interaction_source));
+    // Clickable, the shadow follows the press and hover while drawing; else it rests.
+    let shadow = if on_click.is_some() { Dp(0.0) } else { elevation.default_elevation };
     let click = on_click.map(|on_click| crate::components::SurfaceClick {
         on_click,
         enabled,
         role: None,
         interaction_source,
         selected: None,
+        elevations: Some(crate::components::Elevations {
+            default: elevation.default_elevation,
+            pressed: elevation.pressed_elevation,
+            focused: elevation.focused_elevation,
+            hovered: elevation.hovered_elevation,
+            disabled: elevation.disabled_elevation,
+        }),
     });
     crate::components::surface(
         modifier,

@@ -7,7 +7,7 @@ use compose_foundation::layout::{Arrangement, PaddingValues, Row, RowScope};
 use compose_runtime::{CompositionLocalProvider, composable};
 use compose_ui::{Alignment, Color, Dp, Modifier, MutableInteractionSource, Role, Shape, SizeSpec};
 
-use crate::components::{SurfaceClick, remembered_interaction_source, surface};
+use crate::components::{Elevations, SurfaceClick, remembered_interaction_source, surface};
 use crate::theme::{LOCAL_TEXT_STYLE, MaterialTheme};
 
 /// A button's colors, enabled and disabled, as Compose's `ButtonColors`. Change some of the
@@ -254,13 +254,7 @@ pub fn Button(
     content: impl Fn(RowScope) + 'static,
 ) {
     let interaction_source = remembered_interaction_source(interaction_source);
-    let (tonal, shadow) = match elevation {
-        Some(elevation) => (
-            elevation.tonal_elevation(enabled),
-            elevation.shadow_elevation(enabled, &interaction_source),
-        ),
-        None => (Dp(0.0), Dp(0.0)),
-    };
+    let tonal = elevation.map_or(Dp(0.0), |elevation| elevation.tonal_elevation(enabled));
     let label = MaterialTheme::typography().label_large;
     let click = SurfaceClick {
         on_click,
@@ -268,6 +262,14 @@ pub fn Button(
         role: Some(Role::Button),
         interaction_source,
         selected: None,
+        // The shadow follows the press and hover while drawing.
+        elevations: elevation.map(|elevation| Elevations {
+            default: elevation.default_elevation,
+            pressed: elevation.pressed_elevation,
+            focused: elevation.focused_elevation,
+            hovered: elevation.hovered_elevation,
+            disabled: elevation.disabled_elevation,
+        }),
     };
     surface(
         modifier,
@@ -275,7 +277,7 @@ pub fn Button(
         colors.container_color(enabled),
         colors.content_color(enabled),
         tonal,
-        shadow,
+        Dp(0.0),
         border,
         Some(click),
         compose_runtime::callback(move || {

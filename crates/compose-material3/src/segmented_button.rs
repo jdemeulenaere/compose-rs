@@ -265,6 +265,7 @@ pub fn SegmentedButton(
         role: None,
         interaction_source,
         selected: Some(selected),
+        elevations: None,
     };
     let label_style = MaterialTheme::typography().label_large;
     let policy = remember(|| Rc::new(IconLabelLayout) as Rc<dyn MeasurePolicy>);

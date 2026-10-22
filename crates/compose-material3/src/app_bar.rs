@@ -747,7 +747,7 @@ fn top_app_bar_row(
                     if let Some(navigation_icon) = navigation_icon.clone() {
                         CompositionLocalProvider(
                             LOCAL_CONTENT_COLOR.provides(colors.navigation_icon_content_color),
-                            move || navigation_icon(),
+                            &*navigation_icon,
                         );
                     }
                 }),
@@ -773,7 +773,7 @@ fn top_app_bar_row(
                             let title = title.clone();
                             CompositionLocalProvider(
                                 LOCAL_TEXT_STYLE.provides(title_style),
-                                move || title(),
+                                &*title,
                             );
                         },
                     );

@@ -326,6 +326,7 @@ fn surface_icon_button(
         role: Some(Role::Button),
         interaction_source,
         selected: None,
+        elevations: None,
     };
     crate::components::surface(
         modifier,
