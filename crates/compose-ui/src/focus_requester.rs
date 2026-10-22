@@ -10,13 +10,43 @@ use compose_runtime::ComposeArg;
 use crate::modifier::{Modifier, ModifierNode, ModifierNodeElement};
 use crate::tree::NodeId;
 
-/// The focus requests a tree has been given, handled by its host once it's free (after the
-/// event dispatched, or at the next frame).
+/// The focus requests a tree has been given (by `FocusRequester`s and the `FocusManager`),
+/// handled by its host once it's free (after the event dispatched, or at the next frame); and
+/// what the `SoftwareKeyboardController` last asked, for the platform.
 #[derive(Default)]
 pub(crate) struct FocusRequests {
-    pub(crate) pending: RefCell<Vec<NodeId>>,
+    pub(crate) pending: RefCell<Vec<FocusRequest>>,
+    /// Show (true) or hide (false) the on-screen keyboard: the last request, until the host's
+    /// platform takes it.
+    pub(crate) software_keyboard: std::cell::Cell<Option<bool>>,
     /// Asks the host for a frame.
     pub(crate) wake: RefCell<Option<Rc<dyn Fn()>>>,
+}
+
+/// A focus change asked for outside dispatch.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum FocusRequest {
+    /// `FocusRequester::request_focus`: the node's focus target.
+    Node(NodeId),
+    /// `FocusManager::clear_focus`.
+    Clear { force: bool },
+    /// `FocusManager::move_focus`.
+    Move(crate::focus_manager::FocusDirection),
+}
+
+impl FocusRequests {
+    /// Queues `request` and asks the host for a frame.
+    pub(crate) fn push(&self, request: FocusRequest) {
+        self.pending.borrow_mut().push(request);
+        self.wake();
+    }
+
+    pub(crate) fn wake(&self) {
+        let wake = self.wake.borrow().clone();
+        if let Some(wake) = wake {
+            wake();
+        }
+    }
 }
 
 /// Moves focus to the node it's attached to (`Modifier.focus_requester`), as Compose's
@@ -62,11 +92,7 @@ impl FocusRequester {
             })
         });
         let Some((requests, node)) = owner else { return false };
-        requests.pending.borrow_mut().push(node);
-        let wake = requests.wake.borrow().clone();
-        if let Some(wake) = wake {
-            wake();
-        }
+        requests.push(FocusRequest::Node(node));
         true
     }
 
@@ -178,7 +204,7 @@ mod tests {
         assert!(!requester.request_focus());
         requester.attach(&tree, node);
         assert!(requester.request_focus());
-        assert_eq!(*requests.pending.borrow(), [node]);
+        assert_eq!(*requests.pending.borrow(), [FocusRequest::Node(node)]);
         requester.detach(&tree, node);
         assert!(ATTACHED.with(|attached| attached.borrow().is_empty()));
         assert!(!requester.request_focus());

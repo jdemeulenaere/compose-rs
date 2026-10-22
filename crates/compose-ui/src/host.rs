@@ -181,10 +181,8 @@ impl UiHost {
             if pending.is_empty() {
                 return;
             }
-            for node in pending {
-                let actions = self.with_tree(|tree| {
-                    if tree.get(node).is_some() { tree.request_focus(node) } else { Vec::new() }
-                });
+            for request in pending {
+                let actions = self.with_tree(|tree| tree.perform_focus_request(request));
                 Self::run(actions);
             }
         }
@@ -589,6 +587,31 @@ impl UiHost {
     /// candidate window goes.
     pub fn text_input_area(&self) -> Option<crate::unit::Rect> {
         self.with_tree(|tree| tree.text_input_area())
+    }
+
+    /// What the focused text field asks of an on-screen keyboard (its type, action key,
+    /// capitalization, auto-correction), as Compose's `ImeOptions`; `None` while no focused node
+    /// takes text. A platform reads them when the field takes the focus (Android, for its
+    /// `EditorInfo` in `onCreateInputConnection`; desktop ignores them).
+    pub fn text_input_options(&self) -> Option<crate::text_input::ImeOptions> {
+        self.with_tree(|tree| tree.text_input_options())
+    }
+
+    /// The input method's action key (Android's `performEditorAction`): the focused field runs
+    /// its `KeyboardActions`. Returns whether it was taken.
+    pub fn perform_ime_action(&mut self, action: crate::text_input::ImeAction) -> bool {
+        let (consumed, actions) = self.with_tree(|tree| tree.dispatch_ime_action(action));
+        Self::run(actions);
+        self.wake_if_dirty();
+        consumed
+    }
+
+    /// What the content last asked of the on-screen keyboard since the last call
+    /// (`SoftwareKeyboardController`, a text field's `Done`): show (`Some(true)`) or hide
+    /// (`Some(false)`). The asking wakes the host; a platform with an on-screen keyboard takes
+    /// it after each frame and event (Android shows it for the focused field or hides it).
+    pub fn take_software_keyboard_request(&self) -> Option<bool> {
+        self.with_tree(|tree| tree.focus_requests.software_keyboard.take())
     }
 
     /// Moves focus to `node`'s focus target.

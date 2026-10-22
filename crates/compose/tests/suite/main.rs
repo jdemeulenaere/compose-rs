@@ -57,6 +57,7 @@ mod review_compile_const_block;
 mod review_compile_inner_attribute;
 mod review_compile_packed_derive;
 mod review_compile_ref_mut_pattern;
+mod review_forms_macro;
 mod review_h;
 mod review_locals;
 mod review_locals_compile_trait_object;

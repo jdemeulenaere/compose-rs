@@ -220,6 +220,8 @@ fn annotated_text_draws_each_span_in_its_style() {
                 compose::ui::TextOverflow::Clip,
                 true,
                 u32::MAX,
+                1,
+                None,
                 TextStyle::DEFAULT,
             )
         },

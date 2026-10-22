@@ -263,3 +263,79 @@ fn an_effect_calls_the_latest_callback_through_remember_updated_state() {
     ui.advance_time_by(std::time::Duration::from_millis(150));
     assert_eq!(*calls.borrow(), vec![2], "the newest callback, from the first launch");
 }
+
+/// Frames until `text` shows, the background threads given real time to finish.
+fn wait_for_text(ui: &mut ComposeTestRule, text: &str) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while ui.count_nodes(&has_text(text)) == 0 {
+        assert!(std::time::Instant::now() < deadline, "{text:?} never showed");
+        std::thread::sleep(Duration::from_millis(1));
+        ui.wait_for_idle();
+    }
+}
+
+#[test]
+fn a_launched_effect_awaiting_background_work_writes_its_result() {
+    #[composable]
+    fn Screen() {
+        let text = remember(|| mutable_state_of(String::from("loading")));
+        LaunchedEffect((), async move {
+            let main = std::thread::current().id();
+            let (loaded, thread) = spawn_background(|| {
+                std::thread::sleep(Duration::from_millis(5));
+                (String::from("loaded"), std::thread::current().id())
+            })
+            .await;
+            assert_ne!(thread, main, "the work ran on another thread");
+            assert_eq!(std::thread::current().id(), main, "the task resumed on the UI thread");
+            text.set(loaded);
+        });
+        BasicText!(text.get());
+    }
+    let mut ui = compose_test(Screen);
+    ui.on_node_with_text("loading").assert_exists();
+    wait_for_text(&mut ui, "loaded");
+}
+
+#[test]
+fn an_effect_leaving_the_composition_discards_its_background_result() {
+    struct Probe(std::sync::mpsc::Sender<std::thread::ThreadId>);
+    impl Drop for Probe {
+        fn drop(&mut self) {
+            let _ = self.0.send(std::thread::current().id());
+        }
+    }
+    let shown = mutable_state_of(true);
+    let handle = shown.handle();
+    let (release, released) = std::sync::mpsc::channel::<()>();
+    let released = Arc::new(Mutex::new(released));
+    let (dropped_sender, dropped) = std::sync::mpsc::channel::<std::thread::ThreadId>();
+    let (started_sender, started) = std::sync::mpsc::channel::<()>();
+    let mut ui = compose_test(move || {
+        let text = remember(|| mutable_state_of(String::from("waiting")));
+        if handle.get() {
+            let (released, dropped_sender) = (released.clone(), dropped_sender.clone());
+            let started_sender = started_sender.clone();
+            LaunchedEffect((), async move {
+                let probe = spawn_background(move || {
+                    started_sender.send(()).unwrap();
+                    let _ = released.lock().unwrap().recv();
+                    Probe(dropped_sender)
+                })
+                .await;
+                drop(probe);
+                text.set(String::from("written"));
+            });
+        }
+        BasicText!(text.get());
+    });
+    // The effect leaves while the work blocks: its task is cancelled without waiting for it.
+    started.recv_timeout(Duration::from_secs(10)).unwrap();
+    shown.set(false);
+    ui.wait_for_idle();
+    release.send(()).unwrap();
+    let thread = dropped.recv_timeout(Duration::from_secs(10)).unwrap();
+    assert_ne!(thread, std::thread::current().id(), "dropped on the background thread");
+    ui.wait_for_idle();
+    ui.on_node_with_text("waiting").assert_exists();
+}

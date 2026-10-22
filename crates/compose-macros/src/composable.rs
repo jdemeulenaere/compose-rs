@@ -122,6 +122,9 @@ struct Param {
     default: Option<TokenStream>,
     /// The parameter takes the call macro's format arguments.
     format: bool,
+    /// Written `impl Into<T>` in a restartable composable: the function takes a `T`, and the
+    /// call macro converts what it's given.
+    into: bool,
     /// The names the parameter binds in the body.
     visible: Vec<String>,
 }
@@ -208,6 +211,27 @@ fn expansion_serial() -> u64 {
     SERIAL.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
+/// `T` of `impl Into<T>`: a restartable composable takes a `T` that its call macro converts
+/// its argument to (`Into::into`), so it stays non-generic, as with a callback parameter.
+/// Called as a function, it takes a `T`.
+fn into_type(ty: &Type) -> Option<Type> {
+    let Type::ImplTrait(impl_trait) = ty else { return None };
+    let [syn::TypeParamBound::Trait(bound)] =
+        impl_trait.bounds.iter().collect::<Vec<_>>().as_slice()
+    else {
+        return None;
+    };
+    let segment = bound.path.segments.last()?;
+    if bound.lifetimes.is_some() || segment.ident != "Into" {
+        return None;
+    }
+    let syn::PathArguments::AngleBracketed(arguments) = &segment.arguments else { return None };
+    match arguments.args.first()? {
+        syn::GenericArgument::Type(target) if arguments.args.len() == 1 => Some(target.clone()),
+        _ => None,
+    }
+}
+
 /// `Option<impl Fn(…) + 'static>`, as `Option<Callback<dyn Fn(…)>>`: Compose's nullable
 /// lambdas (`onCheckedChange: ((Boolean) -> Unit)?`, `label: (@Composable () -> Unit)?`).
 fn optional_callback_type(ty: &Type) -> syn::Result<Option<Type>> {
@@ -273,6 +297,7 @@ fn call_macro(function: &ItemFn, params: &[Param], key: u64, site: &str) -> Toke
                     let arity = proc_macro2::Literal::usize_unsuffixed(arity);
                     quote!(optional #arity)
                 }
+                (None, None) if param.into => quote!(into),
                 (None, None) => quote!(value),
             };
             let default =
@@ -532,6 +557,8 @@ fn transform(
             }
         }
         typed.attrs = attributes;
+        // `impl Into<T>`: a `T` if the composable is restartable (below), else generic.
+        let converted = into_type(&typed.ty).is_some();
         if let Some(callback) = callback_type(&typed.ty)? {
             *typed.ty = callback;
         } else if let Some(callback) = optional_callback_type(&typed.ty)? {
@@ -548,7 +575,7 @@ fn transform(
         borrowed |= types.reference || types.lifetime;
         // A `#[cfg]`-ed parameter may not exist: it can't be kept, so the composable runs inline.
         conditional |= typed.attrs.iter().any(|attr| attr.path().is_ident("cfg"));
-        if impl_trait.is_none() {
+        if impl_trait.is_none() && !converted {
             impl_trait = types.impl_trait;
         }
         let function_name = sig.ident.clone();
@@ -588,6 +615,7 @@ fn transform(
             pattern,
             default,
             format,
+            into: false,
             visible,
         });
     }
@@ -596,6 +624,21 @@ fn transform(
         ReturnType::Type(_, ty) => !is_unit(ty),
     };
     let restartable = !options.non_restartable && !borrowed && !returns_value && !conditional;
+    // A restartable composable keeps its arguments: an `impl Into<T>` one takes a `T`, which
+    // its call macro converts to. One that runs inline stays generic.
+    for (input, param) in sig.inputs.iter_mut().zip(params.iter_mut()) {
+        if let FnArg::Typed(typed) = input
+            && let Some(target) = into_type(&typed.ty)
+        {
+            if restartable {
+                *typed.ty = target.clone();
+                param.ty = target;
+                param.into = true;
+            } else if impl_trait.is_none() {
+                impl_trait = Some(typed.ty.span());
+            }
+        }
+    }
     if restartable && let Some(span) = impl_trait {
         return Err(Error::new(
             span,

@@ -15,7 +15,9 @@ use crate::theme::{LOCAL_CONTENT_COLOR, MaterialTheme};
 // ---- Text ------------------------------------------------------------------------------------
 
 /// Text in the theme, as Compose's material3 `Text`: unspecified attributes come from `style`,
-/// which defaults to `LocalTextStyle`, and the color from `LocalContentColor`.
+/// which defaults to `LocalTextStyle`, and the color from `LocalContentColor`. It's at least
+/// `min_lines` lines high; `on_text_layout` hears each new layout (its line count, size and
+/// overflow).
 #[composable]
 pub fn Text(
     #[format] text: SharedString,
@@ -32,6 +34,8 @@ pub fn Text(
     #[default(crate::TextOverflow::Clip)] overflow: compose_ui::TextOverflow,
     #[default(true)] soft_wrap: bool,
     #[default(u32::MAX)] max_lines: u32,
+    #[default(1)] min_lines: u32,
+    #[default(None)] on_text_layout: Option<impl Fn(compose_ui::TextLayoutResult) + 'static>,
     #[default(crate::LOCAL_TEXT_STYLE.current())] style: TextStyle,
 ) {
     // The parameters over the style, as Compose's `Text`; the color by default the content
@@ -48,7 +52,7 @@ pub fn Text(
         text_align,
         line_height,
     });
-    BasicText(text, modifier, style, overflow, soft_wrap, max_lines);
+    BasicText(text, modifier, style, on_text_layout, overflow, soft_wrap, max_lines, min_lines);
 }
 
 /// Styled text, as Compose's `Text(AnnotatedString, …)`: in the theme's text style and content
@@ -61,11 +65,22 @@ pub fn AnnotatedText(
     #[default(crate::TextOverflow::Clip)] overflow: compose_ui::TextOverflow,
     #[default(true)] soft_wrap: bool,
     #[default(u32::MAX)] max_lines: u32,
+    #[default(1)] min_lines: u32,
+    #[default(None)] on_text_layout: Option<impl Fn(compose_ui::TextLayoutResult) + 'static>,
     #[default(crate::LOCAL_TEXT_STYLE.current())] style: TextStyle,
 ) {
     let color = color.or(style.color).or(LOCAL_CONTENT_COLOR.current());
     let style = TextStyle { color, ..style };
-    compose_foundation::BasicAnnotatedText(text, modifier, style, overflow, soft_wrap, max_lines);
+    compose_foundation::BasicAnnotatedText(
+        text,
+        modifier,
+        style,
+        on_text_layout,
+        overflow,
+        soft_wrap,
+        max_lines,
+        min_lines,
+    );
 }
 
 // ---- Surface ---------------------------------------------------------------------------------
@@ -586,6 +601,10 @@ pub struct TextFieldColors {
     pub supporting_text_color: Color,
     pub disabled_supporting_text_color: Color,
     pub error_supporting_text_color: Color,
+    pub prefix_color: Color,
+    pub disabled_prefix_color: Color,
+    pub suffix_color: Color,
+    pub disabled_suffix_color: Color,
 }
 
 impl compose_runtime::ComposeArg for TextFieldColors {
@@ -628,6 +647,10 @@ impl TextFieldDefaults {
             supporting_text_color: scheme.on_surface_variant,
             disabled_supporting_text_color: scheme.on_surface.with_alpha(0.38),
             error_supporting_text_color: scheme.error,
+            prefix_color: scheme.on_surface_variant,
+            disabled_prefix_color: scheme.on_surface.with_alpha(0.38),
+            suffix_color: scheme.on_surface_variant,
+            disabled_suffix_color: scheme.on_surface.with_alpha(0.38),
         }
     }
 

@@ -211,9 +211,11 @@ mod tests {
                         "Save".into(),
                         Modifier,
                         compose_ui::TextStyle::DEFAULT,
+                        None,
                         compose_ui::TextOverflow::Clip,
                         true,
                         u32::MAX,
+                        1,
                     )
                 }),
             );

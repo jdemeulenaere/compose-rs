@@ -24,6 +24,8 @@ struct Parameter {
     callback: Option<usize>,
     /// The same, for an optional callback parameter (`Option<impl Fn(…)>`).
     optional: Option<usize>,
+    /// An `impl Into<T>` parameter: what it's given is converted.
+    into: bool,
     default: Option<TokenStream>,
 }
 
@@ -47,7 +49,7 @@ impl Parse for Parameter {
         } else {
             None
         };
-        Ok(Parameter { name, callback, optional, default })
+        Ok(Parameter { name, callback, optional, into: kind == "into", default })
     }
 }
 
@@ -681,6 +683,11 @@ fn build(call: Call) -> syn::Result<TokenStream> {
                 let value = shared_value(argument.into_value(), &mentions);
                 quote! { ::core::convert::Into::into(#value) }
             }
+            // An `impl Into<T>` parameter converts what it's given.
+            None if parameter.into => {
+                let value = shared_value(argument.into_value(), &mentions);
+                quote! { ::core::convert::Into::into(#value) }
+            }
             None => shared_value(argument.into_value(), &mentions),
         };
         set(&mut slots, index, value);
@@ -702,6 +709,8 @@ fn build(call: Call) -> syn::Result<TokenStream> {
             (Some(value), _) => value,
             (None, Some(default)) => match parameter.callback {
                 Some(_) => memo::probe_value(default.clone()),
+                // An `impl Into<T>` default converts too: it may be of a source type.
+                None if parameter.into => quote! { ::core::convert::Into::into(#default) },
                 None => default.clone(),
             },
             (None, None) => {

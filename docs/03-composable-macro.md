@@ -167,6 +167,8 @@ The syntactic scan of parameter types ignores references inside function types: 
 
 A parameter typed `impl Fn(A, …) -> R + 'static` is rewritten by the callee's macro to `Callback<dyn Fn(A, …) -> R>`, which makes it comparable by identity and storable in the kept tuple, and keeps the composable non-generic (one instantiation, whatever closures callers pass). The body calls it as before (`content()`): a `Callback` derefs to the function. Callback arguments are passed by value (`impl Fn(String)`, as Compose's `onValueChange: (String) -> Unit`); a callback taking a reference (`impl Fn(&str)`) isn't supported, since its higher-ranked type would make the conversion from closures ambiguous: the macro rejects it at the definition, suggesting an owned type. A plain call passes a `Callback`: `Button(callback(move || …), Modifier, true, callback(move || { … }))`.
 
+A restartable composable's parameter typed `impl Into<T>` is rewritten to `T` in the same way, and its call macro converts what it's given (`Into::into`), its `#[default]` included: `BasicTextField!(…, visual_transformation = PasswordVisualTransformation::new())` takes the password's transformation without `.into()`, and the composable stays non-generic. A plain call passes a `T`; an argument already converted (`x.into()`) leaves the conversion's target ambiguous and doesn't compile. A non-restartable composable (or one returning a value) keeps `impl Into<T>` generic (D232).
+
 A content lambda has no restart scope of its own: state read inside it registers the scope of the composable that invokes it. That composable restarts with its kept content callback, which re-runs the lambda, so restarts stay correct with one fewer kind of group. Compose gives content lambdas their own scope, which recomposes less; the cost here is re-running the invoking composable's own body too, usually a layout composable doing almost nothing. A content block making composable calls is a region group, as any such closure is, and the branches and loops inside it get theirs.
 
 ### Root content: call a composable function
@@ -223,7 +225,7 @@ The generated `macro_rules!` has one arm: it forwards its arguments, with a spec
 |---|---|---|
 | `async fn` composables | composition is synchronous | use `LaunchedEffect` |
 | `&mut` parameters | a composable can't hold a mutable borrow across passes | pass a state handle |
-| `impl Trait` parameters other than content lambdas | can't be kept | use a concrete type or `Rc<dyn Trait>` |
+| `impl Trait` parameters other than content lambdas and `impl Into<T>` | can't be kept | use a concrete type or `Rc<dyn Trait>` |
 | composables returning a value | can't restart on their own | allowed, but non-restartable (as in Compose) |
 | callback parameters taking references (`impl Fn(&str)`) | a closure converts to `dyn Fn(&T)` for one lifetime only | take an owned type |
 

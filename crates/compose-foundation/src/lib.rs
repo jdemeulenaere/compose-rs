@@ -71,7 +71,8 @@ pub use text::{
 };
 pub use text_field::{BasicTextField, TextFieldElement, TextFieldNode, inner_text_field_only};
 pub use text_input::{
-    ImeAction, KeyboardActions, KeyboardOptions, KeyboardType, OffsetMapping,
-    PasswordVisualTransformation, TransformedText, VisualTransform, VisualTransformation,
+    ImeAction, ImeOptions, KeyboardActions, KeyboardCapitalization, KeyboardOptions, KeyboardType,
+    OffsetMapping, PasswordVisualTransformation, TransformedText, VisualTransform,
+    VisualTransformation,
 };
 pub use tooltip::{TooltipArea, TooltipPlacement};

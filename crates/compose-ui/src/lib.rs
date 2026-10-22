@@ -19,6 +19,7 @@ pub mod display_list;
 pub mod draw;
 pub mod draw_modifiers;
 mod focus;
+pub mod focus_manager;
 mod focus_requester;
 pub mod graphics;
 pub mod graphics_layer;
@@ -42,6 +43,7 @@ mod render;
 pub mod semantics;
 pub mod shadow;
 pub mod text;
+pub mod text_input;
 mod text_selection;
 pub mod trace;
 pub mod tree;
@@ -58,6 +60,10 @@ pub use clipboard::{Clipboard, MemoryClipboard};
 pub use constraints::Constraints;
 pub use display_list::{DisplayList, DrawGroup, DrawOp, Renderer};
 pub use draw::{DrawScope, SharedPath};
+pub use focus_manager::{
+    FocusDirection, FocusManager, LOCAL_FOCUS_MANAGER, LOCAL_SOFTWARE_KEYBOARD_CONTROLLER,
+    SoftwareKeyboardController,
+};
 pub use focus_requester::FocusRequester;
 pub use graphics::{
     Color, CornerSize, Outline, Paint, PaintStyle, RECTANGLE_SHAPE, Shape, StrokeCap,
@@ -103,9 +109,10 @@ pub use semantics::{
 };
 pub use text::{
     FixedTextMeasurer, FontFamily, FontStyle, FontWeight, ParagraphHandle, ParagraphMetrics,
-    SharedString, TextAlign, TextDecoration, TextLayoutOptions, TextMeasurer, TextOverflow,
-    TextPosition, TextStyle,
+    SharedString, TextAlign, TextDecoration, TextLayoutOptions, TextLayoutResult, TextMeasurer,
+    TextOverflow, TextPosition, TextStyle,
 };
+pub use text_input::{ImeAction, ImeOptions, KeyboardCapitalization, KeyboardType};
 pub use text_selection::Selectable;
 pub use tree::{LayoutNode, NodeId, UiTree};
 pub use unit::{Density, Dp, IntOffset, IntSize, Offset, Rect, Size, Sp, UnitExt, round_to_int};

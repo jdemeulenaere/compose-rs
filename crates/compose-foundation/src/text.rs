@@ -2,12 +2,12 @@
 //! a paragraph (Compose's `TextStringSimpleElement`), keeping it across passes until the text,
 //! style or constraints change.
 
-use compose_runtime::composable;
+use compose_runtime::{Callback, composable};
 use compose_ui::{
     AnnotatedString, Constraints, DetachContext, DrawModifierNode, DrawScope, Layout,
     LayoutModifierNode, Measurable, MeasureResult, MeasureScope, Modifier, ModifierNode,
     ModifierNodeElement, Offset, ParagraphHandle, SemanticsConfiguration, SemanticsModifierNode,
-    SharedString, TextLayoutOptions, TextStyle, empty_measure_policy,
+    SharedString, TextLayoutOptions, TextLayoutResult, TextStyle, empty_measure_policy,
 };
 
 /// Under `DisableSelection`: texts a `SelectionContainer` leaves out.
@@ -45,17 +45,27 @@ pub fn DisableSelection(content: impl Fn() + 'static) {
 }
 
 /// Text, as Compose's `BasicText`: no theme, the style as given; what doesn't fit is cut,
-/// ends with "…" or is drawn past its bounds (`overflow`).
+/// ends with "…" or is drawn past its bounds (`overflow`). It's at least `min_lines` lines
+/// high; `on_text_layout` hears each new layout (its line count, size and overflow).
 #[composable]
 pub fn BasicText(
     #[format] text: SharedString,
     #[default(crate::Modifier)] modifier: Modifier,
     #[default(crate::TextStyle::DEFAULT)] style: TextStyle,
+    #[default(None)] on_text_layout: Option<impl Fn(TextLayoutResult) + 'static>,
     #[default(crate::TextOverflow::Clip)] overflow: compose_ui::TextOverflow,
     #[default(true)] soft_wrap: bool,
     #[default(u32::MAX)] max_lines: u32,
+    #[default(1)] min_lines: u32,
 ) {
-    emit_text(AnnotatedString::new(text), modifier, style, overflow, soft_wrap, max_lines);
+    emit_text(
+        AnnotatedString::new(text),
+        modifier,
+        style,
+        on_text_layout,
+        TextLayoutOptions { soft_wrap, max_lines, overflow, ..Default::default() },
+        min_lines,
+    );
 }
 
 /// Styled text, as Compose's `BasicText(AnnotatedString, …)`: each span in its style over
@@ -65,25 +75,37 @@ pub fn BasicAnnotatedText(
     text: AnnotatedString,
     #[default(crate::Modifier)] modifier: Modifier,
     #[default(crate::TextStyle::DEFAULT)] style: TextStyle,
+    #[default(None)] on_text_layout: Option<impl Fn(TextLayoutResult) + 'static>,
     #[default(crate::TextOverflow::Clip)] overflow: compose_ui::TextOverflow,
     #[default(true)] soft_wrap: bool,
     #[default(u32::MAX)] max_lines: u32,
+    #[default(1)] min_lines: u32,
 ) {
-    emit_text(text, modifier, style, overflow, soft_wrap, max_lines);
+    emit_text(
+        text,
+        modifier,
+        style,
+        on_text_layout,
+        TextLayoutOptions { soft_wrap, max_lines, overflow, ..Default::default() },
+        min_lines,
+    );
 }
 
 fn emit_text(
     text: AnnotatedString,
     modifier: Modifier,
     style: TextStyle,
-    overflow: compose_ui::TextOverflow,
-    soft_wrap: bool,
-    max_lines: u32,
+    on_text_layout: Option<Callback<dyn Fn(TextLayoutResult)>>,
+    options: TextLayoutOptions,
+    min_lines: u32,
 ) {
+    validate_min_max_lines(min_lines, options.max_lines);
     let element = TextElement {
         text,
         style,
-        options: TextLayoutOptions { soft_wrap, max_lines, overflow, ..Default::default() },
+        options,
+        min_lines,
+        on_text_layout,
         selectable: !LOCAL_SELECTION_DISABLED.current(),
     };
     Layout(modifier.then_custom(element), empty_measure_policy(), compose_runtime::callback(|| {}));
@@ -94,8 +116,57 @@ pub struct TextElement {
     pub text: AnnotatedString,
     pub style: TextStyle,
     pub options: TextLayoutOptions,
+    /// The fewest lines' height it takes, as `minLines`.
+    pub min_lines: u32,
+    /// Hears each new layout, as `onTextLayout`.
+    pub on_text_layout: Option<Callback<dyn Fn(TextLayoutResult)>>,
     /// A `SelectionContainer` can select it (not under `DisableSelection`).
     pub selectable: bool,
+}
+
+/// The height of `lines` lines of text in `style` (at least one), as Compose's
+/// `heightInLines`: the first line's height and each further line's, measured from one and two
+/// lines of "H" laid out in the style.
+pub(crate) fn height_of_lines(scope: &mut MeasureScope<'_>, style: &TextStyle, lines: u32) -> i32 {
+    let density = scope.density();
+    let options =
+        TextLayoutOptions { direction: scope.layout_direction(), ..TextLayoutOptions::default() };
+    let measurer = scope.text_measurer();
+    let mut height = |text: &str| {
+        let paragraph = measurer.layout(text, style, options, Constraints::unbounded(), &density);
+        let height = measurer.metrics(paragraph).size.height;
+        measurer.release(paragraph);
+        height
+    };
+    let first = height("H");
+    if lines <= 1 {
+        return first;
+    }
+    let next = height("H\nH") - first;
+    first.saturating_add(next.saturating_mul(lines.min(i32::MAX as u32) as i32 - 1))
+}
+
+/// Panics unless `0 < min_lines <= max_lines`, as Compose's `validateMinMaxLines`.
+pub(crate) fn validate_min_max_lines(min_lines: u32, max_lines: u32) {
+    assert!(
+        min_lines > 0 && max_lines > 0,
+        "both min_lines {min_lines} and max_lines {max_lines} must be greater than zero"
+    );
+    assert!(
+        min_lines <= max_lines,
+        "min_lines {min_lines} must be less than or equal to max_lines {max_lines}"
+    );
+}
+
+pub(crate) fn same_callback<F: ?Sized>(
+    first: &Option<Callback<F>>,
+    second: &Option<Callback<F>>,
+) -> bool {
+    match (first, second) {
+        (Some(first), Some(second)) => first.ptr_eq(second),
+        (None, None) => true,
+        _ => false,
+    }
 }
 
 impl ModifierNodeElement for TextElement {
@@ -104,6 +175,10 @@ impl ModifierNodeElement for TextElement {
             text: self.text.clone(),
             style: self.style,
             options: self.options,
+            min_lines: self.min_lines,
+            min_height: None,
+            on_text_layout: self.on_text_layout.clone(),
+            last_layout: None,
             paragraph: None,
             constraints: None,
             density: None,
@@ -119,7 +194,10 @@ impl ModifierNodeElement for TextElement {
 
     fn update(&self, node: &mut dyn ModifierNode) {
         if let Some(node) = node.downcast_mut::<TextNode>()
-            && (node.text != self.text || node.style != self.style || node.options != self.options)
+            && (node.text != self.text
+                || node.style != self.style
+                || node.options != self.options
+                || node.min_lines != self.min_lines)
         {
             if node.text != self.text {
                 // A new text: a selection in it is dropped, as Compose's.
@@ -130,6 +208,8 @@ impl ModifierNodeElement for TextElement {
             node.text = self.text.clone();
             node.style = self.style;
             node.options = self.options;
+            node.min_lines = self.min_lines;
+            node.min_height = None;
             if let Some(paragraph) = node.paragraph.take() {
                 node.stale.push(paragraph);
             }
@@ -137,6 +217,9 @@ impl ModifierNodeElement for TextElement {
         }
         if let Some(node) = node.downcast_mut::<TextNode>() {
             node.selectable = self.selectable;
+            // A new listener hears the next new layout, as Compose swaps its lambda: the
+            // paragraph is kept.
+            node.on_text_layout = self.on_text_layout.clone();
         }
     }
 
@@ -145,6 +228,8 @@ impl ModifierNodeElement for TextElement {
             other.text == self.text
                 && other.style == self.style
                 && other.options == self.options
+                && other.min_lines == self.min_lines
+                && same_callback(&other.on_text_layout, &self.on_text_layout)
                 && other.selectable == self.selectable
         })
     }
@@ -159,6 +244,13 @@ pub struct TextNode {
     text: AnnotatedString,
     style: TextStyle,
     options: TextLayoutOptions,
+    min_lines: u32,
+    /// `min_lines`' height, at the density it was measured at.
+    min_height: Option<(compose_ui::Density, i32)>,
+    on_text_layout: Option<Callback<dyn Fn(TextLayoutResult)>>,
+    /// What `on_text_layout` last heard: a measurement with the same paragraph and result is
+    /// no new layout.
+    last_layout: Option<TextLayoutResult>,
     paragraph: Option<ParagraphHandle>,
     constraints: Option<Constraints>,
     /// The density it was laid out at: a new one lays it out again.
@@ -214,7 +306,11 @@ impl LayoutModifierNode for TextNode {
         });
         let density = scope.density();
         let direction = scope.layout_direction();
-        if width_changed
+        let relaid = width_changed
+            || self.paragraph.is_none()
+            || self.density != Some(density)
+            || self.direction != direction;
+        if relaid
             || self.paragraph.is_none()
             || self.density != Some(density)
             || self.direction != direction
@@ -240,10 +336,46 @@ impl LayoutModifierNode for TextNode {
             };
         }
         self.constraints = Some(constraints);
-        let natural = scope.text_measurer().metrics(self.paragraph.expect("laid out")).size;
-        let size = constraints.constrain(natural);
+        let paragraph = self.paragraph.expect("laid out");
+        let metrics = scope.text_measurer().metrics(paragraph);
+        let natural = metrics.size;
+        // At least `min_lines` high, as Compose's `heightInLines`.
+        let min_height = if self.min_lines > 1 {
+            match self.min_height {
+                Some((at, height)) if at == density => height,
+                _ => {
+                    let height = height_of_lines(scope, &self.style, self.min_lines);
+                    self.min_height = Some((density, height));
+                    height
+                }
+            }
+        } else {
+            0
+        };
+        let size = constraints
+            .constrain(compose_ui::IntSize::new(natural.width, natural.height.max(min_height)));
         // Text larger than its bounds is clipped, as Compose's `TextOverflow.Clip`.
         self.overflows = natural.width > size.width || natural.height > size.height;
+        // Each new layout is heard, as Compose's `onTextLayout`: a paragraph laid out again
+        // (a new text, style or width), or a new size.
+        if let Some(callback) = &self.on_text_layout
+            && !scope.is_intrinsic_probe()
+        {
+            let result = TextLayoutResult {
+                size,
+                line_count: metrics.line_count,
+                first_baseline: metrics.first_baseline,
+                last_baseline: metrics.last_baseline,
+                did_overflow_width: natural.width > size.width,
+                did_overflow_height: natural.height > size.height
+                    || scope.text_measurer().did_exceed_max_lines(paragraph),
+            };
+            if relaid || self.last_layout != Some(result) {
+                self.last_layout = Some(result);
+                let callback = callback.clone();
+                scope.run_after_layout(move || callback(result));
+            }
+        }
         let placeable = scope.measure(content, Constraints::fixed(size.width, size.height));
         scope.place(&placeable, 0, 0);
         scope.layout(size.width, size.height)
