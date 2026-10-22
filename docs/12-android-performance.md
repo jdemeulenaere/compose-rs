@@ -113,6 +113,5 @@ compose-rs's main thread is now ahead of Compose's (in round 1 it was 0.2 ms a f
 - **The animation's RenderThread**: it is even with Compose's (535 ms against 533 ms of work) and did a little less in round 1 (505 ms); comparing the two rounds' `DrawFrame` slices would show what a frame draws more of now.
 - **Text layout in batches**: laying out paragraphs in batches (one JNI crossing for many) would shorten the big screen's first frame (42 ms of text layout) and the prefetch of each item.
 - **Recording prefetched items ahead**: prefetching composes and measures an item between frames, but the frame that reveals it still records its group and its paragraphs' render nodes; recording them while idle too would leave that frame only drawing render nodes.
-- **Gradients and path clips on Android**: the serializer skips `ClipPath` and paints a gradient's average color (D175); the replayer needs a clip-path record and the display list's shaders.
 
 Flings are comparable by construction: compose-rs's fling follows Android's `OverScroller` spline from the release velocity, the curve of Compose's default fling behaviour on Android.
