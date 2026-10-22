@@ -18,6 +18,7 @@ A design for bringing Jetpack Compose's model to Rust: positional memoization ov
 | `crates/compose-android` | Android: the JNI bridge behind `ComposeRsView` (`android/`), the display list for the Kotlin `Canvas` replayer, text by `StaticLayout`, accessibility |
 | `crates/compose-desktop` | `application { Window(…) }` and `run_app`: winit windows on the main thread, with AccessKit for screen readers |
 | `examples/counter`, `examples/todo`, `examples/gallery` | the sample apps, with tests and event-script transcripts; the gallery tours the toolkit (`cargo run -p gallery`) |
+| `examples/guide` | the developer guide's samples ([docs/guide](docs/guide/README.md)), compiled and tested |
 | `benchmarks` | criterion benchmarks (not a default member) |
 
 ## Getting started
@@ -25,6 +26,8 @@ A design for bringing Jetpack Compose's model to Rust: positional memoization ov
 ```bash
 cargo run -p todo
 ```
+
+The [developer guide](docs/guide/README.md) walks through a desktop app and an Android app.
 
 An app depends on the facade with the `desktop` feature (and `test` for its tests), writes composables, and opens a window:
 
@@ -85,6 +88,10 @@ fn main() {
 ```
 
 The [examples](examples) are this code, running. The design started from [sketches/](sketches): the [counter](sketches/counter.rs), [what `#[composable]` expands it to](sketches/counter.expanded.rs), and the [todo list](sketches/todo.rs) with per-item state and skipping rows.
+
+## Developer guide
+
+[docs/guide](docs/guide/README.md) is for Android developers who know Jetpack Compose: getting started on desktop and Android, [Kotlin and compose-rs side by side](docs/guide/kotlin-to-rust.md), [performance](docs/guide/performance.md), and the [differences from Compose](docs/guide/differences.md) an app will meet. Its samples compile and run as tests in `examples/guide`.
 
 ## Reading order
 
