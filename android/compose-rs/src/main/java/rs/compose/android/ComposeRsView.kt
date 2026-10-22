@@ -36,7 +36,8 @@ import android.view.inputmethod.InputMethodManager
  * On a Choreographer frame (asked for when the app's state changes), Rust recomposes, lays out
  * and records a display list; [onDraw] replays it on the view's (hardware) canvas. After a frame,
  * until the next one should start, lazy lists that scrolled compose and measure the items they'll
- * reach next (prefetch, as Compose's `AndroidPrefetchScheduler`). The composition lives while the
+ * reach next (prefetch, as Compose's `AndroidPrefetchScheduler`). While the window is hidden, no
+ * frame is asked for: the one missed is made when it shows. The composition lives while the
  * view is attached to a window.
  *
  * What the content's `remember_saveable`s hold survives the composition: kept when the view
@@ -53,6 +54,8 @@ class ComposeRsView(context: Context, private val app: String) : View(context) {
     private var drawing: java.nio.ByteBuffer? = null
     private var host = 0L
     private var frameRequested = false
+    /** A frame was asked for while the window was hidden: made when it shows ([requestFrame]). */
+    private var frameWanted = false
     private var textInput = false
     private val inputMethods = context.getSystemService(InputMethodManager::class.java)
 
@@ -180,6 +183,7 @@ class ComposeRsView(context: Context, private val app: String) : View(context) {
         savedState = ComposeRsNative.saveState(host)
         Choreographer.getInstance().removeFrameCallback(frameCallback)
         frameRequested = false
+        frameWanted = false
         Choreographer.getInstance().removeFrameCallback(prefetchFrameCallback)
         removeCallbacks(prefetchRunnable)
         prefetchScheduled = false
@@ -357,11 +361,47 @@ class ComposeRsView(context: Context, private val app: String) : View(context) {
         mainHandler.post { eventListener?.onEvent(name, payload) }
     }
 
-    /** Asks for a frame (Rust calls it when the app's state changes). */
+    /**
+     * Asks for a frame (Rust calls it when the app's state changes). While the window is hidden
+     * (the activity stopped, the screen off), none: the frame is noted, and made when it shows
+     * again ([onWindowVisibilityChanged]), as Compose pauses its frame clock when stopped (D342).
+     */
     fun requestFrame() {
         if (frameRequested || host == 0L) return
+        if (windowVisibility != VISIBLE) {
+            frameWanted = true
+            return
+        }
         frameRequested = true
         Choreographer.getInstance().postFrameCallback(frameCallback)
+    }
+
+    /**
+     * Hidden, the window asks for no frame: an animation would otherwise run a frame on every
+     * vsync, drawing nothing. Shown again, the frame it missed (state changed, animations) is
+     * made now, before the traversal that shows the window draws, so it shows the content as of
+     * now; animations go on from the frame's time, as their clock is the time itself.
+     */
+    override fun onWindowVisibilityChanged(visibility: Int) {
+        super.onWindowVisibilityChanged(visibility)
+        if (host == 0L) return
+        if (visibility == VISIBLE) {
+            if (frameWanted) {
+                frameWanted = false
+                Choreographer.getInstance().removeFrameCallback(frameCallback)
+                frame()
+            }
+        } else {
+            if (frameRequested) {
+                Choreographer.getInstance().removeFrameCallback(frameCallback)
+                frameRequested = false
+                frameWanted = true
+            }
+            // A hidden window prefetches nothing (prefetch() checks, too).
+            Choreographer.getInstance().removeFrameCallback(prefetchFrameCallback)
+            removeCallbacks(prefetchRunnable)
+            prefetchScheduled = false
+        }
     }
 
     private fun frame() {
