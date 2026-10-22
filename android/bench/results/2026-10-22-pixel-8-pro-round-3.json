@@ -1,0 +1,855 @@
+{
+ "device": "Pixel 8 Pro",
+ "android": "16",
+ "startup_ms": {
+  "compose": {
+   "feed": {
+    "runs": [
+     148,
+     128,
+     126,
+     127,
+     129,
+     130,
+     130,
+     131,
+     127,
+     128,
+     127,
+     132,
+     146,
+     124,
+     139
+    ],
+    "median": 129,
+    "min": 124,
+    "max": 148
+   },
+   "big": {
+    "runs": [
+     225,
+     230,
+     222,
+     220,
+     224,
+     225,
+     223,
+     227,
+     224,
+     221,
+     226,
+     224,
+     227,
+     227,
+     228
+    ],
+    "median": 225,
+    "min": 220,
+    "max": 230
+   }
+  },
+  "rs": {
+   "feed": {
+    "runs": [
+     111,
+     107,
+     103,
+     112,
+     106,
+     109,
+     114,
+     111,
+     112,
+     111,
+     105,
+     106,
+     106,
+     106,
+     107
+    ],
+    "median": 107,
+    "min": 103,
+    "max": 114
+   },
+   "big": {
+    "runs": [
+     184,
+     179,
+     180,
+     179,
+     177,
+     182,
+     186,
+     179,
+     172,
+     178,
+     179,
+     184,
+     184,
+     174,
+     179
+    ],
+    "median": 179,
+    "min": 172,
+    "max": 186
+   }
+  }
+ },
+ "first_frame": {
+  "compose": {
+   "feed": {
+    "first": {
+     "bindApplication": 18.825439,
+     "Choreographer#doFrame": 0.052084,
+     "activityStart": 16.651082,
+     "activityResume": 8.173624,
+     "traversal": 44.215576,
+     "Compose:recompose": 2.676758,
+     "measure": 11.505005,
+     "layout": 0.734049,
+     "Record View#draw()": 2.109375
+    },
+    "total_during_trace": {
+     "bindApplication": 18.825439,
+     "Choreographer#doFrame": 49.432171,
+     "activityStart": 16.651082,
+     "activityResume": 8.173624,
+     "traversal": 49.243936999999995,
+     "Compose:recompose": 5.966838999999999,
+     "measure": 14.986369,
+     "layout": 0.88623,
+     "Record View#draw()": 3.129313
+    }
+   },
+   "big": {
+    "first": {
+     "bindApplication": 15.478474,
+     "activityStart": 12.850179,
+     "activityResume": 8.215373,
+     "Choreographer#doFrame": 164.164958,
+     "traversal": 164.058268,
+     "Compose:recompose": 2.526001,
+     "measure": 93.986532,
+     "layout": 7.112997,
+     "Record View#draw()": 36.31779
+    },
+    "total_during_trace": {
+     "bindApplication": 15.478474,
+     "activityStart": 12.850179,
+     "activityResume": 8.215373,
+     "Choreographer#doFrame": 412.1243079999999,
+     "traversal": 247.072388,
+     "Compose:recompose": 14.945067,
+     "measure": 157.12260099999997,
+     "layout": 9.0212,
+     "Record View#draw()": 52.689617
+    }
+   }
+  },
+  "rs": {
+   "feed": {
+    "first": {
+     "bindApplication": 9.456787,
+     "activityStart": 11.046509,
+     "activityResume": 8.243815,
+     "Choreographer#doFrame": 24.366577,
+     "traversal": 24.357382,
+     "measure": 0.01827,
+     "layout": 7.611329,
+     "compose-rs: frame": 7.26534,
+     "compose-rs: recompose": 0.447184,
+     "compose-rs: layout": 2.168619,
+     "compose-rs: text layout": 1.146322,
+     "compose-rs: draw": 0.066488,
+     "compose-rs: serialize": 0.01709,
+     "Record View#draw()": 2.020345,
+     "compose-rs: replay": 1.809693
+    },
+    "total_during_trace": {
+     "bindApplication": 9.456787,
+     "activityStart": 11.046509,
+     "activityResume": 8.243815,
+     "Choreographer#doFrame": 24.581177,
+     "traversal": 24.388754000000002,
+     "measure": 0.034017,
+     "layout": 7.615437999999999,
+     "compose-rs: frame": 7.295736,
+     "compose-rs: recompose": 0.45043900000000003,
+     "compose-rs: layout": 2.1746,
+     "compose-rs: text layout": 5.336592999999999,
+     "compose-rs: draw": 0.068848,
+     "compose-rs: serialize": 0.01709,
+     "Record View#draw()": 2.020345,
+     "compose-rs: replay": 1.809693
+    }
+   },
+   "big": {
+    "first": {
+     "bindApplication": 10.067139,
+     "activityStart": 11.271119,
+     "activityResume": 7.983358,
+     "Choreographer#doFrame": 110.090373,
+     "traversal": 110.083008,
+     "measure": 0.018066,
+     "layout": 69.9163,
+     "compose-rs: frame": 69.554565,
+     "compose-rs: recompose": 22.200358,
+     "compose-rs: layout": 46.136352,
+     "compose-rs: text layout": 1.22583,
+     "compose-rs: draw": 0.924601,
+     "compose-rs: serialize": 0.103597,
+     "Record View#draw()": 24.013956,
+     "compose-rs: replay": 23.76241
+    },
+    "total_during_trace": {
+     "bindApplication": 10.067139,
+     "activityStart": 11.271119,
+     "activityResume": 7.983358,
+     "Choreographer#doFrame": 110.470785,
+     "traversal": 110.113932,
+     "measure": 0.032959,
+     "layout": 69.920979,
+     "compose-rs: frame": 69.580607,
+     "compose-rs: recompose": 22.202759,
+     "compose-rs: layout": 46.141397000000005,
+     "compose-rs: text layout": 41.40389899999991,
+     "compose-rs: draw": 0.926269,
+     "compose-rs: serialize": 0.103597,
+     "Record View#draw()": 24.013956,
+     "compose-rs: replay": 23.76241
+    }
+   }
+  }
+ },
+ "memory_kb": {
+  "compose": {
+   "after_start": [
+    {
+     "Java Heap": 3684,
+     "Native Heap": 8328,
+     "Code": 6264,
+     "Stack": 464,
+     "Graphics": 28728,
+     "Private Other": 1740,
+     "System": 3640,
+     "Total PSS": 52848,
+     "Total RSS": 213580
+    },
+    {
+     "Java Heap": 3688,
+     "Native Heap": 8144,
+     "Code": 6256,
+     "Stack": 484,
+     "Graphics": 28536,
+     "Private Other": 1740,
+     "System": 3602,
+     "Total PSS": 52450,
+     "Total RSS": 213112
+    },
+    {
+     "Java Heap": 3688,
+     "Native Heap": 8172,
+     "Code": 6280,
+     "Stack": 460,
+     "Graphics": 28536,
+     "Private Other": 1744,
+     "System": 3643,
+     "Total PSS": 52523,
+     "Total RSS": 213216
+    }
+   ],
+   "after_scroll": [
+    {
+     "Java Heap": 7756,
+     "Native Heap": 13452,
+     "Code": 6256,
+     "Stack": 520,
+     "Graphics": 58188,
+     "Private Other": 2024,
+     "System": 3660,
+     "Total PSS": 91856,
+     "Total RSS": 254648
+    },
+    {
+     "Java Heap": 4664,
+     "Native Heap": 12820,
+     "Code": 6248,
+     "Stack": 532,
+     "Graphics": 58000,
+     "Private Other": 2024,
+     "System": 3587,
+     "Total PSS": 87875,
+     "Total RSS": 250728
+    },
+    {
+     "Java Heap": 3940,
+     "Native Heap": 12560,
+     "Code": 6272,
+     "Stack": 508,
+     "Graphics": 58012,
+     "Private Other": 2028,
+     "System": 3631,
+     "Total PSS": 86951,
+     "Total RSS": 249892
+    }
+   ]
+  },
+  "rs": {
+   "after_start": [
+    {
+     "Java Heap": 1380,
+     "Native Heap": 8172,
+     "Code": 1896,
+     "Stack": 508,
+     "Graphics": 17424,
+     "Private Other": 1104,
+     "System": 3462,
+     "Total PSS": 33946,
+     "Total RSS": 191112
+    },
+    {
+     "Java Heap": 1384,
+     "Native Heap": 8276,
+     "Code": 1888,
+     "Stack": 508,
+     "Graphics": 17424,
+     "Private Other": 1104,
+     "System": 3459,
+     "Total PSS": 34043,
+     "Total RSS": 191204
+    },
+    {
+     "Java Heap": 1384,
+     "Native Heap": 8280,
+     "Code": 1896,
+     "Stack": 504,
+     "Graphics": 17424,
+     "Private Other": 1108,
+     "System": 3458,
+     "Total PSS": 34054,
+     "Total RSS": 191204
+    }
+   ],
+   "after_scroll": [
+    {
+     "Java Heap": 6240,
+     "Native Heap": 12764,
+     "Code": 1904,
+     "Stack": 552,
+     "Graphics": 57608,
+     "Private Other": 1196,
+     "System": 3438,
+     "Total PSS": 83702,
+     "Total RSS": 243008
+    },
+    {
+     "Java Heap": 6280,
+     "Native Heap": 12796,
+     "Code": 1896,
+     "Stack": 556,
+     "Graphics": 56376,
+     "Private Other": 1200,
+     "System": 3438,
+     "Total PSS": 82542,
+     "Total RSS": 241852
+    },
+    {
+     "Java Heap": 6276,
+     "Native Heap": 12744,
+     "Code": 1904,
+     "Stack": 568,
+     "Graphics": 56580,
+     "Private Other": 1204,
+     "System": 3437,
+     "Total PSS": 82713,
+     "Total RSS": 242012
+    }
+   ]
+  }
+ },
+ "scroll": {
+  "compose": [
+   {
+    "gfxinfo": {
+     "frames": 1777,
+     "janky": 0,
+     "p50": 5,
+     "p90": 6,
+     "p95": 8,
+     "p99": 10,
+     "gpu_p50": 2,
+     "gpu_p90": 2,
+     "gpu_p99": 3
+    },
+    "trace": {
+     "frames": 1729,
+     "janky_frames": 0,
+     "jank_kinds": {},
+     "main_thread_frame_ms": {
+      "count": 1743,
+      "p50": 1.461996,
+      "p90": 3.080892,
+      "p99": 6.316446,
+      "max": 10.62561
+     },
+     "render_thread_frame_ms": {
+      "count": 1744,
+      "p50": 2.215943,
+      "p90": 3.367797,
+      "p99": 4.599894
+     },
+     "cpu_ms": {
+      "main": 4049.244295,
+      "render": 4385.022944
+     },
+     "work_ms": {
+      "main": 782.982944,
+      "render": 836.007732
+     }
+    }
+   },
+   {
+    "gfxinfo": {
+     "frames": 1764,
+     "janky": 2,
+     "p50": 5,
+     "p90": 7,
+     "p95": 8,
+     "p99": 10,
+     "gpu_p50": 2,
+     "gpu_p90": 2,
+     "gpu_p99": 3
+    },
+    "trace": {
+     "frames": 1713,
+     "janky_frames": 1,
+     "jank_kinds": {
+      "App Deadline Missed": 1
+     },
+     "main_thread_frame_ms": {
+      "count": 1736,
+      "p50": 1.428589,
+      "p90": 3.008993,
+      "p99": 6.503662,
+      "max": 13.103434
+     },
+     "render_thread_frame_ms": {
+      "count": 1728,
+      "p50": 2.070313,
+      "p90": 3.42509,
+      "p99": 5.545084
+     },
+     "cpu_ms": {
+      "main": 4060.319988,
+      "render": 4254.505044
+     },
+     "work_ms": {
+      "main": 839.488326,
+      "render": 898.762059
+     }
+    }
+   },
+   {
+    "gfxinfo": {
+     "frames": 1770,
+     "janky": 0,
+     "p50": 5,
+     "p90": 7,
+     "p95": 8,
+     "p99": 11,
+     "gpu_p50": 2,
+     "gpu_p90": 2,
+     "gpu_p99": 3
+    },
+    "trace": {
+     "frames": 1708,
+     "janky_frames": 3,
+     "jank_kinds": {
+      "Prediction Error": 2,
+      "SurfaceFlinger Scheduling": 1
+     },
+     "main_thread_frame_ms": {
+      "count": 1726,
+      "p50": 1.440551,
+      "p90": 3.125367,
+      "p99": 6.82373,
+      "max": 11.830607
+     },
+     "render_thread_frame_ms": {
+      "count": 1721,
+      "p50": 2.128174,
+      "p90": 3.470255,
+      "p99": 5.420817
+     },
+     "cpu_ms": {
+      "main": 4104.973491,
+      "render": 4241.50602
+     },
+     "work_ms": {
+      "main": 827.38274,
+      "render": 861.715659
+     }
+    }
+   }
+  ],
+  "rs": [
+   {
+    "gfxinfo": {
+     "frames": 1767,
+     "janky": 0,
+     "p50": 5,
+     "p90": 6,
+     "p95": 7,
+     "p99": 8,
+     "gpu_p50": 2,
+     "gpu_p90": 2,
+     "gpu_p99": 3
+    },
+    "trace": {
+     "frames": 1718,
+     "janky_frames": 0,
+     "jank_kinds": {},
+     "main_thread_frame_ms": {
+      "count": 1746,
+      "p50": 1.25,
+      "p90": 2.28479,
+      "p99": 3.774739,
+      "max": 6.68221
+     },
+     "render_thread_frame_ms": {
+      "count": 1722,
+      "p50": 2.673095,
+      "p90": 3.727702,
+      "p99": 5.353597
+     },
+     "cpu_ms": {
+      "main": 3248.815276,
+      "render": 4889.97971
+     },
+     "work_ms": {
+      "main": 477.121556,
+      "render": 771.71429
+     }
+    }
+   },
+   {
+    "gfxinfo": {
+     "frames": 1774,
+     "janky": 0,
+     "p50": 5,
+     "p90": 6,
+     "p95": 7,
+     "p99": 9,
+     "gpu_p50": 2,
+     "gpu_p90": 2,
+     "gpu_p99": 3
+    },
+    "trace": {
+     "frames": 1716,
+     "janky_frames": 0,
+     "jank_kinds": {},
+     "main_thread_frame_ms": {
+      "count": 1745,
+      "p50": 1.201294,
+      "p90": 2.097412,
+      "p99": 3.542725,
+      "max": 9.89677
+     },
+     "render_thread_frame_ms": {
+      "count": 1719,
+      "p50": 2.50236,
+      "p90": 3.689942,
+      "p99": 5.416911
+     },
+     "cpu_ms": {
+      "main": 3195.027396,
+      "render": 4723.824371
+     },
+     "work_ms": {
+      "main": 501.160293,
+      "render": 800.997975
+     }
+    }
+   },
+   {
+    "gfxinfo": {
+     "frames": 1768,
+     "janky": 0,
+     "p50": 5,
+     "p90": 6,
+     "p95": 7,
+     "p99": 8,
+     "gpu_p50": 2,
+     "gpu_p90": 2,
+     "gpu_p99": 3
+    },
+    "trace": {
+     "frames": 1715,
+     "janky_frames": 0,
+     "jank_kinds": {},
+     "main_thread_frame_ms": {
+      "count": 1742,
+      "p50": 1.273681,
+      "p90": 2.200114,
+      "p99": 3.743408,
+      "max": 5.068848
+     },
+     "render_thread_frame_ms": {
+      "count": 1718,
+      "p50": 2.78239,
+      "p90": 3.810466,
+      "p99": 5.246338
+     },
+     "cpu_ms": {
+      "main": 3307.493533,
+      "render": 5084.075716
+     },
+     "work_ms": {
+      "main": 458.384506,
+      "render": 779.262421
+     }
+    }
+   }
+  ]
+ },
+ "animation": {
+  "compose": [
+   {
+    "gfxinfo": {
+     "frames": 1345,
+     "janky": 0,
+     "p50": 5,
+     "p90": 6,
+     "p95": 7,
+     "p99": 8,
+     "gpu_p50": 2,
+     "gpu_p90": 2,
+     "gpu_p99": 3
+    },
+    "trace": {
+     "frames": 1206,
+     "janky_frames": 0,
+     "jank_kinds": {},
+     "main_thread_frame_ms": {
+      "count": 1198,
+      "p50": 1.482381,
+      "p90": 2.128093,
+      "p99": 3.066488,
+      "max": 4.305867
+     },
+     "render_thread_frame_ms": {
+      "count": 1201,
+      "p50": 2.96167,
+      "p90": 3.973348,
+      "p99": 5.882324
+     },
+     "cpu_ms": {
+      "main": 1969.814433,
+      "render": 3680.612425
+     },
+     "work_ms": {
+      "main": 255.350138,
+      "render": 528.025308
+     }
+    }
+   },
+   {
+    "gfxinfo": {
+     "frames": 1343,
+     "janky": 0,
+     "p50": 5,
+     "p90": 6,
+     "p95": 7,
+     "p99": 8,
+     "gpu_p50": 2,
+     "gpu_p90": 2,
+     "gpu_p99": 2
+    },
+    "trace": {
+     "frames": 1206,
+     "janky_frames": 0,
+     "jank_kinds": {},
+     "main_thread_frame_ms": {
+      "count": 1200,
+      "p50": 1.489909,
+      "p90": 2.143718,
+      "p99": 2.972005,
+      "max": 4.36084
+     },
+     "render_thread_frame_ms": {
+      "count": 1201,
+      "p50": 3.038859,
+      "p90": 4.06429,
+      "p99": 5.310994
+     },
+     "cpu_ms": {
+      "main": 1956.851292,
+      "render": 3847.257279
+     },
+     "work_ms": {
+      "main": 246.846771,
+      "render": 535.348266
+     }
+    }
+   },
+   {
+    "gfxinfo": {
+     "frames": 1339,
+     "janky": 0,
+     "p50": 5,
+     "p90": 6,
+     "p95": 7,
+     "p99": 7,
+     "gpu_p50": 2,
+     "gpu_p90": 2,
+     "gpu_p99": 2
+    },
+    "trace": {
+     "frames": 1209,
+     "janky_frames": 0,
+     "jank_kinds": {},
+     "main_thread_frame_ms": {
+      "count": 1200,
+      "p50": 1.466349,
+      "p90": 2.108968,
+      "p99": 3.062541,
+      "max": 4.565348
+     },
+     "render_thread_frame_ms": {
+      "count": 1202,
+      "p50": 2.969319,
+      "p90": 3.994344,
+      "p99": 5.180501
+     },
+     "cpu_ms": {
+      "main": 1949.173721,
+      "render": 3724.07
+     },
+     "work_ms": {
+      "main": 250.99807,
+      "render": 544.227337
+     }
+    }
+   }
+  ],
+  "rs": [
+   {
+    "gfxinfo": {
+     "frames": 1338,
+     "janky": 0,
+     "p50": 5,
+     "p90": 6,
+     "p95": 6,
+     "p99": 8,
+     "gpu_p50": 2,
+     "gpu_p90": 2,
+     "gpu_p99": 3
+    },
+    "trace": {
+     "frames": 1198,
+     "janky_frames": 0,
+     "jank_kinds": {},
+     "main_thread_frame_ms": {
+      "count": 1196,
+      "p50": 1.316366,
+      "p90": 1.948242,
+      "p99": 3.115357,
+      "max": 4.832235
+     },
+     "render_thread_frame_ms": {
+      "count": 1196,
+      "p50": 2.89628,
+      "p90": 3.879313,
+      "p99": 5.257528
+     },
+     "cpu_ms": {
+      "main": 1657.979068,
+      "render": 3587.532233
+     },
+     "work_ms": {
+      "main": 214.859253,
+      "render": 539.613206
+     }
+    }
+   },
+   {
+    "gfxinfo": {
+     "frames": 1342,
+     "janky": 0,
+     "p50": 5,
+     "p90": 6,
+     "p95": 6,
+     "p99": 8,
+     "gpu_p50": 2,
+     "gpu_p90": 2,
+     "gpu_p99": 3
+    },
+    "trace": {
+     "frames": 1198,
+     "janky_frames": 0,
+     "jank_kinds": {},
+     "main_thread_frame_ms": {
+      "count": 1193,
+      "p50": 1.289347,
+      "p90": 1.938029,
+      "p99": 3.053508,
+      "max": 4.244873
+     },
+     "render_thread_frame_ms": {
+      "count": 1193,
+      "p50": 2.963378,
+      "p90": 3.857137,
+      "p99": 5.653402
+     },
+     "cpu_ms": {
+      "main": 1624.25257,
+      "render": 3690.588747
+     },
+     "work_ms": {
+      "main": 209.201262,
+      "render": 535.180043
+     }
+    }
+   },
+   {
+    "gfxinfo": {
+     "frames": 1339,
+     "janky": 0,
+     "p50": 5,
+     "p90": 6,
+     "p95": 7,
+     "p99": 8,
+     "gpu_p50": 2,
+     "gpu_p90": 2,
+     "gpu_p99": 3
+    },
+    "trace": {
+     "frames": 1197,
+     "janky_frames": 0,
+     "jank_kinds": {},
+     "main_thread_frame_ms": {
+      "count": 1190,
+      "p50": 1.342407,
+      "p90": 2.027262,
+      "p99": 3.266072,
+      "max": 7.225505
+     },
+     "render_thread_frame_ms": {
+      "count": 1190,
+      "p50": 2.920491,
+      "p90": 3.849894,
+      "p99": 5.541545
+     },
+     "cpu_ms": {
+      "main": 1663.7063,
+      "render": 3637.3203169999997
+     },
+     "work_ms": {
+      "main": 211.431933,
+      "render": 541.948343
+     }
+    }
+   }
+  ]
+ }
+}

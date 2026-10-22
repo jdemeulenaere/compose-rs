@@ -2,7 +2,7 @@
 
 use compose_ui::{
     Color, Paint, PaintStyle, PathCommand, PathFillType, Rect,
-    platform::{DisplayList, DrawOp, Renderer, TextMeasurer},
+    platform::{Boundary, DisplayList, DrawGroup, DrawOp, Renderer, TextMeasurer},
 };
 use skia_safe::{Canvas, ClipOp, EncodedImageFormat, Point, RRect, Surface, Vector, paint};
 
@@ -106,132 +106,190 @@ fn skia_paint(paint: &Paint) -> skia_safe::Paint {
 }
 
 /// Draws `list` onto `canvas`, its paragraphs from `text_measurer` (a `SkiaTextMeasurer`; other
-/// measurers' paragraphs are skipped).
+/// measurers' paragraphs are skipped). Each group's content is drawn from the recording its
+/// boundary keeps, by reference (D270), its layer's operations around it.
 pub fn draw_display_list(canvas: &Canvas, list: &DisplayList, text_measurer: &dyn TextMeasurer) {
     let measurer = (text_measurer as &dyn std::any::Any).downcast_ref::<SkiaTextMeasurer>();
     forget_dropped_images();
-    // A list's saves and restores are balanced against each other only: an unmatched restore
-    // is ignored, and unmatched saves are undone at the end, so the canvas is left as found.
-    let start = canvas.save_count();
-    for op in &list.ops {
-        match op {
-            DrawOp::Save => {
-                canvas.save();
+    let mut walk = Walk { canvas, groups: &list.groups, next: 0, measurer };
+    walk.recording(list);
+}
+
+/// One walk of a display list's recordings.
+struct Walk<'a> {
+    canvas: &'a Canvas,
+    /// The frame's groups, the one at `next` drawn at the next boundary.
+    groups: &'a [DrawGroup],
+    next: usize,
+    measurer: Option<&'a SkiaTextMeasurer>,
+}
+
+impl Walk<'_> {
+    /// Draws `recording` (the frame, or a group's content), each group where its boundary is.
+    /// Its saves and restores are balanced against each other only: an unmatched restore is
+    /// ignored, and unmatched saves are undone at its end, so the canvas is left as found.
+    fn recording(&mut self, recording: &DisplayList) {
+        let start = self.canvas.save_count();
+        let mut boundaries = recording.boundaries.iter().peekable();
+        for (index, op) in recording.ops.iter().enumerate() {
+            while let Some(boundary) = boundaries.next_if(|boundary| boundary.at <= index) {
+                self.group(boundary);
             }
-            DrawOp::Restore => {
-                if canvas.save_count() > start {
-                    canvas.restore();
-                }
-            }
-            DrawOp::Translate(offset) => {
-                canvas.translate((offset.x, offset.y));
-            }
-            DrawOp::ClipRect(bounds) => {
-                canvas.clip_rect(rect(bounds), ClipOp::Intersect, true);
-            }
-            DrawOp::ClipRoundRect(bounds, radii) => {
-                canvas.clip_rrect(round_rect(bounds, radii), ClipOp::Intersect, true);
-            }
-            DrawOp::DrawRect(bounds, paint) => {
-                canvas.draw_rect(rect(bounds), &skia_paint_with(paint, &list.shaders, None));
-            }
-            DrawOp::DrawRoundRect(bounds, radii, paint) => {
-                canvas.draw_rrect(
-                    round_rect(bounds, radii),
-                    &skia_paint_with(paint, &list.shaders, None),
-                );
-            }
-            DrawOp::DrawLine(from, to, paint) => {
-                canvas.draw_line(
-                    Point::new(from.x, from.y),
-                    Point::new(to.x, to.y),
-                    &skia_paint_with(paint, &list.shaders, None),
-                );
-            }
-            DrawOp::DrawParagraph(handle, offset) => {
-                if let Some(paragraph) = measurer.and_then(|measurer| measurer.paragraph(*handle)) {
-                    paragraph.paint(canvas, (offset.x, offset.y));
-                }
-            }
-            DrawOp::DrawPath { path, offset, scale, paint } => {
-                let skia = skia_path(path);
-                canvas.save();
-                canvas.translate((offset.x, offset.y));
-                canvas.scale((scale.0, scale.1));
-                // The gradient stays where it was given, outside the path's scale and offset.
-                let local =
-                    (paint.shader().is_some() && scale.0 != 0.0 && scale.1 != 0.0).then(|| {
-                        let mut local = skia_safe::Matrix::scale((1.0 / scale.0, 1.0 / scale.1));
-                        local.pre_translate((-offset.x, -offset.y));
-                        local
-                    });
-                canvas.draw_path(&skia, &skia_paint_with(paint, &list.shaders, local.as_ref()));
-                canvas.restore();
-            }
-            DrawOp::ClipPath { path, offset } => {
-                let skia = skia_path(path).make_offset((offset.x, offset.y));
-                canvas.clip_path(&skia, ClipOp::Intersect, true);
-            }
-            DrawOp::DrawImage { image, src, dst, alpha } => {
-                if let Some(skia) = skia_image(image) {
-                    let mut paint = skia_safe::Paint::default();
-                    paint.set_alpha_f(alpha.clamp(0.0, 1.0));
-                    let sampling = skia_safe::SamplingOptions::new(
-                        skia_safe::FilterMode::Linear,
-                        skia_safe::MipmapMode::None,
-                    );
-                    canvas.draw_image_rect_with_sampling_options(
-                        &skia,
-                        Some((&rect(src), skia_safe::canvas::SrcRectConstraint::Strict)),
-                        rect(dst),
-                        sampling,
-                        &paint,
-                    );
-                }
-            }
-            DrawOp::DrawArc { oval, start_angle, sweep_angle, use_center, paint } => {
-                canvas.draw_arc(
-                    rect(oval),
-                    *start_angle,
-                    *sweep_angle,
-                    *use_center,
-                    &skia_paint_with(paint, &list.shaders, None),
-                );
-            }
-            DrawOp::DrawShadow { outline, elevation, light, light_radius, ambient, spot } => {
-                let mut path = skia_safe::PathBuilder::new();
-                match outline {
-                    compose_ui::Outline::Rectangle(bounds) => {
-                        path.add_rect(rect(bounds), None, None);
-                    }
-                    compose_ui::Outline::Rounded(bounds, radii) => {
-                        path.add_rrect(round_rect(bounds, radii), None, None);
-                    }
-                }
-                // As Compose Desktop: an opaque occluder, the light in the window's pixels.
-                skia_safe::utils::shadow_utils::draw_shadow(
-                    canvas,
-                    &path.detach(),
-                    skia_safe::Point3::new(0.0, 0.0, *elevation),
-                    skia_safe::Point3::new(light.0, light.1, light.2),
-                    *light_radius,
-                    skia_safe::Color::new(ambient.argb()),
-                    skia_safe::Color::new(spot.argb()),
-                    None,
-                );
-            }
-            DrawOp::SaveLayerAlpha(alpha) => {
-                canvas.save_layer_alpha_f(None, alpha.clamp(0.0, 1.0));
-            }
-            DrawOp::Transform { pivot, scale, rotation, translation } => {
-                canvas.translate((pivot.x + translation.x, pivot.y + translation.y));
-                canvas.rotate(*rotation, None);
-                canvas.scale((scale.0, scale.1));
-                canvas.translate((-pivot.x, -pivot.y));
+            draw_op(self.canvas, op, &recording.shaders, self.measurer, start);
+        }
+        for boundary in boundaries {
+            self.group(boundary);
+        }
+        self.canvas.restore_to_count(start);
+    }
+
+    /// Draws the next group, `boundary`'s: its layer's operations, then its content in a save
+    /// of its own (as a render node: a clip or a move it leaves unbalanced stays in it).
+    fn group(&mut self, boundary: &Boundary) {
+        let group = self.groups.get(self.next);
+        debug_assert!(
+            group.is_some_and(|group| group.key == boundary.key),
+            "the frame's groups don't match its boundaries"
+        );
+        let Some(group) = group else { return };
+        self.next += 1;
+        if group.empty {
+            self.next += group.descendants;
+            return;
+        }
+        let start = self.canvas.save_count();
+        if let Some(layer) = group.layer {
+            for op in layer.operations() {
+                draw_op(self.canvas, &op, &[], self.measurer, start);
             }
         }
+        self.canvas.save();
+        self.recording(&group.content);
+        self.canvas.restore_to_count(start);
     }
-    canvas.restore_to_count(start);
+}
+
+/// Draws `op` onto `canvas`, its paint's shader from `shaders`; a restore below `start` (the
+/// save count its recording started at) is ignored.
+fn draw_op(
+    canvas: &Canvas,
+    op: &DrawOp,
+    shaders: &[compose_ui::platform::Shader],
+    measurer: Option<&SkiaTextMeasurer>,
+    start: usize,
+) {
+    match op {
+        DrawOp::Save => {
+            canvas.save();
+        }
+        DrawOp::Restore => {
+            if canvas.save_count() > start {
+                canvas.restore();
+            }
+        }
+        DrawOp::Translate(offset) => {
+            canvas.translate((offset.x, offset.y));
+        }
+        DrawOp::ClipRect(bounds) => {
+            canvas.clip_rect(rect(bounds), ClipOp::Intersect, true);
+        }
+        DrawOp::ClipRoundRect(bounds, radii) => {
+            canvas.clip_rrect(round_rect(bounds, radii), ClipOp::Intersect, true);
+        }
+        DrawOp::DrawRect(bounds, paint) => {
+            canvas.draw_rect(rect(bounds), &skia_paint_with(paint, shaders, None));
+        }
+        DrawOp::DrawRoundRect(bounds, radii, paint) => {
+            canvas.draw_rrect(round_rect(bounds, radii), &skia_paint_with(paint, shaders, None));
+        }
+        DrawOp::DrawLine(from, to, paint) => {
+            canvas.draw_line(
+                Point::new(from.x, from.y),
+                Point::new(to.x, to.y),
+                &skia_paint_with(paint, shaders, None),
+            );
+        }
+        DrawOp::DrawParagraph(handle, offset) => {
+            if let Some(paragraph) = measurer.and_then(|measurer| measurer.paragraph(*handle)) {
+                paragraph.paint(canvas, (offset.x, offset.y));
+            }
+        }
+        DrawOp::DrawPath { path, offset, scale, paint } => {
+            let skia = skia_path(path);
+            canvas.save();
+            canvas.translate((offset.x, offset.y));
+            canvas.scale((scale.0, scale.1));
+            // The gradient stays where it was given, outside the path's scale and offset.
+            let local = (paint.shader().is_some() && scale.0 != 0.0 && scale.1 != 0.0).then(|| {
+                let mut local = skia_safe::Matrix::scale((1.0 / scale.0, 1.0 / scale.1));
+                local.pre_translate((-offset.x, -offset.y));
+                local
+            });
+            canvas.draw_path(&skia, &skia_paint_with(paint, shaders, local.as_ref()));
+            canvas.restore();
+        }
+        DrawOp::ClipPath { path, offset } => {
+            let skia = skia_path(path).make_offset((offset.x, offset.y));
+            canvas.clip_path(&skia, ClipOp::Intersect, true);
+        }
+        DrawOp::DrawImage { image, src, dst, alpha } => {
+            if let Some(skia) = skia_image(image) {
+                let mut paint = skia_safe::Paint::default();
+                paint.set_alpha_f(alpha.clamp(0.0, 1.0));
+                let sampling = skia_safe::SamplingOptions::new(
+                    skia_safe::FilterMode::Linear,
+                    skia_safe::MipmapMode::None,
+                );
+                canvas.draw_image_rect_with_sampling_options(
+                    &skia,
+                    Some((&rect(src), skia_safe::canvas::SrcRectConstraint::Strict)),
+                    rect(dst),
+                    sampling,
+                    &paint,
+                );
+            }
+        }
+        DrawOp::DrawArc { oval, start_angle, sweep_angle, use_center, paint } => {
+            canvas.draw_arc(
+                rect(oval),
+                *start_angle,
+                *sweep_angle,
+                *use_center,
+                &skia_paint_with(paint, shaders, None),
+            );
+        }
+        DrawOp::DrawShadow { outline, elevation, light, light_radius, ambient, spot } => {
+            let mut path = skia_safe::PathBuilder::new();
+            match outline {
+                compose_ui::Outline::Rectangle(bounds) => {
+                    path.add_rect(rect(bounds), None, None);
+                }
+                compose_ui::Outline::Rounded(bounds, radii) => {
+                    path.add_rrect(round_rect(bounds, radii), None, None);
+                }
+            }
+            // As Compose Desktop: an opaque occluder, the light in the window's pixels.
+            skia_safe::utils::shadow_utils::draw_shadow(
+                canvas,
+                &path.detach(),
+                skia_safe::Point3::new(0.0, 0.0, *elevation),
+                skia_safe::Point3::new(light.0, light.1, light.2),
+                *light_radius,
+                skia_safe::Color::new(ambient.argb()),
+                skia_safe::Color::new(spot.argb()),
+                None,
+            );
+        }
+        DrawOp::SaveLayerAlpha(alpha) => {
+            canvas.save_layer_alpha_f(None, alpha.clamp(0.0, 1.0));
+        }
+        DrawOp::Transform { pivot, scale, rotation, translation } => {
+            canvas.translate((pivot.x + translation.x, pivot.y + translation.y));
+            canvas.rotate(*rotation, None);
+            canvas.scale((scale.0, scale.1));
+            canvas.translate((-pivot.x, -pivot.y));
+        }
+    }
 }
 
 /// A renderer onto a CPU raster surface: for tests, screenshots, and windows presenting pixels.

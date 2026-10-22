@@ -7,7 +7,7 @@ use std::rc::Rc;
 
 use compose_runtime::Composition;
 
-use crate::display_list::DisplayList;
+use crate::display_list::FlatDisplayList;
 use crate::input::{Action, KeyEvent, PointerEvent};
 use crate::semantics::SemanticsNode;
 use crate::text::{FixedTextMeasurer, TextMeasurer};
@@ -645,8 +645,10 @@ impl UiHost {
         self.with_tree(|tree| tree.semantics_tree(merged))
     }
 
-    pub fn display_list(&self) -> DisplayList {
-        self.with_tree(|tree| tree.display_list().clone())
+    /// The last frame's display list flattened (`DisplayList::flatten`): for tests and dumps.
+    /// A renderer draws `UiTree::display_list` (`with_tree`), its groups by reference.
+    pub fn display_list(&self) -> FlatDisplayList {
+        self.with_tree(|tree| tree.display_list().flatten())
     }
 
     /// The tree dump: nodes with their bounds, modifiers and semantics.

@@ -64,7 +64,9 @@ pub mod platform {
     pub use crate::brush::{Gradient, Shader, ShaderIndex};
     pub use crate::clipboard::MemoryClipboard;
     pub use crate::configuration::{Insets, LOCAL_PLATFORM_WINDOW_INSETS, PlatformWindowInsets};
-    pub use crate::display_list::{DisplayList, DrawGroup, DrawOp, Renderer};
+    pub use crate::display_list::{
+        Boundary, DisplayList, DrawGroup, DrawOp, FlatDisplayList, FlatGroup, Renderer,
+    };
     pub use crate::graphics_layer::LayerProperties;
     pub use crate::host::{FrameStats, LOCAL_CONSTRAINTS_HINT, UiHost};
     pub use crate::image::{ImageDecoder, set_image_decoder};

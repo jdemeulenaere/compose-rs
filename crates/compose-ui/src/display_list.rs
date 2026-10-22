@@ -2,6 +2,7 @@
 //! A subset of the `Canvas` API that both Skia and Android's `Canvas` support directly.
 
 use std::fmt::Write as _;
+use std::sync::Arc;
 
 use crate::graphics::{Outline, Paint};
 use crate::text::ParagraphHandle;
@@ -105,44 +106,94 @@ pub trait Renderer {
     );
 }
 
-/// The operations of one frame. Cleared and refilled each draw pass, keeping its capacity.
+/// A recording, and the display list of a frame: operations, the shaders their paints name,
+/// and the repaint boundaries drawn among them by reference. Cleared and refilled each draw
+/// pass, keeping its capacity.
+///
+/// A frame's list (`UiTree::display_list`) holds what's drawn outside every repaint boundary,
+/// and in `groups` each boundary's group, whose content is the recording the boundary keeps,
+/// shared (`Arc`), not copied: a renderer walks the tree, drawing a group's content where its
+/// [`Boundary`] is (Skia), or copying what it made of a group while its version stays
+/// (Android's serializer). [`flatten`](DisplayList::flatten) copies every group into one list
+/// of operations, for tests and dumps.
 #[derive(Clone, Default, Debug)]
 pub struct DisplayList {
     pub ops: Vec<DrawOp>,
-    /// The operations each repaint boundary drew (`Modifier.repaint_boundary`, graphics
-    /// layers, lazy items), in its own coordinates, keyed by its node, with a version: a
-    /// renderer can keep a group's recording while its version stays the same (Android's
-    /// render nodes).
+    /// The shaders its paints refer to (`Paint::shader`), by index: each recording's own, so a
+    /// group's content is drawn with its content's shaders.
+    pub shaders: Vec<crate::brush::Shader>,
+    /// The repaint boundaries drawn inside it, by reference, in drawing order: each before the
+    /// operation at its `at`. Their groups are the frame's (`groups`), in the same order.
+    pub boundaries: Vec<Boundary>,
+    /// In a frame: the group of each repaint boundary drawn (`Modifier.repaint_boundary`,
+    /// graphics layers, lazy items), in drawing order, a group before the ones nested in it
+    /// (its `descendants`). The frame's boundaries, each followed by its group's content's
+    /// (depth first), name them one by one.
     pub groups: Vec<DrawGroup>,
     /// A translation before this index isn't merged into: a group's operations stay its own.
     pub(crate) merge_floor: usize,
-    /// In a recording a repaint boundary keeps (render.rs): the boundaries drawn inside it, by
-    /// reference, each before the operation at its index.
-    pub(crate) boundaries: Vec<(usize, crate::tree::NodeId)>,
-    /// The shaders the operations' paints refer to (`Paint::shader`), by index.
-    pub shaders: Vec<crate::brush::Shader>,
 }
 
-/// A repaint boundary's operations: its content `ops[start..end]`, in its node's coordinates,
-/// keyed by its node.
+/// Where a recording draws a repaint boundary's group: before its operation `at`. `key` is the
+/// group's.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Boundary {
+    pub at: usize,
+    pub key: u64,
+}
+
+/// A repaint boundary's group in a frame: its content, kept by the boundary and shared by each
+/// frame drawing it, keyed by its node, with a version.
 ///
 /// A boundary whose node's first drawing modifier is a graphics layer has the layer's
-/// properties in `layer` (as Compose's `graphicsLayer` sets its render node's), applied by the
-/// operations just outside its content: `ops[layer_start..start]` before it, which are, in this
-/// order and each only if needed, `Save` (if it transforms or clips), `Transform` (if it
-/// scales, rotates or moves), `ClipRect` (if it clips to its bounds) and `SaveLayerAlpha` (if
-/// its alpha is below 1); and `ops[end..layer_end]` after it, a `Restore` for each save. A
-/// renderer that ignores groups draws them as any other operations (Skia); one that keeps a
-/// recording per group skips them and applies `layer` as its render node's properties
-/// (Android). Without a layer, `layer_start == start` and `layer_end == end`.
+/// properties in `layer` (as Compose's `graphicsLayer` sets its render node's), outside its
+/// content: a renderer drawing operations applies them around it
+/// ([`LayerProperties::operations`](crate::platform::LayerProperties::operations), as
+/// [`flatten`](DisplayList::flatten) does); one keeping a recording per group sets them as its
+/// render node's properties (Android).
 ///
 /// `version` comes from a counter of the tree, bumped whenever the group's content is drawn
 /// again or a group inside it changed version: the content is the same while it is, except for
-/// the operations applying the layers of groups inside it, which their own `layer` carries. A
-/// change of a layer's properties alone (an animated alpha or rotation) changes no version,
-/// neither its own nor its parents'. A key with the same version never draws something else.
-#[derive(Clone, Copy, PartialEq, Debug, Default)]
+/// the layers of groups inside it, which their own `layer` carries. A change of a layer's
+/// properties alone (an animated alpha or rotation) changes no version, neither its own nor its
+/// parents'. A key with the same version never draws something else.
+#[derive(Clone, Debug)]
 pub struct DrawGroup {
+    pub key: u64,
+    pub version: u64,
+    pub layer: Option<crate::graphics_layer::LayerProperties>,
+    /// Its operations in its node's coordinates (its layer's left out), the boundaries nested
+    /// in it by reference.
+    pub content: Arc<DisplayList>,
+    /// How many groups are nested in it, at any depth: the ones after it in the frame's
+    /// `groups`.
+    pub descendants: usize,
+    /// It draws nothing (no operation, its own or a nested group's): a renderer skips it, its
+    /// layer and its nested groups.
+    pub empty: bool,
+}
+
+/// A display list with every group's operations in place ([`DisplayList::flatten`]): for tests
+/// and dumps.
+#[derive(Clone, Default, Debug)]
+pub struct FlatDisplayList {
+    pub ops: Vec<DrawOp>,
+    /// Each group drawn (not empty), after the ones nested in it.
+    pub groups: Vec<FlatGroup>,
+    /// The shaders the paints refer to, by index: every recording's, their paints' indices
+    /// shifted to them.
+    pub shaders: Vec<crate::brush::Shader>,
+}
+
+/// A group in a flattened list: its content `ops[start..end]`, in its node's coordinates, keyed
+/// by its node, with its version ([`DrawGroup`]). Its layer's operations are just outside it:
+/// `ops[layer_start..start]` before it, which are, in this order and each only if needed,
+/// `Save` (if it transforms or clips), `Transform` (if it scales, rotates or moves), `ClipRect`
+/// (if it clips to its bounds) and `SaveLayerAlpha` (if its alpha is below 1); and
+/// `ops[end..layer_end]` after it, a `Restore` for each save. Without a layer,
+/// `layer_start == start` and `layer_end == end`.
+#[derive(Clone, Copy, PartialEq, Debug, Default)]
+pub struct FlatGroup {
     pub key: u64,
     pub version: u64,
     pub start: usize,
@@ -171,17 +222,18 @@ impl DisplayList {
         crate::brush::ShaderIndex(self.shaders.len() as u32 - 1)
     }
 
-    /// Appends `ops`, from a list whose shaders are this list's from `base` on.
-    pub(crate) fn extend_shifted(&mut self, ops: &[DrawOp], base: u32) {
-        let start = self.ops.len();
-        self.ops.extend_from_slice(ops);
-        if base > 0 {
-            for op in &mut self.ops[start..] {
-                if let Some(index) = op.paint_mut().and_then(|paint| paint.shader.as_mut()) {
-                    index.0 += base;
-                }
-            }
-        }
+    /// The frame with every group's operations in place, its layer's around it: what a
+    /// renderer draws, as one list. For tests and dumps (renderers walk the groups).
+    pub fn flatten(&self) -> FlatDisplayList {
+        let mut flat = FlatDisplayList::default();
+        let mut next = 0;
+        flatten_into(self, &self.groups, &mut next, &mut flat);
+        flat
+    }
+
+    /// The flattened list's dump ([`FlatDisplayList::dump`]): for golden tests.
+    pub fn dump(&self) -> String {
+        self.flatten().dump()
     }
 
     pub fn draw_outline(&mut self, outline: Outline, paint: Paint) {
@@ -197,7 +249,9 @@ impl DisplayList {
             Outline::Rounded(rect, radii) => self.push(DrawOp::ClipRoundRect(rect, radii)),
         }
     }
+}
 
+impl FlatDisplayList {
     /// A text dump, one operation per line, indented by save depth: for golden tests.
     pub fn dump(&self) -> String {
         let mut out = String::new();
@@ -298,6 +352,80 @@ impl DisplayList {
             }
         }
         out
+    }
+}
+
+/// Appends `recording` (the frame, or a group's content) to `flat`, each group it draws (the
+/// frame's `groups` from `next` on) in place.
+fn flatten_into(
+    recording: &DisplayList,
+    groups: &[DrawGroup],
+    next: &mut usize,
+    flat: &mut FlatDisplayList,
+) {
+    // Its shaders become the list's, its paints' indices shifted to them.
+    let base = if recording.shaders.is_empty() { 0 } else { flat.shaders.len() as u32 };
+    flat.shaders.extend_from_slice(&recording.shaders);
+    let mut from = 0;
+    for boundary in &recording.boundaries {
+        let at = boundary.at.clamp(from, recording.ops.len());
+        extend_shifted(&mut flat.ops, &recording.ops[from..at], base);
+        flatten_group(boundary, groups, next, flat);
+        from = at;
+    }
+    extend_shifted(&mut flat.ops, &recording.ops[from..], base);
+}
+
+/// Appends the group at `next` (and the ones nested in it) to `flat`: its layer's operations
+/// around its content, none if it draws nothing.
+fn flatten_group(
+    boundary: &Boundary,
+    groups: &[DrawGroup],
+    next: &mut usize,
+    flat: &mut FlatDisplayList,
+) {
+    let group = groups.get(*next);
+    debug_assert!(
+        group.is_some_and(|group| group.key == boundary.key),
+        "the frame's groups don't match its boundaries"
+    );
+    let Some(group) = group else { return };
+    *next += 1;
+    let layer_start = flat.ops.len();
+    if let Some(layer) = group.layer {
+        flat.ops.extend(layer.operations());
+    }
+    let start = flat.ops.len();
+    flatten_into(&group.content, groups, next, flat);
+    let end = flat.ops.len();
+    if end == start {
+        // Nothing to apply them to.
+        flat.ops.truncate(layer_start);
+        return;
+    }
+    let restores = group.layer.map_or(0, |layer| layer.restores());
+    flat.ops.extend((0..restores).map(|_| DrawOp::Restore));
+    flat.groups.push(FlatGroup {
+        key: group.key,
+        version: group.version,
+        start,
+        end,
+        layer_start,
+        layer_end: flat.ops.len(),
+        layer: group.layer,
+    });
+}
+
+/// Appends `ops`, from a list whose shaders are the target's from `base` on.
+fn extend_shifted(target: &mut Vec<DrawOp>, ops: &[DrawOp], base: u32) {
+    let start = target.len();
+    target.extend_from_slice(ops);
+    if base > 0 {
+        for op in &mut target[start..] {
+            if let Some(index) = op.paint_mut().and_then(|paint| paint.shader.as_mut()) {
+                index.0 += base;
+            }
+        }
     }
 }
 

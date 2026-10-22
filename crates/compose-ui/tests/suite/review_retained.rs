@@ -13,7 +13,7 @@ use compose_ui::platform::*;
 use compose_ui::*;
 
 /// A display list's dump, without its paragraph handles (a fresh measurer numbers them anew).
-fn dump(list: &DisplayList) -> String {
+fn dump(list: &FlatDisplayList) -> String {
     list.dump()
         .lines()
         .map(|line| match line.find("paragraph ") {

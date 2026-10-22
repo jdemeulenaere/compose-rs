@@ -62,8 +62,9 @@ fn desktop_frame(criterion: &mut Criterion) {
     let mut frame = |ui: &mut ComposeTestRule| {
         let elapsed = click_frame(ui, &checkbox, 3);
         let start = Instant::now();
-        let list = ui.host().display_list();
-        ui.host().with_tree(|tree| renderer.render(&list, Color::WHITE, 1.0, tree.text_measurer()));
+        ui.host().with_tree(|tree| {
+            renderer.render(tree.display_list(), Color::WHITE, 1.0, tree.text_measurer_ref())
+        });
         elapsed + start.elapsed()
     };
     criterion.bench_function("toggle 1 of 1000 todos, rendered at 2x", |bench| {
