@@ -88,10 +88,14 @@ fn tab_row(
     let resting_at = remember(|| Rc::new(std::cell::Cell::new(None::<usize>)));
     let at_rest = remember(|| Rc::new(std::cell::Cell::new(true)));
     let scroll = remember(|| ScrollState::new(0));
+    // Scrolls to the selected tab; cancelled with the row.
+    let scroll_scope = compose_runtime::remember_coroutine_scope();
+    let scroll_job = remember(|| Rc::new(RefCell::new(None::<compose_runtime::Job>)));
     {
         let (positions, indicator, resting_at, at_rest) =
             (positions.clone(), indicator.clone(), resting_at.clone(), at_rest.clone());
-        let scroll = scroll.clone();
+        let (scroll, scroll_scope, scroll_job) =
+            (scroll.clone(), scroll_scope.clone(), scroll_job.clone());
         let density = compose_ui::LOCAL_DENSITY.current();
         LaunchedEffect(selected_tab_index, async move {
             // After the layout that placed the tabs.
@@ -107,9 +111,13 @@ fn tab_row(
                 let centered = left - (visible / 2.0 - width / 2.0);
                 let target = centered.clamp(0.0, (total - visible).max(0.0)).round() as i32;
                 let scroll = scroll.clone();
-                compose_runtime::CoroutineScope::new().launch(async move {
+                let job = scroll_scope.launch(async move {
                     scroll_with_tween(&scroll, target).await;
                 });
+                // A new selection's scroll replaces the last one's.
+                if let Some(last) = scroll_job.replace(Some(job)) {
+                    last.cancel();
+                }
             }
             let target = Offset::new(left, width);
             match resting_at.get() {
