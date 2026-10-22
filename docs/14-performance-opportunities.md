@@ -1,6 +1,6 @@
 # 14. Performance opportunities: what's left, measured
 
-Where compose-rs can still get faster, smaller or quicker to build, after round 3 of [12](12-android-performance.md). Each opportunity was measured with a prototype where feasible, or estimated from profiles with the reasoning shown. Small and negative results are reported too. This began as an analysis: #2, #3, #10 and the prefetched paragraphs have since been done (D320–D323), each section saying so. Since then, the build and benchmark fixes below were made: stripping (#4a, D301), the stale library (D300), benchmark hygiene (D302), build-only dependencies at opt-level 0 (#6, D303), and the corrections to docs/08 (D304) and docs/12; each is marked **Fixed** where it's discussed. The prototypes are kept on `perf/*` branches, each with its raw measurements and a `README.txt` of exact commands under `perf-results/<branch>/` (see "Branches" below).
+Where compose-rs can still get faster, smaller or quicker to build, after round 3 of [12](12-android-performance.md). Each opportunity was measured with a prototype where feasible, or estimated from profiles with the reasoning shown. Small and negative results are reported too. This began as an analysis: #2, #3, #10 and the prefetched paragraphs have since been done (D320–D323), each section saying so, and three jank problems round 4's traces showed were fixed (D340–D342, "Jank" below). Since then, the build and benchmark fixes below were made: stripping (#4a, D301), the stale library (D300), benchmark hygiene (D302), build-only dependencies at opt-level 0 (#6, D303), and the corrections to docs/08 (D304) and docs/12; each is marked **Fixed** where it's discussed. The prototypes are kept on `perf/*` branches, each with its raw measurements and a `README.txt` of exact commands under `perf-results/<branch>/` (see "Branches" below).
 
 **Short answer.**
 - **Desktop** has the one big gain left. A Metal surface takes 70 % off the app's CPU time per animated frame in a 2560 × 1324 window (6.8 → 2.0 ms), and 37 % off the app's and the window server's together (10.0 → 6.3 ms a frame). At that size, a click's time to present goes from 16.4 ms (median of 3; 7.0–16.9) to 1.3 ms. Today's CPU path spends most of each frame not rasterizing but presenting: Core Animation converts the frame's colour space on the CPU.
@@ -208,6 +208,60 @@ The animation (no prefetching) is unchanged: main work 198.1 → 198.1 ms, p99 2
 | Startup feed / big | 105 / 179 ms | 107 / 177 ms | 127–130 / 220–221 ms |
 
 The scroll's RenderThread rose in this pair of sessions (779 → 809 ms, p99 5.36 → 5.59), but not in the interleaved A/Bs of each change, where it stayed within the runs' spread; Compose's moved by as much between the sessions (864 → 903 ms).
+
+### Jank: buffer stuffing, idle work past the vsync, hidden views (D340–D343)
+
+Round 4's traces showed three problems no average shows.
+
+- **Buffer stuffing recovery stopped prefetching (D340).** After a display stall, Android 16's Choreographer enters "buffer stuffing recovery" and hands every frame callback its vsync's time less an interval until the app goes idle, which a fling never does. The idle-time budget was the frame time plus an interval, so it was always past: the view re-posted a vsync callback every frame and never called Rust. In the round 4 run that hit it, there were no prefetches for 10 s and 120 compositions in frames (main p99 7.35 ms against about 3.1). The budget now runs to the vsync after the last one at or before the callback's start, on the frame time's phase.
+- **Idle work ran past the vsync (D341).** About 1 % of the idle-time slices ended more than 1.2 ms past the vsync. Each was an item's measurement (its six text layouts, the first one cold, 4–6 ms) started with 3–4 ms left, because the running average (about 2.2 ms) said it fit. A step now needs the larger of the average and the recent maximum (fading by an eighth per step), plus 0.5 ms. The estimate is lowered only when the step was the idle time's first. In a first version that lowered it on every miss, the measurements still started after a composition; that version took the slices past the vsync from 31 to 17 a run, against 39 to 11 for the version shipped.
+- **A hidden view kept animating (D342).** The demo, in the background, ran a frame on every vsync (about 1 ms each) without drawing.
+
+Measured on the Pixel 8 Pro, with main at 0757e61 (with D330) and the branch alternated run by run, 4 runs each (means [min–max]):
+
+| Scroll (measure.py's scroll run, D343) | main | branch |
+|---|---|---|
+| Idle-time slices ending past the vsync, a run | 39.3 [35–43] | **11.3** [7–14] |
+| of which more than 1.2 ms past | 9.0 [7–10] | **1.8** [1–3] |
+| The latest past the vsync | 2.3–3.8 ms | 1.4–2.7 ms |
+| `doFrame`s more than 2 ms late after main-thread work, a run | 2.8 [2–5] | **0.5** [0–1] |
+| `doFrame`s more than 2 ms late (most woke late) | 11.0 [8–16] | 12.3 [7–18] |
+| `prefetch` calls | 351 | 360 |
+| Main per frame p50 / p90 / p99 | 1.28 / 1.97 / 3.03 ms | 1.28 / 1.93 / 2.96 ms |
+| RenderThread per frame p50 / p90 / p99 | 2.77 / 3.72 / 5.30 ms | 2.82 / 3.88 / 5.51 ms (one run's p99 6.49) |
+| Main, RenderThread work | 438.0, 772.7 ms | 433.4, 778.1 ms |
+| Janky frames (FrameTimeline) | 0, 0, 0, 1 (the app's) | 2 (the compositor's), 0, 0, 0 |
+
+Fewer slices run past the vsync, and those that do run past it by less; the slowest main-thread frames don't grow, though more measurements wait for a whole idle time. The RenderThread's differences are within its runs' spread, and its work is the same.
+
+**Buffer stuffing, simulated.** None of these runs entered recovery, so it was simulated: both APKs were built with every frame callback's time shifted back an interval, as recovery does (a temporary patch, not committed), 2 runs each:
+
+| | main, shifted | branch, shifted |
+|---|---|---|
+| `prefetch` calls | 0, 0 | 363, 365 |
+| Main per frame p90 / p99 | 2.67 / 7.36 ms | 2.00 / 3.19 ms |
+| Main work | 484.3 ms | 433.4 ms |
+
+main reproduces the round 4 run (p99 7.35 ms, no prefetch); the branch prefetches as if nothing were shifted. The pure function behind it (`frame_time.rs`) is tested with shifted, late and on-time callbacks.
+
+**The hidden view** was traced with the demo's gallery shown for 4 s, on the home screen for 10 s, then shown again: 120 frames a second, none while hidden, 120 a second again, drawn.
+
+**The full benchmark** (`measure.py --runs 15`, the branch with D330: `results/2026-10-22-pixel-8-pro-jank-fixes.json`), against round 4 (e3069cb). Its scroll leaves the warm-up swipe out (D343), and both apps were measured with our other apps stopped:
+
+| compose-rs | round 4 | this run | Compose, this run |
+|---|---|---|---|
+| Scroll: janky frames, per run | 1, 3, 1 | **0, 0, 0** | 0, 0, 0 |
+| Scroll: main per frame p50 / p90 / p99 | 1.23 / 1.90 / 3.11 ms | 1.30 / 1.89 / 2.91 ms | 1.50 / 3.13 / 6.62 ms |
+| Scroll: RenderThread per frame p50 / p90 | 2.74 / 3.70 ms | 2.75 / 3.79 ms | 2.08 / 3.29 ms |
+| Scroll: main, RenderThread work | 477, 786 ms | 450, 794 ms | 868, 889 ms |
+| Scroll: frame time p50 / p90 / p99 (gfxinfo) | 5 / 6 / 8 ms | 5 / 6 / 8 ms | 5 / 7 / 10 ms |
+| Animation: main per frame p50 / p90 / p99 | 1.20 / 1.79 / 2.98 ms | 1.20 / 1.69 / 2.89 ms | 1.54 / 2.12 / 3.02 ms |
+| Animation: RenderThread p50 / p90 | 2.63 / 3.56 ms | 2.64 / 3.49 ms | 3.00 / 4.09 ms |
+| Animation: main, RenderThread work | 190, 517 ms | 189, 498 ms | 259, 536 ms |
+| Startup feed / big | 107 / 174 ms | 108 / 165 ms | 134 / 228 ms |
+| PSS after 10 flings | 81.2 MB | 80.7 MB | 88.3 MB |
+
+No run of either app had a janky frame in the scroll or the animation. No compose-rs run entered buffer stuffing recovery. One of Compose's animation runs did: all 1,198 of its frames were presented a vsync late, on cadence, so FrameTimeline counted none as janky. The scroll's p99 and its work owe part of their drop to D330 (BoringLayout), merged in between, as does `big`'s startup. The round 4 run that entered recovery (p99 7.35 ms) set its median, though, and measure.py now leaves out the warm-up swipe, so the jank counts aren't comparable one for one either.
 
 ## Android: text and the big screen
 
