@@ -246,7 +246,7 @@ main reproduces the round 4 run (p99 7.35 ms, no prefetch); the branch prefetche
 
 **The hidden view** was traced with the demo's gallery shown for 4 s, on the home screen for 10 s, then shown again: 120 frames a second, none while hidden, 120 a second again, drawn.
 
-**The full benchmark** (`measure.py --runs 15`, the branch with D330: `results/2026-10-22-pixel-8-pro-jank-fixes.json`), against round 4 (e3069cb). Its scroll leaves the warm-up swipe out (D343), and both apps were measured with our other apps stopped:
+**The full benchmark** (`measure.py --runs 15`, the branch with D330: `results/2026-10-22-pixel-8-pro-round-5.json`, round 5 of [12](12-android-performance.md)), against round 4 (e3069cb). Its scroll leaves the warm-up swipe out (D343), and both apps were measured with our other apps stopped:
 
 | compose-rs | round 4 | this run | Compose, this run |
 |---|---|---|---|
