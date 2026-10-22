@@ -350,9 +350,13 @@ pub fn write_display_list(list: &DisplayList, resources: &mut Resources, out: &m
     let mut folds: Vec<(usize, f32)> = Vec::new();
     // The groups, outer before inner (they nest), and the open ones: where each ends and
     // where its length goes.
-    let mut groups: Vec<_> = list.groups.iter().filter(|group| group.start < group.end).collect();
-    groups.sort_by_key(|group| (group.start, std::cmp::Reverse(group.end)));
-    let mut groups = groups.into_iter().peekable();
+    // Of two with the same range, the outer one was drawn last.
+    let mut groups: Vec<_> =
+        list.groups.iter().enumerate().filter(|(_, group)| group.start < group.end).collect();
+    groups.sort_by_key(|&(index, group)| {
+        (group.start, std::cmp::Reverse(group.end), std::cmp::Reverse(index))
+    });
+    let mut groups = groups.into_iter().map(|(_, group)| group).peekable();
     let mut open: Vec<(usize, usize)> = Vec::new();
     for (index, op) in list.ops.iter().enumerate() {
         while folds.last().is_some_and(|(end, _)| *end < index) {
@@ -549,6 +553,19 @@ mod tests {
         assert_eq!(read_u32(bytes, inner + 1), 2);
         assert_eq!(read_u32(bytes, inner + 9) as usize, rect_bytes);
         assert_eq!(bytes[inner + header], tag::DRAW_RECT);
+    }
+
+    /// A boundary holding only a boundary: the same range, the outer one (drawn last) first.
+    #[test]
+    fn of_two_groups_with_the_same_range_the_outer_opens_first() {
+        let mut list = DisplayList::default();
+        list.push(DrawOp::DrawRect(Rect::new(0.0, 0.0, 1.0, 1.0), Paint::fill(Color::BLACK)));
+        list.groups.push(compose_ui::DrawGroup { key: 1, start: 0, end: 1 });
+        list.groups.push(compose_ui::DrawGroup { key: 2, start: 0, end: 1 });
+        let (mut resources, mut out) = (Resources::default(), Writer::default());
+        write_display_list(&list, &mut resources, &mut out);
+        assert_eq!((out.bytes[0], read_u32(&out.bytes, 1)), (tag::GROUP, 2));
+        assert_eq!((out.bytes[13], read_u32(&out.bytes, 14)), (tag::GROUP, 1));
     }
 
     /// A folded layer's `Save` opens the group as any operation does.

@@ -104,11 +104,17 @@ internal class Replayer(private val text: TextMeasurer) {
     fun replay(canvas: Canvas, buffer: ByteBuffer) {
         buffer.order(ByteOrder.LITTLE_ENDIAN)
         buffer.position(0)
+        children = null
+        unreadable = false
+        if (!canvas.isHardwareAccelerated) {
+            // A software draw (a snapshot) replays everything and keeps the groups: the
+            // window's last frame still draws their nodes.
+            replay(canvas, buffer, buffer.limit())
+            return
+        }
         frame++
         width = canvas.width.coerceAtLeast(1)
         height = canvas.height.coerceAtLeast(1)
-        children = null
-        unreadable = false
         replay(canvas, buffer, buffer.limit())
         // The groups this frame didn't draw are gone.
         val iterator = groups.values.iterator()
@@ -245,6 +251,8 @@ internal class Replayer(private val text: TextMeasurer) {
         }
         val group = kept ?: Group(RenderNode("compose-rs group")).also { groups[key] = it }
         group.frame = frame
+        // Matches nothing until recorded whole.
+        group.length = -1
         // Its bounds: the view's from the group's origin, what it draws past them not clipped.
         group.node.setPosition(0, 0, width, height)
         group.node.setClipToBounds(false)

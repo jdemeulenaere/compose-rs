@@ -12,6 +12,7 @@ mod review_d_panic_measure;
 mod review_d_panic_poisoned;
 #[path = "../review_d_support/mod.rs"]
 mod review_d_support;
+mod review_groups;
 #[path = "../support/mod.rs"]
 mod support;
 mod ui;
