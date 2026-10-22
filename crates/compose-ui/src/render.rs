@@ -164,12 +164,16 @@ impl UiTree {
     ) -> bool {
         let mut changed = false;
         let mut from = 0;
+        // Its shaders become the list's, its paints' indices shifted to them.
+        let base = list.shaders.len() as u32;
+        list.shaders.extend_from_slice(&recording.shaders);
+        let base = if recording.shaders.is_empty() { 0 } else { base };
         for &(index, node) in &recording.boundaries {
-            list.ops.extend_from_slice(&recording.ops[from..index]);
+            list.extend_shifted(&recording.ops[from..index], base);
             changed |= self.draw_boundary(node, list, observer);
             from = index;
         }
-        list.ops.extend_from_slice(&recording.ops[from..]);
+        list.extend_shifted(&recording.ops[from..], base);
         changed
     }
 

@@ -213,16 +213,26 @@ impl PointerInputScope {
     /// each release taps); holding past the timeout long-presses (if `on_long_press`). The
     /// presses detected are consumed. Never returns.
     pub async fn detect_tap_gestures(&self, gestures: TapGestures) {
+        self.detect_taps(gestures, &|_| {}).await
+    }
+
+    /// `detect_tap_gestures`, calling `pressed` at once (in the dispatch) when a press starts
+    /// (true) and ends, released, cancelled or held to its end (false): what a clickable's
+    /// indication shows.
+    pub(crate) async fn detect_taps(&self, gestures: TapGestures, pressed: &dyn Fn(bool)) {
         loop {
             let down = self.await_first_down(true).await;
             down.consume();
+            pressed(true);
             self.call(&gestures.on_press, down.position);
             let Some(up) = self.up_or_long_press(&gestures).await else {
                 // Held: a long press.
                 self.call(&gestures.on_long_press, down.position);
                 self.consume_until_up().await;
+                pressed(false);
                 continue;
             };
+            pressed(false);
             let Some(up) = up else {
                 self.await_all_up().await;
                 continue;
@@ -240,15 +250,18 @@ impl PointerInputScope {
                 continue;
             };
             second.consume();
+            pressed(true);
             self.call(&gestures.on_press, second.position);
             match self.up_or_long_press(&gestures).await {
                 // Released: the double tap.
                 Some(Some(second_up)) => {
+                    pressed(false);
                     second_up.consume();
                     self.call(&gestures.on_double_tap, second_up.position);
                 }
                 // Cancelled: the first tap alone.
                 Some(None) => {
+                    pressed(false);
                     self.call(&gestures.on_tap, up.position);
                     self.await_all_up().await;
                 }
@@ -257,6 +270,7 @@ impl PointerInputScope {
                     self.call(&gestures.on_tap, up.position);
                     self.call(&gestures.on_long_press, second.position);
                     self.consume_until_up().await;
+                    pressed(false);
                 }
             }
         }

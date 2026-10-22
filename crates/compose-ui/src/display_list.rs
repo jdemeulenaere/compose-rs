@@ -68,6 +68,26 @@ pub enum DrawOp {
         scale: (f32, f32),
         paint: Paint,
     },
+    /// Clips what follows (until the matching restore of an earlier save) to `path` moved by
+    /// `offset` (its fill type deciding what's inside), as `clipPath`.
+    ClipPath {
+        path: std::sync::Arc<crate::path::Path>,
+        offset: Offset,
+    },
+}
+
+impl DrawOp {
+    /// The paint of a drawing operation, if it has one.
+    pub fn paint_mut(&mut self) -> Option<&mut Paint> {
+        match self {
+            DrawOp::DrawRect(_, paint)
+            | DrawOp::DrawRoundRect(_, _, paint)
+            | DrawOp::DrawLine(_, _, paint)
+            | DrawOp::DrawArc { paint, .. }
+            | DrawOp::DrawPath { paint, .. } => Some(paint),
+            _ => None,
+        }
+    }
 }
 
 /// Replays display lists onto a surface: Skia on desktop, Android's `Canvas` (docs/07-platforms.md).
@@ -99,6 +119,8 @@ pub struct DisplayList {
     /// In a recording a repaint boundary keeps (render.rs): the boundaries drawn inside it, by
     /// reference, each before the operation at its index.
     pub(crate) boundaries: Vec<(usize, crate::tree::NodeId)>,
+    /// The shaders the operations' paints refer to (`Paint::shader`), by index.
+    pub shaders: Vec<crate::brush::Shader>,
 }
 
 /// A repaint boundary's operations: its content `ops[start..end]`, in its node's coordinates,
@@ -136,10 +158,30 @@ impl DisplayList {
         self.groups.clear();
         self.merge_floor = 0;
         self.boundaries.clear();
+        self.shaders.clear();
     }
 
     pub fn push(&mut self, op: DrawOp) {
         self.ops.push(op);
+    }
+
+    /// Keeps `shader` for this list's paints, returning the index they refer to it by.
+    pub fn push_shader(&mut self, shader: crate::brush::Shader) -> crate::brush::ShaderIndex {
+        self.shaders.push(shader);
+        crate::brush::ShaderIndex(self.shaders.len() as u32 - 1)
+    }
+
+    /// Appends `ops`, from a list whose shaders are this list's from `base` on.
+    pub(crate) fn extend_shifted(&mut self, ops: &[DrawOp], base: u32) {
+        let start = self.ops.len();
+        self.ops.extend_from_slice(ops);
+        if base > 0 {
+            for op in &mut self.ops[start..] {
+                if let Some(index) = op.paint_mut().and_then(|paint| paint.shader.as_mut()) {
+                    index.0 += base;
+                }
+            }
+        }
     }
 
     pub fn draw_outline(&mut self, outline: Outline, paint: Paint) {
@@ -165,6 +207,7 @@ impl DisplayList {
                 depth = depth.saturating_sub(1);
             }
             let _ = write!(out, "{}", "  ".repeat(depth));
+            let paint_text = |paint: &Paint| paint_text(paint, &self.shaders);
             let _ = match op {
                 DrawOp::Save => writeln!(out, "save"),
                 DrawOp::Restore => writeln!(out, "restore"),
@@ -242,6 +285,13 @@ impl DisplayList {
                     "transform pivot {},{} scale {}x{} rotate {} translate {},{}",
                     pivot.x, pivot.y, scale.0, scale.1, rotation, translation.x, translation.y
                 ),
+                DrawOp::ClipPath { path, offset } => writeln!(
+                    out,
+                    "clip path of {} commands at {},{}",
+                    path.commands().len(),
+                    offset.x,
+                    offset.y
+                ),
             };
             if matches!(op, DrawOp::Save | DrawOp::SaveLayerAlpha(_)) {
                 depth += 1;
@@ -255,9 +305,32 @@ fn rect_text(rect: &Rect) -> String {
     format!("{},{} {}x{}", rect.left, rect.top, rect.width(), rect.height())
 }
 
-fn paint_text(paint: &Paint) -> String {
+fn paint_text(paint: &Paint, shaders: &[crate::brush::Shader]) -> String {
+    let color = match paint.shader.and_then(|index| shaders.get(index.0 as usize)) {
+        Some(shader) => shader_text(shader),
+        None => format!("{:?}", paint.color),
+    };
     match paint.style {
-        crate::graphics::PaintStyle::Fill => format!("{:?}", paint.color),
-        crate::graphics::PaintStyle::Stroke(width) => format!("{:?} stroke {width}", paint.color),
+        crate::graphics::PaintStyle::Fill => color,
+        crate::graphics::PaintStyle::Stroke(width) => format!("{color} stroke {width}"),
     }
+}
+
+fn shader_text(shader: &crate::brush::Shader) -> String {
+    use crate::brush::Shader;
+    let gradient = shader.gradient();
+    let colors: Vec<String> = gradient.colors.iter().map(|color| format!("{color:?}")).collect();
+    let stops = gradient.stops.as_ref().map_or(String::new(), |stops| format!(" at {stops:?}"));
+    let alpha =
+        if shader.alpha() < 1.0 { format!(" alpha {}", shader.alpha()) } else { String::new() };
+    let geometry = match shader {
+        Shader::LinearGradient { from, to, .. } => {
+            format!("linear {},{} to {},{}", from.x, from.y, to.x, to.y)
+        }
+        Shader::RadialGradient { center, radius, .. } => {
+            format!("radial at {},{} radius {radius}", center.x, center.y)
+        }
+        Shader::SweepGradient { center, .. } => format!("sweep at {},{}", center.x, center.y),
+    };
+    format!("{geometry} [{}]{stops} {:?}{alpha}", colors.join(", "), gradient.tile_mode)
 }

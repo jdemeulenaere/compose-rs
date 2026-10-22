@@ -248,9 +248,19 @@ pub struct Offset {
 
 impl Offset {
     pub const ZERO: Offset = Offset { x: 0.0, y: 0.0 };
+    /// Infinitely far, as `Offset.Infinite`: a gradient's default end (the drawing's size).
+    pub const INFINITE: Offset = Offset { x: f32::INFINITY, y: f32::INFINITY };
+    /// No position, as `Offset.Unspecified`: a radial gradient's default center (the
+    /// drawing's center).
+    pub const UNSPECIFIED: Offset = Offset { x: f32::NAN, y: f32::NAN };
 
     pub const fn new(x: f32, y: f32) -> Offset {
         Offset { x, y }
+    }
+
+    /// Whether it's a position (not `UNSPECIFIED`), as `isSpecified`.
+    pub fn is_specified(self) -> bool {
+        !self.x.is_nan() && !self.y.is_nan()
     }
 }
 

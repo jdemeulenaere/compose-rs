@@ -112,6 +112,17 @@ impl Modifier {
         self.then_element(Element::Size(spec))
     }
 
+    /// Bounds on the width, within the incoming constraints, as `Modifier.widthIn`
+    /// (`Dp::UNSPECIFIED` for no bound).
+    pub fn width_in(self, min: Dp, max: Dp) -> Modifier {
+        self.size_in(SizeSpec::bounds(min, Dp::UNSPECIFIED, max, Dp::UNSPECIFIED))
+    }
+
+    /// Bounds on the height, as `Modifier.heightIn`.
+    pub fn height_in(self, min: Dp, max: Dp) -> Modifier {
+        self.size_in(SizeSpec::bounds(Dp::UNSPECIFIED, min, Dp::UNSPECIFIED, max))
+    }
+
     pub fn fill_max_width(self) -> Modifier {
         self.fill_max_width_fraction(1.0)
     }
@@ -174,6 +185,18 @@ impl Modifier {
     /// Clips the content to `shape`, as `Modifier.clip`.
     pub fn clip(self, shape: Shape) -> Modifier {
         self.then_element(Element::Clip(shape))
+    }
+
+    /// Clips the content to the bounds, as `Modifier.clipToBounds`.
+    pub fn clip_to_bounds(self) -> Modifier {
+        self.clip(Shape::Rectangle)
+    }
+
+    /// Draws (and hits) the element over its siblings of a lower `z_index`, under those of a
+    /// higher one, as `Modifier.zIndex`: siblings of the same are in their placement order;
+    /// several on one element add up.
+    pub fn z_index(self, z_index: f32) -> Modifier {
+        self.then_element(Element::ZIndex(z_index))
     }
 
     // ---- Input ------------------------------------------------------------------------------
@@ -258,6 +281,93 @@ impl Modifier {
             indication: indication.into(),
             on_value_change: on_value_change.into_callback(),
         }))
+    }
+
+    /// A selectable item (a radio button, a tab): a click calls `on_click`, and its semantics
+    /// say whether it's `selected`, as `Modifier.selectable`.
+    pub fn selectable(
+        self,
+        selected: bool,
+        enabled: bool,
+        role: Option<Role>,
+        on_click: impl IntoCallback<dyn Fn()>,
+    ) -> Modifier {
+        self.selectable_indicated(selected, enabled, role, Indication::NONE, on_click)
+    }
+
+    /// `selectable` drawing a state layer of `indication`, as `clickable_indicated`.
+    pub fn selectable_indicated(
+        self,
+        selected: bool,
+        enabled: bool,
+        role: Option<Role>,
+        indication: impl Into<Indication>,
+        on_click: impl IntoCallback<dyn Fn()>,
+    ) -> Modifier {
+        self.semantics(false, |config| config.selected = Some(selected))
+            .clickable_indicated(enabled, role, indication, on_click)
+    }
+
+    /// Groups selectable items (radio buttons) for accessibility, as
+    /// `Modifier.selectableGroup`.
+    pub fn selectable_group(self) -> Modifier {
+        self.semantics(false, |config| config.selectable_group = true)
+    }
+
+    /// A click, a double click and a long press, as `Modifier.combinedClickable`: with
+    /// `on_double_click`, a click waits for the double-click timeout (300 ms) before calling
+    /// `on_click`; with `on_long_click`, holding past the long-press timeout (400 ms) calls it
+    /// instead. Enter and Space click when focused.
+    pub fn combined_clickable(
+        self,
+        enabled: bool,
+        role: Option<Role>,
+        on_long_click: Option<Callback<dyn Fn()>>,
+        on_double_click: Option<Callback<dyn Fn()>>,
+        on_click: impl IntoCallback<dyn Fn()>,
+    ) -> Modifier {
+        self.combined_clickable_indicated(
+            enabled,
+            role,
+            Indication::NONE,
+            on_long_click,
+            on_double_click,
+            on_click,
+        )
+    }
+
+    /// `combined_clickable` drawing a state layer of `indication` while pressed, focused or
+    /// hovered, as `clickable_indicated`.
+    pub fn combined_clickable_indicated(
+        self,
+        enabled: bool,
+        role: Option<Role>,
+        indication: impl Into<Indication>,
+        on_long_click: Option<Callback<dyn Fn()>>,
+        on_double_click: Option<Callback<dyn Fn()>>,
+        on_click: impl IntoCallback<dyn Fn()>,
+    ) -> Modifier {
+        self.then_custom(crate::nodes::CombinedClickableElement {
+            clickable: Clickable {
+                enabled,
+                role,
+                indication: indication.into(),
+                interaction_source: None,
+                on_click: on_click.into_callback(),
+            },
+            on_long_click,
+            on_double_click,
+        })
+    }
+
+    /// Reports to `interaction_source` whether a mouse is over the element, as
+    /// `Modifier.hoverable`.
+    pub fn hoverable(
+        self,
+        interaction_source: crate::interaction::MutableInteractionSource,
+        enabled: bool,
+    ) -> Modifier {
+        self.then_custom(crate::nodes::HoverableElement { interaction_source, enabled })
     }
 
     /// Makes the element a focus target, as `Modifier.focusable`.
@@ -566,6 +676,8 @@ pub enum Element {
     OnKeyEvent(Callback<dyn Fn(KeyEvent) -> bool>),
     TestTag(SharedString),
     Semantics(bool, Rc<SemanticsConfiguration>),
+    /// `z_index`: the order among siblings, read from the elements as parent data.
+    ZIndex(f32),
     Custom(Rc<dyn ModifierNodeElement>),
 }
 
@@ -611,6 +723,7 @@ impl Element {
             (OnKeyEvent(a), OnKeyEvent(b)) => a.ptr_eq(b),
             (TestTag(a), TestTag(b)) => a.same(b),
             (Semantics(a, b), Semantics(c, d)) => a == c && (Rc::ptr_eq(b, d) || b == d),
+            (ZIndex(a), ZIndex(b)) => a == b,
             (Custom(a), Custom(b)) => Rc::ptr_eq(a, b) || ModifierNodeElement::same(&**a, &**b),
             _ => false,
         }
@@ -670,6 +783,7 @@ impl fmt::Debug for Element {
             OnKeyEvent(_) => formatter.write_str("on_key_event"),
             TestTag(tag) => write!(formatter, "test_tag({tag:?})"),
             Semantics(merge, _) => write!(formatter, "semantics(merge = {merge})"),
+            ZIndex(z_index) => write!(formatter, "z_index({z_index})"),
             Custom(element) => {
                 write!(formatter, "{}", crate::tree::short_type_name(element.name()))
             }
@@ -727,6 +841,13 @@ pub trait ModifierNode: Any {
     /// `Modifier.repaint_boundary`).
     fn is_repaint_boundary(&self) -> bool {
         false
+    }
+    /// Told where it is after each layout that moved or resized it, as
+    /// `GlobalPositionAwareModifierNode` (`on_globally_positioned`).
+    fn as_global_position_aware(
+        &mut self,
+    ) -> Option<&mut dyn crate::layout_callbacks::GlobalPositionAwareModifierNode> {
+        None
     }
     /// A text a `SelectionContainer` selects in.
     fn as_selectable(&mut self) -> Option<&mut dyn crate::text_selection::Selectable> {

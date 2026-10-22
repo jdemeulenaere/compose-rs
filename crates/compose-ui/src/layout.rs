@@ -32,6 +32,36 @@ pub trait MeasurePolicy: 'static {
     }
 }
 
+/// A closure measures as a policy, as a Kotlin lambda converts to the `MeasurePolicy` fun
+/// interface: `Layout!(modifier, measure_policy(|scope, measurables, constraints| …), …)`.
+impl<F> MeasurePolicy for F
+where
+    F: Fn(&mut MeasureScope<'_>, &[Measurable], Constraints) -> MeasureResult + 'static,
+{
+    fn measure(
+        &self,
+        scope: &mut MeasureScope<'_>,
+        measurables: &[Measurable],
+        constraints: Constraints,
+    ) -> MeasureResult {
+        self(scope, measurables, constraints)
+    }
+
+    fn debug_name(&self) -> &'static str {
+        "Layout"
+    }
+}
+
+/// `measure` as a policy for `Layout`, as Compose's `MeasurePolicy { measurables, constraints
+/// -> … }`: the closure's argument types are inferred. A new closure is a new policy (the node
+/// is measured again), as a Kotlin lambda capturing what changed; `remember` one that doesn't
+/// change.
+pub fn measure_policy(
+    measure: impl Fn(&mut MeasureScope<'_>, &[Measurable], Constraints) -> MeasureResult + 'static,
+) -> Rc<dyn MeasurePolicy> {
+    Rc::new(measure)
+}
+
 /// Something to measure: a child of the node being measured, or, for a layout modifier, the
 /// content it wraps (the rest of the chain and the node's own policy).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -149,7 +179,7 @@ impl MeasureScope<'_> {
         assert_eq!(measurable.layer, 0, "compose-ui: intrinsic widths are asked of children");
         let probe = Constraints::new(0, Constraints::INFINITY, 0, height);
         self.tree.node_mut(measurable.node).intrinsics_asked = true;
-        self.tree.measure_node(measurable.node, probe).width
+        self.probe(measurable, probe).width
     }
 
     /// The height `measurable` takes at `width` (fixed) with an unbounded height, as Compose's
@@ -164,7 +194,22 @@ impl MeasureScope<'_> {
         assert_eq!(measurable.layer, 0, "compose-ui: intrinsic heights are asked of children");
         let probe = Constraints::new(width, width, 0, Constraints::INFINITY);
         self.tree.node_mut(measurable.node).intrinsics_asked = true;
-        self.tree.measure_node(measurable.node, probe).height
+        self.probe(measurable, probe).height
+    }
+
+    /// Measures `measurable` with `probe` to ask its intrinsic size: layout callbacks don't
+    /// hear the sizes it measures (`on_size_changed`).
+    fn probe(&mut self, measurable: Measurable, probe: Constraints) -> IntSize {
+        self.tree.intrinsic_probes += 1;
+        let size = self.tree.measure_node(measurable.node, probe);
+        self.tree.intrinsic_probes -= 1;
+        size
+    }
+
+    /// Whether this measurement only asks an intrinsic size (`max_intrinsic_width` measuring
+    /// a child to ask): what it measures isn't the layout's.
+    pub fn is_intrinsic_probe(&self) -> bool {
+        self.tree.intrinsic_probes > 0
     }
 
     /// Places `placeable` at `x`, `y` in this node's coordinates, as `Placeable.place`.

@@ -330,6 +330,7 @@ fn foldable_layer(ops: &[DrawOp], start: usize) -> Option<usize> {
             DrawOp::Translate(_)
             | DrawOp::ClipRect(_)
             | DrawOp::ClipRoundRect(..)
+            | DrawOp::ClipPath { .. }
             | DrawOp::Transform { .. } => {}
             DrawOp::DrawRect(..)
             | DrawOp::DrawRoundRect(..)
@@ -659,6 +660,10 @@ fn write_op(op: &DrawOp, alpha: f32, resources: &mut Resources, out: &mut Writer
             out.f32(scale.1);
             out.paint(&faded_paint(paint));
         }
+        // TODO(android): clip to the path (a `CLIP_PATH` tag replayed with `Canvas.clipPath`);
+        // skipped for now, so what follows isn't clipped. (Gradients: `Paint::shader` isn't
+        // written either; `paint.color` is the gradient's average, D175.)
+        DrawOp::ClipPath { .. } => {}
     }
 }
 

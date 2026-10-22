@@ -35,6 +35,8 @@ impl ComposeArg for Role {
 pub enum SemanticsAction {
     /// Click it, as `SemanticsActions.OnClick`.
     OnClick,
+    /// Long-click it, as `SemanticsActions.OnLongClick` (`combined_clickable`).
+    OnLongClick,
     /// Focus it, as `SemanticsActions.RequestFocus`.
     RequestFocus,
     /// Set its progress to a value in its range (a slider's), as `SemanticsActions.SetProgress`.
@@ -83,6 +85,8 @@ pub struct SemanticsConfiguration {
     pub focused: bool,
     /// Whether the node has a click action (`clickable`, `toggleable`).
     pub clickable: bool,
+    /// Whether it has a long-click action (`combined_clickable` with `on_long_click`).
+    pub long_clickable: bool,
     /// Whether the node takes text input (a text field).
     pub editable: bool,
     /// Its text is a password, shown masked, as `password()`.
@@ -99,6 +103,8 @@ pub struct SemanticsConfiguration {
     /// own modifiers set them: a text field's inner text, which in Compose is one semantics
     /// node with its decoration box.
     pub part_of_parent: bool,
+    /// It groups selectable items (radio buttons), as `selectableGroup()`.
+    pub selectable_group: bool,
 }
 
 impl SemanticsConfiguration {
@@ -181,8 +187,10 @@ impl SemanticsConfiguration {
         self.focusable |= other.focusable;
         self.focused |= other.focused;
         self.clickable |= other.clickable;
+        self.long_clickable |= other.long_clickable;
         self.editable |= other.editable;
         self.password |= other.password;
+        self.selectable_group |= other.selectable_group;
     }
 
     /// All text, editable text first, joined by ", ": what text finders match.
@@ -235,6 +243,7 @@ impl fmt::Debug for SemanticsConfiguration {
         }
         for (flag, name) in [
             (self.clickable, "clickable"),
+            (self.long_clickable, "long_clickable"),
             (self.editable, "editable"),
             (self.password, "password"),
             (self.disabled, "disabled"),
@@ -244,6 +253,7 @@ impl fmt::Debug for SemanticsConfiguration {
             (self.part_of_parent, "part_of_parent"),
             (self.is_dialog, "dialog"),
             (self.clear_descendants, "cleared"),
+            (self.selectable_group, "selectable_group"),
         ] {
             if flag {
                 parts.push(name.to_string());

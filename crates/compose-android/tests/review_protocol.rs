@@ -364,8 +364,10 @@ fn a_scrolled_lazy_list_keeps_its_records_sound() {
             Modifier.size_wh(100.dp(), 100.dp()),
             given.clone(),
             compose_foundation::layout::PaddingValues::ZERO,
+            false,
             compose_foundation::layout::Arrangement::TOP,
-            compose_foundation::Alignment::TOP_START,
+            compose_foundation::Alignment::START,
+            true,
             callback(move |scope: compose_foundation::LazyListScope| {
                 scope.items(100, move |index| {
                     let color = if index % 3 == 0 { Color::RED } else { Color::BLUE };

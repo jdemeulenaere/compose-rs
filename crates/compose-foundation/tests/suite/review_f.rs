@@ -194,6 +194,7 @@ fn painted(list: &compose_ui::DisplayList) -> Vec<(compose_ui::Rect, compose_ui:
             DrawOp::DrawImage { dst, .. } => out.push((moved(dst, x, y), clip)),
             DrawOp::DrawLine(..)
             | DrawOp::Transform { .. }
+            | DrawOp::ClipPath { .. }
             | DrawOp::DrawPath { .. }
             | DrawOp::DrawShadow { .. }
             | DrawOp::DrawArc { .. } => {}

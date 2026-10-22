@@ -23,6 +23,8 @@ impl UiTree {
             }
         }
         self.window = size;
+        // A panic in a probe unwound past its count.
+        self.intrinsic_probes = 0;
         let root = self.root_id();
         let constraints = Constraints::fixed(size.width, size.height);
         let value = self.node(root);
@@ -36,6 +38,7 @@ impl UiTree {
         self.place(root, 0, IntOffset::ZERO);
         self.position_overlays();
         self.needs_draw = true;
+        self.laid_out_since_callbacks = true;
         true
     }
 
