@@ -166,6 +166,53 @@ fn one_slow_item_does_not_disable_prefetch_for_good() {
     assert!(prefetched > 0, "nothing prefetched in 10 idle times after one slow item");
 }
 
+/// Input: a list prefetching fast items, then one taking 40 ms (on a phone: a cold text
+/// layout, a little core), then an idle time of 20 ms.
+///
+/// An average (3/4 old + 1/4 new) says the next item takes about 10 ms, so it starts, and if
+/// it's as slow, it overruns the next frame by 20 ms (on the Pixel 8 Pro, about 1 % of the
+/// idle times ran more than 1.2 ms past the vsync, delaying the next frame). Items are no
+/// steadier than that: one taking 40 ms is evidence that the next may too. The idle time is
+/// left alone while the recent maximum (decaying) doesn't fit (D341).
+#[test]
+fn after_a_slow_item_an_idle_time_shorter_than_it_is_left_alone() {
+    let (mut ui, state) = list(0);
+    state.scroll_by(30.0);
+    ui.wait_for_idle();
+    ui.host().prefetch(later());
+    let last = last_composed();
+    SLOW.with(|slow| slow.set(Some(last + 1)));
+    state.scroll_by(20.0);
+    ui.wait_for_idle();
+    ui.host().prefetch(later());
+    assert_eq!(compositions(last + 1), 1, "the slow item, prefetched");
+    state.scroll_by(20.0);
+    ui.wait_for_idle();
+    let before = total_compositions();
+    ui.host().prefetch(Instant::now() + Duration::from_millis(20));
+    assert_eq!(total_compositions(), before, "an item started in 20 ms after one took 40");
+}
+
+/// Input: a list that scrolled, then an idle time of 0.2 ms, before any item was timed.
+///
+/// With nothing learned yet, the estimate is 0: any idle time fits. An item takes much longer
+/// than 0.2 ms on a phone, so it would overrun the next frame. A step starts only if it fits
+/// with a safety margin (0.5 ms) to spare (D341).
+#[test]
+fn an_idle_time_within_the_safety_margin_is_left_alone() {
+    let (mut ui, state) = list(0);
+    state.scroll_by(30.0);
+    ui.wait_for_idle();
+    let before = total_compositions();
+    ui.host().prefetch(Instant::now() + Duration::from_micros(200));
+    assert_eq!(total_compositions(), before);
+    // Given up until the next scroll, whose idle time does it.
+    state.scroll_by(1.0);
+    ui.wait_for_idle();
+    ui.host().prefetch(later());
+    assert!(total_compositions() > before);
+}
+
 /// A row of cells: a `LazyRow` of 30 x 20 cells in a 100 x 20 item.
 #[composable]
 fn Cells(row: usize) {

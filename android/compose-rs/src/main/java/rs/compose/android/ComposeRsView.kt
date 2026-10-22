@@ -389,12 +389,15 @@ class ComposeRsView(context: Context, private val app: String) : View(context) {
         // Until the next frame: a refresh interval after this one started.
         val refreshRate = display?.refreshRate?.coerceAtLeast(30f) ?: 60f
         val nextFrameNanos = frameTimeNanos + (1_000_000_000 / refreshRate).toLong()
+        // Recording stops a margin before it, as Rust's prefetch steps do: its estimate is an
+        // average, and a recording running past the vsync delays the frame (D341).
+        val recordDeadline = nextFrameNanos - RECORD_MARGIN_NANOS
         // Paragraphs the last idle time laid out but had no time to record go first: their item
         // is the next one shown.
-        var workLeft = measurer.recordLaidOut(nextFrameNanos)
+        var workLeft = measurer.recordLaidOut(recordDeadline)
         if (!workLeft) {
             val available = nextFrameNanos - System.nanoTime()
-            workLeft = available <= 0 || prefetchAndRecord(available, nextFrameNanos)
+            workLeft = available <= 0 || prefetchAndRecord(available, recordDeadline)
         }
         if (!workLeft) {
             prefetchScheduled = false
@@ -698,6 +701,9 @@ class ComposeRsView(context: Context, private val app: String) : View(context) {
     private companion object {
         const val SUPER_STATE = "rs.compose.android.super"
         const val COMPOSE_RS_STATE = "rs.compose.android.state"
+
+        /** What recording paragraphs while idle leaves before the next frame, as Rust's prefetch. */
+        const val RECORD_MARGIN_NANOS = 500_000L
     }
 }
 

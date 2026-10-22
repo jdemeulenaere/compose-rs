@@ -47,6 +47,10 @@ const KEY_WINDOW: usize = 100;
 /// direction.
 const PREFETCH_AHEAD: usize = 2;
 
+/// What a prefetch step leaves of the idle time beyond its estimate, at least: the estimate is
+/// a guess, and a step running past the deadline delays the next frame (D341).
+const PREFETCH_MARGIN_NANOS: u64 = 500_000;
+
 /// Where a lazy list is scrolled, as Compose's `LazyListState`: the first visible item and how
 /// far it is scrolled off. Reading them in composition recomposes on scrolls.
 ///
@@ -152,10 +156,40 @@ struct Prefetch {
     request: RefCell<Weak<LazyListPrefetch>>,
     /// An item composed ahead, to measure next.
     to_measure: Cell<Option<usize>>,
-    /// How long composing and measuring an item take, on average (nanoseconds): an idle time
-    /// too short for them is left alone, as Compose's.
-    compose_nanos: Cell<u64>,
-    measure_nanos: Cell<u64>,
+    /// How long composing and measuring an item take: an idle time too short for them is left
+    /// alone, as Compose's.
+    compose_cost: Cell<StepCost>,
+    measure_cost: Cell<StepCost>,
+}
+
+/// How long a prefetch step (composing an item, or measuring it) takes, in nanoseconds: a
+/// running average (3/4 old + 1/4 new, as Compose's prefetch averages) and the recent maximum,
+/// which loses an eighth with each step timed. A step is expected to take the larger: one item
+/// much slower than the average (a cold text layout, a little core) means the next may be too,
+/// and starting it on the average's word overruns the next frame (D341).
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
+struct StepCost {
+    average: u64,
+    peak: u64,
+}
+
+impl StepCost {
+    /// How long the next step is expected to take.
+    fn estimate(self) -> u64 {
+        self.average.max(self.peak)
+    }
+
+    /// With a step that took `nanos`.
+    fn timed(self, nanos: u64) -> StepCost {
+        let average = if self.average == 0 { nanos } else { self.average / 4 * 3 + nanos / 4 };
+        StepCost { average, peak: nanos.max(self.peak - self.peak / 8) }
+    }
+
+    /// Lowered by a quarter, after an idle time too short for it: one slow step (or a run of
+    /// short idle times) doesn't keep the list from prefetching for good.
+    fn lowered(self) -> StepCost {
+        StepCost { average: self.average / 4 * 3, peak: self.peak / 4 * 3 }
+    }
 }
 
 impl LazyListState {
@@ -1566,9 +1600,11 @@ impl PrefetchRequest for LazyListPrefetch {
         loop {
             // An item composed ahead is measured first.
             if let Some(index) = prefetch.to_measure.get() {
-                if !fits(scope, &prefetch.measure_nanos) {
+                if !fits(scope, &prefetch.measure_cost) {
                     return false;
                 }
+                let _section =
+                    compose_ui::platform::trace::section(c"compose-rs: prefetch measure");
                 let start = Instant::now();
                 let child = state.children.borrow().iter().position(|composed| *composed == index);
                 if let (Some(node), Some(child), Some(constraints)) =
@@ -1583,18 +1619,20 @@ impl PrefetchRequest for LazyListPrefetch {
                         }
                     }
                 }
-                average(&prefetch.measure_nanos, start);
+                time(&prefetch.measure_cost, start);
                 prefetch.to_measure.set(None);
                 continue;
             }
             let Some((range, ahead)) = prefetch.next(state.composed.get()) else { return false };
-            if !fits(scope, &prefetch.compose_nanos) {
+            if !fits(scope, &prefetch.compose_cost) {
                 return false;
             }
+            let section = compose_ui::platform::trace::section(c"compose-rs: prefetch compose");
             let began = Instant::now();
             state.composed.set(range);
             scope.recompose();
-            average(&prefetch.compose_nanos, began);
+            time(&prefetch.compose_cost, began);
+            drop(section);
             prefetch.to_measure.set(ahead);
         }
     }
@@ -1627,21 +1665,20 @@ impl Prefetch {
     }
 }
 
-/// Whether the time left exceeds `average`. If not, the average is lowered, so one slow item
-/// (a cold cache) doesn't keep the list from prefetching for good.
-fn fits(scope: &PrefetchRequestScope<'_>, average: &Cell<u64>) -> bool {
-    if scope.available_time_nanos() > average.get() {
+/// Whether the time left exceeds the step's estimate by `PREFETCH_MARGIN_NANOS`. If not, the
+/// estimate is lowered ([`StepCost::lowered`]).
+fn fits(scope: &PrefetchRequestScope<'_>, cost: &Cell<StepCost>) -> bool {
+    let estimate = cost.get().estimate();
+    if scope.available_time_nanos() > estimate.saturating_add(PREFETCH_MARGIN_NANOS) {
         return true;
     }
-    average.set(average.get() / 4 * 3);
+    cost.set(cost.get().lowered());
     false
 }
 
-/// Adds the time since `start` to the running `average`, as Compose's prefetch averages.
-fn average(average: &Cell<u64>, start: Instant) {
-    let new = start.elapsed().as_nanos() as u64;
-    let current = average.get();
-    average.set(if current == 0 { new } else { current / 4 * 3 + new / 4 });
+/// Adds the time since `start` to the step's cost.
+fn time(cost: &Cell<StepCost>, start: Instant) {
+    cost.set(cost.get().timed(start.elapsed().as_nanos() as u64));
 }
 
 /// The contiguous range of composed items (the children but a pinned one out of it).
@@ -1780,5 +1817,52 @@ impl PointerInputModifierNode for LazyScrollNode {
 
     fn on_cancel_pointer_input(&mut self) {
         self.drag.cancel();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::StepCost;
+
+    const MS: u64 = 1_000_000;
+
+    #[test]
+    fn a_step_is_expected_to_take_the_recent_maximum() {
+        let mut cost = StepCost::default();
+        assert_eq!(cost.estimate(), 0, "nothing timed yet");
+        for _ in 0..8 {
+            cost = cost.timed(2 * MS);
+        }
+        assert_eq!(cost.estimate(), 2 * MS);
+        cost = cost.timed(8 * MS);
+        // The average says 3.5 ms; the step that took 8 ms says the next may too.
+        assert_eq!(cost.average, 3_500_000);
+        assert_eq!(cost.estimate(), 8 * MS);
+    }
+
+    #[test]
+    fn the_maximum_fades_as_faster_steps_are_timed() {
+        let mut cost = StepCost::default().timed(2 * MS).timed(8 * MS);
+        let mut estimates = Vec::new();
+        for _ in 0..12 {
+            cost = cost.timed(2 * MS);
+            estimates.push(cost.estimate());
+        }
+        assert_eq!(estimates[0], 7 * MS, "an eighth less with each step");
+        assert!(estimates.windows(2).all(|pair| pair[1] <= pair[0]), "{estimates:?}");
+        assert!(estimates[11] < 3 * MS, "back near the steps' time: {estimates:?}");
+        assert!(estimates[11] >= 2 * MS, "never below the latest step: {estimates:?}");
+    }
+
+    #[test]
+    fn an_idle_time_too_short_lowers_both_by_a_quarter() {
+        let cost = StepCost::default().timed(4 * MS).timed(8 * MS).lowered();
+        assert_eq!(cost, StepCost { average: 3_750_000, peak: 6 * MS });
+        // Lowered enough times, it fits any idle time again.
+        let mut cost = cost;
+        for _ in 0..40 {
+            cost = cost.lowered();
+        }
+        assert!(cost.estimate() < 1_000);
     }
 }
