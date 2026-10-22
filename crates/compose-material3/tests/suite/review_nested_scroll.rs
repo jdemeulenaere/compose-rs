@@ -32,7 +32,7 @@ fn ThreeLevels() {
     MaterialTheme!({
         let behavior = TopAppBarDefaults::exit_until_collapsed_scroll_behavior();
         let outer = remember_scroll_state();
-        OUTER.with(|cell| *cell.borrow_mut() = Some(outer.clone()));
+        OUTER.with(|cell| *cell.borrow_mut() = Some(outer));
         let inner = remember_scroll_state();
         Scaffold!(
             modifier = Modifier.nested_scroll(behavior.nested_scroll_connection()),
@@ -44,12 +44,9 @@ fn ThreeLevels() {
                 );
             },
             move |padding: PaddingValues| {
-                let (outer, inner) = (outer.clone(), inner.clone());
                 Column!(
-                    modifier = Modifier
-                        .padding_values(padding)
-                        .fill_max_size()
-                        .vertical_scroll(outer.clone()),
+                    modifier =
+                        Modifier.padding_values(padding).fill_max_size().vertical_scroll(outer),
                     {
                         Spacer(Modifier.fill_max_width().height(400.dp()));
                         Column!(
@@ -57,7 +54,7 @@ fn ThreeLevels() {
                                 .fill_max_width()
                                 .height(200.dp())
                                 .test_tag("inner")
-                                .vertical_scroll(inner.clone()),
+                                .vertical_scroll(inner),
                             {
                                 for _ in 0..20 {
                                     Spacer(Modifier.fill_max_width().height(40.dp()));
@@ -95,7 +92,7 @@ fn a_bar_doesnt_expand_before_an_outer_scrolling_column_is_back_at_its_start() {
     wheel(&mut ui, 150.0, 300.0);
     wheel(&mut ui, 150.0, 300.0);
     assert_eq!(bounds(&mut ui, "bar").height(), 64.0);
-    let outer = OUTER.with(|cell| cell.borrow().clone().unwrap());
+    let outer = OUTER.with(|cell| (*cell.borrow()).unwrap());
     assert_eq!(outer.value(), 300);
     let inner = bounds(&mut ui, "inner");
     let y = (inner.top + inner.bottom) / 2.0;
@@ -108,7 +105,7 @@ fn a_bar_doesnt_expand_before_an_outer_scrolling_column_is_back_at_its_start() {
 #[composable]
 fn ScrollingSheet(state: SheetState) {
     MaterialTheme!({
-        ModalBottomSheet!(|| {}, sheet_state = state.clone(), {
+        ModalBottomSheet!(|| {}, sheet_state = state, {
             Column!(
                 modifier = Modifier.fill_max_width().vertical_scroll(remember_scroll_state()),
                 {
@@ -134,9 +131,8 @@ fn ScrollingSheet(state: SheetState) {
 #[test]
 fn a_sheet_dragged_through_its_content_settles_after_a_second_finger() {
     let state = SheetState::new(false, SheetValue::Hidden, |_| true, false);
-    let given = state.clone();
-    let mut ui =
-        ComposeTestRule::sized(IntSize::new(400, 600), move || ScrollingSheet(given.clone()));
+    let given = *state;
+    let mut ui = ComposeTestRule::sized(IntSize::new(400, 600), move || ScrollingSheet(given));
     ui.set_auto_advance(false);
     ui.advance_time_by(Duration::from_millis(600));
     assert_eq!(state.current_value(), SheetValue::PartiallyExpanded);
@@ -169,9 +165,8 @@ fn a_sheet_dragged_through_its_content_settles_after_a_second_finger() {
 #[test]
 fn a_sheet_dragged_through_its_content_settles_when_the_touch_is_cancelled() {
     let state = SheetState::new(false, SheetValue::Hidden, |_| true, false);
-    let given = state.clone();
-    let mut ui =
-        ComposeTestRule::sized(IntSize::new(400, 600), move || ScrollingSheet(given.clone()));
+    let given = *state;
+    let mut ui = ComposeTestRule::sized(IntSize::new(400, 600), move || ScrollingSheet(given));
     ui.set_auto_advance(false);
     ui.advance_time_by(Duration::from_millis(600));
     let first = |ui: &mut ComposeTestRule| bounds(ui, "first").top;

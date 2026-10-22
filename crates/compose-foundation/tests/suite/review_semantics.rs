@@ -84,7 +84,7 @@ fn passes_bounds_are_in_pixels_and_follow_scrolling() {
         Box::new(FixedTextMeasurer::new()),
         || {
             let state = remember_scroll_state();
-            STATE.with(|cell| *cell.borrow_mut() = Some(state.clone()));
+            STATE.with(|cell| *cell.borrow_mut() = Some(state));
             Column!(modifier = Modifier.height(50.dp()).vertical_scroll(state), {
                 Box!(
                     modifier =

@@ -69,7 +69,7 @@ pub fn TooltipArea(
         })
     };
     let on_hover = {
-        let (cursor, scope, waiting) = (cursor.clone(), scope.clone(), waiting.clone());
+        let (cursor, scope, waiting) = (cursor.clone(), scope, waiting.clone());
         compose_runtime::callback(move |kind: HoverKind, position: Offset| {
             cancel(&waiting);
             match kind {

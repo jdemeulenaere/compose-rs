@@ -2,6 +2,7 @@
 //! the start over the content, behind a scrim, with `ModalDrawerSheet` and
 //! `NavigationDrawerItem`.
 
+use compose_runtime::{ObjectHandle, Owned};
 use std::rc::Rc;
 
 use compose_animation::{Animatable, tween};
@@ -49,35 +50,56 @@ struct DrawerInner {
     shown: OwnedState<bool>,
 }
 
+impl DrawerInner {
+    /// At `value`: settled there, its sheet composed only while open.
+    fn settle(&self, value: DrawerValue) {
+        self.target.set(value);
+        self.current.set(value);
+        self.shown.set(value == DrawerValue::Open);
+    }
+}
+
 /// A drawer's state, as Compose's `DrawerState`: open or closed, animated by `open` and
 /// `close`.
-#[derive(Clone)]
+///
+/// A `Copy` handle (D240): [`new`](Self::new) returns its owner, and
+/// [`remember_drawer_state`] keeps that in the composition.
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct DrawerState {
-    inner: Rc<DrawerInner>,
+    object: ObjectHandle<DrawerInner>,
 }
 
 impl DrawerState {
-    pub fn new(initial_value: DrawerValue) -> DrawerState {
+    /// Its object, or `None` once its owner went (D240): then it does nothing, its reads
+    /// giving the defaults.
+    #[track_caller]
+    fn inner(&self) -> Option<Rc<DrawerInner>> {
+        self.object.get()
+    }
+
+    #[track_caller]
+    pub fn new(initial_value: DrawerValue) -> Owned<DrawerState> {
         let open = initial_value == DrawerValue::Open;
-        DrawerState {
-            inner: Rc::new(DrawerInner {
+        Owned::new(
+            DrawerInner {
                 open: Animatable::new(if open { 1.0 } else { 0.0 }),
                 target: mutable_state_of(initial_value),
                 current: mutable_state_of(initial_value),
                 shown: mutable_state_of(open),
-            }),
-        }
+            },
+            |object| DrawerState { object },
+        )
     }
 
     /// Where it is or is going, as `targetValue` (a state read).
     pub fn target_value(&self) -> DrawerValue {
-        self.inner.target.get()
+        self.inner().map_or(DrawerValue::Closed, |inner| inner.target.get())
     }
 
     /// Where it last settled, as `currentValue` (a state read): closed while it opens, open
     /// while it closes.
     pub fn current_value(&self) -> DrawerValue {
-        self.inner.current.get()
+        self.inner().map_or(DrawerValue::Closed, |inner| inner.current.get())
     }
 
     pub fn is_open(&self) -> bool {
@@ -101,46 +123,43 @@ impl DrawerState {
     /// Opens or closes it at once, as `snapTo`.
     pub fn snap_to(&self, value: DrawerValue) {
         let open = value == DrawerValue::Open;
-        self.inner.open.snap_to(if open { 1.0 } else { 0.0 });
-        self.settle(value);
+        let Some(inner) = self.inner() else { return };
+        inner.open.snap_to(if open { 1.0 } else { 0.0 });
+        inner.settle(value);
     }
 
     async fn animate_to(&self, value: DrawerValue) {
         let open = value == DrawerValue::Open;
-        self.inner.target.set(value);
-        self.inner.shown.set(true);
+        // Kept across the animation: it ends even if the drawer's owner went meanwhile.
+        let Some(inner) = self.inner() else { return };
+        inner.target.set(value);
+        inner.shown.set(true);
         let result =
-            self.inner.open.animate_to(if open { 1.0 } else { 0.0 }, tween(ANIMATION_MILLIS)).await;
+            inner.open.animate_to(if open { 1.0 } else { 0.0 }, tween(ANIMATION_MILLIS)).await;
         if result.end_reason == compose_animation::AnimationEndReason::Finished {
-            self.settle(value);
+            inner.settle(value);
         }
-    }
-
-    /// At `value`: settled there, its sheet composed only while open.
-    fn settle(&self, value: DrawerValue) {
-        self.inner.target.set(value);
-        self.inner.current.set(value);
-        self.inner.shown.set(value == DrawerValue::Open);
     }
 
     /// Dragged by `delta` pixels of a sheet `width` wide (positive towards open).
     fn drag_by(&self, delta: f32, width: f32) {
+        let Some(inner) = self.inner() else { return };
         let fraction = (self.fraction() + delta / width.max(1.0)).clamp(0.0, 1.0);
-        self.inner.open.snap_to(fraction);
-        if fraction > 0.0 && !self.inner.shown.get() {
-            self.inner.shown.set(true);
+        inner.open.snap_to(fraction);
+        if fraction > 0.0 && !inner.shown.get() {
+            inner.shown.set(true);
         }
     }
 
     /// How far open it is, 0 to 1 (a state read).
     fn fraction(&self) -> f32 {
-        self.inner.open.value().clamp(0.0, 1.0)
+        self.inner().map_or(0.0, |inner| inner.open.value().clamp(0.0, 1.0))
     }
 }
 
 impl ComposeArg for DrawerState {
     fn same(&self, other: &Self) -> bool {
-        Rc::ptr_eq(&self.inner, &other.inner)
+        self == other
     }
 }
 
@@ -180,7 +199,8 @@ impl DrawerDefaults {
 /// `content` with a drawer over it, as Compose's `ModalNavigationDrawer`, filling the space it's
 /// given: while it's open (or sliding), `drawer_content` slides in from the start edge over a
 /// scrim. With `gestures_enabled`, a click on the scrim closes it, and a drag across the drawer
-/// opens or closes it (settling by how far it went, or by the release's speed).
+/// opens or closes it (settling by how far it went, or by the release's speed). Back (Android's
+/// back, Escape on desktop) closes it while it's open.
 #[composable]
 #[allow(non_snake_case)]
 pub fn ModalNavigationDrawer(
@@ -192,30 +212,29 @@ pub fn ModalNavigationDrawer(
     content: impl Fn() + 'static,
 ) {
     let scope = remember_coroutine_scope();
-    let shown = drawer_state.inner.shown.get();
+    let shown = drawer_state.inner().is_some_and(|inner| inner.shown.get());
     let rtl = compose_ui::LOCAL_LAYOUT_DIRECTION.current() == LayoutDirection::Rtl;
     let density = compose_ui::LOCAL_DENSITY.current();
     // The width the sheet was last laid out at: a drag moves it by fractions of it.
     let width = remember(|| Rc::new(std::cell::Cell::new(DrawerDefaults::MAXIMUM_DRAWER_WIDTH.0)));
     let policy = {
-        let (state, width) = (drawer_state.clone(), width.clone());
-        compose_runtime::remember_keyed(drawer_state.clone(), || {
+        let (state, width) = (drawer_state, width.clone());
+        compose_runtime::remember_keyed(drawer_state, || {
             Rc::new(DrawerLayout { state, width }) as Rc<dyn MeasurePolicy>
         })
     };
     // A drag across the drawer moves the sheet; let go, it settles open or closed, as
     // Compose's `anchoredDraggable` on the drawer's box.
     let drag = {
-        let (dragged, width) = (drawer_state.clone(), width.clone());
-        compose_runtime::remember_keyed(drawer_state.clone(), move || {
+        let (dragged, width) = (drawer_state, width.clone());
+        compose_runtime::remember_keyed(drawer_state, move || {
             DraggableState::new(move |delta| dragged.drag_by(delta, width.get()))
         })
     };
     let threshold = density.to_px(VELOCITY_THRESHOLD);
     let settle = {
-        let (state, scope) = (drawer_state.clone(), scope.clone());
+        let state = drawer_state;
         move |velocity: f32| {
-            let state = state.clone();
             scope.launch(async move {
                 let open = if velocity > threshold {
                     true
@@ -236,7 +255,7 @@ pub fn ModalNavigationDrawer(
         |_| {},
         settle,
     );
-    let (state, close_scope) = (drawer_state.clone(), scope.clone());
+    let state = drawer_state;
     Layout(
         modifier,
         policy,
@@ -251,14 +270,10 @@ pub fn ModalNavigationDrawer(
             );
             if shown {
                 // The scrim, its alpha following the drawer (read while drawing).
-                let fraction = state.clone();
-                let close = {
-                    let (state, scope) = (state.clone(), close_scope.clone());
-                    compose_runtime::callback(move || {
-                        let state = state.clone();
-                        scope.launch(async move { state.close().await });
-                    })
-                };
+                let fraction = state;
+                let close = compose_runtime::callback(move || {
+                    scope.launch(async move { state.close().await });
+                });
                 Box(
                     Modifier
                         .fill_max_size()
@@ -277,6 +292,15 @@ pub fn ModalNavigationDrawer(
                     Alignment::TOP_START,
                     false,
                     compose_runtime::callback(|_| {}),
+                );
+                // Back closes it while it's open, as Compose's `DrawerPredictiveBackHandler`:
+                // registered after the content's handlers (so it goes before them) and before
+                // the sheet's (which go before it).
+                compose_ui::BackHandler(
+                    state.is_open(),
+                    compose_runtime::callback(move || {
+                        scope.launch(async move { state.close().await });
+                    }),
                 );
                 let drawer_content = drawer_content.clone();
                 Box(

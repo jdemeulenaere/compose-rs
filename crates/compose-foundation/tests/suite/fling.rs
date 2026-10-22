@@ -34,7 +34,7 @@ fn list(state: LazyListState, clicks: Rc<Cell<u32>>) -> impl Fn() {
         let clicks = clicks.clone();
         LazyColumn!(
             modifier = Modifier.fill_max_size(),
-            state = state.clone(),
+            state = state,
             move |scope: LazyListScope| {
                 let clicks = clicks.clone();
                 scope.items(1000, move |index| {
@@ -57,8 +57,7 @@ fn list(state: LazyListState, clicks: Rc<Cell<u32>>) -> impl Fn() {
 fn a_touch_let_go_while_moving_flings_the_list() {
     let state = LazyListState::new(0, 0);
     let clicks = Rc::new(Cell::new(0));
-    let mut ui =
-        ComposeTestRule::sized(IntSize::new(300, 500), list(state.clone(), clicks.clone()));
+    let mut ui = ComposeTestRule::sized(IntSize::new(300, 500), list(*state, clicks.clone()));
     ui.set_auto_advance(false);
     swipe_up(&mut ui, 100.0);
     ui.advance_time_by_frame();
@@ -76,8 +75,7 @@ fn a_touch_let_go_while_moving_flings_the_list() {
 fn a_press_during_a_fling_stops_it_without_clicking() {
     let state = LazyListState::new(0, 0);
     let clicks = Rc::new(Cell::new(0));
-    let mut ui =
-        ComposeTestRule::sized(IntSize::new(300, 500), list(state.clone(), clicks.clone()));
+    let mut ui = ComposeTestRule::sized(IntSize::new(300, 500), list(*state, clicks.clone()));
     ui.set_auto_advance(false);
     swipe_up(&mut ui, 100.0);
     ui.advance_time_by(Duration::from_millis(100));

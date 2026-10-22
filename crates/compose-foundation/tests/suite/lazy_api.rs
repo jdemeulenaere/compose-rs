@@ -150,9 +150,9 @@ fn Numbers(reverse: bool, arrangement: Arrangement, count: usize, state: LazyLis
 #[test]
 fn a_reversed_list_starts_at_the_bottom_and_scrolls_up() {
     let state = LazyListState::new(0, 0);
-    let given = state.clone();
+    let given = *state;
     let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || {
-        Numbers(true, Arrangement::TOP, 10, given.clone())
+        Numbers(true, Arrangement::TOP, 10, given)
     });
     assert_eq!(top_of(&mut ui, "0"), 70.0);
     assert_eq!(top_of(&mut ui, "1"), 40.0);
@@ -183,13 +183,13 @@ fn a_reversed_list_starts_at_the_bottom_and_scrolls_up() {
 #[test]
 fn a_short_reversed_list_is_arranged_from_the_top_in_reverse_order() {
     let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), || {
-        Numbers(true, Arrangement::TOP, 2, LazyListState::new(0, 0))
+        Numbers(true, Arrangement::TOP, 2, remember(|| LazyListState::new(0, 0)))
     });
     // As Compose's: (top) 1 0 … (bottom).
     assert_eq!(top_of(&mut ui, "1"), 0.0);
     assert_eq!(top_of(&mut ui, "0"), 30.0);
     let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), || {
-        Numbers(true, Arrangement::BOTTOM, 2, LazyListState::new(0, 0))
+        Numbers(true, Arrangement::BOTTOM, 2, remember(|| LazyListState::new(0, 0)))
     });
     assert_eq!(top_of(&mut ui, "0"), 70.0);
     assert_eq!(top_of(&mut ui, "1"), 40.0);
@@ -198,11 +198,11 @@ fn a_short_reversed_list_is_arranged_from_the_top_in_reverse_order() {
 #[test]
 fn a_reversed_list_brings_a_focused_item_into_view() {
     let state = LazyListState::new(0, 0);
-    let given = state.clone();
+    let given = *state;
     let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || {
         LazyColumn!(
             modifier = Modifier.size_wh(100.dp(), 100.dp()),
-            state = given.clone(),
+            state = given,
             reverse_layout = true,
             |scope: LazyListScope| {
                 scope.items(10, |index| {
@@ -225,11 +225,11 @@ fn a_reversed_list_brings_a_focused_item_into_view() {
 #[test]
 fn a_list_with_user_scrolling_disabled_ignores_the_wheel_but_not_its_state() {
     let state = LazyListState::new(0, 0);
-    let given = state.clone();
+    let given = *state;
     let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || {
         LazyColumn!(
             modifier = Modifier.size_wh(100.dp(), 100.dp()),
-            state = given.clone(),
+            state = given,
             user_scroll_enabled = false,
             |scope: LazyListScope| {
                 scope.items(10, |index| {
@@ -279,8 +279,8 @@ fn Sections(state: LazyListState) {
 #[test]
 fn a_sticky_header_stays_at_the_top_until_the_next_one_pushes_it_out() {
     let state = LazyListState::new(0, 0);
-    let given = state.clone();
-    let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || Sections(given.clone()));
+    let given = *state;
+    let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || Sections(given));
     assert_eq!(top_of(&mut ui, "A"), 0.0);
     // Scrolled into section A's items: its header stays at the top, over them.
     state.scroll_to_item(5, 10);
@@ -303,8 +303,8 @@ fn a_sticky_header_stays_at_the_top_until_the_next_one_pushes_it_out() {
 #[test]
 fn a_sticky_header_far_behind_is_composed_and_drawn_over_the_items() {
     let state = LazyListState::new(9, 0);
-    let given = state.clone();
-    let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || Sections(given.clone()));
+    let given = *state;
+    let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || Sections(given));
     assert_eq!(top_of(&mut ui, "A"), 0.0);
     // Placed last: it draws over the items.
     let display = ui.dump_display_list();

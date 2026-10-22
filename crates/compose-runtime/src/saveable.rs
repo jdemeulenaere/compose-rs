@@ -25,7 +25,7 @@ use crate::local::CompositionLocal;
 use crate::remember::{Remember, RememberObserver, remember_observer};
 use crate::runtime::with_runtime;
 use crate::slot_table::{GroupKind, NONE};
-use crate::state::{OwnedState, mutable_state_of};
+use crate::state::{Owned, OwnedState, mutable_state_of};
 
 /// A saved value: what a platform's saved state (an Android `Bundle`) can hold.
 #[derive(Clone, PartialEq, Debug)]
@@ -551,20 +551,21 @@ pub fn current_composite_key_hash() -> u64 {
     })
 }
 
-/// What `remember_saveable` can remember: a `Clone` value (saved as itself) or an
-/// `OwnedState<V>` (its value saved, as Compose's `mutableStateSaver`), as [`Remember`] makes
-/// them.
+/// What `remember_saveable` can remember: a `Clone` value (saved as itself), an
+/// `OwnedState<V>` (its value saved, as Compose's `mutableStateSaver`) or an `Owned<H>` (a state
+/// holder, saved by its saver), as [`Remember`] makes them.
 pub trait RememberSaveable: Remember {
     /// What the saver converts.
     type Value: 'static;
-    fn value(stored: &Self::Stored) -> Self::Value;
+    /// Calls `save` with the value `stored` holds.
+    fn with_value<R>(stored: &Self::Stored, save: impl FnOnce(&Self::Value) -> R) -> R;
     fn from_value(value: Self::Value) -> Self;
 }
 
 impl<T: Clone + 'static> RememberSaveable for T {
     type Value = T;
-    fn value(stored: &T) -> T {
-        stored.clone()
+    fn with_value<R>(stored: &T, save: impl FnOnce(&T) -> R) -> R {
+        save(stored)
     }
     fn from_value(value: T) -> T {
         value
@@ -573,11 +574,21 @@ impl<T: Clone + 'static> RememberSaveable for T {
 
 impl<V: Clone + PartialEq + 'static> RememberSaveable for OwnedState<V> {
     type Value = V;
-    fn value(stored: &OwnedState<V>) -> V {
-        stored.handle().get()
+    fn with_value<R>(stored: &OwnedState<V>, save: impl FnOnce(&V) -> R) -> R {
+        save(&stored.handle().get())
     }
     fn from_value(value: V) -> OwnedState<V> {
         mutable_state_of(value)
+    }
+}
+
+impl<H: Copy + 'static> RememberSaveable for Owned<H> {
+    type Value = Owned<H>;
+    fn with_value<R>(stored: &Owned<H>, save: impl FnOnce(&Owned<H>) -> R) -> R {
+        save(stored)
+    }
+    fn from_value(value: Owned<H>) -> Owned<H> {
+        value
     }
 }
 
@@ -640,7 +651,8 @@ pub fn remember_saveable_with<T: RememberSaveable>(
         let stored = Rc::new(value.into_stored());
         let registration = registry.map(|registry| {
             let stored = stored.clone();
-            let provider: Provider = Rc::new(move || saver.save(&T::value(&stored)));
+            let provider: Provider =
+                Rc::new(move || T::with_value(&stored, |value| saver.save(value)));
             (registry, key, provider)
         });
         SaveableHolder { stored, registration, entry: RefCell::new(None) }

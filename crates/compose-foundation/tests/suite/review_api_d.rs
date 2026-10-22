@@ -230,9 +230,8 @@ fn ReversedSections(state: LazyListState) {
 #[test]
 fn a_sticky_header_of_a_reversed_list_sticks_to_the_bottom() {
     let state = LazyListState::new(0, 0);
-    let given = state.clone();
-    let mut ui =
-        ComposeTestRule::sized(IntSize::new(200, 200), move || ReversedSections(given.clone()));
+    let given = *state;
+    let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || ReversedSections(given));
     assert_eq!(bounds(&mut ui, "A").bottom, 100.0);
     state.scroll_to_item(5, 10);
     ui.wait_for_idle();
@@ -249,11 +248,11 @@ fn a_sticky_header_of_a_reversed_list_sticks_to_the_bottom() {
 #[test]
 fn a_sticky_header_survives_prefetch_between_frames() {
     let state = LazyListState::new(0, 0);
-    let given = state.clone();
+    let given = *state;
     let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || {
         LazyColumn!(
             modifier = Modifier.size_wh(100.dp(), 100.dp()),
-            state = given.clone(),
+            state = given,
             |scope: LazyListScope| {
                 scope.sticky_header(|_| {
                     Box!(modifier = Modifier.size_wh(100.dp(), 20.dp()).test_tag("header"));

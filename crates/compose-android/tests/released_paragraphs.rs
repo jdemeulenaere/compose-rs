@@ -265,11 +265,11 @@ fn a_removed_item_takes_its_paragraphs_out_of_every_kept_group() {
 #[test]
 fn a_scrolled_lazy_list_with_prefetch_draws_only_live_paragraphs() {
     let state = LazyListState::new(0, 0);
-    let given = state.clone();
+    let given = *state;
     let mut checked = Checked::new(move || {
         LazyColumn!(
             modifier = Modifier.size_wh(160.dp(), 200.dp()),
-            state = given.clone(),
+            state = given,
             |scope: LazyListScope| {
                 scope.items(300, |index| {
                     Column!({

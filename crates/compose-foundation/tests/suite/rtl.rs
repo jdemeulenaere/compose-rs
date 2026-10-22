@@ -96,9 +96,9 @@ fn a_provided_direction_lays_out_its_content() {
 fn a_horizontal_scroll_starts_at_the_right_and_scrolls_the_other_way() {
     use compose_ui::{Offset, PointerEvent};
     let state = ScrollState::new(0);
-    let given = state.clone();
+    let given = *state;
     let mut ui = rtl(move || {
-        Row!(modifier = Modifier.width(100.dp()).horizontal_scroll(given.clone()), {
+        Row!(modifier = Modifier.width(100.dp()).horizontal_scroll(given), {
             for index in 0..5 {
                 Box!(modifier = Modifier.size(50.dp()).test_tag(format!("{index}")));
             }

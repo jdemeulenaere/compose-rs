@@ -1,6 +1,7 @@
 //! The compose-runtime integration tests in one binary, each file a module, so
 //! they build and link once (docs/08-fast-builds.md).
 
+mod holders;
 mod model;
 mod review2;
 mod review3;

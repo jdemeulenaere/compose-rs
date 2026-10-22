@@ -60,12 +60,12 @@ fn the_first_visible_item_is_kept_by_key_when_items_are_inserted_before_it() {
     let keys = mutable_state_of((0..100u32).collect::<Vec<_>>());
     let handle = keys.handle();
     let state = LazyListState::new(10, 0);
-    let given = state.clone();
+    let given = *state;
     let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || {
         let keys = std::rc::Rc::new(handle.get());
         LazyColumn!(
             modifier = Modifier.size_wh(100.dp(), 100.dp()),
-            state = given.clone(),
+            state = given,
             |scope: LazyListScope| {
                 let (by_index, labels) = (keys.clone(), keys.clone());
                 scope.items_keyed(
@@ -131,11 +131,11 @@ fn the_arrangement_places_items_that_do_not_fill_the_list() {
 #[test]
 fn scrolling_back_past_the_composed_items_moves_by_the_distance_asked() {
     let state = LazyListState::new(100, 0);
-    let given = state.clone();
+    let given = *state;
     let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || {
         LazyColumn!(
             modifier = Modifier.size_wh(100.dp(), 100.dp()),
-            state = given.clone(),
+            state = given,
             |scope: LazyListScope| {
                 scope.items(1000, |index| {
                     let height = if index % 4 == 0 { 50 } else { 10 };
@@ -170,8 +170,8 @@ fn scrolling_back_past_the_composed_items_moves_by_the_distance_asked() {
 #[test]
 fn sub_pixel_wheel_deltas_add_up() {
     let state = LazyListState::new(0, 0);
-    let given = state.clone();
-    let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || Rows(given.clone(), 1000));
+    let given = *state;
+    let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || Rows(given, 1000));
     for _ in 0..10 {
         ui.host()
             .send_pointer(PointerEvent::scroll(Offset::new(50.0, 50.0), Offset::new(0.0, 0.4)));
@@ -191,9 +191,9 @@ fn sub_pixel_wheel_deltas_add_up() {
 #[test]
 fn a_slow_drag_scrolls() {
     let state = ScrollState::new(0);
-    let given = state.clone();
+    let given = *state;
     let mut ui = ComposeTestRule::sized(IntSize::new(100, 100), move || {
-        Column!(modifier = Modifier.size_wh(100.dp(), 100.dp()).vertical_scroll(given.clone()), {
+        Column!(modifier = Modifier.size_wh(100.dp(), 100.dp()).vertical_scroll(given), {
             Spacer(Modifier.size_wh(100.dp(), 300.dp()));
         });
     });
@@ -221,16 +221,12 @@ fn a_slow_drag_scrolls() {
 fn a_drag_in_a_nested_lazy_list_scrolls_only_the_list() {
     let outer = ScrollState::new(0);
     let state = LazyListState::new(0, 0);
-    let (given_outer, given) = (outer.clone(), state.clone());
+    let (given_outer, given) = (*outer, *state);
     let mut ui = ComposeTestRule::sized(IntSize::new(100, 100), move || {
-        let given = given.clone();
-        Column!(
-            modifier = Modifier.size_wh(100.dp(), 100.dp()).vertical_scroll(given_outer.clone()),
-            {
-                Rows(given.clone(), 1000);
-                Spacer(Modifier.size_wh(100.dp(), 200.dp()));
-            }
-        );
+        Column!(modifier = Modifier.size_wh(100.dp(), 100.dp()).vertical_scroll(given_outer), {
+            Rows(given, 1000);
+            Spacer(Modifier.size_wh(100.dp(), 200.dp()));
+        });
     });
     let host = ui.host();
     host.send_pointer(PointerEvent::press(Offset::new(50.0, 90.0)));
@@ -273,8 +269,8 @@ fn scrolling_does_not_recompose_the_caller_of_the_list() {
         );
     }
     let state = LazyListState::new(0, 0);
-    let given = state.clone();
-    let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || Screen(given.clone()));
+    let given = *state;
+    let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || Screen(given));
     take_count();
     state.scroll_by(60.0);
     ui.wait_for_idle();
@@ -296,11 +292,11 @@ fn scrolling_does_not_recompose_the_caller_of_the_list() {
 #[test]
 fn scrolling_one_row_composes_only_the_rows_coming_into_range() {
     let state = LazyListState::new(0, 0);
-    let given = state.clone();
+    let given = *state;
     let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || {
         LazyColumn!(
             modifier = Modifier.size_wh(100.dp(), 100.dp()),
-            state = given.clone(),
+            state = given,
             |scope: LazyListScope| {
                 scope.items(1000, |index| {
                     count();
@@ -333,11 +329,11 @@ fn scrolling_one_row_composes_only_the_rows_coming_into_range() {
 #[test]
 fn a_jump_fills_the_viewport_in_one_frame() {
     let state = LazyListState::new(0, 0);
-    let given = state.clone();
+    let given = *state;
     let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || {
         LazyColumn!(
             modifier = Modifier.size_wh(100.dp(), 100.dp()),
-            state = given.clone(),
+            state = given,
             |scope: LazyListScope| {
                 scope.items(1000, |index| {
                     let height = if index < 10 { 100 } else { 2 };
@@ -399,13 +395,13 @@ fn tab_moves_focus_past_the_rows_in_view() {
 #[test]
 fn a_focused_item_scrolled_out_of_view_keeps_focus() {
     let state = LazyListState::new(0, 0);
-    let given = state.clone();
+    let given = *state;
     let text = mutable_state_of(String::new());
     let handle = text.handle();
     let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || {
         LazyColumn!(
             modifier = Modifier.size_wh(100.dp(), 100.dp()),
-            state = given.clone(),
+            state = given,
             |scope: LazyListScope| {
                 scope.item(move || {
                     BasicTextField!(
@@ -441,8 +437,8 @@ fn a_focused_item_scrolled_out_of_view_keeps_focus() {
 #[test]
 fn a_frame_that_composes_in_its_relayout_loop_reports_it_recomposed() {
     let state = LazyListState::new(0, 0);
-    let given = state.clone();
-    let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || Rows(given.clone(), 1000));
+    let given = *state;
+    let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || Rows(given, 1000));
     ui.host().send_pointer(PointerEvent::scroll(Offset::new(50.0, 50.0), Offset::new(0.0, 200.0)));
     let stats = ui.host().frame();
     assert_eq!(state.first_visible_item_index(), 10);
@@ -459,8 +455,8 @@ fn a_frame_that_composes_in_its_relayout_loop_reports_it_recomposed() {
 #[test]
 fn a_drag_scrolls_by_what_it_moved_past_the_slop() {
     let state = LazyListState::new(0, 0);
-    let given = state.clone();
-    let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || Rows(given.clone(), 1000));
+    let given = *state;
+    let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || Rows(given, 1000));
     let host = ui.host();
     host.send_pointer(PointerEvent::press(Offset::new(50.0, 90.0)));
     for y in [80.0, 70.0, 60.0, 50.0, 40.0] {
@@ -486,16 +482,12 @@ fn a_drag_scrolls_by_what_it_moved_past_the_slop() {
 fn the_wheel_delta_a_nested_lazy_list_leaves_scrolls_its_parent() {
     let outer = ScrollState::new(0);
     let state = LazyListState::new(0, 0);
-    let (given_outer, given) = (outer.clone(), state.clone());
+    let (given_outer, given) = (*outer, *state);
     let mut ui = ComposeTestRule::sized(IntSize::new(100, 100), move || {
-        let given = given.clone();
-        Column!(
-            modifier = Modifier.size_wh(100.dp(), 100.dp()).vertical_scroll(given_outer.clone()),
-            {
-                Rows(given.clone(), 6);
-                Spacer(Modifier.size_wh(100.dp(), 200.dp()));
-            }
-        );
+        Column!(modifier = Modifier.size_wh(100.dp(), 100.dp()).vertical_scroll(given_outer), {
+            Rows(given, 6);
+            Spacer(Modifier.size_wh(100.dp(), 200.dp()));
+        });
     });
     ui.host().send_pointer(PointerEvent::scroll(Offset::new(50.0, 50.0), Offset::new(0.0, 100.0)));
     ui.wait_for_idle();
@@ -516,8 +508,8 @@ fn the_wheel_delta_a_nested_lazy_list_leaves_scrolls_its_parent() {
 #[test]
 fn a_scroll_frame_leaves_no_pending_work() {
     let state = LazyListState::new(0, 0);
-    let given = state.clone();
-    let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || Rows(given.clone(), 1000));
+    let given = *state;
+    let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || Rows(given, 1000));
     ui.host().send_pointer(PointerEvent::scroll(Offset::new(50.0, 50.0), Offset::new(0.0, 5.0)));
     ui.host().frame();
     assert_eq!(state.first_visible_item_scroll_offset(), 5);

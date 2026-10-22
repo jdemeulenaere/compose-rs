@@ -34,9 +34,9 @@ fn left(ui: &mut ComposeTestRule, tag: &str) -> f32 {
 #[test]
 fn focusing_a_box_beyond_the_left_of_a_right_to_left_scroll_brings_it_into_view() {
     let state = ScrollState::new(0);
-    let given = state.clone();
+    let given = *state;
     let mut ui = rtl(move || {
-        Row!(modifier = Modifier.width(100.dp()).horizontal_scroll(given.clone()), {
+        Row!(modifier = Modifier.width(100.dp()).horizontal_scroll(given), {
             for index in 0..5 {
                 Box!(
                     modifier = Modifier.size(50.dp()).clickable(|| {}).test_tag(format!("{index}"))
@@ -56,9 +56,9 @@ fn focusing_a_box_beyond_the_left_of_a_right_to_left_scroll_brings_it_into_view(
 #[test]
 fn passes_focusing_a_box_beyond_the_right_of_a_left_to_right_scroll_brings_it_into_view() {
     let state = ScrollState::new(0);
-    let given = state.clone();
+    let given = *state;
     let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || {
-        Row!(modifier = Modifier.width(100.dp()).horizontal_scroll(given.clone()), {
+        Row!(modifier = Modifier.width(100.dp()).horizontal_scroll(given), {
             for index in 0..5 {
                 Box!(
                     modifier = Modifier.size(50.dp()).clickable(|| {}).test_tag(format!("{index}"))
@@ -84,11 +84,11 @@ fn passes_focusing_a_box_beyond_the_right_of_a_left_to_right_scroll_brings_it_in
 #[test]
 fn focusing_an_item_past_the_left_of_a_right_to_left_lazy_row_brings_it_into_view() {
     let state = LazyListState::new(0, 0);
-    let given = state.clone();
+    let given = *state;
     let mut ui = rtl(move || {
         LazyRow!(
             modifier = Modifier.size_wh(100.dp(), 30.dp()),
-            state = given.clone(),
+            state = given,
             |scope: LazyListScope| {
                 scope.items(10, |index| {
                     Box!(

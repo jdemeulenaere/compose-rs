@@ -151,13 +151,12 @@ fn removing_a_text_above_the_selection_keeps_it_on_its_text() {
 #[test]
 fn scrolling_a_lazy_list_keeps_the_selection_on_its_item() {
     let state = LazyListState::new(0, 0);
-    let given = state.clone();
+    let given = *state;
     let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || {
-        let given = given.clone();
         SelectionContainer!({
             LazyColumn!(
                 modifier = Modifier.size_wh(100.dp(), 100.dp()),
-                state = given.clone(),
+                state = given,
                 |scope: LazyListScope| {
                     scope.items(100, |index| {
                         BasicText!(

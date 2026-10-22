@@ -19,7 +19,8 @@ use std::rc::{Rc, Weak};
 use std::time::Instant;
 
 use compose_runtime::{
-    ComposeArg, ImmutableList, OwnedState, composable, hash_key, key, mutable_state_of, remember,
+    ComposeArg, ImmutableList, ObjectHandle, Owned, OwnedState, composable, hash_key, key,
+    mutable_state_of, remember,
 };
 use compose_ui::{
     Alignment, Constraints, Dp, EventContext, HorizontalAlignment, IntSize, Layout, Measurable,
@@ -47,9 +48,12 @@ const PREFETCH_AHEAD: usize = 2;
 
 /// Where a lazy list is scrolled, as Compose's `LazyListState`: the first visible item and how
 /// far it is scrolled off. Reading them in composition recomposes on scrolls.
-#[derive(Clone)]
+///
+/// A `Copy` handle (D240): [`new`](Self::new) returns its owner, and
+/// [`remember_lazy_list_state`] keeps that in the composition.
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct LazyListState {
-    inner: Rc<LazyListInner>,
+    object: ObjectHandle<LazyListInner>,
 }
 
 struct LazyListInner {
@@ -100,6 +104,40 @@ struct LazyListInner {
     sticky_written: Cell<Option<usize>>,
 }
 
+impl LazyListInner {
+    fn new(first_visible_item_index: usize, first_visible_item_scroll_offset: i32) -> Self {
+        let offset = first_visible_item_scroll_offset.max(0);
+        LazyListInner {
+            position: Cell::new((first_visible_item_index, offset as f32)),
+            first_key: Cell::new(None),
+            pending: Cell::new(0.0),
+            rtl: Cell::new(false),
+            remeasure: mutable_state_of(0),
+            composed: mutable_state_of((first_visible_item_index, first_visible_item_index + 1)),
+            pinned: mutable_state_of(None),
+            pinned_near: Cell::new(0),
+            had_items: Cell::new(false),
+            children: RefCell::new(Vec::new()),
+            first_index: mutable_state_of(first_visible_item_index),
+            first_offset: mutable_state_of(offset),
+            published: Cell::new((first_visible_item_index, offset)),
+            sizes: RefCell::new(HashMap::new()),
+            layout_info: mutable_state_of((0, 1, 0, 0, 0)),
+            item_constraints: mutable_state_of(None),
+            room_backward: Cell::new(if first_visible_item_index > 0 {
+                f32::INFINITY
+            } else {
+                offset as f32
+            }),
+            room_forward: Cell::new(f32::INFINITY),
+            prefetch: Prefetch::default(),
+            parent_size: Rc::default(),
+            sticky: mutable_state_of(None),
+            sticky_written: Cell::new(None),
+        }
+    }
+}
+
 /// What prefetching works from, as last laid out, and what it learned.
 #[derive(Default)]
 struct Prefetch {
@@ -120,65 +158,51 @@ struct Prefetch {
 }
 
 impl LazyListState {
+    #[track_caller]
     pub fn new(
         first_visible_item_index: usize,
         first_visible_item_scroll_offset: i32,
-    ) -> LazyListState {
-        let offset = first_visible_item_scroll_offset.max(0);
-        LazyListState {
-            inner: Rc::new(LazyListInner {
-                position: Cell::new((first_visible_item_index, offset as f32)),
-                first_key: Cell::new(None),
-                pending: Cell::new(0.0),
-                rtl: Cell::new(false),
-                remeasure: mutable_state_of(0),
-                composed: mutable_state_of((
-                    first_visible_item_index,
-                    first_visible_item_index + 1,
-                )),
-                pinned: mutable_state_of(None),
-                pinned_near: Cell::new(0),
-                had_items: Cell::new(false),
-                children: RefCell::new(Vec::new()),
-                first_index: mutable_state_of(first_visible_item_index),
-                first_offset: mutable_state_of(offset),
-                published: Cell::new((first_visible_item_index, offset)),
-                sizes: RefCell::new(HashMap::new()),
-                layout_info: mutable_state_of((0, 1, 0, 0, 0)),
-                item_constraints: mutable_state_of(None),
-                room_backward: Cell::new(if first_visible_item_index > 0 {
-                    f32::INFINITY
-                } else {
-                    offset as f32
-                }),
-                room_forward: Cell::new(f32::INFINITY),
-                prefetch: Prefetch::default(),
-                parent_size: Rc::default(),
-                sticky: mutable_state_of(None),
-                sticky_written: Cell::new(None),
-            }),
-        }
+    ) -> Owned<LazyListState> {
+        Owned::new(
+            LazyListInner::new(first_visible_item_index, first_visible_item_scroll_offset),
+            |object| LazyListState { object },
+        )
+    }
+
+    /// Its object, or `None` once its owner went (D240): then it does nothing, its reads
+    /// giving the defaults.
+    #[track_caller]
+    fn inner(&self) -> Option<Rc<LazyListInner>> {
+        self.object.get()
+    }
+
+    /// Its object, or once its owner went a detached one at the top, for its composition and
+    /// layout (D240).
+    #[track_caller]
+    fn inner_or_detached(&self) -> Rc<LazyListInner> {
+        self.inner().unwrap_or_else(|| Rc::new(LazyListInner::new(0, 0)))
     }
 
     /// The first item in view, as `firstVisibleItemIndex` (a state read).
     pub fn first_visible_item_index(&self) -> usize {
-        self.inner.first_index.get()
+        self.inner().map_or(0, |inner| inner.first_index.get())
     }
 
     /// How many pixels of it are scrolled off, as `firstVisibleItemScrollOffset` (a state read).
     pub fn first_visible_item_scroll_offset(&self) -> i32 {
-        self.inner.first_offset.get()
+        self.inner().map_or(0, |inner| inner.first_offset.get())
     }
 
     /// Scrolls to `index` (and `scroll_offset` pixels into it) at the next layout, as
     /// `scrollToItem`, without animation.
     pub fn scroll_to_item(&self, index: usize, scroll_offset: i32) {
-        self.inner.position.set((index, scroll_offset.max(0) as f32));
-        self.inner.first_key.set(None);
-        self.inner.pending.set(0.0);
-        self.inner.room_backward.set(f32::INFINITY);
-        self.inner.room_forward.set(f32::INFINITY);
-        self.inner.remeasure.update(|count| count.wrapping_add(1));
+        let Some(inner) = self.inner() else { return };
+        inner.position.set((index, scroll_offset.max(0) as f32));
+        inner.first_key.set(None);
+        inner.pending.set(0.0);
+        inner.room_backward.set(f32::INFINITY);
+        inner.room_forward.set(f32::INFINITY);
+        inner.remeasure.update(|count| count.wrapping_add(1));
     }
 
     /// Scrolls by `pixels` (positive: towards the end) at the next layout, as
@@ -190,7 +214,7 @@ impl LazyListState {
     /// Scrolls by up to `pixels`, as far as the list goes (as last laid out); returns the
     /// pixels it will move.
     fn dispatch(&self, pixels: f32) -> f32 {
-        let inner = &self.inner;
+        let Some(inner) = self.inner() else { return 0.0 };
         let used = if pixels > 0.0 {
             pixels.min(inner.room_forward.get().max(0.0))
         } else {
@@ -211,55 +235,61 @@ impl LazyListState {
     /// length and the content padding along the axis, as last laid out: a scrollbar's
     /// estimates (a state read).
     pub(crate) fn layout_info(&self) -> (usize, i32, i32, i32, i32) {
-        self.inner.layout_info.get()
+        self.inner().map_or((0, 1, 0, 0, 0), |inner| inner.layout_info.get())
     }
 
     /// Moves the position for the next layout without asking for one: for a composition that
     /// is about to lay the list out anyway (a grid whose columns changed).
     pub(crate) fn set_position_quietly(&self, index: usize, scroll_offset: i32) {
-        self.inner.position.set((index, scroll_offset.max(0) as f32));
-        self.inner.first_key.set(None);
-        self.inner.pending.set(0.0);
-        self.inner.room_backward.set(f32::INFINITY);
-        self.inner.room_forward.set(f32::INFINITY);
+        let Some(inner) = self.inner() else { return };
+        inner.position.set((index, scroll_offset.max(0) as f32));
+        inner.first_key.set(None);
+        inner.pending.set(0.0);
+        inner.room_backward.set(f32::INFINITY);
+        inner.room_forward.set(f32::INFINITY);
     }
 
     /// The first visible item and its offset, as last laid out, read without observing it.
     pub(crate) fn position_untracked(&self) -> (usize, i32) {
-        self.inner.published.get()
+        self.inner().map_or((0, 0), |inner| inner.published.get())
     }
 
     /// Whether the list can scroll towards its end, as `canScrollForward` (as last laid out).
     pub fn can_scroll_forward(&self) -> bool {
-        self.inner.room_forward.get() > 0.0
+        self.inner().is_some_and(|inner| inner.room_forward.get() > 0.0)
     }
 
     /// Whether the list can scroll towards its start, as `canScrollBackward`.
     pub fn can_scroll_backward(&self) -> bool {
-        self.inner.room_backward.get() > 0.0
+        self.inner().is_some_and(|inner| inner.room_backward.get() > 0.0)
     }
 }
 
 impl ComposeArg for LazyListState {
     fn same(&self, other: &Self) -> bool {
-        Rc::ptr_eq(&self.inner, &other.inner)
+        self == other
     }
 }
 
 impl std::fmt::Debug for LazyListState {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let (index, offset) = self.inner.position.get();
-        write!(formatter, "LazyListState({index}, {offset})")
+        match self.object.try_get() {
+            Some(inner) => {
+                let (index, offset) = inner.position.get();
+                write!(formatter, "LazyListState({index}, {offset})")
+            }
+            None => formatter.write_str("LazyListState(freed)"),
+        }
     }
 }
 
 impl LazyListState {
     /// Saves the first visible item and its offset, as Compose's `LazyListState.Saver`.
-    pub fn saver() -> impl compose_runtime::Saver<LazyListState> {
+    pub fn saver() -> impl compose_runtime::Saver<Owned<LazyListState>> {
         use compose_runtime::Saveable;
         compose_runtime::saver(
-            |state: &LazyListState| {
-                let (index, offset) = state.inner.position.get();
+            |state: &Owned<LazyListState>| {
+                let (index, offset) = state.inner()?.position.get();
                 Some((index, offset.round() as i32).save())
             },
             |saved| {
@@ -844,7 +874,7 @@ fn LazyList(
 ) {
     let scope = LazyListScope {
         intervals: Rc::default(),
-        item_scope: LazyItemScope { parent_size: state.inner.parent_size.clone() },
+        item_scope: LazyItemScope { parent_size: state.inner_or_detached().parent_size.clone() },
     };
     content(scope.clone());
     let intervals = std::mem::take(&mut *scope.intervals.borrow_mut());
@@ -858,18 +888,14 @@ fn LazyList(
         alignment,
     };
     let policy = {
-        let state = state.clone();
         let scheduler = compose_ui::LOCAL_PREFETCH_SCHEDULER.current();
-        compose_runtime::remember_keyed(
-            (state.clone(), InfoKey(info.clone()), scheduler.clone()),
-            || {
-                Rc::new(LazyListLayout { state: state.inner.clone(), info, scheduler })
-                    as Rc<dyn MeasurePolicy>
-            },
-        )
+        compose_runtime::remember_keyed((state, InfoKey(info.clone()), scheduler.clone()), || {
+            Rc::new(LazyListLayout { state: state.inner_or_detached(), info, scheduler })
+                as Rc<dyn MeasurePolicy>
+        })
     };
     let modifier = modifier.clip(compose_ui::RECTANGLE_SHAPE).then_custom(LazyScrollElement {
-        state: state.clone(),
+        state,
         vertical,
         reverse,
         enabled: user_scroll_enabled,
@@ -888,7 +914,7 @@ fn LazyList(
     Layout(
         modifier,
         policy,
-        compose_runtime::callback(move || LazyItems(state.clone(), items.clone(), fallback)),
+        compose_runtime::callback(move || LazyItems(state, items.clone(), fallback)),
     );
 }
 
@@ -897,20 +923,21 @@ fn LazyList(
 #[composable]
 #[allow(non_snake_case)]
 fn LazyItems(state: LazyListState, items: ItemsRef, fallback: Option<Constraints>) {
-    let (start, end) = state.inner.composed.get();
+    let inner = state.inner_or_detached();
+    let (start, end) = inner.composed.get();
     let count = items.0.count;
     let mut indices: Vec<usize> = (start.min(count)..end.min(count)).collect();
     // The focused item, by key (gone with its item).
-    if let Some(pinned) = state.inner.pinned.get()
-        && let Some(index) = items.0.index_of(pinned, state.inner.pinned_near.get())
+    if let Some(pinned) = inner.pinned.get()
+        && let Some(index) = items.0.index_of(pinned, inner.pinned_near.get())
     {
-        state.inner.pinned_near.set(index);
+        inner.pinned_near.set(index);
         if !indices.contains(&index) {
             indices.push(index);
         }
     }
     // The sticky header over the first visible item, wherever it is.
-    if let Some(header) = state.inner.sticky.get()
+    if let Some(header) = inner.sticky.get()
         && header < count
         && !indices.contains(&header)
     {
@@ -918,16 +945,17 @@ fn LazyItems(state: LazyListState, items: ItemsRef, fallback: Option<Constraints
     }
     #[cfg(debug_assertions)]
     items.0.check_keys(&indices);
-    *state.inner.children.borrow_mut() = indices.clone();
+    *inner.children.borrow_mut() = indices.clone();
     // The items' constraints, for those composing for theirs (`BoxWithConstraints`).
-    let hint = state.inner.item_constraints.get().or(fallback);
+    let hint = inner.item_constraints.get().or(fallback);
+    drop(inner);
     compose_runtime::CompositionLocalProvider(
         compose_ui::LOCAL_CONSTRAINTS_HINT.provides(hint),
         || {
             for &index in &indices {
                 let item_key = items.0.key(index);
-                let (state, items) = (state.clone(), items.clone());
-                key(item_key, move || LazyItem(index, state.clone(), items.clone()));
+                let (state, items) = (state, items.clone());
+                key(item_key, move || LazyItem(index, state, items.clone()));
             }
         },
     );
@@ -938,13 +966,15 @@ fn LazyItems(state: LazyListState, items: ItemsRef, fallback: Option<Constraints
 #[allow(non_snake_case)]
 fn LazyItem(index: usize, state: LazyListState, items: ItemsRef) {
     let policy = remember(|| Rc::new(ItemLayout) as Rc<dyn MeasurePolicy>);
-    let pinned = state.inner.pinned.handle();
+    let pinned = state.inner_or_detached().pinned.handle();
     let item_key = items.0.key(index);
-    let near = state.clone();
+    let near = state;
     // An item is a repaint boundary: scrolled, or beside an animation, it's not recorded again.
     let modifier = Modifier.repaint_boundary().on_focus_changed(move |focused: bool| {
         if focused {
-            near.inner.pinned_near.set(index);
+            if let Some(inner) = near.inner() {
+                inner.pinned_near.set(index);
+            }
             pinned.set(Some(item_key));
         } else if pinned.get() == Some(item_key) {
             pinned.set(None);
@@ -1634,7 +1664,7 @@ struct LazyScrollNode {
 impl ModifierNodeElement for LazyScrollElement {
     fn create(&self) -> Box<dyn ModifierNode> {
         Box::new(LazyScrollNode {
-            state: self.state.clone(),
+            state: self.state,
             vertical: self.vertical,
             reverse: self.reverse,
             enabled: self.enabled,
@@ -1644,7 +1674,12 @@ impl ModifierNodeElement for LazyScrollElement {
 
     fn update(&self, node: &mut dyn ModifierNode) {
         if let Some(node) = node.downcast_mut::<LazyScrollNode>() {
-            node.state = self.state.clone();
+            // A fling scrolls the state it started with: a new state stops it (the old one's
+            // owner may be going, D240).
+            if node.state != self.state {
+                node.drag.stop_fling();
+            }
+            node.state = self.state;
             node.vertical = self.vertical;
             node.reverse = self.reverse;
             if node.enabled && !self.enabled {
@@ -1692,11 +1727,12 @@ impl ModifierNode for LazyScrollNode {
 
     /// Scrolls the least that shows `rect` (an item beyond the viewport taking the focus).
     fn bring_into_view(&mut self, rect: Rect, viewport: IntSize) -> Option<Rect> {
-        let mirrored = self.mirrored(self.state.inner.rtl.get());
+        let inner = self.state.inner()?;
+        let mirrored = self.mirrored(inner.rtl.get());
         let (start, end, length) =
             crate::scroll::scroll_axis(rect, viewport, self.vertical, mirrored);
         // Where it will be once the scrolling asked for (not yet laid out) is.
-        let pending = self.state.inner.pending.get();
+        let pending = inner.pending.get();
         let delta = bring_into_view_delta(start - pending, end - pending, length);
         let used = if delta == 0.0 { 0.0 } else { self.state.dispatch(delta) };
         Some(crate::scroll::scrolled_rect(rect, used, self.vertical, mirrored))
@@ -1714,9 +1750,9 @@ impl PointerInputModifierNode for LazyScrollNode {
         if !self.enabled {
             return;
         }
-        let state = self.state.clone();
+        let state = self.state;
         let reverse = self.mirrored(context.layout_direction() == compose_ui::LayoutDirection::Rtl);
-        let flung = state.clone();
+        let flung = state;
         self.drag.on_pointer_event(
             event,
             pass,
@@ -1724,10 +1760,7 @@ impl PointerInputModifierNode for LazyScrollNode {
             reverse,
             context,
             |delta| state.dispatch(delta),
-            move || {
-                let flung = flung.clone();
-                Rc::new(move |delta| flung.dispatch(delta))
-            },
+            move || Rc::new(move |delta| flung.dispatch(delta)),
         );
     }
 

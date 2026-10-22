@@ -86,7 +86,7 @@ fn Screen(kind: u8, small: bool) {
                     modifier = Modifier
                         .padding_values(padding)
                         .fill_max_size()
-                        .vertical_scroll(scroll.clone())
+                        .vertical_scroll(scroll)
                         .test_tag("content"),
                     {
                         for index in 0..40 {

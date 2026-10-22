@@ -88,11 +88,11 @@ fn List(state: LazyListState) {
     );
 }
 
-fn list(first: usize) -> (ComposeTestRule, LazyListState) {
+fn list(first: usize) -> (ComposeTestRule, Owned<LazyListState>) {
     reset();
     let state = LazyListState::new(first, 0);
-    let given = state.clone();
-    let ui = ComposeTestRule::sized(IntSize::new(200, 200), move || List(given.clone()));
+    let given = *state;
+    let ui = ComposeTestRule::sized(IntSize::new(200, 200), move || List(given));
     (ui, state)
 }
 
@@ -190,11 +190,11 @@ fn Cells(row: usize) {
 fn a_prefetched_row_of_a_nested_lazy_row_is_composed_ahead() {
     reset();
     let state = LazyListState::new(0, 0);
-    let given = state.clone();
+    let given = *state;
     let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || {
         LazyColumn!(
             modifier = Modifier.size_wh(100.dp(), 100.dp()),
-            state = given.clone(),
+            state = given,
             |scope: LazyListScope| {
                 scope.items(100, Cells);
             }
@@ -225,11 +225,11 @@ fn a_prefetched_row_of_a_nested_lazy_row_is_composed_ahead() {
 fn a_prefetched_box_with_constraints_is_ready_for_the_frame() {
     reset();
     let state = LazyListState::new(0, 0);
-    let given = state.clone();
+    let given = *state;
     let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || {
         LazyColumn!(
             modifier = Modifier.size_wh(100.dp(), 100.dp()),
-            state = given.clone(),
+            state = given,
             |scope: LazyListScope| {
                 scope.items(100, |index| {
                     BoxWithConstraints!(
@@ -262,7 +262,7 @@ fn AutoItem(index: usize) {
     COMPOSED.with(|map| *map.borrow_mut().entry(index).or_insert(0) += 1);
     let requester = remember(compose_ui::FocusRequester::new);
     if AUTO.with(|auto| auto.get()) == Some(index) {
-        let shown = requester.clone();
+        let shown = requester;
         LaunchedEffect((), async move {
             shown.request_focus();
         });
@@ -270,20 +270,20 @@ fn AutoItem(index: usize) {
     Box!(
         modifier = Modifier
             .size_wh(100.dp(), 20.dp())
-            .focus_requester(requester.clone())
+            .focus_requester(requester)
             .focusable(true)
             .test_tag(format!("row {index}"))
     );
 }
 
-fn auto_list() -> (ComposeTestRule, LazyListState) {
+fn auto_list() -> (ComposeTestRule, Owned<LazyListState>) {
     reset();
     let state = LazyListState::new(0, 0);
-    let given = state.clone();
+    let given = *state;
     let ui = ComposeTestRule::sized(IntSize::new(200, 200), move || {
         LazyColumn!(
             modifier = Modifier.size_wh(100.dp(), 100.dp()),
-            state = given.clone(),
+            state = given,
             |scope: LazyListScope| {
                 scope.items(1000, AutoItem);
             }

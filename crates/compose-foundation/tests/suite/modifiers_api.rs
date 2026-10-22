@@ -171,10 +171,10 @@ fn on_globally_positioned_reports_the_layer_after_it_and_follows_a_scroll() {
     let log: Rc<RefCell<Vec<LayoutCoordinates>>> = Rc::default();
     let seen = log.clone();
     let state = ScrollState::new(0);
-    let scroll = state.clone();
+    let scroll = *state;
     let mut ui = ComposeTestRule::sized(IntSize::new(300, 300), move || {
         let seen = seen.clone();
-        Column!(modifier = Modifier.size_wh(100.dp(), 100.dp()).vertical_scroll(scroll.clone()), {
+        Column!(modifier = Modifier.size_wh(100.dp(), 100.dp()).vertical_scroll(scroll), {
             let seen = seen.clone();
             Box!(modifier = Modifier.size_wh(100.dp(), 80.dp()));
             Box!(

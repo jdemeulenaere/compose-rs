@@ -2,6 +2,7 @@
 //! and `LargeTopAppBar` with their `TopAppBarState` and `TopAppBarScrollBehavior`s (pinned,
 //! enter-always, exit-until-collapsed), and `BottomAppBar`.
 
+use compose_runtime::{ObjectHandle, Owned};
 use std::rc::Rc;
 
 use compose_animation::{Animatable, AnimationSpec, Easing, FAST_OUT_LINEAR_IN_EASING, Spring};
@@ -29,58 +30,75 @@ struct TopAppBarStateInner {
 
 /// How far a top app bar has collapsed and how far the content under it has scrolled, as
 /// Compose's `TopAppBarState` (state reads and writes, in pixels).
-#[derive(Clone)]
+///
+/// A `Copy` handle (D240): [`new`](Self::new) returns its owner, and
+/// [`remember_top_app_bar_state`] keeps that in the composition.
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct TopAppBarState {
-    inner: Rc<TopAppBarStateInner>,
+    object: ObjectHandle<TopAppBarStateInner>,
 }
 
 impl TopAppBarState {
+    /// Its object, or `None` once its owner went (D240): then it does nothing, its reads
+    /// giving the defaults.
+    #[track_caller]
+    fn inner(&self) -> Option<Rc<TopAppBarStateInner>> {
+        self.object.get()
+    }
+
+    #[track_caller]
     pub fn new(
         initial_height_offset_limit: f32,
         initial_height_offset: f32,
         initial_content_offset: f32,
-    ) -> TopAppBarState {
-        TopAppBarState {
-            inner: Rc::new(TopAppBarStateInner {
+    ) -> Owned<TopAppBarState> {
+        Owned::new(
+            TopAppBarStateInner {
                 height_offset_limit: mutable_state_of(initial_height_offset_limit),
                 height_offset: Animatable::new(
                     initial_height_offset.clamp(initial_height_offset_limit.min(0.0), 0.0),
                 ),
                 content_offset: mutable_state_of(initial_content_offset),
-            }),
-        }
+            },
+            |object| TopAppBarState { object },
+        )
     }
 
     /// The most the bar collapses (negative), as `heightOffsetLimit`: the bar sets it.
     pub fn height_offset_limit(&self) -> f32 {
-        self.inner.height_offset_limit.get()
+        self.inner().map_or(-f32::MAX, |inner| inner.height_offset_limit.get())
     }
 
     pub fn set_height_offset_limit(&self, limit: f32) {
-        self.inner.height_offset_limit.set(limit);
+        if let Some(inner) = self.inner() {
+            inner.height_offset_limit.set(limit);
+        }
     }
 
     /// How far it's collapsed, between the limit and 0, as `heightOffset`.
     pub fn height_offset(&self) -> f32 {
-        self.inner.height_offset.value()
+        self.inner().map_or(0.0, |inner| inner.height_offset.value())
     }
 
     /// Collapses it to `offset`, kept between the limit and 0.
     pub fn set_height_offset(&self, offset: f32) {
         let limit = self.height_offset_limit().min(0.0);
         let offset = offset.clamp(limit, 0.0);
-        if offset != self.inner.height_offset.value() || self.inner.height_offset.is_running() {
-            self.inner.height_offset.snap_to(offset);
+        let Some(inner) = self.inner() else { return };
+        if offset != inner.height_offset.value() || inner.height_offset.is_running() {
+            inner.height_offset.snap_to(offset);
         }
     }
 
     /// How far the content has scrolled (negative: into it), as `contentOffset`.
     pub fn content_offset(&self) -> f32 {
-        self.inner.content_offset.get()
+        self.inner().map_or(0.0, |inner| inner.content_offset.get())
     }
 
     pub fn set_content_offset(&self, offset: f32) {
-        self.inner.content_offset.set(offset);
+        if let Some(inner) = self.inner() {
+            inner.content_offset.set(offset);
+        }
     }
 
     /// 0 expanded to 1 collapsed, as `collapsedFraction`.
@@ -111,14 +129,16 @@ impl TopAppBarState {
         if offset < 0.0 && offset > limit {
             let target = if fraction < 0.5 { 0.0 } else { limit };
             let spring = compose_animation::spring_with(1.0, Spring::STIFFNESS_MEDIUM_LOW);
-            self.inner.height_offset.animate_to(target, spring).await;
+            if let Some(inner) = self.inner() {
+                inner.height_offset.animate_to(target, spring).await;
+            }
         }
     }
 }
 
 impl ComposeArg for TopAppBarState {
     fn same(&self, other: &Self) -> bool {
-        Rc::ptr_eq(&self.inner, &other.inner)
+        self == other
     }
 }
 
@@ -168,13 +188,13 @@ impl TopAppBarScrollBehavior {
     }
 
     fn new(kind: ScrollKind, state: TopAppBarState, scope: CoroutineScope) -> Self {
-        let connection = Rc::new(ScrollConnection { kind, state: state.clone(), scope });
+        let connection = Rc::new(ScrollConnection { kind, state, scope });
         TopAppBarScrollBehavior { state, kind, connection }
     }
 
     /// Its state, as `state`.
     pub fn state(&self) -> TopAppBarState {
-        self.state.clone()
+        self.state
     }
 
     /// Whether the bar never collapses, as `isPinned`.
@@ -206,8 +226,11 @@ impl NestedScrollConnection for ScrollConnection {
         let state = &self.state;
         // A new drag or wheel turn stops a settle going on, as Compose's (its fling's
         // coroutine is cancelled).
-        if source == NestedScrollSource::UserInput && state.inner.height_offset.is_running() {
-            state.inner.height_offset.stop();
+        if source == NestedScrollSource::UserInput
+            && let Some(inner) = state.inner()
+            && inner.height_offset.is_running()
+        {
+            inner.height_offset.stop();
         }
         let collapses = match self.kind {
             ScrollKind::Pinned => false,
@@ -274,7 +297,7 @@ impl NestedScrollConnection for ScrollConnection {
 
     fn on_post_fling(&self, _consumed: Offset, _available: Offset) -> Offset {
         if self.kind != ScrollKind::Pinned {
-            let state = self.state.clone();
+            let state = self.state;
             self.scope.launch(async move { state.settle().await });
         }
         Offset::ZERO
@@ -535,8 +558,7 @@ fn single_row_top_app_bar(
     // The container turns the scrolled color once content is under the bar, animated, as
     // Compose's (the threshold read in a derived state: crossing it composes again only).
     let overlapped = {
-        let state = state.clone();
-        compose_runtime::remember_keyed(state.clone(), move || {
+        compose_runtime::remember_keyed(state, move || {
             Rc::new(derived_state_of(move || {
                 state.as_ref().is_some_and(|state| state.overlapped_fraction() > 0.01)
             }))
@@ -549,8 +571,7 @@ fn single_row_top_app_bar(
         "TopAppBarColor",
         None,
     );
-    let policy = compose_runtime::remember_keyed((state.clone(), expanded_height, centered), {
-        let state = state.clone();
+    let policy = compose_runtime::remember_keyed((state, expanded_height, centered), {
         move || {
             Rc::new(TopAppBarLayout {
                 height: expanded_height,
@@ -617,22 +638,17 @@ fn two_rows_top_app_bar(bar: TwoRows) {
         density.to_px(collapsed_height) - density.to_px(expanded_height),
     );
     let state = bar.scroll_behavior.as_ref().map(TopAppBarScrollBehavior::state);
-    let collapsed = {
-        let state = state.clone();
-        move || state.as_ref().map_or(0.0, TopAppBarState::collapsed_fraction)
-    };
+    let collapsed = { move || state.as_ref().map_or(0.0, TopAppBarState::collapsed_fraction) };
     // Which row's title screen readers see: crossing half way composes again only.
     let top_shown = {
-        let collapsed = collapsed.clone();
-        compose_runtime::remember_keyed(state.clone(), move || {
+        compose_runtime::remember_keyed(state, move || {
             Rc::new(derived_state_of(move || collapsed() >= 0.5))
         })
     };
     let top_shown = top_shown.get();
     let policies = compose_runtime::remember_keyed(
-        (state.clone(), collapsed_height, expanded_height, bar.title_bottom_padding),
+        (state, collapsed_height, expanded_height, bar.title_bottom_padding),
         {
-            let state = state.clone();
             let bottom_padding = bar.title_bottom_padding;
             move || {
                 let top: Rc<dyn MeasurePolicy> = Rc::new(TopAppBarLayout {
@@ -653,8 +669,8 @@ fn two_rows_top_app_bar(bar: TwoRows) {
     );
     // The titles' alphas and the container's color, read while drawing.
     let (top_alpha, bottom_alpha, container) = {
-        let (first, second, third) = (collapsed.clone(), collapsed.clone(), collapsed);
-        compose_runtime::remember_keyed((state.clone(), colors), move || {
+        let (first, second, third) = (collapsed, collapsed, collapsed);
+        compose_runtime::remember_keyed((state, colors), move || {
             (
                 Modifier.graphics_layer(move |layer| {
                     layer.alpha = TOP_TITLE_ALPHA_EASING.transform(first());

@@ -12,7 +12,7 @@ use crate::error::misuse;
 use crate::hash::{hash_key, key_of};
 use crate::runtime::with_runtime;
 use crate::slot_table::SlotValue;
-use crate::state::{MutableState, OwnedState};
+use crate::state::{MutableState, Owned, OwnedState};
 
 /// What `remember` keeps in its slot and what it returns, as a function of the remembered type.
 ///
@@ -20,6 +20,7 @@ use crate::state::{MutableState, OwnedState};
 /// |------------------------------|----------------|--------------------------|
 /// | `Clone` values (incl. `Rc`)  | the value      | a clone of it            |
 /// | `OwnedState<V>`              | the owner      | its handle `MutableState<V>` |
+/// | `Owned<H>` (a state holder)  | the owner      | its handle `H`           |
 pub trait Remember: Sized + 'static {
     type Stored: 'static;
     type Output;
@@ -49,6 +50,19 @@ impl<V: 'static> Remember for OwnedState<V> {
     }
 
     fn output(stored: &OwnedState<V>) -> MutableState<V> {
+        stored.handle()
+    }
+}
+
+impl<H: Copy + 'static> Remember for Owned<H> {
+    type Stored = Owned<H>;
+    type Output = H;
+
+    fn into_stored(self) -> Owned<H> {
+        self
+    }
+
+    fn output(stored: &Owned<H>) -> H {
         stored.handle()
     }
 }

@@ -2,6 +2,7 @@
 //! at the bottom of the screen, shown one at a time by `show_snackbar` (a coroutine returning
 //! whether the action was performed), each for its duration.
 
+use compose_runtime::{ObjectHandle, Owned};
 use std::cell::{Cell, RefCell};
 use std::future::Future;
 use std::pin::Pin;
@@ -137,9 +138,12 @@ impl Future for Wait {
 
 /// The snackbars to show, one at a time, as Compose's `SnackbarHostState`; remember one
 /// (`remember(SnackbarHostState::new)`) and give it to a `SnackbarHost`.
-#[derive(Clone)]
+///
+/// A `Copy` handle (D240): [`new`](Self::new) returns its owner, which
+/// `remember(SnackbarHostState::new)` keeps in the composition.
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct SnackbarHostState {
-    inner: Rc<HostInner>,
+    object: ObjectHandle<HostInner>,
 }
 
 struct HostInner {
@@ -180,18 +184,6 @@ impl Future for Turn {
     }
 }
 
-impl Default for SnackbarHostState {
-    fn default() -> Self {
-        SnackbarHostState::new()
-    }
-}
-
-impl PartialEq for SnackbarHostState {
-    fn eq(&self, other: &Self) -> bool {
-        Rc::ptr_eq(&self.inner, &other.inner)
-    }
-}
-
 impl ComposeArg for SnackbarHostState {
     fn same(&self, other: &Self) -> bool {
         self == other
@@ -199,19 +191,28 @@ impl ComposeArg for SnackbarHostState {
 }
 
 impl SnackbarHostState {
-    pub fn new() -> SnackbarHostState {
-        SnackbarHostState {
-            inner: Rc::new(HostInner {
+    /// Its object, or `None` once its owner went (D240): then it does nothing, its reads
+    /// giving the defaults.
+    #[track_caller]
+    fn inner(&self) -> Option<Rc<HostInner>> {
+        self.object.get()
+    }
+
+    #[track_caller]
+    pub fn new() -> Owned<SnackbarHostState> {
+        Owned::new(
+            HostInner {
                 current: compose_runtime::mutable_state_of(None),
                 queue: RefCell::new(std::collections::VecDeque::new()),
                 waiting: RefCell::new(Vec::new()),
-            }),
-        }
+            },
+            |object| SnackbarHostState { object },
+        )
     }
 
     /// The snackbar showing, if any, as `currentSnackbarData` (a state read).
     pub fn current_snackbar_data(&self) -> Option<SnackbarData> {
-        self.inner.current.get()
+        self.inner().and_then(|inner| inner.current.get())
     }
 
     /// Shows a snackbar once those asked for before it ended, and waits for it to end, as
@@ -231,12 +232,14 @@ impl SnackbarHostState {
             duration,
         };
         let done = Rc::new(Completion::default());
-        self.inner.queue.borrow_mut().push_back(done.clone());
+        // Kept while it waits: the host outlives its owner until the snackbar ends.
+        let Some(host) = self.inner() else { return SnackbarResult::Dismissed };
+        host.queue.borrow_mut().push_back(done.clone());
         // Ends it however this coroutine ends: it leaves the queue, the next ones go on.
-        let guard = Guard { host: self.inner.clone(), done: done.clone() };
-        Turn { host: self.inner.clone(), done: done.clone() }.await;
+        let guard = Guard { host: host.clone(), done: done.clone() };
+        Turn { host: host.clone(), done: done.clone() }.await;
         let data = SnackbarData { visuals, done: done.clone() };
-        self.inner.current.set(Some(data));
+        host.current.set(Some(data));
         let result = done.wait().await;
         drop(guard);
         result

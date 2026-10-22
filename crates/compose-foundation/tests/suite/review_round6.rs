@@ -26,9 +26,9 @@ fn bounds(ui: &mut ComposeTestRule, tag: &str) -> Rect {
 #[test]
 fn a_grid_state_initial_index_is_an_item_index() {
     let state = LazyGridState::new(10, 0);
-    let given = state.clone();
+    let given = *state;
     let mut ui = ComposeTestRule::sized(IntSize::new(300, 200), move || {
-        LazyVerticalGrid!(GridCells::Fixed(3), state = given.clone(), |scope: LazyGridScope| {
+        LazyVerticalGrid!(GridCells::Fixed(3), state = given, |scope: LazyGridScope| {
             scope.items(100, |index| {
                 Box!(modifier = Modifier.height(50.dp()).test_tag(format!("{index}")));
             });
@@ -46,17 +46,13 @@ fn a_grid_state_initial_index_is_an_item_index() {
 #[test]
 fn a_grid_keeps_its_first_item_when_its_column_count_changes() {
     let state = LazyGridState::new(0, 0);
-    let given = state.clone();
+    let given = *state;
     let mut ui = ComposeTestRule::sized(IntSize::new(300, 200), move || {
-        LazyVerticalGrid!(
-            GridCells::Adaptive(100.dp()),
-            state = given.clone(),
-            |scope: LazyGridScope| {
-                scope.items(300, |index| {
-                    Box!(modifier = Modifier.height(50.dp()).test_tag(format!("{index}")));
-                });
-            }
-        );
+        LazyVerticalGrid!(GridCells::Adaptive(100.dp()), state = given, |scope: LazyGridScope| {
+            scope.items(300, |index| {
+                Box!(modifier = Modifier.height(50.dp()).test_tag(format!("{index}")));
+            });
+        });
     });
     state.scroll_to_item(30, 0);
     ui.wait_for_idle();
@@ -126,13 +122,13 @@ fn a_lazy_scrollbar_hides_when_items_with_spacing_fit() {
         Row!(modifier = Modifier.fill_max_size(), |row: RowScope| {
             LazyColumn!(
                 modifier = Modifier.weight(row, 1.0),
-                state = list.clone(),
+                state = list,
                 vertical_arrangement = Arrangement::spaced_by(10.dp()),
                 |scope: LazyListScope| {
                     scope.items(4, |_| Box!(modifier = Modifier.size(50.dp())));
                 }
             );
-            let adapter = remember_lazy_list_scrollbar_adapter(list.clone());
+            let adapter = remember_lazy_list_scrollbar_adapter(list);
             VerticalScrollbar!(adapter, modifier = Modifier.fill_max_height());
         });
     });
@@ -145,19 +141,19 @@ fn a_lazy_scrollbar_hides_when_items_with_spacing_fit() {
 #[test]
 fn a_lazy_scrollbar_thumb_reaches_the_end_with_spacing() {
     let list = LazyListState::new(0, 0);
-    let given = list.clone();
+    let given = *list;
     let mut ui = ComposeTestRule::sized(IntSize::new(300, 200), move || {
-        let list = given.clone();
+        let list = given;
         Row!(modifier = Modifier.fill_max_size(), |row: RowScope| {
             LazyColumn!(
                 modifier = Modifier.weight(row, 1.0),
-                state = list.clone(),
+                state = list,
                 vertical_arrangement = Arrangement::spaced_by(40.dp()),
                 |scope: LazyListScope| {
                     scope.items(20, |_| Box!(modifier = Modifier.size(50.dp())));
                 }
             );
-            let adapter = remember_lazy_list_scrollbar_adapter(list.clone());
+            let adapter = remember_lazy_list_scrollbar_adapter(list);
             VerticalScrollbar!(adapter, modifier = Modifier.fill_max_height());
         });
     });
@@ -319,16 +315,16 @@ fn lazy_items_with_box_with_constraints_compose_only_what_shows() {
 #[test]
 fn a_horizontal_scrollbar_starts_on_the_right_in_rtl() {
     let state = ScrollState::new(0);
-    let given = state.clone();
+    let given = *state;
     let mut ui = ComposeTestRule::sized(IntSize::new(200, 100), move || {
-        let state = given.clone();
+        let state = given;
         Column!(modifier = Modifier.fill_max_size(), {
-            Row!(modifier = Modifier.fill_max_width().horizontal_scroll(state.clone()), {
+            Row!(modifier = Modifier.fill_max_width().horizontal_scroll(state), {
                 for _ in 0..20 {
                     Box!(modifier = Modifier.size(50.dp()));
                 }
             });
-            let adapter = remember_scrollbar_adapter(state.clone());
+            let adapter = remember_scrollbar_adapter(state);
             HorizontalScrollbar!(adapter, modifier = Modifier.fill_max_width());
         });
     });
@@ -349,22 +345,18 @@ fn a_horizontal_scrollbar_starts_on_the_right_in_rtl() {
 #[test]
 fn a_grid_of_box_with_constraints_cells_opens_at_its_top() {
     let state = LazyGridState::new(0, 0);
-    let given = state.clone();
+    let given = *state;
     let mut ui = ComposeTestRule::sized(IntSize::new(500, 400), move || {
-        LazyVerticalGrid!(
-            GridCells::Adaptive(100.dp()),
-            state = given.clone(),
-            |grid: LazyGridScope| {
-                grid.items(100, |index| {
-                    BoxWithConstraints!(move |cell: BoxWithConstraintsScope| {
-                        Box!(
-                            modifier =
-                                Modifier.size(cell.max_width()).test_tag(format!("cell {index}"))
-                        );
-                    });
+        LazyVerticalGrid!(GridCells::Adaptive(100.dp()), state = given, |grid: LazyGridScope| {
+            grid.items(100, |index| {
+                BoxWithConstraints!(move |cell: BoxWithConstraintsScope| {
+                    Box!(
+                        modifier =
+                            Modifier.size(cell.max_width()).test_tag(format!("cell {index}"))
+                    );
                 });
-            }
-        );
+            });
+        });
     });
     assert_eq!(state.first_visible_item_index(), 0);
     assert_eq!(bounds(&mut ui, "cell 0").top, 0.0);
@@ -400,10 +392,10 @@ fn passes_degenerate_grids_and_scrollbars_do_not_panic() {
                 |_scope: LazyGridScope| {}
             );
             let state = remember(|| ScrollState::new(0));
-            Box!(modifier = Modifier.height(0.dp()).vertical_scroll(state.clone()), {
+            Box!(modifier = Modifier.height(0.dp()).vertical_scroll(state), {
                 Box!(modifier = Modifier.size(100.dp()));
             });
-            let adapter = remember_scrollbar_adapter(state.clone());
+            let adapter = remember_scrollbar_adapter(state);
             VerticalScrollbar!(adapter.clone(), modifier = Modifier.height(0.dp()));
             HorizontalScrollbar!(adapter, modifier = Modifier.width(0.dp()));
         });

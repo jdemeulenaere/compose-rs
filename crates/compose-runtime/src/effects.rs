@@ -8,6 +8,7 @@ use crate::composer::record_effect;
 use crate::executor::{CoroutineScope, Job};
 use crate::remember::{RememberObserver, remember, remember_observer, remember_observer_keyed};
 use crate::runtime::{DeferredEffect, RunEffect};
+use crate::state::Owned;
 
 /// Where a [`SideEffect`]'s closure waits for the end of the pass: a remembered slot, so a
 /// pass that runs the call again allocates nothing.
@@ -94,7 +95,7 @@ struct LaunchedEffectImpl {
 impl RememberObserver for LaunchedEffectImpl {
     fn on_remembered(&self) {
         if let Some(task) = self.task.take() {
-            self.job.set(Some(CoroutineScope::new().launch(task)));
+            self.job.set(Some(crate::executor::launch(task)));
         }
     }
 
@@ -121,7 +122,8 @@ pub fn LaunchedEffect<K: ComposeArg>(
     });
 }
 
-struct ScopeObserver(CoroutineScope);
+/// Owns the scope: it is freed a pass after it is forgotten (and cancelled).
+struct ScopeObserver(Owned<CoroutineScope>);
 
 impl RememberObserver for ScopeObserver {
     fn on_forgotten(&self) {
@@ -137,7 +139,7 @@ impl RememberObserver for ScopeObserver {
 /// `rememberCoroutineScope()`: launch tasks from handlers (`scope.launch(async move { … })`);
 /// they are cancelled when the call leaves the composition.
 pub fn remember_coroutine_scope() -> CoroutineScope {
-    remember_observer(|| ScopeObserver(CoroutineScope::new())).0.clone()
+    remember_observer(|| ScopeObserver(CoroutineScope::new())).0.handle()
 }
 
 /// The latest value given, for effects started earlier to read, as Compose's

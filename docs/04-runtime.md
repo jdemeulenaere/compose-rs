@@ -90,7 +90,7 @@ Effects are written in Rust on remember observers, as in Compose:
 - `DisposableEffect(keys, |scope| { …; scope.on_dispose(|| …) })` gets the cleanup when the keys change or the group leaves.
 - `LaunchedEffect(keys, async move { … })` runs a future on the UI thread's executor after the pass, and cancels it (drops the future) when the keys change or the call leaves the composition. A future given on a pass whose keys are the same is dropped unpolled.
 - `produce_state(initial, key, |state| async move { … })` (as `produceState`) is state a coroutine sets, launched as `LaunchedEffect`; `remember_updated_state(value)` (as `rememberUpdatedState`) keeps the latest value for effects started earlier (a plain cell updated at each composition, not state, since composition doesn't write state).
-- `remember_coroutine_scope()` is a `CoroutineScope` for handlers: `scope.launch(async move { … })` returns a `Job` (`cancel`, `is_active`), and the scope cancels its jobs when the call leaves the composition.
+- `remember_coroutine_scope()` is a `CoroutineScope` for handlers: `scope.launch(async move { … })` returns a `Job` (`cancel`, `is_active`), and the scope cancels its jobs when the call leaves the composition. The scope is a `Copy` handle owned by the slot ([05](05-state.md#state-holders), D240): freed a pass after it leaves, it stays a cancelled scope (launching in it starts nothing). `CoroutineScope::new()` returns an owner (`Owned<CoroutineScope>`) for a scope of one's own.
 
 ## Tasks and the frame clock
 

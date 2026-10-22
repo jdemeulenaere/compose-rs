@@ -117,7 +117,7 @@ struct SwitchNode {
     colors: SwitchColors,
     /// 0 unchecked, 1 checked: the thumb's position and size.
     progress: Animatable<f32>,
-    scope: CoroutineScope,
+    scope: compose_runtime::Owned<CoroutineScope>,
 }
 
 impl ModifierNodeElement for SwitchElement {
@@ -326,7 +326,7 @@ struct RadioNode {
     colors: RadioButtonColors,
     /// The dot's radius in dp: 5 selected (Compose's 6 dp less half the 2 dp stroke), 0 not.
     dot: Animatable<f32>,
-    scope: CoroutineScope,
+    scope: compose_runtime::Owned<CoroutineScope>,
 }
 
 impl ModifierNodeElement for RadioElement {

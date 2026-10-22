@@ -277,7 +277,7 @@ fn a_lazy_list_keeps_its_position_in_a_new_host() {
     thread_local! { static STATE: RefCell<Option<LazyListState>> = const { RefCell::new(None) }; }
     let content = || {
         let state = remember_lazy_list_state!();
-        STATE.with(|cell| *cell.borrow_mut() = Some(state.clone()));
+        STATE.with(|cell| *cell.borrow_mut() = Some(state));
         LazyColumn!(
             modifier = Modifier.size_wh(100.dp(), 200.dp()),
             state = state,
@@ -291,10 +291,10 @@ fn a_lazy_list_keeps_its_position_in_a_new_host() {
         );
     };
     let mut ui = compose_test(content);
-    STATE.with(|cell| cell.borrow().clone()).unwrap().scroll_to_item(30, 10);
+    STATE.with(|cell| *cell.borrow()).unwrap().scroll_to_item(30, 10);
     ui.wait_for_idle();
     let mut ui = recreate(ui, content);
-    let state = STATE.with(|cell| cell.borrow().clone()).unwrap();
+    let state = STATE.with(|cell| *cell.borrow()).unwrap();
     assert_eq!(state.first_visible_item_index(), 30);
     assert_eq!(state.first_visible_item_scroll_offset(), 10);
     ui.on_node_with_text("item 30").assert_exists();
@@ -305,16 +305,16 @@ fn a_scroll_state_keeps_its_value_in_a_new_host() {
     thread_local! { static STATE: RefCell<Option<ScrollState>> = const { RefCell::new(None) }; }
     let content = || {
         let state = remember_scroll_state();
-        STATE.with(|cell| *cell.borrow_mut() = Some(state.clone()));
+        STATE.with(|cell| *cell.borrow_mut() = Some(state));
         Column!(modifier = Modifier.size_wh(100.dp(), 100.dp()).vertical_scroll(state), {
             Box!(modifier = Modifier.size_wh(100.dp(), 1000.dp()));
         });
     };
     let mut ui = compose_test(content);
-    STATE.with(|cell| cell.borrow().clone()).unwrap().scroll_to(250);
+    STATE.with(|cell| *cell.borrow()).unwrap().scroll_to(250);
     ui.wait_for_idle();
     let _ui = recreate(ui, content);
-    assert_eq!(STATE.with(|cell| cell.borrow().clone()).unwrap().value(), 250);
+    assert_eq!(STATE.with(|cell| *cell.borrow()).unwrap().value(), 250);
 }
 
 #[test]

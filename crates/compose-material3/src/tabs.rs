@@ -94,8 +94,7 @@ fn tab_row(
     {
         let (positions, indicator, resting_at, at_rest) =
             (positions.clone(), indicator.clone(), resting_at.clone(), at_rest.clone());
-        let (scroll, scroll_scope, scroll_job) =
-            (scroll.clone(), scroll_scope.clone(), scroll_job.clone());
+        let (scroll, scroll_scope, scroll_job) = (scroll, scroll_scope, scroll_job.clone());
         let density = compose_ui::LOCAL_DENSITY.current();
         LaunchedEffect(selected_tab_index, async move {
             // After the layout that placed the tabs.
@@ -110,7 +109,6 @@ fn tab_row(
                 let visible = total - scroll.max_value() as f32;
                 let centered = left - (visible / 2.0 - width / 2.0);
                 let target = centered.clamp(0.0, (total - visible).max(0.0)).round() as i32;
-                let scroll = scroll.clone();
                 let job = scroll_scope.launch(async move {
                     scroll_with_tween(&scroll, target).await;
                 });
@@ -180,7 +178,7 @@ fn tab_row(
             });
             let row = match edge_padding {
                 None => Modifier.fill_max_width().then(row),
-                Some(_) => Modifier.fill_max_width().horizontal_scroll(scroll.clone()).then(row),
+                Some(_) => Modifier.fill_max_width().horizontal_scroll(scroll).then(row),
             };
             Layout(
                 row,

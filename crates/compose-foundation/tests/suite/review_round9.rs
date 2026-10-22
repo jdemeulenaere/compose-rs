@@ -76,8 +76,8 @@ fn HundredRows(state: LazyListState) {
 #[test]
 fn scrolling_to_the_last_item_with_a_huge_offset_shows_the_end() {
     let state = LazyListState::new(0, 0);
-    let list = state.clone();
-    let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || HundredRows(list.clone()));
+    let list = *state;
+    let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || HundredRows(list));
     state.scroll_to_item(99, i32::MAX);
     ui.wait_for_idle();
     ui.on_node_with_text("Row 99").assert_exists();
@@ -92,8 +92,8 @@ fn scrolling_to_the_last_item_with_a_huge_offset_shows_the_end() {
 #[test]
 fn an_infinite_scroll_right_after_a_jump_stops_at_the_end() {
     let state = LazyListState::new(0, 0);
-    let list = state.clone();
-    let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || HundredRows(list.clone()));
+    let list = *state;
+    let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || HundredRows(list));
     state.scroll_to_item(10, 0);
     state.scroll_by(f32::INFINITY);
     ui.wait_for_idle();

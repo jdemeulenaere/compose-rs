@@ -17,16 +17,16 @@ fn thumb(ui: &mut ComposeTestRule) -> Option<Rect> {
 #[test]
 fn a_scrollbar_shows_and_drags_a_scroll() {
     let state = ScrollState::new(0);
-    let given = state.clone();
+    let given = *state;
     let mut ui = ComposeTestRule::sized(IntSize::new(300, 200), move || {
-        let state = given.clone();
+        let state = given;
         Row!(modifier = Modifier.fill_max_size(), |row: RowScope| {
-            Column!(modifier = Modifier.weight(row, 1.0).vertical_scroll(state.clone()), {
+            Column!(modifier = Modifier.weight(row, 1.0).vertical_scroll(state), {
                 for _ in 0..20 {
                     Box!(modifier = Modifier.size(50.dp()));
                 }
             });
-            let adapter = remember_scrollbar_adapter(state.clone());
+            let adapter = remember_scrollbar_adapter(state);
             VerticalScrollbar!(adapter, modifier = Modifier.fill_max_height());
         });
     });
@@ -54,18 +54,18 @@ fn a_scrollbar_shows_and_drags_a_scroll() {
 #[test]
 fn a_scrollbar_follows_a_lazy_list_and_hides_when_it_fits() {
     let list = LazyListState::new(0, 0);
-    let given = list.clone();
+    let given = *list;
     let mut ui = ComposeTestRule::sized(IntSize::new(300, 200), move || {
-        let list = given.clone();
+        let list = given;
         Row!(modifier = Modifier.fill_max_size(), |row: RowScope| {
             LazyColumn!(
                 modifier = Modifier.weight(row, 1.0),
-                state = list.clone(),
+                state = list,
                 |scope: LazyListScope| {
                     scope.items(100, |_| Box!(modifier = Modifier.size(20.dp())));
                 }
             );
-            let adapter = remember_lazy_list_scrollbar_adapter(list.clone());
+            let adapter = remember_lazy_list_scrollbar_adapter(list);
             VerticalScrollbar!(adapter, modifier = Modifier.fill_max_height());
         });
     });
@@ -81,12 +81,12 @@ fn a_scrollbar_follows_a_lazy_list_and_hides_when_it_fits() {
         Row!(modifier = Modifier.fill_max_size(), |row: RowScope| {
             LazyColumn!(
                 modifier = Modifier.weight(row, 1.0),
-                state = list.clone(),
+                state = list,
                 |scope: LazyListScope| {
                     scope.items(3, |_| Box!(modifier = Modifier.size(20.dp())));
                 }
             );
-            let adapter = remember_lazy_list_scrollbar_adapter(list.clone());
+            let adapter = remember_lazy_list_scrollbar_adapter(list);
             VerticalScrollbar!(adapter, modifier = Modifier.fill_max_height());
         });
     });

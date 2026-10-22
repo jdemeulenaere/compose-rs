@@ -906,3 +906,168 @@ impl<T: 'static> Drop for OwnedState<T> {
 pub fn live_state_count() -> usize {
     with_runtime(|runtime| runtime.cells.live_count())
 }
+
+// ---- Objects: what state holders keep ----------------------------------------------------------
+
+/// A `Copy` handle to an object in the thread's cell arena: what a state holder (`DrawerState`,
+/// `LazyListState`, `CoroutineScope`, …) wraps, so closures capture it without clones, as they
+/// capture a [`MutableState`]. An [`Owned`] owns the object (in a `remember` slot, or in data);
+/// once that is dropped, the object is freed at the end of the next pass (rule R2). Unlike a
+/// state handle's, using the handle then doesn't panic: [`get`](Self::get) gives `None` and the
+/// holder's methods do nothing (D240). Reading it observes nothing (the object's own states
+/// do).
+pub struct ObjectHandle<T: 'static> {
+    id: StateId,
+    _marker: PhantomData<*const T>,
+}
+
+impl<T: 'static> Clone for ObjectHandle<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<T: 'static> Copy for ObjectHandle<T> {}
+
+impl<T: 'static> PartialEq for ObjectHandle<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+    }
+}
+
+impl<T: 'static> Eq for ObjectHandle<T> {}
+
+impl<T: 'static> Hash for ObjectHandle<T> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.id.hash(state)
+    }
+}
+
+impl<T: 'static> fmt::Debug for ObjectHandle<T> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "ObjectHandle({}v{})", self.id.index, self.id.generation)
+    }
+}
+
+impl<T: 'static> ObjectHandle<T> {
+    /// The object (an `Rc`, so an async method keeps it across its `.await`s), or `None` once
+    /// it was freed (its owner dropped before the last pass ended): a holder's method then does
+    /// nothing, as a Kotlin holder nobody shows any more would (D240). Debug builds say so once
+    /// per call site, naming the object's type and where it was made.
+    #[track_caller]
+    pub fn get(&self) -> Option<Rc<T>> {
+        match self.lookup() {
+            Ok(object) => Some(object),
+            Err(stale) => {
+                warn_stale(stale, std::any::type_name::<T>(), Location::caller());
+                None
+            }
+        }
+    }
+
+    /// The object, or `None` if it was freed, saying nothing.
+    pub fn try_get(&self) -> Option<Rc<T>> {
+        self.lookup().ok()
+    }
+
+    /// Whether the object is still live.
+    pub fn is_alive(&self) -> bool {
+        self.lookup().is_ok()
+    }
+
+    /// Says (in debug builds, once per call site) that the object was used after it was
+    /// freed, for a holder that found it out another way (its own state handles).
+    #[track_caller]
+    pub fn warn_if_freed(&self) {
+        if let Err(stale) = self.lookup() {
+            warn_stale(stale, std::any::type_name::<T>(), Location::caller());
+        }
+    }
+
+    fn lookup(&self) -> Result<Rc<T>, Stale> {
+        let cell = try_with_runtime(|runtime| {
+            runtime.cells.entry(self.id).map(|entry| entry.cell.clone().expect("a live cell"))
+        })
+        .unwrap_or(Err(Stale { created_at: None }))?;
+        Ok(cell.downcast::<T>().unwrap_or_else(|_| {
+            panic!("compose-runtime: object handle of the wrong type");
+        }))
+    }
+}
+
+/// A freed object used at `used_at`: debug builds print it once per call site.
+#[cold]
+fn warn_stale(stale: Stale, type_name: &str, used_at: &'static Location<'static>) {
+    if !cfg!(debug_assertions) {
+        return;
+    }
+    thread_local! {
+        static WARNED: RefCell<Vec<&'static Location<'static>>> = const { RefCell::new(Vec::new()) };
+    }
+    let first = WARNED
+        .try_with(|warned| {
+            let mut warned = warned.borrow_mut();
+            let first = !warned.contains(&used_at);
+            if first {
+                warned.push(used_at);
+            }
+            first
+        })
+        .unwrap_or(false);
+    if !first {
+        return;
+    }
+    let made = stale.created_at.map_or_else(String::new, |at| format!(" made at {at}"));
+    eprintln!(
+        "compose-runtime: {type_name}{made} was used at {used_at} after its owner (a `remember` \
+         slot, or an `Owned`) was dropped; ignored (D240)"
+    );
+}
+
+/// Owns an object in the thread's cell arena, as [`OwnedState`] owns a state cell, and derefs
+/// to its `Copy` handle `H`: `DrawerState::new(…)` is an `Owned<DrawerState>`. Not `Copy`;
+/// dropping it retires the object, which is freed at the end of the next pass (rule R2), or at
+/// once if no composition exists on the thread. `remember` keeps it and returns the handle.
+///
+/// **Keep the owner.** `let state = *DrawerState::new(…);` compiles, but drops the owner at
+/// the end of the statement: the handle is stale from the start (its methods then do nothing,
+/// D240). Write `let state = DrawerState::new(…);` (the owner, which derefs to the handle) and
+/// copy the handle out (`*state`) for closures while it lives, or `remember` it.
+pub struct Owned<H: Copy + 'static> {
+    handle: H,
+    object: StateId,
+}
+
+impl<H: Copy + 'static> Owned<H> {
+    /// Moves `object` into the arena, owned by the result, whose handle `handle` makes from the
+    /// object's (a state holder wrapping it).
+    #[track_caller]
+    pub fn new<T: 'static>(object: T, handle: impl FnOnce(ObjectHandle<T>) -> H) -> Owned<H> {
+        let id = alloc_cell(Rc::new(object), Location::caller());
+        Owned { handle: handle(ObjectHandle { id, _marker: PhantomData }), object: id }
+    }
+
+    /// The `Copy` handle, for closures.
+    pub fn handle(&self) -> H {
+        self.handle
+    }
+}
+
+impl<H: Copy + 'static> Deref for Owned<H> {
+    type Target = H;
+    fn deref(&self) -> &H {
+        &self.handle
+    }
+}
+
+impl<H: Copy + fmt::Debug + 'static> fmt::Debug for Owned<H> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "Owned({:?})", self.handle)
+    }
+}
+
+impl<H: Copy + 'static> Drop for Owned<H> {
+    fn drop(&mut self) {
+        retire(self.object);
+    }
+}

@@ -97,3 +97,46 @@ fn a_menu_taller_than_the_window_scrolls() {
     let last = ui.on_node_with_text("19").fetch_semantics_node().bounds;
     assert!(last.bottom <= menu.bottom, "the last item is out of the menu: {last:?} {menu:?}");
 }
+
+#[composable]
+fn MenuInDrawer(drawer: DrawerState, expanded: MutableState<bool>) {
+    MaterialTheme!({
+        ModalNavigationDrawer!(
+            {
+                ModalDrawerSheet!({
+                    Box!({
+                        DropdownMenu!(expanded.get(), move || expanded.set(false), {
+                            DropdownMenuItem!({ Text!("Rename") }, || {});
+                        });
+                    });
+                });
+            },
+            drawer_state = drawer,
+            {
+                Box!(modifier = Modifier.fill_max_size());
+            }
+        );
+    });
+}
+
+/// Back (Android's, not only Escape) dismisses an open menu first, then closes the drawer it's
+/// in: the menu is a focusable popup, whose back goes before what's beneath it.
+#[test]
+fn back_dismisses_a_menu_before_closing_its_drawer() {
+    let drawer = DrawerState::new(DrawerValue::Open);
+    let owner = mutable_state_of(true);
+    let expanded = owner.handle();
+    let given = *drawer;
+    let mut ui =
+        ComposeTestRule::sized(IntSize::new(800, 600), move || MenuInDrawer(given, expanded));
+    ui.on_node_with_text("Rename").assert_exists();
+    assert!(ui.host().on_back_pressed());
+    ui.wait_for_idle();
+    assert!(!expanded.get());
+    assert!(drawer.is_open());
+    ui.on_node_with_text("Rename").assert_does_not_exist();
+    assert!(ui.host().on_back_pressed());
+    ui.wait_for_idle();
+    assert!(drawer.is_closed());
+    assert!(!ui.host().on_back_pressed());
+}
