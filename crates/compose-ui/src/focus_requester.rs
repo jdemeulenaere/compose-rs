@@ -55,10 +55,12 @@ impl FocusRequests {
 /// into view, once the tree is free: after the event that asked, or at the next frame.
 ///
 /// A `Copy` id (D240): the nodes it's attached to are kept by the thread's registry while
-/// they're attached, so it owns nothing and is never stale.
+/// they're attached, so it owns nothing and is never stale. It's `!Send`, as state handles
+/// are: the registry is the thread's.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct FocusRequester {
     id: u64,
+    _thread: std::marker::PhantomData<*const ()>,
 }
 
 /// The trees and nodes a requester is attached to, first attached first.
@@ -79,7 +81,7 @@ impl Default for FocusRequester {
 impl FocusRequester {
     pub fn new() -> FocusRequester {
         let id = NEXT_ID.with(|next| next.replace(next.get() + 1));
-        FocusRequester { id }
+        FocusRequester { id, _thread: std::marker::PhantomData }
     }
 
     /// Moves focus to its node (the first it was attached to, if several), as

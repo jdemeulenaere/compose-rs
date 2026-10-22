@@ -39,8 +39,10 @@ pub struct TopAppBarState {
 }
 
 impl TopAppBarState {
+    /// Its object, or `None` once its owner went (D240): then it does nothing, its reads
+    /// giving the defaults.
     #[track_caller]
-    fn inner(&self) -> Rc<TopAppBarStateInner> {
+    fn inner(&self) -> Option<Rc<TopAppBarStateInner>> {
         self.object.get()
     }
 
@@ -64,34 +66,39 @@ impl TopAppBarState {
 
     /// The most the bar collapses (negative), as `heightOffsetLimit`: the bar sets it.
     pub fn height_offset_limit(&self) -> f32 {
-        self.inner().height_offset_limit.get()
+        self.inner().map_or(-f32::MAX, |inner| inner.height_offset_limit.get())
     }
 
     pub fn set_height_offset_limit(&self, limit: f32) {
-        self.inner().height_offset_limit.set(limit);
+        if let Some(inner) = self.inner() {
+            inner.height_offset_limit.set(limit);
+        }
     }
 
     /// How far it's collapsed, between the limit and 0, as `heightOffset`.
     pub fn height_offset(&self) -> f32 {
-        self.inner().height_offset.value()
+        self.inner().map_or(0.0, |inner| inner.height_offset.value())
     }
 
     /// Collapses it to `offset`, kept between the limit and 0.
     pub fn set_height_offset(&self, offset: f32) {
         let limit = self.height_offset_limit().min(0.0);
         let offset = offset.clamp(limit, 0.0);
-        if offset != self.inner().height_offset.value() || self.inner().height_offset.is_running() {
-            self.inner().height_offset.snap_to(offset);
+        let Some(inner) = self.inner() else { return };
+        if offset != inner.height_offset.value() || inner.height_offset.is_running() {
+            inner.height_offset.snap_to(offset);
         }
     }
 
     /// How far the content has scrolled (negative: into it), as `contentOffset`.
     pub fn content_offset(&self) -> f32 {
-        self.inner().content_offset.get()
+        self.inner().map_or(0.0, |inner| inner.content_offset.get())
     }
 
     pub fn set_content_offset(&self, offset: f32) {
-        self.inner().content_offset.set(offset);
+        if let Some(inner) = self.inner() {
+            inner.content_offset.set(offset);
+        }
     }
 
     /// 0 expanded to 1 collapsed, as `collapsedFraction`.
@@ -122,7 +129,9 @@ impl TopAppBarState {
         if offset < 0.0 && offset > limit {
             let target = if fraction < 0.5 { 0.0 } else { limit };
             let spring = compose_animation::spring_with(1.0, Spring::STIFFNESS_MEDIUM_LOW);
-            self.inner().height_offset.animate_to(target, spring).await;
+            if let Some(inner) = self.inner() {
+                inner.height_offset.animate_to(target, spring).await;
+            }
         }
     }
 }
@@ -217,8 +226,11 @@ impl NestedScrollConnection for ScrollConnection {
         let state = &self.state;
         // A new drag or wheel turn stops a settle going on, as Compose's (its fling's
         // coroutine is cancelled).
-        if source == NestedScrollSource::UserInput && state.inner().height_offset.is_running() {
-            state.inner().height_offset.stop();
+        if source == NestedScrollSource::UserInput
+            && let Some(inner) = state.inner()
+            && inner.height_offset.is_running()
+        {
+            inner.height_offset.stop();
         }
         let collapses = match self.kind {
             ScrollKind::Pinned => false,

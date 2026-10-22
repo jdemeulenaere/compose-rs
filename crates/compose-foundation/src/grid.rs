@@ -76,14 +76,17 @@ impl LazyGridState {
         Owned::new(inner, |object| LazyGridState { list: handle, object })
     }
 
+    /// Its object, or `None` once its owner went (D240): then it does nothing, its reads
+    /// giving the defaults.
     #[track_caller]
-    fn inner(&self) -> Rc<GridInner> {
+    fn inner(&self) -> Option<Rc<GridInner>> {
         self.object.get()
     }
 
     /// The first item of the first visible row, as `firstVisibleItemIndex`.
     pub fn first_visible_item_index(&self) -> usize {
-        self.list.first_visible_item_index() * self.inner().columns.get().max(1)
+        let columns = self.inner().map_or(1, |inner| inner.columns.get().max(1));
+        self.list.first_visible_item_index() * columns
     }
 
     pub fn first_visible_item_scroll_offset(&self) -> i32 {
@@ -92,7 +95,7 @@ impl LazyGridState {
 
     /// Scrolls to the row of item `index`, as `scrollToItem`.
     pub fn scroll_to_item(&self, index: usize, scroll_offset: i32) {
-        let inner = self.inner();
+        let Some(inner) = self.inner() else { return };
         match inner.columns.get() {
             // Not composed yet: once the columns are known.
             0 => inner.pending.set(Some((index, scroll_offset))),
@@ -126,7 +129,7 @@ impl LazyGridState {
         use compose_runtime::Saveable;
         compose_runtime::saver(
             |state: &Owned<LazyGridState>| {
-                let position = state.inner().pending.get().unwrap_or_else(|| {
+                let position = state.inner()?.pending.get().unwrap_or_else(|| {
                     (state.first_visible_item_index(), state.first_visible_item_scroll_offset())
                 });
                 Some(position.save())
@@ -278,9 +281,11 @@ pub fn LazyVerticalGrid(
             ));
             // A new column count keeps the first item in view (and its row's offset), as
             // Compose's; the first count applies a scroll asked for before it.
-            let inner = state.inner();
-            let before = inner.columns.replace(count);
-            if let Some((item, offset)) = inner.pending.take() {
+            let (before, pending) = match state.inner() {
+                Some(inner) => (inner.columns.replace(count), inner.pending.take()),
+                None => (count, None),
+            };
+            if let Some((item, offset)) = pending {
                 state.list.set_position_quietly(item / count, offset);
             } else if before != 0 && before != count {
                 let (row, offset) = state.list.position_untracked();

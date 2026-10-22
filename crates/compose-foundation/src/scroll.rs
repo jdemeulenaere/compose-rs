@@ -8,8 +8,8 @@
 use std::rc::Rc;
 
 use compose_runtime::{
-    ComposeArg, CoroutineScope, Job, MutableState, Owned, OwnedState, composable, mutable_state_of,
-    with_frame_nanos,
+    ComposeArg, CoroutineScope, Job, MutableState, ObjectHandle, Owned, OwnedState, composable,
+    mutable_state_of, with_frame_nanos,
 };
 use compose_ui::{
     Constraints, DrawModifierNode, DrawScope, EventContext, IntSize, LayoutModifierNode,
@@ -22,66 +22,73 @@ use compose_ui::{
 /// state, so reading it in composition recomposes on scrolls, and setting it scrolls.
 ///
 /// A `Copy` handle of its states (D240): [`new`](Self::new) returns its owner, and
-/// [`remember_scroll_state`] keeps that in the composition.
+/// [`remember_scroll_state`] keeps that in the composition. Once its owner went, it reads 0
+/// and ignores writes.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct ScrollState {
     value: MutableState<i32>,
     max: MutableState<i32>,
     /// The viewport's length along the axis, as last laid out (for scrollbars).
     viewport: MutableState<i32>,
+    /// Their owner, to say when they're used after it went.
+    object: ObjectHandle<ScrollStates>,
 }
 
 /// What a `ScrollState`'s owner keeps.
 struct ScrollStates {
-    _value: OwnedState<i32>,
-    _max: OwnedState<i32>,
-    _viewport: OwnedState<i32>,
+    value: OwnedState<i32>,
+    max: OwnedState<i32>,
+    viewport: OwnedState<i32>,
 }
 
 impl ScrollState {
     #[track_caller]
     pub fn new(initial: i32) -> Owned<ScrollState> {
         let states = ScrollStates {
-            _value: mutable_state_of(initial.max(0)),
-            _max: mutable_state_of(i32::MAX),
-            _viewport: mutable_state_of(0),
+            value: mutable_state_of(initial.max(0)),
+            max: mutable_state_of(i32::MAX),
+            viewport: mutable_state_of(0),
         };
-        let state = ScrollState {
-            value: states._value.handle(),
-            max: states._max.handle(),
-            viewport: states._viewport.handle(),
-        };
-        Owned::new(states, move |_| state)
+        let (value, max, viewport) =
+            (states.value.handle(), states.max.handle(), states.viewport.handle());
+        Owned::new(states, move |object| ScrollState { value, max, viewport, object })
     }
 
-    fn value_state(&self) -> MutableState<i32> {
-        self.value
+    /// `state`'s value, or `default` once the owner went (D240).
+    fn read(&self, state: MutableState<i32>, default: i32) -> i32 {
+        state.try_get().unwrap_or_else(|| {
+            self.object.warn_if_freed();
+            default
+        })
     }
 
-    fn max_state(&self) -> MutableState<i32> {
-        self.max
+    /// Writes `state`, unless the owner went (D240).
+    fn write(&self, state: MutableState<i32>, value: i32) {
+        if !state.try_set(value) {
+            self.object.warn_if_freed();
+        }
     }
 
     /// The scroll offset, in pixels.
     pub fn value(&self) -> i32 {
-        self.value_state().get()
+        self.read(self.value, 0)
     }
 
     /// The largest offset, known once laid out.
     pub fn max_value(&self) -> i32 {
-        self.max_state().get()
+        self.read(self.max, 0)
     }
 
     /// The viewport's length along the scroll's axis, in pixels, as `viewportSize` (a state
     /// read; 0 until laid out).
     pub fn viewport_size(&self) -> i32 {
-        self.viewport.get()
+        self.read(self.viewport, 0)
     }
 
     /// Scrolls to `value` (clamped to the content at the next layout), as `scrollTo`, without
     /// animation.
     pub fn scroll_to(&self, value: i32) {
-        self.value_state().set(value.max(0));
+        self.write(self.value, value.max(0));
     }
 }
 
@@ -144,6 +151,11 @@ impl ModifierNodeElement for ScrollElement {
 
     fn update(&self, node: &mut dyn ModifierNode) {
         if let Some(node) = node.downcast_mut::<ScrollNode>() {
+            // A fling scrolls the state it started with: a new state stops it (the old one's
+            // owner may be going, D240).
+            if node.state != self.state {
+                node.drag.stop_fling();
+            }
             node.state = self.state;
             node.vertical = self.vertical;
         }
@@ -308,7 +320,7 @@ impl ModifierNode for ScrollNode {
     fn bring_into_view(&mut self, rect: Rect, viewport: IntSize) -> Option<Rect> {
         let (start, end, length) = scroll_axis(rect, viewport, self.vertical, self.rtl);
         // Where it will be once the scrolling asked for (not yet laid out) is.
-        let pending = (self.state.value_state().get() - self.laid_out) as f32;
+        let pending = (self.state.value() - self.laid_out) as f32;
         let delta = bring_into_view_delta(start - pending, end - pending, length);
         let used = scroll_state_by(&self.state, delta, &mut self.fraction);
         Some(scrolled_rect(rect, used, self.vertical, self.rtl))
@@ -377,17 +389,17 @@ impl LayoutModifierNode for ScrollNode {
         let height = constraints.constrain_height(placeable.height);
         let max =
             if self.vertical { placeable.height - height } else { placeable.width - width }.max(0);
-        if self.state.max_state().get() != max {
-            self.state.max_state().set(max);
+        if self.state.max_value() != max {
+            self.state.write(self.state.max, max);
         }
         let viewport = if self.vertical { height } else { width };
-        if self.state.viewport.get() != viewport {
-            self.state.viewport.set(viewport);
+        if self.state.viewport_size() != viewport {
+            self.state.write(self.state.viewport, viewport);
         }
-        let value = self.state.value_state().get().min(max);
+        let value = self.state.value().min(max);
         self.laid_out = value;
-        if value != self.state.value_state().get() {
-            self.state.value_state().set(value);
+        if value != self.state.value() {
+            self.state.write(self.state.value, value);
         }
         // Relatively: a horizontal scroll's content starts at the right in a right-to-left
         // layout, and scrolls toward the left.
@@ -452,15 +464,15 @@ impl PointerInputModifierNode for ScrollNode {
 /// Scrolls `state` by `delta` pixels, within its range, carrying the fraction of a pixel left
 /// over to the next delta (slow drags and fine wheels add up); returns the pixels used.
 fn scroll_state_by(state: &ScrollState, delta: f32, fraction: &mut f32) -> f32 {
-    let old = state.value_state().get();
-    let max = state.max_state().get().max(0);
+    let old = state.value();
+    let max = state.max_value().max(0);
     let start = old as f32 + *fraction;
     let clamped = (start + delta).clamp(0.0, max as f32);
     let new = clamped.round();
     *fraction = clamped - new;
     if new as i32 != old {
         // The layout read the value: the write measures it again.
-        state.value_state().set(new as i32);
+        state.write(state.value, new as i32);
     }
     clamped - start
 }

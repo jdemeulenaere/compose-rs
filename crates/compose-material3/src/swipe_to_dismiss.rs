@@ -57,8 +57,10 @@ pub struct SwipeToDismissBoxState {
 }
 
 impl SwipeToDismissBoxState {
+    /// Its object, or `None` once its owner went (D240): then it does nothing, its reads
+    /// giving the defaults.
     #[track_caller]
-    fn inner(&self) -> Rc<SwipeInner> {
+    fn inner(&self) -> Option<Rc<SwipeInner>> {
         self.object.get()
     }
 
@@ -88,17 +90,21 @@ impl SwipeToDismissBoxState {
 
     /// Where it last settled (a state read), as `currentValue`.
     pub fn current_value(&self) -> SwipeToDismissBoxValue {
-        SwipeToDismissBoxValue::from_key(self.inner().anchored.current_value())
+        self.inner().map_or(SwipeToDismissBoxValue::Settled, |inner| {
+            SwipeToDismissBoxValue::from_key(inner.anchored.current_value())
+        })
     }
 
     /// Where it's going, or would settle if let go now (a state read), as `targetValue`.
     pub fn target_value(&self) -> SwipeToDismissBoxValue {
-        SwipeToDismissBoxValue::from_key(self.inner().anchored.target_value())
+        self.inner().map_or(SwipeToDismissBoxValue::Settled, |inner| {
+            SwipeToDismissBoxValue::from_key(inner.anchored.target_value())
+        })
     }
 
     /// The content's offset, in pixels (a state read), as `requireOffset()`.
     pub fn require_offset(&self) -> f32 {
-        self.inner().anchored.offset()
+        self.inner().map_or(0.0, |inner| inner.anchored.offset())
     }
 
     /// Which way it's being swiped, from the (logical) offset's sign, as `dismissDirection`.
@@ -115,7 +121,8 @@ impl SwipeToDismissBoxState {
 
     /// How far it's been swiped towards a dismissal, 0 to 1, as `progress`.
     pub fn progress(&self) -> f32 {
-        let anchored = &self.inner().anchored;
+        let Some(inner) = self.inner() else { return 0.0 };
+        let anchored = &inner.anchored;
         let offset = self.require_offset();
         let from = anchored.position_of(anchored.current_value()).unwrap_or(0.0);
         let to = anchored.position_of(anchored.target_value()).unwrap_or(from);
@@ -128,17 +135,23 @@ impl SwipeToDismissBoxState {
 
     /// Animates it back in place, as `reset()`.
     pub async fn reset(&self) {
-        self.inner().anchored.animate_to(SwipeToDismissBoxValue::Settled as u8).await;
+        if let Some(inner) = self.inner() {
+            inner.anchored.animate_to(SwipeToDismissBoxValue::Settled as u8).await;
+        }
     }
 
     /// Animates it away in `direction`, as `dismiss(direction)`.
     pub async fn dismiss(&self, direction: SwipeToDismissBoxValue) {
-        self.inner().anchored.animate_to(direction as u8).await;
+        if let Some(inner) = self.inner() {
+            inner.anchored.animate_to(direction as u8).await;
+        }
     }
 
     /// At `value` at once, as `snapTo`.
     pub fn snap_to(&self, value: SwipeToDismissBoxValue) {
-        self.inner().anchored.snap_to(value as u8);
+        if let Some(inner) = self.inner() {
+            inner.anchored.snap_to(value as u8);
+        }
     }
 }
 
@@ -185,7 +198,9 @@ pub fn SwipeToDismissBox(
     let drag = {
         compose_runtime::remember_keyed(state, move || {
             DraggableState::new(move |delta| {
-                state.inner().anchored.drag_by(delta);
+                if let Some(inner) = state.inner() {
+                    inner.anchored.drag_by(delta);
+                }
             })
         })
     };
@@ -193,7 +208,7 @@ pub fn SwipeToDismissBox(
         let threshold = density.to_px(VELOCITY_THRESHOLD);
         move |velocity: f32| {
             scope.launch(async move {
-                let inner = &state.inner();
+                let Some(inner) = state.inner() else { return };
                 inner.anchored.settle(velocity, &*inner.positional_threshold, threshold).await;
             });
         }
@@ -265,7 +280,12 @@ impl MeasurePolicy for SwipeLayout {
         if self.end_to_start {
             anchors.push((SwipeToDismissBoxValue::EndToStart, -towards_end));
         }
-        let anchored = &self.state.inner().anchored;
+        let Some(inner) = self.state.inner() else {
+            scope.place(&background, 0, 0);
+            scope.place_relative(&content, 0, 0);
+            return scope.layout(content.width, content.height);
+        };
+        let anchored = &inner.anchored;
         anchored.update_anchors(anchors.into_iter().map(|(value, at)| (value as u8, at)).collect());
         // Read while measuring: a frame of the swipe places the content again only.
         let offset = anchored.offset();

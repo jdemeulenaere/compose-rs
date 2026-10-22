@@ -2,17 +2,9 @@
 //! freed a pass after its owner goes, and `CoroutineScope` built on it.
 
 use std::cell::{Cell, RefCell};
-use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::Rc;
 
 use compose_runtime::*;
-
-fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
-    match payload.downcast::<String>() {
-        Ok(message) => *message,
-        Err(payload) => payload.downcast_ref::<&str>().map(|s| s.to_string()).unwrap_or_default(),
-    }
-}
 
 fn new_composition() -> Composition {
     Composition::new(NodeTree::<()>::new())
@@ -33,8 +25,9 @@ impl Counter {
         Owned::new(CounterObject { count: Cell::new(count) }, |object| Counter { object })
     }
 
+    /// The new count, or 0 (doing nothing) once the counter's owner went.
     fn increment(&self) -> i32 {
-        let object = self.object.get();
+        let Some(object) = self.object.get() else { return 0 };
         object.count.set(object.count.get() + 1);
         object.count.get()
     }
@@ -70,10 +63,9 @@ fn a_remembered_holder_is_a_handle_freed_a_pass_after_its_group_leaves() {
     composition.recompose();
     assert!(!counter.object.is_alive(), "freed at the end of the next pass");
     assert!(counter.object.try_get().is_none());
-    let message =
-        panic_message(catch_unwind(AssertUnwindSafe(|| counter.increment())).expect_err("panics"));
-    assert!(message.contains("CounterObject"), "{message}");
-    assert!(message.contains("after it was freed"), "{message}");
+    // A stale handle doesn't panic: the holder's method does nothing (debug builds say so).
+    assert_eq!(counter.increment(), 0);
+    assert_eq!(counter.increment(), 0);
 }
 
 #[test]
@@ -90,7 +82,7 @@ fn an_owned_holder_outside_a_composition_is_freed_when_dropped() {
 fn an_async_method_keeps_its_object_across_awaits() {
     let owner = Counter::new(0);
     let counter = *owner;
-    let object = counter.object.get();
+    let object = counter.object.get().expect("live");
     drop(owner);
     // What a method fetched before its owner went stays usable.
     object.count.set(5);
@@ -99,7 +91,7 @@ fn an_async_method_keeps_its_object_across_awaits() {
 }
 
 #[test]
-fn a_forgotten_scope_is_cancelled_then_freed_and_launching_in_it_panics() {
+fn a_forgotten_scope_is_cancelled_then_freed_and_stays_cancelled() {
     thread_local! {
         static SCOPE: Cell<Option<CoroutineScope>> = const { Cell::new(None) };
     }
@@ -134,13 +126,16 @@ fn a_forgotten_scope_is_cancelled_then_freed_and_launching_in_it_panics() {
     assert!(!late.is_active(), "a cancelled scope launches nothing");
     show.set(true);
     composition.recompose();
-    // Freed: cancelling does nothing, launching panics naming the scope.
+    // Freed: a cancelled scope still, as Kotlin's: cancelling does nothing, launching starts
+    // nothing.
     assert!(!scope.is_active());
     scope.cancel();
-    let message = panic_message(
-        catch_unwind(AssertUnwindSafe(|| scope.launch(async {}))).expect_err("panics"),
-    );
-    assert!(message.contains("ScopeInner"), "{message}");
+    let ran_late = Rc::new(Cell::new(false));
+    let flag = ran_late.clone();
+    let late = scope.launch(async move { flag.set(true) });
+    executor::run_ready();
+    assert!(!late.is_active());
+    assert!(!ran_late.get());
 }
 
 #[test]

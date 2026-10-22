@@ -70,8 +70,10 @@ pub struct DrawerState {
 }
 
 impl DrawerState {
+    /// Its object, or `None` once its owner went (D240): then it does nothing, its reads
+    /// giving the defaults.
     #[track_caller]
-    fn inner(&self) -> Rc<DrawerInner> {
+    fn inner(&self) -> Option<Rc<DrawerInner>> {
         self.object.get()
     }
 
@@ -91,13 +93,13 @@ impl DrawerState {
 
     /// Where it is or is going, as `targetValue` (a state read).
     pub fn target_value(&self) -> DrawerValue {
-        self.inner().target.get()
+        self.inner().map_or(DrawerValue::Closed, |inner| inner.target.get())
     }
 
     /// Where it last settled, as `currentValue` (a state read): closed while it opens, open
     /// while it closes.
     pub fn current_value(&self) -> DrawerValue {
-        self.inner().current.get()
+        self.inner().map_or(DrawerValue::Closed, |inner| inner.current.get())
     }
 
     pub fn is_open(&self) -> bool {
@@ -121,7 +123,7 @@ impl DrawerState {
     /// Opens or closes it at once, as `snapTo`.
     pub fn snap_to(&self, value: DrawerValue) {
         let open = value == DrawerValue::Open;
-        let inner = self.inner();
+        let Some(inner) = self.inner() else { return };
         inner.open.snap_to(if open { 1.0 } else { 0.0 });
         inner.settle(value);
     }
@@ -129,7 +131,7 @@ impl DrawerState {
     async fn animate_to(&self, value: DrawerValue) {
         let open = value == DrawerValue::Open;
         // Kept across the animation: it ends even if the drawer's owner went meanwhile.
-        let inner = self.inner();
+        let Some(inner) = self.inner() else { return };
         inner.target.set(value);
         inner.shown.set(true);
         let result =
@@ -141,7 +143,7 @@ impl DrawerState {
 
     /// Dragged by `delta` pixels of a sheet `width` wide (positive towards open).
     fn drag_by(&self, delta: f32, width: f32) {
-        let inner = self.inner();
+        let Some(inner) = self.inner() else { return };
         let fraction = (self.fraction() + delta / width.max(1.0)).clamp(0.0, 1.0);
         inner.open.snap_to(fraction);
         if fraction > 0.0 && !inner.shown.get() {
@@ -151,7 +153,7 @@ impl DrawerState {
 
     /// How far open it is, 0 to 1 (a state read).
     fn fraction(&self) -> f32 {
-        self.inner().open.value().clamp(0.0, 1.0)
+        self.inner().map_or(0.0, |inner| inner.open.value().clamp(0.0, 1.0))
     }
 }
 
@@ -210,7 +212,7 @@ pub fn ModalNavigationDrawer(
     content: impl Fn() + 'static,
 ) {
     let scope = remember_coroutine_scope();
-    let shown = drawer_state.inner().shown.get();
+    let shown = drawer_state.inner().is_some_and(|inner| inner.shown.get());
     let rtl = compose_ui::LOCAL_LAYOUT_DIRECTION.current() == LayoutDirection::Rtl;
     let density = compose_ui::LOCAL_DENSITY.current();
     // The width the sheet was last laid out at: a drag moves it by fractions of it.
@@ -291,20 +293,21 @@ pub fn ModalNavigationDrawer(
                     false,
                     compose_runtime::callback(|_| {}),
                 );
+                // Back closes it while it's open, as Compose's `DrawerPredictiveBackHandler`:
+                // registered after the content's handlers (so it goes before them) and before
+                // the sheet's (which go before it).
+                compose_ui::BackHandler(
+                    state.is_open(),
+                    compose_runtime::callback(move || {
+                        scope.launch(async move { state.close().await });
+                    }),
+                );
                 let drawer_content = drawer_content.clone();
                 Box(
                     Modifier,
                     Alignment::TOP_START,
                     false,
                     compose_runtime::callback(move |_| drawer_content()),
-                );
-                // Back closes it while it's open, as Compose's drawer sheet's back handler:
-                // registered with the sheet (after the content's), so it goes first.
-                compose_ui::BackHandler(
-                    state.is_open(),
-                    compose_runtime::callback(move || {
-                        scope.launch(async move { state.close().await });
-                    }),
                 );
             }
         }),

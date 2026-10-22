@@ -191,8 +191,10 @@ impl ComposeArg for SnackbarHostState {
 }
 
 impl SnackbarHostState {
+    /// Its object, or `None` once its owner went (D240): then it does nothing, its reads
+    /// giving the defaults.
     #[track_caller]
-    fn inner(&self) -> Rc<HostInner> {
+    fn inner(&self) -> Option<Rc<HostInner>> {
         self.object.get()
     }
 
@@ -210,7 +212,7 @@ impl SnackbarHostState {
 
     /// The snackbar showing, if any, as `currentSnackbarData` (a state read).
     pub fn current_snackbar_data(&self) -> Option<SnackbarData> {
-        self.inner().current.get()
+        self.inner().and_then(|inner| inner.current.get())
     }
 
     /// Shows a snackbar once those asked for before it ended, and waits for it to end, as
@@ -231,7 +233,7 @@ impl SnackbarHostState {
         };
         let done = Rc::new(Completion::default());
         // Kept while it waits: the host outlives its owner until the snackbar ends.
-        let host = self.inner();
+        let Some(host) = self.inner() else { return SnackbarResult::Dismissed };
         host.queue.borrow_mut().push_back(done.clone());
         // Ends it however this coroutine ends: it leaves the queue, the next ones go on.
         let guard = Guard { host: host.clone(), done: done.clone() };

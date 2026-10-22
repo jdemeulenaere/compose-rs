@@ -548,8 +548,8 @@ pub(crate) fn launch(future: impl Future<Output = ()> + 'static) -> Job {
 /// [`remember_coroutine_scope`] cancels its tasks when it leaves the composition.
 ///
 /// A `Copy` handle (D240), as a state handle: its owner is the `remember` slot (or the
-/// [`Owned`] that [`new`](Self::new) returns), and launching in a scope freed since panics,
-/// naming where it was made (a forgotten scope is cancelled until then).
+/// [`Owned`] that [`new`](Self::new) returns). A forgotten scope is cancelled, and once freed
+/// it stays a cancelled scope: launching in it starts nothing, as in Kotlin.
 ///
 /// [`remember_coroutine_scope`]: crate::remember_coroutine_scope
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -572,17 +572,16 @@ impl CoroutineScope {
         Owned::new(inner, |inner| CoroutineScope { inner })
     }
 
-    /// Starts `future` as a task of this scope, as `scope.launch { … }`. In a cancelled scope it
-    /// never runs.
-    #[track_caller]
+    /// Starts `future` as a task of this scope, as `scope.launch { … }`. In a cancelled (or
+    /// freed) scope it never runs: the job is already over.
     pub fn launch(&self, future: impl Future<Output = ()> + 'static) -> Job {
-        let inner = self.inner.get();
-        if inner.cancelled.get() {
+        let inner = self.inner.try_get().filter(|inner| !inner.cancelled.get());
+        let Some(inner) = inner else {
             // A job that is already over.
             let key = spawn(Box::pin(async {}));
             cancel(key);
             return Job { key };
-        }
+        };
         let job = Job { key: spawn(Box::pin(future)) };
         let mut jobs = inner.jobs.borrow_mut();
         jobs.retain(Job::is_active);

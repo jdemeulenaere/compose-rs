@@ -60,8 +60,10 @@ pub struct SheetState {
 }
 
 impl SheetState {
+    /// Its object, or `None` once its owner went (D240): then it does nothing, its reads
+    /// giving the defaults.
     #[track_caller]
-    fn inner(&self) -> Rc<SheetInner> {
+    fn inner(&self) -> Option<Rc<SheetInner>> {
         self.object.get()
     }
 
@@ -92,12 +94,15 @@ impl SheetState {
 
     /// Where it last settled (a state read), as `currentValue`.
     pub fn current_value(&self) -> SheetValue {
-        SheetValue::from_key(self.inner().anchored.current_value())
+        self.inner().map_or(SheetValue::Hidden, |inner| {
+            SheetValue::from_key(inner.anchored.current_value())
+        })
     }
 
     /// Where it's going (a state read), as `targetValue`.
     pub fn target_value(&self) -> SheetValue {
-        SheetValue::from_key(self.inner().anchored.target_value())
+        self.inner()
+            .map_or(SheetValue::Hidden, |inner| SheetValue::from_key(inner.anchored.target_value()))
     }
 
     /// Whether it's showing, as `isVisible`.
@@ -107,18 +112,19 @@ impl SheetState {
 
     /// Whether it can rest expanded, as `hasExpandedState`.
     pub fn has_expanded_state(&self) -> bool {
-        self.inner().anchored.has_anchor(SheetValue::Expanded as u8)
+        self.inner().is_some_and(|inner| inner.anchored.has_anchor(SheetValue::Expanded as u8))
     }
 
     /// Whether it can rest half way, as `hasPartiallyExpandedState`.
     pub fn has_partially_expanded_state(&self) -> bool {
-        self.inner().anchored.has_anchor(SheetValue::PartiallyExpanded as u8)
+        self.inner()
+            .is_some_and(|inner| inner.anchored.has_anchor(SheetValue::PartiallyExpanded as u8))
     }
 
     /// Its top's offset from the top of the window, in pixels (a state read; NaN before it's
     /// laid out), as `requireOffset()`.
     pub fn require_offset(&self) -> f32 {
-        self.inner().anchored.offset()
+        self.inner().map_or(f32::NAN, |inner| inner.anchored.offset())
     }
 
     /// Shows it, half way if it can rest there, as `show()`.
@@ -128,31 +134,41 @@ impl SheetState {
         } else {
             SheetValue::Expanded
         };
-        self.inner().anchored.animate_to(value as u8).await;
+        if let Some(inner) = self.inner() {
+            inner.anchored.animate_to(value as u8).await;
+        }
     }
 
     /// Hides it, as `hide()` (not with `skip_hidden_state`).
     pub async fn hide(&self) {
-        if !self.inner().skip_hidden_state {
-            self.inner().anchored.animate_to(SheetValue::Hidden as u8).await;
+        if let Some(inner) = self.inner()
+            && !inner.skip_hidden_state
+        {
+            inner.anchored.animate_to(SheetValue::Hidden as u8).await;
         }
     }
 
     /// Expands it, as `expand()`.
     pub async fn expand(&self) {
-        self.inner().anchored.animate_to(SheetValue::Expanded as u8).await;
+        if let Some(inner) = self.inner() {
+            inner.anchored.animate_to(SheetValue::Expanded as u8).await;
+        }
     }
 
     /// Takes it half way, as `partialExpand()` (not with `skip_partially_expanded`).
     pub async fn partial_expand(&self) {
-        if !self.inner().skip_partially_expanded {
-            self.inner().anchored.animate_to(SheetValue::PartiallyExpanded as u8).await;
+        if let Some(inner) = self.inner()
+            && !inner.skip_partially_expanded
+        {
+            inner.anchored.animate_to(SheetValue::PartiallyExpanded as u8).await;
         }
     }
 
     /// At `value` at once, as `snapTo`.
     pub fn snap_to(&self, value: SheetValue) {
-        self.inner().anchored.snap_to(value as u8);
+        if let Some(inner) = self.inner() {
+            inner.anchored.snap_to(value as u8);
+        }
     }
 }
 
@@ -232,8 +248,11 @@ struct SheetConnection {
 impl NestedScrollConnection for SheetConnection {
     /// Scrolling the content up drags the sheet up first, as far as it goes.
     fn on_pre_scroll(&self, available: Offset, source: NestedScrollSource) -> Offset {
-        if available.y < 0.0 && source == NestedScrollSource::UserInput {
-            Offset::new(0.0, self.state.inner().anchored.drag_by(available.y))
+        if available.y < 0.0
+            && source == NestedScrollSource::UserInput
+            && let Some(inner) = self.state.inner()
+        {
+            Offset::new(0.0, inner.anchored.drag_by(available.y))
         } else {
             Offset::ZERO
         }
@@ -241,8 +260,10 @@ impl NestedScrollConnection for SheetConnection {
 
     /// What the content leaves scrolling down (it's at its top) drags the sheet down.
     fn on_post_scroll(&self, _: Offset, available: Offset, source: NestedScrollSource) -> Offset {
-        if source == NestedScrollSource::UserInput {
-            Offset::new(0.0, self.state.inner().anchored.drag_by(available.y))
+        if source == NestedScrollSource::UserInput
+            && let Some(inner) = self.state.inner()
+        {
+            Offset::new(0.0, inner.anchored.drag_by(available.y))
         } else {
             Offset::ZERO
         }
@@ -250,7 +271,8 @@ impl NestedScrollConnection for SheetConnection {
 
     /// A fling up while the sheet isn't at its top settles the sheet instead.
     fn on_pre_fling(&self, available: Offset) -> Offset {
-        let anchored = &self.state.inner().anchored;
+        let Some(inner) = self.state.inner() else { return Offset::ZERO };
+        let anchored = &inner.anchored;
         if available.y < 0.0 && anchored.offset() > anchored.bounds().0 {
             (self.settle.borrow())(available.y);
             available
@@ -314,7 +336,8 @@ pub fn ModalBottomSheet(
     let dismiss = {
         let (state, scope, on_dismiss) = (sheet_state, scope, on_dismiss_request.clone());
         compose_runtime::callback(move || {
-            if !state.inner().anchored.confirm(SheetValue::Hidden as u8) {
+            if !state.inner().is_some_and(|inner| inner.anchored.confirm(SheetValue::Hidden as u8))
+            {
                 return;
             }
             let (state, on_dismiss) = (state, on_dismiss.clone());
@@ -352,7 +375,9 @@ pub fn ModalBottomSheet(
         Rc::new(move |velocity: f32| {
             let (state, on_dismiss) = (state, on_dismiss.clone());
             scope.launch(async move {
-                state.inner().anchored.settle(velocity, &|_| positional, threshold).await;
+                if let Some(inner) = state.inner() {
+                    inner.anchored.settle(velocity, &|_| positional, threshold).await;
+                }
                 if !state.is_visible() {
                     on_dismiss();
                 }
@@ -374,7 +399,9 @@ pub fn ModalBottomSheet(
         let state = sheet_state;
         compose_runtime::remember_keyed(sheet_state, move || {
             DraggableState::new(move |delta| {
-                state.inner().anchored.drag_by(delta);
+                if let Some(inner) = state.inner() {
+                    inner.anchored.drag_by(delta);
+                }
             })
         })
     };
@@ -499,7 +526,10 @@ impl MeasurePolicy for SheetLayout {
         let sheet = scope.measure(*sheet, Constraints::new(0, sheet_width, 0, height));
         let full = height as f32;
         let sheet_height = sheet.height as f32;
-        let inner = &self.state.inner();
+        let Some(inner) = self.state.inner() else {
+            scope.place(&scrim, 0, 0);
+            return scope.layout(width, height);
+        };
         let mut anchors = Vec::with_capacity(3);
         if !inner.skip_hidden_state {
             anchors.push((SheetValue::Hidden, full));

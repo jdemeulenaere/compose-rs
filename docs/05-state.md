@@ -89,7 +89,7 @@ Compose's state holder classes (`DrawerState`, `SheetState`, `SnackbarHostState`
 
 ```rust
 /// A Copy handle to an object in the same arena as state cells (not observable itself).
-pub struct ObjectHandle<T: 'static> { … }       // get() -> Rc<T>; try_get(); is_alive()
+pub struct ObjectHandle<T: 'static> { … }       // get() -> Option<Rc<T>>; try_get(); is_alive()
 
 /// Owns an object, as OwnedState owns a cell, and derefs to its handle H.
 pub struct Owned<H: Copy + 'static> { … }
@@ -103,10 +103,11 @@ impl DrawerState { pub fn new(initial_value: DrawerValue) -> Owned<DrawerState>;
 ```
 
 - **`remember(|| DrawerState::new(…))` returns the handle**, and the slot keeps the `Owned` (`Remember for Owned<H>`), as for `OwnedState`; `remember_drawer_state` and the other `remember_*` functions do that. `remember_saveable_with` takes a saver of `Owned<H>` (`LazyListState::saver()`).
-- **The rules are a state's.** Forgotten, the object is retired and freed at the end of the next pass (R2); a handle used after that panics naming the object's type and where it was made (R3). A holder's async methods (`open`, `show_snackbar`) take the object's `Rc` when they start, so a running animation ends even if the owner went meanwhile.
+- **Freed as a state is, but stale handles don't panic.** Forgotten, the object is retired and freed at the end of the next pass (R2). A handle used after that does nothing: its writes, scrolls and animations (`scroll_by`, `open`, `show`, `snap_to`) return at once, its reads give the defaults (closed, hidden, item 0), and `CoroutineScope::launch` starts nothing, as Kotlin's cancelled scope. Debug builds print one line per call site naming the object's type and where it was made. In Kotlin a holder lives while anything references it, so a fling or a settle that outlives its screen (a host disposed mid-drag, a state swapped by `remember(key)`) just runs on unseen; a crash there would be a port's artefact. A holder's async methods take the object's `Rc` when they start, so a running animation still ends if the owner goes meanwhile. A scroll node stops its fling when it's given another state. Plain `MutableState` handles keep R3's panic: a stale state is a bug in the app's model (data dropped while a handler still writes it), which `try_get`/`try_set` handle explicitly.
 - **Outside a composition** (tests, an app's model), `DrawerState::new` returns the owner, which derefs to the handle: keep it, and copy the handle out (`*state`) for closures. `CoroutineScope::new().launch(…)` drops its owner at once, which doesn't cancel the task.
-- **A holder of states only** (`ScrollState`) keeps its states' handles in the handle itself, so reading it costs a state read; others look their object up in the arena (an index, a generation check, an `Rc` clone: a few nanoseconds).
-- **`FocusRequester`** owns nothing: it's a `Copy` id, and the nodes it's attached to are kept by a registry while attached (D240).
+- **The footgun: `let state = *DrawerState::new(…);`** compiles but drops the owner at the end of the statement, so the handle is stale from the start (and silently does nothing, with a debug-build warning). Keep the owner (`let state = DrawerState::new(…);`), or `remember` it.
+- **A holder of states only** (`ScrollState`) keeps its states' handles in the handle itself, so reading it costs a state read (`try_get`, falling back to the default); others look their object up in the arena (an index, a generation check, an `Rc` clone: a few nanoseconds).
+- **`FocusRequester`** owns nothing: it's a `Copy` (and `!Send`) id, and the nodes it's attached to are kept by the thread's registry while attached (D240).
 
 ## Derived state
 
