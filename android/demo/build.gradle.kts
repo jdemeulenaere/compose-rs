@@ -44,11 +44,14 @@ abstract class BuildRust : Exec() {
 androidComponents {
     onVariants { variant ->
         val name = "buildRust" + variant.name.replaceFirstChar(Char::uppercase)
+        // Cargo's Android profiles (Cargo.toml, D361): both abort on panics; the release one
+        // adds fat LTO and one codegen unit, which debug builds skip to rebuild faster.
+        val cargoProfile = if (variant.buildType == "release") "android-release" else "android"
         val buildRust = tasks.register<BuildRust>(name) {
             val output = outputDirectory
             executable = rootDir.resolve("build-rust.sh").path
             args("android-demo", "compose_rs_demo")
-            argumentProviders.add(CommandLineArgumentProvider { listOf(output.get().asFile.path) })
+            argumentProviders.add(CommandLineArgumentProvider { listOf(output.get().asFile.path, cargoProfile) })
             environment("ANDROID_NDK_VERSION", android.ndkVersion)
             // What build-rust.sh reads, through providers: the configuration cache keeps the
             // environment the task was configured with, and is discarded when these change.

@@ -1,0 +1,7 @@
+# Baseline Profile of the benchmark's Kotlin Compose app code (docs/12; D360). Compose's
+# libraries ship their own profiles, which the Android Gradle plugin merges with this one; they
+# don't cover the app's composables, which an app's own Baseline Profile would. Every class and
+# method of the app is listed, as compose-rs's library profile lists its glue
+# (android/compose-rs/src/main/baseline-prof.txt), so both apps' code is compiled the same way.
+Lrs/compose/bench/compose/**;
+HSPLrs/compose/bench/compose/**->**(**)**

@@ -13,12 +13,12 @@ end of the run.
 
 --compile (`cmd package compile -m MODE -f`, before measuring):
   speed          (default) everything compiled ahead of time; docs/12's rounds 1 to 3 used it
-  speed-profile  each app is reset, run through its screens so ART records a profile, then
-                 compiled from that profile: what a Baseline or Cloud Profile gives a Play
-                 install, with an app image. Compose's feed starts faster this way than with
-                 speed (docs/14). compose-rs's Kotlin glue leaves no profile worth compiling, so
-                 its state stays verify (the dexopt log shows it): its startup doesn't depend on
-                 it, but its replay runs JIT code
+  speed-profile  each app is reset, given the Baseline Profile its APK ships (through
+                 androidx.profileinstaller's receiver, as Macrobenchmark's
+                 BaselineProfileMode.Require), then compiled from it: what a Play install compiles
+                 at install, with an app image. bench-compose's is Compose's libraries' and its
+                 own; bench-rs's is the compose-rs library's and its own (D360). The run stops if
+                 an app's profile isn't installed
   verify         no ahead-of-time code: a fresh install with no profile
 
 Scenarios (docs/12-android-performance.md):
@@ -241,29 +241,35 @@ def log_dexopt(when):
     return apps
 
 
-def train(package):
-    """Runs the app's screens from a reset, so ART's profile saver records what they run."""
-    shell(f"cmd package compile --reset {package}")
-    for screen in ("feed", "big", "feed_animated"):
-        stop(package)
-        time.sleep(1.0)
-        start(package, screen)
-        time.sleep(2)
-        if screen == "feed":
-            for flick in range(6):
-                swipe(up=flick % 4 != 3)
-                time.sleep(1.0)
-        time.sleep(3)
-    shell("input keyevent KEYCODE_HOME")
-    # The profile saver writes the profile a few seconds after the app goes to the background.
-    time.sleep(12)
+# androidx.profileinstaller's `ProfileInstaller.RESULT_INSTALL_SUCCESS`.
+PROFILE_INSTALLED = 1
+
+
+def broadcast_result(output):
+    """The result code in `am broadcast`'s output, or None (no `result=`)."""
+    match = re.search(r"Broadcast completed: result=(-?\d+)", output)
+    return int(match.group(1)) if match else None
+
+
+def install_baseline_profile(package):
+    """Has the app's androidx.profileinstaller write the Baseline Profile its APK ships
+    (`assets/dexopt/baseline.prof`) where ART compiles from, as Macrobenchmark does. Stops the
+    run if it didn't: an app without profileinstaller would be compiled from no profile."""
+    output = shell(f"am broadcast -a androidx.profileinstaller.action.INSTALL_PROFILE "
+                   f"{package}/androidx.profileinstaller.ProfileInstallReceiver")
     stop(package)
+    result = broadcast_result(output)
+    if result != PROFILE_INSTALLED:
+        raise SystemExit(f"{package}: its Baseline Profile wasn't installed (profileinstaller's "
+                         f"result {result}; {PROFILE_INSTALLED} is success): {output.strip()}")
 
 
 def compile_apps(mode):
     for package in APPS.values():
         if mode == "speed-profile":
-            train(package)
+            # Without the profiles of earlier runs or compilations: the APK's only.
+            shell(f"cmd package compile --reset {package}")
+            install_baseline_profile(package)
         shell(f"cmd package compile -m {mode} -f {package}")
 
 

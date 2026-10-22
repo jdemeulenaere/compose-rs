@@ -159,6 +159,37 @@ class HygieneTest(unittest.TestCase):
         self.assertEqual(measure.measured_since([]), 0)
 
 
+class BaselineProfileTest(unittest.TestCase):
+    # `am broadcast` to androidx.profileinstaller's receiver on a Pixel 8 Pro, Android 16.
+    INSTALLED = (
+        "Broadcasting: Intent { act=androidx.profileinstaller.action.INSTALL_PROFILE flg=0x400000 "
+        "cmp=rs.compose.bench.rs/androidx.profileinstaller.ProfileInstallReceiver }\n"
+        "Broadcast completed: result=1\n")
+
+    def test_broadcast_result(self):
+        self.assertEqual(measure.broadcast_result(self.INSTALLED), measure.PROFILE_INSTALLED)
+        # Another result: the profile wasn't installed (e.g. 6, none in the APK).
+        self.assertEqual(measure.broadcast_result("Broadcast completed: result=6\n"), 6)
+        # No receiver: an app without profileinstaller.
+        self.assertEqual(measure.broadcast_result("Broadcast completed: result=0\n"), 0)
+        self.assertIsNone(measure.broadcast_result("Error: something failed\n"))
+
+    def test_an_app_without_its_profile_stops_the_run(self):
+        calls = []
+        original_shell, original_stop = measure.shell, measure.stop
+        try:
+            measure.stop = lambda package: calls.append(("stop", package))
+            measure.shell = lambda command: "Broadcast completed: result=0\n"
+            with self.assertRaises(SystemExit):
+                measure.install_baseline_profile("rs.compose.bench.rs")
+            measure.shell = lambda command: self.INSTALLED
+            measure.install_baseline_profile("rs.compose.bench.rs")
+        finally:
+            measure.shell, measure.stop = original_shell, original_stop
+        # The receiver's process is stopped either way, so the run starts cold.
+        self.assertEqual(calls, [("stop", "rs.compose.bench.rs")] * 2)
+
+
 class QueryTest(unittest.TestCase):
     def test_a_failed_query_stops_the_run(self):
         # A trace processor exiting with an error must not read as no rows (zero counts).

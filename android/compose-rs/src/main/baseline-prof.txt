@@ -1,0 +1,21 @@
+# Baseline Profile of compose-rs's Android glue (rs.compose.android): docs/07, "Baseline
+# Profile"; D360.
+#
+# The Android Gradle plugin merges this file into every app's profile
+# (assets/dexopt/baseline.prof). Play compiles from it at install, and androidx.profileinstaller
+# hands it to ART for other installs. Without it, an install that isn't fully compiled runs the glue
+# in the interpreter until the JIT compiles it: a slower replay and higher main-thread work
+# (docs/14, "Compilation modes").
+#
+# Every method is marked hot (H), so it's compiled ahead of time, as `cmd package compile -m speed`
+# would compile it. The frame path is ComposeRsView's frame callback and draw, Replayer, TextMeasurer
+# and RenderNodePool; the rest (input, back, accessibility) is small. Wildcards rather than a method
+# list, as AndroidX libraries write them, so a renamed or added method is still covered. R8
+# rewrites the rules for the lambdas and outlines it synthesizes, and for the names it
+# obfuscates.
+
+# Every class: they're loaded while the first ComposeRsView starts (the app image keeps them).
+Lrs/compose/android/**;
+
+# Every method: hot (compiled ahead of time), startup and post-startup.
+HSPLrs/compose/android/**->**(**)**

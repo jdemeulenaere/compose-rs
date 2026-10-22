@@ -1,0 +1,4 @@
+# Baseline Profile of the benchmark's compose-rs app code (docs/12; D360): its activity. The
+# compose-rs library's profile (android/compose-rs/src/main/baseline-prof.txt) is merged with it.
+Lrs/compose/bench/rs/**;
+HSPLrs/compose/bench/rs/**->**(**)**
