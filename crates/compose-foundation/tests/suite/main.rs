@@ -4,6 +4,7 @@
 extern crate compose_runtime as compose;
 
 mod draw_modifiers;
+mod drawing_api;
 mod effects;
 mod fling;
 mod focus_requester;
@@ -12,8 +13,11 @@ mod grid;
 mod hover;
 mod image;
 mod lazy;
+mod lazy_api;
+mod modifiers_api;
 mod pointer_input;
 mod prefetch;
+mod review_api_d;
 mod review_e;
 mod review_f;
 mod review_f2;

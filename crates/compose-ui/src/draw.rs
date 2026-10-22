@@ -1,7 +1,10 @@
 //! The draw scope modifier nodes record into (docs/06-ui.md, "Drawing").
 
+use std::sync::Arc;
+
 use crate::display_list::{DisplayList, DrawOp};
 use crate::graphics::{Color, Outline, Paint, Shape};
+use crate::path::Path;
 use crate::text::ParagraphHandle;
 use crate::unit::{Density, Offset, Rect, Size};
 
@@ -70,14 +73,127 @@ impl DrawScope<'_> {
     /// Draws an arc of the oval in `oval` from `start_angle` degrees (0 at 3 o'clock,
     /// clockwise) over `sweep_angle`, as `drawArc(useCenter = false)`.
     pub fn draw_arc(&mut self, oval: Rect, start_angle: f32, sweep_angle: f32, paint: Paint) {
+        self.draw_arc_with(oval, start_angle, sweep_angle, false, paint);
+    }
+
+    /// `draw_arc`, closed through the oval's center if `use_center` (a pie slice), as
+    /// `drawArc(useCenter)`.
+    pub fn draw_arc_with(
+        &mut self,
+        oval: Rect,
+        start_angle: f32,
+        sweep_angle: f32,
+        use_center: bool,
+        paint: Paint,
+    ) {
         let oval = self.to_list(oval);
-        self.list.push(DrawOp::DrawArc {
-            oval,
-            start_angle,
-            sweep_angle,
-            use_center: false,
-            paint,
-        });
+        self.list.push(DrawOp::DrawArc { oval, start_angle, sweep_angle, use_center, paint });
+    }
+
+    /// Draws the circle of `radius` around `center`, as `drawCircle` (Compose's defaults: half
+    /// the smaller side, around `self.center()`).
+    pub fn draw_circle(&mut self, center: Offset, radius: f32, paint: Paint) {
+        let oval =
+            Rect::new(center.x - radius, center.y - radius, center.x + radius, center.y + radius);
+        self.draw_oval(oval, paint);
+    }
+
+    /// Draws the oval inscribed in `oval`, as `drawOval` (a whole turn of an arc).
+    pub fn draw_oval(&mut self, oval: Rect, paint: Paint) {
+        self.draw_arc_with(oval, 0.0, 360.0, false, paint);
+    }
+
+    /// The center of the drawing, as `DrawScope.center`.
+    pub fn center(&self) -> Offset {
+        Offset::new(self.size.width / 2.0, self.size.height / 2.0)
+    }
+
+    /// A paint for `brush` over this drawing (its gradient positions in this scope's
+    /// coordinates, defaulting to its size), at `alpha`, `style`d: what the draw calls take
+    /// for a brush, as Compose's `drawRect(brush, …)` and friends. A gradient is kept by this
+    /// display list (`DisplayList::shaders`): the paint is for this scope's drawing only.
+    pub fn brush_paint(
+        &mut self,
+        brush: &crate::brush::Brush,
+        alpha: f32,
+        style: crate::graphics::PaintStyle,
+    ) -> Paint {
+        let mut paint = Paint::fill(brush.color(alpha));
+        paint.style = style;
+        if let Some(shader) = brush.shader(self.size, self.origin, alpha) {
+            paint.shader = Some(self.list.push_shader(shader));
+        }
+        paint
+    }
+
+    // ---- Scoped transforms and clips, as Compose's `DrawScope` extensions -----------------
+
+    /// Draws `block` rotated by `degrees` (clockwise) around `pivot`, as `rotate(degrees,
+    /// pivot) { … }`.
+    pub fn rotate(&mut self, degrees: f32, pivot: Offset, block: impl FnOnce(&mut DrawScope<'_>)) {
+        self.save();
+        self.transform(pivot, (1.0, 1.0), degrees, Offset::ZERO);
+        block(self);
+        self.restore();
+    }
+
+    /// Draws `block` scaled by `scale_x`, `scale_y` around `pivot`, as `scale(scaleX, scaleY,
+    /// pivot) { … }`.
+    pub fn scale(
+        &mut self,
+        scale_x: f32,
+        scale_y: f32,
+        pivot: Offset,
+        block: impl FnOnce(&mut DrawScope<'_>),
+    ) {
+        self.save();
+        self.transform(pivot, (scale_x, scale_y), 0.0, Offset::ZERO);
+        block(self);
+        self.restore();
+    }
+
+    /// Draws `block` moved by `left`, `top`, as `translate(left, top) { … }`.
+    pub fn translate(&mut self, left: f32, top: f32, block: impl FnOnce(&mut DrawScope<'_>)) {
+        let origin = self.origin;
+        self.origin = origin + Offset::new(left, top);
+        block(self);
+        self.origin = origin;
+    }
+
+    /// Draws `block` in this drawing less the insets (its size too), as `inset(left, top,
+    /// right, bottom) { … }`.
+    pub fn inset(
+        &mut self,
+        left: f32,
+        top: f32,
+        right: f32,
+        bottom: f32,
+        block: impl FnOnce(&mut DrawScope<'_>),
+    ) {
+        let (origin, size) = (self.origin, self.size);
+        self.origin = origin + Offset::new(left, top);
+        self.size =
+            Size::new((size.width - left - right).max(0.0), (size.height - top - bottom).max(0.0));
+        block(self);
+        self.origin = origin;
+        self.size = size;
+    }
+
+    /// Draws `block` clipped to `rect`, as `clipRect(left, top, right, bottom) { … }`.
+    pub fn clip_rect(&mut self, rect: Rect, block: impl FnOnce(&mut DrawScope<'_>)) {
+        self.save();
+        self.clip_outline(Outline::Rectangle(rect));
+        block(self);
+        self.restore();
+    }
+
+    /// Draws `block` clipped to `path`, as `clipPath(path) { … }`.
+    pub fn clip_path(&mut self, path: impl SharedPath, block: impl FnOnce(&mut DrawScope<'_>)) {
+        self.save();
+        let offset = self.origin;
+        self.list.push(DrawOp::ClipPath { path: path.shared(), offset });
+        block(self);
+        self.restore();
     }
 
     pub fn draw_line(&mut self, from: Offset, to: Offset, paint: Paint) {
@@ -142,8 +258,9 @@ impl DrawScope<'_> {
         });
     }
 
-    /// Draws `path` (in the node's coordinates).
-    pub fn draw_path(&mut self, path: &std::sync::Arc<crate::path::Path>, paint: Paint) {
+    /// Draws `path` (in the node's coordinates): a `&Path` (copied) or a `&Arc<Path>` (shared,
+    /// nothing copied), as `drawPath`.
+    pub fn draw_path(&mut self, path: impl SharedPath, paint: Paint) {
         self.draw_path_scaled(path, Offset::ZERO, (1.0, 1.0), paint);
     }
 
@@ -151,13 +268,13 @@ impl DrawScope<'_> {
     /// vector image's viewport fitted to its size.
     pub fn draw_path_scaled(
         &mut self,
-        path: &std::sync::Arc<crate::path::Path>,
+        path: impl SharedPath,
         offset: Offset,
         scale: (f32, f32),
         paint: Paint,
     ) {
         let offset = offset + self.origin;
-        self.list.push(DrawOp::DrawPath { path: path.clone(), offset, scale, paint });
+        self.list.push(DrawOp::DrawPath { path: path.shared(), offset, scale, paint });
     }
 
     /// Saves, and draws what follows into a layer composited with `alpha` at the next restore.
@@ -190,5 +307,23 @@ impl DrawScope<'_> {
                 self.list.push(DrawOp::ClipRoundRect(rect, radii));
             }
         }
+    }
+}
+
+/// A borrowed path the display list can hold: a `&Arc<Path>`, shared (nothing copied), or a
+/// `&Path`, copied into one.
+pub trait SharedPath {
+    fn shared(self) -> Arc<Path>;
+}
+
+impl SharedPath for &Arc<Path> {
+    fn shared(self) -> Arc<Path> {
+        self.clone()
+    }
+}
+
+impl SharedPath for &Path {
+    fn shared(self) -> Arc<Path> {
+        Arc::new(self.clone())
     }
 }

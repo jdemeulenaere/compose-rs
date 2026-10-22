@@ -107,7 +107,7 @@ fn focusing_an_item_past_the_left_of_a_right_to_left_lazy_row_brings_it_into_vie
 }
 
 /// Input: right to left, a 105 px `LazyColumn` (at 95..200) with `horizontal_alignment =
-/// TOP_CENTER` and a 100 px item: 5 px to share.
+/// CENTER_HORIZONTALLY` and a 100 px item: 5 px to share.
 ///
 /// Compose: a vertical list aligns its items with the layout direction and places them
 /// absolutely (`LazyListMeasuredItem`: `horizontalAlignment.align(width, layoutWidth,
@@ -123,7 +123,7 @@ fn a_centered_lazy_column_item_rounds_as_in_left_to_right() {
     let mut ui = rtl(|| {
         LazyColumn!(
             modifier = Modifier.size_wh(105.dp(), 100.dp()),
-            horizontal_alignment = Alignment::TOP_CENTER,
+            horizontal_alignment = Alignment::CENTER_HORIZONTALLY,
             |scope: LazyListScope| {
                 scope.item(|| {
                     Box!(modifier = Modifier.size_wh(100.dp(), 20.dp()).test_tag("item"));

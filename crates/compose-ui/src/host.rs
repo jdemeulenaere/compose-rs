@@ -286,10 +286,7 @@ impl UiHost {
         let size = self.size;
         let invalid_before_layout = self.composition.has_invalidations();
         let layout = crate::trace::section(c"compose-rs: layout");
-        let mut measured = self.with_tree(|tree| {
-            tree.apply_observed_writes();
-            tree.layout(size)
-        });
+        let mut measured = self.lay_out(size);
         drop(layout);
         // A layout that changed what to compose (a lazy list reaching items it lacks) is
         // composed and laid out again in this frame, a few times at most, before drawing.
@@ -298,10 +295,7 @@ impl UiHost {
             rounds += 1;
             let _round = crate::trace::section(c"compose-rs: recompose and layout again");
             recomposed |= self.composition.recompose();
-            measured |= self.with_tree(|tree| {
-                tree.apply_observed_writes();
-                tree.layout(size)
-            });
+            measured |= self.lay_out(size);
         }
         // A node focused before it was placed is shown, now that it is.
         let shown = self.with_tree(|tree| {
@@ -314,10 +308,7 @@ impl UiHost {
             Some(())
         });
         if shown.is_some() {
-            measured |= self.with_tree(|tree| {
-                tree.apply_observed_writes();
-                tree.layout(size)
-            });
+            measured |= self.lay_out(size);
         }
         // Content that moved under a resting mouse: the hover follows it, as Compose Desktop's
         // synthetic move after a layout.
@@ -410,6 +401,31 @@ impl UiHost {
         for action in actions {
             action.run();
         }
+    }
+
+    /// Measures and places what the writes observed since invalidated, then runs the layout
+    /// callbacks (`on_size_changed`, `on_globally_positioned`). A measurement reading state that
+    /// another measurement or a callback wrote (a lazy list's viewport size, which its items'
+    /// `fill_parent_max_*` read) is measured again within this layout, a few rounds at most,
+    /// rather than at the next frame.
+    fn lay_out(&mut self, size: IntSize) -> bool {
+        let mut measured = false;
+        // A callback's writes read by measurements are laid out here too (those read by
+        // composition, by the frame's next round).
+        for _ in 0..4 {
+            let again = self.with_tree(|tree| {
+                tree.apply_observed_writes();
+                tree.layout(size)
+            });
+            measured |= again;
+            let actions = self.with_tree(|tree| tree.take_layout_callbacks());
+            let called = !actions.is_empty();
+            Self::run(actions);
+            if !again && !called {
+                break;
+            }
+        }
+        measured
     }
 
     /// Dispatches a pointer event (its position in the root), then runs the handlers' actions.

@@ -378,3 +378,25 @@ fn an_icon_keeps_its_aspect_ratio() {
     assert_eq!(scale, (1.0, 1.0));
     assert_eq!(offset.x, 12.0);
 }
+
+/// Compose's `Alignment.Center` rounds the fitted icon's offset to whole pixels (its sizes
+/// rounded, then the half of what's left): 37 x 30 fits the 24 dp viewport at 1.25, 30 x 30,
+/// 3.5 px from the left, drawn at 4. On whole pixels, Android draws its mask unfiltered (D190).
+#[test]
+fn an_icon_is_centered_on_whole_pixels() {
+    let mut ui = compose_test(|| {
+        Icon!(icons::filled::add(), None, modifier = Modifier.size_wh(37.dp(), 30.dp()));
+    });
+    let (offset, scale) = ui
+        .host()
+        .display_list()
+        .ops
+        .iter()
+        .find_map(|op| match op {
+            DrawOp::DrawPath { offset, scale, .. } => Some((*offset, *scale)),
+            _ => None,
+        })
+        .expect("the icon's path");
+    assert_eq!(scale, (1.25, 1.25));
+    assert_eq!((offset.x, offset.y), (4.0, 0.0));
+}

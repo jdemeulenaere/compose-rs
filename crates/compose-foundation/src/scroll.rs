@@ -227,30 +227,28 @@ impl ModifierNode for ScrollNode {
     }
 }
 
-/// `rect`'s start and end along a scroll's axis, from where its content starts (the right of
-/// a right-to-left horizontal scroll), and the viewport's length.
+/// `rect`'s start and end along a scroll's axis, from where its content starts (the far end
+/// when `reversed`: the right of a right-to-left horizontal scroll, the bottom of a reversed
+/// lazy column), and the viewport's length.
 pub(crate) fn scroll_axis(
     rect: Rect,
     viewport: IntSize,
     vertical: bool,
-    rtl: bool,
+    reversed: bool,
 ) -> (f32, f32, f32) {
-    if vertical {
+    let (start, end, length) = if vertical {
         (rect.top, rect.bottom, viewport.height as f32)
-    } else if rtl {
-        let width = viewport.width as f32;
-        (width - rect.right, width - rect.left, width)
     } else {
         (rect.left, rect.right, viewport.width as f32)
-    }
+    };
+    if reversed { (length - end, length - start, length) } else { (start, end, length) }
 }
 
 /// `rect` once its scroll moved `used` pixels forward.
-pub(crate) fn scrolled_rect(rect: Rect, used: f32, vertical: bool, rtl: bool) -> Rect {
+pub(crate) fn scrolled_rect(rect: Rect, used: f32, vertical: bool, reversed: bool) -> Rect {
+    let used = if reversed { -used } else { used };
     if vertical {
         Rect::new(rect.left, rect.top - used, rect.right, rect.bottom - used)
-    } else if rtl {
-        Rect::new(rect.left + used, rect.top, rect.right + used, rect.bottom)
     } else {
         Rect::new(rect.left - used, rect.top, rect.right - used, rect.bottom)
     }

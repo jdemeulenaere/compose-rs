@@ -17,6 +17,68 @@ fn round_rect(bounds: &Rect, radii: &[f32; 4]) -> RRect {
     RRect::new_rect_radii(rect(bounds), &radii)
 }
 
+/// `paint` for Skia, its shader (from `shaders`) moved by `local` (the inverse of a transform
+/// the operation applies before drawing, so the gradient stays in the list's coordinates).
+fn skia_paint_with(
+    paint: &Paint,
+    shaders: &[compose_ui::Shader],
+    local: Option<&skia_safe::Matrix>,
+) -> skia_safe::Paint {
+    let mut skia = skia_paint(paint);
+    if let Some(shader) = paint.shader.and_then(|index| shaders.get(index.0 as usize))
+        && let Some(skia_shader) = skia_shader(shader, local)
+    {
+        // The shader paints; the paint's alpha is the brush's.
+        skia.set_color(skia_safe::Color::BLACK);
+        skia.set_alpha_f(shader.alpha());
+        skia.set_shader(skia_shader);
+    }
+    skia
+}
+
+fn skia_shader(
+    shader: &compose_ui::Shader,
+    local: Option<&skia_safe::Matrix>,
+) -> Option<skia_safe::Shader> {
+    use compose_ui::Shader;
+    use skia_safe::gradient::{Colors, Gradient, Interpolation, shaders};
+    let gradient = shader.gradient();
+    let mut colors: Vec<skia_safe::Color4f> = gradient
+        .colors
+        .iter()
+        .map(|color| skia_safe::Color4f::from(skia_safe::Color::new(color.argb())))
+        .collect();
+    // A gradient needs two colors: one is a solid color.
+    if colors.len() == 1 {
+        colors.push(colors[0]);
+    }
+    if colors.is_empty() {
+        return None;
+    }
+    let stops = gradient.stops.as_deref().filter(|stops| stops.len() == colors.len());
+    let mode = match gradient.tile_mode {
+        compose_ui::TileMode::Clamp => skia_safe::TileMode::Clamp,
+        compose_ui::TileMode::Repeated => skia_safe::TileMode::Repeat,
+        compose_ui::TileMode::Mirror => skia_safe::TileMode::Mirror,
+        compose_ui::TileMode::Decal => skia_safe::TileMode::Decal,
+    };
+    // Interpolated unpremultiplied, as Android's and Skiko's gradients.
+    let gradient = Gradient::new(Colors::new(&colors, stops, mode, None), Interpolation::default());
+    match shader {
+        Shader::LinearGradient { from, to, .. } => shaders::linear_gradient(
+            (Point::new(from.x, from.y), Point::new(to.x, to.y)),
+            &gradient,
+            local,
+        ),
+        Shader::RadialGradient { center, radius, .. } => {
+            shaders::radial_gradient((Point::new(center.x, center.y), *radius), &gradient, local)
+        }
+        Shader::SweepGradient { center, .. } => {
+            shaders::sweep_gradient(Point::new(center.x, center.y), (0.0, 360.0), &gradient, local)
+        }
+    }
+}
+
 fn skia_paint(paint: &Paint) -> skia_safe::Paint {
     let mut skia = skia_safe::Paint::default();
     skia.set_anti_alias(true);
@@ -66,16 +128,19 @@ pub fn draw_display_list(canvas: &Canvas, list: &DisplayList, text_measurer: &dy
                 canvas.clip_rrect(round_rect(bounds, radii), ClipOp::Intersect, true);
             }
             DrawOp::DrawRect(bounds, paint) => {
-                canvas.draw_rect(rect(bounds), &skia_paint(paint));
+                canvas.draw_rect(rect(bounds), &skia_paint_with(paint, &list.shaders, None));
             }
             DrawOp::DrawRoundRect(bounds, radii, paint) => {
-                canvas.draw_rrect(round_rect(bounds, radii), &skia_paint(paint));
+                canvas.draw_rrect(
+                    round_rect(bounds, radii),
+                    &skia_paint_with(paint, &list.shaders, None),
+                );
             }
             DrawOp::DrawLine(from, to, paint) => {
                 canvas.draw_line(
                     Point::new(from.x, from.y),
                     Point::new(to.x, to.y),
-                    &skia_paint(paint),
+                    &skia_paint_with(paint, &list.shaders, None),
                 );
             }
             DrawOp::DrawParagraph(handle, offset) => {
@@ -88,8 +153,19 @@ pub fn draw_display_list(canvas: &Canvas, list: &DisplayList, text_measurer: &dy
                 canvas.save();
                 canvas.translate((offset.x, offset.y));
                 canvas.scale((scale.0, scale.1));
-                canvas.draw_path(&skia, &skia_paint(paint));
+                // The gradient stays where it was given, outside the path's scale and offset.
+                let local =
+                    (paint.shader.is_some() && scale.0 != 0.0 && scale.1 != 0.0).then(|| {
+                        let mut local = skia_safe::Matrix::scale((1.0 / scale.0, 1.0 / scale.1));
+                        local.pre_translate((-offset.x, -offset.y));
+                        local
+                    });
+                canvas.draw_path(&skia, &skia_paint_with(paint, &list.shaders, local.as_ref()));
                 canvas.restore();
+            }
+            DrawOp::ClipPath { path, offset } => {
+                let skia = skia_path(path).make_offset((offset.x, offset.y));
+                canvas.clip_path(&skia, ClipOp::Intersect, true);
             }
             DrawOp::DrawImage { image, src, dst, alpha } => {
                 if let Some(skia) = skia_image(image) {
@@ -114,7 +190,7 @@ pub fn draw_display_list(canvas: &Canvas, list: &DisplayList, text_measurer: &dy
                     *start_angle,
                     *sweep_angle,
                     *use_center,
-                    &skia_paint(paint),
+                    &skia_paint_with(paint, &list.shaders, None),
                 );
             }
             DrawOp::DrawShadow { outline, elevation, light, light_radius, ambient, spot } => {

@@ -1,3 +1,12 @@
+/// A button: its call form is appended to these docs.
+/**
+ # Call
+
+ ```text
+ Button!(on_click, modifier = Modifier, enabled = true, { content })
+ ```
+
+ Arguments go in this order, or by name (`name = value`); those shown with a value are optional. A final block `{ … }` (or closure) is `content`.*/
 #[allow(non_snake_case, clippy::too_many_arguments)]
 pub fn Button(
     on_click: ::compose::__private::Callback<dyn Fn()>,
@@ -129,3 +138,76 @@ macro_rules! __compose_call_Counter_abf9ac1093febf76_N {
 #[doc(hidden)]
 #[allow(unused_imports)]
 use __compose_call_Counter_abf9ac1093febf76_N as Counter;
+#[allow(non_snake_case, clippy::too_many_arguments)]
+fn Menu(drawer: DrawerState, title: String, shown: Rc<Vec<u32>>) {
+    let __composer = ::compose::__private::current();
+    let __compose_restart = |__kept: &dyn ::core::any::Any| {
+        let __kept = ::compose::__private::kept::<
+            (DrawerState, String, Rc<Vec<u32>>),
+        >(__kept);
+        Menu(
+            ::compose::__private::keep(&__kept.0),
+            ::compose::__private::keep(&__kept.1),
+            ::compose::__private::keep(&__kept.2),
+        )
+    };
+    let __compose_group = ::compose::__private::RestartGroup::start(
+        __composer,
+        133122779289621940u64,
+        __compose_restart,
+        ::compose::__private::identity_of(&__compose_restart),
+    );
+    if !__composer
+        .update_kept(
+            |__kept: &(DrawerState, String, Rc<Vec<u32>>)| {
+                !::compose::__private::ComposeArg::same(&__kept.0, &drawer)
+                    || !::compose::__private::ComposeArg::same(&__kept.1, &title)
+                    || !::compose::__private::ComposeArg::same(&__kept.2, &shown)
+            },
+            || (
+                ::compose::__private::keep(&drawer),
+                ::compose::__private::keep(&title),
+                ::compose::__private::keep(&shown),
+            ),
+        ) && __composer.skipping()
+    {
+        __composer.skip_to_group_end();
+        return;
+    }
+    {
+        let scope = remember_coroutine_scope();
+        IconButton!(
+            on_click = move | | { ::compose::__private::marked!(scope, drawer); { scope
+            .launch({ #[allow(unused_variables)] let drawer =
+            ::compose::__private::reuse(& drawer); async move { drawer.open(). await }
+            }); } }, { ::compose::__private::marked!(title); let __compose_region =
+            ::compose::__private::region(133122779289621941u64); {
+            #[allow(unused_variables)] let title = ::compose::__private::reuse(& title);
+            Text!(title) }; }
+        );
+        LazyColumn!(
+            state = drawer, move | list : LazyListScope | {
+            ::compose::__private::marked!(shown, title, drawer); { let __compose_region =
+            ::compose::__private::region(133122779289621943u64); { list.items(shown
+            .len(), { #[allow(unused_variables)] let title =
+            ::compose::__private::reuse(& title); #[allow(unused_variables)] let shown =
+            ::compose::__private::reuse(& shown); move | index | { let __compose_region =
+            ::compose::__private::region(133122779289621942u64); Text!("{title} {}",
+            shown[index]) } }); Show(::compose::__private::reuse(& drawer)); } } }
+        );
+    }
+}
+#[doc(hidden)]
+macro_rules! __compose_call_Menu_6c54f0d88792bace_N {
+    (@ path($($path:tt)*) $($arguments:tt)*) => {
+        ::compose::__private::call! { Menu[drawer : value, title : value, shown : value]
+        plain @ path($($path)*); $($arguments)* }
+    };
+    ($($arguments:tt)*) => {
+        ::compose::__private::call! { Menu[drawer : value, title : value, shown : value]
+        plain; $($arguments)* }
+    };
+}
+#[doc(hidden)]
+#[allow(unused_imports)]
+use __compose_call_Menu_6c54f0d88792bace_N as Menu;

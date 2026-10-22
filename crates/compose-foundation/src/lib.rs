@@ -51,7 +51,10 @@ pub use grid::{
     GridCells, LazyGridScope, LazyGridState, LazyVerticalGrid, remember_lazy_grid_state,
 };
 pub use image::{ContentScale, Image};
-pub use lazy::{LazyColumn, LazyListScope, LazyListState, LazyRow, remember_lazy_list_state};
+pub use lazy::{
+    LazyColumn, LazyItemModifiers, LazyItemScope, LazyListScope, LazyListState, LazyRow,
+    remember_lazy_list_state,
+};
 pub use scroll::{ScrollModifiers, ScrollState, remember_scroll_state};
 pub use scrollbar::{
     HorizontalScrollbar, LOCAL_SCROLLBAR_STYLE, ScrollbarAdapter, ScrollbarStyle,

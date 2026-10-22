@@ -155,8 +155,13 @@ internal class TextMeasurer {
         // (or ellipsizing), else the text's own; then the text's width, kept in the constraints.
         val bounded = maxWidth != Int.MAX_VALUE
         val available = if ((softWrap || ellipsis) && bounded) maxWidth else Int.MAX_VALUE
-        val desired = ceil(Layout.getDesiredWidth(text, paint)).toInt()
-        val width = if (minWidth == available) available else desired.coerceIn(minWidth, available)
+        // The text's own width is a second measure of all of it: only when the constraints
+        // leave a choice.
+        val width = if (minWidth == available) {
+            available
+        } else {
+            ceil(Layout.getDesiredWidth(text, paint)).toInt().coerceIn(minWidth, available)
+        }
         val alignment = when (align) {
             1 -> Layout.Alignment.ALIGN_OPPOSITE
             2 -> Layout.Alignment.ALIGN_CENTER

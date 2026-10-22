@@ -10,11 +10,14 @@ use crate::state::{MutableState, OwnedState, State};
 /// **The rule: identity first, then contents only where that's cheap.** Shared data (`Rc`,
 /// `Arc`, state handles, callbacks) compares by identity; small values by contents. Collections
 /// are never compared element by element, so `Vec` and `HashMap` don't implement it: wrap them
-/// in `Rc`.
+/// in `Rc`, or hold a list as an [`ImmutableList`](crate::ImmutableList). A derived struct's
+/// field marked `#[compose_arg(eq)]` is compared with `PartialEq` instead.
 #[diagnostic::on_unimplemented(
     message = "`{Self}` can't be compared for skipping: it doesn't implement `ComposeArg`",
     label = "this type doesn't implement `ComposeArg`",
-    note = "large or deep data is compared by identity: wrap it in `Rc<…>`",
+    note = "large or deep data is compared by identity: wrap it in `Rc<…>`, or hold a list as \
+            an `ImmutableList<…>`; in a derived struct, `#[compose_arg(eq)]` on a field compares \
+            it with `PartialEq`",
     note = "derive `ComposeArg` for your own types; for a composable's parameter, you can also \
             mark the composable `#[composable(non_restartable)]`"
 )]
