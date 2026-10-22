@@ -14,7 +14,9 @@
 //! replayer keeps a render node by; a graphics layer's properties are in a `LAYERS` section
 //! before the operations, not in any record, so a key and a version are always the same bytes,
 //! copied from a [`GroupCache`] while the version stays (D157), without reading the group's
-//! operations (the frame holds each group's recording by reference, D270).
+//! operations (the frame holds each group's recording by reference, D270). A record names the
+//! groups drawn inside it by key (`GROUP_REF`), their records written apart: a group whose
+//! nested group changed keeps its bytes, and its version for the replayer (D323).
 
 use std::collections::HashMap;
 use std::sync::{Arc, Weak};
@@ -44,8 +46,10 @@ pub mod tag {
     pub const DRAW_ARC: u8 = 13;
     pub const DRAW_PATH: u8 = 14;
     /// A repaint boundary's record: its key (u64), its version (u64), its content's length in
-    /// bytes (u32), then its content (its layer's operations left out). The same key and
-    /// version are always the same bytes: the replayer keeps the group's render node by them.
+    /// bytes (u32), then its content (its layer's operations left out, the groups drawn in it
+    /// as `GROUP_REF`s). The same key and version are always the same bytes: the replayer keeps
+    /// the group's render node by them. Every group's record comes before the frame's own
+    /// operations, a group's before those of the groups drawn in it.
     pub const GROUP: u8 = 15;
     /// The layer properties of the groups that have a layer, before the operations: a count
     /// (u32), then per group its key (u64), alpha, pivot (x, y), scale (x, y), rotation
@@ -56,6 +60,8 @@ pub mod tag {
     pub const LAYERS: u8 = 16;
     /// Clips what follows to a path (u32 id) moved by an offset (x, y).
     pub const CLIP_PATH: u8 = 17;
+    /// Draws the group of a key (u64), whose `GROUP` record the frame holds (D323).
+    pub const GROUP_REF: u8 = 18;
     pub const DEFINE_PATH: u8 = 20;
     pub const DROP_PATH: u8 = 21;
     pub const DEFINE_IMAGE: u8 = 22;
@@ -454,6 +460,7 @@ pub fn operand_bytes(bytes: &[u8], at: usize) -> usize {
         tag::CLIP_RECT => 16,
         tag::CLIP_ROUND_RECT => 32,
         tag::CLIP_PATH => 4 + 8,
+        tag::GROUP_REF => 8,
         tag::DRAW_RECT | tag::DRAW_LINE => painted(16),
         tag::DRAW_ROUND_RECT => painted(32),
         tag::DRAW_PARAGRAPH => 12,
@@ -591,13 +598,19 @@ pub struct GroupCache {
     copied: usize,
     /// How many records the last write wrote afresh.
     written: usize,
+    /// How many of those were the bytes cached already (only nested groups changed).
+    unchanged: usize,
     /// The groups whose layers are still to be listed (`write_layers`), kept for its capacity.
     open: Vec<usize>,
 }
 
 #[derive(Default)]
 struct CachedGroup {
+    /// The group's version in the display list.
     version: u64,
+    /// The version its record carries: the display list's when its bytes last changed (a
+    /// nested group's change gives the group a new version, but leaves its bytes as they were).
+    written_version: u64,
     bytes: Vec<u8>,
     generation: u64,
     /// Its content is one drawing with a paint (`single_drawing`): an alpha layer around it
@@ -620,9 +633,15 @@ impl GroupCache {
         self.copied
     }
 
-    /// How many records the last write wrote afresh (a new version each: Kotlin records them).
+    /// How many records the last write wrote afresh.
     pub fn written(&self) -> usize {
         self.written
+    }
+
+    /// How many of the records written afresh were the bytes cached (with their version): only
+    /// a nested group changed, so Kotlin keeps their recordings.
+    pub fn unchanged(&self) -> usize {
+        self.unchanged
     }
 }
 
@@ -632,11 +651,12 @@ pub const LAYER_ENTRY_BYTES: usize = 8 + 8 * 4 + 1 + 4 * 4 + 1 + 4 * 4;
 /// Writes `list` into `out` (cleared first), defining in `resources` the paths and images it
 /// uses, and copying from `cache` the records of the groups whose version it holds.
 ///
-/// The bytes are a `LAYERS` section (if a group has a layer), then the operations, each group a
-/// `GROUP` record where its boundary is, its layer's operations left out: its layer is its
-/// `LAYERS` entry, which a replayer keeping a render node per group sets on that node each
-/// frame, nested groups' included. A cached group's record is copied without reading its
-/// operations (D270): only groups drawn again are walked.
+/// The bytes are a `LAYERS` section (if a group has a layer), then each group's `GROUP` record
+/// (outer before inner), then the frame's operations; where a boundary is, a `GROUP_REF` names
+/// its group. A record leaves out its layer's operations: its layer is its `LAYERS` entry,
+/// which a replayer keeping a render node per group sets on that node each frame. A cached
+/// group's record is copied without reading its operations (D270): only groups drawn again are
+/// walked.
 pub fn write_display_list(
     list: &DisplayList,
     resources: &mut Resources,
@@ -647,10 +667,21 @@ pub fn write_display_list(
     cache.generation += 1;
     cache.copied = 0;
     cache.written = 0;
+    cache.unchanged = 0;
     write_layers(list, cache, out);
     let mut serializer =
-        Serializer { groups: &list.groups, next: 0, folds: Vec::new(), resources, cache, out };
-    serializer.write_recording(list);
+        Serializer { groups: &list.groups, folds: Vec::new(), resources, cache, out };
+    let mut index = 0;
+    while let Some(group) = list.groups.get(index) {
+        if group.empty {
+            // Nothing drawn in it either.
+            index += 1 + group.descendants;
+        } else {
+            serializer.write_group(index);
+            index += 1;
+        }
+    }
+    serializer.write_recording(list, 0);
     let generation = cache.generation;
     cache.records.retain(|_, record| record.generation == generation);
 }
@@ -721,9 +752,8 @@ fn overlapping(list: &DisplayList, index: usize, cache: &GroupCache) -> bool {
 
 /// One write of a display list.
 struct Serializer<'a> {
-    /// The frame's groups, the one at `next` written at the next boundary.
+    /// The frame's groups, each before the ones nested in it.
     groups: &'a [DrawGroup],
-    next: usize,
     /// Layers folded into their one drawing's paint: where each ends (in the recording being
     /// written), and its alpha.
     folds: Vec<(usize, f32)>,
@@ -733,15 +763,16 @@ struct Serializer<'a> {
 }
 
 impl<'a> Serializer<'a> {
-    /// Writes `recording` (the frame, or a group's content), each group where its boundary is,
-    /// as its record. Its paints' shaders are its own (written whole into each paint, D210).
-    fn write_recording(&mut self, recording: &DisplayList) {
+    /// Writes `recording` (the frame, or a group's content), each group drawn in it named where
+    /// its boundary is; those groups are the ones from `child` on, siblings. Its paints'
+    /// shaders are its own (written whole into each paint, D210).
+    fn write_recording(&mut self, recording: &DisplayList, mut child: usize) {
         let ops = &recording.ops;
         let boundaries = &recording.boundaries;
         let mut boundary = 0;
         for index in 0..ops.len() {
             while boundaries.get(boundary).is_some_and(|boundary| boundary.at <= index) {
-                self.write_group(boundaries[boundary].key);
+                child = self.write_reference(boundaries[boundary].key, child);
                 boundary += 1;
             }
             while self.folds.last().is_some_and(|(end, _)| *end < index) {
@@ -751,7 +782,7 @@ impl<'a> Serializer<'a> {
             // would change it without changing its version.
             if let DrawOp::SaveLayerAlpha(alpha) = ops[index]
                 && let Some(end) = foldable_layer(ops, index)
-                && !self.draws_before(&boundaries[boundary..], end)
+                && !self.draws_before(&boundaries[boundary..], end, child)
             {
                 self.folds.push((end, alpha));
                 self.out.u8(tag::SAVE);
@@ -761,15 +792,37 @@ impl<'a> Serializer<'a> {
             write_op(&ops[index], alpha, &recording.shaders, self.resources, self.out);
         }
         for rest in &boundaries[boundary..] {
-            self.write_group(rest.key);
+            child = self.write_reference(rest.key, child);
         }
     }
 
-    /// Whether a group that draws is drawn at one of `boundaries` (the next ones) before
-    /// operation `end`.
-    fn draws_before(&self, boundaries: &[compose_ui::platform::Boundary], end: usize) -> bool {
+    /// Names the group at `child`, the boundary of `key`, unless it draws nothing; returns its
+    /// next sibling's index.
+    fn write_reference(&mut self, key: u64, child: usize) -> usize {
+        let group = self.groups.get(child);
+        debug_assert!(
+            group.is_some_and(|group| group.key == key),
+            "the frame's groups don't match its boundaries"
+        );
+        let Some(group) = group else { return child };
+        if !group.empty {
+            self.out.u8(tag::GROUP_REF);
+            self.out.u32(key as u32);
+            self.out.u32((key >> 32) as u32);
+        }
+        child + 1 + group.descendants
+    }
+
+    /// Whether a group that draws is drawn at one of `boundaries` (the next ones, the first
+    /// one's group at `child`) before operation `end`.
+    fn draws_before(
+        &self,
+        boundaries: &[compose_ui::platform::Boundary],
+        end: usize,
+        child: usize,
+    ) -> bool {
         let inside = boundaries.iter().take_while(|boundary| boundary.at <= end).count();
-        let mut next = self.next;
+        let mut next = child;
         for _ in 0..inside {
             let Some(group) = self.groups.get(next) else { return false };
             if !group.empty {
@@ -780,23 +833,12 @@ impl<'a> Serializer<'a> {
         false
     }
 
-    /// Writes the next group's record, the one of the boundary of `key`: copied if the cache has
-    /// its version (its operations untouched), else its header and its content (its layer's
-    /// operations left out).
-    fn write_group(&mut self, key: u64) {
-        let groups: &'a [DrawGroup] = self.groups;
-        let group = groups.get(self.next);
-        debug_assert!(
-            group.is_some_and(|group| group.key == key),
-            "the frame's groups don't match its boundaries"
-        );
-        let Some(group) = group else { return };
-        self.next += 1;
-        let nested = self.next..self.next + group.descendants;
-        if group.empty {
-            self.next = nested.end;
-            return;
-        }
+    /// Writes the record of the group at `index`: copied if the cache has its version (its
+    /// operations untouched), else its header and its content (its layer's operations left
+    /// out, the groups in it named). Written again with the bytes cached (a nested group
+    /// changed), it keeps the version they were cached with: the replayer keeps its recording.
+    fn write_group(&mut self, index: usize) {
+        let group = &self.groups[index];
         let generation = self.cache.generation;
         if let Some(record) = self.cache.records.get_mut(&group.key)
             && record.version == group.version
@@ -804,13 +846,6 @@ impl<'a> Serializer<'a> {
             record.generation = generation;
             self.out.bytes.extend_from_slice(&record.bytes);
             self.cache.copied += 1;
-            // The groups inside it are in its bytes, and stay cached.
-            for inner in &groups[nested.clone()] {
-                if let Some(record) = self.cache.records.get_mut(&inner.key) {
-                    record.generation = generation;
-                }
-            }
-            self.next = nested.end;
             return;
         }
         self.cache.written += 1;
@@ -818,22 +853,38 @@ impl<'a> Serializer<'a> {
         self.out.u8(tag::GROUP);
         self.out.u32(group.key as u32);
         self.out.u32((group.key >> 32) as u32);
+        let version_at = self.out.bytes.len();
         self.out.u32(group.version as u32);
         self.out.u32((group.version >> 32) as u32);
         let length_at = self.out.bytes.len();
         self.out.u32(0);
         // No fold spans a group's edge: the ones open here end before it.
         let folds = std::mem::take(&mut self.folds);
-        self.write_recording(&group.content);
+        self.write_recording(&group.content, index + 1);
         self.folds = folds;
         let length = (self.out.bytes.len() - length_at - 4) as u32;
         self.out.bytes[length_at..length_at + 4].copy_from_slice(&length.to_le_bytes());
         let record = self.cache.records.entry(group.key).or_default();
+        let content = length_at + 4;
+        let unchanged = !record.bytes.is_empty()
+            && record.bytes.len() == self.out.bytes.len() - at
+            && record.bytes[content - at..] == self.out.bytes[content..];
+        if unchanged {
+            self.cache.unchanged += 1;
+            let version = record.written_version;
+            self.out.bytes[version_at..version_at + 4]
+                .copy_from_slice(&(version as u32).to_le_bytes());
+            self.out.bytes[version_at + 4..version_at + 8]
+                .copy_from_slice(&((version >> 32) as u32).to_le_bytes());
+        } else {
+            record.written_version = group.version;
+            record.bytes.clear();
+            record.bytes.extend_from_slice(&self.out.bytes[at..]);
+        }
         record.version = group.version;
         record.generation = generation;
+        // Of the display list's operations, which bytes alone don't tell (a folded layer's).
         record.single_drawing = single_drawing(&group.content.ops).is_some();
-        record.bytes.clear();
-        record.bytes.extend_from_slice(&self.out.bytes[at..]);
     }
 }
 
@@ -1005,8 +1056,10 @@ mod tests {
         assert_eq!(out.bytes[0], tag::SAVE_LAYER_ALPHA);
     }
 
+    /// Each group is a record, before the frame's operations and the records of the groups in
+    /// it, which it names where they're drawn (D323).
     #[test]
-    fn groups_nest_and_carry_their_length() {
+    fn groups_are_records_named_where_drawn() {
         let rect = || DrawOp::DrawRect(Rect::new(0.0, 0.0, 1.0, 1.0), Paint::fill(Color::BLACK));
         // The outer group holds a rect, the inner one, an empty one (left out), and a rect.
         let mut outer = DisplayList::default();
@@ -1026,50 +1079,104 @@ mod tests {
         let (mut resources, mut out) = (Resources::default(), Writer::default());
         write_display_list(&list, &mut resources, &mut GroupCache::default(), &mut out);
         let rect_bytes = 1 + 16 + 4 + 1 + 4 + 1 + 1;
-        let header = 1 + 8 + 8 + 4;
+        let (header, reference) = (1 + 8 + 8 + 4, 1 + 8);
         let bytes = &out.bytes;
-        assert_eq!(bytes.len(), 2 * header + 3 * rect_bytes);
+        assert_eq!(bytes.len(), 2 * header + 3 * rect_bytes + 2 * reference);
         assert_eq!(bytes[0], tag::GROUP);
         assert_eq!((read_u32(bytes, 1), read_u32(bytes, 5)), (1, 1 << 8));
-        assert_eq!(read_u32(bytes, 17) as usize, header + 3 * rect_bytes);
-        let inner = header + rect_bytes;
+        assert_eq!(read_u32(bytes, 17) as usize, 2 * rect_bytes + reference);
+        let named = header + rect_bytes;
+        assert_eq!((bytes[named], read_u32(bytes, named + 1)), (tag::GROUP_REF, 2));
+        assert_eq!(bytes[named + reference], tag::DRAW_RECT);
+        let inner = header + 2 * rect_bytes + reference;
         assert_eq!(bytes[inner], tag::GROUP);
         assert_eq!(read_u32(bytes, inner + 1), 2);
         assert_eq!((read_u32(bytes, inner + 9), read_u32(bytes, inner + 13)), (7, 0), "version");
         assert_eq!(read_u32(bytes, inner + 17) as usize, rect_bytes);
         assert_eq!(bytes[inner + header], tag::DRAW_RECT);
+        // Then the frame's operations: the outer group, named.
+        let frame = inner + header + rect_bytes;
+        assert_eq!((bytes[frame], read_u32(bytes, frame + 1)), (tag::GROUP_REF, 1));
+        assert_eq!(read_u32(bytes, frame + 5), 1 << 8);
+    }
+
+    /// A frame of two nested groups, the inner one drawing a rect of `color`.
+    fn nested_frame(outer: u64, inner: u64, color: Color) -> DisplayList {
+        let mut content = DisplayList::default();
+        content.push(DrawOp::DrawRect(Rect::new(0.0, 0.0, 1.0, 1.0), Paint::fill(color)));
+        let mut around = DisplayList::default();
+        around.push(DrawOp::DrawRect(Rect::new(0.0, 0.0, 2.0, 2.0), Paint::fill(Color::WHITE)));
+        boundary(&mut around, 2);
+        let mut list = DisplayList::default();
+        boundary(&mut list, 1);
+        list.groups = vec![group(1, outer, around, 1), group(2, inner, content, 0)];
+        list
     }
 
     /// A group whose version the cache holds is its cached record: its operations aren't read
-    /// (D270), nor are its nested groups'.
+    /// (D270).
     #[test]
     fn a_cached_group_is_copied_without_reading_its_operations() {
-        let rect = |color| DrawOp::DrawRect(Rect::new(0.0, 0.0, 1.0, 1.0), Paint::fill(color));
-        let frame = |color| {
-            let mut inner = DisplayList::default();
-            inner.push(rect(color));
-            let mut outer = DisplayList::default();
-            boundary(&mut outer, 2);
-            let mut list = DisplayList::default();
-            boundary(&mut list, 1);
-            list.groups = vec![group(1, 5, outer, 1), group(2, 4, inner, 0)];
-            list
-        };
         let (mut resources, mut cache) = (Resources::default(), GroupCache::default());
         let mut first = Writer::default();
-        write_display_list(&frame(Color::BLACK), &mut resources, &mut cache, &mut first);
+        write_display_list(
+            &nested_frame(5, 4, Color::BLACK),
+            &mut resources,
+            &mut cache,
+            &mut first,
+        );
         assert_eq!((cache.written(), cache.copied()), (2, 0));
         // The same versions drawing something else (which a tree never does): the cache's.
         let mut second = Writer::default();
-        write_display_list(&frame(Color::WHITE), &mut resources, &mut cache, &mut second);
-        assert_eq!((cache.written(), cache.copied()), (0, 1));
+        write_display_list(
+            &nested_frame(5, 4, Color::WHITE),
+            &mut resources,
+            &mut cache,
+            &mut second,
+        );
+        assert_eq!((cache.written(), cache.copied()), (0, 2));
         assert_eq!(second.bytes, first.bytes);
-        assert_eq!(cache.len(), 2, "the nested group's record stays");
+        assert_eq!(cache.len(), 2);
     }
 
-    /// A boundary holding only a boundary: the outer one opens first.
+    /// A nested group's change gives its parent a new version (D155), but leaves the parent's
+    /// bytes as they were (it names the group by key): its record keeps its version, so the
+    /// replayer keeps its recording (D323).
     #[test]
-    fn a_group_holding_only_a_group_opens_first() {
+    fn a_group_whose_nested_group_changed_keeps_its_version() {
+        let (mut resources, mut cache) = (Resources::default(), GroupCache::default());
+        let mut first = Writer::default();
+        write_display_list(
+            &nested_frame(5, 4, Color::BLACK),
+            &mut resources,
+            &mut cache,
+            &mut first,
+        );
+        let mut second = Writer::default();
+        write_display_list(
+            &nested_frame(9, 8, Color::RED),
+            &mut resources,
+            &mut cache,
+            &mut second,
+        );
+        assert_eq!((cache.written(), cache.unchanged(), cache.copied()), (2, 1, 0));
+        let version = |bytes: &[u8]| read_u32(bytes, 9);
+        let inner = |bytes: &[u8]| 21 + read_u32(bytes, 17) as usize;
+        assert_eq!(version(&second.bytes), 5, "the outer record's version stays");
+        assert_eq!(second.bytes[..inner(&second.bytes)], first.bytes[..inner(&first.bytes)]);
+        assert_eq!(version(&second.bytes[inner(&second.bytes)..]), 8, "the inner one's is new");
+        // Its own content changed: a new version.
+        let mut changed = nested_frame(10, 8, Color::RED);
+        Arc::make_mut(&mut changed.groups[0].content).ops.clear();
+        let mut third = Writer::default();
+        write_display_list(&changed, &mut resources, &mut cache, &mut third);
+        assert_eq!((cache.written(), cache.unchanged(), cache.copied()), (1, 0, 1));
+        assert_eq!(version(&third.bytes), 10);
+    }
+
+    /// A group's record comes before those of the groups drawn in it.
+    #[test]
+    fn a_groups_record_comes_before_those_of_the_groups_in_it() {
         let mut inner = DisplayList::default();
         inner.push(DrawOp::DrawRect(Rect::new(0.0, 0.0, 1.0, 1.0), Paint::fill(Color::BLACK)));
         let mut outer = DisplayList::default();
@@ -1080,7 +1187,8 @@ mod tests {
         let (mut resources, mut out) = (Resources::default(), Writer::default());
         write_display_list(&list, &mut resources, &mut GroupCache::default(), &mut out);
         assert_eq!((out.bytes[0], read_u32(&out.bytes, 1)), (tag::GROUP, 2));
-        assert_eq!((out.bytes[21], read_u32(&out.bytes, 22)), (tag::GROUP, 1));
+        assert_eq!((out.bytes[21], read_u32(&out.bytes, 22)), (tag::GROUP_REF, 1));
+        assert_eq!((out.bytes[30], read_u32(&out.bytes, 31)), (tag::GROUP, 1));
     }
 
     /// A folded layer's `Save` opens the group as any operation does.
@@ -1096,7 +1204,8 @@ mod tests {
         let (mut resources, mut out) = (Resources::default(), Writer::default());
         write_display_list(&list, &mut resources, &mut GroupCache::default(), &mut out);
         assert_eq!(out.bytes[0], tag::GROUP);
-        assert_eq!(read_u32(&out.bytes, 17) as usize, out.bytes.len() - 21);
+        // Its record, then the frame naming it.
+        assert_eq!(read_u32(&out.bytes, 17) as usize, out.bytes.len() - 21 - 9);
         assert_eq!(out.bytes[21], tag::SAVE);
     }
 

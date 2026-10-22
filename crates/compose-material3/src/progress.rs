@@ -22,6 +22,16 @@ impl ProgressIndicatorDefaults {
     pub const LINEAR_INDICATOR_WIDTH: Dp = Dp(240.0);
     /// A linear indicator's height, as `LinearIndicatorHeight`.
     pub const LINEAR_INDICATOR_HEIGHT: Dp = Dp(4.0);
+    /// A linear indicator's ends, as `LinearStrokeCap`: `Round` since Material 3 1.3 (`Butt`
+    /// before).
+    pub const LINEAR_STROKE_CAP: StrokeCap = StrokeCap::Round;
+    /// A determinate circular indicator's ends, as `CircularDeterminateStrokeCap`: `Round`
+    /// since Material 3 1.3 (`Butt` before).
+    pub const CIRCULAR_DETERMINATE_STROKE_CAP: StrokeCap = StrokeCap::Round;
+    /// An indeterminate circular indicator's ends, as `CircularIndeterminateStrokeCap`: `Round`
+    /// since Material 3 1.3 (`Square` before). A round arc is also one Skia draws directly
+    /// (`CircleOp`), where a square-capped one becomes a stroked path each frame.
+    pub const CIRCULAR_INDETERMINATE_STROKE_CAP: StrokeCap = StrokeCap::Round;
 
     /// The indicator's color, as `circularColor` and `linearColor`.
     pub fn color() -> Color {
@@ -54,7 +64,8 @@ pub fn CircularProgressIndicator(
     #[default(crate::ProgressIndicatorDefaults::color())] color: Color,
     #[default(crate::ProgressIndicatorDefaults::CIRCULAR_STROKE_WIDTH)] stroke_width: Dp,
     #[default(crate::Color::TRANSPARENT)] track_color: Color,
-    #[default(crate::StrokeCap::Butt)] stroke_cap: StrokeCap,
+    #[default(crate::ProgressIndicatorDefaults::CIRCULAR_DETERMINATE_STROKE_CAP)]
+    stroke_cap: StrokeCap,
 ) {
     let modifier = progress_semantics(modifier, Some(progress))
         .size(ProgressIndicatorDefaults::CIRCULAR_INDICATOR_DIAMETER);
@@ -77,7 +88,8 @@ pub fn IndeterminateCircularProgressIndicator(
     #[default(crate::ProgressIndicatorDefaults::color())] color: Color,
     #[default(crate::ProgressIndicatorDefaults::CIRCULAR_STROKE_WIDTH)] stroke_width: Dp,
     #[default(crate::Color::TRANSPARENT)] track_color: Color,
-    #[default(crate::StrokeCap::Square)] stroke_cap: StrokeCap,
+    #[default(crate::ProgressIndicatorDefaults::CIRCULAR_INDETERMINATE_STROKE_CAP)]
+    stroke_cap: StrokeCap,
 ) {
     // One clock for the five turns of a cycle (Compose's `RotationsPerCycle`), the angles from
     // it as Compose's keyframes.
@@ -91,8 +103,11 @@ pub fn IndeterminateCircularProgressIndicator(
             RepeatMode::Restart,
         ),
     );
+    // A repaint boundary of its own: it draws again every frame, what's around it needn't
+    // (D323).
     let modifier = progress_semantics(modifier, None)
-        .size(ProgressIndicatorDefaults::CIRCULAR_INDICATOR_DIAMETER);
+        .size(ProgressIndicatorDefaults::CIRCULAR_INDICATOR_DIAMETER)
+        .repaint_boundary();
     compose_foundation::layout::Canvas(modifier, move |scope| {
         let stroke = scope.density().to_px(stroke_width);
         let size = scope.size().width.min(scope.size().height);
@@ -151,7 +166,7 @@ pub fn LinearProgressIndicator(
     #[default(crate::Modifier)] modifier: Modifier,
     #[default(crate::ProgressIndicatorDefaults::color())] color: Color,
     #[default(crate::ProgressIndicatorDefaults::linear_track_color())] track_color: Color,
-    #[default(crate::StrokeCap::Butt)] stroke_cap: StrokeCap,
+    #[default(crate::ProgressIndicatorDefaults::LINEAR_STROKE_CAP)] stroke_cap: StrokeCap,
 ) {
     let modifier = linear_size(progress_semantics(modifier, Some(progress)));
     compose_foundation::layout::Canvas(modifier, move |scope| {
@@ -168,7 +183,7 @@ pub fn IndeterminateLinearProgressIndicator(
     #[default(crate::Modifier)] modifier: Modifier,
     #[default(crate::ProgressIndicatorDefaults::color())] color: Color,
     #[default(crate::ProgressIndicatorDefaults::linear_track_color())] track_color: Color,
-    #[default(crate::StrokeCap::Butt)] stroke_cap: StrokeCap,
+    #[default(crate::ProgressIndicatorDefaults::LINEAR_STROKE_CAP)] stroke_cap: StrokeCap,
 ) {
     let transition = remember_infinite_transition("LinearProgressIndicator");
     let time: State<f32> = transition.animate_float(
@@ -176,7 +191,8 @@ pub fn IndeterminateLinearProgressIndicator(
         LINEAR_DURATION as f32,
         infinite_repeatable(tween(LINEAR_DURATION).easing(Easing::Linear), RepeatMode::Restart),
     );
-    let modifier = linear_size(progress_semantics(modifier, None));
+    // Its own repaint boundary, as the circular one's.
+    let modifier = linear_size(progress_semantics(modifier, None)).repaint_boundary();
     compose_foundation::layout::Canvas(modifier, move |scope| {
         let rtl = scope.layout_direction() == compose_ui::LayoutDirection::Rtl;
         draw_line_fraction(scope, 0.0, 1.0, track_color, stroke_cap, rtl);

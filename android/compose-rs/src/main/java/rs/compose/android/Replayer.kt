@@ -21,6 +21,17 @@ import kotlin.math.ceil
 import kotlin.math.floor
 
 /**
+ * A float read as its bits: `ByteBuffer.getFloat` isn't compiled in the boot image (it runs in
+ * the interpreter, and the JIT doesn't compile it either), `getInt` is, and `fromBits` is an
+ * intrinsic.
+ */
+@Suppress("NOTHING_TO_INLINE")
+internal inline fun ByteBuffer.float(): Float = Float.fromBits(getInt())
+
+@Suppress("NOTHING_TO_INLINE")
+internal inline fun ByteBuffer.floatAt(index: Int): Float = Float.fromBits(getInt(index))
+
+/**
  * Replays compose-rs display lists (`crates/compose-android/src/serialize.rs`) on a `Canvas`:
  * on a hardware-accelerated view, the system records the calls and draws them on the GPU.
  * Paths and images are kept by id across frames, as the buffer defines and drops them. A small
@@ -32,10 +43,12 @@ import kotlin.math.floor
  * a frame drawing the same gradients builds none.
  *
  * A group (a repaint boundary: a graphics layer, a lazy item) is recorded into a `RenderNode`
- * of its own, kept by its key and version (D157). Rust gives a group a new version whenever
- * what it draws changes, a nested group's change included, so a key and a version always come
- * with the same bytes: a frame where a group is unchanged (it scrolled, or something beside it
- * animates) draws its node, its bytes skipped unread, nested groups' records included.
+ * of its own, kept by its key and version (D157). Rust gives a group's record a new version
+ * whenever its bytes change, so a key and a version always come with the same bytes: a frame
+ * where a group is unchanged (it scrolled, or something beside it animates) draws its node,
+ * its bytes skipped unread. A record names the groups drawn in it (`GROUP_REF`): their nodes
+ * are drawn by reference, recorded from their own records (D323), so a group whose nested
+ * group changed keeps its recording.
  *
  * A graphics layer's properties (alpha, transform, clip) are in no group's bytes: the frame's
  * `LAYERS` section lists them for every group that has a layer, nested ones in kept parents
@@ -85,14 +98,14 @@ internal class Replayer(private val text: TextMeasurer) {
     private val images = SparseArray<Bitmap>()
 
     private fun ByteBuffer.readRect(into: RectF): RectF {
-        into.set(getFloat(), getFloat(), getFloat(), getFloat())
+        into.set(float(), float(), float(), float())
         return into
     }
 
     /** Reads 4 corner radii (top left, top right, bottom right, bottom left) as 8 floats. */
     private fun ByteBuffer.readRadii(): FloatArray {
         for (corner in 0 until 4) {
-            val radius = getFloat()
+            val radius = float()
             radii[corner * 2] = radius
             radii[corner * 2 + 1] = radius
         }
@@ -115,13 +128,13 @@ internal class Replayer(private val text: TextMeasurer) {
     private fun ByteBuffer.readPaint(x: Float = 0f, y: Float = 0f, scaleX: Float = 1f, scaleY: Float = 1f): Paint {
         var color = getInt()
         val stroke = get().toInt() != 0
-        val width = getFloat()
+        val width = float()
         val cap = get().toInt()
         val kind = get().toInt()
         val shader = if (kind == SHADER_NONE) null else readShader(kind, x, y, scaleX, scaleY)
         if (shader != null) {
             // The shader paints; the paint's alpha is the gradient's, as compose-skia's.
-            color = (getFloat().coerceIn(0f, 1f) * 255f + 0.5f).toInt() shl 24
+            color = (float().coerceIn(0f, 1f) * 255f + 0.5f).toInt() shl 24
         }
         if (shader !== paintShader) {
             paintShader = shader
@@ -173,10 +186,22 @@ internal class Replayer(private val text: TextMeasurer) {
         var layered = false
         /** The `LAYERS` entry (after its key) last set on [node], while [layered]. */
         val applied = ByteArray(LAYER_ENTRY_BYTES - 8)
-        /** The groups drawn inside it: kept as long as it is. */
-        val children = ArrayList<Group>()
-        /** Gone: its node went back to the pool (a parent's [children] may still name it). */
-        var removed = false
+        /**
+         * The size last given to [node], read here rather than with `RenderNode.getWidth` and
+         * `getHeight` (not compiled in the boot image: they'd run in the interpreter). -1
+         * until set: a node from the pool keeps its last group's size.
+         */
+        var width = -1
+        var height = -1
+
+        /** Sets [node]'s bounds to [width] × [height] at the origin, unless they're those already. */
+        fun setPosition(width: Int, height: Int) {
+            if (width == this.width && height == this.height) return
+            this.width = width
+            this.height = height
+            node.setPosition(0, 0, width, height)
+        }
+
     }
 
     private val groups = HashMap<Long, Group>()
@@ -185,23 +210,27 @@ internal class Replayer(private val text: TextMeasurer) {
     private var frame = 0
     private var width = 1
     private var height = 1
-    /** The groups met in the group being recorded (null outside any). */
-    private var children: ArrayList<Group>? = null
     /** In a software draw: where each group's `LAYERS` entry is in the buffer. */
     private val softwareLayers = HashMap<Long, Int>()
+    /** In a software draw: where each group's record is in the buffer (its content's start). */
+    private val softwareGroups = HashMap<Long, Int>()
     private val clipBounds = Rect()
     /** An unknown operation was met: the rest can't be read. */
     private var unreadable = false
+    /** The frame's canvas is hardware accelerated (groups are recorded into render nodes). */
+    private var hardware = false
 
     fun replay(canvas: Canvas, buffer: ByteBuffer) {
         buffer.order(ByteOrder.LITTLE_ENDIAN)
         buffer.position(0)
-        children = null
         unreadable = false
-        if (!canvas.isHardwareAccelerated) {
+        // Read once a frame: `isHardwareAccelerated` isn't compiled in the boot image.
+        hardware = canvas.isHardwareAccelerated
+        if (!hardware) {
             // A software draw (a snapshot) replays everything, layers applied as operations,
             // and leaves the groups alone: the window's last frame still draws their nodes.
             softwareLayers.clear()
+            softwareGroups.clear()
             replay(canvas, buffer, buffer.limit())
             return
         }
@@ -213,17 +242,16 @@ internal class Replayer(private val text: TextMeasurer) {
         while (iterator.hasNext()) {
             val group = iterator.next()
             if (group.frame != frame) {
-                // Gone: this frame didn't draw it, so no recording drawn from now on does.
+                // Gone: this frame has no record of it, so no recording drawn from now on draws
+                // it (one that did changed, and was recorded again).
                 iterator.remove()
                 if (group.layered) resetLayer(group.node)
-                group.removed = true
-                group.children.clear()
                 pool.recycle(group.node)
             } else if (group.layered && group.layerFrame != frame) {
                 // No longer a layer. (Properties set after drawing the node still apply: the
                 // render thread reads them when the frame is done.)
                 resetLayer(group.node)
-                group.node.setPosition(0, 0, width, height)
+                group.setPosition(width, height)
                 group.layered = false
             }
         }
@@ -236,7 +264,7 @@ internal class Replayer(private val text: TextMeasurer) {
             when (buffer.get().toInt()) {
                 SAVE -> canvas.save()
                 RESTORE -> if (canvas.saveCount > start) canvas.restore()
-                TRANSLATE -> canvas.translate(buffer.getFloat(), buffer.getFloat())
+                TRANSLATE -> canvas.translate(buffer.float(), buffer.float())
                 CLIP_RECT -> canvas.clipRect(buffer.readRect(rect))
                 CLIP_ROUND_RECT -> {
                     buffer.readRect(rect)
@@ -246,8 +274,8 @@ internal class Replayer(private val text: TextMeasurer) {
                 }
                 CLIP_PATH -> {
                     val kept = paths.get(buffer.getInt())
-                    val x = buffer.getFloat()
-                    val y = buffer.getFloat()
+                    val x = buffer.float()
+                    val y = buffer.float()
                     if (kept == null) {
                         // An unknown path clips everything out rather than nothing.
                         canvas.clipRect(0f, 0f, 0f, 0f)
@@ -273,28 +301,28 @@ internal class Replayer(private val text: TextMeasurer) {
                     drawRoundRect(canvas, corners, paint)
                 }
                 DRAW_LINE -> {
-                    val x1 = buffer.getFloat()
-                    val y1 = buffer.getFloat()
-                    val x2 = buffer.getFloat()
-                    val y2 = buffer.getFloat()
+                    val x1 = buffer.float()
+                    val y1 = buffer.float()
+                    val x2 = buffer.float()
+                    val y2 = buffer.float()
                     canvas.drawLine(x1, y1, x2, y2, buffer.readPaint())
                 }
                 DRAW_PARAGRAPH -> {
                     val handle = buffer.getInt()
-                    text.draw(canvas, handle, buffer.getFloat(), buffer.getFloat())
+                    text.draw(canvas, hardware, handle, buffer.float(), buffer.float())
                 }
                 SAVE_LAYER_ALPHA -> {
-                    val alpha = (buffer.getFloat().coerceIn(0f, 1f) * 255f + 0.5f).toInt()
+                    val alpha = (buffer.float().coerceIn(0f, 1f) * 255f + 0.5f).toInt()
                     canvas.saveLayerAlpha(null, alpha)
                 }
                 TRANSFORM -> {
-                    val pivotX = buffer.getFloat()
-                    val pivotY = buffer.getFloat()
-                    val scaleX = buffer.getFloat()
-                    val scaleY = buffer.getFloat()
-                    val rotation = buffer.getFloat()
-                    val translateX = buffer.getFloat()
-                    val translateY = buffer.getFloat()
+                    val pivotX = buffer.float()
+                    val pivotY = buffer.float()
+                    val scaleX = buffer.float()
+                    val scaleY = buffer.float()
+                    val rotation = buffer.float()
+                    val translateX = buffer.float()
+                    val translateY = buffer.float()
                     canvas.translate(pivotX + translateX, pivotY + translateY)
                     canvas.rotate(rotation)
                     canvas.scale(scaleX, scaleY)
@@ -304,7 +332,7 @@ internal class Replayer(private val text: TextMeasurer) {
                     val image = images.get(buffer.getInt())
                     val src = buffer.readRect(RectF())
                     buffer.readRect(rect)
-                    bitmapPaint.alpha = (buffer.getFloat().coerceIn(0f, 1f) * 255f + 0.5f).toInt()
+                    bitmapPaint.alpha = (buffer.float().coerceIn(0f, 1f) * 255f + 0.5f).toInt()
                     if (image != null) {
                         source.set(src.left.toInt(), src.top.toInt(), src.right.toInt(), src.bottom.toInt())
                         canvas.drawBitmap(image, source, rect, bitmapPaint)
@@ -313,18 +341,18 @@ internal class Replayer(private val text: TextMeasurer) {
                 DRAW_SHADOW -> drawShadow(canvas, buffer)
                 DRAW_ARC -> {
                     buffer.readRect(rect)
-                    val startAngle = buffer.getFloat()
-                    val sweepAngle = buffer.getFloat()
+                    val startAngle = buffer.float()
+                    val sweepAngle = buffer.float()
                     val useCenter = buffer.get().toInt() != 0
                     canvas.drawArc(rect, startAngle, sweepAngle, useCenter, buffer.readPaint())
                 }
                 DRAW_PATH -> {
                     val id = buffer.getInt()
                     val kept = paths.get(id)
-                    val x = buffer.getFloat()
-                    val y = buffer.getFloat()
-                    val scaleX = buffer.getFloat()
-                    val scaleY = buffer.getFloat()
+                    val x = buffer.float()
+                    val y = buffer.float()
+                    val scaleX = buffer.float()
+                    val scaleY = buffer.float()
                     val paint = buffer.readPaint(x, y, scaleX, scaleY)
                     // A mask is tinted by a color: a gradient draws the path.
                     val masked = !paintStroke && paintShader == null
@@ -341,10 +369,13 @@ internal class Replayer(private val text: TextMeasurer) {
                     val version = buffer.getLong()
                     val length = buffer.getInt()
                     val from = buffer.position()
-                    group(canvas, buffer, key, version, from + length)
+                    group(buffer, key, version, from + length)
                     buffer.position(from + length)
+                    // A record cut short (not kept as its version) leaves the rest readable.
+                    unreadable = false
                 }
-                LAYERS -> layers(canvas.isHardwareAccelerated, buffer)
+                GROUP_REF -> drawGroup(canvas, buffer, buffer.getLong())
+                LAYERS -> layers(hardware, buffer)
                 DEFINE_PATH -> definePath(buffer)
                 DROP_PATH -> dropPath(buffer.getInt())
                 DEFINE_IMAGE -> defineImage(buffer)
@@ -360,69 +391,56 @@ internal class Replayer(private val text: TextMeasurer) {
     }
 
     /**
-     * Draws group [key] at [version], its content the bytes up to [end]: its kept node if it
-     * holds that version's recording (whole: the system drops recordings when the window
-     * hides), else recorded from them first.
+     * The record of group [key] at [version], its content the bytes up to [end]: its node is
+     * recorded from them, unless it holds that version's recording already (whole: the system
+     * drops recordings when the window hides). Drawn where a `GROUP_REF` names it. In a
+     * software draw, where it is, for [drawGroup].
      */
-    private fun group(canvas: Canvas, buffer: ByteBuffer, key: Long, version: Long, end: Int) {
-        if (!canvas.isHardwareAccelerated) {
-            // Its layer as the operations Rust left out: transform, clip, alpha layer.
-            val save = canvas.save()
-            softwareLayers[key]?.let { at -> applyLayer(canvas, buffer, at) }
-            replay(canvas, buffer, end)
-            canvas.restoreToCount(save)
+    private fun group(buffer: ByteBuffer, key: Long, version: Long, end: Int) {
+        if (!hardware) {
+            softwareGroups[key] = buffer.position()
             return
         }
         val group = groups.getOrPut(key) { Group(pool.obtain()) }
-        children?.add(group)
-        if (group.version == version && recorded(group)) {
-            // The same bytes as recorded, nested groups' included: their versions are too.
-            keep(group)
-            canvas.drawRenderNode(group.node)
-            return
-        }
         group.frame = frame
+        if (group.version == version && group.node.hasDisplayList()) return
         // Matches nothing until recorded whole.
         group.version = -1L
         // A layer's node has its bounds already (setLayer).
-        if (!group.layered) group.node.setPosition(0, 0, width, height)
-        val outer = children
-        group.children.clear()
-        children = group.children
+        if (!group.layered) group.setPosition(width, height)
         // Its size is a hint: what's recorded past it is kept, as a view's children drawn past
         // its bounds are.
         val recording =
-            group.node.beginRecording(group.node.width.coerceAtLeast(1), group.node.height.coerceAtLeast(1))
+            group.node.beginRecording(group.width.coerceAtLeast(1), group.height.coerceAtLeast(1))
         try {
             replay(recording, buffer, end)
         } finally {
             group.node.endRecording()
-            children = outer
         }
         // A recording cut short by an unknown operation isn't that version's.
         if (!unreadable) group.version = version
-        canvas.drawRenderNode(group.node)
     }
 
     /**
-     * Whether [group] and the groups inside it still have their recordings: the system drops
-     * them all when the window hides (`destroyHardwareResources`).
+     * Draws group [key] on [canvas]: its node (recorded from its record, which comes first), or
+     * in a software draw its record's operations, under its layer's.
      */
-    private fun recorded(group: Group): Boolean {
-        if (group.removed || !group.node.hasDisplayList()) return false
-        // By index: an iterator a frame for every kept group adds up.
-        val children = group.children
-        for (index in children.indices) {
-            if (!recorded(children[index])) return false
+    private fun drawGroup(canvas: Canvas, buffer: ByteBuffer, key: Long) {
+        if (hardware) {
+            // Made here if new: a parent's record comes before those of the groups in it, which
+            // are recorded later in this frame (its node is drawn by reference).
+            canvas.drawRenderNode(groups.getOrPut(key) { Group(pool.obtain()) }.node)
+            return
         }
-        return true
-    }
-
-    /** Marks [group] and the groups inside it drawn this frame. */
-    private fun keep(group: Group) {
-        group.frame = frame
-        val children = group.children
-        for (index in children.indices) keep(children[index])
+        val from = softwareGroups[key] ?: return
+        val position = buffer.position()
+        // Its layer as the operations Rust left out: transform, clip, alpha layer.
+        val save = canvas.save()
+        softwareLayers[key]?.let { at -> applyLayer(canvas, buffer, at) }
+        buffer.position(from)
+        replay(canvas, buffer, from + buffer.getInt(from - 4))
+        canvas.restoreToCount(save)
+        buffer.position(position)
     }
 
     /**
@@ -437,10 +455,13 @@ internal class Replayer(private val text: TextMeasurer) {
             val key = buffer.getLong(at)
             if (hardware) {
                 val group = groups.getOrPut(key) { Group(pool.obtain()) }
-                // Set only when it changed: a frame where nothing moves sets nothing.
-                if (!group.layered || !applied(group.applied, buffer, at + 8)) {
-                    for (index in group.applied.indices) group.applied[index] = buffer.get(at + 8 + index)
-                    setLayer(group.node, buffer, at + 8)
+                // Read in one copy, compared with what was set: a frame where nothing moves
+                // sets nothing, and a change sets only the properties that changed.
+                buffer.position(at + 8)
+                buffer.get(entry)
+                if (!group.layered || !entry.contentEquals(group.applied)) {
+                    setLayer(group, buffer, at + 8, if (group.layered) group.applied else null)
+                    System.arraycopy(entry, 0, group.applied, 0, entry.size)
                     group.layered = true
                 }
                 group.layerFrame = frame
@@ -452,48 +473,58 @@ internal class Replayer(private val text: TextMeasurer) {
         buffer.position(at)
     }
 
-    /** Whether [applied] holds the `LAYERS` entry at [at] (after its key). */
-    private fun applied(applied: ByteArray, buffer: ByteBuffer, at: Int): Boolean {
-        for (index in applied.indices) {
-            if (applied[index] != buffer.get(at + index)) return false
+    /** The `LAYERS` entry being read (after its key). */
+    private val entry = ByteArray(LAYER_ENTRY_BYTES - 8)
+
+    /** Whether [entry]'s bytes [from] until [to] differ from [old]'s (or there's no [old]). */
+    private fun changed(old: ByteArray?, from: Int, to: Int): Boolean {
+        if (old == null) return true
+        for (index in from until to) {
+            if (old[index] != entry[index]) return true
         }
-        return true
+        return false
     }
 
     /**
      * Sets the layer at [at] (a `LAYERS` entry after its key: alpha, pivot, scale, rotation,
-     * translation, clip, overlapping, bounds) on [node]. A node scales and rotates around its
-     * pivot then translates, clips in its own coordinates and applies its alpha last, as the
-     * operations Rust left out (`Transform`, `ClipRect`, `SaveLayerAlpha`). Its position is the
-     * group's origin (a recording doesn't depend on the layer's offset, which can change
-     * without the group's version) to the layer's far corner.
+     * translation, clip, overlapping, bounds) on [group]'s node: the properties whose bytes
+     * differ from [old] (the entry last set), all of them without one. A node scales and
+     * rotates around its pivot then translates, clips in its own coordinates and applies its
+     * alpha last, as the operations Rust left out (`Transform`, `ClipRect`, `SaveLayerAlpha`).
+     * Its position is the group's origin (a recording doesn't depend on the layer's offset,
+     * which can change without the group's version) to the layer's far corner.
      */
-    private fun setLayer(node: RenderNode, buffer: ByteBuffer, at: Int) {
-        node.setPosition(0, 0, ceil(buffer.getFloat(at + 58)).toInt(), ceil(buffer.getFloat(at + 62)).toInt())
-        node.setAlpha(buffer.getFloat(at))
-        node.setPivotX(buffer.getFloat(at + 4))
-        node.setPivotY(buffer.getFloat(at + 8))
-        node.setScaleX(buffer.getFloat(at + 12))
-        node.setScaleY(buffer.getFloat(at + 16))
-        node.setRotationZ(buffer.getFloat(at + 20))
-        node.setTranslationX(buffer.getFloat(at + 24))
-        node.setTranslationY(buffer.getFloat(at + 28))
-        if (buffer.get(at + 32).toInt() != 0) {
-            // Whole pixels: a layer's bounds are its node's (whole) size at its (whole) offset.
-            clipBounds.set(
-                floor(buffer.getFloat(at + 33)).toInt(),
-                floor(buffer.getFloat(at + 37)).toInt(),
-                ceil(buffer.getFloat(at + 41)).toInt(),
-                ceil(buffer.getFloat(at + 45)).toInt(),
-            )
-            node.setClipRect(clipBounds)
-        } else {
-            node.setClipRect(null)
+    private fun setLayer(group: Group, buffer: ByteBuffer, at: Int, old: ByteArray?) {
+        val node = group.node
+        if (changed(old, 58, 66)) {
+            group.setPosition(ceil(buffer.floatAt(at + 58)).toInt(), ceil(buffer.floatAt(at + 62)).toInt())
+        }
+        if (changed(old, 0, 4)) node.setAlpha(buffer.floatAt(at))
+        if (changed(old, 4, 8)) node.setPivotX(buffer.floatAt(at + 4))
+        if (changed(old, 8, 12)) node.setPivotY(buffer.floatAt(at + 8))
+        if (changed(old, 12, 16)) node.setScaleX(buffer.floatAt(at + 12))
+        if (changed(old, 16, 20)) node.setScaleY(buffer.floatAt(at + 16))
+        if (changed(old, 20, 24)) node.setRotationZ(buffer.floatAt(at + 20))
+        if (changed(old, 24, 28)) node.setTranslationX(buffer.floatAt(at + 24))
+        if (changed(old, 28, 32)) node.setTranslationY(buffer.floatAt(at + 28))
+        if (changed(old, 32, 49)) {
+            if (buffer.get(at + 32).toInt() != 0) {
+                // Whole pixels: a layer's bounds are its node's (whole) size at its (whole) offset.
+                clipBounds.set(
+                    floor(buffer.floatAt(at + 33)).toInt(),
+                    floor(buffer.floatAt(at + 37)).toInt(),
+                    ceil(buffer.floatAt(at + 41)).toInt(),
+                    ceil(buffer.floatAt(at + 45)).toInt(),
+                )
+                node.setClipRect(clipBounds)
+            } else {
+                node.setClipRect(null)
+            }
         }
         // An alpha below 1 draws the content offscreen then composites it, as Compose's layers
         // do (`CompositingStrategy.Auto`), unless it's one drawing: then each drawing's alpha
         // is multiplied instead, as D153's folded layers (the same pixels, no offscreen pass).
-        node.setHasOverlappingRendering(buffer.get(at + 49).toInt() != 0)
+        if (changed(old, 49, 50)) node.setHasOverlappingRendering(buffer.get(at + 49).toInt() != 0)
     }
 
     /** No layer: [node]'s properties back to the identity. */
@@ -510,19 +541,19 @@ internal class Replayer(private val text: TextMeasurer) {
 
     /** The layer at [at] (as [setLayer] reads it) applied on a software [canvas]. */
     private fun applyLayer(canvas: Canvas, buffer: ByteBuffer, at: Int) {
-        val alpha = buffer.getFloat(at)
-        val pivotX = buffer.getFloat(at + 4)
-        val pivotY = buffer.getFloat(at + 8)
-        canvas.translate(pivotX + buffer.getFloat(at + 24), pivotY + buffer.getFloat(at + 28))
-        canvas.rotate(buffer.getFloat(at + 20))
-        canvas.scale(buffer.getFloat(at + 12), buffer.getFloat(at + 16))
+        val alpha = buffer.floatAt(at)
+        val pivotX = buffer.floatAt(at + 4)
+        val pivotY = buffer.floatAt(at + 8)
+        canvas.translate(pivotX + buffer.floatAt(at + 24), pivotY + buffer.floatAt(at + 28))
+        canvas.rotate(buffer.floatAt(at + 20))
+        canvas.scale(buffer.floatAt(at + 12), buffer.floatAt(at + 16))
         canvas.translate(-pivotX, -pivotY)
         if (buffer.get(at + 32).toInt() != 0) {
             canvas.clipRect(
-                buffer.getFloat(at + 33),
-                buffer.getFloat(at + 37),
-                buffer.getFloat(at + 41),
-                buffer.getFloat(at + 45),
+                buffer.floatAt(at + 33),
+                buffer.floatAt(at + 37),
+                buffer.floatAt(at + 41),
+                buffer.floatAt(at + 45),
             )
         }
         if (alpha < 1f) {
@@ -530,8 +561,8 @@ internal class Replayer(private val text: TextMeasurer) {
             canvas.saveLayerAlpha(
                 0f,
                 0f,
-                ceil(buffer.getFloat(at + 58)),
-                ceil(buffer.getFloat(at + 62)),
+                ceil(buffer.floatAt(at + 58)),
+                ceil(buffer.floatAt(at + 62)),
                 (alpha.coerceIn(0f, 1f) * 255f + 0.5f).toInt(),
             )
         }
@@ -556,11 +587,11 @@ internal class Replayer(private val text: TextMeasurer) {
         val rounded = buffer.get().toInt() != 0
         buffer.readRect(rect)
         val corners = buffer.readRadii()
-        val elevation = buffer.getFloat()
-        buffer.getFloat()
-        buffer.getFloat()
-        buffer.getFloat()
-        buffer.getFloat()
+        val elevation = buffer.float()
+        buffer.float()
+        buffer.float()
+        buffer.float()
+        buffer.float()
         val ambient = buffer.getInt()
         val spot = buffer.getInt()
         if (elevation <= 0f) return
@@ -612,7 +643,7 @@ internal class Replayer(private val text: TextMeasurer) {
             }
         }
         val colors = IntArray(colorCount) { getInt(colorsAt + 4 + it * 4) }
-        val stops = if (stopCount == 0) null else FloatArray(stopCount) { getFloat(stopsAt + 4 + it * 4) }
+        val stops = if (stopCount == 0) null else FloatArray(stopCount) { floatAt(stopsAt + 4 + it * 4) }
         val tileMode = when (get(start + 1).toInt()) {
             1 -> Shader.TileMode.REPEAT
             2 -> Shader.TileMode.MIRROR
@@ -622,17 +653,17 @@ internal class Replayer(private val text: TextMeasurer) {
         }
         val shader = when (kind) {
             SHADER_LINEAR -> LinearGradient(
-                getFloat(start + 2),
-                getFloat(start + 6),
-                getFloat(start + 10),
-                getFloat(start + 14),
+                floatAt(start + 2),
+                floatAt(start + 6),
+                floatAt(start + 10),
+                floatAt(start + 14),
                 colors,
                 stops,
                 tileMode,
             )
             SHADER_RADIAL ->
-                RadialGradient(getFloat(start + 2), getFloat(start + 6), getFloat(start + 10), colors, stops, tileMode)
-            else -> SweepGradient(getFloat(start + 2), getFloat(start + 6), colors, stops)
+                RadialGradient(floatAt(start + 2), floatAt(start + 6), floatAt(start + 10), colors, stops, tileMode)
+            else -> SweepGradient(floatAt(start + 2), floatAt(start + 6), colors, stops)
         }
         if ((x != 0f || y != 0f || scaleX != 1f || scaleY != 1f) && scaleX != 0f && scaleY != 0f) {
             val local = Matrix()
@@ -823,16 +854,16 @@ internal class Replayer(private val text: TextMeasurer) {
         path.fillType = if (buffer.get().toInt() == 1) Path.FillType.EVEN_ODD else Path.FillType.WINDING
         repeat(buffer.getInt()) {
             when (buffer.get().toInt()) {
-                0 -> path.moveTo(buffer.getFloat(), buffer.getFloat())
-                1 -> path.lineTo(buffer.getFloat(), buffer.getFloat())
-                2 -> path.quadTo(buffer.getFloat(), buffer.getFloat(), buffer.getFloat(), buffer.getFloat())
+                0 -> path.moveTo(buffer.float(), buffer.float())
+                1 -> path.lineTo(buffer.float(), buffer.float())
+                2 -> path.quadTo(buffer.float(), buffer.float(), buffer.float(), buffer.float())
                 3 -> path.cubicTo(
-                    buffer.getFloat(),
-                    buffer.getFloat(),
-                    buffer.getFloat(),
-                    buffer.getFloat(),
-                    buffer.getFloat(),
-                    buffer.getFloat(),
+                    buffer.float(),
+                    buffer.float(),
+                    buffer.float(),
+                    buffer.float(),
+                    buffer.float(),
+                    buffer.float(),
                 )
                 else -> path.close()
             }
@@ -900,6 +931,7 @@ internal class Replayer(private val text: TextMeasurer) {
         const val GROUP = 15
         const val LAYERS = 16
         const val CLIP_PATH = 17
+        const val GROUP_REF = 18
         const val DEFINE_PATH = 20
         const val DROP_PATH = 21
         const val DEFINE_IMAGE = 22

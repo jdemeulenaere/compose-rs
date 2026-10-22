@@ -433,7 +433,8 @@ fn progress_indicators_draw_their_progress_and_animate_when_indeterminate() {
     assert_eq!((info.current, info.range), (0.25, (0.0, 1.0)));
     let linear = ui.on_node_with_tag("linear").fetch_semantics_node().bounds;
     assert_eq!((linear.width(), linear.height()), (240.0, 4.0));
-    // A quarter turn from the top; a line half way over its track.
+    // A quarter turn from the top; a line half way over its track, their round caps (the
+    // default) inside the indicator: from 2 to 238 and to 120.
     let list = ui.host().display_list();
     let arcs: Vec<(f32, f32)> = list
         .ops
@@ -452,7 +453,7 @@ fn progress_indicators_draw_their_progress_and_animate_when_indeterminate() {
             _ => None,
         })
         .collect();
-    assert_eq!(lines, vec![240.0, 120.0]);
+    assert_eq!(lines, vec![236.0, 118.0]);
     // The indeterminate arc moves frame to frame, drawing again only.
     let first = arcs[1];
     ui.advance_time_by(std::time::Duration::from_millis(300));

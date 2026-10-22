@@ -18,6 +18,7 @@ use std::future::Future;
 use std::mem::ManuallyDrop;
 use std::pin::Pin;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Wake, Waker};
 use std::time::{Duration, Instant};
@@ -46,14 +47,56 @@ struct TaskSlot {
 struct Shared {
     ready: Mutex<Vec<TaskKey>>,
     wake: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
+    /// [`dispatch_frame`] is resuming frame awaiters and polls the ready tasks right after:
+    /// a task scheduled meanwhile, from any thread, needs no turn from the host. Set by
+    /// [`QuietWakes`] only.
+    quiet: AtomicBool,
 }
 
 impl Shared {
     fn schedule(&self, key: TaskKey) {
         self.ready.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push(key);
+        // Read after the push: a `true` here means the dispatching thread hasn't cleared it
+        // yet, so its `run_ready` (which takes `ready`'s lock after clearing it) sees the key.
+        if self.quiet.load(Ordering::SeqCst) {
+            return;
+        }
+        self.wake_host();
+    }
+
+    /// Calls the host's wake handler, if it has one.
+    fn wake_host(&self) {
         let wake = self.wake.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone();
         if let Some(wake) = wake {
             wake();
+        }
+    }
+}
+
+/// While it lives, wakes of one executor's tasks don't call its host's wake handler (see
+/// [`Shared::quiet`]). Only that executor's: another thread's tasks woken meanwhile wake their
+/// own host. Dropped in an unwind (a waker panicked), it wakes the host if tasks are ready, as
+/// the `run_ready` that would have polled them won't run.
+struct QuietWakes<'a> {
+    shared: &'a Shared,
+    /// The flag as it was (a nested dispatch leaves it set).
+    previous: bool,
+}
+
+impl<'a> QuietWakes<'a> {
+    fn new(shared: &'a Shared) -> QuietWakes<'a> {
+        QuietWakes { shared, previous: shared.quiet.swap(true, Ordering::SeqCst) }
+    }
+}
+
+impl Drop for QuietWakes<'_> {
+    fn drop(&mut self) {
+        self.shared.quiet.store(self.previous, Ordering::SeqCst);
+        if !self.previous
+            && std::thread::panicking()
+            && !self.shared.ready.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).is_empty()
+        {
+            self.shared.wake_host();
         }
     }
 }
@@ -125,7 +168,11 @@ thread_local! {
     static EXECUTOR: RefCell<ManuallyDrop<Executor>> = RefCell::new(ManuallyDrop::new(Executor {
         tasks: Vec::new(),
         free: Vec::new(),
-        shared: Arc::new(Shared { ready: Mutex::new(Vec::new()), wake: Mutex::new(None) }),
+        shared: Arc::new(Shared {
+            ready: Mutex::new(Vec::new()),
+            wake: Mutex::new(None),
+            quiet: AtomicBool::new(false),
+        }),
         clock: Clock::Real(Instant::now()),
         timers: BinaryHeap::new(),
         timer_serial: 0,
@@ -312,15 +359,43 @@ pub fn fire_timers() -> bool {
 
 /// Resumes the tasks waiting for a frame (`with_frame_nanos`) with this frame's time, and polls
 /// them. For hosts: at the start of a frame, before it recomposes. Returns the frame's time.
+///
+/// The tasks it wakes don't ask the host for a turn (its wake handler): they're polled here.
 pub fn dispatch_frame() -> u64 {
-    let (now, awaiters) =
-        with_executor(|executor| (executor.now(), std::mem::take(&mut executor.frame_awaiters)));
-    for (time, waker) in awaiters {
-        time.set(Some(now));
-        waker.wake();
+    let (now, awaiters, shared) = with_executor(|executor| {
+        (executor.now(), std::mem::take(&mut executor.frame_awaiters), executor.shared.clone())
+    });
+    {
+        let _quiet = QuietWakes::new(&shared);
+        let mut awaiters = UnwokenAwaiters(awaiters.into_iter());
+        for (time, waker) in awaiters.0.by_ref() {
+            time.set(Some(now));
+            waker.wake();
+        }
     }
     run_ready();
     now
+}
+
+/// The frame awaiters [`dispatch_frame`] is waking. Dropped in an unwind (a waker panicked),
+/// the ones not woken yet wait again, for the next frame, which the host is asked for.
+struct UnwokenAwaiters(std::vec::IntoIter<FrameAwaiter>);
+
+impl Drop for UnwokenAwaiters {
+    fn drop(&mut self) {
+        if !std::thread::panicking() || self.0.len() == 0 {
+            return;
+        }
+        let rest: Vec<FrameAwaiter> = self.0.by_ref().collect();
+        let shared = EXECUTOR.try_with(|executor| {
+            let mut executor = executor.try_borrow_mut().ok()?;
+            executor.frame_awaiters.extend(rest);
+            Some(executor.shared.clone())
+        });
+        if let Ok(Some(shared)) = shared {
+            shared.wake_host();
+        }
+    }
 }
 
 /// Whether a task waits for a frame: the host should run one.
@@ -359,10 +434,7 @@ pub(crate) fn wake_host() {
     let shared = EXECUTOR
         .try_with(|executor| executor.try_borrow().ok().map(|executor| executor.shared.clone()));
     if let Ok(Some(shared)) = shared {
-        let wake = shared.wake.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone();
-        if let Some(wake) = wake {
-            wake();
-        }
+        shared.wake_host();
     }
 }
 
@@ -498,10 +570,7 @@ impl<R, F: FnOnce(u64) -> R> Future for WithFrame<F> {
             executor.shared.clone()
         });
         // The host runs a frame.
-        let wake = shared.wake.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone();
-        if let Some(wake) = wake {
-            wake();
-        }
+        shared.wake_host();
         Poll::Pending
     }
 }
@@ -615,5 +684,126 @@ impl std::fmt::Debug for CoroutineScope {
 impl crate::ComposeArg for CoroutineScope {
     fn same(&self, other: &CoroutineScope) -> bool {
         self == other
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::AtomicUsize;
+
+    /// Counts the host's wakes on this thread's executor.
+    fn count_wakes() -> Arc<AtomicUsize> {
+        let wakes = Arc::new(AtomicUsize::new(0));
+        let counted = wakes.clone();
+        set_wake_handler(move || {
+            counted.fetch_add(1, Ordering::SeqCst);
+        });
+        wakes
+    }
+
+    /// A waker that runs `on_wake`.
+    struct CallbackWaker<F: Fn() + Send + Sync + 'static>(F);
+
+    impl<F: Fn() + Send + Sync + 'static> Wake for CallbackWaker<F> {
+        fn wake(self: Arc<Self>) {
+            (self.0)();
+        }
+    }
+
+    /// A frame awaiter registered with `waker` rather than a task's: the future, kept pending.
+    fn await_frame_with(waker: Waker) -> Pin<Box<WithFrame<impl FnOnce(u64)>>> {
+        let mut future = Box::pin(with_frame_nanos(|_| {}));
+        let poll = future.as_mut().poll(&mut Context::from_waker(&waker));
+        assert!(poll.is_pending());
+        future
+    }
+
+    /// `dispatch_frame` polls the tasks it resumes right away: their wakes don't ask the host
+    /// for a turn (on Android, a JNI upcall, a posted message and a `tick` per frame).
+    #[test]
+    fn tasks_resumed_by_a_frame_dont_wake_the_host() {
+        let wakes = count_wakes();
+        let frames = Rc::new(Cell::new(0));
+        let counted = frames.clone();
+        let _job = launch(async move {
+            loop {
+                with_frame_nanos(|_| ()).await;
+                counted.set(counted.get() + 1);
+            }
+        });
+        run_ready();
+        wakes.store(0, Ordering::SeqCst);
+        dispatch_frame();
+        assert_eq!(frames.get(), 1);
+        // Only the task's next await asks for a frame.
+        assert_eq!(wakes.load(Ordering::SeqCst), 1);
+        // Wakes outside a frame's dispatch still reach the host.
+        let _other = launch(async {});
+        assert_eq!(wakes.load(Ordering::SeqCst), 2);
+    }
+
+    /// A frame awaiter's waker that panics leaves the executor waking the host as before: the
+    /// tasks resumed before it get a turn from the host (the frame's `run_ready` never ran), and
+    /// those after it wait for the next frame.
+    #[test]
+    fn a_panicking_frame_awaiter_leaves_wakes_reaching_the_host() {
+        let wakes = count_wakes();
+        let awaiting = |resumed: Rc<Cell<bool>>| {
+            launch(async move {
+                with_frame_nanos(|_| ()).await;
+                resumed.set(true);
+            })
+        };
+        let (before, after) = (Rc::new(Cell::new(false)), Rc::new(Cell::new(false)));
+        let _first = awaiting(before.clone());
+        run_ready();
+        let _panicking =
+            await_frame_with(Waker::from(Arc::new(CallbackWaker(|| panic!("a waker panics")))));
+        let _last = awaiting(after.clone());
+        run_ready();
+        wakes.store(0, Ordering::SeqCst);
+        let result = std::panic::catch_unwind(dispatch_frame);
+        assert!(result.is_err());
+        assert!(wakes.load(Ordering::SeqCst) >= 1, "the resumed task's wake reached the host");
+        assert!(has_ready_tasks());
+        run_ready();
+        assert!(before.get());
+        assert!(!after.get());
+        assert!(has_frame_awaiters(), "the awaiter after the panicking one waits again");
+        dispatch_frame();
+        assert!(after.get());
+        wakes.store(0, Ordering::SeqCst);
+        let _other = launch(async {});
+        assert_eq!(wakes.load(Ordering::SeqCst), 1, "wakes reach the host again");
+    }
+
+    /// Only the dispatching executor's wakes are quiet: a frame awaiter on another thread that
+    /// wakes this thread's task wakes this thread's host.
+    #[test]
+    fn another_threads_frame_wakes_this_threads_host() {
+        let wakes = count_wakes();
+        let parked: Arc<Mutex<Option<Waker>>> = Arc::new(Mutex::new(None));
+        let parking = parked.clone();
+        let _job = launch(std::future::poll_fn(move |context| {
+            *parking.lock().unwrap() = Some(context.waker().clone());
+            Poll::<()>::Pending
+        }));
+        run_ready();
+        let waker = parked.lock().unwrap().take().expect("the task waits");
+        wakes.store(0, Ordering::SeqCst);
+        std::thread::spawn(move || {
+            let waker = std::sync::Mutex::new(Some(waker));
+            let _awaiter = await_frame_with(Waker::from(Arc::new(CallbackWaker(move || {
+                if let Some(waker) = waker.lock().unwrap().take() {
+                    waker.wake();
+                }
+            }))));
+            dispatch_frame();
+        })
+        .join()
+        .unwrap();
+        assert_eq!(wakes.load(Ordering::SeqCst), 1, "this thread's host heard its task's wake");
+        assert!(has_ready_tasks());
     }
 }

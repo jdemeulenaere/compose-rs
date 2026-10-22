@@ -273,6 +273,8 @@ struct Host {
     groups: GroupCache,
     /// What `take_drawing` last gave Kotlin: resource changes, then the display list.
     drawing: Writer,
+    /// The memory (address, capacity) of `drawing` that Kotlin's buffer wraps.
+    drawing_given: (usize, usize),
     /// What `semantics` last gave Kotlin: the semantics tree.
     semantics: Writer,
     /// Nothing has been drawn yet.
@@ -425,6 +427,7 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_create<'local>(
         list: Writer::default(),
         groups: GroupCache::default(),
         drawing: Writer { bytes: Vec::with_capacity(4096) },
+        drawing_given: (0, 0),
         semantics: Writer::default(),
         first: true,
         ime_options: None,
@@ -565,13 +568,16 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_prefetch(
 }
 
 /// `ComposeRsNative.takeDrawing(host)`: what `onDraw` replays: the resources defined or dropped
-/// since it last took them, then the last frame's display list.
+/// since it last took them, then the last frame's display list. Returns its length, with
+/// `NEW_DRAWING_BUFFER` set when its memory moved: Kotlin then asks for a new buffer
+/// (`drawingBuffer`) instead of creating one each frame (`NewDirectByteBuffer` calls a Java
+/// constructor).
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_rs_compose_android_ComposeRsNative_takeDrawing(
-    mut env: JNIEnv,
+    _env: JNIEnv,
     _class: JClass,
     host: jlong,
-) -> jobject {
+) -> jlong {
     // SAFETY: a live host, on the main thread.
     let host = unsafe { self::host(host) };
     let _take = compose_ui::platform::trace::section(c"compose-rs: take drawing");
@@ -579,11 +585,36 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_takeDrawing(
     host.resources.write_pending(&mut host.drawing);
     host.drawing.bytes.extend_from_slice(&host.list.bytes);
     host.drawing.bytes.reserve(1);
-    // SAFETY: the buffer lives in the host until the next `takeDrawing` (or `destroy`), and
-    // Kotlin reads it during `onDraw` only.
-    let buffer = unsafe {
-        env.new_direct_byte_buffer(host.drawing.bytes.as_mut_ptr(), host.drawing.bytes.len())
-    };
+    taken_drawing(&host.drawing.bytes, host.drawing_given)
+}
+
+/// In what `takeDrawing` returns: the drawing's memory moved since Kotlin's buffer wrapped it.
+const NEW_DRAWING_BUFFER: jlong = 1 << 32;
+
+/// What `takeDrawing` returns for a drawing in `bytes`, Kotlin's buffer wrapping `given`
+/// (address, capacity): the length, with `NEW_DRAWING_BUFFER` if the memory isn't that one.
+/// The length fits in 31 bits (Kotlin reads it as an `Int`): a display list is kilobytes.
+fn taken_drawing(bytes: &Vec<u8>, given: (usize, usize)) -> jlong {
+    let memory = (bytes.as_ptr() as usize, bytes.capacity());
+    let moved = if memory == given { 0 } else { NEW_DRAWING_BUFFER };
+    (bytes.len() as jlong & i32::MAX as jlong) | moved
+}
+
+/// `ComposeRsNative.drawingBuffer(host)`: a direct buffer over the drawing's memory (all of its
+/// capacity), valid until `takeDrawing` says it moved (or the host is destroyed).
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_rs_compose_android_ComposeRsNative_drawingBuffer(
+    mut env: JNIEnv,
+    _class: JClass,
+    host: jlong,
+) -> jobject {
+    // SAFETY: a live host, on the main thread.
+    let host = unsafe { self::host(host) };
+    let bytes = &mut host.drawing.bytes;
+    host.drawing_given = (bytes.as_ptr() as usize, bytes.capacity());
+    // SAFETY: the memory lives in the host until `takeDrawing` moves it (and says so) or
+    // `destroy`; Kotlin reads it during `onDraw` only, up to the length `takeDrawing` returned.
+    let buffer = unsafe { env.new_direct_byte_buffer(bytes.as_mut_ptr(), bytes.capacity()) };
     buffer.map_or(std::ptr::null_mut(), |buffer| buffer.into_raw())
 }
 
@@ -975,4 +1006,21 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_setProp<'local>(
         _ => None,
     };
     host.ui.props().set(&name, value);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_taken_drawing_says_when_its_memory_moved() {
+        let mut bytes = Vec::with_capacity(16);
+        bytes.extend_from_slice(&[1, 2, 3]);
+        let given = (bytes.as_ptr() as usize, bytes.capacity());
+        assert_eq!(taken_drawing(&bytes, given), 3);
+        assert_eq!(taken_drawing(&bytes, (0, 0)), 3 | NEW_DRAWING_BUFFER);
+        // Grown past its capacity: a new allocation, or the same one larger.
+        bytes.extend_from_slice(&[0; 64]);
+        assert_eq!(taken_drawing(&bytes, given), 67 | NEW_DRAWING_BUFFER);
+    }
 }

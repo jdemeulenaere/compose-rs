@@ -4,6 +4,7 @@ import android.graphics.Canvas
 import android.graphics.RenderNode
 import android.graphics.Typeface
 import android.graphics.text.LineBreaker
+import android.os.Trace
 import android.text.Layout
 import android.text.SpannableString
 import android.text.Spanned
@@ -57,7 +58,7 @@ internal class TextMeasurer {
 
     private fun readStyle(request: ByteBuffer): Style {
         val color = request.getInt()
-        val fontPx = request.getFloat()
+        val fontPx = request.float()
         val weight = request.getInt()
         val italic = request.get().toInt() != 0
         val family = request.get().toInt()
@@ -74,10 +75,10 @@ internal class TextMeasurer {
             italic = italic,
             family = family,
             familyName = name,
-            letterSpacingPx = request.getFloat(),
+            letterSpacingPx = request.float(),
             decoration = request.get().toInt(),
         )
-        return Style(paint, lineHeightPx = request.getFloat(), background = request.getInt())
+        return Style(paint, lineHeightPx = request.float(), background = request.getInt())
     }
 
     private fun typeface(style: PaintStyle): Typeface {
@@ -188,19 +189,20 @@ internal class TextMeasurer {
         val layout = builder.build()
         layouts.put(handle, layout)
         releaseNode(handle)
+        if (collectingLaidOut) laidOut.add(handle)
         // StaticLayout limits the lines only when it ellipsizes: the rest are cut here, as
         // Compose's `TextLayout` does (the text is clipped to its height).
         val lines = layout.lineCount.coerceIn(1, maxLines.coerceAtLeast(1))
-        results.putFloat(0, width.toFloat())
-        results.putFloat(4, layout.getLineBottom(lines - 1).toFloat())
-        results.putFloat(8, layout.getLineBaseline(0).toFloat())
-        results.putFloat(12, layout.getLineBaseline(lines - 1).toFloat())
-        results.putFloat(16, lines.toFloat())
+        results.putInt(0, width.toFloat().toRawBits())
+        results.putInt(4, (layout.getLineBottom(lines - 1).toFloat()).toRawBits())
+        results.putInt(8, (layout.getLineBaseline(0).toFloat()).toRawBits())
+        results.putInt(12, (layout.getLineBaseline(lines - 1).toFloat()).toRawBits())
+        results.putInt(16, lines.toFloat().toRawBits())
         // Lines past max lines, cut or ellipsized, as Compose's `TextLayout.didExceedMaxLines`
         // (API 26+: the line count passes max lines unless it ellipsizes, which marks the last).
         val lastEllipsized = layout.lineCount > 0 && layout.getEllipsisCount(layout.lineCount - 1) > 0
         val exceeded = layout.lineCount > maxLines || lastEllipsized
-        results.putFloat(20, if (exceeded) 1f else 0f)
+        results.putInt(20, (if (exceeded) 1f else 0f).toRawBits())
     }
 
     fun hitTest(handle: Int, x: Float, y: Float): Int {
@@ -214,10 +216,10 @@ internal class TextMeasurer {
         val at = offset.coerceIn(0, layout.text.length)
         val line = layout.getLineForOffset(at)
         val x = layout.getPrimaryHorizontal(at)
-        results.putFloat(0, x)
-        results.putFloat(4, layout.getLineTop(line).toFloat())
-        results.putFloat(8, x)
-        results.putFloat(12, layout.getLineBottom(line).toFloat())
+        results.putInt(0, x.toRawBits())
+        results.putInt(4, (layout.getLineTop(line).toFloat()).toRawBits())
+        results.putInt(8, x.toRawBits())
+        results.putInt(12, (layout.getLineBottom(line).toFloat()).toRawBits())
     }
 
     fun release(handle: Int) {
@@ -233,6 +235,7 @@ internal class TextMeasurer {
     }
 
     fun clear() {
+        laidOut.clear()
         layouts.clear()
         for (index in 0 until nodes.size()) nodes.valueAt(index).discardDisplayList()
         nodes.clear()
@@ -255,9 +258,9 @@ internal class TextMeasurer {
      * Draws paragraph [handle] with its top left at ([x], [y]): on a hardware canvas, its
      * render node, recorded the first time (a paragraph never changes once laid out).
      */
-    fun draw(canvas: Canvas, handle: Int, x: Float, y: Float) {
+    fun draw(canvas: Canvas, hardware: Boolean, handle: Int, x: Float, y: Float) {
         val layout = layouts.get(handle) ?: return
-        if (!canvas.isHardwareAccelerated) {
+        if (!hardware) {
             canvas.save()
             canvas.translate(x, y)
             layout.draw(canvas)
@@ -266,26 +269,108 @@ internal class TextMeasurer {
         }
         var node = nodes.get(handle)
         // Recorded again if the system dropped its recording (the window hid).
-        if (node == null || !node.hasDisplayList()) {
-            node = node ?: pool.obtain()
-            // Its bounds: the layout's width and height, glyphs past them (an italic's
-            // overhang, a line wider than an ellipsized width) not clipped.
-            node.setPosition(0, 0, layout.width.coerceAtLeast(1), layout.height.coerceAtLeast(1))
-            node.setClipToBounds(false)
-            val recording = node.beginRecording()
-            layout.draw(recording)
-            node.endRecording()
-            nodes.put(handle, node)
-        }
+        if (node == null || !node.hasDisplayList()) node = record(handle, layout, node)
         canvas.save()
         canvas.translate(x, y)
         canvas.drawRenderNode(node)
         canvas.restore()
     }
 
+    /** Records paragraph [handle]'s [layout] into its node ([node], else one from the pool). */
+    private fun record(handle: Int, layout: Layout, node: RenderNode?): RenderNode {
+        val recorded = node ?: pool.obtain()
+        // Its bounds: the layout's width and height, glyphs past them (an italic's overhang, a
+        // line wider than an ellipsized width) not clipped.
+        recorded.setPosition(0, 0, layout.width.coerceAtLeast(1), layout.height.coerceAtLeast(1))
+        recorded.setClipToBounds(false)
+        val recording = recorded.beginRecording()
+        layout.draw(recording)
+        recorded.endRecording()
+        nodes.put(handle, recorded)
+        return recorded
+    }
+
+    /**
+     * While set (by the view, around a prefetch), the paragraphs laid out are noted in
+     * [laidOut], for [recordLaidOut] to record before a frame shows them.
+     */
+    var collectingLaidOut = false
+
+    /** Paragraphs laid out while prefetching, oldest first, not recorded yet. */
+    private val laidOut = IntList()
+
+    /** About how long recording a paragraph takes (ns), from the last ones. */
+    private var recordNanos = INITIAL_RECORD_NANOS
+
+    /**
+     * Records the paragraphs laid out while prefetching ([collectingLaidOut]), oldest first,
+     * while one is expected to end before [deadlineNanos] (`System.nanoTime`; one at least, if
+     * it's not past, so a slow recording can't stop them for good): the frame that
+     * scrolls their item in then draws their nodes rather than recording them (on average 1
+     * ms of the frames revealing an item). Skipped: the ones released or laid out again since
+     * (a later layout of the same text is a new paragraph, noted itself), those recorded
+     * already (a frame drew them first), and empty ones. Returns whether some are left, for
+     * the next idle time.
+     */
+    fun recordLaidOut(deadlineNanos: Long): Boolean {
+        if (laidOut.size == 0) return false
+        Trace.beginSection("compose-rs: record paragraphs")
+        var index = 0
+        var recorded = 0
+        while (index < laidOut.size) {
+            val handle = laidOut[index]
+            val layout = layouts.get(handle)
+            if (layout == null || nodes.get(handle) != null || layout.text.isEmpty()) {
+                index++
+                continue
+            }
+            val start = System.nanoTime()
+            if (start >= deadlineNanos || recorded > 0 && start + recordNanos > deadlineNanos) break
+            record(handle, layout, null)
+            recorded++
+            // A running average, as Rust's prefetch estimates, an outlier (a collection, the
+            // thread descheduled) counting for at most a millisecond.
+            val took = (System.nanoTime() - start).coerceAtMost(MAX_RECORD_NANOS)
+            recordNanos = (recordNanos * 3 + took) / 4
+            index++
+        }
+        laidOut.removeFirst(index)
+        Trace.endSection()
+        return laidOut.size > 0
+    }
+
     private companion object {
         /** About ten list items' paragraphs: what a fling releases before composing more. */
         const val NODE_POOL_CAPACITY = 64
         const val PAINT_CACHE_CAPACITY = 64
+        /** A paragraph's recording before any was timed: a short one's, on a big core. */
+        const val INITIAL_RECORD_NANOS = 30_000L
+        /** The most one recording counts for in [recordNanos]. */
+        const val MAX_RECORD_NANOS = 1_000_000L
+    }
+}
+
+/** A growable list of ints, without boxing them. */
+internal class IntList {
+    private var values = IntArray(16)
+    var size = 0
+        private set
+
+    operator fun get(index: Int): Int = values[index]
+
+    fun add(value: Int) {
+        if (size == values.size) values = values.copyOf(size * 2)
+        values[size++] = value
+    }
+
+    /** Removes the first [count] values. */
+    fun removeFirst(count: Int) {
+        if (count <= 0) return
+        System.arraycopy(values, count, values, 0, size - count)
+        size -= count
+    }
+
+    fun clear() {
+        size = 0
     }
 }

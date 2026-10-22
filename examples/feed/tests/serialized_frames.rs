@@ -1,8 +1,9 @@
 //! What an animation frame of the feed's live header sends to Kotlin (D157): its records
-//! written afresh (a new version each, so Kotlin records each again) and the bytes Kotlin
-//! reads. A leaf whose drawing changes each frame changes the version of every group around
-//! it, so each ancestor's record is written and recorded again. Run with `--nocapture` to see
-//! the numbers.
+//! written afresh and the bytes Kotlin reads. A leaf whose drawing changes each frame changes
+//! the version of every group around it, so each ancestor's record is written again; but an
+//! ancestor's bytes name the groups in it by key, so they stay the same, with their version,
+//! and Kotlin records only the spinner's group again (D323). Run with `--nocapture` to see the
+//! numbers.
 
 use std::collections::HashMap;
 
@@ -78,17 +79,20 @@ fn an_animation_frame_of_the_live_header() {
         let mut recorded = Vec::new();
         let read = replay(bytes, layers, bytes.len(), 0, &mut kept, &mut recorded);
         lines.push(format!(
-            "frame {frame}: {} bytes ({layers} of layers), records written {} copied {}, \
-             Kotlin reads {read} bytes and records {} groups at depths {recorded:?}",
+            "frame {frame}: {} bytes ({layers} of layers), records written {} ({} unchanged) \
+             copied {}, Kotlin reads {read} bytes and records {} groups",
             bytes.len(),
             cache.written(),
+            cache.unchanged(),
             cache.copied(),
             recorded.len(),
         ));
         if frame > 0 {
             // The header's groups only: the posts are copied and kept.
             assert!(cache.copied() > 0, "{}", lines.join("\n"));
-            assert_eq!(cache.written(), recorded.len(), "{}", lines.join("\n"));
+            assert_eq!(cache.written() - cache.unchanged(), recorded.len(), "{}", lines.join("\n"));
+            // The spinner's group alone: the header around it keeps its recording.
+            assert_eq!(recorded.len(), 1, "{}", lines.join("\n"));
         }
     }
     eprintln!("{}", lines.join("\n"));

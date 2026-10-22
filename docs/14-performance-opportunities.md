@@ -1,12 +1,12 @@
 # 14. Performance opportunities: what's left, measured
 
-Where compose-rs can still get faster, smaller or quicker to build, after round 3 of [12](12-android-performance.md). Each opportunity was measured with a prototype where feasible, or estimated from profiles with the reasoning shown. Small and negative results are reported too. This is an analysis, not a change: the prototypes aren't merged. Since then, the build and benchmark fixes below were made: stripping (#4a, D301), the stale library (D300), benchmark hygiene (D302), build-only dependencies at opt-level 0 (#6, D303), and the corrections to docs/08 (D304) and docs/12; each is marked **Fixed** where it's discussed. The prototypes are kept on `perf/*` branches, each with its raw measurements and a `README.txt` of exact commands under `perf-results/<branch>/` (see "Branches" below).
+Where compose-rs can still get faster, smaller or quicker to build, after round 3 of [12](12-android-performance.md). Each opportunity was measured with a prototype where feasible, or estimated from profiles with the reasoning shown. Small and negative results are reported too. This began as an analysis: #2, #3, #10 and the prefetched paragraphs have since been done (D320–D323), each section saying so. Since then, the build and benchmark fixes below were made: stripping (#4a, D301), the stale library (D300), benchmark hygiene (D302), build-only dependencies at opt-level 0 (#6, D303), and the corrections to docs/08 (D304) and docs/12; each is marked **Fixed** where it's discussed. The prototypes are kept on `perf/*` branches, each with its raw measurements and a `README.txt` of exact commands under `perf-results/<branch>/` (see "Branches" below).
 
 **Short answer.**
 - **Desktop** has the one big gain left. A Metal surface takes 70 % off the app's CPU time per animated frame in a 2560 × 1324 window (6.8 → 2.0 ms), and 37 % off the app's and the window server's together (10.0 → 6.3 ms a frame). At that size, a click's time to present goes from 16.4 ms (median of 3; 7.0–16.9) to 1.3 ms. Today's CPU path spends most of each frame not rasterizing but presenting: Core Animation converts the frame's colour space on the CPU.
 - **Android** has several cheap gains, each a few percent to 10 % of a frame or startup metric, and no big one:
-  - a round cap on the spinner: −8 % of the animation's RenderThread work;
-  - a replay without interpreted framework calls: −8 % of its main-thread work;
+  - a round cap on the spinner: −8 % of the animation's RenderThread work (done: D320);
+  - a replay without interpreted framework calls: −8 % of its main-thread work (done: D321);
   - two runtime fixes that remove a quadratic scan when composing big screens: −39 % of the big screen's first frame headless;
   - stripping the library, which the build silently skipped: the APK goes from 3.2 to 2.0 MB at no cost (**fixed**: D301); with a release profile (LTO, `panic = "abort"`), 1.5 MB.
   - **Together**, measured with the full benchmark ("Combined" below; the two sessions ran one after the other, not interleaved): the animation's main-thread work goes from 210 to 196 ms and its RenderThread work from 547 to 492 ms (Compose: 248–260 and 534–544). `big` starts in 166 ms instead of 181 (Compose: 222–224), and the APK is 1.5 MB. An interleaved A/B of the frame changes alone (#2, #3 and the spinner boundary) agrees: 209.7 → 194.0 ms and 546.6 → 496.5 ms.
@@ -24,15 +24,15 @@ Gain over cost, best first.
 | # | Opportunity | Gain (metric) | Evidence | Cost, risk | Behaviour or API change | Branch |
 |---|---|---|---|---|---|---|
 | 1 | **Desktop: GPU surface** (Skia on Metal; D3D or GL elsewhere) | App CPU per animated frame at 2560 × 1324: 6.79 → 2.04 ms (−70 %); click → present 16.4 [7.0–16.9] → 1.30 [1.14–1.55] ms. WindowServer's CPU per frame rises 3.2 → 4.2 ms, so app and WindowServer together go 10.0 → 6.3 ms (−37 %) | measured, 3 runs each (medians) | M per platform: a raster fallback, resizing, device loss, unsafe code in compose-desktop; the prototype has no colour management | none in the API; colours need the layer's colour space set (cost not measured); its lower frame rate (122 against 142 fps) is unexplained | `perf/desktop-metal` |
-| 2 | **Android: the spinner's round cap** (`IndeterminateCircularProgressIndicator`, as Material 3 1.4) | Animation RenderThread work −44 ms (544.4 → 500.1, −8.1 %) | measured, 3 runs | S, none | the default cap's look, on every platform (Compose's own default); the determinate indicator keeps `Butt` | `perf/frame-roundcap` |
-| 3 | **Android: replay without interpreted calls** (floats as int bits, one reused buffer, sizes tracked in Kotlin, no host wake for frame awaiters) | Animation main work −16.8 ms (213.9 → 197.1, −7.9 %); scroll −12 ms (−2.6 %, ranges overlap) | measured, 3 runs, on a build whose JIT compiles no framework methods (smaller where it does) | S, low | internal JNI signatures; the executor skips the host wake for `dispatch_frame`'s wakes on every host (a thread-wide flag: not reset if a waker panics, and it would also skip another thread's executor's wake) | `perf/frame-replay` |
+| 2 | **Android: the spinner's round cap** (`IndeterminateCircularProgressIndicator`, as Material 3 1.4). **Done** (D320) | Animation RenderThread work −44 ms (544.4 → 500.1, −8.1 %); as shipped, −51 ms (−9.4 %), RenderThread p99 5.64 → 5.20 ms | measured, 3 runs; as shipped, 4 | S, none | the default cap's look, on every platform: every indicator's default is `Round`, as Material 3 1.4's (determinate and linear too) | `perf/frame-roundcap` |
+| 3 | **Android: replay without interpreted calls** (floats as int bits, one reused buffer, sizes tracked in Kotlin, no host wake for frame awaiters). **Done** (D321) | Animation main work −16.8 ms (213.9 → 197.1, −7.9 %); scroll −12 ms (−2.6 %, ranges overlap). As shipped: −11 ms (−5.2 %) and −20 ms (−4.1 %); animation main p50 1.37 → 1.26 ms | measured, 3 runs, on a build whose JIT compiles no framework methods (smaller where it does); as shipped, 4 | S, low | internal JNI signatures; the executor skips the host wake for `dispatch_frame`'s wakes on every host (per executor, reset by a guard, also on a waker's panic) | `perf/frame-replay` |
 | 4 | **Android: stripping, then a release profile.** (a) AGP strips the library once `ndkVersion` is set (**fixed**: D301); (b) `[profile.android]`: fat LTO, one codegen unit, `panic = "abort"` | (a) APK 3.24 → 1.99 MB (−39 %); (b) → 1.50 MB (−54 % in all, below Compose's 1.74 MB), code PSS −0.3 MB, Rust frame section −4 to −8 %, main work −3 to −4 % (about the noise); startup unchanged | measured | (a) none, but `ndkVersion` pins one NDK every developer needs. (b) S; as prototyped every Android build uses it (debug too): clean 6.9 → 9.2 s, a material3 edit rebuilds the library in 4.6 s instead of 1.9 | (b) more panics abort the process: those of cancelled background tasks, and in drops and wakes on the pool's threads; Android only | `perf/startup-release-profile` |
 | 5 | **Runtime: state readers and composition locals** (a read searches a cell's 8 latest readers; a local read walks provider groups only) | Headless big-screen first frame −39 % (7.04 → 4.32 ms), composition −44 %; feed first frame −21 %. On the device, with #2–#4 and #7 (one traced start): big composition 22.1 → 16.5 ms | measured headless, 3–5 rounds | S/M, low | none (the prototype's copies of readers are now compacted: D310) | `perf/runtime-compose`; made production-ready as D310 |
 | 6 | **Build: build-only dependencies at opt-level 0** in the dev profile (**fixed**: D303) | Clean debug build of todo 11.8 → 8.6 s (median; −27 %, means −24 %), workspace `test --no-run` 16.1 → 12.6 s (−22 %); edit loop unchanged | measured, 3 runs | S (Cargo.toml; the list needs upkeep) | none | `perf/build-dev-profile` |
 | 7 | **Android: startup warm-ups** (an ALPHA_8 bitmap's texture upload, and two StaticLayouts on a thread, when the first `ComposeRsView` is made) | TotalTime feed −4.0 ms (se 1.1, −4 %); big −2.2 ms (se 1.2, −1 %, not significant); the first `doFrame` 26.0 → 21.5 ms | measured, n = 36 | S; `activityResume` grows by about 1 ms | none | `perf/startup-text-warmup` |
 | 8 | **Android: a Baseline Profile for the Kotlin glue** | For installs that aren't fully compiled (Play), at most: replay +25–30 % and main work +5 % recovered; startup unchanged | measured (`-m verify` against `speed`) | S | none | `perf/startup-compilation-modes` |
 | 9 | **Desktop: present without the colour conversion** (tag the image with the window's colour space; properly, an IOSurface-backed layer) | Present 5.37 → 0.09 ms at 2560 × 1324; app CPU per frame 6.79 → 3.64 ms | measured (tagging, with the alpha pass also off), estimated (IOSurface) | S–M (a softbuffer fork or our own layer code); with #1, it matters mainly as the raster fallback | tagging turns off colour management, so it can't ship as measured | `perf/desktop-present` |
-| 10 | **Android: records that reference nested groups by key**, so a parent's version doesn't change with a nested group's content | Animation main work −5 to −10 ms (−3 to −5 %) on top of #3 | estimated ("Nested groups") | M–L, medium | none | — |
+| 10 | **Android: records that reference nested groups by key**, so a parent's version doesn't change with a nested group's content. **Done** (D323) | Animation main work −5 to −10 ms (−3 to −5 %) on top of #3; as shipped (with the indeterminate indicators as repaint boundaries), −6.6 ms (−3.3 %), main p50 / p90 −6 / −7 %, p99 unchanged | estimated ("Nested groups"); as shipped, measured, 4 runs | M–L, medium | none (the indeterminate indicators are repaint boundaries of their own) | — |
 | 11 | **Android: text widths and paragraph recording on worker threads** | Big first frame main work 94.0 → 79.0 ms (−16 %), TotalTime 182 → 174 ms; scroll main work −19 ms, p99 3.53 → 3.08 ms; costs 50 ms (big) and 440 ms (scroll) of worker CPU | measured, n = 10 and 4 | M–L, threading risk; the prototype isn't production-ready (see "Android: text and the big screen") | none | `perf/text-combined` |
 | 12 | **Android: fewer Java allocations per frame** | Per animation frame 17.2 → 4.2 Java objects; −0.48 MB allocated over start and 10 flings; Java heap PSS after flings 5.40 → 4.86 MB (single runs); no frame-time gain | measured | S | none | `perf/startup-java-allocs` |
 | 13 | **Memory: exact or chunked growth** of the slot table's groups and the node arena | Big screen's Rust heap −1.7 MB allocated of 17.9 (unused capacity, so maybe not resident: the PSS saving is unmeasured; its PSS is 69.8 MB); no transient 2× copy when growing | estimated (heapprofd) | S–M | none | — |
@@ -89,6 +89,18 @@ docs/12 found the animation's RenderThread work "even with Compose's" (540 again
 
 With a round cap (`perf/frame-roundcap`, 3 runs each): RenderThread work 544.4 [534–557] → 500.1 [496–508] ms (−8.1 %), RenderThread p50 2.95 → 2.76 ms, main thread unchanged. Round 1 (7550e31), measured the same day, did 514.7 ms. Today's frame draws a little more than round 1's (four atlas text ops instead of two, the four icon-mask textures of D190, a longer flush), and the round cap more than makes up for it. It's a parity fix too: the benchmark compared different arcs.
 
+**Done (D320).** Material 3 1.4.0's `ProgressIndicatorDefaults` (checked with `javap`) has `Round` for all three caps (`LinearStrokeCap`, `CircularDeterminateStrokeCap`, `CircularIndeterminateStrokeCap`), and every overload taking a cap defaults to them, so all four compose-rs indicators now default to `Round`, not the spinner alone (the table's "the determinate indicator keeps `Butt`" was wrong). The Kotlin twin's spinner (`CircularProgressIndicator(Modifier.size(24.dp))`) already drew a round arc, so the benchmark apps needed no change. Measured against main, 4 runs each, interleaved (means [min–max]):
+
+| Animation | main | round cap |
+|---|---|---|
+| RenderThread work | 542.7 [541.0–546.6] ms | 491.9 [485.0–507.0] ms (−9.4 %) |
+| RenderThread per frame (`DrawFrame`) p50 / p90 / p99 | 2.94 / 3.88 / 5.64 ms | 2.73 / 3.65 / 5.20 ms |
+| Main thread work | 214.3 [208.5–219.0] ms | 211.3 [208.8–214.0] ms |
+| Main thread per frame (`doFrame`) p50 / p90 / p99 | 1.34 / 1.88 / 2.95 ms | 1.37 / 1.95 / 3.02 ms (ranges overlap) |
+| Janky frames (FrameTimeline) | 0 | 0 |
+
+Each frame's two `PathStencilCoverOp`s and two `DrawAtlasPathOp`s became two `CircleOp`s. The scroll (no spinner in its feed) didn't change: RenderThread work 765.9 → 764.4 ms, main p99 4.00 → 3.81 ms (ranges overlap), 1 → 0.5 janky frames a run.
+
 ### The replay: interpreted framework calls (#3)
 
 With both apps compiled `-m speed`, neither had any JIT-compiled code in its profiles on this build. So framework methods that aren't compiled in the boot image run in ART's interpreter (nterp), whatever the app's own compilation. Checked against `boot.oat`'s symbols, the replay called several of them on every operation:
@@ -111,6 +123,24 @@ About a third of the replay was interpreter time. The prototype (`perf/frame-rep
 | `compose-rs: replay` | 194 → 128 µs | 193 → 153 µs |
 | `Record View#draw()` | 262 → 186 µs | 262 → 211 µs |
 
+**Done (D321).** As prototyped, with two fixes:
+- The executor's flag is per executor (in the state its wakers share), not per thread: a frame awaiter that wakes another thread's task wakes that thread's host. A guard sets it around the awaiters' wakes and resets it when dropped, so a waker that panics leaves it reset, and then wakes the host if tasks are ready (the frame's `run_ready` won't run); the awaiters after a panicking one, which were dropped unwoken before, wait for the next frame. A task another thread wakes while it's set needs no wake either: the dispatching thread polls the ready queue after clearing it. Three tests cover the skipped wake, the panic and the other thread (the prototype's thread-local fails the last two).
+- A group's tracked size starts at -1, not 0: a node from the pool keeps its last group's size, so a new group of size 0 would have kept it.
+
+Measured against the round cap (D320), 4 runs each, interleaved (means [min–max]):
+
+| | Animation: before | after | Scroll: before | after |
+|---|---|---|---|---|
+| Main work | 211.8 [207.2–215.4] ms | 200.8 [197.0–207.5] ms (−5.2 %) | 486.5 [477.4–501.9] ms | 466.4 [453.2–474.1] ms (−4.1 %) |
+| Main per frame p50 / p90 / p99 | 1.37 / 1.90 / 2.90 ms | 1.26 / 1.82 / 2.93 ms | 1.31 / 2.42 / 3.74 ms | 1.29 / 2.39 / 3.67 ms |
+| RenderThread work | 487.5 ms | 497.5 ms (ranges overlap) | 762.3 ms | 775.0 ms (ranges overlap) |
+| RenderThread per frame p50 / p90 / p99 | 2.72 / 3.58 / 4.99 ms | 2.69 / 3.54 / 5.00 ms | 2.68 / 3.74 / 5.30 ms | 2.77 / 3.77 / 5.37 ms |
+| Janky frames a run | 0 | 0.25 | 1.0 | 1.25 |
+| `compose-rs: replay`, `take drawing` | 237, 20 µs | 152, 9 µs | 230, 19 µs | 194, 10 µs |
+| `Record View#draw()`, `doFrame` | 313, 1,457 µs | 215, 1,360 µs | 302, 1,496 µs | 257, 1,479 µs |
+
+The frames' medians and work drop; their p99s don't move: the slowest animation frames are the system's (vsync requests, the RenderThread's sync), and the slowest scroll frames reveal an item ("Prefetch" below).
+
 **Ceiling.** If the replay, serializing and taking the drawing all cost nothing, the animation's main work would drop by about 24 ms (12 %) after this prototype. About 40 % of what's left is `Canvas` and `RenderNode` calls that any path through HWUI makes, so the realistic remaining gain on this path is about 12 ms (6 %), #10 included. (Option D of [13](13-android-drawing-paths.md), our own Skia, would also drop HWUI's recording and sync, so this doesn't bound it.) docs/13's "about 0.2 ms a frame" for the replay was one-third interpreter overhead.
 
 Smaller items left:
@@ -118,11 +148,24 @@ Smaller items left:
 - serializing copies each group's bytes twice (under 1 %);
 - rounded clips go through `Path.addRoundRect` + `clipPath` (about 15 % of the animation's replay); public `Canvas` has no `clipRRect`, and a `RenderNode` outline clip would be the alternative.
 
-### Nested groups (#10, estimated)
+### Nested groups (#10, done)
 
 Making the spinner a repaint boundary of its own (`perf/frame-spinner-boundary`) gained nothing: main work 209.7 → 209.4 ms. A group's version changes whenever a nested group's content changes (D155, D157: a record holds its nested records' bytes). So the header card around the spinner is still serialized and recorded again in Kotlin every frame, plus one more group.
 
 With records that reference nested groups by key, the header's re-recording would go away. Before #3, that re-recording was 16.4 of the replay's 31.3 sampled ms (the arc itself about 1 ms), which would have meant −12 to −15 ms of the animation's main work. #3 has since cut the replay by a third (194 → 128 µs a frame), much of it in the same re-recording, and the two don't add: on top of #3 the estimate is −5 to −10 ms (3 to 5 %), within the 12 ms ceiling above. This revisits D155's rejected alternative now that D270 made the display list a tree. Cost M–L: serialize.rs and `Replayer.kt`.
+
+**Done (D323).** Every group's record now comes before the frame's operations, outer before inner, and names the groups drawn in it with a `GROUP_REF` (their key). A group whose display-list version changed is written again, and if its bytes are the ones cached (only a nested group changed) its record keeps the version it was cached with, so Kotlin keeps its recording and draws the nested group's node by reference. Kotlin records each group from its own record and checks each node's recording on its own; a group with no record in a frame is gone. The indeterminate indicators (circular and linear) became repaint boundaries of their own, so the header around the spinner keeps its bytes. In the feed's animation (`examples/feed/tests/serialized_frames.rs`), each frame now writes 2 records (the spinner's and the header's, the latter unchanged) and Kotlin records 1 group, instead of the header's chain. Measured against D322, 4 runs each, interleaved (means [min–max]):
+
+| Animation | before | after |
+|---|---|---|
+| Main work | 197.9 [195.9–199.9] ms | 191.3 [189.2–195.4] ms (−3.3 %) |
+| Main per frame p50 / p90 / p99 | 1.27 / 1.81 / 2.91 ms | 1.19 / 1.68 / 2.89 ms |
+| RenderThread work | 489.8 ms | 492.8 ms (ranges overlap) |
+| RenderThread per frame p50 / p90 / p99 | 2.70 / 3.53 / 5.00 ms | 2.67 / 3.45 / 4.88 ms |
+| Janky frames a run | 0 | 0.25 |
+| `compose-rs: replay`, `Record View#draw()`, `serialize` | 155, 221, 30.5 µs | 97, 159, 32.4 µs |
+
+The scroll (no spinner) is unchanged: in a second session of 5 runs each, main work 466.7 → 469.4 ms, main p50 / p90 / p99 1.27 / 1.91 / 3.04 → 1.30 / 1.94 / 3.06 ms, replay 103 → 108 µs (one more lookup per group and frame: its record and its reference); the first session's 4 runs had 473.7 → 483.6 ms and p99 3.04 → 3.17 ms, with overlapping ranges. The animation's p99 frames are the system's (vsync, the RenderThread's sync), which this doesn't touch.
 
 ### Prefetch
 
@@ -134,6 +177,36 @@ The "about 2.1 ms per item" quoted for prefetching is the wall-clock time of a `
 - `update_focus_listeners` 3.6 %.
 
 The frames that reveal an item (about 175 per run) are the slow ones: replay 1.04 ms against 0.09, `doFrame` 2.42 against 1.24 ms. Recording each paragraph's render node while prefetching (`perf/frame-eager-text`, docs/12's third next step) cuts the main thread's p90 and p99 by 15 % each (2.17 → 1.84 ms, 3.53 → 3.00 ms). But it raises total main work by 4 % (460 → 480 ms): prefetching's work rose by 33 ms to save 18 ms in frames. Some prefetched paragraphs are never shown; the rest of the difference is unexplained (the investigation's guess: the same recording costs more on the little cores, where idle-time work runs). It moves work to shorten the slowest frames; it doesn't reduce work. Recording the item's group ahead too would need Rust to draw unplaced items (M–L), for about 0.15 ms more per revealing frame.
+
+**Done, without the extra work (D322).** The prototype recorded each paragraph inside its layout call. The production version notes the paragraphs laid out during a `prefetch` call and records them after it returns, oldest first, while a recording (a running average of the last ones, 30 µs before any, each counting for at most 1 ms) fits before the next frame's deadline, the one Rust's prefetch works to, and at least one if the deadline isn't past (so a slow recording can't stall them). It skips the paragraphs released or laid out again since (a text measured twice is two paragraphs, the first released), the ones a frame already recorded, and empty ones. What doesn't fit waits for the next idle time, before any more prefetching. Measured against D321, 4 runs each, interleaved with the prototype on top of D321 (means [min–max]):
+
+| Scroll | before | prototype | shipped |
+|---|---|---|---|
+| Main per frame p50 / p90 / p99 | 1.26 / 2.28 / 3.63 ms | 1.30 / 2.01 / 3.13 ms | 1.28 / **1.94 / 3.05** ms (−15 %, −16 %) |
+| Main work | 473.1 [464.4–479.6] ms | 481.6 [475.4–484.2] ms (+1.8 %) | 473.9 [465.2–481.3] ms (+0.2 %) |
+| RenderThread work | 775.3 ms | 775.5 ms | 776.3 ms |
+| RenderThread per frame p50 / p90 / p99 | 2.73 / 3.69 / 5.49 ms | 2.80 / 3.83 / 5.44 ms | 2.78 / 3.73 / 5.46 ms |
+| Janky frames a run | 0.75 | 0.5 | 1.0 |
+| `compose-rs: replay`, `Record View#draw()` | 188, 250 µs | 105, 171 µs | 104, 168 µs |
+
+The animation (no prefetching) is unchanged: main work 198.1 → 198.1 ms, p99 2.90 → 3.02 ms (ranges overlap). Janky frames stay at about one a run either way, within the runs' spread.
+
+### The four together (D320–D323): the full benchmark
+
+`measure.py --runs 15`, the branch then main (152a608), back to back, Compose alternated run by run in each session (means of the 3 traced runs; startup medians):
+
+| | main | D320–D323 | Compose (the two sessions) |
+|---|---|---|---|
+| Animation: main per frame p50 / p90 / p99 | 1.35 / 2.06 / 3.16 ms | 1.18 / 1.75 / 2.90 ms | 1.48–1.50 / 2.18–2.20 / 3.15–3.39 ms |
+| Animation: RenderThread per frame p50 / p90 / p99 | 2.94 / 4.02 / 5.65 ms | 2.66 / 3.59 / 5.17 ms | 2.95 / 4.07–4.09 / 5.56–5.70 ms |
+| Animation: main, RenderThread work | 213, 552 ms | 192, 505 ms | 256–257, 546–551 ms |
+| Scroll: main per frame p50 / p90 / p99 | 1.27 / 2.22 / 3.87 ms | 1.23 / 1.88 / 2.89 ms | 1.36–1.50 / 2.93–3.23 / 6.11–6.71 ms |
+| Scroll: RenderThread per frame p50 / p90 / p99 | 2.71 / 3.76 / 5.36 ms | 2.64 / 3.81 / 5.59 ms | 2.04–2.24 / 3.32–3.48 / 4.90–5.24 ms |
+| Scroll: main, RenderThread work | 478, 779 ms | 484, 809 ms | 823–873, 864–903 ms |
+| Janky frames (3 runs) | animation 0, scroll 1 | 0, 0 | 0, 1 and 0, 1 |
+| Startup feed / big | 105 / 179 ms | 107 / 177 ms | 127–130 / 220–221 ms |
+
+The scroll's RenderThread rose in this pair of sessions (779 → 809 ms, p99 5.36 → 5.59), but not in the interleaved A/Bs of each change, where it stayed within the runs' spread; Compose's moved by as much between the sessions (864 → 903 ms).
 
 ## Android: text and the big screen
 
@@ -462,8 +535,7 @@ With these changes, compose-rs's animation does about 25 % less main-thread work
 | `PrecomputedText` per paragraph | big first frame +7 ms (text-precomputed) |
 | Skipping `getDesiredWidth` when a line wraps | flat: the shaping moves (text-wrap-first) |
 | Recording paragraphs on workers while laying out | contention: text layout +18 ms (text-async-record, C) |
-| Recording prefetched paragraphs ahead (docs/12's next step) | p99 −15 %, but total main work +4 % (frame-eager-text) |
-| The spinner as a repaint boundary alone | no change (frame-spinner-boundary); needs #10 |
+| The spinner as a repaint boundary alone | no change (frame-spinner-boundary); with #10, done (D323) |
 | Dropping the per-paragraph render node | at most 4.5 ms of the big frame, and the animation frames that re-record groups would pay (D153) |
 | `RegisterNatives`, lazier initialization at startup | under 0.2 ms and 0.3 ms |
 | `opt-level = "s"`/`"z"` for Android | on top of #4, 45 KB smaller and frames 11–13 % slower |
