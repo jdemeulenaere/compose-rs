@@ -422,15 +422,16 @@ fn plain_value(value: Value) -> TokenStream {
     }
 }
 
-/// The value passed for a value parameter: as written, or a clone of a local a lambda of the same
-/// call captures (`ModalNavigationDrawer!(drawer_state = drawer, { … drawer … })`). The lambda
-/// borrows it to compare its captures, so the value can't move it, whatever the parameters'
-/// order.
-fn shared_value(value: Value, captured: &[Ident]) -> TokenStream {
+/// The value passed for a value parameter: as written, or a clone of a local another argument of
+/// the call names: a lambda capturing it (`ModalNavigationDrawer!(drawer_state = drawer, { …
+/// drawer … })`), which borrows it to compare its captures, or an expression borrowing it
+/// (`Chip!(label, selected = label == current)`). The value can't move it, whatever the
+/// parameters' order.
+fn shared_value(value: Value, mentions: &std::collections::HashMap<String, usize>) -> TokenStream {
     if let Value::Expr(Expr::Path(path)) = &value
         && path.qself.is_none()
         && let Some(name) = path.path.get_ident()
-        && captured.contains(name)
+        && mentions.get(&name.to_string()).is_some_and(|count| *count > 1)
     {
         return quote! { ::core::clone::Clone::clone(&#name) };
     }
@@ -448,24 +449,25 @@ fn is_string_literal(argument: &Argument) -> bool {
 
 /// The trailing lambda, taken out of `arguments`: the argument for the last parameter, when that
 /// is a callback not given by name, as Kotlin's trailing lambda.
-/// - A positional argument after named ones is it, when it is the only one and a lambda (`{ … }`
-///   anywhere after them) or the last argument (`Layout!(modifier = m, measure_policy = p,
-///   content)`).
+/// - A block or closure after named arguments is it, when it is the only positional argument
+///   after them (`Button!(on_click = …, { … }, enabled = false)`).
 /// - Otherwise a final block or closure is it, once every required parameter before the last
 ///   is given: `BasicTextField!(value, move |text| …)` gives `on_value_change`, not the trailing
-///   `decoration_box`.
+///   `decoration_box`. Declined because one is missing, it names the first missing one, which
+///   the caller reports if the last parameter ends up missing (`Button!({ … })` lacks
+///   `on_click`, not `content`).
 fn trailing_lambda(
     parameters: &[Parameter],
     arguments: &mut Vec<Argument>,
     formatting: bool,
-) -> Option<Value> {
-    let last = parameters.last()?;
+) -> Trailing {
+    let Some(last) = parameters.last() else { return Trailing::None };
     if last.callback.is_none() && last.optional.is_none()
         || arguments
             .iter()
             .any(|argument| matches!(argument, Argument::Named(name, _) if *name == last.name))
     {
-        return None;
+        return Trailing::None;
     }
     let first_named = arguments.iter().position(|argument| matches!(argument, Argument::Named(..)));
     let after_named: Vec<usize> = (first_named.map_or(arguments.len(), |first| first + 1)
@@ -473,7 +475,7 @@ fn trailing_lambda(
         .filter(|index| matches!(arguments[*index], Argument::Positional(_)))
         .collect();
     let index = match after_named.as_slice() {
-        [index] if *index + 1 == arguments.len() || arguments[*index].value().is_lambda() => *index,
+        [index] if arguments[*index].value().is_lambda() => *index,
         [] if matches!(arguments.last(), Some(Argument::Positional(value)) if value.is_lambda()) => {
             // The positional arguments before it fill the first parameters (a format string
             // and its arguments, the first one).
@@ -485,18 +487,28 @@ fn trailing_lambda(
                         |argument| matches!(argument, Argument::Named(name, _) if *name == parameter.name),
                     )
             };
-            let required_missing = parameters[..parameters.len() - 1]
-                .iter()
-                .enumerate()
-                .any(|(index, parameter)| parameter.default.is_none() && !given(index, parameter));
-            if required_missing {
-                return None;
+            let missing =
+                parameters[..parameters.len() - 1].iter().enumerate().find(|(index, parameter)| {
+                    parameter.default.is_none() && !given(*index, parameter)
+                });
+            if let Some((_, parameter)) = missing {
+                let span =
+                    arguments.last().map_or_else(Span::call_site, |last| last.value().span());
+                return Trailing::Declined(parameter.name.clone(), span);
             }
             arguments.len() - 1
         }
-        _ => return None,
+        _ => return Trailing::None,
     };
-    Some(arguments.remove(index).into_value())
+    Trailing::Lambda(arguments.remove(index).into_value())
+}
+
+/// What `trailing_lambda` found.
+enum Trailing {
+    None,
+    Lambda(Value),
+    /// A final lambda not taken as the trailing one, as this required parameter is missing.
+    Declined(Ident, Span),
 }
 
 fn build(call: Call) -> syn::Result<TokenStream> {
@@ -508,27 +520,36 @@ fn build(call: Call) -> syn::Result<TokenStream> {
 
     // The trailing lambda is bound by name: given twice, it is an error as any argument is.
     let formatting = format && arguments.first().is_some_and(is_string_literal);
-    if let Some(value) = trailing_lambda(&parameters, &mut arguments, formatting)
-        && let Some(last) = parameters.last()
-    {
-        let name = Ident::new(&last.name.to_string(), value.span());
-        arguments.push(Argument::Named(name, value));
+    let mut declined = None;
+    match trailing_lambda(&parameters, &mut arguments, formatting) {
+        Trailing::Lambda(value) => {
+            if let Some(last) = parameters.last() {
+                let name = Ident::new(&last.name.to_string(), value.span());
+                arguments.push(Argument::Named(name, value));
+            }
+        }
+        Trailing::Declined(missing, span) => declined = Some((missing, span)),
+        Trailing::None => {}
+    }
+
+    // How many arguments name each identifier: a local given by itself to a value parameter and
+    // named by another argument (captured by a lambda, borrowed by an expression) is cloned for
+    // it (`shared_value`).
+    let mut mentions: std::collections::HashMap<String, usize> = Default::default();
+    for argument in &arguments {
+        let mut names = Vec::new();
+        memo::mentioned_names(argument.value().to_token_stream(), &mut names);
+        names.sort();
+        names.dedup();
+        for name in names {
+            *mentions.entry(name).or_default() += 1;
+        }
     }
 
     // A leading string literal formats into a `#[format]` first parameter, with the positional
     // arguments after it.
     // A named argument the string names (`"{count} items", count = items.len()`) is a format
     // argument, as in `format!`, even if a parameter has its name.
-    // What the call's lambdas capture: a local also given by name to a value parameter is
-    // cloned for it (`shared_value`).
-    let captured: Vec<Ident> = arguments
-        .iter()
-        .filter_map(|argument| match argument.value() {
-            Value::Marked(marked) => Some(marked.captures.iter().cloned()),
-            Value::Expr(_) => None,
-        })
-        .flatten()
-        .collect();
     let mut arguments = arguments.into_iter().peekable();
     let mut next_positional = 0;
     let mut format_arguments = Vec::new();
@@ -640,12 +661,14 @@ fn build(call: Call) -> syn::Result<TokenStream> {
                     Value::Expr(Expr::Path(path)) if path.path.is_ident("None") => {
                         path.into_token_stream()
                     }
-                    // An optional callback given by name is cloned, as a callback given by name
-                    // is: a content lambda passing it on stays `Fn`.
+                    // An optional callback given by name (a function, a callback, a closure, an
+                    // `Option`) is memoized on itself, as a callback given by name is: the same
+                    // value passes the same callback, and a content lambda passing it on stays
+                    // `Fn`.
                     Value::Expr(Expr::Path(path))
                         if path.qself.is_none() && path.path.get_ident().is_some() =>
                     {
-                        quote! { ::compose::__private::optional_callback(::core::clone::Clone::clone(&#path)) }
+                        memo::probe_optional_value(path.into_token_stream())
                     }
                     value => {
                         let value = plain_value(value);
@@ -655,10 +678,10 @@ fn build(call: Call) -> syn::Result<TokenStream> {
             }
             // A `#[format]` parameter converts whatever it is given (`Text!(title)`).
             None if format && index == 0 => {
-                let value = shared_value(argument.into_value(), &captured);
+                let value = shared_value(argument.into_value(), &mentions);
                 quote! { ::core::convert::Into::into(#value) }
             }
-            None => shared_value(argument.into_value(), &captured),
+            None => shared_value(argument.into_value(), &mentions),
         };
         set(&mut slots, index, value);
     }
@@ -682,6 +705,12 @@ fn build(call: Call) -> syn::Result<TokenStream> {
                 None => default.clone(),
             },
             (None, None) => {
+                if let Some((missing, span)) = &declined {
+                    return Err(Error::new(
+                        *span,
+                        format!("missing argument `{missing}` for `{function}`"),
+                    ));
+                }
                 let message = format!("missing argument `{}` for `{function}`", parameter.name);
                 quote_spanned! { span=> ::core::compile_error!(#message) }
             }

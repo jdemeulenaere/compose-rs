@@ -635,7 +635,9 @@ fn transform(
     let mut regions = Regions::new(callables, key);
     regions.transform_block(&mut function.block);
     let call_macro = call_macro(&function, &params, key, site);
-    let call_form = call_form_doc(&function, &params);
+    // Only on documented composables, so `missing_docs` still flags the others.
+    let documented = function.attrs.iter().any(|attr| attr.path().is_ident("doc"));
+    let call_form = if documented { call_form_doc(&function, &params) } else { TokenStream::new() };
 
     let rebinds = params.iter().filter_map(|param| {
         let pattern = param.pattern.as_ref()?;

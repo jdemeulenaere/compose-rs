@@ -14,6 +14,8 @@
 //!   trailing content may follow named arguments.
 
 #![allow(non_snake_case, dead_code)]
+// A statement macro wrapped with its clones keeps its attributes on the block.
+#![deny(unused_attributes)]
 
 use std::cell::{Cell, RefCell};
 use std::future::Future;
@@ -203,6 +205,7 @@ fn item_closures_in_a_lambda_get_clones_of_its_captures() {
 #[composable]
 fn Greeting(name: String, sink: Rc<RefCell<Vec<String>>>) {
     Section!({
+        #[allow(unused_braces)]
         Label!(name);
         Show(name);
         sink.borrow_mut().push(name);
@@ -472,11 +475,11 @@ fn Layout(#[default(1)] modifier: u32, measure_policy: u32, content: impl Fn() +
     content();
 }
 
-/// The trailing content may follow named arguments, as a block or by name, and a block may come
+/// The trailing content may follow named arguments, as a block or a closure, and may come
 /// before named arguments that follow it.
 #[composable]
 fn Trailing(content: impl Fn() + 'static) {
-    Layout!(modifier = 2, measure_policy = 3, content);
+    Layout!(modifier = 2, measure_policy = 3, move || content());
     Layout!(measure_policy = 4, { Label!("block") });
     Card!(on_click = || log("unused"), { Label!("middle") }, enabled = false);
 }

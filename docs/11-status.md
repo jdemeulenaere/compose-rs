@@ -35,5 +35,5 @@ What compose-rs covers of Jetpack Compose today, and where it knowingly differs.
 - **Text** has no link annotations, no paragraph styles in spans, and text fields have no prefix, suffix, `max_lines` or `min_lines`.
 - **Animation** transitions have no child transitions; `AnimatedContent` keeps at most three states' contents while they animate.
 - **Material** lacks, among others, dismissible and permanent navigation drawers, navigation rails, bottom sheets, input chips, date and time pickers, segmented buttons and search bars.
-- **Values aren't references.** Kotlin passes references; here a lambda clones a capture where it would move it (D155), but at a composable's top level a value given to two calls, or moved into a `LaunchedEffect`'s `async move` before a later use, still needs `.clone()`.
+- **Values aren't references.** Kotlin passes references; here a lambda clones a capture where it would move it (D158), but at a composable's top level a value given to two calls, or moved into a `LaunchedEffect`'s `async move` before a later use, still needs `.clone()`.
 - **Saving state** across process death (`rememberSaveable`) has no desktop counterpart and isn't provided.

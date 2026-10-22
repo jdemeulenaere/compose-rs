@@ -1,3 +1,4 @@
+/// A button: its call form is appended to these docs.
 /**
  # Call
 
@@ -83,12 +84,6 @@ macro_rules! __compose_call_Button_ceda1bb746811f5a_N {
 #[doc(hidden)]
 #[allow(unused_imports)]
 pub use __compose_call_Button_ceda1bb746811f5a_N as Button;
-/**
- # Call
-
- ```text
- Counter!()
- ```*/
 #[allow(non_snake_case, clippy::too_many_arguments)]
 fn Counter() {
     let __composer = ::compose::__private::current();
@@ -143,14 +138,6 @@ macro_rules! __compose_call_Counter_abf9ac1093febf76_N {
 #[doc(hidden)]
 #[allow(unused_imports)]
 use __compose_call_Counter_abf9ac1093febf76_N as Counter;
-/**
- # Call
-
- ```text
- Menu!(drawer, title, shown)
- ```
-
- Arguments go in this order, or by name (`name = value`); those shown with a value are optional.*/
 #[allow(non_snake_case, clippy::too_many_arguments)]
 fn Menu(drawer: DrawerState, title: String, shown: Rc<Vec<u32>>) {
     let __composer = ::compose::__private::current();

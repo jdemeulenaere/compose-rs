@@ -1,11 +1,3 @@
-/**
- # Call
-
- ```text
- Borrowed!(title)
- ```
-
- Arguments go in this order, or by name (`name = value`); those shown with a value are optional.*/
 #[allow(non_snake_case, clippy::too_many_arguments)]
 fn Borrowed(title: &str) {
     let __compose_marker = || ();
@@ -30,14 +22,6 @@ macro_rules! __compose_call_Borrowed_1efc7a945654dc5e_N {
 #[doc(hidden)]
 #[allow(unused_imports)]
 use __compose_call_Borrowed_1efc7a945654dc5e_N as Borrowed;
-/**
- # Call
-
- ```text
- Returns!(value)
- ```
-
- Arguments go in this order, or by name (`name = value`); those shown with a value are optional.*/
 #[allow(non_snake_case, clippy::too_many_arguments)]
 fn Returns(value: i32) -> i32 {
     let __compose_marker = || ();
@@ -60,14 +44,6 @@ macro_rules! __compose_call_Returns_0ad3229f33d2e0b2_N {
 #[doc(hidden)]
 #[allow(unused_imports)]
 use __compose_call_Returns_0ad3229f33d2e0b2_N as Returns;
-/**
- # Call
-
- ```text
- Explicit!(content)
- ```
-
- Arguments go in this order, or by name (`name = value`); those shown with a value are optional.*/
 #[allow(non_snake_case, clippy::too_many_arguments)]
 fn Explicit(content: impl Fn()) {
     let __compose_marker = || ();
@@ -92,14 +68,6 @@ macro_rules! __compose_call_Explicit_0e6aa01d864d81a2_N {
 #[doc(hidden)]
 #[allow(unused_imports)]
 use __compose_call_Explicit_0e6aa01d864d81a2_N as Explicit;
-/**
- # Call
-
- ```text
- StaticReference!(title)
- ```
-
- Arguments go in this order, or by name (`name = value`); those shown with a value are optional.*/
 #[allow(non_snake_case, clippy::too_many_arguments)]
 fn StaticReference(title: &'static str) {
     let __composer = ::compose::__private::current();

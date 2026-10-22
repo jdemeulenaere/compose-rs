@@ -1,3 +1,4 @@
+/// A button: its call form is appended to these docs.
 #[composable]
 pub fn Button(
     on_click: impl Fn() + 'static,

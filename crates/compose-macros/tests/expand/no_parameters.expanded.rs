@@ -1,9 +1,3 @@
-/**
- # Call
-
- ```text
- Counter!()
- ```*/
 #[allow(non_snake_case, clippy::too_many_arguments)]
 fn Counter() {
     let __composer = ::compose::__private::current();

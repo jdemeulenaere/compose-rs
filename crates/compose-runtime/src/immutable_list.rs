@@ -93,8 +93,9 @@ impl<'a, T> IntoIterator for &'a ImmutableList<T> {
 }
 
 impl<T: PartialEq> PartialEq for ImmutableList<T> {
+    /// The contents, as the slices compare (a list holding NaN isn't equal to itself).
     fn eq(&self, other: &Self) -> bool {
-        self.ptr_eq(other) || self.0 == other.0
+        *self.0 == *other.0
     }
 }
 

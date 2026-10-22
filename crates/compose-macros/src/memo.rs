@@ -235,6 +235,21 @@ pub(crate) fn probe_value(value: TokenStream) -> TokenStream {
     }}
 }
 
+/// The same for an optional callback given by name (a function, a callback, a closure or an
+/// `Option` of one): memoized on the value itself, so the callee still skips.
+pub(crate) fn probe_optional_value(value: TokenStream) -> TokenStream {
+    let name = Ident::new("__compose_value", Span::mixed_site());
+    let key = quote! { (&&&::compose::__private::ArgProbe(#name)).arg_key() };
+    let site = site_of(&value);
+    let keys = key_tuple(vec![key]);
+    quote! {{
+        #[allow(unused_imports)]
+        use ::compose::__private::{KeyedProbe as _, StaticProbe as _, UnkeyedProbe as _};
+        let #name = &(#value);
+        ::compose::__private::optional_lambda(#site, #keys, #name)
+    }}
+}
+
 /// A local named by itself (`name`): not a path, a constant or a variant (`LIMIT`, `None`).
 fn bare_local(expression: &Expr) -> Option<Ident> {
     let Expr::Path(path) = expression else { return None };
@@ -346,6 +361,29 @@ fn starts_uppercase(name: &str) -> bool {
 
 /// The identifiers in a macro's tokens, but field and method names (`settings.enabled`) and
 /// keywords.
+/// The names tokens mention: identifiers (as `token_idents`) and the names in string literals'
+/// format placeholders (`"{name}"`). Over-counting is harmless where it's used: a clone more.
+pub(crate) fn mentioned_names(tokens: TokenStream, out: &mut Vec<String>) {
+    fn literals(tokens: TokenStream, out: &mut Vec<String>) {
+        for token in tokens {
+            match token {
+                TokenTree::Literal(literal) => {
+                    let text = literal.to_string();
+                    if text.contains('{')
+                        && let Ok(text) = syn::parse_str::<syn::LitStr>(&text)
+                    {
+                        out.extend(format_names(&text.value()));
+                    }
+                }
+                TokenTree::Group(group) => literals(group.stream(), out),
+                _ => {}
+            }
+        }
+    }
+    token_idents(tokens.clone(), out);
+    literals(tokens, out);
+}
+
 fn token_idents(tokens: TokenStream, out: &mut Vec<String>) {
     let mut dots = 0;
     for token in tokens {
@@ -834,12 +872,13 @@ pub(crate) struct Memoize {
     local_macros: Vec<String>,
     /// How many closures (or content blocks) enclose the code being visited.
     depth: usize,
-    /// The scope depth at which the innermost closure (or content block) starts: the names
-    /// bound before it are what it captures.
-    closure: Option<usize>,
-    /// The same, for the innermost lambda this pass memoizes: built from clones of its captures
-    /// and run again, it can't give them away.
+    /// The scope depth at which the innermost lambda this pass memoizes starts: the names bound
+    /// before it are its captures. Built from clones of them and run again, it can't give them
+    /// away.
     lambda: Option<usize>,
+    /// In `remember`'s calculation: it runs once, while `remember` holds its slot, so nothing in
+    /// it is memoized (a probe there would take a slot out of order); captures are still cloned.
+    calculation: bool,
 }
 
 impl Memoize {
@@ -882,7 +921,7 @@ impl Memoize {
         }
         let mut local_macros = LocalMacros(Vec::new());
         local_macros.visit_block(body);
-        Memoize { scopes, local_macros: local_macros.0, depth: 0, closure: None, lambda: None }
+        Memoize { scopes, local_macros: local_macros.0, depth: 0, lambda: None, calculation: false }
     }
 
     /// A closure's body, with its parameters in scope. `memoized`: a lambda this pass memoizes.
@@ -897,16 +936,14 @@ impl Memoize {
     }
 
     fn within_closure(&mut self, memoized: bool, f: impl FnOnce(&mut Self)) {
-        let outer = (self.closure, self.lambda);
-        let start = Some(self.scopes.depth());
-        self.closure = start;
+        let outer = self.lambda;
         if memoized {
-            self.lambda = start;
+            self.lambda = Some(self.scopes.depth());
         }
         self.depth += 1;
         f(self);
         self.depth -= 1;
-        (self.closure, self.lambda) = outer;
+        self.lambda = outer;
     }
 
     /// Whether `name` is a capture of the innermost memoized lambda: a local bound before it, not
@@ -927,11 +964,12 @@ impl Memoize {
         }
     }
 
-    /// A `move` closure or an `async move` block in a closure, given clones of what it names of
-    /// the closure's captures: the closure may run again (a click handler launching a task, a
-    /// lazy list's item closure), so it can't move them out.
+    /// A `move` closure or an `async move` block in a memoized lambda, given clones of what it
+    /// names of the lambda's captures: the lambda runs again (a click handler launching a task, a
+    /// lazy list's item closures), so it can't move them out, and they are `Clone` (D115). What
+    /// the lambda makes for itself moves as written, even through an `FnOnce` closure in it.
     fn clone_into(&self, expression: &mut Expr) {
-        let Some(start) = self.closure else { return };
+        let Some(start) = self.lambda else { return };
         let (captures, _) =
             captures_of(&self.scopes, &self.local_macros, |free| free.visit_expr(expression));
         let names: Vec<Ident> = captures
@@ -1132,16 +1170,24 @@ impl VisitMut for Memoize {
                         let local =
                             name.as_ref().is_some_and(|name| memoize.local_macros.contains(name));
                         if is_call_macro_path(&statement.mac.path) && !local {
-                            let given = memoize.rewrite_call_macro(&mut statement.mac);
-                            // In a block with the clones, which the code after it doesn't see.
+                            let given = if memoize.calculation {
+                                Vec::new()
+                            } else {
+                                memoize.rewrite_call_macro(&mut statement.mac)
+                            };
+                            // In a block with the clones, which the code after it doesn't see;
+                            // the statement's attributes on the block.
                             if !given.is_empty() {
                                 let call = Expr::Macro(syn::ExprMacro {
-                                    attrs: std::mem::take(&mut statement.attrs),
+                                    attrs: Vec::new(),
                                     mac: statement.mac.clone(),
                                 });
+                                let mut wrapped = with_clones(&given, call);
+                                if let Expr::Block(block) = &mut wrapped {
+                                    block.attrs = std::mem::take(&mut statement.attrs);
+                                }
                                 let semicolon = statement.semi_token;
-                                replacement =
-                                    Some(syn::Stmt::Expr(with_clones(&given, call), semicolon));
+                                replacement = Some(syn::Stmt::Expr(wrapped, semicolon));
                             }
                         } else if !is_known_macro(&statement.mac.path) {
                             // It may bind locals the walk can't see: a lambda naming a new
@@ -1168,7 +1214,8 @@ impl VisitMut for Memoize {
             // a callback: modifiers take `impl IntoCallback`, so it is memoized, and the
             // modifier stays `same` when its captures do.
             Expr::MethodCall(call)
-                if is_modifier_chain(&call.receiver, &self.scopes)
+                if !self.calculation
+                    && is_modifier_chain(&call.receiver, &self.scopes)
                     && CALLBACK_MODIFIERS.contains(&call.method.to_string().as_str()) =>
             {
                 self.visit_expr_mut(&mut call.receiver);
@@ -1189,16 +1236,21 @@ impl VisitMut for Memoize {
             }
             // `remember`'s calculation runs once, while `remember` holds its slot: a callback
             // made there needs no memoization, and a probe there would take a slot out of order.
+            // Captures it gives away are still cloned.
             Expr::Call(call) if is_remember(&call.func) => {
                 self.visit_expr_mut(&mut call.func);
+                let outer = std::mem::replace(&mut self.calculation, true);
                 for argument in &mut call.args {
+                    self.visit_expr_mut(argument);
                     self.reuse_argument(argument);
                 }
+                self.calculation = outer;
             }
             // `callback(closure)`: the memoized closure replaces the call, so its parameters take
             // their types from where the callback goes.
             Expr::Call(call)
-                if call.args.len() == 1
+                if !self.calculation
+                    && call.args.len() == 1
                     && matches!(&call.args[0], Expr::Closure(_))
                     && matches!(&*call.func, Expr::Path(path) if is_callback_constructor(&path.path)) =>
             {
@@ -1207,8 +1259,8 @@ impl VisitMut for Memoize {
                 *expr = memoize_closure(self.depth > 0, &self.scopes, &self.local_macros, closure);
             }
             Expr::Call(call) => {
-                let constructor =
-                    matches!(&*call.func, Expr::Path(path) if is_callback_constructor(&path.path));
+                let constructor = !self.calculation
+                    && matches!(&*call.func, Expr::Path(path) if is_callback_constructor(&path.path));
                 self.visit_expr_mut(&mut call.func);
                 for argument in &mut call.args {
                     if let (true, Expr::Closure(closure)) = (constructor, &mut *argument) {
@@ -1231,6 +1283,7 @@ impl VisitMut for Memoize {
                     self.reuse_argument(argument);
                 }
             }
+            Expr::Macro(_) if self.calculation => {}
             Expr::Macro(macro_expr) => {
                 let given = self.rewrite_call_macro(&mut macro_expr.mac);
                 if !given.is_empty() {
@@ -1238,18 +1291,17 @@ impl VisitMut for Memoize {
                     *expr = with_clones(&given, call);
                 }
             }
-            // A `move` closure in a closure: given clones of the captures it names.
+            // A `move` closure in a memoized lambda: given clones of the lambda's captures it names.
             Expr::Closure(closure) if closure.capture.is_some() => {
                 self.visit_closure(closure, false);
                 self.clone_into(expr);
             }
             // An `async move` block owns what it names: no lambda around it to give captures to,
-            // and given clones of the enclosing closure's captures.
+            // and given clones of the enclosing lambda's captures.
             Expr::Async(block) if block.capture.is_some() => {
-                let outer = (self.closure, self.lambda);
-                (self.closure, self.lambda) = (None, None);
+                let outer = self.lambda.take();
                 self.visit_block_mut(&mut block.block);
-                (self.closure, self.lambda) = outer;
+                self.lambda = outer;
                 self.clone_into(expr);
             }
             _ => visit_mut::visit_expr_mut(self, expr),

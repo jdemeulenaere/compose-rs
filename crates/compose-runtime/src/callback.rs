@@ -449,6 +449,33 @@ fn lambda_slot(type_id: TypeId) -> Option<(SlotPosition, Option<Rc<dyn Any>>)> {
     with_runtime(|runtime| runtime.is_composing().then(|| runtime.slot_next(type_id)))
 }
 
+/// An optional callback given by name (a function, a callback, a closure or an `Option` of one),
+/// memoized on the value itself as [`LambdaProbe::resolve_cloned`] does for a required one: the
+/// same value passes the same callback every pass, so the callee can skip. A hit clones nothing.
+pub fn optional_lambda<K: LambdaKeys, F: ?Sized + 'static, C: IntoOptionalCallback<F> + Clone>(
+    site: u64,
+    keys: K,
+    value: &C,
+) -> Option<Callback<F>> {
+    let Some((position, existing)) =
+        lambda_slot(TypeId::of::<(u64, K::Owned, Option<Callback<F>>)>())
+    else {
+        return value.clone().into_optional_callback();
+    };
+    if let Some(existing) = existing
+        && let Some((kept_site, kept, callback)) =
+            existing.downcast_ref::<(u64, K::Owned, Option<Callback<F>>)>()
+        && *kept_site == site
+        && keys.same(kept)
+    {
+        return callback.clone();
+    }
+    let callback = value.clone().into_optional_callback();
+    let stored: Rc<dyn Any> = Rc::new((site, keys.to_owned(), callback.clone()));
+    set_lambda_slot(position, stored, type_name::<(u64, K::Owned, Option<Callback<F>>)>());
+    callback
+}
+
 /// Looks up the lambda remembered at this position: if its captures are all `same` as `keys`,
 /// returns it; otherwise returns a [`PendingLambda`] to store the new one.
 ///
