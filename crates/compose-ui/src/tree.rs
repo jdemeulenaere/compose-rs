@@ -170,6 +170,8 @@ pub struct LayoutNode {
     pub(crate) place_order: u64,
     /// What it drew last, if it's a repaint boundary (render.rs).
     pub(crate) retained: Option<Box<crate::render::RetainedDrawing>>,
+    /// The sum of its `z_index` modifiers: siblings are drawn, and hit, in its order.
+    pub(crate) z_index: f32,
 }
 
 impl LayoutNode {
@@ -197,6 +199,7 @@ impl LayoutNode {
             overlay_origin: crate::unit::Offset::ZERO,
             place_order: 0,
             retained: None,
+            z_index: 0.0,
         }
     }
 
@@ -264,6 +267,13 @@ pub struct UiTree {
     /// A node focused before it was ever placed (a prefetched lazy item): brought into view
     /// once laid out.
     pub(crate) bring_into_view_after_layout: Option<NodeId>,
+    /// What layouts queued for application code (`on_size_changed`, `on_globally_positioned`),
+    /// run by the host once the layout is over.
+    pub(crate) layout_callbacks: Vec<crate::input::Action>,
+    /// The nodes with position-aware modifier nodes (`on_globally_positioned`).
+    pub(crate) positioned: Vec<NodeId>,
+    /// Something was laid out (or a position-aware node came) since the last callbacks.
+    pub(crate) laid_out_since_callbacks: bool,
 }
 
 impl UiTree {
@@ -297,19 +307,34 @@ impl UiTree {
             focus_requests: Rc::default(),
             text_selection: None,
             bring_into_view_after_layout: None,
+            layout_callbacks: Vec::new(),
+            positioned: Vec::new(),
+            laid_out_since_callbacks: false,
         }
     }
 
-    /// `node`'s children's indices in placement order (the order they're drawn in), if it
-    /// isn't their order: `None` when it is (the usual case, which allocates nothing).
+    /// `node`'s children's indices in drawing order, if it isn't their order (`None` when it
+    /// is, the usual case, which allocates nothing): by `z_index`, then in the order their
+    /// parent placed them, as Compose's.
     pub(crate) fn placement_order(&self, node: NodeId) -> Option<SmallVec<[u32; 8]>> {
         let children = &self.node(node).children;
-        let orders = || children.iter().map(|child| self.node(child.node).place_order);
-        if orders().zip(orders().skip(1)).all(|(a, b)| a <= b) {
+        let order_of = |child: NodeId| {
+            let value = self.node(child);
+            (value.z_index, value.place_order)
+        };
+        let orders = || children.iter().map(|child| order_of(child.node));
+        let in_order = |a: (f32, u64), b: (f32, u64)| {
+            a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)) != std::cmp::Ordering::Greater
+        };
+        if orders().zip(orders().skip(1)).all(|(a, b)| in_order(a, b)) {
             return None;
         }
         let mut indices: SmallVec<[u32; 8]> = (0..children.len() as u32).collect();
-        indices.sort_by_key(|index| self.node(children[*index as usize].node).place_order);
+        indices.sort_by(|a, b| {
+            let (a, b) =
+                (order_of(children[*a as usize].node), order_of(children[*b as usize].node));
+            a.0.total_cmp(&b.0).then(a.1.cmp(&b.1))
+        });
         Some(indices)
     }
 
@@ -690,6 +715,25 @@ impl UiTree {
         // Its parent draws it otherwise: by reference, in place, or not (an overlay).
         if parent_draws_differently && let Some(parent) = parent {
             self.invalidate_draw_of(parent);
+        }
+        let value = self.node_mut(node);
+        let positioned =
+            value.chain.iter_mut().any(|entry| entry.as_global_position_aware().is_some());
+        let z_index = value
+            .modifier
+            .elements()
+            .iter()
+            .map(|element| if let Element::ZIndex(z) = element { *z } else { 0.0 })
+            .sum::<f32>();
+        if z_index != value.z_index {
+            value.z_index = z_index;
+            // Its parent draws its children in another order.
+            if let Some(parent) = value.parent {
+                self.invalidate_draw_of(parent);
+            }
+        }
+        if positioned {
+            self.register_positioned(node);
         }
         let value = self.node_mut(node);
         for element in value.modifier.elements() {

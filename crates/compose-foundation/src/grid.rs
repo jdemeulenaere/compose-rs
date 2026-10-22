@@ -253,8 +253,10 @@ pub fn LazyVerticalGrid(
                 Modifier.fill_max_size(),
                 state.list.clone(),
                 content_padding,
+                false,
                 vertical_arrangement,
-                Alignment::TOP_START,
+                Alignment::START,
+                true,
                 compose_runtime::callback(move |list: LazyListScope| {
                     let items = items.clone();
                     let keys = items.clone();

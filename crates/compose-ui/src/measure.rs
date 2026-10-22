@@ -36,6 +36,7 @@ impl UiTree {
         self.place(root, 0, IntOffset::ZERO);
         self.position_overlays();
         self.needs_draw = true;
+        self.laid_out_since_callbacks = true;
         true
     }
 

@@ -22,10 +22,10 @@ use compose_runtime::{
     ComposeArg, OwnedState, composable, hash_key, key, mutable_state_of, remember,
 };
 use compose_ui::{
-    Alignment, Constraints, Dp, EventContext, IntSize, Layout, Measurable, MeasurePolicy,
-    MeasureResult, MeasureScope, Modifier, ModifierNode, ModifierNodeElement, NodeId,
-    PaddingValues, Placeable, PointerEvent, PointerEventPass, PointerInputModifierNode,
-    PrefetchRequest, PrefetchRequestScope, PrefetchScheduler, Rect,
+    Alignment, Constraints, Dp, EventContext, HorizontalAlignment, IntSize, Layout, Measurable,
+    MeasurePolicy, MeasureResult, MeasureScope, Modifier, ModifierNode, ModifierNodeElement,
+    NodeId, PaddingValues, Placeable, PointerEvent, PointerEventPass, PointerInputModifierNode,
+    PrefetchRequest, PrefetchRequestScope, PrefetchScheduler, Rect, VerticalAlignment,
 };
 
 use crate::layout::Arrangement;
@@ -92,6 +92,12 @@ struct LazyListInner {
     room_backward: Cell<f32>,
     room_forward: Cell<f32>,
     prefetch: Prefetch,
+    /// The viewport's size less the content padding, for the items' `fill_parent_max_*`.
+    parent_size: Rc<ParentSize>,
+    /// The sticky header to keep composed (over the first visible item), as last laid out.
+    sticky: OwnedState<Option<usize>>,
+    /// What was last written to `sticky`, read without observing it.
+    sticky_written: Cell<Option<usize>>,
 }
 
 /// What prefetching works from, as last laid out, and what it learned.
@@ -147,6 +153,9 @@ impl LazyListState {
                 }),
                 room_forward: Cell::new(f32::INFINITY),
                 prefetch: Prefetch::default(),
+                parent_size: Rc::default(),
+                sticky: mutable_state_of(None),
+                sticky_written: Cell::new(None),
             }),
         }
     }
@@ -262,46 +271,210 @@ pub fn remember_lazy_list_state(
 struct Interval {
     count: usize,
     key: Option<Rc<dyn Fn(usize) -> u64>>,
+    /// The item's full key, to tell a duplicate key from a hash collision (debug builds).
+    #[cfg(debug_assertions)]
+    full_key: Option<FullKey>,
+    /// A sticky header (`sticky_header`).
+    sticky: bool,
     content: Rc<dyn Fn(usize)>,
 }
 
+/// An item's key, by its index in its interval.
+#[cfg(debug_assertions)]
+type FullKey = Rc<dyn Fn(usize) -> Box<dyn DynKey>>;
+
+/// A key compared through `dyn Any`, for the debug check of duplicate keys.
+#[cfg(debug_assertions)]
+trait DynKey: std::any::Any {
+    fn equals(&self, other: &dyn DynKey) -> bool;
+    fn as_any(&self) -> &dyn std::any::Any;
+}
+
+#[cfg(debug_assertions)]
+impl<K: PartialEq + 'static> DynKey for K {
+    fn equals(&self, other: &dyn DynKey) -> bool {
+        other.as_any().downcast_ref::<K>().is_some_and(|other| other == self)
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+impl Interval {
+    fn new(count: usize, content: Rc<dyn Fn(usize)>) -> Interval {
+        Interval {
+            count,
+            key: None,
+            #[cfg(debug_assertions)]
+            full_key: None,
+            sticky: false,
+            content,
+        }
+    }
+
+    fn keyed<K: Hash + PartialEq + 'static>(
+        count: usize,
+        key: impl Fn(usize) -> K + 'static,
+        content: Rc<dyn Fn(usize)>,
+    ) -> Interval {
+        let key = Rc::new(key);
+        Interval {
+            count,
+            #[cfg(debug_assertions)]
+            full_key: Some({
+                let key = key.clone();
+                Rc::new(move |index| Box::new(key(index)) as Box<dyn DynKey>)
+            }),
+            key: Some(Rc::new(move |index| hash_key(&key(index)))),
+            sticky: false,
+            content,
+        }
+    }
+}
+
 /// What a lazy list's content declares its items with, as Compose's `LazyListScope`:
-/// `scope.item(|| …)`, `scope.items(count, |index| …)`, `scope.items_keyed(count, key, …)`.
+/// `scope.item(|| …)`, `scope.items(count, |index| …)`, `scope.items_keyed(count, key, …)`, and
+/// over a list, `scope.items_list(list, |item_scope, item| …)` and
+/// `scope.items_indexed(list, |item_scope, index, item| …)`.
 #[derive(Clone, Default)]
 pub struct LazyListScope {
     intervals: Rc<RefCell<Vec<Interval>>>,
+    item_scope: LazyItemScope,
 }
 
 impl LazyListScope {
     /// One item, as `item { … }`.
     pub fn item(&self, content: impl Fn() + 'static) {
-        self.intervals.borrow_mut().push(Interval {
-            count: 1,
-            key: None,
-            content: Rc::new(move |_| content()),
-        });
+        self.push(Interval::new(1, Rc::new(move |_| content())));
+    }
+
+    /// One item with a key, as `item(key) { … }`.
+    pub fn item_keyed<K: Hash + PartialEq + 'static>(&self, key: K, content: impl Fn() + 'static) {
+        let key = Rc::new(key);
+        self.push(Interval::keyed(1, move |_| KeyRef(key.clone()), Rc::new(move |_| content())));
     }
 
     /// `count` items, as `items(count) { index -> … }`. Without keys, an item's state goes with
     /// its index.
     pub fn items(&self, count: usize, content: impl Fn(usize) + 'static) {
-        self.intervals.borrow_mut().push(Interval { count, key: None, content: Rc::new(content) });
+        self.push(Interval::new(count, Rc::new(content)));
     }
 
     /// `count` items with keys, as `items(count, key = { … }) { … }`: an item keeps its state
     /// (and the scroll position follows the first visible one) when items before it come and
-    /// go. Keys must be unique in the list.
-    pub fn items_keyed<K: Hash>(
+    /// go. Keys must be unique in the list (debug builds check those composed).
+    pub fn items_keyed<K: Hash + PartialEq + 'static>(
         &self,
         count: usize,
         key: impl Fn(usize) -> K + 'static,
         content: impl Fn(usize) + 'static,
     ) {
-        self.intervals.borrow_mut().push(Interval {
+        self.push(Interval::keyed(count, key, Rc::new(content)));
+    }
+
+    /// An item for each of `items`, as `items(items: List<T>) { item -> … }`: a `Vec`, a
+    /// slice (cloned) or an `Rc<[T]>` (shared, as an `ImmutableList`).
+    pub fn items_list<T: 'static>(
+        &self,
+        items: impl Into<Rc<[T]>>,
+        content: impl Fn(LazyItemScope, &T) + 'static,
+    ) {
+        let (items, scope) = (items.into(), self.item_scope.clone());
+        let count = items.len();
+        self.push(Interval::new(
             count,
-            key: Some(Rc::new(move |index| hash_key(&key(index)))),
-            content: Rc::new(content),
-        });
+            Rc::new(move |index| content(scope.clone(), &items[index])),
+        ));
+    }
+
+    /// `items_list` with keys, as `items(items, key = { item -> … })`.
+    pub fn items_list_keyed<T: 'static, K: Hash + PartialEq + 'static>(
+        &self,
+        items: impl Into<Rc<[T]>>,
+        key: impl Fn(&T) -> K + 'static,
+        content: impl Fn(LazyItemScope, &T) + 'static,
+    ) {
+        let (items, scope) = (items.into(), self.item_scope.clone());
+        let keys = items.clone();
+        self.push(Interval::keyed(
+            items.len(),
+            move |index| key(&keys[index]),
+            Rc::new(move |index| content(scope.clone(), &items[index])),
+        ));
+    }
+
+    /// An item for each of `items`, with its index, as `itemsIndexed(items) { index, item -> … }`.
+    pub fn items_indexed<T: 'static>(
+        &self,
+        items: impl Into<Rc<[T]>>,
+        content: impl Fn(LazyItemScope, usize, &T) + 'static,
+    ) {
+        let (items, scope) = (items.into(), self.item_scope.clone());
+        self.push(Interval::new(
+            items.len(),
+            Rc::new(move |index| content(scope.clone(), index, &items[index])),
+        ));
+    }
+
+    /// `items_indexed` with keys, as `itemsIndexed(items, key = { index, item -> … })`.
+    pub fn items_indexed_keyed<T: 'static, K: Hash + PartialEq + 'static>(
+        &self,
+        items: impl Into<Rc<[T]>>,
+        key: impl Fn(usize, &T) -> K + 'static,
+        content: impl Fn(LazyItemScope, usize, &T) + 'static,
+    ) {
+        let (items, scope) = (items.into(), self.item_scope.clone());
+        let keys = items.clone();
+        self.push(Interval::keyed(
+            items.len(),
+            move |index| key(index, &keys[index]),
+            Rc::new(move |index| content(scope.clone(), index, &items[index])),
+        ));
+    }
+
+    /// A header that sticks to the list's start while the items after it (up to the next
+    /// header) scroll under it, as `stickyHeader { … }`.
+    pub fn sticky_header(&self, content: impl Fn(LazyItemScope) + 'static) {
+        let scope = self.item_scope.clone();
+        let mut interval = Interval::new(1, Rc::new(move |_| content(scope.clone())));
+        interval.sticky = true;
+        self.push(interval);
+    }
+
+    /// `sticky_header` with a key, as `stickyHeader(key) { … }`.
+    pub fn sticky_header_keyed<K: Hash + PartialEq + 'static>(
+        &self,
+        key: K,
+        content: impl Fn(LazyItemScope) + 'static,
+    ) {
+        let (key, scope) = (Rc::new(key), self.item_scope.clone());
+        let mut interval = Interval::keyed(
+            1,
+            move |_| KeyRef(key.clone()),
+            Rc::new(move |_| content(scope.clone())),
+        );
+        interval.sticky = true;
+        self.push(interval);
+    }
+
+    /// The scope of this list's items, for the forms whose content doesn't receive it (`item`,
+    /// `items`): what `fill_parent_max_width` and friends take.
+    pub fn item_scope(&self) -> LazyItemScope {
+        self.item_scope.clone()
+    }
+
+    fn push(&self, interval: Interval) {
+        self.intervals.borrow_mut().push(interval);
+    }
+}
+
+/// A key shared by reference, hashed and compared as the key.
+#[derive(PartialEq)]
+struct KeyRef<K>(Rc<K>);
+
+impl<K: Hash> Hash for KeyRef<K> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.0.hash(state)
     }
 }
 
@@ -311,23 +484,174 @@ impl ComposeArg for LazyListScope {
     }
 }
 
+/// The scope of a lazy list's items, as Compose's `LazyItemScope`: what sizes an item to the
+/// list's viewport (`Modifier.fill_parent_max_width(&scope)`, from `LazyItemModifiers`).
+#[derive(Clone, Default)]
+pub struct LazyItemScope {
+    parent_size: Rc<ParentSize>,
+}
+
+/// A list's viewport size less its content padding, as last measured: written by the list's
+/// measurement before it measures its items, whose `fill_parent_max_*` read it.
+struct ParentSize {
+    size: OwnedState<IntSize>,
+    /// What was last written, read without observing it.
+    written: Cell<IntSize>,
+}
+
+impl Default for ParentSize {
+    fn default() -> ParentSize {
+        let unbounded = IntSize::new(Constraints::INFINITY, Constraints::INFINITY);
+        ParentSize { size: mutable_state_of(unbounded), written: Cell::new(unbounded) }
+    }
+}
+
+impl ComposeArg for LazyItemScope {
+    fn same(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.parent_size, &other.parent_size)
+    }
+}
+
+/// The modifiers of a lazy list's items, as `LazyItemScope`'s: `Modifier` methods taking the
+/// item scope.
+pub trait LazyItemModifiers {
+    /// As wide as the list's viewport (less its content padding), as `fillParentMaxWidth()`.
+    fn fill_parent_max_width(self, scope: &LazyItemScope) -> Modifier;
+    /// As tall as the list's viewport, as `fillParentMaxHeight()`.
+    fn fill_parent_max_height(self, scope: &LazyItemScope) -> Modifier;
+    /// As large as the list's viewport, as `fillParentMaxSize()`.
+    fn fill_parent_max_size(self, scope: &LazyItemScope) -> Modifier;
+    /// `fraction` of the viewport's width, as `fillParentMaxWidth(fraction)`.
+    fn fill_parent_max_width_fraction(self, scope: &LazyItemScope, fraction: f32) -> Modifier;
+    fn fill_parent_max_height_fraction(self, scope: &LazyItemScope, fraction: f32) -> Modifier;
+    fn fill_parent_max_size_fraction(self, scope: &LazyItemScope, fraction: f32) -> Modifier;
+}
+
+impl LazyItemModifiers for Modifier {
+    fn fill_parent_max_width(self, scope: &LazyItemScope) -> Modifier {
+        self.fill_parent_max_width_fraction(scope, 1.0)
+    }
+    fn fill_parent_max_height(self, scope: &LazyItemScope) -> Modifier {
+        self.fill_parent_max_height_fraction(scope, 1.0)
+    }
+    fn fill_parent_max_size(self, scope: &LazyItemScope) -> Modifier {
+        self.fill_parent_max_size_fraction(scope, 1.0)
+    }
+    fn fill_parent_max_width_fraction(self, scope: &LazyItemScope, fraction: f32) -> Modifier {
+        self.then_custom(ParentSizeElement {
+            parent: scope.parent_size.clone(),
+            width: Some(fraction),
+            height: None,
+        })
+    }
+    fn fill_parent_max_height_fraction(self, scope: &LazyItemScope, fraction: f32) -> Modifier {
+        self.then_custom(ParentSizeElement {
+            parent: scope.parent_size.clone(),
+            width: None,
+            height: Some(fraction),
+        })
+    }
+    fn fill_parent_max_size_fraction(self, scope: &LazyItemScope, fraction: f32) -> Modifier {
+        self.then_custom(ParentSizeElement {
+            parent: scope.parent_size.clone(),
+            width: Some(fraction),
+            height: Some(fraction),
+        })
+    }
+}
+
+/// `fill_parent_max_*`: the fractions of the viewport's size to take, as Compose's
+/// `ParentSizeElement` (its node too).
+#[derive(Clone)]
+struct ParentSizeElement {
+    parent: Rc<ParentSize>,
+    width: Option<f32>,
+    height: Option<f32>,
+}
+
+impl ModifierNodeElement for ParentSizeElement {
+    fn create(&self) -> Box<dyn ModifierNode> {
+        Box::new(self.clone())
+    }
+    fn update(&self, node: &mut dyn ModifierNode) {
+        if let Some(node) = node.downcast_mut::<ParentSizeElement>() {
+            *node = self.clone();
+        }
+    }
+    fn same(&self, other: &dyn ModifierNodeElement) -> bool {
+        other.downcast_ref::<ParentSizeElement>().is_some_and(|other| {
+            Rc::ptr_eq(&other.parent, &self.parent)
+                && other.width == self.width
+                && other.height == self.height
+        })
+    }
+    fn name(&self) -> &'static str {
+        match (self.width, self.height) {
+            (Some(_), Some(_)) => "fill_parent_max_size",
+            (Some(_), None) => "fill_parent_max_width",
+            _ => "fill_parent_max_height",
+        }
+    }
+}
+
+impl ModifierNode for ParentSizeElement {
+    fn as_layout(&mut self) -> Option<&mut dyn compose_ui::LayoutModifierNode> {
+        Some(self)
+    }
+}
+
+impl compose_ui::LayoutModifierNode for ParentSizeElement {
+    fn measure(
+        &mut self,
+        scope: &mut MeasureScope<'_>,
+        content: Measurable,
+        constraints: Constraints,
+    ) -> MeasureResult {
+        // Observed: a new viewport size measures the item again.
+        let parent = self.parent.size.get();
+        let size = |fraction: Option<f32>, parent: i32| match fraction {
+            Some(fraction) if parent != Constraints::INFINITY => {
+                Some(compose_ui::round_to_int(parent as f32 * fraction).max(0))
+            }
+            _ => None,
+        };
+        let width = size(self.width, parent.width);
+        let height = size(self.height, parent.height);
+        let child = Constraints::new(
+            width.unwrap_or(constraints.min_width),
+            width.unwrap_or(constraints.max_width),
+            height.unwrap_or(constraints.min_height),
+            height.unwrap_or(constraints.max_height),
+        );
+        let placeable = scope.measure(content, child);
+        scope.place(&placeable, 0, 0);
+        scope.layout(placeable.width, placeable.height)
+    }
+}
+
 /// The items a list's content declared, for one composition of the list.
 struct Items {
     intervals: Vec<Interval>,
     /// Each interval's first item: a binary search finds an item's interval.
     starts: Vec<usize>,
     count: usize,
+    /// The sticky headers' indices, in order.
+    headers: Vec<usize>,
 }
 
 impl Items {
     fn new(intervals: Vec<Interval>) -> Items {
         let mut starts = Vec::with_capacity(intervals.len());
+        let mut headers = Vec::new();
         let mut count = 0;
         for interval in &intervals {
             starts.push(count);
+            if interval.sticky {
+                headers.extend(count..count + interval.count);
+            }
             count += interval.count;
         }
-        Items { intervals, starts, count }
+        Items { intervals, starts, count, headers }
     }
 
     /// The interval holding item `index`, and the item's index in it.
@@ -355,6 +679,41 @@ impl Items {
             None => hash_key(&("index", index)),
         }
     }
+
+    /// The sticky header at or before `index`, and the next header after it, if any.
+    fn headers_around(&self, index: usize) -> Option<(usize, Option<usize>)> {
+        let after = self.headers.partition_point(|header| *header <= index);
+        let header = *self.headers.get(after.checked_sub(1)?)?;
+        Some((header, self.headers.get(after).copied()))
+    }
+
+    /// Panics if two of `indices` have the same key, as Compose's lazy layouts do (a hash
+    /// collision of different keys too, which would share their state): debug builds only.
+    #[cfg(debug_assertions)]
+    fn check_keys(&self, indices: &[usize]) {
+        let full_key = |index: usize| -> Box<dyn DynKey> {
+            match self.find(index) {
+                Some((Interval { full_key: Some(key), .. }, local)) => key(local),
+                _ => Box::new(("index", index)),
+            }
+        };
+        let mut seen: HashMap<u64, usize> = HashMap::with_capacity(indices.len());
+        for &index in indices {
+            if let Some(&other) = seen.get(&self.key(index)) {
+                if full_key(index).equals(&*full_key(other)) {
+                    panic!(
+                        "compose-foundation: items {other} and {index} of a lazy list have the \
+                         same key: keys must be unique in the list"
+                    );
+                }
+                panic!(
+                    "compose-foundation: the keys of items {other} and {index} of a lazy list \
+                     differ but hash to the same value: they would share their state"
+                );
+            }
+            seen.insert(self.key(index), index);
+        }
+    }
 }
 
 /// The items, compared by identity (a new set each time the list's caller recomposes).
@@ -374,7 +733,11 @@ struct ListInfo {
     items: Rc<Items>,
     vertical: bool,
     padding: PaddingValues,
+    /// Laid out from the end: the first item at the bottom (the right of a row).
+    reverse: bool,
     arrangement: Arrangement,
+    /// The items' alignment across the list: its horizontal bias for a column, its vertical
+    /// one for a row.
     alignment: Alignment,
 }
 
@@ -383,20 +746,27 @@ impl PartialEq for ListInfo {
         Rc::ptr_eq(&self.items, &other.items)
             && self.vertical == other.vertical
             && self.padding == other.padding
+            && self.reverse == other.reverse
             && self.arrangement == other.arrangement
             && self.alignment == other.alignment
     }
 }
 
-/// A vertical lazy list, as Compose's `LazyColumn`.
+/// A vertical lazy list, as Compose's `LazyColumn`. `reverse_layout` lays the items out from
+/// the bottom (the first one there, scrolled from there); the arrangement stays from the top,
+/// as Compose's (whose default becomes `Arrangement.Bottom` when reversed: pass
+/// `Arrangement::BOTTOM` here). `user_scroll_enabled = false` keeps drags and the wheel from
+/// scrolling it (the state still does).
 #[composable(non_restartable)]
 #[allow(non_snake_case)]
 pub fn LazyColumn(
     #[default(crate::Modifier)] modifier: Modifier,
     #[default(crate::remember_lazy_list_state(0, 0))] state: LazyListState,
     #[default(crate::layout::PaddingValues::ZERO)] content_padding: PaddingValues,
+    #[default(false)] reverse_layout: bool,
     #[default(crate::layout::Arrangement::TOP)] vertical_arrangement: Arrangement,
-    #[default(crate::Alignment::TOP_START)] horizontal_alignment: Alignment,
+    #[default(crate::Alignment::START)] horizontal_alignment: HorizontalAlignment,
+    #[default(true)] user_scroll_enabled: bool,
     content: impl Fn(LazyListScope) + 'static,
 ) {
     LazyList(
@@ -404,21 +774,26 @@ pub fn LazyColumn(
         state,
         content_padding,
         true,
+        reverse_layout,
         vertical_arrangement,
-        horizontal_alignment,
+        Alignment::new(horizontal_alignment.bias, -1.0),
+        user_scroll_enabled,
         content,
     );
 }
 
-/// A horizontal lazy list, as Compose's `LazyRow`.
+/// A horizontal lazy list, as Compose's `LazyRow`. `reverse_layout` lays the items out from
+/// the end (the right, in left to right).
 #[composable(non_restartable)]
 #[allow(non_snake_case)]
 pub fn LazyRow(
     #[default(crate::Modifier)] modifier: Modifier,
     #[default(crate::remember_lazy_list_state(0, 0))] state: LazyListState,
     #[default(crate::layout::PaddingValues::ZERO)] content_padding: PaddingValues,
+    #[default(false)] reverse_layout: bool,
     #[default(crate::layout::Arrangement::Start)] horizontal_arrangement: Arrangement,
-    #[default(crate::Alignment::TOP_START)] vertical_alignment: Alignment,
+    #[default(crate::Alignment::TOP)] vertical_alignment: VerticalAlignment,
+    #[default(true)] user_scroll_enabled: bool,
     content: impl Fn(LazyListScope) + 'static,
 ) {
     LazyList(
@@ -426,24 +801,31 @@ pub fn LazyRow(
         state,
         content_padding,
         false,
+        reverse_layout,
         horizontal_arrangement,
-        vertical_alignment,
+        Alignment::new(-1.0, vertical_alignment.bias),
+        user_scroll_enabled,
         content,
     );
 }
 
 #[composable(non_restartable)]
-#[allow(non_snake_case)]
+#[allow(non_snake_case, clippy::too_many_arguments)]
 fn LazyList(
     modifier: Modifier,
     state: LazyListState,
     content_padding: PaddingValues,
     vertical: bool,
+    reverse: bool,
     arrangement: Arrangement,
     alignment: Alignment,
+    user_scroll_enabled: bool,
     content: impl Fn(LazyListScope) + 'static,
 ) {
-    let scope = LazyListScope::default();
+    let scope = LazyListScope {
+        intervals: Rc::default(),
+        item_scope: LazyItemScope { parent_size: state.inner.parent_size.clone() },
+    };
     content(scope.clone());
     let intervals = std::mem::take(&mut *scope.intervals.borrow_mut());
     let items = Rc::new(Items::new(intervals));
@@ -451,6 +833,7 @@ fn LazyList(
         items: items.clone(),
         vertical,
         padding: content_padding,
+        reverse,
         arrangement,
         alignment,
     };
@@ -465,9 +848,12 @@ fn LazyList(
             },
         )
     };
-    let modifier = modifier
-        .clip(compose_ui::RECTANGLE_SHAPE)
-        .then_custom(LazyScrollElement { state: state.clone(), vertical });
+    let modifier = modifier.clip(compose_ui::RECTANGLE_SHAPE).then_custom(LazyScrollElement {
+        state: state.clone(),
+        vertical,
+        reverse,
+        enabled: user_scroll_enabled,
+    });
     let items = ItemsRef(items);
     // Until the list is measured, its items' likely constraints: those around it, unbounded
     // along the list.
@@ -503,6 +889,15 @@ fn LazyItems(state: LazyListState, items: ItemsRef, fallback: Option<Constraints
             indices.push(index);
         }
     }
+    // The sticky header over the first visible item, wherever it is.
+    if let Some(header) = state.inner.sticky.get()
+        && header < count
+        && !indices.contains(&header)
+    {
+        indices.push(header);
+    }
+    #[cfg(debug_assertions)]
+    items.0.check_keys(&indices);
     *state.inner.children.borrow_mut() = indices.clone();
     // The items' constraints, for those composing for theirs (`BoxWithConstraints`).
     let hint = state.inner.item_constraints.get().or(fallback);
@@ -619,7 +1014,10 @@ impl MeasurePolicy for LazyListLayout {
         state.rtl.set(layout_direction == compose_ui::LayoutDirection::Rtl);
         let direction = compose_ui::LayoutDirection::Ltr;
         let px = |dp: Dp| density.round_to_px(dp);
-        let (before, after, cross_before, cross_after) = if vertical {
+        // Positions along the axis are worked out from the list's start (its end, reversed:
+        // the padding there comes first), and mirrored when placed if reversed.
+        let reverse = info.reverse;
+        let (mut before, mut after, cross_before, cross_after) = if vertical {
             (
                 px(info.padding.top),
                 px(info.padding.bottom),
@@ -634,6 +1032,9 @@ impl MeasurePolicy for LazyListLayout {
                 px(info.padding.bottom),
             )
         };
+        if reverse {
+            std::mem::swap(&mut before, &mut after);
+        }
         let spacing = info.arrangement.spacing(&density);
         let main_max = if vertical { constraints.max_height } else { constraints.max_width };
         assert!(
@@ -654,6 +1055,17 @@ impl MeasurePolicy for LazyListLayout {
         };
         if state.item_constraints.get() != Some(item_constraints) {
             state.item_constraints.set(Some(item_constraints));
+        }
+        // The viewport less its padding, for `fill_parent_max_*`: written before the items are
+        // measured, so they read this measurement's.
+        let main_room = (main_max - before - after).max(0);
+        let parent_size = if vertical {
+            IntSize::new(cross_room, main_room)
+        } else {
+            IntSize::new(main_room, cross_room)
+        };
+        if state.parent_size.written.replace(parent_size) != parent_size {
+            state.parent_size.size.set(parent_size);
         }
         let count = info.items.count;
         let children = state.children.borrow().clone();
@@ -815,26 +1227,46 @@ impl MeasurePolicy for LazyListLayout {
             }
             break;
         }
-        // Content shorter than the viewport, not scrolled: placed by the arrangement.
+        // The list's length: the viewport once scrolled, else its content's, within the
+        // constraints.
+        let scrolled_into = index > 0 || offset > 0.0;
+        let main_size = if scrolled_into { main_max } else { content_end.min(main_max) };
+        let main_total = if vertical {
+            constraints.constrain_height(main_size)
+        } else {
+            constraints.constrain_width(main_size)
+        };
+        // Content shorter than the list, not scrolled: placed by the arrangement, from the top
+        // (the left) even when reversed, as Compose's.
         if !missing
             && end_index == count
             && index == 0
             && offset == 0.0
-            && content_end < main_max
+            && content_end < main_total
             && !placed.is_empty()
         {
-            let item_sizes: Vec<i32> =
+            let mut item_sizes: Vec<i32> =
                 placed.iter().map(|(placeable, _)| main_of(placeable)).collect();
+            if reverse {
+                item_sizes.reverse();
+            }
             let mut positions = vec![0; item_sizes.len()];
             info.arrangement.arrange(
-                main_max - before - after,
+                main_total - before - after,
                 &item_sizes,
                 direction,
                 &density,
                 &mut positions,
             );
-            for ((_, main), position) in placed.iter_mut().zip(positions) {
-                *main = before + position;
+            let last = placed.len() - 1;
+            for (position, (placeable, main)) in placed.iter_mut().enumerate() {
+                *main = if reverse {
+                    // Mirrored back when placed.
+                    let physical = after + positions[last - position];
+                    main_total - physical - main_of(placeable)
+                } else {
+                    before + positions[position]
+                };
             }
         }
         // The items wanted composed: those in view and a few beyond, and as many more as the
@@ -965,9 +1397,33 @@ impl MeasurePolicy for LazyListLayout {
             let after_composed = count.saturating_sub(placed_end.max(end_index)) as f32 * average;
             (after_composed + (extent_end.max(content_end) - main_max) as f32 - pending).max(1.0)
         });
+        // The sticky header over the first visible item, kept composed: at the list's start,
+        // or where it is if lower, pushed out by the next header.
+        let headers = info.items.headers_around(index);
+        let header = headers.map(|(header, _)| header);
+        if state.sticky_written.replace(header) != header {
+            state.sticky.set(header);
+        }
+        let mut sticky = None;
+        if let Some((header, next)) = headers
+            && let Some(placeable) = measure(header, &mut sizes)
+        {
+            let natural = placed.iter().chain(&beyond).find(|(other, _)| *other == placeable);
+            let mut at = natural.map_or(0, |(_, main)| (*main).max(0));
+            if let Some(next) = next.and_then(|next| measure(next, &mut sizes))
+                && let Some((_, next_main)) =
+                    placed.iter().chain(&beyond).find(|(other, _)| *other == next)
+            {
+                at = at.min(next_main - main_of(&placeable));
+            }
+            placed.retain(|(other, _)| *other != placeable);
+            beyond.retain(|(other, _)| *other != placeable);
+            sticky = Some((placeable, at));
+        }
         let children = state.children.borrow().clone();
         for &pinned in &children {
             if (pinned < composed_start || pinned >= composed_end)
+                && Some(pinned) != header
                 && let Some(placeable) = measure(pinned, &mut sizes)
             {
                 let at =
@@ -986,20 +1442,13 @@ impl MeasurePolicy for LazyListLayout {
             .map(|(placeable, _)| if vertical { placeable.width } else { placeable.height })
             .max()
             .unwrap_or(0);
-        let scrolled = index > 0 || offset > 0.0;
-        let main_size = if scrolled { main_max } else { content_end.min(main_max) };
         let (width, height) = if vertical {
-            (
-                constraints.constrain_width(cross_size + cross_before + cross_after),
-                constraints.constrain_height(main_size),
-            )
+            (constraints.constrain_width(cross_size + cross_before + cross_after), main_total)
         } else {
-            (
-                constraints.constrain_width(main_size),
-                constraints.constrain_height(cross_size + cross_before + cross_after),
-            )
+            (main_total, constraints.constrain_height(cross_size + cross_before + cross_after))
         };
         let layout = |scope: &mut MeasureScope<'_>, placeable: &Placeable, main: i32| {
+            let main = if reverse { main_total - main - main_of(placeable) } else { main };
             if vertical {
                 let space = IntSize::new(width - cross_before - cross_after, placeable.height);
                 let x = info.alignment.align(placeable.size(), space, layout_direction).x;
@@ -1016,7 +1465,8 @@ impl MeasurePolicy for LazyListLayout {
                 scope.place_relative(placeable, main, cross_before + y);
             }
         };
-        for (placeable, main) in placed.iter().chain(&beyond) {
+        // The sticky header last: drawn over the items, and hit first.
+        for (placeable, main) in placed.iter().chain(&beyond).chain(&sticky) {
             layout(scope, placeable, *main);
         }
         scope.layout(width, height)
@@ -1145,15 +1595,19 @@ fn composed_range(children: &[usize], count: usize) -> (usize, usize) {
     (start, end.min(count).max(start))
 }
 
-/// The wheel and drags scroll the list.
+/// The wheel and drags scroll the list (unless disabled: `user_scroll_enabled`).
 struct LazyScrollElement {
     state: LazyListState,
     vertical: bool,
+    reverse: bool,
+    enabled: bool,
 }
 
 struct LazyScrollNode {
     state: LazyListState,
     vertical: bool,
+    reverse: bool,
+    enabled: bool,
     drag: DragScroller,
 }
 
@@ -1162,6 +1616,8 @@ impl ModifierNodeElement for LazyScrollElement {
         Box::new(LazyScrollNode {
             state: self.state.clone(),
             vertical: self.vertical,
+            reverse: self.reverse,
+            enabled: self.enabled,
             drag: DragScroller::default(),
         })
     }
@@ -1170,17 +1626,34 @@ impl ModifierNodeElement for LazyScrollElement {
         if let Some(node) = node.downcast_mut::<LazyScrollNode>() {
             node.state = self.state.clone();
             node.vertical = self.vertical;
+            node.reverse = self.reverse;
+            if node.enabled && !self.enabled {
+                node.drag.cancel();
+                node.drag.stop_fling();
+            }
+            node.enabled = self.enabled;
         }
     }
 
     fn same(&self, other: &dyn ModifierNodeElement) -> bool {
-        other
-            .downcast_ref::<LazyScrollElement>()
-            .is_some_and(|other| other.vertical == self.vertical && other.state.same(&self.state))
+        other.downcast_ref::<LazyScrollElement>().is_some_and(|other| {
+            other.vertical == self.vertical
+                && other.reverse == self.reverse
+                && other.enabled == self.enabled
+                && other.state.same(&self.state)
+        })
     }
 
     fn name(&self) -> &'static str {
         "lazy_scroll"
+    }
+}
+
+impl LazyScrollNode {
+    /// Whether the content runs the other way along the axis: a reversed list, or a row right
+    /// to left (both: left to right again).
+    fn mirrored(&self, rtl: bool) -> bool {
+        self.reverse ^ (!self.vertical && rtl)
     }
 }
 
@@ -1199,13 +1672,14 @@ impl ModifierNode for LazyScrollNode {
 
     /// Scrolls the least that shows `rect` (an item beyond the viewport taking the focus).
     fn bring_into_view(&mut self, rect: Rect, viewport: IntSize) -> Option<Rect> {
-        let rtl = !self.vertical && self.state.inner.rtl.get();
-        let (start, end, length) = crate::scroll::scroll_axis(rect, viewport, self.vertical, rtl);
+        let mirrored = self.mirrored(self.state.inner.rtl.get());
+        let (start, end, length) =
+            crate::scroll::scroll_axis(rect, viewport, self.vertical, mirrored);
         // Where it will be once the scrolling asked for (not yet laid out) is.
         let pending = self.state.inner.pending.get();
         let delta = bring_into_view_delta(start - pending, end - pending, length);
         let used = if delta == 0.0 { 0.0 } else { self.state.dispatch(delta) };
-        Some(crate::scroll::scrolled_rect(rect, used, self.vertical, rtl))
+        Some(crate::scroll::scrolled_rect(rect, used, self.vertical, mirrored))
     }
 }
 
@@ -1217,9 +1691,11 @@ impl PointerInputModifierNode for LazyScrollNode {
         _bounds: IntSize,
         context: &mut EventContext<'_>,
     ) {
+        if !self.enabled {
+            return;
+        }
         let state = self.state.clone();
-        let reverse =
-            !self.vertical && context.layout_direction() == compose_ui::LayoutDirection::Rtl;
+        let reverse = self.mirrored(context.layout_direction() == compose_ui::LayoutDirection::Rtl);
         let flung = state.clone();
         self.drag.on_pointer_event(
             event,

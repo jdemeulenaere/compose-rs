@@ -99,6 +99,8 @@ pub struct SemanticsConfiguration {
     /// own modifiers set them: a text field's inner text, which in Compose is one semantics
     /// node with its decoration box.
     pub part_of_parent: bool,
+    /// It groups selectable items (radio buttons), as `selectableGroup()`.
+    pub selectable_group: bool,
 }
 
 impl SemanticsConfiguration {
@@ -183,6 +185,7 @@ impl SemanticsConfiguration {
         self.clickable |= other.clickable;
         self.editable |= other.editable;
         self.password |= other.password;
+        self.selectable_group |= other.selectable_group;
     }
 
     /// All text, editable text first, joined by ", ": what text finders match.
@@ -244,6 +247,7 @@ impl fmt::Debug for SemanticsConfiguration {
             (self.part_of_parent, "part_of_parent"),
             (self.is_dialog, "dialog"),
             (self.clear_descendants, "cleared"),
+            (self.selectable_group, "selectable_group"),
         ] {
             if flag {
                 parts.push(name.to_string());

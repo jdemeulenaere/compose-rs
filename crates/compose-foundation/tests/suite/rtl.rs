@@ -164,7 +164,7 @@ fn lazy_items_align_and_arrange_from_the_start() {
     let mut ui = rtl(|| {
         LazyColumn!(
             modifier = Modifier.fill_max_size(),
-            horizontal_alignment = Alignment::TOP_START,
+            horizontal_alignment = Alignment::START,
             |scope: LazyListScope| {
                 scope.items(2, |index| {
                     Box!(modifier = Modifier.size(30.dp()).test_tag(format!("{index}")));

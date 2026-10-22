@@ -14,7 +14,7 @@ use crate::input::{
 use crate::layout::{Measurable, MeasureResult, MeasureScope};
 use crate::modifier::{
     Clickable, DrawModifierNode, Element, Fill, FocusTargetModifierNode, KeyInputModifierNode,
-    LayoutModifierNode, ModifierNode, PaddingValues, PointerInputModifierNode,
+    LayoutModifierNode, ModifierNode, ModifierNodeElement, PaddingValues, PointerInputModifierNode,
     SemanticsModifierNode, SizeSpec, Toggleable,
 };
 use crate::semantics::{SemanticsConfiguration, ToggleableState};
@@ -31,7 +31,7 @@ pub(crate) fn create(element: &Element) -> Box<dyn ModifierNode> {
         Element::Fill(fill) => Box::new(FillNode(*fill)),
         // Parent data is read from the elements; these nodes do nothing. A zero-sized box
         // doesn't allocate.
-        Element::Weight(..) | Element::Align(_) => Box::new(Inert),
+        Element::Weight(..) | Element::Align(_) | Element::ZIndex(_) => Box::new(Inert),
         Element::Background(color, shape) => Box::new(BackgroundNode(*color, *shape)),
         Element::Border(width, color, shape) => Box::new(BorderNode(*width, *color, *shape)),
         Element::Clip(shape) => Box::new(ClipNode(*shape)),
@@ -75,7 +75,7 @@ pub(crate) fn update(element: &Element, node: &mut dyn ModifierNode) {
         }
         Element::Size(spec) => set!(SizeNode, SizeNode(*spec)),
         Element::Fill(fill) => set!(FillNode, FillNode(*fill)),
-        Element::Weight(..) | Element::Align(_) => {}
+        Element::Weight(..) | Element::Align(_) | Element::ZIndex(_) => {}
         Element::Background(color, shape) => set!(BackgroundNode, BackgroundNode(*color, *shape)),
         Element::Border(width, color, shape) => {
             set!(BorderNode, BorderNode(*width, *color, *shape))
@@ -506,9 +506,18 @@ const HOVER_STATE_LAYER_ALPHA: f32 = 0.08;
 impl DrawModifierNode for ClickableNode {
     /// The state layer, over the content, while pressed or focused.
     fn draw_after(&mut self, scope: &mut DrawScope<'_>) {
+        self.draw_indication(scope, false);
+    }
+}
+
+impl ClickableNode {
+    /// The state layer, while pressed (or `pressed` by something else), focused or hovered.
+    fn draw_indication(&self, scope: &mut DrawScope<'_>, pressed: bool) {
         let indication = self.spec.indication();
-        let active =
-            self.state.pressed.is_some() || self.state.keys_pressed != 0 || self.state.focused;
+        let active = pressed
+            || self.state.pressed.is_some()
+            || self.state.keys_pressed != 0
+            || self.state.focused;
         // Material's state layers: pressed and focused 10 %, hovered 8 %.
         let alpha = if active {
             Some(STATE_LAYER_ALPHA)
@@ -720,6 +729,281 @@ impl KeyInputModifierNode for ClickableNode {
                     false
                 }
             }
+        }
+    }
+}
+
+// ---- Combined clickable ----------------------------------------------------------------------
+
+/// `combined_clickable`'s element: a clickable whose pointer presses go through tap detection
+/// (double clicks and long presses take time), its keys, focus, hover and semantics as
+/// `clickable`'s.
+pub(crate) struct CombinedClickableElement {
+    pub(crate) clickable: Clickable,
+    pub(crate) on_long_click: Option<Callback<dyn Fn()>>,
+    pub(crate) on_double_click: Option<Callback<dyn Fn()>>,
+}
+
+/// The callbacks the tap detection calls, updated in place.
+struct CombinedHandlers {
+    on_click: Callback<dyn Fn()>,
+    on_long_click: Option<Callback<dyn Fn()>>,
+    on_double_click: Option<Callback<dyn Fn()>>,
+}
+
+struct CombinedClickableNode {
+    clickable: ClickableNode,
+    handlers: Rc<std::cell::RefCell<CombinedHandlers>>,
+    driver: crate::pointer_input::PointerInputDriver,
+    /// Whether the tap detection holds a press: read while drawing, so its writes draw again.
+    pressed: compose_runtime::OwnedState<bool>,
+}
+
+impl CombinedClickableNode {
+    /// A tap detector for these handlers: whether there are a long and a double click decides
+    /// how it waits.
+    fn driver(
+        handlers: &Rc<std::cell::RefCell<CombinedHandlers>>,
+        pressed: compose_runtime::MutableState<bool>,
+    ) -> crate::pointer_input::PointerInputDriver {
+        let handlers = handlers.clone();
+        crate::pointer_input::PointerInputDriver::new(move |scope| {
+            let handlers = handlers.clone();
+            async move {
+                let (long, double) = {
+                    let current = handlers.borrow();
+                    (current.on_long_click.is_some(), current.on_double_click.is_some())
+                };
+                let mut gestures = crate::pointer_input::TapGestures::default();
+                let on_click = handlers.clone();
+                gestures = gestures.on_tap(move |_| {
+                    let callback = on_click.borrow().on_click.clone();
+                    callback();
+                });
+                if long {
+                    let on_long = handlers.clone();
+                    gestures = gestures.on_long_press(move |_| {
+                        let callback = on_long.borrow().on_long_click.clone();
+                        if let Some(callback) = callback {
+                            callback();
+                        }
+                    });
+                }
+                if double {
+                    let on_double = handlers.clone();
+                    gestures = gestures.on_double_tap(move |_| {
+                        let callback = on_double.borrow().on_double_click.clone();
+                        if let Some(callback) = callback {
+                            callback();
+                        }
+                    });
+                }
+                let report = move |down: bool| {
+                    if pressed.try_get() != Some(down) {
+                        pressed.set(down);
+                    }
+                };
+                scope.detect_taps(gestures, &report).await;
+            }
+        })
+    }
+
+    /// The press is over without its events (cancelled, disabled, detached).
+    fn stop(&mut self) {
+        self.driver.stop();
+        if self.pressed.try_get() == Some(true) {
+            self.pressed.set(false);
+        }
+    }
+}
+
+impl ModifierNodeElement for CombinedClickableElement {
+    fn create(&self) -> Box<dyn ModifierNode> {
+        let handlers = Rc::new(std::cell::RefCell::new(CombinedHandlers {
+            on_click: self.clickable.on_click.clone(),
+            on_long_click: self.on_long_click.clone(),
+            on_double_click: self.on_double_click.clone(),
+        }));
+        let pressed = compose_runtime::mutable_state_of(false);
+        Box::new(CombinedClickableNode {
+            clickable: ClickableNode {
+                spec: Press::Click(self.clickable.clone()),
+                state: PressState::default(),
+            },
+            driver: CombinedClickableNode::driver(&handlers, pressed.handle()),
+            handlers,
+            pressed,
+        })
+    }
+
+    fn update(&self, node: &mut dyn ModifierNode) {
+        let Some(node) = node.downcast_mut::<CombinedClickableNode>() else { return };
+        let mut handlers = node.handlers.borrow_mut();
+        // Another kind of gesture to wait for: the detection starts over.
+        let restart = handlers.on_long_click.is_some() != self.on_long_click.is_some()
+            || handlers.on_double_click.is_some() != self.on_double_click.is_some();
+        handlers.on_click = self.clickable.on_click.clone();
+        handlers.on_long_click = self.on_long_click.clone();
+        handlers.on_double_click = self.on_double_click.clone();
+        drop(handlers);
+        if restart || !self.clickable.enabled {
+            node.stop();
+        }
+        node.clickable.spec = Press::Click(self.clickable.clone());
+        node.clickable.state.disable_if(!self.clickable.enabled);
+    }
+
+    fn same(&self, other: &dyn ModifierNodeElement) -> bool {
+        let same_callback =
+            |a: &Option<Callback<dyn Fn()>>, b: &Option<Callback<dyn Fn()>>| match (a, b) {
+                (Some(a), Some(b)) => a.ptr_eq(b),
+                (None, None) => true,
+                _ => false,
+            };
+        other.downcast_ref::<CombinedClickableElement>().is_some_and(|other| {
+            let (a, b) = (&self.clickable, &other.clickable);
+            a.enabled == b.enabled
+                && a.role == b.role
+                && a.indication == b.indication
+                && a.on_click.ptr_eq(&b.on_click)
+                && same_callback(&self.on_long_click, &other.on_long_click)
+                && same_callback(&self.on_double_click, &other.on_double_click)
+        })
+    }
+
+    fn name(&self) -> &'static str {
+        "combined_clickable"
+    }
+}
+
+impl ModifierNode for CombinedClickableNode {
+    fn on_detach(&mut self, _context: &mut crate::modifier::DetachContext<'_>) {
+        self.stop();
+    }
+    fn as_pointer_input(&mut self) -> Option<&mut dyn PointerInputModifierNode> {
+        Some(self)
+    }
+    fn as_semantics(&mut self) -> Option<&mut dyn SemanticsModifierNode> {
+        Some(&mut self.clickable)
+    }
+    fn as_focus_target(&mut self) -> Option<&mut dyn FocusTargetModifierNode> {
+        Some(&mut self.clickable)
+    }
+    fn as_key_input(&mut self) -> Option<&mut dyn KeyInputModifierNode> {
+        Some(&mut self.clickable)
+    }
+    fn as_draw(&mut self) -> Option<&mut dyn DrawModifierNode> {
+        Some(self)
+    }
+}
+
+impl DrawModifierNode for CombinedClickableNode {
+    fn draw_after(&mut self, scope: &mut DrawScope<'_>) {
+        let pressed = self.pressed.get();
+        self.clickable.draw_indication(scope, pressed);
+    }
+}
+
+impl PointerInputModifierNode for CombinedClickableNode {
+    fn on_pointer_event(
+        &mut self,
+        event: &mut PointerEvent,
+        pass: PointerEventPass,
+        bounds: IntSize,
+        context: &mut EventContext<'_>,
+    ) {
+        match event.kind {
+            // The hover, as a clickable's.
+            PointerEventType::Enter | PointerEventType::Exit => {
+                self.clickable.on_pointer_event(event, pass, bounds, context)
+            }
+            _ if self.clickable.spec.enabled() => {
+                self.driver.on_pointer_event(event, pass, bounds, context)
+            }
+            _ => {}
+        }
+    }
+
+    fn on_cancel_pointer_input(&mut self) {
+        self.stop();
+    }
+}
+
+// ---- Hoverable -------------------------------------------------------------------------------
+
+/// `hoverable`'s element and node in one: whether a mouse is over it, reported to its source.
+#[derive(Clone)]
+pub(crate) struct HoverableElement {
+    pub(crate) interaction_source: crate::interaction::MutableInteractionSource,
+    pub(crate) enabled: bool,
+}
+
+struct HoverableNode {
+    spec: HoverableElement,
+    hovered: bool,
+}
+
+impl HoverableNode {
+    /// The hover is over: told to its source after the pass (a source can't be written while
+    /// composing).
+    fn exit(&mut self) {
+        if std::mem::take(&mut self.hovered) {
+            let source = self.spec.interaction_source.clone();
+            compose_runtime::CoroutineScope::new().launch(async move { source.set_hovered(false) });
+        }
+    }
+}
+
+impl ModifierNodeElement for HoverableElement {
+    fn create(&self) -> Box<dyn ModifierNode> {
+        Box::new(HoverableNode { spec: self.clone(), hovered: false })
+    }
+    fn update(&self, node: &mut dyn ModifierNode) {
+        if let Some(node) = node.downcast_mut::<HoverableNode>() {
+            if !self.enabled || node.spec.interaction_source != self.interaction_source {
+                node.exit();
+            }
+            node.spec = self.clone();
+        }
+    }
+    fn same(&self, other: &dyn ModifierNodeElement) -> bool {
+        other.downcast_ref::<HoverableElement>().is_some_and(|other| {
+            other.enabled == self.enabled && other.interaction_source == self.interaction_source
+        })
+    }
+    fn name(&self) -> &'static str {
+        "hoverable"
+    }
+}
+
+impl ModifierNode for HoverableNode {
+    fn on_detach(&mut self, _context: &mut crate::modifier::DetachContext<'_>) {
+        self.exit();
+    }
+    fn as_pointer_input(&mut self) -> Option<&mut dyn PointerInputModifierNode> {
+        Some(self)
+    }
+}
+
+impl PointerInputModifierNode for HoverableNode {
+    fn on_pointer_event(
+        &mut self,
+        event: &mut PointerEvent,
+        pass: PointerEventPass,
+        _bounds: IntSize,
+        _context: &mut EventContext<'_>,
+    ) {
+        if pass != PointerEventPass::Main || !self.spec.enabled {
+            return;
+        }
+        let hovered = match event.kind {
+            PointerEventType::Enter => true,
+            PointerEventType::Exit => false,
+            _ => return,
+        };
+        if self.hovered != hovered {
+            self.hovered = hovered;
+            self.spec.interaction_source.set_hovered(hovered);
         }
     }
 }

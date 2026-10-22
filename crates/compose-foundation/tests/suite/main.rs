@@ -12,6 +12,8 @@ mod grid;
 mod hover;
 mod image;
 mod lazy;
+mod lazy_api;
+mod modifiers_api;
 mod pointer_input;
 mod prefetch;
 mod review_e;

@@ -25,6 +25,8 @@ pub mod image;
 pub mod input;
 pub mod interaction;
 pub mod layout;
+pub mod layout_callbacks;
+mod layout_modifiers;
 mod measure;
 pub mod modifier;
 mod nodes;
@@ -66,6 +68,7 @@ pub use layout::{
     EmptyMeasurePolicy, Layout, Measurable, MeasurePolicy, MeasureResult, MeasureScope, Placeable,
     StackMeasurePolicy, emit_layout_node, empty_measure_policy,
 };
+pub use layout_callbacks::{GlobalPositionAwareModifierNode, LayoutCoordinates};
 pub use modifier::{
     AlignScope, BoxScope, ColumnScope, DetachContext, DrawModifierNode, Element, Fill,
     FocusTargetModifierNode, Indication, KeyInputModifierNode, LayoutModifierNode, Modifier,
