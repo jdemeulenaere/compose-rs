@@ -68,7 +68,7 @@ fn a_round_capped_linear_indicator_at_zero_draws_no_progress_dot() {
 }
 
 /// Compose's `drawIndeterminateCircularIndicator` moves the arc's start forward by the stroke
-/// cap's offset when the cap isn't `Butt` (the indeterminate default is `Square`):
+/// cap's offset when the cap isn't `Butt` (the default, `Round`, is one):
 /// `(180 / PI) * (strokeWidth / (CircularIndicatorDiameter / 2)) / 2`, 5.73 degrees for the
 /// default 4 dp stroke, so the arc's capped start shows where the animation puts it. At the start
 /// of the animation, the arc starts at -90 + 5.73 = -84.27 degrees; here at -90.
@@ -84,6 +84,40 @@ fn the_indeterminate_circular_arc_starts_past_its_stroke_cap() {
     let expected = -90.0 + (180.0 / std::f32::consts::PI) * (4.0 / 20.0) / 2.0;
     assert!((start - expected).abs() < 0.01, "start {start}, expected {expected} ({found:?})");
     assert!((sweep - 0.1).abs() < 0.001, "the minimum sweep: {sweep}");
+}
+
+/// Material 3 1.4's `ProgressIndicatorDefaults` (`LinearStrokeCap`,
+/// `CircularDeterminateStrokeCap`, `CircularIndeterminateStrokeCap`) are all `StrokeCap.Round`,
+/// and every overload taking a cap defaults to them (checked with `javap` on material3 1.4.0).
+/// A round arc is also what Skia's `CircleOp` draws directly: a square one is a stroked path.
+#[test]
+fn every_indicator_defaults_to_a_round_cap() {
+    let mut ui = ComposeTestRule::with_manual_clock(|| {
+        MaterialTheme!({
+            Column!({
+                CircularProgressIndicator!(0.25);
+                IndeterminateCircularProgressIndicator!();
+                LinearProgressIndicator!(0.5);
+                IndeterminateLinearProgressIndicator!();
+            });
+        });
+    });
+    // Into the animations, where both indeterminate lines and the arc have a length.
+    ui.advance_time_by(std::time::Duration::from_millis(1100));
+    let caps: Vec<(&str, compose_ui::StrokeCap)> = ui
+        .host()
+        .display_list()
+        .ops
+        .iter()
+        .filter_map(|op| match op {
+            DrawOp::DrawArc { paint, .. } => Some(("arc", paint.cap)),
+            DrawOp::DrawLine(_, _, paint) => Some(("line", paint.cap)),
+            _ => None,
+        })
+        .collect();
+    assert!(caps.iter().filter(|(kind, _)| *kind == "arc").count() >= 2, "{caps:?}");
+    assert!(caps.iter().filter(|(kind, _)| *kind == "line").count() >= 3, "{caps:?}");
+    assert!(caps.iter().all(|(_, cap)| *cap == compose_ui::StrokeCap::Round), "{caps:?}");
 }
 
 /// Lock-in: a determinate indicator given a new progress draws it.

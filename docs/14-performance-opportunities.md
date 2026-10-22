@@ -5,7 +5,7 @@ Where compose-rs can still get faster, smaller or quicker to build, after round 
 **Short answer.**
 - **Desktop** has the one big gain left. A Metal surface takes 70 % off the app's CPU time per animated frame in a 2560 × 1324 window (6.8 → 2.0 ms), and 37 % off the app's and the window server's together (10.0 → 6.3 ms a frame). At that size, a click's time to present goes from 16.4 ms (median of 3; 7.0–16.9) to 1.3 ms. Today's CPU path spends most of each frame not rasterizing but presenting: Core Animation converts the frame's colour space on the CPU.
 - **Android** has several cheap gains, each a few percent to 10 % of a frame or startup metric, and no big one:
-  - a round cap on the spinner: −8 % of the animation's RenderThread work;
+  - a round cap on the spinner: −8 % of the animation's RenderThread work (done: D320);
   - a replay without interpreted framework calls: −8 % of its main-thread work;
   - two runtime fixes that remove a quadratic scan when composing big screens: −39 % of the big screen's first frame headless;
   - stripping the library, which the build silently skips today: the APK goes from 3.2 to 2.0 MB at no cost; with a release profile (LTO, `panic = "abort"`), 1.5 MB.
@@ -24,7 +24,7 @@ Gain over cost, best first.
 | # | Opportunity | Gain (metric) | Evidence | Cost, risk | Behaviour or API change | Branch |
 |---|---|---|---|---|---|---|
 | 1 | **Desktop: GPU surface** (Skia on Metal; D3D or GL elsewhere) | App CPU per animated frame at 2560 × 1324: 6.79 → 2.04 ms (−70 %); click → present 16.4 [7.0–16.9] → 1.30 [1.14–1.55] ms. WindowServer's CPU per frame rises 3.2 → 4.2 ms, so app and WindowServer together go 10.0 → 6.3 ms (−37 %) | measured, 3 runs each (medians) | M per platform: a raster fallback, resizing, device loss, unsafe code in compose-desktop; the prototype has no colour management | none in the API; colours need the layer's colour space set (cost not measured); its lower frame rate (122 against 142 fps) is unexplained | `perf/desktop-metal` |
-| 2 | **Android: the spinner's round cap** (`IndeterminateCircularProgressIndicator`, as Material 3 1.4) | Animation RenderThread work −44 ms (544.4 → 500.1, −8.1 %) | measured, 3 runs | S, none | the default cap's look, on every platform (Compose's own default); the determinate indicator keeps `Butt` | `perf/frame-roundcap` |
+| 2 | **Android: the spinner's round cap** (`IndeterminateCircularProgressIndicator`, as Material 3 1.4). **Done** (D320) | Animation RenderThread work −44 ms (544.4 → 500.1, −8.1 %); as shipped, −51 ms (−9.4 %), RenderThread p99 5.64 → 5.20 ms | measured, 3 runs; as shipped, 4 | S, none | the default cap's look, on every platform: every indicator's default is `Round`, as Material 3 1.4's (determinate and linear too) | `perf/frame-roundcap` |
 | 3 | **Android: replay without interpreted calls** (floats as int bits, one reused buffer, sizes tracked in Kotlin, no host wake for frame awaiters) | Animation main work −16.8 ms (213.9 → 197.1, −7.9 %); scroll −12 ms (−2.6 %, ranges overlap) | measured, 3 runs, on a build whose JIT compiles no framework methods (smaller where it does) | S, low | internal JNI signatures; the executor skips the host wake for `dispatch_frame`'s wakes on every host (a thread-wide flag: not reset if a waker panics, and it would also skip another thread's executor's wake) | `perf/frame-replay` |
 | 4 | **Android: stripping, then a release profile.** (a) AGP strips the library once `ndkVersion` is set; (b) `[profile.android]`: fat LTO, one codegen unit, `panic = "abort"` | (a) APK 3.24 → 1.99 MB (−39 %); (b) → 1.50 MB (−54 % in all, below Compose's 1.74 MB), code PSS −0.3 MB, Rust frame section −4 to −8 %, main work −3 to −4 % (about the noise); startup unchanged | measured | (a) none, but `ndkVersion` pins one NDK every developer needs. (b) S; as prototyped every Android build uses it (debug too): clean 6.9 → 9.2 s, a material3 edit rebuilds the library in 4.6 s instead of 1.9 | (b) more panics abort the process: those of cancelled background tasks, and in drops and wakes on the pool's threads; Android only | `perf/startup-release-profile` |
 | 5 | **Runtime: state readers and composition locals** (a read searches a cell's 8 latest readers; a local read walks provider groups only) | Headless big-screen first frame −39 % (7.04 → 4.32 ms), composition −44 %; feed first frame −21 %. On the device, with #2–#4 and #7 (one traced start): big composition 22.1 → 16.5 ms | measured headless, 3–5 rounds | S/M, low | none (a cell can hold duplicate readers until they're stale) | `perf/runtime-compose` |
@@ -88,6 +88,18 @@ docs/12 found the animation's RenderThread work "even with Compose's" (540 again
   - a second GPU render pass per frame (`AtlasRenderTask`, 23.7 sampled ms).
 
 With a round cap (`perf/frame-roundcap`, 3 runs each): RenderThread work 544.4 [534–557] → 500.1 [496–508] ms (−8.1 %), RenderThread p50 2.95 → 2.76 ms, main thread unchanged. Round 1 (7550e31), measured the same day, did 514.7 ms. Today's frame draws a little more than round 1's (four atlas text ops instead of two, the four icon-mask textures of D190, a longer flush), and the round cap more than makes up for it. It's a parity fix too: the benchmark compared different arcs.
+
+**Done (D320).** Material 3 1.4.0's `ProgressIndicatorDefaults` (checked with `javap`) has `Round` for all three caps (`LinearStrokeCap`, `CircularDeterminateStrokeCap`, `CircularIndeterminateStrokeCap`), and every overload taking a cap defaults to them, so all four compose-rs indicators now default to `Round`, not the spinner alone (the table's "the determinate indicator keeps `Butt`" was wrong). The Kotlin twin's spinner (`CircularProgressIndicator(Modifier.size(24.dp))`) already drew a round arc, so the benchmark apps needed no change. Measured against main, 4 runs each, interleaved (means [min–max]):
+
+| Animation | main | round cap |
+|---|---|---|
+| RenderThread work | 542.7 [541.0–546.6] ms | 491.9 [485.0–507.0] ms (−9.4 %) |
+| RenderThread per frame (`DrawFrame`) p50 / p90 / p99 | 2.94 / 3.88 / 5.64 ms | 2.73 / 3.65 / 5.20 ms |
+| Main thread work | 214.3 [208.5–219.0] ms | 211.3 [208.8–214.0] ms |
+| Main thread per frame (`doFrame`) p50 / p90 / p99 | 1.34 / 1.88 / 2.95 ms | 1.37 / 1.95 / 3.02 ms (ranges overlap) |
+| Janky frames (FrameTimeline) | 0 | 0 |
+
+Each frame's two `PathStencilCoverOp`s and two `DrawAtlasPathOp`s became two `CircleOp`s. The scroll (no spinner in its feed) didn't change: RenderThread work 765.9 → 764.4 ms, main p99 4.00 → 3.81 ms (ranges overlap), 1 → 0.5 janky frames a run.
 
 ### The replay: interpreted framework calls (#3)
 
