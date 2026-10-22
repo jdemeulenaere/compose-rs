@@ -48,6 +48,7 @@ fn segmented_buttons_share_the_row_and_select_one() {
     assert_eq!(day.height(), 40.0);
     assert_eq!(week.left, day.right - 1.0);
     assert_eq!(bounds(&mut ui, "row").width(), 3.0 * day.width() - 2.0);
+    assert!(ui.on_node_with_tag("row").fetch_semantics_node().config.selectable_group);
     let node = ui.on_node_with_tag("Day").fetch_semantics_node();
     assert_eq!((node.config.role, node.config.selected), (Some(Role::RadioButton), Some(true)));
     // The selected one shows a check before its label.

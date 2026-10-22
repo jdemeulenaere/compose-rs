@@ -168,7 +168,7 @@ pub fn SingleChoiceSegmentedButtonRow(
         Rc::new(SegmentedRowLayout { space }) as Rc<dyn MeasurePolicy>
     });
     Layout(
-        modifier,
+        modifier.selectable_group(),
         policy,
         compose_runtime::callback(move || content(SingleChoiceSegmentedButtonRowScope(()))),
     );
@@ -259,73 +259,66 @@ pub fn SegmentedButton(
         SegmentedButtonDefaults::border_stroke(colors.border_color(enabled, selected))
     });
     let interaction_source = remembered_interaction_source(interaction_source);
-    let click = SurfaceClick {
+    let mut click = Some(SurfaceClick {
         on_click,
         enabled,
         role: None,
         interaction_source,
         selected: Some(selected),
         elevations: None,
-    };
+    });
     let label_style = MaterialTheme::typography().label_large;
     let policy = remember(|| Rc::new(IconLabelLayout) as Rc<dyn MeasurePolicy>);
-    surface(
-        modifier
-            .size_in(compose_ui::SizeSpec::bounds(
-                crate::ButtonDefaults::MIN_WIDTH,
-                crate::ButtonDefaults::MIN_HEIGHT,
-                Dp::UNSPECIFIED,
-                Dp::UNSPECIFIED,
-            ))
-            .semantics(false, |config| config.role = Some(Role::RadioButton)),
-        shape,
-        colors.container_color(enabled, selected),
-        colors.content_color(enabled, selected),
-        Dp(0.0),
-        Dp(0.0),
-        Some(border),
-        Some(click),
-        compose_runtime::callback(move || {
-            let (icon, label, policy) = (icon.clone(), label.clone(), policy.clone());
-            CompositionLocalProvider(LOCAL_TEXT_STYLE.provides(label_style), || {
-                let (icon, label, policy) = (icon.clone(), label.clone(), policy.clone());
+    let modifier = modifier
+        .size_in(compose_ui::SizeSpec::bounds(
+            crate::ButtonDefaults::MIN_WIDTH,
+            crate::ButtonDefaults::MIN_HEIGHT,
+            Dp::UNSPECIFIED,
+            Dp::UNSPECIFIED,
+        ))
+        .semantics(false, |config| config.role = Some(Role::RadioButton));
+    let content = compose_runtime::callback(move || {
+        let (icon, label) = (icon.clone(), label.clone());
+        Layout(
+            Modifier.padding_values(crate::ButtonDefaults::TEXT_BUTTON_CONTENT_PADDING),
+            policy.clone(),
+            compose_runtime::callback(move || {
+                let icon = icon.clone();
                 Box(
-                    Modifier.padding_values(crate::ButtonDefaults::TEXT_BUTTON_CONTENT_PADDING),
+                    Modifier,
                     Alignment::CENTER,
                     false,
-                    compose_runtime::callback(move |_| {
-                        let (icon, label) = (icon.clone(), label.clone());
-                        Layout(
-                            Modifier,
-                            policy.clone(),
-                            compose_runtime::callback(move || {
-                                let icon = icon.clone();
-                                Box(
-                                    Modifier,
-                                    Alignment::CENTER,
-                                    false,
-                                    compose_runtime::callback(move |_| match &icon {
-                                        Some(icon) => icon(),
-                                        None => SegmentedButtonDefaults::icon(selected),
-                                    }),
-                                );
-                                let label = label.clone();
-                                Box(
-                                    Modifier,
-                                    Alignment::CENTER,
-                                    false,
-                                    compose_runtime::callback(move |_| label()),
-                                );
-                            }),
-                        );
+                    compose_runtime::callback(move |_| match &icon {
+                        Some(icon) => icon(),
+                        None => SegmentedButtonDefaults::icon(selected),
                     }),
                 );
-            });
-        }),
-    );
+                let label = label.clone();
+                Box(
+                    Modifier,
+                    Alignment::CENTER,
+                    false,
+                    compose_runtime::callback(move |_| label()),
+                );
+            }),
+        );
+    });
+    CompositionLocalProvider(LOCAL_TEXT_STYLE.provides(label_style), || {
+        surface(
+            modifier.clone(),
+            shape,
+            colors.container_color(enabled, selected),
+            colors.content_color(enabled, selected),
+            Dp(0.0),
+            Dp(0.0),
+            Some(border),
+            click.take(),
+            content.clone(),
+        );
+    });
 }
 
-/// The icon, then (if the icon shows) 8 dp, then the label, centered down the tallest, as
+/// The icon, then (if the icon shows) 8 dp, then the label, centered in the button, as
 /// Compose's `SegmentedButtonContent`.
 struct IconLabelLayout;
 
@@ -347,11 +340,14 @@ impl MeasurePolicy for IconLabelLayout {
             0
         };
         let label = scope.measure(*label, loose);
-        let height = icon.height.max(label.height);
-        let width = constraints.constrain_width(icon.width + spacing + label.width);
-        scope.place_relative(&icon, 0, (height - icon.height) / 2);
-        scope.place_relative(&label, icon.width + spacing, (height - label.height) / 2);
-        scope.layout(width, constraints.constrain_height(height))
+        // Centered in the button (its minimum size).
+        let content_width = icon.width + spacing + label.width;
+        let width = constraints.constrain_width(content_width);
+        let height = constraints.constrain_height(icon.height.max(label.height));
+        let start = (width - content_width) / 2;
+        scope.place_relative(&icon, start, (height - icon.height) / 2);
+        scope.place_relative(&label, start + icon.width + spacing, (height - label.height) / 2);
+        scope.layout(width, height)
     }
 
     fn debug_name(&self) -> &'static str {

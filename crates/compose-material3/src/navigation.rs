@@ -342,7 +342,8 @@ pub fn NavigationRail(
                         Dp::UNSPECIFIED,
                         Dp::UNSPECIFIED,
                     ))
-                    .padding_horizontal_vertical(Dp(0.0), 4.dp()),
+                    .padding_horizontal_vertical(Dp(0.0), 4.dp())
+                    .selectable_group(),
                 Arrangement::spaced_by(4.dp()),
                 Alignment::CENTER_HORIZONTALLY,
                 compose_runtime::callback(move |column: ColumnScope| {

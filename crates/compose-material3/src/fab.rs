@@ -5,7 +5,7 @@
 use compose_animation::{
     AnimatedVisibility, expand_horizontally, fade_in, fade_out, shrink_horizontally,
 };
-use compose_foundation::layout::{Arrangement, Box, Row, Spacer};
+use compose_foundation::layout::{Arrangement, Box, Row};
 use compose_runtime::{CompositionLocalProvider, composable};
 use compose_ui::{
     Alignment, Color, Dp, Modifier, MutableInteractionSource, Role, Shape, SizeSpec, UnitExt,
@@ -296,23 +296,21 @@ pub fn ExtendedFloatingActionButton(
                 Alignment::CENTER_VERTICALLY,
                 compose_runtime::callback(move |_| {
                     icon();
+                    // The text 12 dp after the icon (the gap shrinking with it), not read.
                     let text = text.clone();
                     AnimatedVisibility(
                         expanded,
-                        Modifier,
+                        Modifier.clear_and_set_semantics(|_| {}),
                         fade_in() + expand_horizontally(),
                         fade_out() + shrink_horizontally(),
                         "ExtendedFloatingActionButton",
                         compose_runtime::callback(move || {
                             let text = text.clone();
-                            Row(
-                                Modifier.clear_and_set_semantics(|_| {}),
-                                Arrangement::Start,
-                                Alignment::CENTER_VERTICALLY,
-                                compose_runtime::callback(move |_| {
-                                    Spacer(Modifier.width(12.dp()));
-                                    text();
-                                }),
+                            Box(
+                                Modifier.padding_sides(12.dp(), Dp(0.0), Dp(0.0), Dp(0.0)),
+                                Alignment::CENTER_START,
+                                false,
+                                compose_runtime::callback(move |_| text()),
                             );
                         }),
                     );

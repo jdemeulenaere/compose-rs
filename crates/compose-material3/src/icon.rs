@@ -440,23 +440,48 @@ pub mod icons {
     pub mod filled {
         use compose_ui::ImageVector;
 
+        // One table of the icons' labels and path data and one accessor parsing each once per
+        // thread (D128): an icon's function is a call with its index, so the set costs little
+        // to compile.
         macro_rules! icons {
             ($($(#[$doc:meta])* $name:ident = $label:literal, $data:literal;)*) => {
+                /// The icons' indexes in `TABLE`.
+                #[allow(non_camel_case_types)]
+                #[derive(Clone, Copy)]
+                enum Index {
+                    $($name),*
+                }
+
+                const TABLE: &[(&str, &str)] = &[$(($label, $data)),*];
+
                 $(
                     $(#[$doc])*
                     pub fn $name() -> ImageVector {
-                        thread_local! {
-                            static ICON: ImageVector = ImageVector::icon($label, $data);
-                        }
-                        ICON.with(Clone::clone)
+                        parsed(Index::$name as usize)
                     }
                 )*
-
-                /// Every icon, by name, for galleries and tests.
-                pub fn all() -> Vec<ImageVector> {
-                    vec![$($name()),*]
-                }
             };
+        }
+
+        /// The icon at `index` of `TABLE`, parsed the first time it's asked for on the thread.
+        fn parsed(index: usize) -> ImageVector {
+            thread_local! {
+                static PARSED: std::cell::RefCell<Vec<Option<ImageVector>>> =
+                    std::cell::RefCell::new(vec![None; TABLE.len()]);
+            }
+            PARSED.with(|parsed| {
+                parsed.borrow_mut()[index]
+                    .get_or_insert_with(|| {
+                        let (label, data) = TABLE[index];
+                        ImageVector::icon(label, data)
+                    })
+                    .clone()
+            })
+        }
+
+        /// Every icon, in the table's order, for galleries and tests.
+        pub fn all() -> Vec<ImageVector> {
+            (0..TABLE.len()).map(parsed).collect()
         }
 
         icons! {

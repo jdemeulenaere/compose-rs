@@ -556,6 +556,7 @@ fn single_row_top_app_bar(
         }
     });
     let title_style = MaterialTheme::typography().title_large;
+    let actions = actions_row(actions);
     // Read while drawing: the transition draws again only.
     let container = Modifier.draw_behind(move |scope| {
         let color = colors.container_color(fraction.get());
@@ -662,6 +663,7 @@ fn two_rows_top_app_bar(bar: TwoRows) {
         })
     };
     let TwoRows { title, title_style, small_title_style, navigation_icon, actions, .. } = bar;
+    let actions = actions_row(actions);
     let window_insets = bar.window_insets;
     crate::components::surface(
         bar.modifier.then(container),
@@ -683,7 +685,7 @@ fn two_rows_top_app_bar(bar: TwoRows) {
                 Alignment::START,
                 compose_runtime::callback(move |_| {
                     top_app_bar_row(
-                        Modifier.padding_values(window_insets).clip(compose_ui::RECTANGLE_SHAPE),
+                        Modifier.padding_values(window_insets).clip_to_bounds(),
                         policies.0.clone(),
                         title.clone(),
                         small_title_style,
@@ -701,7 +703,7 @@ fn two_rows_top_app_bar(bar: TwoRows) {
                                 window_insets.end,
                                 Dp(0.0),
                             ))
-                            .clip(compose_ui::RECTANGLE_SHAPE),
+                            .clip_to_bounds(),
                         policies.1.clone(),
                         title.clone(),
                         title_style,
@@ -731,26 +733,18 @@ fn top_app_bar_row(
     title_alpha: Option<Modifier>,
     hide_title_semantics: bool,
     navigation_icon: Option<compose_runtime::Callback>,
-    actions: Option<compose_runtime::Callback<dyn Fn(RowScope)>>,
+    actions: Option<compose_runtime::Callback>,
     colors: TopAppBarColors,
 ) {
     Layout(
         modifier,
         policy,
         compose_runtime::callback(move || {
-            let navigation_icon = navigation_icon.clone();
-            Box(
+            bar_slot(
                 Modifier.padding_sides(HORIZONTAL_PADDING, Dp(0.0), Dp(0.0), Dp(0.0)),
-                Alignment::TOP_START,
-                false,
-                compose_runtime::callback(move |_| {
-                    if let Some(navigation_icon) = navigation_icon.clone() {
-                        CompositionLocalProvider(
-                            LOCAL_CONTENT_COLOR.provides(colors.navigation_icon_content_color),
-                            &*navigation_icon,
-                        );
-                    }
-                }),
+                colors.navigation_icon_content_color,
+                None,
+                navigation_icon.clone(),
             );
             let mut title_modifier =
                 Modifier.padding_horizontal_vertical(HORIZONTAL_PADDING, 0.dp());
@@ -760,48 +754,46 @@ fn top_app_bar_row(
             if let Some(alpha) = &title_alpha {
                 title_modifier = title_modifier.then(alpha.clone());
             }
-            let title = title.clone();
-            Box(
+            bar_slot(
                 title_modifier,
-                Alignment::TOP_START,
-                false,
-                compose_runtime::callback(move |_| {
-                    let title = title.clone();
-                    CompositionLocalProvider(
-                        LOCAL_CONTENT_COLOR.provides(colors.title_content_color),
-                        || {
-                            let title = title.clone();
-                            CompositionLocalProvider(
-                                LOCAL_TEXT_STYLE.provides(title_style),
-                                &*title,
-                            );
-                        },
-                    );
-                }),
+                colors.title_content_color,
+                Some(title_style),
+                Some(title.clone()),
             );
-            let actions = actions.clone();
-            Box(
+            bar_slot(
                 Modifier.padding_sides(Dp(0.0), Dp(0.0), HORIZONTAL_PADDING, Dp(0.0)),
-                Alignment::TOP_START,
-                false,
-                compose_runtime::callback(move |_| {
-                    if let Some(actions) = actions.clone() {
-                        CompositionLocalProvider(
-                            LOCAL_CONTENT_COLOR.provides(colors.action_icon_content_color),
-                            || {
-                                Row(
-                                    Modifier,
-                                    Arrangement::End,
-                                    Alignment::CENTER_VERTICALLY,
-                                    actions.clone(),
-                                );
-                            },
-                        );
-                    }
-                }),
+                colors.action_icon_content_color,
+                None,
+                actions.clone(),
             );
         }),
     )
+}
+
+/// A slot of a bar's row: `content` in a box of `modifier`, in `color` (and `style`).
+fn bar_slot(
+    modifier: Modifier,
+    color: Color,
+    style: Option<TextStyle>,
+    content: Option<compose_runtime::Callback>,
+) {
+    let body = move || {
+        let content = content.clone();
+        Box(
+            modifier.clone(),
+            Alignment::TOP_START,
+            false,
+            compose_runtime::callback(move |_| {
+                if let Some(content) = &content {
+                    content();
+                }
+            }),
+        );
+    };
+    CompositionLocalProvider(LOCAL_CONTENT_COLOR.provides(color), || match style {
+        Some(style) => CompositionLocalProvider(LOCAL_TEXT_STYLE.provides(style), &body),
+        None => body(),
+    });
 }
 
 /// The navigation icon, the title and the actions of a bar's row, as Compose's
@@ -960,4 +952,13 @@ pub fn BottomAppBar(
             );
         }),
     );
+}
+
+/// The actions in a row at the end, as one callback (kept while `actions` is the same).
+fn actions_row(actions: compose_runtime::Callback<dyn Fn(RowScope)>) -> compose_runtime::Callback {
+    compose_runtime::remember_keyed(actions.clone(), move || {
+        compose_runtime::callback(move || {
+            Row(Modifier, Arrangement::End, Alignment::CENTER_VERTICALLY, actions.clone());
+        })
+    })
 }
