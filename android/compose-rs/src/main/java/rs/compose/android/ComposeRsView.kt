@@ -377,8 +377,9 @@ class ComposeRsView(context: Context, private val app: String) : View(context) {
     /**
      * Hidden, the window asks for no frame: an animation would otherwise run a frame on every
      * vsync, drawing nothing. Shown again, the frame it missed (state changed, animations) is
-     * made now, before the traversal that shows the window draws, so it shows the content as of
-     * now; animations go on from the frame's time, as their clock is the time itself.
+     * made in the traversal that shows the window, after its layout and before it draws, so it
+     * shows the content as of now; animations go on from the frame's time, as their clock is
+     * the time itself.
      */
     override fun onWindowVisibilityChanged(visibility: Int) {
         super.onWindowVisibilityChanged(visibility)
@@ -395,8 +396,11 @@ class ComposeRsView(context: Context, private val app: String) : View(context) {
                     viewTreeObserver.addOnPreDrawListener(showFrame)
                 }
             }
-            // Prefetch work left when the window hid (prefetch() does nothing without any).
-            schedulePrefetch()
+            // Prefetch work left when the window hid.
+            if (prefetchLeft) {
+                prefetchLeft = false
+                schedulePrefetch()
+            }
         } else {
             if (frameRequested) {
                 Choreographer.getInstance().removeFrameCallback(frameCallback)
@@ -406,6 +410,7 @@ class ComposeRsView(context: Context, private val app: String) : View(context) {
             // A hidden window prefetches nothing (prefetch() checks, too).
             Choreographer.getInstance().removeFrameCallback(prefetchFrameCallback)
             removeCallbacks(prefetchRunnable)
+            if (prefetchScheduled) prefetchLeft = true
             prefetchScheduled = false
             idleTimesWithoutTime = 0
         }
@@ -413,6 +418,9 @@ class ComposeRsView(context: Context, private val app: String) : View(context) {
 
     /** The frame missed while hidden, made before the traversal that shows the window draws. */
     private var showFramePending = false
+
+    /** Prefetch work was left when the window hid: scheduled again when it shows. */
+    private var prefetchLeft = false
     private val showFrame = object : ViewTreeObserver.OnPreDrawListener {
         override fun onPreDraw(): Boolean {
             viewTreeObserver.removeOnPreDrawListener(this)
@@ -434,7 +442,12 @@ class ComposeRsView(context: Context, private val app: String) : View(context) {
         choreographer.removeFrameCallback(prefetchFrameCallback)
         removeCallbacks(prefetchRunnable)
         prefetchScheduled = false
+        prefetchLeft = false
         idleTimesWithoutTime = 0
+        cancelShowFrame()
+    }
+
+    private fun cancelShowFrame() {
         if (showFramePending) {
             showFramePending = false
             viewTreeObserver.removeOnPreDrawListener(showFrame)
@@ -443,6 +456,9 @@ class ComposeRsView(context: Context, private val app: String) : View(context) {
 
     private fun frame() {
         frameRequested = false
+        // Any frame is the one missed while hidden (if the traversal showing the window ended
+        // before drawing, the frame callback made it: its listener mustn't make the next one).
+        cancelShowFrame()
         if (host == 0L) return
         val result = ComposeRsNative.frame(host)
         if (result and Frame.DREW != 0L) invalidate()
@@ -474,6 +490,7 @@ class ComposeRsView(context: Context, private val app: String) : View(context) {
     private fun prefetch() {
         // A hidden window draws no frames to prepare for, as Compose's.
         if (host == 0L || windowVisibility != VISIBLE) {
+            if (host != 0L) prefetchLeft = true
             prefetchScheduled = false
             idleTimesWithoutTime = 0
             return
