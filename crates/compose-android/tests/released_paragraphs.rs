@@ -21,7 +21,7 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use compose_android::serialize::{
-    GroupCache, LAYER_ENTRY_BYTES, Resources, Writer, tag, write_display_list,
+    GroupCache, LAYER_ENTRY_BYTES, Resources, Writer, operand_bytes, tag, write_display_list,
 };
 use compose_android::text::{AndroidTextMeasurer, TextBackend};
 use compose_foundation::layout::*;
@@ -70,27 +70,6 @@ fn u64_at(bytes: &[u8], at: usize) -> u64 {
     u64::from_le_bytes(bytes[at..at + 8].try_into().unwrap())
 }
 
-const PAINT: usize = 4 + 1 + 4 + 1;
-
-fn operands(op: u8) -> usize {
-    match op {
-        tag::SAVE | tag::RESTORE => 0,
-        tag::TRANSLATE => 8,
-        tag::CLIP_RECT => 16,
-        tag::CLIP_ROUND_RECT => 32,
-        tag::DRAW_RECT | tag::DRAW_LINE => 16 + PAINT,
-        tag::DRAW_ROUND_RECT => 32 + PAINT,
-        tag::DRAW_PARAGRAPH => 12,
-        tag::SAVE_LAYER_ALPHA => 4,
-        tag::TRANSFORM => 28,
-        tag::DRAW_IMAGE => 4 + 32 + 4,
-        tag::DRAW_SHADOW => 1 + 32 + 4 + 12 + 4 + 8,
-        tag::DRAW_ARC => 16 + 8 + 1 + PAINT,
-        tag::DRAW_PATH => 4 + 16 + PAINT,
-        other => panic!("unknown tag {other}"),
-    }
-}
-
 /// What a recording draws: the group's (key, version) (`None`: the view's own recording), and
 /// the paragraphs its own operations draw.
 type Recording = (Option<(u64, u64)>, Vec<u32>);
@@ -125,7 +104,7 @@ fn read(
             if op == tag::DRAW_PARAGRAPH {
                 out[index].1.push(u32_at(bytes, at + 1));
             }
-            at += 1 + operands(op);
+            at += 1 + operand_bytes(bytes, at);
         }
     }
     assert_eq!(at, end, "a record's length is its content's");

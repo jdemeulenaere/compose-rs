@@ -17,6 +17,18 @@ pub(crate) struct HitEntry {
     pub(crate) index: u16,
     pub(crate) layer: u16,
     pub(crate) version: u32,
+    /// An observer: on the path only if something inside it is hit.
+    pub(crate) observer: bool,
+}
+
+/// Whether the entries pushed from `start` hit anything but observers; if not, they're dropped.
+fn hit_since(path: &mut Vec<HitEntry>, start: usize) -> bool {
+    if path[start..].iter().any(|entry| !entry.observer) {
+        true
+    } else {
+        path.truncate(start);
+        false
+    }
 }
 
 fn contains(size: IntSize, point: Offset) -> bool {
@@ -80,7 +92,7 @@ impl UiTree {
                         .contains(local - origins[layer])
                     {
                         // Outside the clip: nothing after it, nor the children, is hit.
-                        return path.len() > start;
+                        return hit_since(path, start);
                     }
                 }
                 if bits & capability::POINTER != 0
@@ -91,6 +103,7 @@ impl UiTree {
                         index: index as u16,
                         layer: layer as u16,
                         version: value.chain_version,
+                        observer: value.chain[index].is_pointer_observer(),
                     });
                 }
                 if bits & capability::LAYOUT != 0 {
@@ -113,13 +126,14 @@ impl UiTree {
                 break;
             }
         }
-        path.len() > start
+        hit_since(path, start)
     }
 
     /// Dispatches a pointer event at `position` in the root. A press captures its hit path:
     /// the pointer's moves and its release go to the same nodes. Returns the actions handlers
     /// queued, to run once the tree is free.
     pub fn dispatch_pointer(&mut self, mut event: PointerEvent) -> Vec<Action> {
+        crate::nested_scroll::begin_pointer_event();
         let position = event.position;
         let captured = self.captures.iter().position(|(pointer, _)| *pointer == event.pointer);
         let path = match (event.kind, captured) {

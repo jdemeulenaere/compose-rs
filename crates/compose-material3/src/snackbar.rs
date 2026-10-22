@@ -373,7 +373,7 @@ pub fn Snackbar(
                             // The action in its color, as `textButtonColors(contentColor =
                             // actionColor)`.
                             let data = data.clone();
-                            crate::components::Button(
+                            crate::button::Button(
                                 compose_runtime::callback(move || data.perform_action()),
                                 Modifier,
                                 true,
@@ -382,9 +382,10 @@ pub fn Snackbar(
                                     content_color: action_color,
                                     ..crate::ButtonDefaults::text_button_colors()
                                 },
-                                Dp(0.0),
+                                None,
                                 None,
                                 crate::ButtonDefaults::TEXT_BUTTON_CONTENT_PADDING,
+                                None,
                                 compose_runtime::callback(move |_: RowScope| {
                                     themed_text(label.clone())
                                 }),
@@ -396,6 +397,8 @@ pub fn Snackbar(
                                 compose_runtime::callback(move || data.dismiss()),
                                 Modifier,
                                 true,
+                                crate::IconButtonDefaults::icon_button_colors(),
+                                None,
                                 compose_runtime::callback(|| {
                                     Icon(
                                         icons::filled::close(),

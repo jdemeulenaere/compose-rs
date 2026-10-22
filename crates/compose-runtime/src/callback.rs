@@ -363,7 +363,7 @@ macro_rules! lazy_resolvers {
             {
                 match probe {
                     LambdaProbe::Hit(callback) => callback,
-                    LambdaProbe::Miss(pending) => pending.store(make()),
+                    LambdaProbe::Miss(pending) => pending.store_callback(Callback(Rc::new(make()))),
                 }
             }
         )*
@@ -391,7 +391,7 @@ pub fn resolve_lazy<K: 'static, F: ?Sized + 'static, C: IntoCallback<F>>(
 ) -> Callback<F> {
     match probe {
         LambdaProbe::Hit(callback) => callback,
-        LambdaProbe::Miss(pending) => pending.store(make()),
+        LambdaProbe::Miss(pending) => pending.store_callback(make().into_callback()),
     }
 }
 
@@ -425,8 +425,14 @@ wrappers!(
 
 impl<K: 'static, F: ?Sized + 'static> PendingLambda<K, F> {
     /// Wraps the lambda, remembers it with its keys, and returns it.
+    #[inline]
     pub fn store<C: IntoCallback<F>>(self, lambda: C) -> Callback<F> {
-        let callback = lambda.into_callback();
+        self.store_callback(lambda.into_callback())
+    }
+
+    /// Remembers `callback` with the keys, and returns it. Instantiated per keys and signature,
+    /// not per lambda, unlike [`store`](PendingLambda::store).
+    pub fn store_callback(self, callback: Callback<F>) -> Callback<F> {
         if let Some(position) = self.position {
             let stored: Rc<dyn Any> = Rc::new((self.site, self.keys, callback.clone()));
             set_lambda_slot(position, stored, type_name::<(u64, K, Callback<F>)>());
@@ -486,27 +492,23 @@ pub fn lambda_probe<K: LambdaKeys, F: ?Sized + 'static>(
     site: u64,
     keys: K,
 ) -> LambdaProbe<K::Owned, F> {
-    let Some((position, existing)) = lambda_slot(TypeId::of::<(u64, K::Owned, Callback<F>)>())
-    else {
-        return LambdaProbe::Miss(PendingLambda {
-            site,
-            keys: keys.to_owned(),
-            position: None,
-            _function: std::marker::PhantomData,
-        });
-    };
-    if let Some(existing) = existing
-        && let Some((kept_site, kept, callback)) =
-            existing.downcast_ref::<(u64, K::Owned, Callback<F>)>()
-        && *kept_site == site
-        && keys.same(kept)
-    {
-        return LambdaProbe::Hit(callback.clone());
+    // Instantiated per captures' types and signature: one miss path, no combinators.
+    let mut position = None;
+    if let Some((reserved, existing)) = lambda_slot(TypeId::of::<(u64, K::Owned, Callback<F>)>()) {
+        if let Some(existing) = existing
+            && let Some((kept_site, kept, callback)) =
+                existing.downcast_ref::<(u64, K::Owned, Callback<F>)>()
+            && *kept_site == site
+            && keys.same(kept)
+        {
+            return LambdaProbe::Hit(callback.clone());
+        }
+        position = Some(reserved);
     }
     LambdaProbe::Miss(PendingLambda {
         site,
         keys: keys.to_owned(),
-        position: Some(position),
+        position,
         _function: std::marker::PhantomData,
     })
 }

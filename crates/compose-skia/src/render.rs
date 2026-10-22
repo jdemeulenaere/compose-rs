@@ -62,8 +62,13 @@ fn skia_shader(
         compose_ui::TileMode::Mirror => skia_safe::TileMode::Mirror,
         compose_ui::TileMode::Decal => skia_safe::TileMode::Decal,
     };
-    // Interpolated unpremultiplied, as Android's and Skiko's gradients.
-    let gradient = Gradient::new(Colors::new(&colors, stops, mode, None), Interpolation::default());
+    // Interpolated premultiplied, as Android's gradients (HWUI builds them with
+    // `kInterpolateColorsInPremul_Flag`) and Skiko's (`GradientStyle.DEFAULT`), D210.
+    let interpolation = Interpolation {
+        in_premul: skia_safe::gradient::interpolation::InPremul::Yes,
+        ..Interpolation::default()
+    };
+    let gradient = Gradient::new(Colors::new(&colors, stops, mode, None), interpolation);
     match shader {
         Shader::LinearGradient { from, to, .. } => shaders::linear_gradient(
             (Point::new(from.x, from.y), Point::new(to.x, to.y)),

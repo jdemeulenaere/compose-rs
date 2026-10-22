@@ -17,15 +17,24 @@ fn Filtered(ids: Rc<Vec<u32>>, on_change: Rc<dyn Fn(&str)>) {
         __compose_restart,
         ::compose::__private::identity_of(&__compose_restart),
     );
-    if !__composer
-        .update_kept(
-            |__kept: &(Rc<Vec<u32>>, Rc<dyn Fn(&str)>)| {
-                !::compose::__private::ComposeArg::same(&__kept.0, &ids)
-                    || !::compose::__private::ComposeArg::same(&__kept.1, &on_change)
-            },
-            || (::compose::__private::keep(&ids), ::compose::__private::keep(&on_change)),
-        ) && __composer.skipping()
+    let mut __compose_kept = __composer.take_kept();
+    let __compose_changed = match __compose_kept
+        .get::<(Rc<Vec<u32>>, Rc<dyn Fn(&str)>)>()
     {
+        ::core::option::Option::Some(__kept) => {
+            !::compose::__private::ComposeArg::same(&__kept.0, &ids)
+                || !::compose::__private::ComposeArg::same(&__kept.1, &on_change)
+        }
+        ::core::option::Option::None => true,
+    };
+    if __compose_changed {
+        __compose_kept
+            .set((
+                ::compose::__private::keep(&ids),
+                ::compose::__private::keep(&on_change),
+            ));
+    }
+    if !__compose_kept.put(__compose_changed) && __composer.skipping() {
         __composer.skip_to_group_end();
         return;
     }

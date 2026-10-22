@@ -37,29 +37,35 @@ pub fn Button(
         __compose_restart,
         ::compose::__private::identity_of(&__compose_restart),
     );
-    if !__composer
-        .update_kept(
-            |
-                __kept: &(
-                    ::compose::__private::Callback<dyn Fn()>,
-                    Modifier,
-                    bool,
-                    ::compose::__private::Callback<dyn Fn()>,
-                )|
-            {
-                !::compose::__private::ComposeArg::same(&__kept.0, &on_click)
-                    || !::compose::__private::ComposeArg::same(&__kept.1, &modifier)
-                    || !::compose::__private::ComposeArg::same(&__kept.2, &enabled)
-                    || !::compose::__private::ComposeArg::same(&__kept.3, &content)
-            },
-            || (
+    let mut __compose_kept = __composer.take_kept();
+    let __compose_changed = match __compose_kept
+        .get::<
+            (
+                ::compose::__private::Callback<dyn Fn()>,
+                Modifier,
+                bool,
+                ::compose::__private::Callback<dyn Fn()>,
+            ),
+        >()
+    {
+        ::core::option::Option::Some(__kept) => {
+            !::compose::__private::ComposeArg::same(&__kept.0, &on_click)
+                || !::compose::__private::ComposeArg::same(&__kept.1, &modifier)
+                || !::compose::__private::ComposeArg::same(&__kept.2, &enabled)
+                || !::compose::__private::ComposeArg::same(&__kept.3, &content)
+        }
+        ::core::option::Option::None => true,
+    };
+    if __compose_changed {
+        __compose_kept
+            .set((
                 ::compose::__private::keep(&on_click),
                 ::compose::__private::keep(&modifier),
                 ::compose::__private::keep(&enabled),
                 ::compose::__private::keep(&content),
-            ),
-        ) && __composer.skipping()
-    {
+            ));
+    }
+    if !__compose_kept.put(__compose_changed) && __composer.skipping() {
         __composer.skip_to_group_end();
         return;
     }
@@ -157,20 +163,26 @@ fn Menu(drawer: DrawerState, title: String, shown: Rc<Vec<u32>>) {
         __compose_restart,
         ::compose::__private::identity_of(&__compose_restart),
     );
-    if !__composer
-        .update_kept(
-            |__kept: &(DrawerState, String, Rc<Vec<u32>>)| {
-                !::compose::__private::ComposeArg::same(&__kept.0, &drawer)
-                    || !::compose::__private::ComposeArg::same(&__kept.1, &title)
-                    || !::compose::__private::ComposeArg::same(&__kept.2, &shown)
-            },
-            || (
+    let mut __compose_kept = __composer.take_kept();
+    let __compose_changed = match __compose_kept
+        .get::<(DrawerState, String, Rc<Vec<u32>>)>()
+    {
+        ::core::option::Option::Some(__kept) => {
+            !::compose::__private::ComposeArg::same(&__kept.0, &drawer)
+                || !::compose::__private::ComposeArg::same(&__kept.1, &title)
+                || !::compose::__private::ComposeArg::same(&__kept.2, &shown)
+        }
+        ::core::option::Option::None => true,
+    };
+    if __compose_changed {
+        __compose_kept
+            .set((
                 ::compose::__private::keep(&drawer),
                 ::compose::__private::keep(&title),
                 ::compose::__private::keep(&shown),
-            ),
-        ) && __composer.skipping()
-    {
+            ));
+    }
+    if !__compose_kept.put(__compose_changed) && __composer.skipping() {
         __composer.skip_to_group_end();
         return;
     }

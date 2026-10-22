@@ -1,15 +1,16 @@
 //! A tour of the toolkit: a scaffold with a top app bar (its menu opening a navigation drawer,
-//! its search filtering the cards) and a floating action button adding a card (and saying so
-//! in a snackbar), Material's selection controls, text fields, progress indicators, an
-//! animated panel and a lazy list of cards with a scrollbar.
+//! its search filtering the cards; it slides away as the cards scroll and comes back as they
+//! scroll back) and an extended floating action button adding a card (and saying so in a
+//! snackbar; just its icon once the cards are scrolled), Material's selection controls, text
+//! fields, progress indicators, an animated panel and a lazy list of cards with a scrollbar.
 
 #![allow(non_snake_case)]
 
 use compose::animation::*;
 use compose::foundation::layout::*;
 use compose::foundation::{
-    LazyColumn, LazyListScope, TooltipArea, VerticalScrollbar, is_system_in_dark_theme,
-    remember_lazy_list_scrollbar_adapter, remember_lazy_list_state,
+    LazyColumn, LazyListScope, LazyListState, TooltipArea, VerticalScrollbar,
+    is_system_in_dark_theme, remember_lazy_list_scrollbar_adapter, remember_lazy_list_state,
 };
 use compose::material3::*;
 use compose::runtime::*;
@@ -33,6 +34,8 @@ pub fn GalleryWith(about: bool) {
         let searching = remember_saveable(|| mutable_state_of(false));
         let query = remember_saveable(|| mutable_state_of(String::new()));
         let drawer = remember_drawer_state(DrawerValue::Closed);
+        let list = remember_lazy_list_state(0, 0);
+        let scroll_behavior = TopAppBarDefaults::enter_always_scroll_behavior();
         let snackbars = remember(SnackbarHostState::new);
         let scope = remember_coroutine_scope();
         // Closes the drawer.
@@ -80,14 +83,18 @@ pub fn GalleryWith(about: bool) {
             drawer_state = drawer,
             {
                 Scaffold!(
+                    modifier = Modifier.nested_scroll(scroll_behavior.nested_scroll_connection()),
                     top_bar = {
-                        TopBar(drawer, searching, query, menu, cards, dialog);
+                        TopBar(drawer, scroll_behavior, searching, query, menu, cards, dialog);
                     },
                     snackbar_host = {
                         SnackbarHost!(snackbars);
                     },
                     floating_action_button = {
-                        FloatingActionButton!(
+                        ExtendedFloatingActionButton!(
+                            text = { Text!("Add a card") },
+                            icon = { Icon!(icons::filled::add(), Some("Add a card")) },
+                            expanded = list.first_visible_item_index() == 0,
                             on_click = move || {
                                 let added = cards.get();
                                 cards.set(added + 1);
@@ -102,9 +109,6 @@ pub fn GalleryWith(about: bool) {
                                         .await;
                                 });
                             },
-                            {
-                                Icon!(icons::filled::add(), Some("Add a card"));
-                            }
                         );
                     },
                     |padding: PaddingValues| {
@@ -117,7 +121,12 @@ pub fn GalleryWith(about: bool) {
                             vertical_arrangement = Arrangement::spaced_by(12.dp()),
                             |column| {
                                 Controls(cards);
-                                Cards(cards.get(), query.get(), Modifier.weight(column, 1.0));
+                                Cards(
+                                    cards.get(),
+                                    query.get(),
+                                    list.clone(),
+                                    Modifier.weight(column, 1.0),
+                                );
                             }
                         );
                     }
@@ -135,6 +144,7 @@ const FIRST_CARDS: u32 = 20;
 #[composable]
 fn TopBar(
     drawer: DrawerState,
+    scroll_behavior: TopAppBarScrollBehavior,
     searching: MutableState<bool>,
     query: MutableState<String>,
     menu: MutableState<bool>,
@@ -168,6 +178,7 @@ fn TopBar(
                 }
             );
         },
+        scroll_behavior = Some(scroll_behavior),
         actions = move |_row: RowScope| {
             TooltipArea!(
                 move || PlainTooltip!({
@@ -258,12 +269,11 @@ fn AboutDialog(dialog: MutableState<bool>) {
 
 /// The cards, newest first, those matching the search, with a scrollbar as on desktop.
 #[composable]
-fn Cards(count: u32, query: String, modifier: Modifier) {
+fn Cards(count: u32, query: String, list: LazyListState, modifier: Modifier) {
     let query = query.trim().to_lowercase();
     let shown: std::rc::Rc<Vec<u32>> = std::rc::Rc::new(
         (0..count).rev().filter(|index| format!("card {index}").contains(&query)).collect(),
     );
-    let list = remember_lazy_list_state(0, 0);
     if shown.is_empty() {
         Text!("No card matches “{}”", query, modifier = modifier.padding(16.dp()));
         return;

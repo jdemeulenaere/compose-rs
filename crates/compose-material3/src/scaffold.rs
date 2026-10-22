@@ -3,16 +3,16 @@
 use std::rc::Rc;
 
 use compose_foundation::BorderStroke;
-use compose_foundation::layout::{Box, Column, ColumnScope, Row, RowScope};
+use compose_foundation::layout::{Box, Column, ColumnScope};
 use compose_runtime::{
     CompositionLocalProvider, MutableState, composable, mutable_state_of, remember,
 };
 use compose_ui::{
     Alignment, Color, Constraints, Dp, Layout, Measurable, MeasurePolicy, MeasureResult,
-    MeasureScope, Modifier, PaddingValues, Role, Shape, UnitExt,
+    MeasureScope, Modifier, MutableInteractionSource, PaddingValues, Shape, UnitExt,
 };
 
-use crate::theme::{LOCAL_CONTENT_COLOR, LOCAL_TEXT_STYLE, MaterialTheme};
+use crate::theme::{LOCAL_CONTENT_COLOR, MaterialTheme};
 
 // ---- Dividers --------------------------------------------------------------------------------
 
@@ -100,16 +100,107 @@ impl CardDefaults {
         BorderStroke::new(Dp(1.0), color)
     }
 
-    /// An elevated card's shadow, as `elevatedCardElevation()`'s resting elevation.
-    pub const ELEVATED_CARD_ELEVATION: Dp = Dp(1.0);
+    /// Flat, 1 dp hovered, 6 dp dragged, as `cardElevation()`.
+    pub fn card_elevation() -> CardElevation {
+        CardElevation {
+            default_elevation: Dp(0.0),
+            pressed_elevation: Dp(0.0),
+            focused_elevation: Dp(0.0),
+            hovered_elevation: Dp(1.0),
+            dragged_elevation: Dp(6.0),
+            disabled_elevation: Dp(0.0),
+        }
+    }
+
+    /// 1 dp, 3 dp hovered, 8 dp dragged, as `elevatedCardElevation()`.
+    pub fn elevated_card_elevation() -> CardElevation {
+        CardElevation {
+            default_elevation: Dp(1.0),
+            pressed_elevation: Dp(1.0),
+            focused_elevation: Dp(1.0),
+            hovered_elevation: Dp(3.0),
+            dragged_elevation: Dp(8.0),
+            disabled_elevation: Dp(1.0),
+        }
+    }
+
+    /// Flat, 6 dp dragged, as `outlinedCardElevation()`.
+    pub fn outlined_card_elevation() -> CardElevation {
+        CardElevation {
+            default_elevation: Dp(0.0),
+            pressed_elevation: Dp(0.0),
+            focused_elevation: Dp(0.0),
+            hovered_elevation: Dp(0.0),
+            dragged_elevation: Dp(6.0),
+            disabled_elevation: Dp(0.0),
+        }
+    }
 
     pub fn shape() -> Shape {
         MaterialTheme::shapes().medium
     }
+
+    /// As `elevatedShape`.
+    pub fn elevated_shape() -> Shape {
+        MaterialTheme::shapes().medium
+    }
+
+    /// As `outlinedShape`.
+    pub fn outlined_shape() -> Shape {
+        MaterialTheme::shapes().medium
+    }
 }
 
-/// A filled card, as Compose's `Card`: its content in a column on the medium shape; clickable
-/// when `on_click` is given (Compose's `Card(onClick)` overload).
+/// A card's elevation in each of its states, as Compose's `CardElevation`: the shadow follows a
+/// clickable card's press, focus and hover (snapping, where Compose animates; nothing drags a
+/// card here, so `dragged_elevation` isn't used yet), the tonal elevation is the resting one.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct CardElevation {
+    pub default_elevation: Dp,
+    pub pressed_elevation: Dp,
+    pub focused_elevation: Dp,
+    pub hovered_elevation: Dp,
+    pub dragged_elevation: Dp,
+    pub disabled_elevation: Dp,
+}
+
+impl CardElevation {
+    /// The tonal elevation, as `tonalElevation(enabled)`.
+    pub fn tonal_elevation(&self, enabled: bool) -> Dp {
+        if enabled { self.default_elevation } else { self.disabled_elevation }
+    }
+
+    /// The shadow's elevation, as `shadowElevation(enabled, interactionSource)`: a card that
+    /// isn't clickable (no `interaction_source`) rests at its default.
+    pub fn shadow_elevation(
+        &self,
+        enabled: bool,
+        interaction_source: Option<&MutableInteractionSource>,
+    ) -> Dp {
+        match interaction_source {
+            Some(interaction_source) => crate::button::interaction_elevation(
+                enabled,
+                self.default_elevation,
+                self.pressed_elevation,
+                self.focused_elevation,
+                self.hovered_elevation,
+                self.disabled_elevation,
+                interaction_source,
+            ),
+            None => self.default_elevation,
+        }
+    }
+}
+
+impl compose_runtime::ComposeArg for CardElevation {
+    fn same(&self, other: &Self) -> bool {
+        self == other
+    }
+}
+
+/// A filled card, as Compose's `Card`: its content in a column on a surface of the medium
+/// shape; clickable when `on_click` is given (Compose's `Card(onClick)` overload), its shadow
+/// then following its press, focus and hover.
 #[composable]
 pub fn Card(
     #[default(None)] on_click: Option<impl Fn() + 'static>,
@@ -117,39 +208,51 @@ pub fn Card(
     #[default(true)] enabled: bool,
     #[default(crate::CardDefaults::shape())] shape: Shape,
     #[default(crate::CardDefaults::card_colors())] colors: CardColors,
-    #[default(crate::Dp(0.0))] elevation: Dp,
+    #[default(crate::CardDefaults::card_elevation())] elevation: CardElevation,
     #[default(None)] border: Option<BorderStroke>,
+    #[default(None)] interaction_source: Option<MutableInteractionSource>,
     content: impl Fn(ColumnScope) + 'static,
 ) {
+    let interaction_source = crate::components::remembered_interaction_source(interaction_source);
     let (container, content_color) = if enabled {
         (colors.container_color, colors.content_color)
     } else {
         (colors.disabled_container_color, colors.disabled_content_color)
     };
-    let mut surface = modifier
-        // Disabled cards keep their elevation, as Compose's `CardElevation` defaults.
-        .shadow(elevation, shape, false)
-        .background_shape(container, shape)
-        .clip(shape);
-    if let Some(border) = border {
-        surface = surface.border(border.width, border.color, shape);
-    }
-    if let Some(on_click) = on_click {
-        surface = surface.clickable_indicated(
-            enabled,
-            Some(Role::Button),
-            colors.content_color,
-            on_click,
-        );
-    }
-    CompositionLocalProvider(LOCAL_CONTENT_COLOR.provides(content_color), || {
-        Column(
-            surface.clone(),
-            compose_foundation::layout::Arrangement::TOP,
-            compose_ui::Alignment::START,
-            content.clone(),
-        );
+    // Clickable, the shadow follows the press and hover while drawing; else it rests.
+    let shadow = if on_click.is_some() { Dp(0.0) } else { elevation.default_elevation };
+    let click = on_click.map(|on_click| crate::components::SurfaceClick {
+        on_click,
+        enabled,
+        role: None,
+        interaction_source,
+        selected: None,
+        elevations: Some(crate::components::Elevations {
+            default: elevation.default_elevation,
+            pressed: elevation.pressed_elevation,
+            focused: elevation.focused_elevation,
+            hovered: elevation.hovered_elevation,
+            disabled: elevation.disabled_elevation,
+        }),
     });
+    crate::components::surface(
+        modifier,
+        shape,
+        container,
+        content_color,
+        elevation.tonal_elevation(enabled),
+        shadow,
+        border,
+        click,
+        compose_runtime::callback(move || {
+            Column(
+                Modifier,
+                compose_foundation::layout::Arrangement::TOP,
+                compose_ui::Alignment::START,
+                content.clone(),
+            );
+        }),
+    );
 }
 
 /// A card raised on a 1 dp shadow, as Compose's `ElevatedCard`.
@@ -158,140 +261,81 @@ pub fn ElevatedCard(
     #[default(None)] on_click: Option<impl Fn() + 'static>,
     #[default(crate::Modifier)] modifier: Modifier,
     #[default(true)] enabled: bool,
+    #[default(crate::CardDefaults::elevated_shape())] shape: Shape,
+    #[default(crate::CardDefaults::elevated_card_colors())] colors: CardColors,
+    #[default(crate::CardDefaults::elevated_card_elevation())] elevation: CardElevation,
+    #[default(None)] interaction_source: Option<MutableInteractionSource>,
     content: impl Fn(ColumnScope) + 'static,
 ) {
-    Card(
-        on_click,
-        modifier,
-        enabled,
-        CardDefaults::shape(),
-        CardDefaults::elevated_card_colors(),
-        CardDefaults::ELEVATED_CARD_ELEVATION,
-        None,
-        content,
-    );
+    Card(on_click, modifier, enabled, shape, colors, elevation, None, interaction_source, content);
 }
 
-/// A card with an outline, as Compose's `OutlinedCard`.
+/// A card with an outline, as Compose's `OutlinedCard`; `border` `None` is the default
+/// outline, `outlinedCardBorder(enabled)`.
 #[composable]
 pub fn OutlinedCard(
     #[default(None)] on_click: Option<impl Fn() + 'static>,
     #[default(crate::Modifier)] modifier: Modifier,
     #[default(true)] enabled: bool,
+    #[default(crate::CardDefaults::outlined_shape())] shape: Shape,
+    #[default(crate::CardDefaults::outlined_card_colors())] colors: CardColors,
+    #[default(crate::CardDefaults::outlined_card_elevation())] elevation: CardElevation,
+    #[default(None)] border: Option<BorderStroke>,
+    #[default(None)] interaction_source: Option<MutableInteractionSource>,
     content: impl Fn(ColumnScope) + 'static,
 ) {
+    let border = border.or_else(|| Some(CardDefaults::outlined_card_border(enabled)));
     Card(
         on_click,
         modifier,
         enabled,
-        CardDefaults::shape(),
-        CardDefaults::outlined_card_colors(),
-        Dp(0.0),
-        Some(CardDefaults::outlined_card_border(enabled)),
+        shape,
+        colors,
+        elevation,
+        border,
+        interaction_source,
         content,
-    );
-}
-
-// ---- TopAppBar -------------------------------------------------------------------------------
-
-/// A top app bar's colors, as Compose's `TopAppBarColors`.
-#[derive(Clone, Copy, PartialEq, Debug)]
-pub struct TopAppBarColors {
-    pub container_color: Color,
-    pub navigation_icon_content_color: Color,
-    pub title_content_color: Color,
-    pub action_icon_content_color: Color,
-}
-
-impl compose_runtime::ComposeArg for TopAppBarColors {
-    fn same(&self, other: &Self) -> bool {
-        self == other
-    }
-}
-
-/// As Compose's `TopAppBarDefaults`.
-pub struct TopAppBarDefaults;
-
-impl TopAppBarDefaults {
-    pub fn top_app_bar_colors() -> TopAppBarColors {
-        let scheme = MaterialTheme::color_scheme();
-        TopAppBarColors {
-            container_color: scheme.surface,
-            navigation_icon_content_color: scheme.on_surface,
-            title_content_color: scheme.on_surface,
-            action_icon_content_color: scheme.on_surface_variant,
-        }
-    }
-}
-
-/// A small top app bar, as Compose's `TopAppBar`: 64 dp high, the navigation icon at the start,
-/// the title in the title-large style, the actions at the end.
-#[composable]
-pub fn TopAppBar(
-    title: impl Fn() + 'static,
-    #[default(crate::Modifier)] modifier: Modifier,
-    #[default(None)] navigation_icon: Option<impl Fn() + 'static>,
-    #[default(|_| {})] actions: impl Fn(RowScope) + 'static,
-    #[default(crate::TopAppBarDefaults::top_app_bar_colors())] colors: TopAppBarColors,
-) {
-    let style = MaterialTheme::typography().title_large;
-    let has_navigation = navigation_icon.is_some();
-    Row(
-        modifier
-            .background(colors.container_color)
-            .fill_max_width()
-            .height(64.dp())
-            .padding_horizontal_vertical(4.dp(), 0.dp()),
-        compose_foundation::layout::Arrangement::Start,
-        Alignment::CENTER_VERTICALLY,
-        compose_runtime::callback(move |row: RowScope| {
-            if let Some(navigation_icon) = navigation_icon.clone() {
-                CompositionLocalProvider(
-                    LOCAL_CONTENT_COLOR.provides(colors.navigation_icon_content_color),
-                    move || navigation_icon(),
-                );
-            }
-            // The title starts 16 dp in (the bar's 4 and 12), or right after the navigation
-            // icon, as Compose's `TopAppBarTitleInset`.
-            let inset = if has_navigation { 4.dp() } else { 12.dp() };
-            let title = title.clone();
-            CompositionLocalProvider(
-                LOCAL_CONTENT_COLOR.provides(colors.title_content_color),
-                || {
-                    CompositionLocalProvider(LOCAL_TEXT_STYLE.provides(style), || {
-                        Box(
-                            Modifier.weight(row, 1.0).padding_horizontal_vertical(inset, 0.dp()),
-                            Alignment::CENTER_START,
-                            false,
-                            compose_runtime::callback({
-                                let title = title.clone();
-                                move |_| title()
-                            }),
-                        );
-                    });
-                },
-            );
-            let actions = actions.clone();
-            CompositionLocalProvider(
-                LOCAL_CONTENT_COLOR.provides(colors.action_icon_content_color),
-                || {
-                    Row(
-                        Modifier,
-                        compose_foundation::layout::Arrangement::End,
-                        Alignment::CENTER_VERTICALLY,
-                        actions.clone(),
-                    );
-                },
-            );
-        }),
     );
 }
 
 // ---- Scaffold --------------------------------------------------------------------------------
 
+/// Where a `Scaffold` places its floating action button, as Compose's `FabPosition`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum FabPosition {
+    /// At the start, above the bottom bar.
+    Start,
+    /// Centered, above the bottom bar.
+    Center,
+    /// At the end, above the bottom bar.
+    End,
+    /// At the end, over the bottom bar.
+    EndOverlay,
+}
+
+impl compose_runtime::ComposeArg for FabPosition {
+    fn same(&self, other: &Self) -> bool {
+        self == other
+    }
+}
+
+/// As Compose's `ScaffoldDefaults`.
+pub struct ScaffoldDefaults;
+
+impl ScaffoldDefaults {
+    /// The insets the content keeps clear of, as `contentWindowInsets` (the system bars'):
+    /// none, until the hosts report the window's insets (`WindowInsets` isn't there yet;
+    /// padding stands in for it).
+    pub fn content_window_insets() -> PaddingValues {
+        PaddingValues::ZERO
+    }
+}
+
 /// The basic screen layout, as Compose's `Scaffold`: the top bar, the content (given the padding
-/// that keeps it clear of the bars), the bottom bar, and the floating action button above the
-/// bottom bar at the end, 16 dp in.
+/// that keeps it clear of the bars, or of `content_window_insets` where there's no bar), the
+/// bottom bar, and the floating action button 16 dp from the edges at
+/// `floating_action_button_position`, above the bottom bar (over it for `EndOverlay`); the
+/// snackbar host above all of them, centered.
 ///
 /// Compose measures the bars before composing the content (subcomposition); here the content
 /// reads the padding as state its measurement writes, composed again within the same frame.
@@ -302,14 +346,26 @@ pub fn Scaffold(
     #[default(|| {})] bottom_bar: impl Fn() + 'static,
     #[default(|| {})] snackbar_host: impl Fn() + 'static,
     #[default(|| {})] floating_action_button: impl Fn() + 'static,
+    #[default(crate::FabPosition::End)] floating_action_button_position: FabPosition,
     #[default(crate::MaterialTheme::color_scheme().background)] container_color: Color,
     #[default(crate::Color::UNSPECIFIED)] content_color: Color,
+    #[default(crate::ScaffoldDefaults::content_window_insets())]
+    content_window_insets: PaddingValues,
     content: impl Fn(PaddingValues) + 'static,
 ) {
     let content_color =
         content_color.or(MaterialTheme::color_scheme().content_color_for(container_color));
     let padding = remember(|| mutable_state_of(PaddingValues::ZERO));
-    let policy = remember(|| Rc::new(ScaffoldLayout { padding }) as Rc<dyn MeasurePolicy>);
+    let policy = compose_runtime::remember_keyed(
+        (floating_action_button_position, content_window_insets),
+        || {
+            Rc::new(ScaffoldLayout {
+                padding,
+                fab_position: floating_action_button_position,
+                insets: content_window_insets,
+            }) as Rc<dyn MeasurePolicy>
+        },
+    );
     CompositionLocalProvider(LOCAL_CONTENT_COLOR.provides(content_color), || {
         let (top_bar, bottom_bar, snackbar_host, fab, content) = (
             top_bar.clone(),
@@ -345,6 +401,8 @@ pub fn Scaffold(
 /// snackbar host (placed last: over the rest).
 struct ScaffoldLayout {
     padding: MutableState<PaddingValues>,
+    fab_position: FabPosition,
+    insets: PaddingValues,
 }
 
 impl MeasurePolicy for ScaffoldLayout {
@@ -364,14 +422,17 @@ impl MeasurePolicy for ScaffoldLayout {
         let bottom = scope.measure(*bottom, loose);
         let fab = scope.measure(*fab, loose);
         let snackbar = scope.measure(*snackbar, loose);
-        // The content's padding: the bars' heights. Written as state the content reads, which
-        // composes it again (within the frame) when they change.
+        // The content's padding: the bars' heights, or the insets where there's no bar, as
+        // Compose's. Written as state the content reads, which composes it again (within the
+        // frame) when they change.
         let density = scope.density();
+        let insets = self.insets;
+        let to_dp = |pixels: i32| Dp(pixels as f32 / density.density);
         let padding = PaddingValues::new(
-            Dp(0.0),
-            Dp(top.height as f32 / density.density),
-            Dp(0.0),
-            Dp(bottom.height as f32 / density.density),
+            insets.start,
+            if top.height == 0 { insets.top } else { to_dp(top.height) },
+            insets.end,
+            if bottom.height == 0 { insets.bottom } else { to_dp(bottom.height) },
         );
         if self.padding.get() != padding {
             self.padding.set(padding);
@@ -380,17 +441,26 @@ impl MeasurePolicy for ScaffoldLayout {
         scope.place_relative(&content, 0, 0);
         scope.place_relative(&top, 0, 0);
         scope.place_relative(&bottom, 0, height - bottom.height);
-        // Above the bottom bar, the FAB 16 dp up, and the snackbar above both, centered, as
-        // Compose's `ScaffoldLayout`.
-        let mut above = bottom.height;
+        // The FAB 16 dp from the edges, above the bottom bar (over it for `EndOverlay`: above
+        // the bottom inset then), and the snackbar above both, centered, as Compose's
+        // `ScaffoldLayout`.
+        let bottom_inset = density.round_to_px(insets.bottom);
+        let mut above = if bottom.height == 0 { bottom_inset } else { bottom.height };
         if fab.width > 0 && fab.height > 0 {
             let margin = density.round_to_px(16.dp());
-            scope.place_relative(
-                &fab,
-                width - fab.width - margin,
-                height - above - fab.height - margin,
-            );
-            above += fab.height + margin;
+            let x = match self.fab_position {
+                FabPosition::Start => margin,
+                FabPosition::Center => (width - fab.width) / 2,
+                FabPosition::End | FabPosition::EndOverlay => width - fab.width - margin,
+            };
+            let from_bottom = if bottom.height == 0 || self.fab_position == FabPosition::EndOverlay
+            {
+                fab.height + margin + bottom_inset
+            } else {
+                bottom.height + fab.height + margin
+            };
+            scope.place_relative(&fab, x, height - from_bottom);
+            above = from_bottom;
         }
         if snackbar.height > 0 {
             scope.place_relative(

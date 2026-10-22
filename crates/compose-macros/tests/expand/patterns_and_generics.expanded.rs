@@ -14,18 +14,22 @@ fn Pair(__compose_argument0: (i32, i32), _unused: bool) {
         __compose_restart,
         ::compose::__private::identity_of(&__compose_restart),
     );
-    if !__composer
-        .update_kept(
-            |__kept: &((i32, i32), bool)| {
-                !::compose::__private::ComposeArg::same(&__kept.0, &__compose_argument0)
-                    || !::compose::__private::ComposeArg::same(&__kept.1, &_unused)
-            },
-            || (
+    let mut __compose_kept = __composer.take_kept();
+    let __compose_changed = match __compose_kept.get::<((i32, i32), bool)>() {
+        ::core::option::Option::Some(__kept) => {
+            !::compose::__private::ComposeArg::same(&__kept.0, &__compose_argument0)
+                || !::compose::__private::ComposeArg::same(&__kept.1, &_unused)
+        }
+        ::core::option::Option::None => true,
+    };
+    if __compose_changed {
+        __compose_kept
+            .set((
                 ::compose::__private::keep(&__compose_argument0),
                 ::compose::__private::keep(&_unused),
-            ),
-        ) && __composer.skipping()
-    {
+            ));
+    }
+    if !__compose_kept.put(__compose_changed) && __composer.skipping() {
         __composer.skip_to_group_end();
         return;
     }
@@ -61,14 +65,17 @@ fn List<T: ComposeArg + Clone + Display + 'static>(items: Rc<Vec<T>>) {
         __compose_restart,
         ::compose::__private::identity_of(&__compose_restart),
     );
-    if !__composer
-        .update_kept(
-            |__kept: &(Rc<Vec<T>>,)| {
-                !::compose::__private::ComposeArg::same(&__kept.0, &items)
-            },
-            || (::compose::__private::keep(&items),),
-        ) && __composer.skipping()
-    {
+    let mut __compose_kept = __composer.take_kept();
+    let __compose_changed = match __compose_kept.get::<(Rc<Vec<T>>,)>() {
+        ::core::option::Option::Some(__kept) => {
+            !::compose::__private::ComposeArg::same(&__kept.0, &items)
+        }
+        ::core::option::Option::None => true,
+    };
+    if __compose_changed {
+        __compose_kept.set((::compose::__private::keep(&items),));
+    }
+    if !__compose_kept.put(__compose_changed) && __composer.skipping() {
         __composer.skip_to_group_end();
         return;
     }

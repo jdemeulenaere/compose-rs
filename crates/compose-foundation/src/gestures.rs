@@ -242,7 +242,9 @@ fn drag_driver(
                 scope.run_after_dispatch(move || started(position));
                 let mut guard = StopOnDrop { callbacks: callbacks.clone(), armed: true };
                 delta(&callbacks, along(over));
-                let mut last = start.position;
+                // Where the pointer is along the drag, from its moves (the node moving under it, a
+                // sheet it drags, doesn't count), as Compose's `positionChange()`.
+                let mut at = start.position;
                 let mut tracker = crate::fling::VelocityTracker::default();
                 tracker.add(start.uptime_millis * 1_000_000, along(start.position));
                 let velocity = loop {
@@ -253,12 +255,16 @@ fn drag_driver(
                     match change.kind {
                         PointerEventType::Move if !change.is_consumed() => {
                             change.consume();
-                            delta(&callbacks, along(change.position - last));
-                            last = change.position;
-                            tracker.add(change.uptime_millis * 1_000_000, along(change.position));
+                            let moved = change.position_change();
+                            delta(&callbacks, along(moved));
+                            at = at + moved;
+                            tracker.add(change.uptime_millis * 1_000_000, along(at));
                         }
                         PointerEventType::Release => {
-                            tracker.add(change.uptime_millis * 1_000_000, along(change.position));
+                            tracker.add(
+                                change.uptime_millis * 1_000_000,
+                                along(at + change.position_change()),
+                            );
                             break tracker.velocity();
                         }
                         PointerEventType::Move => break 0.0,

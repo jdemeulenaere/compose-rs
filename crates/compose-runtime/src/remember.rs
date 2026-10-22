@@ -77,35 +77,53 @@ fn downcast<T: 'static>(value: &Rc<dyn Any>) -> &T {
 /// `remember(|| mutable_state_of(0))` returns a `Copy` [`MutableState`] handle, and the slot owns
 /// the state: leaving the group frees it, after the group's nodes are released.
 pub fn remember<T: Remember>(calc: impl FnOnce() -> T) -> T::Output {
-    let (position, existing) = slot_next(TypeId::of::<T::Stored>());
-    if let Some(existing) = existing {
-        return T::output(downcast::<T::Stored>(&existing));
+    // A shim, instantiated per call site (`calc` is a closure type of its own): the work is in
+    // `remembered` and `remember_new`, instantiated per remembered type, and in the runtime's
+    // non-generic slot functions.
+    match remembered::<T>(true) {
+        Ok(output) => output,
+        Err(position) => remember_new(position, calc()),
     }
-    let stored = Rc::new(calc().into_stored());
-    let output = T::output(&stored);
-    slot_set(position, SlotValue::Plain(stored), type_name::<T::Stored>());
-    output
 }
 
 /// Like [`remember`], recomputed whenever `keys` is not [`same`](ComposeArg::same) as last time,
 /// as Compose's `remember(key1, …) { … }`. The replaced value is forgotten at the end of the pass.
 pub fn remember_keyed<K: ComposeArg, T: Remember>(keys: K, calc: impl FnOnce() -> T) -> T::Output {
-    let (keys_position, kept_keys) = slot_next(TypeId::of::<K>());
-    let (value_position, existing) = slot_next(TypeId::of::<T::Stored>());
-    let keys_same = kept_keys.as_ref().is_some_and(|kept| downcast::<K>(kept).same(&keys));
-    drop(kept_keys);
-    if keys_same {
-        if let Some(existing) = existing {
-            return T::output(downcast::<T::Stored>(&existing));
-        }
-    } else {
-        slot_set(keys_position, SlotValue::Plain(Rc::new(keys)), type_name::<K>());
+    let keys_same = remember_keys(keys);
+    match remembered::<T>(keys_same) {
+        Ok(output) => output,
+        Err(position) => remember_new(position, calc()),
     }
-    drop(existing);
-    let stored = Rc::new(calc().into_stored());
+}
+
+/// Reserves the next slot: what it holds, if `reuse` and it holds a `T`, or its position.
+fn remembered<T: Remember>(reuse: bool) -> Result<T::Output, SlotPosition> {
+    let (position, existing) = slot_next(TypeId::of::<T::Stored>());
+    if reuse && let Some(existing) = existing {
+        return Ok(T::output(downcast::<T::Stored>(&existing)));
+    }
+    Err(position)
+}
+
+/// Stores a new value in the slot [`remembered`] reserved.
+fn remember_new<T: Remember>(position: SlotPosition, value: T) -> T::Output {
+    let stored = Rc::new(value.into_stored());
     let output = T::output(&stored);
-    slot_set(value_position, SlotValue::Plain(stored), type_name::<T::Stored>());
+    slot_set(position, SlotValue::Plain(stored), type_name::<T::Stored>());
     output
+}
+
+/// Reserves the next slot for `keys`, keeps them unless they are `same` as the kept ones, and
+/// says whether they were.
+fn remember_keys<K: ComposeArg>(keys: K) -> bool {
+    let (position, kept) = slot_next(TypeId::of::<K>());
+    if let Some(kept) = kept
+        && downcast::<K>(&kept).same(&keys)
+    {
+        return true;
+    }
+    slot_set(position, SlotValue::Plain(Rc::new(keys)), type_name::<K>());
+    false
 }
 
 /// Callbacks for a remembered value entering and leaving the composition, as Compose's
@@ -193,13 +211,10 @@ impl<T: 'static> Deref for Observed<T> {
 
 /// Remembers a [`RememberObserver`], which then gets Compose's lifecycle callbacks.
 pub fn remember_observer<T: RememberObserver>(calc: impl FnOnce() -> T) -> Observed<T> {
-    let (position, existing) = slot_next(TypeId::of::<ObserverBox<T>>());
-    if let Some(existing) = existing {
-        return Observed(existing.downcast::<ObserverBox<T>>().expect("slot type checked"));
+    match observed::<T>(true) {
+        Ok(observed) => observed,
+        Err(position) => observe_new(position, calc()),
     }
-    let observer = Rc::new(ObserverBox { state: Cell::new(ObserverState::New), value: calc() });
-    slot_set(position, SlotValue::Observer(observer.clone()), type_name::<T>());
-    Observed(observer)
 }
 
 /// Like [`remember_observer`], recreated whenever `keys` changes: the old observer is forgotten.
@@ -207,20 +222,26 @@ pub fn remember_observer_keyed<K: ComposeArg, T: RememberObserver>(
     keys: K,
     calc: impl FnOnce() -> T,
 ) -> Observed<T> {
-    let (keys_position, kept_keys) = slot_next(TypeId::of::<K>());
-    let (value_position, existing) = slot_next(TypeId::of::<ObserverBox<T>>());
-    let keys_same = kept_keys.as_ref().is_some_and(|kept| downcast::<K>(kept).same(&keys));
-    drop(kept_keys);
-    if keys_same {
-        if let Some(existing) = existing {
-            return Observed(existing.downcast::<ObserverBox<T>>().expect("slot type checked"));
-        }
-    } else {
-        slot_set(keys_position, SlotValue::Plain(Rc::new(keys)), type_name::<K>());
+    let keys_same = remember_keys(keys);
+    match observed::<T>(keys_same) {
+        Ok(observed) => observed,
+        Err(position) => observe_new(position, calc()),
     }
-    drop(existing);
-    let observer = Rc::new(ObserverBox { state: Cell::new(ObserverState::New), value: calc() });
-    slot_set(value_position, SlotValue::Observer(observer.clone()), type_name::<T>());
+}
+
+/// Reserves the next slot: the observer it holds, if `reuse` and it holds a `T`, or its position.
+fn observed<T: RememberObserver>(reuse: bool) -> Result<Observed<T>, SlotPosition> {
+    let (position, existing) = slot_next(TypeId::of::<ObserverBox<T>>());
+    if reuse && let Some(existing) = existing {
+        return Ok(Observed(existing.downcast::<ObserverBox<T>>().expect("slot type checked")));
+    }
+    Err(position)
+}
+
+/// Stores a new observer in the slot [`observed`] reserved.
+fn observe_new<T: RememberObserver>(position: SlotPosition, value: T) -> Observed<T> {
+    let observer = Rc::new(ObserverBox { state: Cell::new(ObserverState::New), value });
+    slot_set(position, SlotValue::Observer(observer.clone()), type_name::<T>());
     Observed(observer)
 }
 

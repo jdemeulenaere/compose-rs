@@ -3,7 +3,11 @@
 //! `ByteBuffer`, each operation a tag byte and its operands.
 //!
 //! Paths and images are resources: defined once (a `DefinePath` or `DefineImage` before their
-//! first use) and dropped when the last frame using them is gone, so a frame names them by id.
+//! first use) and dropped when the last frame using them is gone, so a frame names them by id
+//! (drawn with `DRAW_PATH`, clipped to with `CLIP_PATH`). A gradient isn't a resource: a paint
+//! with a shader carries its whole definition (D210), as a shader's index is the list's (D175)
+//! and changes when a retained recording is spliced at another place, while a group's cached
+//! bytes must not.
 //! Their definitions wait until the Kotlin side takes them with the frame it draws, so a frame
 //! drawn twice or skipped loses none; one dropped before it was taken is cancelled.
 //!
@@ -17,7 +21,7 @@ use std::sync::{Arc, Weak};
 
 use compose_ui::{
     Color, DisplayList, DrawGroup, DrawOp, ImageBitmap, Offset, Outline, Paint, PaintStyle, Path,
-    PathCommand, PathFillType, Rect, StrokeCap,
+    PathCommand, PathFillType, Rect, Shader, StrokeCap, TileMode,
 };
 
 /// The operations' tags, as `Replayer.kt` reads them.
@@ -48,6 +52,8 @@ pub mod tag {
     /// offscreen (u8; 0 for one drawing, faded instead), then its bounds (left, top, right,
     /// bottom): `LAYER_ENTRY_BYTES` each.
     pub const LAYERS: u8 = 16;
+    /// Clips what follows to a path (u32 id) moved by an offset (x, y).
+    pub const CLIP_PATH: u8 = 17;
     pub const DEFINE_PATH: u8 = 20;
     pub const DROP_PATH: u8 = 21;
     pub const DEFINE_IMAGE: u8 = 22;
@@ -61,6 +67,14 @@ mod command {
     pub const QUAD_TO: u8 = 2;
     pub const CUBIC_TO: u8 = 3;
     pub const CLOSE: u8 = 4;
+}
+
+/// A paint's shader kind, as `Replayer.kt` reads it.
+pub mod shader {
+    pub const NONE: u8 = 0;
+    pub const LINEAR: u8 = 1;
+    pub const RADIAL: u8 = 2;
+    pub const SWEEP: u8 = 3;
 }
 
 /// Little-endian writes into a byte buffer.
@@ -97,9 +111,22 @@ impl Writer {
     fn color(&mut self, color: Color) {
         self.u32(color.argb());
     }
-    /// Color, style (0 fill, 1 stroke), stroke width, cap (0 butt, 1 round, 2 square).
-    fn paint(&mut self, paint: &Paint) {
-        self.color(paint.color);
+    /// Color, style (0 fill, 1 stroke), stroke width, cap (0 butt, 1 round, 2 square), then
+    /// its shader (from `shaders`): see [`Writer::shader`]. Faded by `alpha` (folded layers'):
+    /// its color's alpha, or its shader's. A gradient that is a solid color (see [`shading`])
+    /// is that color at the shader's alpha, with no shader.
+    fn paint(&mut self, paint: &Paint, shaders: &[Shader], alpha: f32) {
+        let shading = paint
+            .shader
+            .and_then(|index| shaders.get(index.0 as usize))
+            .map_or(Shading::Color, shading);
+        let color = match shading {
+            Shading::Solid(color, opacity) => {
+                color.with_alpha(color.alpha() as f32 / 255.0 * opacity.clamp(0.0, 1.0))
+            }
+            Shading::Color | Shading::Gradient(_) => paint.color,
+        };
+        self.color(faded(color, alpha));
         match paint.style {
             PaintStyle::Fill => {
                 self.u8(0);
@@ -115,6 +142,64 @@ impl Writer {
             StrokeCap::Round => 1,
             StrokeCap::Square => 2,
         });
+        match shading {
+            Shading::Gradient(shader) => {
+                self.shader(shader, shader.alpha() * alpha.clamp(0.0, 1.0));
+            }
+            Shading::Color | Shading::Solid(..) => self.u8(shader::NONE),
+        }
+    }
+    /// A shader's definition, then its alpha: its kind (a [`shader`] constant), tile mode (0
+    /// clamp, 1 repeated, 2 mirror, 3 decal), geometry (linear: from x, y, to x, y; radial:
+    /// center x, y, radius; sweep: center x, y), color count (u32, 2 at least: one color is
+    /// written twice), colors (ARGB), stop count (u32: 0 for evenly spread colors, else the
+    /// color count), stops, then the alpha the paint has (f32). The definition (kind to stops)
+    /// is what `Replayer.kt` keeps its `Shader` objects by.
+    fn shader(&mut self, shader: &Shader, alpha: f32) {
+        let gradient = shader.gradient();
+        let tile_mode = match gradient.tile_mode {
+            TileMode::Clamp => 0,
+            TileMode::Repeated => 1,
+            TileMode::Mirror => 2,
+            TileMode::Decal => 3,
+        };
+        match shader {
+            Shader::LinearGradient { from, to, .. } => {
+                self.u8(shader::LINEAR);
+                self.u8(tile_mode);
+                self.offset(*from);
+                self.offset(*to);
+            }
+            Shader::RadialGradient { center, radius, .. } => {
+                self.u8(shader::RADIAL);
+                self.u8(tile_mode);
+                self.offset(*center);
+                self.f32(*radius);
+            }
+            Shader::SweepGradient { center, .. } => {
+                self.u8(shader::SWEEP);
+                self.u8(tile_mode);
+                self.offset(*center);
+            }
+        }
+        let colors = &gradient.colors;
+        // A gradient needs two colors: one is a solid color, as compose-skia draws it.
+        let count = colors.len().max(2);
+        self.u32(count as u32);
+        for index in 0..count {
+            self.color(colors[index.min(colors.len() - 1)]);
+        }
+        // Stops not matching the colors are left out (evenly spread), as compose-skia does.
+        match gradient.stops.as_deref().filter(|stops| stops.len() == count) {
+            Some(stops) => {
+                self.u32(count as u32);
+                for stop in stops {
+                    self.f32(*stop);
+                }
+            }
+            None => self.u32(0),
+        }
+        self.f32(alpha.clamp(0.0, 1.0));
     }
     /// Kind (0 rectangle, 1 rounded), bounds, radii.
     fn outline(&mut self, outline: &Outline) {
@@ -131,6 +216,85 @@ impl Writer {
             }
         }
     }
+}
+
+/// What paints a paint with a shader on Android.
+enum Shading<'a> {
+    /// The paint's color (no shader, or one Skia doesn't make: the gradient's average, D175).
+    Color,
+    /// The gradient.
+    Gradient(&'a Shader),
+    /// A solid color at an alpha (the shader's): a degenerate gradient.
+    Solid(Color, f32),
+}
+
+/// A radius Skia takes for none (`SkGradientShader`'s `kDegenerateThreshold`).
+const DEGENERATE_RADIUS: f32 = 1.0 / (1 << 15) as f32;
+
+/// How `shader` paints, as compose-skia's Skia draws it: no colors, a position not finite or a
+/// negative radius make no shader (the paint's color paints); a radius of (nearly) 0, which
+/// Android's `RadialGradient` refuses, is Skia's degenerate gradient: its last color when
+/// clamped, its average when repeated or mirrored, nothing with decal.
+fn shading(shader: &Shader) -> Shading<'_> {
+    let finite = |offset: &Offset| offset.x.is_finite() && offset.y.is_finite();
+    let gradient = shader.gradient();
+    if gradient.colors.is_empty() {
+        return Shading::Color;
+    }
+    match shader {
+        Shader::LinearGradient { from, to, .. } if !finite(from) || !finite(to) => Shading::Color,
+        Shader::RadialGradient { center, radius, .. }
+            if !finite(center) || !radius.is_finite() || *radius < 0.0 =>
+        {
+            Shading::Color
+        }
+        Shader::RadialGradient { radius, .. } if *radius <= DEGENERATE_RADIUS => {
+            let color = match gradient.tile_mode {
+                TileMode::Clamp => *gradient.colors.last().expect("colors"),
+                TileMode::Repeated | TileMode::Mirror => average_color(gradient),
+                TileMode::Decal => Color::TRANSPARENT,
+            };
+            Shading::Solid(color, shader.alpha())
+        }
+        Shader::SweepGradient { center, .. } if !finite(center) => Shading::Color,
+        _ => Shading::Gradient(shader),
+    }
+}
+
+/// A gradient's mean color over 0 to 1 (unpremultiplied channels, each stretch between two
+/// stops its colors' mean, the ends their color), as Skia's `average_gradient_color`.
+fn average_color(gradient: &compose_ui::Gradient) -> Color {
+    let colors: Vec<[f32; 4]> = gradient
+        .colors
+        .iter()
+        .map(|color| [color.alpha(), color.red(), color.green(), color.blue()].map(f32::from))
+        .collect();
+    let colors = if colors.len() == 1 { vec![colors[0]; 2] } else { colors };
+    let count = colors.len();
+    let stops: Vec<f32> = match gradient.stops.as_deref().filter(|stops| stops.len() == count) {
+        Some(stops) => stops.to_vec(),
+        None => (0..count).map(|index| index as f32 / (count - 1) as f32).collect(),
+    };
+    let mut sum = [0.0f32; 4];
+    let mut add = |color: [f32; 4], weight: f32| {
+        for (total, channel) in sum.iter_mut().zip(color) {
+            *total += channel * weight;
+        }
+    };
+    let first = stops[0].clamp(0.0, 1.0);
+    add(colors[0], first);
+    let mut previous = first;
+    for index in 1..count {
+        let stop = stops[index].clamp(previous, 1.0);
+        let middle = std::array::from_fn(|channel| {
+            (colors[index - 1][channel] + colors[index][channel]) / 2.0
+        });
+        add(middle, stop - previous);
+        previous = stop;
+    }
+    add(colors[count - 1], 1.0 - previous);
+    let [alpha, red, green, blue] = sum.map(|value| value.round().clamp(0.0, 255.0) as u32);
+    Color::from_argb(alpha << 24 | red << 16 | green << 8 | blue)
 }
 
 /// A resource change the Kotlin side hasn't taken yet.
@@ -277,6 +441,47 @@ impl Resources {
     }
 }
 
+/// The operand bytes of the operation whose tag is at `at` (not a `GROUP`, `LAYERS` or resource
+/// change), as `Replayer.kt` reads them: for tests and tools reading a frame back.
+pub fn operand_bytes(bytes: &[u8], at: usize) -> usize {
+    // The paint is the last operand, after `fixed` bytes.
+    let painted = |fixed: usize| fixed + paint_bytes(bytes, at + 1 + fixed);
+    match bytes[at] {
+        tag::SAVE | tag::RESTORE => 0,
+        tag::TRANSLATE => 8,
+        tag::CLIP_RECT => 16,
+        tag::CLIP_ROUND_RECT => 32,
+        tag::CLIP_PATH => 4 + 8,
+        tag::DRAW_RECT | tag::DRAW_LINE => painted(16),
+        tag::DRAW_ROUND_RECT => painted(32),
+        tag::DRAW_PARAGRAPH => 12,
+        tag::SAVE_LAYER_ALPHA => 4,
+        tag::TRANSFORM => 28,
+        tag::DRAW_IMAGE => 4 + 32 + 4,
+        tag::DRAW_SHADOW => 1 + 32 + 4 + 12 + 4 + 8,
+        tag::DRAW_ARC => painted(16 + 8 + 1),
+        tag::DRAW_PATH => painted(4 + 16),
+        other => panic!("not a drawing operation's tag: {other}"),
+    }
+}
+
+/// The bytes of the paint at `at` ([`Writer::paint`]).
+fn paint_bytes(bytes: &[u8], at: usize) -> usize {
+    let count_at = |at: usize| u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap()) as usize;
+    let kind_at = at + 4 + 1 + 4 + 1;
+    let geometry = match bytes[kind_at] {
+        shader::NONE => return kind_at + 1 - at,
+        shader::LINEAR => 16,
+        shader::RADIAL => 12,
+        shader::SWEEP => 8,
+        other => panic!("not a shader kind: {other}"),
+    };
+    let colors_at = kind_at + 2 + geometry;
+    let stops_at = colors_at + 4 + 4 * count_at(colors_at);
+    let alpha_at = stops_at + 4 + 4 * count_at(stops_at);
+    alpha_at + 4 - at
+}
+
 fn write_path(writer: &mut Writer, id: u32, path: &Path) {
     writer.u8(tag::DEFINE_PATH);
     writer.u32(id);
@@ -312,8 +517,9 @@ fn write_path(writer: &mut Writer, id: u32, path: &Path) {
 }
 
 /// Whether the layer opening at `start` (a `SaveLayerAlpha`) holds one drawing with a paint,
-/// among saves, clips and moves: its alpha can go into that paint, without an offscreen layer
-/// (a GPU pass each frame on Android). Returns the index of its closing `Restore` if so.
+/// among saves, clips and moves: its alpha can go into that paint (its color's, or its
+/// gradient's: [`Writer::paint`]), without an offscreen layer (a GPU pass each frame on
+/// Android). Returns the index of its closing `Restore` if so.
 fn foldable_layer(ops: &[DrawOp], start: usize) -> Option<usize> {
     let mut depth = 0usize;
     let mut drawings = 0;
@@ -346,14 +552,14 @@ fn foldable_layer(ops: &[DrawOp], start: usize) -> Option<usize> {
     None
 }
 
-/// `paint` with its color's alpha multiplied by `alpha`.
-fn faded(paint: &Paint, alpha: f32) -> Paint {
+/// `color` with its alpha multiplied by `alpha`.
+fn faded(color: Color, alpha: f32) -> Color {
     if alpha >= 1.0 {
-        return *paint;
+        return color;
     }
-    let argb = paint.color.argb();
+    let argb = color.argb();
     let faded = ((argb >> 24) as f32 * alpha.clamp(0.0, 1.0)).round() as u32;
-    Paint { color: Color::from_argb((faded << 24) | (argb & 0x00FF_FFFF)), ..*paint }
+    Color::from_argb((faded << 24) | (argb & 0x00FF_FFFF))
 }
 
 /// Each group's record (its `GROUP` header and content) as last written, by key: a group whose
@@ -428,6 +634,7 @@ pub fn write_display_list(
     groups.sort_by_key(|group| (group.layer_start, std::cmp::Reverse(group.layer_end)));
     let mut serializer = Serializer {
         ops: &list.ops,
+        shaders: &list.shaders,
         groups: groups.into_iter().peekable(),
         folds: Vec::new(),
         resources,
@@ -489,6 +696,8 @@ fn overlapping(list: &DisplayList, group: &DrawGroup) -> bool {
 /// One write of a display list.
 struct Serializer<'a> {
     ops: &'a [DrawOp],
+    /// The shaders the paints name (written whole into each paint, D210).
+    shaders: &'a [Shader],
     /// The groups not written yet, by where they start.
     groups: std::iter::Peekable<std::vec::IntoIter<&'a DrawGroup>>,
     /// Layers folded into their one drawing's paint: where each ends, and its alpha.
@@ -524,7 +733,7 @@ impl Serializer<'_> {
                 continue;
             }
             let alpha: f32 = self.folds.iter().map(|(_, alpha)| alpha).product();
-            write_op(&self.ops[index], alpha, self.resources, self.out);
+            write_op(&self.ops[index], alpha, self.shaders, self.resources, self.out);
             index += 1;
         }
     }
@@ -571,9 +780,15 @@ impl Serializer<'_> {
     }
 }
 
-/// Writes `op`, its paint faded by `alpha` (the folded layers around it).
-fn write_op(op: &DrawOp, alpha: f32, resources: &mut Resources, out: &mut Writer) {
-    let faded_paint = |paint: &Paint| faded(paint, alpha);
+/// Writes `op`, its paint faded by `alpha` (the folded layers around it), its shader from
+/// `shaders`.
+fn write_op(
+    op: &DrawOp,
+    alpha: f32,
+    shaders: &[Shader],
+    resources: &mut Resources,
+    out: &mut Writer,
+) {
     match op {
         DrawOp::Save => out.u8(tag::SAVE),
         DrawOp::Restore => out.u8(tag::RESTORE),
@@ -593,19 +808,19 @@ fn write_op(op: &DrawOp, alpha: f32, resources: &mut Resources, out: &mut Writer
         DrawOp::DrawRect(rect, paint) => {
             out.u8(tag::DRAW_RECT);
             out.rect(rect);
-            out.paint(&faded_paint(paint));
+            out.paint(paint, shaders, alpha);
         }
         DrawOp::DrawRoundRect(rect, radii, paint) => {
             out.u8(tag::DRAW_ROUND_RECT);
             out.rect(rect);
             out.radii(radii);
-            out.paint(&faded_paint(paint));
+            out.paint(paint, shaders, alpha);
         }
         DrawOp::DrawLine(from, to, paint) => {
             out.u8(tag::DRAW_LINE);
             out.offset(*from);
             out.offset(*to);
-            out.paint(&faded_paint(paint));
+            out.paint(paint, shaders, alpha);
         }
         DrawOp::DrawParagraph(handle, offset) => {
             out.u8(tag::DRAW_PARAGRAPH);
@@ -649,7 +864,7 @@ fn write_op(op: &DrawOp, alpha: f32, resources: &mut Resources, out: &mut Writer
             out.f32(*start_angle);
             out.f32(*sweep_angle);
             out.u8(u8::from(*use_center));
-            out.paint(&faded_paint(paint));
+            out.paint(paint, shaders, alpha);
         }
         DrawOp::DrawPath { path, offset, scale, paint } => {
             let id = resources.path_id(path);
@@ -658,18 +873,21 @@ fn write_op(op: &DrawOp, alpha: f32, resources: &mut Resources, out: &mut Writer
             out.offset(*offset);
             out.f32(scale.0);
             out.f32(scale.1);
-            out.paint(&faded_paint(paint));
+            out.paint(paint, shaders, alpha);
         }
-        // TODO(android): clip to the path (a `CLIP_PATH` tag replayed with `Canvas.clipPath`);
-        // skipped for now, so what follows isn't clipped. (Gradients: `Paint::shader` isn't
-        // written either; `paint.color` is the gradient's average, D175.)
-        DrawOp::ClipPath { .. } => {}
+        DrawOp::ClipPath { path, offset } => {
+            let id = resources.path_id(path);
+            out.u8(tag::CLIP_PATH);
+            out.u32(id);
+            out.offset(*offset);
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use compose_ui::Gradient;
 
     fn read_u32(bytes: &[u8], at: usize) -> u32 {
         u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap())
@@ -681,8 +899,8 @@ mod tests {
         list.push(DrawOp::DrawRect(Rect::new(1.0, 2.0, 3.0, 4.0), Paint::fill(Color::BLACK)));
         let (mut resources, mut out) = (Resources::default(), Writer::default());
         write_display_list(&list, &mut resources, &mut GroupCache::default(), &mut out);
-        // Tag, 4 floats, color, style, width, cap.
-        assert_eq!(out.bytes.len(), 1 + 16 + 4 + 1 + 4 + 1);
+        // Tag, 4 floats, color, style, width, cap, no shader.
+        assert_eq!(out.bytes.len(), 1 + 16 + 4 + 1 + 4 + 1 + 1);
         assert_eq!(out.bytes[0], tag::DRAW_RECT);
         assert_eq!(f32::from_le_bytes(out.bytes[13..17].try_into().unwrap()), 4.0);
         assert_eq!(read_u32(&out.bytes, 17), 0xFF00_0000);
@@ -702,7 +920,7 @@ mod tests {
         assert_eq!(out.bytes[0], tag::SAVE);
         // Save, clip (17 bytes), then the rect: its color at 1 + 17 + 1 + 16.
         assert_eq!(read_u32(&out.bytes, 35), 0x8000_0000);
-        let last = out.bytes.len() - 27;
+        let last = out.bytes.len() - 28;
         assert_eq!(out.bytes[last], tag::DRAW_RECT);
         assert_eq!(read_u32(&out.bytes, last + 17), 0xFF00_0000);
         // Two drawings: a layer, as their overlap must fade together.
@@ -748,7 +966,7 @@ mod tests {
         });
         let (mut resources, mut out) = (Resources::default(), Writer::default());
         write_display_list(&list, &mut resources, &mut GroupCache::default(), &mut out);
-        let rect_bytes = 1 + 16 + 4 + 1 + 4 + 1;
+        let rect_bytes = 1 + 16 + 4 + 1 + 4 + 1 + 1;
         let header = 1 + 8 + 8 + 4;
         let bytes = &out.bytes;
         assert_eq!(bytes.len(), 2 * header + 3 * rect_bytes);
@@ -838,5 +1056,177 @@ mod tests {
         let mut pending = Writer::default();
         resources.write_pending(&mut pending);
         assert_eq!(pending.bytes[0], tag::DROP_PATH);
+    }
+
+    fn read_f32(bytes: &[u8], at: usize) -> f32 {
+        f32::from_le_bytes(bytes[at..at + 4].try_into().unwrap())
+    }
+
+    /// The bytes before a paint's shader in a `DRAW_RECT`: tag, rect, color, style, width, cap.
+    const RECT_BEFORE_SHADER: usize = 1 + 16 + 4 + 1 + 4 + 1;
+
+    fn gradient(colors: &[Color], stops: Option<&[f32]>, tile_mode: TileMode) -> Gradient {
+        Gradient { colors: colors.into(), stops: stops.map(Into::into), tile_mode }
+    }
+
+    fn gradient_rect(list: &mut DisplayList, shader: Shader) {
+        let mut paint = Paint::fill(Color::BLACK);
+        paint.shader = Some(list.push_shader(shader));
+        list.push(DrawOp::DrawRect(Rect::new(0.0, 0.0, 10.0, 10.0), paint));
+    }
+
+    #[test]
+    fn a_gradient_paint_carries_its_definition_and_alpha() {
+        let mut list = DisplayList::default();
+        // Another shader first: the paint's index is 1, its bytes its content.
+        list.push_shader(Shader::SweepGradient {
+            gradient: gradient(&[Color::RED, Color::BLUE], None, TileMode::Clamp),
+            center: Offset::ZERO,
+            alpha: 1.0,
+        });
+        gradient_rect(
+            &mut list,
+            Shader::LinearGradient {
+                gradient: gradient(
+                    &[Color::RED, Color::GREEN, Color::BLUE],
+                    Some(&[0.0, 0.25, 1.0]),
+                    TileMode::Repeated,
+                ),
+                from: Offset::new(1.0, 2.0),
+                to: Offset::new(3.0, 4.0),
+                alpha: 0.5,
+            },
+        );
+        let (mut resources, mut out) = (Resources::default(), Writer::default());
+        write_display_list(&list, &mut resources, &mut GroupCache::default(), &mut out);
+        let bytes = &out.bytes;
+        let at = RECT_BEFORE_SHADER;
+        assert_eq!((bytes[at], bytes[at + 1]), (shader::LINEAR, 1), "kind, tile mode");
+        let floats: Vec<f32> = (0..4).map(|index| read_f32(bytes, at + 2 + index * 4)).collect();
+        assert_eq!(floats, [1.0, 2.0, 3.0, 4.0]);
+        let at = at + 2 + 16;
+        assert_eq!(read_u32(bytes, at), 3);
+        let colors: Vec<u32> = (0..3).map(|index| read_u32(bytes, at + 4 + index * 4)).collect();
+        assert_eq!(colors, [Color::RED.argb(), Color::GREEN.argb(), Color::BLUE.argb()]);
+        let at = at + 4 + 12;
+        assert_eq!(read_u32(bytes, at), 3);
+        let stops: Vec<f32> = (0..3).map(|index| read_f32(bytes, at + 4 + index * 4)).collect();
+        assert_eq!(stops, [0.0, 0.25, 1.0]);
+        assert_eq!(read_f32(bytes, at + 16), 0.5, "the shader's alpha");
+        assert_eq!(bytes.len(), at + 20);
+    }
+
+    /// One color is a solid color (written twice, its stop left out).
+    #[test]
+    fn one_color_is_written_twice() {
+        let mut list = DisplayList::default();
+        gradient_rect(
+            &mut list,
+            Shader::RadialGradient {
+                gradient: gradient(&[Color::RED], Some(&[0.5]), TileMode::Decal),
+                center: Offset::new(5.0, 5.0),
+                radius: 2.0,
+                alpha: 1.0,
+            },
+        );
+        let (mut resources, mut out) = (Resources::default(), Writer::default());
+        write_display_list(&list, &mut resources, &mut GroupCache::default(), &mut out);
+        let at = RECT_BEFORE_SHADER;
+        assert_eq!((out.bytes[at], out.bytes[at + 1]), (shader::RADIAL, 3));
+        assert_eq!(read_f32(&out.bytes, at + 2 + 8), 2.0, "the radius");
+        let at = at + 2 + 12;
+        assert_eq!(read_u32(&out.bytes, at), 2);
+        assert_eq!(read_u32(&out.bytes, at + 4), read_u32(&out.bytes, at + 8));
+        assert_eq!(read_u32(&out.bytes, at + 12), 0, "no stops");
+    }
+
+    /// The color and shader kind a radial gradient of `radius` and `tile_mode` is written with,
+    /// at alpha 0.5: red, then green from 0.5 on, then blue at 0.75.
+    fn radial_written(radius: f32, tile_mode: TileMode) -> (Color, u8) {
+        let mut list = DisplayList::default();
+        let colors = [Color::RED, Color::GREEN, Color::BLUE];
+        let shader = Shader::RadialGradient {
+            gradient: gradient(&colors, Some(&[0.5, 0.75, 0.75]), tile_mode),
+            center: Offset::new(5.0, 5.0),
+            radius,
+            alpha: 0.5,
+        };
+        let mut paint = Paint::fill(Color::from_argb(0x8011_2233));
+        paint.shader = Some(list.push_shader(shader));
+        list.push(DrawOp::DrawRect(Rect::new(0.0, 0.0, 10.0, 10.0), paint));
+        let (mut resources, mut out) = (Resources::default(), Writer::default());
+        write_display_list(&list, &mut resources, &mut GroupCache::default(), &mut out);
+        (Color::from_argb(read_u32(&out.bytes, 17)), out.bytes[RECT_BEFORE_SHADER])
+    }
+
+    /// A radial gradient with no radius, which Android's `RadialGradient` refuses, is Skia's
+    /// degenerate gradient (a solid color at the shader's alpha); a negative radius is no shader
+    /// in Skia (the paint's color paints).
+    #[test]
+    fn a_radial_gradient_without_a_radius_is_skias_degenerate_gradient() {
+        assert_eq!(radial_written(0.0, TileMode::Clamp), (Color::BLUE.with_alpha(0.5), 0));
+        // Red over half, red to green over a quarter, green to blue at once, blue past it:
+        // (0.5 + 0.125) of red, 0.125 of green, 0.25 of blue.
+        let average = Color::from_argb(0x809F_2040);
+        assert_eq!(radial_written(0.0, TileMode::Repeated), (average, 0));
+        assert_eq!(radial_written(1e-6, TileMode::Mirror), (average, 0));
+        assert_eq!(radial_written(0.0, TileMode::Decal), (Color::TRANSPARENT, 0));
+        assert_eq!(radial_written(-1.0, TileMode::Clamp), (Color::from_argb(0x8011_2233), 0));
+        assert_eq!(radial_written(1.0, TileMode::Clamp).1, shader::RADIAL);
+    }
+
+    /// A layer folded into a gradient's paint multiplies the shader's alpha (what Android's
+    /// paint alpha is with a shader), not only the color's.
+    #[test]
+    fn a_folded_layer_fades_a_shaders_alpha() {
+        let mut list = DisplayList::default();
+        list.push(DrawOp::SaveLayerAlpha(0.5));
+        gradient_rect(
+            &mut list,
+            Shader::SweepGradient {
+                gradient: gradient(&[Color::RED, Color::BLUE], None, TileMode::Clamp),
+                center: Offset::new(5.0, 5.0),
+                alpha: 0.8,
+            },
+        );
+        list.push(DrawOp::Restore);
+        let (mut resources, mut out) = (Resources::default(), Writer::default());
+        write_display_list(&list, &mut resources, &mut GroupCache::default(), &mut out);
+        assert_eq!(out.bytes[0], tag::SAVE, "folded");
+        // Save, then the rect; its sweep: kind, tile, center, 2 colors, no stops, alpha.
+        let at = 1 + RECT_BEFORE_SHADER;
+        assert_eq!(out.bytes[at], shader::SWEEP);
+        let alpha_at = at + 2 + 8 + 4 + 8 + 4;
+        assert!((read_f32(&out.bytes, alpha_at) - 0.4).abs() < 1e-6);
+        assert_eq!(out.bytes[alpha_at + 4], tag::RESTORE);
+    }
+
+    /// A clip path in a group's record names its path, defined beside the frame, and its offset.
+    #[test]
+    fn a_clip_path_names_its_path_and_offset() {
+        let path = Arc::new(Path::from_svg("M0,0 L10,0 L10,10 Z").unwrap());
+        let mut list = DisplayList::default();
+        list.push(DrawOp::Save);
+        list.push(DrawOp::ClipPath { path: path.clone(), offset: Offset::new(3.0, 4.0) });
+        list.push(DrawOp::DrawRect(Rect::new(0.0, 0.0, 4.0, 4.0), Paint::fill(Color::BLACK)));
+        list.push(DrawOp::Restore);
+        list.groups.push(compose_ui::DrawGroup {
+            key: 1,
+            start: 0,
+            end: 4,
+            layer_start: 0,
+            layer_end: 4,
+            ..Default::default()
+        });
+        let (mut resources, mut out) = (Resources::default(), Writer::default());
+        write_display_list(&list, &mut resources, &mut GroupCache::default(), &mut out);
+        let bytes = &out.bytes;
+        assert_eq!((bytes[0], bytes[21], bytes[22]), (tag::GROUP, tag::SAVE, tag::CLIP_PATH));
+        let id = read_u32(bytes, 23);
+        assert_eq!((read_f32(bytes, 27), read_f32(bytes, 31)), (3.0, 4.0));
+        assert_eq!(bytes[35], tag::DRAW_RECT);
+        let mut pending = Writer::default();
+        resources.write_pending(&mut pending);
+        assert_eq!((pending.bytes[0], read_u32(&pending.bytes, 1)), (tag::DEFINE_PATH, id));
     }
 }
