@@ -19,7 +19,7 @@ use jni::objects::{
 use jni::signature::{Primitive, ReturnType};
 use jni::sys::{jboolean, jfloat, jint, jlong, jobject};
 
-use crate::serialize::{Resources, Writer, write_display_list};
+use crate::serialize::{GroupCache, Resources, Writer, write_display_list};
 use crate::text::{AndroidTextMeasurer, TextBackend};
 
 static VM: OnceLock<JavaVM> = OnceLock::new();
@@ -258,6 +258,8 @@ struct Host {
     resources: Resources,
     /// The last frame's display list.
     list: Writer,
+    /// The groups' records the last frame wrote, copied while their version stays.
+    groups: GroupCache,
     /// What `take_drawing` last gave Kotlin: resource changes, then the display list.
     drawing: Writer,
     /// What `semantics` last gave Kotlin: the semantics tree.
@@ -372,6 +374,7 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_create<'local>(
         ui,
         resources: Resources::default(),
         list: Writer::default(),
+        groups: GroupCache::default(),
         drawing: Writer { bytes: Vec::with_capacity(4096) },
         semantics: Writer::default(),
         first: true,
@@ -451,8 +454,8 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_frame(
     if stats.drew || host.first {
         let _serialize = compose_ui::trace::section(c"compose-rs: serialize");
         host.first = false;
-        let (list, resources) = (&mut host.list, &mut host.resources);
-        host.ui.with_tree(|tree| write_display_list(tree.display_list(), resources, list));
+        let (list, resources, groups) = (&mut host.list, &mut host.resources, &mut host.groups);
+        host.ui.with_tree(|tree| write_display_list(tree.display_list(), resources, groups, list));
         host.resources.collect();
         result |= flags::DREW;
     }
