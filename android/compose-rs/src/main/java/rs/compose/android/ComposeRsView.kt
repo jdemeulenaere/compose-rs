@@ -57,19 +57,32 @@ class ComposeRsView(context: Context, private val app: String) : View(context) {
     private val inputMethods = context.getSystemService(InputMethodManager::class.java)
 
     private val frameCallback = Choreographer.FrameCallback { time ->
-        frameTimeNanos = time
+        noteFrameTime(time)
         frame()
     }
 
-    /** The last Choreographer frame's start (`System.nanoTime`): the next is a refresh later. */
+    /**
+     * The last Choreographer callback's frame time and when it started (`System.nanoTime`):
+     * where the next frame starts comes from both ([ComposeRsNative.nextFrameNanos]), as the
+     * frame time may lag its vsync by an interval (buffer stuffing recovery: D340).
+     */
     private var frameTimeNanos = 0L
+    private var frameStartedNanos = 0L
     private var prefetchScheduled = false
     private val prefetchRunnable = Runnable { prefetch() }
 
+    /** Idle times in a row that had no time before the next frame (see [prefetch]). */
+    private var idleTimesWithoutTime = 0
+
     /** Prefetch work left: tried again after the next frame. */
     private val prefetchFrameCallback = Choreographer.FrameCallback { time ->
-        frameTimeNanos = time
+        noteFrameTime(time)
         post(prefetchRunnable)
+    }
+
+    private fun noteFrameTime(time: Long) {
+        frameTimeNanos = time
+        frameStartedNanos = System.nanoTime()
     }
     private val accessibility = Accessibility(this)
     private val accessibilityManager = context.getSystemService(AccessibilityManager::class.java)
@@ -170,6 +183,7 @@ class ComposeRsView(context: Context, private val app: String) : View(context) {
         Choreographer.getInstance().removeFrameCallback(prefetchFrameCallback)
         removeCallbacks(prefetchRunnable)
         prefetchScheduled = false
+        idleTimesWithoutTime = 0
         ComposeRsNative.destroy(host)
         host = 0L
         drawing = null
@@ -386,9 +400,26 @@ class ComposeRsView(context: Context, private val app: String) : View(context) {
             prefetchScheduled = false
             return
         }
-        // Until the next frame: a refresh interval after this one started.
+        // Until the next frame: the vsync after the last frame's, found from its frame time and
+        // start, as a frame time shifted by buffer stuffing recovery would leave no time at all
+        // (D340). The shifted time itself is the animations', not changed here.
         val refreshRate = display?.refreshRate?.coerceAtLeast(30f) ?: 60f
-        val nextFrameNanos = frameTimeNanos + (1_000_000_000 / refreshRate).toLong()
+        val interval = (1_000_000_000 / refreshRate).toLong()
+        val nextFrameNanos = ComposeRsNative.nextFrameNanos(frameTimeNanos, interval, frameStartedNanos)
+        if (nextFrameNanos - System.nanoTime() <= 0) {
+            // No time (the frame ran past the next vsync, or came from a layout, not a
+            // callback): tried after the next frame, which gives a fresh time; a few times at
+            // most, then the next frame with prefetch work schedules it again, rather than
+            // asking for every vsync for good.
+            if (++idleTimesWithoutTime > MOST_IDLE_TIMES_WITHOUT_TIME) {
+                idleTimesWithoutTime = 0
+                prefetchScheduled = false
+            } else {
+                Choreographer.getInstance().postFrameCallback(prefetchFrameCallback)
+            }
+            return
+        }
+        idleTimesWithoutTime = 0
         // Recording stops a margin before it, as Rust's prefetch steps do: its estimate is an
         // average, and a recording running past the vsync delays the frame (D341).
         val recordDeadline = nextFrameNanos - RECORD_MARGIN_NANOS
@@ -704,6 +735,9 @@ class ComposeRsView(context: Context, private val app: String) : View(context) {
 
         /** What recording paragraphs while idle leaves before the next frame, as Rust's prefetch. */
         const val RECORD_MARGIN_NANOS = 500_000L
+
+        /** Idle times in a row without time before [prefetch] waits for a frame (D340). */
+        const val MOST_IDLE_TIMES_WITHOUT_TIME = 3
     }
 }
 

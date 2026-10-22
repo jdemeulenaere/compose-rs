@@ -567,6 +567,20 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_prefetch(
     u8::from(host.ui.prefetch(std::time::Instant::now() + available))
 }
 
+/// `ComposeRsNative.nextFrameNanos(frameTimeNanos, intervalNanos, startedNanos)`: when the next
+/// frame should start, from the last Choreographer callback's frame time and start, on the
+/// vsync's phase (`frame_time.rs`, D340); 0 without a frame time.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_rs_compose_android_ComposeRsNative_nextFrameNanos(
+    _env: JNIEnv,
+    _class: JClass,
+    frame_time_nanos: jlong,
+    interval_nanos: jlong,
+    started_nanos: jlong,
+) -> jlong {
+    crate::frame_time::next_frame_nanos(frame_time_nanos, interval_nanos, started_nanos)
+}
+
 /// `ComposeRsNative.takeDrawing(host)`: what `onDraw` replays: the resources defined or dropped
 /// since it last took them, then the last frame's display list. Returns its length, with
 /// `NEW_DRAWING_BUFFER` set when its memory moved: Kotlin then asks for a new buffer

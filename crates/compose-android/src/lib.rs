@@ -25,6 +25,7 @@ pub mod serialize;
 pub mod text;
 
 mod bridge;
+mod frame_time;
 mod logging;
 mod services;
 

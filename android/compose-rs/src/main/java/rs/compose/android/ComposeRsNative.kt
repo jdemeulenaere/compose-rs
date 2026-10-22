@@ -34,6 +34,14 @@ internal object ComposeRsNative {
     @JvmStatic external fun prefetch(host: Long, availableNanos: Long): Boolean
 
     /**
+     * When the frame after the last Choreographer callback's should start (`System.nanoTime`):
+     * the vsync after the last one at or before [startedNanos], the callback's start, on
+     * [frameTimeNanos]' phase, so a frame time shifted by buffer stuffing recovery still gives
+     * the next vsync (`frame_time.rs`); 0 without a frame time.
+     */
+    @JvmStatic external fun nextFrameNanos(frameTimeNanos: Long, intervalNanos: Long, startedNanos: Long): Long
+
+    /**
      * What `onDraw` replays (resource changes, then the last frame's display list) is ready in
      * [drawingBuffer]: its length, with [NEW_DRAWING_BUFFER] set when that buffer moved.
      */
