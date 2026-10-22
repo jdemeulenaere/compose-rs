@@ -71,7 +71,7 @@ pub mod platform {
     pub use crate::input::Action;
     pub use crate::layout::StackMeasurePolicy;
     pub use crate::layout::emit_layout_node;
-    pub use crate::logging::{StderrLogger, default_max_level, install_stderr_logger};
+    pub use crate::logging::{LogFilter, StderrLogger, default_max_level, install_stderr_logger};
     pub use crate::modifier::shared_custom_modifier;
     pub use crate::nested_scroll::NestedScrollChain;
     pub use crate::pointer_input::{PointerInputDriver, run_soon};
@@ -134,7 +134,8 @@ pub use nested_scroll::{NestedScrollConnection, NestedScrollSource};
 pub use overlay::{PopupPositionProvider, WindowPosition};
 pub use path::{ImageVector, Path, PathCommand, PathError, PathFillType};
 pub use platform_services::{
-    HapticFeedback, HapticFeedbackType, LOCAL_HAPTIC_FEEDBACK, LOCAL_URI_HANDLER, UriHandler,
+    DEFAULT_URI_SCHEMES, HapticFeedback, HapticFeedbackType, LOCAL_HAPTIC_FEEDBACK,
+    LOCAL_URI_HANDLER, PlatformUriHandler, UriHandler, check_uri, uri_for_log,
 };
 pub use pointer_input::{
     AwaitPointerEvent, Axis, DragGestures, PointerInputChange, PointerInputScope, TapGestures,

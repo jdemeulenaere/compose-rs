@@ -3,16 +3,16 @@
 //! tree's default).
 
 use std::cell::RefCell;
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::rc::Rc;
 
 use compose_ui::platform::{MemoryClipboard, UiTree};
-use compose_ui::{ClipboardManager, UriHandler};
+use compose_ui::{ClipboardManager, PlatformUriHandler, uri_for_log};
 
 /// Sets a window's tree's services.
 pub(crate) fn install(tree: &mut UiTree) {
     tree.set_clipboard(Rc::new(SystemClipboard::new()));
-    tree.set_uri_handler(Rc::new(DesktopUriHandler));
+    tree.set_platform_uri_handler(PlatformUriHandler::new(open_with_os));
 }
 
 /// The system clipboard, through `arboard`; a clipboard in memory if the system's can't be
@@ -49,35 +49,24 @@ impl ClipboardManager for SystemClipboard {
     }
 }
 
-/// Opens links with the OS: `open` on macOS, `xdg-open` on Linux and the BSDs, the URL
-/// protocol handler on Windows.
-struct DesktopUriHandler;
-
-impl UriHandler for DesktopUriHandler {
-    fn open_uri(&self, uri: &str) {
-        let Some(mut command) = open_command(uri) else {
-            log::warn!("not opening {uri:?}: not a URI");
-            return;
-        };
-        match command.spawn() {
-            // Reaped on a thread of its own: the opener exits once it handed the link over.
-            Ok(mut child) => {
-                std::thread::spawn(move || child.wait());
-            }
-            Err(error) => log::warn!("opening {uri:?}: {error}"),
+/// Opens a link `PlatformUriHandler` checked (an allowed scheme, no whitespace, quotes or
+/// backslashes) with the OS: `open` on macOS, `xdg-open` on Linux and the BSDs, the URL
+/// protocol handler on Windows. No shell is involved, and the opener's input and output are
+/// closed.
+fn open_with_os(uri: &str) {
+    let mut command = open_command(uri);
+    command.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    match command.spawn() {
+        // Reaped on a thread of its own: the opener exits once it handed the link over.
+        Ok(mut child) => {
+            std::thread::spawn(move || child.wait());
         }
+        Err(error) => log::warn!("opening {}: {error}", uri_for_log(uri)),
     }
 }
 
-/// The command opening `uri`: `None` for what isn't a URI with a scheme (an argument the
-/// opener would take for an option, a bare path).
-fn open_command(uri: &str) -> Option<Command> {
-    let scheme = uri.split_once(':')?.0;
-    let valid_scheme = scheme.starts_with(|c: char| c.is_ascii_alphabetic())
-        && scheme.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'));
-    if !valid_scheme || uri.chars().any(char::is_control) {
-        return None;
-    }
+/// The command opening `uri`, its one argument.
+fn open_command(uri: &str) -> Command {
     let mut command = if cfg!(target_os = "macos") {
         Command::new("open")
     } else if cfg!(windows) {
@@ -88,18 +77,35 @@ fn open_command(uri: &str) -> Option<Command> {
     } else {
         Command::new("xdg-open")
     };
+    // `rundll32` hands its command line's rest to the handler as is: given verbatim, not quoted
+    // as an argument (`check_uri` let no space or quote through).
+    #[cfg(windows)]
+    std::os::windows::process::CommandExt::raw_arg(&mut command, uri);
+    #[cfg(not(windows))]
     command.arg(uri);
-    Some(command)
+    command
 }
 
 #[cfg(test)]
 mod tests {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    use compose_ui::{PlatformUriHandler, UriHandler};
+
     use super::open_command;
 
+    /// The opener's arguments for `uri` through the host's handler: `None` if it's refused.
     fn arguments(uri: &str) -> Option<Vec<String>> {
-        open_command(uri).map(|command| {
-            command.get_args().map(|arg| arg.to_string_lossy().into_owned()).collect()
-        })
+        let opened = Rc::new(RefCell::new(None));
+        let sink = opened.clone();
+        let handler = PlatformUriHandler::new(move |uri| {
+            let command = open_command(uri);
+            let arguments = command.get_args().map(|arg| arg.to_string_lossy().into_owned());
+            *sink.borrow_mut() = Some(arguments.collect());
+        });
+        handler.open_uri(uri);
+        opened.take()
     }
 
     #[test]
@@ -116,5 +122,15 @@ mod tests {
         assert_eq!(arguments("1http://example.com"), None);
         assert_eq!(arguments("https://example.com/\nsecond"), None);
         assert_eq!(arguments(""), None);
+    }
+
+    /// Review: what still reaches the opener.
+    #[test]
+    fn review_dangerous_inputs_are_refused() {
+        // A Windows drive path has a one-letter "scheme": `rundll32 url.dll,FileProtocolHandler`
+        // runs an executable given its path.
+        assert_eq!(arguments("C:\\Windows\\System32\\calc.exe"), None, "drive path");
+        // `open file:///…/X.app` launches an app; `.command` files run in Terminal.
+        assert_eq!(arguments("file:///System/Applications/Calculator.app"), None, "file:");
     }
 }

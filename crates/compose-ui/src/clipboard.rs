@@ -41,5 +41,11 @@ impl ClipboardManager for MemoryClipboard {
 pub static LOCAL_CLIPBOARD_MANAGER: CompositionLocal<Rc<dyn ClipboardManager>> =
     CompositionLocal::new("LocalClipboardManager", || {
         crate::platform_services::of_composing_tree(|tree| tree.clipboard.clone())
-            .unwrap_or_else(|| Rc::new(MemoryClipboard::default()))
+            .unwrap_or_else(|| OUTSIDE_A_TREE.with(Rc::clone))
     });
+
+thread_local! {
+    /// The clipboard outside a tree's composition: one per thread, so what's copied there can
+    /// be pasted there.
+    static OUTSIDE_A_TREE: Rc<dyn ClipboardManager> = Rc::new(MemoryClipboard::default());
+}

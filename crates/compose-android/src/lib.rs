@@ -38,11 +38,20 @@ type App = (&'static str, fn());
 /// The root composables an app's library offers.
 static APPS: OnceLock<Vec<App>> = OnceLock::new();
 
-/// Called by `JNI_OnLoad` (see [`export_apps!`]): keeps the VM and the apps.
+/// Called by `JNI_OnLoad` (see [`export_apps!`]): keeps the VM and the apps, and installs
+/// the logcat logger.
 pub fn on_load(vm: jni::JavaVM, apps: &[App]) -> jni::sys::jint {
+    on_load_with(vm, apps, true)
+}
+
+/// [`on_load`], installing the logcat logger only if `logger` (`export_apps!`'s
+/// `logger = false;` leaves the `log` crate's logger to the app: `android_logger`, say).
+pub fn on_load_with(vm: jni::JavaVM, apps: &[App], logger: bool) -> jni::sys::jint {
     let _ = APPS.set(apps.to_vec());
-    // `log`'s records (compose-rs's warnings, the app's) go to logcat.
-    logging::install();
+    if logger {
+        // `log`'s records (compose-rs's warnings, the app's) go to logcat.
+        logging::install();
+    }
     bridge::set_vm(vm);
     jni::sys::JNI_VERSION_1_6
 }
@@ -60,8 +69,21 @@ fn app(name: &str) -> Option<fn()> {
 ///     "todo" => todo::TodoApp,
 /// }
 /// ```
+///
+/// It installs a logcat logger for the `log` crate before any of the app's code runs; start
+/// with `logger = false;` to install one of the app's own (in its first composable, or a
+/// `JNI_OnLoad` of its own calling [`on_load_with`]).
 #[macro_export]
 macro_rules! export_apps {
+    (logger = $logger:expr; $($name:literal => $content:path),* $(,)?) => {
+        #[unsafe(no_mangle)]
+        pub extern "system" fn JNI_OnLoad(
+            vm: $crate::jni::JavaVM,
+            _reserved: *mut ::std::ffi::c_void,
+        ) -> $crate::jni::sys::jint {
+            $crate::on_load_with(vm, &[$(($name, $content as fn())),*], $logger)
+        }
+    };
     ($($name:literal => $content:path),* $(,)?) => {
         #[unsafe(no_mangle)]
         pub extern "system" fn JNI_OnLoad(

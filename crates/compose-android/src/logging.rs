@@ -1,5 +1,7 @@
 //! The `log` crate's records in logcat (D280): compose-rs's warnings and the app's own
 //! `log::info!`s, tagged with the crate that logged them (`compose_runtime`, the app's).
+//! Installed by `JNI_OnLoad`, before the app's code runs, unless the app opted out
+//! (`export_apps! { logger = false; … }`).
 
 use log::{Level, Log, Metadata, Record};
 
@@ -116,5 +118,21 @@ mod tests {
         assert_eq!(chunks("abcdefghij", 4).collect::<Vec<_>>(), ["abcd", "efgh", "ij"]);
         // "é" is two bytes: never cut in half.
         assert_eq!(chunks("aéé", 2).collect::<Vec<_>>(), ["a", "é", "é"]);
+    }
+
+    /// Review: at the real limit, with two-, three- and four-byte characters straddling it.
+    #[test]
+    fn review_chunks_at_max_entry_reassemble() {
+        for prefix in 0..4 {
+            for ch in ['é', '€', '😀'] {
+                let text: String = "a".repeat(prefix) + &ch.to_string().repeat(3000);
+                let pieces: Vec<&str> = chunks(&text, MAX_ENTRY).collect();
+                assert_eq!(pieces.concat(), text);
+                assert!(pieces.iter().all(|p| p.len() <= MAX_ENTRY && !p.is_empty()));
+                assert!(pieces[0].len() > MAX_ENTRY - 4);
+            }
+        }
+        // A character longer than the limit goes whole, and the loop ends.
+        assert_eq!(chunks("😀😀", 1).collect::<Vec<_>>(), ["😀", "😀"]);
     }
 }

@@ -48,6 +48,7 @@ mod review_round7;
 mod review_round9;
 mod review_rtl;
 mod review_semantics;
+mod review_services;
 mod review_text_draw;
 mod rtl;
 mod scroll;

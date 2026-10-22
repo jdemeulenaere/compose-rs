@@ -2,11 +2,12 @@
 //! the bridge's `JniClipboard`), through the view: `ComposeRsView.openUri` starts an
 //! `ACTION_VIEW` intent, `performHapticFeedbackType` calls `View.performHapticFeedback`. Both run
 //! in the middle of a call into Rust (a click's callback), so the view posts them to the main
-//! looper, as it does host events (D226).
+//! looper, as it does host events (D226). Links are checked first, in Rust
+//! (`PlatformUriHandler`: allowed schemes only, D283).
 
 use std::rc::Rc;
 
-use compose_ui::{HapticFeedback, HapticFeedbackType, UriHandler, platform::UiHost};
+use compose_ui::{HapticFeedback, HapticFeedbackType, PlatformUriHandler, platform::UiHost};
 use jni::JNIEnv;
 use jni::objects::{GlobalRef, JMethodID, JObject, JValue};
 use jni::signature::{Primitive, ReturnType};
@@ -17,10 +18,11 @@ use crate::bridge::{check, vm};
 pub(crate) fn install(env: &mut JNIEnv, view: &JObject, view_ref: &GlobalRef, ui: &UiHost) {
     let open_uri = method(env, view, "openUri", "(Ljava/lang/String;)V");
     let perform = method(env, view, "performHapticFeedbackType", "(I)V");
-    let uri_handler = Rc::new(JniUriHandler { view: view_ref.clone(), method: open_uri });
+    let opener = JniUriOpener { view: view_ref.clone(), method: open_uri };
+    let uri_handler = PlatformUriHandler::new(move |uri| opener.open(uri));
     let haptic_feedback = Rc::new(JniHapticFeedback { view: view_ref.clone(), method: perform });
     ui.with_tree(|tree| {
-        tree.set_uri_handler(uri_handler);
+        tree.set_platform_uri_handler(uri_handler);
         tree.set_haptic_feedback(haptic_feedback);
     });
 }
@@ -39,13 +41,14 @@ fn main_env() -> JNIEnv<'static> {
     vm().get_env().expect("compose-android: called on a thread attached to the VM")
 }
 
-struct JniUriHandler {
+/// Hands a checked link to `ComposeRsView.openUri`.
+struct JniUriOpener {
     view: GlobalRef,
     method: JMethodID,
 }
 
-impl UriHandler for JniUriHandler {
-    fn open_uri(&self, uri: &str) {
+impl JniUriOpener {
+    fn open(&self, uri: &str) {
         let mut env = main_env();
         let _ = env.with_local_frame(2, |env| -> jni::errors::Result<()> {
             let uri = env.new_string(uri)?;

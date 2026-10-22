@@ -232,6 +232,7 @@ pub struct UiTree {
     /// The platform's services content reaches as `LOCAL_URI_HANDLER` and
     /// `LOCAL_HAPTIC_FEEDBACK`.
     pub(crate) uri_handler: Rc<dyn crate::platform_services::UriHandler>,
+    pub(crate) platform_uri_handler: crate::platform_services::PlatformUriHandler,
     pub(crate) haptic_feedback: Rc<dyn crate::platform_services::HapticFeedback>,
     pub(crate) density: Density,
     pub(crate) display_list: DisplayList,
@@ -299,7 +300,8 @@ impl UiTree {
             root: NodeId { index: 0, generation: 0 },
             text_measurer,
             clipboard: Rc::new(crate::clipboard::MemoryClipboard::default()),
-            uri_handler: Rc::new(crate::platform_services::LoggingUriHandler),
+            uri_handler: Rc::new(crate::platform_services::PlatformUriHandler::headless()),
+            platform_uri_handler: crate::platform_services::PlatformUriHandler::headless(),
             haptic_feedback: Rc::new(crate::platform_services::NoHapticFeedback),
             density,
             display_list: DisplayList::default(),

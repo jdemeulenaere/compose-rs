@@ -1,6 +1,5 @@
 package rs.compose.android
 
-import android.content.ActivityNotFoundException
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -608,19 +607,32 @@ class ComposeRsView(context: Context, private val app: String) : View(context) {
     // ---- Links and haptics (Rust calls these: `LOCAL_URI_HANDLER`, `LOCAL_HAPTIC_FEEDBACK`) --
 
     /**
-     * Opens [uri] with an `ACTION_VIEW` intent, as Compose's `AndroidUriHandler`. Rust calls it
-     * in the middle of a call into Rust: posted to the main looper (D226).
+     * Opens [uri] with an `ACTION_VIEW` intent, as Compose's `AndroidUriHandler`; Rust checked
+     * its scheme (`PlatformUriHandler`). Rust calls it in the middle of a call into Rust: posted
+     * to the main looper (D226). A failure (nothing opens it, a `file:` URI the app may not
+     * expose, a permission) is logged, never thrown at the looper.
      */
     fun openUri(uri: String) {
         mainHandler.post {
             val intent = Intent(Intent.ACTION_VIEW, Uri.parse(uri))
-            if (context !is android.app.Activity) intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            if (findActivity(context) == null) intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             try {
                 context.startActivity(intent)
-            } catch (exception: ActivityNotFoundException) {
-                Log.w("compose-rs", "nothing opens $uri", exception)
+            } catch (exception: RuntimeException) {
+                val scheme = Uri.parse(uri).scheme
+                Log.w("compose-rs", "not opening a $scheme: URI: ${exception.javaClass.simpleName}")
             }
         }
+    }
+
+    /** The activity [context] wraps, if any (an `AndroidView`'s context is often a wrapper). */
+    private fun findActivity(context: Context): android.app.Activity? {
+        var current: Context? = context
+        while (current is android.content.ContextWrapper) {
+            if (current is android.app.Activity) return current
+            current = current.baseContext
+        }
+        return null
     }
 
     /**
