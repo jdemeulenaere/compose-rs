@@ -5,8 +5,9 @@ connected device, interleaving the two apps run by run, and writes a JSON report
     measure.py --trace-processor PATH --out DIR [--runs N] [--compile MODE] [--allow-stale]
 
 Before measuring, the installed APKs are checked against the ones built in this checkout
-(android/bench-*/build/outputs/apk/release/): each native library's SHA-1 must match, or the run
-stops (--allow-stale measures anyway). The report records each APK's size and SHA-1 and its
+(android/bench-*/build/outputs/apk/release/): the device ABI's native libraries' SHA-1s must
+match (an install from Android Studio, or as splits, holds only those), or the run stops
+(--allow-stale measures anyway). The report records each APK's size and SHA-1 and its
 libraries', and each app's ART compilation state (`dumpsys package dexopt`) at the start and the
 end of the run.
 
@@ -92,56 +93,88 @@ def apk_summary(path):
     return {"bytes": os.path.getsize(path), "sha1": digest.hexdigest(), "libraries": libraries}
 
 
-def base_apk_path(pm_path_output):
-    """The base APK's path on the device, from `pm path`'s `package:/data/app/.../base.apk`."""
+def apk_paths(pm_path_output):
+    """The APKs an app is installed as (the base, then any splits), from `pm path`'s
+    `package:<path>` lines."""
     paths = [line.strip()[len("package:"):] for line in pm_path_output.splitlines()
              if line.strip().startswith("package:")]
-    bases = [path for path in paths if path.endswith("/base.apk")]
-    return (bases or paths or [None])[0]
+    return sorted(paths, key=lambda path: not path.endswith("/base.apk"))
 
 
-def compare_apks(installed, built):
-    """What differs between the installed APK and the built one (nothing if none was built)."""
+def installed_summary(apk_files):
+    """An installed app's APKs, the base first: their total size, the base's SHA-1, the number
+    of splits, and the native libraries of all of them."""
+    apks = [apk_summary(path) for path in apk_files]
+    libraries = {}
+    for apk in apks:
+        libraries.update(apk["libraries"])
+    return {"bytes": sum(apk["bytes"] for apk in apks), "sha1": apks[0]["sha1"],
+            "splits": len(apks) - 1, "libraries": libraries}
+
+
+def abi_libraries(apk, abi):
+    """An APK's libraries for one ABI (`lib/<abi>/`)."""
+    return {name: value for name, value in apk["libraries"].items()
+            if name.startswith(f"lib/{abi}/")}
+
+
+def compare_apks(installed, built, abi):
+    """What differs between the installed app and the built APK, as (whether the device ABI's
+    libraries differ, the problems). Only `lib/<abi>/` counts: an install from Android Studio
+    or as splits holds the device's ABI only. Nothing if no APK was built."""
     if built is None:
-        return []
+        return False, []
     problems = []
-    if installed["libraries"] != built["libraries"]:
-        def short(apk):
-            return {name: value["sha1"][:12] for name, value in apk["libraries"].items()}
-        problems.append(f"libraries {short(installed)} installed, {short(built)} built")
+    installed_libraries = abi_libraries(installed, abi)
+    built_libraries = abi_libraries(built, abi)
+    # A built APK with libraries, but none for the device, is as wrong as different ones.
+    libraries_differ = installed_libraries != built_libraries or (
+        not built_libraries and bool(built["libraries"]))
+    if libraries_differ:
+        def short(libraries):
+            return {name: value["sha1"][:12] for name, value in libraries.items()} or "none"
+        problems.append(f"{abi} libraries {short(installed_libraries)} installed, "
+                        f"{short(built_libraries)} built")
     if installed["sha1"] != built["sha1"]:
-        problems.append(f"APK {installed['sha1'][:12]} installed, {built['sha1'][:12]} built")
-    return problems
+        splits = f" (and {installed['splits']} splits)" if installed["splits"] else ""
+        problems.append(f"APK {installed['sha1'][:12]}{splits} installed, "
+                        f"{built['sha1'][:12]} built")
+    return libraries_differ, problems
 
 
-def check_apks(out_dir, allow_stale):
-    """Pulls each installed APK and records its size and checksums. Stops if its libraries
-    aren't those of the APK built in this checkout, unless allow_stale; warns if only the rest
-    of the APK differs."""
+def check_apks(out_dir, abi, allow_stale):
+    """Pulls each installed app's APKs and records their size and checksums. Stops if the
+    device ABI's libraries aren't those of the APK built in this checkout, unless allow_stale;
+    warns if only the rest differs."""
     apks = {}
     for name, package in APPS.items():
-        device_path = base_apk_path(shell(f"pm path {package}"))
-        if device_path is None:
+        # `pm path` fails for a package that isn't installed.
+        device_paths = apk_paths(adb("shell", f"pm path {package}", check=False))
+        if not device_paths:
             raise SystemExit(f"{package} isn't installed")
-        local = os.path.join(out_dir, f"installed-{package}.apk")
-        adb("pull", device_path, local)
-        installed = apk_summary(local)
-        os.remove(local)
+        local_paths = []
+        for index, device_path in enumerate(device_paths):
+            local_paths.append(os.path.join(out_dir, f"installed-{package}-{index}.apk"))
+            adb("pull", device_path, local_paths[-1])
+        installed = installed_summary(local_paths)
+        for path in local_paths:
+            os.remove(path)
         built_path = os.path.join(ANDROID_DIR, BUILT_APKS[name])
         built = apk_summary(built_path) if os.path.exists(built_path) else None
-        problems = compare_apks(installed, built)
+        libraries_differ, problems = compare_apks(installed, built, abi)
         apks[name] = {"installed": installed, "built": built, "built_path": built_path,
                       "problems": problems}
-        print(f"apk {name}: {installed['bytes']} bytes, sha1 {installed['sha1'][:12]}; "
+        print(f"apk {name}: {installed['bytes']} bytes, sha1 {installed['sha1'][:12]}"
+              + (f", {installed['splits']} splits" if installed["splits"] else "") + "; "
               + ", ".join(f"{library} {value['bytes']} bytes, sha1 {value['sha1'][:12]}"
-                          for library, value in installed["libraries"].items()))
+                          for library, value in abi_libraries(installed, abi).items()))
         if built is None:
             print(f"apk {name}: no APK built at {built_path}: recorded the installed one only")
-        elif problems and (allow_stale or installed["libraries"] == built["libraries"]):
-            print(f"apk {name}: WARNING: not the APK built at {built_path}: {'; '.join(problems)}")
-        elif problems:
-            raise SystemExit(f"{package}: the installed APK isn't the one built at {built_path}: "
+        elif libraries_differ and not allow_stale:
+            raise SystemExit(f"{package}: the installed app isn't the one built at {built_path}: "
                              f"{'; '.join(problems)}. Install it again, or pass --allow-stale.")
+        elif problems:
+            print(f"apk {name}: WARNING: not the APK built at {built_path}: {'; '.join(problems)}")
     return apks
 
 
@@ -490,8 +523,9 @@ def main():
     capacities = cpu_capacities()
     report = {"device": shell("getprop ro.product.model").strip(),
               "android": shell("getprop ro.build.version.release").strip(),
+              "abi": shell("getprop ro.product.cpu.abi").strip(),
               "compile": arguments.compile}
-    report["apks"] = check_apks(arguments.out, arguments.allow_stale)
+    report["apks"] = check_apks(arguments.out, report["abi"], arguments.allow_stale)
 
     shell("input keyevent KEYCODE_WAKEUP")
     shell("wm dismiss-keyguard")

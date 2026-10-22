@@ -50,6 +50,14 @@ androidComponents {
             args("android-demo", "compose_rs_demo")
             argumentProviders.add(CommandLineArgumentProvider { listOf(output.get().asFile.path) })
             environment("ANDROID_NDK_VERSION", android.ndkVersion)
+            // What build-rust.sh reads, through providers: the configuration cache keeps the
+            // environment the task was configured with, and is discarded when these change.
+            // Unset ones are passed empty (the script reads empty as unset), so each is always
+            // the value the cache entry was made with.
+            val variables = listOf("ANDROID_NDK_HOME", "ANDROID_HOME", "ANDROID_SDK_ROOT", "HOME", "PATH")
+            for (variable in variables) {
+                environment(variable, providers.environmentVariable(variable).getOrElse(""))
+            }
             outputs.upToDateWhen { false }
         }
         variant.sources.jniLibs?.addGeneratedSourceDirectory(buildRust, BuildRust::outputDirectory)

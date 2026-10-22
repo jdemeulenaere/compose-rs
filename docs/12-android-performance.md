@@ -14,7 +14,7 @@ The Kotlin app follows Compose's performance guidance: an `@Immutable` data clas
 
 ## Method
 
-`android/bench/measure.py` drives a connected device over adb, interleaving the two apps run by run, and writes a JSON report (`android/bench/results/`); `summarize.py` prints it. Since D302, it first checks that the installed APKs' native libraries are those built in the checkout (and stops if not), and records each APK's size and SHA-1, the compilation filter (`--compile`, `speed` by default) and each app's compilation state (`dumpsys package dexopt`) at the start and the end of the run. Its parsing is tested on captured output: `python3 android/bench/test_measure.py`.
+`android/bench/measure.py` drives a connected device over adb, interleaving the two apps run by run, and writes a JSON report (`android/bench/results/`); `summarize.py` prints it. Since D302, it first checks that the installed apps' native libraries for the device's ABI are those built in the checkout (and stops if not), and records each APK's size and SHA-1, the compilation filter (`--compile`, `speed` by default) and each app's compilation state (`dumpsys package dexopt`) at the start and the end of the run. Its parsing is tested on captured output: `python3 android/bench/test_measure.py`.
 
 - **Startup**: 15 cold starts of each screen per app (`am force-stop`, then `am start -W`: `TotalTime`, from the launch to the first frame drawn). One cold start of each is also traced with Perfetto, to break the first frame down.
 - **Memory**: `dumpsys meminfo` 5 s after start, and again after scrolling (3 runs). Calling it runs the app's garbage collector, so the first measurement resets what the second counts.
@@ -63,7 +63,7 @@ In compose-rs's first `big` frame (110 ms): composing 200 posts takes 22 ms, lay
 | of which Java heap | **4.6 MB** | 6.1 MB |
 | of which native heap | 12.5 MB | 12.5 MB (12.1 MB) |
 | of which graphics | 56.7 MB | **55.3 MB** |
-| APK (release) | 1.7 MB (minified) | 3.1 MB (with the 3.0 MB `.so` uncompressed inside; 2.4 MB in round 2). Unstripped: since D301 the library is stripped, 1.9 MB (1.8 MB `.so`) |
+| APK (release) | 1.7 MB (minified) | 3.1 MB (with the 3.0 MB `.so` uncompressed inside, unstripped; 2.4 MB in round 2). Since D301 the library is stripped: 1.9 MB, with a 1.8 MB `.so` |
 
 After start, compose-rs holds a third less: its code is a native library rather than Compose's dex and runtime, and its graphics memory is 11 MB smaller, most likely because the GPU keeps no path atlas or stencil buffer for the icons, drawn from masks (D190; round 1 held 26.2 MB). The code mapped grew by 0.3 MB with the library. After scrolling, both are dominated by graphics memory (the render thread's caches: about 56 MB each). The rest depends on when the garbage collector last ran: `dumpsys meminfo` itself collects in the app (`Runtime.gc` in its path; a second call right after reads 10–13 MB less for both apps), so the measurement after scrolling counts what the 10 flings left for the collector. Compose's numbers swing with it (85 to 90 MB in this run, up to 112 MB in earlier ones: its Java heap holds 4 to 20 MB of garbage, as it allocates on every frame); compose-rs's stay within 80.6 to 81.7 MB.
 

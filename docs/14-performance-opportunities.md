@@ -214,7 +214,7 @@ Its frames do. Under `verify` (the glue run by the JIT and the interpreter), the
 
 docs/12 called `-m speed` "Compose's best case" (**fixed**: docs/12 now cites this; `measure.py --compile speed-profile` measures it, D302). For the feed's startup it isn't: with a profile, Compose starts in 113.5 ms (its app image), against 129 ms with `speed`. compose-rs still starts first (105.5 ms), by 8 ms rather than the 23.5 ms of the same session's `speed` row.
 
-**The library (#4).** The workspace has no `[profile.release]`, and the bench app set no `ndkVersion`, so the Android Gradle plugin silently skipped stripping (**fixed**: D301 pins `ndkVersion`; bench-rs's APK is now 1,985,087 bytes, its `.so` 1,883,512). Today's APK therefore ships 1.25 MB of symbol tables, which are never mapped. The prototype adds `[profile.android]` (fat LTO, one codegen unit, `panic = "abort"`) and sets `ndkVersion`, so AGP strips and the unstripped copy stays in `build/intermediates` for profilers.
+**The library (#4).** The workspace has no `[profile.release]`, and the bench app set no `ndkVersion`, so the Android Gradle plugin silently skipped stripping (**fixed**: D301 pins `ndkVersion`; bench-rs's APK is now 1,985,087 bytes, its `.so` 1,883,512). Main's APK therefore shipped 1.25 MB of symbol tables, which are never mapped. The prototype adds `[profile.android]` (fat LTO, one codegen unit, `panic = "abort"`) and sets `ndkVersion`, so AGP strips and the unstripped copy stays in `build/intermediates` for profilers.
 
 | | main | prototype |
 |---|---|---|

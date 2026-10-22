@@ -64,12 +64,49 @@ class DexoptTest(unittest.TestCase):
 
 
 class ApkTest(unittest.TestCase):
-    def test_base_apk_path(self):
-        output = ("package:/data/app/~~a==/rs.compose.bench.rs-b==/base.apk\n"
-                  "package:/data/app/~~a==/rs.compose.bench.rs-b==/split_config.arm64_v8a.apk\n")
-        self.assertEqual(measure.base_apk_path(output),
-                         "/data/app/~~a==/rs.compose.bench.rs-b==/base.apk")
-        self.assertIsNone(measure.base_apk_path(""))
+    def test_apk_paths(self):
+        output = ("package:/data/app/~~a==/rs.compose.bench.rs-b==/split_config.arm64_v8a.apk\n"
+                  "package:/data/app/~~a==/rs.compose.bench.rs-b==/base.apk\n")
+        self.assertEqual(measure.apk_paths(output), [
+            "/data/app/~~a==/rs.compose.bench.rs-b==/base.apk",
+            "/data/app/~~a==/rs.compose.bench.rs-b==/split_config.arm64_v8a.apk"])
+        # `pm path` for a missing package prints nothing on stdout (and exits 1).
+        self.assertEqual(measure.apk_paths(""), [])
+
+    def test_device_abi_only(self):
+        """A built APK with every ABI against an install of the device's ABI only (Android
+        Studio's), or as a base and a split: only lib/arm64-v8a/ is compared."""
+        with tempfile.TemporaryDirectory() as directory:
+            def path(name):
+                return os.path.join(directory, name)
+            library = "lib/arm64-v8a/libcompose_rs_feed.so"
+            other = "lib/x86_64/libcompose_rs_feed.so"
+            write_apk(path("built.apk"), {"classes.dex": b"dex", library: b"new", other: b"x86"})
+            write_apk(path("studio.apk"), {"classes.dex": b"dex", library: b"new"})
+            write_apk(path("base.apk"), {"classes.dex": b"dex"})
+            write_apk(path("split.apk"), {library: b"new"})
+            write_apk(path("stale-split.apk"), {library: b"old"})
+            built = measure.apk_summary(path("built.apk"))
+
+            studio = measure.installed_summary([path("studio.apk")])
+            differ, problems = measure.compare_apks(studio, built, "arm64-v8a")
+            self.assertFalse(differ)
+            self.assertTrue(problems[0].startswith("APK"), problems)
+
+            split = measure.installed_summary([path("base.apk"), path("split.apk")])
+            self.assertEqual(split["splits"], 1)
+            self.assertEqual(split["bytes"], os.path.getsize(path("base.apk"))
+                             + os.path.getsize(path("split.apk")))
+            self.assertEqual(split["sha1"], measure.apk_summary(path("base.apk"))["sha1"])
+            self.assertFalse(measure.compare_apks(split, built, "arm64-v8a")[0])
+
+            stale = measure.installed_summary([path("base.apk"), path("stale-split.apk")])
+            differ, problems = measure.compare_apks(stale, built, "arm64-v8a")
+            self.assertTrue(differ)
+            self.assertTrue(problems[0].startswith("arm64-v8a libraries"), problems)
+
+            # No library for the device's ABI in a built APK that has some: wrong too.
+            self.assertTrue(measure.compare_apks(studio, built, "armeabi-v7a")[0])
 
     def test_summary_and_comparison(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -88,12 +125,16 @@ class ApkTest(unittest.TestCase):
             self.assertEqual(built["libraries"][library]["bytes"], len(b"new library"))
             # Zip entries carry timestamps: compare the libraries, not the archives.
             self.assertEqual(measure.apk_summary(same_path)["libraries"], built["libraries"])
-            stale = measure.compare_apks(measure.apk_summary(stale_path), built)
-            self.assertTrue(stale[0].startswith("libraries"), stale)
-            dex = measure.compare_apks(measure.apk_summary(dex_path), built)
+            differ, stale = measure.compare_apks(
+                measure.installed_summary([stale_path]), built, "arm64-v8a")
+            self.assertTrue(differ)
+            self.assertTrue(stale[0].startswith("arm64-v8a libraries"), stale)
+            differ, dex = measure.compare_apks(
+                measure.installed_summary([dex_path]), built, "arm64-v8a")
+            self.assertFalse(differ)
             self.assertEqual(len(dex), 1)
             self.assertTrue(dex[0].startswith("APK"), dex)
-            self.assertEqual(measure.compare_apks(built, None), [])
+            self.assertEqual(measure.compare_apks(built, None, "arm64-v8a"), (False, []))
 
 
 if __name__ == "__main__":

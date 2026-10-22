@@ -12,13 +12,16 @@ cd "$(dirname "$0")/.."
 SDK=${ANDROID_HOME:-${ANDROID_SDK_ROOT:-$HOME/Library/Android/sdk}}
 if [ -n "$ANDROID_NDK_HOME" ]; then
     NDK=$ANDROID_NDK_HOME
+    if [ -n "$ANDROID_NDK_VERSION" ] && [ ! -d "$SDK/ndk/$ANDROID_NDK_VERSION" ]; then
+        echo "build-rust.sh: warning: Gradle won't strip the library unless NDK $ANDROID_NDK_VERSION (the app's ndkVersion) is installed: sdkmanager --install \"ndk;$ANDROID_NDK_VERSION\"" >&2
+    fi
 elif [ -n "$ANDROID_NDK_VERSION" ] && [ -d "$SDK/ndk/$ANDROID_NDK_VERSION" ]; then
     NDK=$SDK/ndk/$ANDROID_NDK_VERSION
 else
     NDK=$(ls -d "$SDK"/ndk/* 2>/dev/null | sort -V | tail -1)
     if [ -n "$ANDROID_NDK_VERSION" ] && [ -d "$NDK" ]; then
         echo "build-rust.sh: NDK $ANDROID_NDK_VERSION (the app's ndkVersion) isn't installed; linking with $(basename "$NDK"), the newest installed." >&2
-        echo "build-rust.sh: Gradle strips the library with NDK $ANDROID_NDK_VERSION: install it with sdkmanager --install \"ndk;$ANDROID_NDK_VERSION\"" >&2
+        echo "build-rust.sh: warning: Gradle won't strip the library unless NDK $ANDROID_NDK_VERSION is installed: sdkmanager --install \"ndk;$ANDROID_NDK_VERSION\"" >&2
     fi
 fi
 if [ -n "$ANDROID_NDK_HOME" ] && [ ! -d "$NDK" ]; then
