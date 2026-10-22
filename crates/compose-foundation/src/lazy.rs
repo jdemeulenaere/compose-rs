@@ -349,9 +349,12 @@ impl LazyListScope {
     }
 
     /// One item with a key, as `item(key) { … }`.
-    pub fn item_keyed<K: Hash + PartialEq + 'static>(&self, key: K, content: impl Fn() + 'static) {
-        let key = Rc::new(key);
-        self.push(Interval::keyed(1, move |_| KeyRef(key.clone()), Rc::new(move |_| content())));
+    pub fn item_keyed<K: Hash + PartialEq + Clone + 'static>(
+        &self,
+        key: K,
+        content: impl Fn() + 'static,
+    ) {
+        self.push(Interval::keyed(1, move |_| key.clone(), Rc::new(move |_| content())));
     }
 
     /// `count` items, as `items(count) { index -> … }`. Without keys, an item's state goes with
@@ -442,17 +445,14 @@ impl LazyListScope {
     }
 
     /// `sticky_header` with a key, as `stickyHeader(key) { … }`.
-    pub fn sticky_header_keyed<K: Hash + PartialEq + 'static>(
+    pub fn sticky_header_keyed<K: Hash + PartialEq + Clone + 'static>(
         &self,
         key: K,
         content: impl Fn(LazyItemScope) + 'static,
     ) {
-        let (key, scope) = (Rc::new(key), self.item_scope.clone());
-        let mut interval = Interval::keyed(
-            1,
-            move |_| KeyRef(key.clone()),
-            Rc::new(move |_| content(scope.clone())),
-        );
+        let scope = self.item_scope.clone();
+        let mut interval =
+            Interval::keyed(1, move |_| key.clone(), Rc::new(move |_| content(scope.clone())));
         interval.sticky = true;
         self.push(interval);
     }
@@ -468,13 +468,15 @@ impl LazyListScope {
     }
 }
 
-/// A key shared by reference, hashed and compared as the key.
+/// An unkeyed item's key, by its index: a private type no user key equals (as Compose's
+/// `DefaultLazyKey`), its hash salted apart from the index's own.
 #[derive(PartialEq)]
-struct KeyRef<K>(Rc<K>);
+struct DefaultKey(usize);
 
-impl<K: Hash> Hash for KeyRef<K> {
+impl Hash for DefaultKey {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.0.hash(state)
+        state.write_u64(0x6C61_7A79_5F6B_6579);
+        self.0.hash(state);
     }
 }
 
@@ -674,9 +676,9 @@ impl Items {
     fn key(&self, index: usize) -> u64 {
         match self.find(index) {
             Some((interval, local)) => {
-                interval.key.as_ref().map_or(hash_key(&("index", index)), |key| key(local))
+                interval.key.as_ref().map_or(hash_key(&DefaultKey(index)), |key| key(local))
             }
-            None => hash_key(&("index", index)),
+            None => hash_key(&DefaultKey(index)),
         }
     }
 
@@ -694,7 +696,7 @@ impl Items {
         let full_key = |index: usize| -> Box<dyn DynKey> {
             match self.find(index) {
                 Some((Interval { full_key: Some(key), .. }, local)) => key(local),
-                _ => Box::new(("index", index)),
+                _ => Box::new(DefaultKey(index)),
             }
         };
         let mut seen: HashMap<u64, usize> = HashMap::with_capacity(indices.len());

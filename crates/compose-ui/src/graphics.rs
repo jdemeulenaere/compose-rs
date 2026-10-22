@@ -270,7 +270,8 @@ impl Paint {
     }
 
     /// The same paint at `alpha` (0 to 1) of its opacity, as `Paint.alpha` and the draw calls'
-    /// `alpha`: its color's alpha multiplied (a brush's alpha is given to `brush_paint`).
+    /// `alpha`: its color's alpha multiplied. A brush paint's gradient keeps the alpha given to
+    /// `brush_paint` (only its fallback color changes): pass the alpha there.
     pub fn with_alpha(self, alpha: f32) -> Paint {
         let opacity = self.color.alpha() as f32 / 255.0 * alpha.clamp(0.0, 1.0);
         Paint { color: self.color.with_alpha(opacity), ..self }

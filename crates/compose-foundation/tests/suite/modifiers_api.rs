@@ -271,6 +271,11 @@ fn combined_clickable_clicks_long_clicks_and_double_clicks() {
     // Accessibility clicks at once.
     ui.on_node_with_tag("target").perform_semantics_action(compose_ui::SemanticsAction::OnClick);
     assert_eq!(log.borrow().last().unwrap(), "click");
+    let semantics = ui.dump_semantics();
+    assert!(semantics.contains("long_clickable"), "{semantics}");
+    ui.on_node_with_tag("target")
+        .perform_semantics_action(compose_ui::SemanticsAction::OnLongClick);
+    assert_eq!(log.borrow().last().unwrap(), "long");
 }
 
 #[test]

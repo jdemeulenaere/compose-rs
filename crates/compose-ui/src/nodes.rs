@@ -893,7 +893,7 @@ impl ModifierNode for CombinedClickableNode {
         Some(self)
     }
     fn as_semantics(&mut self) -> Option<&mut dyn SemanticsModifierNode> {
-        Some(&mut self.clickable)
+        Some(self)
     }
     fn as_focus_target(&mut self) -> Option<&mut dyn FocusTargetModifierNode> {
         Some(&mut self.clickable)
@@ -903,6 +903,33 @@ impl ModifierNode for CombinedClickableNode {
     }
     fn as_draw(&mut self) -> Option<&mut dyn DrawModifierNode> {
         Some(self)
+    }
+}
+
+impl SemanticsModifierNode for CombinedClickableNode {
+    /// A clickable's, with a long-click action if it long-clicks.
+    fn apply_semantics(&self, config: &mut SemanticsConfiguration) {
+        self.clickable.apply_semantics(config);
+        config.long_clickable |=
+            self.handlers.borrow().on_long_click.is_some() && self.clickable.spec.enabled();
+    }
+
+    fn perform_action(
+        &mut self,
+        action: crate::semantics::SemanticsAction,
+        context: &mut EventContext<'_>,
+    ) -> bool {
+        if action != crate::semantics::SemanticsAction::OnLongClick {
+            return self.clickable.perform_action(action, context);
+        }
+        let on_long_click = self.handlers.borrow().on_long_click.clone();
+        match on_long_click {
+            Some(callback) if self.clickable.spec.enabled() => {
+                context.call(&callback);
+                true
+            }
+            _ => false,
+        }
     }
 }
 

@@ -179,7 +179,7 @@ impl MeasureScope<'_> {
         assert_eq!(measurable.layer, 0, "compose-ui: intrinsic widths are asked of children");
         let probe = Constraints::new(0, Constraints::INFINITY, 0, height);
         self.tree.node_mut(measurable.node).intrinsics_asked = true;
-        self.tree.measure_node(measurable.node, probe).width
+        self.probe(measurable, probe).width
     }
 
     /// The height `measurable` takes at `width` (fixed) with an unbounded height, as Compose's
@@ -194,7 +194,22 @@ impl MeasureScope<'_> {
         assert_eq!(measurable.layer, 0, "compose-ui: intrinsic heights are asked of children");
         let probe = Constraints::new(width, width, 0, Constraints::INFINITY);
         self.tree.node_mut(measurable.node).intrinsics_asked = true;
-        self.tree.measure_node(measurable.node, probe).height
+        self.probe(measurable, probe).height
+    }
+
+    /// Measures `measurable` with `probe` to ask its intrinsic size: layout callbacks don't
+    /// hear the sizes it measures (`on_size_changed`).
+    fn probe(&mut self, measurable: Measurable, probe: Constraints) -> IntSize {
+        self.tree.intrinsic_probes += 1;
+        let size = self.tree.measure_node(measurable.node, probe);
+        self.tree.intrinsic_probes -= 1;
+        size
+    }
+
+    /// Whether this measurement only asks an intrinsic size (`max_intrinsic_width` measuring
+    /// a child to ask): what it measures isn't the layout's.
+    pub fn is_intrinsic_probe(&self) -> bool {
+        self.tree.intrinsic_probes > 0
     }
 
     /// Places `placeable` at `x`, `y` in this node's coordinates, as `Placeable.place`.

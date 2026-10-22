@@ -274,6 +274,8 @@ pub struct UiTree {
     pub(crate) positioned: Vec<NodeId>,
     /// Something was laid out (or a position-aware node came) since the last callbacks.
     pub(crate) laid_out_since_callbacks: bool,
+    /// Intrinsic probes in progress (`MeasureScope::max_intrinsic_width` measuring to ask).
+    pub(crate) intrinsic_probes: u32,
 }
 
 impl UiTree {
@@ -310,6 +312,7 @@ impl UiTree {
             layout_callbacks: Vec::new(),
             positioned: Vec::new(),
             laid_out_since_callbacks: false,
+            intrinsic_probes: 0,
         }
     }
 
@@ -723,8 +726,9 @@ impl UiTree {
             .modifier
             .elements()
             .iter()
-            .map(|element| if let Element::ZIndex(z) = element { *z } else { 0.0 })
-            .sum::<f32>();
+            .filter_map(|element| if let Element::ZIndex(z) = element { Some(*z) } else { None })
+            // From +0.0 (an empty `sum` is -0.0, which `total_cmp` orders first).
+            .fold(0.0f32, |sum, z| sum + z);
         if z_index != value.z_index {
             value.z_index = z_index;
             // Its parent draws its children in another order.

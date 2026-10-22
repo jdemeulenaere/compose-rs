@@ -405,23 +405,26 @@ impl UiHost {
 
     /// Measures and places what the writes observed since invalidated, then runs the layout
     /// callbacks (`on_size_changed`, `on_globally_positioned`). A measurement reading state that
-    /// another wrote while laying out (a lazy list's viewport size, which its items'
-    /// `fill_parent_max_*` read) is measured again within this layout, twice at most, rather
-    /// than at the next frame.
+    /// another measurement or a callback wrote (a lazy list's viewport size, which its items'
+    /// `fill_parent_max_*` read) is measured again within this layout, a few rounds at most,
+    /// rather than at the next frame.
     fn lay_out(&mut self, size: IntSize) -> bool {
         let mut measured = false;
-        for _ in 0..3 {
+        // A callback's writes read by measurements are laid out here too (those read by
+        // composition, by the frame's next round).
+        for _ in 0..4 {
             let again = self.with_tree(|tree| {
                 tree.apply_observed_writes();
                 tree.layout(size)
             });
             measured |= again;
-            if !again {
+            let actions = self.with_tree(|tree| tree.take_layout_callbacks());
+            let called = !actions.is_empty();
+            Self::run(actions);
+            if !again && !called {
                 break;
             }
         }
-        let actions = self.with_tree(|tree| tree.take_layout_callbacks());
-        Self::run(actions);
         measured
     }
 

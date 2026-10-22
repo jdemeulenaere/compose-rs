@@ -121,6 +121,17 @@ impl LayerProperties {
         }
     }
 
+    /// Where it draws `point` (of what it transforms), as its `Transform` operation does.
+    pub(crate) fn map(&self, point: Offset) -> Offset {
+        let (x, y) =
+            ((point.x - self.pivot.x) * self.scale.0, (point.y - self.pivot.y) * self.scale.1);
+        let (sin, cos) = self.rotation.to_radians().sin_cos();
+        Offset::new(
+            self.pivot.x + self.translation.x + x * cos - y * sin,
+            self.pivot.y + self.translation.y + x * sin + y * cos,
+        )
+    }
+
     fn transforms(&self) -> bool {
         self.scale != (1.0, 1.0) || self.rotation != 0.0 || self.translation != Offset::ZERO
     }

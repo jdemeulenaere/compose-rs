@@ -117,7 +117,8 @@ impl LayoutModifierNode for OnSizeChangedNode {
     ) -> MeasureResult {
         let placeable = scope.measure(content, constraints);
         let size = placeable.size();
-        if self.last != Some(size) {
+        // An intrinsic probe's size isn't the layout's.
+        if self.last != Some(size) && !scope.is_intrinsic_probe() {
             self.last = Some(size);
             let callback = self.callback.clone();
             scope.tree.layout_callbacks.push(Action::Run(Box::new(move || callback(size))));
@@ -232,8 +233,8 @@ impl UiTree {
     fn coordinates(&self, node: NodeId, layer: usize, entry: usize) -> LayoutCoordinates {
         let value = self.node(node);
         let size = value.layers[layer].size;
-        let origin = self.layer_origin(node, layer);
-        let mut bounds = Rect::from_offset_size(origin, size.into());
+        let origin = self.map_to_root(node, layer, Some(entry), Offset::ZERO);
+        let mut bounds = self.rect_in_root(node, layer, Some(entry), size);
         let clip_node = |id: NodeId, before_entry: Option<usize>, bounds: &mut Rect| {
             let value = self.node(id);
             let mut layer_of_entry = 0;
@@ -242,9 +243,9 @@ impl UiTree {
                     break;
                 }
                 if entry.hit_clip().is_some() {
-                    let origin = self.layer_origin(id, layer_of_entry);
                     let size = value.layers[layer_of_entry].size;
-                    *bounds = intersect(*bounds, Rect::from_offset_size(origin, size.into()));
+                    let clip = self.rect_in_root(id, layer_of_entry, Some(index), size);
+                    *bounds = intersect(*bounds, clip);
                 }
                 if value.capabilities[index] & capability::LAYOUT != 0 {
                     layer_of_entry += 1;
@@ -259,6 +260,80 @@ impl UiTree {
             current = if value.overlay { None } else { value.parent };
         }
         LayoutCoordinates { size, position_in_root: origin, clipped_bounds: bounds }
+    }
+
+    /// The bounding box in the root of a rectangle of `size` at the origin of layer `layer` of
+    /// `node` (seen by its chain entry `before_entry`), through the graphics layers around it.
+    fn rect_in_root(
+        &self,
+        node: NodeId,
+        layer: usize,
+        before_entry: Option<usize>,
+        size: IntSize,
+    ) -> Rect {
+        let (width, height) = (size.width as f32, size.height as f32);
+        let corners = [(0.0, 0.0), (width, 0.0), (0.0, height), (width, height)]
+            .map(|(x, y)| self.map_to_root(node, layer, before_entry, Offset::new(x, y)));
+        let min = |pick: fn(&Offset) -> f32| corners.iter().map(pick).fold(f32::INFINITY, f32::min);
+        let max =
+            |pick: fn(&Offset) -> f32| corners.iter().map(pick).fold(f32::NEG_INFINITY, f32::max);
+        Rect::new(min(|p| p.x), min(|p| p.y), max(|p| p.x), max(|p| p.y))
+    }
+
+    /// Where `point`, in layer `layer` of `node`, is in the root: through each layer's offset
+    /// and the graphics layers' transforms (`node`'s before its chain entry `before_entry`,
+    /// all of its ancestors'), as Compose's `localToRoot`.
+    fn map_to_root(
+        &self,
+        node: NodeId,
+        layer: usize,
+        before_entry: Option<usize>,
+        point: Offset,
+    ) -> Offset {
+        let (mut current, mut layer, mut before) = (node, layer, before_entry);
+        let mut point = point;
+        loop {
+            let value = self.node(current);
+            // In the node's own coordinates (its first layer's).
+            let layer_origin = |layer: usize| {
+                value.layers[1..=layer].iter().fold(Offset::ZERO, |origin, entry| {
+                    origin + Offset::new(entry.offset.x as f32, entry.offset.y as f32)
+                })
+            };
+            point = point + layer_origin(layer);
+            let end = before.unwrap_or(value.chain.len());
+            // The innermost first.
+            for index in (0..end).rev() {
+                let Some(graphics) =
+                    value.chain[index].downcast_ref::<crate::graphics_layer::GraphicsLayerNode>()
+                else {
+                    continue;
+                };
+                let entry_layer = value.capabilities[..index]
+                    .iter()
+                    .filter(|bits| **bits & capability::LAYOUT != 0)
+                    .count();
+                let properties = crate::graphics_layer::LayerProperties::new(
+                    &graphics.scope(),
+                    layer_origin(entry_layer),
+                    value.layers[entry_layer].measured.into(),
+                );
+                point = properties.map(point);
+            }
+            if value.overlay {
+                return point + value.overlay_origin;
+            }
+            let position = value.layers[0].offset;
+            point = point + Offset::new(position.x as f32, position.y as f32);
+            match value.parent {
+                Some(parent) => {
+                    current = parent;
+                    layer = self.node(parent).layers.len() - 1;
+                    before = None;
+                }
+                None => return point,
+            }
+        }
     }
 
     /// Registers `node` as having position-aware modifier nodes (from its chain refresh).
