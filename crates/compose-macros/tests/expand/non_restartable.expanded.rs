@@ -81,14 +81,17 @@ fn StaticReference(title: &'static str) {
         __compose_restart,
         ::compose::__private::identity_of(&__compose_restart),
     );
-    if !__composer
-        .update_kept(
-            |__kept: &(&'static str,)| {
-                !::compose::__private::ComposeArg::same(&__kept.0, &title)
-            },
-            || (::compose::__private::keep(&title),),
-        ) && __composer.skipping()
-    {
+    let mut __compose_kept = __composer.take_kept();
+    let __compose_changed = match __compose_kept.get::<(&'static str,)>() {
+        ::core::option::Option::Some(__kept) => {
+            !::compose::__private::ComposeArg::same(&__kept.0, &title)
+        }
+        ::core::option::Option::None => true,
+    };
+    if __compose_changed {
+        __compose_kept.set((::compose::__private::keep(&title),));
+    }
+    if !__compose_kept.put(__compose_changed) && __composer.skipping() {
         __composer.skip_to_group_end();
         return;
     }

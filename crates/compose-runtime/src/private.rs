@@ -14,7 +14,7 @@ pub use crate::callback::{
     resolve_lazy_6, resolve_lazy_7, resolve_lazy_8, reuse, to_callback,
 };
 pub use crate::compose_arg::ComposeArg;
-pub use crate::composer::{Composer, current};
+pub use crate::composer::{Composer, KeptArguments, current};
 pub use crate::hash::key_of;
 pub use compose_macros::call;
 

@@ -42,7 +42,7 @@ pub use applier::{Applier, NodeRef};
 pub use callback::{Callback, IntoCallback, IntoOptionalCallback, callback};
 pub use compose_arg::ComposeArg;
 pub use compose_macros::{ComposeArg, composable};
-pub use composer::{Composer, current, current_recompose_scope};
+pub use composer::{Composer, KeptArguments, current, current_recompose_scope};
 pub use composition::Composition;
 pub use derived::{DerivedState, derived_state_of, derived_state_of_with, flush_derived_states};
 pub use effects::{

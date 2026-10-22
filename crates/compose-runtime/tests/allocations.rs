@@ -289,6 +289,61 @@ fn changed_arguments_update_kept_values_in_place() {
     }
 }
 
+/// `Text` as `#[composable]` expands it: `update_kept`'s steps inline, with no closures.
+fn InlineText(value: u64) {
+    let composer = current();
+    composer.start_restart_group(key_of("allocations::InlineText"));
+    let mut kept = composer.take_kept();
+    let changed = match kept.get::<(u64,)>() {
+        Some(kept) => !kept.0.same(&value),
+        None => true,
+    };
+    if changed {
+        kept.set((value,));
+    }
+    if !kept.put(changed) && composer.skipping() {
+        composer.skip_to_group_end();
+    } else {
+        RUNS.with(|runs| runs.set(runs.get() + 1));
+        Leaf(value);
+    }
+    composer.end_restart_group(|kept| InlineText(kept.downcast_ref::<(u64,)>().expect("kept").0));
+}
+
+#[test]
+fn inline_kept_arguments_skip_and_update_in_place() {
+    let value = mutable_state_of(0u64);
+    let other = mutable_state_of(0u64);
+    let (handle, other_handle) = (value.handle(), other.handle());
+    let composition = Composition::new(Tree::new());
+    composition.set_content(move || {
+        let composer = current();
+        composer.start_replace_group(1);
+        other_handle.get();
+        InlineText(handle.get());
+        composer.end_group();
+    });
+    assert_eq!(runs(), 1);
+    // The parent recomposes with the same argument: the child skips.
+    other.set(1);
+    composition.recompose();
+    assert_eq!(runs(), 0);
+    for round in 1..4 {
+        value.set(round);
+        composition.recompose();
+    }
+    assert_eq!(runs(), 3);
+    for round in 4..100 {
+        let allocated = allocations_in(|| {
+            value.set(round);
+            composition.recompose();
+        });
+        assert_eq!(allocated, 0);
+    }
+    assert_eq!(runs(), 96);
+    composition.validate();
+}
+
 #[test]
 fn live_allocations_stay_constant_across_a_thousand_clicks() {
     let composition = Composition::new(Tree::new());
