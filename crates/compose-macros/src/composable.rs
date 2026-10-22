@@ -305,6 +305,138 @@ fn call_macro(function: &ItemFn, params: &[Param], key: u64, site: &str) -> Toke
     }
 }
 
+/// The doc section appended to a composable's doc comment: its call macro's form, with the
+/// defaults, so rustdoc shows which arguments are optional.
+///
+/// ```text
+/// Button!(on_click, modifier = Modifier, enabled = true, { content })
+/// ```
+fn call_form_doc(function: &ItemFn, params: &[Param]) -> TokenStream {
+    let name = &function.sig.ident;
+    let trailing = params
+        .last()
+        .filter(|param| param.default.is_none())
+        .filter(|param| {
+            callback_arity(&param.ty).is_some()
+                || option_argument(&param.ty).and_then(callback_arity).is_some()
+        })
+        .map(|param| param.name.to_string());
+    let mut arguments: Vec<String> = params
+        .iter()
+        .filter(|param| trailing.as_ref() != Some(&param.name.to_string()))
+        .map(|param| match &param.default {
+            Some(default) => format!("{} = {}", param.name, display_tokens(default)),
+            None => param.name.to_string(),
+        })
+        .collect();
+    if let Some(trailing) = &trailing {
+        arguments.push(format!("{{ {trailing} }}"));
+    }
+    let single = format!("{name}!({})", arguments.join(", "));
+    let call = if single.len() <= 90 {
+        vec![single]
+    } else {
+        let mut lines = vec![format!("{name}!(")];
+        lines.extend(arguments.iter().map(|argument| format!("    {argument},")));
+        lines.push(")".to_string());
+        lines
+    };
+    let mut text = vec![String::new(), "# Call".to_string(), String::new(), "```text".to_string()];
+    text.extend(call);
+    text.push("```".to_string());
+    if params.is_empty() {
+        return doc_attributes(text);
+    }
+    text.push(String::new());
+    let mut note = String::from(
+        "Arguments go in this order, or by name (`name = value`); those shown with a value are \
+         optional.",
+    );
+    if let Some(trailing) = &trailing {
+        note.push_str(&format!(" A final block `{{ … }}` (or closure) is `{trailing}`."));
+    }
+    if params.first().is_some_and(|param| param.format) {
+        note.push_str(&format!(
+            " The first argument takes format arguments: `{name}!(\"{{count}} items\")`."
+        ));
+    }
+    text.push(note);
+    doc_attributes(text)
+}
+
+/// One `#[doc]` attribute holding the lines, as `///` comments would.
+fn doc_attributes(lines: Vec<String>) -> TokenStream {
+    let text: Vec<String> = lines
+        .into_iter()
+        .map(|line| if line.is_empty() { line } else { format!(" {line}") })
+        .collect();
+    let text = text.join("\n");
+    quote!(#[doc = #text])
+}
+
+/// A default's tokens as written, without `crate::` (`crate::Modifier` shows as `Modifier`).
+/// Printed token by token: the compiler's `TokenStream::to_string` costs more.
+fn display_tokens(tokens: &TokenStream) -> String {
+    fn print(tokens: TokenStream, out: &mut String) {
+        let tokens: Vec<proc_macro2::TokenTree> = tokens.into_iter().collect();
+        let mut index = 0;
+        while index < tokens.len() {
+            match &tokens[index] {
+                proc_macro2::TokenTree::Ident(ident)
+                    if ident == "crate"
+                        && tokens[index + 1..].iter().take(2).all(|token| {
+                            matches!(token, proc_macro2::TokenTree::Punct(punct) if punct.as_char() == ':')
+                        })
+                        && tokens.len() > index + 2 =>
+                {
+                    // `crate::` (and `$crate::`) left out.
+                    if out.ends_with('$') {
+                        out.pop();
+                    }
+                    index += 3;
+                    continue;
+                }
+                proc_macro2::TokenTree::Ident(ident) => {
+                    if out.ends_with(|c: char| c.is_alphanumeric() || c == '_' || c == '"') {
+                        out.push(' ');
+                    }
+                    out.push_str(&ident.to_string());
+                }
+                proc_macro2::TokenTree::Literal(literal) => {
+                    if out.ends_with(|c: char| c.is_alphanumeric() || c == '_') {
+                        out.push(' ');
+                    }
+                    out.push_str(&literal.to_string());
+                }
+                proc_macro2::TokenTree::Punct(punct) => {
+                    out.push(punct.as_char());
+                    if matches!(punct.as_char(), ',' | '=') {
+                        out.push(' ');
+                    }
+                }
+                proc_macro2::TokenTree::Group(group) => {
+                    let (open, close) = match group.delimiter() {
+                        proc_macro2::Delimiter::Parenthesis => ("(", ")"),
+                        proc_macro2::Delimiter::Bracket => ("[", "]"),
+                        proc_macro2::Delimiter::Brace => ("{", "}"),
+                        proc_macro2::Delimiter::None => ("", ""),
+                    };
+                    if open == "{" && !out.is_empty() && !out.ends_with(' ') {
+                        out.push(' ');
+                    }
+                    out.push_str(open);
+                    print(group.stream(), out);
+                    out.push_str(close);
+                }
+            }
+            index += 1;
+        }
+    }
+    let mut out = String::new();
+    print(tokens.clone(), &mut out);
+    out
+}
+
 /// The generic type parameters bounded by `Fn`, `FnMut` or `FnOnce`.
 fn generic_function_types(generics: &syn::Generics) -> Vec<Ident> {
     let bounded = |bounds: &syn::punctuated::Punctuated<syn::TypeParamBound, syn::Token![+]>| {
@@ -503,6 +635,7 @@ fn transform(
     let mut regions = Regions::new(callables, key);
     regions.transform_block(&mut function.block);
     let call_macro = call_macro(&function, &params, key, site);
+    let call_form = call_form_doc(&function, &params);
 
     let rebinds = params.iter().filter_map(|param| {
         let pattern = param.pattern.as_ref()?;
@@ -607,6 +740,7 @@ fn transform(
     let sig = &function.sig;
     Ok(quote! {
         #(#outer)*
+        #call_form
         #[allow(non_snake_case, clippy::too_many_arguments)]
         #vis #sig {
             #(#inner)*

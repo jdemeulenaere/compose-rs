@@ -1,3 +1,11 @@
+/**
+ # Call
+
+ ```text
+ Screen!(items, mode, content)
+ ```
+
+ Arguments go in this order, or by name (`name = value`); those shown with a value are optional.*/
 #[allow(non_snake_case, clippy::too_many_arguments)]
 fn Screen(items: Rc<Vec<u32>>, mode: Mode, content: Rc<dyn Fn()>) {
     let __composer = ::compose::__private::current();

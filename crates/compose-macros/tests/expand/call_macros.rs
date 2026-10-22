@@ -16,3 +16,17 @@ fn Counter() {
     });
     Toolbar(callback(move || count.set(0)));
 }
+
+#[composable]
+fn Menu(drawer: DrawerState, title: String, shown: Rc<Vec<u32>>) {
+    let scope = remember_coroutine_scope();
+    IconButton!(on_click = move || {
+        scope.launch(async move { drawer.open().await });
+    }, {
+        Text!(title);
+    });
+    LazyColumn!(state = drawer, move |list: LazyListScope| {
+        list.items(shown.len(), move |index| Text!("{title} {}", shown[index]));
+        Show(drawer);
+    });
+}

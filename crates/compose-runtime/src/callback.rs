@@ -84,6 +84,17 @@ macro_rules! closures {
                 Callback(Rc::new(self))
             }
         }
+
+        impl<Function, Output, $($argument),*> IntoOptionalCallback<dyn Fn($($argument),*) -> Output>
+            for Function
+        where
+            Function: Fn($($argument),*) -> Output + 'static,
+        {
+            #[inline]
+            fn into_optional_callback(self) -> Option<Callback<dyn Fn($($argument),*) -> Output>> {
+                Some(Callback(Rc::new(self)))
+            }
+        }
     };
 }
 
@@ -110,13 +121,44 @@ pub fn to_callback<F: ?Sized, C: IntoCallback<F> + Clone>(function: &C) -> Callb
     function.clone().into_callback()
 }
 
-/// Converts an optional function into an optional callback: what call macros apply to an
-/// optional callback argument that isn't a lambda (`if editable { Some(move || …) } else { None }`).
+/// What converts into an optional callback, as Kotlin passes a lambda for a nullable one: an
+/// `Option` of a function, a callback, or a closure.
+pub trait IntoOptionalCallback<F: ?Sized> {
+    fn into_optional_callback(self) -> Option<Callback<F>>;
+}
+
+impl<F: ?Sized, C: IntoCallback<F>> IntoOptionalCallback<F> for Option<C> {
+    #[inline]
+    fn into_optional_callback(self) -> Option<Callback<F>> {
+        self.map(IntoCallback::into_callback)
+    }
+}
+
+impl<F: ?Sized> IntoOptionalCallback<F> for Callback<F> {
+    #[inline]
+    fn into_optional_callback(self) -> Option<Callback<F>> {
+        Some(self)
+    }
+}
+
+/// Converts into an optional callback: what call macros apply to an optional callback argument
+/// that isn't a lambda (`if editable { Some(move || …) } else { None }`, a callback forwarded by
+/// name).
 #[inline]
-pub fn optional_callback<F: ?Sized, C: IntoCallback<F>>(
-    function: Option<C>,
+pub fn optional_callback<F: ?Sized, C: IntoOptionalCallback<F>>(
+    function: C,
 ) -> Option<Callback<F>> {
-    function.map(IntoCallback::into_callback)
+    function.into_optional_callback()
+}
+
+/// A clone of a lambda's capture, where the lambda would move it: what `#[composable]` passes for
+/// a capture given by itself as an argument (`Text!(name)`), and gives a `move` closure or an
+/// `async move` block for the captures it names. A lambda runs again, so it can't give its
+/// captures away.
+#[doc(hidden)]
+#[inline]
+pub fn reuse<T: Clone>(capture: &T) -> T {
+    capture.clone()
 }
 
 // ---- Memoization -----------------------------------------------------------------------------

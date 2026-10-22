@@ -11,7 +11,7 @@ pub use crate::callback::{
     callback, callback_0, callback_1, callback_2, callback_3, callback_4, callback_5, callback_6,
     callback_7, callback_8, lambda_probe, optional_callback, resolve_lazy, resolve_lazy_0,
     resolve_lazy_1, resolve_lazy_2, resolve_lazy_3, resolve_lazy_4, resolve_lazy_5, resolve_lazy_6,
-    resolve_lazy_7, resolve_lazy_8, to_callback,
+    resolve_lazy_7, resolve_lazy_8, reuse, to_callback,
 };
 pub use crate::compose_arg::ComposeArg;
 pub use crate::composer::{Composer, current};

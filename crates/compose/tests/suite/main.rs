@@ -1,6 +1,7 @@
 //! The compose integration tests in one binary, each file a module, so
 //! they build and link once (docs/08-fast-builds.md).
 
+mod clone_on_use;
 mod composables;
 mod derived;
 mod ergonomics;

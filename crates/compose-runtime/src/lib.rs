@@ -28,6 +28,7 @@ mod effects;
 mod error;
 pub mod executor;
 mod hash;
+mod immutable_list;
 mod local;
 mod node_tree;
 mod observe;
@@ -38,7 +39,7 @@ mod slot_table;
 mod state;
 
 pub use applier::{Applier, NodeRef};
-pub use callback::{Callback, IntoCallback, callback};
+pub use callback::{Callback, IntoCallback, IntoOptionalCallback, callback};
 pub use compose_arg::ComposeArg;
 pub use compose_macros::{ComposeArg, composable};
 pub use composer::{Composer, current, current_recompose_scope};
@@ -51,6 +52,7 @@ pub use effects::{
 pub use error::ComposeError;
 pub use executor::{CoroutineScope, Job, delay, with_frame_millis, with_frame_nanos};
 pub use hash::{KeyHasher, hash_key, key_of};
+pub use immutable_list::ImmutableList;
 pub use local::{CompositionLocal, CompositionLocalProvider, ProvidedValue};
 pub use node_tree::NodeTree;
 pub use observe::ReadObserver;

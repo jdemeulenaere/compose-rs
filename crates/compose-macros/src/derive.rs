@@ -12,8 +12,30 @@ pub(crate) fn expand(input: TokenStream) -> TokenStream {
     }
 }
 
-fn same(a: TokenStream, b: TokenStream, field: &syn::Field) -> TokenStream {
-    quote_spanned! { field.ty.span()=> ::compose::__private::ComposeArg::same(#a, #b) }
+/// Field-wise `same`, or `PartialEq` for a field marked `#[compose_arg(eq)]`.
+fn same(a: TokenStream, b: TokenStream, field: &syn::Field) -> syn::Result<TokenStream> {
+    Ok(if compared_by_value(field)? {
+        quote_spanned! { field.ty.span()=> ::core::cmp::PartialEq::eq(#a, #b) }
+    } else {
+        quote_spanned! { field.ty.span()=> ::compose::__private::ComposeArg::same(#a, #b) }
+    })
+}
+
+/// Whether a field is marked `#[compose_arg(eq)]`: compared by `PartialEq`, as a collection the
+/// model knows to be small (`#[compose_arg(eq)] tags: Vec<String>`).
+fn compared_by_value(field: &syn::Field) -> syn::Result<bool> {
+    let mut eq = false;
+    for attr in field.attrs.iter().filter(|attr| attr.path().is_ident("compose_arg")) {
+        attr.parse_nested_meta(|meta| {
+            if meta.path.is_ident("eq") {
+                eq = true;
+                Ok(())
+            } else {
+                Err(meta.error("unknown `compose_arg` option; expected `eq`"))
+            }
+        })?;
+    }
+    Ok(eq)
 }
 
 fn all(conditions: Vec<TokenStream>) -> TokenStream {
@@ -35,22 +57,26 @@ fn derive(input: TokenStream) -> syn::Result<TokenStream> {
     // `Rc<T>` is `ComposeArg` for any `T`, so `Shared<Vec<u32>>` works.
     let parameters: Vec<String> =
         input.generics.type_params().map(|param| param.ident.to_string()).collect();
-    let fields: Vec<syn::Type> = match &input.data {
-        Data::Struct(data) => data.fields.iter().map(|field| field.ty.clone()).collect(),
-        Data::Enum(data) => data
-            .variants
-            .iter()
-            .flat_map(|variant| variant.fields.iter().map(|field| field.ty.clone()))
-            .collect(),
+    let fields: Vec<syn::Field> = match &input.data {
+        Data::Struct(data) => data.fields.iter().cloned().collect(),
+        Data::Enum(data) => {
+            data.variants.iter().flat_map(|variant| variant.fields.iter().cloned()).collect()
+        }
         Data::Union(_) => Vec::new(),
     };
-    let generic_fields: Vec<syn::Type> =
-        fields.into_iter().filter(|ty| mentions(quote!(#ty), &parameters)).collect();
-    if !generic_fields.is_empty() {
-        let clause = input.generics.make_where_clause();
-        for ty in generic_fields {
-            clause.predicates.push(parse_quote!(#ty: ::compose::__private::ComposeArg));
+    let mut bounds: Vec<syn::WherePredicate> = Vec::new();
+    for field in fields {
+        let ty = &field.ty;
+        if mentions(quote!(#ty), &parameters) {
+            bounds.push(if compared_by_value(&field)? {
+                parse_quote!(#ty: ::core::cmp::PartialEq + 'static)
+            } else {
+                parse_quote!(#ty: ::compose::__private::ComposeArg)
+            });
         }
+    }
+    if !bounds.is_empty() {
+        input.generics.make_where_clause().predicates.extend(bounds);
     }
     // Fields of a packed struct can't be borrowed in place: compare copies (they must be `Copy`).
     let packed = input
@@ -77,11 +103,11 @@ fn derive(input: TokenStream) -> syn::Result<TokenStream> {
                         same(quote!(&self.#member), quote!(&other.#member), field)
                     }
                 })
-                .collect();
+                .collect::<syn::Result<_>>()?;
             all(conditions)
         }
         Data::Enum(data) => {
-            let arms = data.variants.iter().map(|variant| {
+            let arms = data.variants.iter().map(|variant| -> syn::Result<TokenStream> {
                 let name = &variant.ident;
                 let left = |prefix: &str| -> Vec<syn::Ident> {
                     (0..variant.fields.len()).map(|index| format_ident!("__{}{}", prefix, index)).collect()
@@ -92,9 +118,9 @@ fn derive(input: TokenStream) -> syn::Result<TokenStream> {
                     .iter()
                     .zip(ours.iter().zip(&theirs))
                     .map(|(field, (a, b))| same(quote!(#a), quote!(#b), field))
-                    .collect();
+                    .collect::<syn::Result<_>>()?;
                 let condition = all(conditions);
-                match &variant.fields {
+                Ok(match &variant.fields {
                     Fields::Named(fields) => {
                         let names: Vec<_> = fields.named.iter().map(|field| &field.ident).collect();
                         quote! {
@@ -105,8 +131,9 @@ fn derive(input: TokenStream) -> syn::Result<TokenStream> {
                         (Self::#name(#(#ours),*), Self::#name(#(#theirs),*)) => #condition,
                     },
                     Fields::Unit => quote! { (Self::#name, Self::#name) => true, },
-                }
+                })
             });
+            let arms = arms.collect::<syn::Result<Vec<_>>>()?;
             let fallback = (data.variants.len() > 1).then(|| quote!(_ => false,));
             if data.variants.is_empty() {
                 quote!(match *self {})

@@ -1,4 +1,12 @@
 /// Greets someone.
+/**
+ # Call
+
+ ```text
+ Greeting!(name, count)
+ ```
+
+ Arguments go in this order, or by name (`name = value`); those shown with a value are optional.*/
 #[allow(non_snake_case, clippy::too_many_arguments)]
 pub fn Greeting(name: String, count: i32) {
     let __composer = ::compose::__private::current();

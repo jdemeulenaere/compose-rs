@@ -1,0 +1,5 @@
+error: `top_bar` takes a composable lambda, and `Bar!(…)` is a call: wrap it in braces, `top_bar = { Bar!(…) }`
+  --> tests/ui/call_composable_call_for_slot.rs:16:22
+   |
+16 |     Frame!(top_bar = Bar!("Title".into()), {});
+   |                      ^^^

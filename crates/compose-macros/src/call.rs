@@ -9,7 +9,7 @@
 //! defaults; and emits the plain call, `Button(…)`.
 
 use proc_macro2::{Span, TokenStream};
-use quote::{ToTokens, quote, quote_spanned};
+use quote::{ToTokens, TokenStreamExt, quote, quote_spanned};
 use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
 use syn::spanned::Spanned;
@@ -187,8 +187,11 @@ impl ToTokens for Marked {
         let marker = quote! { ::compose::__private::marked!(#(#names),*); };
         match &self.body {
             MarkedBody::Block(block) => {
-                let statements = &block.stmts;
-                tokens.extend(quote! { { #marker #(#statements)* } });
+                // The block's own braces, so an error about the argument points at it.
+                block.brace_token.surround(tokens, |tokens| {
+                    marker.to_tokens(tokens);
+                    tokens.append_all(&block.stmts);
+                });
             }
             MarkedBody::Closure(closure) => {
                 let mut closure = closure.clone();
@@ -240,6 +243,26 @@ impl Value {
             self,
             Value::Marked(_) | Value::Expr(Expr::Block(_)) | Value::Expr(Expr::Closure(_))
         )
+    }
+
+    /// A composable's call macro (`TopAppBar!(…)`), given where a lambda goes: an error
+    /// suggesting the braces of a content lambda.
+    fn check_not_a_call(&self, parameter: &Ident) -> syn::Result<()> {
+        let Value::Expr(Expr::Macro(call)) = self else { return Ok(()) };
+        let Some(name) = call.mac.path.segments.last().map(|segment| segment.ident.to_string())
+        else {
+            return Ok(());
+        };
+        if !crate::regions::is_pascal_case(&name) {
+            return Ok(());
+        }
+        Err(Error::new(
+            call.mac.path.span(),
+            format!(
+                "`{parameter}` takes a composable lambda, and `{name}!(…)` is a call: wrap it in \
+                 braces, `{parameter} = {{ {name}!(…) }}`"
+            ),
+        ))
     }
 }
 
@@ -399,6 +422,21 @@ fn plain_value(value: Value) -> TokenStream {
     }
 }
 
+/// The value passed for a value parameter: as written, or a clone of a local a lambda of the same
+/// call captures (`ModalNavigationDrawer!(drawer_state = drawer, { … drawer … })`). The lambda
+/// borrows it to compare its captures, so the value can't move it, whatever the parameters'
+/// order.
+fn shared_value(value: Value, captured: &[Ident]) -> TokenStream {
+    if let Value::Expr(Expr::Path(path)) = &value
+        && path.qself.is_none()
+        && let Some(name) = path.path.get_ident()
+        && captured.contains(name)
+    {
+        return quote! { ::core::clone::Clone::clone(&#name) };
+    }
+    plain_value(value)
+}
+
 /// `Some`, as a function called.
 pub(crate) fn is_some(function: &Expr) -> bool {
     matches!(function, Expr::Path(path) if path.qself.is_none() && path.path.segments.last().is_some_and(|segment| segment.ident == "Some"))
@@ -408,6 +446,59 @@ fn is_string_literal(argument: &Argument) -> bool {
     matches!(argument, Argument::Positional(Value::Expr(Expr::Lit(literal))) if matches!(literal.lit, syn::Lit::Str(_)))
 }
 
+/// The trailing lambda, taken out of `arguments`: the argument for the last parameter, when that
+/// is a callback not given by name, as Kotlin's trailing lambda.
+/// - A positional argument after named ones is it, when it is the only one and a lambda (`{ … }`
+///   anywhere after them) or the last argument (`Layout!(modifier = m, measure_policy = p,
+///   content)`).
+/// - Otherwise a final block or closure is it, once every required parameter before the last
+///   is given: `BasicTextField!(value, move |text| …)` gives `on_value_change`, not the trailing
+///   `decoration_box`.
+fn trailing_lambda(
+    parameters: &[Parameter],
+    arguments: &mut Vec<Argument>,
+    formatting: bool,
+) -> Option<Value> {
+    let last = parameters.last()?;
+    if last.callback.is_none() && last.optional.is_none()
+        || arguments
+            .iter()
+            .any(|argument| matches!(argument, Argument::Named(name, _) if *name == last.name))
+    {
+        return None;
+    }
+    let first_named = arguments.iter().position(|argument| matches!(argument, Argument::Named(..)));
+    let after_named: Vec<usize> = (first_named.map_or(arguments.len(), |first| first + 1)
+        ..arguments.len())
+        .filter(|index| matches!(arguments[*index], Argument::Positional(_)))
+        .collect();
+    let index = match after_named.as_slice() {
+        [index] if *index + 1 == arguments.len() || arguments[*index].value().is_lambda() => *index,
+        [] if matches!(arguments.last(), Some(Argument::Positional(value)) if value.is_lambda()) => {
+            // The positional arguments before it fill the first parameters (a format string
+            // and its arguments, the first one).
+            let positional = arguments.len() - 1;
+            let positional = if formatting { 1 } else { positional };
+            let given = |index: usize, parameter: &Parameter| {
+                index < positional
+                    || arguments.iter().any(
+                        |argument| matches!(argument, Argument::Named(name, _) if *name == parameter.name),
+                    )
+            };
+            let required_missing = parameters[..parameters.len() - 1]
+                .iter()
+                .enumerate()
+                .any(|(index, parameter)| parameter.default.is_none() && !given(index, parameter));
+            if required_missing {
+                return None;
+            }
+            arguments.len() - 1
+        }
+        _ => return None,
+    };
+    Some(arguments.remove(index).into_value())
+}
+
 fn build(call: Call) -> syn::Result<TokenStream> {
     let Call { function, path, parameters, format, mut arguments, span } = call;
     let mut slots: Vec<Option<TokenStream>> = parameters.iter().map(|_| None).collect();
@@ -415,31 +506,33 @@ fn build(call: Call) -> syn::Result<TokenStream> {
         slots[index] = Some(value);
     };
 
-    // A final block or closure is the last parameter, when that is a callback (a trailing lambda).
-    let mut trailing = None;
-    let last_is_callback = parameters
-        .last()
-        .is_some_and(|parameter| parameter.callback.is_some() || parameter.optional.is_some());
-    if last_is_callback {
-        let is_trailing =
-            matches!(arguments.last(), Some(Argument::Positional(value)) if value.is_lambda());
-        let named_last = arguments.iter().any(|argument| {
-            matches!(argument, Argument::Named(name, _) if parameters.last().is_some_and(|last| *name == last.name))
-        });
-        if is_trailing && !named_last {
-            trailing = arguments.pop();
-        }
+    // The trailing lambda is bound by name: given twice, it is an error as any argument is.
+    let formatting = format && arguments.first().is_some_and(is_string_literal);
+    if let Some(value) = trailing_lambda(&parameters, &mut arguments, formatting)
+        && let Some(last) = parameters.last()
+    {
+        let name = Ident::new(&last.name.to_string(), value.span());
+        arguments.push(Argument::Named(name, value));
     }
 
     // A leading string literal formats into a `#[format]` first parameter, with the positional
     // arguments after it.
     // A named argument the string names (`"{count} items", count = items.len()`) is a format
     // argument, as in `format!`, even if a parameter has its name.
+    // What the call's lambdas capture: a local also given by name to a value parameter is
+    // cloned for it (`shared_value`).
+    let captured: Vec<Ident> = arguments
+        .iter()
+        .filter_map(|argument| match argument.value() {
+            Value::Marked(marked) => Some(marked.captures.iter().cloned()),
+            Value::Expr(_) => None,
+        })
+        .flatten()
+        .collect();
     let mut arguments = arguments.into_iter().peekable();
     let mut next_positional = 0;
     let mut format_arguments = Vec::new();
     let mut format_names = Vec::new();
-    let formatting = format && arguments.peek().is_some_and(is_string_literal);
     if formatting {
         if let Some(Argument::Positional(Value::Expr(Expr::Lit(literal)))) = arguments.peek()
             && let syn::Lit::Str(string) = &literal.lit
@@ -494,7 +587,8 @@ fn build(call: Call) -> syn::Result<TokenStream> {
                 if named_seen {
                     return Err(Error::new(
                         value.span(),
-                        "positional arguments come before named ones",
+                        "positional arguments come before named ones; only the trailing lambda \
+                         (`{ … }`) may follow them",
                     ));
                 }
                 if next_positional >= parameters.len() {
@@ -507,13 +601,20 @@ fn build(call: Call) -> syn::Result<TokenStream> {
                 next_positional - 1
             }
         };
-        let value = match parameters[index].callback {
-            Some(arity) => callback_value(arity, argument.into_value()),
+        let parameter = &parameters[index];
+        let value = match parameter.callback {
+            Some(arity) => {
+                let value = argument.into_value();
+                value.check_not_a_call(&parameter.name)?;
+                callback_value(arity, value)
+            }
             // A lambda for an optional callback is `Some` callback; anything else (`None`, an
-            // `Option` value) is passed as written.
-            None if parameters[index].optional.is_some() => {
-                let arity = parameters[index].optional.unwrap_or(0);
-                match argument.into_value() {
+            // `Option` value, a callback or a function by name) is converted.
+            None if parameter.optional.is_some() => {
+                let arity = parameter.optional.unwrap_or(0);
+                let value = argument.into_value();
+                value.check_not_a_call(&parameter.name)?;
+                match value {
                     value @ (Value::Marked(_)
                     | Value::Expr(Expr::Closure(_))
                     | Value::Expr(Expr::Block(_))) => {
@@ -554,10 +655,10 @@ fn build(call: Call) -> syn::Result<TokenStream> {
             }
             // A `#[format]` parameter converts whatever it is given (`Text!(title)`).
             None if format && index == 0 => {
-                let value = plain_value(argument.into_value());
+                let value = shared_value(argument.into_value(), &captured);
                 quote! { ::core::convert::Into::into(#value) }
             }
-            None => plain_value(argument.into_value()),
+            None => shared_value(argument.into_value(), &captured),
         };
         set(&mut slots, index, value);
     }
@@ -570,21 +671,6 @@ fn build(call: Call) -> syn::Result<TokenStream> {
             ::core::convert::Into::into(::std::format!(#(#format_arguments),*))
         };
         set(&mut slots, 0, value);
-    }
-
-    if let Some(argument) = trailing {
-        let index = parameters.len() - 1;
-        if slots[index].is_some() {
-            return Err(Error::new(span, format!("`{function}`'s last argument is given twice")));
-        }
-        let arity = parameters[index].callback.or(parameters[index].optional).unwrap_or(0);
-        let value = callback_value(arity, argument.into_value());
-        let value = if parameters[index].optional.is_some() {
-            quote! { ::core::option::Option::Some(#value) }
-        } else {
-            value
-        };
-        set(&mut slots, index, value);
     }
 
     let mut values = Vec::new();

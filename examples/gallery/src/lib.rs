@@ -33,28 +33,9 @@ pub fn GalleryWith(about: bool) {
         let snackbars = remember(SnackbarHostState::new);
         let scope = remember_coroutine_scope();
         // Closes the drawer.
-        let close_drawer = {
-            let (drawer, scope) = (drawer.clone(), scope.clone());
-            move || {
-                let drawer = drawer.clone();
-                scope.launch(async move { drawer.close().await });
-            }
-        };
-        let reset_from_drawer = {
-            let close_drawer = close_drawer.clone();
-            move || {
-                cards.set(FIRST_CARDS);
-                query.set(String::new());
-                close_drawer();
-            }
-        };
-        let about_from_drawer = {
-            let close_drawer = close_drawer.clone();
-            move || {
-                dialog.set(true);
-                close_drawer();
-            }
-        };
+        let close_drawer = callback(move || {
+            scope.launch(async move { drawer.close().await });
+        });
         ModalNavigationDrawer!(
             {
                 ModalDrawerSheet!({
@@ -66,43 +47,47 @@ pub fn GalleryWith(about: bool) {
                     NavigationDrawerItem!(
                         { Text!("Gallery") },
                         true,
-                        close_drawer.clone(),
+                        close_drawer,
                         modifier = NavigationDrawerItemDefaults::item_padding(Modifier),
                         icon = Some(|| Icon!(icons::filled::home(), None))
                     );
                     NavigationDrawerItem!(
                         { Text!("Reset the cards") },
                         false,
-                        reset_from_drawer,
+                        move || {
+                            cards.set(FIRST_CARDS);
+                            query.set(String::new());
+                            close_drawer();
+                        },
                         modifier = NavigationDrawerItemDefaults::item_padding(Modifier),
                         icon = Some(|| Icon!(icons::filled::delete(), None))
                     );
                     NavigationDrawerItem!(
                         { Text!("About") },
                         false,
-                        about_from_drawer,
+                        move || {
+                            dialog.set(true);
+                            close_drawer();
+                        },
                         modifier = NavigationDrawerItemDefaults::item_padding(Modifier),
                         icon = Some(|| Icon!(icons::filled::info(), None))
                     );
                 });
             },
-            drawer_state = drawer.clone(),
+            drawer_state = drawer,
             {
-                let (drawer, scope, snackbars) = (drawer.clone(), scope.clone(), snackbars.clone());
                 Scaffold!(
                     top_bar = {
-                        TopBar(drawer.clone(), searching, query, menu, cards, dialog);
+                        TopBar(drawer, searching, query, menu, cards, dialog);
                     },
                     snackbar_host = {
-                        SnackbarHost!(snackbars.clone());
+                        SnackbarHost!(snackbars);
                     },
                     floating_action_button = {
-                        let (scope, snackbars) = (scope.clone(), snackbars.clone());
                         FloatingActionButton!(
                             on_click = move || {
                                 let added = cards.get();
                                 cards.set(added + 1);
-                                let snackbars = snackbars.clone();
                                 scope.launch(async move {
                                     snackbars
                                         .show_snackbar(
@@ -155,20 +140,13 @@ fn TopBar(
 ) {
     let scope = remember_coroutine_scope();
     let search_field = remember(FocusRequester::new);
-    // The field takes the focus as it shows (the keyboard opens).
-    let focus = search_field.clone();
-    LaunchedEffect(searching.get(), async move {
-        if searching.get() {
-            focus.request_focus();
-        }
-    });
     TopAppBar!(
         {
             if searching.get() {
                 TextField!(
                     query.get(),
                     move |value| query.set(value),
-                    modifier = Modifier.fill_max_width().focus_requester(search_field.clone()),
+                    modifier = Modifier.fill_max_width().focus_requester(search_field),
                     text_style = MaterialTheme::typography().body_large,
                     placeholder = Some(|| Text!("Search the cards")),
                     single_line = true,
@@ -177,21 +155,16 @@ fn TopBar(
                 Text!("Gallery");
             }
         },
-        navigation_icon = Some({
-            let (drawer, scope) = (drawer.clone(), scope.clone());
-            move || {
-                let (drawer, scope) = (drawer.clone(), scope.clone());
-                IconButton!(
-                    on_click = move || {
-                        let drawer = drawer.clone();
-                        scope.launch(async move { drawer.open().await });
-                    },
-                    {
-                        Icon!(icons::filled::menu(), Some("Menu"));
-                    }
-                );
-            }
-        }),
+        navigation_icon = {
+            IconButton!(
+                on_click = move || {
+                    scope.launch(async move { drawer.open().await });
+                },
+                {
+                    Icon!(icons::filled::menu(), Some("Menu"));
+                }
+            );
+        },
         actions = move |_row: RowScope| {
             TooltipArea!(
                 move || PlainTooltip!({
@@ -249,6 +222,12 @@ fn TopBar(
             });
         }
     );
+    // The field takes the focus as it shows (the keyboard opens).
+    LaunchedEffect(searching.get(), async move {
+        if searching.get() {
+            search_field.request_focus();
+        }
+    });
 }
 
 #[composable]
@@ -287,19 +266,14 @@ fn Cards(count: u32, query: String, modifier: Modifier) {
         return;
     }
     Row!(modifier = modifier.fill_max_width(), |row: RowScope| {
-        let shown = shown.clone();
         LazyColumn!(
             modifier = Modifier.weight(row, 1.0),
-            state = list.clone(),
+            state = list,
             vertical_arrangement = Arrangement::spaced_by(8.dp()),
             move |scope: LazyListScope| {
-                let shown = shown.clone();
                 scope.items_keyed(
                     shown.len(),
-                    {
-                        let shown = shown.clone();
-                        move |index| u64::from(shown[index])
-                    },
+                    move |index| u64::from(shown[index]),
                     move |index| {
                         let card = shown[index];
                         Card!(modifier = Modifier.fill_max_width(), {
@@ -317,7 +291,7 @@ fn Cards(count: u32, query: String, modifier: Modifier) {
                 );
             }
         );
-        let adapter = remember_lazy_list_scrollbar_adapter(list.clone());
+        let adapter = remember_lazy_list_scrollbar_adapter(list);
         VerticalScrollbar!(
             adapter,
             modifier = Modifier.fill_max_height().padding_sides(4.dp(), 0.dp(), 0.dp(), 0.dp())

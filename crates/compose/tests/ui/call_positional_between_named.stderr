@@ -1,0 +1,5 @@
+error: positional arguments come before named ones; only the trailing lambda (`{ … }`) may follow them
+  --> tests/ui/call_positional_between_named.rs:14:31
+   |
+14 |     Button!(on_click = || {}, { println!("first") }, { println!("second") });
+   |                               ^^^^^^^^^^^^^^^^^^^^^
