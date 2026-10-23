@@ -119,12 +119,14 @@ fn FeedScreen(animated: bool) {
                 LazyColumn!(
                     modifier = Modifier.padding(padding).fill_max_size(),
                     move |scope: LazyListScope| {
+                        // Content types as the Kotlin app's: a post reuses a post that left.
                         if animated {
-                            scope.item(LiveHeader);
+                            scope.item_with("header", LiveHeader);
                         }
-                        scope.items_keyed(
+                        scope.items_keyed_with(
                             POSTS as usize,
                             |index| index as u64,
+                            |_| "post",
                             |index| PostCard(index as u32),
                         );
                     }

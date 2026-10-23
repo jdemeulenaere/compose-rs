@@ -177,6 +177,9 @@ impl ModifierNode for DraggableNode {
     fn on_detach(&mut self, _context: &mut compose_ui::DetachContext<'_>) {
         self.driver.stop();
     }
+    fn on_reset(&mut self) {
+        self.driver.stop();
+    }
 }
 
 impl PointerInputModifierNode for DraggableNode {

@@ -749,10 +749,10 @@ LazyColumn(
     verticalArrangement = Arrangement.spacedBy(4.dp),
 ) {
     for (day in days) {
-        stickyHeader(key = day.title) {
+        stickyHeader(key = day.title, contentType = "day") {
             Text(day.title, Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface))
         }
-        items(day.messages, key = { it.id }) { message ->
+        items(day.messages, key = { it.id }, contentType = { "message" }) { message ->
             Text(message.text)
         }
     }
@@ -785,7 +785,9 @@ pub fn Messages(days: ImmutableList<Day>, state: LazyListState) {
                 // `title` is made here, not captured: it moves into the closure as in plain
                 // Rust (D158 clones only the lambda's captures), hence the clone for the key.
                 let title = day.title.clone();
-                scope.sticky_header_keyed(title.clone(), move |_item| {
+                // Content types, as Compose's `contentType`: an item reuses the composition and
+                // nodes of one of its type that left (D430).
+                scope.sticky_header_keyed_with(title.clone(), "day", move |_item| {
                     Text!(
                         title.clone(),
                         modifier = Modifier
@@ -794,9 +796,10 @@ pub fn Messages(days: ImmutableList<Day>, state: LazyListState) {
                     );
                 });
                 // Keys keep an item's state (and the scroll position) when items move.
-                scope.items_list_keyed(
+                scope.items_list_keyed_with(
                     day.messages.clone(),
                     |message| message.id,
+                    |_message| "message",
                     |_item, message| {
                         Text!(&message.text);
                     },
@@ -807,7 +810,7 @@ pub fn Messages(days: ImmutableList<Day>, state: LazyListState) {
 }
 ```
 
-The content is a closure taking the `LazyListScope`. Its methods are named apart because Rust has no overloads (D174):
+The content is a closure taking the `LazyListScope`. Its methods are named apart because Rust has no overloads (D174), and each has a `_with` form taking Compose's `contentType` after the key (D432):
 
 | Kotlin | compose-rs |
 |---|---|
@@ -816,9 +819,10 @@ The content is a closure taking the `LazyListScope`. Its methods are named apart
 | `items(list) { item -> … }`, with `key = { item -> … }` | `scope.items_list(list, \|item_scope, item\| …)`, `scope.items_list_keyed(list, key, …)` |
 | `itemsIndexed(list) { index, item -> … }` | `scope.items_indexed(list, …)`, `scope.items_indexed_keyed(list, key, …)` |
 | `stickyHeader { … }` | `scope.sticky_header(…)`, `scope.sticky_header_keyed(key, …)` |
+| `contentType = …` (on any of them) | `scope.item_with(content_type, …)`, `scope.items_keyed_with(count, key, content_type, …)`, … |
 | `Modifier.fillParentMaxWidth()` | `Modifier.fill_parent_max_width(&item_scope)` |
 
-The list forms take anything that converts to an `ImmutableList` (a `Vec`, a slice, an `ImmutableList`, shared without copying). Keys are any `Hash + PartialEq` value; debug builds panic on a duplicate key, as Compose throws. Items have no `contentType` and no `animateItem` ([Differences](differences.md#lazy-lists)).
+The list forms take anything that converts to an `ImmutableList` (a `Vec`, a slice, an `ImmutableList`, shared without copying). Keys are any `Hash + PartialEq` value; debug builds panic on a duplicate key, as Compose throws. A content type is any `Hash` value: as in Compose, an item coming into view reuses the composition and nodes of an item of its content type that left (those without one, Compose's `null`, reuse each other's), its remembered values computed anew ([Performance](performance.md)). Items have no `animateItem` ([Differences](differences.md#lazy-lists)).
 
 ### Custom layouts
 

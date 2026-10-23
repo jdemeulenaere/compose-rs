@@ -75,7 +75,12 @@ pub(crate) enum NodeOp {
 pub(crate) enum NodeStart {
     NotNode,
     Reused(NodeRef),
-    Insert { parent: NodeRef, index: u32 },
+    /// A node kept by content being reused: the applier resets it first (`Applier::reuse`).
+    Reusing(NodeRef),
+    Insert {
+        parent: NodeRef,
+        index: u32,
+    },
 }
 
 pub(crate) enum WalkStep {
@@ -164,15 +169,18 @@ impl Runtime {
         frame
     }
 
+    /// Starts a group of `kind`. `reusable` marks a node group as a reusable node's
+    /// (`start_reusable_node`): content being reused keeps it, and replaces other node groups.
     pub(crate) fn start_group(
         &mut self,
         kind: GroupKind,
         key: u64,
         data_key: u64,
         identity: Option<Identity>,
+        reusable: bool,
     ) -> (NodeOp, NodeStart) {
         let composition = self.check_composing();
-        let Runtime { compositions, scopes, frames, .. } = self;
+        let Runtime { compositions, scopes, frames, reusing, .. } = self;
         let table = &mut compositions.data_mut(composition).table;
         let parent = frames.last_mut().unwrap_or_else(|| misuse(ComposeError::NotComposing));
         match parent.mode {
@@ -184,7 +192,10 @@ impl Runtime {
 
         let mut op = NodeOp::None;
         let mut found = NONE;
-        if !parent.inserting {
+        // Content being reused replaces the node groups that aren't reusable nodes, as
+        // Compose's `forceReplace` (a `ComposeNode` under `ReusableContent`).
+        let force_replace = *reusing != 0 && kind == GroupKind::Node && !reusable;
+        if !parent.inserting && !force_replace {
             let mut previous = parent.last_placed;
             let mut current = parent.cursor;
             let mut nodes_before = 0;
@@ -197,9 +208,10 @@ impl Runtime {
                     (Some(old), Some(new)) => old == new,
                     _ => true,
                 };
+                // A reusable group matches by its key alone: another data key reuses it.
                 if group.key == key
                     && group.kind == kind
-                    && group.data_key == data_key
+                    && (group.data_key == data_key || kind == GroupKind::Reusable)
                     && same_composable
                 {
                     found = current;
@@ -248,11 +260,24 @@ impl Runtime {
         let group = &mut table[index];
         let dirty = group.dirty;
         group.dirty = false;
+        // A reusable group met with another data key: its content is reused, as Compose's
+        // `startReusableGroup` (from here to its end, unless content above is reused already).
+        let starts_reuse = !inserting && kind == GroupKind::Reusable && group.data_key != data_key;
+        if starts_reuse {
+            group.data_key = data_key;
+            group.deactivated = false;
+        }
+        if inserting {
+            group.reusable = reusable;
+        }
+        let reusing_now = *reusing != 0 || starts_reuse;
         let mut frame = Frame {
             group: index,
             mode: Mode::Normal,
             inserting,
-            forced: false,
+            // Reused content runs: its slots read as empty, as if new, but its groups and
+            // nodes are kept.
+            forced: reusing_now,
             skipped: false,
             dirty,
             cursor: if inserting { NONE } else { group.first_child },
@@ -273,16 +298,20 @@ impl Runtime {
                 frame.node_start = 0;
                 if inserting {
                     NodeStart::Insert { parent: parent.node_parent, index: parent.node_index }
+                } else if reusing_now {
+                    NodeStart::Reusing(group.node)
                 } else {
                     NodeStart::Reused(group.node)
                 }
             }
             GroupKind::Restart => {
-                if inserting {
+                // Deactivated content's scopes were freed: reused, it gets new ones.
+                let fresh = inserting || group.scope.is_none();
+                if fresh {
                     group.scope = scopes.alloc(composition, index);
                 }
                 let scope = scopes.get_mut(group.scope).expect("restart group without a scope");
-                frame.forced = scope.invalid;
+                frame.forced |= scope.invalid || fresh;
                 scope.invalid = false;
                 // The epoch is bumped only once the body is known to run (`begin_body`): until
                 // then the scope may still skip, and its reads from the last run stay current.
@@ -293,6 +322,9 @@ impl Runtime {
             _ => NodeStart::NotNode,
         };
         frames.push(frame);
+        if starts_reuse && *reusing == 0 {
+            *reusing = frames.len();
+        }
         (op, node_start)
     }
 
@@ -313,7 +345,9 @@ impl Runtime {
 
     pub(crate) fn end_group(&mut self, restart: Option<fn(&dyn Any)>) -> NodeOp {
         let composition = self.check_composing();
-        let Runtime { compositions, scopes, frames, removal_stack, abandoned_groups, .. } = self;
+        let Runtime {
+            compositions, scopes, frames, removal_stack, abandoned_groups, reusing, ..
+        } = self;
         let data = compositions.data_mut(composition);
         let (table, deferred) = (&mut data.table, &mut data.deferred);
         if frames.len() < 2 {
@@ -327,6 +361,9 @@ impl Runtime {
             } else {
                 ComposeError::UnbalancedGroups
             })
+        }
+        if *reusing == frames.len() {
+            *reusing = 0;
         }
         frames.pop();
 
@@ -364,6 +401,77 @@ impl Runtime {
         let parent = frames.last_mut().expect("the sentinel frame");
         parent.node_index += count;
         op
+    }
+
+    /// Deactivates the content of the reusable group just started, and skips it: see
+    /// [`Composer::deactivate_to_end_group`].
+    pub(crate) fn deactivate_to_end_group(&mut self, changed: bool) {
+        let composition = self.check_composing();
+        // Content being reused is deactivated whatever the caller says, as Compose's
+        // `changed(active)` answers true then (its slots read as empty).
+        let changed = changed || self.reusing != 0;
+        let Runtime { compositions, scopes, frames, removal_stack, .. } = self;
+        let data = compositions.data_mut(composition);
+        let (table, deferred) = (&mut data.table, &mut data.deferred);
+        let depth = frames.len();
+        let frame = frames.last_mut().unwrap_or_else(|| misuse(ComposeError::NotComposing));
+        if frame.mode != Mode::Normal || depth < 2 {
+            misuse(ComposeError::UnbalancedGroups)
+        }
+        if frame.skipped {
+            misuse(ComposeError::UseAfterSkip)
+        }
+        // Nothing composed in it yet, as Compose requires ("No nodes can be emitted before").
+        if table[frame.group].kind != GroupKind::Reusable
+            || frame.last_placed != NONE
+            || frame.slot_cursor != 0
+        {
+            misuse(ComposeError::UnbalancedGroups)
+        }
+        frame.skipped = true;
+        frame.dirty = false;
+        if changed && !frame.inserting {
+            // Pre-order, as removals: a group's slots before its children's.
+            let group = &mut table[frame.group];
+            group.deactivated = true;
+            for slot in &mut group.slots {
+                deactivate_slot(&mut slot.value, &mut deferred.removed_values);
+            }
+            let stack = removal_stack;
+            stack.clear();
+            let mut child = group.first_child;
+            while child != NONE {
+                stack.push((child, false));
+                child = table[child].next_sibling;
+            }
+            stack.reverse();
+            while let Some((index, _)) = stack.pop() {
+                let group = &mut table[index];
+                group.dirty = false;
+                for slot in &mut group.slots {
+                    deactivate_slot(&mut slot.value, &mut deferred.removed_values);
+                }
+                if !group.scope.is_none() {
+                    scopes.free(group.scope);
+                    group.scope = ScopeId::NONE;
+                }
+                if group.kind == GroupKind::Node && !group.node.is_none() {
+                    deferred.deactivated_nodes.push(group.node);
+                }
+                let start = stack.len();
+                let mut child = group.first_child;
+                while child != NONE {
+                    stack.push((child, false));
+                    child = table[child].next_sibling;
+                }
+                stack[start..].reverse();
+            }
+        }
+        // Its nodes stay where they are: all its children's (nothing composed in it).
+        if !frame.inserting {
+            frame.node_index += table[frame.group].node_count;
+        }
+        frame.cursor = NONE;
     }
 
     /// Starts skipping the rest of the current group. Returns the depth to walk from if some
@@ -587,10 +695,12 @@ impl Runtime {
         frame.slot_cursor += 1;
         let group = frame.group;
         let slots = &self.compositions.data_mut(composition).table[group].slots;
+        // Reused content's slots read as empty (Compose's `nextSlot` while `reusing`): every
+        // `remember` computes anew, and the value it replaces is forgotten.
         let value = slots
             .get(index as usize)
-            .filter(|slot| slot.value.value_type_id() == type_id)
-            .map(|slot| slot.value.to_any());
+            .filter(|slot| self.reusing == 0 && slot.value.value_type_id() == type_id)
+            .and_then(|slot| slot.value.to_any());
         (SlotPosition { depth, group, index }, value)
     }
 
@@ -655,6 +765,14 @@ impl Runtime {
     pub(crate) fn current_scope(&mut self) -> ScopeId {
         self.check_composing();
         self.frames.last().map_or(ScopeId::NONE, |frame| frame.scope)
+    }
+}
+
+/// Empties a deactivated remember observer's slot: the observer is forgotten at the end of the
+/// pass (and dropped), as Compose's `deactivateCurrentGroup`. Other values stay until reused.
+fn deactivate_slot(value: &mut SlotValue, removed: &mut Vec<SlotValue>) {
+    if let SlotValue::Observer(_) = value {
+        removed.push(std::mem::replace(value, SlotValue::Empty));
     }
 }
 
@@ -745,9 +863,21 @@ pub(crate) fn run_walk(base: usize) {
 // shims per composable, so they stay thin, and the work happens here, compiled once.
 
 fn start_group(kind: GroupKind, key: u64, data_key: u64) -> NodeStart {
-    let (op, start) = with_runtime(|runtime| runtime.start_group(kind, key, data_key, None));
+    start_group_of(kind, key, data_key, false)
+}
+
+fn start_group_of(kind: GroupKind, key: u64, data_key: u64, reusable: bool) -> NodeStart {
+    let (op, start) =
+        with_runtime(|runtime| runtime.start_group(kind, key, data_key, None, reusable));
     apply_node_op(op);
     start
+}
+
+/// Resets a node kept by content being reused (`Applier::reuse`), before the pass updates it.
+fn reuse_node(node: NodeRef) {
+    flush_node_moves();
+    let applier = with_runtime(|runtime| runtime.active_applier());
+    applier.try_borrow_mut().unwrap_or_else(|_| misuse(ComposeError::ApplierBusy)).reuse(node);
 }
 
 /// Starts a restart group for the composable whose identity (the `TypeId` of its restart
@@ -756,7 +886,8 @@ fn start_group(kind: GroupKind, key: u64, data_key: u64) -> NodeStart {
 /// an `#[inline]` composable can have a copy per crate, with distinct addresses.
 pub(crate) fn start_restart_group_of(key: u64, identity: crate::__private::RestartIdentity) {
     let identity = Some(Identity::Type(identity.type_id, identity.name));
-    let (op, _) = with_runtime(|runtime| runtime.start_group(GroupKind::Restart, key, 0, identity));
+    let (op, _) =
+        with_runtime(|runtime| runtime.start_group(GroupKind::Restart, key, 0, identity, false));
     apply_node_op(op);
 }
 
@@ -764,7 +895,8 @@ pub(crate) fn start_restart_group_of(key: u64, identity: crate::__private::Resta
 /// marker closure (its parameters may borrow, so no `TypeId`).
 pub(crate) fn start_replace_group_of(key: u64, identity: &'static str) {
     let identity = Some(Identity::Name(identity));
-    let (op, _) = with_runtime(|runtime| runtime.start_group(GroupKind::Replace, key, 0, identity));
+    let (op, _) =
+        with_runtime(|runtime| runtime.start_group(GroupKind::Replace, key, 0, identity, false));
     apply_node_op(op);
 }
 
@@ -906,16 +1038,65 @@ impl Composer {
         start_group(GroupKind::Movable, key, data_key);
     }
 
-    /// Starts a group that emits one node. `factory` runs only when the group is new; the node
-    /// is inserted into the applier's tree at once. End it with [`end_group`](Composer::end_group).
+    /// Starts a group that emits one node, as Compose's `startNode` (`ComposeNode`). `factory`
+    /// runs only when the group is new; the node is inserted into the applier's tree at once.
+    /// Content being reused (`ReusableContent`) replaces it with a new one. End it with
+    /// [`end_group`](Composer::end_group).
     pub fn start_node<N: 'static>(&self, key: u64, factory: impl FnOnce() -> N) -> NodeRef {
         match start_group(GroupKind::Node, key, 0) {
-            NodeStart::Reused(node) => node,
+            NodeStart::Reused(node) | NodeStart::Reusing(node) => node,
             NodeStart::Insert { parent, index } => {
                 insert_node(parent, index, &mut Some(factory()), std::any::type_name::<N>())
             }
             NodeStart::NotNode => unreachable!("a node group"),
         }
+    }
+
+    /// Starts a group that emits one reusable node, as Compose's `startReusableNode`
+    /// (`ReusableComposeNode`): like [`start_node`](Composer::start_node), but content being
+    /// reused keeps the node, which the applier resets ([`Applier::reuse`]) before the pass
+    /// updates it.
+    pub fn start_reusable_node<N: 'static>(
+        &self,
+        key: u64,
+        factory: impl FnOnce() -> N,
+    ) -> NodeRef {
+        match start_group_of(GroupKind::Node, key, 0, true) {
+            NodeStart::Reused(node) => node,
+            NodeStart::Reusing(node) => {
+                reuse_node(node);
+                node
+            }
+            NodeStart::Insert { parent, index } => {
+                insert_node(parent, index, &mut Some(factory()), std::any::type_name::<N>())
+            }
+            NodeStart::NotNode => unreachable!("a node group"),
+        }
+    }
+
+    /// Starts a reusable group, as Compose's `startReusableGroup` (what `ReusableContent` and
+    /// `ReusableContentHost` are written on): matched by `key` alone, its `data_key` kept. Met
+    /// with another `data_key`, its content is reused until it ends: slots read as empty
+    /// (`remember` computes anew, the replaced values are forgotten), bodies run, groups are
+    /// matched as usual, reusable nodes are kept and updated ([`Applier::reuse`]) and other
+    /// nodes replaced. End it with [`end_reusable_group`](Composer::end_reusable_group).
+    pub fn start_reusable_group(&self, key: u64, data_key: u64) {
+        start_group(GroupKind::Reusable, key, data_key);
+    }
+
+    /// Ends a reusable group, and the reuse it started.
+    pub fn end_reusable_group(&self) {
+        self.end_group();
+    }
+
+    /// Deactivates the rest of the current reusable group, as Compose's `deactivateToEndGroup`
+    /// (`ReusableContentHost` inactive): its groups and nodes stay, for content to reuse later;
+    /// if `changed` (the content was active), or if content is being reused (when Compose's
+    /// `changed(active)` is true too), its remember observers are forgotten at the end of the
+    /// pass (their slots emptied), its recompose scopes freed, and its nodes deactivated
+    /// ([`Applier::deactivate`]). Called right after the group starts.
+    pub fn deactivate_to_end_group(&self, changed: bool) {
+        with_runtime(|runtime| runtime.deactivate_to_end_group(changed));
     }
 
     /// Ends a replace, movable or node group.

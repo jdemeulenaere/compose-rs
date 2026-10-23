@@ -84,8 +84,8 @@ fn bitmap(which: u32) -> ImageBitmap {
     STRESS_BITMAPS.with(|bitmaps| bitmaps[(which % BITMAPS) as usize].clone())
 }
 
-/// What an item of the stress list is, from its index.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+/// What an item of the stress list is, from its index; also its content type.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum StressKind {
     Carousel,
     RichPost,
@@ -127,14 +127,17 @@ pub fn StressScroll() {
                     move |scope: LazyListScope| {
                         for section in 0..STRESS_ITEMS / SECTION_ITEMS {
                             // Headers' keys apart from the items' (the Kotlin app's are strings).
-                            scope.sticky_header_keyed(
+                            // Content types as the Kotlin app's: an item reuses one of its kind.
+                            scope.sticky_header_keyed_with(
                                 STRESS_ITEMS as u64 + section as u64,
+                                "header",
                                 move |_| SectionHeader(section),
                             );
                             let first = section * SECTION_ITEMS;
-                            scope.items_keyed(
+                            scope.items_keyed_with(
                                 SECTION_ITEMS as usize,
                                 move |offset| (first + offset as u32) as u64,
+                                move |offset| StressKind::of(first + offset as u32),
                                 move |offset| StressItem(first + offset as u32),
                             );
                         }

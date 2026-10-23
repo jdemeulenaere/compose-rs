@@ -126,8 +126,11 @@ impl Composition {
                 stack.push((entry.next_sibling, depth));
                 let indent = "  ".repeat(depth);
                 let _ = write!(out, "{indent}{:?} {:#018x}", entry.kind, entry.key);
-                if entry.kind == GroupKind::Movable {
+                if matches!(entry.kind, GroupKind::Movable | GroupKind::Reusable) {
                     let _ = write!(out, " data={:#018x}", entry.data_key);
+                }
+                if entry.deactivated {
+                    let _ = write!(out, " deactivated");
                 }
                 if entry.kind == GroupKind::Node {
                     let _ = write!(out, " node={:#x}", entry.node.bits());
@@ -247,7 +250,8 @@ impl Pass {
             if runtime.active.is_some() {
                 misuse(ComposeError::PassInProgress)
             }
-            let Runtime { compositions, cells, frames, active, abandoned_groups, .. } = runtime;
+            let Runtime { compositions, cells, frames, active, abandoned_groups, reusing, .. } =
+                runtime;
             let data = compositions.get_mut(id).expect("a live composition");
             if data.closed {
                 return None;
@@ -272,6 +276,7 @@ impl Pass {
             data.pending = false;
             *active = Some(ActivePass { composition: id, composing: true });
             *abandoned_groups = false;
+            *reusing = 0;
             cells.begin_pass();
             frames.clear();
             frames.push(Frame {
@@ -417,6 +422,7 @@ impl Drop for Pass {
             if runtime.active.is_some_and(|active| active.composition == self.id) {
                 runtime.active = None;
                 runtime.frames.clear();
+                runtime.reusing = 0;
                 runtime.pending_move = None;
                 runtime.cells.abort_pass();
             }
@@ -437,6 +443,9 @@ fn apply_deferred(
     {
         let mut applier =
             applier.try_borrow_mut().unwrap_or_else(|_| misuse(ComposeError::ApplierBusy));
+        for node in deferred.deactivated_nodes.drain(..) {
+            applier.deactivate(node);
+        }
         for node in deferred.released_nodes.drain(..) {
             applier.release(node);
         }
@@ -571,10 +580,12 @@ fn validate(runtime: &Runtime, id: CompositionId) -> Result<(), String> {
     let table = &data.table;
     let in_pass = runtime.active.is_some_and(|active| active.composition == id);
     let mut reachable = 0usize;
-    let mut stack = vec![SENTINEL];
-    while let Some(index) = stack.pop() {
+    // Each group, and whether it's in deactivated content (whose scopes were freed).
+    let mut stack = vec![(SENTINEL, false)];
+    while let Some((index, deactivated)) = stack.pop() {
         reachable += 1;
         let group = &table[index];
+        let inner_deactivated = deactivated || group.deactivated;
         if group.kind == GroupKind::Free {
             return Err(format!("group {index} is free but reachable"));
         }
@@ -592,7 +603,7 @@ fn validate(runtime: &Runtime, id: CompositionId) -> Result<(), String> {
             if !in_pass && entry.dirty && !group.dirty {
                 return Err(format!("group {child} is dirty but its parent {index} is not"));
             }
-            stack.push(child);
+            stack.push((child, inner_deactivated));
             child = entry.next_sibling;
         }
         let expected = if group.kind == GroupKind::Node { 1 } else { nodes };
@@ -606,6 +617,11 @@ fn validate(runtime: &Runtime, id: CompositionId) -> Result<(), String> {
             return Err(format!("node group {index} has no node"));
         }
         match group.kind {
+            GroupKind::Restart if deactivated => {
+                if !group.scope.is_none() {
+                    return Err(format!("restart group {index} keeps a scope while deactivated"));
+                }
+            }
             GroupKind::Restart => {
                 let scope = runtime
                     .scopes

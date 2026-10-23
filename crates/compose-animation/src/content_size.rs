@@ -82,6 +82,12 @@ impl ModifierNode for ContentSizeNode {
     fn on_detach(&mut self, _context: &mut DetachContext<'_>) {
         self.scope.cancel();
     }
+
+    /// Reused, the new content's size is taken at once, as Compose's `animData = null`.
+    fn on_reset(&mut self) {
+        self.size = None;
+        self.target = None;
+    }
 }
 
 impl LayoutModifierNode for ContentSizeNode {

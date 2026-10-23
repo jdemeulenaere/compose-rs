@@ -155,8 +155,8 @@ impl UiTree {
                     layer += 1;
                 }
             }
-            let count = self.node(node).children.len();
             let order = self.placement_order(node);
+            let count = order.as_ref().map_or(self.node(node).children.len(), |order| order.len());
             // Pushed last first, so the first placed comes off the stack first.
             for position in (0..count).rev() {
                 let index = order.as_ref().map_or(position, |order| order[position] as usize);

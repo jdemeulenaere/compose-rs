@@ -105,6 +105,20 @@ fn scroll_through(criterion: &mut Criterion) {
                     .sum()
             })
         });
+        // A frame that composes nothing: a pixel down or back up, in the middle of the list.
+        rewind(&mut host);
+        for _ in 0..30 {
+            scroll_frame(&mut host, STEP);
+        }
+        let mut nudges = 0u64;
+        let mut nudge = move |host: &mut UiHost| {
+            nudges += 1;
+            scroll_frame(host, if nudges.is_multiple_of(2) { 1.0 } else { -1.0 })
+        };
+        report(&format!("{name}, a pixel"), (0..500).map(|_| nudge(&mut host)).collect());
+        criterion.bench_function(&format!("scroll the {name} list a pixel, frame"), |bench| {
+            bench.iter_custom(|iterations| (0..iterations).map(|_| nudge(&mut host)).sum())
+        });
     }
 }
 

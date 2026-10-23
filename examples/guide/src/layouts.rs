@@ -124,7 +124,9 @@ pub fn Messages(days: ImmutableList<Day>, state: LazyListState) {
                 // `title` is made here, not captured: it moves into the closure as in plain
                 // Rust (D158 clones only the lambda's captures), hence the clone for the key.
                 let title = day.title.clone();
-                scope.sticky_header_keyed(title.clone(), move |_item| {
+                // Content types, as Compose's `contentType`: an item reuses the composition and
+                // nodes of one of its type that left (D430).
+                scope.sticky_header_keyed_with(title.clone(), "day", move |_item| {
                     Text!(
                         title.clone(),
                         modifier = Modifier
@@ -133,9 +135,10 @@ pub fn Messages(days: ImmutableList<Day>, state: LazyListState) {
                     );
                 });
                 // Keys keep an item's state (and the scroll position) when items move.
-                scope.items_list_keyed(
+                scope.items_list_keyed_with(
                     day.messages.clone(),
                     |message| message.id,
+                    |_message| "message",
                     |_item, message| {
                         Text!(&message.text);
                     },

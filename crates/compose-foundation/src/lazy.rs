@@ -11,6 +11,10 @@
 //! After a scroll, the next items in its direction are composed and measured between frames
 //! (prefetch, as Compose's `LazyListPrefetchStrategy`), so the frame reaching them finds them
 //! ready.
+//!
+//! An item that leaves is deactivated and kept for reuse, and an item that comes is composed in
+//! the place of one of its content type, its nodes kept (D430), as Compose's
+//! `LazyLayoutItemReusePolicy`.
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -378,10 +382,12 @@ pub fn remember_lazy_list_state(
     })
 }
 
-/// A run of items: their count, keys and content.
+/// A run of items: their count, keys, content types and content.
 struct Interval {
     count: usize,
     key: Option<Rc<dyn Fn(usize) -> u64>>,
+    /// The items' content types, hashed (`None`: Compose's default `{ null }`).
+    content_type: Option<ContentType>,
     /// The item's full key, to tell a duplicate key from a hash collision (debug builds).
     #[cfg(debug_assertions)]
     full_key: Option<FullKey>,
@@ -389,6 +395,9 @@ struct Interval {
     sticky: bool,
     content: Rc<dyn Fn(usize)>,
 }
+
+/// An item's content type, hashed, by its index in its interval.
+type ContentType = Rc<dyn Fn(usize) -> u64>;
 
 /// An item's key, by its index in its interval.
 #[cfg(debug_assertions)]
@@ -416,11 +425,18 @@ impl Interval {
         Interval {
             count,
             key: None,
+            content_type: None,
             #[cfg(debug_assertions)]
             full_key: None,
             sticky: false,
             content,
         }
+    }
+
+    /// With the items' content types.
+    fn typed(mut self, content_type: ContentType) -> Interval {
+        self.content_type = Some(content_type);
+        self
     }
 
     fn keyed<K: Hash + PartialEq + 'static>(
@@ -437,16 +453,28 @@ impl Interval {
                 Rc::new(move |index| Box::new(key(index)) as Box<dyn DynKey>)
             }),
             key: Some(Rc::new(move |index| hash_key(&key(index)))),
+            content_type: None,
             sticky: false,
             content,
         }
     }
 }
 
+/// A content type, hashed (a collision only lets items of two types reuse each other's slots).
+fn content_type_of<C: Hash>(content_type: &C) -> u64 {
+    hash_key(content_type)
+}
+
 /// What a lazy list's content declares its items with, as Compose's `LazyListScope`:
 /// `scope.item(|| …)`, `scope.items(count, |index| …)`, `scope.items_keyed(count, key, …)`, and
 /// over a list, `scope.items_list(list, |item_scope, item| …)` and
 /// `scope.items_indexed(list, |item_scope, index, item| …)`.
+///
+/// Each form has a `_with` variant taking Compose's `contentType` too, after the key, as in
+/// Compose's parameters (`items_keyed_with(count, key, content_type, …)`): an item composed
+/// where none was reuses the composition and nodes of an item of its content type that left
+/// (D430, D432). The forms without take Compose's default, `{ null }`: such items reuse each
+/// other's.
 #[derive(Clone, Default)]
 pub struct LazyListScope {
     intervals: Rc<RefCell<Vec<Interval>>>,
@@ -459,6 +487,14 @@ impl LazyListScope {
         self.push(Interval::new(1, Rc::new(move |_| content())));
     }
 
+    /// One item of `content_type`, as `item(contentType = …) { … }`.
+    pub fn item_with<C: Hash>(&self, content_type: C, content: impl Fn() + 'static) {
+        let content_type = content_type_of(&content_type);
+        self.push(
+            Interval::new(1, Rc::new(move |_| content())).typed(Rc::new(move |_| content_type)),
+        );
+    }
+
     /// One item with a key, as `item(key) { … }`.
     pub fn item_keyed<K: Hash + PartialEq + Clone + 'static>(
         &self,
@@ -468,10 +504,37 @@ impl LazyListScope {
         self.push(Interval::keyed(1, move |_| key.clone(), Rc::new(move |_| content())));
     }
 
+    /// One item with a key and a content type, as `item(key, contentType) { … }`.
+    pub fn item_keyed_with<K: Hash + PartialEq + Clone + 'static, C: Hash>(
+        &self,
+        key: K,
+        content_type: C,
+        content: impl Fn() + 'static,
+    ) {
+        let content_type = content_type_of(&content_type);
+        self.push(
+            Interval::keyed(1, move |_| key.clone(), Rc::new(move |_| content()))
+                .typed(Rc::new(move |_| content_type)),
+        );
+    }
+
     /// `count` items, as `items(count) { index -> … }`. Without keys, an item's state goes with
     /// its index.
     pub fn items(&self, count: usize, content: impl Fn(usize) + 'static) {
         self.push(Interval::new(count, Rc::new(content)));
+    }
+
+    /// `count` items with their content types, as `items(count, contentType = { … }) { … }`.
+    pub fn items_with<C: Hash>(
+        &self,
+        count: usize,
+        content_type: impl Fn(usize) -> C + 'static,
+        content: impl Fn(usize) + 'static,
+    ) {
+        self.push(
+            Interval::new(count, Rc::new(content))
+                .typed(Rc::new(move |index| content_type_of(&content_type(index)))),
+        );
     }
 
     /// `count` items with keys, as `items(count, key = { … }) { … }`: an item keeps its state
@@ -486,8 +549,23 @@ impl LazyListScope {
         self.push(Interval::keyed(count, key, Rc::new(content)));
     }
 
+    /// `count` items with keys and content types, as
+    /// `items(count, key = { … }, contentType = { … }) { … }`.
+    pub fn items_keyed_with<K: Hash + PartialEq + 'static, C: Hash>(
+        &self,
+        count: usize,
+        key: impl Fn(usize) -> K + 'static,
+        content_type: impl Fn(usize) -> C + 'static,
+        content: impl Fn(usize) + 'static,
+    ) {
+        self.push(
+            Interval::keyed(count, key, Rc::new(content))
+                .typed(Rc::new(move |index| content_type_of(&content_type(index)))),
+        );
+    }
+
+    /// An item for each of `items`, as `items(items) { item -> … }`: `items` is a `Vec`, a
     /// slice or an array (copied), or an `ImmutableList` (shared).
-    /// slice (cloned) or an `Rc<[T]>` (shared, as an `ImmutableList`).
     pub fn items_list<T: 'static>(
         &self,
         items: impl Into<ImmutableList<T>>,
@@ -499,6 +577,21 @@ impl LazyListScope {
             count,
             Rc::new(move |index| content(scope.clone(), &items[index])),
         ));
+    }
+
+    /// `items_list` with content types, as `items(items, contentType = { item -> … })`.
+    pub fn items_list_with<T: 'static, C: Hash>(
+        &self,
+        items: impl Into<ImmutableList<T>>,
+        content_type: impl Fn(&T) -> C + 'static,
+        content: impl Fn(LazyItemScope, &T) + 'static,
+    ) {
+        let (items, scope) = (items.into(), self.item_scope.clone());
+        let types = items.clone();
+        self.push(
+            Interval::new(items.len(), Rc::new(move |index| content(scope.clone(), &items[index])))
+                .typed(Rc::new(move |index| content_type_of(&content_type(&types[index])))),
+        );
     }
 
     /// `items_list` with keys, as `items(items, key = { item -> … })`.
@@ -517,6 +610,27 @@ impl LazyListScope {
         ));
     }
 
+    /// `items_list` with keys and content types, as
+    /// `items(items, key = { … }, contentType = { … })`.
+    pub fn items_list_keyed_with<T: 'static, K: Hash + PartialEq + 'static, C: Hash>(
+        &self,
+        items: impl Into<ImmutableList<T>>,
+        key: impl Fn(&T) -> K + 'static,
+        content_type: impl Fn(&T) -> C + 'static,
+        content: impl Fn(LazyItemScope, &T) + 'static,
+    ) {
+        let (items, scope) = (items.into(), self.item_scope.clone());
+        let (keys, types) = (items.clone(), items.clone());
+        self.push(
+            Interval::keyed(
+                items.len(),
+                move |index| key(&keys[index]),
+                Rc::new(move |index| content(scope.clone(), &items[index])),
+            )
+            .typed(Rc::new(move |index| content_type_of(&content_type(&types[index])))),
+        );
+    }
+
     /// An item for each of `items`, with its index, as `itemsIndexed(items) { index, item -> … }`.
     pub fn items_indexed<T: 'static>(
         &self,
@@ -528,6 +642,25 @@ impl LazyListScope {
             items.len(),
             Rc::new(move |index| content(scope.clone(), index, &items[index])),
         ));
+    }
+
+    /// `items_indexed` with content types, as
+    /// `itemsIndexed(items, contentType = { index, item -> … })`.
+    pub fn items_indexed_with<T: 'static, C: Hash>(
+        &self,
+        items: impl Into<ImmutableList<T>>,
+        content_type: impl Fn(usize, &T) -> C + 'static,
+        content: impl Fn(LazyItemScope, usize, &T) + 'static,
+    ) {
+        let (items, scope) = (items.into(), self.item_scope.clone());
+        let types = items.clone();
+        self.push(
+            Interval::new(
+                items.len(),
+                Rc::new(move |index| content(scope.clone(), index, &items[index])),
+            )
+            .typed(Rc::new(move |index| content_type_of(&content_type(index, &types[index])))),
+        );
     }
 
     /// `items_indexed` with keys, as `itemsIndexed(items, key = { index, item -> … })`.
@@ -546,13 +679,40 @@ impl LazyListScope {
         ));
     }
 
+    /// `items_indexed` with keys and content types, as
+    /// `itemsIndexed(items, key = { … }, contentType = { … })`.
+    pub fn items_indexed_keyed_with<T: 'static, K: Hash + PartialEq + 'static, C: Hash>(
+        &self,
+        items: impl Into<ImmutableList<T>>,
+        key: impl Fn(usize, &T) -> K + 'static,
+        content_type: impl Fn(usize, &T) -> C + 'static,
+        content: impl Fn(LazyItemScope, usize, &T) + 'static,
+    ) {
+        let (items, scope) = (items.into(), self.item_scope.clone());
+        let (keys, types) = (items.clone(), items.clone());
+        self.push(
+            Interval::keyed(
+                items.len(),
+                move |index| key(index, &keys[index]),
+                Rc::new(move |index| content(scope.clone(), index, &items[index])),
+            )
+            .typed(Rc::new(move |index| content_type_of(&content_type(index, &types[index])))),
+        );
+    }
+
     /// A header that sticks to the list's start while the items after it (up to the next
     /// header) scroll under it, as `stickyHeader { … }`.
     pub fn sticky_header(&self, content: impl Fn(LazyItemScope) + 'static) {
-        let scope = self.item_scope.clone();
-        let mut interval = Interval::new(1, Rc::new(move |_| content(scope.clone())));
-        interval.sticky = true;
-        self.push(interval);
+        self.push_sticky(None, None, Rc::new(content));
+    }
+
+    /// `sticky_header` with a content type, as `stickyHeader(contentType = …) { … }`.
+    pub fn sticky_header_with<C: Hash>(
+        &self,
+        content_type: C,
+        content: impl Fn(LazyItemScope) + 'static,
+    ) {
+        self.push_sticky(None, Some(content_type_of(&content_type)), Rc::new(content));
     }
 
     /// `sticky_header` with a key, as `stickyHeader(key) { … }`.
@@ -561,11 +721,19 @@ impl LazyListScope {
         key: K,
         content: impl Fn(LazyItemScope) + 'static,
     ) {
-        let scope = self.item_scope.clone();
-        let mut interval =
-            Interval::keyed(1, move |_| key.clone(), Rc::new(move |_| content(scope.clone())));
-        interval.sticky = true;
-        self.push(interval);
+        let keyed = Interval::keyed(1, move |_| key.clone(), Rc::new(|_| {}));
+        self.push_sticky(Some(keyed), None, Rc::new(content));
+    }
+
+    /// `sticky_header` with a key and a content type, as `stickyHeader(key, contentType) { … }`.
+    pub fn sticky_header_keyed_with<K: Hash + PartialEq + Clone + 'static, C: Hash>(
+        &self,
+        key: K,
+        content_type: C,
+        content: impl Fn(LazyItemScope) + 'static,
+    ) {
+        let keyed = Interval::keyed(1, move |_| key.clone(), Rc::new(|_| {}));
+        self.push_sticky(Some(keyed), Some(content_type_of(&content_type)), Rc::new(content));
     }
 
     /// The scope of this list's items, for the forms whose content doesn't receive it (`item`,
@@ -576,6 +744,30 @@ impl LazyListScope {
 
     fn push(&self, interval: Interval) {
         self.intervals.borrow_mut().push(interval);
+    }
+
+    /// A sticky header: its key (an interval of one item with the key, its content replaced),
+    /// its content type and its content. Not generic: the shims above are.
+    fn push_sticky(
+        &self,
+        keyed: Option<Interval>,
+        content_type: Option<u64>,
+        content: Rc<dyn Fn(LazyItemScope)>,
+    ) {
+        let scope = self.item_scope.clone();
+        let content: Rc<dyn Fn(usize)> = Rc::new(move |_| content(scope.clone()));
+        let mut interval = match keyed {
+            Some(mut interval) => {
+                interval.content = content;
+                interval
+            }
+            None => Interval::new(1, content),
+        };
+        if let Some(content_type) = content_type {
+            interval = interval.typed(Rc::new(move |_| content_type));
+        }
+        interval.sticky = true;
+        self.push(interval);
     }
 }
 
@@ -784,6 +976,12 @@ impl Items {
         (start..end).find(|candidate| self.key(*candidate) == key)
     }
 
+    /// The item's content type, hashed (`None`, Compose's `null`, if its interval has none).
+    fn content_type(&self, index: usize) -> Option<u64> {
+        let (interval, local) = self.find(index)?;
+        interval.content_type.as_ref().map(|content_type| content_type(local))
+    }
+
     fn key(&self, index: usize) -> u64 {
         match self.find(index) {
             Some((interval, local)) => {
@@ -826,6 +1024,192 @@ impl Items {
             }
             seen.insert(self.key(index), index);
         }
+    }
+}
+
+/// The most deactivated items kept for reuse per content type, as Compose's
+/// `MaxItemsToRetainForReuse`.
+const MAX_ITEMS_TO_RETAIN_FOR_REUSE: usize = 7;
+
+/// No slot yet.
+const NO_SLOT: u64 = 0;
+
+/// A slot an item is composed in, as the subcomposition Compose's lazy layouts compose each item
+/// in: a keyed group of the items' composition holding one item at a time. When its item leaves,
+/// its content is deactivated and kept for an item of the same content type to reuse.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ItemSlot {
+    /// Its group's key: the same whatever item it holds.
+    id: u64,
+    /// The key of the item it holds, or held last.
+    key: u64,
+    /// That item's content type, hashed (`None`: Compose's `null`).
+    content_type: Option<u64>,
+}
+
+/// What a slot holds in a pass: an item (by index), or its content deactivated, kept for reuse
+/// (`just_now`: its item left in this pass).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SlotContent {
+    Item(usize),
+    Deactivated { just_now: bool },
+}
+
+/// The key of a slot's reusable group (its data key is its item's key).
+const SLOT_GROUP: u64 = compose_runtime::key_of("compose_foundation::LazyItemSlot");
+
+/// The data key of a slot's reusable group while it holds no item.
+const NO_ITEM: u64 = compose_runtime::key_of("compose_foundation::LazyItemSlot::none");
+
+/// A slot's content, as the content of the subcomposition Compose's lazy layouts compose each
+/// item in (`ReusableContentHost(active) { item }`, reused from its root when another item
+/// takes it): a reusable group whose data key is its item's key, so another item reuses it,
+/// or `NO_ITEM` while it's kept for reuse, its content deactivated (D430). One group where
+/// Compose has two (the host, and `ReusableContent(key)` around the item): a slot passes through
+/// both states the same way.
+fn compose_slot(
+    slot: ItemSlot,
+    content: SlotContent,
+    state: LazyListState,
+    items: &ItemsRef,
+    holder: SaveableStateHolder,
+) {
+    let composer = compose_runtime::platform::current();
+    match content {
+        SlotContent::Item(index) => {
+            composer.start_reusable_group(SLOT_GROUP, slot.key);
+            LazyItem(index, state, items.clone(), holder);
+        }
+        SlotContent::Deactivated { just_now } => {
+            composer.start_reusable_group(SLOT_GROUP, NO_ITEM);
+            composer.deactivate_to_end_group(just_now);
+        }
+    }
+    composer.end_reusable_group();
+}
+
+/// Which slot holds which item, and the slots kept for reuse: what Compose's
+/// `SubcomposeLayoutState` keeps of a lazy layout's items (its `slotIdToNode` and reusable
+/// nodes).
+#[derive(Default)]
+struct ItemSlots {
+    /// The slots holding items, in the order last composed.
+    active: Vec<ItemSlot>,
+    /// The slots kept for reuse, their content deactivated, oldest first.
+    reusable: Vec<ItemSlot>,
+    /// The last slot id given.
+    last_id: u64,
+}
+
+impl ItemSlots {
+    /// Gives each item of `indices` a slot, and returns them in order: the slot holding the item
+    /// already; else a slot kept for reuse, the item's own if it's there (Compose's search for
+    /// the same slot id first), else the newest of its content type; else a new one. The slots
+    /// of the items that left are kept for reuse first, so an item coming in reuses one going
+    /// out in the same pass (where Compose deactivates it after the measurement, for the next
+    /// one to reuse). Returns the slots to compose: those of `indices`, each with its item, then
+    /// those kept for reuse.
+    fn assign(&mut self, items: &Items, indices: &[usize]) -> Vec<(ItemSlot, SlotContent)> {
+        let previous: HashMap<u64, usize> =
+            self.active.iter().enumerate().map(|(position, slot)| (slot.key, position)).collect();
+        let mut taken = vec![false; self.active.len()];
+        let mut assigned = Vec::with_capacity(indices.len());
+        for &index in indices {
+            let (key, content_type) = (items.key(index), items.content_type(index));
+            let slot = match previous.get(&key) {
+                Some(&position) if !taken[position] => {
+                    taken[position] = true;
+                    ItemSlot { content_type, ..self.active[position] }
+                }
+                _ => ItemSlot { id: NO_SLOT, key, content_type },
+            };
+            assigned.push((index, slot));
+        }
+        let leaving = self.reusable.len();
+        for (position, slot) in self.active.iter().enumerate() {
+            if !taken[position] {
+                self.reusable.push(*slot);
+            }
+        }
+        let leaving: Vec<u64> = self.reusable[leaving..].iter().map(|slot| slot.id).collect();
+        for (_, slot) in &mut assigned {
+            if slot.id == NO_SLOT {
+                slot.id = match self.take_reusable(slot.key, slot.content_type) {
+                    Some(id) => id,
+                    None => {
+                        self.last_id += 1;
+                        self.last_id
+                    }
+                };
+            }
+        }
+        self.active = assigned.iter().map(|(_, slot)| *slot).collect();
+        LazyLayoutItemReusePolicy.get_slots_to_retain(&mut self.reusable);
+        let mut composed: Vec<(ItemSlot, SlotContent)> =
+            assigned.into_iter().map(|(index, slot)| (slot, SlotContent::Item(index))).collect();
+        composed.extend(self.reusable.iter().map(|slot| {
+            (*slot, SlotContent::Deactivated { just_now: leaving.contains(&slot.id) })
+        }));
+        composed
+    }
+
+    /// Takes a slot kept for reuse for the item with `key` and `content_type`: the one it was
+    /// in, else the newest compatible one (as Compose's `takeNodeFromReusables`).
+    fn take_reusable(&mut self, key: u64, content_type: Option<u64>) -> Option<u64> {
+        let policy = LazyLayoutItemReusePolicy;
+        let position = (self.reusable.iter().rposition(|slot| slot.key == key)).or_else(|| {
+            self.reusable
+                .iter()
+                .rposition(|slot| policy.are_compatible(content_type, slot.content_type))
+        })?;
+        Some(self.reusable.remove(position).id)
+    }
+}
+
+/// Which items that left are kept for reuse, and which item may reuse which, as Compose's
+/// `LazyLayoutItemReusePolicy` (a `SubcomposeSlotReusePolicy`): up to
+/// `MAX_ITEMS_TO_RETAIN_FOR_REUSE` of each content type; an item reuses one of its content type
+/// (`null`, here `None`, being one).
+struct LazyLayoutItemReusePolicy;
+
+impl LazyLayoutItemReusePolicy {
+    /// Keeps the newest `MAX_ITEMS_TO_RETAIN_FOR_REUSE` of each content type among `reusable`
+    /// (oldest first), as `getSlotsToRetain`; the others are disposed.
+    fn get_slots_to_retain(&self, reusable: &mut Vec<ItemSlot>) {
+        if reusable.len() <= MAX_ITEMS_TO_RETAIN_FOR_REUSE {
+            return;
+        }
+        let mut count_per_type: Vec<(Option<u64>, usize)> = Vec::new();
+        let mut retain = vec![false; reusable.len()];
+        for (position, slot) in reusable.iter().enumerate().rev() {
+            let count = match count_per_type.iter_mut().find(|(kind, _)| *kind == slot.content_type)
+            {
+                Some((_, count)) => count,
+                None => {
+                    count_per_type.push((slot.content_type, 0));
+                    &mut count_per_type.last_mut().expect("just pushed").1
+                }
+            };
+            if *count < MAX_ITEMS_TO_RETAIN_FOR_REUSE {
+                *count += 1;
+                retain[position] = true;
+            }
+        }
+        let mut position = 0;
+        reusable.retain(|_| {
+            position += 1;
+            retain[position - 1]
+        });
+    }
+
+    /// Whether an item of `content_type` may reuse the slot of one of `reusable_content_type`, as
+    /// `areCompatible`: the same content type.
+    fn are_compatible(
+        &self,
+        content_type: Option<u64>,
+        reusable_content_type: Option<u64>,
+    ) -> bool {
+        content_type == reusable_content_type
     }
 }
 
@@ -1022,13 +1406,18 @@ fn LazyItems(
     // The items' constraints, for those composing for theirs (`BoxWithConstraints`).
     let hint = inner.item_constraints.get().or(fallback);
     drop(inner);
+    // Each item in a slot of its own, which an item of its content type reuses once it left
+    // (D430).
+    let slots = remember(|| Rc::new(RefCell::new(ItemSlots::default())));
+    let composed = slots.borrow_mut().assign(&items.0, &indices);
     compose_runtime::CompositionLocalProvider(
         compose_ui::platform::LOCAL_CONSTRAINTS_HINT.provides(hint),
         || {
-            for &index in &indices {
-                let item_key = items.0.key(index);
-                let (state, items) = (state, items.clone());
-                key(item_key, move || LazyItem(index, state, items.clone(), holder));
+            // The slots holding items first, in the children's order the layout reads; then
+            // those kept for reuse, deactivated: their nodes stay, unmeasured and unplaced. One
+            // loop, so a slot's group moves between the two.
+            for &(slot, content) in &composed {
+                key(slot.id, || compose_slot(slot, content, state, &items, holder));
             }
         },
     );
@@ -1445,7 +1834,7 @@ impl MeasurePolicy for LazyListLayout {
             state.composed.set(composed);
         }
         // After a scroll, the next items in its direction are composed between frames (and
-        // those left behind disposed), if any are to be.
+        // those left behind kept for reuse), if any are to be.
         prefetch.node.set(Some(node));
         prefetch.count.set(count);
         prefetch.wanted.set((wanted_start, wanted_end));
@@ -1498,13 +1887,17 @@ impl MeasurePolicy for LazyListLayout {
         }
         // How far the list can scroll each way: known when the composed items reach its ends.
         let extent_end = main - spacing + after;
+        // Those before, placed first, in the items' order: the children are then placed in
+        // their order (but a sticky header), which the tree draws and hits without sorting them.
+        let mut ahead: Vec<(Placeable, i32)> = Vec::new();
         let mut main = placed.first().map_or(before, |(_, main)| *main);
         for previous in (placed_start.min(index)..index).rev() {
             if let Some(placeable) = measure(previous, &mut sizes) {
                 main -= main_of(&placeable) + spacing;
-                beyond.push((placeable, main));
+                ahead.push((placeable, main));
             }
         }
+        ahead.reverse();
         let extent_start = main - before;
         let pending = state.pending.get();
         let reaches_start = (index == 0 || placed_start == 0) && wanted_before == 0;
@@ -1534,16 +1927,18 @@ impl MeasurePolicy for LazyListLayout {
         if let Some((header, next)) = headers
             && let Some(placeable) = measure(header, &mut sizes)
         {
-            let natural = placed.iter().chain(&beyond).find(|(other, _)| *other == placeable);
+            let natural =
+                ahead.iter().chain(&placed).chain(&beyond).find(|(other, _)| *other == placeable);
             let mut at = natural.map_or(0, |(_, main)| (*main).max(0));
             if let Some(next) = next.and_then(|next| measure(next, &mut sizes))
                 && let Some((_, next_main)) =
-                    placed.iter().chain(&beyond).find(|(other, _)| *other == next)
+                    ahead.iter().chain(&placed).chain(&beyond).find(|(other, _)| *other == next)
             {
                 at = at.min(next_main - main_of(&placeable));
             }
             placed.retain(|(other, _)| *other != placeable);
             beyond.retain(|(other, _)| *other != placeable);
+            ahead.retain(|(other, _)| *other != placeable);
             sticky = Some((placeable, at));
         }
         let children = state.children.borrow().clone();
@@ -1592,7 +1987,7 @@ impl MeasurePolicy for LazyListLayout {
             }
         };
         // The sticky header last: drawn over the items, and hit first.
-        for (placeable, main) in placed.iter().chain(&beyond).chain(&sticky) {
+        for (placeable, main) in ahead.iter().chain(&placed).chain(&beyond).chain(&sticky) {
             layout(scope, placeable, *main);
         }
         scope.layout(width, height)
@@ -1842,6 +2237,11 @@ impl LazyScrollNode {
 
 impl ModifierNode for LazyScrollNode {
     fn on_detach(&mut self, _context: &mut compose_ui::DetachContext<'_>) {
+        self.drag.stop_fling();
+    }
+
+    fn on_reset(&mut self) {
+        self.drag.cancel();
         self.drag.stop_fling();
     }
 

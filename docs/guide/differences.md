@@ -42,7 +42,7 @@ The known differences from Jetpack Compose that an app will run into, distilled 
 
 ## Lazy lists
 
-- No `animateItem` (placement and fade animations) and no `contentType`: items are reused by key only.
+- No `animateItem` (placement and fade animations). `contentType` is given with the `_with` forms (`items_keyed_with(count, key, content_type, content)`, D432), and items reuse the composition and nodes of those that left as in Compose (D430), but a reused node's modifier nodes are reset (`ModifierNode::on_reset`) rather than detached and attached again: a custom node keeps its resources while its item is kept for reuse (D431).
 - `LazyVerticalGrid` has no `reverse_layout` or `user_scroll_enabled`, and keeps an item's state by its row rather than its key, so items inserted before others move state between rows (D144).
 - A popup in a lazy item composed beyond the viewport shows where the item is placed (D136).
 

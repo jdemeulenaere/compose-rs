@@ -167,6 +167,8 @@ While a list scrolls, it prefetches between frames, as Compose's prefetch does: 
 
 Keys (`items_keyed`, `items_list_keyed`) keep an item's state and composition with the item when items before it come or go, so the unchanged items skip and the scroll position follows the first visible item.
 
+Content types (`items_keyed_with(count, key, content_type, content)` and the other `_with` forms, Compose's `contentType`) let an item coming into view reuse the composition and nodes of an item of its type that left, as Compose's lazy layouts do: up to 7 items of each type are kept for reuse, their effects disposed, and the item reusing one runs its composables with its own remembered values, updating the nodes in place rather than creating them (D430). Give items that look alike the same content type and different layouts different ones: an item reusing one of another layout replaces most of its nodes, and the forms without a content type all share one. Scrolling the feed through 300 items headless, an item costs 16 % less (41.0 → 34.5 µs).
+
 ### No garbage collection
 
 State, slots and nodes are owned, and freed when they leave the composition. A steady frame allocates little, so there are no collector pauses. Strings shown as text are `SharedString`s, which share static strings and `Rc<str>`s without copying.

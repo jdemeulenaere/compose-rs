@@ -56,6 +56,10 @@ pub(crate) struct Runtime {
     pub recomposition_counts: Option<std::collections::HashMap<&'static str, u64>>,
     /// A group guard was dropped by an unwinding panic in this pass, leaving its group open.
     pub abandoned_groups: bool,
+    /// The depth (`frames.len()`) of the reusable group whose content is being reused, or 0:
+    /// as Compose's `reusing`, slots read as empty, bodies run and reusable nodes are kept
+    /// until that group ends.
+    pub reusing: usize,
 }
 
 #[derive(Clone, Copy)]
@@ -85,6 +89,7 @@ impl Runtime {
             bodies_run: 0,
             recomposition_counts: None,
             abandoned_groups: false,
+            reusing: 0,
         }
     }
 
@@ -244,10 +249,12 @@ pub(crate) struct CompositionId {
     pub generation: u32,
 }
 
-/// Work a pass defers to its end, in rule R1's order: release removed nodes, then forget and
-/// drop removed values, then dispatch new remember observers, then run side effects.
+/// Work a pass defers to its end, in rule R1's order: deactivate the nodes of deactivated
+/// content and release removed nodes, then forget and drop removed values, then dispatch new
+/// remember observers, then run side effects.
 #[derive(Default)]
 pub(crate) struct Deferred {
+    pub deactivated_nodes: Vec<NodeRef>,
     pub released_nodes: Vec<NodeRef>,
     pub removed_values: Vec<SlotValue>,
     pub remembered: Vec<Rc<dyn ErasedObserver>>,
@@ -284,6 +291,7 @@ impl Deferred {
                 *target = source;
             }
         }
+        put_back(&mut self.deactivated_nodes, std::mem::take(&mut emptied.deactivated_nodes));
         put_back(&mut self.released_nodes, std::mem::take(&mut emptied.released_nodes));
         put_back(&mut self.removed_values, std::mem::take(&mut emptied.removed_values));
         put_back(&mut self.remembered, std::mem::take(&mut emptied.remembered));

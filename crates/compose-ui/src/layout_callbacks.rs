@@ -106,6 +106,10 @@ impl ModifierNode for OnSizeChangedNode {
     fn as_layout(&mut self) -> Option<&mut dyn LayoutModifierNode> {
         Some(self)
     }
+    /// Reused, it reports the new content's size.
+    fn on_reset(&mut self) {
+        self.last = None;
+    }
 }
 
 impl LayoutModifierNode for OnSizeChangedNode {
@@ -157,6 +161,10 @@ impl ModifierNodeElement for OnGloballyPositionedElement {
 impl ModifierNode for OnGloballyPositionedNode {
     fn as_global_position_aware(&mut self) -> Option<&mut dyn GlobalPositionAwareModifierNode> {
         Some(self)
+    }
+    /// Reused, it reports the new content's coordinates.
+    fn on_reset(&mut self) {
+        self.last = None;
     }
 }
 

@@ -494,6 +494,12 @@ impl ModifierNode for ClickableNode {
     fn on_detach(&mut self, _context: &mut crate::modifier::DetachContext<'_>) {
         self.release_later();
     }
+    /// Reused, the same as leaving: its press, focus and hover are over.
+    fn on_reset(&mut self) {
+        self.release_later();
+        let tap_pressed = self.state.tap_pressed.take();
+        self.state = PressState { tap_pressed, ..PressState::default() };
+    }
     fn as_pointer_input(&mut self) -> Option<&mut dyn PointerInputModifierNode> {
         Some(self)
     }
@@ -937,6 +943,10 @@ impl ModifierNode for CombinedClickableNode {
     fn on_detach(&mut self, _context: &mut crate::modifier::DetachContext<'_>) {
         self.stop();
     }
+    fn on_reset(&mut self) {
+        self.stop();
+        self.clickable.on_reset();
+    }
     fn as_pointer_input(&mut self) -> Option<&mut dyn PointerInputModifierNode> {
         Some(self)
     }
@@ -1064,6 +1074,9 @@ impl ModifierNode for HoverableNode {
     fn on_detach(&mut self, _context: &mut crate::modifier::DetachContext<'_>) {
         self.exit();
     }
+    fn on_reset(&mut self) {
+        self.exit();
+    }
     fn as_pointer_input(&mut self) -> Option<&mut dyn PointerInputModifierNode> {
         Some(self)
     }
@@ -1100,6 +1113,9 @@ struct FocusableNode {
 }
 
 impl ModifierNode for FocusableNode {
+    fn on_reset(&mut self) {
+        self.focused = false;
+    }
     fn as_focus_target(&mut self) -> Option<&mut dyn FocusTargetModifierNode> {
         Some(self)
     }
@@ -1132,7 +1148,12 @@ pub(crate) struct OnFocusChangedNode {
     pub(crate) last: Option<bool>,
 }
 
-impl ModifierNode for OnFocusChangedNode {}
+impl ModifierNode for OnFocusChangedNode {
+    /// Reused, it reports the new content's focus to the new callback.
+    fn on_reset(&mut self) {
+        self.last = None;
+    }
+}
 
 struct OnKeyEventNode(Callback<dyn Fn(KeyEvent) -> bool>);
 

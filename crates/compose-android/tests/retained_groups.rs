@@ -1036,13 +1036,19 @@ fn a_kept_item_placed_again_is_drawn_from_its_kept_record() {
             assert!(last_drawn.contains_key(key), "kept as an earlier frame drew it");
             // Its record stays cached, not written.
             assert!(!records.keys().any(|(group, _)| group == key), "step {step}: {key:x}");
-            assert_eq!(serialized.cache.cached_version(*key), Some(last_drawn[key].0));
+            assert_eq!(serialized.cache.cached_written_version(*key), Some(last_drawn[key].0));
             *kept_for.entry(*key).or_default() += 1;
             nested += usize::from(!outermost);
         }
         // Those no longer named are gone (disposed): not placed again from a record.
         kept_for.retain(|key, _| listed.contains(key));
-        serialized.prefetch_and_write_ahead();
+        // A group drawn ahead is drawn: an item reusing a node that left (D430) is drawn ahead
+        // in that node's group, kept then as drawn ahead.
+        for bytes in serialized.prefetch_and_write_ahead() {
+            for ((key, version), content) in self::records(&bytes) {
+                last_drawn.insert(key, (version, content));
+            }
+        }
     }
     assert!(placed_again >= 5, "kept groups placed again: {placed_again}");
     assert!(nested > 0, "nested kept groups named: {nested}");

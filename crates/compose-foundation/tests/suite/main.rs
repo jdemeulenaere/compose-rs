@@ -15,6 +15,7 @@ mod hover;
 mod image;
 mod lazy;
 mod lazy_api;
+mod lazy_reuse;
 mod locals;
 mod modifier_memoization;
 mod modifiers_api;

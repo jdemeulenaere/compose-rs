@@ -279,6 +279,10 @@ impl UiTree {
         let mut stack = vec![self.root_id()];
         while let Some(node) = stack.pop() {
             let value = self.node_mut(node);
+            // Deactivated content (kept for reuse) reports nothing: reused, it reports anew.
+            if value.deactivated {
+                continue;
+            }
             if value.all_capabilities & capability::FOCUS_EVENT != 0 {
                 let below = ancestors.iter().skip(1).any(|ancestor| *ancestor == node);
                 for index in 0..value.chain.len() {

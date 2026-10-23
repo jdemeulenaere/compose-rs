@@ -66,7 +66,7 @@ D400 records the choices. A fresh reviewer checked the two implementations befor
   - stable parameters, and `remember(index)` for the `AnnotatedString`;
   - deferred reads in `graphicsLayer { }`, `drawBehind`, `Modifier.layout` and `Canvas`;
   - `derivedStateOf` for the percentages, and one `Path` remembered and reset for each wave.
-- **`contentType` is Compose's alone.** compose-rs has no item reuse ([11](11-status.md)): it composes each new item afresh, where Compose reuses the composition of an item of the same kind.
+- **`contentType` on both.** compose-rs reuses items as Compose does since D430, by the same content types (`sticky_header_keyed_with`, `items_keyed_with`); the measurements below predate it, when compose-rs composed each new item afresh where Compose reused the composition of an item of the same kind.
 - **The progress indicator.** Kotlin's `LinearProgressIndicator` is given `gapSize = 0.dp` and an empty `drawStopIndicator`. That draws a track and a line, as compose-rs's does, rather than Material 3 1.4's two segments and stop dot.
 - **The alpha of the grid's cells.** Kotlin keeps the default `CompositingStrategy.Auto`, under which HWUI draws a layer faded below 1 offscreen.
   - compose-rs fades a layer whose content is one drawing without an offscreen buffer (`setHasOverlappingRendering(false)`, D153 and D157).

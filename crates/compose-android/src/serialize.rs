@@ -687,6 +687,13 @@ impl GroupCache {
         self.records.get(&key).map(|record| record.version)
     }
 
+    /// The version the replayer has the record cached for `key` under, if any: the cached
+    /// version, or the one its bytes were first written with when written again the same
+    /// (a node reused for content drawing the same, D430).
+    pub fn cached_written_version(&self, key: u64) -> Option<u64> {
+        self.records.get(&key).map(|record| record.written_version)
+    }
+
     /// How many records written ahead wait for a frame.
     pub fn waiting_ahead(&self) -> usize {
         self.ahead.iter().map(Vec::len).sum()

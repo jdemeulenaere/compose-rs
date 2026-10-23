@@ -313,14 +313,15 @@ pub fn Layout(
 }
 
 /// Emits a layout node with `modifier` and `measure_policy`, and `content` as its children:
-/// `Layout`'s body, for composables that build their node by hand.
+/// `Layout`'s body, for composables that build their node by hand. The node is reusable, as
+/// Compose's `Layout` (`ReusableComposeNode`): content reused in its place keeps it.
 pub fn emit_layout_node(
     modifier: Modifier,
     measure_policy: Rc<dyn MeasurePolicy>,
     content: impl FnOnce(),
 ) {
     let composer = current();
-    let node = composer.start_node(compose_runtime::key_of("compose_ui::Layout"), || {
+    let node = composer.start_reusable_node(compose_runtime::key_of("compose_ui::Layout"), || {
         crate::tree::LayoutNode::new(measure_policy.clone())
     });
     let direction = crate::alignment::LOCAL_LAYOUT_DIRECTION.current();

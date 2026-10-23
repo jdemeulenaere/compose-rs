@@ -134,8 +134,9 @@ data class Post(
 fun FeedScreen(animated: Boolean) {
     Scaffold(topBar = { TopAppBar(title = { Text("Feed") }) }) { padding ->
         LazyColumn(Modifier.fillMaxSize(), contentPadding = padding) {
-            if (animated) item { LiveHeader() }
-            items(POSTS, key = { it }) { index -> PostCard(index) }
+            // Content types as compose-rs's feed: a post reuses a post that left.
+            if (animated) item(contentType = "header") { LiveHeader() }
+            items(POSTS, key = { it }, contentType = { "post" }) { index -> PostCard(index) }
         }
     }
 }
