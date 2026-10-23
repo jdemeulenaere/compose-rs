@@ -70,7 +70,7 @@ D400 records the choices. A fresh reviewer checked the two implementations befor
 - **The alpha of the grid's cells.** Kotlin keeps the default `CompositingStrategy.Auto`, under which HWUI draws a layer faded below 1 offscreen.
   - compose-rs fades a layer whose content is one drawing without an offscreen buffer (`setHasOverlappingRendering(false)`, D153 and D157).
   - `ModulateAlpha`, Compose's opt-in for the same thing, was measured separately (D402, "With `ModulateAlpha`" below).
-- **Infinite transitions.** compose-rs runs one `Animatable` and one coroutine per animated value (`animate_value`). That makes 567 tasks a frame, and the ticker's. Compose runs one frame loop per transition (147) and ticks its animations together. This is a real cost of the library, measured as such.
+- **Infinite transitions.** In the results below, compose-rs ran one `Animatable` and one coroutine per animated value (`animate_value`). That made 567 tasks a frame, and the ticker's. Compose runs one frame loop per transition (147) and ticks its animations together. This was a real cost of the library, measured as such. Since D420, compose-rs's transitions run one task each too ("Infinite transitions, one task each" below).
 - **Paths drawn anew each frame.** compose-rs's `Canvas` makes a new `Path` per wave per frame. There is no way to reuse one: a drawn path is a shared, immutable resource (`Arc<Path>`). So the display list defines 50 paths and drops 50 a frame, and the replayer makes an `android.graphics.Path` for each. Kotlin resets one `Path`. That is the bridge's cost, measured as such (see "Memory").
 - **Clips and shadows.**
   - Compose makes a render node (a graphics layer) for each non-rectangular `clip` and each `shadow`, and HWUI draws the shadow from the elevation.
@@ -286,11 +286,47 @@ From the traces of the runs above: the slowest 1 % of each app's frames on each 
   - its RenderThread runs unboosted because its main thread is short;
   - like Compose, it waits for the GPU on the heaviest frames.
 
+## Infinite transitions, one task each (D420–D424)
+
+compose-rs's infinite transitions now work as Compose's: one task per transition sets all its values each frame (D420). The executor's cost per task resumed by a frame went down too (D421):
+- every task waiting for a frame used to wake the host (on Android a JNI upcall each);
+- two scans of the awaiter list per task made resuming them quadratic.
+
+Animated colors no longer convert to Oklab to compare (D422). `update_transition`'s values keep a task each (D423).
+
+**Headless** (`benchmarks/benches/animation.rs`, D424; an M-series Mac, frames 16 ms apart on a phone-sized host, p50):
+
+| | Before | After |
+|---|---|---|
+| Resuming 568 tasks waiting for a frame (568 closure calls: 0.43 µs) | 169 µs | 21 µs |
+| 140 infinite transitions of 4 values, nothing reading them | 211 µs | 44 µs |
+| The same, drawn as the stress cells | 250 µs | 76 µs |
+| `stress_animation` (fixed text measurer) | 284 µs | 107 µs |
+
+Most of the 140 transitions' remaining time is the values' own math: the easing curves (a cubic Bézier solved per value per frame) and the colors' conversions from Oklab.
+
+**On the Pixel 8 Pro**: the same session, `speed`, 3 runs a side, before (0e0c86c) then after, with the same Kotlin APK measured beside each. The runs are `results/2026-10-23-pixel-8-pro-infinite-transitions-{before,after}.json`.
+
+| `stress_animation`, compose-rs (medians of 3 runs) | Before | After |
+|---|---|---|
+| Main thread per frame p50 / p90 / p99 | 3.18 / 3.82 / 5.08 ms | **2.53** / **3.37** / 5.44 ms |
+| Main thread work | 2,139 ms | **1,550 ms** (−28 %) |
+| Main thread CPU | 3,845 ms | **2,946 ms** |
+| `compose-rs: tasks` per frame, per run | 1.13, 1.13, 1.13 ms | **0.36, 0.41, 0.42 ms** |
+| `compose-rs: frame` per frame, per run | 2.03, 2.02, 2.06 ms | **1.25, 1.37, 1.36 ms** |
+| Janky frames (FrameTimeline), per run | 0, 0, 1 | 0, 0, 1 |
+| RenderThread per frame p50 / p90 / p99 | 6.11 / 7.04 / 8.20 ms | 7.14 / 8.18 / 9.37 ms |
+| RenderThread work | 4,221 ms | 3,850 ms |
+
+- The p99 moved within the runs' spread (before 5.08, 4.70, 5.74 ms; after 3.97, 6.17, 5.44 ms). These frames wait for the RenderThread (`postAndWait`), not for tasks.
+- The RenderThread did less work but took longer. The device was slower in the second half of the session: Kotlin's RenderThread p50 went from 7.40 to 7.80 ms with the same APK, and its third run had 292 janky frames against 1. Nothing in this change touches the RenderThread's input; the drawing is the same.
+- **The feed's animation** (`animation`, docs/12) didn't move: compose-rs's main thread p50 / p90 / p99 1.21 / 1.79 / 2.91 ms before and 1.21 / 1.80 / 3.15 ms after, with 187 ms of work both times and no janky frames. Its header has three animated values.
+
 ## Next steps
 
 - **Paths in the bridge** (the largest gap these screens show):
   - free or reuse a dropped path's `android.graphics.Path` in the replayer, so its native memory and its GPU mask go at once;
   - or let a `Canvas` keep a path's identity across frames;
   - then measure `stress_animation`'s memory and HWUI's worker threads again.
-- **Infinite transitions** run a task per value (567 here; 1.1 ms of tasks a frame). A transition ticking its values in one frame callback, as Compose's does, would cut that.
+- **Infinite transitions**: done (D420–D424). The 0.4 ms of tasks a frame left is mostly easing curves and color conversions.
 - **Shader warm-up**: a pipeline compiled on first use cost compose-rs its one janky scroll frame. Compose's apps share the same cache behavior; it isn't specific to compose-rs, but it showed here.

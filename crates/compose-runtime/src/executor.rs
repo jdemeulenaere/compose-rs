@@ -13,8 +13,9 @@
 
 use std::cell::{Cell, RefCell};
 use std::cmp::Reverse;
-use std::collections::BinaryHeap;
+use std::collections::{BinaryHeap, HashSet};
 use std::future::Future;
+use std::hash::BuildHasherDefault;
 use std::mem::ManuallyDrop;
 use std::pin::Pin;
 use std::rc::Rc;
@@ -23,12 +24,13 @@ use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Wake, Waker};
 use std::time::{Duration, Instant};
 
+use crate::hash::KeyHasher;
 use crate::state::{ObjectHandle, Owned};
 
 type BoxedTask = Pin<Box<dyn Future<Output = ()>>>;
 
 /// A task's slot: generational, so a waker of a finished task can't poll its successor.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 struct TaskKey {
     index: u32,
     generation: u32,
@@ -41,6 +43,9 @@ struct TaskSlot {
     live: bool,
     /// Cancelled while it was being polled: dropped once the poll returns.
     cancelled: bool,
+    /// The waker its polls get, made at its first: each poll clones it rather than allocating
+    /// one (a frame polls a task per animated value).
+    waker: Option<Waker>,
 }
 
 /// What wakers reach from any thread.
@@ -210,6 +215,7 @@ fn spawn(future: BoxedTask) -> TaskKey {
                 slot.future = Some(future);
                 slot.live = true;
                 slot.cancelled = false;
+                slot.waker = None;
                 TaskKey { index, generation: slot.generation }
             }
             None => {
@@ -219,6 +225,7 @@ fn spawn(future: BoxedTask) -> TaskKey {
                     future: Some(future),
                     live: true,
                     cancelled: false,
+                    waker: None,
                 });
                 TaskKey { index, generation: 0 }
             }
@@ -239,6 +246,7 @@ fn cancel(key: TaskKey) {
         match slot.future.take() {
             Some(future) => {
                 slot.live = false;
+                slot.waker = None;
                 executor.free.push(key.index);
                 Some(future)
             }
@@ -263,15 +271,17 @@ fn is_live(key: TaskKey) -> bool {
 /// between its steps, as Compose's `yield()`. Returns whether a task ran.
 pub fn run_ready() -> bool {
     let mut ran = false;
-    let mut polled: Vec<TaskKey> = Vec::new();
+    // A set: a frame resumes hundreds of tasks (an animated value each), and a scan per key
+    // made that quadratic.
+    let mut polled: HashSet<TaskKey, BuildHasherDefault<KeyHasher>> = HashSet::default();
     let mut deferred: Vec<TaskKey> = Vec::new();
     loop {
-        let (mut keys, shared) = with_executor(|executor| {
+        let mut keys = with_executor(|executor| {
             let mut keys = std::mem::take(&mut executor.polling);
             keys.append(
                 &mut executor.shared.ready.lock().unwrap_or_else(|poisoned| poisoned.into_inner()),
             );
-            (keys, executor.shared.clone())
+            keys
         });
         if keys.is_empty() {
             with_executor(|executor| executor.polling = keys);
@@ -285,15 +295,15 @@ pub fn run_ready() -> bool {
             }
             return ran;
         }
+        polled.reserve(keys.len());
         for &key in &keys {
-            if polled.contains(&key) {
+            if !polled.insert(key) {
                 if !deferred.contains(&key) {
                     deferred.push(key);
                 }
                 continue;
             }
-            polled.push(key);
-            ran |= poll_task(key, &shared);
+            ran |= poll_task(key);
         }
         keys.clear();
         with_executor(|executor| executor.polling = keys);
@@ -301,16 +311,20 @@ pub fn run_ready() -> bool {
 }
 
 /// Polls task `key` once, if it's live and not being polled; returns whether it was.
-fn poll_task(key: TaskKey, shared: &Arc<Shared>) -> bool {
-    let future = with_executor(|executor| {
-        let slot = executor.slot(key)?;
-        if !slot.live {
-            return None;
-        }
-        slot.future.take()
+fn poll_task(key: TaskKey) -> bool {
+    let polled = with_executor(|executor| {
+        let shared = &executor.shared;
+        let slot = executor
+            .tasks
+            .get_mut(key.index as usize)
+            .filter(|slot| slot.generation == key.generation && slot.live)?;
+        let future = slot.future.take()?;
+        let waker = slot.waker.get_or_insert_with(|| {
+            Waker::from(Arc::new(TaskWaker { key, shared: shared.clone() }))
+        });
+        Some((future, waker.clone()))
     });
-    let Some(mut future) = future else { return false };
-    let waker = Waker::from(Arc::new(TaskWaker { key, shared: shared.clone() }));
+    let Some((mut future, waker)) = polled else { return false };
     let mut context = Context::from_waker(&waker);
     let poll = future.as_mut().poll(&mut context);
     let done = with_executor(move |executor| {
@@ -318,6 +332,7 @@ fn poll_task(key: TaskKey, shared: &Arc<Shared>) -> bool {
         if poll.is_ready() || slot.cancelled {
             slot.live = false;
             slot.cancelled = false;
+            slot.waker = None;
             executor.free.push(key.index);
             Some(future)
         } else {
@@ -334,8 +349,7 @@ fn poll_task(key: TaskKey, shared: &Arc<Shared>) -> bool {
 /// handlers whose task must see an event before the dispatch goes on (`pointer_input`, as
 /// Compose resumes it undispatched). Returns whether it was polled.
 pub fn poll_now(job: Job) -> bool {
-    let shared = with_executor(|executor| executor.shared.clone());
-    poll_task(job.key, &shared)
+    poll_task(job.key)
 }
 
 /// Wakes the tasks whose `delay` is over, by the executor's clock. For hosts, before
@@ -560,17 +574,28 @@ impl<R, F: FnOnce(u64) -> R> Future for WithFrame<F> {
 
     fn poll(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<R> {
         if let Some(time) = self.time.as_ref().and_then(|time| time.get()) {
+            // Resumed: no longer an awaiter, nothing for its drop to remove.
+            self.time = None;
             let on_frame = self.on_frame.take().expect("polled after it completed");
             return Poll::Ready(on_frame(time));
         }
+        assert!(self.on_frame.is_some(), "polled after it completed");
+        // Polled again while waiting: its registration is replaced (with this poll's waker).
+        let registered = self.time.is_some();
         let time = self.time.get_or_insert_with(|| Rc::new(Cell::new(None))).clone();
         let shared = with_executor(|executor| {
-            executor.frame_awaiters.retain(|(awaiting, _)| !Rc::ptr_eq(awaiting, &time));
+            if registered {
+                executor.frame_awaiters.retain(|(awaiting, _)| !Rc::ptr_eq(awaiting, &time));
+            }
+            // The first awaiter since the last frame asks the host for the next; the host
+            // already runs it for the others (it runs frames while `has_frame_awaiters`).
+            let first = executor.frame_awaiters.is_empty();
             executor.frame_awaiters.push((time, context.waker().clone()));
-            executor.shared.clone()
+            first.then(|| executor.shared.clone())
         });
-        // The host runs a frame.
-        shared.wake_host();
+        if let Some(shared) = shared {
+            shared.wake_host();
+        }
         Poll::Pending
     }
 }
@@ -741,6 +766,82 @@ mod tests {
         // Wakes outside a frame's dispatch still reach the host.
         let _other = launch(async {});
         assert_eq!(wakes.load(Ordering::SeqCst), 2);
+    }
+
+    /// Many tasks waiting for a frame ask the host for it once: on Android each wake is a JNI
+    /// upcall, and an animation frame's tasks all wait for the next frame.
+    #[test]
+    fn many_frame_awaiters_ask_the_host_once() {
+        let wakes = count_wakes();
+        let jobs: Vec<Job> = (0..5)
+            .map(|_| {
+                launch(async {
+                    loop {
+                        with_frame_nanos(|_| ()).await;
+                    }
+                })
+            })
+            .collect();
+        run_ready();
+        assert_eq!(wakes.load(Ordering::SeqCst), 6, "5 launches, then 1 frame asked for");
+        wakes.store(0, Ordering::SeqCst);
+        dispatch_frame();
+        assert_eq!(wakes.load(Ordering::SeqCst), 1, "the next frame, asked for once");
+        // An awaiter gone (cancelled) and back: the host still hears of the first one after the
+        // list was empty.
+        for job in &jobs {
+            job.cancel();
+        }
+        assert!(!has_frame_awaiters());
+        wakes.store(0, Ordering::SeqCst);
+        let _job = launch(async {
+            with_frame_nanos(|_| ()).await;
+        });
+        run_ready();
+        assert_eq!(wakes.load(Ordering::SeqCst), 2, "the launch, then its frame");
+    }
+
+    /// A task waking itself while it waits for a frame (polled again, still waiting) is resumed
+    /// once by the frame, and polled once per `run_ready`.
+    #[test]
+    fn a_frame_awaiter_polled_again_waits_once() {
+        let polls = Rc::new(Cell::new(0));
+        let frames = Rc::new(Cell::new(0));
+        let (counted_polls, counted_frames) = (polls.clone(), frames.clone());
+        let _job = launch(async move {
+            let mut frame = std::pin::pin!(with_frame_nanos(|_| ()));
+            std::future::poll_fn(|context| {
+                counted_polls.set(counted_polls.get() + 1);
+                let poll = frame.as_mut().poll(context);
+                if poll.is_pending() && counted_polls.get() == 1 {
+                    context.waker().wake_by_ref();
+                }
+                poll
+            })
+            .await;
+            counted_frames.set(counted_frames.get() + 1);
+        });
+        run_ready();
+        assert_eq!(polls.get(), 1, "a task woken during its poll runs at the next run_ready");
+        run_ready();
+        assert_eq!(polls.get(), 2);
+        assert!(has_frame_awaiters());
+        dispatch_frame();
+        assert_eq!((polls.get(), frames.get()), (3, 1));
+        assert!(!has_frame_awaiters());
+    }
+
+    /// Polling a completed `with_frame_nanos` again panics there, not at the next frame.
+    #[test]
+    #[should_panic(expected = "polled after it completed")]
+    fn a_completed_frame_wait_polled_again_panics_at_once() {
+        let mut future = Box::pin(with_frame_nanos(|_| ()));
+        let waker = Waker::noop();
+        let mut context = Context::from_waker(waker);
+        assert!(future.as_mut().poll(&mut context).is_pending());
+        dispatch_frame();
+        assert!(future.as_mut().poll(&mut context).is_ready());
+        let _ = future.as_mut().poll(&mut context);
     }
 
     /// A frame awaiter's waker that panics leaves the executor waking the host as before: the

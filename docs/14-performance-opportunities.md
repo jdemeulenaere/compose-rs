@@ -77,7 +77,7 @@ Work per 10 s of the animated feed, or per 10 flings. Sections are `compose-rs:`
 
 So about 60 % of the animation's main thread is the system's per-frame cost, which a `View` can't avoid and Compose pays equally: the binder `requestNextVsync` triggered by `invalidate()` (26 ms), waking and waiting for the RenderThread (22 ms), Looper and epoll (44 ms). compose-rs's own part (Rust, replay, HWUI recording) is about 78 ms of the 210.
 
-**JNI crossings** are few: about 6 per animation frame (`frame()`, `takeDrawing()`, `tick()` from a posted message, one `wake()` upcall per woken frame awaiter, the `NewDirectByteBuffer` constructor). Scrolling adds `touch()` per input sample, `requestFrame` upcalls, one `prefetch()` per idle slot with about 6 text-layout upcalls per item, and release upcalls. Their cost is small: text's JNI overhead is about 5 % of text layout.
+**JNI crossings** are few: about 6 per animation frame (`frame()`, `takeDrawing()`, `tick()` from a posted message, one `wake()` upcall per frame for the tasks waiting for the next (one per awaiter until D421), the `NewDirectByteBuffer` constructor). Scrolling adds `touch()` per input sample, `requestFrame` upcalls, one `prefetch()` per idle slot with about 6 text-layout upcalls per item, and release upcalls. Their cost is small: text's JNI overhead is about 5 % of text layout.
 
 **Render nodes** show no extra cost: the RenderThread's sync is cheaper than Compose's in both scenarios (17.6 against 23.5 ms; scrolling, from one trace each, 32.7 against 45 ms). Compose's scroll figure (842 ms) is also one trace.
 
