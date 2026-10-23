@@ -41,7 +41,11 @@ def main(path):
             print(f"memory {app} {when}: " + ", ".join(f"{k} {med([x.get(k,0) for x in runs])/1024:.1f}MB" for k in keys))
     for scenario in ("scroll", "animation"):
         for app in ("compose", "rs"):
-            runs = r[scenario][app]
+            # A run whose trace holds no frame (measure.py runs it again since D362; older
+            # reports may have one) would read as zero work: left out, and said.
+            runs = [x for x in r[scenario][app] if x["trace"].get("frames", 1) > 0]
+            if len(runs) < len(r[scenario][app]):
+                print(f"{scenario} {app}: {len(r[scenario][app]) - len(runs)} run(s) without a traced frame left out")
             g = [x["gfxinfo"] for x in runs]; t = [x["trace"] for x in runs]
             print(f"{scenario} {app}: gfx frames {med([x.get('frames',0) for x in g])}, janky {med([x.get('janky',0) for x in g])}, p50 {med([x.get('p50',0) for x in g])} p90 {med([x.get('p90',0) for x in g])} p99 {med([x.get('p99',0) for x in g])} | timeline frames {med([x['frames'] for x in t])}, janky {med([x['janky_frames'] for x in t])} kinds {[x['jank_kinds'] for x in t]} | main p50 {med([x['main_thread_frame_ms']['p50'] or 0 for x in t]):.2f} p90 {med([x['main_thread_frame_ms']['p90'] or 0 for x in t]):.2f} p99 {med([x['main_thread_frame_ms']['p99'] or 0 for x in t]):.2f} max {med([x['main_thread_frame_ms']['max'] or 0 for x in t]):.1f} | render p50 {med([x['render_thread_frame_ms']['p50'] or 0 for x in t]):.2f} p90 {med([x['render_thread_frame_ms']['p90'] or 0 for x in t]):.2f} | cpu main {med([x['cpu_ms'].get('main',0) for x in t]):.0f}ms render {med([x['cpu_ms'].get('render',0) for x in t]):.0f}ms | work main {med([(x.get('work_ms') or {}).get('main',0) for x in t]):.0f}ms render {med([(x.get('work_ms') or {}).get('render',0) for x in t]):.0f}ms")
             for index, trace in enumerate(t):

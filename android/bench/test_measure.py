@@ -159,6 +159,59 @@ class HygieneTest(unittest.TestCase):
         self.assertEqual(measure.measured_since([]), 0)
 
 
+class BaselineProfileTest(unittest.TestCase):
+    # `am broadcast` to androidx.profileinstaller's receiver on a Pixel 8 Pro, Android 16.
+    INSTALLED = (
+        "Broadcasting: Intent { act=androidx.profileinstaller.action.INSTALL_PROFILE flg=0x400000 "
+        "cmp=rs.compose.bench.rs/androidx.profileinstaller.ProfileInstallReceiver }\n"
+        "Broadcast completed: result=1\n")
+
+    def test_broadcast_result(self):
+        self.assertEqual(measure.broadcast_result(self.INSTALLED), measure.PROFILE_INSTALLED)
+        # Another result: the profile wasn't installed (e.g. 6, none in the APK).
+        self.assertEqual(measure.broadcast_result("Broadcast completed: result=6\n"), 6)
+        # No receiver: an app without profileinstaller.
+        self.assertEqual(measure.broadcast_result("Broadcast completed: result=0\n"), 0)
+        self.assertIsNone(measure.broadcast_result("Error: something failed\n"))
+
+    def test_an_app_without_its_profile_stops_the_run(self):
+        calls = []
+        original_shell, original_stop = measure.shell, measure.stop
+        try:
+            measure.stop = lambda package: calls.append(("stop", package))
+            measure.shell = lambda command: "Broadcast completed: result=0\n"
+            with self.assertRaises(SystemExit):
+                measure.install_baseline_profile("rs.compose.bench.rs")
+            measure.shell = lambda command: self.INSTALLED
+            measure.install_baseline_profile("rs.compose.bench.rs")
+        finally:
+            measure.shell, measure.stop = original_shell, original_stop
+        # The receiver's process is stopped either way, so the run starts cold.
+        self.assertEqual(calls, [("stop", "rs.compose.bench.rs")] * 2)
+
+
+class CompiledTest(unittest.TestCase):
+    def test_each_app_must_be_compiled_as_asked(self):
+        states = measure.dexopt_states(DEXOPT_ART_SERVICE)
+        apps = {"compose": states["rs.compose.bench.compose"], "rs": states["rs.compose.bench.rs"]}
+        # compose-rs's app is at verify: a speed-profile run stops.
+        with self.assertRaises(SystemExit):
+            measure.check_compiled(apps, "speed-profile")
+        measure.check_compiled({"compose": apps["compose"]}, "speed-profile")
+        with self.assertRaises(SystemExit):
+            measure.check_compiled({"rs": []}, "verify")
+
+
+class EmptyTraceTest(unittest.TestCase):
+    def test_a_run_without_frames_is_run_again(self):
+        results = iter([{"trace": {"frames": 0}}, {"trace": {"frames": 1200}}])
+        self.assertEqual(measure.traced(lambda: next(results), "animation"), {"trace": {"frames": 1200}})
+        results = iter([("memory", {"trace": {"frames": 0}}), ("memory", {"trace": {"frames": 9}})])
+        self.assertEqual(measure.traced(lambda: next(results), "scroll")[1]["trace"]["frames"], 9)
+        with self.assertRaises(SystemExit):
+            measure.traced(lambda: {"trace": {"frames": 0}}, "scroll")
+
+
 class QueryTest(unittest.TestCase):
     def test_a_failed_query_stops_the_run(self):
         # A trace processor exiting with an error must not read as no rows (zero counts).

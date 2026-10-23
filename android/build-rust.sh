@@ -1,13 +1,21 @@
 #!/bin/sh
 # Builds a compose-rs library for Android (arm64) and copies it where Gradle packages it:
-#   build-rust.sh <cargo package> <library name> <jniLibs directory>
+#   build-rust.sh <cargo package> <library name> <jniLibs directory> <cargo profile>
+# The apps pass Cargo's `android` profile for debuggable variants and `android-release` for the
+# others (Cargo.toml, D361). Required, so a caller can't build a release without LTO unawares.
 # The NDK: $ANDROID_NDK_HOME if set; else $ANDROID_NDK_VERSION (the app's `ndkVersion`, which
 # Gradle passes) under $ANDROID_HOME/ndk if installed; else the newest there, with a warning.
 set -e
-if [ $# -ne 3 ] || [ -z "$3" ]; then
-    echo "usage: build-rust.sh <cargo package> <library name> <jniLibs directory>" >&2
+if [ $# -ne 4 ] || [ -z "$3" ] || [ -z "$4" ]; then
+    echo "usage: build-rust.sh <cargo package> <library name> <jniLibs directory> <cargo profile>" >&2
     exit 2
 fi
+PROFILE=$4
+# Cargo's output directory for the profile: `dev` builds into `debug`.
+case "$PROFILE" in
+    dev) PROFILE_DIRECTORY=debug ;;
+    *) PROFILE_DIRECTORY=$PROFILE ;;
+esac
 cd "$(dirname "$0")/.."
 SDK=${ANDROID_HOME:-${ANDROID_SDK_ROOT:-$HOME/Library/Android/sdk}}
 if [ -n "$ANDROID_NDK_HOME" ]; then
@@ -36,8 +44,8 @@ export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$NDK/toolchains/llvm/prebuilt/
 # Segments aligned to 16 KB pages, as Android 15+ devices with 16 KB pages require.
 export CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS="-C link-arg=-Wl,-z,max-page-size=16384"
 CARGO=$(command -v cargo || echo "$HOME/.cargo/bin/cargo")
-"$CARGO" build --release --target aarch64-linux-android -p "$1"
+"$CARGO" build --profile "$PROFILE" --target aarch64-linux-android -p "$1"
 # Only this build's library in the directory Gradle packages.
 rm -rf "$3/arm64-v8a"
 mkdir -p "$3/arm64-v8a"
-cp "target/aarch64-linux-android/release/lib$2.so" "$3/arm64-v8a/"
+cp "target/aarch64-linux-android/$PROFILE_DIRECTORY/lib$2.so" "$3/arm64-v8a/"

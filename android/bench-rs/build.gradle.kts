@@ -3,7 +3,7 @@ plugins {
 }
 
 // The benchmark's compose-rs app: examples/feed in a ComposeRsView, in a plain Activity (no
-// AndroidX), the same screens as bench-compose's.
+// AndroidX but androidx.profileinstaller, as bench-compose), the same screens as bench-compose's.
 android {
     namespace = "rs.compose.bench.rs"
     compileSdk = 36
@@ -42,11 +42,16 @@ abstract class BuildRust : Exec() {
 androidComponents {
     onVariants { variant ->
         val name = "buildRust" + variant.name.replaceFirstChar(Char::uppercase)
+        // Cargo's Android profiles (Cargo.toml, D361): both abort on panics; the release one
+        // adds fat LTO and one codegen unit, which debuggable builds skip to rebuild faster.
+        // By the build type's debuggable flag, so other release-like types take LTO too.
+        val debuggable = variant.buildType?.let { android.buildTypes.getByName(it).isDebuggable } ?: true
+        val cargoProfile = if (debuggable) "android" else "android-release"
         val buildRust = tasks.register<BuildRust>(name) {
             val output = outputDirectory
             executable = rootDir.resolve("build-rust.sh").path
             args("feed", "compose_rs_feed")
-            argumentProviders.add(CommandLineArgumentProvider { listOf(output.get().asFile.path) })
+            argumentProviders.add(CommandLineArgumentProvider { listOf(output.get().asFile.path, cargoProfile) })
             environment("ANDROID_NDK_VERSION", android.ndkVersion)
             // What build-rust.sh reads, through providers: the configuration cache keeps the
             // environment the task was configured with, and is discarded when these change.
@@ -64,4 +69,13 @@ androidComponents {
 
 dependencies {
     implementation(project(":compose-rs"))
+    // Hands the APK's Baseline Profile (compose-rs's, merged) to ART on installs that don't come
+    // from Play, as bench-compose's does for Compose's (D360): measure.py --compile speed-profile.
+    implementation("androidx.profileinstaller:profileinstaller:1.4.1")
+    constraints {
+        // Its dependencies at the versions bench-compose resolves through Compose's BOM, which
+        // an offline build finds in Gradle's cache.
+        implementation("androidx.annotation:annotation:1.9.1")
+        implementation("androidx.tracing:tracing:1.2.0")
+    }
 }

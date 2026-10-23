@@ -13,13 +13,14 @@ end of the run.
 
 --compile (`cmd package compile -m MODE -f`, before measuring):
   speed          (default) everything compiled ahead of time; docs/12's rounds 1 to 3 used it
-  speed-profile  each app is reset, run through its screens so ART records a profile, then
-                 compiled from that profile: what a Baseline or Cloud Profile gives a Play
-                 install, with an app image. Compose's feed starts faster this way than with
-                 speed (docs/14). compose-rs's Kotlin glue leaves no profile worth compiling, so
-                 its state stays verify (the dexopt log shows it): its startup doesn't depend on
-                 it, but its replay runs JIT code
+  speed-profile  each app is stopped and reset, given the Baseline Profile its APK ships
+                 (through androidx.profileinstaller's receiver, as Macrobenchmark installs one),
+                 then compiled from it: what a Play install compiles at install, with an app
+                 image (D362). bench-compose's is Compose's libraries' and its own; bench-rs's is
+                 the compose-rs library's and its own (D360)
   verify         no ahead-of-time code: a fresh install with no profile
+The run stops if a step fails: a reset, a profile not installed, or an app whose compilation
+state isn't the filter asked for.
 
 Scenarios (docs/12-android-performance.md):
   startup      cold starts of the feed and of the big screen (`am start -W`: TotalTime), and a
@@ -241,30 +242,50 @@ def log_dexopt(when):
     return apps
 
 
-def train(package):
-    """Runs the app's screens from a reset, so ART's profile saver records what they run."""
-    shell(f"cmd package compile --reset {package}")
-    for screen in ("feed", "big", "feed_animated"):
-        stop(package)
-        time.sleep(1.0)
-        start(package, screen)
-        time.sleep(2)
-        if screen == "feed":
-            for flick in range(6):
-                swipe(up=flick % 4 != 3)
-                time.sleep(1.0)
-        time.sleep(3)
-    shell("input keyevent KEYCODE_HOME")
-    # The profile saver writes the profile a few seconds after the app goes to the background.
-    time.sleep(12)
+# androidx.profileinstaller's `ProfileInstaller.RESULT_INSTALL_SUCCESS`.
+PROFILE_INSTALLED = 1
+
+
+def broadcast_result(output):
+    """The result code in `am broadcast`'s output, or None (no `result=`)."""
+    match = re.search(r"Broadcast completed: result=(-?\d+)", output)
+    return int(match.group(1)) if match else None
+
+
+def install_baseline_profile(package):
+    """Has the app's androidx.profileinstaller write the Baseline Profile its APK ships
+    (`assets/dexopt/baseline.prof`) where ART compiles from, as Macrobenchmark does. Stops the
+    run if it didn't: an app without profileinstaller would be compiled from no profile."""
+    output = shell(f"am broadcast -a androidx.profileinstaller.action.INSTALL_PROFILE "
+                   f"{package}/androidx.profileinstaller.ProfileInstallReceiver")
     stop(package)
+    result = broadcast_result(output)
+    if result != PROFILE_INSTALLED:
+        raise SystemExit(f"{package}: its Baseline Profile wasn't installed (profileinstaller's "
+                         f"result {result}; {PROFILE_INSTALLED} is success): {output.strip()}")
 
 
 def compile_apps(mode):
     for package in APPS.values():
         if mode == "speed-profile":
-            train(package)
+            # Without the profiles of earlier runs or compilations: the APK's only. Stopped
+            # first, so a running process's profile saver can't write after the reset.
+            stop(package)
+            output = shell(f"cmd package compile --reset {package}")
+            # "Success" (Android 16, ART Service); some versions print the dexopt result.
+            if "Success" not in output and "PERFORMED" not in output:
+                raise SystemExit(f"{package}: `cmd package compile --reset` failed: {output.strip()}")
+            install_baseline_profile(package)
         shell(f"cmd package compile -m {mode} -f {package}")
+
+
+def check_compiled(apps, mode):
+    """Stops the run unless each app's states (`log_dexopt`'s) are all `mode`: a profile ART
+    found empty compiles to `verify`, say."""
+    for name, states in apps.items():
+        statuses = sorted({state["status"] for state in states})
+        if statuses != [mode]:
+            raise SystemExit(f"{name}: compiled as {statuses or 'nothing'}, not {mode}")
 
 
 def meminfo(package):
@@ -656,6 +677,24 @@ def swipe(up):
         shell("input swipe 504 500 504 1800 120")
 
 
+# Traced runs tried again when their trace holds no frame of the app's (a trace that missed the
+# app's process, say), at most this many times in all; then the run stops.
+TRACE_ATTEMPTS = 3
+
+
+def traced(attempt, what):
+    """`attempt()`'s result (`(…, stats)` or `stats`, whose "trace" has FrameTimeline's
+    "frames"), tried again while its trace counted no frame: an empty run would read as zero work
+    and no percentiles, and pull the medians down."""
+    for _ in range(TRACE_ATTEMPTS):
+        result = attempt()
+        stats = result[-1] if isinstance(result, tuple) else result
+        if stats["trace"]["frames"] > 0:
+            return result
+        print(f"{what}: the trace has no frame of the app's; again")
+    raise SystemExit(f"{what}: no frame traced in {TRACE_ATTEMPTS} attempts")
+
+
 def scroll_run(trace_processor, out_dir, package, name, run, capacities):
     """One traced run of 10 flings through the feed, after a warm-up swipe: the display, idle
     since the app started, resyncs its vsync on the first input, which FrameTimeline counts as
@@ -704,6 +743,7 @@ def main():
     shell("wm dismiss-keyguard")
     compile_apps(arguments.compile)
     report["dexopt"] = {"start": log_dexopt("start")}
+    check_compiled(report["dexopt"]["start"], arguments.compile)
 
     # Startup: cold starts, interleaved.
     startup = {name: {"feed": [], "big": []} for name in APPS}
@@ -737,7 +777,9 @@ def main():
     scroll = {name: [] for name in APPS}
     for run in range(3):
         for name, package in APPS.items():
-            after_start, stats = scroll_run(tp, arguments.out, package, name, run, capacities)
+            after_start, stats = traced(
+                lambda: scroll_run(tp, arguments.out, package, name, run, capacities),
+                f"scroll {name} {run}")
             memory[name]["after_start"].append(after_start)
             scroll[name].append(stats)
             memory[name]["after_scroll"].append(meminfo(package))
@@ -749,14 +791,17 @@ def main():
     animation = {name: [] for name in APPS}
     for run in range(3):
         for name, package in APPS.items():
-            fresh(package)
-            time.sleep(1.0)
-            start(package, "feed_animated")
-            time.sleep(3)
-            gfxinfo(package, reset=True)
-            process, path = start_trace(package, 10000, f"animation-{name}-{run}")
-            trace = finish_trace(process, path, arguments.out)
-            stats = {"gfxinfo": gfxinfo(package), "trace": frame_stats(tp, trace, package, capacities)}
+            def animation_run():
+                fresh(package)
+                time.sleep(1.0)
+                start(package, "feed_animated")
+                time.sleep(3)
+                gfxinfo(package, reset=True)
+                process, path = start_trace(package, 10000, f"animation-{name}-{run}")
+                trace = finish_trace(process, path, arguments.out)
+                return {"gfxinfo": gfxinfo(package),
+                        "trace": frame_stats(tp, trace, package, capacities)}
+            stats = traced(animation_run, f"animation {name} {run}")
             animation[name].append(stats)
             print("animation", name, run, json.dumps(stats))
     report["animation"] = animation

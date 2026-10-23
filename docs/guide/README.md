@@ -186,7 +186,7 @@ compose_android::export_apps! {
 
 ### 2. Gradle
 
-The Kotlin side is the `android/compose-rs` library module: `ComposeRsView` and its glue, without dependencies on AndroidX. Copy `android/demo` to `android/hello` and add `include(":hello")` to `android/settings.gradle.kts`, which already includes `:compose-rs`. The app's `build.gradle.kts` builds the Rust library before each build, with `build-rust.sh <cargo package> <library name> <jniLibs directory>`:
+The Kotlin side is the `android/compose-rs` library module: `ComposeRsView` and its glue, without dependencies on AndroidX. Copy `android/demo` to `android/hello` and add `include(":hello")` to `android/settings.gradle.kts`, which already includes `:compose-rs`. The app's `build.gradle.kts` builds the Rust library before each build, with `build-rust.sh <cargo package> <library name> <jniLibs directory> <cargo profile>`:
 
 ```kotlin
 android {
@@ -203,11 +203,14 @@ abstract class BuildRust : Exec() {
 androidComponents {
     onVariants { variant ->
         val name = "buildRust" + variant.name.replaceFirstChar(Char::uppercase)
+        // The workspace's Cargo profiles: release (non-debuggable) variants also take fat LTO.
+        val debuggable = variant.buildType?.let { android.buildTypes.getByName(it).isDebuggable } ?: true
+        val cargoProfile = if (debuggable) "android" else "android-release"
         val buildRust = tasks.register<BuildRust>(name) {
             val output = outputDirectory
             executable = rootDir.resolve("build-rust.sh").path
             args("hello-android", "hello_android")
-            argumentProviders.add(CommandLineArgumentProvider { listOf(output.get().asFile.path) })
+            argumentProviders.add(CommandLineArgumentProvider { listOf(output.get().asFile.path, cargoProfile) })
             environment("ANDROID_NDK_VERSION", android.ndkVersion)
             // What build-rust.sh reads, through providers: the configuration cache keeps the
             // environment the task was configured with, and is discarded when these change.
@@ -230,9 +233,11 @@ dependencies {
 
 The task's output directory is the variant's generated `jniLibs`, so Gradle runs it before merging and packaging the native libraries, and packages the library it built. (A plain `Exec` task without declared outputs, run before `preBuild`, sometimes left the previous build's library in the APK.)
 
-`build-rust.sh` runs `cargo build --release --target aarch64-linux-android -p <package>` with the NDK's linker (no `cargo-ndk` needed), then copies the library where Gradle packages it.
+`build-rust.sh` runs `cargo build --profile <profile> --target aarch64-linux-android -p <package>` with the NDK's linker (no `cargo-ndk` needed), then copies the library where Gradle packages it. The profiles are the workspace's (its `Cargo.toml`): `android`, the release profile with `panic = "abort"`, for debug builds, and `android-release`, which adds fat LTO and one codegen unit (a smaller, slightly faster library that takes longer to rebuild), for release builds. A panic then aborts the app after it's logged to logcat.
 
-It builds in the compose-rs workspace, the directory above the script, so the package must be one of that workspace's members. An app in a repository of its own copies the script and changes the directory it builds in, and points Gradle at the library module: `project(":compose-rs").projectDir = file("…/compose-rs/android/compose-rs")`.
+It builds in the compose-rs workspace, the directory above the script, so the package must be one of that workspace's members. An app in a repository of its own copies the script and changes the directory it builds in, copies the two profiles into its workspace's `Cargo.toml`, and points Gradle at the library module: `project(":compose-rs").projectDir = file("…/compose-rs/android/compose-rs")`.
+
+The library's Baseline Profile is merged into the app's, so Play compiles its Kotlin glue ahead of time at install. For installs from elsewhere (`adb install`, other stores), add `implementation("androidx.profileinstaller:profileinstaller:1.4.1")`, which installs the profile on the app's first start (an app using AndroidX's `activity` already has it).
 
 ### 3. The activity
 
@@ -295,4 +300,4 @@ What the view does for its app:
 
 The demo is a working template: `examples/android-demo` is its Rust library (the counter, todo and gallery examples) and `android/demo` its Kotlin app, which shows each example in a tab of a Kotlin Compose screen. From `android/`, with a device connected, `./gradlew :demo:installDebug` builds and installs it (`./gradlew :hello:installDebug` for the app above).
 
-A Rust panic aborts the app at the JNI boundary; its message is in logcat under the tag `compose-rs`. [Logging](kotlin-to-rust.md#logging) covers the app's own messages, and [Profiling](performance.md#profiling) Perfetto traces of compose-rs's frame phases.
+A Rust panic aborts the app where it happens (the Android profiles set `panic = "abort"`), also one in background work or on a thread of the app's own; its message is in logcat under the tag `compose-rs`. [Logging](kotlin-to-rust.md#logging) covers the app's own messages, and [Profiling](performance.md#profiling) Perfetto traces of compose-rs's frame phases.

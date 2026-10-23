@@ -49,7 +49,7 @@ Needs the Android SDK (`ANDROID_HOME`, or `~/Library/Android/sdk` on macOS), JDK
 rustup target add aarch64-linux-android
 ```
 
-The NDK version is pinned: the apps' `ndkVersion` is 27.2.12479018, the NDK the Android Gradle plugin strips the Rust library with (without it, it packages the library unstripped). `build-rust.sh` links with the NDK `ANDROID_NDK_HOME` names, else that version under `$ANDROID_HOME/ndk/`, else the newest there, with a warning.
+The NDK version is pinned: the apps' `ndkVersion` is 27.2.12479018, the NDK the Android Gradle plugin strips the Rust library with (without it, it packages the library unstripped). `build-rust.sh` links with the NDK `ANDROID_NDK_HOME` names, else that version under `$ANDROID_HOME/ndk/`, else the newest there, with a warning. Debug variants build the library with Cargo's `android` profile, release variants with `android-release` (fat LTO, one codegen unit: smaller and slightly faster, slower to rebuild); in both, a Rust panic aborts the app after it's logged to logcat (docs/decisions.md, D361).
 
 ```bash
 android/gradlew -p android :demo:installDebug    # the gallery, todo and counter in Kotlin Compose tabs

@@ -67,3 +67,21 @@ opt-level = 0
 
 [profile.bench]
 debug = "line-tables-only"
+
+# The Android library (android/build-rust.sh; D361, docs/14's #4b). Debuggable variants build
+# with `android`: release, but panics abort where they happen, after the panic hook logs them to
+# logcat. A panic reaching a JNI function aborts anyway; one that unwinding would let go aborts
+# too, in debug builds as in release ones: in a cancelled task's background work, a pool thread's
+# drop or wake, an app's own thread, or under an app's own `catch_unwind`. Desktop and tests keep
+# unwinding. With LTO, abort takes 0.28 MB off the library.
+[profile.android]
+inherits = "release"
+panic = "abort"
+
+# The other (release) variants: also one codegen unit and fat LTO (0.21 MB smaller without abort,
+# the Rust frame about 2 % shorter), which make a framework edit rebuild the library in about 5 s
+# instead of 2.
+[profile.android-release]
+inherits = "android"
+lto = "fat"
+codegen-units = 1
