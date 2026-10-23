@@ -190,6 +190,18 @@ class BaselineProfileTest(unittest.TestCase):
         self.assertEqual(calls, [("stop", "rs.compose.bench.rs")] * 2)
 
 
+class CompiledTest(unittest.TestCase):
+    def test_each_app_must_be_compiled_as_asked(self):
+        states = measure.dexopt_states(DEXOPT_ART_SERVICE)
+        apps = {"compose": states["rs.compose.bench.compose"], "rs": states["rs.compose.bench.rs"]}
+        # compose-rs's app is at verify: a speed-profile run stops.
+        with self.assertRaises(SystemExit):
+            measure.check_compiled(apps, "speed-profile")
+        measure.check_compiled({"compose": apps["compose"]}, "speed-profile")
+        with self.assertRaises(SystemExit):
+            measure.check_compiled({"rs": []}, "verify")
+
+
 class QueryTest(unittest.TestCase):
     def test_a_failed_query_stops_the_run(self):
         # A trace processor exiting with an error must not read as no rows (zero counts).

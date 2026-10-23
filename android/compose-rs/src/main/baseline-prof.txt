@@ -1,5 +1,5 @@
-# Baseline Profile of compose-rs's Android glue (rs.compose.android): docs/07, "Baseline
-# Profile"; D360.
+# Baseline Profile of compose-rs's Android glue (rs.compose.android): docs/07, "Packaging";
+# docs/14, "Compilation modes"; D360.
 #
 # The Android Gradle plugin merges this file into every app's profile
 # (assets/dexopt/baseline.prof). Play compiles from it at install, and androidx.profileinstaller
@@ -14,7 +14,8 @@
 # rewrites the rules for the lambdas and outlines it synthesizes, and for the names it
 # obfuscates.
 
-# Every class: they're loaded while the first ComposeRsView starts (the app image keeps them).
+# Every class: most are loaded while the first ComposeRsView starts (the app image keeps them);
+# ART skips those it can't resolve, as AndroidXBack without androidx.activity.
 Lrs/compose/android/**;
 
 # Every method: hot (compiled ahead of time), startup and post-startup.

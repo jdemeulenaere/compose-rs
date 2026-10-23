@@ -83,7 +83,7 @@ To work on a single composable, run it alone rather than the whole app: a small 
 
 ### 7. Develop on desktop, verify on Android
 
-The Android loop pays for Gradle packaging and installing on top of the Rust build, so iterate on desktop, where the same composables run, and switch to the device to check platform behaviour. When you do build for Android in development, build only one ABI (`cargo ndk -t arm64-v8a`) and keep Gradle's configuration cache on.
+The Android loop pays for Gradle packaging and installing on top of the Rust build, so iterate on desktop, where the same composables run, and switch to the device to check platform behaviour. When you do build for Android in development, build only one ABI (`cargo ndk -t arm64-v8a`) and keep Gradle's configuration cache on, and install the debug variant: its Rust library builds with Cargo's `android` profile, without the release variant's fat LTO and single codegen unit (an edit to compose-material3 rebuilds it in 1.8 s against 5.1: D361).
 
 Two optional extras:
 - The Cranelift code generator for debug builds (`-Zcodegen-backend=cranelift`, nightly) cuts code-generation time further.

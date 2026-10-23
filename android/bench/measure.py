@@ -13,13 +13,14 @@ end of the run.
 
 --compile (`cmd package compile -m MODE -f`, before measuring):
   speed          (default) everything compiled ahead of time; docs/12's rounds 1 to 3 used it
-  speed-profile  each app is reset, given the Baseline Profile its APK ships (through
-                 androidx.profileinstaller's receiver, as Macrobenchmark's
-                 BaselineProfileMode.Require), then compiled from it: what a Play install compiles
-                 at install, with an app image. bench-compose's is Compose's libraries' and its
-                 own; bench-rs's is the compose-rs library's and its own (D360). The run stops if
-                 an app's profile isn't installed
+  speed-profile  each app is stopped and reset, given the Baseline Profile its APK ships
+                 (through androidx.profileinstaller's receiver, as Macrobenchmark installs one),
+                 then compiled from it: what a Play install compiles at install, with an app
+                 image (D362). bench-compose's is Compose's libraries' and its own; bench-rs's is
+                 the compose-rs library's and its own (D360)
   verify         no ahead-of-time code: a fresh install with no profile
+The run stops if a step fails: a reset, a profile not installed, or an app whose compilation
+state isn't the filter asked for.
 
 Scenarios (docs/12-android-performance.md):
   startup      cold starts of the feed and of the big screen (`am start -W`: TotalTime), and a
@@ -267,10 +268,23 @@ def install_baseline_profile(package):
 def compile_apps(mode):
     for package in APPS.values():
         if mode == "speed-profile":
-            # Without the profiles of earlier runs or compilations: the APK's only.
-            shell(f"cmd package compile --reset {package}")
+            # Without the profiles of earlier runs or compilations: the APK's only. Stopped
+            # first, so a running process's profile saver can't write after the reset.
+            stop(package)
+            output = shell(f"cmd package compile --reset {package}")
+            if "Success" not in output:
+                raise SystemExit(f"{package}: `cmd package compile --reset` failed: {output.strip()}")
             install_baseline_profile(package)
         shell(f"cmd package compile -m {mode} -f {package}")
+
+
+def check_compiled(apps, mode):
+    """Stops the run unless each app's states (`log_dexopt`'s) are all `mode`: a profile ART
+    found empty compiles to `verify`, say."""
+    for name, states in apps.items():
+        statuses = sorted({state["status"] for state in states})
+        if statuses != [mode]:
+            raise SystemExit(f"{name}: compiled as {statuses or 'nothing'}, not {mode}")
 
 
 def meminfo(package):
@@ -710,6 +724,7 @@ def main():
     shell("wm dismiss-keyguard")
     compile_apps(arguments.compile)
     report["dexopt"] = {"start": log_dexopt("start")}
+    check_compiled(report["dexopt"]["start"], arguments.compile)
 
     # Startup: cold starts, interleaved.
     startup = {name: {"feed": [], "big": []} for name in APPS}

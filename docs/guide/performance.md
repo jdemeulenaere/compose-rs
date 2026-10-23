@@ -138,7 +138,7 @@ State, slots and nodes are owned, and freed when they leave the composition. A s
 - **Large composables reading state at the top.** The reading scope is the unit of recomposition. Move a read into the smallest composable that needs it, or pass the state handle (or a holder such as `LazyListState`) down instead of its value.
 - **Work in composition.** A composable's body can run on any frame. Compute derived values with `remember_keyed(keys, || …)` or `derived_state_of`, and do I/O in a `LaunchedEffect` with `spawn_background`.
 - **Composable calls in a root closure.** `run_app`, `application` and `compose_test` take root content that the transform doesn't see. Give them a `#[composable]` function, or a closure that only calls one (`move || TodoAppWith(items)`): calls, branches and lambdas written in the closure itself get no memoization and no groups.
-- **Measuring debug builds.** Profile release builds (`cargo run --release`); Android's `build-rust.sh` always builds release.
+- **Measuring debug builds.** Profile release builds (`cargo run --release`). On Android, profile the release variant: its Rust library takes fat LTO and one codegen unit (`android-release`), the debug variant's doesn't (`android`, otherwise the release profile).
 
 ## Profiling
 

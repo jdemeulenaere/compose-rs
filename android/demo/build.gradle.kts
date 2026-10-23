@@ -45,8 +45,10 @@ androidComponents {
     onVariants { variant ->
         val name = "buildRust" + variant.name.replaceFirstChar(Char::uppercase)
         // Cargo's Android profiles (Cargo.toml, D361): both abort on panics; the release one
-        // adds fat LTO and one codegen unit, which debug builds skip to rebuild faster.
-        val cargoProfile = if (variant.buildType == "release") "android-release" else "android"
+        // adds fat LTO and one codegen unit, which debuggable builds skip to rebuild faster.
+        // By the build type's debuggable flag, so other release-like types take LTO too.
+        val debuggable = variant.buildType?.let { android.buildTypes.getByName(it).isDebuggable } ?: true
+        val cargoProfile = if (debuggable) "android" else "android-release"
         val buildRust = tasks.register<BuildRust>(name) {
             val output = outputDirectory
             executable = rootDir.resolve("build-rust.sh").path
