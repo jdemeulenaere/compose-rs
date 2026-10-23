@@ -71,6 +71,8 @@ python3 android/bench/measure.py --trace-processor path/to/trace_processor_shell
 python3 android/bench/summarize.py bench-out/report.json
 ```
 
+`--scenarios stress_startup,stress_scroll,stress_animation` measures only the stress screens ([docs/15](docs/15-android-stress-benchmark.md)).
+
 The [developer guide](docs/guide/README.md) walks through a desktop app and an Android app.
 
 An app depends on the facade with the `desktop` feature (and `test` for its tests), writes composables, and opens a window:
@@ -152,6 +154,7 @@ The [examples](examples) are this code, running. The design started from [sketch
 11. [Status](docs/11-status.md): what's covered, and the known differences from Compose.
 12. [Android performance](docs/12-android-performance.md): the same app in Jetpack Compose and compose-rs, measured with Perfetto.
 13. [Drawing on Android](docs/13-android-drawing-paths.md): why compose-rs draws through `Canvas` and `RenderNode`, what `libhwui.so` exposes, and the options for drawing directly.
+15. [Android stress benchmark](docs/15-android-stress-benchmark.md): a heavy list and a screen of hundreds of animations, in both, for jank and memory.
 
 Every decision with its alternatives and revert cost is in [docs/decisions.md](docs/decisions.md).
 

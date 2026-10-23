@@ -6,6 +6,7 @@
 //! - `feed_animated`: the same, with a header whose spinner, pulsing dot and turning star
 //!   animate forever (each read while drawing, as Compose's `graphicsLayer { }`).
 //! - `big`: 200 posts in a scrolling column, all composed at once.
+//! - `stress` and `stress_animation`: much heavier screens ([`stress`], docs/15).
 
 #![allow(non_snake_case)]
 
@@ -16,12 +17,14 @@ use compose::material3::*;
 use compose::runtime::*;
 use compose::ui::*;
 
+pub mod stress;
+
 /// The posts in the lazy feed.
 pub const POSTS: u32 = 1_000;
 /// The posts the big screen composes at once.
 pub const BIG_POSTS: u32 = 200;
 
-const AUTHORS: [&str; 16] = [
+pub(crate) const AUTHORS: [&str; 16] = [
     "Ada Lovelace",
     "Alan Turing",
     "Grace Hopper",
@@ -40,7 +43,7 @@ const AUTHORS: [&str; 16] = [
     "Katherine Johnson",
 ];
 
-const SENTENCES: [&str; 8] = [
+pub(crate) const SENTENCES: [&str; 8] = [
     "Shipped a new release today, with faster startup and fewer allocations.",
     "Reading about incremental computation and how UI frameworks skip work.",
     "Our team switched to declarative UI last year and never looked back.",
@@ -51,9 +54,10 @@ const SENTENCES: [&str; 8] = [
     "The best optimization is the work you never have to do at all.",
 ];
 
-const TAGS: [&str; 6] = ["kotlin", "rust", "compose", "android", "performance", "design"];
+pub(crate) const TAGS: [&str; 6] =
+    ["kotlin", "rust", "compose", "android", "performance", "design"];
 
-const COLORS: [u32; 8] = [
+pub(crate) const COLORS: [u32; 8] = [
     0xFF6750A4, 0xFF7D5260, 0xFF006A6A, 0xFF8C4A00, 0xFF3F51B5, 0xFF00796B, 0xFFC2185B, 0xFF5D4037,
 ];
 
@@ -260,4 +264,6 @@ compose_android::export_apps! {
     "feed" => Feed,
     "feed_animated" => FeedAnimated,
     "big" => BigScreen,
+    "stress" => stress::StressScroll,
+    "stress_animation" => stress::StressAnimation,
 }

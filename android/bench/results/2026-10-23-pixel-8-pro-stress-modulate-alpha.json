@@ -1,0 +1,3536 @@
+{
+ "device": "Pixel 8 Pro",
+ "android": "16",
+ "abi": "arm64-v8a",
+ "compile": "speed",
+ "scenarios": [
+  "stress_animation"
+ ],
+ "cpu_capacities": {
+  "0": [
+   182,
+   1704000
+  ],
+  "1": [
+   182,
+   1704000
+  ],
+  "2": [
+   182,
+   1704000
+  ],
+  "3": [
+   182,
+   1704000
+  ],
+  "4": [
+   725,
+   2367000
+  ],
+  "5": [
+   725,
+   2367000
+  ],
+  "6": [
+   725,
+   2367000
+  ],
+  "7": [
+   725,
+   2367000
+  ],
+  "8": [
+   1024,
+   2914000
+  ]
+ },
+ "apks": {
+  "compose": {
+   "installed": {
+    "bytes": 1885020,
+    "sha1": "0658c1c5b0e4967cf91a5e59a894ff2ea9aa48bb",
+    "splits": 0,
+    "libraries": {
+     "lib/arm64-v8a/libandroidx.graphics.path.so": {
+      "bytes": 10096,
+      "sha1": "d7c17fcb44b30a6efe89d436aa102abe52e008a6"
+     },
+     "lib/armeabi-v7a/libandroidx.graphics.path.so": {
+      "bytes": 7252,
+      "sha1": "4b416b1e0fd2c2313499c96cb7e3203d6852a6d3"
+     },
+     "lib/x86/libandroidx.graphics.path.so": {
+      "bytes": 9284,
+      "sha1": "e42764616064a561445f6900f246f5f84b04d6c7"
+     },
+     "lib/x86_64/libandroidx.graphics.path.so": {
+      "bytes": 10760,
+      "sha1": "b91b02f418e0ab0ff17d37a730558179d6ccd75c"
+     }
+    }
+   },
+   "built": {
+    "bytes": 1885020,
+    "sha1": "0658c1c5b0e4967cf91a5e59a894ff2ea9aa48bb",
+    "libraries": {
+     "lib/arm64-v8a/libandroidx.graphics.path.so": {
+      "bytes": 10096,
+      "sha1": "d7c17fcb44b30a6efe89d436aa102abe52e008a6"
+     },
+     "lib/armeabi-v7a/libandroidx.graphics.path.so": {
+      "bytes": 7252,
+      "sha1": "4b416b1e0fd2c2313499c96cb7e3203d6852a6d3"
+     },
+     "lib/x86/libandroidx.graphics.path.so": {
+      "bytes": 9284,
+      "sha1": "e42764616064a561445f6900f246f5f84b04d6c7"
+     },
+     "lib/x86_64/libandroidx.graphics.path.so": {
+      "bytes": 10760,
+      "sha1": "b91b02f418e0ab0ff17d37a730558179d6ccd75c"
+     }
+    }
+   },
+   "built_path": "/Users/jdemeulenaere/Development/compose-rs/.claude/worktrees/agent-a246d388e8b9b971d/android/bench-compose/build/outputs/apk/release/bench-compose-release.apk",
+   "problems": []
+  },
+  "rs": {
+   "installed": {
+    "bytes": 1748050,
+    "sha1": "1b081aab54daa56b6688333aa806bc8a2a807a9f",
+    "splits": 0,
+    "libraries": {
+     "lib/arm64-v8a/libcompose_rs_feed.so": {
+      "bytes": 1592208,
+      "sha1": "6df75026d1885138f929e74e0d18fb83ba9ac2b7"
+     }
+    }
+   },
+   "built": {
+    "bytes": 1748050,
+    "sha1": "1b081aab54daa56b6688333aa806bc8a2a807a9f",
+    "libraries": {
+     "lib/arm64-v8a/libcompose_rs_feed.so": {
+      "bytes": 1592208,
+      "sha1": "6df75026d1885138f929e74e0d18fb83ba9ac2b7"
+     }
+    }
+   },
+   "built_path": "/Users/jdemeulenaere/Development/compose-rs/.claude/worktrees/agent-a246d388e8b9b971d/android/bench-rs/build/outputs/apk/release/bench-rs-release.apk",
+   "problems": []
+  }
+ },
+ "dexopt": {
+  "start": {
+   "compose": [
+    {
+     "path": "/data/app/~~5SM2aQq6ce4Dq_kzGtV-ew==/rs.compose.bench.compose-qainL5HaDiIkzyGuToTznQ==/base.apk",
+     "isa": "arm64",
+     "status": "speed",
+     "reason": "cmdline"
+    }
+   ],
+   "rs": [
+    {
+     "path": "/data/app/~~u9jHEUCi9EmBbQCB99HOfQ==/rs.compose.bench.rs-O5ZrVrYPgFbd5DbQNhXUAA==/base.apk",
+     "isa": "arm64",
+     "status": "speed",
+     "reason": "cmdline"
+    }
+   ]
+  },
+  "end": {
+   "compose": [
+    {
+     "path": "/data/app/~~5SM2aQq6ce4Dq_kzGtV-ew==/rs.compose.bench.compose-qainL5HaDiIkzyGuToTznQ==/base.apk",
+     "isa": "arm64",
+     "status": "speed",
+     "reason": "cmdline"
+    }
+   ],
+   "rs": [
+    {
+     "path": "/data/app/~~u9jHEUCi9EmBbQCB99HOfQ==/rs.compose.bench.rs-O5ZrVrYPgFbd5DbQNhXUAA==/base.apk",
+     "isa": "arm64",
+     "status": "speed",
+     "reason": "cmdline"
+    }
+   ]
+  }
+ },
+ "stress_animation": {
+  "compose": [
+   {
+    "gfxinfo": {
+     "frames": 1362,
+     "janky": 0,
+     "p50": 15,
+     "p90": 17,
+     "p95": 18,
+     "p99": 19,
+     "gpu_p50": 6,
+     "gpu_p90": 7,
+     "gpu_p99": 8
+    },
+    "trace": {
+     "since": 0,
+     "frames": 1199,
+     "janky_frames": 1,
+     "jank_kinds": {
+      "App Deadline Missed": 1
+     },
+     "jank_sides": {
+      "app": 1,
+      "compositor": 0,
+      "other": 0
+     },
+     "visibly_late_frames": 671,
+     "late_do_frames": 16,
+     "late_do_frames_after_work": 0,
+     "prefetches": 0,
+     "buffer_stuffing": {
+      "recovery_slices": 0,
+      "buffer_stuffed": 0,
+      "occurred": false
+     },
+     "main_thread_frame_ms": {
+      "count": 1195,
+      "p50": 3.89449,
+      "p90": 4.933756,
+      "p99": 6.46464,
+      "max": 11.633586
+     },
+     "render_thread_frame_ms": {
+      "count": 1196,
+      "p50": 6.209147,
+      "p90": 6.978434,
+      "p99": 8.120972
+     },
+     "cpu_ms": {
+      "main": 4792.336267,
+      "render": 5434.109828
+     },
+     "work_ms": {
+      "main": 2741.905833,
+      "render": 3180.326284
+     },
+     "render_boost": {
+      "counter": true,
+      "time_weighted_min": 485.85820666062864,
+      "unboosted_frame_share": 0.0,
+      "frames_before_counter": 0,
+      "buckets": {
+       "unboosted": {
+        "frames": 0,
+        "share": 0.0,
+        "p50": null,
+        "p90": null,
+        "p99": null
+       },
+       "100-199": {
+        "frames": 0,
+        "share": 0.0,
+        "p50": null,
+        "p90": null,
+        "p99": null
+       },
+       "200+": {
+        "frames": 1196,
+        "share": 1.0,
+        "p50": 6.209147,
+        "p90": 6.978434,
+        "p99": 8.120972
+       }
+      },
+      "little_core_share": 0.000514815689787929
+     },
+     "slowest_frames": {
+      "main": [
+       {
+        "ts": 122572134741886,
+        "ms": 11.633586,
+        "slices": [
+         {
+          "name": "animation",
+          "ms": 7.410604,
+          "depth": 1
+         },
+         {
+          "name": "Recomposer:animation",
+          "ms": 6.204875,
+          "depth": 2
+         },
+         {
+          "name": "traversal",
+          "ms": 4.172607,
+          "depth": 1
+         },
+         {
+          "name": "draw-VRI[MainActivity]",
+          "ms": 4.114054,
+          "depth": 2
+         },
+         {
+          "name": "Record View#draw()",
+          "ms": 3.691772,
+          "depth": 3
+         },
+         {
+          "name": "AndroidOwner:measureAndLayout",
+          "ms": 2.096639,
+          "depth": 4
+         },
+         {
+          "name": "AndroidOwner:draw",
+          "ms": 1.445882,
+          "depth": 4
+         },
+         {
+          "name": "Recomposer:recompose",
+          "ms": 1.166992,
+          "depth": 2
+         }
+        ]
+       },
+       {
+        "ts": 122570184918521,
+        "ms": 10.986654,
+        "slices": [
+         {
+          "name": "traversal",
+          "ms": 7.993571,
+          "depth": 1
+         },
+         {
+          "name": "draw-VRI[MainActivity]",
+          "ms": 7.925415,
+          "depth": 2
+         },
+         {
+          "name": "postAndWait",
+          "ms": 4.467001,
+          "depth": 3
+         },
+         {
+          "name": "Record View#draw()",
+          "ms": 3.414469,
+          "depth": 3
+         },
+         {
+          "name": "animation",
+          "ms": 2.957316,
+          "depth": 1
+         },
+         {
+          "name": "Recomposer:animation",
+          "ms": 2.29427,
+          "depth": 2
+         },
+         {
+          "name": "AndroidOwner:measureAndLayout",
+          "ms": 1.816366,
+          "depth": 4
+         },
+         {
+          "name": "AndroidOwner:draw",
+          "ms": 1.487386,
+          "depth": 4
+         }
+        ]
+       },
+       {
+        "ts": 122567251314353,
+        "ms": 10.412231,
+        "slices": [
+         {
+          "name": "animation",
+          "ms": 7.270712,
+          "depth": 1
+         },
+         {
+          "name": "Recomposer:animation",
+          "ms": 5.842285,
+          "depth": 2
+         },
+         {
+          "name": "traversal",
+          "ms": 3.091594,
+          "depth": 1
+         },
+         {
+          "name": "draw-VRI[MainActivity]",
+          "ms": 3.009969,
+          "depth": 2
+         },
+         {
+          "name": "Record View#draw()",
+          "ms": 2.622111,
+          "depth": 3
+         },
+         {
+          "name": "AndroidOwner:measureAndLayout",
+          "ms": 1.768189,
+          "depth": 4
+         },
+         {
+          "name": "Recomposer:recompose",
+          "ms": 1.310506,
+          "depth": 2
+         },
+         {
+          "name": "TextStringSimpleNode::measure",
+          "ms": 0.898071,
+          "depth": 5
+         }
+        ]
+       },
+       {
+        "ts": 122567217803733,
+        "ms": 8.020304,
+        "slices": [
+         {
+          "name": "animation",
+          "ms": 5.966919,
+          "depth": 1
+         },
+         {
+          "name": "Recomposer:animation",
+          "ms": 5.625895,
+          "depth": 2
+         },
+         {
+          "name": "traversal",
+          "ms": 2.030925,
+          "depth": 1
+         },
+         {
+          "name": "draw-VRI[MainActivity]",
+          "ms": 1.994913,
+          "depth": 2
+         },
+         {
+          "name": "Record View#draw()",
+          "ms": 1.627604,
+          "depth": 3
+         },
+         {
+          "name": "AndroidOwner:measureAndLayout",
+          "ms": 0.952841,
+          "depth": 4
+         },
+         {
+          "name": "AndroidOwner:draw",
+          "ms": 0.607341,
+          "depth": 4
+         },
+         {
+          "name": "TextStringSimpleNode::measure",
+          "ms": 0.395671,
+          "depth": 5
+         }
+        ]
+       },
+       {
+        "ts": 122567226216860,
+        "ms": 7.307047,
+        "slices": [
+         {
+          "name": "traversal",
+          "ms": 4.834677,
+          "depth": 1
+         },
+         {
+          "name": "draw-VRI[MainActivity]",
+          "ms": 4.775065,
+          "depth": 2
+         },
+         {
+          "name": "Record View#draw()",
+          "ms": 2.907105,
+          "depth": 3
+         },
+         {
+          "name": "animation",
+          "ms": 2.440918,
+          "depth": 1
+         },
+         {
+          "name": "Recomposer:animation",
+          "ms": 1.867513,
+          "depth": 2
+         },
+         {
+          "name": "postAndWait",
+          "ms": 1.824463,
+          "depth": 3
+         },
+         {
+          "name": "AndroidOwner:measureAndLayout",
+          "ms": 1.578043,
+          "depth": 4
+         },
+         {
+          "name": "AndroidOwner:draw",
+          "ms": 1.213826,
+          "depth": 4
+         }
+        ]
+       }
+      ],
+      "render": [
+       {
+        "ts": 122567045605613,
+        "ms": 11.659586,
+        "slices": [
+         {
+          "name": "Drawing  0.00  0.00 1008.00 2244.00",
+          "ms": 11.390381,
+          "depth": 1
+         },
+         {
+          "name": "flush commands",
+          "ms": 9.484538,
+          "depth": 2
+         },
+         {
+          "name": "Vulkan finish frame",
+          "ms": 9.478108,
+          "depth": 3
+         },
+         {
+          "name": "auto skgpu::ganesh::OpsTask::onExecute(GrOpFlushState *)::(anonymous class)::operator()() const",
+          "ms": 0.418213,
+          "depth": 4
+         },
+         {
+          "name": "queueBuffer",
+          "ms": 0.260172,
+          "depth": 2
+         },
+         {
+          "name": "auto skgpu::ganesh::OpsTask::onPrepare(GrOpFlushState *)::(anonymous class)::operator()() const",
+          "ms": 0.197591,
+          "depth": 4
+         },
+         {
+          "name": "queueBuffer",
+          "ms": 0.179687,
+          "depth": 3
+         },
+         {
+          "name": "syncFrameState",
+          "ms": 0.173015,
+          "depth": 1
+         }
+        ]
+       },
+       {
+        "ts": 122569955598778,
+        "ms": 9.420329,
+        "slices": [
+         {
+          "name": "Drawing  0.00  0.00 1008.00 2244.00",
+          "ms": 9.1722,
+          "depth": 1
+         },
+         {
+          "name": "flush commands",
+          "ms": 7.706136,
+          "depth": 2
+         },
+         {
+          "name": "Vulkan finish frame",
+          "ms": 7.701782,
+          "depth": 3
+         },
+         {
+          "name": "auto skgpu::ganesh::OpsTask::onExecute(GrOpFlushState *)::(anonymous class)::operator()() const",
+          "ms": 0.418783,
+          "depth": 4
+         },
+         {
+          "name": "queueBuffer",
+          "ms": 0.257935,
+          "depth": 2
+         },
+         {
+          "name": "queueBuffer",
+          "ms": 0.184367,
+          "depth": 3
+         },
+         {
+          "name": "syncFrameState",
+          "ms": 0.177369,
+          "depth": 1
+         },
+         {
+          "name": "prepareTree",
+          "ms": 0.171183,
+          "depth": 2
+         }
+        ]
+       },
+       {
+        "ts": 122569946792992,
+        "ms": 8.791178,
+        "slices": [
+         {
+          "name": "Drawing  0.00  0.00 1008.00 2244.00",
+          "ms": 8.486572,
+          "depth": 1
+         },
+         {
+          "name": "flush commands",
+          "ms": 5.843994,
+          "depth": 2
+         },
+         {
+          "name": "Vulkan finish frame",
+          "ms": 5.838461,
+          "depth": 3
+         },
+         {
+          "name": "dispatchSetFrameTimelineInfo",
+          "ms": 0.693115,
+          "depth": 3
+         },
+         {
+          "name": "setFrameTimelineInfo(VRI[MainActivity]#0) frameNumber: 1342 vsyncId: 67779133",
+          "ms": 0.68811,
+          "depth": 4
+         },
+         {
+          "name": "queueBuffer",
+          "ms": 0.45345,
+          "depth": 2
+         },
+         {
+          "name": "auto skgpu::ganesh::OpsTask::onExecute(GrOpFlushState *)::(anonymous class)::operator()() const",
+          "ms": 0.398316,
+          "depth": 4
+         }
+        ]
+       },
+       {
+        "ts": 122564339981588,
+        "ms": 8.699422,
+        "slices": [
+         {
+          "name": "Drawing  0.00  0.00 1008.00 2244.00",
+          "ms": 8.191894,
+          "depth": 1
+         },
+         {
+          "name": "flush commands",
+          "ms": 5.875489,
+          "depth": 2
+         },
+         {
+          "name": "Vulkan finish frame",
+          "ms": 5.869303,
+          "depth": 3
+         },
+         {
+          "name": "auto skgpu::ganesh::OpsTask::onExecute(GrOpFlushState *)::(anonymous class)::operator()() const",
+          "ms": 0.712036,
+          "depth": 4
+         },
+         {
+          "name": "queueBuffer",
+          "ms": 0.388224,
+          "depth": 2
+         },
+         {
+          "name": "syncFrameState",
+          "ms": 0.330282,
+          "depth": 1
+         },
+         {
+          "name": "prepareTree",
+          "ms": 0.318645,
+          "depth": 2
+         },
+         {
+          "name": "queueBuffer",
+          "ms": 0.263102,
+          "depth": 3
+         }
+        ]
+       },
+       {
+        "ts": 122563772216939,
+        "ms": 8.646525,
+        "slices": [
+         {
+          "name": "Drawing  0.00  0.00 1008.00 2244.00",
+          "ms": 8.351156,
+          "depth": 1
+         },
+         {
+          "name": "flush commands",
+          "ms": 5.412191,
+          "depth": 2
+         },
+         {
+          "name": "Vulkan finish frame",
+          "ms": 5.406779,
+          "depth": 3
+         },
+         {
+          "name": "dispatchSetFrameTimelineInfo",
+          "ms": 0.882609,
+          "depth": 3
+         },
+         {
+          "name": "setFrameTimelineInfo(VRI[MainActivity]#0) frameNumber: 601 vsyncId: 67773206",
+          "ms": 0.876668,
+          "depth": 4
+         },
+         {
+          "name": "queueBuffer",
+          "ms": 0.691121,
+          "depth": 2
+         },
+         {
+          "name": "auto skgpu::ganesh::OpsTask::onExecute(GrOpFlushState *)::(anonymous class)::operator()() const",
+          "ms": 0.577474,
+          "depth": 4
+         }
+        ]
+       }
+      ]
+     }
+    },
+    "memory_kb": {
+     "after_start": {
+      "Java Heap": 12872,
+      "Native Heap": 17660,
+      "Code": 7408,
+      "Stack": 504,
+      "Graphics": 154152,
+      "Private Other": 1908,
+      "System": 3726,
+      "Total PSS": 198230,
+      "Total RSS": 357876
+     },
+     "after_animation": {
+      "Java Heap": 39144,
+      "Native Heap": 24612,
+      "Code": 7396,
+      "Stack": 544,
+      "Graphics": 158264,
+      "Private Other": 2144,
+      "System": 3812,
+      "Total PSS": 235916,
+      "Total RSS": 398020
+     }
+    }
+   },
+   {
+    "gfxinfo": {
+     "frames": 1358,
+     "janky": 0,
+     "p50": 16,
+     "p90": 18,
+     "p95": 18,
+     "p99": 19,
+     "gpu_p50": 6,
+     "gpu_p90": 7,
+     "gpu_p99": 8
+    },
+    "trace": {
+     "since": 0,
+     "frames": 1207,
+     "janky_frames": 1,
+     "jank_kinds": {
+      "App Deadline Missed": 1
+     },
+     "jank_sides": {
+      "app": 1,
+      "compositor": 0,
+      "other": 0
+     },
+     "visibly_late_frames": 706,
+     "late_do_frames": 3,
+     "late_do_frames_after_work": 0,
+     "prefetches": 0,
+     "buffer_stuffing": {
+      "recovery_slices": 0,
+      "buffer_stuffed": 0,
+      "occurred": false
+     },
+     "main_thread_frame_ms": {
+      "count": 1204,
+      "p50": 4.042277,
+      "p90": 5.089885,
+      "p99": 6.649292,
+      "max": 9.711711
+     },
+     "render_thread_frame_ms": {
+      "count": 1201,
+      "p50": 6.228597,
+      "p90": 7.032186,
+      "p99": 8.20695
+     },
+     "cpu_ms": {
+      "main": 5023.91038,
+      "render": 5519.47163
+     },
+     "work_ms": {
+      "main": 2886.367767,
+      "render": 3286.060306
+     },
+     "render_boost": {
+      "counter": true,
+      "time_weighted_min": 495.26977450260455,
+      "unboosted_frame_share": 0.0,
+      "frames_before_counter": 0,
+      "buckets": {
+       "unboosted": {
+        "frames": 0,
+        "share": 0.0,
+        "p50": null,
+        "p90": null,
+        "p99": null
+       },
+       "100-199": {
+        "frames": 0,
+        "share": 0.0,
+        "p50": null,
+        "p90": null,
+        "p99": null
+       },
+       "200+": {
+        "frames": 1201,
+        "share": 1.0,
+        "p50": 6.228597,
+        "p90": 7.032186,
+        "p99": 8.20695
+       }
+      },
+      "little_core_share": 0.0012960300332225821
+     },
+     "slowest_frames": {
+      "main": [
+       {
+        "ts": 122632874919813,
+        "ms": 9.711711,
+        "slices": [
+         {
+          "name": "animation",
+          "ms": 6.312012,
+          "depth": 1
+         },
+         {
+          "name": "Recomposer:animation",
+          "ms": 5.017049,
+          "depth": 2
+         },
+         {
+          "name": "traversal",
+          "ms": 3.369425,
+          "depth": 1
+         },
+         {
+          "name": "draw-VRI[MainActivity]",
+          "ms": 3.311442,
+          "depth": 2
+         },
+         {
+          "name": "Record View#draw()",
+          "ms": 2.883626,
+          "depth": 3
+         },
+         {
+          "name": "AndroidOwner:measureAndLayout",
+          "ms": 1.579509,
+          "depth": 4
+         },
+         {
+          "name": "Recomposer:recompose",
+          "ms": 1.226441,
+          "depth": 2
+         },
+         {
+          "name": "AndroidOwner:draw",
+          "ms": 1.165893,
+          "depth": 4
+         }
+        ]
+       },
+       {
+        "ts": 122627090428803,
+        "ms": 8.744873,
+        "slices": [
+         {
+          "name": "traversal",
+          "ms": 7.08781,
+          "depth": 1
+         },
+         {
+          "name": "draw-VRI[MainActivity]",
+          "ms": 7.055257,
+          "depth": 2
+         },
+         {
+          "name": "postAndWait",
+          "ms": 5.281941,
+          "depth": 3
+         },
+         {
+          "name": "Record View#draw()",
+          "ms": 1.753133,
+          "depth": 3
+         },
+         {
+          "name": "animation",
+          "ms": 1.600627,
+          "depth": 1
+         },
+         {
+          "name": "Recomposer:animation",
+          "ms": 1.283895,
+          "depth": 2
+         },
+         {
+          "name": "AndroidOwner:measureAndLayout",
+          "ms": 0.890625,
+          "depth": 4
+         },
+         {
+          "name": "AndroidOwner:draw",
+          "ms": 0.805501,
+          "depth": 4
+         }
+        ]
+       },
+       {
+        "ts": 122627332233897,
+        "ms": 8.643474,
+        "slices": [
+         {
+          "name": "traversal",
+          "ms": 4.704549,
+          "depth": 1
+         },
+         {
+          "name": "draw-VRI[MainActivity]",
+          "ms": 4.642985,
+          "depth": 2
+         },
+         {
+          "name": "Record View#draw()",
+          "ms": 4.283529,
+          "depth": 3
+         },
+         {
+          "name": "animation",
+          "ms": 3.919434,
+          "depth": 1
+         },
+         {
+          "name": "Recomposer:recompose",
+          "ms": 2.671265,
+          "depth": 2
+         },
+         {
+          "name": "Compose:applyChanges",
+          "ms": 2.184529,
+          "depth": 3
+         },
+         {
+          "name": "AndroidOwner:draw",
+          "ms": 2.023275,
+          "depth": 4
+         },
+         {
+          "name": "AndroidOwner:measureAndLayout",
+          "ms": 1.995036,
+          "depth": 4
+         }
+        ]
+       },
+       {
+        "ts": 122632175534478,
+        "ms": 8.217,
+        "slices": [
+         {
+          "name": "traversal",
+          "ms": 6.587239,
+          "depth": 1
+         },
+         {
+          "name": "draw-VRI[MainActivity]",
+          "ms": 6.559529,
+          "depth": 2
+         },
+         {
+          "name": "postAndWait",
+          "ms": 4.823364,
+          "depth": 3
+         },
+         {
+          "name": "Record View#draw()",
+          "ms": 1.716145,
+          "depth": 3
+         },
+         {
+          "name": "animation",
+          "ms": 1.611206,
+          "depth": 1
+         },
+         {
+          "name": "Recomposer:animation",
+          "ms": 1.318685,
+          "depth": 2
+         },
+         {
+          "name": "AndroidOwner:measureAndLayout",
+          "ms": 0.846232,
+          "depth": 4
+         },
+         {
+          "name": "AndroidOwner:draw",
+          "ms": 0.802246,
+          "depth": 4
+         }
+        ]
+       },
+       {
+        "ts": 122626948762340,
+        "ms": 7.637613,
+        "slices": [
+         {
+          "name": "traversal",
+          "ms": 3.839518,
+          "depth": 1
+         },
+         {
+          "name": "draw-VRI[MainActivity]",
+          "ms": 3.815756,
+          "depth": 2
+         },
+         {
+          "name": "animation",
+          "ms": 3.783814,
+          "depth": 1
+         },
+         {
+          "name": "Record View#draw()",
+          "ms": 3.569336,
+          "depth": 3
+         },
+         {
+          "name": "Recomposer:recompose",
+          "ms": 2.486329,
+          "depth": 2
+         },
+         {
+          "name": "Compose:recompose",
+          "ms": 2.300903,
+          "depth": 3
+         },
+         {
+          "name": "AndroidOwner:draw",
+          "ms": 2.095052,
+          "depth": 4
+         },
+         {
+          "name": "AndroidOwner:measureAndLayout",
+          "ms": 1.410767,
+          "depth": 4
+         }
+        ]
+       }
+      ],
+      "render": [
+       {
+        "ts": 122627086203949,
+        "ms": 12.603028,
+        "slices": [
+         {
+          "name": "Drawing  0.00  0.00 1008.00 2244.00",
+          "ms": 12.252482,
+          "depth": 1
+         },
+         {
+          "name": "flush commands",
+          "ms": 10.494751,
+          "depth": 2
+         },
+         {
+          "name": "Vulkan finish frame",
+          "ms": 10.48942,
+          "depth": 3
+         },
+         {
+          "name": "auto skgpu::ganesh::OpsTask::onExecute(GrOpFlushState *)::(anonymous class)::operator()() const",
+          "ms": 1.172404,
+          "depth": 4
+         },
+         {
+          "name": "queueBuffer",
+          "ms": 0.488362,
+          "depth": 2
+         },
+         {
+          "name": "Texture upload(3594) 940x227",
+          "ms": 0.417318,
+          "depth": 4
+         },
+         {
+          "name": "queueBuffer",
+          "ms": 0.407471,
+          "depth": 3
+         }
+        ]
+       },
+       {
+        "ts": 122632172265028,
+        "ms": 11.155761,
+        "slices": [
+         {
+          "name": "Drawing  0.00  0.00 1008.00 2244.00",
+          "ms": 10.806641,
+          "depth": 1
+         },
+         {
+          "name": "flush commands",
+          "ms": 9.146973,
+          "depth": 2
+         },
+         {
+          "name": "Vulkan finish frame",
+          "ms": 9.13973,
+          "depth": 3
+         },
+         {
+          "name": "auto skgpu::ganesh::OpsTask::onExecute(GrOpFlushState *)::(anonymous class)::operator()() const",
+          "ms": 0.540771,
+          "depth": 4
+         },
+         {
+          "name": "queueBuffer",
+          "ms": 0.320312,
+          "depth": 2
+         },
+         {
+          "name": "Texture upload(1284) 938x149",
+          "ms": 0.242025,
+          "depth": 4
+         },
+         {
+          "name": "syncFrameState",
+          "ms": 0.241211,
+          "depth": 1
+         },
+         {
+          "name": "prepareTree",
+          "ms": 0.232462,
+          "depth": 2
+         }
+        ]
+       },
+       {
+        "ts": 122627052463511,
+        "ms": 9.513143,
+        "slices": [
+         {
+          "name": "Drawing  0.00  0.00 1008.00 2244.00",
+          "ms": 9.200928,
+          "depth": 1
+         },
+         {
+          "name": "flush commands",
+          "ms": 7.691162,
+          "depth": 2
+         },
+         {
+          "name": "Vulkan finish frame",
+          "ms": 7.685262,
+          "depth": 3
+         },
+         {
+          "name": "QueueSubmit",
+          "ms": 1.89034,
+          "depth": 4
+         },
+         {
+          "name": "auto skgpu::ganesh::OpsTask::onExecute(GrOpFlushState *)::(anonymous class)::operator()() const",
+          "ms": 0.409424,
+          "depth": 4
+         },
+         {
+          "name": "queueBuffer",
+          "ms": 0.289876,
+          "depth": 2
+         },
+         {
+          "name": "syncFrameState",
+          "ms": 0.219726,
+          "depth": 1
+         },
+         {
+          "name": "prepareTree",
+          "ms": 0.210083,
+          "depth": 2
+         }
+        ]
+       },
+       {
+        "ts": 122623777616261,
+        "ms": 9.216186,
+        "slices": [
+         {
+          "name": "Drawing  0.00  0.00 1008.00 2244.00",
+          "ms": 8.963135,
+          "depth": 1
+         },
+         {
+          "name": "flush commands",
+          "ms": 7.395671,
+          "depth": 2
+         },
+         {
+          "name": "Vulkan finish frame",
+          "ms": 7.390747,
+          "depth": 3
+         },
+         {
+          "name": "auto skgpu::ganesh::OpsTask::onExecute(GrOpFlushState *)::(anonymous class)::operator()() const",
+          "ms": 0.45992,
+          "depth": 4
+         },
+         {
+          "name": "queueBuffer",
+          "ms": 0.300455,
+          "depth": 2
+         },
+         {
+          "name": "Texture upload(576) 940x249",
+          "ms": 0.254069,
+          "depth": 4
+         },
+         {
+          "name": "queueBuffer",
+          "ms": 0.227011,
+          "depth": 3
+         },
+         {
+          "name": "auto skgpu::ganesh::OpsTask::onPrepare(GrOpFlushState *)::(anonymous class)::operator()() const",
+          "ms": 0.182251,
+          "depth": 4
+         }
+        ]
+       },
+       {
+        "ts": 122630160101534,
+        "ms": 8.87032,
+        "slices": [
+         {
+          "name": "Drawing  0.00  0.00 1008.00 2244.00",
+          "ms": 8.573527,
+          "depth": 1
+         },
+         {
+          "name": "flush commands",
+          "ms": 4.882447,
+          "depth": 2
+         },
+         {
+          "name": "Vulkan finish frame",
+          "ms": 4.824178,
+          "depth": 3
+         },
+         {
+          "name": "dumpingMemoryStatistics",
+          "ms": 2.14266,
+          "depth": 2
+         },
+         {
+          "name": "Texture upload(112) 938x89",
+          "ms": 0.86495,
+          "depth": 4
+         },
+         {
+          "name": "auto skgpu::ganesh::OpsTask::onExecute(GrOpFlushState *)::(anonymous class)::operator()() const",
+          "ms": 0.446411,
+          "depth": 4
+         },
+         {
+          "name": "queueBuffer",
+          "ms": 0.273641,
+          "depth": 2
+         },
+         {
+          "name": "queueBuffer",
+          "ms": 0.207194,
+          "depth": 3
+         }
+        ]
+       }
+      ]
+     }
+    },
+    "memory_kb": {
+     "after_start": {
+      "Java Heap": 14124,
+      "Native Heap": 17584,
+      "Code": 7440,
+      "Stack": 500,
+      "Graphics": 154152,
+      "Private Other": 1908,
+      "System": 3780,
+      "Total PSS": 199488,
+      "Total RSS": 359344
+     },
+     "after_animation": {
+      "Java Heap": 16748,
+      "Native Heap": 24388,
+      "Code": 7432,
+      "Stack": 556,
+      "Graphics": 166824,
+      "Private Other": 2028,
+      "System": 3867,
+      "Total PSS": 221843,
+      "Total RSS": 384208
+     }
+    }
+   },
+   {
+    "gfxinfo": {
+     "frames": 1358,
+     "janky": 0,
+     "p50": 15,
+     "p90": 18,
+     "p95": 19,
+     "p99": 21,
+     "gpu_p50": 7,
+     "gpu_p90": 7,
+     "gpu_p99": 9
+    },
+    "trace": {
+     "since": 0,
+     "frames": 1206,
+     "janky_frames": 0,
+     "jank_kinds": {},
+     "jank_sides": {
+      "app": 0,
+      "compositor": 0,
+      "other": 0
+     },
+     "visibly_late_frames": 1206,
+     "late_do_frames": 4,
+     "late_do_frames_after_work": 0,
+     "prefetches": 0,
+     "buffer_stuffing": {
+      "recovery_slices": 0,
+      "buffer_stuffed": 0,
+      "occurred": false
+     },
+     "main_thread_frame_ms": {
+      "count": 1199,
+      "p50": 3.139567,
+      "p90": 5.037476,
+      "p99": 6.996542,
+      "max": 7.873576
+     },
+     "render_thread_frame_ms": {
+      "count": 1199,
+      "p50": 6.222493,
+      "p90": 7.704386,
+      "p99": 8.620727
+     },
+     "cpu_ms": {
+      "main": 4051.005873,
+      "render": 6025.494084
+     },
+     "work_ms": {
+      "main": 2794.703489,
+      "render": 3285.669679
+     },
+     "render_boost": {
+      "counter": true,
+      "time_weighted_min": 530.9002508160196,
+      "unboosted_frame_share": 0.0,
+      "frames_before_counter": 0,
+      "buckets": {
+       "unboosted": {
+        "frames": 0,
+        "share": 0.0,
+        "p50": null,
+        "p90": null,
+        "p99": null
+       },
+       "100-199": {
+        "frames": 0,
+        "share": 0.0,
+        "p50": null,
+        "p90": null,
+        "p99": null
+       },
+       "200+": {
+        "frames": 1199,
+        "share": 1.0,
+        "p50": 6.222493,
+        "p90": 7.704386,
+        "p99": 8.620727
+       }
+      },
+      "little_core_share": 0.002031907894907826
+     },
+     "slowest_frames": {
+      "main": [
+       {
+        "ts": 122688788959066,
+        "ms": 7.873576,
+        "slices": [
+         {
+          "name": "traversal",
+          "ms": 5.02889,
+          "depth": 1
+         },
+         {
+          "name": "draw-VRI[MainActivity]",
+          "ms": 4.987508,
+          "depth": 2
+         },
+         {
+          "name": "Record View#draw()",
+          "ms": 4.583496,
+          "depth": 3
+         },
+         {
+          "name": "AndroidOwner:measureAndLayout",
+          "ms": 2.913208,
+          "depth": 4
+         },
+         {
+          "name": "animation",
+          "ms": 2.81014,
+          "depth": 1
+         },
+         {
+          "name": "Recomposer:animation",
+          "ms": 2.20573,
+          "depth": 2
+         },
+         {
+          "name": "AndroidOwner:draw",
+          "ms": 1.551473,
+          "depth": 4
+         },
+         {
+          "name": "Recomposer:recompose",
+          "ms": 0.571126,
+          "depth": 2
+         }
+        ]
+       },
+       {
+        "ts": 122684604878334,
+        "ms": 7.664917,
+        "slices": [
+         {
+          "name": "traversal",
+          "ms": 5.730347,
+          "depth": 1
+         },
+         {
+          "name": "draw-VRI[MainActivity]",
+          "ms": 5.703491,
+          "depth": 2
+         },
+         {
+          "name": "postAndWait",
+          "ms": 3.669515,
+          "depth": 3
+         },
+         {
+          "name": "Record View#draw()",
+          "ms": 2.012451,
+          "depth": 3
+         },
+         {
+          "name": "animation",
+          "ms": 1.918783,
+          "depth": 1
+         },
+         {
+          "name": "Recomposer:animation",
+          "ms": 1.609335,
+          "depth": 2
+         },
+         {
+          "name": "AndroidOwner:measureAndLayout",
+          "ms": 1.030233,
+          "depth": 4
+         },
+         {
+          "name": "AndroidOwner:draw",
+          "ms": 0.919922,
+          "depth": 4
+         }
+        ]
+       },
+       {
+        "ts": 122685347140298,
+        "ms": 7.642008,
+        "slices": [
+         {
+          "name": "traversal",
+          "ms": 5.011149,
+          "depth": 1
+         },
+         {
+          "name": "draw-VRI[MainActivity]",
+          "ms": 4.973674,
+          "depth": 2
+         },
+         {
+          "name": "Record View#draw()",
+          "ms": 4.575196,
+          "depth": 3
+         },
+         {
+          "name": "AndroidOwner:measureAndLayout",
+          "ms": 2.797363,
+          "depth": 4
+         },
+         {
+          "name": "animation",
+          "ms": 2.601847,
+          "depth": 1
+         },
+         {
+          "name": "Recomposer:animation",
+          "ms": 1.981812,
+          "depth": 2
+         },
+         {
+          "name": "AndroidOwner:draw",
+          "ms": 1.665813,
+          "depth": 4
+         },
+         {
+          "name": "Recomposer:recompose",
+          "ms": 0.583008,
+          "depth": 2
+         }
+        ]
+       },
+       {
+        "ts": 122688797517334,
+        "ms": 7.578573,
+        "slices": [
+         {
+          "name": "traversal",
+          "ms": 5.346883,
+          "depth": 1
+         },
+         {
+          "name": "draw-VRI[MainActivity]",
+          "ms": 5.320435,
+          "depth": 2
+         },
+         {
+          "name": "postAndWait",
+          "ms": 2.977905,
+          "depth": 3
+         },
+         {
+          "name": "Record View#draw()",
+          "ms": 2.317261,
+          "depth": 3
+         },
+         {
+          "name": "animation",
+          "ms": 2.207438,
+          "depth": 1
+         },
+         {
+          "name": "Recomposer:animation",
+          "ms": 1.841552,
+          "depth": 2
+         },
+         {
+          "name": "AndroidOwner:measureAndLayout",
+          "ms": 1.205729,
+          "depth": 4
+         },
+         {
+          "name": "AndroidOwner:draw",
+          "ms": 1.039795,
+          "depth": 4
+         }
+        ]
+       },
+       {
+        "ts": 122688588976562,
+        "ms": 7.397705,
+        "slices": [
+         {
+          "name": "traversal",
+          "ms": 4.565633,
+          "depth": 1
+         },
+         {
+          "name": "draw-VRI[MainActivity]",
+          "ms": 4.512899,
+          "depth": 2
+         },
+         {
+          "name": "Record View#draw()",
+          "ms": 3.900798,
+          "depth": 3
+         },
+         {
+          "name": "animation",
+          "ms": 2.800822,
+          "depth": 1
+         },
+         {
+          "name": "AndroidOwner:measureAndLayout",
+          "ms": 2.387248,
+          "depth": 4
+         },
+         {
+          "name": "Recomposer:animation",
+          "ms": 2.181763,
+          "depth": 2
+         },
+         {
+          "name": "AndroidOwner:draw",
+          "ms": 1.410523,
+          "depth": 4
+         },
+         {
+          "name": "TextStringSimpleNode::measure",
+          "ms": 0.68872,
+          "depth": 5
+         }
+        ]
+       }
+      ],
+      "render": [
+       {
+        "ts": 122691158993979,
+        "ms": 9.947062,
+        "slices": [
+         {
+          "name": "Drawing  0.00  0.00 1008.00 2244.00",
+          "ms": 9.54012,
+          "depth": 1
+         },
+         {
+          "name": "flush commands",
+          "ms": 7.850546,
+          "depth": 2
+         },
+         {
+          "name": "Vulkan finish frame",
+          "ms": 7.8455,
+          "depth": 3
+         },
+         {
+          "name": "auto skgpu::ganesh::OpsTask::onExecute(GrOpFlushState *)::(anonymous class)::operator()() const",
+          "ms": 0.845785,
+          "depth": 4
+         },
+         {
+          "name": "queueBuffer",
+          "ms": 0.550089,
+          "depth": 2
+         },
+         {
+          "name": "queueBuffer",
+          "ms": 0.385213,
+          "depth": 3
+         },
+         {
+          "name": "QueueSubmit",
+          "ms": 0.268799,
+          "depth": 4
+         }
+        ]
+       },
+       {
+        "ts": 122688760044393,
+        "ms": 9.68221,
+        "slices": [
+         {
+          "name": "Drawing  0.00  0.00 1008.00 2244.00",
+          "ms": 9.300008,
+          "depth": 1
+         },
+         {
+          "name": "flush commands",
+          "ms": 7.653606,
+          "depth": 2
+         },
+         {
+          "name": "Vulkan finish frame",
+          "ms": 7.64856,
+          "depth": 3
+         },
+         {
+          "name": "auto skgpu::ganesh::OpsTask::onExecute(GrOpFlushState *)::(anonymous class)::operator()() const",
+          "ms": 0.45756,
+          "depth": 4
+         },
+         {
+          "name": "queueBuffer",
+          "ms": 0.285808,
+          "depth": 2
+         },
+         {
+          "name": "syncFrameState",
+          "ms": 0.246867,
+          "depth": 1
+         },
+         {
+          "name": "prepareTree",
+          "ms": 0.236165,
+          "depth": 2
+         },
+         {
+          "name": "auto skgpu::ganesh::OpsTask::onPrepare(GrOpFlushState *)::(anonymous class)::operator()() const",
+          "ms": 0.225871,
+          "depth": 4
+         }
+        ]
+       },
+       {
+        "ts": 122690758943360,
+        "ms": 8.982504,
+        "slices": [
+         {
+          "name": "Drawing  0.00  0.00 1008.00 2244.00",
+          "ms": 8.418253,
+          "depth": 1
+         },
+         {
+          "name": "flush commands",
+          "ms": 5.633708,
+          "depth": 2
+         },
+         {
+          "name": "Vulkan finish frame",
+          "ms": 5.625936,
+          "depth": 3
+         },
+         {
+          "name": "auto skgpu::ganesh::OpsTask::onExecute(GrOpFlushState *)::(anonymous class)::operator()() const",
+          "ms": 1.093547,
+          "depth": 4
+         },
+         {
+          "name": "queueBuffer",
+          "ms": 0.502808,
+          "depth": 2
+         },
+         {
+          "name": "syncFrameState",
+          "ms": 0.356323,
+          "depth": 1
+         },
+         {
+          "name": "queueBuffer",
+          "ms": 0.350423,
+          "depth": 3
+         },
+         {
+          "name": "prepareTree",
+          "ms": 0.338908,
+          "depth": 2
+         }
+        ]
+       },
+       {
+        "ts": 122687925806722,
+        "ms": 8.887247,
+        "slices": [
+         {
+          "name": "Drawing  0.00  0.00 1008.00 2244.00",
+          "ms": 8.570191,
+          "depth": 1
+         },
+         {
+          "name": "flush commands",
+          "ms": 6.115479,
+          "depth": 2
+         },
+         {
+          "name": "Vulkan finish frame",
+          "ms": 6.108032,
+          "depth": 3
+         },
+         {
+          "name": "queueBuffer",
+          "ms": 0.641846,
+          "depth": 2
+         },
+         {
+          "name": "auto skgpu::ganesh::OpsTask::onExecute(GrOpFlushState *)::(anonymous class)::operator()() const",
+          "ms": 0.608358,
+          "depth": 4
+         },
+         {
+          "name": "queueBuffer",
+          "ms": 0.537638,
+          "depth": 3
+         },
+         {
+          "name": "auto skgpu::ganesh::OpsTask::onPrepare(GrOpFlushState *)::(anonymous class)::operator()() const",
+          "ms": 0.230794,
+          "depth": 4
+         }
+        ]
+       },
+       {
+        "ts": 122683974795652,
+        "ms": 8.845622,
+        "slices": [
+         {
+          "name": "Drawing  0.00  0.00 1008.00 2244.00",
+          "ms": 8.677978,
+          "depth": 1
+         },
+         {
+          "name": "flush commands",
+          "ms": 7.683065,
+          "depth": 2
+         },
+         {
+          "name": "Vulkan finish frame",
+          "ms": 7.679606,
+          "depth": 3
+         },
+         {
+          "name": "auto skgpu::ganesh::OpsTask::onExecute(GrOpFlushState *)::(anonymous class)::operator()() const",
+          "ms": 0.786581,
+          "depth": 4
+         },
+         {
+          "name": "queueBuffer",
+          "ms": 0.22526,
+          "depth": 2
+         },
+         {
+          "name": "queueBuffer",
+          "ms": 0.165121,
+          "depth": 3
+         },
+         {
+          "name": "auto skgpu::ganesh::OpsTask::onPrepare(GrOpFlushState *)::(anonymous class)::operator()() const",
+          "ms": 0.122599,
+          "depth": 4
+         }
+        ]
+       }
+      ]
+     }
+    },
+    "memory_kb": {
+     "after_start": {
+      "Java Heap": 15576,
+      "Native Heap": 19752,
+      "Code": 7440,
+      "Stack": 516,
+      "Graphics": 154152,
+      "Private Other": 1904,
+      "System": 3774,
+      "Total PSS": 203114,
+      "Total RSS": 362800
+     },
+     "after_animation": {
+      "Java Heap": 93396,
+      "Native Heap": 25400,
+      "Code": 7428,
+      "Stack": 576,
+      "Graphics": 158264,
+      "Private Other": 2144,
+      "System": 3860,
+      "Total PSS": 291068,
+      "Total RSS": 453160
+     }
+    }
+   }
+  ],
+  "rs": [
+   {
+    "gfxinfo": {
+     "frames": 1372,
+     "janky": 0,
+     "p50": 15,
+     "p90": 17,
+     "p95": 17,
+     "p99": 18,
+     "gpu_p50": 6,
+     "gpu_p90": 7,
+     "gpu_p99": 8
+    },
+    "trace": {
+     "since": 0,
+     "frames": 1206,
+     "janky_frames": 1,
+     "jank_kinds": {
+      "App Deadline Missed": 1
+     },
+     "jank_sides": {
+      "app": 1,
+      "compositor": 0,
+      "other": 0
+     },
+     "visibly_late_frames": 505,
+     "late_do_frames": 0,
+     "late_do_frames_after_work": 0,
+     "prefetches": 0,
+     "buffer_stuffing": {
+      "recovery_slices": 0,
+      "buffer_stuffed": 0,
+      "occurred": false
+     },
+     "main_thread_frame_ms": {
+      "count": 1202,
+      "p50": 3.185466,
+      "p90": 3.783366,
+      "p99": 4.748779,
+      "max": 8.70581
+     },
+     "render_thread_frame_ms": {
+      "count": 1205,
+      "p50": 6.239664,
+      "p90": 7.113485,
+      "p99": 8.394775
+     },
+     "cpu_ms": {
+      "main": 3885.563165,
+      "render": 5723.516528
+     },
+     "work_ms": {
+      "main": 2133.578475,
+      "render": 4177.720852
+     },
+     "render_boost": {
+      "counter": true,
+      "time_weighted_min": 458.7342401109697,
+      "unboosted_frame_share": 0.0,
+      "frames_before_counter": 0,
+      "buckets": {
+       "unboosted": {
+        "frames": 0,
+        "share": 0.0,
+        "p50": null,
+        "p90": null,
+        "p99": null
+       },
+       "100-199": {
+        "frames": 0,
+        "share": 0.0,
+        "p50": null,
+        "p90": null,
+        "p99": null
+       },
+       "200+": {
+        "frames": 1205,
+        "share": 1.0,
+        "p50": 6.239664,
+        "p90": 7.113485,
+        "p99": 8.394775
+       }
+      },
+      "little_core_share": 0.0003355297378115652
+     },
+     "slowest_frames": {
+      "main": [
+       {
+        "ts": 122598363169878,
+        "ms": 8.70581,
+        "slices": [
+         {
+          "name": "traversal",
+          "ms": 6.471313,
+          "depth": 1
+         },
+         {
+          "name": "draw-VRI[MainActivity]",
+          "ms": 6.437622,
+          "depth": 2
+         },
+         {
+          "name": "postAndWait",
+          "ms": 5.656005,
+          "depth": 3
+         },
+         {
+          "name": "animation",
+          "ms": 2.212321,
+          "depth": 1
+         },
+         {
+          "name": "compose-rs: frame",
+          "ms": 2.061849,
+          "depth": 2
+         },
+         {
+          "name": "compose-rs: tasks",
+          "ms": 1.132324,
+          "depth": 3
+         },
+         {
+          "name": "Record View#draw()",
+          "ms": 0.756023,
+          "depth": 3
+         },
+         {
+          "name": "compose-rs: replay",
+          "ms": 0.683634,
+          "depth": 4
+         }
+        ]
+       },
+       {
+        "ts": 122598354606442,
+        "ms": 7.519653,
+        "slices": [
+         {
+          "name": "traversal",
+          "ms": 4.527425,
+          "depth": 1
+         },
+         {
+          "name": "draw-VRI[MainActivity]",
+          "ms": 4.490071,
+          "depth": 2
+         },
+         {
+          "name": "postAndWait",
+          "ms": 3.339681,
+          "depth": 3
+         },
+         {
+          "name": "animation",
+          "ms": 2.969238,
+          "depth": 1
+         },
+         {
+          "name": "compose-rs: frame",
+          "ms": 2.77242,
+          "depth": 2
+         },
+         {
+          "name": "compose-rs: tasks",
+          "ms": 1.477661,
+          "depth": 3
+         },
+         {
+          "name": "Record View#draw()",
+          "ms": 1.118286,
+          "depth": 3
+         },
+         {
+          "name": "compose-rs: replay",
+          "ms": 1.027751,
+          "depth": 4
+         }
+        ]
+       },
+       {
+        "ts": 122598371988766,
+        "ms": 6.31132,
+        "slices": [
+         {
+          "name": "traversal",
+          "ms": 4.165527,
+          "depth": 1
+         },
+         {
+          "name": "draw-VRI[MainActivity]",
+          "ms": 4.138265,
+          "depth": 2
+         },
+         {
+          "name": "postAndWait",
+          "ms": 3.388956,
+          "depth": 3
+         },
+         {
+          "name": "animation",
+          "ms": 2.129638,
+          "depth": 1
+         },
+         {
+          "name": "compose-rs: frame",
+          "ms": 2.032918,
+          "depth": 2
+         },
+         {
+          "name": "compose-rs: tasks",
+          "ms": 1.204061,
+          "depth": 3
+         },
+         {
+          "name": "Record View#draw()",
+          "ms": 0.726725,
+          "depth": 3
+         },
+         {
+          "name": "compose-rs: replay",
+          "ms": 0.672689,
+          "depth": 4
+         }
+        ]
+       },
+       {
+        "ts": 122601554785317,
+        "ms": 5.645915,
+        "slices": [
+         {
+          "name": "traversal",
+          "ms": 3.229207,
+          "depth": 1
+         },
+         {
+          "name": "draw-VRI[MainActivity]",
+          "ms": 3.200968,
+          "depth": 2
+         },
+         {
+          "name": "Record View#draw()",
+          "ms": 2.949911,
+          "depth": 3
+         },
+         {
+          "name": "compose-rs: replay",
+          "ms": 2.880941,
+          "depth": 4
+         },
+         {
+          "name": "animation",
+          "ms": 2.399943,
+          "depth": 1
+         },
+         {
+          "name": "compose-rs: frame",
+          "ms": 2.23405,
+          "depth": 2
+         },
+         {
+          "name": "compose-rs: tasks",
+          "ms": 1.248576,
+          "depth": 3
+         },
+         {
+          "name": "compose-rs: layout",
+          "ms": 0.415283,
+          "depth": 3
+         }
+        ]
+       },
+       {
+        "ts": 122595304342931,
+        "ms": 5.284546,
+        "slices": [
+         {
+          "name": "animation",
+          "ms": 4.151652,
+          "depth": 1
+         },
+         {
+          "name": "compose-rs: frame",
+          "ms": 3.990397,
+          "depth": 2
+         },
+         {
+          "name": "compose-rs: layout",
+          "ms": 2.148112,
+          "depth": 3
+         },
+         {
+          "name": "compose-rs: text layout",
+          "ms": 1.93868,
+          "depth": 4
+         },
+         {
+          "name": "calculateBounds",
+          "ms": 1.717041,
+          "depth": 5
+         },
+         {
+          "name": "compose-rs: tasks",
+          "ms": 1.22522,
+          "depth": 3
+         },
+         {
+          "name": "traversal",
+          "ms": 1.110758,
+          "depth": 1
+         },
+         {
+          "name": "draw-VRI[MainActivity]",
+          "ms": 1.079874,
+          "depth": 2
+         }
+        ]
+       }
+      ],
+      "render": [
+       {
+        "ts": 122602543388548,
+        "ms": 15.996908,
+        "slices": [
+         {
+          "name": "Drawing  0.00 113.00 1008.00 2190.00",
+          "ms": 15.287191,
+          "depth": 1
+         },
+         {
+          "name": "flush commands",
+          "ms": 13.924397,
+          "depth": 2
+         },
+         {
+          "name": "Vulkan finish frame",
+          "ms": 13.918661,
+          "depth": 3
+         },
+         {
+          "name": "queueBuffer",
+          "ms": 0.342529,
+          "depth": 1
+         },
+         {
+          "name": "auto skgpu::ganesh::OpsTask::onPrepare(GrOpFlushState *)::(anonymous class)::operator()() const",
+          "ms": 0.271443,
+          "depth": 4
+         },
+         {
+          "name": "queueBuffer",
+          "ms": 0.247966,
+          "depth": 2
+         },
+         {
+          "name": "syncFrameState",
+          "ms": 0.173543,
+          "depth": 1
+         }
+        ]
+       },
+       {
+        "ts": 122598359510169,
+        "ms": 12.111857,
+        "slices": [
+         {
+          "name": "Drawing  0.00 113.00 1008.00 2190.00",
+          "ms": 9.454508,
+          "depth": 1
+         },
+         {
+          "name": "flush commands",
+          "ms": 7.790121,
+          "depth": 2
+         },
+         {
+          "name": "Vulkan finish frame",
+          "ms": 7.784668,
+          "depth": 3
+         },
+         {
+          "name": "auto skgpu::ganesh::OpsTask::onExecute(GrOpFlushState *)::(anonymous class)::operator()() const",
+          "ms": 2.018148,
+          "depth": 4
+         },
+         {
+          "name": "auto skgpu::ganesh::OpsTask::onPrepare(GrOpFlushState *)::(anonymous class)::operator()() const",
+          "ms": 1.501017,
+          "depth": 4
+         },
+         {
+          "name": "FillRectOp",
+          "ms": 1.432089,
+          "depth": 5
+         },
+         {
+          "name": "syncFrameState",
+          "ms": 1.168213,
+          "depth": 1
+         },
+         {
+          "name": "prepareTree",
+          "ms": 0.916788,
+          "depth": 2
+         }
+        ]
+       },
+       {
+        "ts": 122601582236530,
+        "ms": 10.120686,
+        "slices": [
+         {
+          "name": "Drawing  0.00 113.00 1008.00 2190.00",
+          "ms": 8.471721,
+          "depth": 1
+         },
+         {
+          "name": "flush commands",
+          "ms": 6.849447,
+          "depth": 2
+         },
+         {
+          "name": "Vulkan finish frame",
+          "ms": 6.844198,
+          "depth": 3
+         },
+         {
+          "name": "auto skgpu::ganesh::OpsTask::onExecute(GrOpFlushState *)::(anonymous class)::operator()() const",
+          "ms": 1.520142,
+          "depth": 4
+         },
+         {
+          "name": "FillRectOp",
+          "ms": 0.92098,
+          "depth": 5
+         },
+         {
+          "name": "queueBuffer",
+          "ms": 0.2618,
+          "depth": 2
+         },
+         {
+          "name": "auto skgpu::ganesh::OpsTask::onPrepare(GrOpFlushState *)::(anonymous class)::operator()() const",
+          "ms": 0.206096,
+          "depth": 4
+         },
+         {
+          "name": "queueBuffer",
+          "ms": 0.18746,
+          "depth": 3
+         }
+        ]
+       },
+       {
+        "ts": 122593132044590,
+        "ms": 9.948365,
+        "slices": [
+         {
+          "name": "Drawing  0.00 113.00 1008.00 2190.00",
+          "ms": 9.637166,
+          "depth": 1
+         },
+         {
+          "name": "flush commands",
+          "ms": 7.923584,
+          "depth": 2
+         },
+         {
+          "name": "Vulkan finish frame",
+          "ms": 7.916504,
+          "depth": 3
+         },
+         {
+          "name": "auto skgpu::ganesh::OpsTask::onExecute(GrOpFlushState *)::(anonymous class)::operator()() const",
+          "ms": 0.619792,
+          "depth": 4
+         },
+         {
+          "name": "queueBuffer",
+          "ms": 0.356079,
+          "depth": 2
+         },
+         {
+          "name": "queueBuffer",
+          "ms": 0.275757,
+          "depth": 3
+         },
+         {
+          "name": "auto skgpu::ganesh::OpsTask::onPrepare(GrOpFlushState *)::(anonymous class)::operator()() const",
+          "ms": 0.222127,
+          "depth": 4
+         }
+        ]
+       },
+       {
+        "ts": 122601632773110,
+        "ms": 9.791423,
+        "slices": [
+         {
+          "name": "Drawing  0.00 113.00 1008.00 2190.00",
+          "ms": 9.539917,
+          "depth": 1
+         },
+         {
+          "name": "flush commands",
+          "ms": 6.769491,
+          "depth": 2
+         },
+         {
+          "name": "Vulkan finish frame",
+          "ms": 6.76473,
+          "depth": 3
+         },
+         {
+          "name": "auto skgpu::ganesh::OpsTask::onExecute(GrOpFlushState *)::(anonymous class)::operator()() const",
+          "ms": 1.791463,
+          "depth": 4
+         },
+         {
+          "name": "dispatchSetFrameTimelineInfo",
+          "ms": 1.265788,
+          "depth": 3
+         },
+         {
+          "name": "setFrameTimelineInfo(VRI[MainActivity]#0) frameNumber: 1580 vsyncId: 67809972",
+          "ms": 1.256796,
+          "depth": 4
+         },
+         {
+          "name": "queueBuffer",
+          "ms": 0.282389,
+          "depth": 2
+         }
+        ]
+       }
+      ]
+     }
+    },
+    "memory_kb": {
+     "after_start": {
+      "Java Heap": 7828,
+      "Native Heap": 60556,
+      "Code": 2264,
+      "Stack": 500,
+      "Graphics": 215968,
+      "Private Other": 1116,
+      "System": 3660,
+      "Total PSS": 291892,
+      "Total RSS": 447952
+     },
+     "after_animation": {
+      "Java Heap": 26664,
+      "Native Heap": 153132,
+      "Code": 2268,
+      "Stack": 528,
+      "Graphics": 220080,
+      "Private Other": 1380,
+      "System": 3662,
+      "Total PSS": 407714,
+      "Total RSS": 566660
+     }
+    }
+   },
+   {
+    "gfxinfo": {
+     "frames": 1360,
+     "janky": 1,
+     "p50": 16,
+     "p90": 17,
+     "p95": 18,
+     "p99": 20,
+     "gpu_p50": 7,
+     "gpu_p90": 8,
+     "gpu_p99": 9
+    },
+    "trace": {
+     "since": 0,
+     "frames": 1199,
+     "janky_frames": 1,
+     "jank_kinds": {
+      "App Deadline Missed": 1
+     },
+     "jank_sides": {
+      "app": 1,
+      "compositor": 0,
+      "other": 0
+     },
+     "visibly_late_frames": 917,
+     "late_do_frames": 8,
+     "late_do_frames_after_work": 0,
+     "prefetches": 0,
+     "buffer_stuffing": {
+      "recovery_slices": 0,
+      "buffer_stuffed": 0,
+      "occurred": false
+     },
+     "main_thread_frame_ms": {
+      "count": 1195,
+      "p50": 3.255086,
+      "p90": 4.044434,
+      "p99": 5.84078,
+      "max": 10.781291
+     },
+     "render_thread_frame_ms": {
+      "count": 1195,
+      "p50": 6.363484,
+      "p90": 7.416015,
+      "p99": 9.278687
+     },
+     "cpu_ms": {
+      "main": 3888.192503,
+      "render": 6352.284538
+     },
+     "work_ms": {
+      "main": 2227.225448,
+      "render": 4339.744303
+     },
+     "render_boost": {
+      "counter": true,
+      "time_weighted_min": 465.90003483262086,
+      "unboosted_frame_share": 0.0,
+      "frames_before_counter": 0,
+      "buckets": {
+       "unboosted": {
+        "frames": 0,
+        "share": 0.0,
+        "p50": null,
+        "p90": null,
+        "p99": null
+       },
+       "100-199": {
+        "frames": 0,
+        "share": 0.0,
+        "p50": null,
+        "p90": null,
+        "p99": null
+       },
+       "200+": {
+        "frames": 1195,
+        "share": 1.0,
+        "p50": 6.363484,
+        "p90": 7.416015,
+        "p99": 9.278687
+       }
+      },
+      "little_core_share": 0.0
+     },
+     "slowest_frames": {
+      "main": [
+       {
+        "ts": 122662552526924,
+        "ms": 10.781291,
+        "slices": [
+         {
+          "name": "animation",
+          "ms": 9.879151,
+          "depth": 1
+         },
+         {
+          "name": "compose-rs: frame",
+          "ms": 2.553467,
+          "depth": 2
+         },
+         {
+          "name": "compose-rs: layout",
+          "ms": 1.489746,
+          "depth": 3
+         },
+         {
+          "name": "compose-rs: tasks",
+          "ms": 1.008056,
+          "depth": 3
+         },
+         {
+          "name": "draw-VRI[MainActivity]",
+          "ms": 0.731282,
+          "depth": 4
+         },
+         {
+          "name": "Record View#draw()",
+          "ms": 0.431966,
+          "depth": 5
+         },
+         {
+          "name": "compose-rs: replay",
+          "ms": 0.391765,
+          "depth": 6
+         },
+         {
+          "name": "compose-rs: layout",
+          "ms": 0.386719,
+          "depth": 1
+         }
+        ]
+       },
+       {
+        "ts": 122661735866116,
+        "ms": 9.190145,
+        "slices": [
+         {
+          "name": "traversal",
+          "ms": 7.499105,
+          "depth": 1
+         },
+         {
+          "name": "draw-VRI[MainActivity]",
+          "ms": 7.469441,
+          "depth": 2
+         },
+         {
+          "name": "postAndWait",
+          "ms": 6.732341,
+          "depth": 3
+         },
+         {
+          "name": "animation",
+          "ms": 1.678263,
+          "depth": 1
+         },
+         {
+          "name": "compose-rs: frame",
+          "ms": 1.563436,
+          "depth": 2
+         },
+         {
+          "name": "compose-rs: tasks",
+          "ms": 0.840739,
+          "depth": 3
+         },
+         {
+          "name": "Record View#draw()",
+          "ms": 0.710571,
+          "depth": 3
+         },
+         {
+          "name": "compose-rs: replay",
+          "ms": 0.647461,
+          "depth": 4
+         }
+        ]
+       },
+       {
+        "ts": 122662510857653,
+        "ms": 9.170736,
+        "slices": [
+         {
+          "name": "traversal",
+          "ms": 6.324341,
+          "depth": 1
+         },
+         {
+          "name": "draw-VRI[MainActivity]",
+          "ms": 6.285482,
+          "depth": 2
+         },
+         {
+          "name": "postAndWait",
+          "ms": 5.088867,
+          "depth": 3
+         },
+         {
+          "name": "animation",
+          "ms": 2.820109,
+          "depth": 1
+         },
+         {
+          "name": "compose-rs: frame",
+          "ms": 2.679077,
+          "depth": 2
+         },
+         {
+          "name": "Record View#draw()",
+          "ms": 1.169393,
+          "depth": 3
+         },
+         {
+          "name": "compose-rs: replay",
+          "ms": 1.103759,
+          "depth": 4
+         },
+         {
+          "name": "compose-rs: tasks",
+          "ms": 1.093424,
+          "depth": 3
+         }
+        ]
+       },
+       {
+        "ts": 122655410341862,
+        "ms": 8.73645,
+        "slices": [
+         {
+          "name": "traversal",
+          "ms": 6.518718,
+          "depth": 1
+         },
+         {
+          "name": "draw-VRI[MainActivity]",
+          "ms": 6.487955,
+          "depth": 2
+         },
+         {
+          "name": "postAndWait",
+          "ms": 5.708456,
+          "depth": 3
+         },
+         {
+          "name": "animation",
+          "ms": 2.201171,
+          "depth": 1
+         },
+         {
+          "name": "compose-rs: frame",
+          "ms": 2.054118,
+          "depth": 2
+         },
+         {
+          "name": "compose-rs: tasks",
+          "ms": 1.071492,
+          "depth": 3
+         },
+         {
+          "name": "Record View#draw()",
+          "ms": 0.758057,
+          "depth": 3
+         },
+         {
+          "name": "compose-rs: replay",
+          "ms": 0.696737,
+          "depth": 4
+         }
+        ]
+       },
+       {
+        "ts": 122662102841743,
+        "ms": 7.226074,
+        "slices": [
+         {
+          "name": "animation",
+          "ms": 5.281616,
+          "depth": 1
+         },
+         {
+          "name": "compose-rs: frame",
+          "ms": 5.06075,
+          "depth": 2
+         },
+         {
+          "name": "compose-rs: tasks",
+          "ms": 2.208415,
+          "depth": 3
+         },
+         {
+          "name": "traversal",
+          "ms": 1.916626,
+          "depth": 1
+         },
+         {
+          "name": "draw-VRI[MainActivity]",
+          "ms": 1.860636,
+          "depth": 2
+         },
+         {
+          "name": "compose-rs: layout",
+          "ms": 1.393107,
+          "depth": 3
+         },
+         {
+          "name": "Record View#draw()",
+          "ms": 1.273559,
+          "depth": 3
+         },
+         {
+          "name": "compose-rs: replay",
+          "ms": 1.173666,
+          "depth": 4
+         }
+        ]
+       }
+      ],
+      "render": [
+       {
+        "ts": 122661732191312,
+        "ms": 12.591145,
+        "slices": [
+         {
+          "name": "Drawing  0.00 113.00 1008.00 2190.00",
+          "ms": 12.299764,
+          "depth": 1
+         },
+         {
+          "name": "flush commands",
+          "ms": 10.607829,
+          "depth": 2
+         },
+         {
+          "name": "Vulkan finish frame",
+          "ms": 10.603557,
+          "depth": 3
+         },
+         {
+          "name": "auto skgpu::ganesh::OpsTask::onExecute(GrOpFlushState *)::(anonymous class)::operator()() const",
+          "ms": 2.913412,
+          "depth": 4
+         },
+         {
+          "name": "FillRectOp",
+          "ms": 2.221314,
+          "depth": 5
+         },
+         {
+          "name": "queueBuffer",
+          "ms": 0.318196,
+          "depth": 2
+         },
+         {
+          "name": "queueBuffer",
+          "ms": 0.220378,
+          "depth": 3
+         },
+         {
+          "name": "auto skgpu::ganesh::OpsTask::onPrepare(GrOpFlushState *)::(anonymous class)::operator()() const",
+          "ms": 0.20931,
+          "depth": 4
+         }
+        ]
+       },
+       {
+        "ts": 122655405212345,
+        "ms": 11.88619,
+        "slices": [
+         {
+          "name": "Drawing  0.00 113.00 1008.00 2190.00",
+          "ms": 10.311402,
+          "depth": 1
+         },
+         {
+          "name": "flush commands",
+          "ms": 8.753377,
+          "depth": 2
+         },
+         {
+          "name": "Vulkan finish frame",
+          "ms": 8.748209,
+          "depth": 3
+         },
+         {
+          "name": "auto skgpu::ganesh::OpsTask::onPrepare(GrOpFlushState *)::(anonymous class)::operator()() const",
+          "ms": 1.901977,
+          "depth": 4
+         },
+         {
+          "name": "auto skgpu::ganesh::OpsTask::onExecute(GrOpFlushState *)::(anonymous class)::operator()() const",
+          "ms": 0.675619,
+          "depth": 4
+         },
+         {
+          "name": "queueBuffer",
+          "ms": 0.297282,
+          "depth": 2
+         },
+         {
+          "name": "queueBuffer",
+          "ms": 0.207642,
+          "depth": 3
+         }
+        ]
+       },
+       {
+        "ts": 122661688706163,
+        "ms": 10.860149,
+        "slices": [
+         {
+          "name": "Drawing  0.00 113.00 1008.00 2190.00",
+          "ms": 10.626465,
+          "depth": 1
+         },
+         {
+          "name": "flush commands",
+          "ms": 7.718546,
+          "depth": 2
+         },
+         {
+          "name": "Vulkan finish frame",
+          "ms": 7.713664,
+          "depth": 3
+         },
+         {
+          "name": "queueBuffer",
+          "ms": 1.649536,
+          "depth": 2
+         },
+         {
+          "name": "queueBuffer",
+          "ms": 1.552083,
+          "depth": 3
+         },
+         {
+          "name": "Texture upload(243466) 938x189",
+          "ms": 1.339925,
+          "depth": 4
+         }
+        ]
+       },
+       {
+        "ts": 122662099052599,
+        "ms": 10.551921,
+        "slices": [
+         {
+          "name": "Drawing  0.00 113.00 1008.00 2190.00",
+          "ms": 10.002319,
+          "depth": 1
+         },
+         {
+          "name": "flush commands",
+          "ms": 8.061849,
+          "depth": 2
+         },
+         {
+          "name": "Vulkan finish frame",
+          "ms": 8.056478,
+          "depth": 3
+         },
+         {
+          "name": "auto skgpu::ganesh::OpsTask::onExecute(GrOpFlushState *)::(anonymous class)::operator()() const",
+          "ms": 0.846192,
+          "depth": 4
+         },
+         {
+          "name": "queueBuffer",
+          "ms": 0.482341,
+          "depth": 2
+         },
+         {
+          "name": "syncFrameState",
+          "ms": 0.336792,
+          "depth": 1
+         },
+         {
+          "name": "queueBuffer",
+          "ms": 0.32609,
+          "depth": 3
+         },
+         {
+          "name": "prepareTree",
+          "ms": 0.318318,
+          "depth": 2
+         }
+        ]
+       },
+       {
+        "ts": 122658147487452,
+        "ms": 10.320679,
+        "slices": [
+         {
+          "name": "Drawing  0.00 113.00 1008.00 2190.00",
+          "ms": 9.990072,
+          "depth": 1
+         },
+         {
+          "name": "flush commands",
+          "ms": 8.204346,
+          "depth": 2
+         },
+         {
+          "name": "Vulkan finish frame",
+          "ms": 8.197713,
+          "depth": 3
+         },
+         {
+          "name": "auto skgpu::ganesh::OpsTask::onExecute(GrOpFlushState *)::(anonymous class)::operator()() const",
+          "ms": 0.766154,
+          "depth": 4
+         },
+         {
+          "name": "queueBuffer",
+          "ms": 0.385214,
+          "depth": 2
+         },
+         {
+          "name": "queueBuffer",
+          "ms": 0.25887,
+          "depth": 3
+         },
+         {
+          "name": "auto skgpu::ganesh::OpsTask::onPrepare(GrOpFlushState *)::(anonymous class)::operator()() const",
+          "ms": 0.210205,
+          "depth": 4
+         }
+        ]
+       }
+      ]
+     }
+    },
+    "memory_kb": {
+     "after_start": {
+      "Java Heap": 8192,
+      "Native Heap": 62616,
+      "Code": 2304,
+      "Stack": 504,
+      "Graphics": 215888,
+      "Private Other": 1116,
+      "System": 3667,
+      "Total PSS": 294287,
+      "Total RSS": 450464
+     },
+     "after_animation": {
+      "Java Heap": 24500,
+      "Native Heap": 143192,
+      "Code": 2308,
+      "Stack": 528,
+      "Graphics": 224112,
+      "Private Other": 1372,
+      "System": 3651,
+      "Total PSS": 399663,
+      "Total RSS": 558160
+     }
+    }
+   },
+   {
+    "gfxinfo": {
+     "frames": 1373,
+     "janky": 1,
+     "p50": 17,
+     "p90": 19,
+     "p95": 19,
+     "p99": 22,
+     "gpu_p50": 7,
+     "gpu_p90": 7,
+     "gpu_p99": 8
+    },
+    "trace": {
+     "since": 0,
+     "frames": 1204,
+     "janky_frames": 1,
+     "jank_kinds": {
+      "App Deadline Missed": 1
+     },
+     "jank_sides": {
+      "app": 1,
+      "compositor": 0,
+      "other": 0
+     },
+     "visibly_late_frames": 884,
+     "late_do_frames": 11,
+     "late_do_frames_after_work": 0,
+     "prefetches": 0,
+     "buffer_stuffing": {
+      "recovery_slices": 0,
+      "buffer_stuffed": 0,
+      "occurred": false
+     },
+     "main_thread_frame_ms": {
+      "count": 1197,
+      "p50": 4.075195,
+      "p90": 5.135254,
+      "p99": 7.479818,
+      "max": 20.576538
+     },
+     "render_thread_frame_ms": {
+      "count": 1195,
+      "p50": 7.775268,
+      "p90": 8.600383,
+      "p99": 9.780477
+     },
+     "cpu_ms": {
+      "main": 4306.296031,
+      "render": 7476.235545
+     },
+     "work_ms": {
+      "main": 2120.902497,
+      "render": 3944.68281
+     },
+     "render_boost": {
+      "counter": true,
+      "time_weighted_min": 664.4907184227982,
+      "unboosted_frame_share": 0.0,
+      "frames_before_counter": 0,
+      "buckets": {
+       "unboosted": {
+        "frames": 0,
+        "share": 0.0,
+        "p50": null,
+        "p90": null,
+        "p99": null
+       },
+       "100-199": {
+        "frames": 0,
+        "share": 0.0,
+        "p50": null,
+        "p90": null,
+        "p99": null
+       },
+       "200+": {
+        "frames": 1195,
+        "share": 1.0,
+        "p50": 7.775268,
+        "p90": 8.600383,
+        "p99": 9.780477
+       }
+      },
+      "little_core_share": 0.00839259057881917
+     },
+     "slowest_frames": {
+      "main": [
+       {
+        "ts": 122722500638892,
+        "ms": 20.576538,
+        "slices": [
+         {
+          "name": "traversal",
+          "ms": 17.503703,
+          "depth": 1
+         },
+         {
+          "name": "draw-VRI[MainActivity]",
+          "ms": 17.3868,
+          "depth": 2
+         },
+         {
+          "name": "postAndWait",
+          "ms": 16.637084,
+          "depth": 3
+         },
+         {
+          "name": "Choreographer#doFrame 67928040",
+          "ms": 3.744222,
+          "depth": 4
+         },
+         {
+          "name": "traversal",
+          "ms": 2.057984,
+          "depth": 5
+         },
+         {
+          "name": "draw-VRI[MainActivity]",
+          "ms": 2.036865,
+          "depth": 6
+         },
+         {
+          "name": "animation",
+          "ms": 1.990275,
+          "depth": 1
+         },
+         {
+          "name": "compose-rs: frame",
+          "ms": 1.901286,
+          "depth": 2
+         }
+        ]
+       },
+       {
+        "ts": 122718927261286,
+        "ms": 10.661458,
+        "slices": [
+         {
+          "name": "traversal",
+          "ms": 8.666545,
+          "depth": 1
+         },
+         {
+          "name": "draw-VRI[MainActivity]",
+          "ms": 8.630493,
+          "depth": 2
+         },
+         {
+          "name": "postAndWait",
+          "ms": 7.937663,
+          "depth": 3
+         },
+         {
+          "name": "animation",
+          "ms": 1.9705,
+          "depth": 1
+         },
+         {
+          "name": "compose-rs: frame",
+          "ms": 1.848673,
+          "depth": 2
+         },
+         {
+          "name": "compose-rs: tasks",
+          "ms": 1.079996,
+          "depth": 3
+         },
+         {
+          "name": "Record View#draw()",
+          "ms": 0.665975,
+          "depth": 3
+         },
+         {
+          "name": "compose-rs: replay",
+          "ms": 0.614828,
+          "depth": 4
+         }
+        ]
+       },
+       {
+        "ts": 122718917507176,
+        "ms": 9.647095,
+        "slices": [
+         {
+          "name": "traversal",
+          "ms": 6.916422,
+          "depth": 1
+         },
+         {
+          "name": "draw-VRI[MainActivity]",
+          "ms": 6.886638,
+          "depth": 2
+         },
+         {
+          "name": "postAndWait",
+          "ms": 6.075561,
+          "depth": 3
+         },
+         {
+          "name": "animation",
+          "ms": 2.712036,
+          "depth": 1
+         },
+         {
+          "name": "compose-rs: frame",
+          "ms": 2.588419,
+          "depth": 2
+         },
+         {
+          "name": "compose-rs: tasks",
+          "ms": 1.583903,
+          "depth": 3
+         },
+         {
+          "name": "Record View#draw()",
+          "ms": 0.787924,
+          "depth": 3
+         },
+         {
+          "name": "compose-rs: replay",
+          "ms": 0.728191,
+          "depth": 4
+         }
+        ]
+       },
+       {
+        "ts": 122718962804784,
+        "ms": 9.201375,
+        "slices": [
+         {
+          "name": "traversal",
+          "ms": 6.527466,
+          "depth": 1
+         },
+         {
+          "name": "draw-VRI[MainActivity]",
+          "ms": 6.496663,
+          "depth": 2
+         },
+         {
+          "name": "postAndWait",
+          "ms": 5.634277,
+          "depth": 3
+         },
+         {
+          "name": "animation",
+          "ms": 2.654663,
+          "depth": 1
+         },
+         {
+          "name": "compose-rs: frame",
+          "ms": 2.493652,
+          "depth": 2
+         },
+         {
+          "name": "compose-rs: tasks",
+          "ms": 1.352661,
+          "depth": 3
+         },
+         {
+          "name": "Record View#draw()",
+          "ms": 0.837199,
+          "depth": 3
+         },
+         {
+          "name": "compose-rs: replay",
+          "ms": 0.765584,
+          "depth": 4
+         }
+        ]
+       },
+       {
+        "ts": 122718980610366,
+        "ms": 9.11674,
+        "slices": [
+         {
+          "name": "traversal",
+          "ms": 5.938802,
+          "depth": 1
+         },
+         {
+          "name": "draw-VRI[MainActivity]",
+          "ms": 5.904256,
+          "depth": 2
+         },
+         {
+          "name": "postAndWait",
+          "ms": 4.920614,
+          "depth": 3
+         },
+         {
+          "name": "animation",
+          "ms": 3.155599,
+          "depth": 1
+         },
+         {
+          "name": "compose-rs: frame",
+          "ms": 2.995809,
+          "depth": 2
+         },
+         {
+          "name": "compose-rs: tasks",
+          "ms": 1.634196,
+          "depth": 3
+         },
+         {
+          "name": "Record View#draw()",
+          "ms": 0.954223,
+          "depth": 3
+         },
+         {
+          "name": "compose-rs: replay",
+          "ms": 0.874797,
+          "depth": 4
+         }
+        ]
+       }
+      ],
+      "render": [
+       {
+        "ts": 122712911005342,
+        "ms": 12.233195,
+        "slices": [
+         {
+          "name": "Drawing  0.00 113.00 1008.00 2190.00",
+          "ms": 11.935221,
+          "depth": 1
+         },
+         {
+          "name": "flush commands",
+          "ms": 8.999878,
+          "depth": 2
+         },
+         {
+          "name": "Vulkan finish frame",
+          "ms": 8.992961,
+          "depth": 3
+         },
+         {
+          "name": "auto skgpu::ganesh::OpsTask::onExecute(GrOpFlushState *)::(anonymous class)::operator()() const",
+          "ms": 0.737874,
+          "depth": 4
+         },
+         {
+          "name": "queueBuffer",
+          "ms": 0.420329,
+          "depth": 2
+         },
+         {
+          "name": "auto skgpu::ganesh::OpsTask::onPrepare(GrOpFlushState *)::(anonymous class)::operator()() const",
+          "ms": 0.392823,
+          "depth": 4
+         },
+         {
+          "name": "queueBuffer",
+          "ms": 0.30542,
+          "depth": 3
+         },
+         {
+          "name": "Texture upload(89215) 938x189",
+          "ms": 0.263794,
+          "depth": 4
+         }
+        ]
+       },
+       {
+        "ts": 122713361162040,
+        "ms": 11.583089,
+        "slices": [
+         {
+          "name": "Drawing  0.00 113.00 1008.00 2190.00",
+          "ms": 11.398885,
+          "depth": 1
+         },
+         {
+          "name": "flush commands",
+          "ms": 7.101888,
+          "depth": 2
+         },
+         {
+          "name": "Vulkan finish frame",
+          "ms": 7.097371,
+          "depth": 3
+         },
+         {
+          "name": "dispatchSetFrameTimelineInfo",
+          "ms": 2.770549,
+          "depth": 3
+         },
+         {
+          "name": "setFrameTimelineInfo(VRI[MainActivity]#0) frameNumber: 645 vsyncId: 67919236",
+          "ms": 2.76355,
+          "depth": 4
+         },
+         {
+          "name": "auto skgpu::ganesh::OpsTask::onExecute(GrOpFlushState *)::(anonymous class)::operator()() const",
+          "ms": 0.660889,
+          "depth": 4
+         },
+         {
+          "name": "queueBuffer",
+          "ms": 0.381388,
+          "depth": 2
+         }
+        ]
+       },
+       {
+        "ts": 122721663592789,
+        "ms": 10.947185,
+        "slices": [
+         {
+          "name": "Drawing  0.00 113.00 1008.00 2190.00",
+          "ms": 10.451294,
+          "depth": 1
+         },
+         {
+          "name": "flush commands",
+          "ms": 7.897502,
+          "depth": 2
+         },
+         {
+          "name": "Vulkan finish frame",
+          "ms": 7.891195,
+          "depth": 3
+         },
+         {
+          "name": "auto skgpu::ganesh::OpsTask::onExecute(GrOpFlushState *)::(anonymous class)::operator()() const",
+          "ms": 0.609456,
+          "depth": 4
+         },
+         {
+          "name": "queueBuffer",
+          "ms": 0.352702,
+          "depth": 2
+         },
+         {
+          "name": "auto skgpu::ganesh::OpsTask::onPrepare(GrOpFlushState *)::(anonymous class)::operator()() const",
+          "ms": 0.34965,
+          "depth": 4
+         },
+         {
+          "name": "syncFrameState",
+          "ms": 0.340413,
+          "depth": 1
+         },
+         {
+          "name": "prepareTree",
+          "ms": 0.323487,
+          "depth": 2
+         }
+        ]
+       },
+       {
+        "ts": 122718926855239,
+        "ms": 10.783814,
+        "slices": [
+         {
+          "name": "Drawing  0.00 113.00 1008.00 2190.00",
+          "ms": 10.450806,
+          "depth": 1
+         },
+         {
+          "name": "flush commands",
+          "ms": 7.018026,
+          "depth": 2
+         },
+         {
+          "name": "Vulkan finish frame",
+          "ms": 7.012655,
+          "depth": 3
+         },
+         {
+          "name": "auto skgpu::ganesh::OpsTask::onExecute(GrOpFlushState *)::(anonymous class)::operator()() const",
+          "ms": 0.424439,
+          "depth": 4
+         },
+         {
+          "name": "queueBuffer",
+          "ms": 0.272095,
+          "depth": 2
+         },
+         {
+          "name": "auto skgpu::ganesh::OpsTask::onPrepare(GrOpFlushState *)::(anonymous class)::operator()() const",
+          "ms": 0.265381,
+          "depth": 4
+         },
+         {
+          "name": "queueBuffer",
+          "ms": 0.195516,
+          "depth": 3
+         }
+        ]
+       },
+       {
+        "ts": 122716112169284,
+        "ms": 10.668742,
+        "slices": [
+         {
+          "name": "Drawing  0.00 113.00 1008.00 2190.00",
+          "ms": 10.414388,
+          "depth": 1
+         },
+         {
+          "name": "flush commands",
+          "ms": 8.136759,
+          "depth": 2
+         },
+         {
+          "name": "Vulkan finish frame",
+          "ms": 8.130168,
+          "depth": 3
+         },
+         {
+          "name": "auto skgpu::ganesh::OpsTask::onExecute(GrOpFlushState *)::(anonymous class)::operator()() const",
+          "ms": 1.058675,
+          "depth": 4
+         },
+         {
+          "name": "queueBuffer",
+          "ms": 0.686483,
+          "depth": 2
+         },
+         {
+          "name": "queueBuffer",
+          "ms": 0.554281,
+          "depth": 3
+         }
+        ]
+       }
+      ]
+     }
+    },
+    "memory_kb": {
+     "after_start": {
+      "Java Heap": 8484,
+      "Native Heap": 64360,
+      "Code": 2280,
+      "Stack": 476,
+      "Graphics": 215888,
+      "Private Other": 1116,
+      "System": 3659,
+      "Total PSS": 296263,
+      "Total RSS": 452316
+     },
+     "after_animation": {
+      "Java Heap": 23460,
+      "Native Heap": 140884,
+      "Code": 2284,
+      "Stack": 528,
+      "Graphics": 224112,
+      "Private Other": 1364,
+      "System": 3644,
+      "Total PSS": 396276,
+      "Total RSS": 554648
+     }
+    }
+   }
+  ]
+ }
+}

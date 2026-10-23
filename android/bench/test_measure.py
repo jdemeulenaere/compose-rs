@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """measure.py's parsing, on captured output (no device): python3 android/bench/test_measure.py"""
 
+import contextlib
+import io
+import json
 import os
 import tempfile
 import unittest
@@ -357,6 +360,85 @@ class BoostTest(unittest.TestCase):
         self.assertIsNone(summarize.boost_line({"frames": 3}))
         self.assertIsNone(summarize.boost_summary([{"frames": 3}]))
         self.assertIn("no HWUI boost counter", summarize.boost_summary([{"render_boost": no_counter}]))
+
+
+class ScenariosTest(unittest.TestCase):
+    def test_all_by_default(self):
+        self.assertEqual(measure.parse_scenarios("all"), list(measure.SCENARIOS))
+        self.assertEqual(measure.parse_scenarios(""), list(measure.SCENARIOS))
+        self.assertEqual(measure.parse_scenarios(None), list(measure.SCENARIOS))
+
+    def test_some_in_their_order(self):
+        self.assertEqual(measure.parse_scenarios("stress_animation, stress_scroll"),
+                         ["stress_scroll", "stress_animation"])
+        self.assertEqual(measure.parse_scenarios("scroll,stress_startup"),
+                         ["scroll", "stress_startup"])
+
+    def test_an_unknown_name_stops_the_run(self):
+        with self.assertRaises(SystemExit):
+            measure.parse_scenarios("scroll,stress")
+
+
+class SlowestFramesTest(unittest.TestCase):
+    def test_slowest_line(self):
+        trace = {"slowest_frames": {
+            "main": [{"ts": 1, "ms": 9.5, "slices": [
+                {"name": "traversal", "ms": 9.1, "depth": 1},
+                {"name": "compose-rs: frame", "ms": 8.7, "depth": 2},
+                {"name": "compose-rs: layout", "ms": 6.2, "depth": 3},
+                {"name": "compose-rs: text layout", "ms": 3.0, "depth": 4}]}],
+            "render": []}}
+        self.assertEqual(summarize.slowest_line(trace, "main"),
+                         "slowest main frame 9.50 ms: traversal 9.10, compose-rs: frame 8.70, "
+                         "compose-rs: layout 6.20")
+        # No frame on that thread, or a report from before docs/15.
+        self.assertIsNone(summarize.slowest_line(trace, "render"))
+        self.assertIsNone(summarize.slowest_line({"frames": 3}, "main"))
+
+
+class SummarizeTest(unittest.TestCase):
+    def test_a_report_of_the_stress_scenarios_only(self):
+        """A report of `--scenarios stress_scroll,stress_animation` has none of the feed's
+        sections: summarize.py prints what's there."""
+        def run(memory=False):
+            trace = {
+                "frames": 100, "janky_frames": 0, "jank_kinds": {},
+                "jank_sides": {"app": 0, "compositor": 0, "other": 0},
+                "visibly_late_frames": 0, "late_do_frames": 1, "late_do_frames_after_work": 0,
+                "prefetches": 0,
+                "buffer_stuffing": {"recovery_slices": 0, "buffer_stuffed": 0, "occurred": False},
+                "main_thread_frame_ms": {"p50": 1.0, "p90": 2.0, "p99": 3.0, "max": 4.0},
+                "render_thread_frame_ms": {"p50": 2.0, "p90": 3.0, "p99": 4.0},
+                "cpu_ms": {"main": 100.0, "render": 200.0},
+                "work_ms": {"main": 10.0, "render": 20.0},
+                "slowest_frames": {"main": [], "render": []}}
+            result = {"gfxinfo": {"frames": 100, "p50": 5, "p90": 6, "p99": 8}, "trace": trace}
+            if memory:
+                result["memory_kb"] = {"after_start": {"Total PSS": 40960},
+                                       "after_animation": {"Total PSS": 51200}}
+            return result
+        report = {
+            "device": "Pixel 8 Pro", "android": "16",
+            "scenarios": ["stress_scroll", "stress_animation"],
+            "stress_memory_kb": {app: {"after_start": [{"Total PSS": 30720}],
+                                       "after_scroll": [{"Total PSS": 61440}]}
+                                 for app in ("compose", "rs")},
+            "stress_scroll": {app: [run()] for app in ("compose", "rs")},
+            "stress_animation": {app: [run(memory=True)] for app in ("compose", "rs")},
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "report.json")
+            with open(path, "w") as file:
+                json.dump(report, file)
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                summarize.main(path)
+        text = output.getvalue()
+        self.assertIn("scenarios stress_scroll, stress_animation", text)
+        self.assertIn("memory stress rs after_scroll: Total PSS 60.0MB", text)
+        self.assertIn("stress_scroll rs: gfx frames 100", text)
+        self.assertIn("memory stress_animation compose after_animation: Total PSS 50.0MB", text)
+        self.assertNotIn("startup", text)
 
 
 if __name__ == "__main__":

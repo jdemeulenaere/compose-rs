@@ -75,38 +75,82 @@ def boost_summary(traces):
     return line
 
 
+def slowest_line(trace, thread):
+    """A traced run's slowest frame on `thread` ("main" or "render", reports since docs/15 have
+    them) with its three longest slices inside, or None."""
+    frames = (trace.get("slowest_frames") or {}).get(thread)
+    if not frames:
+        return None
+    frame = frames[0]
+    inside = ", ".join(f"{s['name']} {s['ms']:.2f}" for s in frame["slices"][:3])
+    return f"slowest {thread} frame {frame['ms']:.2f} ms: {inside}"
+
+
+def frames_summary(r, scenario):
+    """The medians of a frames scenario's runs, then a line per run."""
+    for app in ("compose", "rs"):
+        # A run whose trace holds no frame (measure.py runs it again since D362; older
+        # reports may have one) would read as zero work: left out, and said.
+        runs = [x for x in r[scenario][app] if x["trace"].get("frames", 1) > 0]
+        if len(runs) < len(r[scenario][app]):
+            print(f"{scenario} {app}: {len(r[scenario][app]) - len(runs)} run(s) without a traced frame left out")
+        g = [x["gfxinfo"] for x in runs]; t = [x["trace"] for x in runs]
+        print(f"{scenario} {app}: gfx frames {med([x.get('frames',0) for x in g])}, janky {med([x.get('janky',0) for x in g])}, p50 {med([x.get('p50',0) for x in g])} p90 {med([x.get('p90',0) for x in g])} p99 {med([x.get('p99',0) for x in g])} | timeline frames {med([x['frames'] for x in t])}, janky {med([x['janky_frames'] for x in t])} kinds {[x['jank_kinds'] for x in t]} | main p50 {med([x['main_thread_frame_ms']['p50'] or 0 for x in t]):.2f} p90 {med([x['main_thread_frame_ms']['p90'] or 0 for x in t]):.2f} p99 {med([x['main_thread_frame_ms']['p99'] or 0 for x in t]):.2f} max {med([x['main_thread_frame_ms']['max'] or 0 for x in t]):.1f} | render p50 {med([x['render_thread_frame_ms']['p50'] or 0 for x in t]):.2f} p90 {med([x['render_thread_frame_ms']['p90'] or 0 for x in t]):.2f} p99 {med([x['render_thread_frame_ms']['p99'] or 0 for x in t]):.2f} | cpu main {med([x['cpu_ms'].get('main',0) for x in t]):.0f}ms render {med([x['cpu_ms'].get('render',0) for x in t]):.0f}ms | work main {med([(x.get('work_ms') or {}).get('main',0) for x in t]):.0f}ms render {med([(x.get('work_ms') or {}).get('render',0) for x in t]):.0f}ms")
+        boost = boost_summary(t)
+        if boost:
+            print(f"  {scenario} {app} render boost (medians): {boost}")
+        for index, trace in enumerate(t):
+            for line in (run_line(trace), boost_line(trace), slowest_line(trace, "main"),
+                         slowest_line(trace, "render")):
+                if line:
+                    print(f"  {scenario} {app} run {index}: {line}")
+        animation_memory = [x["memory_kb"] for x in runs if x.get("memory_kb")]
+        if animation_memory:
+            print_memory(f"{scenario} {app}", {
+                when: [m[when] for m in animation_memory] for when in animation_memory[0]})
+
+
+MEMORY_KEYS = ["Total PSS", "Java Heap", "Native Heap", "Code", "Graphics", "Private Other", "System", "Total RSS"]
+
+
+def print_memory(label, by_when):
+    """The medians of `dumpsys meminfo`'s parts, for each moment (after start, …)."""
+    for when, runs in by_when.items():
+        print(f"memory {label} {when}: " + ", ".join(f"{k} {med([x.get(k,0) for x in runs])/1024:.1f}MB" for k in MEMORY_KEYS))
+
+
+def startup_summary(r, key, first_key, screens):
+    for app in ("compose", "rs"):
+        s = r[key][app]
+        print(f"{key} {app}: " + ", ".join(f"{screen} median {s[screen]['median']} (min {s[screen]['min']}, max {s[screen]['max']})" for screen in screens))
+    for app in ("compose", "rs"):
+        for screen in screens:
+            f = r[first_key][app][screen]["first"]
+            keys = [k for k in ("bindApplication","activityStart","activityResume","Choreographer#doFrame","traversal","Record View#draw()","compose-rs: frame","compose-rs: recompose","compose-rs: layout","compose-rs: text layout","compose-rs: draw","compose-rs: replay") if k in f]
+            print(f"first {app} {screen}: " + ", ".join(f"{k} {f[k]:.1f}" for k in keys))
+
+
 def main(path):
     r = json.load(open(path))
     print("device", r["device"], "android", r["android"])
-    for app in ("compose", "rs"):
-        s = r["startup_ms"][app]
-        print(f"startup {app}: feed median {s['feed']['median']} (min {s['feed']['min']}, max {s['feed']['max']}), big median {s['big']['median']} (min {s['big']['min']})")
-    for app in ("compose", "rs"):
-        for screen in ("feed", "big"):
-            f = r["first_frame"][app][screen]["first"]
-            keys = [k for k in ("bindApplication","activityStart","activityResume","Choreographer#doFrame","traversal","Record View#draw()","compose-rs: frame","compose-rs: recompose","compose-rs: layout","compose-rs: text layout","compose-rs: draw","compose-rs: replay") if k in f]
-            print(f"first {app} {screen}: " + ", ".join(f"{k} {f[k]:.1f}" for k in keys))
-    for app in ("compose", "rs"):
-        for when in ("after_start", "after_scroll"):
-            runs = r["memory_kb"][app][when]
-            keys = ["Total PSS", "Java Heap", "Native Heap", "Code", "Graphics", "Private Other", "System", "Total RSS"]
-            print(f"memory {app} {when}: " + ", ".join(f"{k} {med([x.get(k,0) for x in runs])/1024:.1f}MB" for k in keys))
-    for scenario in ("scroll", "animation"):
+    # Reports since docs/15 name the scenarios run; earlier ones ran the first three.
+    print("scenarios", ", ".join(r.get("scenarios", ["startup", "scroll", "animation"])))
+    if "startup_ms" in r:
+        startup_summary(r, "startup_ms", "first_frame", ("feed", "big"))
+    if "memory_kb" in r:
         for app in ("compose", "rs"):
-            # A run whose trace holds no frame (measure.py runs it again since D362; older
-            # reports may have one) would read as zero work: left out, and said.
-            runs = [x for x in r[scenario][app] if x["trace"].get("frames", 1) > 0]
-            if len(runs) < len(r[scenario][app]):
-                print(f"{scenario} {app}: {len(r[scenario][app]) - len(runs)} run(s) without a traced frame left out")
-            g = [x["gfxinfo"] for x in runs]; t = [x["trace"] for x in runs]
-            print(f"{scenario} {app}: gfx frames {med([x.get('frames',0) for x in g])}, janky {med([x.get('janky',0) for x in g])}, p50 {med([x.get('p50',0) for x in g])} p90 {med([x.get('p90',0) for x in g])} p99 {med([x.get('p99',0) for x in g])} | timeline frames {med([x['frames'] for x in t])}, janky {med([x['janky_frames'] for x in t])} kinds {[x['jank_kinds'] for x in t]} | main p50 {med([x['main_thread_frame_ms']['p50'] or 0 for x in t]):.2f} p90 {med([x['main_thread_frame_ms']['p90'] or 0 for x in t]):.2f} p99 {med([x['main_thread_frame_ms']['p99'] or 0 for x in t]):.2f} max {med([x['main_thread_frame_ms']['max'] or 0 for x in t]):.1f} | render p50 {med([x['render_thread_frame_ms']['p50'] or 0 for x in t]):.2f} p90 {med([x['render_thread_frame_ms']['p90'] or 0 for x in t]):.2f} | cpu main {med([x['cpu_ms'].get('main',0) for x in t]):.0f}ms render {med([x['cpu_ms'].get('render',0) for x in t]):.0f}ms | work main {med([(x.get('work_ms') or {}).get('main',0) for x in t]):.0f}ms render {med([(x.get('work_ms') or {}).get('render',0) for x in t]):.0f}ms")
-            boost = boost_summary(t)
-            if boost:
-                print(f"  {scenario} {app} render boost (medians): {boost}")
-            for index, trace in enumerate(t):
-                for line in (run_line(trace), boost_line(trace)):
-                    if line:
-                        print(f"  {scenario} {app} run {index}: {line}")
+            print_memory(app, r["memory_kb"][app])
+    for scenario in ("scroll", "animation"):
+        if scenario in r:
+            frames_summary(r, scenario)
+    if "stress_startup_ms" in r:
+        startup_summary(r, "stress_startup_ms", "stress_first_frame", ("stress",))
+    if "stress_memory_kb" in r:
+        for app in ("compose", "rs"):
+            print_memory(f"stress {app}", r["stress_memory_kb"][app])
+    for scenario in ("stress_scroll", "stress_animation"):
+        if scenario in r:
+            frames_summary(r, scenario)
     # Reports from before measure.py recorded them have no "compile", "apks" or "dexopt".
     print("compile", r.get("compile", "speed (not recorded)"))
     for app, apk in r.get("apks", {}).items():

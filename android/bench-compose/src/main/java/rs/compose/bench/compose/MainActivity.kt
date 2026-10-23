@@ -55,7 +55,8 @@ import androidx.compose.ui.unit.dp
 
 /**
  * The benchmark's Kotlin Compose app: the screens of examples/feed (compose-rs), widget for
- * widget. `-e screen feed|feed_animated|big` picks one.
+ * widget. `-e screen feed|feed_animated|big|stress|stress_animation` picks one (the stress
+ * screens: Stress.kt).
  */
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -66,6 +67,8 @@ class MainActivity : ComponentActivity() {
             MaterialTheme {
                 when (screen) {
                     "big" -> BigScreen()
+                    "stress" -> StressScroll()
+                    "stress_animation" -> StressAnimation()
                     else -> FeedScreen(animated = screen == "feed_animated")
                 }
             }
@@ -76,14 +79,14 @@ class MainActivity : ComponentActivity() {
 const val POSTS = 1_000
 const val BIG_POSTS = 200
 
-private val AUTHORS = listOf(
+internal val AUTHORS = listOf(
     "Ada Lovelace", "Alan Turing", "Grace Hopper", "Linus Torvalds", "Barbara Liskov",
     "Donald Knuth", "Margaret Hamilton", "Dennis Ritchie", "Ken Thompson", "Radia Perlman",
     "Edsger Dijkstra", "Frances Allen", "John McCarthy", "Hedy Lamarr", "Tim Berners-Lee",
     "Katherine Johnson",
 )
 
-private val SENTENCES = listOf(
+internal val SENTENCES = listOf(
     "Shipped a new release today, with faster startup and fewer allocations.",
     "Reading about incremental computation and how UI frameworks skip work.",
     "Our team switched to declarative UI last year and never looked back.",
@@ -94,9 +97,9 @@ private val SENTENCES = listOf(
     "The best optimization is the work you never have to do at all.",
 )
 
-private val TAGS = listOf("kotlin", "rust", "compose", "android", "performance", "design")
+internal val TAGS = listOf("kotlin", "rust", "compose", "android", "performance", "design")
 
-private val COLORS = longArrayOf(
+internal val COLORS = longArrayOf(
     0xFF6750A4, 0xFF7D5260, 0xFF006A6A, 0xFF8C4A00, 0xFF3F51B5, 0xFF00796B, 0xFFC2185B, 0xFF5D4037,
 )
 

@@ -3,6 +3,7 @@
 connected device, interleaving the two apps run by run, and writes a JSON report.
 
     measure.py --trace-processor PATH --out DIR [--runs N] [--compile MODE] [--allow-stale]
+               [--scenarios NAME,NAME,...]
 
 Before measuring, the installed APKs are checked against the ones built in this checkout
 (android/bench-*/build/outputs/apk/release/): the device ABI's native libraries' SHA-1s must
@@ -34,6 +35,14 @@ Scenarios (docs/12-android-performance.md):
                minimum (ADPF's uclamp.min), its frames' durations by boost, and its running
                time's share on the little cores
   animation    10 s of the animated header, no input: the same
+  stress_startup    cold starts of the stress list (docs/15), and a traced one
+  stress_scroll     memory after start, 10 flings through the stress list as `scroll`, memory
+                    after them
+  stress_animation  10 s of the stress animation, as `animation`, with memory before and after
+
+--scenarios picks some of them (all by default), comma-separated; the report holds those run.
+Each traced run also lists its slowest frames on each thread with their longest slices
+(`slowest_frames`).
 
 Before each run, our other apps (`rs.compose.*`) are force-stopped (D343).
 """
@@ -330,7 +339,7 @@ def gfxinfo(package, reset=False):
 
 
 TRACE_CONFIG = """
-buffers {{ size_kb: 65536 fill_policy: RING_BUFFER }}
+buffers {{ size_kb: {buffer_kb} fill_policy: RING_BUFFER }}
 data_sources {{ config {{ name: "android.surfaceflinger.frametimeline" }} }}
 data_sources {{ config {{ name: "linux.process_stats" process_stats_config {{ scan_all_processes_on_start: true }} }} }}
 data_sources {{ config {{ name: "linux.ftrace" ftrace_config {{
@@ -351,8 +360,15 @@ duration_ms: {duration}
 """
 
 
-def start_trace(package, duration_ms, name):
-    config = TRACE_CONFIG.format(app=package, duration=duration_ms)
+# The trace buffer: enough for the feed's scenarios. The stress screens' traces hold several
+# times more (HWUI traces each of its operations: 140 cells' layers each frame), and a ring
+# buffer that wraps loses the process table scanned at the start, and with it every frame.
+TRACE_BUFFER_KB = 65536
+STRESS_TRACE_BUFFER_KB = 393216
+
+
+def start_trace(package, duration_ms, name, buffer_kb=TRACE_BUFFER_KB):
+    config = TRACE_CONFIG.format(app=package, duration=duration_ms, buffer_kb=buffer_kb)
     path = f"/data/misc/perfetto-traces/{name}.perfetto-trace"
     process = subprocess.Popen(
         ["adb", "shell", f"perfetto --txt -c - -o {path}"],
@@ -753,6 +769,7 @@ def frame_stats(trace_processor, trace, package, capacities=None, since=0):
         "cpu_ms": cpu_ms,
         "work_ms": work_ms(trace_processor, trace, package, capacities, since),
         "render_boost": boost_stats(trace_processor, trace, package, capacities, since),
+        "slowest_frames": slowest_frames(trace_processor, trace, package, since),
     }
 
 
@@ -789,6 +806,63 @@ def first_frame(trace_processor, trace, package):
     return {"first": firsts, "total_during_trace": totals}
 
 
+# The scenarios, in the order they run (docs/12, docs/15).
+SCENARIOS = ("startup", "scroll", "animation", "stress_startup", "stress_scroll",
+             "stress_animation")
+
+
+def parse_scenarios(text):
+    """The scenarios `--scenarios` names (comma-separated; empty or "all": all of them), in
+    SCENARIOS' order. Stops the run on an unknown name."""
+    names = [name.strip() for name in (text or "").split(",") if name.strip()]
+    if not names or names == ["all"]:
+        return list(SCENARIOS)
+    unknown = sorted(set(names) - set(SCENARIOS))
+    if unknown:
+        raise SystemExit(f"unknown scenarios {unknown}; known: {', '.join(SCENARIOS)}")
+    return [name for name in SCENARIOS if name in names]
+
+
+# How many of a run's slowest frames, and of each one's longest slices, `slowest_frames` lists.
+SLOWEST_FRAMES = 5
+LONGEST_SLICES = 8
+
+
+def slowest_frames(trace_processor, trace, package, since=0):
+    """The run's slowest `Choreographer#doFrame`s (main thread) and `DrawFrame`s (RenderThread),
+    each with its start, its duration (ms) and its longest slices inside it (any depth): where
+    the time of the frames that set p99 goes."""
+    result = {}
+    for thread, thread_condition, name_condition in (
+            ("main", "t.tid = p.pid", "s.name LIKE 'Choreographer#doFrame%'"),
+            ("render", "t.name = 'RenderThread'", "s.name LIKE 'DrawFrame%'")):
+        frames = query(trace_processor, trace, f"""
+            SELECT s.id AS id, s.ts AS ts, s.dur AS dur FROM slice s
+            JOIN thread_track tt ON s.track_id = tt.id
+            JOIN thread t USING (utid) JOIN process p USING (upid)
+            WHERE p.name = '{package}' AND {thread_condition} AND {name_condition}
+              AND s.ts >= {since} AND s.dur > 0
+            ORDER BY s.dur DESC LIMIT {SLOWEST_FRAMES}
+            """)
+        listed = []
+        for frame in frames:
+            if not frame.get("id", "").isdigit() or not frame.get("dur", "").isdigit():
+                continue
+            inside = query(trace_processor, trace, f"""
+                SELECT d.name AS name, d.dur AS dur, d.depth AS depth
+                FROM descendant_slice({frame['id']}) d
+                WHERE d.dur > 0 ORDER BY d.dur DESC LIMIT {LONGEST_SLICES}
+                """)
+            listed.append({
+                "ts": int(frame["ts"]), "ms": int(frame["dur"]) / 1e6,
+                "slices": [{"name": row["name"], "ms": int(row["dur"]) / 1e6,
+                            "depth": int(row["depth"])}
+                           for row in inside if row.get("dur", "").isdigit()
+                           and row.get("depth", "").isdigit()]})
+        result[thread] = listed
+    return result
+
+
 def swipe(up):
     if up:
         shell("input swipe 504 1800 504 500 120")
@@ -814,17 +888,19 @@ def traced(attempt, what):
     raise SystemExit(f"{what}: no frame traced in {TRACE_ATTEMPTS} attempts")
 
 
-def scroll_run(trace_processor, out_dir, package, name, run, capacities):
-    """One traced run of 10 flings through the feed, after a warm-up swipe: the display, idle
-    since the app started, resyncs its vsync on the first input, which FrameTimeline counts as
-    jank no app causes. The warm-up's frames are left out of the stats (from the first input
-    after it), and gfxinfo is reset after it. Returns the memory after start, and the stats."""
+def scroll_run(trace_processor, out_dir, package, name, run, capacities, screen="feed",
+               prefix="scroll", buffer_kb=TRACE_BUFFER_KB):
+    """One traced run of 10 flings through the feed (or `screen`), after a warm-up swipe: the
+    display, idle since the app started, resyncs its vsync on the first input, which
+    FrameTimeline counts as jank no app causes. The warm-up's frames are left out of the stats
+    (from the first input after it), and gfxinfo is reset after it. Returns the memory after
+    start, and the stats."""
     fresh(package)
     time.sleep(1.0)
-    start(package, "feed")
+    start(package, screen)
     time.sleep(5)
     after_start = meminfo(package)
-    process, path = start_trace(package, 18000, f"scroll-{name}-{run}")
+    process, path = start_trace(package, 18000, f"{prefix}-{name}-{run}", buffer_kb)
     swipe(up=True)
     time.sleep(1.2)
     gfxinfo(package, reset=True)
@@ -838,6 +914,83 @@ def scroll_run(trace_processor, out_dir, package, name, run, capacities):
     return after_start, stats
 
 
+def startup_scenario(tp, out_dir, runs, screens):
+    """Cold starts of each of `screens`, interleaved by app, `runs` times; then one traced cold
+    start of each for the first frame's breakdown."""
+    startup = {name: {screen: [] for screen in screens} for name in APPS}
+    for _ in range(runs):
+        for screen in screens:
+            for name, package in APPS.items():
+                startup[name][screen].append(cold_start(package, screen))
+    startup_ms = {
+        name: {screen: {"runs": times, "median": statistics.median(times), "min": min(times),
+                        "max": max(times)} for screen, times in by_screen.items()}
+        for name, by_screen in startup.items()
+    }
+    print("startup", json.dumps(startup_ms, indent=1))
+    first = {}
+    for name, package in APPS.items():
+        first[name] = {}
+        for screen in screens:
+            fresh(package)
+            time.sleep(1.0)
+            process, path = start_trace(package, 5000, f"start-{name}-{screen}")
+            start(package, screen, wait=False)
+            trace = finish_trace(process, path, out_dir)
+            first[name][screen] = first_frame(tp, trace, package)
+    print("first frame", json.dumps(first, indent=1))
+    return startup_ms, first
+
+
+def scroll_scenario(tp, out_dir, capacities, screen, prefix, buffer_kb=TRACE_BUFFER_KB):
+    """3 traced scroll runs of each app through `screen`, interleaved, with the memory after
+    start and after the flings."""
+    memory = {name: {"after_start": [], "after_scroll": []} for name in APPS}
+    scroll = {name: [] for name in APPS}
+    for run in range(3):
+        for name, package in APPS.items():
+            after_start, stats = traced(
+                lambda: scroll_run(tp, out_dir, package, name, run, capacities, screen, prefix,
+                                   buffer_kb),
+                f"{prefix} {name} {run}")
+            memory[name]["after_start"].append(after_start)
+            scroll[name].append(stats)
+            memory[name]["after_scroll"].append(meminfo(package))
+            print(prefix, name, run, json.dumps(stats))
+    return memory, scroll
+
+
+def animation_scenario(tp, out_dir, capacities, screen, prefix, memory=False,
+                       buffer_kb=TRACE_BUFFER_KB):
+    """3 traced runs of each app showing `screen` for 10 s untouched, interleaved, 3 s after
+    it started. With `memory`, each run also has the memory before the trace (`after_start`;
+    `dumpsys meminfo` collects garbage, so it's taken before gfxinfo's reset) and after it
+    (`after_animation`)."""
+    animation = {name: [] for name in APPS}
+    for run in range(3):
+        for name, package in APPS.items():
+            def animation_run():
+                fresh(package)
+                time.sleep(1.0)
+                start(package, screen)
+                time.sleep(3)
+                before = meminfo(package) if memory else None
+                gfxinfo(package, reset=True)
+                process, path = start_trace(package, 10000, f"{prefix}-{name}-{run}",
+                                            buffer_kb)
+                trace = finish_trace(process, path, out_dir)
+                stats = {"gfxinfo": gfxinfo(package),
+                         "trace": frame_stats(tp, trace, package, capacities)}
+                if memory:
+                    stats["memory_kb"] = {"after_start": before,
+                                          "after_animation": meminfo(package)}
+                return stats
+            stats = traced(animation_run, f"{prefix} {name} {run}")
+            animation[name].append(stats)
+            print(prefix, name, run, json.dumps(stats))
+    return animation
+
+
 def main():
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -848,7 +1001,10 @@ def main():
                         default="speed", help="the apps' ART compilation filter (see above)")
     parser.add_argument("--allow-stale", action="store_true",
                         help="measure even if the installed APKs aren't the ones built here")
+    parser.add_argument("--scenarios", default="all",
+                        help="the scenarios to run, comma-separated (see above; default all)")
     arguments = parser.parse_args()
+    scenarios = parse_scenarios(arguments.scenarios)
     os.makedirs(arguments.out, exist_ok=True)
     tp = arguments.trace_processor
     capacities = cpu_capacities()
@@ -856,6 +1012,7 @@ def main():
               "android": shell("getprop ro.build.version.release").strip(),
               "abi": shell("getprop ro.product.cpu.abi").strip(),
               "compile": arguments.compile,
+              "scenarios": scenarios,
               # Each CPU's capacity and highest frequency (kHz): what "work" and the little
               # cores' share are computed from.
               "cpu_capacities": {str(cpu): list(value) for cpu, value in capacities.items()}}
@@ -867,66 +1024,25 @@ def main():
     report["dexopt"] = {"start": log_dexopt("start")}
     check_compiled(report["dexopt"]["start"], arguments.compile)
 
-    # Startup: cold starts, interleaved.
-    startup = {name: {"feed": [], "big": []} for name in APPS}
-    for _ in range(arguments.runs):
-        for screen in ("feed", "big"):
-            for name, package in APPS.items():
-                startup[name][screen].append(cold_start(package, screen))
-    report["startup_ms"] = {
-        name: {screen: {"runs": runs, "median": statistics.median(runs), "min": min(runs),
-                        "max": max(runs)} for screen, runs in screens.items()}
-        for name, screens in startup.items()
-    }
-    print("startup", json.dumps(report["startup_ms"], indent=1))
-
-    # The first frame of each screen, traced on a cold start.
-    first = {}
-    for name, package in APPS.items():
-        first[name] = {}
-        for screen in ("feed", "big"):
-            fresh(package)
-            time.sleep(1.0)
-            process, path = start_trace(package, 5000, f"start-{name}-{screen}")
-            start(package, screen, wait=False)
-            trace = finish_trace(process, path, arguments.out)
-            first[name][screen] = first_frame(tp, trace, package)
-    report["first_frame"] = first
-    print("first frame", json.dumps(first, indent=1))
-
-    # Memory, and scrolling jank.
-    memory = {name: {"after_start": [], "after_scroll": []} for name in APPS}
-    scroll = {name: [] for name in APPS}
-    for run in range(3):
-        for name, package in APPS.items():
-            after_start, stats = traced(
-                lambda: scroll_run(tp, arguments.out, package, name, run, capacities),
-                f"scroll {name} {run}")
-            memory[name]["after_start"].append(after_start)
-            scroll[name].append(stats)
-            memory[name]["after_scroll"].append(meminfo(package))
-            print("scroll", name, run, json.dumps(stats))
-    report["memory_kb"] = memory
-    report["scroll"] = scroll
-
-    # The animated header, untouched.
-    animation = {name: [] for name in APPS}
-    for run in range(3):
-        for name, package in APPS.items():
-            def animation_run():
-                fresh(package)
-                time.sleep(1.0)
-                start(package, "feed_animated")
-                time.sleep(3)
-                gfxinfo(package, reset=True)
-                process, path = start_trace(package, 10000, f"animation-{name}-{run}")
-                trace = finish_trace(process, path, arguments.out)
-                return {"gfxinfo": gfxinfo(package),
-                        "trace": frame_stats(tp, trace, package, capacities)}
-            stats = traced(animation_run, f"animation {name} {run}")
-            animation[name].append(stats)
-            print("animation", name, run, json.dumps(stats))
-    report["animation"] = animation
+    if "startup" in scenarios:
+        report["startup_ms"], report["first_frame"] = startup_scenario(
+            tp, arguments.out, arguments.runs, ("feed", "big"))
+    if "scroll" in scenarios:
+        report["memory_kb"], report["scroll"] = scroll_scenario(
+            tp, arguments.out, capacities, "feed", "scroll")
+    if "animation" in scenarios:
+        report["animation"] = animation_scenario(
+            tp, arguments.out, capacities, "feed_animated", "animation")
+    if "stress_startup" in scenarios:
+        report["stress_startup_ms"], report["stress_first_frame"] = startup_scenario(
+            tp, arguments.out, arguments.runs, ("stress",))
+    if "stress_scroll" in scenarios:
+        report["stress_memory_kb"], report["stress_scroll"] = scroll_scenario(
+            tp, arguments.out, capacities, "stress", "stress-scroll", STRESS_TRACE_BUFFER_KB)
+    if "stress_animation" in scenarios:
+        report["stress_animation"] = animation_scenario(
+            tp, arguments.out, capacities, "stress_animation", "stress-animation", memory=True,
+            buffer_kb=STRESS_TRACE_BUFFER_KB)
 
     for package in APPS.values():
         stop(package)
