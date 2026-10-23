@@ -23,6 +23,58 @@ def run_line(trace):
             + f" | render p50 {render['p50'] or 0:.2f} p90 {render['p90'] or 0:.2f} p99 {render['p99'] or 0:.2f}")
 
 
+def percent(value):
+    return "n/a" if value is None else f"{100 * value:.0f}%"
+
+
+def boost_line(trace):
+    """One traced run's RenderThread boost picture (reports since round 6 have it): the share of
+    its running time on little cores, the HWUI session's time-weighted boost minimum, the share
+    of frames unboosted (a minimum under 100), and the duration percentiles per boost bucket."""
+    boost = trace.get("render_boost")
+    if boost is None:
+        return None
+    line = f"render: little cores {percent(boost['little_core_share'])} of running"
+    if not boost["counter"]:
+        return line + ", no HWUI boost counter in the trace"
+    if boost["buckets"] is None:
+        return line + ", no frame with a boost value"
+    line += (f", boost min time-weighted {boost['time_weighted_min']:.0f}, frames unboosted "
+             f"{percent(boost['unboosted_frame_share'])}")
+    if boost["frames_before_counter"]:
+        line += f" ({boost['frames_before_counter']} before the counter left out)"
+    for name, bucket in boost["buckets"].items():
+        line += f" | {name} {bucket['frames']} ({percent(bucket['share'])})"
+        if bucket["frames"]:
+            line += f" p50 {bucket['p50']:.2f} p90 {bucket['p90']:.2f} p99 {bucket['p99']:.2f}"
+    return line
+
+
+def boost_summary(traces):
+    """The runs' medians of boost_line's numbers (of the runs with the counter, for the
+    boost's; a bucket's percentiles, of the runs with frames in it), or None if no run has the
+    boost picture."""
+    boosts = [trace["render_boost"] for trace in traces if trace.get("render_boost")]
+    if not boosts:
+        return None
+    little = [b["little_core_share"] for b in boosts if b["little_core_share"] is not None]
+    line = f"little cores {percent(med(little)) if little else 'n/a'} of running"
+    counted = [b for b in boosts if b["buckets"] is not None]
+    if not counted:
+        return line + ", no HWUI boost counter"
+    line += (f", boost min time-weighted {med([b['time_weighted_min'] for b in counted]):.0f}, "
+             f"frames unboosted {percent(med([b['unboosted_frame_share'] for b in counted]))}")
+    for name in counted[0]["buckets"]:
+        share = med([b["buckets"][name]["share"] for b in counted])
+        line += f" | {name} {percent(share)}"
+        buckets = [b["buckets"][name] for b in counted if b["buckets"][name]["frames"]]
+        if buckets:
+            line += (f" p50 {med([b['p50'] for b in buckets]):.2f} "
+                     f"p90 {med([b['p90'] for b in buckets]):.2f} "
+                     f"p99 {med([b['p99'] for b in buckets]):.2f}")
+    return line
+
+
 def main(path):
     r = json.load(open(path))
     print("device", r["device"], "android", r["android"])
@@ -48,10 +100,13 @@ def main(path):
                 print(f"{scenario} {app}: {len(r[scenario][app]) - len(runs)} run(s) without a traced frame left out")
             g = [x["gfxinfo"] for x in runs]; t = [x["trace"] for x in runs]
             print(f"{scenario} {app}: gfx frames {med([x.get('frames',0) for x in g])}, janky {med([x.get('janky',0) for x in g])}, p50 {med([x.get('p50',0) for x in g])} p90 {med([x.get('p90',0) for x in g])} p99 {med([x.get('p99',0) for x in g])} | timeline frames {med([x['frames'] for x in t])}, janky {med([x['janky_frames'] for x in t])} kinds {[x['jank_kinds'] for x in t]} | main p50 {med([x['main_thread_frame_ms']['p50'] or 0 for x in t]):.2f} p90 {med([x['main_thread_frame_ms']['p90'] or 0 for x in t]):.2f} p99 {med([x['main_thread_frame_ms']['p99'] or 0 for x in t]):.2f} max {med([x['main_thread_frame_ms']['max'] or 0 for x in t]):.1f} | render p50 {med([x['render_thread_frame_ms']['p50'] or 0 for x in t]):.2f} p90 {med([x['render_thread_frame_ms']['p90'] or 0 for x in t]):.2f} | cpu main {med([x['cpu_ms'].get('main',0) for x in t]):.0f}ms render {med([x['cpu_ms'].get('render',0) for x in t]):.0f}ms | work main {med([(x.get('work_ms') or {}).get('main',0) for x in t]):.0f}ms render {med([(x.get('work_ms') or {}).get('render',0) for x in t]):.0f}ms")
+            boost = boost_summary(t)
+            if boost:
+                print(f"  {scenario} {app} render boost (medians): {boost}")
             for index, trace in enumerate(t):
-                line = run_line(trace)
-                if line:
-                    print(f"  {scenario} {app} run {index}: {line}")
+                for line in (run_line(trace), boost_line(trace)):
+                    if line:
+                        print(f"  {scenario} {app} run {index}: {line}")
     # Reports from before measure.py recorded them have no "compile", "apks" or "dexopt".
     print("compile", r.get("compile", "speed (not recorded)"))
     for app, apk in r.get("apks", {}).items():

@@ -29,13 +29,17 @@ Scenarios (docs/12-android-performance.md):
   scroll       10 flings through the feed, after a warm-up swipe left out: frames
                (`dumpsys gfxinfo`) and jank (FrameTimeline: the app's or the compositor's, and
                frames presented at another vsync than expected), doFrames starting late,
-               compose-rs's prefetches, and whether Choreographer recovered from buffer stuffing
+               compose-rs's prefetches, whether Choreographer recovered from buffer stuffing, and
+               the RenderThread's boost picture: the HWUI performance-hint session's boost
+               minimum (ADPF's uclamp.min), its frames' durations by boost, and its running
+               time's share on the little cores
   animation    10 s of the animated header, no input: the same
 
 Before each run, our other apps (`rs.compose.*`) are force-stopped (D343).
 """
 
 import argparse
+import bisect
 import hashlib
 import json
 import os
@@ -450,6 +454,120 @@ def work_ms(trace_processor, trace, package, capacities, since=0):
     return work
 
 
+# The RenderThread's frames by the HWUI performance-hint session's boost (its uclamp.min, out of
+# 1024) when they started: (name, lowest, highest excluded or None).
+BOOST_BUCKETS = (("unboosted", 0, 100), ("100-199", 100, 200), ("200+", 200, None))
+
+
+def little_core_share(running_by_cpu, capacities):
+    """The share of running time (ns by CPU) on the little cores: those of the lowest capacity
+    (`cpu_capacities()`). None without capacities, with cores all alike, or without running
+    time."""
+    if not capacities or not running_by_cpu:
+        return None
+    lowest = min(capacity for capacity, _ in capacities.values())
+    if all(capacity == lowest for capacity, _ in capacities.values()):
+        return None
+    total = sum(running_by_cpu.values())
+    if total <= 0:
+        return None
+    little = sum(running for cpu, running in running_by_cpu.items()
+                 if cpu in capacities and capacities[cpu][0] == lowest)
+    return little / total
+
+
+def boost_picture(frames, samples, running_by_cpu, capacities):
+    """How much Android's performance hints (ADPF) boosted the RenderThread, and where it ran.
+
+    `frames`: its DrawFrame slices as (ts, dur) in ns. `samples`: the app's HWUI session's
+    boost minimum (the `adpf.<pid>-…-HWUI-…-min` counter: the uclamp.min ADPF asks for, out of
+    1024) as (ts, value). `running_by_cpu`: its running time (ns) by CPU.
+
+    Returns the boost minimum's time-weighted mean over the frames' span, the share of frames
+    started at a minimum under 100 (unboosted), each bucket's share of frames and duration
+    percentiles (ms), and the share of running time on little cores. The boost's fields are
+    None in a trace without the counter; frames before its first value aren't bucketed
+    (`frames_before_counter`)."""
+    picture = {"counter": bool(samples), "time_weighted_min": None,
+               "unboosted_frame_share": None, "frames_before_counter": 0, "buckets": None,
+               "little_core_share": little_core_share(running_by_cpu, capacities)}
+    if not samples or not frames:
+        return picture
+    samples = sorted(samples)
+    times = [ts for ts, _ in samples]
+    frames = sorted(frames)
+    start = frames[0][0]
+    end = max(ts + dur for ts, dur in frames)
+    weighted = covered = 0
+    for index, (ts, value) in enumerate(samples):
+        until = samples[index + 1][0] if index + 1 < len(samples) else end
+        span = min(until, end) - max(ts, start)
+        if span > 0:
+            weighted += value * span
+            covered += span
+    picture["time_weighted_min"] = weighted / covered if covered else None
+    durations = {name: [] for name, _, _ in BOOST_BUCKETS}
+    for ts, dur in frames:
+        index = bisect.bisect_right(times, ts) - 1
+        if index < 0:
+            picture["frames_before_counter"] += 1
+            continue
+        value = samples[index][1]
+        for name, lowest, highest in BOOST_BUCKETS:
+            if value >= lowest and (highest is None or value < highest):
+                durations[name].append(dur / 1e6)
+                break
+    bucketed = sum(len(values) for values in durations.values())
+    if not bucketed:
+        return picture
+    picture["unboosted_frame_share"] = len(durations["unboosted"]) / bucketed
+    picture["buckets"] = {
+        name: {"frames": len(values), "share": len(values) / bucketed,
+               "p50": percentile(values, 0.5), "p90": percentile(values, 0.9),
+               "p99": percentile(values, 0.99)}
+        for name, values in durations.items()}
+    return picture
+
+
+def boost_stats(trace_processor, trace, package, capacities, since=0):
+    """`boost_picture` of the app's RenderThread, from `since` (a trace timestamp) on."""
+    frames = query(trace_processor, trace, f"""
+        SELECT s.ts AS ts, s.dur AS dur FROM slice s
+        JOIN thread_track tt ON s.track_id = tt.id
+        JOIN thread t USING (utid) JOIN process p USING (upid)
+        WHERE p.name = '{package}' AND t.name = 'RenderThread' AND s.name LIKE 'DrawFrame%'
+          AND s.ts >= {since} AND s.dur > 0
+        """)
+    # The power HAL's counters per hint session, named `adpf.<pid>-<uid>-<session>-<name>-…`:
+    # HWUI's for the app's process (each value holds until the next).
+    samples = query(trace_processor, trace, f"""
+        SELECT c.ts AS ts, c.value AS value FROM counter c
+        JOIN counter_track ct ON c.track_id = ct.id
+        JOIN process p ON ct.name GLOB 'adpf.' || p.pid || '-*-HWUI-*-min'
+        WHERE p.name = '{package}'
+        """)
+    running = query(trace_processor, trace, f"""
+        SELECT s.cpu AS cpu, SUM(s.dur) AS running FROM sched s
+        JOIN thread t USING (utid) JOIN process p USING (upid)
+        WHERE p.name = '{package}' AND t.name = 'RenderThread' AND s.dur > 0 AND s.ts >= {since}
+        GROUP BY s.cpu
+        """)
+
+    def number(text):
+        try:
+            return float(text)
+        except (TypeError, ValueError):
+            return None
+
+    frame_list = [(int(row["ts"]), int(row["dur"])) for row in frames
+                  if row.get("ts", "").isdigit() and row.get("dur", "").isdigit()]
+    sample_list = [(int(row["ts"]), number(row.get("value"))) for row in samples
+                   if row.get("ts", "").isdigit() and number(row.get("value")) is not None]
+    running_by_cpu = {int(row["cpu"]): int(row["running"]) for row in running
+                      if row.get("cpu", "").isdigit() and row.get("running", "").isdigit()}
+    return boost_picture(frame_list, sample_list, running_by_cpu, capacities)
+
+
 # FrameTimeline's jank types (a frame may have several, comma-separated), by whose they are.
 APP_JANK = {"App Deadline Missed", "App Resynced Jitter"}
 COMPOSITOR_JANK = {"SurfaceFlinger CPU Deadline Missed", "SurfaceFlinger GPU Deadline Missed",
@@ -634,6 +752,7 @@ def frame_stats(trace_processor, trace, package, capacities=None, since=0):
         },
         "cpu_ms": cpu_ms,
         "work_ms": work_ms(trace_processor, trace, package, capacities, since),
+        "render_boost": boost_stats(trace_processor, trace, package, capacities, since),
     }
 
 
@@ -736,7 +855,10 @@ def main():
     report = {"device": shell("getprop ro.product.model").strip(),
               "android": shell("getprop ro.build.version.release").strip(),
               "abi": shell("getprop ro.product.cpu.abi").strip(),
-              "compile": arguments.compile}
+              "compile": arguments.compile,
+              # Each CPU's capacity and highest frequency (kHz): what "work" and the little
+              # cores' share are computed from.
+              "cpu_capacities": {str(cpu): list(value) for cpu, value in capacities.items()}}
     report["apks"] = check_apks(arguments.out, report["abi"], arguments.allow_stale)
 
     shell("input keyevent KEYCODE_WAKEUP")

@@ -62,9 +62,11 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-/// Runs a job, its panics caught: one escaping `spawn_background`'s own catch (a result's or a
-/// capture's drop, a waker's `wake`) is reported by the panic hook and goes no further, so the
-/// thread lives on and keeps its place in the count.
+/// Runs a job, its panics caught where panics unwind (desktop, tests): one escaping
+/// `spawn_background`'s own catch (a result's or a capture's drop, a waker's `wake`) is reported
+/// by the panic hook and goes no further, so the thread lives on and keeps its place in the
+/// count. Under `panic = "abort"` (compose-rs's Android profiles, D361) nothing is caught: the
+/// hook reports the panic and the process aborts on this thread.
 fn run(work: Work) {
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(work));
 }
@@ -116,8 +118,8 @@ impl Pool {
         loop {
             if let Some(work) = state.queue.pop_front() {
                 drop(state);
-                // A panicking closure's panic goes to its future (see `spawn_background`); the
-                // thread lives on.
+                // Where panics unwind, a panicking closure's panic goes to its future (see
+                // `spawn_background`) and the thread lives on; under abort, the process ends.
                 run(work);
                 state = lock(&self.state);
                 continue;
@@ -155,7 +157,12 @@ struct Shared<T> {
 /// Dropping the future (its task cancelled: the effect left the composition) doesn't block: work
 /// not started yet never starts, and the result of work already running is dropped on its
 /// thread when it ends (blocking work can't be interrupted, as in Compose, where `withContext`
-/// can't cancel a blocking call either). A panic in `work` panics the awaiting task.
+/// can't cancel a blocking call either).
+///
+/// A panic in `work`, where panics unwind (desktop, tests), panics the awaiting task, or is
+/// dropped with the result if the future was dropped. Under `panic = "abort"` (compose-rs's
+/// Android profiles, D361), it aborts the process on the background thread, awaited or not,
+/// after the panic hook reports it.
 ///
 /// `work` and its result must be `Send`; state handles aren't, so read what it needs before and
 /// write what it returns after:

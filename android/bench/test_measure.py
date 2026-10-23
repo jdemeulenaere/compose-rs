@@ -254,5 +254,110 @@ class JankTest(unittest.TestCase):
         self.assertIsNone(summarize.run_line({"frames": 3}))
 
 
+class BoostTest(unittest.TestCase):
+    MS = 1_000_000
+    # A Pixel 8 Pro's cores (`cpu_capacities()`): 4 little, 4 mid, 1 big.
+    PIXEL_8_PRO = {**{cpu: (255, 1704000) for cpu in range(4)},
+                   **{cpu: (861, 2367000) for cpu in range(4, 8)}, 8: (1024, 2914000)}
+
+    def frames(self, starts_ms, dur_ms):
+        return [(start * self.MS, int(dur * self.MS)) for start, dur in zip(starts_ms, dur_ms)]
+
+    def test_buckets_and_time_weighted_minimum(self):
+        ms = self.MS
+        # Frames every 10 ms from 100 to 190 ms; the minimum 2 until 120 ms, then 150 until
+        # 160 ms, then 300.
+        frames = self.frames(range(100, 200, 10), [3, 3, 2, 2, 2, 2, 1, 1, 1, 1])
+        samples = [(50 * ms, 2), (120 * ms, 150), (160 * ms, 300)]
+        picture = measure.boost_picture(frames, samples, {}, {})
+        self.assertTrue(picture["counter"])
+        # Over 100 to 191 ms: 20 ms at 2, 40 ms at 150, 31 ms at 300.
+        self.assertAlmostEqual(picture["time_weighted_min"], (20 * 2 + 40 * 150 + 31 * 300) / 91)
+        self.assertEqual(picture["frames_before_counter"], 0)
+        self.assertAlmostEqual(picture["unboosted_frame_share"], 0.2)
+        buckets = picture["buckets"]
+        self.assertEqual([buckets[name]["frames"] for name in ("unboosted", "100-199", "200+")],
+                         [2, 4, 4])
+        self.assertAlmostEqual(buckets["100-199"]["share"], 0.4)
+        self.assertEqual(buckets["unboosted"]["p50"], 3.0)
+        self.assertEqual(buckets["200+"]["p99"], 1.0)
+        # Little cores' share is None without capacities.
+        self.assertIsNone(picture["little_core_share"])
+
+    def test_bucket_edges(self):
+        frames = self.frames([10, 20, 30, 40], [1, 2, 3, 4])
+        samples = [(10 * self.MS, 99), (20 * self.MS, 100), (30 * self.MS, 199), (40 * self.MS, 200)]
+        buckets = measure.boost_picture(frames, samples, {}, {})["buckets"]
+        self.assertEqual([buckets[name]["frames"] for name in ("unboosted", "100-199", "200+")],
+                         [1, 2, 1])
+
+    def test_without_the_counter(self):
+        frames = self.frames([10, 20], [2, 2])
+        picture = measure.boost_picture(frames, [], {0: 3 * self.MS, 8: self.MS}, self.PIXEL_8_PRO)
+        self.assertFalse(picture["counter"])
+        self.assertIsNone(picture["time_weighted_min"])
+        self.assertIsNone(picture["unboosted_frame_share"])
+        self.assertIsNone(picture["buckets"])
+        # Where it ran is known without the counter.
+        self.assertAlmostEqual(picture["little_core_share"], 0.75)
+        line = summarize.boost_line({"render_boost": picture})
+        self.assertIn("little cores 75% of running", line)
+        self.assertIn("no HWUI boost counter", line)
+
+    def test_frames_before_the_first_value_are_left_out(self):
+        frames = self.frames([10, 20, 30], [5, 4, 2])
+        picture = measure.boost_picture(frames, [(25 * self.MS, 250)], {}, {})
+        self.assertEqual(picture["frames_before_counter"], 2)
+        self.assertEqual(picture["buckets"]["200+"]["frames"], 1)
+        self.assertEqual(picture["unboosted_frame_share"], 0.0)
+        # Only the span from the first value counts: 250 throughout.
+        self.assertEqual(picture["time_weighted_min"], 250)
+        # A counter whose values all come after the frames: nothing bucketed.
+        picture = measure.boost_picture(frames, [(90 * self.MS, 250)], {}, {})
+        self.assertTrue(picture["counter"])
+        self.assertIsNone(picture["buckets"])
+        self.assertIn("no frame with a boost value", summarize.boost_line({"render_boost": picture}))
+
+    def test_little_cores_by_capacity(self):
+        share = measure.little_core_share
+        running = {0: 2, 3: 2, 5: 4, 8: 2}
+        self.assertAlmostEqual(share(running, self.PIXEL_8_PRO), 0.4)
+        # Another layout: 6 little cores and 2 big ones.
+        other = {**{cpu: (400, 1800000) for cpu in range(6)},
+                 **{cpu: (1024, 3000000) for cpu in range(6, 8)}}
+        self.assertAlmostEqual(share({0: 1, 5: 1, 6: 2}, other), 0.5)
+        # Cores all alike have no little ones; no capacities read, or no running time: unknown.
+        self.assertIsNone(share(running, {cpu: (1024, 1) for cpu in range(9)}))
+        self.assertIsNone(share(running, {}))
+        self.assertIsNone(share({}, self.PIXEL_8_PRO))
+        # A CPU missing from the capacities counts as running, not as little.
+        self.assertAlmostEqual(share({0: 1, 9: 1}, self.PIXEL_8_PRO), 0.5)
+
+    def test_summary_lines(self):
+        frames = self.frames(range(100, 200, 10), [3, 3, 2, 2, 2, 2, 1, 1, 1, 1])
+        samples = [(50 * self.MS, 2), (120 * self.MS, 150), (160 * self.MS, 300)]
+        picture = measure.boost_picture(frames, samples, {0: 1, 4: 3}, self.PIXEL_8_PRO)
+        line = summarize.boost_line({"render_boost": picture})
+        self.assertIn("little cores 25% of running, boost min time-weighted 169, frames unboosted 20%", line)
+        self.assertIn("| unboosted 2 (20%) p50 3.00 p90 3.00 p99 3.00", line)
+        self.assertIn("| 200+ 4 (40%) p50 1.00", line)
+        unboosted = measure.boost_picture(frames, [(0, 2)], {0: 1}, self.PIXEL_8_PRO)
+        self.assertIn("| 200+ 0 (0%) |", summarize.boost_line({"render_boost": unboosted}) + " |")
+        no_counter = measure.boost_picture(frames, [], {0: 1}, self.PIXEL_8_PRO)
+        traces = [{"render_boost": picture}, {"render_boost": unboosted},
+                  {"render_boost": no_counter}, {"frames": 3}]
+        summary = summarize.boost_summary(traces)
+        # Little cores: 25 %, 100 %, 100 %; the boost's medians of the two runs with the counter.
+        self.assertIn("little cores 100% of running", summary)
+        self.assertIn("frames unboosted 60%", summary)
+        self.assertIn("| unboosted 60% p50 2.50", summary)
+        # 200+: shares 40 % and 0 %; percentiles of the run with frames in it.
+        self.assertIn("| 200+ 20% p50 1.00", summary)
+        # Reports from before round 6 have no boost picture.
+        self.assertIsNone(summarize.boost_line({"frames": 3}))
+        self.assertIsNone(summarize.boost_summary([{"frames": 3}]))
+        self.assertIn("no HWUI boost counter", summarize.boost_summary([{"render_boost": no_counter}]))
+
+
 if __name__ == "__main__":
     unittest.main()

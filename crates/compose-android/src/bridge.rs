@@ -93,7 +93,11 @@ pub(crate) fn log(message: &str) {
     eprintln!("compose-rs: {message}");
 }
 
-/// A panic (which aborts at the JNI boundary) says what it was in logcat first.
+/// A panic says what it was in logcat first. Under the Android profiles (`android` and
+/// `android-release`: `panic = "abort"`, D361), the process then aborts where the panic happened,
+/// on whichever thread, caught or not. Built with unwinding (another profile), a panic reaching a
+/// JNI function aborts at that boundary, and one caught on the way (a background task's, an
+/// app's own `catch_unwind`) is logged and lets the process go on.
 fn install_panic_hook() {
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
