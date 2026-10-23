@@ -508,8 +508,32 @@ fn a_scroll_frame_leaves_no_pending_work() {
     let state = LazyListState::new(0, 0);
     let given = *state;
     let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || Rows(given, 1000));
+    // The idle time after the first frame, as a platform gives it: the row the scroll reveals
+    // is prefetched (D470), so the frame composes nothing.
+    ui.host().prefetch(std::time::Instant::now() + std::time::Duration::from_secs(60));
     ui.host().send_pointer(PointerEvent::scroll(Offset::new(50.0, 50.0), Offset::new(0.0, 5.0)));
     ui.host().frame();
     assert_eq!(state.first_visible_item_scroll_offset(), 5);
     assert!(!ui.host().has_pending_work(), "another frame was asked for");
+}
+
+/// Input: a `LazyColumn` of 1000 rows, not prefetched; a wheel scroll of 25 px (a row not
+/// composed comes into view) and one frame.
+///
+/// The frame composes the row in a round of its own (`recompose and layout again`): the write
+/// asking for it (the range the layout wants) is composed in that frame, so nothing is left
+/// for another, and the idle time after it prefetches (D474). It asked for another frame,
+/// which also kept prefetch from running after it: on the Pixel 8 Pro, a fast fling's frames
+/// composed items one after another.
+#[test]
+fn a_frame_composing_items_in_a_round_leaves_no_pending_work() {
+    let state = LazyListState::new(0, 0);
+    let given = *state;
+    let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || Rows(given, 1000));
+    ui.host().send_pointer(PointerEvent::scroll(Offset::new(50.0, 50.0), Offset::new(0.0, 25.0)));
+    let stats = ui.host().frame();
+    assert!(stats.bodies_run > 0, "a row composed in the frame");
+    assert_eq!(state.first_visible_item_index(), 1);
+    assert!(!ui.host().has_pending_work(), "another frame was asked for");
+    assert!(ui.host().has_prefetch_work());
 }

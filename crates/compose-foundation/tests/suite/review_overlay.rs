@@ -395,9 +395,9 @@ fn a_popup_in_a_lazy_item_scrolled_out_of_view_is_gone() {
 /// An item composed beyond the viewport (here placed past the list's end, clipped): Compose
 /// composes only the visible items (a prefetched one is precomposed but never placed, and a
 /// popup whose anchor isn't placed stays transparent, `canCalculatePosition` being false), so a
-/// popup of an item out of view never shows nor takes taps.
+/// popup of an item out of view never shows nor takes taps. So does compose-rs since D470: a
+/// list places only the items in view (but while an item holds the focus, D136).
 #[test]
-#[ignore = "known difference, D136: items composed beyond a lazy list's viewport are placed"]
 fn a_popup_in_a_lazy_item_composed_beyond_the_viewport_takes_no_taps() {
     thread_local! { static CLICKS: Cell<u32> = const { Cell::new(0) }; }
     let state = LazyListState::new(0, 0);

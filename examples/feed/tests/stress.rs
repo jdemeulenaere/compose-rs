@@ -1,7 +1,9 @@
 //! The stress screens (docs/15) compose, scroll and animate as designed: the benchmark measures
 //! what these check is there.
 
+use compose::runtime::platform;
 use compose::test::*;
+use compose::ui::platform::{FixedTextMeasurer, UiHost};
 use compose::ui::{Density, IntSize, Offset, PointerEvent};
 use compose_rs_feed::stress::*;
 
@@ -75,8 +77,9 @@ fn a_header_sticks_while_its_items_scroll_under_it() {
     }
     host.send_pointer(PointerEvent::release(Offset::new(500.0, y)));
     ui.advance_time_by_frame();
-    assert!(ui.on_node_with_text("Collection 0").fetch_semantics_node().bounds.bottom < 0.0);
-    // Item 0 scrolled away; its section's header is where it was.
+    // Item 0 scrolled away (not placed: only the items in view are); its section's header is
+    // where it was.
+    assert_eq!(ui.count_nodes(&has_text("Collection 0")), 0);
     assert_eq!(ui.on_node_with_text("Section 1").fetch_semantics_node().bounds.top, top);
 }
 
@@ -104,4 +107,37 @@ fn the_stress_animation_ticks_every_frame_and_its_card_grows() {
 fn ticker(ui: &mut ComposeTestRule) -> String {
     let node = ui.on_node(has_text_containing("Frame ")).fetch_semantics_node();
     node.config.all_text().collect::<Vec<_>>().join("")
+}
+
+/// The lazy items (the list's and the carousels') composed in `host` now.
+fn lazy_items(host: &mut UiHost) -> usize {
+    let dump = host.with_tree(|tree| tree.dump());
+    dump.lines().filter(|line| line.trim_start().starts_with("LazyItem")).count()
+}
+
+/// The stress list's first frame composes the items it shows and few more (the first layout
+/// asks for a few items at a time while it knows few sizes, B): its 81 px header alone once
+/// made it compose 87 items, rows and the carousels' tiles, of which 38 stayed (D460). The
+/// frame fills the screen: the next one composes nothing.
+#[test]
+fn the_stress_lists_first_frame_composes_what_it_shows() {
+    platform::set_manual_clock(platform::now_nanos());
+    let mut host = UiHost::new(
+        IntSize::new(1008, 2244),
+        Density::new(2.25),
+        Box::new(FixedTextMeasurer::new()),
+    );
+    platform::track_recompositions(true);
+    let before = platform::recomposition_counts();
+    host.set_content(StressScroll);
+    host.frame();
+    let composed = platform::recomposition_counts().since(&before).scopes_named("LazyItem");
+    let kept = lazy_items(&mut host);
+    assert!(composed <= kept as u64 + 2, "{composed} items composed, {kept} kept");
+    assert!(composed < 30, "{composed} items composed");
+    let before = platform::recomposition_counts();
+    platform::advance_clock(std::time::Duration::from_millis(8));
+    host.frame();
+    let more = platform::recomposition_counts().since(&before).scopes_named("LazyItem");
+    assert_eq!(more, 0, "the second frame composed items");
 }

@@ -212,7 +212,8 @@ fn after_a_slow_item_an_idle_time_shorter_than_it_is_left_alone() {
 fn idle_times_too_short_for_a_steady_step_do_not_wear_its_estimate_down() {
     let (mut ui, state) = list(0);
     ITEM_MILLIS.with(|millis| millis.set(20));
-    for _ in 0..3 {
+    // Timed at least four times (`SETTLED_STEPS`).
+    for _ in 0..4 {
         state.scroll_by(20.0);
         ui.wait_for_idle();
         ui.host().prefetch(later());

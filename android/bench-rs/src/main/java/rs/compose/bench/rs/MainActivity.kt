@@ -9,7 +9,7 @@ import rs.compose.android.ComposeRsView
 
 /**
  * The benchmark's compose-rs app: a screen of examples/feed in a [ComposeRsView], below the
- * status bar. `-e screen feed|feed_animated|big|stress|stress_animation` picks one.
+ * status bar. `-e screen feed|feed_animated|big|stress|stress_animation|grid` picks one.
  */
 class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {

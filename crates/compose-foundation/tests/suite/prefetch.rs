@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 
 use compose_foundation::layout::*;
 use compose_foundation::*;
+use compose_runtime::platform;
 use compose_runtime::*;
 use compose_test::*;
 use compose_ui::{IntSize, UnitExt};
@@ -73,9 +74,13 @@ fn last_live() -> usize {
 }
 
 #[test]
-fn after_a_scroll_down_prefetch_composes_the_next_items_beyond_the_composed_ones() {
+fn after_the_first_layout_and_a_scroll_down_prefetch_composes_the_next_items() {
     let (mut ui, state) = list(0);
-    assert!(!ui.host().has_prefetch_work(), "nothing to prefetch before a scroll");
+    // At rest after its first layout (rows 0 to 4 in view), the list asks for the two rows after
+    // them: a first scroll finds them composed (D470).
+    assert!(ui.host().has_prefetch_work(), "the two rows after those in view");
+    assert!(!ui.host().prefetch(later()));
+    assert_eq!(live_items(), (0..7).collect::<Vec<_>>());
     state.scroll_by(30.0);
     ui.wait_for_idle();
     let last = last_live();
@@ -163,22 +168,22 @@ fn a_scroll_reversing_direction_finds_the_items_behind_composed() {
 #[test]
 fn a_frame_composing_items_keeps_the_two_behind_the_wanted_ones() {
     let (mut ui, state) = list(100);
-    // Five rows down with no prefetching: the frame composes the items after, and of those
-    // before the five it now wants beyond the viewport (100 to 104), keeps two.
+    // Five rows down with no prefetching: the frame composes the rows it scrolls to (105 to
+    // 109), and of those it no longer wants (100 to 104) keeps the two next to them.
     state.scroll_by(100.0);
     ui.wait_for_idle();
     assert_eq!(state.first_visible_item_index(), 105);
-    assert_eq!(live_items(), (98..115).collect::<Vec<_>>());
+    assert_eq!(live_items(), (103..110).collect::<Vec<_>>());
 }
 
 #[test]
 fn items_kept_behind_are_two_at_most() {
     let (mut ui, state) = list(100);
     scroll_down_prefetching(&mut ui, *state, 20);
-    // In view 130 to 134, and a viewport's worth (5 rows) wanted beyond each side: 125 to 139.
-    // Prefetching adds two ahead, and two behind are kept.
+    // In view 130 to 134: prefetching adds two ahead (135, 136), and two behind are kept (128,
+    // 129).
     assert_eq!(state.first_visible_item_index(), 130);
-    assert_eq!(live_items(), (123..142).collect::<Vec<_>>());
+    assert_eq!(live_items(), (128..137).collect::<Vec<_>>());
 }
 
 /// The items a list shown at `first` composes, without scrolling.
@@ -217,10 +222,12 @@ fn a_scroll_up_prefetches_the_items_before() {
     ui.wait_for_idle();
     let first_now = LIVE.with(|live| live.borrow().iter().copied().min().unwrap());
     assert!(first_now < first);
+    // The two before those in view (one of which the frame's estimate composed already).
+    let index = state.first_visible_item_index();
     ui.host().prefetch(later());
-    assert_eq!(compositions(first_now - 1), 1);
-    assert_eq!(compositions(first_now - 2), 1);
-    assert!(!live(first_now - 3));
+    assert!(live(index - 1) && live(index - 2), "{:?}", live_items());
+    assert_eq!(compositions(index - 2), 1);
+    assert!(!live(index - 3));
 }
 
 #[test]
@@ -560,7 +567,8 @@ fn a_frame_revealing_prefetched_items_draws_only_them() {
         assert_eq!(draws(*index), draws_before[index], "row {index}'s draw code didn't run");
         kept += 1;
     }
-    assert!(kept >= 5, "the rows in view stay: {kept}");
+    // Rows 3 to 6, in view before and after.
+    assert!(kept >= 4, "the rows in view stay: {kept}");
     for index in after.keys() {
         let new = !before.contains_key(index);
         assert!(!new || *index > last_drawn, "only prefetched rows are new, not row {index}");
@@ -798,4 +806,97 @@ fn drawing_ahead_changes_nothing_a_frame_draws() {
         }
     }
     assert!(drawn_ahead > 20, "items were drawn ahead: {drawn_ahead}");
+}
+
+// ---- Flings: what the composed items and prefetch leave to the frames (D470) ---------------
+
+/// A row 50 to 140 px tall, by index.
+#[composable]
+fn VariedRow(index: usize) {
+    let height = 50 + (index * 37) % 91;
+    Box!(modifier = Modifier.fill_max_width().height((height as f32).dp()), {
+        BasicText!("item {}", index);
+    });
+}
+
+/// One frame at 120 Hz, then the idle time's prefetch; returns the item bodies the frame ran.
+fn fling_frame(ui: &mut ComposeTestRule) -> u64 {
+    platform::advance_clock(Duration::from_nanos(8_333_333));
+    let before = platform::recomposition_counts();
+    ui.host().frame();
+    let composed = platform::recomposition_counts().since(&before).scopes_named("VariedRow");
+    ui.host().prefetch(later());
+    composed
+}
+
+/// `input swipe` from `from` to `to` (y, px) in 120 ms, a move each frame, then a second of
+/// frames: a fling of about 10,000 px/s. Returns the item bodies the frames ran.
+fn fling(ui: &mut ComposeTestRule, from: f32, to: f32) -> u64 {
+    use compose_ui::{Offset, PointerEvent, PointerId, PointerType};
+    let touch = |event: PointerEvent| {
+        event.with_pointer(PointerId(1), PointerType::Touch).at_time(platform::now_nanos())
+    };
+    let mut composed = 0;
+    ui.host().send_pointer(touch(PointerEvent::press(Offset::new(150.0, from))));
+    for step in 1..=15 {
+        composed += fling_frame(ui);
+        let y = from + (to - from) * step as f32 / 15.0;
+        ui.host().send_pointer(touch(PointerEvent::moved(Offset::new(150.0, y), true)));
+    }
+    ui.host().send_pointer(touch(PointerEvent::release(Offset::new(150.0, to))));
+    for _ in 0..120 {
+        composed += fling_frame(ui);
+    }
+    composed
+}
+
+/// A list of rows 50 to 140 px tall in a 1,200 px viewport, flung as the benchmark does (three
+/// flings down, one up, from the first frame): no frame composes an item. The items composed
+/// beyond those in view are those prefetched between frames (two ahead of the scroll, from the
+/// first layout on) and those kept behind (two): a fling's first frames, and a reversal's,
+/// find the items they reveal composed.
+#[test]
+fn flings_compose_no_item_in_their_frames() {
+    let state = LazyListState::new(0, 0);
+    let given = *state;
+    let mut ui = ComposeTestRule::sized(IntSize::new(300, 1200), move || {
+        LazyColumn!(modifier = Modifier.fill_max_size(), state = given, |scope: LazyListScope| {
+            scope.items(5000, VariedRow);
+        });
+    });
+    ui.set_auto_advance(false);
+    // The idle time after the first frame.
+    ui.host().prefetch(later());
+    let mut composed = Vec::new();
+    for flick in 0..8 {
+        composed.push(if flick % 4 != 3 {
+            fling(&mut ui, 1100.0, 100.0)
+        } else {
+            fling(&mut ui, 100.0, 1100.0)
+        });
+    }
+    assert!(state.first_visible_item_index() > 50, "{}", state.first_visible_item_index());
+    assert_eq!(composed, vec![0; 8], "items composed in frames, by fling");
+}
+
+/// The items prefetched change the average size the list estimates from; the scroll frame
+/// after them writes it (`layout_info`, for scrollbars) without having read it: it measures the
+/// list once and asks for no other frame, so the next idle time prefetches (D471). Reading it
+/// to compare measured the list twice, and the frame asked for another, which kept prefetch
+/// from running in that idle time.
+#[test]
+fn a_scroll_frame_after_prefetch_asks_for_no_other_frame() {
+    let state = LazyListState::new(0, 0);
+    let given = *state;
+    let mut ui = ComposeTestRule::sized(IntSize::new(300, 600), move || {
+        LazyColumn!(modifier = Modifier.fill_max_size(), state = given, |scope: LazyListScope| {
+            scope.items(5000, VariedRow);
+        });
+    });
+    for _ in 0..5 {
+        ui.host().prefetch(later());
+        state.scroll_by(60.0);
+        ui.host().frame();
+        assert!(!ui.host().has_pending_work(), "the scroll frame asked for another");
+    }
 }

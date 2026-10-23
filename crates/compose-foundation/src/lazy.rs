@@ -1,5 +1,5 @@
 //! Lazy lists, as Compose's `LazyColumn` and `LazyRow`: only the items in view (and a few
-//! beyond, and the focused one) are composed, measured and drawn.
+//! next to them, and the focused one) are composed, measured and drawn.
 //!
 //! Compose composes items while measuring (subcomposition). Here the list composes a range of
 //! items, and its measurement, which fills the viewport from the scroll position, writes the
@@ -8,9 +8,10 @@
 //! composed by a restartable composable of their own, each item one too: a scroll recomposes
 //! neither the list's caller nor the items that stay.
 //!
-//! After a scroll, the next items in its direction are composed and measured between frames
-//! (prefetch, as Compose's `LazyListPrefetchStrategy`), so the frame reaching them finds them
-//! ready.
+//! Only the items in view are placed (and composed, but those next to them). After its first
+//! layout and after each scroll, the next items in the scroll direction are composed and
+//! measured between frames (prefetch, as Compose's `LazyListPrefetchStrategy`), so the frame
+//! reaching them finds them ready.
 //!
 //! An item that leaves is deactivated and kept for reuse, and an item that comes is composed in
 //! the place of one of its content type, its nodes kept (D430), as Compose's
@@ -47,9 +48,19 @@ use compose_ui::{
 use crate::layout::{HorizontalArrangement, MainAxisArrangement, VerticalArrangement};
 use crate::scroll::{DragScroller, bring_into_view_delta};
 
-/// Items composed beyond the viewport on each side, ready when scrolling reaches them, and
-/// placed (out of view) so focus can move to them.
+/// While an item of the list holds the focus, a viewport's worth of items, and at least this
+/// many, is composed and placed (out of view) beyond each side, so focus can move to the next
+/// focusable item. Otherwise the list composes and places only the items in view, as Compose's
+/// (`beyondBoundsItemCount` 0): prefetch composes the next ones between frames, from its first
+/// layout on, and a frame keeps those next to the ones in view (D470).
 const BEYOND: usize = 2;
+
+/// While it knows fewer item sizes than this (a first layout), a measurement lacking items asks
+/// for `FIRST_STEP` at most, or as many as it placed if more, whatever its estimate: the
+/// estimate rests on those few sizes (the stress list's 81 px header made it ask for 87 items
+/// where 15 show, D472). The frame's next round asks for the rest, from more sizes.
+const FEW_SIZES: usize = 4;
+const FIRST_STEP: usize = 4;
 
 /// The most items a measurement asks for beyond those in view, however small they may be.
 const MOST_MISSING: usize = 200;
@@ -131,6 +142,12 @@ struct LazyListInner {
     /// The constraints its items are measured with, as last laid out: their composition's
     /// `LOCAL_CONSTRAINTS_HINT`.
     item_constraints: OwnedState<Option<Constraints>>,
+    /// What was last written to `layout_info` and `item_constraints`, read by the layout
+    /// without observing them: a measurement reading the state it writes is measured again in
+    /// the same layout, and asks for another frame, which holds prefetch back until it ran
+    /// (each item measured changes the average size, D471).
+    layout_info_written: Cell<(usize, f32, i32, i32, i32)>,
+    item_constraints_written: Cell<Option<Constraints>>,
     /// How far the list can scroll each way, as last laid out (infinite: not known).
     room_backward: Cell<f32>,
     room_forward: Cell<f32>,
@@ -178,13 +195,15 @@ impl LazyListInner {
             line_sizes: RefCell::default(),
             layout_info: mutable_state_of((0, 1.0, 0, 0, 0)),
             item_constraints: mutable_state_of(None),
+            layout_info_written: Cell::new((0, 1.0, 0, 0, 0)),
+            item_constraints_written: Cell::new(None),
             room_backward: Cell::new(if first_visible_item_index > 0 {
                 f32::INFINITY
             } else {
                 offset as f32
             }),
             room_forward: Cell::new(f32::INFINITY),
-            prefetch: Prefetch::default(),
+            prefetch: Prefetch { forward: Cell::new(true), ..Prefetch::default() },
             parent_size: Rc::default(),
             sticky: mutable_state_of(None),
             sticky_written: Cell::new(None),
@@ -199,7 +218,7 @@ struct Prefetch {
     node: Cell<Option<NodeId>>,
     count: Cell<usize>,
     wanted: Cell<(usize, usize)>,
-    /// The last scroll went towards the end.
+    /// The last scroll went towards the end (as if, before any).
     forward: Cell<bool>,
     /// The request waiting in the scheduler, if any.
     request: RefCell<Weak<LazyListPrefetch>>,
@@ -1723,7 +1742,8 @@ impl MeasurePolicy for LazyListLayout {
         } else {
             Constraints::new(0, Constraints::INFINITY, 0, cross_room)
         };
-        if state.item_constraints.get() != Some(item_constraints) {
+        if state.item_constraints_written.replace(Some(item_constraints)) != Some(item_constraints)
+        {
             state.item_constraints.set(Some(item_constraints));
         }
         // The viewport less its padding, for `fill_parent_max_*`: written before the items are
@@ -1941,12 +1961,13 @@ impl MeasurePolicy for LazyListLayout {
                 };
             }
         }
-        // The items wanted composed: those in view and a few beyond, and as many more as the
-        // room left would take, at the smallest size seen, if items were missing.
-        // A viewport's worth of items beyond each side (at least two), so focus can move to
-        // the next focusable item and scrolling finds them ready.
+        // The items wanted composed: those in view, and as many more as the room left would
+        // take if items were missing. While an item holds the focus, a viewport's worth more
+        // on each side (at least two), so focus can move to the next focusable item (D470).
         let average = sizes.average();
-        let beyond = ((main_max / (average + spacing).max(1)) as usize).clamp(BEYOND, MOST_MISSING);
+        let viewport_worth =
+            ((main_max / (average + spacing).max(1)) as usize).clamp(BEYOND, MOST_MISSING);
+        let beyond = if state.pinned.get().is_some() { viewport_worth } else { 0 };
         let wanted_start = index.saturating_sub(beyond + wanted_before);
         let mut wanted_end = (end_index + beyond).min(count);
         if missing {
@@ -1959,13 +1980,20 @@ impl MeasurePolicy for LazyListLayout {
                     / placed.len() as i32)
                     .max(1)
             };
-            let room = (main_max - content_end).max(0);
-            let more = ((room / (in_view + spacing).max(1)) as usize + 1).min(MOST_MISSING);
+            // The room the next items fill (the end padding's included: the items fill the
+            // viewport under it), each with its spacing: as many as cover it, no more.
+            let room = (main_max - content_end + after).max(1) as usize;
+            let mut more = room.div_ceil((in_view + spacing).max(1) as usize).min(MOST_MISSING);
+            if sizes.len() < FEW_SIZES {
+                more = more.min(placed.len().max(FIRST_STEP));
+            }
             wanted_end = (end_index + more + beyond).min(count);
         }
         let covers = composed_start <= wanted_start && composed_end >= wanted_end;
-        let too_many =
-            composed_start + 2 * beyond < wanted_start || composed_end > wanted_end + 2 * beyond;
+        // Items composed far from those wanted are left in a frame, beyond two viewports' worth
+        // of them: prefetch leaves those within `limits` between frames.
+        let slack = 2 * viewport_worth;
+        let too_many = composed_start + slack < wanted_start || composed_end > wanted_end + slack;
         let prefetch = &state.prefetch;
         let mut composed = (composed_start, composed_end);
         if state.composed_more.take() && covers && !too_many {
@@ -1993,16 +2021,17 @@ impl MeasurePolicy for LazyListLayout {
             composed = (start, end);
             state.compose(composed);
         }
-        // After a scroll, the next items in its direction are composed between frames (and
-        // those left behind kept for reuse), if any are to be.
+        // What prefetching works from.
         prefetch.node.set(Some(node));
         prefetch.count.set(count);
         prefetch.wanted.set((wanted_start, wanted_end));
         // As many kept behind as composed ahead (`KEPT_BEHIND` is `PREFETCH_AHEAD`).
         let limits = (wanted_start.saturating_sub(KEPT_BEHIND), wanted_end + PREFETCH_AHEAD);
         prefetch.limits.set(limits);
-        if scrolled != 0.0
-            && let Some(scheduler) = &self.scheduler
+        // After a scroll, the next items in its direction are composed between frames (and
+        // those left behind kept for reuse), if any are to be; at rest too (a first layout, a
+        // jump), so the first frames of a scroll find the next items composed (D470).
+        if let Some(scheduler) = &self.scheduler
             && prefetch.next(composed).is_some()
             && prefetch.request.borrow().upgrade().is_none()
         {
@@ -2015,7 +2044,7 @@ impl MeasurePolicy for LazyListLayout {
             state.first_key.set(Some(info.items.key(index)));
         }
         let layout_info = (count, (average + spacing) as f32, spacing, main_max, before + after);
-        if state.layout_info.get() != layout_info {
+        if state.layout_info_written.replace(layout_info) != layout_info {
             state.layout_info.set(layout_info);
         }
         let rounded = (index, offset.round() as i32);
@@ -2024,10 +2053,11 @@ impl MeasurePolicy for LazyListLayout {
             state.first_index.set(rounded.0);
             state.first_offset.set(rounded.1);
         }
-        // The composed items out of view are placed too (clipped away), so focus can move to
-        // them and a focused item scrolled away keeps its node; those composed beyond the ones
-        // wanted (prefetched) aren't, as Compose's: nothing draws them until they're wanted.
-        // A focused one among those is placed, next to the others: focus scrolls it in.
+        // The items wanted are placed: those in view, and while an item holds the focus those
+        // beyond them (clipped away), so focus can move to them; those composed beyond the
+        // ones wanted (prefetched, kept behind) aren't, as Compose's: nothing draws or hits
+        // them until they're wanted. A focused one among those is placed, next to the others:
+        // focus scrolls it in.
         let (mut placed_start, mut placed_end) =
             (composed_start.max(wanted_start), composed_end.min(wanted_end));
         if let Some(key) = state.pinned.get()

@@ -30,6 +30,8 @@ thread_local! {
     static LIVE: RefCell<HashSet<u64>> = RefCell::new(HashSet::new());
     /// Each composed item's saveable count, to change from the test.
     static COUNTS: RefCell<HashMap<u64, MutableState<u64>>> = RefCell::new(HashMap::new());
+    /// The fixture's list height (dp).
+    static LIST_HEIGHT: std::cell::Cell<u32> = const { std::cell::Cell::new(100) };
 }
 
 fn reset() {
@@ -126,8 +128,9 @@ fn List(state: LazyListState, items: MutableState<Items>, shown: MutableState<bo
     if !shown.get() {
         return;
     }
+    let height = LIST_HEIGHT.with(std::cell::Cell::get);
     LazyColumn!(
-        modifier = Modifier.size((100.dp(), 100.dp())),
+        modifier = Modifier.size((100.dp(), (height as f32).dp())),
         state = state,
         move |scope: LazyListScope| {
             let (keys, types, contents) = (items.clone(), items.clone(), items.clone());
@@ -159,12 +162,22 @@ struct Fixture {
 
 impl Fixture {
     fn new(items: Vec<(u64, Option<u32>)>) -> Fixture {
+        Fixture::sized(items, 100)
+    }
+
+    /// The same list 300 px tall: 15 items in view.
+    fn tall(items: Vec<(u64, Option<u32>)>) -> Fixture {
+        Fixture::sized(items, 300)
+    }
+
+    fn sized(items: Vec<(u64, Option<u32>)>, height: u32) -> Fixture {
         reset();
+        LIST_HEIGHT.with(|list_height| list_height.set(height));
         let state = LazyListState::new(0, 0);
         let items = mutable_state_of(Rc::new(items));
         let shown = mutable_state_of(true);
         let (given, handle, shown_handle) = (*state, items.handle(), shown.handle());
-        let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || {
+        let mut ui = ComposeTestRule::sized(IntSize::new(200, 400), move || {
             List(given, handle, shown_handle)
         });
         ui.wait_for_idle();
@@ -259,7 +272,7 @@ fn an_item_scrolled_back_gets_its_saved_state_and_no_other_items() {
     list.ui.on_node_with_tag("item 2: 7").assert_exists();
     list.scroll(40);
     // The item reusing item 2's slot (or any) starts at its own count.
-    for item in 38..45 {
+    for item in 40..45 {
         list.ui.on_node_with_tag(&format!("item {item}: {}", item * 10)).assert_exists();
     }
     list.scroll(-40);
@@ -269,7 +282,8 @@ fn an_item_scrolled_back_gets_its_saved_state_and_no_other_items() {
 
 #[test]
 fn up_to_seven_items_of_a_content_type_are_kept_for_reuse() {
-    let mut list = Fixture::new(untyped(0..30));
+    // A 300 px list: 15 items in view, more than 7 to leave.
+    let mut list = Fixture::tall(untyped(0..30));
     let composed = live().len();
     assert!(composed > 10, "{composed} composed");
     // Two items left: the others leave at once, 7 of them kept for reuse, the rest disposed.
@@ -278,7 +292,7 @@ fn up_to_seven_items_of_a_content_type_are_kept_for_reuse() {
     assert_eq!(list.children(0), 2 + 7);
     // Of two content types, up to 7 of each: items 0 to 8 of one, the others of the other.
     let content_type = |key: u64| Some(u32::from(key > 8));
-    let mut list = Fixture::new((0..40).map(|key| (key, content_type(key))).collect());
+    let mut list = Fixture::tall((0..40).map(|key| (key, content_type(key))).collect());
     let composed = live();
     assert!(composed.len() > 10, "{composed:?} composed");
     // Those laid out: an item composed beyond them (the first layout's estimate) and never
@@ -345,10 +359,15 @@ fn prefetch_composes_the_next_items_in_the_slots_of_those_left_behind() {
 
 #[test]
 fn an_item_scrolled_back_to_reuses_its_own_slot() {
-    // A content type for each run of as many items as are composed: the item leaving the
-    // composed ones (at the top) and the one coming (at the bottom) differ, so the one leaving
-    // is kept for reuse rather than reused at once.
-    let composed = Fixture::new(untyped(0..1000)).ui.host().with_tree(|_| live().len()) as u64;
+    // A content type for each run of as many items as are composed once scrolled (those in
+    // view and the two kept behind): the item leaving the composed ones (at the top) and the
+    // one coming (at the bottom) differ, so the one leaving is kept for reuse rather than
+    // reused at once.
+    let composed = {
+        let mut probe = Fixture::new(untyped(0..1000));
+        probe.scroll(20);
+        live().len() as u64
+    };
     let typed = (0..1000).map(|key| (key, Some(((key / composed) % 2) as u32))).collect();
     let mut list = Fixture::new(typed);
     list.scroll(20);
@@ -470,10 +489,12 @@ fn items_inserted_before_others_leave_the_others_composition_alone() {
     assert_eq!(events(), ["remembered 100"]);
     assert_eq!((0..4).map(node_of).collect::<Vec<_>>(), nodes);
     list.ui.on_node_with_tag("item 3: 7").assert_exists();
-    // In the middle too; and items appended don't widen what's composed.
+    // In the middle too (item 3 now out of view, still composed, its count kept); and items
+    // appended don't widen what's composed.
     list.set_items(untyped([100, 0, 1, 101, 102, 2, 3]));
     assert_eq!(events(), ["remembered 101", "remembered 102"]);
-    list.ui.on_node_with_tag("item 3: 7").assert_exists();
+    assert!(live().contains(&3));
+    assert_eq!(COUNTS.with(|counts| counts.borrow()[&3].get()), 7);
     let mut long = untyped([100, 0, 1, 101, 102, 2, 3]);
     long.extend(untyped(1000..2000));
     list.set_items(long);
@@ -548,13 +569,14 @@ fn TallItem(item: u64, height: i32) {
     compose_ui::Layout(Modifier, policy, callback(|| {}));
 }
 
-/// A list's first layout estimates the items it lacks from the one it has (here a 4 px
-/// header, so 25 more of 40 px items to fill 100 px, and as many beyond), and composes items it
-/// then finds it doesn't want: they were never measured, and are disposed rather than kept for
-/// reuse, as Compose, composing items as its measurement reaches them, never composes them
-/// (D460). Items that leave after they were laid out are kept and reused, as before.
+/// A list's first layout estimates the items it lacks from those it has: here a 4 px header,
+/// so 24 more of 40 px items to fill 100 px. Knowing few sizes, it asks for 4 at most (D472):
+/// the header and items 1 to 3 fill the viewport, and item 4 is composed and never measured
+/// (it once composed about 50, D460). An item that leaves without having been measured is
+/// disposed rather than kept for reuse, as Compose, composing items as its measurement reaches
+/// them, never composes it (D460); those laid out are kept.
 #[test]
-fn items_composed_beyond_what_the_first_layout_wants_are_not_kept_for_reuse() {
+fn the_first_layout_composes_few_items_beyond_those_it_lays_out_and_keeps_none_for_reuse() {
     reset();
     let state = LazyListState::new(0, 0);
     let given = *state;
@@ -564,34 +586,31 @@ fn items_composed_beyond_what_the_first_layout_wants_are_not_kept_for_reuse() {
             state = given,
             |scope: LazyListScope| {
                 scope.item(|| TallItem(0, 4));
-                scope.items(1000, |index| TallItem(index as u64 + 1, 40));
+                // Two content types: the items a jump reaches reuse none of the first ones.
+                scope.items_with(
+                    1000,
+                    |index| index >= 100,
+                    |index| TallItem(index as u64 + 1, 40),
+                );
             }
         );
     });
     ui.wait_for_idle();
+    assert_eq!(live(), [0, 1, 2, 3, 4]);
+    let measured: HashSet<u64> = NODES.with(|nodes| nodes.borrow().keys().copied().collect());
+    assert_eq!(measured, HashSet::from([0, 1, 2, 3]), "item 4 composed, not measured");
     let children = |ui: &mut ComposeTestRule| {
         ui.host().with_tree(|tree| {
             let item = tree.parent_of(node_of(0)).expect("an item's node");
             tree.children_of(tree.parent_of(item).expect("the list")).count()
         })
     };
-    // The estimate composed many more items than the list wants: those left at once.
+    // A jump: all five leave; the four laid out are kept for reuse, item 4 is disposed.
+    state.scroll_to_item(500, 0);
+    ui.wait_for_idle();
     let composed = live();
-    let forgotten = events().iter().filter(|event| event.starts_with("forgotten")).count();
-    assert!(forgotten > 20, "{forgotten} items composed beyond those wanted");
-    assert!(composed.len() < 12, "{composed:?} composed");
-    // None kept: the list's children are its items composed.
-    assert_eq!(children(&mut ui), composed.len());
-    // Scrolled, the items leaving were laid out: kept for reuse, and the items coming in reuse
-    // their nodes.
-    let shown = composed.len() as u64;
-    for _ in 0..6 {
-        state.scroll_by(40.0);
-        ui.wait_for_idle();
-    }
-    let measured = shown + 6;
-    let nodes = nodes_of(0..measured);
-    assert!(nodes.len() < measured as usize, "{} nodes for {measured} items", nodes.len());
+    assert!(composed.iter().all(|item| *item > 400), "{composed:?}");
+    assert_eq!(children(&mut ui), composed.len() + 4);
 }
 
 // ---- Review of D450-D453 -----------------------------------------------------------------
@@ -605,7 +624,7 @@ fn review_items_removed_far_before_the_composed_ones_keep_their_composition() {
     let mut list = Fixture::new(untyped(0..300));
     list.scroll(100);
     assert_eq!(list.state.first_visible_item_index(), 100);
-    let in_view: Vec<u64> = (100..110).collect();
+    let in_view: Vec<u64> = (100..105).collect();
     let nodes: Vec<NodeId> = in_view.iter().copied().map(node_of).collect();
     events();
     list.set_items(untyped(60..300));

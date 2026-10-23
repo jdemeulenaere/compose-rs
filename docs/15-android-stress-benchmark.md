@@ -521,6 +521,53 @@ Interleaved on the device, 12 runs each against main (18272a3), the variants rot
 - **Not chosen.** Reporting both threads' CPU time against 8.33 ms gave shorter frames still: list main thread p50 0.94 ms, RenderThread 2.09 ms. It cost +2.6 % (± 2.3) CPU-rail power here and +4.0 % (± 2.1) on the feed (D442).
 - **Beside Compose (round 10, "Results" above).** The list's main thread p50 / p90 / p99 was 1.02 / 1.63 / 2.86 ms against Compose's 1.29 / 3.32 / 7.76 ms, 21 % of its time on the little cores. No `doFrame` waited for a prefetch step, and no run of compose-rs's had a compositor-side janky frame, on any screen.
 
+## The lazy list's policy (D470–D474)
+
+Until D470 a lazy list composed and placed a viewport's worth of items beyond each side of the viewport: about 7 items on this list (and their carousels' tiles), 5 on the feed. Each placed item is a render node the main thread replays and the RenderThread syncs every frame. Its first layout also estimated the items it lacked from the only one it had measured, this list's 81 px header, and composed 87 items (rows and tiles) of which 38 stayed (D460). The changes:
+
+- **D470**: a list composes and places only the items in view, as Compose's, but a viewport's worth beyond each side while one of its items holds the focus (for focus to move to). Prefetch runs from the first layout on, not only after a scroll, so a fling's first frames find the next two items composed. A frame still keeps the two composed items next to those it wants, for a reversal.
+- **D472**: while a list knows fewer than 4 item sizes, a measurement lacking items asks for 4 at most (or as many as it placed), and the frame's next round asks for the rest.
+- **D471, D474**: two fixes, each of which kept prefetch from running in the idle time after some frames. The list read `layout_info` while measuring, which measured it twice and asked for another frame whenever the average size changed; and a frame that composed in a round asked for another frame. A frame with work pending skips prefetch, so the next frame had to compose its items itself.
+
+**What a viewport's worth bought.** (Results: `results/2026-10-23-pixel-8-pro-lazy-policy.json`.) First, an interleaved A/B on the Pixel 8 Pro, 12 runs each of the feed's and this list's scroll (10 flings), of four variants: main (727d266), and with D471 and D472 a viewport's worth, two items beyond (placed), and none. In-frame composition was the same in all four: no text laid out inside a frame on the feed, and on this list one in 12 runs with two beyond, none otherwise. This list had 10 rounds a run (`recompose and layout again`) in all four, which laid out no text: most likely the sticky header changing (a state the items' composition reads, written as a section's first item scrolls past). Placing fewer items cut the work of both threads (medians of the runs):
+
+| Stress scroll | main | a viewport's worth | two beyond | none (shipped) |
+|---|---|---|---|---|
+| Main thread work | 677 ms | 678 ms | 639 ms | **589 ms** |
+| RenderThread work | 1,543 ms | 1,551 ms | 1,451 ms | **1,345 ms** |
+| Main thread p50 / p90 / p99 | 1.05 / 1.66 / 2.93 ms | 1.04 / 1.63 / 2.86 ms | 0.99 / 1.60 / 2.79 ms | 1.01 / 1.55 / 2.76 ms |
+| RenderThread p50 / p90 / p99 | 2.56 / 3.59 / 4.97 ms | 2.48 / 3.54 / 5.11 ms | 2.46 / 3.48 / 5.00 ms | 2.46 / 3.51 / 5.04 ms |
+| Native heap after the flings | 20.5 MB | 19.7 MB | 18.1 MB | **17.3 MB** |
+
+On the feed the same order held: RenderThread work 829, 811, 789 and 747 ms. There, with none beyond, the RenderThread's p50 was 2.42 ms against main's 2.16 ms in this session, for 10 % less work at lower clocks: its CPU time didn't change (4.39 and 4.51 s), and 21 % of its time was on the little cores against 17 %. Its p90 and p99 were shorter (3.21 / 4.72 against 3.29 / 4.85 ms). The confirming A/B below didn't show the p50 difference (2.33 → 2.24 ms). So a viewport's worth bought nothing a frame needed, and none beyond shipped.
+
+**The shipped code against main**: interleaved, 12 runs each, scroll and cold starts (medians of the runs; the better side in bold where the runs' ranges barely overlap or not at all):
+
+| | Feed: main | shipped | Stress list: main | shipped |
+|---|---|---|---|---|
+| Janky frames, the app's / the compositor's (12 runs) | 0 / 0 | 0 / 0 | 0 / 2 | 0 / 2 |
+| Frames presented a vsync late (12 runs) | 0 | 0 | 127 | 3 |
+| Main thread p50 / p90 / p99 | 1.23 / 1.76 / 2.72 ms | **1.16** / **1.68** / 2.73 ms | 1.06 / 1.68 / 2.86 ms | 0.98 / **1.53** / 2.70 ms |
+| RenderThread p50 / p90 / p99 | 2.33 / 3.40 / 4.79 ms | 2.24 / 3.26 / 4.86 ms | 2.56 / 3.63 / 4.98 ms | 2.51 / 3.56 / 5.09 ms |
+| Main thread work | 483 ms | 468 ms | 681 ms | **591 ms** |
+| RenderThread work | 810 ms | **772 ms** | 1,556 ms | **1,333 ms** |
+| Frames with an in-frame round; text laid out in frames (12 runs) | 0; 0 | 0; 0 | 120; 1 | 120; 1 |
+| Prefetch steps composing, a run | 347 | 348 | 345 | 351 |
+| Native heap after start / after the flings | 8.5 / 11.8 MB | **8.1** / **10.6** MB | 17.2 / 20.5 MB | **14.4** / **17.3** MB |
+| PSS after start / after the flings | 34.3 / 79.2 MB | 33.9 / 77.9 MB | 49.8 / 95.6 MB | **47.0** / **91.4** MB |
+| `TotalTime` (24 cold starts) | 108.5 ms | 104.0 ms | 125.5 ms | **118.5 ms** |
+| The first frame's `compose-rs: frame` (12 traced starts) | 6.7 ms | **5.1 ms** | 14.5 ms | **7.2 ms** |
+
+The big screen's start didn't change (162 ms). The RenderThread's p99s are 0.07 and 0.11 ms longer, within the runs' spread (4.54 to 5.47 against 4.61 to 5.05 ms on the feed, 4.52 to 5.81 against 4.45 to 5.86 ms here), and were 0.13 ms shorter on the feed and 0.07 ms longer here in the first A/B. Our hint session voted less for the RenderThread, which had less work (here a time-weighted 212 against 252).
+
+The first frame now composes 16 items where it composed 87, and lays out 29 paragraphs where it laid out 69. Its rounds take 5.5 against 12.7 ms. Headless, the list's Rust heap peaks at 2,288 KiB at start, against 6,677 KiB (live: 2,268 against 5,434 KiB), and is 3,160 KiB after 10 flings, against 5,792 KiB.
+
+**Lazy grids** keep 2 lines composed and placed beyond each side (D456). Their open risk was that a fast fling would outrun that buffer. Checked on the new `grid` screen of both apps (D473): 3,000 tiles in 4 columns, 10 flings of 1,600 px in 60 ms as measure.py's pattern, 3 to 4 runs each, interleaved.
+- Before D474, compose-rs composed items in 0 to 11 frames a run (mean 4.3, 6 runs), in runs of consecutive frames at the flings' starts with no prefetch between them. With D474, 0 to 2 a run (mean 1.0, 4 runs).
+- No janky frame of compose-rs's; its main thread p99 was 2.6 to 3.0 ms.
+- Compose laid out new tiles' text in 79 to 136 of its frames a run (7 runs), with a main thread p99 of 5.8 to 6.9 ms, and had 5 app-janky frames in 10 runs.
+- So the grid's beyond and prefetch stay as they were.
+
 ## Next steps
 
 - **Paths in the bridge**: done (D410, D411, "With paths reused"). HWUI's worker threads still take about 30 % more CPU time than Compose's in the animation (11.0 against 8.5 s in round 10, 11.2 against 8.6 s in round 9), unchanged by D410; why isn't known.
@@ -528,4 +575,5 @@ Interleaved on the device, 12 runs each against main (18272a3), the variants rot
 - **The stress list's main thread on the little cores**: done (D440, "The main thread in the hint session"). The main thread joined compose-rs's hint session: in its A/B, on the little cores 79 → 28 % of its time, p50 1.54 → 1.07 ms, `doFrame`s waiting for a prefetch step 58 → 4 in 12 runs, no power change resolved. In round 10, 21 % on the little cores, p50 1.02 ms, no `doFrame` waiting for a prefetch step, and no frame laying a newly revealed item out itself (1 to 3 a run in round 9). If those frames come back, splitting an item's measurement so a step can stop at the deadline ([12](12-android-performance.md), "Next steps") is the fix.
 - **Item reuse** (D430–D435): measured on the device for the first time in round 10, in the same build as D440, whose faster cores raise the work metric; a prefetched item's composition did about the same work as in round 9 (0.167 against 0.163 ms) and half as many paragraphs were laid out ([12](12-android-performance.md), "Item reuse on the device"). An interleaved A/B would separate the two. The list's native heap was 1.0 to 1.5 MB larger than in round 9: items the first layout composed beyond those it wanted, kept for reuse; fixed (D460, "Memory").
 - **The RenderThread's boost on the list** varies with the session: our session's vote averaged 324 in round 9, 247 to 257 in D440's A/B and 295 in round 10, for RenderThread p50s of 2.20, 2.49 and 2.49 ms (Compose: 2.62 and 2.63 ms in rounds 9 and 10).
+- **The lazy list's policy**: done (D470–D474, "The lazy list's policy"). Only the items in view are placed, prefetch runs from the first layout on, and the first layout composes 16 items where it composed 87. Main thread work −13 %, RenderThread work −14 %, native heap −3 MB, `TotalTime` −7 ms. The 10 in-frame rounds a run that remain laid out no text; headless, the only items flings compose in frames are sticky headers, when a scroll back enters the section before (as Compose's would).
 - **Shader warm-up**: a pipeline compiled on first use cost compose-rs its one janky scroll frame in the first results (none in rounds 9 and 10). Compose's apps share the same cache behavior; it isn't specific to compose-rs, but it showed here.

@@ -1,5 +1,5 @@
 use compose::test::*;
-use compose::ui::Role;
+use compose::ui::{Offset, PointerEvent, Role};
 
 fn described(description: &'static str) -> Matcher {
     Matcher::new("described", move |config| {
@@ -15,9 +15,13 @@ fn the_gallery_shows_its_controls_and_adds_cards() {
     ui.on_node(described("Add a card")).perform_click();
     ui.advance_time_by(std::time::Duration::from_millis(500));
     ui.on_node_with_text("Cards: 21").assert_exists();
-    // The new card is first, and a snackbar says so.
-    ui.on_node_with_text("Card 20").assert_exists();
+    // The new card is first, and a snackbar says so. The list keeps its first visible card
+    // (by key, as Compose's), so the new one is above it, out of view: scrolled up, it shows.
     ui.on_node_with_text("Card 20 added at the top").assert_exists();
+    ui.host()
+        .send_pointer(PointerEvent::scroll(Offset::new(200.0, 500.0), Offset::new(0.0, -100.0)));
+    ui.advance_time_by_frame();
+    ui.on_node_with_text("Card 20").assert_exists();
     assert_eq!(ui.count_nodes(&has_role(Role::RadioButton)), 3);
     ui.on_node(has_role(Role::Switch)).perform_click();
     ui.advance_time_by(std::time::Duration::from_secs(1));

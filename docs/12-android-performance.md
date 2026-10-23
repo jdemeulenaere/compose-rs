@@ -161,6 +161,10 @@ compose-rs's traces time each prefetch step (`compose-rs: prefetch`), and inside
 
 Compose's prefetched items cost the same as in round 9 on both lists (0.255 and 0.258 ms of work each): its posts were already reused without content types.
 
+### Lazy lists place only the items in view (D470–D474), after round 10
+
+Not a round: an interleaved A/B of main (727d266) against D470–D474, 12 runs each ([15](15-android-stress-benchmark.md), "The lazy list's policy", has both lists and the variants weighed). A list now places only the items in view (it placed a viewport's worth more on each side), prefetches from its first layout on, and its first layout composes what it shows. On the feed's scroll: main thread p50 / p90 / p99 1.23 / 1.76 / 2.72 → 1.16 / 1.68 / 2.73 ms, RenderThread 2.33 / 3.40 / 4.79 → 2.24 / 3.26 / 4.86 ms (p99 within the runs' spread), RenderThread work 810 → 772 ms, no janky frame and no text laid out in a frame either way, native heap after the flings 11.8 → 10.6 MB. Its start: `TotalTime` 108.5 → 104.0 ms, the first frame's own part 6.7 → 5.1 ms; the big screen's unchanged (162 ms).
+
 ### Startup: launch to the first frame with content
 
 | | Kotlin Compose | compose-rs |

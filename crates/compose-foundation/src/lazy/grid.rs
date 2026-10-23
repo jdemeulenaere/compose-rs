@@ -1196,7 +1196,7 @@ impl MeasurePolicy for LazyGridLayout {
         let slots = self.slots(cross_room, cross_spacing, density);
         // A cell's constraints, for the items composing for theirs (`BoxWithConstraints`).
         let hint = cell_constraints(vertical, slots.sizes[0]);
-        if state.item_constraints.get() != Some(hint) {
+        if state.item_constraints_written.replace(Some(hint)) != Some(hint) {
             state.item_constraints.set(Some(hint));
         }
         let mut lines = self.lines.borrow_mut();
@@ -1429,7 +1429,7 @@ impl MeasurePolicy for LazyGridLayout {
         let lines = m.lines.count_estimate().max(1);
         let per_item = (average + spacing) as f32 * lines as f32 / count as f32;
         let layout_info = (count, per_item, spacing, main_max, before + after);
-        if state.layout_info.get() != layout_info {
+        if state.layout_info_written.replace(layout_info) != layout_info {
             state.layout_info.set(layout_info);
         }
         let rounded = (first_item, offset.round() as i32);

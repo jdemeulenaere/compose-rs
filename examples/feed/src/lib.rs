@@ -7,6 +7,7 @@
 //!   animate forever (each read while drawing, as Compose's `graphicsLayer { }`).
 //! - `big`: 200 posts in a scrolling column, all composed at once.
 //! - `stress` and `stress_animation`: much heavier screens ([`stress`], docs/15).
+//! - `grid`: a lazy grid of tiles ([`grid`]), for ad hoc traces; not a measured scenario.
 
 #![allow(non_snake_case)]
 
@@ -17,6 +18,7 @@ use compose::material3::*;
 use compose::runtime::*;
 use compose::ui::*;
 
+pub mod grid;
 pub mod stress;
 
 /// The posts in the lazy feed.
@@ -268,4 +270,5 @@ compose_android::export_apps! {
     "big" => BigScreen,
     "stress" => stress::StressScroll,
     "stress_animation" => stress::StressAnimation,
+    "grid" => grid::GridScreen,
 }

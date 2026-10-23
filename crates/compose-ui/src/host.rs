@@ -389,8 +389,16 @@ impl UiHost {
         while !invalid_before_layout && rounds < 3 && self.composition.has_invalidations() {
             rounds += 1;
             let _round = crate::trace::section(c"compose-rs: recompose and layout again");
+            // The writes that asked for this round are composed in it: they ask for no other
+            // frame (which also held prefetch back in the idle time after this one, so the next
+            // frame composed items itself again, D474).
+            self.frame_requested.set(false);
             recomposed |= self.composition.recompose();
             measured |= self.lay_out(size);
+        }
+        // What the rounds left (they ran out) is the next frame's.
+        if rounds > 0 && self.composition.has_invalidations() {
+            self.frame_requested.set(true);
         }
         // A node focused before it was placed is shown, now that it is.
         let shown = self.with_tree(|tree| {

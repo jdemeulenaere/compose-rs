@@ -216,10 +216,11 @@ fn a_reversed_list_brings_a_focused_item_into_view() {
             }
         );
     });
-    // Item 4 is composed out of view (above): focusing it scrolls it in at the top.
-    ui.on_node_with_tag("4").request_focus();
+    // Item 3 is partly out of view (above): focusing it scrolls it in at the top.
+    assert_eq!(top_of(&mut ui, "3"), -20.0);
+    ui.on_node_with_tag("3").request_focus();
     ui.wait_for_idle();
-    assert_eq!(top_of(&mut ui, "4"), 0.0);
+    assert_eq!(top_of(&mut ui, "3"), 0.0);
 }
 
 #[test]
