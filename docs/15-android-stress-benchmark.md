@@ -12,6 +12,7 @@
   - compose-rs's frames are shorter on both threads: main thread p50 2.24 against 3.59 ms, RenderThread p50 6.44 against 7.39 ms. Its main thread does half Compose's work since its transitions run one task each (D420).
   - Most of the RenderThread gap is one Compose default: a `graphicsLayer` whose alpha is below 1 draws offscreen (`CompositingStrategy.Auto`). compose-rs fades a layer holding a single drawing without one. With `CompositingStrategy.ModulateAlpha`, Compose's RenderThread matched compose-rs's in its session and did less work.
 - **Memory**: on the list, compose-rs holds less: 97.8 against 109.3 MB after scrolling.
+  - Round 10's 1.0 to 1.5 MB more native heap than round 9 was items the list's first layout composed beyond those it wanted, kept for reuse since D430; they're disposed again (D460): native heap 18.1 → 17.1 MB after start and 22.3 → 20.4 MB after scrolling, PSS 97.1 → 94.8 MB ("Memory" below).
   - In the animation, after 13 s, it held 210 against Compose's 196 MB this round (204 against 226 MB in round 9). Compose's swings with its garbage collector (191 to 285 MB in this round's runs), compose-rs's less (195 to 215 MB).
   - In the first results compose-rs held 405 MB there: its 50 waves are new paths every frame, and each frame's paths, with the masks the GPU cached for them, lived until the garbage collector freed the Kotlin `Path`s. The replayer now rewinds a dropped path at once and rebuilds it for the next, as Compose's one reset `Path` does (D410).
 - **Startup** of the stress list: 126 against 145 ms.
@@ -191,7 +192,27 @@ The RenderThread's boost below is the higher of both sessions' votes when each f
 | Stress animation, PSS after 13 s | 195.8 MB (runs: 190.6 to 284.7) | 210.1 MB (194.8 to 214.5) (203.9 MB) |
 | of which Java heap / native heap / graphics | 12.6 / 27.8 / 141.8 MB | 7.8 / 23.9 / 171.3 MB (7.0 / 23.0 / 162.9 MB) |
 
-**On the list**, compose-rs holds less after start (less code, less Java heap, less graphics memory) and after scrolling, as before. Its native heap is 1.0 MB larger than in round 9 after start (17.1 → 18.1 MB) and 1.5 MB larger after scrolling (20.8 → 22.3 MB), in all three runs alike. After scrolling, part of that is likely the items kept for reuse (up to 7 per content type, composed, with their nodes; a carousel's tiles kept with its inner list, D434). After start, no item has left the list yet, so the pool can't explain it; it wasn't broken down.
+**On the list**, compose-rs holds less after start (less code, less Java heap, less graphics memory) and after scrolling, as before. Its native heap is 1.0 MB larger than in round 9 after start (17.1 → 18.1 MB) and 1.5 MB larger after scrolling (20.8 → 22.3 MB), in all three runs alike.
+
+**Where the 1.0 to 1.5 MB went** (D460). The list's first layout has measured only its header (81 px) when it estimates how many items to compose: 87 items, its rows and its carousels' tiles, of which 38 stay; the others leave in the next pass without ever being measured. Until D430 they were disposed. With D430 they went to the reuse pool, 7 per content type: 30 rows with their carousels' first tiles, 531 layout nodes, 3,563 groups and 1,462 slots, about 33 KB a row. The pool then stayed full: scrolling hands each slot leaving to an item coming in the same pass, so nothing else enters it; and the items in it, once reused and measured, kept their paragraphs (the Java heap after the flings was 0.4 MB larger too). Compose composes items as its measurement reaches them, so its pool holds only items that left. A slot whose item leaves unmeasured is now disposed, as before D430. A flag D430 added to every group, written and never read, had also grown `Group` from 144 to 152 bytes; it's gone (D461).
+
+The Rust heap, headless (a counting allocator; the stress screen at 1008 × 2244 px and 2.25, a fixed text measurer; after start, and after 10 flings of 1,400 px):
+
+| | before D430 (7cf5338) | round 10 (aaa2035) | D460, D461 |
+|---|---|---|---|
+| After start | 5,412.6 KiB, 357 nodes, 2,474 groups | 6,405.2 KiB, 888 nodes, 6,097 groups | 5,428.0 KiB, 360 nodes, 2,497 groups |
+| After 10 flings | 5,886.5 KiB, 516 nodes, 3,585 groups | 7,008.4 KiB, 1,080 nodes, 7,441 groups | 5,791.6 KiB, 516 nodes, 3,585 groups |
+
+What's left of reuse's cost after start, 15 KiB: one more group per composed item (its slot's reusable group), and the one item the first layout measured and then dropped (the second section's header), kept. After the flings the pool is empty: every item that left was taken by one coming in, in the same pass. On the device, main (aaa2035) against D460 and D461, 6 runs each in two alternating installs, the stress list's `stress_scroll` memory steps (medians, MB):
+
+| | main | D460, D461 |
+|---|---|---|
+| Native heap after start | 18.1 | 17.1 |
+| Native heap after 10 flings | 22.3 | 20.4 |
+| Java heap after 10 flings | 5.0 | 4.6 |
+| PSS after start / after 10 flings | 50.7 / 97.1 | 49.7 / 94.8 |
+
+No range overlaps; the native heap is back to round 9's (17.1 and 20.8 MB).
 
 **In the animation**, the medians changed places: Compose's 195.8 MB after 13 s is below compose-rs's 210.1 MB this round, against 226.2 and 203.9 MB in round 9. Neither app changed on this screen. Compose's memory swings with its garbage collector: its runs ranged over 190.6 to 284.7 MB this round (211.0 to 264.0 MB in round 9), and its Java heap was 12.6 MB at the median here against 44.9 MB in round 9's. compose-rs's runs ranged over 194.8 to 214.5 MB (192.3 to 214.6 MB). compose-rs grows by 30 MB over the 10 s, Compose by 29 MB at the median; compose-rs holds about 30 MB more graphics memory than Compose: HWUI's scratch surfaces and buffers ("With paths reused" below).
 
@@ -505,6 +526,6 @@ Interleaved on the device, 12 runs each against main (18272a3), the variants rot
 - **Paths in the bridge**: done (D410, D411, "With paths reused"). HWUI's worker threads still take about 30 % more CPU time than Compose's in the animation (11.0 against 8.5 s in round 10, 11.2 against 8.6 s in round 9), unchanged by D410; why isn't known.
 - **Infinite transitions**: done (D420–D424). The 0.4 ms of tasks a frame left is mostly easing curves and color conversions.
 - **The stress list's main thread on the little cores**: done (D440, "The main thread in the hint session"). The main thread joined compose-rs's hint session: in its A/B, on the little cores 79 → 28 % of its time, p50 1.54 → 1.07 ms, `doFrame`s waiting for a prefetch step 58 → 4 in 12 runs, no power change resolved. In round 10, 21 % on the little cores, p50 1.02 ms, no `doFrame` waiting for a prefetch step, and no frame laying a newly revealed item out itself (1 to 3 a run in round 9). If those frames come back, splitting an item's measurement so a step can stop at the deadline ([12](12-android-performance.md), "Next steps") is the fix.
-- **Item reuse** (D430–D435): measured on the device for the first time in round 10, in the same build as D440, whose faster cores raise the work metric; a prefetched item's composition did about the same work as in round 9 (0.167 against 0.163 ms) and half as many paragraphs were laid out ([12](12-android-performance.md), "Item reuse on the device"). An interleaved A/B would separate the two. The list's native heap is 1.0 to 1.5 MB larger than in round 9, after start too; not broken down.
+- **Item reuse** (D430–D435): measured on the device for the first time in round 10, in the same build as D440, whose faster cores raise the work metric; a prefetched item's composition did about the same work as in round 9 (0.167 against 0.163 ms) and half as many paragraphs were laid out ([12](12-android-performance.md), "Item reuse on the device"). An interleaved A/B would separate the two. The list's native heap was 1.0 to 1.5 MB larger than in round 9: items the first layout composed beyond those it wanted, kept for reuse; fixed (D460, "Memory").
 - **The RenderThread's boost on the list** varies with the session: our session's vote averaged 324 in round 9, 247 to 257 in D440's A/B and 295 in round 10, for RenderThread p50s of 2.20, 2.49 and 2.49 ms (Compose: 2.62 and 2.63 ms in rounds 9 and 10).
 - **Shader warm-up**: a pipeline compiled on first use cost compose-rs its one janky scroll frame in the first results (none in rounds 9 and 10). Compose's apps share the same cache behavior; it isn't specific to compose-rs, but it showed here.

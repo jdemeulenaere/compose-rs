@@ -281,9 +281,14 @@ fn up_to_seven_items_of_a_content_type_are_kept_for_reuse() {
     let mut list = Fixture::new((0..40).map(|key| (key, content_type(key))).collect());
     let composed = live();
     assert!(composed.len() > 10, "{composed:?} composed");
+    // Those laid out: an item composed beyond them (the first layout's estimate) and never
+    // measured is disposed when it leaves (D460).
+    let measured: HashSet<u64> = NODES.with(|nodes| nodes.borrow().keys().copied().collect());
     list.set_items(vec![(0, Some(0))]);
     let left = |kind: Option<u32>| {
-        composed.iter().filter(move |key| **key != 0 && content_type(**key) == kind)
+        (composed.iter())
+            .filter(move |key| **key != 0 && content_type(**key) == kind)
+            .filter(|key| measured.contains(key))
     };
     assert!(left(Some(0)).count() > 7);
     assert_eq!(list.children(0), 1 + 7 + left(Some(1)).count().min(7));
@@ -506,4 +511,84 @@ fn a_popup_in_deactivated_content_is_not_shown() {
     active.set(true);
     ui.wait_for_idle();
     ui.on_node_with_tag("in popup").assert_exists();
+}
+
+/// Measures `height` tall, recording its node for `item`.
+struct Tall {
+    item: u64,
+    height: i32,
+}
+
+impl MeasurePolicy for Tall {
+    fn measure(
+        &self,
+        scope: &mut MeasureScope<'_>,
+        _: &[Measurable],
+        constraints: Constraints,
+    ) -> MeasureResult {
+        let node = scope.node_id();
+        NODES.with(|nodes| nodes.borrow_mut().insert(self.item, node));
+        ALL_NODES.with(|nodes| nodes.borrow_mut().entry(self.item).or_default().insert(node));
+        scope.layout(constraints.max_width.min(100), self.height)
+    }
+}
+
+/// An item `height` px tall, with an observer and an effect of `item`.
+#[composable]
+fn TallItem(item: u64, height: i32) {
+    remember_observer(move || Observer(item));
+    DisposableEffect((), move |scope| {
+        LIVE.with(|live| live.borrow_mut().insert(item));
+        scope.on_dispose(move || {
+            LIVE.with(|live| live.borrow_mut().remove(&item));
+        })
+    });
+    let policy = remember(move || Rc::new(Tall { item, height }) as Rc<dyn MeasurePolicy>);
+    compose_ui::Layout(Modifier, policy, callback(|| {}));
+}
+
+/// A list's first layout estimates the items it lacks from the one it has (here a 4 px
+/// header, so 25 more of 40 px items to fill 100 px, and as many beyond), and composes items it
+/// then finds it doesn't want: they were never measured, and are disposed rather than kept for
+/// reuse, as Compose, composing items as its measurement reaches them, never composes them
+/// (D460). Items that leave after they were laid out are kept and reused, as before.
+#[test]
+fn items_composed_beyond_what_the_first_layout_wants_are_not_kept_for_reuse() {
+    reset();
+    let state = LazyListState::new(0, 0);
+    let given = *state;
+    let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || {
+        LazyColumn!(
+            modifier = Modifier.size((100.dp(), 100.dp())),
+            state = given,
+            |scope: LazyListScope| {
+                scope.item(|| TallItem(0, 4));
+                scope.items(1000, |index| TallItem(index as u64 + 1, 40));
+            }
+        );
+    });
+    ui.wait_for_idle();
+    let children = |ui: &mut ComposeTestRule| {
+        ui.host().with_tree(|tree| {
+            let item = tree.parent_of(node_of(0)).expect("an item's node");
+            tree.children_of(tree.parent_of(item).expect("the list")).count()
+        })
+    };
+    // The estimate composed many more items than the list wants: those left at once.
+    let composed = live();
+    let forgotten = events().iter().filter(|event| event.starts_with("forgotten")).count();
+    assert!(forgotten > 20, "{forgotten} items composed beyond those wanted");
+    assert!(composed.len() < 12, "{composed:?} composed");
+    // None kept: the list's children are its items composed.
+    assert_eq!(children(&mut ui), composed.len());
+    // Scrolled, the items leaving were laid out: kept for reuse, and the items coming in reuse
+    // their nodes.
+    let shown = composed.len() as u64;
+    for _ in 0..6 {
+        state.scroll_by(40.0);
+        ui.wait_for_idle();
+    }
+    let measured = shown + 6;
+    let nodes = nodes_of(0..measured);
+    assert!(nodes.len() < measured as usize, "{} nodes for {measured} items", nodes.len());
 }

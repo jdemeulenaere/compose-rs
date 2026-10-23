@@ -89,9 +89,6 @@ pub(crate) struct Group {
     /// A composition local provider's group (`CompositionLocalProvider`), marked as it starts,
     /// before its content allocates any group.
     pub is_provider: bool,
-    /// A node group emitted by `start_reusable_node` (Compose's `ReusableComposeNode`): content
-    /// reused keeps it and updates it; another node group is replaced.
-    pub reusable: bool,
     /// A reusable group whose content is deactivated (`ReusableContentHost` inactive): its
     /// groups and nodes are kept, its remember observers forgotten, its scopes freed.
     pub deactivated: bool,
@@ -141,7 +138,6 @@ impl SlotTable {
             group.kind = kind;
             group.dirty = false;
             group.is_provider = false;
-            group.reusable = false;
             group.deactivated = false;
             group.enclosing_provider = enclosing_provider;
             group.parent = parent;
@@ -161,7 +157,6 @@ impl SlotTable {
                 kind,
                 dirty: false,
                 is_provider: false,
-                reusable: false,
                 deactivated: false,
                 enclosing_provider,
                 parent,
@@ -234,3 +229,10 @@ impl std::ops::IndexMut<u32> for SlotTable {
         &mut self.groups[index as usize]
     }
 }
+
+// A group per composable call, and more (a lazy list's slot, a provider, a node): its size is
+// the slot table's (the stress list holds 2,500 to 3,600). 144 bytes on 64-bit targets, where
+// the one-byte fields (`kind` and three flags) and the five `u32`s fill 24 bytes exactly: one
+// more byte grows every group by 8 (a flag D430 wrote and nothing read did, D460).
+#[cfg(target_pointer_width = "64")]
+const _: () = assert!(std::mem::size_of::<Group>() <= 144);

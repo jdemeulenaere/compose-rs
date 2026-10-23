@@ -1059,6 +1059,8 @@ struct ItemSlot {
     key: u64,
     /// That item's content type, hashed (`None`: Compose's `null`).
     content_type: Option<u64>,
+    /// That item's index, as last composed.
+    index: usize,
 }
 
 /// What a slot holds in a pass: an item (by index), or its content deactivated, kept for reuse.
@@ -1163,7 +1165,19 @@ impl ItemSlots {
     /// out in the same pass (where Compose deactivates it after the measurement, for the next
     /// one to reuse). Returns the slots to compose: those of `indices`, each with its item, then
     /// those kept for reuse.
-    fn assign(&mut self, items: &Items, indices: &[usize]) -> Vec<(ItemSlot, SlotContent)> {
+    ///
+    /// A slot whose item leaves without ever having been measured (`measured` of its index is
+    /// false) is disposed rather than kept: a first layout's estimate composes items it then
+    /// finds it doesn't want (the stress list's: 87 items, its rows and carousels' tiles, of
+    /// which 38 stay, from the size of its 36 dp header), which Compose, composing items as its
+    /// measurement reaches them, never composes; kept, they would fill its pool with items no
+    /// scroll brought, and keep it full (D460).
+    fn assign(
+        &mut self,
+        items: &Items,
+        indices: &[usize],
+        measured: impl Fn(usize) -> bool,
+    ) -> Vec<(ItemSlot, SlotContent)> {
         let previous: HashMap<u64, usize> =
             self.active.iter().enumerate().map(|(position, slot)| (slot.key, position)).collect();
         let mut taken = vec![false; self.active.len()];
@@ -1173,14 +1187,14 @@ impl ItemSlots {
             let slot = match previous.get(&key) {
                 Some(&position) if !taken[position] => {
                     taken[position] = true;
-                    ItemSlot { content_type, ..self.active[position] }
+                    ItemSlot { content_type, index, ..self.active[position] }
                 }
-                _ => ItemSlot { id: NO_SLOT, key, content_type },
+                _ => ItemSlot { id: NO_SLOT, key, content_type, index },
             };
             assigned.push((index, slot));
         }
         for (position, slot) in self.active.iter().enumerate() {
-            if !taken[position] {
+            if !taken[position] && measured(slot.index) {
                 self.reusable.push(*slot);
             }
         }
@@ -1478,7 +1492,11 @@ fn LazyItems(
     // The items' constraints, for those composing for theirs (`BoxWithConstraints`).
     let hint = inner.item_constraints.get().or(fallback);
     drop(inner);
-    let composed = slots.borrow_mut().assign(&items.0, &indices);
+    let composed = {
+        let inner = state.inner_or_detached();
+        let sizes = inner.sizes.borrow();
+        slots.borrow_mut().assign(&items.0, &indices, |index| sizes.contains_key(&index))
+    };
     slots.borrow_mut().items = Rc::downgrade(&items.0);
     compose_runtime::CompositionLocalProvider(
         compose_ui::platform::LOCAL_CONSTRAINTS_HINT.provides(hint),
