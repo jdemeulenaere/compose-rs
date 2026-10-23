@@ -403,14 +403,13 @@ impl UiHost {
         }
         // Focus moves waiting for a lazy list's items beyond its bounds, laid out now; each may
         // ask for one more item, laid out (and composed) here too, a few times a frame (D477).
+        // Laid out again after each, so the item the focus found is shown (scrolled into view)
+        // in this frame too (D485).
         let mut searches = 0;
         while searches < 8 && self.with_tree(|tree| tree.has_beyond_bounds_moves()) {
             searches += 1;
             let actions = self.with_tree(|tree| tree.run_beyond_bounds_moves());
             Self::run(actions);
-            if !self.with_tree(|tree| tree.has_beyond_bounds_moves()) {
-                break;
-            }
             measured |= self.lay_out(size);
             let mut rounds = 0;
             while rounds < 3 && self.composition.has_invalidations() {

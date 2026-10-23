@@ -1245,8 +1245,11 @@ impl MeasurePolicy for LazyGridLayout {
             } else {
                 state.pending.set(state.pending.get() + offset - state.position.get().1);
             }
+            // Known: an empty list takes no scroll (D480).
             state.room_backward.set(0.0);
             state.room_forward.set(0.0);
+            state.room_estimated.set((false, false));
+            state.beyond_more.set((false, false));
             drop(measurer);
             return scope.layout(constraints.min_width, constraints.min_height);
         }
@@ -1498,6 +1501,11 @@ impl MeasurePolicy for LazyGridLayout {
         });
         let reaches_end = !missing && (at_end || !m.lines.exists(placed_end));
         state.room_estimated.set((!reaches_start, !reaches_end));
+        // What a grid's estimated end leaves isn't offered to nested-scroll parents (as a
+        // list's is, D479): dropped once laid out.
+        if pending == 0.0 {
+            state.overshoot.borrow_mut().take();
+        }
         state.beyond_more.set((placed_start.min(index) > 0, m.lines.exists(placed_end)));
         state.room_forward.set(if reaches_end {
             (extent_end.max(content_end) - main_max).max(0) as f32 - pending

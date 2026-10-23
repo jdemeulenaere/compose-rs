@@ -20,7 +20,7 @@ struct Record {
     bounds: [f32; 4],
     flags: u32,
     text: String,
-    scroll: Option<(f32, f32)>,
+    scroll: Option<(f32, f32, f32)>,
 }
 
 fn records(bytes: &[u8]) -> Vec<Record> {
@@ -48,7 +48,9 @@ fn records(bytes: &[u8]) -> Vec<Record> {
         }
         let scroll = (flags & flag::SCROLL != 0).then(|| {
             let value = f32::from_bits(u32_at(&mut at));
-            (value, f32::from_bits(u32_at(&mut at)))
+            let max = f32::from_bits(u32_at(&mut at));
+            let page = f32::from_bits(u32_at(&mut at));
+            (value, max, page)
         });
         out.push(Record { bounds, flags, text: strings.swap_remove(0), scroll });
     }
@@ -90,7 +92,7 @@ fn a_lazy_list_is_a_scrolling_container_with_its_items_in_it() {
     let records = written(Rows);
     let list = records.iter().find(|record| record.scroll.is_some()).expect("a scrolling node");
     assert_eq!(list.flags & flag::SCROLL_HORIZONTAL, 0);
-    assert_eq!(list.scroll, Some((0.0, 900.0)));
+    assert_eq!(list.scroll, Some((0.0, 900.0, 100.0)));
     assert_eq!(list.bounds, [0.0, 0.0, 100.0, 100.0]);
     // Only the rows in view are placed, all visible.
     let rows: Vec<&Record> =
@@ -103,7 +105,7 @@ fn a_lazy_list_is_a_scrolling_container_with_its_items_in_it() {
 fn what_a_scrolling_column_clips_away_is_hidden() {
     let records = written(ScrollingRows);
     let column = records.iter().find(|record| record.scroll.is_some()).expect("a scrolling node");
-    assert_eq!(column.scroll, Some((0.0, 100.0)));
+    assert_eq!(column.scroll, Some((0.0, 100.0, 100.0)));
     let hidden: Vec<&str> = records
         .iter()
         .filter(|record| record.flags & flag::HIDDEN != 0)
@@ -114,4 +116,28 @@ fn what_a_scrolling_column_clips_away_is_hidden() {
     let row = records.iter().find(|record| record.text == "row 4").unwrap();
     assert_eq!(row.flags & flag::HIDDEN, 0);
     assert_eq!((row.bounds[1], row.bounds[3]), (80.0, 100.0));
+}
+
+#[composable]
+fn RightToLeftRow() {
+    compose_runtime::CompositionLocalProvider(
+        compose_ui::LOCAL_LAYOUT_DIRECTION.provides(compose_ui::LayoutDirection::Rtl),
+        || {
+            LazyRow!(modifier = Modifier.size((100.dp(), 20.dp())), |scope: LazyListScope| {
+                scope.items(50, |index| {
+                    BasicText!("tile {}", index, modifier = Modifier.width(20.dp()));
+                });
+            });
+        },
+    );
+}
+
+/// A right-to-left row says so: its left and right go the other way.
+#[test]
+fn a_right_to_left_row_is_marked_so() {
+    let records = written(RightToLeftRow);
+    let row = records.iter().find(|record| record.scroll.is_some()).expect("a scrolling node");
+    assert_ne!(row.flags & flag::SCROLL_HORIZONTAL, 0);
+    assert_ne!(row.flags & flag::RTL, 0);
+    assert_eq!(row.flags & flag::SCROLL_REVERSED, 0);
 }

@@ -588,6 +588,34 @@ Interleaved again against main (727d266), 8 runs each:
 - **The compositor's janky frames** (4 against 2) aren't the app's.
 - **Startup:** `TotalTime` is within the starts' spread here (−2 and −3 ms).
 
+**After the third review (D479–D485).** A third review found seven more bugs, fixed since:
+- **Nested scrolling (D479).** Inside a nested-scroll parent (a `Scaffold`'s app bar connection, or a `LazyColumn` around a carousel), a delta was still cut at the estimated room. Now the list takes the whole delta, and what it couldn't use is offered to the parents once laid out, in the same frame.
+- **Emptied lists (D480).** An emptied list took scroll.
+- **Cards and dividers (D481).** With 1 px dividers between 300 px cards, the first frame composed 805 items to show 15.
+- **Search leftovers (D482).** Rows laid out for a focus search stayed composed.
+- **Nested focus searches (D483).** Searches didn't climb from a carousel's row to its list, and a spaced list's Down spun over 200 rows.
+- **Accessibility directions (D484).** Accessibility scrolled reversed and right-to-left lists the wrong way.
+- **Focus timing (D485).** The row a focus search found showed a frame late.
+
+Interleaved against main (727d266), 8 runs each:
+
+| | Feed: main | shipped | Stress list: main | shipped |
+|---|---|---|---|---|
+| Janky frames, the app's / the compositor's (8 runs) | 0 / 4 | 0 / 0 | 0 / 0 | 0 / 0 |
+| Main thread p50 / p90 / p99 | 1.22 / 1.75 / 2.75 ms | **1.16** / **1.66** / 2.73 ms | 1.07 / 1.68 / 2.88 ms | **0.98** / **1.54** / 2.79 ms |
+| RenderThread p50 / p90 / p99 | 2.20 / 3.34 / 4.97 ms | 2.32 / 3.21 / 4.66 ms | 2.62 / 3.68 / 5.02 ms | 2.40 / 3.57 / 5.34 ms |
+| Main thread / RenderThread work | 497 / 829 ms | **462** / **759** ms | 689 / 1,552 ms | **595** / **1,348** ms |
+| Text laid out in frames (8 runs) | 0 | 0 | 0 | 0 |
+| Native heap after start / after the flings | 8.5 / 12.0 MB | **8.1** / **10.6** MB | 17.2 / 20.4 MB | **14.7** / **17.2** MB |
+| `TotalTime` (16 cold starts) | 104.5 ms | 105.0 ms | 126.5 ms | **119.5 ms** |
+| The first frame's `compose-rs: frame` (8 traced starts) | 6.7 ms | **5.0 ms** | 14.6 ms | **7.2 ms** |
+
+- **Most numbers hold or improve.**
+- **The stress list's RenderThread p99 is longer again:** 5.34 against 5.02 ms here, +0.30 ms in the run before. The ranges overlap (4.74 to 5.47 against 4.27 to 5.53 ms) but the shift recurs, so it may be real. The RenderThread does 13 % less work, and its p50 and p90 are shorter; with less work, our hint session votes less for it (D441).
+- **Grid fast flings, again (4 runs each, interleaved):**
+  - compose-rs composed items in 0 to 3 frames a run, with no janky frame and a main thread p99 of 2.9 to 3.0 ms.
+  - Compose laid out new tiles' text in 72 to 118 frames a run, with a p99 of 5.6 to 6.8 ms and 2 app-janky frames.
+
 **Lazy grids** keep 2 lines composed and placed beyond each side (D456). Their open risk was that a fast fling would outrun that buffer. Checked on the new `grid` screen of both apps (D473): 3,000 tiles in 4 columns, 10 flings of 1,600 px in 60 ms as measure.py's pattern, 3 to 4 runs each, interleaved.
 - Before D474, compose-rs composed items in 0 to 11 frames a run (mean 4.3, 6 runs), in runs of consecutive frames at the flings' starts with no prefetch between them. With D474, 0 to 2 a run (mean 1.0, 4 runs).
 - No janky frame of compose-rs's; its main thread p99 was 2.6 to 3.0 ms.

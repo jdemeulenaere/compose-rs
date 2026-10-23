@@ -321,7 +321,9 @@ impl compose_ui::SemanticsModifierNode for ScrollNode {
         _context: &mut compose_ui::EventContext<'_>,
     ) -> bool {
         let compose_ui::SemanticsAction::ScrollBy { x, y } = action else { return false };
-        let delta = if self.vertical { y } else { x };
+        // As seen: a right-to-left horizontal scroll's content starts at the right.
+        let seen = if self.vertical { y } else { x };
+        let delta = if self.rtl { -seen } else { seen };
         delta != 0.0 && scroll_state_by(&self.state, delta, &mut self.fraction) != 0.0
     }
 }
@@ -556,10 +558,10 @@ impl NestedScrollConnection for ScrollableConnection {
 }
 
 impl DragScroller {
-    /// Whether a nested-scroll parent was around the last press or wheel turn: it takes what
-    /// this scrollable leaves of a delta.
-    pub(crate) fn has_outer(&self) -> bool {
-        !self.chain.is_empty()
+    /// The nested-scroll parents around the last press or wheel turn (none: `None`): they're
+    /// offered what this scrollable leaves of a delta.
+    pub(crate) fn outer_chain(&self) -> Option<NestedScrollChain> {
+        (!self.chain.is_empty()).then(|| self.chain.clone())
     }
 
     /// `scroll_by` scrolls during the event; `flinger` gives a scroll usable later, by a

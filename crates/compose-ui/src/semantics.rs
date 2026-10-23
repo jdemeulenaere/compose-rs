@@ -42,8 +42,10 @@ pub enum SemanticsAction {
     RequestFocus,
     /// Set its progress to a value in its range (a slider's), as `SemanticsActions.SetProgress`.
     SetProgress(f32),
-    /// Scroll its content by `x` and `y` pixels (positive: towards its end), as
-    /// `SemanticsActions.ScrollBy`: a scrolling container's (D478).
+    /// Scroll its content by `x` and `y` pixels as seen (positive: the view moves right and
+    /// down over the content, whatever way the content runs: a reversed list's, a
+    /// right-to-left row's), as `SemanticsActions.ScrollBy`: a scrolling container's (D478,
+    /// D484).
     ScrollBy { x: f32, y: f32 },
 }
 
@@ -156,6 +158,12 @@ impl SemanticsConfiguration {
         }
         if self.progress_bar_range_info.is_none() {
             self.progress_bar_range_info = child.progress_bar_range_info;
+        }
+        if self.horizontal_scroll_axis_range.is_none() {
+            self.horizontal_scroll_axis_range = child.horizontal_scroll_axis_range;
+        }
+        if self.vertical_scroll_axis_range.is_none() {
+            self.vertical_scroll_axis_range = child.vertical_scroll_axis_range;
         }
         // Compose's default merge policy, parent ?: child: a flag set below is set here.
         self.editable |= child.editable;
@@ -303,6 +311,9 @@ impl fmt::Debug for SemanticsConfiguration {
 pub struct SemanticsNode {
     pub id: NodeId,
     pub bounds: Rect,
+    /// Laid out right to left, as Compose's `layoutInfo.layoutDirection`: a horizontal
+    /// scroll's left and right go the other way (D484).
+    pub rtl: bool,
     pub config: SemanticsConfiguration,
     pub children: Vec<SemanticsNode>,
 }
@@ -422,7 +433,8 @@ impl UiTree {
                 self.semantics_of_overlay(overlay, merged, &mut overlay_config, &mut children);
             }
         }
-        SemanticsNode { id: root, bounds: self.bounds_in_root(root), config, children }
+        let rtl = self.node(root).layout_direction == crate::alignment::LayoutDirection::Rtl;
+        SemanticsNode { id: root, bounds: self.bounds_in_root(root), rtl, config, children }
     }
 
     /// Adds `node`'s semantics nodes to `out`, the children of the node whose properties are
@@ -494,9 +506,12 @@ impl UiTree {
                 }
                 let origin = self.layer_origin(node, layer);
                 let size = self.node(node).layers[layer].measured;
+                let rtl =
+                    self.node(node).layout_direction == crate::alignment::LayoutDirection::Rtl;
                 out.push(SemanticsNode {
                     id: node,
                     bounds: Rect::from_offset_size(origin, size.into()),
+                    rtl,
                     config,
                     children,
                 });

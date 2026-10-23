@@ -35,6 +35,8 @@ pub mod flag {
     /// while it holds the focus, a column's child out of view): not visible to the user, as
     /// Compose's `isVisibleToUser` from the clipped bounds.
     pub const HIDDEN: u32 = 1 << 14;
+    /// Laid out right to left: a horizontal scroll's left and right go the other way (D484).
+    pub const RTL: u32 = 1 << 15;
 }
 
 /// A node's virtual view id: its index (live nodes have distinct ones).
@@ -105,7 +107,8 @@ fn flags(config: &SemanticsConfiguration) -> u32 {
 /// `clip`), flags (u32), role (u8: 0 none, 1 button, 2 checkbox, 3 switch, 4 radio button,
 /// 5 tab, 6 image, 7 dropdown list), text, content description, editable text, state
 /// description, error (each a length and UTF-8 bytes), the range (current, min, max: 3 × f32)
-/// if the range flag is set, and the scroll (offset, largest: 2 × f32) if the scroll flag is.
+/// if the range flag is set, and the scroll (offset, largest, the viewport's length along its
+/// axis: 3 × f32) if the scroll flag is.
 fn write_node(node: &SemanticsNode, parent: i32, clip: Rect, out: &mut Writer) {
     let config = &node.config;
     let id = virtual_id(node.id);
@@ -118,6 +121,9 @@ fn write_node(node: &SemanticsNode, parent: i32, clip: Rect, out: &mut Writer) {
     let mut flags = flags(config);
     if visible.is_none() {
         flags |= flag::HIDDEN;
+    }
+    if node.rtl {
+        flags |= flag::RTL;
     }
     if let Some((range, horizontal)) = scroll {
         flags |= flag::SCROLL;
@@ -157,9 +163,11 @@ fn write_node(node: &SemanticsNode, parent: i32, clip: Rect, out: &mut Writer) {
         out.f32(info.range.0);
         out.f32(info.range.1);
     }
-    if let Some((range, _)) = scroll {
+    if let Some((range, horizontal)) = scroll {
         out.f32(range.value);
         out.f32(range.max_value);
+        // A page: the viewport's length along the axis, unclipped.
+        out.f32(if horizontal { node.bounds.width() } else { node.bounds.height() });
     }
     // A scrolling container clips what's in it.
     let inner =

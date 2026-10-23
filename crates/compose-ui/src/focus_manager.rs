@@ -173,16 +173,39 @@ impl UiTree {
             return (false, Vec::new());
         }
         let before = self.focused();
-        let target = match direction {
-            FocusDirection::Next => self.tab_target(true),
-            FocusDirection::Previous => self.tab_target(false),
-            _ => self.two_dimensional_search(direction).map(|target| (target, false)),
-        };
-        if self.search_beyond_bounds(direction, target) {
-            return (false, Vec::new());
+        let tab = matches!(direction, FocusDirection::Next | FocusDirection::Previous);
+        let tab_target =
+            if tab { self.tab_target(direction == FocusDirection::Next) } else { None };
+        // The beyond-bounds containers around the focus, innermost first, each a focus group
+        // as Compose's lazy layouts: the target inside it, else one more item laid out beyond
+        // it (the search made again then), else the next container out (a carousel's row in a
+        // list, D483). Then the window.
+        let mut container = before.and_then(|focused| self.beyond_bounds_container(focused));
+        while let Some((id, index)) = container {
+            let inside = if tab {
+                tab_target
+                    .filter(|&(target, wrapped)| !wrapped && self.is_at_or_below(target, id))
+                    .map(|(target, _)| target)
+            } else {
+                self.two_dimensional_search_in(direction, Some(id))
+            };
+            if let Some(target) = inside {
+                self.end_beyond_bounds();
+                let actions = self.focus_found(target);
+                return (self.focused() != before, actions);
+            }
+            if self.lay_out_beyond(id, index, direction) {
+                return (false, Vec::new());
+            }
+            container = self.outer_beyond_bounds_container(id);
         }
         self.end_beyond_bounds();
-        let Some((target, _)) = target else { return (false, Vec::new()) };
+        let target = if tab {
+            tab_target.map(|(target, _)| target)
+        } else {
+            self.two_dimensional_search_in(direction, None)
+        };
+        let Some(target) = target else { return (false, Vec::new()) };
         let actions = self.focus_found(target);
         (self.focused() != before, actions)
     }
@@ -214,7 +237,13 @@ impl UiTree {
     /// `13 × major² + minor²` (the distance along the direction and the centers' offset across
     /// it). With nothing focused, from the window's top-left corner (`Down`, `Right`) or its
     /// bottom-right one (`Up`, `Left`).
-    fn two_dimensional_search(&mut self, direction: FocusDirection) -> Option<NodeId> {
+    ///
+    /// `within`: only among the focusables inside it (a lazy list's focus group, D483).
+    fn two_dimensional_search_in(
+        &mut self,
+        direction: FocusDirection,
+        within: Option<NodeId>,
+    ) -> Option<NodeId> {
         let focused = self.focused();
         let source = match focused {
             Some(node) => self.focus_rect(node),
@@ -230,7 +259,9 @@ impl UiTree {
         };
         let mut best: Option<(NodeId, Rect)> = None;
         for node in self.focus_order() {
-            if Some(node) == focused {
+            if Some(node) == focused
+                || within.is_some_and(|within| !self.is_at_or_below(node, within))
+            {
                 continue;
             }
             let candidate = self.focus_rect(node);

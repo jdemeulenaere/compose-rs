@@ -457,3 +457,71 @@ fn a_scrolling_column_has_scroll_semantics_and_scrolls_by_its_action() {
     ui.wait_for_idle();
     assert_eq!(scroll.value(), 60);
 }
+
+/// `ScrollBy` is as seen (positive: the view moves down over the content), as Compose's: a
+/// reversed list (its first item at the bottom) scrolls on through its items going up.
+#[test]
+fn scroll_by_is_as_seen_on_a_reversed_list() {
+    let state = LazyListState::new(0, 0);
+    let given = *state;
+    let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || {
+        LazyColumn!(
+            modifier = Modifier.size((100.dp(), 100.dp())).test_tag("list"),
+            state = given,
+            reverse_layout = true,
+            |scope: LazyListScope| {
+                scope.items(50, Row);
+            }
+        );
+    });
+    let node = scroll_node(&mut ui, "list").id;
+    let range = scroll_node(&mut ui, "list").config.vertical_scroll_axis_range.unwrap();
+    assert!(range.reverse_scrolling);
+    // Down, as seen: back towards the first item, already at the bottom.
+    assert!(!ui.host().perform_semantics_action(
+        node,
+        compose_ui::SemanticsAction::ScrollBy { x: 0.0, y: 100.0 }
+    ));
+    // Up: on through the items.
+    assert!(ui.host().perform_semantics_action(
+        node,
+        compose_ui::SemanticsAction::ScrollBy { x: 0.0, y: -100.0 }
+    ));
+    ui.wait_for_idle();
+    assert_eq!(state.first_visible_item_index(), 5);
+}
+
+/// The frame that lays out the row a Tab waits for also scrolls it in (D485): one frame.
+#[test]
+fn the_row_a_tab_finds_beyond_the_list_shows_in_the_same_frame() {
+    let mut ui = focusable_rows(1000);
+    ui.on_node_with_tag("row 4").request_focus();
+    ui.wait_for_idle();
+    ui.host().send_key(compose_ui::KeyEvent::down(compose_ui::Key::Tab));
+    ui.host().frame();
+    ui.on_node_with_tag("row 5").assert_is_focused();
+    assert_eq!(top(&mut ui, "row 5"), 80.0);
+}
+
+/// A scroll past an estimated end leaves the list able to scroll on until laid out: its room
+/// that way is still an estimate, not spent (D479).
+#[test]
+fn a_scroll_past_the_estimated_room_leaves_the_list_scrollable_until_laid_out() {
+    let state = LazyListState::new(0, 0);
+    let given = *state;
+    let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || {
+        LazyColumn!(
+            modifier = Modifier.size((100.dp(), 100.dp())),
+            state = given,
+            |scope: LazyListScope| {
+                scope.items(50, Row);
+            }
+        );
+    });
+    // 900 px estimated on; 2,000 asked.
+    assert!(state.scroll_by(2000.0));
+    assert!(state.can_scroll_forward());
+    ui.wait_for_idle();
+    assert!(!state.can_scroll_forward(), "laid out at its end");
+    assert_eq!(state.first_visible_item_index(), 45);
+}

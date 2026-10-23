@@ -29,7 +29,7 @@ internal class Accessibility(private val view: ComposeRsView) : AccessibilityNod
         val state: String,
         val error: String,
         val range: FloatArray?,
-        /** A scrolling container's offset and the largest, along its axis. */
+        /** A scrolling container's offset, the largest, and its viewport's length. */
         val scroll: FloatArray?,
     ) {
         val children = ArrayList<Int>()
@@ -40,10 +40,32 @@ internal class Accessibility(private val view: ComposeRsView) : AccessibilityNod
     private var stale = true
     private var accessibilityFocused = View.NO_ID
 
+    /** A container scrolled by an action: told to the services once laid out (D484). */
+    private var scrolled = View.NO_ID
+
     /** The semantics changed: read again when asked, and tell the services. */
     fun invalidate() {
         stale = true
         val parent = view.parent ?: return
+        if (scrolled != View.NO_ID) {
+            val id = scrolled
+            scrolled = View.NO_ID
+            refresh()
+            nodes.get(id)?.scroll?.let { scroll ->
+                val event = AccessibilityEvent.obtain(AccessibilityEvent.TYPE_VIEW_SCROLLED)
+                event.setSource(view, id)
+                event.packageName = view.context.packageName
+                val horizontal = nodes.get(id).flags and SCROLL_HORIZONTAL != 0
+                if (horizontal) {
+                    event.scrollX = scroll[0].toInt()
+                    event.maxScrollX = scroll[1].toInt()
+                } else {
+                    event.scrollY = scroll[0].toInt()
+                    event.maxScrollY = scroll[1].toInt()
+                }
+                parent.requestSendAccessibilityEvent(view, event)
+            }
+        }
         val event = AccessibilityEvent.obtain(AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED)
         event.contentChangeTypes = AccessibilityEvent.CONTENT_CHANGE_TYPE_SUBTREE
         event.setSource(view)
@@ -80,7 +102,7 @@ internal class Accessibility(private val view: ComposeRsView) : AccessibilityNod
                 null
             }
             val scroll = if (flags and SCROLL != 0) {
-                floatArrayOf(buffer.getFloat(), buffer.getFloat())
+                floatArrayOf(buffer.getFloat(), buffer.getFloat(), buffer.getFloat())
             } else {
                 null
             }
@@ -176,29 +198,27 @@ internal class Accessibility(private val view: ComposeRsView) : AccessibilityNod
                 info.addAction(AccessibilityAction.ACTION_SCROLL_BACKWARD)
             }
             // A scrolling container (a lazy list, a scrolling column), as Compose's
-            // `ScrollAxisRange` and `ScrollBy`: scrolled a page at a time.
+            // `ScrollAxisRange` and `ScrollBy`: scrolled a page at a time, forward meaning down
+            // or right as seen, whatever way its content runs (D478, D484).
             if (node.range == null) node.scroll?.let { scroll ->
-                info.isScrollable = true
+                if (scroll[1] > 0f) info.isScrollable = true
                 val horizontal = node.flags and SCROLL_HORIZONTAL != 0
-                val reversed = node.flags and SCROLL_REVERSED != 0
-                if (scroll[0] < scroll[1]) {
+                // Down (right) as seen goes back through the content: a reversed list's, a
+                // right-to-left row's.
+                val flipped = (node.flags and SCROLL_REVERSED != 0) xor
+                    (horizontal && node.flags and RTL != 0)
+                val towardsEnd = scroll[0] < scroll[1]
+                val towardsStart = scroll[0] > 0f
+                if (if (flipped) towardsStart else towardsEnd) {
                     info.addAction(AccessibilityAction.ACTION_SCROLL_FORWARD)
                     info.addAction(
-                        when {
-                            horizontal -> AccessibilityAction.ACTION_SCROLL_RIGHT
-                            reversed -> AccessibilityAction.ACTION_SCROLL_UP
-                            else -> AccessibilityAction.ACTION_SCROLL_DOWN
-                        },
+                        if (horizontal) AccessibilityAction.ACTION_SCROLL_RIGHT else AccessibilityAction.ACTION_SCROLL_DOWN,
                     )
                 }
-                if (scroll[0] > 0f) {
+                if (if (flipped) towardsEnd else towardsStart) {
                     info.addAction(AccessibilityAction.ACTION_SCROLL_BACKWARD)
                     info.addAction(
-                        when {
-                            horizontal -> AccessibilityAction.ACTION_SCROLL_LEFT
-                            reversed -> AccessibilityAction.ACTION_SCROLL_DOWN
-                            else -> AccessibilityAction.ACTION_SCROLL_UP
-                        },
+                        if (horizontal) AccessibilityAction.ACTION_SCROLL_LEFT else AccessibilityAction.ACTION_SCROLL_UP,
                     )
                 }
             }
@@ -265,21 +285,22 @@ internal class Accessibility(private val view: ComposeRsView) : AccessibilityNod
      * one's up and down are the other way.
      */
     private fun scrollPage(node: Node, action: Int): Boolean {
+        val scroll = node.scroll ?: return false
         val horizontal = node.flags and SCROLL_HORIZONTAL != 0
-        val reversed = node.flags and SCROLL_REVERSED != 0
         val forward = when (action) {
             AccessibilityNodeInfo.ACTION_SCROLL_FORWARD -> true
             AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD -> false
-            android.R.id.accessibilityActionScrollDown -> if (horizontal) null else !reversed
-            android.R.id.accessibilityActionScrollUp -> if (horizontal) null else reversed
+            android.R.id.accessibilityActionScrollDown -> if (horizontal) null else true
+            android.R.id.accessibilityActionScrollUp -> if (horizontal) null else false
             android.R.id.accessibilityActionScrollRight -> if (horizontal) true else null
             android.R.id.accessibilityActionScrollLeft -> if (horizontal) false else null
             else -> null
         } ?: return false
-        val page = if (horizontal) node.bounds.width() else node.bounds.height()
-        val delta = if (forward) page.toFloat() else -page.toFloat()
+        // Down or right as seen; Rust turns it the content's way (`ScrollBy`).
+        val delta = if (forward) scroll[2] else -scroll[2]
         val done = view.performSemanticsAction(node.id, if (horizontal) 4 else 3, delta)
-        if (done) send(node.id, AccessibilityEvent.TYPE_VIEW_SCROLLED)
+        // Told once the next frame laid it out (`invalidate`).
+        if (done) scrolled = node.id
         return done
     }
 
@@ -339,6 +360,7 @@ internal class Accessibility(private val view: ComposeRsView) : AccessibilityNod
         const val SCROLL_HORIZONTAL = 1 shl 12
         const val SCROLL_REVERSED = 1 shl 13
         const val HIDDEN = 1 shl 14
+        const val RTL = 1 shl 15
         const val CLICKABLE = 1
     }
 }

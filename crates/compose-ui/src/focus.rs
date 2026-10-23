@@ -417,7 +417,7 @@ impl UiTree {
 
     /// The innermost ancestor of `node` (or itself) laying out content beyond its bounds for
     /// focus searches (a lazy list), and the index of the modifier node doing it.
-    fn beyond_bounds_container(&self, node: NodeId) -> Option<(NodeId, usize)> {
+    pub(crate) fn beyond_bounds_container(&self, node: NodeId) -> Option<(NodeId, usize)> {
         let mut current = Some(node);
         while let Some(id) = current {
             let value = self.node(id);
@@ -431,40 +431,45 @@ impl UiTree {
         None
     }
 
-    /// Asks the container around the focused node to lay out more beyond its bounds, when the
-    /// search going `direction` leaves it (`target`: what it found, and whether it wrapped
-    /// around): the move waits for it, made again at the next layout (D477). Returns whether
-    /// it waits.
-    pub(crate) fn search_beyond_bounds(
+    /// Asks `container` (its modifier node `index`) to lay out one more item beyond its bounds
+    /// going `direction`, for the search: the move waits for it, made again at the next layout
+    /// (D477). Returns whether it waits (`false`: nothing more that way, or the search laid out
+    /// `MOST_BEYOND_STEPS` items already).
+    pub(crate) fn lay_out_beyond(
         &mut self,
+        container: NodeId,
+        index: usize,
         direction: FocusDirection,
-        target: Option<(NodeId, bool)>,
     ) -> bool {
-        let Some(focused) = self.focused() else { return false };
-        let Some((container, index)) = self.beyond_bounds_container(focused) else {
-            return false;
-        };
-        let leaves = target
-            .is_none_or(|(target, wrapped)| wrapped || !self.is_at_or_below(target, container));
-        if !leaves || self.beyond_search.steps >= MOST_BEYOND_STEPS {
+        if self.beyond_search.container.is_some_and(|active| active != (container, index)) {
+            // Another container's turn: the items the last one laid out go, and the count
+            // starts again (D483).
+            self.end_beyond_bounds();
+        }
+        if self.beyond_search.steps >= MOST_BEYOND_STEPS {
             return false;
         }
         let layout_direction = self.node(container).layout_direction;
         let more = self.get_mut(container).is_some_and(|value| {
-            value.chain[index].lay_out_beyond_bounds(direction, layout_direction)
+            index < value.chain.len()
+                && value.chain[index].lay_out_beyond_bounds(direction, layout_direction)
         });
         if !more {
             return false;
         }
-        if let Some(other) = self.beyond_search.container.replace((container, index))
-            && other != (container, index)
-            && let Some(value) = self.get_mut(other.0)
-        {
-            value.chain[other.1].end_beyond_bounds();
-        }
+        self.beyond_search.container = Some((container, index));
         self.beyond_search.steps += 1;
         self.beyond_search.moves.push_back(direction);
         true
+    }
+
+    /// The beyond-bounds container around `node`'s, the next one out.
+    pub(crate) fn outer_beyond_bounds_container(&self, node: NodeId) -> Option<(NodeId, usize)> {
+        let value = self.node(node);
+        if value.overlay {
+            return None;
+        }
+        self.beyond_bounds_container(value.parent?)
     }
 
     /// The search is over: what was laid out beyond the bounds for it goes.
