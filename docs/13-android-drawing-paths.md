@@ -86,7 +86,7 @@ Draw with a Skia built into the app, into a `SurfaceView` (or `TextureView`), th
 - **Gains:** no JNI call per frame, no serialization and no Kotlin replay. Rust would drive Skia directly, on a render thread of its own.
 - **Costs** (estimates, to be measured):
   - **APK size:** +5–8 MB for Skia and its text stack. Today's library is 3 MB uncompressed.
-  - **Startup:** creating a Vulkan or GL context and Skia's GPU context, likely tens of milliseconds, where compose-rs now starts 17–20 % faster than Compose ([12](12-android-performance.md)).
+  - **Startup:** creating a Vulkan or GL context and Skia's GPU context, likely tens of milliseconds, where compose-rs now starts 21–29 % faster than Compose (round 6) ([12](12-android-performance.md)).
   - **Memory:** the app's own glyph caches and GPU resource cache, on top of HWUI's own.
   - **Text:** shaped by SkParagraph with fonts compose-rs loads, instead of the system's `StaticLayout`. System font fallback and locale-specific behaviour would need care to match.
   - **Integration:** a `SurfaceView` composites as its own layer, with known limitations for z-order, clipping, animations and transforms inside a View hierarchy. A `TextureView` composes like a View but adds a copy. Drawing inside Kotlin Compose screens (`AndroidView`) and the interaction with HWUI's damage and frame pacing would need checking.

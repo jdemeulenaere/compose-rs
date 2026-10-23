@@ -487,7 +487,7 @@ Build times of the library (`build-rust.sh`, M4 Pro, medians of 3; incremental: 
 
 Through Gradle, `:bench-rs:assembleDebug` after an edit to feed takes 1.05 s, to compose-material3 2.4 s; `assembleRelease` 1.1 and 5.5 s.
 
-The full benchmark with D360 and D361, under `speed` and compiled from the shipped profiles: [12](12-android-performance.md), "With the release profile and the Baseline Profiles".
+The full benchmark with D360 and D361, under `speed` and compiled from the shipped profiles: [12](12-android-performance.md), "Compiled from the shipped Baseline Profiles".
 
 ## Android: memory
 
