@@ -27,6 +27,7 @@ pub mod text;
 mod bridge;
 mod frame_time;
 mod logging;
+mod performance_hint;
 mod services;
 
 pub use jni;

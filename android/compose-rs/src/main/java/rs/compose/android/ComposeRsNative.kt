@@ -20,6 +20,12 @@ internal object ComposeRsNative {
 
     @JvmStatic external fun destroy(host: Long)
 
+    /**
+     * Whether the view shows with performance hints enabled: its frames then report the
+     * RenderThread's work to the process's hint session (`performance_hint.rs`, D390).
+     */
+    @JvmStatic external fun setPerformanceHint(host: Long, shown: Boolean)
+
     @JvmStatic external fun resize(host: Long, width: Int, height: Int)
 
     @JvmStatic external fun setDensity(host: Long, density: Float, fontScale: Float)

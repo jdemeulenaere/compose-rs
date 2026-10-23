@@ -288,6 +288,9 @@ struct Host {
     first: bool,
     /// The focused field's options the last frame saw: a change restarts the input method.
     ime_options: Option<compose_ui::ImeOptions>,
+    /// Shown with performance hints enabled: its frames report the RenderThread's work
+    /// (`performance_hint.rs`, D390).
+    hint: bool,
 }
 
 /// The host behind a pointer Kotlin keeps.
@@ -441,6 +444,7 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_create<'local>(
         semantics: Writer::default(),
         first: true,
         ime_options: None,
+        hint: false,
     });
     Box::into_raw(host) as jlong
 }
@@ -454,7 +458,33 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_destroy(
 ) {
     if host != 0 {
         // SAFETY: `host` came from `create`, and Kotlin forgets it now.
-        drop(unsafe { Box::from_raw(host as *mut Host) });
+        let host = unsafe { Box::from_raw(host as *mut Host) };
+        if host.hint {
+            crate::performance_hint::hide();
+        }
+    }
+}
+
+/// `ComposeRsNative.setPerformanceHint(host, shown)`: whether the view shows with performance
+/// hints enabled, so that its frames report the RenderThread's work to the process's hint
+/// session (`performance_hint.rs`, D390).
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_rs_compose_android_ComposeRsNative_setPerformanceHint(
+    _env: JNIEnv,
+    _class: JClass,
+    host: jlong,
+    shown: jboolean,
+) {
+    // SAFETY: a live host, on the main thread.
+    let host = unsafe { self::host(host) };
+    let shown = shown != 0;
+    if shown != host.hint {
+        host.hint = shown;
+        if shown {
+            crate::performance_hint::show();
+        } else {
+            crate::performance_hint::hide();
+        }
     }
 }
 
@@ -523,6 +553,10 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_frame(
 ) -> jlong {
     // SAFETY: a live host, on the main thread.
     let host = unsafe { self::host(host) };
+    if host.hint {
+        // The RenderThread's work for the frame before, read before this one's.
+        crate::performance_hint::frame();
+    }
     let _frame = compose_ui::platform::trace::section(c"compose-rs: frame");
     let stats = host.ui.frame();
     let mut result = 0;

@@ -48,6 +48,10 @@ import android.view.inputmethod.InputMethodManager
  * the view to have an id: it takes `R.id.compose_rs_view` unless given another (two views in one
  * window need ids of their own). Back goes to the content's `BackHandler`s while one is enabled.
  * The app receives properties ([setProp]) and sends events ([setOnEventListener]).
+ *
+ * While it shows, on API 33+, the RenderThread is in a performance hint session of compose-rs's
+ * own, so Android boosts it when its own frames run long, not only after long main-thread
+ * frames ([isPerformanceHintEnabled]).
  */
 class ComposeRsView(context: Context, private val app: String) : View(context) {
     private val measurer =
@@ -61,6 +65,29 @@ class ComposeRsView(context: Context, private val app: String) : View(context) {
     private var frameWanted = false
     private var textInput = false
     private val inputMethods = context.getSystemService(InputMethodManager::class.java)
+
+    /**
+     * Whether, while this view shows (API 33+), the RenderThread is in compose-rs's own
+     * performance hint session, which reports the RenderThread's CPU time over each frame
+     * against a target, so Android boosts it when its frames run long (on by default; D390).
+     * Android boosts a thread through HWUI's own session too, but only after long frames
+     * counting the main thread's, which compose-rs's are rarely: without it, the RenderThread
+     * mostly runs on slower cores at lower frequencies, and its frames take longer for the same
+     * work. Off, only HWUI's session boosts it, which costs less power. Set from another thread,
+     * it applies on the main thread.
+     */
+    var isPerformanceHintEnabled = true
+        set(value) {
+            if (Looper.myLooper() != Looper.getMainLooper()) {
+                mainHandler.post { isPerformanceHintEnabled = value }
+                return
+            }
+            field = value
+            updatePerformanceHint()
+        }
+
+    /** The host was told it shows with hints enabled ([ComposeRsNative.setPerformanceHint]). */
+    private var performanceHintShown = false
 
     private val frameCallback = Choreographer.FrameCallback { time ->
         noteFrameTime(time)
@@ -178,6 +205,7 @@ class ComposeRsView(context: Context, private val app: String) : View(context) {
         sendConfiguration(resources.configuration)
         ComposeRsNative.setWindowInsets(host, insets)
         for ((name, value) in props) sendProp(name, value)
+        updatePerformanceHint()
         // Composed, laid out and recorded now (during the window's layout), so the first frame
         // the window draws shows the content, as a Compose view's does.
         frame()
@@ -188,6 +216,8 @@ class ComposeRsView(context: Context, private val app: String) : View(context) {
         // Given back if it's composed again (attached again, or a new view of the same id).
         savedState = ComposeRsNative.saveState(host)
         cancelFrames()
+        // (Destroying a host shown with hints hides it.)
+        performanceHintShown = false
         ComposeRsNative.destroy(host)
         host = 0L
         drawing = null
@@ -243,6 +273,7 @@ class ComposeRsView(context: Context, private val app: String) : View(context) {
         // Already composed (restored late): composed again from the saved state.
         if (host != 0L) {
             cancelFrames()
+            performanceHintShown = false
             ComposeRsNative.destroy(host)
             host = 0L
             drawing = null
@@ -387,6 +418,7 @@ class ComposeRsView(context: Context, private val app: String) : View(context) {
     override fun onWindowVisibilityChanged(visibility: Int) {
         super.onWindowVisibilityChanged(visibility)
         if (host == 0L) return
+        updatePerformanceHint(visibility)
         if (visibility == VISIBLE) {
             if (frameWanted) {
                 frameWanted = false
@@ -417,6 +449,19 @@ class ComposeRsView(context: Context, private val app: String) : View(context) {
             prefetchScheduled = false
             idleTimesWithoutTime = 0
         }
+    }
+
+    /**
+     * Tells the host whether it shows with performance hints enabled: a host, a visible window
+     * ([visibility]: the window's), API 33+ (`APerformanceHint`). The hint session is the
+     * process's, open while one does.
+     */
+    private fun updatePerformanceHint(visibility: Int = windowVisibility) {
+        val shown = host != 0L && isPerformanceHintEnabled && visibility == VISIBLE &&
+            Build.VERSION.SDK_INT >= 33
+        if (shown == performanceHintShown) return
+        performanceHintShown = shown
+        ComposeRsNative.setPerformanceHint(host, shown)
     }
 
     /** The frame missed while hidden, made before the traversal that shows the window draws. */
