@@ -272,7 +272,8 @@ def compile_apps(mode):
             # first, so a running process's profile saver can't write after the reset.
             stop(package)
             output = shell(f"cmd package compile --reset {package}")
-            if "Success" not in output:
+            # "Success" (Android 16, ART Service); some versions print the dexopt result.
+            if "Success" not in output and "PERFORMED" not in output:
                 raise SystemExit(f"{package}: `cmd package compile --reset` failed: {output.strip()}")
             install_baseline_profile(package)
         shell(f"cmd package compile -m {mode} -f {package}")
@@ -676,6 +677,24 @@ def swipe(up):
         shell("input swipe 504 500 504 1800 120")
 
 
+# Traced runs tried again when their trace holds no frame of the app's (a trace that missed the
+# app's process, say), at most this many times in all; then the run stops.
+TRACE_ATTEMPTS = 3
+
+
+def traced(attempt, what):
+    """`attempt()`'s result (`(…, stats)` or `stats`, whose "trace" has FrameTimeline's
+    "frames"), tried again while its trace counted no frame: an empty run would read as zero work
+    and no percentiles, and pull the medians down."""
+    for _ in range(TRACE_ATTEMPTS):
+        result = attempt()
+        stats = result[-1] if isinstance(result, tuple) else result
+        if stats["trace"]["frames"] > 0:
+            return result
+        print(f"{what}: the trace has no frame of the app's; again")
+    raise SystemExit(f"{what}: no frame traced in {TRACE_ATTEMPTS} attempts")
+
+
 def scroll_run(trace_processor, out_dir, package, name, run, capacities):
     """One traced run of 10 flings through the feed, after a warm-up swipe: the display, idle
     since the app started, resyncs its vsync on the first input, which FrameTimeline counts as
@@ -758,7 +777,9 @@ def main():
     scroll = {name: [] for name in APPS}
     for run in range(3):
         for name, package in APPS.items():
-            after_start, stats = scroll_run(tp, arguments.out, package, name, run, capacities)
+            after_start, stats = traced(
+                lambda: scroll_run(tp, arguments.out, package, name, run, capacities),
+                f"scroll {name} {run}")
             memory[name]["after_start"].append(after_start)
             scroll[name].append(stats)
             memory[name]["after_scroll"].append(meminfo(package))
@@ -770,14 +791,17 @@ def main():
     animation = {name: [] for name in APPS}
     for run in range(3):
         for name, package in APPS.items():
-            fresh(package)
-            time.sleep(1.0)
-            start(package, "feed_animated")
-            time.sleep(3)
-            gfxinfo(package, reset=True)
-            process, path = start_trace(package, 10000, f"animation-{name}-{run}")
-            trace = finish_trace(process, path, arguments.out)
-            stats = {"gfxinfo": gfxinfo(package), "trace": frame_stats(tp, trace, package, capacities)}
+            def animation_run():
+                fresh(package)
+                time.sleep(1.0)
+                start(package, "feed_animated")
+                time.sleep(3)
+                gfxinfo(package, reset=True)
+                process, path = start_trace(package, 10000, f"animation-{name}-{run}")
+                trace = finish_trace(process, path, arguments.out)
+                return {"gfxinfo": gfxinfo(package),
+                        "trace": frame_stats(tp, trace, package, capacities)}
+            stats = traced(animation_run, f"animation {name} {run}")
             animation[name].append(stats)
             print("animation", name, run, json.dumps(stats))
     report["animation"] = animation

@@ -203,8 +203,9 @@ abstract class BuildRust : Exec() {
 androidComponents {
     onVariants { variant ->
         val name = "buildRust" + variant.name.replaceFirstChar(Char::uppercase)
-        // The workspace's Cargo profiles: release variants also take fat LTO.
-        val cargoProfile = if (variant.buildType == "release") "android-release" else "android"
+        // The workspace's Cargo profiles: release (non-debuggable) variants also take fat LTO.
+        val debuggable = variant.buildType?.let { android.buildTypes.getByName(it).isDebuggable } ?: true
+        val cargoProfile = if (debuggable) "android" else "android-release"
         val buildRust = tasks.register<BuildRust>(name) {
             val output = outputDirectory
             executable = rootDir.resolve("build-rust.sh").path

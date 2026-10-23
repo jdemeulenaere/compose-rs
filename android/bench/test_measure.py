@@ -202,6 +202,16 @@ class CompiledTest(unittest.TestCase):
             measure.check_compiled({"rs": []}, "verify")
 
 
+class EmptyTraceTest(unittest.TestCase):
+    def test_a_run_without_frames_is_run_again(self):
+        results = iter([{"trace": {"frames": 0}}, {"trace": {"frames": 1200}}])
+        self.assertEqual(measure.traced(lambda: next(results), "animation"), {"trace": {"frames": 1200}})
+        results = iter([("memory", {"trace": {"frames": 0}}), ("memory", {"trace": {"frames": 9}})])
+        self.assertEqual(measure.traced(lambda: next(results), "scroll")[1]["trace"]["frames"], 9)
+        with self.assertRaises(SystemExit):
+            measure.traced(lambda: {"trace": {"frames": 0}}, "scroll")
+
+
 class QueryTest(unittest.TestCase):
     def test_a_failed_query_stops_the_run(self):
         # A trace processor exiting with an error must not read as no rows (zero counts).
