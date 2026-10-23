@@ -91,6 +91,9 @@ struct LazyListInner {
     pinned_near: Cell<usize>,
     /// The list has had items: an empty layout before that keeps the initial position.
     had_items: Cell<bool>,
+    /// Not laid out yet, its items' composition composed more than `composed` (the slots it
+    /// kept in content reused): the layout makes them the composed range.
+    composed_more: Cell<bool>,
     /// The items composed, in the children's order: written by their composition, read by the
     /// layout (a change of children measures it again).
     children: RefCell<Vec<usize>>,
@@ -132,6 +135,7 @@ impl LazyListInner {
             pinned: mutable_state_of(None),
             pinned_near: Cell::new(0),
             had_items: Cell::new(false),
+            composed_more: Cell::new(false),
             children: RefCell::new(Vec::new()),
             first_index: mutable_state_of(first_visible_item_index),
             first_offset: mutable_state_of(offset),
@@ -1047,12 +1051,11 @@ struct ItemSlot {
     content_type: Option<u64>,
 }
 
-/// What a slot holds in a pass: an item (by index), or its content deactivated, kept for reuse
-/// (`just_now`: its item left in this pass).
+/// What a slot holds in a pass: an item (by index), or its content deactivated, kept for reuse.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SlotContent {
     Item(usize),
-    Deactivated { just_now: bool },
+    Deactivated,
 }
 
 /// The key of a slot's reusable group (its data key is its item's key).
@@ -1080,9 +1083,11 @@ fn compose_slot(
             composer.start_reusable_group(SLOT_GROUP, slot.key);
             LazyItem(index, state, items.clone(), holder);
         }
-        SlotContent::Deactivated { just_now } => {
+        SlotContent::Deactivated => {
+            // Its data key changes as its item leaves: the composer deactivates its content
+            // then (content being reused), and skips it after.
             composer.start_reusable_group(SLOT_GROUP, NO_ITEM);
-            composer.deactivate_to_end_group(just_now);
+            composer.deactivate_to_end_group(false);
         }
     }
     composer.end_reusable_group();
@@ -1125,13 +1130,11 @@ impl ItemSlots {
             };
             assigned.push((index, slot));
         }
-        let leaving = self.reusable.len();
         for (position, slot) in self.active.iter().enumerate() {
             if !taken[position] {
                 self.reusable.push(*slot);
             }
         }
-        let leaving: Vec<u64> = self.reusable[leaving..].iter().map(|slot| slot.id).collect();
         for (_, slot) in &mut assigned {
             if slot.id == NO_SLOT {
                 slot.id = match self.take_reusable(slot.key, slot.content_type) {
@@ -1144,23 +1147,20 @@ impl ItemSlots {
             }
         }
         self.active = assigned.iter().map(|(_, slot)| *slot).collect();
-        LazyLayoutItemReusePolicy.get_slots_to_retain(&mut self.reusable);
+        LazyLayoutItemReusePolicy::get_slots_to_retain(&mut self.reusable);
         let mut composed: Vec<(ItemSlot, SlotContent)> =
             assigned.into_iter().map(|(index, slot)| (slot, SlotContent::Item(index))).collect();
-        composed.extend(self.reusable.iter().map(|slot| {
-            (*slot, SlotContent::Deactivated { just_now: leaving.contains(&slot.id) })
-        }));
+        composed.extend(self.reusable.iter().map(|slot| (*slot, SlotContent::Deactivated)));
         composed
     }
 
     /// Takes a slot kept for reuse for the item with `key` and `content_type`: the one it was
     /// in, else the newest compatible one (as Compose's `takeNodeFromReusables`).
     fn take_reusable(&mut self, key: u64, content_type: Option<u64>) -> Option<u64> {
-        let policy = LazyLayoutItemReusePolicy;
         let position = (self.reusable.iter().rposition(|slot| slot.key == key)).or_else(|| {
-            self.reusable
-                .iter()
-                .rposition(|slot| policy.are_compatible(content_type, slot.content_type))
+            self.reusable.iter().rposition(|slot| {
+                LazyLayoutItemReusePolicy::are_compatible(content_type, slot.content_type)
+            })
         })?;
         Some(self.reusable.remove(position).id)
     }
@@ -1169,13 +1169,14 @@ impl ItemSlots {
 /// Which items that left are kept for reuse, and which item may reuse which, as Compose's
 /// `LazyLayoutItemReusePolicy` (a `SubcomposeSlotReusePolicy`): up to
 /// `MAX_ITEMS_TO_RETAIN_FOR_REUSE` of each content type; an item reuses one of its content type
-/// (`null`, here `None`, being one).
-struct LazyLayoutItemReusePolicy;
+/// (`null`, here `None`, being one). Compose's is an object of the item content factory; here
+/// the slots know their items' content types, so it holds nothing.
+enum LazyLayoutItemReusePolicy {}
 
 impl LazyLayoutItemReusePolicy {
     /// Keeps the newest `MAX_ITEMS_TO_RETAIN_FOR_REUSE` of each content type among `reusable`
     /// (oldest first), as `getSlotsToRetain`; the others are disposed.
-    fn get_slots_to_retain(&self, reusable: &mut Vec<ItemSlot>) {
+    fn get_slots_to_retain(reusable: &mut Vec<ItemSlot>) {
         if reusable.len() <= MAX_ITEMS_TO_RETAIN_FOR_REUSE {
             return;
         }
@@ -1204,11 +1205,7 @@ impl LazyLayoutItemReusePolicy {
 
     /// Whether an item of `content_type` may reuse the slot of one of `reusable_content_type`, as
     /// `areCompatible`: the same content type.
-    fn are_compatible(
-        &self,
-        content_type: Option<u64>,
-        reusable_content_type: Option<u64>,
-    ) -> bool {
+    fn are_compatible(content_type: Option<u64>, reusable_content_type: Option<u64>) -> bool {
         content_type == reusable_content_type
     }
 }
@@ -1380,9 +1377,25 @@ fn LazyItems(
     holder: SaveableStateHolder,
     fallback: Option<Constraints>,
 ) {
+    // Each item in a slot of its own, which an item of its content type reuses once it left
+    // (D430). Kept when the list is in content reused (an outer list's item reused for
+    // another): its items are reused too, as Compose keeps a reused node's
+    // `SubcomposeLayoutState`.
+    let slots = compose_runtime::platform::remember_across_reuse(|| {
+        Rc::new(RefCell::new(ItemSlots::default()))
+    });
     let inner = state.inner_or_detached();
-    let (start, end) = inner.composed.get();
+    let (start, mut end) = inner.composed.get();
     let count = items.0.count;
+    // A list not laid out yet composes its first item, and then those its layout asks for; in
+    // reused content, it composes as many as it had, which keep their slots (as Compose's
+    // measurement takes the active slots by key) rather than going to those kept for reuse,
+    // where all but 7 would be disposed.
+    if !inner.had_items.get() && start + slots.borrow().active.len() > end {
+        end = start + slots.borrow().active.len();
+        // The layout makes it the composed range (rather than the first item alone).
+        inner.composed_more.set(true);
+    }
     let mut indices: Vec<usize> = (start.min(count)..end.min(count)).collect();
     // The focused item, by key (gone with its item).
     if let Some(pinned) = inner.pinned.get()
@@ -1406,9 +1419,6 @@ fn LazyItems(
     // The items' constraints, for those composing for theirs (`BoxWithConstraints`).
     let hint = inner.item_constraints.get().or(fallback);
     drop(inner);
-    // Each item in a slot of its own, which an item of its content type reuses once it left
-    // (D430).
-    let slots = remember(|| Rc::new(RefCell::new(ItemSlots::default())));
     let composed = slots.borrow_mut().assign(&items.0, &indices);
     compose_runtime::CompositionLocalProvider(
         compose_ui::platform::LOCAL_CONSTRAINTS_HINT.provides(hint),
@@ -1811,6 +1821,9 @@ impl MeasurePolicy for LazyListLayout {
             composed_start + 2 * beyond < wanted_start || composed_end > wanted_end + 2 * beyond;
         let prefetch = &state.prefetch;
         let mut composed = (composed_start, composed_end);
+        if state.composed_more.take() && covers && !too_many {
+            state.composed.set(composed);
+        }
         if !covers || too_many {
             // Items prefetched ahead in the scroll direction stay, and those just behind it (up
             // to `KEPT_BEHIND`), for a scroll back: those composed next to the wanted ones (a

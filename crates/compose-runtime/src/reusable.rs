@@ -21,12 +21,11 @@ const REUSE_KEY: u64 = key_of("compose_runtime::reuseKey");
 /// Matched by position, not by `key`: unlike `key(…)`, two of them in a loop don't move with
 /// their keys (put each in a `key(…)` for that).
 #[allow(non_snake_case)]
-pub fn ReusableContent<R>(key: impl Hash, content: impl FnOnce() -> R) -> R {
+pub fn ReusableContent(key: impl Hash, content: impl FnOnce()) {
     let composer = current();
     composer.start_reusable_group(REUSE_KEY, hash_key(&key));
-    let result = content();
+    content();
     composer.end_reusable_group();
-    result
 }
 
 /// Composes `content` while `active`, as Compose's `ReusableContentHost(active) { … }`. While

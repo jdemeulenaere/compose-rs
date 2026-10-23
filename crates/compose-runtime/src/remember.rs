@@ -100,6 +100,22 @@ pub fn remember<T: Remember>(calc: impl FnOnce() -> T) -> T::Output {
     }
 }
 
+/// Like [`remember`], but content reused around it (`ReusableContent` with another key, a lazy
+/// list's item reused for another) finds the value it remembered, where `remember` computes a
+/// new one: as a value of Compose's `ReusableRememberObserver` (`rememberCompositionContext`'s, a
+/// `SubcomposeLayoutState` kept on its reused node). For state a component keeps for the content
+/// it composes, which reused content reuses too: a lazy list keeps its items' slots so (D430).
+pub fn remember_across_reuse<T: Remember>(calc: impl FnOnce() -> T) -> T::Output {
+    let (position, existing) = slot_next(TypeId::of::<T::Stored>());
+    if let Some(existing) = existing {
+        return T::output(downcast::<T::Stored>(&existing));
+    }
+    let stored = Rc::new(calc().into_stored());
+    let output = T::output(&stored);
+    slot_set(position, SlotValue::KeptOnReuse(stored), type_name::<T::Stored>());
+    output
+}
+
 /// Like [`remember`], recomputed whenever `keys` is not [`same`](ComposeArg::same) as last time,
 /// as Compose's `remember(key1, …) { … }`. The replaced value is forgotten at the end of the pass.
 pub fn remember_keyed<K: ComposeArg, T: Remember>(keys: K, calc: impl FnOnce() -> T) -> T::Output {

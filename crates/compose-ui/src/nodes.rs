@@ -498,6 +498,9 @@ impl ModifierNode for ClickableNode {
     fn on_reset(&mut self) {
         self.release_later();
         let tap_pressed = self.state.tap_pressed.take();
+        if let Some(pressed) = &tap_pressed {
+            pressed.set(false);
+        }
         self.state = PressState { tap_pressed, ..PressState::default() };
     }
     fn as_pointer_input(&mut self) -> Option<&mut dyn PointerInputModifierNode> {

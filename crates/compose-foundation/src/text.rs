@@ -272,6 +272,11 @@ pub(crate) struct TextNode {
 }
 
 impl ModifierNode for TextNode {
+    /// Reused for another text: a selection in it goes, as with a new text.
+    fn on_reset(&mut self) {
+        self.selection = None;
+        self.selection_rects.clear();
+    }
     fn as_layout(&mut self) -> Option<&mut dyn LayoutModifierNode> {
         Some(self)
     }

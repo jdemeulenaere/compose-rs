@@ -448,3 +448,37 @@ fn a_reused_items_modifier_nodes_are_reset_for_it() {
     let nodes = nodes_of(0..1000);
     assert!(nodes.len() < 30, "{} nodes: reused", nodes.len());
 }
+
+/// A popup in deactivated content isn't placed, drawn, hit nor in the semantics; active again,
+/// it shows.
+#[test]
+fn a_popup_in_deactivated_content_is_not_shown() {
+    use compose_foundation::layout::*;
+    use compose_ui::Popup;
+    let active = mutable_state_of(true);
+    let handle = active.handle();
+    let mut ui = compose_test(move || {
+        Column!(modifier = Modifier.size(100.dp()), {
+            ReusableContentHost(handle.get(), move || {
+                Popup!(on_dismiss_request = || {}, {
+                    Box!(
+                        modifier = Modifier
+                            .size(20.dp())
+                            .test_tag("in popup")
+                            .background(compose_ui::Color::RED)
+                    );
+                });
+            });
+        });
+    });
+    ui.wait_for_idle();
+    ui.on_node_with_tag("in popup").assert_exists();
+    active.set(false);
+    ui.wait_for_idle();
+    ui.on_node_with_tag("in popup").assert_does_not_exist();
+    let drawn = ui.dump_display_list();
+    assert!(!drawn.contains("#FFFF0000"), "drawn:\n{drawn}");
+    active.set(true);
+    ui.wait_for_idle();
+    ui.on_node_with_tag("in popup").assert_exists();
+}

@@ -41,6 +41,9 @@ pub(crate) enum GroupKind {
 /// or a mismatched group recreates a slot instead of misreading it.
 pub(crate) enum SlotValue {
     Plain(Rc<dyn Any>),
+    /// A value content being reused finds (`remember_across_reuse`), as a value of Compose's
+    /// `ReusableRememberObserver`: a lazy list's slots, kept by the list in an item reused.
+    KeptOnReuse(Rc<dyn Any>),
     Observer(Rc<dyn ErasedObserver>),
     /// A remember observer's slot after its content was deactivated (`deactivate_to_end_group`),
     /// as Compose's `Composer.Empty`: it was forgotten, and nothing reads it.
@@ -53,7 +56,7 @@ struct EmptySlot;
 impl SlotValue {
     pub fn value_type_id(&self) -> TypeId {
         match self {
-            SlotValue::Plain(value) => Any::type_id(&**value),
+            SlotValue::Plain(value) | SlotValue::KeptOnReuse(value) => Any::type_id(&**value),
             SlotValue::Observer(observer) => Any::type_id(observer.as_any()),
             SlotValue::Empty => TypeId::of::<EmptySlot>(),
         }
@@ -65,7 +68,7 @@ impl SlotValue {
     /// [`value_type_id`]: SlotValue::value_type_id
     pub fn to_any(&self) -> Option<Rc<dyn Any>> {
         match self {
-            SlotValue::Plain(value) => Some(value.clone()),
+            SlotValue::Plain(value) | SlotValue::KeptOnReuse(value) => Some(value.clone()),
             SlotValue::Observer(observer) => Some(observer.clone().into_any()),
             SlotValue::Empty => None,
         }

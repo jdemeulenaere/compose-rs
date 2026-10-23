@@ -193,7 +193,7 @@ impl UiTree {
         for index in 0..count {
             let child = self.node(node).children[index].node;
             let value = self.node(child);
-            if !value.needs_measure && !value.subtree_needs_measure {
+            if (!value.needs_measure && !value.subtree_needs_measure) || value.deactivated {
                 continue;
             }
             // Its parent's size depends on its intrinsics, not just its size.
@@ -256,11 +256,30 @@ impl UiTree {
         } else {
             let policy = value.policy.clone();
             let children = mem::take(&mut value.children);
-            for child in &children {
+            // Deactivated children (content kept for reuse) aren't measured, so not placed: at
+            // the end, as a lazy list keeps them, the others are a prefix; anywhere else, a copy.
+            let mut active = children.len();
+            let mut scattered = false;
+            for (index, child) in children.iter().enumerate() {
                 let child = self.node_mut(child.node);
                 child.placed = false;
                 child.intrinsics_asked = false;
+                if child.deactivated {
+                    active = active.min(index);
+                } else if active < index {
+                    scattered = true;
+                }
             }
+            let filtered: Vec<Measurable> = if scattered {
+                (children.iter())
+                    .filter(|child| !self.node(child.node).deactivated)
+                    .copied()
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            let measurables: &[Measurable] =
+                if scattered { &filtered } else { &children[..active] };
             let run = self.next_measure_run();
             let observer = self.observer.clone();
             let mut relative = Vec::new();
@@ -269,9 +288,9 @@ impl UiTree {
                 let result = match &observer {
                     Some(observer) => observer
                         .observe(observation_key(node, Observation::Measure), || {
-                            policy.measure(&mut scope, &children, constraints)
+                            policy.measure(&mut scope, measurables, constraints)
                         }),
-                    None => policy.measure(&mut scope, &children, constraints),
+                    None => policy.measure(&mut scope, measurables, constraints),
                 };
                 relative = scope.relative;
                 result

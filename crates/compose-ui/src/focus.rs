@@ -26,7 +26,8 @@ impl UiTree {
     /// The chain index of the node's first focus target that can take focus.
     pub(crate) fn focus_target_index(&mut self, node: NodeId) -> Option<usize> {
         let value = self.get_mut(node)?;
-        if value.all_capabilities & capability::FOCUS == 0 {
+        // Content kept for reuse takes no focus (nor keys, which go to the focused node).
+        if value.all_capabilities & capability::FOCUS == 0 || value.deactivated {
             return None;
         }
         (0..value.chain.len()).find(|&index| {

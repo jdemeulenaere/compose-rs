@@ -699,7 +699,10 @@ impl Runtime {
         // `remember` computes anew, and the value it replaces is forgotten.
         let value = slots
             .get(index as usize)
-            .filter(|slot| self.reusing == 0 && slot.value.value_type_id() == type_id)
+            .filter(|slot| {
+                (self.reusing == 0 || matches!(slot.value, SlotValue::KeptOnReuse(_)))
+                    && slot.value.value_type_id() == type_id
+            })
             .and_then(|slot| slot.value.to_any());
         (SlotPosition { depth, group, index }, value)
     }

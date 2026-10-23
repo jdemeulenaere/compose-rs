@@ -223,6 +223,10 @@ impl ModifierNodeElement for ScrollbarElement {
 }
 
 impl ModifierNode for ScrollbarNode {
+    fn on_reset(&mut self) {
+        self.drag = None;
+        self.hovered = false;
+    }
     fn as_layout(&mut self) -> Option<&mut dyn LayoutModifierNode> {
         Some(self)
     }
