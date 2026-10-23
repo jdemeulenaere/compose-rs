@@ -5,7 +5,7 @@
 **Short answer** (Pixel 8 Pro, Android 16; round 9 of [12](12-android-performance.md), compose-rs at c57a8e1 with its own RenderThread hint session (D390), paths reused (D410) and one task per infinite transition (D420); medians of 3 runs, startup of 15):
 
 - **Scrolling the stress list**, neither app janks much: Compose missed 3 app deadlines in 3 runs, compose-rs none.
-  - compose-rs's slowest main-thread frames are much shorter: p99 3.60 against 8.07 ms, for less than half the work. Its median is longer (1.67 against 1.26 ms): its main thread ran mostly on the little cores.
+  - compose-rs's slowest main-thread frames are much shorter: p99 3.60 against 8.07 ms, for less than half the work. Its median is longer (1.67 against 1.26 ms): its main thread ran mostly on the little cores. Since D440, compose-rs's hint session holds the main thread too: in an interleaved A/B its p50 / p99 went from 1.54 / 3.53 to 1.07 / 2.97 ms ("The main thread in the hint session" below).
   - Its RenderThread is now faster: p50 2.20 against 2.62 ms (3.04 ms in the first results). Its own hint session (D390) keeps it boosted.
 - **The stress animation** keeps both RenderThreads busy for most of a 120 Hz vsync (8.33 ms): Compose's frames exceed it at p90, compose-rs's at p99.
   - compose-rs had no janky frame, Compose one a run. In earlier sessions, each app had a few, depending on the session.
@@ -475,9 +475,35 @@ Most of the 140 transitions' remaining time is the values' own math: the easing 
 - **The feed's animation** (`animation`, docs/12) didn't move: compose-rs's main thread p50 / p90 / p99 1.21 / 1.79 / 2.91 ms before and 1.21 / 1.80 / 3.15 ms after, with 187 ms of work both times and no janky frames. Its header has three animated values.
 - **In round 9** ("Results" above; with D390 as well, which neither build here had), compose-rs's main thread p50 / p90 / p99 was 2.36 / 2.97 / 3.99 ms for 1,444 ms of work, `compose-rs: tasks` 0.36 ms a frame, and the RenderThread's p50 6.34 ms: the gains held, with a p99 below both builds' here.
 
+## The main thread in the hint session (D440)
+
+Round 9 left compose-rs's main thread on the little cores on this list (above, "The main thread lost the boost it had"). Two findings ([14](14-performance-opportunities.md), "The main thread in the session"):
+- **Why the vote sits near 320 here, and near 100 on the feed.** Under the target, the power HAL's controller is a random walk. About every 83 ms it takes about 23 off the vote, whatever the vote, and adds 7.7 for each 100 µs by which the last report of the batch exceeds the one before; only rises count. This list's frames vary more from one to the next than the feed's. The kicks average 26 to 29 a batch here against 20 to 21 there, so the vote drifts up here and down there. HWUI's session works the same way, which is why Compose's main thread is boosted on this list too (its vote about 290).
+- **The fix: the main thread joins compose-rs's session.** It gets the same vote as the RenderThread; the reports don't change.
+
+Interleaved on the device, 12 runs each against main (18272a3), the variants rotating each round (medians of the runs' percentiles; power: means over the measured 13 s and 9 s, the difference ± its 95 % interval):
+
+| | Stress scroll: main | with the main thread (D440) | Stress animation: main | with the main thread (D440) |
+|---|---|---|---|---|
+| Main thread per frame p50 / p90 / p99 | 1.54 / 2.24 / 3.53 ms | **1.07** / **1.71** / **2.97** ms | 2.36 / 3.00 / 4.10 ms | 2.26 / 2.83 / 3.80 ms |
+| RenderThread per frame p50 / p90 / p99 | 2.39 / 3.46 / 5.01 ms | 2.49 / 3.51 / 4.83 ms | 6.36 / 7.43 / 8.50 ms | 6.38 / 7.43 / 8.43 ms |
+| Janky frames, the app's / the compositor's (12 runs) | 0 / 0 | 0 / 2 (one run) | 1 / 0 | 1 / 0 |
+| `doFrame`s delayed by main-thread work (on the list, prefetch steps; 12 runs) | 58 (1 to 10 a run) | **4** (0 or 1) | 1 | 0 |
+| Main thread on the little cores | 79 % | 28 % | 0 % | 0 % |
+| Main thread CPU time (work) | 3,529 (498) ms | 2,368 (610) ms | 2,515 (1,295) ms | 2,409 (1,318) ms |
+| Power: CPU rails | 474 ± 14 mW | −0.7 % ± 2.2 | 1,837 ± 61 mW | −0.8 % ± 2.8 |
+| Power: all rails | 1,813 ± 35 mW | −0.6 % ± 1.6 | 3,663 ± 87 mW | −0.4 % ± 1.9 |
+
+- **The list's main thread.** Its median is now shorter than Compose's in round 9 (1.07 against 1.26 ms). The runs' p50s range over 1.02 to 1.23 ms against main's 1.51 to 1.61, and their p99s over 2.69 to 3.05 against 3.16 to 3.90 ms.
+- **Prefetch steps.** Almost no frame waits for one any more.
+- **Power.** No change was resolved.
+- **The animation.** It moves little: both sessions already vote about 430 to 465 there, and both threads run on the mid and big cores.
+- **The compositor.** One run had 2 compositor-side janky frames and presented 72 frames a vsync late, on cadence. In all, 4 of the 48 runs with the main thread had such frames (1 to 3), against none of main's 48: too few to tell from noise.
+- **Not chosen.** Reporting both threads' CPU time against 8.33 ms gave shorter frames still: list main thread p50 0.94 ms, RenderThread 2.09 ms. It cost +2.6 % (± 2.3) CPU-rail power here and +4.0 % (± 2.1) on the feed (D442).
+
 ## Next steps
 
 - **Paths in the bridge**: done (D410, D411, "With paths reused"). HWUI's worker threads still take about 30 % more CPU time than Compose's in the animation (11.2 against 8.6 s in round 9), unchanged by D410; why isn't known.
 - **Infinite transitions**: done (D420–D424). The 0.4 ms of tasks a frame left is mostly easing curves and color conversions.
-- **The stress list's main thread on the little cores**: with D390 boosting the RenderThread, HWUI's session no longer boosts the main thread, which runs 83 % of its time on the little cores. Its work is unchanged, but its median frame is longer than Compose's (1.67 against 1.26 ms), 8 to 16 `doFrame`s a run wait for a prefetch step, and 1 to 3 frames a run lay out a newly revealed item themselves. None was janky. Splitting an item's measurement so a step can stop at the deadline ([12](12-android-performance.md), "Next steps") would address the waits; whether the main thread should join compose-rs's hint session is the other question, at a power cost.
+- **The stress list's main thread on the little cores**: done (D440, "The main thread in the hint session"). The main thread joined compose-rs's hint session: on the little cores 79 → 28 % of its time, p50 1.54 → 1.07 ms, `doFrame`s waiting for a prefetch step 58 → 4 in 12 runs, no power change resolved. Whether frames still lay out a newly revealed item themselves (1 to 3 a run in round 9) is for the next round's traces; splitting an item's measurement so a step can stop at the deadline ([12](12-android-performance.md), "Next steps") remains the fix for those.
 - **Shader warm-up**: a pipeline compiled on first use cost compose-rs its one janky scroll frame in the first results (none in round 9). Compose's apps share the same cache behavior; it isn't specific to compose-rs, but it showed here.
