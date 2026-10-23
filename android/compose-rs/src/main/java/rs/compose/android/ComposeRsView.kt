@@ -50,7 +50,8 @@ import android.view.inputmethod.InputMethodManager
  * The app receives properties ([setProp]) and sends events ([setOnEventListener]).
  *
  * While it shows, on API 33+, the RenderThread is in a performance hint session of compose-rs's
- * own, so Android boosts it as it boosts a Compose app's ([isPerformanceHintEnabled]).
+ * own, so Android boosts it when its own frames run long, not only after long main-thread
+ * frames ([isPerformanceHintEnabled]).
  */
 class ComposeRsView(context: Context, private val app: String) : View(context) {
     private val measurer =
@@ -72,10 +73,15 @@ class ComposeRsView(context: Context, private val app: String) : View(context) {
      * Android boosts a thread through HWUI's own session too, but only after long frames
      * counting the main thread's, which compose-rs's are rarely: without it, the RenderThread
      * mostly runs on slower cores at lower frequencies, and its frames take longer for the same
-     * work. Off, only HWUI's session boosts it, which costs less power.
+     * work. Off, only HWUI's session boosts it, which costs less power. Set from another thread,
+     * it applies on the main thread.
      */
     var isPerformanceHintEnabled = true
         set(value) {
+            if (Looper.myLooper() != Looper.getMainLooper()) {
+                mainHandler.post { isPerformanceHintEnabled = value }
+                return
+            }
             field = value
             updatePerformanceHint()
         }

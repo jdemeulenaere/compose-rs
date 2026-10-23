@@ -5,21 +5,26 @@
 //! higher frequencies) when a performance hint session holding it reports work running long
 //! against its target (ADPF). HWUI runs one session per window for the main thread and the
 //! RenderThread, reporting each frame's duration from the main thread's start to the
-//! RenderThread's end against the vsync interval: an app whose main-thread frames are short is
-//! rarely boosted, and its RenderThread's frames then take longer for the same work (docs/14,
-//! "The scroll's RenderThread"). So a view showing compose-rs keeps a session of its own for the
-//! RenderThread alone, reporting the RenderThread's CPU time over each frame against
-//! [`TARGET_NANOS`]. The power HAL applies the highest boost of a thread's sessions.
+//! RenderThread's end against its deadline (about 1.4 vsync intervals): an app whose main-thread
+//! frames are short is rarely boosted, and its RenderThread's frames then take longer for the
+//! same work (docs/14, "The scroll's RenderThread"). So a view showing compose-rs keeps a
+//! session of its own for the RenderThread alone, reporting the RenderThread's CPU time over
+//! each frame against [`TARGET_NANOS`]. The power HAL applies the highest boost of a thread's
+//! sessions.
 //!
 //! What is reported: the RenderThread's CPU time since the last compose-rs frame, read when the
-//! next one starts (one `clock_gettime` of the thread's CPU clock): the work it did for the frame
-//! before, as it ends well before the next vsync. No listener, no other thread, and no call into
-//! Java: `frame` reads it.
+//! next one starts (one `clock_gettime` of the thread's CPU clock). While compose-rs makes a
+//! frame every vsync, that is the work the RenderThread did for the frame before, which ends
+//! well before the next vsync (with whatever else it drew in between: other views' frames in
+//! the same window, its own animations). After a gap of more than [`MOST_FRAME_GAP`], the time
+//! since isn't one frame's: it starts a new count, unreported. No listener, no other thread,
+//! and no call into Java: `frame` reads it.
 //!
 //! The session is the process's (the RenderThread is): open while a view with hints enabled is
-//! shown, created at the first frame after that (finding the RenderThread among the process's
-//! threads), closed when the last such view hides or goes. Below API 33 (no `APerformanceHint`),
-//! or if the system gives no session, nothing happens.
+//! shown, created at the second frame after that (not on the first frame's path, the window's
+//! first traversal at startup; the RenderThread found among the process's threads once), closed
+//! when the last such view hides or goes. Below API 33 (no `APerformanceHint`), or if the system
+//! gives no session, nothing happens.
 
 // Only Android has the system side.
 #![cfg_attr(not(target_os = "android"), allow(dead_code))]
@@ -31,8 +36,13 @@ use std::time::{Duration, Instant};
 pub(crate) const TARGET_NANOS: i64 = 6_500_000;
 
 /// Frames of other views within this time of a reported one are the same frame (two views
-/// showing compose-rs in one window run their frames back to back): not reported again.
-const SAME_FRAME: Duration = Duration::from_millis(2);
+/// showing compose-rs in one window run their frames back to back, the second after the first
+/// ends): not reported again. Half a 120 Hz vsync interval.
+const SAME_FRAME: Duration = Duration::from_millis(4);
+
+/// Frames further apart than this (one and a half 60 Hz intervals) don't report the
+/// RenderThread's time between them: it may hold several frames, or other content's.
+const MOST_FRAME_GAP: Duration = Duration::from_millis(25);
 
 /// Every this many reports, the session's thread is checked to still be the RenderThread (a new
 /// one is found, and the session made again, if not).
@@ -73,10 +83,13 @@ pub(crate) struct RenderThreadHint<P: HintPlatform> {
     target_nanos: i64,
     shown: usize,
     open: Option<Open<P::Session>>,
+    /// The RenderThread found last, checked by name before it's used again.
+    render_thread: Option<i32>,
     /// Sessions made again since the views showed.
     reopens: u32,
     /// No session to be had until the views hide and show again.
     gave_up: bool,
+    /// When the last frame since the views showed started.
     last_frame: Option<Instant>,
 }
 
@@ -87,6 +100,7 @@ impl<P: HintPlatform> RenderThreadHint<P> {
             target_nanos,
             shown: 0,
             open: None,
+            render_thread: None,
             reopens: 0,
             gave_up: false,
             last_frame: None,
@@ -118,15 +132,20 @@ impl<P: HintPlatform> RenderThreadHint<P> {
     }
 
     /// A shown view's frame starts at `now`: the RenderThread's work since the last frame is
-    /// reported (the session made first, if none is open).
+    /// reported (the session made first, if none is open: not at the first frame since the
+    /// views showed).
     pub(crate) fn frame(&mut self, now: Instant) {
         if self.shown == 0 || self.gave_up {
             return;
         }
-        if self.last_frame.is_some_and(|last| now.saturating_duration_since(last) < SAME_FRAME) {
+        let since_last = self.last_frame.map(|last| now.saturating_duration_since(last));
+        if since_last.is_some_and(|since| since < SAME_FRAME) {
             return;
         }
         self.last_frame = Some(now);
+        let Some(since_last) = since_last else {
+            return;
+        };
         let Some(open) = self.open.as_mut() else {
             self.open_session();
             return;
@@ -137,8 +156,12 @@ impl<P: HintPlatform> RenderThreadHint<P> {
         };
         let work = cpu_nanos - open.cpu_nanos;
         open.cpu_nanos = cpu_nanos;
+        if since_last > MOST_FRAME_GAP {
+            return;
+        }
         open.reports = open.reports.wrapping_add(1);
         if open.reports % CHECK_THREAD_EVERY == 0 && !self.platform.is_render_thread(open.tid) {
+            self.render_thread = None;
             self.reopen();
             return;
         }
@@ -149,7 +172,10 @@ impl<P: HintPlatform> RenderThreadHint<P> {
     }
 
     fn open_session(&mut self) {
-        let opened = self.platform.render_thread().and_then(|tid| {
+        let _section = compose_ui::platform::trace::section(c"compose-rs: hint session");
+        let cached = self.render_thread.filter(|&tid| self.platform.is_render_thread(tid));
+        self.render_thread = cached.or_else(|| self.platform.render_thread());
+        let opened = self.render_thread.and_then(|tid| {
             let cpu_nanos = self.platform.thread_cpu_nanos(tid)?;
             let session = self.platform.create_session(&[tid], self.target_nanos)?;
             Some(Open { session, tid, cpu_nanos, reports: 0 })
@@ -164,7 +190,7 @@ impl<P: HintPlatform> RenderThreadHint<P> {
     }
 
     /// The session failed, or its thread isn't the RenderThread any more: closed, and made
-    /// again (with the RenderThread found again) at the next frame, a few times at most.
+    /// again at the next frame, a few times at most.
     fn reopen(&mut self) {
         self.close();
         self.reopens += 1;
@@ -361,6 +387,8 @@ mod tests {
     #[derive(Default)]
     struct State {
         render_thread: Option<i32>,
+        /// How often the RenderThread was looked for among the threads.
+        scans: u32,
         /// Threads that aren't the RenderThread any more.
         renamed: Vec<i32>,
         cpu: std::collections::HashMap<i32, i64>,
@@ -378,7 +406,9 @@ mod tests {
     impl HintPlatform for Fake {
         type Session = u32;
         fn render_thread(&self) -> Option<i32> {
-            self.0.borrow().render_thread
+            let mut state = self.0.borrow_mut();
+            state.scans += 1;
+            state.render_thread
         }
         fn is_render_thread(&self, tid: i32) -> bool {
             let state = self.0.borrow();
@@ -424,22 +454,37 @@ mod tests {
         *fake.0.borrow_mut().cpu.get_mut(&tid).unwrap() += nanos;
     }
 
+    /// A view shows and makes two frames from `start`, which open the session: when the next
+    /// frame is due.
+    fn shown_and_opened(hint: &mut RenderThreadHint<Fake>, start: Instant) -> Instant {
+        hint.show();
+        hint.frame(start);
+        hint.frame(start + INTERVAL);
+        start + 2 * INTERVAL
+    }
+
     #[test]
     fn nothing_happens_until_a_view_shows() {
         let fake = platform();
         let mut hint = RenderThreadHint::new(fake.clone(), TARGET_NANOS);
         hint.frame(Instant::now());
+        hint.frame(Instant::now() + INTERVAL);
         assert!(fake.0.borrow().created.is_empty());
         assert!(!hint.is_open());
     }
 
     #[test]
-    fn the_first_frame_shown_opens_a_session_for_the_render_thread() {
+    fn the_second_frame_shown_opens_a_session_for_the_render_thread() {
         let fake = platform();
         let mut hint = RenderThreadHint::new(fake.clone(), 4 * MS);
         hint.show();
-        assert!(fake.0.borrow().created.is_empty(), "made at the first frame, not on show");
-        hint.frame(Instant::now());
+        assert!(fake.0.borrow().created.is_empty(), "made at a frame, not on show");
+        let start = Instant::now();
+        // The first frame (at startup, the window's first traversal's) opens nothing.
+        hint.frame(start);
+        assert!(fake.0.borrow().created.is_empty());
+        assert_eq!(fake.0.borrow().scans, 0);
+        hint.frame(start + INTERVAL);
         assert_eq!(fake.0.borrow().created, vec![(1, vec![RENDER], 4 * MS)]);
         // Nothing to report yet: the CPU time is the start.
         assert!(fake.0.borrow().reports.is_empty());
@@ -449,13 +494,11 @@ mod tests {
     fn each_frame_reports_the_render_threads_cpu_time_since_the_last() {
         let fake = platform();
         let mut hint = RenderThreadHint::new(fake.clone(), TARGET_NANOS);
-        hint.show();
-        let start = Instant::now();
-        hint.frame(start);
+        let next = shown_and_opened(&mut hint, Instant::now());
         runs(&fake, RENDER, 3 * MS);
-        hint.frame(start + INTERVAL);
+        hint.frame(next);
         runs(&fake, RENDER, 2 * MS);
-        hint.frame(start + 2 * INTERVAL);
+        hint.frame(next + INTERVAL);
         assert_eq!(fake.0.borrow().reports, vec![(1, 3 * MS), (1, 2 * MS)]);
     }
 
@@ -463,11 +506,28 @@ mod tests {
     fn a_frame_without_render_thread_work_reports_nothing() {
         let fake = platform();
         let mut hint = RenderThreadHint::new(fake.clone(), TARGET_NANOS);
-        hint.show();
-        let start = Instant::now();
-        hint.frame(start);
-        hint.frame(start + INTERVAL);
+        let next = shown_and_opened(&mut hint, Instant::now());
+        hint.frame(next);
         assert!(fake.0.borrow().reports.is_empty());
+    }
+
+    #[test]
+    fn a_frame_after_a_gap_starts_a_new_count_unreported() {
+        let fake = platform();
+        let mut hint = RenderThreadHint::new(fake.clone(), TARGET_NANOS);
+        let next = shown_and_opened(&mut hint, Instant::now());
+        // Between the frames, the RenderThread drew other content (or several frames).
+        runs(&fake, RENDER, 40 * MS);
+        let after_gap = next + Duration::from_millis(500);
+        hint.frame(after_gap);
+        assert!(fake.0.borrow().reports.is_empty());
+        runs(&fake, RENDER, 3 * MS);
+        hint.frame(after_gap + INTERVAL);
+        assert_eq!(fake.0.borrow().reports, vec![(1, 3 * MS)]);
+        // A skipped vsync at 120 Hz is no gap.
+        runs(&fake, RENDER, 2 * MS);
+        hint.frame(after_gap + 3 * INTERVAL);
+        assert_eq!(fake.0.borrow().reports, vec![(1, 3 * MS), (1, 2 * MS)]);
     }
 
     #[test]
@@ -475,14 +535,13 @@ mod tests {
         let fake = platform();
         let mut hint = RenderThreadHint::new(fake.clone(), TARGET_NANOS);
         hint.show();
-        hint.show();
-        let start = Instant::now();
-        hint.frame(start);
+        let next = shown_and_opened(&mut hint, Instant::now());
         runs(&fake, RENDER, 3 * MS);
-        hint.frame(start + INTERVAL);
-        hint.frame(start + INTERVAL + Duration::from_micros(300));
+        hint.frame(next);
+        // The second view's frame starts when the first's ends.
+        hint.frame(next + Duration::from_micros(3_000));
         runs(&fake, RENDER, 3 * MS);
-        hint.frame(start + 2 * INTERVAL);
+        hint.frame(next + INTERVAL);
         assert_eq!(fake.0.borrow().reports, vec![(1, 3 * MS), (1, 3 * MS)]);
     }
 
@@ -491,9 +550,8 @@ mod tests {
         let fake = platform();
         let mut hint = RenderThreadHint::new(fake.clone(), TARGET_NANOS);
         hint.show();
-        hint.show();
         let start = Instant::now();
-        hint.frame(start);
+        let next = shown_and_opened(&mut hint, start);
         hint.hide();
         assert!(hint.is_open(), "a view still shows");
         hint.hide();
@@ -501,16 +559,18 @@ mod tests {
         assert_eq!(fake.0.borrow().closed, vec![1]);
         // Hidden: frames report nothing (a frame made while hiding).
         runs(&fake, RENDER, 3 * MS);
-        hint.frame(start + INTERVAL);
+        hint.frame(next);
+        hint.frame(next + INTERVAL);
         assert!(fake.0.borrow().reports.is_empty());
         assert_eq!(fake.0.borrow().created.len(), 1);
-        // Shown again: a new session, its CPU time from the frame making it.
-        hint.show();
-        hint.frame(start + 2 * INTERVAL);
+        // Shown again: a new session, its CPU time from the frame making it, and the
+        // RenderThread found before, checked by name rather than looked for again.
+        let next = shown_and_opened(&mut hint, next + 2 * INTERVAL);
         runs(&fake, RENDER, 2 * MS);
-        hint.frame(start + 3 * INTERVAL);
+        hint.frame(next);
         assert_eq!(fake.0.borrow().created.len(), 2);
         assert_eq!(fake.0.borrow().reports, vec![(2, 2 * MS)]);
+        assert_eq!(fake.0.borrow().scans, 1);
     }
 
     #[test]
@@ -518,8 +578,7 @@ mod tests {
         let fake = platform();
         let mut hint = RenderThreadHint::new(fake.clone(), TARGET_NANOS);
         hint.hide();
-        hint.show();
-        hint.frame(Instant::now());
+        shown_and_opened(&mut hint, Instant::now());
         assert!(hint.is_open());
     }
 
@@ -528,16 +587,13 @@ mod tests {
         let fake = platform();
         fake.0.borrow_mut().create_fails = true;
         let mut hint = RenderThreadHint::new(fake.clone(), TARGET_NANOS);
-        hint.show();
-        let start = Instant::now();
-        hint.frame(start);
+        let next = shown_and_opened(&mut hint, Instant::now());
         // Not tried on every frame.
         fake.0.borrow_mut().create_fails = false;
-        hint.frame(start + INTERVAL);
+        hint.frame(next);
         assert!(!hint.is_open());
         hint.hide();
-        hint.show();
-        hint.frame(start + 2 * INTERVAL);
+        shown_and_opened(&mut hint, next + INTERVAL);
         assert!(hint.is_open());
     }
 
@@ -546,9 +602,10 @@ mod tests {
         let fake = platform();
         fake.0.borrow_mut().render_thread = None;
         let mut hint = RenderThreadHint::new(fake.clone(), TARGET_NANOS);
-        hint.show();
-        hint.frame(Instant::now());
+        let next = shown_and_opened(&mut hint, Instant::now());
+        hint.frame(next);
         assert!(fake.0.borrow().created.is_empty());
+        assert_eq!(fake.0.borrow().scans, 1);
         assert!(!hint.is_open());
     }
 
@@ -557,8 +614,7 @@ mod tests {
         let fake = platform();
         fake.0.borrow_mut().report_fails = true;
         let mut hint = RenderThreadHint::new(fake.clone(), TARGET_NANOS);
-        hint.show();
-        let mut now = Instant::now();
+        let mut now = shown_and_opened(&mut hint, Instant::now());
         for _ in 0..20 {
             runs(&fake, RENDER, 3 * MS);
             hint.frame(now);
@@ -574,20 +630,17 @@ mod tests {
     fn a_new_render_thread_gets_a_new_session() {
         let fake = platform();
         let mut hint = RenderThreadHint::new(fake.clone(), TARGET_NANOS);
-        hint.show();
-        let mut now = Instant::now();
-        hint.frame(now);
-        // The RenderThread is replaced: the old one's CPU time stops (or it is renamed).
+        let mut now = shown_and_opened(&mut hint, Instant::now());
+        // The RenderThread is replaced: the old one is renamed.
         fake.0.borrow_mut().renamed.push(RENDER);
         fake.0.borrow_mut().render_thread = Some(RENDER + 1);
         fake.0.borrow_mut().cpu.insert(RENDER + 1, 0);
         for _ in 0..CHECK_THREAD_EVERY {
-            now += INTERVAL;
             runs(&fake, RENDER, MS);
             hint.frame(now);
+            now += INTERVAL;
         }
         assert_eq!(fake.0.borrow().closed, vec![1]);
-        now += INTERVAL;
         hint.frame(now);
         assert_eq!(fake.0.borrow().created.last(), Some(&(2, vec![RENDER + 1], TARGET_NANOS)));
     }
@@ -596,15 +649,13 @@ mod tests {
     fn a_render_thread_gone_gets_a_new_session() {
         let fake = platform();
         let mut hint = RenderThreadHint::new(fake.clone(), TARGET_NANOS);
-        hint.show();
-        let start = Instant::now();
-        hint.frame(start);
+        let next = shown_and_opened(&mut hint, Instant::now());
         fake.0.borrow_mut().cpu.remove(&RENDER);
         fake.0.borrow_mut().render_thread = Some(RENDER + 1);
         fake.0.borrow_mut().cpu.insert(RENDER + 1, 0);
-        hint.frame(start + INTERVAL);
+        hint.frame(next);
         assert_eq!(fake.0.borrow().closed, vec![1]);
-        hint.frame(start + 2 * INTERVAL);
+        hint.frame(next + INTERVAL);
         assert_eq!(
             fake.0.borrow().created.last().map(|created| created.1.clone()),
             Some(vec![RENDER + 1])
