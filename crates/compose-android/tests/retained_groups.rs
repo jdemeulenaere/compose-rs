@@ -13,8 +13,8 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use compose_android::serialize::{
-    AHEAD_CAPACITY, GroupCache, LAYER_ENTRY_BYTES, Resources, Writer, operand_bytes, shader, tag,
-    write_display_list, write_groups_ahead,
+    AHEAD_CAPACITY, GroupCache, KEPT_ENTRY_BYTES, LAYER_ENTRY_BYTES, Resources, Writer,
+    operand_bytes, shader, tag, write_display_list, write_groups_ahead,
 };
 use compose_runtime::*;
 use compose_ui::platform::*;
@@ -88,9 +88,68 @@ fn read(bytes: &[u8]) -> (Vec<Layer>, Vec<Item>) {
         at += length;
     }
     let mut drawn = HashSet::new();
+    // The kept groups (D380), outer and nested: drawn by no operation, their records not in
+    // the frame unless their version changed.
+    if bytes.get(at) == Some(&tag::KEPT) {
+        let count = u32_at(bytes, at + 1) as usize;
+        for index in 0..count {
+            assert!(drawn.insert(u64_at(bytes, at + 5 + KEPT_ENTRY_BYTES * index)), "kept twice");
+        }
+        at += 5 + KEPT_ENTRY_BYTES * count;
+    }
     let items = read_items(bytes, at, bytes.len(), &records, &mut drawn);
-    assert_eq!(drawn.len(), records.len(), "every record is drawn once");
+    assert!(records.keys().all(|key| drawn.contains(key)), "every record is drawn once");
     (layers, items)
+}
+
+/// `bytes` without the records of the groups its `KEPT` section names (D380): a frame writes
+/// them only if their version changed; with nothing cached, always.
+fn without_kept_records(mut bytes: Vec<u8>) -> Vec<u8> {
+    let kept: HashSet<u64> = kept_entries(&bytes).into_iter().map(|(key, _)| key).collect();
+    let mut at = if bytes.first() == Some(&tag::LAYERS) {
+        5 + u32_at(&bytes, 1) as usize * LAYER_ENTRY_BYTES
+    } else {
+        0
+    };
+    while bytes.get(at) == Some(&tag::GROUP) {
+        let length = 21 + u32_at(&bytes, at + 17) as usize;
+        if kept.contains(&u64_at(&bytes, at + 1)) {
+            bytes.drain(at..at + length);
+        } else {
+            at += length;
+        }
+    }
+    bytes
+}
+
+/// The keys the `KEPT` section names (D380), and whether each is outermost.
+fn kept_entries(bytes: &[u8]) -> Vec<(u64, bool)> {
+    let mut at = if bytes.first() == Some(&tag::LAYERS) {
+        5 + u32_at(bytes, 1) as usize * LAYER_ENTRY_BYTES
+    } else {
+        0
+    };
+    while bytes.get(at) == Some(&tag::GROUP) {
+        at += 21 + u32_at(bytes, at + 17) as usize;
+    }
+    if bytes.get(at) != Some(&tag::KEPT) {
+        return Vec::new();
+    }
+    (0..u32_at(bytes, at + 1) as usize)
+        .map(|index| {
+            let entry = at + 5 + KEPT_ENTRY_BYTES * index;
+            (u64_at(bytes, entry), bytes[entry + 8] != 0)
+        })
+        .collect()
+}
+
+/// The outermost keys the `KEPT` section names.
+fn kept_keys(bytes: &[u8]) -> Vec<u64> {
+    kept_entries(bytes)
+        .into_iter()
+        .filter(|(_, outermost)| *outermost)
+        .map(|(key, _)| key)
+        .collect()
 }
 
 /// The operations in `bytes[at..end]`, each `GROUP_REF` read as its group's record (from
@@ -196,7 +255,9 @@ struct Serialized {
 
 impl Serialized {
     fn new(content: impl Fn() + 'static) -> Serialized {
-        let host = UiHost::headless(200, 200);
+        let mut host = UiHost::headless(200, 200);
+        // As the bridge does (D380).
+        host.set_keep_unplaced_groups(true);
         host.set_content(content);
         let mut serialized = Serialized {
             host,
@@ -224,7 +285,8 @@ impl Serialized {
         self.host.with_tree(|tree| {
             write_display_list(tree.display_list(), resources, &mut GroupCache::default(), &mut out)
         });
-        out.bytes
+        // The kept groups' records (D380), written with nothing cached, are cached in a frame.
+        without_kept_records(out.bytes)
     }
 }
 
@@ -777,7 +839,8 @@ fn groups_written_ahead_are_what_the_frame_placing_them_writes() {
         state.scroll_by(delta);
         let bytes = serialized.frame();
         copied += serialized.cache.copied_ahead();
-        assert_eq!(unversioned_bytes(&bytes), unversioned_bytes(&serialized.fresh()));
+        let cached = without_kept_records(bytes.clone());
+        assert_eq!(unversioned_bytes(&cached), unversioned_bytes(&serialized.fresh()));
         for (group, content) in records(&bytes) {
             if let Some(written) = ahead.get(&group) {
                 assert_eq!(*written, content, "step {step}: {group:x?} as written ahead");
@@ -860,4 +923,210 @@ fn records_written_ahead_are_bounded() {
     assert_eq!(records(&out.bytes).len(), 40);
     assert_eq!(cache.items_waiting_ahead(), AHEAD_CAPACITY);
     assert_eq!(cache.waiting_ahead(), AHEAD_CAPACITY - 1 + 40);
+}
+
+// ---- Kept groups (D380) ----------------------------------------------------------------------
+
+/// The items a lazy list keeps composed beside the wanted ones and doesn't place (D375): each
+/// frame names their groups (`KEPT`), outer and nested, without their records, which stay
+/// cached, so the replayer keeps their nodes recorded; the frame placing one again draws it at
+/// the version it was last drawn at, its record the same bytes, copied: nothing is recorded
+/// again.
+#[test]
+fn a_kept_item_placed_again_is_drawn_from_its_kept_record() {
+    let state = compose_foundation::LazyListState::new(0, 0);
+    let count = mutable_state_of(0u32);
+    let (given, shown) = (*state, count.handle());
+    let mut serialized = Serialized::new(move || feed(given, shown));
+    // Each group's record as last drawn (version and bytes), and the frames that kept it since.
+    let mut last_drawn: HashMap<u64, (u64, Vec<u8>)> = HashMap::new();
+    let mut kept_for: HashMap<u64, usize> = HashMap::new();
+    let (mut placed_again, mut nested) = (0, 0);
+    for step in 0..60 {
+        state.scroll_by(if step % 10 >= 7 { -23.0 } else { 19.0 });
+        let bytes = serialized.frame();
+        let records = records(&bytes);
+        let (_, items) = read(&bytes);
+        let drawn = groups(&items);
+        let entries = kept_entries(&bytes);
+        assert!(entries.iter().filter(|(_, outermost)| *outermost).count() <= KEPT_CAPACITY);
+        for (key, version) in &drawn {
+            let content = records.get(&(*key, *version)).expect("a drawn group's record");
+            if let Some(frames) = kept_for.remove(key) {
+                // Placed again: at its kept version, the same bytes.
+                assert!(frames >= 1);
+                assert_eq!(last_drawn[key], (*version, content.clone()), "step {step}: {key:x}");
+                placed_again += 1;
+            }
+            last_drawn.insert(*key, (*version, content.clone()));
+        }
+        let listed: HashSet<u64> = entries.iter().map(|(key, _)| *key).collect();
+        for (key, outermost) in &entries {
+            assert!(!drawn.iter().any(|(group, _)| group == key), "a kept group isn't drawn");
+            assert!(last_drawn.contains_key(key), "kept as an earlier frame drew it");
+            // Its record stays cached, not written.
+            assert!(!records.keys().any(|(group, _)| group == key), "step {step}: {key:x}");
+            assert_eq!(serialized.cache.cached_version(*key), Some(last_drawn[key].0));
+            *kept_for.entry(*key).or_default() += 1;
+            nested += usize::from(!outermost);
+        }
+        // Those no longer named are gone (disposed): not placed again from a record.
+        kept_for.retain(|key, _| listed.contains(key));
+        serialized.prefetch_and_write_ahead();
+    }
+    assert!(placed_again >= 5, "kept groups placed again: {placed_again}");
+    assert!(nested > 0, "nested kept groups named: {nested}");
+}
+
+/// A kept item that changes while not placed is no longer listed: the frame placing it draws
+/// it again, as before.
+#[test]
+fn a_kept_item_that_changes_is_no_longer_kept() {
+    let state = compose_foundation::LazyListState::new(0, 0);
+    let changed = mutable_state_of(0u32);
+    let (given, read_changed) = (*state, changed.handle());
+    let mut serialized = Serialized::new(move || {
+        use compose_foundation::*;
+        LazyColumn!(
+            modifier = Modifier.size((160.dp(), 150.dp())),
+            state = given,
+            |scope: LazyListScope| {
+                scope.items(300, move |index| {
+                    Leaf(
+                        painted(move || {
+                            Color::from_argb(0xFF00_0000 | (index as u32 + read_changed.get()))
+                        })
+                        .size((100.dp(), 30.dp())),
+                    );
+                });
+            }
+        );
+    });
+    for _ in 0..10 {
+        state.scroll_by(19.0);
+        serialized.frame();
+        serialized.prefetch_and_write_ahead();
+    }
+    count_kept(&mut serialized);
+    // Every item draws again: none stays kept.
+    changed.set(1);
+    let bytes = serialized.frame();
+    assert_eq!(kept_keys(&bytes), Vec::<u64>::new());
+    assert_eq!(serialized.host.with_tree(|tree| tree.kept_count()), 0);
+}
+
+/// The last frame lists kept items.
+fn count_kept(serialized: &mut Serialized) {
+    let listed = kept_keys(&serialized.out.bytes).len();
+    assert!(listed > 0, "items kept");
+    assert_eq!(serialized.host.with_tree(|tree| tree.kept_count()), listed);
+}
+
+/// A kept item whose nested graphics layer reads state written while it isn't placed is no
+/// longer kept: nothing runs for an unplaced item (as in Compose), and the frame placing it
+/// again draws it.
+#[test]
+fn a_kept_item_whose_nested_layer_changes_is_no_longer_kept() {
+    let state = compose_foundation::LazyListState::new(0, 0);
+    let alpha = mutable_state_of(0.5f32);
+    let (given, read_alpha) = (*state, alpha.handle());
+    let mut serialized = Serialized::new(move || {
+        use compose_foundation::*;
+        LazyColumn!(
+            modifier = Modifier.size((160.dp(), 150.dp())),
+            state = given,
+            |scope: LazyListScope| {
+                scope.items(300, move |_| {
+                    Layout(
+                        Modifier.size((100.dp(), 30.dp())),
+                        stack(),
+                        callback(move || {
+                            Leaf(
+                                Modifier
+                                    .graphics_layer(move |layer| layer.alpha = read_alpha.get())
+                                    .then(painted(|| Color::RED))
+                                    .size(10.dp()),
+                            );
+                        }),
+                    );
+                });
+            }
+        );
+    });
+    for _ in 0..10 {
+        state.scroll_by(19.0);
+        serialized.frame();
+        serialized.prefetch_and_write_ahead();
+    }
+    count_kept(&mut serialized);
+    alpha.set(0.25);
+    let bytes = serialized.frame();
+    assert_eq!(kept_keys(&bytes), Vec::<u64>::new());
+}
+
+/// Without `set_keep_unplaced_groups` (a renderer drawing the tree), frames list no kept group.
+#[test]
+fn frames_list_kept_groups_only_when_asked() {
+    let state = compose_foundation::LazyListState::new(0, 0);
+    let count = mutable_state_of(0u32);
+    let (given, shown) = (*state, count.handle());
+    let mut serialized = Serialized::new(move || feed(given, shown));
+    serialized.host.set_keep_unplaced_groups(false);
+    for _ in 0..10 {
+        state.scroll_by(19.0);
+        let bytes = serialized.frame();
+        assert!(kept_entries(&bytes).is_empty());
+        assert!(serialized.host.with_tree(|tree| tree.display_list().kept.is_empty()));
+        serialized.prefetch_and_write_ahead();
+    }
+}
+
+/// A kept group's record is written only when the cache doesn't hold its version (it changed
+/// since a frame wrote it); else it stays cached, the `KEPT` section naming it (D380).
+#[test]
+fn a_kept_groups_record_is_written_only_for_a_new_version() {
+    let group = |key: u64, version: u64, descendants: usize| {
+        let mut content = DisplayList::default();
+        // The nested group draws something else at each version; the item, the same.
+        let size = if descendants > 0 { 1.0 } else { version as f32 };
+        content.push(DrawOp::DrawRect(Rect::new(0.0, 0.0, size, size), Paint::fill(Color::RED)));
+        if descendants > 0 {
+            content.boundaries.push(Boundary { at: 1, key: key + 1 });
+        }
+        DrawGroup {
+            key,
+            version,
+            layer: None,
+            content: Arc::new(content),
+            descendants,
+            empty: false,
+        }
+    };
+    let (mut resources, mut cache) = (Resources::default(), GroupCache::default());
+    // A frame drawing an item (10) with a nested group (11).
+    let mut frame = DisplayList::default();
+    frame.boundaries.push(Boundary { at: 0, key: 10 });
+    frame.groups = vec![group(10, 1, 1), group(11, 1, 0)];
+    let mut out = Writer::default();
+    write_display_list(&frame, &mut resources, &mut cache, &mut out);
+    // Kept, unchanged: no record, both named, the outer one outermost.
+    let mut kept = DisplayList::default();
+    kept.kept = vec![group(10, 1, 1), group(11, 1, 0)];
+    let mut out = Writer::default();
+    write_display_list(&kept, &mut resources, &mut cache, &mut out);
+    assert!(records(&out.bytes).is_empty());
+    assert_eq!(kept_entries(&out.bytes), vec![(10, true), (11, false)]);
+    assert_eq!((cache.cached_version(10), cache.cached_version(11)), (Some(1), Some(1)));
+    // The nested one at a new version: its record, and its parent's (its version follows).
+    kept.kept = vec![group(10, 2, 1), group(11, 2, 0)];
+    let mut out = Writer::default();
+    write_display_list(&kept, &mut resources, &mut cache, &mut out);
+    let written: HashSet<(u64, u64)> = records(&out.bytes).into_keys().collect();
+    assert_eq!(written, HashSet::from([(10, 1), (11, 2)]), "the parent's bytes are the same");
+    assert_eq!(kept_entries(&out.bytes), vec![(10, true), (11, false)]);
+    assert_eq!(cache.cached_version(11), Some(2));
+    // No longer kept nor drawn: gone from the cache.
+    let mut out = Writer::default();
+    write_display_list(&DisplayList::default(), &mut resources, &mut cache, &mut out);
+    assert_eq!((cache.cached_version(10), cache.cached_version(11)), (None, None));
 }

@@ -17,6 +17,12 @@ use crate::graphics_layer::{GraphicsLayerNode, LayerProperties};
 use crate::tree::{NodeId, Observation, UiTree, capability, observation_key};
 use crate::unit::Offset;
 
+/// The most repaint boundaries composed and not placed whose groups the frames keep listing
+/// ([`DisplayList::kept`]), the oldest dropped first: a lazy list's items kept on each side of
+/// the wanted ones (two behind the scroll, D375, and the two prefetched ahead once placed, after
+/// a reversal), for two lists.
+pub const KEPT_CAPACITY: usize = 8;
+
 /// What a repaint boundary drew last, kept until something it drew from changes.
 pub(crate) struct RetainedDrawing {
     /// Its operations, in its own coordinates (after its position): its chain and children,
@@ -69,9 +75,13 @@ impl UiTree {
             return false;
         }
         let observer = self.observer.clone();
+        let mut recording = mem::take(&mut self.display_list);
+        // The boundaries the last frame drew that this one won't, still composed: kept drawn.
+        if self.keeps_unplaced {
+            self.note_kept(&recording.groups);
+        }
         // Cleared first: the last frame's groups let go of the recordings they shared, which a
         // boundary drawn again records into in place.
-        let mut recording = mem::take(&mut self.display_list);
         recording.clear();
         self.draw_node(self.root_id(), &mut recording, observer.as_deref());
         // The overlays, over everything, each where its provider put it.
@@ -89,9 +99,83 @@ impl UiTree {
         let mut groups = mem::take(&mut recording.groups);
         self.draw_boundaries(&recording.boundaries, &mut groups, observer.as_deref());
         recording.groups = groups;
+        if self.keeps_unplaced {
+            let mut kept = mem::take(&mut recording.kept);
+            self.draw_kept(&mut kept);
+            recording.kept = kept;
+        }
         self.display_list = recording;
         self.needs_draw = false;
         true
+    }
+
+    /// Notes the repaint boundaries among `groups` (the last frame's) that are composed and
+    /// not placed now, unchanged since drawn: the frames list their groups while they stay so
+    /// ([`DisplayList::kept`]).
+    fn note_kept(&mut self, groups: &[DrawGroup]) {
+        for group in groups {
+            let node = NodeId::from_bits(group.key);
+            if !group.empty && self.stays_kept(node) && !self.kept.contains(&node) {
+                self.kept.push(node);
+            }
+        }
+    }
+
+    /// `node` is a repaint boundary in the tree, not placed, its content and layer unchanged
+    /// since it was last drawn, and those of the boundaries nested in it: what it drew is what
+    /// the frame placing it again draws. One that changed isn't drawn while not placed (a
+    /// spinner in an item scrolled away runs nothing, as in Compose): the frame placing it
+    /// draws it.
+    fn stays_kept(&self, node: NodeId) -> bool {
+        self.get(node).is_some_and(|value| {
+            !value.placed && !value.overlay && value.parent.is_some() && self.drawn_unchanged(node)
+        })
+    }
+
+    /// `node` is a repaint boundary whose content and layer are as last drawn, and those of the
+    /// boundaries nested in it.
+    fn drawn_unchanged(&self, node: NodeId) -> bool {
+        let Some(retained) = self.get(node).and_then(|value| value.retained.as_ref()) else {
+            return false;
+        };
+        !retained.dirty
+            && !retained.layer_dirty
+            && retained
+                .recording
+                .boundaries
+                .iter()
+                .all(|nested| self.drawn_unchanged(NodeId::from_bits(nested.key)))
+    }
+
+    /// Appends to `kept` the groups of the boundaries kept drawn ([`note_kept`]) that still
+    /// are, the newest `KEPT_CAPACITY`, each followed by its nested ones, shared: nothing in
+    /// them changed, so nothing is drawn.
+    ///
+    /// [`note_kept`]: UiTree::note_kept
+    fn draw_kept(&mut self, kept: &mut Vec<DrawGroup>) {
+        let mut nodes = mem::take(&mut self.kept);
+        nodes.retain(|node| self.stays_kept(*node));
+        if nodes.len() > KEPT_CAPACITY {
+            nodes.drain(..nodes.len() - KEPT_CAPACITY);
+        }
+        for node in &nodes {
+            self.draw_boundary(*node, kept, None);
+        }
+        self.kept = nodes;
+    }
+
+    /// Whether frames list the kept boundaries' groups (`UiHost::set_keep_unplaced_groups`).
+    pub fn set_keep_unplaced_groups(&mut self, keep: bool) {
+        self.keeps_unplaced = keep;
+        if !keep {
+            self.kept.clear();
+        }
+    }
+
+    /// How many boundaries are kept drawn: for tests.
+    #[doc(hidden)]
+    pub fn kept_count(&self) -> usize {
+        self.kept.len()
     }
 
     /// Whether a repaint boundary measured ahead (`premeasure`) waits to be drawn ahead

@@ -77,6 +77,7 @@ pub mod platform {
     pub use crate::modifier::shared_custom_modifier;
     pub use crate::nested_scroll::NestedScrollChain;
     pub use crate::pointer_input::{PointerInputDriver, run_soon};
+    pub use crate::render::KEPT_CAPACITY;
     pub use crate::semantics::SemanticsNode;
     pub use crate::text::{
         DEFAULT_FONT_SIZE, FixedTextMeasurer, ParagraphHandle, ParagraphMetrics, TextLayoutOptions,

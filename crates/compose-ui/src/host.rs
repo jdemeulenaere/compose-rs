@@ -499,6 +499,13 @@ impl UiHost {
         self.with_tree(|tree| tree.has_draw_ahead_work())
     }
 
+    /// Whether each frame lists the groups of the repaint boundaries composed and no longer
+    /// placed (`DisplayList::kept`, D380): for a platform keeping a recording per group
+    /// (Android's render nodes). Off by default: a renderer drawing the tree has no use for them.
+    pub fn set_keep_unplaced_groups(&mut self, keep: bool) {
+        self.with_tree(|tree| tree.set_keep_unplaced_groups(keep));
+    }
+
     /// Gives up drawing ahead the items waiting ([`UiTree::cancel_draw_ahead`]): the frames
     /// placing them draw them.
     pub fn cancel_draw_ahead(&mut self) {

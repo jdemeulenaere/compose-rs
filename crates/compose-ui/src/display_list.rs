@@ -130,6 +130,12 @@ pub struct DisplayList {
     /// (its `descendants`). The frame's boundaries, each followed by its group's content's
     /// (depth first), name them one by one.
     pub groups: Vec<DrawGroup>,
+    /// In a frame: the groups of the repaint boundaries an earlier frame drew that are composed
+    /// and not placed now (a lazy list's items kept beside the wanted ones, D375), each followed
+    /// by the ones nested in it, as in `groups`. No boundary draws them: a renderer keeping a
+    /// recording per group keeps theirs while they're listed, so the frame placing one again
+    /// finds it recorded (Android, D380); one drawing the tree ignores them.
+    pub kept: Vec<DrawGroup>,
     /// A translation before this index isn't merged into: a group's operations stay its own.
     pub(crate) merge_floor: usize,
 }
@@ -207,6 +213,7 @@ impl DisplayList {
     pub fn clear(&mut self) {
         self.ops.clear();
         self.groups.clear();
+        self.kept.clear();
         self.merge_floor = 0;
         self.boundaries.clear();
         self.shaders.clear();

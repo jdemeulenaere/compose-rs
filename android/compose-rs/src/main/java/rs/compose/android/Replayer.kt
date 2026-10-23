@@ -62,6 +62,13 @@ internal inline fun ByteBuffer.floatAt(index: Int): Float = Float.fromBits(getIn
  * D350) from records Rust wrote ahead, as a frame would record them: kept apart (a frame not
  * naming them doesn't drop them) until a frame names one, which then finds its version
  * recorded, and draws it by reference.
+ *
+ * A group composed and not placed (a lazy list's item kept beside the wanted ones) keeps its
+ * record in every frame, which names it in a `KEPT` section rather than drawing it (D380).
+ * HWUI drops the recording of a node no recording draws any more (when the render thread
+ * syncs a frame that no longer draws it), so the kept groups' nodes are drawn by [keptNode], a
+ * node at alpha 0, which the render thread skips: the frame placing one again finds its version
+ * recorded, and records nothing.
  */
 internal class Replayer(private val text: TextMeasurer) {
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
@@ -224,6 +231,24 @@ internal class Replayer(private val text: TextMeasurer) {
     private var recordingAhead = false
     /** The group recorded ahead draws a node of the last frame's: not kept as its version. */
     private var drawsFrameGroup = false
+    /**
+     * Draws the kept groups' nodes (D380), at alpha 0: the render thread draws nothing of it,
+     * but the nodes stay in its tree, their recordings with them.
+     */
+    private val keptNode = RenderNode("compose-rs kept").apply {
+        setAlpha(0f)
+        setClipToBounds(true)
+        setPosition(0, 0, 0, 0)
+    }
+    /** The nodes [keptNode] draws, the first [keptCount]. */
+    private var keptNodes = arrayOfNulls<RenderNode>(8)
+    private var keptCount = 0
+    /** The last frame with a `KEPT` section. */
+    private var keptFrame = 0
+    /** That section's keys and groups (null: unknown), the first [keptEntryCount]. */
+    private var keptEntryKeys = LongArray(16)
+    private var keptEntryGroups = arrayOfNulls<Group>(16)
+    private var keptEntryCount = 0
     /** Gone groups' nodes, for new groups (D195). */
     private val pool = RenderNodePool("compose-rs group", NODE_POOL_CAPACITY)
     private var frame = 0
@@ -257,6 +282,14 @@ internal class Replayer(private val text: TextMeasurer) {
         width = canvas.width.coerceAtLeast(1)
         height = canvas.height.coerceAtLeast(1)
         replay(canvas, buffer, buffer.limit())
+        if (keptFrame != frame && keptCount > 0) {
+            // None kept: the frame doesn't draw keptNode, nor keptNode its old nodes.
+            keptNode.discardDisplayList()
+            keptNodes.fill(null)
+            keptCount = 0
+            keptEntryGroups.fill(null)
+            keptEntryCount = 0
+        }
         val iterator = groups.values.iterator()
         while (iterator.hasNext()) {
             val group = iterator.next()
@@ -394,6 +427,7 @@ internal class Replayer(private val text: TextMeasurer) {
                     unreadable = false
                 }
                 GROUP_REF -> drawGroup(canvas, buffer, buffer.getLong())
+                KEPT -> kept(canvas, buffer)
                 LAYERS -> layers(hardware, buffer)
                 DEFINE_PATH -> definePath(buffer)
                 DROP_PATH -> dropPath(buffer.getInt())
@@ -442,6 +476,65 @@ internal class Replayer(private val text: TextMeasurer) {
         // A recording cut short by an unknown operation isn't that version's (nor one ahead
         // drawing a frame's node, which the frames may drop).
         if (!unreadable && !drawsFrameGroup) group.version = version
+    }
+
+    /**
+     * The `KEPT` section: the groups composed and not placed (D380), outer before inner, each
+     * with whether it is outermost. Their nodes are kept as recorded, layers included, though
+     * the frame neither draws them nor (unless changed) holds their records; the outermost are
+     * drawn by [keptNode] (recorded again when they change, or when its recording was dropped),
+     * which the frame's canvas draws. Skipped in a software draw.
+     */
+    private fun kept(canvas: Canvas, buffer: ByteBuffer) {
+        val count = buffer.getInt()
+        if (!hardware) {
+            buffer.position(buffer.position() + count * KEPT_ENTRY_BYTES)
+            return
+        }
+        // The last frame's entries are this one's, by index, while they are the same keys: a
+        // group named by every frame since stayed in [groups].
+        val known = if (keptFrame == frame - 1) keptEntryCount else 0
+        keptFrame = frame
+        if (keptNodes.size < count) keptNodes = keptNodes.copyOf(count)
+        if (keptEntryKeys.size < count) {
+            keptEntryKeys = keptEntryKeys.copyOf(count)
+            keptEntryGroups = keptEntryGroups.copyOf(count)
+        }
+        var outermost = 0
+        var changed = !keptNode.hasDisplayList()
+        for (index in 0 until count) {
+            val key = buffer.getLong()
+            val outer = buffer.get().toInt() != 0
+            val same = index < known && keptEntryKeys[index] == key
+            val group = if (same && keptEntryGroups[index] != null) keptEntryGroups[index] else groups[key]
+            keptEntryKeys[index] = key
+            keptEntryGroups[index] = group
+            // Unknown (its recording was lost, or never made): the frame placing it records it.
+            if (group == null) continue
+            group.frame = frame
+            group.layerFrame = frame
+            if (outer) {
+                if (keptNodes[outermost] !== group.node) {
+                    keptNodes[outermost] = group.node
+                    changed = true
+                }
+                outermost++
+            }
+        }
+        for (index in count until keptEntryCount) keptEntryGroups[index] = null
+        keptEntryCount = count
+        if (outermost != keptCount) changed = true
+        for (index in outermost until keptCount) keptNodes[index] = null
+        keptCount = outermost
+        if (changed) {
+            val recording = keptNode.beginRecording(1, 1)
+            try {
+                for (index in 0 until outermost) recording.drawRenderNode(keptNodes[index]!!)
+            } finally {
+                keptNode.endRecording()
+            }
+        }
+        canvas.drawRenderNode(keptNode)
     }
 
     /**
@@ -995,6 +1088,11 @@ internal class Replayer(private val text: TextMeasurer) {
     }
 
     fun clear() {
+        keptNode.discardDisplayList()
+        keptNodes.fill(null)
+        keptCount = 0
+        keptEntryGroups.fill(null)
+        keptEntryCount = 0
         for (group in groups.values) group.node.discardDisplayList()
         groups.clear()
         for (group in ahead.values) group.node.discardDisplayList()
@@ -1049,6 +1147,9 @@ internal class Replayer(private val text: TextMeasurer) {
         const val LAYERS = 16
         const val CLIP_PATH = 17
         const val GROUP_REF = 18
+        const val KEPT = 19
+        /** The bytes of a `KEPT` entry: its key, whether it is outermost. */
+        const val KEPT_ENTRY_BYTES = 8 + 1
         const val DEFINE_PATH = 20
         const val DROP_PATH = 21
         const val DEFINE_IMAGE = 22

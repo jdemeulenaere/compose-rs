@@ -15,7 +15,8 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use compose_android::serialize::{
-    GroupCache, LAYER_ENTRY_BYTES, Resources, Writer, operand_bytes, tag, write_display_list,
+    GroupCache, KEPT_ENTRY_BYTES, LAYER_ENTRY_BYTES, Resources, Writer, operand_bytes, tag,
+    write_display_list,
 };
 use compose_runtime::*;
 use compose_ui::platform::*;
@@ -65,6 +66,36 @@ fn records_in(bytes: &[u8], mut at: usize, end: usize, out: &mut Vec<Record>) {
     assert_eq!(at, end, "a record's length is its content's");
 }
 
+/// `bytes` without the records of the groups its `KEPT` section names (D380): a frame writes
+/// them only if their version changed; with nothing cached, always.
+fn without_kept_records(mut bytes: Vec<u8>) -> Vec<u8> {
+    let start = if bytes.first() == Some(&tag::LAYERS) {
+        5 + u32_at(&bytes, 1) as usize * LAYER_ENTRY_BYTES
+    } else {
+        0
+    };
+    let mut at = start;
+    while bytes.get(at) == Some(&tag::GROUP) {
+        at += 21 + u32_at(&bytes, at + 17) as usize;
+    }
+    if bytes.get(at) != Some(&tag::KEPT) {
+        return bytes;
+    }
+    let kept: Vec<u64> = (0..u32_at(&bytes, at + 1) as usize)
+        .map(|index| u64_at(&bytes, at + 5 + KEPT_ENTRY_BYTES * index))
+        .collect();
+    let mut at = start;
+    while bytes.get(at) == Some(&tag::GROUP) {
+        let length = 21 + u32_at(&bytes, at + 17) as usize;
+        if kept.contains(&u64_at(&bytes, at + 1)) {
+            bytes.drain(at..at + length);
+        } else {
+            at += length;
+        }
+    }
+    bytes
+}
+
 /// A host's frames, serialized as `bridge.rs` does, checked against every earlier frame.
 struct Checked {
     host: UiHost,
@@ -77,7 +108,9 @@ struct Checked {
 
 impl Checked {
     fn new(content: impl Fn() + 'static) -> Checked {
-        let host = UiHost::headless(200, 200);
+        let mut host = UiHost::headless(200, 200);
+        // As the bridge does (D380).
+        host.set_keep_unplaced_groups(true);
         host.set_content(content);
         let mut checked = Checked {
             host,
@@ -107,7 +140,11 @@ impl Checked {
                 &mut fresh,
             )
         });
-        assert_eq!(bytes, fresh.bytes, "cached records differ from fresh ones");
+        assert_eq!(
+            bytes,
+            without_kept_records(fresh.bytes),
+            "cached records differ from fresh ones"
+        );
         let (keys, records) = parse(&bytes);
         for key in keys {
             assert!(

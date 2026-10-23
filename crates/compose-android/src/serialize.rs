@@ -16,7 +16,9 @@
 //! copied from a [`GroupCache`] while the version stays (D157), without reading the group's
 //! operations (the frame holds each group's recording by reference, D270). A record names the
 //! groups drawn inside it by key (`GROUP_REF`), their records written apart: a group whose
-//! nested group changed keeps its bytes, and its version for the replayer (D323).
+//! nested group changed keeps its bytes, and its version for the replayer (D323). The groups
+//! composed and not placed (`DisplayList::kept`) are named by key (`KEPT`), their records kept
+//! in the cache, so the replayer keeps their nodes for the frame placing them again (D380).
 
 use std::collections::HashMap;
 use std::sync::{Arc, Weak};
@@ -62,6 +64,14 @@ pub mod tag {
     pub const CLIP_PATH: u8 = 17;
     /// Draws the group of a key (u64), whose `GROUP` record the frame holds (D323).
     pub const GROUP_REF: u8 = 18;
+    /// The groups composed and not placed (`DisplayList::kept`), which no `GROUP_REF` draws: a
+    /// count (u32), then per group (outer before inner) its key (u64) and whether it is
+    /// outermost (u8), after the records and before the operations. Their records aren't in
+    /// the frame (unless their version changed): the replayer keeps their render nodes as
+    /// recorded, layers included, drawing the outermost ones out of sight (HWUI drops the
+    /// recording of a node no recording draws), so the frame placing one again copies its
+    /// record and records nothing (D380).
+    pub const KEPT: u8 = 19;
     pub const DEFINE_PATH: u8 = 20;
     pub const DROP_PATH: u8 = 21;
     pub const DEFINE_IMAGE: u8 = 22;
@@ -450,7 +460,8 @@ impl Resources {
 }
 
 /// The operand bytes of the operation whose tag is at `at` (not a `GROUP`, `LAYERS` or resource
-/// change), as `Replayer.kt` reads them: for tests and tools reading a frame back.
+/// change; a `KEPT` section counts as one), as `Replayer.kt` reads them: for tests and tools
+/// reading a frame back.
 pub fn operand_bytes(bytes: &[u8], at: usize) -> usize {
     // The paint is the last operand, after `fixed` bytes.
     let painted = |fixed: usize| fixed + paint_bytes(bytes, at + 1 + fixed);
@@ -461,6 +472,10 @@ pub fn operand_bytes(bytes: &[u8], at: usize) -> usize {
         tag::CLIP_ROUND_RECT => 32,
         tag::CLIP_PATH => 4 + 8,
         tag::GROUP_REF => 8,
+        tag::KEPT => {
+            4 + KEPT_ENTRY_BYTES
+                * u32::from_le_bytes(bytes[at + 1..at + 5].try_into().unwrap()) as usize
+        }
         tag::DRAW_RECT | tag::DRAW_LINE => painted(16),
         tag::DRAW_ROUND_RECT => painted(32),
         tag::DRAW_PARAGRAPH => 12,
@@ -657,6 +672,11 @@ impl GroupCache {
         self.copied_ahead
     }
 
+    /// The version of the record cached for `key`, if any.
+    pub fn cached_version(&self, key: u64) -> Option<u64> {
+        self.records.get(&key).map(|record| record.version)
+    }
+
     /// How many records written ahead wait for a frame.
     pub fn waiting_ahead(&self) -> usize {
         self.ahead.iter().map(Vec::len).sum()
@@ -677,15 +697,19 @@ pub const AHEAD_CAPACITY: usize = 8;
 /// The bytes of one entry of the `LAYERS` section.
 pub const LAYER_ENTRY_BYTES: usize = 8 + 8 * 4 + 1 + 4 * 4 + 1 + 4 * 4;
 
+/// The bytes of one entry of the `KEPT` section: a key, whether it is outermost.
+pub const KEPT_ENTRY_BYTES: usize = 8 + 1;
+
 /// Writes `list` into `out` (cleared first), defining in `resources` the paths and images it
 /// uses, and copying from `cache` the records of the groups whose version it holds.
 ///
 /// The bytes are a `LAYERS` section (if a group has a layer), then each group's `GROUP` record
-/// (outer before inner), then the frame's operations; where a boundary is, a `GROUP_REF` names
-/// its group. A record leaves out its layer's operations: its layer is its `LAYERS` entry,
-/// which a replayer keeping a render node per group sets on that node each frame. A cached
-/// group's record is copied without reading its operations (D270): only groups drawn again are
-/// walked.
+/// (outer before inner), a `KEPT` section naming the groups kept (`DisplayList::kept`, if any:
+/// their records stay cached, written only if their version isn't the one cached), then the
+/// frame's operations; where a boundary is, a `GROUP_REF` names its group. A record leaves out
+/// its layer's operations: its layer is its `LAYERS` entry, which a replayer keeping a render
+/// node per group sets on that node each frame. A cached group's record is copied without
+/// reading its operations (D270): only groups drawn again are walked.
 pub fn write_display_list(
     list: &DisplayList,
     resources: &mut Resources,
@@ -700,8 +724,9 @@ pub fn write_display_list(
     cache.unchanged = 0;
     write_layers(&list.groups, cache, out);
     let mut serializer =
-        Serializer { groups: &list.groups, folds: Vec::new(), resources, cache, out, ahead: false };
-    serializer.write_groups();
+        Serializer { groups: &list.kept, folds: Vec::new(), resources, cache, out, ahead: false };
+    serializer.write_groups_and_kept(&list.groups);
+    serializer.groups = &list.groups;
     serializer.write_recording(list, 0);
     let generation = cache.generation;
     // Records written ahead wait for the frame placing their group.
@@ -828,6 +853,49 @@ struct Serializer<'a> {
 }
 
 impl<'a> Serializer<'a> {
+    /// Writes the records of `frame`'s groups that draw, then the `KEPT` section naming the kept
+    /// groups that draw (its `groups`): their records stay cached, written only if their version
+    /// isn't the one cached (a nested group drawn again since), so the replayer records them
+    /// now.
+    fn write_groups_and_kept(&mut self, frame: &'a [DrawGroup]) {
+        let kept = self.groups;
+        self.groups = frame;
+        self.write_groups();
+        self.groups = kept;
+        let generation = self.cache.generation;
+        let mut count = 0;
+        for (index, group) in kept.iter().enumerate() {
+            if group.empty {
+                continue;
+            }
+            count += 1;
+            match self.cache.records.get_mut(&group.key) {
+                Some(record) if record.version == group.version => {
+                    record.generation = generation;
+                    record.ahead = false;
+                }
+                _ => self.write_group(index),
+            }
+        }
+        if count == 0 {
+            return;
+        }
+        self.out.u8(tag::KEPT);
+        self.out.u32(count as u32);
+        let mut nested_until = 0;
+        for (index, group) in kept.iter().enumerate() {
+            if group.empty {
+                continue;
+            }
+            self.out.u32(group.key as u32);
+            self.out.u32((group.key >> 32) as u32);
+            self.out.u8(u8::from(index >= nested_until));
+            if index >= nested_until {
+                nested_until = index + 1 + group.descendants;
+            }
+        }
+    }
+
     /// Writes the record of each group that draws, outer before inner.
     fn write_groups(&mut self) {
         let mut index = 0;

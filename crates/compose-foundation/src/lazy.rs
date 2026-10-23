@@ -1628,10 +1628,12 @@ impl PrefetchRequest for LazyListPrefetch {
         // A step that doesn't fit after others in the same idle time may fit the next one
         // whole: its estimate is lowered only when it's the first.
         let mut first = true;
+        // A step slower than its estimate (a little core, low clocks) slows those after it.
+        let mut pace = Pace::EXPECTED;
         loop {
             // An item composed ahead is measured first.
             if let Some(index) = prefetch.to_measure.get() {
-                if !fits(scope, &prefetch.measure_cost, first) {
+                if !fits(scope, &prefetch.measure_cost, first, pace) {
                     return false;
                 }
                 let _section =
@@ -1651,21 +1653,21 @@ impl PrefetchRequest for LazyListPrefetch {
                     }
                     // Timed only when it measured: an item gone in the meantime would lower
                     // the estimate with a sample of nothing.
-                    time(&prefetch.measure_cost, start);
+                    pace = time(&prefetch.measure_cost, start, pace);
                 }
                 prefetch.to_measure.set(None);
                 first = false;
                 continue;
             }
             let Some((range, ahead)) = prefetch.next(state.composed.get()) else { return false };
-            if !fits(scope, &prefetch.compose_cost, first) {
+            if !fits(scope, &prefetch.compose_cost, first, pace) {
                 return false;
             }
             let section = compose_ui::platform::trace::section(c"compose-rs: prefetch compose");
             let began = Instant::now();
             state.composed.set(range);
             scope.recompose();
-            time(&prefetch.compose_cost, began);
+            pace = time(&prefetch.compose_cost, began, pace);
             drop(section);
             prefetch.to_measure.set(ahead);
             first = false;
@@ -1701,21 +1703,58 @@ impl Prefetch {
     }
 }
 
-/// Whether the time left exceeds the step's estimate by `PREFETCH_MARGIN_NANOS`. If not, the
-/// estimate may be lowered ([`StepCost::missed`]). `first`: no step of this request ran in this
-/// idle time (another list's may have: it then counts as a miss of this one's).
-fn fits(scope: &PrefetchRequestScope<'_>, cost: &Cell<StepCost>, first: bool) -> bool {
+/// Whether the time left exceeds the step's estimate, at the `pace` of the list's steps so far
+/// in this idle time, by
+/// `PREFETCH_MARGIN_NANOS`. If not, the estimate may be lowered ([`StepCost::missed`]).
+/// `first`: no step of this request ran in this idle time (another list's may have: it then
+/// counts as a miss of this one's).
+fn fits(scope: &PrefetchRequestScope<'_>, cost: &Cell<StepCost>, first: bool, pace: Pace) -> bool {
     let available = scope.available_time_nanos();
-    if available > cost.get().estimate().saturating_add(PREFETCH_MARGIN_NANOS) {
+    if available > pace.needed(cost.get().estimate()) {
         return true;
     }
     cost.set(cost.get().missed(first));
     false
 }
 
-/// Adds the time since `start` to the step's cost.
-fn time(cost: &Cell<StepCost>, start: Instant) {
-    cost.set(cost.get().timed(start.elapsed().as_nanos() as u64));
+/// Adds the time since `start` to the step's cost; returns the idle time's pace with it.
+fn time(cost: &Cell<StepCost>, start: Instant, pace: Pace) -> Pace {
+    let nanos = start.elapsed().as_nanos() as u64;
+    let estimate = cost.get().estimate();
+    cost.set(cost.get().timed(nanos));
+    pace.after(nanos, estimate)
+}
+
+/// How much slower than estimated a list's steps in an idle time ran: the largest ratio of a
+/// step's time to its estimate, at least 1 and at most `MOST_PACE` (D381). The steps after a slow one are expected to be as slow:
+/// the main thread is on a little core, or at low clocks, for the rest of the idle time. On the
+/// Pixel 8 Pro, nearly every prefetch step that ran more than 1.2 ms past the vsync was an
+/// item's measurement (4–6 ms against a 2–3 ms estimate) after its composition in the same idle
+/// time, on the little cores, the composition itself 1.5 to 4 times its estimate.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Pace(f64);
+
+/// The slowest pace: a step preempted, or a tiny estimate, says little about the next one, which
+/// would never fit (the list then gives up until the next scroll).
+const MOST_PACE: f64 = 4.0;
+
+impl Pace {
+    /// An idle time's first step: as estimated.
+    const EXPECTED: Pace = Pace(1.0);
+
+    /// After a step that took `nanos` against an estimate of `estimate` (none: 0).
+    fn after(self, nanos: u64, estimate: u64) -> Pace {
+        if estimate == 0 {
+            return self;
+        }
+        Pace(self.0.max((nanos as f64 / estimate as f64).min(MOST_PACE)))
+    }
+
+    /// The time left a step of `estimate` needs to start: its estimate at this pace, and the
+    /// margin.
+    fn needed(self, estimate: u64) -> u64 {
+        ((estimate as f64 * self.0) as u64).saturating_add(PREFETCH_MARGIN_NANOS)
+    }
 }
 
 /// The contiguous range of composed items (the children but a pinned one out of it).
@@ -1859,9 +1898,33 @@ impl PointerInputModifierNode for LazyScrollNode {
 
 #[cfg(test)]
 mod tests {
-    use super::{PREFETCH_MARGIN_NANOS, StepCost};
+    use super::{PREFETCH_MARGIN_NANOS, Pace, StepCost};
 
     const MS: u64 = 1_000_000;
+
+    #[test]
+    fn an_idle_time_starts_at_the_expected_pace() {
+        assert_eq!(Pace::EXPECTED.needed(3 * MS), 3 * MS + PREFETCH_MARGIN_NANOS);
+        // Steps at or under their estimate change nothing.
+        let pace = Pace::EXPECTED.after(MS, 2 * MS).after(2 * MS, 2 * MS);
+        assert_eq!(pace.needed(3 * MS), 3 * MS + PREFETCH_MARGIN_NANOS);
+    }
+
+    #[test]
+    fn a_slow_step_scales_the_next_ones_estimates() {
+        // A composition that took 2.75 ms against its 1.1 ms estimate (the little cores, on the
+        // Pixel 8 Pro): the measurement after it is expected to take 2.5 times its 2 ms too,
+        // so 3.4 ms left no longer starts it (it took 5 ms).
+        let pace = Pace::EXPECTED.after(2_750_000, 1_100_000);
+        assert_eq!(pace.needed(2 * MS), 5 * MS + PREFETCH_MARGIN_NANOS);
+        assert!(pace.needed(2 * MS) > 3_400_000);
+        // The slowest step so far sets it.
+        assert_eq!(pace.after(MS, MS).needed(2 * MS), 5 * MS + PREFETCH_MARGIN_NANOS);
+        // Nothing timed before says nothing.
+        assert_eq!(Pace::EXPECTED.after(5 * MS, 0).needed(MS), MS + PREFETCH_MARGIN_NANOS);
+        // A step preempted for 40 times its estimate counts as 4 times.
+        assert_eq!(Pace::EXPECTED.after(40 * MS, MS).needed(MS), 4 * MS + PREFETCH_MARGIN_NANOS);
+    }
 
     #[test]
     fn a_step_is_expected_to_take_the_recent_maximum() {

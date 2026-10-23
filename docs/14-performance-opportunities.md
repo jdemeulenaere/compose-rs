@@ -37,6 +37,8 @@ Gain over cost, best first.
 | 12 | **Android: fewer Java allocations per frame** | Per animation frame 17.2 → 4.2 Java objects; −0.48 MB allocated over start and 10 flings; Java heap PSS after flings 5.40 → 4.86 MB (single runs); no frame-time gain | measured | S | none | `perf/startup-java-allocs` |
 | 14 | **Android: `BoringLayout` for single lines** (Compose's `TextLayout` choice). **Done** (D330) | Big first frame: text layout 41.3 → 29.3 ms (−29 %), `doFrame` 104.8 → 90.3 ms (−14 %), TotalTime 167 → 158 ms; scroll main work 460 → 431 ms (−6.4 %), frame percentiles unchanged | measured, interleaved: 12 traced and 18 untraced starts, 4 scroll runs each | S, low (checked against `StaticLayout` on API 36 only) | letter-spaced texts at their own width are 1 px wider, as Compose's | — |
 | 15 | **Android: a prefetched item's groups drawn and recorded ahead** (D350). **Done** | Revealing frames' `doFrame` 1.80 → 1.53 ms (replay 0.31 → 0.11 ms); scroll main p90 1.94 → 1.86 ms (−4 %), p99 and work within the spread | measured, interleaved, 10 runs each | M, low (a key and version are the same bytes either way; render nodes recorded ahead are kept apart, dropped together) | none (`UiHost::draw_ahead` for platforms recording groups) | — |
+| 16 | **Android: kept items' groups kept recorded** (D380). **Done** | The slowest replay in a reversal's first 100 ms 1.17 → 0.18 ms, its slowest `doFrame` 3.37 → 2.96 ms (p90 4.65 → 3.70); percentiles and work within the spread | measured, interleaved, 12 runs each | S–M, low (a node at alpha 0 keeps HWUI from dropping their recordings; 8 items at most) | none | — |
+| 17 | **Android: an idle time's slow step slows the next ones' estimates** (D381). **Done** | Idle-time slices past the vsync 12.4 → 6.9 a run, more than 1.2 ms past 1.67 → 0.92; `doFrame`s delayed by our work 5 → 3 in 12 runs | measured, interleaved, 12 runs each | S, low (replaying D375's traces, 14 % of measurements wait for the next idle time instead of 2.6 %; on the device, as many measurements a run, none in frames) | none | — |
 | 13 | **Memory: exact or chunked growth** of the slot table's groups and the node arena | Big screen's Rust heap −1.7 MB allocated of 17.9 (unused capacity, so maybe not resident: the PSS saving is unmeasured; its PSS is 69.8 MB); no transient 2× copy when growing | estimated (heapprofd) | S–M | none | — |
 
 Small, negative or not worth doing: see "What isn't worth doing".
@@ -229,7 +231,23 @@ The revealing frames lose 0.27 ms (−15 %), most of their excess over the other
 | Janky frames (FrameTimeline), the app's / the compositor's | 0 / 0 | 0 / 5 (two runs) |
 | `doFrame`s more than 2 ms late, a run (after main-thread work) | 11.5 (0.9) | 10.9 (0.6) |
 
-The inline compositions on reversals go, and with them the slowest reversal frames (p90 −36 %, max −54 %). Work moves within the runs' spread: prefetching composes and measures about 8 items fewer a run (those kept across the reversals, 19 ms less wall time and 16 ms less text layout), and the replay takes 4.6 ms more: a kept item isn't placed, so the drawing's records and Kotlin's render nodes let it go, and the frame placing it again writes and records it (a reversal frame's replay is 1.6–2 ms; drawing kept items ahead, D350, would need Rust to re-emit a clean boundary's groups, a follow-up). The compositor's janky frames are SurfaceFlinger's, as main's in D350's runs.
+The inline compositions on reversals go, and with them the slowest reversal frames (p90 −36 %, max −54 %). Work moves within the runs' spread: prefetching composes and measures about 8 items fewer a run (those kept across the reversals, 19 ms less wall time and 16 ms less text layout), and the replay takes 4.6 ms more: a kept item isn't placed, so the drawing's records and Kotlin's render nodes let it go, and the frame placing it again writes and records it (a reversal frame's replay is 1.6–2 ms; drawing kept items ahead, D350, would need Rust to re-emit a clean boundary's groups, a follow-up, done since: D380, below). The compositor's janky frames are SurfaceFlinger's, as main's in D350's runs.
+
+**Kept items' groups (D380).** After D375, a kept item (composed behind the wanted range, not placed) lost its records and render nodes, and the frame placing it again on a reversal wrote and recorded it: 1.6–2 ms of replay in that frame. Its recording is still valid (its key and version haven't changed), so now each frame lists the groups of the repaint boundaries an earlier frame drew that are composed, not placed and unchanged, nested ones included (`DisplayList::kept`, 8 items at most, for a platform that asks: Android). The serializer names them in a `KEPT` section and keeps their records cached, without writing them, and the replayer keeps their nodes, layers included. That alone wasn't enough: HWUI drops the recording of a node no recording draws once the render thread syncs the frame, and on the device such a build met 174 groups a run whose version matched but whose recording was gone (traced with a temporary marker), and recorded them again (replay 315–319 ms a run against 170 ms with the node below, 2 runs each). So the replayer draws the outermost kept nodes from a node of its own at alpha 0, which the view's recording draws and the render thread skips: none was lost then. A kept item changed while unplaced (it, or a group nested in it) is no longer listed: nothing runs for it until placed, as in Compose. Measured against D375 (26c780c), interleaved, 12 runs each (means [min–max]; the reversals are the 4 flings back a run):
+
+| Scroll (measure.py's scroll run) | D375 | D380 |
+|---|---|---|
+| The slowest replay in each reversal's first 100 ms: mean, p90, max | 1.17, 1.75, 2.29 ms | **0.18, 0.25, 0.46 ms** |
+| The slowest `doFrame` in each reversal's first 100 ms: mean, p90, max | 3.37, 4.65, 4.96 ms | **2.96, 3.70, 4.54 ms** |
+| Replays over 0.5 ms, a run | 8.0 (8.0 ms) | **0.4** (0.4 ms) |
+| Main per frame p50 / p90 / p99 | 1.27 / 1.88 [1.79–1.98] / 2.98 [2.79–3.22] ms | 1.29 / 1.90 [1.81–1.99] / 2.94 [2.80–3.14] ms |
+| RenderThread per frame p50 / p90 / p99 | 2.79 / 3.80 / 5.42 ms | 2.80 / 3.77 / 5.30 ms |
+| Main, RenderThread work | 434.2 [421.4–448.7], 779.1 [762.6–790.3] ms | 437.6 [425.3–450.5], 775.3 [753.0–793.9] ms |
+| `compose-rs: replay`, `draw`, `serialize`, a run | 177.3, 85.3, 62.2 ms | 181.6, 91.9, 64.5 ms |
+| Janky frames (FrameTimeline), the app's / the compositor's | 0 / 0 | 0 / 0 |
+| `doFrame`s more than 2 ms late, a run (after main-thread work) | 9.9 (0.42) | 10.0 (0.33) |
+
+The reversals' slowest replay falls by 85 % (p90 1.75 → 0.25 ms) and their slowest frame by 12 % on average (p90 −20 %). The other frames pay a few microseconds each (noting the kept boundaries, listing their groups, looking their nodes up): the replay takes 4.3 ms more a run in all though the reversals' replays lost 7.6 ms, the Rust draw 6.6 ms and serializing 2.3 ms more; the main thread's work (+3.4 ms, +0.8 %) and percentiles move within the runs' spread. The measured build listed a kept item whatever its nested groups did; the shipped one drops it when one changed (none does in the feed) and lists nothing unless the platform asks.
 
 ### The four together (D320–D323): the full benchmark
 
@@ -301,6 +319,24 @@ main reproduces the round 4 run (p99 7.35 ms, no prefetch); the branch prefetche
 | PSS after 10 flings | 81.2 MB | 79.5 MB | 90.0 MB |
 
 compose-rs had no janky frame in any run, and no run of either app entered buffer stuffing recovery. Two of Compose's animation runs had every frame presented a vsync late, on cadence, which FrameTimeline doesn't count as jank. The round 4 run that entered recovery (p99 7.35 ms) set nothing in round 4's medians; the scroll's lower main work and `big`'s startup owe more to D330 (BoringLayout), merged in between, than to these changes. measure.py now leaves out the warm-up swipe, so the jank counts aren't comparable one for one. Two earlier full runs of the branch, before the reviews' fixes, had no janky frame of compose-rs's either, apart from 3 of the compositor's in one run.
+
+**Idle work after a slow step (D381).** Round 6 had 1 to 3 `doFrame`s a run delayed by main-thread work, round 5 none. In the 32 traces of D375's A/B (both sides), the work past the vsync before each such `doFrame` was always a `prefetch` call that composed an item and then measured it in one idle time (6.3–8.0 ms slices, started 4–5 ms before the vsync), never D350's recording of an item's groups or D322's of its paragraphs (the `record paragraphs` slices after them are the 10 µs check that finds the deadline past). Of those runs' 6,300 measurements, 46 ended more than 1.2 ms past the vsync. All ran mostly on the little cores (70 % of their running time or more); 43 followed the item's composition in the same idle time, which had itself taken a median 2.0 times its estimate (41 of the 43 more than it). They took 3.9–8.2 ms (median 5.1) against an estimate of a median 2.4 ms, with 2.5–4.9 ms left. D341's estimate can't foresee it: which core runs the idle time is the scheduler's choice. But the composition just before showed it, so within an idle time a list's steps after one that ran slower than its estimate now need their estimate scaled by the largest such ratio (4 at most). Replaying the traces' steps with D341's estimates, the rule would have started 8 of the 42 overrunning measurements D341 started, deferring 14 % of the measurements to the next idle time instead of 2.6 %. The late `doFrame`s after main-thread work are no more frequent since round 5 than chance gives at their rate (0.25 to 0.9 a run in each A/B since D350, either side). Measured against D380, interleaved, 12 runs each (means [min–max]):
+
+| Scroll (measure.py's scroll run) | D380 | D381 |
+|---|---|---|
+| Idle-time slices ending past the vsync, a run | 12.4 [7–16] | **6.9** [3–12] |
+| of which more than 1.2 ms past | 1.67 [0–4] | **0.92** [0–2] |
+| The latest past the vsync | 1.70 [0.80–2.75] ms | 1.39 [0.79–2.16] ms |
+| `doFrame`s more than 2 ms late after main-thread work, in 12 runs | 5 | 3 |
+| `doFrame`s more than 2 ms late, a run | 11.1 | 10.3 |
+| `prefetch` calls; prefetch measurements, a run | 357; 173.5 | 361; 174.0 |
+| Text layouts and compositions inside frames | 0, 0 | 0, 0 |
+| Main per frame p50 / p90 / p99 | 1.30 / 1.92 [1.86–2.03] / 2.93 [2.77–3.05] ms | 1.29 / 1.90 [1.84–2.00] / 2.91 [2.65–3.20] ms |
+| RenderThread per frame p50 / p90 / p99 | 2.78 / 3.80 / 5.48 ms | 2.76 / 3.74 / 5.25 ms |
+| Main, RenderThread work | 440.5 [433.3–448.3], 782.0 [759.1–802.4] ms | 434.9 [425.1–444.5], 769.3 [756.7–783.7] ms |
+| Janky frames (FrameTimeline), the app's / the compositor's | 0 / 2 (one run) | 0 / 0 |
+
+The idle-time slices past the vsync halve, as do those more than 1.2 ms past; no measurement moved into a frame (the frames lay no text out), and prefetching kept up (as many measurements a run). Of the 3 `doFrame`s still delayed, two followed a composition and a measurement in one idle time, and one a measurement alone that took 6.5 ms: each step's own overrun, which no estimate made before it starts can see. The percentiles and the work move within the runs' spread. The measured build had no upper bound on the ratio; the shipped one caps it at 4 (the largest seen before a measurement that overran was 4.1).
 
 ### The scroll's RenderThread: the boost, not the work
 

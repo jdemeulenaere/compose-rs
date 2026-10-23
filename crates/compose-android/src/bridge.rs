@@ -377,6 +377,8 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_create<'local>(
     ui.with_tree(|tree| {
         tree.set_clipboard(std::rc::Rc::new(JniClipboard { view: view_ref.clone() }))
     });
+    // The replayer keeps a render node per group: those of unplaced items too (D380).
+    ui.set_keep_unplaced_groups(true);
     crate::services::install(&mut env, &view, &view_ref, &ui);
     if rtl != 0 {
         ui.set_layout_direction(LayoutDirection::Rtl);

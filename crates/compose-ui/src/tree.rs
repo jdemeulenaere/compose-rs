@@ -291,6 +291,12 @@ pub struct UiTree {
     /// items), oldest first: the repaint boundaries among them are drawn ahead too
     /// (`draw_ahead`), so the frame placing them finds them drawn.
     pub(crate) measured_ahead: Vec<NodeId>,
+    /// Repaint boundaries a frame drew that are composed and not placed now (a lazy list's
+    /// items kept beside the wanted ones), oldest first, `KEPT_CAPACITY` at most: each frame
+    /// lists their groups (`DisplayList::kept`) while they stay so, unchanged (D380).
+    pub(crate) kept: Vec<NodeId>,
+    /// Frames list the kept boundaries' groups (`UiHost::set_keep_unplaced_groups`).
+    pub(crate) keeps_unplaced: bool,
 }
 
 impl UiTree {
@@ -332,6 +338,8 @@ impl UiTree {
             intrinsic_probes: 0,
             window_insets: None,
             measured_ahead: Vec::new(),
+            kept: Vec::new(),
+            keeps_unplaced: false,
         }
     }
 

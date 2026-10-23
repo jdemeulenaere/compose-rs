@@ -21,8 +21,8 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use compose_android::serialize::{
-    GroupCache, LAYER_ENTRY_BYTES, Resources, Writer, operand_bytes, tag, write_display_list,
-    write_groups_ahead,
+    GroupCache, KEPT_ENTRY_BYTES, LAYER_ENTRY_BYTES, Resources, Writer, operand_bytes, tag,
+    write_display_list, write_groups_ahead,
 };
 use compose_android::text::{AndroidTextMeasurer, LaidOut, TextBackend};
 use compose_foundation::layout::*;
@@ -75,9 +75,9 @@ fn u64_at(bytes: &[u8], at: usize) -> u64 {
     u64::from_le_bytes(bytes[at..at + 8].try_into().unwrap())
 }
 
-/// What a recording draws: the group's (key, version) (`None`: the view's own recording), and
-/// the paragraphs its own operations draw.
-type Recording = (Option<(u64, u64)>, Vec<u32>);
+/// What a recording draws: the group's (key, version) (`None`: the view's own recording), the
+/// paragraphs its own operations draw, and the groups it draws (`GROUP_REF`).
+type Recording = (Option<(u64, u64)>, Vec<u32>, Vec<u64>);
 
 fn recordings(bytes: &[u8]) -> Vec<Recording> {
     let mut at = 0;
@@ -89,6 +89,34 @@ fn recordings(bytes: &[u8]) -> Vec<Recording> {
     out
 }
 
+/// The keys of the groups the `KEPT` section names (D380), and those drawn inside them: composed
+/// and not placed, no recording the view draws shows them.
+fn kept_keys(bytes: &[u8], recordings: &[Recording]) -> HashSet<u64> {
+    let mut at = 0;
+    if bytes.first() == Some(&tag::LAYERS) {
+        at = 5 + u32_at(bytes, 1) as usize * LAYER_ENTRY_BYTES;
+    }
+    while bytes.get(at) == Some(&tag::GROUP) {
+        at += 21 + u32_at(bytes, at + 17) as usize;
+    }
+    let mut kept = HashSet::new();
+    if bytes.get(at) == Some(&tag::KEPT) {
+        let count = u32_at(bytes, at + 1) as usize;
+        let mut pending: Vec<u64> =
+            (0..count).map(|index| u64_at(bytes, at + 5 + KEPT_ENTRY_BYTES * index)).collect();
+        while let Some(key) = pending.pop() {
+            if kept.insert(key) {
+                for (group, _, drawn) in recordings {
+                    if group.is_some_and(|(inner, _)| inner == key) {
+                        pending.extend(drawn);
+                    }
+                }
+            }
+        }
+    }
+    kept
+}
+
 fn read(
     bytes: &[u8],
     mut at: usize,
@@ -97,7 +125,7 @@ fn read(
     out: &mut Vec<Recording>,
 ) {
     let index = out.len();
-    out.push((group, Vec::new()));
+    out.push((group, Vec::new(), Vec::new()));
     while at < end {
         let op = bytes[at];
         if op == tag::GROUP {
@@ -108,6 +136,9 @@ fn read(
         } else {
             if op == tag::DRAW_PARAGRAPH {
                 out[index].1.push(u32_at(bytes, at + 1));
+            }
+            if op == tag::GROUP_REF {
+                out[index].2.push(u64_at(bytes, at + 1));
             }
             at += 1 + operand_bytes(bytes, at);
         }
@@ -131,16 +162,22 @@ struct Checked {
     released: usize,
     /// Items drawn ahead so far.
     drawn_ahead: usize,
+    /// Kept groups listed so far (D380).
+    kept_listed: usize,
+    /// Checking the last frame's bytes after prefetching.
+    stale: bool,
 }
 
 impl Checked {
     fn new(content: impl Fn() + 'static) -> Checked {
         let live = Live::default();
-        let host = UiHost::new(
+        let mut host = UiHost::new(
             IntSize::new(200, 200),
             Density::new(1.0),
             Box::new(AndroidTextMeasurer::new(live.clone())),
         );
+        // As the bridge does (D380).
+        host.set_keep_unplaced_groups(true);
         host.set_content(content);
         let mut checked = Checked {
             host,
@@ -152,6 +189,8 @@ impl Checked {
             kept: 0,
             released: 0,
             drawn_ahead: 0,
+            kept_listed: 0,
+            stale: false,
         };
         checked.frame();
         checked
@@ -172,7 +211,11 @@ impl Checked {
         let before = self.live.0.borrow().clone();
         self.host.prefetch(Instant::now() + Duration::from_secs(60));
         self.count_released(&before);
+        // The kept groups prefetching disposed are drawn by nothing the view shows, until the
+        // next frame no longer lists them.
+        self.stale = true;
         self.check("prefetch, then the last frame drawn again");
+        self.stale = false;
     }
 
     fn count_released(&mut self, before: &HashSet<u32>) {
@@ -200,8 +243,12 @@ impl Checked {
 
     fn check_bytes(&mut self, bytes: &[u8], when: &str) {
         let live = self.live.0.borrow();
-        for (group, handles) in recordings(bytes) {
-            for handle in &handles {
+        let recordings = recordings(bytes);
+        let kept = kept_keys(bytes, &recordings);
+        self.kept_listed += kept.len();
+        for (group, handles, _) in recordings {
+            let shown = group.is_none_or(|(key, _)| !kept.contains(&key));
+            for handle in handles.iter().filter(|_| shown || !self.stale) {
                 assert!(
                     live.contains(handle),
                     "after {when}: {group:x?} draws released paragraph {handle}"
@@ -312,6 +359,7 @@ fn a_scrolled_lazy_list_with_prefetch_draws_only_live_paragraphs() {
         checked.frame();
     }
     checked.assert_exercised();
+    assert!(checked.kept_listed > 10, "kept groups listed: {}", checked.kept_listed);
 }
 
 /// The same, the items prefetched drawn ahead between frames (D350): a group recorded ahead
@@ -341,6 +389,7 @@ fn a_scrolled_lazy_list_drawing_ahead_draws_only_live_paragraphs() {
         checked.frame();
     }
     checked.assert_exercised();
+    assert!(checked.kept_listed > 10, "kept groups listed: {}", checked.kept_listed);
     assert!(checked.drawn_ahead > 20, "items drawn ahead: {}", checked.drawn_ahead);
 }
 
