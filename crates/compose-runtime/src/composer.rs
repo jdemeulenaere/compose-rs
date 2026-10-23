@@ -267,9 +267,6 @@ impl Runtime {
             group.data_key = data_key;
             group.deactivated = false;
         }
-        if inserting {
-            group.reusable = reusable;
-        }
         let reusing_now = *reusing != 0 || starts_reuse;
         let mut frame = Frame {
             group: index,
