@@ -687,7 +687,12 @@ impl Runtime {
 
     /// Reserves the next slot of the current group, and returns its value if it holds a value
     /// of type `type_id`.
-    pub(crate) fn slot_next(&mut self, type_id: TypeId) -> (SlotPosition, Option<Rc<dyn Any>>) {
+    /// `across_reuse`: a `remember_across_reuse`, which reused content's kept values answer.
+    pub(crate) fn slot_next(
+        &mut self,
+        type_id: TypeId,
+        across_reuse: bool,
+    ) -> (SlotPosition, Option<Rc<dyn Any>>) {
         let composition = self.check_composing();
         let depth = self.frames.len() as u32;
         let frame = self.body_frame();
@@ -700,7 +705,8 @@ impl Runtime {
         let value = slots
             .get(index as usize)
             .filter(|slot| {
-                (self.reusing == 0 || matches!(slot.value, SlotValue::KeptOnReuse(_)))
+                (self.reusing == 0
+                    || (across_reuse && matches!(slot.value, SlotValue::KeptOnReuse(_))))
                     && slot.value.value_type_id() == type_id
             })
             .and_then(|slot| slot.value.to_any());

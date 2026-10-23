@@ -68,7 +68,7 @@ impl<H: Copy + 'static> Remember for Owned<H> {
 }
 
 fn slot_next(type_id: TypeId) -> (SlotPosition, Option<Rc<dyn Any>>) {
-    with_runtime(|runtime| runtime.slot_next(type_id))
+    with_runtime(|runtime| runtime.slot_next(type_id, false))
 }
 
 fn slot_set(position: SlotPosition, value: SlotValue, type_name: &'static str) {
@@ -106,7 +106,8 @@ pub fn remember<T: Remember>(calc: impl FnOnce() -> T) -> T::Output {
 /// `SubcomposeLayoutState` kept on its reused node). For state a component keeps for the content
 /// it composes, which reused content reuses too: a lazy list keeps its items' slots so (D430).
 pub fn remember_across_reuse<T: Remember>(calc: impl FnOnce() -> T) -> T::Output {
-    let (position, existing) = slot_next(TypeId::of::<T::Stored>());
+    let type_id = TypeId::of::<T::Stored>();
+    let (position, existing) = with_runtime(|runtime| runtime.slot_next(type_id, true));
     if let Some(existing) = existing {
         return T::output(downcast::<T::Stored>(&existing));
     }

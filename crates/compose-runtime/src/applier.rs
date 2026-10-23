@@ -57,9 +57,11 @@ pub trait Applier: 'static {
     /// `node` is about to be reused by content composed in its place (`ReusableContent` with
     /// another key, `ReusableContentHost` active again), as Compose's `Applier.reuse` (which
     /// calls the node's `ComposeNodeLifecycleCallback.onReuse`): the applier resets what the
-    /// node keeps of its last content (its modifiers' state), and the pass then updates it.
-    /// Called during the pass, as composition reaches the node, for each node a reusable node
-    /// group keeps (`start_reusable_node`).
+    /// node keeps of its last content, and the pass then updates it. Called during the pass, as
+    /// composition reaches the node, for each node a reusable node group keeps
+    /// (`start_reusable_node`): composition is running, so the applier must not run code that
+    /// writes state then; it may defer such work to `on_end_changes` (`UiTree` resets its
+    /// modifier nodes there, D434).
     fn reuse(&mut self, _node: NodeRef) {}
 
     /// `node`'s content was deactivated (`ReusableContentHost` inactive), as Compose's

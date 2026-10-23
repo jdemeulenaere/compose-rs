@@ -47,6 +47,8 @@ struct ContentSizeNode {
     /// The content's size the animation goes to.
     target: Option<IntSize>,
     scope: compose_runtime::Owned<CoroutineScope>,
+    /// The animation running, if any.
+    animation: Option<compose_runtime::Job>,
 }
 
 impl ModifierNodeElement for ContentSizeElement {
@@ -56,6 +58,7 @@ impl ModifierNodeElement for ContentSizeElement {
             size: None,
             target: None,
             scope: CoroutineScope::new(),
+            animation: None,
         })
     }
 
@@ -87,6 +90,9 @@ impl ModifierNode for ContentSizeNode {
     fn on_reset(&mut self) {
         self.size = None;
         self.target = None;
+        if let Some(animation) = self.animation.take() {
+            animation.cancel();
+        }
     }
 }
 
@@ -107,9 +113,12 @@ impl LayoutModifierNode for ContentSizeNode {
             if self.target.is_some() {
                 let (size, spec) = (size.clone(), self.spec);
                 let target = Size::new(measured.width as f32, measured.height as f32);
-                self.scope.launch(async move {
+                if let Some(previous) = self.animation.take() {
+                    previous.cancel();
+                }
+                self.animation = Some(self.scope.launch(async move {
                     size.animate_to(target, spec).await;
-                });
+                }));
             }
             self.target = Some(measured);
         }

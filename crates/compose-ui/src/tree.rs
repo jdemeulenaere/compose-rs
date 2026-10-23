@@ -519,19 +519,24 @@ impl UiTree {
     /// (what's outside every boundary is drawn each draw). An overlay is drawn at the root,
     /// outside its ancestors.
     pub(crate) fn invalidate_draw_of(&mut self, node: NodeId) {
-        self.needs_draw = true;
         let mut current = Some(node);
         while let Some(id) = current {
-            let Some(value) = self.get_mut(id) else { return };
+            let Some(value) = self.get_mut(id) else { break };
             if let Some(retained) = &mut value.retained {
                 retained.dirty = true;
-                return;
+                // A boundary nothing places (a lazy list's item prefetched or kept for reuse)
+                // is drawn when a frame places it: nothing to draw now (D435).
+                if !value.placed {
+                    return;
+                }
+                break;
             }
             if value.overlay {
-                return;
+                break;
             }
             current = value.parent;
         }
+        self.needs_draw = true;
     }
 
     /// Layer `layer` of `node` moved: draws again what draws the move, its parent for its
@@ -1045,8 +1050,11 @@ impl Applier for UiTree {
             }
         } else {
             self.reset_modifier_state(node);
-            self.pending_resets.push(node);
         }
+        // Reset after the pass, after the new content's elements updated it, also when it was
+        // reset as it was deactivated (with the old content's): a node showing its value (a
+        // switch) shows the new one at once (D435).
+        self.pending_resets.push(node);
         // Measured again, its ancestors marked up to the first already marked (the content
         // reused around it marked them).
         self.invalidate_draw_of(node);
@@ -1092,6 +1100,11 @@ impl Applier for UiTree {
         if self.bring_into_view_after_layout == Some(node) {
             self.bring_into_view_after_layout = None;
         }
+    }
+
+    /// A pass that panicked before its end left no reset to run.
+    fn on_begin_changes(&mut self) {
+        self.pending_resets.clear();
     }
 
     /// The modifier nodes of the nodes reused in the pass are reset, now that it's over.

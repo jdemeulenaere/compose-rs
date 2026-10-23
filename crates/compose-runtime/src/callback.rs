@@ -452,7 +452,7 @@ fn set_lambda_slot(position: SlotPosition, stored: Rc<dyn Any>, type_name: &'sta
 
 /// The non-generic part of a probe: reserves the next slot when composing.
 fn lambda_slot(type_id: TypeId) -> Option<(SlotPosition, Option<Rc<dyn Any>>)> {
-    with_runtime(|runtime| runtime.is_composing().then(|| runtime.slot_next(type_id)))
+    with_runtime(|runtime| runtime.is_composing().then(|| runtime.slot_next(type_id, false)))
 }
 
 /// An optional callback given by name (a function, a callback, a closure or an `Option` of one),

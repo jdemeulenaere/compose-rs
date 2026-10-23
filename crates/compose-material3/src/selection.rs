@@ -127,6 +127,9 @@ struct SwitchNode {
     /// 0 unchecked, 1 checked: the thumb's position and size.
     progress: Animatable<f32>,
     scope: compose_runtime::Owned<CoroutineScope>,
+    /// A new value to animate to, started when drawn: a reset (reused for another item's switch,
+    /// after the update giving it its value) shows the value at once instead (D435).
+    animate: bool,
 }
 
 impl ModifierNodeElement for SwitchElement {
@@ -137,16 +140,12 @@ impl ModifierNodeElement for SwitchElement {
             colors: self.colors,
             progress: Animatable::new(if self.checked { 1.0 } else { 0.0 }),
             scope: CoroutineScope::new(),
+            animate: false,
         })
     }
     fn update(&self, node: &mut dyn ModifierNode) {
         let Some(node) = node.downcast_mut::<SwitchNode>() else { return };
-        if node.checked != self.checked {
-            let (progress, target) = (node.progress.clone(), if self.checked { 1.0 } else { 0.0 });
-            node.scope.launch(async move {
-                progress.animate_to(target, spring()).await;
-            });
-        }
+        node.animate |= node.checked != self.checked;
         node.checked = self.checked;
         node.enabled = self.enabled;
         node.colors = self.colors;
@@ -171,9 +170,13 @@ impl ModifierNode for SwitchNode {
         self.scope.cancel();
     }
     /// Reused for another item's switch (after its value came, and the pass ended): shown at
-    /// its value, as a new one, the animation its update started stopped.
+    /// its value, as a new one, without animating.
     fn on_reset(&mut self) {
-        self.progress.snap_to(if self.checked { 1.0 } else { 0.0 });
+        self.animate = false;
+        let target = if self.checked { 1.0 } else { 0.0 };
+        if self.progress.value() != target || self.progress.is_running() {
+            self.progress.snap_to(target);
+        }
     }
 }
 
@@ -190,6 +193,12 @@ pub(crate) fn blend(from: Color, to: Color, fraction: f32) -> Color {
 
 impl DrawModifierNode for SwitchNode {
     fn draw(&mut self, scope: &mut DrawScope<'_>) {
+        if std::mem::take(&mut self.animate) {
+            let (progress, target) = (self.progress.clone(), if self.checked { 1.0 } else { 0.0 });
+            self.scope.launch(async move {
+                progress.animate_to(target, spring()).await;
+            });
+        }
         mirrored_in_rtl(scope, |scope| self.draw_start_to_end(scope));
     }
 }
@@ -344,6 +353,8 @@ struct RadioNode {
     /// The dot's radius in dp: 5 selected (Compose's 6 dp less half the 2 dp stroke), 0 not.
     dot: Animatable<f32>,
     scope: compose_runtime::Owned<CoroutineScope>,
+    /// A new value to animate to, started when drawn (as a switch's).
+    animate: bool,
 }
 
 impl ModifierNodeElement for RadioElement {
@@ -354,17 +365,12 @@ impl ModifierNodeElement for RadioElement {
             colors: self.colors,
             dot: Animatable::new(if self.selected { 5.0 } else { 0.0 }),
             scope: CoroutineScope::new(),
+            animate: false,
         })
     }
     fn update(&self, node: &mut dyn ModifierNode) {
         let Some(node) = node.downcast_mut::<RadioNode>() else { return };
-        if node.selected != self.selected {
-            let (dot, target) = (node.dot.clone(), if self.selected { 5.0 } else { 0.0 });
-            // As Compose's `RadioAnimationDuration`.
-            node.scope.launch(async move {
-                dot.animate_to(target, tween(100)).await;
-            });
-        }
+        node.animate |= node.selected != self.selected;
         node.selected = self.selected;
         node.enabled = self.enabled;
         node.colors = self.colors;
@@ -390,12 +396,23 @@ impl ModifierNode for RadioNode {
     }
     /// Reused for another item's button: shown at its value, as a new one.
     fn on_reset(&mut self) {
-        self.dot.snap_to(if self.selected { 5.0 } else { 0.0 });
+        self.animate = false;
+        let target = if self.selected { 5.0 } else { 0.0 };
+        if self.dot.value() != target || self.dot.is_running() {
+            self.dot.snap_to(target);
+        }
     }
 }
 
 impl DrawModifierNode for RadioNode {
     fn draw(&mut self, scope: &mut DrawScope<'_>) {
+        if std::mem::take(&mut self.animate) {
+            let (dot, target) = (self.dot.clone(), if self.selected { 5.0 } else { 0.0 });
+            // As Compose's `RadioAnimationDuration`.
+            self.scope.launch(async move {
+                dot.animate_to(target, tween(100)).await;
+            });
+        }
         let size = scope.size();
         let density = scope.density();
         let colors = &self.colors;
