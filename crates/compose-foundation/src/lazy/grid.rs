@@ -1361,8 +1361,10 @@ impl MeasurePolicy for LazyGridLayout {
         // D456), and as many more as the room left would take if lines were missing.
         let average = m.line_sizes.average();
         let beyond = BEYOND;
-        let wanted_start = index.saturating_sub(beyond + wanted_before);
-        let mut wanted_end = m.lines.at_most_last(end_index + beyond - 1) + 1;
+        // And the lines a focus search asked for beyond those (D477).
+        let (beyond_before, beyond_after) = state.beyond_bounds.get();
+        let wanted_start = index.saturating_sub(beyond + beyond_before + wanted_before);
+        let mut wanted_end = m.lines.at_most_last(end_index + beyond + beyond_after - 1) + 1;
         if missing {
             let in_view = if placed.is_empty() {
                 average
@@ -1372,7 +1374,7 @@ impl MeasurePolicy for LazyGridLayout {
             };
             let room = (main_max - content_end).max(0);
             let more = ((room / (in_view + spacing).max(1)) as usize + 1).min(MOST_MISSING);
-            wanted_end = m.lines.at_most_last(end_index + more + beyond - 1) + 1;
+            wanted_end = m.lines.at_most_last(end_index + more + beyond + beyond_after - 1) + 1;
         }
         // The items composed, from the lines: whole lines, those ahead in the scroll direction
         // and just behind it kept (`PREFETCH_AHEAD` and `KEPT_BEHIND` lines): the limits
@@ -1495,6 +1497,8 @@ impl MeasurePolicy for LazyGridLayout {
             (placed_start.min(index) as f32 * average - extent_start as f32 + pending).max(1.0)
         });
         let reaches_end = !missing && (at_end || !m.lines.exists(placed_end));
+        state.room_estimated.set((!reaches_start, !reaches_end));
+        state.beyond_more.set((placed_start.min(index) > 0, m.lines.exists(placed_end)));
         state.room_forward.set(if reaches_end {
             (extent_end.max(content_end) - main_max).max(0) as f32 - pending
         } else {

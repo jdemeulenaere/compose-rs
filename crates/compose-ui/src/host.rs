@@ -301,6 +301,7 @@ impl UiHost {
             || self.with_tree(|tree| tree.needs_draw)
             || compose_runtime::platform::has_ready_tasks()
             || self.with_tree(|tree| !tree.focus_requests.pending.borrow().is_empty())
+            || self.with_tree(|tree| tree.has_beyond_bounds_moves())
     }
 
     /// One frame: runs the tasks that are due and resumes those waiting for a frame (with this
@@ -399,6 +400,25 @@ impl UiHost {
         // What the rounds left (they ran out) is the next frame's.
         if rounds > 0 && self.composition.has_invalidations() {
             self.frame_requested.set(true);
+        }
+        // Focus moves waiting for a lazy list's items beyond its bounds, laid out now; each may
+        // ask for one more item, laid out (and composed) here too, a few times a frame (D477).
+        let mut searches = 0;
+        while searches < 8 && self.with_tree(|tree| tree.has_beyond_bounds_moves()) {
+            searches += 1;
+            let actions = self.with_tree(|tree| tree.run_beyond_bounds_moves());
+            Self::run(actions);
+            if !self.with_tree(|tree| tree.has_beyond_bounds_moves()) {
+                break;
+            }
+            measured |= self.lay_out(size);
+            let mut rounds = 0;
+            while rounds < 3 && self.composition.has_invalidations() {
+                rounds += 1;
+                let _round = crate::trace::section(c"compose-rs: recompose and layout again");
+                recomposed |= self.composition.recompose();
+                measured |= self.lay_out(size);
+            }
         }
         // A node focused before it was placed is shown, now that it is.
         let shown = self.with_tree(|tree| {

@@ -975,7 +975,8 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_semantics(
 }
 
 /// `ComposeRsNative.performAction(host, id, action, value)`: an accessibility service's action
-/// on virtual view `id`: 0 click, 1 focus, 2 set progress to `value`.
+/// on virtual view `id`: 0 click, 1 focus, 2 set progress to `value`, 3 and 4 scroll by `value`
+/// pixels vertically and horizontally (positive: towards the end).
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_rs_compose_android_ComposeRsNative_performAction(
     _env: JNIEnv,
@@ -993,6 +994,8 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_performAction(
         0 => compose_ui::SemanticsAction::OnClick,
         1 => compose_ui::SemanticsAction::RequestFocus,
         2 => compose_ui::SemanticsAction::SetProgress(value),
+        3 => compose_ui::SemanticsAction::ScrollBy { x: 0.0, y: value },
+        4 => compose_ui::SemanticsAction::ScrollBy { x: value, y: 0.0 },
         _ => return 0,
     };
     u8::from(host.ui.perform_semantics_action(node, action))

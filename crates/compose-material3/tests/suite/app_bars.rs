@@ -143,8 +143,10 @@ fn height(ui: &mut ComposeTestRule) -> f32 {
     bounds(ui, "bar").height()
 }
 
+/// Where the scrolled content starts: its first item's top (the tagged column's own bounds
+/// are its viewport's, its scroll's semantics being outermost, as Compose's).
 fn content_top(ui: &mut ComposeTestRule) -> f32 {
-    bounds(ui, "content").top
+    ui.on_node_with_text("Item 0").fetch_semantics_node().bounds.top
 }
 
 #[test]

@@ -944,6 +944,24 @@ pub trait ModifierNode: Any {
     ) -> Option<crate::unit::Rect> {
         None
     }
+    /// Whether it lays out content beyond its bounds for a focus search from inside it, as
+    /// Compose's `BeyondBoundsLayout` (a lazy list's).
+    fn is_beyond_bounds_layout(&self) -> bool {
+        false
+    }
+    /// A focus search from inside it going `direction` found nothing more inside: lays out more
+    /// content that way, beyond its bounds (a lazy list: one more item, composed and placed at
+    /// the next layout), until `end_beyond_bounds`, as `BeyondBoundsLayout.layout`. Returns
+    /// whether there's more that way: the search is made again once it's laid out (D477).
+    fn lay_out_beyond_bounds(
+        &mut self,
+        _direction: crate::focus_manager::FocusDirection,
+        _layout_direction: crate::alignment::LayoutDirection,
+    ) -> bool {
+        false
+    }
+    /// The focus search is over: what was laid out beyond the bounds for it goes.
+    fn end_beyond_bounds(&mut self) {}
 }
 
 impl dyn ModifierNode {

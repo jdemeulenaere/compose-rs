@@ -10,12 +10,13 @@
   [16,76 69x40] role=Button text=["All"] clickable disabled merged
   [93,76 90x40] role=Button text=["Active"] clickable focusable merged
   [191,76 76x40] role=Button text=["Done"] clickable focusable merged
-  [20,124 48x48] role=Checkbox toggle=Off clickable focusable merged
-  [68,139 222x18] text=["milk"]
-  [290,128 90x40] role=Button text=["Remove"] clickable focusable merged
-  [20,180 48x48] role=Checkbox toggle=Off clickable focusable merged
-  [68,195 222x18] text=["eggs"]
-  [290,184 90x40] role=Button text=["Remove"] clickable focusable merged
+  [16,120 368x664] vertical_scroll=0/0
+    [20,124 48x48] role=Checkbox toggle=Off clickable focusable merged
+    [68,139 222x18] text=["milk"]
+    [290,128 90x40] role=Button text=["Remove"] clickable focusable merged
+    [20,180 48x48] role=Checkbox toggle=Off clickable focusable merged
+    [68,195 222x18] text=["eggs"]
+    [290,184 90x40] role=Button text=["Remove"] clickable focusable merged
 > click "Done"
 > semantics
 [0,0 400x800] 
@@ -24,6 +25,7 @@
   [16,76 69x40] role=Button text=["All"] clickable focusable merged
   [93,76 90x40] role=Button text=["Active"] clickable focusable merged
   [191,76 76x40] role=Button text=["Done"] clickable disabled merged
+  [16,120 368x664] vertical_scroll=0/0
 > click "All"
 > dump
 StackMeasurePolicy [0,0 400x800]
@@ -46,7 +48,7 @@ StackMeasurePolicy [0,0 400x800]
       BoxMeasurePolicy [175,0 76x48] Modifier.minimum_touch_target(48.dp).shadow.background(#FF6750A4, Rounded([Percent(50.0), Percent(50.0), Percent(50.0), Percent(50.0)])).clip(Rounded([Percent(50.0), Percent(50.0), Percent(50.0), Percent(50.0)])).clickable(enabled = true) {role=Button clickable focusable merged}
         RowColumnMeasurePolicy [0,0 76x40] Modifier.size(58.dp.._ x 40.dp.._).padding(24.dp, 8.dp, 24.dp, 8.dp)
           EmptyMeasurePolicy [0,2 28x20] Modifier.Text {text=["Done"]}
-    LazyList [0,104 368x664] Modifier.weight(1, true).fill_max_width(1).clip(Rectangle).lazy_scroll
+    LazyList [0,104 368x664] Modifier.weight(1, true).fill_max_width(1).clip(Rectangle).lazy_scroll {vertical_scroll=0/0}
       LazyItem [0,0 368x56] Modifier.repaint_boundary.on_focus_changed
         RowColumnMeasurePolicy [0,0 368x56] Modifier.fill_max_width(1).padding(4.dp, 4.dp, 4.dp, 4.dp)
           EmptyMeasurePolicy [0,0 48x48] Modifier.toggleable(false, enabled = true).minimum_touch_target(48.dp).padding(2.dp, 2.dp, 2.dp, 2.dp).required_size(20.dp x 20.dp).checkbox {role=Checkbox toggle=Off clickable focusable merged}

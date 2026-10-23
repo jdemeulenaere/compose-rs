@@ -115,8 +115,8 @@ fn lazy_items(host: &mut UiHost) -> usize {
     dump.lines().filter(|line| line.trim_start().starts_with("LazyItem")).count()
 }
 
-/// The stress list's first frame composes the items it shows and few more (the first layout
-/// asks for a few items at a time while it knows few sizes, B): its 81 px header alone once
+/// The stress list's first frame composes the items it shows and few more: while it knows few
+/// sizes, its first layout asks for a few items at a time (D472). Its 81 px header alone once
 /// made it compose 87 items, rows and the carousels' tiles, of which 38 stayed (D460). The
 /// frame fills the screen: the next one composes nothing.
 #[test]

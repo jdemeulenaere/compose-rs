@@ -45,7 +45,7 @@ The known differences from Jetpack Compose that an app will run into, distilled 
 
 - No `animateItem` (placement and fade animations). `contentType` is given with the `_with` forms (`items_keyed_with(count, key, content_type, content)`, D432), and items reuse the composition and nodes of those that left as in Compose (D430), but a reused node's modifier nodes are reset (`ModifierNode::on_reset`) rather than detached and attached again: a custom node keeps its resources while its item is kept for reuse (D431).
 - `LazyVerticalGrid` and `LazyHorizontalGrid` have no `reverse_layout` or `user_scroll_enabled`, and no sticky headers. Their items are composed one by one and keep their state by key, as in Compose (D450); the content of the `items` forms gets no item scope (Compose's `LazyGridItemScope` only has `animateItem`), and the forms taking a span are named apart (`_with_span`, D454).
-- While an item of a lazy list holds the focus, the list composes and places a viewport's worth of items beyond each side, for focus to move to (Compose lays them out only while a focus search asks): a popup in one of them shows where the item is placed (D136). Otherwise it places only the items in view, as Compose (D470).
+- A lazy list places only the items in view, as Compose (D470); a focus search leaving it lays out the next items beyond its bounds one at a time, as Compose's, but over frames: the moves wait for the next layout (D477). A popup in an item laid out beyond the bounds for a search shows where the item is placed while it is (D136).
 
 ## Drawing and graphics
 

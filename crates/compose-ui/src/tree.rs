@@ -278,6 +278,8 @@ pub struct UiTree {
     /// A node focused before it was ever placed (a prefetched lazy item): brought into view
     /// once laid out.
     pub(crate) bring_into_view_after_layout: Option<NodeId>,
+    /// Focus moves waiting for a container to lay out content beyond its bounds (D477).
+    pub(crate) beyond_search: crate::focus::BeyondSearch,
     /// What layouts queued for application code (`on_size_changed`, `on_globally_positioned`),
     /// run by the host once the layout is over.
     pub(crate) layout_callbacks: Vec<crate::input::Action>,
@@ -339,6 +341,7 @@ impl UiTree {
             focus_requests: Rc::default(),
             text_selection: None,
             bring_into_view_after_layout: None,
+            beyond_search: crate::focus::BeyondSearch::default(),
             layout_callbacks: Vec::new(),
             positioned: Vec::new(),
             laid_out_since_callbacks: false,

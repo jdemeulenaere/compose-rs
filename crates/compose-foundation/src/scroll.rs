@@ -299,7 +299,37 @@ struct ScrollNode {
     rtl: bool,
 }
 
+impl compose_ui::SemanticsModifierNode for ScrollNode {
+    /// Its offset and the largest, along its axis, as `Modifier.verticalScroll`'s semantics:
+    /// accessibility services scroll it a page at a time (D478).
+    fn apply_semantics(&self, config: &mut compose_ui::SemanticsConfiguration) {
+        let range = compose_ui::ScrollAxisRange {
+            value: self.state.value() as f32,
+            max_value: self.state.max_value() as f32,
+            reverse_scrolling: false,
+        };
+        if self.vertical {
+            config.vertical_scroll_axis_range = Some(range);
+        } else {
+            config.horizontal_scroll_axis_range = Some(range);
+        }
+    }
+
+    fn perform_action(
+        &mut self,
+        action: compose_ui::SemanticsAction,
+        _context: &mut compose_ui::EventContext<'_>,
+    ) -> bool {
+        let compose_ui::SemanticsAction::ScrollBy { x, y } = action else { return false };
+        let delta = if self.vertical { y } else { x };
+        delta != 0.0 && scroll_state_by(&self.state, delta, &mut self.fraction) != 0.0
+    }
+}
+
 impl ModifierNode for ScrollNode {
+    fn as_semantics(&mut self) -> Option<&mut dyn compose_ui::SemanticsModifierNode> {
+        Some(self)
+    }
     fn on_detach(&mut self, _context: &mut compose_ui::DetachContext<'_>) {
         self.drag.stop_fling();
     }
@@ -526,6 +556,12 @@ impl NestedScrollConnection for ScrollableConnection {
 }
 
 impl DragScroller {
+    /// Whether a nested-scroll parent was around the last press or wheel turn: it takes what
+    /// this scrollable leaves of a delta.
+    pub(crate) fn has_outer(&self) -> bool {
+        !self.chain.is_empty()
+    }
+
     /// `scroll_by` scrolls during the event; `flinger` gives a scroll usable later, by a
     /// fling's task (a touch let go while moving flings, as on Android) or as the nested-scroll
     /// parent of the scrollables inside.

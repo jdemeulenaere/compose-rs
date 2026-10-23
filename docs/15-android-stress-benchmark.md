@@ -525,7 +525,7 @@ Interleaved on the device, 12 runs each against main (18272a3), the variants rot
 
 Until D470 a lazy list composed and placed a viewport's worth of items beyond each side of the viewport: about 7 items on this list (and their carousels' tiles), 5 on the feed. Each placed item is a render node the main thread replays and the RenderThread syncs every frame. Its first layout also estimated the items it lacked from the only one it had measured, this list's 81 px header, and composed 87 items (rows and tiles) of which 38 stayed (D460). The changes:
 
-- **D470**: a list composes and places only the items in view, as Compose's, but a viewport's worth beyond each side while one of its items holds the focus (for focus to move to). Prefetch runs from the first layout on, not only after a scroll, so a fling's first frames find the next two items composed. A frame still keeps the two composed items next to those it wants, for a reversal.
+- **D470**: a list composes and places only the items in view, as Compose's; a focus search leaving it asks for the next items one at a time (D477, after a review: D470 first kept a viewport's worth beyond each side while an item held the focus). Prefetch runs from the first layout on, not only after a scroll, so a fling's first frames find the next two items composed. A frame still keeps the two composed items next to those it wants, for a reversal.
 - **D472**: while a list knows fewer than 4 item sizes, a measurement lacking items asks for 4 at most (or as many as it placed), and the frame's next round asks for the rest.
 - **D471, D474**: two fixes, each of which kept prefetch from running in the idle time after some frames. The list read `layout_info` while measuring, which measured it twice and asked for another frame whenever the average size changed; and a frame that composed in a round asked for another frame. A frame with work pending skips prefetch, so the next frame had to compose its items itself.
 
@@ -539,7 +539,7 @@ Until D470 a lazy list composed and placed a viewport's worth of items beyond ea
 | RenderThread p50 / p90 / p99 | 2.56 / 3.59 / 4.97 ms | 2.48 / 3.54 / 5.11 ms | 2.46 / 3.48 / 5.00 ms | 2.46 / 3.51 / 5.04 ms |
 | Native heap after the flings | 20.5 MB | 19.7 MB | 18.1 MB | **17.3 MB** |
 
-On the feed the same order held: RenderThread work 829, 811, 789 and 747 ms. There, with none beyond, the RenderThread's p50 was 2.42 ms against main's 2.16 ms in this session, for 10 % less work at lower clocks: its CPU time didn't change (4.39 and 4.51 s), and 21 % of its time was on the little cores against 17 %. Its p90 and p99 were shorter (3.21 / 4.72 against 3.29 / 4.85 ms). The confirming A/B below didn't show the p50 difference (2.33 → 2.24 ms). So a viewport's worth bought nothing a frame needed, and none beyond shipped.
+On the feed the same order held: RenderThread work 829, 811, 789 and 747 ms. There, with none beyond, the RenderThread's p50 was 2.42 ms against main's 2.16 ms in this session, for 10 % less work at lower clocks: its CPU time didn't change (4.39 and 4.51 s), and 21 % of its time was on the little cores against 17 %. Its p90 and p99 were shorter (3.21 / 4.72 against 3.29 / 4.85 ms). The confirming A/B below didn't show the p50 difference (2.33 → 2.24 ms). So a viewport's worth saved no composition in these flings, and none beyond shipped. A review then found what it had hidden, fixed by D475–D478: scrolls onto a large item out of view were cut at an estimated room, first frames under a large first item could be short, focusing a field composed a viewport's worth in a frame, and accessibility couldn't scroll a list ("After the review" below).
 
 **The shipped code against main**: interleaved, 12 runs each, scroll and cold starts (medians of the runs; the better side in bold where the runs' ranges barely overlap or not at all):
 
@@ -561,6 +561,32 @@ On the feed the same order held: RenderThread work 829, 811, 789 and 747 ms. The
 The big screen's start didn't change (162 ms). The RenderThread's p99s are 0.07 and 0.11 ms longer, within the runs' spread (4.54 to 5.47 against 4.61 to 5.05 ms on the feed, 4.52 to 5.81 against 4.45 to 5.86 ms here), and were 0.13 ms shorter on the feed and 0.07 ms longer here in the first A/B. Our hint session voted less for the RenderThread, which had less work (here a time-weighted 212 against 252).
 
 The first frame now composes 16 items where it composed 87, and lays out 29 paragraphs where it laid out 69. Its rounds take 5.5 against 12.7 ms. Headless, the list's Rust heap peaks at 2,288 KiB at start, against 6,677 KiB (live: 2,268 against 5,434 KiB), and is 3,160 KiB after 10 flings, against 5,792 KiB.
+
+**After the review (D475–D478).** A review of D470–D474 found three regressions, fixed since:
+- **D476**: scrolls past an estimated end are no longer cut there. With only the items in view placed, a `scroll_by` onto a large item out of view, or a fling back to a large first item, stopped short.
+- **D475**: first frames are full again. A large first item made the estimate run the 3 rounds out, short of the viewport.
+- **D477**: a focus search asks the list for the next item beyond its bounds, as Compose's, instead of a viewport's worth composed while an item holds the focus. Focusing a field in a list composed 16 to 36 items in a frame.
+
+It also found that TalkBack couldn't scroll a list. Lists, grids and scrolling containers now have scroll semantics, and Android exposes them as scrollable with scroll actions; nodes clipped away aren't visible to the user (D478).
+
+Interleaved again against main (727d266), 8 runs each:
+
+| | Feed: main | shipped | Stress list: main | shipped |
+|---|---|---|---|---|
+| Janky frames, the app's / the compositor's (8 runs) | 0 / 0 | 0 / 2 | 0 / 2 | 0 / 4 |
+| Main thread p50 / p90 / p99 | 1.23 / 1.75 / 2.75 ms | **1.17** / **1.67** / 2.71 ms | 1.04 / 1.65 / 2.80 ms | 1.01 / 1.57 / 2.74 ms |
+| RenderThread p50 / p90 / p99 | 2.31 / 3.38 / 5.08 ms | 2.35 / **3.23** / **4.72** ms | 2.49 / 3.61 / 5.01 ms | 2.51 / 3.60 / 5.31 ms |
+| Main thread / RenderThread work | 490 / 814 ms | **459** / **755** ms | 680 / 1,562 ms | **574** / **1,316** ms |
+| Text laid out in frames (8 runs) | 0 | 0 | 0 | 3 |
+| Native heap after start / after the flings | 8.5 / 12.0 MB | **8.1** / **10.6** MB | 17.1 / 20.5 MB | **14.4** / **17.2** MB |
+| `TotalTime` (16 cold starts) | 108.0 ms | 105.0 ms | 123.0 ms | 121.0 ms |
+| The first frame's `compose-rs: frame` (8 traced starts) | 6.7 ms | **5.0 ms** | 14.3 ms | **7.3 ms** |
+
+- **The wins hold:** less work on both threads, less memory, and a first frame half as long.
+- **The stress list's RenderThread p99 is 0.30 ms longer.** The runs' ranges overlap (4.68 to 5.53 against 4.50 to 5.42 ms). The earlier A/Bs gave +0.07 and +0.11 ms.
+- **It laid out text in 3 frames in 8 runs**, where main laid out none in 8 and 1 in 12 in the first A/B; too few to tell from noise.
+- **The compositor's janky frames** (4 against 2) aren't the app's.
+- **Startup:** `TotalTime` is within the starts' spread here (−2 and −3 ms).
 
 **Lazy grids** keep 2 lines composed and placed beyond each side (D456). Their open risk was that a fast fling would outrun that buffer. Checked on the new `grid` screen of both apps (D473): 3,000 tiles in 4 columns, 10 flings of 1,600 px in 60 ms as measure.py's pattern, 3 to 4 runs each, interleaved.
 - Before D474, compose-rs composed items in 0 to 11 frames a run (mean 4.3, 6 runs), in runs of consecutive frames at the flings' starts with no prefetch between them. With D474, 0 to 2 a run (mean 1.0, 4 runs).

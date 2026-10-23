@@ -29,6 +29,8 @@ internal class Accessibility(private val view: ComposeRsView) : AccessibilityNod
         val state: String,
         val error: String,
         val range: FloatArray?,
+        /** A scrolling container's offset and the largest, along its axis. */
+        val scroll: FloatArray?,
     ) {
         val children = ArrayList<Int>()
     }
@@ -77,7 +79,12 @@ internal class Accessibility(private val view: ComposeRsView) : AccessibilityNod
             } else {
                 null
             }
-            val node = Node(id, parent, bounds, flags, role, text, description, editableText, state, error, range)
+            val scroll = if (flags and SCROLL != 0) {
+                floatArrayOf(buffer.getFloat(), buffer.getFloat())
+            } else {
+                null
+            }
+            val node = Node(id, parent, bounds, flags, role, text, description, editableText, state, error, range, scroll)
             read.put(id, node)
             if (parent == -1) roots.add(id) else read.get(parent)?.children?.add(id)
         }
@@ -109,7 +116,8 @@ internal class Accessibility(private val view: ComposeRsView) : AccessibilityNod
         screen.offset(location[0], location[1])
         info.setBoundsInScreen(screen)
         info.setBoundsInParent(node.bounds)
-        info.isVisibleToUser = true
+        // Clipped away by a scrolling container around it: TalkBack scrolls that instead.
+        info.isVisibleToUser = node.flags and HIDDEN == 0
         info.className = when {
             node.flags and EDITABLE != 0 -> "android.widget.EditText"
             node.role == 1 -> "android.widget.Button"
@@ -119,6 +127,8 @@ internal class Accessibility(private val view: ComposeRsView) : AccessibilityNod
             node.role == 6 -> "android.widget.ImageView"
             node.role == 7 -> "android.widget.Spinner"
             node.range != null -> "android.widget.SeekBar"
+            node.scroll != null && node.flags and SCROLL_HORIZONTAL != 0 -> "android.widget.HorizontalScrollView"
+            node.scroll != null -> "android.widget.ScrollView"
             else -> "android.view.View"
         }
         if (node.role == 5) info.extras.putCharSequence("AccessibilityNodeInfo.roleDescription", "Tab")
@@ -165,6 +175,33 @@ internal class Accessibility(private val view: ComposeRsView) : AccessibilityNod
                 info.addAction(AccessibilityAction.ACTION_SCROLL_FORWARD)
                 info.addAction(AccessibilityAction.ACTION_SCROLL_BACKWARD)
             }
+            // A scrolling container (a lazy list, a scrolling column), as Compose's
+            // `ScrollAxisRange` and `ScrollBy`: scrolled a page at a time.
+            if (node.range == null) node.scroll?.let { scroll ->
+                info.isScrollable = true
+                val horizontal = node.flags and SCROLL_HORIZONTAL != 0
+                val reversed = node.flags and SCROLL_REVERSED != 0
+                if (scroll[0] < scroll[1]) {
+                    info.addAction(AccessibilityAction.ACTION_SCROLL_FORWARD)
+                    info.addAction(
+                        when {
+                            horizontal -> AccessibilityAction.ACTION_SCROLL_RIGHT
+                            reversed -> AccessibilityAction.ACTION_SCROLL_UP
+                            else -> AccessibilityAction.ACTION_SCROLL_DOWN
+                        },
+                    )
+                }
+                if (scroll[0] > 0f) {
+                    info.addAction(AccessibilityAction.ACTION_SCROLL_BACKWARD)
+                    info.addAction(
+                        when {
+                            horizontal -> AccessibilityAction.ACTION_SCROLL_LEFT
+                            reversed -> AccessibilityAction.ACTION_SCROLL_DOWN
+                            else -> AccessibilityAction.ACTION_SCROLL_UP
+                        },
+                    )
+                }
+            }
         }
         if (node.flags and DIALOG != 0) info.paneTitle = node.description.ifEmpty { node.text }
         return info
@@ -203,7 +240,16 @@ internal class Accessibility(private val view: ComposeRsView) : AccessibilityNod
                     ?: return false
                 view.performSemanticsAction(virtualViewId, 2, value)
             }
-            AccessibilityNodeInfo.ACTION_SCROLL_FORWARD, AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD -> {
+            AccessibilityNodeInfo.ACTION_SCROLL_FORWARD, AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD,
+            android.R.id.accessibilityActionScrollDown, android.R.id.accessibilityActionScrollUp,
+            android.R.id.accessibilityActionScrollRight, android.R.id.accessibilityActionScrollLeft,
+            -> {
+                if (node.range == null && node.scroll != null) return scrollPage(node, action)
+                if (action != AccessibilityNodeInfo.ACTION_SCROLL_FORWARD &&
+                    action != AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD
+                ) {
+                    return false
+                }
                 val range = node.range ?: return false
                 val step = (range[2] - range[1]) / 20f
                 val delta = if (action == AccessibilityNodeInfo.ACTION_SCROLL_FORWARD) step else -step
@@ -211,6 +257,30 @@ internal class Accessibility(private val view: ComposeRsView) : AccessibilityNod
             }
             else -> false
         }
+    }
+
+    /**
+     * Scrolls a scrolling container by its length along its axis (less nothing: Compose's
+     * accessibility scrolls a whole viewport), forward (towards its end) or back; a reversed
+     * one's up and down are the other way.
+     */
+    private fun scrollPage(node: Node, action: Int): Boolean {
+        val horizontal = node.flags and SCROLL_HORIZONTAL != 0
+        val reversed = node.flags and SCROLL_REVERSED != 0
+        val forward = when (action) {
+            AccessibilityNodeInfo.ACTION_SCROLL_FORWARD -> true
+            AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD -> false
+            android.R.id.accessibilityActionScrollDown -> if (horizontal) null else !reversed
+            android.R.id.accessibilityActionScrollUp -> if (horizontal) null else reversed
+            android.R.id.accessibilityActionScrollRight -> if (horizontal) true else null
+            android.R.id.accessibilityActionScrollLeft -> if (horizontal) false else null
+            else -> null
+        } ?: return false
+        val page = if (horizontal) node.bounds.width() else node.bounds.height()
+        val delta = if (forward) page.toFloat() else -page.toFloat()
+        val done = view.performSemanticsAction(node.id, if (horizontal) 4 else 3, delta)
+        if (done) send(node.id, AccessibilityEvent.TYPE_VIEW_SCROLLED)
+        return done
     }
 
     private fun send(virtualViewId: Int, type: Int) {
@@ -265,6 +335,10 @@ internal class Accessibility(private val view: ComposeRsView) : AccessibilityNod
         const val SELECTED = 1 shl 8
         const val DIALOG = 1 shl 9
         const val RANGE = 1 shl 10
+        const val SCROLL = 1 shl 11
+        const val SCROLL_HORIZONTAL = 1 shl 12
+        const val SCROLL_REVERSED = 1 shl 13
+        const val HIDDEN = 1 shl 14
         const val CLICKABLE = 1
     }
 }

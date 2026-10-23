@@ -3,6 +3,7 @@
 //! node or one below it has focus (Compose's `FocusState.hasFocus`), including once when they
 //! attach.
 
+use crate::focus_manager::FocusDirection;
 use smallvec::SmallVec;
 
 use crate::input::{Action, EventContext, Requests};
@@ -367,12 +368,19 @@ impl UiTree {
         })
     }
 
-    /// Moves focus to the next (or previous) focusable node, wrapping around, as Tab does.
+    /// Moves focus to the next (or previous) focusable node, wrapping around, as Tab does
+    /// (laying out content beyond a lazy list's bounds first, if the focus would leave it:
+    /// `move_focus_in`).
     pub fn move_focus(&mut self, forward: bool) -> Vec<Action> {
+        let direction = if forward { FocusDirection::Next } else { FocusDirection::Previous };
+        self.move_focus_in(direction).1
+    }
+
+    /// The node Tab (`forward`) or Shift+Tab moves the focus to, and whether it wrapped around.
+    pub(crate) fn tab_target(&mut self, forward: bool) -> Option<(NodeId, bool)> {
         let order = self.focus_order();
-        let mut actions = Vec::new();
         if order.is_empty() {
-            return actions;
+            return None;
         }
         let current =
             self.focused().and_then(|focused| order.iter().position(|&node| node == focused));
@@ -403,7 +411,93 @@ impl UiTree {
                 break next;
             }
         };
-        self.request_focus_into(order[next], &mut actions);
+        let wrapped = current.is_some_and(|current| (next <= current) == forward);
+        Some((order[next], wrapped))
+    }
+
+    /// The innermost ancestor of `node` (or itself) laying out content beyond its bounds for
+    /// focus searches (a lazy list), and the index of the modifier node doing it.
+    fn beyond_bounds_container(&self, node: NodeId) -> Option<(NodeId, usize)> {
+        let mut current = Some(node);
+        while let Some(id) = current {
+            let value = self.node(id);
+            if let Some(index) =
+                value.chain.iter().position(|entry| entry.is_beyond_bounds_layout())
+            {
+                return Some((id, index));
+            }
+            current = if value.overlay { None } else { value.parent };
+        }
+        None
+    }
+
+    /// Asks the container around the focused node to lay out more beyond its bounds, when the
+    /// search going `direction` leaves it (`target`: what it found, and whether it wrapped
+    /// around): the move waits for it, made again at the next layout (D477). Returns whether
+    /// it waits.
+    pub(crate) fn search_beyond_bounds(
+        &mut self,
+        direction: FocusDirection,
+        target: Option<(NodeId, bool)>,
+    ) -> bool {
+        let Some(focused) = self.focused() else { return false };
+        let Some((container, index)) = self.beyond_bounds_container(focused) else {
+            return false;
+        };
+        let leaves = target
+            .is_none_or(|(target, wrapped)| wrapped || !self.is_at_or_below(target, container));
+        if !leaves || self.beyond_search.steps >= MOST_BEYOND_STEPS {
+            return false;
+        }
+        let layout_direction = self.node(container).layout_direction;
+        let more = self.get_mut(container).is_some_and(|value| {
+            value.chain[index].lay_out_beyond_bounds(direction, layout_direction)
+        });
+        if !more {
+            return false;
+        }
+        if let Some(other) = self.beyond_search.container.replace((container, index))
+            && other != (container, index)
+            && let Some(value) = self.get_mut(other.0)
+        {
+            value.chain[other.1].end_beyond_bounds();
+        }
+        self.beyond_search.steps += 1;
+        self.beyond_search.moves.push_back(direction);
+        true
+    }
+
+    /// The search is over: what was laid out beyond the bounds for it goes.
+    pub(crate) fn end_beyond_bounds(&mut self) {
+        self.beyond_search.steps = 0;
+        if let Some((container, index)) = self.beyond_search.container.take()
+            && let Some(value) = self.get_mut(container)
+            && index < value.chain.len()
+        {
+            value.chain[index].end_beyond_bounds();
+        }
+    }
+
+    /// Whether focus moves wait for content laid out beyond a container's bounds.
+    pub fn has_beyond_bounds_moves(&self) -> bool {
+        !self.beyond_search.moves.is_empty()
+    }
+
+    /// Makes the focus moves that waited for content beyond a container's bounds, now laid
+    /// out (each may wait again, for one more item).
+    pub fn run_beyond_bounds_moves(&mut self) -> Vec<Action> {
+        let moves = std::mem::take(&mut self.beyond_search.moves);
+        let mut actions = Vec::new();
+        for direction in moves {
+            actions.extend(self.move_focus_in(direction).1);
+        }
+        actions
+    }
+
+    /// Moves the focus to `target`, done searching.
+    pub(crate) fn focus_found(&mut self, target: NodeId) -> Vec<Action> {
+        let mut actions = Vec::new();
+        self.request_focus_into(target, &mut actions);
         self.update_focus_listeners(&mut actions);
         actions
     }
@@ -441,4 +535,18 @@ impl UiTree {
         self.update_focus_listeners(&mut actions);
         actions
     }
+}
+
+/// The most items a focus search lays out beyond a container's bounds before it gives up
+/// (leaving the container): Tab past that many unfocusable items in a row.
+const MOST_BEYOND_STEPS: usize = 200;
+
+/// Focus moves waiting for content a container lays out beyond its bounds, as Compose's
+/// `BeyondBoundsLayout` during a focus search (D477): the moves asked meanwhile, in order, the
+/// container (its node and the modifier node laying it out), and the items it laid out so far.
+#[derive(Default)]
+pub(crate) struct BeyondSearch {
+    pub(crate) moves: std::collections::VecDeque<FocusDirection>,
+    pub(crate) container: Option<(NodeId, usize)>,
+    pub(crate) steps: usize,
 }

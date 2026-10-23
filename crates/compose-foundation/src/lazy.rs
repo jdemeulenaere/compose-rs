@@ -1,5 +1,5 @@
-//! Lazy lists, as Compose's `LazyColumn` and `LazyRow`: only the items in view (and a few
-//! next to them, and the focused one) are composed, measured and drawn.
+//! Lazy lists, as Compose's `LazyColumn` and `LazyRow`: only the items in view are placed and
+//! drawn; they, a few next to them and the focused one are composed and measured.
 //!
 //! Compose composes items while measuring (subcomposition). Here the list composes a range of
 //! items, and its measurement, which fills the viewport from the scroll position, writes the
@@ -8,10 +8,10 @@
 //! composed by a restartable composable of their own, each item one too: a scroll recomposes
 //! neither the list's caller nor the items that stay.
 //!
-//! Only the items in view are placed (and composed, but those next to them). After its first
-//! layout and after each scroll, the next items in the scroll direction are composed and
-//! measured between frames (prefetch, as Compose's `LazyListPrefetchStrategy`), so the frame
-//! reaching them finds them ready.
+//! After its first layout and after each scroll, the next items in the scroll direction are
+//! composed and measured between frames (prefetch, as Compose's `LazyListPrefetchStrategy`), so
+//! the frame reaching them finds them ready. A focus search leaving the list asks it for the
+//! next items, laid out beyond its bounds for the search (D477).
 //!
 //! An item that leaves is deactivated and kept for reuse, and an item that comes is composed in
 //! the place of one of its content type, its nodes kept (D430), as Compose's
@@ -48,11 +48,11 @@ use compose_ui::{
 use crate::layout::{HorizontalArrangement, MainAxisArrangement, VerticalArrangement};
 use crate::scroll::{DragScroller, bring_into_view_delta};
 
-/// While an item of the list holds the focus, a viewport's worth of items, and at least this
-/// many, is composed and placed (out of view) beyond each side, so focus can move to the next
-/// focusable item. Otherwise the list composes and places only the items in view, as Compose's
-/// (`beyondBoundsItemCount` 0): prefetch composes the next ones between frames, from its first
-/// layout on, and a frame keeps those next to the ones in view (D470).
+/// A grid's lines composed and placed beyond each side (D456). A list composes and places only
+/// the items in view, as Compose's (`beyondBoundsItemCount` 0): prefetch composes the next ones
+/// between frames, from its first layout on, a frame keeps those next to the ones in view
+/// (D470), and a focus search leaving the list asks for the next items one at a time
+/// (`lay_out_beyond_bounds`, D477); a list's least viewport's worth.
 const BEYOND: usize = 2;
 
 /// While it knows fewer item sizes than this (a first layout), a measurement lacking items asks
@@ -148,12 +148,22 @@ struct LazyListInner {
     /// (each item measured changes the average size, D471).
     layout_info_written: Cell<(usize, f32, i32, i32, i32)>,
     item_constraints_written: Cell<Option<Constraints>>,
-    /// How far the list can scroll each way, as last laid out (infinite: not known).
+    /// How far the list can scroll each way, as last laid out (infinite: not known), and
+    /// whether that's an estimate (the end isn't laid out: from the average size). A delta is
+    /// cut at an estimate only for a parent to take the rest (nested scrolling), as Compose's
+    /// measurement consumes it up to the real end; otherwise the measurement takes it all and
+    /// stops at the end it reaches (D476).
     room_backward: Cell<f32>,
     room_forward: Cell<f32>,
+    room_estimated: Cell<(bool, bool)>,
     prefetch: Prefetch,
     /// The viewport's size less the content padding, for the items' `fill_parent_max_*`.
     parent_size: Rc<ParentSize>,
+    /// The items (a grid's lines) a focus search asked to lay out beyond those in view, before
+    /// and after them, until it's over (D477); and whether there are any more that way, as
+    /// last laid out.
+    beyond_bounds: OwnedState<(usize, usize)>,
+    beyond_more: Cell<(bool, bool)>,
     /// The sticky header to keep composed (over the first visible item), as last laid out.
     sticky: OwnedState<Option<usize>>,
     /// What was last written to `sticky`, read without observing it.
@@ -203,10 +213,13 @@ impl LazyListInner {
                 offset as f32
             }),
             room_forward: Cell::new(f32::INFINITY),
+            room_estimated: Cell::new((false, false)),
             prefetch: Prefetch { forward: Cell::new(true), ..Prefetch::default() },
             parent_size: Rc::default(),
             sticky: mutable_state_of(None),
             sticky_written: Cell::new(None),
+            beyond_bounds: mutable_state_of((0, 0)),
+            beyond_more: Cell::new((false, false)),
         }
     }
 }
@@ -343,17 +356,23 @@ impl LazyListState {
     /// Scrolls by `pixels` (positive: towards the end) at the next layout, as
     /// `scrollBy`/`dispatchRawDelta`; returns whether the list can move that way.
     pub fn scroll_by(&self, pixels: f32) -> bool {
-        self.dispatch(pixels) != 0.0
+        self.dispatch(pixels, false) != 0.0
     }
 
     /// Scrolls by up to `pixels`, as far as the list goes (as last laid out); returns the
-    /// pixels it will move.
-    fn dispatch(&self, pixels: f32) -> f32 {
+    /// pixels it will move. Where the end isn't laid out, the room is an estimate: it cuts
+    /// the delta only if `to_estimate` (a parent scrollable takes the rest), else the
+    /// measurement takes it all, composing in the frame what it reaches, as Compose's (D476).
+    fn dispatch(&self, pixels: f32, to_estimate: bool) -> f32 {
         let Some(inner) = self.inner() else { return 0.0 };
+        let (backward_estimated, forward_estimated) = inner.room_estimated.get();
+        let room = |room: f32, estimated: bool| {
+            if estimated && !to_estimate { f32::INFINITY } else { room.max(0.0) }
+        };
         let used = if pixels > 0.0 {
-            pixels.min(inner.room_forward.get().max(0.0))
+            pixels.min(room(inner.room_forward.get(), forward_estimated))
         } else {
-            pixels.max(-inner.room_backward.get().max(0.0))
+            pixels.max(-room(inner.room_backward.get(), backward_estimated))
         };
         if used != 0.0 {
             inner.room_forward.set(inner.room_forward.get() - used);
@@ -1961,33 +1980,39 @@ impl MeasurePolicy for LazyListLayout {
                 };
             }
         }
-        // The items wanted composed: those in view, and as many more as the room left would
-        // take if items were missing. While an item holds the focus, a viewport's worth more
-        // on each side (at least two), so focus can move to the next focusable item (D470).
+        // The items wanted composed: those in view, those a focus search asked for beyond them
+        // (D477), and as many more as the room left would take if items were missing.
         let average = sizes.average();
         let viewport_worth =
             ((main_max / (average + spacing).max(1)) as usize).clamp(BEYOND, MOST_MISSING);
-        let beyond = if state.pinned.get().is_some() { viewport_worth } else { 0 };
-        let wanted_start = index.saturating_sub(beyond + wanted_before);
-        let mut wanted_end = (end_index + beyond).min(count);
+        let (beyond_before, beyond_after) = state.beyond_bounds.get();
+        let wanted_start = index.saturating_sub(beyond_before + wanted_before);
+        let mut wanted_end = (end_index + beyond_after).min(count);
         if missing {
             // At the size of the items in view, if any: the ones about to come are likelier
-            // like them than like the list's average.
-            let in_view = if placed.is_empty() {
-                average
-            } else {
-                (placed.iter().map(|(placeable, _)| main_of(placeable)).sum::<i32>()
-                    / placed.len() as i32)
-                    .max(1)
+            // like them than like the list's average; and no larger than the last of them, so a
+            // large first item (a header, a hero image) doesn't make the rounds run out short
+            // of filling the viewport (D475).
+            let in_view = match placed.last() {
+                None => average,
+                Some((last, _)) => {
+                    (placed.iter().map(|(placeable, _)| main_of(placeable)).sum::<i32>()
+                        / placed.len() as i32)
+                        .min(main_of(last))
+                        .max(1)
+                }
             };
             // The room the next items fill (the end padding's included: the items fill the
             // viewport under it), each with its spacing: as many as cover it, no more.
             let room = (main_max - content_end + after).max(1) as usize;
-            let mut more = room.div_ceil((in_view + spacing).max(1) as usize).min(MOST_MISSING);
+            // At most `MOST_MISSING`, or four times as many from sizes measured in view (rows a
+            // few pixels tall filling a phone's screen in a frame's rounds).
+            let most = if placed.is_empty() { MOST_MISSING } else { 4 * MOST_MISSING };
+            let mut more = room.div_ceil((in_view + spacing).max(1) as usize).min(most);
             if sizes.len() < FEW_SIZES {
                 more = more.min(placed.len().max(FIRST_STEP));
             }
-            wanted_end = (end_index + more + beyond).min(count);
+            wanted_end = (end_index + more + beyond_after).min(count);
         }
         let covers = composed_start <= wanted_start && composed_end >= wanted_end;
         // Items composed far from those wanted are left in a frame, beyond two viewports' worth
@@ -2053,11 +2078,11 @@ impl MeasurePolicy for LazyListLayout {
             state.first_index.set(rounded.0);
             state.first_offset.set(rounded.1);
         }
-        // The items wanted are placed: those in view, and while an item holds the focus those
-        // beyond them (clipped away), so focus can move to them; those composed beyond the
-        // ones wanted (prefetched, kept behind) aren't, as Compose's: nothing draws or hits
-        // them until they're wanted. A focused one among those is placed, next to the others:
-        // focus scrolls it in.
+        // The items wanted are placed: those in view, and those a focus search asked for beyond
+        // them (clipped away), so focus can move to them; those composed beyond the ones wanted
+        // (prefetched, kept behind) aren't, as Compose's: nothing draws or hits them until
+        // they're wanted. A focused one among those is placed, next to the others: focus
+        // scrolls it in.
         let (mut placed_start, mut placed_end) =
             (composed_start.max(wanted_start), composed_end.min(wanted_end));
         if let Some(key) = state.pinned.get()
@@ -2097,12 +2122,14 @@ impl MeasurePolicy for LazyListLayout {
         // Not reaching an end: estimated from the average size (a nested list's wheel delta
         // it can't use goes on to its parent).
         let average = sizes.average() as f32 + spacing as f32;
+        let reaches_end = !missing && (end_index == count || placed_end >= count);
+        state.room_estimated.set((!reaches_start, !reaches_end));
+        state.beyond_more.set((placed_start.min(index) > 0, placed_end.max(end_index) < count));
         state.room_backward.set(if reaches_start {
             (-extent_start) as f32 + pending
         } else {
             (placed_start.min(index) as f32 * average - extent_start as f32 + pending).max(1.0)
         });
-        let reaches_end = !missing && (end_index == count || placed_end >= count);
         state.room_forward.set(if reaches_end {
             (extent_end.max(content_end) - main_max).max(0) as f32 - pending
         } else {
@@ -2466,7 +2493,46 @@ impl LazyScrollNode {
     }
 }
 
+impl compose_ui::SemanticsModifierNode for LazyScrollNode {
+    /// How far it's scrolled and can be, along its axis, as Compose's lazy layouts' semantics:
+    /// accessibility services scroll it a page at a time (D478). Where an end isn't laid out,
+    /// the room that way is estimated from the average item size.
+    fn apply_semantics(&self, config: &mut compose_ui::SemanticsConfiguration) {
+        let Some(inner) = self.state.inner() else { return };
+        let (count, average, ..) = inner.layout_info.get();
+        let (index, _) = inner.published.get();
+        let estimate = |room: f32, items: usize| {
+            if room.is_finite() { room.max(0.0) } else { items as f32 * average }
+        };
+        let value = estimate(inner.room_backward.get(), index);
+        let range = compose_ui::ScrollAxisRange {
+            value,
+            max_value: value + estimate(inner.room_forward.get(), count.saturating_sub(index)),
+            reverse_scrolling: self.reverse,
+        };
+        if self.vertical {
+            config.vertical_scroll_axis_range = Some(range);
+        } else {
+            config.horizontal_scroll_axis_range = Some(range);
+        }
+    }
+
+    fn perform_action(
+        &mut self,
+        action: compose_ui::SemanticsAction,
+        _context: &mut EventContext<'_>,
+    ) -> bool {
+        let compose_ui::SemanticsAction::ScrollBy { x, y } = action else { return false };
+        let delta = if self.vertical { y } else { x };
+        delta != 0.0 && self.state.dispatch(delta, false) != 0.0
+    }
+}
+
 impl ModifierNode for LazyScrollNode {
+    fn as_semantics(&mut self) -> Option<&mut dyn compose_ui::SemanticsModifierNode> {
+        Some(self)
+    }
+
     fn on_detach(&mut self, _context: &mut compose_ui::DetachContext<'_>) {
         self.drag.stop_fling();
     }
@@ -2484,6 +2550,49 @@ impl ModifierNode for LazyScrollNode {
         Some(compose_ui::Shape::Rectangle)
     }
 
+    fn is_beyond_bounds_layout(&self) -> bool {
+        true
+    }
+
+    /// One more item (a grid's line) beyond those laid out, the way `direction` goes along the
+    /// list, for a focus search, as Compose's `LazyLayoutBeyondBoundsModifierNode` (D477).
+    fn lay_out_beyond_bounds(
+        &mut self,
+        direction: compose_ui::FocusDirection,
+        layout_direction: compose_ui::LayoutDirection,
+    ) -> bool {
+        use compose_ui::FocusDirection;
+        let Some(inner) = self.state.inner() else { return false };
+        let mirrored = self.mirrored(layout_direction == compose_ui::LayoutDirection::Rtl);
+        let forward = match direction {
+            FocusDirection::Next => true,
+            FocusDirection::Previous => false,
+            FocusDirection::Down if self.vertical => !mirrored,
+            FocusDirection::Up if self.vertical => mirrored,
+            FocusDirection::Right if !self.vertical => !mirrored,
+            FocusDirection::Left if !self.vertical => mirrored,
+            _ => return false,
+        };
+        let (before, after) = inner.beyond_more.get();
+        if !(if forward { after } else { before }) {
+            return false;
+        }
+        inner.beyond_bounds.update(
+            |&(before, after)| {
+                if forward { (before, after + 1) } else { (before + 1, after) }
+            },
+        );
+        true
+    }
+
+    fn end_beyond_bounds(&mut self) {
+        if let Some(inner) = self.state.inner()
+            && inner.beyond_bounds.get() != (0, 0)
+        {
+            inner.beyond_bounds.set((0, 0));
+        }
+    }
+
     /// Scrolls the least that shows `rect` (an item beyond the viewport taking the focus).
     fn bring_into_view(&mut self, rect: Rect, viewport: IntSize) -> Option<Rect> {
         let inner = self.state.inner()?;
@@ -2493,7 +2602,7 @@ impl ModifierNode for LazyScrollNode {
         // Where it will be once the scrolling asked for (not yet laid out) is.
         let pending = inner.pending.get();
         let delta = bring_into_view_delta(start - pending, end - pending, length);
-        let used = if delta == 0.0 { 0.0 } else { self.state.dispatch(delta) };
+        let used = if delta == 0.0 { 0.0 } else { self.state.dispatch(delta, false) };
         Some(crate::scroll::scrolled_rect(rect, used, self.vertical, mirrored))
     }
 }
@@ -2512,14 +2621,16 @@ impl PointerInputModifierNode for LazyScrollNode {
         let state = self.state;
         let reverse = self.mirrored(context.layout_direction() == compose_ui::LayoutDirection::Rtl);
         let flung = state;
+        let nested = self.drag.has_outer();
         self.drag.on_pointer_event(
             event,
             pass,
             self.vertical,
             reverse,
             context,
-            |delta| state.dispatch(delta),
-            move || Rc::new(move |delta| flung.dispatch(delta)),
+            // Cut at an estimated end only for a parent to take the rest (D476).
+            move |delta| state.dispatch(delta, nested),
+            move || Rc::new(move |delta| flung.dispatch(delta, false)),
         );
     }
 

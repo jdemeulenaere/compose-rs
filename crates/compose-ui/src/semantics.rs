@@ -42,6 +42,19 @@ pub enum SemanticsAction {
     RequestFocus,
     /// Set its progress to a value in its range (a slider's), as `SemanticsActions.SetProgress`.
     SetProgress(f32),
+    /// Scroll its content by `x` and `y` pixels (positive: towards its end), as
+    /// `SemanticsActions.ScrollBy`: a scrolling container's (D478).
+    ScrollBy { x: f32, y: f32 },
+}
+
+/// How far a scrolling container is scrolled along an axis, as Compose's `ScrollAxisRange`: its
+/// offset, the largest it can be (a lazy list's estimated from its average item size where its
+/// end isn't laid out), and whether its content runs from the end (a reversed layout).
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct ScrollAxisRange {
+    pub value: f32,
+    pub max_value: f32,
+    pub reverse_scrolling: bool,
 }
 
 /// A value in a range, as Compose's `ProgressBarRangeInfo`: a slider's or a progress bar's.
@@ -106,6 +119,11 @@ pub struct SemanticsConfiguration {
     pub part_of_parent: bool,
     /// It groups selectable items (radio buttons), as `selectableGroup()`.
     pub selectable_group: bool,
+    /// It scrolls its content, horizontally or vertically, as `horizontalScrollAxisRange` and
+    /// `verticalScrollAxisRange` (with the `ScrollBy` action): scrolling containers and lazy
+    /// lists and grids (D478).
+    pub horizontal_scroll_axis_range: Option<ScrollAxisRange>,
+    pub vertical_scroll_axis_range: Option<ScrollAxisRange>,
 }
 
 impl SemanticsConfiguration {
@@ -182,6 +200,12 @@ impl SemanticsConfiguration {
         if other.progress_bar_range_info.is_some() {
             self.progress_bar_range_info = other.progress_bar_range_info;
         }
+        if other.horizontal_scroll_axis_range.is_some() {
+            self.horizontal_scroll_axis_range = other.horizontal_scroll_axis_range;
+        }
+        if other.vertical_scroll_axis_range.is_some() {
+            self.vertical_scroll_axis_range = other.vertical_scroll_axis_range;
+        }
         self.is_dialog |= other.is_dialog;
         self.clear_descendants |= other.clear_descendants;
         self.disabled |= other.disabled;
@@ -241,6 +265,15 @@ impl fmt::Debug for SemanticsConfiguration {
                 "progress={} in {}..{} steps {}",
                 info.current, info.range.0, info.range.1, info.steps
             ));
+        }
+        for (range, axis) in [
+            (self.horizontal_scroll_axis_range, "horizontal"),
+            (self.vertical_scroll_axis_range, "vertical"),
+        ] {
+            if let Some(range) = range {
+                let reverse = if range.reverse_scrolling { " reversed" } else { "" };
+                parts.push(format!("{axis}_scroll={}/{}{reverse}", range.value, range.max_value));
+            }
         }
         for (flag, name) in [
             (self.clickable, "clickable"),

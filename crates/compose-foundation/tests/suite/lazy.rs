@@ -186,3 +186,274 @@ fn scrolling_keeps_what_the_items_drew() {
     assert!(kept >= 5, "{kept} items kept\n{}", after.dump());
     assert_ne!(after.dump(), before.dump());
 }
+
+thread_local! {
+    static FIRST_BOTTOM: Cell<f32> = const { Cell::new(0.0) };
+    static FIRST_COMPOSED: Cell<usize> = const { Cell::new(0) };
+}
+
+/// The first frame of a `height` px list of a `header` px item then `row` px rows: how far
+/// down its items reach, and how many it composed.
+fn first_frame(height: f32, header: f32, row: f32) -> (f32, usize) {
+    let note = |coordinates: compose_ui::LayoutCoordinates| {
+        let bottom = coordinates.bounds_in_root().bottom;
+        FIRST_BOTTOM.with(|cell| cell.set(cell.get().max(bottom)));
+    };
+    let mut host = compose_ui::platform::UiHost::headless(100, height as i32);
+    host.set_content(move || {
+        LazyColumn!(
+            modifier = Modifier.size((100.dp(), height.dp())),
+            move |scope: LazyListScope| {
+                scope.item(move || {
+                    FIRST_COMPOSED.with(|cell| cell.set(cell.get() + 1));
+                    Box!(
+                        modifier =
+                            Modifier.size((100.dp(), header.dp())).on_globally_positioned(note)
+                    );
+                });
+                scope.items(2000, move |_| {
+                    FIRST_COMPOSED.with(|cell| cell.set(cell.get() + 1));
+                    Box!(
+                        modifier = Modifier.size((100.dp(), row.dp())).on_globally_positioned(note)
+                    );
+                });
+            }
+        );
+    });
+    FIRST_BOTTOM.with(|cell| cell.set(0.0));
+    FIRST_COMPOSED.with(|cell| cell.set(0));
+    host.frame();
+    (FIRST_BOTTOM.with(Cell::get), FIRST_COMPOSED.with(Cell::get))
+}
+
+/// Whatever its first item and rows, a list's first frame fills its viewport, as Compose's (its
+/// measurement composes items until it's full), composing few items it then doesn't show
+/// (D472, D475): headers from 20 to 1,500 px, rows from 5 to 700 px, viewports of 500 to
+/// 2,244 px.
+#[test]
+fn the_first_frame_fills_the_viewport_whatever_the_sizes() {
+    let mut short = Vec::new();
+    for height in [500.0, 800.0, 2244.0] {
+        for header in [20.0, 81.0, 300.0, 600.0, 1500.0] {
+            for row in [5.0, 20.0, 50.0, 120.0, 300.0, 700.0] {
+                let (bottom, composed) = first_frame(height, header, row);
+                if bottom < height {
+                    short.push((height, header, row, bottom));
+                }
+                // The items in view, and those the estimates' last round asked for beyond.
+                let in_view = 1 + ((height - header).max(0.0) / row).ceil() as usize;
+                assert!(
+                    composed <= in_view + (in_view / 2).max(4),
+                    "{height} px, {header} px header, {row} px rows: {composed} composed, {in_view} in view"
+                );
+            }
+        }
+    }
+    assert!(short.is_empty(), "first frames short (height, header, row, bottom): {short:?}");
+}
+
+// ---- Focus searches laying items out beyond a list's bounds (D477) -------------------------
+
+/// A 100 px list of `count` clickable 20 px rows, then a clickable box after it.
+fn focusable_rows(count: usize) -> ComposeTestRule {
+    ComposeTestRule::sized(IntSize::new(200, 300), move || {
+        Column!({
+            LazyColumn!(
+                modifier = Modifier.size((100.dp(), 100.dp())),
+                move |scope: LazyListScope| {
+                    scope.items(count, |index| {
+                        Box!(
+                            modifier = Modifier
+                                .size((100.dp(), 20.dp()))
+                                .clickable(|| {})
+                                .test_tag(format!("row {index}"))
+                        );
+                    });
+                }
+            );
+            Box!(modifier = Modifier.size((100.dp(), 20.dp())).clickable(|| {}).test_tag("after"));
+        });
+    })
+}
+
+fn top(ui: &mut ComposeTestRule, tag: &str) -> f32 {
+    ui.on_node_with_tag(tag).fetch_semantics_node().bounds.top
+}
+
+/// The rows placed now (in the semantics tree).
+fn rows_placed(ui: &mut ComposeTestRule) -> usize {
+    (0..1000).filter(|index| ui.count_nodes(&has_test_tag(&format!("row {index}"))) == 1).count()
+}
+
+/// Tab from the last row in view asks the list for the next row, laid out beyond its bounds
+/// for the search, as Compose's `BeyondBoundsLayout`: it takes the focus and is scrolled in.
+/// Once the search is over, nothing beyond the rows in view stays placed.
+#[test]
+fn tab_lays_out_the_next_row_beyond_the_list_and_leaves_nothing_placed_after() {
+    let mut ui = focusable_rows(1000);
+    assert_eq!(rows_placed(&mut ui), 5);
+    for _ in 0..7 {
+        ui.press_key(compose_ui::Key::Tab);
+    }
+    ui.on_node_with_tag("row 6").assert_is_focused();
+    assert_eq!(top(&mut ui, "row 6"), 80.0);
+    // Rows 2 to 6 in view, none beyond.
+    assert_eq!(rows_placed(&mut ui), 5);
+}
+
+/// Down from the last row in view (the two-dimensional search) does the same.
+#[test]
+fn moving_the_focus_down_lays_out_the_next_row() {
+    let mut ui = focusable_rows(1000);
+    ui.on_node_with_tag("row 4").request_focus();
+    ui.wait_for_idle();
+    ui.host().with_tree(|tree| tree.move_focus_in(compose_ui::FocusDirection::Down));
+    ui.wait_for_idle();
+    ui.on_node_with_tag("row 5").assert_is_focused();
+    assert_eq!(top(&mut ui, "row 5"), 80.0);
+}
+
+/// At the list's end there's nothing more beyond: Tab leaves it, at once.
+#[test]
+fn tab_from_a_lists_last_row_leaves_it() {
+    let mut ui = focusable_rows(5);
+    ui.on_node_with_tag("row 4").request_focus();
+    ui.wait_for_idle();
+    ui.press_key(compose_ui::Key::Tab);
+    ui.on_node_with_tag("after").assert_is_focused();
+}
+
+/// Shift+Tab from the first row in view of a scrolled list lays out the row before it.
+#[test]
+fn shift_tab_lays_out_the_row_before_the_list() {
+    let state = LazyListState::new(10, 0);
+    let given = *state;
+    let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || {
+        LazyColumn!(
+            modifier = Modifier.size((100.dp(), 100.dp())),
+            state = given,
+            |scope: LazyListScope| {
+                scope.items(1000, |index| {
+                    Box!(
+                        modifier = Modifier
+                            .size((100.dp(), 20.dp()))
+                            .clickable(|| {})
+                            .test_tag(format!("row {index}"))
+                    );
+                });
+            }
+        );
+    });
+    ui.on_node_with_tag("row 10").request_focus();
+    ui.wait_for_idle();
+    ui.host().send_key(compose_ui::KeyEvent {
+        modifiers: compose_ui::KeyModifiers { shift: true, ..Default::default() },
+        ..compose_ui::KeyEvent::down(compose_ui::Key::Tab)
+    });
+    ui.wait_for_idle();
+    ui.on_node_with_tag("row 9").assert_is_focused();
+    assert_eq!(top(&mut ui, "row 9"), 0.0);
+}
+
+/// A grid's focus search past its lines in view and the two beyond them lays out the next
+/// lines too.
+#[test]
+fn tab_moves_through_a_grid_past_the_lines_laid_out() {
+    let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), || {
+        LazyVerticalGrid!(
+            GridCells::Fixed(2),
+            modifier = Modifier.size((100.dp(), 100.dp())),
+            |scope: LazyGridScope| {
+                scope.items(1000, |index| {
+                    Box!(
+                        modifier = Modifier
+                            .height(20.dp())
+                            .clickable(|| {})
+                            .test_tag(format!("tile {index}"))
+                    );
+                });
+            }
+        );
+    });
+    // 5 lines in view, 2 beyond: tiles 0 to 13; the 16th Tab focuses tile 15.
+    for _ in 0..16 {
+        ui.press_key(compose_ui::Key::Tab);
+    }
+    ui.on_node_with_tag("tile 15").assert_is_focused();
+}
+
+// ---- Scroll semantics (D478) -------------------------------------------------------------------
+
+/// The semantics node of the list tagged `tag` (its scroll's, outermost).
+fn scroll_node(ui: &mut ComposeTestRule, tag: &str) -> compose_ui::platform::SemanticsNode {
+    ui.on_node_with_tag(tag).fetch_semantics_node()
+}
+
+/// A lazy list says how far it's scrolled and can be, and scrolls by `ScrollBy`, as Compose's
+/// lazy layouts' semantics: what accessibility services scroll a page at a time with, past the
+/// items in view (the only ones placed).
+#[test]
+fn a_lazy_list_has_scroll_semantics_and_scrolls_by_its_action() {
+    let state = LazyListState::new(0, 0);
+    let given = *state;
+    let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || {
+        LazyColumn!(
+            modifier = Modifier.size((100.dp(), 100.dp())).test_tag("list"),
+            state = given,
+            |scope: LazyListScope| {
+                scope.items(50, Row);
+            }
+        );
+    });
+    let range = scroll_node(&mut ui, "list").config.vertical_scroll_axis_range.expect("a range");
+    assert_eq!(range.value, 0.0);
+    // 50 rows of 20 px in 100 px: 900 px more (estimated from the average).
+    assert_eq!(range.max_value, 900.0);
+    assert!(!range.reverse_scrolling);
+    // A page down.
+    let node = scroll_node(&mut ui, "list").id;
+    assert!(ui.host().perform_semantics_action(
+        node,
+        compose_ui::SemanticsAction::ScrollBy { x: 0.0, y: 100.0 }
+    ));
+    ui.wait_for_idle();
+    assert_eq!(state.first_visible_item_index(), 5);
+    let range = scroll_node(&mut ui, "list").config.vertical_scroll_axis_range.unwrap();
+    assert_eq!((range.value, range.max_value), (100.0, 900.0));
+    // At the start, nothing to scroll back by.
+    state.scroll_to_item(0, 0);
+    ui.wait_for_idle();
+    assert!(!ui.host().perform_semantics_action(
+        node,
+        compose_ui::SemanticsAction::ScrollBy { x: 0.0, y: -100.0 }
+    ));
+}
+
+/// A scrolling column too.
+#[test]
+fn a_scrolling_column_has_scroll_semantics_and_scrolls_by_its_action() {
+    let scroll = ScrollState::new(0);
+    let given = *scroll;
+    let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || {
+        Column!(
+            modifier =
+                Modifier.size((100.dp(), 100.dp())).vertical_scroll(given).test_tag("column"),
+            {
+                for index in 0..10 {
+                    Row(index);
+                }
+            }
+        );
+    });
+    let range = scroll_node(&mut ui, "column").config.vertical_scroll_axis_range.unwrap();
+    assert_eq!((range.value, range.max_value), (0.0, 100.0));
+    let node = scroll_node(&mut ui, "column").id;
+    assert!(
+        ui.host().perform_semantics_action(
+            node,
+            compose_ui::SemanticsAction::ScrollBy { x: 0.0, y: 60.0 }
+        )
+    );
+    ui.wait_for_idle();
+    assert_eq!(scroll.value(), 60);
+}

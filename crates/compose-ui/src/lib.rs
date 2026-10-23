@@ -150,7 +150,8 @@ pub use prefetch::{
     LOCAL_PREFETCH_SCHEDULER, PrefetchRequest, PrefetchRequestScope, PrefetchScheduler,
 };
 pub use semantics::{
-    ProgressBarRangeInfo, Role, SemanticsAction, SemanticsConfiguration, ToggleableState,
+    ProgressBarRangeInfo, Role, ScrollAxisRange, SemanticsAction, SemanticsConfiguration,
+    ToggleableState,
 };
 pub use shadow::DEFAULT_SHADOW_COLOR;
 pub use text::{

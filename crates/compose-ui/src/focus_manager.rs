@@ -162,21 +162,28 @@ impl UiTree {
 
     /// Moves the focus in `direction`, as Compose's `FocusOwner.moveFocus`. Returns whether it
     /// moved, and the actions focus listeners queued.
+    ///
+    /// A search from inside a lazy list that finds nothing more inside it asks the list for the
+    /// next item beyond its bounds, and is made again once it's laid out (at the next layout,
+    /// in the frame), as Compose's `BeyondBoundsLayout`; moves asked meanwhile wait their turn
+    /// (D477).
     pub fn move_focus_in(&mut self, direction: FocusDirection) -> (bool, Vec<Action>) {
+        if self.has_beyond_bounds_moves() {
+            self.beyond_search.moves.push_back(direction);
+            return (false, Vec::new());
+        }
         let before = self.focused();
-        let actions = match direction {
-            FocusDirection::Next => self.move_focus(true),
-            FocusDirection::Previous => self.move_focus(false),
-            _ => {
-                let Some(target) = self.two_dimensional_search(direction) else {
-                    return (false, Vec::new());
-                };
-                let mut actions = Vec::new();
-                self.request_focus_into(target, &mut actions);
-                self.update_focus_listeners(&mut actions);
-                actions
-            }
+        let target = match direction {
+            FocusDirection::Next => self.tab_target(true),
+            FocusDirection::Previous => self.tab_target(false),
+            _ => self.two_dimensional_search(direction).map(|target| (target, false)),
         };
+        if self.search_beyond_bounds(direction, target) {
+            return (false, Vec::new());
+        }
+        self.end_beyond_bounds();
+        let Some((target, _)) = target else { return (false, Vec::new()) };
+        let actions = self.focus_found(target);
         (self.focused() != before, actions)
     }
 

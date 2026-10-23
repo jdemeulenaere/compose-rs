@@ -515,6 +515,10 @@ impl UiTree {
         self.apply_requests(requests, &mut actions);
         if !consumed && event.key == Key::Tab && event.kind == KeyEventType::KeyDown {
             actions.extend(self.move_focus(!event.modifiers.shift));
+            // A search waiting for a lazy list's next item asks for the frame laying it out.
+            if self.has_beyond_bounds_moves() {
+                self.needs_draw = true;
+            }
             consumed = true;
         }
         (consumed, actions)
