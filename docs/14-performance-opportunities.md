@@ -286,6 +286,23 @@ main reproduces the round 4 run (p99 7.35 ms, no prefetch); the branch prefetche
 
 compose-rs had no janky frame in any run, and no run of either app entered buffer stuffing recovery. Two of Compose's animation runs had every frame presented a vsync late, on cadence, which FrameTimeline doesn't count as jank. The round 4 run that entered recovery (p99 7.35 ms) set nothing in round 4's medians; the scroll's lower main work and `big`'s startup owe more to D330 (BoringLayout), merged in between, than to these changes. measure.py now leaves out the warm-up swipe, so the jank counts aren't comparable one for one. Two earlier full runs of the branch, before the reviews' fixes, had no janky frame of compose-rs's either, apart from 3 of the compositor's in one run.
 
+### The scroll's RenderThread: the boost, not the work
+
+Since round 2, the scroll's RenderThread frames have taken longer than Compose's (round 5: p50 2.71 against 2.13 ms) while doing less work (813 against 878 ms). The scroll traces of five full sessions (3 runs per app each: round 5 and the two full runs of D340–D343 before it, and D320–D323's two sessions) were split by the boost Android's performance hints (ADPF) gave the RenderThread when each frame started. That boost is the HWUI hint session's minimum utilization (`uclamp.min`, out of 1024: the `adpf.<pid>-…-HWUI-0-min` counter in the traces). ADPF raises it when the frames HWUI reports run long against their target. Those are the main thread's frames as well as the RenderThread's.
+
+| Scroll, five sessions (range of the sessions) | Kotlin Compose | compose-rs |
+|---|---|---|
+| Frames unboosted (minimum under 100) | 41–51 % | 86–93 % |
+| Frames at 100–199 | 24–29 % | 6–12 % |
+| Frames at 200 or more | 21–34 % | 1–3 % |
+| Unboosted frames' duration p50 / p90 / p99 | 2.73–2.84 / 3.81–4.02 / 5.47–5.63 ms | 2.74–2.82 / 3.80–3.92 / 5.41–5.83 ms |
+| Unboosted frames' work, median | 393–400 µs | 389–401 µs |
+| Boosted frames (100–199) duration p50 | 2.05–2.08 ms | 2.07–2.17 ms |
+
+At the same boost, the two apps' RenderThread frames take the same time for the same work. The unboosted p99 differs by +0.08 ms on average over the five sessions (compose-rs's against Compose's: −0.08 to +0.23 ms). Compose's frames are boosted half the time, and boosted frames run on the mid and big cores at higher frequencies. compose-rs's main thread has fewer long frames, so ADPF rarely boosts it. Weighted so that each boost bucket holds Compose's share of frames, compose-rs's round 5 scroll frames have a p50 / p90 / p99 of 2.16 / 3.35 / 5.27 ms, against Compose's 2.13 / 3.56 / 5.17 (unweighted: 2.71 / 3.81 / 5.68). In both apps, about 19 in 20 of the slowest 5 % of frames are unboosted and ran mostly on little cores. measure.py reports the picture for each run since round 6 ([12](12-android-performance.md), "Scrolling: the RenderThread's boost"): there, 96 % of compose-rs's scroll frames were unboosted against 46 % of Compose's, and the unboosted and 100–199 buckets' percentiles matched within 0.3 ms.
+
+**Asking for a boost ourselves** was considered and not done. An `APerformanceHint` session of compose-rs's own, reporting frames as longer than they are, or with a tighter target, would buy the scroll's RenderThread Compose's durations. But it would cost power for durations no user sees: frame times (gfxinfo's p50 / p90 / p99: 5 / 6 / 8 ms against Compose's 5 / 7 / 11) and jank are already better without it, and the RenderThread finishes well within its 8.3 ms vsync.
+
 ## Android: text and the big screen
 
 The `big` screen's first frame (110 ms of main thread) lays out 1,201 paragraphs. Each paragraph is laid out exactly once: no intrinsics and no second measure. Each costs about 35 µs: one JNI call, one `NewStringUTF`, one direct buffer, one `getDesiredWidth` and one `StaticLayout`. simpleperf (3 cold starts, dwarf call graphs) splits the samples:
@@ -708,6 +725,7 @@ With these changes, compose-rs's animation does about 25 % less main-thread work
 | The proc macro at opt-level 3 | 67 → 65 ms of expansion |
 | Thinning monomorphization | about 2 % of an edit |
 | Avoiding the system's per-frame costs on Android | about 60 % of the animation's main thread, the same in Compose; inherent to a `View` |
+| Our own `APerformanceHint` session, to get the scroll's RenderThread boosted as Compose's is | power for durations no user sees: at the same boost the durations match, and frame times and jank are already better ("The scroll's RenderThread") |
 
 ## Caveats
 
