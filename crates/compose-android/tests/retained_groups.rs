@@ -729,14 +729,84 @@ fn a_copied_record_keeps_its_paths_ids() {
     assert_eq!(bytes, serialized.fresh());
     let mut pending = Writer::default();
     serialized.resources.write_pending(&mut pending);
-    // The new path's definition, then (its owner gone) the old one's drop.
-    assert_eq!(pending.bytes[0], tag::DEFINE_PATH);
-    let new_id = u32_at(&pending.bytes, 1);
+    // The old one's drop (its owner gone), then the new path's definition (D410).
+    assert_eq!((pending.bytes[0], u32_at(&pending.bytes, 1)), (tag::DROP_PATH, defined));
+    assert_eq!(pending.bytes[5], tag::DEFINE_PATH);
+    let new_id = u32_at(&pending.bytes, 6);
     assert_ne!(new_id, defined);
-    let last = pending.bytes.len() - 5;
-    assert_eq!((pending.bytes[last], u32_at(&pending.bytes, last + 1)), (tag::DROP_PATH, defined));
     let at = find(&bytes, tag::DRAW_PATH).expect("a path drawn");
     assert_eq!(u32_at(&bytes, at + 1), new_id);
+}
+
+/// The (tag, id) of each resource change in `pending` (paths only, as drawn here).
+fn path_changes(pending: &[u8]) -> Vec<(u8, u32)> {
+    let (mut changes, mut at) = (Vec::new(), 0);
+    while at < pending.len() {
+        let (tag, id) = (pending[at], u32_at(pending, at + 1));
+        changes.push((tag, id));
+        at += match tag {
+            tag::DROP_PATH => 5,
+            // An id, a fill type, a count, then each command: a kind and its points.
+            tag::DEFINE_PATH => {
+                let count = u32_at(pending, at + 6) as usize;
+                let mut end = at + 10;
+                for _ in 0..count {
+                    end += 1 + match pending[end] {
+                        0 | 1 => 8,
+                        2 => 16,
+                        3 => 24,
+                        _ => 0,
+                    };
+                }
+                end - at
+            }
+            other => panic!("not a path change: {other}"),
+        };
+    }
+    changes
+}
+
+/// Modelled on the guide's `Heartbeat` (docs/guide/performance.md, "Paths"): a remembered `Arc<Path>` keeps
+/// its id while the drawing around it changes each frame; a path built in the drawing block is
+/// a new one each frame, the last frame's dropped before it's defined (D410).
+#[test]
+fn a_remembered_path_keeps_its_id_and_a_drawn_one_is_replaced() {
+    let heart = Arc::new(Path::from_svg("M0,0 L10,0 L10,10 Z").unwrap());
+    let phase = mutable_state_of(0.0f32);
+    let handle = phase.handle();
+    let mut serialized = Serialized::new(move || {
+        let heart = heart.clone();
+        Leaf(
+            Modifier
+                .draw_behind(move |scope| {
+                    scope.draw_path(&heart, Paint::fill(Color::RED));
+                    let mut trace = Path::new();
+                    trace.move_to(0.0, handle.get());
+                    trace.line_to(10.0, 0.0);
+                    scope.draw_path(&trace, Paint::stroke(Color::BLACK, 1.0));
+                })
+                .size(10.dp()),
+        );
+    });
+    let mut pending = Writer::default();
+    serialized.resources.write_pending(&mut pending);
+    let first = path_changes(&pending.bytes);
+    assert_eq!(first.iter().map(|change| change.0).collect::<Vec<_>>(), [tag::DEFINE_PATH; 2]);
+    let (heart_id, trace_id) = (first[0].1, first[1].1);
+    for frame in 1..4 {
+        phase.set(frame as f32);
+        serialized.frame();
+        let mut pending = Writer::default();
+        serialized.resources.write_pending(&mut pending);
+        let changes = path_changes(&pending.bytes);
+        assert_eq!(changes.len(), 2, "{changes:?}");
+        assert_eq!(changes[0].0, tag::DROP_PATH);
+        assert_ne!(changes[0].1, heart_id);
+        assert_eq!(changes[1].0, tag::DEFINE_PATH);
+        if frame == 1 {
+            assert_eq!(changes[0].1, trace_id);
+        }
+    }
 }
 
 // ---- Groups written ahead (D350) -------------------------------------------------------------

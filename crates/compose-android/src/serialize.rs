@@ -429,8 +429,25 @@ impl Resources {
     }
 
     /// Appends the pending changes to `out` (a definition whose owner is already gone is
-    /// skipped), and forgets them: the Kotlin side has them.
+    /// skipped), and forgets them: the Kotlin side has them. Drops come first (D410): a frame
+    /// replacing its paths (a canvas drawing new ones each frame) defines them after the frame
+    /// before's are dropped, so the replayer rebuilds the dropped `Path`s rather than making
+    /// new ones. (A drop names an id taken before, never one defined beside it: that one's
+    /// definition is cancelled instead.)
     pub fn write_pending(&mut self, out: &mut Writer) {
+        for op in &self.pending {
+            match op {
+                Pending::DropPath(id) => {
+                    out.u8(tag::DROP_PATH);
+                    out.u32(*id);
+                }
+                Pending::DropImage(id) => {
+                    out.u8(tag::DROP_IMAGE);
+                    out.u32(*id);
+                }
+                Pending::Path { .. } | Pending::Image { .. } => {}
+            }
+        }
         for op in self.pending.drain(..) {
             match op {
                 Pending::Path { id, path } => {
@@ -446,14 +463,7 @@ impl Resources {
                     out.u32(pixels.len() as u32);
                     out.bytes.extend_from_slice(&pixels);
                 }
-                Pending::DropPath(id) => {
-                    out.u8(tag::DROP_PATH);
-                    out.u32(id);
-                }
-                Pending::DropImage(id) => {
-                    out.u8(tag::DROP_IMAGE);
-                    out.u32(id);
-                }
+                Pending::DropPath(_) | Pending::DropImage(_) => {}
             }
         }
     }
@@ -1400,6 +1410,69 @@ mod tests {
         let mut pending = Writer::default();
         resources.write_pending(&mut pending);
         assert_eq!(pending.bytes[0], tag::DROP_PATH);
+    }
+
+    /// A frame drawing a path and an image of its own, new each frame (as a canvas drawing a
+    /// wave), replacing `previous` (its owners gone with it), and the pending changes after it,
+    /// as `frame` and `takeDrawing` take them.
+    fn frame_with_new_resources(
+        resources: &mut Resources,
+        previous: Option<DisplayList>,
+        seed: u8,
+    ) -> (DisplayList, Vec<u8>) {
+        let path = Arc::new(Path::from_svg("M0,0 L10,0 L10,10 Z").unwrap());
+        let image = ImageBitmap::from_rgba_premultiplied(1, 1, vec![seed; 4]);
+        let mut list = DisplayList::default();
+        list.push(DrawOp::DrawPath {
+            path,
+            offset: Offset::ZERO,
+            scale: (1.0, 1.0),
+            paint: Paint::fill(Color::BLACK),
+        });
+        list.push(DrawOp::DrawImage {
+            image,
+            src: Rect::new(0.0, 0.0, 1.0, 1.0),
+            dst: Rect::new(0.0, 0.0, 1.0, 1.0),
+            alpha: 1.0,
+        });
+        let mut out = Writer::default();
+        write_display_list(&list, resources, &mut GroupCache::default(), &mut out);
+        drop(previous);
+        resources.collect();
+        let mut pending = Writer::default();
+        resources.write_pending(&mut pending);
+        (list, pending.bytes)
+    }
+
+    /// The tags of the resource changes in `bytes`, in order.
+    fn resource_tags(bytes: &[u8]) -> Vec<u8> {
+        let (mut tags, mut at) = (Vec::new(), 0);
+        while at < bytes.len() {
+            let tag = bytes[at];
+            tags.push(tag);
+            at += match tag {
+                tag::DROP_PATH | tag::DROP_IMAGE => 5,
+                tag::DEFINE_IMAGE => 17 + read_u32(bytes, at + 13) as usize,
+                // An id, a fill type, a count, and a triangle's 4 commands (3 points, a close).
+                tag::DEFINE_PATH => 10 + 3 * 9 + 1,
+                other => panic!("not a resource change: {other}"),
+            };
+        }
+        tags
+    }
+
+    /// Drops come before definitions (D410): a path replaced each frame frees its Kotlin `Path`
+    /// for the replacement's definition, in the same frame.
+    #[test]
+    fn drops_come_before_definitions() {
+        let mut resources = Resources::default();
+        let (first, bytes) = frame_with_new_resources(&mut resources, None, 1);
+        assert_eq!(resource_tags(&bytes), [tag::DEFINE_PATH, tag::DEFINE_IMAGE]);
+        let (_second, second) = frame_with_new_resources(&mut resources, Some(first), 2);
+        assert_eq!(
+            resource_tags(&second),
+            [tag::DROP_PATH, tag::DROP_IMAGE, tag::DEFINE_PATH, tag::DEFINE_IMAGE]
+        );
     }
 
     fn read_f32(bytes: &[u8], at: usize) -> f32 {

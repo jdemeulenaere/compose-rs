@@ -454,6 +454,20 @@ fn scrolling_recomposes_nothing_when_read_while_drawing() {
 }
 
 #[test]
+fn the_heartbeat_draws_each_frame_without_recomposing() {
+    let mut ui = ComposeTestRule::with_manual_clock(performance::Heartbeat);
+    ui.advance_time_by_frame();
+    let before = ui.recomposition_counts();
+    for _ in 0..10 {
+        ui.advance_time_by_frame();
+    }
+    // The animation draws again (the trace read while drawing); nothing recomposes.
+    let ran = ui.recomposition_counts().since(&before);
+    assert!(ran.names().is_empty(), "{:?}", ran.names());
+    ui.on_node_with_tag("heartbeat").assert_exists();
+}
+
+#[test]
 fn the_spinner_is_in_a_repaint_boundary() {
     let mut ui = ComposeTestRule::with_manual_clock(|| performance::Syncing(3));
     ui.advance_time_by_frame();

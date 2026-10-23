@@ -11,8 +11,9 @@
   - compose-rs had no janky frame in this session and Compose had 21 (20 of them in one slow run). In a second session, Compose had 2 and compose-rs 3.
   - compose-rs's frames are shorter on both threads.
   - Most of the RenderThread gap is one Compose default: a `graphicsLayer` whose alpha is below 1 draws offscreen (`CompositingStrategy.Auto`). compose-rs fades a layer holding a single drawing without one. With `CompositingStrategy.ModulateAlpha`, Compose's RenderThread matches compose-rs's and does less work.
-- **Memory** goes the other way in the animation. compose-rs holds 405 MB after 13 s against Compose's 251 MB.
-  - Its 50 waves are new paths every frame. Each frame's paths, and the masks the GPU cached for them, live until the garbage collector frees the Kotlin `Path`s.
+- **Memory** went the other way in the animation: compose-rs held 405 MB after 13 s against Compose's 251 MB.
+  - Its 50 waves are new paths every frame. Each frame's paths, and the masks the GPU cached for them, lived until the garbage collector freed the Kotlin `Path`s.
+  - The replayer now rewinds a dropped path at once and rebuilds it for the next, as Compose's one reset `Path` (D410). compose-rs then holds 191 to 230 MB over two sessions, flat after 15 s, where Compose swings between 189 and 241 MB ("With paths reused" below).
   - On the list, compose-rs holds less: 98 against 111 MB after scrolling.
 - **Startup** of the stress list: 126 against 143 ms.
 
@@ -71,7 +72,7 @@ D400 records the choices. A fresh reviewer checked the two implementations befor
   - compose-rs fades a layer whose content is one drawing without an offscreen buffer (`setHasOverlappingRendering(false)`, D153 and D157).
   - `ModulateAlpha`, Compose's opt-in for the same thing, was measured separately (D402, "With `ModulateAlpha`" below).
 - **Infinite transitions.** compose-rs runs one `Animatable` and one coroutine per animated value (`animate_value`). That makes 567 tasks a frame, and the ticker's. Compose runs one frame loop per transition (147) and ticks its animations together. This is a real cost of the library, measured as such.
-- **Paths drawn anew each frame.** compose-rs's `Canvas` makes a new `Path` per wave per frame. There is no way to reuse one: a drawn path is a shared, immutable resource (`Arc<Path>`). So the display list defines 50 paths and drops 50 a frame, and the replayer makes an `android.graphics.Path` for each. Kotlin resets one `Path`. That is the bridge's cost, measured as such (see "Memory").
+- **Paths drawn anew each frame.** compose-rs's `Canvas` makes a new `Path` per wave per frame. There is no way to reuse one: a drawn path is a shared, immutable resource (`Arc<Path>`, D412). So the display list defines 50 paths and drops 50 a frame. Kotlin resets one `Path`. In the results below, the replayer made an `android.graphics.Path` for each, the bridge's cost, measured as such (see "Memory"); it now rebuilds the dropped ones (D410).
 - **Clips and shadows.**
   - Compose makes a render node (a graphics layer) for each non-rectangular `clip` and each `shadow`, and HWUI draws the shadow from the elevation.
   - compose-rs clips inline in its drawing, and draws its approximate shadow with a `BlurMaskFilter`.
@@ -189,7 +190,7 @@ So the stress animation janks rarely in either app, and which one depends on the
 
 **Work** is milliseconds on the fastest core at its highest frequency ([12](12-android-performance.md), "Method"). compose-rs's main thread does about half Compose's work scrolling and three quarters in the animation.
 
-**HWUI's two worker threads** run in the animation (scrolling, they hardly run), where both apps keep them busy most of the time. They rasterize the 50 stroked waves on the CPU into masks (Skia's software path renderer). That work is the canvas's, and it costs compose-rs a quarter more: its masks go into new GPU images each frame rather than recycled ones (next section).
+**HWUI's two worker threads** run in the animation (scrolling, they hardly run), where both apps keep them busy most of the time. They rasterize the 50 stroked waves on the CPU into masks (Skia's software path renderer). That work is the canvas's, and it costs compose-rs a quarter more: its masks go into new GPU images each frame rather than recycled ones (next section; since D410, they're freed a frame later).
 
 ### Memory
 
@@ -217,10 +218,52 @@ So the stress animation janks rarely in either app, and which one depends on the
 - **Native heap.** The 60 to 144 MB are those paths' native memory, waiting for the same collection. A `Path`'s native size isn't counted against the Java heap, so the collector runs late.
 - **New GPU images.** Since the dead paths' masks keep their textures, Skia allocates 50 new GPU images a frame (`allocateImageMemory`: 50 a frame, 0.19 ms) where Compose re-uploads into textures it recycles.
 
-The fix belongs to the Android bridge, outside this benchmark:
+The fix belonged to the Android bridge, and is the next section.
 
-- the replayer could `rewind()` a dropped path's `android.graphics.Path`, or reuse it for the next definition, freeing its native memory and its mask at once;
-- or compose-rs could keep a path's identity across frames, so that an unchanged wave isn't defined again.
+### With paths reused (D410, D411)
+
+The replayer now:
+
+- rewinds a dropped path's `android.graphics.Path` at once, and keeps it (64 at most) for the next definition, which rebuilds it, as Compose's one reset `Path`;
+- reads a frame's drops before its definitions (Rust writes them first), so the 50 waves reuse the last frame's 50 `Path`s in the same frame.
+
+A recording keeps its own copy of a path's contents, so rewinding changes nothing drawn. HWUI keys its cached mask by those contents' generation: it's freed when the last recording drawing them is, a frame later, not at a garbage collection.
+
+D190's masks, for small filled paths (the waves are stroked: none is made for them), aren't made for paths that are new every frame either (D411).
+
+Keeping a wave's path identity across frames instead, a resource id per draw site redefined in place, was not done (D412). It would save only the 5-byte drop, and a group's key and version would no longer name one drawing.
+
+The stress animation at 0e0c86c with D410 and D411, against 0e0c86c, in one session (`dumpsys meminfo` every 5 s for 60 s, each app started alone):
+
+| PSS over 60 s | Kotlin Compose | compose-rs before | compose-rs after |
+|---|---|---|---|
+| Total, range | 189–241 MB | 322–334 MB | **186–230 MB** (228 MB from 15 s; in a later session, 191–195 MB) |
+| Java heap / native heap / graphics at 60 s | 35.0 / 26.7 / 165.7 MB | 14.1 / 87.8 / 224.8 MB | 6.4 / 22.0 / 192.0 MB |
+| HWUI's software path masks at 60 s (`gfxinfo`) | 50 entries, 8.0 MB | 519 entries, 82.9 MB | 50 entries, 8.0 MB |
+| Total GPU memory at 60 s | 103.1 MB | 146.6 MB | 125.7 MB |
+
+compose-rs's memory no longer waits on the collector: it is flat after 15 s, where Compose's moves with its Java heap. Its level depends on how much scratch memory HWUI kept: 192 MB of graphics in this session, 158 MB in the later one. It holds about 26 MB more graphics memory than Compose at 60 s, mostly Skia's scratch surfaces and buffers (118 against 95 MB), which both apps' HWUI keeps for reuse.
+
+measure.py's `stress_animation` (3 runs a side; compose-rs before and after in two runs of it, back to back):
+
+| | compose-rs before | compose-rs after |
+|---|---|---|
+| PSS 3 s after start / after 13 s | 293.1 / 397.2 MB | **181.9 / 201.8 MB** |
+| Janky frames (FrameTimeline), per run | 2, 1, 1 | **0, 1, 0** |
+| Main thread per frame p50 / p90 / p99 | 3.93 / 5.11 / 7.21 ms | **3.62 / 4.67 / 6.12** ms |
+| RenderThread per frame p50 / p90 / p99 | 7.64 / 8.50 / 9.76 ms | 7.55 / 8.55 / 9.46 ms |
+| Main thread / RenderThread CPU time | 4.29 / 7.52 s | **3.73 / 6.28 s** |
+| Main thread / RenderThread work | 2,115 / 3,909 ms | **1,933 / 3,200 ms** (−9 %, −18 %) |
+
+Compose's runs in that session were slow: 233 to 330 janky frames a run, both threads' p50 above 9.5 ms, unlike its runs above. They aren't compared here. Its memory was 167–169 MB after start and 215–240 MB after 13 s.
+
+The other scenarios didn't change: compose-rs before and after, in another session (measure.py's `scroll`, `animation` and `stress_scroll`, 3 runs a side each):
+
+| compose-rs, before → after | Main thread p50 / p90 / p99 | RenderThread p50 / p90 / p99 | Janky frames | PSS after scrolling |
+|---|---|---|---|---|
+| Feed, 10 flings | 1.30 / 1.87 / 2.90 → 1.30 / 1.92 / 2.86 ms | 2.76 / 3.69 / 5.19 → 2.79 / 3.75 / 5.30 ms | 0 → 0 | 80.8 → 79.9 MB |
+| Feed, animated header | 1.22 / 1.83 / 3.23 → 1.21 / 1.79 / 2.93 ms | 2.65 / 3.60 / 5.02 → 2.68 / 3.56 / 5.27 ms | 0 → 0 | |
+| Stress list, 10 flings | 1.54 / 2.23 / 3.46 → 1.51 / 2.17 / 3.31 ms | 3.27 / 4.93 / 7.06 → 3.33 / 4.88 / 6.69 ms | 0 → 1 (one run) | 93.4 → 96.9 MB |
 
 ### Startup
 
@@ -282,15 +325,12 @@ From the traces of the runs above: the slowest 1 % of each app's frames on each 
 **In short:**
 - **Compose struggles on the main thread when content arrives.** Its slowest scroll frames compose and measure new items, and its animation frames are dearer per animated value.
 - **compose-rs struggles where it hands drawing to Android:**
-  - its paths, new every frame, cost memory, mask rasterization and GPU allocations;
+  - its paths, new every frame, cost memory, mask rasterization and GPU allocations (until D410: "With paths reused");
   - its RenderThread runs unboosted because its main thread is short;
   - like Compose, it waits for the GPU on the heaviest frames.
 
 ## Next steps
 
-- **Paths in the bridge** (the largest gap these screens show):
-  - free or reuse a dropped path's `android.graphics.Path` in the replayer, so its native memory and its GPU mask go at once;
-  - or let a `Canvas` keep a path's identity across frames;
-  - then measure `stress_animation`'s memory and HWUI's worker threads again.
+- **Paths in the bridge**: done (D410, D411, "With paths reused"). HWUI's worker threads weren't measured again.
 - **Infinite transitions** run a task per value (567 here; 1.1 ms of tasks a frame). A transition ticking its values in one frame callback, as Compose's does, would cut that.
 - **Shader warm-up**: a pipeline compiled on first use cost compose-rs its one janky scroll frame. Compose's apps share the same cache behavior; it isn't specific to compose-rs, but it showed here.

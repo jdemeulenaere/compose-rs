@@ -39,6 +39,12 @@ internal inline fun ByteBuffer.floatAt(index: Int): Float = Float.fromBits(getIn
  * `VectorPainter` draws an icon from a cached bitmap: the GPU draws a textured quad instead of
  * rendering the path (through a scratch atlas, an extra render pass, every frame).
  *
+ * A dropped path's `Path` is rewound at once and kept for the next definition (D410), as
+ * Compose's apps reset one `Path` to draw a shape that changes each frame: its native memory,
+ * and the mask HWUI's GPU cache keeps for its contents, go when the recordings drawing it do,
+ * not when the collector finalizes it. A recording that draws paths new each frame (an
+ * animated drawing) draws them without masks (D411).
+ *
  * A gradient comes whole in each paint drawing it (D210): its `Shader` is kept by its bytes, so
  * a frame drawing the same gradients builds none.
  *
@@ -97,6 +103,17 @@ internal class Replayer(private val text: TextMeasurer) {
     private val clip = Path()
     private val radii = FloatArray(8)
     private val paths = SparseArray<KeptPath>()
+    /** Dropped paths, rewound, for the next definitions (D410). */
+    private val pathPool = ArrayList<KeptPath>(PATH_POOL_CAPACITY)
+    /**
+     * The group being recorded (null: the frame's own canvas), and whether it draws the paths
+     * defined this frame without masks: it drew new ones in the last frames as well, so they
+     * change every frame (D411).
+     */
+    private var recordingGroup: Group? = null
+    private var skipNewMasks = false
+    /** The last frame the frame's own canvas drew a path new that frame that a mask could draw. */
+    private var newPathFrame = NEVER
     /**
      * The alpha masks of small filled paths, least recently recorded first (D190): a kept
      * group's node draws its masks without replaying, so it doesn't touch them.
@@ -206,6 +223,14 @@ internal class Replayer(private val text: TextMeasurer) {
          */
         var width = -1
         var height = -1
+        /** The last frame it was recorded drawing a path new that frame that a mask could draw. */
+        var newPathFrame = NEVER
+        /**
+         * Its recording drew such a path without its mask (D411): recorded again, though its
+         * version is the same, the first time its record is read more than [NEW_PATH_FRAMES]
+         * frames after it last drew a new path.
+         */
+        var unmasked = false
 
         /** Sets [node]'s bounds to [width] × [height] at the origin, unless they're those already. */
         fun setPosition(width: Int, height: Int) {
@@ -282,6 +307,8 @@ internal class Replayer(private val text: TextMeasurer) {
         frame++
         width = canvas.width.coerceAtLeast(1)
         height = canvas.height.coerceAtLeast(1)
+        recordingGroup = null
+        skipNewMasks = recent(newPathFrame)
         replay(canvas, buffer, buffer.limit())
         if (keptFrame != frame && keptCount > 0) {
             // None kept: the frame doesn't draw keptNode, nor keptNode its old nodes.
@@ -408,7 +435,7 @@ internal class Replayer(private val text: TextMeasurer) {
                     val scaleY = buffer.float()
                     val paint = buffer.readPaint(x, y, scaleX, scaleY)
                     // A mask is tinted by a color: a gradient draws the path.
-                    val masked = !paintStroke && paintShader == null
+                    val masked = !paintStroke && paintShader == null && maskNew(kept, scaleX, scaleY)
                     if (kept != null && (!masked || !drawMask(canvas, kept, x, y, scaleX, scaleY))) {
                         canvas.save()
                         canvas.translate(x, y)
@@ -460,7 +487,11 @@ internal class Replayer(private val text: TextMeasurer) {
         val group = groupOf(key)
         group.frame = frame
         drawsFrameGroup = false
-        if (group.version == version && group.node.hasDisplayList()) return
+        // A group recorded without a new path's mask is recorded again once its paths stopped
+        // changing (D411): not on the next frame, which a path changing every other frame would
+        // make a recording and a mask each time.
+        val keep = !group.unmasked || recent(group.newPathFrame)
+        if (group.version == version && group.node.hasDisplayList() && keep) return
         // Matches nothing until recorded whole.
         group.version = -1L
         // A layer's node has its bounds already (setLayer).
@@ -469,10 +500,17 @@ internal class Replayer(private val text: TextMeasurer) {
         // its bounds are.
         val recording =
             group.node.beginRecording(group.width.coerceAtLeast(1), group.height.coerceAtLeast(1))
+        val outerGroup = recordingGroup
+        val outerSkip = skipNewMasks
+        recordingGroup = group
+        skipNewMasks = recent(group.newPathFrame)
+        group.unmasked = false
         try {
             replay(recording, buffer, end)
         } finally {
             group.node.endRecording()
+            recordingGroup = outerGroup
+            skipNewMasks = outerSkip
         }
         // A recording cut short by an unknown operation isn't that version's (nor one ahead
         // drawing a frame's node, which the frames may drop).
@@ -920,18 +958,39 @@ internal class Replayer(private val text: TextMeasurer) {
         return filter
     }
 
-    /** A path, its bounds (its control points', in its units) and its masks (D190). */
-    private class KeptPath(val path: Path) {
-        private var computedBounds: RectF? = null
+    /**
+     * A path, its bounds (its control points', in its units) and its masks (D190). Reused once
+     * dropped ([rewind], D410).
+     */
+    private class KeptPath {
+        val path = Path()
+        private val computedBounds = RectF()
+        private var boundsComputed = false
+        /** The frame that defined it (D411). */
+        var definedFrame = 0
 
         /** Computed on first use: a stroked path (a text field's outline) never needs them. */
         val bounds: RectF
-            get() = computedBounds ?: RectF().also {
-                // `exact` is ignored (and deprecated for that) on API 31+: the control points'.
-                @Suppress("DEPRECATION")
-                path.computeBounds(it, true)
-                computedBounds = it
+            get() {
+                if (!boundsComputed) {
+                    // `exact` is ignored (and deprecated for that) on API 31+: the control points'.
+                    @Suppress("DEPRECATION")
+                    path.computeBounds(computedBounds, true)
+                    boundsComputed = true
+                }
+                return computedBounds
             }
+
+        /**
+         * Empties it for another definition. `rewind` lets go of the native contents now: a
+         * recording drawing them keeps its own reference, and once the recordings go, HWUI's
+         * GPU cache drops their mask (keyed by the contents' generation). A dropped `Path` left
+         * to the collector kept them, and their cache entry, until it was finalized.
+         */
+        fun rewind() {
+            path.rewind()
+            boundsComputed = false
+        }
 
         /** Its masks, least recently recorded first: at most [MAX_MASKS_PER_PATH]. */
         val masks = ArrayList<Mask>(1)
@@ -998,12 +1057,12 @@ internal class Replayer(private val text: TextMeasurer) {
         val x2 = bounds.right * scaleX
         val y1 = bounds.top * scaleY
         val y2 = bounds.bottom * scaleY
+        if (!fitsMask(kept, scaleX, scaleY)) return null
         // A pixel of margin each side, for anti-aliasing.
         val left = floor(minOf(x1, x2)) - 1f
         val top = floor(minOf(y1, y2)) - 1f
-        val width = (ceil(maxOf(x1, x2)) + 1f - left).toInt()
-        val height = (ceil(maxOf(y1, y2)) + 1f - top).toInt()
-        if (bounds.isEmpty || width !in 1..MAX_MASK_SIZE || height !in 1..MAX_MASK_SIZE) return null
+        val width = maskSpan(x1, x2)
+        val height = maskSpan(y1, y2)
         val drawn = Bitmap.createBitmap(width, height, Bitmap.Config.ALPHA_8)
         maskCanvas.setBitmap(drawn)
         maskCanvas.save()
@@ -1023,8 +1082,8 @@ internal class Replayer(private val text: TextMeasurer) {
         kept.masks.add(mask)
         masks[mask] = Unit
         maskBytes += bitmap.allocationByteCount
-        // The least recently recorded masks go past the budget. Not recycled: a kept group's
-        // recording may still draw them (the garbage collector frees them after it).
+        // The least recently recorded masks go past the budget, recycled (D411): a kept group's
+        // recording that draws one keeps its own reference to its pixels.
         val iterator = masks.keys.iterator()
         while (maskBytes > MAX_MASK_BYTES && iterator.hasNext()) {
             val oldest = iterator.next()
@@ -1032,25 +1091,82 @@ internal class Replayer(private val text: TextMeasurer) {
             iterator.remove()
             oldest.path.masks.remove(oldest)
             maskBytes -= oldest.bitmap.allocationByteCount
+            oldest.bitmap.recycle()
         }
         return mask
     }
 
-    /** Forgets [mask], taken from its path's. */
+    /**
+     * Forgets [mask], taken from its path's, and recycles it (D411): a recording that drew it
+     * keeps its own reference to its pixels.
+     */
     private fun forget(mask: Mask) {
         masks.remove(mask)
         maskBytes -= mask.bitmap.allocationByteCount
+        mask.bitmap.recycle()
     }
 
+    /** The pixels a mask spans from [a] to [b] (scaled), with a pixel of margin each side. */
+    private fun maskSpan(a: Float, b: Float): Int =
+        (ceil(maxOf(a, b)) + 1f - (floor(minOf(a, b)) - 1f)).toInt()
+
+    /** Whether [kept] scaled by ([scaleX], [scaleY]) is small enough for a mask ([MAX_MASK_SIZE]). */
+    private fun fitsMask(kept: KeptPath, scaleX: Float, scaleY: Float): Boolean {
+        val bounds = kept.bounds
+        if (bounds.isEmpty) return false
+        val width = maskSpan(bounds.left * scaleX, bounds.right * scaleX)
+        val height = maskSpan(bounds.top * scaleY, bounds.bottom * scaleY)
+        return width in 1..MAX_MASK_SIZE && height in 1..MAX_MASK_SIZE
+    }
+
+    /** Whether [at] (a frame a recording drew a new path in) is one of the last few (D411). */
+    private fun recent(at: Int): Boolean = at != NEVER && frame - at in 0..NEW_PATH_FRAMES
+
+    /**
+     * Whether a mask may draw [kept] here (D411): unless it was defined this frame and the
+     * recording drawing it drew new paths a mask could draw in the last frames as well. Those
+     * change every frame (an animated drawing defines new ones each frame): a mask for each
+     * would be rasterized, uploaded and dropped a frame later. A group recorded so is recorded
+     * again the first time its record is read after its paths stop changing, so it doesn't
+     * keep `drawPath` (until then, it does: say, a kept group, or no frame after it).
+     */
+    private fun maskNew(kept: KeptPath?, scaleX: Float, scaleY: Float): Boolean {
+        if (kept == null || !hardware || kept.definedFrame != frame) return true
+        // Too large for a mask: drawn as a path whatever it does.
+        if (!fitsMask(kept, scaleX, scaleY)) return true
+        val group = recordingGroup
+        if (group != null) group.newPathFrame = frame else newPathFrame = frame
+        if (!skipNewMasks) return true
+        group?.unmasked = true
+        return false
+    }
+
+    /**
+     * Drops path [id] (D410, D411): its masks are recycled, and it's rewound for the next definition,
+     * or reset (its memory freed) when the pool is full. A recording that drew them (the last
+     * frame's, which the render thread may still be drawing, or a kept node's) keeps its own
+     * reference to their native contents, so recycling and rewinding change nothing drawn.
+     */
     private fun dropPath(id: Int) {
         val kept = paths.get(id) ?: return
         paths.remove(id)
         for (mask in kept.masks) forget(mask)
+        kept.masks.clear()
+        if (pathPool.size < PATH_POOL_CAPACITY) {
+            kept.rewind()
+            pathPool.add(kept)
+        } else {
+            kept.path.reset()
+        }
     }
 
     private fun definePath(buffer: ByteBuffer) {
         val id = buffer.getInt()
-        val path = Path()
+        // An id is defined once, but a stale mask must never outlive its path.
+        dropPath(id)
+        val kept = if (pathPool.isEmpty()) KeptPath() else pathPool.removeAt(pathPool.size - 1)
+        kept.definedFrame = frame
+        val path = kept.path
         path.fillType = if (buffer.get().toInt() == 1) Path.FillType.EVEN_ODD else Path.FillType.WINDING
         repeat(buffer.getInt()) {
             when (buffer.get().toInt()) {
@@ -1068,9 +1184,7 @@ internal class Replayer(private val text: TextMeasurer) {
                 else -> path.close()
             }
         }
-        // An id is defined once, but a stale mask must never outlive its path.
-        dropPath(id)
-        paths.put(id, KeptPath(path))
+        paths.put(id, kept)
     }
 
     private fun defineImage(buffer: ByteBuffer) {
@@ -1100,7 +1214,11 @@ internal class Replayer(private val text: TextMeasurer) {
         ahead.clear()
         aheadItems.clear()
         pool.clear()
+        // Reset, not rewound: their memory goes now, not when they're collected.
+        for (index in 0 until paths.size()) paths.valueAt(index).path.reset()
         paths.clear()
+        for (kept in pathPool) kept.path.reset()
+        pathPool.clear()
         masks.clear()
         maskBytes = 0
         for (index in 0 until images.size()) images.valueAt(index).recycle()
@@ -1167,6 +1285,15 @@ internal class Replayer(private val text: TextMeasurer) {
         const val MAX_MASK_BYTES = 4 shl 20
         /** The masks a path keeps, one per drawn size (D190). */
         const val MAX_MASKS_PER_PATH = 4
+        /** Dropped paths kept for new definitions: a canvas's paths replaced each frame (D410). */
+        const val PATH_POOL_CAPACITY = 64
+        /**
+         * A recording that drew paths new in one of the last this many frames draws this
+         * frame's new paths without masks (D411): they change every frame.
+         */
+        const val NEW_PATH_FRAMES = 2
+        /** A frame long past: no new path drawn yet. */
+        const val NEVER = Int.MIN_VALUE / 2
 
         /**
          * The bytes of a `LAYERS` entry: its key, 8 floats, whether it clips, its clip, whether

@@ -80,3 +80,39 @@ pub fn Syncing(items: u32) {
     });
 }
 // ANCHOR_END: repaint_boundary
+
+// ANCHOR: paths
+#[composable]
+pub fn Heartbeat() {
+    // A shape that doesn't change: built once and drawn as a shared `&Arc<Path>`, so the platform
+    // keeps it (Android defines it once). A `&Path` would be copied into a new path each draw.
+    let heart = remember(|| {
+        std::sync::Arc::new(Path::from_svg("M12,21 L3,12 Q3,4 12,8 Q21,4 21,12 Z").unwrap())
+    });
+    let transition = remember_infinite_transition("Heartbeat");
+    let phase = transition.animate_float(
+        0.0,
+        1.0,
+        infinite_repeatable(tween(1000).easing(LINEAR_EASING), RepeatMode::Restart),
+    );
+    Canvas(Modifier.size(48.dp()).test_tag("heartbeat"), move |scope| {
+        scope.draw_path_scaled(&heart, Offset::ZERO, (2.0, 2.0), Paint::fill(Color::RED));
+        // A shape that changes every frame: built anew in the drawing block, which reads the
+        // animation. A drawn path is shared and immutable, so there's no `Path` to reset as in
+        // Compose; Android's replayer rebuilds the dropped path's native one instead.
+        let size = scope.size();
+        let mut trace = Path::new();
+        for point in 0..=24 {
+            let along = point as f32 / 24.0;
+            let wave = (std::f32::consts::TAU * (along + phase.get())).sin();
+            let (x, y) = (size.width * along, size.height * (0.5 - 0.25 * wave));
+            if point == 0 {
+                trace.move_to(x, y);
+            } else {
+                trace.line_to(x, y);
+            }
+        }
+        scope.draw_path(&trace, Paint::stroke(Color::WHITE, 2.0));
+    });
+}
+// ANCHOR_END: paths
