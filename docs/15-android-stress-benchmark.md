@@ -95,7 +95,7 @@ That tracing (atrace's `gfx` category) costs both RenderThreads time. On these s
 
 ## Results
 
-compose-rs at 921db6b with D400–D402. The run is `results/2026-10-23-pixel-8-pro-stress.json`: `speed`, `--runs 15`, the stress scenarios only.
+compose-rs at 921db6b with D400–D402. The run is `results/2026-10-23-pixel-8-pro-stress.json`: `speed`, `--runs 15`, the stress scenarios only. That is before D390, compose-rs's own performance hint session for the RenderThread ([12](12-android-performance.md), "Scrolling: the RenderThread's boost"), whose effect on these screens hasn't been measured: the RenderThread boosts below are HWUI's session's alone.
 
 - measure.py's checks passed: the installed native libraries were those built, and both apps were `speed` at the start and the end.
 - Medians of 3 runs, startup of 15. The better side is in bold; ties aren't.

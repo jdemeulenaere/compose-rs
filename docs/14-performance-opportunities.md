@@ -39,6 +39,7 @@ Gain over cost, best first.
 | 15 | **Android: a prefetched item's groups drawn and recorded ahead** (D350). **Done** | Revealing frames' `doFrame` 1.80 → 1.53 ms (replay 0.31 → 0.11 ms); scroll main p90 1.94 → 1.86 ms (−4 %), p99 and work within the spread | measured, interleaved, 10 runs each | M, low (a key and version are the same bytes either way; render nodes recorded ahead are kept apart, dropped together) | none (`UiHost::draw_ahead` for platforms recording groups) | — |
 | 16 | **Android: kept items' groups kept recorded** (D380). **Done** | The slowest replay in a reversal's first 100 ms 1.17 → 0.18 ms, its slowest `doFrame` 3.37 → 2.96 ms (p90 4.65 → 3.70); percentiles and work within the spread | measured, interleaved, 12 runs each | S–M, low (a node at alpha 0 keeps HWUI from dropping their recordings; 8 items at most) | none | — |
 | 17 | **Android: an idle time's slow step slows the next ones' estimates** (D381). **Done** | Idle-time slices past the vsync 12.4 → 6.9 a run, more than 1.2 ms past 1.67 → 0.92; `doFrame`s delayed by our work 5 → 3 in 12 runs | measured, interleaved, 12 runs each | S, low (replaying D375's traces, 14 % of measurements wait for the next idle time instead of 2.6 %; on the device, as many measurements a run, none in frames) | none | — |
+| 18 | **Android: a performance hint session of our own for the RenderThread** (D390). **Done**, on the user's decision | Scroll RenderThread p50 / p99 2.70 → 2.50 / 5.36 → 4.92 ms (Compose: 2.19 / 5.03); frames unboosted 93 → 62 % (Compose 49 %); CPU-rail energy +2.2 % scrolling, +2.0 % animating (within the spread), all rails +0.5 % | measured, interleaved with main and Compose, 6 runs each; targets swept 3.5–7.5 ms | S, low (API 33+, looked up at run time; nothing below) | `ComposeRsView.isPerformanceHintEnabled` (on by default) | — |
 | 13 | **Memory: exact or chunked growth** of the slot table's groups and the node arena | Big screen's Rust heap −1.7 MB allocated of 17.9 (unused capacity, so maybe not resident: the PSS saving is unmeasured; its PSS is 69.8 MB); no transient 2× copy when growing | estimated (heapprofd) | S–M | none | — |
 
 Small, negative or not worth doing: see "What isn't worth doing".
@@ -353,7 +354,58 @@ Since round 2, the scroll's RenderThread frames have taken longer than Compose's
 
 At the same boost, the two apps' RenderThread frames take the same time for the same work. The unboosted p99 differs by +0.08 ms on average over the five sessions (compose-rs's against Compose's: −0.08 to +0.23 ms). Compose's frames are boosted half the time, and boosted frames run on the mid and big cores at higher frequencies. compose-rs's main thread has fewer long frames, so ADPF rarely boosts it. Weighted so that each boost bucket holds Compose's share of frames, compose-rs's round 5 scroll frames have a p50 / p90 / p99 of 2.16 / 3.35 / 5.27 ms, against Compose's 2.13 / 3.56 / 5.17 (unweighted: 2.71 / 3.81 / 5.68). In both apps, about 19 in 20 of the slowest 5 % of frames are unboosted and ran mostly on little cores. measure.py reports the picture for each run since round 6 ([12](12-android-performance.md), "Scrolling: the RenderThread's boost"): there, 96 % of compose-rs's scroll frames were unboosted against 46 % of Compose's, and the unboosted and 100–199 buckets' percentiles matched within 0.3 ms.
 
-**Asking for a boost ourselves** was considered and not done. An `APerformanceHint` session of compose-rs's own, reporting frames as longer than they are, or with a tighter target, would buy the scroll's RenderThread Compose's durations. But it would cost power for durations no user sees: frame times (gfxinfo's p50 / p90 / p99: 5 / 6 / 8 ms against Compose's 5 / 7 / 11) and jank are already better without it, and the RenderThread finishes well within its 8.3 ms vsync.
+**Asking for a boost ourselves: done (D390).** Round 7 left this as "not pursued": the boost would cost power for durations no user sees. The user chose to give compose-rs a boost comparable to Compose's. While a `ComposeRsView` shows (API 33+, `isPerformanceHintEnabled`, on by default), the RenderThread is in a performance hint session of compose-rs's own: the NDK's `APerformanceHint`, looked up at run time, one session per process. Each compose-rs frame reads the RenderThread's CPU time (one `clock_gettime` of its thread CPU clock, at the start of `frame`) and reports what it used since the last frame (the frame before's work: the RenderThread ends well before the next vsync) against a 6.5 ms target. The main thread isn't in it: its frames are already shorter than Compose's, and boosting it would cost power for nothing a user sees.
+
+- **How the power HAL combines sessions.** The Pixel power HAL keeps each session's votes (`CPU_VOTE_DEFAULT`, the PID's output, and the load hints' `CPU_LOAD_*`, each with a timeout) and sets a thread's `uclamp.min` to the highest active vote of all the sessions holding it (`SessionTaskMap::getTaskVoteRange`). On the device, a scroll sampling the RenderThread's requested `uclamp.min` (`/proc/<pid>/task/<tid>/sched`) every ~170 ms: 63 of 71 samples equal the higher of the two sessions' votes, where HWUI's alone matched 29 and ours alone 51 (the sessions differed at 55; the misses are the sampling's lag). So our session only adds: HWUI's still applies, and wins when it is higher.
+- **How it reacts.** The device's ADPF profile (`powerhint.json`, `REFRESH_120FPS`): a PID with no integral term, a proportional gain of 2.0 over the target and 0.6 under it per 100 µs of error, a derivative gain of 500 on rising errors only, the minimum between 2 and 480 (raised to 230–410 floors and 722 ceilings when the session counts frames over 1.2 × the target: "heuristic boost"), each vote lasting max(15 × target, 167 ms). The NDK client sends every report over the target at once, and rate-limits those under it to one per 83 ms. So a frame over the target after a short one raises the minimum by 150–250 at once, and it decays by about 0.6 × the margin per 83 ms. HWUI's session reports the whole frame, from the main thread's start to the RenderThread's end, against 11.62 ms (frame deadline less intended vsync): Compose's long main-thread frames cross it; compose-rs's rarely do.
+- **Why reading the CPU clock.** `Window.addOnFrameMetricsAvailableListener` gives the RenderThread's wall time per frame (`SYNC` + `COMMAND_ISSUE` + `SWAP_BUFFERS`), but costs a JNI upcall and a `Handler` post on the RenderThread for every frame, a thread of ours woken per frame, a JNI call to report, and finding the view's `Window` (none for a dialog's). The thread CPU clock costs one system call on the main thread, inside the `frame` call already made, and measures the work a boost speeds up (not waits).
+
+**The target.** Swept on the scroll, each against Compose in its session (2–5 runs each; medians; CPU energy: the CPU rails' over the measured 13 s):
+
+| Target | Unboosted frames | Boost minimum, time-weighted | RenderThread p50 / p99 | CPU energy against main |
+|---|---|---|---|---|
+| none (main) | 91–95 % | 23–27 | 2.74 / 5.21 ms | |
+| 3.5 ms | 0 % | 499 | 1.10 / 2.68 ms | +17 % |
+| 4.5 ms | 0 % | 392 | 1.32 / 2.82 ms | +10 % |
+| 6.0 ms | 34 % | 169 | 2.09 / 4.57 ms | +4 % |
+| **6.5 ms** | 51 % | 127 | 2.30 / 4.99 ms | +2.2 % (the A/B below) |
+| 7.0 ms | 63 % | 83 | 2.49 / 5.08 ms | – |
+| 7.5 ms | 80 % | 54 | 2.65 / 5.25 ms | +4 % (noise) |
+| Kotlin Compose (HWUI's session) | 49–51 % | 120–128 | 2.22 / 5.09 ms | +8 to +11 % |
+
+At 3.5 and 4.5 ms the minimum never drops (the heuristic boost's floors), the RenderThread leaves the little cores altogether, and the main thread's p90 / p99 get worse (2.27 / 3.46 against 1.88 / 2.88 ms at 3.5 ms: more `doFrame`s start late). 6.5 ms is the target whose boost was closest to Compose's in its session. Session to session, its unboosted share moved from 51 % (sweep) to 62 % (the A/B below), Compose's from 49 to 51 %.
+
+**Interleaved A/B** (main 0e0c86c, the change, and Compose in the same session; 6 runs each, the order rotating; percentiles: medians of the runs; CPU, work and energy: means over the measured window, 13 s scrolling, 9 s animating; power rails polled every 250 ms by an `android.power` data source added to measure.py's trace config):
+
+| Scroll | main | own session (D390) | Kotlin Compose |
+|---|---|---|---|
+| RenderThread per frame p50 / p90 / p99 | 2.70 / 3.67 / 5.36 ms | **2.50 / 3.39 / 4.92 ms** | 2.19 / 3.49 / 5.03 ms |
+| Main thread per frame p50 / p90 / p99 | 1.28 / 1.85 / 2.85 ms | 1.31 / 1.85 / 2.79 ms | 1.56 / 3.10 / 6.84 ms |
+| Frames unboosted (the highest vote under 100) | 93 % (84–97) | 62 % (34–76) | 49 % (31–54) |
+| Boost minimum, time-weighted | 24 | 85 (HWUI's alone: 12) | 128 |
+| Unboosted / 100–199 / 200+ frames' p50 | 2.74 / 2.06 / 1.72 ms | 2.75 / 2.05 / 1.71 ms | 2.85 / 2.10 / 1.56 ms |
+| RenderThread on the little cores | 30 % | 23 % | 24 % |
+| RenderThread's mean frequency on the mid cores | 548 MHz | 602 MHz | 740 MHz |
+| Janky frames (FrameTimeline), all runs | 2 (the compositor's) | 5 (the compositor's) | 2 (the app's) |
+| RenderThread CPU time (work) | 4,418 (676) ms | 4,016 (687) ms | 3,793 (761) ms |
+| Main thread CPU time (work) | 2,921 (385) ms | 3,027 (395) ms | 3,842 (745) ms |
+| The app's CPU time (work), all threads | 9,170 (1,297) ms | 8,839 (1,315) ms | 9,477 (1,768) ms |
+| The power HAL's CPU time | 649 ms | 683 ms | 642 ms |
+| Energy: CPU rails | 5,474 ± 136 mJ | 5,592 ± 296 mJ (+2.2 %) | 5,932 ± 144 mJ |
+| Energy: all rails (display included) | 21,526 ± 294 mJ | 21,632 ± 485 mJ (+0.5 %) | 21,956 ± 265 mJ |
+
+| Animation | main | own session (D390) | Kotlin Compose |
+|---|---|---|---|
+| RenderThread per frame p50 / p90 / p99 | 2.63 / 3.43 / 4.97 ms | 2.54 / 3.26 / 4.60 ms | 3.03 / 4.11 / 5.49 ms |
+| Main thread per frame p50 / p90 / p99 | 1.20 / 1.75 / 2.94 ms | 1.22 / 1.69 / 2.72 ms | 1.53 / 2.15 / 3.03 ms |
+| Frames unboosted | 96 % | 74 % (53–92) | 96 % |
+| RenderThread CPU time (work) | 2,993 (450) ms | 2,855 (444) ms | 3,426 (474) ms |
+| Energy: CPU rails | 3,550 ± 158 mJ | 3,620 ± 229 mJ (+2.0 %) | 3,490 ± 107 mJ |
+| Energy: all rails | 14,371 ± 290 mJ | 14,406 ± 326 mJ (+0.2 %) | 14,355 ± 259 mJ |
+
+- **Durations.** The scroll's RenderThread p50 is 0.20 ms shorter (2.70 → 2.50), its p99 0.44 ms (5.36 → 4.92, below Compose's 5.03). The gap to Compose's p50 closes by about 40 % (0.51 → 0.31 ms) in this session, where our session boosted less often than Compose's HWUI session (62 % of frames unboosted against 49 %); in the sweep's session, at 51 % against 49 %, it was 2.30 against Compose's 2.22 ms. Each boost bucket's durations are the same as before: frames are shorter because more of them are boosted, as at the same boost they already matched. Main-thread percentiles and gfxinfo's frame times (5 / 6 / 7 ms) are unchanged; no frame of compose-rs's missed the app's deadline on either side.
+- **Power.** The CPU rails take 2.2 % more energy scrolling and 2.0 % more animating, within the runs' spread (± 2.5–6 %), and all rails 0.5 % and 0.2 % more. The boosted RenderThread runs less CPU time (−9 % scrolling: at higher frequencies) for about the same work (+1.6 %): what costs is the frequency, not more cycles. Compose's CPU rails took 8 % more than main's scrolling. The power HAL runs 34 ms more CPU per run (+5 %) for our session's reports (about 200 a run reach it; the others are rate-limited in the client), and the main thread's work rose 2.6 % (385 → 395 ms), within its spread: the report call, traced in these runs, and the clock read. Lower targets cost more: +10 % CPU energy at 4.5 ms, +17 % at 3.5 ms.
+- **Animation.** The RenderThread is rarely over 6.5 ms, so the boost is small (74 % of frames unboosted, against 96 %): p50 2.63 → 2.54 ms, p99 4.97 → 4.60 ms, for +2 % CPU energy within the spread.
 
 ## Android: text and the big screen
 
@@ -777,7 +829,6 @@ With these changes, compose-rs's animation does about 25 % less main-thread work
 | The proc macro at opt-level 3 | 67 → 65 ms of expansion |
 | Thinning monomorphization | about 2 % of an edit |
 | Avoiding the system's per-frame costs on Android | about 60 % of the animation's main thread, the same in Compose; inherent to a `View` |
-| Our own `APerformanceHint` session, to get the scroll's RenderThread boosted as Compose's is | power for durations no user sees: at the same boost the durations match, and frame times and jank are already better ("The scroll's RenderThread") |
 
 ## Caveats
 
