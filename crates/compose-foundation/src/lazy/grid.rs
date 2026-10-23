@@ -1062,7 +1062,7 @@ impl Measurer<'_, '_> {
         if (start..end).any(|item| self.child_of(item).is_none()) {
             // Not all composed (the first item alone, before the first layout): those that are
             // tell the size of the lines to come, for how many to compose.
-            if !self.line_sizes.contains_key(&line) {
+            if !self.line_sizes.contains_key(line) {
                 let mut slot = 0;
                 let mut size = None;
                 for item in start..end {
@@ -1427,7 +1427,7 @@ impl MeasurePolicy for LazyGridLayout {
         // In items, as `first_visible_item_index` (a scrollbar's estimates): a line's extent
         // shared among its items.
         let lines = m.lines.count_estimate().max(1);
-        let per_item = ((average + spacing) as i64 * lines as i64 / count as i64).max(1) as i32;
+        let per_item = (average + spacing) as f32 * lines as f32 / count as f32;
         let layout_info = (count, per_item, spacing, main_max, before + after);
         if state.layout_info.get() != layout_info {
             state.layout_info.set(layout_info);

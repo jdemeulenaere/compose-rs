@@ -553,14 +553,15 @@ fn reordered_grid_items_keep_their_nodes_and_a_removed_ones_is_reused() {
         let (zero, one) = (bounds(&mut grid.ui, 0), bounds(&mut grid.ui, 1));
         assert_eq!((zero.left, zero.top), if vertical { (50.0, 0.0) } else { (0.0, 50.0) });
         assert_eq!((one.left, one.top), (0.0, 0.0));
-        // Item 2 removed: its slot goes to the item coming in at the end of the composed ones,
-        // which takes its nodes: no node is created or released.
+        // Item 2 removed: the composed range moves with the first visible item (item 0, one
+        // place up, D458), so at most one item comes in, taking item 2's nodes; else item 2's slot
+        // is kept for reuse, for the next item to come. No node is created or released.
         reversed.retain(|item| *item != 2);
         let composed: HashSet<u64> = live().into_iter().collect();
         let nodes = grid.ui.host().with_tree(|tree| tree.node_count());
         grid.set_items(untyped(reversed));
         let came: Vec<u64> = live().into_iter().filter(|item| !composed.contains(item)).collect();
-        assert_eq!(came.len(), 1, "{came:?}");
+        assert!(came.len() <= 1, "{came:?}");
         assert_eq!(grid.ui.host().with_tree(|tree| tree.node_count()), nodes);
         grid.ui.on_node_with_tag("item 2: 20").assert_does_not_exist();
         for (item, node) in [0, 1, 3, 4, 5].into_iter().zip([0, 1, 3, 4, 5].map(|i| first[i])) {

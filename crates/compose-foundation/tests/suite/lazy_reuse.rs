@@ -374,14 +374,15 @@ fn reordered_items_keep_their_nodes_and_a_removed_ones_is_reused() {
     for (item, node) in (0..5).zip(&first) {
         assert_eq!(node_of(item), *node, "item {item}");
     }
-    // Item 2 removed: its slot goes to the item coming in at the end of the composed ones, which
-    // takes its nodes: no node is created or released.
+    // Item 2 removed: the composed range moves with the first visible item (item 0, one
+    // place up, D458), so at most one item comes in, taking item 2's nodes; else item 2's slot
+    // is kept for reuse, for the next item to come. No node is created or released.
     reversed.retain(|item| *item != 2);
     let composed: HashSet<u64> = live().into_iter().collect();
     let nodes = list.ui.host().with_tree(|tree| tree.node_count());
     list.set_items(untyped(reversed));
     let came: Vec<u64> = live().into_iter().filter(|item| !composed.contains(item)).collect();
-    assert_eq!(came.len(), 1, "{came:?}");
+    assert!(came.len() <= 1, "{came:?}");
     assert_eq!(list.ui.host().with_tree(|tree| tree.node_count()), nodes);
     list.ui.on_node_with_tag("item 2: 20").assert_does_not_exist();
     for (item, node) in [0, 1, 3, 4].into_iter().zip([first[0], first[1], first[3], first[4]]) {
@@ -632,4 +633,94 @@ fn review_items_inserted_far_before_the_composed_ones_keep_their_composition() {
         .filter(|event| (100..110).any(|item| **event == format!("remembered {item}")))
         .collect();
     assert!(recomposed.is_empty(), "items in view composed again: {recomposed:?}");
+}
+
+// ---- Adversarial review of 36461e5 (D455-D457) -------------------------------------------
+
+/// The item composed first (out of view, before the viewport) moved within the key window:
+/// D455 moves the whole composed range by *its* shift, so the items in view, which didn't move,
+/// fall out of the followed range and lose their composition.
+#[test]
+fn review2_first_composed_item_moved_forward_keeps_the_items_in_view() {
+    let mut list = Fixture::new(untyped(0..300));
+    list.scroll(100);
+    assert_eq!(list.state.first_visible_item_index(), 100);
+    let composed = live();
+    let first = composed[0];
+    assert!(first < 100, "{composed:?}");
+    let in_view: Vec<u64> = (100..105).collect();
+    let nodes: Vec<NodeId> = in_view.iter().copied().map(node_of).collect();
+    events();
+    // Item `first` moved 60 places down (within the key window).
+    let mut keys: Vec<u64> = (0..300).filter(|key| *key != first).collect();
+    keys.insert(first as usize + 60, first);
+    list.set_items(untyped(keys));
+    let events = events();
+    assert_eq!(list.state.first_visible_item_index(), 99);
+    let recomposed: Vec<&String> = events
+        .iter()
+        .filter(|event| in_view.iter().any(|item| **event == format!("remembered {item}")))
+        .collect();
+    assert!(recomposed.is_empty(), "items in view composed again: {recomposed:?}");
+    assert_eq!(in_view.iter().copied().map(node_of).collect::<Vec<_>>(), nodes);
+}
+
+/// The same with the first composed item moved to the top (a "move to top" of a feed or chat
+/// list): the range follows it back by ~95 places.
+#[test]
+fn review2_first_composed_item_moved_to_the_top_keeps_the_items_in_view() {
+    let mut list = Fixture::new(untyped(0..300));
+    list.scroll(100);
+    let composed = live();
+    let first = composed[0];
+    let in_view: Vec<u64> = (100..105).collect();
+    events();
+    let mut keys: Vec<u64> = (0..300).filter(|key| *key != first).collect();
+    keys.insert(0, first);
+    list.set_items(untyped(keys));
+    let events = events();
+    assert_eq!(list.state.first_visible_item_index(), 100);
+    let recomposed: Vec<&String> = events
+        .iter()
+        .filter(|event| in_view.iter().any(|item| **event == format!("remembered {item}")))
+        .collect();
+    assert!(recomposed.is_empty(), "items in view composed again: {recomposed:?}");
+}
+
+/// A list whose items all show (and are composed), reversed: more than `MOST_KEY_SEARCHES`
+/// items each need a search. Those not found must not lose their composition when the range
+/// would otherwise have held them.
+#[test]
+fn review2_reversed_list_keeps_every_items_composition() {
+    let mut list = Fixture::new(untyped(0..12));
+    let composed = live();
+    events();
+    list.set_items(untyped((0..12).rev()));
+    let events = events();
+    let recomposed: Vec<&String> = events
+        .iter()
+        .filter(|event| composed.iter().any(|item| **event == format!("remembered {item}")))
+        .collect();
+    assert!(recomposed.is_empty(), "composed {composed:?}; composed again: {recomposed:?}");
+}
+
+/// Scrolled to the end, items removed at the start (a log capped at its newest entries): the new
+/// count is below the old composed indices, `LazyItems` clamps the range it follows to the new
+/// count (empty), so `follow` finds nothing and every item in view loses its composition.
+#[test]
+fn review2_items_removed_before_while_at_the_end_keep_the_items_in_view() {
+    let mut list = Fixture::new(untyped(0..300));
+    list.scroll(400);
+    assert!(!list.state.can_scroll_forward());
+    let in_view: Vec<u64> = (295..300).collect();
+    let nodes: Vec<NodeId> = in_view.iter().copied().map(node_of).collect();
+    events();
+    list.set_items(untyped(60..300));
+    let events = events();
+    let recomposed: Vec<&String> = events
+        .iter()
+        .filter(|event| in_view.iter().any(|item| **event == format!("remembered {item}")))
+        .collect();
+    assert!(recomposed.is_empty(), "items in view composed again: {recomposed:?}");
+    assert_eq!(in_view.iter().copied().map(node_of).collect::<Vec<_>>(), nodes);
 }

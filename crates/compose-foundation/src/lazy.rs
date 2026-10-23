@@ -127,7 +127,7 @@ struct LazyListInner {
     /// What scrollbars estimate the content from, as last laid out: the item count, the
     /// average item size with its spacing, the spacing, the viewport's length and the content
     /// padding.
-    layout_info: OwnedState<(usize, i32, i32, i32, i32)>,
+    layout_info: OwnedState<(usize, f32, i32, i32, i32)>,
     /// The constraints its items are measured with, as last laid out: their composition's
     /// `LOCAL_CONSTRAINTS_HINT`.
     item_constraints: OwnedState<Option<Constraints>>,
@@ -176,7 +176,7 @@ impl LazyListInner {
             published: Cell::new((first_visible_item_index, offset)),
             sizes: RefCell::default(),
             line_sizes: RefCell::default(),
-            layout_info: mutable_state_of((0, 1, 0, 0, 0)),
+            layout_info: mutable_state_of((0, 1.0, 0, 0, 0)),
             item_constraints: mutable_state_of(None),
             room_backward: Cell::new(if first_visible_item_index > 0 {
                 f32::INFINITY
@@ -350,8 +350,8 @@ impl LazyListState {
     /// The item count, the average item size (with its spacing), the spacing, the viewport's
     /// length and the content padding along the axis, as last laid out: a scrollbar's
     /// estimates (a state read).
-    pub(crate) fn layout_info(&self) -> (usize, i32, i32, i32, i32) {
-        self.inner().map_or((0, 1, 0, 0, 0), |inner| inner.layout_info.get())
+    pub(crate) fn layout_info(&self) -> (usize, f32, i32, i32, i32) {
+        self.inner().map_or((0, 1.0, 0, 0, 0), |inner| inner.layout_info.get())
     }
 
     /// Whether the list can scroll towards its end, as `canScrollForward` (as last laid out).
@@ -1148,56 +1148,76 @@ struct ItemSlots {
 
 impl ItemSlots {
     /// When the items changed since the last pass (the list's caller composed again), where the
-    /// `composed` range's items went: found by key (each first where the one before it moved by
-    /// as much, else within the key window around where it was, `MOST_KEY_SEARCHES` times at
-    /// most), the range moved by as much as the first found, and widened to hold those that
-    /// moved otherwise but stayed near it (items inserted or removed among them). Those items
-    /// stay composed, rather than leaving (deactivated, their state lost) for a measurement to
-    /// ask for them again, as Compose's measurement finds each item's composition by its key
-    /// (D453, D455). `None` if the items are the same, none was found, or the range is the
-    /// same.
-    fn follow(&self, items: &Rc<Items>, composed: (usize, usize)) -> Option<(usize, usize)> {
+    /// `composed` range's items went. The range moves by as much as the first visible item
+    /// (`anchor`: its key and the index it was at) moved, found by key: the layout follows that
+    /// key (Compose's position follows `firstVisibleItem`'s), so the range composed is the one
+    /// the next measurement wants (D458). It's widened to hold the other composed items found
+    /// near it (each looked for first where the one before it went, else within the key
+    /// window, `MOST_KEY_SEARCHES` times at most); when that cap leaves some unsearched, it
+    /// holds the old range too, so `assign` still finds them by key. Those items stay composed,
+    /// rather than leaving (deactivated, their state lost) for a measurement to ask for them
+    /// again, as Compose's measurement finds each item's composition by its key (D453, D455).
+    /// `composed` may hold indices past the new count (items removed). `None` if the items are
+    /// the same, or the range is the same.
+    fn follow(
+        &self,
+        items: &Rc<Items>,
+        composed: (usize, usize),
+        anchor: Option<(u64, usize)>,
+    ) -> Option<(usize, usize)> {
         if std::ptr::eq(self.items.as_ptr(), Rc::as_ptr(items)) {
             return None;
         }
+        let count = items.count;
         let (start, end) = composed;
-        let mut shift = 0isize;
-        let mut first_shift = None;
+        let find = |key: u64, guess: Option<usize>, near: usize, searches: &mut usize| match guess
+            .filter(|guess| *guess < count)
+        {
+            Some(guess) if items.key(guess) == key => Some(guess),
+            _ if *searches < MOST_KEY_SEARCHES => {
+                *searches += 1;
+                items.index_of(key, near.min(count.saturating_sub(1)))
+            }
+            _ => None,
+        };
         let mut searches = 0;
-        let mut found = Vec::new();
+        // The first visible item's move (none if it went: the range stays where it was).
+        let anchor_shift = anchor
+            .and_then(|(key, old)| {
+                let index = find(key, Some(old), old, &mut searches)?;
+                Some(index as isize - old as isize)
+            })
+            .unwrap_or(0);
+        let moved = |index: usize| index.saturating_add_signed(anchor_shift).min(count);
+        let (moved_start, moved_end) = (moved(start), moved(end));
+        let near = (end - start).max(1);
+        let (mut low, mut high) = (moved_start, moved_end);
+        let mut shift = anchor_shift;
+        let mut unsearched = false;
         for slot in &self.active {
             let old = slot.index;
             // A pinned item or a header out of the range: kept by key already.
             if old < start || old >= end {
                 continue;
             }
-            let guess = old.checked_add_signed(shift).filter(|guess| *guess < items.count);
-            let index = match guess {
-                Some(guess) if items.key(guess) == slot.key => Some(guess),
-                _ if searches < MOST_KEY_SEARCHES => {
-                    searches += 1;
-                    items.index_of(slot.key, old)
+            let guess = old.checked_add_signed(shift);
+            let searched = searches < MOST_KEY_SEARCHES;
+            match find(slot.key, guess, old, &mut searches) {
+                Some(index) => {
+                    shift = index as isize - old as isize;
+                    if index + near >= moved_start && index < moved_end + near {
+                        low = low.min(index);
+                        high = high.max(index + 1);
+                    }
                 }
-                _ => None,
-            };
-            if let Some(index) = index {
-                shift = index as isize - old as isize;
-                first_shift.get_or_insert(shift);
-                found.push(index);
+                None => unsearched |= !searched,
             }
         }
-        let first_shift = first_shift?;
-        let moved = |index: usize| index.saturating_add_signed(first_shift).min(items.count);
-        let (moved_start, moved_end) = (moved(start), moved(end));
-        let near = (end - start).max(1);
-        let (mut low, mut high) = (moved_start, moved_end);
-        for index in found {
-            if index + near >= moved_start && index < moved_end + near {
-                low = low.min(index);
-                high = high.max(index + 1);
-            }
+        if unsearched {
+            low = low.min(start.min(count));
+            high = high.max(end.min(count));
         }
-        let followed = (low, high.min(items.count));
+        let followed = (low, high.min(count));
         (followed != composed).then_some(followed)
     }
 
@@ -1497,7 +1517,11 @@ fn LazyItems(
     let count = items.0.count;
     // Items came, went or moved: those composed stay composed where they went.
     if inner.had_items.get()
-        && let Some(followed) = slots.borrow().follow(&items.0, (start.min(count), end.min(count)))
+        && let Some(followed) = slots.borrow().follow(
+            &items.0,
+            (start, end),
+            inner.first_key.get().map(|key| (key, inner.position.get().0)),
+        )
     {
         (start, end) = followed;
         // The layout makes it the composed range.
@@ -1538,7 +1562,7 @@ fn LazyItems(
     let composed = {
         let inner = state.inner_or_detached();
         let sizes = inner.sizes.borrow();
-        slots.borrow_mut().assign(&items.0, &indices, |index| sizes.contains_key(&index))
+        slots.borrow_mut().assign(&items.0, &indices, |index| sizes.contains_key(index))
     };
     slots.borrow_mut().items = Rc::downgrade(&items.0);
     compose_runtime::CompositionLocalProvider(
@@ -1990,7 +2014,7 @@ impl MeasurePolicy for LazyListLayout {
         if count > 0 {
             state.first_key.set(Some(info.items.key(index)));
         }
-        let layout_info = (count, average + spacing, spacing, main_max, before + after);
+        let layout_info = (count, (average + spacing) as f32, spacing, main_max, before + after);
         if state.layout_info.get() != layout_info {
             state.layout_info.set(layout_info);
         }
@@ -2150,8 +2174,8 @@ impl Sizes {
         self.sum += i64::from(size) - self.sizes.insert(index, size).map_or(0, i64::from);
     }
 
-    fn contains_key(&self, index: &usize) -> bool {
-        self.sizes.contains_key(index)
+    fn contains_key(&self, index: usize) -> bool {
+        self.sizes.contains_key(&index)
     }
 
     fn len(&self) -> usize {
@@ -2253,9 +2277,8 @@ impl Prefetch {
     /// the scroll direction (within `limits`: `PREFETCH_AHEAD` items, or a grid's lines, beyond
     /// those the layout wants), and of those behind it doesn't want, those within `limits`
     /// only (`KEPT_BEHIND`), as a frame composing the item would have left them. The range, and
-    /// the item ahead (to measure
-    /// next); `None` when nothing is to be done, or when the composed items don't cover the
-    /// wanted ones (the frame composes those).
+    /// the item ahead (to measure next); `None` when nothing is to be done, or when the composed
+    /// items don't cover the wanted ones (the frame composes those).
     fn next(&self, composed: (usize, usize)) -> Option<((usize, usize), Option<usize>)> {
         let (start, end) = composed;
         let (wanted_start, wanted_end) = self.wanted.get();

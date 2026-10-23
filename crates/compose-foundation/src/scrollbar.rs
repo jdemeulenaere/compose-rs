@@ -70,7 +70,7 @@ impl ScrollbarAdapter for LazyListAdapter {
     }
     fn scroll_to(&self, scroll_offset: f64) {
         let (count, average, _, _, _) = self.0.layout_info();
-        let average = average.max(1) as f64;
+        let average = (average as f64).max(1.0);
         let offset = scroll_offset.max(0.0);
         let index = ((offset / average).floor() as usize).min(count.saturating_sub(1));
         self.0.scroll_to_item(index, (offset - index as f64 * average).round() as i32);
