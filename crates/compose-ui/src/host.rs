@@ -80,6 +80,9 @@ pub static LOCAL_CONSTRAINTS_HINT: compose_runtime::CompositionLocal<
 pub static LOCAL_DENSITY: compose_runtime::CompositionLocal<Density> =
     compose_runtime::CompositionLocal::new("LocalDensity", Density::default);
 
+/// The most times a frame composes and lays out again for what its layout asked (D487).
+const MOST_ROUNDS: usize = 16;
+
 impl UiHost {
     /// A host of `size` pixels at `density`, measuring text with `text_measurer`.
     pub fn new(size: IntSize, density: Density, text_measurer: Box<dyn TextMeasurer>) -> UiHost {
@@ -385,9 +388,12 @@ impl UiHost {
         let mut measured = self.lay_out(size);
         drop(layout);
         // A layout that changed what to compose (a lazy list reaching items it lacks) is
-        // composed and laid out again in this frame, a few times at most, before drawing.
+        // composed and laid out again in this frame, `MOST_ROUNDS` times at most, before
+        // drawing: a list asks for items geometrically, so a frame filling a phone's screen
+        // with rows a few pixels tall takes about 8 (D487).
         let mut rounds = 0;
-        while !invalid_before_layout && rounds < 3 && self.composition.has_invalidations() {
+        while !invalid_before_layout && rounds < MOST_ROUNDS && self.composition.has_invalidations()
+        {
             rounds += 1;
             let _round = crate::trace::section(c"compose-rs: recompose and layout again");
             // The writes that asked for this round are composed in it: they ask for no other
@@ -412,11 +418,18 @@ impl UiHost {
             Self::run(actions);
             measured |= self.lay_out(size);
             let mut rounds = 0;
-            while rounds < 3 && self.composition.has_invalidations() {
+            while rounds < MOST_ROUNDS && self.composition.has_invalidations() {
                 rounds += 1;
                 let _round = crate::trace::section(c"compose-rs: recompose and layout again");
+                // As the frame's rounds (D474): what asked for this one is composed in it.
+                self.frame_requested.set(false);
                 recomposed |= self.composition.recompose();
                 measured |= self.lay_out(size);
+            }
+            if self.composition.has_invalidations()
+                || self.with_tree(|tree| tree.has_beyond_bounds_moves())
+            {
+                self.frame_requested.set(true);
             }
         }
         // A node focused before it was placed is shown, now that it is.

@@ -42,10 +42,11 @@ pub enum SemanticsAction {
     RequestFocus,
     /// Set its progress to a value in its range (a slider's), as `SemanticsActions.SetProgress`.
     SetProgress(f32),
-    /// Scroll its content by `x` and `y` pixels as seen (positive: the view moves right and
-    /// down over the content, whatever way the content runs: a reversed list's, a
-    /// right-to-left row's), as `SemanticsActions.ScrollBy`: a scrolling container's (D478,
-    /// D484).
+    /// Scroll its content by `x` and `y` pixels (positive: towards the content's end, whatever
+    /// way it runs: a reversed list's later items, a right-to-left row's), as
+    /// `SemanticsActions.ScrollBy`: a scrolling container's. Android's accessibility turns its
+    /// directions into it as Compose's `AndroidComposeViewAccessibilityDelegateCompat` does
+    /// (D478, D491).
     ScrollBy { x: f32, y: f32 },
 }
 
@@ -159,12 +160,9 @@ impl SemanticsConfiguration {
         if self.progress_bar_range_info.is_none() {
             self.progress_bar_range_info = child.progress_bar_range_info;
         }
-        if self.horizontal_scroll_axis_range.is_none() {
-            self.horizontal_scroll_axis_range = child.horizontal_scroll_axis_range;
-        }
-        if self.vertical_scroll_axis_range.is_none() {
-            self.vertical_scroll_axis_range = child.vertical_scroll_axis_range;
-        }
+        // Scroll ranges don't merge: Compose reads them, with `ScrollBy`, from a node's own
+        // (unmerged) configuration, so a merging parent offers no scroll it can't perform
+        // (D491).
         // Compose's default merge policy, parent ?: child: a flag set below is set here.
         self.editable |= child.editable;
         self.password |= child.password;

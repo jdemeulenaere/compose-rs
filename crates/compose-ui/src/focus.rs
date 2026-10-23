@@ -441,13 +441,23 @@ impl UiTree {
         index: usize,
         direction: FocusDirection,
     ) -> bool {
-        if self.beyond_search.container.is_some_and(|active| active != (container, index)) {
-            // Another container's turn: the items the last one laid out go, and the count
-            // starts again (D483).
-            self.end_beyond_bounds();
-        }
-        if self.beyond_search.steps >= MOST_BEYOND_STEPS {
+        // A container that had no more that way has none for the rest of the search (D486).
+        if self.beyond_search.exhausted.contains(&(container, index))
+            || self.beyond_search.steps >= MOST_BEYOND_STEPS
+        {
             return false;
+        }
+        if let Some(active) = self.beyond_search.container
+            && active != (container, index)
+        {
+            // Another container's turn: the items the last one laid out go (D483); the count
+            // goes on, so the search ends within `MOST_BEYOND_STEPS` items whatever the tree.
+            self.beyond_search.container = None;
+            if let Some(value) = self.get_mut(active.0)
+                && active.1 < value.chain.len()
+            {
+                value.chain[active.1].end_beyond_bounds();
+            }
         }
         let layout_direction = self.node(container).layout_direction;
         let more = self.get_mut(container).is_some_and(|value| {
@@ -455,6 +465,7 @@ impl UiTree {
                 && value.chain[index].lay_out_beyond_bounds(direction, layout_direction)
         });
         if !more {
+            self.beyond_search.exhausted.push((container, index));
             return false;
         }
         self.beyond_search.container = Some((container, index));
@@ -475,6 +486,7 @@ impl UiTree {
     /// The search is over: what was laid out beyond the bounds for it goes.
     pub(crate) fn end_beyond_bounds(&mut self) {
         self.beyond_search.steps = 0;
+        self.beyond_search.exhausted.clear();
         if let Some((container, index)) = self.beyond_search.container.take()
             && let Some(value) = self.get_mut(container)
             && index < value.chain.len()
@@ -554,4 +566,6 @@ pub(crate) struct BeyondSearch {
     pub(crate) moves: std::collections::VecDeque<FocusDirection>,
     pub(crate) container: Option<(NodeId, usize)>,
     pub(crate) steps: usize,
+    /// The containers that had no more to lay out in this search (D486).
+    pub(crate) exhausted: Vec<(NodeId, usize)>,
 }

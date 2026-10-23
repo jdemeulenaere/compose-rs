@@ -56,11 +56,8 @@ use crate::scroll::{DragScroller, bring_into_view_delta};
 /// (`lay_out_beyond_bounds`, D477).
 const BEYOND: usize = 2;
 
-/// While it knows fewer item sizes than this (a first layout), a measurement lacking items asks
-/// for `FIRST_STEP` at most, or as many as it placed if more, whatever its estimate: the
-/// estimate rests on those few sizes (the stress list's 81 px header made it ask for 87 items
-/// where 15 show, D472). The frame's next round asks for the rest, from more sizes.
-const FEW_SIZES: usize = 4;
+/// The most items a measurement lacking items asks for in a round: this many, or as many as it
+/// placed if more, so the items asked for double round to round while it lacks them (D487).
 const FIRST_STEP: usize = 4;
 
 /// The most items a measurement asks for beyond those in view, however small they may be.
@@ -245,7 +242,42 @@ struct Overshoot {
     vertical: bool,
     reverse: bool,
     from: (usize, f32),
+    /// The first visible item's key then: `from` follows it when items come and go before it
+    /// (D488).
+    from_key: Option<u64>,
     asked: f32,
+}
+
+impl Overshoot {
+    /// Where it started, found again by its key among `items`.
+    fn start(&self, items: &Items) -> (usize, f32) {
+        let index =
+            self.from_key.and_then(|key| items.index_of(key, self.from.0)).unwrap_or(self.from.0);
+        (index, self.from.1)
+    }
+
+    /// Offering its parents what wasn't used, `moved` of what was asked: their post-scroll,
+    /// to run once the layout is over; `None` if nothing is left.
+    fn rest(self, moved: f32) -> Option<Box<dyn FnOnce()>> {
+        let left = self.asked - moved;
+        if left * self.asked <= 0.0 || left.abs() < 0.5 {
+            return None;
+        }
+        Some(Box::new(move || {
+            // The pointer's way: the content's other way.
+            let along = if self.reverse { left } else { -left };
+            let available = if self.vertical {
+                compose_ui::Offset::new(0.0, along)
+            } else {
+                compose_ui::Offset::new(along, 0.0)
+            };
+            self.chain.post_scroll(
+                compose_ui::Offset::ZERO,
+                available,
+                compose_ui::NestedScrollSource::UserInput,
+            );
+        }))
+    }
 }
 
 /// What prefetching works from, as last laid out, and what it learned.
@@ -369,6 +401,8 @@ impl LazyListState {
     /// `scrollToItem`, without animation.
     pub fn scroll_to_item(&self, index: usize, scroll_offset: i32) {
         let Some(inner) = self.inner() else { return };
+        // A jump is no user input: nothing it passes goes to nested-scroll parents.
+        inner.overshoot.borrow_mut().take();
         inner.position.set((index, scroll_offset.max(0) as f32));
         inner.first_key.set(None);
         inner.pending.set(0.0);
@@ -413,6 +447,7 @@ impl LazyListState {
                         vertical,
                         reverse,
                         from: inner.position.get(),
+                        from_key: inner.first_key.get(),
                         asked: inner.pending.get() + used,
                     })
                 }
@@ -2040,29 +2075,28 @@ impl MeasurePolicy for LazyListLayout {
         let wanted_start = index.saturating_sub(beyond_before + wanted_before);
         let mut wanted_end = (end_index + beyond_after).min(count);
         if missing {
-            // At the average size of the items in view, if any: the ones about to come are
-            // likelier like them than like the list's average. The first of them left out when
-            // others follow it: a first item unlike the rest (a header, a hero image) made the
-            // rounds run out short of filling the viewport (D475); a minimum (the last item's
-            // size) asked for hundreds of items after a 1 px divider (D481).
-            let sizes_in_view = placed.iter().map(|(placeable, _)| main_of(placeable));
+            // The items the room left takes at the average size of those in view (the first
+            // left out when others follow it: a header; the list's average if none): an estimate,
+            // so no more than `FIRST_STEP`, or as many as are placed, a round. Whatever the sizes,
+            // what's asked for beyond what the measurement turns out to need is then at most
+            // about as much again, and the rounds are as many as doublings (D487); the estimate
+            // only saves rounds (each estimate alone broke on some sizes: a header, D475; a
+            // divider after a card, D481; a spacer and a divider, D487).
             let in_view = match placed.len() {
                 0 => average,
                 1 => main_of(&placed[0].0).max(1),
                 placed_count => {
-                    (sizes_in_view.skip(1).sum::<i32>() / (placed_count as i32 - 1)).max(1)
+                    (placed[1..].iter().map(|(placeable, _)| main_of(placeable)).sum::<i32>()
+                        / (placed_count as i32 - 1))
+                        .max(1)
                 }
             };
             // The room the next items fill (the end padding's included: the items fill the
             // viewport under it), each with its spacing: as many as cover it, no more.
             let room = (main_max - content_end + after).max(1) as usize;
-            // At most `MOST_MISSING`, or four times as many from several sizes measured in view
-            // (rows a few pixels tall filling a phone's screen in a frame's rounds).
-            let most = if placed.len() < 2 { MOST_MISSING } else { 4 * MOST_MISSING };
-            let mut more = room.div_ceil((in_view + spacing).max(1) as usize).min(most);
-            if sizes.len() < FEW_SIZES {
-                more = more.min(placed.len().max(FIRST_STEP));
-            }
+            let more = room
+                .div_ceil((in_view + spacing).max(1) as usize)
+                .min(placed.len().max(FIRST_STEP));
             wanted_end = (end_index + more + beyond_after).min(count);
         }
         let covers = composed_start <= wanted_start && composed_end >= wanted_end;
@@ -2187,25 +2221,10 @@ impl MeasurePolicy for LazyListLayout {
             && !missing
             && wanted_before == 0
             && let Some(overshoot) = state.overshoot.borrow_mut().take()
-            && let Some(moved) = sizes.distance(overshoot.from, (index, offset), spacing)
+            && let Some(moved) =
+                sizes.distance(overshoot.start(&info.items), (index, offset), spacing)
         {
-            let left = overshoot.asked - moved;
-            if left * overshoot.asked > 0.0 && left.abs() >= 0.5 {
-                post_scroll = Some(Box::new(move || {
-                    // The pointer's way: the content's other way.
-                    let along = if overshoot.reverse { left } else { -left };
-                    let available = if overshoot.vertical {
-                        compose_ui::Offset::new(0.0, along)
-                    } else {
-                        compose_ui::Offset::new(along, 0.0)
-                    };
-                    overshoot.chain.post_scroll(
-                        compose_ui::Offset::ZERO,
-                        available,
-                        compose_ui::NestedScrollSource::UserInput,
-                    );
-                }));
-            }
+            post_scroll = overshoot.rest(moved);
         }
         let reaches_start = (index == 0 || placed_start == 0) && wanted_before == 0;
         // Not reaching an end: estimated from the average size (a nested list's wheel delta
@@ -2627,10 +2646,8 @@ impl compose_ui::SemanticsModifierNode for LazyScrollNode {
         _context: &mut EventContext<'_>,
     ) -> bool {
         let compose_ui::SemanticsAction::ScrollBy { x, y } = action else { return false };
-        // As seen: a reversed list's (or a right-to-left row's) content runs the other way.
-        let seen = if self.vertical { y } else { x };
-        let rtl = self.state.inner().is_some_and(|inner| inner.rtl.get());
-        let delta = if self.mirrored(rtl) { -seen } else { seen };
+        // Towards the content's end, as Compose's lazy layouts' `scrollBy` (D491).
+        let delta = if self.vertical { y } else { x };
         delta != 0.0 && self.state.dispatch(delta, None) != 0.0
     }
 }
@@ -2741,7 +2758,12 @@ impl PointerInputModifierNode for LazyScrollNode {
             move |delta| {
                 state.dispatch(delta, outer.clone().map(|chain| (chain, vertical, reverse)))
             },
-            move || Rc::new(move |delta| flung.dispatch(delta, None)),
+            // As a fling's scroll, or the nested-scroll parent of the scrollables inside: its
+            // own parents get what an estimated end leaves of it too (D489).
+            move |chain: &compose_ui::platform::NestedScrollChain| {
+                let outer = (!chain.is_empty()).then(|| (chain.clone(), vertical, reverse));
+                Rc::new(move |delta| flung.dispatch(delta, outer.clone()))
+            },
         );
     }
 

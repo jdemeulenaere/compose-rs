@@ -321,9 +321,8 @@ impl compose_ui::SemanticsModifierNode for ScrollNode {
         _context: &mut compose_ui::EventContext<'_>,
     ) -> bool {
         let compose_ui::SemanticsAction::ScrollBy { x, y } = action else { return false };
-        // As seen: a right-to-left horizontal scroll's content starts at the right.
-        let seen = if self.vertical { y } else { x };
-        let delta = if self.rtl { -seen } else { seen };
+        // Towards the content's end (its value growing), as Compose's (D491).
+        let delta = if self.vertical { y } else { x };
         delta != 0.0 && scroll_state_by(&self.state, delta, &mut self.fraction) != 0.0
     }
 }
@@ -480,7 +479,7 @@ impl PointerInputModifierNode for ScrollNode {
             reverse,
             context,
             |delta| scroll_state_by(&state, delta, fraction),
-            move || {
+            move |_: &NestedScrollChain| {
                 let fraction = std::cell::Cell::new(0.0f32);
                 Rc::new(move |delta| {
                     let mut left = fraction.get();
@@ -576,7 +575,7 @@ impl DragScroller {
         reverse: bool,
         context: &EventContext<'_>,
         mut scroll_by: impl FnMut(f32) -> f32,
-        flinger: impl Fn() -> Rc<dyn Fn(f32) -> f32>,
+        flinger: impl Fn(&NestedScrollChain) -> Rc<dyn Fn(f32) -> f32>,
     ) {
         let slop = touch_slop(context);
         self.vertical = vertical;
@@ -587,7 +586,7 @@ impl DragScroller {
         {
             self.chain = NestedScrollChain::current();
             NestedScrollChain::enter(Rc::new(ScrollableConnection {
-                scroll: flinger(),
+                scroll: flinger(&self.chain),
                 vertical,
                 reverse,
             }));
@@ -721,7 +720,7 @@ impl DragScroller {
         velocity: f32,
         density: f32,
         reverse: bool,
-        flinger: impl Fn() -> Rc<dyn Fn(f32) -> f32>,
+        flinger: impl Fn(&NestedScrollChain) -> Rc<dyn Fn(f32) -> f32>,
     ) {
         let vertical = self.vertical;
         let chain = self.chain.clone();
@@ -731,7 +730,7 @@ impl DragScroller {
         let along_axis = move |offset: Offset| if vertical { offset.y } else { offset.x };
         let velocity = velocity + along_axis(chain.pre_fling(axis(-velocity)));
         if velocity.abs() > MINIMUM_FLING_DP * density {
-            let scroll = flinger();
+            let scroll = flinger(&chain);
             let flung = chain.clone();
             let scroll: Rc<dyn Fn(f32) -> f32> = Rc::new(move |delta: f32| {
                 let mut reversed =

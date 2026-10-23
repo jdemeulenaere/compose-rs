@@ -108,7 +108,7 @@ fn flags(config: &SemanticsConfiguration) -> u32 {
 /// 5 tab, 6 image, 7 dropdown list), text, content description, editable text, state
 /// description, error (each a length and UTF-8 bytes), the range (current, min, max: 3 × f32)
 /// if the range flag is set, and the scroll (offset, largest, the viewport's length along its
-/// axis: 3 × f32) if the scroll flag is.
+/// axis: 3 × f32, and the scroll actions offered: u8, `scroll_action`) if the scroll flag is.
 fn write_node(node: &SemanticsNode, parent: i32, clip: Rect, out: &mut Writer) {
     let config = &node.config;
     let id = virtual_id(node.id);
@@ -166,8 +166,10 @@ fn write_node(node: &SemanticsNode, parent: i32, clip: Rect, out: &mut Writer) {
     if let Some((range, horizontal)) = scroll {
         out.f32(range.value);
         out.f32(range.max_value);
-        // A page: the viewport's length along the axis, unclipped.
-        out.f32(if horizontal { node.bounds.width() } else { node.bounds.height() });
+        // A page: the viewport's length along the axis, as shown (clipped), as Compose's
+        // `boundsInParent`.
+        out.f32(if horizontal { bounds.width() } else { bounds.height() });
+        out.u8(scroll_actions(node));
     }
     // A scrolling container clips what's in it.
     let inner =
@@ -183,4 +185,90 @@ pub fn find(root: &SemanticsNode, id: i32) -> Option<&SemanticsNode> {
         return Some(root);
     }
     root.children.iter().find_map(|child| find(child, id))
+}
+
+/// The scroll actions of a node's record, as bits: what `Accessibility.kt` offers and asks
+/// (`ComposeRsNative.performAction`'s actions 3 to 8, in this order).
+pub mod scroll_action {
+    pub const FORWARD: u8 = 1;
+    pub const BACKWARD: u8 = 1 << 1;
+    pub const UP: u8 = 1 << 2;
+    pub const DOWN: u8 = 1 << 3;
+    pub const LEFT: u8 = 1 << 4;
+    pub const RIGHT: u8 = 1 << 5;
+}
+
+/// The scroll actions `node` offers, as Compose's `AndroidComposeViewAccessibilityDelegateCompat`
+/// (D491): forward where it can scroll forward (towards its end, or its start if
+/// `reverse_scrolling`), paired with right (left when right to left) or down; backward and
+/// left (right) or up the other way.
+pub fn scroll_actions(node: &SemanticsNode) -> u8 {
+    use scroll_action::*;
+    let forward = |range: compose_ui::ScrollAxisRange| {
+        if range.reverse_scrolling { range.value > 0.0 } else { range.value < range.max_value }
+    };
+    let backward = |range: compose_ui::ScrollAxisRange| {
+        if range.reverse_scrolling { range.value < range.max_value } else { range.value > 0.0 }
+    };
+    let mut actions = 0;
+    if let Some(range) = node.config.horizontal_scroll_axis_range {
+        if forward(range) {
+            actions |= FORWARD | if node.rtl { LEFT } else { RIGHT };
+        }
+        if backward(range) {
+            actions |= BACKWARD | if node.rtl { RIGHT } else { LEFT };
+        }
+    }
+    if let Some(range) = node.config.vertical_scroll_axis_range {
+        if forward(range) {
+            actions |= FORWARD | DOWN;
+        }
+        if backward(range) {
+            actions |= BACKWARD | UP;
+        }
+    }
+    actions
+}
+
+/// What `action` (one `scroll_action` bit) scrolls `node` by, `page` its viewport's length:
+/// the `ScrollBy` amounts, as Compose's delegate works them out (a page, back for backward,
+/// left or up, the other way if `reverse_scrolling`, and for left or right when right to
+/// left); `None` if it can't scroll that way (D491).
+pub fn scroll_amount(node: &SemanticsNode, action: u8, page: f32) -> Option<(f32, f32)> {
+    use scroll_action::*;
+    let can = |range: compose_ui::ScrollAxisRange, amount: f32| {
+        (amount < 0.0 && range.value > 0.0) || (amount > 0.0 && range.value < range.max_value)
+    };
+    if let Some(range) = node.config.horizontal_scroll_axis_range
+        && action & (FORWARD | BACKWARD | LEFT | RIGHT) != 0
+    {
+        let mut amount = page;
+        if action & (LEFT | BACKWARD) != 0 {
+            amount = -amount;
+        }
+        if range.reverse_scrolling {
+            amount = -amount;
+        }
+        if node.rtl && action & (LEFT | RIGHT) != 0 {
+            amount = -amount;
+        }
+        if can(range, amount) {
+            return Some((amount, 0.0));
+        }
+    }
+    if let Some(range) = node.config.vertical_scroll_axis_range
+        && action & (FORWARD | BACKWARD | UP | DOWN) != 0
+    {
+        let mut amount = page;
+        if action & (UP | BACKWARD) != 0 {
+            amount = -amount;
+        }
+        if range.reverse_scrolling {
+            amount = -amount;
+        }
+        if can(range, amount) {
+            return Some((0.0, amount));
+        }
+    }
+    None
 }

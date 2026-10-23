@@ -1501,10 +1501,21 @@ impl MeasurePolicy for LazyGridLayout {
         });
         let reaches_end = !missing && (at_end || !m.lines.exists(placed_end));
         state.room_estimated.set((!reaches_start, !reaches_end));
-        // What a grid's estimated end leaves isn't offered to nested-scroll parents (as a
-        // list's is, D479): dropped once laid out.
-        if pending == 0.0 {
-            state.overshoot.borrow_mut().take();
+        // What input taken past an estimated end couldn't use goes to the parents once the
+        // layout is over, as a list's (D479, D490); the distance moved in lines measured.
+        let mut post_scroll: Option<Box<dyn FnOnce()>> = None;
+        if pending == 0.0
+            && !missing
+            && wanted_before == 0
+            && let Some(overshoot) = state.overshoot.borrow_mut().take()
+        {
+            let (from_item, from_offset) = overshoot.start(&info.items);
+            let from_line = m.lines.line_of(from_item.min(count - 1));
+            if let Some(moved) =
+                m.line_sizes.distance((from_line, from_offset), (index, offset), spacing)
+            {
+                post_scroll = overshoot.rest(moved);
+            }
         }
         state.beyond_more.set((placed_start.min(index) > 0, m.lines.exists(placed_end)));
         state.room_forward.set(if reaches_end {
@@ -1552,6 +1563,9 @@ impl MeasurePolicy for LazyGridLayout {
         }
         for (placeable, main, cross) in &pinned {
             place(m.scope, placeable, *main, *cross);
+        }
+        if let Some(post_scroll) = post_scroll {
+            m.scope.run_after_layout(post_scroll);
         }
         m.scope.layout(width, height)
     }

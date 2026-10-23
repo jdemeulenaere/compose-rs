@@ -6,7 +6,9 @@
 // The call macros name the runtime `compose`.
 extern crate compose_runtime as compose;
 
-use compose_android::accessibility::{flag, write_tree};
+use compose_android::accessibility::{
+    flag, scroll_action, scroll_actions, scroll_amount, write_tree,
+};
 use compose_android::serialize::Writer;
 use compose_foundation::layout::*;
 use compose_foundation::*;
@@ -50,6 +52,7 @@ fn records(bytes: &[u8]) -> Vec<Record> {
             let value = f32::from_bits(u32_at(&mut at));
             let max = f32::from_bits(u32_at(&mut at));
             let page = f32::from_bits(u32_at(&mut at));
+            at += 1;
             (value, max, page)
         });
         out.push(Record { bounds, flags, text: strings.swap_remove(0), scroll });
@@ -118,26 +121,118 @@ fn what_a_scrolling_column_clips_away_is_hidden() {
     assert_eq!((row.bounds[1], row.bounds[3]), (80.0, 100.0));
 }
 
-#[composable]
-fn RightToLeftRow() {
+/// The scrolling node of `content`'s merged semantics tree.
+fn scrolling_node(content: fn()) -> compose_ui::platform::SemanticsNode {
+    let mut host = UiHost::headless(200, 200);
+    host.set_content(content);
+    host.settle(10);
+    fn find(
+        node: &compose_ui::platform::SemanticsNode,
+    ) -> Option<compose_ui::platform::SemanticsNode> {
+        if node.config.vertical_scroll_axis_range.is_some()
+            || node.config.horizontal_scroll_axis_range.is_some()
+        {
+            return Some(node.clone());
+        }
+        node.children.iter().find_map(find)
+    }
+    find(&host.semantics_tree(true)).expect("a scrolling node")
+}
+
+fn rtl(content: impl Fn() + 'static) {
     compose_runtime::CompositionLocalProvider(
         compose_ui::LOCAL_LAYOUT_DIRECTION.provides(compose_ui::LayoutDirection::Rtl),
-        || {
-            LazyRow!(modifier = Modifier.size((100.dp(), 20.dp())), |scope: LazyListScope| {
-                scope.items(50, |index| {
-                    BasicText!("tile {}", index, modifier = Modifier.width(20.dp()));
-                });
-            });
-        },
+        content,
     );
 }
 
-/// A right-to-left row says so: its left and right go the other way.
+#[composable]
+fn RightToLeftRow() {
+    rtl(|| {
+        LazyRow!(modifier = Modifier.size((100.dp(), 20.dp())), |scope: LazyListScope| {
+            scope.items(50, |index| {
+                BasicText!("tile {}", index, modifier = Modifier.width(20.dp()));
+            });
+        });
+    });
+}
+
+#[composable]
+fn ReversedRightToLeftRow() {
+    rtl(|| {
+        LazyRow!(
+            modifier = Modifier.size((100.dp(), 20.dp())),
+            reverse_layout = true,
+            |scope: LazyListScope| {
+                scope.items(50, |index| {
+                    BasicText!("tile {}", index, modifier = Modifier.width(20.dp()));
+                });
+            }
+        );
+    });
+}
+
+#[composable]
+fn ReversedColumn() {
+    LazyColumn!(
+        modifier = Modifier.size((100.dp(), 100.dp())),
+        reverse_layout = true,
+        |scope: LazyListScope| {
+            scope.items(50, |index| {
+                BasicText!("row {}", index, modifier = Modifier.height(20.dp()));
+            });
+        }
+    );
+}
+
+/// A right-to-left row at its start, as Compose's delegate (D491): forward goes towards its
+/// end, left as seen, paired with left; right (back) is nothing yet.
 #[test]
-fn a_right_to_left_row_is_marked_so() {
+fn a_right_to_left_row_scrolls_forward_to_the_left() {
+    use scroll_action::*;
+    let node = scrolling_node(RightToLeftRow);
+    assert!(node.rtl);
+    assert_eq!(scroll_actions(&node), FORWARD | LEFT);
+    assert_eq!(scroll_amount(&node, FORWARD, 100.0), Some((100.0, 0.0)));
+    assert_eq!(scroll_amount(&node, LEFT, 100.0), Some((100.0, 0.0)));
+    assert_eq!(scroll_amount(&node, RIGHT, 100.0), None);
+    assert_eq!(scroll_amount(&node, BACKWARD, 100.0), None);
     let records = written(RightToLeftRow);
-    let row = records.iter().find(|record| record.scroll.is_some()).expect("a scrolling node");
-    assert_ne!(row.flags & flag::SCROLL_HORIZONTAL, 0);
+    let row = records.iter().find(|record| record.scroll.is_some()).unwrap();
     assert_ne!(row.flags & flag::RTL, 0);
-    assert_eq!(row.flags & flag::SCROLL_REVERSED, 0);
+    assert_ne!(row.flags & flag::SCROLL_HORIZONTAL, 0);
+}
+
+/// A reversed right-to-left row (its first item at the left) at its start: forward would go
+/// back past it; backward goes on through its items, paired with right, as Compose's.
+#[test]
+fn a_reversed_right_to_left_row_scrolls_backward_to_the_right() {
+    use scroll_action::*;
+    let node = scrolling_node(ReversedRightToLeftRow);
+    assert_eq!(scroll_actions(&node), BACKWARD | RIGHT);
+    assert_eq!(scroll_amount(&node, BACKWARD, 100.0), Some((100.0, 0.0)));
+    assert_eq!(scroll_amount(&node, RIGHT, 100.0), Some((100.0, 0.0)));
+    assert_eq!(scroll_amount(&node, FORWARD, 100.0), None);
+    assert_eq!(scroll_amount(&node, LEFT, 100.0), None);
+}
+
+/// A reversed column at its start (its first item at the bottom): backward and up go on
+/// through its items, as Compose's; forward and down have nothing.
+#[test]
+fn a_reversed_column_scrolls_backward_up() {
+    use scroll_action::*;
+    let node = scrolling_node(ReversedColumn);
+    assert_eq!(scroll_actions(&node), BACKWARD | UP);
+    assert_eq!(scroll_amount(&node, UP, 100.0), Some((0.0, 100.0)));
+    assert_eq!(scroll_amount(&node, BACKWARD, 100.0), Some((0.0, 100.0)));
+    assert_eq!(scroll_amount(&node, DOWN, 100.0), None);
+}
+
+/// A plain column at its start: forward and down.
+#[test]
+fn a_column_scrolls_forward_down() {
+    use scroll_action::*;
+    let node = scrolling_node(Rows);
+    assert_eq!(scroll_actions(&node), FORWARD | DOWN);
+    assert_eq!(scroll_amount(&node, DOWN, 100.0), Some((0.0, 100.0)));
 }

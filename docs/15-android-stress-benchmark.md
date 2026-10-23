@@ -616,6 +616,39 @@ Interleaved against main (727d266), 8 runs each:
   - compose-rs composed items in 0 to 3 frames a run, with no janky frame and a main thread p99 of 2.9 to 3.0 ms.
   - Compose laid out new tiles' text in 72 to 118 frames a run, with a p99 of 5.6 to 6.8 ms and 2 app-janky frames.
 
+**After the fourth review (D486–D491).** The fourth review found five bugs, fixed since:
+- **A Tab that never ended (D486).** A Tab from a carousel ending in unfocusable tiles waited forever; every focus search now ends within about 25 frames.
+- **Over-composition (D487).** A page down on cards, spacers and dividers composed 800 items in a frame. What a frame asks for now doubles round to round, bounded at about twice what it needs.
+- **A phantom delta (D488).** An item inserted above during a drag sent one to the app bar.
+- **Grids (D490).** A grid dropped what its estimated end left instead of passing it to its parents.
+- **Right-to-left accessibility (D491).** Accessibility's forward and backward in right-to-left rows were the opposite of Compose's; the mapping is now Compose's, in Rust.
+
+Interleaved against main (727d266), 8 runs each:
+- One of main's feed traces held no frame, so its feed column has 7 runs.
+- Neither app had a janky frame in any run.
+
+| | Feed: main | shipped | Stress list: main | shipped |
+|---|---|---|---|---|
+| Main thread p50 / p90 / p99 | 1.24 / 1.75 / 2.74 ms | **1.17** / **1.67** / 2.64 ms | 1.06 / 1.66 / 2.79 ms | **0.96** / **1.53** / 2.70 ms |
+| RenderThread p50 / p90 / p99 | 2.35 / 3.40 / 4.89 ms | 2.33 / 3.20 / 4.73 ms | 2.47 / 3.54 / 4.95 ms | 2.42 / 3.43 / 4.96 ms |
+| Main thread / RenderThread work | 490 / 814 ms | **460** / **755** ms | 703 / 1,589 ms | **596** / **1,366** ms |
+| Text laid out in frames (runs) | 0 | 0 | 1 | 0 |
+| Native heap after start / after the flings | 8.5 / 11.9 MB | **8.1** / **10.5** MB | 17.2 / 20.6 MB | **14.7** / **17.4** MB |
+| `TotalTime` (16 cold starts) | 106.5 ms | 105.5 ms | 123.5 ms | **116.5 ms** |
+| The first frame's `compose-rs: frame` (8 traced starts) | 6.8 ms | **5.0 ms** | 14.5 ms | **7.0 ms** |
+
+**The stress list's RenderThread p99** came out 0.3 ms longer in the two A/Bs before this one, and equal here (4.96 against 4.95 ms). It's the boost, not more work:
+- **Faster at every boost level.** At the same boost, the shipped code's RenderThread frames are faster. In the A/B before this one, p99 was 6.45 against 6.82 ms unboosted, 4.91 against 5.75 ms at 100–199 and 3.94 against 4.33 ms at 200 or more; this one, 6.01 / 4.90 / 3.73 against 6.47 / 5.35 / 4.37 ms.
+- **Less boosted.** With 13 to 14 % less RenderThread work, our hint session voted less: 230 against 254, then 226 against 268, time-weighted. Fewer frames started at 200 or more (58 against 69 %, then 60 against 73 %), and more ran unboosted.
+- **Still drawn ahead.** Prefetched items are drawn and recorded ahead as before: about 213 draw-ahead steps a run against 210. The replay takes less time (100 against 144 ms a run).
+- **Fewer render nodes.** The frame records no more render nodes, it places fewer.
+
+**Grid fast flings (4 runs each, interleaved):**
+- compose-rs composed items in 0 to 3 frames a run, with no janky frame and a main thread p99 of 2.7 to 2.9 ms.
+- Compose laid out new tiles' text in 99 to 143 frames a run, with a p99 of 6.2 to 6.7 ms and 2 app-janky frames.
+
+The stress list's first frame still composes 16 items (headless 0.25 ms).
+
 **Lazy grids** keep 2 lines composed and placed beyond each side (D456). Their open risk was that a fast fling would outrun that buffer. Checked on the new `grid` screen of both apps (D473): 3,000 tiles in 4 columns, 10 flings of 1,600 px in 60 ms as measure.py's pattern, 3 to 4 runs each, interleaved.
 - Before D474, compose-rs composed items in 0 to 11 frames a run (mean 4.3, 6 runs), in runs of consecutive frames at the flings' starts with no prefetch between them. With D474, 0 to 2 a run (mean 1.0, 4 runs).
 - No janky frame of compose-rs's; its main thread p99 was 2.6 to 3.0 ms.

@@ -458,10 +458,11 @@ fn a_scrolling_column_has_scroll_semantics_and_scrolls_by_its_action() {
     assert_eq!(scroll.value(), 60);
 }
 
-/// `ScrollBy` is as seen (positive: the view moves down over the content), as Compose's: a
-/// reversed list (its first item at the bottom) scrolls on through its items going up.
+/// `ScrollBy` is towards the content's end, as Compose's lazy layouts' (D491): a reversed list
+/// (its first item at the bottom) scrolls on through its items with a positive amount, as seen
+/// going up (Android's accessibility turns its directions into amounts, `scroll_amount`).
 #[test]
-fn scroll_by_is_as_seen_on_a_reversed_list() {
+fn scroll_by_goes_towards_the_end_of_a_reversed_list() {
     let state = LazyListState::new(0, 0);
     let given = *state;
     let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || {
@@ -477,15 +478,14 @@ fn scroll_by_is_as_seen_on_a_reversed_list() {
     let node = scroll_node(&mut ui, "list").id;
     let range = scroll_node(&mut ui, "list").config.vertical_scroll_axis_range.unwrap();
     assert!(range.reverse_scrolling);
-    // Down, as seen: back towards the first item, already at the bottom.
+    // Back towards the first item: already there.
     assert!(!ui.host().perform_semantics_action(
         node,
-        compose_ui::SemanticsAction::ScrollBy { x: 0.0, y: 100.0 }
+        compose_ui::SemanticsAction::ScrollBy { x: 0.0, y: -100.0 }
     ));
-    // Up: on through the items.
     assert!(ui.host().perform_semantics_action(
         node,
-        compose_ui::SemanticsAction::ScrollBy { x: 0.0, y: -100.0 }
+        compose_ui::SemanticsAction::ScrollBy { x: 0.0, y: 100.0 }
     ));
     ui.wait_for_idle();
     assert_eq!(state.first_visible_item_index(), 5);
@@ -524,4 +524,35 @@ fn a_scroll_past_the_estimated_room_leaves_the_list_scrollable_until_laid_out() 
     ui.wait_for_idle();
     assert!(!state.can_scroll_forward(), "laid out at its end");
     assert_eq!(state.first_visible_item_index(), 45);
+}
+
+/// Every focus search ends within a bounded number of frames, whatever the tree (D486): Tab
+/// from the last focusable row of a list whose 1,000 rows after it take no focus gives up
+/// after `MOST_BEYOND_STEPS` items laid out, moves on, and the host idles.
+#[test]
+fn a_tab_past_nothing_focusable_ends_and_the_host_idles() {
+    let mut ui = ComposeTestRule::sized(IntSize::new(200, 300), || {
+        Column!({
+            LazyColumn!(modifier = Modifier.size((100.dp(), 100.dp())), |scope: LazyListScope| {
+                scope.items(1005, |index| {
+                    let modifier =
+                        Modifier.size((100.dp(), 20.dp())).test_tag(format!("row {index}"));
+                    let modifier = if index < 5 { modifier.clickable(|| {}) } else { modifier };
+                    Box!(modifier = modifier);
+                });
+            });
+            Box!(modifier = Modifier.size((100.dp(), 20.dp())).clickable(|| {}).test_tag("after"));
+        });
+    });
+    ui.on_node_with_tag("row 4").request_focus();
+    ui.wait_for_idle();
+    ui.host().send_key(compose_ui::KeyEvent::down(compose_ui::Key::Tab));
+    let mut frames = 0;
+    while ui.host().has_pending_work() && frames < 100 {
+        ui.host().frame();
+        frames += 1;
+    }
+    assert!(frames < 40, "{frames} frames");
+    assert!(!ui.host().with_tree(|tree| tree.has_beyond_bounds_moves()));
+    ui.on_node_with_tag("after").assert_is_focused();
 }
