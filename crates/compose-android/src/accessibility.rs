@@ -230,11 +230,31 @@ pub fn scroll_actions(node: &SemanticsNode) -> u8 {
     actions
 }
 
-/// What `action` (one `scroll_action` bit) scrolls `node` by, `page` its viewport's length:
+/// The node of virtual id `id` in `root`'s tree, with its bounds as shown: clipped by the
+/// scrolling containers around it, as the record's.
+pub fn find_shown(root: &SemanticsNode, id: i32) -> Option<(&SemanticsNode, Rect)> {
+    fn visit(node: &SemanticsNode, id: i32, clip: Rect) -> Option<(&SemanticsNode, Rect)> {
+        let shown = clipped(node.bounds, clip);
+        if virtual_id(node.id) == id {
+            return Some((node, shown.unwrap_or(node.bounds)));
+        }
+        let scrolls = node.config.vertical_scroll_axis_range.is_some()
+            || node.config.horizontal_scroll_axis_range.is_some();
+        let inner = if scrolls { shown.unwrap_or(Rect::new(0.0, 0.0, 0.0, 0.0)) } else { clip };
+        node.children.iter().find_map(|child| visit(child, id, inner))
+    }
+    if virtual_id(root.id) == id {
+        return Some((root, root.bounds));
+    }
+    root.children.iter().find_map(|child| visit(child, id, root.bounds))
+}
+
+/// What `action` (one `scroll_action` bit) scrolls `node` by, `page` its viewport as shown (its
+/// width a page horizontally, its height vertically):
 /// the `ScrollBy` amounts, as Compose's delegate works them out (a page, back for backward,
 /// left or up, the other way if `reverse_scrolling`, and for left or right when right to
 /// left); `None` if it can't scroll that way (D491).
-pub fn scroll_amount(node: &SemanticsNode, action: u8, page: f32) -> Option<(f32, f32)> {
+pub fn scroll_amount(node: &SemanticsNode, action: u8, page: Rect) -> Option<(f32, f32)> {
     use scroll_action::*;
     let can = |range: compose_ui::ScrollAxisRange, amount: f32| {
         (amount < 0.0 && range.value > 0.0) || (amount > 0.0 && range.value < range.max_value)
@@ -242,7 +262,7 @@ pub fn scroll_amount(node: &SemanticsNode, action: u8, page: f32) -> Option<(f32
     if let Some(range) = node.config.horizontal_scroll_axis_range
         && action & (FORWARD | BACKWARD | LEFT | RIGHT) != 0
     {
-        let mut amount = page;
+        let mut amount = page.width();
         if action & (LEFT | BACKWARD) != 0 {
             amount = -amount;
         }
@@ -259,7 +279,7 @@ pub fn scroll_amount(node: &SemanticsNode, action: u8, page: f32) -> Option<(f32
     if let Some(range) = node.config.vertical_scroll_axis_range
         && action & (FORWARD | BACKWARD | UP | DOWN) != 0
     {
-        let mut amount = page;
+        let mut amount = page.height();
         if action & (UP | BACKWARD) != 0 {
             amount = -amount;
         }

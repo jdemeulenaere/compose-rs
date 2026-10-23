@@ -7,7 +7,7 @@
 extern crate compose_runtime as compose;
 
 use compose_android::accessibility::{
-    flag, scroll_action, scroll_actions, scroll_amount, write_tree,
+    find_shown, flag, scroll_action, scroll_actions, scroll_amount, virtual_id, write_tree,
 };
 use compose_android::serialize::Writer;
 use compose_foundation::layout::*;
@@ -121,6 +121,11 @@ fn what_a_scrolling_column_clips_away_is_hidden() {
     assert_eq!((row.bounds[1], row.bounds[3]), (80.0, 100.0));
 }
 
+/// A page of 100 px each way.
+fn page() -> compose_ui::Rect {
+    compose_ui::Rect::new(0.0, 0.0, 100.0, 100.0)
+}
+
 /// The scrolling node of `content`'s merged semantics tree.
 fn scrolling_node(content: fn()) -> compose_ui::platform::SemanticsNode {
     let mut host = UiHost::headless(200, 200);
@@ -193,10 +198,10 @@ fn a_right_to_left_row_scrolls_forward_to_the_left() {
     let node = scrolling_node(RightToLeftRow);
     assert!(node.rtl);
     assert_eq!(scroll_actions(&node), FORWARD | LEFT);
-    assert_eq!(scroll_amount(&node, FORWARD, 100.0), Some((100.0, 0.0)));
-    assert_eq!(scroll_amount(&node, LEFT, 100.0), Some((100.0, 0.0)));
-    assert_eq!(scroll_amount(&node, RIGHT, 100.0), None);
-    assert_eq!(scroll_amount(&node, BACKWARD, 100.0), None);
+    assert_eq!(scroll_amount(&node, FORWARD, page()), Some((100.0, 0.0)));
+    assert_eq!(scroll_amount(&node, LEFT, page()), Some((100.0, 0.0)));
+    assert_eq!(scroll_amount(&node, RIGHT, page()), None);
+    assert_eq!(scroll_amount(&node, BACKWARD, page()), None);
     let records = written(RightToLeftRow);
     let row = records.iter().find(|record| record.scroll.is_some()).unwrap();
     assert_ne!(row.flags & flag::RTL, 0);
@@ -210,10 +215,10 @@ fn a_reversed_right_to_left_row_scrolls_backward_to_the_right() {
     use scroll_action::*;
     let node = scrolling_node(ReversedRightToLeftRow);
     assert_eq!(scroll_actions(&node), BACKWARD | RIGHT);
-    assert_eq!(scroll_amount(&node, BACKWARD, 100.0), Some((100.0, 0.0)));
-    assert_eq!(scroll_amount(&node, RIGHT, 100.0), Some((100.0, 0.0)));
-    assert_eq!(scroll_amount(&node, FORWARD, 100.0), None);
-    assert_eq!(scroll_amount(&node, LEFT, 100.0), None);
+    assert_eq!(scroll_amount(&node, BACKWARD, page()), Some((100.0, 0.0)));
+    assert_eq!(scroll_amount(&node, RIGHT, page()), Some((100.0, 0.0)));
+    assert_eq!(scroll_amount(&node, FORWARD, page()), None);
+    assert_eq!(scroll_amount(&node, LEFT, page()), None);
 }
 
 /// A reversed column at its start (its first item at the bottom): backward and up go on
@@ -223,9 +228,9 @@ fn a_reversed_column_scrolls_backward_up() {
     use scroll_action::*;
     let node = scrolling_node(ReversedColumn);
     assert_eq!(scroll_actions(&node), BACKWARD | UP);
-    assert_eq!(scroll_amount(&node, UP, 100.0), Some((0.0, 100.0)));
-    assert_eq!(scroll_amount(&node, BACKWARD, 100.0), Some((0.0, 100.0)));
-    assert_eq!(scroll_amount(&node, DOWN, 100.0), None);
+    assert_eq!(scroll_amount(&node, UP, page()), Some((0.0, 100.0)));
+    assert_eq!(scroll_amount(&node, BACKWARD, page()), Some((0.0, 100.0)));
+    assert_eq!(scroll_amount(&node, DOWN, page()), None);
 }
 
 /// A plain column at its start: forward and down.
@@ -234,5 +239,44 @@ fn a_column_scrolls_forward_down() {
     use scroll_action::*;
     let node = scrolling_node(Rows);
     assert_eq!(scroll_actions(&node), FORWARD | DOWN);
-    assert_eq!(scroll_amount(&node, DOWN, 100.0), Some((0.0, 100.0)));
+    assert_eq!(scroll_amount(&node, DOWN, page()), Some((0.0, 100.0)));
+}
+
+#[composable]
+fn BothAxes() {
+    Column!(
+        modifier = Modifier
+            .size((100.dp(), 50.dp()))
+            .vertical_scroll(remember_scroll_state!())
+            .horizontal_scroll(remember_scroll_state!()),
+        {
+            Spacer(Modifier.size((400.dp(), 400.dp())));
+        }
+    );
+}
+
+/// A node scrolling both ways pages horizontally by its width, vertically by its height, as
+/// shown (D496).
+#[test]
+fn a_node_scrolling_both_ways_pages_by_its_width_and_its_height() {
+    use scroll_action::*;
+    let mut host = UiHost::headless(200, 200);
+    host.set_content(BothAxes);
+    host.settle(10);
+    let root = host.semantics_tree(true);
+    fn find(
+        node: &compose_ui::platform::SemanticsNode,
+    ) -> Option<&compose_ui::platform::SemanticsNode> {
+        if node.config.horizontal_scroll_axis_range.is_some()
+            && node.config.vertical_scroll_axis_range.is_some()
+        {
+            return Some(node);
+        }
+        node.children.iter().find_map(find)
+    }
+    let node = find(&root).expect("a node scrolling both ways");
+    let (found, shown) = find_shown(&root, virtual_id(node.id)).unwrap();
+    assert_eq!((shown.width(), shown.height()), (100.0, 50.0));
+    assert_eq!(scroll_amount(found, RIGHT, shown), Some((100.0, 0.0)));
+    assert_eq!(scroll_amount(found, DOWN, shown), Some((0.0, 50.0)));
 }

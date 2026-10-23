@@ -57,10 +57,16 @@ use crate::scroll::{DragScroller, bring_into_view_delta};
 const BEYOND: usize = 2;
 
 /// The most items a measurement lacking items asks for in a round: this many, or as many as it
-/// placed if more, so the items asked for double round to round while it lacks them (D487).
+/// placed or asked for last round, twice, if more, so the items asked for double round to round
+/// while it lacks them (D487, D492), up to `MOST_IN_A_ROUND`.
 const FIRST_STEP: usize = 4;
 
-/// The most items a measurement asks for beyond those in view, however small they may be.
+/// The most items a measurement asks for in a round: a frame's 16 rounds compose about 5,000 at
+/// most (zero-height items; anything taller fills the viewport first, D492).
+const MOST_IN_A_ROUND: usize = 512;
+
+/// How far a scroll steps over items it lacks by their estimated size rather than composing them
+/// (a jump), and the most a viewport's worth of items counts (a list's trimming slack).
 const MOST_MISSING: usize = 200;
 
 /// How far from its last index an item is looked for by key.
@@ -154,6 +160,9 @@ struct LazyListInner {
     room_backward: Cell<f32>,
     room_forward: Cell<f32>,
     room_estimated: Cell<(bool, bool)>,
+    /// The items the last measurement lacking items asked for (0: it lacked none): the next
+    /// round asks for up to twice as many (D492).
+    asked: Cell<usize>,
     /// User input taken past an estimated end with nested-scroll parents around: once the
     /// measurement knows how far the list went, what it couldn't use is offered to them, as
     /// Compose's measurement consumes a delta and the rest goes to post-scroll (D479).
@@ -221,6 +230,7 @@ impl LazyListInner {
             }),
             room_forward: Cell::new(f32::INFINITY),
             room_estimated: Cell::new((false, false)),
+            asked: Cell::new(0),
             overshoot: RefCell::new(None),
             prefetch: Prefetch { forward: Cell::new(true), ..Prefetch::default() },
             parent_size: Rc::default(),
@@ -246,6 +256,9 @@ struct Overshoot {
     /// (D488).
     from_key: Option<u64>,
     asked: f32,
+    /// `UserInput` (a drag, a wheel), or `SideEffect` (a fling's scroll, or a child's fling
+    /// going on through this list as its parent), as Compose's post-scroll says (D493).
+    source: compose_ui::NestedScrollSource,
 }
 
 impl Overshoot {
@@ -271,11 +284,7 @@ impl Overshoot {
             } else {
                 compose_ui::Offset::new(along, 0.0)
             };
-            self.chain.post_scroll(
-                compose_ui::Offset::ZERO,
-                available,
-                compose_ui::NestedScrollSource::UserInput,
-            );
+            self.chain.post_scroll(compose_ui::Offset::ZERO, available, self.source);
         }))
     }
 }
@@ -426,7 +435,12 @@ impl LazyListState {
     fn dispatch(
         &self,
         pixels: f32,
-        outer: Option<(compose_ui::platform::NestedScrollChain, bool, bool)>,
+        outer: Option<(
+            compose_ui::platform::NestedScrollChain,
+            bool,
+            bool,
+            compose_ui::NestedScrollSource,
+        )>,
     ) -> f32 {
         let Some(inner) = self.inner() else { return 0.0 };
         let (backward_estimated, forward_estimated) = inner.room_estimated.get();
@@ -437,7 +451,7 @@ impl LazyListState {
         };
         let used =
             if estimated { pixels } else { pixels.signum() * pixels.abs().min(room.max(0.0)) };
-        if estimated && let Some((chain, vertical, reverse)) = outer {
+        if estimated && let Some((chain, vertical, reverse, source)) = outer {
             let mut overshoot = inner.overshoot.borrow_mut();
             match &mut *overshoot {
                 Some(overshoot) => overshoot.asked += used,
@@ -449,6 +463,7 @@ impl LazyListState {
                         from: inner.position.get(),
                         from_key: inner.first_key.get(),
                         asked: inner.pending.get() + used,
+                        source,
                     })
                 }
             }
@@ -2094,10 +2109,15 @@ impl MeasurePolicy for LazyListLayout {
             // The room the next items fill (the end padding's included: the items fill the
             // viewport under it), each with its spacing: as many as cover it, no more.
             let room = (main_max - content_end + after).max(1) as usize;
-            let more = room
-                .div_ceil((in_view + spacing).max(1) as usize)
-                .min(placed.len().max(FIRST_STEP));
+            // Doubling from what was asked last round too, so a scroll past the composed items
+            // (none placed) grows 4, 8, 16, … (D492); at most `MOST_IN_A_ROUND`, so zero-height
+            // items don't compose tens of thousands in a frame.
+            let cap = placed.len().max(FIRST_STEP).max(2 * state.asked.get()).min(MOST_IN_A_ROUND);
+            let more = room.div_ceil((in_view + spacing).max(1) as usize).min(cap);
+            state.asked.set(more);
             wanted_end = (end_index + more + beyond_after).min(count);
+        } else {
+            state.asked.set(0);
         }
         let covers = composed_start <= wanted_start && composed_end >= wanted_end;
         // Items composed far from those wanted are left in a frame, beyond two viewports' worth
@@ -2347,13 +2367,14 @@ impl Sizes {
     }
 
     /// How far it is from `from` to `to` (an item and the pixels into it), items `spacing`
-    /// apart: `None` unless every item between was measured.
+    /// apart, an item not measured at the average size (D494).
     fn distance(&self, from: (usize, f32), to: (usize, f32), spacing: i32) -> Option<f32> {
         let (low, high, sign) =
             if to.0 >= from.0 { (from.0, to.0, 1.0) } else { (to.0, from.0, -1.0) };
+        let average = self.average();
         let mut sum = 0.0;
         for index in low..high {
-            sum += (*self.sizes.get(&index)? + spacing) as f32;
+            sum += (self.sizes.get(&index).copied().unwrap_or(average) + spacing) as f32;
         }
         Some(sign * sum + to.1 - from.1)
     }
@@ -2756,12 +2777,19 @@ impl PointerInputModifierNode for LazyScrollNode {
             context,
             // What an estimated end leaves goes to the parents once laid out (D479).
             move |delta| {
-                state.dispatch(delta, outer.clone().map(|chain| (chain, vertical, reverse)))
+                let outer = outer.clone();
+                state.dispatch(
+                    delta,
+                    outer.map(|chain| {
+                        (chain, vertical, reverse, compose_ui::NestedScrollSource::UserInput)
+                    }),
+                )
             },
             // As a fling's scroll, or the nested-scroll parent of the scrollables inside: its
             // own parents get what an estimated end leaves of it too (D489).
-            move |chain: &compose_ui::platform::NestedScrollChain| {
-                let outer = (!chain.is_empty()).then(|| (chain.clone(), vertical, reverse));
+            move |chain: &compose_ui::platform::NestedScrollChain,
+                  source: compose_ui::NestedScrollSource| {
+                let outer = (!chain.is_empty()).then(|| (chain.clone(), vertical, reverse, source));
                 Rc::new(move |delta| flung.dispatch(delta, outer.clone()))
             },
         );

@@ -479,7 +479,7 @@ impl PointerInputModifierNode for ScrollNode {
             reverse,
             context,
             |delta| scroll_state_by(&state, delta, fraction),
-            move |_: &NestedScrollChain| {
+            move |_: &NestedScrollChain, _: NestedScrollSource| {
                 let fraction = std::cell::Cell::new(0.0f32);
                 Rc::new(move |delta| {
                     let mut left = fraction.get();
@@ -538,20 +538,28 @@ pub(crate) struct DragScroller {
 /// A scrollable as the nested-scroll parent of the scrollables inside it: what they leave
 /// scrolls it.
 struct ScrollableConnection {
+    /// Its scroll for what a child's drag (`UserInput`) leaves, and for what a child's fling
+    /// (`SideEffect`) leaves: a lazy list offers its own parents the rest as such (D493).
     scroll: Rc<dyn Fn(f32) -> f32>,
+    scroll_side_effect: Rc<dyn Fn(f32) -> f32>,
     vertical: bool,
     reverse: bool,
 }
 
 impl NestedScrollConnection for ScrollableConnection {
-    fn on_post_scroll(&self, _: Offset, available: Offset, _: NestedScrollSource) -> Offset {
+    fn on_post_scroll(&self, _: Offset, available: Offset, source: NestedScrollSource) -> Offset {
         let along = if self.vertical { available.y } else { available.x };
         // The content scrolls the pointer's other way.
         let delta = -along;
         if delta == 0.0 {
             return Offset::ZERO;
         }
-        let used = if self.reverse { -(self.scroll)(-delta) } else { (self.scroll)(delta) };
+        let scroll = if source == NestedScrollSource::UserInput {
+            &self.scroll
+        } else {
+            &self.scroll_side_effect
+        };
+        let used = if self.reverse { -scroll(-delta) } else { scroll(delta) };
         if self.vertical { Offset::new(0.0, -used) } else { Offset::new(-used, 0.0) }
     }
 }
@@ -575,7 +583,7 @@ impl DragScroller {
         reverse: bool,
         context: &EventContext<'_>,
         mut scroll_by: impl FnMut(f32) -> f32,
-        flinger: impl Fn(&NestedScrollChain) -> Rc<dyn Fn(f32) -> f32>,
+        flinger: impl Fn(&NestedScrollChain, NestedScrollSource) -> Rc<dyn Fn(f32) -> f32>,
     ) {
         let slop = touch_slop(context);
         self.vertical = vertical;
@@ -586,7 +594,8 @@ impl DragScroller {
         {
             self.chain = NestedScrollChain::current();
             NestedScrollChain::enter(Rc::new(ScrollableConnection {
-                scroll: flinger(&self.chain),
+                scroll: flinger(&self.chain, NestedScrollSource::UserInput),
+                scroll_side_effect: flinger(&self.chain, NestedScrollSource::SideEffect),
                 vertical,
                 reverse,
             }));
@@ -720,7 +729,7 @@ impl DragScroller {
         velocity: f32,
         density: f32,
         reverse: bool,
-        flinger: impl Fn(&NestedScrollChain) -> Rc<dyn Fn(f32) -> f32>,
+        flinger: impl Fn(&NestedScrollChain, NestedScrollSource) -> Rc<dyn Fn(f32) -> f32>,
     ) {
         let vertical = self.vertical;
         let chain = self.chain.clone();
@@ -730,7 +739,7 @@ impl DragScroller {
         let along_axis = move |offset: Offset| if vertical { offset.y } else { offset.x };
         let velocity = velocity + along_axis(chain.pre_fling(axis(-velocity)));
         if velocity.abs() > MINIMUM_FLING_DP * density {
-            let scroll = flinger(&chain);
+            let scroll = flinger(&chain, NestedScrollSource::SideEffect);
             let flung = chain.clone();
             let scroll: Rc<dyn Fn(f32) -> f32> = Rc::new(move |delta: f32| {
                 let mut reversed =

@@ -471,6 +471,7 @@ impl UiTree {
         self.beyond_search.container = Some((container, index));
         self.beyond_search.steps += 1;
         self.beyond_search.moves.push_back(direction);
+        self.beyond_search.focused = self.focused();
         true
     }
 
@@ -504,6 +505,12 @@ impl UiTree {
     /// out (each may wait again, for one more item).
     pub fn run_beyond_bounds_moves(&mut self) -> Vec<Action> {
         let moves = std::mem::take(&mut self.beyond_search.moves);
+        // The focus moved meanwhile (a click, a `FocusRequester`): that wins, the search and
+        // the moves waiting go (D495).
+        if !moves.is_empty() && self.focused() != self.beyond_search.focused {
+            self.end_beyond_bounds();
+            return Vec::new();
+        }
         let mut actions = Vec::new();
         for direction in moves {
             actions.extend(self.move_focus_in(direction).1);
@@ -568,4 +575,6 @@ pub(crate) struct BeyondSearch {
     pub(crate) steps: usize,
     /// The containers that had no more to lay out in this search (D486).
     pub(crate) exhausted: Vec<(NodeId, usize)>,
+    /// The focused node when the search waited: another then is a focus change from outside.
+    pub(crate) focused: Option<NodeId>,
 }

@@ -556,3 +556,26 @@ fn a_tab_past_nothing_focusable_ends_and_the_host_idles() {
     assert!(!ui.host().with_tree(|tree| tree.has_beyond_bounds_moves()));
     ui.on_node_with_tag("after").assert_is_focused();
 }
+
+thread_local! {
+    static ZERO_BODIES: Cell<usize> = const { Cell::new(0) };
+}
+
+/// A list of items with no height composes a few thousand at most in a frame (`MOST_IN_A_ROUND`
+/// a round, D492), not the tens of thousands its doubling allows over 16 rounds.
+#[test]
+fn a_list_of_empty_items_composes_a_few_thousand_at_most_in_a_frame() {
+    let mut host = compose_ui::platform::UiHost::headless(100, 500);
+    host.set_content(|| {
+        LazyColumn!(modifier = Modifier.size((100.dp(), 500.dp())), |scope: LazyListScope| {
+            scope.items(1_000_000, |_| {
+                ZERO_BODIES.with(|cell| cell.set(cell.get() + 1));
+                Box!(modifier = Modifier.size((100.dp(), 0.dp())));
+            });
+        });
+    });
+    ZERO_BODIES.with(|cell| cell.set(0));
+    host.frame();
+    let composed = ZERO_BODIES.with(Cell::get);
+    assert!(composed <= 6000, "{composed} composed in a frame");
+}

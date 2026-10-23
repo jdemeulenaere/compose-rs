@@ -975,9 +975,9 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_semantics(
 }
 
 /// `ComposeRsNative.performAction(host, id, action, value)`: an accessibility service's action
-/// on virtual view `id`: 0 click, 1 focus, 2 set progress to `value`, 3 to 8 scroll a page of
-/// `value` pixels forward, backward, up, down, left or right, as Compose's accessibility
-/// delegate (`accessibility::scroll_amount`, D491).
+/// on virtual view `id`: 0 click, 1 focus, 2 set progress to `value`, 3 to 8 scroll a page
+/// (the viewport as shown) forward, backward, up, down, left or right, as Compose's
+/// accessibility delegate (`accessibility::scroll_amount`, D491, D496).
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_rs_compose_android_ComposeRsNative_performAction(
     _env: JNIEnv,
@@ -990,7 +990,7 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_performAction(
     // SAFETY: a live host, on the main thread.
     let host = unsafe { self::host(host) };
     let root = host.ui.semantics_tree(true);
-    let Some(found) = crate::accessibility::find(&root, id) else { return 0 };
+    let Some((found, shown)) = crate::accessibility::find_shown(&root, id) else { return 0 };
     let node = found.id;
     let action = match action {
         0 => compose_ui::SemanticsAction::OnClick,
@@ -998,7 +998,7 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_performAction(
         2 => compose_ui::SemanticsAction::SetProgress(value),
         3..=8 => {
             let direction = 1u8 << (action - 3);
-            let Some((x, y)) = crate::accessibility::scroll_amount(found, direction, value) else {
+            let Some((x, y)) = crate::accessibility::scroll_amount(found, direction, shown) else {
                 return 0;
             };
             compose_ui::SemanticsAction::ScrollBy { x, y }

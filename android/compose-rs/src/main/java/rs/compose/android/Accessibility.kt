@@ -285,9 +285,13 @@ internal class Accessibility(private val view: ComposeRsView) : AccessibilityNod
      * accessibility scrolls a whole viewport), forward (towards its end) or back; a reversed
      * one's up and down are the other way.
      */
-    /** Scrolls a scrolling container a page that way, as Rust works it out (D491). */
+    /**
+     * Scrolls a scrolling container a page (its viewport as shown) that way, as Compose's
+     * accessibility delegate: Rust works the amount out (`accessibility::scroll_amount`, D491).
+     * The services hear it once laid out (`invalidate`).
+     */
     private fun scrollPage(node: Node, action: Int): Boolean {
-        val scroll = node.scroll ?: return false
+        if (node.scroll == null) return false
         val direction = when (action) {
             AccessibilityNodeInfo.ACTION_SCROLL_FORWARD -> 3
             AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD -> 4
@@ -297,8 +301,7 @@ internal class Accessibility(private val view: ComposeRsView) : AccessibilityNod
             android.R.id.accessibilityActionScrollRight -> 8
             else -> return false
         }
-        // Told once the next frame laid it out (`invalidate`).
-        return view.performSemanticsAction(node.id, direction, scroll[2])
+        return view.performSemanticsAction(node.id, direction, 0f)
     }
 
     private fun send(virtualViewId: Int, type: Int) {
