@@ -88,7 +88,12 @@ impl ModifierNodeElement for OverlayElement {
     }
 }
 
-impl ModifierNode for OverlayNode {}
+impl ModifierNode for OverlayNode {
+    /// Reused for another popup: the focus goes into it again when it opens.
+    fn on_reset(&mut self) {
+        self.focused_once = false;
+    }
+}
 
 impl Modifier {
     /// Makes the node an overlay, placed in the window by `provider` after layout, drawn over

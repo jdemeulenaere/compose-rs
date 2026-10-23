@@ -38,6 +38,7 @@ mod node_tree;
 mod observe;
 pub mod platform;
 mod remember;
+mod reusable;
 mod runtime;
 pub mod saveable;
 mod saveable_state_holder;
@@ -65,6 +66,7 @@ pub use remember::{
     Observed, Remember, RememberObserver, key, remember, remember_keyed, remember_observer,
     remember_observer_keyed,
 };
+pub use reusable::{ReusableContent, ReusableContentHost};
 pub use saveable::{
     AutoSaver, LOCAL_SAVEABLE_STATE_REGISTRY, RegistryEntry, RememberSaveable, Saveable,
     SaveableStateRegistry, SavedState, SavedValue, Saver, current_composite_key_hash,

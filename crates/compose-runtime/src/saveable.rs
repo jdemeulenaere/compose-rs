@@ -556,7 +556,7 @@ pub fn current_composite_key_hash() -> u64 {
                 ^ ordinal.wrapping_mul(0x9e37_79b9_7f4a_7c15);
             // A `SaveableStateProvider`'s values are found by their place within it, wherever
             // it is: its registry is theirs alone (D290).
-            if entry.kind == GroupKind::Movable
+            if entry.kind == GroupKind::Reusable
                 && entry.key == crate::saveable_state_holder::PROVIDER_GROUP
             {
                 break;

@@ -54,6 +54,23 @@ pub trait Applier: 'static {
     /// applier then detaches it first.
     fn release(&mut self, node: NodeRef);
 
+    /// `node` is about to be reused by content composed in its place (`ReusableContent` with
+    /// another key, `ReusableContentHost` active again), as Compose's `Applier.reuse` (which
+    /// calls the node's `ComposeNodeLifecycleCallback.onReuse`): the applier resets what the
+    /// node keeps of its last content, and the pass then updates it. Called during the pass, as
+    /// composition reaches the node, for each node a reusable node group keeps
+    /// (`start_reusable_node`): composition is running, so the applier must not run code that
+    /// writes state then; it may defer such work to `on_end_changes` (`UiTree` resets its
+    /// modifier nodes there, D434).
+    fn reuse(&mut self, _node: NodeRef) {}
+
+    /// `node`'s content was deactivated (`ReusableContentHost` inactive), as Compose's
+    /// `ComposeNodeLifecycleCallback.onDeactivate`: it stays in the tree, its groups kept for
+    /// reuse, and the applier resets what it keeps (its modifiers' state) and leaves it out of
+    /// what it shows. Called at the end of the pass, before releases, for every node of the
+    /// deactivated content, outer before inner.
+    fn deactivate(&mut self, _node: NodeRef) {}
+
     /// Called before a pass applies its first change.
     fn on_begin_changes(&mut self) {}
 
@@ -74,6 +91,8 @@ pub(crate) trait ErasedApplier {
     fn remove(&mut self, parent: NodeRef, index: usize, count: usize);
     fn move_nodes(&mut self, parent: NodeRef, from: usize, to: usize, count: usize);
     fn release(&mut self, node: NodeRef);
+    fn reuse(&mut self, node: NodeRef);
+    fn deactivate(&mut self, node: NodeRef);
     fn on_begin_changes(&mut self);
     fn on_end_changes(&mut self);
     fn as_any_mut(&mut self) -> &mut dyn Any;
@@ -100,6 +119,14 @@ impl<A: Applier> ErasedApplier for A {
 
     fn release(&mut self, node: NodeRef) {
         Applier::release(self, node)
+    }
+
+    fn reuse(&mut self, node: NodeRef) {
+        Applier::reuse(self, node)
+    }
+
+    fn deactivate(&mut self, node: NodeRef) {
+        Applier::deactivate(self, node)
     }
 
     fn on_begin_changes(&mut self) {

@@ -503,10 +503,10 @@ impl UiTree {
             }
         }
         let content = *origins.last().expect("a layer");
-        let count = self.node(node).children.len();
-        if count > 0 {
+        if !self.node(node).children.is_empty() {
             translate(list, content);
             let order = self.placement_order(node);
+            let count = order.as_ref().map_or(self.node(node).children.len(), |order| order.len());
             for position in 0..count {
                 let index = order.as_ref().map_or(position, |order| order[position] as usize);
                 let child = self.node(node).children[index].node;

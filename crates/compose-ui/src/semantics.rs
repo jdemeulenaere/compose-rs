@@ -384,7 +384,7 @@ impl UiTree {
         // content, never merged into what's around their anchor.
         for index in 0..self.overlays.len() {
             let overlay = self.overlays[index];
-            if self.get(overlay).is_some_and(|value| value.overlay) {
+            if self.get(overlay).is_some_and(|value| value.overlay && value.placed) {
                 let mut overlay_config = SemanticsConfiguration::default();
                 self.semantics_of_overlay(overlay, merged, &mut overlay_config, &mut children);
             }

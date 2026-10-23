@@ -68,7 +68,7 @@ impl<H: Copy + 'static> Remember for Owned<H> {
 }
 
 fn slot_next(type_id: TypeId) -> (SlotPosition, Option<Rc<dyn Any>>) {
-    with_runtime(|runtime| runtime.slot_next(type_id))
+    with_runtime(|runtime| runtime.slot_next(type_id, false))
 }
 
 fn slot_set(position: SlotPosition, value: SlotValue, type_name: &'static str) {
@@ -98,6 +98,23 @@ pub fn remember<T: Remember>(calc: impl FnOnce() -> T) -> T::Output {
         Ok(output) => output,
         Err(position) => remember_new(position, calc()),
     }
+}
+
+/// Like [`remember`], but content reused around it (`ReusableContent` with another key, a lazy
+/// list's item reused for another) finds the value it remembered, where `remember` computes a
+/// new one: as a value of Compose's `ReusableRememberObserver` (`rememberCompositionContext`'s, a
+/// `SubcomposeLayoutState` kept on its reused node). For state a component keeps for the content
+/// it composes, which reused content reuses too: a lazy list keeps its items' slots so (D430).
+pub fn remember_across_reuse<T: Remember>(calc: impl FnOnce() -> T) -> T::Output {
+    let type_id = TypeId::of::<T::Stored>();
+    let (position, existing) = with_runtime(|runtime| runtime.slot_next(type_id, true));
+    if let Some(existing) = existing {
+        return T::output(downcast::<T::Stored>(&existing));
+    }
+    let stored = Rc::new(calc().into_stored());
+    let output = T::output(&stored);
+    slot_set(position, SlotValue::KeptOnReuse(stored), type_name::<T::Stored>());
+    output
 }
 
 /// Like [`remember`], recomputed whenever `keys` is not [`same`](ComposeArg::same) as last time,

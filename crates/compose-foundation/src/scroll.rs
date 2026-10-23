@@ -303,6 +303,10 @@ impl ModifierNode for ScrollNode {
     fn on_detach(&mut self, _context: &mut compose_ui::DetachContext<'_>) {
         self.drag.stop_fling();
     }
+    fn on_reset(&mut self) {
+        self.drag.cancel();
+        self.drag.stop_fling();
+    }
 
     fn as_layout(&mut self) -> Option<&mut dyn LayoutModifierNode> {
         Some(self)

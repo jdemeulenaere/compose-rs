@@ -105,7 +105,7 @@ impl<T: 'static> CompositionLocal<T> {
                     && let Some(slot) = entry.slots.first()
                     && slot.value.value_type_id() == TypeId::of::<Rc<ProviderSlot<T>>>()
                 {
-                    return Some(slot.value.to_any());
+                    return slot.value.to_any();
                 }
                 group = entry.enclosing_provider;
             }

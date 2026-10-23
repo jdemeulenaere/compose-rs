@@ -7,7 +7,7 @@ The composition runtime: a slot table of keyed groups, a composer that generated
 | Concept | Representation |
 |---|---|
 | Composition, scope, state cell | generational handles (an index plus a generation, 64 bits) into per-thread arenas; misuse is a `ComposeError`, never undefined behaviour |
-| Group | an arena tree of keyed groups (restart, replace, movable, node), children in a linked list |
+| Group | an arena tree of keyed groups (restart, replace, movable, reusable, node), children in a linked list |
 | Slot | an `Rc<dyn Any>`, which carries its `TypeId`; remember observers are a second variant. Allocated when a value is first remembered, never in steady state |
 | Restart function | `fn(&dyn Any)` plus the group's kept arguments (an `Rc<dyn Any>` updated in place): see [03](03-composable-macro.md) |
 | Composable lambda | `Callback<A>` = `Rc<dyn Fn(A)>`, compared with `Rc::ptr_eq` |
@@ -24,7 +24,10 @@ impl Composer {
     pub fn start_restart_group(&self, key: u64);
     pub fn start_replace_group(&self, key: u64);
     pub fn start_movable_group(&self, key: u64, data_key: u64);
+    pub fn start_reusable_group(&self, key: u64, data_key: u64);   // ReusableContent's
+    pub fn deactivate_to_end_group(&self, changed: bool);          // ReusableContentHost's
     pub fn start_node<N>(&self, key: u64, factory: impl FnOnce() -> N) -> NodeRef;
+    pub fn start_reusable_node<N>(&self, key: u64, factory: impl FnOnce() -> N) -> NodeRef;
     pub fn end_group(&self);
     pub fn end_restart_group(&self, restart: fn(&dyn Any));
     pub fn skipping(&self) -> bool;
@@ -51,7 +54,7 @@ The pass algorithm:
 
 - **Matching.** Starting a group reuses the first old sibling not yet matched with the same kind, key and data key, scanning forward from the current position, and moves it (and its nodes) to that position if needed. Unvisited old children are removed when their parent group ends. The scan is linear: reversing 1,000 keyed items costs about 1.4 ms; an index of the pending siblings can come later if profiles ask for it.
 - **Node changes.** Insertions and moves are applied to the applier at once, top-down, as the pass reaches them; removed nodes are detached at once and **released** at the end of the pass. Adjacent moves are coalesced, as Compose's `recordMoveNode` does, so removing the first of many keyed items costs one move. The applier is part of composition while the pass runs: it may read state but not write it.
-- **Deferred removals.** The rest of a removal happens at the end of the pass, in a fixed order: released nodes and their handlers first, then the removed groups' values (remember observers get `on_forgotten`, in reverse order of remembering), then new observers' `on_remembered`, then side effects (rule R1 of [05](05-state.md)).
+- **Deferred removals.** The rest of a removal happens at the end of the pass, in a fixed order: deactivated nodes (reusable content, below) and released nodes and their handlers first, then the removed groups' values (remember observers get `on_forgotten`, in reverse order of remembering), then new observers' `on_remembered`, then side effects (rule R1 of [05](05-state.md)).
 - **Restart scopes.** Invalidating a scope marks its ancestor groups dirty. A pass walks from the root: a skipped group descends into its dirty children only, and restarts the invalid scopes it meets with their kept arguments. So invalidated scopes recompose in tree order, a scope inside a removed group never runs, and none runs twice in one pass. A restarted scope matches its existing group, so a child scope that recomposes alone below a skipped parent reuses its group. These are subtle, so a model-checked randomized test (random insertions, removals, keyed and unkeyed moves at every position, value writes, branch toggles and replaced arguments, each pass checked against a reference model) guards them.
 - **Observation.** A read records the reading scope and the scope's *epoch*, bumped when its body is known to run (`skipping()` says no, or `update_kept` reports a change), never just because the group started: a scope that may still skip keeps its reads current. A write invalidates only the scopes whose latest run read the cell: a scope that stopped reading a state isn't recomposed by it, and a skipped scope keeps its reads.
 - **Concurrency.** One pass at a time per thread. A scope invalidated during a pass is recomposed by the next one.
@@ -81,6 +84,16 @@ pub fn key<K: ComposeArg + Hash, R>(key: K, content: impl FnOnce() -> R) -> R;
 So `let count = remember(|| mutable_state_of(0));` gives a `Copy` `MutableState<i32>`, exactly as `val count = remember { mutableStateOf(0) }` gives a state object in Kotlin. The slot owns the state, and leaving the group frees it, after the nodes and their handlers are released.
 
 **Remember observers.** A value remembered with `remember_observer` implements `RememberObserver` (`on_remembered`, `on_forgotten`, `on_abandoned`) and gets Compose's callbacks: exactly one of `on_forgotten` (after `on_remembered`) or `on_abandoned` (its pass never completed). Plain `remember` can't detect the trait without specialization, hence the separate function. `Drop` covers the common case, so most types need nothing.
+
+## Reusable content
+
+As Compose's `ReusableContent(key) { … }` and `ReusableContentHost(active) { … }` (D430), what lazy lists reuse items with:
+
+- **Reusing.** A reusable group (`start_reusable_group(key, data_key)`) matches by its key alone. Met with another data key, its content is *reused* until the group ends, as Compose's `startReusableGroup`: its slots read as empty, so every `remember` computes anew and the value it replaces is forgotten at the end of the pass (an observer's `on_forgotten`, an effect disposed, a `LaunchedEffect` cancelled and launched again); every body runs (`skipping()` says no); groups inside match as usual (a `key(…)` that changed gets new content); a reusable node (`start_reusable_node`, as `ReusableComposeNode`: `Layout`'s) is kept, the applier resetting it first (`Applier::reuse`), and the pass updates it; other nodes (`start_node`, as `ComposeNode`) are replaced. `ReusableContent(key, content)` is that group around `content`; `SaveableStateProvider` is one, as Compose's.
+- **Deactivating.** `ReusableContentHost(active, content)` is a reusable group whose data key is `active`. Inactive, its content isn't run but kept: `deactivate_to_end_group` empties the slots of its remember observers (forgotten at the end of the pass; plain values stay until reused or removed), frees its recompose scopes (a state it read recomposes nothing, and a scope invalid then never runs), deactivates its nodes at the end of the pass (`Applier::deactivate`, before releases: they stay in the tree) and skips the group. Active again, its data key changed: its content is reused as above. Removed while deactivated, it's disposed as any content, its observers not forgotten twice.
+- **Kept across reuse.** `platform::remember_across_reuse(calc)` is a `remember` that reused content finds, as a value of Compose's `ReusableRememberObserver`: what a component keeps for the content it composes (a lazy list's slots, which a list in a reused item reuses too).
+
+The model-checked randomized test covers them: items whose content is reusable, deactivated, activated again and given new reuse keys, under nodes that are reusable and nodes that aren't.
 
 ## Effects
 

@@ -682,6 +682,28 @@ impl ModifierNode for TextFieldNode {
             context.text_measurer.release(paragraph);
         }
     }
+    /// Reused for another field: its editing (cursor, selection, history, composing text,
+    /// gestures, scroll) goes, as a new field's, and the new element's value comes in.
+    fn on_reset(&mut self) {
+        // As a new field's: the text is the value (an edit not taken yet is dropped).
+        if self.text != self.value {
+            self.text = self.value.clone();
+            self.invalidate_paragraph();
+        }
+        self.awaiting_value = false;
+        self.cursor = 0;
+        self.anchor = 0;
+        self.focused = false;
+        self.press = None;
+        self.last_tap = None;
+        self.pending_tap = None;
+        self.scroll = Offset::ZERO;
+        self.preferred_x = None;
+        self.undo.clear();
+        self.redo.clear();
+        self.last_typing = None;
+        self.composition = None;
+    }
 }
 
 impl TextFieldNode {

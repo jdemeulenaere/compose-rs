@@ -175,6 +175,9 @@ pub struct LayoutNode {
     pub(crate) retained: Option<Box<crate::render::RetainedDrawing>>,
     /// The sum of its `z_index` modifiers: siblings are drawn, and hit, in its order.
     pub(crate) z_index: f32,
+    /// Its content is deactivated (a lazy list's item kept for reuse): unplaced, its modifier
+    /// nodes reset, left out of the walks that only concern content in use.
+    pub(crate) deactivated: bool,
 }
 
 impl LayoutNode {
@@ -203,6 +206,7 @@ impl LayoutNode {
             place_order: 0,
             retained: None,
             z_index: 0.0,
+            deactivated: false,
         }
     }
 
@@ -297,6 +301,9 @@ pub struct UiTree {
     pub(crate) kept: Vec<NodeId>,
     /// Frames list the kept boundaries' groups (`UiHost::set_keep_unplaced_groups`).
     pub(crate) keeps_unplaced: bool,
+    /// The nodes reused in the pass under way, whose modifier nodes are reset when it ends
+    /// (`run_resets`); kept for its capacity.
+    pending_resets: Vec<NodeId>,
 }
 
 impl UiTree {
@@ -340,6 +347,7 @@ impl UiTree {
             measured_ahead: Vec::new(),
             kept: Vec::new(),
             keeps_unplaced: false,
+            pending_resets: Vec::new(),
         }
     }
 
@@ -351,29 +359,33 @@ impl UiTree {
         self.window_insets = Some(state);
     }
 
-    /// `node`'s children's indices in drawing order, if it isn't their order (`None` when it
-    /// is, the usual case, which allocates nothing): by `z_index`, then in the order their
-    /// parent placed them, as Compose's.
+    /// `node`'s placed children's indices in drawing order, if it isn't their order (`None` when
+    /// it is, the usual case, which allocates nothing): by `z_index`, then in the order their
+    /// parent placed them, as Compose's. The children not placed, which nothing draws or hits (a
+    /// lazy list's items kept for reuse, or beyond the wanted ones), their placement stale, are
+    /// left out: with `None`, the caller skips them.
     pub(crate) fn placement_order(&self, node: NodeId) -> Option<SmallVec<[u32; 8]>> {
         let children = &self.node(node).children;
-        let order_of = |child: NodeId| {
-            let value = self.node(child);
-            (value.z_index, value.place_order)
+        let order_of = |child: &Measurable| {
+            let value = self.node(child.node);
+            value.placed.then_some((value.z_index, value.place_order))
         };
-        let orders = || children.iter().map(|child| order_of(child.node));
-        let in_order = |a: (f32, u64), b: (f32, u64)| {
-            a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)) != std::cmp::Ordering::Greater
-        };
-        if orders().zip(orders().skip(1)).all(|(a, b)| in_order(a, b)) {
+        let before = |a: (f32, u64), b: (f32, u64)| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1));
+        // In order, the usual case: one look at each child, nothing allocated.
+        let mut last = None;
+        let in_order = children.iter().filter_map(order_of).all(|order| {
+            let in_order = last.is_none_or(|last| before(last, order).is_le());
+            last = Some(order);
+            in_order
+        });
+        if in_order {
             return None;
         }
-        let mut indices: SmallVec<[u32; 8]> = (0..children.len() as u32).collect();
-        indices.sort_by(|a, b| {
-            let (a, b) =
-                (order_of(children[*a as usize].node), order_of(children[*b as usize].node));
-            a.0.total_cmp(&b.0).then(a.1.cmp(&b.1))
-        });
-        Some(indices)
+        let mut placed: SmallVec<[(f32, u64, u32); 8]> = (children.iter().enumerate())
+            .filter_map(|(index, child)| order_of(child).map(|(z, at)| (z, at, index as u32)))
+            .collect();
+        placed.sort_by(|a, b| before((a.0, a.1), (b.0, b.1)));
+        Some(placed.into_iter().map(|(_, _, index)| index).collect())
     }
 
     pub fn root_id(&self) -> NodeId {
@@ -477,6 +489,10 @@ impl UiTree {
 
     /// Marks `node` for measuring, and its ancestors as having a descendant to measure.
     pub fn invalidate_measure(&mut self, node: NodeId) {
+        // Deactivated content (kept for reuse) isn't measured: reused, it is.
+        if self.get(node).is_none_or(|value| value.deactivated) {
+            return;
+        }
         self.invalidate_draw_of(node);
         let Some(value) = self.get_mut(node) else { return };
         value.needs_measure = true;
@@ -503,19 +519,24 @@ impl UiTree {
     /// (what's outside every boundary is drawn each draw). An overlay is drawn at the root,
     /// outside its ancestors.
     pub(crate) fn invalidate_draw_of(&mut self, node: NodeId) {
-        self.needs_draw = true;
         let mut current = Some(node);
         while let Some(id) = current {
-            let Some(value) = self.get_mut(id) else { return };
+            let Some(value) = self.get_mut(id) else { break };
             if let Some(retained) = &mut value.retained {
                 retained.dirty = true;
-                return;
+                // A boundary nothing places (a lazy list's item prefetched or kept for reuse)
+                // is drawn when a frame places it: nothing to draw now (D435).
+                if !value.placed {
+                    return;
+                }
+                break;
             }
             if value.overlay {
-                return;
+                break;
             }
             current = value.parent;
         }
+        self.needs_draw = true;
     }
 
     /// Layer `layer` of `node` moved: draws again what draws the move, its parent for its
@@ -547,9 +568,11 @@ impl UiTree {
         observer.drain_invalidated(|key| {
             let (node, observation) = observation_of(key);
             match observation {
-                Observation::Measure if self.get(node).is_some() => self.invalidate_measure(node),
-                Observation::Measure => {}
-                Observation::Draw => self.invalidate_draw_of(node),
+                Observation::Measure => self.invalidate_measure(node),
+                Observation::Draw if self.get(node).is_some_and(|value| !value.deactivated) => {
+                    self.invalidate_draw_of(node)
+                }
+                Observation::Draw => {}
                 Observation::Layer => {
                     // Its layer's properties only: its content and version stay.
                     self.needs_draw = true;
@@ -866,6 +889,64 @@ impl UiTree {
         crate::unit::Rect::from_offset_size(origin, size.into())
     }
 
+    // ---- Reusing ----------------------------------------------------------------------------
+
+    /// Resets what the tree keeps of `node`'s old content, as Compose's `resetModifierState` on a
+    /// node reused or deactivated: the focus, if it's here, goes; pointer captures of its
+    /// modifier nodes lapse; it's drawn again. Its modifier nodes are kept, with their caches,
+    /// for the new content's elements to update, as Compose's chain diff does (D431); each is
+    /// reset (`ModifierNode::on_reset`) by `run_resets`, after the pass.
+    fn reset_modifier_state(&mut self, node: NodeId) {
+        let value = self.node_mut(node);
+        if let Some(retained) = &mut value.retained {
+            retained.dirty = true;
+            retained.layer_dirty = true;
+        }
+        if value.chain.is_empty() {
+            return;
+        }
+        value.chain_version = value.chain_version.wrapping_add(1);
+        if self.focused() == Some(node) {
+            self.focus = None;
+            self.focus_listeners_dirty = true;
+        }
+        if self.text_selection.as_ref().is_some_and(|selection| selection.container() == node) {
+            self.text_selection = None;
+        }
+    }
+
+    /// Resets the modifier nodes of `node` (`ModifierNode::on_reset`), after the pass that reused
+    /// or deactivated it: outside composition, so a reset may write state, as Compose applies a
+    /// node's `onReuse` with the pass's changes.
+    fn run_resets(&mut self, node: NodeId) {
+        let Some(value) = self.get_mut(node) else { return };
+        for entry in &mut value.chain {
+            entry.on_reset();
+        }
+    }
+
+    /// The focus requesters on `node` (`Modifier.focus_requester`), detached while it's
+    /// deactivated: a requester of content kept for reuse focuses nothing, as Compose's
+    /// detached nodes. Attached again when it's reused.
+    fn set_requesters_attached(&mut self, node: NodeId, attached: bool) {
+        let requests = self.focus_requests.clone();
+        let value = self.node_mut(node);
+        if value.all_capabilities & capability::CUSTOM == 0 {
+            return;
+        }
+        for entry in &mut value.chain {
+            if let Some(requester) =
+                entry.downcast_mut::<crate::focus_requester::FocusRequesterNode>()
+            {
+                if attached {
+                    requester.attach(&requests, node);
+                } else {
+                    requester.detach();
+                }
+            }
+        }
+    }
+
     // ---- Releasing --------------------------------------------------------------------------
 
     fn alloc(&mut self, node: LayoutNode) -> NodeId {
@@ -952,6 +1033,90 @@ impl Applier for UiTree {
             children[from..destination + count].rotate_left(count);
         }
         self.invalidate_measure(parent);
+    }
+
+    /// Content reused in `node`'s place keeps it, as Compose's `LayoutNode.onReuse`: what the
+    /// tree keeps of its old content is reset now (`reset_modifier_state`) and its modifier nodes
+    /// after the pass (`on_end_changes`), unless that was done when it was deactivated; then
+    /// composition gives it its new modifier and policy, and it's measured again.
+    fn reuse(&mut self, node: NodeRef) {
+        let node = NodeId::from_ref(node);
+        let Some(value) = self.get_mut(node) else { return };
+        if std::mem::take(&mut value.deactivated) {
+            self.set_requesters_attached(node, true);
+            // Its parent has a child to measure again (an ordinary layout's, or a list's).
+            if let Some(parent) = self.parent_of(node) {
+                self.invalidate_measure(parent);
+            }
+        } else {
+            self.reset_modifier_state(node);
+        }
+        // Reset after the pass, after the new content's elements updated it, also when it was
+        // reset as it was deactivated (with the old content's): a node showing its value (a
+        // switch) shows the new one at once (D435).
+        self.pending_resets.push(node);
+        // Measured again, its ancestors marked up to the first already marked (the content
+        // reused around it marked them).
+        self.invalidate_draw_of(node);
+        let value = self.node_mut(node);
+        value.needs_measure = true;
+        let mut parent = value.parent;
+        while let Some(id) = parent {
+            let value = self.node_mut(id);
+            if value.subtree_needs_measure {
+                break;
+            }
+            value.subtree_needs_measure = true;
+            parent = value.parent;
+        }
+    }
+
+    /// `node`'s content was deactivated (a lazy list's item kept for reuse, an inactive
+    /// `ReusableContentHost`), as Compose's `LayoutNode.onDeactivate`, at the end of the pass: it
+    /// stays in the tree, but its parent no longer measures it (`measurables` leave it out), so
+    /// it isn't placed, drawn, hit, focused or in the semantics, in any layout; nothing measures
+    /// it, whatever it read; its modifier nodes are reset and its focus requesters detached,
+    /// until content reuses it.
+    fn deactivate(&mut self, node: NodeRef) {
+        let node = NodeId::from_ref(node);
+        let Some(value) = self.get_mut(node) else { return };
+        if std::mem::replace(&mut value.deactivated, true) {
+            return;
+        }
+        value.placed = false;
+        value.needs_measure = false;
+        value.subtree_needs_measure = false;
+        // The outermost deactivated node: its parent lays out and draws without it.
+        if let Some(parent) = value.parent
+            && self.get(parent).is_some_and(|parent| !parent.deactivated)
+        {
+            self.invalidate_measure(parent);
+        }
+        self.reset_modifier_state(node);
+        self.run_resets(node);
+        self.set_requesters_attached(node, false);
+        self.measured_ahead.retain(|ahead| *ahead != node);
+        self.kept.retain(|kept| *kept != node);
+        if self.bring_into_view_after_layout == Some(node) {
+            self.bring_into_view_after_layout = None;
+        }
+    }
+
+    /// A pass that panicked before its end left no reset to run.
+    fn on_begin_changes(&mut self) {
+        self.pending_resets.clear();
+    }
+
+    /// The modifier nodes of the nodes reused in the pass are reset, now that it's over.
+    fn on_end_changes(&mut self) {
+        let mut pending = std::mem::take(&mut self.pending_resets);
+        for node in pending.drain(..) {
+            // Deactivated since (reset then), or released.
+            if self.get(node).is_some_and(|value| !value.deactivated) {
+                self.run_resets(node);
+            }
+        }
+        self.pending_resets = pending;
     }
 
     fn release(&mut self, node: NodeRef) {

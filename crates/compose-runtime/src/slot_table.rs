@@ -27,6 +27,10 @@ pub(crate) enum GroupKind {
     Replace,
     /// A keyed group (`key(…)`): matched by its data key too.
     Movable,
+    /// A reusable group (`ReusableContent`, `ReusableContentHost`): matched by its key alone,
+    /// as Compose's; a match with another data key reuses the group's content (its slots read
+    /// as empty, its nodes are kept and updated).
+    Reusable,
     /// A group that emits one node.
     Node,
     /// A free entry of the arena.
@@ -37,21 +41,36 @@ pub(crate) enum GroupKind {
 /// or a mismatched group recreates a slot instead of misreading it.
 pub(crate) enum SlotValue {
     Plain(Rc<dyn Any>),
+    /// A value content being reused finds (`remember_across_reuse`), as a value of Compose's
+    /// `ReusableRememberObserver`: a lazy list's slots, kept by the list in an item reused.
+    KeptOnReuse(Rc<dyn Any>),
     Observer(Rc<dyn ErasedObserver>),
+    /// A remember observer's slot after its content was deactivated (`deactivate_to_end_group`),
+    /// as Compose's `Composer.Empty`: it was forgotten, and nothing reads it.
+    Empty,
 }
+
+/// The type an empty slot holds, which no value has.
+struct EmptySlot;
 
 impl SlotValue {
     pub fn value_type_id(&self) -> TypeId {
         match self {
-            SlotValue::Plain(value) => Any::type_id(&**value),
+            SlotValue::Plain(value) | SlotValue::KeptOnReuse(value) => Any::type_id(&**value),
             SlotValue::Observer(observer) => Any::type_id(observer.as_any()),
+            SlotValue::Empty => TypeId::of::<EmptySlot>(),
         }
     }
 
-    pub fn to_any(&self) -> Rc<dyn Any> {
+    /// The value, for a reader that checked its type ([`value_type_id`]): `None` for an empty
+    /// slot.
+    ///
+    /// [`value_type_id`]: SlotValue::value_type_id
+    pub fn to_any(&self) -> Option<Rc<dyn Any>> {
         match self {
-            SlotValue::Plain(value) => value.clone(),
-            SlotValue::Observer(observer) => observer.clone().into_any(),
+            SlotValue::Plain(value) | SlotValue::KeptOnReuse(value) => Some(value.clone()),
+            SlotValue::Observer(observer) => Some(observer.clone().into_any()),
+            SlotValue::Empty => None,
         }
     }
 }
@@ -70,6 +89,12 @@ pub(crate) struct Group {
     /// A composition local provider's group (`CompositionLocalProvider`), marked as it starts,
     /// before its content allocates any group.
     pub is_provider: bool,
+    /// A node group emitted by `start_reusable_node` (Compose's `ReusableComposeNode`): content
+    /// reused keeps it and updates it; another node group is replaced.
+    pub reusable: bool,
+    /// A reusable group whose content is deactivated (`ReusableContentHost` inactive): its
+    /// groups and nodes are kept, its remember observers forgotten, its scopes freed.
+    pub deactivated: bool,
     /// The nearest provider's group above this one (`NONE` if there is none), set when the
     /// group is allocated: a group's ancestors never change (keyed groups move among their
     /// siblings only). Reading a local walks from provider to provider through it, past the
@@ -116,6 +141,8 @@ impl SlotTable {
             group.kind = kind;
             group.dirty = false;
             group.is_provider = false;
+            group.reusable = false;
+            group.deactivated = false;
             group.enclosing_provider = enclosing_provider;
             group.parent = parent;
             group.first_child = NONE;
@@ -134,6 +161,8 @@ impl SlotTable {
                 kind,
                 dirty: false,
                 is_provider: false,
+                reusable: false,
+                deactivated: false,
                 enclosing_provider,
                 parent,
                 first_child: NONE,

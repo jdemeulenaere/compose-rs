@@ -926,6 +926,14 @@ pub trait ModifierNode: Any {
     }
     /// Called when the node leaves the tree, before it's dropped: release resources here.
     fn on_detach(&mut self, _context: &mut DetachContext<'_>) {}
+    /// Its layout node is deactivated or reused for other content (a lazy list's item that
+    /// left, reused by one that came), as Compose's `Modifier.Node.onReset`: forget what the old
+    /// content's interactions left (a press, a hover, a gesture, a focus, an animation under
+    /// way). The node stays, and the new content's element updates it. Called after the pass
+    /// that reused or deactivated it, outside composition (after the new element's `update`,
+    /// so a node snapping to its value snaps to the new one): it may write state, but not reach
+    /// the tree, as `on_detach`.
+    fn on_reset(&mut self) {}
     /// Asked to show `rect` (in this node's coordinates; `viewport` is its size), as Compose's
     /// `BringIntoViewResponder`: a scrolling node scrolls so it is in view, and returns where it
     /// will then be, for the scrolling ancestors. `None`: not a scrolling node.

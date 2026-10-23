@@ -112,9 +112,9 @@ impl UiTree {
             }
         }
         let content = local - *origins.last().expect("a layer");
-        let count = value.children.len();
         // The last placed (drawn on top) first.
         let order = self.placement_order(node);
+        let count = order.as_ref().map_or(value.children.len(), |order| order.len());
         for position in (0..count).rev() {
             let index = order.as_ref().map_or(position, |order| order[position] as usize);
             let child = self.node(node).children[index].node;

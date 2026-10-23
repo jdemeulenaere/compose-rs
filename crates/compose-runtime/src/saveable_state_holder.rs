@@ -23,8 +23,8 @@ use crate::saveable::{
 };
 use crate::state::{ObjectHandle, Owned};
 
-/// The group key of [`SaveableStateHolder::SaveableStateProvider`]'s groups, whose data key is
-/// the hash of the provider's key. `current_composite_key_hash` stops there (D290).
+/// The group key of [`SaveableStateHolder::SaveableStateProvider`]'s reusable groups, whose data
+/// key is the hash of the provider's key. `current_composite_key_hash` stops there (D290).
 pub(crate) const PROVIDER_GROUP: u64 = key_of("compose_runtime::SaveableStateProvider");
 
 /// The group of a provider's [`ProviderEntry`], after its content's.
@@ -102,13 +102,16 @@ impl SaveableStateHolder {
     /// back. Content with one key is composed at one place at a time (debug builds panic
     /// otherwise, as Compose throws). Content that leaves one place and comes in at another in
     /// one pass starts without its state (the new place composes before the old one saves), as
-    /// in Compose. Like `key(…)`, it's a keyed group: its content's state follows the key.
+    /// in Compose. As Compose's, it's a `ReusableContent(key)`: content with another key
+    /// composed in its place reuses its groups and nodes, its remembered values computed anew
+    /// (D430); matched by position, so providers in a loop need a `key(…)` each to move with
+    /// their keys.
     #[allow(non_snake_case)]
     #[track_caller]
     pub fn SaveableStateProvider(&self, key: impl Hash, content: impl FnOnce()) {
         let key = hash_key(&key);
         let composer = crate::composer::current();
-        composer.start_movable_group(PROVIDER_GROUP, key);
+        composer.start_reusable_group(PROVIDER_GROUP, key);
         let holder = self.object.get();
         // The registry the content's values register with, given back what was kept under
         // this key.

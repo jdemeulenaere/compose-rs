@@ -155,8 +155,8 @@ impl UiTree {
                     layer += 1;
                 }
             }
-            let count = self.node(node).children.len();
             let order = self.placement_order(node);
+            let count = order.as_ref().map_or(self.node(node).children.len(), |order| order.len());
             // Pushed last first, so the first placed comes off the stack first.
             for position in (0..count).rev() {
                 let index = order.as_ref().map_or(position, |order| order[position] as usize);
@@ -447,6 +447,12 @@ impl ModifierNodeElement for SelectionContainerElement {
 }
 
 impl ModifierNode for SelectionContainerNode {
+    /// Reused: no press selecting, no focus, no click run (the tree drops its selection).
+    fn on_reset(&mut self) {
+        self.dragging = false;
+        self.focused = false;
+        self.last_press = None;
+    }
     fn as_pointer_input(&mut self) -> Option<&mut dyn PointerInputModifierNode> {
         Some(self)
     }
@@ -577,5 +583,12 @@ impl Modifier {
     /// Leaves this node's texts out of a selection container, as `DisableSelection`.
     pub fn disable_selection(self) -> Modifier {
         self.then_custom(DisableSelectionElement)
+    }
+}
+
+impl TextSelection {
+    /// The container it's in.
+    pub(crate) fn container(&self) -> NodeId {
+        self.container
     }
 }

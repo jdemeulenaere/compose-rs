@@ -158,6 +158,13 @@ impl FocusRequesterNode {
         self.requester.attach(&owner.0, owner.1);
         self.owner = Some(owner);
     }
+
+    /// Detaches its requester, which then focuses nothing (its node deactivated, or gone).
+    pub(crate) fn detach(&mut self) {
+        if let Some((requests, at)) = self.owner.take() {
+            self.requester.detach(&requests, at);
+        }
+    }
 }
 
 impl ModifierNodeElement for FocusRequesterElement {
@@ -185,9 +192,7 @@ impl ModifierNodeElement for FocusRequesterElement {
 
 impl ModifierNode for FocusRequesterNode {
     fn on_detach(&mut self, _context: &mut crate::modifier::DetachContext<'_>) {
-        if let Some((requests, at)) = self.owner.take() {
-            self.requester.detach(&requests, at);
-        }
+        self.detach();
     }
 }
 

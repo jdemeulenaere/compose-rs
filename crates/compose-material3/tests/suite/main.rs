@@ -21,6 +21,8 @@ mod review_menus;
 mod review_menus2;
 mod review_nested_scroll;
 mod review_retained;
+mod review_reuse_d434;
+mod review_reuse_material;
 mod review_round11;
 mod review_round12;
 mod review_round15;
