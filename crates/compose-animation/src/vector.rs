@@ -13,11 +13,20 @@ pub trait Animate: Clone + PartialEq + 'static {
     fn visibility_threshold() -> f32 {
         crate::spec::Spring::DEFAULT_DISPLACEMENT_THRESHOLD
     }
+    /// Whether `self` and `other` are the same value, as Kotlin's `equals` of the boxed value
+    /// (NaN equals NaN): what writing an animated value compares. By default, their vectors'
+    /// components; a type whose conversion is dear compares itself (a color, D420).
+    fn same_value(&self, other: &Self) -> bool {
+        self.to_vector()
+            .iter()
+            .zip(other.to_vector())
+            .all(|(&a, b)| a == b || (a.is_nan() && b.is_nan()))
+    }
 }
 
 /// Whether `a` and `b` are the same value, as Kotlin compares boxed floats: NaN equals NaN.
 pub(crate) fn same_value<T: Animate>(a: &T, b: &T) -> bool {
-    a.to_vector().iter().zip(b.to_vector()).all(|(&a, b)| a == b || (a.is_nan() && b.is_nan()))
+    a.same_value(b)
 }
 
 /// The policy of an animated value's state: writing the same value (NaN over NaN included)
@@ -104,6 +113,11 @@ impl Animate for Size {
 /// Colors animate in the Oklab color space, with alpha, as Compose's `Color.VectorConverter`:
 /// perceptually even, without the gray midpoint of an sRGB blend.
 impl Animate for Color {
+    /// As `Color.equals`: the packed colors (no conversion to Oklab).
+    fn same_value(&self, other: &Color) -> bool {
+        self == other
+    }
+
     fn to_vector(&self) -> [f32; 4] {
         let linear = |channel: u8| {
             let value = f32::from(channel) / 255.0;

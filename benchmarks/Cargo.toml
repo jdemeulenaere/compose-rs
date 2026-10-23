@@ -25,3 +25,7 @@ harness = false
 [[bench]]
 name = "ui"
 harness = false
+
+[[bench]]
+name = "animation"
+harness = false

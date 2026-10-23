@@ -6,6 +6,7 @@ extern crate compose_runtime as compose;
 mod animation;
 mod content;
 mod crossfade;
+mod infinite;
 mod review_animation;
 mod review_retained;
 mod review_round10;

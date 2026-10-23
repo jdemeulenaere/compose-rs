@@ -275,25 +275,54 @@ impl AnimationSpec {
         velocity: [f32; N],
         threshold: f32,
     ) -> Frame<N> {
+        self.frame_with(play_nanos, start, target, velocity, threshold, true)
+    }
+
+    /// The same, without the velocities of duration-based animations (zero): what a value
+    /// that never hands its velocity on needs, as Compose's `getValueFromNanos` (an infinite
+    /// transition's, D420). The values are the same.
+    pub(crate) fn value_at<const N: usize>(
+        &self,
+        play_nanos: u64,
+        start: [f32; N],
+        target: [f32; N],
+        threshold: f32,
+    ) -> Frame<N> {
+        self.frame_with(play_nanos, start, target, [0.0; N], threshold, false)
+    }
+
+    fn frame_with<const N: usize>(
+        &self,
+        play_nanos: u64,
+        start: [f32; N],
+        target: [f32; N],
+        velocity: [f32; N],
+        threshold: f32,
+        with_velocities: bool,
+    ) -> Frame<N> {
         match self {
             AnimationSpec::Tween(tween) => {
                 let fraction = tween.fraction(play_nanos);
-                let earlier = tween.fraction(play_nanos.saturating_sub(1_000_000));
                 let values = lerp(start, target, fraction);
-                let previous = lerp(start, target, earlier);
                 let mut velocities = [0.0; N];
-                for index in 0..N {
-                    velocities[index] = (values[index] - previous[index]) * 1000.0;
+                if with_velocities {
+                    let earlier = tween.fraction(play_nanos.saturating_sub(1_000_000));
+                    let previous = lerp(start, target, earlier);
+                    for index in 0..N {
+                        velocities[index] = (values[index] - previous[index]) * 1000.0;
+                    }
                 }
                 Frame { values, velocities, finished: play_nanos >= tween.total_nanos() }
             }
             AnimationSpec::Keyframes(keyframes) => {
                 let values = keyframes.value_at(play_nanos, start, target);
-                let previous =
-                    keyframes.value_at(play_nanos.saturating_sub(1_000_000), start, target);
                 let mut velocities = [0.0; N];
-                for index in 0..N {
-                    velocities[index] = (values[index] - previous[index]) * 1000.0;
+                if with_velocities {
+                    let previous =
+                        keyframes.value_at(play_nanos.saturating_sub(1_000_000), start, target);
+                    for index in 0..N {
+                        velocities[index] = (values[index] - previous[index]) * 1000.0;
+                    }
                 }
                 // Ended, at the target (whatever a keyframe at the end says), as Compose's.
                 if play_nanos >= keyframes.total_nanos() {
@@ -344,8 +373,14 @@ impl AnimationSpec {
                 if finished {
                     return Frame { values: target, velocities: [0.0; N], finished };
                 }
-                let frame = AnimationSpec::from(repeat.animation)
-                    .frame(within, start, target, velocity, threshold);
+                let frame = AnimationSpec::from(repeat.animation).frame_with(
+                    within,
+                    start,
+                    target,
+                    velocity,
+                    threshold,
+                    with_velocities,
+                );
                 Frame { finished, ..frame }
             }
         }
