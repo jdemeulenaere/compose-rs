@@ -49,9 +49,9 @@ import android.view.inputmethod.InputMethodManager
  * window need ids of their own). Back goes to the content's `BackHandler`s while one is enabled.
  * The app receives properties ([setProp]) and sends events ([setOnEventListener]).
  *
- * While it shows, on API 33+, the RenderThread is in a performance hint session of compose-rs's
- * own, so Android boosts it when its own frames run long, not only after long main-thread
- * frames ([isPerformanceHintEnabled]).
+ * While it shows, on API 33+, the RenderThread and the main thread are in a performance hint
+ * session of compose-rs's own, so Android boosts them by the frames' own work, not only after
+ * long main-thread frames ([isPerformanceHintEnabled]).
  */
 class ComposeRsView(context: Context, private val app: String) : View(context) {
     private val measurer =
@@ -67,9 +67,10 @@ class ComposeRsView(context: Context, private val app: String) : View(context) {
     private val inputMethods = context.getSystemService(InputMethodManager::class.java)
 
     /**
-     * Whether, while this view shows (API 33+), the RenderThread is in compose-rs's own
-     * performance hint session, which reports the RenderThread's CPU time over each frame
-     * against a target, so Android boosts it when its frames run long (on by default; D390).
+     * Whether, while this view shows (API 33+), the RenderThread and the main thread are in
+     * compose-rs's own performance hint session, which reports both threads' CPU time over each
+     * frame against a target, so Android boosts them by the frames' work (on by default; D390,
+     * D440, D500).
      * Android boosts a thread through HWUI's own session too, but only after long frames
      * counting the main thread's, which compose-rs's are rarely: without it, the RenderThread
      * mostly runs on slower cores at lower frequencies, and its frames take longer for the same

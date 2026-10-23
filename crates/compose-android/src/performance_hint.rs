@@ -1,31 +1,39 @@
 //! compose-rs's own performance hint session for the RenderThread and the main thread
-//! (docs/07-platforms.md, "Android"; D390, D440).
+//! (docs/07-platforms.md, "Android"; D390, D440, D500).
 //!
 //! Android boosts a thread (raises its `uclamp.min`, so the scheduler runs it on faster cores at
 //! higher frequencies) when a performance hint session holding it reports work running long
 //! against its target (ADPF). HWUI runs one session per window for the main thread and the
 //! RenderThread, reporting each frame's duration from the main thread's start to the
-//! RenderThread's end against its deadline (about 1.4 vsync intervals): an app whose main-thread
-//! frames are short is rarely boosted, and its RenderThread's frames then take longer for the
-//! same work (docs/14, "The scroll's RenderThread"). So a view showing compose-rs keeps a
-//! session of its own, reporting the RenderThread's CPU time over each frame against
-//! [`TARGET_NANOS`]. The power HAL applies the highest boost of a thread's sessions.
+//! RenderThread's end against 70 % of its deadline (about 1.4 vsync intervals): an app whose
+//! main-thread frames are short is rarely boosted, and its RenderThread's frames then take
+//! longer for the same work (docs/14, "The scroll's RenderThread"). So a view showing compose-rs
+//! keeps a session of its own for the RenderThread and the main thread, reporting both threads'
+//! CPU time over each frame against [`TARGET_NANOS`]. The power HAL applies the highest boost
+//! of a thread's sessions.
 //!
 //! The session holds the main thread too (D440): with the RenderThread boosted, its part of
 //! each frame is shorter, so HWUI's session, which boosted both threads, hardly boosts any more,
 //! and the main thread would be left on the little cores (on the stress list, 79 % of its time,
-//! its median frame 1.54 ms against 1.07 ms in the session). Its reports stay the RenderThread's:
-//! with reports well under the target, the power HAL's vote is a random walk set by how much
-//! one report exceeds the one before, not by the margin, so reporting both threads' time only
-//! moved the vote (docs/14, "The main thread in the session").
+//! its median frame 1.54 ms against 1.07 ms in the session).
 //!
-//! What is reported: the RenderThread's CPU time since the last compose-rs frame, read when the
-//! next one starts (one `clock_gettime` of the thread's CPU clock). While compose-rs makes a
-//! frame every vsync, that is the work the RenderThread did for the frame before, which ends
-//! well before the next vsync (with whatever else it drew in between: other views' frames in
-//! the same window, its own animations). After a gap of more than [`MOST_FRAME_GAP`], the time
-//! since isn't one frame's: it starts a new count, unreported. No listener, no other thread,
-//! and no call into Java: `frame` reads it.
+//! Why both threads' time, against one 120 Hz interval (D500): under the target, the power
+//! HAL's controller adds to the vote what a report exceeds the one before by, and takes off a
+//! share of the margin under the target, so the vote settles where the reports' mean is about
+//! 0.4 of the target for frames varying as ours do. Against 6.5 ms, the RenderThread's time
+//! alone settled near 2.6 ms whatever the screen: the less work a screen gave it, the less it
+//! was boosted, and the slower that work ran (docs/14, "The session's target"). Both threads'
+//! time is the frame's work, as HWUI reports it, and against 8.33 ms that level is where the
+//! scrolls' frames are: the vote follows the load, low in a light animation, high on a list.
+//!
+//! What is reported: the RenderThread's and the main thread's CPU time since the last
+//! compose-rs frame, read when the next one starts (one `clock_gettime` of each thread's CPU
+//! clock). While compose-rs makes a frame every vsync, that is the RenderThread's work for the
+//! frame before, which ends well before the next vsync (with whatever else it drew in between:
+//! other views' frames in the same window, its own animations), and the main thread's since the
+//! last frame started (the frame's, and the idle-time work after it: prefetch). After a gap of
+//! more than [`MOST_FRAME_GAP`], the time since isn't one frame's: it starts a new count,
+//! unreported. No listener, no other thread, and no call into Java: `frame` reads it.
 //!
 //! The session is the process's (the RenderThread is): open while a view with hints enabled is
 //! shown, created at the second frame after that (not on the first frame's path, the window's
@@ -38,9 +46,9 @@
 
 use std::time::{Duration, Instant};
 
-/// What a frame's RenderThread work is reported against: a frame taking more CPU time than
-/// this raises the boost; frames under it lower it (D390).
-pub(crate) const TARGET_NANOS: i64 = 6_500_000;
+/// What a frame's work (both threads' CPU time) is reported against: one 120 Hz vsync interval
+/// (D500; D390's 6.5 ms was for the RenderThread's alone).
+pub(crate) const TARGET_NANOS: i64 = 8_333_333;
 
 /// Frames of other views within this time of a reported one are the same frame (two views
 /// showing compose-rs in one window run their frames back to back, the second after the first
@@ -83,6 +91,10 @@ struct Open<S> {
     tid: i32,
     /// The RenderThread's CPU time at the last frame.
     cpu_nanos: i64,
+    /// The main thread (the one making the frames).
+    main_tid: i32,
+    /// The main thread's CPU time at the last frame.
+    main_cpu_nanos: i64,
     reports: u32,
 }
 
@@ -140,9 +152,9 @@ impl<P: HintPlatform> RenderThreadHint<P> {
         self.open.is_some()
     }
 
-    /// A shown view's frame starts at `now`, on the main thread: the RenderThread's work since
-    /// the last frame is reported (the session made first, if none is open: not at the first
-    /// frame since the views showed).
+    /// A shown view's frame starts at `now`, on the main thread: both threads' work since the
+    /// last frame is reported (the session made first, if none is open: not at the first frame
+    /// since the views showed).
     pub(crate) fn frame(&mut self, now: Instant) {
         if self.shown == 0 || self.gave_up {
             return;
@@ -159,12 +171,16 @@ impl<P: HintPlatform> RenderThreadHint<P> {
             self.open_session();
             return;
         };
-        let Some(cpu_nanos) = self.platform.thread_cpu_nanos(open.tid) else {
+        let (Some(cpu_nanos), Some(main_cpu_nanos)) = (
+            self.platform.thread_cpu_nanos(open.tid),
+            self.platform.thread_cpu_nanos(open.main_tid),
+        ) else {
             self.reopen();
             return;
         };
-        let work = cpu_nanos - open.cpu_nanos;
+        let work = cpu_nanos - open.cpu_nanos + main_cpu_nanos - open.main_cpu_nanos;
         open.cpu_nanos = cpu_nanos;
+        open.main_cpu_nanos = main_cpu_nanos;
         if since_last > MOST_FRAME_GAP {
             return;
         }
@@ -174,7 +190,7 @@ impl<P: HintPlatform> RenderThreadHint<P> {
             self.reopen();
             return;
         }
-        // Nothing ran (no frame drawn): a duration of 0 is invalid, and says nothing.
+        // Nothing ran: a duration of 0 is invalid, and says nothing.
         if work > 0 && !self.platform.report(&open.session, work) {
             self.reopen();
         }
@@ -187,9 +203,10 @@ impl<P: HintPlatform> RenderThreadHint<P> {
         let opened = self.render_thread.and_then(|tid| {
             let cpu_nanos = self.platform.thread_cpu_nanos(tid)?;
             // The main thread: the one making the frames.
-            let threads = [tid, self.platform.current_thread()];
-            let session = self.platform.create_session(&threads, self.target_nanos)?;
-            Some(Open { session, tid, cpu_nanos, reports: 0 })
+            let main_tid = self.platform.current_thread();
+            let main_cpu_nanos = self.platform.thread_cpu_nanos(main_tid)?;
+            let session = self.platform.create_session(&[tid, main_tid], self.target_nanos)?;
+            Some(Open { session, tid, cpu_nanos, main_tid, main_cpu_nanos, reports: 0 })
         });
         match opened {
             Some(open) => {
@@ -471,10 +488,11 @@ mod tests {
         let fake = Fake::default();
         fake.0.borrow_mut().render_thread = Some(RENDER);
         fake.0.borrow_mut().cpu.insert(RENDER, 1_000 * MS);
+        fake.0.borrow_mut().cpu.insert(MAIN, 500 * MS);
         fake
     }
 
-    /// The RenderThread runs `nanos` more.
+    /// Thread `tid` runs `nanos` more.
     fn runs(fake: &Fake, tid: i32, nanos: i64) {
         *fake.0.borrow_mut().cpu.get_mut(&tid).unwrap() += nanos;
     }
@@ -517,33 +535,75 @@ mod tests {
     }
 
     #[test]
-    fn the_main_threads_own_work_isnt_reported() {
+    fn the_target_is_one_120_hz_interval() {
+        assert_eq!(TARGET_NANOS, 8_333_333);
+    }
+
+    #[test]
+    fn each_frame_reports_both_threads_cpu_time_since_the_last() {
         let fake = platform();
-        fake.0.borrow_mut().cpu.insert(MAIN, 500 * MS);
+        let mut hint = RenderThreadHint::new(fake.clone(), TARGET_NANOS);
+        let next = shown_and_opened(&mut hint, Instant::now());
+        runs(&fake, RENDER, 3 * MS);
+        runs(&fake, MAIN, 2 * MS);
+        hint.frame(next);
+        runs(&fake, RENDER, 2 * MS);
+        runs(&fake, MAIN, MS / 2);
+        hint.frame(next + INTERVAL);
+        assert_eq!(fake.0.borrow().reports, vec![(1, 5 * MS), (1, 2 * MS + MS / 2)]);
+    }
+
+    #[test]
+    fn the_main_threads_work_alone_is_reported() {
+        // Between two frames, the RenderThread drew nothing; the main thread ran the frame and
+        // idle-time work (prefetch).
+        let fake = platform();
         let mut hint = RenderThreadHint::new(fake.clone(), TARGET_NANOS);
         let next = shown_and_opened(&mut hint, Instant::now());
         runs(&fake, MAIN, 4 * MS);
-        runs(&fake, RENDER, 3 * MS);
         hint.frame(next);
-        runs(&fake, MAIN, 4 * MS);
-        hint.frame(next + INTERVAL);
+        assert_eq!(fake.0.borrow().reports, vec![(1, 4 * MS)]);
+    }
+
+    #[test]
+    fn the_main_threads_cpu_time_counts_from_the_sessions_creation() {
+        let fake = platform();
+        let mut hint = RenderThreadHint::new(fake.clone(), TARGET_NANOS);
+        hint.show();
+        let start = Instant::now();
+        hint.frame(start);
+        // Before the session: not reported.
+        runs(&fake, MAIN, 30 * MS);
+        hint.frame(start + INTERVAL);
+        runs(&fake, MAIN, MS);
+        runs(&fake, RENDER, 2 * MS);
+        hint.frame(start + 2 * INTERVAL);
         assert_eq!(fake.0.borrow().reports, vec![(1, 3 * MS)]);
     }
 
     #[test]
-    fn each_frame_reports_the_render_threads_cpu_time_since_the_last() {
+    fn a_main_thread_clock_failing_makes_the_session_again() {
         let fake = platform();
         let mut hint = RenderThreadHint::new(fake.clone(), TARGET_NANOS);
         let next = shown_and_opened(&mut hint, Instant::now());
+        let main_cpu = fake.0.borrow_mut().cpu.remove(&MAIN).unwrap();
         runs(&fake, RENDER, 3 * MS);
         hint.frame(next);
-        runs(&fake, RENDER, 2 * MS);
+        assert!(fake.0.borrow().reports.is_empty());
+        assert_eq!(fake.0.borrow().closed, vec![1]);
+        // While it fails, no session can be made: given up until shown again.
         hint.frame(next + INTERVAL);
-        assert_eq!(fake.0.borrow().reports, vec![(1, 3 * MS), (1, 2 * MS)]);
+        assert!(!hint.is_open());
+        fake.0.borrow_mut().cpu.insert(MAIN, main_cpu);
+        hint.frame(next + 2 * INTERVAL);
+        assert!(!hint.is_open());
+        hint.hide();
+        shown_and_opened(&mut hint, next + 3 * INTERVAL);
+        assert!(hint.is_open());
     }
 
     #[test]
-    fn a_frame_without_render_thread_work_reports_nothing() {
+    fn a_frame_without_work_reports_nothing() {
         let fake = platform();
         let mut hint = RenderThreadHint::new(fake.clone(), TARGET_NANOS);
         let next = shown_and_opened(&mut hint, Instant::now());
@@ -556,8 +616,10 @@ mod tests {
         let fake = platform();
         let mut hint = RenderThreadHint::new(fake.clone(), TARGET_NANOS);
         let next = shown_and_opened(&mut hint, Instant::now());
-        // Between the frames, the RenderThread drew other content (or several frames).
+        // Between the frames, the RenderThread drew other content (or several frames), and the
+        // main thread ran other work.
         runs(&fake, RENDER, 40 * MS);
+        runs(&fake, MAIN, 25 * MS);
         let after_gap = next + Duration::from_millis(500);
         hint.frame(after_gap);
         assert!(fake.0.borrow().reports.is_empty());
