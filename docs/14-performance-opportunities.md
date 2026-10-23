@@ -215,6 +215,22 @@ The animation (no prefetching) is unchanged: main work 198.1 → 198.1 ms, p99 2
 
 The revealing frames lose 0.27 ms (−15 %), most of their excess over the other frames (0.45 → 0.17 ms), more than the 0.15 ms estimated: besides the group's recording, the replay no longer draws the paragraphs' nodes into it, and the Rust frame no longer draws the item. The main thread's p90 falls 4 %, in both batches; the p99, which more and more is the frames that compose or lay out in the frame (a fling back, which prefetching ahead in the other direction didn't reach), and the work move within the runs' spread. The late `doFrame`s are no more often behind compose-rs's idle work: on both sides each follows a `Choreographer#onVsync` that itself ran 2 to 4 ms after the vsync (the thread woke late). The full benchmark of D350 (`results/2026-10-23-pixel-8-pro-draw-ahead.json`) matches round 5 apart from it: scroll main p50 / p90 / p99 1.28 / 1.91 / 3.01 ms (1.30 / 1.92 / 3.04), work 454 and 783 ms (452, 813), one janky frame of the app's in 3 runs (a fling back composing items in its 12.9 ms frame), 12 to 20 late `doFrame`s a run (Compose's 14 to 28 in the same session), animation unchanged (no prefetching), startup 108 / 165 ms, PSS after the flings 79.5 MB.
 
+**A fling back (D375).** The full benchmark's one janky frame of the app's after D350 was a fling reversing direction: its first frame moving the first visible item back by one composed and measured an item inside its 12.9 ms frame (`compose-rs: recompose and layout again`). The list composes the items in view and a viewport's worth beyond each side; prefetching (D156) composed two more ahead in the scroll direction but disposed every item behind the wanted range, so the item the first frame back wanted was always gone, and nothing in that frame could prefetch it: the touch that stops a fling scrolls nothing, and the next frame already carries the reversed drag. Compose's `LazyListPrefetchStrategy` turns with the scroll deltas too (and cancels a request going the other way), so it has the same first frame; its prefetch-free mitigation is the slot reuse pool, and Compose 1.9's experimental `LazyLayoutCacheWindow` keeps a "behind" window composed. Here the list now keeps the two composed items next to the wanted ones on the side behind the scroll (as many as it prefetches ahead): a frame that composes keeps them, prefetch disposes only the ones beyond. The first frame back finds them composed and measured, and after a reversal prefetching has nothing to compose until the list has moved an item. Measured against main (e12d389), interleaved, 16 runs each (means [min–max]):
+
+| Scroll (measure.py's scroll run) | main | D375 |
+|---|---|---|
+| Frames composing items inline, in 16 runs | 4 (all on reversals; `doFrame` 4.2–11.4 ms) | **0** |
+| The slowest `doFrame` in each reversal's first 100 ms: mean, p90, max | 4.07, 7.26, 11.44 ms | **3.46, 4.64, 5.32 ms** |
+| the same, the other flings | 2.75, 3.54, 5.10 ms | 2.84, 3.79, 8.10 ms |
+| Main per frame p50 / p90 / p99 | 1.26 / 1.87 [1.79–1.94] / 2.96 [2.77–3.23] ms | 1.26 / 1.87 [1.71–1.95] / 2.96 [2.68–3.25] ms |
+| RenderThread per frame p50 / p90 / p99 | 2.78 / 3.75 / 5.35 ms | 2.76 / 3.75 / 5.31 ms |
+| Main, RenderThread work | 437.8 [426.9–452.2], 778.1 [764.1–793.3] ms | 440.4 [423.0–466.0], 783.9 [763.8–801.4] ms |
+| Prefetch compositions, measurements, wall time a run | 385, 201, 784 ms | 378, 193, 765 ms |
+| Janky frames (FrameTimeline), the app's / the compositor's | 0 / 0 | 0 / 5 (two runs) |
+| `doFrame`s more than 2 ms late, a run (after main-thread work) | 11.5 (0.9) | 10.9 (0.6) |
+
+The inline compositions on reversals go, and with them the slowest reversal frames (p90 −36 %, max −54 %). Work moves within the runs' spread: prefetching composes and measures about 8 items fewer a run (those kept across the reversals, 19 ms less wall time and 16 ms less text layout), and the replay takes 4.6 ms more: a kept item isn't placed, so the drawing's records and Kotlin's render nodes let it go, and the frame placing it again writes and records it (a reversal frame's replay is 1.6–2 ms; drawing kept items ahead, D350, would need Rust to re-emit a clean boundary's groups, a follow-up). The compositor's janky frames are SurfaceFlinger's, as main's in D350's runs.
+
 ### The four together (D320–D323): the full benchmark
 
 `measure.py --runs 15`, the branch then main (152a608), back to back, Compose alternated run by run in each session (means of the 3 traced runs; startup medians):

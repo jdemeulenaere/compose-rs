@@ -47,6 +47,12 @@ const KEY_WINDOW: usize = 100;
 /// direction.
 const PREFETCH_AHEAD: usize = 2;
 
+/// Items kept composed (and measured) behind those the layout wants, the other way from the
+/// scroll: a scroll reversing direction finds the first items it wants composed, rather than
+/// composing them in its frame before prefetching could go the new way (D375). As many as
+/// prefetching keeps ahead: the composed range is then the same whichever way the list goes.
+const KEPT_BEHIND: usize = PREFETCH_AHEAD;
+
 /// What a prefetch step leaves of the idle time beyond its estimate, at least: the estimate is
 /// a guess, and a step running past the deadline delays the next frame (D341).
 const PREFETCH_MARGIN_NANOS: u64 = 500_000;
@@ -1417,25 +1423,25 @@ impl MeasurePolicy for LazyListLayout {
         let prefetch = &state.prefetch;
         let mut composed = (composed_start, composed_end);
         if !covers || too_many {
-            // Items prefetched ahead in the scroll direction stay.
-            composed = if prefetch.forward.get() {
-                let end =
-                    if composed_end > wanted_end && composed_end <= wanted_end + PREFETCH_AHEAD {
-                        composed_end
-                    } else {
-                        wanted_end
-                    };
-                (wanted_start, end)
+            // Items prefetched ahead in the scroll direction stay, and those just behind it (up
+            // to `KEPT_BEHIND`), for a scroll back: those composed next to the wanted ones (a
+            // jump keeps none, and composes none beyond them).
+            let (before, after) = if prefetch.forward.get() {
+                (KEPT_BEHIND, PREFETCH_AHEAD)
             } else {
-                let start = if composed_start < wanted_start
-                    && composed_start + PREFETCH_AHEAD >= wanted_start
-                {
-                    composed_start
-                } else {
-                    wanted_start
-                };
-                (start, wanted_end)
+                (PREFETCH_AHEAD, KEPT_BEHIND)
             };
+            let start = if (composed_start..=composed_end).contains(&wanted_start) {
+                composed_start.max(wanted_start.saturating_sub(before))
+            } else {
+                wanted_start
+            };
+            let end = if (composed_start..=composed_end).contains(&wanted_end) {
+                composed_end.min(wanted_end + after)
+            } else {
+                wanted_end
+            };
+            composed = (start, end);
             state.composed.set(composed);
         }
         // After a scroll, the next items in its direction are composed between frames (and
@@ -1669,10 +1675,11 @@ impl PrefetchRequest for LazyListPrefetch {
 
 impl Prefetch {
     /// What to compose next between frames, from the `composed` range: one more item ahead in
-    /// the scroll direction (up to `PREFETCH_AHEAD` beyond those the layout wants), and none of
-    /// those behind it doesn't want, as a frame composing the item would have left them. The
-    /// range, and the item ahead (to measure next); `None` when nothing is to be done, or when
-    /// the composed items don't cover the wanted ones (the frame composes those).
+    /// the scroll direction (up to `PREFETCH_AHEAD` beyond those the layout wants), and of
+    /// those behind it doesn't want, the `KEPT_BEHIND` next to the wanted ones only, as a frame
+    /// composing the item would have left them. The range, and the item ahead (to measure
+    /// next); `None` when nothing is to be done, or when the composed items don't cover the
+    /// wanted ones (the frame composes those).
     fn next(&self, composed: (usize, usize)) -> Option<((usize, usize), Option<usize>)> {
         let (start, end) = composed;
         let (wanted_start, wanted_end) = self.wanted.get();
@@ -1681,15 +1688,15 @@ impl Prefetch {
         }
         if self.forward.get() {
             let ahead = (end < self.count.get().min(wanted_end + PREFETCH_AHEAD)).then_some(end);
-            let behind = start < wanted_start;
-            (ahead.is_some() || behind)
-                .then(|| ((wanted_start, end + usize::from(ahead.is_some())), ahead))
+            let kept = start.max(wanted_start.saturating_sub(KEPT_BEHIND));
+            (ahead.is_some() || kept > start)
+                .then(|| ((kept, end + usize::from(ahead.is_some())), ahead))
         } else {
             let ahead = (start > wanted_start.saturating_sub(PREFETCH_AHEAD))
                 .then(|| start.checked_sub(1))
                 .flatten();
-            let behind = end > wanted_end;
-            (ahead.is_some() || behind).then(|| ((ahead.unwrap_or(start), wanted_end), ahead))
+            let kept = end.min(wanted_end + KEPT_BEHIND);
+            (ahead.is_some() || kept < end).then(|| ((ahead.unwrap_or(start), kept), ahead))
         }
     }
 }

@@ -803,7 +803,10 @@ fn groups_written_ahead_are_what_the_frame_placing_them_writes() {
         }
     }
     assert!(kept > 40, "records written ahead kept: {kept}");
-    assert!(copied > 20, "records copied from those written ahead: {copied}");
+    // 15 (31 before D375): after each scroll back, fewer items are prefetched and written
+    // ahead again; those kept composed beside the wanted ones (D375) are written by the frames
+    // placing them again.
+    assert!(copied > 10, "records copied from those written ahead: {copied}");
     assert!(layered > 5, "layers listed ahead: {layered}");
 }
 

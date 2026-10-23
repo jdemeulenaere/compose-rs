@@ -118,6 +118,97 @@ fn a_scroll_that_reveals_prefetched_items_does_not_compose_them_again() {
     assert_eq!(compositions(last + 4), 1);
 }
 
+/// Scrolls down `frames` times by 30 px, prefetching after each frame.
+fn scroll_down_prefetching(ui: &mut ComposeTestRule, state: LazyListState, frames: usize) {
+    for _ in 0..frames {
+        state.scroll_by(30.0);
+        ui.wait_for_idle();
+        ui.host().prefetch(later());
+    }
+}
+
+/// The items composed now, in order.
+fn live_items() -> Vec<usize> {
+    let mut items: Vec<usize> = LIVE.with(|live| live.borrow().iter().copied().collect());
+    items.sort_unstable();
+    items
+}
+
+#[test]
+fn a_scroll_reversing_direction_finds_the_items_behind_composed() {
+    let (mut ui, state) = list(100);
+    scroll_down_prefetching(&mut ui, *state, 5);
+    let first = live_items()[0];
+    // Back up two rows in one frame: the list wants the two items before the first it wanted,
+    // which it kept composed (and measured), as it keeps those prefetched ahead.
+    state.scroll_by(-50.0);
+    let stats = ui.host().frame();
+    assert!(!stats.recomposed, "nothing composed in the frame");
+    ui.wait_for_idle();
+    assert_eq!(state.first_visible_item_index(), 105);
+    assert_eq!(compositions(first), 1, "composed once");
+    assert_eq!(compositions(first + 1), 1, "composed once");
+    // Prefetch goes the new way: the next two up.
+    let before = (compositions(first - 1), compositions(first - 2));
+    ui.host().prefetch(later());
+    let items = live_items();
+    assert_eq!(items[0], first - 2, "{items:?}");
+    assert_eq!((compositions(first - 1), compositions(first - 2)), (before.0 + 1, before.1 + 1));
+    // And two rows down again: the two below the wanted ones were kept too.
+    state.scroll_by(40.0);
+    let stats = ui.host().frame();
+    assert!(!stats.recomposed, "nothing composed in the frame");
+}
+
+#[test]
+fn a_frame_composing_items_keeps_the_two_behind_the_wanted_ones() {
+    let (mut ui, state) = list(100);
+    // Five rows down with no prefetching: the frame composes the items after, and of those
+    // before the five it now wants beyond the viewport (100 to 104), keeps two.
+    state.scroll_by(100.0);
+    ui.wait_for_idle();
+    assert_eq!(state.first_visible_item_index(), 105);
+    assert_eq!(live_items(), (98..115).collect::<Vec<_>>());
+}
+
+#[test]
+fn items_kept_behind_are_two_at_most() {
+    let (mut ui, state) = list(100);
+    scroll_down_prefetching(&mut ui, *state, 20);
+    // In view 130 to 134, and a viewport's worth (5 rows) wanted beyond each side: 125 to 139.
+    // Prefetching adds two ahead, and two behind are kept.
+    assert_eq!(state.first_visible_item_index(), 130);
+    assert_eq!(live_items(), (123..142).collect::<Vec<_>>());
+}
+
+/// The items a list shown at `first` composes, without scrolling.
+fn composed_at(first: usize) -> Vec<usize> {
+    let (_ui, _state) = list(first);
+    live_items()
+}
+
+#[test]
+fn a_jump_composes_only_the_items_it_wants() {
+    // Far back: none of the items composed is kept, and none is composed beyond those wanted.
+    let expected = composed_at(10);
+    let (mut ui, state) = list(100);
+    scroll_down_prefetching(&mut ui, *state, 5);
+    state.scroll_to_item(10, 0);
+    ui.wait_for_idle();
+    assert_eq!(live_items(), expected);
+    // Wanting from one past the item after the composed ones (5 before the first visible): the
+    // same.
+    let (mut ui, state) = list(100);
+    scroll_down_prefetching(&mut ui, *state, 5);
+    let last = *live_items().last().unwrap();
+    let expected = composed_at(last + 7);
+    let (mut ui, state) = list(100);
+    scroll_down_prefetching(&mut ui, *state, 5);
+    state.scroll_to_item(last + 7, 0);
+    ui.wait_for_idle();
+    assert_eq!(live_items(), expected);
+}
+
 #[test]
 fn a_scroll_up_prefetches_the_items_before() {
     let (mut ui, state) = list(100);
