@@ -15,6 +15,16 @@
 //! An item that leaves is deactivated and kept for reuse, and an item that comes is composed in
 //! the place of one of its content type, its nodes kept (D430), as Compose's
 //! `LazyLayoutItemReusePolicy`.
+//!
+//! Lazy grids (`grid`) compose their items the same way, one slot per item, and lay them out
+//! in lines.
+
+mod grid;
+
+pub use grid::{
+    GridCells, GridItemSpan, LazyGridItemSpanScope, LazyGridScope, LazyGridState,
+    LazyHorizontalGrid, LazyVerticalGrid, remember_lazy_grid_state,
+};
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -170,11 +180,20 @@ struct Prefetch {
     request: RefCell<Weak<LazyListPrefetch>>,
     /// An item composed ahead, to measure next.
     to_measure: Cell<Option<usize>>,
+    /// The items composed ahead beyond those the layout wants, and kept behind them: a list's
+    /// `PREFETCH_AHEAD`, a grid's lines' worth (set by each layout).
+    ahead: Cell<usize>,
+    /// Each item's constraints, where they differ by item (a grid's spans); else the list's
+    /// `item_constraints`.
+    constraints_of: RefCell<Option<ItemConstraints>>,
     /// How long composing and measuring an item take: an idle time too short for them is left
     /// alone, as Compose's.
     compose_cost: Cell<StepCost>,
     measure_cost: Cell<StepCost>,
 }
+
+/// An item's constraints by its index (`None`: no such item).
+type ItemConstraints = Rc<dyn Fn(usize) -> Option<Constraints>>;
 
 /// How long a prefetch step (composing an item, or measuring it) takes, in nanoseconds: a
 /// running average (3/4 old + 1/4 new, as Compose's prefetch averages) and the recent maximum,
@@ -309,22 +328,6 @@ impl LazyListState {
         self.inner().map_or((0, 1, 0, 0, 0), |inner| inner.layout_info.get())
     }
 
-    /// Moves the position for the next layout without asking for one: for a composition that
-    /// is about to lay the list out anyway (a grid whose columns changed).
-    pub(crate) fn set_position_quietly(&self, index: usize, scroll_offset: i32) {
-        let Some(inner) = self.inner() else { return };
-        inner.position.set((index, scroll_offset.max(0) as f32));
-        inner.first_key.set(None);
-        inner.pending.set(0.0);
-        inner.room_backward.set(f32::INFINITY);
-        inner.room_forward.set(f32::INFINITY);
-    }
-
-    /// The first visible item and its offset, as last laid out, read without observing it.
-    pub(crate) fn position_untracked(&self) -> (usize, i32) {
-        self.inner().map_or((0, 0), |inner| inner.published.get())
-    }
-
     /// Whether the list can scroll towards its end, as `canScrollForward` (as last laid out).
     pub fn can_scroll_forward(&self) -> bool {
         self.inner().is_some_and(|inner| inner.room_forward.get() > 0.0)
@@ -397,6 +400,8 @@ struct Interval {
     full_key: Option<FullKey>,
     /// A sticky header (`sticky_header`).
     sticky: bool,
+    /// A grid's items' spans (`None`: one cell each, Compose's default).
+    span: Option<grid::SpanOf>,
     content: Rc<dyn Fn(usize)>,
 }
 
@@ -433,6 +438,7 @@ impl Interval {
             #[cfg(debug_assertions)]
             full_key: None,
             sticky: false,
+            span: None,
             content,
         }
     }
@@ -459,6 +465,7 @@ impl Interval {
             key: Some(Rc::new(move |index| hash_key(&key(index)))),
             content_type: None,
             sticky: false,
+            span: None,
             content,
         }
     }
@@ -946,6 +953,8 @@ struct Items {
     count: usize,
     /// The sticky headers' indices, in order.
     headers: Vec<usize>,
+    /// Some items have spans (a grid's): its lines are found by walking the items.
+    has_custom_spans: bool,
 }
 
 impl Items {
@@ -953,6 +962,7 @@ impl Items {
         let mut starts = Vec::with_capacity(intervals.len());
         let mut headers = Vec::new();
         let mut count = 0;
+        let has_custom_spans = intervals.iter().any(|interval| interval.span.is_some());
         for interval in &intervals {
             starts.push(count);
             if interval.sticky {
@@ -960,7 +970,7 @@ impl Items {
             }
             count += interval.count;
         }
-        Items { intervals, starts, count, headers }
+        Items { intervals, starts, count, headers, has_custom_spans }
     }
 
     /// The interval holding item `index`, and the item's index in it.
@@ -1104,9 +1114,48 @@ struct ItemSlots {
     reusable: Vec<ItemSlot>,
     /// The last slot id given.
     last_id: u64,
+    /// The items the active slots were composed from, and each one's index then.
+    items: Weak<Items>,
+    indices: Vec<usize>,
 }
 
 impl ItemSlots {
+    /// When the items changed since the last pass (the list's caller composed again), the
+    /// `composed` range widened to hold where the items composed in it went, found by key (each
+    /// first where the one before it moved by as much), those that went near it: they stay
+    /// composed, rather than leaving (deactivated, their state lost) for a measurement to ask
+    /// for them again, as Compose's measurement finds each item's composition by its key
+    /// (D453). `None` if the items are the same, or the range holds them all.
+    fn follow(&self, items: &Rc<Items>, composed: (usize, usize)) -> Option<(usize, usize)> {
+        if std::ptr::eq(self.items.as_ptr(), Rc::as_ptr(items)) {
+            return None;
+        }
+        let (start, end) = composed;
+        let near = (end - start).max(1);
+        let (mut low, mut high) = composed;
+        let mut shift = 0isize;
+        for (slot, &old) in self.active.iter().zip(&self.indices) {
+            // A pinned item or a header out of the range: kept by key already.
+            if old < start || old >= end {
+                continue;
+            }
+            let guess = old.checked_add_signed(shift).filter(|guess| *guess < items.count);
+            let found = match guess {
+                Some(guess) if items.key(guess) == slot.key => Some(guess),
+                _ => items.index_of(slot.key, old),
+            };
+            if let Some(index) = found {
+                shift = index as isize - old as isize;
+                if index + near >= start && index < end + near {
+                    low = low.min(index);
+                    high = high.max(index + 1);
+                }
+            }
+        }
+        let followed = (low.min(items.count), high.min(items.count));
+        (followed != composed).then_some(followed)
+    }
+
     /// Gives each item of `indices` a slot, and returns them in order: the slot holding the item
     /// already; else a slot kept for reuse, the item's own if it's there (Compose's search for
     /// the same slot id first), else the newest of its content type; else a new one. The slots
@@ -1147,6 +1196,8 @@ impl ItemSlots {
             }
         }
         self.active = assigned.iter().map(|(_, slot)| *slot).collect();
+        self.indices.clear();
+        self.indices.extend_from_slice(indices);
         LazyLayoutItemReusePolicy::get_slots_to_retain(&mut self.reusable);
         let mut composed: Vec<(ItemSlot, SlotContent)> =
             assigned.into_iter().map(|(index, slot)| (slot, SlotContent::Item(index))).collect();
@@ -1385,8 +1436,16 @@ fn LazyItems(
         Rc::new(RefCell::new(ItemSlots::default()))
     });
     let inner = state.inner_or_detached();
-    let (start, mut end) = inner.composed.get();
+    let (mut start, mut end) = inner.composed.get();
     let count = items.0.count;
+    // Items came, went or moved: those composed stay composed where they went.
+    if inner.had_items.get()
+        && let Some(followed) = slots.borrow().follow(&items.0, (start.min(count), end.min(count)))
+    {
+        (start, end) = followed;
+        // The layout makes it the composed range.
+        inner.composed_more.set(true);
+    }
     // A list not laid out yet composes its first item, and then those its layout asks for; in
     // reused content, it composes as many as it had, which keep their slots (as Compose's
     // measurement takes the active slots by key) rather than going to those kept for reuse,
@@ -1420,6 +1479,7 @@ fn LazyItems(
     let hint = inner.item_constraints.get().or(fallback);
     drop(inner);
     let composed = slots.borrow_mut().assign(&items.0, &indices);
+    slots.borrow_mut().items = Rc::downgrade(&items.0);
     compose_runtime::CompositionLocalProvider(
         compose_ui::platform::LOCAL_CONSTRAINTS_HINT.provides(hint),
         || {
@@ -1851,6 +1911,7 @@ impl MeasurePolicy for LazyListLayout {
         prefetch.node.set(Some(node));
         prefetch.count.set(count);
         prefetch.wanted.set((wanted_start, wanted_end));
+        prefetch.ahead.set(PREFETCH_AHEAD);
         if scrolled != 0.0
             && let Some(scheduler) = &self.scheduler
             && prefetch.next(composed).is_some()
@@ -2048,8 +2109,13 @@ impl PrefetchRequest for LazyListPrefetch {
                     compose_ui::platform::trace::section(c"compose-rs: prefetch measure");
                 let start = Instant::now();
                 let child = state.children.borrow().iter().position(|composed| *composed == index);
+                let constraints_of = prefetch.constraints_of.borrow().clone();
+                let constraints = match constraints_of {
+                    Some(constraints_of) => constraints_of(index),
+                    None => state.item_constraints.get(),
+                };
                 if let (Some(node), Some(child), Some(constraints)) =
-                    (prefetch.node.get(), child, state.item_constraints.get())
+                    (prefetch.node.get(), child, constraints)
                 {
                     // What measuring it wrote (a nested list's items, a `BoxWithConstraints`'
                     // constraints) is composed and measured too, as a frame's rounds do.
@@ -2096,16 +2162,18 @@ impl Prefetch {
         if start > wanted_start || end < wanted_end {
             return None;
         }
+        // As many kept behind as composed ahead (`KEPT_BEHIND` is `PREFETCH_AHEAD`).
+        let beyond = self.ahead.get();
         if self.forward.get() {
-            let ahead = (end < self.count.get().min(wanted_end + PREFETCH_AHEAD)).then_some(end);
-            let kept = start.max(wanted_start.saturating_sub(KEPT_BEHIND));
+            let ahead = (end < self.count.get().min(wanted_end + beyond)).then_some(end);
+            let kept = start.max(wanted_start.saturating_sub(beyond));
             (ahead.is_some() || kept > start)
                 .then(|| ((kept, end + usize::from(ahead.is_some())), ahead))
         } else {
-            let ahead = (start > wanted_start.saturating_sub(PREFETCH_AHEAD))
+            let ahead = (start > wanted_start.saturating_sub(beyond))
                 .then(|| start.checked_sub(1))
                 .flatten();
-            let kept = end.min(wanted_end + KEPT_BEHIND);
+            let kept = end.min(wanted_end + beyond);
             (ahead.is_some() || kept < end).then(|| ((ahead.unwrap_or(start), kept), ahead))
         }
     }

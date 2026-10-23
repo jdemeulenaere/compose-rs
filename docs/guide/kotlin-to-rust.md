@@ -824,6 +824,77 @@ The content is a closure taking the `LazyListScope`. Its methods are named apart
 
 The list forms take anything that converts to an `ImmutableList` (a `Vec`, a slice, an `ImmutableList`, shared without copying). Keys are any `Hash + PartialEq` value; debug builds panic on a duplicate key, as Compose throws. A content type is any `Hash` value: as in Compose, an item coming into view reuses the composition and nodes of an item of its content type that left (those without one, Compose's `null`, reuse each other's), its remembered values computed anew ([Performance](performance.md)). Items have no `animateItem` ([Differences](differences.md#lazy-lists)).
 
+### Lazy grids
+
+```kotlin
+LazyVerticalGrid(
+    columns = GridCells.Adaptive(minSize = 96.dp),
+    modifier = Modifier.fillMaxSize(),
+    verticalArrangement = Arrangement.spacedBy(4.dp),
+    horizontalArrangement = Arrangement.spacedBy(4.dp),
+) {
+    for (album in albums) {
+        item(key = album.title, span = { GridItemSpan(maxLineSpan) }, contentType = "title") {
+            Text(album.title)
+        }
+        items(album.photos, key = { it.id }, contentType = { "photo" }) { photo ->
+            Box(Modifier.aspectRatio(1f).background(photo.color))
+        }
+    }
+}
+```
+
+<!-- snippet: src/layouts.rs#grid -->
+```rust
+#[derive(Clone, PartialEq)]
+pub struct Photo {
+    pub id: u64,
+    pub color: Color,
+}
+
+#[derive(Clone, PartialEq)]
+pub struct Album {
+    pub title: SharedString,
+    pub photos: ImmutableList<Photo>,
+}
+
+#[composable]
+pub fn Albums(albums: ImmutableList<Album>) {
+    LazyVerticalGrid!(
+        GridCells::Adaptive(96.dp()),
+        modifier = Modifier.fill_max_size(),
+        vertical_arrangement = Arrangement::spaced_by(4.dp()),
+        horizontal_arrangement = Arrangement::spaced_by(4.dp()),
+        |scope: LazyGridScope| {
+            for album in albums.iter() {
+                let title = album.title.clone();
+                // A title over a whole line, as `span = { GridItemSpan(maxLineSpan) }`.
+                scope.item_keyed_with(
+                    title.clone(),
+                    |line| GridItemSpan(line.max_line_span()),
+                    "title",
+                    move || {
+                        Text!(title.clone());
+                    },
+                );
+                // A span and a content type go together (`_with`): one cell is the default.
+                scope.items_list_keyed_with(
+                    album.photos.clone(),
+                    |photo| photo.id,
+                    |_, _| GridItemSpan(1),
+                    |_| "photo",
+                    |photo| {
+                        Box!(modifier = Modifier.aspect_ratio(1.0).background(photo.color));
+                    },
+                );
+            }
+        }
+    );
+}
+```
+
+`LazyVerticalGrid` and `LazyHorizontalGrid` take a `LazyGridScope` with the list's forms (`item`, `items`, `items_keyed`, `items_list`, `items_indexed`, …), whose `_with` forms take Compose's `span` and `contentType`, in Compose's order, after the key (`items_keyed_with(count, key, span, content_type, content)`, D451). A span is a closure returning a `GridItemSpan` from the `LazyGridItemSpanScope` (`max_line_span()`, `max_current_line_span()`) and the item: `|_, _| GridItemSpan(1)` is Compose's default. The content gets no item scope (Compose's `LazyGridItemScope` only has `animateItem`). Each item is composed on its own and reused by content type, as in a lazy list (D450).
+
 ### Custom layouts
 
 ```kotlin

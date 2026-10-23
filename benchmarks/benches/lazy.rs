@@ -1,17 +1,23 @@
 //! Scrolling lazy lists through many items: what an item coming into view costs (composing it,
 //! creating or reusing its nodes, measuring it), in the feed and the stress list of
-//! `examples/feed`, on a phone-sized host (1080 × 2400 px at 2.625) with a fixed text measurer.
+//! `examples/feed` and a photo grid (`Gallery`, below), on a phone-sized host (1080 × 2400 px
+//! at 2.625) with a fixed text measurer.
 //! There's no prefetch (the platform's idle time runs it): each frame composes the items it
 //! scrolls to, so a frame's time is mostly theirs.
 //!
 //! Besides criterion's frame time, each screen prints the time per item composed: the frames'
-//! total over the items whose `LazyItem` body ran, scrolling through `ITEMS` items.
+//! total over the items whose body ran (`LazyItem`, a grid's `Tile`), scrolling through `ITEMS`
+//! items.
+
+#![allow(non_snake_case)]
 
 use std::time::{Duration, Instant};
 
-use compose::runtime::platform;
+use compose::foundation::layout::*;
+use compose::foundation::*;
+use compose::runtime::{composable, mutable_state_of, platform, remember};
 use compose::ui::platform::{FixedTextMeasurer, UiHost};
-use compose::ui::{Density, IntSize, Offset, PointerEvent};
+use compose::ui::{Color, Density, IntSize, Modifier, Offset, PointerEvent, UnitExt};
 use criterion::{Criterion, criterion_group, criterion_main};
 
 /// The items scrolled through for the time per item.
@@ -60,10 +66,46 @@ fn report(name: &str, mut samples: Vec<Duration>) {
     );
 }
 
+/// The tiles in the grid.
+const TILES: usize = 10_000;
+
+/// A photo grid: 3 columns of tiles (a picture, a title and a count, clickable) 4 dp apart.
+#[composable]
+fn Gallery() {
+    LazyVerticalGrid!(
+        GridCells::Adaptive(120.dp()),
+        modifier = Modifier.fill_max_size(),
+        vertical_arrangement = Arrangement::spaced_by(4.dp()),
+        horizontal_arrangement = Arrangement::spaced_by(4.dp()),
+        |scope: LazyGridScope| {
+            scope.items_keyed(TILES, |index| index, Tile);
+        }
+    );
+}
+
+#[composable]
+fn Tile(index: usize) {
+    let liked = remember(|| mutable_state_of(false));
+    let color = Color::from_argb(0xFF00_0000 | ((index as u32).wrapping_mul(2_654_435_761) >> 8));
+    Column!(
+        modifier =
+            Modifier.fill_max_width().height(140.dp()).clickable(move || liked.update(|on| !on)),
+        {
+            Box!(modifier = Modifier.fill_max_width().height(100.dp()).background(color));
+            BasicText!("Photo {index}");
+            BasicText!("{} likes", index % 97 + usize::from(liked.get()));
+        }
+    );
+}
+
 fn scroll_through(criterion: &mut Criterion) {
-    let screens: [(&str, fn()); 2] =
-        [("feed", compose_rs_feed::Feed), ("stress", compose_rs_feed::stress::StressScroll)];
-    for (name, content) in screens {
+    // Each screen, and the composable counted as an item.
+    let screens: [(&str, fn(), &str); 3] = [
+        ("feed", compose_rs_feed::Feed, "LazyItem"),
+        ("stress", compose_rs_feed::stress::StressScroll, "LazyItem"),
+        ("grid", Gallery, "Tile"),
+    ];
+    for (name, content, item) in screens {
         let mut host = host(content);
         // Warm up: the pool of reusable items fills, caches warm.
         for _ in 0..100 {
@@ -80,7 +122,7 @@ fn scroll_through(criterion: &mut Criterion) {
             let elapsed = scroll_frame(&mut host, STEP);
             total += elapsed;
             samples.push(elapsed);
-            composed = platform::recomposition_counts().since(&before).scopes_named("LazyItem");
+            composed = platform::recomposition_counts().since(&before).scopes_named(item);
         }
         platform::track_recompositions(false);
         println!(

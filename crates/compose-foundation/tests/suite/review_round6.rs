@@ -22,8 +22,8 @@ fn bounds(ui: &mut ComposeTestRule, tag: &str) -> Rect {
 
 /// `rememberLazyGridState(initialFirstVisibleItemIndex = 10)` in a 3-column grid: Compose's
 /// `LazyGridState` holds an item index, the grid shows the line holding item 10 (items 9 to
-/// 11) at the top, and `firstVisibleItemIndex` is 9. Here the index is given to the inner
-/// `LazyListState` as a row index: row 10 (items 30 to 32) shows, `firstVisibleItemIndex` 30.
+/// 11) at the top, and `firstVisibleItemIndex` is 9. So here (the measurement finds the item's
+/// line, D450).
 #[test]
 fn a_grid_state_initial_index_is_an_item_index() {
     let state = LazyGridState::new(10, 0);
@@ -41,9 +41,7 @@ fn a_grid_state_initial_index_is_an_item_index() {
 
 /// A grid scrolled to item 30 (3 columns: row 10) gets wider and holds 4 columns: Compose's
 /// `LazyGridState` keeps item 30 in view (its line, items 28 to 31, at the top,
-/// `firstVisibleItemIndex` 28). Here the inner list looks for row 10's key (item 30's), which
-/// starts no row with 4 columns, and keeps row 10: items 40 to 43, the grid jumping 10 items on
-/// a window resize. (With 6 columns it happens to find it: item 30 starts row 5.)
+/// `firstVisibleItemIndex` 28). So here: the position is an item, its line found anew (D450).
 #[test]
 fn a_grid_keeps_its_first_item_when_its_column_count_changes() {
     let state = LazyGridState::new(0, 0);
@@ -77,10 +75,9 @@ fn Counted(key: String) {
 
 /// A keyed grid of a, b, c, d in 2 columns gets z inserted first: Compose's lazy grid keeps
 /// each item's composition by its key, so only z is composed anew (its `remember` runs once).
-/// Here a row is keyed by its first item and its cells by position: rows [z a] [b c] [d] match
-/// none of [a b] [c d], and every item is composed again, its remembered state lost.
+/// So here since D450 (a grid composed by rows, keyed by their first items, lost them all,
+/// D144).
 #[test]
-#[ignore = "known difference, D144: a grid keeps item state by row, not by item key"]
 fn a_keyed_grid_keeps_each_items_state_by_its_key() {
     let keys = mutable_state_of(vec!["a", "b", "c", "d"]);
     let handle = keys.handle();
@@ -343,11 +340,9 @@ fn a_horizontal_scrollbar_starts_on_the_right_in_rtl() {
 
 /// A grid of square cells, each a `BoxWithConstraints` as tall as it is wide (the usual
 /// photo grid): Compose composes each cell while measuring it, with its real constraints, and
-/// the grid opens at its top (`firstVisibleItemIndex` 0, cell 0 at y 0). Here the cells' first
-/// composition has zero constraints, so the first row is 0 px high; the lazy list steps its
-/// first visible item over a zero-size row (as Compose's does, `currentMainAxisOffset <= 0`),
-/// and when the cells get their size the grid stays scrolled a row down: cell 0 at y −100,
-/// `firstVisibleItemIndex` 5.
+/// the grid opens at its top (`firstVisibleItemIndex` 0, cell 0 at y 0). So here: the cells
+/// first compose for a cell's constraints in the space around (`LOCAL_CONSTRAINTS_HINT`, D452),
+/// then for those they're measured with.
 #[test]
 fn a_grid_of_box_with_constraints_cells_opens_at_its_top() {
     let state = LazyGridState::new(0, 0);

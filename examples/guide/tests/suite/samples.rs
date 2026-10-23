@@ -234,6 +234,28 @@ fn sticky_headers_stay_at_the_top() {
     assert_eq!(header.bounds.top, 0.0, "{}", ui.dump_semantics());
 }
 
+#[test]
+fn album_titles_span_their_lines() {
+    let albums = ImmutableList::from(vec![
+        layouts::Album {
+            title: "Spring".into(),
+            photos: (0..4).map(|id| layouts::Photo { id, color: Color::GREEN }).collect(),
+        },
+        layouts::Album {
+            title: "Summer".into(),
+            photos: (10..12).map(|id| layouts::Photo { id, color: Color::RED }).collect(),
+        },
+    ]);
+    let mut ui =
+        ComposeTestRule::sized(IntSize::new(320, 600), move || layouts::Albums(albums.clone()));
+    // Three columns of 96 dp or more; each title alone on its line, starting a new one.
+    let spring = ui.on_node_with_text("Spring").fetch_semantics_node().bounds;
+    let summer = ui.on_node_with_text("Summer").fetch_semantics_node().bounds;
+    assert_eq!(spring.top, 0.0);
+    assert!(summer.top > spring.bottom + 2.0 * 96.0, "{summer:?}");
+    assert_eq!(summer.left, 0.0);
+}
+
 #[composable]
 fn Wrapped() {
     guide::layouts::Wrap!({

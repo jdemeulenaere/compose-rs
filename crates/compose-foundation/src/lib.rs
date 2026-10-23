@@ -15,7 +15,6 @@ extern crate compose_runtime as compose;
 mod dark_theme;
 mod fling;
 pub mod gestures;
-mod grid;
 mod image;
 pub mod layout;
 pub mod lazy;
@@ -52,13 +51,11 @@ impl compose_runtime::ComposeArg for BorderStroke {
 }
 pub use dark_theme::is_system_in_dark_theme;
 pub use gestures::{DraggableModifier, DraggableState, Orientation, remember_draggable_state};
-pub use grid::{
-    GridCells, LazyGridScope, LazyGridState, LazyVerticalGrid, remember_lazy_grid_state,
-};
 pub use image::{ContentScale, Image};
 pub use lazy::{
-    LazyColumn, LazyItemModifiers, LazyItemScope, LazyListScope, LazyListState, LazyRow,
-    remember_lazy_list_state,
+    GridCells, GridItemSpan, LazyColumn, LazyGridItemSpanScope, LazyGridScope, LazyGridState,
+    LazyHorizontalGrid, LazyItemModifiers, LazyItemScope, LazyListScope, LazyListState, LazyRow,
+    LazyVerticalGrid, remember_lazy_grid_state, remember_lazy_list_state,
 };
 pub use scroll::{ScrollModifiers, ScrollState, remember_scroll_state};
 pub use scrollbar::{

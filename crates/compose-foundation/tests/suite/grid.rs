@@ -80,3 +80,71 @@ fn an_adaptive_grid_fits_as_many_columns_as_it_can_and_composes_lazily() {
     assert_eq!(bounds(&mut ui, "200").top, 0.0);
     assert_eq!(bounds(&mut ui, "200").left, 234.0);
 }
+
+#[test]
+fn a_horizontal_grid_fills_its_columns_and_scrolls_sideways() {
+    let state = LazyGridState::new(0, 0);
+    let given = *state;
+    let mut ui = ComposeTestRule::sized(IntSize::new(300, 200), move || {
+        LazyHorizontalGrid!(
+            GridCells::Fixed(2),
+            modifier = Modifier.size((300.dp(), 200.dp())),
+            state = given,
+            content_padding = PaddingValues::from(10.dp()),
+            horizontal_arrangement = Arrangement::spaced_by(5.dp()),
+            vertical_arrangement = Arrangement::spaced_by(20.dp()),
+            |scope: LazyGridScope| {
+                scope.items(100, |index| {
+                    Box!(modifier = Modifier.width(50.dp()).test_tag(format!("{index}")));
+                });
+            }
+        );
+    });
+    // Two rows of (200 − 2 × 10 − 20) / 2 = 80, the first column inside the padding; each item
+    // as tall as its row.
+    let (first, second, third) = (bounds(&mut ui, "0"), bounds(&mut ui, "1"), bounds(&mut ui, "2"));
+    assert_eq!((first.left, first.top, first.height()), (10.0, 10.0, 80.0));
+    assert_eq!((second.left, second.top), (10.0, 110.0));
+    assert_eq!((third.left, third.top), (65.0, 10.0));
+    state.scroll_by(110.0);
+    ui.wait_for_idle();
+    // Two columns of 55 scrolled off: the third first, items 4 and 5.
+    assert_eq!(state.first_visible_item_index(), 4);
+    assert_eq!(bounds(&mut ui, "4").left, 10.0);
+}
+
+#[test]
+fn grids_start_at_the_right_in_a_right_to_left_layout() {
+    let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), || {
+        Column!({
+            LazyVerticalGrid!(
+                GridCells::Fixed(2),
+                modifier = Modifier.size((200.dp(), 50.dp())),
+                content_padding = PaddingValues::new(10.dp(), 0.dp(), 0.dp(), 0.dp()),
+                |scope: LazyGridScope| {
+                    scope.items(4, |index| {
+                        Box!(modifier = Modifier.height(20.dp()).test_tag(format!("v{index}")));
+                    });
+                }
+            );
+            LazyHorizontalGrid!(
+                GridCells::Fixed(2),
+                modifier = Modifier.size((200.dp(), 100.dp())),
+                |scope: LazyGridScope| {
+                    scope.items(4, |index| {
+                        Box!(modifier = Modifier.width(30.dp()).test_tag(format!("h{index}")));
+                    });
+                }
+            );
+        });
+    });
+    ui.host().set_layout_direction(compose_ui::LayoutDirection::Rtl);
+    ui.wait_for_idle();
+    // A vertical grid's first column at the right, its start padding there; a horizontal
+    // grid's first column at the right, as a `LazyRow`'s first item.
+    assert_eq!(bounds(&mut ui, "v0").left, 95.0);
+    assert_eq!(bounds(&mut ui, "v1").left, 0.0);
+    assert_eq!(bounds(&mut ui, "h0").left, 170.0);
+    assert_eq!(bounds(&mut ui, "h2").left, 140.0);
+    assert_eq!(bounds(&mut ui, "h1").top, 100.0);
+}

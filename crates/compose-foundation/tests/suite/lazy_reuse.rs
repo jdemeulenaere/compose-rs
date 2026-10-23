@@ -449,6 +449,31 @@ fn a_reused_items_modifier_nodes_are_reset_for_it() {
     assert!(nodes.len() < 30, "{} nodes: reused", nodes.len());
 }
 
+/// Items inserted before others in a list whose items are all composed: Compose's measurement
+/// finds each item's composition by its key, so only the new ones are composed. Here the
+/// composed range, in indices, would end before the last items, which would leave (their state
+/// forgotten) and come back: the items composed follow their keys (D453).
+#[test]
+fn items_inserted_before_others_leave_the_others_composition_alone() {
+    let mut list = Fixture::new(untyped(0..4));
+    COUNTS.with(|counts| counts.borrow()[&3].set(7));
+    list.ui.wait_for_idle();
+    let nodes: Vec<NodeId> = (0..4).map(node_of).collect();
+    events();
+    list.set_items(untyped([100].into_iter().chain(0..4)));
+    assert_eq!(events(), ["remembered 100"]);
+    assert_eq!((0..4).map(node_of).collect::<Vec<_>>(), nodes);
+    list.ui.on_node_with_tag("item 3: 7").assert_exists();
+    // In the middle too; and items appended don't widen what's composed.
+    list.set_items(untyped([100, 0, 1, 101, 102, 2, 3]));
+    assert_eq!(events(), ["remembered 101", "remembered 102"]);
+    list.ui.on_node_with_tag("item 3: 7").assert_exists();
+    let mut long = untyped([100, 0, 1, 101, 102, 2, 3]);
+    long.extend(untyped(1000..2000));
+    list.set_items(long);
+    assert!(live().len() < 20, "{} composed", live().len());
+}
+
 /// A popup in deactivated content isn't placed, drawn, hit nor in the semantics; active again,
 /// it shows.
 #[test]

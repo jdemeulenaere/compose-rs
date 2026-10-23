@@ -214,7 +214,7 @@ fn lazy_items_keep_their_saveable_state_when_scrolled_away() {
 #[test]
 fn lazy_grid_cells_keep_their_saveable_state_when_scrolled_away() {
     thread_local! { static GRID: Cell<Option<LazyGridState>> = const { Cell::new(None) }; }
-    // The grid's rows are a lazy list's items: each row's provider keeps its cells' state.
+    // Each grid item's provider keeps its state by its key, as a list item's (D450).
     let content = || {
         let state = remember_lazy_grid_state!();
         GRID.set(Some(state));

@@ -44,7 +44,7 @@ The known differences from Jetpack Compose that an app will run into, distilled 
 ## Lazy lists
 
 - No `animateItem` (placement and fade animations). `contentType` is given with the `_with` forms (`items_keyed_with(count, key, content_type, content)`, D432), and items reuse the composition and nodes of those that left as in Compose (D430), but a reused node's modifier nodes are reset (`ModifierNode::on_reset`) rather than detached and attached again: a custom node keeps its resources while its item is kept for reuse (D431).
-- `LazyVerticalGrid` has no `reverse_layout` or `user_scroll_enabled`, and keeps an item's state by its row rather than its key, so items inserted before others move state between rows (D144).
+- `LazyVerticalGrid` and `LazyHorizontalGrid` have no `reverse_layout` or `user_scroll_enabled`, and no sticky headers. Their items are composed one by one and keep their state by key, as in Compose (D450); the content of the `items` forms gets no item scope (Compose's `LazyGridItemScope` only has `animateItem`), and a `_with` form takes both `span` and `content_type` (D451).
 - A popup in a lazy item composed beyond the viewport shows where the item is placed (D136).
 
 ## Drawing and graphics
@@ -87,4 +87,4 @@ The known differences from Jetpack Compose that an app will run into, distilled 
 - **Top app bars' scroll behaviors** have no fling decay before they settle, and dragging the bar itself doesn't collapse it (D186).
 - **Icons** are material-icons-core's filled set (D187).
 - **No dynamic color**: there's no `dynamicLightColorScheme`/`dynamicDarkColorScheme` reading the wallpaper's colors; pass them from Kotlin as properties if you need them.
-- **Missing foundation pieces**: no `HorizontalPager`/`VerticalPager`, no pull to refresh, no `movableContentOf`, no `LazyHorizontalGrid` or staggered grids.
+- **Missing foundation pieces**: no `HorizontalPager`/`VerticalPager`, no pull to refresh, no `movableContentOf`, no staggered grids (`LazyVerticalStaggeredGrid`), no `GridCells.FixedSize`.

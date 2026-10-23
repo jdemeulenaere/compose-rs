@@ -149,6 +149,54 @@ pub fn Messages(days: ImmutableList<Day>, state: LazyListState) {
 }
 // ANCHOR_END: lazy
 
+// ANCHOR: grid
+#[derive(Clone, PartialEq)]
+pub struct Photo {
+    pub id: u64,
+    pub color: Color,
+}
+
+#[derive(Clone, PartialEq)]
+pub struct Album {
+    pub title: SharedString,
+    pub photos: ImmutableList<Photo>,
+}
+
+#[composable]
+pub fn Albums(albums: ImmutableList<Album>) {
+    LazyVerticalGrid!(
+        GridCells::Adaptive(96.dp()),
+        modifier = Modifier.fill_max_size(),
+        vertical_arrangement = Arrangement::spaced_by(4.dp()),
+        horizontal_arrangement = Arrangement::spaced_by(4.dp()),
+        |scope: LazyGridScope| {
+            for album in albums.iter() {
+                let title = album.title.clone();
+                // A title over a whole line, as `span = { GridItemSpan(maxLineSpan) }`.
+                scope.item_keyed_with(
+                    title.clone(),
+                    |line| GridItemSpan(line.max_line_span()),
+                    "title",
+                    move || {
+                        Text!(title.clone());
+                    },
+                );
+                // A span and a content type go together (`_with`): one cell is the default.
+                scope.items_list_keyed_with(
+                    album.photos.clone(),
+                    |photo| photo.id,
+                    |_, _| GridItemSpan(1),
+                    |_| "photo",
+                    |photo| {
+                        Box!(modifier = Modifier.aspect_ratio(1.0).background(photo.color));
+                    },
+                );
+            }
+        }
+    );
+}
+// ANCHOR_END: grid
+
 // ANCHOR: custom_layout
 /// Its children left to right, wrapping to a new line when one doesn't fit: a minimal FlowRow.
 #[composable]
