@@ -1704,9 +1704,8 @@ impl Prefetch {
 }
 
 /// Whether the time left exceeds the step's estimate, at the `pace` of the list's steps so far
-/// in this idle time, by
-/// `PREFETCH_MARGIN_NANOS`. If not, the estimate may be lowered ([`StepCost::missed`]).
-/// `first`: no step of this request ran in this idle time (another list's may have: it then
+/// in this idle time, by `PREFETCH_MARGIN_NANOS`. If not, the estimate may be lowered
+/// ([`StepCost::missed`]). `first`: no step of this request ran in this idle time (another list's may have: it then
 /// counts as a miss of this one's).
 fn fits(scope: &PrefetchRequestScope<'_>, cost: &Cell<StepCost>, first: bool, pace: Pace) -> bool {
     let available = scope.available_time_nanos();
@@ -1726,11 +1725,13 @@ fn time(cost: &Cell<StepCost>, start: Instant, pace: Pace) -> Pace {
 }
 
 /// How much slower than estimated a list's steps in an idle time ran: the largest ratio of a
-/// step's time to its estimate, at least 1 and at most `MOST_PACE` (D381). The steps after a slow one are expected to be as slow:
-/// the main thread is on a little core, or at low clocks, for the rest of the idle time. On the
-/// Pixel 8 Pro, nearly every prefetch step that ran more than 1.2 ms past the vsync was an
-/// item's measurement (4–6 ms against a 2–3 ms estimate) after its composition in the same idle
-/// time, on the little cores, the composition itself 1.5 to 4 times its estimate.
+/// step's time to its estimate, at least 1 and at most `MOST_PACE` (D381). The steps after a
+/// slow one are expected to be as slow: the main thread is on a little core, or at low clocks,
+/// for the rest of the idle time. On the Pixel 8 Pro, 43 of the 46 prefetch measurements that
+/// ended more than 1.2 ms past the vsync (in 32 scroll runs) followed the item's composition in
+/// the same idle time, all on the little cores: they took 3.9–8.2 ms (a median of 5.1) against
+/// an estimate of a median 2.4 ms, and the composition before them a median 2.0 times its
+/// estimate.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Pace(f64);
 

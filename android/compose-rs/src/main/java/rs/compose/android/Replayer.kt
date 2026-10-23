@@ -64,7 +64,8 @@ internal inline fun ByteBuffer.floatAt(index: Int): Float = Float.fromBits(getIn
  * recorded, and draws it by reference.
  *
  * A group composed and not placed (a lazy list's item kept beside the wanted ones) keeps its
- * record in every frame, which names it in a `KEPT` section rather than drawing it (D380).
+ * render node: every frame names it in a `KEPT` section, without its record (Rust keeps that
+ * in its cache), rather than drawing it (D380).
  * HWUI drops the recording of a node no recording draws any more (when the render thread
  * syncs a frame that no longer draws it), so the kept groups' nodes are drawn by [keptNode], a
  * node at alpha 0, which the render thread skips: the frame placing one again finds its version
