@@ -869,7 +869,7 @@ pub fn Albums(albums: ImmutableList<Album>) {
             for album in albums.iter() {
                 let title = album.title.clone();
                 // A title over a whole line, as `span = { GridItemSpan(maxLineSpan) }`.
-                scope.item_keyed_with(
+                scope.item_keyed_with_span(
                     title.clone(),
                     |line| GridItemSpan(line.max_line_span()),
                     "title",
@@ -877,11 +877,10 @@ pub fn Albums(albums: ImmutableList<Album>) {
                         Text!(title.clone());
                     },
                 );
-                // A span and a content type go together (`_with`): one cell is the default.
+                // A content type alone (`_with`): each photo takes one cell, the default.
                 scope.items_list_keyed_with(
                     album.photos.clone(),
                     |photo| photo.id,
-                    |_, _| GridItemSpan(1),
                     |_| "photo",
                     |photo| {
                         Box!(modifier = Modifier.aspect_ratio(1.0).background(photo.color));
@@ -893,7 +892,7 @@ pub fn Albums(albums: ImmutableList<Album>) {
 }
 ```
 
-`LazyVerticalGrid` and `LazyHorizontalGrid` take a `LazyGridScope` with the list's forms (`item`, `items`, `items_keyed`, `items_list`, `items_indexed`, …), whose `_with` forms take Compose's `span` and `contentType`, in Compose's order, after the key (`items_keyed_with(count, key, span, content_type, content)`, D451). A span is a closure returning a `GridItemSpan` from the `LazyGridItemSpanScope` (`max_line_span()`, `max_current_line_span()`) and the item: `|_, _| GridItemSpan(1)` is Compose's default. The content gets no item scope (Compose's `LazyGridItemScope` only has `animateItem`). Each item is composed on its own and reused by content type, as in a lazy list (D450).
+`LazyVerticalGrid` and `LazyHorizontalGrid` take a `LazyGridScope` with the list's forms (`item`, `items`, `items_keyed`, `items_list`, `items_indexed`, …), whose `_with` forms take Compose's `contentType` after the key, as a list's (`items_keyed_with(count, key, content_type, content)`), and whose `_with_span` forms take Compose's `span` and `contentType`, in Compose's order (`items_keyed_with_span(count, key, span, content_type, content)`, D454). A span is a closure returning a `GridItemSpan` from the `LazyGridItemSpanScope` (`max_line_span()`, `max_current_line_span()`) and the item: `|_, _| GridItemSpan(1)` is Compose's default. Give spans only where items take more than a cell: with spans, which items a line holds is found by asking the spans from the first item, again each time the grid's content changes. The content gets no item scope (Compose's `LazyGridItemScope` only has `animateItem`). Each item is composed on its own and reused by content type, as in a lazy list (D450).
 
 ### Custom layouts
 

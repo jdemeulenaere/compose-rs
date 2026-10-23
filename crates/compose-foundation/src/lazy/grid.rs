@@ -9,7 +9,6 @@
 //! from the line holding the first visible item, and asks for the items of the lines it needs.
 
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::hash::Hash;
 use std::rc::Rc;
 
@@ -21,7 +20,7 @@ use compose_ui::{
 
 use super::{
     BEYOND, Interval, Items, ItemsRef, KEPT_BEHIND, LazyItems, LazyListInner, LazyListPrefetch,
-    LazyListState, LazyScrollElement, MOST_MISSING, PREFETCH_AHEAD, average_size, composed_range,
+    LazyListState, LazyScrollElement, MOST_MISSING, PREFETCH_AHEAD, Sizes, composed_range,
     content_type_of,
 };
 use crate::layout::{HorizontalArrangement, MainAxisArrangement, VerticalArrangement};
@@ -61,8 +60,9 @@ impl GridCells {
 }
 
 /// How many cells of a line an item takes, as Compose's `GridItemSpan`: `GridItemSpan(1)` is
-/// the default, `GridItemSpan(scope.max_line_span())` a whole line. Kept within 1 and the line's
-/// cells (Compose requires it).
+/// the default, `GridItemSpan(scope.max_line_span())` a whole line. Compose requires a span
+/// within 1 and the line's cells (it throws otherwise); here one outside them is kept within
+/// them.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct GridItemSpan(pub usize);
 
@@ -147,10 +147,13 @@ impl LazyGridState {
         self.list.scroll_by(pixels)
     }
 
+    /// Whether the grid can scroll towards its end, as `canScrollForward` (as last laid out).
     pub fn can_scroll_forward(&self) -> bool {
         self.list.can_scroll_forward()
     }
 
+    /// Whether the grid can scroll towards its start, as `canScrollBackward` (as last laid
+    /// out).
     pub fn can_scroll_backward(&self) -> bool {
         self.list.can_scroll_backward()
     }
@@ -200,12 +203,18 @@ pub fn remember_lazy_grid_state(
 /// over a list, `scope.items_list(list, |item| …)` and `scope.items_indexed(list, |index, item|
 /// …)`.
 ///
-/// Each form has a `_with` variant taking Compose's `span` and `contentType` too, after the key,
-/// in Compose's order (`items_keyed_with(count, key, span, content_type, …)`, D451): `span`
-/// gives an item's `GridItemSpan` (`|_, _| GridItemSpan(1)` is the default), and an item
-/// composed where none was reuses the composition and nodes of an item of its content type
-/// that left (D430). The forms without take Compose's defaults: one cell, and the content type
-/// `{ null }` (such items reuse each other's).
+/// Each form has a `_with` variant taking Compose's `contentType` too, after the key, as a
+/// list's (`items_keyed_with(count, key, content_type, …)`): an item composed where none was
+/// reuses the composition and nodes of an item of its content type that left (D430). And a
+/// `_with_span` variant taking Compose's `span` and `contentType`, in Compose's order
+/// (`items_keyed_with_span(count, key, span, content_type, …)`, D454): `span` gives an item's
+/// `GridItemSpan` (`|_, _| GridItemSpan(1)` is the default). The forms without take Compose's
+/// defaults: one cell, and the content type `{ null }` (such items reuse each other's).
+///
+/// Spans cost a walk: which items each line holds is worked out by asking the items' spans from
+/// the first, as far as the grid is scrolled, once per set of items (each time the grid's
+/// content runs again, as when its caller recomposes with other captures). Without spans, it's
+/// arithmetic: give a span only where an item takes more than a cell.
 #[derive(Clone, Default)]
 pub struct LazyGridScope {
     intervals: Rc<RefCell<Vec<Interval>>>,
@@ -218,7 +227,7 @@ impl LazyGridScope {
     }
 
     /// One item with a span and a content type, as `item(span = { … }, contentType = …) { … }`.
-    pub fn item_with<C: Hash>(
+    pub fn item_with_span<C: Hash>(
         &self,
         span: impl Fn(LazyGridItemSpanScope) -> GridItemSpan + 'static,
         content_type: C,
@@ -242,7 +251,7 @@ impl LazyGridScope {
     }
 
     /// One item with a key, a span and a content type, as `item(key, span, contentType) { … }`.
-    pub fn item_keyed_with<K: Hash + PartialEq + Clone + 'static, C: Hash>(
+    pub fn item_keyed_with_span<K: Hash + PartialEq + Clone + 'static, C: Hash>(
         &self,
         key: K,
         span: impl Fn(LazyGridItemSpanScope) -> GridItemSpan + 'static,
@@ -265,7 +274,7 @@ impl LazyGridScope {
 
     /// `count` items with their spans and content types, as
     /// `items(count, span = { … }, contentType = { … }) { … }`.
-    pub fn items_with<C: Hash>(
+    pub fn items_with_span<C: Hash>(
         &self,
         count: usize,
         span: impl Fn(LazyGridItemSpanScope, usize) -> GridItemSpan + 'static,
@@ -293,7 +302,7 @@ impl LazyGridScope {
 
     /// `count` items with keys, spans and content types, as
     /// `items(count, key = { … }, span = { … }, contentType = { … }) { … }`.
-    pub fn items_keyed_with<K: Hash + PartialEq + 'static, C: Hash>(
+    pub fn items_keyed_with_span<K: Hash + PartialEq + 'static, C: Hash>(
         &self,
         count: usize,
         key: impl Fn(usize) -> K + 'static,
@@ -321,7 +330,7 @@ impl LazyGridScope {
 
     /// `items_list` with spans and content types, as
     /// `items(items, span = { item -> … }, contentType = { item -> … })`.
-    pub fn items_list_with<T: 'static, C: Hash>(
+    pub fn items_list_with_span<T: 'static, C: Hash>(
         &self,
         items: impl Into<ImmutableList<T>>,
         span: impl Fn(LazyGridItemSpanScope, &T) -> GridItemSpan + 'static,
@@ -355,7 +364,7 @@ impl LazyGridScope {
 
     /// `items_list` with keys, spans and content types, as
     /// `items(items, key = { … }, span = { … }, contentType = { … })`.
-    pub fn items_list_keyed_with<T: 'static, K: Hash + PartialEq + 'static, C: Hash>(
+    pub fn items_list_keyed_with_span<T: 'static, K: Hash + PartialEq + 'static, C: Hash>(
         &self,
         items: impl Into<ImmutableList<T>>,
         key: impl Fn(&T) -> K + 'static,
@@ -388,7 +397,7 @@ impl LazyGridScope {
 
     /// `items_indexed` with spans and content types, as
     /// `itemsIndexed(items, span = { index, item -> … }, contentType = { index, item -> … })`.
-    pub fn items_indexed_with<T: 'static, C: Hash>(
+    pub fn items_indexed_with_span<T: 'static, C: Hash>(
         &self,
         items: impl Into<ImmutableList<T>>,
         span: impl Fn(LazyGridItemSpanScope, usize, &T) -> GridItemSpan + 'static,
@@ -422,7 +431,7 @@ impl LazyGridScope {
 
     /// `items_indexed` with keys, spans and content types, as
     /// `itemsIndexed(items, key = { … }, span = { … }, contentType = { … })`.
-    pub fn items_indexed_keyed_with<T: 'static, K: Hash + PartialEq + 'static, C: Hash>(
+    pub fn items_indexed_keyed_with_span<T: 'static, K: Hash + PartialEq + 'static, C: Hash>(
         &self,
         items: impl Into<ImmutableList<T>>,
         key: impl Fn(usize, &T) -> K + 'static,
@@ -440,6 +449,129 @@ impl LazyGridScope {
             )
             .typed(Rc::new(move |index| content_type_of(&content_type(index, &types[index]))))
             .spanned(Rc::new(move |scope, index| span(scope, index, &spans[index]))),
+        );
+    }
+
+    /// One item of `content_type`, as `item(contentType = …) { … }`.
+    pub fn item_with<C: Hash>(&self, content_type: C, content: impl Fn() + 'static) {
+        let content_type = content_type_of(&content_type);
+        self.push(
+            Interval::new(1, Rc::new(move |_| content())).typed(Rc::new(move |_| content_type)),
+        );
+    }
+
+    /// One item with a key and a content type, as `item(key, contentType = …) { … }`.
+    pub fn item_keyed_with<K: Hash + PartialEq + Clone + 'static, C: Hash>(
+        &self,
+        key: K,
+        content_type: C,
+        content: impl Fn() + 'static,
+    ) {
+        let content_type = content_type_of(&content_type);
+        self.push(
+            Interval::keyed(1, move |_| key.clone(), Rc::new(move |_| content()))
+                .typed(Rc::new(move |_| content_type)),
+        );
+    }
+
+    /// `count` items with their content types, as `items(count, contentType = { … }) { … }`.
+    pub fn items_with<C: Hash>(
+        &self,
+        count: usize,
+        content_type: impl Fn(usize) -> C + 'static,
+        content: impl Fn(usize) + 'static,
+    ) {
+        self.push(
+            Interval::new(count, Rc::new(content))
+                .typed(Rc::new(move |index| content_type_of(&content_type(index)))),
+        );
+    }
+
+    /// `count` items with keys and content types, as
+    /// `items(count, key = { … }, contentType = { … }) { … }`.
+    pub fn items_keyed_with<K: Hash + PartialEq + 'static, C: Hash>(
+        &self,
+        count: usize,
+        key: impl Fn(usize) -> K + 'static,
+        content_type: impl Fn(usize) -> C + 'static,
+        content: impl Fn(usize) + 'static,
+    ) {
+        self.push(
+            Interval::keyed(count, key, Rc::new(content))
+                .typed(Rc::new(move |index| content_type_of(&content_type(index)))),
+        );
+    }
+
+    /// `items_list` with content types, as `items(items, contentType = { item -> … })`.
+    pub fn items_list_with<T: 'static, C: Hash>(
+        &self,
+        items: impl Into<ImmutableList<T>>,
+        content_type: impl Fn(&T) -> C + 'static,
+        content: impl Fn(&T) + 'static,
+    ) {
+        let items = items.into();
+        let types = items.clone();
+        self.push(
+            Interval::new(items.len(), Rc::new(move |index| content(&items[index])))
+                .typed(Rc::new(move |index| content_type_of(&content_type(&types[index])))),
+        );
+    }
+
+    /// `items_list` with keys and content types, as
+    /// `items(items, key = { … }, contentType = { … })`.
+    pub fn items_list_keyed_with<T: 'static, K: Hash + PartialEq + 'static, C: Hash>(
+        &self,
+        items: impl Into<ImmutableList<T>>,
+        key: impl Fn(&T) -> K + 'static,
+        content_type: impl Fn(&T) -> C + 'static,
+        content: impl Fn(&T) + 'static,
+    ) {
+        let items = items.into();
+        let (keys, types) = (items.clone(), items.clone());
+        self.push(
+            Interval::keyed(
+                items.len(),
+                move |index| key(&keys[index]),
+                Rc::new(move |index| content(&items[index])),
+            )
+            .typed(Rc::new(move |index| content_type_of(&content_type(&types[index])))),
+        );
+    }
+
+    /// `items_indexed` with content types, as
+    /// `itemsIndexed(items, contentType = { index, item -> … })`.
+    pub fn items_indexed_with<T: 'static, C: Hash>(
+        &self,
+        items: impl Into<ImmutableList<T>>,
+        content_type: impl Fn(usize, &T) -> C + 'static,
+        content: impl Fn(usize, &T) + 'static,
+    ) {
+        let items = items.into();
+        let types = items.clone();
+        self.push(
+            Interval::new(items.len(), Rc::new(move |index| content(index, &items[index])))
+                .typed(Rc::new(move |index| content_type_of(&content_type(index, &types[index])))),
+        );
+    }
+
+    /// `items_indexed` with keys and content types, as
+    /// `itemsIndexed(items, key = { … }, contentType = { … })`.
+    pub fn items_indexed_keyed_with<T: 'static, K: Hash + PartialEq + 'static, C: Hash>(
+        &self,
+        items: impl Into<ImmutableList<T>>,
+        key: impl Fn(usize, &T) -> K + 'static,
+        content_type: impl Fn(usize, &T) -> C + 'static,
+        content: impl Fn(usize, &T) + 'static,
+    ) {
+        let items = items.into();
+        let (keys, types) = (items.clone(), items.clone());
+        self.push(
+            Interval::keyed(
+                items.len(),
+                move |index| key(index, &keys[index]),
+                Rc::new(move |index| content(index, &items[index])),
+            )
+            .typed(Rc::new(move |index| content_type_of(&content_type(index, &types[index])))),
         );
     }
 
@@ -841,10 +973,42 @@ struct Measurer<'a, 'scope> {
     slots: &'a Slots,
     vertical: bool,
     /// The lines measured: their cells' range in `cells`, and their size along the grid.
-    measured: Vec<(usize, usize, usize, i32)>,
+    measured: MeasuredLines,
     /// The cells of the lines measured: each item and its offset across the grid.
     cells: Vec<(Placeable, i32)>,
-    sizes: &'a mut HashMap<usize, i32>,
+    /// The items' sizes along the grid (by item: what a slot leaving was measured by, D460), and
+    /// the lines' (the estimates).
+    sizes: &'a mut Sizes,
+    line_sizes: &'a mut Sizes,
+}
+
+/// The lines a measurement measured, by line: from the first one measured, a measurement's lines
+/// being next to each other (a look-up is an index, D456).
+#[derive(Default)]
+struct MeasuredLines {
+    first: usize,
+    /// From `first`: the line's cells' range in `cells` and its size, if measured.
+    lines: Vec<Option<(usize, usize, i32)>>,
+}
+
+impl MeasuredLines {
+    fn get(&self, line: usize) -> Option<(usize, usize, i32)> {
+        *self.lines.get(line.checked_sub(self.first)?)?
+    }
+
+    fn insert(&mut self, line: usize, measured: (usize, usize, i32)) {
+        if self.lines.is_empty() {
+            self.first = line;
+        } else if line < self.first {
+            self.lines.splice(0..0, std::iter::repeat_n(None, self.first - line));
+            self.first = line;
+        }
+        let at = line - self.first;
+        if at >= self.lines.len() {
+            self.lines.resize(at + 1, None);
+        }
+        self.lines[at] = Some(measured);
+    }
 }
 
 impl Measurer<'_, '_> {
@@ -857,11 +1021,9 @@ impl Measurer<'_, '_> {
         child.filter(|child| *child < self.measurables.len())
     }
 
-    /// A line measured: its cells' range in `cells`, and its size along the grid (a few lines
-    /// are measured: a look through them beats hashing).
+    /// A line measured: its cells' range in `cells`, and its size along the grid.
     fn measured_line(&self, line: usize) -> Option<(usize, usize, i32)> {
-        let found = self.measured.iter().rev().find(|measured| measured.0 == line);
-        found.map(|&(_, start, end, size)| (start, end, size))
+        self.measured.get(line)
     }
 
     /// A line measured's size along the grid.
@@ -879,6 +1041,8 @@ impl Measurer<'_, '_> {
                 let constraints = cell_constraints(self.vertical, size);
                 let placeable = self.scope.measure(self.measurables[child], constraints);
                 self.placeables[child] = Some(placeable);
+                let main = if self.vertical { placeable.height } else { placeable.width };
+                self.sizes.insert(item, main);
                 placeable
             }
         };
@@ -898,7 +1062,7 @@ impl Measurer<'_, '_> {
         if (start..end).any(|item| self.child_of(item).is_none()) {
             // Not all composed (the first item alone, before the first layout): those that are
             // tell the size of the lines to come, for how many to compose.
-            if !self.sizes.contains_key(&line) {
+            if !self.line_sizes.contains_key(&line) {
                 let mut slot = 0;
                 let mut size = None;
                 for item in start..end {
@@ -910,7 +1074,7 @@ impl Measurer<'_, '_> {
                     slot += span;
                 }
                 if let Some(size) = size {
-                    self.sizes.insert(line, size);
+                    self.line_sizes.insert(line, size);
                 }
             }
             return None;
@@ -925,8 +1089,8 @@ impl Measurer<'_, '_> {
             self.cells.push((placeable, offset));
             slot += span;
         }
-        self.measured.push((line, first, self.cells.len(), size));
-        self.sizes.insert(line, size);
+        self.measured.insert(line, (first, self.cells.len(), size));
+        self.line_sizes.insert(line, size);
         Some(size)
     }
 
@@ -958,7 +1122,7 @@ fn step_back(
                 *offset += (size + spacing) as f32;
             }
             None => {
-                let average = average_size(measurer.sizes) as f32 + spacing as f32;
+                let average = measurer.line_sizes.average() as f32 + spacing as f32;
                 let skip = ((-*offset) / average) as usize;
                 if skip > MOST_MISSING {
                     let skip = skip.min(*index);
@@ -1042,7 +1206,7 @@ impl MeasurePolicy for LazyGridLayout {
         let count = info.items.count;
         let children = state.children.borrow().clone();
         let (composed_start, composed_end) = composed_range(&children, count);
-        let mut sizes = state.sizes.borrow_mut();
+        let (mut sizes, mut line_sizes) = (state.sizes.borrow_mut(), state.line_sizes.borrow_mut());
         let mut measurer = Measurer {
             scope,
             measurables,
@@ -1052,9 +1216,10 @@ impl MeasurePolicy for LazyGridLayout {
             lines: &mut lines,
             slots: &slots,
             vertical,
-            measured: Vec::new(),
+            measured: MeasuredLines::default(),
             cells: Vec::new(),
             sizes: &mut sizes,
+            line_sizes: &mut line_sizes,
         };
         let m = &mut measurer;
         // The position, with the scrolling asked for; the first visible item found again by
@@ -1093,7 +1258,7 @@ impl MeasurePolicy for LazyGridLayout {
         // average size (an estimate).
         while m.lines.exists(index + 1) {
             let Some(size) = m.line(index) else {
-                let average = average_size(m.sizes) as f32 + spacing as f32;
+                let average = m.line_sizes.average() as f32 + spacing as f32;
                 let skip = (offset / average) as usize;
                 if skip > MOST_MISSING {
                     let target = m.lines.at_most_last(index + skip);
@@ -1147,6 +1312,9 @@ impl MeasurePolicy for LazyGridLayout {
                 && !m.lines.exists(end_index)
                 && gap > 0.0
                 && (index > 0 || offset > 0.0)
+                // Not while items before wait to be composed: the scrolling left pending holds
+                // the gap already (a second measurement would step it back again, D457).
+                && wanted_before == 0
                 && attempt < 3
             {
                 offset -= gap;
@@ -1188,10 +1356,11 @@ impl MeasurePolicy for LazyGridLayout {
                 *main = before + position;
             }
         }
-        // The lines wanted composed: those in view and a viewport's worth beyond each side (at
-        // least two), and as many more as the room left would take if lines were missing.
-        let average = average_size(m.sizes);
-        let beyond = ((main_max / (average + spacing).max(1)) as usize).clamp(BEYOND, MOST_MISSING);
+        // The lines wanted composed: those in view and `BEYOND` beyond each side (where a list
+        // composes a viewport's worth: a grid's lines hold several items, all placed and drawn,
+        // D456), and as many more as the room left would take if lines were missing.
+        let average = m.line_sizes.average();
+        let beyond = BEYOND;
         let wanted_start = index.saturating_sub(beyond + wanted_before);
         let mut wanted_end = m.lines.at_most_last(end_index + beyond - 1) + 1;
         if missing {
@@ -1206,8 +1375,13 @@ impl MeasurePolicy for LazyGridLayout {
             wanted_end = m.lines.at_most_last(end_index + more + beyond - 1) + 1;
         }
         // The items composed, from the lines: whole lines, those ahead in the scroll direction
-        // and just behind it kept (`PREFETCH_AHEAD` and `KEPT_BEHIND` lines).
+        // and just behind it kept (`PREFETCH_AHEAD` and `KEPT_BEHIND` lines): the limits
+        // prefetching composes within too, in items, whatever the lines' spans (D456).
         let wanted_items = (m.lines.start(wanted_start), m.lines.start(wanted_end));
+        let limits = (
+            m.lines.start(wanted_start.saturating_sub(KEPT_BEHIND)),
+            m.lines.start(wanted_end + PREFETCH_AHEAD),
+        );
         let covers = composed_start <= wanted_items.0 && composed_end >= wanted_items.1;
         let too_many = (wanted_start > 2 * beyond
             && composed_start < m.lines.start(wanted_start - 2 * beyond))
@@ -1218,30 +1392,26 @@ impl MeasurePolicy for LazyGridLayout {
             state.composed.set(composed);
         }
         if !covers || too_many {
-            let (behind, ahead) = if prefetch.forward.get() {
-                (KEPT_BEHIND, PREFETCH_AHEAD)
-            } else {
-                (PREFETCH_AHEAD, KEPT_BEHIND)
-            };
+            // (`KEPT_BEHIND` is `PREFETCH_AHEAD`: the same lines kept whichever way.)
             let start = if (composed_start..=composed_end).contains(&wanted_items.0) {
-                composed_start.max(m.lines.start(wanted_start.saturating_sub(behind)))
+                composed_start.max(limits.0)
             } else {
                 wanted_items.0
             };
             let end = if (composed_start..=composed_end).contains(&wanted_items.1) {
-                composed_end.min(m.lines.start(wanted_end + ahead))
+                composed_end.min(limits.1)
             } else {
                 wanted_items.1
             };
             composed = (start, end);
-            state.composed.set(composed);
+            state.compose(composed);
         }
         // After a scroll, the items of the next lines are composed between frames, one at a
         // time, each measured in its cell.
         prefetch.node.set(Some(node));
         prefetch.count.set(count);
         prefetch.wanted.set(wanted_items);
-        prefetch.ahead.set(PREFETCH_AHEAD * slots.count());
+        prefetch.limits.set(limits);
         if scrolled != 0.0
             && let Some(scheduler) = &self.scheduler
             && prefetch.next(composed).is_some()
@@ -1254,8 +1424,11 @@ impl MeasurePolicy for LazyGridLayout {
         let first_item = m.lines.start(index);
         state.position.set((first_item, offset));
         state.first_key.set(Some(info.items.key(first_item)));
-        let layout_info =
-            (m.lines.count_estimate(), average + spacing, spacing, main_max, before + after);
+        // In items, as `first_visible_item_index` (a scrollbar's estimates): a line's extent
+        // shared among its items.
+        let lines = m.lines.count_estimate().max(1);
+        let per_item = ((average + spacing) as i64 * lines as i64 / count as i64).max(1) as i32;
+        let layout_info = (count, per_item, spacing, main_max, before + after);
         if state.layout_info.get() != layout_info {
             state.layout_info.set(layout_info);
         }
@@ -1315,7 +1488,7 @@ impl MeasurePolicy for LazyGridLayout {
         let extent_start = main - before;
         let pending = state.pending.get();
         let reaches_start = (index == 0 || placed_start == 0) && wanted_before == 0;
-        let average = average_size(m.sizes) as f32 + spacing as f32;
+        let average = m.line_sizes.average() as f32 + spacing as f32;
         state.room_backward.set(if reaches_start {
             (-extent_start) as f32 + pending
         } else {
@@ -1342,8 +1515,12 @@ impl MeasurePolicy for LazyGridLayout {
             }
         }
         // Sizes far from view are forgotten, so the estimates follow the data.
-        if m.sizes.len() > 4 * MOST_MISSING {
-            m.sizes.retain(|line, _| line.abs_diff(index) <= MOST_MISSING);
+        if m.line_sizes.len() > 4 * MOST_MISSING {
+            m.line_sizes.retain(|line| line.abs_diff(index) <= MOST_MISSING);
+        }
+        let near = MOST_MISSING * slots.count();
+        if m.sizes.len() > 4 * near {
+            m.sizes.retain(|item| item.abs_diff(first_item) <= near);
         }
         let (width, height) =
             if vertical { (cross_max, main_total) } else { (main_total, cross_max) };

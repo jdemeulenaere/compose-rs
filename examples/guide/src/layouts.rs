@@ -173,7 +173,7 @@ pub fn Albums(albums: ImmutableList<Album>) {
             for album in albums.iter() {
                 let title = album.title.clone();
                 // A title over a whole line, as `span = { GridItemSpan(maxLineSpan) }`.
-                scope.item_keyed_with(
+                scope.item_keyed_with_span(
                     title.clone(),
                     |line| GridItemSpan(line.max_line_span()),
                     "title",
@@ -181,11 +181,10 @@ pub fn Albums(albums: ImmutableList<Album>) {
                         Text!(title.clone());
                     },
                 );
-                // A span and a content type go together (`_with`): one cell is the default.
+                // A content type alone (`_with`): each photo takes one cell, the default.
                 scope.items_list_keyed_with(
                     album.photos.clone(),
                     |photo| photo.id,
-                    |_, _| GridItemSpan(1),
                     |_| "photo",
                     |photo| {
                         Box!(modifier = Modifier.aspect_ratio(1.0).background(photo.color));

@@ -128,7 +128,8 @@ fn Item(item: u64) {
 /// (`None`: the default).
 type Items = Rc<Vec<(u64, Option<u32>, Option<usize>)>>;
 
-/// Declares `items` with `items_keyed`, or `items_keyed_with` if any has a type or a span.
+/// Declares `items` with `items_keyed`, `items_keyed_with` if any has a type, or
+/// `items_keyed_with_span` if any has a span.
 fn declare(scope: &LazyGridScope, items: Items) {
     let (keys, spans, types, contents) =
         (items.clone(), items.clone(), items.clone(), items.clone());
@@ -138,8 +139,15 @@ fn declare(scope: &LazyGridScope, items: Items) {
             move |index| keys[index].0,
             move |index| Item(contents[index].0),
         );
-    } else {
+    } else if items.iter().all(|(_, _, span)| span.is_none()) {
         scope.items_keyed_with(
+            items.len(),
+            move |index| keys[index].0,
+            move |index| types[index].1,
+            move |index| Item(contents[index].0),
+        );
+    } else {
+        scope.items_keyed_with_span(
             items.len(),
             move |index| keys[index].0,
             move |_, index| GridItemSpan(spans[index].2.unwrap_or(1)),
@@ -321,8 +329,12 @@ fn up_to_seven_grid_items_of_a_content_type_are_kept_for_reuse() {
         // Of two content types, up to 7 of each: items 0 to 8 of one, the others of the other.
         let content_type = |key: u64| u32::from(key > 8);
         let mut grid = Fixture::new(vertical, typed(0..60, content_type));
-        let composed = live();
-        assert!(composed.len() > 16, "{composed:?} composed");
+        // Those measured (one composed and never measured is disposed, D460).
+        let composed: Vec<u64> = live()
+            .into_iter()
+            .filter(|item| NODES.with(|nodes| nodes.borrow().contains_key(item)))
+            .collect();
+        assert!(composed.len() > 10, "{composed:?} composed");
         grid.set_items(vec![(0, Some(0), None)]);
         let left = |kind: u32| {
             composed.iter().filter(move |key| **key != 0 && content_type(**key) == kind)
@@ -403,7 +415,7 @@ fn spans_lay_items_out_in_lines_as_compose() {
                 GridItemSpan(spans[index].unwrap_or(scope.max_line_span()))
             };
             let grid = move |scope: LazyGridScope| {
-                scope.items_with(8, span, |index| index == 0, |index| Item(index as u64));
+                scope.items_with_span(8, span, |index| index == 0, |index| Item(index as u64));
             };
             if vertical {
                 LazyVerticalGrid!(
@@ -613,20 +625,20 @@ fn the_list_and_indexed_forms_take_keys_spans_and_content_types() {
             GridCells::Fixed(2),
             modifier = Modifier.size((200.dp(), 200.dp())),
             move |scope: LazyGridScope| {
-                scope.item_keyed_with(
+                scope.item_keyed_with_span(
                     "title",
                     |line: LazyGridItemSpanScope| GridItemSpan(line.max_line_span()),
                     "title",
                     || Item(1000),
                 );
-                scope.items_list_keyed_with(
+                scope.items_list_keyed_with_span(
                     names.clone(),
                     |name: &&str| *name,
                     |_, name: &&str| GridItemSpan(if *name == "c" { 2 } else { 1 }),
                     |_: &&str| "name",
                     |name: &&str| Item(name.as_bytes()[0] as u64),
                 );
-                scope.items_indexed_with(
+                scope.items_indexed_with_span(
                     names.clone(),
                     |_, index, _: &&str| GridItemSpan(1 + index % 2),
                     |_, _: &&str| "indexed",

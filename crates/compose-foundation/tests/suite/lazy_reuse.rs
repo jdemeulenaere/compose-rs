@@ -592,3 +592,44 @@ fn items_composed_beyond_what_the_first_layout_wants_are_not_kept_for_reuse() {
     let nodes = nodes_of(0..measured);
     assert!(nodes.len() < measured as usize, "{} nodes for {measured} items", nodes.len());
 }
+
+// ---- Review of D450-D453 -----------------------------------------------------------------
+
+/// Items removed before the composed ones, more than the composed range holds: Compose's
+/// measurement finds the first visible item by its key and each item's composition by its key,
+/// so the items in view keep their composition (their `remember`s). D453 follows a composed item
+/// only if it lands within a range's length of the old range.
+#[test]
+fn review_items_removed_far_before_the_composed_ones_keep_their_composition() {
+    let mut list = Fixture::new(untyped(0..300));
+    list.scroll(100);
+    assert_eq!(list.state.first_visible_item_index(), 100);
+    let in_view: Vec<u64> = (100..110).collect();
+    let nodes: Vec<NodeId> = in_view.iter().copied().map(node_of).collect();
+    events();
+    list.set_items(untyped(60..300));
+    let events = events();
+    assert_eq!(list.state.first_visible_item_index(), 40);
+    let recomposed: Vec<&String> = events
+        .iter()
+        .filter(|event| in_view.iter().any(|item| **event == format!("remembered {item}")))
+        .collect();
+    assert!(recomposed.is_empty(), "items in view composed again: {recomposed:?}");
+    assert_eq!(in_view.iter().copied().map(node_of).collect::<Vec<_>>(), nodes);
+}
+
+/// The same for items inserted before the composed ones (fewer than `KEY_WINDOW`).
+#[test]
+fn review_items_inserted_far_before_the_composed_ones_keep_their_composition() {
+    let mut list = Fixture::new(untyped(0..300));
+    list.scroll(100);
+    events();
+    list.set_items(untyped((1000..1080).chain(0..300)));
+    let events = events();
+    assert_eq!(list.state.first_visible_item_index(), 180);
+    let recomposed: Vec<&String> = events
+        .iter()
+        .filter(|event| (100..110).any(|item| **event == format!("remembered {item}")))
+        .collect();
+    assert!(recomposed.is_empty(), "items in view composed again: {recomposed:?}");
+}

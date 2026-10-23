@@ -57,6 +57,10 @@ const MOST_MISSING: usize = 200;
 /// How far from its last index an item is looked for by key.
 const KEY_WINDOW: usize = 100;
 
+/// The most composed items looked for in the key window when the items change (D455): a
+/// change's cost stays bounded (each of the others is checked where the one before it went).
+const MOST_KEY_SEARCHES: usize = 8;
+
 /// Items composed and measured between frames beyond those the layout wants, in the scroll
 /// direction.
 const PREFETCH_AHEAD: usize = 2;
@@ -95,6 +99,11 @@ struct LazyListInner {
     remeasure: OwnedState<u64>,
     /// The items to compose: what the layout asks for, read by the items' composition only.
     composed: OwnedState<(usize, usize)>,
+    /// What the items' composition last read of `composed` (it may compose another range: the
+    /// keys it followed, D455), and a count it reads, bumped to compose `composed` again when
+    /// it holds the range wanted already.
+    composed_read: Cell<(usize, usize)>,
+    compose_again: OwnedState<u64>,
     /// The focused item's key, kept composed and placed while it scrolls away, as Compose pins
     /// it, and the index it was last at.
     pinned: OwnedState<Option<u64>>,
@@ -112,7 +121,9 @@ struct LazyListInner {
     first_offset: OwnedState<i32>,
     published: Cell<(usize, i32)>,
     /// Item sizes along the axis, as last measured: estimates for items not composed.
-    sizes: RefCell<HashMap<usize, i32>>,
+    sizes: RefCell<Sizes>,
+    /// A grid's line sizes along its axis, as last measured (its `sizes` are its items', D455).
+    line_sizes: RefCell<Sizes>,
     /// What scrollbars estimate the content from, as last laid out: the item count, the
     /// average item size with its spacing, the spacing, the viewport's length and the content
     /// padding.
@@ -133,6 +144,17 @@ struct LazyListInner {
 }
 
 impl LazyListInner {
+    /// Asks the items' composition for the items `range`: a write of `composed`, or, when it
+    /// holds `range` already (the composition composed another range, following the items'
+    /// keys, D455), a count bumped so it composes `composed` again.
+    fn compose(&self, range: (usize, usize)) {
+        if self.composed_read.get() == range {
+            self.compose_again.update(|count| count.wrapping_add(1));
+        } else {
+            self.composed.set(range);
+        }
+    }
+
     fn new(first_visible_item_index: usize, first_visible_item_scroll_offset: i32) -> Self {
         let offset = first_visible_item_scroll_offset.max(0);
         LazyListInner {
@@ -142,6 +164,8 @@ impl LazyListInner {
             rtl: Cell::new(false),
             remeasure: mutable_state_of(0),
             composed: mutable_state_of((first_visible_item_index, first_visible_item_index + 1)),
+            composed_read: Cell::new((first_visible_item_index, first_visible_item_index + 1)),
+            compose_again: mutable_state_of(0),
             pinned: mutable_state_of(None),
             pinned_near: Cell::new(0),
             had_items: Cell::new(false),
@@ -150,7 +174,8 @@ impl LazyListInner {
             first_index: mutable_state_of(first_visible_item_index),
             first_offset: mutable_state_of(offset),
             published: Cell::new((first_visible_item_index, offset)),
-            sizes: RefCell::new(HashMap::new()),
+            sizes: RefCell::default(),
+            line_sizes: RefCell::default(),
             layout_info: mutable_state_of((0, 1, 0, 0, 0)),
             item_constraints: mutable_state_of(None),
             room_backward: Cell::new(if first_visible_item_index > 0 {
@@ -180,9 +205,10 @@ struct Prefetch {
     request: RefCell<Weak<LazyListPrefetch>>,
     /// An item composed ahead, to measure next.
     to_measure: Cell<Option<usize>>,
-    /// The items composed ahead beyond those the layout wants, and kept behind them: a list's
-    /// `PREFETCH_AHEAD`, a grid's lines' worth (set by each layout).
-    ahead: Cell<usize>,
+    /// The items prefetching may compose and keep: from the first kept behind the wanted ones
+    /// to the end of those composed ahead of them (a list's `PREFETCH_AHEAD` items each way, a
+    /// grid's lines: set by each layout, so a frame trims the composed items to the same).
+    limits: Cell<(usize, usize)>,
     /// Each item's constraints, where they differ by item (a grid's spans); else the list's
     /// `item_constraints`.
     constraints_of: RefCell<Option<ItemConstraints>>,
@@ -1116,45 +1142,62 @@ struct ItemSlots {
     reusable: Vec<ItemSlot>,
     /// The last slot id given.
     last_id: u64,
-    /// The items the active slots were composed from, and each one's index then.
+    /// The items the active slots were composed from.
     items: Weak<Items>,
-    indices: Vec<usize>,
 }
 
 impl ItemSlots {
-    /// When the items changed since the last pass (the list's caller composed again), the
-    /// `composed` range widened to hold where the items composed in it went, found by key (each
-    /// first where the one before it moved by as much), those that went near it: they stay
-    /// composed, rather than leaving (deactivated, their state lost) for a measurement to ask
-    /// for them again, as Compose's measurement finds each item's composition by its key
-    /// (D453). `None` if the items are the same, or the range holds them all.
+    /// When the items changed since the last pass (the list's caller composed again), where the
+    /// `composed` range's items went: found by key (each first where the one before it moved by
+    /// as much, else within the key window around where it was, `MOST_KEY_SEARCHES` times at
+    /// most), the range moved by as much as the first found, and widened to hold those that
+    /// moved otherwise but stayed near it (items inserted or removed among them). Those items
+    /// stay composed, rather than leaving (deactivated, their state lost) for a measurement to
+    /// ask for them again, as Compose's measurement finds each item's composition by its key
+    /// (D453, D455). `None` if the items are the same, none was found, or the range is the
+    /// same.
     fn follow(&self, items: &Rc<Items>, composed: (usize, usize)) -> Option<(usize, usize)> {
         if std::ptr::eq(self.items.as_ptr(), Rc::as_ptr(items)) {
             return None;
         }
         let (start, end) = composed;
-        let near = (end - start).max(1);
-        let (mut low, mut high) = composed;
         let mut shift = 0isize;
-        for (slot, &old) in self.active.iter().zip(&self.indices) {
+        let mut first_shift = None;
+        let mut searches = 0;
+        let mut found = Vec::new();
+        for slot in &self.active {
+            let old = slot.index;
             // A pinned item or a header out of the range: kept by key already.
             if old < start || old >= end {
                 continue;
             }
             let guess = old.checked_add_signed(shift).filter(|guess| *guess < items.count);
-            let found = match guess {
+            let index = match guess {
                 Some(guess) if items.key(guess) == slot.key => Some(guess),
-                _ => items.index_of(slot.key, old),
-            };
-            if let Some(index) = found {
-                shift = index as isize - old as isize;
-                if index + near >= start && index < end + near {
-                    low = low.min(index);
-                    high = high.max(index + 1);
+                _ if searches < MOST_KEY_SEARCHES => {
+                    searches += 1;
+                    items.index_of(slot.key, old)
                 }
+                _ => None,
+            };
+            if let Some(index) = index {
+                shift = index as isize - old as isize;
+                first_shift.get_or_insert(shift);
+                found.push(index);
             }
         }
-        let followed = (low.min(items.count), high.min(items.count));
+        let first_shift = first_shift?;
+        let moved = |index: usize| index.saturating_add_signed(first_shift).min(items.count);
+        let (moved_start, moved_end) = (moved(start), moved(end));
+        let near = (end - start).max(1);
+        let (mut low, mut high) = (moved_start, moved_end);
+        for index in found {
+            if index + near >= moved_start && index < moved_end + near {
+                low = low.min(index);
+                high = high.max(index + 1);
+            }
+        }
+        let followed = (low, high.min(items.count));
         (followed != composed).then_some(followed)
     }
 
@@ -1210,8 +1253,6 @@ impl ItemSlots {
             }
         }
         self.active = assigned.iter().map(|(_, slot)| *slot).collect();
-        self.indices.clear();
-        self.indices.extend_from_slice(indices);
         LazyLayoutItemReusePolicy::get_slots_to_retain(&mut self.reusable);
         let mut composed: Vec<(ItemSlot, SlotContent)> =
             assigned.into_iter().map(|(index, slot)| (slot, SlotContent::Item(index))).collect();
@@ -1451,6 +1492,8 @@ fn LazyItems(
     });
     let inner = state.inner_or_detached();
     let (mut start, mut end) = inner.composed.get();
+    inner.compose_again.get();
+    inner.composed_read.set((start, end));
     let count = items.0.count;
     // Items came, went or moved: those composed stay composed where they went.
     if inner.had_items.get()
@@ -1593,7 +1636,7 @@ struct LazyListLayout {
 }
 
 /// Measures an item by index (once), recording its size; `None` if it isn't composed.
-type MeasureItem<'a> = dyn FnMut(usize, &mut HashMap<usize, i32>) -> Option<Placeable> + 'a;
+type MeasureItem<'a> = dyn FnMut(usize, &mut Sizes) -> Option<Placeable> + 'a;
 
 impl MeasurePolicy for LazyListLayout {
     fn measure(
@@ -1678,19 +1721,18 @@ impl MeasurePolicy for LazyListLayout {
         let mut sizes = state.sizes.borrow_mut();
         let main_of =
             move |placeable: &Placeable| if vertical { placeable.height } else { placeable.width };
-        let mut measure_child =
-            |index: usize, sizes: &mut HashMap<usize, i32>| -> Option<Placeable> {
-                let child = children
-                    .iter()
-                    .position(|composed| *composed == index)
-                    .filter(|child| *child < measurables.len())?;
-                if placeables[child].is_none() {
-                    let placeable = scope.measure(measurables[child], item_constraints);
-                    sizes.insert(index, main_of(&placeable));
-                    placeables[child] = Some(placeable);
-                }
-                placeables[child]
-            };
+        let mut measure_child = |index: usize, sizes: &mut Sizes| -> Option<Placeable> {
+            let child = children
+                .iter()
+                .position(|composed| *composed == index)
+                .filter(|child| *child < measurables.len())?;
+            if placeables[child].is_none() {
+                let placeable = scope.measure(measurables[child], item_constraints);
+                sizes.insert(index, main_of(&placeable));
+                placeables[child] = Some(placeable);
+            }
+            placeables[child]
+        };
         let measure: &mut MeasureItem<'_> = &mut measure_child;
         // The position, with the scrolling asked for; the first visible item found again by
         // its key if items came or went before it.
@@ -1728,7 +1770,7 @@ impl MeasurePolicy for LazyListLayout {
         let mut wanted_before = 0usize;
         let step_back = |index: &mut usize,
                          offset: &mut f32,
-                         sizes: &mut HashMap<usize, i32>,
+                         sizes: &mut Sizes,
                          measure: &mut MeasureItem<'_>|
          -> usize {
             while *offset < 0.0 && *index > 0 {
@@ -1740,7 +1782,7 @@ impl MeasurePolicy for LazyListLayout {
                     None => {
                         // Far back: jumped over by the average size (an estimate, as the items
                         // between aren't composed); near: waits for them to be.
-                        let average = average_size(sizes) as f32 + spacing as f32;
+                        let average = sizes.average() as f32 + spacing as f32;
                         let skip = ((-*offset) / average) as usize;
                         if skip > MOST_MISSING {
                             let skip = skip.min(*index);
@@ -1763,7 +1805,7 @@ impl MeasurePolicy for LazyListLayout {
         // the average size (an estimate).
         while index + 1 < count {
             let Some(placeable) = measure(index, &mut sizes) else {
-                let average = average_size(&sizes) as f32 + spacing as f32;
+                let average = sizes.average() as f32 + spacing as f32;
                 let skip = ((offset / average) as usize).min(count - 1 - index);
                 if skip > MOST_MISSING {
                     index += skip;
@@ -1817,6 +1859,9 @@ impl MeasurePolicy for LazyListLayout {
                 && end_index == count
                 && gap > 0.0
                 && (index > 0 || offset > 0.0)
+                // Not while items before wait to be composed: the scrolling left pending holds
+                // the gap already (a second measurement would step it back again, D457).
+                && wanted_before == 0
                 && attempt < 3
             {
                 offset -= gap;
@@ -1876,7 +1921,7 @@ impl MeasurePolicy for LazyListLayout {
         // room left would take, at the smallest size seen, if items were missing.
         // A viewport's worth of items beyond each side (at least two), so focus can move to
         // the next focusable item and scrolling finds them ready.
-        let average = average_size(&sizes);
+        let average = sizes.average();
         let beyond = ((main_max / (average + spacing).max(1)) as usize).clamp(BEYOND, MOST_MISSING);
         let wanted_start = index.saturating_sub(beyond + wanted_before);
         let mut wanted_end = (end_index + beyond).min(count);
@@ -1922,14 +1967,16 @@ impl MeasurePolicy for LazyListLayout {
                 wanted_end
             };
             composed = (start, end);
-            state.composed.set(composed);
+            state.compose(composed);
         }
         // After a scroll, the next items in its direction are composed between frames (and
         // those left behind kept for reuse), if any are to be.
         prefetch.node.set(Some(node));
         prefetch.count.set(count);
         prefetch.wanted.set((wanted_start, wanted_end));
-        prefetch.ahead.set(PREFETCH_AHEAD);
+        // As many kept behind as composed ahead (`KEPT_BEHIND` is `PREFETCH_AHEAD`).
+        let limits = (wanted_start.saturating_sub(KEPT_BEHIND), wanted_end + PREFETCH_AHEAD);
+        prefetch.limits.set(limits);
         if scrolled != 0.0
             && let Some(scheduler) = &self.scheduler
             && prefetch.next(composed).is_some()
@@ -1995,7 +2042,7 @@ impl MeasurePolicy for LazyListLayout {
         let reaches_start = (index == 0 || placed_start == 0) && wanted_before == 0;
         // Not reaching an end: estimated from the average size (a nested list's wheel delta
         // it can't use goes on to its parent).
-        let average = average_size(&sizes) as f32 + spacing as f32;
+        let average = sizes.average() as f32 + spacing as f32;
         state.room_backward.set(if reaches_start {
             (-extent_start) as f32 + pending
         } else {
@@ -2046,7 +2093,7 @@ impl MeasurePolicy for LazyListLayout {
         }
         // Sizes far from view are forgotten, so the estimates follow the data.
         if sizes.len() > 4 * MOST_MISSING {
-            sizes.retain(|item, _| item.abs_diff(index) <= MOST_MISSING);
+            sizes.retain(|item| item.abs_diff(index) <= MOST_MISSING);
         }
         drop(sizes);
         // Placed along the axis, aligned across it.
@@ -2090,13 +2137,47 @@ impl MeasurePolicy for LazyListLayout {
     }
 }
 
-/// The average item size measured (at least a pixel): what estimates of positions and of how
-/// many items fit use.
-fn average_size(sizes: &HashMap<usize, i32>) -> i32 {
-    if sizes.is_empty() {
-        return 1;
+/// Sizes along the axis by index (a list's items, a grid's items or lines), as last measured,
+/// with their sum: the average is a division, not a walk over them (D456).
+#[derive(Default)]
+struct Sizes {
+    sizes: HashMap<usize, i32>,
+    sum: i64,
+}
+
+impl Sizes {
+    fn insert(&mut self, index: usize, size: i32) {
+        self.sum += i64::from(size) - self.sizes.insert(index, size).map_or(0, i64::from);
     }
-    (sizes.values().map(|size| i64::from(*size)).sum::<i64>() / sizes.len() as i64).max(1) as i32
+
+    fn contains_key(&self, index: &usize) -> bool {
+        self.sizes.contains_key(index)
+    }
+
+    fn len(&self) -> usize {
+        self.sizes.len()
+    }
+
+    /// Keeps the sizes of the indices `keep` says.
+    fn retain(&mut self, keep: impl Fn(usize) -> bool) {
+        let sum = &mut self.sum;
+        self.sizes.retain(|index, size| {
+            let kept = keep(*index);
+            if !kept {
+                *sum -= i64::from(*size);
+            }
+            kept
+        });
+    }
+
+    /// The average size measured (at least a pixel): what estimates of positions and of how
+    /// many items fit use.
+    fn average(&self) -> i32 {
+        if self.sizes.is_empty() {
+            return 1;
+        }
+        (self.sum / self.sizes.len() as i64).max(1) as i32
+    }
 }
 
 /// The items a lazy list will scroll to next, composed and measured between frames, as
@@ -2169,9 +2250,10 @@ impl PrefetchRequest for LazyListPrefetch {
 
 impl Prefetch {
     /// What to compose next between frames, from the `composed` range: one more item ahead in
-    /// the scroll direction (up to `PREFETCH_AHEAD` beyond those the layout wants), and of
-    /// those behind it doesn't want, the `KEPT_BEHIND` next to the wanted ones only, as a frame
-    /// composing the item would have left them. The range, and the item ahead (to measure
+    /// the scroll direction (within `limits`: `PREFETCH_AHEAD` items, or a grid's lines, beyond
+    /// those the layout wants), and of those behind it doesn't want, those within `limits`
+    /// only (`KEPT_BEHIND`), as a frame composing the item would have left them. The range, and
+    /// the item ahead (to measure
     /// next); `None` when nothing is to be done, or when the composed items don't cover the
     /// wanted ones (the frame composes those).
     fn next(&self, composed: (usize, usize)) -> Option<((usize, usize), Option<usize>)> {
@@ -2180,18 +2262,15 @@ impl Prefetch {
         if start > wanted_start || end < wanted_end {
             return None;
         }
-        // As many kept behind as composed ahead (`KEPT_BEHIND` is `PREFETCH_AHEAD`).
-        let beyond = self.ahead.get();
+        let (low, high) = self.limits.get();
         if self.forward.get() {
-            let ahead = (end < self.count.get().min(wanted_end + beyond)).then_some(end);
-            let kept = start.max(wanted_start.saturating_sub(beyond));
+            let ahead = (end < self.count.get().min(high)).then_some(end);
+            let kept = start.max(low);
             (ahead.is_some() || kept > start)
                 .then(|| ((kept, end + usize::from(ahead.is_some())), ahead))
         } else {
-            let ahead = (start > wanted_start.saturating_sub(beyond))
-                .then(|| start.checked_sub(1))
-                .flatten();
-            let kept = end.min(wanted_end + beyond);
+            let ahead = (start > low).then(|| start.checked_sub(1)).flatten();
+            let kept = end.min(high);
             (ahead.is_some() || kept < end).then(|| ((ahead.unwrap_or(start), kept), ahead))
         }
     }
