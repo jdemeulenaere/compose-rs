@@ -20,7 +20,8 @@ object ComposeRsOptimizations {
     /**
      * The RenderThread and the main thread in a performance hint session of compose-rs's own
      * while the view shows (API 33+): [ComposeRsView.isPerformanceHintEnabled]. On by default
-     * (D390, D440, D500).
+     * for apps (D390, D440, D500); the benchmarks' parity runs set it off, as Compose has no such
+     * session (D568).
      */
     const val PERFORMANCE_HINT = 1L shl 1
 
@@ -31,6 +32,42 @@ object ComposeRsOptimizations {
      */
     const val REUSE_PARAGRAPH_AT_SAME_LAYOUT_WIDTH = 1L shl 2
 
+    /** Lazy lists prefetch two items ahead of the scroll, where Compose prefetches one (D156, D560). */
+    const val PREFETCH_TWO_AHEAD = 1L shl 3
+
+    /**
+     * Prefetch steps start only with their recent maximum and a margin left, a step short of
+     * time gives its request up until the next scroll, and the idle time runs to the vsync on
+     * the frame time's phase (D340, D341, D381, D561). Compose starts a step with more than its
+     * average left, keeps a request for the next frame, and runs to the last frame's time plus
+     * an interval.
+     */
+    const val PREFETCH_BUDGET_RECENT_MAXIMUM = 1L shl 4
+
+    /** Lazy lists prefetch after a layout at rest too, not only on scrolls (D470, D562). */
+    const val PREFETCH_AT_REST = 1L shl 5
+
+    /** Lazy lists keep two items behind the scroll composed, and their recordings (D375, D380, D563). */
+    const val KEEP_ITEMS_BEHIND = 1L shl 6
+
+    /**
+     * Items a prefetch measured are drawn and recorded ahead, and the paragraphs it laid out
+     * recorded, in the same idle time (D322, D350, D564).
+     */
+    const val DRAW_PREFETCHED_AHEAD = 1L shl 7
+
+    /** Lazy grids compose and place two lines beyond each side (D456, D565). */
+    const val GRID_LINES_BEYOND = 1L shl 8
+
+    /** A frame dropping a path drawn as a path flushes HWUI's layers first (D510, D566). */
+    const val FLUSH_LAYERS_BEFORE_DROPPED_PATHS = 1L shl 9
+
+    /**
+     * Each paragraph is recorded once into a render node of its own, drawn by reference (D153,
+     * D567), where Compose draws a paragraph into its layer's recording each time it records.
+     */
+    const val PARAGRAPH_RENDER_NODES = 1L shl 10
+
     /** None: the rendering Compose does. */
     const val NONE = 0L
 
@@ -38,7 +75,7 @@ object ComposeRsOptimizations {
     const val DEFAULT = PERFORMANCE_HINT
 
     /** Every one. */
-    const val ALL = SINGLE_DRAWING_FADE or PERFORMANCE_HINT or REUSE_PARAGRAPH_AT_SAME_LAYOUT_WIDTH
+    const val ALL = SINGLE_DRAWING_FADE or PERFORMANCE_HINT or REUSE_PARAGRAPH_AT_SAME_LAYOUT_WIDTH or PREFETCH_TWO_AHEAD or PREFETCH_BUDGET_RECENT_MAXIMUM or PREFETCH_AT_REST or KEEP_ITEMS_BEHIND or DRAW_PREFETCHED_AHEAD or GRID_LINES_BEYOND or FLUSH_LAYERS_BEFORE_DROPPED_PATHS or PARAGRAPH_RENDER_NODES
 
     /**
      * The set a list names: `none`, `all`, `default`, or names separated by commas (as Rust's,

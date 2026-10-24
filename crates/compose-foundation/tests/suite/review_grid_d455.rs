@@ -77,6 +77,7 @@ fn grid(keys: Vec<usize>) -> GridFixture {
 /// follows *its* shift and the items in view, which didn't move, are composed again.
 #[test]
 fn review3_grid_first_composed_item_moved_keeps_the_items_in_view() {
+    crate::legacy::lazy_lists();
     let mut g = grid((0..3000).collect());
     g.state.scroll_to_item(900, 0);
     g.ui.wait_for_idle();

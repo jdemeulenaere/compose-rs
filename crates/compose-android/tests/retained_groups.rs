@@ -297,6 +297,17 @@ struct Serialized {
     out: Writer,
 }
 
+/// compose-rs's own lazy-list behaviours beyond Compose's, which hosts don't use by default
+/// (D560-D565): two ahead, D341's budget, prefetching at rest, two kept behind (their groups
+/// listed, D380), drawing ahead (D350). For the tests of kept and drawn-ahead groups.
+fn legacy() -> Optimizations {
+    Optimizations::parse(
+        "prefetch_two_ahead,prefetch_budget_recent_maximum,prefetch_at_rest,keep_items_behind,\
+         draw_prefetched_ahead",
+    )
+    .expect("known names")
+}
+
 impl Serialized {
     fn new(content: impl Fn() + 'static) -> Serialized {
         Serialized::with(Optimizations::defaults(), content)
@@ -1128,7 +1139,7 @@ fn groups_written_ahead_are_what_the_frame_placing_them_writes() {
     let state = compose_foundation::LazyListState::new(0, 0);
     let count = mutable_state_of(0u32);
     let (given, shown) = (*state, count.handle());
-    let mut serialized = Serialized::new(move || feed(given, shown));
+    let mut serialized = Serialized::with(legacy(), move || feed(given, shown));
     let mut ahead: HashMap<(u64, u64), Vec<u8>> = HashMap::new();
     let (mut kept, mut copied, mut layered) = (0, 0, 0);
     for step in 0..90 {
@@ -1237,7 +1248,7 @@ fn a_kept_item_placed_again_is_drawn_from_its_kept_record() {
     let state = compose_foundation::LazyListState::new(0, 0);
     let count = mutable_state_of(0u32);
     let (given, shown) = (*state, count.handle());
-    let mut serialized = Serialized::new(move || feed(given, shown));
+    let mut serialized = Serialized::with(legacy(), move || feed(given, shown));
     // Each group's record as last drawn (version and bytes), and the frames that kept it since.
     let mut last_drawn: HashMap<u64, (u64, Vec<u8>)> = HashMap::new();
     let mut kept_for: HashMap<u64, usize> = HashMap::new();
@@ -1291,7 +1302,7 @@ fn a_kept_item_that_changes_is_no_longer_kept() {
     let state = compose_foundation::LazyListState::new(0, 0);
     let changed = mutable_state_of(0u32);
     let (given, read_changed) = (*state, changed.handle());
-    let mut serialized = Serialized::new(move || {
+    let mut serialized = Serialized::with(legacy(), move || {
         use compose_foundation::*;
         LazyColumn!(
             modifier = Modifier.size((160.dp(), 150.dp())),
@@ -1336,7 +1347,7 @@ fn a_kept_item_whose_nested_layer_changes_is_no_longer_kept() {
     let state = compose_foundation::LazyListState::new(0, 0);
     let alpha = mutable_state_of(0.5f32);
     let (given, read_alpha) = (*state, alpha.handle());
-    let mut serialized = Serialized::new(move || {
+    let mut serialized = Serialized::with(legacy(), move || {
         use compose_foundation::*;
         LazyColumn!(
             modifier = Modifier.size((160.dp(), 150.dp())),
@@ -1687,6 +1698,29 @@ fn the_kotlin_constants_are_rusts() {
     );
 }
 
+/// The optimizations Kotlin alone acts on switch what it does where it does it: the flush layer
+/// (D566), paragraphs' render nodes (D567), recording ahead (D564) and the prefetch deadline
+/// (D561).
+#[test]
+fn the_kotlin_side_switches_its_optimizations() {
+    let kotlin = |file: &str| {
+        let path = format!(
+            "{}/../../android/compose-rs/src/main/java/rs/compose/android/{file}",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        std::fs::read_to_string(&path).unwrap_or_else(|error| panic!("{path}: {error}"))
+    };
+    let replayer = kotlin("Replayer.kt");
+    assert!(replayer.contains(
+        "if (flush && optimizations and ComposeRsOptimizations.FLUSH_LAYERS_BEFORE_DROPPED_PATHS != 0L)"
+    ));
+    let view = kotlin("ComposeRsView.kt");
+    for flag in ["PARAGRAPH_RENDER_NODES", "DRAW_PREFETCHED_AHEAD", "PREFETCH_BUDGET_RECENT_MAXIMUM"] {
+        assert!(view.contains(&format!("and ComposeRsOptimizations.{flag} ")), "{flag}");
+    }
+    assert!(kotlin("TextMeasurer.kt").contains("if (!hardware || !paragraphNodes)"));
+}
+
 // ---- Mutable paths, after a review ----------------------------------------------------------
 
 /// Two groups drawing one `Path`, changed outside drawing, then both drawn again in the same
@@ -1859,7 +1893,7 @@ fn review_inner_layers_in_kept_and_ahead_items_match_fresh_writes() {
     let state = LazyListState::new(0, 0);
     let tick = mutable_state_of(0u32);
     let (given, read) = (*state, tick.handle());
-    let mut serialized = Serialized::new(move || {
+    let mut serialized = Serialized::with(legacy(), move || {
         LazyColumn!(
             modifier = Modifier.size((160.dp(), 150.dp())),
             state = given,
@@ -2015,13 +2049,21 @@ mod randomized_inner_layers {
         }
     }
 
+    thread_local! {
+        /// The optimizations the hosts of a run use: Compose's prefetch, or compose-rs's own
+        /// (kept and drawn-ahead groups).
+        static RUN_OPTIMIZATIONS: std::cell::Cell<Optimizations> =
+            std::cell::Cell::new(Optimizations::defaults());
+    }
+
     fn labeled_host() -> (UiHost, Labels) {
         let labels: Labels = Rc::default();
-        let host = UiHost::new(
+        let mut host = UiHost::new(
             IntSize::new(200, 200),
             Density::default(),
             Box::new(Labeled { inner: FixedTextMeasurer::new(), labels: labels.clone() }),
         );
+        host.set_optimizations(RUN_OPTIMIZATIONS.with(std::cell::Cell::get));
         (host, labels)
     }
 
@@ -2218,7 +2260,7 @@ mod randomized_inner_layers {
         host.set_keep_unplaced_groups(true);
         let path = Path::new();
         host.set_content(move || scene(knobs, given, path.clone()));
-        let optimizations = Optimizations::defaults();
+        let optimizations = RUN_OPTIMIZATIONS.with(std::cell::Cell::get);
         let mut serialized = Serialized {
             host,
             resources: Resources::default(),
@@ -2317,8 +2359,13 @@ mod randomized_inner_layers {
     fn incremental_frames_with_inner_layers_draw_what_fresh_hosts_do() {
         let seeds: u64 = std::env::var("INNER_LAYER_SEEDS").ok().and_then(|s| s.parse().ok()).unwrap_or(40);
         let steps: usize = std::env::var("INNER_LAYER_STEPS").ok().and_then(|s| s.parse().ok()).unwrap_or(120);
-        for seed in 1..=seeds {
-            run(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15), steps);
+        // Compose's prefetch (items deactivated in the frame that leaves them), then compose-rs's
+        // own (kept behind and drawn ahead).
+        for optimizations in [Optimizations::defaults(), super::legacy()] {
+            RUN_OPTIMIZATIONS.with(|cell| cell.set(optimizations));
+            for seed in 1..=seeds {
+                run(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15), steps);
+            }
         }
         let (kept, inner, ahead) = (KEPT_SEEN.with(|c| c.get()), INNER_SEEN.with(|c| c.get()), AHEAD_SEEN.with(|c| c.get()));
         eprintln!("kept entries {kept}, inner-layer records {inner}, items written ahead {ahead}");

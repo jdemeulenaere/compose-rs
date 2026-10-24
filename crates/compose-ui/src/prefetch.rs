@@ -26,12 +26,19 @@ pub trait PrefetchRequest {
 pub struct PrefetchRequestScope<'a> {
     pub(crate) deadline: Instant,
     pub(crate) composition: &'a Composition,
+    pub(crate) idle_time: u64,
 }
 
 impl PrefetchRequestScope<'_> {
     /// The nanoseconds left until the next frame should start, as `availableTimeNanos`.
     pub fn available_time_nanos(&self) -> u64 {
         self.deadline.saturating_duration_since(Instant::now()).as_nanos() as u64
+    }
+
+    /// Which idle time this is: a number the scheduler counts up at each run, so a request can
+    /// tell its first step in an idle time from the next ones.
+    pub fn idle_time(&self) -> u64 {
+        self.idle_time
     }
 
     /// Recomposes the scopes the request's state writes invalidated, now, outside a frame (as
@@ -59,6 +66,8 @@ impl PrefetchRequestScope<'_> {
 #[derive(Clone, Default)]
 pub struct PrefetchScheduler {
     requests: Rc<RefCell<VecDeque<Rc<dyn PrefetchRequest>>>>,
+    /// The idle times run so far.
+    runs: Rc<std::cell::Cell<u64>>,
 }
 
 impl PrefetchScheduler {
@@ -72,11 +81,28 @@ impl PrefetchScheduler {
     }
 
     /// Runs the requests in order until `deadline`: one with work left keeps its place and ends
-    /// this idle time, as Compose's. Returns whether requests are left.
-    pub(crate) fn run(&self, composition: &Composition, deadline: Instant) -> bool {
+    /// this idle time, as Compose's (`AndroidPrefetchScheduler.run`: a request runs while time
+    /// is left, and is taken off the queue once it has no work left). With `unbounded_first`
+    /// (no frame drawn for two intervals: Compose's `isFrameIdle`), the first request runs
+    /// without a deadline. Returns whether requests are left.
+    pub(crate) fn run(
+        &self,
+        composition: &Composition,
+        deadline: Instant,
+        unbounded_first: bool,
+    ) -> bool {
+        let idle_time = self.runs.get() + 1;
+        self.runs.set(idle_time);
+        let mut unbounded = unbounded_first;
         loop {
             let Some(request) = self.requests.borrow().front().cloned() else { return false };
-            let mut scope = PrefetchRequestScope { deadline, composition };
+            let deadline = if unbounded {
+                Instant::now() + std::time::Duration::from_secs(3600)
+            } else {
+                deadline
+            };
+            unbounded = false;
+            let mut scope = PrefetchRequestScope { deadline, composition, idle_time };
             if scope.available_time_nanos() == 0 || request.execute(&mut scope) {
                 return true;
             }

@@ -42,9 +42,11 @@ internal object ComposeRsNative {
 
     /**
      * Between frames: lazy lists that scrolled compose and measure the items they'll reach next,
-     * for at most [availableNanos]. Returns whether work is left, for the next idle time.
+     * for at most [availableNanos] ([unboundedFirst]: the first request without a deadline, as
+     * Compose's scheduler when no frame was drawn for two intervals). Returns whether work is
+     * left, for the next idle time.
      */
-    @JvmStatic external fun prefetch(host: Long, availableNanos: Long): Boolean
+    @JvmStatic external fun prefetch(host: Long, availableNanos: Long, unboundedFirst: Boolean): Boolean
 
     /**
      * When the frame after the last Choreographer callback's should start (`System.nanoTime`):

@@ -18,10 +18,10 @@ use compose_ui::{
     Modifier, PaddingValues, Placeable, PrefetchScheduler,
 };
 
+use super::prefetch::{Laid, Policy};
 use super::{
-    BEYOND, Interval, Items, ItemsRef, KEPT_BEHIND, LazyItems, LazyListInner, LazyListPrefetch,
-    LazyListState, LazyScrollElement, MOST_MISSING, PREFETCH_AHEAD, Sizes, composed_range,
-    content_type_of,
+    BEYOND, Interval, Items, ItemsRef, LazyItems, LazyListInner, LazyListState, LazyScrollElement,
+    MOST_MISSING, Sizes, composed_range, content_type_of,
 };
 use crate::layout::{HorizontalArrangement, MainAxisArrangement, VerticalArrangement};
 
@@ -1359,15 +1359,24 @@ impl MeasurePolicy for LazyGridLayout {
                 *main = before + position;
             }
         }
-        // The lines wanted composed: those in view and `BEYOND` beyond each side (where a list
-        // composes a viewport's worth: a grid's lines hold several items, all placed and drawn,
-        // D456), and as many more as the room left would take if lines were missing.
+        // The lines wanted composed: those in view (with `GRID_LINES_BEYOND`, and `BEYOND`
+        // beyond each side, D456: where a list composed a viewport's worth, a grid's lines hold
+        // several items, all placed and drawn), and as many more as the room left would take if
+        // lines were missing. Compose's grid composes those in view (D565).
         let average = m.line_sizes.average();
-        let beyond = BEYOND;
+        let optimizations = m.scope.optimizations();
+        let policy = Policy::of(optimizations);
+        let beyond =
+            if optimizations.contains(compose_ui::platform::Optimization::GRID_LINES_BEYOND) {
+                BEYOND
+            } else {
+                0
+            };
         // And the lines a focus search asked for beyond those (D477).
         let (beyond_before, beyond_after) = state.beyond_bounds.get();
         let wanted_start = index.saturating_sub(beyond + beyond_before + wanted_before);
-        let mut wanted_end = m.lines.at_most_last(end_index + beyond + beyond_after - 1) + 1;
+        let mut wanted_end =
+            m.lines.at_most_last((end_index + beyond + beyond_after).saturating_sub(1)) + 1;
         if missing {
             let in_view = if placed.is_empty() {
                 average
@@ -1379,52 +1388,91 @@ impl MeasurePolicy for LazyGridLayout {
             let more = ((room / (in_view + spacing).max(1)) as usize + 1).min(MOST_MISSING);
             wanted_end = m.lines.at_most_last(end_index + more + beyond + beyond_after - 1) + 1;
         }
-        // The items composed, from the lines: whole lines, those ahead in the scroll direction
-        // and just behind it kept (`PREFETCH_AHEAD` and `KEPT_BEHIND` lines): the limits
-        // prefetching composes within too, in items, whatever the lines' spans (D456).
+        // The items composed, from the lines: whole lines.
         let wanted_items = (m.lines.start(wanted_start), m.lines.start(wanted_end));
-        let limits = (
-            m.lines.start(wanted_start.saturating_sub(KEPT_BEHIND)),
-            m.lines.start(wanted_end + PREFETCH_AHEAD),
-        );
         let covers = composed_start <= wanted_items.0 && composed_end >= wanted_items.1;
-        let too_many = (wanted_start > 2 * beyond
-            && composed_start < m.lines.start(wanted_start - 2 * beyond))
-            || composed_end > m.lines.start(wanted_end + 2 * beyond);
         let prefetch = &state.prefetch;
+        prefetch.policy.set(policy);
+        prefetch.visible.set(m.lines.start(end_index) - m.lines.start(index));
+        // Compose's grid prefetch strategy, once the layout settled: a line at a time, each of
+        // its items a request.
+        if !missing && wanted_before == 0 {
+            let laid = match (placed.first().copied(), placed.last().copied()) {
+                (Some((_, first_main)), Some((last_line, last_main))) => {
+                    let first = index.saturating_sub(beyond);
+                    let last = m.lines.at_most_last(end_index - 1 + beyond);
+                    Some(Laid {
+                        first,
+                        last,
+                        first_item: m.lines.start(first),
+                        last_item: m.lines.start(last + 1).saturating_sub(1),
+                        start_distance: -first_main,
+                        end_distance: last_main + m.size_of(last_line) + spacing - main_max,
+                    })
+                }
+                _ => None,
+            };
+            prefetch.after_layout(
+                state,
+                self.scheduler.as_ref(),
+                laid.as_ref(),
+                count,
+                &mut |line| m.lines.start(line)..m.lines.start(line + 1),
+            );
+        }
+        // The items that may stay composed: with `KEEP_ITEMS_BEHIND`, those ahead in the scroll
+        // direction and just behind it kept (lines: the limits prefetching composes within too,
+        // in items, whatever the lines' spans, D456); else, as Compose's, those wanted and those
+        // requests composed next to them.
+        let keep = policy.keep_behind > 0;
+        let limits = if keep {
+            let (behind, ahead) = if prefetch.forward.get() {
+                (policy.keep_behind, policy.ahead)
+            } else {
+                (policy.ahead, policy.keep_behind)
+            };
+            (m.lines.start(wanted_start.saturating_sub(behind)), m.lines.start(wanted_end + ahead))
+        } else {
+            prefetch.target(wanted_items, (composed_start, composed_end))
+        };
         let mut composed = (composed_start, composed_end);
-        if state.composed_more.take() && covers && !too_many {
+        let composed_more = state.composed_more.take();
+        if keep {
+            let slack = 2 * BEYOND;
+            let too_many = (wanted_start > slack
+                && composed_start < m.lines.start(wanted_start - slack))
+                || composed_end > m.lines.start(wanted_end + slack);
+            if composed_more && covers && !too_many {
+                state.composed.set(composed);
+            }
+            if !covers || too_many {
+                let start = if (composed_start..=composed_end).contains(&wanted_items.0) {
+                    composed_start.max(limits.0)
+                } else {
+                    wanted_items.0
+                };
+                let end = if (composed_start..=composed_end).contains(&wanted_items.1) {
+                    composed_end.min(limits.1)
+                } else {
+                    wanted_items.1
+                };
+                composed = (start, end);
+                state.compose(composed);
+            }
+        } else if composed != limits {
+            // The others are deactivated (kept for reuse) in this frame, as Compose's
+            // measurement leaves them.
+            composed = limits;
+            state.compose(composed);
+        } else if composed_more {
             state.composed.set(composed);
         }
-        if !covers || too_many {
-            // (`KEPT_BEHIND` is `PREFETCH_AHEAD`: the same lines kept whichever way.)
-            let start = if (composed_start..=composed_end).contains(&wanted_items.0) {
-                composed_start.max(limits.0)
-            } else {
-                wanted_items.0
-            };
-            let end = if (composed_start..=composed_end).contains(&wanted_items.1) {
-                composed_end.min(limits.1)
-            } else {
-                wanted_items.1
-            };
-            composed = (start, end);
-            state.compose(composed);
-        }
-        // After a scroll, the items of the next lines are composed between frames, one at a
-        // time, each measured in its cell.
         prefetch.node.set(Some(node));
         prefetch.count.set(count);
         prefetch.wanted.set(wanted_items);
         prefetch.limits.set(limits);
-        if scrolled != 0.0
-            && let Some(scheduler) = &self.scheduler
-            && prefetch.next(composed).is_some()
-            && prefetch.request.borrow().upgrade().is_none()
-        {
-            let request = Rc::new(LazyListPrefetch { state: Rc::downgrade(state) });
-            *prefetch.request.borrow_mut() = Rc::downgrade(&request);
-            scheduler.schedule_prefetch(request);
+        if keep {
+            prefetch.trim_between_frames(state, self.scheduler.as_ref(), composed);
         }
         let first_item = m.lines.start(index);
         state.position.set((first_item, offset));

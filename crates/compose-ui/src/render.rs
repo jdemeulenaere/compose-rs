@@ -120,8 +120,9 @@ impl UiTree {
         }
         let observer = self.observer.clone();
         let mut recording = mem::take(&mut self.display_list);
-        // The boundaries the last frame drew that this one won't, still composed: kept drawn.
-        if self.keeps_unplaced {
+        // The boundaries the last frame drew that this one won't, still composed: kept drawn
+        // (with `KEEP_ITEMS_BEHIND`: Compose keeps no recording of an item no frame places).
+        if self.keeps_unplaced_groups() {
             self.note_kept(&recording.groups);
         }
         // Cleared first: the last frame's groups let go of the recordings they shared, which a
@@ -143,7 +144,7 @@ impl UiTree {
         let mut groups = mem::take(&mut recording.groups);
         self.draw_boundaries(&recording.boundaries, &mut groups, observer.as_deref());
         recording.groups = groups;
-        if self.keeps_unplaced {
+        if self.keeps_unplaced_groups() {
             let mut kept = mem::take(&mut recording.kept);
             self.draw_kept(&mut kept);
             recording.kept = kept;
@@ -226,12 +227,20 @@ impl UiTree {
         self.kept = nodes;
     }
 
-    /// Whether frames list the kept boundaries' groups (`UiHost::set_keep_unplaced_groups`).
+    /// Whether frames list the kept boundaries' groups (`UiHost::set_keep_unplaced_groups`):
+    /// only with `Optimization::KEEP_ITEMS_BEHIND` (D380, D563).
     pub fn set_keep_unplaced_groups(&mut self, keep: bool) {
         self.keeps_unplaced = keep;
-        if !keep {
+        if !self.keeps_unplaced_groups() {
             self.kept.clear();
         }
+    }
+
+    /// Frames list the kept boundaries' groups: the platform asks, and the host keeps items
+    /// behind (`KEEP_ITEMS_BEHIND`).
+    pub(crate) fn keeps_unplaced_groups(&self) -> bool {
+        self.keeps_unplaced
+            && self.optimizations.contains(crate::optimizations::Optimization::KEEP_ITEMS_BEHIND)
     }
 
     /// How many boundaries are kept drawn: for tests.

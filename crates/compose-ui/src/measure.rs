@@ -204,8 +204,8 @@ impl UiTree {
     /// Measures `parent`'s child at `index` with `constraints` before the layout that places it
     /// (a lazy list's next item, between frames), as Compose's `premeasure`: that layout, measuring
     /// it with the same constraints, finds it measured. Returns its size, or `None` without such
-    /// a child. A repaint boundary measured so is drawn ahead too, if the platform asks
-    /// (`draw_ahead`).
+    /// a child. With `Optimization::DRAW_PREFETCHED_AHEAD`, a repaint boundary measured so is
+    /// drawn ahead too, if the platform asks (`draw_ahead`, D350, D564).
     pub fn premeasure(
         &mut self,
         parent: NodeId,
@@ -214,7 +214,9 @@ impl UiTree {
     ) -> Option<IntSize> {
         let child = self.get(parent)?.children.get(index)?.node;
         let size = self.measure_node(child, constraints);
-        if !self.measured_ahead.contains(&child) {
+        if self.optimizations.contains(crate::optimizations::Optimization::DRAW_PREFETCHED_AHEAD)
+            && !self.measured_ahead.contains(&child)
+        {
             self.measured_ahead.push(child);
         }
         Some(size)

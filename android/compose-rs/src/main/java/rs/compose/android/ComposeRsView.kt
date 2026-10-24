@@ -29,6 +29,7 @@ import android.view.inputmethod.BaseInputConnection
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputConnection
 import android.view.inputmethod.InputMethodManager
+import java.util.concurrent.TimeUnit
 
 /**
  * A view showing a compose-rs app (`compose_android::export_apps!` names them), as a plain
@@ -115,12 +116,23 @@ class ComposeRsView @JvmOverloads constructor(
             }
             if (value == field) return
             field = value
+            applyOptimizations(value)
             if (host != 0L) {
                 ComposeRsNative.setOptimizations(host, value)
                 requestFrame()
             }
             updatePerformanceHint()
         }
+
+    init {
+        applyOptimizations(optimizations)
+    }
+
+    /** What the Kotlin side does by [optimizations]: paragraphs' render nodes, the flush layer. */
+    private fun applyOptimizations(value: Long) {
+        measurer.paragraphNodes = value and ComposeRsOptimizations.PARAGRAPH_RENDER_NODES != 0L
+        replayer.optimizations = value
+    }
 
     /** The host was told it shows with hints enabled ([ComposeRsNative.setPerformanceHint]). */
     private var performanceHintShown = false
@@ -146,9 +158,16 @@ class ComposeRsView @JvmOverloads constructor(
     /** How long drawing an item ahead and recording its groups takes ([recordAhead]). */
     private val drawAheadCost = StepCost()
 
+    /**
+     * The frame time of the last [prefetchFrameCallback]: Compose's `AndroidPrefetchScheduler`'s
+     * `frameStartTimeNanos`, the frame callbacks it posts itself (not the frames').
+     */
+    private var prefetchFrameTimeNanos = 0L
+
     /** Prefetch work left: tried again after the next frame. */
     private val prefetchFrameCallback = Choreographer.FrameCallback { time ->
         noteFrameTime(time)
+        prefetchFrameTimeNanos = time
         post(prefetchRunnable)
     }
 
@@ -580,11 +599,16 @@ class ComposeRsView @JvmOverloads constructor(
             idleTimesWithoutTime = 0
             return
         }
+        val refreshRate = display?.refreshRate?.coerceAtLeast(30f) ?: 60f
+        val interval = (1_000_000_000 / refreshRate).toLong()
+        val ahead = optimizations and ComposeRsOptimizations.DRAW_PREFETCHED_AHEAD != 0L
+        if (optimizations and ComposeRsOptimizations.PREFETCH_BUDGET_RECENT_MAXIMUM == 0L) {
+            prefetchAsCompose(interval, ahead)
+            return
+        }
         // Until the next frame: the vsync after the last frame's, found from its frame time and
         // start, as a frame time shifted by buffer stuffing recovery would leave no time at all
         // (D340). The shifted time itself is the animations', not changed here.
-        val refreshRate = display?.refreshRate?.coerceAtLeast(30f) ?: 60f
-        val interval = (1_000_000_000 / refreshRate).toLong()
         // (`display.refreshRate`: right after a change of rate, a frame time from before it may
         // put the next frame up to an interval late, once.)
         val nextFrameNanos = ComposeRsNative.nextFrameNanos(frameTimeNanos, interval, frameStartedNanos)
@@ -608,11 +632,14 @@ class ComposeRsView @JvmOverloads constructor(
         val recordDeadline = nextFrameNanos - RECORD_MARGIN_NANOS
         // Paragraphs the last idle time laid out but had no time to record go first, then the
         // groups of the items it measured: their item is the next one shown.
-        var workLeft = measurer.recordLaidOut(recordDeadline) ||
-            recordAhead(recordDeadline, firstInIdleTime = measurer.recordedLast == 0)
+        var workLeft = ahead && (
+            measurer.recordLaidOut(recordDeadline) ||
+                recordAhead(recordDeadline, firstInIdleTime = measurer.recordedLast == 0)
+            )
         if (!workLeft) {
             val available = nextFrameNanos - System.nanoTime()
-            workLeft = available <= RECORD_MARGIN_NANOS || prefetchAndRecord(available, recordDeadline)
+            workLeft = available <= RECORD_MARGIN_NANOS ||
+                prefetchAndRecord(available, recordDeadline, unboundedFirst = false, ahead = ahead)
         }
         if (!workLeft) {
             prefetchScheduled = false
@@ -622,18 +649,52 @@ class ComposeRsView @JvmOverloads constructor(
     }
 
     /**
-     * Prefetches for [available] nanoseconds, then records the paragraphs it laid out and the
-     * groups of the items it measured until [deadlineNanos], so the frame showing their item
-     * only draws them. Returns whether work is left (prefetching, or paragraphs or groups to
-     * record).
+     * Prefetches as Compose's `AndroidPrefetchScheduler.run`: until the later of the last drawn
+     * frame's time (`drawingTime`) and the last frame callback it posted itself, plus an
+     * interval; with no frame drawn for two intervals, the first request without a deadline
+     * (`isFrameIdle`). Work left (a request whose next step didn't fit) goes on after the next
+     * frame, each frame until it's done (D561). With [ahead], what it measured is recorded until
+     * a margin before that deadline.
      */
-    private fun prefetchAndRecord(available: Long, deadlineNanos: Long): Boolean {
-        measurer.collectingLaidOut = true
+    private fun prefetchAsCompose(interval: Long, ahead: Boolean) {
+        idleTimesWithoutTime = 0
+        val now = System.nanoTime()
+        val drawn = TimeUnit.MILLISECONDS.toNanos(drawingTime)
+        val idle = now > drawn + 2 * interval
+        val nextFrameNanos = maxOf(prefetchFrameTimeNanos, drawn) + interval
+        val available = (nextFrameNanos - now).coerceAtLeast(0L)
+        var workLeft = ahead && (
+            measurer.recordLaidOut(nextFrameNanos - RECORD_MARGIN_NANOS) ||
+                recordAhead(nextFrameNanos - RECORD_MARGIN_NANOS, firstInIdleTime = measurer.recordedLast == 0)
+            )
+        if (!workLeft) {
+            workLeft = if (available > 0 || idle) {
+                prefetchAndRecord(available, nextFrameNanos - RECORD_MARGIN_NANOS, idle, ahead)
+            } else {
+                true
+            }
+        }
+        if (!workLeft) {
+            prefetchScheduled = false
+        } else {
+            Choreographer.getInstance().postFrameCallback(prefetchFrameCallback)
+        }
+    }
+
+    /**
+     * Prefetches for [available] nanoseconds ([unboundedFirst]: the first request without a
+     * deadline); with [ahead], records the paragraphs it laid out and the groups of the items it
+     * measured until [deadlineNanos], so the frame showing their item only draws them. Returns
+     * whether work is left (prefetching, or paragraphs or groups to record).
+     */
+    private fun prefetchAndRecord(available: Long, deadlineNanos: Long, unboundedFirst: Boolean, ahead: Boolean): Boolean {
+        measurer.collectingLaidOut = ahead
         val prefetchLeft = try {
-            ComposeRsNative.prefetch(host, available)
+            ComposeRsNative.prefetch(host, available, unboundedFirst)
         } finally {
             measurer.collectingLaidOut = false
         }
+        if (!ahead) return prefetchLeft
         val recordingLeft = measurer.recordLaidOut(deadlineNanos) || recordAhead(deadlineNanos, firstInIdleTime = false)
         return prefetchLeft || recordingLeft
     }

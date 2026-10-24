@@ -20,7 +20,7 @@ mod text_probe;
 use compose_runtime::platform;
 use compose_ui::{
     Density, IntSize, Key, KeyEvent, PointerEvent, SemanticsAction,
-    platform::{FixedTextMeasurer, NodeId, SemanticsNode, TextMeasurer, UiHost},
+    platform::{FixedTextMeasurer, NodeId, Optimizations, SemanticsNode, TextMeasurer, UiHost},
 };
 
 pub use matcher::{
@@ -38,6 +38,19 @@ pub use compose_runtime::platform::{
 
 /// The default test root: a phone-sized window at density 1.
 pub const DEFAULT_SIZE: IntSize = IntSize::new(400, 800);
+
+thread_local! {
+    /// What [`use_optimizations`] set for the rules made on this thread.
+    static OPTIMIZATIONS: std::cell::Cell<Option<Optimizations>> = const { std::cell::Cell::new(None) };
+}
+
+/// The rules made on this thread from now on give their hosts `optimizations`
+/// (`UiHost::set_optimizations`) before composing: for tests of compose-rs's own behaviours
+/// beyond Compose's (D520), which hosts don't use by default. Each test runs on a thread of its
+/// own, so it holds for the test that calls it.
+pub fn use_optimizations(optimizations: Optimizations) {
+    OPTIMIZATIONS.with(|cell| cell.set(Some(optimizations)));
+}
 
 /// A UI under test: owns a headless host, and runs a frame after every action, as Compose's
 /// test rule waits for idle.
@@ -77,6 +90,9 @@ impl ComposeTestRule {
         // The test's main clock: time moves only as the rule advances it.
         platform::set_manual_clock(platform::now_nanos());
         let mut rule = ComposeTestRule { host, auto_advance: true };
+        if let Some(optimizations) = OPTIMIZATIONS.with(std::cell::Cell::get) {
+            rule.host.set_optimizations(optimizations);
+        }
         rule.host.set_content(content);
         rule.wait_for_idle();
         rule
@@ -90,6 +106,9 @@ impl ComposeTestRule {
         platform::set_manual_clock(platform::now_nanos());
         let host = UiHost::headless(DEFAULT_SIZE.width, DEFAULT_SIZE.height);
         let mut rule = ComposeTestRule { host, auto_advance: false };
+        if let Some(optimizations) = OPTIMIZATIONS.with(std::cell::Cell::get) {
+            rule.host.set_optimizations(optimizations);
+        }
         rule.host.set_content(content);
         rule.wait_for_idle();
         rule

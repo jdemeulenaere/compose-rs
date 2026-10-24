@@ -75,6 +75,7 @@ fn last_live() -> usize {
 
 #[test]
 fn after_the_first_layout_and_a_scroll_down_prefetch_composes_the_next_items() {
+    crate::legacy::lazy_lists();
     let (mut ui, state) = list(0);
     // At rest after its first layout (rows 0 to 4 in view), the list asks for the two rows after
     // them: a first scroll finds them composed (D470).
@@ -102,6 +103,7 @@ fn after_the_first_layout_and_a_scroll_down_prefetch_composes_the_next_items() {
 
 #[test]
 fn a_scroll_that_reveals_prefetched_items_does_not_compose_them_again() {
+    crate::legacy::lazy_lists();
     let (mut ui, state) = list(0);
     state.scroll_by(30.0);
     ui.wait_for_idle();
@@ -141,6 +143,7 @@ fn live_items() -> Vec<usize> {
 
 #[test]
 fn a_scroll_reversing_direction_finds_the_items_behind_composed() {
+    crate::legacy::lazy_lists();
     let (mut ui, state) = list(100);
     scroll_down_prefetching(&mut ui, *state, 5);
     let first = live_items()[0];
@@ -167,6 +170,7 @@ fn a_scroll_reversing_direction_finds_the_items_behind_composed() {
 
 #[test]
 fn a_frame_composing_items_keeps_the_two_behind_the_wanted_ones() {
+    crate::legacy::lazy_lists();
     let (mut ui, state) = list(100);
     // Five rows down with no prefetching: the frame composes the rows it scrolls to (105 to
     // 109), and of those it no longer wants (100 to 104) keeps the two next to them.
@@ -178,6 +182,7 @@ fn a_frame_composing_items_keeps_the_two_behind_the_wanted_ones() {
 
 #[test]
 fn items_kept_behind_are_two_at_most() {
+    crate::legacy::lazy_lists();
     let (mut ui, state) = list(100);
     scroll_down_prefetching(&mut ui, *state, 20);
     // In view 130 to 134: prefetching adds two ahead (135, 136), and two behind are kept (128,
@@ -194,6 +199,7 @@ fn composed_at(first: usize) -> Vec<usize> {
 
 #[test]
 fn a_jump_composes_only_the_items_it_wants() {
+    crate::legacy::lazy_lists();
     // Far back: none of the items composed is kept, and none is composed beyond those wanted.
     let expected = composed_at(10);
     let (mut ui, state) = list(100);
@@ -216,6 +222,7 @@ fn a_jump_composes_only_the_items_it_wants() {
 
 #[test]
 fn a_scroll_up_prefetches_the_items_before() {
+    crate::legacy::lazy_lists();
     let (mut ui, state) = list(100);
     let first = LIVE.with(|live| live.borrow().iter().copied().min().unwrap());
     state.scroll_by(-30.0);
@@ -232,6 +239,7 @@ fn a_scroll_up_prefetches_the_items_before() {
 
 #[test]
 fn prefetch_past_its_deadline_does_nothing() {
+    crate::legacy::lazy_lists();
     let (mut ui, state) = list(0);
     state.scroll_by(30.0);
     ui.wait_for_idle();
@@ -246,6 +254,7 @@ fn prefetch_past_its_deadline_does_nothing() {
 
 #[test]
 fn prefetched_items_left_far_behind_are_disposed() {
+    crate::legacy::lazy_lists();
     let (mut ui, state) = list(100);
     state.scroll_by(30.0);
     ui.wait_for_idle();
@@ -281,6 +290,7 @@ fn items_composed(ui: &ComposeTestRule) -> usize {
 
 #[test]
 fn prefetch_changes_nothing_in_view_and_composes_no_more_than_it_prefetches() {
+    crate::legacy::lazy_lists();
     // Two lists scrolled alike, one prefetching between frames.
     let (mut plain, plain_state) = list(0);
     let (mut prefetched, state) = list(0);
@@ -311,6 +321,7 @@ fn prefetch_changes_nothing_in_view_and_composes_no_more_than_it_prefetches() {
 
 #[test]
 fn a_grid_prefetches_its_next_rows() {
+    crate::legacy::lazy_lists();
     COMPOSED.with(|composed| composed.borrow_mut().clear());
     LIVE.with(|live| live.borrow_mut().clear());
     let state = LazyGridState::new(0, 0);
@@ -404,6 +415,7 @@ fn counted_list() -> (ComposeTestRule, Owned<LazyListState>) {
 
 #[test]
 fn a_frame_revealing_prefetched_items_lays_out_no_text() {
+    crate::legacy::lazy_lists();
     let (mut ui, state) = counted_list();
     state.scroll_by(30.0);
     ui.wait_for_idle();
@@ -423,6 +435,7 @@ fn a_frame_revealing_prefetched_items_lays_out_no_text() {
 
 #[test]
 fn a_prefetch_with_nothing_to_do_does_nothing() {
+    crate::legacy::lazy_lists();
     let (mut ui, state) = counted_list();
     state.scroll_by(30.0);
     ui.wait_for_idle();
@@ -441,6 +454,7 @@ fn a_prefetch_with_nothing_to_do_does_nothing() {
 
 #[test]
 fn prefetch_asks_for_no_frame() {
+    crate::legacy::lazy_lists();
     let (mut ui, state) = list(0);
     let wakes = std::rc::Rc::new(std::cell::Cell::new(0));
     let counter = wakes.clone();
@@ -533,6 +547,7 @@ fn dump_without_paragraphs(list: &compose_ui::platform::FlatDisplayList) -> Stri
 /// assembles is what a fresh host at that position draws.
 #[test]
 fn a_frame_revealing_prefetched_items_draws_only_them() {
+    crate::legacy::lazy_lists();
     DRAWN.with(|drawn| drawn.borrow_mut().clear());
     let state = LazyListState::new(0, 0);
     let given = *state;
@@ -636,6 +651,7 @@ fn prefetched_painted_list() -> (ComposeTestRule, Owned<LazyListState>, usize) {
 /// of a frame, and the frame's list is a fresh host's.
 #[test]
 fn a_prefetched_item_drawn_ahead_is_kept_by_the_frame_placing_it() {
+    crate::legacy::lazy_lists();
     let (mut ui, state, last_drawn) = prefetched_painted_list();
     assert!(ui.host().has_draw_ahead_work());
     let ahead = draw_all_ahead(&mut ui);
@@ -675,6 +691,7 @@ fn a_prefetched_item_drawn_ahead_is_kept_by_the_frame_placing_it() {
 /// it, or once it's gone.
 #[test]
 fn items_measured_ahead_are_forgotten_once_placed_or_gone() {
+    crate::legacy::lazy_lists();
     let (mut ui, state, _) = prefetched_painted_list();
     assert_eq!(ui.host().with_tree(|tree| tree.measured_ahead_count()), 2);
     state.scroll_by(40.0);
@@ -702,6 +719,7 @@ fn items_measured_ahead_are_forgotten_once_placed_or_gone() {
 /// (drawing ahead waits for it), and the frame placing the item draws it again.
 #[test]
 fn an_item_drawn_ahead_draws_again_when_what_it_read_changes() {
+    crate::legacy::lazy_lists();
     let tint = mutable_state_of(0u32);
     let read = tint.handle();
     let state = LazyListState::new(0, 0);
@@ -770,6 +788,7 @@ fn KeyedList(state: LazyListState, order: MutableState<Vec<usize>>) {
 /// prefetched items ahead: every frame draws the same.
 #[test]
 fn drawing_ahead_changes_nothing_a_frame_draws() {
+    crate::legacy::lazy_lists();
     let rule = || {
         let state = LazyListState::new(0, 0);
         let order = mutable_state_of((0..300).collect::<Vec<usize>>());
@@ -863,6 +882,7 @@ fn fling(ui: &mut ComposeTestRule, from: f32, to: f32) -> u64 {
 /// find the items they reveal composed.
 #[test]
 fn flings_compose_no_item_in_their_frames() {
+    crate::legacy::lazy_lists();
     let state = LazyListState::new(0, 0);
     let given = *state;
     let mut ui = ComposeTestRule::sized(IntSize::new(300, 1200), move || {
@@ -892,6 +912,7 @@ fn flings_compose_no_item_in_their_frames() {
 /// from running in that idle time.
 #[test]
 fn a_scroll_frame_after_prefetch_asks_for_no_other_frame() {
+    crate::legacy::lazy_lists();
     let state = LazyListState::new(0, 0);
     let given = *state;
     let mut ui = ComposeTestRule::sized(IntSize::new(300, 600), move || {

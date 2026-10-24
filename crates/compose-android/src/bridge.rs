@@ -724,20 +724,23 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_frame(
     result | next_timer_bits()
 }
 
-/// `ComposeRsNative.prefetch(host, availableNanos)`: between frames, lazy lists that scrolled
-/// compose and measure the items they'll reach next, for at most `available_nanos` (the time to
-/// the next frame). Returns whether work is left, for the next idle time.
+/// `ComposeRsNative.prefetch(host, availableNanos, unboundedFirst)`: between frames, lazy lists
+/// that scrolled compose and measure the items they'll reach next, for at most `available_nanos`
+/// (the time to the next frame); with `unbounded_first`, the first request without a deadline
+/// (Compose's scheduler when no frame was drawn for two intervals). Returns whether work is left,
+/// for the next idle time.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_rs_compose_android_ComposeRsNative_prefetch(
     _env: JNIEnv,
     _class: JClass,
     host: jlong,
     available_nanos: jlong,
+    unbounded_first: jboolean,
 ) -> jboolean {
     // SAFETY: a live host, on the main thread.
     let host = unsafe { self::host(host) };
     let available = std::time::Duration::from_nanos(available_nanos.max(0) as u64);
-    u8::from(host.ui.prefetch(std::time::Instant::now() + available))
+    u8::from(host.ui.prefetch_with(std::time::Instant::now() + available, unbounded_first != 0))
 }
 
 /// `ComposeRsNative.hasDrawAhead(host)`: whether an item prefetched waits to be drawn ahead

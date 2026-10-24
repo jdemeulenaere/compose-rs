@@ -309,6 +309,9 @@ internal class Replayer(private val text: TextMeasurer) {
     }
     /** A path drawn as a path was dropped or redefined: the frame draws [flushNode]. */
     private var flushLayers = false
+
+    /** The view's [ComposeRsOptimizations] bits: [flushNode] only with `FLUSH_LAYERS_BEFORE_DROPPED_PATHS`. */
+    var optimizations = 0L
     /** The nodes [keptNode] draws, the first [keptCount]. */
     private var keptNodes = arrayOfNulls<RenderNode>(8)
     private var keptCount = 0
@@ -355,8 +358,10 @@ internal class Replayer(private val text: TextMeasurer) {
         replay(canvas, buffer, buffer.limit())
         // A frame of resource changes and a `LAYERS` section alone.
         if (!layersRetired) retireLayers(buffer, buffer.limit())
-        if (flushLayers) {
-            flushLayers = false
+        // Only with `FLUSH_LAYERS_BEFORE_DROPPED_PATHS` (D510, D566): Compose draws no such layer.
+        val flush = flushLayers
+        flushLayers = false
+        if (flush && optimizations and ComposeRsOptimizations.FLUSH_LAYERS_BEFORE_DROPPED_PATHS != 0L) {
             // Its recording changes, so its layer is drawn again, and flushed before the frame.
             val recording = flushNode.beginRecording(1, 1)
             try {

@@ -661,6 +661,7 @@ fn review_items_inserted_far_before_the_composed_ones_keep_their_composition() {
 /// fall out of the followed range and lose their composition.
 #[test]
 fn review2_first_composed_item_moved_forward_keeps_the_items_in_view() {
+    crate::legacy::lazy_lists();
     let mut list = Fixture::new(untyped(0..300));
     list.scroll(100);
     assert_eq!(list.state.first_visible_item_index(), 100);
@@ -688,6 +689,7 @@ fn review2_first_composed_item_moved_forward_keeps_the_items_in_view() {
 /// list): the range follows it back by ~95 places.
 #[test]
 fn review2_first_composed_item_moved_to_the_top_keeps_the_items_in_view() {
+    crate::legacy::lazy_lists();
     let mut list = Fixture::new(untyped(0..300));
     list.scroll(100);
     let composed = live();

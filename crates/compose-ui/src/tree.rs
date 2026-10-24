@@ -550,6 +550,12 @@ impl UiTree {
     pub fn set_optimizations(&mut self, optimizations: crate::optimizations::Optimizations) {
         let draws_differently = self.optimizations.draws_differently(optimizations);
         self.optimizations = optimizations;
+        if !self.keeps_unplaced_groups() {
+            self.kept.clear();
+        }
+        if !optimizations.contains(crate::optimizations::Optimization::DRAW_PREFETCHED_AHEAD) {
+            self.measured_ahead.clear();
+        }
         if draws_differently {
             self.invalidate_draw();
         }

@@ -694,7 +694,8 @@ internal class TextMeasurer(
      */
     fun draw(canvas: Canvas, hardware: Boolean, handle: Int, x: Float, y: Float) {
         val layout = layouts.get(handle) ?: return
-        if (!hardware) {
+        // Without render nodes of their own, drawn into the recording around them, as Compose's.
+        if (!hardware || !paragraphNodes) {
             canvas.save()
             canvas.translate(x, y)
             drawInPaint(handle, layout, canvas)
@@ -750,6 +751,13 @@ internal class TextMeasurer(
         nodes.put(handle, recorded)
         return recorded
     }
+
+    /**
+     * Each paragraph recorded once into a render node of its own, which recordings draw by
+     * reference ([ComposeRsOptimizations.PARAGRAPH_RENDER_NODES], D153); else drawn into the
+     * recording drawing it, as Compose's. Set by the view.
+     */
+    var paragraphNodes = false
 
     /**
      * While set (by the view, around a prefetch), the paragraphs laid out are noted in

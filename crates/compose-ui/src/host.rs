@@ -497,6 +497,13 @@ impl UiHost {
     /// (a list's first visible item), and no frame is asked for. A frame with work waiting (state
     /// changed, a scroll) goes first: nothing runs then.
     pub fn prefetch(&mut self, deadline: std::time::Instant) -> bool {
+        self.prefetch_with(deadline, false)
+    }
+
+    /// [`prefetch`](UiHost::prefetch), the first request without a deadline when
+    /// `unbounded_first`: as Compose's `AndroidPrefetchScheduler` when no frame was drawn for
+    /// two intervals (`isFrameIdle`), the others until `deadline`.
+    pub fn prefetch_with(&mut self, deadline: std::time::Instant, unbounded_first: bool) -> bool {
         if !self.has_prefetch_work() {
             return false;
         }
@@ -506,7 +513,7 @@ impl UiHost {
         let _prefetch = crate::trace::section(c"compose-rs: prefetch");
         // The requests' writes are composed here: they wake nothing.
         self.framing.set(true);
-        let more = self.prefetch_scheduler.run(&self.composition, deadline);
+        let more = self.prefetch_scheduler.run(&self.composition, deadline, unbounded_first);
         // The items composed aren't placed, and those disposed weren't: unless measuring wrote
         // state for others (observed writes, scopes invalidated), nothing needs a frame. Each
         // item is a repaint boundary, so measuring one marks only its own drawing (D155), drawn

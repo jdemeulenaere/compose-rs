@@ -106,9 +106,26 @@ struct Checked {
     seen: HashMap<(u64, u64), Vec<u8>>,
 }
 
+/// compose-rs's own lazy-list behaviours beyond Compose's, which hosts don't use by default
+/// (D560-D565): two ahead, D341's budget, prefetching at rest, two kept behind (their groups
+/// listed, D380), drawing ahead (D350). For the tests of kept and drawn-ahead groups.
+fn legacy() -> Optimizations {
+    Optimizations::parse(
+        "prefetch_two_ahead,prefetch_budget_recent_maximum,prefetch_at_rest,keep_items_behind,\
+         draw_prefetched_ahead",
+    )
+    .expect("known names")
+}
+
 impl Checked {
     fn new(content: impl Fn() + 'static) -> Checked {
+        Checked::with(Optimizations::defaults(), content)
+    }
+
+    /// With compose-rs's `optimizations`, as the bridge sets them.
+    fn with(optimizations: Optimizations, content: impl Fn() + 'static) -> Checked {
         let mut host = UiHost::headless(200, 200);
+        host.set_optimizations(optimizations);
         // As the bridge does (D380).
         host.set_keep_unplaced_groups(true);
         host.set_content(content);
@@ -375,7 +392,7 @@ fn a_scrolled_lazy_list_keeps_its_records_sound() {
     let given = *state;
     let tick = mutable_state_of(0u32);
     let tick_handle = tick.handle();
-    let mut checked = Checked::new(move || {
+    let mut checked = Checked::with(legacy(), move || {
         compose_foundation::LazyColumn(
             Modifier.size((100.dp(), 100.dp())),
             given,

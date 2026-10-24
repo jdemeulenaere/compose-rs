@@ -21,6 +21,7 @@
 //! in lines.
 
 mod grid;
+mod prefetch;
 
 pub use grid::{
     GridCells, GridItemSpan, LazyGridItemSpanScope, LazyGridScope, LazyGridState,
@@ -31,7 +32,6 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::hash::Hash;
 use std::rc::{Rc, Weak};
-use std::time::Instant;
 
 use compose_runtime::{
     ComposeArg, ImmutableList, ObjectHandle, Owned, OwnedState, SaveableStateHolder, composable,
@@ -41,12 +41,12 @@ use compose_ui::{
     Alignment, Constraints, Dp, EventContext, HorizontalAlignment, IntSize, Layout, Measurable,
     MeasurePolicy, MeasureResult, MeasureScope, Modifier, ModifierNode, ModifierNodeElement,
     PaddingValues, Placeable, PointerEvent, PointerEventPass, PointerInputModifierNode,
-    PrefetchRequest, PrefetchRequestScope, PrefetchScheduler, Rect, VerticalAlignment,
-    platform::NodeId,
+    PrefetchScheduler, Rect, VerticalAlignment,
 };
 
 use crate::layout::{HorizontalArrangement, MainAxisArrangement, VerticalArrangement};
 use crate::scroll::{DragScroller, bring_into_view_delta};
+use prefetch::{Laid, Policy, Prefetch};
 
 /// The lines a grid composes and places beyond each side of its viewport (D456), and the least
 /// "viewport's worth" of items a list's trimming counts in. A list itself composes and places
@@ -75,20 +75,6 @@ const KEY_WINDOW: usize = 100;
 /// The most composed items looked for in the key window when the items change (D455): a
 /// change's cost stays bounded (each of the others is checked where the one before it went).
 const MOST_KEY_SEARCHES: usize = 8;
-
-/// Items composed and measured between frames beyond those the layout wants, in the scroll
-/// direction.
-const PREFETCH_AHEAD: usize = 2;
-
-/// Items kept composed (and measured) behind those the layout wants, the other way from the
-/// scroll: a scroll reversing direction finds the first items it wants composed, rather than
-/// composing them in its frame before prefetching could go the new way (D375). As many as
-/// prefetching keeps ahead: the composed range is then the same whichever way the list goes.
-const KEPT_BEHIND: usize = PREFETCH_AHEAD;
-
-/// What a prefetch step leaves of the idle time beyond its estimate, at least: the estimate is
-/// a guess, and a step running past the deadline delays the next frame (D341).
-const PREFETCH_MARGIN_NANOS: u64 = 500_000;
 
 /// Where a lazy list is scrolled, as Compose's `LazyListState`: the first visible item and how
 /// far it is scrolled off. Reading them in composition recomposes on scrolls.
@@ -232,7 +218,7 @@ impl LazyListInner {
             room_estimated: Cell::new((false, false)),
             asked: Cell::new(0),
             overshoot: RefCell::new(None),
-            prefetch: Prefetch { forward: Cell::new(true), ..Prefetch::default() },
+            prefetch: Prefetch::new(),
             parent_size: Rc::default(),
             sticky: mutable_state_of(None),
             sticky_written: Cell::new(None),
@@ -286,87 +272,6 @@ impl Overshoot {
             };
             self.chain.post_scroll(compose_ui::Offset::ZERO, available, self.source);
         }))
-    }
-}
-
-/// What prefetching works from, as last laid out, and what it learned.
-#[derive(Default)]
-struct Prefetch {
-    /// The list's node, its item count and the items its layout wants composed.
-    node: Cell<Option<NodeId>>,
-    count: Cell<usize>,
-    wanted: Cell<(usize, usize)>,
-    /// The last scroll went towards the end (as if, before any).
-    forward: Cell<bool>,
-    /// The request waiting in the scheduler, if any.
-    request: RefCell<Weak<LazyListPrefetch>>,
-    /// An item composed ahead, to measure next.
-    to_measure: Cell<Option<usize>>,
-    /// The items prefetching may compose and keep: from the first kept behind the wanted ones
-    /// to the end of those composed ahead of them (a list's `PREFETCH_AHEAD` items each way, a
-    /// grid's lines: set by each layout, so a frame trims the composed items to the same).
-    limits: Cell<(usize, usize)>,
-    /// Each item's constraints, where they differ by item (a grid's spans); else the list's
-    /// `item_constraints`.
-    constraints_of: RefCell<Option<ItemConstraints>>,
-    /// How long composing and measuring an item take: an idle time too short for them is left
-    /// alone, as Compose's.
-    compose_cost: Cell<StepCost>,
-    measure_cost: Cell<StepCost>,
-}
-
-/// An item's constraints by its index (`None`: no such item).
-type ItemConstraints = Rc<dyn Fn(usize) -> Option<Constraints>>;
-
-/// How long a prefetch step (composing an item, or measuring it) takes, in nanoseconds: a
-/// running average (3/4 old + 1/4 new, as Compose's prefetch averages) and the recent maximum,
-/// which loses an eighth with each step timed. A step is expected to take the larger: one item
-/// much slower than the average (a cold text layout, a little core) means the next may be too,
-/// and starting it on the average's word overruns the next frame (D341).
-#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
-struct StepCost {
-    average: u64,
-    peak: u64,
-    /// Steps timed (up to `SETTLED_STEPS`): an average of fewer may be one outlier.
-    timed: u32,
-}
-
-/// Steps timed after which an average is the step's cost rather than its first samples.
-const SETTLED_STEPS: u32 = 4;
-
-impl StepCost {
-    /// How long the next step is expected to take.
-    fn estimate(self) -> u64 {
-        self.average.max(self.peak)
-    }
-
-    /// With a step that took `nanos`.
-    fn timed(self, nanos: u64) -> StepCost {
-        let average = if self.timed == 0 { nanos } else { self.average / 4 * 3 + nanos / 4 };
-        StepCost {
-            average,
-            peak: nanos.max(self.peak - self.peak / 8),
-            timed: (self.timed + 1).min(SETTLED_STEPS),
-        }
-    }
-
-    /// After the step didn't fit the time left, as the `first` step of its idle time or not.
-    /// Kept if steps before it took the time: the next idle time may fit it whole (lowering it
-    /// then let a 5 ms measurement start with 3 ms left after a composition, on the Pixel 8
-    /// Pro). Otherwise lowered, so nothing keeps the list from prefetching for good, but a miss
-    /// teaches nothing about the step's cost, so slowly where that cost is known: the recent
-    /// maximum by a quarter, down to the average (an outlier fades within a few idle times);
-    /// the average by a quarter while it rests on fewer than `SETTLED_STEPS` steps (it may be
-    /// one outlier), by a sixteenth after (heavy frames' short idle times would otherwise
-    /// wear a steady slow step's estimate down in two or three frames, until one it overruns
-    /// starts it).
-    fn missed(self, first: bool) -> StepCost {
-        if !first {
-            return self;
-        }
-        let average =
-            if self.timed < SETTLED_STEPS { self.average / 4 * 3 } else { self.average / 16 * 15 };
-        StepCost { average, peak: average.max(self.peak / 4 * 3), timed: self.timed }
     }
 }
 
@@ -475,8 +380,10 @@ impl LazyListState {
             inner.room_forward.set(left(inner.room_forward.get() - used, forward_estimated));
             inner.room_backward.set(left(inner.room_backward.get() + used, backward_estimated));
             inner.pending.set(inner.pending.get() + used);
-            // Prefetch goes the way the list was scrolled (not the way a layout steps back).
+            // Prefetch goes the way the list was scrolled (not the way a layout steps back),
+            // as Compose's strategy hears of each scroll's delta (negative towards the end).
             inner.prefetch.forward.set(used > 0.0);
+            inner.prefetch.delta.set(inner.prefetch.delta.get() - used);
             inner.remeasure.update(|count| count.wrapping_add(1));
         }
         used
@@ -1579,6 +1486,9 @@ fn LazyList(
     user_scroll_enabled: bool,
     content: impl Fn(LazyListScope) + 'static,
 ) {
+    // In an item a request composes, the list is one to prefetch the first items of (Compose's
+    // nested prefetch).
+    prefetch::note_nested(&state.inner_or_detached());
     let scope = LazyListScope {
         intervals: Rc::default(),
         item_scope: LazyItemScope { parent_size: state.inner_or_detached().parent_size.clone() },
@@ -1701,15 +1611,25 @@ fn LazyItems(
         slots.borrow_mut().assign(&items.0, &indices, |index| keep && sizes.contains_key(index))
     };
     slots.borrow_mut().items = Rc::downgrade(&items.0);
+    let parent = {
+        let inner = state.inner_or_detached();
+        *inner.prefetch.items.borrow_mut() = Rc::downgrade(&items.0);
+        prefetch::ParentList(Rc::downgrade(&inner))
+    };
     compose_runtime::CompositionLocalProvider(
         compose_ui::platform::LOCAL_CONSTRAINTS_HINT.provides(hint),
         || {
-            // The slots holding items first, in the children's order the layout reads; then
-            // those kept for reuse, deactivated: their nodes stay, unmeasured and unplaced. One
-            // loop, so a slot's group moves between the two.
-            for &(slot, content) in &composed {
-                key(slot.id, || compose_slot(slot, content, state, &items, holder));
-            }
+            compose_runtime::CompositionLocalProvider(
+                prefetch::LOCAL_PARENT_LIST.provides(Some(parent)),
+                || {
+                    // The slots holding items first, in the children's order the layout reads;
+                    // then those kept for reuse, deactivated: their nodes stay, unmeasured and
+                    // unplaced. One loop, so a slot's group moves between the two.
+                    for &(slot, content) in &composed {
+                        key(slot.id, || compose_slot(slot, content, state, &items, holder));
+                    }
+                },
+            );
         },
     );
 }
@@ -1813,6 +1733,7 @@ impl MeasurePolicy for LazyListLayout {
         let vertical = info.vertical;
         let density = scope.density();
         let node = scope.node_id();
+        let policy = Policy::of(scope.optimizations());
         // A row is laid out left to right, and `place_relative` mirrors it in a right-to-left
         // layout; a column's items align in the direction and are placed as they are, as
         // Compose's (so a centered item rounds as in left to right).
@@ -2120,64 +2041,95 @@ impl MeasurePolicy for LazyListLayout {
             state.asked.set(0);
         }
         let covers = composed_start <= wanted_start && composed_end >= wanted_end;
-        // Items composed far from those wanted are left in a frame, beyond two viewports' worth
-        // of them: prefetch leaves those within `limits` between frames.
-        let slack = 2 * viewport_worth;
+        let prefetch = &state.prefetch;
+        prefetch.policy.set(policy);
+        prefetch.visible.set(end_index - index);
+        // Compose's prefetch strategy, once the layout settled (nothing missing, nothing waiting
+        // to be composed before): what it shows, and the scrolling since.
+        if !missing && wanted_before == 0 {
+            let laid = match (placed.first(), placed.last()) {
+                (Some((_, first_main)), Some((last, last_main))) => Some(Laid {
+                    first: index,
+                    last: end_index - 1,
+                    first_item: index,
+                    last_item: end_index - 1,
+                    start_distance: -first_main,
+                    end_distance: last_main + main_of(last) + spacing - main_max,
+                }),
+                _ => None,
+            };
+            prefetch.after_layout(
+                state,
+                self.scheduler.as_ref(),
+                laid.as_ref(),
+                count,
+                &mut |unit| unit..unit + 1,
+            );
+        }
+        // The items that may stay composed: with `KEEP_ITEMS_BEHIND`, those up to the ones
+        // kept behind and prefetched ahead (D375); else, as Compose's, those wanted and those
+        // requests composed next to them.
+        let keep = policy.keep_behind > 0;
+        let limits = if keep {
+            let (behind, ahead) = if prefetch.forward.get() {
+                (policy.keep_behind, policy.ahead)
+            } else {
+                (policy.ahead, policy.keep_behind)
+            };
+            (wanted_start.saturating_sub(behind), wanted_end + ahead)
+        } else {
+            prefetch.target((wanted_start, wanted_end), (composed_start, composed_end))
+        };
         // After a focus search that laid items out beyond the bounds, those it composed go
         // too, but the ones next to those wanted, as after a scroll (D482).
-        let past_limits = composed_start + KEPT_BEHIND < wanted_start
-            || composed_end > wanted_end + PREFETCH_AHEAD;
+        let past_limits = composed_start < limits.0 || composed_end > limits.1;
         let search_ended = state.beyond_ended.take() && past_limits;
         if search_ended {
             state.dispose_leaving.set(true);
         }
-        let too_many = composed_start + slack < wanted_start
-            || composed_end > wanted_end + slack
-            || search_ended;
-        let prefetch = &state.prefetch;
         let mut composed = (composed_start, composed_end);
-        if state.composed_more.take() && covers && !too_many {
-            state.composed.set(composed);
-        }
-        if !covers || too_many {
-            // Items prefetched ahead in the scroll direction stay, and those just behind it (up
-            // to `KEPT_BEHIND`), for a scroll back: those composed next to the wanted ones (a
-            // jump keeps none, and composes none beyond them).
-            let (before, after) = if prefetch.forward.get() {
-                (KEPT_BEHIND, PREFETCH_AHEAD)
-            } else {
-                (PREFETCH_AHEAD, KEPT_BEHIND)
-            };
-            let start = if (composed_start..=composed_end).contains(&wanted_start) {
-                composed_start.max(wanted_start.saturating_sub(before))
-            } else {
-                wanted_start
-            };
-            let end = if (composed_start..=composed_end).contains(&wanted_end) {
-                composed_end.min(wanted_end + after)
-            } else {
-                wanted_end
-            };
-            composed = (start, end);
+        let composed_more = state.composed_more.take();
+        if keep {
+            // Items composed far from those wanted are left in a frame, beyond two viewports'
+            // worth of them: prefetch leaves those within `limits` between frames.
+            let slack = 2 * viewport_worth;
+            let too_many = composed_start + slack < wanted_start
+                || composed_end > wanted_end + slack
+                || search_ended;
+            if composed_more && covers && !too_many {
+                state.composed.set(composed);
+            }
+            if !covers || too_many {
+                // Those next to the wanted ones stay (a jump keeps none, and composes none
+                // beyond them).
+                let start = if (composed_start..=composed_end).contains(&wanted_start) {
+                    composed_start.max(limits.0)
+                } else {
+                    wanted_start
+                };
+                let end = if (composed_start..=composed_end).contains(&wanted_end) {
+                    composed_end.min(limits.1)
+                } else {
+                    wanted_end
+                };
+                composed = (start, end);
+                state.compose(composed);
+            }
+        } else if composed != limits {
+            // The others are deactivated (kept for reuse) in this frame, as Compose's
+            // measurement leaves them.
+            composed = limits;
             state.compose(composed);
+        } else if composed_more {
+            state.composed.set(composed);
         }
         // What prefetching works from.
         prefetch.node.set(Some(node));
         prefetch.count.set(count);
         prefetch.wanted.set((wanted_start, wanted_end));
-        // As many kept behind as composed ahead (`KEPT_BEHIND` is `PREFETCH_AHEAD`).
-        let limits = (wanted_start.saturating_sub(KEPT_BEHIND), wanted_end + PREFETCH_AHEAD);
         prefetch.limits.set(limits);
-        // After a scroll, the next items in its direction are composed between frames (and
-        // those left behind kept for reuse), if any are to be; at rest too (a first layout, a
-        // jump), so the first frames of a scroll find the next items composed (D470).
-        if let Some(scheduler) = &self.scheduler
-            && prefetch.next(composed).is_some()
-            && prefetch.request.borrow().upgrade().is_none()
-        {
-            let request = Rc::new(LazyListPrefetch { state: Rc::downgrade(state) });
-            *prefetch.request.borrow_mut() = Rc::downgrade(&request);
-            scheduler.schedule_prefetch(request);
+        if keep {
+            prefetch.trim_between_frames(state, self.scheduler.as_ref(), composed);
         }
         state.position.set((index, offset));
         if count > 0 {
@@ -2402,156 +2354,6 @@ impl Sizes {
             return 1;
         }
         (self.sum / self.sizes.len() as i64).max(1) as i32
-    }
-}
-
-/// The items a lazy list will scroll to next, composed and measured between frames, as
-/// Compose's `LazyListPrefetchStrategy`: one at a time, up to `PREFETCH_AHEAD` beyond those its
-/// layout wants, while the idle time left exceeds what an item took on average. Short of time,
-/// it gives up until the list scrolls again (which asks anew), rather than waking the platform
-/// at every frame for an item that may never fit.
-struct LazyListPrefetch {
-    state: Weak<LazyListInner>,
-}
-
-impl PrefetchRequest for LazyListPrefetch {
-    fn execute(&self, scope: &mut PrefetchRequestScope<'_>) -> bool {
-        let Some(state) = self.state.upgrade() else { return false };
-        let prefetch = &state.prefetch;
-        // A step that doesn't fit after others in the same idle time may fit the next one
-        // whole: its estimate is lowered only when it's the first.
-        let mut first = true;
-        // A step slower than its estimate (a little core, low clocks) slows those after it.
-        let mut pace = Pace::EXPECTED;
-        loop {
-            // An item composed ahead is measured first.
-            if let Some(index) = prefetch.to_measure.get() {
-                if !fits(scope, &prefetch.measure_cost, first, pace) {
-                    return false;
-                }
-                let _section =
-                    compose_ui::platform::trace::section(c"compose-rs: prefetch measure");
-                let start = Instant::now();
-                let child = state.children.borrow().iter().position(|composed| *composed == index);
-                let constraints_of = prefetch.constraints_of.borrow().clone();
-                let constraints = match constraints_of {
-                    Some(constraints_of) => constraints_of(index),
-                    None => state.item_constraints.get(),
-                };
-                if let (Some(node), Some(child), Some(constraints)) =
-                    (prefetch.node.get(), child, constraints)
-                {
-                    // What measuring it wrote (a nested list's items, a `BoxWithConstraints`'
-                    // constraints) is composed and measured too, as a frame's rounds do.
-                    for _ in 0..3 {
-                        scope.premeasure(node, child, constraints);
-                        if !scope.recompose() {
-                            break;
-                        }
-                    }
-                    // Timed only when it measured: an item gone in the meantime would lower
-                    // the estimate with a sample of nothing.
-                    pace = time(&prefetch.measure_cost, start, pace);
-                }
-                prefetch.to_measure.set(None);
-                first = false;
-                continue;
-            }
-            let Some((range, ahead)) = prefetch.next(state.composed.get()) else { return false };
-            if !fits(scope, &prefetch.compose_cost, first, pace) {
-                return false;
-            }
-            let section = compose_ui::platform::trace::section(c"compose-rs: prefetch compose");
-            let began = Instant::now();
-            state.composed.set(range);
-            scope.recompose();
-            pace = time(&prefetch.compose_cost, began, pace);
-            drop(section);
-            prefetch.to_measure.set(ahead);
-            first = false;
-        }
-    }
-}
-
-impl Prefetch {
-    /// What to compose next between frames, from the `composed` range: one more item ahead in
-    /// the scroll direction (within `limits`: `PREFETCH_AHEAD` items, or a grid's lines, beyond
-    /// those the layout wants), and of those behind it doesn't want, those within `limits`
-    /// only (`KEPT_BEHIND`), as a frame composing the item would have left them. The range, and
-    /// the item ahead (to measure next); `None` when nothing is to be done, or when the composed
-    /// items don't cover the wanted ones (the frame composes those).
-    fn next(&self, composed: (usize, usize)) -> Option<((usize, usize), Option<usize>)> {
-        let (start, end) = composed;
-        let (wanted_start, wanted_end) = self.wanted.get();
-        if start > wanted_start || end < wanted_end {
-            return None;
-        }
-        let (low, high) = self.limits.get();
-        if self.forward.get() {
-            let ahead = (end < self.count.get().min(high)).then_some(end);
-            let kept = start.max(low);
-            (ahead.is_some() || kept > start)
-                .then(|| ((kept, end + usize::from(ahead.is_some())), ahead))
-        } else {
-            let ahead = (start > low).then(|| start.checked_sub(1)).flatten();
-            let kept = end.min(high);
-            (ahead.is_some() || kept < end).then(|| ((ahead.unwrap_or(start), kept), ahead))
-        }
-    }
-}
-
-/// Whether the time left exceeds the step's estimate, at the `pace` of the list's steps so far
-/// in this idle time, by `PREFETCH_MARGIN_NANOS`. If not, the estimate may be lowered
-/// ([`StepCost::missed`]). `first`: no step of this request ran in this idle time (another list's may have: it then
-/// counts as a miss of this one's).
-fn fits(scope: &PrefetchRequestScope<'_>, cost: &Cell<StepCost>, first: bool, pace: Pace) -> bool {
-    let available = scope.available_time_nanos();
-    if available > pace.needed(cost.get().estimate()) {
-        return true;
-    }
-    cost.set(cost.get().missed(first));
-    false
-}
-
-/// Adds the time since `start` to the step's cost; returns the idle time's pace with it.
-fn time(cost: &Cell<StepCost>, start: Instant, pace: Pace) -> Pace {
-    let nanos = start.elapsed().as_nanos() as u64;
-    let estimate = cost.get().estimate();
-    cost.set(cost.get().timed(nanos));
-    pace.after(nanos, estimate)
-}
-
-/// How much slower than estimated a list's steps in an idle time ran: the largest ratio of a
-/// step's time to its estimate, at least 1 and at most `MOST_PACE` (D381). The steps after a
-/// slow one are expected to be as slow: the main thread is on a little core, or at low clocks,
-/// for the rest of the idle time. On the Pixel 8 Pro, 43 of the 46 prefetch measurements that
-/// ended more than 1.2 ms past the vsync (in 32 scroll runs) followed the item's composition in
-/// the same idle time, all on the little cores: they took 3.9–8.2 ms (a median of 5.1) against
-/// an estimate of a median 2.4 ms, and the composition before them a median 2.0 times its
-/// estimate.
-#[derive(Clone, Copy, Debug, PartialEq)]
-struct Pace(f64);
-
-/// The slowest pace: a step preempted, or a tiny estimate, says little about the next one, which
-/// would never fit (the list then gives up until the next scroll).
-const MOST_PACE: f64 = 4.0;
-
-impl Pace {
-    /// An idle time's first step: as estimated.
-    const EXPECTED: Pace = Pace(1.0);
-
-    /// After a step that took `nanos` against an estimate of `estimate` (none: 0).
-    fn after(self, nanos: u64, estimate: u64) -> Pace {
-        if estimate == 0 {
-            return self;
-        }
-        Pace(self.0.max((nanos as f64 / estimate as f64).min(MOST_PACE)))
-    }
-
-    /// The time left a step of `estimate` needs to start: its estimate at this pace, and the
-    /// margin.
-    fn needed(self, estimate: u64) -> u64 {
-        ((estimate as f64 * self.0) as u64).saturating_add(PREFETCH_MARGIN_NANOS)
     }
 }
 
@@ -2797,118 +2599,5 @@ impl PointerInputModifierNode for LazyScrollNode {
 
     fn on_cancel_pointer_input(&mut self) {
         self.drag.cancel();
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{PREFETCH_MARGIN_NANOS, Pace, StepCost};
-
-    const MS: u64 = 1_000_000;
-
-    #[test]
-    fn an_idle_time_starts_at_the_expected_pace() {
-        assert_eq!(Pace::EXPECTED.needed(3 * MS), 3 * MS + PREFETCH_MARGIN_NANOS);
-        // Steps at or under their estimate change nothing.
-        let pace = Pace::EXPECTED.after(MS, 2 * MS).after(2 * MS, 2 * MS);
-        assert_eq!(pace.needed(3 * MS), 3 * MS + PREFETCH_MARGIN_NANOS);
-    }
-
-    #[test]
-    fn a_slow_step_scales_the_next_ones_estimates() {
-        // A composition that took 2.75 ms against its 1.1 ms estimate (the little cores, on the
-        // Pixel 8 Pro): the measurement after it is expected to take 2.5 times its 2 ms too,
-        // so 3.4 ms left no longer starts it (it took 5 ms).
-        let pace = Pace::EXPECTED.after(2_750_000, 1_100_000);
-        assert_eq!(pace.needed(2 * MS), 5 * MS + PREFETCH_MARGIN_NANOS);
-        assert!(pace.needed(2 * MS) > 3_400_000);
-        // The slowest step so far sets it.
-        assert_eq!(pace.after(MS, MS).needed(2 * MS), 5 * MS + PREFETCH_MARGIN_NANOS);
-        // Nothing timed before says nothing.
-        assert_eq!(Pace::EXPECTED.after(5 * MS, 0).needed(MS), MS + PREFETCH_MARGIN_NANOS);
-        // A step preempted for 40 times its estimate counts as 4 times.
-        assert_eq!(Pace::EXPECTED.after(40 * MS, MS).needed(MS), 4 * MS + PREFETCH_MARGIN_NANOS);
-    }
-
-    #[test]
-    fn a_step_is_expected_to_take_the_recent_maximum() {
-        let mut cost = StepCost::default();
-        assert_eq!(cost.estimate(), 0, "nothing timed yet");
-        for _ in 0..8 {
-            cost = cost.timed(2 * MS);
-        }
-        assert_eq!(cost.estimate(), 2 * MS);
-        cost = cost.timed(8 * MS);
-        // The average says 3.5 ms; the step that took 8 ms says the next may too.
-        assert_eq!(cost.average, 3_500_000);
-        assert_eq!(cost.timed, super::SETTLED_STEPS);
-        assert_eq!(cost.estimate(), 8 * MS);
-    }
-
-    #[test]
-    fn the_maximum_fades_as_faster_steps_are_timed() {
-        let mut cost = StepCost::default().timed(2 * MS).timed(8 * MS);
-        let mut estimates = Vec::new();
-        for _ in 0..12 {
-            cost = cost.timed(2 * MS);
-            estimates.push(cost.estimate());
-        }
-        assert_eq!(estimates[0], 7 * MS, "an eighth less with each step");
-        assert!(estimates.windows(2).all(|pair| pair[1] <= pair[0]), "{estimates:?}");
-        assert!(estimates[11] < 3 * MS, "back near the steps' time: {estimates:?}");
-        assert!(estimates[11] >= 2 * MS, "never below the latest step: {estimates:?}");
-    }
-
-    #[test]
-    fn a_miss_lowers_an_unsettled_estimate_by_a_quarter() {
-        let cost = StepCost::default().timed(4 * MS).timed(8 * MS).missed(true);
-        assert_eq!((cost.average, cost.peak), (3_750_000, 6 * MS));
-        // Missed enough times, it fits any idle time again.
-        let mut cost = cost;
-        for _ in 0..40 {
-            cost = cost.missed(true);
-        }
-        assert!(cost.estimate() < 1_000);
-    }
-
-    #[test]
-    fn a_step_short_of_time_after_others_keeps_its_estimate() {
-        let cost = StepCost::default().timed(5 * MS);
-        assert_eq!(cost.missed(false), cost, "the next idle time may fit it whole");
-        assert!(cost.missed(true).estimate() < cost.estimate());
-    }
-
-    #[test]
-    fn misses_wear_a_steady_steps_estimate_down_slowly() {
-        let mut steady = StepCost::default();
-        for _ in 0..8 {
-            steady = steady.timed(4 * MS);
-        }
-        for _ in 0..4 {
-            steady = steady.missed(true);
-        }
-        // A sixteenth each: a 3 ms idle time still doesn't start it (a quarter each: 1.3 ms).
-        assert!(steady.estimate() + PREFETCH_MARGIN_NANOS > 3 * MS, "{steady:?}");
-        // But it fades, however short the idle times: nothing stops prefetching for good.
-        for _ in 0..100 {
-            steady = steady.missed(true);
-        }
-        assert!(steady.estimate() < MS, "{steady:?}");
-    }
-
-    #[test]
-    fn an_outliers_maximum_fades_fast() {
-        let mut cost = StepCost::default();
-        for _ in 0..8 {
-            cost = cost.timed(MS);
-        }
-        cost = cost.timed(40 * MS);
-        assert_eq!(cost.estimate(), 40 * MS);
-        for _ in 0..6 {
-            cost = cost.missed(true);
-        }
-        // Down to the average (10.75 ms, lowered by a sixteenth each).
-        assert_eq!(cost.peak, cost.average);
-        assert!(cost.estimate() < 11 * MS, "{cost:?}");
     }
 }

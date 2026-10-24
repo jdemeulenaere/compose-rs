@@ -318,6 +318,7 @@ fn a_grid_item_scrolled_back_gets_its_saved_state_and_no_other_items() {
 
 #[test]
 fn up_to_seven_grid_items_of_a_content_type_are_kept_for_reuse() {
+    crate::legacy::lazy_lists();
     for vertical in ORIENTATIONS {
         let mut grid = Fixture::new(vertical, untyped(0..60));
         let composed = live().len();

@@ -116,6 +116,7 @@ fn list(first: usize) -> (ComposeTestRule, Owned<LazyListState>) {
 /// goes first. On Android the stale flag stays set with no frame scheduled.
 #[test]
 fn prefetch_leaves_the_host_without_pending_work() {
+    crate::legacy::lazy_lists();
     let (mut ui, state) = list(0);
     state.scroll_by(30.0);
     ui.wait_for_idle();
@@ -134,6 +135,7 @@ fn prefetch_leaves_the_host_without_pending_work() {
 /// prefetch right after the frame, so any input in between lands here).
 #[test]
 fn prefetch_waits_for_a_pending_scroll() {
+    crate::legacy::lazy_lists();
     let (mut ui, state) = list(0);
     state.scroll_by(30.0);
     ui.wait_for_idle();
@@ -155,6 +157,7 @@ fn prefetch_waits_for_a_pending_scroll() {
 /// never prefetches again; every later item is composed in the frame that scrolls it in.
 #[test]
 fn one_slow_item_does_not_disable_prefetch_for_good() {
+    crate::legacy::lazy_lists();
     let (mut ui, state) = list(0);
     state.scroll_by(30.0);
     ui.wait_for_idle();
@@ -183,6 +186,7 @@ fn one_slow_item_does_not_disable_prefetch_for_good() {
 /// left alone while the recent maximum (decaying) doesn't fit (D341).
 #[test]
 fn after_a_slow_item_an_idle_time_shorter_than_it_is_left_alone() {
+    crate::legacy::lazy_lists();
     let (mut ui, state) = list(0);
     state.scroll_by(30.0);
     ui.wait_for_idle();
@@ -210,6 +214,7 @@ fn after_a_slow_item_an_idle_time_shorter_than_it_is_left_alone() {
 /// it (an outlier's fades fast: `one_slow_item_does_not_disable_prefetch_for_good`) (D341).
 #[test]
 fn idle_times_too_short_for_a_steady_step_do_not_wear_its_estimate_down() {
+    crate::legacy::lazy_lists();
     let (mut ui, state) = list(0);
     ITEM_MILLIS.with(|millis| millis.set(20));
     // Timed at least four times (`SETTLED_STEPS`).
@@ -234,6 +239,7 @@ fn idle_times_too_short_for_a_steady_step_do_not_wear_its_estimate_down() {
 /// with a safety margin (0.5 ms) to spare (D341).
 #[test]
 fn an_idle_time_within_the_safety_margin_is_left_alone() {
+    crate::legacy::lazy_lists();
     let (mut ui, state) = list(0);
     state.scroll_by(30.0);
     ui.wait_for_idle();
@@ -269,6 +275,7 @@ fn Cells(row: usize) {
 /// a frame, the jank prefetch is meant to remove (prefetch even wakes a frame for it).
 #[test]
 fn a_prefetched_row_of_a_nested_lazy_row_is_composed_ahead() {
+    crate::legacy::lazy_lists();
     reset();
     let state = LazyListState::new(0, 0);
     let given = *state;
@@ -304,6 +311,7 @@ fn a_prefetched_row_of_a_nested_lazy_row_is_composed_ahead() {
 /// (woken by prefetch) for the last.
 #[test]
 fn a_prefetched_box_with_constraints_is_ready_for_the_frame() {
+    crate::legacy::lazy_lists();
     reset();
     let state = LazyListState::new(0, 0);
     let given = *state;
@@ -384,6 +392,7 @@ fn auto_list() -> (ComposeTestRule, Owned<LazyListState>) {
 /// below the viewport. The focused field is off screen (keys go to something not shown).
 #[test]
 fn an_item_focused_when_prefetched_is_scrolled_into_view() {
+    crate::legacy::lazy_lists();
     let (mut ui, state) = auto_list();
     state.scroll_by(30.0);
     ui.wait_for_idle();
