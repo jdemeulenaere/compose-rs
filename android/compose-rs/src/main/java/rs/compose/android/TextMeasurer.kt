@@ -50,8 +50,10 @@ internal class TextMeasurer(
     private val pool = RenderNodePool("paragraph", NODE_POOL_CAPACITY)
     private val typefaces = HashMap<Long, Typeface>()
     /**
-     * A paint per paragraph style, shared by the layouts of that style (a layout reads its
-     * paint and never changes it): a paint's native side otherwise waits for the collector.
+     * A paint per paragraph style, shared by the layouts of that style: a paint's native side
+     * otherwise waits for the collector. A layout only reads its paint, but [drawInPaint] swaps
+     * the color and decoration of a layout's paint while it draws one given another paint
+     * ([restyle]), and puts them back.
      */
     private val paints = HashMap<PaintStyle, TextPaint>()
 
@@ -187,7 +189,7 @@ internal class TextMeasurer(
         fun inPaint(color: Int, decoration: Int): Intrinsics {
             val style = paintStyle.copy(color = color, decoration = decoration)
             return Intrinsics(
-                content, style, paint(style), direction, boring, lineHeight, letterSpaced, softWrap, maxLines,
+                content, style, this@TextMeasurer.paint(style), direction, boring, lineHeight, letterSpaced, softWrap, maxLines,
                 ellipsis, align, boringWidth, maxIntrinsicWidth,
             )
         }
@@ -204,7 +206,10 @@ internal class TextMeasurer(
 
     fun layout(handle: Int, text: String, request: ByteBuffer) {
         request.order(ByteOrder.LITTLE_ENDIAN)
-        val softWrap = request.get().toInt() != 0
+        val flags = request.get().toInt()
+        val softWrap = flags and 1 != 0
+        // For an intrinsic probe only: measured, never drawn, so not recorded ahead (D556).
+        val probe = flags and 2 != 0
         val maxLines = request.getInt()
         val ellipsis = request.get().toInt() != 0
         val align = request.get().toInt()
@@ -261,7 +266,18 @@ internal class TextMeasurer(
             content, base.paint, paint, direction, boring, lineHeight, letterSpaced, softWrap, maxLines, ellipsis,
             align, boringWidth, maxIntrinsicWidth,
         )
-        layoutAt(handle, kept, minWidth, maxWidth)
+        layoutAt(handle, kept, minWidth, maxWidth, drawn = !probe)
+    }
+
+    /**
+     * Lays out paragraph [previous]'s text again as paragraph [handle] for an intrinsic probe, as
+     * [relayout] does but keeping [previous]: measured from what [previous] kept, never drawn, so
+     * not recorded ahead (D556). False (nothing changed) when [previous] kept nothing.
+     */
+    fun probeLayout(previous: Int, handle: Int, minWidth: Int, maxWidth: Int): Boolean {
+        val kept = intrinsics.get(previous) ?: return false
+        layoutAt(handle, kept, minWidth, maxWidth, drawn = false)
+        return true
     }
 
     /**
@@ -298,7 +314,7 @@ internal class TextMeasurer(
     }
 
     /** Lays out [kept]'s text as paragraph [handle] at the constraints' width, writing [results]. */
-    private fun layoutAt(handle: Int, kept: Intrinsics, minWidth: Int, maxWidth: Int) {
+    private fun layoutAt(handle: Int, kept: Intrinsics, minWidth: Int, maxWidth: Int, drawn: Boolean = true) {
         // The width to break lines at, as Compose's `finalMaxWidth`: the constraint when wrapping
         // (or ellipsizing), else the text's own; then the text's width, kept in the constraints.
         val bounded = maxWidth != Int.MAX_VALUE
@@ -333,7 +349,7 @@ internal class TextMeasurer(
         layouts.put(handle, layout)
         intrinsics.put(handle, kept)
         releaseNode(handle)
-        if (collectingLaidOut) laidOut.add(handle)
+        if (collectingLaidOut && drawn) laidOut.add(handle)
         // StaticLayout limits the lines only when it ellipsizes: the rest are cut here, as
         // Compose's `TextLayout` does (the text is clipped to its height).
         val lines = layout.lineCount.coerceIn(1, maxLines.coerceAtLeast(1))

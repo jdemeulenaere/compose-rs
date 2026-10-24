@@ -402,6 +402,24 @@ pub trait TextMeasurer: std::any::Any {
     ) -> Option<ParagraphHandle> {
         None
     }
+    /// Lays `text` out for an intrinsic probe: measured, never drawn, so a platform prepares
+    /// nothing to draw it (Android doesn't record it ahead, D322). `measured` is the text's
+    /// measured paragraph in the same style, options, density and direction, if there's one: what
+    /// the measurer kept of it may be reused (as Compose's intrinsics come from its
+    /// `ParagraphIntrinsics`), and it stays as it is. The default lays the text out anew.
+    #[allow(clippy::too_many_arguments)]
+    fn layout_probe(
+        &mut self,
+        measured: Option<ParagraphHandle>,
+        text: &crate::annotated::AnnotatedString,
+        style: &TextStyle,
+        options: TextLayoutOptions,
+        constraints: Constraints,
+        density: &Density,
+    ) -> ParagraphHandle {
+        let _ = measured;
+        self.layout_annotated(text, style, options, constraints, density)
+    }
     /// Draws `paragraph`'s layout in `style`'s paint (its color and decoration, what
     /// [`TextStyle::has_same_layout_affecting_attributes`] leaves out), as Compose draws a kept
     /// paragraph with `Paragraph.paint(color, textDecoration)` after a style change that leaves

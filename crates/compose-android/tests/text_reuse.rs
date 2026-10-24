@@ -193,6 +193,18 @@ impl TextBackend for Model {
         Some(self.lay_out(handle, kept, min_width, max_width))
     }
 
+    /// As `relayout`, keeping `previous`: Kotlin's `probeLayout`.
+    fn probe_layout(
+        &mut self,
+        previous: u32,
+        handle: u32,
+        min_width: i32,
+        max_width: i32,
+    ) -> Option<LaidOut> {
+        let kept = self.paragraphs.borrow().get(&previous)?.kept.clone();
+        Some(self.lay_out(handle, kept, min_width, max_width))
+    }
+
     /// The same lines in a new paint, as Kotlin keeps the `Layout`: nothing measured.
     fn restyle(&mut self, previous: u32, handle: u32, color: u32, decoration: u8) -> bool {
         let mut paragraphs = self.paragraphs.borrow_mut();
@@ -406,7 +418,7 @@ fn a_resized_host_relays_texts_out_from_what_kotlin_kept_and_with_the_optimizati
     for text in [SHORT, CENTERED_WIDE, WRAPPING, ELLIPSIZED, HEBREW, HEBREW_END, SPACED] {
         assert_eq!(
             parity_counts.of(text),
-            LayoutCounts { fresh: 0, relaid: changes, restyled: 0 },
+            LayoutCounts { fresh: 0, relaid: changes, restyled: 0, probes: 0 },
             "{text:?}"
         );
     }
@@ -480,7 +492,7 @@ fn a_new_color_draws_the_kept_layout_without_laying_it_out() {
     counter.clear();
     color.set(compose_ui::Color::BLUE);
     ui.wait_for_idle();
-    assert_eq!(counter.of(SHORT), LayoutCounts { fresh: 0, relaid: 0, restyled: 1 });
+    assert_eq!(counter.of(SHORT), LayoutCounts { fresh: 0, relaid: 0, restyled: 1, probes: 0 });
     assert_eq!(model.measures.get(), measured);
     let drawn = ui
         .host()
@@ -493,4 +505,40 @@ fn a_new_color_draws_the_kept_layout_without_laying_it_out() {
         })
         .unwrap();
     assert_eq!(model.paint(drawn).0, compose_ui::Color::BLUE.argb());
+}
+
+// ---- Intrinsic probes ---------------------------------------------------------------------------
+
+#[test]
+fn a_probe_lays_out_from_the_measured_paragraphs_intrinsics_and_keeps_it() {
+    let model = Model::default();
+    let mut measurer = AndroidTextMeasurer::new(model.clone());
+    let density = Density::new(1.0);
+    let text = compose_ui::AnnotatedString::new(compose_ui::SharedString::from("Probed text"));
+    let options = TextLayoutOptions::default();
+    let measured = measurer.layout_annotated(
+        &text,
+        &TextStyle::DEFAULT,
+        options,
+        Constraints::new(0, 300, 0, 300),
+        &density,
+    );
+    let measures = model.measures.get();
+    let narrow = Constraints::new(0, 40, 0, Constraints::INFINITY);
+    let probe = measurer.layout_probe(
+        Some(measured),
+        &text,
+        &TextStyle::DEFAULT,
+        options,
+        narrow,
+        &density,
+    );
+    assert_eq!(model.measures.get(), measures, "measured from what Kotlin kept");
+    assert_eq!(measurer.text(measured), "Probed text", "the measured paragraph kept");
+    let fresh = measurer.layout_annotated(&text, &TextStyle::DEFAULT, options, narrow, &density);
+    assert_eq!(snapshot(&measurer, probe), snapshot(&measurer, fresh));
+    for paragraph in [measured, probe, fresh] {
+        measurer.release(paragraph);
+    }
+    assert_eq!(model.live(), 0);
 }

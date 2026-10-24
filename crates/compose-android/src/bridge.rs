@@ -125,6 +125,7 @@ struct JniText {
     layout: JMethodID,
     relayout: JMethodID,
     restyle: JMethodID,
+    probe_layout: JMethodID,
     hit_test: JMethodID,
     cursor: JMethodID,
     release: JMethodID,
@@ -217,6 +218,33 @@ impl TextBackend for JniText {
         check(&mut env, "TextMeasurer.relayout");
         // False (nothing kept) or an exception: Rust lays the text out anew.
         relaid.and_then(|value| value.z()).unwrap_or(false).then(|| self.laid_out())
+    }
+
+    fn probe_layout(
+        &mut self,
+        previous: u32,
+        handle: u32,
+        min_width: i32,
+        max_width: i32,
+    ) -> Option<LaidOut> {
+        self.clear_results();
+        let mut env = main_env();
+        // SAFETY: the method's signature is `(IIII)Z`.
+        let laid = unsafe {
+            env.call_method_unchecked(
+                &self.measurer,
+                self.probe_layout,
+                ReturnType::Primitive(Primitive::Boolean),
+                &[
+                    JValue::Int(previous as jint).as_jni(),
+                    JValue::Int(handle as jint).as_jni(),
+                    JValue::Int(min_width).as_jni(),
+                    JValue::Int(max_width).as_jni(),
+                ],
+            )
+        };
+        check(&mut env, "TextMeasurer.probeLayout");
+        laid.and_then(|value| value.z()).unwrap_or(false).then(|| self.laid_out())
     }
 
     fn restyle(&mut self, previous: u32, handle: u32, color: u32, decoration: u8) -> bool {
@@ -426,6 +454,7 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_create<'local>(
         ),
         relayout: method(&mut env, &measurer, "relayout", "(IIII)Z"),
         restyle: method(&mut env, &measurer, "restyle", "(IIII)Z"),
+        probe_layout: method(&mut env, &measurer, "probeLayout", "(IIII)Z"),
         hit_test: method(&mut env, &measurer, "hitTest", "(IFF)I"),
         cursor: method(&mut env, &measurer, "cursor", "(II)V"),
         release: method(&mut env, &measurer, "release", "(I)V"),

@@ -148,7 +148,25 @@ impl UiTree {
     /// before with the same constraints and nothing changed inside returns its size at once; if
     /// only descendants changed, they're measured again in place, and the node itself only if
     /// one of its children's sizes changed.
+    ///
+    /// An intrinsic probe (`max_intrinsic_width`, `max_intrinsic_height`) doesn't fill this
+    /// cache, as Compose's intrinsics don't touch its measurement (D556): it reads the size of a
+    /// node measured with the same constraints and nothing changed inside since; otherwise it
+    /// measures the node for itself and leaves it to be measured again (what its layers hold
+    /// then is the probe's, not a measurement to return).
     pub(crate) fn measure_node(&mut self, node: NodeId, constraints: Constraints) -> IntSize {
+        if self.intrinsic_probes > 0 {
+            let value = self.node(node);
+            if value.constraints == Some(constraints)
+                && !value.needs_measure
+                && !value.subtree_needs_measure
+            {
+                return value.layers[0].size;
+            }
+            let size = self.measure_layer(node, 0, constraints);
+            self.node_mut(node).constraints = None;
+            return size;
+        }
         let value = self.node(node);
         if value.constraints == Some(constraints)
             && !value.needs_measure

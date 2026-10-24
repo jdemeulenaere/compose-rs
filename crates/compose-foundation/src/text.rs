@@ -509,7 +509,11 @@ impl TextNode {
         if let Some(old) = self.probe.take() {
             measurer.release(old.paragraph);
         }
-        let paragraph = measurer.layout_annotated(
+        // From what the measurer kept of the measured paragraph, where it's in this setting.
+        let measured =
+            self.paragraph.filter(|_| self.density == Some(density) && self.direction == direction);
+        let paragraph = measurer.layout_probe(
+            measured,
             &self.text,
             &self.style,
             TextLayoutOptions { direction, ..self.options },

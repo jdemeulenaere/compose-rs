@@ -240,7 +240,10 @@ fn a_paint_only_style_change_keeps_the_layout_and_draws_it_again_as_compose() {
         counter.clear();
         style.set(paint);
         ui.wait_for_idle();
-        assert_eq!(counter.of("Styled"), LayoutCounts { fresh: 0, relaid: 0, restyled: 1 });
+        assert_eq!(
+            counter.of("Styled"),
+            LayoutCounts { fresh: 0, relaid: 0, restyled: 1, probes: 0 }
+        );
         assert_ne!(drawn(&mut ui), before, "drawn again, in the new paint");
     }
     // What lays it out differently lays it out again.
@@ -249,7 +252,10 @@ fn a_paint_only_style_change_keeps_the_layout_and_draws_it_again_as_compose() {
         counter.clear();
         style.set(layout);
         ui.wait_for_idle();
-        assert_eq!(counter.of("Styled"), LayoutCounts { fresh: 1, relaid: 0, restyled: 0 });
+        assert_eq!(
+            counter.of("Styled"),
+            LayoutCounts { fresh: 1, relaid: 0, restyled: 0, probes: 0 }
+        );
     }
 }
 

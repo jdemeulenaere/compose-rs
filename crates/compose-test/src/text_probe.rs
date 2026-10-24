@@ -23,12 +23,14 @@ pub struct LayoutCounts {
     pub fresh: usize,
     pub relaid: usize,
     pub restyled: usize,
+    /// Laid out for intrinsic probes (`layout_probe`), a layout each.
+    pub probes: usize,
 }
 
 impl LayoutCounts {
-    /// Every layout, either way (restyles aren't layouts).
+    /// Every layout, any way (restyles aren't layouts).
     pub fn total(&self) -> usize {
-        self.fresh + self.relaid
+        self.fresh + self.relaid + self.probes
     }
 }
 
@@ -98,6 +100,19 @@ impl<M: TextMeasurer> TextMeasurer for CountingTextMeasurer<M> {
     ) -> ParagraphHandle {
         self.counter.count(text.as_str(), |counts| counts.fresh += 1);
         self.inner.layout_annotated(text, style, options, constraints, density)
+    }
+
+    fn layout_probe(
+        &mut self,
+        measured: Option<ParagraphHandle>,
+        text: &AnnotatedString,
+        style: &TextStyle,
+        options: TextLayoutOptions,
+        constraints: Constraints,
+        density: &Density,
+    ) -> ParagraphHandle {
+        self.counter.count(text.as_str(), |counts| counts.probes += 1);
+        self.inner.layout_probe(measured, text, style, options, constraints, density)
     }
 
     fn metrics(&self, paragraph: ParagraphHandle) -> ParagraphMetrics {

@@ -35,13 +35,25 @@ pub trait TextBackend: 'static {
     ) -> Option<LaidOut> {
         None
     }
-    /// The UTF-16 offset nearest to `position`.
+    /// Lays out paragraph `previous`'s text again as paragraph `handle`, as `relayout` does,
+    /// for an intrinsic probe: `previous` is kept, and `handle` isn't recorded ahead. `None`
+    /// (the default) when the backend kept nothing of `previous`.
+    fn probe_layout(
+        &mut self,
+        _previous: u32,
+        _handle: u32,
+        _min_width: i32,
+        _max_width: i32,
+    ) -> Option<LaidOut> {
+        None
+    }
     /// Gives paragraph `previous`'s layout, as paragraph `handle`, the paint of `color` (ARGB)
     /// and `decoration` (1 underline, 2 line through), and releases `previous`. False (the
     /// default: a backend keeping nothing) leaves `previous` as it was.
     fn restyle(&mut self, _previous: u32, _handle: u32, _color: u32, _decoration: u8) -> bool {
         false
     }
+    /// The UTF-16 offset nearest to `position`.
     fn hit_test(&self, handle: u32, position: Offset) -> usize;
     /// The cursor before UTF-16 offset `offset`: its top, bottom and x.
     fn cursor(&self, handle: u32, offset: usize) -> Rect;
@@ -103,6 +115,9 @@ impl<B: TextBackend> AndroidTextMeasurer<B> {
         handle
     }
 
+    /// Lays out `text` in `style` and `runs`; for an intrinsic probe (`probe`: Kotlin doesn't
+    /// record it ahead) or to be drawn.
+    #[allow(clippy::too_many_arguments)]
     fn layout_runs(
         &mut self,
         text: &str,
@@ -111,6 +126,7 @@ impl<B: TextBackend> AndroidTextMeasurer<B> {
         options: TextLayoutOptions,
         constraints: Constraints,
         density: &Density,
+        probe: bool,
     ) -> ParagraphHandle {
         let handle = self.next_handle();
         let right_to_left =
@@ -125,6 +141,7 @@ impl<B: TextBackend> AndroidTextMeasurer<B> {
             constraints,
             density,
             right_to_left,
+            probe,
         );
         let laid_out = self.backend.layout(handle, text, &self.request.bytes);
         self.paragraphs.insert(handle, Entry { text: text.to_string(), laid_out, right_to_left });
@@ -141,7 +158,7 @@ impl<B: TextBackend> TextMeasurer for AndroidTextMeasurer<B> {
         constraints: Constraints,
         density: &Density,
     ) -> ParagraphHandle {
-        self.layout_runs(text, style, &[], options, constraints, density)
+        self.layout_runs(text, style, &[], options, constraints, density, false)
     }
 
     fn layout_annotated(
@@ -152,14 +169,41 @@ impl<B: TextBackend> TextMeasurer for AndroidTextMeasurer<B> {
         constraints: Constraints,
         density: &Density,
     ) -> ParagraphHandle {
-        // Each run's own color and decoration only, the paragraph's paint giving the rest, so a
-        // new paint (`restyle`) reaches the runs that don't set them.
-        let runs = if text.span_styles.is_empty() {
-            Vec::new()
-        } else {
-            text.runs(&TextStyle { color: Color::UNSPECIFIED, text_decoration: None, ..*style })
-        };
-        self.layout_runs(text.as_str(), style, &runs, options, constraints, density)
+        let runs = paint_free_runs(text, style);
+        self.layout_runs(text.as_str(), style, &runs, options, constraints, density, false)
+    }
+
+    /// From what Kotlin kept of `measured` where it can (`probe_layout`), else anew; either way
+    /// not recorded ahead (D556).
+    fn layout_probe(
+        &mut self,
+        measured: Option<ParagraphHandle>,
+        text: &AnnotatedString,
+        style: &TextStyle,
+        options: TextLayoutOptions,
+        constraints: Constraints,
+        density: &Density,
+    ) -> ParagraphHandle {
+        let measured = measured.map(|paragraph| paragraph.0 as u32);
+        if let Some(previous) = measured.filter(|previous| self.paragraphs.contains_key(previous)) {
+            let handle = self.next_handle();
+            let _layout = compose_ui::platform::trace::section(c"compose-rs: text layout");
+            let (min_width, max_width) = width_bounds(constraints);
+            if let Some(laid_out) =
+                self.backend.probe_layout(previous, handle, min_width, max_width)
+            {
+                let entry = &self.paragraphs[&previous];
+                let entry = Entry {
+                    text: entry.text.clone(),
+                    laid_out,
+                    right_to_left: entry.right_to_left,
+                };
+                self.paragraphs.insert(handle, entry);
+                return ParagraphHandle(handle as u64);
+            }
+        }
+        let runs = paint_free_runs(text, style);
+        self.layout_runs(text.as_str(), style, &runs, options, constraints, density, true)
     }
 
     fn metrics(&self, paragraph: ParagraphHandle) -> ParagraphMetrics {
@@ -302,6 +346,19 @@ pub fn byte_offset(text: &str, index: usize) -> usize {
     text.len()
 }
 
+/// `text`'s runs, each with its own color and decoration only (none if its spans set none), the
+/// paragraph's paint giving the rest, so a new paint (`restyle`) reaches the runs that don't set
+/// them. None without spans.
+fn paint_free_runs(
+    text: &AnnotatedString,
+    style: &TextStyle,
+) -> Vec<(std::ops::Range<usize>, TextStyle, Color)> {
+    if text.span_styles.is_empty() {
+        return Vec::new();
+    }
+    text.runs(&TextStyle { color: Color::UNSPECIFIED, text_decoration: None, ..*style })
+}
+
 /// The minimum and maximum width Kotlin lays a paragraph out between (`i32::MAX`: unbounded).
 fn width_bounds(constraints: Constraints) -> (i32, i32) {
     let max_width = if constraints.has_bounded_width() { constraints.max_width } else { i32::MAX };
@@ -310,7 +367,7 @@ fn width_bounds(constraints: Constraints) -> (i32, i32) {
 
 /// The request `TextMeasurer.kt` reads: line options, then the base style, then the runs.
 ///
-/// Options: soft wrap (u8), max lines (u32), ellipsis (u8), alignment (u8: 0 normal, 1
+/// Options: flags (u8: 1 soft wrap, 2 for an intrinsic probe only), max lines (u32), ellipsis (u8), alignment (u8: 0 normal, 1
 /// opposite, 2 center, 3 justify), right to left (u8), min and max width (i32, max
 /// `i32::MAX` unbounded). A style: color (ARGB u32), font size (px f32), weight (u32), italic
 /// (u8), family (u8: 0 sans serif, 1 serif, 2 monospace, 3 cursive, 4 named, then its name's
@@ -328,12 +385,13 @@ fn encode_request(
     constraints: Constraints,
     density: &Density,
     right_to_left: bool,
+    probe: bool,
 ) {
     out.bytes.clear();
     let ellipsis = options.overflow == TextOverflow::Ellipsis;
     // As Compose: an ellipsis without soft wrapping is one line.
     let max_lines = if ellipsis && !options.soft_wrap { 1 } else { options.max_lines };
-    out.u8(u8::from(options.soft_wrap));
+    out.u8(u8::from(options.soft_wrap) | (u8::from(probe) << 1));
     // A Java `int`: unlimited is `Integer.MAX_VALUE`, not -1.
     out.u32(max_lines.clamp(1, i32::MAX as u32));
     out.u8(u8::from(ellipsis));
@@ -535,5 +593,28 @@ mod tests {
         );
         assert_eq!((u32_at(83), u32_at(87), request[91]), (3, 6, 0b10), "its own color");
         assert_eq!(u32_at(92), Color::RED.argb());
+    }
+
+    #[test]
+    fn a_probe_without_kept_intrinsics_is_marked_for_measuring_only() {
+        let mut measurer = AndroidTextMeasurer::new(Fake::default());
+        let text = AnnotatedString::new(compose_ui::SharedString::from("probe"));
+        let options = TextLayoutOptions::default();
+        let constraints = Constraints::new(0, 300, 0, 300);
+        let density = Density::new(1.0);
+        let measured =
+            measurer.layout_annotated(&text, &TextStyle::DEFAULT, options, constraints, &density);
+        // The fake keeps nothing to lay out from: a request, flagged.
+        measurer.layout_probe(
+            Some(measured),
+            &text,
+            &TextStyle::DEFAULT,
+            options,
+            constraints,
+            &density,
+        );
+        let requests = &measurer.backend.requests;
+        assert_eq!(requests[0][0], 1, "soft wrap, to be drawn");
+        assert_eq!(requests[1][0], 0b11, "soft wrap, for a probe only");
     }
 }
