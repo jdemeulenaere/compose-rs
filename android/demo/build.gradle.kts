@@ -5,7 +5,7 @@ plugins {
 
 android {
     namespace = "rs.compose.demo"
-    compileSdk = 36
+    compileSdk = 37
     // Pinned (README.md): the Android Gradle plugin strips native libraries only when it's set.
     ndkVersion = "27.2.12479018"
     defaultConfig {
@@ -71,8 +71,8 @@ androidComponents {
 
 dependencies {
     implementation(project(":compose-rs"))
-    implementation(platform("androidx.compose:compose-bom:2026.06.01"))
+    implementation(platform("androidx.compose:compose-bom:2026.09.00"))
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.material3:material3")
-    implementation("androidx.activity:activity-compose:1.12.4")
+    implementation("androidx.activity:activity-compose:1.13.0")
 }
