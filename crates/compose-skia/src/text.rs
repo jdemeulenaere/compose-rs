@@ -281,10 +281,11 @@ impl SkiaTextMeasurer {
         let mut paragraph_style = ParagraphStyle::new();
         paragraph_style.set_text_style(&text_style);
         // A trimmed line height leaves the first line's top or the last line's bottom at the
-        // font's, as Compose's `LineHeightStyle.Trim`.
-        if let Some(line_height_style) = style.line_height_style {
+        // font's, as Compose's `LineHeightStyle.Trim`; a style without a line height style
+        // takes `LineHeightStyle.Default` (both trimmed), as Compose's (D571).
+        if style.line_height.is_specified() {
             use skia_safe::textlayout::TextHeightBehavior as Behavior;
-            let trim = line_height_style.trim;
+            let trim = style.line_height_style.unwrap_or(compose_ui::LineHeightStyle::DEFAULT).trim;
             paragraph_style.set_text_height_behavior(
                 match (trim.trims_first_line_top(), trim.trims_last_line_bottom()) {
                     (true, true) => Behavior::DisableAll,
@@ -437,10 +438,11 @@ fn skia_text_style(style: &TextStyle, density: &Density) -> SkiaTextStyle {
         text_style.set_height(density.sp_to_px(style.line_height) / font_px);
         text_style.set_height_override(true);
         // A centered line height splits the extra space evenly (Material 3's, D571); Skia's
-        // default scales the font's ascent and descent, as Compose's proportional alignment.
-        let centered = style.line_height_style.is_some_and(|line_height_style| {
-            line_height_style.alignment == compose_ui::LineHeightAlignment::CENTER
-        });
+        // default scales the font's ascent and descent, as Compose's proportional alignment
+        // (`LineHeightStyle.Default`'s, for a style without one).
+        let alignment =
+            style.line_height_style.unwrap_or(compose_ui::LineHeightStyle::DEFAULT).alignment;
+        let centered = alignment == compose_ui::LineHeightAlignment::CENTER;
         text_style.set_half_leading(centered);
     }
     text_style

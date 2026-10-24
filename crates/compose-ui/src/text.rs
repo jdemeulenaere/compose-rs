@@ -248,8 +248,9 @@ impl LineHeightTrim {
 
 /// How a line height is spread around each line's text, as Compose's `LineHeightStyle` (its
 /// `Mode.Fixed`, the default: every line is the line height). A style without one
-/// (`TextStyle::line_height_style` `None`) spreads it as Compose's `LineHeightSpan` does:
-/// proportionally, nothing trimmed. Material 3's text styles center it and trim nothing
+/// (`TextStyle::line_height_style` `None`) takes `LineHeightStyle::DEFAULT`, proportional with
+/// both ends trimmed, as Compose's `createCharSequence` does without `includeFontPadding`
+/// (which compose-rs doesn't have). Material 3's text styles center it and trim nothing
 /// (`DefaultLineHeightStyle`).
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct LineHeightStyle {
@@ -280,8 +281,8 @@ pub struct TextStyle {
     pub text_decoration: Option<TextDecoration>,
     pub text_align: Option<TextAlign>,
     pub line_height: Sp,
-    /// How `line_height` is spread around each line: `None` as Compose's `LineHeightSpan`
-    /// (proportionally, nothing trimmed).
+    /// How `line_height` is spread around each line: `None` as `LineHeightStyle::DEFAULT`
+    /// (proportionally, both ends trimmed), as Compose's.
     pub line_height_style: Option<LineHeightStyle>,
 }
 

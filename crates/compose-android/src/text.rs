@@ -464,19 +464,14 @@ fn encode_style(out: &mut Writer, style: &TextStyle, background: Color, density:
     } else {
         0.0
     });
-    // How the line height is spread: 0 as Compose's `LineHeightSpan` (no style), else 1, the
-    // alignment's top ratio (-1 proportional) and the trim (1 first line's top, 2 last line's
-    // bottom), as its `LineHeightStyleSpan`.
-    match style.line_height_style {
-        None => out.u8(0),
-        Some(line_height_style) => {
-            out.u8(1);
-            out.f32(line_height_style.alignment.top_ratio);
-            let trim = line_height_style.trim;
-            out.u8(u8::from(trim.trims_first_line_top())
-                | (u8::from(trim.trims_last_line_bottom()) << 1));
-        }
-    }
+    // How the line height is spread, as Compose's `LineHeightStyleSpan`: the alignment's top
+    // ratio (-1 proportional) and the trim (1 the first line's top, 2 the last line's bottom).
+    // A style without one takes `LineHeightStyle.Default`, as Compose's `createCharSequence`
+    // (its plain `LineHeightSpan` is for `includeFontPadding`, which compose-rs doesn't have).
+    let line_height_style = style.line_height_style.unwrap_or(compose_ui::LineHeightStyle::DEFAULT);
+    out.f32(line_height_style.alignment.top_ratio);
+    let trim = line_height_style.trim;
+    out.u8(u8::from(trim.trims_first_line_top()) | (u8::from(trim.trims_last_line_bottom()) << 1));
     out.u32(if background.is_specified() { background.argb() } else { 0 });
 }
 
@@ -594,22 +589,24 @@ mod tests {
         let constraints = Constraints::new(0, 300, 0, 300);
         measurer.layout_annotated(&text, &style, options, constraints, &Density::new(1.0));
         let request = &measurer.backend.requests[0];
-        // 16 bytes of options, then the 28-byte base style (its color first: the paint's).
+        // 16 bytes of options, then the 32-byte base style (its color first: the paint's).
         assert_eq!(u32::from_le_bytes(request[16..20].try_into().unwrap()), Color::BLUE.argb());
         let u32_at = |at: usize| u32::from_le_bytes(request[at..at + 4].try_into().unwrap());
-        assert_eq!(u32_at(44), 2, "two runs");
-        // Each run: its range, what it takes from the paint, its style (28 bytes).
+        assert_eq!(u32_at(48), 2, "two runs");
+        // Each run: its range, what it takes from the paint, its style (32 bytes).
         assert_eq!(
-            (u32_at(48), u32_at(52), request[56]),
+            (u32_at(52), u32_at(56), request[60]),
             (0, 3, 0b11),
             "the paint's color and decoration"
         );
-        assert_eq!((u32_at(85), u32_at(89), request[93]), (3, 6, 0b10), "its own color");
-        assert_eq!(u32_at(94), Color::RED.argb());
+        assert_eq!((u32_at(93), u32_at(97), request[101]), (3, 6, 0b10), "its own color");
+        assert_eq!(u32_at(102), Color::RED.argb());
     }
 
-    /// A style's line height style follows its line height (D571): none as one byte, a style as
-    /// the alignment's top ratio and the trim's two flags.
+    /// A style's line height style follows its line height (D571): the alignment's top ratio and
+    /// the trim's two flags; a style without one sends `LineHeightStyle::DEFAULT` (proportional,
+    /// both ends trimmed), as Compose's `createCharSequence` applies `LineHeightStyle.Default`
+    /// (its plain `LineHeightSpan` is for `includeFontPadding` only).
     #[test]
     fn a_line_height_style_is_sent_after_the_line_height() {
         use compose_ui::{LineHeightAlignment, LineHeightStyle, LineHeightTrim};
@@ -636,11 +633,14 @@ mod tests {
             |request: &[u8], at: usize| f32::from_le_bytes(request[at..at + 4].try_into().unwrap());
         // The base style's line height is its bytes 19 to 22 (16 bytes of options before).
         assert_eq!(f32_at(&requests[0], 16 + 19), 40.0, "the line height in pixels");
-        assert_eq!(requests[0][16 + 23], 0, "no line height style");
+        assert_eq!(
+            (f32_at(&requests[0], 16 + 23), requests[0][16 + 27]),
+            (-1.0, 0b11),
+            "no line height style: the default, proportional and trimmed at both ends"
+        );
         for (request, (alignment, _, trim)) in requests[1..].iter().zip(styles) {
-            assert_eq!(request[16 + 23], 1);
-            assert_eq!(f32_at(request, 16 + 24), alignment.top_ratio);
-            assert_eq!(request[16 + 28], trim);
+            assert_eq!(f32_at(request, 16 + 23), alignment.top_ratio);
+            assert_eq!(request[16 + 27], trim);
         }
     }
 

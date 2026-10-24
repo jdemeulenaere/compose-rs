@@ -160,3 +160,17 @@ fn the_chips_outlines_are_outline_variant_outside_their_clip() {
     }
     assert!(!chips[3].contains("border("), "a selected filter chip has no outline");
 }
+
+/// `LocalTextStyle`'s default is Material's `DefaultTextStyle` (material3 1.4.0's
+/// `TextKt.LocalTextStyle` reads `TypographyTokensKt.getDefaultTextStyle`): a text outside a
+/// theme centers its line height too.
+#[test]
+fn the_local_text_styles_default_is_materials_default_text_style() {
+    let seen = Rc::new(Cell::new(None));
+    let sink = seen.clone();
+    let _ui = compose_test(move || sink.set(Some(LOCAL_TEXT_STYLE.current())));
+    let style = seen.take().unwrap();
+    assert_eq!(style, DEFAULT_TEXT_STYLE);
+    assert_eq!(style.line_height_style, Some(DEFAULT_LINE_HEIGHT_STYLE));
+    assert_eq!(TextStyle { line_height_style: None, ..style }, TextStyle::DEFAULT);
+}

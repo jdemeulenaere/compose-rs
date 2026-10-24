@@ -45,6 +45,8 @@ internal class TextMeasurer(
     val results: ByteBuffer = ByteBuffer.allocateDirect(32).order(ByteOrder.nativeOrder())
 
     private val layouts = SparseArray<Layout>()
+    /** The empty last line's metrics of the paragraphs that have one ([lastLineMetrics]). */
+    private val lastLines = SparseArray<Paint.FontMetricsInt>()
     /** Each paragraph's drawing, recorded once: a frame draws the node, not the glyphs. */
     private val nodes = SparseArray<RenderNode>()
     /** Released paragraphs' nodes, for the next ones (D195). */
@@ -73,7 +75,8 @@ internal class TextMeasurer(
     /**
      * How a line height is spread around each line, as Compose's `LineHeightStyle` (its `Fixed`
      * mode): the share above the text ([topRatio], -1 for proportional) and which ends are
-     * trimmed. Null: as Compose's plain `LineHeightSpan` (a style without one).
+     * trimmed. Rust sends `LineHeightStyle.Default` (proportional, both trimmed) for a style
+     * without one, as Compose's `createCharSequence` applies it (D571).
      */
     private data class LineHeightStyle(val topRatio: Float, val trimFirstLineTop: Boolean, val trimLastLineBottom: Boolean)
 
@@ -81,7 +84,7 @@ internal class TextMeasurer(
     private class Style(
         val paint: PaintStyle,
         val lineHeightPx: Float,
-        val lineHeightStyle: LineHeightStyle?,
+        val lineHeightStyle: LineHeightStyle,
         val background: Int,
     )
 
@@ -108,13 +111,9 @@ internal class TextMeasurer(
             decoration = request.get().toInt(),
         )
         val lineHeightPx = request.float()
-        val lineHeightStyle = if (request.get().toInt() == 0) {
-            null
-        } else {
-            val topRatio = request.float()
-            val trim = request.get().toInt()
-            LineHeightStyle(topRatio, trimFirstLineTop = trim and 1 != 0, trimLastLineBottom = trim and 2 != 0)
-        }
+        val topRatio = request.float()
+        val trim = request.get().toInt()
+        val lineHeightStyle = LineHeightStyle(topRatio, trimFirstLineTop = trim and 1 != 0, trimLastLineBottom = trim and 2 != 0)
         return Style(paint, lineHeightPx, lineHeightStyle, background = request.getInt())
     }
 
@@ -184,8 +183,8 @@ internal class TextMeasurer(
         val boring: BoringLayout.Metrics?,
         /** A line height in px over every line, or 0. */
         val lineHeight: Float,
-        /** How [lineHeight] is spread around each line (null: as Compose's `LineHeightSpan`). */
-        val lineHeightStyle: LineHeightStyle?,
+        /** How [lineHeight] is spread around each line. */
+        val lineHeightStyle: LineHeightStyle,
         val letterSpaced: Boolean,
         val softWrap: Boolean,
         val maxLines: Int,
@@ -268,8 +267,9 @@ internal class TextMeasurer(
             }
             spannable
         }
-        // A line height over every line (Compose's spans', [lineHeightSpan]), none on an empty text.
-        val lineHeight = if (base.lineHeightPx > 0f && content.isNotEmpty()) base.lineHeightPx else 0f
+        // A line height over every line (Compose's span, [StyledLineHeightSpan]), an empty text's
+        // included (its line takes it from [lastLineMetrics], as Compose's).
+        val lineHeight = if (base.lineHeightPx > 0f) base.lineHeightPx else 0f
         // The direction Rust decided (its first strong character's), for the whole text, as the
         // desktop measurer: alignment and the cursor's movement agree with what's drawn.
         val direction = if (rtl) TextDirectionHeuristics.RTL else TextDirectionHeuristics.LTR
@@ -309,8 +309,10 @@ internal class TextMeasurer(
     fun restyle(previous: Int, handle: Int, color: Int, decoration: Int): Boolean {
         val layout = layouts.get(previous) ?: return false
         val kept = intrinsics.get(previous) ?: return false
+        val lastLine = lastLines.get(previous)
         release(previous)
         layouts.put(handle, layout)
+        if (lastLine != null) lastLines.put(handle, lastLine)
         intrinsics.put(handle, kept.inPaint(color, decoration))
         releaseNode(handle)
         if (collectingLaidOut) laidOut.add(handle)
@@ -372,10 +374,12 @@ internal class TextMeasurer(
         // StaticLayout limits the lines only when it ellipsizes: the rest are cut here, as
         // Compose's `TextLayout` does (the text is clipped to its height).
         val lines = layout.lineCount.coerceIn(1, maxLines.coerceAtLeast(1))
+        val lastLine = lastLineMetrics(layout, lines - 1, kept)
+        if (lastLine == null) lastLines.remove(handle) else lastLines.put(handle, lastLine)
         results.putInt(0, width.toFloat().toRawBits())
-        results.putInt(4, (layout.getLineBottom(lines - 1).toFloat()).toRawBits())
-        results.putInt(8, (layout.getLineBaseline(0).toFloat()).toRawBits())
-        results.putInt(12, (layout.getLineBaseline(lines - 1).toFloat()).toRawBits())
+        results.putInt(4, lineBottom(layout, lines - 1, lines, lastLine).toRawBits())
+        results.putInt(8, lineBaseline(layout, 0, lines, lastLine).toRawBits())
+        results.putInt(12, lineBaseline(layout, lines - 1, lines, lastLine).toRawBits())
         results.putInt(16, lines.toFloat().toRawBits())
         // Lines past max lines, cut or ellipsized, as Compose's `TextLayout.didExceedMaxLines`
         // (API 26+: the line count passes max lines unless it ellipsizes, which marks the last).
@@ -385,6 +389,54 @@ internal class TextMeasurer(
         // The text's own width, from which Rust can tell another width would lay it out the same.
         results.putInt(24, kept.maxIntrinsicWidth.toRawBits())
     }
+
+    /**
+     * The metrics of the empty last line [line] of [layout] (an empty text's, or after a last new
+     * line), as Compose's `TextLayout.getLastLineMetrics` (ui-text 1.12.1, read from its class):
+     * a zero-width space laid out alone with a copy of the line height span, so the empty line
+     * is as high as a line of text would be. Null when the line isn't empty or there's no line
+     * height (a `StaticLayout` gives the empty line the font's metrics then, as Compose's).
+     */
+    private fun lastLineMetrics(layout: Layout, line: Int, kept: Intrinsics): Paint.FontMetricsInt? {
+        if (kept.lineHeight <= 0f || layout.getLineStart(line) != layout.getLineEnd(line)) return null
+        val style = kept.lineHeightStyle
+        // Compose's copy: its first line's top trimmed as the original's last line's bottom,
+        // except after other lines when that one is trimmed.
+        val trimFirstLineTop = if (line != 0 && style.trimLastLineBottom) false else style.trimLastLineBottom
+        val space = SpannableString("\u200B")
+        val span = StyledLineHeightSpan(kept.lineHeight, space.length, style.copy(trimFirstLineTop = trimFirstLineTop))
+        space.setSpan(span, 0, space.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        val single = StaticLayout.Builder.obtain(space, 0, space.length, kept.paint, Int.MAX_VALUE)
+            .setTextDirection(kept.direction)
+            .setIncludePad(false)
+            .setUseLineSpacingFromFallbacks(true)
+            .build()
+        val metrics = Paint.FontMetricsInt()
+        metrics.ascent = single.getLineAscent(0)
+        metrics.descent = single.getLineDescent(0)
+        metrics.top = single.getLineTop(0)
+        metrics.bottom = single.getLineBottom(0)
+        return metrics
+    }
+
+    /**
+     * Line [line]'s bottom of [lines], as Compose's `TextLayout.getLineBottom`: an empty last
+     * line's from its [lastLine] metrics, under the line before it.
+     */
+    private fun lineBottom(layout: Layout, line: Int, lines: Int, lastLine: Paint.FontMetricsInt?): Float =
+        if (line == lines - 1 && lastLine != null) {
+            (if (line == 0) 0 else layout.getLineBottom(line - 1)).toFloat() + lastLine.bottom
+        } else {
+            layout.getLineBottom(line).toFloat()
+        }
+
+    /** Line [line]'s baseline of [lines], as Compose's `TextLayout.getLineBaseline`. */
+    private fun lineBaseline(layout: Layout, line: Int, lines: Int, lastLine: Paint.FontMetricsInt?): Float =
+        if (line == lines - 1 && lastLine != null) {
+            layout.getLineTop(line).toFloat() - lastLine.ascent
+        } else {
+            layout.getLineBaseline(line).toFloat()
+        }
 
     /**
      * [text]'s metrics as a single boring line, or null: as Compose's `BoringLayoutFactory33`
@@ -403,9 +455,12 @@ internal class TextMeasurer(
         paint: TextPaint,
         direction: TextDirectionHeuristic,
         lineHeight: Float,
-        lineHeightStyle: LineHeightStyle?,
+        lineHeightStyle: LineHeightStyle,
     ): BoringLayout.Metrics? {
         if (Build.VERSION.SDK_INT < 33) return null
+        // An empty text with a line height: its line comes from [lastLineMetrics], after a
+        // `StaticLayout` (Compose's span makes no text boring).
+        if (text.isEmpty() && lineHeight > 0f) return null
         val metrics = BoringLayout.isBoring(text, paint, direction, true, null) ?: return null
         if (lineHeight > 0f) {
             lineHeightSpan(lineHeight, text.length, lineHeightStyle).chooseHeight(text, 0, text.length, 0, 0, metrics)
@@ -421,45 +476,23 @@ internal class TextMeasurer(
      * [content] with a [lineHeight] span over it (px; none when 0), as a `StaticLayout` takes it:
      * a copy, so that [content], which a `BoringLayout` of the same text may draw, has none.
      */
-    private fun withLineHeight(content: CharSequence, lineHeight: Float, lineHeightStyle: LineHeightStyle?): CharSequence {
+    private fun withLineHeight(content: CharSequence, lineHeight: Float, lineHeightStyle: LineHeightStyle): CharSequence {
         if (lineHeight == 0f) return content
         val spannable = SpannableString(content)
-        // Its end past a last new line, as Compose's `setLineHeight`.
-        val end = if (content.isNotEmpty() && content[content.length - 1] == '\n') content.length + 1 else content.length
+        // Its end past an empty text or a last new line, as Compose's `setLineHeight`.
+        val end = if (content.isEmpty() || content[content.length - 1] == '\n') content.length + 1 else content.length
         spannable.setSpan(lineHeightSpan(lineHeight, end, lineHeightStyle), 0, spannable.length, Spanned.SPAN_INCLUSIVE_INCLUSIVE)
         return spannable
     }
 
     /**
      * The span spreading [lineHeight] (px) around each line of a text ending at [end], as
-     * Compose's `setLineHeight` (ui-text 1.12.1) chooses: its `LineHeightStyleSpan` for a
-     * [style], else its plain `LineHeightSpan` (D571). A new one per text: the styled one keeps
-     * the metrics of the first line it sees.
+     * Compose's `setLineHeight` (ui-text 1.12.1): its `LineHeightStyleSpan` (D571; its plain
+     * `LineHeightSpan` is for `includeFontPadding` only). A new one per text: it keeps the
+     * metrics of the first line it sees.
      */
-    private fun lineHeightSpan(lineHeight: Float, end: Int, style: LineHeightStyle?): LineHeightSpan =
-        if (style == null) ProportionalLineHeightSpan(lineHeight) else StyledLineHeightSpan(lineHeight, end, style)
-
-    /**
-     * Compose's `LineHeightSpan` (ui-text 1.12.1, read from its class): every line [lineHeight]
-     * (ceiled) high, the descent scaled (ceiled) as the line's height, the rest above.
-     */
-    private class ProportionalLineHeightSpan(private val lineHeight: Float) : LineHeightSpan {
-        override fun chooseHeight(
-            text: CharSequence,
-            start: Int,
-            end: Int,
-            spanstartv: Int,
-            lineHeight: Int,
-            metrics: Paint.FontMetricsInt,
-        ) {
-            val height = metrics.descent - metrics.ascent
-            if (height <= 0) return
-            val target = ceil(this.lineHeight).toInt()
-            val ratio = target * 1.0f / height
-            metrics.descent = ceil(metrics.descent * ratio.toDouble()).toInt()
-            metrics.ascent = metrics.descent - target
-        }
-    }
+    private fun lineHeightSpan(lineHeight: Float, end: Int, style: LineHeightStyle): LineHeightSpan =
+        StyledLineHeightSpan(lineHeight, end, style)
 
     /**
      * Compose's `LineHeightStyleSpan` in its `Fixed` mode, the default (ui-text 1.12.1, read
@@ -501,10 +534,11 @@ internal class TextMeasurer(
             val target = ceil(lineHeight).toInt()
             val difference = target - height
             val topRatio = if (style.topRatio == -1f) Math.abs(metrics.ascent.toFloat()) / height else style.topRatio
+            // In floats, then ceiled as doubles, as Compose's.
             val descentDifference = if (difference <= 0) {
-                ceil(difference * topRatio.toDouble()).toInt()
+                ceil((difference * topRatio).toDouble()).toInt()
             } else {
-                ceil(difference * (1f - topRatio).toDouble()).toInt()
+                ceil((difference * (1f - topRatio)).toDouble()).toInt()
             }
             descent = metrics.descent + descentDifference
             ascent = descent - target
@@ -609,14 +643,18 @@ internal class TextMeasurer(
         val at = offset.coerceIn(0, layout.text.length)
         val line = layout.getLineForOffset(at)
         val x = layout.getPrimaryHorizontal(at)
+        // As Compose's `getCursorRect`: the line's top and bottom, an empty last line's from its
+        // metrics ([lastLineMetrics]).
+        val lines = (intrinsics.get(handle)?.maxLines ?: layout.lineCount).coerceIn(1, layout.lineCount.coerceAtLeast(1))
         results.putInt(0, x.toRawBits())
         results.putInt(4, (layout.getLineTop(line).toFloat()).toRawBits())
         results.putInt(8, x.toRawBits())
-        results.putInt(12, (layout.getLineBottom(line).toFloat()).toRawBits())
+        results.putInt(12, lineBottom(layout, line, lines, lastLines.get(handle)).toRawBits())
     }
 
     fun release(handle: Int) {
         layouts.remove(handle)
+        lastLines.remove(handle)
         intrinsics.remove(handle)
         releaseNode(handle)
     }
@@ -631,6 +669,7 @@ internal class TextMeasurer(
     fun clear() {
         laidOut.clear()
         layouts.clear()
+        lastLines.clear()
         intrinsics.clear()
         for (index in 0 until nodes.size()) nodes.valueAt(index).discardDisplayList()
         nodes.clear()

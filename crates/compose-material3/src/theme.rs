@@ -245,8 +245,7 @@ const fn style(token: TypeScaleToken) -> TextStyle {
         font_weight: Some(token.weight),
         line_height: Sp(token.line_height),
         letter_spacing: Sp(token.tracking),
-        line_height_style: Some(DEFAULT_LINE_HEIGHT_STYLE),
-        ..TextStyle::DEFAULT
+        ..DEFAULT_TEXT_STYLE
     }
 }
 
@@ -319,9 +318,16 @@ pub static LOCAL_SHAPES: CompositionLocal<Shapes> =
 /// The color content draws with, as Compose's `LocalContentColor`.
 pub static LOCAL_CONTENT_COLOR: CompositionLocal<Color> =
     CompositionLocal::new("LocalContentColor", || Color::BLACK);
-/// The style `Text` uses by default, as Compose's `LocalTextStyle`.
+/// The style `Text` uses by default, as Compose's `LocalTextStyle`: Material's default text
+/// style (`DefaultTextStyle`, with its `DefaultLineHeightStyle`).
 pub static LOCAL_TEXT_STYLE: CompositionLocal<TextStyle> =
-    CompositionLocal::new("LocalTextStyle", || TextStyle::DEFAULT);
+    CompositionLocal::new("LocalTextStyle", || DEFAULT_TEXT_STYLE);
+
+/// Material's default text style, as `DefaultTextStyle` (`TypographyTokens.kt`, read from
+/// material3 1.4.0): `TextStyle.Default` with `DefaultLineHeightStyle` (and, in Compose, no font
+/// padding, which compose-rs never adds).
+pub const DEFAULT_TEXT_STYLE: TextStyle =
+    TextStyle { line_height_style: Some(DEFAULT_LINE_HEIGHT_STYLE), ..TextStyle::DEFAULT };
 
 /// The theme of `content`, as Compose's `MaterialTheme`; what isn't given stays the enclosing
 /// theme's. Also a type: `MaterialTheme::color_scheme()`
