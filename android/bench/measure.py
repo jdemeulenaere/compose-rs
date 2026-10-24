@@ -58,15 +58,18 @@ crates/compose-ui/src/optimizations.rs, docs/07; passed to bench-rs as `-e optim
 The report records the mode and each subject's list (`"optimizations"`). --traced-runs sets the
 traced runs of each subject in the scroll and animation scenarios (3).
 
-Thermal guards: before each run (each startup round, each traced run), the device's thermal
-status (`dumpsys thermalservice`: "Thermal Status") and battery temperature (`dumpsys battery`)
-are read; while the status is above 0 or the battery above --battery-limit (36 °C), the run
-waits, reading them every 10 s, at most --thermal-wait-limit seconds (600; 0: until cool), then
-goes on and notes it (`"gave_up"`); --skin-limit adds the skin temperature (Pixel's VIRTUAL-SKIN,
-which it throttles by). The stress animation heats the device fast: its `each` runs want
---battery-limit 34 --skin-limit 35 --thermal-wait-limit 0, and --rotate to vary which subject runs
-last (D574). Each traced run records them before and
-after it (`"thermal"`), the startup rounds in the report's `"thermal"`.
+Thermal guards: before each run (each startup round, each traced run and traced first frame), our
+apps are stopped (the last run's would go on animating) and the device's thermal status
+(`dumpsys thermalservice`: "Thermal Status"), battery temperature (`dumpsys battery`) and skin
+temperature (the highest `TYPE_SKIN` sensor, Pixel's VIRTUAL-SKIN, which it throttles by) are
+read; while the status is above 0, the battery above --battery-limit (36 °C) or, with
+--skin-limit, the skin above it, the run waits, reading them every 10 s, at most
+--thermal-wait-limit seconds (600; 0: until cool), then goes on and notes it (`"gave_up"`). A
+sensor that can't be read is said, once (and a limit on it can't hold). The stress animation
+heats the device fast: its `each` runs want --battery-limit 34 --skin-limit 35
+--thermal-wait-limit 0, and --rotate to vary which subject runs last (D574). Each traced run
+records the state before and after it (`"thermal"`), the startup rounds and first frames in the
+report's `"thermal"`; the report records each subject's bits (`"optimizations"`, `"bits"`).
 
 Before each run, our other apps (`rs.compose.*`) are force-stopped (D343).
 """
@@ -873,6 +876,34 @@ def optimization_names(source):
     return re.findall(r'^\s*name: "([a-z_]+)",', source, re.M)
 
 
+def optimization_defaults(source):
+    """The names of the optimizations on by default in Rust's table (each `name: "…"` followed
+    by its `default: true`)."""
+    return re.findall(r'^\s*name: "([a-z_]+)",\s*\n\s*default: true,', source, re.M)
+
+
+def optimization_bits(given, names, defaults):
+    """The bits bench-rs's `-e optimizations` list sets, as Rust's `Optimizations::parse`
+    (`none`, `all`, `default`, names, `-name`; None or empty: the defaults); the bit of a name
+    is its place in `names`."""
+    def of(chosen):
+        return sum(1 << names.index(name) for name in chosen)
+    if given is None or not given.strip():
+        return of(defaults)
+    bits = 0
+    for word in [word.strip() for word in given.split(",") if word.strip()]:
+        on, name = (False, word[1:]) if word.startswith("-") else (True, word)
+        if (name, on) == ("none", True):
+            bits = 0
+        elif (name, on) == ("all", True):
+            bits = of(names)
+        elif (name, on) == ("default", True):
+            bits = of(defaults)
+        else:
+            bits = bits | (1 << names.index(name)) if on else bits & ~(1 << names.index(name))
+    return bits
+
+
 def parse_optimizations(text, names, each_only=None):
     """The mode `--optimizations` names and the subjects it measures: (name, package,
     bench-rs's `-e optimizations`, None for the Compose app). `parity` (the default) runs
@@ -921,20 +952,37 @@ def battery_celsius(output):
 
 
 def skin_celsius(output):
-    """The skin temperature (Pixel's VIRTUAL-SKIN) from `dumpsys thermalservice`: the HAL's
-    current one if listed, else the cached one (which can be stale), or None."""
+    """The skin temperature from `dumpsys thermalservice`: the highest of its skin sensors
+    (`mType=3`, `TYPE_SKIN`: Pixel's VIRTUAL-SKIN, another device's own), the HAL's current
+    values if listed, else the cached ones (which can be stale), or None without one."""
     current = output.split("Current temperatures from HAL:", 1)
     for text in ([current[1]] if len(current) > 1 else []) + [output]:
-        match = re.search(r"Temperature\{mValue=([-\d.]+), mType=3, mName=VIRTUAL-SKIN,", text)
-        if match:
-            return round(float(match.group(1)), 1)
+        values = [float(value) for value in
+                  re.findall(r"Temperature\{mValue=([-\d.]+), mType=3,", text)]
+        if values:
+            return round(max(values), 1)
     return None
 
 
-def thermal_state():
-    thermal = shell("dumpsys thermalservice")
-    return {"status": thermal_status(thermal), "battery_c": battery_celsius(shell("dumpsys battery")),
-            "skin_c": skin_celsius(thermal)}
+# The sensors a run found missing, said once each.
+MISSING_SENSORS = set()
+
+
+def thermal_state(dumpsys=None):
+    """The thermal status, battery and skin temperatures (`dumpsys`: a function of a dumpsys
+    service's name to its output, the device's by default). A sensor it can't read is None,
+    said once; a limit set on one that can't be read is said too, as it can't hold."""
+    dumpsys = dumpsys or (lambda service: shell(f"dumpsys {service}"))
+    thermal = dumpsys("thermalservice")
+    state = {"status": thermal_status(thermal), "battery_c": battery_celsius(dumpsys("battery")),
+             "skin_c": skin_celsius(thermal)}
+    for sensor, limit in (("status", None), ("battery_c", THERMAL["battery_limit_c"]),
+                          ("skin_c", THERMAL["skin_limit_c"])):
+        if state[sensor] is None and sensor not in MISSING_SENSORS:
+            MISSING_SENSORS.add(sensor)
+            print(f"thermal: no {sensor} read from the device"
+                  + (f"; its limit ({limit}) can't hold" if limit is not None else ""))
+    return state
 
 
 def too_warm(state, battery_limit_c, skin_limit_c=None):
@@ -1110,6 +1158,8 @@ def startup_scenario(tp, out_dir, runs, screens, subjects, thermal_log):
     for name, package, optimizations in subjects:
         first[name] = {}
         for screen in screens:
+            thermal = cool_down(f"first frame {name} {screen}")
+            thermal_log.append({"first_frame": name, "screen": screen, **thermal})
             fresh(package)
             time.sleep(1.0)
             process, path = start_trace(package, 5000, f"start-{name}-{screen}")
@@ -1177,7 +1227,23 @@ def animation_scenario(tp, out_dir, capacities, screen, prefix, subjects, runs=3
     return animation
 
 
-def main():
+def configure(arguments, source):
+    """The mode and subjects `arguments` ask for (rotated by --rotate), each subject's full bit
+    set (None: the Compose app), and the thermal guards' limits set."""
+    names = optimization_names(source)
+    defaults = optimization_defaults(source)
+    mode, subjects = parse_optimizations(arguments.optimizations, names, arguments.each_only)
+    THERMAL["battery_limit_c"] = arguments.battery_limit
+    THERMAL["wait_limit_s"] = arguments.thermal_wait_limit
+    THERMAL["skin_limit_c"] = arguments.skin_limit
+    rotate = arguments.rotate % len(subjects)
+    subjects = subjects[rotate:] + subjects[:rotate]
+    bits = {name: None if package == APPS["compose"] else optimization_bits(given, names, defaults)
+            for name, package, given in subjects}
+    return mode, subjects, bits
+
+
+def main(argv=None):
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--trace-processor", required=True)
@@ -1199,7 +1265,7 @@ def main():
     parser.add_argument("--thermal-wait-limit", type=int, default=THERMAL["wait_limit_s"],
                         help="the most a run waits for the device to cool (s; 0: no limit)")
     parser.add_argument("--skin-limit", type=float, default=None,
-                        help="the skin temperature (°C, VIRTUAL-SKIN) above which a run waits "
+                        help="the skin temperature (°C, the highest skin sensor) above which a run waits "
                              "(none by default)")
     parser.add_argument("--rotate", type=int, default=0,
                         help="start the subjects' order this many places on (each run's order "
@@ -1207,16 +1273,11 @@ def main():
     parser.add_argument("--each-only", default=None,
                         help="with --optimizations each: only these optimizations, "
                              "comma-separated")
-    arguments = parser.parse_args()
+    arguments = parser.parse_args(argv)
     scenarios = parse_scenarios(arguments.scenarios)
     with open(OPTIMIZATIONS_SOURCE) as file:
-        names = optimization_names(file.read())
-    mode, subjects = parse_optimizations(arguments.optimizations, names, arguments.each_only)
-    THERMAL["battery_limit_c"] = arguments.battery_limit
-    THERMAL["wait_limit_s"] = arguments.thermal_wait_limit
-    THERMAL["skin_limit_c"] = arguments.skin_limit
-    rotate = arguments.rotate % len(subjects)
-    subjects = subjects[rotate:] + subjects[:rotate]
+        source = file.read()
+    mode, subjects, bits = configure(arguments, source)
     thermal_log = []
     os.makedirs(arguments.out, exist_ok=True)
     tp = arguments.trace_processor
@@ -1228,7 +1289,9 @@ def main():
               "scenarios": scenarios,
               # bench-rs's `-e optimizations` for each subject (None: the Compose app).
               "optimizations": {"mode": mode,
-                                "subjects": {name: given for name, _, given in subjects}},
+                                "subjects": {name: given for name, _, given in subjects},
+                                # Each subject's bits, Rust's table's (`Optimization::ALL`).
+                                "bits": bits},
               "thermal": {"battery_limit_c": THERMAL["battery_limit_c"],
                           "skin_limit_c": THERMAL["skin_limit_c"],
                           "wait_limit_s": THERMAL["wait_limit_s"], "startup": thermal_log},

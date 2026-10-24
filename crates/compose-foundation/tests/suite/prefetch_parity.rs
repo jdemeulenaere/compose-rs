@@ -94,7 +94,8 @@ fn a_scroll_prefetches_one_item_ahead_and_keeps_none_behind() {
     // At rest, nothing: Compose prefetches on scrolls.
     assert!(!ui.host().has_prefetch_work());
     assert_eq!(live_items(), (0..5).collect::<Vec<_>>());
-    // 30 px down: rows 1 to 6 show (row 6 from 90 px).
+    // 30 px down: rows 1 to 6 show (row 6 from 90 px); the frame composing rows 5 and 6
+    // deactivates row 0 in the same composition.
     scroll(&mut ui, *state, 30.0);
     assert_eq!(live_items(), (1..7).collect::<Vec<_>>(), "row 0 deactivated in the frame");
     assert!(ui.host().has_prefetch_work());
@@ -106,11 +107,13 @@ fn a_scroll_prefetches_one_item_ahead_and_keeps_none_behind() {
     let line = dump.lines().find(|line| line.contains("\"row 7\"")).expect("row 7 in the tree");
     assert!(line.contains("100x20"), "measured: {line}");
     assert_eq!(state.first_visible_item_index(), 1);
-    // The frame showing it composes no item (it deactivates row 1).
+    // The frame showing it composes nothing: row 1, unplaced, is deactivated by the next idle
+    // time's composition, which prefetches row 8 (D575).
     let composed: usize = COMPOSED.with(|composed| composed.borrow().values().sum());
     scroll(&mut ui, *state, 20.0);
     assert_eq!(COMPOSED.with(|composed| composed.borrow().values().sum::<usize>()), composed);
-    assert_eq!(live_items(), (2..8).collect::<Vec<_>>());
+    assert!(!ui.host().prefetch(later()));
+    assert_eq!(live_items(), (2..9).collect::<Vec<_>>());
 }
 
 #[test]
@@ -159,12 +162,12 @@ fn a_turn_cancels_the_request_ahead_and_requests_the_item_before() {
     scroll(&mut ui, *state, 30.0);
     ui.host().prefetch(later());
     assert!(live_items().contains(&7));
-    // 5 px back up: rows 1 to 6 still show.
+    // 5 px back up: rows 1 to 6 still show; row 7's request is cancelled, row 0 requested.
     scroll(&mut ui, *state, -5.0);
-    assert_eq!(live_items(), (1..7).collect::<Vec<_>>(), "row 7 disposed (kept for reuse)");
     assert!(ui.host().has_prefetch_work());
     assert!(!ui.host().prefetch(later()));
-    assert_eq!(live_items(), (0..7).collect::<Vec<_>>(), "row 0 now");
+    // Row 0 composed, and row 7 deactivated (kept for reuse) in the same composition.
+    assert_eq!(live_items(), (0..7).collect::<Vec<_>>(), "row 0 now, row 7 let go");
 }
 
 #[test]

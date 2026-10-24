@@ -467,6 +467,46 @@ class OptimizationsTest(unittest.TestCase):
         with self.assertRaises(SystemExit):
             measure.parse_optimizations("each", self.NAMES, "faster")
 
+    def test_bits_as_rusts_parse(self):
+        names, defaults = self.NAMES, ["performance_hint"]
+        self.assertEqual(measure.optimization_bits("none", names, defaults), 0)
+        self.assertEqual(measure.optimization_bits(None, names, defaults), 0b010)
+        self.assertEqual(measure.optimization_bits("all", names, defaults), 0b111)
+        self.assertEqual(measure.optimization_bits("all,-performance_hint", names, defaults), 0b101)
+        self.assertEqual(measure.optimization_bits("keep_items_behind", names, defaults), 0b100)
+        with open(measure.OPTIMIZATIONS_SOURCE) as file:
+            source = file.read()
+        self.assertEqual(measure.optimization_defaults(source), ["performance_hint"])
+
+    def test_main_wires_the_arguments(self):
+        """`main`'s configuration: the subjects rotated, each one's bits, the thermal limits."""
+        with open(measure.OPTIMIZATIONS_SOURCE) as file:
+            source = file.read()
+        names = measure.optimization_names(source)
+        parser_arguments = type("Arguments", (), {
+            "optimizations": "each", "each_only": "single_drawing_fade,performance_hint",
+            "battery_limit": 34.0, "thermal_wait_limit": 0, "skin_limit": 35.0, "rotate": 1})
+        original = dict(measure.THERMAL)
+        try:
+            mode, subjects, bits = measure.configure(parser_arguments, source)
+            limits = dict(measure.THERMAL)
+        finally:
+            measure.THERMAL.update(original)
+        self.assertEqual(mode, "each")
+        self.assertEqual([name for name, _, _ in subjects],
+                         ["rs+single_drawing_fade", "rs+performance_hint", "rs"])
+        self.assertEqual(bits, {"rs": 0, "rs+single_drawing_fade": 1 << names.index("single_drawing_fade"),
+                                "rs+performance_hint": 1 << names.index("performance_hint")})
+        self.assertEqual((limits["battery_limit_c"], limits["wait_limit_s"], limits["skin_limit_c"]),
+                         (34.0, 0, 35.0))
+        # Parity by default: the Compose app has no bits, bench-rs none.
+        parser_arguments.optimizations, parser_arguments.rotate = "parity", 0
+        try:
+            _, _, bits = measure.configure(parser_arguments, source)
+        finally:
+            measure.THERMAL.update(original)
+        self.assertEqual(bits, {"compose": None, "rs": 0})
+
     def test_a_list_is_checked(self):
         mode, subjects = measure.parse_optimizations(
             "all, -performance_hint", self.NAMES)
@@ -520,6 +560,30 @@ class ThermalTest(unittest.TestCase):
         self.assertIsNone(measure.thermal_status(""))
         self.assertIsNone(measure.battery_celsius(""))
         self.assertIsNone(measure.skin_celsius(""))
+
+    def test_a_device_without_a_skin_sensor(self):
+        """Another device's skin sensor has its own name; none at all reads as None, and a skin
+        limit set then is said not to hold."""
+        other = "Thermal Status: 0\n\tTemperature{mValue=33.4, mType=3, mName=skin-therm, mStatus=0}\n"
+        self.assertEqual(measure.skin_celsius(other), 33.4)
+        none = "Thermal Status: 0\n\tTemperature{mValue=40.0, mType=0, mName=CPU, mStatus=0}\n"
+        self.assertIsNone(measure.skin_celsius(none))
+        outputs = {"thermalservice": none, "battery": BATTERY}
+        original = dict(measure.THERMAL)
+        measure.MISSING_SENSORS.clear()
+        try:
+            measure.THERMAL["skin_limit_c"] = 35.0
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                state = measure.thermal_state(outputs.get)
+                measure.thermal_state(outputs.get)
+        finally:
+            measure.THERMAL.update(original)
+            measure.MISSING_SENSORS.clear()
+        self.assertEqual(state, {"status": 0, "battery_c": 29.9, "skin_c": None})
+        # Said once.
+        self.assertEqual(output.getvalue().count("no skin_c"), 1)
+        self.assertIn("can't hold", output.getvalue())
 
     def test_too_warm(self):
         self.assertFalse(measure.too_warm({"status": 0, "battery_c": 35.9}, 36.0))

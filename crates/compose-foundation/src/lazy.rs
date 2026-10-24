@@ -1608,7 +1608,12 @@ fn LazyItems(
         let inner = state.inner_or_detached();
         let sizes = inner.sizes.borrow();
         let keep = !inner.dispose_leaving.replace(false);
-        slots.borrow_mut().assign(&items.0, &indices, |index| keep && sizes.contains_key(index))
+        // Measured, or composed by a prefetch request (Compose's precomposed slot goes to the
+        // reuse pool when its request is cancelled).
+        slots.borrow_mut().assign(&items.0, &indices, |index| {
+            keep && (sizes.contains_key(index)
+                || inner.prefetch.was_precomposed(items.0.key(index)))
+        })
     };
     slots.borrow_mut().items = Rc::downgrade(&items.0);
     let parent = {
@@ -1625,9 +1630,16 @@ fn LazyItems(
                     // The slots holding items first, in the children's order the layout reads;
                     // then those kept for reuse, deactivated: their nodes stay, unmeasured and
                     // unplaced. One loop, so a slot's group moves between the two.
+                    let inner = state.inner_or_detached();
                     for &(slot, content) in &composed {
+                        // The lazy lists composing in an item note themselves under its key.
+                        inner.prefetch.composing_item.set(match content {
+                            SlotContent::Item(index) => Some(items.0.key(index)),
+                            SlotContent::Deactivated => None,
+                        });
                         key(slot.id, || compose_slot(slot, content, state, &items, holder));
                     }
+                    inner.prefetch.composing_item.set(None);
                 },
             );
         },
@@ -1875,7 +1887,9 @@ impl MeasurePolicy for LazyListLayout {
                             *offset += skip as f32 * average;
                             continue;
                         }
-                        let wanted = ((-*offset) / average).ceil() as usize + 1;
+                        // As many as cover the offset, as forward: a next round asks for more
+                        // if they're smaller (D576).
+                        let wanted = ((-*offset) / average).ceil().max(1.0) as usize;
                         state.pending.set(state.pending.get() + *offset);
                         *offset = 0.0;
                         return wanted;
@@ -2070,6 +2084,8 @@ impl MeasurePolicy for LazyListLayout {
         // kept behind and prefetched ahead (D375); else, as Compose's, those wanted and those
         // requests composed next to them.
         let keep = policy.keep_behind > 0;
+        // A focus search that laid items out beyond the bounds is over.
+        let beyond_ended = state.beyond_ended.take();
         let limits = if keep {
             let (behind, ahead) = if prefetch.forward.get() {
                 (policy.keep_behind, policy.ahead)
@@ -2078,12 +2094,16 @@ impl MeasurePolicy for LazyListLayout {
             };
             (wanted_start.saturating_sub(behind), wanted_end + ahead)
         } else {
-            prefetch.target((wanted_start, wanted_end), (composed_start, composed_end))
+            prefetch.target(
+                (wanted_start, wanted_end),
+                (composed_start, composed_end),
+                !beyond_ended,
+            )
         };
         // After a focus search that laid items out beyond the bounds, those it composed go
         // too, but the ones next to those wanted, as after a scroll (D482).
         let past_limits = composed_start < limits.0 || composed_end > limits.1;
-        let search_ended = state.beyond_ended.take() && past_limits;
+        let search_ended = beyond_ended && past_limits;
         if search_ended {
             state.dispose_leaving.set(true);
         }
@@ -2115,9 +2135,9 @@ impl MeasurePolicy for LazyListLayout {
                 composed = (start, end);
                 state.compose(composed);
             }
-        } else if composed != limits {
-            // The others are deactivated (kept for reuse) in this frame, as Compose's
-            // measurement leaves them.
+        } else if !covers || search_ended {
+            // Items to compose (or a focus search's to let go): this composition deactivates
+            // those the layout no longer wants too (kept for reuse), as Compose's measurement.
             composed = limits;
             state.compose(composed);
         } else if composed_more {
@@ -2128,9 +2148,10 @@ impl MeasurePolicy for LazyListLayout {
         prefetch.count.set(count);
         prefetch.wanted.set((wanted_start, wanted_end));
         prefetch.limits.set(limits);
-        if keep {
-            prefetch.trim_between_frames(state, self.scheduler.as_ref(), composed);
-        }
+        // Those no longer wanted, unplaced, are deactivated by the next composition: a
+        // request's, or one between frames; a frame with nothing to compose runs none for them
+        // (D575).
+        prefetch.trim_between_frames(state, self.scheduler.as_ref(), composed);
         state.position.set((index, offset));
         if count > 0 {
             state.first_key.set(Some(info.items.key(index)));
@@ -2316,6 +2337,10 @@ impl Sizes {
 
     fn contains_key(&self, index: usize) -> bool {
         self.sizes.contains_key(&index)
+    }
+
+    fn get(&self, index: usize) -> Option<i32> {
+        self.sizes.get(&index).copied()
     }
 
     /// How far it is from `from` to `to` (an item and the pixels into it), items `spacing`

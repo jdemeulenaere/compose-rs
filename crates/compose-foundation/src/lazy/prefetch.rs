@@ -51,6 +51,12 @@ pub(super) const PREFETCH_MARGIN_NANOS: u64 = 500_000;
 /// as Compose's `nestedPrefetchItemCount` (2).
 const INITIAL_NESTED_PREFETCH_COUNT: usize = 2;
 
+/// The items composed by requests a list remembers (`Prefetch::was_precomposed`).
+const PRECOMPOSED_KEPT: usize = 8;
+
+/// Items noted with nested lists beyond which the dead entries are forgotten.
+const NESTED_KEYS_KEPT: usize = 64;
+
 /// Which of compose-rs's own prefetch behaviours a list uses, from the host's optimizations.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) struct Policy {
@@ -120,9 +126,16 @@ pub(super) struct Prefetch {
     measure_cost: Cell<StepCost>,
     /// This list's steps in the idle time under way (`PREFETCH_BUDGET_RECENT_MAXIMUM`).
     idle: Cell<IdleSteps>,
-    /// A request composes an item: the lazy lists composed in it note themselves in `nested`.
-    pub(super) collecting: Cell<bool>,
-    pub(super) nested: RefCell<Vec<Weak<LazyListInner>>>,
+    /// The key of the item whose content is composing now (set around each item's composition
+    /// by the items' composition), and the lazy lists composed in each item, by its key: a
+    /// request finds its item's nested lists there, whoever composed it (Compose traverses the
+    /// precomposed item's nodes for them, `traversablePrefetchState`).
+    pub(super) composing_item: Cell<Option<u64>>,
+    nested: RefCell<HashMap<u64, Vec<Weak<LazyListInner>>>>,
+    /// Items a request composed, the latest last (a few): leaving before they're measured, they
+    /// go to the reuse pool, as Compose's precomposed slots (`PrecomposedSlotHandle.dispose`),
+    /// where an item never measured is disposed (D460).
+    precomposed: RefCell<Vec<u64>>,
     /// The trimming request waiting in the scheduler, if any (`KEEP_ITEMS_BEHIND`).
     trim: RefCell<Weak<TrimRequest>>,
 }
@@ -145,8 +158,9 @@ impl Prefetch {
             compose_cost: Cell::default(),
             measure_cost: Cell::default(),
             idle: Cell::default(),
-            collecting: Cell::new(false),
+            composing_item: Cell::new(None),
             nested: RefCell::default(),
+            precomposed: RefCell::default(),
             trim: RefCell::new(Weak::new()),
         }
     }
@@ -323,7 +337,10 @@ impl Prefetch {
             else {
                 break;
             };
-            for item in items_of(unit) {
+            // Each composes next to the composed items: a line before them from its end.
+            let line = items_of(unit);
+            let line: Vec<usize> = if forward { line.collect() } else { line.rev().collect() };
+            for item in line {
                 if item >= count
                     || self.strategy.handles.borrow().iter().any(|handle| handle.item == item)
                 {
@@ -348,31 +365,36 @@ impl Prefetch {
         });
     }
 
-    /// The items the layout composes, from those it wants and those `composed`: the wanted
-    /// ones, the items live requests composed next to them (Compose's precomposed items, kept
-    /// until their request is cancelled), and those composed ahead of them in the scroll
-    /// direction. Compose's measurement composes the items it places, one at a time; a
-    /// measurement here asks for the items it lacks by an estimate of their size, so it may
-    /// compose one more than it places: kept, that one is the next item (disposed, it would be
-    /// composed again when it comes). Those behind are deactivated in the frame, as Compose's.
+    /// The items that stay composed, from those the layout wants and those `composed`: the
+    /// wanted ones; with `ahead`, those composed next to them the last scroll's way (a layout's
+    /// estimate may compose more than it places, where Compose's composes as it measures: they
+    /// are the next ones a scroll that way reaches, and disposed they would be composed again);
+    /// and the items of live requests next to those, composed by the request (Compose's
+    /// precomposed items, kept until their request is cancelled) or already. Any other is let
+    /// go: those behind, and without `ahead` (a focus search ended, D482) those it laid out
+    /// (D577).
     pub(super) fn target(
         &self,
         wanted: (usize, usize),
         composed: (usize, usize),
+        ahead: bool,
     ) -> (usize, usize) {
         let handles = self.strategy.handles.borrow();
         let (mut start, mut end) = wanted;
-        let overlaps = composed.0 <= end && composed.1 >= start;
-        if overlaps && self.forward.get() {
-            end = end.max(composed.1);
-        } else if overlaps {
-            start = start.min(composed.0);
+        if ahead && composed.0 <= end && composed.1 >= start {
+            if self.forward.get() {
+                end = end.max(composed.1);
+            } else {
+                start = start.min(composed.0);
+            }
         }
+        let holds = |handle: &&Rc<Handle>| {
+            !handle.canceled.get()
+                && (handle.composed.get() || (composed.0..composed.1).contains(&handle.item))
+        };
         loop {
             let mut grew = false;
-            for handle in
-                handles.iter().filter(|handle| handle.composed.get() && !handle.canceled.get())
-            {
+            for handle in handles.iter().filter(holds) {
                 if handle.item == end {
                     end += 1;
                     grew = true;
@@ -387,8 +409,12 @@ impl Prefetch {
         }
     }
 
-    /// With `KEEP_ITEMS_BEHIND`, asks for the items composed beyond `limits` behind the scroll
-    /// to be disposed between frames, unless a request will (its composition trims them).
+    /// Asks for the items composed beyond `limits` to be deactivated between frames (kept for
+    /// reuse), unless a request will (its composition trims them): those the layout no longer
+    /// wants stay composed, unplaced and undrawn, until then. Compose deactivates them in its
+    /// measurement, which composes nothing; here leaving needs a composition, which a frame
+    /// whose items are all composed doesn't run for them (D575). With `KEEP_ITEMS_BEHIND`,
+    /// behind the scroll only: those ahead are the next ones (D375).
     pub(super) fn trim_between_frames(
         &self,
         state: &Rc<LazyListInner>,
@@ -396,8 +422,13 @@ impl Prefetch {
         composed: (usize, usize),
     ) {
         let (low, high) = self.limits.get();
-        // Behind the scroll only: those ahead are the next ones (D375).
-        let beyond = if self.forward.get() { composed.0 < low } else { composed.1 > high };
+        let beyond = if self.policy.get().keep_behind == 0 {
+            composed.0 < low || composed.1 > high
+        } else if self.forward.get() {
+            composed.0 < low
+        } else {
+            composed.1 > high
+        };
         if !beyond {
             return;
         }
@@ -492,21 +523,21 @@ impl Prefetch {
         }
     }
 
-    /// Composes `item` beside the composed ones (with `KEEP_ITEMS_BEHIND`, trimming those
-    /// beyond the limits), noting the lazy lists composed in it. `None` if it isn't next to
+    /// Composes `item` beside the composed ones, deactivating those beyond the limits on the
+    /// other side in the same composition (those the layout let go). `None` if it isn't next to
     /// them; else whether it composed anything.
     fn compose_item(
         &self,
         state: &Rc<LazyListInner>,
         item: usize,
+        key: u64,
         scope: &mut PrefetchRequestScope<'_>,
     ) -> Option<bool> {
         let (start, end) = state.composed.get();
         if (start..end).contains(&item) {
             return Some(false);
         }
-        let (low, high) =
-            if self.policy.get().keep_behind > 0 { self.limits.get() } else { (0, usize::MAX) };
+        let (low, high) = self.limits.get();
         let range = if item == end {
             (start.max(low).min(item), item + 1)
         } else if item + 1 == start {
@@ -514,12 +545,45 @@ impl Prefetch {
         } else {
             return None;
         };
-        self.collecting.set(true);
-        self.nested.borrow_mut().clear();
+        {
+            let mut precomposed = self.precomposed.borrow_mut();
+            precomposed.retain(|kept| *kept != key);
+            if precomposed.len() >= PRECOMPOSED_KEPT {
+                precomposed.remove(0);
+            }
+            precomposed.push(key);
+        }
         state.compose(range);
         scope.recompose();
-        self.collecting.set(false);
         Some(true)
+    }
+
+    /// Whether the item of `key` was composed by a request (and may leave unmeasured, kept for
+    /// reuse).
+    pub(super) fn was_precomposed(&self, key: u64) -> bool {
+        self.precomposed.borrow().contains(&key)
+    }
+
+    /// Notes `nested`, a lazy list composing in the item composing now, if any.
+    fn note(&self, nested: &Rc<LazyListInner>) {
+        let Some(key) = self.composing_item.get() else { return };
+        let mut lists = self.nested.borrow_mut();
+        if lists.len() > NESTED_KEYS_KEPT {
+            lists.retain(|_, noted| noted.iter().any(|list| list.strong_count() > 0));
+        }
+        let noted = lists.entry(key).or_default();
+        noted.retain(|list| list.strong_count() > 0);
+        if !noted.iter().any(|list| std::ptr::eq(list.as_ptr(), Rc::as_ptr(nested))) {
+            noted.push(Rc::downgrade(nested));
+        }
+    }
+
+    /// The live lazy lists composed in the item of `key`.
+    fn nested_lists(&self, key: u64) -> Vec<Rc<LazyListInner>> {
+        self.nested
+            .borrow()
+            .get(&key)
+            .map_or(Vec::new(), |noted| noted.iter().filter_map(Weak::upgrade).collect())
     }
 }
 
@@ -635,7 +699,7 @@ impl Handle {
             }
             let section = compose_ui::platform::trace::section(c"compose-rs: prefetch compose");
             let began = Instant::now();
-            match prefetch.compose_item(&state, self.item, scope) {
+            match prefetch.compose_item(&state, self.item, self.key, scope) {
                 // Not next to the composed items: no longer to be prefetched.
                 None => {
                     self.canceled.set(true);
@@ -645,19 +709,30 @@ impl Handle {
                     if composed {
                         let nanos = began.elapsed().as_nanos() as u64;
                         prefetch.timed(scope, Step::Compose, self.content_type, nanos);
-                        // What composed in it: `resolveNestedPrefetchStates`, which runs only
-                        // with time left (as the next step).
-                        *self.nested.borrow_mut() = Some(NestedPrefetch::of(&prefetch.nested));
                     }
                 }
             }
             drop(section);
             prefetch.stepped(scope);
             self.composed.set(true);
+            // Another item there now (the items changed while composing): done, as Compose's
+            // check of the key it composed.
+            let same =
+                prefetch.items.borrow().upgrade().is_some_and(|items| {
+                    self.item < items.count && items.key(self.item) == self.key
+                });
+            if !same {
+                self.canceled.set(true);
+                return false;
+            }
         }
         if self.nested.borrow().is_none() {
-            // Composed before this request (a frame's), or nothing composed in it.
-            *self.nested.borrow_mut() = Some(NestedPrefetch::default());
+            // `resolveNestedPrefetchStates`: the lazy lists in the item, whether this request or
+            // a frame composed it, as Compose's request finds those of its precomposed item.
+            if scope.available_time_nanos() == 0 {
+                return true;
+            }
+            *self.nested.borrow_mut() = Some(NestedPrefetch::of(prefetch.nested_lists(self.key)));
         }
         let nested_count = averages.nested_count.unwrap_or(INITIAL_NESTED_PREFETCH_COUNT);
         if self.execute_nested(scope, nested_count, urgent) {
@@ -786,21 +861,12 @@ impl Handle {
 }
 
 impl NestedPrefetch {
-    /// The lazy lists noted while composing an item (each once, live).
-    fn of(noted: &RefCell<Vec<Weak<LazyListInner>>>) -> NestedPrefetch {
-        let mut lists: Vec<Rc<LazyListInner>> = Vec::new();
-        for list in noted.borrow_mut().drain(..) {
-            if let Some(list) = list.upgrade()
-                && !lists.iter().any(|known| Rc::ptr_eq(known, &list))
-            {
-                lists.push(list);
-            }
-        }
+    /// Over the lazy lists composed in an item.
+    fn of(lists: Vec<Rc<LazyListInner>>) -> NestedPrefetch {
         let requests = lists.iter().map(|_| None).collect();
         NestedPrefetch { lists, requests, list: 0, request: 0 }
     }
 }
-
 
 /// A [`Handle`] in the scheduler's queue.
 struct HandleRequest(Rc<Handle>);
@@ -832,15 +898,27 @@ impl PrefetchRequest for TrimRequest {
             // The frame composes the wanted ones (and trims).
             return false;
         }
-        // Behind the scroll only: those ahead are the next ones.
-        let range =
-            if prefetch.forward.get() { (start.max(low), end) } else { (start, end.min(high)) };
-        if range == (start, end) {
+        let policy = prefetch.policy.get();
+        // With `KEEP_ITEMS_BEHIND`, behind the scroll only: those ahead are the next ones.
+        let range = if policy.keep_behind == 0 {
+            (start.max(low), end.min(high))
+        } else if prefetch.forward.get() {
+            (start.max(low), end)
+        } else {
+            (start, end.min(high))
+        };
+        if range == (start, end) || range.0 >= range.1 {
             return false;
         }
-        let averages = prefetch.averages(None);
-        if !prefetch.fits(scope, Step::Compose, averages.composition, false) {
-            return !prefetch.policy.get().recent_maximum;
+        // Compose deactivates in its measurement, so any time left goes; D341's budget times it
+        // as a composition.
+        let fits = if policy.recent_maximum {
+            prefetch.fits(scope, Step::Compose, prefetch.averages(None).composition, false)
+        } else {
+            scope.available_time_nanos() > 0
+        };
+        if !fits {
+            return !policy.recent_maximum;
         }
         let _section = compose_ui::platform::trace::section(c"compose-rs: prefetch compose");
         state.compose(range);
@@ -864,15 +942,13 @@ impl ComposeArg for ParentList {
 pub(super) static LOCAL_PARENT_LIST: compose_runtime::CompositionLocal<Option<ParentList>> =
     compose_runtime::CompositionLocal::new("LocalParentLazyList", || None);
 
-/// A lazy list composing: notes `state` in the list around it while a request composes that
-/// list's item.
+/// A lazy list composing: notes `state` in the list around it, under the item composing it.
 pub(super) fn note_nested(state: &Rc<LazyListInner>) {
     if let Some(ParentList(parent)) = LOCAL_PARENT_LIST.current()
         && let Some(parent) = parent.upgrade()
-        && parent.prefetch.collecting.get()
         && !Rc::ptr_eq(&parent, state)
     {
-        parent.prefetch.nested.borrow_mut().push(Rc::downgrade(state));
+        parent.prefetch.note(state);
     }
 }
 

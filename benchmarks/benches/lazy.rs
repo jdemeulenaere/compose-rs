@@ -34,6 +34,12 @@ fn host(content: fn()) -> UiHost {
         Density::new(2.625),
         Box::new(FixedTextMeasurer::new()),
     );
+    // `LAZY_BENCH_OPTIMIZATIONS`: compose-rs's optimizations (D520; Compose's work by default).
+    if let Ok(list) = std::env::var("LAZY_BENCH_OPTIMIZATIONS") {
+        host.set_optimizations(
+            compose::ui::platform::Optimizations::parse(&list).expect("known optimizations"),
+        );
+    }
     host.set_content(content);
     host.settle(10);
     host

@@ -96,6 +96,33 @@ fn without_kept_records(mut bytes: Vec<u8>) -> Vec<u8> {
     bytes
 }
 
+/// `bytes` with every `GROUP` record's version zeroed.
+fn without_versions(bytes: &[u8]) -> Vec<u8> {
+    let mut bytes = bytes.to_vec();
+    let start = if bytes.first() == Some(&tag::LAYERS) {
+        5 + u32_at(&bytes, 1) as usize * LAYER_ENTRY_BYTES
+    } else {
+        0
+    };
+    fn zero(bytes: &mut [u8], mut at: usize, end: usize) {
+        while at < end {
+            if bytes[at] == tag::GROUP {
+                let length = u32_at(bytes, at + 17) as usize;
+                bytes[at + 9..at + 17].fill(0);
+                zero(bytes, at + 21, at + 21 + length);
+                at += 21 + length;
+            } else if bytes[at] == tag::KEPT {
+                return;
+            } else {
+                at += 1 + operand_bytes(bytes, at);
+            }
+        }
+    }
+    let end = bytes.len();
+    zero(&mut bytes, start, end);
+    bytes
+}
+
 /// A host's frames, serialized as `bridge.rs` does, checked against every earlier frame.
 struct Checked {
     host: UiHost,
@@ -104,17 +131,6 @@ struct Checked {
     out: Writer,
     /// Every (key, version) seen, and its record's bytes.
     seen: HashMap<(u64, u64), Vec<u8>>,
-}
-
-/// compose-rs's own lazy-list behaviours beyond Compose's, which hosts don't use by default
-/// (D560-D565): two ahead, D341's budget, prefetching at rest, two kept behind (their groups
-/// listed, D380), drawing ahead (D350). For the tests of kept and drawn-ahead groups.
-fn legacy() -> Optimizations {
-    Optimizations::parse(
-        "prefetch_two_ahead,prefetch_budget_recent_maximum,prefetch_at_rest,keep_items_behind,\
-         draw_prefetched_ahead",
-    )
-    .expect("known names")
 }
 
 impl Checked {
@@ -157,9 +173,11 @@ impl Checked {
                 &mut fresh,
             )
         });
+        // Versions aside: a record whose bytes stayed the same keeps the version it was cached
+        // with (its nested group changed, D323), where a fresh cache writes the group's.
         assert_eq!(
-            bytes,
-            without_kept_records(fresh.bytes),
+            without_versions(&bytes),
+            without_versions(&without_kept_records(fresh.bytes)),
             "cached records differ from fresh ones"
         );
         let (keys, records) = parse(&bytes);
@@ -392,7 +410,7 @@ fn a_scrolled_lazy_list_keeps_its_records_sound() {
     let given = *state;
     let tick = mutable_state_of(0u32);
     let tick_handle = tick.handle();
-    let mut checked = Checked::with(legacy(), move || {
+    let mut checked = Checked::new(move || {
         compose_foundation::LazyColumn(
             Modifier.size((100.dp(), 100.dp())),
             given,

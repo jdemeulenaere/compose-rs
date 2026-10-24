@@ -1130,7 +1130,8 @@ fn step_back(
                     *offset += skip as f32 * average;
                     continue;
                 }
-                let wanted = ((-*offset) / average).ceil() as usize + 1;
+                // As many lines as cover the offset (D576).
+                let wanted = ((-*offset) / average).ceil().max(1.0) as usize;
                 state.pending.set(state.pending.get() + *offset);
                 *offset = 0.0;
                 return wanted;
@@ -1385,7 +1386,10 @@ impl MeasurePolicy for LazyGridLayout {
                     .max(1)
             };
             let room = (main_max - content_end).max(0);
-            let more = ((room / (in_view + spacing).max(1)) as usize + 1).min(MOST_MISSING);
+            // As many lines as cover the room left, no more (D576).
+            let more = (room.max(1) as usize)
+                .div_ceil((in_view + spacing).max(1) as usize)
+                .min(MOST_MISSING);
             wanted_end = m.lines.at_most_last(end_index + more + beyond + beyond_after - 1) + 1;
         }
         // The items composed, from the lines: whole lines.
@@ -1407,7 +1411,14 @@ impl MeasurePolicy for LazyGridLayout {
                         first_item: m.lines.start(first),
                         last_item: m.lines.start(last + 1).saturating_sub(1),
                         start_distance: -first_main,
-                        end_distance: last_main + m.size_of(last_line) + spacing - main_max,
+                        // The last visible item's own size, as Compose's `lastItem.size` (an item
+                        // shorter than its line ends before the line does).
+                        end_distance: last_main
+                            + m.sizes
+                                .get(m.lines.start(last_line + 1).saturating_sub(1))
+                                .unwrap_or_else(|| m.size_of(last_line))
+                            + spacing
+                            - main_max,
                     })
                 }
                 _ => None,
@@ -1433,7 +1444,7 @@ impl MeasurePolicy for LazyGridLayout {
             };
             (m.lines.start(wanted_start.saturating_sub(behind)), m.lines.start(wanted_end + ahead))
         } else {
-            prefetch.target(wanted_items, (composed_start, composed_end))
+            prefetch.target(wanted_items, (composed_start, composed_end), true)
         };
         let mut composed = (composed_start, composed_end);
         let composed_more = state.composed_more.take();
@@ -1459,9 +1470,8 @@ impl MeasurePolicy for LazyGridLayout {
                 composed = (start, end);
                 state.compose(composed);
             }
-        } else if composed != limits {
-            // The others are deactivated (kept for reuse) in this frame, as Compose's
-            // measurement leaves them.
+        } else if !covers {
+            // Items to compose: this composition deactivates those no longer wanted too.
             composed = limits;
             state.compose(composed);
         } else if composed_more {
@@ -1471,9 +1481,8 @@ impl MeasurePolicy for LazyGridLayout {
         prefetch.count.set(count);
         prefetch.wanted.set(wanted_items);
         prefetch.limits.set(limits);
-        if keep {
-            prefetch.trim_between_frames(state, self.scheduler.as_ref(), composed);
-        }
+        // Those no longer wanted are deactivated by the next composition (D575).
+        prefetch.trim_between_frames(state, self.scheduler.as_ref(), composed);
         let first_item = m.lines.start(index);
         state.position.set((first_item, offset));
         state.first_key.set(Some(info.items.key(first_item)));
