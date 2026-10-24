@@ -22,6 +22,9 @@ impl ProgressIndicatorDefaults {
     pub const LINEAR_INDICATOR_WIDTH: Dp = Dp(240.0);
     /// A linear indicator's height, as `LinearIndicatorHeight`.
     pub const LINEAR_INDICATOR_HEIGHT: Dp = Dp(4.0);
+    /// Between a determinate linear indicator's line and its track, as
+    /// `LinearIndicatorTrackGapSize` (`LinearProgressIndicatorTokens.TrackActiveSpace`).
+    pub const LINEAR_INDICATOR_TRACK_GAP_SIZE: Dp = Dp(4.0);
     /// A linear indicator's ends, as `LinearStrokeCap`: `Round` since Material 3 1.3 (`Butt`
     /// before).
     pub const LINEAR_STROKE_CAP: StrokeCap = StrokeCap::Round;
@@ -38,9 +41,10 @@ impl ProgressIndicatorDefaults {
         MaterialTheme::color_scheme().primary
     }
 
-    /// A linear indicator's track, as `linearTrackColor`.
+    /// A linear indicator's track, as `linearTrackColor`: the secondary container
+    /// (`ProgressIndicatorTokens.TrackColor`, Material 3 1.3 on; the surface variant before).
     pub fn linear_track_color() -> Color {
-        MaterialTheme::color_scheme().surface_variant
+        MaterialTheme::color_scheme().secondary_container
     }
 }
 
@@ -158,8 +162,11 @@ fn inset_oval(size: f32, stroke: f32) -> Rect {
     Rect::new(half, half, size - half, size - half)
 }
 
-/// A determinate linear indicator, as Compose's `LinearProgressIndicator(progress, …)`: a line
-/// from the start, `progress` (0 to 1) of the way, over its track; 240 by 4 dp.
+/// A determinate linear indicator, as Compose's `LinearProgressIndicator(progress, …)` (Material
+/// 3 1.4): a line from the start, `progress` (0 to 1) of the way, then `gap_size` and the track
+/// to the end; 240 by 4 dp. A capped line's gap grows by the stroke, so its caps don't cross
+/// into it (a gap of 0: the line's and the track's round ends touch). Compose also draws a stop
+/// dot at the track's end (`drawStopIndicator`), which this doesn't (D572).
 #[composable]
 pub fn LinearProgressIndicator(
     progress: f32,
@@ -167,13 +174,32 @@ pub fn LinearProgressIndicator(
     #[default(crate::ProgressIndicatorDefaults::color())] color: Color,
     #[default(crate::ProgressIndicatorDefaults::linear_track_color())] track_color: Color,
     #[default(crate::ProgressIndicatorDefaults::LINEAR_STROKE_CAP)] stroke_cap: StrokeCap,
+    #[default(crate::ProgressIndicatorDefaults::LINEAR_INDICATOR_TRACK_GAP_SIZE)] gap_size: Dp,
 ) {
     let modifier = linear_size(progress_semantics(modifier, Some(progress)));
     compose_foundation::layout::Canvas(modifier, move |scope| {
         let rtl = scope.layout_direction() == compose_ui::LayoutDirection::Rtl;
-        draw_line_fraction(scope, 0.0, 1.0, track_color, stroke_cap, rtl);
-        draw_line_fraction(scope, 0.0, progress.clamp(0.0, 1.0), color, stroke_cap, rtl);
+        let progress = progress.clamp(0.0, 1.0);
+        let track_start = progress + progress.min(linear_gap_fraction(scope, gap_size, stroke_cap));
+        if track_start <= 1.0 {
+            draw_line_fraction(scope, track_start, 1.0, track_color, stroke_cap, rtl);
+        }
+        draw_line_fraction(scope, 0.0, progress, color, stroke_cap, rtl);
     });
+}
+
+/// The gap between a linear indicator's line and its track, as a fraction of its width:
+/// `gap_size`, and the stroke's width for a capped line (its caps reach half a stroke past each
+/// end), as Compose's `adjustedGapSize`.
+fn linear_gap_fraction(scope: &compose_ui::DrawScope<'_>, gap_size: Dp, cap: StrokeCap) -> f32 {
+    let size = scope.size();
+    if size.width <= 0.0 {
+        return 0.0;
+    }
+    let gap = scope.density().to_px(gap_size);
+    let adjusted =
+        if cap == StrokeCap::Butt || size.height > size.width { gap } else { gap + size.height };
+    adjusted / size.width
 }
 
 /// An indeterminate linear indicator, as Compose's `LinearProgressIndicator()`: two lines

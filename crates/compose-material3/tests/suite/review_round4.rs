@@ -10,7 +10,7 @@ use compose_foundation::layout::*;
 use compose_material3::*;
 use compose_runtime::*;
 use compose_test::*;
-use compose_ui::{Color, IntSize, Modifier, Offset, platform::DrawOp};
+use compose_ui::{Color, IntSize, Modifier, Offset, UnitExt, platform::DrawOp};
 
 fn lines(ui: &mut ComposeTestRule) -> Vec<(Offset, Offset)> {
     ui.host()
@@ -49,8 +49,38 @@ fn a_round_capped_linear_indicator_keeps_its_caps_in_its_bounds() {
     });
     let found = lines(&mut ui);
     let ends: Vec<(f32, f32)> = found.iter().map(|(from, to)| (from.x, to.x)).collect();
-    // The track from 2 to 238, the progress from 2 to 120 (half of 240).
-    assert_eq!(ends, vec![(2.0, 238.0), (2.0, 120.0)], "{found:?}");
+    // The track from 128 (half of 240, the 4 dp gap and the 4 dp stroke for the caps) to 238,
+    // the progress from 2 to 120.
+    assert_eq!(ends, vec![(128.0, 238.0), (2.0, 120.0)], "{found:?}");
+}
+
+/// Material 3 1.4's determinate linear indicator draws its track after the progress, past a
+/// gap (`gapSize`, 4 dp by default) grown by the stroke for capped lines (`adjustedGapSize`):
+/// with no gap, the progress's round end and the track's touch, half a stroke past the
+/// progress. Before, the track ran under the progress, its corners showing around the
+/// progress's round end (the stress screen's action cards, D572).
+#[test]
+fn a_linear_indicator_without_a_gap_starts_its_track_where_the_progress_ends() {
+    let mut ui = ComposeTestRule::sized(IntSize::new(400, 400), || {
+        MaterialTheme!({
+            LinearProgressIndicator!(0.5, gap_size = 0.dp());
+        });
+    });
+    let found = lines(&mut ui);
+    let ends: Vec<(f32, f32)> = found.iter().map(|(from, to)| (from.x, to.x)).collect();
+    // The track's line from 124 (its cap from 122), the progress's to 120 (its cap to 122).
+    assert_eq!(ends, vec![(124.0, 238.0), (2.0, 120.0)], "{found:?}");
+    // Full, no track; empty, only the track.
+    for (progress, expected) in [(1.0, vec![(2.0, 238.0)]), (0.0, vec![(2.0, 238.0)])] {
+        let mut ui = ComposeTestRule::sized(IntSize::new(400, 400), move || {
+            MaterialTheme!({
+                LinearProgressIndicator!(progress, gap_size = 0.dp());
+            });
+        });
+        let found = lines(&mut ui);
+        let ends: Vec<(f32, f32)> = found.iter().map(|(from, to)| (from.x, to.x)).collect();
+        assert_eq!(ends, expected, "at {progress}: {found:?}");
+    }
 }
 
 /// Compose draws a capped linear progress only when it has a length (`abs(endFraction -

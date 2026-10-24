@@ -162,8 +162,8 @@ pub use semantics::{
     ToggleableState,
 };
 pub use text::{
-    FontFamily, FontStyle, FontWeight, SharedString, TextAlign, TextDecoration, TextLayoutResult,
-    TextOverflow, TextStyle,
+    FontFamily, FontStyle, FontWeight, LineHeightAlignment, LineHeightStyle, LineHeightTrim,
+    SharedString, TextAlign, TextDecoration, TextLayoutResult, TextOverflow, TextStyle,
 };
 pub use text_input::{ImeAction, ImeOptions, KeyboardCapitalization, KeyboardType};
 pub use text_selection::Selectable;

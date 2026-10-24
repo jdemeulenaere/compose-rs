@@ -31,9 +31,9 @@ fn a_button_follows_the_material_sizes_and_states() {
     let mut ui = ComposeTestRule::sized(IntSize::new(300, 300), move || {
         Screen(enabled_handle, clicks_handle)
     });
-    // 24 dp padding each side around 2 × 7 px ("Go", 14 sp), at least 58 dp; 40 dp tall within a
-    // 48 dp touch target.
-    assert_eq!(bounds(&mut ui, "button").width(), 62.0);
+    // 24 dp padding each side around 2 × 7.1 px ("Go", 14 sp with label-large's 0.1 sp
+    // tracking, ceiled), at least 58 dp; 40 dp tall within a 48 dp touch target.
+    assert_eq!(bounds(&mut ui, "button").width(), 63.0);
     ui.on_node_with_tag("button").assert_is_enabled().perform_click();
     assert_eq!(clicks.get(), 1);
     enabled.set(false);
@@ -86,11 +86,13 @@ fn text_takes_its_style_from_the_theme() {
             });
         });
     });
-    // Body large: 16 sp text, 24 sp lines (the fixed measurer: half the size per character).
+    // Body large: 16 sp text, 24 sp lines, 0.5 sp tracking (the fixed measurer: half the size
+    // per character, plus the tracking).
     assert_eq!(bounds(&mut ui, "body").height(), 24.0);
-    assert_eq!(bounds(&mut ui, "body").width(), 32.0);
+    assert_eq!(bounds(&mut ui, "body").width(), 34.0);
     assert_eq!(bounds(&mut ui, "title").height(), 28.0);
-    assert_eq!(bounds(&mut ui, "big").width(), 45.0);
+    // 30 sp over body large keeps its tracking: 3 × 15.5 px, ceiled.
+    assert_eq!(bounds(&mut ui, "big").width(), 47.0);
 }
 
 #[test]

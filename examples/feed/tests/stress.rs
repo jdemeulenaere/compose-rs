@@ -202,3 +202,94 @@ fn the_waves_redefine_their_paths_in_place_each_frame() {
         }
     }
 }
+
+/// A text measurer that records each paragraph's text, style and maximum width, laying it out
+/// with the fixed-advance measurer.
+struct Recording {
+    inner: FixedTextMeasurer,
+    laid_out: std::rc::Rc<std::cell::RefCell<Vec<(String, compose::ui::TextStyle, i32)>>>,
+}
+
+impl compose::ui::platform::TextMeasurer for Recording {
+    fn layout(
+        &mut self,
+        text: &str,
+        style: &compose::ui::TextStyle,
+        options: compose::ui::platform::TextLayoutOptions,
+        constraints: compose::ui::Constraints,
+        density: &Density,
+    ) -> compose::ui::platform::ParagraphHandle {
+        self.laid_out.borrow_mut().push((text.to_string(), *style, constraints.max_width));
+        self.inner.layout(text, style, options, constraints, density)
+    }
+    fn metrics(
+        &self,
+        paragraph: compose::ui::platform::ParagraphHandle,
+    ) -> compose::ui::platform::ParagraphMetrics {
+        self.inner.metrics(paragraph)
+    }
+    fn hit_test(
+        &self,
+        paragraph: compose::ui::platform::ParagraphHandle,
+        position: Offset,
+    ) -> compose::ui::platform::TextPosition {
+        self.inner.hit_test(paragraph, position)
+    }
+    fn cursor_rect(
+        &self,
+        paragraph: compose::ui::platform::ParagraphHandle,
+        offset: usize,
+    ) -> compose::ui::Rect {
+        self.inner.cursor_rect(paragraph, offset)
+    }
+    fn text(&self, paragraph: compose::ui::platform::ParagraphHandle) -> &str {
+        self.inner.text(paragraph)
+    }
+    fn release(&mut self, paragraph: compose::ui::platform::ParagraphHandle) {
+        self.inner.release(paragraph)
+    }
+}
+
+/// The rich post's text is laid out as the Kotlin app's (D570, D571): Material 3 1.4's body
+/// medium (14 sp on 20 sp lines, 0.2 sp tracking, the line height centered and untrimmed) at
+/// 864 px on the Pixel 8 Pro (448 dp less the card's and its column's 16 dp each side, 384 dp).
+/// Where the line breaks fall needs Android's fonts: on the device both apps break "Alan wrote:
+/// Reading about incremental computation and how" before "UI" (docs/15, "What differs"); before
+/// D570 compose-rs, without the tracking, fit "UI" on the first line.
+#[test]
+fn the_posts_text_is_laid_out_in_body_medium_at_the_kotlin_apps_width() {
+    use compose::material3::{DEFAULT_LINE_HEIGHT_STYLE, Typography};
+    use compose::ui::Sp;
+    let laid_out = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let measurer = Recording { inner: FixedTextMeasurer::new(), laid_out: laid_out.clone() };
+    let mut ui = compose_test_with(
+        IntSize::new(1008, 2244),
+        Density::new(2.25),
+        Box::new(measurer),
+        StressScroll,
+    );
+    ui.wait_for_idle();
+    let laid_out = laid_out.borrow();
+    let (_, style, width) = laid_out
+        .iter()
+        .find(|(text, _, _)| text.starts_with("Alan wrote: Reading about incremental computation"))
+        .expect("the first post's text");
+    assert_eq!(*width, 864);
+    let body_medium = Typography::default().body_medium;
+    assert_eq!(
+        (style.font_size, style.line_height, style.letter_spacing),
+        (Sp(14.0), Sp(20.0), Sp(0.2))
+    );
+    assert_eq!(style.line_height_style, Some(DEFAULT_LINE_HEIGHT_STYLE));
+    assert!(style.has_same_layout_affecting_attributes(&body_medium));
+    // The other texts take their styles' tracking too: a tile's label in body small (0.4 sp),
+    // the section header in title small (0.1 sp).
+    let tracking = |prefix: &str| {
+        laid_out
+            .iter()
+            .find(|(text, _, _)| text == prefix)
+            .map(|(_, style, _)| style.letter_spacing)
+    };
+    assert_eq!(tracking("Tile 1"), Some(Sp(0.4)));
+    assert_eq!(tracking("Section 1"), Some(Sp(0.1)));
+}

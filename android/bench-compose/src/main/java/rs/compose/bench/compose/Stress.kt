@@ -332,8 +332,8 @@ private fun ActionCard(index: Int) {
                 FilterChip(selected = index % 3 == 0, onClick = {}, label = { Text("Filter") })
                 SuggestionChip(onClick = {}, label = { Text("Hint") })
             }
-            // Without Material 3 1.4's gap and stop dot, which compose-rs's indicator doesn't draw:
-            // a track and a line, on both sides.
+            // Without Material 3 1.4's gap, as stress.rs's, and its stop dot, which compose-rs's
+            // indicator doesn't draw: a line, then the track, on both sides.
             LinearProgressIndicator(
                 progress = { progress },
                 modifier = Modifier.fillMaxWidth(),

@@ -62,6 +62,7 @@ The known differences from Jetpack Compose that an app will run into, distilled 
 - **Focus requests are asynchronous**: `FocusManager` and `FocusRequester` requests apply after the current event or at the next frame, so `move_focus` says whether a tree was there to ask, not whether the focus moved. Arrow keys don't move the focus, as on desktop Compose (D230).
 - **Semantics** have no custom actions or pane titles, so a bottom sheet's drag handle offers no expand, collapse or dismiss actions to accessibility services.
 - **Content descriptions of icons and images are `&'static str`** (`Icon!(icon, Some("Search"))`): a description built at run time goes through `Modifier.semantics` ([Accessibility](kotlin-to-rust.md#accessibility-and-semantics)).
+- **Line heights** spread as Compose's `LineHeightStyle` in its `Fixed` mode only: there are no `Tight` and `Minimum` modes (D571). On the desktop, Skia centers or scales the extra height; other alignments are proportional there.
 - **Fonts are the system's**: `FontFamily` names a system family (`SansSerif`, `Serif`, `Monospace`, `Cursive`, `Named("…")`); custom font files can't be loaded.
 
 ## Navigation and platform
@@ -86,6 +87,7 @@ The known differences from Jetpack Compose that an app will run into, distilled 
   - dismissible and permanent navigation drawers, `BottomSheetScaffold` and standard bottom sheets;
   - input chips, date and time pickers, search bars, exposed dropdown menus, multi-choice segmented buttons;
   - the toggleable `Surface` overload, the content overloads of `ExtendedFloatingActionButton` and `BottomAppBar`, and the bottom app bar's scroll behavior.
+- **`LinearProgressIndicator`** has Material 3 1.4's gap (`gap_size`) but no stop dot at the track's end (`drawStopIndicator`), and the indeterminate one has no gaps; a determinate `CircularProgressIndicator` takes a value, as Compose's deprecated `Float` overload, with its transparent track (D572).
 - **Top app bars' scroll behaviors** have no fling decay before they settle, and dragging the bar itself doesn't collapse it (D186).
 - **Icons** are material-icons-core's filled set (D187).
 - **No dynamic color**: there's no `dynamicLightColorScheme`/`dynamicDarkColorScheme` reading the wallpaper's colors; pass them from Kotlin as properties if you need them.

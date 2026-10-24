@@ -17,10 +17,10 @@ fn bounds(ui: &mut ComposeTestRule, tag: &str) -> compose_ui::Rect {
 
 /// Compose's menu is `width(IntrinsicSize.Max)`: a child whose intrinsic width changes
 /// remeasures the menu (intrinsics are a measure dependency). An item whose text grows from
-/// "Short" to a 17-character label (119 px at 7 px a character, 143 px with the item's 12 dp
-/// paddings) widens the menu past 112 dp; here the item is measured again in place at the old
-/// width (its text wraps to two lines, still within its 48 dp height), so the menu never asks
-/// its items' widths again.
+/// "Short" to a 17-character label (121 px at 7.1 px a character, label-large's 0.1 sp
+/// tracking included; 145 px with the item's 12 dp paddings) widens the menu past 112 dp; here
+/// the item is measured again in place at the old width (its text wraps to two lines, still
+/// within its 48 dp height), so the menu never asks its items' widths again.
 #[test]
 fn a_menu_widens_when_an_items_text_grows() {
     thread_local! { static LABEL: RefCell<Option<MutableState<&'static str>>> = const { RefCell::new(None) }; }
@@ -40,7 +40,7 @@ fn a_menu_widens_when_an_items_text_grows() {
     LABEL.with(|cell| cell.borrow().unwrap().set("Much longer label"));
     ui.wait_for_idle();
     let menu = bounds(&mut ui, "menu");
-    assert_eq!(menu.width(), 143.0, "the menu didn't widen for the longer item: {menu:?}");
+    assert_eq!(menu.width(), 145.0, "the menu didn't widen for the longer item: {menu:?}");
 }
 
 /// Compose's `AlertDialog` gives its text `weight(1f, fill = false)`: a text taller than the

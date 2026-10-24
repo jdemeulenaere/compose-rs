@@ -152,17 +152,20 @@ impl ButtonDefaults {
         compose_foundation::CIRCLE_SHAPE
     }
 
+    /// The primary color, as `buttonColors()` (`FilledButtonTokens`): disabled, the on-surface
+    /// color at 10 % under the on-surface-variant one at 38 %.
     pub fn button_colors() -> ButtonColors {
         let scheme = MaterialTheme::color_scheme();
         ButtonColors {
             container_color: scheme.primary,
             content_color: scheme.on_primary,
-            disabled_container_color: scheme.on_surface.with_alpha(0.12),
-            disabled_content_color: scheme.on_surface.with_alpha(0.38),
+            disabled_container_color: scheme.on_surface.with_alpha(0.1),
+            disabled_content_color: scheme.on_surface_variant.with_alpha(0.38),
         }
     }
 
-    /// The secondary container, as `filledTonalButtonColors()`.
+    /// The secondary container, as `filledTonalButtonColors()` (`FilledTonalButtonTokens`):
+    /// disabled, the on-surface color at 12 % under itself at 38 %.
     pub fn filled_tonal_button_colors() -> ButtonColors {
         let scheme = MaterialTheme::color_scheme();
         ButtonColors {
@@ -173,30 +176,38 @@ impl ButtonDefaults {
         }
     }
 
-    /// The low surface container, primary text, as `elevatedButtonColors()`.
+    /// The low surface container, primary text, as `elevatedButtonColors()`
+    /// (`ElevatedButtonTokens`): disabled as `button_colors()`.
     pub fn elevated_button_colors() -> ButtonColors {
         let scheme = MaterialTheme::color_scheme();
         ButtonColors {
             container_color: scheme.surface_container_low,
             content_color: scheme.primary,
-            disabled_container_color: scheme.on_surface.with_alpha(0.12),
-            disabled_content_color: scheme.on_surface.with_alpha(0.38),
+            disabled_container_color: scheme.on_surface.with_alpha(0.1),
+            disabled_content_color: scheme.on_surface_variant.with_alpha(0.38),
         }
     }
 
-    /// Transparent, primary text, as `outlinedButtonColors()`.
+    /// Transparent, on-surface-variant text, as `outlinedButtonColors()`
+    /// (`OutlinedButtonTokens.LabelTextColor`, Material 3 1.4; primary before).
     pub fn outlined_button_colors() -> ButtonColors {
-        ButtonDefaults::text_button_colors()
+        let scheme = MaterialTheme::color_scheme();
+        ButtonColors {
+            container_color: Color::TRANSPARENT,
+            content_color: scheme.on_surface_variant,
+            disabled_container_color: Color::TRANSPARENT,
+            disabled_content_color: scheme.on_surface_variant.with_alpha(0.38),
+        }
     }
 
-    /// Transparent, primary text, as `textButtonColors()`.
+    /// Transparent, primary text, as `textButtonColors()` (`TextButtonTokens`).
     pub fn text_button_colors() -> ButtonColors {
         let scheme = MaterialTheme::color_scheme();
         ButtonColors {
             container_color: Color::TRANSPARENT,
             content_color: scheme.primary,
             disabled_container_color: Color::TRANSPARENT,
-            disabled_content_color: scheme.on_surface.with_alpha(0.38),
+            disabled_content_color: scheme.on_surface_variant.with_alpha(0.38),
         }
     }
 
@@ -227,13 +238,12 @@ impl ButtonDefaults {
         }
     }
 
-    /// The outline, as `outlinedButtonBorder(enabled)`.
+    /// The outline, as `outlinedButtonBorder(enabled)`: 1 dp of the outline-variant color
+    /// (`OutlinedButtonTokens.OutlineColor`, Material 3 1.4; the outline color before), at 10 %
+    /// disabled (`DisabledContainerOpacity`).
     pub fn outlined_button_border(enabled: bool) -> BorderStroke {
-        let scheme = MaterialTheme::color_scheme();
-        BorderStroke::new(
-            Dp(1.0),
-            if enabled { scheme.outline } else { scheme.on_surface.with_alpha(0.12) },
-        )
+        let outline = MaterialTheme::color_scheme().outline_variant;
+        BorderStroke::new(Dp(1.0), if enabled { outline } else { outline.with_alpha(0.1) })
     }
 }
 

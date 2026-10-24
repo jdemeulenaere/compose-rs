@@ -2,7 +2,10 @@
 //! composition locals, as Compose's (Material 3 baseline values).
 
 use compose_runtime::{ComposeArg, CompositionLocal, CompositionLocalProvider, composable};
-use compose_ui::{Color, CornerSize, FontWeight, Shape, Sp, TextStyle, UnitExt};
+use compose_ui::{
+    Color, CornerSize, FontWeight, LineHeightAlignment, LineHeightStyle, LineHeightTrim, Shape, Sp,
+    TextStyle, UnitExt,
+};
 
 /// The theme's colors, as Compose's `ColorScheme` (the roles components use).
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -172,7 +175,8 @@ impl ColorScheme {
     }
 }
 
-/// The theme's text styles, as Compose's `Typography` (Material 3 baseline sizes).
+/// The theme's text styles, as Compose's `Typography` (Material 3's type scale,
+/// `TypeScaleTokens`).
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Typography {
     pub display_large: TextStyle,
@@ -192,34 +196,78 @@ pub struct Typography {
     pub label_small: TextStyle,
 }
 
-const fn style(size: f32, line_height: f32, weight: FontWeight) -> TextStyle {
+/// How Material 3's text styles spread their line height, as `DefaultLineHeightStyle`
+/// (`TypographyTokens.kt`): centered on the text, neither end trimmed.
+pub const DEFAULT_LINE_HEIGHT_STYLE: LineHeightStyle =
+    LineHeightStyle { alignment: LineHeightAlignment::CENTER, trim: LineHeightTrim::None };
+
+/// A type scale entry: its size, line height, tracking (letter spacing, sp) and weight, as
+/// `TypeScaleTokens`' `…Size`, `…LineHeight`, `…Tracking` and `…Weight`.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct TypeScaleToken {
+    pub size: f32,
+    pub line_height: f32,
+    pub tracking: f32,
+    pub weight: FontWeight,
+}
+
+/// Material 3 1.4.0's type scale (`TypeScaleTokens`, read from its classes): sizes, line
+/// heights, tracking and weights.
+pub struct TypeScaleTokens {}
+
+const fn token(size: f32, line_height: f32, tracking: f32, weight: FontWeight) -> TypeScaleToken {
+    TypeScaleToken { size, line_height, tracking, weight }
+}
+
+impl TypeScaleTokens {
+    pub const DISPLAY_LARGE: TypeScaleToken = token(57.0, 64.0, -0.2, FontWeight::NORMAL);
+    pub const DISPLAY_MEDIUM: TypeScaleToken = token(45.0, 52.0, 0.0, FontWeight::NORMAL);
+    pub const DISPLAY_SMALL: TypeScaleToken = token(36.0, 44.0, 0.0, FontWeight::NORMAL);
+    pub const HEADLINE_LARGE: TypeScaleToken = token(32.0, 40.0, 0.0, FontWeight::NORMAL);
+    pub const HEADLINE_MEDIUM: TypeScaleToken = token(28.0, 36.0, 0.0, FontWeight::NORMAL);
+    pub const HEADLINE_SMALL: TypeScaleToken = token(24.0, 32.0, 0.0, FontWeight::NORMAL);
+    pub const TITLE_LARGE: TypeScaleToken = token(22.0, 28.0, 0.0, FontWeight::NORMAL);
+    pub const TITLE_MEDIUM: TypeScaleToken = token(16.0, 24.0, 0.2, FontWeight::MEDIUM);
+    pub const TITLE_SMALL: TypeScaleToken = token(14.0, 20.0, 0.1, FontWeight::MEDIUM);
+    pub const BODY_LARGE: TypeScaleToken = token(16.0, 24.0, 0.5, FontWeight::NORMAL);
+    pub const BODY_MEDIUM: TypeScaleToken = token(14.0, 20.0, 0.2, FontWeight::NORMAL);
+    pub const BODY_SMALL: TypeScaleToken = token(12.0, 16.0, 0.4, FontWeight::NORMAL);
+    pub const LABEL_LARGE: TypeScaleToken = token(14.0, 20.0, 0.1, FontWeight::MEDIUM);
+    pub const LABEL_MEDIUM: TypeScaleToken = token(12.0, 16.0, 0.5, FontWeight::MEDIUM);
+    pub const LABEL_SMALL: TypeScaleToken = token(11.0, 16.0, 0.5, FontWeight::MEDIUM);
+}
+
+/// A type scale entry as a text style, as `TypographyTokens`: Material's default text style
+/// (`DefaultTextStyle`: its line height style) with the token's values.
+const fn style(token: TypeScaleToken) -> TextStyle {
     TextStyle {
-        font_size: Sp(size),
-        font_weight: Some(weight),
-        line_height: Sp(line_height),
+        font_size: Sp(token.size),
+        font_weight: Some(token.weight),
+        line_height: Sp(token.line_height),
+        letter_spacing: Sp(token.tracking),
+        line_height_style: Some(DEFAULT_LINE_HEIGHT_STYLE),
         ..TextStyle::DEFAULT
     }
 }
 
 impl Default for Typography {
     fn default() -> Self {
-        let (normal, medium) = (FontWeight::NORMAL, FontWeight::MEDIUM);
         Typography {
-            display_large: style(57.0, 64.0, normal),
-            display_medium: style(45.0, 52.0, normal),
-            display_small: style(36.0, 44.0, normal),
-            headline_large: style(32.0, 40.0, normal),
-            headline_medium: style(28.0, 36.0, normal),
-            headline_small: style(24.0, 32.0, normal),
-            title_large: style(22.0, 28.0, normal),
-            title_medium: style(16.0, 24.0, medium),
-            title_small: style(14.0, 20.0, medium),
-            body_large: style(16.0, 24.0, normal),
-            body_medium: style(14.0, 20.0, normal),
-            body_small: style(12.0, 16.0, normal),
-            label_large: style(14.0, 20.0, medium),
-            label_medium: style(12.0, 16.0, medium),
-            label_small: style(11.0, 16.0, medium),
+            display_large: style(TypeScaleTokens::DISPLAY_LARGE),
+            display_medium: style(TypeScaleTokens::DISPLAY_MEDIUM),
+            display_small: style(TypeScaleTokens::DISPLAY_SMALL),
+            headline_large: style(TypeScaleTokens::HEADLINE_LARGE),
+            headline_medium: style(TypeScaleTokens::HEADLINE_MEDIUM),
+            headline_small: style(TypeScaleTokens::HEADLINE_SMALL),
+            title_large: style(TypeScaleTokens::TITLE_LARGE),
+            title_medium: style(TypeScaleTokens::TITLE_MEDIUM),
+            title_small: style(TypeScaleTokens::TITLE_SMALL),
+            body_large: style(TypeScaleTokens::BODY_LARGE),
+            body_medium: style(TypeScaleTokens::BODY_MEDIUM),
+            body_small: style(TypeScaleTokens::BODY_SMALL),
+            label_large: style(TypeScaleTokens::LABEL_LARGE),
+            label_medium: style(TypeScaleTokens::LABEL_MEDIUM),
+            label_small: style(TypeScaleTokens::LABEL_SMALL),
         }
     }
 }

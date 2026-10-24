@@ -2,6 +2,7 @@ package rs.compose.android
 
 import android.annotation.TargetApi
 import android.graphics.Canvas
+import android.graphics.Paint
 import android.graphics.RenderNode
 import android.graphics.Typeface
 import android.graphics.text.LineBreaker
@@ -69,8 +70,20 @@ internal class TextMeasurer(
         val decoration: Int,
     )
 
+    /**
+     * How a line height is spread around each line, as Compose's `LineHeightStyle` (its `Fixed`
+     * mode): the share above the text ([topRatio], -1 for proportional) and which ends are
+     * trimmed. Null: as Compose's plain `LineHeightSpan` (a style without one).
+     */
+    private data class LineHeightStyle(val topRatio: Float, val trimFirstLineTop: Boolean, val trimLastLineBottom: Boolean)
+
     /** A text style, as the request encodes it: its paint's part, and the spans'. */
-    private class Style(val paint: PaintStyle, val lineHeightPx: Float, val background: Int)
+    private class Style(
+        val paint: PaintStyle,
+        val lineHeightPx: Float,
+        val lineHeightStyle: LineHeightStyle?,
+        val background: Int,
+    )
 
     private fun readStyle(request: ByteBuffer): Style {
         val color = request.getInt()
@@ -94,7 +107,15 @@ internal class TextMeasurer(
             letterSpacingPx = request.float(),
             decoration = request.get().toInt(),
         )
-        return Style(paint, lineHeightPx = request.float(), background = request.getInt())
+        val lineHeightPx = request.float()
+        val lineHeightStyle = if (request.get().toInt() == 0) {
+            null
+        } else {
+            val topRatio = request.float()
+            val trim = request.get().toInt()
+            LineHeightStyle(topRatio, trimFirstLineTop = trim and 1 != 0, trimLastLineBottom = trim and 2 != 0)
+        }
+        return Style(paint, lineHeightPx, lineHeightStyle, background = request.getInt())
     }
 
     private fun typeface(style: PaintStyle): Typeface {
@@ -162,7 +183,9 @@ internal class TextMeasurer(
         /** One line of left-to-right text's metrics (D330), or null. */
         val boring: BoringLayout.Metrics?,
         /** A line height in px over every line, or 0. */
-        val lineHeight: Int,
+        val lineHeight: Float,
+        /** How [lineHeight] is spread around each line (null: as Compose's `LineHeightSpan`). */
+        val lineHeightStyle: LineHeightStyle?,
         val letterSpaced: Boolean,
         val softWrap: Boolean,
         val maxLines: Int,
@@ -180,7 +203,7 @@ internal class TextMeasurer(
         val maxIntrinsicWidth: Float,
     ) {
         /** [content] with its line height span, for a `StaticLayout` (made when one needs it). */
-        val staticText: CharSequence by lazy(LazyThreadSafetyMode.NONE) { withLineHeight(content, lineHeight) }
+        val staticText: CharSequence by lazy(LazyThreadSafetyMode.NONE) { withLineHeight(content, lineHeight, lineHeightStyle) }
 
         /**
          * These in another paint, which changes no metric (its color and decoration): nothing is
@@ -189,8 +212,8 @@ internal class TextMeasurer(
         fun inPaint(color: Int, decoration: Int): Intrinsics {
             val style = paintStyle.copy(color = color, decoration = decoration)
             return Intrinsics(
-                content, style, this@TextMeasurer.paint(style), direction, boring, lineHeight, letterSpaced, softWrap, maxLines,
-                ellipsis, align, boringWidth, maxIntrinsicWidth,
+                content, style, this@TextMeasurer.paint(style), direction, boring, lineHeight, lineHeightStyle, letterSpaced,
+                softWrap, maxLines, ellipsis, align, boringWidth, maxIntrinsicWidth,
             )
         }
 
@@ -245,17 +268,13 @@ internal class TextMeasurer(
             }
             spannable
         }
-        // A line height over every line (LineHeightSpan.Standard's), none on an empty text.
-        val lineHeight = if (base.lineHeightPx > 0f && content.isNotEmpty()) {
-            base.lineHeightPx.toInt().coerceAtLeast(1)
-        } else {
-            0
-        }
+        // A line height over every line (Compose's spans', [lineHeightSpan]), none on an empty text.
+        val lineHeight = if (base.lineHeightPx > 0f && content.isNotEmpty()) base.lineHeightPx else 0f
         // The direction Rust decided (its first strong character's), for the whole text, as the
         // desktop measurer: alignment and the cursor's movement agree with what's drawn.
         val direction = if (rtl) TextDirectionHeuristics.RTL else TextDirectionHeuristics.LTR
         // One line of left-to-right text has boring metrics (D330): its width, in one measure.
-        val boring = boringMetrics(content, paint, direction, lineHeight)
+        val boring = boringMetrics(content, paint, direction, lineHeight, base.lineHeightStyle)
         val boringWidth = if (boring == null) 0f else intrinsicWidth(boring.width.toFloat(), letterSpaced)
         val maxIntrinsicWidth = if (boring != null) {
             boringWidth
@@ -263,8 +282,8 @@ internal class TextMeasurer(
             intrinsicWidth(ceil(Layout.getDesiredWidth(content, paint)), letterSpaced)
         }
         val kept = Intrinsics(
-            content, base.paint, paint, direction, boring, lineHeight, letterSpaced, softWrap, maxLines, ellipsis,
-            align, boringWidth, maxIntrinsicWidth,
+            content, base.paint, paint, direction, boring, lineHeight, base.lineHeightStyle, letterSpaced, softWrap,
+            maxLines, ellipsis, align, boringWidth, maxIntrinsicWidth,
         )
         layoutAt(handle, kept, minWidth, maxWidth, drawn = !probe)
     }
@@ -375,24 +394,21 @@ internal class TextMeasurer(
      * `BoringLayout` can't use fallback fonts' line spacing as the `StaticLayout` does, so a line
      * with a taller fallback font (CJK) would be shorter (Compose accepts that difference).
      *
-     * A [lineHeight] (px, 0 for none) is applied to the metrics as the `StaticLayout`'s
-     * `LineHeightSpan.Standard` would apply it to its single line, rather than ruling the text
-     * out as Compose's `LineHeightStyleSpan` does (its trimming and alignment are not ours; D330).
+     * A [lineHeight] (px, 0 for none) is applied to the metrics as the `StaticLayout`'s span
+     * ([lineHeightSpan]) applies it to its single line (the first and the last), rather than
+     * ruling the text out as Compose's line height spans do (D330, D571).
      */
     private fun boringMetrics(
         text: CharSequence,
         paint: TextPaint,
         direction: TextDirectionHeuristic,
-        lineHeight: Int,
+        lineHeight: Float,
+        lineHeightStyle: LineHeightStyle?,
     ): BoringLayout.Metrics? {
         if (Build.VERSION.SDK_INT < 33) return null
         val metrics = BoringLayout.isBoring(text, paint, direction, true, null) ?: return null
-        // LineHeightSpan.Standard.chooseHeight, to the line's ascent and descent.
-        val height = metrics.descent - metrics.ascent
-        if (lineHeight > 0 && height > 0) {
-            val ratio = lineHeight * 1.0f / height
-            metrics.descent = Math.round(metrics.descent * ratio)
-            metrics.ascent = metrics.descent - lineHeight
+        if (lineHeight > 0f) {
+            lineHeightSpan(lineHeight, text.length, lineHeightStyle).chooseHeight(text, 0, text.length, 0, 0, metrics)
         }
         return metrics
     }
@@ -405,11 +421,96 @@ internal class TextMeasurer(
      * [content] with a [lineHeight] span over it (px; none when 0), as a `StaticLayout` takes it:
      * a copy, so that [content], which a `BoringLayout` of the same text may draw, has none.
      */
-    private fun withLineHeight(content: CharSequence, lineHeight: Int): CharSequence {
-        if (lineHeight == 0) return content
+    private fun withLineHeight(content: CharSequence, lineHeight: Float, lineHeightStyle: LineHeightStyle?): CharSequence {
+        if (lineHeight == 0f) return content
         val spannable = SpannableString(content)
-        spannable.setSpan(LineHeightSpan.Standard(lineHeight), 0, spannable.length, Spanned.SPAN_INCLUSIVE_INCLUSIVE)
+        // Its end past a last new line, as Compose's `setLineHeight`.
+        val end = if (content.isNotEmpty() && content[content.length - 1] == '\n') content.length + 1 else content.length
+        spannable.setSpan(lineHeightSpan(lineHeight, end, lineHeightStyle), 0, spannable.length, Spanned.SPAN_INCLUSIVE_INCLUSIVE)
         return spannable
+    }
+
+    /**
+     * The span spreading [lineHeight] (px) around each line of a text ending at [end], as
+     * Compose's `setLineHeight` (ui-text 1.12.1) chooses: its `LineHeightStyleSpan` for a
+     * [style], else its plain `LineHeightSpan` (D571). A new one per text: the styled one keeps
+     * the metrics of the first line it sees.
+     */
+    private fun lineHeightSpan(lineHeight: Float, end: Int, style: LineHeightStyle?): LineHeightSpan =
+        if (style == null) ProportionalLineHeightSpan(lineHeight) else StyledLineHeightSpan(lineHeight, end, style)
+
+    /**
+     * Compose's `LineHeightSpan` (ui-text 1.12.1, read from its class): every line [lineHeight]
+     * (ceiled) high, the descent scaled (ceiled) as the line's height, the rest above.
+     */
+    private class ProportionalLineHeightSpan(private val lineHeight: Float) : LineHeightSpan {
+        override fun chooseHeight(
+            text: CharSequence,
+            start: Int,
+            end: Int,
+            spanstartv: Int,
+            lineHeight: Int,
+            metrics: Paint.FontMetricsInt,
+        ) {
+            val height = metrics.descent - metrics.ascent
+            if (height <= 0) return
+            val target = ceil(this.lineHeight).toInt()
+            val ratio = target * 1.0f / height
+            metrics.descent = ceil(metrics.descent * ratio.toDouble()).toInt()
+            metrics.ascent = metrics.descent - target
+        }
+    }
+
+    /**
+     * Compose's `LineHeightStyleSpan` in its `Fixed` mode, the default (ui-text 1.12.1, read
+     * from its class): every line [lineHeight] (ceiled) high, the difference from the font's
+     * height split by the alignment's top ratio (the font's ascent's share for proportional),
+     * the first line's top and the last line's bottom back to the font's when trimmed. The
+     * target metrics are the first line's, as Compose's.
+     */
+    private class StyledLineHeightSpan(
+        private val lineHeight: Float,
+        private val endIndex: Int,
+        private val style: LineHeightStyle,
+    ) : LineHeightSpan {
+        private var firstAscent = Int.MIN_VALUE
+        private var ascent = 0
+        private var descent = 0
+        private var lastDescent = 0
+
+        override fun chooseHeight(
+            text: CharSequence,
+            start: Int,
+            end: Int,
+            spanstartv: Int,
+            lineHeight: Int,
+            metrics: Paint.FontMetricsInt,
+        ) {
+            if (metrics.descent - metrics.ascent <= 0) return
+            val first = start == 0
+            val last = end == endIndex
+            // A single line trimmed at both ends keeps its font's height.
+            if (first && last && style.trimFirstLineTop && style.trimLastLineBottom) return
+            if (firstAscent == Int.MIN_VALUE) target(metrics)
+            metrics.ascent = if (first) firstAscent else ascent
+            metrics.descent = if (last) lastDescent else descent
+        }
+
+        private fun target(metrics: Paint.FontMetricsInt) {
+            val height = metrics.descent - metrics.ascent
+            val target = ceil(lineHeight).toInt()
+            val difference = target - height
+            val topRatio = if (style.topRatio == -1f) Math.abs(metrics.ascent.toFloat()) / height else style.topRatio
+            val descentDifference = if (difference <= 0) {
+                ceil(difference * topRatio.toDouble()).toInt()
+            } else {
+                ceil(difference * (1f - topRatio).toDouble()).toInt()
+            }
+            descent = metrics.descent + descentDifference
+            ascent = descent - target
+            firstAscent = if (style.trimFirstLineTop) metrics.ascent else ascent
+            lastDescent = if (style.trimLastLineBottom) metrics.descent else descent
+        }
     }
 
     /**

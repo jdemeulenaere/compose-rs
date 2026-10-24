@@ -211,7 +211,61 @@ macro_rules! compose_arg_by_eq {
     };
 }
 
-compose_arg_by_eq!(FontStyle, FontFamily, TextDecoration, TextAlign, TextOverflow);
+/// Where a line's extra height goes, as `LineHeightStyle.Alignment`: the share of it above the
+/// text (`top_ratio`, 0 to 1), or `PROPORTIONAL` (-1: as the font's ascent and descent share
+/// its height).
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct LineHeightAlignment {
+    pub top_ratio: f32,
+}
+
+impl LineHeightAlignment {
+    pub const TOP: LineHeightAlignment = LineHeightAlignment { top_ratio: 0.0 };
+    pub const CENTER: LineHeightAlignment = LineHeightAlignment { top_ratio: 0.5 };
+    pub const PROPORTIONAL: LineHeightAlignment = LineHeightAlignment { top_ratio: -1.0 };
+    pub const BOTTOM: LineHeightAlignment = LineHeightAlignment { top_ratio: 1.0 };
+}
+
+/// Whether the first line's space above the text and the last line's below it are left out,
+/// as `LineHeightStyle.Trim`.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum LineHeightTrim {
+    FirstLineTop,
+    LastLineBottom,
+    Both,
+    None,
+}
+
+impl LineHeightTrim {
+    pub fn trims_first_line_top(self) -> bool {
+        matches!(self, LineHeightTrim::FirstLineTop | LineHeightTrim::Both)
+    }
+
+    pub fn trims_last_line_bottom(self) -> bool {
+        matches!(self, LineHeightTrim::LastLineBottom | LineHeightTrim::Both)
+    }
+}
+
+/// How a line height is spread around each line's text, as Compose's `LineHeightStyle` (its
+/// `Mode.Fixed`, the default: every line is the line height). A style without one
+/// (`TextStyle::line_height_style` `None`) spreads it as Compose's `LineHeightSpan` does:
+/// proportionally, nothing trimmed. Material 3's text styles center it and trim nothing
+/// (`DefaultLineHeightStyle`).
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct LineHeightStyle {
+    pub alignment: LineHeightAlignment,
+    pub trim: LineHeightTrim,
+}
+
+impl LineHeightStyle {
+    /// As `LineHeightStyle.Default`: proportional, both ends trimmed.
+    pub const DEFAULT: LineHeightStyle = LineHeightStyle {
+        alignment: LineHeightAlignment::PROPORTIONAL,
+        trim: LineHeightTrim::Both,
+    };
+}
+
+compose_arg_by_eq!(FontStyle, FontFamily, TextDecoration, TextAlign, TextOverflow, LineHeightStyle);
 
 /// How text looks, as Compose's `TextStyle`: what isn't set (`None`, unspecified) comes from
 /// the style it's merged over, or the measurer's defaults.
@@ -226,6 +280,9 @@ pub struct TextStyle {
     pub text_decoration: Option<TextDecoration>,
     pub text_align: Option<TextAlign>,
     pub line_height: Sp,
+    /// How `line_height` is spread around each line: `None` as Compose's `LineHeightSpan`
+    /// (proportionally, nothing trimmed).
+    pub line_height_style: Option<LineHeightStyle>,
 }
 
 impl TextStyle {
@@ -240,6 +297,7 @@ impl TextStyle {
         text_decoration: None,
         text_align: None,
         line_height: Sp::UNSPECIFIED,
+        line_height_style: None,
     };
 
     /// Whether a text in `other` is laid out as in this style, as Compose's
@@ -262,6 +320,7 @@ impl TextStyle {
             text_decoration: other.text_decoration.or(self.text_decoration),
             text_align: other.text_align.or(self.text_align),
             line_height: sp(other.line_height, self.line_height),
+            line_height_style: other.line_height_style.or(self.line_height_style),
         }
     }
 }
@@ -283,6 +342,7 @@ impl ComposeArg for TextStyle {
             && self.text_decoration == other.text_decoration
             && self.text_align == other.text_align
             && self.line_height.same(&other.line_height)
+            && self.line_height_style == other.line_height_style
     }
 }
 

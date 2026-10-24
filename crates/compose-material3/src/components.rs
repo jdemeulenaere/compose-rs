@@ -53,6 +53,7 @@ pub fn Text(
         text_decoration,
         text_align,
         line_height,
+        line_height_style: None,
     });
     BasicText(text, modifier, style, on_text_layout, overflow, soft_wrap, max_lines, min_lines);
 }

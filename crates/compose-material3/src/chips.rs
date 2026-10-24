@@ -40,14 +40,18 @@ fn chip(
 ) {
     let shape = MaterialTheme::shapes().small;
     let typography = MaterialTheme::typography();
-    let mut surface = minimum_interactive_component_size(modifier)
-        .size_in(SizeSpec::bounds(Dp::UNSPECIFIED, 32.dp(), Dp::UNSPECIFIED, Dp::UNSPECIFIED))
-        .background_with(look.container, shape)
-        .clip(shape);
+    // As Compose's `Surface`: the border, then the color, then the clip, so the clip doesn't
+    // cut into the border's antialiased outer edge at the corners (D573).
+    let mut surface = minimum_interactive_component_size(modifier).size_in(SizeSpec::bounds(
+        Dp::UNSPECIFIED,
+        32.dp(),
+        Dp::UNSPECIFIED,
+        Dp::UNSPECIFIED,
+    ));
     if let Some(border) = look.border {
         surface = surface.border_with(border.width, border.color, shape);
     }
-    surface = surface.clickable_with(
+    let mut surface = surface.background_with(look.container, shape).clip(shape).clickable_with(
         ClickableOptions {
             enabled,
             role: Some(role),
@@ -101,7 +105,8 @@ fn chip(
     });
 }
 
-/// A flat chip's look: an outline, no fill (dimmed when disabled).
+/// A flat chip's look: a 1 dp outline of the outline-variant color (`FlatOutlineColor`,
+/// Material 3 1.4; the outline color before), no fill (dimmed when disabled).
 fn outlined_look(enabled: bool, label: Color, icon: Color) -> ChipLook {
     let scheme = MaterialTheme::color_scheme();
     let dim = scheme.on_surface.with_alpha(0.38);
@@ -111,7 +116,7 @@ fn outlined_look(enabled: bool, label: Color, icon: Color) -> ChipLook {
         icon: if enabled { icon } else { dim },
         border: Some(BorderStroke::new(
             Dp(1.0),
-            if enabled { scheme.outline } else { scheme.on_surface.with_alpha(0.12) },
+            if enabled { scheme.outline_variant } else { scheme.on_surface.with_alpha(0.12) },
         )),
     }
 }

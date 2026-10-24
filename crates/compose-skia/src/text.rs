@@ -280,6 +280,20 @@ impl SkiaTextMeasurer {
         let text_style = skia_text_style(style, density);
         let mut paragraph_style = ParagraphStyle::new();
         paragraph_style.set_text_style(&text_style);
+        // A trimmed line height leaves the first line's top or the last line's bottom at the
+        // font's, as Compose's `LineHeightStyle.Trim`.
+        if let Some(line_height_style) = style.line_height_style {
+            use skia_safe::textlayout::TextHeightBehavior as Behavior;
+            let trim = line_height_style.trim;
+            paragraph_style.set_text_height_behavior(
+                match (trim.trims_first_line_top(), trim.trims_last_line_bottom()) {
+                    (true, true) => Behavior::DisableAll,
+                    (true, false) => Behavior::DisableFirstAscent,
+                    (false, true) => Behavior::DisableLastDescent,
+                    (false, false) => Behavior::All,
+                },
+            );
+        }
         // The direction from the content, as Compose resolves it: right-to-left when the first
         // strong character is (Hebrew, Arabic and the other right-to-left scripts), else the
         // layout's.
@@ -422,6 +436,12 @@ fn skia_text_style(style: &TextStyle, density: &Density) -> SkiaTextStyle {
     if style.line_height.is_specified() && font_px > 0.0 {
         text_style.set_height(density.sp_to_px(style.line_height) / font_px);
         text_style.set_height_override(true);
+        // A centered line height splits the extra space evenly (Material 3's, D571); Skia's
+        // default scales the font's ascent and descent, as Compose's proportional alignment.
+        let centered = style.line_height_style.is_some_and(|line_height_style| {
+            line_height_style.alignment == compose_ui::LineHeightAlignment::CENTER
+        });
+        text_style.set_half_leading(centered);
     }
     text_style
 }

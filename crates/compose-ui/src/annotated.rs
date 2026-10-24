@@ -50,6 +50,7 @@ impl SpanStyle {
             text_decoration: self.text_decoration,
             text_align: None,
             line_height: Sp::UNSPECIFIED,
+            line_height_style: None,
         })
     }
 }
