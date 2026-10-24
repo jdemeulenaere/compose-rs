@@ -1,7 +1,7 @@
 //! Replaying display lists onto a Skia canvas (docs/07-platforms.md, "The rendering interface").
 
 use compose_ui::{
-    Color, Paint, PaintStyle, PathCommand, PathFillType, Rect,
+    Color, Paint, PaintStyle, PathCommand, PathFillType, PathOperation, Rect,
     platform::{Boundary, DisplayList, DrawGroup, DrawOp, Renderer, TextMeasurer},
 };
 use skia_safe::{Canvas, ClipOp, EncodedImageFormat, Point, RRect, Surface, Vector, paint};
@@ -385,35 +385,57 @@ impl Renderer for RasterRenderer {
     }
 }
 
+/// Skia's paths by path identity and generation, each with its contents to tell when they're
+/// gone.
+type PathCache =
+    std::collections::HashMap<(u64, u64), (std::sync::Weak<compose_ui::PathData>, skia_safe::Path)>;
+
 thread_local! {
-    /// Skia's path of each path drawn, by its `Arc` (kept while the path lives): an icon drawn
-    /// every frame is converted once.
-    static PATHS: std::cell::RefCell<std::collections::HashMap<usize, (std::sync::Weak<compose_ui::Path>, skia_safe::Path)>> =
+    /// Skia's path of each path's contents drawn, kept while they live: an icon drawn every frame
+    /// is converted once, a `Path` changed each frame once per change (D532).
+    static PATHS: std::cell::RefCell<PathCache> =
         std::cell::RefCell::new(std::collections::HashMap::new());
 }
 
-/// Skia's path for `path`, converted once per path (while it lives).
-fn skia_path(path: &std::sync::Arc<compose_ui::Path>) -> skia_safe::Path {
-    let address = std::sync::Arc::as_ptr(path) as usize;
+/// Skia's path for `path`, converted once per contents (while they live).
+fn skia_path(path: &std::sync::Arc<compose_ui::PathData>) -> skia_safe::Path {
+    let key = (path.id(), path.generation());
     PATHS.with(|paths| {
         let mut paths = paths.borrow_mut();
-        if let Some((alive, skia)) = paths.get(&address)
+        if let Some((alive, skia)) = paths.get(&key)
             && alive.upgrade().is_some_and(|alive| std::sync::Arc::ptr_eq(&alive, path))
         {
             return skia.clone();
         }
-        // Paths that are gone are forgotten as new ones come.
+        // Contents that are gone are forgotten as new ones come.
         if paths.len() > 256 {
             paths.retain(|_, (alive, _)| alive.strong_count() > 0);
         }
         let skia = build_skia_path(path);
-        paths.insert(address, (std::sync::Arc::downgrade(path), skia.clone()));
+        paths.insert(key, (std::sync::Arc::downgrade(path), skia.clone()));
         skia
     })
 }
 
-fn build_skia_path(path: &compose_ui::Path) -> skia_safe::Path {
-    let mut skia = skia_safe::PathBuilder::new();
+/// Skia's path for `path`: its operation's result (Skia's path ops; nothing if they fail), then
+/// its commands, with its fill type.
+fn build_skia_path(path: &compose_ui::PathData) -> skia_safe::Path {
+    let mut skia = match path.operands() {
+        Some(operands) => {
+            let operation = match operands.operation {
+                PathOperation::Difference => skia_safe::PathOp::Difference,
+                PathOperation::Intersect => skia_safe::PathOp::Intersect,
+                PathOperation::Union => skia_safe::PathOp::Union,
+                PathOperation::Xor => skia_safe::PathOp::XOR,
+                PathOperation::ReverseDifference => skia_safe::PathOp::ReverseDifference,
+            };
+            let (first, second) =
+                (build_skia_path(&operands.path1), build_skia_path(&operands.path2));
+            let result = skia_safe::op(&first, &second, operation).unwrap_or_default();
+            skia_safe::PathBuilder::new_path(&result)
+        }
+        None => skia_safe::PathBuilder::new(),
+    };
     for command in path.commands() {
         match *command {
             PathCommand::MoveTo(point) => {
@@ -433,7 +455,7 @@ fn build_skia_path(path: &compose_ui::Path) -> skia_safe::Path {
             }
         }
     }
-    skia.set_fill_type(match path.fill_type {
+    skia.set_fill_type(match path.fill_type() {
         PathFillType::NonZero => skia_safe::PathFillType::Winding,
         PathFillType::EvenOdd => skia_safe::PathFillType::EvenOdd,
     });

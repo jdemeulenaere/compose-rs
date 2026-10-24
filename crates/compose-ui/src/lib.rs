@@ -138,7 +138,10 @@ pub use modifier::{
 };
 pub use nested_scroll::{NestedScrollConnection, NestedScrollSource};
 pub use overlay::{PopupPositionProvider, WindowPosition};
-pub use path::{ImageVector, Path, PathCommand, PathError, PathFillType};
+pub use path::{
+    CornerRadius, ImageVector, Path, PathCommand, PathData, PathDirection, PathError, PathFillType,
+    PathOperands, PathOperation, RoundRect,
+};
 pub use platform_services::{
     DEFAULT_URI_SCHEMES, HapticFeedback, HapticFeedbackType, LOCAL_HAPTIC_FEEDBACK,
     LOCAL_URI_HANDLER, PlatformUriHandler, UriHandler, check_uri, uri_for_log,

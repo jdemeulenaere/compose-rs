@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use crate::display_list::{DisplayList, DrawOp};
 use crate::graphics::{Color, Outline, Paint, Shape};
-use crate::path::Path;
+use crate::path::{Path, PathData};
 use crate::text::ParagraphHandle;
 use crate::unit::{Density, Offset, Rect, Size};
 
@@ -207,7 +207,8 @@ impl DrawScope<'_> {
     pub fn clip_path(&mut self, path: impl SharedPath, block: impl FnOnce(&mut DrawScope<'_>)) {
         self.save();
         let offset = self.origin;
-        self.list.push(DrawOp::ClipPath { path: path.shared(), offset });
+        let path = path.record(self.list);
+        self.list.push(DrawOp::ClipPath { path, offset });
         block(self);
         self.restore();
     }
@@ -277,8 +278,9 @@ impl DrawScope<'_> {
         });
     }
 
-    /// Draws `path` (in the node's coordinates): a `&Path` (copied) or a `&Arc<Path>` (shared,
-    /// nothing copied), as `drawPath`.
+    /// Draws `path` (in the node's coordinates), as `drawPath`: a `&Path`, its contents as they
+    /// are now (shared, nothing copied), or a `&Arc<PathData>`, contents that never change (an
+    /// `ImageVector`'s).
     pub fn draw_path(&mut self, path: impl SharedPath, paint: Paint) {
         self.draw_path_scaled(path, Offset::ZERO, (1.0, 1.0), paint);
     }
@@ -296,7 +298,8 @@ impl DrawScope<'_> {
             return;
         }
         let offset = offset + self.origin;
-        self.list.push(DrawOp::DrawPath { path: path.shared(), offset, scale, paint });
+        let path = path.record(self.list);
+        self.list.push(DrawOp::DrawPath { path, offset, scale, paint });
     }
 
     /// Saves, and draws what follows into a layer composited with `alpha` at the next restore.
@@ -332,20 +335,24 @@ impl DrawScope<'_> {
     }
 }
 
-/// A borrowed path the display list can hold: a `&Arc<Path>`, shared (nothing copied), or a
-/// `&Path`, copied into one.
+/// A path the display list can hold: a `&Path`, whose contents now are recorded (shared, nothing
+/// copied) and whose later changes draw the recording again (D531), or a `&Arc<PathData>`,
+/// contents that never change (an `ImageVector`'s).
 pub trait SharedPath {
-    fn shared(self) -> Arc<Path>;
+    /// Its contents, noting in `list` a path whose changes the recording follows.
+    #[doc(hidden)]
+    fn record(self, list: &mut DisplayList) -> Arc<PathData>;
 }
 
-impl SharedPath for &Arc<Path> {
-    fn shared(self) -> Arc<Path> {
-        self.clone()
+impl SharedPath for &Arc<PathData> {
+    fn record(self, _list: &mut DisplayList) -> Arc<PathData> {
+        Arc::clone(self)
     }
 }
 
 impl SharedPath for &Path {
-    fn shared(self) -> Arc<Path> {
-        Arc::new(self.clone())
+    fn record(self, list: &mut DisplayList) -> Arc<PathData> {
+        list.note_path(self);
+        self.data()
     }
 }

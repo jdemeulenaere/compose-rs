@@ -241,7 +241,7 @@ fn an_icon_tint_recolors_paths_with_their_own_fill() {
             viewport_width: 24.0,
             viewport_height: 24.0,
             paths: Arc::from(vec![(
-                Arc::new(Path::from_svg("M4,4h16v16h-16z").unwrap()),
+                Path::from_svg("M4,4h16v16h-16z").unwrap().data(),
                 Some(Color::RED),
             )]),
         };

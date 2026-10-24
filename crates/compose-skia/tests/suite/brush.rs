@@ -1,8 +1,6 @@
 //! Gradients and path clips rendered by Skia: a paint's shader comes from its display list,
 //! in the list's coordinates (a scaled path's included).
 
-use std::sync::Arc;
-
 use compose::ui::{
     Brush, Color, Offset, Paint, Path, Rect, Size, TileMode,
     platform::{DisplayList, DrawOp, FixedTextMeasurer, Renderer},
@@ -54,14 +52,14 @@ fn a_radial_gradient_and_a_shaded_path_stay_in_the_lists_coordinates() {
     );
     let paint = gradient_paint(&mut list, &brush, Size::new(100.0, 100.0), Offset::ZERO);
     // A unit square scaled to the whole surface: the gradient isn't scaled with it.
-    let mut path = Path::new();
+    let path = Path::new();
     path.move_to(0.0, 0.0);
     path.line_to(1.0, 0.0);
     path.line_to(1.0, 1.0);
     path.line_to(0.0, 1.0);
     path.close();
     list.push(DrawOp::DrawPath {
-        path: Arc::new(path),
+        path: path.data(),
         offset: Offset::ZERO,
         scale: (100.0, 100.0),
         paint,
@@ -76,13 +74,13 @@ fn a_radial_gradient_and_a_shaded_path_stay_in_the_lists_coordinates() {
 #[test]
 fn a_path_clip_keeps_what_is_inside_it() {
     let mut list = DisplayList::default();
-    let mut triangle = Path::new();
+    let triangle = Path::new();
     triangle.move_to(0.0, 0.0);
     triangle.line_to(100.0, 0.0);
     triangle.line_to(0.0, 100.0);
     triangle.close();
     list.push(DrawOp::Save);
-    list.push(DrawOp::ClipPath { path: Arc::new(triangle), offset: Offset::ZERO });
+    list.push(DrawOp::ClipPath { path: triangle.data(), offset: Offset::ZERO });
     list.push(DrawOp::DrawRect(Rect::new(0.0, 0.0, 100.0, 100.0), Paint::fill(Color::RED)));
     list.push(DrawOp::Restore);
     let mut renderer = render(&list);
@@ -125,4 +123,63 @@ fn a_gradient_interpolates_premultiplied_colors() {
     let middle = renderer.pixel(50, 50);
     assert!(middle.red() > 245, "{middle:?}");
     assert!((115..140).contains(&middle.green()), "{middle:?}");
+}
+
+/// A remembered `Path` reset and rebuilt in its drawing block each frame (D530) renders as it
+/// is in each frame: Skia's path for it is made again for each change (D532), not the one made
+/// for its first contents.
+#[test]
+fn a_path_reset_each_frame_renders_as_it_is() {
+    use compose::foundation::layout::Canvas;
+    use compose::runtime::{MutableState, mutable_state_of, remember};
+    use compose::ui::{Density, IntSize, Modifier, UnitExt, platform::UiHost};
+    thread_local! {
+        static WIDTH: std::cell::Cell<Option<MutableState<f32>>> = const { std::cell::Cell::new(None) };
+    }
+    let width = mutable_state_of(30.0f32);
+    WIDTH.set(Some(width.handle()));
+    fn content() {
+        let path = remember(Path::new);
+        let width = WIDTH.get().expect("a width");
+        Canvas(Modifier.size(100.dp()), move |scope| {
+            path.reset();
+            path.add_rect(Rect::new(0.0, 0.0, width.get(), 100.0));
+            scope.draw_path(&path, Paint::fill(Color::RED));
+        });
+    }
+    let mut host = UiHost::new(
+        IntSize::new(100, 100),
+        Density::new(1.0),
+        Box::new(FixedTextMeasurer::default()),
+    );
+    host.set_content(content);
+    for (wide, inside, outside) in [(30.0, 25, 35), (80.0, 75, 85), (10.0, 5, 15)] {
+        width.set(wide);
+        host.frame();
+        let mut renderer = RasterRenderer::new(100, 100);
+        host.with_tree(|tree| {
+            renderer.render(tree.display_list(), Color::WHITE, 1.0, tree.text_measurer_ref())
+        });
+        assert_eq!(renderer.pixel(inside, 50), Color::RED, "width {wide}");
+        assert_eq!(renderer.pixel(outside, 50), Color::WHITE, "width {wide}");
+    }
+}
+
+/// `Path::op` is drawn as Skia's path ops compute it: a square less a smaller one is a frame.
+#[test]
+fn a_path_operation_renders_its_result() {
+    let (outer, inner) = (Path::new(), Path::new());
+    outer.add_rect(Rect::new(0.0, 0.0, 100.0, 100.0));
+    inner.add_rect(Rect::new(25.0, 25.0, 75.0, 75.0));
+    let frame = Path::combine(compose::ui::PathOperation::Difference, &outer, &inner);
+    let mut list = DisplayList::default();
+    list.push(DrawOp::DrawPath {
+        path: frame.data(),
+        offset: Offset::ZERO,
+        scale: (1.0, 1.0),
+        paint: Paint::fill(Color::RED),
+    });
+    let mut renderer = render(&list);
+    assert_eq!(renderer.pixel(10, 10), Color::RED);
+    assert_eq!(renderer.pixel(50, 50), Color::WHITE, "the hole");
 }

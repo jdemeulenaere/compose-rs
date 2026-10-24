@@ -70,7 +70,7 @@ fn circles_ovals_and_pie_arcs_draw_as_arcs() {
 fn scoped_transforms_and_clips_restore_after_their_block() {
     let ui = ComposeTestRule::sized(IntSize::new(300, 300), || {
         Canvas(Modifier.size(100.dp()), |scope| {
-            let mut triangle = Path::new();
+            let triangle = Path::new();
             triangle.move_to(0.0, 0.0);
             triangle.line_to(10.0, 0.0);
             triangle.line_to(0.0, 10.0);

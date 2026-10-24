@@ -4,7 +4,10 @@
 //!
 //! Paths and images are resources: defined once (a `DefinePath` or `DefineImage` before their
 //! first use) and dropped when the last frame using them is gone, so a frame names them by id
-//! (drawn with `DRAW_PATH`, clipped to with `CLIP_PATH`). A gradient isn't a resource: a paint
+//! (drawn with `DRAW_PATH`, clipped to with `CLIP_PATH`). A path changed in place (a `Path`
+//! reset and rebuilt each frame) is defined again under the id of its contents no frame uses any
+//! more, so the replayer rewinds and refills the same `android.graphics.Path`, as Kotlin's
+//! `reset` (D532). A gradient isn't a resource: a paint
 //! with a shader carries its whole definition (D210): a paint names a shader of its own
 //! recording's table (D175, D270), and a cached record's bytes stand on their own.
 //! Their definitions wait until the Kotlin side takes them with the frame it draws, so a frame
@@ -24,8 +27,8 @@ use std::collections::HashMap;
 use std::sync::{Arc, Weak};
 
 use compose_ui::{
-    Color, ImageBitmap, Offset, Outline, Paint, PaintStyle, Path, PathCommand, PathFillType, Rect,
-    StrokeCap, TileMode,
+    Color, ImageBitmap, Offset, Outline, Paint, PaintStyle, PathCommand, PathData, PathFillType,
+    PathOperation, Rect, StrokeCap, TileMode,
     platform::Shader,
     platform::{DisplayList, DrawGroup, DrawOp},
 };
@@ -317,16 +320,28 @@ fn average_color(gradient: &compose_ui::platform::Gradient) -> Color {
 
 /// A resource change the Kotlin side hasn't taken yet.
 enum Pending {
-    Path { id: u32, path: Weak<Path> },
+    Path { id: u32, path: Weak<PathData> },
     Image { id: u32, width: u32, height: u32, pixels: Weak<[u8]> },
     DropPath(u32),
     DropImage(u32),
 }
 
+/// A path's contents the Kotlin side holds under an id.
+struct DefinedPath {
+    /// The contents: alive while a recording (a group's, the frame's) or their path holds them.
+    contents: Weak<PathData>,
+    generation: u64,
+    id: u32,
+}
+
 /// The paths and images the Kotlin side holds, by id.
 #[derive(Default)]
 pub struct Resources {
-    paths: HashMap<usize, (Weak<Path>, u32)>,
+    /// By path identity (`PathData::id`), each generation still held, under its own id.
+    paths: HashMap<u64, Vec<DefinedPath>>,
+    /// How many paths were defined again under an id they had (D532): a record naming one is
+    /// the same bytes drawing other contents.
+    redefinitions: u64,
     images: HashMap<usize, (Weak<[u8]>, u32)>,
     next_id: u32,
     /// Definitions and drops the Kotlin side hasn't taken yet: a definition dropped before it
@@ -359,18 +374,38 @@ impl Resources {
         }
     }
 
-    /// The id of `path`, defined if new.
-    fn path_id(&mut self, path: &Arc<Path>) -> u32 {
-        let key = Arc::as_ptr(path) as usize;
-        if let Some((weak, id)) = self.paths.get(&key)
-            && weak.upgrade().is_some_and(|alive| Arc::ptr_eq(&alive, path))
-        {
-            return *id;
+    /// The id of `path`'s contents, defined if new: under the id of contents of the same path
+    /// that nothing holds any more if there are (D532), the replayer then refilling that id's
+    /// `android.graphics.Path`; under a new id otherwise. Contents still held keep their id, so a
+    /// record naming it (cached, D157) draws them whenever it's replayed.
+    fn path_id(&mut self, path: &Arc<PathData>) -> u32 {
+        let defined = self.paths.entry(path.id()).or_default();
+        if let Some(entry) = defined.iter().find(|entry| entry.generation == path.generation()) {
+            debug_assert!(
+                entry.contents.upgrade().is_some_and(|alive| Arc::ptr_eq(&alive, path)),
+                "a path's generation names one set of contents"
+            );
+            return entry.id;
         }
-        let id = self.next();
-        if let Some((_, old)) = self.paths.insert(key, (Arc::downgrade(path), id)) {
-            self.drop_path(old);
-        }
+        let (contents, generation) = (Arc::downgrade(path), path.generation());
+        let id = match defined.iter_mut().find(|entry| entry.contents.strong_count() == 0) {
+            Some(entry) => {
+                *entry = DefinedPath { contents, generation, id: entry.id };
+                let id = entry.id;
+                self.redefinitions += 1;
+                // Redefined in place: a definition the Kotlin side hasn't taken is replaced.
+                self.pending.retain(
+                    |op| !matches!(op, Pending::Path { id: defined, .. } if *defined == id),
+                );
+                id
+            }
+            None => {
+                self.next_id = self.next_id.wrapping_add(1).max(1);
+                let id = self.next_id;
+                defined.push(DefinedPath { contents, generation, id });
+                id
+            }
+        };
         self.pending.push(Pending::Path { id, path: Arc::downgrade(path) });
         id
     }
@@ -401,13 +436,17 @@ impl Resources {
 
     /// Drops the resources no frame can use any more (their owners are gone).
     pub fn collect(&mut self) {
-        let dead_paths: Vec<u32> = self
-            .paths
-            .values()
-            .filter(|(weak, _)| weak.strong_count() == 0)
-            .map(|(_, id)| *id)
-            .collect();
-        self.paths.retain(|_, (weak, _)| weak.strong_count() > 0);
+        let mut dead_paths = Vec::new();
+        self.paths.retain(|_, defined| {
+            defined.retain(|entry| {
+                let alive = entry.contents.strong_count() > 0;
+                if !alive {
+                    dead_paths.push(entry.id);
+                }
+                alive
+            });
+            !defined.is_empty()
+        });
         for id in dead_paths {
             self.drop_path(id);
         }
@@ -516,13 +555,34 @@ fn paint_bytes(bytes: &[u8], at: usize) -> usize {
     alpha_at + 4 - at
 }
 
-fn write_path(writer: &mut Writer, id: u32, path: &Path) {
+fn write_path(writer: &mut Writer, id: u32, path: &PathData) {
     writer.u8(tag::DEFINE_PATH);
     writer.u32(id);
-    writer.u8(match path.fill_type {
+    write_path_contents(writer, path);
+}
+
+/// A path's contents, as `Replayer.kt` reads them: its fill type (u8: 0 non-zero, 1 even-odd),
+/// its operation (u8: 0 none, else `PathOperation`'s kind + 1, then both operands' contents, as
+/// these), then its commands' count (u32) and each command (its kind, its points).
+fn write_path_contents(writer: &mut Writer, path: &PathData) {
+    writer.u8(match path.fill_type() {
         PathFillType::NonZero => 0,
         PathFillType::EvenOdd => 1,
     });
+    match path.operands() {
+        None => writer.u8(0),
+        Some(operands) => {
+            writer.u8(1 + match operands.operation {
+                PathOperation::Difference => 0,
+                PathOperation::Intersect => 1,
+                PathOperation::Union => 2,
+                PathOperation::Xor => 3,
+                PathOperation::ReverseDifference => 4,
+            });
+            write_path_contents(writer, &operands.path1);
+            write_path_contents(writer, &operands.path2);
+        }
+    }
     writer.u32(path.commands().len() as u32);
     for command in path.commands() {
         match command {
@@ -1028,13 +1088,18 @@ impl<'a> Serializer<'a> {
         self.out.u32(0);
         // No fold spans a group's edge: the ones open here end before it.
         let folds = std::mem::take(&mut self.folds);
+        let redefinitions = self.resources.redefinitions;
         self.write_recording(&group.content, index + 1);
+        // A path it draws defined again under its id (changed in place, D532): the same bytes
+        // draw other contents, so its version tells the replayer to record it again.
+        let redefined = self.resources.redefinitions != redefinitions;
         self.folds = folds;
         let length = (self.out.bytes.len() - length_at - 4) as u32;
         self.out.bytes[length_at..length_at + 4].copy_from_slice(&length.to_le_bytes());
         let record = self.cache.records.entry(group.key).or_default();
         let content = length_at + 4;
-        let unchanged = !record.bytes.is_empty()
+        let unchanged = !redefined
+            && !record.bytes.is_empty()
             && record.bytes.len() == self.out.bytes.len() - at
             && record.bytes[content - at..] == self.out.bytes[content..];
         if unchanged {
@@ -1177,6 +1242,7 @@ fn write_op(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use compose_ui::Path;
     use compose_ui::platform::Gradient;
 
     fn read_u32(bytes: &[u8], at: usize) -> u32 {
@@ -1393,7 +1459,7 @@ mod tests {
 
     #[test]
     fn a_path_is_defined_once_and_dropped_with_its_owner() {
-        let path = Arc::new(Path::from_svg("M0,0 L10,0 L10,10 Z").unwrap());
+        let path = Path::from_svg("M0,0 L10,0 L10,10 Z").unwrap().data();
         let mut list = DisplayList::default();
         let op = DrawOp::DrawPath {
             path: path.clone(),
@@ -1427,7 +1493,7 @@ mod tests {
         previous: Option<DisplayList>,
         seed: u8,
     ) -> (DisplayList, Vec<u8>) {
-        let path = Arc::new(Path::from_svg("M0,0 L10,0 L10,10 Z").unwrap());
+        let path = Path::from_svg("M0,0 L10,0 L10,10 Z").unwrap().data();
         let image = ImageBitmap::from_rgba_premultiplied(1, 1, vec![seed; 4]);
         let mut list = DisplayList::default();
         list.push(DrawOp::DrawPath {
@@ -1460,8 +1526,8 @@ mod tests {
             at += match tag {
                 tag::DROP_PATH | tag::DROP_IMAGE => 5,
                 tag::DEFINE_IMAGE => 17 + read_u32(bytes, at + 13) as usize,
-                // An id, a fill type, a count, and a triangle's 4 commands (3 points, a close).
-                tag::DEFINE_PATH => 10 + 3 * 9 + 1,
+                // An id, a fill type, no operation, a count, and a triangle's 4 commands.
+                tag::DEFINE_PATH => 11 + 3 * 9 + 1,
                 other => panic!("not a resource change: {other}"),
             };
         }
@@ -1628,7 +1694,7 @@ mod tests {
     /// A clip path in a group's record names its path, defined beside the frame, and its offset.
     #[test]
     fn a_clip_path_names_its_path_and_offset() {
-        let path = Arc::new(Path::from_svg("M0,0 L10,0 L10,10 Z").unwrap());
+        let path = Path::from_svg("M0,0 L10,0 L10,10 Z").unwrap().data();
         let mut content = DisplayList::default();
         content.push(DrawOp::Save);
         content.push(DrawOp::ClipPath { path: path.clone(), offset: Offset::new(3.0, 4.0) });

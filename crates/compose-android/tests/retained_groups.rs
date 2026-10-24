@@ -502,7 +502,7 @@ fn cached_records_are_the_bytes_written_afresh() {
 /// A leaf clipped to a triangle and filled with `brush`.
 fn clipped_gradient(brush: impl Fn() -> Brush + 'static) -> Modifier {
     Modifier.draw_behind(move |scope| {
-        let triangle = Arc::new(Path::from_svg("M0,0 L10,0 L0,10 Z").unwrap());
+        let triangle = Path::from_svg("M0,0 L10,0 L0,10 Z").unwrap().data();
         let paint = scope.brush_paint(&brush(), 1.0, PaintStyle::Fill);
         scope.clip_path(&triangle, |scope| {
             let bounds = scope.bounds();
@@ -684,8 +684,8 @@ fn a_record_is_its_content_its_layer_an_entry() {
 /// defined, the old one dropped.
 #[test]
 fn a_copied_record_keeps_its_paths_ids() {
-    let square = Arc::new(Path::from_svg("M0,0 L10,0 L10,10 Z").unwrap());
-    let triangle = Arc::new(Path::from_svg("M0,0 L10,10 L0,10 Z").unwrap());
+    let square = Path::from_svg("M0,0 L10,0 L10,10 Z").unwrap().data();
+    let triangle = Path::from_svg("M0,0 L10,10 L0,10 Z").unwrap().data();
     let current = mutable_state_of(square.clone());
     let color = mutable_state_of(Color::RED);
     let (path_handle, color_handle) = (current.handle(), color.handle());
@@ -746,10 +746,10 @@ fn path_changes(pending: &[u8]) -> Vec<(u8, u32)> {
         changes.push((tag, id));
         at += match tag {
             tag::DROP_PATH => 5,
-            // An id, a fill type, a count, then each command: a kind and its points.
+            // An id, a fill type, no operation, a count, then each command: a kind and its points.
             tag::DEFINE_PATH => {
-                let count = u32_at(pending, at + 6) as usize;
-                let mut end = at + 10;
+                let count = u32_at(pending, at + 7) as usize;
+                let mut end = at + 11;
                 for _ in 0..count {
                     end += 1 + match pending[end] {
                         0 | 1 => 8,
@@ -771,7 +771,7 @@ fn path_changes(pending: &[u8]) -> Vec<(u8, u32)> {
 /// a new one each frame, the last frame's dropped before it's defined (D410).
 #[test]
 fn a_remembered_path_keeps_its_id_and_a_drawn_one_is_replaced() {
-    let heart = Arc::new(Path::from_svg("M0,0 L10,0 L10,10 Z").unwrap());
+    let heart = Path::from_svg("M0,0 L10,0 L10,10 Z").unwrap().data();
     let phase = mutable_state_of(0.0f32);
     let handle = phase.handle();
     let mut serialized = Serialized::new(move || {
@@ -780,7 +780,7 @@ fn a_remembered_path_keeps_its_id_and_a_drawn_one_is_replaced() {
             Modifier
                 .draw_behind(move |scope| {
                     scope.draw_path(&heart, Paint::fill(Color::RED));
-                    let mut trace = Path::new();
+                    let trace = Path::new();
                     trace.move_to(0.0, handle.get());
                     trace.line_to(10.0, 0.0);
                     scope.draw_path(&trace, Paint::stroke(Color::BLACK, 1.0));
@@ -806,6 +806,182 @@ fn a_remembered_path_keeps_its_id_and_a_drawn_one_is_replaced() {
         if frame == 1 {
             assert_eq!(changes[0].1, trace_id);
         }
+    }
+}
+
+/// A remembered `Path` reset and rebuilt each frame, as Compose code does (D530): each frame
+/// defines it again under the same id, nothing dropped, so the replayer refills the same
+/// `android.graphics.Path` (D532); the group drawing it gets a new version each time.
+#[test]
+fn a_path_reset_each_frame_is_redefined_in_place() {
+    let phase = mutable_state_of(0.0f32);
+    let handle = phase.handle();
+    let mut serialized = Serialized::new(move || {
+        let path = remember(Path::new);
+        Leaf(
+            Modifier
+                .repaint_boundary()
+                .draw_behind(move |scope| {
+                    path.reset();
+                    path.move_to(0.0, handle.get());
+                    path.line_to(10.0, 0.0);
+                    scope.draw_path(&path, Paint::stroke(Color::BLACK, 1.0));
+                })
+                .size(10.dp()),
+        );
+    });
+    let mut pending = Writer::default();
+    serialized.resources.write_pending(&mut pending);
+    let first = path_changes(&pending.bytes);
+    assert_eq!(first.len(), 1);
+    let (id, mut version) = (first[0].1, groups(&read(&serialized.out.bytes).1)[0].1);
+    let mut replay = PathReplay::default();
+    replay.take_bytes(&pending.bytes, &serialized.out.bytes);
+    for frame in 1..4 {
+        phase.set(frame as f32);
+        let bytes = serialized.frame();
+        assert_eq!(bytes, serialized.fresh());
+        let mut pending = Writer::default();
+        serialized.resources.write_pending(&mut pending);
+        assert_eq!(path_changes(&pending.bytes), [(tag::DEFINE_PATH, id)], "frame {frame}");
+        // The same bytes but its version would draw the new contents: a new version.
+        replay.take_bytes(&pending.bytes, &bytes);
+        let now = groups(&read(&bytes).1)[0].1;
+        assert_ne!(now, version, "a new version for a new path");
+        version = now;
+    }
+    // Unchanged: nothing defined, the version kept.
+    let bytes = serialized.frame();
+    assert!(!serialized.resources.has_pending());
+    assert_eq!(groups(&read(&bytes).1)[0].1, version);
+}
+
+/// Each path a record draws: its id and its definition's bytes.
+type DrawnPaths = Vec<(u32, Vec<u8>)>;
+
+/// What the replayer holds as frames are taken: each path id's definition, and each record's
+/// paths' definitions when it was first seen under its key and version.
+#[derive(Default)]
+struct PathReplay {
+    defined: HashMap<u32, Vec<u8>>,
+    recorded: HashMap<(u64, u64), DrawnPaths>,
+}
+
+impl PathReplay {
+    /// Takes `serialized`'s pending changes and frame, as `takeDrawing` hands them to Kotlin,
+    /// and checks that each record seen before under its key and version still draws the paths
+    /// it drew then: one recorded again from these bytes would draw what it first did (D157).
+    fn take(&mut self, serialized: &mut Serialized) {
+        let mut pending = Writer::default();
+        serialized.resources.write_pending(&mut pending);
+        let frame = serialized.out.bytes.clone();
+        self.take_bytes(&pending.bytes, &frame);
+    }
+
+    /// [`take`](PathReplay::take) with the pending changes and the frame given.
+    fn take_bytes(&mut self, bytes: &[u8], frame: &[u8]) {
+        let mut at = 0;
+        while at < bytes.len() {
+            let id = u32_at(bytes, at + 1);
+            match bytes[at] {
+                tag::DROP_PATH => {
+                    self.defined.remove(&id);
+                    at += 5;
+                }
+                tag::DEFINE_PATH => {
+                    assert_eq!(bytes[at + 6], 0, "no operation");
+                    let mut end = at + 11;
+                    for _ in 0..u32_at(bytes, at + 7) {
+                        end += 1 + 8 * [1, 1, 2, 3, 0][bytes[end] as usize];
+                    }
+                    self.defined.insert(id, bytes[at + 5..end].to_vec());
+                    at = end;
+                }
+                other => panic!("not a path change: {other}"),
+            }
+        }
+        for ((key, version), content) in records(frame) {
+            let mut drawn = Vec::new();
+            let mut at = 0;
+            while at < content.len() {
+                if matches!(content[at], tag::DRAW_PATH | tag::CLIP_PATH) {
+                    let id = u32_at(&content, at + 1);
+                    drawn.push((id, self.defined.get(&id).expect("a defined path").clone()));
+                }
+                at += 1 + operand_bytes(&content, at);
+            }
+            let first = self.recorded.entry((key, version)).or_insert_with(|| drawn.clone());
+            assert_eq!(*first, drawn, "group {key} version {version} draws other paths");
+        }
+    }
+}
+
+/// Two groups drawing one `Path`, the second resetting it each time it draws (D531): the frame
+/// the second changes it, the first's record, copied, still names its path's id with the
+/// contents it drew (the changed path is defined under another id), and the next frame draws
+/// the first again, with a new version. No record seen again under its key and version names
+/// contents other than those it named first, so a group Kotlin records again from cached bytes
+/// never draws a newer path; and no group keeps an older one past the next frame.
+#[test]
+fn a_cached_record_never_draws_a_newer_path() {
+    let path = Path::new();
+    let lines = mutable_state_of(1u32);
+    let handle = lines.handle();
+    let mut serialized = Serialized::new(move || {
+        let (first, second) = (path.clone(), path.clone());
+        Layout(
+            Modifier,
+            stack(),
+            callback(move || {
+                let first = first.clone();
+                Leaf(
+                    Modifier
+                        .repaint_boundary()
+                        .draw_behind(move |scope| {
+                            scope.draw_path(&first, Paint::stroke(Color::BLACK, 1.0))
+                        })
+                        .size(10.dp()),
+                );
+                let second = second.clone();
+                Leaf(
+                    Modifier
+                        .repaint_boundary()
+                        .draw_behind(move |scope| {
+                            second.reset();
+                            second.move_to(0.0, 0.0);
+                            for line in 0..handle.get() {
+                                second.line_to(line as f32, 10.0);
+                            }
+                            scope.draw_path(&second, Paint::stroke(Color::BLACK, 1.0))
+                        })
+                        .size(10.dp()),
+                );
+            }),
+        );
+    });
+    let mut replay = PathReplay::default();
+    replay.take(&mut serialized);
+    for count in [2, 3, 4] {
+        lines.set(count);
+        // The frame the second group changes the path, then the one drawing the first again.
+        for _ in 0..2 {
+            let bytes = serialized.frame();
+            assert_eq!(bytes, serialized.fresh());
+            replay.take(&mut serialized);
+        }
+        assert!(!serialized.host.has_pending_work(), "settled");
+        let drawn: Vec<usize> = serialized.host.with_tree(|tree| {
+            tree.display_list()
+                .flatten()
+                .ops
+                .iter()
+                .filter_map(|op| match op {
+                    DrawOp::DrawPath { path, .. } => Some(path.commands().len()),
+                    _ => None,
+                })
+                .collect()
+        });
+        assert_eq!(drawn, [count as usize + 1; 2], "both groups draw the path as it is");
     }
 }
 

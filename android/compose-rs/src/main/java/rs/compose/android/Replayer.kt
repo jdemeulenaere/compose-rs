@@ -43,10 +43,12 @@ internal inline fun ByteBuffer.floatAt(index: Int): Float = Float.fromBits(getIn
  * A dropped path's `Path` is rewound at once and kept for the next definition (D410), as
  * Compose's apps reset one `Path` to draw a shape that changes each frame: its native memory,
  * and the mask HWUI's GPU cache keeps for its contents, go when the recordings drawing it do,
- * not when the collector finalizes it. A recording that draws paths new each frame (an
- * animated drawing) draws them without masks (D411). A frame dropping a path drawn as one
- * flushes HWUI's layers first ([flushNode], D510), so the GPU cache reuses the dropped paths'
- * masks' textures for this frame's.
+ * not when the collector finalizes it. A path Rust changes in place (a `Path` reset each frame)
+ * is defined again under its id, and its `Path` rewound and refilled, as Kotlin's `reset`
+ * (D532). A recording that draws paths new each frame (an animated drawing) draws them without
+ * masks (D411). A frame dropping or redefining a path drawn as one flushes HWUI's layers first
+ * ([flushNode], D510), so the GPU cache reuses the old contents' masks' textures for this
+ * frame's.
  *
  * A gradient comes whole in each paint drawing it (D210): its `Shader` is kept by its bytes, so
  * a frame drawing the same gradients builds none.
@@ -284,7 +286,7 @@ internal class Replayer(private val text: TextMeasurer) {
         setPosition(0, 0, 1, 1)
         setUseCompositingLayer(true, null)
     }
-    /** A path drawn as a path was dropped: the frame draws [flushNode]. */
+    /** A path drawn as a path was dropped or redefined: the frame draws [flushNode]. */
     private var flushLayers = false
     /** The nodes [keptNode] draws, the first [keptCount]. */
     private var keptNodes = arrayOfNulls<RenderNode>(8)
@@ -1200,14 +1202,53 @@ internal class Replayer(private val text: TextMeasurer) {
         }
     }
 
+    /**
+     * Defines path `id`. An id already defined is a path changed in place (a `Path` Rust resets
+     * and rebuilds, D532): its `Path` is rewound and refilled, as Kotlin's `reset`, its masks
+     * recycled, and, if a recording drew it as a path, the frame flushes HWUI's layers first, as
+     * for a drop (D510). Its recordings keep their own copy of its old contents.
+     */
     private fun definePath(buffer: ByteBuffer) {
         val id = buffer.getInt()
-        // An id is defined once, but a stale mask must never outlive its path.
-        dropPath(id)
-        val kept = if (pathPool.isEmpty()) KeptPath() else pathPool.removeAt(pathPool.size - 1)
+        val defined = paths.get(id)
+        val kept = if (defined != null) {
+            if (defined.drawnAsPath) flushLayers = true
+            for (mask in defined.masks) forget(mask)
+            defined.masks.clear()
+            defined.rewind()
+            defined
+        } else if (pathPool.isEmpty()) {
+            KeptPath()
+        } else {
+            pathPool.removeAt(pathPool.size - 1)
+        }
         kept.definedFrame = frame
-        val path = kept.path
-        path.fillType = if (buffer.get().toInt() == 1) Path.FillType.EVEN_ODD else Path.FillType.WINDING
+        readPath(buffer, kept.path)
+        paths.put(id, kept)
+    }
+
+    /**
+     * Reads a path's contents into [path] (empty): its fill type, its operation (the result of
+     * `Path.op` on its two operands, read the same way into scratch paths), then its commands.
+     */
+    private fun readPath(buffer: ByteBuffer, path: Path) {
+        val fillType = if (buffer.get().toInt() == 1) Path.FillType.EVEN_ODD else Path.FillType.WINDING
+        val operation = buffer.get().toInt()
+        if (operation != 0) {
+            val first = Path()
+            val second = Path()
+            readPath(buffer, first)
+            readPath(buffer, second)
+            val op = when (operation - 1) {
+                0 -> Path.Op.DIFFERENCE
+                1 -> Path.Op.INTERSECT
+                2 -> Path.Op.UNION
+                3 -> Path.Op.XOR
+                else -> Path.Op.REVERSE_DIFFERENCE
+            }
+            // A failed operation draws nothing, as on desktop.
+            if (!path.op(first, second, op)) path.rewind()
+        }
         repeat(buffer.getInt()) {
             when (buffer.get().toInt()) {
                 0 -> path.moveTo(buffer.float(), buffer.float())
@@ -1224,7 +1265,7 @@ internal class Replayer(private val text: TextMeasurer) {
                 else -> path.close()
             }
         }
-        paths.put(id, kept)
+        path.fillType = fillType
     }
 
     private fun defineImage(buffer: ByteBuffer) {

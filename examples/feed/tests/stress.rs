@@ -157,8 +157,9 @@ fn path_changes(bytes: &[u8]) -> (Vec<u32>, Vec<u32>) {
             }
             tag::DEFINE_PATH => {
                 defined.push(id(at + 1));
-                let commands = id(at + 6);
-                at += 10;
+                assert_eq!(bytes[at + 6], 0, "no operation");
+                let commands = id(at + 7);
+                at += 11;
                 for _ in 0..commands {
                     // A command, then its points: move and line 1, quad 2, cubic 3, close none.
                     at += 1 + 8 * [1, 1, 2, 3, 0][bytes[at] as usize];
@@ -170,19 +171,19 @@ fn path_changes(bytes: &[u8]) -> (Vec<u32>, Vec<u32>) {
     (dropped, defined)
 }
 
-/// Each frame of the stress animation draws its 50 waves as new paths, and its changes drop
-/// the frame before's 50 first (D410). So the replayer rebuilds those `Path`s, and, as the
-/// frame's sync frees the recording that drew them, flushes HWUI's layers before drawing the
-/// frame: the GPU cache's masks of the dropped paths give their textures to the new paths'
-/// masks (D510).
+/// The stress animation's 50 waves are one `Path`, reset for each wave, as Stress.kt's (D533).
+/// The first frame defines each wave's contents under an id of its own; each frame after it
+/// redefines the same 50 ids in place, the last frame's contents being gone, dropping none and
+/// defining no new one: the replayer rewinds and refills the same 50 `android.graphics.Path`s
+/// (D532), and a frame redefining a path drawn as a path flushes HWUI's layers first (D510).
 #[test]
-fn the_waves_are_new_paths_each_frame_dropped_by_the_next() {
+fn the_waves_redefine_their_paths_in_place_each_frame() {
     use compose_android::serialize::{GroupCache, Resources, Writer, write_display_list};
     let mut ui = phone(StressAnimation);
     let (mut resources, mut groups, mut list) =
         (Resources::default(), GroupCache::default(), Writer::default());
-    let mut before = Vec::new();
-    for frame in 0..4 {
+    let mut first = Vec::new();
+    for frame in 0..6 {
         ui.advance_time_by_frame();
         ui.host().with_tree(|tree| {
             write_display_list(tree.display_list(), &mut resources, &mut groups, &mut list)
@@ -190,14 +191,14 @@ fn the_waves_are_new_paths_each_frame_dropped_by_the_next() {
         resources.collect();
         let mut changes = Writer::default();
         resources.write_pending(&mut changes);
-        let (mut dropped, mut defined) = path_changes(&changes.bytes);
-        // Dropped in no particular order.
-        dropped.sort_unstable();
+        let (dropped, mut defined) = path_changes(&changes.bytes);
         defined.sort_unstable();
         assert_eq!(defined.len(), WAVES as usize, "frame {frame}");
-        if frame > 0 {
-            assert_eq!(dropped, before, "frame {frame}");
+        assert_eq!(dropped, [], "frame {frame}");
+        if frame == 0 {
+            first = defined;
+        } else {
+            assert_eq!(defined, first, "frame {frame}: the same ids");
         }
-        before = defined;
     }
 }

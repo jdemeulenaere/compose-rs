@@ -307,6 +307,9 @@ fn decorated_field(
     // in another repaint boundary would draw a stale cut, docs/06).
     let label_width = remember(|| Rc::new(std::cell::Cell::new(0.0f32)));
     let label_start = remember(|| Rc::new(std::cell::Cell::new(0.0f32)));
+    // The outline's path, reset each time it's drawn, as Compose's drawing caches keep one
+    // (`CheckDrawingCache`): an animated cut redefines it in place on Android (D532).
+    let outline = remember(Path::new);
     let decoration = {
         let (label_width, label_start) = (label_width.clone(), label_start.clone());
         move |inner_text_field: Callback| {
@@ -330,9 +333,11 @@ fn decorated_field(
                     };
                     let shape = OutlinedTextFieldDefaults::shape();
                     let (label_width, label_start) = (label_width.clone(), label_start.clone());
+                    let outline = outline.clone();
                     container.background_with(container_color, shape).draw_behind(move |scope| {
                         draw_notched_outline(
                             scope,
+                            &outline,
                             shape,
                             thickness,
                             indicator,
@@ -727,9 +732,10 @@ impl MeasurePolicy for SupportingLayout {
 
 /// The outline of `shape` around the node, `thickness` wide, its top edge cut for a label
 /// `label_width` wide starting `label_start` in (4 dp each side of it), as Compose's
-/// `outlineCutout`.
+/// `outlineCutout`: built in `path`, reset first.
 fn draw_notched_outline(
     scope: &mut compose_ui::DrawScope<'_>,
+    path: &Path,
     shape: Shape,
     thickness: Dp,
     color: Color,
@@ -755,7 +761,7 @@ fn draw_notched_outline(
         if rtl { (size.width - start - cut, size.width - start) } else { (start, start + cut) };
     // From the cut's right end, clockwise round to its left end; corners as quarter circles.
     const K: f32 = 0.552_284_8;
-    let mut path = Path::new();
+    path.reset();
     path.move_to(if cut > 0.0 { cut_right } else { left + radius }, top);
     path.line_to(right - radius, top);
     path.cubic_to(
@@ -798,5 +804,5 @@ fn draw_notched_outline(
     } else {
         path.close();
     }
-    scope.draw_path(&std::sync::Arc::new(path), Paint::stroke(color, stroke));
+    scope.draw_path(path, Paint::stroke(color, stroke));
 }

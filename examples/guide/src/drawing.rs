@@ -64,7 +64,7 @@ pub fn Ribbon() {
         modifier = Modifier.size((120.dp(), 48.dp())).draw_with_cache(|cache| {
             // Runs again only for a new size (or density, direction, or state it read).
             let size = cache.size();
-            let mut path = Path::new();
+            let path = Path::new();
             path.move_to(0.0, 0.0);
             path.line_to(size.width, 0.0);
             path.line_to(size.width - size.height / 2.0, size.height / 2.0);

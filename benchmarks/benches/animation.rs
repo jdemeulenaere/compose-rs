@@ -126,6 +126,55 @@ fn infinite_transitions(criterion: &mut Criterion) {
     DRAWN.set(true);
     frames(criterion, "140 infinite transitions of 4 values drawn, frame", Cells);
     frames(criterion, "stress_animation, frame", compose_rs_feed::stress::StressAnimation);
+    serialized_frames(criterion);
+}
+
+/// `stress_animation`'s frames with what Android's bridge does after each: the display list
+/// written for Kotlin (`write_display_list`, the resources collected) and taken with the
+/// resource changes (`write_pending`), as `frame` and `takeDrawing` do. Prints the bytes Kotlin
+/// takes a frame, and of them the path definitions' (the 50 waves' paths, D532).
+fn serialized_frames(criterion: &mut Criterion) {
+    use compose_android::serialize::{GroupCache, Resources, Writer, write_display_list};
+    platform::set_manual_clock(platform::now_nanos());
+    let mut host = UiHost::new(
+        IntSize::new(1080, 2400),
+        Density::new(2.625),
+        Box::new(FixedTextMeasurer::new()),
+    );
+    host.set_content(compose_rs_feed::stress::StressAnimation);
+    let (mut resources, mut groups, mut list, mut taken) =
+        (Resources::default(), GroupCache::default(), Writer::default(), Writer::default());
+    let mut frame = |host: &mut UiHost| {
+        platform::advance_clock(Duration::from_millis(16));
+        let start = Instant::now();
+        host.frame();
+        host.with_tree(|tree| {
+            write_display_list(tree.display_list(), &mut resources, &mut groups, &mut list)
+        });
+        resources.collect();
+        taken.bytes.clear();
+        resources.write_pending(&mut taken);
+        let resource_bytes = taken.bytes.len();
+        taken.bytes.extend_from_slice(&list.bytes);
+        (start.elapsed(), taken.bytes.len(), resource_bytes)
+    };
+    for _ in 0..30 {
+        frame(&mut host);
+    }
+    let title = "stress_animation, frame and serialize";
+    criterion.bench_function(title, |bench| {
+        bench.iter_custom(|iterations| (0..iterations).map(|_| frame(&mut host).0).sum())
+    });
+    let runs: Vec<_> = (0..1000).map(|_| frame(&mut host)).collect();
+    let mean = |pick: fn(&(Duration, usize, usize)) -> usize| {
+        runs.iter().map(pick).sum::<usize>() as f64 / runs.len() as f64
+    };
+    println!(
+        "{title}: {:.0} bytes taken a frame, {:.0} of them resource changes",
+        mean(|run| run.1),
+        mean(|run| run.2)
+    );
+    report(title, runs.iter().map(|run| run.0).collect());
 }
 
 /// Resuming 568 tasks waiting for a frame (`dispatch_frame`), against 568 calls of a boxed

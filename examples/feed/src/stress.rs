@@ -638,6 +638,8 @@ fn Waves() {
         1.0,
         infinite_repeatable(tween(4000).easing(LINEAR_EASING), RepeatMode::Restart),
     );
+    // One path, reset for each wave, as Stress.kt's: the recording keeps the contents of each.
+    let path = remember(Path::new);
     Canvas(Modifier.fill_max_width().height(140.dp()), move |scope| {
         let time = time.get();
         let size = scope.size();
@@ -646,7 +648,7 @@ fn Waves() {
             let amplitude = size.height * 0.45 * (0.3 + 0.07 * (line % 10) as f32);
             let cycles = 1.0 + (line % 5) as f32 * 0.5;
             let phase = 2.0 * PI * time * (1 + line % 4) as f32 + line as f32 * 0.37;
-            let mut path = Path::new();
+            path.reset();
             for point in 0..=WAVE_SEGMENTS {
                 let along = point as f32 / WAVE_SEGMENTS as f32;
                 let x = size.width * along;
@@ -657,10 +659,7 @@ fn Waves() {
                     path.line_to(x, y);
                 }
             }
-            scope.draw_path(
-                &std::sync::Arc::new(path),
-                Paint::stroke(color(line).with_alpha(0.6), stroke),
-            );
+            scope.draw_path(&path, Paint::stroke(color(line).with_alpha(0.6), stroke));
         }
     });
 }
