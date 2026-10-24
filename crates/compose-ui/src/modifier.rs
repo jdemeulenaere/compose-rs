@@ -921,6 +921,16 @@ pub trait ModifierNode: Any {
     fn hit_clip(&self) -> Option<crate::graphics::Shape> {
         None
     }
+    /// [`hit_clip`](ModifierNode::hit_clip) for a node of `size` at `density` (a graphics
+    /// layer's block may set its clip from them): what hit testing asks.
+    fn hit_clip_at(
+        &self,
+        size: crate::unit::Size,
+        density: crate::unit::Density,
+    ) -> Option<crate::graphics::Shape> {
+        let _ = (size, density);
+        self.hit_clip()
+    }
     /// Whether this pointer input node only watches the events passing to what's hit inside
     /// it: it doesn't count as hit itself, so the siblings under its node are still tested
     /// (`Modifier.nested_scroll`).

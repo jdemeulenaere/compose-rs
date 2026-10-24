@@ -10,6 +10,9 @@
 //! (`background(…).clip(shape)`) is a group of its own inside its node's drawing, holding what
 //! follows it in the chain and the children (an inner layer, D522). `Modifier.clip`,
 //! `clip_to_bounds` and `shadow` are graphics layers, as in Compose (D523, D524).
+//!
+//! Hit testing follows a layer's clip but not its transform yet: a scaled or translated node
+//! takes pointer events at its laid-out bounds.
 
 use std::rc::Rc;
 
@@ -301,9 +304,11 @@ impl LayerProperties {
             elevation: self.shadow_elevation,
             light: (0.0, -px(300.0), px(600.0)),
             light_radius: px(800.0),
-            // Compose Desktop's alphas, faded with the layer (as Android's outline alpha).
-            ambient: self.ambient_shadow_color.with_alpha(0.039 * self.alpha),
-            spot: self.spot_shadow_color.with_alpha(0.19 * self.alpha),
+            // Compose Desktop's alphas times the layer's and the colors' (Skiko's
+            // `RenderNode::drawShadow`).
+            ambient: faded(self.ambient_shadow_color, 0.039 * self.alpha),
+            spot: faded(self.spot_shadow_color, 0.19 * self.alpha),
+            transparent_occluder: self.alpha < 1.0,
         });
         let clip = self.outline.filter(|_| self.clip).map(|outline| match outline {
             Outline::Rectangle(rect) => DrawOp::ClipRect(rect),
@@ -317,6 +322,11 @@ impl LayerProperties {
     pub fn restores(&self) -> u8 {
         u8::from(self.transforms() || self.clip || self.casts_shadow()) + u8::from(self.offscreen())
     }
+}
+
+/// `color` with its alpha multiplied by `alpha`.
+fn faded(color: Color, alpha: f32) -> Color {
+    color.with_alpha(color.alpha() as f32 / 255.0 * alpha)
 }
 
 fn moved(rect: Rect, by: Offset) -> Rect {
@@ -358,9 +368,9 @@ impl ModifierNode for GraphicsLayerNode {
         Some(self)
     }
     /// Its clip, for hit testing, as Compose's layer's `isInLayer`: what's outside its shape
-    /// isn't hit.
-    fn hit_clip(&self) -> Option<Shape> {
-        let layer = self.scope(Density::default(), Size::ZERO);
+    /// isn't hit (its block run for the layer's size and density).
+    fn hit_clip_at(&self, size: Size, density: Density) -> Option<Shape> {
+        let layer = self.scope(density, size);
         layer.clip.then_some(layer.shape)
     }
 }
@@ -418,13 +428,24 @@ impl Modifier {
         self.then_custom(GraphicsLayerElement(Layer::Fixed(layer)))
     }
 
-    /// Draws the content with `alpha` opacity, as `Modifier.alpha`.
+    /// Draws the content with `alpha` opacity, as `Modifier.alpha`: a layer clipping to its
+    /// bounds, none at 1, as Compose's (`graphicsLayer(alpha = alpha, clip = true)`).
     pub fn alpha(self, alpha: f32) -> Modifier {
-        self.graphics_layer_with(GraphicsLayerScope { alpha, ..GraphicsLayerScope::default() })
+        if alpha == 1.0 {
+            return self;
+        }
+        self.graphics_layer_with(GraphicsLayerScope {
+            alpha,
+            clip: true,
+            ..GraphicsLayerScope::default()
+        })
     }
 
-    /// Scales the drawing around its center, as `Modifier.scale`.
+    /// Scales the drawing around its center, as `Modifier.scale`: no layer at 1.
     pub fn scale(self, scale: f32) -> Modifier {
+        if scale == 1.0 {
+            return self;
+        }
         self.graphics_layer_with(GraphicsLayerScope {
             scale_x: scale,
             scale_y: scale,
@@ -432,8 +453,12 @@ impl Modifier {
         })
     }
 
-    /// Rotates the drawing around its center (degrees, clockwise), as `Modifier.rotate`.
+    /// Rotates the drawing around its center (degrees, clockwise), as `Modifier.rotate`: no
+    /// layer at 0.
     pub fn rotate(self, degrees: f32) -> Modifier {
+        if degrees == 0.0 {
+            return self;
+        }
         self.graphics_layer_with(GraphicsLayerScope {
             rotation_z: degrees,
             ..GraphicsLayerScope::default()

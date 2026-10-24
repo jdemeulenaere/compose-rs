@@ -192,7 +192,16 @@ impl Walk<'_> {
                 layer.compositing_strategy = CompositingStrategy::ModulateAlpha;
             }
             for op in layer.operations() {
-                draw_op(self.canvas, &op, &[], self.measurer, start, self.alpha);
+                match op {
+                    // An offscreen layer inside a modulated one is faded as one composite,
+                    // its content drawn at full alpha in it (HWUI multiplies a child node's
+                    // layer alpha, not what's inside its layer).
+                    DrawOp::SaveLayerAlpha(alpha) => {
+                        self.canvas.save_layer_alpha_f(None, (alpha * self.alpha).clamp(0.0, 1.0));
+                        self.alpha = 1.0;
+                    }
+                    op => draw_op(self.canvas, &op, &[], self.measurer, start, self.alpha),
+                }
             }
             if let Some(alpha) = layer.modulated_alpha() {
                 self.alpha *= alpha;
@@ -314,7 +323,15 @@ fn draw_op(
                 &skia_paint_with(paint, shaders, None),
             );
         }
-        DrawOp::DrawShadow { outline, elevation, light, light_radius, ambient, spot } => {
+        DrawOp::DrawShadow {
+            outline,
+            elevation,
+            light,
+            light_radius,
+            ambient,
+            spot,
+            transparent_occluder,
+        } => {
             let mut path = skia_safe::PathBuilder::new();
             match outline {
                 compose_ui::Outline::Rectangle(bounds) => {
@@ -324,7 +341,13 @@ fn draw_op(
                     path.add_rrect(round_rect(bounds, radii), None, None);
                 }
             }
-            // As Compose Desktop: an opaque occluder, the light in the window's pixels.
+            // As Compose Desktop (Skiko's render node): the light in the window's pixels, the
+            // occluder transparent for a faded layer.
+            let flags = if *transparent_occluder {
+                skia_safe::utils::shadow_utils::ShadowFlags::TRANSPARENT_OCCLUDER
+            } else {
+                skia_safe::utils::shadow_utils::ShadowFlags::empty()
+            };
             skia_safe::utils::shadow_utils::draw_shadow(
                 canvas,
                 &path.detach(),
@@ -333,7 +356,7 @@ fn draw_op(
                 *light_radius,
                 skia_safe::Color::new(ambient.argb()),
                 skia_safe::Color::new(spot.argb()),
-                None,
+                flags,
             );
         }
         DrawOp::SaveLayerAlpha(alpha) => {

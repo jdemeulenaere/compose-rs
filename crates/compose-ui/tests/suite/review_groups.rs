@@ -57,8 +57,9 @@ pub(crate) fn check_groups(list: &FlatDisplayList) {
     let dump = list.dump();
     for group in &list.groups {
         assert!(group.start < group.end && group.end <= list.ops.len(), "{group:?}\n{dump}");
-        // A layer's operations around the content: saves and what they apply, then as many
-        // restores; none without a layer.
+        // A layer's operations around the content: saves and what they apply (a transform, its
+        // shadow, its clip to its outline, its alpha), then as many restores; none without a
+        // layer.
         let before = &list.ops[group.layer_start..group.start];
         let after = &list.ops[group.end..group.layer_end];
         let saves = before
@@ -69,7 +70,9 @@ pub(crate) fn check_groups(list: &FlatDisplayList) {
                         op,
                         DrawOp::Save
                             | DrawOp::Transform { .. }
+                            | DrawOp::DrawShadow { .. }
                             | DrawOp::ClipRect(_)
+                            | DrawOp::ClipRoundRect(..)
                             | DrawOp::SaveLayerAlpha(_)
                     ),
                     "{group:?} applies its layer with {op:?}\n{dump}"

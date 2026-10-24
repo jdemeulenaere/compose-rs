@@ -103,8 +103,10 @@ class ComposeRsView @JvmOverloads constructor(
      * bits ([ComposeRsOptimizations.DEFAULT] unless given at construction): none of those on by
      * default changes what's drawn, or how, relative to Compose, so a benchmark against Compose
      * measures the same rendering; others are for measuring each optimization (D520). Set from
-     * another thread, it applies on the main thread; a change draws everything again.
+     * another thread, it applies on the main thread (read from any); a change to one that draws
+     * draws everything again.
      */
+    @Volatile
     var optimizations: Long = optimizations
         set(value) {
             if (Looper.myLooper() != Looper.getMainLooper()) {

@@ -1,7 +1,7 @@
 //! What drawing graphics layers, clips and shadows as Compose's render nodes (D522-D525) costs
 //! headless: the frame (recompose, layout, draw) and its serialization for the Kotlin replayer,
-//! per frame of the benchmark's screens at the Pixel 8 Pro's size, with the bytes and groups
-//! written. Ignored: run with `cargo test --release -p compose-benchmarks --test layer_cost --
+//! per frame of the benchmark's screens at the Pixel 8 Pro's size, with the bytes, the groups,
+//! and the groups whose records changed (new or drawn again: what the replayer records again). Ignored: run with `cargo test --release -p compose-benchmarks --test layer_cost --
 //! --ignored --nocapture` (the same file runs on an earlier commit to compare, D527).
 
 use std::time::{Duration, Instant};
@@ -24,8 +24,8 @@ fn measure(name: &str, content: fn(), frames: usize, input: impl Fn(usize) -> Op
     host.settle(10);
     let (mut resources, mut cache, mut out) =
         (Resources::default(), GroupCache::default(), Writer::default());
-    let (mut frame_times, mut serialize_times, mut bytes, mut groups) =
-        (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    let (mut frame_times, mut serialize_times, mut bytes, mut groups, mut written) =
+        (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
     for frame in 0..frames + 30 {
         platform::advance_clock(Duration::from_nanos(8_333_333));
         // The input's dispatch and the frame it asks for.
@@ -47,6 +47,8 @@ fn measure(name: &str, content: fn(), frames: usize, input: impl Fn(usize) -> Op
             serialize_times.push(serialized);
             bytes.push(out.bytes.len());
             groups.push(host.with_tree(|tree| tree.display_list().groups.len()));
+            // Written with new bytes: what the replayer records again.
+            written.push(cache.written() - cache.unchanged());
         }
     }
     let median = |values: &mut Vec<Duration>| {
@@ -57,12 +59,16 @@ fn measure(name: &str, content: fn(), frames: usize, input: impl Fn(usize) -> Op
         values.sort();
         values[values.len() / 2]
     };
+    let total_written: usize = written.iter().sum();
     println!(
-        "{name}: frame {:?}, serialize {:?}, {} bytes, {} groups (medians of {frames})",
+        "{name}: frame {:?}, serialize {:?}, {} bytes, {} groups, {} recorded again (medians of \
+         {frames}; {:.2} a frame on average)",
         median(&mut frame_times),
         median(&mut serialize_times),
         median_count(&mut bytes),
         median_count(&mut groups),
+        median_count(&mut written),
+        total_written as f64 / frames as f64,
     );
 }
 
@@ -72,9 +78,33 @@ fn scroll(frame: usize) -> Option<PointerEvent> {
     Some(PointerEvent::scroll(Offset::new(672.0, 1390.0), Offset::new(0.0, delta)))
 }
 
+/// A list with a background, in a boundary: its clip is an inner layer (D522).
+#[compose::runtime::composable]
+#[allow(non_snake_case)]
+fn BackgroundList() {
+    use compose::foundation::layout::*;
+    use compose::foundation::*;
+    use compose::material3::*;
+    MaterialTheme!({
+        Box!(modifier = Modifier.fill_max_size().repaint_boundary(), {
+            LazyColumn!(
+                modifier = Modifier.fill_max_size().background(Color::LIGHT_GRAY),
+                |scope: LazyListScope| {
+                    scope.items(10_000, |index| {
+                        Card!(modifier = Modifier.fill_max_width().padding(8.dp()), {
+                            Text!("Item {}", index, modifier = Modifier.padding(16.dp()));
+                        });
+                    });
+                }
+            );
+        });
+    });
+}
+
 #[test]
 #[ignore]
 fn layer_cost() {
+    measure("background list scroll", BackgroundList, 600, scroll);
     measure("feed scroll", compose_rs_feed::Feed, 600, scroll);
     measure("stress scroll", compose_rs_feed::stress::StressScroll, 600, scroll);
     measure("stress animation", compose_rs_feed::stress::StressAnimation, 600, |_| None);

@@ -83,17 +83,15 @@ impl UiTree {
         if value.all_capabilities & (capability::POINTER | capability::DRAW) != 0 {
             for index in 0..value.chain.len() {
                 let bits = value.capabilities[index];
+                let size = value.layers[layer].measured.into();
                 if bits & capability::DRAW != 0
-                    && let Some(clip) = value.chain[index].hit_clip()
-                {
-                    let size = value.layers[layer].measured.into();
-                    if !clip
+                    && let Some(clip) = value.chain[index].hit_clip_at(size, density)
+                    && !clip
                         .outline_in(size, &density, value.layout_direction)
                         .contains(local - origins[layer])
-                    {
-                        // Outside the clip: nothing after it, nor the children, is hit.
-                        return hit_since(path, start);
-                    }
+                {
+                    // Outside the clip: nothing after it, nor the children, is hit.
+                    return hit_since(path, start);
                 }
                 if bits & capability::POINTER != 0
                     && contains(value.layers[layer].measured, local - origins[layer])

@@ -14,7 +14,8 @@ use std::sync::Arc;
 
 use compose_android::serialize::{
     AHEAD_CAPACITY, GroupCache, KEPT_ENTRY_BYTES, LAYER_ENTRY_BYTES, Resources, Writer,
-    compositing, operand_bytes, shader, tag, write_display_list, write_groups_ahead,
+    compositing, layer_entry, operand_bytes, outline_kind, shader, tag, write_display_list,
+    write_groups_ahead,
 };
 use compose_runtime::*;
 use compose_ui::platform::*;
@@ -94,22 +95,29 @@ fn read(bytes: &[u8]) -> (Vec<Layer>, Vec<Item>) {
         let count = u32_at(bytes, 1) as usize;
         at = 5;
         for _ in 0..count {
-            let f = |offset: usize| f32_at(bytes, at + offset);
+            use layer_entry as e;
+            // After the key.
+            let entry = at + 8;
+            let f = |offset: usize| f32_at(bytes, entry + offset);
+            let four = |offset: usize| (f(offset), f(offset + 4), f(offset + 8), f(offset + 12));
+            let kind = bytes[entry + e::OUTLINE_KIND];
+            let radii = four(e::OUTLINE_RADII);
             layers.push(Layer {
                 key: u64_at(bytes, at),
-                alpha: f(8),
-                pivot: (f(12), f(16)),
-                scale: (f(20), f(24)),
-                rotation: f(28),
-                translation: (f(32), f(36)),
-                clip: bytes[at + 40] != 0,
-                outline: (bytes[at + 41] != 0)
-                    .then(|| (bytes[at + 41], (f(42), f(46), f(50), f(54)), [f(58), f(62), f(66), f(70)])),
-                elevation: f(74),
-                ambient: u32_at(bytes, at + 78),
-                spot: u32_at(bytes, at + 82),
-                compositing: bytes[at + 86],
-                bounds: (f(87), f(91), f(95), f(99)),
+                alpha: f(e::ALPHA),
+                pivot: (f(e::PIVOT), f(e::PIVOT + 4)),
+                scale: (f(e::SCALE), f(e::SCALE + 4)),
+                rotation: f(e::ROTATION),
+                translation: (f(e::TRANSLATION), f(e::TRANSLATION + 4)),
+                clip: bytes[entry + e::CLIP] != 0,
+                outline: (kind != outline_kind::NONE).then(|| {
+                    (kind, four(e::OUTLINE_BOUNDS), [radii.0, radii.1, radii.2, radii.3])
+                }),
+                elevation: f(e::ELEVATION),
+                ambient: u32_at(bytes, entry + e::AMBIENT),
+                spot: u32_at(bytes, entry + e::SPOT),
+                compositing: bytes[entry + e::COMPOSITING],
+                bounds: four(e::BOUNDS),
             });
             at += LAYER_ENTRY_BYTES;
         }
@@ -1628,11 +1636,28 @@ fn the_kotlin_constants_are_rusts() {
         std::fs::read_to_string(&path).unwrap_or_else(|error| panic!("{path}: {error}"))
     };
     let replayer = kotlin("Replayer.kt");
+    use layer_entry as e;
     for (name, value) in [
         ("LAYER_ENTRY_BYTES", LAYER_ENTRY_BYTES as u64),
         ("COMPOSITING_AUTO", compositing::AUTO as u64),
         ("COMPOSITING_OFFSCREEN", compositing::OFFSCREEN as u64),
         ("COMPOSITING_MODULATE_ALPHA", compositing::MODULATE_ALPHA as u64),
+        ("OUTLINE_NONE", outline_kind::NONE as u64),
+        ("ENTRY_ALPHA", e::ALPHA as u64),
+        ("ENTRY_PIVOT", e::PIVOT as u64),
+        ("ENTRY_SCALE", e::SCALE as u64),
+        ("ENTRY_ROTATION", e::ROTATION as u64),
+        ("ENTRY_TRANSLATION", e::TRANSLATION as u64),
+        ("ENTRY_CLIP", e::CLIP as u64),
+        ("ENTRY_OUTLINE_KIND", e::OUTLINE_KIND as u64),
+        ("ENTRY_OUTLINE_BOUNDS", e::OUTLINE_BOUNDS as u64),
+        ("ENTRY_OUTLINE_RADII", e::OUTLINE_RADII as u64),
+        ("ENTRY_ELEVATION", e::ELEVATION as u64),
+        ("ENTRY_AMBIENT", e::AMBIENT as u64),
+        ("ENTRY_SPOT", e::SPOT as u64),
+        ("ENTRY_COMPOSITING", e::COMPOSITING as u64),
+        ("ENTRY_BOUNDS", e::BOUNDS as u64),
+        ("ENTRY_END", e::END as u64),
     ] {
         assert!(replayer.contains(&format!("const val {name} = {value}\n")), "{name} = {value}");
     }
@@ -1653,6 +1678,12 @@ fn the_kotlin_constants_are_rusts() {
     assert!(
         optimizations.contains(&format!("const val DEFAULT = {}\n", defaults.join(" or "))),
         "DEFAULT is {defaults:?}"
+    );
+    let all: Vec<String> =
+        Optimization::ALL.iter().map(|optimization| optimization.name.to_uppercase()).collect();
+    assert!(
+        optimizations.contains(&format!("const val ALL = {}\n", all.join(" or "))),
+        "ALL is {all:?}"
     );
 }
 
@@ -1758,4 +1789,157 @@ fn timing_one_path_reset_for_many_shapes() {
         }
         println!("n = {n}: serialize {:?} a frame", serialize / frames);
     }
+}
+
+// ---- Review of D520-D529 ---------------------------------------------------------------------
+
+/// A lifted layer drawing nothing whose block's shadow elevation goes from 0 to above 0 (a
+/// layer-only change: no version changes): its group goes from empty to drawing. The frame must
+/// write what a fresh write of the same display list writes: its parent's record naming it.
+#[test]
+fn review_an_empty_layers_shadow_appearing_by_its_block_is_drawn() {
+    let elevation = mutable_state_of(0.0f32);
+    let handle = elevation.handle();
+    let mut serialized = Serialized::new(move || {
+        Layout(
+            Modifier.repaint_boundary().then(painted(|| Color::WHITE)).size(50.dp()),
+            stack(),
+            callback(move || {
+                Leaf(
+                    Modifier
+                        .graphics_layer(move |layer| layer.shadow_elevation = handle.get())
+                        .size(20.dp()),
+                );
+            }),
+        );
+    });
+    serialized.frame();
+    elevation.set(8.0);
+    let bytes = serialized.frame();
+    let fresh = serialized.fresh();
+    assert_eq!(
+        unversioned_bytes(&bytes),
+        unversioned_bytes(&fresh),
+        "the parent's cached record doesn't name the layer now casting a shadow"
+    );
+}
+
+/// The same, the other way: the shadow goes (elevation back to 0), the group empty again.
+#[test]
+fn review_an_empty_layers_shadow_going_by_its_block_matches_a_fresh_write() {
+    let elevation = mutable_state_of(8.0f32);
+    let handle = elevation.handle();
+    let mut serialized = Serialized::new(move || {
+        Layout(
+            Modifier.repaint_boundary().then(painted(|| Color::WHITE)).size(50.dp()),
+            stack(),
+            callback(move || {
+                Leaf(
+                    Modifier
+                        .graphics_layer(move |layer| layer.shadow_elevation = handle.get())
+                        .size(20.dp()),
+                );
+            }),
+        );
+    });
+    serialized.frame();
+    elevation.set(0.0);
+    let bytes = serialized.frame();
+    let fresh = serialized.fresh();
+    assert_eq!(unversioned_bytes(&bytes), unversioned_bytes(&fresh));
+}
+
+/// A feed of card-like items (inner clip layers holding children that read state, an inner
+/// layer with a block, a lifted shadow), scrolled back and forth, state written while items
+/// are placed, kept and drawn ahead: each frame writes what a fresh write does, and each
+/// record written ahead is the frame's.
+#[test]
+fn review_inner_layers_in_kept_and_ahead_items_match_fresh_writes() {
+    use compose_foundation::*;
+    let state = LazyListState::new(0, 0);
+    let tick = mutable_state_of(0u32);
+    let (given, read) = (*state, tick.handle());
+    let mut serialized = Serialized::new(move || {
+        LazyColumn!(
+            modifier = Modifier.size((160.dp(), 150.dp())),
+            state = given,
+            |scope: LazyListScope| {
+                scope.items(300, move |index| {
+                    Layout(
+                        Modifier
+                            .background(Color::WHITE)
+                            .clip(RoundedCornerShape(4.dp()))
+                            .size((100.dp(), 30.dp())),
+                        stack(),
+                        callback(move || {
+                            Leaf(
+                                painted(move || {
+                                    Color::from_argb(0xFF00_0000 | (index as u32 * 7 + read.get()))
+                                })
+                                .size((50.dp(), 10.dp())),
+                            );
+                            Leaf(
+                                Modifier
+                                    .background(Color::RED)
+                                    .graphics_layer(move |layer| {
+                                        layer.alpha = 0.25 + (read.get() % 3) as f32 / 4.0
+                                    })
+                                    .then(painted(|| Color::BLUE))
+                                    .size(10.dp()),
+                            );
+                            if index % 2 == 0 {
+                                Leaf(Modifier.shadow(2.dp()).then(painted(|| Color::GREEN)).size(8.dp()));
+                            }
+                        }),
+                    );
+                });
+            }
+        );
+    });
+    let mut ahead: HashMap<(u64, u64), Vec<u8>> = HashMap::new();
+    let mut checked = 0;
+    for step in 0..80u32 {
+        state.scroll_by(if step % 10 >= 7 { -37.0 } else { 23.0 });
+        if step % 4 == 1 {
+            tick.set(step);
+        }
+        let bytes = serialized.frame();
+        let cached = without_kept_records(bytes.clone());
+        assert_eq!(unversioned_bytes(&cached), unversioned_bytes(&serialized.fresh()), "step {step}");
+        let _ = self::read(&bytes);
+        for (group, content) in records(&bytes) {
+            if let Some(written) = ahead.get(&group) {
+                assert_eq!(*written, content, "step {step}: {group:x?} as written ahead");
+                checked += 1;
+            }
+        }
+        for written in serialized.prefetch_and_write_ahead() {
+            ahead.extend(records(&written));
+        }
+    }
+    assert!(checked > 0, "records written ahead met again");
+}
+
+/// Turning the performance hint off (`ComposeRsView.isPerformanceHintEnabled = false`, which
+/// sets the optimizations through `setOptimizations`) changes nothing drawn: no boundary should
+/// be drawn again, no record written again.
+#[test]
+fn review_the_performance_hint_toggle_draws_nothing_again() {
+    let mut serialized = Serialized::new(|| {
+        Layout(
+            Modifier.repaint_boundary().then(painted(|| Color::WHITE)).size(50.dp()),
+            stack(),
+            callback(|| {
+                Leaf(Modifier.repaint_boundary().then(painted(|| Color::RED)).size(10.dp()));
+            }),
+        );
+    });
+    let before = serialized.frame();
+    let without_hint = Optimizations::defaults().with(Optimization::PERFORMANCE_HINT, false);
+    // As `Java_rs_compose_android_ComposeRsNative_setOptimizations`.
+    serialized.cache.set_optimizations(without_hint);
+    serialized.host.set_optimizations(without_hint);
+    let after = serialized.frame();
+    assert_eq!(groups(&read(&after).1), groups(&read(&before).1), "versions changed");
+    assert_eq!(serialized.cache.written(), 0, "records written again");
 }

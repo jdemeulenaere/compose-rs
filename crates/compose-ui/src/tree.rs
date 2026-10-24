@@ -510,10 +510,25 @@ impl UiTree {
     /// Marks `node` for measuring, and its ancestors as having a descendant to measure.
     pub fn invalidate_measure(&mut self, node: NodeId) {
         // Deactivated content (kept for reuse) isn't measured: reused, it is.
+        self.invalidate_measure_with(node, true);
+    }
+
+    /// Measures `node` again for a state its measurement read: with inner layers, what it lays
+    /// out is theirs, and what's around them draws again only if its measurement changes their
+    /// sizes (`measure_node`), as Compose's layer is recorded again alone (D522).
+    pub(crate) fn invalidate_layout_of(&mut self, node: NodeId) {
+        self.invalidate_measure_with(node, false);
+    }
+
+    fn invalidate_measure_with(&mut self, node: NodeId, whole: bool) {
         if self.get(node).is_none_or(|value| value.deactivated) {
             return;
         }
-        self.invalidate_draw_of(node);
+        if whole {
+            self.invalidate_draw_of(node);
+        } else {
+            self.invalidate_children_draw_of(node);
+        }
         let Some(value) = self.get_mut(node) else { return };
         value.needs_measure = true;
         let mut parent = value.parent;
@@ -530,11 +545,12 @@ impl UiTree {
         self.optimizations
     }
 
-    /// Uses `optimizations` from the next frame on, which draws everything again if they
-    /// changed.
+    /// Uses `optimizations` from the next frame on, which draws everything again if one that
+    /// draws changed.
     pub fn set_optimizations(&mut self, optimizations: crate::optimizations::Optimizations) {
-        if optimizations != self.optimizations {
-            self.optimizations = optimizations;
+        let draws_differently = self.optimizations.draws_differently(optimizations);
+        self.optimizations = optimizations;
+        if draws_differently {
             self.invalidate_draw();
         }
     }
@@ -568,15 +584,36 @@ impl UiTree {
     }
 
     /// Draws again what `node` draws in: the nearest repaint boundary at or above it, if any
-    /// (what's outside every boundary is drawn each draw). An overlay is drawn at the root,
-    /// outside its ancestors.
+    /// (what's outside every boundary is drawn each draw), and its inner layers. An overlay is
+    /// drawn at the root, outside its ancestors.
     pub(crate) fn invalidate_draw_of(&mut self, node: NodeId) {
+        self.invalidate_drawing(node, true);
+    }
+
+    /// Draws again what `node` draws before its inner layers (a state its drawing read there
+    /// changed): what draws it, not its inner layers' content, as Compose's layer keeps its
+    /// recording while what draws it draws again (D522).
+    pub(crate) fn invalidate_draw_before_inner_layers(&mut self, node: NodeId) {
+        self.invalidate_drawing(node, false);
+    }
+
+    /// Draws again how `node` draws its children (one moved, came, went, or is drawn
+    /// otherwise): its last inner layer if it has one, which holds them, else what draws it.
+    pub(crate) fn invalidate_children_draw_of(&mut self, node: NodeId) {
+        if self.get(node).is_some_and(|value| !value.inner_layers.is_empty()) {
+            self.invalidate_inner_layers(node);
+        } else {
+            self.invalidate_draw_of(node);
+        }
+    }
+
+    fn invalidate_drawing(&mut self, node: NodeId, own_inner_layers: bool) {
         let mut current = Some(node);
         while let Some(id) = current {
             let Some(value) = self.get_mut(id) else { break };
             // Its inner layers (D522): the last holds its children, so a change below it is
             // theirs alone; its own change may be in what's before them too.
-            if !value.inner_layers.is_empty() {
+            if !value.inner_layers.is_empty() && (id != node || own_inner_layers) {
                 for inner in &mut value.inner_layers {
                     inner.dirty = true;
                 }
@@ -624,7 +661,7 @@ impl UiTree {
             && !value.overlay
             && let Some(parent) = value.parent
         {
-            self.invalidate_draw_of(parent);
+            self.invalidate_children_draw_of(parent);
         }
     }
 
@@ -640,9 +677,10 @@ impl UiTree {
         observer.drain_invalidated(|key| {
             let (node, observation) = observation_of(key);
             match observation {
-                Observation::Measure => self.invalidate_measure(node),
+                Observation::Measure => self.invalidate_layout_of(node),
                 Observation::Draw if self.get(node).is_some_and(|value| !value.deactivated) => {
-                    self.invalidate_draw_of(node)
+                    // Its reads in its inner layers are theirs (`InnerLayers`).
+                    self.invalidate_draw_before_inner_layers(node)
                 }
                 Observation::Draw => {}
                 Observation::InnerLayers => {
@@ -883,7 +921,7 @@ impl UiTree {
         }
         // Its parent draws it otherwise: by reference, in place, or not (an overlay).
         if parent_draws_differently && let Some(parent) = parent {
-            self.invalidate_draw_of(parent);
+            self.invalidate_children_draw_of(parent);
         }
         let value = self.node_mut(node);
         let positioned =
@@ -899,7 +937,7 @@ impl UiTree {
             value.z_index = z_index;
             // Its parent draws its children in another order.
             if let Some(parent) = value.parent {
-                self.invalidate_draw_of(parent);
+                self.invalidate_children_draw_of(parent);
             }
         }
         if positioned {

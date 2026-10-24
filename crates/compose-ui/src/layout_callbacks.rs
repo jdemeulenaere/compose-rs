@@ -250,8 +250,8 @@ impl UiTree {
                 if before_entry.is_some_and(|before| index >= before) {
                     break;
                 }
-                if entry.hit_clip().is_some() {
-                    let size = value.layers[layer_of_entry].size;
+                let size = value.layers[layer_of_entry].size;
+                if entry.hit_clip_at(size.into(), self.density).is_some() {
                     let clip = self.rect_in_root(id, layer_of_entry, Some(index), size);
                     *bounds = intersect(*bounds, clip);
                 }

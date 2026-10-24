@@ -47,11 +47,17 @@ fn assert_one_row(recomposed: &compose::runtime::platform::RecompositionCounts) 
     assert_eq!(recomposed.scopes_named("Checkbox"), 1, "{names:?}");
     assert_eq!(recomposed.scopes_named("TodoAppWith"), 0, "{names:?}");
     assert!(recomposed.scopes_named("TodoRow") <= 1, "{names:?}");
-    // The button the pointer left composes again for its hover elevation, read in composition
-    // as Compose's `Button` reads its elevation's state (D526).
-    assert!(recomposed.scopes_named("Button") <= 1, "{names:?}");
-    let total: u64 = names.iter().map(|(_, count)| count).sum();
-    assert!(total <= 7, "{names:?}");
+    // The button the pointer left composes again for each frame of its elevation's animation
+    // (150 ms back from its hover elevation), its surface's box and layouts with it, as
+    // Compose's `Button` reads its animated elevation in composition (D526); nothing else does.
+    let animating = ["Button", "Box", "Layout"];
+    let total: u64 = names
+        .iter()
+        .filter(|(name, _)| !animating.contains(name))
+        .map(|(_, count)| count)
+        .sum();
+    assert!(total <= 3, "{names:?}");
+    assert!(recomposed.scopes_named("Button") <= 12, "{names:?}");
 }
 
 #[test]

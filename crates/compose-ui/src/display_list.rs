@@ -44,7 +44,8 @@ pub enum DrawOp {
     /// The shadows of `outline` raised by `elevation` pixels, lit from `light` (x, y, z in the
     /// window's pixels, not moved by transforms) of `light_radius`: an ambient shadow in
     /// `ambient` and a spot shadow in `spot` (their alphas Compose's 3.9 % and 19 %), as
-    /// Compose Desktop draws them with Skia's `ShadowUtils`.
+    /// Compose Desktop draws them with Skia's `ShadowUtils`; its occluder transparent (the
+    /// shadow under it drawn too) for a layer faded below 1, as Skiko's render node's.
     DrawShadow {
         outline: crate::graphics::Outline,
         elevation: f32,
@@ -52,6 +53,7 @@ pub enum DrawOp {
         light_radius: f32,
         ambient: crate::graphics::Color,
         spot: crate::graphics::Color,
+        transparent_occluder: bool,
     },
     /// An arc of the oval in `oval`: from `start_angle` degrees (0 at 3 o'clock, clockwise),
     /// over `sweep_angle`, closed through the center if `use_center`.

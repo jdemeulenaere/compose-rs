@@ -18,6 +18,9 @@ pub struct Optimization {
     pub name: &'static str,
     /// On unless a host says otherwise.
     pub default: bool,
+    /// It changes what's drawn or how: turning it on or off draws everything again (and the
+    /// Android serializer writes every record again).
+    pub draws: bool,
     /// What it does, and what Compose does instead.
     pub summary: &'static str,
 }
@@ -33,6 +36,7 @@ impl Optimization {
         bit: 0,
         name: "single_drawing_fade",
         default: false,
+        draws: true,
         summary: "fade a layer holding one drawing by its paint, not offscreen",
     };
 
@@ -45,6 +49,7 @@ impl Optimization {
         bit: 1,
         name: "performance_hint",
         default: true,
+        draws: false,
         summary: "report the frames' work to a hint session of compose-rs's own (Android)",
     };
 
@@ -104,15 +109,25 @@ impl Optimizations {
         self.0
     }
 
+    /// Whether going from `self` to `other` changes one that draws ([`Optimization::draws`]).
+    pub fn draws_differently(self, other: Optimizations) -> bool {
+        Optimization::ALL
+            .iter()
+            .any(|optimization| optimization.draws && self.contains(*optimization) != other.contains(*optimization))
+    }
+
     /// The set of `bits` (unknown bits dropped).
     pub fn from_bits(bits: u64) -> Optimizations {
         Optimizations(bits & Optimizations::all().0)
     }
 
     /// Parses `none`, `all`, `default`, or a comma-separated list of names (each may start with
-    /// `-` to take it out of what's before it: `default,-performance_hint`). An unknown name is
-    /// an error naming it.
+    /// `-` to take it out of what's before it: `default,-performance_hint`); an empty text is the
+    /// defaults. An unknown name is an error naming it.
     pub fn parse(text: &str) -> Result<Optimizations, String> {
+        if text.trim().is_empty() {
+            return Ok(Optimizations::defaults());
+        }
         let mut set = Optimizations::NONE;
         for word in text.split(',').map(str::trim).filter(|word| !word.is_empty()) {
             let (on, name) = match word.strip_prefix('-') {
@@ -166,7 +181,10 @@ mod tests {
         let fade = Optimization::SINGLE_DRAWING_FADE;
         let hint = Optimization::PERFORMANCE_HINT;
         assert_eq!(Optimizations::parse("none"), Ok(Optimizations::NONE));
-        assert_eq!(Optimizations::parse(""), Ok(Optimizations::NONE));
+        // Nothing named: the defaults (an empty `COMPOSE_OPTIMIZATIONS`, `-e optimizations ""`).
+        assert_eq!(Optimizations::parse(" "), Ok(Optimizations::defaults()));
+        assert!(Optimizations::NONE.draws_differently(Optimizations::NONE.with(fade, true)));
+        assert!(!Optimizations::NONE.draws_differently(Optimizations::NONE.with(hint, true)));
         assert_eq!(Optimizations::parse("all"), Ok(Optimizations::all()));
         assert_eq!(Optimizations::parse("default"), Ok(Optimizations::defaults()));
         assert!(Optimizations::defaults().contains(hint));

@@ -348,3 +348,52 @@ fn a_clip_clips_to_its_rounded_outline() {
     assert_eq!(renderer.pixel(20, 20), Color::RED);
     assert_eq!(renderer.pixel(20, 1), Color::RED, "an edge's middle");
 }
+
+/// Review: a `ModulateAlpha` layer (alpha 0.5) around a child layer drawn `Offscreen` holding
+/// two overlapping squares. The child's offscreen buffer is drawn at full alpha, then faded as
+/// one by the outer alpha (HWUI: a non-overlapping node's alpha multiplies its child node's
+/// layer alpha, not the drawings inside that layer): the overlap is blue at half alpha over
+/// white, no red through it.
+#[test]
+fn review_a_modulated_alpha_fades_a_nested_offscreen_layer_as_one() {
+    use compose::foundation::layout::Box;
+    use compose::ui::{
+        Alignment, CompositingStrategy, GraphicsLayerScope, Modifier, Paint, Rect, UnitExt,
+    };
+    let mut host =
+        UiHost::new(IntSize::new(40, 20), Density::new(1.0), Box::new(SkiaTextMeasurer::new()));
+    host.set_content(move || {
+        Box(
+            Modifier.size((40.dp(), 20.dp())).graphics_layer_with(GraphicsLayerScope {
+                alpha: 0.5,
+                compositing_strategy: CompositingStrategy::ModulateAlpha,
+                ..GraphicsLayerScope::default()
+            }),
+            Alignment::TOP_START,
+            false,
+            compose::runtime::callback(|_| {
+                compose::foundation::layout::Canvas(
+                    Modifier.size((40.dp(), 20.dp())).graphics_layer_with(GraphicsLayerScope {
+                        compositing_strategy: CompositingStrategy::Offscreen,
+                        ..GraphicsLayerScope::default()
+                    }),
+                    |scope| {
+                        scope.draw_rect(Rect::new(0.0, 0.0, 30.0, 20.0), Paint::fill(Color::RED));
+                        scope.draw_rect(Rect::new(20.0, 0.0, 40.0, 20.0), Paint::fill(Color::BLUE));
+                    },
+                );
+            }),
+        );
+    });
+    host.frame();
+    let mut renderer = RasterRenderer::new(40, 20);
+    host.with_tree(|tree| {
+        renderer.render(tree.display_list(), Color::WHITE, 1.0, tree.text_measurer_ref())
+    });
+    let overlap = renderer.pixel(25, 10);
+    let near = |a: u8, b: u8| a.abs_diff(b) <= 2;
+    assert!(
+        near(overlap.red(), 0x7F) && near(overlap.green(), 0x7F) && near(overlap.blue(), 0xFF),
+        "{overlap:?}: the red shows through the offscreen layer"
+    );
+}

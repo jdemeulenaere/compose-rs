@@ -106,7 +106,8 @@ fn passes_draw_with_content_balances_saves_around_it() {
         max = max.max(depth);
     }
     assert_eq!(depth, 0, "{}", list.dump());
-    assert_eq!(max, 2, "{}", list.dump());
+    // The clip's layer, then the alpha's, which clips too (as Compose's `alpha`, D523).
+    assert_eq!(max, 3, "{}", list.dump());
     assert_eq!(
         fills(&mut ui),
         vec![Color::RED, Color::BLUE, Color::GREEN, Color::RED, Color::BLUE, Color::GREEN]

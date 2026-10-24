@@ -13,6 +13,7 @@ mod review_d_incremental;
 mod review_d_panic_layout_node;
 mod review_d_panic_measure;
 mod review_d_panic_poisoned;
+mod review_d520;
 #[path = "../review_d_support/mod.rs"]
 mod review_d_support;
 mod review_groups;

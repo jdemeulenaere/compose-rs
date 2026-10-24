@@ -41,6 +41,8 @@ pub(crate) struct RetainedDrawing {
     pub(crate) dirty: bool,
     /// Its layer's properties must be computed again (its block read state that changed).
     pub(crate) layer_dirty: bool,
+    /// Its group drew something when last listed (not `empty`).
+    draws: bool,
 }
 
 /// The flag of an inner layer's group key: the others are their nodes' (`NodeId::to_bits`,
@@ -65,6 +67,8 @@ pub(crate) struct InnerLayer {
     /// Its content must be drawn again (`UiTree::invalidate_inner_layers`): otherwise what
     /// draws its node draws it by reference, as it is.
     pub(crate) dirty: bool,
+    /// Its group drew something when last listed (not `empty`).
+    draws: bool,
 }
 
 impl InnerLayer {
@@ -77,6 +81,7 @@ impl InnerLayer {
             layer: None,
             drawn: false,
             dirty: true,
+            draws: false,
         }
     }
 }
@@ -90,6 +95,7 @@ impl RetainedDrawing {
             layer: None,
             dirty: true,
             layer_dirty: true,
+            draws: false,
         }
     }
 }
@@ -453,7 +459,14 @@ impl UiTree {
             empty: true,
         });
         let (nested, nested_draws) = self.draw_boundaries(&content.boundaries, groups, observer);
-        let changed = dirty || nested;
+        // A shadow is a drawing too, under no content (as a Compose layer's).
+        let shadow = groups[index].layer.is_some_and(|layer| layer.casts_shadow());
+        let draws = !content.ops.is_empty() || nested_draws || shadow;
+        let retained = self.node_mut(node).retained.as_mut().expect("a repaint boundary");
+        // Drawing something or nothing changes what draws it (a reference or none): a new
+        // version, though only its layer changed (a shadow its block gave or took, D522).
+        let changed = dirty || nested || retained.draws != draws;
+        retained.draws = draws;
         if changed {
             self.draw_version += 1;
             let version = self.draw_version;
@@ -461,9 +474,6 @@ impl UiTree {
             retained.version = version;
             groups[index].version = version;
         }
-        // A shadow is a drawing too, under no content (as a Compose layer's).
-        let shadow = groups[index].layer.is_some_and(|layer| layer.casts_shadow());
-        let draws = !content.ops.is_empty() || nested_draws || shadow;
         let descendants = groups.len() - index - 1;
         let group = &mut groups[index];
         group.descendants = descendants;
@@ -526,7 +536,18 @@ impl UiTree {
             empty: true,
         });
         let (nested, nested_draws) = self.draw_boundaries(&content.boundaries, groups, observer);
-        let changed = drawn || nested;
+        // A shadow is a drawing too, under no content (as a Compose layer's).
+        let shadow = groups[index].layer.is_some_and(|layer| layer.casts_shadow());
+        let draws = !content.ops.is_empty() || nested_draws || shadow;
+        let inner = owner.and_then(|node| {
+            self.get_mut(node)?.inner_layers.iter_mut().find(|inner| inner.key == key)
+        });
+        // Drawing something or nothing changes what draws it: a new version (as a boundary's).
+        let draws_changed = inner.as_ref().is_some_and(|inner| inner.draws != draws);
+        if let Some(inner) = inner {
+            inner.draws = draws;
+        }
+        let changed = drawn || nested || draws_changed;
         if changed {
             self.draw_version += 1;
             let version = self.draw_version;
@@ -537,9 +558,6 @@ impl UiTree {
                 inner.version = version;
             }
         }
-        // A shadow is a drawing too, under no content (as a Compose layer's).
-        let shadow = groups[index].layer.is_some_and(|layer| layer.casts_shadow());
-        let draws = !content.ops.is_empty() || nested_draws || shadow;
         let descendants = groups.len() - index - 1;
         let group = &mut groups[index];
         group.descendants = descendants;

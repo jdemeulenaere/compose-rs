@@ -794,8 +794,9 @@ impl GroupCache {
     /// the next write (the same bytes where they don't depend on them, so the replayer keeps
     /// their recordings).
     pub fn set_optimizations(&mut self, optimizations: Optimizations) {
-        if optimizations != self.optimizations {
-            self.optimizations = optimizations;
+        let draws_differently = self.optimizations.draws_differently(optimizations);
+        self.optimizations = optimizations;
+        if draws_differently {
             for record in self.records.values_mut() {
                 record.version = u64::MAX;
             }
@@ -866,7 +867,34 @@ impl GroupCache {
 pub const AHEAD_CAPACITY: usize = 8;
 
 /// The bytes of one entry of the `LAYERS` section.
-pub const LAYER_ENTRY_BYTES: usize = 8 + 8 * 4 + 1 + 1 + 4 * 4 + 4 * 4 + 4 + 4 + 4 + 1 + 4 * 4;
+pub const LAYER_ENTRY_BYTES: usize = 8 + layer_entry::END;
+
+/// Where each property is in a `LAYERS` entry, after its key (8 bytes), as `Replayer.kt`'s
+/// `ENTRY_` constants read it (`write_layer` writes them in this order).
+pub mod layer_entry {
+    pub const ALPHA: usize = 0;
+    pub const PIVOT: usize = 4;
+    pub const SCALE: usize = 12;
+    pub const ROTATION: usize = 20;
+    pub const TRANSLATION: usize = 24;
+    pub const CLIP: usize = 32;
+    pub const OUTLINE_KIND: usize = 33;
+    pub const OUTLINE_BOUNDS: usize = 34;
+    pub const OUTLINE_RADII: usize = 50;
+    pub const ELEVATION: usize = 66;
+    pub const AMBIENT: usize = 70;
+    pub const SPOT: usize = 74;
+    pub const COMPOSITING: usize = 78;
+    pub const BOUNDS: usize = 79;
+    pub const END: usize = 95;
+}
+
+/// A `LAYERS` entry's outline kind, as `Replayer.kt` reads it.
+pub mod outline_kind {
+    pub const NONE: u8 = 0;
+    pub const RECTANGLE: u8 = 1;
+    pub const ROUNDED: u8 = 2;
+}
 
 /// A `LAYERS` entry's compositing byte, as `Replayer.kt` reads it.
 pub mod compositing {
@@ -995,20 +1023,21 @@ fn write_layer(groups: &[DrawGroup], index: usize, cache: &GroupCache, out: &mut
     out.f32(layer.scale.1);
     out.f32(layer.rotation);
     out.offset(layer.translation);
+    let start = out.bytes.len();
     out.u8(u8::from(layer.clip && layer.outline.is_some()));
     match layer.outline {
         None => {
-            out.u8(0);
+            out.u8(outline_kind::NONE);
             out.rect(&Rect::new(0.0, 0.0, 0.0, 0.0));
             out.radii(&[0.0; 4]);
         }
         Some(Outline::Rectangle(rect)) => {
-            out.u8(1);
+            out.u8(outline_kind::RECTANGLE);
             out.rect(&rect);
             out.radii(&[0.0; 4]);
         }
         Some(Outline::Rounded(rect, radii)) => {
-            out.u8(2);
+            out.u8(outline_kind::ROUNDED);
             out.rect(&rect);
             out.radii(&radii);
         }
@@ -1018,6 +1047,7 @@ fn write_layer(groups: &[DrawGroup], index: usize, cache: &GroupCache, out: &mut
     out.color(layer.spot_shadow_color);
     out.u8(compositing_of(groups, index, cache));
     out.rect(&layer.bounds);
+    debug_assert_eq!(out.bytes.len() - start, layer_entry::END - layer_entry::CLIP);
 }
 
 /// How the group at `index` of `groups` composites its content: its layer's strategy, except
@@ -1338,7 +1368,7 @@ fn write_op(
             out.rect(dst);
             out.f32(*alpha);
         }
-        DrawOp::DrawShadow { outline, elevation, light, light_radius, ambient, spot } => {
+        DrawOp::DrawShadow { outline, elevation, light, light_radius, ambient, spot, .. } => {
             out.u8(tag::DRAW_SHADOW);
             out.outline(outline);
             out.f32(*elevation);

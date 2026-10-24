@@ -537,7 +537,10 @@ impl UiTree {
                 break;
             }
             // Only a container clipping its content (a scroll's viewport, `clip`) hides it.
-            let clips = self.node(container).chain.iter().any(|entry| entry.hit_clip().is_some());
+            let value = self.node(container);
+            let size = value.layers[0].measured.into();
+            let clips =
+                value.chain.iter().any(|entry| entry.hit_clip_at(size, self.density).is_some());
             let outer = self.bounds_in_root(container);
             let outside = clips
                 && (bounds.right <= outer.left

@@ -180,9 +180,25 @@ impl UiTree {
         value.needs_measure = false;
         value.subtree_needs_measure = false;
         value.constraints = Some(constraints);
-        // Measured, it draws again.
-        self.invalidate_draw_of(node);
-        self.measure_layer(node, 0, constraints)
+        if value.inner_layers.is_empty() {
+            // Measured, it draws again.
+            self.invalidate_draw_of(node);
+            return self.measure_layer(node, 0, constraints);
+        }
+        // With inner layers, what it lays out (its children) is theirs: what's before them draws
+        // again only if a layer's size changed (a moved layer draws it again: `place`), as
+        // Compose's layer keeps what's around it when its content is measured again (D522).
+        let sizes: smallvec::SmallVec<[IntSize; 4]> =
+            value.layers.iter().map(|layer| layer.measured).collect();
+        self.invalidate_inner_layers(node);
+        let size = self.measure_layer(node, 0, constraints);
+        let value = self.node(node);
+        if value.layers.len() != sizes.len()
+            || value.layers.iter().zip(&sizes).any(|(layer, size)| layer.measured != *size)
+        {
+            self.invalidate_draw_of(node);
+        }
+        size
     }
 
     /// Measures `parent`'s child at `index` with `constraints` before the layout that places it

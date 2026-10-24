@@ -262,7 +262,7 @@ pub fn Button(
         role: Some(Role::Button),
         interaction_source,
         selected: None,
-        // The shadow follows the press and hover while drawing.
+        // The shadow follows the press, hover and focus, animated (`surface`).
         elevations: elevation.map(|elevation| Elevations {
             default: elevation.default_elevation,
             pressed: elevation.pressed_elevation,

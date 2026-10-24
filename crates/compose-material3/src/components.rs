@@ -250,6 +250,30 @@ pub(crate) struct Elevations {
     pub disabled: Dp,
 }
 
+/// `target` reached as material3's `animateElevation` does: in 120 ms entering an interaction's
+/// elevation (`ElevationDefaults`' incoming spec), 150 ms going back to `default` (its outgoing
+/// one), at once when disabled.
+fn animated_elevation(target: Dp, default: Dp, enabled: bool) -> Dp {
+    use compose_animation::{AnimationSpec, Easing, TweenSpec};
+    let spec = if !enabled {
+        AnimationSpec::Tween(TweenSpec { duration_millis: 0, delay_millis: 0, easing: Easing::Linear })
+    } else if target != default {
+        AnimationSpec::Tween(TweenSpec {
+            duration_millis: 120,
+            delay_millis: 0,
+            easing: Easing::CubicBezier(0.0, 0.0, 0.2, 1.0),
+        })
+    } else {
+        AnimationSpec::Tween(TweenSpec {
+            duration_millis: 150,
+            delay_millis: 0,
+            easing: Easing::CubicBezier(0.4, 0.0, 0.6, 1.0),
+        })
+    };
+    compose_animation::animate_dp_as_state(target, spec, "ElevationAnimation", None)
+        .get()
+}
+
 /// A surface's body, as Compose's `Surface` overloads share: the container (clickable with
 /// `click`, else taking the pointer from what's beneath), its content color and absolute tonal
 /// elevation provided, its content in a box passing its minimum size on.
@@ -276,20 +300,23 @@ pub(crate) fn surface(
         // clickable `Surface` (`ripple()` over `LocalContentColor`).
         Some(click) => {
             let modifier = minimum_interactive_component_size(modifier);
-            // The shadow follows the press, hover and focus, read here as Compose's components
-            // read their elevation's state (`shadowElevation(enabled, interactionSource)`): a
-            // change composes the surface again, its layer there only while it has an
-            // elevation.
+            // The shadow follows the press, hover and focus, animated and read here as Compose's
+            // components read their elevation's state (`shadowElevation(enabled,
+            // interactionSource)`, `animateElevation`): a change composes the surface again
+            // each frame of its animation, its layer there only while it has an elevation.
             let shadow_elevation = match click.elevations {
-                Some(elevations) => crate::button::interaction_elevation(
-                    click.enabled,
-                    elevations.default,
-                    elevations.pressed,
-                    elevations.focused,
-                    elevations.hovered,
-                    elevations.disabled,
-                    &click.interaction_source,
-                ),
+                Some(elevations) => {
+                    let target = crate::button::interaction_elevation(
+                        click.enabled,
+                        elevations.default,
+                        elevations.pressed,
+                        elevations.focused,
+                        elevations.hovered,
+                        elevations.disabled,
+                        &click.interaction_source,
+                    );
+                    animated_elevation(target, elevations.default, click.enabled)
+                }
                 None => shadow_elevation,
             };
             let modifier = surface_modifier(modifier, shape, color, border, shadow_elevation)

@@ -233,6 +233,13 @@ internal class Replayer(private val text: TextMeasurer) {
          * each frame): recorded again when this node starts or stops casting a shadow.
          */
         var drawnBy: Group? = null
+        /** Its outline can clip (`Outline.canClip`; a path can't before API 33). */
+        var outlineClips = true
+        /**
+         * The path its recording clips to, when its layer clips to an outline that can't
+         * ([outlineClips]): Compose's `usePathForClip`.
+         */
+        var clipPath: Path? = null
         /** The `LAYERS` entry (after its key) last set on [node], while [layered]. */
         val applied = ByteArray(LAYER_ENTRY_BYTES - 8)
         /**
@@ -379,6 +386,11 @@ internal class Replayer(private val text: TextMeasurer) {
                 resetLayer(group.node)
                 group.setPosition(width, height)
                 group.layered = false
+                group.outlineClips = true
+                if (group.clipPath != null) {
+                    group.clipPath = null
+                    group.version = -1L
+                }
                 if (group.elevated) {
                     group.elevated = false
                     group.drawnBy?.version = -1L
@@ -558,6 +570,7 @@ internal class Replayer(private val text: TextMeasurer) {
         skipNewMasks = recent(group.newPathFrame)
         group.unmasked = false
         try {
+            group.clipPath?.let { recording.clipPath(it) }
             replay(recording, buffer, end)
         } finally {
             group.node.endRecording()
@@ -796,25 +809,44 @@ internal class Replayer(private val text: TextMeasurer) {
      */
     private fun setLayer(group: Group, buffer: ByteBuffer, at: Int, old: ByteArray?) {
         val node = group.node
-        if (changed(old, 79, 95)) {
-            group.setPosition(ceil(buffer.floatAt(at + 87)).toInt(), ceil(buffer.floatAt(at + 91)).toInt())
+        if (changed(old, ENTRY_BOUNDS, ENTRY_END)) {
+            group.setPosition(
+                ceil(buffer.floatAt(at + ENTRY_BOUNDS + 8)).toInt(),
+                ceil(buffer.floatAt(at + ENTRY_BOUNDS + 12)).toInt(),
+            )
         }
-        val alpha = buffer.floatAt(at)
-        if (changed(old, 0, 4)) node.setAlpha(alpha)
-        if (changed(old, 4, 8)) node.setPivotX(buffer.floatAt(at + 4))
-        if (changed(old, 8, 12)) node.setPivotY(buffer.floatAt(at + 8))
-        if (changed(old, 12, 16)) node.setScaleX(buffer.floatAt(at + 12))
-        if (changed(old, 16, 20)) node.setScaleY(buffer.floatAt(at + 16))
-        if (changed(old, 20, 24)) node.setRotationZ(buffer.floatAt(at + 20))
-        if (changed(old, 24, 28)) node.setTranslationX(buffer.floatAt(at + 24))
-        if (changed(old, 28, 32)) node.setTranslationY(buffer.floatAt(at + 28))
-        val kind = buffer.get(at + 33).toInt()
+        val alpha = buffer.floatAt(at + ENTRY_ALPHA)
+        if (changed(old, ENTRY_ALPHA, ENTRY_ALPHA + 4)) node.setAlpha(alpha)
+        if (changed(old, ENTRY_PIVOT, ENTRY_PIVOT + 4)) node.setPivotX(buffer.floatAt(at + ENTRY_PIVOT))
+        if (changed(old, ENTRY_PIVOT + 4, ENTRY_SCALE)) node.setPivotY(buffer.floatAt(at + ENTRY_PIVOT + 4))
+        if (changed(old, ENTRY_SCALE, ENTRY_SCALE + 4)) node.setScaleX(buffer.floatAt(at + ENTRY_SCALE))
+        if (changed(old, ENTRY_SCALE + 4, ENTRY_ROTATION)) node.setScaleY(buffer.floatAt(at + ENTRY_SCALE + 4))
+        if (changed(old, ENTRY_ROTATION, ENTRY_TRANSLATION)) node.setRotationZ(buffer.floatAt(at + ENTRY_ROTATION))
+        if (changed(old, ENTRY_TRANSLATION, ENTRY_TRANSLATION + 4)) {
+            node.setTranslationX(buffer.floatAt(at + ENTRY_TRANSLATION))
+        }
+        if (changed(old, ENTRY_TRANSLATION + 4, ENTRY_CLIP)) {
+            node.setTranslationY(buffer.floatAt(at + ENTRY_TRANSLATION + 4))
+        }
+        val kind = buffer.get(at + ENTRY_OUTLINE_KIND).toInt()
         // The outline, with the layer's alpha when it's set, as Compose's
         // (`configureOutlineAndClip`): its shadow fades with it.
-        if (changed(old, 33, 66)) setOutline(node, buffer, at, kind, alpha)
-        if (changed(old, 32, 34)) node.setClipToOutline(kind != OUTLINE_NONE && buffer.get(at + 32).toInt() != 0)
-        if (changed(old, 66, 70)) {
-            val elevation = buffer.floatAt(at + 66)
+        if (changed(old, ENTRY_OUTLINE_KIND, ENTRY_ELEVATION)) {
+            group.outlineClips = setOutline(node, buffer, at, kind, alpha)
+        }
+        if (changed(old, ENTRY_CLIP, ENTRY_ELEVATION)) {
+            val clip = kind != OUTLINE_NONE && buffer.get(at + ENTRY_CLIP).toInt() != 0
+            // An outline that can't clip (a path before API 33, `Outline.canClip`) clips its
+            // node's recording to the path instead, as Compose's `usePathForClip`: recorded again.
+            val byPath = clip && !group.outlineClips
+            node.setClipToOutline(clip && !byPath)
+            if (byPath || group.clipPath != null) {
+                group.clipPath = if (byPath) Path(outlinePath) else null
+                group.version = -1L
+            }
+        }
+        if (changed(old, ENTRY_ELEVATION, ENTRY_AMBIENT)) {
+            val elevation = buffer.floatAt(at + ENTRY_ELEVATION)
             node.setElevation(elevation)
             val elevated = elevation > 0f
             if (elevated != group.elevated) {
@@ -823,12 +855,12 @@ internal class Replayer(private val text: TextMeasurer) {
                 group.drawnBy?.version = -1L
             }
         }
-        if (changed(old, 70, 74)) node.setAmbientShadowColor(buffer.getInt(at + 70))
-        if (changed(old, 74, 78)) node.setSpotShadowColor(buffer.getInt(at + 74))
+        if (changed(old, ENTRY_AMBIENT, ENTRY_SPOT)) node.setAmbientShadowColor(buffer.getInt(at + ENTRY_AMBIENT))
+        if (changed(old, ENTRY_SPOT, ENTRY_COMPOSITING)) node.setSpotShadowColor(buffer.getInt(at + ENTRY_SPOT))
         // Compose's strategies: an offscreen buffer (a compositing layer) always, or HWUI's for
         // an alpha below 1 when overlapping, or the alpha multiplying each drawing's.
-        if (changed(old, 78, 79)) {
-            when (buffer.get(at + 78).toInt()) {
+        if (changed(old, ENTRY_COMPOSITING, ENTRY_BOUNDS)) {
+            when (buffer.get(at + ENTRY_COMPOSITING).toInt()) {
                 COMPOSITING_OFFSCREEN -> {
                     node.setUseCompositingLayer(true, null)
                     node.setHasOverlappingRendering(true)
@@ -848,32 +880,29 @@ internal class Replayer(private val text: TextMeasurer) {
     /**
      * Sets the outline of kind [kind] at [at] (a `LAYERS` entry after its key) on [node], at
      * [alpha], as Compose's `AndroidGraphicsLayer`: a rectangle or a rounded rectangle whose
-     * corners are the same with `setRoundRect` (whole pixels), others as a path (`setPath`);
-     * none without one.
+     * corners are the same with `setRoundRect` (whole pixels), others as a path (`setPath`,
+     * left in [outlinePath]); none without one. Returns whether the outline can clip
+     * (`Outline.canClip`: a path can't before API 33).
      */
-    private fun setOutline(node: RenderNode, buffer: ByteBuffer, at: Int, kind: Int, alpha: Float) {
+    private fun setOutline(node: RenderNode, buffer: ByteBuffer, at: Int, kind: Int, alpha: Float): Boolean {
         if (kind == OUTLINE_NONE) {
             node.setOutline(null)
-            return
+            return true
         }
-        val left = buffer.floatAt(at + 34)
-        val top = buffer.floatAt(at + 38)
-        val right = buffer.floatAt(at + 42)
-        val bottom = buffer.floatAt(at + 46)
-        val first = buffer.floatAt(at + 50)
+        val left = buffer.floatAt(at + ENTRY_OUTLINE_BOUNDS)
+        val top = buffer.floatAt(at + ENTRY_OUTLINE_BOUNDS + 4)
+        val right = buffer.floatAt(at + ENTRY_OUTLINE_BOUNDS + 8)
+        val bottom = buffer.floatAt(at + ENTRY_OUTLINE_BOUNDS + 12)
+        val first = buffer.floatAt(at + ENTRY_OUTLINE_RADII)
         var same = true
         for (corner in 1 until 4) {
-            if (buffer.floatAt(at + 50 + corner * 4) != first) same = false
+            if (buffer.floatAt(at + ENTRY_OUTLINE_RADII + corner * 4) != first) same = false
         }
         if (same) {
             // Whole pixels, rounded as Compose's `fastRoundToInt`.
             outline.setRoundRect(Math.round(left), Math.round(top), Math.round(right), Math.round(bottom), first)
         } else {
-            for (corner in 0 until 4) {
-                val radius = buffer.floatAt(at + 50 + corner * 4)
-                radii[corner * 2] = radius
-                radii[corner * 2 + 1] = radius
-            }
+            readRadii(buffer, at + ENTRY_OUTLINE_RADII)
             rect.set(left, top, right, bottom)
             outlinePath.rewind()
             outlinePath.addRoundRect(rect, radii, Path.Direction.CCW)
@@ -886,6 +915,16 @@ internal class Replayer(private val text: TextMeasurer) {
         }
         outline.alpha = alpha
         node.setOutline(outline)
+        return outline.canClip()
+    }
+
+    /** The 4 corner radii at [at] as 8 floats, into [radii]. */
+    private fun readRadii(buffer: ByteBuffer, at: Int) {
+        for (corner in 0 until 4) {
+            val radius = buffer.floatAt(at + corner * 4)
+            radii[corner * 2] = radius
+            radii[corner * 2 + 1] = radius
+        }
     }
 
     /** No layer: [node]'s properties back to a render node's defaults. */
@@ -910,31 +949,35 @@ internal class Replayer(private val text: TextMeasurer) {
      * Compose's software layers draw none; an alpha below 1 (or `Offscreen`) in a layer.
      */
     private fun applyLayer(canvas: Canvas, buffer: ByteBuffer, at: Int) {
-        val alpha = buffer.floatAt(at)
-        val pivotX = buffer.floatAt(at + 4)
-        val pivotY = buffer.floatAt(at + 8)
-        canvas.translate(pivotX + buffer.floatAt(at + 24), pivotY + buffer.floatAt(at + 28))
-        canvas.rotate(buffer.floatAt(at + 20))
-        canvas.scale(buffer.floatAt(at + 12), buffer.floatAt(at + 16))
+        val alpha = buffer.floatAt(at + ENTRY_ALPHA)
+        val pivotX = buffer.floatAt(at + ENTRY_PIVOT)
+        val pivotY = buffer.floatAt(at + ENTRY_PIVOT + 4)
+        canvas.translate(
+            pivotX + buffer.floatAt(at + ENTRY_TRANSLATION),
+            pivotY + buffer.floatAt(at + ENTRY_TRANSLATION + 4),
+        )
+        canvas.rotate(buffer.floatAt(at + ENTRY_ROTATION))
+        canvas.scale(buffer.floatAt(at + ENTRY_SCALE), buffer.floatAt(at + ENTRY_SCALE + 4))
         canvas.translate(-pivotX, -pivotY)
-        if (buffer.get(at + 32).toInt() != 0 && buffer.get(at + 33).toInt() != OUTLINE_NONE) {
-            rect.set(buffer.floatAt(at + 34), buffer.floatAt(at + 38), buffer.floatAt(at + 42), buffer.floatAt(at + 46))
-            for (corner in 0 until 4) {
-                val radius = buffer.floatAt(at + 50 + corner * 4)
-                radii[corner * 2] = radius
-                radii[corner * 2 + 1] = radius
-            }
+        if (buffer.get(at + ENTRY_CLIP).toInt() != 0 && buffer.get(at + ENTRY_OUTLINE_KIND).toInt() != OUTLINE_NONE) {
+            rect.set(
+                buffer.floatAt(at + ENTRY_OUTLINE_BOUNDS),
+                buffer.floatAt(at + ENTRY_OUTLINE_BOUNDS + 4),
+                buffer.floatAt(at + ENTRY_OUTLINE_BOUNDS + 8),
+                buffer.floatAt(at + ENTRY_OUTLINE_BOUNDS + 12),
+            )
+            readRadii(buffer, at + ENTRY_OUTLINE_RADII)
             clip.reset()
             clip.addRoundRect(rect, radii, Path.Direction.CW)
             canvas.clipPath(clip)
         }
-        if (alpha < 1f || buffer.get(at + 78).toInt() == COMPOSITING_OFFSCREEN) {
+        if (alpha < 1f || buffer.get(at + ENTRY_COMPOSITING).toInt() == COMPOSITING_OFFSCREEN) {
             // Bounded as the node's offscreen layer is.
             canvas.saveLayerAlpha(
                 0f,
                 0f,
-                ceil(buffer.floatAt(at + 87)),
-                ceil(buffer.floatAt(at + 91)),
+                ceil(buffer.floatAt(at + ENTRY_BOUNDS + 8)),
+                ceil(buffer.floatAt(at + ENTRY_BOUNDS + 12)),
                 (alpha.coerceIn(0f, 1f) * 255f + 0.5f).toInt(),
             )
         }
@@ -1495,6 +1538,22 @@ internal class Replayer(private val text: TextMeasurer) {
          * compositing, its bounds: 8 + 8 * 4 + 1 + 1 + 4 * 4 + 4 * 4 + 4 + 4 + 4 + 1 + 4 * 4.
          */
         const val LAYER_ENTRY_BYTES = 103
+        // Where each property is in a `LAYERS` entry, after its key (`serialize::layer_entry`).
+        const val ENTRY_ALPHA = 0
+        const val ENTRY_PIVOT = 4
+        const val ENTRY_SCALE = 12
+        const val ENTRY_ROTATION = 20
+        const val ENTRY_TRANSLATION = 24
+        const val ENTRY_CLIP = 32
+        const val ENTRY_OUTLINE_KIND = 33
+        const val ENTRY_OUTLINE_BOUNDS = 34
+        const val ENTRY_OUTLINE_RADII = 50
+        const val ENTRY_ELEVATION = 66
+        const val ENTRY_AMBIENT = 70
+        const val ENTRY_SPOT = 74
+        const val ENTRY_COMPOSITING = 78
+        const val ENTRY_BOUNDS = 79
+        const val ENTRY_END = 95
         const val OUTLINE_NONE = 0
         const val COMPOSITING_AUTO = 0
         const val COMPOSITING_OFFSCREEN = 1
