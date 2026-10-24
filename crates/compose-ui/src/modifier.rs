@@ -204,12 +204,15 @@ impl Modifier {
         self.then_element(Element::Border(width, color, shape))
     }
 
-    /// Clips the content to `shape`, as `Modifier.clip`.
+    /// Clips the content to `shape`, as `Modifier.clip`: a graphics layer clipping to its
+    /// outline (a render node on Android), as Compose's `graphicsLayer(shape = shape, clip =
+    /// true)`.
     pub fn clip(self, shape: Shape) -> Modifier {
         self.then_element(Element::Clip(shape))
     }
 
-    /// Clips the content to the bounds, as `Modifier.clipToBounds`.
+    /// Clips the content to the bounds, as `Modifier.clipToBounds`: a graphics layer clipping
+    /// to a rectangle, as Compose's `graphicsLayer(clip = true)`.
     pub fn clip_to_bounds(self) -> Modifier {
         self.clip(Shape::Rectangle)
     }

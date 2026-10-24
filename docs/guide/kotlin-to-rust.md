@@ -1152,6 +1152,51 @@ pub fn Gradients() {
 
 In a `DrawScope`, `scope.brush_paint(&brush, alpha, style)` makes a paint of a brush. `background_with(brush, shape)` has no `alpha` parameter: `brush.with_alpha(alpha)` gives the same pixels.
 
+### Graphics layers, clips and shadows
+
+```kotlin
+Box(Modifier.size(64.dp).shadow(6.dp, RoundedCornerShape(12.dp), clip = true).background(Color.White))
+Box(
+    Modifier.size(64.dp)
+        .graphicsLayer { alpha = 0.5f; compositingStrategy = CompositingStrategy.ModulateAlpha }
+        .background(Color.Red)
+)
+Box(Modifier.size(40.dp).clip(CircleShape).background(Color.Blue))
+```
+
+<!-- snippet: src/drawing.rs#layers -->
+```rust
+#[composable]
+pub fn Layers() {
+    let shape = RoundedCornerShape(12.dp());
+    Column!(vertical_arrangement = Arrangement::spaced_by(8.dp()), {
+        // `Modifier.shadow(6.dp, shape, clip = true)`: a layer casting a shadow of `shape` (a
+        // render node's elevation on Android) and clipping its content to it.
+        Box!(
+            modifier = Modifier
+                .size(64.dp())
+                .shadow_with(6.dp(), shape, true, DEFAULT_SHADOW_COLOR, DEFAULT_SHADOW_COLOR)
+                .background(Color::WHITE)
+        );
+        // `graphicsLayer { alpha = 0.5f; compositingStrategy = CompositingStrategy.ModulateAlpha }`:
+        // each drawing faded, no offscreen buffer.
+        Box!(
+            modifier = Modifier
+                .size(64.dp())
+                .graphics_layer(|layer| {
+                    layer.alpha = 0.5;
+                    layer.compositing_strategy = CompositingStrategy::ModulateAlpha;
+                })
+                .background(Color::RED)
+        );
+        // `clip(CircleShape)`: a layer clipping to the circle.
+        Box!(modifier = Modifier.size(40.dp()).clip(CIRCLE_SHAPE).background(Color::BLUE));
+    });
+}
+```
+
+As in Compose, `clip`, `clip_to_bounds`, `shadow` and `alpha` are graphics layers: each is a layer of its own (a render node on Android), whose properties change without drawing its content again. `GraphicsLayerScope` has Compose's properties and defaults: `alpha`, `scale_x`/`scale_y`, `rotation_z`, `translation_x`/`translation_y`, `transform_origin`, `shadow_elevation` (pixels: `layer.density.to_px(6.dp())`), `ambient_shadow_color`, `spot_shadow_color`, `shape`, `clip` and `compositing_strategy`, and reads `size` and `density`. `CompositingStrategy::Auto` (the default) draws the content offscreen only for an alpha below 1, `Offscreen` always, `ModulateAlpha` never (each drawing faded: overlapping drawings show through each other). Android draws a layer's shadow from its elevation, as Compose's; desktop draws it with Skia's shadow utilities, lit as Compose Desktop's.
+
 ## Theming and Material 3
 
 ```kotlin

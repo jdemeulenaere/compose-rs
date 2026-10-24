@@ -43,6 +43,44 @@ pub(crate) struct RetainedDrawing {
     pub(crate) layer_dirty: bool,
 }
 
+/// The flag of an inner layer's group key: the others are their nodes' (`NodeId::to_bits`,
+/// whose generation never reaches it).
+pub(crate) const INNER_LAYER_KEY: u64 = 1 << 63;
+
+/// A graphics layer that isn't its node's first drawing modifier: a group of its own in its
+/// node's drawing (a render node on Android), holding what follows it in the chain and the
+/// children, as each of Compose's graphics layers is a layer (D522). Drawn with what draws its
+/// node (the node's boundary, or the nearest one around it), each time that draws it.
+pub(crate) struct InnerLayer {
+    /// Its chain index.
+    pub(crate) entry: u16,
+    /// Its group's key (`INNER_LAYER_KEY` set).
+    pub(crate) key: u64,
+    /// What follows it, in its node's coordinates, the boundaries in it by reference.
+    recording: Arc<DisplayList>,
+    version: u64,
+    layer: Option<LayerProperties>,
+    /// Drawn since it was last listed: its version changes when it is.
+    pub(crate) drawn: bool,
+    /// Its content must be drawn again (`UiTree::invalidate_inner_layers`): otherwise what
+    /// draws its node draws it by reference, as it is.
+    pub(crate) dirty: bool,
+}
+
+impl InnerLayer {
+    pub(crate) fn new(entry: u16, key: u64) -> InnerLayer {
+        InnerLayer {
+            entry,
+            key,
+            recording: Arc::default(),
+            version: 0,
+            layer: None,
+            drawn: false,
+            dirty: true,
+        }
+    }
+}
+
 impl RetainedDrawing {
     pub(crate) fn new(layer_entry: Option<u16>) -> RetainedDrawing {
         RetainedDrawing {
@@ -114,6 +152,10 @@ impl UiTree {
     /// ([`DisplayList::kept`]).
     fn note_kept(&mut self, groups: &[DrawGroup]) {
         for group in groups {
+            if group.key & INNER_LAYER_KEY != 0 {
+                // Kept with its node's group.
+                continue;
+            }
             let node = NodeId::from_bits(group.key);
             if !group.empty && self.stays_kept(node) && !self.kept.contains(&node) {
                 self.kept.push(node);
@@ -140,11 +182,25 @@ impl UiTree {
         };
         !retained.dirty
             && !retained.layer_dirty
-            && retained
-                .recording
-                .boundaries
-                .iter()
-                .all(|nested| self.drawn_unchanged(NodeId::from_bits(nested.key)))
+            && retained.recording.boundaries.iter().all(|nested| self.group_unchanged(nested.key))
+    }
+
+    /// The group of `key` (a boundary's, or an inner layer's) is as last drawn, and those
+    /// nested in it. An inner layer is drawn with what draws its node: unchanged while that is.
+    fn group_unchanged(&self, key: u64) -> bool {
+        if key & INNER_LAYER_KEY == 0 {
+            return self.drawn_unchanged(NodeId::from_bits(key));
+        }
+        self.inner_layer(key).is_some_and(|inner| {
+            !inner.dirty
+                && inner.recording.boundaries.iter().all(|nested| self.group_unchanged(nested.key))
+        })
+    }
+
+    /// The inner layer of `key`, if its node has it.
+    fn inner_layer(&self, key: u64) -> Option<&InnerLayer> {
+        let node = *self.inner_layer_owners.get(&key)?;
+        self.get(node)?.inner_layers.iter().find(|inner| inner.key == key)
     }
 
     /// Appends to `kept` the groups of the boundaries kept drawn ([`note_kept`]) that still
@@ -320,8 +376,11 @@ impl UiTree {
     ) -> (bool, bool) {
         let (mut changed, mut draws) = (false, false);
         for boundary in boundaries {
-            let (version_changed, drawn) =
-                self.draw_boundary(NodeId::from_bits(boundary.key), groups, observer);
+            let (version_changed, drawn) = if boundary.key & INNER_LAYER_KEY != 0 {
+                self.list_inner_layer(boundary.key, groups, observer)
+            } else {
+                self.draw_boundary(NodeId::from_bits(boundary.key), groups, observer)
+            };
             changed |= version_changed;
             draws |= drawn;
         }
@@ -402,12 +461,151 @@ impl UiTree {
             retained.version = version;
             groups[index].version = version;
         }
-        let draws = !content.ops.is_empty() || nested_draws;
+        // A shadow is a drawing too, under no content (as a Compose layer's).
+        let shadow = groups[index].layer.is_some_and(|layer| layer.casts_shadow());
+        let draws = !content.ops.is_empty() || nested_draws || shadow;
         let descendants = groups.len() - index - 1;
         let group = &mut groups[index];
         group.descendants = descendants;
         group.empty = !draws;
         (changed, draws)
+    }
+
+    /// Appends inner layer `key`'s group to `groups`, then the groups nested in it: its content
+    /// as its node last drew it (with what draws the node), its version new if it was drawn
+    /// since it was last listed or a nested group's changed. Returns whether its version
+    /// changed, and whether it draws anything.
+    fn list_inner_layer(
+        &mut self,
+        key: u64,
+        groups: &mut Vec<DrawGroup>,
+        observer: Option<&compose_runtime::platform::ReadObserver>,
+    ) -> (bool, bool) {
+        let owner = self.inner_layer_owners.get(&key).copied();
+        // Drawn again where it is, if what it drew from changed (its node's drawing kept).
+        if let Some(node) = owner
+            && let Some(entry) = self.get(node).and_then(|value| {
+                value.inner_layers.iter().find(|inner| inner.key == key && inner.dirty)
+            })
+            .map(|inner| inner.entry as usize)
+        {
+            let origins = self.layer_origins(node);
+            let value = self.node(node);
+            let layer = value.capabilities[..entry]
+                .iter()
+                .filter(|bits| **bits & capability::LAYOUT != 0)
+                .count();
+            let mut unused = DisplayList::default();
+            self.draw_inner_layer(node, entry, layer, &origins, &mut unused, observer);
+        }
+        let inner = owner.and_then(|node| {
+            let value = self.get_mut(node)?;
+            value.inner_layers.iter_mut().find(|inner| inner.key == key)
+        });
+        let Some(inner) = inner else {
+            // Gone: an empty group keeps the frame's groups in step with the boundaries.
+            groups.push(DrawGroup {
+                key,
+                version: 0,
+                layer: None,
+                content: Arc::default(),
+                descendants: 0,
+                empty: true,
+            });
+            return (false, false);
+        };
+        let drawn = mem::take(&mut inner.drawn);
+        let content = Arc::clone(&inner.recording);
+        let index = groups.len();
+        groups.push(DrawGroup {
+            key,
+            version: inner.version,
+            layer: inner.layer,
+            content: Arc::clone(&content),
+            descendants: 0,
+            empty: true,
+        });
+        let (nested, nested_draws) = self.draw_boundaries(&content.boundaries, groups, observer);
+        let changed = drawn || nested;
+        if changed {
+            self.draw_version += 1;
+            let version = self.draw_version;
+            groups[index].version = version;
+            if let Some(inner) = owner.and_then(|node| {
+                self.get_mut(node)?.inner_layers.iter_mut().find(|inner| inner.key == key)
+            }) {
+                inner.version = version;
+            }
+        }
+        // A shadow is a drawing too, under no content (as a Compose layer's).
+        let shadow = groups[index].layer.is_some_and(|layer| layer.casts_shadow());
+        let draws = !content.ops.is_empty() || nested_draws || shadow;
+        let descendants = groups.len() - index - 1;
+        let group = &mut groups[index];
+        group.descendants = descendants;
+        group.empty = !draws;
+        (changed, draws)
+    }
+
+    /// Draws inner layer `entry` of `node` (in layer `layer` of the node): what follows it in
+    /// the chain and the children, into its own recording, which `list` draws by reference
+    /// where it is. Returns whether `entry` is one.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_inner_layer(
+        &mut self,
+        node: NodeId,
+        entry: usize,
+        layer: usize,
+        origins: &[Offset],
+        list: &mut DisplayList,
+        observer: Option<&compose_runtime::platform::ReadObserver>,
+    ) -> bool {
+        let density = self.density;
+        let value = self.node_mut(node);
+        let Some(slot) = value.inner_layers.iter().position(|inner| inner.entry as usize == entry)
+        else {
+            return false;
+        };
+        if value.chain[entry].downcast_ref::<GraphicsLayerNode>().is_none() {
+            return false;
+        }
+        let key = value.inner_layers[slot].key;
+        if value.inner_layers[slot].dirty {
+            // Its block and what it holds run under an observation of their own: a change to
+            // what they read draws them again, not what's around them.
+            let record = |tree: &mut UiTree| {
+                let value = tree.node_mut(node);
+                let size = value.layers[layer].measured.into();
+                let direction = value.layout_direction;
+                let graphics =
+                    value.chain[entry].downcast_ref::<GraphicsLayerNode>().expect("a layer");
+                let properties = graphics.properties(density, direction, origins[layer], size);
+                let inner = &mut value.inner_layers[slot];
+                // Recorded in place: the frames that shared it are gone (`draw` clears the
+                // last).
+                let mut recording =
+                    Arc::get_mut(&mut inner.recording).map(mem::take).unwrap_or_default();
+                recording.clear();
+                tree.draw_chain(node, entry + 1, layer, origins, &mut recording, observer);
+                let inner = &mut tree.node_mut(node).inner_layers[slot];
+                match Arc::get_mut(&mut inner.recording) {
+                    Some(kept) => *kept = recording,
+                    None => inner.recording = Arc::new(recording),
+                }
+                inner.layer = Some(properties);
+                inner.drawn = true;
+                inner.dirty = false;
+            };
+            match observer {
+                Some(observer) => observer
+                    .observe(observation_key(node, Observation::InnerLayers), || record(self)),
+                None => record(self),
+            }
+        }
+        list.boundaries.push(Boundary { at: list.ops.len(), key });
+        // Its group's operations stay its own.
+        list.merge_floor = list.ops.len();
+        true
     }
 
     /// The properties of `node`'s graphics layer whose properties are its group's, its block
@@ -426,13 +624,14 @@ impl UiTree {
         let origin = self.layer_origins(node)[layer];
         let size = value.layers[layer].measured.into();
         let graphics = value.chain[index].downcast_ref::<GraphicsLayerNode>()?;
-        let scope = match observer {
+        let (density, direction) = (self.density, value.layout_direction);
+        let properties = || graphics.properties(density, direction, origin, size);
+        Some(match observer {
             Some(observer) => {
-                observer.observe(observation_key(node, Observation::Layer), || graphics.scope())
+                observer.observe(observation_key(node, Observation::Layer), properties)
             }
-            None => graphics.scope(),
-        };
-        Some(LayerProperties::new(&scope, origin, size))
+            None => properties(),
+        })
     }
 }
 
@@ -460,6 +659,12 @@ impl UiTree {
                 let value = self.node_mut(node);
                 let bits = value.capabilities[index];
                 if bits & capability::DRAW != 0 && lifted != Some(index as u16) {
+                    // An inner layer draws the rest in a group of its own.
+                    if self.draw_inner_layer(node, index, layer, origins, list, observer) {
+                        self.draw_afters(node, &after, origins, list);
+                        return;
+                    }
+                    let value = self.node_mut(node);
                     let draws_content =
                         value.chain[index].as_draw().is_some_and(|draw| draw.draws_content());
                     let size = value.layers[layer].measured.into();

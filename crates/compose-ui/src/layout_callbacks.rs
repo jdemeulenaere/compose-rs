@@ -321,8 +321,9 @@ impl UiTree {
                     .iter()
                     .filter(|bits| **bits & capability::LAYOUT != 0)
                     .count();
-                let properties = crate::graphics_layer::LayerProperties::new(
-                    &graphics.scope(),
+                let properties = graphics.properties(
+                    self.density,
+                    value.layout_direction,
                     layer_origin(entry_layer),
                     value.layers[entry_layer].measured.into(),
                 );

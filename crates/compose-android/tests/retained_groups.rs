@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 use compose_android::serialize::{
     AHEAD_CAPACITY, GroupCache, KEPT_ENTRY_BYTES, LAYER_ENTRY_BYTES, Resources, Writer,
-    operand_bytes, shader, tag, write_display_list, write_groups_ahead,
+    compositing, operand_bytes, shader, tag, write_display_list, write_groups_ahead,
 };
 use compose_runtime::*;
 use compose_ui::platform::*;
@@ -29,6 +29,9 @@ enum Item {
     Group { key: u64, version: u64, content: Vec<Item> },
 }
 
+/// A `LAYERS` entry's outline: its kind (1 rectangle, 2 rounded), its bounds, its corner radii.
+type Outline = (u8, (f32, f32, f32, f32), [f32; 4]);
+
 /// A `LAYERS` entry.
 #[derive(Debug, PartialEq)]
 struct Layer {
@@ -38,9 +41,37 @@ struct Layer {
     scale: (f32, f32),
     rotation: f32,
     translation: (f32, f32),
-    clip: Option<(f32, f32, f32, f32)>,
-    overlapping: bool,
+    /// Clips to its outline.
+    clip: bool,
+    /// Its outline: a kind (1 rectangle, 2 rounded), its bounds, its corner radii.
+    outline: Option<Outline>,
+    elevation: f32,
+    ambient: u32,
+    spot: u32,
+    /// 0 `Auto`, 1 `Offscreen`, 2 `ModulateAlpha` (`serialize::compositing`).
+    compositing: u8,
     bounds: (f32, f32, f32, f32),
+}
+
+impl Layer {
+    /// A layer of `key` with Compose's defaults, at `bounds`.
+    fn plain(key: u64, bounds: (f32, f32, f32, f32)) -> Layer {
+        Layer {
+            key,
+            alpha: 1.0,
+            pivot: ((bounds.0 + bounds.2) / 2.0, (bounds.1 + bounds.3) / 2.0),
+            scale: (1.0, 1.0),
+            rotation: 0.0,
+            translation: (0.0, 0.0),
+            clip: false,
+            outline: None,
+            elevation: 0.0,
+            ambient: 0xFF00_0000,
+            spot: 0xFF00_0000,
+            compositing: compositing::AUTO,
+            bounds,
+        }
+    }
 }
 
 fn u32_at(bytes: &[u8], at: usize) -> u32 {
@@ -71,9 +102,14 @@ fn read(bytes: &[u8]) -> (Vec<Layer>, Vec<Item>) {
                 scale: (f(20), f(24)),
                 rotation: f(28),
                 translation: (f(32), f(36)),
-                clip: (bytes[at + 40] != 0).then(|| (f(41), f(45), f(49), f(53))),
-                overlapping: bytes[at + 57] != 0,
-                bounds: (f(58), f(62), f(66), f(70)),
+                clip: bytes[at + 40] != 0,
+                outline: (bytes[at + 41] != 0)
+                    .then(|| (bytes[at + 41], (f(42), f(46), f(50), f(54)), [f(58), f(62), f(66), f(70)])),
+                elevation: f(74),
+                ambient: u32_at(bytes, at + 78),
+                spot: u32_at(bytes, at + 82),
+                compositing: bytes[at + 86],
+                bounds: (f(87), f(91), f(95), f(99)),
             });
             at += LAYER_ENTRY_BYTES;
         }
@@ -255,14 +291,20 @@ struct Serialized {
 
 impl Serialized {
     fn new(content: impl Fn() + 'static) -> Serialized {
+        Serialized::with(Optimizations::defaults(), content)
+    }
+
+    /// With compose-rs's `optimizations`, as the bridge sets them on its host and cache.
+    fn with(optimizations: Optimizations, content: impl Fn() + 'static) -> Serialized {
         let mut host = UiHost::headless(200, 200);
+        host.set_optimizations(optimizations);
         // As the bridge does (D380).
         host.set_keep_unplaced_groups(true);
         host.set_content(content);
         let mut serialized = Serialized {
             host,
             resources: Resources::default(),
-            cache: GroupCache::default(),
+            cache: GroupCache::new(optimizations),
             out: Writer::default(),
         };
         serialized.frame();
@@ -283,7 +325,8 @@ impl Serialized {
         let mut out = Writer::default();
         let resources = &mut self.resources;
         self.host.with_tree(|tree| {
-            write_display_list(tree.display_list(), resources, &mut GroupCache::default(), &mut out)
+            let mut cache = GroupCache::new(tree.optimizations());
+            write_display_list(tree.display_list(), resources, &mut cache, &mut out)
         });
         // The kept groups' records (D380), written with nothing cached, are cached in a frame.
         without_kept_records(out.bytes)
@@ -334,16 +377,15 @@ fn a_lifted_layer_is_its_layers_entry_not_operations() {
     assert_eq!(
         layers,
         [Layer {
-            key: group.key,
             alpha: 0.5,
-            pivot: (10.0, 10.0),
-            scale: (1.0, 1.0),
             rotation: 30.0,
             translation: (4.0, 0.0),
-            clip: Some((0.0, 0.0, 20.0, 20.0)),
-            // One drawing: faded, no offscreen layer.
-            overlapping: false,
-            bounds: (0.0, 0.0, 20.0, 20.0),
+            // Clipped to its outline, a rectangle, as Compose's `clip` with `RectangleShape`.
+            clip: true,
+            outline: Some((1, (0.0, 0.0, 20.0, 20.0), [0.0; 4])),
+            // Compose's `Auto`: offscreen for an alpha below 1, one drawing or more.
+            compositing: compositing::AUTO,
+            ..Layer::plain(group.key, (0.0, 0.0, 20.0, 20.0))
         }]
     );
     assert_eq!(groups(&items), [(group.key, group.version)]);
@@ -384,7 +426,8 @@ fn a_layers_bounds_are_its_size_at_its_origin() {
 #[test]
 fn a_layer_drawing_more_than_one_thing_composites_offscreen() {
     let layer = |alpha: f32, content: fn()| {
-        let mut serialized = Serialized::new(move || {
+        let fade = Optimizations::NONE.with(Optimization::SINGLE_DRAWING_FADE, true);
+        let mut serialized = Serialized::with(fade, move || {
             Layout(
                 Modifier.graphics_layer_with(GraphicsLayerScope {
                     alpha,
@@ -395,7 +438,7 @@ fn a_layer_drawing_more_than_one_thing_composites_offscreen() {
             );
         });
         let (layers, _) = read(&serialized.frame());
-        layers.iter().map(|layer| layer.overlapping).collect::<Vec<_>>()
+        layers.iter().map(|layer| layer.compositing != compositing::MODULATE_ALPHA).collect::<Vec<_>>()
     };
     fn two() {
         Leaf(painted(|| Color::RED).size(10.dp()));
@@ -658,15 +701,21 @@ fn a_record_is_its_content_its_layer_an_entry() {
         scale: (2.0, 2.0),
         rotation: 0.0,
         translation: Offset::ZERO,
-        clip: None,
+        clip: false,
+        outline: None,
+        shadow_elevation: 0.0,
+        ambient_shadow_color: Color::BLACK,
+        spot_shadow_color: Color::BLACK,
+        compositing_strategy: CompositingStrategy::Auto,
         bounds: Rect::new(0.0, 0.0, 4.0, 4.0),
+        density: 1.0,
     };
     list.groups.push(group(9, 3, Some(layer), content));
     let (mut resources, mut out) = (Resources::default(), Writer::default());
     write_display_list(&list, &mut resources, &mut GroupCache::default(), &mut out);
     let (layers, items) = read(&out.bytes);
     assert_eq!(layers.len(), 1);
-    assert_eq!((layers[0].key, layers[0].scale, layers[0].clip), (9, (2.0, 2.0), None));
+    assert_eq!((layers[0].key, layers[0].scale, layers[0].clip), (9, (2.0, 2.0), false));
     assert_eq!(
         items,
         [
@@ -1378,6 +1427,233 @@ fn a_kept_groups_record_is_written_only_for_a_new_version() {
     let mut out = Writer::default();
     write_display_list(&DisplayList::default(), &mut resources, &mut cache, &mut out);
     assert_eq!((cache.cached_version(10), cache.cached_version(11)), (None, None));
+}
+
+// ---- Layers as Compose's (D522-D525) ---------------------------------------------------------
+
+/// `Modifier.clip(shape)` is a graphics layer clipping to its outline, as Compose's
+/// `graphicsLayer(shape = shape, clip = true)`: its node's group has the outline in its `LAYERS`
+/// entry (a render node's `setClipToOutline`), and its record holds no clip.
+#[test]
+fn a_clip_is_a_layer_clipping_to_its_outline() {
+    let mut serialized = Serialized::new(|| {
+        Leaf(
+            Modifier
+                .size(20.dp())
+                .clip(compose_foundation::RoundedCornerShape(4.dp()))
+                .then(painted(|| Color::RED)),
+        );
+    });
+    let (layers, items) = read(&serialized.frame());
+    assert_eq!(
+        layers,
+        [Layer {
+            clip: true,
+            outline: Some((2, (0.0, 0.0, 20.0, 20.0), [4.0; 4])),
+            ..Layer::plain(layers[0].key, (0.0, 0.0, 20.0, 20.0))
+        }]
+    );
+    let operations = all_operations(&items);
+    for clip in [tag::CLIP_RECT, tag::CLIP_ROUND_RECT, tag::CLIP_PATH, tag::SAVE] {
+        assert!(!operations.contains(&clip), "{clip} written: {items:?}");
+    }
+    // `clip_to_bounds`: a rectangle.
+    let mut serialized = Serialized::new(|| {
+        Leaf(Modifier.size(20.dp()).clip_to_bounds().then(painted(|| Color::RED)));
+    });
+    let (layers, _) = read(&serialized.frame());
+    assert_eq!(
+        (layers[0].clip, layers[0].outline),
+        (true, Some((1, (0.0, 0.0, 20.0, 20.0), [0.0; 4])))
+    );
+}
+
+/// `Modifier.shadow` is a graphics layer with an elevation, an outline and the shadows' colors
+/// (a render node's `setElevation`, `setOutline`, `setAmbientShadowColor`, `setSpotShadowColor`:
+/// HWUI draws the shadow), clipping if asked; no drawing of it in any record.
+#[test]
+fn a_shadow_is_its_layers_elevation_outline_and_colors() {
+    let shape = compose_foundation::RoundedCornerShape(5.dp());
+    let mut serialized = Serialized::new(move || {
+        Leaf(
+            Modifier
+                .size(30.dp())
+                .shadow_with(6.dp(), shape, false, Color::RED, Color::BLUE)
+                .then(painted(|| Color::WHITE)),
+        );
+    });
+    let (layers, items) = read(&serialized.frame());
+    assert_eq!(
+        layers,
+        [Layer {
+            outline: Some((2, (0.0, 0.0, 30.0, 30.0), [5.0; 4])),
+            elevation: 6.0,
+            ambient: Color::RED.argb(),
+            spot: Color::BLUE.argb(),
+            ..Layer::plain(layers[0].key, (0.0, 0.0, 30.0, 30.0))
+        }]
+    );
+    assert!(!all_operations(&items).contains(&tag::DRAW_SHADOW), "{items:?}");
+    // Clipping too: the same outline, clipped to.
+    let mut serialized = Serialized::new(move || {
+        Leaf(Modifier.size(30.dp()).shadow_with(6.dp(), shape, true, Color::BLACK, Color::BLACK));
+    });
+    let (layers, _) = read(&serialized.frame());
+    assert!(layers[0].clip && layers[0].elevation == 6.0, "{layers:?}");
+    // With nothing in it, its shadow is still drawn, as a Compose layer's.
+    let mut serialized = Serialized::new(move || {
+        Leaf(Modifier.size(30.dp()).shadow_with(6.dp(), shape, false, Color::BLACK, Color::BLACK));
+    });
+    let (layers, _) = read(&serialized.frame());
+    assert!(!layers[0].clip && layers[0].elevation == 6.0, "{layers:?}");
+    // No elevation and no clip: no layer, as Compose's.
+    let mut serialized = Serialized::new(|| {
+        Leaf(Modifier.size(30.dp()).shadow_with(
+            0.dp(),
+            RECTANGLE_SHAPE,
+            false,
+            Color::BLACK,
+            Color::BLACK,
+        ));
+    });
+    assert!(read(&serialized.frame()).0.is_empty());
+}
+
+/// Each `CompositingStrategy` is its byte: `Auto` (offscreen for an alpha below 1, by HWUI),
+/// `Offscreen` (a compositing layer) and `ModulateAlpha` (no offscreen buffer), whatever the
+/// content; with `SINGLE_DRAWING_FADE`, an `Auto` alpha over one drawing is `ModulateAlpha`.
+#[test]
+fn compositing_strategies_are_their_bytes() {
+    let compositing = |strategy: CompositingStrategy, optimizations: Optimizations| {
+        let mut serialized = Serialized::with(optimizations, move || {
+            Leaf(
+                Modifier
+                    .size(10.dp())
+                    .graphics_layer_with(GraphicsLayerScope {
+                        alpha: 0.5,
+                        compositing_strategy: strategy,
+                        ..GraphicsLayerScope::default()
+                    })
+                    .then(painted(|| Color::RED)),
+            );
+        });
+        read(&serialized.frame()).0[0].compositing
+    };
+    let (none, fade) =
+        (Optimizations::NONE, Optimizations::NONE.with(Optimization::SINGLE_DRAWING_FADE, true));
+    assert_eq!(compositing(CompositingStrategy::Auto, none), compositing::AUTO);
+    assert_eq!(compositing(CompositingStrategy::Offscreen, none), compositing::OFFSCREEN);
+    assert_eq!(compositing(CompositingStrategy::ModulateAlpha, none), compositing::MODULATE_ALPHA);
+    assert_eq!(compositing(CompositingStrategy::Auto, fade), compositing::MODULATE_ALPHA);
+    assert_eq!(compositing(CompositingStrategy::Offscreen, fade), compositing::OFFSCREEN);
+}
+
+/// A layer after a drawing (`background(…).clip(shape)`, a surface's) is a group of its own
+/// (an inner layer): the background is drawn by what draws the node, the layer's group by
+/// reference after it, holding what follows it; its properties are its `LAYERS` entry.
+#[test]
+fn a_layer_after_a_drawing_is_a_group_of_its_own() {
+    let shape = compose_foundation::RoundedCornerShape(6.dp());
+    let mut serialized = Serialized::new(move || {
+        Leaf(
+            Modifier
+                .size(40.dp())
+                .background_with(Color::GREEN, shape)
+                .clip(shape)
+                .then(painted(|| Color::RED)),
+        );
+    });
+    let bytes = serialized.frame();
+    let (layers, items) = read(&bytes);
+    assert_eq!(layers.len(), 1);
+    assert_eq!(
+        (layers[0].clip, layers[0].outline.map(|outline| outline.2)),
+        (true, Some([6.0; 4]))
+    );
+    assert_eq!(
+        items,
+        [
+            Item::Operation(tag::DRAW_ROUND_RECT),
+            Item::Group {
+                key: layers[0].key,
+                version: groups(&items)[0].1,
+                content: vec![Item::Operation(tag::DRAW_RECT)],
+            },
+        ]
+    );
+}
+
+/// An inner layer keeps its drawing, as Compose's layer does, while what draws its node draws
+/// again for something else: its record is copied, its version the same.
+#[test]
+fn an_inner_layer_keeps_its_drawing_while_around_it_draws_again() {
+    let tick = mutable_state_of(0u32);
+    let handle = tick.handle();
+    let mut serialized = Serialized::new(move || {
+        Layout(
+            Modifier,
+            stack(),
+            callback(move || {
+                Leaf(
+                    Modifier
+                        .size(40.dp())
+                        .background(Color::GREEN)
+                        .clip(compose_foundation::RoundedCornerShape(6.dp()))
+                        .then(painted(|| Color::RED)),
+                );
+                Leaf(Modifier.size(10.dp()).then(painted(move || {
+                    if handle.get().is_multiple_of(2) { Color::BLUE } else { Color::BLACK }
+                })));
+            }),
+        );
+    });
+    let first = serialized.frame();
+    tick.set(1);
+    let second = serialized.frame();
+    assert_ne!(first, second, "the sibling drew again");
+    let (before, after) = (read(&first).1, read(&second).1);
+    assert_eq!(groups(&after), groups(&before), "the layer kept its drawing");
+    assert_eq!(serialized.cache.copied(), 1);
+}
+
+/// What the replayer reads in `Replayer.kt` and `ComposeRsOptimizations.kt` is what Rust
+/// writes: a `LAYERS` entry's size, the compositing bytes, and each optimization's bit.
+#[test]
+fn the_kotlin_constants_are_rusts() {
+    let kotlin = |file: &str| {
+        let path = format!(
+            "{}/../../android/compose-rs/src/main/java/rs/compose/android/{file}",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        std::fs::read_to_string(&path).unwrap_or_else(|error| panic!("{path}: {error}"))
+    };
+    let replayer = kotlin("Replayer.kt");
+    for (name, value) in [
+        ("LAYER_ENTRY_BYTES", LAYER_ENTRY_BYTES as u64),
+        ("COMPOSITING_AUTO", compositing::AUTO as u64),
+        ("COMPOSITING_OFFSCREEN", compositing::OFFSCREEN as u64),
+        ("COMPOSITING_MODULATE_ALPHA", compositing::MODULATE_ALPHA as u64),
+    ] {
+        assert!(replayer.contains(&format!("const val {name} = {value}\n")), "{name} = {value}");
+    }
+    let optimizations = kotlin("ComposeRsOptimizations.kt");
+    for optimization in Optimization::ALL {
+        let name = optimization.name.to_uppercase();
+        let bit = optimization.mask().trailing_zeros();
+        assert!(
+            optimizations.contains(&format!("const val {name} = 1L shl {bit}\n")),
+            "{name} is bit {bit} in Kotlin"
+        );
+    }
+    let defaults: Vec<String> = Optimization::ALL
+        .iter()
+        .filter(|optimization| optimization.default)
+        .map(|optimization| optimization.name.to_uppercase())
+        .collect();
+    assert!(
+        optimizations.contains(&format!("const val DEFAULT = {}\n", defaults.join(" or "))),
+        "DEFAULT is {defaults:?}"
+    );
 }
 
 // ---- Mutable paths, after a review ----------------------------------------------------------

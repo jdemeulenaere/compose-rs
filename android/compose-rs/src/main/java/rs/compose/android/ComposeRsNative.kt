@@ -16,6 +16,7 @@ internal object ComposeRsNative {
         fontScale: Float,
         rtl: Boolean,
         saved: ByteArray?,
+        optimizations: Long,
     ): Long
 
     @JvmStatic external fun destroy(host: Long)
@@ -25,6 +26,12 @@ internal object ComposeRsNative {
      * RenderThread's work to the process's hint session (`performance_hint.rs`, D390).
      */
     @JvmStatic external fun setPerformanceHint(host: Long, shown: Boolean)
+
+    /** compose-rs's optimizations ([ComposeRsOptimizations] bits), from the next frame on. */
+    @JvmStatic external fun setOptimizations(host: Long, optimizations: Long)
+
+    /** The bits a list of optimizations names (Rust's names), or -1 for an unknown one. */
+    @JvmStatic external fun parseOptimizations(list: String): Long
 
     @JvmStatic external fun resize(host: Long, width: Int, height: Int)
 

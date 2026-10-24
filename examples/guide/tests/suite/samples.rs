@@ -291,6 +291,11 @@ fn the_drawing_samples_draw() {
     let mut ui = compose_test(|| drawing::Badge(SharedString::from("New")));
     ui.on_node_with_text("New").assert_exists();
     let _ = compose_test(drawing::Gradients);
+    let mut ui = compose_test(drawing::Layers);
+    let list = ui.host().display_list();
+    let layers: Vec<_> = list.groups.iter().filter_map(|group| group.layer).collect();
+    assert_eq!(layers.len(), 3, "a layer each");
+    assert!(layers.iter().any(|layer| layer.shadow_elevation > 0.0 && layer.clip));
 }
 
 #[composable]

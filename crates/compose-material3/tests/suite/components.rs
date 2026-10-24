@@ -699,3 +699,61 @@ fn chips_and_badges_are_sized_and_behave_as_compose() {
     assert_eq!((dot.width(), dot.height()), (6.0, 6.0));
     assert_eq!((dot.left, dot.top), (icon.right - 6.0, icon.top - 3.0));
 }
+
+/// Cards render as Compose's: a `Surface` is a layer casting its shadow (not clipping) when it
+/// has an elevation, then its border and color, then a layer clipping its content to its shape
+/// (material3's `Modifier.surface`). So a card is one clipping layer, and an elevated card adds
+/// a 1 dp shadow's (D526).
+#[test]
+fn cards_are_a_shadow_layer_and_a_clip_layer_as_composes() {
+    let mut ui = ComposeTestRule::sized(IntSize::new(300, 300), || {
+        MaterialTheme!({
+            Column!({
+                Card!(modifier = Modifier.size(40.dp()), { Text!("filled") });
+                ElevatedCard!(modifier = Modifier.size(40.dp()), { Text!("elevated") });
+                OutlinedCard!(modifier = Modifier.size(40.dp()), { Text!("outlined") });
+            });
+        });
+    });
+    let list = ui.host().display_list();
+    let layers: Vec<compose_ui::platform::LayerProperties> =
+        list.groups.iter().filter_map(|group| group.layer).collect();
+    let rounded = |layer: &compose_ui::platform::LayerProperties| {
+        matches!(layer.outline, Some(compose_ui::Outline::Rounded(_, radii)) if radii == [12.0; 4])
+    };
+    let clips: Vec<_> = layers.iter().filter(|layer| layer.clip).collect();
+    let shadows: Vec<_> = layers.iter().filter(|layer| layer.shadow_elevation > 0.0).collect();
+    assert_eq!(clips.len(), 3, "a clip each: {layers:?}");
+    assert!(clips.iter().all(|layer| rounded(layer) && layer.shadow_elevation == 0.0));
+    assert_eq!(shadows.len(), 1, "the elevated card's: {layers:?}");
+    assert!(rounded(shadows[0]) && !shadows[0].clip && shadows[0].shadow_elevation == 1.0);
+    assert_eq!(layers.len(), 4);
+}
+
+/// A button's shadow follows its interaction state, composed as Compose's (its elevation's
+/// state read in composition): no layer at rest without an elevation, one while hovered.
+#[test]
+fn a_buttons_shadow_layer_comes_with_its_elevation() {
+    let mut ui = ComposeTestRule::sized(IntSize::new(300, 200), || {
+        MaterialTheme!({
+            Button!(on_click = || {}, modifier = Modifier.test_tag("button"), { Text!("Go") });
+        });
+    });
+    let elevations = |ui: &mut ComposeTestRule| -> Vec<f32> {
+        let list = ui.host().display_list();
+        list.groups
+            .iter()
+            .filter_map(|group| group.layer)
+            .map(|layer| layer.shadow_elevation)
+            .filter(|elevation| *elevation > 0.0)
+            .collect()
+    };
+    assert!(elevations(&mut ui).is_empty(), "no shadow at rest");
+    let center = {
+        let bounds = bounds(&mut ui, "button");
+        Offset::new((bounds.left + bounds.right) / 2.0, (bounds.top + bounds.bottom) / 2.0)
+    };
+    ui.host().send_pointer(PointerEvent::moved(center, false));
+    ui.wait_for_idle();
+    assert_eq!(elevations(&mut ui), [1.0], "hovered: Material's 1 dp");
+}

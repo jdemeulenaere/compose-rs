@@ -176,7 +176,14 @@ fn scrolling_keeps_what_the_items_drew() {
     assert_eq!(state.first_visible_item_scroll_offset(), 13);
     let after = ui.host().display_list();
     let mut kept = 0;
-    for group in &after.groups {
+    // The items': the list's own (its clip's layer, D523) holds them, and draws them where
+    // they moved.
+    let holds_others = |group: &compose_ui::platform::FlatGroup| {
+        after.groups.iter().any(|other| {
+            other.key != group.key && other.start >= group.start && other.end <= group.end
+        })
+    };
+    for group in after.groups.iter().filter(|group| !holds_others(group)) {
         if let Some(earlier) = before.groups.iter().find(|earlier| earlier.key == group.key) {
             assert_eq!(group.version, earlier.version, "{group:?} drawn again");
             assert_eq!(after.ops[group.start..group.end], before.ops[earlier.start..earlier.end]);

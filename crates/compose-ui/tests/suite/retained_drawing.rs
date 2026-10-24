@@ -164,8 +164,9 @@ fn an_animated_layer_changes_no_version_only_its_properties() {
     }
 }
 
-/// A layer whose node draws before it (a background under it) applies its properties inside its
-/// node's content: its block's reads draw the node again.
+/// A layer whose node draws before it (a background under it) is a group of its own inside what
+/// draws its node (an inner layer, D522), its properties computed while drawing the node: its
+/// block's reads draw the node again.
 #[test]
 fn a_layer_after_a_drawing_is_part_of_its_nodes_content() {
     let alpha = mutable_state_of(1.0f32);
@@ -180,8 +181,10 @@ fn a_layer_after_a_drawing_is_part_of_its_nodes_content() {
         );
     });
     let before = host.display_list();
+    // The node isn't a boundary: the frame draws the background, then the layer's group.
+    assert_eq!(before.groups.len(), 1, "{}", before.dump());
     let layer = before.groups[0];
-    assert_eq!(layer.layer, None);
+    assert_eq!(layer.layer.map(|layer| layer.alpha), Some(1.0));
     take_log();
     alpha.set(0.5);
     host.frame();

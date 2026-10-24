@@ -54,7 +54,7 @@ The two apps' screenshots, side by side, match except for Material version detai
 
 - Kotlin's `OutlinedButton` label is `onSurfaceVariant` where compose-rs's is `primary`.
 - Kotlin's chip and card outlines are lighter.
-- compose-rs's shadow is a blurred outline ([11](11-status.md)).
+- compose-rs's shadows were a blurred outline before D524; since, the elevated card's and the banner's are HWUI's elevation shadows, as Kotlin's, and the cards' rounded clips the same (compared side by side after D522-D525, with the feed, the grid and the stress animation).
 - compose-rs sits below the status bar, as on the feed.
 
 ## What differs, and why it's fair
@@ -69,14 +69,13 @@ D400 records the choices. A fresh reviewer checked the two implementations befor
   - `derivedStateOf` for the percentages, and one `Path` remembered and reset for each wave.
 - **`contentType` on both.** compose-rs reuses items as Compose does since D430, by the same content types (`sticky_header_keyed_with`, `items_keyed_with`). Round 10 was the first measurement with it ("Results" below is round 12); the sections after "Results" predate it, when compose-rs composed each new item afresh where Compose reused the composition of an item of the same kind.
 - **The progress indicator.** Kotlin's `LinearProgressIndicator` is given `gapSize = 0.dp` and an empty `drawStopIndicator`. That draws a track and a line, as compose-rs's does, rather than Material 3 1.4's two segments and stop dot.
-- **The alpha of the grid's cells.** Kotlin keeps the default `CompositingStrategy.Auto`, under which HWUI draws a layer faded below 1 offscreen.
-  - compose-rs fades a layer whose content is one drawing without an offscreen buffer (`setHasOverlappingRendering(false)`, D153 and D157).
+- **The alpha of the grid's cells.** Both keep the default `CompositingStrategy.Auto`, under which HWUI draws a layer faded below 1 offscreen (`setHasOverlappingRendering(true)`), since D521.
+  - Before D521, compose-rs faded a layer whose content is one drawing without an offscreen buffer (`setHasOverlappingRendering(false)`, D153 and D157), as `ModulateAlpha` would: the results below that predate D521 have it. It is now `Optimization::SINGLE_DRAWING_FADE`, off by default (`-e optimizations single_drawing_fade` on bench-rs measures it, D520). Since, compose-rs's RenderThread does the stress animation's work Compose's does: 5.8 s against 3.2 s before and 6.0 s for Compose, p50 7.55 ms against 6.46 (Compose 7.40), D527.
   - `ModulateAlpha`, Compose's opt-in for the same thing, was measured separately (D402, "With `ModulateAlpha`" below).
 - **Infinite transitions.** In the first results below, compose-rs ran one `Animatable` and one coroutine per animated value (`animate_value`). That made 567 tasks a frame, and the ticker's. Compose runs one frame loop per transition (147) and ticks its animations together. This was a real cost of the library, measured as such. Since D420, compose-rs's transitions run one task each too ("Infinite transitions, one task each" below).
 - **One `Path`, reset for each wave**, in both apps since D533: Kotlin's `remember { Path() }` and `path.reset()`, compose-rs's `remember(Path::new)` and `path.reset()` (D530). Kotlin's `drawPath` records each wave's contents into the node's recording, as compose-rs's display list records each wave's `PathData`. On Android compose-rs's 50 contents keep 50 ids, each defined again in place each frame, so the replayer refills the same 50 `android.graphics.Path`s, defining no new one and dropping none (D532); a frame redefining a path drawn as a path draws a 1 × 1 layer so HWUI flushes before drawing it, which frees the old contents' masks in time for the new ones (D510, D534). Before D533, compose-rs made a new `Path` per wave per frame (a drawn path was immutable, D412): 50 paths defined and 50 dropped a frame; in the first results below, the replayer made an `android.graphics.Path` for each, the bridge's cost, measured as such (see "Memory"), then rebuilt the dropped ones (D410).
-- **Clips and shadows.**
-  - Compose makes a render node (a graphics layer) for each non-rectangular `clip` and each `shadow`, and HWUI draws the shadow from the elevation.
-  - compose-rs clips inline in its drawing, and draws its approximate shadow with a `BlurMaskFilter`.
+- **Clips and shadows.** Both make a render node (a graphics layer) for each `clip` and each `shadow`, and HWUI draws the shadow from the elevation, since D522-D525: a card is a node clipping to its outline (`setClipToOutline`), an elevated card adds a 1 dp elevation node, the banner's `shadow(6.dp, shape, clip = true)` is one node with an elevation and a clip.
+  - Before, compose-rs clipped inline in its drawing and drew an approximate shadow with a `BlurMaskFilter`: the results below that predate D522 have it.
 - **The theme.** Both apps use the light theme. The Kotlin app always does; compose-rs follows the system's, which was light.
 
 ## Compose's defaults (version 1.12.1)

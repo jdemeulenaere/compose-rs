@@ -113,3 +113,33 @@ pub fn Gradients() {
     });
 }
 // ANCHOR_END: brushes
+
+// ANCHOR: layers
+#[composable]
+pub fn Layers() {
+    let shape = RoundedCornerShape(12.dp());
+    Column!(vertical_arrangement = Arrangement::spaced_by(8.dp()), {
+        // `Modifier.shadow(6.dp, shape, clip = true)`: a layer casting a shadow of `shape` (a
+        // render node's elevation on Android) and clipping its content to it.
+        Box!(
+            modifier = Modifier
+                .size(64.dp())
+                .shadow_with(6.dp(), shape, true, DEFAULT_SHADOW_COLOR, DEFAULT_SHADOW_COLOR)
+                .background(Color::WHITE)
+        );
+        // `graphicsLayer { alpha = 0.5f; compositingStrategy = CompositingStrategy.ModulateAlpha }`:
+        // each drawing faded, no offscreen buffer.
+        Box!(
+            modifier = Modifier
+                .size(64.dp())
+                .graphics_layer(|layer| {
+                    layer.alpha = 0.5;
+                    layer.compositing_strategy = CompositingStrategy::ModulateAlpha;
+                })
+                .background(Color::RED)
+        );
+        // `clip(CircleShape)`: a layer clipping to the circle.
+        Box!(modifier = Modifier.size(40.dp()).clip(CIRCLE_SHAPE).background(Color::BLUE));
+    });
+}
+// ANCHOR_END: layers

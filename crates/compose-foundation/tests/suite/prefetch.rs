@@ -493,7 +493,13 @@ fn PaintedList(state: LazyListState) {
 /// Each drawn row's group (its lazy item's), by row: its key and version.
 fn row_groups(list: &compose_ui::platform::FlatDisplayList) -> HashMap<usize, (u64, u64)> {
     let mut rows = HashMap::new();
-    for group in &list.groups {
+    // The rows' own groups, not the list's holding them (its clip's layer, D523).
+    let holds_others = |group: &compose_ui::platform::FlatGroup| {
+        list.groups.iter().any(|other| {
+            other.key != group.key && other.start >= group.start && other.end <= group.end
+        })
+    };
+    for group in list.groups.iter().filter(|group| !holds_others(group)) {
         for op in &list.ops[group.start..group.end] {
             if let compose_ui::platform::DrawOp::DrawRect(_, paint) = op {
                 let index = (paint.color.argb() & 0x00FF_FFFF) as usize;

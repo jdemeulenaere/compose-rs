@@ -52,8 +52,15 @@ import android.view.inputmethod.InputMethodManager
  * While it shows, on API 33+, the RenderThread and the main thread are in a performance hint
  * session of compose-rs's own, so Android boosts them by the frames' own work, not only after
  * long main-thread frames ([isPerformanceHintEnabled]).
+ *
+ * It draws as Compose does (its graphics layers, clips and shadows as Compose's render nodes)
+ * unless given compose-rs's own optimizations ([optimizations]).
  */
-class ComposeRsView(context: Context, private val app: String) : View(context) {
+class ComposeRsView @JvmOverloads constructor(
+    context: Context,
+    private val app: String,
+    optimizations: Long = ComposeRsOptimizations.DEFAULT,
+) : View(context) {
     private val measurer =
         TextMeasurer(checkBoring = context.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0)
     private val replayer = Replayer(measurer)
@@ -77,13 +84,39 @@ class ComposeRsView(context: Context, private val app: String) : View(context) {
      * work. Off, only HWUI's session boosts it, which costs less power. Set from another thread,
      * it applies on the main thread.
      */
-    var isPerformanceHintEnabled = true
+    var isPerformanceHintEnabled: Boolean
+        get() = optimizations and ComposeRsOptimizations.PERFORMANCE_HINT != 0L
         set(value) {
             if (Looper.myLooper() != Looper.getMainLooper()) {
                 mainHandler.post { isPerformanceHintEnabled = value }
                 return
             }
+            optimizations = if (value) {
+                optimizations or ComposeRsOptimizations.PERFORMANCE_HINT
+            } else {
+                optimizations and ComposeRsOptimizations.PERFORMANCE_HINT.inv()
+            }
+        }
+
+    /**
+     * compose-rs's own optimizations beyond Compose's rendering, as [ComposeRsOptimizations]'
+     * bits ([ComposeRsOptimizations.DEFAULT] unless given at construction): none of those on by
+     * default changes what's drawn, or how, relative to Compose, so a benchmark against Compose
+     * measures the same rendering; others are for measuring each optimization (D520). Set from
+     * another thread, it applies on the main thread; a change draws everything again.
+     */
+    var optimizations: Long = optimizations
+        set(value) {
+            if (Looper.myLooper() != Looper.getMainLooper()) {
+                mainHandler.post { this.optimizations = value }
+                return
+            }
+            if (value == field) return
             field = value
+            if (host != 0L) {
+                ComposeRsNative.setOptimizations(host, value)
+                requestFrame()
+            }
             updatePerformanceHint()
         }
 
@@ -201,6 +234,7 @@ class ComposeRsView(context: Context, private val app: String) : View(context) {
             resources.configuration.fontScale,
             layoutDirection == LAYOUT_DIRECTION_RTL,
             savedState,
+            optimizations,
         )
         savedState = null
         sendConfiguration(resources.configuration)

@@ -22,6 +22,7 @@ use jni::signature::{Primitive, ReturnType};
 use jni::sys::{jboolean, jdouble, jfloat, jint, jlong, jobject};
 
 use crate::serialize::{GroupCache, Resources, Writer, write_display_list, write_groups_ahead};
+use compose_ui::platform::Optimizations;
 use crate::text::{AndroidTextMeasurer, LaidOut, TextBackend};
 
 static VM: OnceLock<JavaVM> = OnceLock::new();
@@ -415,6 +416,7 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_create<'local>(
     font_scale: jfloat,
     rtl: jboolean,
     saved: JByteArray<'local>,
+    optimizations: jlong,
 ) -> jlong {
     if WAKE.get().is_none() {
         let class_ref = env.new_global_ref(&class).expect("compose-android: a global ref");
@@ -472,6 +474,8 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_create<'local>(
     });
     // The replayer keeps a render node per group: those of unplaced items too (D380).
     ui.set_keep_unplaced_groups(true);
+    let optimizations = Optimizations::from_bits(optimizations as u64);
+    ui.set_optimizations(optimizations);
     crate::services::install(&mut env, &view, &view_ref, &ui);
     if rtl != 0 {
         ui.set_layout_direction(LayoutDirection::Rtl);
@@ -527,7 +531,7 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_create<'local>(
         ui,
         resources: Resources::default(),
         list: Writer::default(),
-        groups: GroupCache::default(),
+        groups: GroupCache::new(optimizations),
         ahead: Writer::default(),
         drawing: Writer { bytes: Vec::with_capacity(4096) },
         drawing_given: (0, 0),
@@ -574,6 +578,41 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_setPerformanceHin
             crate::performance_hint::show();
         } else {
             crate::performance_hint::hide();
+        }
+    }
+}
+
+/// `ComposeRsNative.setOptimizations(host, bits)`: compose-rs's optimizations beyond Compose's
+/// rendering (`ComposeRsView.optimizations`, D520), from the next frame on.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_rs_compose_android_ComposeRsNative_setOptimizations(
+    _env: JNIEnv,
+    _class: JClass,
+    host: jlong,
+    bits: jlong,
+) {
+    // SAFETY: a live host, on the main thread.
+    let host = unsafe { self::host(host) };
+    let optimizations = Optimizations::from_bits(bits as u64);
+    host.groups.set_optimizations(optimizations);
+    host.ui.set_optimizations(optimizations);
+}
+
+/// `ComposeRsNative.parseOptimizations(text)`: the bits of a list of optimizations (`none`,
+/// `all`, `default`, or names separated by commas, `-name` taking one out:
+/// `Optimizations::parse`), or -1 if a name is unknown (logged).
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_rs_compose_android_ComposeRsNative_parseOptimizations<'local>(
+    mut env: JNIEnv<'local>,
+    _class: JClass<'local>,
+    text: JString<'local>,
+) -> jlong {
+    let text: String = env.get_string(&text).map(Into::into).unwrap_or_default();
+    match Optimizations::parse(&text) {
+        Ok(optimizations) => optimizations.bits() as jlong,
+        Err(error) => {
+            log(&format!("optimizations {text:?}: {error}"));
+            -1
         }
     }
 }

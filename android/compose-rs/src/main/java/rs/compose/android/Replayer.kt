@@ -1,10 +1,10 @@
 package rs.compose.android
 
 import android.graphics.Bitmap
-import android.graphics.BlurMaskFilter
 import android.graphics.Canvas
 import android.graphics.LinearGradient
 import android.graphics.Matrix
+import android.graphics.Outline
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.PorterDuff
@@ -61,10 +61,15 @@ internal inline fun ByteBuffer.floatAt(index: Int): Float = Float.fromBits(getIn
  * are drawn by reference, recorded from their own records (D323), so a group whose nested
  * group changed keeps its recording.
  *
- * A graphics layer's properties (alpha, transform, clip) are in no group's bytes: the frame's
- * `LAYERS` section lists them for every group that has a layer, nested ones in kept parents
- * included, and they're set on the groups' nodes before the replay. So a layer-only animation
- * records nothing again: it sets properties, and the view's own recording draws the nodes.
+ * A graphics layer's properties (alpha, transform, outline, clip, shadow, compositing) are in
+ * no group's bytes: the frame's `LAYERS` section lists them for every group that has a layer,
+ * nested ones in kept parents included, and they're set on the groups' nodes before the replay,
+ * as Compose sets its layers' (`GraphicsLayerV29`, D525): an outline when it clips or casts a
+ * shadow (`setRoundRect`, or `setPath` for corners that differ), `setClipToOutline`, the
+ * elevation and the shadows' colors (HWUI draws the shadow, inside the `enableZ` that the
+ * parent's recording puts around the node, as Compose's), and the compositing strategy
+ * (`setUseCompositingLayer`, `setHasOverlappingRendering`). So a layer-only animation records
+ * nothing again: it sets properties, and the view's own recording draws the nodes.
  *
  * Every frame's buffer holds every group's bytes (Rust copies unchanged ones from a cache), so
  * a group whose recording the system dropped (the window hid) is recorded again from them.
@@ -84,18 +89,10 @@ internal inline fun ByteBuffer.floatAt(index: Int): Float = Float.fromBits(getIn
  */
 internal class Replayer(private val text: TextMeasurer) {
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
-    private val shadowPaint = Paint(Paint.ANTI_ALIAS_FLAG)
-    /**
-     * Blur filters by elevation (a filter is a native object the collector frees): a few
-     * elevations, kept in arrays so a lookup boxes nothing, the oldest replaced when full.
-     */
-    private val blurElevations = FloatArray(BLUR_CACHE_CAPACITY)
-    private val blurFilters = arrayOfNulls<BlurMaskFilter>(BLUR_CACHE_CAPACITY)
-    private var blurCount = 0
-    private var blurNext = 0
     /**
      * Gradients by their bytes (kind to stops) and local transform (x, y, scale x, scale y
-     * each), kept as the blur filters are: a frame's gradients are built once, not each frame.
+     * each), kept in arrays so a lookup boxes nothing, the oldest replaced when full: a frame's
+     * gradients are built once, not each frame.
      */
     private val shaderKeys = arrayOfNulls<ByteArray>(SHADER_CACHE_CAPACITY)
     private val shaderLocals = FloatArray(SHADER_CACHE_CAPACITY * 4)
@@ -107,6 +104,10 @@ internal class Replayer(private val text: TextMeasurer) {
     private val source = Rect()
     private val clip = Path()
     private val radii = FloatArray(8)
+    /** A layer's outline, copied into its node by `setOutline`. */
+    private val outline = Outline()
+    /** A layer's outline whose corners differ, as a path (`Outline.setPath`). */
+    private val outlinePath = Path()
     private val paths = SparseArray<KeptPath>()
     /** Dropped paths, rewound, for the next definitions (D410). */
     private val pathPool = ArrayList<KeptPath>(PATH_POOL_CAPACITY)
@@ -222,6 +223,16 @@ internal class Replayer(private val text: TextMeasurer) {
         var layerFrame = 0
         /** Its node has a layer's properties, [applied] (else they're the identity). */
         var layered = false
+        /**
+         * Its layer casts a shadow (an elevation above 0): the recording drawing its node puts
+         * it between `enableZ` and `disableZ`, so HWUI draws the shadow (as Compose's).
+         */
+        var elevated = false
+        /**
+         * The group whose recording last drew its node (null: the frame's own canvas, recorded
+         * each frame): recorded again when this node starts or stops casting a shadow.
+         */
+        var drawnBy: Group? = null
         /** The `LAYERS` entry (after its key) last set on [node], while [layered]. */
         val applied = ByteArray(LAYER_ENTRY_BYTES - 8)
         /**
@@ -309,7 +320,6 @@ internal class Replayer(private val text: TextMeasurer) {
     private val softwareLayers = HashMap<Long, Int>()
     /** In a software draw: where each group's record is in the buffer (its content's start). */
     private val softwareGroups = HashMap<Long, Int>()
-    private val clipBounds = Rect()
     /** An unknown operation was met: the rest can't be read. */
     private var unreadable = false
     /** The frame's canvas is hardware accelerated (groups are recorded into render nodes). */
@@ -369,6 +379,10 @@ internal class Replayer(private val text: TextMeasurer) {
                 resetLayer(group.node)
                 group.setPosition(width, height)
                 group.layered = false
+                if (group.elevated) {
+                    group.elevated = false
+                    group.drawnBy?.version = -1L
+                }
             }
         }
     }
@@ -455,7 +469,7 @@ internal class Replayer(private val text: TextMeasurer) {
                         canvas.drawBitmap(image, source, rect, bitmapPaint)
                     }
                 }
-                DRAW_SHADOW -> drawShadow(canvas, buffer)
+                DRAW_SHADOW -> skipShadow(buffer)
                 DRAW_ARC -> {
                     buffer.readRect(rect)
                     val startAngle = buffer.float()
@@ -704,7 +718,16 @@ internal class Replayer(private val text: TextMeasurer) {
             // Made here if new: a parent's record comes before those of the groups in it, which
             // are recorded later in this frame (its node is drawn by reference).
             if (recordingAhead && groups.containsKey(key)) drawsFrameGroup = true
-            canvas.drawRenderNode(groupOf(key).node)
+            val group = groupOf(key)
+            group.drawnBy = recordingGroup
+            if (group.elevated) {
+                // Its shadow is drawn in a reordering section only, as Compose's layer is.
+                canvas.enableZ()
+                canvas.drawRenderNode(group.node)
+                canvas.disableZ()
+            } else {
+                canvas.drawRenderNode(group.node)
+            }
             return
         }
         val from = softwareGroups[key] ?: return
@@ -763,19 +786,21 @@ internal class Replayer(private val text: TextMeasurer) {
 
     /**
      * Sets the layer at [at] (a `LAYERS` entry after its key: alpha, pivot, scale, rotation,
-     * translation, clip, overlapping, bounds) on [group]'s node: the properties whose bytes
-     * differ from [old] (the entry last set), all of them without one. A node scales and
-     * rotates around its pivot then translates, clips in its own coordinates and applies its
-     * alpha last, as the operations Rust left out (`Transform`, `ClipRect`, `SaveLayerAlpha`).
-     * Its position is the group's origin (a recording doesn't depend on the layer's offset,
-     * which can change without the group's version) to the layer's far corner.
+     * translation, clip, outline, elevation, shadow colors, compositing, bounds) on [group]'s
+     * node: the properties whose bytes differ from [old] (the entry last set), all of them
+     * without one. A node scales and rotates around its pivot then translates, clips in its own
+     * coordinates to its outline and applies its alpha last, as Compose's layer
+     * (`GraphicsLayerV29`). Its position is the group's origin (a recording doesn't depend on
+     * the layer's offset, which can change without the group's version) to the layer's far
+     * corner.
      */
     private fun setLayer(group: Group, buffer: ByteBuffer, at: Int, old: ByteArray?) {
         val node = group.node
-        if (changed(old, 58, 66)) {
-            group.setPosition(ceil(buffer.floatAt(at + 58)).toInt(), ceil(buffer.floatAt(at + 62)).toInt())
+        if (changed(old, 79, 95)) {
+            group.setPosition(ceil(buffer.floatAt(at + 87)).toInt(), ceil(buffer.floatAt(at + 91)).toInt())
         }
-        if (changed(old, 0, 4)) node.setAlpha(buffer.floatAt(at))
+        val alpha = buffer.floatAt(at)
+        if (changed(old, 0, 4)) node.setAlpha(alpha)
         if (changed(old, 4, 8)) node.setPivotX(buffer.floatAt(at + 4))
         if (changed(old, 8, 12)) node.setPivotY(buffer.floatAt(at + 8))
         if (changed(old, 12, 16)) node.setScaleX(buffer.floatAt(at + 12))
@@ -783,27 +808,87 @@ internal class Replayer(private val text: TextMeasurer) {
         if (changed(old, 20, 24)) node.setRotationZ(buffer.floatAt(at + 20))
         if (changed(old, 24, 28)) node.setTranslationX(buffer.floatAt(at + 24))
         if (changed(old, 28, 32)) node.setTranslationY(buffer.floatAt(at + 28))
-        if (changed(old, 32, 49)) {
-            if (buffer.get(at + 32).toInt() != 0) {
-                // Whole pixels: a layer's bounds are its node's (whole) size at its (whole) offset.
-                clipBounds.set(
-                    floor(buffer.floatAt(at + 33)).toInt(),
-                    floor(buffer.floatAt(at + 37)).toInt(),
-                    ceil(buffer.floatAt(at + 41)).toInt(),
-                    ceil(buffer.floatAt(at + 45)).toInt(),
-                )
-                node.setClipRect(clipBounds)
-            } else {
-                node.setClipRect(null)
+        val kind = buffer.get(at + 33).toInt()
+        // The outline, with the layer's alpha when it's set, as Compose's
+        // (`configureOutlineAndClip`): its shadow fades with it.
+        if (changed(old, 33, 66)) setOutline(node, buffer, at, kind, alpha)
+        if (changed(old, 32, 34)) node.setClipToOutline(kind != OUTLINE_NONE && buffer.get(at + 32).toInt() != 0)
+        if (changed(old, 66, 70)) {
+            val elevation = buffer.floatAt(at + 66)
+            node.setElevation(elevation)
+            val elevated = elevation > 0f
+            if (elevated != group.elevated) {
+                group.elevated = elevated
+                // The recording drawing it puts it in a reordering section, or no longer.
+                group.drawnBy?.version = -1L
             }
         }
-        // An alpha below 1 draws the content offscreen then composites it, as Compose's layers
-        // do (`CompositingStrategy.Auto`), unless it's one drawing: then each drawing's alpha
-        // is multiplied instead, as D153's folded layers (the same pixels, no offscreen pass).
-        if (changed(old, 49, 50)) node.setHasOverlappingRendering(buffer.get(at + 49).toInt() != 0)
+        if (changed(old, 70, 74)) node.setAmbientShadowColor(buffer.getInt(at + 70))
+        if (changed(old, 74, 78)) node.setSpotShadowColor(buffer.getInt(at + 74))
+        // Compose's strategies: an offscreen buffer (a compositing layer) always, or HWUI's for
+        // an alpha below 1 when overlapping, or the alpha multiplying each drawing's.
+        if (changed(old, 78, 79)) {
+            when (buffer.get(at + 78).toInt()) {
+                COMPOSITING_OFFSCREEN -> {
+                    node.setUseCompositingLayer(true, null)
+                    node.setHasOverlappingRendering(true)
+                }
+                COMPOSITING_MODULATE_ALPHA -> {
+                    node.setUseCompositingLayer(false, null)
+                    node.setHasOverlappingRendering(false)
+                }
+                else -> {
+                    node.setUseCompositingLayer(false, null)
+                    node.setHasOverlappingRendering(true)
+                }
+            }
+        }
     }
 
-    /** No layer: [node]'s properties back to the identity. */
+    /**
+     * Sets the outline of kind [kind] at [at] (a `LAYERS` entry after its key) on [node], at
+     * [alpha], as Compose's `AndroidGraphicsLayer`: a rectangle or a rounded rectangle whose
+     * corners are the same with `setRoundRect` (whole pixels), others as a path (`setPath`);
+     * none without one.
+     */
+    private fun setOutline(node: RenderNode, buffer: ByteBuffer, at: Int, kind: Int, alpha: Float) {
+        if (kind == OUTLINE_NONE) {
+            node.setOutline(null)
+            return
+        }
+        val left = buffer.floatAt(at + 34)
+        val top = buffer.floatAt(at + 38)
+        val right = buffer.floatAt(at + 42)
+        val bottom = buffer.floatAt(at + 46)
+        val first = buffer.floatAt(at + 50)
+        var same = true
+        for (corner in 1 until 4) {
+            if (buffer.floatAt(at + 50 + corner * 4) != first) same = false
+        }
+        if (same) {
+            // Whole pixels, rounded as Compose's `fastRoundToInt`.
+            outline.setRoundRect(Math.round(left), Math.round(top), Math.round(right), Math.round(bottom), first)
+        } else {
+            for (corner in 0 until 4) {
+                val radius = buffer.floatAt(at + 50 + corner * 4)
+                radii[corner * 2] = radius
+                radii[corner * 2 + 1] = radius
+            }
+            rect.set(left, top, right, bottom)
+            outlinePath.rewind()
+            outlinePath.addRoundRect(rect, radii, Path.Direction.CCW)
+            if (Build.VERSION.SDK_INT >= 30) {
+                outline.setPath(outlinePath)
+            } else {
+                @Suppress("DEPRECATION")
+                outline.setConvexPath(outlinePath)
+            }
+        }
+        outline.alpha = alpha
+        node.setOutline(outline)
+    }
+
+    /** No layer: [node]'s properties back to a render node's defaults. */
     private fun resetLayer(node: RenderNode) {
         node.setAlpha(1f)
         node.setScaleX(1f)
@@ -811,11 +896,19 @@ internal class Replayer(private val text: TextMeasurer) {
         node.setRotationZ(0f)
         node.setTranslationX(0f)
         node.setTranslationY(0f)
-        node.setClipRect(null)
+        node.setOutline(null)
+        node.setClipToOutline(false)
+        node.setElevation(0f)
+        node.setAmbientShadowColor(BLACK)
+        node.setSpotShadowColor(BLACK)
+        node.setUseCompositingLayer(false, null)
         node.setHasOverlappingRendering(true)
     }
 
-    /** The layer at [at] (as [setLayer] reads it) applied on a software [canvas]. */
+    /**
+     * The layer at [at] (as [setLayer] reads it) applied on a software [canvas]: no shadow, as
+     * Compose's software layers draw none; an alpha below 1 (or `Offscreen`) in a layer.
+     */
     private fun applyLayer(canvas: Canvas, buffer: ByteBuffer, at: Int) {
         val alpha = buffer.floatAt(at)
         val pivotX = buffer.floatAt(at + 4)
@@ -824,21 +917,24 @@ internal class Replayer(private val text: TextMeasurer) {
         canvas.rotate(buffer.floatAt(at + 20))
         canvas.scale(buffer.floatAt(at + 12), buffer.floatAt(at + 16))
         canvas.translate(-pivotX, -pivotY)
-        if (buffer.get(at + 32).toInt() != 0) {
-            canvas.clipRect(
-                buffer.floatAt(at + 33),
-                buffer.floatAt(at + 37),
-                buffer.floatAt(at + 41),
-                buffer.floatAt(at + 45),
-            )
+        if (buffer.get(at + 32).toInt() != 0 && buffer.get(at + 33).toInt() != OUTLINE_NONE) {
+            rect.set(buffer.floatAt(at + 34), buffer.floatAt(at + 38), buffer.floatAt(at + 42), buffer.floatAt(at + 46))
+            for (corner in 0 until 4) {
+                val radius = buffer.floatAt(at + 50 + corner * 4)
+                radii[corner * 2] = radius
+                radii[corner * 2 + 1] = radius
+            }
+            clip.reset()
+            clip.addRoundRect(rect, radii, Path.Direction.CW)
+            canvas.clipPath(clip)
         }
-        if (alpha < 1f) {
+        if (alpha < 1f || buffer.get(at + 78).toInt() == COMPOSITING_OFFSCREEN) {
             // Bounded as the node's offscreen layer is.
             canvas.saveLayerAlpha(
                 0f,
                 0f,
-                ceil(buffer.floatAt(at + 58)),
-                ceil(buffer.floatAt(at + 62)),
+                ceil(buffer.floatAt(at + 87)),
+                ceil(buffer.floatAt(at + 91)),
                 (alpha.coerceIn(0f, 1f) * 255f + 0.5f).toInt(),
             )
         }
@@ -856,36 +952,11 @@ internal class Replayer(private val text: TextMeasurer) {
     }
 
     /**
-     * A Material shadow, approximated with a blurred copy of the outline below it (the outline
-     * itself is drawn over by the surface): Android's own elevation shadows need render nodes.
+     * A `DRAW_SHADOW` operation (a layer's shadow as an operation, which a frame's records
+     * don't hold: layers' shadows are their nodes' elevations, D524): its operands skipped.
      */
-    private fun drawShadow(canvas: Canvas, buffer: ByteBuffer) {
-        val rounded = buffer.get().toInt() != 0
-        buffer.readRect(rect)
-        val corners = buffer.readRadii()
-        val elevation = buffer.float()
-        buffer.float()
-        buffer.float()
-        buffer.float()
-        buffer.float()
-        val ambient = buffer.getInt()
-        val spot = buffer.getInt()
-        if (elevation <= 0f) return
-        // The spot shadow: offset down, blurred by the elevation.
-        val alpha = ((ambient ushr 24) + (spot ushr 24)).coerceAtMost(255)
-        shadowPaint.color = (alpha shl 24) or (spot and 0xFFFFFF)
-        val blur = blur(elevation)
-        if (shadowPaint.maskFilter !== blur) shadowPaint.maskFilter = blur
-        canvas.save()
-        canvas.translate(0f, elevation / 2f)
-        if (rounded) {
-            clip.reset()
-            clip.addRoundRect(rect, corners, Path.Direction.CW)
-            canvas.drawPath(clip, shadowPaint)
-        } else {
-            canvas.drawRect(rect, shadowPaint)
-        }
-        canvas.restore()
+    private fun skipShadow(buffer: ByteBuffer) {
+        buffer.position(buffer.position() + 1 + 16 + 16 + 4 + 16 + 4 + 4)
     }
 
     /**
@@ -980,20 +1051,6 @@ internal class Replayer(private val text: TextMeasurer) {
             if (key[offset] != buffer.get(start + offset)) return false
         }
         return true
-    }
-
-    /** The blur filter for [elevation], made once while it's among the last few used. */
-    private fun blur(elevation: Float): BlurMaskFilter {
-        for (index in 0 until blurCount) {
-            if (blurElevations[index] == elevation) return blurFilters[index]!!
-        }
-        val filter = BlurMaskFilter(elevation, BlurMaskFilter.Blur.NORMAL)
-        val at = if (blurCount < BLUR_CACHE_CAPACITY) blurCount++ else blurNext.also {
-            blurNext = (blurNext + 1) % BLUR_CACHE_CAPACITY
-        }
-        blurElevations[at] = elevation
-        blurFilters[at] = filter
-        return filter
     }
 
     /**
@@ -1380,8 +1437,6 @@ internal class Replayer(private val text: TextMeasurer) {
         const val AHEAD_ITEMS = 8
         /** The most groups recorded ahead waiting for a frame, however few items hold them. */
         const val AHEAD_GROUPS = 128
-        /** Elevations whose blur filters are kept: Material's levels, and an animated one. */
-        const val BLUR_CACHE_CAPACITY = 8
         /** Gradients kept: a screen's few, and an animated one. */
         const val SHADER_CACHE_CAPACITY = 16
 
@@ -1435,9 +1490,15 @@ internal class Replayer(private val text: TextMeasurer) {
         const val NEVER = Int.MIN_VALUE / 2
 
         /**
-         * The bytes of a `LAYERS` entry: its key, 8 floats, whether it clips, its clip, whether
-         * it overlaps, its bounds.
+         * The bytes of a `LAYERS` entry (`serialize.rs`): its key, 8 floats, whether it clips,
+         * its outline's kind, bounds and radii, its elevation, its shadows' colors, its
+         * compositing, its bounds: 8 + 8 * 4 + 1 + 1 + 4 * 4 + 4 * 4 + 4 + 4 + 4 + 1 + 4 * 4.
          */
-        const val LAYER_ENTRY_BYTES = 8 + 8 * 4 + 1 + 4 * 4 + 1 + 4 * 4
+        const val LAYER_ENTRY_BYTES = 103
+        const val OUTLINE_NONE = 0
+        const val COMPOSITING_AUTO = 0
+        const val COMPOSITING_OFFSCREEN = 1
+        const val COMPOSITING_MODULATE_ALPHA = 2
+        const val BLACK = 0xFF000000.toInt()
     }
 }

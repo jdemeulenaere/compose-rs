@@ -40,6 +40,7 @@ mod measure;
 mod modifier;
 mod nested_scroll;
 mod nodes;
+mod optimizations;
 mod overlay;
 mod path;
 mod platform_services;
@@ -47,7 +48,6 @@ mod pointer_input;
 mod prefetch;
 mod render;
 mod semantics;
-mod shadow;
 mod text;
 mod text_input;
 mod text_selection;
@@ -66,6 +66,7 @@ pub mod platform {
     pub use crate::configuration::{Insets, LOCAL_PLATFORM_WINDOW_INSETS, PlatformWindowInsets};
     pub use crate::display_list::{
         Boundary, DisplayList, DrawGroup, DrawOp, FlatDisplayList, FlatGroup, Renderer,
+        single_drawing,
     };
     pub use crate::graphics_layer::LayerProperties;
     pub use crate::host::{FrameStats, LOCAL_CONSTRAINTS_HINT, UiHost};
@@ -77,6 +78,7 @@ pub mod platform {
     pub use crate::modifier::shared_custom_modifier;
     pub use crate::nested_scroll::NestedScrollChain;
     pub use crate::path::{PathOperator, set_path_operator};
+    pub use crate::optimizations::{Optimization, Optimizations};
     pub use crate::pointer_input::{PointerInputDriver, run_soon};
     pub use crate::render::KEPT_CAPACITY;
     pub use crate::semantics::SemanticsNode;
@@ -118,7 +120,9 @@ pub use focus_requester::FocusRequester;
 pub use graphics::{
     Color, CornerSize, Outline, Paint, PaintStyle, RECTANGLE_SHAPE, Shape, StrokeCap,
 };
-pub use graphics_layer::{GraphicsLayerScope, TransformOrigin};
+pub use graphics_layer::{
+    CompositingStrategy, DEFAULT_SHADOW_COLOR, GraphicsLayerScope, TransformOrigin,
+};
 pub use host::LOCAL_DENSITY;
 pub use image::{ImageBitmap, decode_image_bytes, remember_image_resource};
 pub use input::{
@@ -157,7 +161,6 @@ pub use semantics::{
     ProgressBarRangeInfo, Role, ScrollAxisRange, SemanticsAction, SemanticsConfiguration,
     ToggleableState,
 };
-pub use shadow::DEFAULT_SHADOW_COLOR;
 pub use text::{
     FontFamily, FontStyle, FontWeight, SharedString, TextAlign, TextDecoration, TextLayoutResult,
     TextOverflow, TextStyle,

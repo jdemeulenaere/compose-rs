@@ -362,6 +362,44 @@ impl FlatDisplayList {
     }
 }
 
+/// Whether `ops` (what an alpha layer holds, from just after its `SaveLayerAlpha`, or a group's
+/// content) are one drawing with a paint among saves, clips and moves: returns the index of the
+/// layer's closing `Restore` if so, or `ops.len()` if they end first, balanced. An alpha over
+/// them can fade that paint instead of compositing them offscreen, the same pixels
+/// (`Optimization::SINGLE_DRAWING_FADE`).
+pub fn single_drawing(ops: &[DrawOp]) -> Option<usize> {
+    let mut depth = 0usize;
+    let mut drawings = 0;
+    for (index, op) in ops.iter().enumerate() {
+        match op {
+            DrawOp::SaveLayerAlpha(_) => return None,
+            DrawOp::Save => depth += 1,
+            DrawOp::Restore if depth == 0 => return (drawings == 1).then_some(index),
+            DrawOp::Restore => depth -= 1,
+            DrawOp::Translate(_)
+            | DrawOp::ClipRect(_)
+            | DrawOp::ClipRoundRect(..)
+            | DrawOp::ClipPath { .. }
+            | DrawOp::Transform { .. } => {}
+            DrawOp::DrawRect(..)
+            | DrawOp::DrawRoundRect(..)
+            | DrawOp::DrawLine(..)
+            | DrawOp::DrawArc { .. }
+            | DrawOp::DrawPath { .. } => {
+                drawings += 1;
+                if drawings > 1 {
+                    return None;
+                }
+            }
+            // Text, images and shadows draw what a paint's alpha doesn't reach.
+            DrawOp::DrawParagraph(..) | DrawOp::DrawImage { .. } | DrawOp::DrawShadow { .. } => {
+                return None;
+            }
+        }
+    }
+    (drawings == 1 && depth == 0).then_some(ops.len())
+}
+
 /// Appends `recording` (the frame, or a group's content) to `flat`, each group it draws (the
 /// frame's `groups` from `next` on) in place.
 fn flatten_into(
@@ -405,7 +443,7 @@ fn flatten_group(
     let start = flat.ops.len();
     flatten_into(&group.content, groups, next, flat);
     let end = flat.ops.len();
-    if end == start {
+    if end == start && !group.layer.is_some_and(|layer| layer.casts_shadow()) {
         // Nothing to apply them to.
         flat.ops.truncate(layer_start);
         return;

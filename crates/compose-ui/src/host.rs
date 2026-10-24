@@ -546,6 +546,20 @@ impl UiHost {
         self.with_tree(|tree| tree.set_keep_unplaced_groups(keep));
     }
 
+    /// Uses `optimizations`, compose-rs's own beyond Compose's rendering (D520): the renderer
+    /// reads them ([`optimizations`](UiHost::optimizations)), and so does the tree. The next
+    /// frame draws everything again if they changed.
+    pub fn set_optimizations(&mut self, optimizations: crate::optimizations::Optimizations) {
+        self.with_tree(|tree| tree.set_optimizations(optimizations));
+        self.wake();
+    }
+
+    /// The optimizations in use ([`set_optimizations`](UiHost::set_optimizations); by default
+    /// `Optimizations::defaults()`).
+    pub fn optimizations(&self) -> crate::optimizations::Optimizations {
+        self.with_tree(|tree| tree.optimizations())
+    }
+
     /// Gives up drawing ahead the items waiting ([`UiTree::cancel_draw_ahead`]): the frames
     /// placing them draw them.
     pub fn cancel_draw_ahead(&mut self) {

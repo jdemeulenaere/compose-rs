@@ -1,8 +1,11 @@
 //! Replaying display lists onto a Skia canvas (docs/07-platforms.md, "The rendering interface").
 
 use compose_ui::{
-    Color, Paint, PaintStyle, PathCommand, PathFillType, PathOperation, Rect,
-    platform::{Boundary, DisplayList, DrawGroup, DrawOp, Renderer, TextMeasurer},
+    Color, CompositingStrategy, Paint, PaintStyle, PathCommand, PathFillType, PathOperation, Rect,
+    platform::{
+        Boundary, DisplayList, DrawGroup, DrawOp, Optimization, Optimizations, Renderer,
+        TextMeasurer, single_drawing,
+    },
 };
 use skia_safe::{Canvas, ClipOp, EncodedImageFormat, Point, RRect, Surface, Vector, paint};
 
@@ -107,11 +110,25 @@ fn skia_paint(paint: &Paint) -> skia_safe::Paint {
 
 /// Draws `list` onto `canvas`, its paragraphs from `text_measurer` (a `SkiaTextMeasurer`; other
 /// measurers' paragraphs are skipped). Each group's content is drawn from the recording its
-/// boundary keeps, by reference (D270), its layer's operations around it.
+/// boundary keeps, by reference (D270), its layer's operations around it, as Compose Desktop's
+/// render nodes: without compose-rs's optimizations (see [`draw_display_list_with`]).
 pub fn draw_display_list(canvas: &Canvas, list: &DisplayList, text_measurer: &dyn TextMeasurer) {
+    draw_display_list_with(canvas, list, text_measurer, Optimizations::NONE);
+}
+
+/// [`draw_display_list`] with compose-rs's `optimizations` (`SINGLE_DRAWING_FADE`: a layer's
+/// alpha under `Auto` over one drawing with a paint fades that paint, without an offscreen
+/// buffer).
+pub fn draw_display_list_with(
+    canvas: &Canvas,
+    list: &DisplayList,
+    text_measurer: &dyn TextMeasurer,
+    optimizations: Optimizations,
+) {
     let measurer = (text_measurer as &dyn std::any::Any).downcast_ref::<SkiaTextMeasurer>();
     forget_dropped_images();
-    let mut walk = Walk { canvas, groups: &list.groups, next: 0, measurer };
+    let mut walk =
+        Walk { canvas, groups: &list.groups, next: 0, measurer, alpha: 1.0, optimizations };
     walk.recording(list);
 }
 
@@ -122,6 +139,9 @@ struct Walk<'a> {
     groups: &'a [DrawGroup],
     next: usize,
     measurer: Option<&'a SkiaTextMeasurer>,
+    /// What each drawing's alpha is multiplied by: the `ModulateAlpha` layers around it.
+    alpha: f32,
+    optimizations: Optimizations,
 }
 
 impl Walk<'_> {
@@ -135,7 +155,7 @@ impl Walk<'_> {
             while let Some(boundary) = boundaries.next_if(|boundary| boundary.at <= index) {
                 self.group(boundary);
             }
-            draw_op(self.canvas, op, &recording.shaders, self.measurer, start);
+            draw_op(self.canvas, op, &recording.shaders, self.measurer, start, self.alpha);
         }
         for boundary in boundaries {
             self.group(boundary);
@@ -158,26 +178,61 @@ impl Walk<'_> {
             return;
         }
         let start = self.canvas.save_count();
-        if let Some(layer) = group.layer {
+        let outer_alpha = self.alpha;
+        if let Some(mut layer) = group.layer {
+            // One drawing faded by its paint, with the optimization (D521).
+            if layer.compositing_strategy == CompositingStrategy::Auto
+                && layer.alpha < 1.0
+                && self.optimizations.contains(Optimization::SINGLE_DRAWING_FADE)
+                && self.groups[self.next..self.next + group.descendants]
+                    .iter()
+                    .all(|nested| nested.empty)
+                && single_drawing(&group.content.ops).is_some()
+            {
+                layer.compositing_strategy = CompositingStrategy::ModulateAlpha;
+            }
             for op in layer.operations() {
-                draw_op(self.canvas, &op, &[], self.measurer, start);
+                draw_op(self.canvas, &op, &[], self.measurer, start, self.alpha);
+            }
+            if let Some(alpha) = layer.modulated_alpha() {
+                self.alpha *= alpha;
             }
         }
         self.canvas.save();
         self.recording(&group.content);
         self.canvas.restore_to_count(start);
+        self.alpha = outer_alpha;
     }
 }
 
-/// Draws `op` onto `canvas`, its paint's shader from `shaders`; a restore below `start` (the
-/// save count its recording started at) is ignored.
+/// `paint` with its alpha multiplied by `alpha` (a `ModulateAlpha` layer's).
+fn faded(mut paint: skia_safe::Paint, alpha: f32) -> skia_safe::Paint {
+    if alpha < 1.0 {
+        let faded = paint.alpha_f() * alpha;
+        paint.set_alpha_f(faded);
+    }
+    paint
+}
+
+/// Draws `op` onto `canvas`, its paint's shader from `shaders`, its alpha multiplied by
+/// `alpha` (a drawing a paint's alpha doesn't reach, text and shadows, in a layer of that
+/// alpha); a restore below `start` (the save count its recording started at) is ignored.
 fn draw_op(
     canvas: &Canvas,
     op: &DrawOp,
     shaders: &[compose_ui::platform::Shader],
     measurer: Option<&SkiaTextMeasurer>,
     start: usize,
+    alpha: f32,
 ) {
+    let skia_paint_with =
+        |paint: &Paint, shaders: &[compose_ui::platform::Shader], local: Option<&skia_safe::Matrix>| {
+            faded(skia_paint_with(paint, shaders, local), alpha)
+        };
+    let own_layer = alpha < 1.0 && matches!(op, DrawOp::DrawParagraph(..) | DrawOp::DrawShadow { .. });
+    if own_layer {
+        canvas.save_layer_alpha_f(None, alpha);
+    }
     match op {
         DrawOp::Save => {
             canvas.save();
@@ -232,10 +287,11 @@ fn draw_op(
             let skia = skia_path(path).make_offset((offset.x, offset.y));
             canvas.clip_path(&skia, ClipOp::Intersect, true);
         }
-        DrawOp::DrawImage { image, src, dst, alpha } => {
+        DrawOp::DrawImage { image, src, dst, alpha: image_alpha } => {
+            let (alpha, outer_alpha) = (*image_alpha, alpha);
             if let Some(skia) = skia_image(image) {
                 let mut paint = skia_safe::Paint::default();
-                paint.set_alpha_f(alpha.clamp(0.0, 1.0));
+                paint.set_alpha_f(alpha.clamp(0.0, 1.0) * outer_alpha);
                 let sampling = skia_safe::SamplingOptions::new(
                     skia_safe::FilterMode::Linear,
                     skia_safe::MipmapMode::None,
@@ -290,11 +346,16 @@ fn draw_op(
             canvas.translate((-pivot.x, -pivot.y));
         }
     }
+    if own_layer {
+        canvas.restore();
+    }
 }
 
 /// A renderer onto a CPU raster surface: for tests, screenshots, and windows presenting pixels.
 pub struct RasterRenderer {
     surface: Surface,
+    /// compose-rs's optimizations it draws with (`set_optimizations`; none by default).
+    optimizations: Optimizations,
 }
 
 impl RasterRenderer {
@@ -302,7 +363,13 @@ impl RasterRenderer {
     pub fn new(width: i32, height: i32) -> RasterRenderer {
         let surface = skia_safe::surfaces::raster_n32_premul((width.max(1), height.max(1)))
             .expect("compose-skia: a raster surface");
-        RasterRenderer { surface }
+        RasterRenderer { surface, optimizations: Optimizations::NONE }
+    }
+
+    /// Draws with compose-rs's `optimizations` from now on (its host's,
+    /// `UiHost::optimizations`).
+    pub fn set_optimizations(&mut self, optimizations: Optimizations) {
+        self.optimizations = optimizations;
     }
 
     pub fn size(&self) -> (i32, i32) {
@@ -312,7 +379,9 @@ impl RasterRenderer {
     /// Resizes the surface (its content is lost).
     pub fn resize(&mut self, width: i32, height: i32) {
         if self.size() != (width, height) {
+            let optimizations = self.optimizations;
             *self = RasterRenderer::new(width, height);
+            self.optimizations = optimizations;
         }
     }
 
@@ -380,7 +449,7 @@ impl Renderer for RasterRenderer {
         canvas.clear(skia_safe::Color::new(background.argb()));
         let count = canvas.save();
         canvas.scale((scale, scale));
-        draw_display_list(canvas, list, text_measurer);
+        draw_display_list_with(canvas, list, text_measurer, self.optimizations);
         canvas.restore_to_count(count);
     }
 }

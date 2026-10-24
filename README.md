@@ -100,7 +100,7 @@ fn counting_to_three() {
 }
 ```
 
-`COMPOSE_FRAME_STATS=1` prints each frame's timings, and `COMPOSE_SCREENSHOT=out.png` writes the last frame when the app exits.
+`COMPOSE_FRAME_STATS=1` prints each frame's timings, and `COMPOSE_SCREENSHOT=out.png` writes the last frame when the app exits. compose-rs draws graphics layers, clips and shadows as Compose does; its own optimizations beyond that are off by default where they change the rendering (`COMPOSE_OPTIMIZATIONS=all`, `ComposeRsView.optimizations`, bench-rs's `-e optimizations all`: docs/decisions.md, D520).
 
 ## Verdict
 

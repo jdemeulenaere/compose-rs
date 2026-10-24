@@ -87,7 +87,9 @@ pub fn AnnotatedText(
 
 // ---- Surface ---------------------------------------------------------------------------------
 
-/// The modifiers of a surface: clipped to its shape, filled with its color, bordered.
+/// The modifiers of a surface, in Compose's order (material3's `Modifier.surface`): a layer
+/// casting its shadow if it has an elevation (not clipping), its border, its color, then a
+/// layer clipping its content to its shape (D526).
 pub(crate) fn surface_modifier(
     modifier: Modifier,
     shape: Shape,
@@ -95,14 +97,18 @@ pub(crate) fn surface_modifier(
     border: Option<BorderStroke>,
     shadow_elevation: Dp,
 ) -> Modifier {
-    let modifier = modifier
-        .shadow_with(shadow_elevation, shape, false, DEFAULT_SHADOW_COLOR, DEFAULT_SHADOW_COLOR)
-        .background_with(color, shape);
+    let modifier = modifier.shadow_with(
+        shadow_elevation,
+        shape,
+        false,
+        DEFAULT_SHADOW_COLOR,
+        DEFAULT_SHADOW_COLOR,
+    );
     let modifier = match border {
         Some(border) => modifier.border_with(border.width, border.color, shape),
         None => modifier,
     };
-    modifier.clip(shape)
+    modifier.background_with(color, shape).clip(shape)
 }
 
 /// A themed container, as Compose's `Surface`: its shape and color (the surface color tinted
@@ -229,7 +235,7 @@ pub(crate) struct SurfaceClick {
     /// Whether it's selected, for a selectable surface.
     pub selected: Option<bool>,
     /// The shadow's elevation in each state (in place of the surface's shadow elevation),
-    /// following `interaction_source` while drawing.
+    /// following `interaction_source`.
     pub elevations: Option<Elevations>,
 }
 
@@ -242,75 +248,6 @@ pub(crate) struct Elevations {
     pub focused: Dp,
     pub hovered: Dp,
     pub disabled: Dp,
-}
-
-/// A shadow whose elevation follows an interaction source, read while drawing: a press or a
-/// hover draws the component again, without composing it again (Compose reads the animated
-/// elevation in composition).
-struct InteractiveShadow {
-    elevations: Elevations,
-    enabled: bool,
-    source: MutableInteractionSource,
-    shape: Shape,
-}
-
-impl ModifierNodeElement for InteractiveShadow {
-    fn create(&self) -> std::boxed::Box<dyn ModifierNode> {
-        std::boxed::Box::new(InteractiveShadow {
-            elevations: self.elevations,
-            enabled: self.enabled,
-            source: self.source.clone(),
-            shape: self.shape,
-        })
-    }
-    fn update(&self, node: &mut dyn ModifierNode) {
-        if let Some(node) = node.downcast_mut::<InteractiveShadow>() {
-            node.elevations = self.elevations;
-            node.enabled = self.enabled;
-            node.source = self.source.clone();
-            node.shape = self.shape;
-        }
-    }
-    fn same(&self, other: &dyn ModifierNodeElement) -> bool {
-        other.downcast_ref::<InteractiveShadow>().is_some_and(|other| {
-            other.elevations == self.elevations
-                && other.enabled == self.enabled
-                && other.source == self.source
-                && other.shape == self.shape
-        })
-    }
-    fn name(&self) -> &'static str {
-        "shadow"
-    }
-}
-
-impl ModifierNode for InteractiveShadow {
-    fn as_draw(&mut self) -> Option<&mut dyn DrawModifierNode> {
-        Some(self)
-    }
-}
-
-impl DrawModifierNode for InteractiveShadow {
-    fn draw(&mut self, scope: &mut DrawScope<'_>) {
-        let elevations = self.elevations;
-        let elevation = crate::button::interaction_elevation(
-            self.enabled,
-            elevations.default,
-            elevations.pressed,
-            elevations.focused,
-            elevations.hovered,
-            elevations.disabled,
-            &self.source,
-        );
-        if elevation.0 > 0.0 {
-            let outline =
-                self.shape.outline_in(scope.size(), &scope.density(), scope.layout_direction());
-            let elevation = scope.density().to_px(elevation);
-            // Compose's `DefaultShadowColor`.
-            let color = Color::BLACK;
-            scope.draw_shadow(outline, elevation, color, color);
-        }
-    }
 }
 
 /// A surface's body, as Compose's `Surface` overloads share: the container (clickable with
@@ -338,15 +275,23 @@ pub(crate) fn surface(
         // At least the touch target, the state layer in the content color, as Compose's
         // clickable `Surface` (`ripple()` over `LocalContentColor`).
         Some(click) => {
-            let mut modifier = minimum_interactive_component_size(modifier);
-            if let Some(elevations) = click.elevations {
-                modifier = modifier.then_custom(InteractiveShadow {
-                    elevations,
-                    enabled: click.enabled,
-                    source: click.interaction_source.clone(),
-                    shape,
-                });
-            }
+            let modifier = minimum_interactive_component_size(modifier);
+            // The shadow follows the press, hover and focus, read here as Compose's components
+            // read their elevation's state (`shadowElevation(enabled, interactionSource)`): a
+            // change composes the surface again, its layer there only while it has an
+            // elevation.
+            let shadow_elevation = match click.elevations {
+                Some(elevations) => crate::button::interaction_elevation(
+                    click.enabled,
+                    elevations.default,
+                    elevations.pressed,
+                    elevations.focused,
+                    elevations.hovered,
+                    elevations.disabled,
+                    &click.interaction_source,
+                ),
+                None => shadow_elevation,
+            };
             let modifier = surface_modifier(modifier, shape, color, border, shadow_elevation)
                 .clickable_with(
                     ClickableOptions {

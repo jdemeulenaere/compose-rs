@@ -53,7 +53,8 @@ The known differences from Jetpack Compose that an app will run into, distilled 
 - **No text in a `DrawScope`**: no `drawText`, no `TextMeasurer`/`rememberTextMeasurer`. No color filters or blend modes, and no `Brush` on `border`.
 - **Ripples are static** state layers (8 % hovered, 10 % pressed or focused), not animated ripples. Interactive elevations snap to their value instead of animating (D184).
 - **Desktop renders on the CPU** (Skia's raster backend): well under a millisecond a frame up to about 1080p, slower at 4K. A GPU surface is planned (D93).
-- **Android shadows are approximated** with a blurred outline rather than the platform's elevation shadows (D152).
+- **Graphics layers, clips and shadows are Compose's**: each `graphics_layer`, `clip`, `clip_to_bounds`, `alpha` and `shadow` is a layer (a render node on Android, its shadow the platform's elevation shadow, D522-D525). Desktop draws shadows with Skia's shadow utilities, lit as Compose Desktop's. No `rotation_x`/`rotation_y`, camera distance, render effects, color filters or blend modes on a layer, and shapes are rectangles and rounded rectangles (no generic outline). compose-rs's own optimizations beyond Compose's rendering are off by default where they change it, and can be turned on per view (`ComposeRsView.optimizations`, `WindowOptions::optimizations`, D520).
+- **Interactive elevations recompose**: a button's or card's shadow follows its press, hover and focus as Compose's does, read in composition (D526).
 
 ## Text and input
 

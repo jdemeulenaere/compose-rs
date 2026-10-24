@@ -1,0 +1,186 @@
+//! compose-rs's own optimizations: what it does beyond Jetpack Compose's rendering, each a flag
+//! a host sets (`UiHost::set_optimizations`; `ComposeRsView.optimizations` on Android,
+//! `WindowOptions::optimizations` on desktop), so the benchmarks against Compose can measure the
+//! same rendering (none of them, the default where one changes what's drawn or how) and each
+//! optimization apart (D520).
+//!
+//! Adding one: a constant of [`Optimization`] with the next bit, a row in
+//! [`Optimization::ALL`], and the same bit in Kotlin's `ComposeRsOptimizations`
+//! (`android/compose-rs`, which a test checks against this table).
+
+use std::fmt;
+
+/// One of compose-rs's optimizations (a bit of [`Optimizations`]).
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct Optimization {
+    bit: u8,
+    /// Its name in lists (`Optimizations::parse`), as Kotlin's.
+    pub name: &'static str,
+    /// On unless a host says otherwise.
+    pub default: bool,
+    /// What it does, and what Compose does instead.
+    pub summary: &'static str,
+}
+
+impl Optimization {
+    /// A graphics layer whose alpha is below 1 under `CompositingStrategy::Auto`, holding one
+    /// drawing with a paint and no nested layer, fades that paint instead of compositing its
+    /// content offscreen (Android: `setHasOverlappingRendering(false)`; an alpha layer inside a
+    /// recording around one such drawing is folded into its paint), as Compose's
+    /// `CompositingStrategy.ModulateAlpha` would. The pixels are the same (one drawing can't
+    /// overlap itself). Compose's `Auto` draws such a layer offscreen (D153, D157, D521).
+    pub const SINGLE_DRAWING_FADE: Optimization = Optimization {
+        bit: 0,
+        name: "single_drawing_fade",
+        default: false,
+        summary: "fade a layer holding one drawing by its paint, not offscreen",
+    };
+
+    /// Android: while a view shows (API 33+), the RenderThread and the main thread are in a
+    /// performance hint session of compose-rs's own, reporting both threads' work each frame
+    /// (`ComposeRsView.isPerformanceHintEnabled`, which it is). On by default: it gives
+    /// compose-rs's threads the boost HWUI's own session gives Compose's after its longer
+    /// main-thread frames (D390, D440, D500).
+    pub const PERFORMANCE_HINT: Optimization = Optimization {
+        bit: 1,
+        name: "performance_hint",
+        default: true,
+        summary: "report the frames' work to a hint session of compose-rs's own (Android)",
+    };
+
+    /// Every optimization, by bit.
+    pub const ALL: &'static [Optimization] =
+        &[Optimization::SINGLE_DRAWING_FADE, Optimization::PERFORMANCE_HINT];
+
+    /// Its bit in [`Optimizations::bits`].
+    pub const fn mask(self) -> u64 {
+        1 << self.bit
+    }
+
+    /// The optimization named `name`, if any.
+    pub fn named(name: &str) -> Option<Optimization> {
+        Optimization::ALL.iter().copied().find(|optimization| optimization.name == name)
+    }
+}
+
+/// Which of compose-rs's optimizations a host uses: a set of [`Optimization`]s, as bits (what
+/// crosses to Kotlin).
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Optimizations(u64);
+
+impl Optimizations {
+    /// None: the rendering Compose does.
+    pub const NONE: Optimizations = Optimizations(0);
+
+    /// The ones on by default ([`Optimization::default`]).
+    pub fn defaults() -> Optimizations {
+        Optimization::ALL
+            .iter()
+            .filter(|optimization| optimization.default)
+            .fold(Optimizations::NONE, |set, optimization| set.with(*optimization, true))
+    }
+
+    /// Every one.
+    pub fn all() -> Optimizations {
+        Optimization::ALL
+            .iter()
+            .fold(Optimizations::NONE, |set, optimization| set.with(*optimization, true))
+    }
+
+    pub const fn contains(self, optimization: Optimization) -> bool {
+        self.0 & optimization.mask() != 0
+    }
+
+    /// This set with `optimization` on or off.
+    pub const fn with(self, optimization: Optimization, on: bool) -> Optimizations {
+        if on {
+            Optimizations(self.0 | optimization.mask())
+        } else {
+            Optimizations(self.0 & !optimization.mask())
+        }
+    }
+
+    pub const fn bits(self) -> u64 {
+        self.0
+    }
+
+    /// The set of `bits` (unknown bits dropped).
+    pub fn from_bits(bits: u64) -> Optimizations {
+        Optimizations(bits & Optimizations::all().0)
+    }
+
+    /// Parses `none`, `all`, `default`, or a comma-separated list of names (each may start with
+    /// `-` to take it out of what's before it: `default,-performance_hint`). An unknown name is
+    /// an error naming it.
+    pub fn parse(text: &str) -> Result<Optimizations, String> {
+        let mut set = Optimizations::NONE;
+        for word in text.split(',').map(str::trim).filter(|word| !word.is_empty()) {
+            let (on, name) = match word.strip_prefix('-') {
+                Some(name) => (false, name),
+                None => (true, word),
+            };
+            set = match (name, on) {
+                ("none", true) => Optimizations::NONE,
+                ("all", true) => Optimizations::all(),
+                ("default", true) => Optimizations::defaults(),
+                _ => match Optimization::named(name) {
+                    Some(optimization) => set.with(optimization, on),
+                    None => return Err(format!("no optimization named {name:?}")),
+                },
+            };
+        }
+        Ok(set)
+    }
+}
+
+impl Default for Optimizations {
+    fn default() -> Optimizations {
+        Optimizations::defaults()
+    }
+}
+
+impl fmt::Debug for Optimizations {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let names: Vec<&str> = Optimization::ALL
+            .iter()
+            .filter(|optimization| self.contains(**optimization))
+            .map(|optimization| optimization.name)
+            .collect();
+        write!(formatter, "Optimizations({})", if names.is_empty() { "none".to_string() } else { names.join(",") })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bits_are_distinct_and_in_order() {
+        for (index, optimization) in Optimization::ALL.iter().enumerate() {
+            assert_eq!(optimization.bit as usize, index, "{}", optimization.name);
+        }
+    }
+
+    #[test]
+    fn lists_parse() {
+        let fade = Optimization::SINGLE_DRAWING_FADE;
+        let hint = Optimization::PERFORMANCE_HINT;
+        assert_eq!(Optimizations::parse("none"), Ok(Optimizations::NONE));
+        assert_eq!(Optimizations::parse(""), Ok(Optimizations::NONE));
+        assert_eq!(Optimizations::parse("all"), Ok(Optimizations::all()));
+        assert_eq!(Optimizations::parse("default"), Ok(Optimizations::defaults()));
+        assert!(Optimizations::defaults().contains(hint));
+        assert!(!Optimizations::defaults().contains(fade));
+        assert_eq!(
+            Optimizations::parse("single_drawing_fade"),
+            Ok(Optimizations::NONE.with(fade, true))
+        );
+        assert_eq!(
+            Optimizations::parse("all, -performance_hint"),
+            Ok(Optimizations::NONE.with(fade, true))
+        );
+        assert!(Optimizations::parse("faster").is_err());
+        assert_eq!(Optimizations::from_bits(u64::MAX), Optimizations::all());
+        assert_eq!(format!("{:?}", Optimizations::all()), "Optimizations(single_drawing_fade,performance_hint)");
+    }
+}

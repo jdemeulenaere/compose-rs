@@ -34,7 +34,8 @@ pub(crate) fn create(element: &Element) -> Box<dyn ModifierNode> {
         Element::Weight(..) | Element::Align(_) | Element::ZIndex(_) => Box::new(Inert),
         Element::Background(color, shape) => Box::new(BackgroundNode(*color, *shape)),
         Element::Border(width, color, shape) => Box::new(BorderNode(*width, *color, *shape)),
-        Element::Clip(shape) => Box::new(ClipNode(*shape)),
+        // A graphics layer clipping to its shape, as Compose's `clip` (D523).
+        Element::Clip(shape) => Box::new(crate::graphics_layer::GraphicsLayerNode::clip(*shape)),
         Element::Clickable(clickable) => Box::new(ClickableNode {
             spec: Press::Click(clickable.clone()),
             state: PressState::default(),
@@ -80,7 +81,10 @@ pub(crate) fn update(element: &Element, node: &mut dyn ModifierNode) {
         Element::Border(width, color, shape) => {
             set!(BorderNode, BorderNode(*width, *color, *shape))
         }
-        Element::Clip(shape) => set!(ClipNode, ClipNode(*shape)),
+        Element::Clip(shape) => set!(
+            crate::graphics_layer::GraphicsLayerNode,
+            crate::graphics_layer::GraphicsLayerNode::clip(*shape)
+        ),
         Element::Clickable(clickable) => {
             if let Some(node) = node.downcast_mut::<ClickableNode>() {
                 // A source swapped or the clickable disabled mid-press: the old press is over.
@@ -387,29 +391,6 @@ impl DrawModifierNode for BorderNode {
 
 fn inset(rect: Rect, by: f32) -> Rect {
     Rect::new(rect.left + by, rect.top + by, rect.right - by, rect.bottom - by)
-}
-
-pub(crate) struct ClipNode(pub(crate) Shape);
-
-impl ModifierNode for ClipNode {
-    fn as_draw(&mut self) -> Option<&mut dyn DrawModifierNode> {
-        Some(self)
-    }
-    fn hit_clip(&self) -> Option<Shape> {
-        Some(self.0)
-    }
-}
-
-impl DrawModifierNode for ClipNode {
-    fn draw(&mut self, scope: &mut DrawScope<'_>) {
-        scope.save();
-        let outline = self.0.outline_in(scope.size(), &scope.density(), scope.layout_direction());
-        scope.clip_outline(outline);
-    }
-
-    fn draw_after(&mut self, scope: &mut DrawScope<'_>) {
-        scope.restore();
-    }
 }
 
 // ---- Clickable and toggleable ----------------------------------------------------------------

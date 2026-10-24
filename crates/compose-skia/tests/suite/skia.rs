@@ -251,3 +251,100 @@ fn annotated_text_draws_each_span_in_its_style() {
     assert!(colors.contains(&Color::BLACK), "the first run's glyphs");
     assert!(colors.contains(&Color::RED), "the span's glyphs");
 }
+
+/// Two overlapping squares (red, then blue over its right half) in a layer at half alpha under
+/// `strategy`, drawn with `optimizations`: the pixel where they overlap, and one of the red
+/// alone.
+fn overlapping_pixels(
+    strategy: compose::ui::CompositingStrategy,
+    optimizations: compose::ui::platform::Optimizations,
+) -> (Color, Color) {
+    use compose::ui::{GraphicsLayerScope, Modifier, Paint, Rect, UnitExt};
+    let mut host =
+        UiHost::new(IntSize::new(40, 20), Density::new(1.0), Box::new(SkiaTextMeasurer::new()));
+    host.set_optimizations(optimizations);
+    host.set_content(move || {
+        compose::foundation::layout::Canvas(
+            Modifier.size((40.dp(), 20.dp())).graphics_layer_with(GraphicsLayerScope {
+                alpha: 0.5,
+                compositing_strategy: strategy,
+                ..GraphicsLayerScope::default()
+            }),
+            |scope| {
+                scope.draw_rect(Rect::new(0.0, 0.0, 30.0, 20.0), Paint::fill(Color::RED));
+                scope.draw_rect(Rect::new(20.0, 0.0, 40.0, 20.0), Paint::fill(Color::BLUE));
+            },
+        );
+    });
+    host.frame();
+    let mut renderer = RasterRenderer::new(40, 20);
+    renderer.set_optimizations(host.optimizations());
+    host.with_tree(|tree| {
+        renderer.render(tree.display_list(), Color::WHITE, 1.0, tree.text_measurer_ref())
+    });
+    (renderer.pixel(25, 10), renderer.pixel(5, 10))
+}
+
+/// `Auto` and `Offscreen` fade the layer's content as one (the overlap shows no red, as
+/// Compose Desktop's offscreen buffer); `ModulateAlpha` fades each drawing (the red shows
+/// through the blue).
+#[test]
+fn compositing_strategies_fade_as_compose_desktops() {
+    use compose::ui::CompositingStrategy;
+    use compose::ui::platform::Optimizations;
+    let (auto, auto_red) = overlapping_pixels(CompositingStrategy::Auto, Optimizations::NONE);
+    let (offscreen, _) = overlapping_pixels(CompositingStrategy::Offscreen, Optimizations::NONE);
+    let (modulated, modulated_red) =
+        overlapping_pixels(CompositingStrategy::ModulateAlpha, Optimizations::NONE);
+    let near = |a: u8, b: u8| a.abs_diff(b) <= 2;
+    // Blue at half alpha over white.
+    assert!(near(auto.red(), 0x7F) && near(auto.blue(), 0xFF), "{auto:?}");
+    assert_eq!(offscreen, auto);
+    // Blue at half alpha over red at half alpha over white: the red took its green away.
+    assert!(modulated.green() + 30 < auto.green(), "{modulated:?} against {auto:?}");
+    // One drawing fades the same either way (but for rounding).
+    assert!(
+        near(modulated_red.green(), auto_red.green()) && near(modulated_red.red(), auto_red.red()),
+        "{modulated_red:?} against {auto_red:?}"
+    );
+}
+
+/// With `SINGLE_DRAWING_FADE`, an `Auto` layer over two drawings still composites offscreen
+/// (they may overlap): the same pixels as without it.
+#[test]
+fn the_single_drawing_fade_keeps_overlapping_layers_offscreen() {
+    use compose::ui::CompositingStrategy;
+    use compose::ui::platform::{Optimization, Optimizations};
+    let fade = Optimizations::NONE.with(Optimization::SINGLE_DRAWING_FADE, true);
+    assert_eq!(
+        overlapping_pixels(CompositingStrategy::Auto, fade),
+        overlapping_pixels(CompositingStrategy::Auto, Optimizations::NONE)
+    );
+}
+
+/// A clip is a layer clipping to its shape, anti-aliased as Compose Desktop's render node's
+/// `setClipRRect`: a corner outside the rounded rectangle shows the background.
+#[test]
+fn a_clip_clips_to_its_rounded_outline() {
+    use compose::foundation::RoundedCornerShape;
+    use compose::foundation::layout::Box;
+    use compose::ui::{Alignment, Modifier, UnitExt};
+    let mut host =
+        UiHost::new(IntSize::new(40, 40), Density::new(1.0), Box::new(SkiaTextMeasurer::new()));
+    host.set_content(|| {
+        Box(
+            Modifier.size(40.dp()).clip(RoundedCornerShape(12.dp())).background(Color::RED),
+            Alignment::TOP_START,
+            false,
+            compose::runtime::callback(|_| {}),
+        );
+    });
+    host.frame();
+    let mut renderer = RasterRenderer::new(40, 40);
+    host.with_tree(|tree| {
+        renderer.render(tree.display_list(), Color::WHITE, 1.0, tree.text_measurer_ref())
+    });
+    assert_eq!(renderer.pixel(1, 1), Color::WHITE, "outside the corner");
+    assert_eq!(renderer.pixel(20, 20), Color::RED);
+    assert_eq!(renderer.pixel(20, 1), Color::RED, "an edge's middle");
+}

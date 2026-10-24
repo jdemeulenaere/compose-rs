@@ -17,13 +17,16 @@ use crate::nodes;
 use crate::text::TextMeasurer;
 use crate::unit::{Density, IntOffset, IntSize, Offset};
 
-/// What a node's observed reads were made for: measuring it, drawing it, or (a graphics
-/// layer's block) its layer's properties, which change without drawing it again.
+/// What a node's observed reads were made for: measuring it, drawing it, (a graphics
+/// layer's block) its layer's properties, which change without drawing it again, or drawing
+/// its inner layers (what follows its first inner layer in its chain, and its children), which
+/// are drawn again apart from the rest of its drawing (D522).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum Observation {
     Measure = 0,
     Draw = 1,
     Layer = 2,
+    InnerLayers = 3,
 }
 
 /// The key `node`'s reads for `observation` are observed under: the kind in the top two bits.
@@ -36,7 +39,8 @@ fn observation_of(key: u64) -> (NodeId, Observation) {
     let observation = match key >> 62 {
         0 => Observation::Measure,
         1 => Observation::Draw,
-        _ => Observation::Layer,
+        2 => Observation::Layer,
+        _ => Observation::InnerLayers,
     };
     (NodeId::from_ref(NodeRef::new(key & !(3 << 62))), observation)
 }
@@ -173,6 +177,9 @@ pub struct LayoutNode {
     pub(crate) place_order: u64,
     /// What it drew last, if it's a repaint boundary (render.rs).
     pub(crate) retained: Option<Box<crate::render::RetainedDrawing>>,
+    /// Its graphics layers that aren't its first drawing modifier, each a group of its own
+    /// inside its drawing (render.rs), by chain index.
+    pub(crate) inner_layers: Vec<crate::render::InnerLayer>,
     /// The sum of its `z_index` modifiers: siblings are drawn, and hit, in its order.
     pub(crate) z_index: f32,
     /// Its content is deactivated (a lazy list's item kept for reuse): unplaced, its modifier
@@ -205,6 +212,7 @@ impl LayoutNode {
             overlay_origin: crate::unit::Offset::ZERO,
             place_order: 0,
             retained: None,
+            inner_layers: Vec::new(),
             z_index: 0.0,
             deactivated: false,
         }
@@ -303,6 +311,12 @@ pub struct UiTree {
     pub(crate) kept: Vec<NodeId>,
     /// Frames list the kept boundaries' groups (`UiHost::set_keep_unplaced_groups`).
     pub(crate) keeps_unplaced: bool,
+    /// compose-rs's optimizations beyond Compose's rendering the host uses (D520).
+    pub(crate) optimizations: crate::optimizations::Optimizations,
+    /// The node of each inner layer's group key (`render::INNER_LAYER_KEY`).
+    pub(crate) inner_layer_owners: std::collections::HashMap<u64, NodeId>,
+    /// The last inner layer's key, without its flag.
+    next_inner_layer: u64,
     /// The nodes reused in the pass under way, whose modifier nodes are reset when it ends
     /// (`run_resets`); kept for its capacity.
     pending_resets: Vec<NodeId>,
@@ -350,6 +364,9 @@ impl UiTree {
             measured_ahead: Vec::new(),
             kept: Vec::new(),
             keeps_unplaced: false,
+            optimizations: crate::optimizations::Optimizations::defaults(),
+            inner_layer_owners: std::collections::HashMap::new(),
+            next_inner_layer: 0,
             pending_resets: Vec::new(),
         }
     }
@@ -507,14 +524,46 @@ impl UiTree {
         }
     }
 
+    /// compose-rs's optimizations beyond Compose's rendering this tree's host uses
+    /// (`UiHost::set_optimizations`).
+    pub fn optimizations(&self) -> crate::optimizations::Optimizations {
+        self.optimizations
+    }
+
+    /// Uses `optimizations` from the next frame on, which draws everything again if they
+    /// changed.
+    pub fn set_optimizations(&mut self, optimizations: crate::optimizations::Optimizations) {
+        if optimizations != self.optimizations {
+            self.optimizations = optimizations;
+            self.invalidate_draw();
+        }
+    }
+
     /// Draws everything again: every repaint boundary too.
     pub fn invalidate_draw(&mut self) {
         self.needs_draw = true;
         for slot in &mut self.slots {
-            if let Some(retained) = slot.node.as_mut().and_then(|node| node.retained.as_mut()) {
+            let Some(node) = slot.node.as_mut() else { continue };
+            if let Some(retained) = node.retained.as_mut() {
                 retained.dirty = true;
                 retained.layer_dirty = true;
             }
+            for inner in &mut node.inner_layers {
+                inner.dirty = true;
+            }
+        }
+    }
+
+    /// Draws `node`'s inner layers again (what follows its first one, and its children), not
+    /// what's around them: as Compose's layer draws its content again, not its parent's.
+    pub(crate) fn invalidate_inner_layers(&mut self, node: NodeId) {
+        let Some(value) = self.get_mut(node) else { return };
+        for inner in &mut value.inner_layers {
+            inner.dirty = true;
+        }
+        // Nothing places it: drawn when a frame does.
+        if value.placed {
+            self.needs_draw = true;
         }
     }
 
@@ -525,7 +574,27 @@ impl UiTree {
         let mut current = Some(node);
         while let Some(id) = current {
             let Some(value) = self.get_mut(id) else { break };
+            // Its inner layers (D522): the last holds its children, so a change below it is
+            // theirs alone; its own change may be in what's before them too.
+            if !value.inner_layers.is_empty() {
+                for inner in &mut value.inner_layers {
+                    inner.dirty = true;
+                }
+                if id != node && value.retained.is_none() {
+                    if value.placed {
+                        self.needs_draw = true;
+                    }
+                    return;
+                }
+            }
             if let Some(retained) = &mut value.retained {
+                if id != node && !value.inner_layers.is_empty() {
+                    // A child's change, in its inner layers: its own drawing stays.
+                    if value.placed {
+                        self.needs_draw = true;
+                    }
+                    return;
+                }
                 retained.dirty = true;
                 // A boundary nothing places (a lazy list's item prefetched or kept for reuse)
                 // is drawn when a frame places it: nothing to draw now (D435).
@@ -576,6 +645,11 @@ impl UiTree {
                     self.invalidate_draw_of(node)
                 }
                 Observation::Draw => {}
+                Observation::InnerLayers => {
+                    if self.get(node).is_some_and(|value| !value.deactivated) {
+                        self.invalidate_inner_layers(node);
+                    }
+                }
                 Observation::Layer => {
                     // Its layer's properties only: its content and version stay.
                     self.needs_draw = true;
@@ -738,18 +812,48 @@ impl UiTree {
             }
         }
         // A repaint boundary keeps what it draws: its layer's properties apart if its first
-        // drawing modifier is a graphics layer.
-        let boundary = value.chain.iter().any(|entry| entry.is_repaint_boundary());
+        // drawing modifier is a graphics layer (which makes it one, as each of Compose's
+        // graphics layers is a layer). Each other graphics layer is a group of its own inside
+        // the node's drawing (an inner layer, D522).
+        let is_layer = |entry: &dyn ModifierNode| {
+            entry.downcast_ref::<crate::graphics_layer::GraphicsLayerNode>().is_some()
+        };
         let layer_entry = value
             .chain
             .iter()
-            .position(|entry| {
-                entry.downcast_ref::<crate::graphics_layer::GraphicsLayerNode>().is_some()
-            })
+            .position(|entry| is_layer(&**entry))
             .filter(|&index| {
                 value.capabilities[..index].iter().all(|bits| bits & capability::DRAW == 0)
             })
             .map(|index| index as u16);
+        let boundary =
+            layer_entry.is_some() || value.chain.iter().any(|entry| entry.is_repaint_boundary());
+        let inner: SmallVec<[u16; 2]> = (0..value.chain.len())
+            .filter(|&index| is_layer(&*value.chain[index]) && layer_entry != Some(index as u16))
+            .map(|index| index as u16)
+            .collect();
+        if !inner.is_empty() || !value.inner_layers.is_empty() {
+            let mut layers = std::mem::take(&mut value.inner_layers);
+            // Kept by chain index: the same render node for the same layer.
+            layers.retain(|layer| {
+                let keep = inner.contains(&layer.entry);
+                if !keep {
+                    self.inner_layer_owners.remove(&layer.key);
+                }
+                keep
+            });
+            for &entry in &inner {
+                if !layers.iter().any(|layer| layer.entry == entry) {
+                    self.next_inner_layer += 1;
+                    let key = crate::render::INNER_LAYER_KEY | self.next_inner_layer;
+                    self.inner_layer_owners.insert(key, node);
+                    layers.push(crate::render::InnerLayer::new(entry, key));
+                }
+            }
+            layers.sort_by_key(|layer| layer.entry);
+            self.node_mut(node).inner_layers = layers;
+        }
+        let value = self.node_mut(node);
         let mut parent_draws_differently = boundary != value.retained.is_some();
         match &mut value.retained {
             Some(retained) if boundary => {
@@ -979,10 +1083,14 @@ impl UiTree {
                 observer.forget(observation_key(id, Observation::Measure));
                 observer.forget(observation_key(id, Observation::Draw));
                 observer.forget(observation_key(id, Observation::Layer));
+                observer.forget(observation_key(id, Observation::InnerLayers));
             }
             if self.focused() == Some(id) {
                 self.focus = None;
                 self.focus_listeners_dirty = true;
+            }
+            for layer in &value.inner_layers {
+                self.inner_layer_owners.remove(&layer.key);
             }
             let mut context = DetachContext { text_measurer: &mut *self.text_measurer };
             for entry in &mut value.chain {

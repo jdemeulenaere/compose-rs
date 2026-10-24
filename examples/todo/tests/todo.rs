@@ -47,8 +47,11 @@ fn assert_one_row(recomposed: &compose::runtime::platform::RecompositionCounts) 
     assert_eq!(recomposed.scopes_named("Checkbox"), 1, "{names:?}");
     assert_eq!(recomposed.scopes_named("TodoAppWith"), 0, "{names:?}");
     assert!(recomposed.scopes_named("TodoRow") <= 1, "{names:?}");
+    // The button the pointer left composes again for its hover elevation, read in composition
+    // as Compose's `Button` reads its elevation's state (D526).
+    assert!(recomposed.scopes_named("Button") <= 1, "{names:?}");
     let total: u64 = names.iter().map(|(_, count)| count).sum();
-    assert!(total <= 6, "{names:?}");
+    assert!(total <= 7, "{names:?}");
 }
 
 #[test]

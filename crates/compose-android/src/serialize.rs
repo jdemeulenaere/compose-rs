@@ -27,10 +27,10 @@ use std::collections::HashMap;
 use std::sync::{Arc, Weak};
 
 use compose_ui::{
-    Color, ImageBitmap, Offset, Outline, Paint, PaintStyle, PathCommand, PathData, PathFillType,
-    PathOperation, PathStep, Rect, StrokeCap, TileMode,
+    Color, CompositingStrategy, ImageBitmap, Offset, Outline, Paint, PaintStyle, PathCommand,
+    PathData, PathFillType, PathOperation, PathStep, Rect, StrokeCap, TileMode,
     platform::Shader,
-    platform::{DisplayList, DrawGroup, DrawOp},
+    platform::{DisplayList, DrawGroup, DrawOp, Optimization, Optimizations, single_drawing},
 };
 
 /// The operations' tags, as `Replayer.kt` reads them.
@@ -58,10 +58,12 @@ pub mod tag {
     pub const GROUP: u8 = 15;
     /// The layer properties of the groups that have a layer, before the operations: a count
     /// (u32), then per group its key (u64), alpha, pivot (x, y), scale (x, y), rotation
-    /// (degrees), translation (x, y) (f32s), whether it clips (u8) and its clip (left, top,
-    /// right, bottom; zeros if it doesn't), then whether its alpha composites its content
-    /// offscreen (u8; 0 for one drawing, faded instead), then its bounds (left, top, right,
-    /// bottom): `LAYER_ENTRY_BYTES` each.
+    /// (degrees), translation (x, y) (f32s), whether it clips to its outline (u8), its outline
+    /// (a kind, u8: 0 none, 1 rectangle, 2 rounded; left, top, right, bottom; the corner radii
+    /// top left, top right, bottom right, bottom left: zeros without), its shadow elevation
+    /// (f32), its ambient and spot shadow colors (ARGB u32s), its compositing (u8, see
+    /// [`compositing`](super::compositing)), then its bounds (left, top, right, bottom):
+    /// `LAYER_ENTRY_BYTES` each (D525).
     pub const LAYERS: u8 = 16;
     /// Clips what follows to a path (u32 id) moved by an offset (x, y).
     pub const CLIP_PATH: u8 = 17;
@@ -724,47 +726,6 @@ fn foldable_layer(ops: &[DrawOp], start: usize) -> Option<usize> {
     single_drawing(&ops[start + 1..]).map(|end| start + 1 + end).filter(|end| *end < ops.len())
 }
 
-/// Whether `ops`, what an alpha layer holds (from just after its `SaveLayerAlpha`), are one
-/// drawing with a paint among saves, clips and moves: returns the index of the layer's closing
-/// `Restore` if so, or `ops.len()` if they end first, balanced (a group's content, its layer's
-/// restore after it).
-fn single_drawing(ops: &[DrawOp]) -> Option<usize> {
-    let mut depth = 0usize;
-    let mut drawings = 0;
-    for (index, op) in ops.iter().enumerate() {
-        match op {
-            DrawOp::Save | DrawOp::SaveLayerAlpha(_) => {
-                if matches!(op, DrawOp::SaveLayerAlpha(_)) {
-                    return None;
-                }
-                depth += 1;
-            }
-            DrawOp::Restore if depth == 0 => return (drawings == 1).then_some(index),
-            DrawOp::Restore => depth -= 1,
-            DrawOp::Translate(_)
-            | DrawOp::ClipRect(_)
-            | DrawOp::ClipRoundRect(..)
-            | DrawOp::ClipPath { .. }
-            | DrawOp::Transform { .. } => {}
-            DrawOp::DrawRect(..)
-            | DrawOp::DrawRoundRect(..)
-            | DrawOp::DrawLine(..)
-            | DrawOp::DrawArc { .. }
-            | DrawOp::DrawPath { .. } => {
-                drawings += 1;
-                if drawings > 1 {
-                    return None;
-                }
-            }
-            // Text, images and shadows draw what a paint's alpha doesn't reach.
-            DrawOp::DrawParagraph(..) | DrawOp::DrawImage { .. } | DrawOp::DrawShadow { .. } => {
-                return None;
-            }
-        }
-    }
-    (drawings == 1 && depth == 0).then_some(ops.len())
-}
-
 /// `color` with its alpha multiplied by `alpha`.
 fn faded(color: Color, alpha: f32) -> Color {
     if alpha >= 1.0 {
@@ -799,6 +760,8 @@ pub struct GroupCache {
     ahead: Vec<Vec<u64>>,
     /// How many records the last write copied that were written ahead.
     copied_ahead: usize,
+    /// The optimizations its records are written with (`set_optimizations`).
+    optimizations: Optimizations,
 }
 
 #[derive(Default)]
@@ -821,6 +784,28 @@ struct CachedGroup {
 }
 
 impl GroupCache {
+    /// A cache writing records with `optimizations` (an alpha layer folded into its one
+    /// drawing's paint with `SINGLE_DRAWING_FADE`).
+    pub fn new(optimizations: Optimizations) -> GroupCache {
+        GroupCache { optimizations, ..GroupCache::default() }
+    }
+
+    /// Writes records with `optimizations` from now on: each cached record is written again by
+    /// the next write (the same bytes where they don't depend on them, so the replayer keeps
+    /// their recordings).
+    pub fn set_optimizations(&mut self, optimizations: Optimizations) {
+        if optimizations != self.optimizations {
+            self.optimizations = optimizations;
+            for record in self.records.values_mut() {
+                record.version = u64::MAX;
+            }
+        }
+    }
+
+    pub fn optimizations(&self) -> Optimizations {
+        self.optimizations
+    }
+
     /// How many groups' records it holds.
     pub fn len(&self) -> usize {
         self.records.len()
@@ -881,7 +866,17 @@ impl GroupCache {
 pub const AHEAD_CAPACITY: usize = 8;
 
 /// The bytes of one entry of the `LAYERS` section.
-pub const LAYER_ENTRY_BYTES: usize = 8 + 8 * 4 + 1 + 4 * 4 + 1 + 4 * 4;
+pub const LAYER_ENTRY_BYTES: usize = 8 + 8 * 4 + 1 + 1 + 4 * 4 + 4 * 4 + 4 + 4 + 4 + 1 + 4 * 4;
+
+/// A `LAYERS` entry's compositing byte, as `Replayer.kt` reads it.
+pub mod compositing {
+    /// Offscreen for an alpha below 1 (`CompositingStrategy::Auto`).
+    pub const AUTO: u8 = 0;
+    /// Always offscreen (`Offscreen`: a compositing layer).
+    pub const OFFSCREEN: u8 = 1;
+    /// Never: the alpha multiplies each drawing's (`ModulateAlpha`).
+    pub const MODULATE_ALPHA: u8 = 2;
+}
 
 /// The bytes of one entry of the `KEPT` section: a key, whether it is outermost.
 pub const KEPT_ENTRY_BYTES: usize = 8 + 1;
@@ -1000,30 +995,56 @@ fn write_layer(groups: &[DrawGroup], index: usize, cache: &GroupCache, out: &mut
     out.f32(layer.scale.1);
     out.f32(layer.rotation);
     out.offset(layer.translation);
-    out.u8(u8::from(layer.clip.is_some()));
-    out.rect(&layer.clip.unwrap_or(Rect::new(0.0, 0.0, 0.0, 0.0)));
-    out.u8(u8::from(overlapping(groups, index, cache)));
+    out.u8(u8::from(layer.clip && layer.outline.is_some()));
+    match layer.outline {
+        None => {
+            out.u8(0);
+            out.rect(&Rect::new(0.0, 0.0, 0.0, 0.0));
+            out.radii(&[0.0; 4]);
+        }
+        Some(Outline::Rectangle(rect)) => {
+            out.u8(1);
+            out.rect(&rect);
+            out.radii(&[0.0; 4]);
+        }
+        Some(Outline::Rounded(rect, radii)) => {
+            out.u8(2);
+            out.rect(&rect);
+            out.radii(&radii);
+        }
+    }
+    out.f32(layer.shadow_elevation);
+    out.color(layer.ambient_shadow_color);
+    out.color(layer.spot_shadow_color);
+    out.u8(compositing_of(groups, index, cache));
     out.rect(&layer.bounds);
 }
 
-/// Whether the alpha (below 1) of the group at `index` must composite its content offscreen:
-/// unless it is one drawing with a paint and no group (as a folded layer, D153), which a render
-/// node fades without a layer (`setHasOverlappingRendering(false)`). Read from its cached
-/// record while its version stays.
-fn overlapping(groups: &[DrawGroup], index: usize, cache: &GroupCache) -> bool {
+/// How the group at `index` of `groups` composites its content: its layer's strategy, except
+/// that with `Optimization::SINGLE_DRAWING_FADE`, an `Auto` alpha below 1 over one drawing with
+/// a paint and no group (as a folded layer, D153) multiplies that drawing's alpha instead
+/// (`ModulateAlpha`: a render node's `setHasOverlappingRendering(false)`), the same pixels
+/// without an offscreen buffer (D521). Read from its cached record while its version stays.
+fn compositing_of(groups: &[DrawGroup], index: usize, cache: &GroupCache) -> u8 {
     let group = &groups[index];
-    if group.layer.is_none_or(|layer| layer.alpha >= 1.0) {
-        return true;
+    let Some(layer) = group.layer else { return compositing::AUTO };
+    match layer.compositing_strategy {
+        CompositingStrategy::Offscreen => return compositing::OFFSCREEN,
+        CompositingStrategy::ModulateAlpha => return compositing::MODULATE_ALPHA,
+        CompositingStrategy::Auto => {}
+    }
+    if !cache.optimizations.contains(Optimization::SINGLE_DRAWING_FADE) || layer.alpha >= 1.0 {
+        return compositing::AUTO;
     }
     let nested = &groups[index + 1..=index + group.descendants];
     if nested.iter().any(|inner| !inner.empty) {
-        return true;
+        return compositing::AUTO;
     }
     let single = match cache.records.get(&group.key) {
         Some(record) if record.version == group.version => record.single_drawing,
         _ => single_drawing(&group.content.ops).is_some(),
     };
-    !single
+    if single { compositing::MODULATE_ALPHA } else { compositing::AUTO }
 }
 
 /// One write of a display list.
@@ -1116,6 +1137,7 @@ impl<'a> Serializer<'a> {
             // A layer holding one drawing and no group: a folded alpha inside a group's record
             // would change it without changing its version.
             if let DrawOp::SaveLayerAlpha(alpha) = ops[index]
+                && self.cache.optimizations.contains(Optimization::SINGLE_DRAWING_FADE)
                 && let Some(end) = foldable_layer(ops, index)
                 && !self.draws_before(&boundaries[boundary..], end, child)
             {
@@ -1359,6 +1381,11 @@ mod tests {
     use compose_ui::Path;
     use compose_ui::platform::Gradient;
 
+    /// The optimizations folding a layer into its one drawing's paint.
+    fn fade() -> Optimizations {
+        Optimizations::NONE.with(Optimization::SINGLE_DRAWING_FADE, true)
+    }
+
     fn read_u32(bytes: &[u8], at: usize) -> u32 {
         u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap())
     }
@@ -1404,7 +1431,10 @@ mod tests {
         // After it, the paint is whole again.
         list.push(DrawOp::DrawRect(Rect::new(0.0, 0.0, 4.0, 4.0), Paint::fill(Color::BLACK)));
         let (mut resources, mut out) = (Resources::default(), Writer::default());
+        // Without the optimization, an offscreen layer, as Compose's.
         write_display_list(&list, &mut resources, &mut GroupCache::default(), &mut out);
+        assert_eq!(out.bytes[0], tag::SAVE_LAYER_ALPHA);
+        write_display_list(&list, &mut resources, &mut GroupCache::new(fade()), &mut out);
         assert_eq!(out.bytes[0], tag::SAVE);
         // Save, clip (17 bytes), then the rect: its color at 1 + 17 + 1 + 16.
         assert_eq!(read_u32(&out.bytes, 35), 0x8000_0000);
@@ -1414,7 +1444,7 @@ mod tests {
         // Two drawings: a layer, as their overlap must fade together.
         list.ops
             .insert(3, DrawOp::DrawRect(Rect::new(1.0, 1.0, 2.0, 2.0), Paint::fill(Color::WHITE)));
-        write_display_list(&list, &mut resources, &mut GroupCache::default(), &mut out);
+        write_display_list(&list, &mut resources, &mut GroupCache::new(fade()), &mut out);
         assert_eq!(out.bytes[0], tag::SAVE_LAYER_ALPHA);
     }
 
@@ -1564,7 +1594,7 @@ mod tests {
         boundary(&mut list, 7);
         list.groups = vec![group(7, 0, content, 0)];
         let (mut resources, mut out) = (Resources::default(), Writer::default());
-        write_display_list(&list, &mut resources, &mut GroupCache::default(), &mut out);
+        write_display_list(&list, &mut resources, &mut GroupCache::new(fade()), &mut out);
         assert_eq!(out.bytes[0], tag::GROUP);
         // Its record, then the frame naming it.
         assert_eq!(read_u32(&out.bytes, 17) as usize, out.bytes.len() - 21 - 9);
@@ -1950,7 +1980,7 @@ mod tests {
         );
         list.push(DrawOp::Restore);
         let (mut resources, mut out) = (Resources::default(), Writer::default());
-        write_display_list(&list, &mut resources, &mut GroupCache::default(), &mut out);
+        write_display_list(&list, &mut resources, &mut GroupCache::new(fade()), &mut out);
         assert_eq!(out.bytes[0], tag::SAVE, "folded");
         // Save, then the rect; its sweep: kind, tile, center, 2 colors, no stops, alpha.
         let at = 1 + RECT_BEFORE_SHADER;

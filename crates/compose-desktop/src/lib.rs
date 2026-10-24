@@ -8,7 +8,10 @@
 //!
 //! Environment variables: `COMPOSE_SCREENSHOT=path.png` writes the first window's last frame
 //! when the app exits; `COMPOSE_FRAME_STATS=1` prints each frame's timings;
-//! `COMPOSE_EXIT_AFTER_FRAMES=n` exits after `n` frames, or once idle (for smoke tests).
+//! `COMPOSE_EXIT_AFTER_FRAMES=n` exits after `n` frames, or once idle (for smoke tests);
+//! `COMPOSE_OPTIMIZATIONS=none|all|default|name,…` sets compose-rs's optimizations beyond
+//! Compose's rendering (`Optimizations::parse`, over `set_optimizations`'s and
+//! `WindowOptions::optimizations`).
 
 #![forbid(unsafe_code)]
 // Every type reachable from the public API can be named (D260): a type in a private
@@ -34,6 +37,32 @@ pub use application::{
 };
 use compose_skia::{RasterRenderer, SkiaTextMeasurer};
 pub use compose_ui::{Color, LayoutDirection};
+pub use compose_ui::platform::{Optimization, Optimizations};
+
+thread_local! {
+    /// The optimizations the windows opened from now on use (`set_optimizations`).
+    static OPTIMIZATIONS: std::cell::Cell<Optimizations> =
+        std::cell::Cell::new(Optimizations::defaults());
+}
+
+/// Uses compose-rs's `optimizations` beyond Compose's rendering (D520) in the windows opened
+/// from now on: their hosts' and renderers' (`COMPOSE_OPTIMIZATIONS` overrides them).
+pub fn set_optimizations(optimizations: Optimizations) {
+    OPTIMIZATIONS.with(|cell| cell.set(optimizations));
+}
+
+/// The optimizations windows open with: `COMPOSE_OPTIMIZATIONS` if set (and valid), else
+/// `set_optimizations`'s.
+fn window_optimizations() -> Optimizations {
+    let set = OPTIMIZATIONS.with(std::cell::Cell::get);
+    match std::env::var("COMPOSE_OPTIMIZATIONS") {
+        Ok(text) => Optimizations::parse(&text).unwrap_or_else(|error| {
+            log::warn!("COMPOSE_OPTIMIZATIONS: {error}");
+            set
+        }),
+        Err(_) => set,
+    }
+}
 use compose_ui::{
     Density, IntSize,
     platform::{Renderer, UiHost},
@@ -68,6 +97,9 @@ pub struct WindowOptions {
     /// The content's layout direction (`LOCAL_LAYOUT_DIRECTION` at the root): right-to-left
     /// for an Arabic or Hebrew interface.
     pub layout_direction: compose_ui::LayoutDirection,
+    /// compose-rs's optimizations beyond Compose's rendering (D520): by default, the ones on by
+    /// default (none that changes what's drawn).
+    pub optimizations: Optimizations,
 }
 
 impl Default for WindowOptions {
@@ -78,6 +110,7 @@ impl Default for WindowOptions {
             background: Color::WHITE,
             resizable: true,
             layout_direction: compose_ui::LayoutDirection::Ltr,
+            optimizations: Optimizations::defaults(),
         }
     }
 }
@@ -250,6 +283,8 @@ impl App {
         );
         host.with_tree(services::install);
         host.set_layout_direction(props.layout_direction);
+        let optimizations = window_optimizations();
+        host.set_optimizations(optimizations);
         update_configuration(&mut host, &window);
         let waker = window.clone();
         host.set_frame_waker(move || waker.request_redraw());
@@ -264,7 +299,8 @@ impl App {
         }
         let content = handle.clone();
         host.set_content(move || content.compose_content());
-        let renderer = RasterRenderer::new(physical.width as i32, physical.height as i32);
+        let mut renderer = RasterRenderer::new(physical.width as i32, physical.height as i32);
+        renderer.set_optimizations(optimizations);
         window.request_redraw();
         let (title, resizable, visible) = (props.title.clone(), props.resizable, props.visible);
         let (layout_direction, background) = (props.layout_direction, props.background);
@@ -668,6 +704,7 @@ pub fn application(content: impl Fn() + 'static) {
 /// Opens one window showing `content` and runs until it's closed (the close button, Cmd+W or
 /// Cmd+Q, Ctrl+W on other systems): `application` with one `Window` whose close request exits.
 pub fn run_app(options: WindowOptions, content: impl Fn() + 'static) {
+    set_optimizations(options.optimizations);
     let content = compose_runtime::callback(content);
     application(move || {
         let state = remember_window_state(options.size);
