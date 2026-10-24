@@ -28,7 +28,7 @@ use std::sync::{Arc, Weak};
 
 use compose_ui::{
     Color, ImageBitmap, Offset, Outline, Paint, PaintStyle, PathCommand, PathData, PathFillType,
-    PathOperation, Rect, StrokeCap, TileMode,
+    PathOperation, PathStep, Rect, StrokeCap, TileMode,
     platform::Shader,
     platform::{DisplayList, DrawGroup, DrawOp},
 };
@@ -88,6 +88,14 @@ mod command {
     pub const QUAD_TO: u8 = 2;
     pub const CUBIC_TO: u8 = 3;
     pub const CLOSE: u8 = 4;
+}
+
+/// A path's step's kind (D535), as `Replayer.kt` reads it.
+pub mod step {
+    pub const PUSH: u8 = 0;
+    pub const COMBINE: u8 = 1;
+    pub const ADD: u8 = 2;
+    pub const FILL: u8 = 3;
 }
 
 /// A paint's shader kind, as `Replayer.kt` reads it.
@@ -318,46 +326,56 @@ fn average_color(gradient: &compose_ui::platform::Gradient) -> Color {
     Color::from_argb(alpha << 24 | red << 16 | green << 8 | blue)
 }
 
-/// A resource change the Kotlin side hasn't taken yet.
+/// A resource change the Kotlin side hasn't taken yet (a path's definition is a
+/// [`PendingPath`]).
 enum Pending {
-    /// A path's definition; `taken`: the Kotlin side holds the id already (defined again in
-    /// place, D532), so cancelling it must still drop the id.
-    Path {
-        id: u32,
-        path: Weak<PathData>,
-        taken: bool,
-    },
-    Image {
-        id: u32,
-        width: u32,
-        height: u32,
-        pixels: Weak<[u8]>,
-    },
+    Image { id: u32, width: u32, height: u32, pixels: Weak<[u8]> },
     DropPath(u32),
     DropImage(u32),
+}
+
+/// A path's definition the Kotlin side hasn't taken yet.
+struct PendingPath {
+    id: u32,
+    path: Weak<PathData>,
+    /// The Kotlin side holds the id already (defined again in place, D532): cancelling this
+    /// must still drop it.
+    taken: bool,
 }
 
 /// A path's contents the Kotlin side holds under an id.
 struct DefinedPath {
     /// The contents: alive while a recording (a group's, the frame's) or their path holds them.
     contents: Weak<PathData>,
-    generation: u64,
     id: u32,
 }
 
 /// The paths and images the Kotlin side holds, by id.
 #[derive(Default)]
 pub struct Resources {
-    /// By path identity (`PathData::id`), each generation still held, under its own id.
-    paths: HashMap<u64, Vec<DefinedPath>>,
-    /// How many paths were defined again under an id they had (D532): a record naming one is
-    /// the same bytes drawing other contents.
-    redefinitions: u64,
+    /// Each path's contents still held, by its identity and generation (`PathData::id`,
+    /// `generation`), under its own id.
+    paths: HashMap<(u64, u64), DefinedPath>,
+    /// The ids whose contents nothing holds any more, by path identity, found at the start of
+    /// a write ([`Resources::harvest`]): the path's next contents take one (D532); those left
+    /// are dropped once the write is over ([`Resources::collect`]).
+    free: HashMap<u64, Vec<u32>>,
+    /// Each path id's last definition, by a counter of definitions (`serial`): a record cached
+    /// before an id it names was defined again draws other contents with the same bytes.
+    defined_at: HashMap<u32, u64>,
+    serial: u64,
+    /// The path ids the current write's operations named, in order (`write_group` takes a
+    /// record's).
+    named: Vec<u32>,
     images: HashMap<usize, (Weak<[u8]>, u32)>,
     next_id: u32,
-    /// Definitions and drops the Kotlin side hasn't taken yet: a definition dropped before it
-    /// was taken is cancelled, so this stays bounded however many frames go undrawn.
+    /// Drops, and images' definitions, the Kotlin side hasn't taken yet: a definition dropped
+    /// before it was taken is cancelled, so this stays bounded however many frames go undrawn.
     pending: Vec<Pending>,
+    /// Paths' definitions the Kotlin side hasn't taken yet, in order (`None`: cancelled), and
+    /// where each id's is.
+    pending_paths: Vec<Option<PendingPath>>,
+    pending_path_at: HashMap<u32, usize>,
 }
 
 impl Resources {
@@ -368,6 +386,7 @@ impl Resources {
 
     /// Drops path `id`: its definition, if still pending, or the Kotlin side's.
     fn drop_path(&mut self, id: u32) {
+        self.defined_at.remove(&id);
         if self.cancel_path(id).is_none_or(|taken| taken) {
             self.pending.push(Pending::DropPath(id));
         }
@@ -375,14 +394,8 @@ impl Resources {
 
     /// Cancels path `id`'s pending definition, if any: whether the Kotlin side holds the id.
     fn cancel_path(&mut self, id: u32) -> Option<bool> {
-        let at = self
-            .pending
-            .iter()
-            .position(|op| matches!(op, Pending::Path { id: defined, .. } if *defined == id))?;
-        match self.pending.remove(at) {
-            Pending::Path { taken, .. } => Some(taken),
-            _ => unreachable!("a path's definition"),
-        }
+        let at = self.pending_path_at.remove(&id)?;
+        self.pending_paths[at].take().map(|pending| pending.taken)
     }
 
     fn drop_image(&mut self, id: u32) {
@@ -394,38 +407,63 @@ impl Resources {
         }
     }
 
-    /// The id of `path`'s contents, defined if new: under the id of contents of the same path
-    /// that nothing holds any more if there are (D532), the replayer then refilling that id's
-    /// `android.graphics.Path`; under a new id otherwise. Contents still held keep their id, so a
-    /// record naming it (cached, D157) draws them whenever it's replayed.
+    /// Notes the path contents nothing holds any more: their ids are free for their paths' next
+    /// contents (D532). Called before a write, as the frame's drawing let go of the last frame's.
+    fn harvest(&mut self) {
+        let free = &mut self.free;
+        self.paths.retain(|(path, _), defined| {
+            let alive = defined.contents.strong_count() > 0;
+            if !alive {
+                free.entry(*path).or_default().push(defined.id);
+            }
+            alive
+        });
+    }
+
+    /// Starts a write: the ids free since the last one noted, none named yet.
+    fn begin_write(&mut self) {
+        self.harvest();
+        self.named.clear();
+    }
+
+    /// The id of `path`'s contents, defined if new: under an id of contents of the same path
+    /// that nothing holds any more if there is one (D532), the replayer then refilling that
+    /// id's `android.graphics.Path`; under a new id otherwise. Contents still held keep their
+    /// id, so a record naming it (cached, D157) draws them whenever it's replayed. Constant
+    /// time, however many contents a path has (one path reset for each of many shapes).
     fn path_id(&mut self, path: &Arc<PathData>) -> u32 {
-        let defined = self.paths.entry(path.id()).or_default();
-        if let Some(entry) = defined.iter().find(|entry| entry.generation == path.generation()) {
+        let key = (path.id(), path.generation());
+        if let Some(defined) = self.paths.get(&key) {
             debug_assert!(
-                entry.contents.upgrade().is_some_and(|alive| Arc::ptr_eq(&alive, path)),
+                defined.contents.upgrade().is_some_and(|alive| Arc::ptr_eq(&alive, path)),
                 "a path's generation names one set of contents"
             );
-            return entry.id;
+            self.named.push(defined.id);
+            return defined.id;
         }
-        let (contents, generation) = (Arc::downgrade(path), path.generation());
-        let (id, taken) = match defined.iter_mut().find(|entry| entry.contents.strong_count() == 0)
-        {
-            Some(entry) => {
-                *entry = DefinedPath { contents, generation, id: entry.id };
-                let id = entry.id;
-                self.redefinitions += 1;
-                // Redefined in place: a definition the Kotlin side hasn't taken is replaced.
-                (id, self.cancel_path(id).unwrap_or(true))
-            }
-            None => {
-                self.next_id = self.next_id.wrapping_add(1).max(1);
-                let id = self.next_id;
-                defined.push(DefinedPath { contents, generation, id });
-                (id, false)
-            }
+        let (id, taken) = match self.free.get_mut(&path.id()).and_then(Vec::pop) {
+            // Defined again in place: a definition the Kotlin side hasn't taken is replaced.
+            Some(id) => (id, self.cancel_path(id).unwrap_or(true)),
+            None => (self.next(), false),
         };
-        self.pending.push(Pending::Path { id, path: Arc::downgrade(path), taken });
+        self.paths.insert(key, DefinedPath { contents: Arc::downgrade(path), id });
+        self.serial += 1;
+        self.defined_at.insert(id, self.serial);
+        self.pending_path_at.insert(id, self.pending_paths.len());
+        self.pending_paths.push(Some(PendingPath { id, path: Arc::downgrade(path), taken }));
+        self.named.push(id);
         id
+    }
+
+    /// The definitions so far: a record written now draws its paths' contents as they're
+    /// defined after this many.
+    fn serial(&self) -> u64 {
+        self.serial
+    }
+
+    /// Whether a path among `ids` was defined (again) after `serial` definitions.
+    fn defined_after(&self, ids: &[u32], serial: u64) -> bool {
+        ids.iter().any(|id| self.defined_at.get(id).is_some_and(|at| *at > serial))
     }
 
     /// The id of `image`, defined if new; 0 (nothing) for an empty one.
@@ -452,20 +490,12 @@ impl Resources {
         id
     }
 
-    /// Drops the resources no frame can use any more (their owners are gone).
+    /// Drops the resources no frame can use any more (their owners are gone): the paths' ids no
+    /// new contents took, and gone images.
     pub fn collect(&mut self) {
-        let mut dead_paths = Vec::new();
-        self.paths.retain(|_, defined| {
-            defined.retain(|entry| {
-                let alive = entry.contents.strong_count() > 0;
-                if !alive {
-                    dead_paths.push(entry.id);
-                }
-                alive
-            });
-            !defined.is_empty()
-        });
-        for id in dead_paths {
+        self.harvest();
+        let free: Vec<u32> = self.free.drain().flat_map(|(_, ids)| ids).collect();
+        for id in free {
             self.drop_path(id);
         }
         let dead_images: Vec<u32> = self
@@ -482,7 +512,7 @@ impl Resources {
 
     /// Whether changes wait for the Kotlin side.
     pub fn has_pending(&self) -> bool {
-        !self.pending.is_empty()
+        !self.pending.is_empty() || !self.pending_path_at.is_empty()
     }
 
     /// Appends the pending changes to `out` (a definition whose owner is already gone is
@@ -490,7 +520,7 @@ impl Resources {
     /// replacing its paths (a canvas drawing new ones each frame) defines them after the frame
     /// before's are dropped, so the replayer rebuilds the dropped `Path`s rather than making
     /// new ones. (A drop names an id taken before, never one defined beside it: that one's
-    /// definition is cancelled instead.)
+    /// definition is cancelled instead.) Then paths' definitions, then images'.
     pub fn write_pending(&mut self, out: &mut Writer) {
         for op in &self.pending {
             match op {
@@ -502,25 +532,23 @@ impl Resources {
                     out.u8(tag::DROP_IMAGE);
                     out.u32(*id);
                 }
-                Pending::Path { .. } | Pending::Image { .. } => {}
+                Pending::Image { .. } => {}
             }
         }
+        self.pending_path_at.clear();
+        for pending in self.pending_paths.drain(..).flatten() {
+            let Some(path) = pending.path.upgrade() else { continue };
+            write_path(out, pending.id, &path);
+        }
         for op in self.pending.drain(..) {
-            match op {
-                Pending::Path { id, path, .. } => {
-                    let Some(path) = path.upgrade() else { continue };
-                    write_path(out, id, &path);
-                }
-                Pending::Image { id, width, height, pixels } => {
-                    let Some(pixels) = pixels.upgrade() else { continue };
-                    out.u8(tag::DEFINE_IMAGE);
-                    out.u32(id);
-                    out.u32(width);
-                    out.u32(height);
-                    out.u32(pixels.len() as u32);
-                    out.bytes.extend_from_slice(&pixels);
-                }
-                Pending::DropPath(_) | Pending::DropImage(_) => {}
+            if let Pending::Image { id, width, height, pixels } = op {
+                let Some(pixels) = pixels.upgrade() else { continue };
+                out.u8(tag::DEFINE_IMAGE);
+                out.u32(id);
+                out.u32(width);
+                out.u32(height);
+                out.u32(pixels.len() as u32);
+                out.bytes.extend_from_slice(&pixels);
             }
         }
     }
@@ -580,29 +608,52 @@ fn write_path(writer: &mut Writer, id: u32, path: &PathData) {
 }
 
 /// A path's contents, as `Replayer.kt` reads them: its fill type (u8: 0 non-zero, 1 even-odd),
-/// its operation (u8: 0 none, else `PathOperation`'s kind + 1, then both operands' contents, as
-/// these), then its commands' count (u32) and each command (its kind, its points).
+/// its steps (D535: a count, u32, then each a kind, u8: `step::PUSH` and an operand's contents,
+/// as these, which have no steps; `step::COMBINE` and the operation, u8, `PathOperation`'s
+/// order; `step::ADD`; `step::FILL` and a fill type), then its commands' count (u32) and each
+/// command (its kind, its points). A list, written and read in one pass however many steps.
 fn write_path_contents(writer: &mut Writer, path: &PathData) {
-    writer.u8(match path.fill_type() {
+    write_fill_type(writer, path.fill_type());
+    writer.u32(path.steps().len() as u32);
+    for path_step in path.steps() {
+        match path_step {
+            PathStep::Push(operand) => {
+                writer.u8(step::PUSH);
+                debug_assert!(operand.steps().is_empty(), "an operand has no steps");
+                write_fill_type(writer, operand.fill_type());
+                writer.u32(0);
+                write_commands(writer, operand.commands());
+            }
+            PathStep::Combine(operation) => {
+                writer.u8(step::COMBINE);
+                writer.u8(match operation {
+                    PathOperation::Difference => 0,
+                    PathOperation::Intersect => 1,
+                    PathOperation::Union => 2,
+                    PathOperation::Xor => 3,
+                    PathOperation::ReverseDifference => 4,
+                });
+            }
+            PathStep::Add => writer.u8(step::ADD),
+            PathStep::SetFillType(fill_type) => {
+                writer.u8(step::FILL);
+                write_fill_type(writer, *fill_type);
+            }
+        }
+    }
+    write_commands(writer, path.commands());
+}
+
+fn write_fill_type(writer: &mut Writer, fill_type: PathFillType) {
+    writer.u8(match fill_type {
         PathFillType::NonZero => 0,
         PathFillType::EvenOdd => 1,
     });
-    match path.operands() {
-        None => writer.u8(0),
-        Some(operands) => {
-            writer.u8(1 + match operands.operation {
-                PathOperation::Difference => 0,
-                PathOperation::Intersect => 1,
-                PathOperation::Union => 2,
-                PathOperation::Xor => 3,
-                PathOperation::ReverseDifference => 4,
-            });
-            write_path_contents(writer, &operands.path1);
-            write_path_contents(writer, &operands.path2);
-        }
-    }
-    writer.u32(path.commands().len() as u32);
-    for command in path.commands() {
+}
+
+fn write_commands(writer: &mut Writer, commands: &[PathCommand]) {
+    writer.u32(commands.len() as u32);
+    for command in commands {
         match command {
             PathCommand::MoveTo(point) => {
                 writer.u8(command::MOVE_TO);
@@ -721,6 +772,9 @@ struct CachedGroup {
     /// nested group's change gives the group a new version, but leaves its bytes as they were).
     written_version: u64,
     bytes: Vec<u8>,
+    /// The resources' definitions when its bytes were written with `written_version`
+    /// (`Resources::serial`): a path it names defined again since draws other contents.
+    recorded_serial: u64,
     generation: u64,
     /// Its content is one drawing with a paint (`single_drawing`): an alpha layer around it
     /// fades that paint, not overlapping.
@@ -812,6 +866,7 @@ pub fn write_display_list(
     out: &mut Writer,
 ) {
     out.bytes.clear();
+    resources.begin_write();
     cache.generation += 1;
     cache.copied = 0;
     cache.copied_ahead = 0;
@@ -848,6 +903,7 @@ pub fn write_groups_ahead(
     out: &mut Writer,
 ) {
     out.bytes.clear();
+    resources.begin_write();
     cache.copied = 0;
     cache.copied_ahead = 0;
     cache.written = 0;
@@ -1106,16 +1162,18 @@ impl<'a> Serializer<'a> {
         self.out.u32(0);
         // No fold spans a group's edge: the ones open here end before it.
         let folds = std::mem::take(&mut self.folds);
-        let redefinitions = self.resources.redefinitions;
+        let named = self.resources.named.len();
         self.write_recording(&group.content, index + 1);
-        // A path it draws defined again under its id (changed in place, D532): the same bytes
-        // draw other contents, so its version tells the replayer to record it again.
-        let redefined = self.resources.redefinitions != redefinitions;
         self.folds = folds;
         let length = (self.out.bytes.len() - length_at - 4) as u32;
         self.out.bytes[length_at..length_at + 4].copy_from_slice(&length.to_le_bytes());
         let record = self.cache.records.entry(group.key).or_default();
         let content = length_at + 4;
+        // A path it names defined again since its bytes were recorded (changed in place, D532,
+        // by this write or an earlier one): the same bytes draw other contents, so its version
+        // tells the replayer to record it again.
+        let redefined =
+            self.resources.defined_after(&self.resources.named[named..], record.recorded_serial);
         let unchanged = !redefined
             && !record.bytes.is_empty()
             && record.bytes.len() == self.out.bytes.len() - at
@@ -1129,6 +1187,7 @@ impl<'a> Serializer<'a> {
                 .copy_from_slice(&((version >> 32) as u32).to_le_bytes());
         } else {
             record.written_version = group.version;
+            record.recorded_serial = self.resources.serial();
             record.bytes.clear();
             record.bytes.extend_from_slice(&self.out.bytes[at..]);
         }
@@ -1544,16 +1603,14 @@ mod tests {
             at += match tag {
                 tag::DROP_PATH | tag::DROP_IMAGE => 5,
                 tag::DEFINE_IMAGE => 17 + read_u32(bytes, at + 13) as usize,
-                // An id, a fill type, no operation, a count, and a triangle's 4 commands.
-                tag::DEFINE_PATH => 11 + 3 * 9 + 1,
+                // An id, a fill type, no step, a count, and a triangle's 4 commands.
+                tag::DEFINE_PATH => 14 + 3 * 9 + 1,
                 other => panic!("not a resource change: {other}"),
             };
         }
         tags
     }
 
-    /// Drops come before definitions (D410): a path replaced each frame frees its Kotlin `Path`
-    /// for the replacement's definition, in the same frame.
     /// A frame drawing `path`'s contents now, written, the list returned (holding them).
     fn frame_drawing(resources: &mut Resources, path: &Path) -> DisplayList {
         let mut list = DisplayList::default();
@@ -1598,6 +1655,50 @@ mod tests {
         assert_eq!(pending.bytes, [&[tag::DROP_PATH][..], &id.to_le_bytes()].concat());
     }
 
+    /// A path's operation is in its definition as steps (D535), its operands' contents inline:
+    /// the bytes `Replayer.kt` reads.
+    #[test]
+    fn an_operations_steps_are_in_its_definition() {
+        let (square, inner) = (Path::new(), Path::new());
+        square.add_rect(Rect::new(0.0, 0.0, 4.0, 4.0));
+        inner.add_rect(Rect::new(1.0, 1.0, 2.0, 2.0));
+        let framed = Path::combine(PathOperation::Difference, &square, &inner);
+        framed.line_to(9.0, 9.0);
+        let mut resources = Resources::default();
+        let _list = frame_drawing(&mut resources, &framed);
+        let mut out = Writer::default();
+        resources.write_pending(&mut out);
+        let mut expected = Writer::default();
+        expected.u8(tag::DEFINE_PATH);
+        expected.u32(read_u32(&out.bytes, 1));
+        expected.u8(1); // even-odd, as the result of Skia's path ops
+        expected.u32(3);
+        for (left, right) in [(0.0, 4.0), (1.0, 2.0)] {
+            expected.u8(step::PUSH);
+            expected.u8(0);
+            expected.u32(0);
+            expected.u32(5);
+            let corners = [(left, left), (left, right), (right, right), (right, left)];
+            for (index, (x, y)) in corners.into_iter().enumerate() {
+                // Counterclockwise from the top left: down the left side first.
+                expected.u8(if index == 0 { command::MOVE_TO } else { command::LINE_TO });
+                expected.f32(if index == 2 || index == 3 { right } else { left });
+                expected.f32(if index == 1 || index == 2 { right } else { left });
+                let _ = (x, y);
+            }
+            expected.u8(command::CLOSE);
+        }
+        expected.u8(step::COMBINE);
+        expected.u8(0); // a difference
+        expected.u32(1);
+        expected.u8(command::LINE_TO);
+        expected.f32(9.0);
+        expected.f32(9.0);
+        assert_eq!(out.bytes, expected.bytes);
+    }
+
+    /// Drops come before definitions (D410): a path replaced each frame frees its Kotlin `Path`
+    /// for the replacement's definition, in the same frame.
     #[test]
     fn drops_come_before_definitions() {
         let mut resources = Resources::default();

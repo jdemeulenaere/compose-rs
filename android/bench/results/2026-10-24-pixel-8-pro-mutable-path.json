@@ -1,7 +1,7 @@
 {
  "device": "Pixel 8 Pro",
  "compile": "speed",
- "note": "D530-D535: a mutable Path. Interleaved A/B, traced as measure.py traces (sched_waking added, no power rails). stress_animation: 6 runs each; scroll (feed): 4 runs each.",
+ "note": "D530-D535: a mutable Path. Interleaved A/B, traced as measure.py traces (sched_waking added, no power rails). stress_animation: 6 runs each; scroll (feed): 4 runs each. The device ran the first version (before the review fixes, which keep the waves' path flow).",
  "variants": {
   "main": "b847ddd",
   "new": "b847ddd + D530-D535 (the mutable Path)",
@@ -9,7 +9,7 @@
   "compose": "bench-compose at b847ddd (Compose 1.12.1)"
  },
  "headless": {
-  "note": "benchmarks/benches/animation.rs on the Mac, criterion means, one run each",
+  "note": "benchmarks/benches/animation.rs on the Mac, criterion means, one run each; new re-measured after the review fixes",
   "main": {
    "stress_animation_frame_us": 109.51,
    "frame_and_serialize_us": 132.02,
@@ -18,11 +18,11 @@
    "resource_change_bytes_per_frame": 22800
   },
   "new": {
-   "stress_animation_frame_us": 105.21,
-   "frame_and_serialize_us": 122.48,
-   "frame_and_serialize_p99_us": 146.4,
-   "bytes_taken_per_frame": 47085,
-   "resource_change_bytes_per_frame": 22600
+   "stress_animation_frame_us": 105.14,
+   "frame_and_serialize_us": 122.56,
+   "frame_and_serialize_p99_us": 133.6,
+   "bytes_taken_per_frame": 47235,
+   "resource_change_bytes_per_frame": 22750
   }
  },
  "summary": {

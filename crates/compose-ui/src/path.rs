@@ -4,14 +4,13 @@
 //! A [`Path`] is mutable and shared, as Compose's (D530): remembered once and reset in a drawing
 //! block each frame, as Compose code does. Drawing it records its contents as they are then, a
 //! [`PathData`] that never changes once shared: a recording keeps what it drew, as a render node
-//! keeps its copy of an `android.graphics.Path`. Each change gives the path a new generation, so
-//! a platform keeping a path by identity (Android's replayer) redefines it in place, and a
-//! drawing whose path changed after it was recorded is drawn again (D531).
+//! keeps its copy of an `android.graphics.Path` (D531). Each change gives the path a new
+//! generation, so a platform keeping a path by identity (Android's replayer) redefines it in
+//! place (D532).
 
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::sync::Weak;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::unit::{Offset, Rect};
@@ -108,20 +107,120 @@ impl CornerRadius {
     }
 }
 
+/// A transform of 2D points as Compose's `Matrix`: 4 × 4 values, column-major (`values[col * 4 +
+/// row]`), as Compose's `Matrix.values`; a point (x, y) maps to (x', y') through the first,
+/// second and fourth rows, divided by w (the fourth) when it isn't 1.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct Matrix {
+    pub values: [f32; 16],
+}
+
+impl Default for Matrix {
+    fn default() -> Matrix {
+        Matrix::new()
+    }
+}
+
+impl Matrix {
+    /// The identity, as `Matrix()`.
+    pub const fn new() -> Matrix {
+        let mut values = [0.0; 16];
+        values[0] = 1.0;
+        values[5] = 1.0;
+        values[10] = 1.0;
+        values[15] = 1.0;
+        Matrix { values }
+    }
+
+    /// A move by (`x`, `y`).
+    pub fn translation(x: f32, y: f32) -> Matrix {
+        let mut matrix = Matrix::new();
+        matrix.values[12] = x;
+        matrix.values[13] = y;
+        matrix
+    }
+
+    /// A scale by `x` and `y` around the origin.
+    pub fn scaling(x: f32, y: f32) -> Matrix {
+        let mut matrix = Matrix::new();
+        matrix.values[0] = x;
+        matrix.values[5] = y;
+        matrix
+    }
+
+    /// A rotation by `degrees` (clockwise, y down) around the origin, as `rotateZ`.
+    pub fn rotation(degrees: f32) -> Matrix {
+        let (sin, cos) = degrees.to_radians().sin_cos();
+        let mut matrix = Matrix::new();
+        matrix.values[0] = cos;
+        matrix.values[1] = sin;
+        matrix.values[4] = -sin;
+        matrix.values[5] = cos;
+        matrix
+    }
+
+    /// Where `point` goes, as `map(Offset)`.
+    pub fn map(&self, point: Offset) -> Offset {
+        let v = &self.values;
+        let x = v[0] * point.x + v[4] * point.y + v[12];
+        let y = v[1] * point.x + v[5] * point.y + v[13];
+        let w = v[3] * point.x + v[7] * point.y + v[15];
+        if w == 1.0 || w == 0.0 { Offset::new(x, y) } else { Offset::new(x / w, y / w) }
+    }
+}
+
 /// Each path's identity: a path keeps it while it changes (Android's replayer keeps one
-/// `android.graphics.Path` per identity and generation it was drawn at).
+/// `android.graphics.Path` per identity and generation it was drawn at). 0 is the operands'
+/// contents of a path's steps, which are no path's.
 static NEXT_IDENTITY: AtomicU64 = AtomicU64::new(1);
 
-/// What a path holds at one generation: its commands, fill type, and the operation it starts
-/// with, if any. Shared (`Arc`) by what drew it, it never changes: a [`Path`] changed after
-/// drawing gets new contents, with the same [`id`](PathData::id) and a new
-/// [`generation`](PathData::generation).
-#[derive(Clone, Debug)]
+/// Computes [`Path::op`] when it's called: the platform's path operations (desktop: Skia's,
+/// installed by compose-skia), given the operation and both operands' contents, returning the
+/// result's commands and fill type, or `None` if it fails. Without one (Android, whose path
+/// operations are in its replayer, and headless tests), a path keeps the operation as steps
+/// that each platform computes when it draws them (D535).
+pub type PathOperator =
+    fn(PathOperation, &PathData, &PathData) -> Option<(Vec<PathCommand>, PathFillType)>;
+
+static PATH_OPERATOR: std::sync::OnceLock<PathOperator> = std::sync::OnceLock::new();
+
+/// Installs the platform's path operations ([`PathOperator`]): the first installed stays.
+pub fn set_path_operator(operator: PathOperator) {
+    let _ = PATH_OPERATOR.set(operator);
+}
+
+/// One step of the operations a path's contents start with (D535): a stack machine whose
+/// steps leave one path, to which the contents' commands are added, then their fill type set.
+/// As Compose's `Path.op` on Android leaves to `android.graphics.Path.op`, these are computed by
+/// the platform drawing them, where no [`PathOperator`] computed them when they were made.
+#[derive(Debug, PartialEq)]
+pub enum PathStep {
+    /// Pushes contents that have no steps of their own.
+    Push(Arc<PathData>),
+    /// Pops the top two paths and pushes the first (below) combined with the second by the
+    /// operation, as `Path.op(path1, path2, operation)`.
+    Combine(PathOperation),
+    /// Pops the top path and adds its contours to the one below, as `addPath`.
+    Add,
+    /// Sets the top path's fill type.
+    SetFillType(PathFillType),
+}
+
+/// What a path holds at one generation: its steps (operations, D535), commands and fill type.
+/// Shared (`Arc`) by what drew it, it never changes: a [`Path`] changed after drawing gets new
+/// contents, with the same [`id`](PathData::id) and a new [`generation`](PathData::generation).
+/// Not `Clone`: contents are known by their identity and generation, which a copy would share.
+///
+/// ```compile_fail
+/// let path = compose_ui::Path::new();
+/// let copy: compose_ui::PathData = (*path.data()).clone();
+/// ```
+#[derive(Debug)]
 pub struct PathData {
     id: u64,
     generation: u64,
     fill_type: PathFillType,
-    operands: Option<Arc<PathOperands>>,
+    steps: Vec<PathStep>,
     commands: Vec<PathCommand>,
     /// Where the next relative command starts: the last command's end.
     current: Offset,
@@ -132,36 +231,63 @@ pub struct PathData {
     has_current: bool,
 }
 
-/// [`Path::op`]'s operands: the path's contents start with `path1` combined with `path2` by
-/// `operation`, which each platform computes (Skia's path ops, `android.graphics.Path.op`), as
-/// Compose's `Path.op` leaves to its platform's path.
-#[derive(Debug, PartialEq)]
-pub struct PathOperands {
-    pub operation: PathOperation,
-    pub path1: Arc<PathData>,
-    pub path2: Arc<PathData>,
-}
-
 /// Contents only: two paths' contents are equal whatever their identities and generations.
 impl PartialEq for PathData {
     fn eq(&self, other: &Self) -> bool {
         self.fill_type == other.fill_type
             && self.commands == other.commands
-            && self.operands == other.operands
+            && self.steps == other.steps
     }
 }
 
 impl PathData {
     fn empty() -> PathData {
+        PathData::with_id(NEXT_IDENTITY.fetch_add(1, Ordering::Relaxed))
+    }
+
+    fn with_id(id: u64) -> PathData {
         PathData {
-            id: NEXT_IDENTITY.fetch_add(1, Ordering::Relaxed),
+            id,
             generation: 0,
             fill_type: PathFillType::NonZero,
-            operands: None,
+            steps: Vec::new(),
             commands: Vec::new(),
             current: Offset::ZERO,
             contour_start: Offset::ZERO,
             has_current: false,
+        }
+    }
+
+    /// Contents of no path (identity 0), holding `commands`: an operand's.
+    fn operand(commands: Vec<PathCommand>, fill_type: PathFillType) -> PathData {
+        let mut data = PathData::with_id(0);
+        data.fill_type = fill_type;
+        for command in commands {
+            data.push(command);
+        }
+        data
+    }
+
+    /// A copy under the same identity, a generation further: the start of a change.
+    fn next_generation(&self) -> PathData {
+        PathData {
+            id: self.id,
+            generation: self.generation + 1,
+            fill_type: self.fill_type,
+            steps: self
+                .steps
+                .iter()
+                .map(|step| match step {
+                    PathStep::Push(data) => PathStep::Push(Arc::clone(data)),
+                    PathStep::Combine(operation) => PathStep::Combine(*operation),
+                    PathStep::Add => PathStep::Add,
+                    PathStep::SetFillType(fill_type) => PathStep::SetFillType(*fill_type),
+                })
+                .collect(),
+            commands: self.commands.clone(),
+            current: self.current,
+            contour_start: self.contour_start,
+            has_current: self.has_current,
         }
     }
 
@@ -179,66 +305,129 @@ impl PathData {
         self.fill_type
     }
 
-    /// The commands, drawn after the operation's result if there is one.
+    /// The operations' steps its contents start with (empty: none), D535.
+    pub fn steps(&self) -> &[PathStep] {
+        &self.steps
+    }
+
+    /// The commands, added after its steps' result if it has steps.
     pub fn commands(&self) -> &[PathCommand] {
         &self.commands
     }
 
-    /// The operation whose result the path starts with ([`Path::op`]).
-    pub fn operands(&self) -> Option<&PathOperands> {
-        self.operands.as_deref()
+    /// Runs its steps (iteratively, however many: an operand's contents have none) with
+    /// `push` making a value of an operand's contents, `combine` combining two, `add` adding the
+    /// second to the first and `fill` setting a fill type; `None` without steps.
+    pub fn evaluate_steps<T>(
+        &self,
+        mut push: impl FnMut(&PathData) -> T,
+        mut combine: impl FnMut(T, T, PathOperation) -> T,
+        mut add: impl FnMut(T, T) -> T,
+        mut fill: impl FnMut(&mut T, PathFillType),
+    ) -> Option<T> {
+        let mut stack: Vec<T> = Vec::new();
+        for step in &self.steps {
+            match step {
+                PathStep::Push(data) => stack.push(push(data)),
+                PathStep::Combine(operation) => {
+                    let second = stack.pop()?;
+                    let first = stack.pop()?;
+                    stack.push(combine(first, second, *operation));
+                }
+                PathStep::Add => {
+                    let second = stack.pop()?;
+                    let first = stack.pop()?;
+                    stack.push(add(first, second));
+                }
+                PathStep::SetFillType(fill_type) => fill(stack.last_mut()?, *fill_type),
+            }
+        }
+        stack.pop()
     }
 
-    /// Whether it draws nothing: no command, no operation.
+    /// Whether it draws nothing, as `isEmpty`: no command, and steps whose result is known to
+    /// be empty (a union of empty paths, an intersection of paths whose bounds don't meet, a
+    /// difference from an empty path). A result empty for another reason (a path less itself)
+    /// isn't known before a platform computes it: where Skia computes operations when they're
+    /// made (desktop), that's exact.
     pub fn is_empty(&self) -> bool {
-        self.commands.is_empty() && self.operands.is_none()
+        if !self.commands.is_empty() {
+            return false;
+        }
+        self.steps_bounds().is_none()
+    }
+
+    /// The bounds of its steps' result as their operands' bounds tell (`None`: empty, or no
+    /// steps).
+    fn steps_bounds(&self) -> Option<Rect> {
+        let bounds = |data: &PathData| commands_bounds(&data.commands);
+        self.evaluate_steps(bounds, combined_bounds, union, |_, _| {}).flatten()
     }
 
     /// The bounds of its points, curves' control points included, as `getBounds` (Skia's and
-    /// Android's: not the curves' tight bounds). An operation's result is bounded by its operands'
-    /// bounds as the operation combines them (the first's for a difference, both for an
-    /// intersection): its own may be smaller. Empty: all zeros.
+    /// Android's: not the curves' tight bounds). Steps not computed yet (D535) are bounded by
+    /// their operands' bounds as the operations combine them (the first's for a difference, the
+    /// overlap for an intersection), which may be larger than the result's. Empty: all zeros.
     pub fn bounds(&self) -> Rect {
-        let mut bounds: Option<Rect> = self.operands.as_ref().and_then(|operands| {
-            let (first, second) =
-                (operands.path1.bounds_or_none(), operands.path2.bounds_or_none());
-            match operands.operation {
-                PathOperation::Difference => first,
-                PathOperation::ReverseDifference => second,
-                PathOperation::Intersect => match (first, second) {
-                    (Some(a), Some(b)) => {
-                        let rect = Rect::new(
-                            a.left.max(b.left),
-                            a.top.max(b.top),
-                            a.right.min(b.right),
-                            a.bottom.min(b.bottom),
-                        );
-                        (rect.left <= rect.right && rect.top <= rect.bottom).then_some(rect)
-                    }
-                    _ => None,
-                },
-                PathOperation::Union | PathOperation::Xor => union(first, second),
-            }
-        });
-        for command in &self.commands {
-            let points: &[Offset] = match command {
-                PathCommand::MoveTo(point) | PathCommand::LineTo(point) => {
-                    std::slice::from_ref(point)
-                }
-                PathCommand::QuadTo(control, end) => &[*control, *end],
-                PathCommand::CubicTo(first, second, end) => &[*first, *second, *end],
-                PathCommand::Close => &[],
-            };
-            for point in points {
-                let rect = Rect::new(point.x, point.y, point.x, point.y);
-                bounds = union(bounds, Some(rect));
-            }
-        }
-        bounds.unwrap_or(Rect::new(0.0, 0.0, 0.0, 0.0))
+        union(self.steps_bounds(), commands_bounds(&self.commands))
+            .unwrap_or(Rect::new(0.0, 0.0, 0.0, 0.0))
     }
 
-    fn bounds_or_none(&self) -> Option<Rect> {
-        (!self.is_empty()).then(|| self.bounds())
+    /// Whether it's one convex contour, as `isConvex`: its points (curves' control points
+    /// included) turn one way. Contents with steps aren't known to be (false), as Android's
+    /// before its path computes.
+    pub fn is_convex(&self) -> bool {
+        if !self.steps.is_empty() {
+            return false;
+        }
+        let mut points: Vec<Offset> = Vec::new();
+        for (index, command) in self.commands.iter().enumerate() {
+            match command {
+                PathCommand::MoveTo(point) => {
+                    // A second contour (a move after drawing) isn't one convex shape.
+                    if index > 0 && points.len() > 1 {
+                        return false;
+                    }
+                    points.clear();
+                    points.push(*point);
+                }
+                PathCommand::LineTo(point) => points.push(*point),
+                PathCommand::QuadTo(control, end) => points.extend([*control, *end]),
+                PathCommand::CubicTo(first, second, end) => points.extend([*first, *second, *end]),
+                PathCommand::Close => {}
+            }
+        }
+        points.dedup();
+        if points.len() > 1 && points.first() == points.last() {
+            points.pop();
+        }
+        if points.len() < 3 {
+            return !points.is_empty();
+        }
+        let (mut sign, mut turned) = (0.0f32, 0.0f32);
+        let count = points.len();
+        for index in 0..count {
+            let (a, b, c) =
+                (points[index], points[(index + 1) % count], points[(index + 2) % count]);
+            let cross = (b.x - a.x) * (c.y - b.y) - (b.y - a.y) * (c.x - b.x);
+            if cross != 0.0 {
+                if sign != 0.0 && cross.signum() != sign {
+                    return false;
+                }
+                sign = cross.signum();
+            }
+            let (first, second) = ((b.y - a.y).atan2(b.x - a.x), (c.y - b.y).atan2(c.x - b.x));
+            let mut turn = second - first;
+            while turn > std::f32::consts::PI {
+                turn -= std::f32::consts::TAU;
+            }
+            while turn < -std::f32::consts::PI {
+                turn += std::f32::consts::TAU;
+            }
+            turned += turn;
+        }
+        // Once round, not a star turning the same way twice.
+        turned.abs() < 1.5 * std::f32::consts::TAU
     }
 
     fn push(&mut self, command: PathCommand) {
@@ -308,6 +497,107 @@ impl PathData {
             angle = next;
         }
     }
+
+    /// Appends steps pushing `data` as an operand: its contents if it has no steps (shared),
+    /// else its steps, its commands added, its fill type set.
+    fn push_operand(steps: &mut Vec<PathStep>, data: &Arc<PathData>) {
+        if data.steps.is_empty() {
+            steps.push(PathStep::Push(Arc::clone(data)));
+            return;
+        }
+        steps.extend(data.steps.iter().map(|step| match step {
+            PathStep::Push(data) => PathStep::Push(Arc::clone(data)),
+            PathStep::Combine(operation) => PathStep::Combine(*operation),
+            PathStep::Add => PathStep::Add,
+            PathStep::SetFillType(fill_type) => PathStep::SetFillType(*fill_type),
+        }));
+        if !data.commands.is_empty() {
+            steps.push(PathStep::Push(Arc::new(PathData::operand(
+                data.commands.clone(),
+                data.fill_type,
+            ))));
+            steps.push(PathStep::Add);
+        }
+        steps.push(PathStep::SetFillType(data.fill_type));
+    }
+
+    /// These contents with every point mapped by `map`: their commands, and their operands'.
+    fn mapped(&self, map: &impl Fn(Offset) -> Offset) -> PathData {
+        let mut data = self.next_generation();
+        data.commands = self.commands.iter().map(|command| map_command(command, map)).collect();
+        for step in &mut data.steps {
+            if let PathStep::Push(operand) = step {
+                *step = PathStep::Push(Arc::new(PathData::operand(
+                    operand.commands.iter().map(|command| map_command(command, map)).collect(),
+                    operand.fill_type,
+                )));
+            }
+        }
+        data.current = map(self.current);
+        data.contour_start = map(self.contour_start);
+        data
+    }
+}
+
+fn map_command(command: &PathCommand, map: &impl Fn(Offset) -> Offset) -> PathCommand {
+    match *command {
+        PathCommand::MoveTo(point) => PathCommand::MoveTo(map(point)),
+        PathCommand::LineTo(point) => PathCommand::LineTo(map(point)),
+        PathCommand::QuadTo(control, end) => PathCommand::QuadTo(map(control), map(end)),
+        PathCommand::CubicTo(first, second, end) => {
+            PathCommand::CubicTo(map(first), map(second), map(end))
+        }
+        PathCommand::Close => PathCommand::Close,
+    }
+}
+
+/// The bounds of `commands`' points (control points included), `None` without any.
+fn commands_bounds(commands: &[PathCommand]) -> Option<Rect> {
+    let mut bounds: Option<Rect> = None;
+    let mut include = |point: &Offset| {
+        bounds = union(bounds, Some(Rect::new(point.x, point.y, point.x, point.y)));
+    };
+    for command in commands {
+        match command {
+            PathCommand::MoveTo(point) | PathCommand::LineTo(point) => include(point),
+            PathCommand::QuadTo(control, end) => {
+                include(control);
+                include(end);
+            }
+            PathCommand::CubicTo(first, second, end) => {
+                include(first);
+                include(second);
+                include(end);
+            }
+            PathCommand::Close => {}
+        }
+    }
+    bounds
+}
+
+/// Bounds of `first` combined with `second` by `operation`, from theirs (`None`: empty).
+fn combined_bounds(
+    first: Option<Rect>,
+    second: Option<Rect>,
+    operation: PathOperation,
+) -> Option<Rect> {
+    match operation {
+        PathOperation::Difference => first,
+        PathOperation::ReverseDifference => second,
+        PathOperation::Intersect => match (first, second) {
+            (Some(a), Some(b)) => {
+                let rect = Rect::new(
+                    a.left.max(b.left),
+                    a.top.max(b.top),
+                    a.right.min(b.right),
+                    a.bottom.min(b.bottom),
+                );
+                (rect.left <= rect.right && rect.top <= rect.bottom).then_some(rect)
+            }
+            _ => None,
+        },
+        PathOperation::Union | PathOperation::Xor => union(first, second),
+    }
 }
 
 fn union(first: Option<Rect>, second: Option<Rect>) -> Option<Rect> {
@@ -331,19 +621,12 @@ fn union(first: Option<Rect>, second: Option<Rect>) -> Option<Rect> {
 /// ([`data`](Path::data), an `Arc<PathData>`) can go anywhere.
 ///
 /// Drawing it (`DrawScope::draw_path`, `clip_path`) records its contents as they are then, so a
-/// path reset and rebuilt between two draws, in the same block or another, draws each shape it had.
-/// A drawing whose path changed after it was recorded is drawn again in the next frame (D531).
+/// path reset and rebuilt between two draws, in the same block or another, draws each shape it
+/// had, and a recording keeps what it drew until it's drawn again, as a render node keeps its
+/// copy of an `android.graphics.Path` (D531): changing a path draws nothing again, as in Compose.
 #[derive(Clone)]
 pub struct Path {
-    cell: Rc<PathCell>,
-}
-
-/// What a path's clones share.
-struct PathCell {
-    contents: RefCell<Arc<PathData>>,
-    /// The contents' generation, which a recording that drew them follows without holding the
-    /// path (`WeakPath`, `Send` and `Sync` as the display list is).
-    generation: Arc<AtomicU64>,
+    contents: Rc<RefCell<Arc<PathData>>>,
 }
 
 impl Default for Path {
@@ -354,14 +637,14 @@ impl Default for Path {
 
 impl std::fmt::Debug for Path {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.debug_tuple("Path").field(&*self.cell.contents.borrow()).finish()
+        formatter.debug_tuple("Path").field(&*self.contents.borrow()).finish()
     }
 }
 
 /// By identity, as a Kotlin reference: the same path, whatever it holds.
 impl compose_runtime::ComposeArg for Path {
     fn same(&self, other: &Self) -> bool {
-        Rc::ptr_eq(&self.cell, &other.cell)
+        Rc::ptr_eq(&self.contents, &other.contents)
     }
 }
 
@@ -372,86 +655,82 @@ impl Path {
     }
 
     fn from_data(data: PathData) -> Path {
-        let generation = Arc::new(AtomicU64::new(data.generation));
-        Path { cell: Rc::new(PathCell { contents: RefCell::new(Arc::new(data)), generation }) }
+        Path { contents: Rc::new(RefCell::new(Arc::new(data))) }
     }
 
     /// Its contents now, shared: what drawing it records. They never change; the path's later
     /// changes are new contents.
     pub fn data(&self) -> Arc<PathData> {
-        Arc::clone(&self.cell.contents.borrow())
+        Arc::clone(&self.contents.borrow())
     }
 
     /// Its identity: the same for every clone, and kept as it changes.
     pub fn id(&self) -> u64 {
-        self.cell.contents.borrow().id
+        self.contents.borrow().id
     }
 
     /// Its generation: changed by each change.
     pub fn generation(&self) -> u64 {
-        self.cell.contents.borrow().generation
+        self.contents.borrow().generation
     }
 
     /// Whether it is the same path as `other` (a clone of it), as Kotlin's `===`.
     pub fn ptr_eq(&self, other: &Path) -> bool {
-        Rc::ptr_eq(&self.cell, &other.cell)
-    }
-
-    pub(crate) fn downgrade(&self) -> WeakPath {
-        WeakPath(Arc::downgrade(&self.cell.generation))
+        Rc::ptr_eq(&self.contents, &other.contents)
     }
 
     /// Changes its contents through `change`, in place when nothing else holds them (nothing
     /// drew them, or what did is gone), else in a copy: what drew them keeps them.
     fn edit<R>(&self, change: impl FnOnce(&mut PathData) -> R) -> R {
-        let mut contents = self.cell.contents.borrow_mut();
-        if Arc::get_mut(&mut contents).is_none() {
-            *contents = Arc::new((**contents).clone());
+        let mut contents = self.contents.borrow_mut();
+        match Arc::get_mut(&mut contents) {
+            Some(data) => data.generation += 1,
+            None => *contents = Arc::new(contents.next_generation()),
         }
-        let data = Arc::get_mut(&mut contents).expect("unique contents");
-        data.generation += 1;
-        self.cell.generation.store(data.generation, Ordering::Relaxed);
-        change(data)
+        change(Arc::get_mut(&mut contents).expect("unique contents"))
+    }
+
+    /// Replaces its contents, a generation further, by `data` (its identity and generation set
+    /// here).
+    fn replace(&self, mut data: PathData) {
+        let mut contents = self.contents.borrow_mut();
+        data.id = contents.id;
+        data.generation = contents.generation + 1;
+        *contents = Arc::new(data);
     }
 
     /// Empties it, as `edit` changes it, without copying what it held; keeps its fill type if
     /// `keep_fill_type`.
     fn clear(&self, keep_fill_type: bool) {
-        let mut contents = self.cell.contents.borrow_mut();
+        let mut contents = self.contents.borrow_mut();
         let fill_type = if keep_fill_type { contents.fill_type } else { PathFillType::NonZero };
         let cleared = |data: &mut PathData| {
-            data.generation += 1;
             data.fill_type = fill_type;
-            data.operands = None;
+            data.steps.clear();
             data.commands.clear();
             data.current = Offset::ZERO;
             data.contour_start = Offset::ZERO;
             data.has_current = false;
         };
         match Arc::get_mut(&mut contents) {
-            Some(data) => cleared(data),
+            Some(data) => {
+                data.generation += 1;
+                cleared(data);
+            }
             None => {
-                let mut data = PathData {
-                    id: contents.id,
-                    generation: contents.generation,
-                    fill_type,
-                    operands: None,
-                    // The room the last contents took: a path rebuilt each frame grows once.
-                    commands: Vec::with_capacity(contents.commands.capacity()),
-                    current: Offset::ZERO,
-                    contour_start: Offset::ZERO,
-                    has_current: false,
-                };
+                let mut data = PathData::with_id(contents.id);
+                data.generation = contents.generation + 1;
+                // The room the last contents took: a path rebuilt each frame grows once.
+                data.commands = Vec::with_capacity(contents.commands.capacity());
                 cleared(&mut data);
                 *contents = Arc::new(data);
             }
         }
-        self.cell.generation.store(contents.generation, Ordering::Relaxed);
     }
 
     /// Which points are inside it, as `fillType`.
     pub fn fill_type(&self) -> PathFillType {
-        self.cell.contents.borrow().fill_type
+        self.contents.borrow().fill_type
     }
 
     /// Sets which points are inside it, as `fillType = …`.
@@ -461,15 +740,20 @@ impl Path {
         }
     }
 
-    /// Whether it draws nothing, as `isEmpty`.
+    /// Whether it draws nothing, as `isEmpty`: see [`PathData::is_empty`].
     pub fn is_empty(&self) -> bool {
-        self.cell.contents.borrow().is_empty()
+        self.contents.borrow().is_empty()
+    }
+
+    /// Whether it's one convex contour, as `isConvex`: see [`PathData::is_convex`].
+    pub fn is_convex(&self) -> bool {
+        self.contents.borrow().is_convex()
     }
 
     /// The bounds of its points (curves' control points included), as `getBounds`: see
     /// [`PathData::bounds`].
     pub fn get_bounds(&self) -> Rect {
-        self.cell.contents.borrow().bounds()
+        self.contents.borrow().bounds()
     }
 
     /// Empties it, keeping its fill type, as `reset` (Android's: its storage is kept here too,
@@ -575,13 +859,38 @@ impl Path {
         self.edit(|data| data.arc(rect, start_angle_radians, sweep_angle_radians, force_move_to));
     }
 
-    /// An arc of the oval in `oval` as a contour of its own, as `addArc`.
+    /// An arc of the oval in `oval` as a contour of its own, as `addArc`: nothing for an empty
+    /// oval or no sweep, and a whole turn from a quarter's angle (0, 90, …) the closed oval, as
+    /// Skia's.
     pub fn add_arc(&self, oval: Rect, start_angle_degrees: f32, sweep_angle_degrees: f32) {
+        if oval.width() <= 0.0 || oval.height() <= 0.0 || sweep_angle_degrees == 0.0 {
+            return;
+        }
+        let quarters = start_angle_degrees / 90.0;
+        if sweep_angle_degrees.abs() >= 360.0 && (quarters - quarters.round()).abs() < 1e-4 {
+            let sweep = std::f32::consts::TAU.copysign(sweep_angle_degrees);
+            let start = quarters.round() * std::f32::consts::FRAC_PI_2;
+            self.edit(|data| {
+                data.arc(oval, start, sweep, true);
+                data.push(PathCommand::Close);
+            });
+            return;
+        }
         self.add_arc_rad(oval, start_angle_degrees.to_radians(), sweep_angle_degrees.to_radians());
     }
 
     /// [`add_arc`](Path::add_arc) in radians, as `addArcRad`.
     pub fn add_arc_rad(&self, oval: Rect, start_angle_radians: f32, sweep_angle_radians: f32) {
+        let quarters = start_angle_radians / std::f32::consts::FRAC_PI_2;
+        if sweep_angle_radians.abs() >= std::f32::consts::TAU
+            && (quarters - quarters.round()).abs() < 1e-4
+        {
+            self.add_arc(oval, quarters.round() * 90.0, sweep_angle_radians.to_degrees());
+            return;
+        }
+        if oval.width() <= 0.0 || oval.height() <= 0.0 || sweep_angle_radians == 0.0 {
+            return;
+        }
         self.edit(|data| data.arc(oval, start_angle_radians, sweep_angle_radians, true));
     }
 
@@ -717,18 +1026,125 @@ impl Path {
         self.edit(|data| data.push(PathCommand::Close));
     }
 
+    /// Adds `path`'s contours moved by `offset`, as `addPath(path, offset)` (`path` may be this
+    /// one: its contents are taken first).
+    pub fn add_path(&self, path: &Path, offset: Offset) {
+        let other = path.data();
+        let other = if offset == Offset::ZERO {
+            other
+        } else {
+            Arc::new(other.mapped(&|point| point + offset))
+        };
+        if other.steps.is_empty() {
+            self.edit(|data| {
+                for command in &other.commands {
+                    data.push(*command);
+                }
+            });
+            return;
+        }
+        // Operations to add: this path's contents, then the other's, added (D535).
+        let this = self.data();
+        let mut steps = Vec::new();
+        PathData::push_operand(&mut steps, &this);
+        PathData::push_operand(&mut steps, &other);
+        steps.push(PathStep::Add);
+        let mut data = PathData::with_id(0);
+        data.steps = steps;
+        data.fill_type = this.fill_type;
+        drop(this);
+        self.replace(data);
+    }
+
+    /// Moves it by `offset`, as `translate`.
+    pub fn translate(&self, offset: Offset) {
+        if offset != Offset::ZERO {
+            let data = self.contents.borrow().mapped(&|point| point + offset);
+            self.replace(data);
+        }
+    }
+
+    /// Maps its points by `matrix`, as `transform`: exact for affine matrices; with
+    /// perspective, curves' control points are mapped (Skia subdivides them).
+    pub fn transform(&self, matrix: &Matrix) {
+        let data = self.contents.borrow().mapped(&|point| matrix.map(point));
+        self.replace(data);
+    }
+
     /// Sets it to `path1` combined with `path2` by `operation`, as `op` (either may be this path:
-    /// their contents are taken first). Its fill type becomes even-odd, as the result of Skia's
-    /// path ops. Returns `true`: each platform computes the result when it draws it (an operation
-    /// it can't do draws nothing there), where Compose's returns whether its platform could.
+    /// their contents are taken first).
+    ///
+    /// Where the platform computes operations ([`set_path_operator`]: desktop, Skia's path ops),
+    /// the result is computed now, its contents flat, as Compose's: if it fails, the path is
+    /// unchanged and this returns `false`, as Android's. Otherwise (Android, whose path
+    /// operations run in its replayer, and headless) the path keeps the operation as steps
+    /// (D535), computed by the platform drawing it, and this returns `true`; its fill type is
+    /// even-odd, as the result of Skia's path ops. A path combined with itself and another again
+    /// and again (a union of many shapes) adds two steps each time, in place.
     pub fn op(&self, path1: &Path, path2: &Path, operation: PathOperation) -> bool {
-        let operands =
-            Arc::new(PathOperands { operation, path1: path1.data(), path2: path2.data() });
-        self.clear(false);
-        self.edit(|data| {
-            data.fill_type = PathFillType::EvenOdd;
-            data.operands = Some(operands);
-        });
+        if let Some(operator) = PATH_OPERATOR.get() {
+            let (first, second) = (path1.data(), path2.data());
+            let Some((commands, fill_type)) = operator(operation, &first, &second) else {
+                return false;
+            };
+            drop((first, second));
+            self.replace(PathData::operand(commands, fill_type));
+            return true;
+        }
+        // The path combined with another: its steps continue, in place while nothing holds them.
+        let into_self = |other: &Path, operation: PathOperation| {
+            let other = other.data();
+            self.edit(|data| {
+                if data.steps.is_empty() {
+                    let commands = std::mem::take(&mut data.commands);
+                    let operand = PathData::operand(commands, data.fill_type);
+                    data.steps.push(PathStep::Push(Arc::new(operand)));
+                } else {
+                    // The top's fill type, the one its contents have, before it's combined.
+                    let fill_type = data.fill_type;
+                    let set = match data.steps.last() {
+                        Some(PathStep::Combine(_)) => fill_type != PathFillType::EvenOdd,
+                        Some(PathStep::SetFillType(last)) => *last != fill_type,
+                        _ => true,
+                    };
+                    if set {
+                        data.steps.push(PathStep::SetFillType(fill_type));
+                    }
+                }
+                PathData::push_operand(&mut data.steps, &other);
+                data.steps.push(PathStep::Combine(operation));
+                data.fill_type = PathFillType::EvenOdd;
+                data.current = Offset::ZERO;
+                data.contour_start = Offset::ZERO;
+                data.has_current = false;
+            });
+        };
+        let simple = |path: &Path| {
+            let contents = path.contents.borrow();
+            contents.commands.is_empty() || contents.steps.is_empty()
+        };
+        if path1.ptr_eq(self) && !path2.ptr_eq(self) && simple(self) {
+            into_self(path2, operation);
+            return true;
+        }
+        if path2.ptr_eq(self) && !path1.ptr_eq(self) && simple(self) {
+            // `other op self` is `self op' other`, for each operation.
+            let swapped = match operation {
+                PathOperation::Difference => PathOperation::ReverseDifference,
+                PathOperation::ReverseDifference => PathOperation::Difference,
+                other => other,
+            };
+            into_self(path1, swapped);
+            return true;
+        }
+        let (first, second) = (path1.data(), path2.data());
+        let mut data = PathData::with_id(0);
+        PathData::push_operand(&mut data.steps, &first);
+        PathData::push_operand(&mut data.steps, &second);
+        data.steps.push(PathStep::Combine(operation));
+        data.fill_type = PathFillType::EvenOdd;
+        drop((first, second));
+        self.replace(data);
         true
     }
 
@@ -743,29 +1159,6 @@ impl Path {
     /// relative, numbers separated by spaces, commas or signs), as Compose's `PathParser`.
     pub fn from_svg(data: &str) -> Result<Path, PathError> {
         parse_svg(data).map(Path::from_data)
-    }
-}
-
-/// A path that doesn't keep it alive, to ask its generation: what a recording notes of the paths
-/// it drew (D531).
-#[derive(Clone)]
-pub(crate) struct WeakPath(Weak<AtomicU64>);
-
-impl std::fmt::Debug for WeakPath {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str("WeakPath")
-    }
-}
-
-impl WeakPath {
-    /// Its generation now, or `None` once it's gone (it can't change any more).
-    pub(crate) fn generation(&self) -> Option<u64> {
-        self.0.upgrade().map(|generation| generation.load(Ordering::Relaxed))
-    }
-
-    /// The address it's known by, to sort and deduplicate.
-    pub(crate) fn address(&self) -> usize {
-        self.0.as_ptr() as usize
     }
 }
 
@@ -1318,26 +1711,154 @@ mod tests {
         assert!(matches!(path.data().commands()[3], PathCommand::MoveTo(_)));
     }
 
-    /// An operation keeps its operands' contents as they were, and bounds its result by them.
+    /// The kinds of `data`'s steps: 'p'ush, 'c'ombine, 'a'dd, 'f'ill.
+    fn kinds(data: &PathData) -> String {
+        data.steps()
+            .iter()
+            .map(|step| match step {
+                PathStep::Push(_) => 'p',
+                PathStep::Combine(_) => 'c',
+                PathStep::Add => 'a',
+                PathStep::SetFillType(_) => 'f',
+            })
+            .collect()
+    }
+
+    fn rect(left: f32, top: f32, right: f32, bottom: f32) -> Path {
+        let path = Path::new();
+        path.add_rect(Rect::new(left, top, right, bottom));
+        path
+    }
+
+    /// Without the platform's path operations (no `PathOperator`: Android, headless), an
+    /// operation keeps its operands' contents as they were as steps (D535), and bounds its result
+    /// by them.
     #[test]
-    fn an_operation_keeps_its_operands() {
-        let (first, second) = (Path::new(), Path::new());
-        first.add_rect(Rect::new(0.0, 0.0, 10.0, 10.0));
-        second.add_rect(Rect::new(5.0, 5.0, 20.0, 20.0));
+    fn an_operation_keeps_its_operands_as_steps() {
+        let (first, second) = (rect(0.0, 0.0, 10.0, 10.0), rect(5.0, 5.0, 20.0, 20.0));
         let path = Path::combine(PathOperation::Intersect, &first, &second);
         first.reset();
         let data = path.data();
-        let operands = data.operands().expect("operands");
-        assert_eq!(operands.operation, PathOperation::Intersect);
-        assert_eq!(operands.path1.commands().len(), 5);
+        assert_eq!(kinds(&data), "ppc");
+        let PathStep::Push(operand) = &data.steps()[0] else { panic!() };
+        assert_eq!((operand.commands().len(), operand.id()), (5, first.id()), "kept, shared");
+        assert_eq!(data.steps()[2], PathStep::Combine(PathOperation::Intersect));
         assert_eq!(path.fill_type(), PathFillType::EvenOdd);
         assert_eq!(path.get_bounds(), Rect::new(5.0, 5.0, 10.0, 10.0));
         // The path itself as an operand.
-        let rect = Path::new();
-        rect.add_rect(Rect::new(0.0, 0.0, 4.0, 4.0));
-        assert!(rect.op(&rect, &second, PathOperation::Union));
-        assert_eq!(rect.get_bounds(), Rect::new(0.0, 0.0, 20.0, 20.0));
-        rect.line_to(30.0, 30.0);
-        assert_eq!(rect.get_bounds(), Rect::new(0.0, 0.0, 30.0, 30.0));
+        let square = rect(0.0, 0.0, 4.0, 4.0);
+        assert!(square.op(&square, &second, PathOperation::Union));
+        assert_eq!(square.get_bounds(), Rect::new(0.0, 0.0, 20.0, 20.0));
+        square.line_to(30.0, 30.0);
+        assert_eq!(square.get_bounds(), Rect::new(0.0, 0.0, 30.0, 30.0));
+    }
+
+    /// A path combined with itself and another again and again (a union of many shapes) adds two
+    /// steps each time, in place when nothing holds its contents: the steps stay a flat list,
+    /// however long, and the other side's operation is flipped (`x - path` is `path` reversed
+    /// less `x`).
+    #[test]
+    fn a_chain_of_operations_stays_flat() {
+        let (union, shape) = (Path::new(), Path::new());
+        let mut pointer = None;
+        for index in 0..1000 {
+            shape.reset();
+            shape.add_rect(Rect::new(index as f32, 0.0, index as f32 + 1.0, 1.0));
+            union.op(&union, &shape, PathOperation::Union);
+            if index == 10 {
+                pointer = Some(Arc::as_ptr(&union.data()));
+            }
+        }
+        let data = union.data();
+        assert_eq!(data.steps().len(), 1 + 2 * 1000);
+        assert_eq!(Arc::as_ptr(&data), pointer.unwrap(), "changed in place");
+        assert!(data.steps().iter().all(|step| match step {
+            PathStep::Push(operand) => operand.steps().is_empty(),
+            _ => true,
+        }));
+        assert_eq!(union.get_bounds(), Rect::new(0.0, 0.0, 1000.0, 1.0));
+        let hole = rect(2.0, 0.0, 3.0, 1.0);
+        hole.op(&union, &hole, PathOperation::Difference);
+        // The first operand's steps inlined, its fill type set, then the hole and the operation.
+        assert_eq!(kinds(&hole.data()).len(), 2001 + 3);
+        let base = rect(0.0, 0.0, 1.0, 1.0);
+        let other = rect(5.0, 5.0, 6.0, 6.0);
+        base.op(&other, &base, PathOperation::Difference);
+        assert_eq!(base.data().steps()[2], PathStep::Combine(PathOperation::ReverseDifference));
+    }
+
+    /// An operation's result is known to be empty where its operands' bounds say it is.
+    #[test]
+    fn an_operation_is_empty_when_its_operands_say_so() {
+        let (a, b) = (rect(0.0, 0.0, 1.0, 1.0), rect(5.0, 5.0, 6.0, 6.0));
+        let empty = Path::new();
+        assert!(Path::combine(PathOperation::Intersect, &a, &b).is_empty());
+        assert!(!Path::combine(PathOperation::Union, &a, &b).is_empty());
+        assert!(Path::combine(PathOperation::Difference, &empty, &a).is_empty());
+        assert!(!Path::combine(PathOperation::Difference, &a, &b).is_empty());
+        assert!(Path::combine(PathOperation::Union, &empty, &empty).is_empty());
+    }
+
+    /// `add_path` adds another path's contours moved by an offset; `translate` and `transform`
+    /// move every point, an operation's operands too.
+    #[test]
+    fn paths_add_and_move() {
+        let (path, other) = (rect(0.0, 0.0, 1.0, 1.0), rect(0.0, 0.0, 2.0, 2.0));
+        path.add_path(&other, Offset::new(10.0, 0.0));
+        assert_eq!(path.get_bounds(), Rect::new(0.0, 0.0, 12.0, 2.0));
+        assert_eq!(path.data().commands().len(), 10);
+        path.translate(Offset::new(1.0, 1.0));
+        assert_eq!(path.get_bounds(), Rect::new(1.0, 1.0, 13.0, 3.0));
+        path.transform(&Matrix::scaling(2.0, 3.0));
+        assert_eq!(path.get_bounds(), Rect::new(2.0, 3.0, 26.0, 9.0));
+        let combined = Path::combine(PathOperation::Union, &rect(0.0, 0.0, 1.0, 1.0), &other);
+        combined.translate(Offset::new(5.0, 5.0));
+        assert_eq!(combined.get_bounds(), Rect::new(5.0, 5.0, 7.0, 7.0));
+        let added = rect(20.0, 20.0, 21.0, 21.0);
+        added.add_path(&combined, Offset::ZERO);
+        assert_eq!(kinds(&added.data()), "pppcfa");
+        assert_eq!(added.get_bounds(), Rect::new(5.0, 5.0, 21.0, 21.0));
+        let turned = rect(0.0, 0.0, 2.0, 1.0);
+        turned.transform(&Matrix::rotation(90.0));
+        let bounds = turned.get_bounds();
+        assert!(
+            (bounds.left + 1.0).abs() < 1e-5 && (bounds.bottom - 2.0).abs() < 1e-5,
+            "{bounds:?}"
+        );
+    }
+
+    /// Convexity, as `isConvex`: one contour turning one way.
+    #[test]
+    fn convex_paths_turn_one_way() {
+        assert!(rect(0.0, 0.0, 1.0, 1.0).is_convex());
+        let oval = Path::new();
+        oval.add_oval(Rect::new(0.0, 0.0, 4.0, 2.0));
+        assert!(oval.is_convex());
+        let arrow = Path::new();
+        for (x, y) in [(0.0, 0.0), (10.0, 0.0), (5.0, 5.0), (10.0, 10.0), (0.0, 10.0)] {
+            if x == 0.0 && y == 0.0 { arrow.move_to(x, y) } else { arrow.line_to(x, y) }
+        }
+        arrow.close();
+        assert!(!arrow.is_convex());
+        let two = rect(0.0, 0.0, 1.0, 1.0);
+        two.add_rect(Rect::new(5.0, 5.0, 6.0, 6.0));
+        assert!(!two.is_convex());
+    }
+
+    /// A whole turn of an arc from a quarter's angle is the closed oval, as Skia's `addArc`; none
+    /// for no sweep.
+    #[test]
+    fn a_whole_arc_is_the_closed_oval() {
+        let oval = Rect::new(0.0, 0.0, 10.0, 10.0);
+        let arc = Path::new();
+        arc.add_arc(oval, 90.0, 360.0);
+        assert_eq!(arc.data().commands().last(), Some(&PathCommand::Close));
+        assert_eq!(arc.data().commands()[0], PathCommand::MoveTo(Offset::new(5.0, 10.0)));
+        let open = Path::new();
+        open.add_arc(oval, 45.0, 360.0);
+        assert_ne!(open.data().commands().last(), Some(&PathCommand::Close));
+        let none = Path::new();
+        none.add_arc(oval, 0.0, 0.0);
+        assert!(none.is_empty());
     }
 }

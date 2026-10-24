@@ -183,3 +183,34 @@ fn a_path_operation_renders_its_result() {
     assert_eq!(renderer.pixel(10, 10), Color::RED);
     assert_eq!(renderer.pixel(50, 50), Color::WHITE, "the hole");
 }
+
+/// On desktop `Path::op` is computed by Skia when it's called (D535), as Compose Desktop's: the
+/// result is flat contents, exact for `is_empty`; an operation Skia can't do leaves the path as it
+/// was and returns `false`, as Android's.
+#[test]
+fn desktop_computes_path_operations_when_called() {
+    use compose::ui::{PathCommand, PathOperation};
+    compose_skia::install_path_operator();
+    let (outer, inner) = (Path::new(), Path::new());
+    outer.add_rect(Rect::new(0.0, 0.0, 100.0, 100.0));
+    inner.add_rect(Rect::new(25.0, 25.0, 75.0, 75.0));
+    let frame = Path::combine(PathOperation::Difference, &outer, &inner);
+    let data = frame.data();
+    assert!(data.steps().is_empty(), "computed: {:?}", data.steps());
+    let closes = data.commands().iter().filter(|command| matches!(command, PathCommand::Close));
+    assert_eq!(closes.count(), 2);
+    assert_eq!(frame.get_bounds(), Rect::new(0.0, 0.0, 100.0, 100.0));
+    let nothing = Path::combine(PathOperation::Difference, &inner, &outer);
+    assert!(nothing.is_empty(), "a path less one around it: exactly empty");
+    let broken = Path::new();
+    broken.move_to(f32::NAN, 0.0);
+    broken.line_to(1.0, f32::INFINITY);
+    broken.line_to(2.0, 2.0);
+    let kept = Path::new();
+    kept.add_rect(Rect::new(0.0, 0.0, 1.0, 1.0));
+    let before = (kept.generation(), kept.data().commands().len());
+    let done = kept.op(&kept, &broken, PathOperation::Union);
+    if !done {
+        assert_eq!((kept.generation(), kept.data().commands().len()), before, "unchanged");
+    }
+}

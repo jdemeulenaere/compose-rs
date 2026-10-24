@@ -117,12 +117,10 @@ Boundaries aren't free, so don't add one to every component. On Android each is 
 
 ### Paths
 
-A `Path` is mutable and shared, as Compose's: a clone is the same path. Drawing it records its contents as they are then (shared, nothing copied), and the platform keeps a path by identity: on Android, a path is defined to the replayer, which builds an `android.graphics.Path` for it, and defined again under the same id when it changes, the replayer refilling the same `android.graphics.Path` (D530–D532). So, as in Compose:
+A `Path` is mutable and shared, as Compose's: a clone is the same path. Drawing it records its contents as they are then (shared, nothing copied), and the platform keeps a path by identity: on Android, a path is defined to the replayer, which builds an `android.graphics.Path` for it, and defined again under the same id when it changes, the replayer refilling the same `android.graphics.Path` (D530–D532). As in Compose, changing a path draws nothing again: a drawing keeps what it drew until it runs again for its own reasons (state it read). So, as in Compose:
 
 - **build a path that doesn't change once** and `remember` it: it's defined once;
 - **remember a path that changes every frame, and reset it in the drawing block** (`remember(Path::new)`, then `path.reset()` and the new shape), as Compose's `remember { Path() }`. One path can draw several shapes in a block, reset between them: each drawing keeps the shape it drew.
-
-A drawing whose path another drawing changes after it was drawn is drawn again in the next frame (D531), so give each drawing its own path, as Compose code does: two drawings resetting one path to different shapes would draw each other again every frame.
 
 <!-- snippet: src/performance.rs#paths -->
 ```rust

@@ -796,15 +796,15 @@ No janky frame of the app's in either build, except one in a D510 stress-scroll 
 
 compose-rs's `Path` is now Compose's: mutable and shared, remembered and reset in a drawing block (D530). The stress animation's waves remember one `Path` and reset it for each wave, as Stress.kt's (D533). Drawing it records each wave's contents, as Kotlin's `drawPath` records a copy into the node's recording (D531). On Android, the serializer defines the 50 contents under the same 50 ids each frame, and the replayer refills the same 50 `android.graphics.Path`s: after the first frame, no new id and no drop (D532).
 
-**Headless** (`benchmarks/benches/animation.rs` on the Mac, criterion means; main b847ddd against D530–D535, one run each, back to back):
+**Headless** (`benchmarks/benches/animation.rs` on the Mac, criterion means; main b847ddd against D530–D535, one run each):
 
 | `stress_animation` | main | D530 |
 |---|---|---|
-| A frame | 109.5 µs | 105.2 µs (−4 %) |
-| A frame, then written for Kotlin and taken with its resource changes | 132.0 µs (p99 183 µs) | 122.5 µs (−7 %; p99 146 µs) |
-| Bytes Kotlin takes a frame; of them resource changes | 47,285; 22,800 | 47,085; 22,600 |
+| A frame | 109.5 µs | 105.1 µs (−4 %) |
+| A frame, then written for Kotlin and taken with its resource changes | 132.0 µs (p99 183 µs) | 122.6 µs (−7 %; p99 134 µs) |
+| Bytes Kotlin takes a frame; of them resource changes | 47,285; 22,800 | 47,235; 22,750 |
 
-The frame no longer copies each wave into a new `Arc<Path>` (a `&Path` was copied at each draw) nor grows a new one per wave: a reset keeps the storage. The bytes lose the 50 drops (5 bytes each) and gain an operation byte per definition (D535).
+The frame no longer copies each wave into a new `Arc<Path>` (a `&Path` was copied at each draw) nor grows a new one per wave: a reset keeps the storage. The bytes lose the 50 drops (5 bytes each) and gain a step count (4 bytes) per definition (D535). The device ran the first version of D530–D535; the review's fixes after it (D531, D532, D535) don't change the waves' flow: the same 50 ids redefined each frame.
 
 **On the device** (Pixel 8 Pro; main b847ddd against D530–D535, and D530–D535 without D510's flush layer, and Compose, 6 runs each of the stress animation, interleaved; medians; traced as measure.py traces, without the power rails; `results/2026-10-24-pixel-8-pro-mutable-path.json`):
 

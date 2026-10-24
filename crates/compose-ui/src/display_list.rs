@@ -138,10 +138,6 @@ pub struct DisplayList {
     pub kept: Vec<DrawGroup>,
     /// A translation before this index isn't merged into: a group's operations stay its own.
     pub(crate) merge_floor: usize,
-    /// The paths (`Path`s, not fixed contents) its operations drew, with their generations
-    /// once it was recorded ([`finish_paths`](DisplayList::finish_paths)): a path changed since
-    /// draws it again (D531).
-    pub(crate) paths: Vec<(crate::path::WeakPath, u64)>,
 }
 
 /// Where a recording draws a repaint boundary's group: before its operation `at`. `key` is the
@@ -221,43 +217,6 @@ impl DisplayList {
         self.merge_floor = 0;
         self.boundaries.clear();
         self.shaders.clear();
-        self.paths.clear();
-    }
-
-    /// Notes that it draws `path`, whose later changes must draw it again (D531).
-    pub(crate) fn note_path(&mut self, path: &crate::path::Path) {
-        let path = path.downgrade();
-        // A path drawn again and again (one reset for each of a drawing's shapes) is noted once.
-        if self.paths.last().is_none_or(|(last, _)| last.address() != path.address()) {
-            self.paths.push((path, 0));
-        }
-    }
-
-    /// Once it's recorded: each path it drew noted once, with its generation now (a path reset
-    /// and drawn several times is drawn as it is last), and those gone forgotten (they can't
-    /// change).
-    pub(crate) fn finish_paths(&mut self) {
-        if self.paths.is_empty() {
-            return;
-        }
-        self.paths.sort_unstable_by_key(|(path, _)| path.address());
-        self.paths.dedup_by_key(|(path, _)| path.address());
-        self.paths.retain_mut(|(path, generation)| match path.generation() {
-            Some(now) => {
-                *generation = now;
-                true
-            }
-            None => false,
-        });
-    }
-
-    /// Whether a path it drew changed since it was recorded ([`finish_paths`]).
-    ///
-    /// [`finish_paths`]: DisplayList::finish_paths
-    pub(crate) fn paths_changed(&self) -> bool {
-        self.paths
-            .iter()
-            .any(|(path, generation)| path.generation().is_some_and(|now| now != *generation))
     }
 
     pub fn push(&mut self, op: DrawOp) {

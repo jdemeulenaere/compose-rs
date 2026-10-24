@@ -41,8 +41,6 @@ pub(crate) struct RetainedDrawing {
     pub(crate) dirty: bool,
     /// Its layer's properties must be computed again (its block read state that changed).
     pub(crate) layer_dirty: bool,
-    /// It's in the tree's `path_drawings`: its recording drew a `Path` (D531).
-    tracks_paths: bool,
 }
 
 impl RetainedDrawing {
@@ -54,7 +52,6 @@ impl RetainedDrawing {
             layer: None,
             dirty: true,
             layer_dirty: true,
-            tracks_paths: false,
         }
     }
 }
@@ -74,8 +71,6 @@ impl UiTree {
         if !self.measured_ahead.is_empty() {
             self.has_draw_ahead_work();
         }
-        // A path changed since it was drawn (by composition, a handler) draws again what drew it.
-        self.invalidate_changed_paths();
         if !self.needs_draw {
             return false;
         }
@@ -101,7 +96,6 @@ impl UiTree {
             self.draw_node(node, &mut recording, observer.as_deref());
             translate(&mut recording, negate(at));
         }
-        recording.finish_paths();
         let mut groups = mem::take(&mut recording.groups);
         self.draw_boundaries(&recording.boundaries, &mut groups, observer.as_deref());
         recording.groups = groups;
@@ -112,44 +106,7 @@ impl UiTree {
         }
         self.display_list = recording;
         self.needs_draw = false;
-        // A path drawn here, then changed by a drawing after it (another boundary's block
-        // resetting it): the next frame draws again what drew it as it was.
-        self.invalidate_changed_paths();
         true
-    }
-
-    /// Draws again what drew a `Path` that changed since (D531): the boundaries whose recordings
-    /// drew one, and what's drawn outside every boundary. So a recording, and the bytes a
-    /// platform keeps for its group's key and version (D157), never hold a path older than the
-    /// path is. A drawing changing its own paths isn't drawn again for that: what it noted is
-    /// their generations once it was done.
-    fn invalidate_changed_paths(&mut self) {
-        if self.display_list.paths_changed() {
-            self.needs_draw = true;
-        }
-        if self.path_drawings.is_empty() {
-            return;
-        }
-        let mut nodes = mem::take(&mut self.path_drawings);
-        let mut changed: SmallVec<[NodeId; 4]> = SmallVec::new();
-        nodes.retain(|node| {
-            let Some(retained) = self.get_mut(*node).and_then(|value| value.retained.as_mut())
-            else {
-                return false;
-            };
-            if retained.recording.paths.is_empty() {
-                retained.tracks_paths = false;
-                return false;
-            }
-            if !retained.dirty && retained.recording.paths_changed() {
-                changed.push(*node);
-            }
-            true
-        });
-        self.path_drawings = nodes;
-        for node in changed {
-            self.invalidate_draw_of(node);
-        }
     }
 
     /// Notes the repaint boundaries among `groups` (the last frame's) that are composed and
@@ -408,16 +365,6 @@ impl UiTree {
                         self.draw_content(node, &mut recording, Some(observer))
                     }),
                 None => self.draw_content(node, &mut recording, observer),
-            }
-            recording.finish_paths();
-            let draws_paths = !recording.paths.is_empty();
-            let retained = self.node_mut(node).retained.as_mut().expect("a repaint boundary");
-            if draws_paths && !retained.tracks_paths {
-                retained.tracks_paths = true;
-                // Listed once, though its node became a boundary again since.
-                if !self.path_drawings.contains(&node) {
-                    self.path_drawings.push(node);
-                }
             }
             let retained = self.node_mut(node).retained.as_mut().expect("a repaint boundary");
             match Arc::get_mut(&mut retained.recording) {

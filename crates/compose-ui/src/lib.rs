@@ -76,6 +76,7 @@ pub mod platform {
     pub use crate::logging::{LogFilter, StderrLogger, default_max_level, install_stderr_logger};
     pub use crate::modifier::shared_custom_modifier;
     pub use crate::nested_scroll::NestedScrollChain;
+    pub use crate::path::{PathOperator, set_path_operator};
     pub use crate::pointer_input::{PointerInputDriver, run_soon};
     pub use crate::render::KEPT_CAPACITY;
     pub use crate::semantics::SemanticsNode;
@@ -139,8 +140,8 @@ pub use modifier::{
 pub use nested_scroll::{NestedScrollConnection, NestedScrollSource};
 pub use overlay::{PopupPositionProvider, WindowPosition};
 pub use path::{
-    CornerRadius, ImageVector, Path, PathCommand, PathData, PathDirection, PathError, PathFillType,
-    PathOperands, PathOperation, RoundRect,
+    CornerRadius, ImageVector, Matrix, Path, PathCommand, PathData, PathDirection, PathError,
+    PathFillType, PathOperation, PathStep, RoundRect,
 };
 pub use platform_services::{
     DEFAULT_URI_SCHEMES, HapticFeedback, HapticFeedbackType, LOCAL_HAPTIC_FEEDBACK,

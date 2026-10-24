@@ -247,9 +247,6 @@ pub struct UiTree {
     pub(crate) needs_draw: bool,
     /// The last version given to a repaint boundary's operations (`DrawGroup::version`).
     pub(crate) draw_version: u64,
-    /// The repaint boundaries whose recordings drew a `Path`: drawn again when one changes
-    /// (D531).
-    pub(crate) path_drawings: Vec<NodeId>,
     /// A handler asked for the platform's input method to be reset.
     pub(crate) input_method_reset: bool,
     pub(crate) focus: Option<crate::focus::Focus>,
@@ -328,7 +325,6 @@ impl UiTree {
             display_list: DisplayList::default(),
             needs_draw: true,
             draw_version: 0,
-            path_drawings: Vec::new(),
             input_method_reset: false,
             focus: None,
             focus_listeners_dirty: false,

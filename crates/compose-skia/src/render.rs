@@ -300,6 +300,7 @@ pub struct RasterRenderer {
 impl RasterRenderer {
     /// A surface of `width` by `height` device pixels.
     pub fn new(width: i32, height: i32) -> RasterRenderer {
+        install_path_operator();
         let surface = skia_safe::surfaces::raster_n32_premul((width.max(1), height.max(1)))
             .expect("compose-skia: a raster surface");
         RasterRenderer { surface }
@@ -386,57 +387,57 @@ impl Renderer for RasterRenderer {
 }
 
 /// Skia's paths by path identity and generation, each with its contents to tell when they're
-/// gone.
-type PathCache =
-    std::collections::HashMap<(u64, u64), (std::sync::Weak<compose_ui::PathData>, skia_safe::Path)>;
+/// gone, and how many entries make it forget the gone ones.
+struct PathCache {
+    paths: std::collections::HashMap<
+        (u64, u64),
+        (std::sync::Weak<compose_ui::PathData>, skia_safe::Path),
+    >,
+    /// Twice the entries left by the last sweep (256 at least): sweeping when it's reached keeps
+    /// inserts amortized constant time, however many paths a frame draws.
+    sweep_at: usize,
+}
 
 thread_local! {
     /// Skia's path of each path's contents drawn, kept while they live: an icon drawn every frame
     /// is converted once, a `Path` changed each frame once per change (D532).
-    static PATHS: std::cell::RefCell<PathCache> =
-        std::cell::RefCell::new(std::collections::HashMap::new());
+    static PATHS: std::cell::RefCell<PathCache> = std::cell::RefCell::new(PathCache {
+        paths: std::collections::HashMap::new(),
+        sweep_at: 256,
+    });
 }
 
 /// Skia's path for `path`, converted once per contents (while they live).
 fn skia_path(path: &std::sync::Arc<compose_ui::PathData>) -> skia_safe::Path {
     let key = (path.id(), path.generation());
-    PATHS.with(|paths| {
-        let mut paths = paths.borrow_mut();
-        if let Some((alive, skia)) = paths.get(&key)
+    PATHS.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if let Some((alive, skia)) = cache.paths.get(&key)
             && alive.upgrade().is_some_and(|alive| std::sync::Arc::ptr_eq(&alive, path))
         {
             return skia.clone();
         }
         // Contents that are gone are forgotten as new ones come.
-        if paths.len() > 256 {
-            paths.retain(|_, (alive, _)| alive.strong_count() > 0);
+        if cache.paths.len() >= cache.sweep_at {
+            cache.paths.retain(|_, (alive, _)| alive.strong_count() > 0);
+            cache.sweep_at = (2 * cache.paths.len()).max(256);
         }
         let skia = build_skia_path(path);
-        paths.insert(key, (std::sync::Arc::downgrade(path), skia.clone()));
+        cache.paths.insert(key, (std::sync::Arc::downgrade(path), skia.clone()));
         skia
     })
 }
 
-/// Skia's path for `path`: its operation's result (Skia's path ops; nothing if they fail), then
-/// its commands, with its fill type.
-fn build_skia_path(path: &compose_ui::PathData) -> skia_safe::Path {
-    let mut skia = match path.operands() {
-        Some(operands) => {
-            let operation = match operands.operation {
-                PathOperation::Difference => skia_safe::PathOp::Difference,
-                PathOperation::Intersect => skia_safe::PathOp::Intersect,
-                PathOperation::Union => skia_safe::PathOp::Union,
-                PathOperation::Xor => skia_safe::PathOp::XOR,
-                PathOperation::ReverseDifference => skia_safe::PathOp::ReverseDifference,
-            };
-            let (first, second) =
-                (build_skia_path(&operands.path1), build_skia_path(&operands.path2));
-            let result = skia_safe::op(&first, &second, operation).unwrap_or_default();
-            skia_safe::PathBuilder::new_path(&result)
-        }
-        None => skia_safe::PathBuilder::new(),
-    };
-    for command in path.commands() {
+/// Skia's path for `commands` filled by `fill_type`.
+fn skia_commands(commands: &[PathCommand], fill_type: PathFillType) -> skia_safe::Path {
+    let mut skia = skia_safe::PathBuilder::new();
+    append_commands(&mut skia, commands);
+    skia.set_fill_type(skia_fill_type(fill_type));
+    skia.detach()
+}
+
+fn append_commands(skia: &mut skia_safe::PathBuilder, commands: &[PathCommand]) {
+    for command in commands {
         match *command {
             PathCommand::MoveTo(point) => {
                 skia.move_to((point.x, point.y));
@@ -455,11 +456,116 @@ fn build_skia_path(path: &compose_ui::PathData) -> skia_safe::Path {
             }
         }
     }
-    skia.set_fill_type(match path.fill_type() {
+}
+
+fn skia_fill_type(fill_type: PathFillType) -> skia_safe::PathFillType {
+    match fill_type {
         PathFillType::NonZero => skia_safe::PathFillType::Winding,
         PathFillType::EvenOdd => skia_safe::PathFillType::EvenOdd,
-    });
+    }
+}
+
+fn skia_operation(operation: PathOperation) -> skia_safe::PathOp {
+    match operation {
+        PathOperation::Difference => skia_safe::PathOp::Difference,
+        PathOperation::Intersect => skia_safe::PathOp::Intersect,
+        PathOperation::Union => skia_safe::PathOp::Union,
+        PathOperation::Xor => skia_safe::PathOp::XOR,
+        PathOperation::ReverseDifference => skia_safe::PathOp::ReverseDifference,
+    }
+}
+
+/// Skia's path for `path`: its steps' result (Skia's path ops), then its commands, with its fill
+/// type.
+fn build_skia_path(path: &compose_ui::PathData) -> skia_safe::Path {
+    let base = path.evaluate_steps(
+        |operand| skia_commands(operand.commands(), operand.fill_type()),
+        // An operation Skia can't do leaves the first path as it was, as Android's.
+        |first, second, operation| {
+            skia_safe::op(&first, &second, skia_operation(operation)).unwrap_or(first)
+        },
+        |first, second| {
+            let mut builder = skia_safe::PathBuilder::new_path(&first);
+            builder.add_path(&second, None);
+            builder.set_fill_type(first.fill_type());
+            builder.detach()
+        },
+        |top, fill_type| {
+            top.set_fill_type(skia_fill_type(fill_type));
+        },
+    );
+    let mut skia = match &base {
+        Some(base) => skia_safe::PathBuilder::new_path(base),
+        None => skia_safe::PathBuilder::new(),
+    };
+    append_commands(&mut skia, path.commands());
+    skia.set_fill_type(skia_fill_type(path.fill_type()));
     skia.detach()
+}
+
+/// The commands of a Skia path (its conics as quadratic curves, which compose-rs's commands
+/// don't have).
+fn commands_of(skia: &skia_safe::Path) -> Vec<PathCommand> {
+    use skia_safe::path::Verb;
+    let point = |point: skia_safe::Point| compose_ui::Offset::new(point.x, point.y);
+    let mut commands = Vec::new();
+    let mut iter = skia_safe::path::Iter::new(skia, false);
+    while let Some((verb, points)) = iter.next() {
+        match verb {
+            Verb::Move => commands.push(PathCommand::MoveTo(point(points[0]))),
+            Verb::Line => commands.push(PathCommand::LineTo(point(points[1]))),
+            Verb::Quad => commands.push(PathCommand::QuadTo(point(points[1]), point(points[2]))),
+            Verb::Conic => {
+                let weight = iter.conic_weight().unwrap_or(1.0);
+                let mut quads = [skia_safe::Point::default(); 1 + 2 * 4];
+                let count = skia_safe::Path::convert_conic_to_quads(
+                    points[0], points[1], points[2], weight, &mut quads, 2,
+                )
+                .unwrap_or(0);
+                for quad in 0..count {
+                    commands.push(PathCommand::QuadTo(
+                        point(quads[1 + 2 * quad]),
+                        point(quads[2 + 2 * quad]),
+                    ));
+                }
+            }
+            Verb::Cubic => commands.push(PathCommand::CubicTo(
+                point(points[1]),
+                point(points[2]),
+                point(points[3]),
+            )),
+            Verb::Close => commands.push(PathCommand::Close),
+            _ => {}
+        }
+    }
+    commands
+}
+
+/// `Path::op` computed when it's called, by Skia's path ops (`compose_ui::platform::PathOperator`,
+/// D535), as Compose Desktop's: flat contents, or `None` if Skia can't.
+fn operate(
+    operation: PathOperation,
+    first: &compose_ui::PathData,
+    second: &compose_ui::PathData,
+) -> Option<(Vec<PathCommand>, PathFillType)> {
+    let result = skia_safe::op(
+        &build_skia_path(first),
+        &build_skia_path(second),
+        skia_operation(operation),
+    )?;
+    let fill_type = match result.fill_type() {
+        skia_safe::PathFillType::Winding | skia_safe::PathFillType::InverseWinding => {
+            PathFillType::NonZero
+        }
+        _ => PathFillType::EvenOdd,
+    };
+    Some((commands_of(&result), fill_type))
+}
+
+/// Has `Path::op` computed by Skia's path ops when it's called (D535), as Compose Desktop's;
+/// the desktop application and compose-skia's renderers install it.
+pub fn install_path_operator() {
+    compose_ui::platform::set_path_operator(operate);
 }
 
 /// Skia's images by bitmap address, each with its bitmap's pixels to tell when it's gone.

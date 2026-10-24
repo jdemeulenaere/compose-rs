@@ -627,6 +627,8 @@ pub fn application(content: impl Fn() + 'static) {
     compose_ui::platform::install_stderr_logger();
     // `decode_image_bytes` and `remember_image_resource` decode with Skia.
     compose_ui::platform::set_image_decoder(Arc::new(compose_skia::SkiaImageDecoder));
+    // `Path::op` computed by Skia when it's called, as Compose Desktop's (D535).
+    compose_skia::install_path_operator();
     let event_loop =
         EventLoop::<UserEvent>::with_user_event().build().expect("compose-desktop: an event loop");
     let proxy = event_loop.create_proxy();

@@ -207,8 +207,7 @@ impl DrawScope<'_> {
     pub fn clip_path(&mut self, path: impl SharedPath, block: impl FnOnce(&mut DrawScope<'_>)) {
         self.save();
         let offset = self.origin;
-        let path = path.record(self.list);
-        self.list.push(DrawOp::ClipPath { path, offset });
+        self.list.push(DrawOp::ClipPath { path: path.path_data(), offset });
         block(self);
         self.restore();
     }
@@ -298,8 +297,7 @@ impl DrawScope<'_> {
             return;
         }
         let offset = offset + self.origin;
-        let path = path.record(self.list);
-        self.list.push(DrawOp::DrawPath { path, offset, scale, paint });
+        self.list.push(DrawOp::DrawPath { path: path.path_data(), offset, scale, paint });
     }
 
     /// Saves, and draws what follows into a layer composited with `alpha` at the next restore.
@@ -336,23 +334,21 @@ impl DrawScope<'_> {
 }
 
 /// A path the display list can hold: a `&Path`, whose contents now are recorded (shared, nothing
-/// copied) and whose later changes draw the recording again (D531), or a `&Arc<PathData>`,
+/// copied: a recording keeps them, whatever the path does next, D531), or a `&Arc<PathData>`,
 /// contents that never change (an `ImageVector`'s).
 pub trait SharedPath {
-    /// Its contents, noting in `list` a path whose changes the recording follows.
-    #[doc(hidden)]
-    fn record(self, list: &mut DisplayList) -> Arc<PathData>;
+    /// The contents drawn.
+    fn path_data(self) -> Arc<PathData>;
 }
 
 impl SharedPath for &Arc<PathData> {
-    fn record(self, _list: &mut DisplayList) -> Arc<PathData> {
+    fn path_data(self) -> Arc<PathData> {
         Arc::clone(self)
     }
 }
 
 impl SharedPath for &Path {
-    fn record(self, list: &mut DisplayList) -> Arc<PathData> {
-        list.note_path(self);
+    fn path_data(self) -> Arc<PathData> {
         self.data()
     }
 }

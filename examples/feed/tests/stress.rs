@@ -157,9 +157,9 @@ fn path_changes(bytes: &[u8]) -> (Vec<u32>, Vec<u32>) {
             }
             tag::DEFINE_PATH => {
                 defined.push(id(at + 1));
-                assert_eq!(bytes[at + 6], 0, "no operation");
-                let commands = id(at + 7);
-                at += 11;
+                assert_eq!(id(at + 6), 0, "no step");
+                let commands = id(at + 10);
+                at += 14;
                 for _ in 0..commands {
                     // A command, then its points: move and line 1, quad 2, cubic 3, close none.
                     at += 1 + 8 * [1, 1, 2, 3, 0][bytes[at] as usize];

@@ -746,10 +746,10 @@ fn path_changes(pending: &[u8]) -> Vec<(u8, u32)> {
         changes.push((tag, id));
         at += match tag {
             tag::DROP_PATH => 5,
-            // An id, a fill type, no operation, a count, then each command: a kind and its points.
+            // An id, a fill type, no step, a count, then each command: a kind and its points.
             tag::DEFINE_PATH => {
-                let count = u32_at(pending, at + 7) as usize;
-                let mut end = at + 11;
+                let count = u32_at(pending, at + 10) as usize;
+                let mut end = at + 14;
                 for _ in 0..count {
                     end += 1 + match pending[end] {
                         0 | 1 => 8,
@@ -890,9 +890,9 @@ impl PathReplay {
                     at += 5;
                 }
                 tag::DEFINE_PATH => {
-                    assert_eq!(bytes[at + 6], 0, "no operation");
-                    let mut end = at + 11;
-                    for _ in 0..u32_at(bytes, at + 7) {
+                    assert_eq!(u32_at(bytes, at + 6), 0, "no step");
+                    let mut end = at + 14;
+                    for _ in 0..u32_at(bytes, at + 10) {
                         end += 1 + 8 * [1, 1, 2, 3, 0][bytes[end] as usize];
                     }
                     self.defined.insert(id, bytes[at + 5..end].to_vec());
@@ -917,12 +917,11 @@ impl PathReplay {
     }
 }
 
-/// Two groups drawing one `Path`, the second resetting it each time it draws (D531): the frame
-/// the second changes it, the first's record, copied, still names its path's id with the
-/// contents it drew (the changed path is defined under another id), and the next frame draws
-/// the first again, with a new version. No record seen again under its key and version names
-/// contents other than those it named first, so a group Kotlin records again from cached bytes
-/// never draws a newer path; and no group keeps an older one past the next frame.
+/// Two groups drawing one `Path`, the second resetting it each time it draws: the first keeps
+/// what it drew (D531), its record, copied, naming its path's id with those contents (the
+/// changed path is defined under another id, D532). No record seen again under its key and
+/// version names contents other than those it named first, so a group Kotlin records again from
+/// cached bytes never draws a newer path.
 #[test]
 fn a_cached_record_never_draws_a_newer_path() {
     let path = Path::new();
@@ -964,12 +963,9 @@ fn a_cached_record_never_draws_a_newer_path() {
     replay.take(&mut serialized);
     for count in [2, 3, 4] {
         lines.set(count);
-        // The frame the second group changes the path, then the one drawing the first again.
-        for _ in 0..2 {
-            let bytes = serialized.frame();
-            assert_eq!(bytes, serialized.fresh());
-            replay.take(&mut serialized);
-        }
+        let bytes = serialized.frame();
+        assert_eq!(bytes, serialized.fresh());
+        replay.take(&mut serialized);
         assert!(!serialized.host.has_pending_work(), "settled");
         let drawn: Vec<usize> = serialized.host.with_tree(|tree| {
             tree.display_list()
@@ -982,7 +978,7 @@ fn a_cached_record_never_draws_a_newer_path() {
                 })
                 .collect()
         });
-        assert_eq!(drawn, [count as usize + 1; 2], "both groups draw the path as it is");
+        assert_eq!(drawn, [0, count as usize + 1], "each group draws what it drew");
     }
 }
 
@@ -1382,4 +1378,108 @@ fn a_kept_groups_record_is_written_only_for_a_new_version() {
     let mut out = Writer::default();
     write_display_list(&DisplayList::default(), &mut resources, &mut cache, &mut out);
     assert_eq!((cache.cached_version(10), cache.cached_version(11)), (None, None));
+}
+
+// ---- Mutable paths, after a review ----------------------------------------------------------
+
+/// Two groups drawing one `Path`, changed outside drawing, then both drawn again in the same
+/// frame (they read the same state): the first group's write defines the path again under its id
+/// (D532); the second's names that id with the same bytes as its cached record, but the id was
+/// defined since that record was, so it gets a new version too, and the replayer records it
+/// again (a review found it kept its old version, Kotlin's node drawing the old contents).
+#[test]
+fn groups_naming_a_path_defined_again_since_get_new_versions() {
+    let path = Path::new();
+    path.move_to(0.0, 0.0);
+    path.line_to(10.0, 0.0);
+    let shared = path.clone();
+    let tick = mutable_state_of(0u32);
+    let handle = tick.handle();
+    let mut serialized = Serialized::new(move || {
+        let (first, second) = (shared.clone(), shared.clone());
+        Layout(
+            Modifier,
+            stack(),
+            callback(move || {
+                let first = first.clone();
+                Leaf(
+                    Modifier
+                        .repaint_boundary()
+                        .draw_behind(move |scope| {
+                            let _ = handle.get();
+                            scope.draw_path(&first, Paint::stroke(Color::BLACK, 1.0))
+                        })
+                        .size(10.dp()),
+                );
+                let second = second.clone();
+                Leaf(
+                    Modifier
+                        .repaint_boundary()
+                        .draw_behind(move |scope| {
+                            let _ = handle.get();
+                            scope.draw_path(&second, Paint::stroke(Color::BLACK, 1.0))
+                        })
+                        .size(10.dp()),
+                );
+            }),
+        );
+    });
+    let mut replay = PathReplay::default();
+    replay.take(&mut serialized);
+    let before = groups(&read(&serialized.out.bytes).1);
+    // A handler changes the path, and both groups are drawn again.
+    path.line_to(10.0, 10.0);
+    tick.set(1);
+    let bytes = serialized.frame();
+    assert_eq!(bytes, serialized.fresh());
+    replay.take(&mut serialized);
+    let after = groups(&read(&bytes).1);
+    assert!(before.iter().zip(&after).all(|(old, new)| old.0 == new.0 && old.1 != new.1));
+}
+
+/// Timing (`--release --ignored --nocapture`): one `Path` reset for each of `n` shapes in one
+/// drawing, as Compose code draws particles: linear in `n` (a review found the serializer looked
+/// each contents up among the path's others, n²).
+#[test]
+#[ignore]
+fn timing_one_path_reset_for_many_shapes() {
+    for n in [50u32, 500, 2000] {
+        let phase = mutable_state_of(0.0f32);
+        let handle = phase.handle();
+        let mut serialized = Serialized::new(move || {
+            let path = remember(Path::new);
+            Leaf(
+                Modifier
+                    .repaint_boundary()
+                    .draw_behind(move |scope| {
+                        for shape in 0..n {
+                            path.reset();
+                            path.move_to(shape as f32, handle.get());
+                            path.line_to(shape as f32 + 1.0, 0.0);
+                            scope.draw_path(&path, Paint::stroke(Color::BLACK, 1.0));
+                        }
+                    })
+                    .size(100.dp()),
+            );
+        });
+        let mut pending = Writer::default();
+        serialized.resources.write_pending(&mut pending);
+        let frames = 20;
+        let mut serialize = std::time::Duration::ZERO;
+        for frame in 0..frames {
+            phase.set(frame as f32 + 1.0);
+            serialized.host.frame();
+            let start = std::time::Instant::now();
+            let (resources, cache, out) =
+                (&mut serialized.resources, &mut serialized.cache, &mut serialized.out);
+            serialized
+                .host
+                .with_tree(|tree| write_display_list(tree.display_list(), resources, cache, out));
+            serialized.resources.collect();
+            serialize += start.elapsed();
+            let mut pending = Writer::default();
+            serialized.resources.write_pending(&mut pending);
+        }
+        println!("n = {n}: serialize {:?} a frame", serialize / frames);
+    }
 }
