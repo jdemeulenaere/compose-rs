@@ -215,6 +215,37 @@ class EmptyTraceTest(unittest.TestCase):
             measure.traced(lambda: {"trace": {"frames": 0}}, "scroll")
 
 
+GFXINFO_GPU_CACHES = """
+GPU Caches:
+  Other:
+    Other: 6.56 KB (1 entry)
+    Buffer Object: 2.05 KB (2 entries)
+  SW Path Mask:
+    Surface: 7.98 MB (50 entries)
+  Scratch:
+    Buffer Object: 27.95 MB (159 entries)
+    Surface: 58.63 MB (188 entries)
+Total GPU memory usage:
+  99163112 bytes, 94.57 MB (30.09 MB is purgeable)
+Pipeline Cache: inactive
+"""
+
+
+class GpuCachesTest(unittest.TestCase):
+    def test_categories_total_and_purgeable(self):
+        original = measure.shell
+        try:
+            measure.shell = lambda command: GFXINFO_GPU_CACHES
+            caches = measure.gpu_caches("rs.compose.bench.rs")
+        finally:
+            measure.shell = original
+        self.assertEqual(caches["Scratch/Surface"], [58.63, 188])
+        self.assertEqual(caches["Scratch/Buffer Object"], [27.95, 159])
+        self.assertEqual(caches["SW Path Mask/Surface"], [7.98, 50])
+        self.assertEqual(caches["Other/Other"], [0.01, 1])
+        self.assertEqual((caches["total"], caches["purgeable"]), (94.57, 30.09))
+
+
 class QueryTest(unittest.TestCase):
     def test_a_failed_query_stops_the_run(self):
         # A trace processor exiting with an error must not read as no rows (zero counts).

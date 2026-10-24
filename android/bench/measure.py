@@ -38,7 +38,8 @@ Scenarios (docs/12-android-performance.md):
   stress_startup    cold starts of the stress list (docs/15), and a traced one
   stress_scroll     memory after start, 10 flings through the stress list as `scroll`, memory
                     after them
-  stress_animation  10 s of the stress animation, as `animation`, with memory before and after
+  stress_animation  10 s of the stress animation, as `animation`, with memory before and after,
+                    and HWUI's GPU caches (`dumpsys gfxinfo`) at both points
 
 --scenarios picks some of them (all by default), comma-separated; the report holds those run.
 Each traced run also lists its slowest frames on each thread with their longest slices
@@ -336,6 +337,31 @@ def gfxinfo(package, reset=False):
         if match:
             values[key] = int(match.group(1))
     return values
+
+
+def gpu_caches(package):
+    """HWUI's GPU caches from `dumpsys gfxinfo`: [MB, entries] by category and kind
+    ("Scratch/Surface", say), and the total and its purgeable part (MB)."""
+    text = shell(f"dumpsys gfxinfo {package}")
+    section = text.split("GPU Caches:", 1)[-1].split("Total GPU memory usage", 1)
+    out = {}
+    category = None
+    for line in section[0].splitlines():
+        line = line.strip()
+        if line.endswith(":") and not re.search(r"\d", line):
+            category = line[:-1]
+            continue
+        match = re.match(r"(.+?): ([\d.]+) (\w+) \((\d+) entr", line)
+        if match and category:
+            size = float(match.group(2)) * {"bytes": 1 / 2**20, "KB": 1 / 1024,
+                                            "MB": 1.0}.get(match.group(3), 0.0)
+            out[f"{category}/{match.group(1)}"] = [round(size, 2), int(match.group(4))]
+    if len(section) > 1:
+        match = re.search(r"([\d.]+) MB \(([\d.]+) MB is purgeable\)", section[1])
+        if match:
+            out["total"] = float(match.group(1))
+            out["purgeable"] = float(match.group(2))
+    return out
 
 
 TRACE_CONFIG = """
@@ -965,7 +991,8 @@ def animation_scenario(tp, out_dir, capacities, screen, prefix, memory=False,
     """3 traced runs of each app showing `screen` for 10 s untouched, interleaved, 3 s after
     it started. With `memory`, each run also has the memory before the trace (`after_start`;
     `dumpsys meminfo` collects garbage, so it's taken before gfxinfo's reset) and after it
-    (`after_animation`)."""
+    (`after_animation`), and HWUI's GPU caches at both points (`gpu_after_start`,
+    `gpu_after_animation`)."""
     animation = {name: [] for name in APPS}
     for run in range(3):
         for name, package in APPS.items():
@@ -975,6 +1002,7 @@ def animation_scenario(tp, out_dir, capacities, screen, prefix, memory=False,
                 start(package, screen)
                 time.sleep(3)
                 before = meminfo(package) if memory else None
+                gpu_before = gpu_caches(package) if memory else None
                 gfxinfo(package, reset=True)
                 process, path = start_trace(package, 10000, f"{prefix}-{name}-{run}",
                                             buffer_kb)
@@ -984,6 +1012,8 @@ def animation_scenario(tp, out_dir, capacities, screen, prefix, memory=False,
                 if memory:
                     stats["memory_kb"] = {"after_start": before,
                                           "after_animation": meminfo(package)}
+                    stats["gpu_caches_mb"] = {"after_start": gpu_before,
+                                              "after_animation": gpu_caches(package)}
                 return stats
             stats = traced(animation_run, f"{prefix} {name} {run}")
             animation[name].append(stats)
