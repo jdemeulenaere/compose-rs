@@ -320,8 +320,19 @@ fn average_color(gradient: &compose_ui::platform::Gradient) -> Color {
 
 /// A resource change the Kotlin side hasn't taken yet.
 enum Pending {
-    Path { id: u32, path: Weak<PathData> },
-    Image { id: u32, width: u32, height: u32, pixels: Weak<[u8]> },
+    /// A path's definition; `taken`: the Kotlin side holds the id already (defined again in
+    /// place, D532), so cancelling it must still drop the id.
+    Path {
+        id: u32,
+        path: Weak<PathData>,
+        taken: bool,
+    },
+    Image {
+        id: u32,
+        width: u32,
+        height: u32,
+        pixels: Weak<[u8]>,
+    },
     DropPath(u32),
     DropImage(u32),
 }
@@ -357,11 +368,20 @@ impl Resources {
 
     /// Drops path `id`: its definition, if still pending, or the Kotlin side's.
     fn drop_path(&mut self, id: u32) {
-        let before = self.pending.len();
-        self.pending
-            .retain(|op| !matches!(op, Pending::Path { id: defined, .. } if *defined == id));
-        if self.pending.len() == before {
+        if self.cancel_path(id).is_none_or(|taken| taken) {
             self.pending.push(Pending::DropPath(id));
+        }
+    }
+
+    /// Cancels path `id`'s pending definition, if any: whether the Kotlin side holds the id.
+    fn cancel_path(&mut self, id: u32) -> Option<bool> {
+        let at = self
+            .pending
+            .iter()
+            .position(|op| matches!(op, Pending::Path { id: defined, .. } if *defined == id))?;
+        match self.pending.remove(at) {
+            Pending::Path { taken, .. } => Some(taken),
+            _ => unreachable!("a path's definition"),
         }
     }
 
@@ -388,25 +408,23 @@ impl Resources {
             return entry.id;
         }
         let (contents, generation) = (Arc::downgrade(path), path.generation());
-        let id = match defined.iter_mut().find(|entry| entry.contents.strong_count() == 0) {
+        let (id, taken) = match defined.iter_mut().find(|entry| entry.contents.strong_count() == 0)
+        {
             Some(entry) => {
                 *entry = DefinedPath { contents, generation, id: entry.id };
                 let id = entry.id;
                 self.redefinitions += 1;
                 // Redefined in place: a definition the Kotlin side hasn't taken is replaced.
-                self.pending.retain(
-                    |op| !matches!(op, Pending::Path { id: defined, .. } if *defined == id),
-                );
-                id
+                (id, self.cancel_path(id).unwrap_or(true))
             }
             None => {
                 self.next_id = self.next_id.wrapping_add(1).max(1);
                 let id = self.next_id;
                 defined.push(DefinedPath { contents, generation, id });
-                id
+                (id, false)
             }
         };
-        self.pending.push(Pending::Path { id, path: Arc::downgrade(path) });
+        self.pending.push(Pending::Path { id, path: Arc::downgrade(path), taken });
         id
     }
 
@@ -489,7 +507,7 @@ impl Resources {
         }
         for op in self.pending.drain(..) {
             match op {
-                Pending::Path { id, path } => {
+                Pending::Path { id, path, .. } => {
                     let Some(path) = path.upgrade() else { continue };
                     write_path(out, id, &path);
                 }
@@ -1536,6 +1554,50 @@ mod tests {
 
     /// Drops come before definitions (D410): a path replaced each frame frees its Kotlin `Path`
     /// for the replacement's definition, in the same frame.
+    /// A frame drawing `path`'s contents now, written, the list returned (holding them).
+    fn frame_drawing(resources: &mut Resources, path: &Path) -> DisplayList {
+        let mut list = DisplayList::default();
+        list.push(DrawOp::DrawPath {
+            path: path.data(),
+            offset: Offset::ZERO,
+            scale: (1.0, 1.0),
+            paint: Paint::fill(Color::BLACK),
+        });
+        write_display_list(&list, resources, &mut GroupCache::default(), &mut Writer::default());
+        list
+    }
+
+    /// A path changed after the Kotlin side took its definition is defined again under its id
+    /// (D532); if that definition is cancelled before it's taken (the path gone), the id the
+    /// Kotlin side holds is still dropped.
+    #[test]
+    fn a_cancelled_redefinition_still_drops_the_id() {
+        let mut resources = Resources::default();
+        let path = Path::new();
+        path.add_rect(Rect::new(0.0, 0.0, 1.0, 1.0));
+        let first = frame_drawing(&mut resources, &path);
+        let mut taken = Writer::default();
+        resources.write_pending(&mut taken);
+        let id = read_u32(&taken.bytes, 1);
+        path.reset();
+        path.add_rect(Rect::new(0.0, 0.0, 2.0, 2.0));
+        drop(first);
+        let second = frame_drawing(&mut resources, &path);
+        resources.collect();
+        let mut pending = Writer::default();
+        resources.write_pending(&mut pending);
+        assert_eq!((pending.bytes[0], read_u32(&pending.bytes, 1)), (tag::DEFINE_PATH, id));
+        // Changed again, and gone before the Kotlin side takes that definition.
+        path.reset();
+        drop(second);
+        let third = frame_drawing(&mut resources, &path);
+        drop((third, path));
+        resources.collect();
+        let mut pending = Writer::default();
+        resources.write_pending(&mut pending);
+        assert_eq!(pending.bytes, [&[tag::DROP_PATH][..], &id.to_le_bytes()].concat());
+    }
+
     #[test]
     fn drops_come_before_definitions() {
         let mut resources = Resources::default();

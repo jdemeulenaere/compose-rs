@@ -1,0 +1,7045 @@
+{
+ "device": "Pixel 8 Pro",
+ "compile": "speed",
+ "note": "D530-D535: a mutable Path. Interleaved A/B, traced as measure.py traces (sched_waking added, no power rails). stress_animation: 6 runs each; scroll (feed): 4 runs each.",
+ "variants": {
+  "main": "b847ddd",
+  "new": "b847ddd + D530-D535 (the mutable Path)",
+  "noflush": "new with D510's flush layer disabled (a probe)",
+  "compose": "bench-compose at b847ddd (Compose 1.12.1)"
+ },
+ "headless": {
+  "note": "benchmarks/benches/animation.rs on the Mac, criterion means, one run each",
+  "main": {
+   "stress_animation_frame_us": 109.51,
+   "frame_and_serialize_us": 132.02,
+   "frame_and_serialize_p99_us": 183.0,
+   "bytes_taken_per_frame": 47285,
+   "resource_change_bytes_per_frame": 22800
+  },
+  "new": {
+   "stress_animation_frame_us": 105.21,
+   "frame_and_serialize_us": 122.48,
+   "frame_and_serialize_p99_us": 146.4,
+   "bytes_taken_per_frame": 47085,
+   "resource_change_bytes_per_frame": 22600
+  }
+ },
+ "summary": {
+  "stress_animation/compose": {
+   "runs": 6,
+   "main_p50_p90_p99": [
+    3.817505,
+    5.345764,
+    7.6513265
+   ],
+   "render_p50_p90_p99": [
+    7.441427,
+    8.7696735,
+    10.606221999999999
+   ],
+   "work_main_render_ms": [
+    3068.3369915000003,
+    6338.498975
+   ],
+   "cpu_main_render_ms": [
+    4358.053435,
+    7106.070768
+   ],
+   "workers_cpu_work_ms": [
+    7769.785931,
+    5466.3279715
+   ],
+   "workers_mean_ghz": 2334042.27525026,
+   "janky_app_total": 2,
+   "frames": 1197.5,
+   "pss_start_after_mb": [
+    167.76025390625,
+    209.92138671875
+   ],
+   "graphics_start_after_mb": [
+    119.564453125,
+    119.873046875
+   ],
+   "graphics_start_runs": [
+    119.41796875,
+    119.84375,
+    119.71875,
+    119.41796875,
+    119.41796875,
+    119.7109375
+   ],
+   "graphics_after_runs": [
+    131.76953125,
+    119.84765625,
+    119.84765625,
+    119.84765625,
+    119.8984375,
+    140.64453125
+   ],
+   "gpu_total_start_after_mb": [
+    89.54,
+    91.235
+   ],
+   "mask_textures": 142.5,
+   "uploads_into_last_frames": 0.8373554893712938,
+   "flush_layers_per_run": 1184.5
+  },
+  "stress_animation/main": {
+   "runs": 6,
+   "main_p50_p90_p99": [
+    2.302775,
+    2.9567055,
+    4.0071405
+   ],
+   "render_p50_p90_p99": [
+    6.3788245,
+    7.46816,
+    8.6265465
+   ],
+   "work_main_render_ms": [
+    1543.758538,
+    3586.8830475
+   ],
+   "cpu_main_render_ms": [
+    2752.9259305,
+    5704.178503499999
+   ],
+   "workers_cpu_work_ms": [
+    9525.641509500001,
+    5370.763615
+   ],
+   "workers_mean_ghz": 1819893.5403587497,
+   "janky_app_total": 0,
+   "frames": 1209.0,
+   "pss_start_after_mb": [
+    145.60546875,
+    164.416015625
+   ],
+   "graphics_start_after_mb": [
+    114.79296875,
+    127.23046875
+   ],
+   "graphics_start_runs": [
+    131.44921875,
+    114.65234375,
+    114.65234375,
+    114.85546875,
+    114.73046875,
+    123.08984375
+   ],
+   "graphics_after_runs": [
+    131.44921875,
+    123.01171875,
+    114.65234375,
+    123.01171875,
+    152.58203125,
+    191.36328125
+   ],
+   "gpu_total_start_after_mb": [
+    87.125,
+    96.57
+   ],
+   "mask_textures": 131.0,
+   "uploads_into_last_frames": 0.8442426807005743,
+   "flush_layers_per_run": 1205.5
+  },
+  "stress_animation/new": {
+   "runs": 6,
+   "main_p50_p90_p99": [
+    2.3045655,
+    2.930583,
+    4.086527500000001
+   ],
+   "render_p50_p90_p99": [
+    6.391317,
+    7.483948,
+    8.409607
+   ],
+   "work_main_render_ms": [
+    1534.5477225,
+    3566.1520415
+   ],
+   "cpu_main_render_ms": [
+    2731.6010535,
+    5665.8892185
+   ],
+   "workers_cpu_work_ms": [
+    9615.161734500001,
+    5377.179763
+   ],
+   "workers_mean_ghz": 1822758.6702306462,
+   "janky_app_total": 1,
+   "frames": 1202.0,
+   "pss_start_after_mb": [
+    144.56591796875,
+    163.57373046875
+   ],
+   "graphics_start_after_mb": [
+    114.65234375,
+    123.05078125
+   ],
+   "graphics_start_runs": [
+    114.65234375,
+    122.88671875,
+    114.65234375,
+    110.9140625,
+    122.88671875,
+    110.63671875
+   ],
+   "graphics_after_runs": [
+    161.140625,
+    123.01171875,
+    152.58203125,
+    123.08984375,
+    123.01171875,
+    114.65234375
+   ],
+   "gpu_total_start_after_mb": [
+    91.46,
+    96.41
+   ],
+   "mask_textures": 131.0,
+   "uploads_into_last_frames": 0.8475832314233356,
+   "flush_layers_per_run": 1197.5
+  },
+  "stress_animation/noflush": {
+   "runs": 6,
+   "main_p50_p90_p99": [
+    2.3197840000000003,
+    2.9543045,
+    3.970357
+   ],
+   "render_p50_p90_p99": [
+    6.341654500000001,
+    7.323017999999999,
+    8.3963825
+   ],
+   "work_main_render_ms": [
+    1548.2515705,
+    3575.1250265
+   ],
+   "cpu_main_render_ms": [
+    2757.606333,
+    5652.0238915
+   ],
+   "workers_cpu_work_ms": [
+    9690.541919,
+    5381.9094270000005
+   ],
+   "workers_mean_ghz": 1808118.3970322893,
+   "janky_app_total": 0,
+   "frames": 1201.5,
+   "pss_start_after_mb": [
+    179.94287109375,
+    200.97705078125
+   ],
+   "graphics_start_after_mb": [
+    150.58203125,
+    158.81640625
+   ],
+   "graphics_start_runs": [
+    150.62109375,
+    150.54296875,
+    150.54296875,
+    150.62109375,
+    154.55859375,
+    150.54296875
+   ],
+   "graphics_after_runs": [
+    171.27734375,
+    162.91796875,
+    154.55859375,
+    154.63671875,
+    154.71484375,
+    171.27734375
+   ],
+   "gpu_total_start_after_mb": [
+    115.21000000000001,
+    120.865
+   ],
+   "mask_textures": 244.5,
+   "uploads_into_last_frames": 0.0016442981859691947,
+   "flush_layers_per_run": 0.0
+  },
+  "scroll/main": {
+   "runs": 4,
+   "main_p50_p90_p99": [
+    0.8158974999999999,
+    1.2969765,
+    2.0861405
+   ],
+   "render_p50_p90_p99": [
+    1.4765015,
+    2.2145384999999997,
+    3.3373619999999997
+   ],
+   "work_main_render_ms": [
+    603.339296,
+    904.9662445
+   ],
+   "cpu_main_render_ms": [
+    2283.0975045,
+    3035.711143
+   ],
+   "workers_cpu_work_ms": [
+    null,
+    null
+   ],
+   "workers_mean_ghz": null,
+   "janky_app_total": 0,
+   "frames": 1763.5
+  },
+  "scroll/new": {
+   "runs": 4,
+   "main_p50_p90_p99": [
+    0.8005979999999999,
+    1.2733965,
+    2.056559
+   ],
+   "render_p50_p90_p99": [
+    1.4570925,
+    2.2201335,
+    3.2871094999999997
+   ],
+   "work_main_render_ms": [
+    597.3244705,
+    912.950955
+   ],
+   "cpu_main_render_ms": [
+    2248.3364819999997,
+    2983.18913
+   ],
+   "workers_cpu_work_ms": [
+    null,
+    null
+   ],
+   "workers_mean_ghz": null,
+   "janky_app_total": 0,
+   "frames": 1758.5
+  }
+ },
+ "stress_animation_ab": {
+  "variants": {
+   "main": "main/bench-rs-release.apk",
+   "new": "new/bench-rs-release.apk",
+   "noflush": "noflush/bench-rs-release.apk",
+   "compose": null
+  },
+  "scenarios": [
+   "stress_animation"
+  ],
+  "cpu_capacities": {
+   "0": [
+    182,
+    1704000
+   ],
+   "1": [
+    182,
+    1704000
+   ],
+   "2": [
+    182,
+    1704000
+   ],
+   "3": [
+    182,
+    1704000
+   ],
+   "4": [
+    725,
+    2367000
+   ],
+   "5": [
+    725,
+    2367000
+   ],
+   "6": [
+    725,
+    2367000
+   ],
+   "7": [
+    725,
+    2367000
+   ],
+   "8": [
+    1024,
+    2914000
+   ]
+  },
+  "runs": [
+   {
+    "label": "main",
+    "run": 0,
+    "scenario": "stress_animation",
+    "stats": {
+     "trace": {
+      "since": 0,
+      "frames": 1206,
+      "janky_frames": 0,
+      "jank_kinds": {},
+      "jank_sides": {
+       "app": 0,
+       "compositor": 0,
+       "other": 0
+      },
+      "visibly_late_frames": 0,
+      "late_do_frames": 4,
+      "late_do_frames_after_work": 0,
+      "prefetches": 0,
+      "buffer_stuffing": {
+       "recovery_slices": 0,
+       "buffer_stuffed": 0,
+       "occurred": false
+      },
+      "main_thread_frame_ms": {
+       "count": 1203,
+       "p50": 2.378459,
+       "p90": 2.984578,
+       "p99": 3.899699,
+       "max": 6.109294
+      },
+      "render_thread_frame_ms": {
+       "count": 1205,
+       "p50": 6.444946,
+       "p90": 7.431112,
+       "p99": 8.678426
+      },
+      "cpu_ms": {
+       "main": 2792.104503,
+       "render": 5655.580072
+      },
+      "work_ms": {
+       "main": 1540.768379,
+       "render": 3356.14489
+      },
+      "render_boost": {
+       "counter": true,
+       "time_weighted_min": 430.77428236358065,
+       "unboosted_frame_share": 0.0,
+       "frames_before_counter": 0,
+       "buckets": {
+        "unboosted": {
+         "frames": 0,
+         "share": 0.0,
+         "p50": null,
+         "p90": null,
+         "p99": null
+        },
+        "100-199": {
+         "frames": 0,
+         "share": 0.0,
+         "p50": null,
+         "p90": null,
+         "p99": null
+        },
+        "200+": {
+         "frames": 1205,
+         "share": 1.0,
+         "p50": 6.444946,
+         "p90": 7.431112,
+         "p99": 8.678426
+        }
+       },
+       "little_core_share": 3.056308950963375e-05
+      }
+     },
+     "extra": {
+      "cpu": {
+       "main": {
+        "cpu_ms": 2512.409471,
+        "work_ms": 1386.891074,
+        "clusters": {
+         "mid": 2195.842941,
+         "big": 316.56653
+        },
+        "mean_khz": 1810693.9679730255
+       },
+       "other": {
+        "cpu_ms": 1107.968539,
+        "work_ms": 262.827103,
+        "clusters": {
+         "little": 752.770467,
+         "mid": 336.697948,
+         "big": 18.500124
+        },
+        "mean_khz": 1190885.516324214
+       },
+       "render": {
+        "cpu_ms": 5065.5714880000005,
+        "work_ms": 3022.508591,
+        "clusters": {
+         "little": 0.172852,
+         "mid": 3485.8928269999997,
+         "big": 1579.505809
+        },
+        "mean_khz": 1902141.9467729754
+       },
+       "workers": {
+        "cpu_ms": 9531.389360000001,
+        "work_ms": 5356.651997999999,
+        "clusters": {
+         "mid": 7105.251129,
+         "big": 2426.138231
+        },
+        "mean_khz": 1810452.3393387003
+       }
+      },
+      "energy": {
+       "span_s": null,
+       "rails_mw": {},
+       "groups_mw": {
+        "cpu": null,
+        "gpu": null,
+        "all": null
+       }
+      },
+      "masks": {
+       "uploads": 60300,
+       "textures": 129,
+       "lag1": 0.8384936264978146,
+       "lag2": 0.045254358411859534
+      },
+      "render_waits_on_workers_ms": 1727.48277,
+      "flush_layers": {
+       "count": 1206,
+       "ms": 224.586721
+      }
+     },
+     "gfxinfo": {
+      "frames": 1364,
+      "janky": 0,
+      "p50": 14,
+      "p90": 16,
+      "p95": 16,
+      "p99": 18,
+      "gpu_p50": 6,
+      "gpu_p90": 7,
+      "gpu_p99": 8
+     },
+     "memory": {
+      "after_start": {
+       "Java Heap": 5728,
+       "Native Heap": 19136,
+       "Code": 2012,
+       "Stack": 508,
+       "Graphics": 134604,
+       "Private Other": 1156,
+       "System": 3629,
+       "Total PSS": 166773,
+       "Total RSS": 324176
+      },
+      "gpu_after_start": {
+       "Other/Other": [
+        0.01,
+        1
+       ],
+       "Other/Buffer Object": [
+        0.0,
+        2
+       ],
+       "SW Path Mask/Surface": [
+        7.99,
+        50
+       ],
+       "Scratch/Buffer Object": [
+        37.48,
+        217
+       ],
+       "Scratch/Surface": [
+        60.32,
+        228
+       ],
+       "total": 105.81,
+       "purgeable": 43.29
+      },
+      "after_animation": {
+       "Java Heap": 1868,
+       "Native Heap": 23472,
+       "Code": 2016,
+       "Stack": 544,
+       "Graphics": 134604,
+       "Private Other": 1392,
+       "System": 3714,
+       "Total PSS": 167610,
+       "Total RSS": 326636
+      },
+      "gpu_after_animation": {
+       "Other/Other": [
+        0.01,
+        1
+       ],
+       "Other/Buffer Object": [
+        0.0,
+        2
+       ],
+       "SW Path Mask/Surface": [
+        7.99,
+        50
+       ],
+       "Scratch/Buffer Object": [
+        27.98,
+        160
+       ],
+       "Scratch/Surface": [
+        60.15,
+        226
+       ],
+       "total": 96.14,
+       "purgeable": 33.62
+      }
+     }
+    }
+   },
+   {
+    "label": "new",
+    "run": 0,
+    "scenario": "stress_animation",
+    "stats": {
+     "trace": {
+      "since": 0,
+      "frames": 1202,
+      "janky_frames": 0,
+      "jank_kinds": {},
+      "jank_sides": {
+       "app": 0,
+       "compositor": 0,
+       "other": 0
+      },
+      "visibly_late_frames": 1202,
+      "late_do_frames": 3,
+      "late_do_frames_after_work": 0,
+      "prefetches": 0,
+      "buffer_stuffing": {
+       "recovery_slices": 0,
+       "buffer_stuffed": 0,
+       "occurred": false
+      },
+      "main_thread_frame_ms": {
+       "count": 1197,
+       "p50": 2.303304,
+       "p90": 2.879232,
+       "p99": 4.087036,
+       "max": 7.526326
+      },
+      "render_thread_frame_ms": {
+       "count": 1197,
+       "p50": 6.39209,
+       "p90": 7.335816,
+       "p99": 8.36495
+      },
+      "cpu_ms": {
+       "main": 2743.576683,
+       "render": 5577.718038
+      },
+      "work_ms": {
+       "main": 1528.991583,
+       "render": 3382.522182
+      },
+      "render_boost": {
+       "counter": true,
+       "time_weighted_min": 433.0021409736362,
+       "unboosted_frame_share": 0.0,
+       "frames_before_counter": 1,
+       "buckets": {
+        "unboosted": {
+         "frames": 0,
+         "share": 0.0,
+         "p50": null,
+         "p90": null,
+         "p99": null
+        },
+        "100-199": {
+         "frames": 0,
+         "share": 0.0,
+         "p50": null,
+         "p90": null,
+         "p99": null
+        },
+        "200+": {
+         "frames": 1196,
+         "share": 1.0,
+         "p50": 6.392659,
+         "p90": 7.33667,
+         "p99": 8.36495
+        }
+       },
+       "little_core_share": 0.0
+      }
+     },
+     "extra": {
+      "cpu": {
+       "main": {
+        "cpu_ms": 2457.011582,
+        "work_ms": 1375.796898,
+        "clusters": {
+         "little": 0.060018,
+         "mid": 2215.608758,
+         "big": 241.342806
+        },
+        "mean_khz": 1842405.750425152
+       },
+       "other": {
+        "cpu_ms": 1322.0030309999997,
+        "work_ms": 214.599781,
+        "clusters": {
+         "little": 1101.8292059999999,
+         "mid": 212.507563,
+         "big": 7.666262
+        },
+        "mean_khz": 998513.7922403147
+       },
+       "render": {
+        "cpu_ms": 5034.068539,
+        "work_ms": 3055.777339,
+        "clusters": {
+         "mid": 2754.091896,
+         "big": 2279.976643
+        },
+        "mean_khz": 1900439.7219433647
+       },
+       "workers": {
+        "cpu_ms": 9661.193083,
+        "work_ms": 5395.874602,
+        "clusters": {
+         "mid": 7817.847299,
+         "big": 1843.345784
+        },
+        "mean_khz": 1816541.2921293543
+       }
+      },
+      "energy": {
+       "span_s": null,
+       "rails_mw": {},
+       "groups_mw": {
+        "cpu": null,
+        "gpu": null,
+        "all": null
+       }
+      },
+      "masks": {
+       "uploads": 59832,
+       "textures": 131,
+       "lag1": 0.8475234920688096,
+       "lag2": 0.03641480042210348
+      },
+      "render_waits_on_workers_ms": 1676.03737,
+      "flush_layers": {
+       "count": 1197,
+       "ms": 206.846834
+      }
+     },
+     "gfxinfo": {
+      "frames": 1352,
+      "janky": 1,
+      "p50": 14,
+      "p90": 16,
+      "p95": 17,
+      "p99": 18,
+      "gpu_p50": 7,
+      "gpu_p90": 8,
+      "gpu_p99": 8
+     },
+     "memory": {
+      "after_start": {
+       "Java Heap": 4312,
+       "Native Heap": 17976,
+       "Code": 2064,
+       "Stack": 492,
+       "Graphics": 117404,
+       "Private Other": 1128,
+       "System": 3690,
+       "Total PSS": 147066,
+       "Total RSS": 303020
+      },
+      "gpu_after_start": {
+       "Other/Other": [
+        0.01,
+        1
+       ],
+       "Other/Buffer Object": [
+        0.0,
+        2
+       ],
+       "SW Path Mask/Surface": [
+        7.98,
+        50
+       ],
+       "Scratch/Buffer Object": [
+        28.14,
+        163
+       ],
+       "Scratch/Surface": [
+        60.15,
+        226
+       ],
+       "total": 96.29,
+       "purgeable": 33.78
+      },
+      "after_animation": {
+       "Java Heap": 11912,
+       "Native Heap": 24512,
+       "Code": 2068,
+       "Stack": 524,
+       "Graphics": 165008,
+       "Private Other": 1244,
+       "System": 3706,
+       "Total PSS": 208974,
+       "Total RSS": 367816
+      },
+      "gpu_after_animation": {
+       "Other/Other": [
+        0.01,
+        1
+       ],
+       "Other/Buffer Object": [
+        0.0,
+        2
+       ],
+       "SW Path Mask/Surface": [
+        7.99,
+        50
+       ],
+       "Scratch/Buffer Object": [
+        65.42,
+        378
+       ],
+       "Scratch/Surface": [
+        60.59,
+        230
+       ],
+       "total": 134.01,
+       "purgeable": 71.53
+      }
+     }
+    }
+   },
+   {
+    "label": "noflush",
+    "run": 0,
+    "scenario": "stress_animation",
+    "stats": {
+     "trace": {
+      "since": 0,
+      "frames": 1210,
+      "janky_frames": 0,
+      "jank_kinds": {},
+      "jank_sides": {
+       "app": 0,
+       "compositor": 0,
+       "other": 0
+      },
+      "visibly_late_frames": 0,
+      "late_do_frames": 1,
+      "late_do_frames_after_work": 0,
+      "prefetches": 0,
+      "buffer_stuffing": {
+       "recovery_slices": 0,
+       "buffer_stuffed": 0,
+       "occurred": false
+      },
+      "main_thread_frame_ms": {
+       "count": 1203,
+       "p50": 2.294148,
+       "p90": 2.936035,
+       "p99": 3.957845,
+       "max": 5.28951
+      },
+      "render_thread_frame_ms": {
+       "count": 1206,
+       "p50": 6.233317,
+       "p90": 7.205322,
+       "p99": 8.380859
+      },
+      "cpu_ms": {
+       "main": 2751.531996,
+       "render": 5737.406297
+      },
+      "work_ms": {
+       "main": 1551.379823,
+       "render": 3573.207658
+      },
+      "render_boost": {
+       "counter": true,
+       "time_weighted_min": 431.60844402165657,
+       "unboosted_frame_share": 0.0,
+       "frames_before_counter": 0,
+       "buckets": {
+        "unboosted": {
+         "frames": 0,
+         "share": 0.0,
+         "p50": null,
+         "p90": null,
+         "p99": null
+        },
+        "100-199": {
+         "frames": 0,
+         "share": 0.0,
+         "p50": null,
+         "p90": null,
+         "p99": null
+        },
+        "200+": {
+         "frames": 1206,
+         "share": 1.0,
+         "p50": 6.233317,
+         "p90": 7.205322,
+         "p99": 8.380859
+        }
+       },
+       "little_core_share": 0.00031700142983319884
+      }
+     },
+     "extra": {
+      "cpu": {
+       "main": {
+        "cpu_ms": 2464.360116,
+        "work_ms": 1394.559647,
+        "clusters": {
+         "mid": 2157.303519,
+         "big": 307.056597
+        },
+        "mean_khz": 1853855.1435264342
+       },
+       "other": {
+        "cpu_ms": 1255.8272110000003,
+        "work_ms": 194.253396,
+        "clusters": {
+         "little": 1073.4394690000001,
+         "mid": 176.900482,
+         "big": 5.48726
+        },
+        "mean_khz": 990180.0903086179
+       },
+       "render": {
+        "cpu_ms": 5124.6239399999995,
+        "work_ms": 3206.701075,
+        "clusters": {
+         "little": 1.818766,
+         "mid": 2755.821903,
+         "big": 2366.983271
+        },
+        "mean_khz": 1954636.0777840808
+       },
+       "workers": {
+        "cpu_ms": 9520.429234000001,
+        "work_ms": 5385.733476,
+        "clusters": {
+         "mid": 7847.0270900000005,
+         "big": 1673.402144
+        },
+        "mean_khz": 1840245.0061774175
+       }
+      },
+      "energy": {
+       "span_s": null,
+       "rails_mw": {},
+       "groups_mw": {
+        "cpu": null,
+        "gpu": null,
+        "all": null
+       }
+      },
+      "masks": {
+       "uploads": 60321,
+       "textures": 247,
+       "lag1": 0.004361287745114359,
+       "lag2": 0.786380131171555
+      },
+      "render_waits_on_workers_ms": 1447.575674,
+      "flush_layers": {
+       "count": 0,
+       "ms": 0.0
+      }
+     },
+     "gfxinfo": {
+      "frames": 1352,
+      "janky": 0,
+      "p50": 14,
+      "p90": 16,
+      "p95": 17,
+      "p99": 18,
+      "gpu_p50": 7,
+      "gpu_p90": 7,
+      "gpu_p99": 8
+     },
+     "memory": {
+      "after_start": {
+       "Java Heap": 4296,
+       "Native Heap": 18328,
+       "Code": 2016,
+       "Stack": 504,
+       "Graphics": 154236,
+       "Private Other": 1132,
+       "System": 3709,
+       "Total PSS": 184221,
+       "Total RSS": 340220
+      },
+      "gpu_after_start": {
+       "Other/Other": [
+        0.01,
+        1
+       ],
+       "Other/Buffer Object": [
+        0.0,
+        2
+       ],
+       "SW Path Mask/Surface": [
+        7.98,
+        50
+       ],
+       "Scratch/Buffer Object": [
+        28.02,
+        159
+       ],
+       "Scratch/Surface": [
+        78.94,
+        440
+       ],
+       "total": 114.95,
+       "purgeable": 52.48
+      },
+      "after_animation": {
+       "Java Heap": 11952,
+       "Native Heap": 22184,
+       "Code": 2020,
+       "Stack": 528,
+       "Graphics": 175388,
+       "Private Other": 1260,
+       "System": 3702,
+       "Total PSS": 217034,
+       "Total RSS": 375812
+      },
+      "gpu_after_animation": {
+       "Other/Other": [
+        0.01,
+        1
+       ],
+       "Other/Buffer Object": [
+        0.0,
+        2
+       ],
+       "SW Path Mask/Surface": [
+        7.99,
+        50
+       ],
+       "Scratch/Buffer Object": [
+        46.61,
+        266
+       ],
+       "Scratch/Surface": [
+        80.35,
+        456
+       ],
+       "total": 134.96,
+       "purgeable": 72.49
+      }
+     }
+    }
+   },
+   {
+    "label": "compose",
+    "run": 0,
+    "scenario": "stress_animation",
+    "stats": {
+     "trace": {
+      "since": 0,
+      "frames": 1203,
+      "janky_frames": 0,
+      "jank_kinds": {},
+      "jank_sides": {
+       "app": 0,
+       "compositor": 0,
+       "other": 0
+      },
+      "visibly_late_frames": 1203,
+      "late_do_frames": 14,
+      "late_do_frames_after_work": 0,
+      "prefetches": 0,
+      "buffer_stuffing": {
+       "recovery_slices": 0,
+       "buffer_stuffed": 0,
+       "occurred": false
+      },
+      "main_thread_frame_ms": {
+       "count": 1194,
+       "p50": 3.837565,
+       "p90": 5.380981,
+       "p99": 7.613769,
+       "max": 12.172078
+      },
+      "render_thread_frame_ms": {
+       "count": 1200,
+       "p50": 7.392008,
+       "p90": 8.783406,
+       "p99": 10.935872
+      },
+      "cpu_ms": {
+       "main": 4342.609989,
+       "render": 7132.973866
+      },
+      "work_ms": {
+       "main": 3076.911316,
+       "render": 6338.227693
+      },
+      "render_boost": {
+       "counter": true,
+       "time_weighted_min": 719.6189083576115,
+       "unboosted_frame_share": 0.0,
+       "frames_before_counter": 0,
+       "buckets": {
+        "unboosted": {
+         "frames": 0,
+         "share": 0.0,
+         "p50": null,
+         "p90": null,
+         "p99": null
+        },
+        "100-199": {
+         "frames": 0,
+         "share": 0.0,
+         "p50": null,
+         "p90": null,
+         "p99": null
+        },
+        "200+": {
+         "frames": 1200,
+         "share": 1.0,
+         "p50": 7.392008,
+         "p90": 8.783406,
+         "p99": 10.935872
+        }
+       },
+       "little_core_share": 0.0008391556048862221
+      }
+     },
+     "extra": {
+      "cpu": {
+       "main": {
+        "cpu_ms": 3913.8537229999997,
+        "work_ms": 2775.6767580000005,
+        "clusters": {
+         "little": 1.525553,
+         "mid": 3406.181369,
+         "big": 506.146801
+        },
+        "mean_khz": 2320909.2836326733
+       },
+       "other": {
+        "cpu_ms": 1366.124169,
+        "work_ms": 257.367357,
+        "clusters": {
+         "little": 1137.6129449999999,
+         "mid": 196.72126400000002,
+         "big": 31.78996
+        },
+        "mean_khz": 1113518.6362851034
+       },
+       "render": {
+        "cpu_ms": 6418.590024,
+        "work_ms": 5695.143246,
+        "clusters": {
+         "little": 5.929563,
+         "mid": 2102.421671,
+         "big": 4310.23879
+        },
+        "mean_khz": 2685772.82922113
+       },
+       "workers": {
+        "cpu_ms": 7751.039515,
+        "work_ms": 5467.398023,
+        "clusters": {
+         "little": 0.7371019999999999,
+         "mid": 7447.867437999999,
+         "big": 302.434975
+        },
+        "mean_khz": 2343218.2100154087
+       }
+      },
+      "energy": {
+       "span_s": null,
+       "rails_mw": {},
+       "groups_mw": {
+        "cpu": null,
+        "gpu": null,
+        "all": null
+       }
+      },
+      "masks": {
+       "uploads": 60000,
+       "textures": 142,
+       "lag1": 0.8375321594440175,
+       "lag2": 0.04574158842594139
+      },
+      "render_waits_on_workers_ms": 1517.293966,
+      "flush_layers": {
+       "count": 1190,
+       "ms": 1703.385702
+      }
+     },
+     "gfxinfo": {
+      "frames": 1469,
+      "janky": 1,
+      "p50": 15,
+      "p90": 17,
+      "p95": 18,
+      "p99": 20,
+      "gpu_p50": 5,
+      "gpu_p90": 6,
+      "gpu_p99": 7
+     },
+     "memory": {
+      "after_start": {
+       "Java Heap": 14120,
+       "Native Heap": 20736,
+       "Code": 7300,
+       "Stack": 520,
+       "Graphics": 122284,
+       "Private Other": 1904,
+       "System": 3796,
+       "Total PSS": 170660,
+       "Total RSS": 330896
+      },
+      "gpu_after_start": {
+       "Other/Other": [
+        0.01,
+        1
+       ],
+       "Other/Buffer Object": [
+        0.0,
+        2
+       ],
+       "SW Path Mask/Surface": [
+        7.99,
+        50
+       ],
+       "Scratch/Buffer Object": [
+        18.8,
+        111
+       ],
+       "Scratch/Surface": [
+        62.68,
+        506
+       ],
+       "total": 89.48,
+       "purgeable": 24.79
+      },
+      "after_animation": {
+       "Java Heap": 53040,
+       "Native Heap": 25496,
+       "Code": 7304,
+       "Stack": 552,
+       "Graphics": 134932,
+       "Private Other": 2132,
+       "System": 3849,
+       "Total PSS": 227305,
+       "Total RSS": 389016
+      },
+      "gpu_after_animation": {
+       "Other/Other": [
+        0.01,
+        1
+       ],
+       "Other/Buffer Object": [
+        0.0,
+        2
+       ],
+       "SW Path Mask/Surface": [
+        7.99,
+        50
+       ],
+       "Scratch/Buffer Object": [
+        28.11,
+        164
+       ],
+       "Scratch/Surface": [
+        64.48,
+        528
+       ],
+       "total": 100.59,
+       "purgeable": 35.9
+      }
+     }
+    }
+   },
+   {
+    "label": "new",
+    "run": 1,
+    "scenario": "stress_animation",
+    "stats": {
+     "trace": {
+      "since": 0,
+      "frames": 1203,
+      "janky_frames": 0,
+      "jank_kinds": {},
+      "jank_sides": {
+       "app": 0,
+       "compositor": 0,
+       "other": 0
+      },
+      "visibly_late_frames": 1203,
+      "late_do_frames": 6,
+      "late_do_frames_after_work": 0,
+      "prefetches": 0,
+      "buffer_stuffing": {
+       "recovery_slices": 0,
+       "buffer_stuffed": 0,
+       "occurred": false
+      },
+      "main_thread_frame_ms": {
+       "count": 1199,
+       "p50": 2.305827,
+       "p90": 2.914714,
+       "p99": 4.10848,
+       "max": 5.516236
+      },
+      "render_thread_frame_ms": {
+       "count": 1198,
+       "p50": 6.463705,
+       "p90": 7.568888,
+       "p99": 8.37732
+      },
+      "cpu_ms": {
+       "main": 2734.100633,
+       "render": 5657.459041
+      },
+      "work_ms": {
+       "main": 1535.870663,
+       "render": 3611.24274
+      },
+      "render_boost": {
+       "counter": true,
+       "time_weighted_min": 413.9336475191735,
+       "unboosted_frame_share": 0.0,
+       "frames_before_counter": 0,
+       "buckets": {
+        "unboosted": {
+         "frames": 0,
+         "share": 0.0,
+         "p50": null,
+         "p90": null,
+         "p99": null
+        },
+        "100-199": {
+         "frames": 0,
+         "share": 0.0,
+         "p50": null,
+         "p90": null,
+         "p99": null
+        },
+        "200+": {
+         "frames": 1198,
+         "share": 1.0,
+         "p50": 6.463705,
+         "p90": 7.568888,
+         "p99": 8.37732
+        }
+       },
+       "little_core_share": 0.0007743654823617192
+      }
+     },
+     "extra": {
+      "cpu": {
+       "main": {
+        "cpu_ms": 2471.58786,
+        "work_ms": 1391.822126,
+        "clusters": {
+         "mid": 2196.130541,
+         "big": 275.457319
+        },
+        "mean_khz": 1846631.646293974
+       },
+       "other": {
+        "cpu_ms": 1294.9559620000002,
+        "work_ms": 216.454866,
+        "clusters": {
+         "little": 1063.0222760000001,
+         "mid": 226.56527599999998,
+         "big": 5.36841
+        },
+        "mean_khz": 1011542.9245261082
+       },
+       "render": {
+        "cpu_ms": 5081.2063450000005,
+        "work_ms": 3271.6358469999996,
+        "clusters": {
+         "little": 4.380941,
+         "mid": 2923.993324,
+         "big": 2152.83208
+        },
+        "mean_khz": 2015576.9761143203
+       },
+       "workers": {
+        "cpu_ms": 9781.861139,
+        "work_ms": 5381.190538999999,
+        "clusters": {
+         "mid": 8100.483335,
+         "big": 1681.377804
+        },
+        "mean_khz": 1792464.181607005
+       }
+      },
+      "energy": {
+       "span_s": null,
+       "rails_mw": {},
+       "groups_mw": {
+        "cpu": null,
+        "gpu": null,
+        "all": null
+       }
+      },
+      "masks": {
+       "uploads": 59950,
+       "textures": 131,
+       "lag1": 0.8459686721610191,
+       "lag2": 0.0362760995670272
+      },
+      "render_waits_on_workers_ms": 1699.692631,
+      "flush_layers": {
+       "count": 1199,
+       "ms": 209.850052
+      }
+     },
+     "gfxinfo": {
+      "frames": 1366,
+      "janky": 0,
+      "p50": 14,
+      "p90": 16,
+      "p95": 16,
+      "p99": 17,
+      "gpu_p50": 6,
+      "gpu_p90": 7,
+      "gpu_p99": 8
+     },
+     "memory": {
+      "after_start": {
+       "Java Heap": 4388,
+       "Native Heap": 18020,
+       "Code": 2056,
+       "Stack": 484,
+       "Graphics": 125836,
+       "Private Other": 1124,
+       "System": 3721,
+       "Total PSS": 155629,
+       "Total RSS": 311560
+      },
+      "gpu_after_start": {
+       "Other/Other": [
+        0.01,
+        1
+       ],
+       "Other/Buffer Object": [
+        0.0,
+        2
+       ],
+       "SW Path Mask/Surface": [
+        8.0,
+        50
+       ],
+       "Scratch/Buffer Object": [
+        28.08,
+        161
+       ],
+       "Scratch/Surface": [
+        59.88,
+        222
+       ],
+       "total": 95.96,
+       "purgeable": 33.47
+      },
+      "after_animation": {
+       "Java Heap": 12020,
+       "Native Heap": 22000,
+       "Code": 2060,
+       "Stack": 524,
+       "Graphics": 125964,
+       "Private Other": 1244,
+       "System": 3726,
+       "Total PSS": 167538,
+       "Total RSS": 326360
+      },
+      "gpu_after_animation": {
+       "Other/Other": [
+        0.01,
+        1
+       ],
+       "Other/Buffer Object": [
+        0.0,
+        2
+       ],
+       "SW Path Mask/Surface": [
+        7.99,
+        50
+       ],
+       "Scratch/Buffer Object": [
+        28.05,
+        162
+       ],
+       "Scratch/Surface": [
+        60.25,
+        226
+       ],
+       "total": 96.3,
+       "purgeable": 33.81
+      }
+     }
+    }
+   },
+   {
+    "label": "noflush",
+    "run": 1,
+    "scenario": "stress_animation",
+    "stats": {
+     "trace": {
+      "since": 0,
+      "frames": 1201,
+      "janky_frames": 0,
+      "jank_kinds": {},
+      "jank_sides": {
+       "app": 0,
+       "compositor": 0,
+       "other": 0
+      },
+      "visibly_late_frames": 1201,
+      "late_do_frames": 1,
+      "late_do_frames_after_work": 0,
+      "prefetches": 0,
+      "buffer_stuffing": {
+       "recovery_slices": 0,
+       "buffer_stuffed": 0,
+       "occurred": false
+      },
+      "main_thread_frame_ms": {
+       "count": 1198,
+       "p50": 2.307698,
+       "p90": 2.911946,
+       "p99": 3.982869,
+       "max": 6.330038
+      },
+      "render_thread_frame_ms": {
+       "count": 1197,
+       "p50": 6.347086,
+       "p90": 7.541422,
+       "p99": 8.606242
+      },
+      "cpu_ms": {
+       "main": 2717.233342,
+       "render": 5612.022385
+      },
+      "work_ms": {
+       "main": 1533.183294,
+       "render": 3503.185467
+      },
+      "render_boost": {
+       "counter": true,
+       "time_weighted_min": 388.3118135914837,
+       "unboosted_frame_share": 0.0,
+       "frames_before_counter": 0,
+       "buckets": {
+        "unboosted": {
+         "frames": 0,
+         "share": 0.0,
+         "p50": null,
+         "p90": null,
+         "p99": null
+        },
+        "100-199": {
+         "frames": 21,
+         "share": 0.017543859649122806,
+         "p50": 6.850993,
+         "p90": 7.48999,
+         "p99": 8.340129
+        },
+        "200+": {
+         "frames": 1176,
+         "share": 0.9824561403508771,
+         "p50": 6.343343,
+         "p90": 7.544026,
+         "p99": 8.606242
+        }
+       },
+       "little_core_share": 0.0007729350850098338
+      }
+     },
+     "extra": {
+      "cpu": {
+       "main": {
+        "cpu_ms": 2441.572243,
+        "work_ms": 1383.0772430000002,
+        "clusters": {
+         "mid": 2114.718293,
+         "big": 326.85395
+        },
+        "mean_khz": 1853266.7388064666
+       },
+       "other": {
+        "cpu_ms": 1222.001442,
+        "work_ms": 186.62943,
+        "clusters": {
+         "little": 1050.471149,
+         "mid": 163.85386699999998,
+         "big": 7.676426
+        },
+        "mean_khz": 997993.8942486125
+       },
+       "render": {
+        "cpu_ms": 5023.452292,
+        "work_ms": 3181.939808,
+        "clusters": {
+         "little": 3.58012,
+         "mid": 3108.6933639999997,
+         "big": 1911.178808
+        },
+        "mean_khz": 1994886.912739093
+       },
+       "workers": {
+        "cpu_ms": 9767.895799,
+        "work_ms": 5368.203501000001,
+        "clusters": {
+         "mid": 7743.424368,
+         "big": 2024.471431
+        },
+        "mean_khz": 1781820.722825874
+       }
+      },
+      "energy": {
+       "span_s": null,
+       "rails_mw": {},
+       "groups_mw": {
+        "cpu": null,
+        "gpu": null,
+        "all": null
+       }
+      },
+      "masks": {
+       "uploads": 59882,
+       "textures": 246,
+       "lag1": 0.0026158696089610303,
+       "lag2": 0.7793279227312362
+      },
+      "render_waits_on_workers_ms": 1651.828289,
+      "flush_layers": {
+       "count": 0,
+       "ms": 0.0
+      }
+     },
+     "gfxinfo": {
+      "frames": 1371,
+      "janky": 0,
+      "p50": 14,
+      "p90": 16,
+      "p95": 17,
+      "p99": 18,
+      "gpu_p50": 6,
+      "gpu_p90": 7,
+      "gpu_p99": 8
+     },
+     "memory": {
+      "after_start": {
+       "Java Heap": 4332,
+       "Native Heap": 18444,
+       "Code": 2040,
+       "Stack": 488,
+       "Graphics": 154156,
+       "Private Other": 1128,
+       "System": 3714,
+       "Total PSS": 184302,
+       "Total RSS": 340168
+      },
+      "gpu_after_start": {
+       "Other/Other": [
+        0.01,
+        1
+       ],
+       "Other/Buffer Object": [
+        0.0,
+        2
+       ],
+       "SW Path Mask/Surface": [
+        7.99,
+        50
+       ],
+       "Scratch/Buffer Object": [
+        28.08,
+        161
+       ],
+       "Scratch/Surface": [
+        79.43,
+        444
+       ],
+       "total": 115.5,
+       "purgeable": 53.04
+      },
+      "after_animation": {
+       "Java Heap": 12068,
+       "Native Heap": 23284,
+       "Code": 2044,
+       "Stack": 540,
+       "Graphics": 166828,
+       "Private Other": 1256,
+       "System": 3709,
+       "Total PSS": 209729,
+       "Total RSS": 368368
+      },
+      "gpu_after_animation": {
+       "Other/Other": [
+        0.01,
+        1
+       ],
+       "Other/Buffer Object": [
+        0.0,
+        2
+       ],
+       "SW Path Mask/Surface": [
+        7.99,
+        50
+       ],
+       "Scratch/Buffer Object": [
+        37.3,
+        213
+       ],
+       "Scratch/Surface": [
+        80.59,
+        456
+       ],
+       "total": 125.88,
+       "purgeable": 63.41
+      }
+     }
+    }
+   },
+   {
+    "label": "compose",
+    "run": 1,
+    "scenario": "stress_animation",
+    "stats": {
+     "trace": {
+      "since": 0,
+      "frames": 1196,
+      "janky_frames": 1,
+      "jank_kinds": {
+       "App Deadline Missed": 1
+      },
+      "jank_sides": {
+       "app": 1,
+       "compositor": 0,
+       "other": 0
+      },
+      "visibly_late_frames": 1195,
+      "late_do_frames": 10,
+      "late_do_frames_after_work": 0,
+      "prefetches": 0,
+      "buffer_stuffing": {
+       "recovery_slices": 0,
+       "buffer_stuffed": 0,
+       "occurred": false
+      },
+      "main_thread_frame_ms": {
+       "count": 1192,
+       "p50": 3.81482,
+       "p90": 5.354614,
+       "p99": 7.688884,
+       "max": 10.309571
+      },
+      "render_thread_frame_ms": {
+       "count": 1191,
+       "p50": 7.444662,
+       "p90": 8.726278,
+       "p99": 10.613648
+      },
+      "cpu_ms": {
+       "main": 4506.13007,
+       "render": 7082.71377
+      },
+      "work_ms": {
+       "main": 3133.544448,
+       "render": 6339.115493
+      },
+      "render_boost": {
+       "counter": true,
+       "time_weighted_min": 703.4862486343584,
+       "unboosted_frame_share": 0.0,
+       "frames_before_counter": 0,
+       "buckets": {
+        "unboosted": {
+         "frames": 0,
+         "share": 0.0,
+         "p50": null,
+         "p90": null,
+         "p99": null
+        },
+        "100-199": {
+         "frames": 0,
+         "share": 0.0,
+         "p50": null,
+         "p90": null,
+         "p99": null
+        },
+        "200+": {
+         "frames": 1191,
+         "share": 1.0,
+         "p50": 7.444662,
+         "p90": 8.726278,
+         "p99": 10.613648
+        }
+       },
+       "little_core_share": 0.0002806713731874172
+      }
+     },
+     "extra": {
+      "cpu": {
+       "main": {
+        "cpu_ms": 4067.446472,
+        "work_ms": 2837.358101,
+        "clusters": {
+         "little": 1.9602050000000002,
+         "mid": 3680.03754,
+         "big": 385.448727
+        },
+        "mean_khz": 2294827.868011338
+       },
+       "other": {
+        "cpu_ms": 1363.5174249999998,
+        "work_ms": 245.99642999999998,
+        "clusters": {
+         "little": 1146.79776,
+         "mid": 212.26198499999998,
+         "big": 4.45768
+        },
+        "mean_khz": 1095684.681663676
+       },
+       "render": {
+        "cpu_ms": 6435.412386999999,
+        "work_ms": 5726.495567,
+        "clusters": {
+         "little": 1.987915,
+         "mid": 2001.738203,
+         "big": 4431.686269
+        },
+        "mean_khz": 2687404.746912298
+       },
+       "workers": {
+        "cpu_ms": 7764.169651000001,
+        "work_ms": 5442.916053,
+        "clusters": {
+         "little": 0.04537,
+         "mid": 7346.097805000001,
+         "big": 418.026476
+        },
+        "mean_khz": 2323579.4046780546
+       }
+      },
+      "energy": {
+       "span_s": null,
+       "rails_mw": {},
+       "groups_mw": {
+        "cpu": null,
+        "gpu": null,
+        "all": null
+       }
+      },
+      "masks": {
+       "uploads": 59650,
+       "textures": 143,
+       "lag1": 0.83717881929857,
+       "lag2": 0.04565849395869394
+      },
+      "render_waits_on_workers_ms": 1505.46037,
+      "flush_layers": {
+       "count": 1182,
+       "ms": 1687.310925
+      }
+     },
+     "gfxinfo": {
+      "frames": 1466,
+      "janky": 0,
+      "p50": 15,
+      "p90": 17,
+      "p95": 18,
+      "p99": 20,
+      "gpu_p50": 5,
+      "gpu_p90": 6,
+      "gpu_p99": 6
+     },
+     "memory": {
+      "after_start": {
+       "Java Heap": 14624,
+       "Native Heap": 21368,
+       "Code": 7300,
+       "Stack": 504,
+       "Graphics": 122720,
+       "Private Other": 1908,
+       "System": 3834,
+       "Total PSS": 172258,
+       "Total RSS": 332516
+      },
+      "gpu_after_start": {
+       "Other/Other": [
+        0.01,
+        1
+       ],
+       "Other/Buffer Object": [
+        0.0,
+        2
+       ],
+       "SW Path Mask/Surface": [
+        7.99,
+        50
+       ],
+       "Scratch/Buffer Object": [
+        18.86,
+        113
+       ],
+       "Scratch/Surface": [
+        62.68,
+        506
+       ],
+       "total": 89.54,
+       "purgeable": 24.85
+      },
+      "after_animation": {
+       "Java Heap": 46448,
+       "Native Heap": 25928,
+       "Code": 7304,
+       "Stack": 548,
+       "Graphics": 122724,
+       "Private Other": 2012,
+       "System": 3869,
+       "Total PSS": 208833,
+       "Total RSS": 370408
+      },
+      "gpu_after_animation": {
+       "Other/Other": [
+        0.01,
+        1
+       ],
+       "Other/Buffer Object": [
+        0.0,
+        2
+       ],
+       "SW Path Mask/Surface": [
+        7.99,
+        50
+       ],
+       "Scratch/Buffer Object": [
+        18.86,
+        113
+       ],
+       "Scratch/Surface": [
+        64.45,
+        528
+       ],
+       "total": 91.31,
+       "purgeable": 26.62
+      }
+     }
+    }
+   },
+   {
+    "label": "main",
+    "run": 1,
+    "scenario": "stress_animation",
+    "stats": {
+     "trace": {
+      "since": 0,
+      "frames": 1208,
+      "janky_frames": 0,
+      "jank_kinds": {},
+      "jank_sides": {
+       "app": 0,
+       "compositor": 0,
+       "other": 0
+      },
+      "visibly_late_frames": 0,
+      "late_do_frames": 2,
+      "late_do_frames_after_work": 0,
+      "prefetches": 0,
+      "buffer_stuffing": {
+       "recovery_slices": 0,
+       "buffer_stuffed": 0,
+       "occurred": false
+      },
+      "main_thread_frame_ms": {
+       "count": 1202,
+       "p50": 2.274047,
+       "p90": 2.878743,
+       "p99": 3.900797,
+       "max": 5.545898
+      },
+      "render_thread_frame_ms": {
+       "count": 1204,
+       "p50": 6.442138,
+       "p90": 7.533529,
+       "p99": 8.597209
+      },
+      "cpu_ms": {
+       "main": 2710.629612,
+       "render": 5817.843633
+      },
+      "work_ms": {
+       "main": 1529.24053,
+       "render": 3594.397414
+      },
+      "render_boost": {
+       "counter": true,
+       "time_weighted_min": 373.21716867441836,
+       "unboosted_frame_share": 0.0,
+       "frames_before_counter": 0,
+       "buckets": {
+        "unboosted": {
+         "frames": 0,
+         "share": 0.0,
+         "p50": null,
+         "p90": null,
+         "p99": null
+        },
+        "100-199": {
+         "frames": 85,
+         "share": 0.07059800664451828,
+         "p50": 6.309652,
+         "p90": 7.899414,
+         "p99": 8.800985
+        },
+        "200+": {
+         "frames": 1119,
+         "share": 0.9294019933554817,
+         "p50": 6.451131,
+         "p90": 7.489991,
+         "p99": 8.586589
+        }
+       },
+       "little_core_share": 0.0005876792529463296
+      }
+     },
+     "extra": {
+      "cpu": {
+       "main": {
+        "cpu_ms": 2442.447115,
+        "work_ms": 1369.4585020000002,
+        "clusters": {
+         "mid": 2149.8269099999998,
+         "big": 292.620205
+        },
+        "mean_khz": 1839708.578243259
+       },
+       "other": {
+        "cpu_ms": 1365.089328,
+        "work_ms": 214.54183,
+        "clusters": {
+         "little": 1153.366834,
+         "mid": 204.00134299999996,
+         "big": 7.721151
+        },
+        "mean_khz": 991058.1816540287
+       },
+       "render": {
+        "cpu_ms": 5247.012837,
+        "work_ms": 3219.187731,
+        "clusters": {
+         "little": 3.3313390000000003,
+         "mid": 3475.3101070000002,
+         "big": 1768.371391
+        },
+        "mean_khz": 1946503.9139851832
+       },
+       "workers": {
+        "cpu_ms": 9519.893659000001,
+        "work_ms": 5364.381147,
+        "clusters": {
+         "mid": 7247.3560210000005,
+         "big": 2272.537638
+        },
+        "mean_khz": 1819354.076220779
+       }
+      },
+      "energy": {
+       "span_s": null,
+       "rails_mw": {},
+       "groups_mw": {
+        "cpu": null,
+        "gpu": null,
+        "all": null
+       }
+      },
+      "masks": {
+       "uploads": 60219,
+       "textures": 132,
+       "lag1": 0.8453575648642802,
+       "lag2": 0.036363938955181654
+      },
+      "render_waits_on_workers_ms": 1551.793845,
+      "flush_layers": {
+       "count": 1204,
+       "ms": 219.669665
+      }
+     },
+     "gfxinfo": {
+      "frames": 1366,
+      "janky": 1,
+      "p50": 15,
+      "p90": 16,
+      "p95": 17,
+      "p99": 18,
+      "gpu_p50": 6,
+      "gpu_p90": 7,
+      "gpu_p99": 8
+     },
+     "memory": {
+      "after_start": {
+       "Java Heap": 4276,
+       "Native Heap": 17860,
+       "Code": 2008,
+       "Stack": 484,
+       "Graphics": 117404,
+       "Private Other": 1128,
+       "System": 3729,
+       "Total PSS": 146889,
+       "Total RSS": 302936
+      },
+      "gpu_after_start": {
+       "Other/Other": [
+        0.01,
+        1
+       ],
+       "Other/Buffer Object": [
+        0.0,
+        2
+       ],
+       "SW Path Mask/Surface": [
+        7.99,
+        50
+       ],
+       "Scratch/Buffer Object": [
+        18.83,
+        110
+       ],
+       "Scratch/Surface": [
+        60.02,
+        224
+       ],
+       "total": 86.85,
+       "purgeable": 24.33
+      },
+      "after_animation": {
+       "Java Heap": 12004,
+       "Native Heap": 23632,
+       "Code": 2012,
+       "Stack": 528,
+       "Graphics": 125964,
+       "Private Other": 1248,
+       "System": 3726,
+       "Total PSS": 169114,
+       "Total RSS": 327932
+      },
+      "gpu_after_animation": {
+       "Other/Other": [
+        0.01,
+        1
+       ],
+       "Other/Buffer Object": [
+        0.0,
+        2
+       ],
+       "SW Path Mask/Surface": [
+        8.0,
+        50
+       ],
+       "Scratch/Buffer Object": [
+        28.05,
+        162
+       ],
+       "Scratch/Surface": [
+        60.53,
+        230
+       ],
+       "total": 96.59,
+       "purgeable": 34.09
+      }
+     }
+    }
+   },
+   {
+    "label": "noflush",
+    "run": 2,
+    "scenario": "stress_animation",
+    "stats": {
+     "trace": {
+      "since": 0,
+      "frames": 1203,
+      "janky_frames": 0,
+      "jank_kinds": {},
+      "jank_sides": {
+       "app": 0,
+       "compositor": 0,
+       "other": 0
+      },
+      "visibly_late_frames": 0,
+      "late_do_frames": 0,
+      "late_do_frames_after_work": 0,
+      "prefetches": 0,
+      "buffer_stuffing": {
+       "recovery_slices": 0,
+       "buffer_stuffed": 0,
+       "occurred": false
+      },
+      "main_thread_frame_ms": {
+       "count": 1199,
+       "p50": 2.36503,
+       "p90": 2.990764,
+       "p99": 3.773722,
+       "max": 5.130127
+      },
+      "render_thread_frame_ms": {
+       "count": 1198,
+       "p50": 6.365519,
+       "p90": 7.269654,
+       "p99": 8.286174
+      },
+      "cpu_ms": {
+       "main": 2798.460253,
+       "render": 5777.514473
+      },
+      "work_ms": {
+       "main": 1566.851899,
+       "render": 3577.042395
+      },
+      "render_boost": {
+       "counter": true,
+       "time_weighted_min": 440.1622480570329,
+       "unboosted_frame_share": 0.0,
+       "frames_before_counter": 1,
+       "buckets": {
+        "unboosted": {
+         "frames": 0,
+         "share": 0.0,
+         "p50": null,
+         "p90": null,
+         "p99": null
+        },
+        "100-199": {
+         "frames": 0,
+         "share": 0.0,
+         "p50": null,
+         "p90": null,
+         "p99": null
+        },
+        "200+": {
+         "frames": 1197,
+         "share": 1.0,
+         "p50": 6.365519,
+         "p90": 7.262329,
+         "p99": 8.286174
+        }
+       },
+       "little_core_share": 0.00016156965148262473
+      }
+     },
+     "extra": {
+      "cpu": {
+       "main": {
+        "cpu_ms": 2517.617155,
+        "work_ms": 1407.145634,
+        "clusters": {
+         "mid": 2234.4595719999998,
+         "big": 283.157583
+        },
+        "mean_khz": 1835703.3350779659
+       },
+       "other": {
+        "cpu_ms": 1282.0144360000002,
+        "work_ms": 195.69471399999998,
+        "clusters": {
+         "little": 1098.065403,
+         "mid": 179.767317,
+         "big": 4.181716
+        },
+        "mean_khz": 984057.7015787986
+       },
+       "render": {
+        "cpu_ms": 5201.197627,
+        "work_ms": 3219.8747999999996,
+        "clusters": {
+         "little": 0.370239,
+         "mid": 2614.822305,
+         "big": 2586.005083
+        },
+        "mean_khz": 1925816.1379359947
+       },
+       "workers": {
+        "cpu_ms": 9637.675689,
+        "work_ms": 5404.2749699999995,
+        "clusters": {
+         "mid": 8096.970480999999,
+         "big": 1540.705208
+        },
+        "mean_khz": 1830252.6896539775
+       }
+      },
+      "energy": {
+       "span_s": null,
+       "rails_mw": {},
+       "groups_mw": {
+        "cpu": null,
+        "gpu": null,
+        "all": null
+       }
+      },
+      "masks": {
+       "uploads": 59987,
+       "textures": 241,
+       "lag1": 0.0006862384092658923,
+       "lag2": 0.7843370267465605
+      },
+      "render_waits_on_workers_ms": 1460.515382,
+      "flush_layers": {
+       "count": 0,
+       "ms": 0.0
+      }
+     },
+     "gfxinfo": {
+      "frames": 1361,
+      "janky": 0,
+      "p50": 14,
+      "p90": 16,
+      "p95": 17,
+      "p99": 18,
+      "gpu_p50": 6,
+      "gpu_p90": 7,
+      "gpu_p99": 8
+     },
+     "memory": {
+      "after_start": {
+       "Java Heap": 4368,
+       "Native Heap": 18112,
+       "Code": 2020,
+       "Stack": 504,
+       "Graphics": 154156,
+       "Private Other": 1128,
+       "System": 3722,
+       "Total PSS": 184010,
+       "Total RSS": 340008
+      },
+      "gpu_after_start": {
+       "Other/Other": [
+        0.01,
+        1
+       ],
+       "Other/Buffer Object": [
+        0.0,
+        2
+       ],
+       "SW Path Mask/Surface": [
+        7.97,
+        50
+       ],
+       "Scratch/Buffer Object": [
+        28.08,
+        161
+       ],
+       "Scratch/Surface": [
+        79.57,
+        444
+       ],
+       "total": 115.63,
+       "purgeable": 53.18
+      },
+      "after_animation": {
+       "Java Heap": 11948,
+       "Native Heap": 21808,
+       "Code": 2024,
+       "Stack": 528,
+       "Graphics": 158268,
+       "Private Other": 1256,
+       "System": 3718,
+       "Total PSS": 199550,
+       "Total RSS": 358320
+      },
+      "gpu_after_animation": {
+       "Other/Other": [
+        0.01,
+        1
+       ],
+       "Other/Buffer Object": [
+        0.0,
+        2
+       ],
+       "SW Path Mask/Surface": [
+        8.0,
+        50
+       ],
+       "Scratch/Buffer Object": [
+        27.98,
+        160
+       ],
+       "Scratch/Surface": [
+        79.37,
+        444
+       ],
+       "total": 115.36,
+       "purgeable": 52.88
+      }
+     }
+    }
+   },
+   {
+    "label": "compose",
+    "run": 2,
+    "scenario": "stress_animation",
+    "stats": {
+     "trace": {
+      "since": 0,
+      "frames": 1200,
+      "janky_frames": 0,
+      "jank_kinds": {},
+      "jank_sides": {
+       "app": 0,
+       "compositor": 0,
+       "other": 0
+      },
+      "visibly_late_frames": 1200,
+      "late_do_frames": 5,
+      "late_do_frames_after_work": 0,
+      "prefetches": 0,
+      "buffer_stuffing": {
+       "recovery_slices": 0,
+       "buffer_stuffed": 0,
+       "occurred": false
+      },
+      "main_thread_frame_ms": {
+       "count": 1196,
+       "p50": 3.768067,
+       "p90": 5.143188,
+       "p99": 7.479167,
+       "max": 9.079183
+      },
+      "render_thread_frame_ms": {
+       "count": 1197,
+       "p50": 7.402384,
+       "p90": 8.671509,
+       "p99": 10.521688
+      },
+      "cpu_ms": {
+       "main": 4346.383773,
+       "render": 7100.471157
+      },
+      "work_ms": {
+       "main": 3069.227942,
+       "render": 6366.923566
+      },
+      "render_boost": {
+       "counter": true,
+       "time_weighted_min": 719.5686687895278,
+       "unboosted_frame_share": 0.0,
+       "frames_before_counter": 0,
+       "buckets": {
+        "unboosted": {
+         "frames": 0,
+         "share": 0.0,
+         "p50": null,
+         "p90": null,
+         "p99": null
+        },
+        "100-199": {
+         "frames": 0,
+         "share": 0.0,
+         "p50": null,
+         "p90": null,
+         "p99": null
+        },
+        "200+": {
+         "frames": 1197,
+         "share": 1.0,
+         "p50": 7.402384,
+         "p90": 8.671509,
+         "p99": 10.521688
+        }
+       },
+       "little_core_share": 0.0007944474210904188
+      }
+     },
+     "extra": {
+      "cpu": {
+       "main": {
+        "cpu_ms": 3917.2649939999997,
+        "work_ms": 2764.6015390000002,
+        "clusters": {
+         "little": 3.045204,
+         "mid": 3464.900413,
+         "big": 449.319377
+        },
+        "mean_khz": 2315940.899128511
+       },
+       "other": {
+        "cpu_ms": 1412.802877,
+        "work_ms": 255.458489,
+        "clusters": {
+         "little": 1182.582942,
+         "mid": 221.548543,
+         "big": 8.671392
+        },
+        "mean_khz": 1073031.6155393843
+       },
+       "render": {
+        "cpu_ms": 6405.558859,
+        "work_ms": 5737.389555,
+        "clusters": {
+         "little": 4.761637,
+         "mid": 1793.824516,
+         "big": 4606.972706
+        },
+        "mean_khz": 2695584.3116963543
+       },
+       "workers": {
+        "cpu_ms": 7787.405917000001,
+        "work_ms": 5465.25792,
+        "clusters": {
+         "mid": 7545.580765000001,
+         "big": 241.825152
+        },
+        "mean_khz": 2334553.7086349363
+       }
+      },
+      "energy": {
+       "span_s": null,
+       "rails_mw": {},
+       "groups_mw": {
+        "cpu": null,
+        "gpu": null,
+        "all": null
+       }
+      },
+      "masks": {
+       "uploads": 59865,
+       "textures": 145,
+       "lag1": 0.8384795713328868,
+       "lag2": 0.044407233757535164
+      },
+      "render_waits_on_workers_ms": 1515.410636,
+      "flush_layers": {
+       "count": 1185,
+       "ms": 1678.421327
+      }
+     },
+     "gfxinfo": {
+      "frames": 1465,
+      "janky": 0,
+      "p50": 15,
+      "p90": 17,
+      "p95": 18,
+      "p99": 19,
+      "gpu_p50": 5,
+      "gpu_p90": 6,
+      "gpu_p99": 6
+     },
+     "memory": {
+      "after_start": {
+       "Java Heap": 13932,
+       "Native Heap": 22104,
+       "Code": 7304,
+       "Stack": 520,
+       "Graphics": 122592,
+       "Private Other": 1904,
+       "System": 3835,
+       "Total PSS": 172191,
+       "Total RSS": 332452
+      },
+      "gpu_after_start": {
+       "Other/Other": [
+        0.01,
+        1
+       ],
+       "Other/Buffer Object": [
+        0.0,
+        2
+       ],
+       "SW Path Mask/Surface": [
+        7.99,
+        50
+       ],
+       "Scratch/Buffer Object": [
+        18.86,
+        113
+       ],
+       "Scratch/Surface": [
+        62.68,
+        506
+       ],
+       "total": 89.54,
+       "purgeable": 24.86
+      },
+      "after_animation": {
+       "Java Heap": 60496,
+       "Native Heap": 24140,
+       "Code": 7308,
+       "Stack": 548,
+       "Graphics": 122724,
+       "Private Other": 2000,
+       "System": 3870,
+       "Total PSS": 221086,
+       "Total RSS": 382664
+      },
+      "gpu_after_animation": {
+       "Other/Other": [
+        0.01,
+        1
+       ],
+       "Other/Buffer Object": [
+        0.0,
+        2
+       ],
+       "SW Path Mask/Surface": [
+        7.99,
+        50
+       ],
+       "Scratch/Buffer Object": [
+        18.86,
+        113
+       ],
+       "Scratch/Surface": [
+        64.23,
+        526
+       ],
+       "total": 91.09,
+       "purgeable": 26.4
+      }
+     }
+    }
+   },
+   {
+    "label": "main",
+    "run": 2,
+    "scenario": "stress_animation",
+    "stats": {
+     "trace": {
+      "since": 0,
+      "frames": 1210,
+      "janky_frames": 0,
+      "jank_kinds": {},
+      "jank_sides": {
+       "app": 0,
+       "compositor": 0,
+       "other": 0
+      },
+      "visibly_late_frames": 0,
+      "late_do_frames": 2,
+      "late_do_frames_after_work": 0,
+      "prefetches": 0,
+      "buffer_stuffing": {
+       "recovery_slices": 0,
+       "buffer_stuffed": 0,
+       "occurred": false
+      },
+      "main_thread_frame_ms": {
+       "count": 1205,
+       "p50": 2.304769,
+       "p90": 2.941854,
+       "p99": 3.870077,
+       "max": 6.107015
+      },
+      "render_thread_frame_ms": {
+       "count": 1205,
+       "p50": 6.370117,
+       "p90": 7.412964,
+       "p99": 8.589762
+      },
+      "cpu_ms": {
+       "main": 2764.858478,
+       "render": 5568.648537
+      },
+      "work_ms": {
+       "main": 1562.057362,
+       "render": 3628.829202
+      },
+      "render_boost": {
+       "counter": true,
+       "time_weighted_min": 421.51891912672414,
+       "unboosted_frame_share": 0.0,
+       "frames_before_counter": 0,
+       "buckets": {
+        "unboosted": {
+         "frames": 0,
+         "share": 0.0,
+         "p50": null,
+         "p90": null,
+         "p99": null
+        },
+        "100-199": {
+         "frames": 0,
+         "share": 0.0,
+         "p50": null,
+         "p90": null,
+         "p99": null
+        },
+        "200+": {
+         "frames": 1205,
+         "share": 1.0,
+         "p50": 6.370117,
+         "p90": 7.412964,
+         "p99": 8.589762
+        }
+       },
+       "little_core_share": 0.0009022828367984175
+      }
+     },
+     "extra": {
+      "cpu": {
+       "main": {
+        "cpu_ms": 2464.012967,
+        "work_ms": 1390.3278199999997,
+        "clusters": {
+         "mid": 2212.839418,
+         "big": 251.173549
+        },
+        "mean_khz": 1853862.9817308101
+       },
+       "other": {
+        "cpu_ms": 1392.630584,
+        "work_ms": 209.44422300000002,
+        "clusters": {
+         "little": 1192.274924,
+         "mid": 194.612706,
+         "big": 5.742954
+        },
+        "mean_khz": 967964.2676129824
+       },
+       "render": {
+        "cpu_ms": 4942.529699000001,
+        "work_ms": 3260.599451,
+        "clusters": {
+         "little": 5.024496,
+         "mid": 2734.523438,
+         "big": 2202.981765
+        },
+        "mean_khz": 2057190.8768552649
+       },
+       "workers": {
+        "cpu_ms": 9698.367805,
+        "work_ms": 5373.111913999999,
+        "clusters": {
+         "mid": 7929.711675,
+         "big": 1768.65613
+        },
+        "mean_khz": 1801739.218455842
+       }
+      },
+      "energy": {
+       "span_s": null,
+       "rails_mw": {},
+       "groups_mw": {
+        "cpu": null,
+        "gpu": null,
+        "all": null
+       }
+      },
+      "masks": {
+       "uploads": 60250,
+       "textures": 131,
+       "lag1": 0.8431277965368685,
+       "lag2": 0.04243250885743276
+      },
+      "render_waits_on_workers_ms": 1741.602265,
+      "flush_layers": {
+       "count": 1206,
+       "ms": 203.453224
+      }
+     },
+     "gfxinfo": {
+      "frames": 1359,
+      "janky": 0,
+      "p50": 15,
+      "p90": 16,
+      "p95": 17,
+      "p99": 18,
+      "gpu_p50": 7,
+      "gpu_p90": 7,
+      "gpu_p99": 8
+     },
+     "memory": {
+      "after_start": {
+       "Java Heap": 4388,
+       "Native Heap": 19640,
+       "Code": 2000,
+       "Stack": 488,
+       "Graphics": 117404,
+       "Private Other": 1128,
+       "System": 3722,
+       "Total PSS": 148770,
+       "Total RSS": 304696
+      },
+      "gpu_after_start": {
+       "Other/Other": [
+        0.01,
+        1
+       ],
+       "Other/Buffer Object": [
+        0.0,
+        2
+       ],
+       "SW Path Mask/Surface": [
+        7.98,
+        50
+       ],
+       "Scratch/Buffer Object": [
+        18.83,
+        110
+       ],
+       "Scratch/Surface": [
+        59.86,
+        224
+       ],
+       "total": 86.67,
+       "purgeable": 24.2
+      },
+      "after_animation": {
+       "Java Heap": 3372,
+       "Native Heap": 21068,
+       "Code": 2004,
+       "Stack": 536,
+       "Graphics": 117404,
+       "Private Other": 1380,
+       "System": 3726,
+       "Total PSS": 149490,
+       "Total RSS": 308308
+      },
+      "gpu_after_animation": {
+       "Other/Other": [
+        0.01,
+        1
+       ],
+       "Other/Buffer Object": [
+        0.0,
+        2
+       ],
+       "SW Path Mask/Surface": [
+        7.99,
+        50
+       ],
+       "Scratch/Buffer Object": [
+        27.98,
+        160
+       ],
+       "Scratch/Surface": [
+        60.42,
+        230
+       ],
+       "total": 96.4,
+       "purgeable": 33.91
+      }
+     }
+    }
+   },
+   {
+    "label": "new",
+    "run": 2,
+    "scenario": "stress_animation",
+    "stats": {
+     "trace": {
+      "since": 0,
+      "frames": 1202,
+      "janky_frames": 0,
+      "jank_kinds": {},
+      "jank_sides": {
+       "app": 0,
+       "compositor": 0,
+       "other": 0
+      },
+      "visibly_late_frames": 0,
+      "late_do_frames": 0,
+      "late_do_frames_after_work": 0,
+      "prefetches": 0,
+      "buffer_stuffing": {
+       "recovery_slices": 0,
+       "buffer_stuffed": 0,
+       "occurred": false
+      },
+      "main_thread_frame_ms": {
+       "count": 1197,
+       "p50": 2.277507,
+       "p90": 2.778116,
+       "p99": 3.74292,
+       "max": 4.782024
+      },
+      "render_thread_frame_ms": {
+       "count": 1196,
+       "p50": 6.390544,
+       "p90": 7.471314,
+       "p99": 8.609945
+      },
+      "cpu_ms": {
+       "main": 2669.373052,
+       "render": 5624.090396
+      },
+      "work_ms": {
+       "main": 1505.839813,
+       "render": 3476.491646
+      },
+      "render_boost": {
+       "counter": true,
+       "time_weighted_min": 414.1371009695086,
+       "unboosted_frame_share": 0.0,
+       "frames_before_counter": 1,
+       "buckets": {
+        "unboosted": {
+         "frames": 0,
+         "share": 0.0,
+         "p50": null,
+         "p90": null,
+         "p99": null
+        },
+        "100-199": {
+         "frames": 0,
+         "share": 0.0,
+         "p50": null,
+         "p90": null,
+         "p99": null
+        },
+        "200+": {
+         "frames": 1195,
+         "share": 1.0,
+         "p50": 6.390463,
+         "p90": 7.471314,
+         "p99": 8.609945
+        }
+       },
+       "little_core_share": 0.0015881908663425064
+      }
+     },
+     "extra": {
+      "cpu": {
+       "main": {
+        "cpu_ms": 2408.727261,
+        "work_ms": 1354.540285,
+        "clusters": {
+         "mid": 2136.001349,
+         "big": 272.725912
+        },
+        "mean_khz": 1846307.4876159672
+       },
+       "other": {
+        "cpu_ms": 1294.567334,
+        "work_ms": 207.991134,
+        "clusters": {
+         "little": 1084.615064,
+         "mid": 203.57633599999997,
+         "big": 6.375934
+        },
+        "mean_khz": 998194.4510404277
+       },
+       "render": {
+        "cpu_ms": 5080.937244000001,
+        "work_ms": 3136.449109,
+        "clusters": {
+         "little": 8.932129,
+         "mid": 3200.8772080000003,
+         "big": 1871.127907
+        },
+        "mean_khz": 1950617.132400661
+       },
+       "workers": {
+        "cpu_ms": 9637.568299,
+        "work_ms": 5373.168987000001,
+        "clusters": {
+         "little": 0.701619,
+         "mid": 7497.375423,
+         "big": 2139.491257
+        },
+        "mean_khz": 1805202.6741104603
+       }
+      },
+      "energy": {
+       "span_s": null,
+       "rails_mw": {},
+       "groups_mw": {
+        "cpu": null,
+        "gpu": null,
+        "all": null
+       }
+      },
+      "masks": {
+       "uploads": 59846,
+       "textures": 131,
+       "lag1": 0.8476429707778615,
+       "lag2": 0.03600435401490413
+      },
+      "render_waits_on_workers_ms": 1664.869759,
+      "flush_layers": {
+       "count": 1197,
+       "ms": 211.295524
+      }
+     },
+     "gfxinfo": {
+      "frames": 1372,
+      "janky": 0,
+      "p50": 15,
+      "p90": 16,
+      "p95": 16,
+      "p99": 17,
+      "gpu_p50": 7,
+      "gpu_p90": 7,
+      "gpu_p99": 8
+     },
+     "memory": {
+      "after_start": {
+       "Java Heap": 4332,
+       "Native Heap": 19912,
+       "Code": 2020,
+       "Stack": 484,
+       "Graphics": 117404,
+       "Private Other": 1132,
+       "System": 3721,
+       "Total PSS": 149005,
+       "Total RSS": 304920
+      },
+      "gpu_after_start": {
+       "Other/Other": [
+        0.01,
+        1
+       ],
+       "Other/Buffer Object": [
+        0.0,
+        2
+       ],
+       "SW Path Mask/Surface": [
+        7.99,
+        50
+       ],
+       "Scratch/Buffer Object": [
+        18.83,
+        110
+       ],
+       "Scratch/Surface": [
+        60.13,
+        226
+       ],
+       "total": 86.96,
+       "purgeable": 24.47
+      },
+      "after_animation": {
+       "Java Heap": 12100,
+       "Native Heap": 24160,
+       "Code": 2024,
+       "Stack": 504,
+       "Graphics": 156244,
+       "Private Other": 1252,
+       "System": 3717,
+       "Total PSS": 200001,
+       "Total RSS": 358688
+      },
+      "gpu_after_animation": {
+       "Other/Other": [
+        0.01,
+        1
+       ],
+       "Other/Buffer Object": [
+        0.0,
+        2
+       ],
+       "SW Path Mask/Surface": [
+        7.99,
+        50
+       ],
+       "Scratch/Buffer Object": [
+        56.08,
+        324
+       ],
+       "Scratch/Surface": [
+        60.36,
+        228
+       ],
+       "total": 124.43,
+       "purgeable": 61.95
+      }
+     }
+    }
+   },
+   {
+    "label": "compose",
+    "run": 3,
+    "scenario": "stress_animation",
+    "stats": {
+     "trace": {
+      "since": 0,
+      "frames": 1197,
+      "janky_frames": 0,
+      "jank_kinds": {},
+      "jank_sides": {
+       "app": 0,
+       "compositor": 0,
+       "other": 0
+      },
+      "visibly_late_frames": 1197,
+      "late_do_frames": 25,
+      "late_do_frames_after_work": 0,
+      "prefetches": 0,
+      "buffer_stuffing": {
+       "recovery_slices": 0,
+       "buffer_stuffed": 0,
+       "occurred": false
+      },
+      "main_thread_frame_ms": {
+       "count": 1194,
+       "p50": 3.84379,
+       "p90": 5.479818,
+       "p99": 8.994589,
+       "max": 14.998413
+      },
+      "render_thread_frame_ms": {
+       "count": 1193,
+       "p50": 7.467652,
+       "p90": 8.795939,
+       "p99": 10.867716
+      },
+      "cpu_ms": {
+       "main": 4369.723097,
+       "render": 7146.590237
+      },
+      "work_ms": {
+       "main": 3067.446041,
+       "render": 6329.825872
+      },
+      "render_boost": {
+       "counter": true,
+       "time_weighted_min": 719.7534767279526,
+       "unboosted_frame_share": 0.0,
+       "frames_before_counter": 0,
+       "buckets": {
+        "unboosted": {
+         "frames": 0,
+         "share": 0.0,
+         "p50": null,
+         "p90": null,
+         "p99": null
+        },
+        "100-199": {
+         "frames": 0,
+         "share": 0.0,
+         "p50": null,
+         "p90": null,
+         "p99": null
+        },
+        "200+": {
+         "frames": 1193,
+         "share": 1.0,
+         "p50": 7.467652,
+         "p90": 8.795939,
+         "p99": 10.867716
+        }
+       },
+       "little_core_share": 0.0004611387935013716
+      }
+     },
+     "extra": {
+      "cpu": {
+       "main": {
+        "cpu_ms": 3948.2096979999997,
+        "work_ms": 2773.782693,
+        "clusters": {
+         "little": 1.5117189999999998,
+         "mid": 3555.8489299999997,
+         "big": 390.849049
+        },
+        "mean_khz": 2311253.6680173064
+       },
+       "other": {
+        "cpu_ms": 1408.2119309999998,
+        "work_ms": 246.73618,
+        "clusters": {
+         "little": 1186.0468369999999,
+         "mid": 210.63123099999999,
+         "big": 11.533863
+        },
+        "mean_khz": 1051380.2091384213
+       },
+       "render": {
+        "cpu_ms": 6461.029892,
+        "work_ms": 5713.958539,
+        "clusters": {
+         "little": 2.820432,
+         "mid": 1966.05939,
+         "big": 4492.15007
+        },
+        "mean_khz": 2669633.9761688877
+       },
+       "workers": {
+        "cpu_ms": 7775.4022110000005,
+        "work_ms": 5471.524444,
+        "clusters": {
+         "little": 0.691284,
+         "mid": 7466.125517,
+         "big": 308.58541
+        },
+        "mean_khz": 2338164.2071461193
+       }
+      },
+      "energy": {
+       "span_s": null,
+       "rails_mw": {},
+       "groups_mw": {
+        "cpu": null,
+        "gpu": null,
+        "all": null
+       }
+      },
+      "masks": {
+       "uploads": 59700,
+       "textures": 142,
+       "lag1": 0.8369992276436415,
+       "lag2": 0.04607273582054468
+      },
+      "render_waits_on_workers_ms": 1510.965715,
+      "flush_layers": {
+       "count": 1184,
+       "ms": 1695.85311
+      }
+     },
+     "gfxinfo": {
+      "frames": 1447,
+      "janky": 0,
+      "p50": 15,
+      "p90": 17,
+      "p95": 18,
+      "p99": 20,
+      "gpu_p50": 5,
+      "gpu_p90": 6,
+      "gpu_p99": 7
+     },
+     "memory": {
+      "after_start": {
+       "Java Heap": 14836,
+       "Native Heap": 22232,
+       "Code": 7304,
+       "Stack": 508,
+       "Graphics": 122284,
+       "Private Other": 1916,
+       "System": 3824,
+       "Total PSS": 172904,
+       "Total RSS": 333144
+      },
+      "gpu_after_start": {
+       "Other/Other": [
+        0.01,
+        1
+       ],
+       "Other/Buffer Object": [
+        0.0,
+        2
+       ],
+       "SW Path Mask/Surface": [
+        8.0,
+        50
+       ],
+       "Scratch/Buffer Object": [
+        18.8,
+        111
+       ],
+       "Scratch/Surface": [
+        62.74,
+        506
+       ],
+       "total": 89.55,
+       "purgeable": 24.85
+      },
+      "after_animation": {
+       "Java Heap": 44764,
+       "Native Heap": 25916,
+       "Code": 7308,
+       "Stack": 556,
+       "Graphics": 122724,
+       "Private Other": 2144,
+       "System": 3859,
+       "Total PSS": 207271,
+       "Total RSS": 368828
+      },
+      "gpu_after_animation": {
+       "Other/Other": [
+        0.01,
+        1
+       ],
+       "Other/Buffer Object": [
+        0.0,
+        2
+       ],
+       "SW Path Mask/Surface": [
+        7.99,
+        50
+       ],
+       "Scratch/Buffer Object": [
+        18.86,
+        113
+       ],
+       "Scratch/Surface": [
+        64.3,
+        526
+       ],
+       "total": 91.16,
+       "purgeable": 27.2
+      }
+     }
+    }
+   },
+   {
+    "label": "main",
+    "run": 3,
+    "scenario": "stress_animation",
+    "stats": {
+     "trace": {
+      "since": 0,
+      "frames": 1210,
+      "janky_frames": 0,
+      "jank_kinds": {},
+      "jank_sides": {
+       "app": 0,
+       "compositor": 0,
+       "other": 0
+      },
+      "visibly_late_frames": 0,
+      "late_do_frames": 1,
+      "late_do_frames_after_work": 0,
+      "prefetches": 0,
+      "buffer_stuffing": {
+       "recovery_slices": 0,
+       "buffer_stuffed": 0,
+       "occurred": false
+      },
+      "main_thread_frame_ms": {
+       "count": 1205,
+       "p50": 2.328816,
+       "p90": 2.971557,
+       "p99": 4.223389,
+       "max": 5.297648
+      },
+      "render_thread_frame_ms": {
+       "count": 1204,
+       "p50": 6.376912,
+       "p90": 7.602336,
+       "p99": 8.646851
+      },
+      "cpu_ms": {
+       "main": 2760.130074,
+       "render": 5641.686531
+      },
+      "work_ms": {
+       "main": 1546.806128,
+       "render": 3579.368681
+      },
+      "render_boost": {
+       "counter": true,
+       "time_weighted_min": 369.18555856167785,
+       "unboosted_frame_share": 0.0,
+       "frames_before_counter": 0,
+       "buckets": {
+        "unboosted": {
+         "frames": 0,
+         "share": 0.0,
+         "p50": null,
+         "p90": null,
+         "p99": null
+        },
+        "100-199": {
+         "frames": 65,
+         "share": 0.05398671096345515,
+         "p50": 6.422404,
+         "p90": 8.275309,
+         "p99": 8.646851
+        },
+        "200+": {
+         "frames": 1139,
+         "share": 0.9460132890365448,
+         "p50": 6.370931,
+         "p90": 7.564331,
+         "p99": 8.61621
+        }
+       },
+       "little_core_share": 0.0009089645394002547
+      }
+     },
+     "extra": {
+      "cpu": {
+       "main": {
+        "cpu_ms": 2472.436562,
+        "work_ms": 1386.399799,
+        "clusters": {
+         "mid": 2233.8961139999997,
+         "big": 238.540448
+        },
+        "mean_khz": 1842275.2158771062
+       },
+       "other": {
+        "cpu_ms": 1389.9344630000003,
+        "work_ms": 220.75748,
+        "clusters": {
+         "little": 1166.632198,
+         "mid": 218.55458,
+         "big": 4.747685
+        },
+        "mean_khz": 987602.6605975304
+       },
+       "render": {
+        "cpu_ms": 5034.976805,
+        "work_ms": 3203.433457,
+        "clusters": {
+         "little": 4.215495,
+         "mid": 2900.830613,
+         "big": 2129.930697
+        },
+        "mean_khz": 1992713.0081700545
+       },
+       "workers": {
+        "cpu_ms": 9587.102657,
+        "work_ms": 5378.375190000001,
+        "clusters": {
+         "little": 0.49113,
+         "mid": 7772.002876999999,
+         "big": 1814.60865
+        },
+        "mean_khz": 1820433.0044967204
+       }
+      },
+      "energy": {
+       "span_s": null,
+       "rails_mw": {},
+       "groups_mw": {
+        "cpu": null,
+        "gpu": null,
+        "all": null
+       }
+      },
+      "masks": {
+       "uploads": 60250,
+       "textures": 133,
+       "lag1": 0.847297769349768,
+       "lag2": 0.03544754395595256
+      },
+      "render_waits_on_workers_ms": 1670.52503,
+      "flush_layers": {
+       "count": 1205,
+       "ms": 219.604679
+      }
+     },
+     "gfxinfo": {
+      "frames": 1371,
+      "janky": 1,
+      "p50": 15,
+      "p90": 16,
+      "p95": 17,
+      "p99": 18,
+      "gpu_p50": 7,
+      "gpu_p90": 8,
+      "gpu_p99": 9
+     },
+     "memory": {
+      "after_start": {
+       "Java Heap": 4368,
+       "Native Heap": 20056,
+       "Code": 2044,
+       "Stack": 500,
+       "Graphics": 117612,
+       "Private Other": 1120,
+       "System": 3730,
+       "Total PSS": 149430,
+       "Total RSS": 305480
+      },
+      "gpu_after_start": {
+       "Other/Other": [
+        0.01,
+        1
+       ],
+       "Other/Buffer Object": [
+        0.0,
+        2
+       ],
+       "SW Path Mask/Surface": [
+        7.98,
+        50
+       ],
+       "Scratch/Buffer Object": [
+        18.8,
+        109
+       ],
+       "Scratch/Surface": [
+        60.37,
+        228
+       ],
+       "total": 87.15,
+       "purgeable": 24.68
+      },
+      "after_animation": {
+       "Java Heap": 12128,
+       "Native Heap": 21668,
+       "Code": 2048,
+       "Stack": 524,
+       "Graphics": 125964,
+       "Private Other": 1236,
+       "System": 3728,
+       "Total PSS": 167296,
+       "Total RSS": 326248
+      },
+      "gpu_after_animation": {
+       "Other/Other": [
+        0.01,
+        1
+       ],
+       "Other/Buffer Object": [
+        0.0,
+        2
+       ],
+       "SW Path Mask/Surface": [
+        7.98,
+        50
+       ],
+       "Scratch/Buffer Object": [
+        28.05,
+        162
+       ],
+       "Scratch/Surface": [
+        60.51,
+        230
+       ],
+       "total": 96.55,
+       "purgeable": 34.07
+      }
+     }
+    }
+   },
+   {
+    "label": "new",
+    "run": 3,
+    "scenario": "stress_animation",
+    "stats": {
+     "trace": {
+      "since": 0,
+      "frames": 1198,
+      "janky_frames": 1,
+      "jank_kinds": {
+       "App Deadline Missed": 1
+      },
+      "jank_sides": {
+       "app": 1,
+       "compositor": 0,
+       "other": 0
+      },
+      "visibly_late_frames": 1153,
+      "late_do_frames": 2,
+      "late_do_frames_after_work": 0,
+      "prefetches": 0,
+      "buffer_stuffing": {
+       "recovery_slices": 0,
+       "buffer_stuffed": 0,
+       "occurred": false
+      },
+      "main_thread_frame_ms": {
+       "count": 1198,
+       "p50": 2.308064,
+       "p90": 3.014283,
+       "p99": 4.293742,
+       "max": 9.315389
+      },
+      "render_thread_frame_ms": {
+       "count": 1197,
+       "p50": 6.406616,
+       "p90": 7.496582,
+       "p99": 8.441894
+      },
+      "cpu_ms": {
+       "main": 2725.930154,
+       "render": 5674.319396
+      },
+      "work_ms": {
+       "main": 1549.786856,
+       "render": 3548.206547
+      },
+      "render_boost": {
+       "counter": true,
+       "time_weighted_min": 423.1263885182103,
+       "unboosted_frame_share": 0.0,
+       "frames_before_counter": 0,
+       "buckets": {
+        "unboosted": {
+         "frames": 0,
+         "share": 0.0,
+         "p50": null,
+         "p90": null,
+         "p99": null
+        },
+        "100-199": {
+         "frames": 0,
+         "share": 0.0,
+         "p50": null,
+         "p90": null,
+         "p99": null
+        },
+        "200+": {
+         "frames": 1197,
+         "share": 1.0,
+         "p50": 6.406616,
+         "p90": 7.496582,
+         "p99": 8.441894
+        }
+       },
+       "little_core_share": 0.000849954974785146
+      }
+     },
+     "extra": {
+      "cpu": {
+       "main": {
+        "cpu_ms": 2444.6475100000002,
+        "work_ms": 1396.968875,
+        "clusters": {
+         "mid": 2140.170822,
+         "big": 304.476688
+        },
+        "mean_khz": 1872563.5651341812
+       },
+       "other": {
+        "cpu_ms": 1355.4082039999998,
+        "work_ms": 207.94096000000002,
+        "clusters": {
+         "little": 1156.1384420000002,
+         "mid": 192.928453,
+         "big": 6.341309
+        },
+        "mean_khz": 971047.8004713333
+       },
+       "render": {
+        "cpu_ms": 5095.487475,
+        "work_ms": 3202.202728,
+        "clusters": {
+         "little": 2.9909660000000002,
+         "mid": 2976.8671860000004,
+         "big": 2115.629323
+        },
+        "mean_khz": 1973701.515354819
+       },
+       "workers": {
+        "cpu_ms": 9592.75517,
+        "work_ms": 5416.5769230000005,
+        "clusters": {
+         "little": 1.420288,
+         "mid": 7736.605245000001,
+         "big": 1854.729637
+        },
+        "mean_khz": 1835459.8688831124
+       }
+      },
+      "energy": {
+       "span_s": null,
+       "rails_mw": {},
+       "groups_mw": {
+        "cpu": null,
+        "gpu": null,
+        "all": null
+       }
+      },
+      "masks": {
+       "uploads": 59937,
+       "textures": 132,
+       "lag1": 0.8479224145138367,
+       "lag2": 0.036334754619179
+      },
+      "render_waits_on_workers_ms": 1637.631399,
+      "flush_layers": {
+       "count": 1198,
+       "ms": 214.332527
+      }
+     },
+     "gfxinfo": {
+      "frames": 1353,
+      "janky": 1,
+      "p50": 14,
+      "p90": 16,
+      "p95": 17,
+      "p99": 18,
+      "gpu_p50": 6,
+      "gpu_p90": 7,
+      "gpu_p99": 8
+     },
+     "memory": {
+      "after_start": {
+       "Java Heap": 4312,
+       "Native Heap": 17760,
+       "Code": 2008,
+       "Stack": 492,
+       "Graphics": 113576,
+       "Private Other": 1128,
+       "System": 3730,
+       "Total PSS": 143006,
+       "Total RSS": 299048
+      },
+      "gpu_after_start": {
+       "Other/Other": [
+        0.01,
+        1
+       ],
+       "Other/Buffer Object": [
+        0.0,
+        2
+       ],
+       "SW Path Mask/Surface": [
+        7.99,
+        50
+       ],
+       "Scratch/Buffer Object": [
+        18.83,
+        110
+       ],
+       "Scratch/Surface": [
+        59.64,
+        220
+       ],
+       "total": 86.48,
+       "purgeable": 23.98
+      },
+      "after_animation": {
+       "Java Heap": 11952,
+       "Native Heap": 21764,
+       "Code": 2012,
+       "Stack": 524,
+       "Graphics": 126044,
+       "Private Other": 1252,
+       "System": 3727,
+       "Total PSS": 167275,
+       "Total RSS": 326092
+      },
+      "gpu_after_animation": {
+       "Other/Other": [
+        0.01,
+        1
+       ],
+       "Other/Buffer Object": [
+        0.0,
+        2
+       ],
+       "SW Path Mask/Surface": [
+        7.99,
+        50
+       ],
+       "Scratch/Buffer Object": [
+        27.98,
+        160
+       ],
+       "Scratch/Surface": [
+        60.54,
+        230
+       ],
+       "total": 96.52,
+       "purgeable": 34.03
+      }
+     }
+    }
+   },
+   {
+    "label": "noflush",
+    "run": 3,
+    "scenario": "stress_animation",
+    "stats": {
+     "trace": {
+      "since": 0,
+      "frames": 1198,
+      "janky_frames": 0,
+      "jank_kinds": {},
+      "jank_sides": {
+       "app": 0,
+       "compositor": 0,
+       "other": 0
+      },
+      "visibly_late_frames": 0,
+      "late_do_frames": 1,
+      "late_do_frames_after_work": 0,
+      "prefetches": 0,
+      "buffer_stuffing": {
+       "recovery_slices": 0,
+       "buffer_stuffed": 0,
+       "occurred": false
+      },
+      "main_thread_frame_ms": {
+       "count": 1194,
+       "p50": 2.337361,
+       "p90": 2.973877,
+       "p99": 3.990845,
+       "max": 4.722086
+      },
+      "render_thread_frame_ms": {
+       "count": 1193,
+       "p50": 6.403158,
+       "p90": 7.341512,
+       "p99": 8.352417
+      },
+      "cpu_ms": {
+       "main": 2763.68067,
+       "render": 5620.744221
+      },
+      "work_ms": {
+       "main": 1551.069976,
+       "render": 3616.48308
+      },
+      "render_boost": {
+       "counter": true,
+       "time_weighted_min": 429.47993992925694,
+       "unboosted_frame_share": 0.0,
+       "frames_before_counter": 3,
+       "buckets": {
+        "unboosted": {
+         "frames": 0,
+         "share": 0.0,
+         "p50": null,
+         "p90": null,
+         "p99": null
+        },
+        "100-199": {
+         "frames": 0,
+         "share": 0.0,
+         "p50": null,
+         "p90": null,
+         "p99": null
+        },
+        "200+": {
+         "frames": 1190,
+         "share": 1.0,
+         "p50": 6.401571,
+         "p90": 7.34021,
+         "p99": 8.352417
+        }
+       },
+       "little_core_share": 0.000427559039427779
+      }
+     },
+     "extra": {
+      "cpu": {
+       "main": {
+        "cpu_ms": 2502.0088750000004,
+        "work_ms": 1402.8631779999998,
+        "clusters": {
+         "mid": 2217.4271750000003,
+         "big": 284.5817
+        },
+        "mean_khz": 1839008.62113089
+       },
+       "other": {
+        "cpu_ms": 1286.226407,
+        "work_ms": 192.442578,
+        "clusters": {
+         "little": 1104.673001,
+         "mid": 174.916655,
+         "big": 6.636751
+        },
+        "mean_khz": 966859.48422376
+       },
+       "render": {
+        "cpu_ms": 5087.128906,
+        "work_ms": 3266.348618,
+        "clusters": {
+         "little": 2.4032,
+         "mid": 2670.7712670000005,
+         "big": 2413.954439
+        },
+        "mean_khz": 1997446.2152498874
+       },
+       "workers": {
+        "cpu_ms": 9743.408148999999,
+        "work_ms": 5390.392823,
+        "clusters": {
+         "mid": 8226.010821,
+         "big": 1517.397328
+        },
+        "mean_khz": 1805750.1800726426
+       }
+      },
+      "energy": {
+       "span_s": null,
+       "rails_mw": {},
+       "groups_mw": {
+        "cpu": null,
+        "gpu": null,
+        "all": null
+       }
+      },
+      "masks": {
+       "uploads": 59723,
+       "textures": 243,
+       "lag1": 0.0012273032952252857,
+       "lag2": 0.7881640887693342
+      },
+      "render_waits_on_workers_ms": 1586.300957,
+      "flush_layers": {
+       "count": 0,
+       "ms": 0.0
+      }
+     },
+     "gfxinfo": {
+      "frames": 1357,
+      "janky": 0,
+      "p50": 14,
+      "p90": 16,
+      "p95": 16,
+      "p99": 18,
+      "gpu_p50": 6,
+      "gpu_p90": 7,
+      "gpu_p99": 8
+     },
+     "memory": {
+      "after_start": {
+       "Java Heap": 4344,
+       "Native Heap": 18440,
+       "Code": 2068,
+       "Stack": 484,
+       "Graphics": 154236,
+       "Private Other": 1124,
+       "System": 3713,
+       "Total PSS": 184409,
+       "Total RSS": 340276
+      },
+      "gpu_after_start": {
+       "Other/Other": [
+        0.01,
+        1
+       ],
+       "Other/Buffer Object": [
+        0.0,
+        2
+       ],
+       "SW Path Mask/Surface": [
+        7.99,
+        50
+       ],
+       "Scratch/Buffer Object": [
+        28.08,
+        161
+       ],
+       "Scratch/Surface": [
+        78.77,
+        438
+       ],
+       "total": 114.85,
+       "purgeable": 52.38
+      },
+      "after_animation": {
+       "Java Heap": 11956,
+       "Native Heap": 22360,
+       "Code": 2072,
+       "Stack": 508,
+       "Graphics": 158348,
+       "Private Other": 1244,
+       "System": 3709,
+       "Total PSS": 200197,
+       "Total RSS": 358836
+      },
+      "gpu_after_animation": {
+       "Other/Other": [
+        0.01,
+        1
+       ],
+       "Other/Buffer Object": [
+        0.0,
+        2
+       ],
+       "SW Path Mask/Surface": [
+        7.99,
+        50
+       ],
+       "Scratch/Buffer Object": [
+        27.98,
+        160
+       ],
+       "Scratch/Surface": [
+        79.69,
+        446
+       ],
+       "total": 115.67,
+       "purgeable": 53.2
+      }
+     }
+    }
+   },
+   {
+    "label": "main",
+    "run": 4,
+    "scenario": "stress_animation",
+    "stats": {
+     "trace": {
+      "since": 0,
+      "frames": 1212,
+      "janky_frames": 0,
+      "jank_kinds": {},
+      "jank_sides": {
+       "app": 0,
+       "compositor": 0,
+       "other": 0
+      },
+      "visibly_late_frames": 0,
+      "late_do_frames": 4,
+      "late_do_frames_after_work": 0,
+      "prefetches": 0,
+      "buffer_stuffing": {
+       "recovery_slices": 0,
+       "buffer_stuffed": 0,
+       "occurred": false
+      },
+      "main_thread_frame_ms": {
+       "count": 1209,
+       "p50": 2.29366,
+       "p90": 2.986451,
+       "p99": 4.165934,
+       "max": 5.321981
+      },
+      "render_thread_frame_ms": {
+       "count": 1209,
+       "p50": 6.380737,
+       "p90": 7.462117,
+       "p99": 8.668335
+      },
+      "cpu_ms": {
+       "main": 2739.549127,
+       "render": 5752.776935
+      },
+      "work_ms": {
+       "main": 1546.748697,
+       "render": 3577.117534
+      },
+      "render_boost": {
+       "counter": true,
+       "time_weighted_min": 411.2186739779205,
+       "unboosted_frame_share": 0.0,
+       "frames_before_counter": 0,
+       "buckets": {
+        "unboosted": {
+         "frames": 0,
+         "share": 0.0,
+         "p50": null,
+         "p90": null,
+         "p99": null
+        },
+        "100-199": {
+         "frames": 0,
+         "share": 0.0,
+         "p50": null,
+         "p90": null,
+         "p99": null
+        },
+        "200+": {
+         "frames": 1209,
+         "share": 1.0,
+         "p50": 6.380737,
+         "p90": 7.462117,
+         "p99": 8.668335
+        }
+       },
+       "little_core_share": 0.00013491988456527907
+      }
+     },
+     "extra": {
+      "cpu": {
+       "main": {
+        "cpu_ms": 2444.524053,
+        "work_ms": 1384.3328180000003,
+        "clusters": {
+         "mid": 2152.192097,
+         "big": 292.331956
+        },
+        "mean_khz": 1855604.3251712688
+       },
+       "other": {
+        "cpu_ms": 1374.5374259999999,
+        "work_ms": 210.62587500000004,
+        "clusters": {
+         "little": 1175.839261,
+         "mid": 192.74666299999998,
+         "big": 5.951502
+        },
+        "mean_khz": 988267.6953002808
+       },
+       "render": {
+        "cpu_ms": 5093.712649,
+        "work_ms": 3192.481436,
+        "clusters": {
+         "little": 0.776164,
+         "mid": 3111.51116,
+         "big": 1981.425325
+        },
+        "mean_khz": 1972327.6671638177
+       },
+       "workers": {
+        "cpu_ms": 9468.282359,
+        "work_ms": 5368.4153160000005,
+        "clusters": {
+         "little": 0.069498,
+         "mid": 7562.4623599999995,
+         "big": 1905.750501
+        },
+        "mean_khz": 1836456.9473439802
+       }
+      },
+      "energy": {
+       "span_s": null,
+       "rails_mw": {},
+       "groups_mw": {
+        "cpu": null,
+        "gpu": null,
+        "all": null
+       }
+      },
+      "masks": {
+       "uploads": 60450,
+       "textures": 131,
+       "lag1": 0.8481241399890582,
+       "lag2": 0.036655116961488085
+      },
+      "render_waits_on_workers_ms": 1580.025155,
+      "flush_layers": {
+       "count": 1209,
+       "ms": 219.638699
+      }
+     },
+     "gfxinfo": {
+      "frames": 1387,
+      "janky": 0,
+      "p50": 14,
+      "p90": 16,
+      "p95": 17,
+      "p99": 18,
+      "gpu_p50": 7,
+      "gpu_p90": 7,
+      "gpu_p99": 8
+     },
+     "memory": {
+      "after_start": {
+       "Java Heap": 4344,
+       "Native Heap": 17436,
+       "Code": 2052,
+       "Stack": 488,
+       "Graphics": 117484,
+       "Private Other": 1120,
+       "System": 3730,
+       "Total PSS": 146654,
+       "Total RSS": 302704
+      },
+      "gpu_after_start": {
+       "Other/Other": [
+        0.01,
+        1
+       ],
+       "Other/Buffer Object": [
+        0.0,
+        2
+       ],
+       "SW Path Mask/Surface": [
+        7.99,
+        50
+       ],
+       "Scratch/Buffer Object": [
+        18.83,
+        110
+       ],
+       "Scratch/Surface": [
+        60.27,
+        228
+       ],
+       "total": 87.1,
+       "purgeable": 24.61
+      },
+      "after_animation": {
+       "Java Heap": 12124,
+       "Native Heap": 24140,
+       "Code": 2056,
+       "Stack": 520,
+       "Graphics": 156244,
+       "Private Other": 1236,
+       "System": 3727,
+       "Total PSS": 200047,
+       "Total RSS": 358872
+      },
+      "gpu_after_animation": {
+       "Other/Other": [
+        0.01,
+        1
+       ],
+       "Other/Buffer Object": [
+        0.0,
+        2
+       ],
+       "SW Path Mask/Surface": [
+        7.99,
+        50
+       ],
+       "Scratch/Buffer Object": [
+        56.08,
+        324
+       ],
+       "Scratch/Surface": [
+        60.28,
+        228
+       ],
+       "total": 124.36,
+       "purgeable": 61.87
+      }
+     }
+    }
+   },
+   {
+    "label": "new",
+    "run": 4,
+    "scenario": "stress_animation",
+    "stats": {
+     "trace": {
+      "since": 0,
+      "frames": 1205,
+      "janky_frames": 3,
+      "jank_kinds": {
+       "Prediction Error": 3
+      },
+      "jank_sides": {
+       "app": 0,
+       "compositor": 3,
+       "other": 0
+      },
+      "visibly_late_frames": 1203,
+      "late_do_frames": 6,
+      "late_do_frames_after_work": 0,
+      "prefetches": 0,
+      "buffer_stuffing": {
+       "recovery_slices": 0,
+       "buffer_stuffed": 0,
+       "occurred": false
+      },
+      "main_thread_frame_ms": {
+       "count": 1200,
+       "p50": 2.297241,
+       "p90": 2.946452,
+       "p99": 4.058878,
+       "max": 5.948527
+      },
+      "render_thread_frame_ms": {
+       "count": 1200,
+       "p50": 6.363485,
+       "p90": 7.332275,
+       "p99": 8.27889
+      },
+      "cpu_ms": {
+       "main": 2729.101474,
+       "render": 5839.574345
+      },
+      "work_ms": {
+       "main": 1533.224782,
+       "render": 3584.097536
+      },
+      "render_boost": {
+       "counter": true,
+       "time_weighted_min": 442.60641776625795,
+       "unboosted_frame_share": 0.0,
+       "frames_before_counter": 0,
+       "buckets": {
+        "unboosted": {
+         "frames": 0,
+         "share": 0.0,
+         "p50": null,
+         "p90": null,
+         "p99": null
+        },
+        "100-199": {
+         "frames": 0,
+         "share": 0.0,
+         "p50": null,
+         "p90": null,
+         "p99": null
+        },
+        "200+": {
+         "frames": 1200,
+         "share": 1.0,
+         "p50": 6.363485,
+         "p90": 7.332275,
+         "p99": 8.27889
+        }
+       },
+       "little_core_share": 0.0
+      }
+     },
+     "extra": {
+      "cpu": {
+       "main": {
+        "cpu_ms": 2461.1851360000005,
+        "work_ms": 1387.855418,
+        "clusters": {
+         "mid": 2170.5689760000005,
+         "big": 290.61616
+        },
+        "mean_khz": 1848125.5082973973
+       },
+       "other": {
+        "cpu_ms": 1328.1104469999998,
+        "work_ms": 209.589823,
+        "clusters": {
+         "little": 1115.120749,
+         "mid": 206.634272,
+         "big": 6.355426
+        },
+        "mean_khz": 978483.4763949419
+       },
+       "render": {
+        "cpu_ms": 5216.932325000001,
+        "work_ms": 3238.2988929999997,
+        "clusters": {
+         "mid": 3304.4944310000005,
+         "big": 1912.437894
+        },
+        "mean_khz": 1960102.1109563652
+       },
+       "workers": {
+        "cpu_ms": 9424.259611,
+        "work_ms": 5365.266194,
+        "clusters": {
+         "mid": 7428.135188,
+         "big": 1996.124423
+        },
+        "mean_khz": 1843033.7668478093
+       }
+      },
+      "energy": {
+       "span_s": null,
+       "rails_mw": {},
+       "groups_mw": {
+        "cpu": null,
+        "gpu": null,
+        "all": null
+       }
+      },
+      "masks": {
+       "uploads": 60101,
+       "textures": 130,
+       "lag1": 0.8412566073602241,
+       "lag2": 0.0433876373580564
+      },
+      "render_waits_on_workers_ms": 1466.099639,
+      "flush_layers": {
+       "count": 1202,
+       "ms": 216.800536
+      }
+     },
+     "gfxinfo": {
+      "frames": 1360,
+      "janky": 0,
+      "p50": 14,
+      "p90": 16,
+      "p95": 16,
+      "p99": 18,
+      "gpu_p50": 6,
+      "gpu_p90": 7,
+      "gpu_p99": 8
+     },
+     "memory": {
+      "after_start": {
+       "Java Heap": 4304,
+       "Native Heap": 20180,
+       "Code": 2028,
+       "Stack": 484,
+       "Graphics": 125836,
+       "Private Other": 1124,
+       "System": 3721,
+       "Total PSS": 157677,
+       "Total RSS": 313604
+      },
+      "gpu_after_start": {
+       "Other/Other": [
+        0.01,
+        1
+       ],
+       "Other/Buffer Object": [
+        0.0,
+        2
+       ],
+       "SW Path Mask/Surface": [
+        7.99,
+        50
+       ],
+       "Scratch/Buffer Object": [
+        28.14,
+        163
+       ],
+       "Scratch/Surface": [
+        60.22,
+        226
+       ],
+       "total": 96.36,
+       "purgeable": 33.88
+      },
+      "after_animation": {
+       "Java Heap": 12072,
+       "Native Heap": 21912,
+       "Code": 2032,
+       "Stack": 520,
+       "Graphics": 125964,
+       "Private Other": 1244,
+       "System": 3717,
+       "Total PSS": 167461,
+       "Total RSS": 326160
+      },
+      "gpu_after_animation": {
+       "Other/Other": [
+        0.01,
+        1
+       ],
+       "Other/Buffer Object": [
+        0.0,
+        2
+       ],
+       "SW Path Mask/Surface": [
+        7.99,
+        50
+       ],
+       "Scratch/Buffer Object": [
+        27.98,
+        160
+       ],
+       "Scratch/Surface": [
+        60.24,
+        228
+       ],
+       "total": 96.22,
+       "purgeable": 33.73
+      }
+     }
+    }
+   },
+   {
+    "label": "noflush",
+    "run": 4,
+    "scenario": "stress_animation",
+    "stats": {
+     "trace": {
+      "since": 0,
+      "frames": 1201,
+      "janky_frames": 0,
+      "jank_kinds": {},
+      "jank_sides": {
+       "app": 0,
+       "compositor": 0,
+       "other": 0
+      },
+      "visibly_late_frames": 0,
+      "late_do_frames": 3,
+      "late_do_frames_after_work": 0,
+      "prefetches": 0,
+      "buffer_stuffing": {
+       "recovery_slices": 0,
+       "buffer_stuffed": 0,
+       "occurred": false
+      },
+      "main_thread_frame_ms": {
+       "count": 1196,
+       "p50": 2.323731,
+       "p90": 2.972574,
+       "p99": 4.02063,
+       "max": 5.822063
+      },
+      "render_thread_frame_ms": {
+       "count": 1195,
+       "p50": 6.287191,
+       "p90": 7.304524,
+       "p99": 8.437337
+      },
+      "cpu_ms": {
+       "main": 2767.742021,
+       "render": 5683.303562
+      },
+      "work_ms": {
+       "main": 1545.433165,
+       "render": 3541.084455
+      },
+      "render_boost": {
+       "counter": true,
+       "time_weighted_min": 412.93776753137007,
+       "unboosted_frame_share": 0.0,
+       "frames_before_counter": 0,
+       "buckets": {
+        "unboosted": {
+         "frames": 0,
+         "share": 0.0,
+         "p50": null,
+         "p90": null,
+         "p99": null
+        },
+        "100-199": {
+         "frames": 0,
+         "share": 0.0,
+         "p50": null,
+         "p90": null,
+         "p99": null
+        },
+        "200+": {
+         "frames": 1195,
+         "share": 1.0,
+         "p50": 6.287191,
+         "p90": 7.304524,
+         "p99": 8.437337
+        }
+       },
+       "little_core_share": 0.0007928379946717972
+      }
+     },
+     "extra": {
+      "cpu": {
+       "main": {
+        "cpu_ms": 2490.225413,
+        "work_ms": 1391.6133949999999,
+        "clusters": {
+         "mid": 2198.530581,
+         "big": 291.694832
+        },
+        "mean_khz": 1832708.5372624458
+       },
+       "other": {
+        "cpu_ms": 1289.560185,
+        "work_ms": 181.620548,
+        "clusters": {
+         "little": 1137.078656,
+         "mid": 146.365106,
+         "big": 6.116423
+        },
+        "mean_khz": 957775.1409539679
+       },
+       "render": {
+        "cpu_ms": 5080.053027,
+        "work_ms": 3194.8824670000004,
+        "clusters": {
+         "little": 4.505939,
+         "mid": 2879.572837,
+         "big": 2195.974251
+        },
+        "mean_khz": 1968995.4327482653
+       },
+       "workers": {
+        "cpu_ms": 9613.677497,
+        "work_ms": 5348.493264000001,
+        "clusters": {
+         "mid": 7901.593558,
+         "big": 1712.083939
+        },
+        "mean_khz": 1810486.613991936
+       }
+      },
+      "energy": {
+       "span_s": null,
+       "rails_mw": {},
+       "groups_mw": {
+        "cpu": null,
+        "gpu": null,
+        "all": null
+       }
+      },
+      "masks": {
+       "uploads": 59799,
+       "textures": 246,
+       "lag1": 0.0012593823988715934,
+       "lag2": 0.782630597954763
+      },
+      "render_waits_on_workers_ms": 1485.435578,
+      "flush_layers": {
+       "count": 0,
+       "ms": 0.0
+      }
+     },
+     "gfxinfo": {
+      "frames": 1341,
+      "janky": 0,
+      "p50": 14,
+      "p90": 16,
+      "p95": 16,
+      "p99": 18,
+      "gpu_p50": 6,
+      "gpu_p90": 7,
+      "gpu_p99": 8
+     },
+     "memory": {
+      "after_start": {
+       "Java Heap": 4344,
+       "Native Heap": 20260,
+       "Code": 2008,
+       "Stack": 500,
+       "Graphics": 158268,
+       "Private Other": 1132,
+       "System": 3711,
+       "Total PSS": 190223,
+       "Total RSS": 346084
+      },
+      "gpu_after_start": {
+       "Other/Other": [
+        0.01,
+        1
+       ],
+       "Other/Buffer Object": [
+        0.0,
+        2
+       ],
+       "SW Path Mask/Surface": [
+        7.99,
+        50
+       ],
+       "Scratch/Buffer Object": [
+        28.02,
+        159
+       ],
+       "Scratch/Surface": [
+        79.38,
+        444
+       ],
+       "total": 115.4,
+       "purgeable": 52.92
+      },
+      "after_animation": {
+       "Java Heap": 11832,
+       "Native Heap": 24104,
+       "Code": 2012,
+       "Stack": 528,
+       "Graphics": 158428,
+       "Private Other": 1252,
+       "System": 3716,
+       "Total PSS": 201872,
+       "Total RSS": 360628
+      },
+      "gpu_after_animation": {
+       "Other/Other": [
+        0.01,
+        1
+       ],
+       "Other/Buffer Object": [
+        0.0,
+        2
+       ],
+       "SW Path Mask/Surface": [
+        7.99,
+        50
+       ],
+       "Scratch/Buffer Object": [
+        27.98,
+        160
+       ],
+       "Scratch/Surface": [
+        79.86,
+        450
+       ],
+       "total": 115.85,
+       "purgeable": 53.38
+      }
+     }
+    }
+   },
+   {
+    "label": "compose",
+    "run": 4,
+    "scenario": "stress_animation",
+    "stats": {
+     "trace": {
+      "since": 0,
+      "frames": 1198,
+      "janky_frames": 1,
+      "jank_kinds": {
+       "App Deadline Missed": 1
+      },
+      "jank_sides": {
+       "app": 1,
+       "compositor": 0,
+       "other": 0
+      },
+      "visibly_late_frames": 1145,
+      "late_do_frames": 7,
+      "late_do_frames_after_work": 0,
+      "prefetches": 0,
+      "buffer_stuffing": {
+       "recovery_slices": 0,
+       "buffer_stuffed": 0,
+       "occurred": false
+      },
+      "main_thread_frame_ms": {
+       "count": 1193,
+       "p50": 3.82019,
+       "p90": 5.295451,
+       "p99": 6.942709,
+       "max": 10.259887
+      },
+      "render_thread_frame_ms": {
+       "count": 1196,
+       "p50": 7.480754,
+       "p90": 8.788411,
+       "p99": 10.533732
+      },
+      "cpu_ms": {
+       "main": 4390.461961,
+       "render": 7111.661828
+      },
+      "work_ms": {
+       "main": 3047.517464,
+       "render": 6338.770257
+      },
+      "render_boost": {
+       "counter": true,
+       "time_weighted_min": 699.3205533290327,
+       "unboosted_frame_share": 0.0,
+       "frames_before_counter": 0,
+       "buckets": {
+        "unboosted": {
+         "frames": 0,
+         "share": 0.0,
+         "p50": null,
+         "p90": null,
+         "p99": null
+        },
+        "100-199": {
+         "frames": 0,
+         "share": 0.0,
+         "p50": null,
+         "p90": null,
+         "p99": null
+        },
+        "200+": {
+         "frames": 1196,
+         "share": 1.0,
+         "p50": 7.480754,
+         "p90": 8.788411,
+         "p99": 10.533732
+        }
+       },
+       "little_core_share": 0.0010364396083879708
+      }
+     },
+     "extra": {
+      "cpu": {
+       "main": {
+        "cpu_ms": 3969.619707,
+        "work_ms": 2753.153506,
+        "clusters": {
+         "little": 0.286377,
+         "mid": 3602.651736,
+         "big": 366.681594
+        },
+        "mean_khz": 2282688.405348296
+       },
+       "other": {
+        "cpu_ms": 1379.1091109999998,
+        "work_ms": 254.140438,
+        "clusters": {
+         "little": 1144.1649389999998,
+         "mid": 223.244261,
+         "big": 11.699911
+        },
+        "mean_khz": 1083388.8083080037
+       },
+       "render": {
+        "cpu_ms": 6409.449081,
+        "work_ms": 5703.252849,
+        "clusters": {
+         "little": 7.370808,
+         "mid": 1856.934377,
+         "big": 4545.143896
+        },
+        "mean_khz": 2681614.9493722767
+       },
+       "workers": {
+        "cpu_ms": 7865.549956999999,
+        "work_ms": 5469.883767,
+        "clusters": {
+         "little": 0.6685380000000001,
+         "mid": 7461.564813999999,
+         "big": 403.316605
+        },
+        "mean_khz": 2304926.21687267
+       }
+      },
+      "energy": {
+       "span_s": null,
+       "rails_mw": {},
+       "groups_mw": {
+        "cpu": null,
+        "gpu": null,
+        "all": null
+       }
+      },
+      "masks": {
+       "uploads": 59829,
+       "textures": 141,
+       "lag1": 0.8353270339096636,
+       "lag2": 0.047396461600321675
+      },
+      "render_waits_on_workers_ms": 1538.372576,
+      "flush_layers": {
+       "count": 1187,
+       "ms": 1682.817514
+      }
+     },
+     "gfxinfo": {
+      "frames": 1457,
+      "janky": 1,
+      "p50": 15,
+      "p90": 17,
+      "p95": 18,
+      "p99": 19,
+      "gpu_p50": 5,
+      "gpu_p90": 6,
+      "gpu_p99": 7
+     },
+     "memory": {
+      "after_start": {
+       "Java Heap": 13792,
+       "Native Heap": 21728,
+       "Code": 7312,
+       "Stack": 524,
+       "Graphics": 122284,
+       "Private Other": 1912,
+       "System": 3830,
+       "Total PSS": 171382,
+       "Total RSS": 331632
+      },
+      "gpu_after_start": {
+       "Other/Other": [
+        0.01,
+        1
+       ],
+       "Other/Buffer Object": [
+        0.0,
+        2
+       ],
+       "SW Path Mask/Surface": [
+        7.98,
+        50
+       ],
+       "Scratch/Buffer Object": [
+        18.8,
+        111
+       ],
+       "Scratch/Surface": [
+        62.69,
+        506
+       ],
+       "total": 89.48,
+       "purgeable": 24.8
+      },
+      "after_animation": {
+       "Java Heap": 43712,
+       "Native Heap": 26148,
+       "Code": 7316,
+       "Stack": 556,
+       "Graphics": 122776,
+       "Private Other": 2012,
+       "System": 3865,
+       "Total PSS": 206385,
+       "Total RSS": 367952
+      },
+      "gpu_after_animation": {
+       "Other/Other": [
+        0.01,
+        1
+       ],
+       "Other/Buffer Object": [
+        0.0,
+        2
+       ],
+       "SW Path Mask/Surface": [
+        7.99,
+        50
+       ],
+       "Scratch/Buffer Object": [
+        18.86,
+        113
+       ],
+       "Scratch/Surface": [
+        64.3,
+        524
+       ],
+       "total": 91.16,
+       "purgeable": 27.21
+      }
+     }
+    }
+   },
+   {
+    "label": "new",
+    "run": 5,
+    "scenario": "stress_animation",
+    "stats": {
+     "trace": {
+      "since": 0,
+      "frames": 1199,
+      "janky_frames": 0,
+      "jank_kinds": {},
+      "jank_sides": {
+       "app": 0,
+       "compositor": 0,
+       "other": 0
+      },
+      "visibly_late_frames": 1199,
+      "late_do_frames": 2,
+      "late_do_frames_after_work": 1,
+      "prefetches": 0,
+      "buffer_stuffing": {
+       "recovery_slices": 0,
+       "buffer_stuffed": 0,
+       "occurred": false
+      },
+      "main_thread_frame_ms": {
+       "count": 1194,
+       "p50": 2.349406,
+       "p90": 2.95874,
+       "p99": 4.086019,
+       "max": 5.827149
+      },
+      "render_thread_frame_ms": {
+       "count": 1192,
+       "p50": 6.349122,
+       "p90": 7.52417,
+       "p99": 8.607381
+      },
+      "cpu_ms": {
+       "main": 2748.126779,
+       "render": 5733.480358
+      },
+      "work_ms": {
+       "main": 1554.703293,
+       "render": 3601.618884
+      },
+      "render_boost": {
+       "counter": true,
+       "time_weighted_min": 360.9259066467333,
+       "unboosted_frame_share": 0.01174496644295302,
+       "frames_before_counter": 0,
+       "buckets": {
+        "unboosted": {
+         "frames": 14,
+         "share": 0.01174496644295302,
+         "p50": 6.208252,
+         "p90": 8.957357,
+         "p99": 8.965088
+        },
+        "100-199": {
+         "frames": 109,
+         "share": 0.09144295302013423,
+         "p50": 6.442749,
+         "p90": 7.763916,
+         "p99": 8.524211
+        },
+        "200+": {
+         "frames": 1069,
+         "share": 0.8968120805369127,
+         "p50": 6.347249,
+         "p90": 7.473307,
+         "p99": 8.554728
+        }
+       },
+       "little_core_share": 0.000593260949200018
+      }
+     },
+     "extra": {
+      "cpu": {
+       "main": {
+        "cpu_ms": 2477.969145,
+        "work_ms": 1400.233847,
+        "clusters": {
+         "mid": 2209.044791,
+         "big": 268.924354
+        },
+        "mean_khz": 1854946.676558396
+       },
+       "other": {
+        "cpu_ms": 1341.283388,
+        "work_ms": 213.68355700000004,
+        "clusters": {
+         "little": 1128.071316,
+         "mid": 207.32104399999997,
+         "big": 5.891028
+        },
+        "mean_khz": 989713.1717469686
+       },
+       "render": {
+        "cpu_ms": 5178.358519,
+        "work_ms": 3267.566323,
+        "clusters": {
+         "little": 2.567221,
+         "mid": 3219.259375,
+         "big": 1956.531923
+        },
+        "mean_khz": 1988140.3144555043
+       },
+       "workers": {
+        "cpu_ms": 9496.69102,
+        "work_ms": 5361.711789,
+        "clusters": {
+         "mid": 7482.738181,
+         "big": 2013.952839
+        },
+        "mean_khz": 1828976.0483319378
+       }
+      },
+      "energy": {
+       "span_s": null,
+       "rails_mw": {},
+       "groups_mw": {
+        "cpu": null,
+        "gpu": null,
+        "all": null
+       }
+      },
+      "masks": {
+       "uploads": 59631,
+       "textures": 131,
+       "lag1": 0.8481344537815126,
+       "lag2": 0.036420168067226893
+      },
+      "render_waits_on_workers_ms": 1517.427156,
+      "flush_layers": {
+       "count": 1193,
+       "ms": 214.835652
+      }
+     },
+     "gfxinfo": {
+      "frames": 1367,
+      "janky": 0,
+      "p50": 14,
+      "p90": 16,
+      "p95": 17,
+      "p99": 17,
+      "gpu_p50": 6,
+      "gpu_p90": 7,
+      "gpu_p99": 8
+     },
+     "memory": {
+      "after_start": {
+       "Java Heap": 4284,
+       "Native Heap": 17796,
+       "Code": 2008,
+       "Stack": 500,
+       "Graphics": 113292,
+       "Private Other": 1128,
+       "System": 3722,
+       "Total PSS": 142730,
+       "Total RSS": 298652
+      },
+      "gpu_after_start": {
+       "Other/Other": [
+        0.01,
+        1
+       ],
+       "Other/Buffer Object": [
+        0.0,
+        2
+       ],
+       "SW Path Mask/Surface": [
+        7.98,
+        50
+       ],
+       "Scratch/Buffer Object": [
+        18.83,
+        110
+       ],
+       "Scratch/Surface": [
+        59.73,
+        222
+       ],
+       "total": 86.56,
+       "purgeable": 24.04
+      },
+      "after_animation": {
+       "Java Heap": 12028,
+       "Native Heap": 23404,
+       "Code": 2012,
+       "Stack": 524,
+       "Graphics": 117404,
+       "Private Other": 1256,
+       "System": 3726,
+       "Total PSS": 160354,
+       "Total RSS": 319232
+      },
+      "gpu_after_animation": {
+       "Other/Other": [
+        0.01,
+        1
+       ],
+       "Other/Buffer Object": [
+        0.0,
+        2
+       ],
+       "SW Path Mask/Surface": [
+        7.98,
+        50
+       ],
+       "Scratch/Buffer Object": [
+        18.73,
+        109
+       ],
+       "Scratch/Surface": [
+        60.26,
+        226
+       ],
+       "total": 86.99,
+       "purgeable": 24.51
+      }
+     }
+    }
+   },
+   {
+    "label": "noflush",
+    "run": 5,
+    "scenario": "stress_animation",
+    "stats": {
+     "trace": {
+      "since": 0,
+      "frames": 1202,
+      "janky_frames": 0,
+      "jank_kinds": {},
+      "jank_sides": {
+       "app": 0,
+       "compositor": 0,
+       "other": 0
+      },
+      "visibly_late_frames": 0,
+      "late_do_frames": 1,
+      "late_do_frames_after_work": 0,
+      "prefetches": 0,
+      "buffer_stuffing": {
+       "recovery_slices": 0,
+       "buffer_stuffed": 0,
+       "occurred": false
+      },
+      "main_thread_frame_ms": {
+       "count": 1194,
+       "p50": 2.315837,
+       "p90": 2.906983,
+       "p99": 3.827678,
+       "max": 7.141846
+      },
+      "render_thread_frame_ms": {
+       "count": 1196,
+       "p50": 6.336223,
+       "p90": 7.425659,
+       "p99": 8.411906
+      },
+      "cpu_ms": {
+       "main": 2735.239677,
+       "render": 5538.605111
+      },
+      "work_ms": {
+       "main": 1538.940577,
+       "render": 3587.297516
+      },
+      "render_boost": {
+       "counter": true,
+       "time_weighted_min": 388.3191926171659,
+       "unboosted_frame_share": 0.0,
+       "frames_before_counter": 0,
+       "buckets": {
+        "unboosted": {
+         "frames": 0,
+         "share": 0.0,
+         "p50": null,
+         "p90": null,
+         "p99": null
+        },
+        "100-199": {
+         "frames": 0,
+         "share": 0.0,
+         "p50": null,
+         "p90": null,
+         "p99": null
+        },
+        "200+": {
+         "frames": 1196,
+         "share": 1.0,
+         "p50": 6.336223,
+         "p90": 7.425659,
+         "p99": 8.411906
+        }
+       },
+       "little_core_share": 0.0005448853889233339
+      }
+     },
+     "extra": {
+      "cpu": {
+       "main": {
+        "cpu_ms": 2460.683969,
+        "work_ms": 1386.118968,
+        "clusters": {
+         "mid": 2215.109585,
+         "big": 245.574384
+        },
+        "mean_khz": 1849412.6627310913
+       },
+       "other": {
+        "cpu_ms": 1282.217528,
+        "work_ms": 190.359173,
+        "clusters": {
+         "little": 1102.096873,
+         "mid": 173.44685700000002,
+         "big": 6.673798
+        },
+        "mean_khz": 961545.6625718502
+       },
+       "render": {
+        "cpu_ms": 5039.533342999999,
+        "work_ms": 3223.405972,
+        "clusters": {
+         "little": 3.017905,
+         "mid": 2895.340842,
+         "big": 2141.174596
+        },
+        "mean_khz": 2001034.2728031042
+       },
+       "workers": {
+        "cpu_ms": 9792.429595,
+        "work_ms": 5378.085378,
+        "clusters": {
+         "mid": 7997.547385999999,
+         "big": 1794.882209
+        },
+        "mean_khz": 1786067.5699015837
+       }
+      },
+      "energy": {
+       "span_s": null,
+       "rails_mw": {},
+       "groups_mw": {
+        "cpu": null,
+        "gpu": null,
+        "all": null
+       }
+      },
+      "masks": {
+       "uploads": 59872,
+       "textures": 243,
+       "lag1": 0.002029213973066796,
+       "lag2": 0.7851884150329538
+      },
+      "render_waits_on_workers_ms": 1671.855243,
+      "flush_layers": {
+       "count": 0,
+       "ms": 0.0
+      }
+     },
+     "gfxinfo": {
+      "frames": 1330,
+      "janky": 0,
+      "p50": 14,
+      "p90": 16,
+      "p95": 16,
+      "p99": 17,
+      "gpu_p50": 6,
+      "gpu_p90": 7,
+      "gpu_p99": 8
+     },
+     "memory": {
+      "after_start": {
+       "Java Heap": 4344,
+       "Native Heap": 18332,
+       "Code": 2012,
+       "Stack": 484,
+       "Graphics": 154156,
+       "Private Other": 1124,
+       "System": 3722,
+       "Total PSS": 184174,
+       "Total RSS": 340168
+      },
+      "gpu_after_start": {
+       "Other/Other": [
+        0.01,
+        1
+       ],
+       "Other/Buffer Object": [
+        0.0,
+        2
+       ],
+       "SW Path Mask/Surface": [
+        7.98,
+        50
+       ],
+       "Scratch/Buffer Object": [
+        28.02,
+        159
+       ],
+       "Scratch/Surface": [
+        79.01,
+        440
+       ],
+       "total": 115.02,
+       "purgeable": 52.55
+      },
+      "after_animation": {
+       "Java Heap": 11788,
+       "Native Heap": 22448,
+       "Code": 2016,
+       "Stack": 528,
+       "Graphics": 175388,
+       "Private Other": 1244,
+       "System": 3719,
+       "Total PSS": 217131,
+       "Total RSS": 375900
+      },
+      "gpu_after_animation": {
+       "Other/Other": [
+        0.01,
+        1
+       ],
+       "Other/Buffer Object": [
+        0.0,
+        2
+       ],
+       "SW Path Mask/Surface": [
+        7.99,
+        50
+       ],
+       "Scratch/Buffer Object": [
+        46.48,
+        262
+       ],
+       "Scratch/Surface": [
+        80.02,
+        452
+       ],
+       "total": 134.5,
+       "purgeable": 72.03
+      }
+     }
+    }
+   },
+   {
+    "label": "compose",
+    "run": 5,
+    "scenario": "stress_animation",
+    "stats": {
+     "trace": {
+      "since": 0,
+      "frames": 1196,
+      "janky_frames": 0,
+      "jank_kinds": {},
+      "jank_sides": {
+       "app": 0,
+       "compositor": 0,
+       "other": 0
+      },
+      "visibly_late_frames": 1196,
+      "late_do_frames": 16,
+      "late_do_frames_after_work": 1,
+      "prefetches": 0,
+      "buffer_stuffing": {
+       "recovery_slices": 0,
+       "buffer_stuffed": 0,
+       "occurred": false
+      },
+      "main_thread_frame_ms": {
+       "count": 1191,
+       "p50": 3.783366,
+       "p90": 5.336914,
+       "p99": 7.79952,
+       "max": 11.525635
+      },
+      "render_thread_frame_ms": {
+       "count": 1190,
+       "p50": 7.438192,
+       "p90": 8.755941,
+       "p99": 10.598796
+      },
+      "cpu_ms": {
+       "main": 4265.526384,
+       "render": 7100.479708
+      },
+      "work_ms": {
+       "main": 3009.043569,
+       "render": 6306.019516
+      },
+      "render_boost": {
+       "counter": true,
+       "time_weighted_min": 718.2435579187364,
+       "unboosted_frame_share": 0.0,
+       "frames_before_counter": 0,
+       "buckets": {
+        "unboosted": {
+         "frames": 0,
+         "share": 0.0,
+         "p50": null,
+         "p90": null,
+         "p99": null
+        },
+        "100-199": {
+         "frames": 0,
+         "share": 0.0,
+         "p50": null,
+         "p90": null,
+         "p99": null
+        },
+        "200+": {
+         "frames": 1190,
+         "share": 1.0,
+         "p50": 7.438192,
+         "p90": 8.755941,
+         "p99": 10.598796
+        }
+       },
+       "little_core_share": 0.0009569492878550735
+      }
+     },
+     "extra": {
+      "cpu": {
+       "main": {
+        "cpu_ms": 3863.2661310000003,
+        "work_ms": 2731.668806,
+        "clusters": {
+         "little": 3.310466,
+         "mid": 3398.632758,
+         "big": 461.322907
+        },
+        "mean_khz": 2318448.341901196
+       },
+       "other": {
+        "cpu_ms": 1470.878476,
+        "work_ms": 274.1037,
+        "clusters": {
+         "little": 1198.720642,
+         "mid": 232.036697,
+         "big": 40.121137
+        },
+        "mean_khz": 1055399.6054008475
+       },
+       "render": {
+        "cpu_ms": 6412.081502,
+        "work_ms": 5700.753683,
+        "clusters": {
+         "little": 6.794799,
+         "mid": 2028.77799,
+         "big": 4376.508713
+        },
+        "mean_khz": 2687678.967560166
+       },
+       "workers": {
+        "cpu_ms": 7753.52079,
+        "work_ms": 5451.2588510000005,
+        "clusters": {
+         "little": 0.27006,
+         "mid": 7404.936809999999,
+         "big": 348.31392
+        },
+        "mean_khz": 2333530.841865583
+       }
+      },
+      "energy": {
+       "span_s": null,
+       "rails_mw": {},
+       "groups_mw": {
+        "cpu": null,
+        "gpu": null,
+        "all": null
+       }
+      },
+      "masks": {
+       "uploads": 59578,
+       "textures": 143,
+       "lag1": 0.8376545806343064,
+       "lag2": 0.045023975771851604
+      },
+      "render_waits_on_workers_ms": 1480.054844,
+      "flush_layers": {
+       "count": 1180,
+       "ms": 1691.353064
+      }
+     },
+     "gfxinfo": {
+      "frames": 1442,
+      "janky": 1,
+      "p50": 15,
+      "p90": 17,
+      "p95": 18,
+      "p99": 20,
+      "gpu_p50": 5,
+      "gpu_p90": 6,
+      "gpu_p99": 6
+     },
+     "memory": {
+      "after_start": {
+       "Java Heap": 14040,
+       "Native Heap": 20964,
+       "Code": 7308,
+       "Stack": 520,
+       "Graphics": 122584,
+       "Private Other": 1908,
+       "System": 3834,
+       "Total PSS": 171158,
+       "Total RSS": 331456
+      },
+      "gpu_after_start": {
+       "Other/Other": [
+        0.01,
+        1
+       ],
+       "Other/Buffer Object": [
+        0.0,
+        2
+       ],
+       "SW Path Mask/Surface": [
+        7.99,
+        50
+       ],
+       "Scratch/Buffer Object": [
+        18.86,
+        113
+       ],
+       "Scratch/Surface": [
+        62.68,
+        506
+       ],
+       "total": 89.54,
+       "purgeable": 24.85
+      },
+      "after_animation": {
+       "Java Heap": 57352,
+       "Native Heap": 26852,
+       "Code": 7312,
+       "Stack": 552,
+       "Graphics": 144020,
+       "Private Other": 2008,
+       "System": 3873,
+       "Total PSS": 241969,
+       "Total RSS": 403708
+      },
+      "gpu_after_animation": {
+       "Other/Other": [
+        0.01,
+        1
+       ],
+       "Other/Buffer Object": [
+        0.0,
+        2
+       ],
+       "SW Path Mask/Surface": [
+        8.0,
+        50
+       ],
+       "Scratch/Buffer Object": [
+        37.55,
+        221
+       ],
+       "Scratch/Surface": [
+        64.29,
+        526
+       ],
+       "total": 109.84,
+       "purgeable": 45.88
+      }
+     }
+    }
+   },
+   {
+    "label": "main",
+    "run": 5,
+    "scenario": "stress_animation",
+    "stats": {
+     "trace": {
+      "since": 0,
+      "frames": 1208,
+      "janky_frames": 0,
+      "jank_kinds": {},
+      "jank_sides": {
+       "app": 0,
+       "compositor": 0,
+       "other": 0
+      },
+      "visibly_late_frames": 1208,
+      "late_do_frames": 2,
+      "late_do_frames_after_work": 0,
+      "prefetches": 0,
+      "buffer_stuffing": {
+       "recovery_slices": 0,
+       "buffer_stuffed": 0,
+       "occurred": false
+      },
+      "main_thread_frame_ms": {
+       "count": 1200,
+       "p50": 2.300781,
+       "p90": 2.904174,
+       "p99": 4.113484,
+       "max": 9.3868
+      },
+      "render_thread_frame_ms": {
+       "count": 1203,
+       "p50": 6.366251,
+       "p90": 7.474203,
+       "p99": 8.606242
+      },
+      "cpu_ms": {
+       "main": 2745.721787,
+       "render": 5788.329068
+      },
+      "work_ms": {
+       "main": 1521.204467,
+       "render": 3635.894251
+      },
+      "render_boost": {
+       "counter": true,
+       "time_weighted_min": 417.1046589326376,
+       "unboosted_frame_share": 0.0,
+       "frames_before_counter": 0,
+       "buckets": {
+        "unboosted": {
+         "frames": 0,
+         "share": 0.0,
+         "p50": null,
+         "p90": null,
+         "p99": null
+        },
+        "100-199": {
+         "frames": 0,
+         "share": 0.0,
+         "p50": null,
+         "p90": null,
+         "p99": null
+        },
+        "200+": {
+         "frames": 1203,
+         "share": 1.0,
+         "p50": 6.366251,
+         "p90": 7.474203,
+         "p99": 8.606242
+        }
+       },
+       "little_core_share": 1.3222814235481195e-05
+      }
+     },
+     "extra": {
+      "cpu": {
+       "main": {
+        "cpu_ms": 2451.239315,
+        "work_ms": 1371.925241,
+        "clusters": {
+         "mid": 2169.038752,
+         "big": 282.200563
+        },
+        "mean_khz": 1835625.8669239727
+       },
+       "other": {
+        "cpu_ms": 1363.3259690000002,
+        "work_ms": 207.332781,
+        "clusters": {
+         "little": 1154.814444,
+         "mid": 201.122528,
+         "big": 7.388997
+        },
+        "mean_khz": 947922.6546105642
+       },
+       "render": {
+        "cpu_ms": 5192.1399870000005,
+        "work_ms": 3274.097005,
+        "clusters": {
+         "little": 0.076538,
+         "mid": 3428.781403,
+         "big": 1763.282046
+        },
+        "mean_khz": 1995681.3555645375
+       },
+       "workers": {
+        "cpu_ms": 9486.88532,
+        "work_ms": 5379.783746,
+        "clusters": {
+         "little": 2.741537,
+         "mid": 7291.441634999999,
+         "big": 2192.702148
+        },
+        "mean_khz": 1831018.8063224105
+       }
+      },
+      "energy": {
+       "span_s": null,
+       "rails_mw": {},
+       "groups_mw": {
+        "cpu": null,
+        "gpu": null,
+        "all": null
+       }
+      },
+      "masks": {
+       "uploads": 60192,
+       "textures": 130,
+       "lag1": 0.8400486164296893,
+       "lag2": 0.04383803403150078
+      },
+      "render_waits_on_workers_ms": 1519.794477,
+      "flush_layers": {
+       "count": 1203,
+       "ms": 217.535354
+      }
+     },
+     "gfxinfo": {
+      "frames": 1358,
+      "janky": 1,
+      "p50": 14,
+      "p90": 16,
+      "p95": 17,
+      "p99": 18,
+      "gpu_p50": 6,
+      "gpu_p90": 7,
+      "gpu_p99": 8
+     },
+     "memory": {
+      "after_start": {
+       "Java Heap": 4324,
+       "Native Heap": 18140,
+       "Code": 2000,
+       "Stack": 484,
+       "Graphics": 126044,
+       "Private Other": 1128,
+       "System": 3729,
+       "Total PSS": 155849,
+       "Total RSS": 311888
+      },
+      "gpu_after_start": {
+       "Other/Other": [
+        0.01,
+        1
+       ],
+       "Other/Buffer Object": [
+        0.0,
+        2
+       ],
+       "SW Path Mask/Surface": [
+        7.99,
+        50
+       ],
+       "Scratch/Buffer Object": [
+        28.08,
+        161
+       ],
+       "Scratch/Surface": [
+        60.26,
+        226
+       ],
+       "total": 96.34,
+       "purgeable": 33.85
+      },
+      "after_animation": {
+       "Java Heap": 12092,
+       "Native Heap": 25864,
+       "Code": 2004,
+       "Stack": 520,
+       "Graphics": 195956,
+       "Private Other": 1248,
+       "System": 3726,
+       "Total PSS": 241410,
+       "Total RSS": 400212
+      },
+      "gpu_after_animation": {
+       "Other/Other": [
+        0.01,
+        1
+       ],
+       "Other/Buffer Object": [
+        0.0,
+        2
+       ],
+       "SW Path Mask/Surface": [
+        7.99,
+        50
+       ],
+       "Scratch/Buffer Object": [
+        78.95,
+        454
+       ],
+       "Scratch/Surface": [
+        59.57,
+        218
+       ],
+       "total": 146.52,
+       "purgeable": 84.04
+      }
+     }
+    }
+   }
+  ]
+ },
+ "guard_ab": {
+  "variants": {
+   "main": "main/bench-rs-release.apk",
+   "new": "new/bench-rs-release.apk"
+  },
+  "scenarios": [
+   "scroll"
+  ],
+  "cpu_capacities": {
+   "0": [
+    182,
+    1704000
+   ],
+   "1": [
+    182,
+    1704000
+   ],
+   "2": [
+    182,
+    1704000
+   ],
+   "3": [
+    182,
+    1704000
+   ],
+   "4": [
+    725,
+    2367000
+   ],
+   "5": [
+    725,
+    2367000
+   ],
+   "6": [
+    725,
+    2367000
+   ],
+   "7": [
+    725,
+    2367000
+   ],
+   "8": [
+    1024,
+    2914000
+   ]
+  },
+  "runs": [
+   {
+    "label": "main",
+    "run": 0,
+    "scenario": "scroll",
+    "stats": {
+     "trace": {
+      "since": 217388136535945,
+      "frames": 1769,
+      "janky_frames": 0,
+      "jank_kinds": {},
+      "jank_sides": {
+       "app": 0,
+       "compositor": 0,
+       "other": 0
+      },
+      "visibly_late_frames": 0,
+      "late_do_frames": 18,
+      "late_do_frames_after_work": 0,
+      "prefetches": 349,
+      "buffer_stuffing": {
+       "recovery_slices": 0,
+       "buffer_stuffed": 0,
+       "occurred": false
+      },
+      "main_thread_frame_ms": {
+       "count": 1792,
+       "p50": 0.838297,
+       "p90": 1.303426,
+       "p99": 1.950318,
+       "max": 3.127238
+      },
+      "render_thread_frame_ms": {
+       "count": 1769,
+       "p50": 1.489705,
+       "p90": 2.230225,
+       "p99": 3.213501
+      },
+      "cpu_ms": {
+       "main": 2316.007365,
+       "render": 3067.123308
+      },
+      "work_ms": {
+       "main": 609.36461,
+       "render": 909.291275
+      },
+      "render_boost": {
+       "counter": true,
+       "time_weighted_min": 3.4163288241788887,
+       "unboosted_frame_share": 1.0,
+       "frames_before_counter": 0,
+       "buckets": {
+        "unboosted": {
+         "frames": 1769,
+         "share": 1.0,
+         "p50": 1.489705,
+         "p90": 2.230225,
+         "p99": 3.213501
+        },
+        "100-199": {
+         "frames": 0,
+         "share": 0.0,
+         "p50": null,
+         "p90": null,
+         "p99": null
+        },
+        "200+": {
+         "frames": 0,
+         "share": 0.0,
+         "p50": null,
+         "p90": null,
+         "p99": null
+        }
+       },
+       "little_core_share": 0.029850583040204264
+      }
+     },
+     "extra": {
+      "cpu": {
+       "main": {
+        "cpu_ms": 2045.9348670000002,
+        "work_ms": 534.9180210000001,
+        "clusters": {
+         "little": 577.8613600000001,
+         "mid": 1372.498592,
+         "big": 95.574915
+        },
+        "mean_khz": 1133701.5353803048
+       },
+       "other": {
+        "cpu_ms": 1769.790375,
+        "work_ms": 248.798676,
+        "clusters": {
+         "little": 953.218801,
+         "mid": 806.4573150000001,
+         "big": 10.114259
+        },
+        "mean_khz": 785631.1357778743
+       },
+       "render": {
+        "cpu_ms": 2674.7500210000003,
+        "work_ms": 789.3771889999999,
+        "clusters": {
+         "little": 73.547851,
+         "mid": 2530.330512,
+         "big": 70.871658
+        },
+        "mean_khz": 1005343.1332348046
+       }
+      },
+      "energy": {
+       "span_s": null,
+       "rails_mw": {},
+       "groups_mw": {
+        "cpu": null,
+        "gpu": null,
+        "all": null
+       }
+      }
+     },
+     "gfxinfo": {
+      "frames": 1800,
+      "janky": 0,
+      "p50": 5,
+      "p90": 5,
+      "p95": 5,
+      "p99": 6,
+      "gpu_p50": 2,
+      "gpu_p90": 2,
+      "gpu_p99": 3
+     },
+     "memory": {
+      "after_start": {
+       "Java Heap": 1408,
+       "Native Heap": 8348,
+       "Code": 2012,
+       "Stack": 500,
+       "Graphics": 17424,
+       "Private Other": 1152,
+       "System": 3702,
+       "Total PSS": 34546,
+       "Total RSS": 191764
+      },
+      "after_scroll": {
+       "Java Heap": 4508,
+       "Native Heap": 10960,
+       "Code": 2020,
+       "Stack": 556,
+       "Graphics": 56580,
+       "Private Other": 1244,
+       "System": 3768,
+       "Total PSS": 79636,
+       "Total RSS": 238920
+      }
+     }
+    }
+   },
+   {
+    "label": "new",
+    "run": 0,
+    "scenario": "scroll",
+    "stats": {
+     "trace": {
+      "since": 217417872917022,
+      "frames": 1742,
+      "janky_frames": 0,
+      "jank_kinds": {},
+      "jank_sides": {
+       "app": 0,
+       "compositor": 0,
+       "other": 0
+      },
+      "visibly_late_frames": 0,
+      "late_do_frames": 8,
+      "late_do_frames_after_work": 0,
+      "prefetches": 347,
+      "buffer_stuffing": {
+       "recovery_slices": 0,
+       "buffer_stuffed": 0,
+       "occurred": false
+      },
+      "main_thread_frame_ms": {
+       "count": 1766,
+       "p50": 0.819865,
+       "p90": 1.335449,
+       "p99": 2.093099,
+       "max": 3.455037
+      },
+      "render_thread_frame_ms": {
+       "count": 1744,
+       "p50": 1.503377,
+       "p90": 2.335775,
+       "p99": 3.618937
+      },
+      "cpu_ms": {
+       "main": 2306.932777,
+       "render": 3076.801831
+      },
+      "work_ms": {
+       "main": 589.893203,
+       "render": 895.221225
+      },
+      "render_boost": {
+       "counter": true,
+       "time_weighted_min": 3.460274472749436,
+       "unboosted_frame_share": 1.0,
+       "frames_before_counter": 0,
+       "buckets": {
+        "unboosted": {
+         "frames": 1744,
+         "share": 1.0,
+         "p50": 1.503377,
+         "p90": 2.335775,
+         "p99": 3.618937
+        },
+        "100-199": {
+         "frames": 0,
+         "share": 0.0,
+         "p50": null,
+         "p90": null,
+         "p99": null
+        },
+        "200+": {
+         "frames": 0,
+         "share": 0.0,
+         "p50": null,
+         "p90": null,
+         "p99": null
+        }
+       },
+       "little_core_share": 0.04822392053497189
+      }
+     },
+     "extra": {
+      "cpu": {
+       "main": {
+        "cpu_ms": 2070.4815200000003,
+        "work_ms": 516.8358880000001,
+        "clusters": {
+         "little": 657.334362,
+         "mid": 1336.577495,
+         "big": 76.569663
+        },
+        "mean_khz": 1107280.708623277
+       },
+       "other": {
+        "cpu_ms": 1717.316742,
+        "work_ms": 240.59496299999998,
+        "clusters": {
+         "little": 886.6073449999999,
+         "mid": 821.9083750000001,
+         "big": 8.801022
+        },
+        "mean_khz": 773365.1685351123
+       },
+       "render": {
+        "cpu_ms": 2733.549091,
+        "work_ms": 784.8836589999999,
+        "clusters": {
+         "little": 148.375447,
+         "mid": 2512.6593149999994,
+         "big": 72.514329
+        },
+        "mean_khz": 997589.6482453184
+       }
+      },
+      "energy": {
+       "span_s": null,
+       "rails_mw": {},
+       "groups_mw": {
+        "cpu": null,
+        "gpu": null,
+        "all": null
+       }
+      }
+     },
+     "gfxinfo": {
+      "frames": 1794,
+      "janky": 0,
+      "p50": 5,
+      "p90": 5,
+      "p95": 5,
+      "p99": 6,
+      "gpu_p50": 2,
+      "gpu_p90": 2,
+      "gpu_p99": 3
+     },
+     "memory": {
+      "after_start": {
+       "Java Heap": 1412,
+       "Native Heap": 8352,
+       "Code": 2044,
+       "Stack": 484,
+       "Graphics": 17424,
+       "Private Other": 1152,
+       "System": 3711,
+       "Total PSS": 34579,
+       "Total RSS": 191800
+      },
+      "after_scroll": {
+       "Java Heap": 4500,
+       "Native Heap": 10836,
+       "Code": 2052,
+       "Stack": 532,
+       "Graphics": 56376,
+       "Private Other": 1244,
+       "System": 3777,
+       "Total PSS": 79317,
+       "Total RSS": 238732
+      }
+     }
+    }
+   },
+   {
+    "label": "new",
+    "run": 1,
+    "scenario": "scroll",
+    "stats": {
+     "trace": {
+      "since": 217446417443607,
+      "frames": 1757,
+      "janky_frames": 0,
+      "jank_kinds": {},
+      "jank_sides": {
+       "app": 0,
+       "compositor": 0,
+       "other": 0
+      },
+      "visibly_late_frames": 0,
+      "late_do_frames": 24,
+      "late_do_frames_after_work": 0,
+      "prefetches": 347,
+      "buffer_stuffing": {
+       "recovery_slices": 0,
+       "buffer_stuffed": 0,
+       "occurred": false
+      },
+      "main_thread_frame_ms": {
+       "count": 1785,
+       "p50": 0.768961,
+       "p90": 1.199666,
+       "p99": 2.020019,
+       "max": 4.413412
+      },
+      "render_thread_frame_ms": {
+       "count": 1760,
+       "p50": 1.416341,
+       "p90": 2.064128,
+       "p99": 3.12736
+      },
+      "cpu_ms": {
+       "main": 2108.718584,
+       "render": 2868.859884
+      },
+      "work_ms": {
+       "main": 630.181712,
+       "render": 959.968963
+      },
+      "render_boost": {
+       "counter": true,
+       "time_weighted_min": 5.298973370388981,
+       "unboosted_frame_share": 0.99375,
+       "frames_before_counter": 0,
+       "buckets": {
+        "unboosted": {
+         "frames": 1749,
+         "share": 0.99375,
+         "p50": 1.415975,
+         "p90": 2.063924,
+         "p99": 3.129313
+        },
+        "100-199": {
+         "frames": 11,
+         "share": 0.00625,
+         "p50": 1.53593,
+         "p90": 2.255941,
+         "p99": 2.272786
+        },
+        "200+": {
+         "frames": 0,
+         "share": 0.0,
+         "p50": null,
+         "p90": null,
+         "p99": null
+        }
+       },
+       "little_core_share": 0.035807068017825856
+      }
+     },
+     "extra": {
+      "cpu": {
+       "main": {
+        "cpu_ms": 1860.377189,
+        "work_ms": 553.3736759999999,
+        "clusters": {
+         "little": 315.595088,
+         "mid": 1449.65527,
+         "big": 95.126831
+        },
+        "mean_khz": 1144696.7423142276
+       },
+       "other": {
+        "cpu_ms": 1731.0589690000002,
+        "work_ms": 246.27607199999997,
+        "clusters": {
+         "little": 949.890586,
+         "mid": 774.499154,
+         "big": 6.669229
+        },
+        "mean_khz": 795906.0829192352
+       },
+       "render": {
+        "cpu_ms": 2509.7781390000005,
+        "work_ms": 837.23636,
+        "clusters": {
+         "little": 91.747555,
+         "mid": 2364.8683520000004,
+         "big": 53.162232
+        },
+        "mean_khz": 1141947.0936761552
+       }
+      },
+      "energy": {
+       "span_s": null,
+       "rails_mw": {},
+       "groups_mw": {
+        "cpu": null,
+        "gpu": null,
+        "all": null
+       }
+      }
+     },
+     "gfxinfo": {
+      "frames": 1790,
+      "janky": 0,
+      "p50": 5,
+      "p90": 5,
+      "p95": 5,
+      "p99": 6,
+      "gpu_p50": 2,
+      "gpu_p90": 2,
+      "gpu_p99": 3
+     },
+     "memory": {
+      "after_start": {
+       "Java Heap": 1316,
+       "Native Heap": 8400,
+       "Code": 2088,
+       "Stack": 500,
+       "Graphics": 17424,
+       "Private Other": 1136,
+       "System": 3704,
+       "Total PSS": 34568,
+       "Total RSS": 191340
+      },
+      "after_scroll": {
+       "Java Heap": 4512,
+       "Native Heap": 10952,
+       "Code": 2096,
+       "Stack": 548,
+       "Graphics": 57608,
+       "Private Other": 1228,
+       "System": 3770,
+       "Total PSS": 80714,
+       "Total RSS": 239676
+      }
+     }
+    }
+   },
+   {
+    "label": "main",
+    "run": 1,
+    "scenario": "scroll",
+    "stats": {
+     "trace": {
+      "since": 217476207785011,
+      "frames": 1746,
+      "janky_frames": 0,
+      "jank_kinds": {},
+      "jank_sides": {
+       "app": 0,
+       "compositor": 0,
+       "other": 0
+      },
+      "visibly_late_frames": 0,
+      "late_do_frames": 13,
+      "late_do_frames_after_work": 0,
+      "prefetches": 347,
+      "buffer_stuffing": {
+       "recovery_slices": 0,
+       "buffer_stuffed": 0,
+       "occurred": false
+      },
+      "main_thread_frame_ms": {
+       "count": 1772,
+       "p50": 0.781168,
+       "p90": 1.234904,
+       "p99": 2.032267,
+       "max": 4.858154
+      },
+      "render_thread_frame_ms": {
+       "count": 1747,
+       "p50": 1.372315,
+       "p90": 2.053711,
+       "p99": 2.817465
+      },
+      "cpu_ms": {
+       "main": 2141.60356,
+       "render": 2776.0806
+      },
+      "work_ms": {
+       "main": 619.10036,
+       "render": 925.725929
+      },
+      "render_boost": {
+       "counter": true,
+       "time_weighted_min": 3.386358919443731,
+       "unboosted_frame_share": 1.0,
+       "frames_before_counter": 0,
+       "buckets": {
+        "unboosted": {
+         "frames": 1747,
+         "share": 1.0,
+         "p50": 1.372315,
+         "p90": 2.053711,
+         "p99": 2.817465
+        },
+        "100-199": {
+         "frames": 0,
+         "share": 0.0,
+         "p50": null,
+         "p90": null,
+         "p99": null
+        },
+        "200+": {
+         "frames": 0,
+         "share": 0.0,
+         "p50": null,
+         "p90": null,
+         "p99": null
+        }
+       },
+       "little_core_share": 0.022503641636880557
+      }
+     },
+     "extra": {
+      "cpu": {
+       "main": {
+        "cpu_ms": 1871.5665729999998,
+        "work_ms": 560.521883,
+        "clusters": {
+         "little": 204.235153,
+         "mid": 1603.97982,
+         "big": 63.3516
+        },
+        "mean_khz": 1101469.9495511882
+       },
+       "other": {
+        "cpu_ms": 1669.4821279999999,
+        "work_ms": 236.869979,
+        "clusters": {
+         "little": 820.8195219999999,
+         "mid": 842.4365719999998,
+         "big": 6.226034
+        },
+        "mean_khz": 774429.0653981772
+       },
+       "render": {
+        "cpu_ms": 2390.5470660000005,
+        "work_ms": 827.835834,
+        "clusters": {
+         "little": 34.979005,
+         "mid": 2288.224117,
+         "big": 67.343944
+        },
+        "mean_khz": 1166818.7527632636
+       }
+      },
+      "energy": {
+       "span_s": null,
+       "rails_mw": {},
+       "groups_mw": {
+        "cpu": null,
+        "gpu": null,
+        "all": null
+       }
+      }
+     },
+     "gfxinfo": {
+      "frames": 1783,
+      "janky": 0,
+      "p50": 5,
+      "p90": 5,
+      "p95": 5,
+      "p99": 6,
+      "gpu_p50": 2,
+      "gpu_p90": 2,
+      "gpu_p99": 3
+     },
+     "memory": {
+      "after_start": {
+       "Java Heap": 1408,
+       "Native Heap": 8344,
+       "Code": 2020,
+       "Stack": 488,
+       "Graphics": 17424,
+       "Private Other": 1152,
+       "System": 3709,
+       "Total PSS": 34545,
+       "Total RSS": 191764
+      },
+      "after_scroll": {
+       "Java Heap": 4488,
+       "Native Heap": 11944,
+       "Code": 2028,
+       "Stack": 536,
+       "Graphics": 61504,
+       "Private Other": 1236,
+       "System": 3773,
+       "Total PSS": 85509,
+       "Total RSS": 244796
+      }
+     }
+    }
+   },
+   {
+    "label": "main",
+    "run": 2,
+    "scenario": "scroll",
+    "stats": {
+     "trace": {
+      "since": 217504557257030,
+      "frames": 1762,
+      "janky_frames": 0,
+      "jank_kinds": {},
+      "jank_sides": {
+       "app": 0,
+       "compositor": 0,
+       "other": 0
+      },
+      "visibly_late_frames": 0,
+      "late_do_frames": 9,
+      "late_do_frames_after_work": 0,
+      "prefetches": 349,
+      "buffer_stuffing": {
+       "recovery_slices": 0,
+       "buffer_stuffed": 0,
+       "occurred": false
+      },
+      "main_thread_frame_ms": {
+       "count": 1784,
+       "p50": 0.793498,
+       "p90": 1.313232,
+       "p99": 2.197225,
+       "max": 3.148519
+      },
+      "render_thread_frame_ms": {
+       "count": 1762,
+       "p50": 1.463298,
+       "p90": 2.198852,
+       "p99": 3.461223
+      },
+      "cpu_ms": {
+       "main": 2264.547505,
+       "render": 3004.298978
+      },
+      "work_ms": {
+       "main": 584.197818,
+       "render": 890.192846
+      },
+      "render_boost": {
+       "counter": true,
+       "time_weighted_min": 4.006186148421015,
+       "unboosted_frame_share": 1.0,
+       "frames_before_counter": 0,
+       "buckets": {
+        "unboosted": {
+         "frames": 1762,
+         "share": 1.0,
+         "p50": 1.463298,
+         "p90": 2.198852,
+         "p99": 3.461223
+        },
+        "100-199": {
+         "frames": 0,
+         "share": 0.0,
+         "p50": null,
+         "p90": null,
+         "p99": null
+        },
+        "200+": {
+         "frames": 0,
+         "share": 0.0,
+         "p50": null,
+         "p90": null,
+         "p99": null
+        }
+       },
+       "little_core_share": 0.0504195687943279
+      }
+     },
+     "extra": {
+      "cpu": {
+       "main": {
+        "cpu_ms": 1964.3426299999999,
+        "work_ms": 527.454928,
+        "clusters": {
+         "little": 432.769617,
+         "mid": 1478.999605,
+         "big": 52.573408
+        },
+        "mean_khz": 1099375.9503814261
+       },
+       "other": {
+        "cpu_ms": 1731.318471,
+        "work_ms": 240.783519,
+        "clusters": {
+         "little": 880.318231,
+         "mid": 843.880813,
+         "big": 7.119427
+        },
+        "mean_khz": 762883.5491543716
+       },
+       "render": {
+        "cpu_ms": 2562.956216,
+        "work_ms": 796.3200049999999,
+        "clusters": {
+         "little": 133.896725,
+         "mid": 2359.070685,
+         "big": 69.988806
+        },
+        "mean_khz": 1078147.3398794886
+       }
+      },
+      "energy": {
+       "span_s": null,
+       "rails_mw": {},
+       "groups_mw": {
+        "cpu": null,
+        "gpu": null,
+        "all": null
+       }
+      }
+     },
+     "gfxinfo": {
+      "frames": 1776,
+      "janky": 0,
+      "p50": 5,
+      "p90": 5,
+      "p95": 5,
+      "p99": 6,
+      "gpu_p50": 2,
+      "gpu_p90": 2,
+      "gpu_p99": 3
+     },
+     "memory": {
+      "after_start": {
+       "Java Heap": 1316,
+       "Native Heap": 8396,
+       "Code": 2032,
+       "Stack": 480,
+       "Graphics": 17424,
+       "Private Other": 1136,
+       "System": 3709,
+       "Total PSS": 34493,
+       "Total RSS": 191264
+      },
+      "after_scroll": {
+       "Java Heap": 4500,
+       "Native Heap": 10956,
+       "Code": 2040,
+       "Stack": 532,
+       "Graphics": 58016,
+       "Private Other": 1236,
+       "System": 3767,
+       "Total PSS": 81047,
+       "Total RSS": 239888
+      }
+     }
+    }
+   },
+   {
+    "label": "new",
+    "run": 2,
+    "scenario": "scroll",
+    "stats": {
+     "trace": {
+      "since": 217534270301356,
+      "frames": 1774,
+      "janky_frames": 0,
+      "jank_kinds": {},
+      "jank_sides": {
+       "app": 0,
+       "compositor": 0,
+       "other": 0
+      },
+      "visibly_late_frames": 0,
+      "late_do_frames": 14,
+      "late_do_frames_after_work": 1,
+      "prefetches": 350,
+      "buffer_stuffing": {
+       "recovery_slices": 0,
+       "buffer_stuffed": 0,
+       "occurred": false
+      },
+      "main_thread_frame_ms": {
+       "count": 1800,
+       "p50": 0.825154,
+       "p90": 1.325561,
+       "p99": 2.18864,
+       "max": 3.888143
+      },
+      "render_thread_frame_ms": {
+       "count": 1776,
+       "p50": 1.497844,
+       "p90": 2.373291,
+       "p99": 3.446859
+      },
+      "cpu_ms": {
+       "main": 2318.230792,
+       "render": 3160.936712
+      },
+      "work_ms": {
+       "main": 580.23046,
+       "render": 889.964524
+      },
+      "render_boost": {
+       "counter": true,
+       "time_weighted_min": 4.780704566321654,
+       "unboosted_frame_share": 1.0,
+       "frames_before_counter": 0,
+       "buckets": {
+        "unboosted": {
+         "frames": 1776,
+         "share": 1.0,
+         "p50": 1.497844,
+         "p90": 2.373291,
+         "p99": 3.446859
+        },
+        "100-199": {
+         "frames": 0,
+         "share": 0.0,
+         "p50": null,
+         "p90": null,
+         "p99": null
+        },
+        "200+": {
+         "frames": 0,
+         "share": 0.0,
+         "p50": null,
+         "p90": null,
+         "p99": null
+        }
+       },
+       "little_core_share": 0.035303060506198455
+      }
+     },
+     "extra": {
+      "cpu": {
+       "main": {
+        "cpu_ms": 2020.6048140000003,
+        "work_ms": 515.6101510000001,
+        "clusters": {
+         "little": 499.265978,
+         "mid": 1467.941582,
+         "big": 53.397254
+        },
+        "mean_khz": 1076328.1377350017
+       },
+       "other": {
+        "cpu_ms": 1737.187749,
+        "work_ms": 242.09351500000002,
+        "clusters": {
+         "little": 869.891095,
+         "mid": 854.697087,
+         "big": 12.599567
+        },
+        "mean_khz": 762061.8118088052
+       },
+       "render": {
+        "cpu_ms": 2730.120875,
+        "work_ms": 783.168265,
+        "clusters": {
+         "little": 78.43632299999999,
+         "mid": 2594.986675,
+         "big": 56.697877
+        },
+        "mean_khz": 978448.302111532
+       }
+      },
+      "energy": {
+       "span_s": null,
+       "rails_mw": {},
+       "groups_mw": {
+        "cpu": null,
+        "gpu": null,
+        "all": null
+       }
+      }
+     },
+     "gfxinfo": {
+      "frames": 1795,
+      "janky": 0,
+      "p50": 5,
+      "p90": 5,
+      "p95": 5,
+      "p99": 6,
+      "gpu_p50": 2,
+      "gpu_p90": 2,
+      "gpu_p99": 3
+     },
+     "memory": {
+      "after_start": {
+       "Java Heap": 1412,
+       "Native Heap": 8340,
+       "Code": 2044,
+       "Stack": 488,
+       "Graphics": 17424,
+       "Private Other": 1160,
+       "System": 3716,
+       "Total PSS": 34584,
+       "Total RSS": 191788
+      },
+      "after_scroll": {
+       "Java Heap": 4500,
+       "Native Heap": 11168,
+       "Code": 2052,
+       "Stack": 536,
+       "Graphics": 58424,
+       "Private Other": 1252,
+       "System": 3774,
+       "Total PSS": 81706,
+       "Total RSS": 240984
+      }
+     }
+    }
+   },
+   {
+    "label": "new",
+    "run": 3,
+    "scenario": "scroll",
+    "stats": {
+     "trace": {
+      "since": 217562947960265,
+      "frames": 1760,
+      "janky_frames": 0,
+      "jank_kinds": {},
+      "jank_sides": {
+       "app": 0,
+       "compositor": 0,
+       "other": 0
+      },
+      "visibly_late_frames": 0,
+      "late_do_frames": 11,
+      "late_do_frames_after_work": 0,
+      "prefetches": 350,
+      "buffer_stuffing": {
+       "recovery_slices": 0,
+       "buffer_stuffed": 0,
+       "occurred": false
+      },
+      "main_thread_frame_ms": {
+       "count": 1784,
+       "p50": 0.781331,
+       "p90": 1.221232,
+       "p99": 2.00708,
+       "max": 3.017659
+      },
+      "render_thread_frame_ms": {
+       "count": 1760,
+       "p50": 1.390137,
+       "p90": 2.104492,
+       "p99": 3.104899
+      },
+      "cpu_ms": {
+       "main": 2189.740187,
+       "render": 2889.576429
+      },
+      "work_ms": {
+       "main": 604.755738,
+       "render": 930.680685
+      },
+      "render_boost": {
+       "counter": true,
+       "time_weighted_min": 4.459364637142321,
+       "unboosted_frame_share": 0.99375,
+       "frames_before_counter": 0,
+       "buckets": {
+        "unboosted": {
+         "frames": 1749,
+         "share": 0.99375,
+         "p50": 1.387777,
+         "p90": 2.09078,
+         "p99": 3.163086
+        },
+        "100-199": {
+         "frames": 11,
+         "share": 0.00625,
+         "p50": 1.960002,
+         "p90": 2.505412,
+         "p99": 2.562174
+        },
+        "200+": {
+         "frames": 0,
+         "share": 0.0,
+         "p50": null,
+         "p90": null,
+         "p99": null
+        }
+       },
+       "little_core_share": 0.04357889922419491
+      }
+     },
+     "extra": {
+      "cpu": {
+       "main": {
+        "cpu_ms": 1912.6750009999998,
+        "work_ms": 531.638239,
+        "clusters": {
+         "little": 273.371994,
+         "mid": 1576.1688540000002,
+         "big": 63.134153
+        },
+        "mean_khz": 1054541.3712436554
+       },
+       "other": {
+        "cpu_ms": 1687.4935670000002,
+        "work_ms": 237.85933400000002,
+        "clusters": {
+         "little": 820.515986,
+         "mid": 858.820641,
+         "big": 8.15694
+        },
+        "mean_khz": 770104.5955376965
+       },
+       "render": {
+        "cpu_ms": 2493.547043,
+        "work_ms": 807.442518,
+        "clusters": {
+         "little": 85.62316899999999,
+         "mid": 2351.702561,
+         "big": 56.221313
+        },
+        "mean_khz": 1109795.4088680893
+       }
+      },
+      "energy": {
+       "span_s": null,
+       "rails_mw": {},
+       "groups_mw": {
+        "cpu": null,
+        "gpu": null,
+        "all": null
+       }
+      }
+     },
+     "gfxinfo": {
+      "frames": 1783,
+      "janky": 0,
+      "p50": 5,
+      "p90": 5,
+      "p95": 5,
+      "p99": 6,
+      "gpu_p50": 2,
+      "gpu_p90": 2,
+      "gpu_p99": 3
+     },
+     "memory": {
+      "after_start": {
+       "Java Heap": 1320,
+       "Native Heap": 8320,
+       "Code": 2072,
+       "Stack": 504,
+       "Graphics": 17424,
+       "Private Other": 1132,
+       "System": 3709,
+       "Total PSS": 34481,
+       "Total RSS": 191260
+      },
+      "after_scroll": {
+       "Java Heap": 4504,
+       "Native Heap": 10700,
+       "Code": 2080,
+       "Stack": 548,
+       "Graphics": 56376,
+       "Private Other": 1212,
+       "System": 3768,
+       "Total PSS": 79188,
+       "Total RSS": 238040
+      }
+     }
+    }
+   },
+   {
+    "label": "main",
+    "run": 3,
+    "scenario": "scroll",
+    "stats": {
+     "trace": {
+      "since": 217592356253167,
+      "frames": 1765,
+      "janky_frames": 0,
+      "jank_kinds": {},
+      "jank_sides": {
+       "app": 0,
+       "compositor": 0,
+       "other": 0
+      },
+      "visibly_late_frames": 166,
+      "late_do_frames": 19,
+      "late_do_frames_after_work": 0,
+      "prefetches": 350,
+      "buffer_stuffing": {
+       "recovery_slices": 1,
+       "buffer_stuffed": 1,
+       "occurred": true
+      },
+      "main_thread_frame_ms": {
+       "count": 1793,
+       "p50": 0.845093,
+       "p90": 1.290527,
+       "p99": 2.140014,
+       "max": 2.86206
+      },
+      "render_thread_frame_ms": {
+       "count": 1768,
+       "p50": 1.517781,
+       "p90": 2.454305,
+       "p99": 3.615031
+      },
+      "cpu_ms": {
+       "main": 2301.647504,
+       "render": 3152.415419
+      },
+      "work_ms": {
+       "main": 597.313982,
+       "render": 900.641214
+      },
+      "render_boost": {
+       "counter": true,
+       "time_weighted_min": 5.396476203551382,
+       "unboosted_frame_share": 0.9937782805429864,
+       "frames_before_counter": 0,
+       "buckets": {
+        "unboosted": {
+         "frames": 1757,
+         "share": 0.9937782805429864,
+         "p50": 1.517334,
+         "p90": 2.454957,
+         "p99": 3.615031
+        },
+        "100-199": {
+         "frames": 11,
+         "share": 0.006221719457013574,
+         "p50": 1.661499,
+         "p90": 1.777262,
+         "p99": 2.182251
+        },
+        "200+": {
+         "frames": 0,
+         "share": 0.0,
+         "p50": null,
+         "p90": null,
+         "p99": null
+        }
+       },
+       "little_core_share": 0.05676856131377779
+      }
+     },
+     "extra": {
+      "cpu": {
+       "main": {
+        "cpu_ms": 2014.261315,
+        "work_ms": 531.353127,
+        "clusters": {
+         "little": 600.661843,
+         "mid": 1334.5741249999999,
+         "big": 79.025347
+        },
+        "mean_khz": 1149038.9852778362
+       },
+       "other": {
+        "cpu_ms": 1724.6882769999997,
+        "work_ms": 246.913892,
+        "clusters": {
+         "little": 905.48065,
+         "mid": 808.259467,
+         "big": 10.94816
+        },
+        "mean_khz": 795426.3373577741
+       },
+       "render": {
+        "cpu_ms": 2714.722456,
+        "work_ms": 792.6888399999999,
+        "clusters": {
+         "little": 159.08015699999999,
+         "mid": 2515.747116,
+         "big": 39.895183
+        },
+        "mean_khz": 1022736.2486844953
+       }
+      },
+      "energy": {
+       "span_s": null,
+       "rails_mw": {},
+       "groups_mw": {
+        "cpu": null,
+        "gpu": null,
+        "all": null
+       }
+      }
+     },
+     "gfxinfo": {
+      "frames": 1781,
+      "janky": 1,
+      "p50": 5,
+      "p90": 5,
+      "p95": 5,
+      "p99": 7,
+      "gpu_p50": 2,
+      "gpu_p90": 2,
+      "gpu_p99": 3
+     },
+     "memory": {
+      "after_start": {
+       "Java Heap": 1408,
+       "Native Heap": 8356,
+       "Code": 2052,
+       "Stack": 488,
+       "Graphics": 17424,
+       "Private Other": 1152,
+       "System": 3716,
+       "Total PSS": 34596,
+       "Total RSS": 191808
+      },
+      "after_scroll": {
+       "Java Heap": 4484,
+       "Native Heap": 10808,
+       "Code": 2060,
+       "Stack": 536,
+       "Graphics": 56580,
+       "Private Other": 1236,
+       "System": 3783,
+       "Total PSS": 79487,
+       "Total RSS": 238892
+      }
+     }
+    }
+   }
+  ]
+ }
+}

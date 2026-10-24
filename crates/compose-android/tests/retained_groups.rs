@@ -766,9 +766,10 @@ fn path_changes(pending: &[u8]) -> Vec<(u8, u32)> {
     changes
 }
 
-/// Modelled on the guide's `Heartbeat` (docs/guide/performance.md, "Paths"): a remembered `Arc<Path>` keeps
-/// its id while the drawing around it changes each frame; a path built in the drawing block is
-/// a new one each frame, the last frame's dropped before it's defined (D410).
+/// Fixed contents (an `Arc<PathData>`, as an icon's) keep their id while the drawing around them
+/// changes each frame; a new `Path` built in the drawing block each frame (not Compose's way: the
+/// guide's `Heartbeat` remembers and resets one, D533) is a new path each frame, the last
+/// frame's dropped before it's defined (D410).
 #[test]
 fn a_remembered_path_keeps_its_id_and_a_drawn_one_is_replaced() {
     let heart = Path::from_svg("M0,0 L10,0 L10,10 Z").unwrap().data();

@@ -39,6 +39,7 @@ The known differences from Jetpack Compose that an app will run into, distilled 
 - **No alignment lines** (`alignBy(FirstBaseline)`, `paddingFrom`): bars place their titles by measured heights (D186).
 - **`LayoutCoordinates` is a snapshot** given to `on_globally_positioned` (size, position in the root and window, bounds), not a live object: no `localPositionOf`, no parent coordinates, and a graphics layer's property change alone doesn't report new coordinates (D172).
 - **Window insets aren't consumed**: nested paddings of the same insets add up. Sides are physical (no `Start`/`End`); there's no `exclude`, no `WindowInsets(left, top, …)`, no insets animations nor `consumeWindowInsets` (D222). Material's `Scaffold` and bars take their insets as `PaddingValues`, zero by default (D183).
+- **`Path`** is a shared reference (`Rc`), as Kotlin's: a clone is the same path, and it stays on its thread; its contents (`Path::data`, an `Arc<PathData>`) can go anywhere. `op` returns `true` whatever the platform makes of it (D535).
 - **Nested scrolling** finds the connections around a scrollable from the pointer's hit path rather than its layout parents, and has no `dispatcher` for custom scroll sources (`NestedScrollChain` is there for them). An outer scrollable takes the scroll an inner one leaves, but not the rest of its fling (D188).
 
 ## Lazy lists

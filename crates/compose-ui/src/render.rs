@@ -414,7 +414,10 @@ impl UiTree {
             let retained = self.node_mut(node).retained.as_mut().expect("a repaint boundary");
             if draws_paths && !retained.tracks_paths {
                 retained.tracks_paths = true;
-                self.path_drawings.push(node);
+                // Listed once, though its node became a boundary again since.
+                if !self.path_drawings.contains(&node) {
+                    self.path_drawings.push(node);
+                }
             }
             let retained = self.node_mut(node).retained.as_mut().expect("a repaint boundary");
             match Arc::get_mut(&mut retained.recording) {
