@@ -1252,15 +1252,20 @@ internal class Replayer(private val text: TextMeasurer) {
                         stack.add(operand)
                     }
                     1 -> {
-                        val op = when (buffer.get().toInt()) {
-                            0 -> Path.Op.DIFFERENCE
-                            1 -> Path.Op.INTERSECT
-                            2 -> Path.Op.UNION
-                            3 -> Path.Op.XOR
-                            else -> Path.Op.REVERSE_DIFFERENCE
-                        }
+                        val op = readOp(buffer)
                         val second = stack.removeAt(stack.size - 1)
+                        // A failure leaves the first as it was, as `Path.op`.
                         stack[stack.size - 1].op(second, op)
+                        releaseStepPath(second)
+                    }
+                    4 -> {
+                        // `path.op(first, second)`: the path's earlier contents if it fails.
+                        val op = readOp(buffer)
+                        val second = stack.removeAt(stack.size - 1)
+                        val first = stack.removeAt(stack.size - 1)
+                        // On the stack's top, the result, or as it was if the operation failed.
+                        stack[stack.size - 1].op(first, second, op)
+                        releaseStepPath(first)
                         releaseStepPath(second)
                     }
                     2 -> {
@@ -1278,7 +1283,15 @@ internal class Replayer(private val text: TextMeasurer) {
         path.fillType = fillType
     }
 
-    private fun readFillType(buffer: ByteBuffer): Path.FillType =
+    private fun readOp(buffer: ByteBuffer): Path.Op = when (buffer.get().toInt()) {
+        0 -> Path.Op.DIFFERENCE
+        1 -> Path.Op.INTERSECT
+        2 -> Path.Op.UNION
+        3 -> Path.Op.XOR
+        else -> Path.Op.REVERSE_DIFFERENCE
+    }
+
+        private fun readFillType(buffer: ByteBuffer): Path.FillType =
         if (buffer.get().toInt() == 1) Path.FillType.EVEN_ODD else Path.FillType.WINDING
 
     private fun readCommands(buffer: ByteBuffer, path: Path) {

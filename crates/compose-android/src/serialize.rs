@@ -96,6 +96,7 @@ pub mod step {
     pub const COMBINE: u8 = 1;
     pub const ADD: u8 = 2;
     pub const FILL: u8 = 3;
+    pub const COMBINE_OR: u8 = 4;
 }
 
 /// A paint's shader kind, as `Replayer.kt` reads it.
@@ -369,6 +370,8 @@ pub struct Resources {
     named: Vec<u32>,
     images: HashMap<usize, (Weak<[u8]>, u32)>,
     next_id: u32,
+    /// `next_id` wrapped round: ids handed out from now on skip those in use.
+    wrapped: bool,
     /// Drops, and images' definitions, the Kotlin side hasn't taken yet: a definition dropped
     /// before it was taken is cancelled, so this stays bounded however many frames go undrawn.
     pending: Vec<Pending>,
@@ -379,9 +382,24 @@ pub struct Resources {
 }
 
 impl Resources {
+    /// A new resource id: never 0 (nothing), and once the ids wrapped round (after 4 billion),
+    /// never one a path or an image holds. (An id whose drop is pending may be taken again: the
+    /// Kotlin side reads drops before definitions.)
     fn next(&mut self) -> u32 {
-        self.next_id = self.next_id.wrapping_add(1).max(1);
-        self.next_id
+        loop {
+            self.next_id = self.next_id.wrapping_add(1);
+            if self.next_id == 0 {
+                self.wrapped = true;
+                continue;
+            }
+            let id = self.next_id;
+            if !self.wrapped
+                || !(self.defined_at.contains_key(&id)
+                    || self.images.values().any(|(_, image)| *image == id))
+            {
+                return id;
+            }
+        }
     }
 
     /// Drops path `id`: its definition, if still pending, or the Kotlin side's.
@@ -393,9 +411,19 @@ impl Resources {
     }
 
     /// Cancels path `id`'s pending definition, if any: whether the Kotlin side holds the id.
+    /// Once cancelled ones are half the list, it's compacted: frames written and not taken (a
+    /// view hidden by its own visibility, whose window shows) leave one definition per id.
     fn cancel_path(&mut self, id: u32) -> Option<bool> {
         let at = self.pending_path_at.remove(&id)?;
-        self.pending_paths[at].take().map(|pending| pending.taken)
+        let taken = self.pending_paths[at].take().map(|pending| pending.taken);
+        if 2 * self.pending_path_at.len() < self.pending_paths.len() {
+            self.pending_paths.retain(Option::is_some);
+            for (at, pending) in self.pending_paths.iter().enumerate() {
+                let id = pending.as_ref().expect("kept").id;
+                self.pending_path_at.insert(id, at);
+            }
+        }
+        taken
     }
 
     fn drop_image(&mut self, id: u32) {
@@ -610,7 +638,8 @@ fn write_path(writer: &mut Writer, id: u32, path: &PathData) {
 /// A path's contents, as `Replayer.kt` reads them: its fill type (u8: 0 non-zero, 1 even-odd),
 /// its steps (D535: a count, u32, then each a kind, u8: `step::PUSH` and an operand's contents,
 /// as these, which have no steps; `step::COMBINE` and the operation, u8, `PathOperation`'s
-/// order; `step::ADD`; `step::FILL` and a fill type), then its commands' count (u32) and each
+/// order; `step::COMBINE_OR` and the operation; `step::ADD`; `step::FILL` and a fill type), then
+/// its commands' count (u32) and each
 /// command (its kind, its points). A list, written and read in one pass however many steps.
 fn write_path_contents(writer: &mut Writer, path: &PathData) {
     write_fill_type(writer, path.fill_type());
@@ -626,13 +655,11 @@ fn write_path_contents(writer: &mut Writer, path: &PathData) {
             }
             PathStep::Combine(operation) => {
                 writer.u8(step::COMBINE);
-                writer.u8(match operation {
-                    PathOperation::Difference => 0,
-                    PathOperation::Intersect => 1,
-                    PathOperation::Union => 2,
-                    PathOperation::Xor => 3,
-                    PathOperation::ReverseDifference => 4,
-                });
+                write_operation(writer, *operation);
+            }
+            PathStep::CombineOr(operation) => {
+                writer.u8(step::COMBINE_OR);
+                write_operation(writer, *operation);
             }
             PathStep::Add => writer.u8(step::ADD),
             PathStep::SetFillType(fill_type) => {
@@ -642,6 +669,16 @@ fn write_path_contents(writer: &mut Writer, path: &PathData) {
         }
     }
     write_commands(writer, path.commands());
+}
+
+fn write_operation(writer: &mut Writer, operation: PathOperation) {
+    writer.u8(match operation {
+        PathOperation::Difference => 0,
+        PathOperation::Intersect => 1,
+        PathOperation::Union => 2,
+        PathOperation::Xor => 3,
+        PathOperation::ReverseDifference => 4,
+    });
 }
 
 fn write_fill_type(writer: &mut Writer, fill_type: PathFillType) {
@@ -1655,6 +1692,70 @@ mod tests {
         assert_eq!(pending.bytes, [&[tag::DROP_PATH][..], &id.to_le_bytes()].concat());
     }
 
+    /// Resource ids wrap round after 4 billion, skipping those in use.
+    #[test]
+    fn wrapped_ids_skip_those_in_use() {
+        let mut resources = Resources::default();
+        let first = Path::new();
+        first.add_rect(Rect::new(0.0, 0.0, 1.0, 1.0));
+        let _first_list = frame_drawing(&mut resources, &first);
+        let mut pending = Writer::default();
+        resources.write_pending(&mut pending);
+        assert_eq!(read_u32(&pending.bytes, 1), 1);
+        resources.next_id = u32::MAX - 1;
+        let (second, third) = (Path::new(), Path::new());
+        second.add_rect(Rect::new(0.0, 0.0, 2.0, 2.0));
+        third.add_rect(Rect::new(0.0, 0.0, 3.0, 3.0));
+        let _second_list = frame_drawing(&mut resources, &second);
+        let _third_list = frame_drawing(&mut resources, &third);
+        let mut pending = Writer::default();
+        resources.write_pending(&mut pending);
+        let ids = resource_ids(&pending.bytes);
+        assert_eq!(ids, [u32::MAX, 2], "0 and 1 (in use) skipped");
+    }
+
+    /// The ids of the paths `bytes` defines (no steps), in order.
+    fn resource_ids(bytes: &[u8]) -> Vec<u32> {
+        let (mut ids, mut at) = (Vec::new(), 0);
+        while at < bytes.len() {
+            assert_eq!(bytes[at], tag::DEFINE_PATH);
+            ids.push(read_u32(bytes, at + 1));
+            let count = read_u32(bytes, at + 10) as usize;
+            at += 14;
+            for _ in 0..count {
+                at += 1 + 8 * [1, 1, 2, 3, 0][bytes[at] as usize];
+            }
+        }
+        ids
+    }
+
+    /// Frames written but not taken by the Kotlin side (a view hidden by its own visibility while
+    /// its window is visible keeps getting frames, but no `onDraw`, D536): a path redefined in
+    /// place each frame leaves one pending definition (a review found a slot per frame kept).
+    #[test]
+    fn pending_definitions_stay_bounded_over_undrawn_frames() {
+        let mut resources = Resources::default();
+        let path = Path::new();
+        path.add_rect(Rect::new(0.0, 0.0, 1.0, 1.0));
+        let mut list = frame_drawing(&mut resources, &path);
+        resources.collect();
+        let mut taken = Writer::default();
+        resources.write_pending(&mut taken);
+        for frame in 0..1000 {
+            path.reset();
+            path.add_rect(Rect::new(0.0, 0.0, frame as f32, 1.0));
+            drop(list);
+            list = frame_drawing(&mut resources, &path);
+            resources.collect();
+        }
+        drop(list);
+        assert!(
+            resources.pending_paths.len() <= 2,
+            "pending path slots after 1000 undrawn frames: {}",
+            resources.pending_paths.len()
+        );
+    }
+
     /// A path's operation is in its definition as steps (D535), its operands' contents inline:
     /// the bytes `Replayer.kt` reads.
     #[test]
@@ -1672,7 +1773,12 @@ mod tests {
         expected.u8(tag::DEFINE_PATH);
         expected.u32(read_u32(&out.bytes, 1));
         expected.u8(1); // even-odd, as the result of Skia's path ops
-        expected.u32(3);
+        expected.u32(4);
+        // The path's contents before (empty): what it keeps if the operation fails.
+        expected.u8(step::PUSH);
+        expected.u8(0);
+        expected.u32(0);
+        expected.u32(0);
         for (left, right) in [(0.0, 4.0), (1.0, 2.0)] {
             expected.u8(step::PUSH);
             expected.u8(0);
@@ -1688,7 +1794,7 @@ mod tests {
             }
             expected.u8(command::CLOSE);
         }
-        expected.u8(step::COMBINE);
+        expected.u8(step::COMBINE_OR);
         expected.u8(0); // a difference
         expected.u32(1);
         expected.u8(command::LINE_TO);

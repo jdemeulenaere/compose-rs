@@ -2,6 +2,8 @@
 //! they build and link once (docs/08-fast-builds.md).
 
 mod brush;
+mod path_semantics;
+mod path_steps;
 mod review_f;
 mod review_f2;
 mod review_f3;

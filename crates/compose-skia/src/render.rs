@@ -300,7 +300,6 @@ pub struct RasterRenderer {
 impl RasterRenderer {
     /// A surface of `width` by `height` device pixels.
     pub fn new(width: i32, height: i32) -> RasterRenderer {
-        install_path_operator();
         let surface = skia_safe::surfaces::raster_n32_premul((width.max(1), height.max(1)))
             .expect("compose-skia: a raster surface");
         RasterRenderer { surface }
@@ -480,9 +479,12 @@ fn skia_operation(operation: PathOperation) -> skia_safe::PathOp {
 fn build_skia_path(path: &compose_ui::PathData) -> skia_safe::Path {
     let base = path.evaluate_steps(
         |operand| skia_commands(operand.commands(), operand.fill_type()),
-        // An operation Skia can't do leaves the first path as it was, as Android's.
+        // An operation Skia can't do leaves the path it's done on as it was, as Android's.
         |first, second, operation| {
             skia_safe::op(&first, &second, skia_operation(operation)).unwrap_or(first)
+        },
+        |before, first, second, operation| {
+            skia_safe::op(&first, &second, skia_operation(operation)).unwrap_or(before)
         },
         |first, second| {
             let mut builder = skia_safe::PathBuilder::new_path(&first);
@@ -562,10 +564,10 @@ fn operate(
     Some((commands_of(&result), fill_type))
 }
 
-/// Has `Path::op` computed by Skia's path ops when it's called (D535), as Compose Desktop's;
-/// the desktop application and compose-skia's renderers install it.
+/// Has `Path::op` computed by Skia's path ops when it's called on this thread (D535), as Compose
+/// Desktop's: the desktop application installs it on its thread; tests that want it install it.
 pub fn install_path_operator() {
-    compose_ui::platform::set_path_operator(operate);
+    compose_ui::platform::set_path_operator(Some(operate));
 }
 
 /// Skia's images by bitmap address, each with its bitmap's pixels to tell when it's gone.

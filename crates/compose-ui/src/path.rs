@@ -165,7 +165,10 @@ impl Matrix {
         let x = v[0] * point.x + v[4] * point.y + v[12];
         let y = v[1] * point.x + v[5] * point.y + v[13];
         let w = v[3] * point.x + v[7] * point.y + v[15];
-        if w == 1.0 || w == 0.0 { Offset::new(x, y) } else { Offset::new(x / w, y / w) }
+        // As Compose's: a point mapped to infinity (w = 0) is the origin.
+        let scale = 1.0 / w;
+        let scale = if scale.is_finite() { scale } else { 0.0 };
+        Offset::new(x * scale, y * scale)
     }
 }
 
@@ -182,11 +185,16 @@ static NEXT_IDENTITY: AtomicU64 = AtomicU64::new(1);
 pub type PathOperator =
     fn(PathOperation, &PathData, &PathData) -> Option<(Vec<PathCommand>, PathFillType)>;
 
-static PATH_OPERATOR: std::sync::OnceLock<PathOperator> = std::sync::OnceLock::new();
+thread_local! {
+    /// The thread's [`PathOperator`]: paths belong to their thread, so does how they combine.
+    static PATH_OPERATOR: std::cell::Cell<Option<PathOperator>> = const { std::cell::Cell::new(None) };
+}
 
-/// Installs the platform's path operations ([`PathOperator`]): the first installed stays.
-pub fn set_path_operator(operator: PathOperator) {
-    let _ = PATH_OPERATOR.set(operator);
+/// Sets the platform's path operations ([`PathOperator`]) for this thread's paths (`None`: kept as
+/// steps): the desktop application sets Skia's on its thread; a test sets them where it wants
+/// them, so other tests aren't affected.
+pub fn set_path_operator(operator: Option<PathOperator>) {
+    PATH_OPERATOR.set(operator);
 }
 
 /// One step of the operations a path's contents start with (D535): a stack machine whose
@@ -198,8 +206,13 @@ pub enum PathStep {
     /// Pushes contents that have no steps of their own.
     Push(Arc<PathData>),
     /// Pops the top two paths and pushes the first (below) combined with the second by the
-    /// operation, as `Path.op(path1, path2, operation)`.
+    /// operation, as `Path.op(path1, path2, operation)`; the first itself if the platform can't
+    /// combine them (as Android's `Path.op` leaves the path it's called on).
     Combine(PathOperation),
+    /// Pops the top three paths and pushes the second combined with the third (the top) by the
+    /// operation, or the first (the path's contents before `op`) if the platform can't combine
+    /// them, as Android's `path.op(path1, path2, operation)` leaves `path` as it was.
+    CombineOr(PathOperation),
     /// Pops the top path and adds its contours to the one below, as `addPath`.
     Add,
     /// Sets the top path's fill type.
@@ -229,6 +242,9 @@ pub struct PathData {
     /// A command after this one draws from `current`: `false` until the first command (an
     /// `arc_to` then moves rather than draws a line).
     has_current: bool,
+    /// Its steps' bounds once computed (`steps_bounds`): contents with steps never change once
+    /// shared, so a frame asking again (`get_bounds`, `is_empty`) doesn't run them again.
+    steps_bounds: std::sync::OnceLock<Option<Rect>>,
 }
 
 /// Contents only: two paths' contents are equal whatever their identities and generations.
@@ -255,6 +271,7 @@ impl PathData {
             current: Offset::ZERO,
             contour_start: Offset::ZERO,
             has_current: false,
+            steps_bounds: std::sync::OnceLock::new(),
         }
     }
 
@@ -280,6 +297,7 @@ impl PathData {
                 .map(|step| match step {
                     PathStep::Push(data) => PathStep::Push(Arc::clone(data)),
                     PathStep::Combine(operation) => PathStep::Combine(*operation),
+                    PathStep::CombineOr(operation) => PathStep::CombineOr(*operation),
                     PathStep::Add => PathStep::Add,
                     PathStep::SetFillType(fill_type) => PathStep::SetFillType(*fill_type),
                 })
@@ -288,6 +306,7 @@ impl PathData {
             current: self.current,
             contour_start: self.contour_start,
             has_current: self.has_current,
+            steps_bounds: std::sync::OnceLock::new(),
         }
     }
 
@@ -316,12 +335,14 @@ impl PathData {
     }
 
     /// Runs its steps (iteratively, however many: an operand's contents have none) with
-    /// `push` making a value of an operand's contents, `combine` combining two, `add` adding the
-    /// second to the first and `fill` setting a fill type; `None` without steps.
+    /// `push` making a value of an operand's contents, `combine` combining two (the first if it
+    /// can't), `combine_or` combining the second and third or else giving the first, `add` adding
+    /// the second to the first and `fill` setting a fill type; `None` without steps.
     pub fn evaluate_steps<T>(
         &self,
         mut push: impl FnMut(&PathData) -> T,
         mut combine: impl FnMut(T, T, PathOperation) -> T,
+        mut combine_or: impl FnMut(T, T, T, PathOperation) -> T,
         mut add: impl FnMut(T, T) -> T,
         mut fill: impl FnMut(&mut T, PathFillType),
     ) -> Option<T> {
@@ -333,6 +354,12 @@ impl PathData {
                     let second = stack.pop()?;
                     let first = stack.pop()?;
                     stack.push(combine(first, second, *operation));
+                }
+                PathStep::CombineOr(operation) => {
+                    let second = stack.pop()?;
+                    let first = stack.pop()?;
+                    let fallback = stack.pop()?;
+                    stack.push(combine_or(fallback, first, second, *operation));
                 }
                 PathStep::Add => {
                     let second = stack.pop()?;
@@ -360,8 +387,17 @@ impl PathData {
     /// The bounds of its steps' result as their operands' bounds tell (`None`: empty, or no
     /// steps).
     fn steps_bounds(&self) -> Option<Rect> {
-        let bounds = |data: &PathData| commands_bounds(&data.commands);
-        self.evaluate_steps(bounds, combined_bounds, union, |_, _| {}).flatten()
+        if self.steps.is_empty() {
+            return None;
+        }
+        *self.steps_bounds.get_or_init(|| {
+            let bounds = |data: &PathData| commands_bounds(&data.commands);
+            // A combination that fails gives the path's earlier contents: bounded by either.
+            let combine_or = |fallback, first, second, operation| {
+                union(fallback, combined_bounds(first, second, operation))
+            };
+            self.evaluate_steps(bounds, combined_bounds, combine_or, union, |_, _| {}).flatten()
+        })
     }
 
     /// The bounds of its points, curves' control points included, as `getBounds` (Skia's and
@@ -401,8 +437,9 @@ impl PathData {
         if points.len() > 1 && points.first() == points.last() {
             points.pop();
         }
+        // Fewer than 3 points (none, a point, a line) are convex, as Skia's.
         if points.len() < 3 {
-            return !points.is_empty();
+            return true;
         }
         let (mut sign, mut turned) = (0.0f32, 0.0f32);
         let count = points.len();
@@ -431,6 +468,21 @@ impl PathData {
     }
 
     fn push(&mut self, command: PathCommand) {
+        let draws = !matches!(command, PathCommand::MoveTo(_) | PathCommand::Close);
+        let first = !self.has_current && self.steps.is_empty();
+        if draws && (first || matches!(self.commands.last(), Some(PathCommand::Close))) {
+            // As Skia's `injectMoveToIfNeeded`: a contour drawn without a move starts at the
+            // origin, one after a close where the closed one did; the move is explicit here, so
+            // `add_path`, `translate` and `is_convex` see it as Skia does. (After an operation's
+            // steps, it starts where the result's last contour did, which only the platform
+            // computing them knows: left to it, D535.)
+            let start = if self.has_current { self.contour_start } else { Offset::ZERO };
+            self.push(PathCommand::MoveTo(start));
+        }
+        if matches!(command, PathCommand::Close) && self.commands.is_empty() {
+            // Nothing to close, as Skia's.
+            return;
+        }
         match command {
             PathCommand::MoveTo(point) => {
                 self.current = point;
@@ -438,13 +490,7 @@ impl PathData {
             }
             PathCommand::LineTo(end)
             | PathCommand::QuadTo(_, end)
-            | PathCommand::CubicTo(_, _, end) => {
-                if !self.has_current {
-                    // As Skia, a contour drawn without a move starts at the origin.
-                    self.contour_start = Offset::ZERO;
-                }
-                self.current = end;
-            }
+            | PathCommand::CubicTo(_, _, end) => self.current = end,
             PathCommand::Close => self.current = self.contour_start,
         }
         self.has_current = true;
@@ -459,6 +505,35 @@ impl PathData {
         } else if self.current != point {
             self.push(PathCommand::LineTo(point));
         }
+    }
+
+    /// An arc as Skia's `arcTo` draws it: a sweep of a whole number of turns (start and end
+    /// at the same angle) is a lone point, a move or line to its end, and a larger sweep is its
+    /// remainder; else [`arc`](PathData::arc).
+    fn arc_to(&mut self, oval: Rect, start: f32, sweep: f32, force_move_to: bool) {
+        let turn = std::f32::consts::TAU;
+        if sweep.abs() >= turn {
+            let rest = sweep % turn;
+            // Within Skia's float precision of whole turns.
+            if rest.abs() < 1e-5 || (turn - rest.abs()) < 1e-5 {
+                let (center_x, center_y) =
+                    ((oval.left + oval.right) / 2.0, (oval.top + oval.bottom) / 2.0);
+                let end = start + sweep;
+                let point = Offset::new(
+                    center_x + oval.width() / 2.0 * end.cos(),
+                    center_y + oval.height() / 2.0 * end.sin(),
+                );
+                if force_move_to || !self.has_current {
+                    self.push(PathCommand::MoveTo(point));
+                } else {
+                    self.push(PathCommand::LineTo(point));
+                }
+                return;
+            }
+            self.arc(oval, start, rest, force_move_to);
+            return;
+        }
+        self.arc(oval, start, sweep, force_move_to);
     }
 
     /// The arc of the oval in `oval` from `start` over `sweep` radians (clockwise, y down), as
@@ -508,6 +583,7 @@ impl PathData {
         steps.extend(data.steps.iter().map(|step| match step {
             PathStep::Push(data) => PathStep::Push(Arc::clone(data)),
             PathStep::Combine(operation) => PathStep::Combine(*operation),
+            PathStep::CombineOr(operation) => PathStep::CombineOr(*operation),
             PathStep::Add => PathStep::Add,
             PathStep::SetFillType(fill_type) => PathStep::SetFillType(*fill_type),
         }));
@@ -684,7 +760,10 @@ impl Path {
     fn edit<R>(&self, change: impl FnOnce(&mut PathData) -> R) -> R {
         let mut contents = self.contents.borrow_mut();
         match Arc::get_mut(&mut contents) {
-            Some(data) => data.generation += 1,
+            Some(data) => {
+                data.generation += 1;
+                data.steps_bounds = std::sync::OnceLock::new();
+            }
             None => *contents = Arc::new(contents.next_generation()),
         }
         change(Arc::get_mut(&mut contents).expect("unique contents"))
@@ -711,6 +790,7 @@ impl Path {
             data.current = Offset::ZERO;
             data.contour_start = Offset::ZERO;
             data.has_current = false;
+            data.steps_bounds = std::sync::OnceLock::new();
         };
         match Arc::get_mut(&mut contents) {
             Some(data) => {
@@ -856,11 +936,14 @@ impl Path {
         sweep_angle_radians: f32,
         force_move_to: bool,
     ) {
-        self.edit(|data| data.arc(rect, start_angle_radians, sweep_angle_radians, force_move_to));
+        self.edit(|data| {
+            data.arc_to(rect, start_angle_radians, sweep_angle_radians, force_move_to)
+        });
     }
 
     /// An arc of the oval in `oval` as a contour of its own, as `addArc`: nothing for an empty
-    /// oval or no sweep, and a whole turn from a quarter's angle (0, 90, …) the closed oval, as
+    /// oval or no sweep, a whole turn from a quarter's angle (0, 90, …) the closed oval, and
+    /// otherwise `arc_to` forced to move (so a whole turn from another angle is a lone point), as
     /// Skia's.
     pub fn add_arc(&self, oval: Rect, start_angle_degrees: f32, sweep_angle_degrees: f32) {
         if oval.width() <= 0.0 || oval.height() <= 0.0 || sweep_angle_degrees == 0.0 {
@@ -891,7 +974,7 @@ impl Path {
         if oval.width() <= 0.0 || oval.height() <= 0.0 || sweep_angle_radians == 0.0 {
             return;
         }
-        self.edit(|data| data.arc(oval, start_angle_radians, sweep_angle_radians, true));
+        self.edit(|data| data.arc_to(oval, start_angle_radians, sweep_angle_radians, true));
     }
 
     /// `rect` as a closed contour, counterclockwise, as `addRect(rect)`.
@@ -1137,13 +1220,15 @@ impl Path {
             into_self(path1, swapped);
             return true;
         }
-        let (first, second) = (path1.data(), path2.data());
+        // If the platform can't combine them, the path stays as it was, as Android's.
+        let (before, first, second) = (self.data(), path1.data(), path2.data());
         let mut data = PathData::with_id(0);
+        PathData::push_operand(&mut data.steps, &before);
         PathData::push_operand(&mut data.steps, &first);
         PathData::push_operand(&mut data.steps, &second);
-        data.steps.push(PathStep::Combine(operation));
+        data.steps.push(PathStep::CombineOr(operation));
         data.fill_type = PathFillType::EvenOdd;
-        drop((first, second));
+        drop((before, first, second));
         self.replace(data);
         true
     }
@@ -1711,13 +1796,14 @@ mod tests {
         assert!(matches!(path.data().commands()[3], PathCommand::MoveTo(_)));
     }
 
-    /// The kinds of `data`'s steps: 'p'ush, 'c'ombine, 'a'dd, 'f'ill.
+    /// The kinds of `data`'s steps: 'p'ush, 'c'ombine, combine 'o'r, 'a'dd, 'f'ill.
     fn kinds(data: &PathData) -> String {
         data.steps()
             .iter()
             .map(|step| match step {
                 PathStep::Push(_) => 'p',
                 PathStep::Combine(_) => 'c',
+                PathStep::CombineOr(_) => 'o',
                 PathStep::Add => 'a',
                 PathStep::SetFillType(_) => 'f',
             })
@@ -1739,10 +1825,11 @@ mod tests {
         let path = Path::combine(PathOperation::Intersect, &first, &second);
         first.reset();
         let data = path.data();
-        assert_eq!(kinds(&data), "ppc");
-        let PathStep::Push(operand) = &data.steps()[0] else { panic!() };
+        // The path's contents before (empty), kept if the platform can't combine them.
+        assert_eq!(kinds(&data), "pppo");
+        let PathStep::Push(operand) = &data.steps()[1] else { panic!() };
         assert_eq!((operand.commands().len(), operand.id()), (5, first.id()), "kept, shared");
-        assert_eq!(data.steps()[2], PathStep::Combine(PathOperation::Intersect));
+        assert_eq!(data.steps()[3], PathStep::CombineOr(PathOperation::Intersect));
         assert_eq!(path.fill_type(), PathFillType::EvenOdd);
         assert_eq!(path.get_bounds(), Rect::new(5.0, 5.0, 10.0, 10.0));
         // The path itself as an operand.
@@ -1779,8 +1866,13 @@ mod tests {
         assert_eq!(union.get_bounds(), Rect::new(0.0, 0.0, 1000.0, 1.0));
         let hole = rect(2.0, 0.0, 3.0, 1.0);
         hole.op(&union, &hole, PathOperation::Difference);
-        // The first operand's steps inlined, its fill type set, then the hole and the operation.
-        assert_eq!(kinds(&hole.data()).len(), 2001 + 3);
+        // The hole, then the union's steps inlined and its fill type set, then the operation the
+        // other way round.
+        assert_eq!(kinds(&hole.data()).len(), 1 + 2001 + 2);
+        assert_eq!(
+            hole.data().steps().last(),
+            Some(&PathStep::Combine(PathOperation::ReverseDifference))
+        );
         let base = rect(0.0, 0.0, 1.0, 1.0);
         let other = rect(5.0, 5.0, 6.0, 6.0);
         base.op(&other, &base, PathOperation::Difference);
@@ -1816,7 +1908,7 @@ mod tests {
         assert_eq!(combined.get_bounds(), Rect::new(5.0, 5.0, 7.0, 7.0));
         let added = rect(20.0, 20.0, 21.0, 21.0);
         added.add_path(&combined, Offset::ZERO);
-        assert_eq!(kinds(&added.data()), "pppcfa");
+        assert_eq!(kinds(&added.data()), "ppppofa");
         assert_eq!(added.get_bounds(), Rect::new(5.0, 5.0, 21.0, 21.0));
         let turned = rect(0.0, 0.0, 2.0, 1.0);
         turned.transform(&Matrix::rotation(90.0));
@@ -1845,8 +1937,8 @@ mod tests {
         assert!(!two.is_convex());
     }
 
-    /// A whole turn of an arc from a quarter's angle is the closed oval, as Skia's `addArc`; none
-    /// for no sweep.
+    /// A whole turn of an arc from a quarter's angle is the closed oval, as Skia's `addArc`; from
+    /// another angle a lone point; none for no sweep.
     #[test]
     fn a_whole_arc_is_the_closed_oval() {
         let oval = Rect::new(0.0, 0.0, 10.0, 10.0);
@@ -1854,11 +1946,59 @@ mod tests {
         arc.add_arc(oval, 90.0, 360.0);
         assert_eq!(arc.data().commands().last(), Some(&PathCommand::Close));
         assert_eq!(arc.data().commands()[0], PathCommand::MoveTo(Offset::new(5.0, 10.0)));
-        let open = Path::new();
-        open.add_arc(oval, 45.0, 360.0);
-        assert_ne!(open.data().commands().last(), Some(&PathCommand::Close));
+        // From another angle, Skia's `arcTo`: a lone point at its end.
+        let lone = Path::new();
+        lone.add_arc(oval, 45.0, 360.0);
+        assert_eq!(lone.data().commands().len(), 1);
+        assert!(matches!(lone.data().commands()[0], PathCommand::MoveTo(_)));
         let none = Path::new();
         none.add_arc(oval, 0.0, 0.0);
         assert!(none.is_empty());
+    }
+
+    /// `q.op(&a, &b)` keeps `q`'s earlier contents for the platform to fall back on: an operation
+    /// it can't do leaves `q` as it was, as Android's `Path.op` (a review).
+    #[test]
+    fn a_failed_operation_leaves_the_path_as_it_was() {
+        let (q, a, b) =
+            (rect(0.0, 0.0, 1.0, 1.0), rect(0.0, 0.0, 2.0, 2.0), rect(5.0, 5.0, 6.0, 6.0));
+        q.line_to(3.0, 3.0);
+        q.op(&a, &b, PathOperation::Union);
+        let commands = |data: &PathData| data.commands().len();
+        let failing = q.data().evaluate_steps(
+            commands,
+            |first, _, _| first,
+            |before, _, _, _| before,
+            |first, _| first,
+            |_, _| {},
+        );
+        assert_eq!(failing, Some(7), "q's rectangle and line");
+        let succeeding = q.data().evaluate_steps(
+            commands,
+            |first, _, _| first,
+            |_, first, second, _| first + second,
+            |first, _| first,
+            |_, _| {},
+        );
+        assert_eq!(succeeding, Some(10));
+    }
+
+    /// A contour drawn on after a close starts again, as Skia's: two contours aren't convex.
+    #[test]
+    fn a_line_after_a_close_is_another_contour() {
+        let path = rect(0.0, 0.0, 1.0, 1.0);
+        path.line_to(5.0, 5.0);
+        assert_eq!(path.data().commands()[5], PathCommand::MoveTo(Offset::ZERO));
+        assert!(!path.is_convex());
+        assert!(Path::new().is_convex());
+    }
+
+    /// `Matrix::map` sends a point at infinity (w = 0) to the origin, as Compose's.
+    #[test]
+    fn a_point_at_infinity_maps_to_the_origin() {
+        let mut matrix = Matrix::new();
+        matrix.values[15] = 0.0;
+        assert_eq!(matrix.map(Offset::new(3.0, 4.0)), Offset::ZERO);
+        assert_eq!(Matrix::translation(1.0, 2.0).map(Offset::new(3.0, 4.0)), Offset::new(4.0, 6.0));
     }
 }
