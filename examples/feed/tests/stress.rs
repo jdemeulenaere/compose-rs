@@ -141,3 +141,63 @@ fn the_stress_lists_first_frame_composes_what_it_shows() {
     let more = platform::recomposition_counts().since(&before).scopes_named("LazyItem");
     assert_eq!(more, 0, "the second frame composed items");
 }
+
+/// The resource changes in `bytes` (what `takeDrawing` writes before a frame's display list):
+/// the ids of the paths dropped and defined, in order.
+fn path_changes(bytes: &[u8]) -> (Vec<u32>, Vec<u32>) {
+    use compose_android::serialize::tag;
+    let id = |at: usize| u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap());
+    let (mut at, mut dropped, mut defined) = (0, Vec::new(), Vec::new());
+    while at < bytes.len() {
+        match bytes[at] {
+            tag::DROP_PATH => {
+                assert!(defined.is_empty(), "a drop after a definition");
+                dropped.push(id(at + 1));
+                at += 5;
+            }
+            tag::DEFINE_PATH => {
+                defined.push(id(at + 1));
+                let commands = id(at + 6);
+                at += 10;
+                for _ in 0..commands {
+                    // A command, then its points: move and line 1, quad 2, cubic 3, close none.
+                    at += 1 + 8 * [1, 1, 2, 3, 0][bytes[at] as usize];
+                }
+            }
+            other => panic!("not a path change: {other}"),
+        }
+    }
+    (dropped, defined)
+}
+
+/// Each frame of the stress animation draws its 50 waves as new paths, and its changes drop
+/// the frame before's 50 first (D410). So the replayer rebuilds those `Path`s, and, as the
+/// frame's sync frees the recording that drew them, flushes HWUI's layers before drawing the
+/// frame: the GPU cache's masks of the dropped paths give their textures to the new paths'
+/// masks (D510).
+#[test]
+fn the_waves_are_new_paths_each_frame_dropped_by_the_next() {
+    use compose_android::serialize::{GroupCache, Resources, Writer, write_display_list};
+    let mut ui = phone(StressAnimation);
+    let (mut resources, mut groups, mut list) =
+        (Resources::default(), GroupCache::default(), Writer::default());
+    let mut before = Vec::new();
+    for frame in 0..4 {
+        ui.advance_time_by_frame();
+        ui.host().with_tree(|tree| {
+            write_display_list(tree.display_list(), &mut resources, &mut groups, &mut list)
+        });
+        resources.collect();
+        let mut changes = Writer::default();
+        resources.write_pending(&mut changes);
+        let (mut dropped, mut defined) = path_changes(&changes.bytes);
+        // Dropped in no particular order.
+        dropped.sort_unstable();
+        defined.sort_unstable();
+        assert_eq!(defined.len(), WAVES as usize, "frame {frame}");
+        if frame > 0 {
+            assert_eq!(dropped, before, "frame {frame}");
+        }
+        before = defined;
+    }
+}

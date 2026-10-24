@@ -7,6 +7,7 @@ import android.graphics.LinearGradient
 import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.Path
+import android.graphics.PorterDuff
 import android.graphics.RadialGradient
 import android.graphics.Rect
 import android.graphics.RectF
@@ -43,7 +44,9 @@ internal inline fun ByteBuffer.floatAt(index: Int): Float = Float.fromBits(getIn
  * Compose's apps reset one `Path` to draw a shape that changes each frame: its native memory,
  * and the mask HWUI's GPU cache keeps for its contents, go when the recordings drawing it do,
  * not when the collector finalizes it. A recording that draws paths new each frame (an
- * animated drawing) draws them without masks (D411).
+ * animated drawing) draws them without masks (D411). A frame dropping a path drawn as one
+ * flushes HWUI's layers first ([flushNode], D510), so the GPU cache reuses the dropped paths'
+ * masks' textures for this frame's.
  *
  * A gradient comes whole in each paint drawing it (D210): its `Shader` is kept by its bytes, so
  * a frame drawing the same gradients builds none.
@@ -266,6 +269,23 @@ internal class Replayer(private val text: TextMeasurer) {
         setClipToBounds(true)
         setPosition(0, 0, 0, 0)
     }
+    /**
+     * A 1 × 1 layer, cleared, that a frame dropping a path drawn as a path records and draws
+     * (D510). HWUI draws a frame's changed layers and flushes them before drawing the frame,
+     * and Skia's GPU cache takes in, at a flush, the paths whose contents died: those of the
+     * recordings this frame's sync freed. So the masks it cached for them (a stroked path's,
+     * rasterized on the CPU) go back to its scratch textures before this frame's masks take
+     * theirs. Without a layer, the frame has one flush, which takes them in only at its end:
+     * each frame's masks took new textures, and a frame's worth more stayed allocated (as in
+     * Compose's apps without a layer to draw, D510). It draws nothing: transparent, copied
+     * over the view's top left pixel.
+     */
+    private val flushNode = RenderNode("compose-rs flush").apply {
+        setPosition(0, 0, 1, 1)
+        setUseCompositingLayer(true, null)
+    }
+    /** A path drawn as a path was dropped: the frame draws [flushNode]. */
+    private var flushLayers = false
     /** The nodes [keptNode] draws, the first [keptCount]. */
     private var keptNodes = arrayOfNulls<RenderNode>(8)
     private var keptCount = 0
@@ -310,6 +330,17 @@ internal class Replayer(private val text: TextMeasurer) {
         recordingGroup = null
         skipNewMasks = recent(newPathFrame)
         replay(canvas, buffer, buffer.limit())
+        if (flushLayers) {
+            flushLayers = false
+            // Its recording changes, so its layer is drawn again, and flushed before the frame.
+            val recording = flushNode.beginRecording(1, 1)
+            try {
+                recording.drawColor(0, PorterDuff.Mode.CLEAR)
+            } finally {
+                flushNode.endRecording()
+            }
+            canvas.drawRenderNode(flushNode)
+        }
         if (keptFrame != frame && keptCount > 0) {
             // None kept: the frame doesn't draw keptNode, nor keptNode its old nodes.
             keptNode.discardDisplayList()
@@ -360,6 +391,7 @@ internal class Replayer(private val text: TextMeasurer) {
                         // An unknown path clips everything out rather than nothing.
                         canvas.clipRect(0f, 0f, 0f, 0f)
                     } else {
+                        kept.drawnAsPath = true
                         if (x == 0f && y == 0f) {
                             canvas.clipPath(kept.path)
                         } else {
@@ -437,6 +469,7 @@ internal class Replayer(private val text: TextMeasurer) {
                     // A mask is tinted by a color: a gradient draws the path.
                     val masked = !paintStroke && paintShader == null && maskNew(kept, scaleX, scaleY)
                     if (kept != null && (!masked || !drawMask(canvas, kept, x, y, scaleX, scaleY))) {
+                        kept.drawnAsPath = true
                         canvas.save()
                         canvas.translate(x, y)
                         canvas.scale(scaleX, scaleY)
@@ -968,6 +1001,11 @@ internal class Replayer(private val text: TextMeasurer) {
         private var boundsComputed = false
         /** The frame that defined it (D411). */
         var definedFrame = 0
+        /**
+         * A recording drew it as a path (`drawPath`, `clipPath`), so HWUI's GPU cache may hold
+         * a mask of its contents: dropping it flushes the layers first ([flushNode], D510).
+         */
+        var drawnAsPath = false
 
         /** Computed on first use: a stroked path (a text field's outline) never needs them. */
         val bounds: RectF
@@ -990,6 +1028,7 @@ internal class Replayer(private val text: TextMeasurer) {
         fun rewind() {
             path.rewind()
             boundsComputed = false
+            drawnAsPath = false
         }
 
         /** Its masks, least recently recorded first: at most [MAX_MASKS_PER_PATH]. */
@@ -1150,6 +1189,7 @@ internal class Replayer(private val text: TextMeasurer) {
     private fun dropPath(id: Int) {
         val kept = paths.get(id) ?: return
         paths.remove(id)
+        if (kept.drawnAsPath) flushLayers = true
         for (mask in kept.masks) forget(mask)
         kept.masks.clear()
         if (pathPool.size < PATH_POOL_CAPACITY) {
@@ -1204,6 +1244,8 @@ internal class Replayer(private val text: TextMeasurer) {
 
     fun clear() {
         keptNode.discardDisplayList()
+        flushNode.discardDisplayList()
+        flushLayers = false
         keptNodes.fill(null)
         keptCount = 0
         keptEntryGroups.fill(null)
