@@ -410,6 +410,145 @@ class ScenariosTest(unittest.TestCase):
             measure.parse_scenarios("scroll,stress")
 
 
+# Rust's table, shortened (crates/compose-ui/src/optimizations.rs).
+OPTIMIZATIONS_RS = """\
+    pub const SINGLE_DRAWING_FADE: Optimization = Optimization {
+        bit: 0,
+        name: "single_drawing_fade",
+        default: false,
+    };
+    /// (A doc comment naming no `name: "x"`.)
+    pub const PERFORMANCE_HINT: Optimization = Optimization {
+        bit: 1,
+        name: "performance_hint",
+        default: true,
+    };
+    pub const KEEP_ITEMS_BEHIND: Optimization = Optimization {
+        bit: 6,
+        name: "keep_items_behind",
+        default: false,
+    };
+"""
+
+
+class OptimizationsTest(unittest.TestCase):
+    NAMES = ["single_drawing_fade", "performance_hint", "keep_items_behind"]
+
+    def test_names_from_rusts_table(self):
+        self.assertEqual(measure.optimization_names(OPTIMIZATIONS_RS), self.NAMES)
+        # The real table: every name, the hint session's among them.
+        with open(measure.OPTIMIZATIONS_SOURCE) as file:
+            names = measure.optimization_names(file.read())
+        self.assertIn("performance_hint", names)
+        self.assertIn("prefetch_two_ahead", names)
+        self.assertEqual(len(names), len(set(names)))
+
+    def test_parity_by_default_runs_bench_rs_with_none(self):
+        for text in (None, "", "parity"):
+            mode, subjects = measure.parse_optimizations(text, self.NAMES)
+            self.assertEqual(mode, "parity")
+            self.assertEqual(subjects, [("compose", "rs.compose.bench.compose", None),
+                                        ("rs", "rs.compose.bench.rs", "none")])
+        mode, subjects = measure.parse_optimizations("all", self.NAMES)
+        self.assertEqual((mode, subjects[1][2]), ("all", "all"))
+
+    def test_each_runs_bench_rs_at_parity_and_with_each_alone(self):
+        mode, subjects = measure.parse_optimizations("each", self.NAMES)
+        self.assertEqual(mode, "each")
+        self.assertEqual(subjects, [
+            ("rs", "rs.compose.bench.rs", "none"),
+            ("rs+single_drawing_fade", "rs.compose.bench.rs", "single_drawing_fade"),
+            ("rs+performance_hint", "rs.compose.bench.rs", "performance_hint"),
+            ("rs+keep_items_behind", "rs.compose.bench.rs", "keep_items_behind")])
+
+    def test_a_list_is_checked(self):
+        mode, subjects = measure.parse_optimizations(
+            "all, -performance_hint", self.NAMES)
+        self.assertEqual((mode, subjects[1][2]), ("list", "all,-performance_hint"))
+        with self.assertRaises(SystemExit):
+            measure.parse_optimizations("keep_items_behind,faster", self.NAMES)
+
+    def test_the_rs_app_is_started_with_its_list(self):
+        self.assertEqual(
+            measure.start_command("rs.compose.bench.rs", "stress", "-W ", "none"),
+            "am start -W -n rs.compose.bench.rs/.MainActivity -e screen stress "
+            "-e optimizations none")
+        # The Compose app gets none.
+        self.assertEqual(
+            measure.start_command("rs.compose.bench.compose", "feed"),
+            "am start -n rs.compose.bench.compose/.MainActivity -e screen feed")
+
+
+# `dumpsys thermalservice` and `dumpsys battery` on a Pixel 8 Pro, Android 16, shortened.
+THERMALSERVICE = """\
+IsStatusOverride: false
+ThermalEventListeners:
+\tcallbacks: 9
+\tkilled: false
+Thermal Status: 2
+Cached temperatures:
+\tTemperature{mValue=62.000004, mType=0, mName=LITTLE, mStatus=0}
+\tTemperature{mValue=24.900002, mType=2, mName=battery, mStatus=0}
+\tTemperature{mValue=37.06034, mType=3, mName=VIRTUAL-SKIN, mStatus=0}
+HAL Ready: true
+"""
+BATTERY = """\
+Current Battery Service state:
+  AC powered: false
+  USB powered: true
+  level: 100
+  temperature: 299
+  technology: Li-ion
+"""
+
+
+class ThermalTest(unittest.TestCase):
+    def test_status_and_temperatures(self):
+        self.assertEqual(measure.thermal_status(THERMALSERVICE), 2)
+        self.assertEqual(measure.battery_celsius(BATTERY), 29.9)
+        self.assertEqual(measure.skin_celsius(THERMALSERVICE), 37.1)
+        self.assertIsNone(measure.thermal_status(""))
+        self.assertIsNone(measure.battery_celsius(""))
+        self.assertIsNone(measure.skin_celsius(""))
+
+    def test_too_warm(self):
+        self.assertFalse(measure.too_warm({"status": 0, "battery_c": 35.9}, 36.0))
+        self.assertTrue(measure.too_warm({"status": 1, "battery_c": 30.0}, 36.0))
+        self.assertTrue(measure.too_warm({"status": 0, "battery_c": 36.1}, 36.0))
+        # Unknown: not too warm.
+        self.assertFalse(measure.too_warm({"status": None, "battery_c": None}, 36.0))
+
+    def test_a_run_waits_until_cool_polling_every_ten_seconds(self):
+        states = iter([{"status": 1, "battery_c": 37.0}, {"status": 0, "battery_c": 36.5},
+                       {"status": 0, "battery_c": 35.5}])
+        slept = []
+        with contextlib.redirect_stdout(io.StringIO()):
+            thermal = measure.wait_until_cool("run", read=lambda: next(states),
+                                              sleep=slept.append, battery_limit_c=36.0,
+                                              limit_s=600)
+        self.assertEqual(slept, [10, 10])
+        self.assertEqual(thermal, {"before": {"status": 0, "battery_c": 35.5}, "waited_s": 20,
+                                   "gave_up": False})
+
+    def test_a_run_gives_up_waiting_after_the_limit_and_says_so(self):
+        slept = []
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            thermal = measure.wait_until_cool("stress-scroll rs 1",
+                                              read=lambda: {"status": 0, "battery_c": 40.0},
+                                              sleep=slept.append, battery_limit_c=36.0,
+                                              limit_s=30)
+        self.assertEqual(slept, [10, 10, 10])
+        self.assertEqual((thermal["waited_s"], thermal["gave_up"]), (30, True))
+        self.assertIn("still too warm after 30 s", output.getvalue())
+
+    def test_a_cool_device_waits_for_nothing(self):
+        thermal = measure.wait_until_cool("run", read=lambda: {"status": 0, "battery_c": 30.0},
+                                          sleep=lambda _: self.fail("slept"),
+                                          battery_limit_c=36.0, limit_s=600)
+        self.assertEqual((thermal["waited_s"], thermal["gave_up"]), (0, False))
+
+
 class SlowestFramesTest(unittest.TestCase):
     def test_slowest_line(self):
         trace = {"slowest_frames": {
@@ -470,6 +609,45 @@ class SummarizeTest(unittest.TestCase):
         self.assertIn("stress_scroll rs: gfx frames 100", text)
         self.assertIn("memory stress_animation compose after_animation: Total PSS 50.0MB", text)
         self.assertNotIn("startup", text)
+
+    def test_a_report_of_each_optimization(self):
+        """`--optimizations each`: bench-rs's subjects only, with their lists and the thermal
+        guard's record of each run."""
+        run = {"gfxinfo": {"frames": 100, "p50": 5, "p90": 6, "p99": 8}, "trace": {
+            "frames": 100, "janky_frames": 0, "jank_kinds": {},
+            "jank_sides": {"app": 0, "compositor": 0, "other": 0},
+            "visibly_late_frames": 0, "late_do_frames": 1, "late_do_frames_after_work": 0,
+            "prefetches": 0,
+            "buffer_stuffing": {"recovery_slices": 0, "buffer_stuffed": 0, "occurred": False},
+            "main_thread_frame_ms": {"p50": 1.0, "p90": 2.0, "p99": 3.0, "max": 4.0},
+            "render_thread_frame_ms": {"p50": 2.0, "p90": 3.0, "p99": 4.0},
+            "cpu_ms": {"main": 100.0, "render": 200.0},
+            "work_ms": {"main": 10.0, "render": 20.0},
+            "slowest_frames": {"main": [], "render": []}},
+            "thermal": {"before": {"status": 0, "battery_c": 31.0, "skin_c": 33.0},
+                        "after": {"status": 0, "battery_c": 32.5, "skin_c": 35.0},
+                        "waited_s": 20, "gave_up": False}}
+        report = {
+            "device": "Pixel 8 Pro", "android": "16", "scenarios": ["scroll"],
+            "optimizations": {"mode": "each", "subjects": {"rs": "none",
+                                                           "rs+keep_items_behind": "keep_items_behind"}},
+            "memory_kb": {name: {"after_start": [{"Total PSS": 30720}]}
+                          for name in ("rs", "rs+keep_items_behind")},
+            "scroll": {name: [run] for name in ("rs", "rs+keep_items_behind")},
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "report.json")
+            with open(path, "w") as file:
+                json.dump(report, file)
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                summarize.main(path)
+        text = output.getvalue()
+        self.assertIn("optimizations each rs: none, rs+keep_items_behind: keep_items_behind", text)
+        self.assertIn("scroll rs+keep_items_behind: gfx frames 100", text)
+        self.assertIn("thermal before: status 0, battery 31.0 °C, skin 33.0 °C; after: status 0, "
+                      "battery 32.5 °C, skin 35.0 °C; waited 20 s", text)
+        self.assertNotIn("scroll compose", text)
 
 
 if __name__ == "__main__":

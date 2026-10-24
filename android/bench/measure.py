@@ -3,7 +3,8 @@
 connected device, interleaving the two apps run by run, and writes a JSON report.
 
     measure.py --trace-processor PATH --out DIR [--runs N] [--compile MODE] [--allow-stale]
-               [--scenarios NAME,NAME,...]
+               [--scenarios NAME,NAME,...] [--optimizations parity|all|each|NAME,...]
+               [--traced-runs N] [--battery-limit CELSIUS] [--thermal-wait-limit SECONDS]
 
 Before measuring, the installed APKs are checked against the ones built in this checkout
 (android/bench-*/build/outputs/apk/release/): the device ABI's native libraries' SHA-1s must
@@ -45,6 +46,24 @@ Scenarios (docs/12-android-performance.md):
 Each traced run also lists its slowest frames on each thread with their longest slices
 (`slowest_frames`).
 
+--optimizations (compose-rs's own, beyond what Compose does: `Optimization::ALL` in
+crates/compose-ui/src/optimizations.rs, docs/07; passed to bench-rs as `-e optimizations`):
+  parity  (default) none of them, the hint session included (`none`): compose-rs does the work
+          Compose does (docs/15, "Parity mode"; D568)
+  all     every one
+  each    no Compose: bench-rs at parity, then with each optimization alone, interleaved run
+          by run (subjects `rs` and `rs+<name>`): each one's effect, for docs/14's backport table
+  NAMES   a comma-separated list of names (`-name` takes one out: `all,-performance_hint`)
+The report records the mode and each subject's list (`"optimizations"`). --traced-runs sets the
+traced runs of each subject in the scroll and animation scenarios (3).
+
+Thermal guards: before each run (each startup round, each traced run), the device's thermal
+status (`dumpsys thermalservice`: "Thermal Status") and battery temperature (`dumpsys battery`)
+are read; while the status is above 0 or the battery above --battery-limit (36 °C), the run
+waits, reading them every 10 s, at most --thermal-wait-limit seconds (600), then goes on and
+notes it (`"gave_up"`). Each traced run records them before and after it (`"thermal"`), the
+startup rounds in the report's `"thermal"`.
+
 Before each run, our other apps (`rs.compose.*`) are force-stopped (D343).
 """
 
@@ -81,9 +100,16 @@ def shell(command):
     return adb("shell", command)
 
 
-def start(package, screen, wait=True):
+def start(package, screen, wait=True, optimizations=None):
     flags = "-W " if wait else ""
-    return shell(f"am start {flags}-n {package}/.MainActivity -e screen {screen}")
+    return shell(start_command(package, screen, flags, optimizations))
+
+
+def start_command(package, screen, flags="", optimizations=None):
+    """`am start` for `package`'s `screen`, with compose-rs's `optimizations` (bench-rs's
+    `-e optimizations`; None: the app's default)."""
+    extra = f" -e optimizations {optimizations}" if optimizations is not None else ""
+    return f"am start {flags}-n {package}/.MainActivity -e screen {screen}{extra}"
 
 
 def stop(package):
@@ -111,10 +137,10 @@ def fresh(package):
     stop(package)
 
 
-def cold_start(package, screen):
+def cold_start(package, screen, optimizations=None):
     fresh(package)
     time.sleep(1.0)
-    output = start(package, screen)
+    output = start(package, screen, optimizations=optimizations)
     match = re.search(r"TotalTime: (\d+)", output)
     return int(match.group(1)) if match else None
 
@@ -832,6 +858,95 @@ def first_frame(trace_processor, trace, package):
     return {"first": firsts, "total_during_trace": totals}
 
 
+# Rust's table of compose-rs's optimizations: their names, in bit order (D520).
+OPTIMIZATIONS_SOURCE = os.path.join(os.path.dirname(ANDROID_DIR), "crates", "compose-ui", "src",
+                                    "optimizations.rs")
+
+
+def optimization_names(source):
+    """The optimizations' names in Rust's table (`name: "…"` of each `Optimization`), in bit
+    order."""
+    return re.findall(r'^\s*name: "([a-z_]+)",', source, re.M)
+
+
+def parse_optimizations(text, names):
+    """The mode `--optimizations` names and the subjects it measures: (name, package,
+    bench-rs's `-e optimizations`, None for the Compose app). `parity` (the default) runs
+    bench-rs with none (`none`, the hint session off: Compose has none); `all` with every one;
+    `each` bench-rs alone, at parity and with each of `names` alone; else a list of names
+    (each may be `-name`), checked against `names`. Stops the run on an unknown name."""
+    text = (text or "parity").strip()
+    compose = ("compose", APPS["compose"], None)
+    if text == "parity":
+        return "parity", [compose, ("rs", APPS["rs"], "none")]
+    if text == "all":
+        return "all", [compose, ("rs", APPS["rs"], "all")]
+    if text == "each":
+        return "each", [("rs", APPS["rs"], "none")] + [
+            (f"rs+{name}", APPS["rs"], name) for name in names]
+    words = [word.strip() for word in text.split(",") if word.strip()]
+    unknown = [word for word in words
+               if word.lstrip("-") not in names and word not in ("none", "all", "default")]
+    if unknown:
+        raise SystemExit(f"unknown optimizations {unknown}; known: {', '.join(names)}")
+    return "list", [compose, ("rs", APPS["rs"], ",".join(words))]
+
+
+# Thermal guards (see above): how often and how long a run waits for the device to cool.
+THERMAL_POLL_S = 10
+THERMAL = {"battery_limit_c": 36.0, "wait_limit_s": 600}
+
+
+def thermal_status(output):
+    """The current thermal status from `dumpsys thermalservice` (0: none), or None."""
+    match = re.search(r"^Thermal Status: (\d+)", output, re.M)
+    return int(match.group(1)) if match else None
+
+
+def battery_celsius(output):
+    """The battery's temperature from `dumpsys battery` (tenths of a degree), or None."""
+    match = re.search(r"^\s*temperature: (-?\d+)", output, re.M)
+    return int(match.group(1)) / 10 if match else None
+
+
+def skin_celsius(output):
+    """The skin temperature `dumpsys thermalservice` caches (Pixel's VIRTUAL-SKIN), or None."""
+    match = re.search(r"Temperature\{mValue=([-\d.]+), mType=3, mName=VIRTUAL-SKIN,", output)
+    return round(float(match.group(1)), 1) if match else None
+
+
+def thermal_state():
+    thermal = shell("dumpsys thermalservice")
+    return {"status": thermal_status(thermal), "battery_c": battery_celsius(shell("dumpsys battery")),
+            "skin_c": skin_celsius(thermal)}
+
+
+def too_warm(state, battery_limit_c):
+    return ((state.get("status") or 0) > 0
+            or (state.get("battery_c") is not None and state["battery_c"] > battery_limit_c))
+
+
+def wait_until_cool(what, read=thermal_state, sleep=time.sleep, battery_limit_c=None,
+                    limit_s=None):
+    """Waits while the device is too warm (thermal status above 0, battery above the limit),
+    reading it every THERMAL_POLL_S, at most `limit_s`. Returns the state the run starts in
+    (`"before"`), the seconds waited and whether it gave up (still too warm)."""
+    battery_limit_c = THERMAL["battery_limit_c"] if battery_limit_c is None else battery_limit_c
+    limit_s = THERMAL["wait_limit_s"] if limit_s is None else limit_s
+    state = read()
+    waited = 0
+    while too_warm(state, battery_limit_c) and waited < limit_s:
+        if waited == 0:
+            print(f"{what}: waiting for the device to cool ({state})")
+        sleep(THERMAL_POLL_S)
+        waited += THERMAL_POLL_S
+        state = read()
+    gave_up = too_warm(state, battery_limit_c)
+    if gave_up:
+        print(f"{what}: still too warm after {waited} s ({state}); measuring anyway")
+    return {"before": state, "waited_s": waited, "gave_up": gave_up}
+
+
 # The scenarios, in the order they run (docs/12, docs/15).
 SCENARIOS = ("startup", "scroll", "animation", "stress_startup", "stress_scroll",
              "stress_animation")
@@ -915,15 +1030,16 @@ def traced(attempt, what):
 
 
 def scroll_run(trace_processor, out_dir, package, name, run, capacities, screen="feed",
-               prefix="scroll", buffer_kb=TRACE_BUFFER_KB):
+               prefix="scroll", buffer_kb=TRACE_BUFFER_KB, optimizations=None):
     """One traced run of 10 flings through the feed (or `screen`), after a warm-up swipe: the
     display, idle since the app started, resyncs its vsync on the first input, which
     FrameTimeline counts as jank no app causes. The warm-up's frames are left out of the stats
     (from the first input after it), and gfxinfo is reset after it. Returns the memory after
     start, and the stats."""
+    thermal = wait_until_cool(f"{prefix} {name} {run}")
     fresh(package)
     time.sleep(1.0)
-    start(package, screen)
+    start(package, screen, optimizations=optimizations)
     time.sleep(5)
     after_start = meminfo(package)
     process, path = start_trace(package, 18000, f"{prefix}-{name}-{run}", buffer_kb)
@@ -937,17 +1053,23 @@ def scroll_run(trace_processor, out_dir, package, name, run, capacities, screen=
     since = measured_since(input_timestamps(trace_processor, trace, package))
     stats = {"gfxinfo": gfxinfo(package),
              "trace": frame_stats(trace_processor, trace, package, capacities, since)}
+    thermal["after"] = thermal_state()
+    stats["thermal"] = thermal
     return after_start, stats
 
 
-def startup_scenario(tp, out_dir, runs, screens):
-    """Cold starts of each of `screens`, interleaved by app, `runs` times; then one traced cold
-    start of each for the first frame's breakdown."""
-    startup = {name: {screen: [] for screen in screens} for name in APPS}
-    for _ in range(runs):
+def startup_scenario(tp, out_dir, runs, screens, subjects, thermal_log):
+    """Cold starts of each of `screens`, interleaved by subject, `runs` times; then one traced
+    cold start of each for the first frame's breakdown. Each round waits for a cool device
+    first, noted in `thermal_log`."""
+    startup = {name: {screen: [] for screen in screens} for name, _, _ in subjects}
+    for run in range(runs):
+        thermal = wait_until_cool(f"startup {'/'.join(screens)} round {run}")
         for screen in screens:
-            for name, package in APPS.items():
-                startup[name][screen].append(cold_start(package, screen))
+            for name, package, optimizations in subjects:
+                startup[name][screen].append(cold_start(package, screen, optimizations))
+        thermal["after"] = thermal_state()
+        thermal_log.append({"screens": list(screens), "round": run, **thermal})
     startup_ms = {
         name: {screen: {"runs": times, "median": statistics.median(times), "min": min(times),
                         "max": max(times)} for screen, times in by_screen.items()}
@@ -955,29 +1077,30 @@ def startup_scenario(tp, out_dir, runs, screens):
     }
     print("startup", json.dumps(startup_ms, indent=1))
     first = {}
-    for name, package in APPS.items():
+    for name, package, optimizations in subjects:
         first[name] = {}
         for screen in screens:
             fresh(package)
             time.sleep(1.0)
             process, path = start_trace(package, 5000, f"start-{name}-{screen}")
-            start(package, screen, wait=False)
+            start(package, screen, wait=False, optimizations=optimizations)
             trace = finish_trace(process, path, out_dir)
             first[name][screen] = first_frame(tp, trace, package)
     print("first frame", json.dumps(first, indent=1))
     return startup_ms, first
 
 
-def scroll_scenario(tp, out_dir, capacities, screen, prefix, buffer_kb=TRACE_BUFFER_KB):
-    """3 traced scroll runs of each app through `screen`, interleaved, with the memory after
-    start and after the flings."""
-    memory = {name: {"after_start": [], "after_scroll": []} for name in APPS}
-    scroll = {name: [] for name in APPS}
-    for run in range(3):
-        for name, package in APPS.items():
+def scroll_scenario(tp, out_dir, capacities, screen, prefix, subjects, runs=3,
+                    buffer_kb=TRACE_BUFFER_KB):
+    """`runs` traced scroll runs of each subject through `screen`, interleaved, with the memory
+    after start and after the flings."""
+    memory = {name: {"after_start": [], "after_scroll": []} for name, _, _ in subjects}
+    scroll = {name: [] for name, _, _ in subjects}
+    for run in range(runs):
+        for name, package, optimizations in subjects:
             after_start, stats = traced(
                 lambda: scroll_run(tp, out_dir, package, name, run, capacities, screen, prefix,
-                                   buffer_kb),
+                                   buffer_kb, optimizations),
                 f"{prefix} {name} {run}")
             memory[name]["after_start"].append(after_start)
             scroll[name].append(stats)
@@ -986,20 +1109,21 @@ def scroll_scenario(tp, out_dir, capacities, screen, prefix, buffer_kb=TRACE_BUF
     return memory, scroll
 
 
-def animation_scenario(tp, out_dir, capacities, screen, prefix, memory=False,
+def animation_scenario(tp, out_dir, capacities, screen, prefix, subjects, runs=3, memory=False,
                        buffer_kb=TRACE_BUFFER_KB):
-    """3 traced runs of each app showing `screen` for 10 s untouched, interleaved, 3 s after
-    it started. With `memory`, each run also has the memory before the trace (`after_start`;
+    """`runs` traced runs of each subject showing `screen` for 10 s untouched, interleaved, 3 s
+    after it started. With `memory`, each run also has the memory before the trace (`after_start`;
     `dumpsys meminfo` collects garbage, so it's taken before gfxinfo's reset) and after it
     (`after_animation`), and HWUI's GPU caches at both points (`gpu_after_start`,
     `gpu_after_animation`)."""
-    animation = {name: [] for name in APPS}
-    for run in range(3):
-        for name, package in APPS.items():
+    animation = {name: [] for name, _, _ in subjects}
+    for run in range(runs):
+        for name, package, optimizations in subjects:
             def animation_run():
+                thermal = wait_until_cool(f"{prefix} {name} {run}")
                 fresh(package)
                 time.sleep(1.0)
-                start(package, screen)
+                start(package, screen, optimizations=optimizations)
                 time.sleep(3)
                 before = meminfo(package) if memory else None
                 gpu_before = gpu_caches(package) if memory else None
@@ -1014,6 +1138,8 @@ def animation_scenario(tp, out_dir, capacities, screen, prefix, memory=False,
                                           "after_animation": meminfo(package)}
                     stats["gpu_caches_mb"] = {"after_start": gpu_before,
                                               "after_animation": gpu_caches(package)}
+                thermal["after"] = thermal_state()
+                stats["thermal"] = thermal
                 return stats
             stats = traced(animation_run, f"{prefix} {name} {run}")
             animation[name].append(stats)
@@ -1033,8 +1159,23 @@ def main():
                         help="measure even if the installed APKs aren't the ones built here")
     parser.add_argument("--scenarios", default="all",
                         help="the scenarios to run, comma-separated (see above; default all)")
+    parser.add_argument("--optimizations", default="parity",
+                        help="compose-rs's optimizations: parity (default), all, each, or names "
+                             "(see above)")
+    parser.add_argument("--traced-runs", type=int, default=3,
+                        help="traced runs of each subject in the scroll and animation scenarios")
+    parser.add_argument("--battery-limit", type=float, default=THERMAL["battery_limit_c"],
+                        help="the battery temperature (°C) above which a run waits")
+    parser.add_argument("--thermal-wait-limit", type=int, default=THERMAL["wait_limit_s"],
+                        help="the most a run waits for the device to cool (s)")
     arguments = parser.parse_args()
     scenarios = parse_scenarios(arguments.scenarios)
+    with open(OPTIMIZATIONS_SOURCE) as file:
+        names = optimization_names(file.read())
+    mode, subjects = parse_optimizations(arguments.optimizations, names)
+    THERMAL["battery_limit_c"] = arguments.battery_limit
+    THERMAL["wait_limit_s"] = arguments.thermal_wait_limit
+    thermal_log = []
     os.makedirs(arguments.out, exist_ok=True)
     tp = arguments.trace_processor
     capacities = cpu_capacities()
@@ -1043,6 +1184,11 @@ def main():
               "abi": shell("getprop ro.product.cpu.abi").strip(),
               "compile": arguments.compile,
               "scenarios": scenarios,
+              # bench-rs's `-e optimizations` for each subject (None: the Compose app).
+              "optimizations": {"mode": mode,
+                                "subjects": {name: given for name, _, given in subjects}},
+              "thermal": {"battery_limit_c": THERMAL["battery_limit_c"],
+                          "wait_limit_s": THERMAL["wait_limit_s"], "startup": thermal_log},
               # Each CPU's capacity and highest frequency (kHz): what "work" and the little
               # cores' share are computed from.
               "cpu_capacities": {str(cpu): list(value) for cpu, value in capacities.items()}}
@@ -1054,25 +1200,27 @@ def main():
     report["dexopt"] = {"start": log_dexopt("start")}
     check_compiled(report["dexopt"]["start"], arguments.compile)
 
+    traced_runs = arguments.traced_runs
     if "startup" in scenarios:
         report["startup_ms"], report["first_frame"] = startup_scenario(
-            tp, arguments.out, arguments.runs, ("feed", "big"))
+            tp, arguments.out, arguments.runs, ("feed", "big"), subjects, thermal_log)
     if "scroll" in scenarios:
         report["memory_kb"], report["scroll"] = scroll_scenario(
-            tp, arguments.out, capacities, "feed", "scroll")
+            tp, arguments.out, capacities, "feed", "scroll", subjects, traced_runs)
     if "animation" in scenarios:
         report["animation"] = animation_scenario(
-            tp, arguments.out, capacities, "feed_animated", "animation")
+            tp, arguments.out, capacities, "feed_animated", "animation", subjects, traced_runs)
     if "stress_startup" in scenarios:
         report["stress_startup_ms"], report["stress_first_frame"] = startup_scenario(
-            tp, arguments.out, arguments.runs, ("stress",))
+            tp, arguments.out, arguments.runs, ("stress",), subjects, thermal_log)
     if "stress_scroll" in scenarios:
         report["stress_memory_kb"], report["stress_scroll"] = scroll_scenario(
-            tp, arguments.out, capacities, "stress", "stress-scroll", STRESS_TRACE_BUFFER_KB)
+            tp, arguments.out, capacities, "stress", "stress-scroll", subjects, traced_runs,
+            STRESS_TRACE_BUFFER_KB)
     if "stress_animation" in scenarios:
         report["stress_animation"] = animation_scenario(
-            tp, arguments.out, capacities, "stress_animation", "stress-animation", memory=True,
-            buffer_kb=STRESS_TRACE_BUFFER_KB)
+            tp, arguments.out, capacities, "stress_animation", "stress-animation", subjects,
+            traced_runs, memory=True, buffer_kb=STRESS_TRACE_BUFFER_KB)
 
     for package in APPS.values():
         stop(package)

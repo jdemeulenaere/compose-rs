@@ -88,7 +88,7 @@ def slowest_line(trace, thread):
 
 def frames_summary(r, scenario):
     """The medians of a frames scenario's runs, then a line per run."""
-    for app in ("compose", "rs"):
+    for app in r[scenario]:
         # A run whose trace holds no frame (measure.py runs it again since D362; older
         # reports may have one) would read as zero work: left out, and said.
         runs = [x for x in r[scenario][app] if x["trace"].get("frames", 1) > 0]
@@ -101,13 +101,27 @@ def frames_summary(r, scenario):
             print(f"  {scenario} {app} render boost (medians): {boost}")
         for index, trace in enumerate(t):
             for line in (run_line(trace), boost_line(trace), slowest_line(trace, "main"),
-                         slowest_line(trace, "render")):
+                         slowest_line(trace, "render"), thermal_line(runs[index])):
                 if line:
                     print(f"  {scenario} {app} run {index}: {line}")
         animation_memory = [x["memory_kb"] for x in runs if x.get("memory_kb")]
         if animation_memory:
             print_memory(f"{scenario} {app}", {
                 when: [m[when] for m in animation_memory] for when in animation_memory[0]})
+
+
+def thermal_line(run):
+    """The thermal guard's record of a run (since D569): its state before and after, and any
+    wait, or None."""
+    thermal = run.get("thermal")
+    if not thermal:
+        return None
+    def state(s):
+        return f"status {s.get('status')}, battery {s.get('battery_c')} °C, skin {s.get('skin_c')} °C"
+    line = f"thermal before: {state(thermal['before'])}; after: {state(thermal.get('after', {}))}"
+    if thermal.get("waited_s"):
+        line += f"; waited {thermal['waited_s']} s" + (" and gave up" if thermal.get("gave_up") else "")
+    return line
 
 
 MEMORY_KEYS = ["Total PSS", "Java Heap", "Native Heap", "Code", "Graphics", "Private Other", "System", "Total RSS"]
@@ -120,10 +134,10 @@ def print_memory(label, by_when):
 
 
 def startup_summary(r, key, first_key, screens):
-    for app in ("compose", "rs"):
+    for app in r[key]:
         s = r[key][app]
         print(f"{key} {app}: " + ", ".join(f"{screen} median {s[screen]['median']} (min {s[screen]['min']}, max {s[screen]['max']})" for screen in screens))
-    for app in ("compose", "rs"):
+    for app in r[first_key]:
         for screen in screens:
             f = r[first_key][app][screen]["first"]
             keys = [k for k in ("bindApplication","activityStart","activityResume","Choreographer#doFrame","traversal","Record View#draw()","compose-rs: frame","compose-rs: recompose","compose-rs: layout","compose-rs: text layout","compose-rs: draw","compose-rs: replay") if k in f]
@@ -137,8 +151,12 @@ def main(path):
     print("scenarios", ", ".join(r.get("scenarios", ["startup", "scroll", "animation"])))
     if "startup_ms" in r:
         startup_summary(r, "startup_ms", "first_frame", ("feed", "big"))
+    # Since D569: bench-rs's optimizations for each subject, and the thermal guards' waits.
+    if "optimizations" in r:
+        print("optimizations", r["optimizations"]["mode"], ", ".join(
+            f"{name}: {given}" for name, given in r["optimizations"]["subjects"].items()))
     if "memory_kb" in r:
-        for app in ("compose", "rs"):
+        for app in r["memory_kb"]:
             print_memory(app, r["memory_kb"][app])
     for scenario in ("scroll", "animation"):
         if scenario in r:
@@ -146,7 +164,7 @@ def main(path):
     if "stress_startup_ms" in r:
         startup_summary(r, "stress_startup_ms", "stress_first_frame", ("stress",))
     if "stress_memory_kb" in r:
-        for app in ("compose", "rs"):
+        for app in r["stress_memory_kb"]:
             print_memory(f"stress {app}", r["stress_memory_kb"][app])
     for scenario in ("stress_scroll", "stress_animation"):
         if scenario in r:
