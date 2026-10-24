@@ -70,4 +70,5 @@ mod selection;
 mod semantics_actions;
 mod shadow;
 mod text_input;
+mod text_reuse;
 mod window;

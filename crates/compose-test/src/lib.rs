@@ -15,6 +15,7 @@
 
 mod matcher;
 mod script;
+mod text_probe;
 
 use compose_runtime::platform;
 use compose_ui::{
@@ -27,6 +28,7 @@ pub use matcher::{
     has_text_containing, is_enabled, is_focusable, is_focused, is_not_enabled,
 };
 pub use script::{check_script, run_script};
+pub use text_probe::{CountingTextMeasurer, LayoutCounts, TextLayoutCounter, draw_snapshot};
 
 /// Hooks tests count composable runs with (the runtime keeps them in its unstable `platform`
 /// module; tests reach them here).

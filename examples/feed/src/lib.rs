@@ -8,6 +8,8 @@
 //! - `big`: 200 posts in a scrolling column, all composed at once.
 //! - `stress` and `stress_animation`: much heavier screens ([`stress`], docs/15).
 //! - `grid`: a lazy grid of tiles ([`grid`]), for ad hoc traces; not a measured scenario.
+//! - `resize`: texts in a container whose width animates ([`resize`]), for ad hoc checks of text
+//!   layout across width changes; not a measured scenario.
 
 #![allow(non_snake_case)]
 
@@ -19,6 +21,7 @@ use compose::runtime::*;
 use compose::ui::*;
 
 pub mod grid;
+pub mod resize;
 pub mod stress;
 
 /// The posts in the lazy feed.
@@ -271,4 +274,5 @@ compose_android::export_apps! {
     "stress" => stress::StressScroll,
     "stress_animation" => stress::StressAnimation,
     "grid" => grid::GridScreen,
+    "resize" => resize::ResizeScreen,
 }

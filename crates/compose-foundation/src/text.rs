@@ -147,6 +147,100 @@ pub(crate) fn height_of_lines(scope: &mut MeasureScope<'_>, style: &TextStyle, l
     first.saturating_add(next.saturating_mul(lines.min(i32::MAX as u32) as i32 - 1))
 }
 
+thread_local! {
+    static REUSE_PARAGRAPH_AT_SAME_LAYOUT_WIDTH: std::cell::Cell<bool> =
+        const { std::cell::Cell::new(false) };
+}
+
+/// Turns on a compose-rs-only optimization, off by default (D551), for the texts measured on
+/// this thread: a text keeps its paragraph when new constraints change its width bounds but not
+/// the width Compose's `finalMaxWidth` would lay it out at (the text's own width, kept in the
+/// constraints), so a text that fits keeps its layout while its container's width changes.
+/// Compose lays such a text out again ([`new_layout_will_be_different`]). A switch until the
+/// optimizations' per-host flags take it over: [`reuse_paragraph_at_same_layout_width`] is the
+/// one place it's read.
+pub fn set_reuse_paragraph_at_same_layout_width(enabled: bool) {
+    REUSE_PARAGRAPH_AT_SAME_LAYOUT_WIDTH.with(|flag| flag.set(enabled));
+}
+
+/// Whether [`set_reuse_paragraph_at_same_layout_width`] turned the optimization on (off by
+/// default: Compose's rule).
+pub fn reuse_paragraph_at_same_layout_width() -> bool {
+    REUSE_PARAGRAPH_AT_SAME_LAYOUT_WIDTH.with(std::cell::Cell::get)
+}
+
+/// Whether `paragraph`, laid out for this text at constraints `old` (the last ones it was
+/// measured with), must be laid out again for `new`, as Compose's `ParagraphLayoutCache` and
+/// `MultiParagraphLayoutCache` decide (`newLayoutWillBeDifferent`): not for the same
+/// constraints; always for another minimum or maximum width; for another height only when the
+/// paragraph is taller than the new maximum height or had more lines than its maximum ("vertical
+/// clip changes"). With [`reuse_paragraph_at_same_layout_width`], another width bound keeps it
+/// when the width it's laid out at stays the same ([`same_layout_width`]).
+pub(crate) fn new_layout_will_be_different(
+    measurer: &mut dyn compose_ui::platform::TextMeasurer,
+    paragraph: ParagraphHandle,
+    options: TextLayoutOptions,
+    old: Constraints,
+    new: Constraints,
+) -> bool {
+    if new == old {
+        return false;
+    }
+    let same_width_bounds = new.min_width == old.min_width && new.max_width == old.max_width;
+    if !same_width_bounds
+        && !(reuse_paragraph_at_same_layout_width()
+            && same_layout_width(&*measurer, paragraph, options, old, new))
+    {
+        return true;
+    }
+    new.max_height < measurer.metrics(paragraph).size.height
+        || measurer.did_exceed_max_lines(paragraph)
+}
+
+/// The widest a paragraph's lines may be at `constraints`: the maximum width when wrapping or
+/// ellipsizing, else unbounded, as in Compose's `finalMaxWidth`.
+fn line_width_limit(constraints: Constraints, options: TextLayoutOptions) -> i32 {
+    let width_matters = options.soft_wrap || options.overflow == compose_ui::TextOverflow::Ellipsis;
+    if width_matters && constraints.has_bounded_width() {
+        constraints.max_width
+    } else {
+        Constraints::INFINITY
+    }
+}
+
+/// The width a paragraph is laid out at for `constraints`, as Compose's `finalMaxWidth`: the
+/// line width limit ([`line_width_limit`]) if the minimum width is the same, else the text's own
+/// width (`max_intrinsic_width`, rounded up) kept between the minimum width and that limit.
+pub(crate) fn final_max_width(
+    constraints: Constraints,
+    options: TextLayoutOptions,
+    max_intrinsic_width: f32,
+) -> i32 {
+    let limit = line_width_limit(constraints, options);
+    if constraints.min_width == limit {
+        return limit;
+    }
+    (max_intrinsic_width.ceil() as i32).clamp(constraints.min_width, limit)
+}
+
+/// Whether `paragraph`, laid out at `old`, would be laid out at the same width for `new`
+/// ([`final_max_width`]): then its layout is the same, since a measurer lays a text out at that
+/// width alone (its line breaks, alignment, ellipsis and direction follow from it). The text's
+/// own width is trusted only when the paragraph fit (no soft line break, no line past its
+/// maximum), so that a fresh layout would measure the same own width.
+pub(crate) fn same_layout_width(
+    measurer: &dyn compose_ui::platform::TextMeasurer,
+    paragraph: ParagraphHandle,
+    options: TextLayoutOptions,
+    old: Constraints,
+    new: Constraints,
+) -> bool {
+    let Some(own) = measurer.max_intrinsic_width(paragraph) else { return false };
+    let fit = !measurer.did_exceed_max_lines(paragraph)
+        && own.ceil() as i32 <= line_width_limit(old, options);
+    fit && final_max_width(old, options, own) == final_max_width(new, options, own)
+}
+
 /// Panics unless `0 < min_lines <= max_lines`, as Compose's `validateMinMaxLines`.
 pub(crate) fn validate_min_max_lines(min_lines: u32, max_lines: u32) {
     assert!(
@@ -308,34 +402,44 @@ impl LayoutModifierNode for TextNode {
         for paragraph in self.stale.drain(..) {
             scope.text_measurer().release(paragraph);
         }
-        // Only the width bounds the layout; a new height alone keeps the paragraph.
-        let width_changed = self.constraints.is_none_or(|old| {
-            old.min_width != constraints.min_width || old.max_width != constraints.max_width
-        });
         let density = scope.density();
         let direction = scope.layout_direction();
-        let relaid = width_changed
-            || self.paragraph.is_none()
-            || self.density != Some(density)
-            || self.direction != direction;
-        if relaid
-            || self.paragraph.is_none()
-            || self.density != Some(density)
-            || self.direction != direction
-        {
+        // The paragraph holds this text in this style, density and direction: only the
+        // constraints can differ.
+        let current =
+            self.paragraph.filter(|_| self.density == Some(density) && self.direction == direction);
+        let relaid = match (current, self.constraints) {
+            (Some(paragraph), Some(old)) => new_layout_will_be_different(
+                scope.text_measurer(),
+                paragraph,
+                self.options,
+                old,
+                constraints,
+            ),
+            _ => true,
+        };
+        if relaid {
             self.density = Some(density);
             self.direction = direction;
-            if let Some(old) = self.paragraph.take() {
-                scope.text_measurer().release(old);
-            }
-            let density = scope.density();
-            let paragraph = scope.text_measurer().layout_annotated(
-                &self.text,
-                &self.style,
-                TextLayoutOptions { direction, ..self.options },
-                constraints,
-                &density,
-            );
+            let measurer = scope.text_measurer();
+            // As Compose's new `Paragraph` from the `ParagraphIntrinsics` it keeps, where the
+            // measurer keeps them too; otherwise laid out anew.
+            let relaid_out = current.and_then(|old| measurer.relayout(old, constraints));
+            let paragraph = match relaid_out {
+                Some(paragraph) => paragraph,
+                None => {
+                    if let Some(old) = self.paragraph.take() {
+                        measurer.release(old);
+                    }
+                    measurer.layout_annotated(
+                        &self.text,
+                        &self.style,
+                        TextLayoutOptions { direction, ..self.options },
+                        constraints,
+                        &density,
+                    )
+                }
+            };
             self.paragraph = Some(paragraph);
             // The highlight follows the new layout.
             self.selection_rects = match &self.selection {
@@ -465,5 +569,33 @@ impl compose_ui::Selectable for TextNode {
         };
         self.selection = range;
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use compose_ui::TextOverflow;
+
+    #[test]
+    fn the_final_width_is_composes_final_max_width() {
+        let wrap = TextLayoutOptions::default();
+        let no_wrap = TextLayoutOptions { soft_wrap: false, ..wrap };
+        let ellipsis = TextLayoutOptions { overflow: TextOverflow::Ellipsis, ..no_wrap };
+        let loose = Constraints::new(0, 300, 0, 100);
+        // The text's own width, rounded up, within the bounds.
+        assert_eq!(final_max_width(loose, wrap, 76.2), 77);
+        assert_eq!(final_max_width(loose, wrap, 500.0), 300);
+        assert_eq!(final_max_width(Constraints::new(120, 300, 0, 100), wrap, 76.2), 120);
+        // A fixed width is the width, whatever the text's.
+        assert_eq!(final_max_width(Constraints::fixed(200, 10), wrap, 76.2), 200);
+        // Unwrapped and not ellipsized, the maximum doesn't bound it.
+        assert_eq!(final_max_width(loose, no_wrap, 500.0), 500);
+        assert_eq!(final_max_width(Constraints::fixed(200, 10), no_wrap, 500.0), 500);
+        // Ellipsized, it does.
+        assert_eq!(final_max_width(loose, ellipsis, 500.0), 300);
+        // Unbounded.
+        let unbounded = Constraints::new(0, Constraints::INFINITY, 0, 100);
+        assert_eq!(final_max_width(unbounded, wrap, 500.0), 500);
     }
 }

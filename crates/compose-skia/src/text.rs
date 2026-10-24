@@ -46,6 +46,9 @@ struct Entry {
     text: String,
     metrics: ParagraphMetrics,
     right_to_left: bool,
+    /// The text's own width its layout width was chosen from (SkParagraph's
+    /// `maxIntrinsicWidth` after the first layout).
+    max_intrinsic_width: f32,
 }
 
 /// Lays out paragraphs with SkParagraph and the system's fonts, keeping each until released:
@@ -164,6 +167,10 @@ impl TextMeasurer for SkiaTextMeasurer {
 
     fn is_right_to_left(&self, paragraph: ParagraphHandle) -> bool {
         self.entry(paragraph).right_to_left
+    }
+
+    fn max_intrinsic_width(&self, paragraph: ParagraphHandle) -> Option<f32> {
+        Some(self.entry(paragraph).max_intrinsic_width)
     }
 
     fn hit_test(&self, paragraph: ParagraphHandle, position: Offset) -> TextPosition {
@@ -330,10 +337,11 @@ impl SkiaTextMeasurer {
         // kept in the constraints, so alignment and right-to-left text start where the text
         // is (not at an unbounded width's far edge).
         let min_width = constraints.min_width as f32;
+        let max_intrinsic_width = paragraph.max_intrinsic_width();
         let measured_width = if min_width == width {
             width
         } else {
-            paragraph.max_intrinsic_width().ceil().clamp(min_width, width)
+            max_intrinsic_width.ceil().clamp(min_width, width)
         };
         if measured_width != width {
             paragraph.layout(measured_width);
@@ -349,7 +357,13 @@ impl SkiaTextMeasurer {
             line_count: paragraph.line_number().max(1) as u32,
         };
         drop(lines);
-        let entry = Entry { paragraph, text: text.to_string(), metrics, right_to_left };
+        let entry = Entry {
+            paragraph,
+            text: text.to_string(),
+            metrics,
+            right_to_left,
+            max_intrinsic_width,
+        };
         match self.free.pop() {
             Some(index) => {
                 self.paragraphs[index as usize] = Some(entry);

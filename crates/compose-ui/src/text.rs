@@ -377,6 +377,24 @@ pub trait TextMeasurer: std::any::Any {
     fn did_exceed_max_lines(&self, _paragraph: ParagraphHandle) -> bool {
         false
     }
+    /// The text's own width, as Compose's `ParagraphIntrinsics.maxIntrinsicWidth`: the width it
+    /// takes without soft line breaks, from which the paragraph's width was chosen (Compose's
+    /// `finalMaxWidth`). `None` when the measurer doesn't know it (the default).
+    fn max_intrinsic_width(&self, _paragraph: ParagraphHandle) -> Option<f32> {
+        None
+    }
+    /// Lays out `paragraph`'s text again, in the same style and options, at `constraints`, as
+    /// Compose lays out a new `Paragraph` from the `ParagraphIntrinsics` it keeps (the text's
+    /// spans, paint and own width, measured once): returns the new paragraph and releases
+    /// `paragraph`. `None` (the default) when the measurer keeps nothing to reuse: `paragraph`
+    /// is left as it is, and the caller lays the text out anew.
+    fn relayout(
+        &mut self,
+        _paragraph: ParagraphHandle,
+        _constraints: Constraints,
+    ) -> Option<ParagraphHandle> {
+        None
+    }
     fn hit_test(&self, paragraph: ParagraphHandle, position: Offset) -> TextPosition;
     /// Whether the paragraph runs right to left (its first strong character's direction), as
     /// `TextLayoutResult.getParagraphDirection`: Left and Right move the other way.
@@ -429,6 +447,8 @@ struct FixedParagraph {
     line_height: f32,
     size: IntSize,
     exceeded_max_lines: bool,
+    /// The widest hard line's width.
+    intrinsic: f32,
 }
 
 impl FixedTextMeasurer {
@@ -536,6 +556,7 @@ impl TextMeasurer for FixedTextMeasurer {
             line_height,
             size,
             exceeded_max_lines,
+            intrinsic,
         };
         match self.free.pop() {
             Some(index) => {
@@ -563,6 +584,10 @@ impl TextMeasurer for FixedTextMeasurer {
 
     fn did_exceed_max_lines(&self, handle: ParagraphHandle) -> bool {
         self.paragraph(handle).exceeded_max_lines
+    }
+
+    fn max_intrinsic_width(&self, handle: ParagraphHandle) -> Option<f32> {
+        Some(self.paragraph(handle).intrinsic)
     }
 
     fn hit_test(&self, handle: ParagraphHandle, position: Offset) -> TextPosition {

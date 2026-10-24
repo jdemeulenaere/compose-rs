@@ -4,7 +4,9 @@
 //! A layout is one crossing into Kotlin: the text, and a request encoding its style runs and
 //! line options; the metrics come back with it. The text stays here too (byte offsets are
 //! converted to UTF-16 ones for Kotlin), so what the layout needs again (the text, the
-//! metrics, its direction) costs no crossing.
+//! metrics, its direction) costs no crossing. Laying a paragraph's text out again at other
+//! constraints (`relayout`) sends only the widths: Kotlin keeps what it measured of the text, as
+//! Compose's `ParagraphIntrinsics` (D550).
 
 use compose_ui::{
     AnnotatedString, Color, Constraints, Density, FontFamily, LayoutDirection, Offset, Rect,
@@ -20,6 +22,19 @@ pub trait TextBackend: 'static {
     /// Lays out paragraph `handle` (replacing one of the same handle): `text` with `request`
     /// (see `encode_request`), returning its metrics.
     fn layout(&mut self, handle: u32, text: &str, request: &[u8]) -> LaidOut;
+    /// Lays out paragraph `previous`'s text again as paragraph `handle`, in the same style and
+    /// options, between `min_width` and `max_width` (`i32::MAX` unbounded), and releases
+    /// `previous`. `None` (the default: a backend keeping nothing of a text) leaves `previous`
+    /// as it was.
+    fn relayout(
+        &mut self,
+        _previous: u32,
+        _handle: u32,
+        _min_width: i32,
+        _max_width: i32,
+    ) -> Option<LaidOut> {
+        None
+    }
     /// The UTF-16 offset nearest to `position`.
     fn hit_test(&self, handle: u32, position: Offset) -> usize;
     /// The cursor before UTF-16 offset `offset`: its top, bottom and x.
@@ -33,6 +48,8 @@ pub struct LaidOut {
     pub metrics: ParagraphMetrics,
     /// The text had more lines than its max lines (cut or ellipsized).
     pub did_exceed_max_lines: bool,
+    /// The text's own width (Compose's `maxIntrinsicWidth`), if measured.
+    pub max_intrinsic_width: Option<f32>,
 }
 
 struct Entry {
@@ -70,6 +87,16 @@ impl<B: TextBackend> AndroidTextMeasurer<B> {
         self.paragraphs.len()
     }
 
+    /// A handle no live paragraph has (after 2³² paragraphs, past the live ones).
+    fn next_handle(&mut self) -> u32 {
+        while self.paragraphs.contains_key(&self.next) {
+            self.next = self.next.wrapping_add(1);
+        }
+        let handle = self.next;
+        self.next = self.next.wrapping_add(1);
+        handle
+    }
+
     fn layout_runs(
         &mut self,
         text: &str,
@@ -79,12 +106,7 @@ impl<B: TextBackend> AndroidTextMeasurer<B> {
         constraints: Constraints,
         density: &Density,
     ) -> ParagraphHandle {
-        // After 2³² paragraphs, past the live ones.
-        while self.paragraphs.contains_key(&self.next) {
-            self.next = self.next.wrapping_add(1);
-        }
-        let handle = self.next;
-        self.next = self.next.wrapping_add(1);
+        let handle = self.next_handle();
         let right_to_left =
             first_strong_is_rtl(text).unwrap_or(options.direction == LayoutDirection::Rtl);
         let _layout = compose_ui::platform::trace::section(c"compose-rs: text layout");
@@ -138,6 +160,30 @@ impl<B: TextBackend> TextMeasurer for AndroidTextMeasurer<B> {
 
     fn is_right_to_left(&self, paragraph: ParagraphHandle) -> bool {
         self.entry(paragraph).right_to_left
+    }
+
+    fn max_intrinsic_width(&self, paragraph: ParagraphHandle) -> Option<f32> {
+        self.entry(paragraph).laid_out.max_intrinsic_width
+    }
+
+    /// A new handle (a frame's bytes naming a paragraph always draw the same layout), the text
+    /// laid out again by Kotlin from what it kept of it.
+    fn relayout(
+        &mut self,
+        paragraph: ParagraphHandle,
+        constraints: Constraints,
+    ) -> Option<ParagraphHandle> {
+        let previous = paragraph.0 as u32;
+        if !self.paragraphs.contains_key(&previous) {
+            return None;
+        }
+        let handle = self.next_handle();
+        let _layout = compose_ui::platform::trace::section(c"compose-rs: text layout");
+        let (min_width, max_width) = width_bounds(constraints);
+        let laid_out = self.backend.relayout(previous, handle, min_width, max_width)?;
+        let entry = self.paragraphs.remove(&previous).expect("checked above");
+        self.paragraphs.insert(handle, Entry { laid_out, ..entry });
+        Some(ParagraphHandle(handle as u64))
     }
 
     fn hit_test(&self, paragraph: ParagraphHandle, position: Offset) -> TextPosition {
@@ -223,6 +269,12 @@ pub fn byte_offset(text: &str, index: usize) -> usize {
     text.len()
 }
 
+/// The minimum and maximum width Kotlin lays a paragraph out between (`i32::MAX`: unbounded).
+fn width_bounds(constraints: Constraints) -> (i32, i32) {
+    let max_width = if constraints.has_bounded_width() { constraints.max_width } else { i32::MAX };
+    (constraints.min_width, max_width)
+}
+
 /// The request `TextMeasurer.kt` reads: line options, then the base style, then the runs.
 ///
 /// Options: soft wrap (u8), max lines (u32), ellipsis (u8), alignment (u8: 0 normal, 1
@@ -263,12 +315,9 @@ fn encode_request(
         Some(_) => 0,
     });
     out.u8(u8::from(right_to_left));
-    out.u32(constraints.min_width as u32);
-    out.u32(if constraints.has_bounded_width() {
-        constraints.max_width as u32
-    } else {
-        i32::MAX as u32
-    });
+    let (min_width, max_width) = width_bounds(constraints);
+    out.u32(min_width as u32);
+    out.u32(max_width as u32);
     encode_style(out, style, Color::TRANSPARENT, density);
     out.u32(runs.len() as u32);
     for (range, run_style, background) in runs {
@@ -342,6 +391,7 @@ mod tests {
                 },
                 // A new line is one too many.
                 did_exceed_max_lines: text.contains('\n'),
+                max_intrinsic_width: Some(units as f32 * 10.0),
             }
         }
         fn hit_test(&self, _handle: u32, position: Offset) -> usize {

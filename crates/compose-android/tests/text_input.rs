@@ -36,7 +36,7 @@ impl TextBackend for Fake {
             last_baseline: 16.0,
             line_count: 1,
         };
-        LaidOut { metrics, did_exceed_max_lines: false }
+        LaidOut { metrics, did_exceed_max_lines: false, max_intrinsic_width: None }
     }
     fn hit_test(&self, _handle: u32, position: Offset) -> usize {
         (position.x / 8.0).round().max(0.0) as usize

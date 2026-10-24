@@ -123,6 +123,7 @@ struct JniText {
     /// The Kotlin measurer's results: a direct buffer of floats it writes before returning.
     results: *const f32,
     layout: JMethodID,
+    relayout: JMethodID,
     hit_test: JMethodID,
     cursor: JMethodID,
     release: JMethodID,
@@ -134,12 +135,29 @@ impl JniText {
         unsafe { self.results.add(index).read_unaligned() }
     }
 
-    /// Zeroes the results first: a call that fails (an exception, a missing layout) reads
-    /// zeros rather than the last call's.
+    /// A layout's results: its metrics, whether it cut lines, and the text's own width (NaN
+    /// when Kotlin didn't measure it).
+    fn laid_out(&self) -> LaidOut {
+        let own = self.result(6);
+        LaidOut {
+            metrics: ParagraphMetrics {
+                size: IntSize::new(self.result(0) as i32, self.result(1) as i32),
+                first_baseline: self.result(2),
+                last_baseline: self.result(3),
+                line_count: self.result(4) as u32,
+            },
+            did_exceed_max_lines: self.result(5) != 0.0,
+            max_intrinsic_width: if own.is_nan() { None } else { Some(own) },
+        }
+    }
+
+    /// Zeroes the results first (the text's own width: NaN, unknown): a call that fails (an
+    /// exception, a missing layout) reads them rather than the last call's.
     fn clear_results(&self) {
         for index in 0..8 {
+            let value = if index == 6 { f32::NAN } else { 0.0 };
             // SAFETY: as `result`; Kotlin writes it only during calls, on this thread.
-            unsafe { (self.results as *mut f32).add(index).write_unaligned(0.0) };
+            unsafe { (self.results as *mut f32).add(index).write_unaligned(value) };
         }
     }
 }
@@ -169,15 +187,34 @@ impl TextBackend for JniText {
             Ok(())
         });
         check(&mut env, "TextMeasurer.layout");
-        LaidOut {
-            metrics: ParagraphMetrics {
-                size: IntSize::new(self.result(0) as i32, self.result(1) as i32),
-                first_baseline: self.result(2),
-                last_baseline: self.result(3),
-                line_count: self.result(4) as u32,
-            },
-            did_exceed_max_lines: self.result(5) != 0.0,
-        }
+        self.laid_out()
+    }
+
+    fn relayout(
+        &mut self,
+        previous: u32,
+        handle: u32,
+        min_width: i32,
+        max_width: i32,
+    ) -> Option<LaidOut> {
+        self.clear_results();
+        let mut env = main_env();
+        // SAFETY: the method's signature is `(IIII)V`.
+        let _ = unsafe {
+            env.call_method_unchecked(
+                &self.measurer,
+                self.relayout,
+                ReturnType::Primitive(Primitive::Void),
+                &[
+                    JValue::Int(previous as jint).as_jni(),
+                    JValue::Int(handle as jint).as_jni(),
+                    JValue::Int(min_width).as_jni(),
+                    JValue::Int(max_width).as_jni(),
+                ],
+            )
+        };
+        check(&mut env, "TextMeasurer.relayout");
+        Some(self.laid_out())
     }
 
     fn hit_test(&self, handle: u32, position: Offset) -> usize {
@@ -365,6 +402,7 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_create<'local>(
             "layout",
             "(ILjava/lang/String;Ljava/nio/ByteBuffer;)V",
         ),
+        relayout: method(&mut env, &measurer, "relayout", "(IIII)V"),
         hit_test: method(&mut env, &measurer, "hitTest", "(IFF)I"),
         cursor: method(&mut env, &measurer, "cursor", "(II)V"),
         release: method(&mut env, &measurer, "release", "(I)V"),

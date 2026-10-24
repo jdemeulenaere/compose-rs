@@ -678,6 +678,7 @@ version = "0.1.0"
 dependencies = [
  "compose-foundation",
  "compose-runtime",
+ "compose-test",
  "compose-ui",
  "jni 0.21.1",
  "log",

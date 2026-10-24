@@ -33,3 +33,7 @@ harness = false
 [[bench]]
 name = "lazy"
 harness = false
+
+[[bench]]
+name = "text"
+harness = false

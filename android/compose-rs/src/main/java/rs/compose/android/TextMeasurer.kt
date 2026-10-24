@@ -29,7 +29,8 @@ import kotlin.math.ceil
  * Paragraphs laid out for compose-rs (`crates/compose-android/src/text.rs`), as Compose's
  * `TextLayout`: a `BoringLayout` for a single left-to-right line that fits, else a
  * `StaticLayout` (D330); kept by handle to draw them. Rust sends a layout request (style runs and line options, see
- * `encode_request`) and reads the metrics back from [results].
+ * `encode_request`) and reads the metrics back from [results]. A paragraph laid out again at other widths
+ * ([relayout]) reuses what was measured of its text, as Compose's `ParagraphIntrinsics` (D550).
  */
 internal class TextMeasurer(
     /**
@@ -39,7 +40,7 @@ internal class TextMeasurer(
      */
     private val checkBoring: Boolean = false,
 ) {
-    /** Floats Rust reads after a call: a layout's metrics, or a cursor's rectangle. */
+    /** Floats Rust reads after a call: a layout's metrics and the text's own width, or a cursor's rectangle. */
     val results: ByteBuffer = ByteBuffer.allocateDirect(32).order(ByteOrder.nativeOrder())
 
     private val layouts = SparseArray<Layout>()
@@ -125,6 +126,54 @@ internal class TextMeasurer(
         override fun updateMeasureState(paint: TextPaint) = apply(paint, style)
     }
 
+    /**
+     * What a paragraph keeps of its text to lay it out again at other widths without measuring it
+     * again, as Compose's `ParagraphIntrinsics` (`LayoutIntrinsics`: the text with its spans, the
+     * paint, the boring metrics and the text's own width, D550).
+     */
+    private inner class Intrinsics(
+        val content: CharSequence,
+        val paint: TextPaint,
+        val direction: TextDirectionHeuristic,
+        /** One line of left-to-right text's metrics (D330), or null. */
+        val boring: BoringLayout.Metrics?,
+        /** A line height in px over every line, or 0. */
+        val lineHeight: Int,
+        letterSpaced: Boolean,
+        val softWrap: Boolean,
+        val maxLines: Int,
+        val ellipsis: Boolean,
+        /** 0 normal, 1 opposite, 2 center, 3 justify. */
+        val align: Int,
+    ) {
+        /** The boring line's width, as Compose's `maxIntrinsicWidth` takes it. */
+        val boringWidth = if (boring == null) 0f else intrinsicWidth(boring.width.toFloat(), letterSpaced)
+
+        /**
+         * The text's own width, as Compose's `LayoutIntrinsics.maxIntrinsicWidth`: the boring
+         * line's, else a measure of all of it, half a pixel wider with letter spacing
+         * (b/173574230: else a StaticLayout can break the line it measured, or ellipsize it).
+         * Measured once, at the first layout, as Compose's `finalConstraints` reads it.
+         */
+        val maxIntrinsicWidth: Float = if (boring != null) {
+            boringWidth
+        } else {
+            intrinsicWidth(ceil(Layout.getDesiredWidth(content, paint)), letterSpaced)
+        }
+
+        /** [content] with its line height span, for a `StaticLayout` (made when one needs it). */
+        val staticText: CharSequence by lazy(LazyThreadSafetyMode.NONE) { withLineHeight(content, lineHeight) }
+
+        val alignment = when (align) {
+            1 -> Layout.Alignment.ALIGN_OPPOSITE
+            2 -> Layout.Alignment.ALIGN_CENTER
+            else -> Layout.Alignment.ALIGN_NORMAL
+        }
+    }
+
+    /** Each paragraph's [Intrinsics], by handle, as [layouts]. */
+    private val intrinsics = SparseArray<Intrinsics>()
+
     fun layout(handle: Int, text: String, request: ByteBuffer) {
         request.order(ByteOrder.LITTLE_ENDIAN)
         val softWrap = request.get().toInt() != 0
@@ -172,47 +221,59 @@ internal class TextMeasurer(
         val direction = if (rtl) TextDirectionHeuristics.RTL else TextDirectionHeuristics.LTR
         // One line of left-to-right text has boring metrics (D330): its width, in one measure.
         val boring = boringMetrics(content, paint, direction, lineHeight)
-        // The width to break lines at, as the desktop measurer: the constraint when wrapping
+        val kept = Intrinsics(
+            content, paint, direction, boring, lineHeight, letterSpaced, softWrap, maxLines, ellipsis, align,
+        )
+        layoutAt(handle, kept, minWidth, maxWidth)
+    }
+
+    /**
+     * Lays out paragraph [previous]'s text again as paragraph [handle], between [minWidth] and
+     * [maxWidth] (`Int.MAX_VALUE`: unbounded), from what [previous] kept of it ([Intrinsics]: no
+     * measure of the text), as Compose's new `Paragraph` from the `ParagraphIntrinsics` its cache
+     * keeps when only the constraints change; then releases [previous].
+     */
+    fun relayout(previous: Int, handle: Int, minWidth: Int, maxWidth: Int) {
+        val kept = intrinsics.get(previous) ?: return
+        release(previous)
+        layoutAt(handle, kept, minWidth, maxWidth)
+    }
+
+    /** Lays out [kept]'s text as paragraph [handle] at the constraints' width, writing [results]. */
+    private fun layoutAt(handle: Int, kept: Intrinsics, minWidth: Int, maxWidth: Int) {
+        // The width to break lines at, as Compose's `finalMaxWidth`: the constraint when wrapping
         // (or ellipsizing), else the text's own; then the text's width, kept in the constraints.
         val bounded = maxWidth != Int.MAX_VALUE
-        val available = if ((softWrap || ellipsis) && bounded) maxWidth else Int.MAX_VALUE
-        // The text's own width, as Compose's `LayoutIntrinsics.maxIntrinsicWidth`: the boring
-        // line's, else a second measure of all of it (only when the constraints leave a choice),
-        // half a pixel wider with letter spacing (b/173574230: else a StaticLayout can break the
-        // line it measured, or ellipsize it).
-        val boringWidth = if (boring == null) 0f else intrinsicWidth(boring.width.toFloat(), letterSpaced)
-        val width = when {
-            minWidth == available -> available
-            boring != null -> ceil(boringWidth).toInt().coerceIn(minWidth, available)
-            else -> {
-                val desired = intrinsicWidth(ceil(Layout.getDesiredWidth(content, paint)), letterSpaced)
-                ceil(desired).toInt().coerceIn(minWidth, available)
-            }
+        val available = if ((kept.softWrap || kept.ellipsis) && bounded) maxWidth else Int.MAX_VALUE
+        val width = if (minWidth == available) {
+            available
+        } else {
+            ceil(kept.maxIntrinsicWidth).toInt().coerceIn(minWidth, available)
         }
-        val alignment = when (align) {
-            1 -> Layout.Alignment.ALIGN_OPPOSITE
-            2 -> Layout.Alignment.ALIGN_CENTER
-            else -> Layout.Alignment.ALIGN_NORMAL
-        }
+        val maxLines = kept.maxLines
         // As Compose's `TextLayout`: a `BoringLayout` when the boring line fits the width, else
         // a `StaticLayout`.
-        val layout = if (Build.VERSION.SDK_INT >= 33 && boring != null && boringWidth <= width) {
-            val layout = boringLayout(content, paint, width, alignment, boring)
+        val boring = kept.boring
+        val layout = if (Build.VERSION.SDK_INT >= 33 && boring != null && kept.boringWidth <= width) {
+            val layout = boringLayout(kept.content, kept.paint, width, kept.alignment, boring)
             if (checkBoring) {
                 val static = staticLayout(
-                    withLineHeight(SpannableString(content), lineHeight),
-                    paint, width, alignment, direction, maxLines, ellipsis, align,
+                    kept.staticText, kept.paint, width, kept.alignment, kept.direction, maxLines, kept.ellipsis,
+                    kept.align,
                 )
                 // A difference is logged, and the StaticLayout kept (as before D330).
-                if (sameLayout(layout, static, paint)) layout else static
+                if (sameLayout(layout, static, kept.paint)) layout else static
             } else {
                 layout
             }
         } else {
-            val text = withLineHeight(content, lineHeight)
-            staticLayout(text, paint, width.coerceAtLeast(0), alignment, direction, maxLines, ellipsis, align)
+            staticLayout(
+                kept.staticText, kept.paint, width.coerceAtLeast(0), kept.alignment, kept.direction, maxLines,
+                kept.ellipsis, kept.align,
+            )
         }
         layouts.put(handle, layout)
+        intrinsics.put(handle, kept)
         releaseNode(handle)
         if (collectingLaidOut) laidOut.add(handle)
         // StaticLayout limits the lines only when it ellipsizes: the rest are cut here, as
@@ -228,6 +289,8 @@ internal class TextMeasurer(
         val lastEllipsized = layout.lineCount > 0 && layout.getEllipsisCount(layout.lineCount - 1) > 0
         val exceeded = layout.lineCount > maxLines || lastEllipsized
         results.putInt(20, (if (exceeded) 1f else 0f).toRawBits())
+        // The text's own width, from which Rust can tell another width would lay it out the same.
+        results.putInt(24, kept.maxIntrinsicWidth.toRawBits())
     }
 
     /**
@@ -264,10 +327,13 @@ internal class TextMeasurer(
     private fun intrinsicWidth(width: Float, letterSpaced: Boolean): Float =
         if (letterSpaced && width != 0f) width + 0.5f else width
 
-    /** [content] with a [lineHeight] span over it (px; none when 0), as a `StaticLayout` takes it. */
+    /**
+     * [content] with a [lineHeight] span over it (px; none when 0), as a `StaticLayout` takes it:
+     * a copy, so that [content], which a `BoringLayout` of the same text may draw, has none.
+     */
     private fun withLineHeight(content: CharSequence, lineHeight: Int): CharSequence {
         if (lineHeight == 0) return content
-        val spannable = content as? SpannableString ?: SpannableString(content)
+        val spannable = SpannableString(content)
         spannable.setSpan(LineHeightSpan.Standard(lineHeight), 0, spannable.length, Spanned.SPAN_INCLUSIVE_INCLUSIVE)
         return spannable
     }
@@ -376,6 +442,7 @@ internal class TextMeasurer(
 
     fun release(handle: Int) {
         layouts.remove(handle)
+        intrinsics.remove(handle)
         releaseNode(handle)
     }
 
@@ -389,6 +456,7 @@ internal class TextMeasurer(
     fun clear() {
         laidOut.clear()
         layouts.clear()
+        intrinsics.clear()
         for (index in 0 until nodes.size()) nodes.valueAt(index).discardDisplayList()
         nodes.clear()
         pool.clear()
