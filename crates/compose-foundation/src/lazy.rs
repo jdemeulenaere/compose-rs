@@ -1281,7 +1281,7 @@ impl ItemSlots {
         &mut self,
         items: &Items,
         indices: &[usize],
-        measured: impl Fn(usize) -> bool,
+        measured: impl Fn(&ItemSlot) -> bool,
     ) -> Vec<(ItemSlot, SlotContent)> {
         let previous: HashMap<u64, usize> =
             self.active.iter().enumerate().map(|(position, slot)| (slot.key, position)).collect();
@@ -1299,7 +1299,7 @@ impl ItemSlots {
             assigned.push((index, slot));
         }
         for (position, slot) in self.active.iter().enumerate() {
-            if !taken[position] && measured(slot.index) {
+            if !taken[position] && measured(slot) {
                 self.reusable.push(*slot);
             }
         }
@@ -1610,9 +1610,10 @@ fn LazyItems(
         let keep = !inner.dispose_leaving.replace(false);
         // Measured, or composed by a prefetch request (Compose's precomposed slot goes to the
         // reuse pool when its request is cancelled).
-        slots.borrow_mut().assign(&items.0, &indices, |index| {
-            keep && (sizes.contains_key(index)
-                || inner.prefetch.was_precomposed(items.0.key(index)))
+        slots.borrow_mut().assign(&items.0, &indices, |slot| {
+            // The slot's own item: its key, its index when last composed.
+            let precomposed = inner.prefetch.take_precomposed(slot.key);
+            keep && (sizes.contains_key(slot.index) || precomposed)
         })
     };
     slots.borrow_mut().items = Rc::downgrade(&items.0);
@@ -2094,10 +2095,15 @@ impl MeasurePolicy for LazyListLayout {
             };
             (wanted_start.saturating_sub(behind), wanted_end + ahead)
         } else {
+            let next = if prefetch.forward.get() {
+                wanted_end + 1
+            } else {
+                wanted_start.saturating_sub(1)
+            };
             prefetch.target(
                 (wanted_start, wanted_end),
                 (composed_start, composed_end),
-                !beyond_ended,
+                (!beyond_ended).then_some(next),
             )
         };
         // After a focus search that laid items out beyond the bounds, those it composed go

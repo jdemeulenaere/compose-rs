@@ -20,8 +20,8 @@ use compose_ui::{
 
 use super::prefetch::{Laid, Policy};
 use super::{
-    BEYOND, Interval, Items, ItemsRef, LazyItems, LazyListInner, LazyListState, LazyScrollElement,
-    MOST_MISSING, Sizes, composed_range, content_type_of,
+    BEYOND, FIRST_STEP, Interval, Items, ItemsRef, LazyItems, LazyListInner, LazyListState,
+    LazyScrollElement, MOST_IN_A_ROUND, MOST_MISSING, Sizes, composed_range, content_type_of,
 };
 use crate::layout::{HorizontalArrangement, MainAxisArrangement, VerticalArrangement};
 
@@ -1386,11 +1386,23 @@ impl MeasurePolicy for LazyGridLayout {
                     .max(1)
             };
             let room = (main_max - content_end).max(0);
-            // As many lines as cover the room left, no more (D576).
-            let more = (room.max(1) as usize)
-                .div_ceil((in_view + spacing).max(1) as usize)
+            // As many lines as cover the room left, no more (D576), and as a list's (D472,
+            // D487), no more than `FIRST_STEP` lines, as many as it placed, or twice what the
+            // round before asked for: a first layout knowing one short line doesn't compose
+            // dozens (D578).
+            let cap = placed
+                .len()
+                .max(FIRST_STEP)
+                .max(2 * state.asked.get())
+                .min(MOST_IN_A_ROUND)
                 .min(MOST_MISSING);
+            let more =
+                (room.max(1) as usize).div_ceil((in_view + spacing).max(1) as usize).min(cap);
+            state.asked.set(more);
             wanted_end = m.lines.at_most_last(end_index + more + beyond + beyond_after - 1) + 1;
+        }
+        if !missing {
+            state.asked.set(0);
         }
         // The items composed, from the lines: whole lines.
         let wanted_items = (m.lines.start(wanted_start), m.lines.start(wanted_end));
@@ -1436,6 +1448,8 @@ impl MeasurePolicy for LazyGridLayout {
         // in items, whatever the lines' spans, D456); else, as Compose's, those wanted and those
         // requests composed next to them.
         let keep = policy.keep_behind > 0;
+        // A focus search that laid lines out beyond the bounds is over: they go (D482, D577).
+        let beyond_ended = state.beyond_ended.take();
         let limits = if keep {
             let (behind, ahead) = if prefetch.forward.get() {
                 (policy.keep_behind, policy.ahead)
@@ -1444,15 +1458,31 @@ impl MeasurePolicy for LazyGridLayout {
             };
             (m.lines.start(wanted_start.saturating_sub(behind)), m.lines.start(wanted_end + ahead))
         } else {
-            prefetch.target(wanted_items, (composed_start, composed_end), true)
+            // The line after the wanted ones the scroll's way, if no focus search just ended.
+            let next = if prefetch.forward.get() {
+                m.lines.start(wanted_end + 1)
+            } else {
+                m.lines.start(wanted_start.saturating_sub(1))
+            };
+            prefetch.target(
+                wanted_items,
+                (composed_start, composed_end),
+                (!beyond_ended).then_some(next),
+            )
         };
+        let past_limits = composed_start < limits.0 || composed_end > limits.1;
+        let search_ended = beyond_ended && past_limits;
+        if search_ended {
+            state.dispose_leaving.set(true);
+        }
         let mut composed = (composed_start, composed_end);
         let composed_more = state.composed_more.take();
         if keep {
             let slack = 2 * BEYOND;
             let too_many = (wanted_start > slack
                 && composed_start < m.lines.start(wanted_start - slack))
-                || composed_end > m.lines.start(wanted_end + slack);
+                || composed_end > m.lines.start(wanted_end + slack)
+                || search_ended;
             if composed_more && covers && !too_many {
                 state.composed.set(composed);
             }
@@ -1470,8 +1500,9 @@ impl MeasurePolicy for LazyGridLayout {
                 composed = (start, end);
                 state.compose(composed);
             }
-        } else if !covers {
-            // Items to compose: this composition deactivates those no longer wanted too.
+        } else if !covers || search_ended {
+            // Items to compose (or a focus search's to let go): this composition deactivates
+            // those no longer wanted too.
             composed = limits;
             state.compose(composed);
         } else if composed_more {

@@ -76,6 +76,12 @@ impl PrefetchScheduler {
         self.requests.borrow_mut().push_back(request);
     }
 
+    /// Runs `request` first in the next idle time, before the others: work that a frame's
+    /// layout leaves which Compose's does in the layout itself (a lazy list's deactivations).
+    pub fn schedule_prefetch_first(&self, request: Rc<dyn PrefetchRequest>) {
+        self.requests.borrow_mut().push_front(request);
+    }
+
     pub(crate) fn has_requests(&self) -> bool {
         !self.requests.borrow().is_empty()
     }

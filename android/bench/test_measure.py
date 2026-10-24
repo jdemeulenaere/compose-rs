@@ -468,12 +468,15 @@ class OptimizationsTest(unittest.TestCase):
             measure.parse_optimizations("each", self.NAMES, "faster")
 
     def test_bits_as_rusts_parse(self):
-        names, defaults = self.NAMES, ["performance_hint"]
-        self.assertEqual(measure.optimization_bits("none", names, defaults), 0)
-        self.assertEqual(measure.optimization_bits(None, names, defaults), 0b010)
-        self.assertEqual(measure.optimization_bits("all", names, defaults), 0b111)
-        self.assertEqual(measure.optimization_bits("all,-performance_hint", names, defaults), 0b101)
-        self.assertEqual(measure.optimization_bits("keep_items_behind", names, defaults), 0b100)
+        """Each bit and default from the table's own fields: keep_items_behind is bit 6."""
+        table = measure.optimization_table(OPTIMIZATIONS_RS)
+        self.assertEqual(table, [("single_drawing_fade", 0, False), ("performance_hint", 1, True),
+                                 ("keep_items_behind", 6, False)])
+        self.assertEqual(measure.optimization_bits("none", table), 0)
+        self.assertEqual(measure.optimization_bits(None, table), 0b10)
+        self.assertEqual(measure.optimization_bits("all", table), 0b1000011)
+        self.assertEqual(measure.optimization_bits("all,-performance_hint", table), 0b1000001)
+        self.assertEqual(measure.optimization_bits("keep_items_behind", table), 1 << 6)
         with open(measure.OPTIMIZATIONS_SOURCE) as file:
             source = file.read()
         self.assertEqual(measure.optimization_defaults(source), ["performance_hint"])

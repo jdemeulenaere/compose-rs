@@ -870,37 +870,45 @@ OPTIMIZATIONS_SOURCE = os.path.join(os.path.dirname(ANDROID_DIR), "crates", "com
                                     "optimizations.rs")
 
 
+def optimization_table(source):
+    """Rust's table (crates/compose-ui/src/optimizations.rs): each `Optimization`'s name, bit
+    and default, read from its own `bit:`, `name:` and `default:` fields, in bit order."""
+    rows = re.findall(r'Optimization \{\s*bit: (\d+),\s*name: "([a-z_]+)",\s*default: (true|false),',
+                      source)
+    return sorted(((name, int(bit), default == "true") for bit, name, default in rows),
+                  key=lambda row: row[1])
+
+
 def optimization_names(source):
-    """The optimizations' names in Rust's table (`name: "…"` of each `Optimization`), in bit
-    order."""
-    return re.findall(r'^\s*name: "([a-z_]+)",', source, re.M)
+    """The optimizations' names in Rust's table, in bit order."""
+    return [name for name, _, _ in optimization_table(source)]
 
 
 def optimization_defaults(source):
-    """The names of the optimizations on by default in Rust's table (each `name: "…"` followed
-    by its `default: true`)."""
-    return re.findall(r'^\s*name: "([a-z_]+)",\s*\n\s*default: true,', source, re.M)
+    """The names of the optimizations on by default in Rust's table."""
+    return [name for name, _, default in optimization_table(source) if default]
 
 
-def optimization_bits(given, names, defaults):
+def optimization_bits(given, table):
     """The bits bench-rs's `-e optimizations` list sets, as Rust's `Optimizations::parse`
-    (`none`, `all`, `default`, names, `-name`; None or empty: the defaults); the bit of a name
-    is its place in `names`."""
-    def of(chosen):
-        return sum(1 << names.index(name) for name in chosen)
+    (`none`, `all`, `default`, names, `-name`; None or empty: the defaults), each name's bit
+    its `bit:` in `table` (`optimization_table`)."""
+    bit = {name: 1 << number for name, number, _ in table}
+    every = sum(bit.values())
+    defaults = sum(bit[name] for name, _, default in table if default)
     if given is None or not given.strip():
-        return of(defaults)
+        return defaults
     bits = 0
     for word in [word.strip() for word in given.split(",") if word.strip()]:
         on, name = (False, word[1:]) if word.startswith("-") else (True, word)
         if (name, on) == ("none", True):
             bits = 0
         elif (name, on) == ("all", True):
-            bits = of(names)
+            bits = every
         elif (name, on) == ("default", True):
-            bits = of(defaults)
+            bits = defaults
         else:
-            bits = bits | (1 << names.index(name)) if on else bits & ~(1 << names.index(name))
+            bits = bits | bit[name] if on else bits & ~bit[name]
     return bits
 
 
@@ -1230,15 +1238,15 @@ def animation_scenario(tp, out_dir, capacities, screen, prefix, subjects, runs=3
 def configure(arguments, source):
     """The mode and subjects `arguments` ask for (rotated by --rotate), each subject's full bit
     set (None: the Compose app), and the thermal guards' limits set."""
-    names = optimization_names(source)
-    defaults = optimization_defaults(source)
+    table = optimization_table(source)
+    names = [name for name, _, _ in table]
     mode, subjects = parse_optimizations(arguments.optimizations, names, arguments.each_only)
     THERMAL["battery_limit_c"] = arguments.battery_limit
     THERMAL["wait_limit_s"] = arguments.thermal_wait_limit
     THERMAL["skin_limit_c"] = arguments.skin_limit
     rotate = arguments.rotate % len(subjects)
     subjects = subjects[rotate:] + subjects[:rotate]
-    bits = {name: None if package == APPS["compose"] else optimization_bits(given, names, defaults)
+    bits = {name: None if package == APPS["compose"] else optimization_bits(given, table)
             for name, package, given in subjects}
     return mode, subjects, bits
 

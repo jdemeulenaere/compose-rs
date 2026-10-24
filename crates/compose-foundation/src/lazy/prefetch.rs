@@ -179,6 +179,9 @@ struct Strategy {
     previous_delta: Cell<f32>,
     /// The requests held (`currentPrefetchHandle`, a grid's line's), each for one item.
     handles: RefCell<Vec<Rc<Handle>>>,
+    /// What the last layout that ran the strategy showed (first and last units, the count):
+    /// one showing the same with no scroll since has nothing new for it.
+    last_laid: Cell<Option<(usize, usize, usize)>>,
 }
 
 /// What a layout that settled shows, for the strategy: the first and last units in view (items;
@@ -231,6 +234,13 @@ impl Prefetch {
         let policy = self.policy.get();
         let strategy = &self.strategy;
         let delta = self.delta.replace(0.0);
+        // The same units in view, the same count, no scroll since: nothing to cancel or request
+        // (a frame laying the list out again for another reason).
+        let shown = laid.map(|laid| (laid.first, laid.last, count));
+        if delta == 0.0 && shown.is_some() && strategy.last_laid.replace(shown) == shown {
+            return;
+        }
+        strategy.last_laid.set(shown);
         // A request for anything but the next unit the last scroll's way is cancelled (with two
         // ahead, those out of the next two), as `evaluatePrefetchForCancellation`.
         if let (Some(target), Some(laid)) = (strategy.target.get(), laid) {
@@ -366,26 +376,30 @@ impl Prefetch {
     }
 
     /// The items that stay composed, from those the layout wants and those `composed`: the
-    /// wanted ones; with `ahead`, those composed next to them the last scroll's way (a layout's
-    /// estimate may compose more than it places, where Compose's composes as it measures: they
-    /// are the next ones a scroll that way reaches, and disposed they would be composed again);
-    /// and the items of live requests next to those, composed by the request (Compose's
-    /// precomposed items, kept until their request is cancelled) or already. Any other is let
-    /// go: those behind, and without `ahead` (a focus search ended, D482) those it laid out
-    /// (D577).
+    /// wanted ones; with `next` (the end, backward the start, of the unit after the wanted ones
+    /// the last scroll's way: an item, a grid's line), those composed next to them up to it (a
+    /// layout's estimate may compose one more than it places, where Compose's composes as it
+    /// measures: it is the one a scroll that way requests, and disposed it would be composed
+    /// again); and the items of live requests next to those, composed by the request
+    /// (Compose's precomposed items, kept until their request is cancelled) or already. Any
+    /// other is let go: those behind, those further ahead, and without `next` (a focus search
+    /// ended, D482) those a search laid out (D577).
     pub(super) fn target(
         &self,
         wanted: (usize, usize),
         composed: (usize, usize),
-        ahead: bool,
+        next: Option<usize>,
     ) -> (usize, usize) {
         let handles = self.strategy.handles.borrow();
         let (mut start, mut end) = wanted;
-        if ahead && composed.0 <= end && composed.1 >= start {
+        if let Some(next) = next
+            && composed.0 <= end
+            && composed.1 >= start
+        {
             if self.forward.get() {
-                end = end.max(composed.1);
+                end = end.max(composed.1.min(next));
             } else {
-                start = start.min(composed.0);
+                start = start.min(composed.0.max(next));
             }
         }
         let holds = |handle: &&Rc<Handle>| {
@@ -433,16 +447,25 @@ impl Prefetch {
             return;
         }
         let Some(scheduler) = scheduler else { return };
-        let composing =
-            self.strategy.handles.borrow().iter().any(|handle| {
-                handle.queued.get() && !handle.composed.get() && !handle.canceled.get()
-            });
-        if composing || self.trim.borrow().upgrade().is_some() {
+        if self.trim.borrow().upgrade().is_some() {
             return;
         }
         let request = Rc::new(TrimRequest { state: Rc::downgrade(state) });
         *self.trim.borrow_mut() = Rc::downgrade(&request);
-        scheduler.schedule_prefetch(request);
+        if self.policy.get().keep_behind == 0 {
+            // First in the next idle time with any time left, whatever the queue holds: a
+            // request waiting for a longer idle time, or one whose item is composed already
+            // (which deactivates nothing), would leave them composed for good, and an animation
+            // in one asking for frames (D575).
+            scheduler.schedule_prefetch_first(request);
+        } else {
+            let composing = self.strategy.handles.borrow().iter().any(|handle| {
+                handle.queued.get() && !handle.composed.get() && !handle.canceled.get()
+            });
+            if !composing {
+                scheduler.schedule_prefetch(request);
+            }
+        }
     }
 
     fn averages(&self, content_type: Option<u64>) -> Averages {
@@ -457,7 +480,12 @@ impl Prefetch {
     fn idle_steps(&self, scope: &PrefetchRequestScope<'_>) -> IdleSteps {
         let mut steps = self.idle.get();
         if steps.idle_time != scope.idle_time() {
-            steps = IdleSteps { idle_time: scope.idle_time(), first: true, pace: Pace::EXPECTED };
+            steps = IdleSteps {
+                idle_time: scope.idle_time(),
+                first: true,
+                missed: false,
+                pace: Pace::EXPECTED,
+            };
             self.idle.set(steps);
         }
         steps
@@ -478,12 +506,19 @@ impl Prefetch {
         if !self.policy.get().recent_maximum {
             return available > if urgent { 0 } else { average };
         }
-        let steps = self.idle_steps(scope);
+        let mut steps = self.idle_steps(scope);
+        // After a miss, the list's prefetch stops for this idle time (D341's request gave up
+        // whole): another of its steps neither starts nor lowers an estimate again.
+        if steps.missed {
+            return false;
+        }
         let cost = self.cost(step);
         if available > steps.pace.needed(cost.get().estimate()) {
             return true;
         }
         cost.set(cost.get().missed(steps.first));
+        steps.missed = true;
+        self.idle.set(steps);
         false
     }
 
@@ -558,10 +593,17 @@ impl Prefetch {
         Some(true)
     }
 
-    /// Whether the item of `key` was composed by a request (and may leave unmeasured, kept for
-    /// reuse).
-    pub(super) fn was_precomposed(&self, key: u64) -> bool {
-        self.precomposed.borrow().contains(&key)
+    /// Whether the item of `key` was composed by a request and not measured since: leaving, it
+    /// is kept for reuse. Forgotten, as asked when its item leaves.
+    pub(super) fn take_precomposed(&self, key: u64) -> bool {
+        let mut precomposed = self.precomposed.borrow_mut();
+        let found = precomposed.iter().position(|kept| *kept == key);
+        found.map(|position| precomposed.remove(position)).is_some()
+    }
+
+    /// The item of `key` was measured: it is a measured item from now on.
+    fn measured(&self, key: u64) {
+        self.precomposed.borrow_mut().retain(|kept| *kept != key);
     }
 
     /// Notes `nested`, a lazy list composing in the item composing now, if any.
@@ -772,6 +814,7 @@ impl Handle {
             }
             prefetch.stepped(scope);
             self.measured.set(true);
+            prefetch.measured(self.key);
             // The nested lists measured: how many items the smallest shows, for the next item of
             // this type; a measurement that composed more of them than were prefetched isn't one
             // to go by (`clearMeasureTime`).
@@ -958,12 +1001,14 @@ pub(super) fn note_nested(state: &Rc<LazyListInner>) {
 struct IdleSteps {
     idle_time: u64,
     first: bool,
+    /// A step of the list's didn't fit this idle time.
+    missed: bool,
     pace: Pace,
 }
 
 impl Default for IdleSteps {
     fn default() -> IdleSteps {
-        IdleSteps { idle_time: 0, first: true, pace: Pace::EXPECTED }
+        IdleSteps { idle_time: 0, first: true, missed: false, pace: Pace::EXPECTED }
     }
 }
 
