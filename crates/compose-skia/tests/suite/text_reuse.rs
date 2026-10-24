@@ -87,6 +87,15 @@ fn Cases() {
     });
 }
 
+
+/// Turns compose-rs's `REUSE_PARAGRAPH_AT_SAME_LAYOUT_WIDTH` on or off on `host` (D551).
+fn reuse_at_same_width(host: &mut compose::ui::platform::UiHost, on: bool) {
+    let optimizations = host
+        .optimizations()
+        .with(compose::ui::platform::Optimization::REUSE_PARAGRAPH_AT_SAME_LAYOUT_WIDTH, on);
+    host.set_optimizations(optimizations);
+}
+
 fn counted(width: i32) -> (ComposeTestRule, TextLayoutCounter) {
     let (measurer, counter) = CountingTextMeasurer::new(SkiaTextMeasurer::new());
     let host = UiHost::new(IntSize::new(width, 3000), Density::new(1.0), Box::new(measurer));
@@ -94,10 +103,10 @@ fn counted(width: i32) -> (ComposeTestRule, TextLayoutCounter) {
 }
 
 fn resize(ui: &mut ComposeTestRule, width: i32, reuse: bool) {
-    set_reuse_paragraph_at_same_layout_width(reuse);
+    reuse_at_same_width(ui.host(), reuse);
     ui.host().resize(IntSize::new(width, 3000));
     ui.wait_for_idle();
-    set_reuse_paragraph_at_same_layout_width(false);
+    reuse_at_same_width(ui.host(), false);
 }
 
 #[test]
@@ -136,7 +145,7 @@ fn reused_paragraphs_draw_exactly_what_new_layouts_draw() {
 #[test]
 fn a_width_below_the_texts_own_lays_it_out_again() {
     let (mut ui, counter) = counted(400);
-    set_reuse_paragraph_at_same_layout_width(true);
+    reuse_at_same_width(ui.host(), true);
     let own = {
         let snapshot = draw_snapshot(ui.host());
         let line =
@@ -148,5 +157,5 @@ fn a_width_below_the_texts_own_lays_it_out_again() {
     assert_eq!(counter.of(SHORT).total(), 0, "its own width holds it");
     resize(&mut ui, own - 1, true);
     assert_eq!(counter.of(SHORT).total(), 1, "one pixel less wraps it");
-    set_reuse_paragraph_at_same_layout_width(false);
+    reuse_at_same_width(ui.host(), false);
 }

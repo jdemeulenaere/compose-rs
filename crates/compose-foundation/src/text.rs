@@ -147,26 +147,11 @@ pub(crate) fn height_of_lines(scope: &mut MeasureScope<'_>, style: &TextStyle, l
     first.saturating_add(next.saturating_mul(lines.min(i32::MAX as u32) as i32 - 1))
 }
 
-thread_local! {
-    static REUSE_PARAGRAPH_AT_SAME_LAYOUT_WIDTH: std::cell::Cell<bool> =
-        const { std::cell::Cell::new(false) };
-}
-
-/// Turns on a compose-rs-only optimization, off by default (D551), for the texts measured on
-/// this thread: a text keeps its paragraph when new constraints change its width bounds but not
-/// the width Compose's `finalMaxWidth` would lay it out at (the text's own width, kept in the
-/// constraints), so a text that fits keeps its layout while its container's width changes.
-/// Compose lays such a text out again ([`new_layout_will_be_different`]). A switch until the
-/// optimizations' per-host flags take it over: [`reuse_paragraph_at_same_layout_width`] is the
-/// one place it's read.
-pub fn set_reuse_paragraph_at_same_layout_width(enabled: bool) {
-    REUSE_PARAGRAPH_AT_SAME_LAYOUT_WIDTH.with(|flag| flag.set(enabled));
-}
-
-/// Whether [`set_reuse_paragraph_at_same_layout_width`] turned the optimization on (off by
-/// default: Compose's rule).
-pub fn reuse_paragraph_at_same_layout_width() -> bool {
-    REUSE_PARAGRAPH_AT_SAME_LAYOUT_WIDTH.with(std::cell::Cell::get)
+/// Whether the host keeps a text's paragraph at the same layout width (D551).
+fn reuses_at_same_width(scope: &MeasureScope<'_>) -> bool {
+    scope
+        .optimizations()
+        .contains(compose_ui::platform::Optimization::REUSE_PARAGRAPH_AT_SAME_LAYOUT_WIDTH)
 }
 
 /// Whether `paragraph`, laid out for this text at constraints `old` (the last ones it was
@@ -174,9 +159,11 @@ pub fn reuse_paragraph_at_same_layout_width() -> bool {
 /// `MultiParagraphLayoutCache` decide (`newLayoutWillBeDifferent`): not for the same
 /// constraints; always for another minimum or maximum width; for another height only when the
 /// paragraph is taller than the new maximum height or had more lines than its maximum ("vertical
-/// clip changes"). With [`reuse_paragraph_at_same_layout_width`], another width bound keeps it
-/// when the width it's laid out at stays the same ([`same_layout_width`]).
+/// clip changes"). With `reuse_at_same_width` (the host's
+/// `Optimization::REUSE_PARAGRAPH_AT_SAME_LAYOUT_WIDTH`, off by default, D551), another width
+/// bound keeps it when the width it's laid out at stays the same ([`same_layout_width`]).
 pub(crate) fn new_layout_will_be_different(
+    reuse_at_same_width: bool,
     measurer: &mut dyn compose_ui::platform::TextMeasurer,
     paragraph: ParagraphHandle,
     options: TextLayoutOptions,
@@ -188,7 +175,7 @@ pub(crate) fn new_layout_will_be_different(
     }
     let same_width_bounds = new.min_width == old.min_width && new.max_width == old.max_width;
     if !same_width_bounds
-        && !(reuse_paragraph_at_same_layout_width()
+        && !(reuse_at_same_width
             && same_layout_width(&*measurer, paragraph, options, old, new))
     {
         return true;
@@ -434,6 +421,7 @@ impl TextNode {
             self.paragraph.filter(|_| self.density == Some(density) && self.direction == direction);
         let relaid = match (current, self.constraints) {
             (Some(paragraph), Some(old)) => new_layout_will_be_different(
+                reuses_at_same_width(scope),
                 scope.text_measurer(),
                 paragraph,
                 self.options,
@@ -484,11 +472,19 @@ impl TextNode {
         density: compose_ui::Density,
         direction: compose_ui::LayoutDirection,
     ) -> ParagraphHandle {
+        let reuse = reuses_at_same_width(scope);
         let measurer = scope.text_measurer();
         if let (Some(paragraph), Some(old)) = (self.paragraph, self.constraints)
             && self.density == Some(density)
             && self.direction == direction
-            && !new_layout_will_be_different(measurer, paragraph, self.options, old, constraints)
+            && !new_layout_will_be_different(
+                reuse,
+                measurer,
+                paragraph,
+                self.options,
+                old,
+                constraints,
+            )
         {
             return paragraph;
         }
@@ -496,6 +492,7 @@ impl TextNode {
             && probe.density == density
             && probe.direction == direction
             && !new_layout_will_be_different(
+                reuse,
                 measurer,
                 probe.paragraph,
                 self.options,

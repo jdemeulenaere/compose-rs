@@ -3,12 +3,20 @@
 
 use std::time::Duration;
 
-use compose::foundation::set_reuse_paragraph_at_same_layout_width;
 use compose::runtime::platform;
 use compose::test::*;
 use compose::ui::platform::{FixedTextMeasurer, UiHost};
 use compose::ui::{Density, IntSize};
 use compose_rs_feed::resize::*;
+
+
+/// Turns compose-rs's `REUSE_PARAGRAPH_AT_SAME_LAYOUT_WIDTH` on or off on `host` (D551).
+fn reuse_at_same_width(host: &mut UiHost, on: bool) {
+    let optimizations = host
+        .optimizations()
+        .with(compose::ui::platform::Optimization::REUSE_PARAGRAPH_AT_SAME_LAYOUT_WIDTH, on);
+    host.set_optimizations(optimizations);
+}
 
 /// The screen on a phone-sized host, its texts' layouts counted; 30 frames 16 ms apart.
 fn frames(reuse: bool) -> (UiHost, TextLayoutCounter) {
@@ -16,14 +24,14 @@ fn frames(reuse: bool) -> (UiHost, TextLayoutCounter) {
     let (measurer, counter) = CountingTextMeasurer::new(FixedTextMeasurer::new());
     let mut host = UiHost::new(IntSize::new(1008, 2244), Density::new(2.25), Box::new(measurer));
     host.set_content(ResizeScreen);
-    set_reuse_paragraph_at_same_layout_width(reuse);
+    reuse_at_same_width(&mut host, reuse);
     host.frame();
     counter.clear();
     for _ in 0..30 {
         platform::advance_clock(Duration::from_millis(16));
         host.frame();
     }
-    set_reuse_paragraph_at_same_layout_width(false);
+    reuse_at_same_width(&mut host, false);
     (host, counter)
 }
 

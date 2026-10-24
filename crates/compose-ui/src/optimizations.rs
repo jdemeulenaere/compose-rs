@@ -53,9 +53,25 @@ impl Optimization {
         summary: "report the frames' work to a hint session of compose-rs's own (Android)",
     };
 
+    /// A text keeps its paragraph when new constraints change its width bounds but not the
+    /// width Compose's `finalMaxWidth` would lay it out at (the text's own width, kept in the
+    /// constraints), so a text that fits keeps its layout while its container's width changes.
+    /// Compose lays such a text out again (`newLayoutWillBeDifferent`). Off by default (D551).
+    pub const REUSE_PARAGRAPH_AT_SAME_LAYOUT_WIDTH: Optimization = Optimization {
+        bit: 2,
+        name: "reuse_paragraph_at_same_layout_width",
+        default: false,
+        // Read while measuring: what's laid out from then on follows it.
+        draws: false,
+        summary: "keep a text's paragraph when the width it's laid out at stays the same",
+    };
+
     /// Every optimization, by bit.
-    pub const ALL: &'static [Optimization] =
-        &[Optimization::SINGLE_DRAWING_FADE, Optimization::PERFORMANCE_HINT];
+    pub const ALL: &'static [Optimization] = &[
+        Optimization::SINGLE_DRAWING_FADE,
+        Optimization::PERFORMANCE_HINT,
+        Optimization::REUSE_PARAGRAPH_AT_SAME_LAYOUT_WIDTH,
+    ];
 
     /// Its bit in [`Optimizations::bits`].
     pub const fn mask(self) -> u64 {
@@ -194,11 +210,14 @@ mod tests {
             Ok(Optimizations::NONE.with(fade, true))
         );
         assert_eq!(
-            Optimizations::parse("all, -performance_hint"),
+            Optimizations::parse("single_drawing_fade, performance_hint, -performance_hint"),
             Ok(Optimizations::NONE.with(fade, true))
         );
         assert!(Optimizations::parse("faster").is_err());
         assert_eq!(Optimizations::from_bits(u64::MAX), Optimizations::all());
-        assert_eq!(format!("{:?}", Optimizations::all()), "Optimizations(single_drawing_fade,performance_hint)");
+        assert_eq!(
+            format!("{:?}", Optimizations::all()),
+            "Optimizations(single_drawing_fade,performance_hint,reuse_paragraph_at_same_layout_width)"
+        );
     }
 }

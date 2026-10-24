@@ -65,7 +65,6 @@ pub use scrollbar::{
 pub use shape::{CIRCLE_SHAPE, RoundedCornerShape, RoundedCorners};
 pub use text::{
     BasicAnnotatedText, BasicText, DisableSelection, LOCAL_SELECTION_DISABLED, SelectionContainer,
-    reuse_paragraph_at_same_layout_width, set_reuse_paragraph_at_same_layout_width,
 };
 pub use text_field::{BasicTextField, inner_text_field_only};
 pub use text_input::{

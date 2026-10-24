@@ -110,6 +110,12 @@ impl MeasureScope<'_> {
         self.tree.density
     }
 
+    /// compose-rs's optimizations beyond Compose's the host uses (`UiHost::set_optimizations`,
+    /// D520): for measuring code with one (a text's `REUSE_PARAGRAPH_AT_SAME_LAYOUT_WIDTH`).
+    pub fn optimizations(&self) -> crate::optimizations::Optimizations {
+        self.tree.optimizations
+    }
+
     /// The node being measured: what a lazy list premeasures its next items under
     /// (`PrefetchRequestScope::premeasure`).
     pub fn node_id(&self) -> NodeId {

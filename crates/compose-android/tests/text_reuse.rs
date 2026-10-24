@@ -385,6 +385,15 @@ fn Cases() {
     });
 }
 
+
+/// Turns compose-rs's `REUSE_PARAGRAPH_AT_SAME_LAYOUT_WIDTH` on or off on `host` (D551).
+fn reuse_at_same_width(host: &mut compose_ui::platform::UiHost, on: bool) {
+    let optimizations = host
+        .optimizations()
+        .with(compose_ui::platform::Optimization::REUSE_PARAGRAPH_AT_SAME_LAYOUT_WIDTH, on);
+    host.set_optimizations(optimizations);
+}
+
 fn counted(width: i32) -> (ComposeTestRule, TextLayoutCounter, Model) {
     let model = Model::default();
     let (measurer, counter) = CountingTextMeasurer::new(AndroidTextMeasurer::new(model.clone()));
@@ -393,10 +402,10 @@ fn counted(width: i32) -> (ComposeTestRule, TextLayoutCounter, Model) {
 }
 
 fn resize(ui: &mut ComposeTestRule, width: i32, reuse: bool) {
-    set_reuse_paragraph_at_same_layout_width(reuse);
+    reuse_at_same_width(ui.host(), reuse);
     ui.host().resize(IntSize::new(width, 2000));
     ui.wait_for_idle();
-    set_reuse_paragraph_at_same_layout_width(false);
+    reuse_at_same_width(ui.host(), false);
 }
 
 #[test]

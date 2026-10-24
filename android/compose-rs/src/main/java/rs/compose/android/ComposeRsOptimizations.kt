@@ -24,6 +24,13 @@ object ComposeRsOptimizations {
      */
     const val PERFORMANCE_HINT = 1L shl 1
 
+    /**
+     * A text keeps its paragraph when new constraints change its width bounds but not the
+     * width it's laid out at (its own, kept in the constraints), where Compose lays it out
+     * again. Off by default (D551).
+     */
+    const val REUSE_PARAGRAPH_AT_SAME_LAYOUT_WIDTH = 1L shl 2
+
     /** None: the rendering Compose does. */
     const val NONE = 0L
 
@@ -31,7 +38,7 @@ object ComposeRsOptimizations {
     const val DEFAULT = PERFORMANCE_HINT
 
     /** Every one. */
-    const val ALL = SINGLE_DRAWING_FADE or PERFORMANCE_HINT
+    const val ALL = SINGLE_DRAWING_FADE or PERFORMANCE_HINT or REUSE_PARAGRAPH_AT_SAME_LAYOUT_WIDTH
 
     /**
      * The set a list names: `none`, `all`, `default`, or names separated by commas (as Rust's,

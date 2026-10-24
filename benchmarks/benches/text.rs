@@ -7,7 +7,6 @@
 
 use std::time::{Duration, Instant};
 
-use compose::foundation::set_reuse_paragraph_at_same_layout_width;
 use compose::runtime::platform;
 use compose::test::{CountingTextMeasurer, TextLayoutCounter};
 use compose::ui::platform::UiHost;
@@ -31,6 +30,15 @@ fn report(name: &str, mut samples: Vec<Duration>, layouts: usize) {
     );
 }
 
+
+/// Turns compose-rs's `REUSE_PARAGRAPH_AT_SAME_LAYOUT_WIDTH` on or off on `host` (D551).
+fn reuse_at_same_width(host: &mut UiHost, on: bool) {
+    let optimizations = host
+        .optimizations()
+        .with(compose::ui::platform::Optimization::REUSE_PARAGRAPH_AT_SAME_LAYOUT_WIDTH, on);
+    host.set_optimizations(optimizations);
+}
+
 fn resize(criterion: &mut Criterion) {
     let contents: [(&str, fn()); 2] = [
         ("grid", compose_rs_feed::resize::ResizeGrid),
@@ -45,7 +53,7 @@ fn resize(criterion: &mut Criterion) {
                 UiHost::new(IntSize::new(1008, 2244), Density::new(2.25), Box::new(measurer));
             host.set_content(content);
             host.frame();
-            set_reuse_paragraph_at_same_layout_width(reuse);
+            reuse_at_same_width(&mut host, reuse);
             let mut frame_index = 0;
             let mut frame = |host: &mut UiHost| {
                 frame_index += 1;
@@ -67,7 +75,7 @@ fn resize(criterion: &mut Criterion) {
             counter.clear();
             let samples = (0..1008).map(|_| frame(&mut host)).collect();
             report(&title, samples, counter.total());
-            set_reuse_paragraph_at_same_layout_width(false);
+            reuse_at_same_width(&mut host, false);
         }
     }
 }

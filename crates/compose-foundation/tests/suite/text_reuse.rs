@@ -1,6 +1,6 @@
 //! When a text keeps its paragraph as its constraints change (D550, D551): Compose's rule by
 //! default (`newLayoutWillBeDifferent`: a new width bound lays it out again, a new height only
-//! when it clips the paragraph), and with `set_reuse_paragraph_at_same_layout_width`, a new
+//! when it clips the paragraph), and with the host's `REUSE_PARAGRAPH_AT_SAME_LAYOUT_WIDTH`, a new
 //! width bound only when the width the text is laid out at changes. Each frame of a host with
 //! the optimization must draw what a host without it draws.
 
@@ -69,6 +69,15 @@ pub(crate) fn Cases() {
     });
 }
 
+
+/// Turns compose-rs's `REUSE_PARAGRAPH_AT_SAME_LAYOUT_WIDTH` on or off on `host` (D551).
+fn reuse_at_same_width(host: &mut compose_ui::platform::UiHost, on: bool) {
+    let optimizations = host
+        .optimizations()
+        .with(compose_ui::platform::Optimization::REUSE_PARAGRAPH_AT_SAME_LAYOUT_WIDTH, on);
+    host.set_optimizations(optimizations);
+}
+
 /// A rule over the fixed-advance measurer (7 px a character), counting layouts by text.
 fn counted(width: i32) -> (ComposeTestRule, TextLayoutCounter) {
     let (measurer, counter) = CountingTextMeasurer::new(FixedTextMeasurer::new());
@@ -78,10 +87,10 @@ fn counted(width: i32) -> (ComposeTestRule, TextLayoutCounter) {
 
 /// Resizes `ui` to `width` and runs its frames with the optimization `reuse` on or off.
 fn resize(ui: &mut ComposeTestRule, width: i32, reuse: bool) {
-    set_reuse_paragraph_at_same_layout_width(reuse);
+    reuse_at_same_width(ui.host(), reuse);
     ui.host().resize(IntSize::new(width, 2000));
     ui.wait_for_idle();
-    set_reuse_paragraph_at_same_layout_width(false);
+    reuse_at_same_width(ui.host(), false);
 }
 
 /// Widths growing, shrinking past every text's own width, and back, once twice in a row.
@@ -184,17 +193,22 @@ fn a_new_height_lays_a_text_out_again_only_when_it_clips_it_as_compose() {
 }
 
 #[test]
-fn the_optimization_is_off_by_default_and_per_thread() {
-    assert!(!reuse_paragraph_at_same_layout_width());
-    set_reuse_paragraph_at_same_layout_width(true);
-    assert!(std::thread::spawn(|| !reuse_paragraph_at_same_layout_width()).join().unwrap());
-    set_reuse_paragraph_at_same_layout_width(false);
+fn the_optimization_is_off_by_default_and_per_host() {
+    use compose_ui::platform::{Optimization, Optimizations};
+    let flag = Optimization::REUSE_PARAGRAPH_AT_SAME_LAYOUT_WIDTH;
+    assert!(!Optimizations::defaults().contains(flag));
+    let (mut ui, _) = counted(400);
+    let (mut other, _) = counted(400);
+    assert!(!ui.host().optimizations().contains(flag));
+    reuse_at_same_width(ui.host(), true);
+    assert!(ui.host().optimizations().contains(flag));
+    assert!(!other.host().optimizations().contains(flag));
 }
 
 #[test]
 fn a_new_density_or_direction_lays_the_text_out_anew_even_with_the_optimization() {
     let (mut ui, counter) = counted(400);
-    set_reuse_paragraph_at_same_layout_width(true);
+    reuse_at_same_width(ui.host(), true);
     counter.clear();
     ui.host().set_density(Density::new(2.0));
     ui.wait_for_idle();
@@ -203,7 +217,7 @@ fn a_new_density_or_direction_lays_the_text_out_anew_even_with_the_optimization(
     ui.host().set_layout_direction(compose_ui::LayoutDirection::Rtl);
     ui.wait_for_idle();
     assert!(counter.of(SHORT).fresh >= 1);
-    set_reuse_paragraph_at_same_layout_width(false);
+    reuse_at_same_width(ui.host(), false);
 }
 
 #[composable]
