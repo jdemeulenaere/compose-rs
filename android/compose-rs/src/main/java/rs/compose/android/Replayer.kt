@@ -351,7 +351,10 @@ internal class Replayer(private val text: TextMeasurer) {
         height = canvas.height.coerceAtLeast(1)
         recordingGroup = null
         skipNewMasks = recent(newPathFrame)
+        layersRetired = false
         replay(canvas, buffer, buffer.limit())
+        // A frame of resource changes and a `LAYERS` section alone.
+        if (!layersRetired) retireLayers(buffer, buffer.limit())
         if (flushLayers) {
             flushLayers = false
             // Its recording changes, so its layer is drawn again, and flushed before the frame.
@@ -380,30 +383,66 @@ internal class Replayer(private val text: TextMeasurer) {
                 iterator.remove()
                 if (group.layered) resetLayer(group.node)
                 pool.recycle(group.node)
-            } else if (group.layered && group.layerFrame != frame) {
-                // No longer a layer. (Properties set after drawing the node still apply: the
-                // render thread reads them when the frame is done.)
-                resetLayer(group.node)
-                group.setPosition(width, height)
-                group.layered = false
-                group.outlineClips = true
-                if (group.clipPath != null) {
-                    group.clipPath = null
-                    group.version = -1L
-                }
-                if (group.elevated) {
-                    group.elevated = false
-                    group.drawnBy?.version = -1L
-                }
             }
         }
     }
+
+    /**
+     * The groups no longer layers this frame (in neither its `LAYERS` section nor its `KEPT`
+     * one) lose their layer's properties, before the frame's records are read ([at]: where
+     * they start, after the `LAYERS` section if any): a record recorded again for it (a path
+     * clip its recording held, a reordering section its parent's did) is recorded in this
+     * frame, not the next, which an idle screen may never draw. (Properties set while the frame
+     * is replayed still apply: the render thread reads them when it's done.)
+     */
+    private fun retireLayers(buffer: ByteBuffer, at: Int) {
+        layersRetired = true
+        // The kept groups' layers stay (D380): their keys, past the records.
+        var position = at
+        val limit = buffer.limit()
+        while (position + 21 <= limit && buffer.get(position).toInt() == GROUP) {
+            position += 21 + buffer.getInt(position + 17)
+        }
+        if (position + 5 <= limit && buffer.get(position).toInt() == KEPT) {
+            val count = buffer.getInt(position + 1)
+            for (index in 0 until count) {
+                groups[buffer.getLong(position + 5 + index * KEPT_ENTRY_BYTES)]?.layerFrame = frame
+            }
+        }
+        for (group in groups.values) {
+            if (!group.layered || group.layerFrame == frame) continue
+            resetLayer(group.node)
+            group.setPosition(width, height)
+            group.layered = false
+            group.outlineClips = true
+            if (group.clipPath != null) {
+                // Its recording clips to its old outline: recorded again from this frame's record.
+                group.clipPath = null
+                group.version = -1L
+            }
+            if (group.elevated) {
+                group.elevated = false
+                group.drawnBy?.version = -1L
+            }
+        }
+    }
+
+    /** This frame's no-longer layers were retired ([retireLayers]). */
+    private var layersRetired = false
 
     /** Replays the operations up to [end] on [canvas], restoring what they saved. */
     private fun replay(canvas: Canvas, buffer: ByteBuffer, end: Int) {
         val start = canvas.saveCount
         while (buffer.position() < end && !unreadable) {
-            when (buffer.get().toInt()) {
+            val tag = buffer.get().toInt()
+            // Where the frame's records and operations start: after its resource changes and its
+            // `LAYERS` section.
+            if (!layersRetired && hardware && !recordingAhead && recordingGroup == null &&
+                tag != LAYERS && (tag < DEFINE_PATH || tag > DROP_IMAGE)
+            ) {
+                retireLayers(buffer, buffer.position() - 1)
+            }
+            when (tag) {
                 SAVE -> canvas.save()
                 RESTORE -> if (canvas.saveCount > start) canvas.restore()
                 TRANSLATE -> canvas.translate(buffer.float(), buffer.float())
@@ -841,7 +880,8 @@ internal class Replayer(private val text: TextMeasurer) {
             val byPath = clip && !group.outlineClips
             node.setClipToOutline(clip && !byPath)
             if (byPath || group.clipPath != null) {
-                group.clipPath = if (byPath) Path(outlinePath) else null
+                // Its own outline (the scratch path may hold another layer's).
+                group.clipPath = if (byPath) outlinePathOf(buffer, at) else null
                 group.version = -1L
             }
         }
@@ -916,6 +956,18 @@ internal class Replayer(private val text: TextMeasurer) {
         outline.alpha = alpha
         node.setOutline(outline)
         return outline.canClip()
+    }
+
+    /** The outline of the `LAYERS` entry at [at] (after its key), a rounded rectangle, as a path. */
+    private fun outlinePathOf(buffer: ByteBuffer, at: Int): Path {
+        rect.set(
+            buffer.floatAt(at + ENTRY_OUTLINE_BOUNDS),
+            buffer.floatAt(at + ENTRY_OUTLINE_BOUNDS + 4),
+            buffer.floatAt(at + ENTRY_OUTLINE_BOUNDS + 8),
+            buffer.floatAt(at + ENTRY_OUTLINE_BOUNDS + 12),
+        )
+        readRadii(buffer, at + ENTRY_OUTLINE_RADII)
+        return Path().apply { addRoundRect(rect, radii, Path.Direction.CCW) }
     }
 
     /** The 4 corner radii at [at] as 8 floats, into [radii]. */

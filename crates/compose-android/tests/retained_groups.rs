@@ -1943,3 +1943,385 @@ fn review_the_performance_hint_toggle_draws_nothing_again() {
     assert_eq!(groups(&read(&after).1), groups(&read(&before).1), "versions changed");
     assert_eq!(serialized.cache.written(), 0, "records written again");
 }
+
+// ---- Randomized incremental frames against fresh hosts (D522's review) ----------------------
+
+mod randomized_inner_layers {
+    use super::*;
+    use std::cell::RefCell;
+
+    /// Labels of live paragraphs: text and the color of the style each was laid out or restyled in.
+    type Labels = Rc<RefCell<HashMap<u64, String>>>;
+
+    struct Labeled {
+        inner: FixedTextMeasurer,
+        labels: Labels,
+    }
+
+    impl TextMeasurer for Labeled {
+        fn layout(
+            &mut self,
+            text: &str,
+            style: &TextStyle,
+            options: TextLayoutOptions,
+            constraints: Constraints,
+            density: &Density,
+        ) -> ParagraphHandle {
+            let handle = self.inner.layout(text, style, options, constraints, density);
+            self.labels.borrow_mut().insert(handle.0, format!("{text:?} {:?}", style.color));
+            handle
+        }
+        fn metrics(&self, paragraph: ParagraphHandle) -> ParagraphMetrics {
+            self.inner.metrics(paragraph)
+        }
+        fn did_exceed_max_lines(&self, paragraph: ParagraphHandle) -> bool {
+            self.inner.did_exceed_max_lines(paragraph)
+        }
+        fn max_intrinsic_width(&self, paragraph: ParagraphHandle) -> Option<f32> {
+            self.inner.max_intrinsic_width(paragraph)
+        }
+        fn relayout(
+            &mut self,
+            paragraph: ParagraphHandle,
+            constraints: Constraints,
+        ) -> Option<ParagraphHandle> {
+            let new = self.inner.relayout(paragraph, constraints)?;
+            let label = self.labels.borrow().get(&paragraph.0).cloned();
+            if let Some(label) = label {
+                self.labels.borrow_mut().insert(new.0, label);
+            }
+            Some(new)
+        }
+        fn restyle(&mut self, paragraph: ParagraphHandle, style: &TextStyle) -> Option<ParagraphHandle> {
+            let text = self.inner.text(paragraph).to_string();
+            let new = self.inner.restyle(paragraph, style)?;
+            let mut labels = self.labels.borrow_mut();
+            labels.remove(&paragraph.0);
+            labels.insert(new.0, format!("{text:?} {:?}", style.color));
+            Some(new)
+        }
+        fn hit_test(&self, paragraph: ParagraphHandle, position: Offset) -> TextPosition {
+            self.inner.hit_test(paragraph, position)
+        }
+        fn cursor_rect(&self, paragraph: ParagraphHandle, offset: usize) -> Rect {
+            self.inner.cursor_rect(paragraph, offset)
+        }
+        fn text(&self, paragraph: ParagraphHandle) -> &str {
+            self.inner.text(paragraph)
+        }
+        fn release(&mut self, paragraph: ParagraphHandle) {
+            self.labels.borrow_mut().remove(&paragraph.0);
+            self.inner.release(paragraph);
+        }
+    }
+
+    fn labeled_host() -> (UiHost, Labels) {
+        let labels: Labels = Rc::default();
+        let host = UiHost::new(
+            IntSize::new(200, 200),
+            Density::default(),
+            Box::new(Labeled { inner: FixedTextMeasurer::new(), labels: labels.clone() }),
+        );
+        (host, labels)
+    }
+
+    /// The flattened dump with each paragraph handle replaced by its label (or RELEASED).
+    fn normalized(list: &FlatDisplayList, labels: &Labels) -> String {
+        let labels = labels.borrow();
+        list.dump()
+            .lines()
+            .map(|line| {
+                let trimmed = line.trim_start();
+                if let Some(rest) = trimmed.strip_prefix("paragraph ") {
+                    let (handle, at) = rest.split_once(' ').unwrap();
+                    let handle: u64 = handle.parse().unwrap();
+                    let label = labels.get(&handle).cloned().unwrap_or_else(|| "RELEASED".into());
+                    format!("{}paragraph {label} {at}", &line[..line.len() - trimmed.len()])
+                } else {
+                    line.to_string()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn tint(value: i32) -> Color {
+        Color::from_argb(0xFF00_0000 | (value as u32).wrapping_mul(0x0012_3457) & 0x00FF_FFFF)
+    }
+
+    const KNOBS: usize = 16;
+    type Knobs = [MutableState<i32>; KNOBS];
+
+    fn corners(a: f32, b: f32, c: f32, d: f32) -> Shape {
+        Shape::Rounded([
+            CornerSize::Dp(a.dp()),
+            CornerSize::Dp(b.dp()),
+            CornerSize::Dp(c.dp()),
+            CornerSize::Dp(d.dp()),
+        ])
+    }
+
+    fn scene(k: Knobs, state: compose_foundation::LazyListState, path: Path) {
+        use compose_foundation::{layout::*, *};
+        Column!(modifier = Modifier.repaint_boundary(), {
+            let path = path.clone();
+            // Nested inner layers (clip, then a layer with a toggled shadow), drawings between,
+            // a measure-time read sizing and moving children inside them.
+            Layout(
+                painted(move || tint(k[0].get()))
+                    .clip(corners(4.0, 0.0, 2.0, 1.0))
+                    .then(painted(move || tint(k[1].get() + 7)))
+                    .graphics_layer(move |layer| {
+                        layer.alpha = 0.5 + (k[2].get() % 5) as f32 / 10.0;
+                        layer.shadow_elevation = (k[3].get() % 2) as f32 * 2.0;
+                    })
+                    .then(painted(move || tint(k[4].get() + 3)))
+                    .padding((k[5].get() % 3).dp())
+                    .size((60.dp(), 50.dp())),
+                measure_policy(move |scope, measurables, constraints| {
+                    let shift = k[6].get();
+                    let mut y = 0;
+                    for (index, &measurable) in measurables.iter().enumerate() {
+                        let width = 5 + ((shift + index as i32) % 4) * 3;
+                        let placeable = scope.measure(
+                            measurable,
+                            Constraints::fixed(width, 4 + (shift % 2) * 2),
+                        );
+                        scope.place(&placeable, (shift % 3) * index as i32, y);
+                        y += placeable.height;
+                    }
+                    scope.layout(constraints.max_width, constraints.max_height)
+                }),
+                callback(move || {
+                    Leaf(painted(move || tint(k[7].get())));
+                    if k[8].get() % 2 == 0 {
+                        Leaf(painted(|| Color::GREEN));
+                    }
+                    Leaf(Modifier.z_index((k[9].get() % 3) as f32).then(painted(|| Color::BLUE)));
+                    Leaf(Modifier.z_index(1.0).then(painted(|| Color::RED)));
+                    Leaf(
+                        Modifier
+                            .background(Color::WHITE)
+                            .clip(corners(1.0, 2.0, 0.0, 0.0))
+                            .then(painted(move || tint(k[10].get()))),
+                    );
+                    Leaf(
+                        Modifier
+                            .repaint_boundary()
+                            .then(painted(move || tint(k[11].get())))
+                            .alpha(0.5)
+                            .then(painted(move || tint(k[12].get()))),
+                    );
+                    let path = path.clone();
+                    Leaf(Modifier.background(Color::BLACK).clip_to_bounds().draw_behind(move |scope| {
+                        path.reset();
+                        path.move_to(0.0, 0.0);
+                        for line in 0..(k[12].get() % 4 + 1) {
+                            path.line_to(line as f32, 3.0);
+                        }
+                        scope.draw_path(&path, Paint::stroke(Color::BLACK, 1.0));
+                    }));
+                }),
+            );
+            // A text restyled (paint only) or changed inside an inner layer.
+            BasicText!(
+                "text {}",
+                k[13].get() % 2,
+                modifier = Modifier.background(Color::BLACK).clip_to_bounds(),
+                style = TextStyle { color: tint(k[14].get()), ..TextStyle::DEFAULT },
+            );
+            // A lazy list whose clip is an inner layer, items with inner layers.
+            LazyColumn!(
+                modifier = Modifier.background(Color::GREEN).clip_to_bounds().size((100.dp(), 60.dp())),
+                state = state,
+                |scope: LazyListScope| {
+                    scope.items(80, move |index| {
+                        let index = index as i32;
+                        Column!(
+                            modifier = painted(move || tint(index + k[15].get()))
+                                .clip(corners(3.0, 0.0, 0.0, 3.0))
+                                .then(painted(move || tint(k[0].get() * index))),
+                            {
+                                BasicText!(
+                                    "item {index}",
+                                    style = TextStyle {
+                                        color: tint(k[14].get() + index),
+                                        ..TextStyle::DEFAULT
+                                    },
+                                );
+                                Leaf(
+                                    Modifier
+                                        .background(Color::RED)
+                                        .graphics_layer(move |layer| {
+                                            layer.alpha = (k[2].get() % 10) as f32 / 10.0;
+                                        })
+                                        .then(painted(move || tint(k[1].get() + index)))
+                                        .size((10.dp(), ((k[5].get() + index) % 3 + 4).dp())),
+                                );
+                                if (index + k[8].get()) % 3 == 0 {
+                                    Leaf(Modifier.shadow((k[3].get() % 2 * 2).dp()).size(5.dp()));
+                                }
+                            }
+                        );
+                    });
+                }
+            );
+        });
+    }
+
+    fn fresh(values: [i32; KNOBS], index: usize, offset: i32, rtl: bool) -> String {
+        let owned: Vec<OwnedState<i32>> = values.iter().map(|value| mutable_state_of(*value)).collect();
+        let knobs: Knobs = std::array::from_fn(|i| owned[i].handle());
+        let state = compose_foundation::LazyListState::new(index, offset);
+        let given = *state;
+        let (mut host, labels) = labeled_host();
+        if rtl {
+            host.set_layout_direction(LayoutDirection::Rtl);
+        }
+        let path = Path::new();
+        host.set_content(move || scene(knobs, given, path.clone()));
+        host.frame();
+        let dump = normalized(&host.display_list(), &labels);
+        drop(host);
+        drop(state);
+        drop(owned);
+        dump
+    }
+
+    thread_local! {
+        static KEPT_SEEN: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+        static INNER_SEEN: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+        static AHEAD_SEEN: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    }
+
+    struct Rng(u64);
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            self.0
+        }
+        fn below(&mut self, n: u64) -> u64 {
+            self.next() % n
+        }
+    }
+
+    fn run(seed: u64, steps: usize) {
+        let mut rng = Rng(seed);
+        let mut values = [0i32; KNOBS];
+        let owned: Vec<OwnedState<i32>> = values.iter().map(|value| mutable_state_of(*value)).collect();
+        let knobs: Knobs = std::array::from_fn(|i| owned[i].handle());
+        let state = compose_foundation::LazyListState::new(0, 0);
+        let given = *state;
+        let (mut host, labels) = labeled_host();
+        host.set_keep_unplaced_groups(true);
+        let path = Path::new();
+        host.set_content(move || scene(knobs, given, path.clone()));
+        let optimizations = Optimizations::defaults();
+        let mut serialized = Serialized {
+            host,
+            resources: Resources::default(),
+            cache: GroupCache::new(optimizations),
+            out: Writer::default(),
+        };
+        let mut seen: HashMap<(u64, u64), Vec<u8>> = HashMap::new();
+        let mut replay = PathReplay::default();
+        let mut rtl = false;
+        let check_records = |bytes: &[u8], seen: &mut HashMap<(u64, u64), Vec<u8>>, what: &str| {
+            for (group, content) in records(bytes) {
+                if let Some(before) = seen.get(&group) {
+                    assert_eq!(*before, content, "seed {seed} {what}: {group:x?} other bytes, same version");
+                }
+                seen.insert(group, content);
+            }
+        };
+        let bytes = serialized.frame();
+        replay.take(&mut serialized);
+        check_records(&bytes, &mut seen, "first");
+        for step in 0..steps {
+            // One to three changes a frame.
+            for _ in 0..=rng.below(3) {
+                match rng.below(10) {
+                    0..=5 => {
+                        let knob = rng.below(KNOBS as u64) as usize;
+                        values[knob] = rng.below(12) as i32;
+                        owned[knob].set(values[knob]);
+                    }
+                    6 | 7 => {
+                        state.scroll_by(rng.below(90) as f32 - 40.0);
+                    }
+                    8 => {
+                        rtl = !rtl;
+                        serialized.host.set_layout_direction(if rtl {
+                            LayoutDirection::Rtl
+                        } else {
+                            LayoutDirection::Ltr
+                        });
+                    }
+                    _ => {
+                        for written in serialized.prefetch_and_write_ahead() {
+                            AHEAD_SEEN.with(|c| c.set(c.get() + 1));
+                            check_records(&written, &mut seen, &format!("step {step} ahead"));
+                        }
+                    }
+                }
+            }
+            let mut bytes = serialized.frame();
+            replay.take(&mut serialized);
+            check_records(&bytes, &mut seen, &format!("step {step}"));
+            let mut settles = 0;
+            while serialized.host.needs_frame() && settles < 8 {
+                settles += 1;
+                bytes = serialized.frame();
+                replay.take(&mut serialized);
+                check_records(&bytes, &mut seen, &format!("step {step} settling"));
+            }
+            let cached = without_kept_records(bytes.clone());
+            assert_eq!(
+                unversioned_bytes(&cached),
+                unversioned_bytes(&serialized.fresh()),
+                "seed {seed} step {step}: cache"
+            );
+            let _ = read(&bytes);
+            KEPT_SEEN.with(|c| c.set(c.get() + kept_entries(&bytes).len()));
+            INNER_SEEN.with(|c| c.set(c.get() + records(&bytes).keys().filter(|(k, _)| k & (1 << 63) != 0).count()));
+            let incremental = normalized(&serialized.host.display_list(), &labels);
+            assert!(!incremental.contains("RELEASED"), "seed {seed} step {step}: a released paragraph drawn");
+            let expected = fresh(
+                values,
+                state.first_visible_item_index(),
+                state.first_visible_item_scroll_offset(),
+                rtl,
+            );
+            if incremental != expected {
+                let dir = "/private/tmp/claude-501/-Users-jdemeulenaere-Development-compose-rs/7d277bf3-2730-4157-9603-1c5cd0f12d15/scratchpad/rev_fix6";
+                std::fs::write(format!("{dir}/incremental.txt"), &incremental).unwrap();
+                std::fs::write(format!("{dir}/fresh.txt"), &expected).unwrap();
+                let a: Vec<&str> = incremental.lines().collect();
+                let b: Vec<&str> = expected.lines().collect();
+                let first = a.iter().zip(&b).position(|(x, y)| x != y).unwrap_or(a.len().min(b.len()));
+                panic!(
+                    "seed {seed} step {step} values {values:?} rtl {rtl}: differs at line {first}\n--- incremental\n{}\n--- fresh\n{}",
+                    a[first.saturating_sub(8)..(first + 5).min(a.len())].join("\n"),
+                    b[first.saturating_sub(8)..(first + 5).min(b.len())].join("\n"),
+                );
+            }
+        }
+    }
+
+    /// Randomized frames (a review's): each incremental frame writes what a fresh host in the
+    /// same state writes. `INNER_LAYER_SEEDS` and `INNER_LAYER_STEPS` run more (40 × 120 by
+    /// default, to keep `cargo test` fast).
+    #[test]
+    fn incremental_frames_with_inner_layers_draw_what_fresh_hosts_do() {
+        let seeds: u64 = std::env::var("INNER_LAYER_SEEDS").ok().and_then(|s| s.parse().ok()).unwrap_or(40);
+        let steps: usize = std::env::var("INNER_LAYER_STEPS").ok().and_then(|s| s.parse().ok()).unwrap_or(120);
+        for seed in 1..=seeds {
+            run(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15), steps);
+        }
+        let (kept, inner, ahead) = (KEPT_SEEN.with(|c| c.get()), INNER_SEEN.with(|c| c.get()), AHEAD_SEEN.with(|c| c.get()));
+        eprintln!("kept entries {kept}, inner-layer records {inner}, items written ahead {ahead}");
+        assert!(kept > 0 && inner > 0 && ahead > 0);
+    }
+}

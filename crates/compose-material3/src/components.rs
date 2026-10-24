@@ -250,28 +250,58 @@ pub(crate) struct Elevations {
     pub disabled: Dp,
 }
 
-/// `target` reached as material3's `animateElevation` does: in 120 ms entering an interaction's
-/// elevation (`ElevationDefaults`' incoming spec), 150 ms going back to `default` (its outgoing
-/// one), at once when disabled.
-fn animated_elevation(target: Dp, default: Dp, enabled: bool) -> Dp {
-    use compose_animation::{AnimationSpec, Easing, TweenSpec};
-    let spec = if !enabled {
-        AnimationSpec::Tween(TweenSpec { duration_millis: 0, delay_millis: 0, easing: Easing::Linear })
-    } else if target != default {
-        AnimationSpec::Tween(TweenSpec {
-            duration_millis: 120,
-            delay_millis: 0,
-            easing: Easing::CubicBezier(0.0, 0.0, 0.2, 1.0),
-        })
+/// The interaction an elevation follows, as material3's `animateElevation` tells them apart.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum ElevationInteraction {
+    Press,
+    Hover,
+    Focus,
+}
+
+/// The elevation of a component in its interaction state, and the interaction it is that of
+/// (`None` at rest or disabled), as `interaction_elevation` picks it: a press, then a hover,
+/// then a focus, each only when its elevation differs from the default (so only those states
+/// are read, and compose again).
+fn elevation_and_interaction(
+    elevations: Elevations,
+    enabled: bool,
+    source: &compose_ui::MutableInteractionSource,
+) -> (Dp, Option<ElevationInteraction>) {
+    if !enabled {
+        return (elevations.disabled, None);
+    }
+    let default = elevations.default;
+    if elevations.pressed != default && source.is_pressed() {
+        (elevations.pressed, Some(ElevationInteraction::Press))
+    } else if elevations.hovered != default && source.is_hovered() {
+        (elevations.hovered, Some(ElevationInteraction::Hover))
+    } else if elevations.focused != default && source.is_focused() {
+        (elevations.focused, Some(ElevationInteraction::Focus))
     } else {
-        AnimationSpec::Tween(TweenSpec {
-            duration_millis: 150,
-            delay_millis: 0,
-            easing: Easing::CubicBezier(0.4, 0.0, 0.6, 1.0),
-        })
+        (default, None)
+    }
+}
+
+/// A component's elevation animated as material3 1.4's `animateElevation` does (read from its
+/// `ElevationDefaults`): to a new interaction's in 120 ms (`FastOutSlowInEasing`), back from a
+/// hover in 120 ms and from a press, a drag or a focus in 150 ms (`CubicBezierEasing(0.4, 0,
+/// 0.6, 1)`), at once with neither an interaction before nor one now (enabled or disabled).
+fn animated_elevation(elevations: Elevations, enabled: bool, source: &compose_ui::MutableInteractionSource) -> Dp {
+    use compose_animation::{AnimationSpec, Easing, FAST_OUT_SLOW_IN_EASING, TweenSpec};
+    let (target, interaction) = elevation_and_interaction(elevations, enabled, source);
+    let last = compose_runtime::remember(|| std::rc::Rc::new(std::cell::Cell::new(None)));
+    let previous = last.replace(interaction);
+    let tween = |duration_millis, easing| {
+        AnimationSpec::Tween(TweenSpec { duration_millis, delay_millis: 0, easing })
     };
-    compose_animation::animate_dp_as_state(target, spec, "ElevationAnimation", None)
-        .get()
+    let outgoing = Easing::CubicBezier(0.4, 0.0, 0.6, 1.0);
+    let spec = match (interaction, previous) {
+        (Some(_), _) => tween(120, FAST_OUT_SLOW_IN_EASING),
+        (None, Some(ElevationInteraction::Hover)) => tween(120, outgoing),
+        (None, Some(_)) => tween(150, outgoing),
+        (None, None) => compose_animation::snap(0),
+    };
+    compose_animation::animate_dp_as_state(target, spec, "ElevationAnimation", None).get()
 }
 
 /// A surface's body, as Compose's `Surface` overloads share: the container (clickable with
@@ -306,16 +336,7 @@ pub(crate) fn surface(
             // each frame of its animation, its layer there only while it has an elevation.
             let shadow_elevation = match click.elevations {
                 Some(elevations) => {
-                    let target = crate::button::interaction_elevation(
-                        click.enabled,
-                        elevations.default,
-                        elevations.pressed,
-                        elevations.focused,
-                        elevations.hovered,
-                        elevations.disabled,
-                        &click.interaction_source,
-                    );
-                    animated_elevation(target, elevations.default, click.enabled)
+                    animated_elevation(elevations, click.enabled, &click.interaction_source)
                 }
                 None => shadow_elevation,
             };
