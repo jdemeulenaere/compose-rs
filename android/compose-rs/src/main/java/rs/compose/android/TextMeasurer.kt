@@ -119,11 +119,31 @@ internal class TextMeasurer(
         paint.isStrikeThruText = style.decoration and 2 != 0
     }
 
-    /** A run's style over the paragraph's. */
-    private inner class RunSpan(private val style: PaintStyle) : MetricAffectingSpan() {
-        override fun updateDrawState(paint: TextPaint) = apply(paint, style)
+    /**
+     * A run's style over the paragraph's. Its color and decoration are the paragraph's paint's
+     * unless the run sets them ([ownColor], [ownDecoration]), so a paragraph drawn in a new paint
+     * ([restyle]) gives them to the runs that don't, as Compose's spans over its `TextPaint`.
+     */
+    private inner class RunSpan(
+        private val style: PaintStyle,
+        private val ownColor: Boolean,
+        private val ownDecoration: Boolean,
+    ) : MetricAffectingSpan() {
+        override fun updateDrawState(paint: TextPaint) = applyRun(paint)
 
-        override fun updateMeasureState(paint: TextPaint) = apply(paint, style)
+        override fun updateMeasureState(paint: TextPaint) = applyRun(paint)
+
+        private fun applyRun(paint: TextPaint) {
+            val color = paint.color
+            val underline = paint.isUnderlineText
+            val strike = paint.isStrikeThruText
+            apply(paint, style)
+            if (!ownColor) paint.color = color
+            if (!ownDecoration) {
+                paint.isUnderlineText = underline
+                paint.isStrikeThruText = strike
+            }
+        }
     }
 
     /**
@@ -133,36 +153,44 @@ internal class TextMeasurer(
      */
     private inner class Intrinsics(
         val content: CharSequence,
+        /** The paragraph's paint, and what of its style it holds. */
+        val paintStyle: PaintStyle,
         val paint: TextPaint,
         val direction: TextDirectionHeuristic,
         /** One line of left-to-right text's metrics (D330), or null. */
         val boring: BoringLayout.Metrics?,
         /** A line height in px over every line, or 0. */
         val lineHeight: Int,
-        letterSpaced: Boolean,
+        val letterSpaced: Boolean,
         val softWrap: Boolean,
         val maxLines: Int,
         val ellipsis: Boolean,
         /** 0 normal, 1 opposite, 2 center, 3 justify. */
         val align: Int,
-    ) {
         /** The boring line's width, as Compose's `maxIntrinsicWidth` takes it. */
-        val boringWidth = if (boring == null) 0f else intrinsicWidth(boring.width.toFloat(), letterSpaced)
-
+        val boringWidth: Float,
         /**
          * The text's own width, as Compose's `LayoutIntrinsics.maxIntrinsicWidth`: the boring
          * line's, else a measure of all of it, half a pixel wider with letter spacing
          * (b/173574230: else a StaticLayout can break the line it measured, or ellipsize it).
          * Measured once, at the first layout, as Compose's `finalConstraints` reads it.
          */
-        val maxIntrinsicWidth: Float = if (boring != null) {
-            boringWidth
-        } else {
-            intrinsicWidth(ceil(Layout.getDesiredWidth(content, paint)), letterSpaced)
-        }
-
+        val maxIntrinsicWidth: Float,
+    ) {
         /** [content] with its line height span, for a `StaticLayout` (made when one needs it). */
         val staticText: CharSequence by lazy(LazyThreadSafetyMode.NONE) { withLineHeight(content, lineHeight) }
+
+        /**
+         * These in another paint, which changes no metric (its color and decoration): nothing is
+         * measured again, as Compose draws a kept paragraph in a new color.
+         */
+        fun inPaint(color: Int, decoration: Int): Intrinsics {
+            val style = paintStyle.copy(color = color, decoration = decoration)
+            return Intrinsics(
+                content, style, paint(style), direction, boring, lineHeight, letterSpaced, softWrap, maxLines,
+                ellipsis, align, boringWidth, maxIntrinsicWidth,
+            )
+        }
 
         val alignment = when (align) {
             1 -> Layout.Alignment.ALIGN_OPPOSITE
@@ -194,9 +222,11 @@ internal class TextMeasurer(
             repeat(runCount) {
                 val start = request.getInt()
                 val end = request.getInt()
+                val inherits = request.get().toInt()
                 val style = readStyle(request)
                 if (start < end) {
-                    spannable.setSpan(RunSpan(style.paint), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                    val span = RunSpan(style.paint, ownColor = inherits and 1 == 0, ownDecoration = inherits and 2 == 0)
+                    spannable.setSpan(span, start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
                     if (style.paint.fontPx > 0f && style.paint.letterSpacingPx != 0f) letterSpaced = true
                     if (style.background != 0) {
                         spannable.setSpan(
@@ -221,22 +251,50 @@ internal class TextMeasurer(
         val direction = if (rtl) TextDirectionHeuristics.RTL else TextDirectionHeuristics.LTR
         // One line of left-to-right text has boring metrics (D330): its width, in one measure.
         val boring = boringMetrics(content, paint, direction, lineHeight)
+        val boringWidth = if (boring == null) 0f else intrinsicWidth(boring.width.toFloat(), letterSpaced)
+        val maxIntrinsicWidth = if (boring != null) {
+            boringWidth
+        } else {
+            intrinsicWidth(ceil(Layout.getDesiredWidth(content, paint)), letterSpaced)
+        }
         val kept = Intrinsics(
-            content, paint, direction, boring, lineHeight, letterSpaced, softWrap, maxLines, ellipsis, align,
+            content, base.paint, paint, direction, boring, lineHeight, letterSpaced, softWrap, maxLines, ellipsis,
+            align, boringWidth, maxIntrinsicWidth,
         )
         layoutAt(handle, kept, minWidth, maxWidth)
+    }
+
+    /**
+     * Gives paragraph [previous]'s layout, as paragraph [handle], the paint of [color] (ARGB) and
+     * [decoration] (1 underline, 2 line through), and releases [previous]: the same `Layout`,
+     * drawn in the new paint ([record]), and laid out in it later ([relayout]). As Compose keeps a
+     * paragraph whose style changed only in what it draws (`hasSameLayoutAffectingAttributes`)
+     * and paints it in the new color. False (nothing changed) without [previous].
+     */
+    fun restyle(previous: Int, handle: Int, color: Int, decoration: Int): Boolean {
+        val layout = layouts.get(previous) ?: return false
+        val kept = intrinsics.get(previous) ?: return false
+        release(previous)
+        layouts.put(handle, layout)
+        intrinsics.put(handle, kept.inPaint(color, decoration))
+        releaseNode(handle)
+        if (collectingLaidOut) laidOut.add(handle)
+        return true
     }
 
     /**
      * Lays out paragraph [previous]'s text again as paragraph [handle], between [minWidth] and
      * [maxWidth] (`Int.MAX_VALUE`: unbounded), from what [previous] kept of it ([Intrinsics]: no
      * measure of the text), as Compose's new `Paragraph` from the `ParagraphIntrinsics` its cache
-     * keeps when only the constraints change; then releases [previous].
+     * keeps when only the constraints change; then releases [previous]. False (nothing changed,
+     * [results] untouched) when [previous] kept nothing.
      */
-    fun relayout(previous: Int, handle: Int, minWidth: Int, maxWidth: Int) {
-        val kept = intrinsics.get(previous) ?: return
+    fun relayout(previous: Int, handle: Int, minWidth: Int, maxWidth: Int): Boolean {
+        // Rust lays the text out anew (nothing kept: a paragraph cleared or never laid out).
+        val kept = intrinsics.get(previous) ?: return false
         release(previous)
         layoutAt(handle, kept, minWidth, maxWidth)
+        return true
     }
 
     /** Lays out [kept]'s text as paragraph [handle] at the constraints' width, writing [results]. */
@@ -483,7 +541,7 @@ internal class TextMeasurer(
         if (!hardware) {
             canvas.save()
             canvas.translate(x, y)
-            layout.draw(canvas)
+            drawInPaint(handle, layout, canvas)
             canvas.restore()
             return
         }
@@ -496,6 +554,33 @@ internal class TextMeasurer(
         canvas.restore()
     }
 
+    /**
+     * Draws [layout] in paragraph [handle]'s paint: a layout given a new paint ([restyle]) still
+     * holds the old one, whose color and decoration are swapped for the drawing (a recording
+     * copies them), then put back (other layouts of that style share it).
+     */
+    private fun drawInPaint(handle: Int, layout: Layout, canvas: Canvas) {
+        val wanted = intrinsics.get(handle)?.paint
+        val held = layout.paint
+        if (wanted == null || wanted === held) {
+            layout.draw(canvas)
+            return
+        }
+        val color = held.color
+        val underline = held.isUnderlineText
+        val strike = held.isStrikeThruText
+        held.color = wanted.color
+        held.isUnderlineText = wanted.isUnderlineText
+        held.isStrikeThruText = wanted.isStrikeThruText
+        try {
+            layout.draw(canvas)
+        } finally {
+            held.color = color
+            held.isUnderlineText = underline
+            held.isStrikeThruText = strike
+        }
+    }
+
     /** Records paragraph [handle]'s [layout] into its node ([node], else one from the pool). */
     private fun record(handle: Int, layout: Layout, node: RenderNode?): RenderNode {
         val recorded = node ?: pool.obtain()
@@ -504,7 +589,7 @@ internal class TextMeasurer(
         recorded.setPosition(0, 0, layout.width.coerceAtLeast(1), layout.height.coerceAtLeast(1))
         recorded.setClipToBounds(false)
         val recording = recorded.beginRecording()
-        layout.draw(recording)
+        drawInPaint(handle, layout, recording)
         recorded.endRecording()
         nodes.put(handle, recorded)
         return recorded

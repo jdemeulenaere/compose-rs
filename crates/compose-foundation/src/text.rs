@@ -279,6 +279,8 @@ impl ModifierNodeElement for TextElement {
             density: None,
             direction: compose_ui::LayoutDirection::Ltr,
             stale: Vec::new(),
+            restyle: false,
+            probe: None,
             overflows: false,
             selection: None,
             selection_rects: Vec::new(),
@@ -290,7 +292,7 @@ impl ModifierNodeElement for TextElement {
     fn update(&self, node: &mut dyn ModifierNode) {
         if let Some(node) = node.downcast_mut::<TextNode>()
             && (node.text != self.text
-                || node.style != self.style
+                || !node.style.has_same_layout_affecting_attributes(&self.style)
                 || node.options != self.options
                 || node.min_lines != self.min_lines)
         {
@@ -305,10 +307,17 @@ impl ModifierNodeElement for TextElement {
             node.options = self.options;
             node.min_lines = self.min_lines;
             node.min_height = None;
-            if let Some(paragraph) = node.paragraph.take() {
-                node.stale.push(paragraph);
-            }
+            node.restyle = false;
+            let probe = node.probe.take().map(|probe| probe.paragraph);
+            node.stale.extend(node.paragraph.take().into_iter().chain(probe));
             node.constraints = None;
+        } else if let Some(node) = node.downcast_mut::<TextNode>()
+            && node.style != self.style
+        {
+            // Only its paint changed (its color, its decoration): the layout is kept and drawn
+            // again in the new paint, as Compose's `updateDraw` (`hasSameDrawAffectingAttributes`).
+            node.style = self.style;
+            node.restyle = true;
         }
         if let Some(node) = node.downcast_mut::<TextNode>() {
             node.selectable = self.selectable;
@@ -355,6 +364,13 @@ pub(crate) struct TextNode {
     /// Paragraphs replaced by an update, released at the next measurement (an update can't
     /// reach the measurer).
     stale: Vec<ParagraphHandle>,
+    /// The style changed in paint only since the paragraph was laid out: the next measurement
+    /// gives the paragraph the new paint (`TextMeasurer::restyle`).
+    restyle: bool,
+    /// The paragraph intrinsic probes measure, when their constraints would lay the text out
+    /// differently: kept apart, so a probe doesn't replace the measured paragraph, as Compose's
+    /// intrinsics have caches of their own.
+    probe: Option<Probe>,
     /// The paragraph is larger than the node: drawn clipped.
     overflows: bool,
     /// The part a `SelectionContainer` selected, and its highlight (from the measurer).
@@ -363,6 +379,14 @@ pub(crate) struct TextNode {
     selectable: bool,
     /// Bumped when the text changes.
     version: u64,
+}
+
+/// A paragraph laid out for intrinsic probes, at `constraints`, in `density` and `direction`.
+struct Probe {
+    paragraph: ParagraphHandle,
+    constraints: Constraints,
+    density: compose_ui::Density,
+    direction: compose_ui::LayoutDirection,
 }
 
 impl ModifierNode for TextNode {
@@ -386,9 +410,114 @@ impl ModifierNode for TextNode {
         if self.selectable { Some(self) } else { None }
     }
     fn on_detach(&mut self, context: &mut DetachContext<'_>) {
-        for paragraph in self.paragraph.take().into_iter().chain(self.stale.drain(..)) {
+        let probe = self.probe.take().map(|probe| probe.paragraph);
+        let paragraphs = self.paragraph.take().into_iter().chain(self.stale.drain(..));
+        for paragraph in paragraphs.chain(probe) {
             context.text_measurer.release(paragraph);
         }
+    }
+}
+
+impl TextNode {
+    /// Lays the text out for `constraints` if Compose's rule says the paragraph would differ
+    /// ([`new_layout_will_be_different`]); returns whether it did.
+    fn lay_out(
+        &mut self,
+        scope: &mut MeasureScope<'_>,
+        constraints: Constraints,
+        density: compose_ui::Density,
+        direction: compose_ui::LayoutDirection,
+    ) -> bool {
+        // The paragraph holds this text in this style, density and direction: only the
+        // constraints can differ.
+        let current =
+            self.paragraph.filter(|_| self.density == Some(density) && self.direction == direction);
+        let relaid = match (current, self.constraints) {
+            (Some(paragraph), Some(old)) => new_layout_will_be_different(
+                scope.text_measurer(),
+                paragraph,
+                self.options,
+                old,
+                constraints,
+            ),
+            _ => true,
+        };
+        if !relaid {
+            return false;
+        }
+        self.density = Some(density);
+        self.direction = direction;
+        let measurer = scope.text_measurer();
+        // As Compose's new `Paragraph` from the `ParagraphIntrinsics` it keeps, where the
+        // measurer keeps them too; otherwise laid out anew.
+        let paragraph = match current.and_then(|old| measurer.relayout(old, constraints)) {
+            Some(paragraph) => paragraph,
+            None => {
+                if let Some(old) = self.paragraph.take() {
+                    measurer.release(old);
+                }
+                measurer.layout_annotated(
+                    &self.text,
+                    &self.style,
+                    TextLayoutOptions { direction, ..self.options },
+                    constraints,
+                    &density,
+                )
+            }
+        };
+        self.paragraph = Some(paragraph);
+        // The highlight follows the new layout.
+        self.selection_rects = match &self.selection {
+            Some(range) => scope.text_measurer().selection_rects(paragraph, range.clone()),
+            None => Vec::new(),
+        };
+        true
+    }
+
+    /// The paragraph an intrinsic probe at `constraints` measures, leaving the measured one and
+    /// its constraints as they are: the measured paragraph if the probe wouldn't lay it out
+    /// again, else the probes' own, laid out again by the same rule.
+    fn probe_paragraph(
+        &mut self,
+        scope: &mut MeasureScope<'_>,
+        constraints: Constraints,
+        density: compose_ui::Density,
+        direction: compose_ui::LayoutDirection,
+    ) -> ParagraphHandle {
+        let measurer = scope.text_measurer();
+        if let (Some(paragraph), Some(old)) = (self.paragraph, self.constraints)
+            && self.density == Some(density)
+            && self.direction == direction
+            && !new_layout_will_be_different(measurer, paragraph, self.options, old, constraints)
+        {
+            return paragraph;
+        }
+        if let Some(probe) = &mut self.probe
+            && probe.density == density
+            && probe.direction == direction
+            && !new_layout_will_be_different(
+                measurer,
+                probe.paragraph,
+                self.options,
+                probe.constraints,
+                constraints,
+            )
+        {
+            probe.constraints = constraints;
+            return probe.paragraph;
+        }
+        if let Some(old) = self.probe.take() {
+            measurer.release(old.paragraph);
+        }
+        let paragraph = measurer.layout_annotated(
+            &self.text,
+            &self.style,
+            TextLayoutOptions { direction, ..self.options },
+            constraints,
+            &density,
+        );
+        self.probe = Some(Probe { paragraph, constraints, density, direction });
+        paragraph
     }
 }
 
@@ -404,51 +533,26 @@ impl LayoutModifierNode for TextNode {
         }
         let density = scope.density();
         let direction = scope.layout_direction();
-        // The paragraph holds this text in this style, density and direction: only the
-        // constraints can differ.
-        let current =
-            self.paragraph.filter(|_| self.density == Some(density) && self.direction == direction);
-        let relaid = match (current, self.constraints) {
-            (Some(paragraph), Some(old)) => new_layout_will_be_different(
-                scope.text_measurer(),
-                paragraph,
-                self.options,
-                old,
-                constraints,
-            ),
-            _ => true,
-        };
-        if relaid {
-            self.density = Some(density);
-            self.direction = direction;
+        // A new paint only: the layout kept, in the new paint (laid out anew if the measurer
+        // can't).
+        if std::mem::take(&mut self.restyle)
+            && let Some(old) = self.paragraph
+        {
             let measurer = scope.text_measurer();
-            // As Compose's new `Paragraph` from the `ParagraphIntrinsics` it keeps, where the
-            // measurer keeps them too; otherwise laid out anew.
-            let relaid_out = current.and_then(|old| measurer.relayout(old, constraints));
-            let paragraph = match relaid_out {
-                Some(paragraph) => paragraph,
-                None => {
-                    if let Some(old) = self.paragraph.take() {
-                        measurer.release(old);
-                    }
-                    measurer.layout_annotated(
-                        &self.text,
-                        &self.style,
-                        TextLayoutOptions { direction, ..self.options },
-                        constraints,
-                        &density,
-                    )
-                }
-            };
-            self.paragraph = Some(paragraph);
-            // The highlight follows the new layout.
-            self.selection_rects = match &self.selection {
-                Some(range) => scope.text_measurer().selection_rects(paragraph, range.clone()),
-                None => Vec::new(),
-            };
+            self.paragraph = measurer.restyle(old, &self.style);
+            if self.paragraph.is_none() {
+                measurer.release(old);
+                self.constraints = None;
+            }
         }
-        self.constraints = Some(constraints);
-        let paragraph = self.paragraph.expect("laid out");
+        let probing = scope.is_intrinsic_probe();
+        let (paragraph, relaid) = if probing {
+            (self.probe_paragraph(scope, constraints, density, direction), false)
+        } else {
+            let relaid = self.lay_out(scope, constraints, density, direction);
+            self.constraints = Some(constraints);
+            (self.paragraph.expect("laid out"), relaid)
+        };
         let metrics = scope.text_measurer().metrics(paragraph);
         let natural = metrics.size;
         // At least `min_lines` high, as Compose's `heightInLines`.
@@ -467,11 +571,13 @@ impl LayoutModifierNode for TextNode {
         let size = constraints
             .constrain(compose_ui::IntSize::new(natural.width, natural.height.max(min_height)));
         // Text larger than its bounds is clipped, as Compose's `TextOverflow.Clip`.
-        self.overflows = natural.width > size.width || natural.height > size.height;
+        if !probing {
+            self.overflows = natural.width > size.width || natural.height > size.height;
+        }
         // Each new layout is heard, as Compose's `onTextLayout`: a paragraph laid out again
         // (a new text, style or width), or a new size.
         if let Some(callback) = &self.on_text_layout
-            && !scope.is_intrinsic_probe()
+            && !probing
         {
             let result = TextLayoutResult {
                 size,

@@ -16,15 +16,17 @@ use compose_ui::{
 };
 
 /// How many times a text was laid out: anew (`layout`, `layout_annotated`), or again from what
-/// the measurer kept of it (`relayout`).
+/// the measurer kept of it (`relayout`); and how many times its layout was kept in a new paint
+/// (`restyle`, no layout).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct LayoutCounts {
     pub fresh: usize,
     pub relaid: usize,
+    pub restyled: usize,
 }
 
 impl LayoutCounts {
-    /// Every layout, either way.
+    /// Every layout, either way (restyles aren't layouts).
     pub fn total(&self) -> usize {
         self.fresh + self.relaid
     }
@@ -50,14 +52,8 @@ impl TextLayoutCounter {
         self.0.borrow_mut().clear();
     }
 
-    fn count(&self, text: &str, relaid: bool) {
-        let mut counts = self.0.borrow_mut();
-        let entry = counts.entry(text.to_string()).or_default();
-        if relaid {
-            entry.relaid += 1;
-        } else {
-            entry.fresh += 1;
-        }
+    fn count(&self, text: &str, update: impl FnOnce(&mut LayoutCounts)) {
+        update(self.0.borrow_mut().entry(text.to_string()).or_default());
     }
 }
 
@@ -88,7 +84,7 @@ impl<M: TextMeasurer> TextMeasurer for CountingTextMeasurer<M> {
         constraints: Constraints,
         density: &Density,
     ) -> ParagraphHandle {
-        self.counter.count(text, false);
+        self.counter.count(text, |counts| counts.fresh += 1);
         self.inner.layout(text, style, options, constraints, density)
     }
 
@@ -100,7 +96,7 @@ impl<M: TextMeasurer> TextMeasurer for CountingTextMeasurer<M> {
         constraints: Constraints,
         density: &Density,
     ) -> ParagraphHandle {
-        self.counter.count(text.as_str(), false);
+        self.counter.count(text.as_str(), |counts| counts.fresh += 1);
         self.inner.layout_annotated(text, style, options, constraints, density)
     }
 
@@ -123,8 +119,19 @@ impl<M: TextMeasurer> TextMeasurer for CountingTextMeasurer<M> {
     ) -> Option<ParagraphHandle> {
         let text = self.inner.text(paragraph).to_string();
         let relaid = self.inner.relayout(paragraph, constraints)?;
-        self.counter.count(&text, true);
+        self.counter.count(&text, |counts| counts.relaid += 1);
         Some(relaid)
+    }
+
+    fn restyle(
+        &mut self,
+        paragraph: ParagraphHandle,
+        style: &TextStyle,
+    ) -> Option<ParagraphHandle> {
+        let text = self.inner.text(paragraph).to_string();
+        let restyled = self.inner.restyle(paragraph, style)?;
+        self.counter.count(&text, |counts| counts.restyled += 1);
+        Some(restyled)
     }
 
     fn hit_test(&self, paragraph: ParagraphHandle, position: Offset) -> TextPosition {

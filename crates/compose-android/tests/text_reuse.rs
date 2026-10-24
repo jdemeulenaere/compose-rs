@@ -29,10 +29,11 @@ use compose_ui::{
 
 // ---- A model of TextMeasurer.kt ----------------------------------------------------------------
 
-/// What Kotlin keeps of a text (its `Intrinsics`): the text, its line options, its advance per
-/// UTF-16 unit and line height, and its own width.
+/// What Kotlin keeps of a text (its `Intrinsics`): the text, its line options, its paint (color
+/// and decoration), its advance per UTF-16 unit and line height, and its own width.
 #[derive(Clone)]
 struct Kept {
+    paint: (u32, u8),
     units: Vec<Vec<u16>>,
     soft_wrap: bool,
     max_lines: usize,
@@ -75,9 +76,10 @@ impl Reader<'_> {
     fn f32(&mut self) -> f32 {
         f32::from_le_bytes(self.take(4).try_into().unwrap())
     }
-    /// A style: its font size and letter spacing (px) and line height (px, 0 unset).
-    fn style(&mut self) -> (f32, f32, f32) {
-        let _color = self.i32();
+    /// A style: its paint (color, decoration), font size and letter spacing (px) and line
+    /// height (px, 0 unset).
+    fn style(&mut self) -> ((u32, u8), f32, f32, f32) {
+        let color = self.i32() as u32;
         let font_px = self.f32();
         let _weight = self.i32();
         let _italic = self.u8();
@@ -86,10 +88,10 @@ impl Reader<'_> {
             self.take(length);
         }
         let spacing = self.f32();
-        let _decoration = self.u8();
+        let decoration = self.u8();
         let line_height = self.f32();
         let _background = self.i32();
-        (font_px, spacing, line_height)
+        ((color, decoration), font_px, spacing, line_height)
     }
 }
 
@@ -158,13 +160,14 @@ impl TextBackend for Model {
         let right_to_left = request.u8() != 0;
         let min_width = request.i32();
         let max_width = request.i32();
-        let (font_px, spacing, line_height) = request.style();
+        let (paint, font_px, spacing, line_height) = request.style();
         let advance = font_px * 0.5 + spacing;
         let units: Vec<Vec<u16>> =
             text.split('\n').map(|line| line.encode_utf16().collect()).collect();
         self.measures.set(self.measures.get() + 1);
         let own = units.iter().map(Vec::len).max().unwrap_or(0) as f32 * advance;
         let kept = Kept {
+            paint,
             units,
             soft_wrap,
             max_lines,
@@ -188,6 +191,15 @@ impl TextBackend for Model {
     ) -> Option<LaidOut> {
         let kept = self.paragraphs.borrow_mut().remove(&previous)?.kept;
         Some(self.lay_out(handle, kept, min_width, max_width))
+    }
+
+    /// The same lines in a new paint, as Kotlin keeps the `Layout`: nothing measured.
+    fn restyle(&mut self, previous: u32, handle: u32, color: u32, decoration: u8) -> bool {
+        let mut paragraphs = self.paragraphs.borrow_mut();
+        let Some(mut laid) = paragraphs.remove(&previous) else { return false };
+        laid.kept.paint = (color, decoration);
+        paragraphs.insert(handle, laid);
+        true
     }
 
     fn hit_test(&self, handle: u32, position: Offset) -> usize {
@@ -392,7 +404,11 @@ fn a_resized_host_relays_texts_out_from_what_kotlin_kept_and_with_the_optimizati
     // Compose's rule: each new width lays every text out again, from what Kotlin kept.
     let changes = widths.windows(2).filter(|pair| pair[0] != pair[1]).count();
     for text in [SHORT, CENTERED_WIDE, WRAPPING, ELLIPSIZED, HEBREW, HEBREW_END, SPACED] {
-        assert_eq!(parity_counts.of(text), LayoutCounts { fresh: 0, relaid: changes }, "{text:?}");
+        assert_eq!(
+            parity_counts.of(text),
+            LayoutCounts { fresh: 0, relaid: changes, restyled: 0 },
+            "{text:?}"
+        );
     }
     assert_eq!(parity_model.measures.get(), measured, "no text measured again");
     // With the optimization, the texts that fit (77, 63, 70 px, and 104.5 letter spaced) are
@@ -403,4 +419,78 @@ fn a_resized_host_relays_texts_out_from_what_kotlin_kept_and_with_the_optimizati
     for text in [CENTERED_WIDE, WRAPPING, ELLIPSIZED] {
         assert_eq!(reusing_counts.of(text), parity_counts.of(text), "{text:?}");
     }
+}
+
+// ---- A new paint --------------------------------------------------------------------------------
+
+impl Model {
+    /// The paint paragraph `handle` draws in.
+    fn paint(&self, handle: compose_ui::platform::ParagraphHandle) -> (u32, u8) {
+        self.paragraphs.borrow()[&(handle.0 as u32)].kept.paint
+    }
+}
+
+#[test]
+fn a_new_paint_keeps_the_layout_and_later_layouts_are_in_it() {
+    let model = Model::default();
+    let mut measurer = AndroidTextMeasurer::new(model.clone());
+    let density = Density::new(1.0);
+    let red = TextStyle { color: compose_ui::Color::RED, ..TextStyle::DEFAULT };
+    let paragraph = measurer.layout(
+        "Painted",
+        &red,
+        TextLayoutOptions::default(),
+        Constraints::new(0, 300, 0, 300),
+        &density,
+    );
+    let before = snapshot(&measurer, paragraph);
+    let measured = model.measures.get();
+    let blue = TextStyle {
+        color: compose_ui::Color::BLUE,
+        text_decoration: Some(compose_ui::TextDecoration::UNDERLINE),
+        ..red
+    };
+    let restyled = measurer.restyle(paragraph, &blue).expect("Kotlin keeps the layout");
+    assert_ne!(restyled, paragraph, "a new handle draws the new paint");
+    assert_eq!(snapshot(&measurer, restyled), before, "the same layout");
+    assert_eq!(model.measures.get(), measured, "nothing measured");
+    assert_eq!(model.paint(restyled), (compose_ui::Color::BLUE.argb(), 1));
+    assert_eq!(model.live(), 1, "the old handle released");
+    // Laid out again for other constraints: in the new paint.
+    let relaid = measurer.relayout(restyled, Constraints::new(0, 30, 0, 300)).unwrap();
+    assert_eq!(model.paint(relaid), (compose_ui::Color::BLUE.argb(), 1));
+    measurer.release(relaid);
+    assert_eq!(measurer.restyle(relaid, &red), None, "released");
+}
+
+#[composable]
+fn Colored(color: compose_runtime::MutableState<compose_ui::Color>) {
+    BasicText!(SHORT, style = TextStyle { color: color.get(), ..TextStyle::DEFAULT });
+}
+
+#[test]
+fn a_new_color_draws_the_kept_layout_without_laying_it_out() {
+    let owned = compose_runtime::mutable_state_of(compose_ui::Color::RED);
+    let color = owned.handle();
+    let model = Model::default();
+    let (measurer, counter) = CountingTextMeasurer::new(AndroidTextMeasurer::new(model.clone()));
+    let host = UiHost::new(IntSize::new(300, 300), Density::new(1.0), Box::new(measurer));
+    let mut ui = ComposeTestRule::with_host(host, move || Colored(color));
+    let measured = model.measures.get();
+    counter.clear();
+    color.set(compose_ui::Color::BLUE);
+    ui.wait_for_idle();
+    assert_eq!(counter.of(SHORT), LayoutCounts { fresh: 0, relaid: 0, restyled: 1 });
+    assert_eq!(model.measures.get(), measured);
+    let drawn = ui
+        .host()
+        .display_list()
+        .ops
+        .iter()
+        .find_map(|op| match op {
+            compose_ui::platform::DrawOp::DrawParagraph(handle, _) => Some(*handle),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(model.paint(drawn).0, compose_ui::Color::BLUE.argb());
 }

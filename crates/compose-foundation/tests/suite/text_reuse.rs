@@ -205,3 +205,72 @@ fn a_new_density_or_direction_lays_the_text_out_anew_even_with_the_optimization(
     assert!(counter.of(SHORT).fresh >= 1);
     set_reuse_paragraph_at_same_layout_width(false);
 }
+
+#[composable]
+fn Styled(style: MutableState<TextStyle>) {
+    BasicText!("Styled", style = style.get());
+}
+
+/// The paragraph the host's last frame draws.
+fn drawn(ui: &mut ComposeTestRule) -> compose_ui::platform::ParagraphHandle {
+    ui.host()
+        .display_list()
+        .ops
+        .iter()
+        .find_map(|op| match op {
+            compose_ui::platform::DrawOp::DrawParagraph(handle, _) => Some(*handle),
+            _ => None,
+        })
+        .expect("a paragraph drawn")
+}
+
+#[test]
+fn a_paint_only_style_change_keeps_the_layout_and_draws_it_again_as_compose() {
+    let owned = mutable_state_of(TextStyle::DEFAULT);
+    let style = owned.handle();
+    let (measurer, counter) = CountingTextMeasurer::new(FixedTextMeasurer::new());
+    let host = UiHost::new(IntSize::new(300, 300), Density::new(1.0), Box::new(measurer));
+    let mut ui = ComposeTestRule::with_host(host, move || Styled(style));
+    let red = TextStyle { color: compose_ui::Color::RED, ..TextStyle::DEFAULT };
+    let underlined =
+        TextStyle { text_decoration: Some(compose_ui::TextDecoration::UNDERLINE), ..red };
+    // Compose's `hasSameDrawAffectingAttributes`: drawn again in the new paint, not laid out.
+    for paint in [red, underlined] {
+        let before = drawn(&mut ui);
+        counter.clear();
+        style.set(paint);
+        ui.wait_for_idle();
+        assert_eq!(counter.of("Styled"), LayoutCounts { fresh: 0, relaid: 0, restyled: 1 });
+        assert_ne!(drawn(&mut ui), before, "drawn again, in the new paint");
+    }
+    // What lays it out differently lays it out again.
+    let bigger = TextStyle { font_size: compose_ui::Sp(20.0), ..underlined };
+    for layout in [bigger, TextStyle { text_align: Some(TextAlign::Center), ..bigger }] {
+        counter.clear();
+        style.set(layout);
+        ui.wait_for_idle();
+        assert_eq!(counter.of("Styled"), LayoutCounts { fresh: 1, relaid: 0, restyled: 0 });
+    }
+}
+
+#[test]
+fn layout_affecting_attributes_are_composes() {
+    let base = TextStyle::DEFAULT;
+    let paint_only = TextStyle {
+        color: compose_ui::Color::BLUE,
+        text_decoration: Some(compose_ui::TextDecoration::LINE_THROUGH),
+        ..base
+    };
+    assert!(base.has_same_layout_affecting_attributes(&paint_only));
+    for other in [
+        TextStyle { font_size: compose_ui::Sp(3.0), ..base },
+        TextStyle { font_weight: Some(compose_ui::FontWeight(700)), ..base },
+        TextStyle { font_style: Some(compose_ui::FontStyle::Italic), ..base },
+        TextStyle { font_family: Some(compose_ui::FontFamily::Serif), ..base },
+        TextStyle { letter_spacing: compose_ui::Sp(1.0), ..base },
+        TextStyle { text_align: Some(TextAlign::End), ..base },
+        TextStyle { line_height: compose_ui::Sp(30.0), ..base },
+    ] {
+        assert!(!base.has_same_layout_affecting_attributes(&other), "{other:?}");
+    }
+}

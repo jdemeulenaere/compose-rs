@@ -36,6 +36,12 @@ pub trait TextBackend: 'static {
         None
     }
     /// The UTF-16 offset nearest to `position`.
+    /// Gives paragraph `previous`'s layout, as paragraph `handle`, the paint of `color` (ARGB)
+    /// and `decoration` (1 underline, 2 line through), and releases `previous`. False (the
+    /// default: a backend keeping nothing) leaves `previous` as it was.
+    fn restyle(&mut self, _previous: u32, _handle: u32, _color: u32, _decoration: u8) -> bool {
+        false
+    }
     fn hit_test(&self, handle: u32, position: Offset) -> usize;
     /// The cursor before UTF-16 offset `offset`: its top, bottom and x.
     fn cursor(&self, handle: u32, offset: usize) -> Rect;
@@ -146,7 +152,13 @@ impl<B: TextBackend> TextMeasurer for AndroidTextMeasurer<B> {
         constraints: Constraints,
         density: &Density,
     ) -> ParagraphHandle {
-        let runs = if text.span_styles.is_empty() { Vec::new() } else { text.runs(style) };
+        // Each run's own color and decoration only, the paragraph's paint giving the rest, so a
+        // new paint (`restyle`) reaches the runs that don't set them.
+        let runs = if text.span_styles.is_empty() {
+            Vec::new()
+        } else {
+            text.runs(&TextStyle { color: Color::UNSPECIFIED, text_decoration: None, ..*style })
+        };
         self.layout_runs(text.as_str(), style, &runs, options, constraints, density)
     }
 
@@ -164,6 +176,27 @@ impl<B: TextBackend> TextMeasurer for AndroidTextMeasurer<B> {
 
     fn max_intrinsic_width(&self, paragraph: ParagraphHandle) -> Option<f32> {
         self.entry(paragraph).laid_out.max_intrinsic_width
+    }
+
+    /// A new handle for the same layout in `style`'s paint: Kotlin draws the layout it has in
+    /// the new color and decoration, and lays the text out in them from then on.
+    fn restyle(
+        &mut self,
+        paragraph: ParagraphHandle,
+        style: &TextStyle,
+    ) -> Option<ParagraphHandle> {
+        let previous = paragraph.0 as u32;
+        if !self.paragraphs.contains_key(&previous) {
+            return None;
+        }
+        let handle = self.next_handle();
+        let (color, decoration) = paint_of(style);
+        if !self.backend.restyle(previous, handle, color, decoration) {
+            return None;
+        }
+        let entry = self.paragraphs.remove(&previous).expect("checked above");
+        self.paragraphs.insert(handle, entry);
+        Some(ParagraphHandle(handle as u64))
     }
 
     /// A new handle (a frame's bytes naming a paragraph always draw the same layout), the text
@@ -283,7 +316,8 @@ fn width_bounds(constraints: Constraints) -> (i32, i32) {
 /// (u8), family (u8: 0 sans serif, 1 serif, 2 monospace, 3 cursive, 4 named, then its name's
 /// length and UTF-8 bytes), letter spacing (px f32), decoration (u8: 1 underline, 2 line
 /// through), line height (px f32, 0 unset), background (ARGB u32, 0 none). Runs: their count
-/// (u32), then each one's UTF-16 start and end (u32) and style.
+/// (u32), then each one's UTF-16 start and end (u32), what it takes from the paragraph's paint
+/// (u8: 1 its color, 2 its decoration: the ones its spans don't set) and style.
 #[allow(clippy::too_many_arguments)]
 fn encode_request(
     out: &mut Writer,
@@ -323,19 +357,30 @@ fn encode_request(
     for (range, run_style, background) in runs {
         out.u32(utf16_index(text, range.start) as u32);
         out.u32(utf16_index(text, range.end) as u32);
+        let inherits = u8::from(!run_style.color.is_specified())
+            | (u8::from(run_style.text_decoration.is_none()) << 1);
+        out.u8(inherits);
         encode_style(out, run_style, *background, density);
     }
 }
 
-fn encode_style(out: &mut Writer, style: &TextStyle, background: Color, density: &Density) {
+/// What of `style` only paints: its color (ARGB, black if unset) and decoration (1 underline,
+/// 2 line through).
+fn paint_of(style: &TextStyle) -> (u32, u8) {
     let color = if style.color.is_specified() { style.color } else { Color::BLACK };
+    let decoration = style.text_decoration.unwrap_or_default();
+    (color.argb(), u8::from(decoration.underline) | (u8::from(decoration.line_through) << 1))
+}
+
+fn encode_style(out: &mut Writer, style: &TextStyle, background: Color, density: &Density) {
+    let (color, decoration) = paint_of(style);
     let font_size = if style.font_size.is_specified() {
         style.font_size
     } else {
         compose_ui::platform::DEFAULT_FONT_SIZE
     };
     let font_px = density.sp_to_px(font_size);
-    out.u32(color.argb());
+    out.u32(color);
     out.f32(font_px);
     out.u32(u32::from(style.font_weight.map_or(400, |weight| weight.0)));
     out.u8(u8::from(style.font_style == Some(compose_ui::FontStyle::Italic)));
@@ -355,8 +400,7 @@ fn encode_style(out: &mut Writer, style: &TextStyle, background: Color, density:
     } else {
         0.0
     });
-    let decoration = style.text_decoration.unwrap_or_default();
-    out.u8(u8::from(decoration.underline) | (u8::from(decoration.line_through) << 1));
+    out.u8(decoration);
     out.f32(if style.line_height.is_specified() {
         density.sp_to_px(style.line_height)
     } else {
@@ -453,5 +497,43 @@ mod tests {
         measurer.release(handle);
         assert_eq!(measurer.live(), 0);
         assert!(measurer.backend.live.is_empty());
+    }
+
+    #[test]
+    fn runs_take_the_color_and_decoration_their_spans_dont_set_from_the_paint() {
+        use compose_ui::{AnnotatedString, SpanStyle};
+        let mut measurer = AndroidTextMeasurer::new(Fake::default());
+        let text = AnnotatedString::build(|builder| {
+            builder.with_style(
+                SpanStyle { font_size: compose_ui::Sp(20.0), ..SpanStyle::DEFAULT },
+                |builder| {
+                    builder.append("big");
+                },
+            );
+            builder.with_style(SpanStyle { color: Color::RED, ..SpanStyle::DEFAULT }, |builder| {
+                builder.append("red");
+            });
+        });
+        let style = TextStyle {
+            color: Color::BLUE,
+            text_decoration: Some(compose_ui::TextDecoration::UNDERLINE),
+            ..TextStyle::DEFAULT
+        };
+        let options = TextLayoutOptions::default();
+        let constraints = Constraints::new(0, 300, 0, 300);
+        measurer.layout_annotated(&text, &style, options, constraints, &Density::new(1.0));
+        let request = &measurer.backend.requests[0];
+        // 16 bytes of options, then the 27-byte base style (its color first: the paint's).
+        assert_eq!(u32::from_le_bytes(request[16..20].try_into().unwrap()), Color::BLUE.argb());
+        let u32_at = |at: usize| u32::from_le_bytes(request[at..at + 4].try_into().unwrap());
+        assert_eq!(u32_at(43), 2, "two runs");
+        // Each run: its range, what it takes from the paint, its style (27 bytes).
+        assert_eq!(
+            (u32_at(47), u32_at(51), request[55]),
+            (0, 3, 0b11),
+            "the paint's color and decoration"
+        );
+        assert_eq!((u32_at(83), u32_at(87), request[91]), (3, 6, 0b10), "its own color");
+        assert_eq!(u32_at(92), Color::RED.argb());
     }
 }

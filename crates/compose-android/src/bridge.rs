@@ -124,6 +124,7 @@ struct JniText {
     results: *const f32,
     layout: JMethodID,
     relayout: JMethodID,
+    restyle: JMethodID,
     hit_test: JMethodID,
     cursor: JMethodID,
     release: JMethodID,
@@ -199,12 +200,12 @@ impl TextBackend for JniText {
     ) -> Option<LaidOut> {
         self.clear_results();
         let mut env = main_env();
-        // SAFETY: the method's signature is `(IIII)V`.
-        let _ = unsafe {
+        // SAFETY: the method's signature is `(IIII)Z`.
+        let relaid = unsafe {
             env.call_method_unchecked(
                 &self.measurer,
                 self.relayout,
-                ReturnType::Primitive(Primitive::Void),
+                ReturnType::Primitive(Primitive::Boolean),
                 &[
                     JValue::Int(previous as jint).as_jni(),
                     JValue::Int(handle as jint).as_jni(),
@@ -214,7 +215,28 @@ impl TextBackend for JniText {
             )
         };
         check(&mut env, "TextMeasurer.relayout");
-        Some(self.laid_out())
+        // False (nothing kept) or an exception: Rust lays the text out anew.
+        relaid.and_then(|value| value.z()).unwrap_or(false).then(|| self.laid_out())
+    }
+
+    fn restyle(&mut self, previous: u32, handle: u32, color: u32, decoration: u8) -> bool {
+        let mut env = main_env();
+        // SAFETY: the method's signature is `(IIII)Z`.
+        let restyled = unsafe {
+            env.call_method_unchecked(
+                &self.measurer,
+                self.restyle,
+                ReturnType::Primitive(Primitive::Boolean),
+                &[
+                    JValue::Int(previous as jint).as_jni(),
+                    JValue::Int(handle as jint).as_jni(),
+                    JValue::Int(color as jint).as_jni(),
+                    JValue::Int(jint::from(decoration)).as_jni(),
+                ],
+            )
+        };
+        check(&mut env, "TextMeasurer.restyle");
+        restyled.and_then(|value| value.z()).unwrap_or(false)
     }
 
     fn hit_test(&self, handle: u32, position: Offset) -> usize {
@@ -402,7 +424,8 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_create<'local>(
             "layout",
             "(ILjava/lang/String;Ljava/nio/ByteBuffer;)V",
         ),
-        relayout: method(&mut env, &measurer, "relayout", "(IIII)V"),
+        relayout: method(&mut env, &measurer, "relayout", "(IIII)Z"),
+        restyle: method(&mut env, &measurer, "restyle", "(IIII)Z"),
         hit_test: method(&mut env, &measurer, "hitTest", "(IFF)I"),
         cursor: method(&mut env, &measurer, "cursor", "(II)V"),
         release: method(&mut env, &measurer, "release", "(I)V"),

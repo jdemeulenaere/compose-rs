@@ -242,6 +242,13 @@ impl TextStyle {
         line_height: Sp::UNSPECIFIED,
     };
 
+    /// Whether a text in `other` is laid out as in this style, as Compose's
+    /// `hasSameLayoutAffectingAttributes`: everything but what only paints (the color and the
+    /// decoration, Compose's `hasSameDrawAffectingAttributes`) is the same.
+    pub fn has_same_layout_affecting_attributes(&self, other: &TextStyle) -> bool {
+        TextStyle { color: other.color, text_decoration: other.text_decoration, ..*self } == *other
+    }
+
     /// `other`'s set fields over these, as `merge`.
     pub fn merge(&self, other: &TextStyle) -> TextStyle {
         let sp = |other: Sp, this: Sp| if other.is_specified() { other } else { this };
@@ -392,6 +399,19 @@ pub trait TextMeasurer: std::any::Any {
         &mut self,
         _paragraph: ParagraphHandle,
         _constraints: Constraints,
+    ) -> Option<ParagraphHandle> {
+        None
+    }
+    /// Draws `paragraph`'s layout in `style`'s paint (its color and decoration, what
+    /// [`TextStyle::has_same_layout_affecting_attributes`] leaves out), as Compose draws a kept
+    /// paragraph with `Paragraph.paint(color, textDecoration)` after a style change that leaves
+    /// its layout alone: returns a new paragraph with the same layout, laid out again in that
+    /// paint later, and releases `paragraph`. `None` (the default) when the measurer can't:
+    /// `paragraph` is left as it is, and the caller lays the text out anew.
+    fn restyle(
+        &mut self,
+        _paragraph: ParagraphHandle,
+        _style: &TextStyle,
     ) -> Option<ParagraphHandle> {
         None
     }
@@ -588,6 +608,23 @@ impl TextMeasurer for FixedTextMeasurer {
 
     fn max_intrinsic_width(&self, handle: ParagraphHandle) -> Option<f32> {
         Some(self.paragraph(handle).intrinsic)
+    }
+
+    /// The same lines under a new handle: its paragraphs have no paint.
+    fn restyle(&mut self, handle: ParagraphHandle, _style: &TextStyle) -> Option<ParagraphHandle> {
+        let paragraph = self.paragraphs.get_mut(handle.0 as usize)?.take()?;
+        let restyled = match self.free.pop() {
+            Some(index) => {
+                self.paragraphs[index as usize] = Some(paragraph);
+                ParagraphHandle(index)
+            }
+            None => {
+                self.paragraphs.push(Some(paragraph));
+                ParagraphHandle(self.paragraphs.len() as u64 - 1)
+            }
+        };
+        self.free.push(handle.0);
+        Some(restyled)
     }
 
     fn hit_test(&self, handle: ParagraphHandle, position: Offset) -> TextPosition {
