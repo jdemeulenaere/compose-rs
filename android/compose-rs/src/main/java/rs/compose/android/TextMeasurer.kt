@@ -787,6 +787,8 @@ internal class TextMeasurer(
      */
     fun recordLaidOut(deadlineNanos: Long): Boolean {
         recordedLast = 0
+        // Without render nodes of their own (`PARAGRAPH_RENDER_NODES`), nothing to record ahead.
+        if (!paragraphNodes) laidOut.clear()
         if (laidOut.size == 0) return false
         Trace.beginSection("compose-rs: record paragraphs")
         var index = 0

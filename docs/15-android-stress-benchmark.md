@@ -850,6 +850,96 @@ The frame no longer copies each wave into a new `Arc<Path>` (a `&Path` was copie
 
 **Elsewhere nothing moved.** The feed's scroll, 4 runs each, main against D530: main thread p50 / p90 / p99 0.82 / 1.30 / 2.09 → 0.80 / 1.27 / 2.06 ms, RenderThread 1.48 / 2.21 / 3.34 → 1.46 / 2.22 / 3.29 ms, work 603 / 905 → 597 / 913 ms; no janky frame in either. Its icons are fixed contents (`Arc<PathData>`), defined once as before.
 
+## Parity mode (D560–D569, D574)
+
+Since D560, compose-rs does by default the work Compose 1.12.1 does: lazy lists and grids prefetch as Compose's strategy and scheduler ("Compose's defaults" (a), (b), (f)), and every compose-rs-only behaviour is an optimization flag, off by default where it changes the work or the rendering ([07](07-platforms.md), "compose-rs's own optimizations"). measure.py runs bench-rs at parity by default (`--optimizations parity`: `-e optimizations none`, the hint session off too, D568), and each flag alone against it with `--optimizations each` (D569), the candidates for Compose in [14](14-performance-opportunities.md), "Backport candidates".
+
+What's still not the same, structurally: compose-rs has no pausable composition (a request composes its item in one step, where Compose pauses and resumes after the next frame); it composes in rounds, not in measure, so its layout may compose one item more than it places (kept as the next one rather than composed twice) and deactivates the items that left in a composition round of the same frame; the strategy hears a frame's deltas summed; lazy items are repaint boundaries (D155); and compose-rs masks any small filled path, where Compose's `VectorPainter` caches vectors only (no screen here has another small filled path; D567).
+
+### A short parity run against round 13
+
+`results/2026-10-24-pixel-8-pro-parity-short.json`: compose-rs at 637b3ad (D560–D569) with no optimization, `--runs 5` (startup), 3 traced runs of each scroll and animation scenario, `speed`. Every run started cool (thermal status 0, battery 29.9–31.7 °C; no wait). Round 13 (`results/2026-10-24-pixel-8-pro-round-13.json`, compose-rs at d39ecb4 with its hint session, draw-ahead, kept items, two ahead, D341's budget and D153's single-drawing fade and paragraph nodes; before D520–D529's layers) in parentheses. Medians of 3 runs, ms.
+
+| | Compose | compose-rs, parity (round 13) |
+|---|---|---|
+| Feed scroll main p50 / p90 / p99 | 1.46 / 3.11 / 6.95 (1.50 / 3.22 / 7.09) | 1.33 / 2.30 / 3.49 (0.77 / 1.23 / 2.07) |
+| Feed scroll RenderThread p50 / p90 / p99 | 2.01 / 3.34 / 5.00 (2.10 / 3.43 / 5.08) | 2.59 / 3.53 / 5.16 (1.48 / 2.00 / 2.97) |
+| Feed scroll work main / RenderThread | 890 / 930 (854 / 888) | 438 / 728 (646 / 985) |
+| Stress scroll main p50 / p90 / p99 | 1.29 / 3.22 / 7.96 (1.26 / 3.23 / 8.01) | 1.38 / 2.43 / 3.99 (0.83 / 1.24 / 2.39) |
+| Stress scroll RenderThread p50 / p90 / p99 | 2.67 / 3.65 / 5.54 (2.53 / 3.53 / 5.03) | 3.10 / 4.68 / 6.57 (2.12 / 2.90 / 3.86) |
+| Stress scroll work main / RenderThread | 1,216 / 1,623 (1,314 / 1,706) | 483 / 1,147 (710 / 1,541) |
+| Scroll janky frames, the app's (feed + stress, 3 runs each) | 2 + 6 (3 + 5) | 0 + 0 (1 + 0) |
+| Feed animation main p99 / RenderThread p99 | 3.35 / 5.95 (3.33 / 5.74) | 2.88 / 5.20 (2.85 / 4.96) |
+| Stress animation RenderThread p50 / p90 / p99 | 7.47 / 8.90 / 10.80 (7.42 / 8.87 / 10.80) | 7.63 / 8.75 / 10.17 (6.39 / 7.54 / 8.49) |
+| Stress animation work main / RenderThread | 2,924 / 5,994 (3,028 / 6,049) | 1,511 / 5,755 (1,493 / 3,362) |
+| Stress animation graphics memory after 13 s (MB) | 165.3 (146.1) | 149.5 (173.7) |
+| Startup `TotalTime` feed / big / stress (medians of 5) | 135 / 233 / 148 (136 / 236 / 147) | 114 / 156 / 119 (106 / 167 / 119) |
+
+What changed, for compose-rs:
+
+- **Durations rose, work fell, on the scrolls.** Without its own hint session, compose-rs's threads get only HWUI's boost, which follows the main thread's frames, short here: the RenderThread's time-weighted boost minimum was 37–49 on the feed and 67–86 on the stress list, against Compose's 91–192 and 252–277 (D370's picture; D390's reason for the session). At lower clocks the same frames take longer and the work metric (time on the fastest core at its highest frequency) falls. Its main thread's p99 stays at half Compose's (3.49 against 6.95 ms on the feed, 3.99 against 7.96 on the stress list), with no janky frame of the app's; its RenderThread is now slower than Compose's on the stress list (p99 6.57 against 5.54 ms), with D522's render node per clip and layer as Compose's and no boost of its own.
+- **The stress animation's RenderThread does Compose's work** (5.8 s against Compose's 6.0; round 13 3.4 s before D521's offscreen fades), and its p50 is Compose's (7.63 against 7.47 ms). Its graphics memory after 13 s is lower than Compose's (149.5 against 165.3 MB) without D510's flush layer: the frame's offscreen layers flush the dropped masks in, as D510 found Compose's do.
+- **Startup and memory** didn't move beyond the runs' spread.
+
+### Each optimization alone
+
+`results/2026-10-24-pixel-8-pro-parity-each.json`: bench-rs at parity and with each flag alone, interleaved run by run, 3 runs each (`--optimizations each`). The change of each median against parity's (the first row, ms or ms of work); 3 runs a subject, so differences under about 5 % are within the runs' spread.
+
+**Feed scroll** (3 runs a subject)
+
+| | main p50 | p90 | p99 | RenderThread p50 | p90 | p99 | work main | work RenderThread | app janky |
+|---|---|---|---|---|---|---|---|---|---|
+| parity | 1.28 | 2.27 | 3.40 | 2.63 | 3.42 | 4.78 | 428 | 714 | 0 |
+| `single_drawing_fade` | +2 % | -4 % | +5 % | -1 % | +1 % | +0 % | +3 % | +3 % | 0 |
+| `performance_hint` | -34 % | -36 % | -28 % | -46 % | -42 % | -38 % | +56 % | +33 % | 0 |
+| `reuse_paragraph_at_same_layout_width` | +2 % | -2 % | +0 % | -1 % | +3 % | +5 % | +3 % | +3 % | 0 |
+| `prefetch_two_ahead` | +1 % | -5 % | +1 % | -3 % | +0 % | +3 % | -1 % | +0 % | 0 |
+| `prefetch_budget_recent_maximum` | +2 % | -0 % | -4 % | -0 % | +2 % | +3 % | -1 % | -1 % | 0 |
+| `prefetch_at_rest` | +2 % | +0 % | -6 % | -1 % | +0 % | +3 % | -1 % | -1 % | 0 |
+| `keep_items_behind` | +3 % | -2 % | +2 % | +1 % | +4 % | +4 % | +0 % | -0 % | 0 |
+| `draw_prefetched_ahead` | +3 % | -16 % | -14 % | -1 % | +1 % | +7 % | +4 % | +0 % | 0 |
+| `grid_lines_beyond` | +2 % | +0 % | +5 % | -2 % | +6 % | +9 % | +0 % | +1 % | 0 |
+| `flush_layers_before_dropped_paths` | +3 % | +1 % | +9 % | +0 % | +1 % | +6 % | -0 % | -1 % | 0 |
+| `paragraph_render_nodes` | +5 % | +5 % | +10 % | -1 % | +6 % | +7 % | +3 % | +4 % | 0 |
+
+**Stress scroll** (3 runs a subject)
+
+| | main p50 | p90 | p99 | RenderThread p50 | p90 | p99 | work main | work RenderThread | app janky |
+|---|---|---|---|---|---|---|---|---|---|
+| parity | 1.43 | 2.46 | 4.06 | 3.20 | 4.68 | 6.42 | 478 | 1,141 | 0 |
+| `single_drawing_fade` | -3 % | -0 % | +4 % | -1 % | +2 % | +1 % | +1 % | +1 % | 0 |
+| `performance_hint` | -36 % | -36 % | -35 % | -37 % | -40 % | -36 % | +49 % | +26 % | 0 |
+| `reuse_paragraph_at_same_layout_width` | -1 % | +1 % | -4 % | -5 % | +2 % | +0 % | +0 % | +2 % | 0 |
+| `prefetch_two_ahead` | -3 % | -2 % | -2 % | -4 % | -1 % | -1 % | +5 % | +4 % | 0 |
+| `prefetch_budget_recent_maximum` | -2 % | +1 % | +1 % | +0 % | +2 % | +3 % | -0 % | -0 % | 0 |
+| `prefetch_at_rest` | -3 % | -3 % | -0 % | -4 % | -0 % | +0 % | +2 % | +1 % | 0 |
+| `keep_items_behind` | +1 % | -0 % | -1 % | -3 % | -0 % | +1 % | +5 % | +4 % | 0 |
+| `draw_prefetched_ahead` | -3 % | -16 % | -20 % | -1 % | +2 % | +5 % | +1 % | +2 % | 0 |
+| `grid_lines_beyond` | -3 % | +2 % | -1 % | +2 % | +0 % | -1 % | +1 % | +0 % | 0 |
+| `flush_layers_before_dropped_paths` | -3 % | -3 % | -2 % | -1 % | +4 % | -1 % | +2 % | -0 % | 0 |
+| `paragraph_render_nodes` | -1 % | -1 % | -1 % | -2 % | +1 % | +2 % | +3 % | +6 % | 0 |
+
+**Stress animation** (3 runs a subject)
+
+| | main p50 | p90 | p99 | RenderThread p50 | p90 | p99 | work main | work RenderThread | app janky | graphics after 13 s (MB) | GPU caches after (MB) |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| parity | 2.50 | 4.04 | 6.04 | 7.71 | 8.80 | 10.16 | 1,582 | 6,123 | 2 | 185.9 | 146.5 |
+| `single_drawing_fade` | -0 % | -20 % | -23 % | -17 % | -15 % | -13 % | -2 % | -42 % | 0 | -12 % | -15 % |
+| `flush_layers_before_dropped_paths` | -3 % | -3 % | +6 % | -1 % | -0 % | +4 % | +1 % | +1 % | 3 | -14 % | -33 % |
+| `paragraph_render_nodes` | -6 % | +3 % | +12 % | -2 % | -1 % | -1 % | +1 % | +1 % | 1 | -5 % | -12 % |
+| `performance_hint` | -3 % | -1 % | +18 % | -2 % | +0 % | +5 % | +5 % | +1 % | 3 | -21 % | -25 % |
+
+Taken before main's text fidelity changes (D570–D573: letter spacing, line heights, colour tokens), which change both sides of each comparison alike; the full round follows. The scrolls' runs come from one `each` invocation (every run started at battery 29.5–33.7 °C, thermal status 0, no wait). Its stress-animation runs were throttled and aren't used (kept apart in the JSON as `stress_animation_throttled`): the thermal guard waited with the last run's animation still on screen, so the device kept heating (battery 39 °C, skin 39.6 °C, thermal status 1; gfxinfo p50 15–23 ms against 14–15). measure.py now stops our apps before waiting, and can wait on the skin temperature too (D574). The stress animation was then measured again for parity and the four flags that can matter there, in three invocations of one run per subject, each run started at thermal status 0, battery ≤ 34 °C and skin ≤ 35 °C (no time limit), the subjects' order rotated; all twelve would have taken more than the 90 minutes allowed at about 4 minutes of cooling a run. The other flags do nothing on that screen (no list, no text changing width).
+
+What each one does here:
+
+- **`performance_hint`** is the largest: on the scrolls every percentile on both threads falls by a third or more (feed RenderThread p50 2.63 → 1.41 ms), the work metric rising (+26 to +56 %: the same frames at higher clocks spend more of their time waiting on memory, D440). It's what round 13's compose-rs had, and why its durations were shorter than parity's. On the stress animation it changes nothing measurable: HWUI's session already boosts its long frames.
+- **`draw_prefetched_ahead`**: main-thread p90 and p99 −14 to −20 % on both scrolls (the frames revealing an item draw nodes recorded ahead, D350), RenderThread unchanged, work within the spread.
+- **`single_drawing_fade`**: on the stress animation, RenderThread work −42 % and p50 / p99 −17 / −13 % (its 132 faded cells skip their offscreen layers, D521), main thread p90 / p99 −20 / −23 % (it waits less for the RenderThread's sync), graphics memory −12 %. Nothing on the scrolls, which fade nothing.
+- **`flush_layers_before_dropped_paths`**: on the stress animation, HWUI's GPU caches after 13 s −33 % (146.5 → 98 MB), graphics memory −14 %, durations within the spread: with the cells offscreen at parity, D510's flush still frees the dropped masks' textures earlier than the frame's own layers do. Graphics memory varies between subjects by up to about 20 % in 3 runs (the hint session's −21 % is that), so only the GPU caches' drop stands out.
+- **The others** (`reuse_paragraph_at_same_layout_width`, `prefetch_two_ahead`, `prefetch_budget_recent_maximum`, `prefetch_at_rest`, `keep_items_behind`, `grid_lines_beyond`, `paragraph_render_nodes`) are within 3 runs' spread on these flings: each is for a case these runs have little of (a width changing, D551; a reversal's first frame, D375/D380; overruns past the vsync, D341/D381, which need more runs to count; grids, D456). `paragraph_render_nodes` no longer helps: each card is a render node of its own since D522, so a paragraph's node saves little recording.
+
+
 ## Next steps
 
 - **Paths in the bridge**: done (D410, D411, "With paths reused"); since D530, a `Path` is reset in place as Compose's, the waves one remembered `Path` as Kotlin's, refilled in the same `android.graphics.Path`s (D532), with no change on the device and D510's flush still needed (D534, "A mutable `Path`"). HWUI's worker threads take about 21 to 30 % more CPU time than Compose's in the animation (10.8 against 8.9 s in round 12, 10.9 against 8.6 s in round 11, 11.0 against 8.5 s in round 10, 11.2 against 8.6 s in round 9) for the same work, at lower clocks: not changed (D511). In round 13, 10.8 against 8.6 s. The graphics memory compose-rs held more than Compose 3 s after start was a frame's worth of the waves' masks: fixed (D510; "HWUI's workers and graphics memory"), confirmed beside Compose in round 13 (114.9 against 119.7 MB); the 9 MB of scratch buffers left is a level both apps land on, run by run. After 13 s both apps' graphics memory has grown by up to 90 MB, in the GPU driver's memory more than in Skia's caches, differently each run: not traced.

@@ -49,9 +49,30 @@ Gain over cost, best first.
 | 25 | **A mutable `Path`, reset in place as Compose's** (D530–D535), the stress waves one remembered `Path` as Kotlin's, redefined in place on Android (the same ids and `android.graphics.Path`s each frame). **Done** | Headless `stress_animation` frame 109.5 → 105.1 µs (−4 %), with serialization 132.0 → 122.6 µs (−7 %), −50 bytes a frame; on the device within the runs' spread (frames, work, HWUI's workers, memory); D510's flush still needed (without it: graphics 150.6 against 114.7 MB) | measured, interleaved, 6 runs each (docs/15, "A mutable `Path`") | M, low (a group naming a path redefined since its record was recorded gets a new version) | `Path` is mutable and shared (`Rc`), with Compose's API; `draw_path` takes `&Path` or `&Arc<PathData>`; `ImageVector` holds `Arc<PathData>`s | — |
 | 26 | **Text laid out again for new constraints from what was measured of it**, as Compose's `ParagraphIntrinsics` (Android: `TextMeasurer.relayout`), with Compose's rule for when (D550). **Done** | Resize screen: main-thread work 1,853 → 1,094 ms (−41 %), text layout 39.6 → 20.2 µs each, main p50 / p90 / p99 3.28 / 4.39 / 5.66 → 2.49 / 3.21 / 4.69 ms (Compose 5.16 / 8.29 / 10.29) | measured, interleaved, 6 runs | S, low (a new handle as before; checked against fresh layouts headless) | none (Compose's behaviour) | — |
 | 27 | **A text keeps its paragraph while the width it's laid out at doesn't change** (D551): a compose-rs-only optimization, **off by default**, a candidate for Compose | Resize screen, on top of #26: main-thread work 1,094 → 527 ms (−52 %), RenderThread work 815 → 547 ms, text layouts 51,047 → 3,609, main p99 4.69 → 4.33 ms (p50 2.49 → 2.67: the hint session lowers the clocks). Headless resizing frame: grid 96.2 → 9.9 µs, nested levels 46.2 → 4.6 µs | measured, interleaved, 6 runs; headless, criterion | S, low (exact by construction; checked frame by frame against hosts without it, three measurers) | none while off | — |
+| 28 | **Parity by default** (D560–D569): Compose's prefetch, compose-rs's own behaviours as flags measured one by one ("Backport candidates" below) | At parity, compose-rs's main thread p99 is half Compose's on both scrolls (3.49 / 3.99 against 6.95 / 7.96 ms); its RenderThread, without its own hint session, is slower than Compose's on the stress list (p99 6.57 against 5.54 ms) | docs/15, "Parity mode" | measure.py's `--optimizations` | the defaults: no prefetch at rest, one ahead, none kept behind, Compose's budget | — |
 | 13 | **Memory: exact or chunked growth** of the slot table's groups and the node arena | Big screen's Rust heap −1.7 MB allocated of 17.9 (unused capacity, so maybe not resident: the PSS saving is unmeasured; its PSS is 69.8 MB); no transient 2× copy when growing | estimated (heapprofd) | S–M | none | — |
 
 Small, negative or not worth doing: see "What isn't worth doing".
+
+## Backport candidates: compose-rs's optimizations (D560–D569, D574)
+
+Since D560, compose-rs does Compose's work by default, and each of its own behaviours is a flag ([07](07-platforms.md), "compose-rs's own optimizations"). Each one alone against parity, on the Pixel 8 Pro, 3 interleaved runs a subject (`--optimizations each`; docs/15, "Parity mode", has the tables; taken before main's text fidelity changes, D570–D573, which change both sides of each comparison alike). The change of the median against parity's; under about 5 % is within 3 runs' spread. As candidates for Compose:
+
+| Flag | Scroll (feed / stress list) | Stress animation | As a Compose change |
+|---|---|---|---|
+| `performance_hint` | durations −28 to −46 % on both threads, work +26 to +56 % | none measurable | HWUI's own session reporting both threads' work against one interval (D500), so short main-thread frames still boost the RenderThread |
+| `draw_prefetched_ahead` | main p90 / p99 −16 / −14 % (feed), −16 / −20 % (stress) | — | record a prefetched item's layer (`GraphicsLayer.record`) in the idle time Compose's prefetch already has, before a frame places it |
+| `single_drawing_fade` | none (nothing fades) | RenderThread work −42 %, p50 −17 %, main p99 −23 %, graphics −12 % | `CompositingStrategy.Auto` choosing `ModulateAlpha` for a layer holding one drawing |
+| `flush_layers_before_dropped_paths` | none | GPU caches −33 %, graphics −14 % | HWUI flushing before a frame whose sync freed path masks (a platform change) |
+| `paragraph_render_nodes` | within the spread (+5 to +10 % main p99, noise) | within the spread | not a candidate since layers are per card |
+| `reuse_paragraph_at_same_layout_width` | within the spread | — | D551's resize screen: main work −52 %; `newLayoutWillBeDifferent` comparing the width laid out at |
+| `prefetch_two_ahead` | within the spread | — | `LazyListPrefetchStrategy(nestedPrefetchItemCount)` has no "items ahead"; a count would be a new parameter |
+| `prefetch_budget_recent_maximum` | within the spread | — | D341/D381 cut overruns past the vsync (16.5 against 38.8 slices a run); more runs needed to see it here |
+| `prefetch_at_rest` | within the spread | — | a first fling's first frames finding the next item composed |
+| `keep_items_behind` | within the spread | — | a reversal's first frame (D375: its slowest `doFrame` 11.4 → 5.3 ms) |
+| `grid_lines_beyond` | within the spread (no grid) | — | — |
+
+Ranking for Compose: the hint session first (it isn't a library change in Compose's sense: HWUI's session already exists, and what it misses is the main thread's short frames; a session reporting both threads' work against one interval, D500, is what HWUI could do); then drawing prefetched items ahead (`RenderNode`s recorded in the idle time Compose's prefetch already has: a `GraphicsLayer.record` of the premeasured item's layer, placed later); the others are within the runs' spread here, or matter only on screens these don't have (a text's width changing, D551; reversals, D375; paths dropped every frame, D510).
 
 ## Method
 

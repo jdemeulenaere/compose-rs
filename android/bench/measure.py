@@ -52,7 +52,8 @@ crates/compose-ui/src/optimizations.rs, docs/07; passed to bench-rs as `-e optim
           Compose does (docs/15, "Parity mode"; D568)
   all     every one
   each    no Compose: bench-rs at parity, then with each optimization alone, interleaved run
-          by run (subjects `rs` and `rs+<name>`): each one's effect, for docs/14's backport table
+          by run (subjects `rs` and `rs+<name>`): each one's effect, for docs/14's backport table;
+          --each-only NAME,... measures only those
   NAMES   a comma-separated list of names (`-name` takes one out: `all,-performance_hint`)
 The report records the mode and each subject's list (`"optimizations"`). --traced-runs sets the
 traced runs of each subject in the scroll and animation scenarios (3).
@@ -60,9 +61,12 @@ traced runs of each subject in the scroll and animation scenarios (3).
 Thermal guards: before each run (each startup round, each traced run), the device's thermal
 status (`dumpsys thermalservice`: "Thermal Status") and battery temperature (`dumpsys battery`)
 are read; while the status is above 0 or the battery above --battery-limit (36 °C), the run
-waits, reading them every 10 s, at most --thermal-wait-limit seconds (600), then goes on and
-notes it (`"gave_up"`). Each traced run records them before and after it (`"thermal"`), the
-startup rounds in the report's `"thermal"`.
+waits, reading them every 10 s, at most --thermal-wait-limit seconds (600; 0: until cool), then
+goes on and notes it (`"gave_up"`); --skin-limit adds the skin temperature (Pixel's VIRTUAL-SKIN,
+which it throttles by). The stress animation heats the device fast: its `each` runs want
+--battery-limit 34 --skin-limit 35 --thermal-wait-limit 0, and --rotate to vary which subject runs
+last (D574). Each traced run records them before and
+after it (`"thermal"`), the startup rounds in the report's `"thermal"`.
 
 Before each run, our other apps (`rs.compose.*`) are force-stopped (D343).
 """
@@ -869,12 +873,13 @@ def optimization_names(source):
     return re.findall(r'^\s*name: "([a-z_]+)",', source, re.M)
 
 
-def parse_optimizations(text, names):
+def parse_optimizations(text, names, each_only=None):
     """The mode `--optimizations` names and the subjects it measures: (name, package,
     bench-rs's `-e optimizations`, None for the Compose app). `parity` (the default) runs
     bench-rs with none (`none`, the hint session off: Compose has none); `all` with every one;
-    `each` bench-rs alone, at parity and with each of `names` alone; else a list of names
-    (each may be `-name`), checked against `names`. Stops the run on an unknown name."""
+    `each` bench-rs alone, at parity and with each of `names` alone (or of `each_only`'s, a
+    comma-separated list); else a list of names (each may be `-name`), checked against `names`.
+    Stops the run on an unknown name."""
     text = (text or "parity").strip()
     compose = ("compose", APPS["compose"], None)
     if text == "parity":
@@ -882,8 +887,14 @@ def parse_optimizations(text, names):
     if text == "all":
         return "all", [compose, ("rs", APPS["rs"], "all")]
     if text == "each":
+        chosen = names
+        if each_only:
+            chosen = [name.strip() for name in each_only.split(",") if name.strip()]
+            unknown = [name for name in chosen if name not in names]
+            if unknown:
+                raise SystemExit(f"unknown optimizations {unknown}; known: {', '.join(names)}")
         return "each", [("rs", APPS["rs"], "none")] + [
-            (f"rs+{name}", APPS["rs"], name) for name in names]
+            (f"rs+{name}", APPS["rs"], name) for name in chosen]
     words = [word.strip() for word in text.split(",") if word.strip()]
     unknown = [word for word in words
                if word.lstrip("-") not in names and word not in ("none", "all", "default")]
@@ -894,7 +905,7 @@ def parse_optimizations(text, names):
 
 # Thermal guards (see above): how often and how long a run waits for the device to cool.
 THERMAL_POLL_S = 10
-THERMAL = {"battery_limit_c": 36.0, "wait_limit_s": 600}
+THERMAL = {"battery_limit_c": 36.0, "wait_limit_s": 600, "skin_limit_c": None}
 
 
 def thermal_status(output):
@@ -910,9 +921,14 @@ def battery_celsius(output):
 
 
 def skin_celsius(output):
-    """The skin temperature `dumpsys thermalservice` caches (Pixel's VIRTUAL-SKIN), or None."""
-    match = re.search(r"Temperature\{mValue=([-\d.]+), mType=3, mName=VIRTUAL-SKIN,", output)
-    return round(float(match.group(1)), 1) if match else None
+    """The skin temperature (Pixel's VIRTUAL-SKIN) from `dumpsys thermalservice`: the HAL's
+    current one if listed, else the cached one (which can be stale), or None."""
+    current = output.split("Current temperatures from HAL:", 1)
+    for text in ([current[1]] if len(current) > 1 else []) + [output]:
+        match = re.search(r"Temperature\{mValue=([-\d.]+), mType=3, mName=VIRTUAL-SKIN,", text)
+        if match:
+            return round(float(match.group(1)), 1)
+    return None
 
 
 def thermal_state():
@@ -921,30 +937,44 @@ def thermal_state():
             "skin_c": skin_celsius(thermal)}
 
 
-def too_warm(state, battery_limit_c):
+def too_warm(state, battery_limit_c, skin_limit_c=None):
+    """The thermal status above 0, the battery above `battery_limit_c`, or (with a limit) the
+    skin above `skin_limit_c`: Pixel throttles by its skin temperature first."""
     return ((state.get("status") or 0) > 0
-            or (state.get("battery_c") is not None and state["battery_c"] > battery_limit_c))
+            or (state.get("battery_c") is not None and state["battery_c"] > battery_limit_c)
+            or (skin_limit_c is not None and state.get("skin_c") is not None
+                and state["skin_c"] > skin_limit_c))
 
 
 def wait_until_cool(what, read=thermal_state, sleep=time.sleep, battery_limit_c=None,
-                    limit_s=None):
+                    limit_s=None, skin_limit_c=None):
     """Waits while the device is too warm (thermal status above 0, battery above the limit),
-    reading it every THERMAL_POLL_S, at most `limit_s`. Returns the state the run starts in
+    reading it every THERMAL_POLL_S, at most `limit_s` (0: until it's cool, however long).
+    Returns the state the run starts in
     (`"before"`), the seconds waited and whether it gave up (still too warm)."""
     battery_limit_c = THERMAL["battery_limit_c"] if battery_limit_c is None else battery_limit_c
     limit_s = THERMAL["wait_limit_s"] if limit_s is None else limit_s
+    skin_limit_c = THERMAL["skin_limit_c"] if skin_limit_c is None else skin_limit_c
     state = read()
     waited = 0
-    while too_warm(state, battery_limit_c) and waited < limit_s:
+    while too_warm(state, battery_limit_c, skin_limit_c) and (limit_s == 0 or waited < limit_s):
         if waited == 0:
             print(f"{what}: waiting for the device to cool ({state})")
         sleep(THERMAL_POLL_S)
         waited += THERMAL_POLL_S
         state = read()
-    gave_up = too_warm(state, battery_limit_c)
+    gave_up = too_warm(state, battery_limit_c, skin_limit_c)
     if gave_up:
         print(f"{what}: still too warm after {waited} s ({state}); measuring anyway")
     return {"before": state, "waited_s": waited, "gave_up": gave_up}
+
+
+def cool_down(what):
+    """Our apps stopped (the last run's would go on animating, heating the device while it
+    waits), then `wait_until_cool`."""
+    for package in APPS.values():
+        stop(package)
+    return wait_until_cool(what)
 
 
 # The scenarios, in the order they run (docs/12, docs/15).
@@ -1036,7 +1066,7 @@ def scroll_run(trace_processor, out_dir, package, name, run, capacities, screen=
     FrameTimeline counts as jank no app causes. The warm-up's frames are left out of the stats
     (from the first input after it), and gfxinfo is reset after it. Returns the memory after
     start, and the stats."""
-    thermal = wait_until_cool(f"{prefix} {name} {run}")
+    thermal = cool_down(f"{prefix} {name} {run}")
     fresh(package)
     time.sleep(1.0)
     start(package, screen, optimizations=optimizations)
@@ -1064,7 +1094,7 @@ def startup_scenario(tp, out_dir, runs, screens, subjects, thermal_log):
     first, noted in `thermal_log`."""
     startup = {name: {screen: [] for screen in screens} for name, _, _ in subjects}
     for run in range(runs):
-        thermal = wait_until_cool(f"startup {'/'.join(screens)} round {run}")
+        thermal = cool_down(f"startup {'/'.join(screens)} round {run}")
         for screen in screens:
             for name, package, optimizations in subjects:
                 startup[name][screen].append(cold_start(package, screen, optimizations))
@@ -1120,7 +1150,7 @@ def animation_scenario(tp, out_dir, capacities, screen, prefix, subjects, runs=3
     for run in range(runs):
         for name, package, optimizations in subjects:
             def animation_run():
-                thermal = wait_until_cool(f"{prefix} {name} {run}")
+                thermal = cool_down(f"{prefix} {name} {run}")
                 fresh(package)
                 time.sleep(1.0)
                 start(package, screen, optimizations=optimizations)
@@ -1167,14 +1197,26 @@ def main():
     parser.add_argument("--battery-limit", type=float, default=THERMAL["battery_limit_c"],
                         help="the battery temperature (°C) above which a run waits")
     parser.add_argument("--thermal-wait-limit", type=int, default=THERMAL["wait_limit_s"],
-                        help="the most a run waits for the device to cool (s)")
+                        help="the most a run waits for the device to cool (s; 0: no limit)")
+    parser.add_argument("--skin-limit", type=float, default=None,
+                        help="the skin temperature (°C, VIRTUAL-SKIN) above which a run waits "
+                             "(none by default)")
+    parser.add_argument("--rotate", type=int, default=0,
+                        help="start the subjects' order this many places on (each run's order "
+                             "the same), so no subject always runs warmest")
+    parser.add_argument("--each-only", default=None,
+                        help="with --optimizations each: only these optimizations, "
+                             "comma-separated")
     arguments = parser.parse_args()
     scenarios = parse_scenarios(arguments.scenarios)
     with open(OPTIMIZATIONS_SOURCE) as file:
         names = optimization_names(file.read())
-    mode, subjects = parse_optimizations(arguments.optimizations, names)
+    mode, subjects = parse_optimizations(arguments.optimizations, names, arguments.each_only)
     THERMAL["battery_limit_c"] = arguments.battery_limit
     THERMAL["wait_limit_s"] = arguments.thermal_wait_limit
+    THERMAL["skin_limit_c"] = arguments.skin_limit
+    rotate = arguments.rotate % len(subjects)
+    subjects = subjects[rotate:] + subjects[:rotate]
     thermal_log = []
     os.makedirs(arguments.out, exist_ok=True)
     tp = arguments.trace_processor
@@ -1188,6 +1230,7 @@ def main():
               "optimizations": {"mode": mode,
                                 "subjects": {name: given for name, _, given in subjects}},
               "thermal": {"battery_limit_c": THERMAL["battery_limit_c"],
+                          "skin_limit_c": THERMAL["skin_limit_c"],
                           "wait_limit_s": THERMAL["wait_limit_s"], "startup": thermal_log},
               # Each CPU's capacity and highest frequency (kHz): what "work" and the little
               # cores' share are computed from.

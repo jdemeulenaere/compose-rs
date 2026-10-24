@@ -461,6 +461,12 @@ class OptimizationsTest(unittest.TestCase):
             ("rs+performance_hint", "rs.compose.bench.rs", "performance_hint"),
             ("rs+keep_items_behind", "rs.compose.bench.rs", "keep_items_behind")])
 
+    def test_each_only_some(self):
+        mode, subjects = measure.parse_optimizations("each", self.NAMES, "keep_items_behind")
+        self.assertEqual([name for name, _, _ in subjects], ["rs", "rs+keep_items_behind"])
+        with self.assertRaises(SystemExit):
+            measure.parse_optimizations("each", self.NAMES, "faster")
+
     def test_a_list_is_checked(self):
         mode, subjects = measure.parse_optimizations(
             "all, -performance_hint", self.NAMES)
@@ -491,6 +497,8 @@ Cached temperatures:
 \tTemperature{mValue=24.900002, mType=2, mName=battery, mStatus=0}
 \tTemperature{mValue=37.06034, mType=3, mName=VIRTUAL-SKIN, mStatus=0}
 HAL Ready: true
+Current temperatures from HAL:
+\tTemperature{mValue=38.2, mType=3, mName=VIRTUAL-SKIN, mStatus=0}
 """
 BATTERY = """\
 Current Battery Service state:
@@ -506,7 +514,9 @@ class ThermalTest(unittest.TestCase):
     def test_status_and_temperatures(self):
         self.assertEqual(measure.thermal_status(THERMALSERVICE), 2)
         self.assertEqual(measure.battery_celsius(BATTERY), 29.9)
-        self.assertEqual(measure.skin_celsius(THERMALSERVICE), 37.1)
+        # The HAL's current value, not the cached one.
+        self.assertEqual(measure.skin_celsius(THERMALSERVICE), 38.2)
+        self.assertEqual(measure.skin_celsius(THERMALSERVICE.split("Current")[0]), 37.1)
         self.assertIsNone(measure.thermal_status(""))
         self.assertIsNone(measure.battery_celsius(""))
         self.assertIsNone(measure.skin_celsius(""))
@@ -515,6 +525,9 @@ class ThermalTest(unittest.TestCase):
         self.assertFalse(measure.too_warm({"status": 0, "battery_c": 35.9}, 36.0))
         self.assertTrue(measure.too_warm({"status": 1, "battery_c": 30.0}, 36.0))
         self.assertTrue(measure.too_warm({"status": 0, "battery_c": 36.1}, 36.0))
+        # The skin, with a limit.
+        self.assertTrue(measure.too_warm({"status": 0, "battery_c": 33.0, "skin_c": 37.6}, 34.0, 35.0))
+        self.assertFalse(measure.too_warm({"status": 0, "battery_c": 33.0, "skin_c": 37.6}, 34.0))
         # Unknown: not too warm.
         self.assertFalse(measure.too_warm({"status": None, "battery_c": None}, 36.0))
 
@@ -541,6 +554,28 @@ class ThermalTest(unittest.TestCase):
         self.assertEqual(slept, [10, 10, 10])
         self.assertEqual((thermal["waited_s"], thermal["gave_up"]), (30, True))
         self.assertIn("still too warm after 30 s", output.getvalue())
+
+    def test_no_limit_waits_until_cool(self):
+        states = iter([{"status": 0, "battery_c": 39.0 - step * 0.1} for step in range(60)])
+        slept = []
+        with contextlib.redirect_stdout(io.StringIO()):
+            thermal = measure.wait_until_cool("run", read=lambda: next(states),
+                                              sleep=slept.append, battery_limit_c=34.0, limit_s=0)
+        self.assertEqual((thermal["waited_s"], thermal["gave_up"]), (500, False))
+        self.assertLessEqual(thermal["before"]["battery_c"], 34.0)
+
+    def test_our_apps_stop_before_the_wait(self):
+        """The last run's app would go on animating while the device cools."""
+        calls = []
+        original_stop, original_wait = measure.stop, measure.wait_until_cool
+        try:
+            measure.stop = lambda package: calls.append(("stop", package))
+            measure.wait_until_cool = lambda what: calls.append(("wait", what)) or {}
+            measure.cool_down("stress-animation rs 0")
+        finally:
+            measure.stop, measure.wait_until_cool = original_stop, original_wait
+        self.assertEqual(calls, [("stop", "rs.compose.bench.compose"), ("stop", "rs.compose.bench.rs"),
+                                 ("wait", "stress-animation rs 0")])
 
     def test_a_cool_device_waits_for_nothing(self):
         thermal = measure.wait_until_cool("run", read=lambda: {"status": 0, "battery_c": 30.0},
