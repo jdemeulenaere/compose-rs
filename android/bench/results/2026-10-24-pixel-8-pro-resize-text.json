@@ -1,0 +1,2054 @@
+{
+ "fresh": [
+  {
+   "since": 0,
+   "frames": 1202,
+   "janky_frames": 0,
+   "jank_kinds": {},
+   "jank_sides": {
+    "app": 0,
+    "compositor": 0,
+    "other": 0
+   },
+   "visibly_late_frames": 0,
+   "late_do_frames": 86,
+   "late_do_frames_after_work": 6,
+   "prefetches": 0,
+   "buffer_stuffing": {
+    "recovery_slices": 0,
+    "buffer_stuffed": 0,
+    "occurred": false
+   },
+   "main_thread_frame_ms": {
+    "count": 1194,
+    "p50": 3.290161,
+    "p90": 4.337117,
+    "p99": 5.822469,
+    "max": 7.121338
+   },
+   "render_thread_frame_ms": {
+    "count": 1195,
+    "p50": 1.493001,
+    "p90": 2.006104,
+    "p99": 3.926391
+   },
+   "cpu_ms": {
+    "main": 3995.722166,
+    "render": 1866.371073
+   },
+   "work_ms": {
+    "main": 1861.384424,
+    "render": 911.35914
+   },
+   "render_boost": {
+    "counter": true,
+    "time_weighted_min": 27.584488166784446,
+    "unboosted_frame_share": 0.9372384937238494,
+    "frames_before_counter": 0,
+    "buckets": {
+     "unboosted": {
+      "frames": 1120,
+      "share": 0.9372384937238494,
+      "p50": 1.496134,
+      "p90": 1.973389,
+      "p99": 3.845297
+     },
+     "100-199": {
+      "frames": 75,
+      "share": 0.06276150627615062,
+      "p50": 1.456461,
+      "p90": 3.086548,
+      "p99": 4.057251
+     },
+     "200+": {
+      "frames": 0,
+      "share": 0.0,
+      "p50": null,
+      "p90": null,
+      "p99": null
+     }
+    },
+    "little_core_share": 0.0
+   },
+   "slices": {
+    "compose-rs: frame": {
+     "count": 1194,
+     "ms": 2688.999392
+    },
+    "compose-rs: text layout": {
+     "count": 50954,
+     "ms": 2031.949347
+    },
+    "TextStringSimpleNode::measure": {
+     "count": 0,
+     "ms": 0.0
+    }
+   }
+  },
+  {
+   "since": 0,
+   "frames": 1197,
+   "janky_frames": 0,
+   "jank_kinds": {},
+   "jank_sides": {
+    "app": 0,
+    "compositor": 0,
+    "other": 0
+   },
+   "visibly_late_frames": 0,
+   "late_do_frames": 73,
+   "late_do_frames_after_work": 3,
+   "prefetches": 0,
+   "buffer_stuffing": {
+    "recovery_slices": 0,
+    "buffer_stuffed": 0,
+    "occurred": false
+   },
+   "main_thread_frame_ms": {
+    "count": 1191,
+    "p50": 3.19869,
+    "p90": 4.307047,
+    "p99": 5.506959,
+    "max": 6.94344
+   },
+   "render_thread_frame_ms": {
+    "count": 1191,
+    "p50": 1.437867,
+    "p90": 1.97819,
+    "p99": 3.761231
+   },
+   "cpu_ms": {
+    "main": 3929.065031,
+    "render": 1851.9253299999998
+   },
+   "work_ms": {
+    "main": 1804.40537,
+    "render": 893.266575
+   },
+   "render_boost": {
+    "counter": true,
+    "time_weighted_min": 42.75399532728052,
+    "unboosted_frame_share": 0.8740554156171285,
+    "frames_before_counter": 0,
+    "buckets": {
+     "unboosted": {
+      "frames": 1041,
+      "share": 0.8740554156171285,
+      "p50": 1.408895,
+      "p90": 1.97819,
+      "p99": 3.761271
+     },
+     "100-199": {
+      "frames": 139,
+      "share": 0.11670864819479429,
+      "p50": 1.598633,
+      "p90": 1.947387,
+      "p99": 3.502319
+     },
+     "200+": {
+      "frames": 11,
+      "share": 0.009235936188077247,
+      "p50": 1.912557,
+      "p90": 2.084025,
+      "p99": 2.112061
+     }
+    },
+    "little_core_share": 0.0
+   },
+   "slices": {
+    "compose-rs: frame": {
+     "count": 1192,
+     "ms": 2634.185823
+    },
+    "compose-rs: text layout": {
+     "count": 50914,
+     "ms": 1998.786603
+    },
+    "TextStringSimpleNode::measure": {
+     "count": 0,
+     "ms": 0.0
+    }
+   }
+  },
+  {
+   "since": 0,
+   "frames": 1204,
+   "janky_frames": 0,
+   "jank_kinds": {},
+   "jank_sides": {
+    "app": 0,
+    "compositor": 0,
+    "other": 0
+   },
+   "visibly_late_frames": 0,
+   "late_do_frames": 94,
+   "late_do_frames_after_work": 4,
+   "prefetches": 0,
+   "buffer_stuffing": {
+    "recovery_slices": 0,
+    "buffer_stuffed": 0,
+    "occurred": false
+   },
+   "main_thread_frame_ms": {
+    "count": 1197,
+    "p50": 3.167074,
+    "p90": 4.342041,
+    "p99": 5.594604,
+    "max": 7.113525
+   },
+   "render_thread_frame_ms": {
+    "count": 1197,
+    "p50": 1.456461,
+    "p90": 2.260335,
+    "p99": 3.845784
+   },
+   "cpu_ms": {
+    "main": 3917.115536,
+    "render": 1871.986432
+   },
+   "work_ms": {
+    "main": 1808.11669,
+    "render": 908.309179
+   },
+   "render_boost": {
+    "counter": true,
+    "time_weighted_min": 141.77356151803346,
+    "unboosted_frame_share": 0.5158862876254181,
+    "frames_before_counter": 1,
+    "buckets": {
+     "unboosted": {
+      "frames": 617,
+      "share": 0.5158862876254181,
+      "p50": 1.447672,
+      "p90": 2.430705,
+      "p99": 3.859131
+     },
+     "100-199": {
+      "frames": 198,
+      "share": 0.16555183946488294,
+      "p50": 1.349325,
+      "p90": 1.924194,
+      "p99": 3.677937
+     },
+     "200+": {
+      "frames": 381,
+      "share": 0.318561872909699,
+      "p50": 1.506754,
+      "p90": 2.177165,
+      "p99": 3.834717
+     }
+    },
+    "little_core_share": 0.0
+   },
+   "slices": {
+    "compose-rs: frame": {
+     "count": 1198,
+     "ms": 2611.648076
+    },
+    "compose-rs: text layout": {
+     "count": 51061,
+     "ms": 1983.391717
+    },
+    "TextStringSimpleNode::measure": {
+     "count": 0,
+     "ms": 0.0
+    }
+   }
+  },
+  {
+   "since": 0,
+   "frames": 1198,
+   "janky_frames": 0,
+   "jank_kinds": {},
+   "jank_sides": {
+    "app": 0,
+    "compositor": 0,
+    "other": 0
+   },
+   "visibly_late_frames": 0,
+   "late_do_frames": 117,
+   "late_do_frames_after_work": 4,
+   "prefetches": 0,
+   "buffer_stuffing": {
+    "recovery_slices": 0,
+    "buffer_stuffed": 0,
+    "occurred": false
+   },
+   "main_thread_frame_ms": {
+    "count": 1193,
+    "p50": 3.408325,
+    "p90": 4.528483,
+    "p99": 5.618164,
+    "max": 7.501749
+   },
+   "render_thread_frame_ms": {
+    "count": 1193,
+    "p50": 1.571167,
+    "p90": 2.08728,
+    "p99": 3.915975
+   },
+   "cpu_ms": {
+    "main": 4086.325261,
+    "render": 1956.286742
+   },
+   "work_ms": {
+    "main": 1894.09184,
+    "render": 934.737126
+   },
+   "render_boost": {
+    "counter": true,
+    "time_weighted_min": 47.37652554148874,
+    "unboosted_frame_share": 0.802013422818792,
+    "frames_before_counter": 1,
+    "buckets": {
+     "unboosted": {
+      "frames": 956,
+      "share": 0.802013422818792,
+      "p50": 1.538493,
+      "p90": 2.046021,
+      "p99": 3.909709
+     },
+     "100-199": {
+      "frames": 214,
+      "share": 0.17953020134228187,
+      "p50": 1.660848,
+      "p90": 2.189454,
+      "p99": 4.067343
+     },
+     "200+": {
+      "frames": 22,
+      "share": 0.018456375838926176,
+      "p50": 1.667724,
+      "p90": 1.920206,
+      "p99": 2.535686
+     }
+    },
+    "little_core_share": 0.00036540860020815906
+   },
+   "slices": {
+    "compose-rs: frame": {
+     "count": 1194,
+     "ms": 2737.098789
+    },
+    "compose-rs: text layout": {
+     "count": 51094,
+     "ms": 2064.565938
+    },
+    "TextStringSimpleNode::measure": {
+     "count": 0,
+     "ms": 0.0
+    }
+   }
+  },
+  {
+   "since": 0,
+   "frames": 1202,
+   "janky_frames": 0,
+   "jank_kinds": {},
+   "jank_sides": {
+    "app": 0,
+    "compositor": 0,
+    "other": 0
+   },
+   "visibly_late_frames": 0,
+   "late_do_frames": 103,
+   "late_do_frames_after_work": 0,
+   "prefetches": 0,
+   "buffer_stuffing": {
+    "recovery_slices": 0,
+    "buffer_stuffed": 0,
+    "occurred": false
+   },
+   "main_thread_frame_ms": {
+    "count": 1193,
+    "p50": 3.300781,
+    "p90": 4.397746,
+    "p99": 5.721639,
+    "max": 6.813639
+   },
+   "render_thread_frame_ms": {
+    "count": 1193,
+    "p50": 1.572347,
+    "p90": 2.043742,
+    "p99": 3.917928
+   },
+   "cpu_ms": {
+    "main": 3960.35034,
+    "render": 1947.306006
+   },
+   "work_ms": {
+    "main": 1854.865412,
+    "render": 945.267143
+   },
+   "render_boost": {
+    "counter": true,
+    "time_weighted_min": 85.4800128465976,
+    "unboosted_frame_share": 0.663872590108969,
+    "frames_before_counter": 0,
+    "buckets": {
+     "unboosted": {
+      "frames": 792,
+      "share": 0.663872590108969,
+      "p50": 1.618124,
+      "p90": 2.002035,
+      "p99": 3.778158
+     },
+     "100-199": {
+      "frames": 183,
+      "share": 0.1533948030176027,
+      "p50": 1.575805,
+      "p90": 1.951335,
+      "p99": 3.993531
+     },
+     "200+": {
+      "frames": 218,
+      "share": 0.18273260687342832,
+      "p50": 1.288249,
+      "p90": 2.775919,
+      "p99": 4.106323
+     }
+    },
+    "little_core_share": 0.0001874543594459596
+   },
+   "slices": {
+    "compose-rs: frame": {
+     "count": 1193,
+     "ms": 2641.681744
+    },
+    "compose-rs: text layout": {
+     "count": 50776,
+     "ms": 1991.065451
+    },
+    "TextStringSimpleNode::measure": {
+     "count": 0,
+     "ms": 0.0
+    }
+   }
+  },
+  {
+   "since": 0,
+   "frames": 1208,
+   "janky_frames": 0,
+   "jank_kinds": {},
+   "jank_sides": {
+    "app": 0,
+    "compositor": 0,
+    "other": 0
+   },
+   "visibly_late_frames": 0,
+   "late_do_frames": 99,
+   "late_do_frames_after_work": 5,
+   "prefetches": 0,
+   "buffer_stuffing": {
+    "recovery_slices": 0,
+    "buffer_stuffed": 0,
+    "occurred": false
+   },
+   "main_thread_frame_ms": {
+    "count": 1201,
+    "p50": 3.29598,
+    "p90": 4.404419,
+    "p99": 5.666585,
+    "max": 6.628092
+   },
+   "render_thread_frame_ms": {
+    "count": 1199,
+    "p50": 1.488281,
+    "p90": 2.010864,
+    "p99": 3.953899
+   },
+   "cpu_ms": {
+    "main": 4030.945514,
+    "render": 1904.6296069999999
+   },
+   "work_ms": {
+    "main": 1895.700766,
+    "render": 930.853925
+   },
+   "render_boost": {
+    "counter": true,
+    "time_weighted_min": 82.62851376193237,
+    "unboosted_frame_share": 0.6522101751459549,
+    "frames_before_counter": 0,
+    "buckets": {
+     "unboosted": {
+      "frames": 782,
+      "share": 0.6522101751459549,
+      "p50": 1.400594,
+      "p90": 2.08549,
+      "p99": 3.812256
+     },
+     "100-199": {
+      "frames": 258,
+      "share": 0.2151793160967473,
+      "p50": 1.583415,
+      "p90": 1.956625,
+      "p99": 4.119141
+     },
+     "200+": {
+      "frames": 159,
+      "share": 0.13261050875729774,
+      "p50": 1.645549,
+      "p90": 1.972452,
+      "p99": 3.092041
+     }
+    },
+    "little_core_share": 0.0
+   },
+   "slices": {
+    "compose-rs: frame": {
+     "count": 1202,
+     "ms": 2707.273005
+    },
+    "compose-rs: text layout": {
+     "count": 51488,
+     "ms": 2044.996229
+    },
+    "TextStringSimpleNode::measure": {
+     "count": 0,
+     "ms": 0.0
+    }
+   }
+  }
+ ],
+ "parity": [
+  {
+   "since": 0,
+   "frames": 1207,
+   "janky_frames": 0,
+   "jank_kinds": {},
+   "jank_sides": {
+    "app": 0,
+    "compositor": 0,
+    "other": 0
+   },
+   "visibly_late_frames": 0,
+   "late_do_frames": 93,
+   "late_do_frames_after_work": 4,
+   "prefetches": 0,
+   "buffer_stuffing": {
+    "recovery_slices": 0,
+    "buffer_stuffed": 0,
+    "occurred": false
+   },
+   "main_thread_frame_ms": {
+    "count": 1196,
+    "p50": 2.401815,
+    "p90": 3.005819,
+    "p99": 4.172567,
+    "max": 5.519246
+   },
+   "render_thread_frame_ms": {
+    "count": 1194,
+    "p50": 1.645711,
+    "p90": 2.288452,
+    "p99": 4.22172
+   },
+   "cpu_ms": {
+    "main": 2934.630131,
+    "render": 2072.373445
+   },
+   "work_ms": {
+    "main": 1168.862642,
+    "render": 878.931201
+   },
+   "render_boost": {
+    "counter": true,
+    "time_weighted_min": 21.382027916216426,
+    "unboosted_frame_share": 0.9455611390284757,
+    "frames_before_counter": 0,
+    "buckets": {
+     "unboosted": {
+      "frames": 1129,
+      "share": 0.9455611390284757,
+      "p50": 1.652059,
+      "p90": 2.31368,
+      "p99": 4.22172
+     },
+     "100-199": {
+      "frames": 65,
+      "share": 0.05443886097152429,
+      "p50": 1.581828,
+      "p90": 1.969279,
+      "p99": 3.937094
+     },
+     "200+": {
+      "frames": 0,
+      "share": 0.0,
+      "p50": null,
+      "p90": null,
+      "p99": null
+     }
+    },
+    "little_core_share": 0.0
+   },
+   "slices": {
+    "compose-rs: frame": {
+     "count": 1198,
+     "ms": 1469.350807
+    },
+    "compose-rs: text layout": {
+     "count": 51178,
+     "ms": 982.961513
+    },
+    "TextStringSimpleNode::measure": {
+     "count": 0,
+     "ms": 0.0
+    }
+   }
+  },
+  {
+   "since": 0,
+   "frames": 1206,
+   "janky_frames": 1,
+   "jank_kinds": {
+    "App Deadline Missed": 1
+   },
+   "jank_sides": {
+    "app": 1,
+    "compositor": 0,
+    "other": 0
+   },
+   "visibly_late_frames": 3,
+   "late_do_frames": 36,
+   "late_do_frames_after_work": 4,
+   "prefetches": 0,
+   "buffer_stuffing": {
+    "recovery_slices": 0,
+    "buffer_stuffed": 0,
+    "occurred": false
+   },
+   "main_thread_frame_ms": {
+    "count": 1200,
+    "p50": 2.452434,
+    "p90": 3.323527,
+    "p99": 5.256673,
+    "max": 15.671021
+   },
+   "render_thread_frame_ms": {
+    "count": 1202,
+    "p50": 1.636231,
+    "p90": 2.350261,
+    "p99": 4.070353
+   },
+   "cpu_ms": {
+    "main": 3098.729516,
+    "render": 2102.9708
+   },
+   "work_ms": {
+    "main": 1042.384059,
+    "render": 777.697752
+   },
+   "render_boost": {
+    "counter": true,
+    "time_weighted_min": 75.28693330506913,
+    "unboosted_frame_share": 0.7277268942547876,
+    "frames_before_counter": 1,
+    "buckets": {
+     "unboosted": {
+      "frames": 874,
+      "share": 0.7277268942547876,
+      "p50": 1.685343,
+      "p90": 2.312866,
+      "p99": 3.981893
+     },
+     "100-199": {
+      "frames": 21,
+      "share": 0.017485428809325562,
+      "p50": 1.205119,
+      "p90": 2.027629,
+      "p99": 3.588867
+     },
+     "200+": {
+      "frames": 306,
+      "share": 0.2547876769358868,
+      "p50": 1.566528,
+      "p90": 2.841471,
+      "p99": 4.317301
+     }
+    },
+    "little_core_share": 0.0
+   },
+   "slices": {
+    "compose-rs: frame": {
+     "count": 1200,
+     "ms": 1551.031137
+    },
+    "compose-rs: text layout": {
+     "count": 51004,
+     "ms": 1046.692219
+    },
+    "TextStringSimpleNode::measure": {
+     "count": 0,
+     "ms": 0.0
+    }
+   }
+  },
+  {
+   "since": 0,
+   "frames": 1210,
+   "janky_frames": 0,
+   "jank_kinds": {},
+   "jank_sides": {
+    "app": 0,
+    "compositor": 0,
+    "other": 0
+   },
+   "visibly_late_frames": 0,
+   "late_do_frames": 22,
+   "late_do_frames_after_work": 3,
+   "prefetches": 0,
+   "buffer_stuffing": {
+    "recovery_slices": 0,
+    "buffer_stuffed": 0,
+    "occurred": false
+   },
+   "main_thread_frame_ms": {
+    "count": 1203,
+    "p50": 2.696899,
+    "p90": 3.428793,
+    "p99": 5.14384,
+    "max": 6.735149
+   },
+   "render_thread_frame_ms": {
+    "count": 1204,
+    "p50": 1.829346,
+    "p90": 2.413208,
+    "p99": 3.823974
+   },
+   "cpu_ms": {
+    "main": 3348.116959,
+    "render": 2345.3152680000003
+   },
+   "work_ms": {
+    "main": 1014.198501,
+    "render": 743.206786
+   },
+   "render_boost": {
+    "counter": true,
+    "time_weighted_min": 38.87958665230869,
+    "unboosted_frame_share": 0.8156146179401993,
+    "frames_before_counter": 0,
+    "buckets": {
+     "unboosted": {
+      "frames": 982,
+      "share": 0.8156146179401993,
+      "p50": 1.816406,
+      "p90": 2.41276,
+      "p99": 3.920206
+     },
+     "100-199": {
+      "frames": 211,
+      "share": 0.17524916943521596,
+      "p50": 1.882447,
+      "p90": 2.449626,
+      "p99": 3.400798
+     },
+     "200+": {
+      "frames": 11,
+      "share": 0.009136212624584718,
+      "p50": 1.93339,
+      "p90": 2.277466,
+      "p99": 2.278116
+     }
+    },
+    "little_core_share": 0.0
+   },
+   "slices": {
+    "compose-rs: frame": {
+     "count": 1203,
+     "ms": 1665.92267
+    },
+    "compose-rs: text layout": {
+     "count": 50938,
+     "ms": 1103.954635
+    },
+    "TextStringSimpleNode::measure": {
+     "count": 0,
+     "ms": 0.0
+    }
+   }
+  },
+  {
+   "since": 0,
+   "frames": 1209,
+   "janky_frames": 0,
+   "jank_kinds": {},
+   "jank_sides": {
+    "app": 0,
+    "compositor": 0,
+    "other": 0
+   },
+   "visibly_late_frames": 0,
+   "late_do_frames": 86,
+   "late_do_frames_after_work": 5,
+   "prefetches": 0,
+   "buffer_stuffing": {
+    "recovery_slices": 0,
+    "buffer_stuffed": 0,
+    "occurred": false
+   },
+   "main_thread_frame_ms": {
+    "count": 1208,
+    "p50": 2.295614,
+    "p90": 2.958456,
+    "p99": 4.095093,
+    "max": 5.909464
+   },
+   "render_thread_frame_ms": {
+    "count": 1206,
+    "p50": 1.57841,
+    "p90": 2.226969,
+    "p99": 3.965088
+   },
+   "cpu_ms": {
+    "main": 2882.387194,
+    "render": 1995.5115429999998
+   },
+   "work_ms": {
+    "main": 1158.053261,
+    "render": 864.673498
+   },
+   "render_boost": {
+    "counter": true,
+    "time_weighted_min": 22.009673222461473,
+    "unboosted_frame_share": 0.9459234608985025,
+    "frames_before_counter": 4,
+    "buckets": {
+     "unboosted": {
+      "frames": 1137,
+      "share": 0.9459234608985025,
+      "p50": 1.57841,
+      "p90": 2.230509,
+      "p99": 3.965088
+     },
+     "100-199": {
+      "frames": 54,
+      "share": 0.04492512479201331,
+      "p50": 1.57312,
+      "p90": 1.898478,
+      "p99": 3.288656
+     },
+     "200+": {
+      "frames": 11,
+      "share": 0.009151414309484194,
+      "p50": 1.59436,
+      "p90": 2.062663,
+      "p99": 5.007609
+     }
+    },
+    "little_core_share": 0.0
+   },
+   "slices": {
+    "compose-rs: frame": {
+     "count": 1208,
+     "ms": 1434.70689
+    },
+    "compose-rs: text layout": {
+     "count": 51508,
+     "ms": 965.467805
+    },
+    "TextStringSimpleNode::measure": {
+     "count": 0,
+     "ms": 0.0
+    }
+   }
+  },
+  {
+   "since": 0,
+   "frames": 1199,
+   "janky_frames": 0,
+   "jank_kinds": {},
+   "jank_sides": {
+    "app": 0,
+    "compositor": 0,
+    "other": 0
+   },
+   "visibly_late_frames": 0,
+   "late_do_frames": 2,
+   "late_do_frames_after_work": 0,
+   "prefetches": 0,
+   "buffer_stuffing": {
+    "recovery_slices": 0,
+    "buffer_stuffed": 0,
+    "occurred": false
+   },
+   "main_thread_frame_ms": {
+    "count": 1193,
+    "p50": 2.580892,
+    "p90": 3.404867,
+    "p99": 4.96464,
+    "max": 7.90975
+   },
+   "render_thread_frame_ms": {
+    "count": 1192,
+    "p50": 1.744588,
+    "p90": 2.267131,
+    "p99": 3.047038
+   },
+   "cpu_ms": {
+    "main": 3246.622769,
+    "render": 2222.665434
+   },
+   "work_ms": {
+    "main": 1051.421598,
+    "render": 776.974174
+   },
+   "render_boost": {
+    "counter": true,
+    "time_weighted_min": 11.441884230456692,
+    "unboosted_frame_share": 0.9638958858102435,
+    "frames_before_counter": 1,
+    "buckets": {
+     "unboosted": {
+      "frames": 1148,
+      "share": 0.9638958858102435,
+      "p50": 1.75354,
+      "p90": 2.269124,
+      "p99": 3.074341
+     },
+     "100-199": {
+      "frames": 43,
+      "share": 0.03610411418975651,
+      "p50": 1.347209,
+      "p90": 1.833618,
+      "p99": 2.237305
+     },
+     "200+": {
+      "frames": 0,
+      "share": 0.0,
+      "p50": null,
+      "p90": null,
+      "p99": null
+     }
+    },
+    "little_core_share": 0.0
+   },
+   "slices": {
+    "compose-rs: frame": {
+     "count": 1193,
+     "ms": 1605.197755
+    },
+    "compose-rs: text layout": {
+     "count": 50658,
+     "ms": 1062.403911
+    },
+    "TextStringSimpleNode::measure": {
+     "count": 0,
+     "ms": 0.0
+    }
+   }
+  },
+  {
+   "since": 0,
+   "frames": 1199,
+   "janky_frames": 0,
+   "jank_kinds": {},
+   "jank_sides": {
+    "app": 0,
+    "compositor": 0,
+    "other": 0
+   },
+   "visibly_late_frames": 0,
+   "late_do_frames": 83,
+   "late_do_frames_after_work": 4,
+   "prefetches": 0,
+   "buffer_stuffing": {
+    "recovery_slices": 0,
+    "buffer_stuffed": 0,
+    "occurred": false
+   },
+   "main_thread_frame_ms": {
+    "count": 1193,
+    "p50": 2.524536,
+    "p90": 3.118733,
+    "p99": 4.53597,
+    "max": 5.92631
+   },
+   "render_thread_frame_ms": {
+    "count": 1193,
+    "p50": 1.760376,
+    "p90": 2.240193,
+    "p99": 3.929688
+   },
+   "cpu_ms": {
+    "main": 3077.113473,
+    "render": 2202.212215
+   },
+   "work_ms": {
+    "main": 1129.76046,
+    "render": 846.780984
+   },
+   "render_boost": {
+    "counter": true,
+    "time_weighted_min": 16.31670456129614,
+    "unboosted_frame_share": 0.9371332774518022,
+    "frames_before_counter": 0,
+    "buckets": {
+     "unboosted": {
+      "frames": 1118,
+      "share": 0.9371332774518022,
+      "p50": 1.754069,
+      "p90": 2.25769,
+      "p99": 3.937622
+     },
+     "100-199": {
+      "frames": 75,
+      "share": 0.06286672254819782,
+      "p50": 1.91276,
+      "p90": 2.115845,
+      "p99": 2.270141
+     },
+     "200+": {
+      "frames": 0,
+      "share": 0.0,
+      "p50": null,
+      "p90": null,
+      "p99": null
+     }
+    },
+    "little_core_share": 0.00036292369761467335
+   },
+   "slices": {
+    "compose-rs: frame": {
+     "count": 1194,
+     "ms": 1521.904406
+    },
+    "compose-rs: text layout": {
+     "count": 50994,
+     "ms": 1020.874177
+    },
+    "TextStringSimpleNode::measure": {
+     "count": 0,
+     "ms": 0.0
+    }
+   }
+  }
+ ],
+ "flag": [
+  {
+   "since": 0,
+   "frames": 1200,
+   "janky_frames": 0,
+   "jank_kinds": {},
+   "jank_sides": {
+    "app": 0,
+    "compositor": 0,
+    "other": 0
+   },
+   "visibly_late_frames": 0,
+   "late_do_frames": 3,
+   "late_do_frames_after_work": 0,
+   "prefetches": 0,
+   "buffer_stuffing": {
+    "recovery_slices": 0,
+    "buffer_stuffed": 0,
+    "occurred": false
+   },
+   "main_thread_frame_ms": {
+    "count": 1197,
+    "p50": 2.639363,
+    "p90": 3.228475,
+    "p99": 4.184286,
+    "max": 4.982381
+   },
+   "render_thread_frame_ms": {
+    "count": 1196,
+    "p50": 2.284912,
+    "p90": 3.127808,
+    "p99": 4.270508
+   },
+   "cpu_ms": {
+    "main": 3241.59095,
+    "render": 2979.152158
+   },
+   "work_ms": {
+    "main": 537.770927,
+    "render": 547.485903
+   },
+   "render_boost": {
+    "counter": true,
+    "time_weighted_min": 10.596245028606662,
+    "unboosted_frame_share": 0.9907640638119227,
+    "frames_before_counter": 5,
+    "buckets": {
+     "unboosted": {
+      "frames": 1180,
+      "share": 0.9907640638119227,
+      "p50": 2.282145,
+      "p90": 3.127808,
+      "p99": 4.270508
+     },
+     "100-199": {
+      "frames": 11,
+      "share": 0.009235936188077247,
+      "p50": 2.435995,
+      "p90": 2.684774,
+      "p99": 2.709432
+     },
+     "200+": {
+      "frames": 0,
+      "share": 0.0,
+      "p50": null,
+      "p90": null,
+      "p99": null
+     }
+    },
+    "little_core_share": 0.07724761938795877
+   },
+   "slices": {
+    "compose-rs: frame": {
+     "count": 1197,
+     "ms": 1428.37546
+    },
+    "compose-rs: text layout": {
+     "count": 3611,
+     "ms": 820.532259
+    },
+    "TextStringSimpleNode::measure": {
+     "count": 0,
+     "ms": 0.0
+    }
+   }
+  },
+  {
+   "since": 0,
+   "frames": 1204,
+   "janky_frames": 0,
+   "jank_kinds": {},
+   "jank_sides": {
+    "app": 0,
+    "compositor": 0,
+    "other": 0
+   },
+   "visibly_late_frames": 0,
+   "late_do_frames": 2,
+   "late_do_frames_after_work": 0,
+   "prefetches": 0,
+   "buffer_stuffing": {
+    "recovery_slices": 0,
+    "buffer_stuffed": 0,
+    "occurred": false
+   },
+   "main_thread_frame_ms": {
+    "count": 1198,
+    "p50": 2.650879,
+    "p90": 3.342774,
+    "p99": 3.96517,
+    "max": 6.374634
+   },
+   "render_thread_frame_ms": {
+    "count": 1201,
+    "p50": 2.323772,
+    "p90": 3.336019,
+    "p99": 4.655762
+   },
+   "cpu_ms": {
+    "main": 3279.746041,
+    "render": 3122.197443
+   },
+   "work_ms": {
+    "main": 521.917031,
+    "render": 541.110743
+   },
+   "render_boost": {
+    "counter": true,
+    "time_weighted_min": 5.5118146563931525,
+    "unboosted_frame_share": 1.0,
+    "frames_before_counter": 4,
+    "buckets": {
+     "unboosted": {
+      "frames": 1197,
+      "share": 1.0,
+      "p50": 2.324137,
+      "p90": 3.326172,
+      "p99": 4.633301
+     },
+     "100-199": {
+      "frames": 0,
+      "share": 0.0,
+      "p50": null,
+      "p90": null,
+      "p99": null
+     },
+     "200+": {
+      "frames": 0,
+      "share": 0.0,
+      "p50": null,
+      "p90": null,
+      "p99": null
+     }
+    },
+    "little_core_share": 0.17076068177408985
+   },
+   "slices": {
+    "compose-rs: frame": {
+     "count": 1198,
+     "ms": 1464.023992
+    },
+    "compose-rs: text layout": {
+     "count": 3612,
+     "ms": 833.736269
+    },
+    "TextStringSimpleNode::measure": {
+     "count": 0,
+     "ms": 0.0
+    }
+   }
+  },
+  {
+   "since": 0,
+   "frames": 1201,
+   "janky_frames": 0,
+   "jank_kinds": {},
+   "jank_sides": {
+    "app": 0,
+    "compositor": 0,
+    "other": 0
+   },
+   "visibly_late_frames": 0,
+   "late_do_frames": 9,
+   "late_do_frames_after_work": 1,
+   "prefetches": 0,
+   "buffer_stuffing": {
+    "recovery_slices": 0,
+    "buffer_stuffed": 0,
+    "occurred": false
+   },
+   "main_thread_frame_ms": {
+    "count": 1192,
+    "p50": 2.628011,
+    "p90": 3.326538,
+    "p99": 4.510905,
+    "max": 6.560995
+   },
+   "render_thread_frame_ms": {
+    "count": 1193,
+    "p50": 2.270711,
+    "p90": 3.232422,
+    "p99": 4.403728
+   },
+   "cpu_ms": {
+    "main": 3215.148061,
+    "render": 2995.657861
+   },
+   "work_ms": {
+    "main": 530.41313,
+    "render": 544.2013
+   },
+   "render_boost": {
+    "counter": true,
+    "time_weighted_min": 9.189004334690356,
+    "unboosted_frame_share": 1.0,
+    "frames_before_counter": 0,
+    "buckets": {
+     "unboosted": {
+      "frames": 1193,
+      "share": 1.0,
+      "p50": 2.270711,
+      "p90": 3.232422,
+      "p99": 4.403728
+     },
+     "100-199": {
+      "frames": 0,
+      "share": 0.0,
+      "p50": null,
+      "p90": null,
+      "p99": null
+     },
+     "200+": {
+      "frames": 0,
+      "share": 0.0,
+      "p50": null,
+      "p90": null,
+      "p99": null
+     }
+    },
+    "little_core_share": 0.11786718285788005
+   },
+   "slices": {
+    "compose-rs: frame": {
+     "count": 1192,
+     "ms": 1436.52371
+    },
+    "compose-rs: text layout": {
+     "count": 3594,
+     "ms": 826.939275
+    },
+    "TextStringSimpleNode::measure": {
+     "count": 0,
+     "ms": 0.0
+    }
+   }
+  },
+  {
+   "since": 0,
+   "frames": 1207,
+   "janky_frames": 0,
+   "jank_kinds": {},
+   "jank_sides": {
+    "app": 0,
+    "compositor": 0,
+    "other": 0
+   },
+   "visibly_late_frames": 0,
+   "late_do_frames": 2,
+   "late_do_frames_after_work": 0,
+   "prefetches": 0,
+   "buffer_stuffing": {
+    "recovery_slices": 0,
+    "buffer_stuffed": 0,
+    "occurred": false
+   },
+   "main_thread_frame_ms": {
+    "count": 1202,
+    "p50": 2.601196,
+    "p90": 3.362101,
+    "p99": 4.40507,
+    "max": 6.209635
+   },
+   "render_thread_frame_ms": {
+    "count": 1201,
+    "p50": 2.325927,
+    "p90": 3.337402,
+    "p99": 4.492513
+   },
+   "cpu_ms": {
+    "main": 3209.346782,
+    "render": 3110.079071
+   },
+   "work_ms": {
+    "main": 529.032728,
+    "render": 549.998986
+   },
+   "render_boost": {
+    "counter": true,
+    "time_weighted_min": 8.672846426017914,
+    "unboosted_frame_share": 0.9907795473595976,
+    "frames_before_counter": 8,
+    "buckets": {
+     "unboosted": {
+      "frames": 1182,
+      "share": 0.9907795473595976,
+      "p50": 2.325806,
+      "p90": 3.342082,
+      "p99": 4.492513
+     },
+     "100-199": {
+      "frames": 11,
+      "share": 0.009220452640402346,
+      "p50": 2.560059,
+      "p90": 3.328247,
+      "p99": 3.718221
+     },
+     "200+": {
+      "frames": 0,
+      "share": 0.0,
+      "p50": null,
+      "p90": null,
+      "p99": null
+     }
+    },
+    "little_core_share": 0.15538727627565604
+   },
+   "slices": {
+    "compose-rs: frame": {
+     "count": 1202,
+     "ms": 1429.221583
+    },
+    "compose-rs: text layout": {
+     "count": 3626,
+     "ms": 823.1135
+    },
+    "TextStringSimpleNode::measure": {
+     "count": 0,
+     "ms": 0.0
+    }
+   }
+  },
+  {
+   "since": 0,
+   "frames": 1204,
+   "janky_frames": 0,
+   "jank_kinds": {},
+   "jank_sides": {
+    "app": 0,
+    "compositor": 0,
+    "other": 0
+   },
+   "visibly_late_frames": 0,
+   "late_do_frames": 3,
+   "late_do_frames_after_work": 0,
+   "prefetches": 0,
+   "buffer_stuffing": {
+    "recovery_slices": 0,
+    "buffer_stuffed": 0,
+    "occurred": false
+   },
+   "main_thread_frame_ms": {
+    "count": 1195,
+    "p50": 2.717692,
+    "p90": 3.430827,
+    "p99": 4.465739,
+    "max": 5.962362
+   },
+   "render_thread_frame_ms": {
+    "count": 1199,
+    "p50": 2.378051,
+    "p90": 3.432169,
+    "p99": 4.559245
+   },
+   "cpu_ms": {
+    "main": 3370.932764,
+    "render": 3179.771122
+   },
+   "work_ms": {
+    "main": 525.456732,
+    "render": 552.372355
+   },
+   "render_boost": {
+    "counter": true,
+    "time_weighted_min": 21.859592935999945,
+    "unboosted_frame_share": 0.948203842940685,
+    "frames_before_counter": 2,
+    "buckets": {
+     "unboosted": {
+      "frames": 1135,
+      "share": 0.948203842940685,
+      "p50": 2.386312,
+      "p90": 3.446371,
+      "p99": 4.650309
+     },
+     "100-199": {
+      "frames": 51,
+      "share": 0.042606516290726815,
+      "p50": 2.170491,
+      "p90": 2.849935,
+      "p99": 3.952636
+     },
+     "200+": {
+      "frames": 11,
+      "share": 0.009189640768588136,
+      "p50": 1.961588,
+      "p90": 2.690348,
+      "p99": 2.910522
+     }
+    },
+    "little_core_share": 0.16566276621465587
+   },
+   "slices": {
+    "compose-rs: frame": {
+     "count": 1196,
+     "ms": 1482.969204
+    },
+    "compose-rs: text layout": {
+     "count": 3609,
+     "ms": 847.888241
+    },
+    "TextStringSimpleNode::measure": {
+     "count": 0,
+     "ms": 0.0
+    }
+   }
+  },
+  {
+   "since": 0,
+   "frames": 1200,
+   "janky_frames": 0,
+   "jank_kinds": {},
+   "jank_sides": {
+    "app": 0,
+    "compositor": 0,
+    "other": 0
+   },
+   "visibly_late_frames": 0,
+   "late_do_frames": 1,
+   "late_do_frames_after_work": 0,
+   "prefetches": 0,
+   "buffer_stuffing": {
+    "recovery_slices": 0,
+    "buffer_stuffed": 0,
+    "occurred": false
+   },
+   "main_thread_frame_ms": {
+    "count": 1193,
+    "p50": 2.769856,
+    "p90": 3.449463,
+    "p99": 4.445312,
+    "max": 11.787598
+   },
+   "render_thread_frame_ms": {
+    "count": 1195,
+    "p50": 2.408732,
+    "p90": 3.566976,
+    "p99": 4.693767
+   },
+   "cpu_ms": {
+    "main": 3315.936834,
+    "render": 3227.189702
+   },
+   "work_ms": {
+    "main": 517.984936,
+    "render": 544.164329
+   },
+   "render_boost": {
+    "counter": true,
+    "time_weighted_min": 15.671274453437917,
+    "unboosted_frame_share": 0.972338642078793,
+    "frames_before_counter": 2,
+    "buckets": {
+     "unboosted": {
+      "frames": 1160,
+      "share": 0.972338642078793,
+      "p50": 2.42745,
+      "p90": 3.567261,
+      "p99": 4.693767
+     },
+     "100-199": {
+      "frames": 25,
+      "share": 0.020955574182732608,
+      "p50": 2.036621,
+      "p90": 2.872436,
+      "p99": 3.808146
+     },
+     "200+": {
+      "frames": 8,
+      "share": 0.006705783738474434,
+      "p50": 1.598592,
+      "p90": 1.904703,
+      "p99": 2.224732
+     }
+    },
+    "little_core_share": 0.2175680548202245
+   },
+   "slices": {
+    "compose-rs: frame": {
+     "count": 1193,
+     "ms": 1491.427563
+    },
+    "compose-rs: text layout": {
+     "count": 3600,
+     "ms": 860.737625
+    },
+    "TextStringSimpleNode::measure": {
+     "count": 0,
+     "ms": 0.0
+    }
+   }
+  }
+ ],
+ "compose": [
+  {
+   "since": 0,
+   "frames": 1198,
+   "janky_frames": 0,
+   "jank_kinds": {},
+   "jank_sides": {
+    "app": 0,
+    "compositor": 0,
+    "other": 0
+   },
+   "visibly_late_frames": 0,
+   "late_do_frames": 210,
+   "late_do_frames_after_work": 1,
+   "prefetches": 0,
+   "buffer_stuffing": {
+    "recovery_slices": 0,
+    "buffer_stuffed": 0,
+    "occurred": false
+   },
+   "main_thread_frame_ms": {
+    "count": 1194,
+    "p50": 5.274129,
+    "p90": 8.303385,
+    "p99": 10.326579,
+    "max": 13.363444
+   },
+   "render_thread_frame_ms": {
+    "count": 1194,
+    "p50": 1.5743,
+    "p90": 2.233357,
+    "p99": 3.011516
+   },
+   "cpu_ms": {
+    "main": 6337.565683,
+    "render": 2083.990306
+   },
+   "work_ms": {
+    "main": 3508.313604,
+    "render": 898.17348
+   },
+   "render_boost": {
+    "counter": true,
+    "time_weighted_min": 400.462564011738,
+    "unboosted_frame_share": 0.0,
+    "frames_before_counter": 0,
+    "buckets": {
+     "unboosted": {
+      "frames": 0,
+      "share": 0.0,
+      "p50": null,
+      "p90": null,
+      "p99": null
+     },
+     "100-199": {
+      "frames": 21,
+      "share": 0.017587939698492462,
+      "p50": 2.186889,
+      "p90": 2.749105,
+      "p99": 3.818318
+     },
+     "200+": {
+      "frames": 1173,
+      "share": 0.9824120603015075,
+      "p50": 1.569174,
+      "p90": 2.210734,
+      "p99": 2.975342
+     }
+    },
+    "little_core_share": 0.0
+   },
+   "slices": {
+    "compose-rs: frame": {
+     "count": 0,
+     "ms": 0.0
+    },
+    "compose-rs: text layout": {
+     "count": 0,
+     "ms": 0.0
+    },
+    "TextStringSimpleNode::measure": {
+     "count": 50354,
+     "ms": 3400.882337
+    }
+   }
+  },
+  {
+   "since": 0,
+   "frames": 1204,
+   "janky_frames": 0,
+   "jank_kinds": {},
+   "jank_sides": {
+    "app": 0,
+    "compositor": 0,
+    "other": 0
+   },
+   "visibly_late_frames": 0,
+   "late_do_frames": 209,
+   "late_do_frames_after_work": 0,
+   "prefetches": 0,
+   "buffer_stuffing": {
+    "recovery_slices": 0,
+    "buffer_stuffed": 0,
+    "occurred": false
+   },
+   "main_thread_frame_ms": {
+    "count": 1199,
+    "p50": 4.896526,
+    "p90": 8.48287,
+    "p99": 10.313558,
+    "max": 12.375204
+   },
+   "render_thread_frame_ms": {
+    "count": 1200,
+    "p50": 1.677001,
+    "p90": 2.273844,
+    "p99": 2.998331
+   },
+   "cpu_ms": {
+    "main": 6159.602175,
+    "render": 2148.829738
+   },
+   "work_ms": {
+    "main": 3650.082875,
+    "render": 924.770504
+   },
+   "render_boost": {
+    "counter": true,
+    "time_weighted_min": 395.0264510603087,
+    "unboosted_frame_share": 0.0,
+    "frames_before_counter": 1,
+    "buckets": {
+     "unboosted": {
+      "frames": 0,
+      "share": 0.0,
+      "p50": null,
+      "p90": null,
+      "p99": null
+     },
+     "100-199": {
+      "frames": 60,
+      "share": 0.05004170141784821,
+      "p50": 2.07784,
+      "p90": 2.80367,
+      "p99": 3.041463
+     },
+     "200+": {
+      "frames": 1139,
+      "share": 0.9499582985821518,
+      "p50": 1.662964,
+      "p90": 2.21757,
+      "p99": 2.93156
+     }
+    },
+    "little_core_share": 0.0
+   },
+   "slices": {
+    "compose-rs: frame": {
+     "count": 0,
+     "ms": 0.0
+    },
+    "compose-rs: text layout": {
+     "count": 0,
+     "ms": 0.0
+    },
+    "TextStringSimpleNode::measure": {
+     "count": 50927,
+     "ms": 3321.251157
+    }
+   }
+  },
+  {
+   "since": 0,
+   "frames": 1206,
+   "janky_frames": 1,
+   "jank_kinds": {
+    "App Deadline Missed": 1
+   },
+   "jank_sides": {
+    "app": 1,
+    "compositor": 0,
+    "other": 0
+   },
+   "visibly_late_frames": 1178,
+   "late_do_frames": 213,
+   "late_do_frames_after_work": 0,
+   "prefetches": 0,
+   "buffer_stuffing": {
+    "recovery_slices": 0,
+    "buffer_stuffed": 0,
+    "occurred": false
+   },
+   "main_thread_frame_ms": {
+    "count": 1202,
+    "p50": 5.154907,
+    "p90": 8.229858,
+    "p99": 10.566365,
+    "max": 14.09314
+   },
+   "render_thread_frame_ms": {
+    "count": 1202,
+    "p50": 1.644043,
+    "p90": 2.348918,
+    "p99": 3.071859
+   },
+   "cpu_ms": {
+    "main": 6235.555635,
+    "render": 2173.220047
+   },
+   "work_ms": {
+    "main": 3648.374515,
+    "render": 910.789746
+   },
+   "render_boost": {
+    "counter": true,
+    "time_weighted_min": 383.74977755130516,
+    "unboosted_frame_share": 0.0,
+    "frames_before_counter": 1,
+    "buckets": {
+     "unboosted": {
+      "frames": 0,
+      "share": 0.0,
+      "p50": null,
+      "p90": null,
+      "p99": null
+     },
+     "100-199": {
+      "frames": 95,
+      "share": 0.0791007493755204,
+      "p50": 2.07426,
+      "p90": 2.972575,
+      "p99": 3.797079
+     },
+     "200+": {
+      "frames": 1106,
+      "share": 0.9208992506244796,
+      "p50": 1.611735,
+      "p90": 2.26355,
+      "p99": 2.912761
+     }
+    },
+    "little_core_share": 0.005750092825275691
+   },
+   "slices": {
+    "compose-rs: frame": {
+     "count": 0,
+     "ms": 0.0
+    },
+    "compose-rs: text layout": {
+     "count": 0,
+     "ms": 0.0
+    },
+    "TextStringSimpleNode::measure": {
+     "count": 51083,
+     "ms": 3355.874743
+    }
+   }
+  },
+  {
+   "since": 0,
+   "frames": 1199,
+   "janky_frames": 0,
+   "jank_kinds": {},
+   "jank_sides": {
+    "app": 0,
+    "compositor": 0,
+    "other": 0
+   },
+   "visibly_late_frames": 0,
+   "late_do_frames": 206,
+   "late_do_frames_after_work": 1,
+   "prefetches": 0,
+   "buffer_stuffing": {
+    "recovery_slices": 0,
+    "buffer_stuffed": 0,
+    "occurred": false
+   },
+   "main_thread_frame_ms": {
+    "count": 1191,
+    "p50": 4.936604,
+    "p90": 8.461019,
+    "p99": 10.61967,
+    "max": 13.387491
+   },
+   "render_thread_frame_ms": {
+    "count": 1192,
+    "p50": 1.591431,
+    "p90": 2.158488,
+    "p99": 2.847249
+   },
+   "cpu_ms": {
+    "main": 6138.529482,
+    "render": 2070.477052
+   },
+   "work_ms": {
+    "main": 3643.372602,
+    "render": 947.582304
+   },
+   "render_boost": {
+    "counter": true,
+    "time_weighted_min": 435.44382890070955,
+    "unboosted_frame_share": 0.0,
+    "frames_before_counter": 3,
+    "buckets": {
+     "unboosted": {
+      "frames": 0,
+      "share": 0.0,
+      "p50": null,
+      "p90": null,
+      "p99": null
+     },
+     "100-199": {
+      "frames": 11,
+      "share": 0.009251471825063078,
+      "p50": 2.443074,
+      "p90": 2.684733,
+      "p99": 2.847249
+     },
+     "200+": {
+      "frames": 1178,
+      "share": 0.990748528174937,
+      "p50": 1.582031,
+      "p90": 2.143025,
+      "p99": 2.832072
+     }
+    },
+    "little_core_share": 6.943230781579317e-05
+   },
+   "slices": {
+    "compose-rs: frame": {
+     "count": 0,
+     "ms": 0.0
+    },
+    "compose-rs: text layout": {
+     "count": 0,
+     "ms": 0.0
+    },
+    "TextStringSimpleNode::measure": {
+     "count": 50724,
+     "ms": 3302.14537
+    }
+   }
+  },
+  {
+   "since": 0,
+   "frames": 1211,
+   "janky_frames": 0,
+   "jank_kinds": {},
+   "jank_sides": {
+    "app": 0,
+    "compositor": 0,
+    "other": 0
+   },
+   "visibly_late_frames": 0,
+   "late_do_frames": 48,
+   "late_do_frames_after_work": 2,
+   "prefetches": 0,
+   "buffer_stuffing": {
+    "recovery_slices": 0,
+    "buffer_stuffed": 0,
+    "occurred": false
+   },
+   "main_thread_frame_ms": {
+    "count": 1204,
+    "p50": 5.43632,
+    "p90": 8.035156,
+    "p99": 9.61381,
+    "max": 11.454793
+   },
+   "render_thread_frame_ms": {
+    "count": 1205,
+    "p50": 1.624878,
+    "p90": 2.189331,
+    "p99": 2.939127
+   },
+   "cpu_ms": {
+    "main": 6805.584504,
+    "render": 2126.0820919999996
+   },
+   "work_ms": {
+    "main": 3575.776092,
+    "render": 928.179578
+   },
+   "render_boost": {
+    "counter": true,
+    "time_weighted_min": 394.5152049883735,
+    "unboosted_frame_share": 0.0,
+    "frames_before_counter": 0,
+    "buckets": {
+     "unboosted": {
+      "frames": 0,
+      "share": 0.0,
+      "p50": null,
+      "p90": null,
+      "p99": null
+     },
+     "100-199": {
+      "frames": 63,
+      "share": 0.05228215767634855,
+      "p50": 2.326254,
+      "p90": 2.967123,
+      "p99": 3.239665
+     },
+     "200+": {
+      "frames": 1142,
+      "share": 0.9477178423236514,
+      "p50": 1.602702,
+      "p90": 2.093669,
+      "p99": 2.775309
+     }
+    },
+    "little_core_share": 0.002250941305609755
+   },
+   "slices": {
+    "compose-rs: frame": {
+     "count": 0,
+     "ms": 0.0
+    },
+    "compose-rs: text layout": {
+     "count": 0,
+     "ms": 0.0
+    },
+    "TextStringSimpleNode::measure": {
+     "count": 51143,
+     "ms": 3719.886991
+    }
+   }
+  },
+  {
+   "since": 0,
+   "frames": 1209,
+   "janky_frames": 0,
+   "jank_kinds": {},
+   "jank_sides": {
+    "app": 0,
+    "compositor": 0,
+    "other": 0
+   },
+   "visibly_late_frames": 0,
+   "late_do_frames": 187,
+   "late_do_frames_after_work": 3,
+   "prefetches": 0,
+   "buffer_stuffing": {
+    "recovery_slices": 0,
+    "buffer_stuffed": 0,
+    "occurred": false
+   },
+   "main_thread_frame_ms": {
+    "count": 1202,
+    "p50": 5.235514,
+    "p90": 8.247884,
+    "p99": 10.280599,
+    "max": 12.748942
+   },
+   "render_thread_frame_ms": {
+    "count": 1199,
+    "p50": 1.663004,
+    "p90": 2.224976,
+    "p99": 2.86967
+   },
+   "cpu_ms": {
+    "main": 6367.578911,
+    "render": 2144.735457
+   },
+   "work_ms": {
+    "main": 3663.171106,
+    "render": 935.923295
+   },
+   "render_boost": {
+    "counter": true,
+    "time_weighted_min": 406.7153112503459,
+    "unboosted_frame_share": 0.0,
+    "frames_before_counter": 0,
+    "buckets": {
+     "unboosted": {
+      "frames": 0,
+      "share": 0.0,
+      "p50": null,
+      "p90": null,
+      "p99": null
+     },
+     "100-199": {
+      "frames": 31,
+      "share": 0.02585487906588824,
+      "p50": 2.212891,
+      "p90": 2.754761,
+      "p99": 3.361165
+     },
+     "200+": {
+      "frames": 1168,
+      "share": 0.9741451209341118,
+      "p50": 1.658976,
+      "p90": 2.201497,
+      "p99": 2.839844
+     }
+    },
+    "little_core_share": 0.0003430157305675505
+   },
+   "slices": {
+    "compose-rs: frame": {
+     "count": 0,
+     "ms": 0.0
+    },
+    "compose-rs: text layout": {
+     "count": 0,
+     "ms": 0.0
+    },
+    "TextStringSimpleNode::measure": {
+     "count": 51064,
+     "ms": 3409.241762
+    }
+   }
+  }
+ ]
+}

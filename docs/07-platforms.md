@@ -35,13 +35,15 @@ pub trait TextMeasurer {
     fn layout(&mut self, text: &AnnotatedString, style: &TextStyle, constraints: Constraints) -> ParagraphHandle;
     fn metrics(&self, paragraph: ParagraphHandle) -> ParagraphMetrics; // size, baselines, line metrics
     fn hit_test(&self, paragraph: ParagraphHandle, position: Offset) -> TextPosition; // for selection and the cursor
+    fn max_intrinsic_width(&self, paragraph: ParagraphHandle) -> Option<f32>; // the text's own width
+    fn relayout(&mut self, paragraph: ParagraphHandle, constraints: Constraints) -> Option<ParagraphHandle>; // the same text at new constraints
     fn release(&mut self, paragraph: ParagraphHandle);
 }
 ```
 
 - **Desktop:** SkParagraph with the system font manager, as Compose Desktop uses through Skiko; tests measure with a fixed-advance measurer by default, so headless measurements are identical on every machine (no fonts are bundled: D94).
-- **Android:** a Kotlin-side cache of layouts keyed by handle, chosen as Compose's `TextLayout` chooses (D330): a `BoringLayout` for a single left-to-right line that fits its width (API 33+; its metrics give the text's width, so no second measure), else a `StaticLayout`. Rust asks for a layout once per changed text, through one JNI call that returns the metrics. Drawing calls `layout.draw(canvas)` in the replayer. This is the text stack Android Compose itself draws with, so line breaks, hyphenation, fallback fonts and emoji match exactly. Whether lines were cut (`did_exceed_max_lines`) comes back with the metrics: more lines than the max, or the last one ellipsized, as Compose's `TextLayout`.
-- `BasicText` keeps its `ParagraphHandle` on the node, keyed on text, style and width constraint, so recomposing with the same text measures nothing.
+- **Android:** a Kotlin-side cache of layouts keyed by handle, chosen as Compose's `TextLayout` chooses (D330): a `BoringLayout` for a single left-to-right line that fits its width (API 33+; its metrics give the text's width, so no second measure), else a `StaticLayout`. Rust asks for a layout once per changed text, through one JNI call that returns the metrics; new constraints for the same text are one smaller call (`relayout`: the widths), which Kotlin lays out from what it kept of the text (its spans, paint, boring metrics and own width, as Compose's `ParagraphIntrinsics`: D550). Drawing calls `layout.draw(canvas)` in the replayer. This is the text stack Android Compose itself draws with, so line breaks, hyphenation, fallback fonts and emoji match exactly. Whether lines were cut (`did_exceed_max_lines`) comes back with the metrics: more lines than the max, or the last one ellipsized, as Compose's `TextLayout`.
+- `BasicText` keeps its `ParagraphHandle` on the node, so recomposing with the same text measures nothing; new constraints lay it out again as Compose's `newLayoutWillBeDifferent` decides (any new width bound; a new height only when it clips the paragraph: D550, [06](06-ui.md) "Text"), and with D551's optimization (off by default) only when the width it's laid out at changes.
 
 ## Desktop (`compose-desktop`)
 
