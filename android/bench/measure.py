@@ -1558,7 +1558,10 @@ def navigation_records(markers, frames, inputs, render_frames, gpu_waits, timeli
 
         render = next((r for r in render_frames if r[2] == vsync), None) or next(
             (r for r in render_frames if r[2] is None and r[0] >= frame_ts), None)
-        gpu = next((g for g in gpu_waits if render and g[0] >= render[0]), None)
+        # The GPU's wait for this frame starts after its DrawFrames and before the next one.
+        following = next((r[0] for r in render_frames if render and r[0] > render[0]), None)
+        gpu = next((g for g in gpu_waits if render and g[0] >= render[0]
+                    and (following is None or g[0] < following)), None)
         actual, planned = timeline.get(vsync), expected.get(vsync)
         present = actual[0] + actual[1] if actual else None
         expected_present = planned[0] + planned[1] if planned else None

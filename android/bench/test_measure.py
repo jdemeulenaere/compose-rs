@@ -918,6 +918,12 @@ class NavigationTest(unittest.TestCase):
         self.assertEqual((first["jank_type"], first["present_type"]),
                          ("App Deadline Missed", "Late Present"))
         self.assertEqual((second["vsync_id"], second["input_to_present_ms"]), (20, 100.0))
+        # A frame whose GPU wait wasn't traced takes none, not the next frame's.
+        ms = 1_000_000
+        records = measure.navigation_records(
+            [105 * ms], [(1, 104 * ms, 40 * ms, 10)], [(91 * ms, "deliverInputEvent")],
+            [(145 * ms, 10 * ms, 10), (300 * ms, 5 * ms, 11)], [(301 * ms, 2 * ms)], {}, {})
+        self.assertIsNone(records[0]["gpu_end_ms"])
         self.assertIsNone(first["down_to_present_ms"])
         # With the clocks' offset, also from the event's own time (`input tap`'s down's), 1 ms
         # before its delivery; the latency stays from the delivery.
