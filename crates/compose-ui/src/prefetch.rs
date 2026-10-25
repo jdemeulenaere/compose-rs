@@ -60,6 +60,12 @@ impl PrefetchRequestScope<'_> {
         self.composition.recompose_pausable()
     }
 
+    /// As [`recompose_pausable`](Self::recompose_pausable), pausing only the
+    /// `PausableContentFor` of `target` (the request's item's content).
+    pub fn recompose_pausable_for(&mut self, target: u64) -> compose_runtime::PausedComposition {
+        self.composition.recompose_pausable_for(target)
+    }
+
     /// Measures `parent`'s child at `index` with `constraints` before the layout that places it,
     /// as Compose's `premeasure`: that layout finds it measured. Returns its size, or `None`
     /// without such a child.

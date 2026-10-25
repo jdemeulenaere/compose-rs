@@ -1249,6 +1249,17 @@ impl Applier for UiTree {
     /// tree keeps of its old content is reset now (`reset_modifier_state`) and its modifier nodes
     /// after the pass (`on_end_changes`), unless that was done when it was deactivated; then
     /// composition gives it its new modifier and policy, and it's measured again.
+    fn reuse_paused(&mut self, node: NodeRef) -> bool {
+        // A deactivated node is shown again (its focus requesters attached) at apply; one still
+        // shown is reset now, before the pass updates it, as unpaused.
+        let id = NodeId::from_ref(node);
+        if self.get(id).is_none_or(|value| value.deactivated) {
+            return false;
+        }
+        Applier::reuse(self, node);
+        true
+    }
+
     fn reuse(&mut self, node: NodeRef) {
         let node = NodeId::from_ref(node);
         let Some(value) = self.get_mut(node) else { return };

@@ -13,7 +13,7 @@ pub use crate::executor::{
 };
 pub use crate::node_tree::NodeTree;
 pub use crate::observe::ReadObserver;
-pub use crate::pausable::PausableContent;
+pub use crate::pausable::{PausableContent, PausableContentFor};
 pub use crate::remember::remember_across_reuse;
 pub use crate::state::{live_state_count, state_reader_capacity, state_reader_count};
 

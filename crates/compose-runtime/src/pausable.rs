@@ -11,8 +11,10 @@
 //!
 //! compose-rs composes a lazy list's items in the list's composition, so the paused content is
 //! a part of a composition: a *region*. A region is a [`PausableContent`] group inserted or
-//! reused in a paused composition's first pass ([`Composition::recompose_pausable`]); the rest
-//! of that pass is an ordinary pass, applied at its end. Inside a region:
+//! reused in a paused composition's first pass ([`Composition::recompose_pausable`]; one made
+//! for a target, [`Composition::recompose_pausable_for`], only that target's
+//! [`PausableContentFor`]); the rest of that pass is an ordinary pass, applied at its end.
+//! Inside a region:
 //!
 //! - restartable composables pause where Compose's do, when inserting or reusing;
 //! - node changes are recorded and applied at [`apply`](PausedComposition::apply): a new node
@@ -145,9 +147,12 @@ pub(crate) struct Region {
     pub deferred: Deferred,
     /// Its segment (in segment 0, in the first pass's order).
     pub segment: u32,
-    /// A pass of the composition reached its group: composed by it, applied at its end.
+    /// A pass of the composition reached its group: what it composes there is the region's
+    /// (recorded, applied by `apply`), its paused scopes left to the resumes. Reset as the pass
+    /// ends.
     pub adopted: bool,
-    /// Applied by such a pass, or discarded: no longer paused content.
+    /// Discarded by a pass removing or deactivating it (`discard_regions_in`): no longer
+    /// paused content, its group gone or emptied; skipped by resumes, `apply` and `cancel`.
     pub dead: bool,
 }
 
@@ -160,18 +165,22 @@ pub(crate) struct Paused {
     /// A layout needs it: completed and applied before the composition's next pass.
     pub complete_requested: bool,
     pub regions: Vec<Region>,
+    /// The pausable content it pauses: `PausableContentFor` this target only
+    /// ([`Composition::recompose_pausable_for`]), or any (`None`).
+    pub target: Option<u64>,
     /// Segment 0 holds the regions' observers and effects in their first pass's order, and the
     /// places of the scopes paused in it; each paused scope has one of its own.
     pub segments: Vec<Vec<Entry>>,
 }
 
 impl Paused {
-    fn new(state: Rc<Cell<PausedState>>) -> Paused {
+    fn new(state: Rc<Cell<PausedState>>, target: Option<u64>) -> Paused {
         Paused {
             state,
             cancel_requested: false,
             complete_requested: false,
             regions: Vec::new(),
+            target,
             segments: vec![Vec::new()],
         }
     }
@@ -403,7 +412,7 @@ fn set_node_count(table: &mut SlotTable, group: u32, count: u32) {
 impl Runtime {
     /// Starts a region at the group just started (a [`PausableContent`]'s), if this is a paused
     /// composition's first pass and the group is being inserted or reused there.
-    pub(crate) fn begin_region(&mut self) {
+    pub(crate) fn begin_region(&mut self, target: Option<u64>) {
         let composition = self.check_composing();
         if !self.pausable_pass {
             return;
@@ -415,6 +424,11 @@ impl Runtime {
         }
         let data = compositions.data_mut(composition);
         let Some(paused) = data.paused.as_mut() else { return };
+        // Another item's content (another list's, composed in this pass for writes of its
+        // own): ordinary content, as Compose's other subcompositions aren't this one.
+        if paused.target.is_some() && paused.target != target {
+            return;
+        }
         let table = &data.table;
         let (attached, old_nodes) = if frame.inserting {
             (0, Vec::new())
@@ -572,6 +586,18 @@ impl Composition {
     /// If another paused composition of this composition is in progress (not applied or
     /// cancelled), as Compose's.
     pub fn recompose_pausable(&self) -> PausedComposition {
+        self.recompose_pausable_with(None)
+    }
+
+    /// As [`recompose_pausable`](Composition::recompose_pausable), its paused content only the
+    /// [`PausableContentFor`] of `target` (a lazy item's, as Compose's paused composition is
+    /// the item's subcomposition): other pausable content its first pass inserts or reuses is
+    /// ordinary content, applied at that pass's end (D597).
+    pub fn recompose_pausable_for(&self, target: u64) -> PausedComposition {
+        self.recompose_pausable_with(Some(target))
+    }
+
+    fn recompose_pausable_with(&self, target: Option<u64>) -> PausedComposition {
         let state = Rc::new(Cell::new(PausedState::InitialPending));
         let id = self.id;
         run_requests(id);
@@ -587,7 +613,7 @@ impl Composition {
             if data.paused.is_some() {
                 misuse(ComposeError::PausedCompositionState)
             }
-            data.paused = Some(Box::new(Paused::new(state.clone())));
+            data.paused = Some(Box::new(Paused::new(state.clone(), target)));
         });
         PausedComposition { composition: id, state, _not_send: PhantomData }
     }
@@ -603,23 +629,24 @@ pub struct PausedWatch {
 }
 
 impl PausedWatch {
-    /// Whether its content is there, not applied: not composed yet, paused, complete, or
-    /// cancelled with the removal waiting for the composition's next pass.
+    /// Whether paused content of its is there, not applied: a live region, paused or complete,
+    /// or one cancelled with the removal waiting for the composition's next pass. Not composed
+    /// yet, it has none; complete without paused content, none either (what its first pass
+    /// composed outside paused content was applied at its end).
     pub fn holds_unapplied_content(&self) -> bool {
-        match self.state.get() {
-            PausedState::Applied => false,
-            PausedState::Cancelled => try_with_runtime(|runtime| {
-                runtime
-                    .compositions
-                    .get(self.composition)
-                    .and_then(|data| data.paused.as_ref())
-                    .is_some_and(|paused| {
-                        paused.cancel_requested && Rc::ptr_eq(&paused.state, &self.state)
-                    })
-            })
-            .unwrap_or(false),
-            _ => true,
+        let state = self.state.get();
+        if matches!(state, PausedState::Applied | PausedState::InitialPending) {
+            return false;
         }
+        try_with_runtime(|runtime| {
+            runtime
+                .compositions
+                .get(self.composition)
+                .and_then(|data| data.paused.as_ref())
+                .filter(|paused| Rc::ptr_eq(&paused.state, &self.state))
+                .is_some_and(|paused| paused.holds_regions())
+        })
+        .unwrap_or(false)
     }
 }
 
@@ -811,7 +838,11 @@ pub(crate) fn run_requests(id: CompositionId) {
         if paused.cancel_requested {
             return Some((paused.state.clone(), true));
         }
-        if paused.complete_requested && paused.holds_regions() {
+        // Complete without paused content, it's applied all the same (its request's apply
+        // step waits for nothing then).
+        if paused.complete_requested
+            && (paused.holds_regions() || paused.state.get() == PausedState::ApplyPending)
+        {
             paused.complete_requested = false;
             return Some((paused.state.clone(), false));
         }
@@ -1005,8 +1036,9 @@ pub(crate) fn cancel(id: CompositionId, state: &Rc<Cell<PausedState>>, invalidat
         if data.poisoned {
             // Disposal releases what the slot table holds; the nodes made apart go with the
             // applier.
-            return Some((paused, Vec::new(), Flat::default(), data.applier.clone()));
+            return Some((paused, Vec::new(), Flat::default(), data.applier.clone(), false));
         }
+        // Ended by the `Finishing` guard below, whatever there is to remove.
         data.finishing = true;
         *finishing += 1;
         let mut removals = Vec::new();
@@ -1057,16 +1089,14 @@ pub(crate) fn cancel(id: CompositionId, state: &Rc<Cell<PausedState>>, invalidat
         for scope in enclosing {
             invalidate_scope_parts(scopes, compositions, frame_requests, scope);
         }
-        Some((paused, removals, flat, applier))
+        Some((paused, removals, flat, applier, true))
     })
     .flatten();
-    let Some((paused, removals, flat, applier)) = taken else { return };
-    if removals.is_empty() {
-        drop((paused, flat));
-        return;
-    }
-    let finishing = Finishing { id, freeing: Vec::new() };
-    {
+    let Some((paused, removals, flat, applier, finishing)) = taken else { return };
+    // It ends the finishing whatever there is to remove: nothing, with no live region (a paused
+    // composition cancelled before its first resume, or complete without paused content).
+    let finishing = finishing.then(|| Finishing { id, freeing: Vec::new() });
+    if !removals.is_empty() {
         let mut applier =
             applier.try_borrow_mut().unwrap_or_else(|_| misuse(ComposeError::ApplierBusy));
         applier.on_begin_changes();
@@ -1118,7 +1148,18 @@ pub(crate) fn cancel_for_disposal(id: CompositionId) {
 #[allow(non_snake_case)]
 pub fn PausableContent(content: impl FnOnce()) {
     let composer = current();
-    composer.start_pausable_group(PAUSABLE_KEY);
+    composer.start_pausable_group(PAUSABLE_KEY, None);
+    content();
+    composer.end_group();
+}
+
+/// As [`PausableContent`], for `target`: paused content of a paused composition made for it
+/// ([`Composition::recompose_pausable_for`]) or for any; of one made for another target,
+/// ordinary content. A lazy item's content, its target naming its list and its key.
+#[allow(non_snake_case)]
+pub fn PausableContentFor(target: u64, content: impl FnOnce()) {
+    let composer = current();
+    composer.start_pausable_group(PAUSABLE_KEY, Some(target));
     content();
     composer.end_group();
 }

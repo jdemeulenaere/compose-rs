@@ -1235,7 +1235,7 @@ impl MeasurePolicy for LazyGridLayout {
             line_sizes: &mut line_sizes,
             prefetch: &state.prefetch,
             items: &info.items,
-            unready: state.prefetch.unready_item(),
+            unready: state.prefetch.layout_started(),
             lacked_unready: std::cell::Cell::new(false),
         };
         let m = &mut measurer;

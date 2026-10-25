@@ -1156,14 +1156,20 @@ fn start_group_of(kind: GroupKind, key: u64, data_key: u64, reusable: bool) -> N
 
 /// Resets a node kept by content being reused (`Applier::reuse`), before the pass updates it.
 fn reuse_node(node: NodeRef, region: u32) {
-    if region != NO_REGION {
-        // Paused content's: reset as it's applied, as Compose's recorded `reuse`.
-        with_runtime(|runtime| runtime.record_reuse(region, node));
-        return;
-    }
     flush_node_moves();
     let applier = with_runtime(|runtime| runtime.active_applier());
-    applier.try_borrow_mut().unwrap_or_else(|_| misuse(ComposeError::ApplierBusy)).reuse(node);
+    let mut applier =
+        applier.try_borrow_mut().unwrap_or_else(|_| misuse(ComposeError::ApplierBusy));
+    if region == NO_REGION {
+        applier.reuse(node);
+        return;
+    }
+    // Paused content's: reset now if the applier can (a node shown, reset before its update as
+    // unpaused), else as it's applied, as Compose's recorded `reuse`.
+    if !applier.reuse_paused(node) {
+        drop(applier);
+        with_runtime(|runtime| runtime.record_reuse(region, node));
+    }
 }
 
 /// Starts a restart group for the composable whose identity (the `TypeId` of its restart
@@ -1386,14 +1392,16 @@ impl Composer {
 
     /// Starts a group whose content is pausable content ([`PausableContent`]'s): inserted or
     /// reused in a paused composition's first pass, it's paused content, which may pause and
-    /// is applied by the paused composition's `apply`. End it with
+    /// is applied by the paused composition's `apply`, unless the paused composition is for
+    /// another `target` ([`Composition::recompose_pausable_for`]). End it with
     /// [`end_group`](Composer::end_group).
     ///
     /// [`PausableContent`]: crate::platform::PausableContent
-    pub fn start_pausable_group(&self, key: u64) {
+    /// [`Composition::recompose_pausable_for`]: crate::Composition::recompose_pausable_for
+    pub fn start_pausable_group(&self, key: u64, target: Option<u64>) {
         let (op, _) = with_runtime(|runtime| {
             let started = runtime.start_group(GroupKind::Replace, key, 0, None, false);
-            runtime.begin_region();
+            runtime.begin_region(target);
             started
         });
         apply_node_op(op);

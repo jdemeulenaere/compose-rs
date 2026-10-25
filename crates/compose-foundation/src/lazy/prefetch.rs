@@ -524,11 +524,17 @@ impl Prefetch {
         self.unready_item() != Some(key)
     }
 
-    /// The item whose content isn't ready (`content_ready`), if any: checked once a layout.
-    /// A completion's item noted before (`complete_pending`) is composed by now: no inner scope
-    /// restarted later composes in it.
-    pub(super) fn unready_item(&self) -> Option<u64> {
+    /// A layout of the list starts: the item whose content isn't ready (`unready_item`), which
+    /// it checks its children against. A completion's item noted before (`complete_pending`)
+    /// is composed by now, so it's no longer the item composing: no inner scope restarted later
+    /// notes its lists under it.
+    pub(super) fn layout_started(&self) -> Option<u64> {
         self.composing_item.set(None);
+        self.unready_item()
+    }
+
+    /// The item whose content isn't ready (`content_ready`), if any.
+    fn unready_item(&self) -> Option<u64> {
         let mut unready = self.unready.borrow_mut();
         let (key, watch) = unready.as_ref()?;
         if watch.holds_unapplied_content() {
@@ -551,6 +557,8 @@ impl Prefetch {
         let pending = self.pending.borrow();
         if let Some((key, paused)) = pending.as_ref()
             && let Some(paused) = paused.upgrade()
+            && !paused.is_applied()
+            && !paused.is_cancelled()
         {
             // Its nested lists note themselves under its key as the completion composes them.
             self.composing_item.set(Some(*key));
@@ -703,7 +711,7 @@ impl Prefetch {
                 return Some(Composed::Already);
             }
             state.compose((start, end));
-            return Some(self.composed_by(scope, pausable));
+            return Some(self.composed_by(scope, pausable.then(|| item_target(state, key))));
         }
         let (low, high) = self.limits.get();
         let range = if item == end {
@@ -722,13 +730,15 @@ impl Prefetch {
             precomposed.push(key);
         }
         state.compose(range);
-        Some(self.composed_by(scope, pausable))
+        Some(self.composed_by(scope, pausable.then(|| item_target(state, key))))
     }
 
-    /// Composes what the request's writes invalidated: at once, or as a paused composition.
-    fn composed_by(&self, scope: &mut PrefetchRequestScope<'_>, pausable: bool) -> Composed {
-        if pausable {
-            Composed::Paused(Rc::new(scope.recompose_pausable()))
+    /// Composes what the request's writes invalidated: at once, or as a paused composition of
+    /// the item's content (`target`), as Compose's item subcomposition (other lists' items its
+    /// pass composes are ordinary content, D597).
+    fn composed_by(&self, scope: &mut PrefetchRequestScope<'_>, target: Option<u64>) -> Composed {
+        if let Some(target) = target {
+            Composed::Paused(Rc::new(scope.recompose_pausable_for(target)))
         } else {
             scope.recompose();
             Composed::Now
@@ -1346,15 +1356,32 @@ impl PrefetchRequest for TrimRequest {
     }
 }
 
+/// The target of the item of `key`'s content in `list` (`PausableContentFor`): the request's
+/// paused composition pauses it, no other list's item.
+pub(super) fn item_target(list: &LazyListInner, key: u64) -> u64 {
+    let address = list as *const LazyListInner as u64;
+    key.wrapping_mul(0x9e37_79b9_7f4a_7c15) ^ address.rotate_left(17)
+}
+
 /// The lazy list whose items are composing, for the lazy lists in them to note themselves in
 /// under the item composing (`composing_item`; Compose finds them by `traversablePrefetchState`).
+/// Kept by the list's composition, and given its state's list at each (a list given another
+/// state notes its nested lists in the new one).
 pub(super) struct ParentList {
-    list: Weak<LazyListInner>,
+    list: RefCell<Weak<LazyListInner>>,
 }
 
 impl ParentList {
-    pub(super) fn new(list: Weak<LazyListInner>) -> ParentList {
-        ParentList { list }
+    pub(super) fn new(list: &Rc<LazyListInner>) -> ParentList {
+        ParentList { list: RefCell::new(Rc::downgrade(list)) }
+    }
+
+    /// The list's composition: `list` is its state's now.
+    pub(super) fn set(&self, list: &Rc<LazyListInner>) {
+        let mut current = self.list.borrow_mut();
+        if !std::ptr::eq(current.as_ptr(), Rc::as_ptr(list)) {
+            *current = Rc::downgrade(list);
+        }
     }
 }
 
@@ -1364,7 +1391,7 @@ pub(super) static LOCAL_PARENT_LIST: compose_runtime::CompositionLocal<Option<Rc
 /// A lazy list composing: notes `state` in the list around it, under the item composing it.
 pub(super) fn note_nested(state: &Rc<LazyListInner>) {
     if let Some(item) = LOCAL_PARENT_LIST.current()
-        && let Some(parent) = item.list.upgrade()
+        && let Some(parent) = item.list.borrow().upgrade()
         && !Rc::ptr_eq(&parent, state)
         && let Some(key) = parent.prefetch.composing_item.get()
     {

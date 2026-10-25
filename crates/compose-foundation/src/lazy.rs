@@ -1623,10 +1623,13 @@ fn LazyItems(
     let parent = {
         let inner = state.inner_or_detached();
         *inner.prefetch.items.borrow_mut() = Rc::downgrade(&items.0);
-        // One per list, kept: the local stays the same, its readers aren't invalidated.
-        compose_runtime::platform::remember_across_reuse(|| {
-            Rc::new(prefetch::ParentList::new(Rc::downgrade(&inner)))
-        })
+        // One per list, kept: the local stays the same, its readers aren't invalidated; its
+        // list is the state's now.
+        let parent = compose_runtime::platform::remember_across_reuse(|| {
+            Rc::new(prefetch::ParentList::new(&inner))
+        });
+        parent.set(&inner);
+        parent
     };
     compose_runtime::CompositionLocalProvider(
         compose_ui::platform::LOCAL_CONSTRAINTS_HINT.provides(hint),
@@ -1661,6 +1664,7 @@ fn LazyItem(index: usize, state: LazyListState, items: ItemsRef, holder: Saveabl
     // composes it (a frame here, a request's resumes, a completion), as Compose's request finds
     // those of its precomposed item (`traversablePrefetchState`).
     let composing = inner.prefetch.composing_item.replace(Some(item_key));
+    let target = prefetch::item_target(&inner, item_key);
     let near = state;
     // An item is a repaint boundary: scrolled, or beside an animation, it's not recorded again.
     let modifier = Modifier.repaint_boundary().on_focus_changed(move |focused: bool| {
@@ -1680,7 +1684,7 @@ fn LazyItem(index: usize, state: LazyListState, items: ItemsRef, holder: Saveabl
             if let Some((interval, local)) = items.0.find(index) {
                 // The item's content, as Compose's item subcomposition: a request's paused
                 // composition may pause in it, and applies it whole (D590).
-                compose_runtime::platform::PausableContent(|| {
+                compose_runtime::platform::PausableContentFor(target, || {
                     holder.SaveableStateProvider(item_key, || (interval.content)(local));
                 });
             }
@@ -1827,7 +1831,7 @@ impl MeasurePolicy for LazyListLayout {
             move |placeable: &Placeable| if vertical { placeable.height } else { placeable.width };
         // An item whose content isn't applied (a request's paused composition) or was removed (a
         // cancelled one's) is one it lacks: composed in this frame's next round (D592).
-        let unready = state.prefetch.unready_item();
+        let unready = state.prefetch.layout_started();
         let lacked_unready = Cell::new(false);
         let mut measure_child = |index: usize, sizes: &mut Sizes| -> Option<Placeable> {
             if unready.is_some_and(|key| key == info.items.key(index)) {

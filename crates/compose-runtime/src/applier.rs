@@ -64,6 +64,15 @@ pub trait Applier: 'static {
     /// modifier nodes there, D434).
     fn reuse(&mut self, _node: NodeRef) {}
 
+    /// `node` is about to be reused in paused content (D591): returns whether the applier
+    /// reused it now (as [`reuse`](Applier::reuse), before the pass updates it, as unpaused:
+    /// a node still shown, whose reset nothing waits for), or leaves it to `reuse` at the
+    /// paused composition's `apply` (what showing it again does: a deactivated node's). By
+    /// default, at `apply`.
+    fn reuse_paused(&mut self, _node: NodeRef) -> bool {
+        false
+    }
+
     /// `node`'s content was deactivated (`ReusableContentHost` inactive), as Compose's
     /// `ComposeNodeLifecycleCallback.onDeactivate`: it stays in the tree, its groups kept for
     /// reuse, and the applier resets what it keeps (its modifiers' state) and leaves it out of
@@ -113,6 +122,7 @@ pub(crate) trait ErasedApplier {
     fn move_nodes(&mut self, parent: NodeRef, from: usize, to: usize, count: usize);
     fn release(&mut self, node: NodeRef);
     fn reuse(&mut self, node: NodeRef);
+    fn reuse_paused(&mut self, node: NodeRef) -> bool;
     fn deactivate(&mut self, node: NodeRef);
     /// Takes the node out of `node`, as `insert_erased`, and makes it in no parent.
     fn create_erased(&mut self, node: &mut dyn Any) -> Option<NodeRef>;
@@ -147,6 +157,10 @@ impl<A: Applier> ErasedApplier for A {
 
     fn reuse(&mut self, node: NodeRef) {
         Applier::reuse(self, node)
+    }
+
+    fn reuse_paused(&mut self, node: NodeRef) -> bool {
+        Applier::reuse_paused(self, node)
     }
 
     fn deactivate(&mut self, node: NodeRef) {

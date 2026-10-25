@@ -182,6 +182,11 @@ struct Scene {
 
 impl Scene {
     fn new(items: Vec<Rc<Spec>>) -> Scene {
+        Scene::new_with(items, None)
+    }
+
+    /// `new`, the items in a `ReusableContentHost` active while `active` (review 2).
+    fn new_with(items: Vec<Rc<Spec>>, active: Option<MutableState<bool>>) -> Scene {
         let composition = Composition::new(Tree::new());
         let shown = mutable_state_of(false);
         let reuse_key = mutable_state_of(0);
@@ -194,13 +199,19 @@ impl Scene {
             let roots = roots.clone();
             Node(true, "root".to_string(), || {
                 if shown_handle.get() {
-                    ReusableContent(reuse_handle.get(), || {
-                        PausableContent(|| {
-                            for item in &roots {
-                                key(item.id, || Item(item.clone()));
-                            }
+                    let body = || {
+                        ReusableContent(reuse_handle.get(), || {
+                            PausableContent(|| {
+                                for item in &roots {
+                                    key(item.id, || Item(item.clone()));
+                                }
+                            });
                         });
-                    });
+                    };
+                    match active {
+                        Some(active) => ReusableContentHost(active.get(), body),
+                        None => body(),
+                    }
                 }
             });
         });
@@ -1415,8 +1426,9 @@ fn a_pass_through_paused_content_leaves_what_is_paused() {
 }
 
 /// What a layout keeps of a paused composition to know whether its content is there unapplied:
-/// paused, complete, or cancelled with the removal waiting (the applier in use), it is; applied,
-/// or cancelled and removed, it isn't, the paused composition held or not (D599).
+/// paused, complete, or cancelled with the removal waiting (the applier in use), it is; not
+/// composed yet, complete without paused content, applied, or cancelled and removed, it isn't,
+/// the paused composition held or not (D599).
 #[test]
 fn a_watch_says_whether_paused_content_is_there_unapplied() {
     let items = vec![with_children(1, chain(&[2]))];
@@ -1424,7 +1436,7 @@ fn a_watch_says_whether_paused_content_is_there_unapplied() {
     scene.shown.set(true);
     let paused = scene.composition.recompose_pausable();
     let watch = paused.watch();
-    assert!(watch.holds_unapplied_content(), "not composed yet");
+    assert!(!watch.holds_unapplied_content(), "not composed yet: none there");
     let (callback, _) = scripted(&[false, true]);
     assert!(!paused.resume(callback));
     assert!(watch.holds_unapplied_content(), "paused");
@@ -1434,7 +1446,17 @@ fn a_watch_says_whether_paused_content_is_there_unapplied() {
     scene.tick.set(1);
     scene.composition.recompose();
     assert!(!watch.holds_unapplied_content(), "removed");
-    // Applied.
+    // Complete without paused content: none there.
+    scene.tick.set(2);
+    let next = scene.composition.recompose_pausable();
+    let watch = next.watch();
+    assert!(next.resume(|| false));
+    assert!(!watch.holds_unapplied_content(), "complete without paused content");
+    next.apply();
+    // Complete, then applied.
+    scene.shown.set(false);
+    scene.composition.recompose();
+    scene.shown.set(true);
     let next = scene.composition.recompose_pausable();
     let watch = next.watch();
     assert!(next.resume(|| false));
@@ -1442,4 +1464,310 @@ fn a_watch_says_whether_paused_content_is_there_unapplied() {
     next.apply();
     assert!(!watch.holds_unapplied_content(), "applied");
     scene.composition.validate();
+}
+
+// ---- Second review: completion on request, cancels during a layout, drops ------------------
+
+/// Tallies remember observers' events: each label's live count.
+#[derive(Default)]
+struct Tally {
+    live: std::collections::BTreeMap<String, i64>,
+}
+
+impl Tally {
+    fn add(&mut self, seed: u64, who: &str, events: Vec<String>) {
+        for entry in events {
+            if let Some(label) = entry.strip_prefix("remember ") {
+                *self.live.entry(label.to_string()).or_default() += 1;
+            } else if let Some(label) = entry.strip_prefix("forget ") {
+                let count = self.live.entry(label.to_string()).or_default();
+                *count -= 1;
+                assert!(*count >= 0, "seed {seed}: {who} forgot {label} never remembered");
+            }
+        }
+    }
+    fn live(&self) -> Vec<(String, i64)> {
+        self.live.iter().filter(|(_, count)| **count != 0).map(|(l, c)| (l.clone(), *c)).collect()
+    }
+}
+
+/// As `compare_outer`, with completions asked for (from a layout, the applier in use, or not),
+/// cancels during a layout, and the paused composition dropped, at random points; checks that a
+/// completion asked for is done by the next pass, the watch, and the observers left remembered.
+fn compare_outer2(seed: u64) {
+    SHOW_BORN.set(true);
+    EPOCH.set(0);
+    take_events();
+    let hosted = seed % 3 == 2;
+    let (active_ref, active_ours) = (mutable_state_of(true), mutable_state_of(true));
+    let reference = Scene::new_with(forest(seed), hosted.then(|| active_ref.handle()));
+    let scene = Scene::new_with(forest(seed), hosted.then(|| active_ours.handle()));
+    let (mut ours, mut theirs) = (Tally::default(), Tally::default());
+    let random = Random::new(seed ^ 0xabcd);
+    let reuse = seed.is_multiple_of(2);
+    for (each, tally) in [(&reference, &mut theirs), (&scene, &mut ours)] {
+        each.shown.set(true);
+        if reuse {
+            each.composition.recompose();
+        }
+        tally.add(seed, "setup", take_events());
+    }
+    if reuse {
+        EPOCH.set(1);
+        for each in [&reference, &scene] {
+            each.reuse_key.set(1);
+        }
+    }
+    reference.composition.recompose();
+    theirs.add(seed, "reference", take_events());
+    let mut paused = Some(scene.composition.recompose_pausable());
+    let watch = paused.as_ref().unwrap().watch();
+    let pauses = Rc::new(Random::new(seed ^ 0x4242));
+    let mut steps = 0;
+    let mut started = false;
+    loop {
+        steps += 1;
+        assert!(steps < 10_000, "seed {seed}: no progress");
+        let Some(current) = paused.as_ref() else { break };
+        if current.is_applied() || current.is_cancelled() {
+            break;
+        }
+        let mut action = random.below(10);
+        // A request resumes its paused composition as it makes it (D595); it may be dropped
+        // or cancelled before that, though.
+        if !started && action != 5 {
+            action = 0;
+        }
+        if std::env::var("OUTER2_TRACE").is_ok() {
+            eprintln!(
+                "seed {seed} step {steps}: action {action} state complete={} tree={:?}",
+                current.is_complete(),
+                scene.tree()
+            );
+        }
+        match action {
+            0..=3 => {
+                let answers = pauses.clone();
+                started = true;
+                if current.resume(move || answers.chance(50)) {
+                    current.apply();
+                }
+                ours.add(seed, "resume", take_events());
+            }
+            4 => {
+                // A layout needing it asks, then the round's pass.
+                if random.chance(50) {
+                    scene.composition.with_applier(|_: &mut Tree| current.request_completion());
+                } else {
+                    current.request_completion();
+                }
+                let has_content = watch.holds_unapplied_content();
+                scene.tick.set(scene.tick.get() + 1);
+                reference.tick.set(reference.tick.get() + 1);
+                scene.composition.recompose();
+                ours.add(seed, "completion", take_events());
+                reference.composition.recompose();
+                theirs.add(seed, "reference", take_events());
+                scene.composition.validate();
+                if has_content {
+                    COMPLETIONS.set(COMPLETIONS.get() + 1);
+                    assert!(
+                        current.is_applied() || current.is_cancelled(),
+                        "seed {seed}: a completion asked for wasn't done by the next pass ({})",
+                        if current.is_complete() { "complete" } else { "incomplete" }
+                    );
+                    assert!(
+                        !watch.holds_unapplied_content(),
+                        "seed {seed}: watch after completion"
+                    );
+                }
+            }
+            5 => {
+                // Cancelled or dropped, during a layout or not.
+                let during_layout = random.chance(50);
+                let drop_it = random.chance(50);
+                let taken = paused.take().unwrap();
+                let act = RefCell::new(Some(move || {
+                    if drop_it {
+                        drop(taken);
+                    } else {
+                        taken.cancel();
+                    }
+                }));
+                if during_layout {
+                    scene
+                        .composition
+                        .with_applier(|_: &mut Tree| (act.borrow_mut().take().unwrap())());
+                } else {
+                    (act.borrow_mut().take().unwrap())();
+                }
+                ours.add(seed, "cancel", take_events());
+                scene.tick.set(scene.tick.get() + 1);
+                reference.tick.set(reference.tick.get() + 1);
+                scene.composition.recompose();
+                ours.add(seed, "after cancel", take_events());
+                reference.composition.recompose();
+                theirs.add(seed, "reference", take_events());
+                scene.composition.validate();
+                assert!(
+                    !watch.holds_unapplied_content(),
+                    "seed {seed}: watch after a cancel and a pass"
+                );
+                break;
+            }
+            _ => {
+                let (kind, pick) = (random.below(6), random.below(1000) as usize);
+                if kind == 1 {
+                    EPOCH.set(EPOCH.get() + 1);
+                }
+                for (each, tally, who, active) in [
+                    (&scene, &mut ours, "change", &active_ours),
+                    (&reference, &mut theirs, "reference", &active_ref),
+                ] {
+                    match kind {
+                        0 => each.tick.set(each.tick.get() + 1),
+                        1 => each.reuse_key.set(each.reuse_key.get() + 1),
+                        2 => each.shown.set(!each.shown.get()),
+                        5 if hosted => active.set(!active.get()),
+                        _ => {
+                            let items = all_items(&each.items);
+                            let item = &items[pick % items.len()];
+                            item.value.set(item.value.get() + 1);
+                        }
+                    }
+                    each.composition.recompose();
+                    tally.add(seed, who, take_events());
+                    each.composition.validate();
+                }
+            }
+        }
+    }
+    drop(paused);
+    ours.add(seed, "drop", take_events());
+    active_ours.set(true);
+    active_ref.set(true);
+    for (each, tally) in [(&scene, &mut ours), (&reference, &mut theirs)] {
+        each.shown.set(true);
+        each.tick.set(each.tick.get() + 1);
+        each.composition.recompose();
+        tally.add(seed, "end", take_events());
+        each.composition.validate();
+    }
+    assert!(!watch.holds_unapplied_content(), "seed {seed}: watch at the end");
+    assert_eq!(scene.tree(), reference.tree(), "seed {seed}");
+    assert_eq!(scene.groups(), reference.groups(), "seed {seed}");
+    assert_eq!(ours.live(), theirs.live(), "seed {seed}: observers remembered");
+    // A next paused composition can be made.
+    let next = scene.composition.recompose_pausable();
+    assert!(next.resume(|| false));
+    next.apply();
+    take_events();
+    SHOW_BORN.set(false);
+}
+
+#[test]
+fn review2_completions_cancels_and_drops_at_random_points_end_as_composed_at_once() {
+    let seeds: u64 =
+        std::env::var("OUTER2_SEEDS").ok().and_then(|s| s.parse().ok()).unwrap_or(1000);
+    let first: u64 = std::env::var("OUTER2_FIRST").ok().and_then(|s| s.parse().ok()).unwrap_or(0);
+    for seed in first..first + seeds {
+        compare_outer2(seed);
+    }
+    let completions = COMPLETIONS.get();
+    assert!(completions > seeds / 10, "{completions} completions with content");
+}
+
+thread_local! {
+    static COMPLETIONS: Cell<u64> = const { Cell::new(0) };
+}
+
+/// A paused composition dropped (so cancelled, D597) before its first resume: no region to
+/// remove, but `cancel` marked the composition finishing and returned without the guard that
+/// ends it. The composition never composes again, and the runtime stays busy.
+#[test]
+fn review2_dropping_a_paused_composition_before_its_first_resume_leaves_the_composition_usable() {
+    let items = vec![with_children(1, chain(&[2]))];
+    let scene = Scene::new(items);
+    scene.shown.set(true);
+    let paused = scene.composition.recompose_pausable();
+    drop(paused);
+    scene.tick.set(1);
+    scene.composition.recompose();
+    assert_eq!(scene.tree(), "root\n  1:0\n    2:0\n", "composed after the drop");
+    scene.composition.validate();
+}
+
+/// The same with a complete paused composition that holds no paused content (its first pass
+/// inserted no `PausableContent`: the request's item was composed already), cancelled before
+/// it's applied (a request cleaned up, its apply step short of time).
+#[test]
+fn review2_cancelling_a_complete_paused_composition_without_regions_leaves_the_composition_usable()
+{
+    let items = vec![with_children(1, chain(&[2]))];
+    let scene = Scene::new(items);
+    scene.shown.set(true);
+    scene.composition.recompose();
+    // A write outside the pausable content: the paused composition's first pass composes it,
+    // and makes no region.
+    scene.tick.set(1);
+    let paused = scene.composition.recompose_pausable();
+    assert!(paused.resume(|| true), "complete: nothing pausable");
+    paused.cancel();
+    scene.items[0].value.set(5);
+    scene.composition.recompose();
+    assert_eq!(scene.tree(), "root\n  1:5\n    2:0\n", "composed after the cancel");
+    scene.composition.validate();
+}
+
+/// A complete paused composition holding no paused content (its first pass inserted no
+/// `PausableContent`: a request for an item composed already, a pinned or sticky one): its
+/// watch says its content is there unapplied, and a completion asked for does nothing
+/// (`run_requests` needs live regions), so a layout wanting its item lacks it, and asks for a
+/// round, at every frame until the request's apply step runs, which no idle time comes for while
+/// frames keep being asked for.
+#[test]
+fn review2_a_completion_of_a_complete_paused_composition_without_regions_applies_it() {
+    let items = vec![with_children(1, chain(&[2]))];
+    let scene = Scene::new(items);
+    scene.shown.set(true);
+    scene.composition.recompose();
+    scene.tick.set(1);
+    let paused = scene.composition.recompose_pausable();
+    let watch = paused.watch();
+    assert!(paused.resume(|| true), "complete: nothing pausable");
+    paused.request_completion();
+    scene.tick.set(2);
+    scene.composition.recompose();
+    assert!(!watch.holds_unapplied_content(), "the watch after a completion and a pass");
+    assert!(paused.is_applied(), "applied by the completion asked for");
+}
+
+/// A paused composition for a target pauses only that target's pausable content: another one
+/// its first pass inserts (another list's item, composed for writes of its own) is ordinary
+/// content, applied at the pass's end (D597).
+#[test]
+fn a_paused_composition_for_a_target_pauses_only_its_content() {
+    let composition = Composition::new(Tree::new());
+    let shown = mutable_state_of(false);
+    let shown_handle = shown.handle();
+    let (mine, other) = (with_children(1, chain(&[2])), with_children(3, chain(&[4])));
+    composition.set_content(move || {
+        let (mine, other) = (mine.clone(), other.clone());
+        Node(true, "root".to_string(), || {
+            if shown_handle.get() {
+                PausableContentFor(7, || Item(mine.clone()));
+                PausableContentFor(8, || Item(other.clone()));
+            }
+        });
+    });
+    let dump = || composition.with_applier(|tree: &mut Tree| tree.dump()).replace('"', "");
+    shown.set(true);
+    let paused = composition.recompose_pausable_for(7);
+    let (callback, _) = scripted(&[false, true]);
+    assert!(!paused.resume(callback));
+    assert_eq!(dump(), "root\n  3:0\n    4:0\n", "the other target's content applied at once");
+    assert!(paused.resume(|| false));
+    paused.apply();
+    assert_eq!(dump(), "root\n  1:0\n    2:0\n  3:0\n    4:0\n");
+    composition.validate();
 }
