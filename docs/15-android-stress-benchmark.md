@@ -1003,7 +1003,7 @@ The frame no longer copies each wave into a new `Arc<Path>` (a `&Path` was copie
 
 ## Parity mode (D560–D569, D574)
 
-Since D560, compose-rs does by default the work Compose 1.12.1 does: lazy lists and grids prefetch as Compose's strategy and scheduler ("Compose's defaults" (a), (b), (f)), and every compose-rs-only behaviour is an optimization flag, off by default where it changes the work or the rendering ([07](07-platforms.md), "compose-rs's own optimizations"). measure.py runs bench-rs at parity by default (`--optimizations parity`: `-e optimizations none`, the hint session off too, D568), and each flag alone against it with `--optimizations each` (D569), the candidates for Compose in [14](14-performance-opportunities.md), "Backport candidates".
+Since D560, compose-rs does by default the work Compose 1.12.1 does: lazy lists and grids prefetch as Compose's strategy and scheduler ("Compose's defaults" (a), (b), (f)), and every compose-rs-only behaviour is an optimization flag, off by default ([07](07-platforms.md), "compose-rs's own optimizations"): the library's default is parity, the hint session off too (D581). measure.py runs bench-rs at parity by default (`--optimizations parity`: `-e optimizations none`, D568), and each flag alone against it with `--optimizations each` (D569), the candidates for Compose in [14](14-performance-opportunities.md), "Backport candidates".
 
 What's still not the same, structurally:
 

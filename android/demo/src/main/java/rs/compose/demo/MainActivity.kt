@@ -21,10 +21,15 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.AndroidView
+import rs.compose.android.ComposeRsOptimizations
 import rs.compose.android.ComposeRsRuntime
 import rs.compose.android.ComposeRsView
 
-/** The compose-rs examples, each in a `ComposeRsView` inside this Kotlin Compose screen. */
+/**
+ * The compose-rs examples, each in a `ComposeRsView` inside this Kotlin Compose screen. The views
+ * opt in to the performance hint session, as the demo had it before the library's default became
+ * none (D581); the other optimizations stay off, as Compose's rendering.
+ */
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -46,7 +51,7 @@ class MainActivity : ComponentActivity() {
                         key(apps[selected]) {
                             AndroidView(
                                 factory = { context ->
-                                    ComposeRsView(context, apps[selected]).apply {
+                                    ComposeRsView(context, apps[selected], ComposeRsOptimizations.PERFORMANCE_HINT).apply {
                                         // The Rust app's events (a button in the counter).
                                         setOnEventListener { name, payload ->
                                             Toast.makeText(context, "$name: $payload", Toast.LENGTH_SHORT).show()

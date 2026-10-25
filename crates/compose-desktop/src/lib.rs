@@ -97,8 +97,8 @@ pub struct WindowOptions {
     /// The content's layout direction (`LOCAL_LAYOUT_DIRECTION` at the root): right-to-left
     /// for an Arabic or Hebrew interface.
     pub layout_direction: compose_ui::LayoutDirection,
-    /// compose-rs's optimizations beyond Compose's rendering (D520): by default, the ones on by
-    /// default (none that changes what's drawn).
+    /// compose-rs's optimizations beyond Compose's rendering (D520): by default none, the
+    /// rendering Compose does (D581).
     pub optimizations: Optimizations,
 }
 

@@ -3,9 +3,10 @@ package rs.compose.android
 /**
  * compose-rs's own optimizations, beyond what Jetpack Compose's rendering does: bits of a
  * [ComposeRsView.optimizations] set, the same as Rust's `compose_ui::platform::Optimization`s
- * (`optimizations.rs`, which a test checks these against; D520). Each is off by default where
- * it changes what's drawn, or how, relative to Compose, so the benchmarks against Compose
- * measure the same rendering ([DEFAULT]) and each optimization apart.
+ * (`optimizations.rs`, which a test checks these against; D520). Each is off by default: the
+ * default ([DEFAULT], [NONE]) is the rendering Compose does, so the benchmarks against Compose
+ * measure the same rendering and each optimization apart. Apps opt in ([ALL], or the ones they
+ * name; D581).
  *
  * Adding one: its bit here, and in Rust's table.
  */
@@ -19,9 +20,8 @@ object ComposeRsOptimizations {
 
     /**
      * The RenderThread and the main thread in a performance hint session of compose-rs's own
-     * while the view shows (API 33+): [ComposeRsView.isPerformanceHintEnabled]. On by default
-     * for apps (D390, D440, D500); the benchmarks' parity runs set it off, as Compose has no such
-     * session (D568).
+     * while the view shows (API 33+): [ComposeRsView.isPerformanceHintEnabled] (D390, D440, D500).
+     * Off by default, as Compose has no such session (D581; it was on for apps, D568).
      */
     const val PERFORMANCE_HINT = 1L shl 1
 
@@ -71,8 +71,8 @@ object ComposeRsOptimizations {
     /** None: the rendering Compose does. */
     const val NONE = 0L
 
-    /** The ones on by default. */
-    const val DEFAULT = PERFORMANCE_HINT
+    /** The ones on by default: none, the rendering Compose does (D581). */
+    const val DEFAULT = NONE
 
     /** Every one. */
     const val ALL = SINGLE_DRAWING_FADE or PERFORMANCE_HINT or REUSE_PARAGRAPH_AT_SAME_LAYOUT_WIDTH or PREFETCH_TWO_AHEAD or PREFETCH_BUDGET_RECENT_MAXIMUM or PREFETCH_AT_REST or KEEP_ITEMS_BEHIND or DRAW_PREFETCHED_AHEAD or GRID_LINES_BEYOND or FLUSH_LAYERS_BEFORE_DROPPED_PATHS or PARAGRAPH_RENDER_NODES
@@ -80,7 +80,7 @@ object ComposeRsOptimizations {
     /**
      * The set a list names: `none`, `all`, `default`, or names separated by commas (as Rust's,
      * `single_drawing_fade`), each `-name` taking one out of what's before it
-     * (`default,-performance_hint`). Needs the app's compose-rs library loaded
+     * (`all,-performance_hint`). Needs the app's compose-rs library loaded
      * ([ComposeRsRuntime.loadLibrary]): the names are Rust's.
      *
      * @throws IllegalArgumentException for a name compose-rs doesn't know.

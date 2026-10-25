@@ -1,8 +1,8 @@
 //! compose-rs's own optimizations: what it does beyond Jetpack Compose's rendering, each a flag
 //! a host sets (`UiHost::set_optimizations`; `ComposeRsView.optimizations` on Android,
 //! `WindowOptions::optimizations` on desktop), so the benchmarks against Compose can measure the
-//! same rendering (none of them, the default where one changes what's drawn or how) and each
-//! optimization apart (D520).
+//! same rendering (none of them, the default: the library's default is parity, D581) and each
+//! optimization apart (D520). Apps opt in (`all`, or the ones they name).
 //!
 //! Adding one: a constant of [`Optimization`] with the next bit, a row in
 //! [`Optimization::ALL`], and the same bit in Kotlin's `ComposeRsOptimizations`
@@ -42,14 +42,14 @@ impl Optimization {
 
     /// Android: while a view shows (API 33+), the RenderThread and the main thread are in a
     /// performance hint session of compose-rs's own, reporting both threads' work each frame
-    /// (`ComposeRsView.isPerformanceHintEnabled`, which it is). On by default for apps, on the
-    /// user's decision: it gives compose-rs's threads the boost HWUI's own session gives
-    /// Compose's after its longer main-thread frames (D390, D440, D500). Compose has no such
-    /// session, so the benchmarks' parity runs (`none`) set it off (D568).
+    /// (`ComposeRsView.isPerformanceHintEnabled`, which it is): it gives compose-rs's threads
+    /// the boost HWUI's own session gives Compose's after its longer main-thread frames (D390,
+    /// D440, D500). Compose has no such session, so it's off by default, as every other one, on
+    /// the user's decision (D581; it was on for apps, D390, D568): apps opt in.
     pub const PERFORMANCE_HINT: Optimization = Optimization {
         bit: 1,
         name: "performance_hint",
-        default: true,
+        default: false,
         draws: false,
         summary: "report the frames' work to a hint session of compose-rs's own (Android)",
     };
@@ -199,7 +199,8 @@ impl Optimizations {
     /// None: the rendering Compose does.
     pub const NONE: Optimizations = Optimizations(0);
 
-    /// The ones on by default ([`Optimization::default`]).
+    /// The ones on by default ([`Optimization::default`]): none, the rendering Compose does
+    /// (D581).
     pub fn defaults() -> Optimizations {
         Optimization::ALL
             .iter()
@@ -244,7 +245,7 @@ impl Optimizations {
     }
 
     /// Parses `none`, `all`, `default`, or a comma-separated list of names (each may start with
-    /// `-` to take it out of what's before it: `default,-performance_hint`); an empty text is the
+    /// `-` to take it out of what's before it: `all,-performance_hint`); an empty text is the
     /// defaults. An unknown name is an error naming it.
     pub fn parse(text: &str) -> Result<Optimizations, String> {
         if text.trim().is_empty() {
@@ -313,8 +314,16 @@ mod tests {
         assert!(!Optimizations::NONE.draws_differently(Optimizations::NONE.with(hint, true)));
         assert_eq!(Optimizations::parse("all"), Ok(Optimizations::all()));
         assert_eq!(Optimizations::parse("default"), Ok(Optimizations::defaults()));
-        assert!(Optimizations::defaults().contains(hint));
+        // The library's default is parity: none, the hint session included (D581).
+        assert_eq!(Optimizations::defaults(), Optimizations::NONE);
+        assert_eq!(Optimizations::default(), Optimizations::NONE);
+        assert!(Optimization::ALL.iter().all(|optimization| !optimization.default));
+        assert!(!Optimizations::defaults().contains(hint));
         assert!(!Optimizations::defaults().contains(fade));
+        assert_eq!(
+            Optimizations::parse("all,-performance_hint"),
+            Ok(Optimizations::all().with(hint, false))
+        );
         assert_eq!(
             Optimizations::parse("single_drawing_fade"),
             Ok(Optimizations::NONE.with(fade, true))

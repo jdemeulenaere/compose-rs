@@ -100,17 +100,17 @@ fn counting_to_three() {
 }
 ```
 
-`COMPOSE_FRAME_STATS=1` prints each frame's timings, and `COMPOSE_SCREENSHOT=out.png` writes the last frame when the app exits. compose-rs draws graphics layers, clips and shadows as Compose does; its own optimizations beyond that are off by default where they change the rendering (next section).
+`COMPOSE_FRAME_STATS=1` prints each frame's timings, and `COMPOSE_SCREENSHOT=out.png` writes the last frame when the app exits. compose-rs draws graphics layers, clips and shadows as Compose does; its own optimizations beyond that are all off by default (next section).
 
 ## Parity mode and the optimizations
 
-By default compose-rs does the work Jetpack Compose 1.12.1 does: Compose's prefetch and its time budget, its layers, clips and shadows, and its text relayout rule (D560–D569). The one exception is `performance_hint`, which is on by default for apps, on the user's decision (D390, D568). Everything else compose-rs does beyond Compose is an opt-in flag.
+By default compose-rs does the work Jetpack Compose 1.12.1 does: Compose's prefetch and its time budget, its layers, clips and shadows, and its text relayout rule (D560–D569). The default is parity: no flags, the `performance_hint` session included (D581). Everything compose-rs does beyond Compose is a flag an app opts in to, `all` for every one.
 
 Each flag's effect below was measured alone against parity on a Pixel 8 Pro, 5 runs a side ([docs/14](docs/14-performance-opportunities.md), "Backport candidates"; [docs/16](docs/16-backporting-to-compose.md) explains the main ones). "No change" means within the runs' spread.
 
 | Flag | What it does | Measured alone |
 |---|---|---|
-| `performance_hint` (on by default) | A hint session of its own for the main thread and the RenderThread, reporting both threads' CPU time (Android) | Scrolls: every percentile on both threads 24–46 % shorter; CPU-rail power +1.8 to +2.9 % (D500) |
+| `performance_hint` | A hint session of its own for the main thread and the RenderThread, reporting both threads' CPU time (Android) | Scrolls: every percentile on both threads 24–46 % shorter; CPU-rail power +1.8 to +2.9 % (D500) |
 | `draw_prefetched_ahead` | Draws and records prefetched items between frames (Android) | Scrolls: main thread p90 / p99 13–23 % shorter |
 | `single_drawing_fade` | Fades a layer holding one drawing by its paint, not offscreen (as `ModulateAlpha`) | Stress animation: RenderThread work −42 %; GPU caches +31 % unless the next flag is on too |
 | `flush_layers_before_dropped_paths` | Flushes HWUI's layers before a frame that drops a stroked path (Android) | Frees a frame's worth of path masks: −28 MB of graphics memory without offscreen layers (D510) |
@@ -122,15 +122,15 @@ Each flag's effect below was measured alone against parity on a Pixel 8 Pro, 5 r
 | `grid_lines_beyond` | Composes and places two grid lines beyond each side | Not measured (no grid scenario) |
 | `paragraph_render_nodes` | Records each paragraph into a render node of its own (Android) | A cost on the feed: main thread p90 +11 % |
 
-A set is named the same way everywhere: `none`, `all`, `default`, or names separated by commas, where `-name` takes one out of what comes before it (`default,-performance_hint`). An empty list is the defaults.
+A set is named the same way everywhere: `none`, `all`, `default`, or names separated by commas, where `-name` takes one out of what comes before it (`all,-performance_hint`). `default` and an empty list are the defaults: none, the same as `none`.
 
 **Android.** `ComposeRsView` takes the flags as bits of `ComposeRsOptimizations` (`DEFAULT`, `NONE`, `ALL`, one constant per flag), as a constructor argument or through its `optimizations` property. `ComposeRsOptimizations.parse` reads a list, and needs the library loaded first:
 
 ```kotlin
 ComposeRsRuntime.loadLibrary("my_app")
 val view = ComposeRsView(context, "main", ComposeRsOptimizations.ALL)
-view.optimizations = ComposeRsOptimizations.parse("default,draw_prefetched_ahead")
-view.optimizations = ComposeRsOptimizations.DEFAULT or ComposeRsOptimizations.DRAW_PREFETCHED_AHEAD
+view.optimizations = ComposeRsOptimizations.parse("performance_hint,draw_prefetched_ahead")
+view.optimizations = ComposeRsOptimizations.PERFORMANCE_HINT or ComposeRsOptimizations.DRAW_PREFETCHED_AHEAD
 ```
 
 **Desktop.** `run_app` takes `WindowOptions::optimizations`. `application`'s windows take what `compose::desktop::set_optimizations` set last. The `COMPOSE_OPTIMIZATIONS` environment variable overrides both (`COMPOSE_OPTIMIZATIONS=all cargo run -p todo`).
@@ -154,7 +154,7 @@ compose::test::use_optimizations(Optimizations::NONE.with(Optimization::SINGLE_D
 adb shell am start -n rs.compose.bench.rs/.MainActivity -e screen feed -e optimizations all
 ```
 
-measure.py's `--optimizations` takes `parity` (the default: `none`, the hint session off too), `all`, `each` (each flag alone against parity, interleaved), or names.
+measure.py's `--optimizations` takes `parity` (the default: `none`, the library's default), `all`, `each` (each flag alone against parity, interleaved), or names.
 
 **Which to pick.** `all` is the best measured case: with it, compose-rs is ahead of Compose at every percentile on both threads, on every screen measured ([docs/12](docs/12-android-performance.md), [docs/15](docs/15-android-stress-benchmark.md)). Its costs are the hint session's CPU power (above) and the idle-time work of recording prefetched items ahead. If you pick flags one by one, turn on `flush_layers_before_dropped_paths` together with `single_drawing_fade`: the fade alone grows HWUI's GPU caches by 31 % on a screen whose stroked paths change every frame.
 

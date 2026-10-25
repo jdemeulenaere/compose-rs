@@ -1686,10 +1686,13 @@ fn the_kotlin_constants_are_rusts() {
         .filter(|optimization| optimization.default)
         .map(|optimization| optimization.name.to_uppercase())
         .collect();
+    // None on by default is `NONE` (D581).
+    let default = if defaults.is_empty() { "NONE".to_string() } else { defaults.join(" or ") };
     assert!(
-        optimizations.contains(&format!("const val DEFAULT = {}\n", defaults.join(" or "))),
+        optimizations.contains(&format!("const val DEFAULT = {default}\n")),
         "DEFAULT is {defaults:?}"
     );
+    assert!(optimizations.contains("const val NONE = 0L\n"));
     let all: Vec<String> =
         Optimization::ALL.iter().map(|optimization| optimization.name.to_uppercase()).collect();
     assert!(
@@ -1956,10 +1959,12 @@ fn review_inner_layers_in_kept_and_ahead_items_match_fresh_writes() {
 
 /// Turning the performance hint off (`ComposeRsView.isPerformanceHintEnabled = false`, which
 /// sets the optimizations through `setOptimizations`) changes nothing drawn: no boundary should
-/// be drawn again, no record written again.
+/// be drawn again, no record written again. The view starts with it on, as an app opting in
+/// (it's off by default, D581).
 #[test]
 fn review_the_performance_hint_toggle_draws_nothing_again() {
-    let mut serialized = Serialized::new(|| {
+    let with_hint = Optimizations::defaults().with(Optimization::PERFORMANCE_HINT, true);
+    let mut serialized = Serialized::with(with_hint, || {
         Layout(
             Modifier.repaint_boundary().then(painted(|| Color::WHITE)).size(50.dp()),
             stack(),
@@ -1969,7 +1974,8 @@ fn review_the_performance_hint_toggle_draws_nothing_again() {
         );
     });
     let before = serialized.frame();
-    let without_hint = Optimizations::defaults().with(Optimization::PERFORMANCE_HINT, false);
+    let without_hint = with_hint.with(Optimization::PERFORMANCE_HINT, false);
+    assert_ne!(without_hint, with_hint);
     // As `Java_rs_compose_android_ComposeRsNative_setOptimizations`.
     serialized.cache.set_optimizations(without_hint);
     serialized.host.set_optimizations(without_hint);

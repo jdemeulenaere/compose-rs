@@ -1,6 +1,6 @@
 # 16. Backporting compose-rs's optimizations to Jetpack Compose
 
-compose-rs is a Rust port of Jetpack Compose's design ([01](01-feasibility.md)). On Android it draws through the same public `RenderNode` and `Canvas` APIs as Compose, and HWUI renders both apps the same way ([13](13-android-drawing-paths.md)). Since D560, compose-rs runs by default in a **parity mode**: it does the work Compose 1.12.1 does by default, and each optimization of its own is a flag. Each flag was measured alone against parity on a Pixel 8 Pro, then all of them together ([12](12-android-performance.md), [14](14-performance-opportunities.md), [15](15-android-stress-benchmark.md)).
+compose-rs is a Rust port of Jetpack Compose's design ([01](01-feasibility.md)). On Android it draws through the same public `RenderNode` and `Canvas` APIs as Compose, and HWUI renders both apps the same way ([13](13-android-drawing-paths.md)). Since D560, compose-rs runs by default in a **parity mode**: it does the work Compose 1.12.1 does by default, and each optimization of its own is a flag, off unless an app opts in (D581: the hint session too). Each flag was measured alone against parity on a Pixel 8 Pro, then all of them together ([12](12-android-performance.md), [14](14-performance-opportunities.md), [15](15-android-stress-benchmark.md)).
 
 This document is for engineers working on Jetpack Compose, HWUI or Android graphics who want to decide which of those optimizations to backport, and how. For each candidate it gives what it changes in Compose's terms, the evidence, the mechanism, a sketch of the change against Compose's structure, and how to measure it in Compose. Candidates come in order of measured benefit and confidence.
 
@@ -510,7 +510,7 @@ Found while matching Compose 1.12.1's defaults ([15](15-android-stress-benchmark
 - a layer per `graphicsLayer`, `clip` and `shadow`, with HWUI's elevation shadows (D520–D529);
 - a mutable `Path`, reset in place (D530–D535);
 - Compose's text relayout rule (D550);
-- no hint session of its own (D568).
+- no hint session of its own (D568; off by default since D581).
 
 What remains different:
 - **No pausable composition.** A request composes its item in one step, gated on a whole composition's average.

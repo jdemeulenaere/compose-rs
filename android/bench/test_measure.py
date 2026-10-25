@@ -479,7 +479,13 @@ class OptimizationsTest(unittest.TestCase):
         self.assertEqual(measure.optimization_bits("keep_items_behind", table), 1 << 6)
         with open(measure.OPTIMIZATIONS_SOURCE) as file:
             source = file.read()
-        self.assertEqual(measure.optimization_defaults(source), ["performance_hint"])
+        # The real table: every row read, none on by default (the library's default is parity,
+        # D581), so no `-e optimizations` is `none`.
+        real = measure.optimization_table(source)
+        self.assertEqual(len(real), source.count("Optimization = Optimization {"))
+        self.assertEqual(measure.optimization_defaults(source), [])
+        self.assertEqual(measure.optimization_bits(None, real), 0)
+        self.assertEqual(measure.optimization_bits("default", real), 0)
 
     def test_main_wires_the_arguments(self):
         """`main`'s configuration: the subjects rotated, each one's bits, the thermal limits."""
