@@ -562,7 +562,7 @@ impl UiHost {
     }
 
     /// The optimizations in use ([`set_optimizations`](UiHost::set_optimizations); by default
-    /// `Optimizations::defaults()`, none: D581).
+    /// `Optimizations::defaults()`, the recommended set: D610).
     pub fn optimizations(&self) -> crate::optimizations::Optimizations {
         self.with_tree(|tree| tree.optimizations())
     }

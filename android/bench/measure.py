@@ -48,7 +48,8 @@ Each traced run also lists its slowest frames on each thread with their longest 
 (`slowest_frames`).
 
 --optimizations (compose-rs's own, beyond what Compose does: `Optimization::ALL` in
-crates/compose-ui/src/optimizations.rs, docs/07; passed to bench-rs as `-e optimizations`):
+crates/compose-ui/src/optimizations.rs, docs/07; passed to bench-rs as `-e optimizations` in
+every mode, as without it bench-rs runs the library's default, the recommended set, D610):
   parity  (default) none of them, the hint session included (`none`): compose-rs does the work
           Compose does (docs/15, "Parity mode"; D568)
   recommended  the flags with a measured gain (Rust's `Optimization::RECOMMENDED`, D601)

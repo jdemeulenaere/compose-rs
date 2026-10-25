@@ -1461,8 +1461,13 @@ mod tests {
         // After it, the paint is whole again.
         list.push(DrawOp::DrawRect(Rect::new(0.0, 0.0, 4.0, 4.0), Paint::fill(Color::BLACK)));
         let (mut resources, mut out) = (Resources::default(), Writer::default());
-        // Without the optimization, an offscreen layer, as Compose's.
-        write_display_list(&list, &mut resources, &mut GroupCache::default(), &mut out);
+        // Without the optimization (parity: the default has it), an offscreen layer, as Compose's.
+        write_display_list(
+            &list,
+            &mut resources,
+            &mut GroupCache::new(Optimizations::NONE),
+            &mut out,
+        );
         assert_eq!(out.bytes[0], tag::SAVE_LAYER_ALPHA);
         write_display_list(&list, &mut resources, &mut GroupCache::new(fade()), &mut out);
         assert_eq!(out.bytes[0], tag::SAVE);

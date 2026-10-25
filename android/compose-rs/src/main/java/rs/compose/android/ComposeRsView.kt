@@ -50,11 +50,12 @@ import java.util.concurrent.TimeUnit
  * window need ids of their own). Back goes to the content's `BackHandler`s while one is enabled.
  * The app receives properties ([setProp]) and sends events ([setOnEventListener]).
  *
- * It draws as Compose does (its graphics layers, clips and shadows as Compose's render nodes)
- * unless given compose-rs's own optimizations ([optimizations]; none by default, D581). One of
- * them puts, while it shows on API 33+, the RenderThread and the main thread in a performance
- * hint session of compose-rs's own, so Android boosts them by the frames' own work, not only
- * after long main-thread frames ([isPerformanceHintEnabled]).
+ * It draws as Compose does (its graphics layers, clips and shadows as Compose's render nodes),
+ * with compose-rs's own optimizations ([optimizations]): by default the recommended set
+ * ([ComposeRsOptimizations.RECOMMENDED], D610), [ComposeRsOptimizations.NONE] for exactly
+ * Compose's rendering. One of them puts, while it shows on API 33+, the RenderThread and the main
+ * thread in a performance hint session of compose-rs's own, so Android boosts them by the frames'
+ * own work, not only after long main-thread frames ([isPerformanceHintEnabled]).
  */
 class ComposeRsView @JvmOverloads constructor(
     context: Context,
@@ -76,8 +77,9 @@ class ComposeRsView @JvmOverloads constructor(
     /**
      * Whether, while this view shows (API 33+), the RenderThread and the main thread are in
      * compose-rs's own performance hint session, which reports both threads' CPU time over each
-     * frame against a target, so Android boosts them by the frames' work (off by default, as
-     * Compose has no such session: D390, D440, D500, D581).
+     * frame against a target, so Android boosts them by the frames' work (on by default, in the
+     * recommended set; Compose has no such session, so parity runs turn it off: D390, D440,
+     * D500, D610).
      * Android boosts a thread through HWUI's own session too, but only after long frames
      * counting the main thread's, which compose-rs's are rarely: without it, the RenderThread
      * mostly runs on slower cores at lower frequencies, and its frames take longer for the same
@@ -100,11 +102,11 @@ class ComposeRsView @JvmOverloads constructor(
 
     /**
      * compose-rs's own optimizations beyond Compose's rendering, as [ComposeRsOptimizations]'
-     * bits ([ComposeRsOptimizations.DEFAULT], none, unless given at construction): by default the
-     * view does the work Compose does, so a benchmark against Compose measures the same
-     * rendering; apps opt in, and the benchmarks measure each optimization (D520, D581). Set from
-     * another thread, it applies on the main thread (read from any); a change to one that draws
-     * draws everything again.
+     * bits ([ComposeRsOptimizations.DEFAULT], the recommended set, unless given at construction:
+     * D610). [ComposeRsOptimizations.NONE] does the work Compose does, which the benchmarks pass
+     * so a run against Compose measures the same rendering, and each optimization apart (D520).
+     * Set from another thread, it applies on the main thread (read from any); a change to one
+     * that draws draws everything again.
      */
     @Volatile
     var optimizations: Long = optimizations

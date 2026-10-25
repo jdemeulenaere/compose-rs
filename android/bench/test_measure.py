@@ -483,13 +483,34 @@ class OptimizationsTest(unittest.TestCase):
         self.assertEqual(measure.optimization_bits("keep_items_behind", table), 1 << 6)
         with open(measure.OPTIMIZATIONS_SOURCE) as file:
             source = file.read()
-        # The real table: every row read, none on by default (the library's default is parity,
-        # D581), so no `-e optimizations` is `none`.
+        # The real table: every row read, the recommended set on by default (D610), so bench-rs
+        # without `-e optimizations` runs the recommended set, not parity: measure.py always
+        # passes the extra (`test_bench_rs_always_gets_its_list`).
         real = measure.optimization_table(source)
+        recommended = measure.optimization_recommended(source)
         self.assertEqual(len(real), source.count("Optimization = Optimization {"))
-        self.assertEqual(measure.optimization_defaults(source), [])
-        self.assertEqual(measure.optimization_bits(None, real), 0)
-        self.assertEqual(measure.optimization_bits("default", real), 0)
+        self.assertEqual(sorted(measure.optimization_defaults(source)), sorted(recommended))
+        self.assertEqual(measure.optimization_bits(None, real),
+                         measure.optimization_bits("recommended", real, recommended))
+        self.assertEqual(measure.optimization_bits("default", real),
+                         measure.optimization_bits(None, real))
+        self.assertEqual(measure.optimization_bits("none", real), 0)
+
+    def test_bench_rs_always_gets_its_list(self):
+        """Every mode starts bench-rs with an `-e optimizations` (its default is the recommended
+        set, D610): parity passes `none`; only the Compose app gets none."""
+        cases = [measure.parse_optimizations(text, self.NAMES)
+                 for text in (None, "parity", "recommended", "all", "rs", "each",
+                              "keep_items_behind")]
+        cases.append(measure.parse_subjects(["recommended", "none"], self.NAMES))
+        for mode, subjects in cases:
+            for name, package, optimizations in subjects:
+                if package == "rs.compose.bench.rs":
+                    self.assertIsNotNone(optimizations, f"{mode}: {name}")
+                else:
+                    self.assertIsNone(optimizations, f"{mode}: {name}")
+        _, subjects = measure.parse_optimizations("parity", self.NAMES)
+        self.assertEqual(subjects[1][2], "none")
 
     def test_main_wires_the_arguments(self):
         """`main`'s configuration: the subjects rotated, each one's bits, the thermal limits."""

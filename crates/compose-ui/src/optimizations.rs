@@ -1,9 +1,10 @@
 //! compose-rs's own optimizations: what it does beyond Jetpack Compose's rendering, each a flag
 //! a host sets (`UiHost::set_optimizations`; `ComposeRsView.optimizations` on Android,
 //! `WindowOptions::optimizations` on desktop), so the benchmarks against Compose can measure the
-//! same rendering (none of them, the default: the library's default is parity, D581) and each
-//! optimization apart (D520). Apps opt in: `recommended` (the flags with a measured gain, D601),
-//! `all`, or the ones they name.
+//! same rendering (none of them: `Optimizations::NONE`, parity) and each optimization apart
+//! (D520). The default is `recommended`, the flags with a measured gain (D601), on the user's
+//! decision (D610; it was parity, D581): a host not told otherwise uses them. Apps can pick
+//! `none`, `all`, or the ones they name.
 //!
 //! Adding one: a constant of [`Optimization`] with the next bit, a row in
 //! [`Optimization::ALL`], and the same bit in Kotlin's `ComposeRsOptimizations`
@@ -36,7 +37,7 @@ impl Optimization {
     pub const SINGLE_DRAWING_FADE: Optimization = Optimization {
         bit: 0,
         name: "single_drawing_fade",
-        default: false,
+        default: true,
         draws: true,
         summary: "fade a layer holding one drawing by its paint, not offscreen",
     };
@@ -45,12 +46,12 @@ impl Optimization {
     /// performance hint session of compose-rs's own, reporting both threads' work each frame
     /// (`ComposeRsView.isPerformanceHintEnabled`, which it is): it gives compose-rs's threads
     /// the boost HWUI's own session gives Compose's after its longer main-thread frames (D390,
-    /// D440, D500). Compose has no such session, so it's off by default, as every other one, on
-    /// the user's decision (D581; it was on for apps, D390, D568): apps opt in.
+    /// D440, D500). Compose has no such session, so parity runs leave it off; on by default, in
+    /// the recommended set (D610; it was on for apps, D390, D568, then off, D581).
     pub const PERFORMANCE_HINT: Optimization = Optimization {
         bit: 1,
         name: "performance_hint",
-        default: false,
+        default: true,
         draws: false,
         summary: "report the frames' work to a hint session of compose-rs's own (Android)",
     };
@@ -58,11 +59,12 @@ impl Optimization {
     /// A text keeps its paragraph when new constraints change its width bounds but not the
     /// width Compose's `finalMaxWidth` would lay it out at (the text's own width, kept in the
     /// constraints), so a text that fits keeps its layout while its container's width changes.
-    /// Compose lays such a text out again (`newLayoutWillBeDifferent`). Off by default (D551).
+    /// Compose lays such a text out again (`newLayoutWillBeDifferent`) (D551). On by default, in
+    /// the recommended set (D610).
     pub const REUSE_PARAGRAPH_AT_SAME_LAYOUT_WIDTH: Optimization = Optimization {
         bit: 2,
         name: "reuse_paragraph_at_same_layout_width",
-        default: false,
+        default: true,
         // Read while measuring: what's laid out from then on follows it.
         draws: false,
         summary: "keep a text's paragraph when the width it's laid out at stays the same",
@@ -126,7 +128,7 @@ impl Optimization {
     pub const DRAW_PREFETCHED_AHEAD: Optimization = Optimization {
         bit: 7,
         name: "draw_prefetched_ahead",
-        default: false,
+        default: true,
         draws: false,
         summary: "draw and record prefetched items between frames (Android)",
     };
@@ -148,7 +150,7 @@ impl Optimization {
     pub const FLUSH_LAYERS_BEFORE_DROPPED_PATHS: Optimization = Optimization {
         bit: 9,
         name: "flush_layers_before_dropped_paths",
-        default: false,
+        default: true,
         draws: false,
         summary: "flush HWUI's layers before a frame dropping a stroked path (Android)",
     };
@@ -184,7 +186,8 @@ impl Optimization {
     /// device, each alone against parity (docs/14, "Backport candidates") and together against
     /// `all` (docs/12; D601). `flush_layers_before_dropped_paths` is `single_drawing_fade`'s
     /// companion: the fade alone grows HWUI's GPU caches by 31 % on a screen dropping stroked
-    /// paths every frame, and the flush layer brings them back.
+    /// paths every frame, and the flush layer brings them back. They're the ones on by default
+    /// (D610).
     pub const RECOMMENDED: &'static [Optimization] = &[
         Optimization::SINGLE_DRAWING_FADE,
         Optimization::PERFORMANCE_HINT,
@@ -213,8 +216,8 @@ impl Optimizations {
     /// None: the rendering Compose does.
     pub const NONE: Optimizations = Optimizations(0);
 
-    /// The ones on by default ([`Optimization::default`]): none, the rendering Compose does
-    /// (D581).
+    /// The ones on by default ([`Optimization::default`]): the recommended set (D610; parity,
+    /// none, before: D581).
     pub fn defaults() -> Optimizations {
         Optimization::ALL
             .iter()
@@ -223,7 +226,8 @@ impl Optimizations {
     }
 
     /// The recommended ones ([`Optimization::RECOMMENDED`]): those with a measured gain, without
-    /// those that measured none or a cost (D601). Not the default, which is parity (D581).
+    /// those that measured none or a cost (D601). The default ([`Optimizations::defaults`],
+    /// D610).
     pub fn recommended() -> Optimizations {
         Optimization::RECOMMENDED
             .iter()
@@ -339,12 +343,23 @@ mod tests {
         assert!(!Optimizations::NONE.draws_differently(Optimizations::NONE.with(hint, true)));
         assert_eq!(Optimizations::parse("all"), Ok(Optimizations::all()));
         assert_eq!(Optimizations::parse("default"), Ok(Optimizations::defaults()));
-        // The library's default is parity: none, the hint session included (D581).
-        assert_eq!(Optimizations::defaults(), Optimizations::NONE);
-        assert_eq!(Optimizations::default(), Optimizations::NONE);
-        assert!(Optimization::ALL.iter().all(|optimization| !optimization.default));
-        assert!(!Optimizations::defaults().contains(hint));
-        assert!(!Optimizations::defaults().contains(fade));
+        // The library's default is the recommended set, the hint session included (D610).
+        assert_eq!(Optimizations::defaults(), Optimizations::recommended());
+        assert_eq!(Optimizations::default(), Optimizations::recommended());
+        assert_eq!(Optimizations::parse(""), Ok(Optimizations::recommended()));
+        assert_eq!(Optimizations::parse("default"), Ok(Optimizations::recommended()));
+        for optimization in Optimization::ALL {
+            assert_eq!(
+                optimization.default,
+                Optimization::RECOMMENDED.contains(optimization),
+                "{}",
+                optimization.name
+            );
+        }
+        assert!(Optimizations::defaults().contains(hint));
+        assert!(Optimizations::defaults().contains(fade));
+        // Parity is still none: no flag.
+        assert_eq!(Optimizations::NONE.bits(), 0);
         assert_eq!(
             Optimizations::parse("all,-performance_hint"),
             Ok(Optimizations::all().with(hint, false))
@@ -392,9 +407,9 @@ mod tests {
         // The fade comes with its companion (the fade alone grows the GPU caches by 31 %).
         assert!(recommended.contains(Optimization::SINGLE_DRAWING_FADE));
         assert!(recommended.contains(Optimization::FLUSH_LAYERS_BEFORE_DROPPED_PATHS));
-        // It draws differently from parity (the fade), and isn't the default (D581).
+        // It draws differently from parity (the fade), and is the default (D610).
         assert!(Optimizations::NONE.draws_differently(recommended));
-        assert_ne!(Optimizations::defaults(), recommended);
+        assert_eq!(Optimizations::defaults(), recommended);
         let mut table = Optimization::RECOMMENDED.to_vec();
         table.dedup();
         assert_eq!(table.len(), 5);
@@ -425,5 +440,14 @@ mod tests {
         assert!(Optimizations::parse("all,-recommended").is_err());
         assert!(Optimizations::parse("-all").is_err());
         assert_eq!(Optimizations::from_bits(recommended.bits()), recommended);
+    }
+
+    /// A host not told otherwise uses the recommended set (D610).
+    #[test]
+    fn a_host_defaults_to_the_recommended_set() {
+        let mut host = crate::host::UiHost::headless(10, 10);
+        assert_eq!(host.optimizations(), Optimizations::recommended());
+        host.set_optimizations(Optimizations::NONE);
+        assert_eq!(host.optimizations(), Optimizations::NONE);
     }
 }

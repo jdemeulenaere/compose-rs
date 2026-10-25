@@ -4,7 +4,7 @@ compose-rs is Jetpack Compose's programming model in Rust: write UIs as composab
 
 > **Disclaimer:** this is not an officially supported Google product, and it is not affiliated with or endorsed by the Jetpack Compose team. Jetpack Compose and Android are trademarks of Google LLC.
 
-**Status:** the runtime, UI, foundation, Material 3, animation and navigation run on desktop (Skia) and Android (`ComposeRsView`, embeddable in Kotlin Compose). By default compose-rs does what Jetpack Compose 1.12.1 does; on a Pixel 8 Pro it then starts faster, uses less memory and does about half the main-thread work per frame, and with its own optimizations on it is ahead at every frame percentile ([docs/12](docs/12-android-performance.md)). These benchmarks compare like for like ("parity mode"); compose-rs's extra optimizations are opt-in ([below](#parity-mode-and-the-optimizations)). [docs/11](docs/11-status.md) lists what's covered and the known differences from Compose.
+**Status:** the runtime, UI, foundation, Material 3, animation and navigation run on desktop (Skia) and Android (`ComposeRsView`, embeddable in Kotlin Compose). Doing only what Jetpack Compose 1.12.1 does ("parity mode"), compose-rs on a Pixel 8 Pro starts faster, uses less memory and does about half the main-thread work per frame, and with its recommended optimizations on, its default, it is ahead at every frame percentile ([docs/12](docs/12-android-performance.md)). The benchmarks compare like for like at parity, which apps can pick too ([below](#parity-mode-and-the-optimizations)). [docs/11](docs/11-status.md) lists what's covered and the known differences from Compose.
 
 | Crate | Contents |
 |---|---|
@@ -114,7 +114,7 @@ fn counting_to_three() {
 }
 ```
 
-`COMPOSE_FRAME_STATS=1` prints each frame's timings, and `COMPOSE_SCREENSHOT=out.png` writes the last frame when the app exits. compose-rs draws graphics layers, clips and shadows as Compose does; its own optimizations beyond that are off by default (see [Parity mode and the optimizations](#parity-mode-and-the-optimizations) below).
+`COMPOSE_FRAME_STATS=1` prints each frame's timings, and `COMPOSE_SCREENSHOT=out.png` writes the last frame when the app exits. compose-rs draws graphics layers, clips and shadows as Compose does; of its own optimizations beyond that, the recommended ones are on by default and `COMPOSE_OPTIMIZATIONS=none` turns them off (see [Parity mode and the optimizations](#parity-mode-and-the-optimizations) below).
 
 ### Tests and benchmarks
 
@@ -157,43 +157,44 @@ Every decision, with its alternatives and revert cost, is in the decision log, s
 
 ## Parity mode and the optimizations
 
-By default compose-rs does the work Jetpack Compose 1.12.1 does: Compose's prefetch and its time budget, its layers, clips and shadows, and its text relayout rule (D560–D569). The default is parity: no flags, the `performance_hint` session included (D581). Everything compose-rs does beyond Compose is a flag an app opts in to: `recommended` for those with a measured gain, `all` for every one.
+By default compose-rs uses `recommended`, its optimizations with a measured gain (D610, on the user's decision): every host, `ComposeRsView`, desktop windows and the test rules, unless told otherwise. Parity is `none`: no flags, the `performance_hint` session included, and then compose-rs does the work Jetpack Compose 1.12.1 does: Compose's prefetch and its time budget, its layers, clips and shadows, and its text relayout rule (D560–D569). The benchmarks against Compose run at parity, passing `none` explicitly. `all` turns on every flag.
 
-Each flag's effect below was measured alone against parity on a Pixel 8 Pro, 5 runs a side ([docs/14](docs/14-performance-opportunities.md), "Backport candidates"; [docs/16](docs/16-backporting-to-compose.md) explains the main ones). "No change" means within the runs' spread.
+Each flag's effect below was measured alone against parity on a Pixel 8 Pro, 5 runs a side ([docs/14](docs/14-performance-opportunities.md), "Backport candidates"; [docs/16](docs/16-backporting-to-compose.md) explains the main ones). "No change" means within the runs' spread. The "Default" column says which flags are on when nothing is set: the `recommended` ones.
 
-| Flag | What it does | Measured alone |
-|---|---|---|
-| `performance_hint` | A hint session of its own for the main thread and the RenderThread, reporting both threads' CPU time (Android) | Scrolls: every percentile on both threads 24–46 % shorter; CPU-rail power +1.8 to +2.9 % (D500) |
-| `draw_prefetched_ahead` | Draws and records prefetched items between frames (Android) | Scrolls: main thread p90 / p99 13–23 % shorter |
-| `single_drawing_fade` | Fades a layer holding one drawing by its paint, not offscreen (as `ModulateAlpha`) | Stress animation: RenderThread work −42 %; GPU caches +31 % unless the next flag is on too |
-| `flush_layers_before_dropped_paths` | Flushes HWUI's layers before a frame that drops a stroked path (Android) | Frees a frame's worth of path masks: −28 MB of graphics memory without offscreen layers (D510) |
-| `reuse_paragraph_at_same_layout_width` | Keeps a text's paragraph while the width it's laid out at stays the same | Width-changing screen: 14 times fewer text layouts, main-thread work −52 % (D551); no change elsewhere |
-| `keep_items_behind` | Keeps two items behind the scroll composed, with their recordings | Faster first frame on a fling reversal (D375); main thread p50 +5 % |
-| `prefetch_two_ahead` | Prefetches two items ahead, not one | No change in frame durations |
-| `prefetch_budget_recent_maximum` | Budgets prefetch steps by their recent maximum, with a margin, on the vsync's phase | Fewer steps past the vsync (D341, D381); no change in round 14 |
-| `prefetch_at_rest` | Prefetches after a layout at rest too, not only on scrolls | No change |
-| `grid_lines_beyond` | Composes and places two grid lines beyond each side | Not measured (no grid scenario) |
-| `paragraph_render_nodes` | Records each paragraph into a render node of its own (Android) | A cost on the feed: main thread p90 +11 % |
+| Flag | Default | What it does | Measured alone |
+|---|---|---|---|
+| `performance_hint` | on | A hint session of its own for the main thread and the RenderThread, reporting both threads' CPU time (Android) | Scrolls: every percentile on both threads 24–46 % shorter; CPU-rail power +1.8 to +2.9 % (D500) |
+| `draw_prefetched_ahead` | on | Draws and records prefetched items between frames (Android) | Scrolls: main thread p90 / p99 13–23 % shorter |
+| `single_drawing_fade` | on | Fades a layer holding one drawing by its paint, not offscreen (as `ModulateAlpha`) | Stress animation: RenderThread work −42 %; GPU caches +31 % unless the next flag is on too |
+| `flush_layers_before_dropped_paths` | on | Flushes HWUI's layers before a frame that drops a stroked path (Android) | Frees a frame's worth of path masks: −28 MB of graphics memory without offscreen layers (D510) |
+| `reuse_paragraph_at_same_layout_width` | on | Keeps a text's paragraph while the width it's laid out at stays the same | Width-changing screen: 14 times fewer text layouts, main-thread work −52 % (D551); no change elsewhere |
+| `keep_items_behind` | off | Keeps two items behind the scroll composed, with their recordings | Faster first frame on a fling reversal (D375); main thread p50 +5 % |
+| `prefetch_two_ahead` | off | Prefetches two items ahead, not one | No change in frame durations |
+| `prefetch_budget_recent_maximum` | off | Budgets prefetch steps by their recent maximum, with a margin, on the vsync's phase | Fewer steps past the vsync (D341, D381); no change in round 14 |
+| `prefetch_at_rest` | off | Prefetches after a layout at rest too, not only on scrolls | No change |
+| `grid_lines_beyond` | off | Composes and places two grid lines beyond each side | Not measured (no grid scenario) |
+| `paragraph_render_nodes` | off | Records each paragraph into a render node of its own (Android) | A cost on the feed: main thread p90 +11 % |
 
-A set is named the same way everywhere: `none`, `recommended`, `all`, `default`, or names separated by commas, where `-name` takes one out of what comes before it (`recommended,-performance_hint`) and a set's name replaces what comes before it. `recommended` is `performance_hint`, `draw_prefetched_ahead`, `single_drawing_fade`, `flush_layers_before_dropped_paths` and `reuse_paragraph_at_same_layout_width` (D601). `default` and an empty list are the defaults: none, the same as `none`.
+A set is named the same way everywhere: `none`, `recommended`, `all`, `default`, or names separated by commas, where `-name` takes one out of what comes before it (`recommended,-performance_hint`) and a set's name replaces what comes before it. `recommended` is `performance_hint`, `draw_prefetched_ahead`, `single_drawing_fade`, `flush_layers_before_dropped_paths` and `reuse_paragraph_at_same_layout_width` (D601). `default` and an empty list are the defaults: the same as `recommended`.
 
-**Android.** `ComposeRsView` takes the flags as bits of `ComposeRsOptimizations` (`DEFAULT`, `NONE`, `RECOMMENDED`, `ALL`, one constant per flag), as a constructor argument or through its `optimizations` property. `ComposeRsOptimizations.parse` reads a list, and needs the library loaded first:
+**Android.** `ComposeRsView` takes the flags as bits of `ComposeRsOptimizations` (`DEFAULT`, which is `RECOMMENDED`, `NONE`, `ALL`, one constant per flag), as a constructor argument or through its `optimizations` property. `ComposeRsOptimizations.parse` reads a list, and needs the library loaded first:
 
 ```kotlin
 ComposeRsRuntime.loadLibrary("my_app")
-val view = ComposeRsView(context, "main", ComposeRsOptimizations.RECOMMENDED)
+val view = ComposeRsView(context, "main", ComposeRsOptimizations.NONE) // parity
+view.optimizations = ComposeRsOptimizations.RECOMMENDED // the default
 view.optimizations = ComposeRsOptimizations.parse("performance_hint,draw_prefetched_ahead")
 view.optimizations = ComposeRsOptimizations.PERFORMANCE_HINT or ComposeRsOptimizations.DRAW_PREFETCHED_AHEAD
 ```
 
-**Desktop.** `run_app` takes `WindowOptions::optimizations`. `application`'s windows take what `compose::desktop::set_optimizations` set last. The `COMPOSE_OPTIMIZATIONS` environment variable overrides both (`COMPOSE_OPTIMIZATIONS=recommended cargo run -p todo`).
+**Desktop.** `run_app` takes `WindowOptions::optimizations` (`WindowOptions::default()`: `recommended`). `application`'s windows take what `compose::desktop::set_optimizations` set last (`recommended` if nothing). The `COMPOSE_OPTIMIZATIONS` environment variable overrides both (`COMPOSE_OPTIMIZATIONS=none cargo run -p todo`); set but empty, it means the defaults.
 
 ```rust
 use compose::desktop::{Optimizations, WindowOptions, run_app};
-run_app(WindowOptions { optimizations: Optimizations::recommended(), ..Default::default() }, App);
+run_app(WindowOptions { optimizations: Optimizations::NONE, ..Default::default() }, App);
 ```
 
-**Rust hosts and tests.** `UiHost::set_optimizations` sets a host's flags. `compose::test::use_optimizations` sets them for the test rules made on the calling thread:
+**Rust hosts and tests.** `UiHost::set_optimizations` sets a host's flags (a new host has `recommended`). `compose::test::use_optimizations` sets them for the test rules made on the calling thread; without it the rules' hosts use `recommended`, so tests exercise what ships, and a test of Compose's own behaviour sets `Optimizations::NONE`:
 
 ```rust
 use compose::ui::platform::{Optimization, Optimizations};
@@ -201,13 +202,13 @@ host.set_optimizations(Optimizations::parse("recommended,-performance_hint").unw
 compose::test::use_optimizations(Optimizations::NONE.with(Optimization::SINGLE_DRAWING_FADE, true));
 ```
 
-**The bench app and measure.py.** bench-rs takes a list as an intent extra:
+**The bench app and measure.py.** bench-rs takes a list as an intent extra (without one it runs the default, `recommended`):
 
 ```bash
-adb shell am start -n rs.compose.bench.rs/.MainActivity -e screen feed -e optimizations recommended
+adb shell am start -n rs.compose.bench.rs/.MainActivity -e screen feed -e optimizations none
 ```
 
-measure.py's `--optimizations` takes `parity` (the default: `none`, the library's default), `recommended`, `all`, `each` (each flag alone against parity, interleaved), or names; `--subject LIST`, repeated, measures several compose-rs sets beside Compose in one session (`--subject recommended --subject all`).
+measure.py always passes the extra. Its `--optimizations` takes `parity` (the default: `none`), `recommended`, `all`, `each` (each flag alone against parity, interleaved), or names; `--subject LIST`, repeated, measures several compose-rs sets beside Compose in one session (`--subject recommended --subject all`).
 
 **Which to pick.** `recommended`: the five flags with a measured gain, without the six that measured none or a small cost. Measured against `all` and Compose in one session (Pixel 8 Pro, 5 runs each, interleaved; [docs/12](docs/12-android-performance.md), "Recommended against all"), it is at least as fast as `all` at every frame percentile on both threads on every screen, and faster where the runs resolve a difference:
 

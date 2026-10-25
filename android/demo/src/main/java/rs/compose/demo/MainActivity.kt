@@ -26,8 +26,7 @@ import rs.compose.android.ComposeRsView
 
 /**
  * The compose-rs examples, each in a `ComposeRsView` inside this Kotlin Compose screen. The views
- * opt in to the performance hint session, as the demo had it before the library's default became
- * none (D581); the other optimizations stay off, as Compose's rendering.
+ * take the library's default, the recommended set (D610).
  */
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {

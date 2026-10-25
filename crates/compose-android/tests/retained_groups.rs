@@ -296,8 +296,8 @@ struct Serialized {
     out: Writer,
 }
 
-/// compose-rs's own lazy-list behaviours beyond Compose's, which hosts don't use by default
-/// (D560-D565): two ahead, D341's budget, prefetching at rest, two kept behind (their groups
+/// compose-rs's own lazy-list behaviours beyond Compose's, most of which hosts don't use by
+/// default (D560-D565; drawing ahead is in the default set, D610): two ahead, D341's budget, prefetching at rest, two kept behind (their groups
 /// listed, D380), drawing ahead (D350). For the tests of kept and drawn-ahead groups.
 fn legacy() -> Optimizations {
     Optimizations::parse(
@@ -374,7 +374,9 @@ fn painted(color: impl Fn() -> Color + 'static) -> Modifier {
 /// drawing (the layer's save, transform, clip and alpha layer are the `LAYERS` entry's).
 #[test]
 fn a_lifted_layer_is_its_layers_entry_not_operations() {
-    let mut serialized = Serialized::new(|| {
+    // Parity: Compose's `Auto` compositing, which the default's single-drawing fade would turn
+    // into a modulated alpha for this one drawing.
+    let mut serialized = Serialized::with(Optimizations::NONE, || {
         Leaf(
             Modifier
                 .graphics_layer_with(GraphicsLayerScope {
@@ -1688,8 +1690,14 @@ fn the_kotlin_constants_are_rusts() {
         .filter(|optimization| optimization.default)
         .map(|optimization| optimization.name.to_uppercase())
         .collect();
-    // None on by default is `NONE` (D581).
-    let default = if defaults.is_empty() { "NONE".to_string() } else { defaults.join(" or ") };
+    // The recommended set on by default is `RECOMMENDED` (D610), none `NONE` (as D581 had it).
+    let default = if Optimizations::defaults() == Optimizations::recommended() {
+        "RECOMMENDED".to_string()
+    } else if defaults.is_empty() {
+        "NONE".to_string()
+    } else {
+        defaults.join(" or ")
+    };
     assert!(
         optimizations.contains(&format!("const val DEFAULT = {default}\n")),
         "DEFAULT is {defaults:?}"
@@ -1700,7 +1708,8 @@ fn the_kotlin_constants_are_rusts() {
     assert!(
         optimizations.contains(&format!("const val ALL = {}\n", all.join(" or "))),
         "ALL is {all:?}"
-    );    // The recommended ones (D601), in Rust's table's order.
+    );
+    // The recommended ones (D601), in Rust's table's order.
     let recommended: Vec<String> = Optimization::ALL
         .iter()
         .filter(|optimization| Optimizations::recommended().contains(**optimization))
@@ -1736,6 +1745,34 @@ fn the_kotlin_side_switches_its_optimizations() {
         assert!(view.contains(&format!("and ComposeRsOptimizations.{flag} ")), "{flag}");
     }
     assert!(kotlin("TextMeasurer.kt").contains("if (!hardware || !paragraphNodes)"));
+}
+
+/// Android's entry points default to the recommended set (D610): a `ComposeRsView` not given
+/// optimizations takes `ComposeRsOptimizations.DEFAULT` (`RECOMMENDED`, which
+/// `the_kotlin_constants_are_rusts` checks is Rust's defaults), as bench-rs without its extra and
+/// the demo app, which names none.
+#[test]
+fn android_hosts_default_to_the_recommended_set() {
+    let android = |file: &str| {
+        let path = format!("{}/../../android/{file}", env!("CARGO_MANIFEST_DIR"));
+        std::fs::read_to_string(&path).unwrap_or_else(|error| panic!("{path}: {error}"))
+    };
+    assert_eq!(Optimizations::defaults(), Optimizations::recommended());
+    assert!(
+        android("compose-rs/src/main/java/rs/compose/android/ComposeRsOptimizations.kt")
+            .contains("const val DEFAULT = RECOMMENDED\n")
+    );
+    assert!(
+        android("compose-rs/src/main/java/rs/compose/android/ComposeRsView.kt")
+            .contains("    optimizations: Long = ComposeRsOptimizations.DEFAULT,\n")
+    );
+    assert!(
+        android("bench-rs/src/main/java/rs/compose/bench/rs/MainActivity.kt")
+            .contains("?: ComposeRsOptimizations.DEFAULT\n")
+    );
+    let demo = android("demo/src/main/java/rs/compose/demo/MainActivity.kt");
+    assert!(demo.contains("ComposeRsView(context, apps[selected])"));
+    assert!(!demo.contains("optimizations"), "the demo names no optimizations");
 }
 
 // ---- Mutable paths, after a review ----------------------------------------------------------
@@ -1982,8 +2019,7 @@ fn review_inner_layers_in_kept_and_ahead_items_match_fresh_writes() {
 
 /// Turning the performance hint off (`ComposeRsView.isPerformanceHintEnabled = false`, which
 /// sets the optimizations through `setOptimizations`) changes nothing drawn: no boundary should
-/// be drawn again, no record written again. The view starts with it on, as an app opting in
-/// (it's off by default, D581).
+/// be drawn again, no record written again. The view starts with it on, as by default (D610).
 #[test]
 fn review_the_performance_hint_toggle_draws_nothing_again() {
     let with_hint = Optimizations::defaults().with(Optimization::PERFORMANCE_HINT, true);

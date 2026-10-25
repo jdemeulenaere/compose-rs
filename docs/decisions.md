@@ -22,7 +22,7 @@ The log is split by area into the files below, one table each, rows in number or
 | [text](decisions/text.md) | Text measurement and layout on each platform, fonts, text fields and editing. | 26 |
 | [lazy-and-prefetch](decisions/lazy-and-prefetch.md) | Lazy lists and grids, item reuse, the policy of composing only what is in view, prefetch. | 64 |
 | [android-drawing](decisions/android-drawing.md) | The display list and its replayer, render nodes and repaint boundaries, paths, shadows, layers. | 25 |
-| [android-host-and-performance](decisions/android-host-and-performance.md) | The view and activity glue, the frame loop, the hint session, jank, startup, memory, and the optimization flags. | 24 |
+| [android-host-and-performance](decisions/android-host-and-performance.md) | The view and activity glue, the frame loop, the hint session, jank, startup, memory, and the optimization flags. | 25 |
 | [desktop](decisions/desktop.md) | The desktop host: window, Skia rendering, input and events. | 6 |
 | [benchmarks](decisions/benchmarks.md) | The benchmark apps, protocols and rounds, and how results are read. | 19 |
 | [api-and-tooling](decisions/api-and-tooling.md) | Names, crates and modules, semver, the edit-build loop, testing and documentation. | 22 |
@@ -385,7 +385,7 @@ The log is split by area into the files below, one table each, rows in number or
 | D578 | [lazy-and-prefetch](decisions/lazy-and-prefetch.md#d578) | current |
 | D579 | [benchmarks](decisions/benchmarks.md#d579) | current |
 | D580 | [benchmarks](decisions/benchmarks.md#d580) | current |
-| D581 | [android-host-and-performance](decisions/android-host-and-performance.md#d581) | current |
+| D581 | [android-host-and-performance](decisions/android-host-and-performance.md#d581) | revised by [D610](decisions/android-host-and-performance.md#d610) |
 | D590 | [runtime](decisions/runtime.md#d590) | current |
 | D591 | [runtime](decisions/runtime.md#d591) | current |
 | D592 | [runtime](decisions/runtime.md#d592) | revised by [D597](decisions/runtime.md#d597) |
@@ -397,4 +397,5 @@ The log is split by area into the files below, one table each, rows in number or
 | D598 | [benchmarks](decisions/benchmarks.md#d598) | current |
 | D599 | [lazy-and-prefetch](decisions/lazy-and-prefetch.md#d599) | current |
 | D600 | [benchmarks](decisions/benchmarks.md#d600) | current |
-| D601 | [android-host-and-performance](decisions/android-host-and-performance.md#d601) | current |
+| D601 | [android-host-and-performance](decisions/android-host-and-performance.md#d601) | revised by [D610](decisions/android-host-and-performance.md#d610) |
+| D610 | [android-host-and-performance](decisions/android-host-and-performance.md#d610) | current |

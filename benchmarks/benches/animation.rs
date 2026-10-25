@@ -1,6 +1,6 @@
 //! Animation frames: many infinite transitions at once, as docs/15's `stress_animation` (140
 //! cells, each with an infinite transition of 4 values), and the cost of resuming the tasks that
-//! wait for a frame.
+//! wait for a frame. The hosts run at parity (`none`, Compose's work: D610).
 
 use std::hint::black_box;
 use std::rc::Rc;
@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use compose::animation::*;
 use compose::foundation::layout::*;
 use compose::runtime::{composable, platform};
-use compose::ui::platform::{FixedTextMeasurer, UiHost};
+use compose::ui::platform::{FixedTextMeasurer, Optimizations, UiHost};
 use compose::ui::*;
 use criterion::{Criterion, criterion_group, criterion_main};
 
@@ -100,6 +100,8 @@ fn frames(criterion: &mut Criterion, title: &str, content: fn()) {
         Density::new(2.625),
         Box::new(FixedTextMeasurer::new()),
     );
+    // Parity, Compose's work, as before the hosts' default became the recommended set (D610).
+    host.set_optimizations(Optimizations::NONE);
     host.set_content(content);
     let frame = |host: &mut UiHost| {
         platform::advance_clock(Duration::from_millis(16));
@@ -141,9 +143,15 @@ fn serialized_frames(criterion: &mut Criterion) {
         Density::new(2.625),
         Box::new(FixedTextMeasurer::new()),
     );
+    // Parity, host and records, as before the default became the recommended set (D610).
+    host.set_optimizations(Optimizations::NONE);
     host.set_content(compose_rs_feed::stress::StressAnimation);
-    let (mut resources, mut groups, mut list, mut taken) =
-        (Resources::default(), GroupCache::default(), Writer::default(), Writer::default());
+    let (mut resources, mut groups, mut list, mut taken) = (
+        Resources::default(),
+        GroupCache::new(Optimizations::NONE),
+        Writer::default(),
+        Writer::default(),
+    );
     let mut frame = |host: &mut UiHost| {
         platform::advance_clock(Duration::from_millis(16));
         let start = Instant::now();

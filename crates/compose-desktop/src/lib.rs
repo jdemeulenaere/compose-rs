@@ -11,7 +11,8 @@
 //! `COMPOSE_EXIT_AFTER_FRAMES=n` exits after `n` frames, or once idle (for smoke tests);
 //! `COMPOSE_OPTIMIZATIONS=none|recommended|all|default|name,…` sets compose-rs's optimizations beyond
 //! Compose's rendering (`Optimizations::parse`, over `set_optimizations`'s and
-//! `WindowOptions::optimizations`).
+//! `WindowOptions::optimizations`; unset, empty or `default`: the recommended set, D610; `none`:
+//! Compose's rendering).
 
 #![forbid(unsafe_code)]
 // Every type reachable from the public API can be named (D260): a type in a private
@@ -52,15 +53,23 @@ pub fn set_optimizations(optimizations: Optimizations) {
 }
 
 /// The optimizations windows open with: `COMPOSE_OPTIMIZATIONS` if set (and valid), else
-/// `set_optimizations`'s.
+/// `set_optimizations`'s (by default the recommended set, D610).
 fn window_optimizations() -> Optimizations {
-    let set = OPTIMIZATIONS.with(std::cell::Cell::get);
-    match std::env::var("COMPOSE_OPTIMIZATIONS") {
-        Ok(text) => Optimizations::parse(&text).unwrap_or_else(|error| {
+    optimizations_from(
+        std::env::var("COMPOSE_OPTIMIZATIONS").ok().as_deref(),
+        OPTIMIZATIONS.with(std::cell::Cell::get),
+    )
+}
+
+/// The optimizations `COMPOSE_OPTIMIZATIONS`'s `text` names (an empty one: the defaults), or
+/// `set` without it or if it names one unknown.
+fn optimizations_from(text: Option<&str>, set: Optimizations) -> Optimizations {
+    match text {
+        Some(text) => Optimizations::parse(text).unwrap_or_else(|error| {
             log::warn!("COMPOSE_OPTIMIZATIONS: {error}");
             set
         }),
-        Err(_) => set,
+        None => set,
     }
 }
 use compose_ui::{
@@ -97,8 +106,9 @@ pub struct WindowOptions {
     /// The content's layout direction (`LOCAL_LAYOUT_DIRECTION` at the root): right-to-left
     /// for an Arabic or Hebrew interface.
     pub layout_direction: compose_ui::LayoutDirection,
-    /// compose-rs's optimizations beyond Compose's rendering (D520): by default none, the
-    /// rendering Compose does (D581).
+    /// compose-rs's optimizations beyond Compose's rendering (D520): by default the recommended
+    /// set (`Optimizations::defaults()`, D610); `Optimizations::NONE` is the rendering Compose
+    /// does.
     pub optimizations: Optimizations,
 }
 
@@ -733,4 +743,30 @@ fn update_configuration(host: &mut UiHost, window: &winit::window::Window) {
         density,
         dark,
     ));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every way a window opens without naming optimizations gets the recommended set (D610):
+    /// `WindowOptions::default()` (`run_app`'s), `application`'s windows without
+    /// `set_optimizations`, and an unset or empty `COMPOSE_OPTIMIZATIONS`; `none` is parity.
+    #[test]
+    fn windows_default_to_the_recommended_set() {
+        let recommended = Optimizations::recommended();
+        assert_eq!(WindowOptions::default().optimizations, recommended);
+        // A test's thread is fresh: nothing set on it.
+        let set = OPTIMIZATIONS.with(std::cell::Cell::get);
+        assert_eq!(set, recommended);
+        assert_eq!(optimizations_from(None, set), recommended);
+        assert_eq!(optimizations_from(Some(""), Optimizations::NONE), recommended);
+        assert_eq!(optimizations_from(Some("default"), Optimizations::NONE), recommended);
+        assert_eq!(optimizations_from(Some("none"), recommended), Optimizations::NONE);
+        // An unknown name keeps what was set.
+        assert_eq!(optimizations_from(Some("faster"), Optimizations::NONE), Optimizations::NONE);
+        // The window's host and renderer before `set_optimizations` gives them the window's.
+        assert_eq!(UiHost::headless(10, 10).optimizations(), recommended);
+        assert_eq!(RasterRenderer::new(1, 1).optimizations(), recommended);
+    }
 }

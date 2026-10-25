@@ -1,12 +1,21 @@
 //! Headless UI frames (docs/09-testing.md targets): a counter click under 1 ms, and toggling
 //! one of 1,000 todos under 4 ms frame p99. Each iteration is a press and release on a node
 //! followed by a frame (recompose, measure, draw).
+//!
+//! Every host runs at parity (`Optimizations::NONE`, Compose's work), as before the hosts'
+//! default became the recommended set (D610).
 
 use std::time::{Duration, Instant};
 
 use compose::test::*;
+use compose::ui::platform::Optimizations;
 use compose::ui::{IntSize, PointerEvent, Role};
 use criterion::{Criterion, criterion_group, criterion_main};
+
+/// The rules made from now on, on this thread, run at parity.
+fn parity() {
+    use_optimizations(Optimizations::NONE);
+}
 
 /// Clicks the center of `matcher`'s `index`th node, then runs frames until idle.
 fn click_frame(ui: &mut ComposeTestRule, matcher: &Matcher, index: usize) -> Duration {
@@ -26,6 +35,7 @@ fn report_p99(name: &str, mut samples: Vec<Duration>) {
 }
 
 fn ui(criterion: &mut Criterion) {
+    parity();
     let mut counter = compose_test(counter::Counter);
     let count = has_text_containing("Count");
     criterion.bench_function("counter click frame", |bench| {
@@ -56,8 +66,10 @@ fn desktop_frame(criterion: &mut Criterion) {
         Density::new(2.0),
         Box::new(compose_skia::SkiaTextMeasurer::new()),
     );
+    parity();
     let mut ui = ComposeTestRule::with_host(host, || todo::TodoAppWith(1000));
     let mut renderer = compose_skia::RasterRenderer::new(960, 1280);
+    renderer.set_optimizations(Optimizations::NONE);
     let checkbox = has_role(Role::Checkbox);
     let mut frame = |ui: &mut ComposeTestRule| {
         let elapsed = click_frame(ui, &checkbox, 3);
@@ -92,6 +104,7 @@ fn animation_frame(criterion: &mut Criterion) {
             Density::new(2.625),
             Box::new(FixedTextMeasurer::new()),
         );
+        host.set_optimizations(Optimizations::NONE);
         host.set_content(compose_rs_feed::FeedAnimated);
         let frame = |host: &mut UiHost| {
             platform::advance_clock(Duration::from_millis(16));
@@ -147,6 +160,7 @@ fn BigList() {
 /// Scrolling a long lazy list: each frame scrolls 100 px, composing about two items and
 /// releasing two.
 fn lazy_scroll_frame(criterion: &mut Criterion) {
+    parity();
     let mut ui = compose_test(BigList);
     let list = LIST.get().expect("the list composed");
     let mut frame = move || {
@@ -188,6 +202,7 @@ fn first_frame(criterion: &mut Criterion) {
                 Density::new(2.625),
                 Box::new(FixedTextMeasurer::new()),
             );
+            host.set_optimizations(Optimizations::NONE);
             host.set_content(content);
             let start = Instant::now();
             host.frame();

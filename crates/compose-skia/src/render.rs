@@ -379,7 +379,8 @@ fn draw_op(
 /// A renderer onto a CPU raster surface: for tests, screenshots, and windows presenting pixels.
 pub struct RasterRenderer {
     surface: Surface,
-    /// compose-rs's optimizations it draws with (`set_optimizations`; none by default).
+    /// compose-rs's optimizations it draws with (`set_optimizations`; by default
+    /// `Optimizations::defaults()`, the recommended set, as a host's: D610).
     optimizations: Optimizations,
 }
 
@@ -388,13 +389,18 @@ impl RasterRenderer {
     pub fn new(width: i32, height: i32) -> RasterRenderer {
         let surface = skia_safe::surfaces::raster_n32_premul((width.max(1), height.max(1)))
             .expect("compose-skia: a raster surface");
-        RasterRenderer { surface, optimizations: Optimizations::NONE }
+        RasterRenderer { surface, optimizations: Optimizations::defaults() }
     }
 
     /// Draws with compose-rs's `optimizations` from now on (its host's,
     /// `UiHost::optimizations`).
     pub fn set_optimizations(&mut self, optimizations: Optimizations) {
         self.optimizations = optimizations;
+    }
+
+    /// The optimizations it draws with.
+    pub fn optimizations(&self) -> Optimizations {
+        self.optimizations
     }
 
     pub fn size(&self) -> (i32, i32) {

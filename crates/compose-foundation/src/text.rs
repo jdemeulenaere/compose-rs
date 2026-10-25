@@ -160,7 +160,7 @@ fn reuses_at_same_width(scope: &MeasureScope<'_>) -> bool {
 /// constraints; always for another minimum or maximum width; for another height only when the
 /// paragraph is taller than the new maximum height or had more lines than its maximum ("vertical
 /// clip changes"). With `reuse_at_same_width` (the host's
-/// `Optimization::REUSE_PARAGRAPH_AT_SAME_LAYOUT_WIDTH`, off by default, D551), another width
+/// `Optimization::REUSE_PARAGRAPH_AT_SAME_LAYOUT_WIDTH`, on by default, D551, D610), another width
 /// bound keeps it when the width it's laid out at stays the same ([`same_layout_width`]).
 pub(crate) fn new_layout_will_be_different(
     reuse_at_same_width: bool,

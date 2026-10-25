@@ -45,9 +45,10 @@ thread_local! {
 }
 
 /// The rules made on this thread from now on give their hosts `optimizations`
-/// (`UiHost::set_optimizations`) before composing: for tests of compose-rs's own behaviours
-/// beyond Compose's (D520), which hosts don't use by default. Each test runs on a thread of its
-/// own, so it holds for the test that calls it.
+/// (`UiHost::set_optimizations`) before composing. Without it a rule's host has the defaults,
+/// the recommended set, so tests exercise what ships (D610): `Optimizations::NONE` for a test
+/// of Compose's own behaviour (parity), another set for a test of flags beyond it (D520). Each
+/// test runs on a thread of its own, so it holds for the test that calls it.
 pub fn use_optimizations(optimizations: Optimizations) {
     OPTIMIZATIONS.with(|cell| cell.set(Some(optimizations)));
 }

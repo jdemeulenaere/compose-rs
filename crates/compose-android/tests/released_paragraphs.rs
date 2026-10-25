@@ -169,8 +169,8 @@ struct Checked {
     stale: bool,
 }
 
-/// compose-rs's own lazy-list behaviours beyond Compose's, which hosts don't use by default
-/// (D560-D565): two ahead, D341's budget, prefetching at rest, two kept behind (their groups
+/// compose-rs's own lazy-list behaviours beyond Compose's, most of which hosts don't use by
+/// default (D560-D565; drawing ahead is in the default set, D610): two ahead, D341's budget, prefetching at rest, two kept behind (their groups
 /// listed, D380), drawing ahead (D350). For the tests of kept and drawn-ahead groups.
 fn legacy() -> Optimizations {
     Optimizations::parse(

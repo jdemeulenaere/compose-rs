@@ -3,10 +3,10 @@ package rs.compose.android
 /**
  * compose-rs's own optimizations, beyond what Jetpack Compose's rendering does: bits of a
  * [ComposeRsView.optimizations] set, the same as Rust's `compose_ui::platform::Optimization`s
- * (`optimizations.rs`, which a test checks these against; D520). Each is off by default: the
- * default ([DEFAULT], [NONE]) is the rendering Compose does, so the benchmarks against Compose
- * measure the same rendering and each optimization apart. Apps opt in ([RECOMMENDED], the flags
- * with a measured gain; [ALL]; or the ones they name; D581, D601).
+ * (`optimizations.rs`, which a test checks these against; D520). The default ([DEFAULT]) is
+ * [RECOMMENDED], the flags with a measured gain (D601, D610). [NONE] is the rendering Compose
+ * does, which the benchmarks against Compose pass so they measure the same rendering, and each
+ * optimization apart. Apps can also pick [ALL], or the ones they name.
  *
  * Adding one: its bit here, and in Rust's table.
  */
@@ -14,21 +14,22 @@ object ComposeRsOptimizations {
     /**
      * A graphics layer faded under `CompositingStrategy.Auto`, holding one drawing with a paint,
      * fades that paint (`setHasOverlappingRendering(false)`) instead of compositing offscreen,
-     * as `ModulateAlpha` would: the same pixels. Off by default (D153, D157, D521).
+     * as `ModulateAlpha` would: the same pixels (D153, D157, D521). On by default ([RECOMMENDED]).
      */
     const val SINGLE_DRAWING_FADE = 1L shl 0
 
     /**
      * The RenderThread and the main thread in a performance hint session of compose-rs's own
      * while the view shows (API 33+): [ComposeRsView.isPerformanceHintEnabled] (D390, D440, D500).
-     * Off by default, as Compose has no such session (D581; it was on for apps, D568).
+     * On by default ([RECOMMENDED], D610); parity runs leave it off, as Compose has no such
+     * session (D568, D581).
      */
     const val PERFORMANCE_HINT = 1L shl 1
 
     /**
      * A text keeps its paragraph when new constraints change its width bounds but not the
      * width it's laid out at (its own, kept in the constraints), where Compose lays it out
-     * again. Off by default (D551).
+     * again (D551). On by default ([RECOMMENDED]).
      */
     const val REUSE_PARAGRAPH_AT_SAME_LAYOUT_WIDTH = 1L shl 2
 
@@ -71,16 +72,16 @@ object ComposeRsOptimizations {
     /** None: the rendering Compose does. */
     const val NONE = 0L
 
-    /** The ones on by default: none, the rendering Compose does (D581). */
-    const val DEFAULT = NONE
-
     /**
      * The recommended ones: those with a gain measured on the device (Rust's
      * `Optimization::RECOMMENDED`, D601): the hint session, drawing prefetched items ahead, the
      * single-drawing fade with its companion flush layer (the fade alone grows HWUI's GPU caches
-     * by 31 %), and the paragraph kept at the same layout width. Not the default ([DEFAULT]).
+     * by 31 %), and the paragraph kept at the same layout width. The default ([DEFAULT]).
      */
     const val RECOMMENDED = SINGLE_DRAWING_FADE or PERFORMANCE_HINT or REUSE_PARAGRAPH_AT_SAME_LAYOUT_WIDTH or DRAW_PREFETCHED_AHEAD or FLUSH_LAYERS_BEFORE_DROPPED_PATHS
+
+    /** The ones on by default: [RECOMMENDED] (D610; it was [NONE], D581). */
+    const val DEFAULT = RECOMMENDED
 
     /** Every one. */
     const val ALL = SINGLE_DRAWING_FADE or PERFORMANCE_HINT or REUSE_PARAGRAPH_AT_SAME_LAYOUT_WIDTH or PREFETCH_TWO_AHEAD or PREFETCH_BUDGET_RECENT_MAXIMUM or PREFETCH_AT_REST or KEEP_ITEMS_BEHIND or DRAW_PREFETCHED_AHEAD or GRID_LINES_BEYOND or FLUSH_LAYERS_BEFORE_DROPPED_PATHS or PARAGRAPH_RENDER_NODES

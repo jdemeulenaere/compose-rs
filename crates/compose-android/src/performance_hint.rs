@@ -8,8 +8,8 @@
 //! RenderThread's end against 70 % of its deadline (about 1.4 vsync intervals): an app whose
 //! main-thread frames are short is rarely boosted, and its RenderThread's frames then take
 //! longer for the same work (docs/14, "The scroll's RenderThread"). So a view showing compose-rs
-//! with the `performance_hint` optimization (an app's opt-in: off by default, as Compose has no
-//! such session, D581) keeps a session of its own for the RenderThread and the main thread,
+//! with the `performance_hint` optimization (on by default, in the recommended set, D610; off at
+//! parity, as Compose has no such session) keeps a session of its own for the RenderThread and the main thread,
 //! reporting both threads' CPU time over each frame against [`TARGET_NANOS`]. The power HAL
 //! applies the highest boost of a thread's sessions.
 //!

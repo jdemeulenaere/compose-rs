@@ -4,6 +4,7 @@
 //! a frame between half and all of 1008 px. Each is measured following Compose's rule (every new
 //! width lays every text out again) and with D551's optimization (a text keeps its paragraph
 //! while the width it's laid out at doesn't change), and reports its text layouts per frame.
+//! The hosts run at parity (`none`) but for that flag (D610).
 
 use std::time::{Duration, Instant};
 
@@ -50,6 +51,9 @@ fn resize(criterion: &mut Criterion) {
                 CountingTextMeasurer::new(compose_skia::SkiaTextMeasurer::new());
             let mut host =
                 UiHost::new(IntSize::new(1008, 2244), Density::new(2.25), Box::new(measurer));
+            // Parity but for the flag measured, not the hosts' default (the recommended set,
+            // D610, which has it).
+            host.set_optimizations(compose::ui::platform::Optimizations::NONE);
             host.set_content(content);
             host.frame();
             reuse_at_same_width(&mut host, reuse);

@@ -1,7 +1,8 @@
-//! When a text keeps its paragraph as its constraints change (D550, D551): Compose's rule by
-//! default (`newLayoutWillBeDifferent`: a new width bound lays it out again, a new height only
-//! when it clips the paragraph), and with the host's `REUSE_PARAGRAPH_AT_SAME_LAYOUT_WIDTH`, a new
-//! width bound only when the width the text is laid out at changes. Each frame of a host with
+//! When a text keeps its paragraph as its constraints change (D550, D551): Compose's rule
+//! without the optimization (`newLayoutWillBeDifferent`: a new width bound lays it out again, a
+//! new height only when it clips the paragraph), and with the host's
+//! `REUSE_PARAGRAPH_AT_SAME_LAYOUT_WIDTH` (on by default, D610), a new width bound only when the
+//! width the text is laid out at changes. Each frame of a host with
 //! the optimization must draw what a host without it draws.
 
 #![allow(non_snake_case)]
@@ -115,7 +116,7 @@ fn both() -> (TextLayoutCounter, TextLayoutCounter) {
 }
 
 #[test]
-fn by_default_a_new_width_lays_every_text_out_again_as_compose() {
+fn without_the_optimization_a_new_width_lays_every_text_out_again_as_compose() {
     let (parity, _) = both();
     // Every width but the repeated 60 is new to every text (their maximum width is the root's).
     let changes = WIDTHS.windows(2).filter(|pair| pair[0] != pair[1]).count();
@@ -192,16 +193,17 @@ fn a_new_height_lays_a_text_out_again_only_when_it_clips_it_as_compose() {
 }
 
 #[test]
-fn the_optimization_is_off_by_default_and_per_host() {
+fn the_optimization_is_on_by_default_and_per_host() {
     use compose_ui::platform::{Optimization, Optimizations};
     let flag = Optimization::REUSE_PARAGRAPH_AT_SAME_LAYOUT_WIDTH;
-    assert!(!Optimizations::defaults().contains(flag));
+    // In the recommended set, the default (D610).
+    assert!(Optimizations::defaults().contains(flag));
     let (mut ui, _) = counted(400);
     let (mut other, _) = counted(400);
-    assert!(!ui.host().optimizations().contains(flag));
-    reuse_at_same_width(ui.host(), true);
     assert!(ui.host().optimizations().contains(flag));
-    assert!(!other.host().optimizations().contains(flag));
+    reuse_at_same_width(ui.host(), false);
+    assert!(!ui.host().optimizations().contains(flag));
+    assert!(other.host().optimizations().contains(flag));
 }
 
 #[test]

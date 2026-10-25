@@ -3,7 +3,8 @@
 //! `examples/feed` and a photo grid (`Gallery`, below), on a phone-sized host (1080 × 2400 px
 //! at 2.625) with a fixed text measurer.
 //! There's no prefetch (the platform's idle time runs it): each frame composes the items it
-//! scrolls to, so a frame's time is mostly theirs.
+//! scrolls to, so a frame's time is mostly theirs. The hosts run at parity (`none`, Compose's
+//! work) unless `LAZY_BENCH_OPTIMIZATIONS` names a set (D610).
 //!
 //! Besides criterion's frame time, each screen prints the time per item composed: the frames'
 //! total over the items whose body ran (`LazyItem`, a grid's `Tile`), scrolling through `ITEMS`
@@ -34,12 +35,14 @@ fn host(content: fn()) -> UiHost {
         Density::new(2.625),
         Box::new(FixedTextMeasurer::new()),
     );
-    // `LAZY_BENCH_OPTIMIZATIONS`: compose-rs's optimizations (D520; Compose's work by default).
-    if let Ok(list) = std::env::var("LAZY_BENCH_OPTIMIZATIONS") {
-        host.set_optimizations(
-            compose::ui::platform::Optimizations::parse(&list).expect("known optimizations"),
-        );
-    }
+    // `LAZY_BENCH_OPTIMIZATIONS`: compose-rs's optimizations (D520); without it parity, none,
+    // Compose's work, not the hosts' default (the recommended set, D610).
+    host.set_optimizations(match std::env::var("LAZY_BENCH_OPTIMIZATIONS") {
+        Ok(list) => {
+            compose::ui::platform::Optimizations::parse(&list).expect("known optimizations")
+        }
+        Err(_) => compose::ui::platform::Optimizations::NONE,
+    });
     host.set_content(content);
     host.settle(10);
     host

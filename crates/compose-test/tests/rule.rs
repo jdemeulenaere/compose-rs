@@ -68,6 +68,26 @@ fn a_missing_node_fails_with_the_tree() {
     ui.on_node_with_text("Missing").perform_click();
 }
 
+/// The rules' hosts use the recommended set unless a test says otherwise, so tests exercise what
+/// ships (D610); `use_optimizations` sets another for the rules made after it.
+#[test]
+fn the_rules_default_to_the_recommended_set() {
+    use compose_ui::platform::Optimizations;
+    let recommended = Optimizations::recommended();
+    assert_eq!(compose_test(Counter).host().optimizations(), recommended);
+    assert_eq!(ComposeTestRule::with_manual_clock(Counter).host().optimizations(), recommended);
+    assert_eq!(
+        ComposeTestRule::sized(IntSize::new(100, 100), Counter).host().optimizations(),
+        recommended
+    );
+    use_optimizations(Optimizations::NONE);
+    assert_eq!(compose_test(Counter).host().optimizations(), Optimizations::NONE);
+    assert_eq!(
+        ComposeTestRule::with_manual_clock(Counter).host().optimizations(),
+        Optimizations::NONE
+    );
+}
+
 #[test]
 fn an_event_script_records_its_session() {
     let mut ui = compose_test(Counter);

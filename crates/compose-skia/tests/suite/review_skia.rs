@@ -195,6 +195,10 @@ fn a_frames_groups_draw_what_its_flattened_list_does() {
     host.frame();
     let mut walked = RasterRenderer::new(80, 80);
     let mut flattened = RasterRenderer::new(80, 80);
+    // Parity: the default's single-drawing fade needs the groups the flattened list drops, and
+    // modulating differs from compositing offscreen by rounding.
+    walked.set_optimizations(compose::ui::platform::Optimizations::NONE);
+    flattened.set_optimizations(compose::ui::platform::Optimizations::NONE);
     let groups = host.with_tree(|tree| {
         let list = tree.display_list();
         walked.render(list, Color::WHITE, 1.0, tree.text_measurer_ref());
