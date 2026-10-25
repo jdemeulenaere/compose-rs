@@ -149,11 +149,11 @@ compose-rs runs in a plain Android `View`, `ComposeRsView`. It can be an activit
 You need:
 
 - a macOS or Linux machine to build on: `build-rust.sh` is a POSIX shell script;
-- the Android SDK and NDK. The script finds the SDK through `ANDROID_HOME` (or `ANDROID_SDK_ROOT`), falling back to macOS's default location, and doesn't read Gradle's `local.properties`: on Linux, set `ANDROID_HOME`. The NDK version is pinned: install 27.2.12479018, the apps' `ndkVersion`, with `"$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;27.2.12479018"` or Android Studio's SDK Manager (SDK Tools, NDK (Side by side)). The Android Gradle plugin strips the Rust library with that NDK, and packages it unstripped when `ndkVersion` isn't set (1.25 MB bigger for the benchmark's feed, about 2 MB for the demo's examples). The script links with the NDK `ANDROID_NDK_HOME` names, else that version, else the newest under the SDK's `ndk/`, with a warning;
+- the Android SDK and NDK. The script finds the SDK through `ANDROID_HOME` (or `ANDROID_SDK_ROOT`), falling back to macOS's default location, and doesn't read Gradle's `local.properties`: on Linux, set `ANDROID_HOME`. The NDK version is pinned: install 30.0.16248370, the apps' `ndkVersion`, with `"$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;30.0.16248370"` or Android Studio's SDK Manager (SDK Tools, NDK (Side by side)). The Android Gradle plugin strips the Rust library with that NDK, and packages it unstripped when `ndkVersion` isn't set (1.25 MB bigger for the benchmark's feed, about 2 MB for the demo's examples). The script links with the NDK `ANDROID_NDK_HOME` names, else that version, else the newest under the SDK's `ndk/`, with a warning;
 - the Rust target: `rustup target add aarch64-linux-android`;
-- JDK 17 or newer. The Gradle wrapper (`android/gradlew`) fetches Gradle 9.6, which loads the Android Gradle plugin 9.4 (whose built-in Kotlin support compiles the Kotlin) and the Kotlin Compose compiler plugin 2.4; Android Studio opens the `android/` project with the same wrapper.
+- JDK 17 or newer. The Gradle wrapper (`android/gradlew`) fetches Gradle 9.8, which loads the Android Gradle plugin 9.4 (whose built-in Kotlin support compiles the Kotlin) and the Kotlin Compose compiler plugin 2.4; Android Studio opens the `android/` project with the same wrapper.
 
-Only arm64 devices are built for (64-bit phones and the arm64 emulator images). The minimum SDK is 29, compiled against SDK 36.
+Only arm64 devices are built for (64-bit phones and the arm64 emulator images). The minimum SDK is 29, compiled against SDK 37.
 
 ### 1. The Rust library
 
@@ -190,7 +190,7 @@ The Kotlin side is the `android/compose-rs` library module: `ComposeRsView` and 
 
 ```kotlin
 android {
-    ndkVersion = "27.2.12479018"   // the NDK that strips the library
+    ndkVersion = "30.0.16248370"   // the NDK that strips the library
     defaultConfig { minSdk = 29 }
 }
 

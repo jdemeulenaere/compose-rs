@@ -10,6 +10,8 @@ compose_android::export_apps! {
 #[test]
 fn an_app_can_opt_out_of_the_logcat_logger() {
     // `JNI_OnLoad` is defined (it needs a VM to call).
-    let _: extern "system" fn(compose_android::jni::JavaVM, *mut std::ffi::c_void) -> i32 =
-        JNI_OnLoad;
+    let _: unsafe extern "system" fn(
+        *mut compose_android::jni::sys::JavaVM,
+        *mut std::ffi::c_void,
+    ) -> i32 = JNI_OnLoad;
 }

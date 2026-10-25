@@ -6,13 +6,13 @@ plugins {
 // AndroidX but androidx.profileinstaller, as bench-compose), the same screens as bench-compose's.
 android {
     namespace = "rs.compose.bench.rs"
-    compileSdk = 36
+    compileSdk = 37
     // Pinned (README.md): the Android Gradle plugin strips native libraries only when it's set.
-    ndkVersion = "27.2.12479018"
+    ndkVersion = "30.0.16248370"
     defaultConfig {
         applicationId = "rs.compose.bench.rs"
         minSdk = 29
-        targetSdk = 36
+        targetSdk = 37
         versionCode = 1
         versionName = "0.1"
     }

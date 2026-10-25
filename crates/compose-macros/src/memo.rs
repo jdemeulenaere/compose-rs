@@ -468,6 +468,22 @@ fn pattern_bindings(pattern: &Pat, out: &mut Vec<String>, refutable: bool) {
     Bindings(out, refutable).visit_pat(pattern);
 }
 
+/// A `match` arm's guard (`pattern if guard`), which syn keeps in the arm's pattern.
+pub(crate) fn arm_guard(arm: &syn::Arm) -> Option<&Expr> {
+    match &arm.pat {
+        Pat::Guard(guarded) => Some(&guarded.guard),
+        _ => None,
+    }
+}
+
+/// [`arm_guard`], to change it.
+pub(crate) fn arm_guard_mut(arm: &mut syn::Arm) -> Option<&mut Expr> {
+    match &mut arm.pat {
+        Pat::Guard(guarded) => Some(&mut guarded.guard),
+        _ => None,
+    }
+}
+
 /// Names bound by `let` conditions (`if let`, `while let`, let chains).
 fn condition_bindings(condition: &Expr, out: &mut Vec<String>) {
     match condition {
@@ -780,7 +796,7 @@ impl<'ast> Visit<'ast> for Free<'_> {
         let mut names = Vec::new();
         refutable_bindings(&arm.pat, &mut names);
         self.scoped(names, |free| {
-            if let Some((_, guard)) = &arm.guard {
+            if let Some(guard) = arm_guard(arm) {
                 free.visit_expr(guard);
             }
             free.visit_expr(&arm.body);
@@ -1347,7 +1363,7 @@ impl VisitMut for Memoize {
         let mut names = Vec::new();
         refutable_bindings(&arm.pat, &mut names);
         self.scoped(names, |memoize| {
-            if let Some((_, guard)) = &mut arm.guard {
+            if let Some(guard) = arm_guard_mut(arm) {
                 memoize.visit_expr_mut(guard);
             }
             memoize.visit_expr_mut(&mut arm.body);

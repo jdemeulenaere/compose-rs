@@ -10,7 +10,7 @@ publish.workspace = true
 log.workspace = true
 compose-runtime.workspace = true
 compose-ui.workspace = true
-jni = "0.21"
+jni = "0.22"
 
 [dev-dependencies]
 compose-foundation.workspace = true

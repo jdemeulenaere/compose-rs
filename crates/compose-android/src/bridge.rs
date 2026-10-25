@@ -4,6 +4,7 @@
 //! (a task woken from another thread), which attaches its thread to post a `Handler` message.
 //! A host is a `Box` whose pointer Kotlin keeps as a `long`.
 
+use std::rc::Rc;
 use std::sync::OnceLock;
 
 use compose_runtime::platform;
@@ -12,14 +13,13 @@ use compose_ui::{
     PointerEvent, PointerId, PointerType, Rect,
     platform::{ParagraphMetrics, UiHost},
 };
-use jni::JNIEnv;
-use jni::JavaVM;
-use jni::objects::{
-    GlobalRef, JByteArray, JByteBuffer, JClass, JIntArray, JMethodID, JObject, JStaticMethodID,
-    JString, JValue,
-};
-use jni::signature::{Primitive, ReturnType};
-use jni::sys::{jboolean, jdouble, jfloat, jint, jlong, jobject};
+use jni::ids::{JMethodID, JStaticMethodID};
+use jni::objects::{JByteArray, JByteBuffer, JClass, JIntArray, JObject, JString};
+use jni::refs::Global;
+use jni::signature::{MethodSignature, Primitive, ReturnType};
+use jni::strings::JNIStr;
+use jni::sys::{jboolean, jdouble, jfloat, jint, jlong};
+use jni::{Env, EnvUnowned, JValue, JavaVM, Outcome, jni_sig, jni_str};
 
 use crate::serialize::{GroupCache, Resources, Writer, write_display_list, write_groups_ahead};
 use crate::text::{AndroidTextMeasurer, LaidOut, TextBackend};
@@ -27,7 +27,7 @@ use compose_ui::platform::Optimizations;
 
 static VM: OnceLock<JavaVM> = OnceLock::new();
 /// `ComposeRsNative`'s class and its `wake` method: what a task woken on any thread calls.
-static WAKE: OnceLock<(GlobalRef, JStaticMethodID)> = OnceLock::new();
+static WAKE: OnceLock<(Global<JClass<'static>>, JStaticMethodID)> = OnceLock::new();
 
 pub(crate) fn set_vm(vm: JavaVM) {
     install_panic_hook();
@@ -36,10 +36,11 @@ pub(crate) fn set_vm(vm: JavaVM) {
     let _ = VM.set(vm);
     // `JNI_OnLoad` runs with the app's class loader: the decoder's class is found now, for
     // decodes on any thread later.
-    if let Ok(mut env) = self::vm().get_env() {
-        crate::image::install(&mut env);
-        check(&mut env, "ComposeRsImages");
-    }
+    let _ = self::vm().with_top_local_frame(|env| -> jni::errors::Result<()> {
+        crate::image::install(env);
+        check(env, "ComposeRsImages");
+        Ok(())
+    });
 }
 
 #[cfg(target_os = "android")]
@@ -65,9 +66,20 @@ pub(crate) fn vm() -> &'static JavaVM {
     VM.get().expect("compose-android: JNI_OnLoad ran (export_apps!)")
 }
 
-/// The main thread's environment (attached, as Kotlin called in on it).
-fn main_env() -> JNIEnv<'static> {
-    vm().get_env().expect("compose-android: called on a thread attached to the VM")
+/// Runs `f` with the main thread's environment (attached, as Kotlin called in on it), in its
+/// top local frame.
+pub(crate) fn with_main_env<T>(f: impl FnOnce(&mut Env) -> T) -> T {
+    vm().with_top_local_frame(|env| Ok::<T, jni::errors::Error>(f(env)))
+        .expect("compose-android: called on a thread attached to the VM")
+}
+
+/// Runs a native method's body with its environment. A panic isn't caught: it aborts at the JNI
+/// boundary (D361).
+fn with_env<'local, T>(env: &mut EnvUnowned<'local>, f: impl FnOnce(&mut Env<'local>) -> T) -> T {
+    match env.with_env_no_catch(|env| Ok::<T, jni::errors::Error>(f(env))).into_outcome() {
+        Outcome::Ok(value) => value,
+        Outcome::Err(_) | Outcome::Panic(_) => unreachable!("the body returns Ok and isn't caught"),
+    }
 }
 
 // ---- Logging --------------------------------------------------------------------------------
@@ -108,10 +120,10 @@ fn install_panic_hook() {
 }
 
 /// Logs and clears a pending Java exception (a Kotlin callback that threw).
-pub(crate) fn check(env: &mut JNIEnv, what: &str) {
-    if env.exception_check().unwrap_or(false) {
-        let _ = env.exception_describe();
-        let _ = env.exception_clear();
+pub(crate) fn check(env: &Env, what: &str) {
+    if env.exception_check() {
+        env.exception_describe();
+        env.exception_clear();
         log(&format!("an exception in {what}"));
     }
 }
@@ -120,7 +132,7 @@ pub(crate) fn check(env: &mut JNIEnv, what: &str) {
 
 /// `TextMeasurer.kt`, called back with JNI.
 struct JniText {
-    measurer: GlobalRef,
+    measurer: Global<JObject<'static>>,
     /// The Kotlin measurer's results: a direct buffer of floats it writes before returning.
     results: *const f32,
     layout: JMethodID,
@@ -168,28 +180,30 @@ impl JniText {
 impl TextBackend for JniText {
     fn layout(&mut self, handle: u32, text: &str, request: &[u8]) -> LaidOut {
         self.clear_results();
-        let mut env = main_env();
-        let _ = env.with_local_frame(4, |env| -> jni::errors::Result<()> {
-            let text = env.new_string(text)?;
-            // SAFETY: Kotlin only reads the request, during the call.
-            let request =
-                unsafe { env.new_direct_byte_buffer(request.as_ptr() as *mut u8, request.len())? };
-            // SAFETY: the method's signature is `(ILjava/lang/String;Ljava/nio/ByteBuffer;)V`.
-            unsafe {
-                env.call_method_unchecked(
-                    &self.measurer,
-                    self.layout,
-                    ReturnType::Primitive(Primitive::Void),
-                    &[
-                        JValue::Int(handle as jint).as_jni(),
-                        JValue::Object(&text).as_jni(),
-                        JValue::Object(&request).as_jni(),
-                    ],
-                )?;
-            }
-            Ok(())
+        with_main_env(|env| {
+            let _ = env.with_local_frame(4, |env| -> jni::errors::Result<()> {
+                let text = env.new_string(text)?;
+                // SAFETY: Kotlin only reads the request, during the call.
+                let request = unsafe {
+                    env.new_direct_byte_buffer(request.as_ptr() as *mut u8, request.len())?
+                };
+                // SAFETY: the method's signature is `(ILjava/lang/String;Ljava/nio/ByteBuffer;)V`.
+                unsafe {
+                    env.call_method_unchecked(
+                        &*self.measurer,
+                        self.layout,
+                        ReturnType::Primitive(Primitive::Void),
+                        &[
+                            JValue::Int(handle as jint).as_jni(),
+                            JValue::Object(&text).as_jni(),
+                            JValue::Object(&request).as_jni(),
+                        ],
+                    )?;
+                }
+                Ok(())
+            });
+            check(env, "TextMeasurer.layout");
         });
-        check(&mut env, "TextMeasurer.layout");
         self.laid_out()
     }
 
@@ -201,24 +215,26 @@ impl TextBackend for JniText {
         max_width: i32,
     ) -> Option<LaidOut> {
         self.clear_results();
-        let mut env = main_env();
-        // SAFETY: the method's signature is `(IIII)Z`.
-        let relaid = unsafe {
-            env.call_method_unchecked(
-                &self.measurer,
-                self.relayout,
-                ReturnType::Primitive(Primitive::Boolean),
-                &[
-                    JValue::Int(previous as jint).as_jni(),
-                    JValue::Int(handle as jint).as_jni(),
-                    JValue::Int(min_width).as_jni(),
-                    JValue::Int(max_width).as_jni(),
-                ],
-            )
-        };
-        check(&mut env, "TextMeasurer.relayout");
+        let relaid = with_main_env(|env| {
+            // SAFETY: the method's signature is `(IIII)Z`.
+            let relaid = unsafe {
+                env.call_method_unchecked(
+                    &*self.measurer,
+                    self.relayout,
+                    ReturnType::Primitive(Primitive::Boolean),
+                    &[
+                        JValue::Int(previous as jint).as_jni(),
+                        JValue::Int(handle as jint).as_jni(),
+                        JValue::Int(min_width).as_jni(),
+                        JValue::Int(max_width).as_jni(),
+                    ],
+                )
+            };
+            check(env, "TextMeasurer.relayout");
+            relaid.and_then(|value| value.z()).unwrap_or(false)
+        });
         // False (nothing kept) or an exception: Rust lays the text out anew.
-        relaid.and_then(|value| value.z()).unwrap_or(false).then(|| self.laid_out())
+        relaid.then(|| self.laid_out())
     }
 
     fn probe_layout(
@@ -229,127 +245,141 @@ impl TextBackend for JniText {
         max_width: i32,
     ) -> Option<LaidOut> {
         self.clear_results();
-        let mut env = main_env();
-        // SAFETY: the method's signature is `(IIII)Z`.
-        let laid = unsafe {
-            env.call_method_unchecked(
-                &self.measurer,
-                self.probe_layout,
-                ReturnType::Primitive(Primitive::Boolean),
-                &[
-                    JValue::Int(previous as jint).as_jni(),
-                    JValue::Int(handle as jint).as_jni(),
-                    JValue::Int(min_width).as_jni(),
-                    JValue::Int(max_width).as_jni(),
-                ],
-            )
-        };
-        check(&mut env, "TextMeasurer.probeLayout");
-        laid.and_then(|value| value.z()).unwrap_or(false).then(|| self.laid_out())
+        let laid = with_main_env(|env| {
+            // SAFETY: the method's signature is `(IIII)Z`.
+            let laid = unsafe {
+                env.call_method_unchecked(
+                    &*self.measurer,
+                    self.probe_layout,
+                    ReturnType::Primitive(Primitive::Boolean),
+                    &[
+                        JValue::Int(previous as jint).as_jni(),
+                        JValue::Int(handle as jint).as_jni(),
+                        JValue::Int(min_width).as_jni(),
+                        JValue::Int(max_width).as_jni(),
+                    ],
+                )
+            };
+            check(env, "TextMeasurer.probeLayout");
+            laid.and_then(|value| value.z()).unwrap_or(false)
+        });
+        laid.then(|| self.laid_out())
     }
 
     fn restyle(&mut self, previous: u32, handle: u32, color: u32, decoration: u8) -> bool {
-        let mut env = main_env();
-        // SAFETY: the method's signature is `(IIII)Z`.
-        let restyled = unsafe {
-            env.call_method_unchecked(
-                &self.measurer,
-                self.restyle,
-                ReturnType::Primitive(Primitive::Boolean),
-                &[
-                    JValue::Int(previous as jint).as_jni(),
-                    JValue::Int(handle as jint).as_jni(),
-                    JValue::Int(color as jint).as_jni(),
-                    JValue::Int(jint::from(decoration)).as_jni(),
-                ],
-            )
-        };
-        check(&mut env, "TextMeasurer.restyle");
-        restyled.and_then(|value| value.z()).unwrap_or(false)
+        with_main_env(|env| {
+            // SAFETY: the method's signature is `(IIII)Z`.
+            let restyled = unsafe {
+                env.call_method_unchecked(
+                    &*self.measurer,
+                    self.restyle,
+                    ReturnType::Primitive(Primitive::Boolean),
+                    &[
+                        JValue::Int(previous as jint).as_jni(),
+                        JValue::Int(handle as jint).as_jni(),
+                        JValue::Int(color as jint).as_jni(),
+                        JValue::Int(jint::from(decoration)).as_jni(),
+                    ],
+                )
+            };
+            check(env, "TextMeasurer.restyle");
+            restyled.and_then(|value| value.z()).unwrap_or(false)
+        })
     }
 
     fn hit_test(&self, handle: u32, position: Offset) -> usize {
-        let mut env = main_env();
-        // SAFETY: the method's signature is `(IFF)I`.
-        let index = unsafe {
-            env.call_method_unchecked(
-                &self.measurer,
-                self.hit_test,
-                ReturnType::Primitive(Primitive::Int),
-                &[
-                    JValue::Int(handle as jint).as_jni(),
-                    JValue::Float(position.x).as_jni(),
-                    JValue::Float(position.y).as_jni(),
-                ],
-            )
-        };
-        check(&mut env, "TextMeasurer.hitTest");
-        index.and_then(|value| value.i()).unwrap_or(0).max(0) as usize
+        with_main_env(|env| {
+            // SAFETY: the method's signature is `(IFF)I`.
+            let index = unsafe {
+                env.call_method_unchecked(
+                    &*self.measurer,
+                    self.hit_test,
+                    ReturnType::Primitive(Primitive::Int),
+                    &[
+                        JValue::Int(handle as jint).as_jni(),
+                        JValue::Float(position.x).as_jni(),
+                        JValue::Float(position.y).as_jni(),
+                    ],
+                )
+            };
+            check(env, "TextMeasurer.hitTest");
+            index.and_then(|value| value.i()).unwrap_or(0).max(0) as usize
+        })
     }
 
     fn cursor(&self, handle: u32, offset: usize) -> Rect {
         self.clear_results();
-        let mut env = main_env();
-        // SAFETY: the method's signature is `(II)V`.
-        let _ = unsafe {
-            env.call_method_unchecked(
-                &self.measurer,
-                self.cursor,
-                ReturnType::Primitive(Primitive::Void),
-                &[JValue::Int(handle as jint).as_jni(), JValue::Int(offset as jint).as_jni()],
-            )
-        };
-        check(&mut env, "TextMeasurer.cursor");
+        with_main_env(|env| {
+            // SAFETY: the method's signature is `(II)V`.
+            let _ = unsafe {
+                env.call_method_unchecked(
+                    &*self.measurer,
+                    self.cursor,
+                    ReturnType::Primitive(Primitive::Void),
+                    &[JValue::Int(handle as jint).as_jni(), JValue::Int(offset as jint).as_jni()],
+                )
+            };
+            check(env, "TextMeasurer.cursor");
+        });
         Rect::new(self.result(0), self.result(1), self.result(2), self.result(3))
     }
 
     fn release(&mut self, handle: u32) {
-        let mut env = main_env();
-        // SAFETY: the method's signature is `(I)V`.
-        let _ = unsafe {
-            env.call_method_unchecked(
-                &self.measurer,
-                self.release,
-                ReturnType::Primitive(Primitive::Void),
-                &[JValue::Int(handle as jint).as_jni()],
-            )
-        };
-        check(&mut env, "TextMeasurer.release");
+        with_main_env(|env| {
+            // SAFETY: the method's signature is `(I)V`.
+            let _ = unsafe {
+                env.call_method_unchecked(
+                    &*self.measurer,
+                    self.release,
+                    ReturnType::Primitive(Primitive::Void),
+                    &[JValue::Int(handle as jint).as_jni()],
+                )
+            };
+            check(env, "TextMeasurer.release");
+        });
     }
 }
 
 // ---- The clipboard, through the view --------------------------------------------------------
 
 struct JniClipboard {
-    view: GlobalRef,
+    view: Rc<Global<JObject<'static>>>,
 }
 
 impl compose_ui::ClipboardManager for JniClipboard {
     fn get_text(&self) -> Option<String> {
-        let mut env = main_env();
-        let text = env
-            .call_method(&self.view, "clipboardText", "()Ljava/lang/String;", &[])
-            .and_then(|value| value.l());
-        check(&mut env, "ComposeRsView.clipboardText");
-        let text = text.ok().filter(|text| !text.is_null())?;
-        let text = JString::from(text);
-        let value: Option<String> = env.get_string(&text).ok().map(Into::into);
-        let _ = env.delete_local_ref(text);
-        value
+        with_main_env(|env| {
+            let text = env
+                .call_method(
+                    &**self.view,
+                    jni_str!("clipboardText"),
+                    jni_sig!("()Ljava/lang/String;"),
+                    &[],
+                )
+                .and_then(|value| value.l());
+            check(env, "ComposeRsView.clipboardText");
+            let text = text.ok().filter(|text| !text.is_null())?;
+            // SAFETY: `clipboardText` returns a `String`.
+            let text = unsafe { JString::from_raw(env, text.into_raw()) };
+            let value: Option<String> = text.mutf8_chars(env).ok().map(Into::into);
+            env.delete_local_ref(text);
+            value
+        })
     }
 
     fn set_text(&self, text: &str) {
-        let mut env = main_env();
-        if let Ok(text) = env.new_string(text) {
-            let _ = env.call_method(
-                &self.view,
-                "setClipboardText",
-                "(Ljava/lang/String;)V",
-                &[JValue::Object(&text)],
-            );
-            let _ = env.delete_local_ref(text);
-        }
-        check(&mut env, "ComposeRsView.setClipboardText");
+        with_main_env(|env| {
+            if let Ok(text) = env.new_string(text) {
+                let _ = env.call_method(
+                    &**self.view,
+                    jni_str!("setClipboardText"),
+                    jni_sig!("(Ljava/lang/String;)V"),
+                    &[JValue::Object(&text)],
+                );
+                env.delete_local_ref(text);
+            }
+            check(env, "ComposeRsView.setClipboardText");
+        });
     }
 }
 
@@ -389,12 +419,17 @@ unsafe fn host<'a>(host: jlong) -> &'a mut Host {
     unsafe { &mut *(host as *mut Host) }
 }
 
-fn method(env: &mut JNIEnv, object: &JObject, name: &str, signature: &str) -> JMethodID {
+pub(crate) fn method(
+    env: &mut Env,
+    object: &JObject,
+    name: &JNIStr,
+    signature: MethodSignature,
+) -> JMethodID {
     let class = env.get_object_class(object).expect("compose-android: a class");
     let id = env
-        .get_method_id(&class, name, signature)
-        .unwrap_or_else(|_| panic!("compose-android: {name}{signature}"));
-    let _ = env.delete_local_ref(class);
+        .get_method_id(&class, name, &signature)
+        .unwrap_or_else(|_| panic!("compose-android: {name}{}", signature.sig()));
+    env.delete_local_ref(class);
     id
 }
 
@@ -404,7 +439,7 @@ fn method(env: &mut JNIEnv, object: &JObject, name: &str, signature: &str) -> JM
 #[unsafe(no_mangle)]
 #[allow(clippy::too_many_arguments)]
 pub extern "system" fn Java_rs_compose_android_ComposeRsNative_create<'local>(
-    mut env: JNIEnv<'local>,
+    mut env: EnvUnowned<'local>,
     class: JClass<'local>,
     view: JObject<'local>,
     measurer: JObject<'local>,
@@ -418,110 +453,143 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_create<'local>(
     saved: JByteArray<'local>,
     optimizations: jlong,
 ) -> jlong {
+    with_env(&mut env, |env| {
+        create(
+            env,
+            &class,
+            &view,
+            &measurer,
+            &results,
+            &app,
+            IntSize::new(width, height),
+            Density { density, font_scale },
+            rtl,
+            &saved,
+            optimizations,
+        )
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn create(
+    env: &mut Env,
+    class: &JClass,
+    view: &JObject,
+    measurer: &JObject,
+    results: &JByteBuffer,
+    app: &JString,
+    size: IntSize,
+    density: Density,
+    rtl: bool,
+    saved: &JByteArray,
+    optimizations: jlong,
+) -> jlong {
     if WAKE.get().is_none() {
-        let class_ref = env.new_global_ref(&class).expect("compose-android: a global ref");
+        let class_ref = env.new_global_ref(class).expect("compose-android: a global ref");
         let wake = env
-            .get_static_method_id(&class, "wake", "()V")
+            .get_static_method_id(class, jni_str!("wake"), jni_sig!("()V"))
             .expect("compose-android: ComposeRsNative.wake");
         let _ = WAKE.set((class_ref, wake));
         // A task woken on any thread posts a tick to the main thread.
         platform::set_wake_handler(|| {
             let (Some(vm), Some((class, wake))) = (VM.get(), WAKE.get()) else { return };
-            let Ok(mut env) = vm.attach_current_thread_as_daemon() else { return };
-            // SAFETY: `wake` is `()V`, static, of `class`.
-            let _ = unsafe {
-                env.call_static_method_unchecked(
-                    <&JClass>::from(class.as_obj()),
-                    *wake,
-                    ReturnType::Primitive(Primitive::Void),
-                    &[],
-                )
-            };
-            check(&mut env, "ComposeRsNative.wake");
+            // Attached for good if it isn't (a pool's thread): detached when it ends.
+            let _ = vm.attach_current_thread(|env| -> jni::errors::Result<()> {
+                // SAFETY: `wake` is `()V`, static, of `class`.
+                let _ = unsafe {
+                    env.call_static_method_unchecked(
+                        class,
+                        *wake,
+                        ReturnType::Primitive(Primitive::Void),
+                        &[],
+                    )
+                };
+                check(env, "ComposeRsNative.wake");
+                Ok(())
+            });
         });
     }
-    let name: String = env.get_string(&app).map(Into::into).unwrap_or_default();
+    let name: String = app.mutf8_chars(env).map(Into::into).unwrap_or_default();
     let content = crate::app(&name).unwrap_or_else(|| {
         log(&format!("no app named {name:?} (export_apps!)"));
         || {}
     });
-    let results =
-        env.get_direct_buffer_address(&results).expect("compose-android: a direct buffer");
+    let results = env.get_direct_buffer_address(results).expect("compose-android: a direct buffer");
     let text = JniText {
         layout: method(
-            &mut env,
-            &measurer,
-            "layout",
-            "(ILjava/lang/String;Ljava/nio/ByteBuffer;)V",
+            env,
+            measurer,
+            jni_str!("layout"),
+            jni_sig!("(ILjava/lang/String;Ljava/nio/ByteBuffer;)V"),
         ),
-        relayout: method(&mut env, &measurer, "relayout", "(IIII)Z"),
-        restyle: method(&mut env, &measurer, "restyle", "(IIII)Z"),
-        probe_layout: method(&mut env, &measurer, "probeLayout", "(IIII)Z"),
-        hit_test: method(&mut env, &measurer, "hitTest", "(IFF)I"),
-        cursor: method(&mut env, &measurer, "cursor", "(II)V"),
-        release: method(&mut env, &measurer, "release", "(I)V"),
-        measurer: env.new_global_ref(&measurer).expect("compose-android: a global ref"),
+        relayout: method(env, measurer, jni_str!("relayout"), jni_sig!("(IIII)Z")),
+        restyle: method(env, measurer, jni_str!("restyle"), jni_sig!("(IIII)Z")),
+        probe_layout: method(env, measurer, jni_str!("probeLayout"), jni_sig!("(IIII)Z")),
+        hit_test: method(env, measurer, jni_str!("hitTest"), jni_sig!("(IFF)I")),
+        cursor: method(env, measurer, jni_str!("cursor"), jni_sig!("(II)V")),
+        release: method(env, measurer, jni_str!("release"), jni_sig!("(I)V")),
+        measurer: env.new_global_ref(measurer).expect("compose-android: a global ref"),
         results: results as *const f32,
     };
-    let view_ref = env.new_global_ref(&view).expect("compose-android: a global ref");
-    let mut ui = UiHost::new(
-        IntSize::new(width, height),
-        Density { density, font_scale },
-        Box::new(AndroidTextMeasurer::new(text)),
-    );
-    ui.with_tree(|tree| {
-        tree.set_clipboard(std::rc::Rc::new(JniClipboard { view: view_ref.clone() }))
-    });
+    let view_ref = Rc::new(env.new_global_ref(view).expect("compose-android: a global ref"));
+    let mut ui = UiHost::new(size, density, Box::new(AndroidTextMeasurer::new(text)));
+    ui.with_tree(|tree| tree.set_clipboard(Rc::new(JniClipboard { view: view_ref.clone() })));
     // The replayer keeps a render node per group: those of unplaced items too (D380).
     ui.set_keep_unplaced_groups(true);
     let optimizations = Optimizations::from_bits(optimizations as u64);
     ui.set_optimizations(optimizations);
-    crate::services::install(&mut env, &view, &view_ref, &ui);
-    if rtl != 0 {
+    crate::services::install(env, view, &view_ref, &ui);
+    if rtl {
         ui.set_layout_direction(LayoutDirection::Rtl);
     }
     // A state change asks the view for a frame.
-    let request_frame = method(&mut env, &view, "requestFrame", "()V");
+    let request_frame = method(env, view, jni_str!("requestFrame"), jni_sig!("()V"));
     let waker_view = view_ref.clone();
     ui.set_frame_waker(move || {
-        let mut env = main_env();
-        // SAFETY: `requestFrame` is `()V`.
-        let _ = unsafe {
-            env.call_method_unchecked(
-                &waker_view,
-                request_frame,
-                ReturnType::Primitive(Primitive::Void),
-                &[],
-            )
-        };
-        check(&mut env, "ComposeRsView.requestFrame");
+        with_main_env(|env| {
+            // SAFETY: `requestFrame` is `()V`.
+            let _ = unsafe {
+                env.call_method_unchecked(
+                    &**waker_view,
+                    request_frame,
+                    ReturnType::Primitive(Primitive::Void),
+                    &[],
+                )
+            };
+            check(env, "ComposeRsView.requestFrame");
+        });
     });
     // The content's events go to the view, which posts them to its listener: Kotlin code
     // never runs inside this call into Rust (it could call into the host again).
-    let dispatch_event =
-        method(&mut env, &view, "dispatchHostEvent", "(Ljava/lang/String;Ljava/lang/String;)V");
-    let event_view = view_ref.clone();
+    let dispatch_event = method(
+        env,
+        view,
+        jni_str!("dispatchHostEvent"),
+        jni_sig!("(Ljava/lang/String;Ljava/lang/String;)V"),
+    );
+    let event_view = view_ref;
     ui.set_event_listener(move |name, payload| {
-        let mut env = main_env();
-        let _ = env.with_local_frame(4, |env| -> jni::errors::Result<()> {
-            let name = env.new_string(name)?;
-            let payload = env.new_string(payload)?;
-            // SAFETY: `dispatchHostEvent` is `(Ljava/lang/String;Ljava/lang/String;)V`.
-            unsafe {
-                env.call_method_unchecked(
-                    &event_view,
-                    dispatch_event,
-                    ReturnType::Primitive(Primitive::Void),
-                    &[JValue::Object(&name).as_jni(), JValue::Object(&payload).as_jni()],
-                )?;
-            }
-            Ok(())
+        with_main_env(|env| {
+            let _ = env.with_local_frame(4, |env| -> jni::errors::Result<()> {
+                let name = env.new_string(name)?;
+                let payload = env.new_string(payload)?;
+                // SAFETY: `dispatchHostEvent` is `(Ljava/lang/String;Ljava/lang/String;)V`.
+                unsafe {
+                    env.call_method_unchecked(
+                        &**event_view,
+                        dispatch_event,
+                        ReturnType::Primitive(Primitive::Void),
+                        &[JValue::Object(&name).as_jni(), JValue::Object(&payload).as_jni()],
+                    )?;
+                }
+                Ok(())
+            });
+            check(env, "ComposeRsView.dispatchHostEvent");
         });
-        check(&mut env, "ComposeRsView.dispatchHostEvent");
     });
     // What an earlier host saved (a configuration change, the process recreated).
     if !saved.is_null()
-        && let Ok(bytes) = env.convert_byte_array(&saved)
+        && let Ok(bytes) = env.convert_byte_array(saved)
         && let Some(state) = compose_runtime::SavedState::from_bytes(&bytes)
     {
         ui.restore_state(state);
@@ -546,7 +614,7 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_create<'local>(
 /// `ComposeRsNative.destroy(host)`: the composition goes (its effects disposed).
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_rs_compose_android_ComposeRsNative_destroy(
-    _env: JNIEnv,
+    _env: EnvUnowned,
     _class: JClass,
     host: jlong,
 ) {
@@ -564,14 +632,13 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_destroy(
 /// session (`performance_hint.rs`, D390).
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_rs_compose_android_ComposeRsNative_setPerformanceHint(
-    _env: JNIEnv,
+    _env: EnvUnowned,
     _class: JClass,
     host: jlong,
     shown: jboolean,
 ) {
     // SAFETY: a live host, on the main thread.
     let host = unsafe { self::host(host) };
-    let shown = shown != 0;
     if shown != host.hint {
         host.hint = shown;
         if shown {
@@ -586,7 +653,7 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_setPerformanceHin
 /// rendering (`ComposeRsView.optimizations`, D520), from the next frame on.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_rs_compose_android_ComposeRsNative_setOptimizations(
-    _env: JNIEnv,
+    _env: EnvUnowned,
     _class: JClass,
     host: jlong,
     bits: jlong,
@@ -603,11 +670,12 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_setOptimizations(
 /// `Optimizations::parse`), or -1 if a name is unknown (logged).
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_rs_compose_android_ComposeRsNative_parseOptimizations<'local>(
-    mut env: JNIEnv<'local>,
+    mut env: EnvUnowned<'local>,
     _class: JClass<'local>,
     text: JString<'local>,
 ) -> jlong {
-    let text: String = env.get_string(&text).map(Into::into).unwrap_or_default();
+    let text: String =
+        with_env(&mut env, |env| text.mutf8_chars(env).map(Into::into)).unwrap_or_default();
     match Optimizations::parse(&text) {
         Ok(optimizations) => optimizations.bits() as jlong,
         Err(error) => {
@@ -619,7 +687,7 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_parseOptimization
 
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_rs_compose_android_ComposeRsNative_resize(
-    _env: JNIEnv,
+    _env: EnvUnowned,
     _class: JClass,
     host: jlong,
     width: jint,
@@ -631,7 +699,7 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_resize(
 
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_rs_compose_android_ComposeRsNative_setDensity(
-    _env: JNIEnv,
+    _env: EnvUnowned,
     _class: JClass,
     host: jlong,
     density: jfloat,
@@ -677,7 +745,7 @@ fn next_timer_bits() -> i64 {
 /// `ComposeRsNative.frame(host)`: recomposes, lays out and draws what changed.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_rs_compose_android_ComposeRsNative_frame(
-    _env: JNIEnv,
+    _env: EnvUnowned,
     _class: JClass,
     host: jlong,
 ) -> jlong {
@@ -732,7 +800,7 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_frame(
 /// for the next idle time.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_rs_compose_android_ComposeRsNative_prefetch(
-    _env: JNIEnv,
+    _env: EnvUnowned,
     _class: JClass,
     host: jlong,
     available_nanos: jlong,
@@ -741,27 +809,27 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_prefetch(
     // SAFETY: a live host, on the main thread.
     let host = unsafe { self::host(host) };
     let available = std::time::Duration::from_nanos(available_nanos.max(0) as u64);
-    u8::from(host.ui.prefetch_with(std::time::Instant::now() + available, unbounded_first != 0))
+    host.ui.prefetch_with(std::time::Instant::now() + available, unbounded_first)
 }
 
 /// `ComposeRsNative.hasDrawAhead(host)`: whether an item prefetched waits to be drawn ahead
 /// (`drawAhead`).
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_rs_compose_android_ComposeRsNative_hasDrawAhead(
-    _env: JNIEnv,
+    _env: EnvUnowned,
     _class: JClass,
     host: jlong,
 ) -> jboolean {
     // SAFETY: a live host, on the main thread.
     let host = unsafe { self::host(host) };
-    u8::from(host.ui.has_draw_ahead_work())
+    host.ui.has_draw_ahead_work()
 }
 
 /// `ComposeRsNative.cancelDrawAhead(host)`: gives up drawing ahead the items waiting (an idle
 /// time with nothing else to do was too short for one): the frames placing them draw them.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_rs_compose_android_ComposeRsNative_cancelDrawAhead(
-    _env: JNIEnv,
+    _env: EnvUnowned,
     _class: JClass,
     host: jlong,
 ) {
@@ -782,7 +850,7 @@ const MORE_AHEAD: jlong = 1 << 33;
 /// drawing there again.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_rs_compose_android_ComposeRsNative_drawAhead(
-    _env: JNIEnv,
+    _env: EnvUnowned,
     _class: JClass,
     host: jlong,
 ) -> jlong {
@@ -808,7 +876,7 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_drawAhead(
 /// vsync's phase (`frame_time.rs`, D340); 0 without a frame time.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_rs_compose_android_ComposeRsNative_nextFrameNanos(
-    _env: JNIEnv,
+    _env: EnvUnowned,
     _class: JClass,
     frame_time_nanos: jlong,
     interval_nanos: jlong,
@@ -824,7 +892,7 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_nextFrameNanos(
 /// constructor).
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_rs_compose_android_ComposeRsNative_takeDrawing(
-    _env: JNIEnv,
+    _env: EnvUnowned,
     _class: JClass,
     host: jlong,
 ) -> jlong {
@@ -853,19 +921,22 @@ fn taken_drawing(bytes: &Vec<u8>, given: (usize, usize)) -> jlong {
 /// `ComposeRsNative.drawingBuffer(host)`: a direct buffer over the drawing's memory (all of its
 /// capacity), valid until `takeDrawing` says it moved (or the host is destroyed).
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_rs_compose_android_ComposeRsNative_drawingBuffer(
-    mut env: JNIEnv,
-    _class: JClass,
+pub extern "system" fn Java_rs_compose_android_ComposeRsNative_drawingBuffer<'local>(
+    mut env: EnvUnowned<'local>,
+    _class: JClass<'local>,
     host: jlong,
-) -> jobject {
+) -> JByteBuffer<'local> {
     // SAFETY: a live host, on the main thread.
     let host = unsafe { self::host(host) };
     let bytes = &mut host.drawing.bytes;
     host.drawing_given = (bytes.as_ptr() as usize, bytes.capacity());
-    // SAFETY: the memory lives in the host until `takeDrawing` moves it (and says so) or
-    // `destroy`; Kotlin reads it during `onDraw` only, up to the length `takeDrawing` returned.
-    let buffer = unsafe { env.new_direct_byte_buffer(bytes.as_mut_ptr(), bytes.capacity()) };
-    buffer.map_or(std::ptr::null_mut(), |buffer| buffer.into_raw())
+    with_env(&mut env, |env| {
+        // SAFETY: the memory lives in the host until `takeDrawing` moves it (and says so) or
+        // `destroy`; Kotlin reads it during `onDraw` only, up to the length `takeDrawing`
+        // returned.
+        unsafe { env.new_direct_byte_buffer(bytes.as_mut_ptr(), bytes.capacity()) }
+            .unwrap_or_default()
+    })
 }
 
 /// `ComposeRsNative.touch(host, action, pointer, x, y, age)`: action 0 down, 1 move, 2 up, 3
@@ -874,7 +945,7 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_drawingBuffer(
 #[unsafe(no_mangle)]
 #[allow(clippy::too_many_arguments)]
 pub extern "system" fn Java_rs_compose_android_ComposeRsNative_touch(
-    _env: JNIEnv,
+    _env: EnvUnowned,
     _class: JClass,
     host: jlong,
     action: jint,
@@ -904,7 +975,7 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_touch(
 /// `ComposeRsNative.scroll(host, x, y, dx, dy)`: a mouse wheel at (`x`, `y`), by pixels.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_rs_compose_android_ComposeRsNative_scroll(
-    _env: JNIEnv,
+    _env: EnvUnowned,
     _class: JClass,
     host: jlong,
     x: jfloat,
@@ -919,25 +990,21 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_scroll(
 
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_rs_compose_android_ComposeRsNative_setRtl(
-    _env: JNIEnv,
+    _env: EnvUnowned,
     _class: JClass,
     host: jlong,
     rtl: jboolean,
 ) {
     // SAFETY: a live host, on the main thread.
     let host = unsafe { self::host(host) };
-    host.ui.set_layout_direction(if rtl != 0 {
-        LayoutDirection::Rtl
-    } else {
-        LayoutDirection::Ltr
-    });
+    host.ui.set_layout_direction(if rtl { LayoutDirection::Rtl } else { LayoutDirection::Ltr });
 }
 
 /// `ComposeRsNative.textInputOptions(host)`: the focused text field's `EditorInfo`, its
 /// `imeOptions` in the high 32 bits and its `inputType` in the low ones (`input_method.rs`).
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_rs_compose_android_ComposeRsNative_textInputOptions(
-    _env: JNIEnv,
+    _env: EnvUnowned,
     _class: JClass,
     host: jlong,
 ) -> jlong {
@@ -958,21 +1025,21 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_textInputOptions(
 /// (`EditorInfo.IME_ACTION_*`), for the focused field. Returns whether it took it.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_rs_compose_android_ComposeRsNative_performEditorAction(
-    _env: JNIEnv,
+    _env: EnvUnowned,
     _class: JClass,
     host: jlong,
     action: jint,
 ) -> jboolean {
     // SAFETY: a live host, on the main thread.
     let host = unsafe { self::host(host) };
-    u8::from(host.ui.perform_ime_action(crate::input_method::ime_action(action)))
+    host.ui.perform_ime_action(crate::input_method::ime_action(action))
 }
 
 /// `ComposeRsNative.nextTimer()`: the milliseconds to the next `delay`'s end (rounded up), or
 /// -1.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_rs_compose_android_ComposeRsNative_nextTimer(
-    _env: JNIEnv,
+    _env: EnvUnowned,
     _class: JClass,
 ) -> jlong {
     platform::next_timer().map_or(-1, |wait| wait.as_nanos().div_ceil(1_000_000) as jlong)
@@ -982,7 +1049,7 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_nextTimer(
 /// `ComposeRsView.kt`; 0 for a character), with its typed text for a character key down.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_rs_compose_android_ComposeRsNative_key(
-    _env: JNIEnv,
+    _env: EnvUnowned,
     _class: JClass,
     host: jlong,
     key: jint,
@@ -1010,7 +1077,7 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_key(
         14 => Key::PageDown,
         _ => match character {
             Some(c) => Key::Character(c),
-            None => return 0,
+            None => return false,
         },
     };
     // Android's meta state: shift 1, alt 2, ctrl 0x1000, meta 0x10000.
@@ -1020,31 +1087,30 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_key(
         ctrl: meta & 0x1000 != 0,
         meta: meta & 0x10000 != 0,
     };
-    let kind = if down != 0 { KeyEventType::KeyDown } else { KeyEventType::KeyUp };
+    let kind = if down { KeyEventType::KeyDown } else { KeyEventType::KeyUp };
     let consumed = host.ui.send_key(KeyEvent { key, kind, modifiers });
     // A typed character's text, unless it's a shortcut, as the desktop host does.
-    if down != 0
+    if down
         && !modifiers.ctrl
         && !modifiers.meta
         && let Some(c) = character.filter(|c| !c.is_control())
     {
-        return u8::from(host.ui.send_text(&c.to_string()) || consumed);
+        return host.ui.send_text(&c.to_string()) || consumed;
     }
-    u8::from(consumed)
+    consumed
 }
 
 /// `ComposeRsNative.text(host, text)`: text an input method committed.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_rs_compose_android_ComposeRsNative_text(
-    mut env: JNIEnv,
+    mut env: EnvUnowned,
     _class: JClass,
     host: jlong,
     text: JString,
 ) {
     // SAFETY: a live host, on the main thread.
     let host = unsafe { self::host(host) };
-    if let Ok(text) = env.get_string(&text) {
-        let text: String = text.into();
+    if let Ok(text) = with_env(&mut env, |env| text.mutf8_chars(env).map(String::from)) {
         host.ui.send_text(&text);
     }
 }
@@ -1053,7 +1119,7 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_text(
 /// when it's cancelled), its cursor at UTF-16 `cursor` (-1 at its end).
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_rs_compose_android_ComposeRsNative_preedit(
-    mut env: JNIEnv,
+    mut env: EnvUnowned,
     _class: JClass,
     host: jlong,
     text: JString,
@@ -1061,8 +1127,7 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_preedit(
 ) {
     // SAFETY: a live host, on the main thread.
     let host = unsafe { self::host(host) };
-    if let Ok(text) = env.get_string(&text) {
-        let text: String = text.into();
+    if let Ok(text) = with_env(&mut env, |env| text.mutf8_chars(env).map(String::from)) {
         let cursor = (cursor >= 0).then(|| {
             let at = crate::text::byte_offset(&text, cursor as usize);
             (at, at)
@@ -1076,7 +1141,7 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_preedit(
 /// set if a task waits for a frame.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_rs_compose_android_ComposeRsNative_tick(
-    _env: JNIEnv,
+    _env: EnvUnowned,
     _class: JClass,
 ) -> jlong {
     platform::fire_timers();
@@ -1089,22 +1154,22 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_tick(
 
 /// `ComposeRsNative.semantics(host)`: the merged semantics tree, for `Accessibility.kt`.
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_rs_compose_android_ComposeRsNative_semantics(
-    mut env: JNIEnv,
-    _class: JClass,
+pub extern "system" fn Java_rs_compose_android_ComposeRsNative_semantics<'local>(
+    mut env: EnvUnowned<'local>,
+    _class: JClass<'local>,
     host: jlong,
-) -> jobject {
+) -> JByteBuffer<'local> {
     // SAFETY: a live host, on the main thread.
     let host = unsafe { self::host(host) };
     let root = host.ui.semantics_tree(true);
     crate::accessibility::write_tree(&root, &mut host.semantics);
     host.semantics.bytes.reserve(1);
-    // SAFETY: the buffer lives in the host until the next `semantics` (or `destroy`), and
-    // Kotlin reads it before calling again.
-    let buffer = unsafe {
-        env.new_direct_byte_buffer(host.semantics.bytes.as_mut_ptr(), host.semantics.bytes.len())
-    };
-    buffer.map_or(std::ptr::null_mut(), |buffer| buffer.into_raw())
+    let bytes = &mut host.semantics.bytes;
+    with_env(&mut env, |env| {
+        // SAFETY: the buffer lives in the host until the next `semantics` (or `destroy`), and
+        // Kotlin reads it before calling again.
+        unsafe { env.new_direct_byte_buffer(bytes.as_mut_ptr(), bytes.len()) }.unwrap_or_default()
+    })
 }
 
 /// `ComposeRsNative.performAction(host, id, action, value)`: an accessibility service's action
@@ -1113,7 +1178,7 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_semantics(
 /// accessibility delegate (`accessibility::scroll_amount`, D491, D496).
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_rs_compose_android_ComposeRsNative_performAction(
-    _env: JNIEnv,
+    _env: EnvUnowned,
     _class: JClass,
     host: jlong,
     id: jint,
@@ -1123,7 +1188,7 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_performAction(
     // SAFETY: a live host, on the main thread.
     let host = unsafe { self::host(host) };
     let root = host.ui.semantics_tree(true);
-    let Some((found, shown)) = crate::accessibility::find_shown(&root, id) else { return 0 };
+    let Some((found, shown)) = crate::accessibility::find_shown(&root, id) else { return false };
     let node = found.id;
     let action = match action {
         0 => compose_ui::SemanticsAction::OnClick,
@@ -1132,44 +1197,43 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_performAction(
         3..=8 => {
             let direction = 1u8 << (action - 3);
             let Some((x, y)) = crate::accessibility::scroll_amount(found, direction, shown) else {
-                return 0;
+                return false;
             };
             compose_ui::SemanticsAction::ScrollBy { x, y }
         }
-        _ => return 0,
+        _ => return false,
     };
-    u8::from(host.ui.perform_semantics_action(node, action))
+    host.ui.perform_semantics_action(node, action)
 }
 
 /// `ComposeRsNative.saveState(host)`: what the content's `remember_saveable`s hold, as bytes
 /// for the view's saved instance state (null when there's nothing to save).
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_rs_compose_android_ComposeRsNative_saveState<'local>(
-    env: JNIEnv<'local>,
+    mut env: EnvUnowned<'local>,
     _class: JClass<'local>,
     host: jlong,
-) -> jobject {
+) -> JByteArray<'local> {
     // SAFETY: a live host, on the main thread.
     let host = unsafe { self::host(host) };
     let state = host.ui.save_state();
     if state.is_empty() {
-        return std::ptr::null_mut();
+        return JByteArray::default();
     }
-    env.byte_array_from_slice(&state.to_bytes())
-        .map_or(std::ptr::null_mut(), |array| array.into_raw())
+    with_env(&mut env, |env| env.byte_array_from_slice(&state.to_bytes()).unwrap_or_default())
 }
 
 /// `ComposeRsNative.onBackPressed(host)`: the user went back; the innermost enabled
 /// `BackHandler` gets it. Returns whether one did.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_rs_compose_android_ComposeRsNative_onBackPressed(
-    _env: JNIEnv,
+    _env: EnvUnowned,
     _class: JClass,
     host: jlong,
 ) -> jboolean {
     // SAFETY: a live host, on the main thread.
     let host = unsafe { self::host(host) };
-    u8::from(host.ui.on_back_pressed())
+    host.ui.on_back_pressed()
 }
 
 /// `ComposeRsNative.setConfiguration(host, widthDp, heightDp, landscape, fontScale, density,
@@ -1177,7 +1241,7 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_onBackPressed(
 #[unsafe(no_mangle)]
 #[allow(clippy::too_many_arguments)]
 pub extern "system" fn Java_rs_compose_android_ComposeRsNative_setConfiguration(
-    _env: JNIEnv,
+    _env: EnvUnowned,
     _class: JClass,
     host: jlong,
     width_dp: jint,
@@ -1192,14 +1256,14 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_setConfiguration(
     host.ui.set_configuration(compose_ui::Configuration {
         screen_width_dp: width_dp as f32,
         screen_height_dp: height_dp as f32,
-        orientation: if landscape != 0 {
+        orientation: if landscape {
             compose_ui::ScreenOrientation::Landscape
         } else {
             compose_ui::ScreenOrientation::Portrait
         },
         font_scale,
         density,
-        night_mode: night != 0,
+        night_mode: night,
     });
 }
 
@@ -1207,7 +1271,7 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_setConfiguration(
 /// (left, top, right, bottom): status bars, navigation bars, caption bar, keyboard, cutout.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_rs_compose_android_ComposeRsNative_setWindowInsets<'local>(
-    env: JNIEnv<'local>,
+    mut env: EnvUnowned<'local>,
     _class: JClass<'local>,
     host: jlong,
     insets: JIntArray<'local>,
@@ -1215,7 +1279,7 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_setWindowInsets<'
     // SAFETY: a live host, on the main thread.
     let host = unsafe { self::host(host) };
     let mut values = [0; 20];
-    if env.get_int_array_region(&insets, 0, &mut values).is_err() {
+    if with_env(&mut env, |env| insets.get_region(env, 0, &mut values)).is_err() {
         return;
     }
     let side = |kind: usize| {
@@ -1241,7 +1305,7 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_setWindowInsets<'
 /// not 0).
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_rs_compose_android_ComposeRsNative_setProp<'local>(
-    mut env: JNIEnv<'local>,
+    mut env: EnvUnowned<'local>,
     _class: JClass<'local>,
     host: jlong,
     name: JString<'local>,
@@ -1251,16 +1315,19 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_setProp<'local>(
 ) {
     // SAFETY: a live host, on the main thread.
     let host = unsafe { self::host(host) };
-    let Ok(name) = env.get_string(&name).map(String::from) else { return };
+    let (name, text) = with_env(&mut env, |env| {
+        let name = name.mutf8_chars(env).map(String::from);
+        // Read only for text properties.
+        let text = if kind != 1 || text.is_null() {
+            String::new()
+        } else {
+            text.mutf8_chars(env).map(Into::into).unwrap_or_default()
+        };
+        (name, text)
+    });
+    let Ok(name) = name else { return };
     let value = match kind {
-        1 => {
-            let text: String = if text.is_null() {
-                String::new()
-            } else {
-                env.get_string(&text).map(Into::into).unwrap_or_default()
-            };
-            Some(compose_ui::PropValue::Text(text.into()))
-        }
+        1 => Some(compose_ui::PropValue::Text(text.into())),
         2 => Some(compose_ui::PropValue::Number(number)),
         3 => Some(compose_ui::PropValue::Bool(number != 0.0)),
         _ => None,

@@ -2056,7 +2056,7 @@ pub fn load(items: &[&str]) {
 }
 ```
 
-- **Android**: `JNI_OnLoad` (`export_apps!`) installs a logcat logger, each record tagged with the crate that logged it: `adb logcat -s guide compose_runtime`. To use a logger of your own (`android_logger` with its own tags), start `export_apps!` with `logger = false;` and install it in a `JNI_OnLoad` of yours that calls `compose_android::on_load_with`.
+- **Android**: `JNI_OnLoad` (`export_apps!`) installs a logcat logger, each record tagged with the crate that logged it: `adb logcat -s guide compose_runtime`. To use a logger of your own (`android_logger` with its own tags), start `export_apps!` with `logger = false;` and install it in a `JNI_OnLoad` of yours that calls `compose_android::on_load_with` (`#[unsafe(no_mangle)] pub unsafe extern "system" fn JNI_OnLoad(vm: *mut compose_android::jni::sys::JavaVM, _: *mut std::ffi::c_void) -> i32`, the VM from `compose_android::jni::JavaVM::from_raw(vm)`).
 - **Desktop and tests**: records go to standard error (in a test, its captured output). `COMPOSE_LOG` filters them as `RUST_LOG` does: `COMPOSE_LOG=warn,my_app=debug`. A logger set before `run_app` (`env_logger`) replaces it.
 - **Levels**: `debug` and above in debug builds, `info` and above in release ones.
 - compose-rs's own warnings (a state holder used after it was freed, D240) come through it too. A panic's message goes to logcat under the tag `compose-rs` before the app aborts.

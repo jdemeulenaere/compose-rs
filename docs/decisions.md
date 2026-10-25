@@ -25,7 +25,7 @@ The log is split by area into the files below, one table each, rows in number or
 | [android-host-and-performance](decisions/android-host-and-performance.md) | The view and activity glue, the frame loop, the hint session, jank, startup, memory, and the optimization flags. | 25 |
 | [desktop](decisions/desktop.md) | The desktop host: window, Skia rendering, input and events. | 6 |
 | [benchmarks](decisions/benchmarks.md) | The benchmark apps, protocols and rounds, and how results are read. | 23 |
-| [api-and-tooling](decisions/api-and-tooling.md) | Names, crates and modules, semver, the edit-build loop, testing and documentation. | 22 |
+| [api-and-tooling](decisions/api-and-tooling.md) | Names, crates and modules, semver, the edit-build loop, testing and documentation, the toolchain's and dependencies' versions. | 26 |
 
 ## Index by number
 
@@ -251,7 +251,7 @@ The log is split by area into the files below, one table each, rows in number or
 | D292 | [api-and-tooling](decisions/api-and-tooling.md#d292) | current |
 | D293 | [ui-and-layout](decisions/ui-and-layout.md#d293) | current |
 | D300 | [android-host-and-performance](decisions/android-host-and-performance.md#d300) | current |
-| D301 | [android-host-and-performance](decisions/android-host-and-performance.md#d301) | current |
+| D301 | [android-host-and-performance](decisions/android-host-and-performance.md#d301) | revised by [D623](decisions/api-and-tooling.md#d623) |
 | D302 | [benchmarks](decisions/benchmarks.md#d302) | revised by [D362](decisions/benchmarks.md#d362) |
 | D303 | [api-and-tooling](decisions/api-and-tooling.md#d303) | current |
 | D304 | [api-and-tooling](decisions/api-and-tooling.md#d304) | current |
@@ -356,7 +356,7 @@ The log is split by area into the files below, one table each, rows in number or
 | D534 | [android-drawing](decisions/android-drawing.md#d534) | current |
 | D535 | [ui-and-layout](decisions/ui-and-layout.md#d535) | current |
 | D536 | [android-host-and-performance](decisions/android-host-and-performance.md#d536) | current |
-| D540 | [benchmarks](decisions/benchmarks.md#d540) | current |
+| D540 | [benchmarks](decisions/benchmarks.md#d540) | revised by [D622](decisions/api-and-tooling.md#d622) |
 | D550 | [text](decisions/text.md#d550) | revised by [D554](decisions/text.md#d554), [D555](decisions/text.md#d555) |
 | D551 | [text](decisions/text.md#d551) | current |
 | D552 | [text](decisions/text.md#d552) | current |
@@ -403,4 +403,8 @@ The log is split by area into the files below, one table each, rows in number or
 | D604 | [benchmarks](decisions/benchmarks.md#d604) | current |
 | D605 | [benchmarks](decisions/benchmarks.md#d605) | current |
 | D610 | [android-host-and-performance](decisions/android-host-and-performance.md#d610) | current |
+| D620 | [api-and-tooling](decisions/api-and-tooling.md#d620) | current |
+| D621 | [api-and-tooling](decisions/api-and-tooling.md#d621) | current |
+| D622 | [api-and-tooling](decisions/api-and-tooling.md#d622) | current |
+| D623 | [api-and-tooling](decisions/api-and-tooling.md#d623) | current |
 | D630 | [ui-and-layout](decisions/ui-and-layout.md#d630) | current |

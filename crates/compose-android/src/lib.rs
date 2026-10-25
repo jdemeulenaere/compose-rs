@@ -78,20 +78,28 @@ fn app(name: &str) -> Option<fn()> {
 #[macro_export]
 macro_rules! export_apps {
     (logger = $logger:expr; $($name:literal => $content:path),* $(,)?) => {
+        /// # Safety
+        /// Called by the VM loading the library, with itself.
         #[unsafe(no_mangle)]
-        pub extern "system" fn JNI_OnLoad(
-            vm: $crate::jni::JavaVM,
+        pub unsafe extern "system" fn JNI_OnLoad(
+            vm: *mut $crate::jni::sys::JavaVM,
             _reserved: *mut ::std::ffi::c_void,
         ) -> $crate::jni::sys::jint {
+            // SAFETY: the VM loading the library.
+            let vm = unsafe { $crate::jni::JavaVM::from_raw(vm) };
             $crate::on_load_with(vm, &[$(($name, $content as fn())),*], $logger)
         }
     };
     ($($name:literal => $content:path),* $(,)?) => {
+        /// # Safety
+        /// Called by the VM loading the library, with itself.
         #[unsafe(no_mangle)]
-        pub extern "system" fn JNI_OnLoad(
-            vm: $crate::jni::JavaVM,
+        pub unsafe extern "system" fn JNI_OnLoad(
+            vm: *mut $crate::jni::sys::JavaVM,
             _reserved: *mut ::std::ffi::c_void,
         ) -> $crate::jni::sys::jint {
+            // SAFETY: the VM loading the library.
+            let vm = unsafe { $crate::jni::JavaVM::from_raw(vm) };
             $crate::on_load(vm, &[$(($name, $content as fn())),*])
         }
     };

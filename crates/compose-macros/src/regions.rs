@@ -572,7 +572,7 @@ impl VisitMut for Regions {
             Expr::Match(match_expr) => {
                 self.visit_expr_mut(&mut match_expr.expr);
                 for arm in &mut match_expr.arms {
-                    if let Some((_, guard)) = &mut arm.guard {
+                    if let Some(guard) = crate::memo::arm_guard_mut(arm) {
                         self.visit_expr_mut(guard);
                         // A guard runs only for the arms tried before.
                         if self.likely_expr(guard) {

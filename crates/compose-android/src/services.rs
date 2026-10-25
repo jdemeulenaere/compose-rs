@@ -8,16 +8,23 @@
 use std::rc::Rc;
 
 use compose_ui::{HapticFeedback, HapticFeedbackType, PlatformUriHandler, platform::UiHost};
-use jni::JNIEnv;
-use jni::objects::{GlobalRef, JMethodID, JObject, JValue};
+use jni::ids::JMethodID;
+use jni::objects::JObject;
+use jni::refs::Global;
 use jni::signature::{Primitive, ReturnType};
+use jni::{Env, JValue, jni_sig, jni_str};
 
-use crate::bridge::{check, vm};
+use crate::bridge::{check, method, with_main_env};
 
 /// Sets `ui`'s tree's services to the view's.
-pub(crate) fn install(env: &mut JNIEnv, view: &JObject, view_ref: &GlobalRef, ui: &UiHost) {
-    let open_uri = method(env, view, "openUri", "(Ljava/lang/String;)V");
-    let perform = method(env, view, "performHapticFeedbackType", "(I)V");
+pub(crate) fn install(
+    env: &mut Env,
+    view: &JObject,
+    view_ref: &Rc<Global<JObject<'static>>>,
+    ui: &UiHost,
+) {
+    let open_uri = method(env, view, jni_str!("openUri"), jni_sig!("(Ljava/lang/String;)V"));
+    let perform = method(env, view, jni_str!("performHapticFeedbackType"), jni_sig!("(I)V"));
     let opener = JniUriOpener { view: view_ref.clone(), method: open_uri };
     let uri_handler = PlatformUriHandler::new(move |uri| opener.open(uri));
     let haptic_feedback = Rc::new(JniHapticFeedback { view: view_ref.clone(), method: perform });
@@ -27,64 +34,52 @@ pub(crate) fn install(env: &mut JNIEnv, view: &JObject, view_ref: &GlobalRef, ui
     });
 }
 
-fn method(env: &mut JNIEnv, view: &JObject, name: &str, signature: &str) -> JMethodID {
-    let class = env.get_object_class(view).expect("compose-android: a class");
-    let id = env
-        .get_method_id(&class, name, signature)
-        .unwrap_or_else(|_| panic!("compose-android: ComposeRsView.{name}{signature}"));
-    let _ = env.delete_local_ref(class);
-    id
-}
-
-/// The main thread's environment (Kotlin called in on it).
-fn main_env() -> JNIEnv<'static> {
-    vm().get_env().expect("compose-android: called on a thread attached to the VM")
-}
-
 /// Hands a checked link to `ComposeRsView.openUri`.
 struct JniUriOpener {
-    view: GlobalRef,
+    view: Rc<Global<JObject<'static>>>,
     method: JMethodID,
 }
 
 impl JniUriOpener {
     fn open(&self, uri: &str) {
-        let mut env = main_env();
-        let _ = env.with_local_frame(2, |env| -> jni::errors::Result<()> {
-            let uri = env.new_string(uri)?;
-            // SAFETY: `openUri` is `(Ljava/lang/String;)V`.
-            unsafe {
-                env.call_method_unchecked(
-                    &self.view,
-                    self.method,
-                    ReturnType::Primitive(Primitive::Void),
-                    &[JValue::Object(&uri).as_jni()],
-                )?;
-            }
-            Ok(())
+        with_main_env(|env| {
+            let _ = env.with_local_frame(2, |env| -> jni::errors::Result<()> {
+                let uri = env.new_string(uri)?;
+                // SAFETY: `openUri` is `(Ljava/lang/String;)V`.
+                unsafe {
+                    env.call_method_unchecked(
+                        &**self.view,
+                        self.method,
+                        ReturnType::Primitive(Primitive::Void),
+                        &[JValue::Object(&uri).as_jni()],
+                    )?;
+                }
+                Ok(())
+            });
+            check(env, "ComposeRsView.openUri");
         });
-        check(&mut env, "ComposeRsView.openUri");
     }
 }
 
 struct JniHapticFeedback {
-    view: GlobalRef,
+    view: Rc<Global<JObject<'static>>>,
     method: JMethodID,
 }
 
 impl HapticFeedback for JniHapticFeedback {
     fn perform_haptic_feedback(&self, feedback_type: HapticFeedbackType) {
-        let mut env = main_env();
-        // SAFETY: `performHapticFeedbackType` is `(I)V`.
-        let _ = unsafe {
-            env.call_method_unchecked(
-                &self.view,
-                self.method,
-                ReturnType::Primitive(Primitive::Void),
-                &[JValue::Int(haptic_code(feedback_type)).as_jni()],
-            )
-        };
-        check(&mut env, "ComposeRsView.performHapticFeedbackType");
+        with_main_env(|env| {
+            // SAFETY: `performHapticFeedbackType` is `(I)V`.
+            let _ = unsafe {
+                env.call_method_unchecked(
+                    &**self.view,
+                    self.method,
+                    ReturnType::Primitive(Primitive::Void),
+                    &[JValue::Int(haptic_code(feedback_type)).as_jni()],
+                )
+            };
+            check(env, "ComposeRsView.performHapticFeedbackType");
+        });
     }
 }
 

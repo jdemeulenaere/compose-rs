@@ -7,11 +7,11 @@ android {
     namespace = "rs.compose.demo"
     compileSdk = 37
     // Pinned (README.md): the Android Gradle plugin strips native libraries only when it's set.
-    ndkVersion = "27.2.12479018"
+    ndkVersion = "30.0.16248370"
     defaultConfig {
         applicationId = "rs.compose.demo"
         minSdk = 29
-        targetSdk = 36
+        targetSdk = 37
         versionCode = 1
         versionName = "0.1"
     }

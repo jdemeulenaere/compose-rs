@@ -76,10 +76,10 @@ sudo dnf install gcc-c++ pkgconf-pkg-config freetype-devel fontconfig-devel     
 sudo pacman -S base-devel freetype2 fontconfig                                     # Arch
 ```
 
-On Android, you need the Android SDK (`ANDROID_HOME`, or `~/Library/Android/sdk` on macOS), JDK 17 or newer, the NDK and Rust's Android target, and an arm64 device connected with adb. The Gradle wrapper fetches Gradle itself and builds the Rust library:
+On Android, you need the Android SDK (`ANDROID_HOME`, or `~/Library/Android/sdk` on macOS) with the API 37 platform, JDK 17 or newer, the NDK (30.0.16248370, r30, which the apps pin) and Rust's Android target, and an arm64 device connected with adb. The Gradle wrapper fetches Gradle itself (9.8.2), which loads the Android Gradle plugin 9.4.1 and Kotlin 2.4.21, and builds the Rust library; the apps compile against API 37 and target it:
 
 ```bash
-"$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;27.2.12479018" platform-tools   # or Android Studio's SDK Manager
+"$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;30.0.16248370" "platforms;android-37.0" platform-tools   # or Android Studio's SDK Manager
 rustup target add aarch64-linux-android
 android/gradlew -p android :demo:installDebug    # the gallery, todo and counter in Kotlin Compose tabs
 adb shell am start -n rs.compose.demo/.MainActivity

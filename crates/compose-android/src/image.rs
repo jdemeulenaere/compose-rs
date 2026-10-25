@@ -6,22 +6,27 @@
 use std::sync::Arc;
 
 use compose_ui::ImageBitmap;
-use jni::JNIEnv;
-use jni::objects::{GlobalRef, JClass, JObject, JStaticMethodID, JValue};
+use jni::ids::JStaticMethodID;
+use jni::objects::{JClass, JObject};
+use jni::refs::Global;
 use jni::signature::ReturnType;
+use jni::{Env, JValue, jni_sig, jni_str};
 
 /// `ComposeRsImages`' class and its `decode([B)Landroid/graphics/Bitmap;`.
 struct AndroidImageDecoder {
-    class: GlobalRef,
+    class: Global<JClass<'static>>,
     decode: JStaticMethodID,
 }
 
 /// Sets the platform's decoder: called from `JNI_OnLoad`, whose class loader finds the app's
 /// classes.
-pub(crate) fn install(env: &mut JNIEnv) {
-    let Ok(class) = env.find_class("rs/compose/android/ComposeRsImages") else { return };
-    let Ok(decode) = env.get_static_method_id(&class, "decode", "([B)Landroid/graphics/Bitmap;")
-    else {
+pub(crate) fn install(env: &mut Env) {
+    let Ok(class) = env.find_class(jni_str!("rs/compose/android/ComposeRsImages")) else { return };
+    let Ok(decode) = env.get_static_method_id(
+        &class,
+        jni_str!("decode"),
+        jni_sig!("([B)Landroid/graphics/Bitmap;"),
+    ) else {
         return;
     };
     let Ok(class) = env.new_global_ref(class) else { return };
@@ -33,37 +38,42 @@ const MAX_PIXELS: u64 = 1 << 28;
 
 impl compose_ui::platform::ImageDecoder for AndroidImageDecoder {
     fn decode(&self, bytes: &[u8]) -> Option<ImageBitmap> {
-        // Any thread: attached (as a daemon, so it never blocks the VM's exit) if it isn't.
-        let mut env = crate::bridge::vm().attach_current_thread_as_daemon().ok()?;
-        let result = env.with_local_frame(8, |env| -> jni::errors::Result<Option<ImageBitmap>> {
-            let array = env.byte_array_from_slice(bytes)?;
-            // SAFETY: `decode` is `([B)Landroid/graphics/Bitmap;`, static, of `class`.
-            let bitmap = unsafe {
-                env.call_static_method_unchecked(
-                    <&JClass>::from(self.class.as_obj()),
-                    self.decode,
-                    ReturnType::Object,
-                    &[JValue::Object(&array).as_jni()],
-                )
-            }?
-            .l()?;
-            if bitmap.is_null() {
-                return Ok(None);
-            }
-            Ok(copy_pixels(env, &bitmap))
-        });
-        crate::bridge::check(&mut env, "ComposeRsImages.decode");
+        // Any thread: attached for good if it isn't (a pool's thread, detached when it ends);
+        // in a local frame of its own.
+        let result = crate::bridge::vm().attach_current_thread(
+            |env| -> jni::errors::Result<Option<ImageBitmap>> {
+                let decoded = (|| -> jni::errors::Result<Option<ImageBitmap>> {
+                    let array = env.byte_array_from_slice(bytes)?;
+                    // SAFETY: `decode` is `([B)Landroid/graphics/Bitmap;`, static, of `class`.
+                    let bitmap = unsafe {
+                        env.call_static_method_unchecked(
+                            &self.class,
+                            self.decode,
+                            ReturnType::Object,
+                            &[JValue::Object(&array).as_jni()],
+                        )
+                    }?
+                    .l()?;
+                    if bitmap.is_null() {
+                        return Ok(None);
+                    }
+                    Ok(copy_pixels(env, &bitmap))
+                })();
+                crate::bridge::check(env, "ComposeRsImages.decode");
+                decoded
+            },
+        );
         result.ok().flatten()
     }
 }
 
 /// The ARGB_8888 `bitmap`'s pixels (premultiplied, R, G, B, A in memory), then recycled.
-fn copy_pixels(env: &mut JNIEnv, bitmap: &JObject) -> Option<ImageBitmap> {
-    let width = env.call_method(bitmap, "getWidth", "()I", &[]).and_then(|value| value.i()).ok()?;
-    let height =
-        env.call_method(bitmap, "getHeight", "()I", &[]).and_then(|value| value.i()).ok()?;
-    let row_bytes =
-        env.call_method(bitmap, "getRowBytes", "()I", &[]).and_then(|value| value.i()).ok()?;
+fn copy_pixels(env: &mut Env, bitmap: &JObject) -> Option<ImageBitmap> {
+    let mut int =
+        |name| env.call_method(bitmap, name, jni_sig!("()I"), &[]).and_then(|value| value.i()).ok();
+    let width = int(jni_str!("getWidth"))?;
+    let height = int(jni_str!("getHeight"))?;
+    let row_bytes = int(jni_str!("getRowBytes"))?;
     let image = (|| {
         if width <= 0 || height <= 0 || width as u64 * height as u64 > MAX_PIXELS {
             return None;
@@ -79,8 +89,8 @@ fn copy_pixels(env: &mut JNIEnv, bitmap: &JObject) -> Option<ImageBitmap> {
             unsafe { env.new_direct_byte_buffer(pixels.as_mut_ptr(), pixels.len()) }.ok()?;
         env.call_method(
             bitmap,
-            "copyPixelsToBuffer",
-            "(Ljava/nio/Buffer;)V",
+            jni_str!("copyPixelsToBuffer"),
+            jni_sig!("(Ljava/nio/Buffer;)V"),
             &[JValue::Object(&buffer)],
         )
         .ok()?;
@@ -95,6 +105,6 @@ fn copy_pixels(env: &mut JNIEnv, bitmap: &JObject) -> Option<ImageBitmap> {
     // A failed copy's exception is logged and cleared before calling again.
     crate::bridge::check(env, "Bitmap.copyPixelsToBuffer");
     // Its pixels freed now rather than at a garbage collection.
-    let _ = env.call_method(bitmap, "recycle", "()V", &[]);
+    let _ = env.call_method(bitmap, jni_str!("recycle"), jni_sig!("()V"), &[]);
     image
 }

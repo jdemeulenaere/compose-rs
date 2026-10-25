@@ -94,7 +94,7 @@ impl<'ast> Visit<'ast> for TypeScan {
         }
     }
 
-    fn visit_type_bare_fn(&mut self, _: &'ast syn::TypeBareFn) {
+    fn visit_type_fn_ptr(&mut self, _: &'ast syn::TypeFnPtr) {
         // `fn(&str)`: as above. A function pointer is callable.
         self.fn_trait = true;
     }
@@ -157,7 +157,7 @@ fn callback_type(ty: &Type) -> syn::Result<Option<Type>> {
         function.segments.last().map(|segment| &segment.arguments)
     {
         for input in &inputs.inputs {
-            let types = scan(input);
+            let types = scan(&input.ty);
             if types.reference || types.lifetime {
                 let shown = quote::ToTokens::to_token_stream(&function)
                     .to_string()
@@ -501,7 +501,7 @@ fn transform(
     let options = parse_options(attr)?;
     let mut function: ItemFn = syn::parse2(item)?;
     let sig = &mut function.sig;
-    if let Some(unsafety) = sig.unsafety {
+    if let syn::Safety::Unsafe(unsafety) = sig.safety {
         return Err(Error::new(
             unsafety.span(),
             "a composable can't be `unsafe`: the runtime calls it again from safe code when it \
