@@ -3,7 +3,8 @@
 connected device, interleaving the two apps run by run, and writes a JSON report.
 
     measure.py --trace-processor PATH --out DIR [--runs N] [--compile MODE] [--allow-stale]
-               [--scenarios NAME,NAME,...] [--optimizations parity|all|each|NAME,...]
+               [--scenarios NAME,NAME,...]
+               [--optimizations parity|recommended|all|each|NAME,... | --subject [NAME=]LIST ...]
                [--traced-runs N] [--battery-limit CELSIUS] [--thermal-wait-limit SECONDS]
 
 Before measuring, the installed APKs are checked against the ones built in this checkout
@@ -50,13 +51,20 @@ Each traced run also lists its slowest frames on each thread with their longest 
 crates/compose-ui/src/optimizations.rs, docs/07; passed to bench-rs as `-e optimizations`):
   parity  (default) none of them, the hint session included (`none`): compose-rs does the work
           Compose does (docs/15, "Parity mode"; D568)
+  recommended  the flags with a measured gain (Rust's `Optimization::RECOMMENDED`, D601)
   all     every one
   rs      no Compose: bench-rs alone at parity, for an A/B of two compose-rs builds installed
           in turn (D598; --allow-stale for the one not built in this checkout)
   each    no Compose: bench-rs at parity, then with each optimization alone, interleaved run
           by run (subjects `rs` and `rs+<name>`): each one's effect, for docs/14's backport table;
           --each-only NAME,... measures only those
-  NAMES   a comma-separated list of names (`-name` takes one out: `all,-performance_hint`)
+  NAMES   a comma-separated list of names (`-name` takes one out: `all,-performance_hint`,
+          `recommended,-performance_hint`)
+--subject [NAME=]LIST, repeated, measures several bench-rs subjects beside Compose in one
+invocation, interleaved run by run (mode `subjects`): each one bench-rs with `-e optimizations
+LIST`, named NAME (by default `rs-LIST`; a LIST of more than one word needs a NAME), after Compose
+(`--subject recommended --subject all`: subjects `compose`, `rs-recommended`, `rs-all`). It
+replaces --optimizations, which then stays at its default.
 The report records the mode and each subject's list (`"optimizations"`). --traced-runs sets the
 traced runs of each subject in the scroll and animation scenarios (3).
 
@@ -891,13 +899,25 @@ def optimization_defaults(source):
     return [name for name, _, default in optimization_table(source) if default]
 
 
-def optimization_bits(given, table):
+def optimization_recommended(source):
+    """The names in Rust's `Optimization::RECOMMENDED` (crates/compose-ui/src/optimizations.rs),
+    in its order: `Optimization::SINGLE_DRAWING_FADE` is `single_drawing_fade`."""
+    found = re.search(r"pub const RECOMMENDED: &'static \[Optimization\] = &\[(.*?)\];", source,
+                      re.DOTALL)
+    if not found:
+        raise SystemExit("no Optimization::RECOMMENDED in Rust's table")
+    return [name.lower() for name in re.findall(r"Optimization::([A-Z_]+)", found.group(1))]
+
+
+def optimization_bits(given, table, recommended=()):
     """The bits bench-rs's `-e optimizations` list sets, as Rust's `Optimizations::parse`
-    (`none`, `all`, `default`, names, `-name`; None or empty: the defaults), each name's bit
-    its `bit:` in `table` (`optimization_table`)."""
+    (`none`, `all`, `recommended`, `default`, names, `-name`; None or empty: the defaults), each
+    name's bit its `bit:` in `table` (`optimization_table`), `recommended` the names in Rust's
+    `RECOMMENDED` (`optimization_recommended`)."""
     bit = {name: 1 << number for name, number, _ in table}
     every = sum(bit.values())
     defaults = sum(bit[name] for name, _, default in table if default)
+    chosen = sum(bit[name] for name in recommended)
     if given is None or not given.strip():
         return defaults
     bits = 0
@@ -907,6 +927,8 @@ def optimization_bits(given, table):
             bits = 0
         elif (name, on) == ("all", True):
             bits = every
+        elif (name, on) == ("recommended", True):
+            bits = chosen
         elif (name, on) == ("default", True):
             bits = defaults
         else:
@@ -914,10 +936,48 @@ def optimization_bits(given, table):
     return bits
 
 
+# The names of sets in a list, beside the optimizations' own (`Optimizations::parse`).
+SET_NAMES = ("none", "all", "recommended", "default")
+
+
+def check_list(text, names):
+    """The words of a bench-rs list, checked against `names` and the sets' names; stops the run
+    on an unknown one."""
+    words = [word.strip() for word in text.split(",") if word.strip()]
+    unknown = [word for word in words
+               if word.lstrip("-") not in names and word not in SET_NAMES]
+    if unknown:
+        raise SystemExit(f"unknown optimizations {unknown}; known: {', '.join(names)}")
+    return words
+
+
+def parse_subjects(given, names):
+    """`--subject [NAME=]LIST`'s subjects: Compose, then a bench-rs subject for each, with `-e
+    optimizations LIST`, named NAME or `rs-LIST` (a LIST of one word). Stops the run on an unknown
+    name, a LIST of several words without a NAME, or two subjects of one name."""
+    subjects = [("compose", APPS["compose"], None)]
+    for text in given:
+        name, _, listed = text.rpartition("=")
+        words = check_list(listed, names)
+        if not words:
+            raise SystemExit(f"--subject {text!r}: an empty list")
+        if not name:
+            if len(words) > 1:
+                raise SystemExit(f"--subject {text!r}: name a list of several words (NAME=LIST)")
+            name = f"rs-{words[0]}"
+        if not re.fullmatch(r"[A-Za-z0-9_+.-]+", name):
+            raise SystemExit(f"--subject {text!r}: a name of letters, digits and _+.- only")
+        if name in [subject for subject, _, _ in subjects]:
+            raise SystemExit(f"--subject {text!r}: two subjects named {name}")
+        subjects.append((name, APPS["rs"], ",".join(words)))
+    return "subjects", subjects
+
+
 def parse_optimizations(text, names, each_only=None):
     """The mode `--optimizations` names and the subjects it measures: (name, package,
     bench-rs's `-e optimizations`, None for the Compose app). `parity` (the default) runs
-    bench-rs with none (`none`, the hint session off: Compose has none); `all` with every one;
+    bench-rs with none (`none`, the hint session off: Compose has none); `recommended` with the
+    flags of Rust's `RECOMMENDED`; `all` with every one;
     `rs` bench-rs alone at parity (an A/B of two builds);
     `each` bench-rs alone, at parity and with each of `names` alone (or of `each_only`'s, a
     comma-separated list); else a list of names (each may be `-name`), checked against `names`.
@@ -926,8 +986,8 @@ def parse_optimizations(text, names, each_only=None):
     compose = ("compose", APPS["compose"], None)
     if text == "parity":
         return "parity", [compose, ("rs", APPS["rs"], "none")]
-    if text == "all":
-        return "all", [compose, ("rs", APPS["rs"], "all")]
+    if text in ("all", "recommended"):
+        return text, [compose, ("rs", APPS["rs"], text)]
     if text == "rs":
         return "rs", [("rs", APPS["rs"], "none")]
     if text == "each":
@@ -939,11 +999,7 @@ def parse_optimizations(text, names, each_only=None):
                 raise SystemExit(f"unknown optimizations {unknown}; known: {', '.join(names)}")
         return "each", [("rs", APPS["rs"], "none")] + [
             (f"rs+{name}", APPS["rs"], name) for name in chosen]
-    words = [word.strip() for word in text.split(",") if word.strip()]
-    unknown = [word for word in words
-               if word.lstrip("-") not in names and word not in ("none", "all", "default")]
-    if unknown:
-        raise SystemExit(f"unknown optimizations {unknown}; known: {', '.join(names)}")
+    words = check_list(text, names)
     return "list", [compose, ("rs", APPS["rs"], ",".join(words))]
 
 
@@ -1245,14 +1301,22 @@ def configure(arguments, source):
     set (None: the Compose app), and the thermal guards' limits set."""
     table = optimization_table(source)
     names = [name for name, _, _ in table]
-    mode, subjects = parse_optimizations(arguments.optimizations, names, arguments.each_only)
+    recommended = optimization_recommended(source)
+    given = getattr(arguments, "subject", None)
+    if given:
+        if (arguments.optimizations or "parity") != "parity" or arguments.each_only:
+            raise SystemExit("--subject replaces --optimizations and --each-only")
+        mode, subjects = parse_subjects(given, names)
+    else:
+        mode, subjects = parse_optimizations(arguments.optimizations, names, arguments.each_only)
     THERMAL["battery_limit_c"] = arguments.battery_limit
     THERMAL["wait_limit_s"] = arguments.thermal_wait_limit
     THERMAL["skin_limit_c"] = arguments.skin_limit
     rotate = arguments.rotate % len(subjects)
     subjects = subjects[rotate:] + subjects[:rotate]
-    bits = {name: None if package == APPS["compose"] else optimization_bits(given, table)
-            for name, package, given in subjects}
+    bits = {name: None if package == APPS["compose"]
+            else optimization_bits(listed, table, recommended)
+            for name, package, listed in subjects}
     return mode, subjects, bits
 
 
@@ -1269,7 +1333,10 @@ def main(argv=None):
     parser.add_argument("--scenarios", default="all",
                         help="the scenarios to run, comma-separated (see above; default all)")
     parser.add_argument("--optimizations", default="parity",
-                        help="compose-rs's optimizations: parity (default), all, each, or names "
+                        help="compose-rs's optimizations: parity (default), recommended, all, "
+                             "each, or names (see above)")
+    parser.add_argument("--subject", action="append", default=None, metavar="[NAME=]LIST",
+                        help="a bench-rs subject with this list, beside Compose; repeated, several "
                              "(see above)")
     parser.add_argument("--traced-runs", type=int, default=3,
                         help="traced runs of each subject in the scroll and animation scenarios")

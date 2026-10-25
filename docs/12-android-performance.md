@@ -28,7 +28,7 @@ python3 android/bench/measure.py --trace-processor path/to/trace_processor_shell
 python3 android/bench/summarize.py bench-out/report.json
 ```
 
-`--optimizations parity|all|each|<names>` picks compose-rs's flags (parity, the default, turns them all off), `--scenarios` picks the scenarios (the stress screens: `stress_startup,stress_scroll,stress_animation`, [15](15-android-stress-benchmark.md)), and `--thermal-wait-limit 0 --rotate` waits for a cool device before each run, as the published rounds do.
+`--optimizations parity|recommended|all|each|<names>` picks compose-rs's flags (parity, the default, turns them all off; `--subject LIST`, repeated, runs several sets beside Compose in one session), `--scenarios` picks the scenarios (the stress screens: `stress_startup,stress_scroll,stress_animation`, [15](15-android-stress-benchmark.md)), and `--thermal-wait-limit 0 --rotate` waits for a cool device before each run, as the published rounds do.
 
 - **Startup**: 15 cold starts of each screen per app (`am force-stop`, then `am start -W`: `TotalTime`, from the launch to the first frame drawn). One cold start of each is also traced with Perfetto, to break the first frame down.
 - **Memory**: `dumpsys meminfo` 5 s after start, and again after scrolling (3 runs). Calling it runs the app's garbage collector, so the first measurement resets what the second counts.

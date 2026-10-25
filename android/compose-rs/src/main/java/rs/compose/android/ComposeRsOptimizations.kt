@@ -5,8 +5,8 @@ package rs.compose.android
  * [ComposeRsView.optimizations] set, the same as Rust's `compose_ui::platform::Optimization`s
  * (`optimizations.rs`, which a test checks these against; D520). Each is off by default: the
  * default ([DEFAULT], [NONE]) is the rendering Compose does, so the benchmarks against Compose
- * measure the same rendering and each optimization apart. Apps opt in ([ALL], or the ones they
- * name; D581).
+ * measure the same rendering and each optimization apart. Apps opt in ([RECOMMENDED], the flags
+ * with a measured gain; [ALL]; or the ones they name; D581, D601).
  *
  * Adding one: its bit here, and in Rust's table.
  */
@@ -74,13 +74,21 @@ object ComposeRsOptimizations {
     /** The ones on by default: none, the rendering Compose does (D581). */
     const val DEFAULT = NONE
 
+    /**
+     * The recommended ones: those with a gain measured on the device (Rust's
+     * `Optimization::RECOMMENDED`, D601): the hint session, drawing prefetched items ahead, the
+     * single-drawing fade with its companion flush layer (the fade alone grows HWUI's GPU caches
+     * by 31 %), and the paragraph kept at the same layout width. Not the default ([DEFAULT]).
+     */
+    const val RECOMMENDED = SINGLE_DRAWING_FADE or PERFORMANCE_HINT or REUSE_PARAGRAPH_AT_SAME_LAYOUT_WIDTH or DRAW_PREFETCHED_AHEAD or FLUSH_LAYERS_BEFORE_DROPPED_PATHS
+
     /** Every one. */
     const val ALL = SINGLE_DRAWING_FADE or PERFORMANCE_HINT or REUSE_PARAGRAPH_AT_SAME_LAYOUT_WIDTH or PREFETCH_TWO_AHEAD or PREFETCH_BUDGET_RECENT_MAXIMUM or PREFETCH_AT_REST or KEEP_ITEMS_BEHIND or DRAW_PREFETCHED_AHEAD or GRID_LINES_BEYOND or FLUSH_LAYERS_BEFORE_DROPPED_PATHS or PARAGRAPH_RENDER_NODES
 
     /**
-     * The set a list names: `none`, `all`, `default`, or names separated by commas (as Rust's,
-     * `single_drawing_fade`), each `-name` taking one out of what's before it
-     * (`all,-performance_hint`). Needs the app's compose-rs library loaded
+     * The set a list names: `none`, `all`, `recommended`, `default`, or names separated by commas
+     * (as Rust's, `single_drawing_fade`), each `-name` taking one out of what's before it
+     * (`all,-performance_hint`, `recommended,-performance_hint`). Needs the app's compose-rs library loaded
      * ([ComposeRsRuntime.loadLibrary]): the names are Rust's.
      *
      * @throws IllegalArgumentException for a name compose-rs doesn't know.

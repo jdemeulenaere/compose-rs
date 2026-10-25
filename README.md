@@ -157,7 +157,7 @@ Every decision, with its alternatives and revert cost, is in the decision log, s
 
 ## Parity mode and the optimizations
 
-By default compose-rs does the work Jetpack Compose 1.12.1 does: Compose's prefetch and its time budget, its layers, clips and shadows, and its text relayout rule (D560–D569). The default is parity: no flags, the `performance_hint` session included (D581). Everything compose-rs does beyond Compose is a flag an app opts in to, `all` for every one.
+By default compose-rs does the work Jetpack Compose 1.12.1 does: Compose's prefetch and its time budget, its layers, clips and shadows, and its text relayout rule (D560–D569). The default is parity: no flags, the `performance_hint` session included (D581). Everything compose-rs does beyond Compose is a flag an app opts in to: `recommended` for those with a measured gain, `all` for every one.
 
 Each flag's effect below was measured alone against parity on a Pixel 8 Pro, 5 runs a side ([docs/14](docs/14-performance-opportunities.md), "Backport candidates"; [docs/16](docs/16-backporting-to-compose.md) explains the main ones). "No change" means within the runs' spread.
 
@@ -175,39 +175,39 @@ Each flag's effect below was measured alone against parity on a Pixel 8 Pro, 5 r
 | `grid_lines_beyond` | Composes and places two grid lines beyond each side | Not measured (no grid scenario) |
 | `paragraph_render_nodes` | Records each paragraph into a render node of its own (Android) | A cost on the feed: main thread p90 +11 % |
 
-A set is named the same way everywhere: `none`, `all`, `default`, or names separated by commas, where `-name` takes one out of what comes before it (`all,-performance_hint`). `default` and an empty list are the defaults: none, the same as `none`.
+A set is named the same way everywhere: `none`, `recommended`, `all`, `default`, or names separated by commas, where `-name` takes one out of what comes before it (`recommended,-performance_hint`) and a set's name replaces what comes before it. `recommended` is `performance_hint`, `draw_prefetched_ahead`, `single_drawing_fade`, `flush_layers_before_dropped_paths` and `reuse_paragraph_at_same_layout_width` (D601). `default` and an empty list are the defaults: none, the same as `none`.
 
-**Android.** `ComposeRsView` takes the flags as bits of `ComposeRsOptimizations` (`DEFAULT`, `NONE`, `ALL`, one constant per flag), as a constructor argument or through its `optimizations` property. `ComposeRsOptimizations.parse` reads a list, and needs the library loaded first:
+**Android.** `ComposeRsView` takes the flags as bits of `ComposeRsOptimizations` (`DEFAULT`, `NONE`, `RECOMMENDED`, `ALL`, one constant per flag), as a constructor argument or through its `optimizations` property. `ComposeRsOptimizations.parse` reads a list, and needs the library loaded first:
 
 ```kotlin
 ComposeRsRuntime.loadLibrary("my_app")
-val view = ComposeRsView(context, "main", ComposeRsOptimizations.ALL)
+val view = ComposeRsView(context, "main", ComposeRsOptimizations.RECOMMENDED)
 view.optimizations = ComposeRsOptimizations.parse("performance_hint,draw_prefetched_ahead")
 view.optimizations = ComposeRsOptimizations.PERFORMANCE_HINT or ComposeRsOptimizations.DRAW_PREFETCHED_AHEAD
 ```
 
-**Desktop.** `run_app` takes `WindowOptions::optimizations`. `application`'s windows take what `compose::desktop::set_optimizations` set last. The `COMPOSE_OPTIMIZATIONS` environment variable overrides both (`COMPOSE_OPTIMIZATIONS=all cargo run -p todo`).
+**Desktop.** `run_app` takes `WindowOptions::optimizations`. `application`'s windows take what `compose::desktop::set_optimizations` set last. The `COMPOSE_OPTIMIZATIONS` environment variable overrides both (`COMPOSE_OPTIMIZATIONS=recommended cargo run -p todo`).
 
 ```rust
 use compose::desktop::{Optimizations, WindowOptions, run_app};
-run_app(WindowOptions { optimizations: Optimizations::all(), ..Default::default() }, App);
+run_app(WindowOptions { optimizations: Optimizations::recommended(), ..Default::default() }, App);
 ```
 
 **Rust hosts and tests.** `UiHost::set_optimizations` sets a host's flags. `compose::test::use_optimizations` sets them for the test rules made on the calling thread:
 
 ```rust
 use compose::ui::platform::{Optimization, Optimizations};
-host.set_optimizations(Optimizations::parse("all").unwrap());
+host.set_optimizations(Optimizations::parse("recommended,-performance_hint").unwrap());
 compose::test::use_optimizations(Optimizations::NONE.with(Optimization::SINGLE_DRAWING_FADE, true));
 ```
 
 **The bench app and measure.py.** bench-rs takes a list as an intent extra:
 
 ```bash
-adb shell am start -n rs.compose.bench.rs/.MainActivity -e screen feed -e optimizations all
+adb shell am start -n rs.compose.bench.rs/.MainActivity -e screen feed -e optimizations recommended
 ```
 
-measure.py's `--optimizations` takes `parity` (the default: `none`, the library's default), `all`, `each` (each flag alone against parity, interleaved), or names.
+measure.py's `--optimizations` takes `parity` (the default: `none`, the library's default), `recommended`, `all`, `each` (each flag alone against parity, interleaved), or names; `--subject LIST`, repeated, measures several compose-rs sets beside Compose in one session (`--subject recommended --subject all`).
 
 **Which to pick.** `all` is the best measured case: with it, compose-rs is ahead of Compose at every percentile on both threads, on every screen measured ([docs/12](docs/12-android-performance.md), [docs/15](docs/15-android-stress-benchmark.md)). Its costs are the hint session's CPU power (above) and the idle-time work of recording prefetched items ahead. If you pick flags one by one, turn on `flush_layers_before_dropped_paths` together with `single_drawing_fade`: the fade alone grows HWUI's GPU caches by 31 % on a screen whose stroked paths change every frame.
 

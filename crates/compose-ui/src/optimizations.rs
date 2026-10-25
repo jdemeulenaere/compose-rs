@@ -2,7 +2,8 @@
 //! a host sets (`UiHost::set_optimizations`; `ComposeRsView.optimizations` on Android,
 //! `WindowOptions::optimizations` on desktop), so the benchmarks against Compose can measure the
 //! same rendering (none of them, the default: the library's default is parity, D581) and each
-//! optimization apart (D520). Apps opt in (`all`, or the ones they name).
+//! optimization apart (D520). Apps opt in: `recommended` (the flags with a measured gain, D601),
+//! `all`, or the ones they name.
 //!
 //! Adding one: a constant of [`Optimization`] with the next bit, a row in
 //! [`Optimization::ALL`], and the same bit in Kotlin's `ComposeRsOptimizations`
@@ -179,6 +180,19 @@ impl Optimization {
         Optimization::PARAGRAPH_RENDER_NODES,
     ];
 
+    /// The recommended ones ([`Optimizations::recommended`]): those with a gain measured on the
+    /// device, each alone against parity (docs/14, "Backport candidates") and together against
+    /// `all` (docs/12; D601). `flush_layers_before_dropped_paths` is `single_drawing_fade`'s
+    /// companion: the fade alone grows HWUI's GPU caches by 31 % on a screen dropping stroked
+    /// paths every frame, and the flush layer brings them back.
+    pub const RECOMMENDED: &'static [Optimization] = &[
+        Optimization::SINGLE_DRAWING_FADE,
+        Optimization::PERFORMANCE_HINT,
+        Optimization::REUSE_PARAGRAPH_AT_SAME_LAYOUT_WIDTH,
+        Optimization::DRAW_PREFETCHED_AHEAD,
+        Optimization::FLUSH_LAYERS_BEFORE_DROPPED_PATHS,
+    ];
+
     /// Its bit in [`Optimizations::bits`].
     pub const fn mask(self) -> u64 {
         1 << self.bit
@@ -205,6 +219,14 @@ impl Optimizations {
         Optimization::ALL
             .iter()
             .filter(|optimization| optimization.default)
+            .fold(Optimizations::NONE, |set, optimization| set.with(*optimization, true))
+    }
+
+    /// The recommended ones ([`Optimization::RECOMMENDED`]): those with a measured gain, without
+    /// those that measured none or a cost (D601). Not the default, which is parity (D581).
+    pub fn recommended() -> Optimizations {
+        Optimization::RECOMMENDED
+            .iter()
             .fold(Optimizations::NONE, |set, optimization| set.with(*optimization, true))
     }
 
@@ -244,9 +266,11 @@ impl Optimizations {
         Optimizations(bits & Optimizations::all().0)
     }
 
-    /// Parses `none`, `all`, `default`, or a comma-separated list of names (each may start with
-    /// `-` to take it out of what's before it: `all,-performance_hint`); an empty text is the
-    /// defaults. An unknown name is an error naming it.
+    /// Parses `none`, `all`, `recommended`, `default`, or a comma-separated list of names (each
+    /// may start with `-` to take it out of what's before it: `all,-performance_hint`,
+    /// `recommended,-performance_hint`); a set's name replaces what's before it, a flag's adds to
+    /// it (`recommended,keep_items_behind`); an empty text is the defaults. An unknown name is an
+    /// error naming it.
     pub fn parse(text: &str) -> Result<Optimizations, String> {
         if text.trim().is_empty() {
             return Ok(Optimizations::defaults());
@@ -260,6 +284,7 @@ impl Optimizations {
             set = match (name, on) {
                 ("none", true) => Optimizations::NONE,
                 ("all", true) => Optimizations::all(),
+                ("recommended", true) => Optimizations::recommended(),
                 ("default", true) => Optimizations::defaults(),
                 _ => match Optimization::named(name) {
                     Some(optimization) => set.with(optimization, on),
@@ -341,5 +366,64 @@ mod tests {
              draw_prefetched_ahead,grid_lines_beyond,flush_layers_before_dropped_paths,\
              paragraph_render_nodes)"
         );
+    }
+
+    /// `recommended` is the flags with a measured gain (D601): the hint session, drawing
+    /// prefetched items ahead, the single-drawing fade with its companion flush layer, and the
+    /// paragraph kept at the same layout width; not those that measured none or a cost.
+    #[test]
+    fn the_recommended_set() {
+        let recommended = Optimizations::recommended();
+        assert_eq!(
+            format!("{recommended:?}"),
+            "Optimizations(single_drawing_fade,performance_hint,reuse_paragraph_at_same_layout_width,\
+             draw_prefetched_ahead,flush_layers_before_dropped_paths)"
+        );
+        for optimization in [
+            Optimization::PREFETCH_TWO_AHEAD,
+            Optimization::PREFETCH_BUDGET_RECENT_MAXIMUM,
+            Optimization::PREFETCH_AT_REST,
+            Optimization::KEEP_ITEMS_BEHIND,
+            Optimization::GRID_LINES_BEYOND,
+            Optimization::PARAGRAPH_RENDER_NODES,
+        ] {
+            assert!(!recommended.contains(optimization), "{}", optimization.name);
+        }
+        // The fade comes with its companion (the fade alone grows the GPU caches by 31 %).
+        assert!(recommended.contains(Optimization::SINGLE_DRAWING_FADE));
+        assert!(recommended.contains(Optimization::FLUSH_LAYERS_BEFORE_DROPPED_PATHS));
+        // It draws differently from parity (the fade), and isn't the default (D581).
+        assert!(Optimizations::NONE.draws_differently(recommended));
+        assert_ne!(Optimizations::defaults(), recommended);
+        let mut table = Optimization::RECOMMENDED.to_vec();
+        table.dedup();
+        assert_eq!(table.len(), 5);
+        assert!(table.iter().all(|optimization| Optimization::ALL.contains(optimization)));
+    }
+
+    #[test]
+    fn recommended_parses_and_combines() {
+        let hint = Optimization::PERFORMANCE_HINT;
+        let behind = Optimization::KEEP_ITEMS_BEHIND;
+        let recommended = Optimizations::recommended();
+        assert_eq!(Optimizations::parse("recommended"), Ok(recommended));
+        assert_eq!(Optimizations::parse(" recommended "), Ok(recommended));
+        assert_eq!(
+            Optimizations::parse("recommended,-performance_hint"),
+            Ok(recommended.with(hint, false))
+        );
+        assert_eq!(
+            Optimizations::parse("recommended,keep_items_behind"),
+            Ok(recommended.with(behind, true))
+        );
+        // A set's name replaces what's before it.
+        assert_eq!(Optimizations::parse("keep_items_behind,recommended"), Ok(recommended));
+        assert_eq!(Optimizations::parse("all,recommended"), Ok(recommended));
+        assert_eq!(Optimizations::parse("recommended,all"), Ok(Optimizations::all()));
+        assert_eq!(Optimizations::parse("recommended,none"), Ok(Optimizations::NONE));
+        // Only a set's name, not its removal: `-recommended` is unknown, as `-all` is.
+        assert!(Optimizations::parse("all,-recommended").is_err());
+        assert!(Optimizations::parse("-all").is_err());
+        assert_eq!(Optimizations::from_bits(recommended.bits()), recommended);
     }
 }

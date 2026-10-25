@@ -1700,6 +1700,16 @@ fn the_kotlin_constants_are_rusts() {
     assert!(
         optimizations.contains(&format!("const val ALL = {}\n", all.join(" or "))),
         "ALL is {all:?}"
+    );    // The recommended ones (D601), in Rust's table's order.
+    let recommended: Vec<String> = Optimization::ALL
+        .iter()
+        .filter(|optimization| Optimizations::recommended().contains(**optimization))
+        .map(|optimization| optimization.name.to_uppercase())
+        .collect();
+    assert!(!recommended.is_empty());
+    assert!(
+        optimizations.contains(&format!("const val RECOMMENDED = {}\n", recommended.join(" or "))),
+        "RECOMMENDED is {recommended:?}"
     );
 }
 

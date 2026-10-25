@@ -599,7 +599,7 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_setOptimizations(
 }
 
 /// `ComposeRsNative.parseOptimizations(text)`: the bits of a list of optimizations (`none`,
-/// `all`, `default`, or names separated by commas, `-name` taking one out:
+/// `recommended`, `all`, `default`, or names separated by commas, `-name` taking one out:
 /// `Optimizations::parse`), or -1 if a name is unknown (logged).
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_rs_compose_android_ComposeRsNative_parseOptimizations<'local>(

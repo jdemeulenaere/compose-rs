@@ -520,6 +520,105 @@ class OptimizationsTest(unittest.TestCase):
             measure.THERMAL.update(original)
         self.assertEqual(bits, {"compose": None, "rs": 0})
 
+    def test_recommended_runs_bench_rs_with_rusts_set(self):
+        mode, subjects = measure.parse_optimizations("recommended", self.NAMES)
+        self.assertEqual(mode, "recommended")
+        self.assertEqual(subjects, [("compose", "rs.compose.bench.compose", None),
+                                    ("rs", "rs.compose.bench.rs", "recommended")])
+        # In a list too, combined with names.
+        mode, subjects = measure.parse_optimizations("recommended,-performance_hint", self.NAMES)
+        self.assertEqual((mode, subjects[1][2]), ("list", "recommended,-performance_hint"))
+
+    def test_recommended_bits_from_rusts_table(self):
+        source = OPTIMIZATIONS_RS + """\
+    pub const RECOMMENDED: &'static [Optimization] = &[
+        Optimization::SINGLE_DRAWING_FADE,
+        Optimization::KEEP_ITEMS_BEHIND,
+    ];
+"""
+        table = measure.optimization_table(source)
+        recommended = measure.optimization_recommended(source)
+        self.assertEqual(recommended, ["single_drawing_fade", "keep_items_behind"])
+        self.assertEqual(measure.optimization_bits("recommended", table, recommended), 0b1000001)
+        self.assertEqual(
+            measure.optimization_bits("recommended,performance_hint", table, recommended),
+            0b1000011)
+        self.assertEqual(
+            measure.optimization_bits("recommended,-keep_items_behind", table, recommended), 0b1)
+        # A set's name replaces what's before it, as Rust's parse.
+        self.assertEqual(
+            measure.optimization_bits("performance_hint,recommended", table, recommended),
+            0b1000001)
+        with self.assertRaises(SystemExit):
+            measure.optimization_recommended(OPTIMIZATIONS_RS)
+        # The real table: the five flags with a measured gain (D601), as Rust's test says.
+        with open(measure.OPTIMIZATIONS_SOURCE) as file:
+            real = file.read()
+        self.assertEqual(sorted(measure.optimization_recommended(real)), [
+            "draw_prefetched_ahead", "flush_layers_before_dropped_paths", "performance_hint",
+            "reuse_paragraph_at_same_layout_width", "single_drawing_fade"])
+
+    def test_subjects_run_several_bench_rs_lists_beside_compose(self):
+        mode, subjects = measure.parse_subjects(["recommended", "all"], self.NAMES)
+        self.assertEqual(mode, "subjects")
+        self.assertEqual(subjects, [("compose", "rs.compose.bench.compose", None),
+                                    ("rs-recommended", "rs.compose.bench.rs", "recommended"),
+                                    ("rs-all", "rs.compose.bench.rs", "all")])
+        _, subjects = measure.parse_subjects(
+            ["no-hint=recommended, -performance_hint", "none"], self.NAMES)
+        self.assertEqual(subjects[1:], [("no-hint", "rs.compose.bench.rs",
+                                         "recommended,-performance_hint"),
+                                        ("rs-none", "rs.compose.bench.rs", "none")])
+        for bad in (["faster"], ["recommended,-performance_hint"], ["all", "all"],
+                    ["a b=all"], ["x="], ["compose=all"]):
+            with self.assertRaises(SystemExit, msg=bad):
+                measure.parse_subjects(bad, self.NAMES)
+
+    def test_main_wires_several_subjects(self):
+        """`--subject` subjects, rotated, each one's bits; not with --optimizations."""
+        with open(measure.OPTIMIZATIONS_SOURCE) as file:
+            source = file.read()
+        table = measure.optimization_table(source)
+        recommended = measure.optimization_recommended(source)
+        arguments = type("Arguments", (), {
+            "optimizations": "parity", "each_only": None, "subject": ["recommended", "all"],
+            "battery_limit": 34.0, "thermal_wait_limit": 0, "skin_limit": 35.0, "rotate": 1})
+        original = dict(measure.THERMAL)
+        try:
+            mode, subjects, bits = measure.configure(arguments, source)
+            arguments.optimizations = "all"
+            with self.assertRaises(SystemExit):
+                measure.configure(arguments, source)
+        finally:
+            measure.THERMAL.update(original)
+        self.assertEqual(mode, "subjects")
+        self.assertEqual([name for name, _, _ in subjects], ["rs-recommended", "rs-all", "compose"])
+        every = measure.optimization_bits("all", table)
+        self.assertEqual(bits["compose"], None)
+        self.assertEqual(bits["rs-all"], every)
+        self.assertEqual(bits["rs-recommended"],
+                         measure.optimization_bits(",".join(recommended), table))
+        self.assertNotEqual(bits["rs-recommended"], every)
+        self.assertEqual(bits["rs-recommended"] & ~every, 0)
+
+    def test_the_parser_takes_subjects(self):
+        """`--subject` repeated reaches `configure` as a list."""
+        captured = {}
+
+        def configure(arguments, source):
+            captured["subject"] = arguments.subject
+            raise SystemExit(0)
+
+        original = measure.configure
+        measure.configure = configure
+        try:
+            with self.assertRaises(SystemExit):
+                measure.main(["--trace-processor", "tp", "--out", "out",
+                              "--subject", "recommended", "--subject", "all"])
+        finally:
+            measure.configure = original
+        self.assertEqual(captured["subject"], ["recommended", "all"])
+
     def test_a_list_is_checked(self):
         mode, subjects = measure.parse_optimizations(
             "all, -performance_hint", self.NAMES)

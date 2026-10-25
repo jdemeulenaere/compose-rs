@@ -9,7 +9,7 @@
 //! Environment variables: `COMPOSE_SCREENSHOT=path.png` writes the first window's last frame
 //! when the app exits; `COMPOSE_FRAME_STATS=1` prints each frame's timings;
 //! `COMPOSE_EXIT_AFTER_FRAMES=n` exits after `n` frames, or once idle (for smoke tests);
-//! `COMPOSE_OPTIMIZATIONS=none|all|default|name,…` sets compose-rs's optimizations beyond
+//! `COMPOSE_OPTIMIZATIONS=none|recommended|all|default|name,…` sets compose-rs's optimizations beyond
 //! Compose's rendering (`Optimizations::parse`, over `set_optimizations`'s and
 //! `WindowOptions::optimizations`).
 
