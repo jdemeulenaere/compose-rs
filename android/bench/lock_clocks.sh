@@ -3,7 +3,7 @@
 # "Fixed clocks"; D640). Host-side: it runs `adb shell` (as root: `adb root` first, on a
 # userdebug build).
 #
-#   lock_clocks.sh lock STATE [POLICY=KHZ ...] [gpu=KHZ] [mif=KHZ]
+#   lock_clocks.sh lock STATE [POLICY=KHZ ...] [gpu=KHZ] [mif=KHZ] [placement=UCLAMP]
 #   lock_clocks.sh verify STATE      the locked clocks still hold (exit 1 if not)
 #   lock_clocks.sh restore STATE     writes the recorded originals back and checks them
 #   lock_clocks.sh status            each policy's and device's limits and current clock
@@ -16,13 +16,21 @@
 # wrote, checks them and removes STATE. Nothing else on the device is changed: no service is
 # stopped, no property set.
 #
-# The defaults are the Pixel 8 Pro's (Tensor G3): the power HAL's own FIXED_PERFORMANCE values
-# for the CPUs (powerhint.json: little 1,425 MHz, mid 1,572 MHz, big 1,745 MHz, all held for a
-# 10-minute stress animation without throttling, D640), and the GPU at 521 MHz, the middle of
-# its 13 steps. `policy0=1197000` (say) overrides one; `gpu=none` leaves the GPU alone; `mif=KHZ`
+# The defaults are the Pixel 8 Pro's (Tensor G3), about the middle of each range (D640): little
+# 1,197 MHz (of 324 to 1,704), mid 1,328 MHz (402 to 2,367), big 1,745 MHz (500 to 2,914), the
+# GPU 521 MHz (150 to 890). They held 10 minutes of the stress animation, with and without
+# `placement=512`, at thermal status 0; the power HAL's FIXED_PERFORMANCE values (1,425, 1,572,
+# 1,745 MHz) didn't: the thermal HAL capped the mid cluster after 576 s. `policy0=1197000` (say) overrides one; `gpu=none` leaves the GPU alone; `mif=KHZ`
 # writes the memory interconnect's devfreq too (Exynos's devfreq_mif: min_freq and max_freq),
 # but on a Pixel it doesn't hold: the power HAL writes the MIF's, DSU's and BCI's minimum at every
 # app launch and CPU load reset (an ADPF hint), then resets it to its own default.
+#
+# `placement=UCLAMP` (0 to 1024; not set by default) also raises the top-app group's minimum
+# utilization clamp, so the foreground app's threads run on the mid and big cores whatever their
+# load or hint-session boost (D641). On this Pixel the scheduler's groups are the vendor
+# scheduler's (/proc/vendor_sched/groups/ta/uclamp_min): the cpu cgroup's
+# /dev/cpuctl/top-app/cpu.uclamp.min holds no task on Android 17 (every task is in the root cpu
+# cgroup), so writing it changes nothing.
 #
 # What it doesn't hold: the scheduler still places threads on the little, mid or big cores (by
 # utilization and uclamp, which the hint sessions set), the thermal HAL can still cap a clock
@@ -41,7 +49,7 @@ command=$1
 shift
 
 CPUFREQ=/sys/devices/system/cpu/cpufreq
-DEFAULTS="policy0=1425000 policy4=1572000 policy8=1745000 gpu=521000"
+DEFAULTS="policy0=1197000 policy4=1328000 policy8=1745000 gpu=521000"
 
 on_device() {
     adb shell "$1" < /dev/null | tr -d '\r'
@@ -68,6 +76,8 @@ target() {
         policy*) echo "$CPUFREQ/$1 scaling_min_freq scaling_max_freq" ;;
         gpu) echo "$(gpu_dir) scaling_min_freq scaling_max_freq" ;;
         mif) echo "$(mif_dir) min_freq max_freq" ;;
+        # One file, written as both "minimum" and "maximum".
+        placement) on_device '[ -e /proc/vendor_sched/groups/ta/uclamp_min ] && echo /proc/vendor_sched/groups/ta uclamp_min uclamp_min; true' ;;
         *) echo "lock_clocks.sh: unknown target $1" >&2; exit 2 ;;
     esac
 }
@@ -76,6 +86,7 @@ available() {
     local dir=$1 name=$2
     case $name in
         policy*) on_device "cat $dir/scaling_available_frequencies" ;;
+        placement) seq 0 1024 | tr '\n' ' ' ;;
         *) on_device "cat $dir/available_frequencies" ;;
     esac
 }
@@ -114,6 +125,7 @@ current() {
     local dir=$1 name=$2
     case $name in
         policy*) on_device "cat $dir/scaling_cur_freq" ;;
+        placement) on_device "cat $dir/uclamp_min" ;;
         *) on_device "cat $dir/cur_freq" ;;
     esac
 }
@@ -167,6 +179,8 @@ case $command in
                 echo "lock_clocks.sh: no $name found; not locked" >&2
                 continue
             fi
+            # A target the first lock didn't record (placement, say): its original first.
+            grep -q "^original:$name " "$state" || echo "original:$name $(on_device "cat $dir/$min_file") $(on_device "cat $dir/$max_file")" >> "$state"
             if ! available "$dir" "$name" | tr ' ' '\n' | grep -qx "$khz"; then
                 echo "lock_clocks.sh: $name has no $khz kHz step: $(available "$dir" "$name")" >&2
                 exit 1
@@ -200,6 +214,11 @@ case $command in
                 echo "$name: restored to $min..$max"
             else
                 echo "$name: $now_min..$now_max after restoring $min..$max" >&2
+                # A policy's scaling_max_freq reads the effective limit, the thermal HAL's cap
+                # included: a hot device reads lower until it cools.
+                if [ "$now_min" = "$min" ] && [ "$now_max" -lt "$max" ]; then
+                    echo "  (a thermal cap? run 'restore' again once the device is cool)" >&2
+                fi
                 failed=1
             fi
         done < <(grep '^original:' "$state" | sed 's/^original://')
@@ -216,6 +235,7 @@ case $command in
         [ -z "$gpu" ] || echo "gpu: min $(on_device "cat $gpu/scaling_min_freq") max $(on_device "cat $gpu/scaling_max_freq") cur $(on_device "cat $gpu/cur_freq")"
         mif=$(mif_dir)
         [ -z "$mif" ] || echo "mif: min $(on_device "cat $mif/min_freq") max $(on_device "cat $mif/max_freq") cur $(on_device "cat $mif/cur_freq")"
+        echo "placement (top-app uclamp_min): $(on_device 'cat /proc/vendor_sched/groups/ta/uclamp_min 2>/dev/null')"
         ;;
     *)
         usage

@@ -1124,6 +1124,14 @@ gpu 521000 521000 521000
 """
 
 
+class TraceBufferTest(unittest.TestCase):
+    def test_a_wrapped_trace_buffer_is_said(self):
+        self.assertEqual(measure.buffer_overwritten(
+            [{"name": "traced_buf_bytes_overwritten", "value": "294912"}]), 294912)
+        self.assertEqual(measure.buffer_overwritten([]), 0)
+        self.assertTrue(issubclass(measure.TraceWrapped, SystemExit))
+
+
 class LockedClocksTest(unittest.TestCase):
     def test_the_lock_state(self):
         self.assertEqual(measure.locked_clocks(LOCK_STATE),
@@ -1229,6 +1237,29 @@ class LockedClocksTest(unittest.TestCase):
         self.assertEqual(summarize.cluster_summary(traces),
                          "main little 15 mid 6 big 2 ms | render little 3 mid 7 big 0 ms")
         self.assertIsNone(summarize.cluster_summary([{}]))
+
+    def test_fixed_placement(self):
+        """The top-app group's uclamp.min (`placement=`, D641) is read back with the clocks and
+        must hold too."""
+        state = LOCK_STATE + "locked:placement 512\ntouched:placement\n"
+        expected = measure.locked_clocks(state)
+        self.assertEqual(expected["placement"], 512)
+        clocks = measure.parse_clocks(CLOCKS_OUTPUT + "placement 512\n")
+        self.assertEqual(clocks["placement"], {"value": 512})
+        self.assertEqual(measure.clocks_moved(expected, clocks), [])
+        moved = measure.parse_clocks(CLOCKS_OUTPUT + "placement 1\n")
+        self.assertEqual(measure.clocks_moved(expected, moved),
+                         ["placement: top-app uclamp.min 1 (locked at 512)"])
+        self.assertEqual(measure.clocks_moved(expected, measure.parse_clocks(CLOCKS_OUTPUT)),
+                         ["placement: not read"])
+        # The flag and the state must agree: a run can't measure placement unawares.
+        self.assertEqual(measure.check_placement(expected, True), 512)
+        self.assertIsNone(measure.check_placement(measure.locked_clocks(LOCK_STATE), False))
+        self.assertIsNone(measure.check_placement(None, False))
+        for given, flag in ((measure.locked_clocks(LOCK_STATE), True), (expected, False),
+                            (None, True)):
+            with self.assertRaises(SystemExit):
+                measure.check_placement(given, flag)
 
     def test_the_parser_takes_locked_clocks(self):
         with tempfile.TemporaryDirectory() as directory:

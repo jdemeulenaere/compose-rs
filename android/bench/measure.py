@@ -104,7 +104,11 @@ moves those at every launch and load reset, so they aren't locked. At locked clo
 hold no frequency event, so "work" scales each core's running time by its locked frequency.
 Every traced run reports each thread's running time on the little, mid and big cores
 (`"cluster_ms"`), which locked clocks don't equalize: the scheduler and the hint sessions'
-uclamp still place threads.
+uclamp still place threads. With --fixed-placement as well, the state also locks the top-app
+group's minimum utilization clamp (`lock_clocks.sh … placement=512`: /proc/vendor_sched/groups/
+ta/uclamp_min on a Pixel, D641), which keeps the foreground app's threads off the little cores
+whatever their load or boost; it is read back and checked as the clocks, and the report records
+it (`"fixed_placement"`).
 
 The traces include atrace's `power` category: Android 17's power HAL traces its ADPF counters
 (the RenderThread's boost) there.
@@ -464,8 +468,10 @@ duration_ms: {duration}
 # The trace buffer: enough for the feed's scenarios. The stress screens' traces hold several
 # times more (HWUI traces each of its operations: 140 cells' layers each frame), and a ring
 # buffer that wraps loses the process table scanned at the start, and with it every frame.
-TRACE_BUFFER_KB = 65536
-STRESS_TRACE_BUFFER_KB = 393216
+# Android 17 writes more (a feed scroll's trace about 64 MB, where Android 16's 64 MB buffer had
+# room): three times as much now, and a run whose buffer wrapped stops (`check_buffer`).
+TRACE_BUFFER_KB = 196608
+STRESS_TRACE_BUFFER_KB = 786432
 
 
 def start_trace(package, duration_ms, name, buffer_kb=TRACE_BUFFER_KB):
@@ -508,6 +514,26 @@ def query(trace_processor, trace, sql):
         cells = [cell.strip('"') for cell in line.split(",")]
         rows.append(dict(zip(header, cells)))
     return rows
+
+
+class TraceWrapped(SystemExit):
+    """A trace whose ring buffer wrapped: its start is lost (the process table, the warm-up's
+    input), so its frames can't be trusted."""
+
+
+def buffer_overwritten(rows):
+    """The bytes a trace's ring buffers overwrote (its `stats`' rows)."""
+    return sum(int(float(row.get("value", "0") or 0)) for row in rows
+               if row.get("name") == "traced_buf_bytes_overwritten")
+
+
+def check_buffer(trace_processor, trace):
+    """Raises TraceWrapped if the trace's buffer wrapped."""
+    overwritten = buffer_overwritten(query(trace_processor, trace, """
+        SELECT name, value FROM stats WHERE name = 'traced_buf_bytes_overwritten'"""))
+    if overwritten:
+        raise TraceWrapped(f"{trace}: the trace buffer wrapped ({overwritten} bytes overwritten): "
+                           "a bigger buffer is needed")
 
 
 def percentile(values, fraction):
@@ -755,7 +781,8 @@ WORK_PAST_VSYNC_NS = 1_200_000
 
 def frame_stats(trace_processor, trace, package, capacities=None, since=0):
     """FrameTimeline jank and the app's main thread and RenderThread time per frame, from
-    `since` (a trace timestamp: after a warm-up) on."""
+    `since` (a trace timestamp: after a warm-up) on. Stops if the trace's buffer wrapped."""
+    check_buffer(trace_processor, trace)
     timeline = query(
         trace_processor,
         trace,
@@ -1188,7 +1215,10 @@ CLOCKS_COMMAND = (
     "for d in /sys/devices/platform/*.mali; do [ -e $d/scaling_max_freq ] && echo gpu "
     "$(cat $d/scaling_min_freq) $(cat $d/scaling_max_freq) $(cat $d/cur_freq); done; "
     "for d in /sys/class/devfreq/*; do n=${d##*devfreq_}; case $n in dsu|mif|bci) "
-    "echo \"## $n\"; cat $d/time_in_state;; esac; done")
+    "echo \"## $n\"; cat $d/time_in_state;; esac; done; "
+    # The top-app group's minimum utilization clamp (lock_clocks.sh's `placement`, D641).
+    "[ -e /proc/vendor_sched/groups/ta/uclamp_min ] && "
+    "echo placement $(cat /proc/vendor_sched/groups/ta/uclamp_min); true")
 
 
 def parse_clocks(output):
@@ -1198,7 +1228,10 @@ def parse_clocks(output):
     devfreq = None
     for line in output.splitlines():
         parts = line.split()
-        if line.startswith("## ") and len(parts) == 2:
+        if len(parts) == 2 and parts[0] == "placement" and parts[1].isdigit():
+            devfreq = None
+            clocks["placement"] = {"value": int(parts[1])}
+        elif line.startswith("## ") and len(parts) == 2:
             devfreq = parts[1]
             clocks["residency"][devfreq] = {}
         elif devfreq and len(parts) == 2 and all(part.isdigit() for part in parts):
@@ -1225,11 +1258,28 @@ def clocks_moved(expected, clocks):
         clock = clocks.get(name)
         if clock is None:
             moved.append(f"{name}: not read")
+        elif name == "placement":
+            if clock["value"] != khz:
+                moved.append(f"placement: top-app uclamp.min {clock['value']} (locked at {khz})")
         elif clock["min"] != khz or clock["max"] != khz or (
                 name.startswith("policy") and clock["cur"] != khz):
             moved.append(f"{name}: min {clock['min']}, max {clock['max']}, now {clock['cur']} "
                          f"(locked at {khz})")
     return moved
+
+
+def check_placement(expected, fixed_placement):
+    """The top-app group's locked uclamp.min with --fixed-placement, None without; stops unless
+    the flag and lock_clocks.sh's state agree (a lock of `placement` changes where threads run,
+    which a run must say)."""
+    locked = (expected or {}).get("placement")
+    if fixed_placement and locked is None:
+        raise SystemExit("--fixed-placement: --locked-clocks's state locks no placement "
+                         "(lock_clocks.sh lock STATE … placement=UCLAMP)")
+    if not fixed_placement and locked is not None:
+        raise SystemExit("--locked-clocks: the state locks the placement (top-app uclamp.min "
+                         f"{locked}): pass --fixed-placement")
+    return locked
 
 
 def check_clocks(what):
@@ -1582,7 +1632,7 @@ NAVIGATION_OVERHEAD_S = 1.0
 # The empty section each app's heavy screen starts its composition with.
 NAVIGATION_MARKER = "navigation: heavy screen"
 # The heavy frames' HWUI operations are traced a slice each.
-NAVIGATION_TRACE_BUFFER_KB = 196608
+NAVIGATION_TRACE_BUFFER_KB = 393216
 # A tap's input event is the last one delivered before the heavy frame, at most this long before.
 NAVIGATION_INPUT_WINDOW_NS = 1_000_000_000
 
@@ -1853,6 +1903,8 @@ def navigation_trace(trace_processor, trace, package, capacities):
     to 100 ms after its present."""
     def rows(sql):
         return query(trace_processor, trace, sql)
+
+    check_buffer(trace_processor, trace)
 
     app = f"""FROM slice s JOIN thread_track tt ON s.track_id = tt.id
         JOIN thread t USING (utid) JOIN process p USING (upid) WHERE p.name = '{package}'"""
@@ -2134,6 +2186,9 @@ def main(argv=None):
     parser.add_argument("--locked-clocks", default=None, metavar="STATE",
                         help="lock_clocks.sh's state file: check before and after each run, "
                              "and in each trace, that the locked clocks hold (see above)")
+    parser.add_argument("--fixed-placement", action="store_true",
+                        help="with --locked-clocks: the state also locks the top-app group's "
+                             "uclamp.min (lock_clocks.sh's placement=), checked as the clocks")
     arguments = parser.parse_args(argv)
     scenarios = parse_scenarios(arguments.scenarios)
     with open(OPTIMIZATIONS_SOURCE) as file:
@@ -2165,6 +2220,7 @@ def main(argv=None):
     if len(set(report["target_sdk"].values())) > 1:
         print(f"warning: the apps target different SDKs: {report['target_sdk']}")
     LOCKED["expected"] = load_locked_clocks(arguments.locked_clocks)
+    report["fixed_placement"] = check_placement(LOCKED["expected"], arguments.fixed_placement)
     if LOCKED["expected"] is not None:
         start_clocks = read_clocks()
         LOCKED["cpus"] = {name: value["cpus"] for name, value in start_clocks.items()
