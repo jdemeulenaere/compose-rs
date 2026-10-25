@@ -46,7 +46,7 @@ fn Greeting(name: SharedString, count: i32) {
 
 The pieces:
 
-- **Group key**: a hash of the declaration, computed by the macro and emitted as a literal: the crate name, the source file (relative to the package) and the function's name. It doesn't depend on line numbers or formatting, so keys and test dumps stay stable across unrelated edits, and it is the same on every machine. A literal rather than a `const` item: each `const` costs the compiler a body to check and evaluate, about a third of a millisecond per composable.
+- **Group key**: a hash of the declaration, computed by the macro and emitted as a literal: the crate name, the source file (relative to the package, or to `OUT_DIR` for generated code, or just the file's name for code from another crate's macro) and the function's name; region keys are literals too. It doesn't depend on line numbers or formatting, so keys and test dumps stay stable across unrelated edits, and it is the same on every machine. A literal rather than a `const` item: each `const` costs the compiler a body to check and evaluate, about a third of a millisecond per composable.
 - **Kept arguments**: one slot holds a tuple of the arguments. It is allocated once and updated in place when an argument changes. Restart reads it back.
 - **Restart function**: a non-capturing closure, which coerces to a plain `fn` pointer. Registering it allocates nothing.
 - **Groups are guards.** Restart, replace and region groups end when their guard drops, so `return`, `break`, `continue` and `?` in a body keep them balanced without rewriting jumps. While a panic unwinds, guards don't end their groups: the pass is poisoned anyway ([04](04-runtime.md)).

@@ -339,7 +339,7 @@ pub fn Menu() {
 
 Outside a composition (a test, an app's model), `DrawerState::new(…)` and the other holders' constructors return the holder's owner, `Owned<DrawerState>`, which frees the holder when dropped. Keep the owner, and copy the handle out of it (`*owner`) for closures.
 
-`let state = *DrawerState::new(…);` compiles but drops the owner at once: the handle then does nothing (with a warning in debug builds). `FocusRequester` is the exception: it owns nothing, and `FocusRequester::new()` returns the handle itself. See [D240](../decisions.md).
+`let state = *DrawerState::new(…);` compiles but drops the owner at once: the handle then does nothing (with a warning in debug builds). `FocusRequester` is the exception: it owns nothing, and `FocusRequester::new()` returns the handle itself. See [D240](../decisions/runtime.md#d240).
 
 ### Values a lambda would move
 

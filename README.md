@@ -153,7 +153,7 @@ The Android comparison with Jetpack Compose (`android/bench/measure.py`, with Pe
 15. [Android stress benchmark](docs/15-android-stress-benchmark.md): a heavy list and a screen of hundreds of animations, in both, for jank and memory.
 16. [Backporting to Compose](docs/16-backporting-to-compose.md): compose-rs's optimizations that Jetpack Compose or HWUI could adopt, with the evidence and a sketch of each change.
 
-Every decision, with its alternatives and revert cost, is in [docs/decisions.md](docs/decisions.md); see [docs/02](docs/02-architecture.md) for how the crates fit together.
+Every decision, with its alternatives and revert cost, is in the decision log, split by area and indexed by number in [docs/decisions.md](docs/decisions.md); see [docs/02](docs/02-architecture.md) for how the crates fit together.
 
 ## Parity mode and the optimizations
 

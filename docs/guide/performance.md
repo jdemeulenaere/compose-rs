@@ -161,7 +161,7 @@ pub fn Heartbeat() {
 
 `LazyColumn`, `LazyRow`, `LazyVerticalGrid` and `LazyHorizontalGrid` compose and lay out only the items in view.
 
-While a list scrolls, it prefetches between frames, as Compose's prefetch does: when the main thread is idle before the next frame, it composes and measures the next item in the scroll direction, so the frame that shows the item has nothing left to compose. On the Pixel 8 Pro this took the main thread's time per frame while scrolling, at the 99th percentile, from 8.6 ms to 3.9 ms ([D156](../decisions.md), [docs/12](../12-android-performance.md)).
+While a list scrolls, it prefetches between frames, as Compose's prefetch does: when the main thread is idle before the next frame, it composes and measures the next item in the scroll direction, so the frame that shows the item has nothing left to compose. On the Pixel 8 Pro this took the main thread's time per frame while scrolling, at the 99th percentile, from 8.6 ms to 3.9 ms ([D156](../decisions/lazy-and-prefetch.md#d156), [docs/12](../12-android-performance.md)).
 
 Keys (`items_keyed`, `items_list_keyed`) keep an item's state and composition with the item when items before it come or go, so the unchanged items skip and the scroll position follows the first visible item.
 

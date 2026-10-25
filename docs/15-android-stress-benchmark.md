@@ -50,6 +50,10 @@ Each item has several times a feed post's nodes. A carousel composes and lays ou
 - **A card that grows to four lines and shrinks back to one every second.** It toggles from a `delay(1000)` loop, with `animateContentSize(tween(500))` on its column. This is a layout animation that moves what's below it.
 - **A 140 dp `Canvas` of 50 sine waves**, each a 48-segment stroked path with its own amplitude, frequency and speed. The waves are recomputed from an infinite transition read while drawing.
 
+**`grid`** (D473; `examples/feed/src/grid.rs`, `bench-compose`'s `Grid.kt`) is a `LazyVerticalGrid` of 3,000 keyed tiles, `Adaptive(100.dp)` (four columns on the Pixel 8 Pro), 8 dp apart, each a square of a palette color rounded 12 dp holding an icon and its label, in three content types (the icon). It isn't a measure.py scenario (the scroll benchmarks are lazy lists only), but is there for ad hoc traces of grids.
+
+**`resize`** (D553; `examples/feed/src/resize.rs`, `bench-compose`'s `Resize.kt`, widget for widget; not a measure.py scenario either) is a box under a top app bar whose content is laid out at a width animating between half and all of it (1.5 s each way, linear, read while measuring, as a window being resized): a title, a wrapping paragraph, a centered title across the width, an ellipsized line, a 10 × 4 grid of labelled cells and 12 nested levels of labels (56 texts). Its A/B is in `android/bench/results/2026-10-24-pixel-8-pro-resize-text.json`; `benchmarks/benches/text.rs` is its headless counterpart.
+
 The two apps' screens are pixel-identical at their start since the fidelity audit (D570–D573, "What differs" below); the animated screens' layouts and line breaks match by eye. Before it, side by side at the top of the list, mid-scroll with a header stuck and in the animation, they differed in Material version details:
 
 - Kotlin's `OutlinedButton` label was `onSurfaceVariant` where compose-rs's was `primary`, and its chip and card outlines lighter (D572 took Material 3 1.4.0's tokens).
@@ -80,7 +84,7 @@ D400 records the choices. A fresh reviewer checked the two implementations befor
 
 ## Compose's defaults (version 1.12.1)
 
-What the Kotlin app gets by default, read from the sources jars of Compose BOM 2026.09.00 (foundation, ui, ui-graphics 1.12.1; material3 1.4.0), since D540. File names are under `androidx/compose/…` in each jar, `commonMain` unless marked `android`. Everything in (a), (b) and (f) is the same in 1.11.4 (rounds 1 to 13), whose prefetch files differ only in the Robolectric check; in (c) and (d), 1.12 adds layer outsets, which nothing here uses.
+What the Kotlin app gets by default, read from the sources jars of Compose BOM 2026.09.00 (foundation, ui, ui-graphics 1.12.1; material3 1.4.0), since D540. Compose 1.12's AARs require `compileSdk` 37, so the Kotlin apps compile against API 37 and keep `targetSdk` 36 (no runtime behaviour opted in); the compose-rs library and bench-rs stay on 36. File names are under `androidx/compose/…` in each jar, `commonMain` unless marked `android`. Everything in (a), (b) and (f) is the same in 1.11.4 (rounds 1 to 13), whose prefetch files differ only in the Robolectric check; in (c) and (d), 1.12 adds layer outsets, which nothing here uses.
 
 **(a) No cache window on lists; one item ahead.** `LazyColumn`'s `state = rememberLazyListState()` (`LazyDsl.kt:330`) builds `LazyListState(index, offset)`, which passes `LazyListPrefetchStrategy()` (`LazyListState.kt:185-188`); a `LazyLayoutCacheWindow` only comes through the opt-in constructor `LazyListState(cacheWindow, …)` (`:170-177`, `LazyListCacheWindowStrategy`). The cache window is the default only for `Pager` (`ComposeFoundationFlags.isCacheWindowForPagerEnabled = true`, `ComposeFoundationFlags.kt:97`). The default strategy (`LazyListPrefetchStrategy.kt:137-255`) prefetches **one item ahead and none behind**: `visibleItemsInfo.last().index + 1` scrolling forward (`delta < 0`), `first().index - 1` backward (`:236-242`). It cancels its request when the direction turns (`:163-169`) or when, after a layout, the index it holds isn't the next one any more (`:244-254`), and marks it urgent when the same delta again would reach the item: `lastItem.offset + lastItem.size + spacing - viewportEndOffset < -delta` (`:174-182`; backward `viewportStartOffset - firstItem.offset < delta`).
 
@@ -1054,6 +1058,19 @@ The review's fixes (D597) and the cheaper per-item construction (D599) change th
 | work main / RenderThread (ms) | 441 / 715 | 445 / 724 | 487 / 1,118 | 497 / 1,133 |
 
 What it shows: as in D598, nothing beyond the runs' spread; the main thread works +1 % and +2 % (was +3 % and +3.5 %), what ran past the vsync after was measurements only, and on the stress list main's three compositions past the vsync (whole compositions that didn't fit) have no counterpart.
+
+### Headless: the lazy bench at parity (D575, D578, D598, D599)
+
+`benchmarks/benches/lazy.rs` without prefetch (`LAZY_BENCH_OPTIMIZATIONS` sets the flags), three interleaved rounds, criterion's medians of rounds 2 and 3:
+
+| Change, against | Feed, a frame scrolling 200 px | Stress list | Grid | A frame scrolling a pixel (feed, stress list, grid) |
+|---|---|---|---|---|
+| D575 (deactivated by the next composition), against 99863d4 and the old defaults' flags | 12.03 µs (12.05; 12.09) | 17.55 µs (16.94; 17.39) | 15.28 µs (18.44; 18.83) | 2.17, 2.61 µs (2.07, 2.42) |
+| D578 (fidelity fixes), against 99863d4 | 12.04 µs (12.19) | 17.70 µs (17.09) | 15.39 µs (18.38) | 2.19, 2.53, 4.72 µs (2.12, 2.53, 6.55) |
+| D598 (pausable composition), against ecbb0ee, a frame composing an item | 11.89 → 12.10 µs (+1.9 %) | 17.31 → 17.80 µs (+2.9 %) | 15.15 → 15.88 µs (+4.8 %) | 2.18 → 2.18, 2.53 → 2.58, 4.62 → 4.71 µs |
+| D599 (cheaper per item), against main f32e70d | 11.84 → 12.04 µs (+1.6 %) | 17.39 → 17.60 µs (+1.2 %) | 15.10 → 15.52 µs (+2.8 %) | 2.13 → 2.20, 2.57 → 2.60, 4.56 → 4.72 µs |
+
+The scroll-by-a-pixel frames at parity pay the strategy's work each layout, the nudges turning the direction every frame (D575). D598 added each item's pausable content group, its item's `LOCAL_PARENT_LIST` provider and its `ContentReady` observer; D599 left the group only. The stress list's items prefetched (`prefetch_in_pauses`): 19.2 µs of prefetch per item composed whole, 20.8 µs paused but in one idle time (+9 %: the paused composition's recording and apply); a step 22.6 µs whole, 25.4 µs in one idle time, 26.7, 27.8 and 29.3 µs in idle times of 20, 12 and 8 µs (1.5, 2.1 and 2.9 idle times per item); after D599, 18.9 µs whole, 20.8 µs in one idle time, 21.9, 22.5 and 23.7 µs in idle times of 20, 12 and 8 µs. After D597's second review (8f94035), interleaved in release against f32e70d and 7bc93ad (the order rotating, medians of the rounds): figures for f32e70d / 7bc93ad / 8f94035: `tests/perf_review2.rs`, 6 rounds, rows 12.46 / 12.67 / 12.73 µs a frame and grid 24.65 / 25.23 / 25.52 µs; the lazy bench's 200 px frames, 4 rounds, feed 11.84 / 12.05 / 11.98 µs, stress list 17.27 / 17.66 / 17.58 µs, grid 15.06 / 15.62 / 15.54 µs (−0.6 %, −0.4 %, −0.5 % against 7bc93ad; +1.2 %, +1.8 %, +3.2 % against f32e70d).
 
 ### Each optimization alone (round 14)
 
