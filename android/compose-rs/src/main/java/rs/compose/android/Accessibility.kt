@@ -6,6 +6,7 @@ import android.util.SparseArray
 import android.view.MotionEvent
 import android.view.View
 import android.view.accessibility.AccessibilityEvent
+import android.view.accessibility.AccessibilityManager
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityNodeInfo.AccessibilityAction
 import android.view.accessibility.AccessibilityNodeProvider
@@ -14,9 +15,17 @@ import java.nio.ByteOrder
 
 /**
  * compose-rs's semantics as virtual views (`crates/compose-android/src/accessibility.rs`): what
- * TalkBack reads and acts on. The tree is read from Rust when a service asks after a change.
+ * TalkBack, uiautomator and other services read and act on. The tree is read from Rust when a
+ * service asks after a change, whether a service was on at the change or connected since: a
+ * change only marks the nodes read stale, as Compose's `currentSemanticsNodesInvalidated`, and
+ * the services on hear it (D630).
  */
-internal class Accessibility(private val view: ComposeRsView) : AccessibilityNodeProvider() {
+internal class Accessibility(private val view: ComposeRsView) :
+    AccessibilityNodeProvider(),
+    AccessibilityManager.AccessibilityStateChangeListener,
+    AccessibilityManager.TouchExplorationStateChangeListener {
+    private val manager = view.context.getSystemService(AccessibilityManager::class.java)
+
     private class Node(
         val id: Int,
         val parent: Int,
@@ -45,9 +54,60 @@ internal class Accessibility(private val view: ComposeRsView) : AccessibilityNod
     /** The scrolling containers' offsets as last read, for their `TYPE_VIEW_SCROLLED`. */
     private var scrolledTo = SparseArray<Float>()
 
-    /** The semantics changed: read again when asked, and tell the services. */
-    fun invalidate() {
+    /** A change is told to the services at most this often (Compose's bounds updates' 100 ms). */
+    private var changePosted = false
+    private val changed = Runnable {
+        changePosted = false
+        tell()
+    }
+
+    /**
+     * The semantics may have changed (a frame's `SEMANTICS`, the host gone): read again when
+     * next asked, whether or not a service is on now (one connecting later reads the current
+     * tree, D630). Nothing else is done with no service on, as Compose's `onSemanticsChange`.
+     */
+    fun semanticsChanged() {
         stale = true
+        if (!changePosted && manager.isEnabled) {
+            changePosted = true
+            view.postDelayed(changed, 100)
+        }
+    }
+
+    /** The view is attached: services turned on later are told the content. */
+    fun attach() {
+        manager.addAccessibilityStateChangeListener(this)
+        manager.addTouchExplorationStateChangeListener(this)
+    }
+
+    fun detach() {
+        manager.removeAccessibilityStateChangeListener(this)
+        manager.removeTouchExplorationStateChangeListener(this)
+        view.removeCallbacks(changed)
+        changePosted = false
+    }
+
+    override fun onAccessibilityStateChanged(enabled: Boolean) {
+        if (enabled) turnedOn()
+    }
+
+    override fun onTouchExplorationStateChanged(enabled: Boolean) {
+        if (manager.isEnabled) turnedOn()
+    }
+
+    /**
+     * A service turned on: the tree is read again and the window's content told changed. Scrolls
+     * made while none was on aren't told (the offsets are read afresh).
+     */
+    private fun turnedOn() {
+        stale = true
+        scrolledTo = SparseArray()
+        tell()
+    }
+
+    /** Tells the services on that the content changed, and each scroll since last told. */
+    private fun tell() {
+        if (!manager.isEnabled) return
         val parent = view.parent ?: return
         // A scroll (by an action, a drag, a fling) is told once laid out, with how far, as
         // Compose's `sendScrollEventIfNeeded` (D491).
@@ -84,11 +144,15 @@ internal class Accessibility(private val view: ComposeRsView) : AccessibilityNod
     private fun refresh() {
         if (!stale) return
         stale = false
-        val buffer = view.semantics() ?: return
-        buffer.order(ByteOrder.LITTLE_ENDIAN)
-        buffer.position(0)
         val read = SparseArray<Node>()
         roots.clear()
+        // No host (destroyed): no nodes.
+        val buffer = view.semantics() ?: run {
+            nodes = read
+            return
+        }
+        buffer.order(ByteOrder.LITTLE_ENDIAN)
+        buffer.position(0)
         while (buffer.hasRemaining()) {
             val id = buffer.getInt()
             val parent = buffer.getInt()
@@ -288,7 +352,7 @@ internal class Accessibility(private val view: ComposeRsView) : AccessibilityNod
     /**
      * Scrolls a scrolling container a page (its viewport as shown) that way, as Compose's
      * accessibility delegate: Rust works the amount out (`accessibility::scroll_amount`, D491).
-     * The services hear it once laid out (`invalidate`).
+     * The services hear it once laid out (`tell`).
      */
     private fun scrollPage(node: Node, action: Int): Boolean {
         if (node.scroll == null) return false

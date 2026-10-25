@@ -178,12 +178,6 @@ class ComposeRsView @JvmOverloads constructor(
     }
     private val accessibility = Accessibility(this)
     private val accessibilityManager = context.getSystemService(AccessibilityManager::class.java)
-    /** A change of semantics is told to accessibility services at most this often. */
-    private var semanticsChangePosted = false
-    private val semanticsChanged = Runnable {
-        semanticsChangePosted = false
-        accessibility.invalidate()
-    }
 
     /** What the last composition saved (or the instance state restored), for the next one. */
     private var savedState: ByteArray? = null
@@ -219,6 +213,7 @@ class ComposeRsView @JvmOverloads constructor(
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
         ComposeRsRuntime.attach(this)
+        accessibility.attach()
         requestApplyInsets()
         if (width > 0 && height > 0) create()
     }
@@ -226,6 +221,7 @@ class ComposeRsView @JvmOverloads constructor(
     override fun onDetachedFromWindow() {
         ComposeRsRuntime.detach(this)
         destroy()
+        accessibility.detach()
         back?.remove()
         back = null
         backEnabled = false
@@ -277,6 +273,8 @@ class ComposeRsView @JvmOverloads constructor(
         performanceHintShown = false
         ComposeRsNative.destroy(host)
         host = 0L
+        // Its nodes are gone (a host composed again has others).
+        accessibility.semanticsChanged()
         drawing = null
         measurer.clear()
         replayer.clear()
@@ -579,10 +577,8 @@ class ComposeRsView @JvmOverloads constructor(
         } else if (result and Frame.HIDE_KEYBOARD != 0L) {
             inputMethods.hideSoftInputFromWindow(windowToken, 0)
         }
-        if (result and Frame.SEMANTICS != 0L && accessibilityManager.isEnabled && !semanticsChangePosted) {
-            semanticsChangePosted = true
-            postDelayed(semanticsChanged, 100)
-        }
+        // Read again when next asked, service or not (D630); the services on hear it.
+        if (result and Frame.SEMANTICS != 0L) accessibility.semanticsChanged()
     }
 
     /** Prefetches once the frame is done (a message after the Choreographer's callbacks). */

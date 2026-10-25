@@ -18,7 +18,7 @@ The log is split by area into the files below, one table each, rows in number or
 | File | Covers | Rows |
 |---|---|---|
 | [runtime](decisions/runtime.md) | `#[composable]`, groups and keys, skipping, lambdas, the call macro, the composer, recomposition, `remember`, effects, state handles, pausable composition. | 98 |
-| [ui-and-layout](decisions/ui-and-layout.md) | Modifiers and nodes, layout and intrinsics, drawing in the tree, input, focus, semantics, animation, Material 3, navigation, platform values. | 83 |
+| [ui-and-layout](decisions/ui-and-layout.md) | Modifiers and nodes, layout and intrinsics, drawing in the tree, input, focus, semantics, animation, Material 3, navigation, platform values. | 84 |
 | [text](decisions/text.md) | Text measurement and layout on each platform, fonts, text fields and editing. | 26 |
 | [lazy-and-prefetch](decisions/lazy-and-prefetch.md) | Lazy lists and grids, item reuse, the policy of composing only what is in view, prefetch. | 64 |
 | [android-drawing](decisions/android-drawing.md) | The display list and its replayer, render nodes and repaint boundaries, paths, shadows, layers. | 25 |
@@ -403,3 +403,4 @@ The log is split by area into the files below, one table each, rows in number or
 | D604 | [benchmarks](decisions/benchmarks.md#d604) | current |
 | D605 | [benchmarks](decisions/benchmarks.md#d605) | current |
 | D610 | [android-host-and-performance](decisions/android-host-and-performance.md#d610) | current |
+| D630 | [ui-and-layout](decisions/ui-and-layout.md#d630) | current |

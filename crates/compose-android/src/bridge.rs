@@ -653,7 +653,8 @@ mod flags {
     /// A field committed or dropped its composition itself, or the focused field's options
     /// changed: the input method restarts.
     pub const RESET_INPUT: i64 = 8;
-    /// The semantics may have changed (a recomposition or a layout): accessibility hears it.
+    /// The semantics may have changed (a recomposition or a layout): accessibility reads them
+    /// again when next asked, and the services on hear it (D630).
     pub const SEMANTICS: i64 = 16;
     /// Prefetch work waits for idle time: the view calls `prefetch` after the frame.
     pub const PREFETCH: i64 = 32;
@@ -712,7 +713,7 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_frame(
         Some(false) => result |= flags::HIDE_KEYBOARD,
         None => {}
     }
-    if stats.recomposed || stats.measured {
+    if crate::accessibility::semantics_may_have_changed(&stats) {
         result |= flags::SEMANTICS;
     }
     if host.ui.has_enabled_back_handlers() {
