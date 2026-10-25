@@ -1,10 +1,10 @@
 # compose-rs
 
-A design for bringing Jetpack Compose's model to Rust: positional memoization over a slot table, a compiler-style transform that makes composables skippable and restartable, observable state, `Modifier.Node`-style modifiers, and Compose's layout model and API names, on desktop and Android.
+compose-rs is Jetpack Compose's programming model in Rust: write UIs as composable functions with state and modifiers, and run them on desktop or inside an Android app. It is an experimental port, closely following Compose's design: positional memoization over a slot table, a compiler-style transform that makes composables skippable and restartable, observable state, `Modifier.Node`-style modifiers, and Compose's layout model and API names, on desktop and Android.
 
 > **Disclaimer:** this is not an officially supported Google product, and it is not affiliated with or endorsed by the Jetpack Compose team. Jetpack Compose and Android are trademarks of Google LLC.
 
-**Status:** the runtime, UI, foundation, Material 3, animation and navigation run on desktop (Skia) and Android (`ComposeRsView`, embeddable in Kotlin Compose). By default compose-rs does what Jetpack Compose 1.12.1 does; on a Pixel 8 Pro it then starts faster, uses less memory and does about half the main-thread work per frame, and with its own optimizations on it is ahead at every frame percentile ([docs/12](docs/12-android-performance.md)). [docs/11](docs/11-status.md) lists what's covered and the known differences from Compose.
+**Status:** the runtime, UI, foundation, Material 3, animation and navigation run on desktop (Skia) and Android (`ComposeRsView`, embeddable in Kotlin Compose). By default compose-rs does what Jetpack Compose 1.12.1 does; on a Pixel 8 Pro it then starts faster, uses less memory and does about half the main-thread work per frame, and with its own optimizations on it is ahead at every frame percentile ([docs/12](docs/12-android-performance.md)). These benchmarks compare like for like ("parity mode"); compose-rs's extra optimizations are opt-in ([below](#parity-mode-and-the-optimizations)). [docs/11](docs/11-status.md) lists what's covered and the known differences from Compose.
 
 | Crate | Contents |
 |---|---|
@@ -58,7 +58,11 @@ The [examples](examples) are this code, running. The design started from [sketch
 
 ## Getting started
 
-### Desktop apps
+You need Rust 1.88 or newer. compose-rs isn't published on crates.io: apps depend on it by path.
+
+### Run the examples
+
+On desktop:
 
 ```bash
 cargo run -p todo      # also: counter, gallery
@@ -72,42 +76,20 @@ sudo dnf install gcc-c++ pkgconf-pkg-config freetype-devel fontconfig-devel     
 sudo pacman -S base-devel freetype2 fontconfig                                     # Arch
 ```
 
-### Android apps
-
-Needs the Android SDK (`ANDROID_HOME`, or `~/Library/Android/sdk` on macOS), JDK 17 or newer, and an arm64 device connected with adb. The Gradle wrapper (`android/gradlew`) fetches Gradle itself, and builds the Rust library with `android/build-rust.sh`, which needs the NDK and Rust's Android target:
+On Android, you need the Android SDK (`ANDROID_HOME`, or `~/Library/Android/sdk` on macOS), JDK 17 or newer, the NDK and Rust's Android target, and an arm64 device connected with adb. The Gradle wrapper fetches Gradle itself and builds the Rust library:
 
 ```bash
-"$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;27.2.12479018" platform-tools   # or Android Studio's SDK Manager: SDK Tools > NDK (Side by side)
+"$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;27.2.12479018" platform-tools   # or Android Studio's SDK Manager
 rustup target add aarch64-linux-android
-```
-
-The NDK version is pinned: the apps' `ndkVersion` is 27.2.12479018, the NDK the Android Gradle plugin strips the Rust library with (without it, it packages the library unstripped). `build-rust.sh` links with the NDK `ANDROID_NDK_HOME` names, else that version under `$ANDROID_HOME/ndk/`, else the newest there, with a warning. Debug variants build the library with Cargo's `android` profile, release variants with `android-release` (fat LTO, one codegen unit: smaller and slightly faster, slower to rebuild); in both, a Rust panic aborts the app after it's logged to logcat (docs/decisions.md, D361).
-
-```bash
 android/gradlew -p android :demo:installDebug    # the gallery, todo and counter in Kotlin Compose tabs
 adb shell am start -n rs.compose.demo/.MainActivity
 ```
 
-### Tests and benchmarks
+How the Android build works (the pinned NDK, the Cargo profiles, panics) is in [docs/07](docs/07-platforms.md), "Android".
 
-```bash
-cargo test                                           # everything
-cargo bench -p compose-benchmarks                    # runtime and frame benchmarks (criterion)
-```
+### Write your own app
 
-The Android comparison with Jetpack Compose ([docs/12](docs/12-android-performance.md)) installs both versions of the feed app, then measures them with Perfetto; `measure.py` needs a [trace_processor_shell](https://perfetto.dev/docs/analysis/trace-processor) binary:
-
-```bash
-android/gradlew -p android :bench-compose:installRelease :bench-rs:installRelease
-python3 android/bench/measure.py --trace-processor path/to/trace_processor_shell --out bench-out
-python3 android/bench/summarize.py bench-out/report.json
-```
-
-`--scenarios stress_startup,stress_scroll,stress_animation` measures only the stress screens ([docs/15](docs/15-android-stress-benchmark.md)).
-
-The [developer guide](docs/guide/README.md) walks through a desktop app and an Android app.
-
-An app depends on the facade with the `desktop` feature (and `test` for its tests), writes composables, and opens a window:
+The [developer guide](docs/guide/README.md) walks through a desktop app and an Android app. An app depends on the facade crate with the `desktop` feature (and `test` for its tests), writes composables, and opens a window:
 
 ```toml
 [dependencies]
@@ -132,9 +114,27 @@ fn counting_to_three() {
 }
 ```
 
-`COMPOSE_FRAME_STATS=1` prints each frame's timings, and `COMPOSE_SCREENSHOT=out.png` writes the last frame when the app exits. compose-rs draws graphics layers, clips and shadows as Compose does; its own optimizations beyond that are all off by default (next section).
+`COMPOSE_FRAME_STATS=1` prints each frame's timings, and `COMPOSE_SCREENSHOT=out.png` writes the last frame when the app exits. compose-rs draws graphics layers, clips and shadows as Compose does; its own optimizations beyond that are off by default (see [Parity mode and the optimizations](#parity-mode-and-the-optimizations) below).
 
-## Reading order
+### Tests and benchmarks
+
+```bash
+cargo test                                           # everything
+cargo bench -p compose-benchmarks                    # runtime and frame benchmarks (criterion)
+```
+
+The Android comparison with Jetpack Compose (`android/bench/measure.py`, with Perfetto) and how to run it are in [docs/12](docs/12-android-performance.md), "Method"; the stress screens in [docs/15](docs/15-android-stress-benchmark.md).
+
+## Principles
+
+- **Follow Jetpack Compose**: its APIs, parameter names, order and defaults, and its module split (`runtime`, `ui`, `foundation`, `foundation.layout`, `material3`), adapted only where Rust forces it.
+- **Look and behave like Compose on desktop and Android**: draw and lay out text with the same Skia-based stacks Compose uses on each platform, and embed in Kotlin Compose apps on Android.
+- **No composed modifiers**: modifiers are plain data elements whose state lives in UI nodes (`Modifier.Node`); no equivalent of `Modifier.composed { }`.
+- **Strong skipping**: no stability inference; parameters compare by identity or cheap value equality, never by deep comparison.
+- **Compile speed matters**: the transform is syntactic and its expansions stay small, calling into non-generic runtime code.
+- **Zero GC**: ownership is explicit. Shared immutable data uses `Rc`, which is visible and idiomatic in Rust. State uses arena handles, not reference cycles.
+
+## Design documents
 
 1. [Feasibility](docs/01-feasibility.md): verdict, how each part of Compose maps to Rust, prior art, effort, risks.
 2. [Architecture](docs/02-architecture.md): crates, layering, threads, public API shape.
@@ -154,15 +154,6 @@ fn counting_to_three() {
 16. [Backporting to Compose](docs/16-backporting-to-compose.md): compose-rs's optimizations that Jetpack Compose or HWUI could adopt, with the evidence and a sketch of each change.
 
 Every decision, with its alternatives and revert cost, is in [docs/decisions.md](docs/decisions.md); see [docs/02](docs/02-architecture.md) for how the crates fit together.
-
-## Principles
-
-- **Follow Jetpack Compose**: its APIs, parameter names, order and defaults, and its module split (`runtime`, `ui`, `foundation`, `foundation.layout`, `material3`), adapted only where Rust forces it.
-- **Look and behave like Compose on desktop and Android**: draw and lay out text with the same Skia-based stacks Compose uses on each platform, and embed in Kotlin Compose apps on Android.
-- **No composed modifiers**: modifiers are plain data elements whose state lives in UI nodes (`Modifier.Node`); no equivalent of `Modifier.composed { }`.
-- **Strong skipping**: no stability inference; parameters compare by identity or cheap value equality, never by deep comparison.
-- **Compile speed matters**: the transform is syntactic and its expansions stay small, calling into non-generic runtime code.
-- **Zero GC**: ownership is explicit. Shared immutable data uses `Rc`, which is visible and idiomatic in Rust. State uses arena handles, not reference cycles.
 
 ## Parity mode and the optimizations
 
