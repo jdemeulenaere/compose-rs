@@ -23,6 +23,35 @@ A design for bringing Jetpack Compose's model to Rust: positional memoization ov
 | `examples/` | the sample apps (counter, todo, gallery, the benchmark feed) and the guide's samples |
 | `benchmarks` | criterion benchmarks |
 
+## What user code looks like
+
+```rust
+use compose::runtime::*;
+use compose::ui::*;
+use compose::foundation::layout::*;
+use compose::material3::*;
+
+#[composable]
+fn Counter() {
+    let count = remember(|| mutable_state_of(0));
+    Column!(modifier = Modifier.padding(16.dp()), vertical_arrangement = Arrangement::spaced_by(8.dp()), {
+        Button!(on_click = move || count.update(|c| c + 1), {
+            Text!("Count: {}", count.get());
+        });
+        Button!(on_click = move || count.set(0), enabled = count.get() > 0, {
+            Text!("Reset");
+        });
+    });
+}
+
+fn main() {
+    use compose::desktop::{WindowOptions, run_app};
+    run_app(WindowOptions { title: "Counter".into(), size: (320, 200).into(), ..Default::default() }, Counter);
+}
+```
+
+The [examples](examples) are this code, running. The design started from [sketches/](sketches): the [counter](sketches/counter.rs), [what `#[composable]` expands it to](sketches/counter.expanded.rs), and the [todo list](sketches/todo.rs) with per-item state and skipping rows.
+
 ## Getting started
 
 ### Desktop apps
@@ -100,35 +129,6 @@ fn counting_to_three() {
 ```
 
 `COMPOSE_FRAME_STATS=1` prints each frame's timings, and `COMPOSE_SCREENSHOT=out.png` writes the last frame when the app exits. compose-rs draws graphics layers, clips and shadows as Compose does; its own optimizations beyond that are all off by default (next section).
-
-## What user code looks like
-
-```rust
-use compose::runtime::*;
-use compose::ui::*;
-use compose::foundation::layout::*;
-use compose::material3::*;
-
-#[composable]
-fn Counter() {
-    let count = remember(|| mutable_state_of(0));
-    Column!(modifier = Modifier.padding(16.dp()), vertical_arrangement = Arrangement::spaced_by(8.dp()), {
-        Button!(on_click = move || count.update(|c| c + 1), {
-            Text!("Count: {}", count.get());
-        });
-        Button!(on_click = move || count.set(0), enabled = count.get() > 0, {
-            Text!("Reset");
-        });
-    });
-}
-
-fn main() {
-    use compose::desktop::{WindowOptions, run_app};
-    run_app(WindowOptions { title: "Counter".into(), size: (320, 200).into(), ..Default::default() }, Counter);
-}
-```
-
-The [examples](examples) are this code, running. The design started from [sketches/](sketches): the [counter](sketches/counter.rs), [what `#[composable]` expands it to](sketches/counter.expanded.rs), and the [todo list](sketches/todo.rs) with per-item state and skipping rows.
 
 ## Developer guide
 
