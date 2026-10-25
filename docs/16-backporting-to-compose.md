@@ -24,6 +24,7 @@ Candidates 1, 3 and 4 interact with each other through HWUI. Less RenderThread w
   - **parity:** both apps, 3 traced runs a scenario;
   - **all:** both apps, every compose-rs optimization on;
   - **each:** compose-rs alone, at parity and with each flag alone, 5 runs a subject, interleaved ([Methodology](#methodology)).
+  - Round 15 (compose-rs at f120c63, after pausable composition: D590–D599) ran parity and all again beside Compose, with the same findings: compose-rs's RenderThread behind on the scrolls at parity (feed p50 2.58 against 2.09 ms, boost 22 against 148), ahead at every percentile with all ([12](12-android-performance.md)); the numbers below are round 14's.
 - **Effects.** "Alone" means the each round: the change of the flag's median over its runs against parity's median. **\*** marks an exact two-sided Mann–Whitney test at p < 0.05. With 5 runs a side, that means at most 2 of the 25 pairs of runs go the other way. The round ran about 400 tests, so about 1 in 20 of the stars on a flag that changes nothing are expected by chance.
 - **Scenarios.** Most numbers come from four of measure.py's scenarios:
   - **feed scroll:** 10 flings through a `LazyColumn` of Material 3 `Card` posts;
