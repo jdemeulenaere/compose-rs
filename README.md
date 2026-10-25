@@ -209,7 +209,16 @@ adb shell am start -n rs.compose.bench.rs/.MainActivity -e screen feed -e optimi
 
 measure.py's `--optimizations` takes `parity` (the default: `none`, the library's default), `recommended`, `all`, `each` (each flag alone against parity, interleaved), or names; `--subject LIST`, repeated, measures several compose-rs sets beside Compose in one session (`--subject recommended --subject all`).
 
-**Which to pick.** `all` is the best measured case: with it, compose-rs is ahead of Compose at every percentile on both threads, on every screen measured ([docs/12](docs/12-android-performance.md), [docs/15](docs/15-android-stress-benchmark.md)). Its costs are the hint session's CPU power (above) and the idle-time work of recording prefetched items ahead. If you pick flags one by one, turn on `flush_layers_before_dropped_paths` together with `single_drawing_fade`: the fade alone grows HWUI's GPU caches by 31 % on a screen whose stroked paths change every frame.
+**Which to pick.** `recommended`: the five flags with a measured gain, without the six that measured none or a small cost. Measured against `all` and Compose in one session (Pixel 8 Pro, 5 runs each, interleaved; [docs/12](docs/12-android-performance.md), "Recommended against all"), it is at least as fast as `all` at every frame percentile on both threads on every screen, and faster where the runs resolve a difference:
+
+| Main thread p50 / p90 / p99, RenderThread p50 / p90 / p99 (ms) | Compose | `recommended` | `all` |
+|---|---|---|---|
+| Feed scroll | 1.52 / 3.15 / 7.07, 2.11 / 3.45 / 4.95 | **0.82** / **1.30** / **2.09**, **1.43** / **2.00** / **3.03** | 0.88 / 1.41 / 2.21, 1.47 / 2.23 / 3.50 |
+| Stress list scroll | 1.28 / 3.27 / 7.95, 2.57 / 3.70 / 5.45 | **0.86** / **1.28** / **2.60**, **1.97** / **2.64** / **3.75** | 0.93 / 1.39 / 2.66, 2.05 / 2.87 / 3.96 |
+| Animated header | 1.57 / 2.17 / 3.02, 3.02 / 4.21 / 5.82 | 1.25 / 1.76 / 2.82, 2.54 / 3.29 / 4.53 | 1.28 / 1.73 / 2.91, 2.43 / 3.34 / 4.69 |
+| Stress animation | 3.77 / 5.41 / 7.75, 7.43 / 8.87 / 10.76 | 2.42 / 2.96 / 4.25, 6.40 / 7.45 / 8.43 | 2.44 / 3.04 / 4.06, 6.42 / 7.50 / 8.50 |
+
+No app-side janky frame on the scrolls with either set (Compose: 3 in 5 feed runs, 7 in 5 stress-list runs). `recommended` also does less main-thread work on the stress list (−11 %: it measures one item ahead, not two), and starts the 200-post screen in 158 ms against 168 (`paragraph_render_nodes`' slower first replay). No flag outside `recommended` measured a gain in combination. Its costs are the hint session's CPU power (above) and the idle-time work of recording prefetched items ahead. If you pick flags one by one, turn on `flush_layers_before_dropped_paths` together with `single_drawing_fade`: the fade alone grows HWUI's GPU caches by 31 % on a screen whose stroked paths change every frame.
 
 ## Verdict
 

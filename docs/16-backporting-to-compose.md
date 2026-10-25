@@ -16,6 +16,8 @@ This document is for engineers working on Jetpack Compose, HWUI or Android graph
 | 4 | **Free the dropped path masks' textures before the frame draws** | HWUI / Skia's GPU resource cache | Its own A/B (D510, 8 runs): graphics memory 150.6 → 122.9 MB 3 s into the stress animation. At parity: GPU caches −18 %, not resolved. With #3, it brings the caches back to parity's | Medium: one screen; memory varies run to run |
 | 5 | **Keep a paragraph while the width it's laid out at doesn't change** | `ParagraphLayoutCache` / `MultiParagraphLayoutCache.newLayoutWillBeDifferent` | Resize screen (D551, 6 runs, not in the each round): text layouts 51,047 → 3,609, main-thread work −52 % | Medium: exact by construction, but one ad hoc screen |
 
+In compose-rs these five are the `recommended` set (D601): against every flag on, it was as fast or faster at every frame percentile on every screen measured ([12](12-android-performance.md), "Recommended against all"), so the six flags left out add nothing an app would miss.
+
 Candidates 1, 3 and 4 interact with each other through HWUI. Less RenderThread work means less boost (#1 explains why), and removing offscreen layers removes the flush that freed dropped path masks (#3 and #4).
 
 ## Reading the numbers
