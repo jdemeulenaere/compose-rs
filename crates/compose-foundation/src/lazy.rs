@@ -1830,6 +1830,9 @@ impl MeasurePolicy for LazyListLayout {
         let lacked_unready = Cell::new(false);
         let mut measure_child = |index: usize, sizes: &mut Sizes| -> Option<Placeable> {
             if unready && !state.prefetch.content_ready(info.items.key(index)) {
+                // Not applied (a request's paused composition): completed before the round's
+                // pass; cancelled, its item composes it in that pass.
+                state.prefetch.complete_pending();
                 lacked_unready.set(true);
                 return None;
             }

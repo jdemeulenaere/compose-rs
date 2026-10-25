@@ -290,6 +290,9 @@ pub(crate) struct Deferred {
     pub removed_values: Vec<SlotValue>,
     pub remembered: Vec<Rc<dyn ErasedObserver>>,
     pub side_effects: Vec<DeferredEffect>,
+    /// `released_nodes` may name a node twice (paused content removed with what's around it,
+    /// its nodes released by both): released once.
+    pub repeated_releases: bool,
 }
 
 /// A side effect to run at the end of a pass.

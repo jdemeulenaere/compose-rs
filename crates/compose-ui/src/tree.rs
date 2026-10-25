@@ -836,6 +836,10 @@ impl UiTree {
     /// whether the parent data changed.
     fn refresh_chain(&mut self, node: NodeId) -> bool {
         let focus_requests = self.focus_requests.clone();
+        // A node not in the tree yet (a paused composition's, until applied) or deactivated has
+        // its requesters attached when it's attached or reused, as Compose's modifier nodes attach
+        // as the composition is applied.
+        let live = self.shows_requesters(node);
         let value = self.node_mut(node);
         value.capabilities.clear();
         value.layout_indices.clear();
@@ -844,6 +848,7 @@ impl UiTree {
         for (index, entry) in value.chain.iter_mut().enumerate() {
             if let Some(requester) =
                 entry.downcast_mut::<crate::focus_requester::FocusRequesterNode>()
+                && live
             {
                 requester.attach(&focus_requests, node);
             }
@@ -1076,6 +1081,25 @@ impl UiTree {
         }
     }
 
+    /// Whether `node` is in the tree (its ancestors up to the root) and none of them is
+    /// deactivated: where its focus requesters are attached.
+    fn shows_requesters(&self, node: NodeId) -> bool {
+        let mut current = node;
+        loop {
+            let Some(value) = self.get(current) else { return false };
+            if value.deactivated {
+                return false;
+            }
+            if current == self.root {
+                return true;
+            }
+            match value.parent {
+                Some(parent) => current = parent,
+                None => return false,
+            }
+        }
+    }
+
     /// The focus requesters on `node` (`Modifier.focus_requester`), detached while it's
     /// deactivated: a requester of content kept for reuse focuses nothing, as Compose's
     /// detached nodes. Attached again when it's reused.
@@ -1183,6 +1207,16 @@ impl Applier for UiTree {
         value.parent = Some(parent);
         self.node_mut(parent).children.insert(index, Measurable { node: id, layer: 0 });
         self.invalidate_measure(parent);
+        // In the tree now: its requesters, and those of what was attached to it, attach.
+        if self.shows_requesters(id) {
+            let mut stack = vec![id];
+            while let Some(next) = stack.pop() {
+                if self.get(next).is_some_and(|value| !value.deactivated) {
+                    self.set_requesters_attached(next, true);
+                    stack.extend(self.node(next).children.iter().map(|child| child.node));
+                }
+            }
+        }
     }
 
     fn remove(&mut self, parent: NodeRef, index: usize, count: usize) {

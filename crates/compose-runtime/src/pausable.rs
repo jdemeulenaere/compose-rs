@@ -27,9 +27,11 @@
 //! - the resumes walk the regions only (their paused scopes, and those invalidated since), and
 //!   a state write invalidating a scope inside a region marks it for the next resume, not for
 //!   the composition's next pass (as Compose's paused composition takes its invalidations);
-//! - a pass of the composition that would run a body around a region completes the paused
-//!   composition and applies it first (Compose's `subcompose` of a precomposed item completes
-//!   its paused composition), so passes never run over content that isn't applied.
+//! - a pass of the composition reaching a region's group (a body around it ran) composes the rest
+//!   of it, unpaused, and applies it at its end; one removing or deactivating it discards it, as
+//!   Compose disposes a precomposed slot; others leave it alone, as Compose's paused composition
+//!   is a composition of its own; a layout needing it asks for it to be completed before the
+//!   next pass (`request_completion`), as Compose's measurement completes a precomposed item.
 
 use std::cell::Cell;
 use std::marker::PhantomData;
@@ -84,9 +86,27 @@ pub(crate) enum PausedState {
 /// child.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum RecordedOp {
-    Attach { parent: NodeRef, index: u32, node: NodeRef },
-    Move { parent: NodeRef, from: u32, to: u32, count: u32 },
-    Remove { parent: NodeRef, index: u32, count: u32 },
+    Attach {
+        parent: NodeRef,
+        index: u32,
+        node: NodeRef,
+    },
+    Move {
+        parent: NodeRef,
+        from: u32,
+        to: u32,
+        count: u32,
+    },
+    Remove {
+        parent: NodeRef,
+        index: u32,
+        count: u32,
+    },
+    /// `Applier::reuse`: as Compose's recorded `reuse`, the node is reset (and a deactivated one
+    /// made active, its focus requesters attached) only as it's applied.
+    Reuse {
+        node: NodeRef,
+    },
 }
 
 /// A remember observer, a side effect or a forgotten value waiting for `apply`, or the place of
@@ -120,6 +140,12 @@ pub(crate) struct Region {
     /// Its deactivated and released nodes; its observers, effects and forgotten values are in
     /// the paused composition's segments (forgotten values wait here until `settle`).
     pub deferred: Deferred,
+    /// Its segment (in segment 0, in the first pass's order).
+    pub segment: u32,
+    /// A pass of the composition reached its group: composed by it, applied at its end.
+    pub adopted: bool,
+    /// Applied by such a pass, or discarded: no longer paused content.
+    pub dead: bool,
 }
 
 /// A composition's paused composition, in its data.
@@ -128,6 +154,8 @@ pub(crate) struct Paused {
     /// Cancelled while its content couldn't be discarded (during a pass, or a layout): it is
     /// before the composition's next pass, and holds its regions until then.
     pub cancel_requested: bool,
+    /// A layout needs it: completed and applied before the composition's next pass.
+    pub complete_requested: bool,
     pub regions: Vec<Region>,
     /// Segment 0 holds the regions' observers and effects in their first pass's order, and the
     /// places of the scopes paused in it; each paused scope has one of its own.
@@ -136,32 +164,140 @@ pub(crate) struct Paused {
 
 impl Paused {
     fn new(state: Rc<Cell<PausedState>>) -> Paused {
-        Paused { state, cancel_requested: false, regions: Vec::new(), segments: vec![Vec::new()] }
+        Paused {
+            state,
+            cancel_requested: false,
+            complete_requested: false,
+            regions: Vec::new(),
+            segments: vec![Vec::new()],
+        }
     }
 
     /// Its regions wait for `apply` (or a resume): their content isn't the composition's yet.
     /// From its first pass on, which makes them.
     pub fn holds_regions(&self) -> bool {
-        !self.regions.is_empty()
+        self.regions.iter().any(|region| !region.dead)
             && (self.cancel_requested
                 || !matches!(self.state.get(), PausedState::Applied | PausedState::Cancelled))
     }
 
-    /// The region whose root is `group`.
+    /// The live region whose root is `group`.
     pub fn region_rooted_at(&self, group: u32) -> Option<&Region> {
-        self.regions.iter().find(|region| region.root == group)
+        self.regions.iter().find(|region| region.root == group && !region.dead)
     }
 
-    /// The region holding `group` (an ancestor of it is a region's root).
+    /// The live region holding `group` (an ancestor of it is a region's root).
     pub fn region_of(&self, table: &SlotTable, group: u32) -> Option<usize> {
         let mut current = table[group].parent;
         while current != NONE {
-            if let Some(index) = self.regions.iter().position(|region| region.root == current) {
+            if let Some(index) =
+                self.regions.iter().position(|region| region.root == current && !region.dead)
+            {
                 return Some(index);
             }
             current = table[current].parent;
         }
         None
+    }
+
+    /// A pass of the composition starts `group`: if it's a live region's (not adopted yet), what
+    /// the pass composes in it from there is recorded as the region's (D592). The region and its
+    /// segment.
+    pub fn adopt(&mut self, group: u32) -> Option<(u32, u32)> {
+        if !self.holds_regions() {
+            return None;
+        }
+        let index = self.regions.iter().position(|region| region.root == group && !region.dead)?;
+        let region = &mut self.regions[index];
+        if region.adopted {
+            return None;
+        }
+        region.adopted = true;
+        Some((index as u32, region.segment))
+    }
+
+    /// A pass removes `removed` (siblings), or deactivates their content (`deactivating`): the
+    /// regions inside go (D593), what they made released, the values their reused content
+    /// replaced forgotten (into `deferred`, the pass's), their observers abandoned with the
+    /// removed slots. Deactivating, a region's group is removed now, its old nodes from their
+    /// parent (the node changes returned); removing, its group goes with the rest and
+    /// `deferred` releases its nodes once.
+    pub fn discard_regions_in(
+        &mut self,
+        table: &mut SlotTable,
+        scopes: &mut crate::scope::Scopes,
+        removal_stack: &mut Vec<(u32, bool)>,
+        deferred: &mut Deferred,
+        removed: Vec<u32>,
+        deactivating: bool,
+    ) -> Vec<crate::composer::NodeOp> {
+        let mut ops = Vec::new();
+        for index in 0..self.regions.len() {
+            if self.regions[index].dead {
+                continue;
+            }
+            let root = self.regions[index].root;
+            // Inside the removed groups? Under a node of theirs (released with it)?
+            let (mut current, mut under_node, mut inside) = (root, false, false);
+            loop {
+                if current != root && table[current].kind == GroupKind::Node {
+                    under_node = true;
+                }
+                if removed.contains(&current) {
+                    inside = true;
+                    break;
+                }
+                current = table[current].parent;
+                if current == NONE {
+                    break;
+                }
+            }
+            if !inside {
+                continue;
+            }
+            let segment = self.regions[index].segment;
+            let mut flat = Flat::default();
+            flatten(&mut self.segments, segment, &mut flat);
+            let region = &mut self.regions[index];
+            region.dead = true;
+            deferred.removed_values.append(&mut region.deferred.removed_values);
+            deferred.removed_values.append(&mut flat.forgotten);
+            deferred.released_nodes.append(&mut region.created);
+            if deactivating {
+                // The content stays (deactivated) but this region's group goes now.
+                let offset = node_offset(table, root);
+                if region.attached > 0 {
+                    ops.push(crate::composer::NodeOp::Remove {
+                        parent: region.node_parent,
+                        index: offset,
+                        count: region.attached,
+                    });
+                }
+                deferred.released_nodes.append(&mut region.old_nodes);
+                set_node_count(table, root, 0);
+                let (parent, next) = (table[root].parent, table[root].next_sibling);
+                let mut previous = NONE;
+                let mut sibling = table[parent].first_child;
+                while sibling != root {
+                    previous = sibling;
+                    sibling = table[sibling].next_sibling;
+                }
+                table.link_after(parent, previous, next);
+                let mut gone = Deferred::default();
+                remove_siblings(table, &mut gone, scopes, removal_stack, root, next);
+                deferred.removed_values.append(&mut gone.removed_values);
+            } else {
+                if !under_node {
+                    deferred.released_nodes.append(&mut region.old_nodes);
+                }
+                // Its top-level nodes are released by the removal too: once.
+                deferred.repeated_releases = true;
+            }
+        }
+        if !self.regions.iter().any(|region| !region.dead) {
+            self.state.set(PausedState::Cancelled);
+        }
+        ops
     }
 
     /// The deferred work of `region`'s nodes and values.
@@ -283,7 +419,10 @@ impl Runtime {
             (table[frame.group].node_count, top_level_nodes(table, frame.group))
         };
         frame.region = paused.regions.len() as u32;
-        frame.segment = 0;
+        let segment = paused.segments.len() as u32;
+        paused.segments.push(Vec::new());
+        paused.segments[0].push(Entry::Segment(segment));
+        frame.segment = segment;
         // Counted from the region's start: other passes may place nodes before it until it's
         // applied.
         frame.node_index = 0;
@@ -298,6 +437,9 @@ impl Runtime {
             created: Vec::new(),
             old_nodes,
             deferred: Deferred::default(),
+            segment,
+            adopted: false,
+            dead: false,
         });
     }
 
@@ -346,6 +488,14 @@ impl Runtime {
         region_data.ops.push(RecordedOp::Attach { parent, index, node });
     }
 
+    /// Records a node reused in a region, to reset as it's applied.
+    pub(crate) fn record_reuse(&mut self, region: u32, node: NodeRef) {
+        let composition = self.check_composing();
+        let paused =
+            self.compositions.data_mut(composition).paused.as_mut().expect("a region's pass");
+        paused.regions[region as usize].ops.push(RecordedOp::Reuse { node });
+    }
+
     /// Opens a resume's walk of `region` (its paused and invalidated scopes).
     fn push_region_frame(&mut self, region: u32) {
         let composition = self.check_composing();
@@ -353,7 +503,7 @@ impl Runtime {
         let paused = data.paused.as_mut().expect("a paused composition");
         let region_data = &mut paused.regions[region as usize];
         region_data.pending = false;
-        let root = region_data.root;
+        let (root, segment) = (region_data.root, region_data.segment);
         self.frames.push(Frame {
             group: root,
             mode: Mode::Walk,
@@ -372,7 +522,7 @@ impl Runtime {
             saved_epoch: 0,
             body_started: false,
             region,
-            segment: 0,
+            segment,
             resuming: false,
             paused: false,
         });
@@ -396,13 +546,23 @@ pub struct PausedComposition {
     _not_send: PhantomData<*const ()>,
 }
 
+impl Drop for PausedComposition {
+    /// A paused composition no one holds can't be resumed or applied: it's cancelled, so it
+    /// doesn't hold the composition's paused content (and its next paused composition) for good.
+    fn drop(&mut self) {
+        if !matches!(self.state.get(), PausedState::Applied | PausedState::Cancelled) {
+            self.cancel();
+        }
+    }
+}
+
 impl Composition {
     /// A paused composition of this composition's invalid scopes, as Compose's
     /// `PausableComposition.setPausableContent`: its first [`resume`](PausedComposition::resume)
     /// runs the pass `recompose` would, in which each [`PausableContent`] inserted or reused is
     /// paused content: its composables may pause when the callback says so, and nothing of it
     /// is applied before [`apply`](PausedComposition::apply). A pass of this composition before
-    /// then that would run a body around paused content completes and applies it first.
+    /// then that reaches paused content composes it and applies it; one removing it discards it.
     ///
     /// # Panics
     ///
@@ -411,9 +571,16 @@ impl Composition {
     pub fn recompose_pausable(&self) -> PausedComposition {
         let state = Rc::new(Cell::new(PausedState::InitialPending));
         let id = self.id;
-        run_requested_cancel(id);
+        run_requests(id);
         with_runtime(|runtime| {
             let data = runtime.compositions.get_mut(id).expect("a live composition");
+            // One finished (applied or discarded by a pass) is gone.
+            if data.paused.as_ref().is_some_and(|paused| {
+                matches!(paused.state.get(), PausedState::Applied | PausedState::Cancelled)
+                    && !paused.cancel_requested
+            }) {
+                data.paused = None;
+            }
             if data.paused.is_some() {
                 misuse(ComposeError::PausedCompositionState)
             }
@@ -456,6 +623,13 @@ impl PausedComposition {
             }
             PausedState::InitialPending => {
                 crate::derived::flush_derived_states();
+                // Applying a pass's end (an effect resuming it): no pass now, nothing done.
+                let finishing = with_runtime(|runtime| {
+                    runtime.compositions.get(self.composition).is_some_and(|data| data.finishing)
+                });
+                if finishing {
+                    return false;
+                }
                 match Pass::begin_as(self.composition, Mode::Walk, PassKind::Pausable, should_pause)
                 {
                     Some(pass) => {
@@ -478,7 +652,7 @@ impl PausedComposition {
                         return Vec::new();
                     };
                     (paused.regions.iter().enumerate())
-                        .filter(|(_, region)| region.pending)
+                        .filter(|(_, region)| region.pending && !region.dead)
                         .map(|(index, _)| index as u32)
                         .collect()
                 });
@@ -503,10 +677,15 @@ impl PausedComposition {
             else {
                 return;
             };
-            if !Rc::ptr_eq(&paused.state, &self.state) {
+            // Cancelled meanwhile (from its callback, during the pass), or finished by a pass of
+            // the composition: as it is.
+            if !Rc::ptr_eq(&paused.state, &self.state)
+                || paused.cancel_requested
+                || matches!(paused.state.get(), PausedState::Applied | PausedState::Cancelled)
+            {
                 return;
             }
-            let pending = paused.regions.iter().any(|region| region.pending);
+            let pending = paused.regions.iter().any(|region| region.pending && !region.dead);
             paused.state.set(if pending {
                 PausedState::RecomposePending
             } else {
@@ -533,14 +712,15 @@ impl PausedComposition {
     /// Discards it, as Compose's `cancel`: its regions' content is removed, their nodes
     /// released, their remember observers get `on_abandoned`, and the composable around each is
     /// invalidated, to compose it again (as Compose's cancelled slot is recomposed when it's
-    /// subcomposed again, `forceRecompose`). Nothing if it was applied or cancelled. During a pass, or while the applier is in use (a layout), the
-    /// discarding waits for the composition's next pass, or its next paused composition: it's
-    /// cancelled at once all the same.
+    /// subcomposed again, `forceRecompose`). Nothing if it was applied or cancelled. During a
+    /// pass, or while the applier is in use (a layout), the discarding waits for the
+    /// composition's next pass, or its next paused composition: it's cancelled at once all the
+    /// same.
     pub fn cancel(&self) {
         if matches!(self.state.get(), PausedState::Applied | PausedState::Cancelled) {
             return;
         }
-        let deferred = with_runtime(|runtime| {
+        let deferred = try_with_runtime(|runtime| {
             let busy = runtime.active.is_some();
             let Some(data) = runtime.compositions.get_mut(self.composition) else { return false };
             let Some(paused) = data.paused.as_mut() else { return false };
@@ -553,68 +733,98 @@ impl PausedComposition {
             }
             busy
         });
-        if deferred {
-            self.state.set(PausedState::Cancelled);
-        } else {
-            cancel(self.composition, &self.state, true);
+        match deferred {
+            Some(true) => self.state.set(PausedState::Cancelled),
+            Some(false) => cancel(self.composition, &self.state, true),
+            // The thread's runtime is gone.
+            None => self.state.set(PausedState::Cancelled),
         }
     }
-}
 
-/// Discards `id`'s paused composition if its cancelling waits (requested during a pass or a
-/// layout): before the composition's next pass or paused composition.
-pub(crate) fn run_requested_cancel(id: CompositionId) {
-    let state = with_runtime(|runtime| {
-        let paused = runtime.compositions.get(id)?.paused.as_ref()?;
-        paused.cancel_requested.then(|| paused.state.clone())
-    });
-    if let Some(state) = state {
-        cancel(id, &state, true);
-    }
-}
-
-/// Whether `id`'s paused composition holds regions a pass would run a body around (a body
-/// enclosing one, its scope invalid, or the content set again with `always`).
-fn holds_enclosed_regions(runtime: &Runtime, id: CompositionId, always: bool) -> bool {
-    let Some(data) = runtime.compositions.get(id) else { return false };
-    let Some(paused) = data.paused.as_ref() else { return false };
-    if !paused.holds_regions() {
-        return false;
-    }
-    if always {
-        return true;
-    }
-    let table = &data.table;
-    paused.regions.iter().any(|region| {
-        let mut group = table[region.root].parent;
-        while group != NONE {
-            let entry = &table[group];
-            if entry.kind == GroupKind::Restart
-                && runtime.scopes.get(entry.scope).is_some_and(|scope| scope.invalid)
+    /// Asks for it to be completed and applied before the composition's next pass (no pause
+    /// then), as Compose's measurement completes a precomposed item's paused composition it
+    /// needs: what a layout needing its content does, which can't compose itself.
+    pub fn request_completion(&self) {
+        if matches!(self.state.get(), PausedState::Applied | PausedState::Cancelled) {
+            return;
+        }
+        with_runtime(|runtime| {
+            if let Some(paused) =
+                runtime.compositions.get_mut(self.composition).and_then(|data| data.paused.as_mut())
+                && Rc::ptr_eq(&paused.state, &self.state)
             {
-                return true;
+                paused.complete_requested = true;
             }
-            group = entry.parent;
-        }
-        false
-    })
+        });
+    }
 }
 
-/// Before a pass of `id`: completes and applies its paused composition if the pass would run a
-/// body around its paused content (or with `always`, `set_content`), as Compose's subcomposition
-/// of a precomposed item completes its paused composition first.
-pub(crate) fn complete_if_enclosed(id: CompositionId, always: bool) {
-    run_requested_cancel(id);
-    let state = with_runtime(|runtime| {
-        if !holds_enclosed_regions(runtime, id, always) {
+/// Before a pass of `id` or its next paused composition: what was asked of its paused
+/// composition and couldn't be done then. A cancel asked during a pass or a layout discards it;
+/// a completion a layout asked for resumes it, unpaused, and applies it (once: a composition
+/// applying a pass's end runs no pass, and it waits for the next).
+pub(crate) fn run_requests(id: CompositionId) {
+    let requested = with_runtime(|runtime| {
+        let data = runtime.compositions.get_mut(id)?;
+        if data.finishing {
             return None;
         }
-        runtime.compositions.get(id)?.paused.as_ref().map(|paused| paused.state.clone())
+        let paused = data.paused.as_mut()?;
+        if paused.cancel_requested {
+            return Some((paused.state.clone(), true));
+        }
+        if paused.complete_requested && paused.holds_regions() {
+            paused.complete_requested = false;
+            return Some((paused.state.clone(), false));
+        }
+        None
     });
-    let Some(state) = state else { return };
-    let paused = PausedComposition { composition: id, state, _not_send: PhantomData };
-    while !paused.resume_with(None) {}
-    paused.apply();
+    match requested {
+        Some((state, true)) => cancel(id, &state, true),
+        Some((state, false))
+            if resume_state(id, &state, None) && state.get() == PausedState::ApplyPending =>
+        {
+            apply(id, &state)
+        }
+        _ => {}
+    }
+}
+
+/// `resume` for whoever holds `state` (a `PausedComposition`, or a request run for it).
+fn resume_state(
+    id: CompositionId,
+    state: &Rc<Cell<PausedState>>,
+    should_pause: Option<Rc<dyn ShouldPauseCallback>>,
+) -> bool {
+    let paused = std::mem::ManuallyDrop::new(PausedComposition {
+        composition: id,
+        state: state.clone(),
+        _not_send: PhantomData,
+    });
+    paused.resume_with(should_pause)
+}
+
+/// After a pass of `id`: paused content it reached (adopted) stays the paused composition's,
+/// with what the pass changed in it recorded, its paused and invalidated scopes left for its
+/// resumes, as Compose's paused composition is a composition of its own that its parent's
+/// recomposition doesn't run (D592). A paused composition with no paused content left (the pass
+/// removed it) is finished.
+pub(crate) fn finish_pass_regions(id: CompositionId) {
+    with_runtime(|runtime| {
+        let Some(data) = runtime.compositions.get_mut(id) else { return };
+        let Some(paused) = data.paused.as_mut() else { return };
+        for region in &mut paused.regions {
+            region.adopted = false;
+        }
+        if paused.cancel_requested
+            || paused.regions.is_empty()
+            || paused.regions.iter().any(|region| !region.dead)
+        {
+            return;
+        }
+        paused.state.set(PausedState::Cancelled);
+        data.paused = None;
+    });
 }
 
 /// Applies `id`'s complete paused composition.
@@ -639,7 +849,7 @@ fn apply(id: CompositionId, state: &Rc<Cell<PausedState>>) {
         applier.on_begin_changes();
         // In tree order: a region's nodes go where the regions before it in the same parent
         // left room for them.
-        for region in &mut paused.regions {
+        for region in paused.regions.iter_mut().filter(|region| !region.dead) {
             let offset = with_runtime(|runtime| {
                 let table = &runtime.compositions.get(id).expect("a live composition").table;
                 node_offset(table, region.root)
@@ -706,9 +916,19 @@ struct Flat {
 /// node parent.
 fn replay(applier: &mut dyn ErasedApplier, region: &mut Region, offset: u32) {
     let top = region.node_parent;
+    replay_ops(applier, &mut region.ops, top, offset);
+}
+
+/// Plays `ops`, those of a region whose nodes start at `offset` in `top`.
+fn replay_ops(
+    applier: &mut dyn ErasedApplier,
+    ops: &mut Vec<RecordedOp>,
+    top: NodeRef,
+    offset: u32,
+) {
     let at =
         |parent: NodeRef, index: u32| (index + if parent == top { offset } else { 0 }) as usize;
-    for op in region.ops.drain(..) {
+    for op in ops.drain(..) {
         match op {
             RecordedOp::Attach { parent, index, node } => {
                 applier.attach(parent, at(parent, index), node)
@@ -719,6 +939,7 @@ fn replay(applier: &mut dyn ErasedApplier, region: &mut Region, offset: u32) {
             RecordedOp::Remove { parent, index, count } => {
                 applier.remove(parent, at(parent, index), count as usize)
             }
+            RecordedOp::Reuse { node } => applier.reuse(node),
         }
     }
 }
@@ -754,7 +975,7 @@ pub(crate) fn cancel(id: CompositionId, state: &Rc<Cell<PausedState>>, invalidat
         let mut flat = Flat::default();
         let mut enclosing = Vec::new();
         // Last first: removing a region's nodes leaves the offsets of those before it.
-        for region in paused.regions.iter_mut().rev() {
+        for region in paused.regions.iter_mut().rev().filter(|region| !region.dead) {
             let table = &mut data.table;
             let root = region.root;
             let offset = node_offset(table, root);

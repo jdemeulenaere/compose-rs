@@ -47,8 +47,8 @@ impl Composition {
     /// new one: groups with the same keys keep their state.
     pub fn set_content(&self, content: impl Fn() + 'static) {
         let content: Rc<dyn Fn()> = Rc::new(content);
-        // Paused content is applied first: the content runs around it.
-        crate::pausable::complete_if_enclosed(self.id, true);
+        // What was asked of the paused composition, if any, first.
+        crate::pausable::run_requests(self.id);
         // A composition closed at thread exit composes nothing.
         let Some(pass) = Pass::begin(self.id, Mode::Normal) else { return };
         compose_root(content);
@@ -59,8 +59,9 @@ impl Composition {
     pub fn recompose(&self) -> bool {
         // Derived states whose dependencies changed tell their readers first.
         crate::derived::flush_derived_states();
-        // A body around paused content runs: it's completed and applied first.
-        crate::pausable::complete_if_enclosed(self.id, false);
+        // What was asked of the paused composition, if any, first (a cancel during a layout, a
+        // completion a layout needs).
+        crate::pausable::run_requests(self.id);
         let Some(pass) = Pass::begin(self.id, Mode::Walk) else {
             return false;
         };
@@ -381,8 +382,23 @@ impl Pass {
             if frame.mode != Mode::Normal {
                 misuse(ComposeError::UnclosedGroups)
             }
-            let table = &mut data.table;
             let mut op = NodeOp::None;
+            if !frame.skipped
+                && frame.cursor != NONE
+                && let Some(paused) = data.paused.as_mut()
+                && paused.holds_regions()
+            {
+                let removed = crate::composer::siblings_from(&data.table, frame.cursor, NONE);
+                paused.discard_regions_in(
+                    &mut data.table,
+                    scopes,
+                    removal_stack,
+                    &mut data.deferred,
+                    removed,
+                    false,
+                );
+            }
+            let table = &mut data.table;
             if !frame.skipped && frame.cursor != NONE {
                 let count = remove_siblings(
                     table,
@@ -408,6 +424,10 @@ impl Pass {
         });
         apply_node_op(op);
         flush_node_moves();
+        // Paused content the pass reached or removed.
+        if self.kind == PassKind::Whole {
+            crate::pausable::finish_pass_regions(self.id);
+        }
         let (mut deferred, freeing) = with_runtime(|runtime| {
             runtime.active = None;
             runtime.pause = None;
@@ -507,6 +527,10 @@ fn apply_deferred(
             applier.try_borrow_mut().unwrap_or_else(|_| misuse(ComposeError::ApplierBusy));
         for node in deferred.deactivated_nodes.drain(..) {
             applier.deactivate(node);
+        }
+        if std::mem::take(&mut deferred.repeated_releases) {
+            let mut released = std::collections::HashSet::new();
+            deferred.released_nodes.retain(|node| released.insert(node.bits()));
         }
         for node in deferred.released_nodes.drain(..) {
             applier.release(node);

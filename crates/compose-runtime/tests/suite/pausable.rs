@@ -16,6 +16,8 @@ use compose_runtime::*;
 type Tree = NodeTree<String>;
 
 thread_local! {
+    static EPOCH: Cell<u32> = const { Cell::new(0) };
+    static SHOW_BORN: Cell<bool> = const { Cell::new(false) };
     static EVENTS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
 }
 
@@ -124,6 +126,9 @@ fn Item(spec: Rc<Spec>) {
         let observer = remember_observer(|| Logged(format!("o{}", spec.id)));
         drop(observer);
         let value = spec.value.get();
+        // The epoch it was remembered in, shown when `SHOW_BORN` (review tests).
+        let born = remember(|| EPOCH.get());
+        let shown_born = SHOW_BORN.get();
         if spec.effect {
             let id = spec.id;
             SideEffect(move || event(format!("effect {id}")));
@@ -148,7 +153,12 @@ fn Item(spec: Rc<Spec>) {
             }
         };
         if spec.node {
-            Node(spec.reusable_node, format!("{}:{value}", spec.id), content);
+            let label = if shown_born {
+                format!("{}:{value}@{born}", spec.id)
+            } else {
+                format!("{}:{value}", spec.id)
+            };
+            Node(spec.reusable_node, label, content);
         } else {
             content();
         }
@@ -427,8 +437,10 @@ fn state_written_once_complete_makes_it_incomplete() {
     assert_eq!(scene.tree(), "root\n  1:2\n");
 }
 
+/// A pass reaching paused content (a body around it ran) composes in it what its body changes
+/// (here, reused content: everything), recorded for the paused composition's `apply` (D592).
 #[test]
-fn a_pass_around_paused_content_completes_and_applies_it_first() {
+fn a_pass_reaching_paused_content_composes_into_it() {
     let items = vec![with_children(1, chain(&[2]))];
     let scene = Scene::new(items);
     scene.shown.set(true);
@@ -439,7 +451,9 @@ fn a_pass_around_paused_content_completes_and_applies_it_first() {
     // The reusable content around it changes key: its body runs around the paused content.
     scene.reuse_key.set(1);
     scene.composition.recompose();
-    assert!(paused.is_applied(), "completed and applied before the pass");
+    assert!(!paused.is_applied(), "still the paused composition's");
+    assert!(paused.resume(|| true), "nothing left to compose");
+    paused.apply();
     assert_eq!(scene.tree(), "root\n  1:0\n    2:0\n");
     scene.composition.validate();
     let events = take_events();
@@ -885,4 +899,517 @@ fn content_outside_pausable_content_composes_and_applies_with_the_first_pass() {
     assert_eq!(dump(), "outside\n  2:0\n");
     assert_eq!(lifecycle(&take_events()), ["remember o2"]);
     composition.validate();
+}
+
+// ---- Review (adversarial) -------------------------------------------------------------------
+
+#[test]
+fn review_a_paused_reusing_scope_reached_by_its_parent_still_reuses() {
+    // 1 { 2 }, composed, then reused (another reuse key) in a paused composition: 1 runs,
+    // 2 pauses while reusing (its group keeps the old item's content).
+    let items = vec![with_children(1, chain(&[2]))];
+    let scene = Scene::new(items);
+    scene.shown.set(true);
+    scene.composition.recompose();
+    take_events();
+    scene.reuse_key.set(1);
+    let paused = scene.composition.recompose_pausable();
+    let (callback, _) = scripted(&[false, true]);
+    assert!(!paused.resume(callback));
+    assert_eq!(take_events(), ["run 1"]);
+    // A write invalidating item 1: the next resume runs 1's body again, which reaches 2 (paused,
+    // reusing) through its parent rather than through the walk. Compose's `addRecomposeScope`
+    // resumes a paused scope met this way too, in reuse if it paused reusing.
+    scene.items[0].value.set(9);
+    assert!(paused.resume(|| false));
+    paused.apply();
+    let mut events = lifecycle(&take_events());
+    events.sort();
+    // Reused content's values are forgotten and new ones remembered, as composed at once.
+    assert_eq!(events, ["forget o1", "forget o2", "remember o1", "remember o2"]);
+    scene.composition.validate();
+}
+
+#[test]
+fn review_a_scope_resumed_through_its_parent_is_no_longer_paused() {
+    // Plain insertion: 2 pauses, 1 is invalidated, its body composes 2. 2's scope stays marked
+    // paused (with its segment), and a later paused composition reusing the content takes it
+    // for a paused scope of its own (item 2 runs a side effect, which goes to its segment).
+    let items = vec![with_children(1, vec![Rc::new(Spec { effect: true, ..Spec::new(2) })])];
+    let scene = Scene::new(items);
+    scene.shown.set(true);
+    let paused = scene.composition.recompose_pausable();
+    let (callback, _) = scripted(&[false, true]);
+    assert!(!paused.resume(callback));
+    scene.items[0].value.set(9);
+    assert!(paused.resume(|| false));
+    paused.apply();
+    scene.composition.validate();
+    // Reused in a new paused composition, nothing pausing; then a write invalidates item 2.
+    scene.reuse_key.set(1);
+    let second = scene.composition.recompose_pausable();
+    let (callback, _) = scripted(&[false, false]);
+    assert!(second.resume(callback));
+    scene.items[0].children.get()[0].value.set(4);
+    take_events();
+    assert!(second.resume(|| false));
+    assert_eq!(take_events(), ["run 2"]);
+    second.apply();
+    take_events();
+    scene.composition.validate();
+    assert_eq!(scene.tree(), "root\n  1:9\n    2:4\n");
+}
+
+thread_local! {
+    static OWN_COMPOSITION: RefCell<Option<std::rc::Weak<Composition>>> =
+        const { RefCell::new(None) };
+}
+
+/// A restartable composable reading `trigger`: once it's set, its side effect writes `tick`
+/// (read by the content around the paused content) and recomposes its own composition at once,
+/// while that composition is still applying its pass's end.
+fn Trigger(trigger: MutableState<u32>, tick: MutableState<u32>) {
+    let composer = current();
+    composer.start_restart_group(key_of("pausable::Trigger"));
+    let changed = composer.update_kept(
+        |kept: &(MutableState<u32>, MutableState<u32>)| kept.0 != trigger || kept.1 != tick,
+        || (trigger, tick),
+    );
+    if !changed && composer.skipping() {
+        composer.skip_to_group_end();
+    } else if trigger.get() > 0 {
+        SideEffect(move || {
+            tick.set(tick.get() + 1);
+            let own =
+                OWN_COMPOSITION.with(|own| own.borrow().as_ref().and_then(|own| own.upgrade()));
+            if let Some(own) = own {
+                own.recompose();
+            }
+        });
+    }
+    composer.end_restart_group(|kept| {
+        let (trigger, tick) =
+            *kept.downcast_ref::<(MutableState<u32>, MutableState<u32>)>().expect("kept");
+        Trigger(trigger, tick)
+    });
+}
+
+#[test]
+fn review_recomposing_while_finishing_around_paused_content_returns() {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let composition = Rc::new(Composition::new(Tree::new()));
+        OWN_COMPOSITION.with(|own| *own.borrow_mut() = Some(Rc::downgrade(&composition)));
+        let shown = mutable_state_of(false);
+        let trigger = mutable_state_of(0u32);
+        let tick = mutable_state_of(0u32);
+        let (shown_handle, trigger_handle, tick_handle) =
+            (shown.handle(), trigger.handle(), tick.handle());
+        let item = Rc::new(Spec::new(1));
+        let item_for_content = item.clone();
+        composition.set_content(move || {
+            tick_handle.get();
+            let item = item_for_content.clone();
+            Node(true, "root".to_string(), || {
+                Trigger(trigger_handle, tick_handle);
+                if shown_handle.get() {
+                    PausableContent(|| Item(item.clone()));
+                }
+            });
+        });
+        shown.set(true);
+        let paused = composition.recompose_pausable();
+        assert!(!paused.resume(|| true));
+        // A pass beside the paused content, whose effect invalidates the content around it and
+        // recomposes at once (as a frame requester may): that recomposition must return.
+        trigger.set(1);
+        composition.recompose();
+        let _ = sender.send(());
+        drop(paused);
+        drop(item);
+    });
+    receiver
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .expect("recompose() looped forever in complete_if_enclosed");
+}
+
+#[test]
+fn review_cancelling_from_the_callback_stays_cancelled() {
+    let items = vec![with_children(1, chain(&[2, 3]))];
+    let scene = Scene::new(items);
+    scene.shown.set(true);
+    take_events();
+    let paused = Rc::new(scene.composition.recompose_pausable());
+    let weak = Rc::downgrade(&paused);
+    // Cancelled at the first pause point, from the callback (during the pass): told to go on.
+    let cancelled = Cell::new(false);
+    let complete = paused.resume(move || {
+        if !cancelled.replace(true) {
+            weak.upgrade().expect("alive").cancel();
+        }
+        false
+    });
+    assert!(paused.is_cancelled(), "complete: {complete}, applied: {}", paused.is_applied());
+    assert!(!complete);
+}
+
+/// Composes the same forest twice, one paused at random with changes *around* the paused
+/// content between its resumes (the content around it composed again, its reusable content's
+/// key changed, it hidden and shown) and inside it, and checks both the same at the end. Item
+/// labels show the epoch their `remember` ran in (the reuse key's changes), so content kept
+/// rather than reused shows.
+fn compare_outer(seed: u64) {
+    SHOW_BORN.set(true);
+    EPOCH.set(0);
+    let reference = Scene::new(forest(seed));
+    let scene = Scene::new(forest(seed));
+    let random = Random::new(seed ^ 0x1234);
+    let reuse = seed.is_multiple_of(2);
+    for each in [&reference, &scene] {
+        each.shown.set(true);
+        if reuse {
+            each.composition.recompose();
+        }
+    }
+    if reuse {
+        EPOCH.set(1);
+        for each in [&reference, &scene] {
+            each.reuse_key.set(1);
+        }
+    }
+    reference.composition.recompose();
+    let paused = scene.composition.recompose_pausable();
+    let pauses = Rc::new(Random::new(seed ^ 0x99));
+    let mut steps = 0;
+    loop {
+        let answers = pauses.clone();
+        if paused.resume(move || answers.chance(50)) {
+            paused.apply();
+            break;
+        }
+        steps += 1;
+        assert!(steps < 10_000, "seed {seed}: no progress");
+        scene.composition.validate();
+        if seed % 3 == 1 && random.chance(15) {
+            paused.cancel();
+            scene.composition.validate();
+            scene.tick.set(scene.tick.get() + 1);
+            reference.tick.set(reference.tick.get() + 1);
+            for each in [&scene, &reference] {
+                each.composition.recompose();
+                each.composition.validate();
+            }
+            break;
+        }
+        if random.chance(50) {
+            let (kind, pick) = (random.below(5), random.below(1000) as usize);
+            if kind == 1 {
+                EPOCH.set(EPOCH.get() + 1);
+            }
+            for each in [&scene, &reference] {
+                match kind {
+                    0 => each.tick.set(each.tick.get() + 1),
+                    1 => each.reuse_key.set(each.reuse_key.get() + 1),
+                    2 => each.shown.set(!each.shown.get()),
+                    _ => {
+                        let items = all_items(&each.items);
+                        let item = &items[pick % items.len()];
+                        item.value.set(item.value.get() + 1);
+                    }
+                }
+                each.composition.recompose();
+                each.composition.validate();
+            }
+            if paused.is_applied() || paused.is_cancelled() {
+                break;
+            }
+        }
+    }
+    for each in [&scene, &reference] {
+        each.shown.set(true);
+        each.composition.recompose();
+        each.composition.validate();
+    }
+    assert_eq!(scene.tree(), reference.tree(), "seed {seed}");
+    assert_eq!(scene.groups(), reference.groups(), "seed {seed}");
+    take_events();
+    SHOW_BORN.set(false);
+}
+
+#[test]
+fn review_changes_around_paused_content_between_resumes_end_as_composed_at_once() {
+    // Fails at seed 128 (a paused scope composed by its parent's body, not in reuse) and, with
+    // that fixed, at seed 874 (a walk inside a skipped paused group resets the reuse marker).
+    let seeds: u64 = std::env::var("OUTER_SEEDS").ok().and_then(|s| s.parse().ok()).unwrap_or(1000);
+    for seed in 0..seeds {
+        compare_outer(seed);
+    }
+}
+
+#[test]
+fn review_a_walk_inside_a_paused_group_keeps_the_reuse_around_it() {
+    // Reused: 1 { 2 { 3 { 4 (with a leaf), 6 }, 5 } }. Labels show the epoch each item's
+    // `remember` ran in: reused at epoch 1, every item should show @1.
+    SHOW_BORN.set(true);
+    EPOCH.set(0);
+    let third = Spec::new(3);
+    let fourth = Spec::new(4);
+    fourth.branch.set(true);
+    third.children.set(vec![Rc::new(fourth), Rc::new(Spec::new(6))]);
+    let second = Spec::new(2);
+    second.children.set(vec![Rc::new(third), Rc::new(Spec::new(5))]);
+    let first = Spec::new(1);
+    first.children.set(vec![Rc::new(second)]);
+    let scene = Scene::new(vec![Rc::new(first)]);
+    scene.shown.set(true);
+    scene.composition.recompose();
+    EPOCH.set(1);
+    scene.reuse_key.set(1);
+    let paused = scene.composition.recompose_pausable();
+    // 1 runs, 2 pauses (reusing; its content kept as it was, its scopes live).
+    let (callback, _) = scripted(&[false, true]);
+    assert!(!paused.resume(callback));
+    // Item 4, in 2's kept content, is written.
+    let second = scene.items[0].children.get()[0].clone();
+    let third = second.children.get()[0].clone();
+    let fourth = third.children.get()[0].clone();
+    fourth.value.set(1);
+    // 2 resumes (reusing): 3 pauses; skipped while dirty, the walk inside it restarts 4 (asked:
+    // runs), whose leaf pauses (reusing); 5 runs.
+    let (callback, _) = scripted(&[true, false, true, false]);
+    assert!(!paused.resume(callback));
+    // 3 resumes (reusing): 4 pauses; skipped while dirty, the walk inside it restarts the leaf,
+    // which sets the reuse marker at its own depth and clears it as it ends: 6, after 4 in 3,
+    // composes as if not reused (it skips, keeping what it remembered at epoch 0).
+    let (callback, _) = scripted(&[true]);
+    assert!(!paused.resume(callback));
+    while !paused.resume(|| false) {}
+    paused.apply();
+    let tree = scene.tree();
+    SHOW_BORN.set(false);
+    assert!(!tree.contains("@0"), "content kept rather than reused:\n{tree}");
+}
+
+// ---- After the review: passes around paused content, requests, reuse at apply ---------------
+
+#[test]
+fn a_pass_removing_paused_content_discards_it_without_composing_it() {
+    let items = vec![with_children(1, chain(&[2, 3]))];
+    let scene = Scene::new(items);
+    let nodes = scene.node_count();
+    scene.shown.set(true);
+    take_events();
+    let paused = scene.composition.recompose_pausable();
+    let (callback, _) = scripted(&[false, true, true]);
+    assert!(!paused.resume(callback));
+    assert_eq!(take_events(), ["run 1"]);
+    // Hidden: the pass removing it composes nothing of it (D593).
+    scene.shown.set(false);
+    scene.composition.recompose();
+    let events = take_events();
+    assert!(!events.iter().any(|event| event.starts_with("run ")), "{events:?}");
+    assert_eq!(lifecycle(&events), ["abandon o1"]);
+    assert!(paused.is_cancelled());
+    assert_eq!(scene.node_count(), nodes, "what it made released");
+    scene.composition.validate();
+    // Shown again: composed anew.
+    scene.shown.set(true);
+    scene.composition.recompose();
+    assert_eq!(scene.tree(), "root\n  1:0\n    2:0\n    3:0\n");
+    scene.composition.validate();
+}
+
+#[test]
+fn a_pass_removing_reused_paused_content_releases_its_old_nodes_once() {
+    let items = vec![with_children(1, chain(&[2, 3]))];
+    let scene = Scene::new(items);
+    let empty = scene.node_count();
+    scene.shown.set(true);
+    scene.composition.recompose();
+    scene.reuse_key.set(1);
+    take_events();
+    let paused = scene.composition.recompose_pausable();
+    let (callback, _) = scripted(&[false, true, false]);
+    assert!(!paused.resume(callback));
+    scene.shown.set(false);
+    scene.composition.recompose();
+    assert!(paused.is_cancelled());
+    assert_eq!(scene.node_count(), empty);
+    assert_eq!(scene.tree(), "root\n");
+    let mut events = lifecycle(&take_events());
+    events.sort();
+    assert_eq!(events, ["abandon o1", "abandon o3", "forget o1", "forget o2", "forget o3"]);
+    scene.composition.validate();
+}
+
+/// Paused content in a `ReusableContentHost` deactivated meanwhile: discarded, not composed.
+#[test]
+fn deactivating_paused_content_discards_it() {
+    let composition = Composition::new(Tree::new());
+    let active = mutable_state_of(false);
+    let active_handle = active.handle();
+    let item = with_children(1, chain(&[2]));
+    let content_item = item.clone();
+    composition.set_content(move || {
+        let item = content_item.clone();
+        Node(true, "root".to_string(), || {
+            ReusableContentHost(active_handle.get(), || {
+                Node(true, "host".to_string(), || PausableContent(|| Item(item.clone())));
+            });
+        });
+    });
+    let dump = || composition.with_applier(|tree: &mut Tree| tree.dump()).replace('"', "");
+    let nodes = || composition.with_applier(|tree: &mut Tree| tree.len());
+    active.set(true);
+    take_events();
+    let paused = composition.recompose_pausable();
+    let (callback, _) = scripted(&[false, true]);
+    assert!(!paused.resume(callback));
+    assert_eq!(take_events(), ["run 1"]);
+    assert_eq!(dump(), "root\n  host\n");
+    let made = nodes();
+    active.set(false);
+    composition.recompose();
+    let events = take_events();
+    assert!(!events.iter().any(|event| event.starts_with("run ")), "{events:?}");
+    assert_eq!(lifecycle(&events), ["abandon o1"]);
+    assert!(paused.is_cancelled());
+    assert!(nodes() < made, "what it made released");
+    composition.validate();
+    // Active again: composed anew in the reused host.
+    active.set(true);
+    composition.recompose();
+    assert_eq!(dump(), "root\n  host\n    1:0\n      2:0\n");
+    composition.validate();
+}
+
+#[test]
+fn a_completion_asked_for_is_done_before_the_next_pass() {
+    let items = vec![with_children(1, chain(&[2]))];
+    let scene = Scene::new(items);
+    scene.shown.set(true);
+    let paused = scene.composition.recompose_pausable();
+    assert!(!paused.resume(|| true));
+    // A layout needing it asks (it can't compose itself); the next pass completes it first.
+    paused.request_completion();
+    assert!(!paused.is_complete());
+    scene.tick.set(1);
+    scene.composition.recompose();
+    assert!(paused.is_applied());
+    assert_eq!(scene.tree(), "root\n  1:0\n    2:0\n");
+    scene.composition.validate();
+}
+
+#[test]
+fn dropping_a_paused_composition_cancels_it() {
+    let items = vec![with_children(1, chain(&[2]))];
+    let scene = Scene::new(items);
+    let nodes = scene.node_count();
+    scene.shown.set(true);
+    take_events();
+    let paused = scene.composition.recompose_pausable();
+    let (callback, _) = scripted(&[false, true]);
+    assert!(!paused.resume(callback));
+    drop(paused);
+    assert_eq!(lifecycle(&take_events()), ["abandon o1"]);
+    assert_eq!(scene.node_count(), nodes);
+    // The next paused composition isn't held up by it.
+    let next = scene.composition.recompose_pausable();
+    assert!(next.resume(|| false));
+    next.apply();
+    assert_eq!(scene.tree(), "root\n  1:0\n    2:0\n");
+    scene.composition.validate();
+}
+
+/// A node tree that logs the nodes reset for reuse.
+struct ReuseLog(Tree);
+
+impl Applier for ReuseLog {
+    type Node = String;
+    fn root(&self) -> NodeRef {
+        self.0.root()
+    }
+    fn insert(&mut self, parent: NodeRef, index: usize, node: String) -> NodeRef {
+        Applier::insert(&mut self.0, parent, index, node)
+    }
+    fn create(&mut self, node: String) -> NodeRef {
+        Applier::create(&mut self.0, node)
+    }
+    fn attach(&mut self, parent: NodeRef, index: usize, node: NodeRef) {
+        Applier::attach(&mut self.0, parent, index, node)
+    }
+    fn remove(&mut self, parent: NodeRef, index: usize, count: usize) {
+        Applier::remove(&mut self.0, parent, index, count)
+    }
+    fn move_nodes(&mut self, parent: NodeRef, from: usize, to: usize, count: usize) {
+        Applier::move_nodes(&mut self.0, parent, from, to, count)
+    }
+    fn release(&mut self, node: NodeRef) {
+        Applier::release(&mut self.0, node)
+    }
+    fn reuse(&mut self, node: NodeRef) {
+        let label = self.0.get(node).cloned().unwrap_or_default();
+        event(format!("reuse {label}"));
+    }
+}
+
+fn LogNode(label: String, content: impl FnOnce()) {
+    let composer = current();
+    let node = composer.start_reusable_node(key_of("pausable::LogNode"), || label.clone());
+    composer.with_applier(|tree: &mut ReuseLog| {
+        let value = tree.0.get_mut(node).expect("live");
+        *value = label.clone();
+    });
+    content();
+    composer.end_group();
+}
+
+/// A node reused in paused content is reset as the paused composition is applied, as Compose's
+/// recorded `reuse` (its focus requesters attached only then, D591).
+#[test]
+fn a_node_reused_in_paused_content_is_reset_at_apply() {
+    let composition = Composition::new(ReuseLog(Tree::new()));
+    let key = mutable_state_of(0);
+    let key_handle = key.handle();
+    composition.set_content(move || {
+        LogNode("root".to_string(), || {
+            ReusableContent(key_handle.get(), || {
+                PausableContent(|| LogNode(format!("item {}", key_handle.get()), || {}));
+            });
+        });
+    });
+    take_events();
+    key.set(1);
+    let paused = composition.recompose_pausable();
+    assert!(paused.resume(|| false));
+    assert_eq!(take_events(), Vec::<String>::new(), "not reset before apply");
+    paused.apply();
+    assert_eq!(take_events(), ["reuse item 1"]);
+    composition.validate();
+}
+
+/// A pass through paused content (the body around it ran, the composables in it skipping with
+/// their arguments) composes nothing of what's paused: that's its resumes' (D592).
+#[test]
+fn a_pass_through_paused_content_leaves_what_is_paused() {
+    let items = vec![with_children(1, chain(&[2, 3]))];
+    let scene = Scene::new(items);
+    scene.shown.set(true);
+    take_events();
+    let paused = scene.composition.recompose_pausable();
+    let (callback, _) = scripted(&[false, true, true]);
+    assert!(!paused.resume(callback));
+    assert_eq!(take_events(), ["run 1"]);
+    // The content around it composes again: it reaches the paused content's group.
+    scene.tick.set(1);
+    scene.composition.recompose();
+    assert_eq!(take_events(), Vec::<String>::new());
+    assert!(!paused.is_complete());
+    assert_eq!(scene.tree(), "root\n");
+    scene.composition.validate();
+    assert!(paused.resume(|| false));
+    assert_eq!(take_events(), ["run 2", "run 3"]);
+    paused.apply();
+    assert_eq!(scene.tree(), "root\n  1:0\n    2:0\n    3:0\n");
+    scene.composition.validate();
 }

@@ -1022,6 +1022,7 @@ impl Measurer<'_, '_> {
     /// Item `item`'s child, if it's composed.
     fn child_of(&self, item: usize) -> Option<usize> {
         if self.unready && !self.prefetch.content_ready(self.items.key(item)) {
+            self.prefetch.complete_pending();
             self.lacked_unready.set(true);
             return None;
         }

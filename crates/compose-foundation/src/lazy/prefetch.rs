@@ -25,9 +25,9 @@
 //! layout lacks: wanted, the frame composes it (completing the paused composition first), as
 //! Compose's measurement completes a precomposed item's paused composition.
 //!
-//! Without pausable composition (`ComposeFoundationFlags::set_pausable_composition_in_prefetch_
-//! enabled(false)`, as Compose's flag), a request's composition is one step, applied with it,
-//! gated by the whole composition's average.
+//! Without pausable composition (Compose's flag, off: `ComposeFoundationFlags`'
+//! `set_pausable_composition_in_prefetch_enabled(false)`), a request's composition is one step,
+//! applied with it, gated by the whole composition's average.
 //!
 //! compose-rs's own behaviours are optimizations of the host's (D560-D565): two items ahead
 //! (`PREFETCH_TWO_AHEAD`), D341/D381's estimate (`PREFETCH_BUDGET_RECENT_MAXIMUM`), prefetching
@@ -35,7 +35,7 @@
 //! (`KEEP_ITEMS_BEHIND`).
 
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::rc::{Rc, Weak};
 use std::time::Instant;
@@ -144,16 +144,14 @@ pub(super) struct Prefetch {
     /// there, whoever composed it (Compose traverses the precomposed item's nodes for them,
     /// `traversablePrefetchState`); each notes itself through its item's `ParentList`.
     nested: RefCell<HashMap<u64, Vec<Weak<LazyListInner>>>>,
-    /// The item whose paused composition a request holds, not applied yet.
-    pending: RefCell<Option<(u64, Rc<PausedComposition>)>>,
+    /// The paused composition a request holds, not applied yet (the request owns it: dropped,
+    /// it's cancelled).
+    pending: RefCell<Option<Weak<PausedComposition>>>,
     /// Items whose content isn't the layout's to measure: composed by a paused composition not
     /// applied yet, or cancelled (removed, composed again when the item is next composed). A
     /// remember observer in each item's content keeps it: noted as it's made, struck once it's
     /// remembered (D592, D594).
-    unready: RefCell<Vec<u64>>,
-    /// A trimming request found a paused composition pending: it's asked again once that one's
-    /// applied or cancelled.
-    trim_waits: Cell<bool>,
+    unready: RefCell<HashSet<u64>>,
     /// A request's paused composition was cancelled (its content removed, the composable around
     /// it invalidated): the layout has the items composed again (`take_cancelled`), so the next
     /// pass composes the items' composition first, which lets the item go if it's no longer
@@ -191,7 +189,6 @@ impl Prefetch {
             nested: RefCell::default(),
             pending: RefCell::new(None),
             unready: RefCell::default(),
-            trim_waits: Cell::new(false),
             cancelled: Cell::new(false),
             scheduler: RefCell::new(None),
             precomposed: RefCell::default(),
@@ -496,7 +493,6 @@ impl Prefetch {
         if self.trim.borrow().upgrade().is_some() {
             return;
         }
-        self.trim_waits.set(false);
         let request = Rc::new(TrimRequest { state: Rc::downgrade(state) });
         *self.trim.borrow_mut() = Rc::downgrade(&request);
         if self.policy.get().keep_behind == 0 {
@@ -536,14 +532,18 @@ impl Prefetch {
         self.cancelled.take()
     }
 
-    /// A paused composition was applied or cancelled: none pending now, and a trimming request
-    /// that waited for it is asked again.
-    fn pending_done(&self, state: &Rc<LazyListInner>) {
-        *self.pending.borrow_mut() = None;
-        if self.trim_waits.replace(false) {
-            let scheduler = self.scheduler.borrow().clone();
-            self.trim_between_frames(state, scheduler.as_ref(), state.composed.get());
+    /// A layout lacked an item whose content isn't ready: the paused composition pending, if
+    /// any, is completed before the next pass (its round's), as Compose's measurement completes
+    /// a precomposed item's (D592). A cancelled one's item composes its content in that pass.
+    pub(super) fn complete_pending(&self) {
+        if let Some(paused) = self.pending.borrow().as_ref().and_then(Weak::upgrade) {
+            paused.request_completion();
         }
+    }
+
+    /// A paused composition was applied or cancelled: none pending now.
+    fn pending_done(&self) {
+        *self.pending.borrow_mut() = None;
     }
 
     fn update_averages(&self, content_type: Option<u64>, update: impl FnOnce(&mut Averages)) {
@@ -961,6 +961,12 @@ impl Handle {
         }
         // Compose's apply step, gated by its own average.
         let paused = self.paused.borrow().clone();
+        if paused.as_ref().is_some_and(|paused| paused.is_cancelled()) {
+            // A pass discarded it (its item left): over.
+            self.canceled.set(true);
+            self.clean_up(prefetch);
+            return false;
+        }
         if let Some(paused) = paused {
             if !paused.is_applied() {
                 if !paused.is_complete() {
@@ -983,7 +989,7 @@ impl Handle {
                 prefetch.stepped(scope);
             }
             *self.paused.borrow_mut() = None;
-            prefetch.pending_done(&state);
+            prefetch.pending_done();
         }
         if self.nested.borrow().is_none() {
             // `resolveNestedPrefetchStates`: the lazy lists in the item, whether this request or
@@ -1081,7 +1087,7 @@ impl Handle {
                     return false;
                 }
                 Some(Composed::Paused(paused)) => {
-                    *prefetch.pending.borrow_mut() = Some((self.key, paused.clone()));
+                    *prefetch.pending.borrow_mut() = Some(Rc::downgrade(&paused));
                     *self.paused.borrow_mut() = Some(paused.clone());
                     paused
                 }
@@ -1091,6 +1097,12 @@ impl Handle {
                 }
             },
         };
+        if paused.is_cancelled() {
+            // A pass discarded it (its item left, or was deactivated): over.
+            self.canceled.set(true);
+            self.clean_up(prefetch);
+            return false;
+        }
         let timing = Rc::new(PauseTiming {
             state: Rc::downgrade(state),
             content_type: self.content_type,
@@ -1100,7 +1112,7 @@ impl Handle {
             mark: Cell::new(mark),
             requested: Cell::new(false),
         });
-        while !paused.is_complete() && !timing.requested.get() {
+        while !paused.is_complete() && !paused.is_cancelled() && !timing.requested.get() {
             let asked = timing.clone();
             let mark = timing.mark.get();
             // A resume that composed nothing (no pass could run: the composition is applying
@@ -1130,14 +1142,19 @@ impl Handle {
     /// removed, before the composition's next pass if a layout runs now); its item composes its
     /// content again when composed next.
     pub(super) fn clean_up(&self, prefetch: &Prefetch) {
-        let Some(paused) = self.paused.borrow_mut().take() else { return };
-        if paused.is_applied() {
-            return;
+        // Its nested lists' requests too: one of them may hold a paused composition.
+        if let Some(nested) = self.nested.borrow_mut().take() {
+            for (list, requests) in nested.lists.iter().zip(nested.requests) {
+                for request in requests.into_iter().flatten() {
+                    request.clean_up(&list.prefetch);
+                }
+            }
         }
-        paused.cancel();
-        prefetch.cancelled.set(true);
-        if let Some(state) = self.state.upgrade() {
-            prefetch.pending_done(&state);
+        let Some(paused) = self.paused.borrow_mut().take() else { return };
+        prefetch.pending_done();
+        if !paused.is_applied() && !paused.is_cancelled() {
+            paused.cancel();
+            prefetch.cancelled.set(true);
         }
     }
 
@@ -1271,11 +1288,6 @@ impl PrefetchRequest for TrimRequest {
     fn execute(&self, scope: &mut PrefetchRequestScope<'_>) -> bool {
         let Some(state) = self.state.upgrade() else { return false };
         let prefetch = &state.prefetch;
-        // Its composition would complete the paused one first: it waits for it to be applied.
-        if prefetch.pending.borrow().is_some() {
-            prefetch.trim_waits.set(true);
-            return false;
-        }
         let (start, end) = state.composed.get();
         let (low, high) = prefetch.limits.get();
         let (wanted_start, wanted_end) = prefetch.wanted.get();
@@ -1334,13 +1346,11 @@ impl ParentList {
 pub(super) static LOCAL_PARENT_LIST: compose_runtime::CompositionLocal<Option<Rc<ParentList>>> =
     compose_runtime::CompositionLocal::new("LocalParentLazyList", || None);
 
-/// The most items noted unready: one cancelled and never composed again stays noted (harmless:
-/// composed again, it's struck), and the oldest goes beyond this many.
-const MOST_UNREADY: usize = 64;
-
 /// An item's content's remember observer: its content is the layout's once remembered (at the
-/// end of the pass composing it, or when its paused composition is applied); made, abandoned
-/// (a paused composition cancelled), not yet (D592, D594).
+/// end of the pass composing it, or when its paused composition is applied); made and not yet,
+/// it isn't (D592). Abandoned (a paused composition cancelled, its content removed) or forgotten,
+/// the item has no such content left: the pass after composes it again, noted anew, or lets it
+/// go.
 pub(super) struct ContentReady {
     list: Weak<LazyListInner>,
     key: u64,
@@ -1350,23 +1360,29 @@ impl ContentReady {
     /// Made as the item's content composes: unready until remembered.
     pub(super) fn new(list: Weak<LazyListInner>, key: u64) -> ContentReady {
         if let Some(list) = list.upgrade() {
-            let mut unready = list.prefetch.unready.borrow_mut();
-            if !unready.contains(&key) {
-                if unready.len() >= MOST_UNREADY {
-                    unready.remove(0);
-                }
-                unready.push(key);
-            }
+            list.prefetch.unready.borrow_mut().insert(key);
         }
         ContentReady { list, key }
+    }
+
+    fn ready(&self) {
+        if let Some(list) = self.list.upgrade() {
+            list.prefetch.unready.borrow_mut().remove(&self.key);
+        }
     }
 }
 
 impl compose_runtime::RememberObserver for ContentReady {
     fn on_remembered(&self) {
-        if let Some(list) = self.list.upgrade() {
-            list.prefetch.unready.borrow_mut().retain(|key| *key != self.key);
-        }
+        self.ready();
+    }
+
+    fn on_forgotten(&self) {
+        self.ready();
+    }
+
+    fn on_abandoned(&self) {
+        self.ready();
     }
 }
 

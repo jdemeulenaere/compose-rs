@@ -25,6 +25,9 @@ thread_local! {
     static LIVE: RefCell<HashSet<usize>> = RefCell::new(HashSet::new());
     /// How long composing a part takes.
     static PART_TIME: Cell<Duration> = const { Cell::new(Duration::ZERO) };
+    /// Each row's focus requester.
+    static REQUESTERS: RefCell<HashMap<usize, compose_ui::FocusRequester>> =
+        RefCell::new(HashMap::new());
 }
 
 fn parts(row: usize) -> usize {
@@ -55,7 +58,13 @@ fn ListRow(index: usize) {
             LIVE.with(|live| live.borrow_mut().remove(&index));
         })
     });
-    Row!(modifier = Modifier.size((100.dp(), 20.dp())).test_tag(format!("row {index}")), {
+    let requester = remember(compose_ui::FocusRequester::new);
+    REQUESTERS.with(|requesters| requesters.borrow_mut().insert(index, requester));
+    let modifier = Modifier
+        .size((100.dp(), 20.dp()))
+        .test_tag(format!("row {index}"))
+        .focus_requester(requester);
+    Row!(modifier = modifier, {
         for part in 0..4 {
             Part(index, part);
         }
@@ -156,6 +165,37 @@ fn a_composition_out_of_time_pauses_and_resumes_after_the_next_frame() {
     scroll(&mut ui, *state, 20.0);
     assert_eq!(parts(7), 4);
     assert!(in_tree(&ui, "part 7.3"));
+}
+
+/// A paused item's focus requester focuses nothing until it's applied, as Compose's modifier
+/// nodes attach as the composition is applied.
+#[test]
+fn a_paused_items_focus_requester_attaches_as_it_is_applied() {
+    let (mut ui, _state) = first_request_paused();
+    let requester = REQUESTERS.with(|requesters| requesters.borrow().get(&7).copied());
+    let requester = requester.expect("row 7's requester remembered");
+    assert!(!requester.request_focus(), "focused a node not in the tree");
+    assert!(!ui.host().prefetch(later()));
+    assert!(requester.request_focus());
+}
+
+/// Items that left are let go by the next idle time's trimming request while a request's
+/// composition is paused: the trim's pass leaves the paused item alone, so it doesn't wait for
+/// the request (D592).
+#[test]
+fn items_leaving_go_while_a_request_is_paused() {
+    let (mut ui, state) = first_request_paused();
+    assert!(live(1));
+    // 15 px more: row 1 leaves the view, row 7 not in it yet.
+    scroll(&mut ui, *state, 15.0);
+    assert!(live(1), "kept until the next idle time (D575)");
+    ui.host().prefetch(within(1));
+    assert!(!live(1), "let go in the idle time");
+    ui.host().composition().validate();
+    while ui.host().prefetch(later()) {}
+    assert_eq!(parts(7), 4);
+    assert!(live(7));
+    ui.host().composition().validate();
 }
 
 #[test]

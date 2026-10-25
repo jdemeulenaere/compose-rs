@@ -87,8 +87,9 @@ pub(crate) enum NodeOp {
 pub(crate) enum NodeStart {
     NotNode,
     Reused(NodeRef),
-    /// A node kept by content being reused: the applier resets it first (`Applier::reuse`).
-    Reusing(NodeRef),
+    /// A node kept by content being reused: the applier resets it first (`Applier::reuse`), at
+    /// once, or in a region (the second field) when it's applied.
+    Reusing(NodeRef, u32),
     Insert {
         parent: NodeRef,
         index: u32,
@@ -287,6 +288,12 @@ impl Runtime {
         };
 
         let parent = *parent;
+        // A pass reaching paused content's group (a body around it ran): it composes the rest of
+        // it, recorded as the region's, and applies it at its end (D592).
+        let adopted = match paused {
+            Some(paused) if !inserting && parent.region == NO_REGION => paused.adopt(index),
+            _ => None,
+        };
         let group = &mut table[index];
         let dirty = group.dirty;
         group.dirty = false;
@@ -329,6 +336,12 @@ impl Runtime {
             frame.segment = segment;
             frame.resuming = resuming;
         }
+        if let Some((region, segment)) = adopted {
+            frame.region = region;
+            frame.segment = segment;
+            frame.node_index = 0;
+            frame.node_start = 0;
+        }
         let node_start = match kind {
             GroupKind::Node => {
                 frame.node_parent = group.node;
@@ -341,7 +354,7 @@ impl Runtime {
                         region: parent.region,
                     }
                 } else if reusing_now {
-                    NodeStart::Reusing(group.node)
+                    NodeStart::Reusing(group.node, parent.region)
                 } else {
                     NodeStart::Reused(group.node)
                 }
@@ -355,6 +368,17 @@ impl Runtime {
                 let scope = scopes.get_mut(group.scope).expect("restart group without a scope");
                 frame.forced |= scope.invalid || fresh;
                 scope.invalid = false;
+                // A paused scope met through its parent's body rather than a resume's walk
+                // resumes too, as Compose's `addRecomposeScope`: from its start, in its segment,
+                // reusing if it paused reusing.
+                if scope.paused {
+                    scope.paused = false;
+                    frame.resuming = true;
+                    frame.segment = scope.segment;
+                    if std::mem::take(&mut scope.reusing) && *reusing == 0 {
+                        *reusing = frames.len() + 1;
+                    }
+                }
                 // The epoch is bumped only once the body is known to run (`begin_body`): until
                 // then the scope may still skip, and its reads from the last run stay current.
                 frame.saved_epoch = scope.epoch;
@@ -388,7 +412,14 @@ impl Runtime {
     pub(crate) fn end_group(&mut self, restart: Option<fn(&dyn Any)>) -> NodeOp {
         let composition = self.check_composing();
         let Runtime {
-            compositions, scopes, frames, removal_stack, abandoned_groups, reusing, ..
+            compositions,
+            scopes,
+            frames,
+            removal_stack,
+            abandoned_groups,
+            reusing,
+            pausable_pass,
+            ..
         } = self;
         let CompositionData { table, deferred, paused, .. } = compositions.data_mut(composition);
         if frames.len() < 2 {
@@ -410,6 +441,14 @@ impl Runtime {
 
         let mut op = NodeOp::None;
         if !frame.skipped {
+            if frame.cursor != NONE
+                && frame.region == NO_REGION
+                && let Some(paused) = paused.as_mut()
+                && paused.holds_regions()
+            {
+                let removed = siblings_from(table, frame.cursor, NONE);
+                paused.discard_regions_in(table, scopes, removal_stack, deferred, removed, false);
+            }
             let deferred = deferred_of(deferred, paused, frame.region);
             let mut removed = 0;
             if frame.cursor != NONE {
@@ -435,6 +474,26 @@ impl Runtime {
             }
         }
 
+        // A pass of the composition through paused content leaves the dirty marks of what it
+        // didn't reach, for the paused composition's resumes: their ancestors keep theirs.
+        if frame.region != NO_REGION
+            && !*pausable_pass
+            && paused
+                .as_ref()
+                .is_some_and(|paused| paused.regions[frame.region as usize].root != frame.group)
+        {
+            let mut child = table[frame.group].first_child;
+            while child != NONE {
+                if table[child].dirty
+                    || (table[child].kind == GroupKind::Restart
+                        && scopes.get(table[child].scope).is_some_and(|scope| scope.invalid))
+                {
+                    table[frame.group].dirty = true;
+                    break;
+                }
+                child = table[child].next_sibling;
+            }
+        }
         let group = &mut table[frame.group];
         let mut count =
             if kind == GroupKind::Node { 1 } else { frame.node_index - frame.node_start };
@@ -465,13 +524,14 @@ impl Runtime {
 
     /// Deactivates the content of the reusable group just started, and skips it: see
     /// [`Composer::deactivate_to_end_group`].
-    pub(crate) fn deactivate_to_end_group(&mut self, changed: bool) {
+    pub(crate) fn deactivate_to_end_group(&mut self, changed: bool) -> Vec<NodeOp> {
         let composition = self.check_composing();
         // Content being reused is deactivated whatever the caller says, as Compose's
         // `changed(active)` answers true then (its slots read as empty).
         let changed = changed || self.reusing != 0;
         let Runtime { compositions, scopes, frames, removal_stack, .. } = self;
         let CompositionData { table, deferred, paused, .. } = compositions.data_mut(composition);
+        let mut ops = Vec::new();
         let depth = frames.len();
         let frame = frames.last_mut().unwrap_or_else(|| misuse(ComposeError::NotComposing));
         if frame.mode != Mode::Normal || depth < 2 {
@@ -489,6 +549,22 @@ impl Runtime {
         }
         frame.skipped = true;
         frame.dirty = false;
+        // Paused content in it is discarded first, as Compose's precomposed slot is when it goes
+        // to the reuse pool: what it made released, its old nodes removed from their parent.
+        if changed
+            && !frame.inserting
+            && let Some(paused) = paused.as_mut()
+            && paused.holds_regions()
+        {
+            ops = paused.discard_regions_in(
+                table,
+                scopes,
+                removal_stack,
+                deferred,
+                table_children(table, frame.group),
+                true,
+            );
+        }
         let deferred = deferred_of(deferred, paused, frame.region);
         if changed && !frame.inserting {
             // Pre-order, as removals: a group's slots before its children's.
@@ -537,14 +613,16 @@ impl Runtime {
         {
             paused.settle(frame.region, frame.segment);
         }
+        ops
     }
 
     /// Starts skipping the rest of the current group. Returns the depth to walk from if some
     /// descendant scopes are invalid.
     pub(crate) fn begin_skip(&mut self) -> Option<usize> {
         let composition = self.check_composing();
-        let Runtime { compositions, frames, .. } = self;
-        let table = &compositions.data_mut(composition).table;
+        let Runtime { compositions, frames, pausable_pass, .. } = self;
+        let pausable_pass = *pausable_pass;
+        let table = &mut compositions.data_mut(composition).table;
         let depth = frames.len();
         let frame = frames.last_mut().unwrap_or_else(|| misuse(ComposeError::NotComposing));
         if frame.mode != Mode::Normal || depth < 2 {
@@ -554,7 +632,13 @@ impl Runtime {
             misuse(ComposeError::UseAfterSkip)
         }
         frame.skipped = true;
-        if frame.dirty {
+        if frame.dirty && (frame.paused || (frame.region != NO_REGION && !pausable_pass)) {
+            // Paused while reusing, its old content's invalid scopes wait for its resume, which
+            // reuses that content: no walk into it now (it would compose them unreused). And a
+            // pass of the composition through paused content (it reached it) leaves its paused
+            // and invalidated scopes to the paused composition's resumes (D592).
+            table[frame.group].dirty = true;
+        } else if frame.dirty {
             frame.mode = Mode::Walk;
             return Some(depth - 1);
         }
@@ -634,11 +718,15 @@ impl Runtime {
                 {
                     if scope.paused {
                         *resume_next = Some((scope.segment, true));
-                        if scope.reusing {
+                        if scope.reusing && *reusing == 0 {
                             *reusing = frames.len() + 1;
                         }
                     } else {
-                        *resume_next = Some((0, false));
+                        // Invalidated since: its observers come after the region's others.
+                        let segment = paused
+                            .as_ref()
+                            .map_or(0, |paused| paused.regions[walking.region as usize].segment);
+                        *resume_next = Some((segment, false));
                     }
                     scope.paused = false;
                     scope.reusing = false;
@@ -691,6 +779,13 @@ impl Runtime {
         }
         let mut op = NodeOp::None;
         if frame.cursor != frame.limit {
+            if frame.region == NO_REGION
+                && let Some(paused) = paused.as_mut()
+                && paused.holds_regions()
+            {
+                let removed = siblings_from(table, frame.cursor, frame.limit);
+                paused.discard_regions_in(table, scopes, removal_stack, deferred, removed, false);
+            }
             let deferred = deferred_of(deferred, paused, frame.region);
             let count =
                 remove_siblings(table, deferred, scopes, removal_stack, frame.cursor, frame.limit);
@@ -938,6 +1033,22 @@ impl Runtime {
     }
 }
 
+/// The siblings from `first` up to (excluding) `until`.
+pub(crate) fn siblings_from(table: &SlotTable, first: u32, until: u32) -> Vec<u32> {
+    let mut siblings = Vec::new();
+    let mut current = first;
+    while current != until && current != NONE {
+        siblings.push(current);
+        current = table[current].next_sibling;
+    }
+    siblings
+}
+
+/// `group`'s children.
+fn table_children(table: &SlotTable, group: u32) -> Vec<u32> {
+    siblings_from(table, table[group].first_child, NONE)
+}
+
 /// Empties a deactivated remember observer's slot: the observer is forgotten at the end of the
 /// pass (and dropped), as Compose's `deactivateCurrentGroup`. Other values stay until reused.
 fn deactivate_slot(value: &mut SlotValue, removed: &mut Vec<SlotValue>) {
@@ -1044,7 +1155,12 @@ fn start_group_of(kind: GroupKind, key: u64, data_key: u64, reusable: bool) -> N
 }
 
 /// Resets a node kept by content being reused (`Applier::reuse`), before the pass updates it.
-fn reuse_node(node: NodeRef) {
+fn reuse_node(node: NodeRef, region: u32) {
+    if region != NO_REGION {
+        // Paused content's: reset as it's applied, as Compose's recorded `reuse`.
+        with_runtime(|runtime| runtime.record_reuse(region, node));
+        return;
+    }
     flush_node_moves();
     let applier = with_runtime(|runtime| runtime.active_applier());
     applier.try_borrow_mut().unwrap_or_else(|_| misuse(ComposeError::ApplierBusy)).reuse(node);
@@ -1238,7 +1354,7 @@ impl Composer {
     /// [`end_group`](Composer::end_group).
     pub fn start_node<N: 'static>(&self, key: u64, factory: impl FnOnce() -> N) -> NodeRef {
         match start_group(GroupKind::Node, key, 0) {
-            NodeStart::Reused(node) | NodeStart::Reusing(node) => node,
+            NodeStart::Reused(node) | NodeStart::Reusing(node, _) => node,
             NodeStart::Insert { parent, index, region } => {
                 insert_node(parent, index, region, &mut Some(factory()), std::any::type_name::<N>())
             }
@@ -1257,8 +1373,8 @@ impl Composer {
     ) -> NodeRef {
         match start_group_of(GroupKind::Node, key, 0, true) {
             NodeStart::Reused(node) => node,
-            NodeStart::Reusing(node) => {
-                reuse_node(node);
+            NodeStart::Reusing(node, region) => {
+                reuse_node(node, region);
                 node
             }
             NodeStart::Insert { parent, index, region } => {
@@ -1301,7 +1417,10 @@ impl Composer {
     /// pass (their slots emptied), its recompose scopes freed, and its nodes deactivated
     /// ([`Applier::deactivate`]). Called right after the group starts.
     pub fn deactivate_to_end_group(&self, changed: bool) {
-        with_runtime(|runtime| runtime.deactivate_to_end_group(changed));
+        let ops = with_runtime(|runtime| runtime.deactivate_to_end_group(changed));
+        for op in ops {
+            apply_node_op(op);
+        }
     }
 
     /// Ends a replace, movable or node group.

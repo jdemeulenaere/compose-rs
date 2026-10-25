@@ -50,6 +50,7 @@ mod review_nested_scroll;
 mod review_overlay;
 mod review_overlay2;
 mod review_parity;
+mod review_pausable;
 mod review_prefetch;
 mod review_retained;
 mod review_reuse;
