@@ -461,6 +461,10 @@ class OptimizationsTest(unittest.TestCase):
             ("rs+performance_hint", "rs.compose.bench.rs", "performance_hint"),
             ("rs+keep_items_behind", "rs.compose.bench.rs", "keep_items_behind")])
 
+    def test_rs_runs_bench_rs_alone_at_parity(self):
+        mode, subjects = measure.parse_optimizations("rs", self.NAMES)
+        self.assertEqual((mode, subjects), ("rs", [("rs", "rs.compose.bench.rs", "none")]))
+
     def test_each_only_some(self):
         mode, subjects = measure.parse_optimizations("each", self.NAMES, "keep_items_behind")
         self.assertEqual([name for name, _, _ in subjects], ["rs", "rs+keep_items_behind"])

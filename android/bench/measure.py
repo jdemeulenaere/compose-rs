@@ -51,6 +51,8 @@ crates/compose-ui/src/optimizations.rs, docs/07; passed to bench-rs as `-e optim
   parity  (default) none of them, the hint session included (`none`): compose-rs does the work
           Compose does (docs/15, "Parity mode"; D568)
   all     every one
+  rs      no Compose: bench-rs alone at parity, for an A/B of two compose-rs builds installed
+          in turn (D598; --allow-stale for the one not built in this checkout)
   each    no Compose: bench-rs at parity, then with each optimization alone, interleaved run
           by run (subjects `rs` and `rs+<name>`): each one's effect, for docs/14's backport table;
           --each-only NAME,... measures only those
@@ -916,6 +918,7 @@ def parse_optimizations(text, names, each_only=None):
     """The mode `--optimizations` names and the subjects it measures: (name, package,
     bench-rs's `-e optimizations`, None for the Compose app). `parity` (the default) runs
     bench-rs with none (`none`, the hint session off: Compose has none); `all` with every one;
+    `rs` bench-rs alone at parity (an A/B of two builds);
     `each` bench-rs alone, at parity and with each of `names` alone (or of `each_only`'s, a
     comma-separated list); else a list of names (each may be `-name`), checked against `names`.
     Stops the run on an unknown name."""
@@ -925,6 +928,8 @@ def parse_optimizations(text, names, each_only=None):
         return "parity", [compose, ("rs", APPS["rs"], "none")]
     if text == "all":
         return "all", [compose, ("rs", APPS["rs"], "all")]
+    if text == "rs":
+        return "rs", [("rs", APPS["rs"], "none")]
     if text == "each":
         chosen = names
         if each_only:

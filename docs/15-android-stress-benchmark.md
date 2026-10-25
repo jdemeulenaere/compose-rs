@@ -1007,10 +1007,29 @@ Since D560, compose-rs does by default the work Compose 1.12.1 does: lazy lists 
 
 What's still not the same, structurally:
 
-- **No pausable composition.** A request composes its item in one step, where Compose pauses at the runtime's pause points when out of time and resumes after the next frame. So the gate differs too, against compose-rs: Compose starts a composition when the time left exceeds the average of one stretch between pause checks plus a pause (`resumeTimeNanos + pauseTimeNanos`), compose-rs only when it exceeds the average of a whole composition, apply included (Compose's apply is a step of its own, gated by its own average). A long item's composition starts later here, in a longer idle time, where Compose's would start and be split. This goes when compose-rs has pausable composition (D578).
+- **Pausable composition: no longer a difference** (D590-D596). Since D595 a request composes its item with a paused composition, as Compose's default: started when the time left exceeds the averages of a stretch and a pause, paused at the runtime's pause points once out of time, resumed after the next frame, applied as a step of its own (gated by its own average), the averages kept as Compose's (`current / 4 * 3 + new / 4`); D578's gate difference is gone. What's left of it is how compose-rs maps it: the paused part of the list's composition is the item's content (`PausableContent`, where Compose's is the item's subcomposition); the nodes it makes or reuses are updated at once and attached at `apply` (Compose records the updates too, D591); a frame wanting a paused item composes it in a round, whose pass completes the paused composition first, where Compose's measurement completes it (D592); and a pass that would run the list's items' composition completes it first, where Compose's other subcompositions don't wait for it. Measured against parity before it in "Pausable composition (D598)" below.
 - **Composition in rounds, not in measure.** compose-rs's layout asks for the items it lacks by an estimate of their size: as many as cover the room at the sizes it knows (D576, backward as forward, a grid's lines too), a few at a time while it knows few sizes, doubling from round to round (D472, D487; a grid's first layout as a list's since D578, where it composed 15 lines for 6). With sizes that vary, a frame may still compose more than it places, up to about twice: the next item stays composed (it's the one a scroll that way requests), the others go in the next idle time, disposed (never measured), where Compose composes only what its measurement reaches. Items that leave need a composition to be deactivated: a frame composing anyway deactivates them in the same composition; a frame with nothing to compose leaves them composed, unplaced and undrawn, until the next idle time with any time left, whose first request deactivates them, whatever else waits (D575), where Compose's measurement deactivates them without composing.
 - **Deltas summed.** The strategy hears a frame's scroll deltas summed, Compose's `onScroll` each delta; and one queue in order, Compose's a priority queue (one list's requests either way).
 - **Small filled paths.** compose-rs masks any small filled path, where Compose's `VectorPainter` caches vectors only (no screen here has another small filled path; D567).
+
+### Pausable composition (D598)
+
+compose-rs at parity before (main f32e70d's APK) and after pausable composition in prefetch (D590–D596), bench-rs alone (`measure.py --optimizations rs`), the two APKs installed in turn and compiled `speed`, 6 interleaved rounds (the first variant alternating), one traced run of each scroll a round, the stress animation in rounds 1, 3 and 5 (`--thermal-wait-limit 0 --rotate`; every run started at thermal status 0, battery 25.9 to 31.0 °C). Medians over the runs, counts summed (`results/2026-10-25-pixel-8-pro-pausable-ab.json`). "Composition in frames" is the main thread's `compose-rs: recompose` and `recompose and layout again` inside `doFrame`s; "past the vsync" an idle time's `compose-rs: prefetch` ending more than 1.2 ms after the vsync after its start, and its step that did.
+
+| | feed before | feed after | stress list before | stress list after |
+|---|---|---|---|---|
+| main p50 / p90 / p99 (ms) | 1.26 / 2.09 / 3.35 | 1.25 / 2.17 / 3.40 | 1.40 / 2.41 / 3.81 | 1.38 / 2.38 / 3.84 |
+| RenderThread p50 / p90 / p99 (ms) | 2.64 / 3.45 / 5.00 | 2.57 / 3.42 / 4.93 | 3.22 / 4.76 / 6.36 | 3.14 / 4.74 / 6.58 |
+| janky frames: the app's, the compositor's | 0, 4 | 0, 0 | 0, 0 | 0, 0 |
+| `doFrame`s starting late (after our work) | 54 (6) | 40 (3) | 54 (8) | 66 (6) |
+| idle times past the vsync (the worst) | 15 (2.72 ms) | 15 (1.98 ms) | 22 (2.89 ms) | 12 (3.13 ms) |
+| … ended by a measurement, a composition, an apply | 14, 0, — | 12, 0, 0 | 16, 0, — | 9, 0, 0 |
+| composition in frames a run; frames over 0.5 ms | 10.7 ms; 3 | 12.2 ms; 5 | 16.2 ms; 14 | 14.8 ms; 9 |
+| work main / RenderThread (ms) | 437 / 717 | 450 / 726 | 476 / 1,115 | 493 / 1,127 |
+
+The stress animation (3 runs each, no prefetch): main 2.41 / 4.19 / 6.45 → 2.42 / 4.24 / 6.24 ms, RenderThread 7.70 / 8.75 / 9.94 → 7.67 / 8.75 / 10.30 ms, janky frames 1 → 2 (the app's), within its spread.
+
+What it shows: on this device the idle times between these flings' frames fit an item's whole composition, so pausing rarely happens (compose steps 2,129 → 2,146 on the feed, 3,829 → 3,850 on the stress list: about 1 % more, the pauses), and nothing changes beyond the runs' spread: the frames, the jank (none of compose-rs's either way), the late `doFrame`s. What ran past the vsync was measurements both ways, never a composition or an apply: measurement isn't split, in Compose either. The main thread works about 3 % more: the paused composition's recording and its apply (headless, prefetching an item takes 9 % more, D598), and each item's composition in a frame its pausable content's group, its `LOCAL_PARENT_LIST` provider and its observer (headless, +2 to +5 % a frame composing an item). Parity mode has no structural difference left in prefetch ("Parity mode").
 
 ### Each optimization alone (round 14)
 
@@ -1152,7 +1171,7 @@ What each one does here:
 
 ## Next steps
 
-- **Pausable composition** (next): the one structural difference left at parity ("Parity mode"). In round 14 it cost no frame on the list (no janky frame of compose-rs's, one text laid out in a frame in 3 runs); the steps past the vsync there were measurements, which Compose doesn't split either, run unboosted on a little core.
+- **Pausable composition: done** (D590–D598): a request composes its item with a paused composition, as Compose's default; measured against parity before it in "Pausable composition (D598)": no change beyond the runs' spread on this device, where the idle times fit whole compositions.
 - **The list's RenderThread at parity** is behind Compose's (p50 3.13 against 2.61 ms) for 32 % less work: HWUI's session boosts compose-rs's frames little (67 against 277), its main-thread frames being short. `performance_hint` closes it and more (2.09 against 2.51 ms with `all`); for Compose, the same report in HWUI's session ([14](14-performance-opportunities.md), "Backport candidates").
 - **The stress animation's graphics memory after 13 s** at parity is above Compose's (171.5 against 140.6 MB at the median, compose-rs's runs 164 to 203 MB), with 9 MB more in Skia's caches; how much the GPU driver's memory grows varies run to run in both apps and hasn't been traced. HWUI's workers' 18 % more CPU time (D511) is unchanged.
 

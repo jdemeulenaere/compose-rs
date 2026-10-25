@@ -51,11 +51,8 @@ fn assert_one_row(recomposed: &compose::runtime::platform::RecompositionCounts) 
     // (150 ms back from its hover elevation), its surface's box and layouts with it, as
     // Compose's `Button` reads its animated elevation in composition (D526); nothing else does.
     let animating = ["Button", "Box", "Layout"];
-    let total: u64 = names
-        .iter()
-        .filter(|(name, _)| !animating.contains(name))
-        .map(|(_, count)| count)
-        .sum();
+    let total: u64 =
+        names.iter().filter(|(name, _)| !animating.contains(name)).map(|(_, count)| count).sum();
     assert!(total <= 3, "{names:?}");
     assert!(recomposed.scopes_named("Button") <= 12, "{names:?}");
 }

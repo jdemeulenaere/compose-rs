@@ -1,0 +1,2125 @@
+{
+ "protocol": "D598: bench-rs at parity (measure.py --optimizations rs: -e optimizations none), main f32e70d (before) and pausable composition (after) installed in turn, cmd package compile -m speed -f after each install; 6 rounds interleaved, the first variant alternating; each round one traced run of scroll and stress_scroll, rounds 1, 3, 5 stress_animation too; --thermal-wait-limit 0 --rotate <round>. Medians over the runs; *_total sums over the runs. in_frame_composition: compose-rs: recompose and recompose and layout again slices inside doFrames; steps_past_vsync: prefetch slices ending more than 1.2 ms after the vsync after their start.",
+ "device": [
+  "Pixel 8 Pro",
+  "16"
+ ],
+ "apks": {
+  "before": {
+   "sha1": "134536ac4e51f43228a593f9a506ce463e93c428",
+   "bytes": 1989482,
+   "libraries": {
+    "lib/arm64-v8a/libcompose_rs_feed.so": {
+     "bytes": 1817256,
+     "sha1": "9cd3e241633c0467083c148ee46184d2507820c6"
+    }
+   }
+  },
+  "after": {
+   "sha1": "04e8f694a688528232a6f4ee63ca1e8eb8b17d3e",
+   "bytes": 2025946,
+   "libraries": {
+    "lib/arm64-v8a/libcompose_rs_feed.so": {
+     "bytes": 1853720,
+     "sha1": "b26543de56585a363cebb8abc602cca0614e880e"
+    }
+   }
+  }
+ },
+ "summary": {
+  "scroll": {
+   "after": {
+    "main_p50": 1.2521565,
+    "main_p90": 2.1715289999999996,
+    "main_p99": 3.3966874999999996,
+    "render_p50": 2.5699465000000004,
+    "render_p90": 3.421529,
+    "render_p99": 4.932271,
+    "work_main": 449.746223,
+    "work_render": 725.592536,
+    "janky_total": 0,
+    "jank_app_total": 0,
+    "jank_compositor_total": 0,
+    "jank_other_total": 0,
+    "late_do_frames_total": 40,
+    "late_after_work_total": 3,
+    "prefetches_total": 2398,
+    "in_frame_composition_ms_median": 12.239999999999998,
+    "in_frame_composition_frames_over_0_5_ms_total": 5,
+    "in_frame_composition_max_ms": 1.763,
+    "steps_past_vsync_total": {
+     "prefetch": {
+      "steps": 2398,
+      "past": 15,
+      "past_ms": [
+       1.98,
+       1.88,
+       1.79,
+       1.64,
+       1.54,
+       1.48,
+       1.42,
+       1.37,
+       1.37,
+       1.37
+      ]
+     },
+     "prefetch compose": {
+      "steps": 2146,
+      "past": 0,
+      "past_ms": []
+     },
+     "prefetch apply": {
+      "steps": 1063,
+      "past": 0,
+      "past_ms": []
+     },
+     "prefetch measure": {
+      "steps": 1064,
+      "past": 12,
+      "past_ms": [
+       1.83,
+       1.77,
+       1.64,
+       1.51,
+       1.42,
+       1.39,
+       1.36,
+       1.35,
+       1.33,
+       1.26
+      ]
+     }
+    },
+    "runs": 6
+   },
+   "before": {
+    "main_p50": 1.258586,
+    "main_p90": 2.091146,
+    "main_p99": 3.347209,
+    "render_p50": 2.6353755000000003,
+    "render_p90": 3.453492,
+    "render_p99": 5.0017905,
+    "work_main": 436.93625999999995,
+    "work_render": 717.1073045,
+    "janky_total": 4,
+    "jank_app_total": 0,
+    "jank_compositor_total": 4,
+    "jank_other_total": 0,
+    "late_do_frames_total": 54,
+    "late_after_work_total": 6,
+    "prefetches_total": 2323,
+    "in_frame_composition_ms_median": 10.7,
+    "in_frame_composition_frames_over_0_5_ms_total": 3,
+    "in_frame_composition_max_ms": 1.894,
+    "steps_past_vsync_total": {
+     "prefetch": {
+      "steps": 2323,
+      "past": 15,
+      "past_ms": [
+       2.72,
+       2.32,
+       2.31,
+       2.23,
+       2.02,
+       1.78,
+       1.78,
+       1.71,
+       1.7,
+       1.65
+      ]
+     },
+     "prefetch compose": {
+      "steps": 2129,
+      "past": 0,
+      "past_ms": []
+     },
+     "prefetch measure": {
+      "steps": 1067,
+      "past": 14,
+      "past_ms": [
+       2.62,
+       2.22,
+       2.2,
+       2.13,
+       2.01,
+       1.73,
+       1.7,
+       1.59,
+       1.52,
+       1.52
+      ]
+     }
+    },
+    "runs": 6
+   }
+  },
+  "stress_scroll": {
+   "after": {
+    "main_p50": 1.379008,
+    "main_p90": 2.3824664999999996,
+    "main_p99": 3.8441975,
+    "render_p50": 3.143534,
+    "render_p90": 4.737569000000001,
+    "render_p99": 6.58079,
+    "work_main": 492.976174,
+    "work_render": 1126.758364,
+    "janky_total": 0,
+    "jank_app_total": 0,
+    "jank_compositor_total": 0,
+    "jank_other_total": 0,
+    "late_do_frames_total": 66,
+    "late_after_work_total": 6,
+    "prefetches_total": 2309,
+    "in_frame_composition_ms_median": 14.815000000000001,
+    "in_frame_composition_frames_over_0_5_ms_total": 9,
+    "in_frame_composition_max_ms": 1.507,
+    "steps_past_vsync_total": {
+     "prefetch": {
+      "steps": 2309,
+      "past": 12,
+      "past_ms": [
+       3.13,
+       2.78,
+       2.77,
+       2.46,
+       2.41,
+       1.97,
+       1.66,
+       1.56,
+       1.55,
+       1.31
+      ]
+     },
+     "prefetch compose": {
+      "steps": 3850,
+      "past": 0,
+      "past_ms": []
+     },
+     "prefetch apply": {
+      "steps": 2216,
+      "past": 0,
+      "past_ms": []
+     },
+     "prefetch measure": {
+      "steps": 1289,
+      "past": 9,
+      "past_ms": [
+       2.75,
+       2.68,
+       2.5,
+       2.43,
+       2.24,
+       1.88,
+       1.55,
+       1.53,
+       1.46
+      ]
+     }
+    },
+    "runs": 6
+   },
+   "before": {
+    "main_p50": 1.3963215,
+    "main_p90": 2.407878,
+    "main_p99": 3.8138835,
+    "render_p50": 3.217652,
+    "render_p90": 4.762451,
+    "render_p99": 6.362752,
+    "work_main": 476.375125,
+    "work_render": 1114.7060685000001,
+    "janky_total": 0,
+    "jank_app_total": 0,
+    "jank_compositor_total": 0,
+    "jank_other_total": 0,
+    "late_do_frames_total": 54,
+    "late_after_work_total": 8,
+    "prefetches_total": 2251,
+    "in_frame_composition_ms_median": 16.244999999999997,
+    "in_frame_composition_frames_over_0_5_ms_total": 14,
+    "in_frame_composition_max_ms": 2.372,
+    "steps_past_vsync_total": {
+     "prefetch": {
+      "steps": 2251,
+      "past": 22,
+      "past_ms": [
+       2.89,
+       2.86,
+       2.75,
+       2.59,
+       2.54,
+       2.12,
+       1.89,
+       1.84,
+       1.76,
+       1.72
+      ]
+     },
+     "prefetch compose": {
+      "steps": 3829,
+      "past": 0,
+      "past_ms": []
+     },
+     "prefetch measure": {
+      "steps": 1294,
+      "past": 16,
+      "past_ms": [
+       2.8,
+       2.77,
+       2.73,
+       2.55,
+       2.46,
+       1.9,
+       1.82,
+       1.81,
+       1.67,
+       1.65
+      ]
+     }
+    },
+    "runs": 6
+   }
+  },
+  "stress_animation": {
+   "after": {
+    "main_p50": 2.421915,
+    "main_p90": 4.243002,
+    "main_p99": 6.238322,
+    "render_p50": 7.669067,
+    "render_p90": 8.751546,
+    "render_p99": 10.304443,
+    "work_main": 1580.100077,
+    "work_render": 5997.460802,
+    "janky_total": 2,
+    "jank_app_total": 2,
+    "jank_compositor_total": 0,
+    "jank_other_total": 0,
+    "late_do_frames_total": 8,
+    "late_after_work_total": 0,
+    "prefetches_total": 0,
+    "in_frame_composition_ms_median": 95.98,
+    "in_frame_composition_frames_over_0_5_ms_total": 1,
+    "in_frame_composition_max_ms": 0.987,
+    "steps_past_vsync_total": {},
+    "runs": 3
+   },
+   "before": {
+    "main_p50": 2.406779,
+    "main_p90": 4.191244,
+    "main_p99": 6.452759,
+    "render_p50": 7.69755,
+    "render_p90": 8.747396,
+    "render_p99": 9.935181,
+    "work_main": 1582.45397,
+    "work_render": 5942.803146,
+    "janky_total": 1,
+    "jank_app_total": 1,
+    "jank_compositor_total": 0,
+    "jank_other_total": 0,
+    "late_do_frames_total": 10,
+    "late_after_work_total": 0,
+    "prefetches_total": 0,
+    "in_frame_composition_ms_median": 93.0,
+    "in_frame_composition_frames_over_0_5_ms_total": 0,
+    "in_frame_composition_max_ms": 0.301,
+    "steps_past_vsync_total": {},
+    "runs": 3
+   }
+  }
+ },
+ "runs": {
+  "scroll": {
+   "after": [
+    {
+     "round": 1,
+     "main_p50": 1.287679,
+     "main_p90": 2.162028,
+     "main_p99": 3.415771,
+     "render_p50": 2.593303,
+     "render_p90": 3.551839,
+     "render_p99": 5.014486,
+     "janky": 0,
+     "jank_app": 0,
+     "jank_compositor": 0,
+     "jank_other": 0,
+     "late_do_frames": 11,
+     "late_after_work": 0,
+     "prefetches": 402,
+     "work_main": 444.667307,
+     "work_render": 740.55912,
+     "thermal": {
+      "before": {
+       "status": 0,
+       "battery_c": 26.4,
+       "skin_c": 30.2
+      },
+      "waited_s": 0,
+      "gave_up": false,
+      "after": {
+       "status": 0,
+       "battery_c": 26.4,
+       "skin_c": 29.3
+      }
+     },
+     "in_frame_composition": {
+      "total_ms": 12.29,
+      "frames": 1784,
+      "frames_over_0_5_ms": 1,
+      "max_ms": 0.645
+     },
+     "steps_past_vsync": {
+      "prefetch": {
+       "steps": 402,
+       "past": 3,
+       "past_ms": [
+        1.64,
+        1.37,
+        1.34
+       ]
+      },
+      "prefetch compose": {
+       "steps": 356,
+       "past": 0,
+       "past_ms": []
+      },
+      "prefetch apply": {
+       "steps": 177,
+       "past": 0,
+       "past_ms": []
+      },
+      "prefetch measure": {
+       "steps": 177,
+       "past": 3,
+       "past_ms": [
+        1.51,
+        1.25,
+        1.23
+       ]
+      }
+     }
+    },
+    {
+     "round": 2,
+     "main_p50": 1.231608,
+     "main_p90": 2.23287,
+     "main_p99": 3.70813,
+     "render_p50": 2.544352,
+     "render_p90": 3.390625,
+     "render_p99": 4.83606,
+     "janky": 0,
+     "jank_app": 0,
+     "jank_compositor": 0,
+     "jank_other": 0,
+     "late_do_frames": 10,
+     "late_after_work": 1,
+     "prefetches": 402,
+     "work_main": 459.904148,
+     "work_render": 729.072943,
+     "thermal": {
+      "before": {
+       "status": 0,
+       "battery_c": 27.3,
+       "skin_c": 31.3
+      },
+      "waited_s": 0,
+      "gave_up": false,
+      "after": {
+       "status": 0,
+       "battery_c": 27.7,
+       "skin_c": 29.9
+      }
+     },
+     "in_frame_composition": {
+      "total_ms": 11.33,
+      "frames": 1784,
+      "frames_over_0_5_ms": 0,
+      "max_ms": 0.12
+     },
+     "steps_past_vsync": {
+      "prefetch": {
+       "steps": 402,
+       "past": 4,
+       "past_ms": [
+        1.21,
+        1.88,
+        1.42,
+        1.54
+       ]
+      },
+      "prefetch compose": {
+       "steps": 357,
+       "past": 0,
+       "past_ms": []
+      },
+      "prefetch apply": {
+       "steps": 179,
+       "past": 0,
+       "past_ms": []
+      },
+      "prefetch measure": {
+       "steps": 179,
+       "past": 3,
+       "past_ms": [
+        1.77,
+        1.36,
+        1.42
+       ]
+      }
+     }
+    },
+    {
+     "round": 3,
+     "main_p50": 1.245606,
+     "main_p90": 2.18103,
+     "main_p99": 3.377604,
+     "render_p50": 2.54659,
+     "render_p90": 3.408365,
+     "render_p99": 4.974772,
+     "janky": 0,
+     "jank_app": 0,
+     "jank_compositor": 0,
+     "jank_other": 0,
+     "late_do_frames": 4,
+     "late_after_work": 0,
+     "prefetches": 403,
+     "work_main": 446.989028,
+     "work_render": 721.129248,
+     "thermal": {
+      "before": {
+       "status": 0,
+       "battery_c": 28.5,
+       "skin_c": 32.1
+      },
+      "waited_s": 0,
+      "gave_up": false,
+      "after": {
+       "status": 0,
+       "battery_c": 28.5,
+       "skin_c": 30.6
+      }
+     },
+     "in_frame_composition": {
+      "total_ms": 11.38,
+      "frames": 1780,
+      "frames_over_0_5_ms": 0,
+      "max_ms": 0.125
+     },
+     "steps_past_vsync": {
+      "prefetch": {
+       "steps": 403,
+       "past": 4,
+       "past_ms": [
+        1.37,
+        1.35,
+        1.37,
+        1.3
+       ]
+      },
+      "prefetch compose": {
+       "steps": 360,
+       "past": 0,
+       "past_ms": []
+      },
+      "prefetch apply": {
+       "steps": 177,
+       "past": 0,
+       "past_ms": []
+      },
+      "prefetch measure": {
+       "steps": 177,
+       "past": 3,
+       "past_ms": [
+        1.35,
+        1.33,
+        1.26
+       ]
+      }
+     }
+    },
+    {
+     "round": 4,
+     "main_p50": 1.253622,
+     "main_p90": 2.142212,
+     "main_p99": 3.688273,
+     "render_p50": 2.524943,
+     "render_p90": 3.371786,
+     "render_p99": 5.227214,
+     "janky": 0,
+     "jank_app": 0,
+     "jank_compositor": 0,
+     "jank_other": 0,
+     "late_do_frames": 9,
+     "late_after_work": 2,
+     "prefetches": 391,
+     "work_main": 464.341904,
+     "work_render": 755.422669,
+     "thermal": {
+      "before": {
+       "status": 0,
+       "battery_c": 29.2,
+       "skin_c": 32.6
+      },
+      "waited_s": 0,
+      "gave_up": false,
+      "after": {
+       "status": 0,
+       "battery_c": 29.2,
+       "skin_c": 31.2
+      }
+     },
+     "in_frame_composition": {
+      "total_ms": 13.93,
+      "frames": 1784,
+      "frames_over_0_5_ms": 2,
+      "max_ms": 1.763
+     },
+     "steps_past_vsync": {
+      "prefetch": {
+       "steps": 391,
+       "past": 2,
+       "past_ms": [
+        1.79,
+        1.98
+       ]
+      },
+      "prefetch measure": {
+       "steps": 177,
+       "past": 2,
+       "past_ms": [
+        1.64,
+        1.83
+       ]
+      },
+      "prefetch compose": {
+       "steps": 357,
+       "past": 0,
+       "past_ms": []
+      },
+      "prefetch apply": {
+       "steps": 176,
+       "past": 0,
+       "past_ms": []
+      }
+     }
+    },
+    {
+     "round": 5,
+     "main_p50": 1.250691,
+     "main_p90": 2.080648,
+     "main_p99": 3.234619,
+     "render_p50": 2.673421,
+     "render_p90": 3.468669,
+     "render_p99": 4.76355,
+     "janky": 0,
+     "jank_app": 0,
+     "jank_compositor": 0,
+     "jank_other": 0,
+     "late_do_frames": 1,
+     "late_after_work": 0,
+     "prefetches": 400,
+     "work_main": 429.125814,
+     "work_render": 703.629566,
+     "thermal": {
+      "before": {
+       "status": 0,
+       "battery_c": 29.8,
+       "skin_c": 33.1
+      },
+      "waited_s": 0,
+      "gave_up": false,
+      "after": {
+       "status": 0,
+       "battery_c": 30.0,
+       "skin_c": 31.6
+      }
+     },
+     "in_frame_composition": {
+      "total_ms": 13.42,
+      "frames": 1787,
+      "frames_over_0_5_ms": 1,
+      "max_ms": 1.347
+     },
+     "steps_past_vsync": {
+      "prefetch": {
+       "steps": 400,
+       "past": 0,
+       "past_ms": []
+      },
+      "prefetch compose": {
+       "steps": 360,
+       "past": 0,
+       "past_ms": []
+      },
+      "prefetch apply": {
+       "steps": 178,
+       "past": 0,
+       "past_ms": []
+      },
+      "prefetch measure": {
+       "steps": 178,
+       "past": 0,
+       "past_ms": []
+      }
+     }
+    },
+    {
+     "round": 6,
+     "main_p50": 1.260091,
+     "main_p90": 2.186971,
+     "main_p99": 3.252482,
+     "render_p50": 2.614013,
+     "render_p90": 3.434693,
+     "render_p99": 4.88977,
+     "janky": 0,
+     "jank_app": 0,
+     "jank_compositor": 0,
+     "jank_other": 0,
+     "late_do_frames": 5,
+     "late_after_work": 0,
+     "prefetches": 400,
+     "work_main": 452.503418,
+     "work_render": 722.112129,
+     "thermal": {
+      "before": {
+       "status": 0,
+       "battery_c": 30.5,
+       "skin_c": 33.7
+      },
+      "waited_s": 0,
+      "gave_up": false,
+      "after": {
+       "status": 0,
+       "battery_c": 30.5,
+       "skin_c": 31.9
+      }
+     },
+     "in_frame_composition": {
+      "total_ms": 12.19,
+      "frames": 1781,
+      "frames_over_0_5_ms": 1,
+      "max_ms": 0.884
+     },
+     "steps_past_vsync": {
+      "prefetch": {
+       "steps": 400,
+       "past": 2,
+       "past_ms": [
+        1.48,
+        1.23
+       ]
+      },
+      "prefetch compose": {
+       "steps": 356,
+       "past": 0,
+       "past_ms": []
+      },
+      "prefetch apply": {
+       "steps": 176,
+       "past": 0,
+       "past_ms": []
+      },
+      "prefetch measure": {
+       "steps": 176,
+       "past": 1,
+       "past_ms": [
+        1.39
+       ]
+      }
+     }
+    }
+   ],
+   "before": [
+    {
+     "round": 1,
+     "main_p50": 1.292115,
+     "main_p90": 2.448731,
+     "main_p99": 3.681926,
+     "render_p50": 2.663655,
+     "render_p90": 3.6309,
+     "render_p99": 5.076131,
+     "janky": 2,
+     "jank_app": 0,
+     "jank_compositor": 2,
+     "jank_other": 0,
+     "late_do_frames": 12,
+     "late_after_work": 2,
+     "prefetches": 391,
+     "work_main": 440.93429,
+     "work_render": 731.017074,
+     "thermal": {
+      "before": {
+       "status": 0,
+       "battery_c": 25.9,
+       "skin_c": 28.2
+      },
+      "waited_s": 0,
+      "gave_up": false,
+      "after": {
+       "status": 0,
+       "battery_c": 26.0,
+       "skin_c": 28.4
+      }
+     },
+     "in_frame_composition": {
+      "total_ms": 10.44,
+      "frames": 1792,
+      "frames_over_0_5_ms": 0,
+      "max_ms": 0.102
+     },
+     "steps_past_vsync": {
+      "prefetch": {
+       "steps": 391,
+       "past": 4,
+       "past_ms": [
+        2.72,
+        1.78,
+        1.7,
+        1.24
+       ]
+      },
+      "prefetch compose": {
+       "steps": 356,
+       "past": 0,
+       "past_ms": []
+      },
+      "prefetch measure": {
+       "steps": 179,
+       "past": 3,
+       "past_ms": [
+        2.62,
+        1.7,
+        1.52
+       ]
+      }
+     }
+    },
+    {
+     "round": 2,
+     "main_p50": 1.254354,
+     "main_p90": 2.090984,
+     "main_p99": 3.402222,
+     "render_p50": 2.631225,
+     "render_p90": 3.432862,
+     "render_p99": 4.747925,
+     "janky": 0,
+     "jank_app": 0,
+     "jank_compositor": 0,
+     "jank_other": 0,
+     "late_do_frames": 9,
+     "late_after_work": 1,
+     "prefetches": 382,
+     "work_main": 432.737134,
+     "work_render": 711.521694,
+     "thermal": {
+      "before": {
+       "status": 0,
+       "battery_c": 28.2,
+       "skin_c": 29.9
+      },
+      "waited_s": 0,
+      "gave_up": false,
+      "after": {
+       "status": 0,
+       "battery_c": 28.2,
+       "skin_c": 29.9
+      }
+     },
+     "in_frame_composition": {
+      "total_ms": 11.91,
+      "frames": 1789,
+      "frames_over_0_5_ms": 1,
+      "max_ms": 0.97
+     },
+     "steps_past_vsync": {
+      "prefetch": {
+       "steps": 382,
+       "past": 4,
+       "past_ms": [
+        1.65,
+        2.31,
+        1.78,
+        1.55
+       ]
+      },
+      "prefetch compose": {
+       "steps": 354,
+       "past": 0,
+       "past_ms": []
+      },
+      "prefetch measure": {
+       "steps": 177,
+       "past": 4,
+       "past_ms": [
+        1.52,
+        2.22,
+        1.73,
+        1.48
+       ]
+      }
+     }
+    },
+    {
+     "round": 3,
+     "main_p50": 1.258138,
+     "main_p90": 2.067668,
+     "main_p99": 3.329672,
+     "render_p50": 2.639526,
+     "render_p90": 3.538126,
+     "render_p99": 5.213216,
+     "janky": 2,
+     "jank_app": 0,
+     "jank_compositor": 2,
+     "jank_other": 0,
+     "late_do_frames": 5,
+     "late_after_work": 0,
+     "prefetches": 394,
+     "work_main": 435.904187,
+     "work_render": 738.600172,
+     "thermal": {
+      "before": {
+       "status": 0,
+       "battery_c": 28.3,
+       "skin_c": 29.9
+      },
+      "waited_s": 0,
+      "gave_up": false,
+      "after": {
+       "status": 0,
+       "battery_c": 28.4,
+       "skin_c": 29.9
+      }
+     },
+     "in_frame_composition": {
+      "total_ms": 10.53,
+      "frames": 1788,
+      "frames_over_0_5_ms": 0,
+      "max_ms": 0.084
+     },
+     "steps_past_vsync": {
+      "prefetch": {
+       "steps": 394,
+       "past": 2,
+       "past_ms": [
+        1.62,
+        1.38
+       ]
+      },
+      "prefetch compose": {
+       "steps": 354,
+       "past": 0,
+       "past_ms": []
+      },
+      "prefetch measure": {
+       "steps": 177,
+       "past": 2,
+       "past_ms": [
+        1.52,
+        1.31
+       ]
+      }
+     }
+    },
+    {
+     "round": 4,
+     "main_p50": 1.267862,
+     "main_p90": 2.196777,
+     "main_p99": 3.364746,
+     "render_p50": 2.570638,
+     "render_p90": 3.386393,
+     "render_p99": 4.744629,
+     "janky": 0,
+     "jank_app": 0,
+     "jank_compositor": 0,
+     "jank_other": 0,
+     "late_do_frames": 13,
+     "late_after_work": 1,
+     "prefetches": 395,
+     "work_main": 437.968333,
+     "work_render": 721.047841,
+     "thermal": {
+      "before": {
+       "status": 0,
+       "battery_c": 29.7,
+       "skin_c": 31.0
+      },
+      "waited_s": 0,
+      "gave_up": false,
+      "after": {
+       "status": 0,
+       "battery_c": 29.9,
+       "skin_c": 31.0
+      }
+     },
+     "in_frame_composition": {
+      "total_ms": 10.64,
+      "frames": 1789,
+      "frames_over_0_5_ms": 0,
+      "max_ms": 0.097
+     },
+     "steps_past_vsync": {
+      "prefetch": {
+       "steps": 395,
+       "past": 1,
+       "past_ms": [
+        2.23
+       ]
+      },
+      "prefetch compose": {
+       "steps": 355,
+       "past": 0,
+       "past_ms": []
+      },
+      "prefetch measure": {
+       "steps": 178,
+       "past": 1,
+       "past_ms": [
+        2.13
+       ]
+      }
+     }
+    },
+    {
+     "round": 5,
+     "main_p50": 1.259034,
+     "main_p90": 2.091308,
+     "main_p99": 3.208252,
+     "render_p50": 2.644816,
+     "render_p90": 3.474122,
+     "render_p99": 4.934937,
+     "janky": 0,
+     "jank_app": 0,
+     "jank_compositor": 0,
+     "jank_other": 0,
+     "late_do_frames": 10,
+     "late_after_work": 2,
+     "prefetches": 382,
+     "work_main": 431.536677,
+     "work_render": 713.166768,
+     "thermal": {
+      "before": {
+       "status": 0,
+       "battery_c": 29.9,
+       "skin_c": 30.9
+      },
+      "waited_s": 0,
+      "gave_up": false,
+      "after": {
+       "status": 0,
+       "battery_c": 29.9,
+       "skin_c": 30.9
+      }
+     },
+     "in_frame_composition": {
+      "total_ms": 10.76,
+      "frames": 1790,
+      "frames_over_0_5_ms": 0,
+      "max_ms": 0.177
+     },
+     "steps_past_vsync": {
+      "prefetch": {
+       "steps": 382,
+       "past": 3,
+       "past_ms": [
+        2.02,
+        1.71,
+        2.32
+       ]
+      },
+      "prefetch compose": {
+       "steps": 356,
+       "past": 0,
+       "past_ms": []
+      },
+      "prefetch measure": {
+       "steps": 179,
+       "past": 3,
+       "past_ms": [
+        2.01,
+        1.59,
+        2.2
+       ]
+      }
+     }
+    },
+    {
+     "round": 6,
+     "main_p50": 1.240722,
+     "main_p90": 2.011556,
+     "main_p99": 3.272176,
+     "render_p50": 2.600463,
+     "render_p90": 3.389078,
+     "render_p99": 5.068644,
+     "janky": 0,
+     "jank_app": 0,
+     "jank_compositor": 0,
+     "jank_other": 0,
+     "late_do_frames": 5,
+     "late_after_work": 0,
+     "prefetches": 379,
+     "work_main": 439.329082,
+     "work_render": 710.827205,
+     "thermal": {
+      "before": {
+       "status": 0,
+       "battery_c": 30.9,
+       "skin_c": 31.8
+      },
+      "waited_s": 0,
+      "gave_up": false,
+      "after": {
+       "status": 0,
+       "battery_c": 31.0,
+       "skin_c": 31.7
+      }
+     },
+     "in_frame_composition": {
+      "total_ms": 12.84,
+      "frames": 1785,
+      "frames_over_0_5_ms": 2,
+      "max_ms": 1.894
+     },
+     "steps_past_vsync": {
+      "prefetch": {
+       "steps": 379,
+       "past": 1,
+       "past_ms": [
+        1.51
+       ]
+      },
+      "prefetch compose": {
+       "steps": 354,
+       "past": 0,
+       "past_ms": []
+      },
+      "prefetch measure": {
+       "steps": 177,
+       "past": 1,
+       "past_ms": [
+        1.45
+       ]
+      }
+     }
+    }
+   ]
+  },
+  "stress_scroll": {
+   "after": [
+    {
+     "round": 1,
+     "main_p50": 1.382975,
+     "main_p90": 2.387777,
+     "main_p99": 3.78479,
+     "render_p50": 3.190267,
+     "render_p90": 4.602417,
+     "render_p99": 6.483073,
+     "janky": 0,
+     "jank_app": 0,
+     "jank_compositor": 0,
+     "jank_other": 0,
+     "late_do_frames": 13,
+     "late_after_work": 1,
+     "prefetches": 388,
+     "work_main": 489.406971,
+     "work_render": 1106.654195,
+     "thermal": {
+      "before": {
+       "status": 0,
+       "battery_c": 26.4,
+       "skin_c": 29.3
+      },
+      "waited_s": 0,
+      "gave_up": false,
+      "after": {
+       "status": 0,
+       "battery_c": 26.9,
+       "skin_c": 29.3
+      }
+     },
+     "in_frame_composition": {
+      "total_ms": 15.94,
+      "frames": 1767,
+      "frames_over_0_5_ms": 2,
+      "max_ms": 1.171
+     },
+     "steps_past_vsync": {
+      "prefetch": {
+       "steps": 388,
+       "past": 2,
+       "past_ms": [
+        1.31,
+        1.97
+       ]
+      },
+      "prefetch compose": {
+       "steps": 630,
+       "past": 0,
+       "past_ms": []
+      },
+      "prefetch apply": {
+       "steps": 364,
+       "past": 0,
+       "past_ms": []
+      },
+      "prefetch measure": {
+       "steps": 214,
+       "past": 1,
+       "past_ms": [
+        1.88
+       ]
+      }
+     }
+    },
+    {
+     "round": 2,
+     "main_p50": 1.357626,
+     "main_p90": 2.324503,
+     "main_p99": 3.91569,
+     "render_p50": 3.013021,
+     "render_p90": 4.676392,
+     "render_p99": 6.785278,
+     "janky": 0,
+     "jank_app": 0,
+     "jank_compositor": 0,
+     "jank_other": 0,
+     "late_do_frames": 6,
+     "late_after_work": 1,
+     "prefetches": 381,
+     "work_main": 505.604592,
+     "work_render": 1135.829772,
+     "thermal": {
+      "before": {
+       "status": 0,
+       "battery_c": 27.7,
+       "skin_c": 29.9
+      },
+      "waited_s": 0,
+      "gave_up": false,
+      "after": {
+       "status": 0,
+       "battery_c": 27.7,
+       "skin_c": 29.9
+      }
+     },
+     "in_frame_composition": {
+      "total_ms": 14.62,
+      "frames": 1757,
+      "frames_over_0_5_ms": 2,
+      "max_ms": 1.507
+     },
+     "steps_past_vsync": {
+      "prefetch": {
+       "steps": 381,
+       "past": 2,
+       "past_ms": [
+        1.55,
+        3.13
+       ]
+      },
+      "prefetch compose": {
+       "steps": 645,
+       "past": 0,
+       "past_ms": []
+      },
+      "prefetch apply": {
+       "steps": 372,
+       "past": 0,
+       "past_ms": []
+      },
+      "prefetch measure": {
+       "steps": 216,
+       "past": 2,
+       "past_ms": [
+        1.53,
+        2.5
+       ]
+      }
+     }
+    },
+    {
+     "round": 3,
+     "main_p50": 1.37146,
+     "main_p90": 2.377156,
+     "main_p99": 3.749878,
+     "render_p50": 3.140177,
+     "render_p90": 4.759928,
+     "render_p99": 6.770793,
+     "janky": 0,
+     "jank_app": 0,
+     "jank_compositor": 0,
+     "jank_other": 0,
+     "late_do_frames": 12,
+     "late_after_work": 1,
+     "prefetches": 378,
+     "work_main": 490.970571,
+     "work_render": 1144.364199,
+     "thermal": {
+      "before": {
+       "status": 0,
+       "battery_c": 28.5,
+       "skin_c": 30.6
+      },
+      "waited_s": 0,
+      "gave_up": false,
+      "after": {
+       "status": 0,
+       "battery_c": 29.0,
+       "skin_c": 30.5
+      }
+     },
+     "in_frame_composition": {
+      "total_ms": 14.96,
+      "frames": 1775,
+      "frames_over_0_5_ms": 2,
+      "max_ms": 0.718
+     },
+     "steps_past_vsync": {
+      "prefetch": {
+       "steps": 378,
+       "past": 2,
+       "past_ms": [
+        2.46,
+        1.66
+       ]
+      },
+      "prefetch compose": {
+       "steps": 650,
+       "past": 0,
+       "past_ms": []
+      },
+      "prefetch apply": {
+       "steps": 378,
+       "past": 0,
+       "past_ms": []
+      },
+      "prefetch measure": {
+       "steps": 216,
+       "past": 2,
+       "past_ms": [
+        2.43,
+        1.55
+       ]
+      }
+     }
+    },
+    {
+     "round": 4,
+     "main_p50": 1.418742,
+     "main_p90": 2.422607,
+     "main_p99": 4.236328,
+     "render_p50": 3.139608,
+     "render_p90": 4.79716,
+     "render_p99": 6.678507,
+     "janky": 0,
+     "jank_app": 0,
+     "jank_compositor": 0,
+     "jank_other": 0,
+     "late_do_frames": 10,
+     "late_after_work": 1,
+     "prefetches": 395,
+     "work_main": 498.330236,
+     "work_render": 1135.118082,
+     "thermal": {
+      "before": {
+       "status": 0,
+       "battery_c": 29.7,
+       "skin_c": 31.2
+      },
+      "waited_s": 0,
+      "gave_up": false,
+      "after": {
+       "status": 0,
+       "battery_c": 29.7,
+       "skin_c": 31.0
+      }
+     },
+     "in_frame_composition": {
+      "total_ms": 15.08,
+      "frames": 1763,
+      "frames_over_0_5_ms": 2,
+      "max_ms": 1.37
+     },
+     "steps_past_vsync": {
+      "prefetch": {
+       "steps": 395,
+       "past": 2,
+       "past_ms": [
+        2.78,
+        1.26
+       ]
+      },
+      "prefetch compose": {
+       "steps": 640,
+       "past": 0,
+       "past_ms": []
+      },
+      "prefetch apply": {
+       "steps": 363,
+       "past": 0,
+       "past_ms": []
+      },
+      "prefetch measure": {
+       "steps": 213,
+       "past": 1,
+       "past_ms": [
+        2.75
+       ]
+      }
+     }
+    },
+    {
+     "round": 5,
+     "main_p50": 1.375041,
+     "main_p90": 2.330159,
+     "main_p99": 3.592285,
+     "render_p50": 3.165975,
+     "render_p90": 4.77299,
+     "render_p99": 6.442017,
+     "janky": 0,
+     "jank_app": 0,
+     "jank_compositor": 0,
+     "jank_other": 0,
+     "late_do_frames": 13,
+     "late_after_work": 2,
+     "prefetches": 383,
+     "work_main": 491.583374,
+     "work_render": 1118.25633,
+     "thermal": {
+      "before": {
+       "status": 0,
+       "battery_c": 30.0,
+       "skin_c": 31.6
+      },
+      "waited_s": 0,
+      "gave_up": false,
+      "after": {
+       "status": 0,
+       "battery_c": 30.3,
+       "skin_c": 31.3
+      }
+     },
+     "in_frame_composition": {
+      "total_ms": 14.67,
+      "frames": 1766,
+      "frames_over_0_5_ms": 1,
+      "max_ms": 1.102
+     },
+     "steps_past_vsync": {
+      "prefetch": {
+       "steps": 383,
+       "past": 2,
+       "past_ms": [
+        2.77,
+        2.41
+       ]
+      },
+      "prefetch compose": {
+       "steps": 639,
+       "past": 0,
+       "past_ms": []
+      },
+      "prefetch apply": {
+       "steps": 368,
+       "past": 0,
+       "past_ms": []
+      },
+      "prefetch measure": {
+       "steps": 215,
+       "past": 2,
+       "past_ms": [
+        2.68,
+        2.24
+       ]
+      }
+     }
+    },
+    {
+     "round": 6,
+     "main_p50": 1.398031,
+     "main_p90": 2.500529,
+     "main_p99": 3.903605,
+     "render_p50": 3.146891,
+     "render_p90": 4.71521,
+     "render_p99": 6.112997,
+     "janky": 0,
+     "jank_app": 0,
+     "jank_compositor": 0,
+     "jank_other": 0,
+     "late_do_frames": 12,
+     "late_after_work": 0,
+     "prefetches": 384,
+     "work_main": 494.368974,
+     "work_render": 1118.398646,
+     "thermal": {
+      "before": {
+       "status": 0,
+       "battery_c": 30.5,
+       "skin_c": 31.9
+      },
+      "waited_s": 0,
+      "gave_up": false,
+      "after": {
+       "status": 0,
+       "battery_c": 30.9,
+       "skin_c": 31.8
+      }
+     },
+     "in_frame_composition": {
+      "total_ms": 13.54,
+      "frames": 1772,
+      "frames_over_0_5_ms": 0,
+      "max_ms": 0.483
+     },
+     "steps_past_vsync": {
+      "prefetch": {
+       "steps": 384,
+       "past": 2,
+       "past_ms": [
+        1.56,
+        1.21
+       ]
+      },
+      "prefetch compose": {
+       "steps": 646,
+       "past": 0,
+       "past_ms": []
+      },
+      "prefetch apply": {
+       "steps": 371,
+       "past": 0,
+       "past_ms": []
+      },
+      "prefetch measure": {
+       "steps": 215,
+       "past": 1,
+       "past_ms": [
+        1.46
+       ]
+      }
+     }
+    }
+   ],
+   "before": [
+    {
+     "round": 1,
+     "main_p50": 1.380615,
+     "main_p90": 2.216756,
+     "main_p99": 3.975952,
+     "render_p50": 3.203736,
+     "render_p90": 4.674479,
+     "render_p99": 6.430908,
+     "janky": 0,
+     "jank_app": 0,
+     "jank_compositor": 0,
+     "jank_other": 0,
+     "late_do_frames": 6,
+     "late_after_work": 1,
+     "prefetches": 368,
+     "work_main": 479.376025,
+     "work_render": 1118.071929,
+     "thermal": {
+      "before": {
+       "status": 0,
+       "battery_c": 26.0,
+       "skin_c": 28.4
+      },
+      "waited_s": 0,
+      "gave_up": false,
+      "after": {
+       "status": 0,
+       "battery_c": 26.1,
+       "skin_c": 28.5
+      }
+     },
+     "in_frame_composition": {
+      "total_ms": 16.16,
+      "frames": 1762,
+      "frames_over_0_5_ms": 2,
+      "max_ms": 2.026
+     },
+     "steps_past_vsync": {
+      "prefetch": {
+       "steps": 368,
+       "past": 3,
+       "past_ms": [
+        1.89,
+        1.29,
+        1.27
+       ]
+      },
+      "prefetch compose": {
+       "steps": 643,
+       "past": 0,
+       "past_ms": []
+      },
+      "prefetch measure": {
+       "steps": 216,
+       "past": 2,
+       "past_ms": [
+        1.81,
+        1.21
+       ]
+      }
+     }
+    },
+    {
+     "round": 2,
+     "main_p50": 1.411865,
+     "main_p90": 2.433106,
+     "main_p99": 3.772746,
+     "render_p50": 3.412516,
+     "render_p90": 4.79008,
+     "render_p99": 6.400431,
+     "janky": 0,
+     "jank_app": 0,
+     "jank_compositor": 0,
+     "jank_other": 0,
+     "late_do_frames": 12,
+     "late_after_work": 1,
+     "prefetches": 382,
+     "work_main": 461.254853,
+     "work_render": 1078.183019,
+     "thermal": {
+      "before": {
+       "status": 0,
+       "battery_c": 28.2,
+       "skin_c": 29.9
+      },
+      "waited_s": 0,
+      "gave_up": false,
+      "after": {
+       "status": 0,
+       "battery_c": 28.3,
+       "skin_c": 29.9
+      }
+     },
+     "in_frame_composition": {
+      "total_ms": 13.12,
+      "frames": 1763,
+      "frames_over_0_5_ms": 1,
+      "max_ms": 0.591
+     },
+     "steps_past_vsync": {
+      "prefetch": {
+       "steps": 382,
+       "past": 2,
+       "past_ms": [
+        2.54,
+        1.7
+       ]
+      },
+      "prefetch compose": {
+       "steps": 644,
+       "past": 0,
+       "past_ms": []
+      },
+      "prefetch measure": {
+       "steps": 216,
+       "past": 2,
+       "past_ms": [
+        2.46,
+        1.67
+       ]
+      }
+     }
+    },
+    {
+     "round": 3,
+     "main_p50": 1.395833,
+     "main_p90": 2.408163,
+     "main_p99": 3.845296,
+     "render_p50": 3.158366,
+     "render_p90": 4.734822,
+     "render_p99": 6.41451,
+     "janky": 0,
+     "jank_app": 0,
+     "jank_compositor": 0,
+     "jank_other": 0,
+     "late_do_frames": 12,
+     "late_after_work": 1,
+     "prefetches": 373,
+     "work_main": 483.119099,
+     "work_render": 1112.549033,
+     "thermal": {
+      "before": {
+       "status": 0,
+       "battery_c": 28.4,
+       "skin_c": 29.9
+      },
+      "waited_s": 0,
+      "gave_up": false,
+      "after": {
+       "status": 0,
+       "battery_c": 28.4,
+       "skin_c": 29.9
+      }
+     },
+     "in_frame_composition": {
+      "total_ms": 16.33,
+      "frames": 1772,
+      "frames_over_0_5_ms": 4,
+      "max_ms": 1.427
+     },
+     "steps_past_vsync": {
+      "prefetch": {
+       "steps": 373,
+       "past": 1,
+       "past_ms": [
+        2.75
+       ]
+      },
+      "prefetch compose": {
+       "steps": 636,
+       "past": 0,
+       "past_ms": []
+      },
+      "prefetch measure": {
+       "steps": 215,
+       "past": 1,
+       "past_ms": [
+        2.73
+       ]
+      }
+     }
+    },
+    {
+     "round": 4,
+     "main_p50": 1.422322,
+     "main_p90": 2.407593,
+     "main_p99": 3.782471,
+     "render_p50": 3.353922,
+     "render_p90": 4.867106,
+     "render_p99": 6.227051,
+     "janky": 0,
+     "jank_app": 0,
+     "jank_compositor": 0,
+     "jank_other": 0,
+     "late_do_frames": 10,
+     "late_after_work": 4,
+     "prefetches": 364,
+     "work_main": 473.374225,
+     "work_render": 1082.459264,
+     "thermal": {
+      "before": {
+       "status": 0,
+       "battery_c": 29.9,
+       "skin_c": 31.0
+      },
+      "waited_s": 0,
+      "gave_up": false,
+      "after": {
+       "status": 0,
+       "battery_c": 29.9,
+       "skin_c": 30.9
+      }
+     },
+     "in_frame_composition": {
+      "total_ms": 16.6,
+      "frames": 1769,
+      "frames_over_0_5_ms": 2,
+      "max_ms": 2.372
+     },
+     "steps_past_vsync": {
+      "prefetch": {
+       "steps": 364,
+       "past": 10,
+       "past_ms": [
+        2.89,
+        1.76,
+        1.25,
+        2.86,
+        1.33,
+        2.12,
+        1.23,
+        1.25,
+        1.84,
+        1.5
+       ]
+      },
+      "prefetch compose": {
+       "steps": 629,
+       "past": 0,
+       "past_ms": []
+      },
+      "prefetch measure": {
+       "steps": 215,
+       "past": 7,
+       "past_ms": [
+        2.8,
+        1.37,
+        2.77,
+        1.23,
+        1.9,
+        1.82,
+        1.42
+       ]
+      }
+     }
+    },
+    {
+     "round": 5,
+     "main_p50": 1.38977,
+     "main_p90": 2.315999,
+     "main_p99": 3.640747,
+     "render_p50": 3.231568,
+     "render_p90": 4.831828,
+     "render_p99": 6.21049,
+     "janky": 0,
+     "jank_app": 0,
+     "jank_compositor": 0,
+     "jank_other": 0,
+     "late_do_frames": 4,
+     "late_after_work": 1,
+     "prefetches": 378,
+     "work_main": 467.411519,
+     "work_render": 1116.863104,
+     "thermal": {
+      "before": {
+       "status": 0,
+       "battery_c": 29.9,
+       "skin_c": 30.9
+      },
+      "waited_s": 0,
+      "gave_up": false,
+      "after": {
+       "status": 0,
+       "battery_c": 29.9,
+       "skin_c": 30.8
+      }
+     },
+     "in_frame_composition": {
+      "total_ms": 15.15,
+      "frames": 1777,
+      "frames_over_0_5_ms": 2,
+      "max_ms": 0.896
+     },
+     "steps_past_vsync": {
+      "prefetch": {
+       "steps": 378,
+       "past": 2,
+       "past_ms": [
+        1.32,
+        2.59
+       ]
+      },
+      "prefetch compose": {
+       "steps": 649,
+       "past": 0,
+       "past_ms": []
+      },
+      "prefetch measure": {
+       "steps": 217,
+       "past": 2,
+       "past_ms": [
+        1.31,
+        2.55
+       ]
+      }
+     }
+    },
+    {
+     "round": 6,
+     "main_p50": 1.39681,
+     "main_p90": 2.41923,
+     "main_p99": 3.857097,
+     "render_p50": 3.114868,
+     "render_p90": 4.709473,
+     "render_p99": 6.325073,
+     "janky": 0,
+     "jank_app": 0,
+     "jank_compositor": 0,
+     "jank_other": 0,
+     "late_do_frames": 10,
+     "late_after_work": 0,
+     "prefetches": 386,
+     "work_main": 491.271224,
+     "work_render": 1122.605943,
+     "thermal": {
+      "before": {
+       "status": 0,
+       "battery_c": 31.0,
+       "skin_c": 31.7
+      },
+      "waited_s": 0,
+      "gave_up": false,
+      "after": {
+       "status": 0,
+       "battery_c": 31.0,
+       "skin_c": 31.6
+      }
+     },
+     "in_frame_composition": {
+      "total_ms": 18.29,
+      "frames": 1782,
+      "frames_over_0_5_ms": 3,
+      "max_ms": 1.998
+     },
+     "steps_past_vsync": {
+      "prefetch": {
+       "steps": 386,
+       "past": 4,
+       "past_ms": [
+        1.28,
+        1.48,
+        1.56,
+        1.72
+       ]
+      },
+      "prefetch compose": {
+       "steps": 628,
+       "past": 0,
+       "past_ms": []
+      },
+      "prefetch measure": {
+       "steps": 215,
+       "past": 2,
+       "past_ms": [
+        1.54,
+        1.65
+       ]
+      }
+     }
+    }
+   ]
+  },
+  "stress_animation": {
+   "after": [
+    {
+     "round": 1,
+     "main_p50": 2.421915,
+     "main_p90": 4.243002,
+     "main_p99": 6.721192,
+     "render_p50": 7.669067,
+     "render_p90": 8.751546,
+     "render_p99": 10.304443,
+     "janky": 0,
+     "jank_app": 0,
+     "jank_compositor": 0,
+     "jank_other": 0,
+     "late_do_frames": 2,
+     "late_after_work": 0,
+     "prefetches": 0,
+     "work_main": 1611.933726,
+     "work_render": 6087.587785,
+     "thermal": {
+      "before": {
+       "status": 0,
+       "battery_c": 26.9,
+       "skin_c": 29.3
+      },
+      "waited_s": 0,
+      "gave_up": false,
+      "after": {
+       "status": 0,
+       "battery_c": 27.3,
+       "skin_c": 31.1
+      }
+     },
+     "in_frame_composition": {
+      "total_ms": 95.98,
+      "frames": 1203,
+      "frames_over_0_5_ms": 1,
+      "max_ms": 0.987
+     },
+     "steps_past_vsync": {}
+    },
+    {
+     "round": 3,
+     "main_p50": 2.375814,
+     "main_p90": 3.956177,
+     "main_p99": 6.238322,
+     "render_p50": 7.665568,
+     "render_p90": 8.708618,
+     "render_p99": 10.10555,
+     "janky": 1,
+     "jank_app": 1,
+     "jank_compositor": 0,
+     "jank_other": 0,
+     "late_do_frames": 6,
+     "late_after_work": 0,
+     "prefetches": 0,
+     "work_main": 1580.100077,
+     "work_render": 5997.460802,
+     "thermal": {
+      "before": {
+       "status": 0,
+       "battery_c": 29.0,
+       "skin_c": 30.5
+      },
+      "waited_s": 0,
+      "gave_up": false,
+      "after": {
+       "status": 0,
+       "battery_c": 29.2,
+       "skin_c": 32.6
+      }
+     },
+     "in_frame_composition": {
+      "total_ms": 93.93,
+      "frames": 1193,
+      "frames_over_0_5_ms": 0,
+      "max_ms": 0.23
+     },
+     "steps_past_vsync": {}
+    },
+    {
+     "round": 5,
+     "main_p50": 2.464436,
+     "main_p90": 4.376872,
+     "main_p99": 6.036052,
+     "render_p50": 7.735311,
+     "render_p90": 8.858643,
+     "render_p99": 10.434123,
+     "janky": 1,
+     "jank_app": 1,
+     "jank_compositor": 0,
+     "jank_other": 0,
+     "late_do_frames": 0,
+     "late_after_work": 0,
+     "prefetches": 0,
+     "work_main": 1568.980895,
+     "work_render": 5908.789593,
+     "thermal": {
+      "before": {
+       "status": 0,
+       "battery_c": 30.3,
+       "skin_c": 31.3
+      },
+      "waited_s": 0,
+      "gave_up": false,
+      "after": {
+       "status": 0,
+       "battery_c": 30.3,
+       "skin_c": 33.6
+      }
+     },
+     "in_frame_composition": {
+      "total_ms": 96.23,
+      "frames": 1194,
+      "frames_over_0_5_ms": 0,
+      "max_ms": 0.261
+     },
+     "steps_past_vsync": {}
+    }
+   ],
+   "before": [
+    {
+     "round": 1,
+     "main_p50": 2.370321,
+     "main_p90": 3.739909,
+     "main_p99": 6.452759,
+     "render_p50": 7.69755,
+     "render_p90": 8.747396,
+     "render_p99": 9.875814,
+     "janky": 0,
+     "jank_app": 0,
+     "jank_compositor": 0,
+     "jank_other": 0,
+     "late_do_frames": 1,
+     "late_after_work": 0,
+     "prefetches": 0,
+     "work_main": 1582.45397,
+     "work_render": 6061.999153,
+     "thermal": {
+      "before": {
+       "status": 0,
+       "battery_c": 26.1,
+       "skin_c": 28.5
+      },
+      "waited_s": 0,
+      "gave_up": false,
+      "after": {
+       "status": 0,
+       "battery_c": 26.4,
+       "skin_c": 30.2
+      }
+     },
+     "in_frame_composition": {
+      "total_ms": 92.47,
+      "frames": 1193,
+      "frames_over_0_5_ms": 0,
+      "max_ms": 0.301
+     },
+     "steps_past_vsync": {}
+    },
+    {
+     "round": 3,
+     "main_p50": 2.406779,
+     "main_p90": 4.191244,
+     "main_p99": 7.489787,
+     "render_p50": 7.633382,
+     "render_p90": 8.773397,
+     "render_p99": 10.552287,
+     "janky": 1,
+     "jank_app": 1,
+     "jank_compositor": 0,
+     "jank_other": 0,
+     "late_do_frames": 7,
+     "late_after_work": 0,
+     "prefetches": 0,
+     "work_main": 1594.752353,
+     "work_render": 5937.971291,
+     "thermal": {
+      "before": {
+       "status": 0,
+       "battery_c": 28.4,
+       "skin_c": 29.9
+      },
+      "waited_s": 0,
+      "gave_up": false,
+      "after": {
+       "status": 0,
+       "battery_c": 28.4,
+       "skin_c": 31.9
+      }
+     },
+     "in_frame_composition": {
+      "total_ms": 93.0,
+      "frames": 1197,
+      "frames_over_0_5_ms": 0,
+      "max_ms": 0.194
+     },
+     "steps_past_vsync": {}
+    },
+    {
+     "round": 5,
+     "main_p50": 2.498128,
+     "main_p90": 4.567302,
+     "main_p99": 5.899129,
+     "render_p50": 7.853638,
+     "render_p90": 8.741944,
+     "render_p99": 9.935181,
+     "janky": 0,
+     "jank_app": 0,
+     "jank_compositor": 0,
+     "jank_other": 0,
+     "late_do_frames": 2,
+     "late_after_work": 0,
+     "prefetches": 0,
+     "work_main": 1526.839709,
+     "work_render": 5942.803146,
+     "thermal": {
+      "before": {
+       "status": 0,
+       "battery_c": 29.9,
+       "skin_c": 30.8
+      },
+      "waited_s": 0,
+      "gave_up": false,
+      "after": {
+       "status": 0,
+       "battery_c": 29.8,
+       "skin_c": 33.0
+      }
+     },
+     "in_frame_composition": {
+      "total_ms": 93.06,
+      "frames": 1193,
+      "frames_over_0_5_ms": 0,
+      "max_ms": 0.21
+     },
+     "steps_past_vsync": {}
+    }
+   ]
+  }
+ }
+}
