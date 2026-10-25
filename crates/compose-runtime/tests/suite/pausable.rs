@@ -1413,3 +1413,33 @@ fn a_pass_through_paused_content_leaves_what_is_paused() {
     assert_eq!(scene.tree(), "root\n  1:0\n    2:0\n    3:0\n");
     scene.composition.validate();
 }
+
+/// What a layout keeps of a paused composition to know whether its content is there unapplied:
+/// paused, complete, or cancelled with the removal waiting (the applier in use), it is; applied,
+/// or cancelled and removed, it isn't, the paused composition held or not (D599).
+#[test]
+fn a_watch_says_whether_paused_content_is_there_unapplied() {
+    let items = vec![with_children(1, chain(&[2]))];
+    let scene = Scene::new(items);
+    scene.shown.set(true);
+    let paused = scene.composition.recompose_pausable();
+    let watch = paused.watch();
+    assert!(watch.holds_unapplied_content(), "not composed yet");
+    let (callback, _) = scripted(&[false, true]);
+    assert!(!paused.resume(callback));
+    assert!(watch.holds_unapplied_content(), "paused");
+    // Dropped during a layout: cancelled, the removal waits for the next pass.
+    scene.composition.with_applier(|_: &mut Tree| drop(paused));
+    assert!(watch.holds_unapplied_content(), "removal waiting");
+    scene.tick.set(1);
+    scene.composition.recompose();
+    assert!(!watch.holds_unapplied_content(), "removed");
+    // Applied.
+    let next = scene.composition.recompose_pausable();
+    let watch = next.watch();
+    assert!(next.resume(|| false));
+    assert!(watch.holds_unapplied_content(), "complete, not applied");
+    next.apply();
+    assert!(!watch.holds_unapplied_content(), "applied");
+    scene.composition.validate();
+}

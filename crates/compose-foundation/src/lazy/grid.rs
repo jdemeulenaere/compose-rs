@@ -984,7 +984,7 @@ struct Measurer<'a, 'scope> {
     /// composition) or was removed is one it lacks (D592), if any is (`unready`).
     prefetch: &'a super::prefetch::Prefetch,
     items: &'a Items,
-    unready: bool,
+    unready: Option<u64>,
     /// It lacked such an item: composed in the frame's next round.
     lacked_unready: std::cell::Cell<bool>,
 }
@@ -1021,7 +1021,7 @@ impl MeasuredLines {
 impl Measurer<'_, '_> {
     /// Item `item`'s child, if it's composed.
     fn child_of(&self, item: usize) -> Option<usize> {
-        if self.unready && !self.prefetch.content_ready(self.items.key(item)) {
+        if self.unready.is_some_and(|key| key == self.items.key(item)) {
             self.prefetch.complete_pending();
             self.lacked_unready.set(true);
             return None;
@@ -1235,7 +1235,7 @@ impl MeasurePolicy for LazyGridLayout {
             line_sizes: &mut line_sizes,
             prefetch: &state.prefetch,
             items: &info.items,
-            unready: state.prefetch.has_unready_content(),
+            unready: state.prefetch.unready_item(),
             lacked_unready: std::cell::Cell::new(false),
         };
         let m = &mut measurer;

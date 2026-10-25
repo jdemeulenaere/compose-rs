@@ -17,9 +17,9 @@
 //! - restartable composables pause where Compose's do, when inserting or reusing;
 //! - node changes are recorded and applied at [`apply`](PausedComposition::apply): a new node
 //!   is made in no parent (`Applier::create`) and attached then, moves and removals of its
-//!   nodes wait too; the pass updates the nodes it makes meanwhile (Compose records the
-//!   updates too, compose-rs's nodes are updated through the applier at once), and a reused
-//!   node is reset at once (`Applier::reuse`), as the pass then updates it;
+//!   nodes wait too, and so does resetting a reused node (`Applier::reuse`, Compose's recorded
+//!   `REUSE`); the pass updates the nodes it makes and reuses meanwhile (Compose records the
+//!   updates too, compose-rs's nodes are updated through the applier at once);
 //! - remember observers, side effects, deactivations, releases and forgotten values wait for
 //!   `apply`, observers and effects in the order they'd have had without pausing;
 //! - the region's nodes count as those it had before (none if new) for the composition around
@@ -27,11 +27,14 @@
 //! - the resumes walk the regions only (their paused scopes, and those invalidated since), and
 //!   a state write invalidating a scope inside a region marks it for the next resume, not for
 //!   the composition's next pass (as Compose's paused composition takes its invalidations);
-//! - a pass of the composition reaching a region's group (a body around it ran) composes the rest
-//!   of it, unpaused, and applies it at its end; one removing or deactivating it discards it, as
-//!   Compose disposes a precomposed slot; others leave it alone, as Compose's paused composition
-//!   is a composition of its own; a layout needing it asks for it to be completed before the
-//!   next pass (`request_completion`), as Compose's measurement completes a precomposed item.
+//! - a pass of the composition reaching a region's group (a body around it ran) composes what
+//!   changed in it into the region, recorded as the region's, and leaves its paused scopes to
+//!   the resumes (a paused scope reached through its parent's body resumes there, as Compose's
+//!   `addRecomposeScope`); one removing or deactivating it discards it (the paused composition
+//!   is cancelled if nothing's left), as Compose disposes a precomposed slot; others leave it
+//!   alone, as Compose's paused composition is a composition of its own; a layout needing it
+//!   asks for it to be completed before the next pass (`request_completion`), as Compose's
+//!   measurement completes a precomposed item; dropped unapplied, it's cancelled.
 
 use std::cell::Cell;
 use std::marker::PhantomData;
@@ -590,7 +593,42 @@ impl Composition {
     }
 }
 
+/// What one keeps of a [`PausedComposition`] to know whether its content is in the composition
+/// unapplied, whoever holds the paused composition: a lazy layout's check that an item's content
+/// is its to measure (D599), in place of a remember observer in every item.
+#[derive(Clone)]
+pub struct PausedWatch {
+    composition: CompositionId,
+    state: Rc<Cell<PausedState>>,
+}
+
+impl PausedWatch {
+    /// Whether its content is there, not applied: not composed yet, paused, complete, or
+    /// cancelled with the removal waiting for the composition's next pass.
+    pub fn holds_unapplied_content(&self) -> bool {
+        match self.state.get() {
+            PausedState::Applied => false,
+            PausedState::Cancelled => try_with_runtime(|runtime| {
+                runtime
+                    .compositions
+                    .get(self.composition)
+                    .and_then(|data| data.paused.as_ref())
+                    .is_some_and(|paused| {
+                        paused.cancel_requested && Rc::ptr_eq(&paused.state, &self.state)
+                    })
+            })
+            .unwrap_or(false),
+            _ => true,
+        }
+    }
+}
+
 impl PausedComposition {
+    /// A watch of its content (`PausedWatch`), which outlives it.
+    pub fn watch(&self) -> PausedWatch {
+        PausedWatch { composition: self.composition, state: self.state.clone() }
+    }
+
     /// Whether it's composed: [`apply`](PausedComposition::apply) applies it (or it was applied).
     pub fn is_complete(&self) -> bool {
         matches!(self.state.get(), PausedState::ApplyPending | PausedState::Applied)

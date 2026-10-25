@@ -1556,6 +1556,9 @@ fn LazyItems(
         Rc::new(RefCell::new(ItemSlots::default()))
     });
     let inner = state.inner_or_detached();
+    // A completion's item (`complete_pending`), noted for the completion before this pass: not
+    // the item of an inner scope restarted in this one.
+    inner.prefetch.composing_item.set(None);
     let (mut start, mut end) = inner.composed.get();
     inner.compose_again.get();
     inner.composed_read.set((start, end));
@@ -1617,16 +1620,28 @@ fn LazyItems(
         })
     };
     slots.borrow_mut().items = Rc::downgrade(&items.0);
-    *state.inner_or_detached().prefetch.items.borrow_mut() = Rc::downgrade(&items.0);
+    let parent = {
+        let inner = state.inner_or_detached();
+        *inner.prefetch.items.borrow_mut() = Rc::downgrade(&items.0);
+        // One per list, kept: the local stays the same, its readers aren't invalidated.
+        compose_runtime::platform::remember_across_reuse(|| {
+            Rc::new(prefetch::ParentList::new(Rc::downgrade(&inner)))
+        })
+    };
     compose_runtime::CompositionLocalProvider(
         compose_ui::platform::LOCAL_CONSTRAINTS_HINT.provides(hint),
         || {
-            // The slots holding items first, in the children's order the layout reads; then
-            // those kept for reuse, deactivated: their nodes stay, unmeasured and unplaced. One
-            // loop, so a slot's group moves between the two.
-            for &(slot, content) in &composed {
-                key(slot.id, || compose_slot(slot, content, state, &items, holder));
-            }
+            compose_runtime::CompositionLocalProvider(
+                prefetch::LOCAL_PARENT_LIST.provides(Some(parent)),
+                || {
+                    // The slots holding items first, in the children's order the layout reads;
+                    // then those kept for reuse, deactivated: their nodes stay, unmeasured and
+                    // unplaced. One loop, so a slot's group moves between the two.
+                    for &(slot, content) in &composed {
+                        key(slot.id, || compose_slot(slot, content, state, &items, holder));
+                    }
+                },
+            );
         },
     );
 }
@@ -1643,14 +1658,9 @@ fn LazyItem(index: usize, state: LazyListState, items: ItemsRef, holder: Saveabl
     let pinned = inner.pinned.handle();
     let item_key = items.0.key(index);
     // The lazy lists composing in the item note themselves in this list under its key, whoever
-    // composes it (a frame, a request, a resume), as Compose's request finds those of its
-    // precomposed item (`traversablePrefetchState`): the slot's own cell, kept across reuse, so
-    // the local stays the same and its readers aren't invalidated.
-    let item = compose_runtime::platform::remember_across_reuse(|| {
-        Rc::new(prefetch::ParentList::new(Rc::downgrade(&inner)))
-    });
-    item.key.set(Some(item_key));
-    drop(inner);
+    // composes it (a frame here, a request's resumes, a completion), as Compose's request finds
+    // those of its precomposed item (`traversablePrefetchState`).
+    let composing = inner.prefetch.composing_item.replace(Some(item_key));
     let near = state;
     // An item is a repaint boundary: scrolled, or beside an animation, it's not recorded again.
     let modifier = Modifier.repaint_boundary().on_focus_changed(move |focused: bool| {
@@ -1668,24 +1678,15 @@ fn LazyItem(index: usize, state: LazyListState, items: ItemsRef, holder: Saveabl
         policy,
         compose_runtime::callback(move || {
             if let Some((interval, local)) = items.0.find(index) {
-                compose_runtime::CompositionLocalProvider(
-                    prefetch::LOCAL_PARENT_LIST.provides(Some(item.clone())),
-                    || {
-                        // The item's content, as Compose's item subcomposition: a request's
-                        // paused composition may pause in it, and applies it whole (D590).
-                        compose_runtime::platform::PausableContent(|| {
-                            // Unready until remembered: not the layout's before its paused
-                            // composition is applied.
-                            compose_runtime::remember_observer(|| {
-                                prefetch::ContentReady::new(item.list(), item_key)
-                            });
-                            holder.SaveableStateProvider(item_key, || (interval.content)(local));
-                        });
-                    },
-                );
+                // The item's content, as Compose's item subcomposition: a request's paused
+                // composition may pause in it, and applies it whole (D590).
+                compose_runtime::platform::PausableContent(|| {
+                    holder.SaveableStateProvider(item_key, || (interval.content)(local));
+                });
             }
         }),
     );
+    inner.prefetch.composing_item.set(composing);
 }
 
 /// An item: its children stacked at the top start, as large as the largest.
@@ -1826,10 +1827,10 @@ impl MeasurePolicy for LazyListLayout {
             move |placeable: &Placeable| if vertical { placeable.height } else { placeable.width };
         // An item whose content isn't applied (a request's paused composition) or was removed (a
         // cancelled one's) is one it lacks: composed in this frame's next round (D592).
-        let unready = state.prefetch.has_unready_content();
+        let unready = state.prefetch.unready_item();
         let lacked_unready = Cell::new(false);
         let mut measure_child = |index: usize, sizes: &mut Sizes| -> Option<Placeable> {
-            if unready && !state.prefetch.content_ready(info.items.key(index)) {
+            if unready.is_some_and(|key| key == info.items.key(index)) {
                 // Not applied (a request's paused composition): completed before the round's
                 // pass; cancelled, its item composes it in that pass.
                 state.prefetch.complete_pending();

@@ -63,7 +63,7 @@ pub use executor::{CoroutineScope, Job, delay, with_frame_millis, with_frame_nan
 pub use hash::{KeyHasher, hash_key, key_of};
 pub use immutable_list::ImmutableList;
 pub use local::{CompositionLocal, CompositionLocalProvider, ProvidedValue};
-pub use pausable::{PausedComposition, ShouldPauseCallback};
+pub use pausable::{PausedComposition, PausedWatch, ShouldPauseCallback};
 pub use remember::{
     Observed, Remember, RememberObserver, key, remember, remember_keyed, remember_observer,
     remember_observer_keyed,

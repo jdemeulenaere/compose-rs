@@ -1391,8 +1391,12 @@ impl Composer {
     ///
     /// [`PausableContent`]: crate::platform::PausableContent
     pub fn start_pausable_group(&self, key: u64) {
-        start_group(GroupKind::Replace, key, 0);
-        with_runtime(|runtime| runtime.begin_region());
+        let (op, _) = with_runtime(|runtime| {
+            let started = runtime.start_group(GroupKind::Replace, key, 0, None, false);
+            runtime.begin_region();
+            started
+        });
+        apply_node_op(op);
     }
 
     /// Starts a reusable group, as Compose's `startReusableGroup` (what `ReusableContent` and
