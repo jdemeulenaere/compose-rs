@@ -6,6 +6,7 @@ connected device, interleaving the two apps run by run, and writes a JSON report
                [--scenarios NAME,NAME,...]
                [--optimizations parity|recommended|all|each|NAME,... | --subject [NAME=]LIST ...]
                [--traced-runs N] [--battery-limit CELSIUS] [--thermal-wait-limit SECONDS]
+               [--navigations N]
 
 Before measuring, the installed APKs are checked against the ones built in this checkout
 (android/bench-*/build/outputs/apk/release/): the device ABI's native libraries' SHA-1s must
@@ -42,8 +43,18 @@ Scenarios (docs/12-android-performance.md):
                     after them
   stress_animation  10 s of the stress animation, as `animation`, with memory before and after,
                     and HWUI's GPU caches (`dumpsys gfxinfo`) at both points
+  navigation   only when named (docs/17): the navigation screens' launcher, a warm-up navigation
+               left out, then --navigations (20) navigations a run, each a tap on its button
+               opening a heavy screen of new content, 1 s to settle, then back; --traced-runs
+               traced runs (3), then --runs untraced ones, of each subject, interleaved. Traced:
+               each navigation's latency from the tap's input event (`deliverInputEvent`'s
+               `eventTimeNano`) to FrameTimeline's present of the frame whose doFrame holds the
+               heavy screen's `navigation: heavy screen` section; that doFrame's main thread by
+               phase (composition, layout, draw, …), its DrawFrame, the GPU's completion, its
+               jank. Every run: the heavy frame's framestats (`dumpsys gfxinfo framestats`)
 
---scenarios picks some of them (all by default), comma-separated; the report holds those run.
+--scenarios picks some of them (all but navigation by default), comma-separated; the report
+holds those run.
 Each traced run also lists its slowest frames on each thread with their longest slices
 (`slowest_frames`).
 
@@ -1098,18 +1109,21 @@ def cool_down(what):
 # The scenarios, in the order they run (docs/12, docs/15).
 SCENARIOS = ("startup", "scroll", "animation", "stress_startup", "stress_scroll",
              "stress_animation")
+# Scenarios run only when named, after those (docs/17), so `all` stays the rounds' set.
+NAMED_SCENARIOS = ("navigation",)
 
 
 def parse_scenarios(text):
-    """The scenarios `--scenarios` names (comma-separated; empty or "all": all of them), in
-    SCENARIOS' order. Stops the run on an unknown name."""
+    """The scenarios `--scenarios` names (comma-separated; empty or "all": SCENARIOS), in
+    SCENARIOS' order, then NAMED_SCENARIOS'. Stops the run on an unknown name."""
     names = [name.strip() for name in (text or "").split(",") if name.strip()]
     if not names or names == ["all"]:
         return list(SCENARIOS)
-    unknown = sorted(set(names) - set(SCENARIOS))
+    known = SCENARIOS + NAMED_SCENARIOS
+    unknown = sorted(set(names) - set(known))
     if unknown:
-        raise SystemExit(f"unknown scenarios {unknown}; known: {', '.join(SCENARIOS)}")
-    return [name for name in SCENARIOS if name in names]
+        raise SystemExit(f"unknown scenarios {unknown}; known: {', '.join(known)}")
+    return [name for name in known if name in names]
 
 
 # How many of a run's slowest frames, and of each one's longest slices, `slowest_frames` lists.
@@ -1297,6 +1311,450 @@ def animation_scenario(tp, out_dir, capacities, screen, prefix, subjects, runs=3
     return animation
 
 
+# ---- The navigation scenario (docs/17) ---------------------------------------------------------
+
+# Navigations per run, after a warm-up one left out (--navigations).
+NAVIGATIONS = 20
+# How long a navigation waits after the tap (the heavy screen's frames settle) and after back
+# (the launcher's).
+NAVIGATION_SETTLE_S = 1.0
+NAVIGATION_BACK_S = 1.0
+# What a navigation costs beside its waits, at most (adb's commands): the trace's length.
+NAVIGATION_OVERHEAD_S = 1.0
+# The empty section each app's heavy screen starts its composition with.
+NAVIGATION_MARKER = "navigation: heavy screen"
+# The heavy frames' HWUI operations are traced a slice each.
+NAVIGATION_TRACE_BUFFER_KB = 196608
+# A tap's input event is the last one delivered before the heavy frame, at most this long before.
+NAVIGATION_INPUT_WINDOW_NS = 1_000_000_000
+
+# Where a frame's main thread goes (`frame_phases`): a slice's own time (its duration less its
+# children's) counts in the phase of the nearest slice, itself or an ancestor inside the frame,
+# named here; else in "other". Compose 1.12.1's sections, compose-rs's, the view system's.
+FRAME_PHASES = {
+    "Compose:recompose": "composition", "Compose:applyChanges": "composition",
+    "Compose:onRemembered": "composition", "Compose:unobserve": "composition",
+    "Recomposer:recompose": "composition", "compose-rs: recompose": "composition",
+    "compose-rs: tasks": "composition",
+    "AndroidOwner:measureAndLayout": "layout", "Compose:onPositionedCallbacks": "layout",
+    "compose-rs: layout": "layout", "compose-rs: recompose and layout again": "layout",
+    "compose-rs: text layout": "text_layout",
+    "AndroidOwner:draw": "draw", "compose-rs: draw": "draw",
+    "compose-rs: serialize": "serialize", "compose-rs: take drawing": "serialize",
+    "compose-rs: replay": "replay",
+    "Record View#draw()": "record",
+    "postAndWait": "sync",
+    "input": "input",
+}
+
+
+def screen_center(wm_size_output):
+    """The screen's center in pixels, from `wm size` (its override if any), or None."""
+    sizes = dict(re.findall(r"(Physical|Override) size: (\d+x\d+)", wm_size_output))
+    size = sizes.get("Override") or sizes.get("Physical")
+    if not size:
+        return None
+    width, height = (int(value) for value in size.split("x"))
+    return width // 2, height // 2
+
+
+def framestats_frames(output):
+    """The frames of `dumpsys gfxinfo <package> framestats`: each `---PROFILEDATA---` section's
+    rows as {column: int}, by its header's names (`IntendedVsync`, `FrameCompleted`, …)."""
+    frames = []
+    for section in output.split("---PROFILEDATA---")[1::2]:
+        lines = [line.strip() for line in section.strip().splitlines() if line.strip()]
+        if not lines:
+            continue
+        header = [name for name in lines[0].split(",") if name]
+        for line in lines[1:]:
+            cells = [cell for cell in line.split(",") if cell != ""]
+            if len(cells) < len(header) or not all(re.fullmatch(r"-?\d+", c) for c in cells):
+                continue
+            frames.append(dict(zip(header, (int(cell) for cell in cells))))
+    return frames
+
+
+def latest_intended_vsync(frames):
+    """The latest `IntendedVsync` of `frames` (`framestats_frames`), 0 without one."""
+    return max((frame.get("IntendedVsync", 0) for frame in frames), default=0)
+
+
+def framestats_heavy_frame(frames, after=0):
+    """The slowest frame (`IntendedVsync` to `FrameCompleted`) of `frames` (`framestats_frames`)
+    intended after `after` (an `IntendedVsync`), frames with flags (a window change, a skipped
+    frame) left out, and its phases in ms: from its vsync to the main thread's start (its
+    Choreographer callbacks'), the callbacks (Compose's recomposition, compose-rs's whole frame),
+    the traversal's measure and layout, its drawing, the RenderThread's sync and drawing up to the
+    frame's completion; and from its vsync, the GPU's completion and the display's present (when
+    the device reports them). None without one."""
+    candidates = [frame for frame in frames if frame.get("IntendedVsync", 0) > after
+                  and frame.get("Flags", 0) == 0 and frame.get("FrameCompleted", 0) > 0]
+    if not candidates:
+        return None
+    frame = max(candidates, key=lambda f: f["FrameCompleted"] - f["IntendedVsync"])
+    start = frame["IntendedVsync"]
+
+    def span(begin, end):
+        if frame.get(begin, 0) <= 0 or frame.get(end, 0) <= 0:
+            return None
+        return round((frame[end] - frame[begin]) / 1e6, 3)
+
+    def since_vsync(name):
+        value = frame.get(name, 0)
+        return round((value - start) / 1e6, 3) if value > 0 else None
+
+    return {"vsync_id": frame.get("FrameTimelineVsyncId"), "intended_vsync": start,
+            "frame_ms": since_vsync("FrameCompleted"),
+            "start_delay_ms": since_vsync("AnimationStart"),
+            "animation_ms": span("AnimationStart", "PerformTraversalsStart"),
+            "traversal_ms": span("PerformTraversalsStart", "DrawStart"),
+            "draw_ms": span("DrawStart", "SyncQueued"),
+            "sync_ms": span("SyncStart", "IssueDrawCommandsStart"),
+            "render_ms": span("IssueDrawCommandsStart", "FrameCompleted"),
+            "gpu_completed_ms": since_vsync("GpuCompleted"),
+            "present_ms": since_vsync("DisplayPresentTime")}
+
+
+def event_time_ns(slice_name):
+    """The input event's own time (`eventTimeNano=`, CLOCK_MONOTONIC) in a `deliverInputEvent`
+    slice's name (Android 12 and later), or None."""
+    match = re.search(r"eventTimeNano=(\d+)", slice_name)
+    return int(match.group(1)) if match else None
+
+
+def monotonic_offset(snapshots):
+    """The trace's clock (BOOTTIME) less CLOCK_MONOTONIC, from the trace's clock snapshots (rows
+    of `clock_snapshot`: `snapshot_id`, `clock_name`, `clock_value`), or None."""
+    by_snapshot = {}
+    for row in snapshots:
+        by_snapshot.setdefault(row.get("snapshot_id"), {})[row.get("clock_name")] = row.get(
+            "clock_value")
+    for clocks in by_snapshot.values():
+        boottime, monotonic = clocks.get("BOOTTIME"), clocks.get("MONOTONIC")
+        if boottime and monotonic and boottime.isdigit() and monotonic.isdigit():
+            return int(boottime) - int(monotonic)
+    return None
+
+
+def frame_phases(frame_dur, slices):
+    """A frame's main-thread time by phase (`FRAME_PHASES`), in ms. `slices` are the frame's
+    descendants as (id, parent id, name, dur ns); the frame's own time is "other", so the phases
+    sum to the frame's duration."""
+    by_id = {slice_id: (parent, name, dur) for slice_id, parent, name, dur in slices}
+    children = {}
+    for _, parent, _, dur in slices:
+        children[parent] = children.get(parent, 0) + dur
+
+    def phase(slice_id):
+        while slice_id in by_id:
+            parent, name, _ = by_id[slice_id]
+            if name in FRAME_PHASES:
+                return FRAME_PHASES[name]
+            slice_id = parent
+        return "other"
+
+    phases = {}
+    for slice_id, (_, _, dur) in by_id.items():
+        own = max(dur - children.get(slice_id, 0), 0)
+        name = phase(slice_id)
+        phases[name] = phases.get(name, 0.0) + own / 1e6
+    direct = sum(dur for parent, _, dur in by_id.values() if parent not in by_id)
+    phases["other"] = phases.get("other", 0.0) + max(frame_dur - direct, 0) / 1e6
+    return {name: round(value, 3) for name, value in phases.items()}
+
+
+def overlap_by(rows, start, end, key):
+    """The time (ms) of `rows` ((ts, dur, …) in ns) inside [start, end), by `key(row)`."""
+    totals = {}
+    for row in rows:
+        inside = min(row[0] + row[1], end) - max(row[0], start)
+        if inside > 0:
+            totals[key(row)] = totals.get(key(row), 0.0) + inside / 1e6
+    return {name: round(value, 3) for name, value in totals.items()}
+
+
+def core_kind(cpu, capacities):
+    """A CPU's kind by its capacity among the device's (`cpu_capacities`): "little" (the lowest),
+    "big" (the highest), "mid", or "unknown"."""
+    if not capacities or cpu not in capacities:
+        return "unknown"
+    kinds = sorted({capacity for capacity, _ in capacities.values()})
+    capacity = capacities[cpu][0]
+    if capacity == kinds[0]:
+        return "little"
+    return "big" if capacity == kinds[-1] else "mid"
+
+
+def navigation_records(markers, frames, inputs, render_frames, gpu_waits, timeline, expected,
+                       offset=None):
+    """Each navigation's first frame of the heavy screen, from a trace's rows (times in ns):
+    `markers` the heavy screen's sections' starts; `frames` the main thread's doFrames as (id, ts,
+    dur, vsync id); `inputs` its `deliverInputEvent`s as (ts, name); `render_frames` the
+    RenderThread's `DrawFrames <vsync id>` as (ts, dur, vsync id or None); `gpu_waits` the GPU
+    completion thread's waits as (ts, dur); `timeline` and `expected` FrameTimeline's actual and
+    expected slices by vsync id, as (ts, dur, jank type, present type); `offset` the trace's clock
+    less CLOCK_MONOTONIC (`monotonic_offset`), which places the input events' own times.
+
+    A navigation's frame is the doFrame holding the marker; its input the last event delivered
+    before that doFrame (the tap's up), within NAVIGATION_INPUT_WINDOW_NS and after the previous
+    navigation's frame; its present FrameTimeline's actual present (its actual slice's end). The
+    times (`…_ms`) are from the input event's own time when the offset places it (`"input":
+    "event_time"`), else from its delivery (`"delivery"`)."""
+    records = []
+    previous_end = 0
+    frames = sorted(frames, key=lambda frame: frame[1])
+    inputs = sorted(inputs)
+    render_frames = sorted(render_frames, key=lambda frame: frame[0])
+    gpu_waits = sorted(gpu_waits)
+    for marker in sorted(markers):
+        frame = next((f for f in frames if f[1] <= marker < f[1] + f[2]), None)
+        if frame is None or frame[1] < previous_end:
+            continue
+        frame_id, frame_ts, frame_dur, vsync = frame
+        delivered = [(ts, name) for ts, name in inputs if previous_end <= ts < frame_ts
+                     and frame_ts - ts <= NAVIGATION_INPUT_WINDOW_NS]
+        previous_end = frame_ts + frame_dur
+        if not delivered:
+            continue
+        delivery_ts, name = delivered[-1]
+        event = event_time_ns(name)
+        input_ts, input_kind = delivery_ts, "delivery"
+        if (offset is not None and event is not None
+                and 0 <= delivery_ts - (event + offset) < NAVIGATION_INPUT_WINDOW_NS):
+            input_ts, input_kind = event + offset, "event_time"
+
+        def after_input(ts):
+            return None if ts is None else round((ts - input_ts) / 1e6, 3)
+
+        render = next((r for r in render_frames if r[2] == vsync), None) or next(
+            (r for r in render_frames if r[2] is None and r[0] >= frame_ts), None)
+        gpu = next((g for g in gpu_waits if render and g[0] >= render[0]), None)
+        actual, planned = timeline.get(vsync), expected.get(vsync)
+        present = actual[0] + actual[1] if actual else None
+        expected_present = planned[0] + planned[1] if planned else None
+        records.append({
+            "vsync_id": vsync, "frame_id": frame_id, "input": input_kind, "input_ts": input_ts,
+            "delivery_ms": after_input(delivery_ts),
+            "frame_start_ms": after_input(frame_ts),
+            "main_end_ms": after_input(frame_ts + frame_dur),
+            "render_end_ms": after_input(render[0] + render[1]) if render else None,
+            "gpu_end_ms": after_input(gpu[0] + gpu[1]) if gpu else None,
+            "input_to_present_ms": after_input(present),
+            "do_frame_ms": round(frame_dur / 1e6, 3),
+            "render_ms": round(render[1] / 1e6, 3) if render else None,
+            "gpu_wait_ms": round(gpu[1] / 1e6, 3) if gpu else None,
+            "late_ms": round((present - expected_present) / 1e6, 3)
+            if present is not None and expected_present is not None else None,
+            "jank_type": actual[2] if actual else None,
+            "present_type": actual[3] if actual else None,
+        })
+    return records
+
+
+def navigation_trace(trace_processor, trace, package, capacities):
+    """The navigations of a traced run (`navigation_records`), each with its main thread's
+    phases (`frame_phases`), its main thread's states and cores while its doFrame ran, its
+    RenderThread's cores while its DrawFrame ran, and the app's other janky frames from its input
+    to 100 ms after its present."""
+    def rows(sql):
+        return query(trace_processor, trace, sql)
+
+    app = f"""FROM slice s JOIN thread_track tt ON s.track_id = tt.id
+        JOIN thread t USING (utid) JOIN process p USING (upid) WHERE p.name = '{package}'"""
+    markers = [int(r["ts"]) for r in rows(
+        f"SELECT s.ts AS ts {app} AND t.tid = p.pid AND s.name = '{NAVIGATION_MARKER}'")]
+    frames = [(int(r["id"]), int(r["ts"]), int(r["dur"]), int(r["name"].split()[1])) for r in rows(
+        f"""SELECT s.id AS id, s.ts AS ts, s.dur AS dur, s.name AS name {app} AND t.tid = p.pid
+            AND s.name GLOB 'Choreographer#doFrame [0-9]*' AND s.dur > 0""")]
+    inputs = [(int(r["ts"]), r["name"]) for r in rows(
+        f"""SELECT s.ts AS ts, s.name AS name {app} AND t.tid = p.pid
+            AND s.name LIKE 'deliverInputEvent%'""")]
+    render_frames = []
+    for r in rows(f"""SELECT s.ts AS ts, s.dur AS dur, s.name AS name {app}
+                      AND t.name = 'RenderThread' AND s.name GLOB 'DrawFrame*' AND s.dur > 0"""):
+        parts = r["name"].split()
+        render_frames.append((int(r["ts"]), int(r["dur"]),
+                              int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else None))
+    gpu_waits = [(int(r["ts"]), int(r["dur"])) for r in rows(
+        f"""SELECT s.ts AS ts, s.dur AS dur {app} AND t.name = 'GPU completion'
+            AND s.name GLOB 'waiting for GPU completion*' AND s.dur > 0""")]
+
+    def timeline_rows(table, columns):
+        out = {}
+        for r in rows(f"""SELECT a.ts AS ts, a.dur AS dur, a.name AS name, {columns}
+                          FROM {table} a JOIN process p USING (upid) WHERE p.name = '{package}'"""):
+            if not r.get("name", "").isdigit() or not r.get("dur", "").isdigit():
+                continue
+            vsync = int(r["name"])
+            value = (int(r["ts"]), int(r["dur"]), r.get("jank", ""), r.get("present", ""))
+            # Several layers' rows for one vsync: the last present.
+            if vsync not in out or sum(value[:2]) > sum(out[vsync][:2]):
+                out[vsync] = value
+        return out
+
+    timeline = timeline_rows("actual_frame_timeline_slice",
+                             "a.jank_type AS jank, a.present_type AS present")
+    expected = timeline_rows("expected_frame_timeline_slice", "'' AS jank, '' AS present")
+    offset = monotonic_offset(rows(
+        "SELECT snapshot_id, clock_name, clock_value FROM clock_snapshot"))
+    records = navigation_records(markers, frames, inputs, render_frames, gpu_waits, timeline,
+                                 expected, offset)
+    for record in records:
+        _, frame_ts, frame_dur, _ = next(f for f in frames if f[0] == record["frame_id"])
+        end = frame_ts + frame_dur
+        # Names may hold commas, which `query`'s rows split on.
+        descendants = [(int(r["id"]), int(r["parent_id"]), r["name"], int(r["dur"])) for r in rows(
+            f"""SELECT d.id AS id, d.parent_id AS parent_id, d.dur AS dur,
+                       REPLACE(d.name, ',', ';') AS name
+                FROM descendant_slice({record['frame_id']}) d WHERE d.dur >= 0""")
+            if r.get("parent_id", "").isdigit()]
+        record["phases_ms"] = frame_phases(frame_dur, descendants)
+        states = [(int(r["ts"]), int(r["dur"]), r["state"],
+                   int(r["cpu"]) if r.get("cpu", "").isdigit() else None)
+                  for r in rows(f"""SELECT ts.ts AS ts, ts.dur AS dur, ts.state AS state,
+                                           ts.cpu AS cpu
+                                    FROM thread_state ts JOIN thread t USING (utid)
+                                    JOIN process p USING (upid)
+                                    WHERE p.name = '{package}' AND t.tid = p.pid AND ts.dur > 0
+                                      AND ts.ts < {end} AND ts.ts + ts.dur > {frame_ts}""")]
+        record["main_states_ms"] = overlap_by(states, frame_ts, end, lambda row: row[2])
+        record["main_cores_ms"] = overlap_by([row for row in states if row[2] == "Running"],
+                                             frame_ts, end,
+                                             lambda row: core_kind(row[3], capacities))
+        render = next((r for r in render_frames if r[2] == record["vsync_id"]), None)
+        if render:
+            running = [(int(r["ts"]), int(r["dur"]), int(r["cpu"])) for r in rows(
+                f"""SELECT s.ts AS ts, s.dur AS dur, s.cpu AS cpu FROM sched s
+                    JOIN thread t USING (utid) JOIN process p USING (upid)
+                    WHERE p.name = '{package}' AND t.name = 'RenderThread' AND s.dur > 0
+                      AND s.ts < {render[0] + render[1]} AND s.ts + s.dur > {render[0]}""")]
+            record["render_cores_ms"] = overlap_by(running, render[0], render[0] + render[1],
+                                                   lambda row: core_kind(row[2], capacities))
+        if record["input_to_present_ms"] is not None:
+            until = record["input_ts"] + record["input_to_present_ms"] * 1e6 + 100e6
+            record["other_janky_frames"] = sum(
+                1 for vsync, (ts, _, jank, _) in timeline.items()
+                if vsync != record["vsync_id"] and record["input_ts"] <= ts <= until
+                and jank_side(jank))
+    return {"markers": len(markers), "navigations": records,
+            # As the other traced runs' (`traced`): a trace with none is run again.
+            "frames": len(records)}
+
+
+def distribution(values):
+    """The count, p50, p90 and max of `values`, None left out."""
+    values = [value for value in values if value is not None]
+    return {"count": len(values), "p50": percentile(values, 0.5), "p90": percentile(values, 0.9),
+            "max": max(values) if values else None}
+
+
+# The traced navigations' fields summarized, and the framestats' heavy frames'.
+NAVIGATION_FIELDS = ("input_to_present_ms", "delivery_ms", "frame_start_ms", "main_end_ms",
+                     "render_end_ms", "gpu_end_ms", "do_frame_ms", "render_ms", "gpu_wait_ms",
+                     "late_ms")
+FRAMESTATS_FIELDS = ("frame_ms", "start_delay_ms", "animation_ms", "traversal_ms", "draw_ms",
+                     "sync_ms", "render_ms", "gpu_completed_ms", "present_ms")
+
+
+def navigation_summary(traced_runs, untraced_runs):
+    """A subject's navigations over its runs: each traced field's and main-thread phase's
+    distribution, its janky heavy frames and the inputs placed by their own time, and the
+    framestats fields' of the untraced runs and of all runs."""
+    records = [record for run in traced_runs for record in run["trace"]["navigations"]]
+    phases = sorted({name for record in records for name in record.get("phases_ms", {})})
+
+    def heavy_frames(runs):
+        return [frame for run in runs for frame in run["framestats"] if frame]
+
+    return {
+        "traced": {field: distribution([record.get(field) for record in records])
+                   for field in NAVIGATION_FIELDS},
+        "phases_ms": {name: distribution([record.get("phases_ms", {}).get(name, 0.0)
+                                          for record in records]) for name in phases},
+        "inputs": {kind: sum(record["input"] == kind for record in records)
+                   for kind in ("event_time", "delivery")},
+        "janky": sum(1 for record in records if jank_side(record.get("jank_type") or "None")),
+        "framestats_untraced": {field: distribution([f.get(field) for f in heavy_frames(untraced_runs)])
+                                for field in FRAMESTATS_FIELDS},
+        "framestats_all": {field: distribution([f.get(field) for f in
+                                                heavy_frames(traced_runs + untraced_runs)])
+                           for field in FRAMESTATS_FIELDS},
+    }
+
+
+def navigate_once(package, center):
+    """One navigation: a tap on the launcher's button, the frames settling, then back. Returns
+    the heavy frame from framestats (`framestats_heavy_frame`: the frames after the tap's)."""
+    before = latest_intended_vsync(framestats_frames(shell(f"dumpsys gfxinfo {package} framestats")))
+    shell(f"input tap {center[0]} {center[1]}")
+    time.sleep(NAVIGATION_SETTLE_S)
+    heavy = framestats_heavy_frame(
+        framestats_frames(shell(f"dumpsys gfxinfo {package} framestats")), before)
+    shell("input keyevent KEYCODE_BACK")
+    time.sleep(NAVIGATION_BACK_S)
+    return heavy
+
+
+def navigation_run(trace_processor, out_dir, package, name, run, capacities, center, traced_run,
+                   navigations, optimizations=None):
+    """One run: the app started on its launcher, a warm-up navigation left out, then
+    `navigations` navigations, traced or not. Returns each heavy frame's framestats, the trace's
+    navigations if traced, and the thermal states."""
+    thermal = cool_down(f"navigation {name} {run}")
+    fresh(package)
+    time.sleep(1.0)
+    start(package, "navigation", optimizations=optimizations)
+    time.sleep(3)
+    navigate_once(package, center)
+    stats = {"traced": traced_run}
+    if traced_run:
+        duration_ms = int(1000 * (navigations * (NAVIGATION_SETTLE_S + NAVIGATION_BACK_S
+                                                 + NAVIGATION_OVERHEAD_S) + 3))
+        process, path = start_trace(package, duration_ms, f"navigation-{name}-{run}",
+                                    NAVIGATION_TRACE_BUFFER_KB)
+    began = time.time()
+    stats["framestats"] = [navigate_once(package, center) for _ in range(navigations)]
+    stats["seconds"] = round(time.time() - began, 1)
+    if traced_run:
+        process.wait(timeout=duration_ms / 1000 + 60)
+        trace = finish_trace(process, path, out_dir)
+        stats["trace"] = navigation_trace(trace_processor, trace, package, capacities)
+        if stats["trace"]["frames"] < navigations:
+            print(f"navigation {name} {run}: {stats['trace']['frames']} of {navigations} "
+                  f"navigations found in the trace ({stats['trace']['markers']} markers)")
+    thermal["after"] = thermal_state()
+    stats["thermal"] = thermal
+    return stats
+
+
+def navigation_scenario(tp, out_dir, capacities, subjects, runs, traced_runs, navigations):
+    """`traced_runs` traced runs, then `runs` untraced ones, of each subject, interleaved, each of
+    `navigations` navigations after a warm-up (docs/17); and each subject's summary."""
+    center = screen_center(shell("wm size"))
+    if center is None:
+        raise SystemExit("navigation: no screen size from `wm size`")
+    result = {"tap": list(center), "navigations_per_run": navigations,
+              "subjects": {name: {"traced": [], "untraced": []} for name, _, _ in subjects}}
+    for run in range(traced_runs + runs):
+        for name, package, optimizations in subjects:
+            traced_run = run < traced_runs
+
+            def attempt():
+                return navigation_run(tp, out_dir, package, name, run, capacities, center,
+                                      traced_run, navigations, optimizations)
+
+            stats = traced(attempt, f"navigation {name} {run}") if traced_run else attempt()
+            result["subjects"][name]["traced" if traced_run else "untraced"].append(stats)
+            print("navigation", name, run, json.dumps({
+                "framestats_ms": [frame and frame["frame_ms"] for frame in stats["framestats"]],
+                "input_to_present_ms": [record["input_to_present_ms"] for record in
+                                        stats.get("trace", {}).get("navigations", [])]}))
+    for subject in result["subjects"].values():
+        subject["summary"] = navigation_summary(subject["traced"], subject["untraced"])
+    return result
+
+
 def configure(arguments, source):
     """The mode and subjects `arguments` ask for (rotated by --rotate), each subject's full bit
     set (None: the Compose app), and the thermal guards' limits set."""
@@ -1351,6 +1809,8 @@ def main(argv=None):
     parser.add_argument("--rotate", type=int, default=0,
                         help="start the subjects' order this many places on (each run's order "
                              "the same), so no subject always runs warmest")
+    parser.add_argument("--navigations", type=int, default=NAVIGATIONS,
+                        help="navigations per run in the navigation scenario (after a warm-up)")
     parser.add_argument("--each-only", default=None,
                         help="with --optimizations each: only these optimizations, "
                              "comma-separated")
@@ -1408,6 +1868,10 @@ def main(argv=None):
         report["stress_animation"] = animation_scenario(
             tp, arguments.out, capacities, "stress_animation", "stress-animation", subjects,
             traced_runs, memory=True, buffer_kb=STRESS_TRACE_BUFFER_KB)
+    if "navigation" in scenarios:
+        report["navigation"] = navigation_scenario(
+            tp, arguments.out, capacities, subjects, arguments.runs, traced_runs,
+            arguments.navigations)
 
     for package in APPS.values():
         stop(package)

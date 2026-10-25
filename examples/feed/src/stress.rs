@@ -80,7 +80,7 @@ thread_local! {
     static STRESS_BITMAPS: Vec<ImageBitmap> = (0..BITMAPS).map(stress_bitmap).collect();
 }
 
-fn bitmap(which: u32) -> ImageBitmap {
+pub(crate) fn bitmap(which: u32) -> ImageBitmap {
     STRESS_BITMAPS.with(|bitmaps| bitmaps[(which % BITMAPS) as usize].clone())
 }
 
@@ -326,7 +326,7 @@ fn RichPost(index: u32) {
 }
 
 #[composable]
-fn Counted(icon: ImageVector, count: u32) {
+pub(crate) fn Counted(icon: ImageVector, count: u32) {
     Row!(vertical_alignment = Alignment::CENTER_VERTICALLY, {
         Icon!(
             icon,

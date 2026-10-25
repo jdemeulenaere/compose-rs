@@ -798,6 +798,165 @@ class SlowestFramesTest(unittest.TestCase):
         self.assertIsNone(summarize.slowest_line({"frames": 3}, "main"))
 
 
+# `dumpsys gfxinfo rs.compose.bench.rs framestats` on a Pixel 8 Pro, Android 16, shortened: a
+# frame before the tap, the heavy one, one after it, and a flagged one.
+FRAMESTATS = """\
+Window: rs.compose.bench.rs/rs.compose.bench.rs.MainActivity
+---PROFILEDATA---
+Flags,FrameTimelineVsyncId,IntendedVsync,Vsync,InputEventId,HandleInputStart,AnimationStart,PerformTraversalsStart,DrawStart,FrameDeadline,FrameInterval,FrameStartTime,SyncQueued,SyncStart,IssueDrawCommandsStart,SwapBuffers,FrameCompleted,DequeueBufferDuration,QueueBufferDuration,GpuCompleted,SwapBuffersCompleted,DisplayPresentTime,CommandSubmissionCompleted,
+0,100,1000000000,1000000000,0,1000500000,1000600000,1000700000,1000800000,1016600000,8333333,1000400000,1001000000,1001100000,1001200000,1002000000,1002100000,10000,20000,1003000000,1002200000,0,1002000000,
+0,200,2000000000,2000000000,0,2000500000,2000600000,2030700000,2040800000,2016600000,8333333,2000400000,2050000000,2050100000,2051000000,2060000000,2061000000,10000,20000,2065000000,2061500000,2070000000,2060000000,
+0,201,2066000000,2066000000,0,2066500000,2066600000,2066700000,2066800000,2082600000,8333333,2066400000,2067000000,2067100000,2067200000,2068000000,2068100000,10000,20000,2069000000,2068200000,0,2068000000,
+1,202,2100000000,2100000000,0,2100500000,2100600000,2190700000,2190800000,2116600000,8333333,2100400000,2191000000,2191100000,2191200000,2192000000,2199000000,10000,20000,2199500000,2199200000,0,2192000000,
+---PROFILEDATA---
+
+View hierarchy:
+"""
+
+
+class NavigationTest(unittest.TestCase):
+    def test_the_tap_is_the_screens_center(self):
+        self.assertEqual(measure.screen_center("Physical size: 1008x2244\n"), (504, 1122))
+        self.assertEqual(measure.screen_center("Physical size: 1344x2992\nOverride size: 1008x2244\n"),
+                         (504, 1122))
+        self.assertIsNone(measure.screen_center("error"))
+
+    def test_framestats_heavy_frame(self):
+        frames = measure.framestats_frames(FRAMESTATS)
+        self.assertEqual([frame["FrameTimelineVsyncId"] for frame in frames], [100, 200, 201, 202])
+        self.assertEqual(measure.latest_intended_vsync(frames[:1]), 1000000000)
+        heavy = measure.framestats_heavy_frame(frames, after=1000000000)
+        # The flagged frame (202) is slower but left out.
+        self.assertEqual(heavy["vsync_id"], 200)
+        self.assertEqual((heavy["frame_ms"], heavy["start_delay_ms"], heavy["animation_ms"],
+                          heavy["traversal_ms"], heavy["draw_ms"], heavy["sync_ms"],
+                          heavy["render_ms"], heavy["gpu_completed_ms"], heavy["present_ms"]),
+                         (61.0, 0.6, 30.1, 10.1, 9.2, 0.9, 10.0, 65.0, 70.0))
+        # The display's present unknown (0): None, not a negative time.
+        self.assertIsNone(measure.framestats_heavy_frame(frames[:1])["present_ms"])
+        self.assertIsNone(measure.framestats_heavy_frame(frames, after=2200000000))
+        self.assertEqual(measure.framestats_frames("no data"), [])
+
+    def test_the_inputs_own_time_on_the_traces_clock(self):
+        name = "deliverInputEvent src=0x1002 eventTimeNano=126142742000000 id=0xd6b178e4"
+        self.assertEqual(measure.event_time_ns(name), 126142742000000)
+        self.assertIsNone(measure.event_time_ns("deliverInputEvent"))
+        # clock_snapshot's rows, as `query` returns them (strings).
+        snapshots = [{"snapshot_id": "0", "clock_name": "BOOTTIME", "clock_value": "126313374358256"},
+                     {"snapshot_id": "0", "clock_name": "REALTIME", "clock_value": "1792746297049504407"},
+                     {"snapshot_id": "0", "clock_name": "MONOTONIC", "clock_value": "126141199924139"}]
+        self.assertEqual(measure.monotonic_offset(snapshots), 172174434117)
+        self.assertIsNone(measure.monotonic_offset(snapshots[:2]))
+
+    def test_frame_phases_sum_to_the_frame(self):
+        # Compose's: a recomposition inside a measure pass counts as composition, the layout's
+        # own time as layout, the frame's and traversal's own as other.
+        slices = [(2, 1, "animation", 30_000_000),
+                  (3, 2, "AndroidOwner:measureAndLayout", 25_000_000),
+                  (4, 3, "Compose:recompose", 15_000_000),
+                  (5, 4, "SomethingInside", 2_000_000),
+                  (6, 1, "traversal", 15_000_000),
+                  (7, 6, "Record View#draw()", 12_000_000),
+                  (8, 7, "AndroidOwner:draw", 10_000_000),
+                  (9, 6, "postAndWait", 2_000_000)]
+        phases = measure.frame_phases(50_000_000, slices)
+        self.assertEqual(phases, {"other": 5.0 + 1.0 + 5.0, "layout": 10.0, "composition": 15.0,
+                                  "record": 2.0, "draw": 10.0, "sync": 2.0})
+        self.assertAlmostEqual(sum(phases.values()), 50.0)
+
+    def test_overlap_and_cores(self):
+        rows = [(0, 10_000_000, "Running", 0), (10_000_000, 5_000_000, "R", None),
+                (15_000_000, 10_000_000, "Running", 8)]
+        self.assertEqual(measure.overlap_by(rows, 5_000_000, 20_000_000, lambda row: row[2]),
+                         {"Running": 10.0, "R": 5.0})
+        capacities = {0: (160, 1700000), 4: (450, 2400000), 8: (1024, 3000000)}
+        self.assertEqual([measure.core_kind(cpu, capacities) for cpu in (0, 4, 8, 9)],
+                         ["little", "mid", "big", "unknown"])
+
+    def records(self, offset=None):
+        ms = 1_000_000
+        markers = [105 * ms, 2105 * ms, 4300 * ms]
+        # The second navigation's marker is in a doFrame; the third's in none (not counted).
+        frames = [(1, 104 * ms, 40 * ms, 10), (2, 150 * ms, 2 * ms, 11), (3, 2104 * ms, 60 * ms, 20)]
+        inputs = [(90 * ms, "deliverInputEvent src=0x1002 eventTimeNano=89000000 id=0x1"),
+                  (91 * ms, "deliverInputEvent src=0x1002 eventTimeNano=90000000 id=0x2"),
+                  (2100 * ms, "deliverInputEvent src=0x1002 eventTimeNano=2099000000 id=0x3")]
+        render = [(145 * ms, 10 * ms, 10), (2165 * ms, 20 * ms, 20)]
+        gpu = [(156 * ms, 4 * ms), (2186 * ms, 6 * ms)]
+        timeline = {10: (104 * ms, 66 * ms, "App Deadline Missed", "Late Present"),
+                    20: (2104 * ms, 96 * ms, "None", "On-time Present")}
+        expected = {10: (100 * ms, 16 * ms, "", ""), 20: (2100 * ms, 16 * ms, "", "")}
+        return measure.navigation_records(markers, frames, inputs, render, gpu, timeline,
+                                          expected, offset)
+
+    def test_each_navigations_first_frame(self):
+        first, second = self.records()
+        # From the tap's up (the last input delivered before the frame).
+        self.assertEqual(first["input"], "delivery")
+        self.assertEqual((first["vsync_id"], first["frame_start_ms"], first["main_end_ms"],
+                          first["render_end_ms"], first["gpu_end_ms"],
+                          first["input_to_present_ms"], first["do_frame_ms"],
+                          first["render_ms"], first["gpu_wait_ms"], first["late_ms"]),
+                         (10, 13.0, 53.0, 64.0, 69.0, 79.0, 40.0, 10.0, 4.0, 54.0))
+        self.assertEqual((first["jank_type"], first["present_type"]),
+                         ("App Deadline Missed", "Late Present"))
+        self.assertEqual((second["vsync_id"], second["input_to_present_ms"]), (20, 100.0))
+        # With the clocks' offset, from the event's own time: 1 ms before its delivery.
+        first, second = self.records(offset=0)
+        self.assertEqual((first["input"], first["delivery_ms"], first["input_to_present_ms"]),
+                         ("event_time", 1.0, 80.0))
+        # An offset placing the event after its delivery is wrong: the delivery is used.
+        self.assertEqual(self.records(offset=5_000_000)[0]["input"], "delivery")
+
+    def test_the_summary(self):
+        records = self.records()
+        for record in records:
+            record["phases_ms"] = {"composition": 10.0, "layout": 20.0}
+        records[1]["phases_ms"]["draw"] = 4.0
+        heavy = measure.framestats_heavy_frame(measure.framestats_frames(FRAMESTATS))
+        traced = [{"trace": {"navigations": records}, "framestats": [heavy, None]}]
+        untraced = [{"framestats": [heavy, heavy]}]
+        summary = measure.navigation_summary(traced, untraced)
+        self.assertEqual(summary["traced"]["input_to_present_ms"],
+                         {"count": 2, "p50": 79.0, "p90": 100.0, "max": 100.0})
+        self.assertEqual(summary["traced"]["do_frame_ms"]["max"], 60.0)
+        self.assertEqual(summary["phases_ms"]["draw"]["count"], 2)
+        self.assertEqual(summary["phases_ms"]["draw"]["max"], 4.0)
+        self.assertEqual(summary["inputs"], {"event_time": 0, "delivery": 2})
+        self.assertEqual(summary["janky"], 1)
+        self.assertEqual(summary["framestats_untraced"]["frame_ms"]["count"], 2)
+        self.assertEqual(summary["framestats_all"]["frame_ms"]["count"], 3)
+
+    def test_navigation_runs_only_when_named(self):
+        self.assertNotIn("navigation", measure.parse_scenarios("all"))
+        self.assertEqual(measure.parse_scenarios("navigation"), ["navigation"])
+        self.assertEqual(measure.parse_scenarios("navigation,startup"), ["startup", "navigation"])
+
+    def test_summarize_prints_the_navigations(self):
+        records = self.records()
+        for record in records:
+            record["phases_ms"] = {"composition": 10.0, "layout": 20.0}
+        heavy = measure.framestats_heavy_frame(measure.framestats_frames(FRAMESTATS))
+        subject = {"traced": [{"trace": {"navigations": records}, "framestats": [heavy]}],
+                   "untraced": [{"framestats": [heavy]}]}
+        subject["summary"] = measure.navigation_summary(subject["traced"], subject["untraced"])
+        report = {"device": "Pixel 8 Pro", "android": "16", "scenarios": ["navigation"],
+                  "navigation": {"tap": [504, 1122], "navigations_per_run": 2,
+                                 "subjects": {"rs": subject}}}
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "report.json")
+            with open(path, "w") as file:
+                json.dump(report, file)
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                summarize.main(path)
+        text = output.getvalue()
+        self.assertIn("navigation rs: input to present p50 79.0 p90 100.0 max 100.0 ms (2)", text)
+        self.assertIn("navigation rs phases p50: composition 10.0, layout 20.0", text)
+        self.assertIn("navigation rs framestats (untraced): frame p50 61.0 p90 61.0 max 61.0 ms (1)",
+                      text)
+
+
 class SummarizeTest(unittest.TestCase):
     def test_a_report_of_the_stress_scenarios_only(self):
         """A report of `--scenarios stress_scroll,stress_animation` has none of the feed's

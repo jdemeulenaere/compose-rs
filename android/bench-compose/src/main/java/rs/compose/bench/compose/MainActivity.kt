@@ -55,8 +55,9 @@ import androidx.compose.ui.unit.dp
 
 /**
  * The benchmark's Kotlin Compose app: the screens of examples/feed (compose-rs), widget for
- * widget. `-e screen feed|feed_animated|big|stress|stress_animation|grid|resize` picks one (the
- * stress screens: Stress.kt; the grid: Grid.kt; the resize screen: Resize.kt).
+ * widget. `-e screen feed|feed_animated|big|stress|stress_animation|grid|resize|navigation`
+ * picks one (the stress screens: Stress.kt; the grid: Grid.kt; the resize screen: Resize.kt;
+ * the navigation screens: Navigation.kt).
  */
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -71,6 +72,7 @@ class MainActivity : ComponentActivity() {
                     "stress_animation" -> StressAnimation()
                     "grid" -> GridScreen()
                     "resize" -> ResizeScreen()
+                    "navigation" -> NavigationApp()
                     else -> FeedScreen(animated = screen == "feed_animated")
                 }
             }

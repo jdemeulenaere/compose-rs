@@ -153,7 +153,7 @@ fun stressBitmap(which: Int): ImageBitmap {
 }
 
 /** The bitmaps, made the first time a tile asks (as stress.rs's thread-local). */
-private val STRESS_BITMAPS: List<ImageBitmap> by lazy { List(BITMAPS) { stressBitmap(it) } }
+internal val STRESS_BITMAPS: List<ImageBitmap> by lazy { List(BITMAPS) { stressBitmap(it) } }
 
 private fun paletteColor(index: Int) = Color(COLORS[index % 8])
 
@@ -303,7 +303,7 @@ private fun RichPost(index: Int) {
 }
 
 @Composable
-private fun Counted(icon: ImageVector, count: Int) {
+internal fun Counted(icon: ImageVector, count: Int) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         Icon(
             icon,

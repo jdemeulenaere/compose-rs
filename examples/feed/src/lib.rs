@@ -7,6 +7,8 @@
 //!   animate forever (each read while drawing, as Compose's `graphicsLayer { }`).
 //! - `big`: 200 posts in a scrolling column, all composed at once.
 //! - `stress` and `stress_animation`: much heavier screens ([`stress`], docs/15).
+//! - `navigation`: a launcher whose button opens a heavy screen never seen before
+//!   ([`navigation`], docs/17): the latency of navigating to it.
 //! - `grid`: a lazy grid of tiles ([`grid`]), for ad hoc traces; not a measured scenario.
 //! - `resize`: texts in a container whose width animates ([`resize`]), for ad hoc checks of text
 //!   layout across width changes; not a measured scenario.
@@ -21,6 +23,7 @@ use compose::runtime::*;
 use compose::ui::*;
 
 pub mod grid;
+pub mod navigation;
 pub mod resize;
 pub mod stress;
 
@@ -273,6 +276,7 @@ compose_android::export_apps! {
     "big" => BigScreen,
     "stress" => stress::StressScroll,
     "stress_animation" => stress::StressAnimation,
+    "navigation" => navigation::NavigationApp,
     "grid" => grid::GridScreen,
     "resize" => resize::ResizeScreen,
 }

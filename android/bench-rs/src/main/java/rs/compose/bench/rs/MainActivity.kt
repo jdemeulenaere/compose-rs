@@ -10,11 +10,11 @@ import rs.compose.android.ComposeRsView
 
 /**
  * The benchmark's compose-rs app: a screen of examples/feed in a [ComposeRsView], below the
- * status bar. `-e screen feed|feed_animated|big|stress|stress_animation|grid|resize` picks one;
- * `-e optimizations none|recommended|all|default|<names, comma-separated>` compose-rs's own
- * optimizations ([ComposeRsOptimizations]; without it, an app's default: the recommended set,
- * D610). `none` does the work the Compose app does, what measure.py's parity runs pass (D568);
- * measure.py always passes the extra.
+ * status bar. `-e screen feed|feed_animated|big|stress|stress_animation|grid|resize|navigation`
+ * picks one; `-e optimizations none|recommended|all|default|<names, comma-separated>`
+ * compose-rs's own optimizations ([ComposeRsOptimizations]; without it, an app's default: the
+ * recommended set, D610). `none` does the work the Compose app does, what measure.py's parity
+ * runs pass (D568); measure.py always passes the extra.
  */
 class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {

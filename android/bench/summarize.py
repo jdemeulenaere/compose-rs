@@ -144,6 +144,35 @@ def startup_summary(r, key, first_key, screens):
             print(f"first {app} {screen}: " + ", ".join(f"{k} {f[k]:.1f}" for k in keys))
 
 
+def distribution_text(d):
+    """A `measure.distribution`: its p50, p90 and max, and its count."""
+    if not d["count"]:
+        return "none"
+    return f"p50 {d['p50']:.1f} p90 {d['p90']:.1f} max {d['max']:.1f} ms ({d['count']})"
+
+
+def navigation_summary(navigation):
+    """The navigation scenario (docs/17): each subject's latency and frame, then its main
+    thread's phases (p50), then its heavy frames' framestats."""
+    for name, subject in navigation["subjects"].items():
+        s = subject["summary"]
+        traced = s["traced"]
+        print(f"navigation {name}: input to present {distribution_text(traced['input_to_present_ms'])}; "
+              f"doFrame {distribution_text(traced['do_frame_ms'])}; "
+              f"DrawFrame {distribution_text(traced['render_ms'])}; "
+              f"GPU done after input {distribution_text(traced['gpu_end_ms'])}; "
+              f"late {distribution_text(traced['late_ms'])}; janky {s['janky']}; "
+              f"inputs at their own time {s['inputs']['event_time']}, at delivery {s['inputs']['delivery']}")
+        print(f"navigation {name} phases p50: " + ", ".join(
+            f"{phase} {d['p50']:.1f}" for phase, d in sorted(s["phases_ms"].items()) if d["count"]))
+        for key, label in (("framestats_untraced", "untraced"), ("framestats_all", "all runs")):
+            f = s[key]
+            print(f"navigation {name} framestats ({label}): frame {distribution_text(f['frame_ms'])}; "
+                  + "; ".join(f"{field[:-3]} {distribution_text(f[field])}" for field in
+                              ("animation_ms", "traversal_ms", "draw_ms", "render_ms",
+                               "gpu_completed_ms", "present_ms")))
+
+
 def main(path):
     r = json.load(open(path))
     print("device", r["device"], "android", r["android"])
@@ -169,6 +198,8 @@ def main(path):
     for scenario in ("stress_scroll", "stress_animation"):
         if scenario in r:
             frames_summary(r, scenario)
+    if "navigation" in r:
+        navigation_summary(r["navigation"])
     # Reports from before measure.py recorded them have no "compile", "apks" or "dexopt".
     print("compile", r.get("compile", "speed (not recorded)"))
     for app, apk in r.get("apks", {}).items():

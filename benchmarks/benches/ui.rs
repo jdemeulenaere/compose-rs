@@ -218,5 +218,76 @@ fn first_frame(criterion: &mut Criterion) {
     }
 }
 
-criterion_group!(benches, ui, desktop_frame, animation_frame, lazy_scroll_frame, first_frame);
+/// The navigation screen's first frame (docs/17), on the Pixel 8 Pro's screen: from the
+/// launcher, a tap on its button opens the heavy screen of a new visit (its content drawn from
+/// the visit's number), and the timed frame composes, lays it out and draws it, with what
+/// Android's bridge does after it (the display list written for Kotlin, the resources collected
+/// and taken, as `frame` and `takeDrawing` do). Back to the launcher, untimed, before the next.
+/// Text is measured by a fixed measurer: the device's paragraphs are not in it.
+fn navigation_frame(criterion: &mut Criterion) {
+    use compose::runtime::platform;
+    use compose::ui::{
+        Density, Offset,
+        platform::{FixedTextMeasurer, UiHost},
+    };
+    use compose_android::serialize::{GroupCache, Resources, Writer, write_display_list};
+    platform::set_manual_clock(platform::now_nanos());
+    let mut host = UiHost::new(
+        IntSize::new(1008, 2244),
+        Density::new(2.25),
+        Box::new(FixedTextMeasurer::new()),
+    );
+    host.set_content(compose_rs_feed::navigation::NavigationApp);
+    let (mut resources, mut groups, mut list, mut taken) =
+        (Resources::default(), GroupCache::default(), Writer::default(), Writer::default());
+    let mut frame = |host: &mut UiHost| {
+        platform::advance_clock(Duration::from_millis(8));
+        let start = Instant::now();
+        let stats = host.frame();
+        host.with_tree(|tree| {
+            write_display_list(tree.display_list(), &mut resources, &mut groups, &mut list)
+        });
+        resources.collect();
+        taken.bytes.clear();
+        resources.write_pending(&mut taken);
+        taken.bytes.extend_from_slice(&list.bytes);
+        (start.elapsed(), stats.drew)
+    };
+    // The screen's center, which the launcher's big button holds, as measure.py taps it.
+    let center = Offset::new(504.0, 1122.0);
+    frame(&mut host);
+    let mut navigate = |host: &mut UiHost| {
+        host.send_pointer(PointerEvent::press(center));
+        host.send_pointer(PointerEvent::release(center));
+        let (elapsed, drew) = frame(host);
+        assert!(drew, "the heavy screen's frame draws");
+        // Untimed: its effects and frames settle, then back to the launcher.
+        for _ in 0..3 {
+            frame(host);
+        }
+        assert!(host.on_back_pressed(), "the heavy screen takes back");
+        for _ in 0..3 {
+            frame(host);
+        }
+        elapsed
+    };
+    // A warm-up visit, as measure.py's.
+    navigate(&mut host);
+    let title = "navigation: the heavy screen's first frame and serialize";
+    criterion.bench_function(title, |bench| {
+        bench.iter_custom(|iterations| (0..iterations).map(|_| navigate(&mut host)).sum())
+    });
+    let samples = (0..30).map(|_| navigate(&mut host)).collect();
+    report_p99(title, samples);
+}
+
+criterion_group!(
+    benches,
+    ui,
+    desktop_frame,
+    animation_frame,
+    lazy_scroll_frame,
+    first_frame,
+    navigation_frame
+);
 criterion_main!(benches);
