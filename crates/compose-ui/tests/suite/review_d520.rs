@@ -44,7 +44,12 @@ fn scene(knobs: Knobs) {
                         .graphics_layer(move |layer| layer.alpha = c.get() as f32 / 10.0)
                         .then(painted(move || tint(d.get()))),
                     {
-                        Leaf(Modifier.repaint_boundary().then(painted(move || tint(e.get()))).size(3.dp()));
+                        Leaf(
+                            Modifier
+                                .repaint_boundary()
+                                .then(painted(move || tint(e.get())))
+                                .size(3.dp()),
+                        );
                         Leaf(painted(move || tint(a.get() + 1)).size(2.dp()));
                     }
                 );
@@ -65,19 +70,23 @@ fn scene(knobs: Knobs) {
         Leaf(Modifier.background(Color::WHITE).shadow((e.get() % 3).dp()).size(5.dp()));
         Leaf(Modifier.shadow((d.get() % 2 * 4).dp()).size(5.dp()));
         let pre = if a.get() % 2 == 0 { Modifier.border(1.dp(), Color::BLACK) } else { Modifier };
-        Leaf(pre.background(Color::BLUE).clip_to_bounds().then(painted(move || tint(c.get()))).size(4.dp()));
+        Leaf(
+            pre.background(Color::BLUE)
+                .clip_to_bounds()
+                .then(painted(move || tint(c.get())))
+                .size(4.dp()),
+        );
         let boundary = if c.get() % 2 == 0 { Modifier.repaint_boundary() } else { Modifier };
         Column!(
-            modifier = boundary
-                .background(Color::GREEN)
-                .clip_to_bounds()
-                .draw_with_content(move |scope| {
+            modifier = boundary.background(Color::GREEN).clip_to_bounds().draw_with_content(
+                move |scope| {
                     scope.draw_content();
                     if e.get() % 2 == 0 {
                         let bounds = scope.bounds();
                         scope.draw_rect(bounds, Paint::fill(Color::RED));
                     }
-                }),
+                }
+            ),
             {
                 Leaf(painted(move || tint(d.get() * 3)).size((3.dp(), (b.get() % 4 + 1).dp())));
                 Leaf(
@@ -124,8 +133,24 @@ fn review_incremental_frames_with_inner_layers_draw_what_a_fresh_draw_does() {
     assert_eq!(host.display_list().dump(), fresh_scene(values).dump());
     let mut previous = host.display_list();
     let steps = [
-        (0, 8), (2, 6), (4, 7), (3, 2), (1, 13), (3, 3), (2, 4), (0, 1), (1, 12), (3, 4),
-        (4, 3), (2, 0), (2, 7), (1, 9), (0, 6), (4, 5), (3, 1), (1, 3),
+        (0, 8),
+        (2, 6),
+        (4, 7),
+        (3, 2),
+        (1, 13),
+        (3, 3),
+        (2, 4),
+        (0, 1),
+        (1, 12),
+        (3, 4),
+        (4, 3),
+        (2, 0),
+        (2, 7),
+        (1, 9),
+        (0, 6),
+        (4, 5),
+        (3, 1),
+        (1, 3),
     ];
     for (step, &(knob, value)) in steps.iter().enumerate() {
         values[knob] = value;

@@ -12,7 +12,12 @@ use compose::ui::*;
 use compose_android::serialize::{GroupCache, Resources, Writer, write_display_list};
 
 /// Per-frame medians over `frames` frames of `content`, `input` sent before each.
-fn measure(name: &str, content: fn(), frames: usize, input: impl Fn(usize) -> Option<PointerEvent>) {
+fn measure(
+    name: &str,
+    content: fn(),
+    frames: usize,
+    input: impl Fn(usize) -> Option<PointerEvent>,
+) {
     platform::set_manual_clock(platform::now_nanos());
     let mut host = UiHost::new(
         IntSize::new(1344, 2780),

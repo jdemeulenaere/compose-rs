@@ -13,6 +13,7 @@
 extern crate compose_runtime as compose;
 
 mod dark_theme;
+mod flags;
 mod fling;
 pub mod gestures;
 mod image;
@@ -50,6 +51,7 @@ impl compose_runtime::ComposeArg for BorderStroke {
     }
 }
 pub use dark_theme::is_system_in_dark_theme;
+pub use flags::ComposeFoundationFlags;
 pub use gestures::{DraggableModifier, DraggableState, Orientation, remember_draggable_state};
 pub use image::{ContentScale, Image};
 pub use lazy::{

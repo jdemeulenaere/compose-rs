@@ -719,9 +719,7 @@ fn cards_are_a_shadow_layer_and_a_clip_layer_as_composes() {
     let list = ui.host().display_list();
     let layers: Vec<compose_ui::platform::LayerProperties> =
         list.groups.iter().filter_map(|group| group.layer).collect();
-    let rounded = |layer: &compose_ui::platform::LayerProperties| {
-        matches!(layer.outline, Some(compose_ui::Outline::Rounded(_, radii)) if radii == [12.0; 4])
-    };
+    let rounded = |layer: &compose_ui::platform::LayerProperties| matches!(layer.outline, Some(compose_ui::Outline::Rounded(_, radii)) if radii == [12.0; 4]);
     let clips: Vec<_> = layers.iter().filter(|layer| layer.clip).collect();
     let shadows: Vec<_> = layers.iter().filter(|layer| layer.shadow_elevation > 0.0).collect();
     assert_eq!(clips.len(), 3, "a clip each: {layers:?}");

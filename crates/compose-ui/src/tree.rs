@@ -1164,6 +1164,27 @@ impl Applier for UiTree {
         id.to_ref()
     }
 
+    /// A node of a paused composition (a lazy list's item composing between frames), in no
+    /// parent until the composition is applied (`attach`): nothing lays it out or draws it
+    /// until then.
+    fn create(&mut self, mut node: LayoutNode) -> NodeRef {
+        node.parent = None;
+        let id = self.alloc(node);
+        self.refresh_chain(id);
+        id.to_ref()
+    }
+
+    fn attach(&mut self, parent: NodeRef, index: usize, node: NodeRef) {
+        let (parent, id) = (NodeId::from_ref(parent), NodeId::from_ref(node));
+        let length = self.node(parent).children.len();
+        assert!(index <= length, "compose-ui: attach at {index} past {length} children");
+        let value = self.node_mut(id);
+        assert!(value.parent.is_none(), "compose-ui: attaching a node that has a parent");
+        value.parent = Some(parent);
+        self.node_mut(parent).children.insert(index, Measurable { node: id, layer: 0 });
+        self.invalidate_measure(parent);
+    }
+
     fn remove(&mut self, parent: NodeRef, index: usize, count: usize) {
         let parent = NodeId::from_ref(parent);
         let removed: SmallVec<[Measurable; 8]> =

@@ -170,5 +170,77 @@ fn scroll_through(criterion: &mut Criterion) {
     }
 }
 
-criterion_group!(benches, scroll_through);
+/// The stress list's items prefetched in idle times of a given length, as Compose's pausable
+/// composition splits an item's composition across them (D590): per item a request composed,
+/// the time spent in prefetch (composing, applying, measuring, the strategy) and the idle times
+/// it took. `whole` is a request composing its item in one step (pausable composition off),
+/// `one idle time` a paused composition never short of time (one resume, then apply).
+fn prefetch_in_pauses(criterion: &mut Criterion) {
+    let budgets: [(&str, bool, Option<Duration>); 5] = [
+        ("whole", false, None),
+        ("one idle time", true, None),
+        ("20 µs idle times", true, Some(Duration::from_micros(20))),
+        ("12 µs idle times", true, Some(Duration::from_micros(12))),
+        ("8 µs idle times", true, Some(Duration::from_micros(8))),
+    ];
+    for (label, pausable, budget) in budgets {
+        ComposeFoundationFlags::set_pausable_composition_in_prefetch_enabled(pausable);
+        let mut host = host(compose_rs_feed::stress::StressScroll);
+        // A frame scrolling a third of a screen, then idle times until its requests are done.
+        let step = |host: &mut UiHost| -> (Duration, u64, u64) {
+            scroll_frame(host, 300.0);
+            let before = platform::recomposition_counts();
+            let (mut spent, mut idle_times) = (Duration::ZERO, 0u64);
+            while host.has_prefetch_work() && idle_times < 100_000 {
+                if host.has_pending_work() {
+                    host.frame();
+                }
+                let start = Instant::now();
+                let deadline = start + budget.unwrap_or(Duration::from_secs(1));
+                host.prefetch(deadline);
+                spent += start.elapsed();
+                idle_times += 1;
+            }
+            let items = platform::recomposition_counts().since(&before).scopes_named("LazyItem");
+            (spent, idle_times, items)
+        };
+        platform::track_recompositions(true);
+        // Warm up: the averages learn, the pool of reusable items fills.
+        for _ in 0..60 {
+            step(&mut host);
+        }
+        rewind(&mut host);
+        let (mut spent, mut idle_times, mut items) = (Duration::ZERO, 0, 0);
+        for _ in 0..120 {
+            let (time, idle, composed) = step(&mut host);
+            spent += time;
+            idle_times += idle;
+            items += composed;
+        }
+        platform::track_recompositions(false);
+        let items = items.max(1);
+        println!(
+            "stress prefetch, {label}: {items} items composed by requests, {:?} in prefetch and \
+             {:.1} idle times per item",
+            spent / items as u32,
+            idle_times as f64 / items as f64
+        );
+        rewind(&mut host);
+        criterion.bench_function(&format!("prefetch the stress list's items, {label}"), |bench| {
+            bench.iter_custom(|iterations| {
+                (0..iterations)
+                    .map(|index| {
+                        if index % 200 == 199 {
+                            rewind(&mut host);
+                        }
+                        step(&mut host).0
+                    })
+                    .sum()
+            })
+        });
+    }
+    ComposeFoundationFlags::set_pausable_composition_in_prefetch_enabled(true);
+}
+
+criterion_group!(benches, scroll_through, prefetch_in_pauses);
 criterion_main!(benches);

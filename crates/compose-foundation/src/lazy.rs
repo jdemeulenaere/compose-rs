@@ -1617,32 +1617,16 @@ fn LazyItems(
         })
     };
     slots.borrow_mut().items = Rc::downgrade(&items.0);
-    let parent = {
-        let inner = state.inner_or_detached();
-        *inner.prefetch.items.borrow_mut() = Rc::downgrade(&items.0);
-        prefetch::ParentList(Rc::downgrade(&inner))
-    };
+    *state.inner_or_detached().prefetch.items.borrow_mut() = Rc::downgrade(&items.0);
     compose_runtime::CompositionLocalProvider(
         compose_ui::platform::LOCAL_CONSTRAINTS_HINT.provides(hint),
         || {
-            compose_runtime::CompositionLocalProvider(
-                prefetch::LOCAL_PARENT_LIST.provides(Some(parent)),
-                || {
-                    // The slots holding items first, in the children's order the layout reads;
-                    // then those kept for reuse, deactivated: their nodes stay, unmeasured and
-                    // unplaced. One loop, so a slot's group moves between the two.
-                    let inner = state.inner_or_detached();
-                    for &(slot, content) in &composed {
-                        // The lazy lists composing in an item note themselves under its key.
-                        inner.prefetch.composing_item.set(match content {
-                            SlotContent::Item(index) => Some(items.0.key(index)),
-                            SlotContent::Deactivated => None,
-                        });
-                        key(slot.id, || compose_slot(slot, content, state, &items, holder));
-                    }
-                    inner.prefetch.composing_item.set(None);
-                },
-            );
+            // The slots holding items first, in the children's order the layout reads; then
+            // those kept for reuse, deactivated: their nodes stay, unmeasured and unplaced. One
+            // loop, so a slot's group moves between the two.
+            for &(slot, content) in &composed {
+                key(slot.id, || compose_slot(slot, content, state, &items, holder));
+            }
         },
     );
 }
@@ -1655,8 +1639,18 @@ fn LazyItems(
 #[allow(non_snake_case)]
 fn LazyItem(index: usize, state: LazyListState, items: ItemsRef, holder: SaveableStateHolder) {
     let policy = remember(|| Rc::new(ItemLayout) as Rc<dyn MeasurePolicy>);
-    let pinned = state.inner_or_detached().pinned.handle();
+    let inner = state.inner_or_detached();
+    let pinned = inner.pinned.handle();
     let item_key = items.0.key(index);
+    // The lazy lists composing in the item note themselves in this list under its key, whoever
+    // composes it (a frame, a request, a resume), as Compose's request finds those of its
+    // precomposed item (`traversablePrefetchState`): the slot's own cell, kept across reuse, so
+    // the local stays the same and its readers aren't invalidated.
+    let item = compose_runtime::platform::remember_across_reuse(|| {
+        Rc::new(prefetch::ParentList::new(Rc::downgrade(&inner)))
+    });
+    item.key.set(Some(item_key));
+    drop(inner);
     let near = state;
     // An item is a repaint boundary: scrolled, or beside an animation, it's not recorded again.
     let modifier = Modifier.repaint_boundary().on_focus_changed(move |focused: bool| {
@@ -1674,7 +1668,21 @@ fn LazyItem(index: usize, state: LazyListState, items: ItemsRef, holder: Saveabl
         policy,
         compose_runtime::callback(move || {
             if let Some((interval, local)) = items.0.find(index) {
-                holder.SaveableStateProvider(item_key, || (interval.content)(local));
+                compose_runtime::CompositionLocalProvider(
+                    prefetch::LOCAL_PARENT_LIST.provides(Some(item.clone())),
+                    || {
+                        // The item's content, as Compose's item subcomposition: a request's
+                        // paused composition may pause in it, and applies it whole (D590).
+                        compose_runtime::platform::PausableContent(|| {
+                            // Unready until remembered: not the layout's before its paused
+                            // composition is applied.
+                            compose_runtime::remember_observer(|| {
+                                prefetch::ContentReady::new(item.list(), item_key)
+                            });
+                            holder.SaveableStateProvider(item_key, || (interval.content)(local));
+                        });
+                    },
+                );
             }
         }),
     );
@@ -1816,7 +1824,15 @@ impl MeasurePolicy for LazyListLayout {
         let mut sizes = state.sizes.borrow_mut();
         let main_of =
             move |placeable: &Placeable| if vertical { placeable.height } else { placeable.width };
+        // An item whose content isn't applied (a request's paused composition) or was removed (a
+        // cancelled one's) is one it lacks: composed in this frame's next round (D592).
+        let unready = state.prefetch.has_unready_content();
+        let lacked_unready = Cell::new(false);
         let mut measure_child = |index: usize, sizes: &mut Sizes| -> Option<Placeable> {
+            if unready && !state.prefetch.content_ready(info.items.key(index)) {
+                lacked_unready.set(true);
+                return None;
+            }
             let child = children
                 .iter()
                 .position(|composed| *composed == index)
@@ -2115,6 +2131,8 @@ impl MeasurePolicy for LazyListLayout {
         }
         let mut composed = (composed_start, composed_end);
         let composed_more = state.composed_more.take();
+        // A paused composition cancelled: the items composed again first (D594).
+        let recompose = lacked_unready.get() || prefetch.take_cancelled();
         if keep {
             // Items composed far from those wanted are left in a frame, beyond two viewports'
             // worth of them: prefetch leaves those within `limits` between frames.
@@ -2125,7 +2143,7 @@ impl MeasurePolicy for LazyListLayout {
             if composed_more && covers && !too_many {
                 state.composed.set(composed);
             }
-            if !covers || too_many {
+            if !covers || too_many || recompose {
                 // Those next to the wanted ones stay (a jump keeps none, and composes none
                 // beyond them).
                 let start = if (composed_start..=composed_end).contains(&wanted_start) {
@@ -2141,7 +2159,7 @@ impl MeasurePolicy for LazyListLayout {
                 composed = (start, end);
                 state.compose(composed);
             }
-        } else if !covers || search_ended {
+        } else if !covers || search_ended || recompose {
             // Items to compose (or a focus search's to let go): this composition deactivates
             // those the layout no longer wants too (kept for reuse), as Compose's measurement.
             composed = limits;

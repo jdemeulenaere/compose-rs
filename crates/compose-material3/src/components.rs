@@ -287,7 +287,11 @@ fn elevation_and_interaction(
 /// `ElevationDefaults`): to a new interaction's in 120 ms (`FastOutSlowInEasing`), back from a
 /// hover in 120 ms and from a press, a drag or a focus in 150 ms (`CubicBezierEasing(0.4, 0,
 /// 0.6, 1)`), at once with neither an interaction before nor one now (enabled or disabled).
-fn animated_elevation(elevations: Elevations, enabled: bool, source: &compose_ui::MutableInteractionSource) -> Dp {
+fn animated_elevation(
+    elevations: Elevations,
+    enabled: bool,
+    source: &compose_ui::MutableInteractionSource,
+) -> Dp {
     use compose_animation::{AnimationSpec, Easing, FAST_OUT_SLOW_IN_EASING, TweenSpec};
     let (target, interaction) = elevation_and_interaction(elevations, enabled, source);
     let last = compose_runtime::remember(|| std::rc::Rc::new(std::cell::Cell::new(None)));

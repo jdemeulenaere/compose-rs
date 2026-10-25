@@ -8,12 +8,12 @@ mod retained_drawing;
 mod review_d;
 mod review_d2;
 mod review_d270;
+mod review_d520;
 mod review_d_compile_semantics_closure;
 mod review_d_incremental;
 mod review_d_panic_layout_node;
 mod review_d_panic_measure;
 mod review_d_panic_poisoned;
-mod review_d520;
 #[path = "../review_d_support/mod.rs"]
 mod review_d_support;
 mod review_groups;

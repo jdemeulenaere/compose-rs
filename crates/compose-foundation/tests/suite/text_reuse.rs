@@ -69,7 +69,6 @@ pub(crate) fn Cases() {
     });
 }
 
-
 /// Turns compose-rs's `REUSE_PARAGRAPH_AT_SAME_LAYOUT_WIDTH` on or off on `host` (D551).
 fn reuse_at_same_width(host: &mut compose_ui::platform::UiHost, on: bool) {
     let optimizations = host

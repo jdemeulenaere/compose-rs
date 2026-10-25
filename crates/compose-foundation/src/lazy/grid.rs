@@ -980,6 +980,13 @@ struct Measurer<'a, 'scope> {
     /// the lines' (the estimates).
     sizes: &'a mut Sizes,
     line_sizes: &'a mut Sizes,
+    /// The list's prefetch and items: an item whose content isn't applied (a request's paused
+    /// composition) or was removed is one it lacks (D592), if any is (`unready`).
+    prefetch: &'a super::prefetch::Prefetch,
+    items: &'a Items,
+    unready: bool,
+    /// It lacked such an item: composed in the frame's next round.
+    lacked_unready: std::cell::Cell<bool>,
 }
 
 /// The lines a measurement measured, by line: from the first one measured, a measurement's lines
@@ -1014,6 +1021,10 @@ impl MeasuredLines {
 impl Measurer<'_, '_> {
     /// Item `item`'s child, if it's composed.
     fn child_of(&self, item: usize) -> Option<usize> {
+        if self.unready && !self.prefetch.content_ready(self.items.key(item)) {
+            self.lacked_unready.set(true);
+            return None;
+        }
         let child = match item.checked_sub(self.composed_start) {
             Some(position) if self.children.get(position) == Some(&item) => Some(position),
             _ => self.children.iter().position(|composed| *composed == item),
@@ -1221,6 +1232,10 @@ impl MeasurePolicy for LazyGridLayout {
             cells: Vec::new(),
             sizes: &mut sizes,
             line_sizes: &mut line_sizes,
+            prefetch: &state.prefetch,
+            items: &info.items,
+            unready: state.prefetch.has_unready_content(),
+            lacked_unready: std::cell::Cell::new(false),
         };
         let m = &mut measurer;
         // The position, with the scrolling asked for; the first visible item found again by
@@ -1477,6 +1492,8 @@ impl MeasurePolicy for LazyGridLayout {
         }
         let mut composed = (composed_start, composed_end);
         let composed_more = state.composed_more.take();
+        // A paused composition cancelled: the items composed again first (D594).
+        let recompose = m.lacked_unready.get() || prefetch.take_cancelled();
         if keep {
             let slack = 2 * BEYOND;
             let too_many = (wanted_start > slack
@@ -1486,7 +1503,7 @@ impl MeasurePolicy for LazyGridLayout {
             if composed_more && covers && !too_many {
                 state.composed.set(composed);
             }
-            if !covers || too_many {
+            if !covers || too_many || recompose {
                 let start = if (composed_start..=composed_end).contains(&wanted_items.0) {
                     composed_start.max(limits.0)
                 } else {
@@ -1500,7 +1517,7 @@ impl MeasurePolicy for LazyGridLayout {
                 composed = (start, end);
                 state.compose(composed);
             }
-        } else if !covers || search_ended {
+        } else if !covers || search_ended || recompose {
             // Items to compose (or a focus search's to let go): this composition deactivates
             // those no longer wanted too.
             composed = limits;

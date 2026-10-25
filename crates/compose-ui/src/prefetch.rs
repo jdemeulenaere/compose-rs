@@ -41,10 +41,23 @@ impl PrefetchRequestScope<'_> {
         self.idle_time
     }
 
+    /// When the next frame should start: what `available_time_nanos` counts down to.
+    pub fn deadline(&self) -> Instant {
+        self.deadline
+    }
+
     /// Recomposes the scopes the request's state writes invalidated, now, outside a frame (as
     /// Compose's precomposition). Returns whether a pass ran.
     pub fn recompose(&mut self) -> bool {
         self.composition.recompose()
+    }
+
+    /// A paused composition of the scopes the request's state writes invalidated, as Compose's
+    /// paused precomposition (`createPausedPrecomposition`): resumed until complete (in this
+    /// idle time and the next ones), then applied; the `PausableContent` it inserts or reuses
+    /// pauses where its callback says.
+    pub fn recompose_pausable(&mut self) -> compose_runtime::PausedComposition {
+        self.composition.recompose_pausable()
     }
 
     /// Measures `parent`'s child at `index` with `constraints` before the layout that places it,

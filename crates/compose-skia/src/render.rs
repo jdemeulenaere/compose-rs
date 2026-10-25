@@ -234,11 +234,13 @@ fn draw_op(
     start: usize,
     alpha: f32,
 ) {
-    let skia_paint_with =
-        |paint: &Paint, shaders: &[compose_ui::platform::Shader], local: Option<&skia_safe::Matrix>| {
-            faded(skia_paint_with(paint, shaders, local), alpha)
-        };
-    let own_layer = alpha < 1.0 && matches!(op, DrawOp::DrawParagraph(..) | DrawOp::DrawShadow { .. });
+    let skia_paint_with = |paint: &Paint,
+                           shaders: &[compose_ui::platform::Shader],
+                           local: Option<&skia_safe::Matrix>| {
+        faded(skia_paint_with(paint, shaders, local), alpha)
+    };
+    let own_layer =
+        alpha < 1.0 && matches!(op, DrawOp::DrawParagraph(..) | DrawOp::DrawShadow { .. });
     if own_layer {
         canvas.save_layer_alpha_f(None, alpha);
     }

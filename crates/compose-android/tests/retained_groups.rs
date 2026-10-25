@@ -110,9 +110,8 @@ fn read(bytes: &[u8]) -> (Vec<Layer>, Vec<Item>) {
                 rotation: f(e::ROTATION),
                 translation: (f(e::TRANSLATION), f(e::TRANSLATION + 4)),
                 clip: bytes[entry + e::CLIP] != 0,
-                outline: (kind != outline_kind::NONE).then(|| {
-                    (kind, four(e::OUTLINE_BOUNDS), [radii.0, radii.1, radii.2, radii.3])
-                }),
+                outline: (kind != outline_kind::NONE)
+                    .then(|| (kind, four(e::OUTLINE_BOUNDS), [radii.0, radii.1, radii.2, radii.3])),
                 elevation: f(e::ELEVATION),
                 ambient: u32_at(bytes, entry + e::AMBIENT),
                 spot: u32_at(bytes, entry + e::SPOT),
@@ -457,7 +456,10 @@ fn a_layer_drawing_more_than_one_thing_composites_offscreen() {
             );
         });
         let (layers, _) = read(&serialized.frame());
-        layers.iter().map(|layer| layer.compositing != compositing::MODULATE_ALPHA).collect::<Vec<_>>()
+        layers
+            .iter()
+            .map(|layer| layer.compositing != compositing::MODULATE_ALPHA)
+            .collect::<Vec<_>>()
     };
     fn two() {
         Leaf(painted(|| Color::RED).size(10.dp()));
@@ -1718,7 +1720,9 @@ fn the_kotlin_side_switches_its_optimizations() {
         "if (flush && optimizations and ComposeRsOptimizations.FLUSH_LAYERS_BEFORE_DROPPED_PATHS != 0L)"
     ));
     let view = kotlin("ComposeRsView.kt");
-    for flag in ["PARAGRAPH_RENDER_NODES", "DRAW_PREFETCHED_AHEAD", "PREFETCH_BUDGET_RECENT_MAXIMUM"] {
+    for flag in
+        ["PARAGRAPH_RENDER_NODES", "DRAW_PREFETCHED_AHEAD", "PREFETCH_BUDGET_RECENT_MAXIMUM"]
+    {
         assert!(view.contains(&format!("and ComposeRsOptimizations.{flag} ")), "{flag}");
     }
     assert!(kotlin("TextMeasurer.kt").contains("if (!hardware || !paragraphNodes)"));
@@ -1925,7 +1929,12 @@ fn review_inner_layers_in_kept_and_ahead_items_match_fresh_writes() {
                                     .size(10.dp()),
                             );
                             if index % 2 == 0 {
-                                Leaf(Modifier.shadow(2.dp()).then(painted(|| Color::GREEN)).size(8.dp()));
+                                Leaf(
+                                    Modifier
+                                        .shadow(2.dp())
+                                        .then(painted(|| Color::GREEN))
+                                        .size(8.dp()),
+                                );
                             }
                         }),
                     );
@@ -1942,7 +1951,11 @@ fn review_inner_layers_in_kept_and_ahead_items_match_fresh_writes() {
         }
         let bytes = serialized.frame();
         let cached = without_kept_records(bytes.clone());
-        assert_eq!(unversioned_bytes(&cached), unversioned_bytes(&serialized.fresh()), "step {step}");
+        assert_eq!(
+            unversioned_bytes(&cached),
+            unversioned_bytes(&serialized.fresh()),
+            "step {step}"
+        );
         let _ = self::read(&bytes);
         for (group, content) in records(&bytes) {
             if let Some(written) = ahead.get(&group) {
@@ -2032,7 +2045,11 @@ mod randomized_inner_layers {
             }
             Some(new)
         }
-        fn restyle(&mut self, paragraph: ParagraphHandle, style: &TextStyle) -> Option<ParagraphHandle> {
+        fn restyle(
+            &mut self,
+            paragraph: ParagraphHandle,
+            style: &TextStyle,
+        ) -> Option<ParagraphHandle> {
             let text = self.inner.text(paragraph).to_string();
             let new = self.inner.restyle(paragraph, style)?;
             let mut labels = self.labels.borrow_mut();
@@ -2131,10 +2148,8 @@ mod randomized_inner_layers {
                     let mut y = 0;
                     for (index, &measurable) in measurables.iter().enumerate() {
                         let width = 5 + ((shift + index as i32) % 4) * 3;
-                        let placeable = scope.measure(
-                            measurable,
-                            Constraints::fixed(width, 4 + (shift % 2) * 2),
-                        );
+                        let placeable = scope
+                            .measure(measurable, Constraints::fixed(width, 4 + (shift % 2) * 2));
                         scope.place(&placeable, (shift % 3) * index as i32, y);
                         y += placeable.height;
                     }
@@ -2161,14 +2176,16 @@ mod randomized_inner_layers {
                             .then(painted(move || tint(k[12].get()))),
                     );
                     let path = path.clone();
-                    Leaf(Modifier.background(Color::BLACK).clip_to_bounds().draw_behind(move |scope| {
-                        path.reset();
-                        path.move_to(0.0, 0.0);
-                        for line in 0..(k[12].get() % 4 + 1) {
-                            path.line_to(line as f32, 3.0);
-                        }
-                        scope.draw_path(&path, Paint::stroke(Color::BLACK, 1.0));
-                    }));
+                    Leaf(Modifier.background(Color::BLACK).clip_to_bounds().draw_behind(
+                        move |scope| {
+                            path.reset();
+                            path.move_to(0.0, 0.0);
+                            for line in 0..(k[12].get() % 4 + 1) {
+                                path.line_to(line as f32, 3.0);
+                            }
+                            scope.draw_path(&path, Paint::stroke(Color::BLACK, 1.0));
+                        },
+                    ));
                 }),
             );
             // A text restyled (paint only) or changed inside an inner layer.
@@ -2180,7 +2197,8 @@ mod randomized_inner_layers {
             );
             // A lazy list whose clip is an inner layer, items with inner layers.
             LazyColumn!(
-                modifier = Modifier.background(Color::GREEN).clip_to_bounds().size((100.dp(), 60.dp())),
+                modifier =
+                    Modifier.background(Color::GREEN).clip_to_bounds().size((100.dp(), 60.dp())),
                 state = state,
                 |scope: LazyListScope| {
                     scope.items(80, move |index| {
@@ -2218,7 +2236,8 @@ mod randomized_inner_layers {
     }
 
     fn fresh(values: [i32; KNOBS], index: usize, offset: i32, rtl: bool) -> String {
-        let owned: Vec<OwnedState<i32>> = values.iter().map(|value| mutable_state_of(*value)).collect();
+        let owned: Vec<OwnedState<i32>> =
+            values.iter().map(|value| mutable_state_of(*value)).collect();
         let knobs: Knobs = std::array::from_fn(|i| owned[i].handle());
         let state = compose_foundation::LazyListState::new(index, offset);
         let given = *state;
@@ -2258,7 +2277,8 @@ mod randomized_inner_layers {
     fn run(seed: u64, steps: usize) {
         let mut rng = Rng(seed);
         let mut values = [0i32; KNOBS];
-        let owned: Vec<OwnedState<i32>> = values.iter().map(|value| mutable_state_of(*value)).collect();
+        let owned: Vec<OwnedState<i32>> =
+            values.iter().map(|value| mutable_state_of(*value)).collect();
         let knobs: Knobs = std::array::from_fn(|i| owned[i].handle());
         let state = compose_foundation::LazyListState::new(0, 0);
         let given = *state;
@@ -2279,7 +2299,10 @@ mod randomized_inner_layers {
         let check_records = |bytes: &[u8], seen: &mut HashMap<(u64, u64), Vec<u8>>, what: &str| {
             for (group, content) in records(bytes) {
                 if let Some(before) = seen.get(&group) {
-                    assert_eq!(*before, content, "seed {seed} {what}: {group:x?} other bytes, same version");
+                    assert_eq!(
+                        *before, content,
+                        "seed {seed} {what}: {group:x?} other bytes, same version"
+                    );
                 }
                 seen.insert(group, content);
             }
@@ -2333,9 +2356,14 @@ mod randomized_inner_layers {
             );
             let _ = read(&bytes);
             KEPT_SEEN.with(|c| c.set(c.get() + kept_entries(&bytes).len()));
-            INNER_SEEN.with(|c| c.set(c.get() + records(&bytes).keys().filter(|(k, _)| k & (1 << 63) != 0).count()));
+            INNER_SEEN.with(|c| {
+                c.set(c.get() + records(&bytes).keys().filter(|(k, _)| k & (1 << 63) != 0).count())
+            });
             let incremental = normalized(&serialized.host.display_list(), &labels);
-            assert!(!incremental.contains("RELEASED"), "seed {seed} step {step}: a released paragraph drawn");
+            assert!(
+                !incremental.contains("RELEASED"),
+                "seed {seed} step {step}: a released paragraph drawn"
+            );
             let expected = fresh(
                 values,
                 state.first_visible_item_index(),
@@ -2348,7 +2376,8 @@ mod randomized_inner_layers {
                 std::fs::write(format!("{dir}/fresh.txt"), &expected).unwrap();
                 let a: Vec<&str> = incremental.lines().collect();
                 let b: Vec<&str> = expected.lines().collect();
-                let first = a.iter().zip(&b).position(|(x, y)| x != y).unwrap_or(a.len().min(b.len()));
+                let first =
+                    a.iter().zip(&b).position(|(x, y)| x != y).unwrap_or(a.len().min(b.len()));
                 panic!(
                     "seed {seed} step {step} values {values:?} rtl {rtl}: differs at line {first}\n--- incremental\n{}\n--- fresh\n{}",
                     a[first.saturating_sub(8)..(first + 5).min(a.len())].join("\n"),
@@ -2363,8 +2392,10 @@ mod randomized_inner_layers {
     /// default, to keep `cargo test` fast).
     #[test]
     fn incremental_frames_with_inner_layers_draw_what_fresh_hosts_do() {
-        let seeds: u64 = std::env::var("INNER_LAYER_SEEDS").ok().and_then(|s| s.parse().ok()).unwrap_or(40);
-        let steps: usize = std::env::var("INNER_LAYER_STEPS").ok().and_then(|s| s.parse().ok()).unwrap_or(120);
+        let seeds: u64 =
+            std::env::var("INNER_LAYER_SEEDS").ok().and_then(|s| s.parse().ok()).unwrap_or(40);
+        let steps: usize =
+            std::env::var("INNER_LAYER_STEPS").ok().and_then(|s| s.parse().ok()).unwrap_or(120);
         // Compose's prefetch (items deactivated in the frame that leaves them), then compose-rs's
         // own (kept behind and drawn ahead).
         for optimizations in [Optimizations::defaults(), super::legacy()] {
@@ -2373,7 +2404,11 @@ mod randomized_inner_layers {
                 run(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15), steps);
             }
         }
-        let (kept, inner, ahead) = (KEPT_SEEN.with(|c| c.get()), INNER_SEEN.with(|c| c.get()), AHEAD_SEEN.with(|c| c.get()));
+        let (kept, inner, ahead) = (
+            KEPT_SEEN.with(|c| c.get()),
+            INNER_SEEN.with(|c| c.get()),
+            AHEAD_SEEN.with(|c| c.get()),
+        );
         eprintln!("kept entries {kept}, inner-layer records {inner}, items written ahead {ahead}");
         assert!(kept > 0 && inner > 0 && ahead > 0);
     }

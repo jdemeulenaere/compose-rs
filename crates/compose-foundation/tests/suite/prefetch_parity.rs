@@ -79,6 +79,23 @@ fn with(name: Optimization) -> Optimizations {
     Optimizations::NONE.with(name, true)
 }
 
+/// Compose's prefetch without pausable composition (its flag off): a request composes its item
+/// whole, gated by the whole composition's average. Restored when dropped.
+pub(crate) struct WholeCompositions;
+
+impl WholeCompositions {
+    pub(crate) fn new() -> WholeCompositions {
+        ComposeFoundationFlags::set_pausable_composition_in_prefetch_enabled(false);
+        WholeCompositions
+    }
+}
+
+impl Drop for WholeCompositions {
+    fn drop(&mut self) {
+        ComposeFoundationFlags::set_pausable_composition_in_prefetch_enabled(true);
+    }
+}
+
 fn later() -> Instant {
     Instant::now() + Duration::from_secs(60)
 }
@@ -183,8 +200,11 @@ fn a_request_for_an_item_no_longer_next_is_cancelled() {
     assert_eq!(live_items(), (3..10).collect::<Vec<_>>());
 }
 
+/// Without pausable composition: a composition (a row's whole, 25 ms) starts only once the time
+/// left exceeds the whole composition's average (`prefetch_pausable` has the pausable gate).
 #[test]
 fn an_urgent_request_composes_with_any_time_left() {
+    let _whole = WholeCompositions::new();
     let (mut ui, state) = list(Optimizations::NONE);
     SLOW_EVEN.set(Duration::from_millis(25));
     SLOW_ODD.set(Duration::from_millis(25));
@@ -247,8 +267,10 @@ fn prefetch_budget_recent_maximum_gives_a_request_up_until_the_next_scroll() {
     assert_eq!(compositions(7), 1);
 }
 
+/// Without pausable composition, as `an_urgent_request_composes_with_any_time_left`.
 #[test]
 fn each_content_type_has_its_own_averages() {
+    let _whole = WholeCompositions::new();
     let (mut ui, state) = list(Optimizations::NONE);
     // Even rows take 25 ms to compose, odd ones no time. Rows 6 (even) and 7 (odd) prefetched:
     // each type has a sample.

@@ -175,8 +175,7 @@ pub(crate) fn new_layout_will_be_different(
     }
     let same_width_bounds = new.min_width == old.min_width && new.max_width == old.max_width;
     if !same_width_bounds
-        && !(reuse_at_same_width
-            && same_layout_width(&*measurer, paragraph, options, old, new))
+        && !(reuse_at_same_width && same_layout_width(&*measurer, paragraph, options, old, new))
     {
         return true;
     }

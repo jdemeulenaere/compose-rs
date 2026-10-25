@@ -36,8 +36,8 @@ pub use application::{
     remember_window_state,
 };
 use compose_skia::{RasterRenderer, SkiaTextMeasurer};
-pub use compose_ui::{Color, LayoutDirection};
 pub use compose_ui::platform::{Optimization, Optimizations};
+pub use compose_ui::{Color, LayoutDirection};
 
 thread_local! {
     /// The optimizations the windows opened from now on use (`set_optimizations`).

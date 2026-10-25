@@ -22,8 +22,8 @@ use jni::signature::{Primitive, ReturnType};
 use jni::sys::{jboolean, jdouble, jfloat, jint, jlong, jobject};
 
 use crate::serialize::{GroupCache, Resources, Writer, write_display_list, write_groups_ahead};
-use compose_ui::platform::Optimizations;
 use crate::text::{AndroidTextMeasurer, LaidOut, TextBackend};
+use compose_ui::platform::Optimizations;
 
 static VM: OnceLock<JavaVM> = OnceLock::new();
 /// `ComposeRsNative`'s class and its `wake` method: what a task woken on any thread calls.

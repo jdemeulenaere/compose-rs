@@ -503,10 +503,12 @@ impl UiTree {
         let owner = self.inner_layer_owners.get(&key).copied();
         // Drawn again where it is, if what it drew from changed (its node's drawing kept).
         if let Some(node) = owner
-            && let Some(entry) = self.get(node).and_then(|value| {
-                value.inner_layers.iter().find(|inner| inner.key == key && inner.dirty)
-            })
-            .map(|inner| inner.entry as usize)
+            && let Some(entry) = self
+                .get(node)
+                .and_then(|value| {
+                    value.inner_layers.iter().find(|inner| inner.key == key && inner.dirty)
+                })
+                .map(|inner| inner.entry as usize)
         {
             let origins = self.layer_origins(node);
             let value = self.node(node);

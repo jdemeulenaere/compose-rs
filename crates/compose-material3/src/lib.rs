@@ -100,9 +100,9 @@ pub use swipe_to_dismiss::{
 pub use tabs::{ScrollableTabRow, Tab, TabRow, TabRowDefaults};
 pub use text_field::{OutlinedTextField, OutlinedTextFieldDefaults, TextField};
 pub use theme::{
-    ColorScheme, DEFAULT_LINE_HEIGHT_STYLE, DEFAULT_TEXT_STYLE, LOCAL_COLOR_SCHEME, LOCAL_CONTENT_COLOR, LOCAL_SHAPES,
-    LOCAL_TEXT_STYLE, LOCAL_TYPOGRAPHY, MaterialTheme, Shapes, TypeScaleToken, TypeScaleTokens,
-    Typography, dark_color_scheme, light_color_scheme,
+    ColorScheme, DEFAULT_LINE_HEIGHT_STYLE, DEFAULT_TEXT_STYLE, LOCAL_COLOR_SCHEME,
+    LOCAL_CONTENT_COLOR, LOCAL_SHAPES, LOCAL_TEXT_STYLE, LOCAL_TYPOGRAPHY, MaterialTheme, Shapes,
+    TypeScaleToken, TypeScaleTokens, Typography, dark_color_scheme, light_color_scheme,
 };
 
 // What the defaults of the composables name through `crate::`.
