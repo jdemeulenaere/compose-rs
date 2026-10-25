@@ -1334,10 +1334,16 @@ NAVIGATION_INPUT_WINDOW_NS = 1_000_000_000
 FRAME_PHASES = {
     "Compose:recompose": "composition", "Compose:applyChanges": "composition",
     "Compose:onRemembered": "composition", "Compose:unobserve": "composition",
+    "Compose:onForgotten": "composition", "Compose:sideeffects": "composition",
+    "Compose:Composer.dispose": "composition",
     "Recomposer:recompose": "composition", "compose-rs: recompose": "composition",
     "compose-rs: tasks": "composition",
-    "AndroidOwner:measureAndLayout": "layout", "Compose:onPositionedCallbacks": "layout",
+    "AndroidOwner:measureAndLayout": "layout", "AndroidOwner:onMeasure": "layout",
+    "AndroidOwner:onLayout": "layout", "Compose:onPositionedCallbacks": "layout",
+    "measure": "layout", "layout": "layout",
     "compose-rs: layout": "layout", "compose-rs: recompose and layout again": "layout",
+    "TextStringSimpleNode::measure": "text_layout", "TextAnnotatedStringNode:measure": "text_layout",
+    "TextLayout:initLayout": "text_layout",
     "compose-rs: text layout": "text_layout",
     "AndroidOwner:draw": "draw", "compose-rs: draw": "draw",
     "compose-rs: serialize": "serialize", "compose-rs: take drawing": "serialize",
@@ -1486,6 +1492,26 @@ def core_kind(cpu, capacities):
     return "big" if capacity == kinds[-1] else "mid"
 
 
+def window_work_ms(running, frequencies, capacities, start, end):
+    """The work (`work_ms`'s metric: ms on the fastest core at its highest frequency) of
+    `running` ((ts, dur, cpu) in ns) inside [start, end), each part scaled by its core's
+    frequency then (`frequencies`: by CPU, sorted (ts, dur, kHz)) and capacity. None without
+    capacities or frequencies."""
+    if not capacities or not frequencies:
+        return None
+    work = 0.0
+    for ts, dur, cpu in running:
+        begin, finish = max(ts, start), min(ts + dur, end)
+        if finish <= begin or cpu not in capacities:
+            continue
+        capacity, max_freq = capacities[cpu]
+        for freq_ts, freq_dur, freq in frequencies.get(cpu, ()):
+            inside = min(finish, freq_ts + freq_dur) - max(begin, freq_ts)
+            if inside > 0:
+                work += inside * freq / max_freq * capacity / 1024
+    return round(work / 1e6, 3)
+
+
 def navigation_records(markers, frames, inputs, render_frames, gpu_waits, timeline, expected,
                        offset=None):
     """Each navigation's first frame of the heavy screen, from a trace's rows (times in ns):
@@ -1497,10 +1523,13 @@ def navigation_records(markers, frames, inputs, render_frames, gpu_waits, timeli
     less CLOCK_MONOTONIC (`monotonic_offset`), which places the input events' own times.
 
     A navigation's frame is the doFrame holding the marker; its input the last event delivered
-    before that doFrame (the tap's up), within NAVIGATION_INPUT_WINDOW_NS and after the previous
-    navigation's frame; its present FrameTimeline's actual present (its actual slice's end). The
-    times (`…_ms`) are from the input event's own time when the offset places it (`"input":
-    "event_time"`), else from its delivery (`"delivery"`)."""
+    before that doFrame (the tap's up, whose click switches the screen), within
+    NAVIGATION_INPUT_WINDOW_NS and after the previous navigation's frame; its present
+    FrameTimeline's actual present (its actual slice's end). The times (`…_ms`) are from that
+    event's delivery to the app's main thread. `input tap` stamps its down and up with the same
+    time and injects the up once the app has handled the down, so the up's own time is the down's:
+    `down_to_present_ms`, from it when the offset places it (`"event_time"` in `"input"`),
+    includes the app's handling of the down."""
     records = []
     previous_end = 0
     frames = sorted(frames, key=lambda frame: frame[1])
@@ -1519,10 +1548,10 @@ def navigation_records(markers, frames, inputs, render_frames, gpu_waits, timeli
             continue
         delivery_ts, name = delivered[-1]
         event = event_time_ns(name)
-        input_ts, input_kind = delivery_ts, "delivery"
+        input_ts, event_ts = delivery_ts, None
         if (offset is not None and event is not None
                 and 0 <= delivery_ts - (event + offset) < NAVIGATION_INPUT_WINDOW_NS):
-            input_ts, input_kind = event + offset, "event_time"
+            event_ts = event + offset
 
         def after_input(ts):
             return None if ts is None else round((ts - input_ts) / 1e6, 3)
@@ -1534,8 +1563,12 @@ def navigation_records(markers, frames, inputs, render_frames, gpu_waits, timeli
         present = actual[0] + actual[1] if actual else None
         expected_present = planned[0] + planned[1] if planned else None
         records.append({
-            "vsync_id": vsync, "frame_id": frame_id, "input": input_kind, "input_ts": input_ts,
-            "delivery_ms": after_input(delivery_ts),
+            "vsync_id": vsync, "frame_id": frame_id, "input_ts": input_ts,
+            "input": "event_time" if event_ts is not None else "delivery",
+            "down_to_present_ms": round((present - event_ts) / 1e6, 3)
+            if present is not None and event_ts is not None else None,
+            "down_to_delivery_ms": round((delivery_ts - event_ts) / 1e6, 3)
+            if event_ts is not None else None,
             "frame_start_ms": after_input(frame_ts),
             "main_end_ms": after_input(frame_ts + frame_dur),
             "render_end_ms": after_input(render[0] + render[1]) if render else None,
@@ -1600,6 +1633,13 @@ def navigation_trace(trace_processor, trace, package, capacities):
         "SELECT snapshot_id, clock_name, clock_value FROM clock_snapshot"))
     records = navigation_records(markers, frames, inputs, render_frames, gpu_waits, timeline,
                                  expected, offset)
+    # Each CPU's frequencies, for the frames' work.
+    frequencies = {}
+    for r in rows("""INCLUDE PERFETTO MODULE linux.cpu.frequency;
+                     SELECT ts, dur, cpu, freq FROM cpu_frequency_counters WHERE dur > 0"""):
+        if all(r.get(key, "").isdigit() for key in ("ts", "dur", "cpu")):
+            frequencies.setdefault(int(r["cpu"]), []).append(
+                (int(r["ts"]), int(r["dur"]), float(r["freq"])))
     for record in records:
         _, frame_ts, frame_dur, _ = next(f for f in frames if f[0] == record["frame_id"])
         end = frame_ts + frame_dur
@@ -1619,9 +1659,11 @@ def navigation_trace(trace_processor, trace, package, capacities):
                                     WHERE p.name = '{package}' AND t.tid = p.pid AND ts.dur > 0
                                       AND ts.ts < {end} AND ts.ts + ts.dur > {frame_ts}""")]
         record["main_states_ms"] = overlap_by(states, frame_ts, end, lambda row: row[2])
-        record["main_cores_ms"] = overlap_by([row for row in states if row[2] == "Running"],
-                                             frame_ts, end,
+        running = [row for row in states if row[2] == "Running" and row[3] is not None]
+        record["main_cores_ms"] = overlap_by(running, frame_ts, end,
                                              lambda row: core_kind(row[3], capacities))
+        record["main_work_ms"] = window_work_ms([(ts, dur, cpu) for ts, dur, _, cpu in running],
+                                                frequencies, capacities, frame_ts, end)
         render = next((r for r in render_frames if r[2] == record["vsync_id"]), None)
         if render:
             running = [(int(r["ts"]), int(r["dur"]), int(r["cpu"])) for r in rows(
@@ -1631,6 +1673,8 @@ def navigation_trace(trace_processor, trace, package, capacities):
                       AND s.ts < {render[0] + render[1]} AND s.ts + s.dur > {render[0]}""")]
             record["render_cores_ms"] = overlap_by(running, render[0], render[0] + render[1],
                                                    lambda row: core_kind(row[2], capacities))
+            record["render_work_ms"] = window_work_ms(running, frequencies, capacities,
+                                                      render[0], render[0] + render[1])
         if record["input_to_present_ms"] is not None:
             until = record["input_ts"] + record["input_to_present_ms"] * 1e6 + 100e6
             record["other_janky_frames"] = sum(
@@ -1650,9 +1694,10 @@ def distribution(values):
 
 
 # The traced navigations' fields summarized, and the framestats' heavy frames'.
-NAVIGATION_FIELDS = ("input_to_present_ms", "delivery_ms", "frame_start_ms", "main_end_ms",
+NAVIGATION_FIELDS = ("input_to_present_ms", "down_to_present_ms", "down_to_delivery_ms",
+                     "frame_start_ms", "main_end_ms",
                      "render_end_ms", "gpu_end_ms", "do_frame_ms", "render_ms", "gpu_wait_ms",
-                     "late_ms")
+                     "late_ms", "main_work_ms", "render_work_ms")
 FRAMESTATS_FIELDS = ("frame_ms", "start_delay_ms", "animation_ms", "traversal_ms", "draw_ms",
                      "sync_ms", "render_ms", "gpu_completed_ms", "present_ms")
 
@@ -1672,6 +1717,9 @@ def navigation_summary(traced_runs, untraced_runs):
                    for field in NAVIGATION_FIELDS},
         "phases_ms": {name: distribution([record.get("phases_ms", {}).get(name, 0.0)
                                           for record in records]) for name in phases},
+        "main_cores_ms": {kind: distribution([record.get("main_cores_ms", {}).get(kind, 0.0)
+                                              for record in records])
+                          for kind in ("little", "mid", "big")},
         "inputs": {kind: sum(record["input"] == kind for record in records)
                    for kind in ("event_time", "delivery")},
         "janky": sum(1 for record in records if jank_side(record.get("jank_type") or "None")),

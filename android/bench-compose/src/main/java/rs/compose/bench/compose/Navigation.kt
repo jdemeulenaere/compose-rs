@@ -90,7 +90,7 @@ import androidx.compose.ui.unit.dp
  *   screen`, which measure.py's `navigation` scenario finds the first frame by.
  */
 
-const val NAVIGATION_ITEMS = 150
+const val NAVIGATION_ITEMS = 50
 const val NAVIGATION_KINDS = 5
 const val CHART_BARS = 12
 const val SPARKLINE_POINTS = 24

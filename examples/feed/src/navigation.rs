@@ -24,7 +24,7 @@ use crate::COLORS;
 use crate::stress::{BITMAPS, Counted, bitmap};
 
 /// The items the heavy screen composes at once.
-pub const NAVIGATION_ITEMS: u32 = 150;
+pub const NAVIGATION_ITEMS: u32 = 50;
 /// The kinds of items, in turn.
 pub const NAVIGATION_KINDS: u32 = 5;
 /// The bars of a stats card's chart.

@@ -162,9 +162,14 @@ def navigation_summary(navigation):
               f"DrawFrame {distribution_text(traced['render_ms'])}; "
               f"GPU done after input {distribution_text(traced['gpu_end_ms'])}; "
               f"late {distribution_text(traced['late_ms'])}; janky {s['janky']}; "
-              f"inputs at their own time {s['inputs']['event_time']}, at delivery {s['inputs']['delivery']}")
+              f"from the down {distribution_text(traced['down_to_present_ms'])} "
+              f"({s['inputs']['event_time']} placed)")
         print(f"navigation {name} phases p50: " + ", ".join(
             f"{phase} {d['p50']:.1f}" for phase, d in sorted(s["phases_ms"].items()) if d["count"]))
+        if "main_cores_ms" in s:
+            print(f"navigation {name} main thread: work {distribution_text(traced['main_work_ms'])}; "
+                  + ", ".join(f"on {kind} cores p50 {d['p50']:.1f}"
+                              for kind, d in s["main_cores_ms"].items() if d["count"]))
         for key, label in (("framestats_untraced", "untraced"), ("framestats_all", "all runs")):
             f = s[key]
             print(f"navigation {name} framestats ({label}): frame {distribution_text(f['frame_ms'])}; "

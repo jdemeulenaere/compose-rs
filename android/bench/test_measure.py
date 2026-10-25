@@ -863,6 +863,15 @@ class NavigationTest(unittest.TestCase):
         self.assertEqual(phases, {"other": 5.0 + 1.0 + 5.0, "layout": 10.0, "composition": 15.0,
                                   "record": 2.0, "draw": 10.0, "sync": 2.0})
         self.assertAlmostEqual(sum(phases.values()), 50.0)
+        # Compose 1.12.1's view traversal: a Scaffold subcomposing in its measure pass, a text
+        # node measuring its paragraph there.
+        slices = [(2, 1, "traversal", 40_000_000), (3, 2, "measure", 40_000_000),
+                  (4, 3, "AndroidOwner:onMeasure", 39_000_000),
+                  (5, 4, "Compose:recompose", 20_000_000),
+                  (6, 4, "TextStringSimpleNode::measure", 9_000_000),
+                  (7, 6, "TextLayout:initLayout", 7_000_000)]
+        self.assertEqual(measure.frame_phases(40_000_000, slices),
+                         {"other": 0.0, "layout": 11.0, "composition": 20.0, "text_layout": 9.0})
 
     def test_overlap_and_cores(self):
         rows = [(0, 10_000_000, "Running", 0), (10_000_000, 5_000_000, "R", None),
@@ -872,6 +881,14 @@ class NavigationTest(unittest.TestCase):
         capacities = {0: (160, 1700000), 4: (450, 2400000), 8: (1024, 3000000)}
         self.assertEqual([measure.core_kind(cpu, capacities) for cpu in (0, 4, 8, 9)],
                          ["little", "mid", "big", "unknown"])
+        # Work: 10 ms on the big core at its top frequency, then 5 ms on the little core at
+        # half its top (a capacity of 160/1024), 2 ms of which outside the window.
+        frequencies = {8: [(0, 30_000_000, 3000000.0)],
+                       0: [(0, 20_000_000, 1700000.0), (20_000_000, 10_000_000, 850000.0)]}
+        running = [(0, 10_000_000, 8), (20_000_000, 5_000_000, 0)]
+        self.assertAlmostEqual(measure.window_work_ms(running, frequencies, capacities, 0, 23_000_000),
+                               10.0 + 3.0 * 0.5 * 160 / 1024, places=3)
+        self.assertIsNone(measure.window_work_ms(running, {}, capacities, 0, 1))
 
     def records(self, offset=None):
         ms = 1_000_000
@@ -901,11 +918,14 @@ class NavigationTest(unittest.TestCase):
         self.assertEqual((first["jank_type"], first["present_type"]),
                          ("App Deadline Missed", "Late Present"))
         self.assertEqual((second["vsync_id"], second["input_to_present_ms"]), (20, 100.0))
-        # With the clocks' offset, from the event's own time: 1 ms before its delivery.
+        self.assertIsNone(first["down_to_present_ms"])
+        # With the clocks' offset, also from the event's own time (`input tap`'s down's), 1 ms
+        # before its delivery; the latency stays from the delivery.
         first, second = self.records(offset=0)
-        self.assertEqual((first["input"], first["delivery_ms"], first["input_to_present_ms"]),
-                         ("event_time", 1.0, 80.0))
-        # An offset placing the event after its delivery is wrong: the delivery is used.
+        self.assertEqual((first["input"], first["down_to_delivery_ms"],
+                          first["down_to_present_ms"], first["input_to_present_ms"]),
+                         ("event_time", 1.0, 80.0, 79.0))
+        # An offset placing the event after its delivery is wrong: left out.
         self.assertEqual(self.records(offset=5_000_000)[0]["input"], "delivery")
 
     def test_the_summary(self):
