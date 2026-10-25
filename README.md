@@ -4,25 +4,24 @@ A design for bringing Jetpack Compose's model to Rust: positional memoization ov
 
 > **Disclaimer:** this is not an officially supported Google product, and it is not affiliated with or endorsed by the Jetpack Compose team. Jetpack Compose and Android are trademarks of Google LLC.
 
-**Status:** phases A to F of the [roadmap](docs/10-roadmap.md) are implemented: the runtime (`crates/compose-runtime`), the `#[composable]` transform with call macros and lambda memoization (`crates/compose-macros`), the UI core (`crates/compose-ui`), the toolkit (`crates/compose-foundation`, `crates/compose-material3`), the test rule (`crates/compose-test`), Skia rendering and text (`crates/compose-skia`), desktop windows (`crates/compose-desktop`), and the counter and todo apps (`examples/`, `cargo run -p todo`). Beyond the first milestone (phase H): `LaunchedEffect` and coroutine scopes on a UI-thread executor with `delay` and a frame clock, `derived_state_of`, `LazyColumn`/`LazyRow`/`LazyVerticalGrid`, `BoxWithConstraints`, `compose-animation` (`Animatable`, specs, `animate_*_as_state`, `AnimatedVisibility`, `Crossfade`), popups and dialogs, images, custom drawing (`Canvas`, `draw_behind`, `draw_with_content`), shadows and tonal elevation, rich text (`TextStyle`, `AnnotatedString`), right-to-left layout, and accessibility on desktop through AccessKit. Android (phase G) runs: `ComposeRsView` embeds a compose-rs app in an Android or Kotlin Compose UI ([docs/12](docs/12-android-performance.md) compares it with Jetpack Compose on a Pixel 8 Pro: it starts faster, holds a third less memory after start and does less main-thread work per frame). [docs/11-status.md](docs/11-status.md) lists what's covered and the known differences from Compose. `cargo test` runs everything; `cargo bench -p compose-benchmarks` runs the runtime and frame benchmarks (toggling one of 1,000 todos in a `LazyColumn`: about 0.19 ms a headless frame with all 1,000 in view, about 0.31 ms from input to Skia-rendered pixels at 2× in a 480 × 640 dp window; an edit to the todo app rebuilds in about 0.5 s).
+**Status:** the runtime, UI, foundation, Material 3, animation and navigation run on desktop (Skia) and Android (`ComposeRsView`, embeddable in Kotlin Compose). By default compose-rs does what Jetpack Compose 1.12.1 does; on a Pixel 8 Pro it then starts faster, uses less memory and does about half the main-thread work per frame, and with its own optimizations on it is ahead at every frame percentile ([docs/12](docs/12-android-performance.md)). [docs/11](docs/11-status.md) lists what's covered and the known differences from Compose.
 
 | Crate | Contents |
 |---|---|
-| `crates/compose` | the facade: `compose::runtime`, `ui`, `foundation`, `material3`, `animation`, `navigation`, and with features `test` and `desktop` |
-| `crates/compose-runtime` | slot table, composer, restart scopes, state, `remember`, effects, composition locals, `Composition`, `remember_saveable` and `SaveableStateHolder` |
-| `crates/compose-macros` | `#[composable]` (skipping, restarts, call macros, lambda memoization), `#[derive(ComposeArg)]` |
-| `crates/compose-ui` | layout nodes, `Modifier`, `Layout`, drawing (paths, images, arcs, shadows, graphics layers), pointer and key input, focus, semantics and actions, popups and dialogs, layout direction, `UiHost` |
-| `crates/compose-foundation` | `Box`, `BoxWithConstraints`, `Column`, `Row`, `Spacer`, `Arrangement`, `BasicText`, `BasicTextField`, `Image`, `Canvas`, scrolling, `LazyColumn`, `LazyRow`, `LazyVerticalGrid`, `LazyHorizontalGrid`, shapes |
-| `crates/compose-material3` | `MaterialTheme`, `Text`, `Surface`, buttons, icon buttons, FABs, icons, `Checkbox`, `Switch`, `RadioButton`, `Slider`, segmented buttons, `TextField`, `OutlinedTextField`, cards, top and bottom app bars with scroll behaviors, `Scaffold`, `NavigationBar`, `NavigationRail`, tab rows, `ListItem`, `AlertDialog`, `DropdownMenu`, `ModalBottomSheet`, `SwipeToDismissBox`, `Snackbar`, progress indicators |
-| `crates/compose-animation` | `Animatable`, animation specs and easings, `animate_*_as_state`, infinite transitions, `AnimatedVisibility` |
-| `crates/compose-navigation` | `NavController` (a back stack of typed destinations, saved), `NavHost` (each entry's saveable state kept while on the stack) |
-| `crates/compose-test` | `ComposeTestRule`: finders, actions, assertions, event scripts |
-| `crates/compose-skia` | Skia renderer and SkParagraph text measurer |
-| `crates/compose-android` | Android: the JNI bridge behind `ComposeRsView` (`android/`), the display list for the Kotlin `Canvas` replayer, text by `StaticLayout`, accessibility |
-| `crates/compose-desktop` | `application { Window(…) }` and `run_app`: winit windows on the main thread, with AccessKit for screen readers |
-| `examples/counter`, `examples/todo`, `examples/gallery` | the sample apps, with tests and event-script transcripts; the gallery tours the toolkit (`cargo run -p gallery`) |
-| `examples/guide` | the developer guide's samples ([docs/guide](docs/guide/README.md)), compiled and tested |
-| `benchmarks` | criterion benchmarks (not a default member) |
+| `crates/compose` | the facade crate apps depend on (`compose::runtime`, `ui`, `foundation`, `material3`, …) |
+| `crates/compose-runtime` | slot table, composer, recomposition, state, effects, composition locals |
+| `crates/compose-macros` | `#[composable]` and the call macros |
+| `crates/compose-ui` | layout nodes, modifiers, drawing, input, focus, semantics, `UiHost` |
+| `crates/compose-foundation` | layouts, text, images, scrolling, lazy lists and grids |
+| `crates/compose-material3` | Material 3 components and theme |
+| `crates/compose-animation` | animations and transitions |
+| `crates/compose-navigation` | `NavController` and `NavHost` |
+| `crates/compose-test` | `ComposeTestRule` and event scripts |
+| `crates/compose-skia` | Skia renderer and text, for desktop |
+| `crates/compose-android` | the Android bridge behind `ComposeRsView` (`android/`) |
+| `crates/compose-desktop` | desktop windows (winit, AccessKit) |
+| `examples/` | the sample apps (counter, todo, gallery, the benchmark feed) and the guide's samples |
+| `benchmarks` | criterion benchmarks |
 
 ## Getting started
 
@@ -210,10 +209,11 @@ The [examples](examples) are this code, running. The design started from [sketch
 11. [Status](docs/11-status.md): what's covered, and the known differences from Compose.
 12. [Android performance](docs/12-android-performance.md): the same app in Jetpack Compose and compose-rs, measured with Perfetto.
 13. [Drawing on Android](docs/13-android-drawing-paths.md): why compose-rs draws through `Canvas` and `RenderNode`, what `libhwui.so` exposes, and the options for drawing directly.
+14. [Performance opportunities](docs/14-performance-opportunities.md): what was tried, measured and ranked, including the optimizations behind flags.
 15. [Android stress benchmark](docs/15-android-stress-benchmark.md): a heavy list and a screen of hundreds of animations, in both, for jank and memory.
 16. [Backporting to Compose](docs/16-backporting-to-compose.md): compose-rs's optimizations that Jetpack Compose or HWUI could adopt, with the evidence and a sketch of each change.
 
-Every decision with its alternatives and revert cost is in [docs/decisions.md](docs/decisions.md).
+Every decision, with its alternatives and revert cost, is in [docs/decisions.md](docs/decisions.md); see [docs/02](docs/02-architecture.md) for how the crates fit together.
 
 ## Principles
 
