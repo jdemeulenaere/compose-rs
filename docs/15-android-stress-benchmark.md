@@ -1031,6 +1031,23 @@ The stress animation (3 runs each, no prefetch): main 2.41 / 4.19 / 6.45 → 2.4
 
 What it shows: on this device the idle times between these flings' frames fit an item's whole composition, so pausing rarely happens (compose steps 2,129 → 2,146 on the feed, 3,829 → 3,850 on the stress list: about 1 % more, the pauses), and nothing changes beyond the runs' spread: the frames, the jank (none of compose-rs's either way), the late `doFrame`s. What ran past the vsync was measurements both ways, never a composition or an apply: measurement isn't split, in Compose either. The main thread works about 3 % more: the paused composition's recording and its apply (headless, prefetching an item takes 9 % more, D598), and each item's composition in a frame its pausable content's group, its `LOCAL_PARENT_LIST` provider and its observer (headless, +2 to +5 % a frame composing an item; since D599 the group only, +1 to +3 %, rechecked on the device in "Pausable composition, after the review (D597, D599)" below). Parity mode has no structural difference left in prefetch ("Parity mode").
 
+### Pausable composition, after the review (D597, D599)
+
+The review's fixes (D597) and the cheaper per-item construction (D599) change the frames' path (each item's composition), so the A/B was run again, shorter: main f32e70d's APK against this one at parity, as above, 4 interleaved rounds of one traced run each of scroll and stress_scroll (`--thermal-wait-limit 0 --rotate`; thermal status 0 throughout, battery 26.3 to 27.9 °C). Medians over the runs, counts summed (`results/2026-10-25-pixel-8-pro-pausable-review-ab.json`).
+
+| | feed before | feed after | stress list before | stress list after |
+|---|---|---|---|---|
+| main p50 / p90 / p99 (ms) | 1.28 / 2.35 / 3.52 | 1.28 / 2.23 / 3.49 | 1.39 / 2.30 / 3.99 | 1.38 / 2.35 / 3.78 |
+| RenderThread p50 / p90 / p99 (ms) | 2.61 / 3.52 / 4.94 | 2.62 / 3.47 / 5.01 | 3.15 / 4.69 / 6.29 | 3.13 / 4.69 / 6.18 |
+| janky frames: the app's, the compositor's | 0, 0 | 0, 3 | 1, 0 | 0, 0 |
+| `doFrame`s starting late (after our work) | 42 (4) | 35 (2) | 39 (4) | 32 (4) |
+| idle times past the vsync (the worst) | 16 (2.91 ms) | 9 (2.91 ms) | 9 (2.82 ms) | 10 (2.84 ms) |
+| … ended by a measurement, a composition, an apply | 14, 0, — | 6, 0, 0 | 6, 3, — | 10, 0, 0 |
+| composition in frames a run; frames over 0.5 ms | 11.3 ms; 3 | 12.1 ms; 3 | 16.0 ms; 10 | 15.2 ms; 6 |
+| work main / RenderThread (ms) | 441 / 715 | 445 / 724 | 487 / 1,118 | 497 / 1,133 |
+
+What it shows: as in D598, nothing beyond the runs' spread; the main thread works +1 % and +2 % (was +3 % and +3.5 %), what ran past the vsync after was measurements only, and on the stress list main's three compositions past the vsync (whole compositions that didn't fit) have no counterpart.
+
 ### Each optimization alone (round 14)
 
 `results/2026-10-25-pixel-8-pro-each.json`: bench-rs at parity and with each flag alone, interleaved run by run, 5 runs a subject in five invocations whose order was rotated; [14](14-performance-opportunities.md), "Backport candidates", has the method, the feed's tables, the summary and the interactions with `all`. The change of each median against parity's; **\*** marks an exact Mann–Whitney test over the runs at p < 0.05 (with about 400 tests in the round, a lone star with nothing beside it is most likely noise).
