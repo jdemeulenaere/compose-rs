@@ -21,7 +21,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.AndroidView
-import rs.compose.android.ComposeRsOptimizations
 import rs.compose.android.ComposeRsRuntime
 import rs.compose.android.ComposeRsView
 
@@ -51,7 +50,7 @@ class MainActivity : ComponentActivity() {
                         key(apps[selected]) {
                             AndroidView(
                                 factory = { context ->
-                                    ComposeRsView(context, apps[selected], ComposeRsOptimizations.PERFORMANCE_HINT).apply {
+                                    ComposeRsView(context, apps[selected]).apply {
                                         // The Rust app's events (a button in the counter).
                                         setOnEventListener { name, payload ->
                                             Toast.makeText(context, "$name: $payload", Toast.LENGTH_SHORT).show()
