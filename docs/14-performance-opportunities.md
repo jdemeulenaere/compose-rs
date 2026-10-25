@@ -1129,3 +1129,4 @@ Headless: `cargo run --profile bench -p compose-benchmarks --example probe -- re
 - [12](12-android-performance.md): the comparison with Jetpack Compose these numbers start from.
 - [13](13-android-drawing-paths.md): drawing on Android, and option D (our own Skia), which would also remove HWUI's recording that #3's ceiling keeps.
 - [08](08-fast-builds.md): the build loop.
+- [16](16-backporting-to-compose.md): the backport candidates below, written up for Compose and HWUI engineers: what each changes in Compose's classes, the evidence, and a sketch of the change.
