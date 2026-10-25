@@ -2,21 +2,20 @@
 
 [12](12-android-performance.md) compares the two on a light social feed. This document compares them on two much heavier screens, built the same way in both apps (D400): a list of rich, heterogeneous items, and a screen running hundreds of animations at once. It measures jank, frame durations on both threads, work, memory and startup with the same tools as [12](12-android-performance.md) (D401).
 
-**Short answer** (Pixel 8 Pro, Android 16; round 13 of [12](12-android-performance.md), compose-rs at d39ecb4, whose frames dropping a path flush HWUI's layers first (D510); medians of 3 runs, startup of 15):
+**Short answer** (Pixel 8 Pro, Android 16; round 14 of [12](12-android-performance.md), compose-rs at 3ac74a6 against Compose 1.12.1; medians of 3 runs, startup of 15). At **parity**, compose-rs does the work Compose does by default and none of its own optimizations, its hint session included ("Parity mode"):
 
-- **Scrolling the stress list**, no frame of compose-rs's missed the app's deadline; Compose missed 5 app deadlines in 3 runs. One of compose-rs's runs had 2 compositor-side janky frames (the display HAL, a SurfaceFlinger scheduling miss).
-  - compose-rs's frames are shorter than Compose's at every percentile, on both threads: main thread p50 0.83 against 1.26 ms, p99 2.39 against 8.01 ms; RenderThread p50 / p90 / p99 2.12 / 2.90 / 3.86 against 2.53 / 3.53 / 5.03 ms.
-  - Our hint session reports both threads' work against 8.33 ms (D500): its vote is 341, and 95 % of the RenderThread's frames start at 200 or more; the main thread runs 4 % of its time on the little cores. Its A/B measured +2.9 % (± 2.7) CPU-rail power for it; this round doesn't measure power.
-  - By the work metric, the main thread does 46 % less work than Compose's (710 against 1,314 ms) and the RenderThread 10 % less (1,541 against 1,706 ms).
-- **The stress animation** keeps both RenderThreads busy for most of a 120 Hz vsync (8.33 ms): Compose's frames exceed it at p90, compose-rs's at p99.
-  - Neither app missed a deadline.
-  - compose-rs's frames are shorter on both threads: main thread p50 2.26 against 3.72 ms, RenderThread p50 6.39 against 7.42 ms. Its main thread does half Compose's work since its transitions run one task each (D420).
-  - Most of the RenderThread gap is one Compose default: a `graphicsLayer` whose alpha is below 1 draws offscreen (`CompositingStrategy.Auto`). compose-rs fades a layer holding a single drawing without one. With `CompositingStrategy.ModulateAlpha`, Compose's RenderThread matched compose-rs's in its session and did less work.
-- **Memory**: on the list, compose-rs holds a fifth less: 91.2 against 112.1 MB after scrolling.
-  - In the animation, 3 s after start, compose-rs now holds less than Compose: 144.1 against 165.7 MB, its graphics memory 114.9 against 119.7 MB (round 12: 184.7 MB, 154.6 MB of graphics). Its 50 waves get new contents every frame (since D533, one remembered `Path` reset for each wave, as Kotlin's, refilled in place on Android: D532); since D510, a frame replacing its paths' contents flushes HWUI's layers first, as Compose's faded cells make it do, so Skia's GPU cache reuses the last frame's mask textures ("HWUI's workers and graphics memory", "A mutable `Path`").
-  - After 13 s, both apps' graphics memory grows by an amount that varies from run to run, in the GPU driver's memory (`GL mtrack`): compose-rs's 131.7 to 208.7 MB, Compose's 132.2 to 153.0 MB in this round's runs; PSS 213.2 against 209.7 MB at the median (Compose's Java heap 39 MB, ours 9 MB). Untraced, 4 more runs each: 137.7 against 136.8 MB of graphics, 177.0 against 202.9 MB of PSS.
-  - In the first results compose-rs held 405 MB there: its 50 waves were new paths every frame, and each frame's paths, with the masks the GPU cached for them, lived until the garbage collector freed the Kotlin `Path`s. The replayer now rewinds a dropped path at once and rebuilds it for the next, as Compose's one reset `Path` does (D410).
-- **Startup** of the stress list: 119 against 147 ms (118 ms in round 12).
+- **Scrolling the stress list**, no frame of compose-rs's missed the app's deadline; Compose missed 6 in 3 runs (2 a run), building a newly revealed item inside the frame.
+  - The main thread is ahead at p90 and p99 (2.36 / 4.11 against 3.14 / 7.95 ms; its slowest frame 7.5 against 15.4 ms) and behind at p50 (1.39 against 1.29 ms).
+  - The RenderThread is behind at every percentile: 3.13 / 4.60 / 6.47 against 2.61 / 3.71 / 5.45 ms (+19 to +24 %), for 32 % less work. HWUI's session, the only one at parity, boosts it little: compose-rs's main-thread frames are short, so its frames earn a time-weighted boost minimum of 67 against Compose's 277, and 71 % of them run unboosted (Compose's 8 %). At each boost level its frames are the shorter.
+  - By the work metric, the main thread does 61 % less work than Compose's (475 against 1,214 ms), the RenderThread 32 % less (1,119 against 1,648 ms); the metric reads lower at the low clocks compose-rs ran at.
+- **The stress animation** keeps both RenderThreads busy for most of a 120 Hz vsync (8.33 ms).
+  - No frame of compose-rs's missed a deadline in the parity round's 3 runs; Compose missed 2 in one run. On this screen both apps are near the deadline: in the each round, parity's 5 runs had one janky frame in 3 of them (Compose wasn't in that round).
+  - The main thread is ahead: 2.37 / 4.01 / 6.03 against 3.70 / 5.36 / 8.03 ms, for half Compose's work (D420's one task per transition).
+  - The RenderThread is level: 7.67 / 8.77 / 10.14 against 7.48 / 8.94 / 10.77 ms (p50 +3 %, p99 −6 %), for 5 % less work. At parity the faded cells composite offscreen as Compose's (`CompositingStrategy.Auto`, D521); with `single_drawing_fade` (a layer holding one drawing faded without a buffer, as `ModulateAlpha`) its RenderThread does 42 % less work ([14](14-performance-opportunities.md), "Backport candidates").
+- **Memory**: on the list, compose-rs holds a fifth less after scrolling (90.4 against 114.3 MB). In the animation it holds less 3 s after start (152.2 against 168.0 MB of PSS, the same graphics memory: 119.8 against 119.4 MB) and after 13 s (216.0 against 255.5 MB of PSS), but its graphics memory then is the larger (171.5 against 140.6 MB at the median; its runs 164 to 203 MB, Compose's 138 to 142 MB), and HWUI's workers spend 18 % more CPU time for it (10.1 against 8.5 s, D511).
+- **Startup** of the stress list: 116 against 148 ms.
+
+With **every optimization on** (`all`, the same session), compose-rs is ahead at every percentile on both threads on both screens: the list's RenderThread 2.09 / 2.87 / 4.02 against 2.51 / 3.58 / 5.13 ms, its main thread 0.94 / 1.36 / 2.64 against 1.24 / 3.24 / 8.41 ms; the animation's RenderThread 6.41 / 7.43 / 8.56 against 7.44 / 8.91 / 11.10 ms, for 46 % less work.
 
 ## The screens
 
@@ -50,10 +49,9 @@ Each item has several times a feed post's nodes. A carousel composes and lays ou
 - **A card that grows to four lines and shrinks back to one every second.** It toggles from a `delay(1000)` loop, with `animateContentSize(tween(500))` on its column. This is a layout animation that moves what's below it.
 - **A 140 dp `Canvas` of 50 sine waves**, each a 48-segment stroked path with its own amplitude, frequency and speed. The waves are recomputed from an infinite transition read while drawing.
 
-The two apps' screenshots, side by side, match except for Material version details. These were compared at the top of the list, mid-scroll with a header stuck, and in the animation:
+The two apps' screens are pixel-identical at their start since the fidelity audit (D570–D573, "What differs" below); the animated screens' layouts and line breaks match by eye. Before it, side by side at the top of the list, mid-scroll with a header stuck and in the animation, they differed in Material version details:
 
-- Kotlin's `OutlinedButton` label is `onSurfaceVariant` where compose-rs's is `primary`.
-- Kotlin's chip and card outlines are lighter.
+- Kotlin's `OutlinedButton` label was `onSurfaceVariant` where compose-rs's was `primary`, and its chip and card outlines lighter (D572 took Material 3 1.4.0's tokens).
 - compose-rs's shadows were a blurred outline before D524; since, the elevated card's and the banner's are HWUI's elevation shadows, as Kotlin's, and the cards' rounded clips the same (compared side by side after D522-D525, with the feed, the grid and the stress animation).
 - compose-rs sits below the status bar, as on the feed.
 
@@ -67,14 +65,14 @@ D400 records the choices. A fresh reviewer checked the two implementations befor
   - stable parameters, and `remember(index)` for the `AnnotatedString`;
   - deferred reads in `graphicsLayer { }`, `drawBehind`, `Modifier.layout` and `Canvas`;
   - `derivedStateOf` for the percentages, and one `Path` remembered and reset for each wave.
-- **`contentType` on both.** compose-rs reuses items as Compose does since D430, by the same content types (`sticky_header_keyed_with`, `items_keyed_with`). Round 10 was the first measurement with it ("Results" below is round 12); the sections after "Results" predate it, when compose-rs composed each new item afresh where Compose reused the composition of an item of the same kind.
+- **`contentType` on both.** compose-rs reuses items as Compose does since D430, by the same content types (`sticky_header_keyed_with`, `items_keyed_with`). Round 10 was the first measurement with it; the sections after "Round 13 (history)" predate it, when compose-rs composed each new item afresh where Compose reused the composition of an item of the same kind.
 - **The progress indicator.** Both apps' `LinearProgressIndicator`s are given no gap (`gapSize = 0.dp`, `gap_size = 0.dp()`), and Kotlin's an empty `drawStopIndicator`: a line, then the track from where it ends, rather than Material 3 1.4's two segments and stop dot (compose-rs draws no stop dot). Before D572, compose-rs's track ran under the whole line.
 - **The same pixels (D570).** A fidelity audit compared both apps on the device, each screen at its start: bounds from `uiautomator dump`, pixels from `screencap`. It found compose-rs's texts narrower (no letter spacing in its Material typography: the rich post fit "how UI" on its first line, where Kotlin wraps "UI"), its glyphs 1 to 3 px lower (its line height wasn't centered as Material's), and the 1.2 colors of the outlined button's label and outline, the chips' outlines and the progress track, with the chips' outlines clipped at the corners. Since D570 to D573 (Material 3 1.4.0's type scale, `LineHeightStyle`, its component tokens), the stress, feed, big and grid screens are pixel-identical (the stress screen: 99,173 differing pixels before, 0 after). The results before D570 laid out compose-rs's narrower texts, so some of its lines broke later (the first rich post's).
 - **The alpha of the grid's cells.** Both keep the default `CompositingStrategy.Auto`, under which HWUI draws a layer faded below 1 offscreen (`setHasOverlappingRendering(true)`), since D521.
   - Before D521, compose-rs faded a layer whose content is one drawing without an offscreen buffer (`setHasOverlappingRendering(false)`, D153 and D157), as `ModulateAlpha` would: the results below that predate D521 have it. It is now `Optimization::SINGLE_DRAWING_FADE`, off by default (`-e optimizations single_drawing_fade` on bench-rs measures it, D520). Since, compose-rs's RenderThread does the stress animation's work Compose's does: 5.8 s against 3.2 s before and 6.0 s for Compose, p50 7.55 ms against 6.46 (Compose 7.40), D527.
   - `ModulateAlpha`, Compose's opt-in for the same thing, was measured separately (D402, "With `ModulateAlpha`" below).
 - **Infinite transitions.** In the first results below, compose-rs ran one `Animatable` and one coroutine per animated value (`animate_value`). That made 567 tasks a frame, and the ticker's. Compose runs one frame loop per transition (147) and ticks its animations together. This was a real cost of the library, measured as such. Since D420, compose-rs's transitions run one task each too ("Infinite transitions, one task each" below).
-- **One `Path`, reset for each wave**, in both apps since D533: Kotlin's `remember { Path() }` and `path.reset()`, compose-rs's `remember(Path::new)` and `path.reset()` (D530). Kotlin's `drawPath` records each wave's contents into the node's recording, as compose-rs's display list records each wave's `PathData`. On Android compose-rs's 50 contents keep 50 ids, each defined again in place each frame, so the replayer refills the same 50 `android.graphics.Path`s, defining no new one and dropping none (D532); a frame redefining a path drawn as a path draws a 1 × 1 layer so HWUI flushes before drawing it, which frees the old contents' masks in time for the new ones (D510, D534). Before D533, compose-rs made a new `Path` per wave per frame (a drawn path was immutable, D412): 50 paths defined and 50 dropped a frame; in the first results below, the replayer made an `android.graphics.Path` for each, the bridge's cost, measured as such (see "Memory"), then rebuilt the dropped ones (D410).
+- **One `Path`, reset for each wave**, in both apps since D533: Kotlin's `remember { Path() }` and `path.reset()`, compose-rs's `remember(Path::new)` and `path.reset()` (D530). Kotlin's `drawPath` records each wave's contents into the node's recording, as compose-rs's display list records each wave's `PathData`. On Android compose-rs's 50 contents keep 50 ids, each defined again in place each frame, so the replayer refills the same 50 `android.graphics.Path`s, defining no new one and dropping none (D532); a frame redefining a path drawn as a path draws a 1 × 1 layer so HWUI flushes before drawing it, which frees the old contents' masks in time for the new ones (D510, D534). Before D533, compose-rs made a new `Path` per wave per frame (a drawn path was immutable, D412): 50 paths defined and 50 dropped a frame; in the first results below, the replayer made an `android.graphics.Path` for each, the bridge's cost, measured as such (see "Round 13: memory"), then rebuilt the dropped ones (D410).
 - **Clips and shadows.** Both make a render node (a graphics layer) for each `clip` and each `shadow`, and HWUI draws the shadow from the elevation, since D522-D525: a card is a node clipping to its outline (`setClipToOutline`), an elevated card adds a 1 dp elevation node, the banner's `shadow(6.dp, shape, clip = true)` is one node with an elevation and a clip.
   - Before, compose-rs clipped inline in its drawing and drew an approximate shadow with a `BlurMaskFilter`: the results below that predate D522 have it.
 - **The theme.** Both apps use the light theme. The Kotlin app always does; compose-rs follows the system's, which was light.
@@ -160,6 +158,159 @@ That tracing (atrace's `gfx` category) costs both RenderThreads time. On these s
 
 ## Results
 
+Round 14 of [12](12-android-performance.md): compose-rs at 3ac74a6 against Compose 1.12.1, every scenario, at parity (`results/2026-10-25-pixel-8-pro-parity.json`) and with every optimization on (`…-all.json`), then each optimization alone against parity (`…-each.json`; [14](14-performance-opportunities.md), "Backport candidates", and "Parity mode" below). measure.py's checks passed: the installed native libraries were those built, both apps were `speed` at the start and the end, the compose-rs traces hold its prefetch slices (377 to 384 `compose-rs: prefetch` steps a stress list run at parity), and FrameTimeline's janky frames are split by side. Every run started at thermal status 0, battery ≤ 34 °C and skin ≤ 35 °C (no time limit, our apps stopped while waiting): the stress animation's runs started at battery 28.9 to 33.0 °C and skin 30.3 to 34.9 °C and ended at most at 33.4 °C and 36.6 °C; the guard waited 20 to 30 s before 4 of its 12 runs. No run was throttled: gfxinfo's median frame time was 14 to 15 ms in every animation run, as in round 13, and none ran at a thermal status above 0. Medians of 3 runs, startup of 15. The better side is in bold; ties aren't.
+
+"Frames presented at another vsync than expected" counts frames shown later than FrameTimeline predicted. In the animation both apps' main thread and RenderThread together take longer than a vsync, and most runs are presented a vsync late throughout, on cadence: latency, not dropped frames; gfxinfo's 14 to 15 ms median frame time for both apps says the same.
+
+The RenderThread's boost is the higher of the active sessions' votes when each frame started: HWUI's alone at parity, HWUI's and compose-rs's own (D390) with `all` (the rounds' JSONs, `d390_boost`).
+
+### At parity: stress scroll (10 flings, 3 runs)
+
+| | Kotlin Compose | compose-rs |
+|---|---|---|
+| Frames (gfxinfo) | 1,804 | 1,785 |
+| Janky frames (FrameTimeline), per run | 2, 2, 2 | **0, 0, 0** |
+| of which the app's | 2, 2, 2 | **0, 0, 0** |
+| of which the compositor's | 0, 0, 0 | 0, 0, 0 |
+| Frames presented at another vsync than expected, per run | 52, 16, 123 | **0, 0, 0** |
+| `doFrame`s starting more than 2 ms late, per run (of which after main-thread work) | 31 (11), 37 (6), 26 (8) | **15 (5), 4 (1), 11 (0)** |
+| Frame time p50 / p90 / p99 (gfxinfo) | **5** / 8 / 13 ms | 6 / **7** / **9** ms |
+| Main thread per frame p50 / p90 / p99 | **1.29** / 3.14 / 7.95 ms (max 15.4) | 1.39 / **2.36** / **4.11** ms (max 7.5) |
+| RenderThread per frame p50 / p90 / p99 | **2.61** / **3.71** / **5.45** ms | 3.13 / 4.60 / 6.47 ms |
+
+| The boost (medians; nothing ranked) | Kotlin Compose | compose-rs, parity | compose-rs, all (Compose in that session) |
+|---|---|---|---|
+| RenderThread's boost minimum, time-weighted (out of 1024; runs) | 277 (239 to 286) | 67 (58 to 75) | 356, of which HWUI's session's alone 10 (285) |
+| RenderThread frames unboosted / at 100–199 / at 200 or more | 8 % / 17 % / 76 % | 71 % / 22 % / 4 % | 0 % / 5 % / 95 % (3 % / 17 % / 80 %) |
+| `DrawFrame` p50: unboosted / 100–199 / 200 or more | 3.23 / 3.09 / 2.50 ms | 3.38 / 2.81 / 2.15 ms | none / 2.69 / 2.07 ms (3.48 / 3.03 / 2.42 ms) |
+| RenderThread running time on the little cores | 4 % | 19 % | 1 % (2 %) |
+| Main thread running time on the little cores | 14 % (11 to 16 %) | 76 % (72 to 79 %) | 3 % (15 %) |
+
+**No frame of compose-rs's missed the app's deadline; Compose missed 2 in each run.** Its slowest frames build a newly revealed item inside the frame (`AndroidOwner:measureAndLayout` in the fling's `Recomposer:animation`, 9.2 to 12.8 ms; the frames 13.6 to 15.4 ms), as in every round; its runs then presented 16 to 123 frames a vsync late. compose-rs prefetched 377 to 384 times a run; one frame in 3 runs laid a text out (1.6 ms, the second run), and each run had 11 or 12 frames with a second round of composition and layout (2.9 to 3.9 ms a run in all), most likely the sticky header changing, as in rounds 11 to 13.
+
+**The main thread is ahead at p90 and p99 and behind at p50.** compose-rs's slowest main-thread frames (5.3 to 7.5 ms) wait for the RenderThread's sync (`postAndWait`, up to 6.5 ms) or record the items the frame reveals (`Record View#draw()`, up to 4.0 ms: at parity nothing is recorded ahead, D564). Its p50 (1.39 against 1.29 ms) is where it runs: 76 % of its time on the little cores, against Compose's 14 %.
+
+**The RenderThread is behind at every percentile, for 32 % less work.** HWUI's session reports each frame from the main thread's start to the RenderThread's end against 11.62 ms, and compose-rs's main-thread frames are short, so its frames are rarely reported long and rarely boosted: 71 % of them start unboosted against Compose's 8 %. At each boost level compose-rs's `DrawFrame`s are the shorter (2.81 against 3.09 ms at 100–199, 2.15 against 2.50 ms at 200 or more), but most of its frames are at the lowest level, where they take 3.38 ms. Its RenderThread's CPU time is 20 % above Compose's (5.96 against 4.95 s) for that less work: the same frames at lower clocks. With its own session (`all`), compose-rs is boosted on every frame and its RenderThread is the shorter at every percentile (below).
+
+**`doFrame`s starting late**: 4 to 15 a run, none janky, the latest 3.8 ms late, the closest finishing 5.7 ms before its deadline (the round's JSON, `late_do_frames`). Six followed a prefetch step that ran past the vsync: steps of 3.5 to 8.0 ms, most of each an item's measurement (4.6 to 7.7 ms) on a little core, unboosted, ending 1.5 to 3.6 ms after the vsync. A measurement isn't split in Compose either; a composition isn't split here (no pausable composition), and the longest steps' compositions took up to 4.1 ms. Compose's: 26 to 37 a run, up to 8.3 ms late, 6 to 11 a run after its own work, the closest finishing 0.3 ms before its deadline.
+
+### At parity: stress animation (10 s, 3 runs)
+
+| | Kotlin Compose | compose-rs |
+|---|---|---|
+| Frames (gfxinfo) | 1,452 | 1,460 |
+| Janky frames (FrameTimeline), per run | 0, 2, 0 | **0, 0, 0** |
+| Frames presented at another vsync than expected, per run | 1,203, 1,069, 1,197 | 0, 1,203, 1,199 |
+| `doFrame`s starting more than 2 ms late, per run | 4, 13, 16 | **1, 0, 0** |
+| Frame time p50 / p90 / p99 (gfxinfo) | 15 / 17 / 20 ms | **14** / **16** / **17** ms |
+| Main thread per frame p50 / p90 / p99 | 3.70 / 5.36 / 8.03 ms (max 10.7) | **2.37** / **4.01** / **6.03** ms (max 8.5) |
+| RenderThread per frame p50 / p90 / p99 | **7.48** / 8.94 / 10.77 ms | 7.67 / **8.77** / **10.14** ms |
+| RenderThread's boost minimum, time-weighted; frames unboosted | 719; 0 % | 556; 0 % |
+
+**Both apps run near their limit**, boosted on every frame. Both RenderThreads take most of a 120 Hz vsync (8.33 ms) at p50 and more at p90. Compose's second run missed 2 deadlines; no frame of compose-rs's did, though in the each round parity's 5 runs had one janky frame in 3 of them ("Each optimization alone (round 14)"). Two of compose-rs's runs and all of Compose's were presented a vsync late throughout, on cadence.
+
+**The RenderThread is level with Compose's**: 3 % longer at p50, 2 % and 6 % shorter at p90 and p99, for 5 % less work (5,803 against 6,118 ms). At parity compose-rs draws what Compose draws: the 132 faded cells offscreen (D521), each card and clip a render node (D522–D525), the waves one reset `Path` (D530–D535), every paragraph into its layer's recording (D567), and no flush layer (D566). Its slowest RenderThread frames (11.3 to 13.6 ms, one a run) wait for the GPU (`Vulkan finish frame`, 4.2 to 4.7 ms) and flush the layers (3.4 to 4.4 ms); Compose's (13.6 to 13.9 ms) the same (its layers' flush 5.0 to 5.6 ms), or wait in `setFrameTimelineInfo` (6.1 ms).
+
+**The main thread is ahead**, a third shorter at p50 and a quarter at p99, for half the work: compose-rs's transitions run one task each (D420), its cells' properties are set on render nodes without recording (D157), and its slowest frames (7.1 to 8.5 ms) wait for the RenderThread's sync (`postAndWait`, 5.2 to 6.8 ms).
+
+### At parity: work
+
+| Stress scroll (10 flings) | Kotlin Compose | compose-rs, parity | compose-rs, all (Compose in that session) |
+|---|---|---|---|
+| Main thread work | 1,214 ms | **475 ms** (−61 %) | 816 ms (−35 %; 1,251 ms) |
+| RenderThread work | 1,648 ms | **1,119 ms** (−32 %) | 1,562 ms (−6 %; 1,664 ms) |
+| Main thread CPU time | 3.94 s | **3.45 s** (−12 %) | 2.27 s (−42 %; 3.89 s) |
+| RenderThread CPU time | **4.95 s** | 5.96 s (+20 %) | 3.84 s (−20 %; 4.80 s) |
+
+| Stress animation (10 s) | Kotlin Compose | compose-rs, parity | compose-rs, all (Compose in that session) |
+|---|---|---|---|
+| Main thread work | 2,998 ms | **1,559 ms** (−48 %) | 1,564 ms (−48 %; 3,007 ms) |
+| RenderThread work | 6,118 ms | **5,803 ms** (−5 %) | 3,313 ms (−46 %; 6,128 ms) |
+| Main thread CPU time | 4.22 s | **2.53 s** (−40 %) | 2.82 s (−34 %; 4.27 s) |
+| RenderThread CPU time | 7.06 s | **6.21 s** (−12 %) | 5.46 s (−23 %; 7.10 s) |
+| HWUI's worker threads (`hwuiTask0`, `hwuiTask1`), CPU time | **8.5 s** | 10.1 s | 10.6 s (8.5 s) |
+
+**Work** is milliseconds on the fastest core at its highest frequency ([12](12-android-performance.md), "Method"); it reads lower at low clocks, and on the list compose-rs's threads ran less boosted than Compose's at parity, more boosted with `all`. In the animation both apps are boosted on every frame, so the comparison holds at parity: compose-rs's main thread does half Compose's work, its RenderThread 5 % less. With `all`, `single_drawing_fade` takes the RenderThread's offscreen layers out (5,803 → 3,313 ms; [14](14-performance-opportunities.md) has it alone).
+
+**HWUI's two worker threads** cost compose-rs 18 % more CPU time than Compose (10.1 against 8.5 s; 10.6 s with `all`), as in every round since the first results: they rasterize the 50 stroked waves on the CPU into masks (Skia's software path renderer), the same work in both apps, at lower clocks for compose-rs (D511, "HWUI's workers and graphics memory").
+
+### At parity: prefetch on the stress list
+
+As [12](12-android-performance.md)'s feed table, per run, medians of 3 (the rounds' JSONs, `prefetch_slices`, `lazy_lists`); Compose's compositions are pausable (its `compose` slices are each a stretch; an apply follows), and its nested prefetch (a carousel's first tiles) is a slice of its own; compose-rs's item compositions include the carousels' tiles. Nothing ranked:
+
+| Stress list scroll, per run | compose-rs, parity | compose-rs, all | Compose (parity session) |
+|---|---|---|---|
+| Prefetch steps | 382 | 358 | |
+| Compositions; work each | 639; 0.061 ms | 678; 0.093 ms | 384 slices; 0.261 ms, nested 55; 0.451 ms (apply: 341; 0.094 ms) |
+| Composition work | 38.6 ms | 63.5 ms | 98.9 ms, nested 24.8 ms (apply 32.1 ms) |
+| Measurements; work each; wall time each | 215; 0.180 ms; 1.29 ms | 322; 0.221 ms; 0.55 ms | 177; 0.548 ms; 1.42 ms |
+| Paragraphs laid out (main thread) | 583 | 625 | |
+| Paragraphs recorded while prefetching | none | 201 | none |
+| All prefetch work | 82.3 ms | 144.2 ms | |
+| Main thread on the little cores, while prefetching | 68 to 79 % | 2 to 10 % | 4 to 16 % |
+| Second rounds of composition and layout in frames | 11, 12, 12 | 10, 10, 10 | |
+
+### At parity: memory
+
+| | Kotlin Compose | compose-rs |
+|---|---|---|
+| Stress list, PSS 5 s after start | 63.1 MB | **45.0 MB** |
+| of which Java heap / native heap / code / graphics | 5.3 / 10.6 / 7.2 / 34.1 MB | 1.3 / 13.0 / 2.1 / 23.6 MB |
+| Stress list, PSS after 10 flings | 114.3 MB | **90.4 MB** |
+| of which Java heap / native heap / graphics | 15.3 / 22.6 / 63.1 MB | 5.1 / 15.7 / 62.2 MB |
+| Stress animation, PSS 3 s after start | 168.0 MB (167.7 to 187.6) | **152.2 MB** (151.9 to 154.3) |
+| of which Java heap / native heap / graphics | 13.7 / 21.8 / 119.4 MB | 4.8 / 20.4 / 119.8 MB |
+| HWUI's GPU caches 3 s after start, total (`dumpsys gfxinfo`) | 89.7 MB | 89.8 MB |
+| Stress animation, PSS after 13 s | 255.5 MB (217.6 to 259.6) | **216.0 MB** (206.3 to 245.5) |
+| of which Java heap / native heap / graphics | 76.7 / 26.1 / **140.6** MB | 6.9 / 28.2 / 171.5 MB |
+| HWUI's GPU caches after 13 s, total | **109.6 MB** (108.6 to 109.6) | 118.7 MB (100.4 to 128.3) |
+
+**On the list** compose-rs holds 29 % less after start and 21 % less after scrolling; its native heap is 13.0 MB after start and 15.7 MB after scrolling (round 13, with kept items: 14.7 and 17.2 MB; with `all` this round 14.2 and 17.4 MB).
+
+**In the animation, 3 s after start** both apps hold the same graphics memory (119.8 against 119.4 MB) and Skia caches (89.8 against 89.7 MB): without D510's flush layer, the frame's offscreen layers flush the dropped masks in, as Compose's faded cells do for it. **After 13 s** compose-rs's graphics memory has grown more (164.2, 171.5 and 203.0 MB in its runs, against Compose's 137.6 to 141.6 MB), and its Skia caches by 9 MB more at the median; its PSS is still below Compose's (216.0 against 255.5 MB), Compose's Java heap holding 76.7 MB by then (ours 6.9 MB). `flush_layers_before_dropped_paths` takes compose-rs's caches after 13 s down ("Parity mode", "Each optimization alone (round 14)"). How much the GPU driver's memory grows varies from run to run in both apps, as round 13 found (with `all` this round: 131.7 to 178.3 MB for compose-rs, 149.5 to 163.8 MB for Compose).
+
+### At parity: startup
+
+| | Kotlin Compose | compose-rs |
+|---|---|---|
+| `stress` (`TotalTime`, 15 cold starts) | 148 ms (142 to 173) | **116 ms** (110 to 128; −22 %) |
+| The first frame's main thread (`traversal`, one traced start) | 57.3 ms | **34.6 ms** |
+| `bindApplication` | 19.1 ms | **12.7 ms** |
+
+compose-rs's first frame's own part (`compose-rs: frame`) took 7.2 ms, 5.5 ms of it in 3 rounds of composing and laying out again, laying out 29 paragraphs (3.9 ms); its replay 2.9 ms (it makes the bitmaps) and `Record View#draw()` 4.0 ms. With `all`, 117 ms (Compose 147 ms in that session): startup doesn't depend on the optimizations.
+
+### Every optimization on (`all`)
+
+compose-rs with every optimization on, against Compose in the same session, run right after the parity round; the parity column is the parity round's.
+
+| Stress scroll | Kotlin Compose (this session) | compose-rs, all | compose-rs, parity |
+|---|---|---|---|
+| Janky frames, per run: the app's; the compositor's | 2, 3, 2; 0, 2, 0 | **0, 0, 0; 0, 0, 0** | 0, 0, 0; 0, 0, 0 |
+| Frames presented at another vsync than expected, per run | 4, 107, 4 | **0, 0, 0** | 0, 0, 0 |
+| `doFrame`s more than 2 ms late, per run (after main-thread work) | 27 (7), 20 (7), 29 (10) | **20 (0), 26 (1), 14 (0)** | 15 (5), 4 (1), 11 (0) |
+| Frame time p50 / p90 / p99 (gfxinfo) | 5 / 8 / 13 ms | 5 / **5** / **7** ms | 6 / 7 / 9 ms |
+| Main thread p50 / p90 / p99 | 1.24 / 3.24 / 8.41 ms | **0.94** / **1.36** / **2.64** ms | 1.39 / 2.36 / 4.11 ms |
+| RenderThread p50 / p90 / p99 | 2.51 / 3.58 / 5.13 ms | **2.09** / **2.87** / **4.02** ms | 3.13 / 4.60 / 6.47 ms |
+| Work: main thread / RenderThread | 1,251 / 1,664 ms | **816** / **1,562** ms | 475 / 1,119 ms |
+| Boost minimum, time-weighted; frames unboosted | 285; 3 % | 356; 0 % | 67; 71 % |
+
+| Stress animation | Kotlin Compose (this session) | compose-rs, all | compose-rs, parity |
+|---|---|---|---|
+| Janky frames, per run (all the app's) | 1, 0, 0 | 1, 0, 0 | 0, 0, 0 |
+| Frames presented at another vsync than expected, per run | 1,202, 1,201, 1,204 | 440, 0, 1,205 | 0, 1,203, 1,199 |
+| Frame time p50 / p90 / p99 (gfxinfo) | 15 / 17 / 20 ms | 15 / **16** / **18** ms | 14 / 16 / 17 ms |
+| Main thread p50 / p90 / p99 | 3.79 / 5.62 / 8.67 ms | **2.41** / **2.97** / **4.08** ms | 2.37 / 4.01 / 6.03 ms |
+| RenderThread p50 / p90 / p99 | 7.44 / 8.91 / 11.10 ms | **6.41** / **7.43** / **8.56** ms | 7.67 / 8.77 / 10.14 ms |
+| Work: main thread / RenderThread | 3,007 / 6,128 ms | **1,564** / **3,313** ms | 1,559 / 5,803 ms |
+| Graphics memory 3 s after start / after 13 s | **119.4** / 154.1 MB | 131.6 / **144.0** MB | 119.8 / 171.5 MB |
+| Boost minimum, time-weighted (of which HWUI's alone) | 719 | 482 (427) | 556 |
+
+**With every optimization, compose-rs is ahead at every percentile on both threads on both screens.** On the list the hint session boosts every frame (vote 356, none unboosted), and the RenderThread goes from 3.13 / 4.60 / 6.47 ms at parity to 2.09 / 2.87 / 4.02 ms, against Compose's 2.51 / 3.58 / 5.13 ms; the main thread's p99 is a third of Compose's (2.64 against 8.41 ms). In the animation, `all` takes the RenderThread's work down 43 % against parity (5,803 → 3,313 ms; `single_drawing_fade`'s, mostly) and its p99 from 10.14 to 8.56 ms (Compose: 11.10 ms), and the main thread waits less for its sync (p90 4.01 → 2.97 ms). compose-rs's one janky frame there (its first run) was a GPU wait (`Vulkan finish frame`, 5.6 ms in a 9.7 ms `DrawFrame`); Compose had one too. Its graphics memory 3 s after start varied from run to run (114.7, 131.6 and 178.3 MB), its PSS after 13 s was below Compose's (184.8 against 232.2 MB).
+
+## Round 13 (history)
+
+Round 13 of [12](12-android-performance.md), compose-rs at d39ecb4 with its own defaults then (its hint session, drawing ahead, kept items, two ahead, D341's budget, single-drawing fades, paragraph render nodes, the flush layer), against Compose 1.11.4; superseded by round 14 above, kept as history. The short answer it gave was: on the list, compose-rs's frames shorter at every percentile on both threads (main p50 0.83 against 1.26 ms, RenderThread p50 / p90 / p99 2.12 / 2.90 / 3.86 against 2.53 / 3.53 / 5.03 ms), boosted by its session (vote 341); in the animation, main p50 2.26 against 3.72 ms and RenderThread p50 6.39 against 7.42 ms, most of the RenderThread gap being the single-drawing fade; 91.2 against 112.1 MB after scrolling, 144.1 against 165.7 MB 3 s into the animation; startup 119 against 147 ms.
+
 compose-rs at d39ecb4: round 13 of [12](12-android-performance.md), which ran every scenario (`results/2026-10-24-pixel-8-pro-round-13.json`, `speed`, `--runs 15`). Round 12 (4a28979, `results/2026-10-24-pixel-8-pro-round-12.json`) is quoted in parentheses. Since round 12, compose-rs gained one change, which touches the stress animation only:
 
 - **D510–D512**: a frame that drops a path drawn as a path first draws a cleared 1 × 1 compositing layer, so HWUI flushes its layers before the frame and Skia's GPU cache reuses the dropped paths' mask textures. Its interleaved A/B, traced with the power rails, is in "HWUI's workers and graphics memory" below; this round confirms it beside Compose without them.
@@ -172,7 +323,7 @@ measure.py's checks passed: the installed native libraries were those built, and
 
 The RenderThread's boost below is the higher of both sessions' votes when each frame started (HWUI's and, for compose-rs, D390's), from the round's JSON (`d390_boost`); measure.py's `render_boost` reads HWUI's alone.
 
-### Stress scroll: frames (10 flings, 3 runs)
+### Round 13: stress scroll, frames (10 flings, 3 runs)
 
 | | Kotlin Compose | compose-rs (round 12) |
 |---|---|---|
@@ -202,7 +353,7 @@ The RenderThread's boost below is the higher of both sessions' votes when each f
 
 **`doFrame`s starting late**: 13 to 23 a run (13 to 15 in round 12), none janky, the latest 6.2 ms late, the closest finishing 5.4 ms before its deadline; the main thread was asleep, never runnable, between the vsync and the `doFrame` (the round's JSON, `late_do_frames`). Two in the first run followed work on the main thread: one the system's (`MSG_CHECK_INVALIDATION_IDLE`), one a prefetch step that measured an item for 8.2 ms on a little core (6.3 ms of it measuring, 5.3 ms laying text out) and ended 2.2 ms after the vsync; that frame was on time. Compose's: 26 to 37 a run, up to 10.5 ms late, 7 to 12 a run after its own work, the closest finishing 1.5 ms before its deadline.
 
-### Stress animation: frames (10 s, 3 runs)
+### Round 13: stress animation, frames (10 s, 3 runs)
 
 | | Kotlin Compose | compose-rs (round 12) |
 |---|---|---|
@@ -221,7 +372,7 @@ The RenderThread's boost below is the higher of both sessions' votes when each f
 
 **compose-rs's slowest RenderThread frames** (9.5 to 13.6 ms, one a run) were again GPU waits (`Vulkan finish frame`, 6.5 to 8.4 ms); its slowest main-thread frame (7.4 ms) waited for the RenderThread's sync (`postAndWait`, 5.7 ms). None missed a deadline. Compose's slowest RenderThread frames took 13.7 to 18.7 ms (its layers' flush 5.9 to 6.5 ms, or a GPU wait of 15.0 ms).
 
-### Work
+### Round 13: work
 
 | Stress scroll (10 flings) | Kotlin Compose | compose-rs (round 12) |
 |---|---|---|
@@ -244,7 +395,7 @@ The RenderThread's boost below is the higher of both sessions' votes when each f
 
 **HWUI's two worker threads** still cost compose-rs about 26 % more CPU time than Compose in the animation (10.8 against 8.6 s, the medians of all three runs this round; 10.8 against 8.9 s in round 12's second run), as in the first results: reusing paths (D410) didn't change it. They rasterize the 50 stroked waves on the CPU into masks (Skia's software path renderer), the same work in both apps (5.9 against 6.1 s by the work metric), at lower clocks for compose-rs: HWUI's session holds them, and the mid cores' frequency follows Compose's heavier main thread and RenderThread (D511, "HWUI's workers and graphics memory").
 
-### Memory
+### Round 13: memory
 
 | | Kotlin Compose | compose-rs (round 12) |
 |---|---|---|
@@ -287,7 +438,7 @@ No range overlaps; the native heap is back to round 9's (17.1 and 20.8 MB).
 
 In round 12, compose-rs's 222.4 MB after 13 s was below Compose's 275.3 MB, as in round 11 (223.3 against 238.2 MB; in round 10 the medians were the other way, 210.1 against 195.8 MB): Compose's memory swings with its garbage collector (239.0 to 287.5 MB in round 12's runs, its Java heap 75.1 MB at the median). 3 s after start compose-rs held 17 MB more than Compose then (184.7 against 167.3 MB), its graphics memory 35 MB more (154.6 against 119.4 MB): a frame's worth more of the masks of the 50 waves, which Skia's GPU cache freed only at the end of the frame's one flush (D510, "HWUI's workers and graphics memory").
 
-### Startup
+### Round 13: startup
 
 | | Kotlin Compose | compose-rs (round 12) |
 |---|---|---|
@@ -490,7 +641,7 @@ The rest is untraced: class loading and the interpreter.
 
 ## Where each app struggles
 
-From the traces of the first results (921db6b), before D390, D410 and D420; their effects are in "Results" above. The slowest 1 % of each app's frames on each thread, pooled over the 3 runs, with the slices inside them averaged per frame (`slowest_frames` gives the slowest 5 of each run).
+From the traces of the first results (921db6b), before D390, D410 and D420; their effects are in "Round 13 (history)" above. The slowest 1 % of each app's frames on each thread, pooled over the 3 runs, with the slices inside them averaged per frame (`slowest_frames` gives the slowest 5 of each run).
 
 **Compose, scrolling, main thread** (54 frames of 8.0 ms or more, 9.4 ms on average):
 - `AndroidOwner:measureAndLayout` takes 4.5 ms a frame: Compose composes and measures a newly revealed item inside the layout pass, nested `LazyRow` included (`TextStringSimpleNode::measure` 1.1 ms, `Compose:recompose` 0.9 ms).
@@ -563,7 +714,7 @@ Most of the 140 transitions' remaining time is the values' own math: the easing 
 - The p99 moved within the runs' spread (before 5.08, 4.70, 5.74 ms; after 3.97, 6.17, 5.44 ms). These frames wait for the RenderThread (`postAndWait`), not for tasks.
 - The RenderThread did less work but took longer. The device was slower in the second half of the session: Kotlin's RenderThread p50 went from 7.40 to 7.80 ms with the same APK, and its third run had 292 janky frames against 1. Nothing in this change touches the RenderThread's input; the drawing is the same.
 - **The feed's animation** (`animation`, docs/12) didn't move: compose-rs's main thread p50 / p90 / p99 1.21 / 1.79 / 2.91 ms before and 1.21 / 1.80 / 3.15 ms after, with 187 ms of work both times and no janky frames. Its header has three animated values.
-- **In round 9** (with D390 as well, which neither build here had), compose-rs's main thread p50 / p90 / p99 was 2.36 / 2.97 / 3.99 ms for 1,444 ms of work, `compose-rs: tasks` 0.36 ms a frame, and the RenderThread's p50 6.34 ms: the gains held, with a p99 below both builds' here. Round 10 measured 2.24 / 2.82 / 4.12 ms, 1,440 ms of work and 0.35 ms of tasks a frame; round 11 2.23 / 2.77 / 3.71 ms and 1,437 ms of work; round 12 ("Results" above) 2.25 / 2.81 / 3.80 ms and 1,462 ms.
+- **In round 9** (with D390 as well, which neither build here had), compose-rs's main thread p50 / p90 / p99 was 2.36 / 2.97 / 3.99 ms for 1,444 ms of work, `compose-rs: tasks` 0.36 ms a frame, and the RenderThread's p50 6.34 ms: the gains held, with a p99 below both builds' here. Round 10 measured 2.24 / 2.82 / 4.12 ms, 1,440 ms of work and 0.35 ms of tasks a frame; round 11 2.23 / 2.77 / 3.71 ms and 1,437 ms of work; round 12 ("Round 13 (history)" above) 2.25 / 2.81 / 3.80 ms and 1,462 ms.
 
 ## The main thread in the hint session (D440)
 
@@ -592,7 +743,7 @@ Interleaved on the device, 12 runs each against main (18272a3), the variants rot
 - **Not chosen.** Reporting both threads' CPU time against 8.33 ms gave shorter frames still: list main thread p50 0.94 ms, RenderThread 2.09 ms. It cost +2.6 % (± 2.3) CPU-rail power here and +4.0 % (± 2.1) on the feed (D442).
 - **Beside Compose (round 10).** The list's main thread p50 / p90 / p99 was 1.02 / 1.63 / 2.86 ms against Compose's 1.29 / 3.32 / 7.76 ms, 21 % of its time on the little cores. No `doFrame` waited for a prefetch step, and no run of compose-rs's had a compositor-side janky frame, on any screen.
 - **Round 11** (round 11 of [12](12-android-performance.md)). With only the items in view placed (D470), the RenderThread has less work, its reports vary less and the vote is lower (190 against 295). The main thread shares it, and ran 46 % of its time on the little cores, for a p50 / p90 / p99 of 1.08 / 1.62 / 2.75 ms against Compose's 1.25 / 3.33 / 7.61 ms; 2 `doFrame`s waited for a prefetch step in 3 runs. Again no compositor-side janky frame of compose-rs's, on any screen.
-- **Round 12 ("Results" above).** With both threads' work reported against 8.33 ms (D500), the vote is 369 and the main thread runs 4 % of its time on the little cores, for a p50 / p90 / p99 of 0.81 / 1.23 / 2.52 ms against Compose's 1.26 / 3.20 / 8.05 ms; no `doFrame` waited for a prefetch step. One run had 3 compositor-side janky frames, in Choreographer's buffer stuffing recovery from its warm-up on.
+- **Round 12 ("Round 13 (history)" above).** With both threads' work reported against 8.33 ms (D500), the vote is 369 and the main thread runs 4 % of its time on the little cores, for a p50 / p90 / p99 of 0.81 / 1.23 / 2.52 ms against Compose's 1.26 / 3.20 / 8.05 ms; no `doFrame` waited for a prefetch step. One run had 3 compositor-side janky frames, in Choreographer's buffer stuffing recovery from its warm-up on.
 
 ## The lazy list's policy (D470–D474)
 
@@ -755,7 +906,7 @@ In round 11, with D470's 18 % less RenderThread work, our session's vote on the 
 
 The 5.5 ms target sets off the heuristic boost in the stress animation, whose RenderThread frames take 4.8 ms of CPU time: +5.1 % CPU-rail power there for no shorter frames. Both threads against 8.33 ms never cross 1.2 × the target (10 ms), and its vote in the animation stays main's. `doFrame`s starting more than 2 ms late went 85 → 187 on the list in 10 runs, none more delayed by our work (5 → 2).
 
-**Round 12** (4a28979, beside Compose: "Results" above) confirms it. On the list, the RenderThread's p50 / p90 / p99 is 2.00 / 2.75 / 3.94 ms against Compose's 2.59 / 3.56 / 4.88 ms (round 11: 2.58 / 3.81 / 5.45 ms), the main thread's 0.81 / 1.23 / 2.52 ms against 1.26 / 3.20 / 8.05 ms; the vote 369 (A/B: 332), 95 % of the RenderThread's frames at 200 or more, the main thread on the little cores 4 % of its time. In the animation, nothing moved (vote 472, RenderThread p50 6.36 ms). The late `doFrame`s: 13 to 15 a run on the list (round 11: 4 to 15), at most 4.5 ms late, none janky, the closest finishing 8.2 ms before its deadline. Power isn't measured in the round.
+**Round 12** (4a28979, beside Compose: "Round 13 (history)" above) confirms it. On the list, the RenderThread's p50 / p90 / p99 is 2.00 / 2.75 / 3.94 ms against Compose's 2.59 / 3.56 / 4.88 ms (round 11: 2.58 / 3.81 / 5.45 ms), the main thread's 0.81 / 1.23 / 2.52 ms against 1.26 / 3.20 / 8.05 ms; the vote 369 (A/B: 332), 95 % of the RenderThread's frames at 200 or more, the main thread on the little cores 4 % of its time. In the animation, nothing moved (vote 472, RenderThread p50 6.36 ms). The late `doFrame`s: 13 to 15 a run on the list (round 11: 4 to 15), at most 4.5 ms late, none janky, the closest finishing 8.2 ms before its deadline. Power isn't measured in the round.
 
 ## HWUI's workers and graphics memory (D510–D512)
 
@@ -815,7 +966,7 @@ A path kept per draw site and reset in place, as Compose's (D412), wouldn't have
 
 No janky frame of the app's in either build, except one in a D510 stress-scroll run.
 
-**Round 13, beside Compose** (d39ecb4, measure.py without the power rails, 3 runs each; "Memory" above). 3 s after start, compose-rs's graphics memory was 114.9 MB against Compose's 119.7 MB (round 12: 154.6 against 119.4 MB) and its PSS 144.1 against 165.7 MB; an untraced probe of 4 runs each had 114.7 against 119.6 MB. Skia's caches held 96.0 against 89.7 MB: scratch surfaces 60.0 against 62.7 MB, scratch buffers 28.1 against 18.9 MB at the median, but each app's runs land on 18.8 or 28.1 MB (compose-rs's 18.8, 28.1, 28.1; Compose's 28.0, 18.8, 18.9 MB), so the A/B's 9 MB is that level, not compose-rs's. After 13 s, both apps' graphics memory grew by an amount that varies from run to run, mostly in the GPU driver's memory (`GL mtrack`): compose-rs's runs 131.7 to 208.7 MB, Compose's 132.2 to 153.0 MB (the probe: 123.0 to 208.7 against 128.7 to 182.4 MB, medians 137.7 against 136.8 MB). The RenderThread's frames were within round 12's spread (p50 / p90 / p99 6.36 / 7.38 / 8.53 → 6.39 / 7.54 / 8.49 ms) and its work 6 % higher (3,172 → 3,362 ms, CPU time +2 %), still 44 % below Compose's; no frame missed its deadline.
+**Round 13, beside Compose** (d39ecb4, measure.py without the power rails, 3 runs each; "Round 13: memory" above). 3 s after start, compose-rs's graphics memory was 114.9 MB against Compose's 119.7 MB (round 12: 154.6 against 119.4 MB) and its PSS 144.1 against 165.7 MB; an untraced probe of 4 runs each had 114.7 against 119.6 MB. Skia's caches held 96.0 against 89.7 MB: scratch surfaces 60.0 against 62.7 MB, scratch buffers 28.1 against 18.9 MB at the median, but each app's runs land on 18.8 or 28.1 MB (compose-rs's 18.8, 28.1, 28.1; Compose's 28.0, 18.8, 18.9 MB), so the A/B's 9 MB is that level, not compose-rs's. After 13 s, both apps' graphics memory grew by an amount that varies from run to run, mostly in the GPU driver's memory (`GL mtrack`): compose-rs's runs 131.7 to 208.7 MB, Compose's 132.2 to 153.0 MB (the probe: 123.0 to 208.7 against 128.7 to 182.4 MB, medians 137.7 against 136.8 MB). The RenderThread's frames were within round 12's spread (p50 / p90 / p99 6.36 / 7.38 / 8.53 → 6.39 / 7.54 / 8.49 ms) and its work 6 % higher (3,172 → 3,362 ms, CPU time +2 %), still 44 % below Compose's; no frame missed its deadline.
 
 ## A mutable `Path` (D530–D535)
 
@@ -861,7 +1012,59 @@ What's still not the same, structurally:
 - **Deltas summed.** The strategy hears a frame's scroll deltas summed, Compose's `onScroll` each delta; and one queue in order, Compose's a priority queue (one list's requests either way).
 - **Small filled paths.** compose-rs masks any small filled path, where Compose's `VectorPainter` caches vectors only (no screen here has another small filled path; D567).
 
-### A short parity run against round 13
+### Each optimization alone (round 14)
+
+`results/2026-10-25-pixel-8-pro-each.json`: bench-rs at parity and with each flag alone, interleaved run by run, 5 runs a subject in five invocations whose order was rotated; [14](14-performance-opportunities.md), "Backport candidates", has the method, the feed's tables, the summary and the interactions with `all`. The change of each median against parity's; **\*** marks an exact Mann–Whitney test over the runs at p < 0.05 (with about 400 tests in the round, a lone star with nothing beside it is most likely noise).
+
+**Stress scroll** (5 runs a subject)
+
+| | main p50 | p90 | p99 | RenderThread p50 | p90 | p99 | work main | work RenderThread | boost | app janky |
+|---|---|---|---|---|---|---|---|---|---|---|
+| parity | 1.37 | 2.31 | 3.87 | 3.15 | 4.69 | 6.30 | 490 | 1,119 | 82 | 0 |
+| `single_drawing_fade` | +0 % | +1 % | +2 % | +2 % | +1 % | -0 % | -2 % | +1 % | 63 | 1 |
+| `performance_hint` | -35 %* | -36 %* | -30 %* | -36 %* | -41 %* | -39 %* | +43 %* | +23 %* | 326 | 0 |
+| `reuse_paragraph_at_same_layout_width` | +1 % | +1 % | +2 % | -0 % | +0 % | +1 % | -0 % | -0 % | 78 | 0 |
+| `prefetch_two_ahead` | +1 % | -4 % | +1 % | +2 % | -1 % | -1 % | +0 % | -1 % | 71 | 0 |
+| `prefetch_budget_recent_maximum` | +1 % | -2 % | -0 % | +1 % | -0 % | +1 % | -3 % | -1 % | 69 | 1 |
+| `prefetch_at_rest` | +2 % | +2 % | +4 % | +3 % | +1 % | -1 % | -5 % | -2 % | 59 | 0 |
+| `keep_items_behind` | +5 %* | +0 % | +0 % | -2 % | -0 % | -0 % | +2 % | +1 % | 77 | 1 |
+| `draw_prefetched_ahead` | -0 % | -15 %* | -23 %* | -0 % | -0 % | -1 % | -0 % | -1 % | 65 | 0 |
+| `grid_lines_beyond` | +1 % | +1 % | +4 % | -0 % | +0 % | +2 % | -1 % | +0 % | 74 | 1 |
+| `flush_layers_before_dropped_paths` | +1 % | -2 % | +1 % | -0 % | +0 % | -2 % | -0 % | -1 % | 70 | 0 |
+| `paragraph_render_nodes` | +2 % | +2 % | +3 % | +3 % | +1 % | +2 % | -2 % | +1 % | 73 | 1 |
+
+**Stress animation** (5 runs a subject; the supplement's, 3)
+
+| | main p50 | p90 | p99 | RenderThread p50 | p90 | p99 | work main | work RenderThread | graphics after 13 s | GPU caches after 13 s | boost | app janky |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| parity | 2.43 | 4.24 | 6.82 | 7.62 | 8.80 | 10.53 | 1,626 | 6,144 | 164 | 110 | 613 | 3 |
+| `single_drawing_fade` | +4 % | -23 %* | -34 %* | -16 %* | -15 %* | -19 %* | -2 %* | -42 %* | +12 %* | +31 %* | 444 | 1 |
+| `flush_layers_before_dropped_paths` | +0 % | -5 % | +6 % | -1 % | +0 % | -3 % | +2 % | +1 % | -10 % | -18 % | 621 | 2 |
+| `paragraph_render_nodes` | +4 % | +2 % | -3 % | +1 % | +0 % | -3 % | -2 %* | -0 % | -6 % | +9 % | 566 | 5 |
+| `performance_hint` | +0 % | -2 % | +5 % | -1 % | +0 % | +0 % | +4 %* | +0 % | -14 %* | -9 % | 641 | 6 |
+| parity (the supplement's) | 2.40 | 3.93 | 6.15 | 7.69 | 8.78 | 10.23 | 1,562 | 6,106 | 163 | 110 | 566 | 2 |
+| `reuse_paragraph_at_same_layout_width` | -0 % | +5 % | +0 % | -0 % | -0 % | -4 % | -1 % | -1 % | +0 % | +8 % | 553 | 3 |
+| `prefetch_two_ahead` | +10 % | +14 % | +1 % | +2 % | +1 % | +2 % | +1 % | +1 % | +1 % | +9 % | 539 | 1 |
+| `prefetch_budget_recent_maximum` | +2 % | +7 % | +11 % | -1 % | +1 % | +5 % | +3 % | +1 % | -13 % | -2 % | 602 | 2 |
+| `prefetch_at_rest` | +1 % | +8 % | +7 % | -2 % | +0 % | -0 % | +5 % | +1 % | +15 % | +34 % | 618 | 1 |
+| `keep_items_behind` | +2 % | +7 % | +6 % | -1 % | +0 % | +2 % | +3 % | +1 % | +13 % | +16 % | 588 | 2 |
+| `draw_prefetched_ahead` | +0 % | +3 % | +20 % | +1 % | +1 % | -1 % | +2 % | -0 % | +15 % | -1 % | 574 | 3 |
+| `grid_lines_beyond` | +1 % | +5 % | +1 % | +0 % | +1 % | -3 % | +0 % | -1 % | +7 % | +8 % | 541 | 1 |
+
+What each one does on these screens:
+
+- **`performance_hint`** is the largest on the list: every percentile on both threads −30 to −41 %, the RenderThread's boost minimum from 82 to 326, the work metric +23 % and +43 % (the same frames at higher clocks). It is why round 13's compose-rs (which had it) was ahead of Compose on the list's RenderThread, and why compose-rs at parity is behind. In the stress animation HWUI's session already boosts every frame (613 at parity), and the frames don't change; its graphics memory after 13 s read 14 % lower, in a measure that varies by about a fifth from run to run.
+- **`draw_prefetched_ahead`**: the list's main-thread p90 / p99 −15 / −23 %: the frames that reveal an item draw nodes recorded in the idle time (D350) instead of recording them (`Record View#draw()`, up to 4 ms at parity).
+- **`single_drawing_fade`**: in the stress animation, RenderThread work −42 %, its p50 / p90 / p99 −16 / −15 / −19 % (the 132 faded cells without their offscreen layers, as `ModulateAlpha`), the main thread's p90 / p99 −23 / −34 % (it waits less for the RenderThread's sync). It costs memory alone: graphics after 13 s +12 %, HWUI's GPU caches +31 %, since Skia frees the dropped wave masks at a layers' flush and the cells' layers were the frame's flush; with the flush layer as well (`all`), the caches are back to parity's (−3 %; [14](14-performance-opportunities.md), "Interactions").
+- **`flush_layers_before_dropped_paths`**: at parity, the GPU caches after 13 s −18 % and graphics −10 %, not resolved in 5 runs (the caches vary by 27 % across parity's runs; D574's 3 runs read −33 %): with the cells drawn offscreen, the frame's own layers flush the dropped masks already, and D510's layer adds a second flush. Its use is with `single_drawing_fade`.
+- **`paragraph_render_nodes`** and **`keep_items_behind`**: within the spread on the stress screens but the kept items' main p50 +5 %\* on the list (their bookkeeping each frame, D380).
+- **The others** are within the runs' spread on both stress screens; on the stress animation the seven others (the supplement: 3 runs a subject, against its own 3 of parity, which no test over 3 runs a side resolves at p < 0.05) moved its frames by at most +14 % at p90 and +20 % at p99 (`prefetch_two_ahead`'s and `draw_prefetched_ahead`'s main thread) and its memory after 13 s by −13 to +34 %, about parity's own spread there (main p90 18 %, p99 16 %, GPU caches 27 %): none of them touches that screen (no list, no width that changes).
+
+The stress animation's janky frames: parity had one in 3 of its 5 runs, each flag 1 to 6 over its runs (one or two frames in a run; on this screen both apps' frames are near the deadline: the parity round had none of compose-rs's in 3 runs and 2 of Compose's).
+
+### A short parity run against round 13 (history)
+
+Superseded by round 14 ("Results" above, and "Each optimization alone (round 14)").
 
 `results/2026-10-24-pixel-8-pro-parity-short.json`: compose-rs at 637b3ad (D560–D569) with no optimization, `--runs 5` (startup), 3 traced runs of each scroll and animation scenario, `speed`. Every run started cool (thermal status 0, battery 29.9–31.7 °C; no wait). Round 13 (`results/2026-10-24-pixel-8-pro-round-13.json`, compose-rs at d39ecb4 with its hint session, draw-ahead, kept items, two ahead, D341's budget and D153's single-drawing fade and paragraph nodes; before D520–D529's layers) in parentheses. Medians of 3 runs, ms.
 
@@ -886,7 +1089,9 @@ What changed, for compose-rs:
 - **The stress animation's RenderThread does Compose's work** (5.8 s against Compose's 6.0; round 13 3.4 s before D521's offscreen fades), and its p50 is Compose's (7.63 against 7.47 ms). Its graphics memory after 13 s is lower than Compose's (149.5 against 165.3 MB) without D510's flush layer: the frame's offscreen layers flush the dropped masks in, as D510 found Compose's do.
 - **Startup and memory** didn't move beyond the runs' spread.
 
-### Each optimization alone
+### Each optimization alone: the first round, 3 runs (history)
+
+Superseded by "Each optimization alone (round 14)" above, which agrees with it on every flag that stands out.
 
 `results/2026-10-24-pixel-8-pro-parity-each.json`: bench-rs at parity and with each flag alone, interleaved run by run, 3 runs each (`--optimizations each`). The change of each median against parity's (the first row, ms or ms of work); 3 runs a subject, so differences under about 5 % are within the runs' spread.
 
@@ -946,6 +1151,12 @@ What each one does here:
 
 
 ## Next steps
+
+- **Pausable composition** (next): the one structural difference left at parity ("Parity mode"). In round 14 it cost no frame on the list (no janky frame of compose-rs's, one text laid out in a frame in 3 runs); the steps past the vsync there were measurements, which Compose doesn't split either, run unboosted on a little core.
+- **The list's RenderThread at parity** is behind Compose's (p50 3.13 against 2.61 ms) for 32 % less work: HWUI's session boosts compose-rs's frames little (67 against 277), its main-thread frames being short. `performance_hint` closes it and more (2.09 against 2.51 ms with `all`); for Compose, the same report in HWUI's session ([14](14-performance-opportunities.md), "Backport candidates").
+- **The stress animation's graphics memory after 13 s** at parity is above Compose's (171.5 against 140.6 MB at the median, compose-rs's runs 164 to 203 MB), with 9 MB more in Skia's caches; how much the GPU driver's memory grows varies run to run in both apps and hasn't been traced. HWUI's workers' 18 % more CPU time (D511) is unchanged.
+
+Earlier items (rounds 1 to 13):
 
 - **Paths in the bridge**: done (D410, D411, "With paths reused"); since D530, a `Path` is reset in place as Compose's, the waves one remembered `Path` as Kotlin's, refilled in the same `android.graphics.Path`s (D532), with no change on the device and D510's flush still needed (D534, "A mutable `Path`"). HWUI's worker threads take about 21 to 30 % more CPU time than Compose's in the animation (10.8 against 8.9 s in round 12, 10.9 against 8.6 s in round 11, 11.0 against 8.5 s in round 10, 11.2 against 8.6 s in round 9) for the same work, at lower clocks: not changed (D511). In round 13, 10.8 against 8.6 s. The graphics memory compose-rs held more than Compose 3 s after start was a frame's worth of the waves' masks: fixed (D510; "HWUI's workers and graphics memory"), confirmed beside Compose in round 13 (114.9 against 119.7 MB); the 9 MB of scratch buffers left is a level both apps land on, run by run. After 13 s both apps' graphics memory has grown by up to 90 MB, in the GPU driver's memory more than in Skia's caches, differently each run: not traced.
 - **Infinite transitions**: done (D420–D424). The 0.4 ms of tasks a frame left is mostly easing curves and color conversions.
