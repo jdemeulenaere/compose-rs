@@ -21,7 +21,10 @@ use std::rc::Rc;
 
 use crate::applier::{Applier, NodeRef};
 use crate::error::{ComposeError, misuse};
-use crate::runtime::{DeferredEffect, Runtime, remove_siblings, try_with_runtime, with_runtime};
+use crate::pausable::{Entry, NO_REGION, RecordedOp, ShouldPauseCallback, deferred_of};
+use crate::runtime::{
+    CompositionData, DeferredEffect, Runtime, remove_siblings, try_with_runtime, with_runtime,
+};
 use crate::scope::{RecomposeScope, ScopeId, Scopes};
 use crate::slot_table::{GroupKind, NONE, Slot, SlotTable, SlotValue};
 
@@ -62,6 +65,15 @@ pub(crate) struct Frame {
     /// The body is known to run (`skipping()` said no, or the kept arguments changed): the
     /// scope's epoch was bumped, so reads from earlier runs that aren't repeated go stale.
     pub body_started: bool,
+    /// The paused composition's region the group is in (`NO_REGION` if none): its node changes
+    /// are recorded, its observers, effects and removals wait for `apply`.
+    pub region: u32,
+    /// The region's segment its observers and effects go to.
+    pub segment: u32,
+    /// A paused scope a resume restarted: it doesn't pause at its own start.
+    pub resuming: bool,
+    /// The paused composition paused this restart group: it skips its body.
+    pub paused: bool,
 }
 
 /// A change to the node tree, applied right after the runtime's borrow ends.
@@ -80,7 +92,16 @@ pub(crate) enum NodeStart {
     Insert {
         parent: NodeRef,
         index: u32,
+        /// The region it's made in, if any: made apart, attached when applied.
+        region: u32,
     },
+}
+
+/// What `skipping` found: whether the body may skip, or a pause point's question.
+pub(crate) enum Skip {
+    Yes,
+    No,
+    Ask(Rc<dyn ShouldPauseCallback>),
 }
 
 pub(crate) enum WalkStep {
@@ -136,6 +157,9 @@ fn pass_clean_siblings(walking: &mut Frame, table: &SlotTable, scopes: &Scopes) 
 /// A restart group's kept arguments, when it has any.
 type Kept = Option<Rc<dyn Any>>;
 
+/// A pause point's question: the paused composition's callback, to ask outside the borrow.
+type PauseQuestion = Rc<dyn ShouldPauseCallback>;
+
 /// Where `slot_next` reserved a slot, so `slot_set` writes exactly there.
 #[derive(Clone, Copy)]
 pub(crate) struct SlotPosition {
@@ -180,8 +204,8 @@ impl Runtime {
         reusable: bool,
     ) -> (NodeOp, NodeStart) {
         let composition = self.check_composing();
-        let Runtime { compositions, scopes, frames, reusing, .. } = self;
-        let table = &mut compositions.data_mut(composition).table;
+        let Runtime { compositions, scopes, frames, reusing, resume_next, .. } = self;
+        let CompositionData { table, paused, .. } = compositions.data_mut(composition);
         let parent = frames.last_mut().unwrap_or_else(|| misuse(ComposeError::NotComposing));
         match parent.mode {
             Mode::Walk => misuse(ComposeError::UnbalancedGroups),
@@ -232,12 +256,18 @@ impl Runtime {
                     let count = table[found].node_count;
                     // Past node-less groups only, its nodes are already in place.
                     if count > 0 && nodes_before > 0 {
-                        op = NodeOp::Move {
-                            parent: parent.node_parent,
-                            from: parent.node_index + nodes_before,
-                            to: parent.node_index,
-                            count,
-                        };
+                        let (node_parent, from, to) = (
+                            parent.node_parent,
+                            parent.node_index + nodes_before,
+                            parent.node_index,
+                        );
+                        match paused {
+                            Some(paused) if parent.region != NO_REGION => paused.record(
+                                parent.region,
+                                RecordedOp::Move { parent: node_parent, from, to, count },
+                            ),
+                            _ => op = NodeOp::Move { parent: node_parent, from, to, count },
+                        }
                     }
                 }
                 parent.last_placed = found;
@@ -287,14 +317,29 @@ impl Runtime {
             scope: parent.scope,
             saved_epoch: 0,
             body_started: false,
+            region: parent.region,
+            segment: parent.segment,
+            resuming: false,
+            paused: false,
         };
+        // A paused scope restarted by a resume: its observers go to its segment.
+        if parent.mode == Mode::Restart
+            && let Some((segment, resuming)) = resume_next.take()
+        {
+            frame.segment = segment;
+            frame.resuming = resuming;
+        }
         let node_start = match kind {
             GroupKind::Node => {
                 frame.node_parent = group.node;
                 frame.node_index = 0;
                 frame.node_start = 0;
                 if inserting {
-                    NodeStart::Insert { parent: parent.node_parent, index: parent.node_index }
+                    NodeStart::Insert {
+                        parent: parent.node_parent,
+                        index: parent.node_index,
+                        region: parent.region,
+                    }
                 } else if reusing_now {
                     NodeStart::Reusing(group.node)
                 } else {
@@ -345,8 +390,7 @@ impl Runtime {
         let Runtime {
             compositions, scopes, frames, removal_stack, abandoned_groups, reusing, ..
         } = self;
-        let data = compositions.data_mut(composition);
-        let (table, deferred) = (&mut data.table, &mut data.deferred);
+        let CompositionData { table, deferred, paused, .. } = compositions.data_mut(composition);
         if frames.len() < 2 {
             misuse(ComposeError::UnbalancedGroups)
         }
@@ -366,25 +410,44 @@ impl Runtime {
 
         let mut op = NodeOp::None;
         if !frame.skipped {
+            let deferred = deferred_of(deferred, paused, frame.region);
+            let mut removed = 0;
             if frame.cursor != NONE {
-                let count =
+                removed =
                     remove_siblings(table, deferred, scopes, removal_stack, frame.cursor, NONE);
                 table.set_next(frame.group, frame.last_placed, NONE);
-                if count > 0 {
-                    op = NodeOp::Remove {
-                        parent: frame.node_parent,
-                        index: frame.node_index,
-                        count,
-                    };
-                }
             }
             let slots = &mut table[frame.group].slots;
             let keep = (frame.slot_cursor as usize).min(slots.len());
             deferred.removed_values.extend(slots.drain(keep..).map(|slot| slot.value));
+            if frame.region != NO_REGION
+                && let Some(paused) = paused
+            {
+                paused.settle(frame.region, frame.segment);
+            }
+            if removed > 0 {
+                let (parent, index) = (frame.node_parent, frame.node_index);
+                match paused {
+                    Some(paused) if frame.region != NO_REGION => paused
+                        .record(frame.region, RecordedOp::Remove { parent, index, count: removed }),
+                    _ => op = NodeOp::Remove { parent, index, count: removed },
+                }
+            }
         }
 
         let group = &mut table[frame.group];
-        let count = if kind == GroupKind::Node { 1 } else { frame.node_index - frame.node_start };
+        let mut count =
+            if kind == GroupKind::Node { 1 } else { frame.node_index - frame.node_start };
+        // A region's group counts, for the composition around it, the nodes it has there now.
+        if frame.region != NO_REGION
+            && let Some(paused) = paused
+        {
+            let region = &mut paused.regions[frame.region as usize];
+            if region.root == frame.group {
+                region.nodes = count;
+                count = region.attached;
+            }
+        }
         group.node_count = count;
         if restart.is_some() {
             group.restart = restart;
@@ -408,8 +471,7 @@ impl Runtime {
         // `changed(active)` answers true then (its slots read as empty).
         let changed = changed || self.reusing != 0;
         let Runtime { compositions, scopes, frames, removal_stack, .. } = self;
-        let data = compositions.data_mut(composition);
-        let (table, deferred) = (&mut data.table, &mut data.deferred);
+        let CompositionData { table, deferred, paused, .. } = compositions.data_mut(composition);
         let depth = frames.len();
         let frame = frames.last_mut().unwrap_or_else(|| misuse(ComposeError::NotComposing));
         if frame.mode != Mode::Normal || depth < 2 {
@@ -427,6 +489,7 @@ impl Runtime {
         }
         frame.skipped = true;
         frame.dirty = false;
+        let deferred = deferred_of(deferred, paused, frame.region);
         if changed && !frame.inserting {
             // Pre-order, as removals: a group's slots before its children's.
             let group = &mut table[frame.group];
@@ -469,6 +532,11 @@ impl Runtime {
             frame.node_index += table[frame.group].node_count;
         }
         frame.cursor = NONE;
+        if frame.region != NO_REGION
+            && let Some(paused) = paused
+        {
+            paused.settle(frame.region, frame.segment);
+        }
     }
 
     /// Starts skipping the rest of the current group. Returns the depth to walk from if some
@@ -510,8 +578,8 @@ impl Runtime {
     /// Advances the walk started at `base` to the next invalid scope.
     pub(crate) fn walk_step(&mut self, base: usize) -> WalkStep {
         let Some(active) = self.active else { misuse(ComposeError::NotComposing) };
-        let Runtime { compositions, scopes, frames, .. } = self;
-        let table = &mut compositions.data_mut(active.composition.index).table;
+        let Runtime { compositions, scopes, frames, reusing, resume_next, .. } = self;
+        let CompositionData { table, paused, .. } = compositions.data_mut(active.composition.index);
         loop {
             let top = frames.len() - 1;
             pass_clean_siblings(&mut frames[top], table, scopes);
@@ -524,11 +592,19 @@ impl Runtime {
                 }
                 frames.pop();
                 let group = &mut table[frame.group];
-                let count = if group.kind == GroupKind::Node {
+                let mut count = if group.kind == GroupKind::Node {
                     1
                 } else {
                     frame.node_index - frame.node_start
                 };
+                if frame.region != NO_REGION
+                    && let Some(paused) = paused
+                    && paused.regions[frame.region as usize].root == frame.group
+                {
+                    let region = &mut paused.regions[frame.region as usize];
+                    region.nodes = count;
+                    count = region.attached;
+                }
                 group.node_count = count;
                 let next = group.next_sibling;
                 let parent = frames.last_mut().expect("walk base frame");
@@ -550,6 +626,23 @@ impl Runtime {
                 let walking = &mut frames[top];
                 walking.mode = Mode::Restart;
                 walking.limit = group.next_sibling;
+                // In a region (a resume): a paused scope resumes in its segment, from its start,
+                // reusing its content if it paused while reusing (Compose's
+                // `RecomposeScopeImpl.reusing`); one invalidated since composes after the rest.
+                if walking.region != NO_REGION
+                    && let Some(scope) = scopes.get_mut(group.scope)
+                {
+                    if scope.paused {
+                        *resume_next = Some((scope.segment, true));
+                        if scope.reusing {
+                            *reusing = frames.len() + 1;
+                        }
+                    } else {
+                        *resume_next = Some((0, false));
+                    }
+                    scope.paused = false;
+                    scope.reusing = false;
+                }
                 return WalkStep::Restart(restart, kept);
             }
             // Neither clean (`pass_clean_siblings`) nor invalid: dirty. The walk goes into it.
@@ -574,6 +667,10 @@ impl Runtime {
                 scope: if group.kind == GroupKind::Restart { group.scope } else { frame.scope },
                 saved_epoch: 0,
                 body_started: false,
+                region: frame.region,
+                segment: frame.segment,
+                resuming: false,
+                paused: false,
             });
         }
     }
@@ -582,8 +679,8 @@ impl Runtime {
     pub(crate) fn finish_restart(&mut self) -> NodeOp {
         let Some(active) = self.active else { misuse(ComposeError::NotComposing) };
         let Runtime { compositions, scopes, frames, removal_stack, .. } = self;
-        let data = compositions.data_mut(active.composition.index);
-        let (table, deferred) = (&mut data.table, &mut data.deferred);
+        let CompositionData { table, deferred, paused, .. } =
+            compositions.data_mut(active.composition.index);
         let frame = frames.last_mut().expect("walk frame");
         if frame.mode != Mode::Restart {
             misuse(if self.abandoned_groups {
@@ -594,11 +691,23 @@ impl Runtime {
         }
         let mut op = NodeOp::None;
         if frame.cursor != frame.limit {
+            let deferred = deferred_of(deferred, paused, frame.region);
             let count =
                 remove_siblings(table, deferred, scopes, removal_stack, frame.cursor, frame.limit);
             table.set_next(frame.group, frame.last_placed, frame.limit);
+            if frame.region != NO_REGION
+                && let Some(paused) = paused
+            {
+                paused.settle(frame.region, frame.segment);
+            }
             if count > 0 {
-                op = NodeOp::Remove { parent: frame.node_parent, index: frame.node_index, count };
+                let (parent, index) = (frame.node_parent, frame.node_index);
+                match paused {
+                    Some(paused) if frame.region != NO_REGION => {
+                        paused.record(frame.region, RecordedOp::Remove { parent, index, count })
+                    }
+                    _ => op = NodeOp::Remove { parent, index, count },
+                }
             }
         }
         frame.cursor = frame.limit;
@@ -607,14 +716,44 @@ impl Runtime {
         op
     }
 
-    pub(crate) fn skipping(&mut self) -> bool {
+    pub(crate) fn skipping(&mut self) -> Skip {
         self.check_composing();
         let frame = self.body_frame();
-        let skipping = !frame.inserting && !frame.forced;
-        if !skipping {
+        if frame.paused {
+            return Skip::Yes;
+        }
+        if !frame.inserting && !frame.forced {
+            return Skip::Yes;
+        }
+        if let Some(callback) = self.pause_due() {
+            return Skip::Ask(callback);
+        }
+        self.begin_body();
+        Skip::No
+    }
+
+    /// A pause point: the current group is a restart group about to run its body in a region,
+    /// inserting or reusing (Compose's `shouldExecute`), and not a paused scope resuming. The
+    /// callback to ask, if so.
+    fn pause_due(&self) -> Option<Rc<dyn ShouldPauseCallback>> {
+        let callback = self.pause.as_ref()?;
+        let frame = self.frames.last()?;
+        if frame.region == NO_REGION || frame.resuming || !(frame.inserting || self.reusing != 0) {
+            return None;
+        }
+        let active = self.active?;
+        let kind = self.compositions.data(active.composition.index).table[frame.group].kind;
+        (kind == GroupKind::Restart).then(|| callback.clone())
+    }
+
+    /// The pause point's answer: pauses the group, or starts its body.
+    pub(crate) fn decide_pause(&mut self, pause: bool) {
+        self.check_composing();
+        if pause {
+            self.pause_current();
+        } else {
             self.begin_body();
         }
-        skipping
     }
 
     /// The current restart group's body is going to run: bump its scope's epoch, once.
@@ -664,7 +803,7 @@ impl Runtime {
         &mut self,
         kept: Option<Rc<dyn Any>>,
         changed: bool,
-    ) -> Result<Kept, (Kept, ComposeError)> {
+    ) -> Result<(Kept, Option<PauseQuestion>), (Kept, ComposeError)> {
         let Some(active) = self.active.filter(|active| active.composing) else {
             return Err((kept, ComposeError::NotComposing));
         };
@@ -677,9 +816,12 @@ impl Runtime {
         }
         let old = std::mem::replace(&mut group.kept, kept);
         if changed {
+            if let Some(callback) = self.pause_due() {
+                return Ok((old, Some(callback)));
+            }
             self.begin_body();
         }
-        Ok(old)
+        Ok((old, None))
     }
 
     /// Reserves the next slot of the current group, and returns its value if it holds a value
@@ -735,17 +877,31 @@ impl Runtime {
         if !in_order || position.index as usize > len {
             return Err((value, ComposeError::SlotOutOfOrder));
         }
-        let data = self.compositions.data_mut(composition);
+        let (region, segment) =
+            self.frames.last().map_or((NO_REGION, 0), |frame| (frame.region, frame.segment));
+        let CompositionData { table, deferred, paused, .. } =
+            self.compositions.data_mut(composition);
+        // In a region, observers wait for `apply`, in their segment.
         if let SlotValue::Observer(observer) = &value {
-            data.deferred.remembered.push(observer.clone());
+            match paused {
+                Some(paused) if region != NO_REGION => {
+                    paused.segments[segment as usize].push(Entry::Observer(observer.clone()))
+                }
+                _ => deferred.remembered.push(observer.clone()),
+            }
         }
-        let slots = &mut data.table[position.group].slots;
+        let slots = &mut table[position.group].slots;
         let index = position.index as usize;
         if index == slots.len() {
             slots.push(Slot { value, type_name });
         } else {
             let old = std::mem::replace(&mut slots[index], Slot { value, type_name });
-            data.deferred.removed_values.push(old.value);
+            match paused {
+                Some(paused) if region != NO_REGION => {
+                    paused.segments[segment as usize].push(Entry::Forgotten(old.value))
+                }
+                _ => deferred.removed_values.push(old.value),
+            }
         }
         Ok(())
     }
@@ -765,7 +921,15 @@ impl Runtime {
 
     pub(crate) fn record_side_effect(&mut self, effect: DeferredEffect) {
         let composition = self.check_composing();
-        self.compositions.data_mut(composition).deferred.side_effects.push(effect);
+        let (region, segment) =
+            self.frames.last().map_or((NO_REGION, 0), |frame| (frame.region, frame.segment));
+        let data = self.compositions.data_mut(composition);
+        match &mut data.paused {
+            Some(paused) if region != NO_REGION => {
+                paused.segments[segment as usize].push(Entry::Effect(effect))
+            }
+            _ => data.deferred.side_effects.push(effect),
+        }
     }
 
     pub(crate) fn current_scope(&mut self) -> ScopeId {
@@ -912,22 +1076,38 @@ pub(crate) fn abandon_group() {
     try_with_runtime(|runtime| runtime.abandoned_groups = true);
 }
 
-fn insert_node(parent: NodeRef, index: u32, node: &mut dyn Any, node_type: &str) -> NodeRef {
+fn insert_node(
+    parent: NodeRef,
+    index: u32,
+    region: u32,
+    node: &mut dyn Any,
+    node_type: &str,
+) -> NodeRef {
     flush_node_moves();
     let applier = with_runtime(|runtime| runtime.active_applier());
-    let inserted = applier
-        .try_borrow_mut()
-        .unwrap_or_else(|_| misuse(ComposeError::ApplierBusy))
-        .insert_erased(parent, index as usize, node)
-        .unwrap_or_else(|| {
-            panic!(
-                "compose-runtime: {} ({node_type}: a composable emitting it was called in a \
+    let mut applier =
+        applier.try_borrow_mut().unwrap_or_else(|_| misuse(ComposeError::ApplierBusy));
+    // In a region: made apart, attached when the paused composition is applied.
+    let inserted = if region != NO_REGION {
+        applier.create_erased(node)
+    } else {
+        applier.insert_erased(parent, index as usize, node)
+    };
+    drop(applier);
+    let inserted = inserted.unwrap_or_else(|| {
+        panic!(
+            "compose-runtime: {} ({node_type}: a composable emitting it was called in a \
                  composition of other nodes, as UI content in a desktop `application` outside \
                  its `Window`s)",
-                ComposeError::WrongNodeType
-            )
-        });
-    with_runtime(|runtime| runtime.set_inserted_node(inserted));
+            ComposeError::WrongNodeType
+        )
+    });
+    with_runtime(|runtime| {
+        runtime.set_inserted_node(inserted);
+        if region != NO_REGION {
+            runtime.record_attach(region, parent, index, inserted);
+        }
+    });
     inserted
 }
 
@@ -970,7 +1150,15 @@ impl KeptArguments {
     /// so the body runs. Returns `changed`.
     pub fn put(self, changed: bool) -> bool {
         match with_runtime(|runtime| runtime.put_kept(self.0, changed)) {
-            Ok(old) => drop(old),
+            Ok((old, None)) => drop(old),
+            Ok((old, Some(callback))) => {
+                drop(old);
+                // A pause point: paused, the body skips (`skipping` says so).
+                let pause = callback.should_pause();
+                drop(callback);
+                with_runtime(|runtime| runtime.decide_pause(pause));
+                return !pause;
+            }
             Err((kept, error)) => {
                 drop(kept);
                 misuse(error)
@@ -1051,8 +1239,8 @@ impl Composer {
     pub fn start_node<N: 'static>(&self, key: u64, factory: impl FnOnce() -> N) -> NodeRef {
         match start_group(GroupKind::Node, key, 0) {
             NodeStart::Reused(node) | NodeStart::Reusing(node) => node,
-            NodeStart::Insert { parent, index } => {
-                insert_node(parent, index, &mut Some(factory()), std::any::type_name::<N>())
+            NodeStart::Insert { parent, index, region } => {
+                insert_node(parent, index, region, &mut Some(factory()), std::any::type_name::<N>())
             }
             NodeStart::NotNode => unreachable!("a node group"),
         }
@@ -1073,11 +1261,22 @@ impl Composer {
                 reuse_node(node);
                 node
             }
-            NodeStart::Insert { parent, index } => {
-                insert_node(parent, index, &mut Some(factory()), std::any::type_name::<N>())
+            NodeStart::Insert { parent, index, region } => {
+                insert_node(parent, index, region, &mut Some(factory()), std::any::type_name::<N>())
             }
             NodeStart::NotNode => unreachable!("a node group"),
         }
+    }
+
+    /// Starts a group whose content is pausable content ([`PausableContent`]'s): inserted or
+    /// reused in a paused composition's first pass, it's paused content, which may pause and
+    /// is applied by the paused composition's `apply`. End it with
+    /// [`end_group`](Composer::end_group).
+    ///
+    /// [`PausableContent`]: crate::platform::PausableContent
+    pub fn start_pausable_group(&self, key: u64) {
+        start_group(GroupKind::Replace, key, 0);
+        with_runtime(|runtime| runtime.begin_region());
     }
 
     /// Starts a reusable group, as Compose's `startReusableGroup` (what `ReusableContent` and
@@ -1121,7 +1320,17 @@ impl Composer {
     /// Whether the current group may skip its body: it isn't new and its scope isn't invalid.
     /// When it says no, the body is known to run.
     pub fn skipping(&self) -> bool {
-        with_runtime(|runtime| runtime.skipping())
+        match with_runtime(|runtime| runtime.skipping()) {
+            Skip::Yes => true,
+            Skip::No => false,
+            Skip::Ask(callback) => {
+                // A pause point: the paused composition's callback runs outside the borrow.
+                let pause = callback.should_pause();
+                drop(callback);
+                with_runtime(|runtime| runtime.decide_pause(pause));
+                pause
+            }
+        }
     }
 
     /// Whether the current group is new in this pass.

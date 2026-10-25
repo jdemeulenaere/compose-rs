@@ -60,6 +60,15 @@ pub(crate) struct Runtime {
     /// as Compose's `reusing`, slots read as empty, bodies run and reusable nodes are kept
     /// until that group ends.
     pub reusing: usize,
+    /// The paused composition's callback, during its passes (`PausedComposition::resume`): asked
+    /// at each pause point.
+    pub pause: Option<Rc<dyn crate::pausable::ShouldPauseCallback>>,
+    /// The pass is a paused composition's: pausable content inserted or reused in it is paused
+    /// content (a region).
+    pub pausable_pass: bool,
+    /// The scope a resume restarts next was paused: its group doesn't pause at its own start
+    /// (Compose's `RecomposeScopeImpl.resuming`); its segment, and whether it reuses its content.
+    pub resume_next: Option<(u32, bool)>,
 }
 
 #[derive(Clone, Copy)]
@@ -90,6 +99,9 @@ impl Runtime {
             recomposition_counts: None,
             abandoned_groups: false,
             reusing: 0,
+            pause: None,
+            pausable_pass: false,
+            resume_next: None,
         }
     }
 
@@ -228,6 +240,25 @@ pub(crate) fn invalidate_scope_parts(
     scope.invalid = true;
     let data = compositions.data_mut(scope.composition);
     let table = &mut data.table;
+    // In paused content not applied yet: its paused composition's next resume recomposes it, as
+    // Compose's paused composition takes the invalidations of its scopes (`markIncomplete`); no
+    // pass of the composition does.
+    if let Some(paused) = data.paused.as_mut()
+        && paused.holds_regions()
+        && let Some(region) = paused.region_of(table, scope.group)
+    {
+        let region = &mut paused.regions[region];
+        region.pending = true;
+        let mut group = table[scope.group].parent;
+        while group != region.root && !table[group].dirty {
+            table[group].dirty = true;
+            group = table[group].parent;
+        }
+        if paused.state.get() == crate::pausable::PausedState::ApplyPending {
+            paused.state.set(crate::pausable::PausedState::RecomposePending);
+        }
+        return false;
+    }
     let mut group = table[scope.group].parent;
     while group != NONE && !table[group].dirty {
         table[group].dirty = true;
@@ -312,6 +343,8 @@ pub(crate) struct CompositionData {
     pub closed: bool,
     pub frame_requester: Option<Rc<dyn Fn()>>,
     pub deferred: Deferred,
+    /// The paused composition in progress, if any (Compose's `pendingPausedComposition`).
+    pub paused: Option<Box<crate::pausable::Paused>>,
 }
 
 impl CompositionData {
@@ -326,6 +359,7 @@ impl CompositionData {
             closed: false,
             frame_requester: None,
             deferred: Deferred::default(),
+            paused: None,
         }
     }
 

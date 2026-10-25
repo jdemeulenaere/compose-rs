@@ -71,6 +71,27 @@ pub trait Applier: 'static {
     /// deactivated content, outer before inner.
     fn deactivate(&mut self, _node: NodeRef) {}
 
+    /// Makes `node` a node of the tree in no parent yet, and returns its handle: a node a paused
+    /// composition creates (content in a [`PausableContent`]), which it attaches only when it's
+    /// applied ([`attach`](Applier::attach)), as Compose's paused composition creates its nodes
+    /// as it composes and inserts them into the tree when applied (`RecordingApplier`). The
+    /// pass updates it meanwhile. An applier that composes no pausable content needn't
+    /// implement it.
+    ///
+    /// [`PausableContent`]: crate::platform::PausableContent
+    fn create(&mut self, _node: Self::Node) -> NodeRef {
+        panic!(
+            "compose-runtime: this applier doesn't create nodes apart (Applier::create): it can't \
+             compose PausableContent in a paused composition"
+        )
+    }
+
+    /// Inserts `node`, made by [`create`](Applier::create) and in no parent, as the child of
+    /// `parent` at `index`: a paused composition's node, as it's applied.
+    fn attach(&mut self, _parent: NodeRef, _index: usize, _node: NodeRef) {
+        panic!("compose-runtime: this applier doesn't attach nodes made apart (Applier::attach)")
+    }
+
     /// Called before a pass applies its first change.
     fn on_begin_changes(&mut self) {}
 
@@ -93,6 +114,9 @@ pub(crate) trait ErasedApplier {
     fn release(&mut self, node: NodeRef);
     fn reuse(&mut self, node: NodeRef);
     fn deactivate(&mut self, node: NodeRef);
+    /// Takes the node out of `node`, as `insert_erased`, and makes it in no parent.
+    fn create_erased(&mut self, node: &mut dyn Any) -> Option<NodeRef>;
+    fn attach(&mut self, parent: NodeRef, index: usize, node: NodeRef);
     fn on_begin_changes(&mut self);
     fn on_end_changes(&mut self);
     fn as_any_mut(&mut self) -> &mut dyn Any;
@@ -127,6 +151,15 @@ impl<A: Applier> ErasedApplier for A {
 
     fn deactivate(&mut self, node: NodeRef) {
         Applier::deactivate(self, node)
+    }
+
+    fn create_erased(&mut self, node: &mut dyn Any) -> Option<NodeRef> {
+        let node = node.downcast_mut::<Option<A::Node>>()?.take()?;
+        Some(Applier::create(self, node))
+    }
+
+    fn attach(&mut self, parent: NodeRef, index: usize, node: NodeRef) {
+        Applier::attach(self, parent, index, node)
     }
 
     fn on_begin_changes(&mut self) {

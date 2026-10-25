@@ -31,6 +31,16 @@ pub(crate) struct ScopeEntry {
     pub epoch: u32,
     /// Invalidated: its body runs in the next pass.
     pub invalid: bool,
+    /// Its body was paused by a paused composition (Compose's `RecomposeScopeImpl.paused`): it's
+    /// invalid, and the paused composition's next resume runs it, from its start.
+    pub paused: bool,
+    /// Paused while content was being reused: resumed, it reuses its content still (Compose's
+    /// `RecomposeScopeImpl.reusing`).
+    pub reusing: bool,
+    /// Paused: the paused composition's segment its remember observers and effects go to, so
+    /// they're dispatched in the order they would have been without the pause (Compose's
+    /// `rememberPausingScope`).
+    pub segment: u32,
     /// The last compaction of a cell's readers that kept a reader of this scope: a compaction
     /// keeps one reader per scope (`Scopes::keep_reader`).
     compaction: u32,
@@ -61,6 +71,9 @@ impl Scopes {
             entry.group = group;
             entry.epoch = 0;
             entry.invalid = false;
+            entry.paused = false;
+            entry.reusing = false;
+            entry.segment = 0;
             entry.compaction = 0;
             ScopeId { index, generation: entry.generation }
         } else {
@@ -71,6 +84,9 @@ impl Scopes {
                 group,
                 epoch: 0,
                 invalid: false,
+                paused: false,
+                reusing: false,
+                segment: 0,
                 compaction: 0,
             });
             ScopeId { index, generation: self.base }
@@ -82,6 +98,7 @@ impl Scopes {
         debug_assert_eq!(entry.generation, id.generation, "freeing a stale scope");
         entry.generation = entry.generation.wrapping_add(1);
         entry.invalid = false;
+        entry.paused = false;
         self.free.push(id.index);
     }
 

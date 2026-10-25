@@ -27,7 +27,7 @@ const ROOT_KEY: u64 = key_of("compose_runtime::Composition::content");
 /// Owned: dropping it disposes everything it holds, in rule R1's order (nodes and their
 /// handlers, then remembered values and state).
 pub struct Composition {
-    id: CompositionId,
+    pub(crate) id: CompositionId,
     _not_send: PhantomData<*const ()>,
 }
 
@@ -47,6 +47,8 @@ impl Composition {
     /// new one: groups with the same keys keep their state.
     pub fn set_content(&self, content: impl Fn() + 'static) {
         let content: Rc<dyn Fn()> = Rc::new(content);
+        // Paused content is applied first: the content runs around it.
+        crate::pausable::complete_if_enclosed(self.id, true);
         // A composition closed at thread exit composes nothing.
         let Some(pass) = Pass::begin(self.id, Mode::Normal) else { return };
         compose_root(content);
@@ -57,6 +59,8 @@ impl Composition {
     pub fn recompose(&self) -> bool {
         // Derived states whose dependencies changed tell their readers first.
         crate::derived::flush_derived_states();
+        // A body around paused content runs: it's completed and applied first.
+        crate::pausable::complete_if_enclosed(self.id, false);
         let Some(pass) = Pass::begin(self.id, Mode::Walk) else {
             return false;
         };
@@ -181,6 +185,8 @@ impl Composition {
 
 impl Drop for Composition {
     fn drop(&mut self) {
+        // Paused content is discarded first, its nodes released and its observers abandoned.
+        crate::pausable::cancel_for_disposal(self.id);
         let Some(Some(disposal)) = try_with_runtime(|runtime| Disposal::take(runtime, self.id))
         else {
             return;
@@ -211,6 +217,7 @@ impl Drop for ExitGuard {
             return;
         };
         for id in ids {
+            crate::pausable::cancel_for_disposal(id);
             if let Some(Some(disposal)) = try_with_runtime(|runtime| Disposal::close(runtime, id)) {
                 disposal.run();
             }
@@ -237,21 +244,57 @@ fn compose_root(content: Rc<dyn Fn()>) {
     });
 }
 
+/// Which pass: a pass of the whole composition, or a paused composition's.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum PassKind {
+    /// `set_content` or `recompose`.
+    Whole,
+    /// A paused composition's first: `recompose`'s, in which pausable content inserted or
+    /// reused is paused content.
+    Pausable,
+    /// A paused composition's resume: the walks of its regions.
+    Resume,
+}
+
 /// A pass in progress. If it is dropped without [`finish`](Pass::finish), a panic unwound
 /// through it: the composition is poisoned.
-struct Pass {
+pub(crate) struct Pass {
     id: CompositionId,
+    kind: PassKind,
     finished: bool,
 }
 
 impl Pass {
     fn begin(id: CompositionId, mode: Mode) -> Option<Pass> {
+        Pass::begin_as(id, mode, PassKind::Whole, None)
+    }
+
+    /// Begins a pass of `kind`, a paused composition's asking `should_pause` at its pause
+    /// points. A resume's walks its regions (the caller pushes their frames): the sentinel
+    /// frame composes nothing.
+    pub(crate) fn begin_as(
+        id: CompositionId,
+        mode: Mode,
+        kind: PassKind,
+        should_pause: Option<Rc<dyn crate::pausable::ShouldPauseCallback>>,
+    ) -> Option<Pass> {
+        let resume = kind == PassKind::Resume;
         let applier = with_runtime(|runtime| {
             if runtime.active.is_some() {
                 misuse(ComposeError::PassInProgress)
             }
-            let Runtime { compositions, cells, frames, active, abandoned_groups, reusing, .. } =
-                runtime;
+            let Runtime {
+                compositions,
+                cells,
+                frames,
+                active,
+                abandoned_groups,
+                reusing,
+                pause,
+                pausable_pass,
+                resume_next,
+                ..
+            } = runtime;
             let data = compositions.get_mut(id).expect("a live composition");
             if data.closed {
                 return None;
@@ -268,25 +311,30 @@ impl Pass {
                 misuse(ComposeError::PassInProgress)
             }
             let sentinel = &mut data.table[SENTINEL];
-            if mode == Mode::Walk && !sentinel.dirty {
+            if mode == Mode::Walk && !sentinel.dirty && !resume {
                 return None;
             }
-            let dirty = sentinel.dirty;
-            sentinel.dirty = false;
-            data.pending = false;
+            let dirty = sentinel.dirty && !resume;
+            if !resume {
+                sentinel.dirty = false;
+                data.pending = false;
+            }
             *active = Some(ActivePass { composition: id, composing: true });
             *abandoned_groups = false;
             *reusing = 0;
+            *pause = should_pause;
+            *pausable_pass = kind != PassKind::Whole;
+            *resume_next = None;
             cells.begin_pass();
             frames.clear();
             frames.push(Frame {
                 group: SENTINEL,
-                mode,
+                mode: if resume { Mode::Normal } else { mode },
                 inserting: false,
                 forced: false,
-                skipped: mode == Mode::Walk,
+                skipped: mode == Mode::Walk || resume,
                 dirty,
-                cursor: sentinel.first_child,
+                cursor: if resume { NONE } else { sentinel.first_child },
                 limit: NONE,
                 last_placed: NONE,
                 slot_cursor: 0,
@@ -296,10 +344,14 @@ impl Pass {
                 scope: ScopeId::NONE,
                 saved_epoch: 0,
                 body_started: false,
+                region: crate::pausable::NO_REGION,
+                segment: 0,
+                resuming: false,
+                paused: false,
             });
             Some(data.applier.clone())
         })?;
-        let pass = Pass { id, finished: false };
+        let pass = Pass { id, kind, finished: false };
         applier
             .try_borrow_mut()
             .unwrap_or_else(|_| misuse(ComposeError::ApplierBusy))
@@ -312,7 +364,8 @@ impl Pass {
     ///
     /// The pass is over before any of that runs, so effects, observers and drops may compose
     /// other compositions (a popup from an effect), and a frame requester may recompose at once.
-    fn finish(mut self) {
+    pub(crate) fn finish(mut self) {
+        let resume = self.kind == PassKind::Resume;
         let (op, applier) = with_runtime(|runtime| {
             let Runtime { compositions, scopes, frames, removal_stack, abandoned_groups, .. } =
                 runtime;
@@ -348,13 +401,18 @@ impl Pass {
                     };
                 }
             }
-            table[SENTINEL].node_count = frame.node_index - frame.node_start;
+            if !resume {
+                table[SENTINEL].node_count = frame.node_index - frame.node_start;
+            }
             (op, data.applier.clone())
         });
         apply_node_op(op);
         flush_node_moves();
         let (mut deferred, freeing) = with_runtime(|runtime| {
             runtime.active = None;
+            runtime.pause = None;
+            runtime.pausable_pass = false;
+            runtime.resume_next = None;
             runtime.finishing += 1;
             let data = runtime.compositions.get_mut(self.id).expect("a live composition");
             data.finishing = true;
@@ -381,11 +439,12 @@ impl Pass {
     }
 }
 
-/// A pass applying its end-of-pass work; ends it, even when an effect panics.
-struct Finishing {
-    id: CompositionId,
+/// A pass applying its end-of-pass work (or a paused composition being applied or cancelled);
+/// ends it, even when an effect panics.
+pub(crate) struct Finishing {
+    pub id: CompositionId,
     /// The cells to free once the work has run; after a panic, they wait for the next pass.
-    freeing: Vec<crate::state::StateId>,
+    pub freeing: Vec<crate::state::StateId>,
 }
 
 impl Drop for Finishing {
@@ -423,6 +482,9 @@ impl Drop for Pass {
                 runtime.active = None;
                 runtime.frames.clear();
                 runtime.reusing = 0;
+                runtime.pause = None;
+                runtime.pausable_pass = false;
+                runtime.resume_next = None;
                 runtime.pending_move = None;
                 runtime.cells.abort_pass();
             }
@@ -579,13 +641,23 @@ fn validate(runtime: &Runtime, id: CompositionId) -> Result<(), String> {
     let data = runtime.compositions.get(id).ok_or("disposed composition")?;
     let table = &data.table;
     let in_pass = runtime.active.is_some_and(|active| active.composition == id);
+    // Paused content's group: its content's dirty marks and invalid scopes wait for a resume,
+    // and it counts the nodes it has in the tree, not those it will have once applied.
+    let region_at = |group: u32| {
+        (data.paused.as_ref())
+            .filter(|paused| paused.holds_regions())
+            .and_then(|paused| paused.region_rooted_at(group))
+    };
     let mut reachable = 0usize;
-    // Each group, and whether it's in deactivated content (whose scopes were freed).
-    let mut stack = vec![(SENTINEL, false)];
-    while let Some((index, deactivated)) = stack.pop() {
+    // Each group, whether it's in deactivated content (whose scopes were freed), and whether
+    // it's in paused content (which may hold deactivated content's groups it reuses, their
+    // scopes freed, where its paused scopes haven't reached yet).
+    let mut stack = vec![(SENTINEL, false, false)];
+    while let Some((index, deactivated, paused)) = stack.pop() {
         reachable += 1;
         let group = &table[index];
         let inner_deactivated = deactivated || group.deactivated;
+        let inner_paused = paused || region_at(index).is_some();
         if group.kind == GroupKind::Free {
             return Err(format!("group {index} is free but reachable"));
         }
@@ -600,14 +672,22 @@ fn validate(runtime: &Runtime, id: CompositionId) -> Result<(), String> {
                 ));
             }
             nodes += if entry.kind == GroupKind::Node { 1 } else { entry.node_count };
-            if !in_pass && entry.dirty && !group.dirty {
+            if !in_pass && entry.dirty && !group.dirty && region_at(index).is_none() {
                 return Err(format!("group {child} is dirty but its parent {index} is not"));
             }
-            stack.push((child, inner_deactivated));
+            stack.push((child, inner_deactivated, inner_paused));
             child = entry.next_sibling;
         }
         let expected = if group.kind == GroupKind::Node { 1 } else { nodes };
-        if group.node_count != expected {
+        if let Some(region) = region_at(index) {
+            if group.node_count != region.attached || (!in_pass && region.nodes != nodes) {
+                return Err(format!(
+                    "paused content's group {index} counts {} nodes ({} attached), its children \
+                     {nodes} ({} once applied)",
+                    group.node_count, region.attached, region.nodes
+                ));
+            }
+        } else if group.node_count != expected {
             return Err(format!(
                 "group {index} counts {} nodes, its children {expected}",
                 group.node_count
@@ -617,6 +697,7 @@ fn validate(runtime: &Runtime, id: CompositionId) -> Result<(), String> {
             return Err(format!("node group {index} has no node"));
         }
         match group.kind {
+            GroupKind::Restart if paused && group.scope.is_none() => {}
             GroupKind::Restart if deactivated => {
                 if !group.scope.is_none() {
                     return Err(format!("restart group {index} keeps a scope while deactivated"));
@@ -633,7 +714,12 @@ fn validate(runtime: &Runtime, id: CompositionId) -> Result<(), String> {
                 if !in_pass && group.restart.is_none() {
                     return Err(format!("restart group {index} has no restart function"));
                 }
-                if !in_pass && scope.invalid && index != SENTINEL && !table[group.parent].dirty {
+                if !in_pass
+                    && scope.invalid
+                    && index != SENTINEL
+                    && !table[group.parent].dirty
+                    && region_at(group.parent).is_none()
+                {
                     return Err(format!("invalid scope of group {index} has a clean parent"));
                 }
             }

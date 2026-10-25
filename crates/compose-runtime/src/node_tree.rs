@@ -177,6 +177,23 @@ impl<N: 'static> Applier for NodeTree<N> {
         self.reference(child)
     }
 
+    fn create(&mut self, node: N) -> NodeRef {
+        let child = self.alloc(node, NO_PARENT);
+        self.reference(child)
+    }
+
+    fn attach(&mut self, parent: NodeRef, index: usize, node: NodeRef) {
+        let (parent, child) = (self.index(parent), self.index(node));
+        assert!(
+            self.entries[child as usize].parent == NO_PARENT,
+            "compose-runtime: NodeTree: attaching a node that has a parent"
+        );
+        let len = self.entries[parent as usize].children.len();
+        assert!(index <= len, "compose-runtime: NodeTree: attach at {index} past {len} children");
+        self.entries[child as usize].parent = parent;
+        self.entries[parent as usize].children.insert(index, child);
+    }
+
     fn remove(&mut self, parent: NodeRef, index: usize, count: usize) {
         let parent = self.index(parent);
         self.check_range(parent, index, count);

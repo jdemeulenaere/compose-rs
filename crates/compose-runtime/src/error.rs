@@ -35,6 +35,10 @@ pub enum ComposeError {
     /// Groups were left open by a panic that unwound through composables and was caught
     /// (`catch_unwind`) inside the composition.
     CaughtPanic,
+    /// A paused composition was started while another of the same composition was in progress,
+    /// or resumed, applied or cancelled out of order (applied before it was complete, resumed
+    /// after it was applied or cancelled).
+    PausedCompositionState,
 }
 
 impl fmt::Display for ComposeError {
@@ -72,6 +76,10 @@ impl fmt::Display for ComposeError {
                 "a panic unwound through composables and was caught inside the composition \
                  (catch_unwind), leaving their groups open; let panics propagate out of the pass, \
                  as Compose forbids try/catch around composable calls"
+            }
+            ComposeError::PausedCompositionState => {
+                "a paused composition was used out of order: one at a time per composition, \
+                 applied once complete, neither resumed nor applied once applied or cancelled"
             }
         };
         formatter.write_str(message)

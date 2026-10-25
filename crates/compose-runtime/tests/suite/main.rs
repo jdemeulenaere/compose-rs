@@ -3,6 +3,7 @@
 
 mod holders;
 mod model;
+mod pausable;
 mod reusable;
 mod review2;
 mod review3;
