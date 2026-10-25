@@ -26,6 +26,11 @@ To run it, install both apps' release builds, then measure; `measure.py` needs a
 android/gradlew -p android :bench-compose:installRelease :bench-rs:installRelease
 python3 android/bench/measure.py --trace-processor path/to/trace_processor_shell --out bench-out
 python3 android/bench/summarize.py bench-out/report.json
+# At fixed clocks (a userdebug device, `adb root` first; D640, D641):
+android/bench/lock_clocks.sh lock clocks.state placement=512
+python3 android/bench/measure.py --trace-processor path/to/trace_processor_shell --out bench-out \
+    --locked-clocks clocks.state --fixed-placement
+android/bench/lock_clocks.sh restore clocks.state
 ```
 
 `--optimizations parity|recommended|all|each|<names>` picks compose-rs's flags (parity, the default, turns them all off; `--subject LIST`, repeated, runs several sets beside Compose in one session), `--scenarios` picks the scenarios (the stress screens: `stress_startup,stress_scroll,stress_animation`, [15](15-android-stress-benchmark.md)), and `--thermal-wait-limit 0 --rotate` waits for a cool device before each run, as the published rounds do.
@@ -39,6 +44,7 @@ python3 android/bench/summarize.py bench-out/report.json
 - **compose-rs's optimizations** (D569): `--optimizations parity` (the default) runs bench-rs with none of them (`-e optimizations none`, its hint session off: Compose has none of its own), `recommended` with the recommended set, `all` with every one, `each` bench-rs alone at parity and with each one alone, interleaved run by run ([14](14-performance-opportunities.md), "Backport candidates"). Every mode passes bench-rs its list: bench-rs started without `-e optimizations` (by hand, say) runs the library's default, the recommended set since D610, not parity. The report records each subject's list and its full bit set (`"bits"`, as Rust's `Optimizations::parse` reads the list, from Rust's table by each flag's own `bit:`, `name:` and `default:` fields, D579); `each`'s subjects are `rs` and `rs+<name>`, `--each-only` measures some optimizations, `--rotate` changes which subject runs last, and `--traced-runs` sets the traced scenarios' runs (3).
 - **Thermal guard** (D569, D574, D579): before each run, startup round and traced first frame, our apps are stopped (`cool_down`) and measure.py waits, reading `dumpsys thermalservice`'s `Thermal Status`, `dumpsys battery`'s temperature and the cached skin sensor every 10 s, while the thermal status is above 0, the battery above `--battery-limit` or the skin (the highest `TYPE_SKIN` sensor, `mType=3`, whatever its name, Pixel's VIRTUAL-SKIN, the HAL's current values first; a sensor that can't be read is said once) above `--skin-limit`, however long with `--thermal-wait-limit 0`; each run records its state before and after. Rounds 14 and 15 ran with 34 °C and 35 °C.
 - **Stress** (D400, D401): a much heavier list (`stress_startup`, `stress_scroll`) and a screen of hundreds of concurrent animations (`stress_animation`), measured as above; [15](15-android-stress-benchmark.md) describes them and their results. `--scenarios` runs some scenarios only (all by default), and every traced run lists its slowest frames with their longest slices (`slowest_frames`).
+- **Fixed clocks and placement** (D640–D642), on a rooted (userdebug) device: `android/bench/lock_clocks.sh lock STATE` locks each CPU policy's and the GPU's clock (the Pixel 8 Pro's defaults: little 1,197, mid 1,328, big 1,745 MHz, GPU 521 MHz, which hold 10 minutes of the stress animation without throttling), `placement=512` also raises the top-app group's minimum utilization clamp (the vendor scheduler's, `/proc/vendor_sched/groups/ta/uclamp_min`), and `restore STATE` writes the originals back. `measure.py --locked-clocks STATE [--fixed-placement]` reads them back before and after each run and stops if one moved, checks each trace's frequency events, scales "work" by the locked frequencies, and records the memory and interconnect clocks' residency (DSU, MIF, BCI: not lockable, the power HAL rewrites them). Every traced run reports each thread's time on the little, mid and big cores (`cluster_ms`).
 - **Navigation** (D602–D605), only when named (`--scenarios navigation`): the latency from a tap to the present of the first frame of an expensive screen never seen before, in an app already running; [17](17-navigation-latency.md) describes the screens, the method and the results.
 
 Durations and CPU time alone mislead, because they depend on where a thread ran as much as on what it did. The scheduler moves light threads to the little cores, where the same work takes longer, and Android's performance hints (ADPF) boost the threads, onto faster cores at higher frequencies, after long frames. When prefetching (D156) made compose-rs's frames shorter, its threads moved to the little cores: its frames took longer and its CPU time rose while the work they did fell. So "work" scales each running slice by its core's frequency (traced) and capacity: milliseconds on the fastest core at its highest frequency. It's the measure of cost the comparisons below rely on; durations are what a user sees.
@@ -49,7 +55,83 @@ compose-rs's frame phases show in the traces as `compose-rs: recompose`, `layout
 
 ## Results
 
-Pixel 8 Pro, Android 16, October 2026. Medians of 3 runs (startup: of 15). The better side is in bold; ties aren't. compose-rs's round-14 figures are in parentheses where they're given beside round 15's.
+Pixel 8 Pro, Android 16 (rounds 1 to 15) and Android 17 (round 16), October 2026. Medians of 3 runs (startup: of 15). The better side is in bold; ties aren't. compose-rs's round-14 figures are in parentheses where they're given beside round 15's.
+
+### Round 16: Android 17, at dynamic and fixed clocks (D640–D644)
+
+compose-rs at 701c791 (the toolchain upgrade, D620–D623: targetSdk 37 for both apps, NDK r30, jni 0.22) against Compose 1.12.1, on the Pixel 8 Pro reflashed to Android 17 (CP3A.261005.005, userdebug), 2026-10-25, in light mode as every round before (the wiped device came up dark, where the Kotlin app stays light and compose-rs follows the system; switched back on the user's approval, after which the screens are pixel-identical again, D642). Three conditions, each an invocation of measure.py against Compose with every scenario and navigation, `--runs 15 --rotate 1 --battery-limit 34 --skin-limit 35 --thermal-wait-limit 0`:
+
+- **(a) Dynamic clocks, at parity** (`results/2026-10-25-pixel-8-pro-userdebug-dynamic.json`): what users get. The re-baseline on Android 17.
+- **(b) Fixed clocks** (`…-userdebug-fixed.json`): every CPU policy and the GPU locked (`lock_clocks.sh`, D640: little 1,197, mid 1,328, big 1,745 MHz, GPU 521 MHz), compose-rs at parity and with `recommended` (`--subject parity=none --subject recommended`), the three subjects interleaved run by run. Frequency scaling removed; where the scheduler places each thread isn't.
+- **(c) Fixed clocks plus fixed placement** (`…-userdebug-fixed-placement.json`): (b) with the top-app group's minimum utilization clamp at 512 (`placement=512`, D641), which keeps the foreground app's threads off the little cores whatever their load or boost. Frequency and placement removed: work against work.
+
+measure.py's checks passed in all three: the installed native libraries were those built at 701c791, both apps `speed` at the start and the end and targetSdk 37, FrameTimeline's jank split by side, and in (b) and (c) the locked clocks (and the clamp) read back unchanged before and after every run and startup round, every trace's GPU clock at its lock and no CPU frequency event in any trace. Every run, startup round and traced first frame started at thermal status 0, battery ≤ 34 °C and skin ≤ 35 °C (the guard waited before 5 of (a)'s, up to 180 s, and none of (b)'s or (c)'s; runs started at battery 28.0 to 34.0 °C, skin 29.5 to 34.7 °C, and ended at most at 34.2 and 36.8 °C), and no run ended above status 0. Medians of 3 traced runs; startup of 15; nothing starred (3 runs a side can't reach p < 0.05; where all of one side's runs are below all of the other's, it's said).
+
+**The answer.** At fixed clocks alone, compose-rs's RenderThread is still behind Compose's at the median on the feed's scroll (2.42 against 1.57 ms) and level or ahead at p90 and p99, because placement still differs: its RenderThread ran 74 % of its time on the little cores, Compose's 57 % (its main thread 93 % against 69 %). With placement fixed too, compose-rs's RenderThread is ahead at every percentile on every screen: the feed's scroll 1.02 / 1.42 / 1.74 ms against 1.08 / 1.54 / 2.07 ms (each of its three runs below each of Compose's at p99), the stress list 1.41 / 1.88 / 2.35 against 1.56 / 2.26 / 3.08 ms, the animated header 1.04 / 1.30 / 1.60 against 1.10 / 1.41 / 1.74 ms, for 12 %, 16 % and 10 % less RenderThread work. The round-15 reading holds: the RenderThread gap at parity was where it ran, not what it did.
+
+**What fixed clocks equalize and what they don't.** They remove frequency: each core runs at one clock for both apps, and HWUI's session can no longer raise it. They don't remove placement: the scheduler still puts a light thread on a little core and a busier one on a mid or big core, and uclamp (the hint sessions' boost, which on this kernel is a utilization clamp) still moves threads up. At (b) HWUI's session still boosted Compose's RenderThread (a time-weighted 118 against 34 for compose-rs), which now buys placement instead of frequency. They don't hold the memory and interconnect clocks either (DSU, MIF, BCI: the power HAL rewrites their floors at every launch and load reset, D640): measure.py records their residency, which was within 3 to 8 % between the apps on the scrolls (DSU 474 against 487 MHz on the feed at (b)). Fixed placement (c) leaves the hint sessions almost nothing to do on the scrolls and the header (HWUI's boost 6 or less on the feed and the header, every frame unboosted; 54 on Compose's stress list), so compose-rs at parity and with `recommended` are within the runs' spread there; in the stress animation HWUI's heuristic boost still reaches 722, above the clamp, for both apps.
+
+**Work** is CPU time scaled by each core's frequency and capacity, so at (c), on the big core, it reads higher for the same code than at (a) or (b): compare apps within a condition, not conditions.
+
+Feed scroll, at parity:
+
+| | dynamic: Compose | dynamic: compose-rs | fixed clocks: Compose | fixed clocks: compose-rs | fixed clocks + placement: Compose | fixed clocks + placement: compose-rs |
+|---|---|---|---|---|---|---|
+| Janky frames, the app's; the compositor's (3 runs) | 0; 1 | 0; 0 | 2; 1 | 0; 0 | 0; 0 | 0; 0 |
+| Main thread p50 / p90 / p99 (ms) | 1.60 / 3.25 / 6.66 | 1.37 / 2.22 / 3.37 | 1.38 / 3.12 / 6.80 | 1.17 / 2.13 / 3.09 | 0.74 / 1.56 / 2.75 | 0.54 / 0.88 / 1.33 |
+| RenderThread p50 / p90 / p99 (ms) | 2.21 / 3.37 / 4.91 | 2.62 / 3.55 / 5.06 | 1.57 / 3.66 / 4.91 | 2.42 / 3.46 / 4.72 | 1.08 / 1.54 / 2.07 | 1.02 / 1.42 / 1.74 |
+| Work: main / RenderThread (ms) | 810 / 819 | 439 / 675 | 828 / 941 | 430 / 796 | 1,097 / 1,122 | 647 / 987 |
+| CPU time: main / RenderThread (s) | 4.49 / 4.40 | 3.52 / 4.95 | 3.89 / 3.87 | 2.97 / 4.11 | 1.93 / 2.14 | 1.13 / 1.91 |
+| Main thread on little / mid / big (ms) | 2,438 / 1,911 / 144 | 2,681 / 817 / 22 | 2,678 / 1,142 / 68 | 2,758 / 214 / 4 | 0 / 281 / 1,656 | 0 / 163 / 984 |
+| RenderThread on little / mid / big (ms) | 932 / 3,393 / 78 | 1,492 / 3,426 / 44 | 2,200 / 1,652 / 17 | 3,033 / 1,075 / 2 | 0 / 765 / 1,368 | 0 / 789 / 1,126 |
+| HWUI boost, time-weighted | 124 | 22 | 118 | 34 | 6 | 2 |
+
+Feed scroll, compose-rs with `recommended`, against Compose in the same invocations:
+
+| | fixed clocks: Compose | fixed clocks: compose-rs | fixed clocks + placement: Compose | fixed clocks + placement: compose-rs |
+|---|---|---|---|---|
+| Janky frames, the app's; the compositor's (3 runs) | 2; 1 | 0; 0 | 0; 0 | 0; 0 |
+| Main thread p50 / p90 / p99 (ms) | 1.38 / 3.12 / 6.80 | 0.86 / 1.30 / 2.56 | 0.74 / 1.56 / 2.75 | 0.55 / 0.76 / 1.14 |
+| RenderThread p50 / p90 / p99 (ms) | 1.57 / 3.66 / 4.91 | 1.41 / 1.94 / 3.68 | 1.08 / 1.54 / 2.07 | 1.06 / 1.42 / 1.88 |
+| Work: main / RenderThread (ms) | 828 / 941 | 664 / 985 | 1,097 / 1,122 | 671 / 1,015 |
+| CPU time: main / RenderThread (s) | 3.89 / 3.87 | 1.95 / 2.72 | 1.93 / 2.14 | 1.17 / 1.97 |
+| Main thread on little / mid / big (ms) | 2,678 / 1,142 / 68 | 537 / 1,269 / 170 | 0 / 281 / 1,656 | 0 / 130 / 1,035 |
+| RenderThread on little / mid / big (ms) | 2,200 / 1,652 / 17 | 473 / 2,107 / 164 | 0 / 765 / 1,368 | 0 / 829 / 1,144 |
+| HWUI boost, time-weighted | 118 | 5 | 6 | 2 |
+
+Animated header, at parity:
+
+| | dynamic: Compose | dynamic: compose-rs | fixed clocks: Compose | fixed clocks: compose-rs | fixed clocks + placement: Compose | fixed clocks + placement: compose-rs |
+|---|---|---|---|---|---|---|
+| Janky frames, the app's; the compositor's (3 runs) | 0; 0 | 0; 3 | 0; 0 | 0; 0 | 0; 0 | 0; 0 |
+| Main thread p50 / p90 / p99 (ms) | 1.61 / 2.18 / 3.10 | 1.30 / 1.78 / 2.80 | 1.41 / 2.20 / 2.92 | 1.12 / 2.13 / 2.53 | 0.66 / 0.90 / 1.26 | 0.51 / 0.69 / 1.15 |
+| RenderThread p50 / p90 / p99 (ms) | 3.02 / 4.21 / 5.46 | 2.51 / 3.39 / 4.99 | 2.87 / 3.72 / 4.75 | 2.37 / 3.33 / 4.10 | 1.10 / 1.41 / 1.74 | 1.04 / 1.30 / 1.60 |
+| Work: main / RenderThread (ms) | 251 / 500 | 204 / 454 | 231 / 533 | 181 / 503 | 423 / 740 | 303 / 665 |
+| CPU time: main / RenderThread (s) | 2.08 / 3.81 | 1.70 / 3.20 | 1.74 / 3.17 | 1.37 / 2.59 | 0.74 / 1.38 | 0.52 / 1.28 |
+| Main thread on little / mid / big (ms) | 1,687 / 390 / 0 | 1,357 / 345 / 0 | 1,696 / 49 / 0 | 1,349 / 23 / 0 | 0 / 92 / 646 | 0 / 46 / 475 |
+| RenderThread on little / mid / big (ms) | 1,412 / 2,345 / 54 | 734 / 2,308 / 41 | 2,663 / 505 / 0 | 1,934 / 659 / 0 | 0 / 452 / 930 | 0 / 504 / 776 |
+| HWUI boost, time-weighted | 20 | 13 | 18 | 17 | 2 | 2 |
+
+Animated header, `recommended`:
+
+| | fixed clocks: Compose | fixed clocks: compose-rs | fixed clocks + placement: Compose | fixed clocks + placement: compose-rs |
+|---|---|---|---|---|
+| Janky frames, the app's; the compositor's (3 runs) | 0; 0 | 0; 0 | 0; 0 | 0; 0 |
+| Main thread p50 / p90 / p99 (ms) | 1.41 / 2.20 / 2.92 | 1.13 / 2.20 / 2.64 | 0.66 / 0.90 / 1.26 | 0.50 / 0.69 / 1.20 |
+| RenderThread p50 / p90 / p99 (ms) | 2.87 / 3.72 / 4.75 | 1.49 / 3.29 / 4.15 | 1.10 / 1.41 / 1.74 | 1.02 / 1.32 / 1.57 |
+| Work: main / RenderThread (ms) | 231 / 533 | 212 / 532 | 423 / 740 | 300 / 643 |
+| CPU time: main / RenderThread (s) | 1.74 / 3.17 | 1.41 / 2.43 | 0.74 / 1.38 | 0.52 / 1.26 |
+| Main thread on little / mid / big (ms) | 1,696 / 49 / 0 | 1,278 / 131 / 0 | 0 / 92 / 646 | 0 / 49 / 467 |
+| RenderThread on little / mid / big (ms) | 2,663 / 505 / 0 | 1,686 / 797 / 1 | 0 / 452 / 930 | 0 / 526 / 725 |
+| HWUI boost, time-weighted | 18 | 12 | 2 | 2 |
+
+- **(a) against round 15** (Android 16, dynamic): the same picture. compose-rs ahead on the main thread (the feed's p99 3.37 against 6.66 ms), behind on the scrolls' RenderThread median (2.62 against 2.21 ms; HWUI's boost 22 against 124, 94 % of compose-rs's frames unboosted against 46 %), ahead animating. Compose's feed scroll p50s moved by 5 and 6 % from round 15, compose-rs's by 2 to 6 %: drift.
+- **(b)**: locking the clocks made Compose's RenderThread faster at the median (2.21 → 1.57 ms: its mid and little cores now run at 1,328 and 1,197 MHz whatever the load, faster than they idled at) and compose-rs's barely (2.62 → 2.42 ms), as compose-rs's RenderThread moved to the little cores (3,033 of its 4,110 ms). Compose's main thread kept its p99 (6.80 ms), compose-rs's 3.09 ms. With `recommended`, compose-rs's own session moves its threads to the mid and big cores, and its RenderThread's median passes Compose's (1.41 ms).
+- **(c)**: both apps faster everywhere (on the big core, mostly), and compose-rs ahead at every percentile on both threads, its main thread's p99 under half Compose's on both scrolls (1.33 against 2.75 ms, 1.46 against 4.61 ms). No janky frame in either app on the scrolls and the header.
+- **Startup** (`TotalTime`, 15 cold starts): (a) the feed 115 against 139 ms, `big` 174 against 252 ms, the stress list 125 against 152 ms; at fixed clocks, slower for both (no launch boost above the locks): (b) 123 against 161, 214 against 324, 137 against 178 ms; (c) 124 against 164, 216 against 340, 139 against 179 ms.
+- **The stress screens** are in [15](15-android-stress-benchmark.md), "Round 16"; the navigation latency in [17](17-navigation-latency.md), "Android 17, at dynamic and fixed clocks".
+
+### Round 15, on Android 16
 
 **Round 15** is compose-rs at f120c63, after pausable composition (D590–D599), against Compose 1.12.1, measured two ways in one session (2026-10-25), every scenario in each:
 

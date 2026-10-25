@@ -92,6 +92,29 @@ From the tap's up, at the median: the doFrame starts after 4.0 ms in both; the m
 
 Both sets are within the runs' spread of parity (82.8 / 88.9 ms). None of their flags touches a first frame: `performance_hint`'s session reports each frame's CPU time after it, so the first long frame is what earns the boost, for the frames after; `draw_prefetched_ahead` and the prefetch flags work in lazy lists only; `single_drawing_fade` and the flush layer concern faded layers and dropped paths; `reuse_paragraph_at_same_layout_width` relayouts. With `all`, `paragraph_render_nodes` records each paragraph into a render node of its own, which shows as more drawing (framestats' draw 10.3 against 7.0 ms) and replay (7.6 against 6.2 ms).
 
+## Android 17, at dynamic and fixed clocks (round 16)
+
+[12](12-android-performance.md)'s round 16 (D640–D644): compose-rs at 701c791 against Compose 1.12.1 on Android 17, the navigation scenario in each of its three invocations, 3 traced and 15 untraced runs a subject (60 and 300 navigations), every run starting cool: (a) dynamic clocks at parity, (b) every CPU policy and the GPU locked (little 1,197, mid 1,328, big 1,745 MHz, GPU 521 MHz), compose-rs at parity and with `recommended`, (c) the same with the top-app group's utilization clamp at 512, which keeps both apps' main threads off the little cores.
+
+| p50 / p90 / max, ms | dynamic: Compose | dynamic: compose-rs | fixed clocks: Compose | fixed clocks: compose-rs | fixed clocks: compose-rs, recommended | fixed clocks + placement: Compose | fixed clocks + placement: compose-rs | fixed clocks + placement: compose-rs, recommended |
+|---|---|---|---|---|---|---|---|---|
+| Tap (up) to present | 102.0 / 112.4 / 123.6 | 83.1 / 90.7 / 113.8 | 92.6 / 103.2 / 108.5 | 91.5 / 98.2 / 168.3 | 90.8 / 100.4 / 159.5 | 93.5 / 99.1 / 120.3 | 58.7 / 61.8 / 66.6 | 58.8 / 62.2 / 67.8 |
+| doFrame (main thread) | 91.9 / 101.7 / 105.4 | 75.6 / 79.4 / 85.1 | 85.1 / 89.2 / 96.1 | 82.4 / 89.4 / 159.1 | 82.4 / 87.8 / 151.8 | 86.0 / 89.1 / 109.7 | 49.6 / 53.1 / 53.8 | 49.4 / 52.8 / 55.6 |
+| DrawFrames (RenderThread) | 5.6 / 8.7 / 41.6 | 4.0 / 5.0 / 28.9 | 5.8 / 8.9 / 12.0 | 4.0 / 5.4 / 6.3 | 4.2 / 5.6 / 7.7 | 3.9 / 5.1 / 7.1 | 3.9 / 5.0 / 6.1 | 3.9 / 4.9 / 7.0 |
+| Main thread work | 56.0 / 58.8 / 64.2 | 33.3 / 35.0 / 37.3 | 49.7 / 50.8 / 52.3 | 31.7 / 33.7 / 35.2 | 32.1 / 33.9 / 35.5 | 51.0 / 52.7 / 60.5 | 28.4 / 30.4 / 31.6 | 27.9 / 30.3 / 32.0 |
+| Untraced: vsync to frame completed (framestats, 300) | 83.7 / 97.4 / 105.8 | 70.6 / 77.1 / 89.2 | 76.5 / 80.5 / 107.1 | 76.3 / 87.0 / 149.8 | 76.2 / 85.4 / 141.4 | 77.2 / 80.2 / 105.3 | 45.3 / 48.6 / 54.0 | 45.6 / 49.3 / 53.4 |
+| Composition (p50) | 15.8 | 20.4 | 11.9 | 17.3 | 16.4 | 12.6 | 6.0 | 6.2 |
+| Layout, text apart (p50) | 10.0 | 2.9 | 9.2 | 3.6 | 3.6 | 9.6 | 2.2 | 2.2 |
+| Text layout (p50) | 44.9 | 40.8 | 40.3 | 51.3 | 52.0 | 40.3 | 31.4 | 31.2 |
+| Drawing and recording (p50) | 14.4 | 6.4 | 21.3 | 7.8 | 8.1 | 22.3 | 7.3 | 7.1 |
+| Main thread on little / mid / big (p50) | 0.0 / 53.4 / 34.8 | 0.0 / 47.7 / 15.6 | 0.0 / 0.0 / 82.9 | 11.6 / 46.6 / 19.5 | 11.2 / 46.6 / 19.9 | 0.0 / 0.1 / 84.9 | 0.0 / 0.0 / 47.4 | 0.0 / 0.0 / 46.7 |
+
+- **(a), what users get**: compose-rs's lead holds and grows on Android 17: 83.1 against 102.0 ms from the tap to the present at the median (−19 %; on Android 16, D604: 82.8 against 96.7 ms), 90.7 against 112.4 ms at p90. Its composition still takes longer in wall time (20.4 against 15.8 ms), but no longer on a little core: its heavy frame ran on the mid cores (47.7 ms) and the big one (15.6 ms), Compose's on the mid (53.4 ms) and big (34.8 ms) cores, which run Compose's longer frame at higher clocks.
+- **(b), frequency removed**: the two apps are level (91.5 against 92.6 ms at the median; compose-rs's p90 98.2 against 103.2 ms; its slowest frames, 2 of the 60 at parity and 5 with `recommended`, 139 to 168 ms, ran almost wholly on a little core). With every clock fixed, placement decides: Compose's main thread ran the heavy frame on the big core throughout (82.9 ms there), compose-rs's started on a little core (11.6 ms there) and ran mostly on the mid ones (46.6 ms). So its composition took 17.3 against 11.9 ms and its text layout 51.3 against 40.3 ms, on slower cores, for 36 % less main-thread work (31.7 against 49.7 ms).
+- **(c), frequency and placement removed**: compose-rs's heavy frame takes 37 % less from the tap to the present (58.7 against 93.5 ms; untraced, 45.3 against 77.2 ms), both main threads on the big core. **Its composition takes half Compose's** (6.0 against 12.6 ms), its layout outside text a quarter (2.2 against 9.6 ms), its text layout 22 % less (31.4 against 40.3 ms, the same Android text stack, with fewer calls around it), and its drawing and replay a third (7.3 against 22.3 ms). Composition's wall time at (a) and (b) was where the thread ran, not what it did.
+- **The hint session** changes nothing here in any condition (`recommended` within the runs' spread of parity): it reports after the frame.
+- **Jank**: every heavy frame is late in every condition (38 to 83 ms past its expected present at the median), but at (c) FrameTimeline names 42 of compose-rs's 60 "Non Animating" rather than "App Deadline Missed" (Android 17's type for a frame after the app was idle, tagged non-perceivable), so the scenario's janky count (18 against 60) undercounts compose-rs's late frames: the latency is the measure here, not the count.
+
 ## Where the time goes
 
 **Text dominates both.** About 240 paragraphs are laid out on the main thread in the frame, by Android's text stack in both apps: compose-rs's `TextMeasurer` through JNI (38 `StaticLayout`s, the single lines `BoringLayout`s, D330, whose `isBoring` with fallback line spacing measures each line's bounds: 795 `calculateBounds`, 5.2 ms, in the slowest frame), Compose's `TextStringSimpleNode` and `TextAnnotatedStringNode` (241 `StaticLayout`s). 39 against 43 ms: compose-rs is 9 % faster on the same text, on slower cores.
@@ -114,7 +137,7 @@ Recorded in [14](14-performance-opportunities.md), "Android: a new screen's firs
 
 - The composition's wall time misleads: compose-rs's is slower here for less work, because of where the scheduler put the thread, and the cause is the light input handling before it.
 - Neither optimization set moves the first frame; the hint session can only help the frames after.
-- compose-rs's accessibility tree went stale across the switch: `uiautomator dump` after the tap still listed the launcher's nodes ("Open screen 1"), on a screen showing the heavy one. compose-rs sends a semantics change only when an accessibility service is enabled at the frame (`ComposeRsView.frame`), and `uiautomator` connects only for its dump, so it likely read the tree cached before. A service that connects later reads stale nodes until the next change; not fixed here.
+- compose-rs's accessibility tree went stale across the switch: `uiautomator dump` after the tap still listed the launcher's nodes ("Open screen 1"), on a screen showing the heavy one. compose-rs sends a semantics change only when an accessibility service is enabled at the frame (`ComposeRsView.frame`), and `uiautomator` connects only for its dump, so it likely read the tree cached before. A service that connects later read stale nodes until the next change; fixed by D630, and checked on Android 17 (round 16): `uiautomator dump` after the tap lists the heavy screen's nodes and none of the launcher's, and after back the launcher's ("Open screen 2").
 
 ## Headless
 

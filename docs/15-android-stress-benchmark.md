@@ -169,6 +169,73 @@ Round 15 of [12](12-android-performance.md): compose-rs at f120c63, after pausab
 
 The RenderThread's boost is the higher of the active sessions' votes when each frame started: HWUI's alone at parity, HWUI's and compose-rs's own (D390) with `all` (the rounds' JSONs, `d390_boost`).
 
+### Round 16: Android 17, at dynamic and fixed clocks (D640–D644)
+
+[12](12-android-performance.md)'s round 16: compose-rs at 701c791 against Compose 1.12.1 on Android 17, (a) at dynamic clocks, (b) with every CPU policy and the GPU locked (little 1,197, mid 1,328, big 1,745 MHz, GPU 521 MHz), (c) with the top-app group's utilization clamp at 512 too, which keeps both apps' threads off the little cores; each against Compose, 3 traced runs a subject (startup: 15). [12](12-android-performance.md#round-16-android-17-at-dynamic-and-fixed-clocks-d640d644) has the protocol, the checks and the thermal record.
+
+Stress scroll, at parity:
+
+| | dynamic: Compose | dynamic: compose-rs | fixed clocks: Compose | fixed clocks: compose-rs | fixed clocks + placement: Compose | fixed clocks + placement: compose-rs |
+|---|---|---|---|---|---|---|
+| Janky frames, the app's; the compositor's (3 runs) | 2; 2 | 2; 0 | 4; 2 | 0; 1 | 0; 0 | 0; 0 |
+| Main thread p50 / p90 / p99 (ms) | 1.37 / 3.34 / 7.87 | 1.42 / 2.29 / 3.66 | 1.20 / 3.08 / 7.30 | 1.14 / 2.31 / 3.40 | 0.85 / 2.15 / 4.61 | 0.60 / 0.96 / 1.46 |
+| RenderThread p50 / p90 / p99 (ms) | 2.65 / 3.91 / 5.93 | 3.24 / 4.67 / 6.04 | 2.19 / 3.01 / 6.02 | 1.99 / 4.68 / 6.08 | 1.56 / 2.26 / 3.08 | 1.41 / 1.88 / 2.35 |
+| Work: main / RenderThread (ms) | 1,166 / 1,501 | 484 / 1,074 | 1,171 / 1,576 | 500 / 1,168 | 1,307 / 1,633 | 699 / 1,367 |
+| CPU time: main / RenderThread (s) | 4.17 / 5.07 | 3.32 / 5.96 | 3.35 / 4.26 | 2.83 / 4.67 | 2.33 / 3.09 | 1.23 / 2.58 |
+| Main thread on little / mid / big (ms) | 1,080 / 2,893 / 319 | 2,234 / 1,073 / 22 | 746 / 2,490 / 112 | 2,291 / 537 / 7 | 0 / 431 / 1,884 | 0 / 192 / 1,038 |
+| RenderThread on little / mid / big (ms) | 366 / 4,324 / 362 | 1,331 / 4,323 / 325 | 509 / 3,623 / 119 | 2,535 / 2,129 / 11 | 0 / 1,073 / 2,016 | 0 / 892 / 1,677 |
+| HWUI boost, time-weighted | 240 | 76 | 223 | 83 | 54 | 3 |
+
+Stress scroll, `recommended`:
+
+| | fixed clocks: Compose | fixed clocks: compose-rs | fixed clocks + placement: Compose | fixed clocks + placement: compose-rs |
+|---|---|---|---|---|
+| Janky frames, the app's; the compositor's (3 runs) | 4; 2 | 0; 0 | 0; 0 | 0; 0 |
+| Main thread p50 / p90 / p99 (ms) | 1.20 / 3.08 / 7.30 | 0.89 / 1.21 / 2.17 | 0.85 / 2.15 / 4.61 | 0.59 / 0.84 / 1.20 |
+| RenderThread p50 / p90 / p99 (ms) | 2.19 / 3.01 / 6.02 | 1.94 / 2.25 / 4.23 | 1.56 / 2.26 / 3.08 | 1.42 / 1.89 / 2.40 |
+| Work: main / RenderThread (ms) | 1,171 / 1,576 | 748 / 1,389 | 1,307 / 1,633 | 713 / 1,364 |
+| CPU time: main / RenderThread (s) | 3.35 / 4.26 | 1.79 / 3.40 | 2.33 / 3.09 | 1.25 / 2.59 |
+| Main thread on little / mid / big (ms) | 746 / 2,490 / 112 | 110 / 1,400 / 302 | 0 / 431 / 1,884 | 0 / 171 / 1,085 |
+| RenderThread on little / mid / big (ms) | 509 / 3,623 / 119 | 156 / 2,853 / 394 | 0 / 1,073 / 2,016 | 0 / 942 / 1,651 |
+| HWUI boost, time-weighted | 223 | 6 | 54 | 2 |
+
+- **The RenderThread**: behind at the median at dynamic clocks (3.24 against 2.65 ms; HWUI's boost 76 against 240, compose-rs's RenderThread 22 % of its time on the little cores against Compose's 7 %), at fixed clocks ahead at the median, behind at p90 (4.68 against 3.01 ms) and level at p99 (1.99 against 2.19 ms at the median; its RenderThread still ran 54 % of its time on the little cores, Compose's 12 %), and ahead at every percentile with placement fixed too (1.41 / 1.88 / 2.35 against 1.56 / 2.26 / 3.08 ms, each of its runs below each of Compose's at every percentile), for 16 % less work.
+- **The main thread** is ahead in every condition after the median, its p99 under half Compose's (1.46 against 4.61 ms at (c)); its work is 47 to 58 % less. Compose missed 2 to 4 deadlines in 3 runs at (a) and (b), compose-rs 2 at (a), none after.
+
+Stress animation, at parity:
+
+| | dynamic: Compose | dynamic: compose-rs | fixed clocks: Compose | fixed clocks: compose-rs | fixed clocks + placement: Compose | fixed clocks + placement: compose-rs |
+|---|---|---|---|---|---|---|
+| Janky frames, the app's; the compositor's (3 runs) | 0; 0 | 2; 0 | 1078; 463 | 771; 523 | 967; 574 | 668; 582 |
+| Main thread p50 / p90 / p99 (ms) | 3.92 / 5.97 / 8.40 | 2.15 / 4.17 / 6.96 | 11.40 / 13.59 / 14.97 | 11.35 / 13.09 / 14.35 | 11.01 / 12.69 / 14.87 | 10.84 / 12.27 / 13.54 |
+| RenderThread p50 / p90 / p99 (ms) | 7.46 / 9.37 / 11.42 | 7.37 / 8.67 / 11.50 | 11.78 / 13.91 / 15.32 | 11.38 / 13.12 / 14.39 | 11.38 / 13.09 / 15.30 | 10.91 / 12.45 / 13.64 |
+| Work: main / RenderThread (ms) | 2,919 / 5,800 | 1,510 / 5,444 | 1,951 / 3,904 | 1,117 / 3,989 | 2,019 / 4,030 | 1,112 / 4,073 |
+| CPU time: main / RenderThread (s) | 4.18 / 6.94 | 2.38 / 6.15 | 4.27 / 7.85 | 2.46 / 7.84 | 4.88 / 7.60 | 2.66 / 7.81 |
+| Main thread on little / mid / big (ms) | 1 / 3,800 / 395 | 0 / 2,306 / 76 | 0 / 3,030 / 1,245 | 0 / 1,757 / 700 | 0 / 4,478 / 410 | 0 / 2,394 / 269 |
+| RenderThread on little / mid / big (ms) | 1 / 2,346 / 4,538 | 0 / 1,311 / 4,915 | 0 / 3,911 / 3,943 | 0 / 3,560 / 4,344 | 0 / 2,521 / 5,065 | 0 / 2,904 / 4,908 |
+| HWUI boost, time-weighted | 720 | 639 | 722 | 722 | 722 | 722 |
+
+Stress animation, `recommended`:
+
+| | fixed clocks: Compose | fixed clocks: compose-rs | fixed clocks + placement: Compose | fixed clocks + placement: compose-rs |
+|---|---|---|---|---|
+| Janky frames, the app's; the compositor's (3 runs) | 1078; 463 | 2; 0 | 967; 574 | 0; 1 |
+| Main thread p50 / p90 / p99 (ms) | 11.40 / 13.59 / 14.97 | 3.47 / 4.68 / 6.04 | 11.01 / 12.69 / 14.87 | 2.68 / 3.29 / 4.31 |
+| RenderThread p50 / p90 / p99 (ms) | 11.78 / 13.91 / 15.32 | 8.06 / 8.73 / 9.54 | 11.38 / 13.09 / 15.30 | 7.62 / 8.17 / 8.99 |
+| Work: main / RenderThread (ms) | 1,951 / 3,904 | 1,477 / 2,973 | 2,019 / 4,030 | 1,441 / 2,992 |
+| CPU time: main / RenderThread (s) | 4.27 / 7.85 | 3.05 / 5.78 | 4.88 / 7.60 | 2.91 / 6.22 |
+| Main thread on little / mid / big (ms) | 0 / 3,030 / 1,245 | 2 / 1,702 / 1,389 | 0 / 4,478 / 410 | 1 / 1,509 / 1,405 |
+| RenderThread on little / mid / big (ms) | 0 / 3,911 / 3,943 | 42 / 2,227 / 3,479 | 0 / 2,521 / 5,065 | 3 / 3,849 / 2,364 |
+| HWUI boost, time-weighted | 722 | 538 | 722 | 441 |
+
+- **At dynamic clocks** both apps run near the deadline as in round 15 (RenderThread 7.37 against 7.46 ms at the median), compose-rs missed 2 deadlines in 3 runs, Compose none.
+- **At the locked clocks the stress animation doesn't fit a frame for either app**: about 11 ms of RenderThread a frame, mostly the GPU (locked at 521 MHz, where at dynamic clocks it ran up to 723 MHz in this animation), and 214 to 365 of the app's frames janky a run in both. compose-rs's are fewer (214 to 263 a run against 309 to 365) and its percentiles 1 to 11 % shorter, but this is an overloaded GPU for both, not a frame budget either meets; the GPU clock that the soak sustained (D640) is too low for this screen.
+- **With `recommended`** compose-rs fits again at the locked clocks (RenderThread 7.62 / 8.17 / 8.99 ms at (c), no janky frame of its own): `single_drawing_fade` draws its faded cells without offscreen layers (D521), a quarter less RenderThread work (2,992 against 4,073 ms). Here the hint session still matters with placement fixed: HWUI's heuristic boost reaches 722 for both apps, above the clamp, and compose-rs's own session votes too.
+
+### Round 15, on Android 16
+
+The sections below are round 15's (Android 16, dynamic clocks).
+
 ### At parity: stress scroll (10 flings, 3 runs)
 
 | | Kotlin Compose | compose-rs (round 14) |
