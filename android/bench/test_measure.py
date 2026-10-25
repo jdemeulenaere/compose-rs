@@ -267,6 +267,10 @@ class JankTest(unittest.TestCase):
         self.assertEqual(side("SurfaceFlinger Scheduling, App Deadline Missed"), "app")
         self.assertEqual(side("Unknown"), "other")
         self.assertEqual(side("Dropped Frame"), "other")
+        # Android 17's: a frame of an app not animating, which FrameTimeline tags "Non-perceivable
+        # Jank" (presented "Unspecified Present"): not jank, as buffer stuffing.
+        self.assertIsNone(side("Non Animating"))
+        self.assertEqual(side("Non Animating, App Deadline Missed"), "app")
 
     def test_run_line(self):
         trace = {
@@ -939,6 +943,7 @@ class NavigationTest(unittest.TestCase):
         for record in records:
             record["phases_ms"] = {"composition": 10.0, "layout": 20.0}
         records[1]["phases_ms"]["draw"] = 4.0
+        records[0]["render_cores_ms"] = {"mid": 4.0, "big": 1.0}
         heavy = measure.framestats_heavy_frame(measure.framestats_frames(FRAMESTATS))
         traced = [{"trace": {"navigations": records}, "framestats": [heavy, None]}]
         untraced = [{"framestats": [heavy, heavy]}]
@@ -949,6 +954,10 @@ class NavigationTest(unittest.TestCase):
         self.assertEqual(summary["phases_ms"]["draw"]["count"], 2)
         self.assertEqual(summary["phases_ms"]["draw"]["max"], 4.0)
         self.assertEqual(summary["inputs"], {"event_time": 0, "delivery": 2})
+        # The RenderThread's cores, of the navigations whose DrawFrames was found.
+        self.assertEqual(summary["render_cores_ms"]["mid"], {"count": 1, "p50": 4.0, "p90": 4.0,
+                                                             "max": 4.0})
+        self.assertEqual(summary["render_cores_ms"]["little"]["p50"], 0.0)
         self.assertEqual(summary["janky"], 1)
         self.assertEqual(summary["framestats_untraced"]["frame_ms"]["count"], 2)
         self.assertEqual(summary["framestats_all"]["frame_ms"]["count"], 3)
@@ -1065,6 +1074,169 @@ class SummarizeTest(unittest.TestCase):
         self.assertIn("thermal before: status 0, battery 31.0 °C, skin 33.0 °C; after: status 0, "
                       "battery 32.5 °C, skin 35.0 °C; waited 20 s", text)
         self.assertNotIn("scroll compose", text)
+
+
+class Android17Test(unittest.TestCase):
+    def test_the_trace_holds_the_power_hals_counters(self):
+        """Android 17's power HAL traces its ADPF counters (`adpf.<pid>-…-HWUI-…-min`, the
+        RenderThread's boost) under atrace's `power` category only."""
+        config = measure.TRACE_CONFIG.format(app="rs.compose.bench.rs", duration=1000,
+                                             buffer_kb=1024)
+        self.assertIn('atrace_categories: "power"', config)
+
+    def test_target_sdk(self):
+        output = ("Packages:\n  Package [rs.compose.bench.rs] (a1b2c3):\n    versionCode=1 "
+                  "minSdk=29 targetSdk=37\n    versionName=0.1\n")
+        self.assertEqual(measure.target_sdk(output), 37)
+        self.assertIsNone(measure.target_sdk("Unable to find package: x\n"))
+
+
+# lock_clocks.sh's state file, after `lock`.
+LOCK_STATE = """\
+# lock_clocks.sh originals: name min max
+original:policy0 324000 1704000
+original:policy4 402000 2367000
+original:policy8 500000 2914000
+original:gpu 150000 890000
+original:mif 546000 3744000
+locked:policy0 1425000
+touched:policy0
+locked:policy4 1572000
+touched:policy4
+locked:policy8 1745000
+touched:policy8
+locked:gpu 521000
+touched:gpu
+"""
+
+# `read_clocks`' shell output on a Pixel 8 Pro, locked.
+CLOCKS_OUTPUT = """\
+policy0 1425000 1425000 1425000 0 1 2 3
+policy4 1572000 1572000 1572000 4 5 6 7
+policy8 1745000 1745000 1745000 8
+gpu 521000 521000 521000
+## dsu
+ 1800000     100
+  610000     2000
+## mif
+ 845000     300
+ 1352000     40
+"""
+
+
+class LockedClocksTest(unittest.TestCase):
+    def test_the_lock_state(self):
+        self.assertEqual(measure.locked_clocks(LOCK_STATE),
+                         {"policy0": 1425000, "policy4": 1572000, "policy8": 1745000,
+                          "gpu": 521000})
+        with self.assertRaises(SystemExit):
+            measure.locked_clocks("original:policy0 324000 1704000\n")
+
+    def test_the_read_back(self):
+        clocks = measure.parse_clocks(CLOCKS_OUTPUT)
+        self.assertEqual(clocks["policy4"], {"min": 1572000, "max": 1572000, "cur": 1572000,
+                                             "cpus": [4, 5, 6, 7]})
+        self.assertEqual(clocks["gpu"], {"min": 521000, "max": 521000, "cur": 521000})
+        self.assertEqual(clocks["residency"], {"dsu": {1800000: 100, 610000: 2000},
+                                               "mif": {845000: 300, 1352000: 40}})
+        expected = measure.locked_clocks(LOCK_STATE)
+        self.assertEqual(measure.clocks_moved(expected, clocks), [])
+
+    def test_a_moved_clock_is_said(self):
+        expected = measure.locked_clocks(LOCK_STATE)
+        moved = measure.parse_clocks(CLOCKS_OUTPUT.replace(
+            "policy8 1745000 1745000 1745000", "policy8 1745000 2914000 2914000"))
+        self.assertEqual(measure.clocks_moved(expected, moved),
+                         ["policy8: min 1745000, max 2914000, now 2914000 (locked at 1745000)"])
+        # A CPU capped below its lock (the thermal HAL's own request) is said too.
+        capped = measure.parse_clocks(CLOCKS_OUTPUT.replace(
+            "policy0 1425000 1425000 1425000", "policy0 1425000 1425000 1197000"))
+        self.assertEqual(measure.clocks_moved(expected, capped),
+                         ["policy0: min 1425000, max 1425000, now 1197000 (locked at 1425000)"])
+        # The GPU's current clock isn't checked: it reads its lowest step when powered off.
+        idle = measure.parse_clocks(CLOCKS_OUTPUT.replace("gpu 521000 521000 521000",
+                                                          "gpu 521000 521000 150000"))
+        self.assertEqual(measure.clocks_moved(expected, idle), [])
+        self.assertEqual(measure.clocks_moved(expected, measure.parse_clocks("")),
+                         ["policy0: not read", "policy4: not read", "policy8: not read",
+                          "gpu: not read"])
+
+    def test_check_clocks_stops_the_run_when_they_moved(self):
+        original_read, original_locked = measure.read_clocks, dict(measure.LOCKED)
+        try:
+            measure.LOCKED.update(expected=measure.locked_clocks(LOCK_STATE))
+            measure.read_clocks = lambda: measure.parse_clocks(CLOCKS_OUTPUT)
+            self.assertEqual(measure.check_clocks("scroll rs 0")["policy0"]["cur"], 1425000)
+            measure.read_clocks = lambda: measure.parse_clocks(CLOCKS_OUTPUT.replace(
+                "gpu 521000 521000", "gpu 150000 890000"))
+            with self.assertRaises(measure.ClocksMoved):
+                measure.check_clocks("scroll rs 0")
+            # Unlocked (no --locked-clocks), nothing is read.
+            measure.LOCKED.update(expected=None)
+            measure.read_clocks = lambda: self.fail("read")
+            self.assertIsNone(measure.check_clocks("scroll rs 0"))
+        finally:
+            measure.read_clocks = original_read
+            measure.LOCKED.clear()
+            measure.LOCKED.update(original_locked)
+
+    def test_residency_between_two_reads(self):
+        before = {"dsu": {610000: 2000, 1800000: 100}, "mif": {845000: 300}}
+        after = {"dsu": {610000: 2600, 1800000: 100, 970000: 200}, "mif": {845000: 1300}}
+        self.assertEqual(measure.residency_delta(before, after),
+                         {"dsu": {"ms": {610000: 600, 970000: 200}, "mean_mhz": 700.0},
+                          "mif": {"ms": {845000: 1000}, "mean_mhz": 845.0}})
+
+    def test_the_traces_frequencies_must_be_the_locked_ones(self):
+        expected = measure.locked_clocks(LOCK_STATE)
+        cpus = {"policy0": [0, 1, 2, 3], "policy4": [4, 5, 6, 7], "policy8": [8]}
+        self.assertEqual(measure.trace_clocks_moved(
+            expected, cpus, [(0, 1425000, 1425000), (8, 1745000, 1745000)],
+            [(1, 0, 521000)]), [])
+        self.assertEqual(measure.trace_clocks_moved(
+            expected, cpus, [(4, 1572000, 2367000)], [(1, 0, 890000), (0, 0, 900000)]),
+            ["cpu 4 at 1572000 to 2367000 in the trace (locked at 1572000)",
+             "the GPU at 0 to 890000 in the trace (locked at 521000)"])
+
+    def test_work_at_fixed_clocks(self):
+        """With no frequency events in the trace (the clocks don't change), each core's running
+        time is scaled by its locked frequency and capacity."""
+        capacities = BoostTest.PIXEL_8_PRO
+        fixed = measure.fixed_frequencies({"policy0": 1425000, "policy8": 1745000},
+                                          {"policy0": [0, 1, 2, 3], "policy8": [8]})
+        self.assertEqual(fixed, {0: 1425000, 1: 1425000, 2: 1425000, 3: 1425000, 8: 1745000})
+        running = {"main": {0: 10_000_000, 8: 2_000_000}, "render": {8: 4_000_000}}
+        work = measure.fixed_work_ms(running, capacities, fixed)
+        self.assertAlmostEqual(work["main"], 10 * 1425000 / 1704000 * 255 / 1024
+                               + 2 * 1745000 / 2914000, places=6)
+        self.assertAlmostEqual(work["render"], 4 * 1745000 / 2914000, places=6)
+        # A core without a locked frequency can't be scaled: no work rather than a wrong one.
+        self.assertIsNone(measure.fixed_work_ms({"main": {4: 1}}, capacities, fixed))
+
+    def test_each_threads_time_by_cluster(self):
+        capacities = BoostTest.PIXEL_8_PRO
+        running = {"main": {0: 6_000_000, 5: 3_000_000, 8: 1_000_000}, "render": {4: 2_000_000}}
+        self.assertEqual(measure.cluster_ms(running, capacities),
+                         {"main": {"little": 6.0, "mid": 3.0, "big": 1.0},
+                          "render": {"little": 0.0, "mid": 2.0, "big": 0.0}})
+
+    def test_summarize_prints_the_clusters(self):
+        traces = [{"cluster_ms": {"main": {"little": 10.0, "mid": 5.0, "big": 1.0},
+                                  "render": {"little": 2.0, "mid": 8.0, "big": 0.0}}},
+                  {"cluster_ms": {"main": {"little": 20.0, "mid": 7.0, "big": 3.0},
+                                  "render": {"little": 4.0, "mid": 6.0, "big": 0.0}}},
+                  {}]
+        self.assertEqual(summarize.cluster_summary(traces),
+                         "main little 15 mid 6 big 2 ms | render little 3 mid 7 big 0 ms")
+        self.assertIsNone(summarize.cluster_summary([{}]))
+
+    def test_the_parser_takes_locked_clocks(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = os.path.join(directory, "clocks.state")
+            with open(state, "w") as file:
+                file.write(LOCK_STATE)
+            self.assertEqual(measure.load_locked_clocks(state)["policy8"], 1745000)
+            self.assertIsNone(measure.load_locked_clocks(None))
 
 
 if __name__ == "__main__":

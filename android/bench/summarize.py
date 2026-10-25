@@ -75,6 +75,18 @@ def boost_summary(traces):
     return line
 
 
+def cluster_summary(traces):
+    """The runs' medians of each thread's running time on the little, mid and big cores
+    (`cluster_ms`, reports since D640), or None."""
+    clusters = [trace["cluster_ms"] for trace in traces if trace.get("cluster_ms")]
+    if not clusters:
+        return None
+    return " | ".join(
+        f"{thread} " + " ".join(f"{kind} {med([c[thread][kind] for c in clusters]):.0f}"
+                                for kind in ("little", "mid", "big")) + " ms"
+        for thread in ("main", "render"))
+
+
 def slowest_line(trace, thread):
     """A traced run's slowest frame on `thread` ("main" or "render", reports since docs/15 have
     them) with its three longest slices inside, or None."""
@@ -99,6 +111,9 @@ def frames_summary(r, scenario):
         boost = boost_summary(t)
         if boost:
             print(f"  {scenario} {app} render boost (medians): {boost}")
+        clusters = cluster_summary(t)
+        if clusters:
+            print(f"  {scenario} {app} running by cluster (medians): {clusters}")
         for index, trace in enumerate(t):
             for line in (run_line(trace), boost_line(trace), slowest_line(trace, "main"),
                          slowest_line(trace, "render"), thermal_line(runs[index])):

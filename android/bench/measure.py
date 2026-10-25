@@ -3,7 +3,7 @@
 connected device, interleaving the two apps run by run, and writes a JSON report.
 
     measure.py --trace-processor PATH --out DIR [--runs N] [--compile MODE] [--allow-stale]
-               [--scenarios NAME,NAME,...]
+               [--scenarios NAME,NAME,...] [--locked-clocks STATE]
                [--optimizations parity|recommended|all|each|NAME,... | --subject [NAME=]LIST ...]
                [--traced-runs N] [--battery-limit CELSIUS] [--thermal-wait-limit SECONDS]
                [--navigations N]
@@ -92,6 +92,22 @@ heats the device fast: its `each` runs want --battery-limit 34 --skin-limit 35
 --thermal-wait-limit 0, and --rotate to vary which subject runs last (D574). Each traced run
 records the state before and after it (`"thermal"`), the startup rounds and first frames in the
 report's `"thermal"`; the report records each subject's bits (`"optimizations"`, `"bits"`).
+
+Locked clocks (D640): with --locked-clocks STATE (the state file of `lock_clocks.sh lock STATE`,
+which locks each CPU policy's and the GPU's clock on a rooted device), each run and startup
+round reads the clocks back before and after it, each traced first frame before it (each lock's
+limits, and each CPU's current clock: a thermal cap shows there), and each trace's frequency
+events must be the locked ones; if one moved, the run stops and the report keeps what ran before (`"moved"`). The
+report records the locks and each run's readings (`"clocks_before"`, `"clocks_after"`), and the
+DSU's, MIF's and BCI's time at each frequency during it (`"devfreq_residency"`): the power HAL
+moves those at every launch and load reset, so they aren't locked. At locked clocks the traces
+hold no frequency event, so "work" scales each core's running time by its locked frequency.
+Every traced run reports each thread's running time on the little, mid and big cores
+(`"cluster_ms"`), which locked clocks don't equalize: the scheduler and the hint sessions'
+uclamp still place threads.
+
+The traces include atrace's `power` category: Android 17's power HAL traces its ADPF counters
+(the RenderThread's boost) there.
 
 Before each run, our other apps (`rs.compose.*`) are force-stopped (D343).
 """
@@ -435,11 +451,15 @@ data_sources {{ config {{ name: "linux.ftrace" ftrace_config {{
     atrace_categories: "am"
     atrace_categories: "wm"
     atrace_categories: "dalvik"
+    atrace_categories: "power"
     atrace_apps: "{app}"
 }} }} }}
 duration_ms: {duration}
 """
 
+
+# Android 17's power HAL traces its ADPF counters (each hint session's boost: `adpf.<pid>-…-min`,
+# `boost_stats`) under atrace's `power` category only; Android 16's traced them with `gfx`.
 
 # The trace buffer: enough for the feed's scenarios. The stress screens' traces hold several
 # times more (HWUI traces each of its operations: 140 cells' layers each frame), and a ring
@@ -676,8 +696,10 @@ def jank_side(jank_type):
     """Whose a frame's jank is: "app" (the app missed its deadline), "compositor" (SurfaceFlinger
     or the display: its deadlines, its predictions, its scheduling), "other" (unknown, dropped),
     or None for no jank. Buffer stuffing alone (the app's frames queued ahead, presented late
-    but on cadence) isn't counted as jank, as before."""
-    kinds = {kind.strip() for kind in jank_type.split(",")} - {"None", "Buffer Stuffing", ""}
+    but on cadence) isn't counted as jank, as before, nor Android 17's "Non Animating" (a frame
+    of an app not animating, which FrameTimeline tags "Non-perceivable Jank")."""
+    kinds = ({kind.strip() for kind in jank_type.split(",")}
+             - {"None", "Buffer Stuffing", "Non Animating", ""})
     if not kinds:
         return None
     if kinds & APP_JANK:
@@ -769,6 +791,13 @@ def frame_stats(trace_processor, trace, package, capacities=None, since=0):
 
     main = durations("t.tid = p.pid", "s.name LIKE 'Choreographer#doFrame%'")
     render = durations("t.name = 'RenderThread'", "s.name LIKE 'DrawFrame%'")
+    running = thread_running(trace_processor, trace, package, since)
+    trace_clocks = check_trace_clocks(trace_processor, trace, f"{package}'s trace {trace}")
+    if LOCKED["expected"] is not None:
+        work = fixed_work_ms(running, capacities,
+                             fixed_frequencies(LOCKED["expected"], LOCKED["cpus"]))
+    else:
+        work = work_ms(trace_processor, trace, package, capacities, since)
     # CPU time of the main thread and RenderThread while traced.
     cpu = query(
         trace_processor,
@@ -848,7 +877,11 @@ def frame_stats(trace_processor, trace, package, capacities=None, since=0):
             "p99": percentile(render, 0.99),
         },
         "cpu_ms": cpu_ms,
-        "work_ms": work_ms(trace_processor, trace, package, capacities, since),
+        "work_ms": work,
+        # Each thread's running time on the little, mid and big cores: where it ran, which
+        # locked clocks don't equalize (the scheduler and uclamp place threads).
+        "cluster_ms": cluster_ms(running, capacities),
+        "locked_clocks": trace_clocks,
         "render_boost": boost_stats(trace_processor, trace, package, capacities, since),
         "slowest_frames": slowest_frames(trace_processor, trace, package, since),
     }
@@ -1100,10 +1133,238 @@ def wait_until_cool(what, read=thermal_state, sleep=time.sleep, battery_limit_c=
 
 def cool_down(what):
     """Our apps stopped (the last run's would go on animating, heating the device while it
-    waits), then `wait_until_cool`."""
+    waits), then `wait_until_cool`; with --locked-clocks, the clocks checked (`check_clocks`)
+    and the devfreqs' residency noted, for `finish_thermal`."""
     for package in APPS.values():
         stop(package)
-    return wait_until_cool(what)
+    thermal = wait_until_cool(what)
+    clocks = check_clocks(what)
+    if clocks is not None:
+        thermal["what"] = what
+        thermal["clocks_before"] = {name: value for name, value in clocks.items()
+                                    if name != "residency"}
+        thermal["residency_before"] = clocks["residency"]
+    return thermal
+
+
+# ---- Locked clocks (lock_clocks.sh, D640) ---------------------------------------------------------
+
+# With --locked-clocks: the frequency (kHz) each locked target holds (`policy0`, …, `gpu`), and
+# each CPU policy's CPUs, read at the start.
+LOCKED = {"expected": None, "cpus": {}}
+
+
+class ClocksMoved(Exception):
+    """A locked clock read back other than its lock: the run measured something else."""
+
+
+def locked_clocks(state):
+    """The frequencies lock_clocks.sh locked (its STATE file's `locked:<name> <kHz>` lines)."""
+    locked = {}
+    for line in state.splitlines():
+        if line.startswith("locked:"):
+            name, khz = line[len("locked:"):].split()
+            locked[name] = int(khz)
+    if not locked:
+        raise SystemExit("--locked-clocks: the state file holds no locked clock "
+                         "(lock_clocks.sh lock STATE first)")
+    return locked
+
+
+def load_locked_clocks(path):
+    """`locked_clocks` of the file at `path`, or None without one."""
+    if path is None:
+        return None
+    with open(path) as file:
+        return locked_clocks(file.read())
+
+
+# Each CPU policy's limits, current clock and CPUs; the GPU's (Mali); the DSU's, MIF's and BCI's
+# time in each frequency (ms), which the power HAL moves itself and the lock leaves alone.
+CLOCKS_COMMAND = (
+    "for p in /sys/devices/system/cpu/cpufreq/policy*; do echo ${p##*/} "
+    "$(cat $p/scaling_min_freq) $(cat $p/scaling_max_freq) $(cat $p/scaling_cur_freq) "
+    "$(cat $p/related_cpus); done; "
+    "for d in /sys/devices/platform/*.mali; do [ -e $d/scaling_max_freq ] && echo gpu "
+    "$(cat $d/scaling_min_freq) $(cat $d/scaling_max_freq) $(cat $d/cur_freq); done; "
+    "for d in /sys/class/devfreq/*; do n=${d##*devfreq_}; case $n in dsu|mif|bci) "
+    "echo \"## $n\"; cat $d/time_in_state;; esac; done")
+
+
+def parse_clocks(output):
+    """`CLOCKS_COMMAND`'s output: each policy's and the GPU's {"min", "max", "cur"} (kHz; a
+    policy's "cpus" too), and "residency": each devfreq's ms by kHz."""
+    clocks = {"residency": {}}
+    devfreq = None
+    for line in output.splitlines():
+        parts = line.split()
+        if line.startswith("## ") and len(parts) == 2:
+            devfreq = parts[1]
+            clocks["residency"][devfreq] = {}
+        elif devfreq and len(parts) == 2 and all(part.isdigit() for part in parts):
+            clocks["residency"][devfreq][int(parts[0])] = int(parts[1])
+        elif len(parts) >= 4 and (parts[0].startswith("policy") or parts[0] == "gpu") \
+                and all(part.isdigit() for part in parts[1:]):
+            devfreq = None
+            clocks[parts[0]] = {"min": int(parts[1]), "max": int(parts[2]), "cur": int(parts[3])}
+            if parts[0].startswith("policy"):
+                clocks[parts[0]]["cpus"] = [int(cpu) for cpu in parts[4:]]
+    return clocks
+
+
+def read_clocks():
+    return parse_clocks(shell(CLOCKS_COMMAND))
+
+
+def clocks_moved(expected, clocks):
+    """What of `expected` (`locked_clocks`) `clocks` (`parse_clocks`) doesn't hold: a limit
+    other than its lock, or a CPU running at another clock (a thermal cap). The GPU's current
+    clock isn't checked: it reads its lowest step when powered off."""
+    moved = []
+    for name, khz in expected.items():
+        clock = clocks.get(name)
+        if clock is None:
+            moved.append(f"{name}: not read")
+        elif clock["min"] != khz or clock["max"] != khz or (
+                name.startswith("policy") and clock["cur"] != khz):
+            moved.append(f"{name}: min {clock['min']}, max {clock['max']}, now {clock['cur']} "
+                         f"(locked at {khz})")
+    return moved
+
+
+def check_clocks(what):
+    """With --locked-clocks, the clocks read back (`read_clocks`), raising ClocksMoved if a lock
+    doesn't hold; None without."""
+    if LOCKED["expected"] is None:
+        return None
+    clocks = read_clocks()
+    moved = clocks_moved(LOCKED["expected"], clocks)
+    if moved:
+        raise ClocksMoved(f"{what}: the locked clocks moved: {'; '.join(moved)}")
+    return clocks
+
+
+def residency_delta(before, after):
+    """Each devfreq's time (ms) by kHz between two `parse_clocks` residencies, and its mean."""
+    out = {}
+    for name, times in after.items():
+        spent = {khz: ms - before.get(name, {}).get(khz, 0) for khz, ms in times.items()}
+        spent = {khz: ms for khz, ms in spent.items() if ms > 0}
+        total = sum(spent.values())
+        out[name] = {"ms": spent,
+                     "mean_mhz": round(sum(khz * ms for khz, ms in spent.items()) / total / 1000, 1)
+                     if total else None}
+    return out
+
+
+def trace_clocks_moved(expected, cpus, cpu_rows, gpu_rows):
+    """What a trace's frequency events say moved: `cpu_rows` (cpu, min, max kHz) of its
+    `cpufreq` counters, `gpu_rows` (gpu id, min, max) of its `gpufreq` ones (0: powered off;
+    the highest id is the clock lock_clocks.sh sets: Mali's shaders)."""
+    locked_cpu = {cpu: expected[name] for name, listed in cpus.items() if name in expected
+                  for cpu in listed}
+    moved = []
+    for cpu, low, high in cpu_rows:
+        if cpu in locked_cpu and (low != locked_cpu[cpu] or high != locked_cpu[cpu]):
+            moved.append(f"cpu {cpu} at {low} to {high} in the trace "
+                         f"(locked at {locked_cpu[cpu]})")
+    if "gpu" in expected and gpu_rows:
+        gpu, low, high = max(gpu_rows)
+        if {low, high} - {0, expected["gpu"]}:
+            moved.append(f"the GPU at {low} to {high} in the trace (locked at {expected['gpu']})")
+    return moved
+
+
+def fixed_frequencies(expected, cpus):
+    """Each locked CPU's frequency (kHz), by CPU."""
+    return {cpu: expected[name] for name, listed in cpus.items() if name in expected
+            for cpu in listed}
+
+
+def fixed_work_ms(running, capacities, fixed):
+    """`work_ms`'s metric at locked clocks, whose traces hold no frequency event (the clocks
+    don't change): `running` (thread: {cpu: ns}) scaled by each core's locked frequency and
+    capacity. None if a core ran without a locked frequency."""
+    work = {}
+    for thread, by_cpu in running.items():
+        total = 0.0
+        for cpu, ns in by_cpu.items():
+            if cpu not in fixed or cpu not in capacities:
+                return None
+            capacity, max_freq = capacities[cpu]
+            total += ns * fixed[cpu] / max_freq * capacity / 1024
+        work[thread] = total / 1e6
+    return work
+
+
+def cluster_ms(running, capacities):
+    """Each thread's running time (ms) on the little, mid and big cores (`core_kind`)."""
+    out = {}
+    for thread, by_cpu in running.items():
+        kinds = {"little": 0.0, "mid": 0.0, "big": 0.0}
+        for cpu, ns in by_cpu.items():
+            kind = core_kind(cpu, capacities)
+            kinds[kind] = kinds.get(kind, 0.0) + ns / 1e6
+        out[thread] = {kind: round(ms, 3) for kind, ms in kinds.items()}
+    return out
+
+
+def thread_running(trace_processor, trace, package, since=0):
+    """The main thread's and RenderThread's running time (ns) by CPU, from `since` on."""
+    rows = query(trace_processor, trace, f"""
+        SELECT CASE WHEN t.name = 'RenderThread' THEN 'render' ELSE 'main' END AS thread,
+               s.cpu AS cpu, SUM(s.dur) AS running
+        FROM sched s JOIN thread t USING (utid) JOIN process p USING (upid)
+        WHERE p.name = '{package}' AND s.dur > 0 AND s.ts >= {since}
+          AND (t.tid = p.pid OR t.name = 'RenderThread')
+        GROUP BY thread, s.cpu
+        """)
+    running = {"main": {}, "render": {}}
+    for row in rows:
+        if row.get("cpu", "").isdigit() and row.get("running", "").isdigit():
+            running[row["thread"]][int(row["cpu"])] = int(row["running"])
+    return running
+
+
+def check_trace_clocks(trace_processor, trace, what):
+    """With --locked-clocks, raises ClocksMoved if the trace's frequency events left the locks;
+    returns what they held (None without)."""
+    if LOCKED["expected"] is None:
+        return None
+    cpu_rows = [(int(r["cpu"]), int(float(r["low"])), int(float(r["high"]))) for r in query(
+        trace_processor, trace, """
+        SELECT t.cpu AS cpu, MIN(c.value) AS low, MAX(c.value) AS high FROM counter c
+        JOIN cpu_counter_track t ON c.track_id = t.id WHERE t.name = 'cpufreq' GROUP BY t.cpu
+        """) if r.get("cpu", "").isdigit()]
+    gpu_rows = [(int(r["gpu"]), int(float(r["low"])), int(float(r["high"]))) for r in query(
+        trace_processor, trace, """
+        SELECT t.gpu_id AS gpu, MIN(c.value) AS low, MAX(c.value) AS high FROM counter c
+        JOIN gpu_counter_track t ON c.track_id = t.id WHERE t.name = 'gpufreq'
+        GROUP BY t.gpu_id
+        """) if r.get("gpu", "").isdigit()]
+    moved = trace_clocks_moved(LOCKED["expected"], LOCKED["cpus"], cpu_rows, gpu_rows)
+    if moved:
+        raise ClocksMoved(f"{what}: {'; '.join(moved)}")
+    return {"cpu": cpu_rows, "gpu": gpu_rows}
+
+
+def finish_thermal(thermal):
+    """A run's thermal record completed after it: the state after, and with --locked-clocks the
+    clocks read back (raising ClocksMoved if they moved) and the devfreqs' residency during it."""
+    thermal["after"] = thermal_state()
+    clocks = check_clocks(thermal.get("what", "a run"))
+    if clocks is not None:
+        thermal["clocks_after"] = {name: value for name, value in clocks.items()
+                                   if name != "residency"}
+        before = thermal.pop("residency_before", {})
+        thermal["devfreq_residency"] = residency_delta(before, clocks["residency"])
+    return thermal
+
+
+def target_sdk(output):
+    """An app's targetSdk from `dumpsys package <name>`, or None."""
+    match = re.search(r"\btargetSdk=(\d+)", output)
+    return int(match.group(1)) if match else None
 
 
 # The scenarios, in the order they run (docs/12, docs/15).
@@ -1215,8 +1476,7 @@ def scroll_run(trace_processor, out_dir, package, name, run, capacities, screen=
     since = measured_since(input_timestamps(trace_processor, trace, package))
     stats = {"gfxinfo": gfxinfo(package),
              "trace": frame_stats(trace_processor, trace, package, capacities, since)}
-    thermal["after"] = thermal_state()
-    stats["thermal"] = thermal
+    stats["thermal"] = finish_thermal(thermal)
     return after_start, stats
 
 
@@ -1230,8 +1490,7 @@ def startup_scenario(tp, out_dir, runs, screens, subjects, thermal_log):
         for screen in screens:
             for name, package, optimizations in subjects:
                 startup[name][screen].append(cold_start(package, screen, optimizations))
-        thermal["after"] = thermal_state()
-        thermal_log.append({"screens": list(screens), "round": run, **thermal})
+        thermal_log.append({"screens": list(screens), "round": run, **finish_thermal(thermal)})
     startup_ms = {
         name: {screen: {"runs": times, "median": statistics.median(times), "min": min(times),
                         "max": max(times)} for screen, times in by_screen.items()}
@@ -1302,8 +1561,7 @@ def animation_scenario(tp, out_dir, capacities, screen, prefix, subjects, runs=3
                                           "after_animation": meminfo(package)}
                     stats["gpu_caches_mb"] = {"after_start": gpu_before,
                                               "after_animation": gpu_caches(package)}
-                thermal["after"] = thermal_state()
-                stats["thermal"] = thermal
+                stats["thermal"] = finish_thermal(thermal)
                 return stats
             stats = traced(animation_run, f"{prefix} {name} {run}")
             animation[name].append(stats)
@@ -1636,13 +1894,19 @@ def navigation_trace(trace_processor, trace, package, capacities):
         "SELECT snapshot_id, clock_name, clock_value FROM clock_snapshot"))
     records = navigation_records(markers, frames, inputs, render_frames, gpu_waits, timeline,
                                  expected, offset)
-    # Each CPU's frequencies, for the frames' work.
+    # Each CPU's frequencies, for the frames' work: the locked ones at locked clocks, whose
+    # traces hold no frequency event.
     frequencies = {}
-    for r in rows("""INCLUDE PERFETTO MODULE linux.cpu.frequency;
-                     SELECT ts, dur, cpu, freq FROM cpu_frequency_counters WHERE dur > 0"""):
-        if all(r.get(key, "").isdigit() for key in ("ts", "dur", "cpu")):
-            frequencies.setdefault(int(r["cpu"]), []).append(
-                (int(r["ts"]), int(r["dur"]), float(r["freq"])))
+    locked = check_trace_clocks(trace_processor, trace, f"{package}'s trace {trace}")
+    if locked is not None:
+        frequencies = {cpu: [(0, 2**62, float(khz))] for cpu, khz in fixed_frequencies(
+            LOCKED["expected"], LOCKED["cpus"]).items()}
+    else:
+        for r in rows("""INCLUDE PERFETTO MODULE linux.cpu.frequency;
+                         SELECT ts, dur, cpu, freq FROM cpu_frequency_counters WHERE dur > 0"""):
+            if all(r.get(key, "").isdigit() for key in ("ts", "dur", "cpu")):
+                frequencies.setdefault(int(r["cpu"]), []).append(
+                    (int(r["ts"]), int(r["dur"]), float(r["freq"])))
     for record in records:
         _, frame_ts, frame_dur, _ = next(f for f in frames if f[0] == record["frame_id"])
         end = frame_ts + frame_dur
@@ -1684,7 +1948,7 @@ def navigation_trace(trace_processor, trace, package, capacities):
                 1 for vsync, (ts, _, jank, _) in timeline.items()
                 if vsync != record["vsync_id"] and record["input_ts"] <= ts <= until
                 and jank_side(jank))
-    return {"markers": len(markers), "navigations": records,
+    return {"markers": len(markers), "navigations": records, "locked_clocks": locked,
             # As the other traced runs' (`traced`): a trace with none is run again.
             "frames": len(records)}
 
@@ -1723,6 +1987,9 @@ def navigation_summary(traced_runs, untraced_runs):
         "main_cores_ms": {kind: distribution([record.get("main_cores_ms", {}).get(kind, 0.0)
                                               for record in records])
                           for kind in ("little", "mid", "big")},
+        "render_cores_ms": {kind: distribution([record.get("render_cores_ms", {}).get(kind, 0.0)
+                                                for record in records if "render_cores_ms" in record])
+                            for kind in ("little", "mid", "big")},
         "inputs": {kind: sum(record["input"] == kind for record in records)
                    for kind in ("event_time", "delivery")},
         "janky": sum(1 for record in records if jank_side(record.get("jank_type") or "None")),
@@ -1774,8 +2041,7 @@ def navigation_run(trace_processor, out_dir, package, name, run, capacities, cen
         if stats["trace"]["frames"] < navigations:
             print(f"navigation {name} {run}: {stats['trace']['frames']} of {navigations} "
                   f"navigations found in the trace ({stats['trace']['markers']} markers)")
-    thermal["after"] = thermal_state()
-    stats["thermal"] = thermal
+    stats["thermal"] = finish_thermal(thermal)
     return stats
 
 
@@ -1865,6 +2131,9 @@ def main(argv=None):
     parser.add_argument("--each-only", default=None,
                         help="with --optimizations each: only these optimizations, "
                              "comma-separated")
+    parser.add_argument("--locked-clocks", default=None, metavar="STATE",
+                        help="lock_clocks.sh's state file: check before and after each run, "
+                             "and in each trace, that the locked clocks hold (see above)")
     arguments = parser.parse_args(argv)
     scenarios = parse_scenarios(arguments.scenarios)
     with open(OPTIMIZATIONS_SOURCE) as file:
@@ -1891,6 +2160,19 @@ def main(argv=None):
               # cores' share are computed from.
               "cpu_capacities": {str(cpu): list(value) for cpu, value in capacities.items()}}
     report["apks"] = check_apks(arguments.out, report["abi"], arguments.allow_stale)
+    report["target_sdk"] = {name: target_sdk(shell(f"dumpsys package {package}"))
+                            for name, package in APPS.items()}
+    if len(set(report["target_sdk"].values())) > 1:
+        print(f"warning: the apps target different SDKs: {report['target_sdk']}")
+    LOCKED["expected"] = load_locked_clocks(arguments.locked_clocks)
+    if LOCKED["expected"] is not None:
+        start_clocks = read_clocks()
+        LOCKED["cpus"] = {name: value["cpus"] for name, value in start_clocks.items()
+                          if name.startswith("policy")}
+        report["locked_clocks"] = {"expected": LOCKED["expected"], "cpus": LOCKED["cpus"],
+                                   "start": {name: value for name, value in start_clocks.items()
+                                             if name != "residency"}}
+        check_clocks("start")
 
     shell("input keyevent KEYCODE_WAKEUP")
     shell("wm dismiss-keyguard")
@@ -1898,6 +2180,31 @@ def main(argv=None):
     report["dexopt"] = {"start": log_dexopt("start")}
     check_compiled(report["dexopt"]["start"], arguments.compile)
 
+    try:
+        run_scenarios(arguments, scenarios, tp, capacities, subjects, thermal_log, report)
+    except ClocksMoved as moved:
+        # What ran before is kept; the rest didn't run at the locked clocks.
+        report["locked_clocks"]["moved"] = str(moved)
+        write_report(arguments.out, report)
+        raise SystemExit(f"stopped: {moved}")
+    if LOCKED["expected"] is not None:
+        report["locked_clocks"]["end"] = {name: value for name, value in
+                                          check_clocks("end").items() if name != "residency"}
+    for package in APPS.values():
+        stop(package)
+    # A background dexopt job can recompile an app during a run.
+    report["dexopt"]["end"] = log_dexopt("end")
+    write_report(arguments.out, report)
+
+
+def write_report(out, report):
+    with open(os.path.join(out, "report.json"), "w") as file:
+        json.dump(report, file, indent=1)
+    print("wrote", os.path.join(out, "report.json"))
+
+
+def run_scenarios(arguments, scenarios, tp, capacities, subjects, thermal_log, report):
+    """Each scenario asked for, in order, into `report`."""
     traced_runs = arguments.traced_runs
     if "startup" in scenarios:
         report["startup_ms"], report["first_frame"] = startup_scenario(
@@ -1923,14 +2230,6 @@ def main(argv=None):
         report["navigation"] = navigation_scenario(
             tp, arguments.out, capacities, subjects, arguments.runs, traced_runs,
             arguments.navigations)
-
-    for package in APPS.values():
-        stop(package)
-    # A background dexopt job can recompile an app during a run.
-    report["dexopt"]["end"] = log_dexopt("end")
-    with open(os.path.join(arguments.out, "report.json"), "w") as file:
-        json.dump(report, file, indent=1)
-    print("wrote", os.path.join(arguments.out, "report.json"))
 
 
 if __name__ == "__main__":
