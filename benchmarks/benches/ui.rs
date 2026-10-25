@@ -237,9 +237,14 @@ fn navigation_frame(criterion: &mut Criterion) {
         Density::new(2.25),
         Box::new(FixedTextMeasurer::new()),
     );
+    host.set_optimizations(Optimizations::NONE);
     host.set_content(compose_rs_feed::navigation::NavigationApp);
-    let (mut resources, mut groups, mut list, mut taken) =
-        (Resources::default(), GroupCache::default(), Writer::default(), Writer::default());
+    let (mut resources, mut groups, mut list, mut taken) = (
+        Resources::default(),
+        GroupCache::new(Optimizations::NONE),
+        Writer::default(),
+        Writer::default(),
+    );
     let mut frame = |host: &mut UiHost| {
         platform::advance_clock(Duration::from_millis(8));
         let start = Instant::now();

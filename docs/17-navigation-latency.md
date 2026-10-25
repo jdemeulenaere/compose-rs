@@ -118,7 +118,7 @@ Recorded in [14](14-performance-opportunities.md), "Android: a new screen's firs
 
 ## Headless
 
-`benchmarks/benches/ui.rs`, `navigation: the heavy screen's first frame and serialize` (D605): a `UiHost` the size of the Pixel 8 Pro's screen (1008 × 2244 px at 2.25) at parity, the launcher shown; each iteration taps the button, times the frame composing, laying out and drawing the heavy screen of a new visit and what Android's bridge does after it (`write_display_list`, the resources collected and taken), then goes back untimed. Text is measured by the fixed measurer, so it times compose-rs's own work without Android's text layout. On an M-series Mac: 1.25 ms (criterion's median; p99 1.65 ms over 30 frames). On the device the same work, text apart, is 25.3 ms of the frame's wall time at the median (composition, layout, draw, serialize), 31.5 ms with the Kotlin replay.
+`benchmarks/benches/ui.rs`, `navigation: the heavy screen's first frame and serialize` (D605): a `UiHost` the size of the Pixel 8 Pro's screen (1008 × 2244 px at 2.25) at parity, the launcher shown; each iteration taps the button, times the frame composing, laying out and drawing the heavy screen of a new visit and what Android's bridge does after it (`write_display_list`, the resources collected and taken), then goes back untimed. Text is measured by the fixed measurer, so it times compose-rs's own work without Android's text layout. On an M-series Mac: 1.30 ms (criterion's median; p99 1.66 ms over 30 frames). On the device the same work, text apart, is 25.3 ms of the frame's wall time at the median (composition, layout, draw, serialize), 31.5 ms with the Kotlin replay.
 
 ```bash
 cargo bench -p compose-benchmarks --bench ui -- navigation
