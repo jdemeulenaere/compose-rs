@@ -20,6 +20,7 @@ mod pausable;
 mod produce_state;
 mod recomposer;
 mod restart;
+mod restoration;
 mod reusable;
 mod review2;
 mod review3;
