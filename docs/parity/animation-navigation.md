@@ -729,7 +729,7 @@ Navigation 3 is a separate library from Navigation Compose. Adopting it would me
 | `createComposeRule()` + `rule.setContent { … }` | `compose_test(|| …)` or `ComposeTestRule::with_manual_clock(|| …)`. The content is fixed at creation, so drive changes through `mutable_state_of` handles created outside (see `visibility.rs` `panel()`) |
 | `rule.mainClock.autoAdvance = false` before `setContent` | `ComposeTestRule::with_manual_clock`, or `set_auto_advance(false)` |
 | `rule.mainClock.advanceTimeByFrame()` | `advance_time_by_frame()` (16 ms) |
-| `rule.mainClock.advanceTimeBy(ms)` | `advance_time_by(Duration::from_millis(ms))`, **but see the rounding difference below** |
+| `rule.mainClock.advanceTimeBy(ms)` | `advance_time_by(Duration::from_millis(ms))`, rounded up to whole frames as Compose's; `advance_time_by_with(d, true)` for `ignoreFrameDuration = true` |
 | `rule.runOnIdle { … }`, `runOnUiThread { … }` | plain code after `wait_for_idle()`: everything runs on the test thread |
 | `rule.waitForIdle()` | `wait_for_idle()`. With auto-advance on it moves the clock while animations ask for frames, up to 60 s of test time |
 | `rule.waitUntil { cond }`, `mainClock.advanceTimeUntil { cond }` | missing: loop on `advance_time_by_frame()` with a bound |
@@ -751,14 +751,9 @@ Navigation 3 is a separate library from Navigation Compose. Adopting it would me
 
 ### What the harness lacks
 
-> Since the harness's milestone 1 (D900–D905), compose-test has Compose's clock model (rounding, frames on the test clock, `advance_time_until`, `wait_until`, the infinite-animation policy), bounds and displayed assertions, matchers over the tree and selectors (`on_children`, `on_parent`, collections), the touch, mouse (primary button) and key injection scopes, `perform_scroll_to`, `capture_to_image` with `assert_pixels`, and `print_to_string`; `perform_click` is a touch click. The notes in this section and the mapping above that call these missing are out of date: docs/09 lists the API, and [ui-text-and-test](ui-text-and-test.md) what is still missing. Existing tests that relied on the old timing gained a frame where they wait for a recomposition (D900).
+Since the harness's milestone 1 (D900–D905), compose-test has Compose's clock model (rounding, frames on the test clock, `advance_time_until`, `wait_until`, the infinite-animation policy), bounds and displayed assertions, matchers over the tree and selectors (`on_children`, `on_parent`, collections), the touch, mouse (primary button) and key injection scopes, `perform_scroll_to`, `capture_to_image` with `assert_pixels`, `print_to_string`, and `set_content`; `perform_click` is a touch click. docs/09 lists the API, and [ui-text-and-test](ui-text-and-test.md) what is still missing. Existing tests that relied on the old timing gained a frame where they wait for a recomposition (D900).
 
-- **`advance_time_by` doesn't round up to whole frames.** Compose's `advanceTimeBy(ms)` advances `ceil(ms / 16) × 16` unless `ignoreFrameDuration` (`ui-test/.../AbstractMainTestClock.kt`); compose-rs's advances exactly `duration`.
-  - compose-rs schedules frames 16 ms after the call's start, so their phase also drifts after a non-multiple advance or a delay.
-  - Tests that `advanceTimeBy(duration)` and then expect the end state can land one frame short.
-  - Fix: add an `ignore_frame_duration`-style flag to the harness, or round in the ported test, saying so in a comment.
-- **Missing pieces:** `waitUntil`, `advanceTimeUntil`, bounds assertions, `onRoot`, image capture, and the touch-gesture DSL (needed for predictive back and drag scenarios).
-- **No way to set content again mid-test,** as some Compose tests do. Use a state that switches content.
+- **`advance_time_by` rounds up to whole frames**, as Compose's `advanceTimeBy(ms)` (`ceil(ms / 16) × 16`, D900); `advance_time_by_ignoring_frame_duration` is `ignoreFrameDuration = true`. A frame comes a frame duration after something needs one, as Compose's.
 - **No `MotionDurationScale`** to put in the test context (feature motion-duration-scale).
 
 ### compose-rs behaviour suspected to differ from Compose's
