@@ -43,6 +43,11 @@ impl AnimationVector {
         AnimationVector::zero(self.size())
     }
 
+    /// Sets every component to 0, as `reset`.
+    pub fn reset(&mut self) {
+        self.values = [0.0; 4];
+    }
+
     /// The components.
     pub fn as_slice(&self) -> &[f32] {
         &self.values[..self.size()]

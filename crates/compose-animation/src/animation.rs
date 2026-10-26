@@ -142,7 +142,9 @@ impl<T: Animate> TargetBasedAnimation<T> {
     }
 
     fn spec_value(&self, play_time_nanos: i64) -> AnimationVector {
-        if play_time_nanos < self.start_delay_nanos {
+        // Only a delayed spec holds its start before its delay (Compose wraps only those):
+        // a play time before 0 is the spec's own (a fast-forwarded repeatable's).
+        if self.start_delay_nanos > 0 && play_time_nanos < self.start_delay_nanos {
             return self.initial_value_vector;
         }
         self.spec.value_from_nanos(
@@ -154,7 +156,9 @@ impl<T: Animate> TargetBasedAnimation<T> {
     }
 
     fn spec_velocity(&self, play_time_nanos: i64) -> AnimationVector {
-        if play_time_nanos < self.start_delay_nanos {
+        // Only a delayed spec holds its start before its delay (Compose wraps only those):
+        // a play time before 0 is the spec's own (a fast-forwarded repeatable's).
+        if self.start_delay_nanos > 0 && play_time_nanos < self.start_delay_nanos {
             return self.initial_velocity_vector;
         }
         self.spec.velocity_from_nanos(
