@@ -65,8 +65,8 @@ pub mod platform {
     pub use crate::clipboard::MemoryClipboard;
     pub use crate::configuration::{Insets, LOCAL_PLATFORM_WINDOW_INSETS, PlatformWindowInsets};
     pub use crate::display_list::{
-        Boundary, DisplayList, DrawGroup, DrawOp, FlatDisplayList, FlatGroup, Renderer,
-        single_drawing,
+        Boundary, DisplayList, DrawGroup, DrawOp, FlatDisplayList, FlatGroup, Renderer, fits_in,
+        single_drawing, single_drawing_extent,
     };
     pub use crate::graphics_layer::LayerProperties;
     pub use crate::host::{FrameStats, LOCAL_CONSTRAINTS_HINT, UiHost};

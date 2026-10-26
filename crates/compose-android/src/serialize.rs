@@ -30,7 +30,10 @@ use compose_ui::{
     Color, CompositingStrategy, ImageBitmap, Offset, Outline, Paint, PaintStyle, PathCommand,
     PathData, PathFillType, PathOperation, PathStep, Rect, StrokeCap, TileMode,
     platform::Shader,
-    platform::{DisplayList, DrawGroup, DrawOp, Optimization, Optimizations, single_drawing},
+    platform::{
+        DisplayList, DrawGroup, DrawOp, Optimization, Optimizations, fits_in, single_drawing,
+        single_drawing_extent,
+    },
 };
 
 /// The operations' tags, as `Replayer.kt` reads them.
@@ -718,12 +721,15 @@ fn write_commands(writer: &mut Writer, commands: &[PathCommand]) {
     }
 }
 
-/// Whether the layer opening at `start` (a `SaveLayerAlpha`) holds one drawing with a paint,
-/// among saves, clips and moves: its alpha can go into that paint (its color's, or its
+/// Whether the layer opening at `start` (a `SaveLayerAlpha` of `bounds`) holds one drawing with
+/// a paint, among saves, clips and moves, that provably lies within `bounds`
+/// ([`single_drawing_extent`]): its alpha can go into that paint (its color's, or its
 /// gradient's: [`Writer::paint`]), without an offscreen layer (a GPU pass each frame on
-/// Android). Returns the index of its closing `Restore` if so.
-fn foldable_layer(ops: &[DrawOp], start: usize) -> Option<usize> {
-    single_drawing(&ops[start + 1..]).map(|end| start + 1 + end).filter(|end| *end < ops.len())
+/// Android), the same pixels (D648). Returns the index of its closing `Restore` if so.
+fn foldable_layer(ops: &[DrawOp], start: usize, bounds: Rect) -> Option<usize> {
+    let layer = &ops[start + 1..];
+    let end = single_drawing(layer).map(|end| start + 1 + end).filter(|end| *end < ops.len())?;
+    single_drawing_extent(layer).is_some_and(|extent| fits_in(extent, bounds)).then_some(end)
 }
 
 /// `color` with its alpha multiplied by `alpha`.
@@ -776,9 +782,11 @@ struct CachedGroup {
     /// (`Resources::serial`): a path it names defined again since draws other contents.
     recorded_serial: u64,
     generation: u64,
-    /// Its content is one drawing with a paint (`single_drawing`): an alpha layer around it
-    /// fades that paint, not overlapping.
-    single_drawing: bool,
+    /// Its content's one drawing's extent (`single_drawing_extent`), if it's one drawing with a
+    /// paint that can be bounded: an alpha layer around it whose bounds hold it fades that
+    /// paint, not overlapping. Compared with the layer's bounds each frame (they change without
+    /// the version).
+    single_drawing_extent: Option<Rect>,
     /// Written ahead, and no frame wrote or copied it since: kept though the last frame didn't.
     ahead: bool,
 }
@@ -904,9 +912,6 @@ pub mod compositing {
     pub const OFFSCREEN: u8 = 1;
     /// Never: the alpha multiplies each drawing's (`ModulateAlpha`).
     pub const MODULATE_ALPHA: u8 = 2;
-    /// `Auto` over one drawing with `SINGLE_DRAWING_FADE` (D521): as `ModulateAlpha`, its
-    /// content clipped to the node's bounds, as the offscreen buffer it stands for bounds it.
-    pub const MODULATE_ALPHA_IN_BOUNDS: u8 = 3;
 }
 
 /// The bytes of one entry of the `KEPT` section: a key, whether it is outermost.
@@ -1055,10 +1060,10 @@ fn write_layer(groups: &[DrawGroup], index: usize, cache: &GroupCache, out: &mut
 
 /// How the group at `index` of `groups` composites its content: its layer's strategy, except
 /// that with `Optimization::SINGLE_DRAWING_FADE`, an `Auto` alpha below 1 over one drawing with
-/// a paint and no group (as a folded layer, D153) multiplies that drawing's alpha instead,
-/// clipped to the node's bounds (`ModulateAlpha` in bounds: a render node's
-/// `setHasOverlappingRendering(false)` and `setClipToBounds(true)`), the same pixels without an
-/// offscreen buffer (D521). Read from its cached record while its version stays.
+/// a paint and no group (as a folded layer, D153) multiplies that drawing's alpha instead
+/// (`ModulateAlpha`: a render node's `setHasOverlappingRendering(false)`), when the drawing
+/// provably lies within the node's bounds, which bound HWUI's alpha layer: the same pixels
+/// without an offscreen buffer (D521, D648). Read from its cached record while its version stays.
 fn compositing_of(groups: &[DrawGroup], index: usize, cache: &GroupCache) -> u8 {
     let group = &groups[index];
     let Some(layer) = group.layer else { return compositing::AUTO };
@@ -1074,11 +1079,17 @@ fn compositing_of(groups: &[DrawGroup], index: usize, cache: &GroupCache) -> u8 
     if nested.iter().any(|inner| !inner.empty) {
         return compositing::AUTO;
     }
-    let single = match cache.records.get(&group.key) {
-        Some(record) if record.version == group.version => record.single_drawing,
-        _ => single_drawing(&group.content.ops).is_some(),
+    let extent = match cache.records.get(&group.key) {
+        Some(record) if record.version == group.version => record.single_drawing_extent,
+        _ => single_drawing_extent(&group.content.ops),
     };
-    if single { compositing::MODULATE_ALPHA_IN_BOUNDS } else { compositing::AUTO }
+    // The node's bounds: from the group's origin to the layer's far corner.
+    let node = Rect::new(0.0, 0.0, layer.bounds.right, layer.bounds.bottom);
+    if extent.is_some_and(|extent| fits_in(extent, node)) {
+        compositing::MODULATE_ALPHA
+    } else {
+        compositing::AUTO
+    }
 }
 
 /// One write of a display list.
@@ -1172,14 +1183,11 @@ impl<'a> Serializer<'a> {
             // would change it without changing its version.
             if let DrawOp::SaveLayerAlpha { bounds, alpha } = ops[index]
                 && self.cache.optimizations.contains(Optimization::SINGLE_DRAWING_FADE)
-                && let Some(end) = foldable_layer(ops, index)
+                && let Some(end) = foldable_layer(ops, index, bounds)
                 && !self.draws_before(&boundaries[boundary..], end, child)
             {
                 self.folds.push((end, alpha));
-                // Clipped to the layer's bounds, as its offscreen buffer would bound it.
                 self.out.u8(tag::SAVE);
-                self.out.u8(tag::CLIP_RECT);
-                self.out.rect(&bounds);
                 continue;
             }
             let alpha: f32 = self.folds.iter().map(|(_, alpha)| alpha).product();
@@ -1290,7 +1298,7 @@ impl<'a> Serializer<'a> {
         record.version = group.version;
         record.generation = generation;
         // Of the display list's operations, which bytes alone don't tell (a folded layer's).
-        record.single_drawing = single_drawing(&group.content.ops).is_some();
+        record.single_drawing_extent = single_drawing_extent(&group.content.ops);
         self.mark(group.key);
     }
 
@@ -1485,23 +1493,29 @@ mod tests {
         assert_eq!(out.bytes[21], tag::DRAW_RECT);
     }
 
-    /// A layer folded into its drawing's paint clips it to the layer's bounds, as the offscreen
-    /// buffer it stands for bounds it: the same pixels with `SINGLE_DRAWING_FADE` as without,
-    /// for a drawing past them too.
+    /// A layer whose drawing reaches past its bounds isn't folded into its paint: its offscreen
+    /// buffer cuts the drawing there, which a faded paint wouldn't (D648). Within them, it is.
     #[test]
-    fn a_folded_layer_clips_to_its_bounds() {
-        let mut list = DisplayList::default();
-        let bounds = Rect::new(0.0, 0.0, 20.0, 20.0);
-        list.push(DrawOp::SaveLayerAlpha { bounds, alpha: 0.5 });
-        list.push(DrawOp::DrawRect(Rect::new(0.0, 0.0, 40.0, 20.0), Paint::fill(Color::RED)));
-        list.push(DrawOp::Restore);
-        let (mut resources, mut out) = (Resources::default(), Writer::default());
-        write_display_list(&list, &mut resources, &mut GroupCache::new(fade()), &mut out);
-        assert_eq!(out.bytes[0], tag::SAVE, "folded");
-        assert_eq!(out.bytes[1], tag::CLIP_RECT);
-        let float = |at: usize| f32::from_le_bytes(out.bytes[at..at + 4].try_into().unwrap());
-        assert_eq!([float(2), float(6), float(10), float(14)], [0.0, 0.0, 20.0, 20.0]);
-        assert_eq!(out.bytes[18], tag::DRAW_RECT);
+    fn a_layer_past_its_bounds_is_not_folded() {
+        let layer = |rect: Rect, paint: Paint| {
+            let mut list = DisplayList::default();
+            let bounds = Rect::new(0.0, 0.0, 20.0, 20.0);
+            list.push(DrawOp::SaveLayerAlpha { bounds, alpha: 0.5 });
+            list.push(DrawOp::Translate(Offset::new(0.5, 0.0)));
+            list.push(DrawOp::DrawRect(rect, paint));
+            list.push(DrawOp::Restore);
+            let (mut resources, mut out) = (Resources::default(), Writer::default());
+            write_display_list(&list, &mut resources, &mut GroupCache::new(fade()), &mut out);
+            out.bytes[0]
+        };
+        let fill = Paint::fill(Color::RED);
+        assert_eq!(layer(Rect::new(0.0, 0.0, 19.5, 20.0), fill), tag::SAVE, "within: folded");
+        // Moved half a pixel, past its bounds.
+        assert_eq!(layer(Rect::new(0.0, 0.0, 20.0, 20.0), fill), tag::SAVE_LAYER_ALPHA);
+        // Its stroke's half width past them.
+        let stroke = Paint::stroke(Color::RED, 3.0);
+        assert_eq!(layer(Rect::new(0.5, 2.0, 10.0, 10.0), stroke), tag::SAVE_LAYER_ALPHA);
+        assert_eq!(layer(Rect::new(1.0, 2.0, 10.0, 10.0), stroke), tag::SAVE, "within: folded");
     }
 
     #[test]
@@ -1524,9 +1538,8 @@ mod tests {
         assert_eq!(out.bytes[0], tag::SAVE_LAYER_ALPHA);
         write_display_list(&list, &mut resources, &mut GroupCache::new(fade()), &mut out);
         assert_eq!(out.bytes[0], tag::SAVE);
-        // Save, the layer's bounds' clip and the list's (17 bytes each), then the rect: its
-        // color at 1 + 17 + 17 + 1 + 16.
-        assert_eq!(read_u32(&out.bytes, 52), 0x8000_0000);
+        // Save, clip (17 bytes), then the rect: its color at 1 + 17 + 1 + 16.
+        assert_eq!(read_u32(&out.bytes, 35), 0x8000_0000);
         let last = out.bytes.len() - 28;
         assert_eq!(out.bytes[last], tag::DRAW_RECT);
         assert_eq!(read_u32(&out.bytes, last + 17), 0xFF00_0000);
@@ -2072,9 +2085,8 @@ mod tests {
         let (mut resources, mut out) = (Resources::default(), Writer::default());
         write_display_list(&list, &mut resources, &mut GroupCache::new(fade()), &mut out);
         assert_eq!(out.bytes[0], tag::SAVE, "folded");
-        // Save, the layer's bounds' clip (17 bytes), then the rect; its sweep: kind, tile,
-        // center, 2 colors, no stops, alpha.
-        let at = 1 + 17 + RECT_BEFORE_SHADER;
+        // Save, then the rect; its sweep: kind, tile, center, 2 colors, no stops, alpha.
+        let at = 1 + RECT_BEFORE_SHADER;
         assert_eq!(out.bytes[at], shader::SWEEP);
         let alpha_at = at + 2 + 8 + 4 + 8 + 4;
         assert!((read_f32(&out.bytes, alpha_at) - 0.4).abs() < 1e-6);

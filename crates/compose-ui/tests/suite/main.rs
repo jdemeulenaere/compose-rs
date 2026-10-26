@@ -18,6 +18,7 @@ mod review_d_panic_poisoned;
 mod review_d_support;
 mod review_groups;
 mod review_retained;
+mod single_drawing_extent;
 #[path = "../support/mod.rs"]
 mod support;
 mod ui;

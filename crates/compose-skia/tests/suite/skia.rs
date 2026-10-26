@@ -347,8 +347,8 @@ fn overflowing_pixels(optimizations: compose::ui::platform::Optimizations) -> (C
     (renderer.pixel(10, 10), renderer.pixel(30, 10))
 }
 
-/// With `SINGLE_DRAWING_FADE`, a faded drawing past its layer's bounds is clipped to them, as
-/// the offscreen buffer it stands for bounds it: the same pixels as without it.
+/// With `SINGLE_DRAWING_FADE`, a drawing past its layer's bounds isn't faded by its paint: the
+/// offscreen buffer cuts it, the same pixels as without the flag (D648).
 #[test]
 fn the_single_drawing_fade_keeps_its_layers_bounds() {
     use compose::ui::platform::{Optimization, Optimizations};
@@ -356,11 +356,73 @@ fn the_single_drawing_fade_keeps_its_layers_bounds() {
     let (inside, past) = overflowing_pixels(Optimizations::NONE);
     assert_eq!(past, Color::WHITE, "the offscreen buffer bounds it");
     assert_ne!(inside, Color::WHITE);
-    let (faded_inside, faded_past) = overflowing_pixels(fade);
-    assert_eq!(faded_past, past);
-    // The same but for rounding.
+    assert_eq!(overflowing_pixels(fade), (inside, past));
+}
+
+/// Every pixel of a 40 × 40 window holding a 20 × 20 layer at half alpha, moved and turned by
+/// `layer`, its one rect filling it, drawn with `optimizations`.
+fn transformed_layer_pixels(
+    layer: compose::ui::GraphicsLayerScope,
+    optimizations: compose::ui::platform::Optimizations,
+) -> Vec<Color> {
+    use compose::foundation::layout::Box;
+    use compose::ui::{Alignment, GraphicsLayerScope, Modifier, Paint, Rect, UnitExt};
+    let mut host =
+        UiHost::new(IntSize::new(40, 40), Density::new(1.0), Box::new(SkiaTextMeasurer::new()));
+    host.set_optimizations(optimizations);
+    host.set_content(move || {
+        Box(
+            Modifier.size(40.dp()),
+            Alignment::CENTER,
+            false,
+            compose::runtime::callback(move |_| {
+                compose::foundation::layout::Canvas(
+                    Modifier
+                        .size((20.dp(), 20.dp()))
+                        .graphics_layer_with(GraphicsLayerScope { alpha: 0.5, ..layer }),
+                    |scope| {
+                        scope.draw_rect(Rect::new(0.0, 0.0, 20.0, 20.0), Paint::fill(Color::RED))
+                    },
+                );
+            }),
+        );
+    });
+    host.frame();
+    let mut renderer = RasterRenderer::new(40, 40);
+    renderer.set_optimizations(host.optimizations());
+    host.with_tree(|tree| {
+        renderer.render(tree.display_list(), Color::WHITE, 1.0, tree.text_measurer_ref())
+    });
+    (0..40).flat_map(|y| (0..40).map(move |x| (x, y))).map(|(x, y)| renderer.pixel(x, y)).collect()
+}
+
+/// With `SINGLE_DRAWING_FADE`, a drawing filling its layer is faded by its paint and keeps its
+/// anti-aliased edges, at fractional moves and turned: the same pixels as offscreen, but for
+/// rounding (2/255 a channel). A clip to the layer's bounds instead (D648's first version) lost
+/// up to 64/255 at those edges.
+#[test]
+fn the_single_drawing_fade_keeps_a_moved_or_turned_layers_edges() {
+    use compose::ui::GraphicsLayerScope;
+    use compose::ui::platform::{Optimization, Optimizations};
+    let fade = Optimizations::NONE.with(Optimization::SINGLE_DRAWING_FADE, true);
     let near = |a: u8, b: u8| a.abs_diff(b) <= 2;
-    assert!(near(faded_inside.green(), inside.green()), "{faded_inside:?} against {inside:?}");
+    let layers = [
+        GraphicsLayerScope { translation_x: 0.3, translation_y: 0.3, ..Default::default() },
+        GraphicsLayerScope { translation_x: 0.5, translation_y: 0.5, ..Default::default() },
+        GraphicsLayerScope { translation_x: 0.7, translation_y: 0.7, ..Default::default() },
+        GraphicsLayerScope { rotation_z: 30.0, ..Default::default() },
+    ];
+    for layer in layers {
+        let offscreen = transformed_layer_pixels(layer, Optimizations::NONE);
+        let faded = transformed_layer_pixels(layer, fade);
+        assert!(offscreen.iter().any(|pixel| *pixel != Color::WHITE));
+        for (index, (a, b)) in offscreen.iter().zip(&faded).enumerate() {
+            assert!(
+                near(a.red(), b.red()) && near(a.green(), b.green()) && near(a.blue(), b.blue()),
+                "{layer:?}: pixel {index}: {b:?} against {a:?}"
+            );
+        }
+    }
 }
 
 /// A clip is a layer clipping to its shape, anti-aliased as Compose Desktop's render node's

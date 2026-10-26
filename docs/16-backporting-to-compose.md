@@ -245,12 +245,13 @@ The frame that then places the item at its offset only moves its layer (a `Rende
 - With an alpha below 1, HWUI then draws the node through an offscreen buffer (a save layer).
 - The rule never reads the alpha, nor what the layer holds.
 
-**compose-rs's `single_drawing_fade`** (D153, D521; `compositing_of` in [serialize.rs](../crates/compose-android/src/serialize.rs), `single_drawing` in [display_list.rs](../crates/compose-ui/src/display_list.rs)) gives a layer `ModulateAlpha` when all of these hold:
+**compose-rs's `single_drawing_fade`** (D153, D521, D648; `compositing_of` in [serialize.rs](../crates/compose-android/src/serialize.rs), `single_drawing_extent` in [display_list.rs](../crates/compose-ui/src/display_list.rs)) gives a layer `ModulateAlpha` when all of these hold:
 - its strategy is `Auto` and its alpha is below 1;
 - no nested group draws anything;
-- its content is exactly one drawing with a paint (a rect, round rect, line, arc or path) among saves, clips, translations and transforms.
+- its content is exactly one drawing with a paint (a rect, round rect, line, arc or path) among saves, clips and translations;
+- that drawing provably lies within the layer's bounds: its conservative extent (its geometry, a curve's control points, half a stroke's width, more past a square cap, the translations applied) is inside the layer's size, which the offscreen buffer's edges, rounded outward in device space, contain. A drawing it can't bound so (under a transform inside the layer, a stroked path or wedge, whose miter joins reach further) keeps the offscreen buffer. Without this condition a drawing past the bounds would draw whole where the buffer cuts it (D648). The layer's own transform doesn't matter: the condition is in the layer's coordinates.
 
-A layer holding text, an image or a shadow keeps `Auto`. With `ModulateAlpha`, the node gets `setHasOverlappingRendering(false)`, so HWUI multiplies the drawing's alpha and allocates no buffer. One drawing can't overlap itself, so the pixels are the same, but for rounding. compose-rs's Skia raster test finds the two within 2 of 255 per channel. This flag's output wasn't compared pixel by pixel on the device: the fidelity audit compared the parity screens, and not the animated ones.
+A layer holding text, an image or a shadow keeps `Auto`. With `ModulateAlpha`, the node gets `setHasOverlappingRendering(false)`, so HWUI multiplies the drawing's alpha and allocates no buffer. One drawing can't overlap itself, and the buffer would cut none of it, so the pixels are the same, but for rounding. compose-rs's Skia raster tests find the two within 2 of 255 per channel, the layer moved by fractions of a pixel and turned too (a clip to the layer's bounds in place of the buffer, D648's first version, lost up to 64 of 255 on those anti-aliased edges), and a drawing past the bounds unfolded, the same pixels. This flag's output wasn't compared pixel by pixel on the device: the fidelity audit compared the parity screens, and not the animated ones.
 
 ### The evidence
 

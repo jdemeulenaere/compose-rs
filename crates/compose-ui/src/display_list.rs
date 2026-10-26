@@ -372,8 +372,9 @@ impl FlatDisplayList {
 /// Whether `ops` (what an alpha layer holds, from just after its `SaveLayerAlpha`, or a group's
 /// content) are one drawing with a paint among saves, clips and moves: returns the index of the
 /// layer's closing `Restore` if so, or `ops.len()` if they end first, balanced. An alpha over
-/// them can fade that paint instead of compositing them offscreen, the same pixels
-/// (`Optimization::SINGLE_DRAWING_FADE`).
+/// them can fade that paint instead of compositing them offscreen, the same pixels, when the
+/// layer's bounds hold the drawing ([`single_drawing_extent`],
+/// `Optimization::SINGLE_DRAWING_FADE`).
 pub fn single_drawing(ops: &[DrawOp]) -> Option<usize> {
     let mut depth = 0usize;
     let mut drawings = 0;
@@ -405,6 +406,107 @@ pub fn single_drawing(ops: &[DrawOp]) -> Option<usize> {
         }
     }
     (drawings == 1 && depth == 0).then_some(ops.len())
+}
+
+/// The extent of the one drawing `ops` hold ([`single_drawing`]), in their coordinates, the moves
+/// before it applied: what it can touch, conservatively (its geometry, a curve's control points,
+/// a stroke's half width, more past a square cap). `None` when they aren't one drawing, or it
+/// can't be bounded so: under a transform, a stroked path or wedge (their joins' miters). An
+/// alpha layer can fade that drawing's paint instead of compositing it offscreen, the same
+/// pixels, only when the extent lies within the layer's bounds ([`fits_in`]): the offscreen
+/// buffer cuts what's past them, and its edges, rounded outward in device space, keep every
+/// pixel the drawing touches inside them (`Optimization::SINGLE_DRAWING_FADE`, D648).
+pub fn single_drawing_extent(ops: &[DrawOp]) -> Option<Rect> {
+    let end = single_drawing(ops)?;
+    let mut offsets: smallvec::SmallVec<[Offset; 4]> = smallvec::smallvec![Offset::ZERO];
+    let mut extent = None;
+    for op in &ops[..end] {
+        let offset = *offsets.last().expect("balanced");
+        match op {
+            DrawOp::Save => offsets.push(offset),
+            DrawOp::Restore => {
+                offsets.pop();
+            }
+            DrawOp::Translate(by) => *offsets.last_mut().expect("balanced") = offset + *by,
+            DrawOp::Transform { .. } => return None,
+            DrawOp::ClipRect(_) | DrawOp::ClipRoundRect(..) | DrawOp::ClipPath { .. } => {}
+            drawing => {
+                let own = drawing_extent(drawing)?;
+                extent = Some(Rect::new(
+                    own.left + offset.x,
+                    own.top + offset.y,
+                    own.right + offset.x,
+                    own.bottom + offset.y,
+                ));
+            }
+        }
+    }
+    extent
+}
+
+/// Whether `extent` lies within `bounds`.
+pub fn fits_in(extent: Rect, bounds: Rect) -> bool {
+    extent.left >= bounds.left
+        && extent.top >= bounds.top
+        && extent.right <= bounds.right
+        && extent.bottom <= bounds.bottom
+}
+
+/// What `op`, a drawing with a paint, can touch ([`single_drawing_extent`]).
+fn drawing_extent(op: &DrawOp) -> Option<Rect> {
+    // Half a stroke's width (a hairline's pixel), past its ends more for a square cap.
+    let half = |paint: &Paint| {
+        let width = match paint.style {
+            crate::graphics::PaintStyle::Fill => return 0.0,
+            crate::graphics::PaintStyle::Stroke(width) => width.max(1.0),
+        };
+        let cap = if paint.cap == crate::graphics::StrokeCap::Square {
+            std::f32::consts::SQRT_2
+        } else {
+            1.0
+        };
+        width / 2.0 * cap
+    };
+    let stroked = |paint: &Paint| matches!(paint.style, crate::graphics::PaintStyle::Stroke(_));
+    let grown = |rect: Rect, by: f32| {
+        Rect::new(rect.left - by, rect.top - by, rect.right + by, rect.bottom + by)
+    };
+    match op {
+        DrawOp::DrawRect(rect, paint) | DrawOp::DrawRoundRect(rect, _, paint) => {
+            Some(grown(*rect, half(paint)))
+        }
+        DrawOp::DrawLine(from, to, paint) => {
+            // A line is stroked whatever its paint's style.
+            let half = match paint.style {
+                crate::graphics::PaintStyle::Fill => 0.5,
+                _ => half(paint),
+            };
+            let rect =
+                Rect::new(from.x.min(to.x), from.y.min(to.y), from.x.max(to.x), from.y.max(to.y));
+            Some(grown(rect, half))
+        }
+        DrawOp::DrawArc { oval, use_center, paint, .. } => {
+            if *use_center && stroked(paint) {
+                return None;
+            }
+            Some(grown(*oval, half(paint)))
+        }
+        DrawOp::DrawPath { path, offset, scale, paint } => {
+            if stroked(paint) {
+                return None;
+            }
+            let bounds = path.bounds();
+            let (x1, x2) = (bounds.left * scale.0, bounds.right * scale.0);
+            let (y1, y2) = (bounds.top * scale.1, bounds.bottom * scale.1);
+            Some(Rect::new(
+                x1.min(x2) + offset.x,
+                y1.min(y2) + offset.y,
+                x1.max(x2) + offset.x,
+                y1.max(y2) + offset.y,
+            ))
+        }
+        _ => None,
+    }
 }
 
 /// Appends `recording` (the frame, or a group's content) to `flat`, each group it draws (the

@@ -464,7 +464,7 @@ fn a_layer_drawing_more_than_one_thing_composites_offscreen() {
         let (layers, _) = read(&serialized.frame());
         layers
             .iter()
-            .map(|layer| layer.compositing != compositing::MODULATE_ALPHA_IN_BOUNDS)
+            .map(|layer| layer.compositing != compositing::MODULATE_ALPHA)
             .collect::<Vec<_>>()
     };
     fn two() {
@@ -1548,8 +1548,8 @@ fn a_shadow_is_its_layers_elevation_outline_and_colors() {
 
 /// Each `CompositingStrategy` is its byte: `Auto` (offscreen for an alpha below 1, by HWUI),
 /// `Offscreen` (a compositing layer) and `ModulateAlpha` (no offscreen buffer), whatever the
-/// content; with `SINGLE_DRAWING_FADE`, an `Auto` alpha over one drawing is `ModulateAlpha` in
-/// its node's bounds (the offscreen buffer's).
+/// content; with `SINGLE_DRAWING_FADE`, an `Auto` alpha over one drawing within its bounds is
+/// `ModulateAlpha`.
 #[test]
 fn compositing_strategies_are_their_bytes() {
     let compositing = |strategy: CompositingStrategy, optimizations: Optimizations| {
@@ -1572,7 +1572,7 @@ fn compositing_strategies_are_their_bytes() {
     assert_eq!(compositing(CompositingStrategy::Auto, none), compositing::AUTO);
     assert_eq!(compositing(CompositingStrategy::Offscreen, none), compositing::OFFSCREEN);
     assert_eq!(compositing(CompositingStrategy::ModulateAlpha, none), compositing::MODULATE_ALPHA);
-    assert_eq!(compositing(CompositingStrategy::Auto, fade), compositing::MODULATE_ALPHA_IN_BOUNDS);
+    assert_eq!(compositing(CompositingStrategy::Auto, fade), compositing::MODULATE_ALPHA);
     assert_eq!(compositing(CompositingStrategy::Offscreen, fade), compositing::OFFSCREEN);
 }
 
@@ -1662,7 +1662,6 @@ fn the_kotlin_constants_are_rusts() {
         ("COMPOSITING_AUTO", compositing::AUTO as u64),
         ("COMPOSITING_OFFSCREEN", compositing::OFFSCREEN as u64),
         ("COMPOSITING_MODULATE_ALPHA", compositing::MODULATE_ALPHA as u64),
-        ("COMPOSITING_MODULATE_ALPHA_IN_BOUNDS", compositing::MODULATE_ALPHA_IN_BOUNDS as u64),
         ("OUTLINE_NONE", outline_kind::NONE as u64),
         ("ENTRY_ALPHA", e::ALPHA as u64),
         ("ENTRY_PIVOT", e::PIVOT as u64),

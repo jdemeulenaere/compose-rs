@@ -4,7 +4,7 @@ use compose_ui::{
     Color, CompositingStrategy, Paint, PaintStyle, PathCommand, PathFillType, PathOperation, Rect,
     platform::{
         Boundary, DisplayList, DrawGroup, DrawOp, Optimization, Optimizations, Renderer,
-        TextMeasurer, single_drawing,
+        TextMeasurer, fits_in, single_drawing_extent,
     },
 };
 use skia_safe::{Canvas, ClipOp, EncodedImageFormat, Point, RRect, Surface, Vector, paint};
@@ -117,8 +117,8 @@ pub fn draw_display_list(canvas: &Canvas, list: &DisplayList, text_measurer: &dy
 }
 
 /// [`draw_display_list`] with compose-rs's `optimizations` (`SINGLE_DRAWING_FADE`: a layer's
-/// alpha under `Auto` over one drawing with a paint fades that paint, without an offscreen
-/// buffer).
+/// alpha under `Auto` over one drawing with a paint that provably lies within the layer's
+/// bounds fades that paint, without an offscreen buffer: the same pixels, D648).
 pub fn draw_display_list_with(
     canvas: &Canvas,
     list: &DisplayList,
@@ -180,19 +180,18 @@ impl Walk<'_> {
         let start = self.canvas.save_count();
         let outer_alpha = self.alpha;
         if let Some(mut layer) = group.layer {
-            // One drawing faded by its paint, with the optimization (D521), clipped to the
-            // bounds the offscreen buffer it stands for has.
-            let mut faded_in_bounds = false;
+            // One drawing faded by its paint, with the optimization (D521), when it lies within
+            // the bounds its offscreen buffer would have had (D648).
             if layer.compositing_strategy == CompositingStrategy::Auto
                 && layer.alpha < 1.0
                 && self.optimizations.contains(Optimization::SINGLE_DRAWING_FADE)
                 && self.groups[self.next..self.next + group.descendants]
                     .iter()
                     .all(|nested| nested.empty)
-                && single_drawing(&group.content.ops).is_some()
+                && single_drawing_extent(&group.content.ops)
+                    .is_some_and(|extent| fits_in(extent, layer.bounds))
             {
                 layer.compositing_strategy = CompositingStrategy::ModulateAlpha;
-                faded_in_bounds = true;
             }
             for op in layer.operations() {
                 match op {
@@ -206,10 +205,6 @@ impl Walk<'_> {
                     }
                     op => draw_op(self.canvas, &op, &[], self.measurer, start, self.alpha),
                 }
-            }
-            if faded_in_bounds {
-                self.canvas.save();
-                self.canvas.clip_rect(rect(&layer.bounds), None, false);
             }
             if let Some(alpha) = layer.modulated_alpha() {
                 self.alpha *= alpha;

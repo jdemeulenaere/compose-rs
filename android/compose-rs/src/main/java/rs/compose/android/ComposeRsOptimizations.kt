@@ -12,9 +12,11 @@ package rs.compose.android
  */
 object ComposeRsOptimizations {
     /**
-     * A graphics layer faded under `CompositingStrategy.Auto`, holding one drawing with a paint,
-     * fades that paint (`setHasOverlappingRendering(false)`) instead of compositing offscreen,
-     * as `ModulateAlpha` would: the same pixels (D153, D157, D521). On by default ([RECOMMENDED]).
+     * A graphics layer faded under `CompositingStrategy.Auto`, holding one drawing with a paint
+     * that provably lies within the layer's bounds, fades that paint
+     * (`setHasOverlappingRendering(false)`) instead of compositing offscreen, as `ModulateAlpha`
+     * would: the same pixels, as the offscreen buffer would cut nothing (D153, D157, D521,
+     * D648). On by default ([RECOMMENDED]).
      */
     const val SINGLE_DRAWING_FADE = 1L shl 0
 
