@@ -30,7 +30,7 @@ fn selections(ui: &mut ComposeTestRule) -> Vec<bool> {
     let count = ui.count_nodes(&is_selectable());
     (0..count)
         .map(|index| {
-            ui.on_all_nodes(is_selectable(), index).fetch_semantics_node().config.selected
+            ui.on_all_nodes(is_selectable()).get(index).fetch_semantics_node().config.selected
                 == Some(true)
         })
         .collect()
@@ -212,7 +212,7 @@ fn a_fixed_rows_indicator_moves_under_the_selected_tab() {
     let row = bounds(&mut ui, "box");
     let indicator = bounds(&mut ui, "indicator");
     assert_eq!((indicator.left, indicator.top), (0.0, row.height() - 1.0));
-    ui.on_all_nodes(is_selectable(), 1).perform_click();
+    ui.on_all_nodes(is_selectable()).get(1).perform_click();
     let indicator = bounds(&mut ui, "indicator");
     assert_eq!((indicator.left, indicator.top), (row.width() / 2.0, row.height() - 1.0));
 }
@@ -224,7 +224,7 @@ fn right_to_left_a_fixed_rows_indicator_moves_under_the_selected_tab() {
     let row = bounds(&mut ui, "box");
     let indicator = bounds(&mut ui, "indicator");
     assert_eq!((indicator.left, indicator.top), (row.width() / 2.0, row.height() - 1.0));
-    ui.on_all_nodes(is_selectable(), 1).perform_click();
+    ui.on_all_nodes(is_selectable()).get(1).perform_click();
     let indicator = bounds(&mut ui, "indicator");
     assert_eq!((indicator.left, indicator.top), (0.0, row.height() - 1.0));
 }
@@ -236,7 +236,7 @@ fn a_scrollable_rows_indicator_moves_under_the_selected_tab() {
     let row = bounds(&mut ui, "box");
     let indicator = bounds(&mut ui, "indicator");
     assert_eq!((indicator.left, indicator.top), (52.0, row.height() - 1.0));
-    ui.on_all_nodes(is_selectable(), 1).perform_click();
+    ui.on_all_nodes(is_selectable()).get(1).perform_click();
     let indicator = bounds(&mut ui, "indicator");
     assert_eq!((indicator.left, indicator.top), (52.0 + 90.0, row.height() - 1.0));
 }
@@ -249,7 +249,7 @@ fn right_to_left_a_scrollable_rows_indicator_moves_under_the_selected_tab() {
     let indicator = bounds(&mut ui, "indicator");
     assert!((indicator.left - (row.width() - 52.0 - 90.0)).abs() <= 1.0, "{indicator:?}");
     assert!((indicator.top - (row.height() - 1.0)).abs() <= 1.0);
-    ui.on_all_nodes(is_selectable(), 1).perform_click();
+    ui.on_all_nodes(is_selectable()).get(1).perform_click();
     let indicator = bounds(&mut ui, "indicator");
     assert!((indicator.left - (row.width() - 52.0 - 180.0)).abs() <= 1.0, "{indicator:?}");
 }
@@ -416,7 +416,7 @@ fn text_tabs(count: usize, scrollable: bool, initial: usize) -> ComposeTestRule 
 fn a_fixed_row_selects_its_first_tab_then_the_clicked_one() {
     let mut ui = text_tabs(3, false, 0);
     assert_eq!(selections(&mut ui), vec![true, false, false]);
-    ui.on_all_nodes(is_selectable(), 2).perform_click();
+    ui.on_all_nodes(is_selectable()).get(2).perform_click();
     assert_eq!(selections(&mut ui), vec![false, false, true]);
 }
 
@@ -440,7 +440,7 @@ fn a_row_of_leading_icon_tabs_selects_the_clicked_one() {
         });
     });
     assert_eq!(selections(&mut ui), vec![true, false, false]);
-    ui.on_all_nodes(is_selectable(), 2).perform_click();
+    ui.on_all_nodes(is_selectable()).get(2).perform_click();
     assert_eq!(selections(&mut ui), vec![false, false, true]);
 }
 
@@ -452,7 +452,7 @@ fn a_scrollable_row_selects_its_first_tab_then_the_clicked_one() {
     let mut expected = vec![false; 10];
     expected[0] = true;
     assert_eq!(selections(&mut ui), expected);
-    ui.on_all_nodes(is_selectable(), 1).perform_click();
+    ui.on_all_nodes(is_selectable()).get(1).perform_click();
     expected.swap(0, 1);
     assert_eq!(selections(&mut ui), expected);
 }
@@ -461,7 +461,7 @@ fn a_scrollable_row_selects_its_first_tab_then_the_clicked_one() {
 #[test]
 fn a_scrollable_row_scrolls_to_an_initially_selected_tab_off_screen() {
     let mut ui = text_tabs(10, true, 9);
-    let last = ui.on_all_nodes(is_selectable(), 9).fetch_semantics_node();
+    let last = ui.on_all_nodes(is_selectable()).get(9).fetch_semantics_node();
     assert_eq!(last.config.selected, Some(true));
     // Displayed: inside the 400 dp window.
     assert!(last.bounds.left >= 0.0 && last.bounds.right <= 400.0, "{:?}", last.bounds);
@@ -502,7 +502,7 @@ fn the_indicator_widens_to_a_wider_tab_animated() {
     });
     ui.advance_time_by(Duration::from_millis(100));
     let initial = bounds(&mut ui, "indicator").width();
-    ui.on_all_nodes(is_selectable(), 2).perform_click();
+    ui.on_all_nodes(is_selectable()).get(2).perform_click();
     ui.advance_time_by(Duration::from_millis(50));
     let middle = bounds(&mut ui, "indicator").width();
     assert!(initial < middle, "{initial} {middle}");

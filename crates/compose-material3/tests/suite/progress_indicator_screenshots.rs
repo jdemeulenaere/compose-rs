@@ -186,10 +186,10 @@ fn an_indeterminate_linear_indicator_starts_as_its_track_alone() {
 }
 
 /// An infinite animation starts at the first frame after it's composed (a frame, 16 ms, after
-/// the rule's start), as Compose's, and frames come every 16 ms: its play time at the last frame
-/// `advance` after the start.
+/// the rule's start), as Compose's, and frames come every 16 ms; `advance_time_by` rounds up to
+/// whole frames, as Compose's `MainTestClock` (D900): its play time `advance` after the start.
 fn play_time(advance: f32) -> f32 {
-    (advance / 16.0).floor() * 16.0 - 16.0
+    (advance / 16.0).ceil() * 16.0 - 16.0
 }
 
 /// The indeterminate linear indicator's lines 875 ms after the start (about half way through
