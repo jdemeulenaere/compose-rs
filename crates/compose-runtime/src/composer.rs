@@ -108,6 +108,9 @@ pub(crate) enum Skip {
 pub(crate) enum WalkStep {
     Done,
     Restart(fn(&dyn Any), Option<Rc<dyn Any>>),
+    /// A scope invalid only if one of these derived states changed: recompute them (outside
+    /// the borrow), then settle it (`settle_conditions`).
+    Check(ScopeId, Vec<crate::state::StateId>),
 }
 
 /// Which composable a group belongs to, beyond its key: two composables can share a key.
@@ -366,8 +369,11 @@ impl Runtime {
                     group.scope = scopes.alloc(composition, index);
                 }
                 let scope = scopes.get_mut(group.scope).expect("restart group without a scope");
+                // Invalid on conditions too: reached through its parent's body, it runs
+                // unchecked, as Compose's `addRecomposeScope`.
                 frame.forced |= scope.invalid || fresh;
                 scope.invalid = false;
+                scope.conditions.clear();
                 // A paused scope met through its parent's body rather than a resume's walk
                 // resumes too, as Compose's `addRecomposeScope`: from its start, in its segment,
                 // reusing if it paused reusing.
@@ -700,6 +706,16 @@ impl Runtime {
 
             let child = frame.cursor;
             let group = &mut table[child];
+            // Invalid on conditions: checked first, as Compose's `recomposeToGroupEnd` checks
+            // `isInvalidFor`. Not a paused scope: its resume runs it whatever.
+            if group.kind == GroupKind::Restart
+                && let Some(scope) = scopes.get(group.scope)
+                && scope.invalid
+                && !scope.paused
+                && !scope.conditions.is_empty()
+            {
+                return WalkStep::Check(group.scope, scope.conditions.clone());
+            }
             if group.kind == GroupKind::Restart
                 && scopes.get(group.scope).is_some_and(|scope| scope.invalid)
             {
@@ -760,6 +776,19 @@ impl Runtime {
                 resuming: false,
                 paused: false,
             });
+        }
+    }
+
+    /// After the derived states a scope's invalidation depends on were recomputed: if none
+    /// changed (none invalidated it outright meanwhile), it's valid again, and the walk passes it
+    /// or goes into it if it's dirty.
+    pub(crate) fn settle_conditions(&mut self, id: ScopeId) {
+        if let Some(scope) = self.scopes.get_mut(id)
+            && scope.invalid
+            && !scope.conditions.is_empty()
+        {
+            scope.invalid = false;
+            scope.conditions.clear();
         }
     }
 
@@ -1127,6 +1156,12 @@ pub(crate) fn run_walk(base: usize) {
     loop {
         match with_runtime(|runtime| runtime.walk_step(base)) {
             WalkStep::Done => return,
+            WalkStep::Check(scope, conditions) => {
+                for cell in conditions {
+                    crate::state::refresh_if_dirty(cell);
+                }
+                with_runtime(|runtime| runtime.settle_conditions(scope));
+            }
             WalkStep::Restart(restart, kept) => {
                 match &kept {
                     Some(kept) => restart(&**kept),

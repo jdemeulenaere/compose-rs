@@ -1,20 +1,23 @@
 //! `derived_state_of`: a state computed from other state, as Compose's `derivedStateOf`.
 //!
-//! The calculation runs under a read observer of its own, so the derived state learns which
-//! state it read (in composition as anywhere else: those reads don't register the composing
-//! scope). A write to one of them marks the result dirty, at once and without computing (a
-//! handler's writes may be half done): a read recomputes it first, so no read is ever behind
-//! what it derives from, and each frame (`flush_derived_states`, from `Composition::recompose`
-//! and `has_invalidations`) recomputes the dirty ones, invalidating their readers only when the
-//! result changed (by the state's policy): a list's emptiness read by a screen recomposes it
-//! when the list becomes empty, not on every edit.
+//! It's lazy, as Compose's (D122, D711): the calculation runs at the first read, and again at a
+//! read after what it read changed, never before. It runs under a read observer of its own, so
+//! the derived state learns which state it read (in composition as anywhere else: those reads
+//! don't register the composing scope). A write to one of them marks the result dirty, at once
+//! and without computing (a handler's writes may be half done): a read recomputes it first, so
+//! no read is ever behind what it derives from. The composables that read it are invalidated on
+//! the condition that its value changed (by its policy): the pass reaching one recomputes it
+//! and runs the composable only if it did, so a list's emptiness read by a screen recomposes it
+//! when the list becomes empty, not on every edit, and a derived state no composable reads any
+//! more isn't computed. One that layout or drawing reads is recomputed by the next frame
+//! (`flush_derived_states`), which tells them if it changed.
 
 use std::cell::RefCell;
 use std::rc::{Rc, Weak};
 
 use crate::observe::ReadObserver;
 use crate::remember::Remember;
-use crate::state::{MutationPolicy, OwnedState, State, StructuralEqualityPolicy};
+use crate::state::{MutationPolicy, OwnedState, Refreshing, State, StructuralEqualityPolicy};
 
 /// A derived state's recomputation, by its result cell.
 pub(crate) trait Refresh {
@@ -23,12 +26,18 @@ pub(crate) trait Refresh {
 }
 
 thread_local! {
-    /// Derived states whose dependencies changed since the last flush.
+    /// Derived states layout or drawing read whose dependencies changed since the last flush.
     static PENDING: RefCell<Vec<Weak<dyn Refresh>>> = const { RefCell::new(Vec::new()) };
 }
 
-/// Recomputes the derived states whose dependencies changed, telling their readers if they did.
-/// For hosts and compositions, before a frame recomposes.
+/// Queues a derived state that layout or drawing read, for the next flush. Called while the
+/// runtime is borrowed: it touches nothing else.
+pub(crate) fn queue_flush(refresh: Weak<dyn Refresh>) {
+    let _ = PENDING.try_with(|pending| pending.borrow_mut().push(refresh));
+}
+
+/// Recomputes the derived states read by layout or drawing whose dependencies changed, telling
+/// their observers if they did. For hosts and compositions, before a frame recomposes.
 pub fn flush_derived_states() {
     loop {
         let pending = PENDING
@@ -45,7 +54,8 @@ pub fn flush_derived_states() {
     }
 }
 
-/// Whether a derived state's dependencies changed since the last flush.
+/// Whether a derived state that layout or drawing read changed its dependencies since the last
+/// flush.
 pub(crate) fn has_pending_derived_states() -> bool {
     PENDING.try_with(|pending| !pending.borrow().is_empty()).unwrap_or(false)
 }
@@ -64,6 +74,11 @@ struct DerivedInner<T: 'static> {
     observer: ReadObserver,
 }
 
+/// The equivalence a policy decides with, as a function pointer the result cell keeps.
+fn equivalent_of<T, P: MutationPolicy<T>>(_: &P) -> fn(&T, &T) -> bool {
+    P::equivalent
+}
+
 /// A state whose value is `calculation`'s, recomputed when the state it read changes, as
 /// Compose's `derivedStateOf`. Readers are invalidated only when the value changes (`==`).
 #[track_caller]
@@ -80,20 +95,13 @@ pub fn derived_state_of_with<T: 'static, P: MutationPolicy<T>>(
     policy: P,
     calculation: impl Fn() -> T + 'static,
 ) -> DerivedState<T> {
-    let inner = Rc::new_cyclic(|weak: &Weak<DerivedInner<T>>| {
-        let weak: Weak<dyn Refresh> = weak.clone();
-        let observer = ReadObserver::new(move || {
-            // Computed later (by a read or the next frame), never inside the write.
-            let weak = weak.clone();
-            let _ = PENDING.try_with(|pending| pending.borrow_mut().push(weak));
-            crate::executor::wake_host();
-        });
-        let value = observer.observe_exclusive(0, &calculation);
-        DerivedInner {
-            calculation: Box::new(calculation),
-            result: crate::state::mutable_state_of_with(value, policy),
-            observer,
-        }
+    // Nothing is computed until a read.
+    let result = crate::state::uncomputed_state(equivalent_of(&policy));
+    let inner = Rc::new(DerivedInner {
+        calculation: Box::new(calculation),
+        result,
+        // The writes it hears mark the result dirty (`invalidate_readers_except`).
+        observer: ReadObserver::new(|| {}),
     });
     let id = inner.result.handle().id();
     inner.observer.set_dirty_cell(id);
@@ -105,8 +113,19 @@ pub fn derived_state_of_with<T: 'static, P: MutationPolicy<T>>(
 impl<T: 'static> Refresh for DerivedInner<T> {
     fn refresh(&self) {
         let id = self.result.handle().id();
-        if !crate::state::take_dirty(id) {
-            return;
+        match crate::state::begin_refresh(id) {
+            Refreshing::Clean => return,
+            Refreshing::Recompute => {}
+            // Only derived states it read may have changed: it's recomputed if one did (as
+            // Compose's derived state checks its dependencies' records first).
+            Refreshing::Check(derived) => {
+                for cell in derived {
+                    crate::state::refresh_if_dirty(cell);
+                }
+                if !crate::state::settle_refresh(id) {
+                    return;
+                }
+            }
         }
         // The keys invalidated since: this calculation records the reads anew.
         self.observer.drain_invalidated(|_| {});

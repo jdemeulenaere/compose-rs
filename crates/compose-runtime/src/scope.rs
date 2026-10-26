@@ -29,8 +29,13 @@ pub(crate) struct ScopeEntry {
     /// Bumped each time the scope's body runs; a state read records it, so reads from an
     /// earlier run that weren't repeated are recognised as stale.
     pub epoch: u32,
-    /// Invalidated: its body runs in the next pass.
+    /// Invalidated: its body runs in the next pass. With `conditions`, only if one of them
+    /// changed.
     pub invalid: bool,
+    /// The derived states whose dependencies changed since the scope read them, when that is
+    /// all that invalidated it (Compose's conditional invalidation): the pass reaching it
+    /// recomputes them, and runs its body only if one changed. Empty when it's invalid outright.
+    pub conditions: Vec<crate::state::StateId>,
     /// Its body was paused by a paused composition (Compose's `RecomposeScopeImpl.paused`): it's
     /// invalid, and the paused composition's next resume runs it, from its start.
     pub paused: bool,
@@ -71,6 +76,7 @@ impl Scopes {
             entry.group = group;
             entry.epoch = 0;
             entry.invalid = false;
+            entry.conditions.clear();
             entry.paused = false;
             entry.reusing = false;
             entry.segment = 0;
@@ -84,6 +90,7 @@ impl Scopes {
                 group,
                 epoch: 0,
                 invalid: false,
+                conditions: Vec::new(),
                 paused: false,
                 reusing: false,
                 segment: 0,
@@ -98,6 +105,7 @@ impl Scopes {
         debug_assert_eq!(entry.generation, id.generation, "freeing a stale scope");
         entry.generation = entry.generation.wrapping_add(1);
         entry.invalid = false;
+        entry.conditions.clear();
         entry.paused = false;
         self.free.push(id.index);
     }

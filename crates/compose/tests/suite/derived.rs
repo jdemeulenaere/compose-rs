@@ -41,9 +41,10 @@ fn readers_recompose_only_when_the_derived_value_changes() {
     items.edit(|items| items.push(1));
     composition.recompose();
     assert_eq!(take_log(), ["empty: false"]);
-    // Still not empty: the screen doesn't recompose.
+    // Still not empty: the screen doesn't recompose. It's invalid on the condition that the
+    // emptiness changed, which the pass checks (D711).
     items.edit(|items| items.push(2));
-    assert!(!composition.has_invalidations());
+    assert!(composition.has_invalidations());
     composition.recompose();
     assert_eq!(take_log(), Vec::<String>::new());
     items.edit(Vec::clear);
@@ -93,7 +94,8 @@ fn a_change_that_keeps_the_value_recomposes_nothing() {
     assert_eq!(take_log(), ["total: 4"]);
     // 1 + 2 + 1 = 4 = 3 + 0 + 1: the same total.
     prices.set(vec![3, 0]);
-    assert!(!composition.has_invalidations(), "the total didn't change");
+    composition.recompose();
+    assert_eq!(take_log(), Vec::<String>::new(), "the total didn't change");
     tax.set(2);
     composition.recompose();
     assert_eq!(take_log(), ["total: 5"]);
@@ -107,6 +109,8 @@ fn a_dropped_derived_state_stops_recomputing() {
         log("calculated");
         handle.get() * 2
     });
+    assert_eq!(take_log(), Vec::<String>::new(), "lazy: nothing computed before a read");
+    assert_eq!(doubled.get(), 2);
     assert_eq!(take_log(), ["calculated"]);
     drop(doubled);
     count.set(2);

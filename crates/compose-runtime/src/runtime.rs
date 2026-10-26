@@ -222,22 +222,38 @@ pub(crate) fn frames_requested(runtime: &Runtime) -> bool {
 /// Marks a scope invalid and its ancestors dirty. Returns whether a frame request was queued.
 pub(crate) fn invalidate_scope(runtime: &mut Runtime, id: ScopeId) -> bool {
     let Runtime { scopes, compositions, frame_requests, .. } = runtime;
-    invalidate_scope_parts(scopes, compositions, frame_requests, id)
+    invalidate_scope_parts(scopes, compositions, frame_requests, id, None)
 }
 
+/// Marks a scope invalid, outright or (with `condition`) only if that derived state's value
+/// changed, and its ancestors dirty. Returns whether a frame request was queued.
 pub(crate) fn invalidate_scope_parts(
     scopes: &mut Scopes,
     compositions: &mut Compositions,
     frame_requests: &mut Vec<Rc<dyn Fn()>>,
     id: ScopeId,
+    condition: Option<crate::state::StateId>,
 ) -> bool {
     let Some(scope) = scopes.get_mut(id) else {
         return false;
     };
     if scope.invalid {
+        match condition {
+            // Invalid outright already, or conditional: one more condition.
+            Some(cell) => {
+                if !scope.conditions.is_empty() && !scope.conditions.contains(&cell) {
+                    scope.conditions.push(cell);
+                }
+            }
+            // Conditional until now: invalid outright.
+            None => scope.conditions.clear(),
+        }
         return false;
     }
     scope.invalid = true;
+    if let Some(cell) = condition {
+        scope.conditions.push(cell);
+    }
     let data = compositions.data_mut(scope.composition);
     let table = &mut data.table;
     // In paused content not applied yet: its paused composition's next resume recomposes it, as

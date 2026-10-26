@@ -73,7 +73,8 @@ impl Observers {
         if !entry.invalidated.contains(&read.key) {
             entry.invalidated.push(read.key);
         }
-        if entry.pending {
+        // A derived state's observer needs no notification: the write marks its result dirty.
+        if entry.pending || entry.dirty_cell.is_some() {
             return None;
         }
         entry.pending = true;
