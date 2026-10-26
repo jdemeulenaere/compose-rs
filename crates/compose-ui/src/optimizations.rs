@@ -29,13 +29,14 @@ pub struct Optimization {
 
 impl Optimization {
     /// A graphics layer whose alpha is below 1 under `CompositingStrategy::Auto`, holding one
-    /// drawing with a paint and no nested layer, the drawing provably within the layer's bounds
-    /// (`single_drawing_extent`), fades that paint instead of compositing its content offscreen
-    /// (Android: `setHasOverlappingRendering(false)`; an alpha layer inside a recording around
-    /// one such drawing is folded into its paint), as Compose's
-    /// `CompositingStrategy.ModulateAlpha` would. The pixels are the same: one drawing can't
+    /// fill and no nested layer, the fill provably within the layer's bounds
+    /// (`single_drawing_extent`; never a stroke), fades that fill's paint instead of compositing
+    /// its content offscreen (Android: `setHasOverlappingRendering(false)`; an alpha layer inside
+    /// a recording around one such fill is folded into its paint), as Compose's
+    /// `CompositingStrategy.ModulateAlpha` would. The coverage is the same: one fill can't
     /// overlap itself, and the offscreen buffer, its edges rounded outward, would cut nothing of
-    /// it. Compose's `Auto` draws such a layer offscreen (D153, D157, D521, D648).
+    /// it; on Android, under a transform, the promoted layer's resampling can still differ.
+    /// Compose's `Auto` draws such a layer offscreen (D153, D157, D521, D648).
     pub const SINGLE_DRAWING_FADE: Optimization = Optimization {
         bit: 0,
         name: "single_drawing_fade",

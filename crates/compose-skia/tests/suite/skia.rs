@@ -365,8 +365,23 @@ fn transformed_layer_pixels(
     layer: compose::ui::GraphicsLayerScope,
     optimizations: compose::ui::platform::Optimizations,
 ) -> Vec<Color> {
+    layer_pixels(layer, optimizations, |scope| {
+        scope.draw_rect(
+            compose::ui::Rect::new(0.0, 0.0, 20.0, 20.0),
+            compose::ui::Paint::fill(Color::RED),
+        )
+    })
+}
+
+/// Every pixel of a 40 x 40 window holding a 20 x 20 layer at half alpha, moved, scaled and
+/// turned by `layer`, drawing `draw`, with `optimizations`.
+fn layer_pixels(
+    layer: compose::ui::GraphicsLayerScope,
+    optimizations: compose::ui::platform::Optimizations,
+    draw: fn(&mut compose::ui::DrawScope<'_>),
+) -> Vec<Color> {
     use compose::foundation::layout::Box;
-    use compose::ui::{Alignment, GraphicsLayerScope, Modifier, Paint, Rect, UnitExt};
+    use compose::ui::{Alignment, GraphicsLayerScope, Modifier, UnitExt};
     let mut host =
         UiHost::new(IntSize::new(40, 40), Density::new(1.0), Box::new(SkiaTextMeasurer::new()));
     host.set_optimizations(optimizations);
@@ -380,9 +395,7 @@ fn transformed_layer_pixels(
                     Modifier
                         .size((20.dp(), 20.dp()))
                         .graphics_layer_with(GraphicsLayerScope { alpha: 0.5, ..layer }),
-                    |scope| {
-                        scope.draw_rect(Rect::new(0.0, 0.0, 20.0, 20.0), Paint::fill(Color::RED))
-                    },
+                    draw,
                 );
             }),
         );
@@ -499,4 +512,68 @@ fn review_a_modulated_alpha_fades_a_nested_offscreen_layer_as_one() {
         near(overlap.red(), 0x7F) && near(overlap.green(), 0x7F) && near(overlap.blue(), 0xFF),
         "{overlap:?}: the red shows through the offscreen layer"
     );
+}
+
+/// With `SINGLE_DRAWING_FADE`, the same pixels as without, but for rounding (2/255 a channel):
+/// strokes stay offscreen (thin, Skia draws them as hairlines, their joints blended twice where
+/// the buffer blends once, 15 to 20 of 255 apart folded; a 2 px stroked rounded rect's corners
+/// were 5 apart), an inverted rect past the bounds too (sorted, it reaches x 30: 128 apart
+/// folded before D648 sorted it), and fills within the bounds fold, at scale 1, 0.5 and turned.
+#[test]
+fn the_single_drawing_fade_matches_offscreen() {
+    use compose::ui::platform::{Optimization, Optimizations};
+    use compose::ui::{DrawScope, GraphicsLayerScope, Offset, Paint, Rect};
+    let fade = Optimizations::NONE.with(Optimization::SINGLE_DRAWING_FADE, true);
+    let near = |a: u8, b: u8| a.abs_diff(b) <= 2;
+    fn round_rect(scope: &mut DrawScope<'_>, width: f32) {
+        let paint = Paint::stroke(Color::RED, width);
+        scope.draw_round_rect(Rect::new(3.0, 3.0, 17.0, 17.0), [5.0; 4], paint);
+    }
+    fn circle(scope: &mut DrawScope<'_>, width: f32) {
+        scope.draw_circle(Offset::new(10.0, 10.0), 7.0, Paint::stroke(Color::RED, width));
+    }
+    fn rect(scope: &mut DrawScope<'_>, width: f32) {
+        scope.draw_rect(Rect::new(3.5, 3.5, 16.5, 16.5), Paint::stroke(Color::RED, width));
+    }
+    fn inverted(scope: &mut DrawScope<'_>) {
+        scope.draw_rect(Rect::new(30.0, 5.0, 10.0, 15.0), Paint::fill(Color::RED));
+    }
+    fn round_fill(scope: &mut DrawScope<'_>) {
+        scope.draw_round_rect(Rect::new(3.0, 3.0, 17.0, 17.0), [5.0; 4], Paint::fill(Color::RED));
+    }
+    fn circle_fill(scope: &mut DrawScope<'_>) {
+        scope.draw_circle(Offset::new(10.0, 10.0), 7.0, Paint::fill(Color::RED));
+    }
+    type Case = (&'static str, f32, fn(&mut DrawScope<'_>));
+    let cases: [Case; 17] = [
+        ("inverted rect", 1.0, inverted),
+        ("round rect fill", 1.0, round_fill),
+        ("round rect fill at 0.5", 0.5, round_fill),
+        ("circle fill", 1.0, circle_fill),
+        ("circle fill at 0.5", 0.5, circle_fill),
+        ("round rect 0", 1.0, |scope| round_rect(scope, 0.0)),
+        ("round rect 0.5", 1.0, |scope| round_rect(scope, 0.5)),
+        ("round rect 1", 1.0, |scope| round_rect(scope, 1.0)),
+        ("round rect 2", 1.0, |scope| round_rect(scope, 2.0)),
+        ("circle 0", 1.0, |scope| circle(scope, 0.0)),
+        ("circle 0.5", 1.0, |scope| circle(scope, 0.5)),
+        ("circle 1", 1.0, |scope| circle(scope, 1.0)),
+        ("rect 0", 1.0, |scope| rect(scope, 0.0)),
+        ("rect 0.5", 1.0, |scope| rect(scope, 0.5)),
+        ("rect 1", 1.0, |scope| rect(scope, 1.0)),
+        ("hairline at 0.5", 0.5, |scope| round_rect(scope, 0.0)),
+        ("1.5 at 0.5", 0.5, |scope| round_rect(scope, 1.5)),
+    ];
+    for (name, scale, draw) in cases {
+        let layer = GraphicsLayerScope { scale_x: scale, scale_y: scale, ..Default::default() };
+        let offscreen = layer_pixels(layer, Optimizations::NONE, draw);
+        let faded = layer_pixels(layer, fade, draw);
+        assert!(offscreen.iter().any(|pixel| *pixel != Color::WHITE), "{name}");
+        for (index, (a, b)) in offscreen.iter().zip(&faded).enumerate() {
+            assert!(
+                near(a.red(), b.red()) && near(a.green(), b.green()) && near(a.blue(), b.blue()),
+                "{name}: pixel {index}: {b:?} against {a:?}"
+            );
+        }
+    }
 }

@@ -721,11 +721,11 @@ fn write_commands(writer: &mut Writer, commands: &[PathCommand]) {
     }
 }
 
-/// Whether the layer opening at `start` (a `SaveLayerAlpha` of `bounds`) holds one drawing with
-/// a paint, among saves, clips and moves, that provably lies within `bounds`
-/// ([`single_drawing_extent`]): its alpha can go into that paint (its color's, or its
-/// gradient's: [`Writer::paint`]), without an offscreen layer (a GPU pass each frame on
-/// Android), the same pixels (D648). Returns the index of its closing `Restore` if so.
+/// Whether the layer opening at `start` (a `SaveLayerAlpha` of `bounds`) holds one fill, among
+/// saves, clips and moves, that provably lies within `bounds` ([`single_drawing_extent`]): its
+/// alpha can go into that fill's paint (its color's, or its gradient's: [`Writer::paint`]),
+/// without an offscreen layer (a GPU pass each frame on Android), the same coverage (D648).
+/// Returns the index of its closing `Restore` if so.
 fn foldable_layer(ops: &[DrawOp], start: usize, bounds: Rect) -> Option<usize> {
     let layer = &ops[start + 1..];
     let end = single_drawing(layer).map(|end| start + 1 + end).filter(|end| *end < ops.len())?;
@@ -1059,11 +1059,11 @@ fn write_layer(groups: &[DrawGroup], index: usize, cache: &GroupCache, out: &mut
 }
 
 /// How the group at `index` of `groups` composites its content: its layer's strategy, except
-/// that with `Optimization::SINGLE_DRAWING_FADE`, an `Auto` alpha below 1 over one drawing with
-/// a paint and no group (as a folded layer, D153) multiplies that drawing's alpha instead
-/// (`ModulateAlpha`: a render node's `setHasOverlappingRendering(false)`), when the drawing
-/// provably lies within the node's bounds, which bound HWUI's alpha layer: the same pixels
-/// without an offscreen buffer (D521, D648). Read from its cached record while its version stays.
+/// that with `Optimization::SINGLE_DRAWING_FADE`, an `Auto` alpha below 1 over one fill and no
+/// group (as a folded layer, D153) multiplies that fill's alpha instead (`ModulateAlpha`: a
+/// render node's `setHasOverlappingRendering(false)`), when the fill provably lies within the
+/// node's bounds, which bound HWUI's alpha layer: the same coverage without an offscreen
+/// buffer, but for the promoted layer's resampling under the node's transform (D521, D648). Read from its cached record while its version stays.
 fn compositing_of(groups: &[DrawGroup], index: usize, cache: &GroupCache) -> u8 {
     let group = &groups[index];
     let Some(layer) = group.layer else { return compositing::AUTO };
@@ -1493,8 +1493,9 @@ mod tests {
         assert_eq!(out.bytes[21], tag::DRAW_RECT);
     }
 
-    /// A layer whose drawing reaches past its bounds isn't folded into its paint: its offscreen
-    /// buffer cuts the drawing there, which a faded paint wouldn't (D648). Within them, it is.
+    /// A layer whose fill reaches past its bounds isn't folded into its paint: its offscreen
+    /// buffer cuts the fill there, which a faded paint wouldn't (D648). Within them, it is; a
+    /// stroke never is.
     #[test]
     fn a_layer_past_its_bounds_is_not_folded() {
         let layer = |rect: Rect, paint: Paint| {
@@ -1512,10 +1513,11 @@ mod tests {
         assert_eq!(layer(Rect::new(0.0, 0.0, 19.5, 20.0), fill), tag::SAVE, "within: folded");
         // Moved half a pixel, past its bounds.
         assert_eq!(layer(Rect::new(0.0, 0.0, 20.0, 20.0), fill), tag::SAVE_LAYER_ALPHA);
-        // Its stroke's half width past them.
+        // Inverted, it's drawn sorted: x 10.5 to 30.5.
+        assert_eq!(layer(Rect::new(30.0, 5.0, 10.0, 15.0), fill), tag::SAVE_LAYER_ALPHA);
+        // A stroke, well within.
         let stroke = Paint::stroke(Color::RED, 3.0);
-        assert_eq!(layer(Rect::new(0.5, 2.0, 10.0, 10.0), stroke), tag::SAVE_LAYER_ALPHA);
-        assert_eq!(layer(Rect::new(1.0, 2.0, 10.0, 10.0), stroke), tag::SAVE, "within: folded");
+        assert_eq!(layer(Rect::new(4.0, 4.0, 10.0, 10.0), stroke), tag::SAVE_LAYER_ALPHA);
     }
 
     #[test]

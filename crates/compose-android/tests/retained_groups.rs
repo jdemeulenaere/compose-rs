@@ -1576,6 +1576,63 @@ fn compositing_strategies_are_their_bytes() {
     assert_eq!(compositing(CompositingStrategy::Offscreen, fade), compositing::OFFSCREEN);
 }
 
+/// The `LAYERS` path folds an `Auto` alpha into its one fill only when the node's bounds hold
+/// the fill: past them, HWUI's alpha layer would cut it, so the layer stays `Auto` (D648).
+#[test]
+fn a_fill_past_its_nodes_bounds_stays_offscreen() {
+    let compositing = |reach: f32| {
+        let fade = Optimizations::NONE.with(Optimization::SINGLE_DRAWING_FADE, true);
+        let mut serialized = Serialized::with(fade, move || {
+            Leaf(
+                Modifier
+                    .size(10.dp())
+                    .graphics_layer_with(GraphicsLayerScope {
+                        alpha: 0.5,
+                        ..GraphicsLayerScope::default()
+                    })
+                    .draw_behind(move |scope| {
+                        scope.draw_rect(Rect::new(0.0, 0.0, reach, 10.0), Paint::fill(Color::RED))
+                    }),
+            );
+        });
+        read(&serialized.frame()).0[0].compositing
+    };
+    assert_eq!(compositing(10.0), compositing::MODULATE_ALPHA);
+    assert_eq!(compositing(20.0), compositing::AUTO);
+}
+
+/// The fold follows the node's bounds, which change without the record: a node drawing the
+/// same 10 px square while it's 10, then 5, then 10 px wide is folded, then offscreen, then
+/// folded again.
+#[test]
+fn the_fold_follows_the_nodes_bounds() {
+    let fade = Optimizations::NONE.with(Optimization::SINGLE_DRAWING_FADE, true);
+    let width = mutable_state_of(10.0f32);
+    let state = width.handle();
+    let mut serialized = Serialized::with(fade, move || {
+        Leaf(
+            Modifier
+                .size((state.get().dp(), 10.dp()))
+                .graphics_layer_with(GraphicsLayerScope {
+                    alpha: 0.5,
+                    ..GraphicsLayerScope::default()
+                })
+                .draw_behind(|scope| {
+                    scope.draw_rect(Rect::new(0.0, 0.0, 10.0, 10.0), Paint::fill(Color::RED))
+                }),
+        );
+    });
+    let mut bytes = Vec::new();
+    for size in [10.0, 5.0, 10.0] {
+        state.set(size);
+        bytes.push(read(&serialized.frame()).0[0].compositing);
+    }
+    assert_eq!(
+        bytes,
+        [compositing::MODULATE_ALPHA, compositing::AUTO, compositing::MODULATE_ALPHA]
+    );
+}
+
 /// A layer after a drawing (`background(…).clip(shape)`, a surface's) is a group of its own
 /// (an inner layer): the background is drawn by what draws the node, the layer's group by
 /// reference after it, holding what follows it; its properties are its `LAYERS` entry.

@@ -117,8 +117,8 @@ pub fn draw_display_list(canvas: &Canvas, list: &DisplayList, text_measurer: &dy
 }
 
 /// [`draw_display_list`] with compose-rs's `optimizations` (`SINGLE_DRAWING_FADE`: a layer's
-/// alpha under `Auto` over one drawing with a paint that provably lies within the layer's
-/// bounds fades that paint, without an offscreen buffer: the same pixels, D648).
+/// alpha under `Auto` over one fill that provably lies within the layer's bounds fades that
+/// fill's paint, without an offscreen buffer: the same pixels but for rounding, D648).
 pub fn draw_display_list_with(
     canvas: &Canvas,
     list: &DisplayList,
@@ -180,8 +180,8 @@ impl Walk<'_> {
         let start = self.canvas.save_count();
         let outer_alpha = self.alpha;
         if let Some(mut layer) = group.layer {
-            // One drawing faded by its paint, with the optimization (D521), when it lies within
-            // the bounds its offscreen buffer would have had (D648).
+            // One fill faded by its paint, with the optimization (D521), when it lies within the
+            // bounds its offscreen buffer would have had (D648).
             if layer.compositing_strategy == CompositingStrategy::Auto
                 && layer.alpha < 1.0
                 && self.optimizations.contains(Optimization::SINGLE_DRAWING_FADE)

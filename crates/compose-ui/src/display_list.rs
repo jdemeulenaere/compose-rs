@@ -408,14 +408,17 @@ pub fn single_drawing(ops: &[DrawOp]) -> Option<usize> {
     (drawings == 1 && depth == 0).then_some(ops.len())
 }
 
-/// The extent of the one drawing `ops` hold ([`single_drawing`]), in their coordinates, the moves
-/// before it applied: what it can touch, conservatively (its geometry, a curve's control points,
-/// a stroke's half width, more past a square cap). `None` when they aren't one drawing, or it
-/// can't be bounded so: under a transform, a stroked path or wedge (their joins' miters). An
-/// alpha layer can fade that drawing's paint instead of compositing it offscreen, the same
-/// pixels, only when the extent lies within the layer's bounds ([`fits_in`]): the offscreen
-/// buffer cuts what's past them, and its edges, rounded outward in device space, keep every
-/// pixel the drawing touches inside them (`Optimization::SINGLE_DRAWING_FADE`, D648).
+/// The extent of the one drawing `ops` hold ([`single_drawing`]), a fill, in their
+/// coordinates: its geometry (sorted, as Skia and Android draw a rect given right before left;
+/// a curve's control points), the moves before it applied. `None` when they aren't one
+/// drawing, or it can't be bounded and drawn alike faded or offscreen: under a transform, or a
+/// stroke. A stroke a device pixel wide or less is drawn as a hairline, its joints blended
+/// twice where the offscreen buffer blends once (15 to 20 of 255 apart), and wider ones aren't
+/// always the same either (a 2 px stroked rounded rect's corners, 5 of 255 on desktop): no
+/// stroke is folded. An alpha layer can fade that fill's paint instead of compositing it
+/// offscreen when the extent lies within the layer's bounds ([`fits_in`]): the offscreen
+/// buffer, its edges rounded outward in device space, would cut nothing of it
+/// (`Optimization::SINGLE_DRAWING_FADE`, D648).
 pub fn single_drawing_extent(ops: &[DrawOp]) -> Option<Rect> {
     let end = single_drawing(ops)?;
     let mut offsets: smallvec::SmallVec<[Offset; 4]> = smallvec::smallvec![Offset::ZERO];
@@ -431,7 +434,7 @@ pub fn single_drawing_extent(ops: &[DrawOp]) -> Option<Rect> {
             DrawOp::Transform { .. } => return None,
             DrawOp::ClipRect(_) | DrawOp::ClipRoundRect(..) | DrawOp::ClipPath { .. } => {}
             drawing => {
-                let own = drawing_extent(drawing)?;
+                let own = fill_extent(drawing)?;
                 extent = Some(Rect::new(
                     own.left + offset.x,
                     own.top + offset.y,
@@ -444,57 +447,35 @@ pub fn single_drawing_extent(ops: &[DrawOp]) -> Option<Rect> {
     extent
 }
 
-/// Whether `extent` lies within `bounds`.
+/// Whether `extent` lies within `bounds`, both sorted (an inverted one holds nothing).
 pub fn fits_in(extent: Rect, bounds: Rect) -> bool {
-    extent.left >= bounds.left
+    let sorted = |rect: Rect| rect.left <= rect.right && rect.top <= rect.bottom;
+    sorted(extent)
+        && sorted(bounds)
+        && extent.left >= bounds.left
         && extent.top >= bounds.top
         && extent.right <= bounds.right
         && extent.bottom <= bounds.bottom
 }
 
-/// What `op`, a drawing with a paint, can touch ([`single_drawing_extent`]).
-fn drawing_extent(op: &DrawOp) -> Option<Rect> {
-    // Half a stroke's width (a hairline's pixel), past its ends more for a square cap.
-    let half = |paint: &Paint| {
-        let width = match paint.style {
-            crate::graphics::PaintStyle::Fill => return 0.0,
-            crate::graphics::PaintStyle::Stroke(width) => width.max(1.0),
-        };
-        let cap = if paint.cap == crate::graphics::StrokeCap::Square {
-            std::f32::consts::SQRT_2
-        } else {
-            1.0
-        };
-        width / 2.0 * cap
-    };
-    let stroked = |paint: &Paint| matches!(paint.style, crate::graphics::PaintStyle::Stroke(_));
-    let grown = |rect: Rect, by: f32| {
-        Rect::new(rect.left - by, rect.top - by, rect.right + by, rect.bottom + by)
+/// What `op`, a drawing with a fill paint, can touch ([`single_drawing_extent`]); `None` for a
+/// stroke (a line is always one).
+fn fill_extent(op: &DrawOp) -> Option<Rect> {
+    let fill = |paint: &Paint| matches!(paint.style, crate::graphics::PaintStyle::Fill);
+    let sorted = |rect: Rect| {
+        Rect::new(
+            rect.left.min(rect.right),
+            rect.top.min(rect.bottom),
+            rect.left.max(rect.right),
+            rect.top.max(rect.bottom),
+        )
     };
     match op {
-        DrawOp::DrawRect(rect, paint) | DrawOp::DrawRoundRect(rect, _, paint) => {
-            Some(grown(*rect, half(paint)))
+        DrawOp::DrawRect(rect, paint) | DrawOp::DrawRoundRect(rect, _, paint) if fill(paint) => {
+            Some(sorted(*rect))
         }
-        DrawOp::DrawLine(from, to, paint) => {
-            // A line is stroked whatever its paint's style.
-            let half = match paint.style {
-                crate::graphics::PaintStyle::Fill => 0.5,
-                _ => half(paint),
-            };
-            let rect =
-                Rect::new(from.x.min(to.x), from.y.min(to.y), from.x.max(to.x), from.y.max(to.y));
-            Some(grown(rect, half))
-        }
-        DrawOp::DrawArc { oval, use_center, paint, .. } => {
-            if *use_center && stroked(paint) {
-                return None;
-            }
-            Some(grown(*oval, half(paint)))
-        }
-        DrawOp::DrawPath { path, offset, scale, paint } => {
-            if stroked(paint) {
-                return None;
-            }
+        DrawOp::DrawArc { oval, paint, .. } if fill(paint) => Some(sorted(*oval)),
+        DrawOp::DrawPath { path, offset, scale, paint } if fill(paint) => {
             let bounds = path.bounds();
             let (x1, x2) = (bounds.left * scale.0, bounds.right * scale.0);
             let (y1, y2) = (bounds.top * scale.1, bounds.bottom * scale.1);
