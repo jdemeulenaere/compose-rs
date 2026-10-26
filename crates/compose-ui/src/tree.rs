@@ -247,6 +247,8 @@ pub struct UiTree {
     pub(crate) platform_uri_handler: crate::platform_services::PlatformUriHandler,
     pub(crate) haptic_feedback: Rc<dyn crate::platform_services::HapticFeedback>,
     pub(crate) density: Density,
+    /// The host's view configuration, if it set one (else Android's at the density, D907).
+    pub(crate) view_configuration: Option<crate::view_configuration::ViewConfiguration>,
     /// The last frame: what's drawn outside any repaint boundary, recorded each draw (kept for
     /// its capacity), and the boundaries' groups, their kept recordings shared.
     pub(crate) display_list: DisplayList,
@@ -336,6 +338,7 @@ impl UiTree {
             platform_uri_handler: crate::platform_services::PlatformUriHandler::headless(),
             haptic_feedback: Rc::new(crate::platform_services::NoHapticFeedback),
             density,
+            view_configuration: None,
             display_list: DisplayList::default(),
             needs_draw: true,
             draw_version: 0,

@@ -148,8 +148,10 @@ fn disabled_captures_and_panicking_handlers() {
 /// The config's tolerance is the rule's.
 #[test]
 fn the_configs_tolerance_applies() {
-    let config =
-        ComposeUiTestConfig { bounds_assertion_tolerance: 2.dp(), ..ComposeUiTestConfig::default() };
+    let config = ComposeUiTestConfig {
+        bounds_assertion_tolerance: 2.dp(),
+        ..ComposeUiTestConfig::default()
+    };
     run_compose_ui_test_with(config, |ui| {
         ui.set_content(|| Box!(modifier = Modifier.size(10.dp()).test_tag("box")));
         ui.on_node_with_tag("box").assert_width_is_equal_to(11.5.dp());
@@ -184,12 +186,12 @@ fn waiting_for_idle_waits_for_idling_resources() {
     looks.set(u32::MAX);
     ui.set_idle_timeout(Duration::from_millis(30));
     let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| ui.wait_for_idle()));
-    let message = failed
-        .expect_err("never idle")
-        .downcast_ref::<String>()
-        .cloned()
-        .unwrap_or_default();
-    assert!(message.contains("ComposeNotIdleException") && message.contains("loading"), "{message}");
+    let message =
+        failed.expect_err("never idle").downcast_ref::<String>().cloned().unwrap_or_default();
+    assert!(
+        message.contains("ComposeNotIdleException") && message.contains("loading"),
+        "{message}"
+    );
     ui.unregister_idling_resource(&resource);
     ui.wait_for_idle();
 }

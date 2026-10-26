@@ -77,8 +77,9 @@ fn Restorable(
 ) {
     if emit.get() {
         let registry = registry.with(|registry| registry.clone());
-        CompositionLocalProvider(LOCAL_SAVEABLE_STATE_REGISTRY.provides(Some(registry)), move || {
-            content()
-        });
+        CompositionLocalProvider(
+            LOCAL_SAVEABLE_STATE_REGISTRY.provides(Some(registry)),
+            &*content,
+        );
     }
 }

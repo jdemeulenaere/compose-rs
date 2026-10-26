@@ -8,8 +8,8 @@ use std::ops::Deref;
 use std::time::Duration;
 
 use compose_ui::{
-    Density, Dp, DpSize, IntSize, Key, KeyEvent, KeyEventType, KeyModifiers, Offset, PointerEvent,
-    PointerId, PointerType, Rect,
+    Density, Dp, IntSize, Key, KeyEvent, KeyEventType, KeyModifiers, Offset, PointerEvent,
+    PointerId, PointerType, Rect, ViewConfiguration,
 };
 
 use crate::interaction::SemanticsNodeInteraction;
@@ -33,34 +33,9 @@ const SCROLL_DP_PER_UNIT: f32 = 64.0;
 /// How far back a velocity is measured, as Compose's `HorizonMilliseconds`.
 const HORIZON_MILLIS: u64 = 100;
 
-/// The platform's gesture timeouts and distances, as Compose's `ViewConfiguration`: the values
-/// compose-rs's gesture detectors use (`pointer_input.rs`, 8 dp of touch slop).
-#[derive(Clone, Copy, PartialEq, Debug)]
-pub struct ViewConfiguration {
-    pub long_press_timeout_millis: u64,
-    pub double_tap_timeout_millis: u64,
-    pub double_tap_min_time_millis: u64,
-    /// In pixels.
-    pub touch_slop: f32,
-    pub minimum_touch_target_size: DpSize,
-}
-
-impl ViewConfiguration {
-    /// compose-rs's, at `density`.
-    pub fn at(density: Density) -> ViewConfiguration {
-        ViewConfiguration {
-            long_press_timeout_millis: 400,
-            double_tap_timeout_millis: 300,
-            double_tap_min_time_millis: 40,
-            touch_slop: density.to_px(Dp(8.0)),
-            minimum_touch_target_size: DpSize::new(Dp(48.0), Dp(48.0)),
-        }
-    }
-
-    /// Halfway between the double tap's least and most time, as Compose's default.
-    fn default_double_tap_delay_millis(&self) -> u64 {
-        (self.double_tap_min_time_millis + self.double_tap_timeout_millis) / 2
-    }
+/// The double tap's default delay, halfway between its least and most time, as Compose's.
+fn default_double_tap_delay_millis(configuration: &ViewConfiguration) -> u64 {
+    (configuration.double_tap_min_time_millis + configuration.double_tap_timeout_millis) / 2
 }
 
 /// A mouse button, as Compose's `MouseButton`. compose-rs's pointer events carry the primary
@@ -148,8 +123,9 @@ impl<'r> InjectionScope<'r> {
     }
 
     /// As `viewConfiguration`.
+    /// The host's, which its gesture detectors use (`UiHost::set_view_configuration`).
     pub fn view_configuration(&self) -> ViewConfiguration {
-        ViewConfiguration::at(self.density)
+        self.rule.host.view_configuration()
     }
 
     /// The node's visible size (its bounds clipped by the clips around it), as `visibleSize`.
@@ -522,7 +498,7 @@ impl TouchInjectionScope<'_> {
     /// `doubleClick()`.
     pub fn double_click(&mut self) {
         let center = self.center();
-        let delay = self.view_configuration().default_double_tap_delay_millis();
+        let delay = default_double_tap_delay_millis(&self.view_configuration());
         self.double_click_at(center, delay);
     }
 
@@ -1041,7 +1017,7 @@ impl MouseInjectionScope<'_> {
 
     /// Two clicks, halfway through the double-tap window apart, as `doubleClick`.
     pub fn double_click(&mut self, position: Offset) {
-        let delay = self.view_configuration().default_double_tap_delay_millis();
+        let delay = default_double_tap_delay_millis(&self.view_configuration());
         self.click_at(position, MouseButton::Primary);
         self.0.advance_event_time(delay);
         self.click_at(position, MouseButton::Primary);
@@ -1049,7 +1025,7 @@ impl MouseInjectionScope<'_> {
 
     /// Three clicks, as `tripleClick`.
     pub fn triple_click(&mut self, position: Offset) {
-        let delay = self.view_configuration().default_double_tap_delay_millis();
+        let delay = default_double_tap_delay_millis(&self.view_configuration());
         self.click_at(position, MouseButton::Primary);
         self.0.advance_event_time(delay);
         self.click_at(position, MouseButton::Primary);

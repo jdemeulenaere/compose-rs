@@ -205,11 +205,6 @@ fn event_time(event: &PointerEvent) -> u64 {
     if event.time_nanos != 0 { event.time_nanos } else { compose_runtime::platform::now_nanos() }
 }
 
-/// The fastest a fling starts, as Android's `ViewConfiguration.getScaledMaximumFlingVelocity`
-/// (8,000 dp/s), and the slowest that flings (50 dp/s).
-const MAXIMUM_FLING_DP: f32 = 8000.0;
-const MINIMUM_FLING_DP: f32 = 50.0;
-
 /// Scrolls with `scroll_by` (pixels towards the end; returns those used) along a fling starting
 /// at `velocity` (pixels per second), frame by frame, until its distance is covered or an edge
 /// stops it, as Compose's default fling behaviour.
@@ -284,7 +279,7 @@ pub(crate) fn dispatch_scroll(
 /// The distance a pointer moves before a drag scrolls, as Compose's touch slop (8 dp), in
 /// pixels.
 pub(crate) fn touch_slop(context: &EventContext<'_>) -> f32 {
-    context.density().to_px(compose_ui::Dp(8.0))
+    context.view_configuration().touch_slop
 }
 
 struct ScrollNode {
@@ -708,15 +703,17 @@ impl DragScroller {
                 event.consume();
                 // A touch let go while moving: the content goes on, slowing down.
                 drag.tracker.add(event_time(event), along_axis(position));
-                let density = context.density().density;
-                let maximum = MAXIMUM_FLING_DP * density;
+                // The platform's fling bounds (`ViewConfiguration`, D907).
+                let configuration = context.view_configuration();
+                let maximum = configuration.maximum_fling_velocity;
                 // The finger's velocity; the content scrolls the other way.
                 let velocity = if drag.touch {
                     (-drag.tracker.velocity()).clamp(-maximum, maximum)
                 } else {
                     0.0
                 };
-                self.end(velocity, density, reverse, flinger);
+                let density = context.density().density;
+                self.end(velocity, density, configuration.minimum_fling_velocity, reverse, flinger);
             }
             _ => {}
         }
@@ -728,6 +725,7 @@ impl DragScroller {
         &mut self,
         velocity: f32,
         density: f32,
+        minimum: f32,
         reverse: bool,
         flinger: impl Fn(&NestedScrollChain, NestedScrollSource) -> Rc<dyn Fn(f32) -> f32>,
     ) {
@@ -738,7 +736,7 @@ impl DragScroller {
         };
         let along_axis = move |offset: Offset| if vertical { offset.y } else { offset.x };
         let velocity = velocity + along_axis(chain.pre_fling(axis(-velocity)));
-        if velocity.abs() > MINIMUM_FLING_DP * density {
+        if velocity.abs() > minimum {
             let scroll = flinger(&chain, NestedScrollSource::SideEffect);
             let flung = chain.clone();
             let scroll: Rc<dyn Fn(f32) -> f32> = Rc::new(move |delta: f32| {

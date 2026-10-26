@@ -279,6 +279,108 @@ fn a_double_click_is_two_clicks_heard_as_a_double_tap() {
     assert!(message.contains("must be at least 40ms"), "{message}");
 }
 
+/// A box detecting taps, recording long presses and double taps.
+fn tapping_box(
+    configuration: Option<compose_ui::ViewConfiguration>,
+) -> (ComposeTestRule, Rc<RefCell<Vec<&'static str>>>) {
+    let heard: Rc<RefCell<Vec<&'static str>>> = Rc::default();
+    let seen = heard.clone();
+    let mut host = compose_test::default_host();
+    host.set_view_configuration(configuration);
+    let ui = ComposeTestRule::with_host(host, move || {
+        let seen = seen.clone();
+        Box!(
+            modifier = Modifier
+                .size(SIZE.dp())
+                .pointer_input((), move |scope| {
+                    let (long, double) = (seen.clone(), seen.clone());
+                    async move {
+                        scope
+                            .detect_tap_gestures(
+                                TapGestures::default()
+                                    .on_long_press(move |_| long.borrow_mut().push("long"))
+                                    .on_double_tap(move |_| double.borrow_mut().push("double")),
+                            )
+                            .await
+                    }
+                })
+                .test_tag("box")
+        );
+    });
+    (ui, heard)
+}
+
+// Compose: compose/ui/ui-test/src/androidDeviceTest/kotlin/androidx/compose/ui/test/injectionscope/touch/LongClickTest.kt, longClick (with its `TestViewConfiguration(longPressTimeoutMillis = 300)`)
+// Compose: compose/ui/ui-test/src/androidDeviceTest/kotlin/androidx/compose/ui/test/injectionscope/touch/DoubleClickTest.kt, doubleClick (with its `TestViewConfiguration(doubleTapMinTimeMillis = 40, doubleTapTimeoutMillis = 200)`)
+/// The host's view configuration sets the detectors' timeouts and the gestures' defaults
+/// alike (D907): a 300 ms long press is held 400 ms; double taps 40 to 200 ms apart are
+/// 120 ms apart by default, and one 250 ms apart is two taps.
+#[test]
+fn the_view_configuration_times_the_detectors_and_the_gestures() {
+    let base = compose_ui::ViewConfiguration::at(compose_ui::Density::default());
+    let configuration = compose_ui::ViewConfiguration {
+        long_press_timeout_millis: 300,
+        double_tap_min_time_millis: 40,
+        double_tap_timeout_millis: 200,
+        ..base
+    };
+    let (mut ui, heard) = tapping_box(Some(configuration));
+    let mut timeouts = (0, 0);
+    ui.on_node_with_tag("box").perform_touch_input(|touch| {
+        timeouts = (
+            touch.view_configuration().long_press_timeout_millis,
+            touch.view_configuration().double_tap_timeout_millis,
+        );
+        let start = touch.current_position(0);
+        assert_eq!(start, None);
+        touch.long_click();
+    });
+    assert_eq!(timeouts, (300, 200));
+    assert_eq!(*heard.borrow(), ["long"]);
+    heard.borrow_mut().clear();
+    ui.on_node_with_tag("box").perform_touch_input(|touch| touch.double_click());
+    assert_eq!(*heard.borrow(), ["double"]);
+    // Past the configured timeout: not a double tap (the default's 300 ms would make one).
+    heard.borrow_mut().clear();
+    ui.advance_time_by(std::time::Duration::from_secs(1));
+    ui.on_node_with_tag("box").perform_touch_input(|touch| {
+        touch.click();
+        touch.advance_event_time(250);
+        touch.click();
+    });
+    ui.advance_time_by(std::time::Duration::from_secs(1));
+    assert!(heard.borrow().is_empty(), "{:?}", heard.borrow());
+    let (mut default, heard) = tapping_box(None);
+    default.on_node_with_tag("box").perform_touch_input(|touch| {
+        touch.click();
+        touch.advance_event_time(250);
+        touch.click();
+    });
+    assert_eq!(*heard.borrow(), ["double"], "Android's 300 ms make it one");
+}
+
+/// Content reads the host's view configuration as `LOCAL_VIEW_CONFIGURATION`, Android's at the
+/// density by default (an 8 dp touch slop).
+#[test]
+fn content_reads_the_view_configuration() {
+    let seen = Rc::new(std::cell::Cell::new(0.0f32));
+    let read = seen.clone();
+    let mut ui = compose_test_with(
+        IntSize::new(100, 100),
+        compose_ui::Density::new(2.0),
+        Box::new(compose_ui::platform::FixedTextMeasurer::new()),
+        move || read.set(compose_ui::LOCAL_VIEW_CONFIGURATION.current().touch_slop),
+    );
+    assert_eq!(seen.get(), 16.0);
+    let configuration = compose_ui::ViewConfiguration {
+        touch_slop: 3.0,
+        ..compose_ui::ViewConfiguration::at(compose_ui::Density::new(2.0))
+    };
+    ui.host().set_view_configuration(Some(configuration));
+    ui.wait_for_idle();
+    assert_eq!(seen.get(), 3.0);
+}
+
 // Compose: compose/ui/ui-test/src/androidDeviceTest/kotlin/androidx/compose/ui/test/injectionscope/touch/LongClickTest.kt, longClick
 /// A long click holds 100 ms past the long-press timeout (400 + 100 ms), moving every event
 /// period, heard as a long press.

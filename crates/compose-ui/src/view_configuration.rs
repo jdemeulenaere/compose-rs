@@ -1,0 +1,75 @@
+//! The platform's gesture timeouts and distances, as Compose's `ViewConfiguration` and
+//! `LocalViewConfiguration`: what the gesture detectors wait for and how far a pointer moves
+//! before it drags (D907).
+
+use compose_runtime::{ComposeArg, CompositionLocal};
+
+use crate::unit::{Density, Dp, DpSize};
+
+/// Gesture timeouts and distances, as Compose's `ViewConfiguration`. The defaults are
+/// Android's (Compose's `AndroidViewConfiguration` reads them from the platform):
+/// [`ViewConfiguration::at`].
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct ViewConfiguration {
+    /// How long a press lasts before it's a long press, as `longPressTimeoutMillis`.
+    pub long_press_timeout_millis: u64,
+    /// How long after a tap a second one makes a double tap, as `doubleTapTimeoutMillis`.
+    pub double_tap_timeout_millis: u64,
+    /// A second tap sooner than this isn't a double tap, as `doubleTapMinTimeMillis`.
+    pub double_tap_min_time_millis: u64,
+    /// How far, in pixels, a pointer moves before it's a drag, as `touchSlop`.
+    pub touch_slop: f32,
+    /// The smallest size of a touch target, as `minimumTouchTargetSize`.
+    pub minimum_touch_target_size: DpSize,
+    /// The fastest fling, in pixels a second, as `maximumFlingVelocity`.
+    pub maximum_fling_velocity: f32,
+    /// The slowest fling, in pixels a second, as `minimumFlingVelocity`.
+    pub minimum_fling_velocity: f32,
+}
+
+impl ViewConfiguration {
+    /// Android's defaults at `density`: a long press at 400 ms, double taps 40 to 300 ms
+    /// apart, an 8 dp touch slop, 48 dp touch targets, flings between 50 and 8,000 dp a second.
+    pub fn at(density: Density) -> ViewConfiguration {
+        ViewConfiguration {
+            long_press_timeout_millis: 400,
+            double_tap_timeout_millis: 300,
+            double_tap_min_time_millis: 40,
+            touch_slop: density.to_px(Dp(8.0)),
+            minimum_touch_target_size: DpSize::new(Dp(48.0), Dp(48.0)),
+            maximum_fling_velocity: density.to_px(Dp(8000.0)),
+            minimum_fling_velocity: density.to_px(Dp(50.0)),
+        }
+    }
+}
+
+impl Default for ViewConfiguration {
+    /// [`ViewConfiguration::at`] density 1.
+    fn default() -> ViewConfiguration {
+        ViewConfiguration::at(Density::default())
+    }
+}
+
+impl ComposeArg for ViewConfiguration {
+    fn same(&self, other: &Self) -> bool {
+        self == other
+    }
+}
+
+/// The host's view configuration, as `LocalViewConfiguration`: what the gesture detectors use
+/// (they read the host's, `UiHost::set_view_configuration`, which provides it here).
+pub static LOCAL_VIEW_CONFIGURATION: CompositionLocal<ViewConfiguration> =
+    CompositionLocal::new("LocalViewConfiguration", ViewConfiguration::default);
+
+impl crate::tree::UiTree {
+    /// The view configuration the gesture detectors use: the host's
+    /// (`UiHost::set_view_configuration`), else Android's at the tree's density.
+    pub fn view_configuration(&self) -> ViewConfiguration {
+        self.view_configuration.unwrap_or_else(|| ViewConfiguration::at(self.density))
+    }
+
+    /// Sets the view configuration (`None`: Android's at the density).
+    pub(crate) fn set_view_configuration(&mut self, configuration: Option<ViewConfiguration>) {
+        self.view_configuration = configuration;
+    }
+}

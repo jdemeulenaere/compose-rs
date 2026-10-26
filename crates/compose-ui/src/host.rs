@@ -39,6 +39,10 @@ pub struct UiHost {
     waker: Waker,
     /// The density content sees as `LOCAL_DENSITY`.
     density: compose_runtime::OwnedState<Density>,
+    /// The view configuration the platform set, if any (`LOCAL_VIEW_CONFIGURATION`; else
+    /// Android's at the density).
+    view_configuration:
+        compose_runtime::OwnedState<Option<crate::view_configuration::ViewConfiguration>>,
     /// The layout direction content sees as `LOCAL_LAYOUT_DIRECTION`.
     layout_direction: compose_runtime::OwnedState<crate::alignment::LayoutDirection>,
     /// The window's size, the root's constraints hint (`LOCAL_CONSTRAINTS_HINT`).
@@ -129,6 +133,7 @@ impl UiHost {
             pending_content: RefCell::new(None),
             waker,
             density: compose_runtime::mutable_state_of(density),
+            view_configuration: compose_runtime::mutable_state_of(None),
             layout_direction: compose_runtime::mutable_state_of(
                 crate::alignment::LayoutDirection::Ltr,
             ),
@@ -224,6 +229,23 @@ impl UiHost {
             tree.set_layout_direction(root, direction);
         });
         self.wake();
+    }
+
+    /// The gesture timeouts and distances the detectors use and content reads as
+    /// `LOCAL_VIEW_CONFIGURATION`, as a platform's `ViewConfiguration`; `None` (the default):
+    /// Android's at the density (D907).
+    pub fn set_view_configuration(
+        &mut self,
+        configuration: Option<crate::view_configuration::ViewConfiguration>,
+    ) {
+        self.with_tree(|tree| tree.set_view_configuration(configuration));
+        self.view_configuration.set(configuration);
+        self.wake();
+    }
+
+    /// The view configuration the detectors use now.
+    pub fn view_configuration(&self) -> crate::view_configuration::ViewConfiguration {
+        self.with_tree(|tree| tree.view_configuration())
     }
 
     pub fn set_density(&mut self, density: Density) {
@@ -329,6 +351,7 @@ impl UiHost {
         let composed = content.is_some();
         if let Some(content) = content {
             let density = self.density.handle();
+            let view_configuration = self.view_configuration.handle();
             let direction = self.layout_direction.handle();
             let window = self.window_size.handle();
             let constants = HostLocals {
@@ -349,6 +372,13 @@ impl UiHost {
                     compose_runtime::CompositionLocalProvider(
                         LOCAL_DENSITY.provides(density.get()),
                         move || {
+                            let gestures = view_configuration.get().unwrap_or_else(|| {
+                                crate::view_configuration::ViewConfiguration::at(density.get())
+                            });
+                            compose_runtime::CompositionLocalProvider(
+                                crate::view_configuration::LOCAL_VIEW_CONFIGURATION
+                                    .provides(gestures),
+                                move || {
                             compose_runtime::CompositionLocalProvider(
                                 crate::alignment::LOCAL_LAYOUT_DIRECTION.provides(direction.get()),
                                 move || {
@@ -374,6 +404,8 @@ impl UiHost {
                                             )
                                         },
                                     )
+                                },
+                            )
                                 },
                             )
                         },

@@ -36,7 +36,7 @@ pub use bounds::DpAssertions;
 pub use capture::{CaptureRenderer, CapturedImage, set_capture_renderer};
 pub use injection::{
     InjectionScope, KeyInjectionScope, MouseButton, MouseInjectionScope, ScrollWheel,
-    TouchInjectionScope, ViewConfiguration,
+    TouchInjectionScope,
 };
 pub use interaction::{SemanticsNodeInteraction, SemanticsNodeInteractionCollection};
 pub use matcher::{
@@ -52,8 +52,7 @@ pub use matcher::{
 pub use restoration::StateRestorationTester;
 pub use rule::{
     ComposeTestRule, DEFAULT_BOUNDS_TOLERANCE, DEFAULT_IDLE_TIMEOUT, DEFAULT_WAIT_TIMEOUT,
-    FRAME_DURATION, IdlingResource, compose_test,
-    compose_test_with,
+    FRAME_DURATION, IdlingResource, compose_test, compose_test_with,
 };
 pub use run::{
     CaptureMode, ComposeUiTest, ComposeUiTestConfig, FailureArtifact, FailureArtifactType,
@@ -65,6 +64,10 @@ pub use text_probe::{CountingTextMeasurer, LayoutCounts, TextLayoutCounter, draw
 
 /// Hooks tests count composable runs with (the runtime keeps them in its unstable `platform`
 /// module; tests reach them here).
+/// The gesture timeouts and distances the injection scopes report, as `viewConfiguration`
+/// (compose-ui's, D907).
+pub use compose_ui::ViewConfiguration;
+
 pub use compose_runtime::platform::{
     RecompositionCounts, bodies_run, live_state_count, recomposition_counts, track_recompositions,
 };

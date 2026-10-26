@@ -229,6 +229,7 @@ impl UiTree {
         }
         let origin = self.layer_origin(entry.node, entry.layer as usize);
         let density = self.density;
+        let view_configuration = self.view_configuration();
         let Some((value, (text_measurer, clipboard))) = self.node_and_measurer(entry.node) else {
             return;
         };
@@ -242,6 +243,7 @@ impl UiTree {
             clipboard,
             pointer_position: Some(position),
             density,
+            view_configuration,
             layout_direction: value.layout_direction,
         };
         if let Some(handler) = value.chain[entry.index as usize].as_pointer_input() {
@@ -435,6 +437,7 @@ impl UiTree {
                 continue;
             }
             let density = self.density;
+            let view_configuration = self.view_configuration();
             let Some((value, (text_measurer, clipboard))) = self.node_and_measurer(node) else {
                 break;
             };
@@ -446,6 +449,7 @@ impl UiTree {
                 clipboard,
                 pointer_position: None,
                 density,
+                view_configuration,
                 layout_direction: value.layout_direction,
             };
             if let Some(semantics) = value.chain[index].as_semantics()
@@ -490,6 +494,7 @@ impl UiTree {
         let mut consumed = false;
         for (node, index) in self.key_path() {
             let density = self.density;
+            let view_configuration = self.view_configuration();
             let Some((value, (text_measurer, clipboard))) = self.node_and_measurer(node) else {
                 continue;
             };
@@ -501,6 +506,7 @@ impl UiTree {
                 clipboard,
                 pointer_position: None,
                 density,
+                view_configuration,
                 layout_direction: value.layout_direction,
             };
             if let Some(handler) = value.chain[index].as_key_input()
@@ -614,6 +620,7 @@ impl UiTree {
         let mut consumed = false;
         for (node, index) in self.key_path() {
             let density = self.density;
+            let view_configuration = self.view_configuration();
             let Some((value, (text_measurer, clipboard))) = self.node_and_measurer(node) else {
                 continue;
             };
@@ -625,6 +632,7 @@ impl UiTree {
                 clipboard,
                 pointer_position: None,
                 density,
+                view_configuration,
                 layout_direction: value.layout_direction,
             };
             if let Some(handler) = value.chain[index].as_key_input()

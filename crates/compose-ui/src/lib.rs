@@ -54,6 +54,7 @@ mod text_selection;
 mod trace;
 mod tree;
 mod unit;
+mod view_configuration;
 mod window;
 
 /// Host and platform plumbing: what hosts (compose-desktop, compose-android, compose-test) and
@@ -170,6 +171,7 @@ pub use text_selection::Selectable;
 pub use unit::{
     Density, Dp, DpOffset, DpRect, DpSize, IntOffset, IntSize, Offset, Rect, Size, Sp, UnitExt,
 };
+pub use view_configuration::{LOCAL_VIEW_CONFIGURATION, ViewConfiguration};
 pub use window::{
     AlignmentOffsetPositionProvider, Dialog, DialogProperties, Popup, PopupProperties,
     PopupWithPositionProvider,

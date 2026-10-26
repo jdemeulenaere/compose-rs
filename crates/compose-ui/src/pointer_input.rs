@@ -85,6 +85,8 @@ struct ScopeInner {
     delivery: RefCell<Option<Delivery>>,
     size: Cell<IntSize>,
     density: Cell<Density>,
+    /// The host's view configuration, as the last event found it (D907).
+    view_configuration: Cell<crate::view_configuration::ViewConfiguration>,
     /// The pointers down, as the events reaching the node tell.
     pressed: RefCell<Vec<PointerId>>,
     /// Callbacks the detectors call, run once the dispatch is over (the tree is free).
@@ -102,13 +104,6 @@ pub struct PointerInputScope {
     inner: Rc<ScopeInner>,
 }
 
-/// As Compose's `ViewConfiguration.longPressTimeoutMillis`.
-const LONG_PRESS_TIMEOUT: Duration = Duration::from_millis(400);
-/// As `doubleTapTimeoutMillis`.
-const DOUBLE_TAP_TIMEOUT: Duration = Duration::from_millis(300);
-/// As `doubleTapMinTimeMillis`: a second press sooner than this isn't a double tap.
-const DOUBLE_TAP_MIN_MILLIS: u64 = 40;
-
 impl PointerInputScope {
     /// The node's size, as `size`.
     pub fn size(&self) -> IntSize {
@@ -119,9 +114,15 @@ impl PointerInputScope {
         self.inner.density.get()
     }
 
-    /// The distance a pointer moves before it's a drag, as `viewConfiguration.touchSlop` (8 dp).
+    /// The host's gesture timeouts and distances, as `viewConfiguration` (D907).
+    pub fn view_configuration(&self) -> crate::view_configuration::ViewConfiguration {
+        self.inner.view_configuration.get()
+    }
+
+    /// The distance a pointer moves before it's a drag, as `viewConfiguration.touchSlop` (8 dp
+    /// by default).
     pub fn touch_slop(&self) -> f32 {
-        self.density().to_px(crate::unit::Dp(8.0))
+        self.view_configuration().touch_slop
     }
 
     /// Whether any pointer is down, as the events reaching the node tell.
@@ -212,7 +213,9 @@ impl PointerInputScope {
     async fn await_second_down(&self, first_up: &PointerInputChange) -> PointerInputChange {
         loop {
             let down = self.await_first_down(true).await;
-            if down.uptime_millis >= first_up.uptime_millis + DOUBLE_TAP_MIN_MILLIS {
+            if down.uptime_millis
+                >= first_up.uptime_millis + self.view_configuration().double_tap_min_time_millis
+            {
                 return down;
             }
         }
@@ -254,8 +257,12 @@ impl PointerInputScope {
                 continue;
             }
             // A second press soon after: a double tap once it's released.
-            let Some(second) =
-                self.with_timeout(DOUBLE_TAP_TIMEOUT, self.await_second_down(&up)).await
+            let Some(second) = self
+                .with_timeout(
+                    Duration::from_millis(self.view_configuration().double_tap_timeout_millis),
+                    self.await_second_down(&up),
+                )
+                .await
             else {
                 self.call(&gestures.on_tap, up.position);
                 continue;
@@ -291,7 +298,11 @@ impl PointerInputScope {
     /// long press to detect).
     async fn up_or_long_press(&self, gestures: &TapGestures) -> Option<Option<PointerInputChange>> {
         if gestures.on_long_press.is_some() {
-            self.with_timeout(LONG_PRESS_TIMEOUT, self.wait_for_up_or_cancellation()).await
+            self.with_timeout(
+                Duration::from_millis(self.view_configuration().long_press_timeout_millis),
+                self.wait_for_up_or_cancellation(),
+            )
+            .await
         } else {
             Some(self.wait_for_up_or_cancellation().await)
         }
@@ -603,6 +614,7 @@ impl PointerInputDriver {
         let inner = &self.scope.inner;
         inner.size.set(bounds);
         inner.density.set(context.density());
+        inner.view_configuration.set(context.view_configuration());
         if pass == PointerEventPass::Initial {
             let mut pressed = inner.pressed.borrow_mut();
             match event.kind {

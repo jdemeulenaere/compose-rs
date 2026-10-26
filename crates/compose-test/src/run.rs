@@ -10,8 +10,8 @@ use std::time::Duration;
 use compose_ui::Dp;
 
 use crate::capture::{CapturedImage, has_capture_renderer};
-use crate::rule::{ComposeTestRule, DEFAULT_IDLE_TIMEOUT};
 use crate::default_host;
+use crate::rule::{ComposeTestRule, DEFAULT_IDLE_TIMEOUT};
 
 /// The test body's rule, as Compose's `ComposeUiTest`: `set_content` once, the finders, the
 /// clock, `wait_for_idle`, `run_on_idle`, `wait_until`.
@@ -157,7 +157,10 @@ fn run_failure_pipeline(rule: &mut ComposeTestRule, policy: &TestFailurePolicy, 
                 });
             }
             Err(failure) => {
-                eprintln!("compose-test: failed to capture screenshot: {}", panic_message(&*failure))
+                eprintln!(
+                    "compose-test: failed to capture screenshot: {}",
+                    panic_message(&*failure)
+                )
             }
         }
     }

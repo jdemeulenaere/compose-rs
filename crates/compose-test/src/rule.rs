@@ -260,7 +260,11 @@ impl ComposeTestRule {
                 panic!(
                     "compose-test: ComposeNotIdleException: the UI never became idle ({frames} \
                      frames, {elapsed:?} of test time{}){}",
-                    if frame_due { ": an animation or a recomposition that never ends?" } else { "" },
+                    if frame_due {
+                        ": an animation or a recomposition that never ends?"
+                    } else {
+                        ""
+                    },
                     if reasons.is_empty() {
                         String::new()
                     } else {
