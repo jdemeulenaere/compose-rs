@@ -18,12 +18,17 @@ impl DpAssertions for Dp {
     fn assert_is_equal_to(self, expected: Dp, subject: &str, tolerance: Dp) {
         assert!(
             is_within_tolerance(self, expected, tolerance),
-            "compose-test: Actual {subject} is {:?}, expected {:?} (tolerance: {:?})",
-            self,
-            expected,
-            tolerance
+            "compose-test: Actual {subject} is {}, expected {} (tolerance: {})",
+            dp_string(self),
+            dp_string(expected),
+            dp_string(tolerance)
         );
     }
+}
+
+/// A `Dp` as Kotlin prints it: `10.0.dp`, `Dp.Unspecified`.
+fn dp_string(dp: Dp) -> String {
+    if dp.is_specified() { format!("{:?}.dp", dp.0) } else { "Dp.Unspecified".to_string() }
 }
 
 fn is_within_tolerance(actual: Dp, expected: Dp, tolerance: Dp) -> bool {
@@ -232,7 +237,9 @@ fn assert_is_at_least(actual: Dp, expected: Dp, subject: &str) {
     assert!(
         is_within_tolerance(actual, expected, tolerance)
             || (actual.is_specified() && actual.0 > expected.0),
-        "compose-test: Actual {subject} is {actual:?}, expected at least {expected:?} \
-         (tolerance: {tolerance:?})"
+        "compose-test: Actual {subject} is {}, expected at least {} (tolerance: {})",
+        dp_string(actual),
+        dp_string(expected),
+        dp_string(tolerance)
     );
 }

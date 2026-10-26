@@ -2,15 +2,10 @@
 
 #![allow(non_snake_case)]
 
-extern crate compose_runtime as compose;
-
-#[path = "../../compose-ui/tests/support/mod.rs"]
-mod support;
-
 use compose_runtime::*;
 use compose_test::*;
 use compose_ui::*;
-use support::*;
+use crate::support::*;
 
 #[composable]
 fn Counter() {

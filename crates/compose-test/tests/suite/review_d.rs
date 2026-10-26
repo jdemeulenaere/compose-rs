@@ -2,14 +2,9 @@
 
 #![allow(non_snake_case)]
 
-extern crate compose_runtime as compose;
-
-#[path = "../../compose-ui/tests/support/mod.rs"]
-mod support;
-
 use compose_test::*;
 use compose_ui::*;
-use support::*;
+use crate::support::*;
 
 /// `onAllNodes(matcher)[index].assertDoesNotExist()` passes in Compose when fewer than
 /// `index + 1` nodes match. compose-test's `assert_does_not_exist` ignores the index and fails

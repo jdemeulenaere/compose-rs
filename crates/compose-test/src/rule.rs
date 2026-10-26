@@ -267,14 +267,16 @@ impl ComposeTestRule {
     /// `ComposeTimeoutException`.
     #[track_caller]
     pub fn wait_until(&mut self, condition: impl FnMut(&mut Self) -> bool) {
-        self.wait_until_with_timeout(DEFAULT_WAIT_TIMEOUT, condition);
+        self.wait_until_with(None, DEFAULT_WAIT_TIMEOUT, condition);
     }
 
-    /// The same, with a `timeout`, as `waitUntil(timeoutMillis)`. Compose counts real time,
-    /// 10 ms a check; this counts the checks, so it is deterministic.
+    /// The same, with a `timeout`, and a description of the condition for the failure, as
+    /// `waitUntil(conditionDescription, timeoutMillis)`. Compose counts real time, 10 ms a
+    /// check; this counts the checks, so it is deterministic.
     #[track_caller]
-    pub fn wait_until_with_timeout(
+    pub fn wait_until_with(
         &mut self,
+        description: Option<&str>,
         timeout: Duration,
         mut condition: impl FnMut(&mut Self) -> bool,
     ) {
@@ -289,36 +291,71 @@ impl ComposeTestRule {
                 self.run_current();
             }
             checked += 1;
-            assert!(
-                checked <= checks,
-                "compose-test: ComposeTimeoutException: condition still not satisfied after {} ms",
-                timeout.as_millis()
-            );
+            if checked > checks {
+                let condition = description.map_or(String::new(), |d| format!(" ({d})"));
+                panic!(
+                    "compose-test: ComposeTimeoutException: Condition{condition} still not \
+                     satisfied after {} ms",
+                    timeout.as_millis()
+                );
+            }
         }
     }
 
-    /// Waits until exactly `count` nodes match `matcher`, as `waitUntilNodeCount`.
+    fn count_in(&mut self, matcher: &Matcher, use_unmerged_tree: bool) -> usize {
+        self.count_nodes_in(matcher, !use_unmerged_tree)
+    }
+
+    /// Waits until exactly `count` nodes match `matcher` (in the unmerged tree with
+    /// `use_unmerged_tree`), as `waitUntilNodeCount`.
     #[track_caller]
-    pub fn wait_until_node_count(&mut self, matcher: &Matcher, count: usize, timeout: Duration) {
-        self.wait_until_with_timeout(timeout, |rule| rule.count_nodes(matcher) == count);
+    pub fn wait_until_node_count(
+        &mut self,
+        matcher: &Matcher,
+        count: usize,
+        timeout: Duration,
+        use_unmerged_tree: bool,
+    ) {
+        let description = format!("exactly {count} nodes match ({})", matcher.description);
+        self.wait_until_with(Some(&description), timeout, |rule| {
+            rule.count_in(matcher, use_unmerged_tree) == count
+        });
     }
 
     /// Waits until a node matches, as `waitUntilAtLeastOneExists`.
     #[track_caller]
-    pub fn wait_until_at_least_one_exists(&mut self, matcher: &Matcher, timeout: Duration) {
-        self.wait_until_with_timeout(timeout, |rule| rule.count_nodes(matcher) > 0);
+    pub fn wait_until_at_least_one_exists(
+        &mut self,
+        matcher: &Matcher,
+        timeout: Duration,
+        use_unmerged_tree: bool,
+    ) {
+        let description = format!("at least one node matches ({})", matcher.description);
+        self.wait_until_with(Some(&description), timeout, |rule| {
+            rule.count_in(matcher, use_unmerged_tree) > 0
+        });
     }
 
     /// Waits until exactly one node matches, as `waitUntilExactlyOneExists`.
     #[track_caller]
-    pub fn wait_until_exactly_one_exists(&mut self, matcher: &Matcher, timeout: Duration) {
-        self.wait_until_with_timeout(timeout, |rule| rule.count_nodes(matcher) == 1);
+    pub fn wait_until_exactly_one_exists(
+        &mut self,
+        matcher: &Matcher,
+        timeout: Duration,
+        use_unmerged_tree: bool,
+    ) {
+        self.wait_until_node_count(matcher, 1, timeout, use_unmerged_tree);
     }
 
     /// Waits until no node matches, as `waitUntilDoesNotExist`.
     #[track_caller]
-    pub fn wait_until_does_not_exist(&mut self, matcher: &Matcher, timeout: Duration) {
-        self.wait_until_with_timeout(timeout, |rule| rule.count_nodes(matcher) == 0);
+    pub fn wait_until_does_not_exist(
+        &mut self,
+        matcher: &Matcher,
+        timeout: Duration,
+        use_unmerged_tree: bool,
+    ) {
+        self.wait_until_node_count(matcher, 0, timeout, use_unmerged_tree);
     }
 
     // ---- The main clock -----------------------------------------------------------------------
@@ -488,8 +525,17 @@ impl ComposeTestRule {
 
     /// How many nodes match `matcher` in the merged tree, after waiting for idle.
     pub fn count_nodes(&mut self, matcher: &Matcher) -> usize {
+        self.count_nodes_in(matcher, true)
+    }
+
+    /// How many nodes match `matcher` in the unmerged tree, after waiting for idle.
+    pub fn count_nodes_unmerged(&mut self, matcher: &Matcher) -> usize {
+        self.count_nodes_in(matcher, false)
+    }
+
+    fn count_nodes_in(&mut self, matcher: &Matcher, merged: bool) -> usize {
         self.implicit_wait();
-        let tree = self.host.semantics_tree(true);
+        let tree = self.host.semantics_tree(merged);
         let view = TreeView::new(&tree);
         view.all().filter(|node| matcher.matches_node(*node)).count()
     }

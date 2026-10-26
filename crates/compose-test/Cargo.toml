@@ -17,3 +17,8 @@ skia = ["dep:compose-skia"]
 
 [dev-dependencies]
 smallvec = "1.13"
+# The harness's own tests (tests/suite) compose with foundation and animation, and capture
+# pixels with Skia.
+compose-foundation.workspace = true
+compose-animation.workspace = true
+compose-test = { path = ".", features = ["skia"] }
