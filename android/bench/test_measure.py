@@ -1270,5 +1270,367 @@ class LockedClocksTest(unittest.TestCase):
             self.assertIsNone(measure.load_locked_clocks(None))
 
 
+# `simpleperf stat -p <bench-rs> --per-thread -e instructions:u,instructions:k,cpu-cycles --csv
+# --verbose` on the Pixel 8 Pro (Android 17), in the stress animation, three of its threads kept:
+# each event's row per thread and CPU (count, time enabled, time running), then the summary.
+SIMPLEPERF_STAT = """\
+Performance counter statistics,
+instructions,tid,32617,cpu,0,count,0,time_enabled,751816725,time running,0,id,7839,
+instructions,tid,32617,cpu,1,count,0,time_enabled,751808913,time running,0,id,7840,
+instructions,tid,32617,cpu,2,count,0,time_enabled,751802119,time running,0,id,7841,
+instructions,tid,32617,cpu,3,count,0,time_enabled,751795974,time running,0,id,7842,
+instructions,tid,32617,cpu,4,count,253015366,time_enabled,751800653,time running,131074416,id,7843,
+instructions,tid,32617,cpu,5,count,328274118,time_enabled,751794062,time running,165378822,id,7844,
+instructions,tid,32617,cpu,6,count,421714644,time_enabled,751786046,time running,205178097,id,7845,
+instructions,tid,32617,cpu,7,count,455024954,time_enabled,751778030,time running,222120205,id,7846,
+instructions,tid,32617,cpu,8,count,60586738,time_enabled,751767816,time running,28049113,id,7847,
+instructions,tid,32632,cpu,0,count,0,time_enabled,1581024068,time running,0,id,7956,
+instructions,tid,32632,cpu,1,count,0,time_enabled,1581014262,time running,0,id,7957,
+instructions,tid,32632,cpu,2,count,0,time_enabled,1581004822,time running,0,id,7958,
+instructions,tid,32632,cpu,3,count,0,time_enabled,1580995422,time running,0,id,7959,
+instructions,tid,32632,cpu,4,count,440711806,time_enabled,1580986755,time running,243936159,id,7960,
+instructions,tid,32632,cpu,5,count,197056551,time_enabled,1580977274,time running,114513912,id,7961,
+instructions,tid,32632,cpu,6,count,175240524,time_enabled,1580964660,time running,100921622,id,7962,
+instructions,tid,32632,cpu,7,count,108415457,time_enabled,1580680847,time running,57242186,id,7963,
+instructions,tid,32632,cpu,8,count,2890977156,time_enabled,1580634419,time running,1064380729,id,7964,
+instructions,tid,32640,cpu,0,count,0,time_enabled,1721124258,time running,0,id,8001,
+instructions,tid,32640,cpu,1,count,0,time_enabled,1721116893,time running,0,id,8002,
+instructions,tid,32640,cpu,2,count,0,time_enabled,1721112499,time running,0,id,8003,
+instructions,tid,32640,cpu,3,count,0,time_enabled,1721107494,time running,0,id,8004,
+instructions,tid,32640,cpu,4,count,935428791,time_enabled,1721103262,time running,185383789,id,8005,
+instructions,tid,32640,cpu,5,count,962474641,time_enabled,1721099640,time running,194777264,id,8006,
+instructions,tid,32640,cpu,6,count,2224017755,time_enabled,1721095082,time running,434768510,id,8007,
+instructions,tid,32640,cpu,7,count,3974823726,time_enabled,1721097563,time running,803622062,id,8008,
+instructions,tid,32640,cpu,8,count,578934590,time_enabled,1721092396,time running,102545938,id,8009,
+instructions,tid,32617,cpu,0,count,0,time_enabled,750928094,time running,0,id,8082,
+instructions,tid,32617,cpu,1,count,0,time_enabled,750928094,time running,0,id,8083,
+instructions,tid,32617,cpu,2,count,0,time_enabled,750928094,time running,0,id,8084,
+instructions,tid,32617,cpu,3,count,0,time_enabled,750928094,time running,0,id,8085,
+instructions,tid,32617,cpu,4,count,7335457,time_enabled,750928094,time running,130201857,id,8086,
+instructions,tid,32617,cpu,5,count,8357280,time_enabled,750928094,time running,165378822,id,8087,
+instructions,tid,32617,cpu,6,count,11515240,time_enabled,750928094,time running,205178097,id,8088,
+instructions,tid,32617,cpu,7,count,12005168,time_enabled,750928094,time running,222120205,id,8089,
+instructions,tid,32617,cpu,8,count,1432917,time_enabled,750928094,time running,28049113,id,8090,
+instructions,tid,32632,cpu,0,count,0,time_enabled,1578621276,time running,0,id,8199,
+instructions,tid,32632,cpu,1,count,0,time_enabled,1578361185,time running,0,id,8200,
+instructions,tid,32632,cpu,2,count,0,time_enabled,1578238016,time running,0,id,8201,
+instructions,tid,32632,cpu,3,count,0,time_enabled,1578205220,time running,0,id,8202,
+instructions,tid,32632,cpu,4,count,20620951,time_enabled,1578177632,time running,243936159,id,8203,
+instructions,tid,32632,cpu,5,count,8408189,time_enabled,1578152729,time running,110123368,id,8204,
+instructions,tid,32632,cpu,6,count,6105384,time_enabled,1578128274,time running,100921622,id,8205,
+instructions,tid,32632,cpu,7,count,4138810,time_enabled,1578099465,time running,57242186,id,8206,
+instructions,tid,32632,cpu,8,count,136717885,time_enabled,1578075173,time running,1065929394,id,8207,
+instructions,tid,32640,cpu,0,count,0,time_enabled,1720304269,time running,0,id,8244,
+instructions,tid,32640,cpu,1,count,0,time_enabled,1720319650,time running,0,id,8245,
+instructions,tid,32640,cpu,2,count,0,time_enabled,1720333078,time running,0,id,8246,
+instructions,tid,32640,cpu,3,count,0,time_enabled,1720333078,time running,0,id,8247,
+instructions,tid,32640,cpu,4,count,16098870,time_enabled,1720333078,time running,185383789,id,8248,
+instructions,tid,32640,cpu,5,count,16401729,time_enabled,1720333078,time running,194777264,id,8249,
+instructions,tid,32640,cpu,6,count,31081842,time_enabled,1720333078,time running,434768510,id,8250,
+instructions,tid,32640,cpu,7,count,62285288,time_enabled,1720333078,time running,802857577,id,8251,
+instructions,tid,32640,cpu,8,count,4294975,time_enabled,1720333078,time running,102545938,id,8252,
+cpu-cycles,tid,32617,cpu,0,count,0,time_enabled,750246739,time running,0,id,8325,
+cpu-cycles,tid,32617,cpu,1,count,0,time_enabled,750238439,time running,0,id,8326,
+cpu-cycles,tid,32617,cpu,2,count,0,time_enabled,750105464,time running,0,id,8327,
+cpu-cycles,tid,32617,cpu,3,count,0,time_enabled,750134517,time running,0,id,8328,
+cpu-cycles,tid,32617,cpu,4,count,219653716,time_enabled,750131343,time running,129405106,id,8329,
+cpu-cycles,tid,32617,cpu,5,count,276463192,time_enabled,750113032,time running,165378822,id,8330,
+cpu-cycles,tid,32617,cpu,6,count,348869889,time_enabled,750105015,time running,205178097,id,8331,
+cpu-cycles,tid,32617,cpu,7,count,386024035,time_enabled,750098952,time running,222120205,id,8332,
+cpu-cycles,tid,32617,cpu,8,count,54772067,time_enabled,750093460,time running,28049113,id,8333,
+cpu-cycles,tid,32632,cpu,0,count,0,time_enabled,1573237038,time running,0,id,8442,
+cpu-cycles,tid,32632,cpu,1,count,0,time_enabled,1573145730,time running,0,id,8443,
+cpu-cycles,tid,32632,cpu,2,count,0,time_enabled,1573041319,time running,0,id,8444,
+cpu-cycles,tid,32632,cpu,3,count,0,time_enabled,1573010842,time running,0,id,8445,
+cpu-cycles,tid,32632,cpu,4,count,450346274,time_enabled,1572992491,time running,243936159,id,8446,
+cpu-cycles,tid,32632,cpu,5,count,187143903,time_enabled,1572986591,time running,104277583,id,8447,
+cpu-cycles,tid,32632,cpu,6,count,187807750,time_enabled,1572981748,time running,100921622,id,8448,
+cpu-cycles,tid,32632,cpu,7,count,107743270,time_enabled,1572954526,time running,57242186,id,8449,
+cpu-cycles,tid,32632,cpu,8,count,2659464213,time_enabled,1572942767,time running,1066565217,id,8450,
+cpu-cycles,tid,32640,cpu,0,count,0,time_enabled,1715905628,time running,0,id,8487,
+cpu-cycles,tid,32640,cpu,1,count,0,time_enabled,1715905628,time running,0,id,8488,
+cpu-cycles,tid,32640,cpu,2,count,0,time_enabled,1715905628,time running,0,id,8489,
+cpu-cycles,tid,32640,cpu,3,count,0,time_enabled,1715905628,time running,0,id,8490,
+cpu-cycles,tid,32640,cpu,4,count,342894809,time_enabled,1715905628,time running,185383789,id,8491,
+cpu-cycles,tid,32640,cpu,5,count,342373875,time_enabled,1715905628,time running,194777264,id,8492,
+cpu-cycles,tid,32640,cpu,6,count,792469450,time_enabled,1715905628,time running,434768510,id,8493,
+cpu-cycles,tid,32640,cpu,7,count,1397504760,time_enabled,1715905628,time running,798430127,id,8494,
+cpu-cycles,tid,32640,cpu,8,count,172778552,time_enabled,1715905628,time running,102545938,id,8495,
+hwuiTask0,32617,32640,8675679503,instructions:u,5.041,G/sec,
+RenderThread,32617,32632,3812401494,instructions:u,2.411,G/sec,
+ompose.bench.rs,32617,32617,1518615820,instructions:u,2.020,G/sec,
+RenderThread,32617,32632,175991219,instructions:k,111.517,M/sec,
+hwuiTask0,32617,32640,130162704,instructions:k,75.661,M/sec,
+ompose.bench.rs,32617,32617,40646062,instructions:k,54.128,M/sec,
+RenderThread,32617,32632,3592505410,cpu-cycles,2.283939,GHz,
+hwuiTask0,32617,32640,3048021446,cpu-cycles,1.776334,GHz,
+ompose.bench.rs,32617,32617,1285782899,cpu-cycles,1.714077,GHz,
+Total test time,3.001741,seconds,
+"""
+
+
+# `simpleperf stat --print-hw-counter` on the Pixel 8 Pro: the Cortex-X3 (cpu 8) has one fewer.
+HW_COUNTERS = """\
+There are 4 CPU PMU hardware counters available on cpu 0.
+There are 4 CPU PMU hardware counters available on cpu 7.
+There are 3 CPU PMU hardware counters available on cpu 8.
+"""
+
+
+class CountersTest(unittest.TestCase):
+    EVENTS = ("instructions:u", "instructions:k", "cpu-cycles")
+
+    def test_per_thread_counts(self):
+        parsed = measure.parse_simpleperf_stat(SIMPLEPERF_STAT, self.EVENTS)
+        self.assertEqual(parsed["seconds"], 3.001741)
+        self.assertEqual(parsed["mismatches"], [])
+        threads = {thread["tid"]: thread for thread in parsed["threads"]}
+        self.assertEqual(sorted(threads), [32617, 32632, 32640])
+        main = threads[32617]
+        self.assertEqual((main["name"], main["pid"]), ("ompose.bench.rs", 32617))
+        self.assertEqual(main["counts"], {"instructions:u": 1518615820, "instructions:k": 40646062,
+                                          "cpu-cycles": 1285782899})
+        # The summary's counts are the per-CPU rows' sums: no scaling.
+        self.assertEqual(threads[32632]["counts"]["cpu-cycles"], 3592505410)
+
+    def test_the_modifiers_rows_are_told_apart_by_their_order(self):
+        """The per-CPU rows name the event without its modifier (`instructions` for both :u and
+        :k): the n-th row of a thread and CPU is the n-th event of that name."""
+        parsed = measure.parse_simpleperf_stat(SIMPLEPERF_STAT, self.EVENTS)
+        render = {thread["tid"]: thread for thread in parsed["threads"]}[32632]
+        # Time running over time enabled, summed over the CPUs: 1 when never multiplexed.
+        self.assertAlmostEqual(render["running"]["instructions:u"], 1580994608 / 1581024068)
+        self.assertAlmostEqual(render["running"]["instructions:k"], 1578152729 / 1578621276)
+        self.assertAlmostEqual(render["running"]["cpu-cycles"], 1572942767 / 1573237038)
+
+    def test_multiplexed_counters_are_said(self):
+        """Four events on a CPU with three counters (the X3): the counters take turns, each
+        counting part of the time its thread ran."""
+        text = (
+            "Performance counter statistics,\n"
+            "cpu-cycles,tid,10,cpu,0,count,600,time_enabled,1000,time running,600,id,1,\n"
+            "cpu-cycles,tid,10,cpu,1,count,100,time_enabled,1000,time running,200,id,2,\n"
+            "cpu-cycles,tid,11,cpu,0,count,0,time_enabled,0,time running,0,id,3,\n"
+            "cpu-cycles,tid,11,cpu,1,count,0,time_enabled,0,time running,0,id,4,\n"
+            "cpu-cycles,tid,10,cpu,0,count,50,time_enabled,1000,time running,800,id,5,\n"
+            "cpu-cycles,tid,10,cpu,1,count,0,time_enabled,1000,time running,200,id,6,\n"
+            "cpu-cycles,tid,11,cpu,0,count,0,time_enabled,0,time running,0,id,7,\n"
+            "cpu-cycles,tid,11,cpu,1,count,0,time_enabled,0,time running,0,id,8,\n"
+            "main,10,10,700,cpu-cycles:u,1.0,GHz,\n"
+            "main,10,10,51,cpu-cycles:k,1.0,GHz,\n"
+            "Total test time,1.000000,seconds,\n")
+        parsed = measure.parse_simpleperf_stat(text, ("cpu-cycles:u", "cpu-cycles:k"))
+        main, = parsed["threads"]
+        self.assertEqual(main["running"], {"cpu-cycles:u": 0.8, "cpu-cycles:k": 1.0})
+        # A summary that isn't the rows' sum is said (cpu-cycles:k's rows hold 50).
+        self.assertEqual(parsed["mismatches"], ["tid 10 cpu-cycles:k: 51 in the summary, 50 by CPU"])
+        # A thread that never ran (no summary row, no count) isn't listed.
+        self.assertEqual([thread["tid"] for thread in parsed["threads"]], [10])
+
+    def test_thread_groups(self):
+        cases = [
+            ("ompose.bench.rs", 100, 100, "main"), ("e.bench.compose", 7, 7, "main"),
+            ("RenderThread", 101, 100, "RenderThread"), ("hwuiTask0", 102, 100, "hwuiTask"),
+            ("hwuiTask1", 103, 100, "hwuiTask"), ("mali-event-hand", 104, 100, "GPU driver"),
+            ("mali-mem-purge", 105, 100, "GPU driver"), ("GPU completion", 106, 100, "GPU driver"),
+            ("binder:100_4", 107, 100, "binder"), ("Jit thread pool", 108, 100, "JIT"),
+            ("HeapTaskDaemon", 109, 100, "GC"), ("ReferenceQueueD", 110, 100, "ART daemons"),
+            ("FinalizerDaemon", 111, 100, "ART daemons"), ("FinalizerWatchd", 112, 100, "ART daemons"),
+            ("Profile Saver", 113, 100, "ART daemons"), ("Signal Catcher", 114, 100, "ART daemons"),
+            ("DefaultExecutor", 115, 100, "other"), ("TracingMuxer", 116, 100, "other"),
+        ]
+        for name, tid, pid, group in cases:
+            self.assertEqual(measure.counter_group(name, tid, pid), group, name)
+
+    def test_groups_and_the_process_total(self):
+        parsed = measure.parse_simpleperf_stat(SIMPLEPERF_STAT, self.EVENTS)
+        groups = measure.group_counters(parsed["threads"], self.EVENTS)
+        self.assertEqual(groups["main"]["threads"], {"ompose.bench.rs": 1})
+        self.assertEqual(groups["hwuiTask"]["counts"]["instructions:u"], 8675679503)
+        self.assertEqual(groups["total"]["counts"]["instructions:u"],
+                         1518615820 + 3812401494 + 8675679503)
+        self.assertEqual(groups["total"]["threads"],
+                         {"ompose.bench.rs": 1, "RenderThread": 1, "hwuiTask0": 1})
+        # The main thread and the RenderThread are always there, if only to show a zero.
+        empty = measure.group_counters([], self.EVENTS)
+        self.assertEqual(empty["main"]["counts"], {event: 0 for event in self.EVENTS})
+        self.assertEqual(empty["RenderThread"]["threads"], {})
+        self.assertEqual(list(groups), ["main", "RenderThread", "hwuiTask", "total"])
+
+    def test_metrics_per_frame(self):
+        counts = {"instructions:u": 3000, "instructions:k": 1000, "cpu-cycles": 2000}
+        metrics = measure.counter_metrics(counts, frames=100)
+        self.assertEqual(metrics["instructions"], 4000)
+        self.assertEqual((metrics["instructions_u"], metrics["instructions_k"]), (3000, 1000))
+        self.assertEqual(metrics["cycles"], 2000)
+        self.assertEqual(metrics["ipc"], 2.0)
+        self.assertEqual(metrics["kernel_share"], 0.25)
+        self.assertEqual(metrics["instructions_per_frame"], 40.0)
+        self.assertEqual(metrics["cycles_per_frame"], 20.0)
+        self.assertEqual(metrics["per_frame"], {"instructions:u": 30.0, "instructions:k": 10.0,
+                                                "cpu-cycles": 20.0})
+        # Cycles split by mode are summed; an event of no modifier is the total.
+        split = measure.counter_metrics({"instructions": 10, "cpu-cycles:u": 4, "cpu-cycles:k": 1},
+                                        frames=0)
+        self.assertEqual((split["instructions"], split["cycles"], split["ipc"]), (10, 5, 2.0))
+        self.assertIsNone(split["instructions_u"])
+        self.assertIsNone(split["kernel_share"])
+        # No frame: nothing per frame.
+        self.assertIsNone(split["instructions_per_frame"])
+        self.assertEqual(split["per_frame"], {})
+        self.assertIsNone(measure.counter_metrics({"instructions": 0, "cpu-cycles": 0}, 5)["ipc"])
+
+    def test_a_run_and_its_checks(self):
+        parsed = measure.parse_simpleperf_stat(SIMPLEPERF_STAT, self.EVENTS)
+        stats = measure.counter_run_stats(parsed, frames=360, events=self.EVENTS)
+        self.assertEqual(stats["frames"], 360)
+        self.assertEqual(stats["seconds"], 3.001741)
+        main = stats["groups"]["main"]
+        self.assertEqual(main["instructions"], 1518615820 + 40646062)
+        self.assertAlmostEqual(main["instructions_per_frame"], (1518615820 + 40646062) / 360)
+        self.assertAlmostEqual(main["ipc"], (1518615820 + 40646062) / 1285782899)
+        self.assertEqual(stats["problems"], [])
+        self.assertGreater(stats["running_ratio"]["min"], 0.999)
+        # Zero frames, a thread group with no instruction, counters multiplexed: each said.
+        multiplexed = json.loads(json.dumps(parsed))
+        for thread in multiplexed["threads"]:
+            if thread["name"] == "RenderThread":
+                thread["running"]["cpu-cycles"] = 0.8
+            if thread["tid"] == thread["pid"]:
+                thread["counts"] = {event: 0 for event in self.EVENTS}
+        stats = measure.counter_run_stats(multiplexed, frames=0, events=self.EVENTS)
+        self.assertEqual(stats["running_ratio"], {"min": 0.8, "where": "RenderThread cpu-cycles"})
+        self.assertEqual(stats["problems"], [
+            "no frame drawn", "main: no instruction counted",
+            "counters multiplexed: RenderThread cpu-cycles counted 80.0% of its running time"])
+
+    def test_runs_summarized(self):
+        def run(main, frames):
+            return {"frames": frames, "seconds": 10.0, "problems": [],
+                    "running_ratio": {"min": 1.0, "where": None},
+                    "groups": {"main": {"instructions_per_frame": main, "ipc": 1.5,
+                                        "threads": {"main": 1}},
+                               "total": {"instructions_per_frame": 2 * main, "ipc": None,
+                                         "threads": {"main": 1, "RenderThread": 1}}}}
+        summary = measure.counters_summary([run(100.0, 10), run(110.0, 12), run(90.0, 11)])
+        self.assertEqual(summary["runs"], 3)
+        self.assertEqual(summary["frames"]["median"], 11)
+        main = summary["groups"]["main"]["instructions_per_frame"]
+        self.assertEqual((main["median"], main["min"], main["max"]), (100.0, 90.0, 110.0))
+        self.assertAlmostEqual(main["spread"], 0.2)
+        self.assertAlmostEqual(main["cv"], 10.0 / 100.0)
+        self.assertEqual(summary["groups"]["total"]["ipc"]["median"], None)
+        self.assertEqual(summary["groups"]["total"]["threads"], {"main": 1, "RenderThread": 1})
+        self.assertEqual(summary["running_ratio_min"], 1.0)
+        self.assertEqual(summary["problems"], [])
+
+    def test_the_spread_of_runs(self):
+        self.assertEqual(measure.run_spread([]), {"median": None, "min": None, "max": None,
+                                                  "spread": None, "cv": None, "runs": 0})
+        one = measure.run_spread([5.0])
+        self.assertEqual((one["median"], one["spread"], one["cv"]), (5.0, 0.0, None))
+        self.assertEqual(measure.run_spread([None, 2.0, 4.0])["median"], 3.0)
+
+    def test_the_counting_command(self):
+        """simpleperf counts the app's threads while its workload runs: the workload resets
+        gfxinfo, says it's ready, waits (a line on its input, or a duration), then reads gfxinfo,
+        so the frames counted are those drawn inside the counting window."""
+        command = measure.counter_command(4242, "rs.compose.bench.rs", self.EVENTS,
+                                          "/data/local/tmp/c.csv", "/data/local/tmp/g.txt")
+        self.assertTrue(command.startswith(
+            "simpleperf stat -p 4242 --per-thread -e instructions:u,instructions:k,cpu-cycles "
+            "--csv --verbose -o /data/local/tmp/c.csv sh -c '"), command)
+        self.assertIn("echo START $(date +%s%N); dumpsys gfxinfo rs.compose.bench.rs reset > /dev/null; "
+                      "echo READY", command)
+        self.assertIn("read line;", command)
+        self.assertIn("dumpsys gfxinfo rs.compose.bench.rs > /data/local/tmp/g.txt", command)
+        timed = measure.counter_command(1, "p", self.EVENTS, "o", "g", duration_s=10)
+        self.assertIn("sleep 10;", timed)
+        self.assertNotIn("read line", timed)
+
+    def test_the_workloads_window(self):
+        """gfxinfo's reset and read each happen within their dumpsys: the frames' window runs
+        from the middle of the first to the middle of the second."""
+        out = "START 900000000\nREADY 1000000000\nEND 11000000000 11050000000\n"
+        self.assertEqual(measure.workload_window(out),
+                         {"start_ns": 900000000, "ready_ns": 1000000000, "stop_ns": 11000000000,
+                          "end_ns": 11050000000, "frame_window_s": 10.075})
+        self.assertIsNone(measure.workload_window("START 1\nREADY 1\n"))
+
+    def test_frames_in_the_counting_window(self):
+        """An animation draws all the time: its frames are scaled from gfxinfo's window to the
+        counting window (simpleperf's, a little longer). A scroll's or a navigation's window
+        starts and ends idle: its frames are gfxinfo's."""
+        window = {"frame_window_s": 10.0}
+        self.assertEqual(measure.frames_in_window(1200, 10.2, window, continuous=True), 1224.0)
+        self.assertEqual(measure.frames_in_window(1200, 10.2, window, continuous=False), 1200)
+        self.assertEqual(measure.frames_in_window(1200, None, window, continuous=True), 1200)
+
+    def test_hw_counters(self):
+        self.assertEqual(measure.hw_counters(HW_COUNTERS), {0: 4, 7: 4, 8: 3})
+        self.assertEqual(measure.hw_counters(""), {})
+
+    def test_scenarios_that_can_be_counted(self):
+        """A cold start can't be: simpleperf attaches to a process that exists, after its
+        threads have started."""
+        kept, skipped = measure.counter_scenarios(
+            ["startup", "scroll", "animation", "stress_startup", "stress_animation", "navigation"])
+        self.assertEqual(kept, ["scroll", "animation", "stress_animation", "navigation"])
+        self.assertEqual(sorted(skipped), ["startup", "stress_startup"])
+
+    def test_the_parser_takes_counters(self):
+        """--counters needs no trace processor; the runs and events are configurable."""
+        captured = {}
+
+        def configure(arguments, source):
+            captured.update(vars(arguments))
+            raise SystemExit(0)
+
+        original = measure.configure
+        measure.configure = configure
+        try:
+            with self.assertRaises(SystemExit):
+                measure.main(["--out", "out", "--counters", "--counter-runs", "3"])
+            self.assertTrue(captured["counters"])
+            self.assertEqual(captured["counter_runs"], 3)
+            self.assertEqual(captured["counter_events"], "instructions:u,instructions:k,cpu-cycles")
+            captured.clear()
+            with self.assertRaises(SystemExit):
+                measure.main(["--out", "out", "--counters"])
+            self.assertEqual(captured["counter_runs"], 15)
+            # Without --counters the traces need one.
+            captured.clear()
+            with self.assertRaises(SystemExit):
+                with contextlib.redirect_stderr(io.StringIO()):
+                    measure.main(["--out", "out"])
+            self.assertEqual(captured, {})
+        finally:
+            measure.configure = original
+
+    def test_summarize_prints_the_counters(self):
+        def spread(median):
+            return {"median": median, "min": median, "max": median, "spread": 0.01, "cv": 0.005,
+                    "runs": 3}
+        groups = {group: {"instructions_per_frame": spread(value), "ipc": spread(1.25),
+                          "kernel_share": spread(0.05), "cycles_per_frame": spread(value / 2),
+                          "threads": {"main": 1}}
+                  for group, value in (("main", 4.0e6), ("RenderThread", 6.5e6), ("total", 2.0e7))}
+        counters = {"events": list(self.EVENTS), "runs": 3, "skipped": {},
+                    "scenarios": {"stress_animation": {"subjects": {
+                        "compose": {"summary": {"runs": 3, "frames": spread(1200),
+                                                "groups": groups, "running_ratio_min": 1.0,
+                                                "problems": []}}}}}}
+        lines = summarize.counters_lines(counters)
+        self.assertIn("counters stress_animation compose (3 runs, 1200 frames): "
+                      "main 4.00 M/frame (spread 1.0%) IPC 1.25 kernel 5%", lines[0])
+        self.assertIn("RenderThread 6.50 M/frame (spread 1.0%) IPC 1.25", lines[0])
+        self.assertIn("total 20.00 M/frame", lines[0])
+        # A navigation's: per navigation too.
+        groups["total"]["instructions_per_navigation"] = spread(2.1e8)
+        lines = summarize.counters_lines(counters)
+        self.assertIn("total 20.00 M/frame (spread 1.0%) IPC 1.25 kernel 5%, "
+                      "210.0 M/navigation (spread 1.0%)", lines[0])
+
+
 if __name__ == "__main__":
     unittest.main()

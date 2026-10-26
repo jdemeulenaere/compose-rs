@@ -193,6 +193,44 @@ def navigation_summary(navigation):
                                "gpu_completed_ms", "present_ms")))
 
 
+def counters_lines(counters):
+    """measure.py --counters (D660): for each scenario and subject, each thread group's median
+    instructions per frame (millions), the runs' spread ((max - min) / median), its IPC and the
+    kernel's share of its instructions; then the subject's problems, if any."""
+    lines = []
+    for scenario, result in counters["scenarios"].items():
+        for name, subject in result["subjects"].items():
+            s = subject["summary"]
+            parts = []
+            for group, metrics in s["groups"].items():
+                per_frame = metrics.get("instructions_per_frame", {})
+                if per_frame.get("median") is None:
+                    continue
+                text = f"{group} {per_frame['median'] / 1e6:.2f} M/frame"
+                if per_frame.get("spread") is not None:
+                    text += f" (spread {100 * per_frame['spread']:.1f}%)"
+                ipc = metrics.get("ipc", {}).get("median")
+                text += f" IPC {ipc:.2f}" if ipc is not None else " IPC n/a"
+                kernel = metrics.get("kernel_share", {}).get("median")
+                if kernel is not None:
+                    text += f" kernel {100 * kernel:.0f}%"
+                # A navigation's frames vary in number (40 to 47 in 20 navigations): per
+                # navigation is the steadier measure there.
+                navigation = metrics.get("instructions_per_navigation", {})
+                if navigation.get("median") is not None:
+                    text += f", {navigation['median'] / 1e6:.1f} M/navigation"
+                    if navigation.get("spread") is not None:
+                        text += f" (spread {100 * navigation['spread']:.1f}%)"
+                parts.append(text)
+            frames = s["frames"]["median"]
+            lines.append(f"counters {scenario} {name} ({s['runs']} runs, "
+                         + (f"{frames:.0f}" if frames is not None else "no")
+                         + " frames): " + " | ".join(parts))
+            if s["problems"]:
+                lines.append(f"counters {scenario} {name} problems: {'; '.join(s['problems'])}")
+    return lines
+
+
 def main(path):
     r = json.load(open(path))
     print("device", r["device"], "android", r["android"])
@@ -220,6 +258,10 @@ def main(path):
             frames_summary(r, scenario)
     if "navigation" in r:
         navigation_summary(r["navigation"])
+    if "counters" in r:
+        print("counters", ", ".join(r["counters"]["events"]), "|", r["counters"].get("tool", ""))
+        for line in counters_lines(r["counters"]):
+            print(line)
     # Reports from before measure.py recorded them have no "compile", "apks" or "dexopt".
     print("compile", r.get("compile", "speed (not recorded)"))
     for app, apk in r.get("apks", {}).items():
