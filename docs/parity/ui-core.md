@@ -1,0 +1,735 @@
+# Parity ledger: compose ui core (layout, nodes, modifiers, drawing, graphics)
+
+What of Jetpack Compose's ui core compose-rs has, which of Compose's tests its own tests already cover, and what is missing, feature by feature. It drives the porting work: each Compose test file has a status, each missing feature an entry with its size and dependencies, and §4 analyses lookahead, the foundation of shared elements and `animateBounds`.
+
+## Scope
+
+- **Reference:** the androidx checkout at `/Users/jdemeulenaere/Development/androidx-main`, Compose under `frameworks/support/compose`, commit `d153d87ed76`. Paths below are relative to `frameworks/support`.
+- **Compose modules:** `compose/ui/ui` (its tests on layout, lookahead, `SubcomposeLayout`, intrinsics, alignment lines, rulers, `Modifier.Node` and its infrastructure, modifier locals, composition-local consumers, invalidation, drawing, graphics layers, `onGloballyPositioned`/`onPlaced`/`onSizeChanged`, layout-rect callbacks, popups and dialogs as layouts), `compose/ui/ui-graphics`, `compose/ui/ui-geometry`, `compose/ui/ui-unit` and `compose/ui/ui-util`; every test source set (`androidDeviceTest`, `androidHostTest`, `commonTest`; `ui` has no `commonTest`).
+- **compose-rs:** `crates/compose-ui` (but input, focus, semantics and text), `crates/compose-skia` where it's graphics, and their tests; the ui-core tests that live in `crates/compose-foundation/tests/suite` (they need `Box`, `Column`) are counted too.
+- **Left to other agents** (40 files, 262 `@Test`s, not in the table): `ui`'s `focus/`, `input/`, `gesture/`, `autofill/`, `accessibility/`, `semantics/`, `viewinterop/`, `text/`, `contentcapture/`, `draganddrop/`, `scrollcapture/`, `owners/`, `res/` directories and its top-level accessibility tests; and, as platform host or input, `node/HitTestResultTest.kt`, `node/HitTestTouchBoundsExpansionTest.kt`, `node/TouchBoundsExpansionTest.kt`, `node/SharePointerInputWithSiblingTest.kt`, and every `platform/` test (`ComposeViewTest`, `AndroidViewCompatTest`, clipboard, locale, `WindowInfo`, retain, dispatcher, `DisposableSaveableStateRegistry`, …) but `platform/LayoutIdTest.kt` and `platform/InspectableValueTest.kt`, which are here. `window/` (Popup, Dialog) is here: compose-rs's popups are compose-ui overlays laid out by the tree.
+- **Counting:** a test file is a `*Test.kt`/`*Tests.kt` with at least one `@Test`; tests are counted with `grep -cE '^\s*@(Test|org.junit.Test)\b'`. Helper files without tests (`AndroidLayoutDrawTestUtils.kt`, `PathTestUtilities.kt`, `NodeChainTester.kt`, …) aren't rows.
+
+## Totals
+
+**235 test files, 3,165 `@Test` methods.**
+
+| Status | Files | Tests |
+|---|---|---|
+| `covered` | 3 | 11 |
+| `port` | 13 | 113 |
+| `partial` | 51 | 1,106 |
+| `feature:<name>` | 111 | 1,678 |
+| `n/a` | 57 | 257 |
+
+By module: `ui` 147 files (125 device, 22 host), `ui-graphics` 64, `ui-geometry` 7, `ui-unit` 14, `ui-util` 3.
+
+The tests waiting on a feature, by feature (files, tests): `subcompose-layout` 1, 108; `node-traversal` 11, 102; `layout-rect-callbacks` 6, 161; `graphics-layer-object` 3, 95; `vector-graphics` 2, 91; `geometry-unit-api` 4, 85; `blend-modes-and-color-filters` 3, 84; `blur` 3, 79; `lookahead` 4, 77; `color-spaces` 3, 70; `modifier-locals` 5, 60; `alignment-lines` 2, 54; `rulers` 3, 51; `painter` 4, 47; `drop-inner-shadow` 8, 46; `brush-extras` 2, 42; `layout-coordinates` 3, 42; `media-query` 2, 42; `path-geometry` 7, 38; `intrinsics` 3, 32; `graphics-layer-shape-semantics` 1, 28; `delegating-node` 1, 27; `composition-locals-in-nodes` 3, 25; `canvas-and-offscreen-bitmaps` 3, 22; `nonlinear-font-scaling` 2, 21; `content-scale` 1, 17; `layer-3d-and-effects` 2, 16; `modifier-node-lifecycle` 3, 14; `paint-and-draw-style` 1, 14; `alignment-api` 1, 12; `mesh-gradient` 2, 12; `multi-content-layout` 1, 11; `parent-data` 2, 9; `sensitive-content` 1, 9; `preferred-frame-rate` 1, 8; `on-placed` 2, 6; `keep-screen-on` 1, 6; `observer-node` 1, 5; `placement-pass` 1, 5; `layout-info` 1, 3; `remeasurement` 1, 2. Many `partial` files wait on the same features for their missing half (their notes say which): the lookahead variants of `PlacedChildTest`, `PlacementLayoutCoordinatesTest`, `MeasureInPlacementTest` and `IntrinsicsMeasurementTest`, for example.
+
+**Reading the statuses.** `covered`: compose-rs tests already exercise the file's scenarios (cited). `port`: the feature exists, the tests should be adapted. `partial`: some of it exists; the note says what's missing and which feature brings it. `feature:<name>`: needs that missing feature (§3). `n/a: <reason>`: an adapted test wouldn't make compose-rs more robust (Android View host, a Kotlin language detail, a deprecated API, an internal with no Rust analogue, an inspector value).
+
+## 1. The test files
+
+Status in bold for the ones that need work now (`port`, `partial`, `covered`); `feature:` ones wait for their feature.
+
+### `compose/ui/ui`, device tests
+
+| File | Tests | Covers | Status | compose-rs and notes |
+|---|---|---|---|---|
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/AlignmentLinesTest.kt` | 18 | Alignment lines from layouts: inheritance from placed children, merging, early layout when queried, recomposition | `feature:alignment-lines` | No `AlignmentLine` in compose-rs; text keeps its first baseline privately (`TextMeasurer`). |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/CustomLayoutAndMeasureTest.kt` | 21 | Custom `Layout`s and layout modifiers: multi-child layout, relayout on child added/removed, zero-size relayout, layout direction, measured vs coerced placeable size, no remeasure after a state stops being read, modifier update not relaying out the parent | **partial** | `Layout`, `measure_policy` and `Modifier.layout` exist; ui.rs (`layouts_measure_and_place_with_modifiers`, `a_size_change_remeasures_up_to_the_first_ancestor_whose_size_holds`), review_d_incremental.rs. Missing: `Placeable.measured_width/height` (only the coerced size), measuring inside placement (no placement block), `instancesKeepDelegates` (DelegatingNode). `updatingModifierIsNotCausingParentsRelayout` will catch that any modifier update measures its node again (tree.rs `set_modifier`). |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/DrawModifierTest.kt` | 22 | Draw modifiers on layouts: nested draws, draw order with children, compositing strategies, unplaced not drawn, draw size inside padding, layout direction in draw, state reads in draw at root and in a boundary | **port** | All features exist (`draw_behind`, `draw_with_content`, graphics layer `compositing_strategy`, `LOCAL_LAYOUT_DIRECTION`). Pixel checks go to compose-skia (skia.rs `compositing_strategies_fade_as_compose_desktops` already covers the three strategies). `simpleDrawTestLegacyFallback` (legacy `DrawModifier`) n/a. |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/FrameRateTest.kt` | 8 | `Modifier.preferredFrameRate` votes (categories, Hz, combined, moving/resizing content, lazy list, movable content) | `feature:preferred-frame-rate` | Android `View.setRequestedFrameRate`; `testMovableContent` also needs runtime `movableContentOf`. |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/GraphicsLayerTest.kt` | 17 | Graphics layer invalidation: scale/clip drawing, detaching a child with a layer, redraw on layer move or property change, parent layer invalidation, `placeWithLayer`, layers not causing relayout, camera distance | **partial** | Layers, retained groups and property-only invalidation exist (retained_drawing.rs `an_animated_layer_changes_no_version_only_its_properties`, `moving_a_boundary_changes_not_its_version`). Missing: `placeWithLayer` (4 tests), `cameraDistance`. |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/KeepScreenOnModifierTest.kt` | 6 | `Modifier.keepScreenOn` sets and clears the window flag as modifiers come and go | `feature:keep-screen-on` | Android window flag; desktop could inhibit the screensaver. |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/MemoryLeakTest.kt` | 7 | Android View/composition garbage collection after dispose, recreate, reorder | `n/a: Android View/GC lifetime` | compose-rs's equivalents are allocation tests (compose-ui/tests/allocations.rs, `removed_nodes_are_freed_with_their_modifier_nodes`). |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/ParentDataModifierTest.kt` | 7 | Parent data from modifiers: default null, reset, multi-child, on the placeable, delegated, combined with layout modifier, remeasure on change | `feature:parent-data` | compose-rs's `ParentData` is a fixed struct (weight, alignment) filled by built-in modifiers only. |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/RepaintBoundaryTest.kt` | 9 | Repaint boundaries: nested boundaries redrawn on color/size change and moves, leaf redrawn when root layout moves, disappearing node | **covered** | compose-ui/tests/suite/retained_drawing.rs and review_retained.rs check incremental frames against fresh draws (`incremental_frames_draw_what_a_fresh_draw_does`, `moving_a_boundary_changes_not_its_version`); `reattachingViewKeepsRootNodePlaced` n/a (View). |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/SensitiveContentModifierTest.kt` | 9 | `Modifier.sensitiveContent` toggles the view's content sensitivity | `feature:sensitive-content` | Android 15 `View.setContentSensitivity`. |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/SnapshotFlowTest.kt` | 1 | `snapshotFlow` over state changed in a `LaunchedEffect` | `n/a: Kotlin Flow` | Runtime-level; the runtime agent owns snapshot observation. |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/ViewIntegrationTest.kt` | 5 | Drawing detached layout nodes, zero-size ComposeView drawing outside bounds, view transitions | `n/a: Android View host` |  |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/ZIndexNodeTest.kt` | 1 | `zIndex` element's inspector values | `n/a: inspector` | `z_index` itself is covered by modifiers_api.rs `z_index_draws_and_hits_a_sibling_over_the_others`. |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/adaptive/MediaQueryTest.kt` | 19 | `mediaQuery`/`computedMediaQuery` (experimental): results, recomposition only on change, configuration updates | `feature:media-query` | Experimental (`@ExperimentalMediaQueryApi`). `derivedMediaQuery` tests are of a deprecated API. |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/draw/AlphaTest.kt` | 6 | `Modifier.alpha` at 1, 0 and 0.5, switching, nested boundaries, emitted later | **port** | `alpha` exists (a layer, none at 1, D523); pixel checks in compose-skia. |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/draw/BlurTest.kt` | 19 | `Modifier.blur`: no-op, bounded/unbounded edge treatment, circle, progressive blur (vertical, radial, multi-stop, mask), invalidation without re-recording | `feature:blur` |  |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/draw/ClipDrawTest.kt` | 17 | `clip`/`clipToBounds`: rect, rounded, different corners, triangle and concave paths, switching shapes, observable shapes, layout direction, resizing | **partial** | Rect and rounded clips exist (skia.rs `a_clip_clips_to_its_rounded_outline`, modifiers_api.rs `clip_to_bounds_clips_the_content`). Missing: path (generic) shapes (triangle, concave, switch to/from path: feature:custom-shapes); `androidView_visibilityGone` n/a. |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/draw/DrawModifierTest.kt` | 37 | `drawWithCache` (invalidation by size, direction, density, state, reuse), `rememberGraphicsLayer`/`obtainGraphicsLayer` recording and release, `record` of content | **partial** | `draw_with_cache` exists (drawing_api.rs `draw_with_cache_builds_again_only_for_a_new_size_or_state_it_read`, review_api_d.rs). Missing: GraphicsLayer recording (about half the file: feature:graphics-layer-object), reuse invalidation (`testCacheInvalidatedAfterItemReused`). |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/draw/DrawReorderingTest.kt` | 25 | Draw order: placement order, reverse placement, `zIndex` modifier and `place(zIndex)`, siblings/uncles/cousins, changing order, sum of z-indexes, placing twice not allowed | **partial** | z-order by `z_index` then placement order exists (modifiers_api.rs, review_api_d.rs `a_node_losing_its_z_index_and_all_modifiers_keeps_its_placement_order`). Missing: `place(…, z_index)` parameter (feature:place-with-layer); `placingTheSameItemTwiceIsNotAllowed` will fail: compose-rs accepts placing twice. |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/draw/DrawingPrebuiltGraphicsLayerTest.kt` | 12 | Drawing a `GraphicsLayer` recorded by another node (`drawLayer`), nested layers, keeping a layer after its node leaves, updates | `feature:graphics-layer-object` |  |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/draw/DropShadowScreenShotTest.kt` | 5 | `Modifier.dropShadow` screenshots: offset, spread, gradient brush | `feature:drop-inner-shadow` | Pixel tests; port to compose-skia once the feature exists. |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/draw/DropShadowTest.kt` | 8 | `Modifier.dropShadow` drawn, redrawn on change, inside a render node, scope reset, shape change | `feature:drop-inner-shadow` |  |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/draw/GraphicsLayerModifierTest.kt` | 3 | `graphicsLayer` element inspector values and equality | **port** | Only the equality part: equal `GraphicsLayerScope`s make `same` elements (skipping); inspector n/a. |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/draw/GraphicsLayerTest.kt` | 65 | Layer transforms and effects in pixels: bounds position, scale, rotation and pivot, translation, clip (empty, total, generic outlines), outsets, camera distance with rotationY, color filter, blend mode, blur and offset render effects, software layers | **partial** | Scale, rotation Z, translation, transform origin and clip exist (skia.rs, review_skia.rs `graphics_layers_replay_through_skia`). Missing: `LayerOutsets`, rotationX/Y and camera distance, color filter, blend mode, render effects (feature:layer-3d-and-effects), generic outlines (feature:custom-shapes); software-layer tests n/a. |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/draw/InnerShadowScreenShotTest.kt` | 5 | `Modifier.innerShadow` screenshots | `feature:drop-inner-shadow` |  |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/draw/InnerShadowTest.kt` | 8 | `Modifier.innerShadow` drawn and invalidated | `feature:drop-inner-shadow` |  |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/draw/InvalidatingNotPlacedChildTest.kt` | 15 | A child or grandchild redrawn, remeasured or relaid out while not placed shows the change once placed again (with and without layers) | **partial** | review_retained.rs `a_boundary_placed_again_draws_what_changed_while_it_was_not_placed` covers the redraw case; relayout-only and `placeWithLayer` variants need feature:placement-pass and feature:place-with-layer. |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/draw/NotHardwareAcceleratedActivityTest.kt` | 1 | Layer transformations in a software-rendered activity | `n/a: Android software rendering` |  |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/draw/PainterModifierTest.kt` | 23 | `Modifier.paint`: color filter, alpha, RTL, aspect ratio, alignment, intrinsic sizes, scaling bitmap/vector painters, updating painters | `feature:painter` | Foundation's `Image(bitmap)` draws bitmaps without a `Painter`. |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/draw/ShadowTest.kt` | 9 | `Modifier.shadow`: drawn, inside a render node, switching, opacity and colors, emitted later, elevation | **partial** | `shadow`/`shadow_with` exist (skia.rs `shadows_darken_beneath_an_elevated_shape`, foundation shadow.rs); port the color, alpha and switching cases as pixel tests. |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/graphics/AndroidPathMeasureTest.kt` | 1 | Android `PathMeasure` segment workaround | `feature:path-geometry` |  |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/graphics/GraphicsLayerSemanticsTest.kt` | 28 | A clipping layer sets the `Shape` semantics property with bounds (rect, rounded, generic, overflow, padding, offscreen), outer wins, invalidation | `feature:graphics-layer-shape-semantics` | Needs semantics' `Shape` property (semantics agent) and custom shapes. |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/graphics/RootGraphicsLayerTest.kt` | 1 | The root layer redrawn after root removal | `n/a: Android root RenderNode` |  |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/graphics/vector/VectorTest.kt` | 89 | Vector painters: tint, alignment, skipping, invalidation, disposal, clip paths, zero sizes, trim paths, image vector changes, color filters, tint blend modes, groups | `feature:vector-graphics` | compose-rs's `ImageVector` is filled paths only (`ImageVector::icon`, Material's `Icon`). |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/graphics/vector/compat/XmlVectorParserTest.kt` | 16 | Parsing Android VectorDrawable XML resources | `n/a: Android resources` |  |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/AlignmentLineTest.kt` | 36 | Alignment lines: querying unmeasured children, cooperation when a layout disobeys, lines from modifiers, remeasure on change, 30 scenario tests of line propagation | `feature:alignment-lines` |  |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/ApproachLayoutTest.kt` | 9 | `approachLayout`/`ApproachLayoutModifierNode`: measurement/placement approach flags, nested approach nodes, default completion, forced reset, intrinsics before lookahead | `feature:lookahead` |  |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/BeyondBoundsLayoutProviderModifierNodeTest.kt` | 7 | `BeyondBoundsLayoutProviderModifierNode` iteration: no items, found on n-th iteration, reentrancy | **partial** | compose-rs has an internal equivalent for focus search in lazy lists (`ModifierNode::lay_out_beyond_bounds`, D477; review_parity.rs). Public API missing: feature:beyond-bounds-layout. |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/BeyondBoundsLayoutTest.kt` | 7 | `BeyondBoundsLayout` through the modifier local | **partial** | Same as above; the modifier-local route is deprecated, so port only the scenarios. |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/ComposeViewLayoutTest.kt` | 3 | ComposeView large sizes and root view configuration | `n/a: Android View host` |  |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/IntrinsicsMeasurementTest.kt` | 11 | Intrinsics: a change remeasures the parent that asked, usage in placement, grandchildren, usage changes, too-large sizes | `feature:intrinsics` | compose-rs probes by measuring (D137); `intrinsicsChangeCausesParentRemeasure` is partly covered by `intrinsics_asked` (measure.rs). |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/LayoutCooperationTest.kt` | 2 | A parent re-places a child whose constraints changed but size didn't; relayout skipping modifiers | **port** | Incremental layout exists (measure.rs); check the position is kept right. |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/LayoutNodeDensityTest.kt` | 5 | A `LocalDensity` change in a subtree remeasures, redraws, updates layers' outlines | `feature:composition-locals-in-nodes` | compose-rs's density is the tree's (`MeasureScope::density` reads `tree.density`): providing `LOCAL_DENSITY` to a subtree changes nothing in layout. Divergence. |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/LayoutNodeLayoutDirectionTest.kt` | 5 | A `LocalLayoutDirection` change remeasures, redraws (layer before/after draw), updates outlines | **port** | Each node takes `LOCAL_LAYOUT_DIRECTION` where composed (layout.rs `emit_layout_node`); review_retained.rs `switching_to_right_to_left_draws_what_a_fresh_right_to_left_draw_does`. |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/LookaheadDelegatesTest.kt` | 2 | Resetting lookahead pass delegates and invalidations | `feature:lookahead` | Internal; adapt as invariants of the lookahead state once it exists. |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/LookaheadScopeTest.kt` | 62 | `LookaheadScope`: random placement order, intermediate/approach measure policies, animations toward lookahead, nested scopes, observing actual measurement, no extra lookahead, placement invalidation, `localLookaheadPositionOf`, lookahead and approach intrinsics, baselines, subcompose in lookahead, movable content | `feature:lookahead` | The center of this ledger's lookahead analysis (§4). Several tests also need subcompose-layout, intrinsics, alignment-lines and runtime `movableContentOf`. |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/MeasureAndLayoutDelegateTest.kt` | 70 | The measure/layout scheduler: remeasure and relayout requests, which nodes are remeasured/relaid out, parents not remeasured when the size holds, measuring in the layout block | **partial** | Built on internal `LayoutNode` APIs; the measure scenarios map onto `UiTree`'s incremental layout (ui.rs `a_size_change_remeasures_up_to_the_first_ancestor_whose_size_holds`, review_d_incremental.rs). Relayout-only scenarios need feature:placement-pass. |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/MeasureInPlacementTest.kt` | 5 | Measuring a child inside the placement block (modifier and layout, in lookahead) | `feature:placement-pass` | compose-rs measures and places in one call. |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/MeasureOnlyTest.kt` | 10 | `ComposeView.onMeasure` measuring without placing | `n/a: Android View measure` |  |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/MeasuringPlacingTwiceIsNotAllowedTest.kt` | 7 | Measuring twice in one measurement or placing twice throws | **partial** | Measuring twice is rejected (review_d.rs `measuring_a_child_twice_is_rejected_or_stays_correct`, review_d2.rs). Placing twice is not: `UiTree::place` overwrites. Divergence. |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/MultiContentLayoutTest.kt` | 11 | `Layout(contents, MultiContentMeasurePolicy)` slots and intrinsics | `feature:multi-content-layout` |  |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/NodesRemeasuredOnceTest.kt` | 7 | A remeasure request measures each node once (extra layers, not placed, during layout, with intrinsics) | **port** | Count measures with a policy counter (compose-ui support `take_measures`); variants measuring in layout n/a. |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/OnFirstVisibleTest.kt` | 7 | `onFirstVisible` fractions and lazy column | `n/a: deprecated API` | `onFirstVisible` is `@Deprecated` in api/current.txt. |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/OnGlobalLayoutListenerTest.kt` | 14 | `registerOnGlobalLayoutListener` occlusion reports (siblings, z-index, rotation, scrolling) | `feature:layout-rect-callbacks` |  |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/OnGlobalRectChangedTest.kt` | 59 | `onLayoutRectChanged`: positions in root through moves, layers and layout modifiers, debounce/throttle, many children, centering | `feature:layout-rect-callbacks` |  |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/OnGloballyPositionedTest.kt` | 39 | `onGloballyPositioned`: child moves and resizes, only positioned children, lambda changes, `positionInParent`/`boundsInParent`/`boundsInWindow`, scroll, layer changes, delegated nodes, nested coordinates | **partial** | Exists as a snapshot (modifiers_api.rs `on_globally_positioned_reports_the_layer_after_it_and_follows_a_scroll`, review_api_d.rs). Missing: parent-relative queries and parent coordinates (feature:layout-coordinates); `onPositionedCalledWhenLayerChanged` will fail: a layer-only change doesn't report (D172). |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/OnSizeChangedTest.kt` | 18 | `onSizeChanged`: normal/internal/inner changes, no call without change, added/removed/updated modifiers and nodes, delegated nodes, moved between layouts, reuse | **partial** | modifiers_api.rs `on_size_changed_reports_the_first_size_and_each_change`, review_api_d.rs. Missing: delegated nodes (feature:delegating-node), `onRemeasured` node API (feature:on-placed), moved between layouts (runtime `movableContentOf`). |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/OnVisibilityChangedTest.kt` | 17 | `onVisibilityChanged`: fractions, minimum duration, removal, unplacing, reuse, view detach | `feature:layout-rect-callbacks` |  |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/PlacedChildTest.kt` | 29 | Not-placed children: remeasure, modifiers not placed, drawing order, placement blocks not called, `invalidatePlacement` on state, `onPlaced` rules during alignment-line calculation, position/size reads triggering callbacks | **partial** | Unplaced nodes aren't drawn (`LayoutNode::placed`). Most tests need feature:placement-pass, feature:on-placed, feature:alignment-lines; lookahead variants feature:lookahead. |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/PlacementLayoutCoordinatesTest.kt` | 34 | `PlacementScope.coordinates` while placing and aligning, relayout on parent coordinate changes, layer changes causing placement, only real position reads triggering relayout | `feature:layout-coordinates` | Also needs feature:placement-pass; lookahead variants feature:lookahead. |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/PlacementReusableNodeTest.kt` | 3 | `onPlaced` on reused nodes in a lazy column, interop views | `feature:on-placed` | Interop-view cases n/a. |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/PlacementScopeMotionFrameOfReferenceTest.kt` | 4 | `withMotionFrameOfReferencePlacement` in lazy list, grid, staggered grid, pager | `feature:layout-coordinates` | Needs `introducesMotionFrameOfReference`; staggered grid and pager are foundation gaps. |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/RectListIntegrationTest.kt` | 34 | The spatial index (`RectList`) kept in sync through moves, padding, translation, rotation, scale, scrolling, lazy columns, gesturable nodes | `feature:layout-rect-callbacks` | Internal index; adapt as checks of `onLayoutRectChanged` bounds if compose-rs keeps another index. |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/RectRulerTest.kt` | 3 | `RectRulers` default, inner and outer | `feature:rulers` |  |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/RemeasureWithIntrinsicsRealClockTest.kt` | 10 | As RemeasureWithIntrinsicsTest, with the real clock | `feature:intrinsics` | Port once; the clock variant adds nothing in compose-rs (frames are synchronous). |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/RemeasureWithIntrinsicsTest.kt` | 11 | Remeasuring parents and grandparents that used a child's intrinsics; queries from modifiers; stateful measure blocks | `feature:intrinsics` | `intrinsics_asked` (measure.rs) covers the parent-remeasure rule for `max_intrinsic_*` probes; min intrinsics and modifier queries missing. |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/RemeasurementModifierTest.kt` | 2 | `RemeasurementModifier.forceRemeasure` remeasures only that node | `feature:remeasurement` |  |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/ResizingComposeViewTest.kt` | 8 | ComposeView measured twice, wrap content, fixed size, intrinsics, `forceRemeasure` | `n/a: Android View measure` |  |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/RootNodeLayoutTest.kt` | 4 | The root measures with zero minimums and places at the top left; view wrap/match parent | **port** | First two tests only (docs/06: the root loosens the window's constraints, places at the origin); the View ones n/a. |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/RtlLayoutTest.kt` | 9 | Absolute vs relative placement in RTL, direction change remeasures, direction in measure and intrinsics scopes, locale direction, padding and minimum touch target | **partial** | `place_relative` and per-node direction exist (foundation rtl.rs, review_rtl.rs). Missing: direction in intrinsics scope (feature:intrinsics); locale test n/a. |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/RulerTest.kt` | 25 | `Ruler`s: values within/outside a layout, RTL, state updates, providers added/removed, derived rulers, side-effect rulers, `invalidateRulers`, lookahead | `feature:rulers` |  |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/ShowLayoutBoundsTest.kt` | 3 | Android's "show layout bounds" debug setting | `n/a: Android debug setting` |  |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/SubcomposeLayoutTest.kt` | 108 | `SubcomposeLayout`: slots, recomposition isolation, disposal, draw order, z-index, density, precompose/premeasure/dispose, paused precomposition, slot reuse policy, deactivation, nested, lookahead | `feature:subcompose-layout` | compose-rs's lazy lists and `BoxWithConstraints` stand in with composition between measure rounds (docs/11, "No subcomposition"). |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/TestRuleExecutesLayoutPassesWhenWaitingForIdleTest.kt` | 9 | `waitForIdle` runs measure/placement passes of animations (also through AndroidView and SubcomposeLayout) | **partial** | compose-test's `wait_for_idle` runs frames until idle (compose-test/src/lib.rs); port the measure/placement animation cases; AndroidView n/a; subcompose variants need feature:subcompose-layout. |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/TogglePlacementInLookaheadScopeTest.kt` | 4 | Toggling placement in and out within a LookaheadScope, reusable content | `feature:lookahead` |  |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/UnplacedAwareModifierNodeTest.kt` | 3 | `UnplacedAwareModifierNode.onUnplaced` when not placed, removed, deactivated | `feature:on-placed` |  |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/WindowInsetsRulersTest.kt` | 23 | `WindowInsetsRulers`: current/maximum, waterfall, display cutout, animations, dialogs, `innermostOf`, disabling | `feature:rulers` | Insets values come from the host (compose-rs has `PlatformWindowInsets`). |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/modifier/CompositionLocalMapInjectionTest.kt` | 12 | Modifier nodes consuming composition locals in draw, layout and attach; notified of changes; skippable updates | `feature:composition-locals-in-nodes` |  |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/modifier/ModifierLocalMultiLayoutNodeTest.kt` | 15 | Modifier locals across layout nodes: parent/grandparent, nearest, types, provider changes, moves | `feature:modifier-locals` |  |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/modifier/ModifierLocalProviderConsumerOrderTest.kt` | 7 | Modifier local provider/consumer order, detach/attach of producers | `feature:modifier-locals` |  |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/modifier/ModifierLocalSameLayoutNodeTest.kt` | 20 | Modifier locals within one node: order, defaults, changes, disposal | `feature:modifier-locals` |  |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/modifier/ModifierNodeReuseAndDeactivationTest.kt` | 24 | Node reuse: `onReset` on reuse/deactivation, nodes not recreated, update only on new params, detach/attach on reuse, invalidations from reused modifiers reading state in layer/measure/draw | **partial** | `on_reset` on reuse (D431, compose-foundation review_reuse_d434.rs, lazy_reuse.rs). compose-rs resets instead of detaching/attaching (D431): `nodesAreDetachedWhenReused` and `unchangedNodesAreDetachedAndReattachedWhenReused` need a decision; needs feature:modifier-node-lifecycle (`onAttach`). |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/node/CompositeKeyHashTest.kt` | 17 | `LayoutNode.compositeKeyHash` distinct per child, keyed, lazy, subcompose | `n/a: internal (`ComposeUiNode` is `@PublishedApi internal`)` | The runtime's `current_composite_key_hash` is tested by the runtime. |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/node/CompositionLocalConsumerModifierNodeTest.kt` | 8 | `currentValueOf` defaults, provided and static locals, updates, moved content | `feature:composition-locals-in-nodes` |  |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/node/HotReloadTests.kt` | 1 | Live literals hot reload of a layout node | `n/a: Kotlin hot reload` |  |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/node/InvalidateSubtreeTest.kt` | 4 | `invalidateSubtree`, `invalidateMeasurementForSubtree`, `invalidateDrawForSubtree` | `feature:modifier-node-lifecycle` | `UiTree::invalidate_draw` redraws everything (retained_drawing.rs `invalidating_the_drawing_or_the_density_draws_every_boundary_again`); no node-scoped subtree API. |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/node/LayoutNodeMappingTest.kt` | 3 | The owner's semantics-id to layout-node map after toggling and lazy scrolling | `n/a: internal (AndroidComposeView map)` |  |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/node/ModelReadsTest.kt` | 21 | State reads observed per phase: draw, measure, placement; stop after detaching; requests while measuring; derived state | **partial** | Measure and draw reads are observed (ui.rs `state_read_by_a_policy_or_a_draw_node_measures_or_draws_again_without_recomposing`, draw_modifiers.rs `a_canvas_redraws_what_it_read_without_recomposing`). Placement reads measure again in compose-rs (fused), where Compose only relays out: `layoutReactsOnCorrectModelsChanges` and `parentIsNotRelaidOutWhenChildLayoutModifierUsesState` need feature:placement-pass. |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/node/ModifierNodeAncestorsTest.kt` | 6 | `ancestors(type)` through local and parent nodes, unattached skipped | `feature:node-traversal` | Internal helpers; they underpin traversable nodes and modifier locals. |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/node/ModifierNodeAttachOrderTest.kt` | 7 | `onAttach` order on composition, update, removal in the middle, multiple layouts, movable content | `feature:modifier-node-lifecycle` |  |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/node/ModifierNodeChildTest.kt` | 5 | `child` within a node's chain | `feature:node-traversal` |  |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/node/ModifierNodeCoroutineScopeTest.kt` | 1 | Detaching doesn't capture a stack trace in the node's coroutine scope's cancellation | `n/a: Kotlin coroutines detail` | The node `coroutineScope` itself is in feature:modifier-node-lifecycle. |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/node/ModifierNodeNearestAncestorTest.kt` | 8 | `nearestAncestor(type)` within and across layout nodes | `feature:node-traversal` |  |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/node/ModifierNodeOnDensityChangeTest.kt` | 3 | `onDensityChange` callbacks, cancel of pointer input on density change | `feature:modifier-node-lifecycle` |  |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/node/ModifierNodeSetContentInAttachTest.kt` | 1 | `setContent` called from `onAttach` | `n/a: Android View host` |  |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/node/ModifierNodeVisitAncestorsTest.kt` | 9 | `visitAncestors`, shallow with delegates, during `onDetach` | `feature:node-traversal` |  |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/node/ModifierNodeVisitChildrenTest.kt` | 8 | `visitChildren` across layout nodes in draw order (z-index, subcompose) | `feature:node-traversal` |  |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/node/ModifierNodeVisitLocalAncestorsTest.kt` | 6 | `visitLocalAncestors` | `feature:node-traversal` |  |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/node/ModifierNodeVisitLocalDescendantsTest.kt` | 6 | `visitLocalDescendants` | `feature:node-traversal` |  |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/node/ModifierNodeVisitSelfAndChildrenTest.kt` | 9 | `visitSelfAndChildren` | `feature:node-traversal` |  |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/node/ModifierNodeVisitSubtreeIfTest.kt` | 7 | `visitSubtreeIf` early stop, across nodes in draw order | `feature:node-traversal` |  |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/node/ModifierNodeVisitSubtreeTest.kt` | 6 | `visitSubtree` across nodes in draw order | `feature:node-traversal` |  |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/node/MyersDiffTests.kt` | 5 | The chain diff algorithm (removes/inserts at start/end, strings) | **port** | compose-rs matches by kinds with a longest common subsequence (tree.rs `match_kinds`): adapt the scenarios as unit tests of it. |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/node/NodeChainOwnerTests.kt` | 3 | `getModifierInfo` returns layers for graphics layer heads/tails | `feature:layout-info` |  |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/node/NodeChainTests.kt` | 12 | Node chain updates: attach/detach, inserts and deletes at head/tail/middle, swaps, removing all, reuse | **partial** | ui.rs `modifier_nodes_keep_their_state_when_elements_are_added_around_them`, review_d.rs `custom_elements_of_different_types_get_their_own_nodes`, `branches_keep_their_own_modifier_closures`. Attach/detach events need feature:modifier-node-lifecycle. |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/node/NodeCoordinatorInitializationTest.kt` | 4 | Coordinators initialized for focus/pointer nodes and delegates | `n/a: internal (NodeCoordinator)` |  |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/node/ObserverModifierNodeTest.kt` | 5 | `ObserverModifierNode.observeReads`/`onObservedReadsChanged` | `feature:observer-node` |  |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/node/RequireLayoutCoordinatesTest.kt` | 4 | `requireLayoutCoordinates` attached/detached, nearest layout modifier | `feature:layout-coordinates` |  |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/node/RequireViewTest.kt` | 2 | `requireView` | `n/a: Android View` |  |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/node/TraversableModifierNodeTest.kt` | 32 | `TraversableNode`: `findNearestAncestor`, `traverseAncestors/Children/Descendants` by class and key, delegates, cancellation | `feature:node-traversal` |  |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/platform/InspectableValueTest.kt` | 1 | Inspectable values of a layout | `n/a: inspector` |  |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/platform/LayoutIdTest.kt` | 2 | `Modifier.layoutId` tags reach the parent's measurables; inspector | `feature:parent-data` | `layoutId` is parent data (`LayoutIdParentData`). |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/relocation/BringIntoViewModifierNodeTest.kt` | 16 | `BringIntoViewModifierNode` (ui.relocation): rects in children, nearest handler, translation through `calculateRectForParent`, interruption, `isChildOf` | **partial** | compose-rs has the internal `ModifierNode::bring_into_view` (used by scrolls and focus). Public API missing: feature:bring-into-view-node. |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/tooling/UiErrorTraceTests.kt` | 18 | Composition stack traces attached to exceptions from layout, draw, modifiers, effects | `n/a: Kotlin tooling (stack-trace decoration)` | compose-rs's panic-recovery tests (review_d_panic_*.rs) cover the tree staying whole. |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/window/DialogScreenshotTest.kt` | 2 | Dialog window elevation screenshots | `n/a: Android window shadow` | compose-rs dialogs are overlays. |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/window/DialogSecureFlagTest.kt` | 4 | Dialog `FLAG_SECURE` policy | `n/a: Android window flag` |  |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/window/DialogTest.kt` | 47 | `Dialog`: content shown, dismiss on outside click/back/escape per properties, press/release inside/outside, decorFitsSystemWindows, title, focus, semantics, insets, dismiss callbacks | **partial** | foundation window.rs `a_dialog_is_modal_takes_the_focus_and_dismisses_on_escape`, review_overlay.rs, review_overlay2.rs, review_round3.rs, platform.rs (back). Missing: press-outside-release-inside rules check, `usePlatformDefaultWidth`, `windowTitle`, decorFits (n/a). |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/window/DialogWithInsetsTest.kt` | 3 | Dialog window insets and full-screen dialogs | `n/a: Android window` |  |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/window/DialogWithNoStatusBarTest.kt` | 7 | Full-screen dialog sizes with and without system bars, edge to edge | `n/a: Android window` |  |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/window/PopupAlignmentTest.kt` | 17 | Popup positions for every alignment, LTR and RTL | **port** | `Popup(alignment, offset)` with `AlignmentOffsetPositionProvider` exists; foundation rtl.rs `a_popup_aligns_with_its_anchors_start_and_offsets_toward_its_end` covers one case. |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/window/PopupDismissTest.kt` | 1 | Click outside dismisses | **covered** | review_overlay.rs `a_popup_is_dismissed_on_the_press_outside_it`, window.rs. |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/window/PopupLayoutTest.kt` | 10 | Popup position recomputed when coordinates, parent bounds or state read in the provider change; not when detached; clipping | **partial** | review_overlay.rs `passes_a_popup_follows_its_anchor_when_it_scrolls`, `a_popup_is_measured_with_the_new_window_size_after_a_resize`. Missing: state read in a provider (providers aren't observed), `clippingEnabled`. |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/window/PopupSecureFlagTest.kt` | 5 | Popup `FLAG_SECURE` policy | `n/a: Android window flag` |  |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/window/PopupTest.kt` | 36 | `Popup`: showing, actual size, locals and direction preserved, dismissal on outside tap/back/escape per properties, fill width, size changes, measuring once, nested popups, scrolling anchors | **partial** | foundation window.rs, review_overlay.rs, review_overlay2.rs, locals.rs `dialogs_and_popups_see_the_providers_around_them`. Missing: `usePlatformDefaultWidth`/flags (n/a), `doesNotMeasureContentMultipleTimes` worth porting. |
+| `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/window/PositionInWindowTest.kt` | 5 | `positionInWindow` with scrolling decor views, view offsets, moving popups | `n/a: Android window offsets` |  |
+
+### `compose/ui/ui`, host tests
+
+| File | Tests | Covers | Status | compose-rs and notes |
+|---|---|---|---|---|
+| `compose/ui/ui/src/androidHostTest/kotlin/androidx/compose/ui/ComposedModifierTest.kt` | 7 | `Modifier.composed` materialization, keys, skipping | `n/a: by design (no composed modifiers)` | README principle "No composed modifiers". |
+| `compose/ui/ui/src/androidHostTest/kotlin/androidx/compose/ui/ModifierTest.kt` | 1 | `foldIn` over a chain built with `then` | **partial** | `then` exists; `foldIn`/`foldOut`/`any`/`all` don't (elements private, D260): feature:modifier-chain-introspection. |
+| `compose/ui/ui/src/androidHostTest/kotlin/androidx/compose/ui/SessionMutexTest.kt` | 16 | The internal `SessionMutex` | `n/a: internal` |  |
+| `compose/ui/ui/src/androidHostTest/kotlin/androidx/compose/ui/TransformOriginTest.kt` | 4 | `TransformOrigin` copy and destructuring | `n/a: Kotlin data-class API` | A Rust struct with public fields covers it. |
+| `compose/ui/ui/src/androidHostTest/kotlin/androidx/compose/ui/adaptive/MediaQueryIntegrationTest.kt` | 23 | Media queries from the platform: window size, camera, microphone, viewing distance, pointer precision, keyboard | `feature:media-query` | Experimental. |
+| `compose/ui/ui/src/androidHostTest/kotlin/androidx/compose/ui/graphics/GraphicsLayerScopeTest.kt` | 3 | `GraphicsLayerScope` initial and reset values, size | **port** | `GraphicsLayerScope::default()` and its `size` exist; missing fields (rotation X/Y, camera distance, …) wait for feature:layer-3d-and-effects. |
+| `compose/ui/ui/src/androidHostTest/kotlin/androidx/compose/ui/graphics/vector/ImageVectorBuilderTest.kt` | 2 | `ImageVector.Builder` DSL and groups | `feature:vector-graphics` |  |
+| `compose/ui/ui/src/androidHostTest/kotlin/androidx/compose/ui/layout/AlignmentCombineTest.kt` | 12 | Combining horizontal and vertical alignments (bias, absolute) with `+` | `feature:alignment-api` |  |
+| `compose/ui/ui/src/androidHostTest/kotlin/androidx/compose/ui/layout/AlignmentTest.kt` | 27 | `Alignment` constants and custom biases, `AbsoluteAlignment` | **partial** | Bias alignments exist (alignment.rs `aligns_as_bias_alignment`); `AbsoluteAlignment` missing (feature:alignment-api). |
+| `compose/ui/ui/src/androidHostTest/kotlin/androidx/compose/ui/layout/ConstraintsTest.kt` | 21 | `Constraints`: construction, bounded/fixed, zero, constrain, `isSatisfiedBy`, offset, copy, validity, restricted (packing) constraints | **partial** | constraints.rs tests `offset_shrinks_and_keeps_infinity`, `constrain_clamps`; review_d.rs `constraints_offset_adds_as_in_compose`. Missing: `fixed_width`, `fixed_height`, `fit_prioritizing_*`, `is_zero`, `is_satisfied_by`, `copy_max_dimensions` (feature:geometry-unit-api); packing limits n/a (i32 fields). |
+| `compose/ui/ui/src/androidHostTest/kotlin/androidx/compose/ui/layout/ContentScaleTest.kt` | 11 | `ContentScale.computeScaleFactor` for each scale | **partial** | foundation's `ContentScale` enum (image.rs; image.rs tests `content_scales_map_the_bitmap_into_the_node`). Missing: `FixedScale`, `ScaleFactor`, a trait for custom scales, and its place in ui (feature:content-scale). |
+| `compose/ui/ui/src/androidHostTest/kotlin/androidx/compose/ui/layout/ScaleFactorTest.kt` | 17 | `ScaleFactor` arithmetic, lerp, specified, `takeOrElse` | `feature:content-scale` | Destructuring/copy tests n/a. |
+| `compose/ui/ui/src/androidHostTest/kotlin/androidx/compose/ui/modifier/ModifierLocalMapTest.kt` | 7 | `modifierLocalMapOf` with 0–3 entries | `feature:modifier-locals` |  |
+| `compose/ui/ui/src/androidHostTest/kotlin/androidx/compose/ui/node/DelegatingNodeTest.kt` | 27 | `DelegatingNode`: kind sets, `asKind`, dispatch, head-to-tail order, visits, undelegate, invalidation of delegated nodes | `feature:delegating-node` |  |
+| `compose/ui/ui/src/androidHostTest/kotlin/androidx/compose/ui/node/DepthSortedSetTest.kt` | 5 | The internal depth-sorted set | `n/a: internal` |  |
+| `compose/ui/ui/src/androidHostTest/kotlin/androidx/compose/ui/node/LayoutNodeTest.kt` | 90 | `LayoutNode` internals: attach/detach, children add/move/remove, depth, coordinate conversions (global/local, child to local, siblings), hit testing, modifiers | **partial** | Tree operations: review_d.rs `keyed_children_follow_random_edits`, ui.rs `removed_nodes_are_freed_with_their_modifier_nodes`. Coordinate conversions need feature:layout-coordinates; hit testing belongs to the input agent. |
+| `compose/ui/ui/src/androidHostTest/kotlin/androidx/compose/ui/node/ModifierLocalConsumerEntityTest.kt` | 11 | Modifier local consumers: attach, defaults, provided values, changes, detach | `feature:modifier-locals` |  |
+| `compose/ui/ui/src/androidHostTest/kotlin/androidx/compose/ui/node/ModifierNodeElementTest.kt` | 1 | Default inspectable properties of an element | `n/a: inspector` |  |
+| `compose/ui/ui/src/androidHostTest/kotlin/androidx/compose/ui/spatial/RectListTest.kt` | 26 | The internal `RectList` spatial index: insert, update, intersections, nearest neighbor, packing, defragment | `feature:layout-rect-callbacks` | Internal data structure: port only if compose-rs adopts the same index. |
+| `compose/ui/ui/src/androidHostTest/kotlin/androidx/compose/ui/spatial/ThrottledCallbacksTest.kt` | 11 | Throttle/debounce of layout-rect callbacks | `feature:layout-rect-callbacks` | Internal; its rules are observable through `onLayoutRectChanged`. |
+| `compose/ui/ui/src/androidHostTest/kotlin/androidx/compose/ui/window/PopupPositionProviderTest.kt` | 18 | `AlignmentOffsetPositionProvider` positions for every alignment, LTR and RTL | **port** | The provider exists (window.rs, `PopupPositionProvider::position`); pure unit tests, port as is. |
+| `compose/ui/ui/src/androidHostTest/kotlin/androidx/compose/ui/window/PopupWindowTokenTest.kt` | 8 | Resolving the Android window token for popups | `n/a: Android window token` |  |
+
+### `compose/ui/ui-graphics`
+
+| File | Tests | Covers | Status | compose-rs and notes |
+|---|---|---|---|---|
+| `compose/ui/ui-graphics/src/androidDeviceTest/kotlin/androidx/compose/ui/graphics/AndroidBlendModeTest.kt` | 60 | `BlendMode` to Android `PorterDuff`/`BlendMode` mapping | `feature:blend-modes-and-color-filters` | The mapping lives in compose-rs's Kotlin replayer; test it there. |
+| `compose/ui/ui-graphics/src/androidDeviceTest/kotlin/androidx/compose/ui/graphics/AndroidCanvasTest.kt` | 14 | Canvas Z, scale/rotation pivots, path effects (corner, dash, chain, path dash), color filters (tint, lighting, matrix), `drawVertices` | `feature:canvas-and-offscreen-bitmaps` | Also feature:paint-and-draw-style (path effects), feature:blend-modes-and-color-filters. |
+| `compose/ui/ui-graphics/src/androidDeviceTest/kotlin/androidx/compose/ui/graphics/AndroidColorFilterTest.kt` | 10 | Color filter equality and conversion from Android filters | `feature:blend-modes-and-color-filters` | Conversion half n/a (Android objects). |
+| `compose/ui/ui-graphics/src/androidDeviceTest/kotlin/androidx/compose/ui/graphics/AndroidColorSpaceTest.kt` | 22 | Conversion between Compose and Android color spaces | `feature:color-spaces` | Android conversion n/a; the named spaces' parameters port. |
+| `compose/ui/ui-graphics/src/androidDeviceTest/kotlin/androidx/compose/ui/graphics/AndroidMatrixTest.kt` | 8 | `Matrix` rotations, translation, scale applied to Android matrices | **partial** | compose-rs `Matrix` (path.rs: `translation`, `scaling`, `rotation`, `map`); missing `rotate_x/y`, in-place `scale/translate` (feature:geometry-unit-api, `Matrix` part). |
+| `compose/ui/ui-graphics/src/androidDeviceTest/kotlin/androidx/compose/ui/graphics/AndroidRenderEffectTest.kt` | 4 | Blur and offset render effects supported or not by API level | `feature:layer-3d-and-effects` |  |
+| `compose/ui/ui-graphics/src/androidDeviceTest/kotlin/androidx/compose/ui/graphics/AndroidTileModeTest.kt` | 14 | Tile modes drawn and converted to Android | **port** | `TileMode` (Clamp, Repeated, Mirror, Decal) exists (brush.rs); port the drawn cases as pixel tests; conversion n/a. |
+| `compose/ui/ui-graphics/src/androidDeviceTest/kotlin/androidx/compose/ui/graphics/ColorTest.kt` | 39 | `Color`: color spaces, convert, `toArgb`, components, luminance, lerp, compositing, out-of-range sRGB, HSV/HSL, CIE Lab, `ColorLong` | **partial** | `Color` is packed ARGB8888 (graphics.rs: `from_argb`, `with_alpha`, `composite_over`; test `colors_pack_argb`). Float components, lerp, luminance, HSV/HSL need feature:color-api-basics; spaces feature:color-spaces. |
+| `compose/ui/ui-graphics/src/androidDeviceTest/kotlin/androidx/compose/ui/graphics/GradientTest.kt` | 18 | Transparent color stops handling on older Android (N/O) | `n/a: Android API-level workaround` |  |
+| `compose/ui/ui-graphics/src/androidDeviceTest/kotlin/androidx/compose/ui/graphics/ImageBitmapTest.kt` | 1 | Creating an `ImageBitmap(width, height)` | **partial** | `ImageBitmap::from_rgba_premultiplied` exists; `ImageBitmap(w, h, config, …)` to draw into needs feature:canvas-and-offscreen-bitmaps. |
+| `compose/ui/ui-graphics/src/androidDeviceTest/kotlin/androidx/compose/ui/graphics/MeshGradientRendererTest.kt` | 1 | Mesh gradient renderer draws | `feature:mesh-gradient` |  |
+| `compose/ui/ui-graphics/src/androidDeviceTest/kotlin/androidx/compose/ui/graphics/MeshGradientTest.kt` | 11 | `MeshGradientPainter`: control points, interpolation, invalid sizes, alpha, color spaces | `feature:mesh-gradient` |  |
+| `compose/ui/ui-graphics/src/androidDeviceTest/kotlin/androidx/compose/ui/graphics/OutlineTest.kt` | 6 | `Outline` bounds and equality (rect, round rect, path) | **partial** | `Outline::Rectangle`/`Rounded` exist; `Outline.Generic` needs feature:custom-shapes. |
+| `compose/ui/ui-graphics/src/androidDeviceTest/kotlin/androidx/compose/ui/graphics/PaintTest.kt` | 14 | `Paint`: anti-alias, path effect, color configuration, dithering, filter bitmap, Android conversion, wide-gamut colors | `feature:paint-and-draw-style` | Android conversion and wide gamut n/a or feature:color-spaces. |
+| `compose/ui/ui-graphics/src/androidDeviceTest/kotlin/androidx/compose/ui/graphics/PathDirectionTest.kt` | 8 | `computeDirection` for lines, contours, curves | `feature:path-geometry` |  |
+| `compose/ui/ui-graphics/src/androidDeviceTest/kotlin/androidx/compose/ui/graphics/PathDivisionTest.kt` | 4 | `Path.divide` into contours | `feature:path-geometry` |  |
+| `compose/ui/ui-graphics/src/androidDeviceTest/kotlin/androidx/compose/ui/graphics/PathHitTest.kt` | 4 | `PathHitTester` with lines, curves, fill types | `feature:path-geometry` |  |
+| `compose/ui/ui-graphics/src/androidDeviceTest/kotlin/androidx/compose/ui/graphics/PathIteratorTest.kt` | 12 | `PathIterator` segments, conics, sizes | `feature:path-geometry` |  |
+| `compose/ui/ui-graphics/src/androidDeviceTest/kotlin/androidx/compose/ui/graphics/PathMeasureTest.kt` | 1 | `PathMeasure` position and tangent | `feature:path-geometry` |  |
+| `compose/ui/ui-graphics/src/androidDeviceTest/kotlin/androidx/compose/ui/graphics/PathReversionTest.kt` | 8 | `Path.reverse` | `feature:path-geometry` |  |
+| `compose/ui/ui-graphics/src/androidDeviceTest/kotlin/androidx/compose/ui/graphics/PathSvgTest.kt` | 9 | `addSvg`/`toSvg` round trips, holes, invalid data | **partial** | `Path::from_svg` parses (path.rs tests `parses_absolute_and_relative_commands`, `bad_data_says_where`); `to_svg` and `add_svg` missing (feature:path-geometry). |
+| `compose/ui/ui-graphics/src/androidDeviceTest/kotlin/androidx/compose/ui/graphics/PathTest.kt` | 4 | `addArc`, `rewind`, `transform`, `copy` | **partial** | path.rs tests `reset_keeps_the_fill_type_and_rewind_does_not`, `arcs_join_the_contour_unless_forced`, compose-skia path_semantics.rs; `copy` missing (a clone shares the path, by design: add `Path::copy`). |
+| `compose/ui/ui-graphics/src/androidDeviceTest/kotlin/androidx/compose/ui/graphics/PixelMapTest.kt` | 2 | `toPixelMap` of a bitmap and a subsection | `feature:canvas-and-offscreen-bitmaps` |  |
+| `compose/ui/ui-graphics/src/androidDeviceTest/kotlin/androidx/compose/ui/graphics/RectHelperTest.kt` | 6 | Rect to/from Android `Rect`/`RectF` | `n/a: Android conversion` |  |
+| `compose/ui/ui-graphics/src/androidDeviceTest/kotlin/androidx/compose/ui/graphics/RectangleShapeTest.kt` | 1 | `RectangleShape` outline size | **covered** | graphics.rs `Shape::outline` (`RECTANGLE_SHAPE`); trivial, add a unit test with the custom-shapes work. |
+| `compose/ui/ui-graphics/src/androidDeviceTest/kotlin/androidx/compose/ui/graphics/ShaderTest.kt` | 17 | Linear/radial/sweep gradient shaders drawn, intrinsic sizes, infinite sizes, invalid sizes | **partial** | Gradients exist (compose-skia brush.rs, drawing_api.rs `a_brush_paints_a_gradient_in_the_drawings_coordinates`). Missing: `Brush.intrinsicSize` and shader brushes (feature:brush-extras). |
+| `compose/ui/ui-graphics/src/androidDeviceTest/kotlin/androidx/compose/ui/graphics/blur/ProgressiveBlurEffectTest.kt` | 17 | Progressive blur render effects (uniform, gradients, radial, custom mask) | `feature:blur` |  |
+| `compose/ui/ui-graphics/src/androidDeviceTest/kotlin/androidx/compose/ui/graphics/drawscope/DrawScopeTest.kt` | 60 | `DrawScope` in pixels: rects, ovals, brushes, alpha, transforms, insets, scale/rotation pivots, clips, points, paths, images, blend modes, strokes, `withTransform`, `drawIntoCanvas` | **partial** | compose-rs's `DrawScope` (draw.rs) covers rects, round rects, ovals, circles, arcs, lines, paths, images, scoped transforms and clips (drawing_api.rs `scoped_transforms_and_clips_restore_after_their_block`, `circles_ovals_and_pie_arcs_draw_as_arcs`). Missing: points, `alpha`/`style`/`color_filter`/`blend_mode` parameters, stroke joins, `with_transform`, `draw_into_canvas` (feature:paint-and-draw-style). |
+| `compose/ui/ui-graphics/src/androidDeviceTest/kotlin/androidx/compose/ui/graphics/layer/AndroidGraphicsLayerTest.kt` | 50 | `GraphicsLayer`: record, draw, discard, offset, alpha, scale, pivot, translation, rotations, clips, outlines, compositing, color filter, blend mode, render effect, `toImageBitmap` | `feature:graphics-layer-object` |  |
+| `compose/ui/ui-graphics/src/androidDeviceTest/kotlin/androidx/compose/ui/graphics/painter/BitmapPainterTest.kt` | 11 | `BitmapPainter` alpha, tint, source bounds, filter quality, invalid bounds | `feature:painter` |  |
+| `compose/ui/ui-graphics/src/androidDeviceTest/kotlin/androidx/compose/ui/graphics/painter/BrushPainterTest.kt` | 8 | `BrushPainter` drawing, composite brush, alpha, tint, intrinsic size | `feature:painter` |  |
+| `compose/ui/ui-graphics/src/androidDeviceTest/kotlin/androidx/compose/ui/graphics/painter/PainterTest.kt` | 5 | `Painter` draw, RTL, alpha, color filter | `feature:painter` |  |
+| `compose/ui/ui-graphics/src/androidDeviceTest/kotlin/androidx/compose/ui/graphics/shadow/DropShadowPainterTest.kt` | 6 | `DropShadowPainter` with colors, paths, brushes, filters, alpha | `feature:drop-inner-shadow` |  |
+| `compose/ui/ui-graphics/src/androidDeviceTest/kotlin/androidx/compose/ui/graphics/shadow/InnerShadowPainterTest.kt` | 2 | `InnerShadowPainter` with colors and paths | `feature:drop-inner-shadow` |  |
+| `compose/ui/ui-graphics/src/androidHostTest/kotlin/androidx/compose/ui/graphics/AndroidColorTest.kt` | 5 | Unspecified color to `ColorLong`, BT2020/Oklab fallbacks on older APIs | `n/a: Android API-level conversion` |  |
+| `compose/ui/ui-graphics/src/androidHostTest/kotlin/androidx/compose/ui/graphics/BrushInterpolationTests.kt` | 31 | `lerp` between solid, linear, radial and sweep brushes | `feature:brush-extras` |  |
+| `compose/ui/ui-graphics/src/androidHostTest/kotlin/androidx/compose/ui/graphics/InterpolatableTests.kt` | 11 | `Interpolatable.lerp` rules | `feature:brush-extras` |  |
+| `compose/ui/ui-graphics/src/androidHostTest/kotlin/androidx/compose/ui/graphics/ShadowInterpolationTests.kt` | 6 | `lerp` of `shadow.Shadow` | `feature:drop-inner-shadow` |  |
+| `compose/ui/ui-graphics/src/androidHostTest/kotlin/androidx/compose/ui/graphics/layer/RobolectricGraphicsLayerTest.kt` | 33 | `GraphicsLayer` behaviour under Robolectric (as AndroidGraphicsLayerTest) | `feature:graphics-layer-object` | Port once with AndroidGraphicsLayerTest. |
+| `compose/ui/ui-graphics/src/commonTest/kotlin/androidx/compose/ui/graphics/BlendModeTest.kt` | 1 | `BlendMode.toString` | `n/a: Kotlin toString` | Use `Debug` names if wanted. |
+| `compose/ui/ui-graphics/src/commonTest/kotlin/androidx/compose/ui/graphics/ClipOpTest.kt` | 1 | `ClipOp.toString` | `n/a: Kotlin toString` |  |
+| `compose/ui/ui-graphics/src/commonTest/kotlin/androidx/compose/ui/graphics/ColorMatrixTest.kt` | 14 | `ColorMatrix` operations: set, rotate, saturation, scale, YUV, concatenation | `feature:blend-modes-and-color-filters` |  |
+| `compose/ui/ui-graphics/src/commonTest/kotlin/androidx/compose/ui/graphics/ColorSpaceTest.kt` | 44 | Color spaces: named spaces, transfer functions, matrices, connectors, adaptation, Lab, Oklab | `feature:color-spaces` |  |
+| `compose/ui/ui-graphics/src/commonTest/kotlin/androidx/compose/ui/graphics/FilterQualityTest.kt` | 1 | `FilterQuality.toString` | `n/a: Kotlin toString` |  |
+| `compose/ui/ui-graphics/src/commonTest/kotlin/androidx/compose/ui/graphics/ImageBitmapConfigTest.kt` | 1 | `ImageBitmapConfig.toString` | `n/a: Kotlin toString` |  |
+| `compose/ui/ui-graphics/src/commonTest/kotlin/androidx/compose/ui/graphics/MatrixTest.kt` | 15 | `Matrix`: identity, reset, pivoted transform, map point/rect, rotations X/Y/Z, scale, translate, invert, combinations | **partial** | path.rs `Matrix` (`map`, `translation`, `scaling`, `rotation`; test `a_point_at_infinity_maps_to_the_origin`). Missing most operations (feature:geometry-unit-api). |
+| `compose/ui/ui-graphics/src/commonTest/kotlin/androidx/compose/ui/graphics/PaintingStyleTest.kt` | 1 | `PaintingStyle.toString` | `n/a: Kotlin toString` |  |
+| `compose/ui/ui-graphics/src/commonTest/kotlin/androidx/compose/ui/graphics/PathFillTypeTest.kt` | 1 | `PathFillType.toString` | `n/a: Kotlin toString` |  |
+| `compose/ui/ui-graphics/src/commonTest/kotlin/androidx/compose/ui/graphics/PathOperationTest.kt` | 1 | `PathOperation.toString` | `n/a: Kotlin toString` |  |
+| `compose/ui/ui-graphics/src/commonTest/kotlin/androidx/compose/ui/graphics/PointModeTest.kt` | 1 | `PointMode.toString` | `n/a: Kotlin toString` |  |
+| `compose/ui/ui-graphics/src/commonTest/kotlin/androidx/compose/ui/graphics/RenderEffectTest.kt` | 12 | Blur and offset effects' equality, hash, toString, nesting | `feature:layer-3d-and-effects` | Equality part only. |
+| `compose/ui/ui-graphics/src/commonTest/kotlin/androidx/compose/ui/graphics/RenderIntentTest.kt` | 1 | `RenderIntent.toString` | `n/a: Kotlin toString` |  |
+| `compose/ui/ui-graphics/src/commonTest/kotlin/androidx/compose/ui/graphics/ShadowTest.kt` | 3 | Text `Shadow` default, constructor, lerp | **partial** | `Shadow` (color, offset, blur) is text's (ui-graphics, used by `TextStyle.shadow`); text agent's area, missing in compose-rs. |
+| `compose/ui/ui-graphics/src/commonTest/kotlin/androidx/compose/ui/graphics/StampedPathEffectStyleTest.kt` | 1 | `StampedPathEffectStyle.toString` | `n/a: Kotlin toString` |  |
+| `compose/ui/ui-graphics/src/commonTest/kotlin/androidx/compose/ui/graphics/StrokeCapTest.kt` | 1 | `StrokeCap.toString` | `n/a: Kotlin toString` |  |
+| `compose/ui/ui-graphics/src/commonTest/kotlin/androidx/compose/ui/graphics/StrokeJoinTest.kt` | 1 | `StrokeJoin.toString` | `n/a: Kotlin toString` |  |
+| `compose/ui/ui-graphics/src/commonTest/kotlin/androidx/compose/ui/graphics/TileModeTest.kt` | 1 | `TileMode.toString` | `n/a: Kotlin toString` |  |
+| `compose/ui/ui-graphics/src/commonTest/kotlin/androidx/compose/ui/graphics/VertexModeTest.kt` | 1 | `VertexMode.toString` | `n/a: Kotlin toString` |  |
+| `compose/ui/ui-graphics/src/commonTest/kotlin/androidx/compose/ui/graphics/VerticesTest.kt` | 6 | `Vertices` construction and validation | `feature:canvas-and-offscreen-bitmaps` |  |
+| `compose/ui/ui-graphics/src/commonTest/kotlin/androidx/compose/ui/graphics/blur/BlurRadiusSpecTest.kt` | 43 | `BlurRadiusSpec`/`BlurStop` equality and validation | `feature:blur` |  |
+| `compose/ui/ui-graphics/src/commonTest/kotlin/androidx/compose/ui/graphics/colorspace/ColorModelTest.kt` | 4 | `ColorModel` component counts | `feature:color-spaces` |  |
+| `compose/ui/ui-graphics/src/commonTest/kotlin/androidx/compose/ui/graphics/shadow/ShadowParamsTest.kt` | 6 | `shadow.Shadow` parameters equality, brush, toString | `feature:drop-inner-shadow` |  |
+| `compose/ui/ui-graphics/src/commonTest/kotlin/androidx/compose/ui/graphics/vector/FastFloatParserTest.kt` | 1 | The internal fast float parser | `n/a: internal` | compose-rs parses with Rust's `f32::from_str`. |
+| `compose/ui/ui-graphics/src/commonTest/kotlin/androidx/compose/ui/graphics/vector/PathParserTest.kt` | 7 | SVG path data parsing: exponents, `..`, implicit line-tos, quads, separators, arc flags | **port** | `Path::from_svg` exists (path.rs tests `implicit_repeats_and_signs_separate_numbers`, `arcs_become_curves_ending_at_their_end`): adapt the remaining cases (negative exponent, `dotDot`, arc flags without separators). |
+
+### `compose/ui/ui-geometry`
+
+| File | Tests | Covers | Status | compose-rs and notes |
+|---|---|---|---|---|
+| `compose/ui/ui-geometry/src/commonTest/kotlin/androidx/compose/ui/geometry/CornerRadiusTest.kt` | 4 | `CornerRadius` copy and destructuring | `n/a: Kotlin data-class API` | The arithmetic of `CornerRadius` is in feature:geometry-unit-api. |
+| `compose/ui/ui-geometry/src/commonTest/kotlin/androidx/compose/ui/geometry/GeometryUtilsTest.kt` | 8 | Internal `toStringAsFixed` rounding | `n/a: internal` |  |
+| `compose/ui/ui-geometry/src/commonTest/kotlin/androidx/compose/ui/geometry/MutableRectTest.kt` | 29 | `MutableRect` accessors and operations | `feature:geometry-unit-api` |  |
+| `compose/ui/ui-geometry/src/commonTest/kotlin/androidx/compose/ui/geometry/OffsetTest.kt` | 16 | `Offset`: copy, unspecified, `takeOrElse`, unary minus, finite, valid | **partial** | `Offset` with `ZERO`, `INFINITE`, `UNSPECIFIED`, `is_specified`, `+`/`-` (unit.rs); missing `-x`, `*`, `/`, `%`, `is_finite`, `is_valid`, `take_or_else` (feature:geometry-unit-api). |
+| `compose/ui/ui-geometry/src/commonTest/kotlin/androidx/compose/ui/geometry/RectTest.kt` | 33 | `Rect`: accessors, intersection, translate, inflate/deflate, overlaps, dimensions, corners/center, contains, constructors, lerp | **partial** | `Rect` has `new`, `from_offset_size`, `width`, `height`, `contains` (unit.rs test `rects_contain_their_top_left_but_not_their_bottom_right`); the rest is feature:geometry-unit-api. |
+| `compose/ui/ui-geometry/src/commonTest/kotlin/androidx/compose/ui/geometry/RoundRectTest.kt` | 15 | `RoundRect`: contains with radii, dimensions, constructors, per-corner radii, safe inner rect, bounding rect, ellipse | **partial** | path.rs `RoundRect` (one radius, `rect`); round-rect radii scaling tested (`round_rects_scale_radii_that_dont_fit`). Per-corner elliptic radii and queries: feature:geometry-unit-api. |
+| `compose/ui/ui-geometry/src/commonTest/kotlin/androidx/compose/ui/geometry/SizeTest.kt` | 17 | `Size`: arithmetic, copy, lerp, unspecified, `takeOrElse`, toString, `isEmpty` | **partial** | `Size` with `ZERO`, `new`; the rest feature:geometry-unit-api. |
+
+### `compose/ui/ui-unit`
+
+| File | Tests | Covers | Status | compose-rs and notes |
+|---|---|---|---|---|
+| `compose/ui/ui-unit/src/androidDeviceTest/kotlin/androidx/compose/ui/unit/AndroidDensityTest.kt` | 8 | `TextUnit` to pixels: failures for em, rounding | **partial** | `Density::sp_to_px` exists; `em` and `TextUnit` failure rules need feature:geometry-unit-api (`TextUnit`). |
+| `compose/ui/ui-unit/src/androidDeviceTest/kotlin/androidx/compose/ui/unit/DpDeviceTest.kt` | 1 | Dp from Android dimension resources | `n/a: Android resources` |  |
+| `compose/ui/ui-unit/src/androidDeviceTest/kotlin/androidx/compose/ui/unit/SpDeviceTest.kt` | 2 | Sp from Android resources | `n/a: Android resources` |  |
+| `compose/ui/ui-unit/src/androidDeviceTest/kotlin/androidx/compose/ui/unit/fontscaling/FontScaleConverterFactoryTest.kt` | 16 | Android 14 non-linear font scaling tables | `feature:nonlinear-font-scaling` | Internal tables of Android's converter; matters for sp on Android (text agent may own). |
+| `compose/ui/ui-unit/src/androidDeviceTest/kotlin/androidx/compose/ui/unit/fontscaling/FontScaleConverterTableTest.kt` | 5 | Font scale table interpolation | `feature:nonlinear-font-scaling` |  |
+| `compose/ui/ui-unit/src/commonTest/kotlin/androidx/compose/ui/unit/DensityTest.kt` | 10 | `Density` conversions: dp round to px, DpRect to Rect, DpSize to Size and back, unspecified | **partial** | unit.rs test `dp_converts_with_density` (`round_to_px`, `to_px`, `to_dp`, `sp_to_px`); missing `DpRect`, `to_size`, `to_dp_size` (feature:geometry-unit-api). |
+| `compose/ui/ui-unit/src/commonTest/kotlin/androidx/compose/ui/unit/DpOffsetTest.kt` | 13 | `DpOffset` arithmetic, lerp, specified | `feature:geometry-unit-api` |  |
+| `compose/ui/ui-unit/src/commonTest/kotlin/androidx/compose/ui/unit/DpSizeTest.kt` | 15 | `DpSize` arithmetic, center, lerp, specified | **partial** | `DpSize::new` and conversions exist; arithmetic missing. |
+| `compose/ui/ui-unit/src/commonTest/kotlin/androidx/compose/ui/unit/DpTest.kt` | 31 | `Dp`: construction, operators, hairline, infinity, finite, compare, min/max, coerce, `DpRect`, specified, hash, negative zero | **partial** | `Dp` with `ZERO`, `UNSPECIFIED`, `+ - * /`, unary minus, `is_specified` (unit.rs); missing `HAIRLINE`, `INFINITY`, comparisons, `coerce_*`, `min`/`max`, `DpRect` (feature:geometry-unit-api). |
+| `compose/ui/ui-unit/src/commonTest/kotlin/androidx/compose/ui/unit/IntOffsetTest.kt` | 4 | `IntOffset` lerp, plus/minus, to `Offset` | **partial** | `+`/`-` exist; lerp and conversions missing. |
+| `compose/ui/ui-unit/src/commonTest/kotlin/androidx/compose/ui/unit/IntRectTest.kt` | 32 | `IntRect` operations | `feature:geometry-unit-api` |  |
+| `compose/ui/ui-unit/src/commonTest/kotlin/androidx/compose/ui/unit/IntSizeTest.kt` | 7 | `IntSize` arithmetic, center, rounding from `Size` | **partial** | `IntSize` and `Size::from(IntSize)` exist; the rest missing. |
+| `compose/ui/ui-unit/src/commonTest/kotlin/androidx/compose/ui/unit/TextUnitTest.kt` | 57 | `TextUnit`: sp and em construction, arithmetic, comparisons, lerp, unspecified | **partial** | `Sp` exists (unit.rs); `em` and `TextUnit`'s type rules missing (feature:geometry-unit-api; text agent's line heights may need em). |
+| `compose/ui/ui-unit/src/commonTest/kotlin/androidx/compose/ui/unit/VelocityTest.kt` | 11 | `Velocity` arithmetic and copy | `feature:geometry-unit-api` | compose-rs passes velocities as offsets or floats (compose-foundation fling.rs). |
+
+### `compose/ui/ui-util`
+
+| File | Tests | Covers | Status | compose-rs and notes |
+|---|---|---|---|---|
+| `compose/ui/ui-util/src/commonTest/kotlin/androidx/compose/ui/util/InlineClassHelperTest.kt` | 9 | Packing floats/ints into longs | `n/a: Kotlin inline-class packing` |  |
+| `compose/ui/ui-util/src/commonTest/kotlin/androidx/compose/ui/util/ListUtilsTest.kt` | 11 | `fastForEach`, `fastAny`, `fastFirstOrNull`, … | `n/a: Kotlin collection helpers` | Rust iterators. |
+| `compose/ui/ui-util/src/commonTest/kotlin/androidx/compose/ui/util/MathHelpersTest.kt` | 14 | `lerp` of floats/ints/longs, `fastCbrt`, `normalizedAngleCos/Sin` | **partial** | `lerp` lives privately in compose-animation (spec.rs); a public `lerp` belongs to feature:geometry-unit-api. The fast approximations are Kotlin performance helpers (n/a). |
+
+## 2. The public API compose-rs lacks
+
+From each module's `api/current.txt` (public, non-deprecated; experimental included and marked). Each name is tagged with the feature of §3 that brings it. What compose-rs has is said first, so "partial" is clear. Names are Compose's; compose-rs spells them in snake_case.
+
+### `androidx.compose.ui` (`ui`)
+
+- **Has:** `Modifier` (`then`, a const `Modifier`), `Alignment` as biases (`Alignment::TOP_START` … `BOTTOM_END`, `TOP`, `CENTER_VERTICALLY`, `BOTTOM`, `START`, `CENTER_HORIZONTALLY`, `END`, `Alignment::new(h, v)`), `z_index`, `Modifier.Node`'s `onReset` and `onDetach` (as `ModifierNode::on_reset`, `on_detach`).
+- **Missing:**
+  - `Alignment` as an interface for custom alignments, `Alignment.Horizontal`/`Vertical` as interfaces, `Alignment.Horizontal + Alignment.Vertical`, `BiasAlignment`/`BiasAlignment.Horizontal`/`.Vertical` as named types, `AbsoluteAlignment` (`TopLeft`, `TopRight`, `CenterLeft`, `CenterRight`, `BottomLeft`, `BottomRight`, `Left`, `Right`), `BiasAbsoluteAlignment` (+ `.Horizontal`): **alignment-api**.
+  - `Modifier.Node`: `onAttach`, `isAttached`, `coroutineScope`, `sideEffect`, `shouldAutoInvalidate`, `node`: **modifier-node-lifecycle**.
+  - `Modifier.foldIn`, `foldOut`, `any`, `all`, `CombinedModifier`, `Modifier.Element`: **modifier-chain-introspection** (low priority; compose-rs keeps elements private, D260).
+  - `Modifier.preferredFrameRate(Float)`, `preferredFrameRate(FrameRateCategory)`, `FrameRateCategory` (`Default`, `High`, `Normal`): **preferred-frame-rate**. `Modifier.keepScreenOn`: **keep-screen-on**. `Modifier.sensitiveContent`: **sensitive-content**.
+  - *Experimental* (`@ExperimentalMediaQueryApi`): `UiMediaScope` (window width/height, posture, folds, pointer precision, keyboard kind, viewing distance, camera, microphone), `mediaQuery`, `computedMediaQuery`, `LocalUiMediaScope`: **media-query**.
+  - Not to port: `composed`, `materialize` (no composed modifiers, by design), `ComposeUiFlags`/`AndroidComposeUiFlags` (Compose's own rollout flags; compose-rs has `Optimizations`), `UiComposable` (Kotlin applier annotation), `MotionDurationScale` (animation agent).
+
+### `androidx.compose.ui.draw`
+
+- **Has:** `alpha`, `clip`, `clipToBounds`, `rotate`, `scale(scale)`, `shadow(elevation, shape, clip, ambientColor, spotColor)` (`shadow_with`), `drawBehind`, `drawWithContent`, `drawWithCache` with `CacheDrawScope.onDrawBehind`/`onDrawWithContent`, `DrawResult`.
+- **Missing:** `scale(scaleX, scaleY)` (**paint-and-draw-style**, trivial); `CacheDrawScope.obtainGraphicsLayer`, `record`, `obtainShadowContext`, `CacheDrawModifierNode` (+ `invalidateDrawCache`), `BuildDrawCacheParams`: **graphics-layer-object** (`CacheDrawModifierNode` also needs **modifier-node-lifecycle**); `Modifier.paint(painter, sizeToIntrinsics, alignment, contentScale, alpha, colorFilter)`: **painter**; `Modifier.blur(radius)`, `blur(radiusX, radiusY)`, `blur(BlurRadiusSpec, edgeTreatment, alpha)`, `blur { }`, `BlurScope`, `BlurredEdgeTreatment` (`Rectangle`, `Unbounded`): **blur**; `Modifier.dropShadow(shape, Shadow)`, `dropShadow(shape) { }`, `innerShadow(…)`, `DropShadowScope`, `InnerShadowScope`, `ShadowScope`: **drop-inner-shadow**. Legacy element interfaces `DrawModifier`, `DrawCacheModifier`: not to port (the node API covers them).
+
+### `androidx.compose.ui.graphics` (in `ui`) and `ui.graphics.vector`
+
+- **Has:** `Modifier.graphicsLayer { }` and `graphicsLayer(GraphicsLayerScope)` (`graphics_layer_with`), `GraphicsLayerScope` with `alpha`, `scaleX/Y`, `rotationZ`, `translationX/Y`, `transformOrigin`, `shadowElevation`, `ambientShadowColor`, `spotShadowColor`, `shape`, `clip`, `compositingStrategy`, `size`, density; `CompositingStrategy`, `TransformOrigin` (`Center`), `DefaultShadowColor`. `ImageVector` with filled paths only (`ImageVector::icon`).
+- **Missing:**
+  - `GraphicsLayerScope.rotationX`, `rotationY`, `cameraDistance`, `renderEffect`, `colorFilter`, `blendMode`, `outsets` (`LayerOutsets`), `DefaultCameraDistance`, the `graphicsLayer(scaleX = …, …)` parameter overload: **layer-3d-and-effects**.
+  - `rememberGraphicsLayer`: **graphics-layer-object**. `toolingGraphicsLayer`: not to port.
+  - `ImageVector.Builder` (`addGroup`, `addPath`, `clearGroup`, `group`, `path`), `ImageVector`'s `tintColor`, `tintBlendMode`, `autoMirror`, `root`; `VectorGroup`, `VectorPath` (fill and stroke brushes, alphas, stroke cap/join/miter/width, trim path start/end/offset, fill type), `VectorNode`, `PathData { }`, `addPathNodes`, the `Default*` constants, `VectorPainter`, `rememberVectorPainter(image)` and `rememberVectorPainter(defaultWidth, …) { }`, `RenderVectorGroup`, `VectorConfig`, `VectorProperty`, the `Group`/`Path` vector composables and `VectorApplier`/`VectorComposable`/`VNode`: **vector-graphics**.
+
+### `androidx.compose.ui.layout`
+
+- **Has:** `Layout(content, modifier, measurePolicy)` (`Layout!`, also leaf use), `MeasurePolicy.measure` (a closure is one, `measure_policy`), `Measurable`/`Placeable` (`width`, `height`), `MeasureScope.layout(w, h)` with placement done in the policy (`place`, `place_relative`), `Modifier.layout { }`, `onSizeChanged`, `onGloballyPositioned` with a snapshot `LayoutCoordinates` (`size`, `position_in_root`, `position_in_window`, `bounds_in_root`, `bounds_in_window`), `max_intrinsic_width`/`height` probes on the scope (measured, D137); foundation has `ContentScale` (enum: `Crop`, `Fit`, `FillHeight`, `FillWidth`, `FillBounds`, `Inside`, `None`).
+- **Missing:**
+  - `LookaheadScope { }`, `LookaheadScope.toLookaheadCoordinates`, `localLookaheadPositionOf`, `lookaheadScopeCoordinates`, `Modifier.approachLayout`, `ApproachLayoutModifierNode` (`approachMeasure`, `isMeasurementApproachInProgress`, `isPlacementApproachInProgress`, the approach intrinsics), `ApproachMeasureScope`, `ApproachIntrinsicMeasureScope` (`lookaheadSize`, `lookaheadConstraints`), `IntrinsicMeasureScope.isLookingAhead`: **lookahead**.
+  - `IntrinsicMeasurable` (`min/maxIntrinsicWidth/Height`), `IntrinsicMeasureScope`, the intrinsic methods of `MeasurePolicy`, `MultiContentMeasurePolicy`, `LayoutModifier` and `LayoutModifierNode`: **intrinsics**.
+  - `AlignmentLine`, `HorizontalAlignmentLine`, `VerticalAlignmentLine`, `FirstBaseline`, `LastBaseline`, `AlignmentLine.Unspecified`, `MeasureResult.alignmentLines`, `layout(w, h, alignmentLines)`, `Measured.get(line)`, `LayoutCoordinates.get(line)`, `providedAlignmentLines`: **alignment-lines**.
+  - `MeasureResult` (`width`, `height`, `placeChildren`) as an interface with a deferred placement block, `Placeable.PlacementScope` (`place`/`placeRelative` with `zIndex`, `coordinates`, `withMotionFrameOfReferencePlacement`), `Placeable.measuredWidth/Height`, `Measured`: **placement-pass** (`zIndex` and `placeWithLayer`/`placeRelativeWithLayer` with a layer block or a `GraphicsLayer`: **place-with-layer**).
+  - `LayoutCoordinates` as a live object: `parentCoordinates`, `parentLayoutCoordinates`, `isAttached`, `localPositionOf`, `localBoundingBoxOf`, `localToRoot`, `localToWindow`, `localToScreen`, `windowToLocal`, `screenToLocal`, `transformFrom`, `transformToScreen`, `introducesMotionFrameOfReference`, and `positionInParent`, `boundsInParent`, `positionOnScreen`, `findRootCoordinates`: **layout-coordinates**.
+  - `Modifier.onPlaced`, `OnPlacedModifier`, `OnRemeasuredModifier`, `OnGloballyPositionedModifier` (element interfaces: covered by the nodes): **on-placed**.
+  - `SubcomposeLayout(modifier, measurePolicy)`, `SubcomposeLayout(state, …)`, `SubcomposeLayoutState` (`precompose`, `createPausedPrecomposition`), `PrecomposedSlotHandle` (`dispose`, `premeasure`, `getSize`, `placeablesCount`, `traverseDescendants`), `PausedPrecomposition`, `SubcomposeMeasureScope.subcompose`, `SubcomposeSlotReusePolicy` (+ `SlotIdsSet`): **subcompose-layout**.
+  - `Layout(contents: List<@Composable () -> Unit>, modifier, MultiContentMeasurePolicy)`: **multi-content-layout**.
+  - `Ruler`, `HorizontalRuler`, `VerticalRuler` (`derived`, `minOf`, `maxOf`), `RulerScope` (`provides`, `providesRelative`, `coordinates`), `MeasureScope.layout(…, rulers)`, `MeasureResult.rulers`/`rulerProvider`/`isRulerProvided`, `PlacementScope.current(ruler, default)`, `RectRulers` (`innermostOf`, `outermostOf`), `WindowInsetsRulers` (13 kinds, `current`, `maximum`, `getAnimation`, `innermostOf`, `disable`), `WindowInsetsAnimation`, `getDisplayCutoutBounds`: **rulers**.
+  - `ParentDataModifier`, `Modifier.layoutId`, `LayoutIdParentData`, `Measurable.layoutId`, `IntrinsicMeasurable.parentData`: **parent-data**.
+  - `ContentScale` as an interface (`computeScaleFactor`), `FixedScale`, `ScaleFactor` (+ `times`/`div` with `Size`, `lerp`, `isSpecified`, `takeOrElse`), and `ContentScale` in ui rather than foundation: **content-scale**.
+  - `Modifier.onLayoutRectChanged(throttleMillis, debounceMillis)`, `registerOnLayoutRectChanged`, `registerOnGlobalLayoutListener`, `Modifier.onVisibilityChanged`, `onVisibilityChangedNode`, `LayoutBoundsHolder`, `Modifier.layoutBounds`: **layout-rect-callbacks**.
+  - `BeyondBoundsLayout` (+ `BeyondBoundsScope`, `LayoutDirection`), `BeyondBoundsLayoutProviderModifierNode`: **beyond-bounds-layout** (compose-rs has an internal equivalent, D477).
+  - `PinnableContainer`, `PinnedHandle`, `LocalPinnableContainer`: **pinnable-container** (compose-rs's lazy lists pin the focused item internally).
+  - `Remeasurement`, `RemeasurementModifier`: **remeasurement**.
+  - `LayoutInfo` (`placeOrder` and `zIndex` *experimental*, `@ExperimentalComposeUiHostApi`), `ModifierInfo`, `GraphicLayerInfo`, `calculateOuterBoundsInRoot` (*experimental*): **layout-info**.
+  - Legacy element interface `LayoutModifier`: not to port (`LayoutModifierNode`).
+
+### `androidx.compose.ui.modifier`
+
+- **Missing, all:** `ModifierLocal`, `ProvidableModifierLocal`, `modifierLocalOf`, `ModifierLocalModifierNode` (`provide`, `current`, `providedValues`), `ModifierLocalMap`, `modifierLocalMapOf`, `ModifierLocalReadScope`, `modifierLocalProvider`, `modifierLocalConsumer`, `ModifierLocalProvider`, `ModifierLocalConsumer`: **modifier-locals**.
+
+### `androidx.compose.ui.node`
+
+- **Has:** `ModifierNodeElement` (`create`, `update`, and `same` for `equals`), `LayoutModifierNode.measure`, `DrawModifierNode` (`draw`, `draw_after`, `draw_with_content`), `GlobalPositionAwareModifierNode`, `PointerInputModifierNode` and `SemanticsModifierNode` (other agents), and `ModifierNode::on_reset`/`on_detach`.
+- **Missing:**
+  - `DelegatableNode` (`node`, `onDensityChange`, `onLayoutDirectionChange`, `RegistrationHandle`), `requireDensity`, `requireLayoutDirection`, `requireGraphicsContext`, `invalidateSubtree`, `invalidateMeasurementForSubtree`, `invalidateDrawForSubtree`, `DrawModifierNode.invalidateDraw` and `onMeasureResultChanged`, `dispatchDraw`, `LayoutModifierNode.invalidateMeasurement`, `invalidatePlacement`, `invalidateLayer`, `remeasureSync`, `updateLayerBlock`, `invalidateRulers`: **modifier-node-lifecycle** (`invalidatePlacement` needs **placement-pass**, `updateLayerBlock` **place-with-layer**, `invalidateRulers` **rulers**).
+  - `DelegatingNode` (`delegate`, `undelegate`): **delegating-node**.
+  - `TraversableNode` (`traverseKey`), `findNearestAncestor`, `traverseAncestors`, `traverseChildren`, `traverseDescendants` (+ `TraverseDescendantsAction`): **node-traversal**.
+  - `ObserverModifierNode`, `observeReads`: **observer-node**.
+  - `CompositionLocalConsumerModifierNode`, `currentValueOf`: **composition-locals-in-nodes**.
+  - `ParentDataModifierNode`, `invalidateParentData`: **parent-data**.
+  - `LayoutAwareModifierNode` (`onPlaced`, `onRemeasured`), `MeasuredSizeAwareModifierNode`, `UnplacedAwareModifierNode`, `requireLayoutCoordinates`: **on-placed** / **layout-coordinates**.
+  - `findNearestBeyondBoundsLayoutAncestor`: **beyond-bounds-layout**. `dispatchOnScrollChanged`: foundation agent (scroll).
+  - `ObservationTarget` (*experimental*, host API): **layout-info**.
+  - Not to port: `Ref` (Kotlin), `RootForTest` (Android test host), `InteroperableComposeUiNode` (internal), `requireView`, `requestAutofill` (autofill agent), `TouchBoundsExpansion`/`DpTouchBoundsExpansion` and the pointer node's extras (input agent), `invalidateSemantics` (semantics agent).
+
+### `androidx.compose.ui.spatial`, `ui.relocation`, `ui.window`
+
+- `RelativeLayoutBounds` (`positionInRoot/Window/Screen`, `boundsIn*`, `width`, `height`, `fractionVisibleIn`, `fractionVisibleInRect`, `fractionVisibleInWindow`, `fractionVisibleInWindowWithInsets`, `calculateOcclusions`): **layout-rect-callbacks**.
+- `BringIntoViewModifierNode` (`bringIntoView(childCoordinates, boundsProvider)`, a suspend function), `DelegatableNode.bringIntoView(bounds)`: **bring-into-view-node** (compose-rs has the internal `ModifierNode::bring_into_view`, synchronous).
+- **Has:** `Popup(alignment, offset, onDismissRequest, properties, content)`, `Popup(popupPositionProvider, …)` (`PopupWithPositionProvider`), `Dialog`, `PopupPositionProvider`, `PopupProperties` (`focusable`, `dismissOnBackPress`, `dismissOnClickOutside`), `DialogProperties` (`dismissOnBackPress`, `dismissOnClickOutside`). **Missing:** `PopupProperties.clippingEnabled`, `usePlatformDefaultWidth`, `excludeFromSystemGesture`, `securePolicy`, `flags`, `scrimAlpha`, `blurBehindRadius`; `DialogProperties.usePlatformDefaultWidth`, `decorFitsSystemWindows`, `windowTitle`, `scrimAlpha`, `windowShape`, blur radii, `securePolicy`; `PopupPositionProvider.calculatePosition` takes an `IntRect` anchor (compose-rs takes a `Rect`): **popup-dialog-properties** (most are Android window settings; `usePlatformDefaultWidth` and `clippingEnabled` are layout).
+
+### `ui-graphics`
+
+- **Has:** `Color` (ARGB8888: `from_argb`, `from_rgb`, components as `u8`, `with_alpha`, `composite_over`, `is_specified`, the named colors, `UNSPECIFIED`), `Brush` (`Solid`, linear, horizontal, vertical, radial, sweep gradients with stops and `TileMode`), `TileMode` (all four), `Path` (Compose's mutable path, D530: moves, lines, quadratics, cubics, arcs, relatives, rects, ovals, round rects, arcs, `addPath`, `translate`, `transform`, `op`, `combine`, fill type, bounds, `isEmpty`, `isConvex`, `reset`, `rewind`, SVG parsing), `PathFillType`, `PathOperation`, `Path.Direction` (`PathDirection`), `Matrix` (values, translation/scaling/rotation constructors, `map(Offset)`), `Shape` as a closed enum (rectangle, rounded corners) with `Outline` (`Rectangle`, `Rounded`), `RectangleShape`, `Paint` (color, fill or stroke width, cap, shader), `StrokeCap`, `ImageBitmap` (premultiplied RGBA pixels), `DrawScope` (rects, round rects, ovals, circles, arcs, lines, paths, images with src/dst rects, paragraphs, `rotate`/`scale`/`translate`/`inset`/`clipRect`/`clipPath` blocks, `center`, `size`, `brush_paint`), `ContentDrawScope.drawContent`, `CompositingStrategy`.
+- **Missing:**
+  - `Color(red, green, blue, alpha: Float, colorSpace)`, float `red`/`green`/`blue`/`alpha`, `copy`, `lerp` (in Oklab), `luminance`, `toArgb`, `Color.hsv`, `Color.hsl`, `takeOrElse`: **color-api-basics**. `Color(ULong)` with a color space, `convert`, `colorSpace`, the `colorspace` package (`ColorSpace`, `ColorSpaces` (the named spaces), `Rgb`, `TransferParameters`, `WhitePoint`, `Illuminant`, `Adaptation`, `Connector`, `RenderIntent`, `ColorModel`): **color-spaces**.
+  - `BlendMode` (29 modes), `ColorFilter` (`tint`, `lighting`, `colorMatrix`), `BlendModeColorFilter`, `LightingColorFilter`, `ColorMatrixColorFilter`, `ColorMatrix`, `Brush.composite`: **blend-modes-and-color-filters**.
+  - `Paint` as Compose's (`alpha`, `blendMode`, `colorFilter`, `filterQuality`, `isAntiAlias`, `pathEffect`, `strokeJoin`, `strokeMiterLimit`, `style`), `PaintingStyle`, `StrokeJoin`, `FilterQuality`, `PathEffect` (`dashPathEffect`, `cornerPathEffect`, `chainPathEffect`, `stampedPathEffect`), `StampedPathEffectStyle`, `PointMode`, `ClipOp` (`Difference`), `DefaultAlpha`; the `drawscope` package's Compose-shaped `DrawScope` (each draw with a `Color` or a `Brush`, `topLeft`/`size`, `alpha`, `style: DrawStyle`, `colorFilter`, `blendMode`; `drawPoints`; `drawImage(…, filterQuality)`; `drawRoundRect(cornerRadius)`), `DrawStyle`, `Fill`, `Stroke` (`width`, `miter`, `cap`, `join`, `pathEffect`, `HairlineWidth`, `DefaultMiter`), `DrawTransform`, `withTransform`, `rotateRad`, `inset(horizontal, vertical)`, `inset(all)`, `scale(uniform)`, `clipRect(…, clipOp)`, `clipPath(…, clipOp)`, `drawIntoCanvas`, `DrawContext`, `DrawScope.DefaultBlendMode`/`DefaultFilterQuality`: **paint-and-draw-style**.
+  - `Canvas` (immediate mode: `save`, `restore`, `saveLayer`, `translate`, `scale`, `rotate`, `skew`, `concat`, clips, draws, `drawVertices`, `enableZ`/`disableZ`), `Canvas(ImageBitmap)`, `CanvasHolder`, `CanvasDrawScope`, `ImageBitmap(width, height, config, hasAlpha, colorSpace)`, `ImageBitmapConfig`, `readPixels`, `prepareToDraw`, `toPixelMap`, `PixelMap`, `Vertices`, `VertexMode`, `ImageShader`, `decodeToImageBitmap` (compose-rs: `decode_image_bytes`): **canvas-and-offscreen-bitmaps**.
+  - `Shape` as an interface (`createOutline(size, layoutDirection, density)`), `Outline.Generic(path)`, `addOutline`, `drawOutline` (Canvas and DrawScope), `RoundRect` with per-corner elliptic radii: **custom-shapes**.
+  - `PathIterator` (+ `ConicEvaluation`), `PathSegment` (+ `Type`), `PathMeasure` (`length`, `getPosition`, `getTangent`, `getSegment`), `PathHitTester`, `computeDirection`, `divide`, `reverse`, `addSvg`, `toSvg`, `Path.and`/`or`/`xor`/`plus`/`minus`, `Path.copy`, `Path.iterator`: **path-geometry**.
+  - `Brush.intrinsicSize`, `Brush.applyTo`, `ShaderBrush` (custom), `SolidColor` as a type, `LinearGradient`/`RadialGradient`/`SweepGradient` types, `Interpolatable`, brush `lerp`, `LinearGradientShader`/`RadialGradientShader`/`SweepGradientShader`/`CompositeShader`: **brush-extras**.
+  - `RenderEffect`, `BlurEffect`, `OffsetEffect`, `LayerOutsets`: **layer-3d-and-effects**. `blur.BlurRadiusSpec` (uniform, vertical/horizontal/linear/radial gradients, `shader`), `BlurStop`: **blur**.
+  - `layer.GraphicsLayer` (`record`, `drawLayer`, all properties, `topLeft`, `size`, `pivotOffset`, `outline`, `toImageBitmap`, `isReleased`), `layer.CompositingStrategy`, `GraphicsContext` (`createGraphicsLayer`, `releaseGraphicsLayer`, `shadowContext`), `DrawScope.record`: **graphics-layer-object**.
+  - `painter.Painter` (`intrinsicSize`, `draw(size, alpha, colorFilter)`, `applyAlpha`, `applyColorFilter`, `applyLayoutDirection`), `BitmapPainter` (+ `filterQuality`), `BrushPainter`, `ColorPainter`: **painter**.
+  - `shadow.Shadow` (radius, color or brush, spread, offset, alpha, blend mode), `shadow.lerp`, `ShadowContext`, `DropShadowPainter`, `InnerShadowPainter`: **drop-inner-shadow**.
+  - `MeshGradientPainter`, `MeshGradientScope`: **mesh-gradient**.
+  - `vector.PathNode` (all 19 commands), `vector.PathParser`, `vector.PathBuilder`: **vector-graphics** (compose-rs parses SVG path data straight into a `Path`).
+  - `Shadow` (text shadow: color, offset, blur radius, `lerp`): text agent.
+  - Not to port: the `Android*`/`*_android` conversions (`asAndroidPath`, `asComposePaint`, `toAndroidRect`, …), `ExperimentalGraphicsApi` (an annotation; nothing in this module's API carries it now).
+
+### `ui-geometry`
+
+- **Has:** `Offset` (`ZERO`, `INFINITE`, `UNSPECIFIED`, `is_specified`, `+`, `-`), `Size` (`ZERO`, `new`, from `IntSize`), `Rect` (`new`, `from_offset_size`, `width`, `height`, `contains`), `RoundRect` (a rect and one `CornerRadius`), `CornerRadius` (`ZERO`, `new(x, y)`).
+- **Missing** (**geometry-unit-api**): `Rect.Zero`, `Rect(center, radius)`, `Rect(topLeft, bottomRight)`, `intersect`, `inflate`, `deflate`, `translate`, `overlaps`, `isEmpty`, `isFinite`, `isInfinite`, `size`, `minDimension`, `maxDimension`, the corner and center offsets, `lerp`; `MutableRect` (+ `toRect`); `Offset` `times`, `div`, `rem`, unary minus, `isValid`, `isFinite`, `lerp`, `takeOrElse`, `copy`; `Size.Unspecified`, `times`/`div`, `isEmpty`, `minDimension`, `maxDimension`, `center`, `toRect`, `lerp`, `takeOrElse`, `isSpecified`; `RoundRect` per-corner radii (`topLeftCornerRadius`, …), `RoundRect(rect, radiusX, radiusY)`, `contains`, `boundingRect`, `safeInnerRect`, `isRect`/`isEllipse`/`isCircle`/`isSimple`, `center`, `translate`, `lerp`; `CornerRadius` arithmetic, `isZero`, `isCircular`, `lerp`.
+
+### `ui-unit`
+
+- **Has:** `Dp` (`ZERO`, `UNSPECIFIED`, `+ - * /`, unary minus, `is_specified`, `value`), `Sp`, `.dp()`/`.sp()` (`UnitExt`), `Density` (`density`, `font_scale`, `round_to_px`, `to_px`, `sp_to_px`, `to_dp`), `DpSize` (`new`, from `Dp` or a pair), `IntSize` (`ZERO`, `new`), `IntOffset` (`ZERO`, `new`, `+`, `-`), `Constraints` (`new`, `fixed`, `at_most`, `unbounded`, `INFINITY`, bounded/fixed queries, `constrain*`, `loosen`, `offset`, `constrain_by`), `LayoutDirection`.
+- **Missing** (**geometry-unit-api**): `Dp.Hairline`, `Dp.Infinity`, `isFinite`, comparisons, `coerceIn/AtLeast/AtMost`, `min`/`max`, `lerp`, `takeOrElse`, `Dp / Dp`; `DpOffset` (all); `DpRect` (all); `DpSize` arithmetic, `Unspecified`, `center`, `lerp`, `takeOrElse`; `IntOffset` `times`/`div`/`rem`, unary minus, `lerp`, `round(Offset)`, `toOffset`, mixed `Offset ± IntOffset`, `IntOffset.Max`; `IntRect` (all); `IntSize` `times`/`div`, `center`, `toIntRect`, `toSize`, `roundToIntSize`, `toIntSize`; `TextUnit`, `TextUnitType`, `.em`, `isSp`/`isEm`, arithmetic and comparisons, `lerp`, `takeOrElse` (compose-rs has only `Sp`); `Velocity` (all); `Density(density, fontScale)` as a function, `FontScaling` (`toDp(TextUnit)`, `toSp(Dp)`), `Density.toSp`, `toDpSize`, `toSize`, `toRect(DpRect)`, `roundToPx(TextUnit)`; `Constraints.fixedWidth`, `fixedHeight`, `fitPrioritizingWidth`, `fitPrioritizingHeight`, `isZero`, `isSatisfiedBy`, `copy`, `copyMaxDimensions`. `ComposeUiUnitFlags` (*experimental*, `@ExperimentalUnitApi`): flags, not to port.
+
+### `ui-util`
+
+- **Missing:** `lerp(Float/Int/Long)` (public; compose-rs has a private one in compose-animation): **geometry-unit-api**. Not to port: `fastForEach` and the other list helpers, `packFloats`/`unpackFloat*`, `fastCbrt`, `fastCoerce*`, `normalizedAngleCos/Sin`, `trace` (compose-rs has `platform::trace`), and the `ExperimentalComposeUiApi`/`InternalComposeUiApi` annotations.
+
+## 3. Missing features
+
+One entry per feature, in the suggested order (below, after the entries). Sizes: S under a day, M a few days, L one to two weeks, XL several weeks. "Tests" lists the files waiting on the feature, and the `partial` files it completes. None of these is experimental in Compose but `media-query` (and two host-API members of `layout-info`): lookahead, approach layout and `LayoutCoordinates.introducesMotionFrameOfReference` are stable in this API.
+
+### Layout and node track
+
+**3.1 `geometry-unit-api`** — M.
+- *API:* the value types of ui-geometry and ui-unit and `ui-util`'s `lerp`, listed in §2 (`Rect` operations, `MutableRect`, `Offset`/`Size`/`RoundRect`/`CornerRadius` arithmetic, `Dp` extras, `DpOffset`, `DpRect`, `DpSize`/`IntOffset`/`IntSize` arithmetic, `IntRect`, `TextUnit` with `em`, `Velocity`, `Density`/`FontScaling` conversions, `Constraints` extras), and `Matrix`'s operations (`rotateX/Y/Z`, `scale`, `translate`, `invert`, `timesAssign`, `map(Rect)`, `isIdentity`, `reset`).
+- *Does:* the arithmetic everything else is written in; `TextUnit` with `em` is what letter spacing and line heights in `em` need.
+- *Tests:* MutableRectTest, DpOffsetTest, IntRectTest, VelocityTest; completes RectTest, OffsetTest, SizeTest, RoundRectTest, DpTest, DpSizeTest, IntOffsetTest, IntSizeTest, TextUnitTest, DensityTest, AndroidDensityTest, ConstraintsTest, MatrixTest, AndroidMatrixTest, MathHelpersTest.
+- *Depends on:* nothing. `TextUnit` touches the text agent's `TextStyle` (letter spacing, line height, font size in `em`). `Velocity` lets foundation's fling and nested scroll take Compose's type.
+
+**3.2 `alignment-api`** — S.
+- *API:* `Alignment`, `Alignment.Horizontal`, `Alignment.Vertical` as interfaces (custom alignments), `BiasAlignment` (+ `.Horizontal`, `.Vertical`), `AbsoluteAlignment`, `BiasAbsoluteAlignment` (+ `.Horizontal`), `Horizontal + Vertical`.
+- *Does:* alignments that don't mirror in RTL, and user-defined ones. Rust shape: keep the bias structs and their constants `Copy`, add an absolute flag (or `AbsoluteAlignment::*` constants of a bias type that ignores the direction) and a `Custom(Rc<dyn …>)` case, or a trait the layouts take.
+- *Tests:* AlignmentCombineTest; completes AlignmentTest.
+- *Depends on:* nothing; foundation's `Box`, `Row`, `Column`, `Arrangement.Absolute` (missing, docs/06) use it.
+
+**3.3 `content-scale`** — S.
+- *API:* `ContentScale` (interface, `computeScaleFactor(srcSize, dstSize)`, the seven constants), `FixedScale`, `ScaleFactor` (+ `Size * ScaleFactor`, `/`, `lerp`, `isSpecified`, `takeOrElse`).
+- *Does:* moves foundation's `ContentScale` enum into `compose::ui` (re-exported by foundation, as Compose's `ui.layout`), adds `FixedScale` and custom scales.
+- *Tests:* ScaleFactorTest; completes ContentScaleTest.
+- *Depends on:* 3.1 (`Size` arithmetic). Foundation's `Image` takes it; `painter` needs it.
+
+**3.4 `modifier-node-lifecycle`** — L.
+- *API:* `Modifier.Node.onAttach`, `isAttached`, `coroutineScope`, `sideEffect`, `shouldAutoInvalidate`, `node`; `DelegatableNode.onDensityChange`, `onLayoutDirectionChange`, `requireDensity`, `requireLayoutDirection`; node-initiated invalidation: `invalidateDraw`, `invalidateMeasurement`, `invalidateLayer`, `remeasureSync`, `invalidateSubtree`, `invalidateMeasurementForSubtree`, `invalidateDrawForSubtree`, `DrawModifierNode.onMeasureResultChanged`; Compose's auto-invalidation on `update` by the node's kinds (a draw-only node's update redraws, it doesn't remeasure).
+- *Does:* gives a modifier node a life of its own: it can start coroutines that end at detach, and ask its tree for a new measurement or drawing from a callback or a task, outside compose-rs's current paths (observed state reads and `EventContext`). Needs a handle a node keeps (its `NodeId` and chain index, and a weak tree reference or a queue the host drains) since nodes don't hold their tree.
+- *Tests:* ModifierNodeAttachOrderTest, ModifierNodeOnDensityChangeTest, InvalidateSubtreeTest; completes ModifierNodeReuseAndDeactivationTest, NodeChainTests.
+- *Depends on:* the runtime's executor (exists). Foundation's node-based modifiers (clickable's indication, scroll, focus, draggable) and every later node feature build on it.
+
+**3.5 `delegating-node`** — M.
+- *API:* `DelegatingNode` (`delegate`, `undelegate`).
+- *Does:* one modifier node made of several, each with its own capabilities (a clickable is a focusable, a hoverable, a pointer-input node and a semantics node), dispatched in Compose's order. In compose-rs the `ModifierNode::as_*` capability methods and the chain's `capabilities` bits would need to see delegates.
+- *Tests:* DelegatingNodeTest; completes OnSizeChangedTest (delegated cases), OnGloballyPositionedTest (delegated cases), CustomLayoutAndMeasureTest (`instancesKeepDelegates`).
+- *Depends on:* 3.4.
+
+**3.6 `node-traversal`** — M.
+- *API:* `TraversableNode` (`traverseKey`), `findNearestAncestor`, `traverseAncestors`, `traverseChildren`, `traverseDescendants`; underneath, Compose's internal `visitAncestors`, `visitChildren`, `visitSubtree(If)`, `visitLocalAncestors/Descendants`, `nearestAncestor`, `ancestors`, `child` (tested though internal).
+- *Does:* lets a node find related nodes up or down the tree by type or key, across layout nodes and in draw order; what modifier locals, nested lazy prefetch, drag and drop, focus and bring-into-view are built on.
+- *Tests:* TraversableModifierNodeTest and the ten `ModifierNodeVisit*`/`Ancestors`/`Child`/`NearestAncestor` files.
+- *Depends on:* 3.4 (attached state), 3.5 (delegates are visited).
+
+**3.7 `observer-node`** — S.
+- *API:* `ObserverModifierNode` (`onObservedReadsChanged`), `observeReads`.
+- *Does:* a node observes what a block reads and hears when it changes.
+- *Tests:* ObserverModifierNodeTest.
+- *Depends on:* 3.4; the runtime's read observer (exists, `ReadObserver`).
+
+**3.8 `composition-locals-in-nodes`** — M.
+- *API:* `CompositionLocalConsumerModifierNode`, `currentValueOf`; the layout node's own `density`, `layoutDirection` and composition-local map taken where it's composed.
+- *Does:* a modifier node reads composition locals at attach, measure or draw time, and is invalidated when they change; a subtree providing `LocalDensity` lays out at that density (compose-rs's density is the tree's: divergence, §5).
+- *Tests:* CompositionLocalConsumerModifierNodeTest, CompositionLocalMapInjectionTest, LayoutNodeDensityTest.
+- *Depends on:* 3.4; runtime: the current composition-local map captured when a node is emitted (Compose's `currentCompositionLocalMap`; runtime agent). `media-query` uses it in nodes.
+
+**3.9 `modifier-locals`** — M.
+- *API:* `ModifierLocal`, `ProvidableModifierLocal`, `modifierLocalOf`, `ModifierLocalModifierNode` (`provide`, `current`, `providedValues`), `ModifierLocalMap`, `modifierLocalMapOf`, `ModifierLocalReadScope`, `modifierLocalProvider`, `modifierLocalConsumer`.
+- *Does:* values a modifier provides to the modifiers after it in its chain and in its descendants' chains.
+- *Tests:* ModifierLocalSameLayoutNodeTest, ModifierLocalMultiLayoutNodeTest, ModifierLocalProviderConsumerOrderTest, ModifierLocalMapTest, ModifierLocalConsumerEntityTest.
+- *Depends on:* 3.4, 3.6.
+
+**3.10 `parent-data`** — M.
+- *API:* `ParentDataModifierNode` (`modifyParentData(density, parentData)`), `invalidateParentData`, `ParentDataModifier`, `IntrinsicMeasurable.parentData` (any type), `Modifier.layoutId`, `LayoutIdParentData`, `Measurable.layoutId`.
+- *Does:* custom parent data for custom layouts (compose-rs's `ParentData` is a fixed struct for weight and alignment); `layoutId` to find children by id.
+- *Tests:* ParentDataModifierTest, LayoutIdTest.
+- *Depends on:* 3.4 for `invalidateParentData`. Foundation's `weight`, `align`, `matchParentSize`, `alignBy` move onto it (or keep a fast path).
+
+**3.11 `multi-content-layout`** — S.
+- *API:* `Layout(contents, modifier, MultiContentMeasurePolicy)` and its intrinsics.
+- *Does:* a layout whose children come in several slots, the measurables grouped per slot.
+- *Tests:* MultiContentLayoutTest (`customIntrinsics` needs 3.17).
+- *Depends on:* nothing (a policy wrapper over children grouped by slot markers). Material's `TopAppBar`, `ListItem` and `TextField` use it in Compose.
+
+**3.12 `remeasurement`** — S.
+- *API:* `Remeasurement.forceRemeasure`, `RemeasurementModifier`, `LayoutModifierNode.remeasureSync`.
+- *Does:* measure a node now, synchronously (Compose's lazy lists use it on scroll).
+- *Tests:* RemeasurementModifierTest.
+- *Depends on:* 3.4.
+
+**3.13 `placement-pass`** — L.
+- *API:* `MeasureScope.layout(width, height) { placement }` with the block run after the parent placed the node, `MeasureResult.placeChildren`, `Placeable.PlacementScope` (`place`, `placeRelative`, `coordinates`, `withMotionFrameOfReferencePlacement`), `invalidatePlacement`, `Placeable.measuredWidth/Height`, `Measured`.
+- *Does:* Compose's split of layout into measure, then placement top-down: state read while placing only places again (no measure), a node can measure a child while placing, and placement code sees the node's own coordinates in the window. compose-rs places in the policy's call that measures (docs/06, "Layout"), so a node is placed only after its own measurement returns: its position is unknown while it places its children. A design that keeps the fast path: `layout(w, h)` as now for policies that place immediately, plus `layout_with(w, h, |placement| …)` whose block the tree runs top-down once the parent placed the node; placement-only invalidation reruns only the blocks. Also rejects placing a child twice in one placement, as Compose.
+- *Tests:* MeasureInPlacementTest; completes PlacedChildTest, MeasureAndLayoutDelegateTest, ModelReadsTest, InvalidatingNotPlacedChildTest, MeasuringPlacingTwiceIsNotAllowedTest.
+- *Depends on:* nothing. A prerequisite of 3.14, 3.15, 3.16, 3.20, 3.21.
+
+**3.14 `layout-coordinates`** — M to L.
+- *API:* `LayoutCoordinates` as a live object (§2 lists its members), `requireLayoutCoordinates`, `PlacementScope.coordinates`, `introducesMotionFrameOfReference`.
+- *Does:* positions and transforms between any two nodes, through layout modifiers and graphics layers (compose-rs's `LayoutCoordinates` is a snapshot of root and window values, D172). Rust shape: a `Copy` handle (`NodeId`, layer index, pass) whose queries take the tree (inside callbacks and placement scopes) or go through the host, since coordinates outlive no tree borrow.
+- *Tests:* PlacementLayoutCoordinatesTest, RequireLayoutCoordinatesTest, PlacementScopeMotionFrameOfReferenceTest; completes OnGloballyPositionedTest, LayoutNodeTest.
+- *Depends on:* 3.13 (`PlacementScope.coordinates`); 3.18 for `get(alignmentLine)`. Foundation: popups' anchors, `onGloballyPositioned` users, lazy layouts' `withMotionFrameOfReferencePlacement`, staggered grid and pager (foundation gaps).
+
+**3.15 `on-placed`** — S to M.
+- *API:* `Modifier.onPlaced`, `LayoutAwareModifierNode` (`onPlaced`, `onRemeasured`), `MeasuredSizeAwareModifierNode`, `UnplacedAwareModifierNode` (`onUnplaced`).
+- *Does:* callbacks when a node is placed (with its coordinates), measured, or no longer placed.
+- *Tests:* UnplacedAwareModifierNodeTest, PlacementReusableNodeTest; completes PlacedChildTest, OnSizeChangedTest.
+- *Depends on:* 3.14.
+
+**3.16 `place-with-layer`** — M.
+- *API:* `placeWithLayer`/`placeRelativeWithLayer` with a layer block or a `GraphicsLayer`, the `zIndex` parameter of `place`, `LayoutModifierNode.updateLayerBlock`.
+- *Does:* a parent places a child in a graphics layer of its own (lazy items, pagers, `Modifier.offset { }` in Compose), moving it without drawing it again.
+- *Tests:* completes GraphicsLayerTest (top level), DrawReorderingTest, InvalidatingNotPlacedChildTest.
+- *Depends on:* compose-rs's layers (exist); 3.29 for the `GraphicsLayer` overloads. Foundation's `animateItem` and pager; docs/11 notes a list's clip layer is recorded again each scroll frame where Compose moves its items' layers (`placeWithLayer`).
+
+**3.17 `intrinsics`** — L.
+- *API:* `IntrinsicMeasurable` (`minIntrinsicWidth`, `maxIntrinsicWidth`, `minIntrinsicHeight`, `maxIntrinsicHeight`), `IntrinsicMeasureScope`, the four intrinsic methods (with defaults) of `MeasurePolicy`, `LayoutModifierNode` and `MultiContentMeasurePolicy`; remeasuring a parent when an intrinsic it read changes.
+- *Does:* Compose's intrinsics: each layout computes them with its own formula; the default measures. compose-rs has only `max_intrinsic_width/height` probes that measure the child (D137), and no minimum intrinsics.
+- *Tests:* IntrinsicsMeasurementTest, RemeasureWithIntrinsicsTest, RemeasureWithIntrinsicsRealClockTest; completes MultiContentLayoutTest, RtlLayoutTest.
+- *Depends on:* nothing. Foundation: `Modifier.width(IntrinsicSize.Min)` and friends, `Row`/`Column`/`Box` formulas, text's intrinsic widths (text agent); Material: menus, dividers in `IntrinsicSize.Min` rows.
+
+**3.18 `alignment-lines`** — L.
+- *API:* `AlignmentLine`, `HorizontalAlignmentLine`, `VerticalAlignmentLine` (merger), `FirstBaseline`, `LastBaseline`, `layout(w, h, alignmentLines)`, `MeasureResult.alignmentLines`, `Placeable[line]`, `LayoutCoordinates[line]`, `providedAlignmentLines`.
+- *Does:* positions a layout exposes to its ancestors (baselines), inherited from children through positions, with the relayout rules of `AlignmentLinesTest`.
+- *Tests:* AlignmentLinesTest, AlignmentLineTest; completes PlacedChildTest, LookaheadScopeTest (`firstBaselineAlignmentInLookaheadScope`).
+- *Depends on:* 3.13 (lines queried in placement and the early-layout rule); text agent for `BasicText`'s baselines. Foundation: `Row.alignByBaseline`, `alignBy`, `paddingFrom`, `paddingFromBaseline`; Material 3: top app bars' and tabs' baselines (docs/06 says compose-rs approximates a title's baseline at 80 % of its height for lack of alignment lines).
+
+**3.19 `subcompose-layout`** — XL.
+- *API:* `SubcomposeLayout`, `SubcomposeLayoutState` (`precompose`, `createPausedPrecomposition`), `PrecomposedSlotHandle`, `PausedPrecomposition`, `SubcomposeMeasureScope.subcompose`, `SubcomposeSlotReusePolicy`.
+- *Does:* composes content during measurement, with the constraints known. compose-rs can't compose while the tree measures (the tree is borrowed), so its lazy layouts and `BoxWithConstraints` compose between measure rounds of a frame (docs/11, "No subcomposition"; D142, D487). A public `SubcomposeLayout` needs either composition re-entrant from measurement (the applier detached from the tree being measured, composing into a pending subtree attached when the measurement returns) or a documented emulation over the round loop with Compose's semantics for slots, reuse and precomposition.
+- *Tests:* SubcomposeLayoutTest; completes TestRuleExecutesLayoutPassesWhenWaitingForIdleTest and the subcompose cases of LookaheadScopeTest and the `ModifierNodeVisit*` tests.
+- *Depends on:* runtime (subcompositions, reusable and pausable composition exist; composing from layout doesn't; runtime agent); a user decision, since it revisits the "no subcomposition" design. Foundation: `BoxWithConstraints`, `LazyLayout`, `Scaffold`; Material 3: `TabRow`, `Scaffold`.
+
+**3.20 `lookahead`** — XL (plus its prerequisites). Analysed in §4.
+- *API:* `LookaheadScope`, `approachLayout`, `ApproachLayoutModifierNode`, `ApproachMeasureScope`, `ApproachIntrinsicMeasureScope`, `isLookingAhead`, `toLookaheadCoordinates`, `localLookaheadPositionOf`, `lookaheadScopeCoordinates`.
+- *Tests:* LookaheadScopeTest, ApproachLayoutTest, TogglePlacementInLookaheadScopeTest, LookaheadDelegatesTest; completes the lookahead cases of PlacedChildTest, PlacementLayoutCoordinatesTest, MeasureInPlacementTest, IntrinsicsMeasurementTest, RulerTest, SubcomposeLayoutTest.
+- *Depends on:* 3.13, 3.14, 3.17; 3.18 and 3.19 for some tests; runtime `movableContentOf` (shared elements); 3.29 for shared elements' overlay rendering. Unblocks animation's `SharedTransitionLayout`, `sharedElement`, `sharedBounds`, `animateBounds`, `skipToLookaheadSize`, lookahead-aware `AnimatedContent`/`AnimatedVisibility`; foundation's `animateItem` in a `LookaheadScope`.
+
+**3.21 `rulers`** — L.
+- *API:* `Ruler`, `HorizontalRuler`, `VerticalRuler`, `RulerScope`, `RectRulers`, `WindowInsetsRulers`, `WindowInsetsAnimation`, `PlacementScope.current`, `invalidateRulers`, `getDisplayCutoutBounds`.
+- *Does:* positions a layout provides to its whole subtree (window insets as rulers), read while placing.
+- *Tests:* RulerTest, RectRulerTest, WindowInsetsRulersTest.
+- *Depends on:* 3.13, 3.14; the host's insets (exist, `PlatformWindowInsets`) and their animations (foundation agent's insets work).
+
+**3.22 `layout-rect-callbacks`** — L.
+- *API:* `onLayoutRectChanged`, `registerOnLayoutRectChanged`, `registerOnGlobalLayoutListener`, `RelativeLayoutBounds`, `onVisibilityChanged`, `onVisibilityChangedNode`, `LayoutBoundsHolder`, `layoutBounds`.
+- *Does:* throttled, debounced callbacks with a node's bounds in root, window and screen, visible fractions and occlusions, from a spatial index of every node's rectangle.
+- *Tests:* OnGlobalRectChangedTest, RectListIntegrationTest, OnGlobalLayoutListenerTest, OnVisibilityChangedTest, RectListTest, ThrottledCallbacksTest.
+- *Depends on:* 3.14; 3.4 for `register*` on nodes; the host clock for throttling.
+
+**3.23 `beyond-bounds-layout`** — S to M.
+- *API:* `BeyondBoundsLayout`, `BeyondBoundsLayoutProviderModifierNode`, `findNearestBeyondBoundsLayoutAncestor`.
+- *Does:* makes compose-rs's internal beyond-bounds layout (D477) public.
+- *Tests:* completes BeyondBoundsLayoutProviderModifierNodeTest, BeyondBoundsLayoutTest.
+- *Depends on:* 3.6.
+
+**3.24 `pinnable-container`** — S. `PinnableContainer`, `LocalPinnableContainer`: content asks its lazy item to stay composed (compose-rs pins the focused item internally). No test here (foundation's lazy pinning tests). Depends on nothing.
+
+**3.25 `bring-into-view-node`** — S to M. `BringIntoViewModifierNode`, `DelegatableNode.bringIntoView`: public, suspending, interruptible version of compose-rs's `ModifierNode::bring_into_view`. Completes BringIntoViewModifierNodeTest. Depends on 3.4, 3.6, 3.14; foundation's `BringIntoViewRequester` (foundation agent).
+
+**3.26 `layout-info`** — M, low priority. `LayoutInfo`, `ModifierInfo`, `GraphicLayerInfo`, `getModifierInfo`, and the *experimental* host API (`LayoutInfo.placeOrder`, `zIndex`, `calculateOuterBoundsInRoot`, `ObservationTarget`): tooling and inspection. NodeChainOwnerTests. Depends on 3.14.
+
+**3.27 `modifier-chain-introspection`** — S, low priority. `Modifier.foldIn`, `foldOut`, `any`, `all`, `CombinedModifier`. Completes ModifierTest. Conflicts with D260 (elements private); decide whether to expose elements opaquely.
+
+### Graphics track
+
+**3.28 `paint-and-draw-style`** — L.
+- *API:* Compose's `Paint` (alpha, blend mode, color filter, filter quality, anti-alias, path effect, stroke join, miter, style), `DrawStyle`/`Fill`/`Stroke`, `PathEffect` (dash, corner, chain, stamped), `PointMode`, `ClipOp`, `FilterQuality`, and Compose-shaped `DrawScope` calls (color or brush, `topLeft`/`size`, `alpha`, `style`, `colorFilter`, `blendMode`), `drawPoints`, `drawRoundRect(cornerRadius)`, `withTransform`/`DrawTransform`, `rotateRad`, the `inset` and uniform `scale` overloads, clips with `ClipOp.Difference`, `drawIntoCanvas`, `DrawContext`, `Modifier.scale(scaleX, scaleY)`.
+- *Does:* the full drawing vocabulary. Each addition is a `DrawOp` (or paint field) that both renderers replay: Skia on desktop, the Kotlin replayer on Android (docs/07, docs/13).
+- *Tests:* PaintTest; completes DrawScopeTest, AndroidCanvasTest.
+- *Depends on:* 3.30 for blend modes and color filters; 3.1 (`CornerRadius`, `Size`). Foundation's `border` with a brush (missing, docs/11) and `Canvas` users.
+
+**3.29 `custom-shapes`** — M.
+- *API:* `Shape` as an interface (`createOutline(size, layoutDirection, density)`), `Outline.Generic(path)`, `addOutline`, `drawOutline`, elliptic per-corner radii in `RoundRect`/`Outline.Rounded`.
+- *Does:* any shape for backgrounds, borders, clips, shadows and hit tests (compose-rs's `Shape` is a closed enum of rectangles and rounded rectangles: docs/11, D529). Android clips to paths already where needed (D525).
+- *Tests:* completes ClipDrawTest, OutlineTest, RectangleShapeTest, GraphicsLayerTest (draw), GraphicsLayerSemanticsTest.
+- *Depends on:* 3.1; path hit testing (3.32's `PathHitTester`) for clipped hit tests. Foundation: `GenericShape`, `CutCornerShape`, `AbsoluteRoundedCornerShape`, `AbsoluteCutCornerShape`; Material's shapes.
+
+**3.30 `blend-modes-and-color-filters`** — M.
+- *API:* `BlendMode`, `ColorFilter` (`tint`, `lighting`, `colorMatrix`) and its subclasses, `ColorMatrix`, `Brush.composite`, the paint, draw-call and layer parameters.
+- *Tests:* AndroidBlendModeTest (its mapping in compose-rs's Kotlin replayer), AndroidColorFilterTest, ColorMatrixTest; completes VectorTest, PainterModifierTest, GraphicsLayerTest (draw).
+- *Depends on:* both renderers (Skia and Android's `Canvas` have every mode; HWUI's `RenderNode` takes a paint for layer blend modes and color filters).
+
+**3.31 `painter`** — M.
+- *API:* `Painter`, `BitmapPainter`, `ColorPainter`, `BrushPainter`, `Modifier.paint`.
+- *Tests:* PainterModifierTest, PainterTest, BitmapPainterTest, BrushPainterTest.
+- *Depends on:* 3.28 (alpha and color filter on a draw), 3.3, 3.17 (the paint node's intrinsics). Foundation: `Image(painter)`; Material 3: `Icon(painter)`; Android resources' `painterResource` (platform agent).
+
+**3.32 `path-geometry`** — M.
+- *API:* `PathIterator`, `PathSegment`, `PathMeasure`, `PathHitTester`, `computeDirection`, `divide`, `reverse`, `addSvg`, `toSvg`, the path operators, `Path.copy`.
+- *Does:* queries over a path's geometry, computed in Rust (compose-rs keeps paths as Rust data and computes operations on desktop with Skia and on Android in the replayer, D535); `PathMeasure` is what trim paths and path animations need.
+- *Tests:* PathIteratorTest, PathMeasureTest, PathHitTest, PathDirectionTest, PathDivisionTest, PathReversionTest, AndroidPathMeasureTest; completes PathSvgTest, PathTest.
+- *Depends on:* nothing (curve flattening in Rust, or Skia's on desktop).
+
+**3.33 `vector-graphics`** — L.
+- *API:* §2's `ui.graphics.vector` list.
+- *Does:* full `ImageVector`s (groups with transforms and clip paths, strokes, trim paths, tints) drawn by a `VectorPainter`, and vector content composed with `Group`/`Path` composables in a composition of its own (`VectorApplier`).
+- *Tests:* VectorTest, ImageVectorBuilderTest.
+- *Depends on:* 3.31, 3.28 (stroke joins, miters), 3.32 (trim paths), 3.30 (tint blend modes); runtime: a second applier for vector nodes (the runtime's `Applier` is generic). Material's `Icon` (exists for filled icons) and the extended icon sets.
+
+**3.34 `graphics-layer-object`** — L.
+- *API:* `layer.GraphicsLayer` (`record`, every property, `topLeft`, `pivotOffset`, `outline`, `toImageBitmap`, release), `drawLayer`, `GraphicsContext`, `requireGraphicsContext`, `rememberGraphicsLayer`, `CacheDrawScope.obtainGraphicsLayer`/`record`, `DrawScope.record`.
+- *Does:* a recording not tied to a layout node, drawn where code asks, any number of times. compose-rs's retained groups (D155, D270) are per node; a free-standing layer is a group with its own key and version that a drawing refers to.
+- *Tests:* AndroidGraphicsLayerTest, RobolectricGraphicsLayerTest, DrawingPrebuiltGraphicsLayerTest; completes draw/DrawModifierTest.
+- *Depends on:* 3.36 for `toImageBitmap`; 3.4 (release on detach). Animation: shared elements' overlay; foundation and apps: capturing content to a bitmap.
+
+**3.35 `layer-3d-and-effects`** — M to L.
+- *API:* `GraphicsLayerScope.rotationX`, `rotationY`, `cameraDistance`, `renderEffect`, `colorFilter`, `blendMode`, `outsets`; `RenderEffect`, `BlurEffect`, `OffsetEffect`, `LayerOutsets`.
+- *Tests:* AndroidRenderEffectTest, RenderEffectTest; completes GraphicsLayerTest (draw), GraphicsLayerScopeTest.
+- *Depends on:* 3.30; renderers: Skia's 3D matrices and image filters, Android's `RenderNode` (render effects on API 31+).
+
+**3.36 `canvas-and-offscreen-bitmaps`** — L.
+- *API:* `Canvas` (immediate mode), `Canvas(ImageBitmap)`, `CanvasDrawScope`, `ImageBitmap(width, height, config, hasAlpha, colorSpace)`, `ImageBitmapConfig`, `readPixels`, `toPixelMap`, `PixelMap`, `Vertices`/`drawVertices`, `ImageShader`.
+- *Does:* drawing into a bitmap now, not into the frame's display list: a raster backend each platform runs synchronously (Skia raster on desktop; Android's `Bitmap` and `Canvas` across JNI).
+- *Tests:* AndroidCanvasTest, VerticesTest, PixelMapTest; completes ImageBitmapTest.
+- *Depends on:* 3.28.
+
+**3.37 `drop-inner-shadow`** — M. `Modifier.dropShadow`, `innerShadow`, `shadow.Shadow`, `ShadowContext`, `DropShadowPainter`, `InnerShadowPainter`, `shadow.lerp`. Tests: DropShadowTest, InnerShadowTest, DropShadowScreenShotTest, InnerShadowScreenShotTest, DropShadowPainterTest, InnerShadowPainterTest, ShadowParamsTest, ShadowInterpolationTests. Depends on 3.31, 3.29, 3.30, a blur (Skia mask filters; Android `BlurMaskFilter` or render effects).
+
+**3.38 `blur`** — L. `Modifier.blur` (all overloads), `BlurScope`, `BlurredEdgeTreatment`, `BlurRadiusSpec`, `BlurStop`. Tests: BlurTest, ProgressiveBlurEffectTest, BlurRadiusSpecTest. Depends on 3.35; progressive blur needs runtime shaders (Skia's runtime effects, Android's `RuntimeShader` on API 33+).
+
+**3.39 `color-api-basics`** — S. `Color` float components and constructor, `copy`, `lerp` (Oklab, as compose-animation already converts), `luminance`, `toArgb`, `hsv`, `hsl`, `takeOrElse`. Completes ColorTest. Depends on nothing; can stay on ARGB8888.
+
+**3.40 `color-spaces`** — L. `Color` as 64 bits with a color space and the `colorspace` package. Tests: ColorSpaceTest, AndroidColorSpaceTest, ColorModelTest; completes ColorTest, PaintTest. Depends on 3.39; renderers taking wide-gamut colors (Skia color spaces; Android's `Color` longs). Low priority unless wide gamut is wanted.
+
+**3.41 `brush-extras`** — S to M. `Brush.intrinsicSize`, `applyTo`, `ShaderBrush` (custom shaders), the gradient types, `SolidColor`, `Interpolatable` and brush `lerp`, the `*Shader` functions. Tests: BrushInterpolationTests, InterpolatableTests; completes ShaderTest. Depends on 3.30 (`composite`).
+
+**3.42 `mesh-gradient`** — M. `MeshGradientPainter`, `MeshGradientScope`. Tests: MeshGradientTest, MeshGradientRendererTest. Depends on 3.31, 3.36 (`drawVertices`) or Skia's mesh.
+
+**3.43 `graphics-layer-shape-semantics`** — S. A clipping layer's shape as the node's `Shape` semantics property. Tests: GraphicsLayerSemanticsTest. Depends on the semantics agent (a `Shape` property) and 3.29.
+
+### Platform and window track
+
+**3.44 `preferred-frame-rate`** — S. `Modifier.preferredFrameRate`, `FrameRateCategory`. FrameRateTest. Android hosts vote with `View.setRequestedFrameRate` (API 35); desktop ignores it. `testMovableContent` needs runtime `movableContentOf`.
+
+**3.45 `keep-screen-on`** — S. `Modifier.keepScreenOn`. KeepScreenOnModifierTest. Android's `FLAG_KEEP_SCREEN_ON` through the host; desktop may inhibit the screensaver.
+
+**3.46 `sensitive-content`** — S. `Modifier.sensitiveContent`. SensitiveContentModifierTest. Android 15's content sensitivity through the host.
+
+**3.47 `media-query`** — M, **experimental** (`@ExperimentalMediaQueryApi`). `UiMediaScope`, `mediaQuery`, `computedMediaQuery`, `LocalUiMediaScope`. Tests: MediaQueryTest, MediaQueryIntegrationTest. Depends on 3.8 (`mediaQuery` in nodes) and host information (window size exists in `Configuration`; pointer precision, keyboard, posture, camera and microphone don't).
+
+**3.48 `nonlinear-font-scaling`** — S to M. Android 14's non-linear sp scaling (`FontScaleConverter`, internal in Compose but behaviour of `Density.toPx(sp)` on Android). Tests: FontScaleConverterFactoryTest, FontScaleConverterTableTest. Android host and text agent.
+
+**3.49 `popup-dialog-properties`** — S to M. The missing `PopupProperties` and `DialogProperties` members of §2, popup positions recomputed when state a `PopupPositionProvider` reads changes, `IntRect` anchors. Completes PopupLayoutTest, PopupTest, DialogTest. Most members are Android window settings (n/a on desktop overlays); `usePlatformDefaultWidth` and `clippingEnabled` are layout.
+
+### Suggested order
+
+Three tracks that can run in parallel, each in order:
+
+1. **Layout and nodes:** 3.1 geometry-unit-api (M), 3.2 alignment-api (S), 3.3 content-scale (S) → 3.4 modifier-node-lifecycle (L) → 3.5 delegating-node (M) → 3.6 node-traversal (M), 3.7 observer-node (S), 3.8 composition-locals-in-nodes (M) → 3.9 modifier-locals (M), 3.10 parent-data (M), 3.11 multi-content-layout (S), 3.12 remeasurement (S) → 3.13 placement-pass (L) → 3.14 layout-coordinates (M–L) → 3.15 on-placed (S–M), 3.16 place-with-layer (M) → 3.17 intrinsics (L) → 3.20 lookahead (XL) → 3.18 alignment-lines (L) → 3.19 subcompose-layout (XL, after a user decision) → 3.21 rulers (L) → 3.22 layout-rect-callbacks (L), 3.23–3.27.
+2. **Graphics:** 3.39 color-api-basics (S), 3.28 paint-and-draw-style (L), 3.29 custom-shapes (M) → 3.30 blend-modes-and-color-filters (M), 3.41 brush-extras (S–M) → 3.31 painter (M), 3.32 path-geometry (M) → 3.33 vector-graphics (L) → 3.34 graphics-layer-object (L), 3.35 layer-3d-and-effects (M–L) → 3.37 drop-inner-shadow (M), 3.38 blur (L), 3.36 canvas-and-offscreen-bitmaps (L) → 3.40 color-spaces (L), 3.42 mesh-gradient (M), 3.43.
+3. **Platform:** 3.44–3.49, any time; 3.47 after 3.8.
+
+Why this order: the value types (3.1–3.3) unblock about 200 small unit tests at once and every later API is written in them. The node infrastructure (3.4–3.10) is what foundation's Compose-shaped modifiers sit on, and what the foundation, focus and input agents' ports will keep asking for. Lookahead comes as early as its prerequisites allow (3.13, 3.14, 3.17) because shared elements and `animateBounds` wait on it; alignment lines and `SubcomposeLayout` are needed by only a few of its tests and can follow. `SubcomposeLayout` is last of the big ones: it reverses a deliberate design (composition between measure rounds) and needs the runtime agent. In graphics, the paint vocabulary and shapes first, since most later features are draw calls with paints.
+
+## 4. Lookahead in depth
+
+### What Compose does
+
+`LookaheadScope { content }` (layout/LookaheadScope.kt) emits a *virtual* `LayoutNode` (no measure of its own; its children are laid out by its parent) flagged `isVirtualLookaheadRoot`; every node below takes it as its `lookaheadRoot` (the closest one, for nested scopes). A node with an `ApproachLayoutModifierNode` but no scope above becomes its own root (movable content carrying one). Each node then has two layout states: a `LookaheadPassDelegate` and a `MeasurePassDelegate` (node/LookaheadPassDelegate.kt, MeasurePassDelegate.kt), and each coordinator a `LookaheadDelegate` (node/LookaheadDelegate.kt) holding the lookahead measure result and position.
+
+1. **Lookahead pass.** When the scope's subtree is measured by its parent (outside the scope), Compose first measures the subtree in *lookahead*, with the same constraints: every policy and layout modifier runs with `isLookingAhead = true`; `ApproachLayoutModifierNode.measure` runs (by default a pass-through), not `approachMeasure`. Then the lookahead placement: each node's lookahead position. These are the destination: the layout the content will settle to.
+2. **Approach (main) pass.** The ordinary measure and placement then run. Layouts without approach nodes measure as usual (their constraints now come from the approach of their ancestors); an `ApproachLayoutModifierNode` runs `approachMeasure` with `lookaheadSize` and `lookaheadConstraints` in its `ApproachMeasureScope`, and, in its placement block, reads its own current `coordinates` and its destination through `lookaheadScopeCoordinates`, `toLookaheadCoordinates` and `localLookaheadPositionOf`, to animate size and position toward the destination (`animateBounds`, shared elements).
+3. **Completion.** `isMeasurementApproachInProgress(lookaheadSize)` and `isPlacementApproachInProgress(lookaheadCoordinates)` tell whether the approach still differs from the destination; once both are false the approach snaps to the lookahead result and Compose may skip the approach pass until something changes.
+4. **Invalidation.** Lookahead and approach have separate dirty flags (`requestLookaheadRemeasure`, `requestLookaheadRelayout`, `lookaheadMeasurePending`): a state read in `approachMeasure` (an animation's value) invalidates only the approach; a change that affects the destination (modifier, content, constraints) invalidates both. Intrinsics have lookahead and approach variants (`minApproachIntrinsicWidth`, …, used only once the node has a lookahead result).
+5. **Subcomposition and lazy layouts.** `SubcomposeLayout` subcomposes in the lookahead pass and keeps slots the lookahead needs; lazy lists compute items' lookahead positions (`LazyListMeasure` checks `isLookingAhead`) so `animateItem` animates to them, and keep items that only the lookahead pass places.
+
+### Where compose-rs stands
+
+compose-rs's layout (crates/compose-ui/src/measure.rs, layout.rs) is one fused pass: `UiTree::measure_node` runs `measure_layer` per layout modifier then the policy; a `MeasureScope` measures a child and places it in the same call (`MeasureScope::place` writes the child's `Layer::position` immediately); results are cached per node by constraints and dirty flags (`needs_measure`, `subtree_needs_measure`), and a child whose size holds stops the climb (`remeasure_children_in_place`). Layout callbacks (`on_size_changed`, `on_globally_positioned`) run after the whole layout with snapshot coordinates. There are no virtual nodes, no placement blocks, no live coordinates, no intrinsics beyond measuring probes, and no subcomposition.
+
+The fusion is partly good news for lookahead: a fused lookahead pass over a subtree is a complete measure *and* placement, so once it returns every lookahead size and position in the subtree is known, before the approach pass starts. The bad news is the approach: an approach node animating its position must know where its parent placed it in the approach pass, and in compose-rs a node is placed only after its own measurement returns, so the placement code of a node never knows its own position.
+
+### What compose-rs's pipeline needs
+
+1. **Placement after measurement (3.13).** Approach placement needs the node's current coordinates; that needs Compose's order: measure, then placement blocks run top-down after the parent placed the node. A narrower alternative, if the general placement pass is postponed: run only approach nodes' placement deferred, as a top-down fix-up after the approach pass (`approach_place(current, lookahead) -> IntOffset`, applied to the node's outermost layer, drawing unaffected but for the move). It's M rather than L, but leaves `PlacementScope.coordinates` and `invalidatePlacement` for later.
+2. **Live coordinates (3.14).** `LayoutCoordinates` as a handle with `local_position_of`, `parent_layout_coordinates`, and a lookahead flavour (`to_lookahead_coordinates`, positions summed from lookahead layers up to the scope's root), plus `LookaheadScope::local_lookahead_position_of` and `lookahead_scope_coordinates`.
+3. **The scope and the root.** A `LookaheadScope(|scope| …)` composable. Without virtual nodes, the cheapest shape is a composition local the layout node takes when emitted (as it takes `LOCAL_LAYOUT_DIRECTION`, layout.rs `emit_layout_node`): each node keeps `lookahead_root: Option<ScopeId>`; the scope's top nodes are those whose parent has another root (or none). The scope's coordinates are those of the top nodes' parent's inner layer, as Compose's `scopeCoordinates = parent.innerCoordinator`. Virtual nodes (children spliced into the parent's measurables) are the other option; they'd also serve `movableContentOf` placement, but touch every walk of the tree.
+4. **Lookahead state per layer.** `Layer` gains a lookahead copy (`measured`, `size`, `position`, `offset`, `measured_in`); `LayoutNode` gains `lookahead_constraints`, `needs_lookahead_measure`, `subtree_needs_lookahead_measure`, `lookahead_placed`. A `MeasureScope::is_looking_ahead()`; `measure_node`/`measure_layer` take the pass and write the matching state; policies and layout modifiers run unchanged in both passes (Compose's default), an approach node runs `measure` in lookahead and `approach_measure` in the approach.
+5. **The frame.** Where an outer node measures a child whose `lookahead_root` starts a scope, measure the child's subtree in lookahead first with the same constraints (fused, so it's placed too), then the approach pass as today. Nested scopes: the inner scope's lookahead runs inside the outer's lookahead, as Compose's "closest root". The scope's lookahead needn't run again when nothing in its subtree is lookahead-dirty: approach-only frames (an animation) run only the approach pass.
+6. **Observation.** A fourth observation kind for lookahead measurement (tree.rs `Observation`): a read in lookahead invalidates lookahead and approach; a read in `approach_measure` invalidates the approach only. Approach completion: when every approach node in the scope reports neither measurement nor placement in progress, the approach pass reuses the lookahead result (sizes and positions) for nodes whose approach constraints equal their lookahead ones, which is what keeps an idle `LookaheadScope` as cheap as plain content.
+7. **Intrinsics (3.17).** `min/max_approach_intrinsic_*` and lookahead intrinsics; the probes compose-rs has today aren't enough for `lookahead*IntrinsicsTest` and `intermediateLayout*IntrinsicsTest`.
+8. **Lazy layouts.** compose-rs's lazy lists compose between measure rounds (D487). In a scope, the lookahead pass can want items the approach doesn't place (and the reverse): the wanted range written by the measurement must be the union of both passes', and the lookahead positions of items kept for `animateItem`. No `SubcomposeLayout` needed for compose-rs's own lazy layouts; the `SubcomposeLayout`-in-lookahead tests wait for 3.19.
+9. **Drawing and callbacks.** Draw from the approach pass only (unchanged); `on_globally_positioned`/`on_placed` report the approach; lookahead values are reached through coordinates.
+10. **Outside ui.** Shared elements need runtime `movableContentOf` (the shared content moves between two places keeping its state; the runtime has movable groups internally, `start_movable_group`, but no public movable content) and 3.34 (shared elements are drawn in an overlay from recorded `GraphicsLayer`s, `renderInSharedTransitionScopeOverlay`). `animateBounds` needs only lookahead and coordinates. Material 3's internal `DraggableAnchors` reads lookahead state too.
+
+Suggested steps, each with its tests: (a) 3.13 and 3.14 (or the narrow fix-up of point 1 plus 3.14) — PlacementLayoutCoordinatesTest; (b) scope, lookahead state and the two passes with pass-through approach — the first third of LookaheadScopeTest (`lookaheadLayoutAnimation`, `nestedLookaheadScopeTest`, `noExtraLookaheadTest`, `localLookaheadPositionOf*`), LookaheadDelegatesTest; (c) `ApproachLayoutModifierNode`, `approach_layout`, completion and skipping — ApproachLayoutTest, TogglePlacementInLookaheadScopeTest; (d) split invalidation — `lookaheadStaysTheSameDuringAnimationTest`, `skipPlacementOnlyPostLookahead`, `testLookaheadPlacementInvalidatedAfterRoot`; (e) intrinsics — the eight intrinsics tests; (f) lazy lists in a scope (foundation agent's `animateItem` in lookahead); (g) the baseline and `SubcomposeLayout` cases after 3.18 and 3.19. Size: XL for (b)–(f), about three to five weeks, on top of 3.13 (L), 3.14 (M–L) and 3.17 (L).
+
+## 5. Notes for the porting agents
+
+### Where a ported test goes
+
+- **compose-ui's own tests** (`crates/compose-ui/tests/suite/`, one binary; add a module to `main.rs`) can't use foundation: they use the stand-ins in `crates/compose-ui/tests/support/mod.rs` (`ColumnPolicy`, `RowPolicy`, `Leaf`, `Stack`, a measure counter `take_measures`, a log). Good for the layout, node and drawing-order rules.
+- **Foundation's suite** (`crates/compose-foundation/tests/suite/`) has `Box!`, `Column!`, `Row!`, `Canvas`, `Image` and `ComposeTestRule`: most of Compose's ui tests are written with them and port most directly there (as `modifiers_api.rs` and `drawing_api.rs` do).
+- **Pixel tests** (`captureToImage().assertPixels`, `assertColor`, `AndroidLayoutDrawTestUtils`' `validateSquareColors`, screenshot tests) go to `crates/compose-skia/tests/suite/`: build a `UiHost` with `SkiaTextMeasurer`, `frame()`, render with `RasterRenderer::new(w, h)` and `renderer.render(tree.display_list(), Color::WHITE, 1.0, tree.text_measurer_ref())`, then read `renderer.pixel(x, y)` (skia.rs `the_counter_renders_with_skia`, `overlapping_pixels`). Compare colours with a tolerance where anti-aliasing is involved, as Compose's `assertPixels` does with its `ColorTolerance`.
+- **Unit tests of value types** (geometry, unit, `Constraints`, `Matrix`, `Path`) go next to the type (`#[cfg(test)]` in `unit.rs`, `constraints.rs`, `path.rs`) or in a suite module.
+- Cite the Compose test each Rust test covers (file and method) in a comment, rewrite from the scenario, copy no code. Tests of Compose's own behaviour set `compose::test::use_optimizations(Optimizations::NONE)` (README, "Rust hosts and tests"), since the default `recommended` flags change retained drawing.
+
+### How Compose's patterns map
+
+| Compose | compose-rs |
+|---|---|
+| `rule.setContent { … }` | `compose_test(\|\| …)`, `ComposeTestRule::sized(IntSize::new(w, h), …)` (density 1, fixed-advance text), `compose_test_with(size, density, measurer, …)`; in compose-ui, `UiHost::headless` or the support `host(…)` |
+| `var x by mutableStateOf(…)` in the test, changed in `runOnIdle` | `let x = mutable_state_of(…)` outside the content, `x.handle()` captured, `x.set(…)` then `ui.wait_for_idle()` (or `host.frame()`) |
+| `rule.runOnIdle`, `waitForIdle`, `CountDownLatch` on draw/layout | Not needed: frames are synchronous; `wait_for_idle()` runs frames until idle (an animation's frames included, the clock moving on) |
+| `rule.mainClock.autoAdvance = false`, `advanceTimeBy` | `ComposeTestRule::with_manual_clock`, `advance_time_by`, `advance_time_by_frame` |
+| `Layout(content) { measurables, constraints -> layout(w, h) { p.place(x, y) } }` | `Layout!(measure_policy = measure_policy(\|scope, measurables, constraints\| { let p = scope.measure(measurables[0], c); scope.place(&p, x, y); scope.layout(w, h) }), { … })`: placement happens inside measurement |
+| `Modifier.layout { m, c -> … }` | `Modifier.layout(\|scope, measurable, constraints\| …)` |
+| counting measures/layouts | a counter in the policy (`Rc<Cell<u32>>`, or compose-ui support's `take_measures`); "layouts" (placement-block runs) have no separate count until 3.13 |
+| counting draws | a counter in `draw_behind`; retained drawing is checked with group versions (`DisplayList` groups) as retained_drawing.rs does |
+| `onNodeWithTag(t).assertPositionInRootIsEqualTo(x, y)`, `assertWidthIsEqualTo`, `getBoundsInRoot()` | `ui.on_node_with_tag(t).fetch_semantics_node().bounds` (a `Rect` in pixels; with density 1, dp = px) |
+| `Modifier.onGloballyPositioned { coords -> … }` | the same, with a snapshot `LayoutCoordinates` (`size`, `position_in_root`, `position_in_window`, `bounds_in_root`, `bounds_in_window`) |
+| `Modifier.Node` subclass + `ModifierNodeElement` data class | a struct implementing `ModifierNode` (capabilities through `as_layout`, `as_draw`, …) and an element implementing `ModifierNodeElement` (`create`, `update`, `same` for `equals`), added with `Modifier.then_custom(element)` |
+| `ReusableContentHost`/`ReusableContent` | the runtime's reusable content (D430; foundation's lazy_reuse.rs shows the pattern) |
+| `Modifier.testTag`, `testTag` lookups | the same (`test_tag`, `on_node_with_tag`) |
+| Android-only plumbing (`activityTestRule`, `View` measure specs, `ComposeView`) | n/a; don't port |
+
+### What the harness lacks (worth adding before mass-porting)
+
+- **Bounds assertions in dp:** `assert_position_in_root_is_equal_to`, `assert_width_is_equal_to`, `assert_height_is_equal_to`, `get_bounds_in_root`, `get_unclipped_bounds_in_root`, `assert_is_displayed`/`assert_is_not_displayed` (placed and inside the window). Today every test computes them from `fetch_semantics_node().bounds`.
+- **Capturing a node's pixels:** `capture_to_image()` of a node (crop the rendered frame to its bounds) and `assert_pixels { pos -> color }`, `assert_color`, a shape assertion (Compose's `assertShape`), in a test helper of compose-skia's suite. The `RasterRenderer` route works but each test repeats the setup.
+- **Swapping content:** Compose tests set content once and toggle state; compose-test's rule does the same. Tests that call `setContent` twice need a new rule.
+- **Touch input helpers** (`performTouchInput { down; moveBy; up }`) are the input agent's; ui-core tests that need them (hit tests through layers) can send `PointerEvent`s directly (`ui.host().send_pointer(PointerEvent::press(…))`).
+- **No way to count placement-block runs or to observe "relayout without remeasure"** until 3.13.
+
+### Behaviours suspected to differ from Compose
+
+1. **Placing a child twice is accepted.** `UiTree::place` (measure.rs) overwrites the position; Compose throws. Caught by MeasuringPlacingTwiceIsNotAllowedTest (`placeTwiceWithTheSamePosition`, `placeTwiceWithDifferentPositions`) and DrawReorderingTest (`placingTheSameItemTwiceIsNotAllowedAsItBreaksTheDrawingOrder`).
+2. **`LocalDensity` provided to a subtree doesn't change its layout.** `MeasureScope::density` and drawing read the tree's density (`tree.density`); Compose's `LayoutNode.density` is the composition local's where the node is composed. Caught by LayoutNodeDensityTest (`compositionLocalDensityChangeTriggersRemeasure`, `…Redraw`).
+3. **A layer-only change reports no new coordinates** (D172, docs/11). Caught by OnGloballyPositionedTest `onPositionedCalledWhenLayerChanged`.
+4. **State read while placing measures again.** Placement is part of measurement, so a read in placement code reruns the policy; Compose only relays out. Caught by ModelReadsTest `layoutReactsOnCorrectModelsChanges` and `parentIsNotRelaidOutWhenChildLayoutModifierUsesState` when they count measures.
+5. **Any modifier change measures its node again.** `UiTree::set_modifier` (tree.rs) calls `invalidate_measure` for any element change, a `background` colour too, where Compose's update invalidates by the node's kinds (a draw node redraws only). The parent isn't measured again when the size holds, so it's a cost rather than a visible difference; a test counting a policy's measurements across a colour change would catch it (ModifierNodeReuseAndDeactivationTest's invalidation counts are the closest).
+6. **Sizes out of range are clamped silently.** `measure_layer` takes `result.width.max(0)`; Compose's `layout(w, h)` throws for sizes outside 0 to 2^24 − 1 (`checkMeasuredSize`). Caught by IntrinsicsMeasurementTest and MeasureOnlyTest `measureWidthTooLarge`/`measureHeightTooLarge` (the latter is n/a here, so port the scenario from the former).
+7. **Intrinsics are measurements** (D137): a layout whose intrinsic formula differs from what measuring at the probe constraints gives (text's min intrinsic width, a `Row` of weights) answers differently. Caught by IntrinsicsMeasurementTest and foundation's intrinsic tests.
+8. **Hit testing doesn't follow graphics-layer transforms** (docs/06, "Graphics layers"): a scaled or translated layer is hit where it was laid out. Input agent's area, but rooted in layers; Compose's pointer tests over `graphicsLayer` content catch it.
+9. **A popup's position provider isn't observed:** a state it reads doesn't move the popup. Caught by PopupLayoutTest `positionUpdated_whenStateReadInPositionProviderChanged`.
+10. **Reused nodes are reset, not detached and attached again** (D431, a deliberate choice). ModifierNodeReuseAndDeactivationTest `nodesAreDetachedWhenReused` and `unchangedNodesAreDetachedAndReattachedWhenReused` will fail by design: adapt them to D431's contract (`on_reset` runs, state cleared) rather than Compose's.
+11. **`Placeable` has only the coerced size.** A child measured outside its constraints is centered as Compose does, but its `measuredWidth`/`measuredHeight` aren't readable. Caught by CustomLayoutAndMeasureTest `placeableMeasuredSize`.
+
+Parity, not differences (don't "fix"): the root measures its content with the window's constraints loosened and places it at the origin (RootNodeLayoutTest); unplaced children aren't drawn; children draw in placement order sorted by summed `z_index` (DrawReorderingTest); rounding is Kotlin's `roundToInt` (review_d.rs `rounding_follows_kotlin_math_round`); an outline's alpha is the layer's when the outline is set (docs/11).

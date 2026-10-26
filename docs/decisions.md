@@ -17,15 +17,15 @@ The log is split by area into the files below, one table each, rows in number or
 
 | File | Covers | Rows |
 |---|---|---|
-| [runtime](decisions/runtime.md) | `#[composable]`, groups and keys, skipping, lambdas, the call macro, the composer, recomposition, `remember`, effects, state handles, pausable composition. | 98 |
-| [ui-and-layout](decisions/ui-and-layout.md) | Modifiers and nodes, layout and intrinsics, drawing in the tree, input, focus, semantics, animation, Material 3, navigation, platform values. | 84 |
+| [runtime](decisions/runtime.md) | `#[composable]`, groups and keys, skipping, lambdas, the call macro, the composer, recomposition, `remember`, effects, state handles, pausable composition. | 100 |
+| [ui-and-layout](decisions/ui-and-layout.md) | Modifiers and nodes, layout and intrinsics, drawing in the tree, input, focus, semantics, animation, Material 3, navigation, platform values. | 86 |
 | [text](decisions/text.md) | Text measurement and layout on each platform, fonts, text fields and editing. | 26 |
 | [lazy-and-prefetch](decisions/lazy-and-prefetch.md) | Lazy lists and grids, item reuse, the policy of composing only what is in view, prefetch. | 64 |
 | [android-drawing](decisions/android-drawing.md) | The display list and its replayer, render nodes and repaint boundaries, paths, shadows, layers. | 27 |
 | [android-host-and-performance](decisions/android-host-and-performance.md) | The view and activity glue, the frame loop, the hint session, jank, startup, memory, and the optimization flags. | 25 |
 | [desktop](decisions/desktop.md) | The desktop host: window, Skia rendering, input and events. | 6 |
-| [benchmarks](decisions/benchmarks.md) | The benchmark apps, protocols and rounds, and how results are read. | 33 |
-| [api-and-tooling](decisions/api-and-tooling.md) | Names, crates and modules, semver, the edit-build loop, testing and documentation, the toolchain's and dependencies' versions. | 26 |
+| [benchmarks](decisions/benchmarks.md) | The benchmark apps, protocols and rounds, and how results are read. | 34 |
+| [api-and-tooling](decisions/api-and-tooling.md) | Names, crates and modules, semver, the edit-build loop, testing and documentation, the toolchain's and dependencies' versions. | 27 |
 
 ## Index by number
 
@@ -45,8 +45,8 @@ The log is split by area into the files below, one table each, rows in number or
 | D12 | [api-and-tooling](decisions/api-and-tooling.md#d12) | current |
 | D13 | [api-and-tooling](decisions/api-and-tooling.md#d13) | current |
 | D14 | [runtime](decisions/runtime.md#d14) | current |
-| D15 | [runtime](decisions/runtime.md#d15) | current |
-| D16 | [runtime](decisions/runtime.md#d16) | current |
+| D15 | [runtime](decisions/runtime.md#d15) | revised by [D703](decisions/runtime.md#d703) |
+| D16 | [runtime](decisions/runtime.md#d16) | revised by [D702](decisions/runtime.md#d702) |
 | D17 | [runtime](decisions/runtime.md#d17) | current |
 | D18 | [ui-and-layout](decisions/ui-and-layout.md#d18) | current |
 | D19 | [ui-and-layout](decisions/ui-and-layout.md#d19) | current |
@@ -172,7 +172,7 @@ The log is split by area into the files below, one table each, rows in number or
 | D139 | [ui-and-layout](decisions/ui-and-layout.md#d139) | current |
 | D140 | [text](decisions/text.md#d140) | current |
 | D141 | [api-and-tooling](decisions/api-and-tooling.md#d141) | current |
-| D142 | [ui-and-layout](decisions/ui-and-layout.md#d142) | revised by [D450](decisions/lazy-and-prefetch.md#d450) |
+| D142 | [ui-and-layout](decisions/ui-and-layout.md#d142) | revised by [D450](decisions/lazy-and-prefetch.md#d450), [D701](decisions/ui-and-layout.md#d701) |
 | D143 | [ui-and-layout](decisions/ui-and-layout.md#d143) | current |
 | D144 | [lazy-and-prefetch](decisions/lazy-and-prefetch.md#d144) | superseded by [D450](decisions/lazy-and-prefetch.md#d450) |
 | D145 | [runtime](decisions/runtime.md#d145) | current |
@@ -420,3 +420,9 @@ The log is split by area into the files below, one table each, rows in number or
 | D649 | [benchmarks](decisions/benchmarks.md#d649) | current |
 | D660 | [benchmarks](decisions/benchmarks.md#d660) | current |
 | D661 | [benchmarks](decisions/benchmarks.md#d661) | current |
+| D700 | [api-and-tooling](decisions/api-and-tooling.md#d700) | current |
+| D701 | [ui-and-layout](decisions/ui-and-layout.md#d701) | current |
+| D702 | [runtime](decisions/runtime.md#d702) | current |
+| D703 | [runtime](decisions/runtime.md#d703) | current |
+| D704 | [ui-and-layout](decisions/ui-and-layout.md#d704) | current |
+| D705 | [benchmarks](decisions/benchmarks.md#d705) | current |
