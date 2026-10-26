@@ -42,4 +42,5 @@ mod review_semantics_material;
 mod segments_and_rails;
 mod sheets;
 mod snackbar;
+mod surface;
 mod text_field;

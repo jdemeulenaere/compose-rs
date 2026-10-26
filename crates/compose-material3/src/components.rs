@@ -113,7 +113,7 @@ pub(crate) fn surface_modifier(
 }
 
 /// A themed container, as Compose's `Surface`: its shape and color (the surface color tinted
-/// with the primary color by its absolute `tonal_elevation`, as `surfaceColorAtElevation`), its
+/// with the surface tint by its absolute `tonal_elevation`, as `surfaceColorAtElevation`), its
 /// shadow (`shadow_elevation`), and its content's color (by default the theme's content color
 /// for `color`).
 #[composable]
