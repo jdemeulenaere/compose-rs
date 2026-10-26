@@ -26,9 +26,6 @@ use compose_ui::{
 };
 use unicode_segmentation::UnicodeSegmentation;
 
-/// The selection's highlight, as Compose's default `TextSelectionColors` (40% of #4286F4).
-const SELECTION_COLOR: Color = Color::from_argb(0x664286F4);
-
 /// The cursor's width, as Compose's `DefaultCursorThickness`.
 const CURSOR_WIDTH: compose_ui::Dp = compose_ui::Dp(2.0);
 
@@ -77,6 +74,9 @@ pub fn BasicTextField(
         max_lines,
         min_lines,
         cursor_color,
+        // The highlight of a selection in it, as Compose's `CoreTextField` reads
+        // `LocalTextSelectionColors`.
+        selection_color: crate::LOCAL_TEXT_SELECTION_COLORS.current().background_color,
         keyboard_options,
         keyboard_actions,
         visual_transformation,
@@ -118,6 +118,7 @@ pub(crate) struct TextFieldElement {
     /// The fewest lines' height a multi-line field takes.
     pub min_lines: u32,
     pub cursor_color: Color,
+    pub selection_color: Color,
     pub keyboard_options: KeyboardOptions,
     pub keyboard_actions: KeyboardActions,
     pub visual_transformation: VisualTransformation,
@@ -143,6 +144,7 @@ impl ModifierNodeElement for TextFieldElement {
             min_lines: self.min_lines,
             line_bounds: None,
             cursor_color: self.cursor_color,
+            selection_color: self.selection_color,
             focused: false,
             press: None,
             last_tap: None,
@@ -207,6 +209,7 @@ impl ModifierNodeElement for TextFieldElement {
         node.enabled = self.enabled;
         node.read_only = self.read_only;
         node.cursor_color = self.cursor_color;
+        node.selection_color = self.selection_color;
         node.keyboard_options = self.keyboard_options;
         node.keyboard_actions = self.keyboard_actions.clone();
     }
@@ -221,6 +224,7 @@ impl ModifierNodeElement for TextFieldElement {
             && other.max_lines == self.max_lines
             && other.min_lines == self.min_lines
             && other.cursor_color == self.cursor_color
+            && other.selection_color == self.selection_color
             && other.keyboard_options == self.keyboard_options
             && other.keyboard_actions.same(&self.keyboard_actions)
             && other.visual_transformation.same(&self.visual_transformation)
@@ -330,6 +334,7 @@ pub(crate) struct TextFieldNode {
     /// The heights of `min_lines` and `max_lines` lines, at the density they were measured at.
     line_bounds: Option<(compose_ui::Density, i32, i32)>,
     cursor_color: Color,
+    selection_color: Color,
     focused: bool,
     press: Option<Press>,
     /// When and where the last press was, and how many came in a row: a press soon after and
@@ -1109,7 +1114,7 @@ impl DrawModifierNode for TextFieldNode {
         };
         if self.focused {
             for rect in &self.selection_rects {
-                scope.draw_rect(shift(*rect), Paint::fill(SELECTION_COLOR));
+                scope.draw_rect(shift(*rect), Paint::fill(self.selection_color));
             }
         }
         scope.draw_paragraph(paragraph, Offset::new(-scroll.x, -scroll.y));

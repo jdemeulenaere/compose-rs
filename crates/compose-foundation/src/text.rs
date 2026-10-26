@@ -11,9 +11,38 @@ use compose_ui::{
     platform::{ParagraphHandle, TextLayoutOptions},
 };
 
-/// Under `DisableSelection`: texts a `SelectionContainer` leaves out.
-pub static LOCAL_SELECTION_DISABLED: compose_runtime::CompositionLocal<bool> =
-    compose_runtime::CompositionLocal::new("LocalSelectionDisabled", || false);
+/// Inside a `SelectionContainer` and not under a `DisableSelection` below it: the texts there
+/// are selectable, as Compose's `LocalSelectionRegistrar` is set there (and `null` under
+/// `DisableSelection` or outside any container).
+static LOCAL_SELECTION_REGISTRAR: compose_runtime::CompositionLocal<bool> =
+    compose_runtime::CompositionLocal::new("LocalSelectionRegistrar", || false);
+
+/// The colors of a text selection, as Compose's `TextSelectionColors`: the handles' color and
+/// the highlight behind the selected text (40 % alpha by convention, to keep the text legible).
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct TextSelectionColors {
+    pub handle_color: compose_ui::Color,
+    pub background_color: compose_ui::Color,
+}
+
+impl compose_runtime::ComposeArg for TextSelectionColors {
+    fn same(&self, other: &Self) -> bool {
+        self == other
+    }
+}
+
+/// Compose's `DefaultTextSelectionColors`: #4286F4, its highlight at 40 %.
+const DEFAULT_TEXT_SELECTION_COLORS: TextSelectionColors = TextSelectionColors {
+    handle_color: compose_ui::Color::from_argb(0xFF4286F4),
+    background_color: compose_ui::Color::from_argb(0x664286F4),
+};
+
+/// The selection colors of the texts and text fields below, as Compose's
+/// `LocalTextSelectionColors` (Material's theme provides its primary color's).
+pub static LOCAL_TEXT_SELECTION_COLORS: compose_runtime::CompositionLocal<TextSelectionColors> =
+    compose_runtime::CompositionLocal::new("LocalTextSelectionColors", || {
+        DEFAULT_TEXT_SELECTION_COLORS
+    });
 
 /// Makes the texts in `content` selectable, as Compose's `SelectionContainer`: a press and drag
 /// selects from where it went down to the pointer, across texts in order; a double-click
@@ -26,7 +55,7 @@ pub fn SelectionContainer(
     content: impl Fn() + 'static,
 ) {
     // Selectable again below a `DisableSelection`, as Compose's.
-    compose_runtime::CompositionLocalProvider(LOCAL_SELECTION_DISABLED.provides(false), || {
+    compose_runtime::CompositionLocalProvider(LOCAL_SELECTION_REGISTRAR.provides(true), || {
         let content = content.clone();
         crate::layout::Box(
             modifier.clone().selection_container(),
@@ -42,7 +71,7 @@ pub fn SelectionContainer(
 #[composable]
 #[allow(non_snake_case)]
 pub fn DisableSelection(content: impl Fn() + 'static) {
-    compose_runtime::CompositionLocalProvider(LOCAL_SELECTION_DISABLED.provides(true), &*content);
+    compose_runtime::CompositionLocalProvider(LOCAL_SELECTION_REGISTRAR.provides(false), &*content);
 }
 
 /// Text, as Compose's `BasicText`: no theme, the style as given; what doesn't fit is cut,
@@ -101,13 +130,22 @@ fn emit_text(
     min_lines: u32,
 ) {
     validate_min_max_lines(min_lines, options.max_lines);
+    // The selection's highlight is read only where the text can be selected, as Compose's
+    // `BasicText` reads it only with a selection registrar.
+    let selectable = LOCAL_SELECTION_REGISTRAR.current();
+    let selection_color = if selectable {
+        LOCAL_TEXT_SELECTION_COLORS.current().background_color
+    } else {
+        compose_ui::Color::UNSPECIFIED
+    };
     let element = TextElement {
         text,
         style,
         options,
         min_lines,
         on_text_layout,
-        selectable: !LOCAL_SELECTION_DISABLED.current(),
+        selectable,
+        selection_color,
     };
     Layout(modifier.then_custom(element), empty_measure_policy(), compose_runtime::callback(|| {}));
 }
@@ -121,8 +159,10 @@ pub(crate) struct TextElement {
     pub min_lines: u32,
     /// Hears each new layout, as `onTextLayout`.
     pub on_text_layout: Option<Callback<dyn Fn(TextLayoutResult)>>,
-    /// A `SelectionContainer` can select it (not under `DisableSelection`).
+    /// A `SelectionContainer` can select it (in one, and not under `DisableSelection`).
     pub selectable: bool,
+    /// The selection's highlight (`LOCAL_TEXT_SELECTION_COLORS`' background), when selectable.
+    pub selection_color: compose_ui::Color,
 }
 
 /// The height of `lines` lines of text in `style` (at least one), as Compose's
@@ -276,6 +316,7 @@ impl ModifierNodeElement for TextElement {
             selection: None,
             selection_rects: Vec::new(),
             selectable: self.selectable,
+            selection_color: self.selection_color,
             version: 0,
         }
     }
@@ -308,6 +349,7 @@ impl ModifierNodeElement for TextElement {
             node.restyle = true;
         }
         node.selectable = self.selectable;
+        node.selection_color = self.selection_color;
         // A new listener hears the next new layout, as Compose swaps its lambda: the paragraph
         // is kept.
         node.on_text_layout = self.on_text_layout.clone();
@@ -320,6 +362,7 @@ impl ModifierNodeElement for TextElement {
             && other.min_lines == self.min_lines
             && same_callback(&other.on_text_layout, &self.on_text_layout)
             && other.selectable == self.selectable
+            && other.selection_color == self.selection_color
     }
 
     fn name(&self) -> &'static str {
@@ -370,6 +413,7 @@ pub(crate) struct TextNode {
     selection: Option<std::ops::Range<usize>>,
     selection_rects: Vec<compose_ui::Rect>,
     selectable: bool,
+    selection_color: compose_ui::Color,
     /// Bumped when the text changes.
     version: u64,
 }
@@ -709,7 +753,7 @@ impl DrawModifierNode for TextNode {
             scope.clip_outline(compose_ui::Outline::Rectangle(scope.bounds()));
         }
         for rect in &self.selection_rects {
-            scope.draw_rect(*rect, compose_ui::Paint::fill(crate::text::SELECTION_COLOR));
+            scope.draw_rect(*rect, compose_ui::Paint::fill(self.selection_color));
         }
         scope.draw_paragraph(paragraph, Offset::ZERO);
         if clipped {
@@ -723,9 +767,6 @@ impl SemanticsModifierNode for TextNode {
         config.set_text(self.text.text().clone());
     }
 }
-
-/// The selection's highlight, as Compose's default `TextSelectionColors` (40% of #4286F4).
-pub(crate) const SELECTION_COLOR: compose_ui::Color = compose_ui::Color::from_argb(0x664286F4);
 
 impl compose_ui::Selectable for TextNode {
     fn text(&self) -> SharedString {

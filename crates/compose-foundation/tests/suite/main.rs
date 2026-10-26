@@ -110,4 +110,5 @@ mod shadow;
 mod shape_parity;
 mod text_input;
 mod text_reuse;
+mod text_selection_colors;
 mod window;

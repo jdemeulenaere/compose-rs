@@ -59,7 +59,8 @@ pub use shape::{
     CutCornerShape, GenericShape, RoundedCornerShape, RoundedCorners, ZERO_CORNER_SIZE,
 };
 pub use text::{
-    BasicAnnotatedText, BasicText, DisableSelection, LOCAL_SELECTION_DISABLED, SelectionContainer,
+    BasicAnnotatedText, BasicText, DisableSelection, LOCAL_TEXT_SELECTION_COLORS,
+    SelectionContainer, TextSelectionColors,
 };
 pub use text_field::{BasicTextField, inner_text_field_only};
 pub use text_input::{

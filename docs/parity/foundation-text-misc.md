@@ -325,7 +325,7 @@ Paths are relative to `frameworks/support`. A status cites the compose-rs tests 
 | `compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/text/selection/SelectionStateTest.kt` | 34 | `SelectionState`: saved across recreation, selected texts, select all, clear, extend by word, with gestures and handles | feature:selection-state |
 | `compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/text/selection/TextFieldMagnifierTest.kt` | 8 | legacy field: magnifier on cursor drags | n/a: deprecated value-based `BasicTextField`; see `text/input/internal/selection/TextFieldMagnifierTest` |
 | `compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/text/selection/TextFieldVisualTransformationMagnifierTest.kt` | 2 | legacy field with a visual transformation: magnifier | n/a: deprecated value-based `BasicTextField` |
-| `compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/text/selection/TextSelectionColorsScreenshotTest.kt` | 4 | default and custom selection colors for text and a field | feature:text-selection-colors — the field half uses the legacy field; port it with the state-based one |
+| `compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/text/selection/TextSelectionColorsScreenshotTest.kt` | 4 | default and custom selection colors for text and a field | `ported` (`crates/compose-foundation/tests/suite/text_selection_colors.rs`; the highlight's color from the display list, no handles yet; the field half on today's `BasicTextField`, to port again with the state-based one) |
 
 ### textfield (legacy value-based field): 17 files, 298 tests
 
@@ -532,7 +532,7 @@ From `api/current.txt`, every public, non-deprecated API in this area that compo
 |---|---|---|
 | `SelectionContainer(modifier, content)`, `DisableSelection` | present | — |
 | `SelectionContainer(state, modifier, content)`, `SelectionState` (`select`, `selectAll`, `clear`, `extendSelectionByWord`, `selectedTexts`, `getSelectableTexts`, `Saver`), `rememberSelectionState` | missing | `selection-state` |
-| `TextSelectionColors`, `LocalTextSelectionColors` | missing (one constant color, `#664286F4`) | `text-selection-colors` |
+| `TextSelectionColors`, `LocalTextSelectionColors` | done: `TextSelectionColors`, `LOCAL_TEXT_SELECTION_COLORS` (the highlight; no handles to color yet) | `text-selection-colors` |
 | `LocalTextClassifierCoroutineContext` | missing | `smart-selection` |
 
 APIs with no test in this module that still need porting: `GenericShape`, `MarqueeSpacing.fractionOfContainer`, `BasicTooltipDefaults`, `MediaType`, `TextFieldBuffer.forEachChangeReversed`, `InputTransformation.byValue`, `LocalAutofillHighlightBrush`, `LocalTextFieldContentObserverRegistrationExecutor`, `LocalTextClassifierCoroutineContext`: each is in the feature named above.
@@ -759,7 +759,7 @@ Sizes: S under a day, M a few days, L a week or two, XL multi-week. "Other area"
 - **Depends on:** compose-rs's selection (exists, D151).
 - **Size:** M. **Experimental:** no.
 
-### text-selection-colors
+### text-selection-colors (done)
 - **Compose API:** `TextSelectionColors`, `LocalTextSelectionColors`.
 - **Tests:** `TextSelectionColorsScreenshotTest`.
 - **Size:** S. **Experimental:** no.

@@ -504,21 +504,28 @@ fn decorated_field(
     } else {
         modifier
     };
-    BasicTextField(
-        value,
-        on_value_change,
-        modifier,
-        enabled,
-        read_only,
-        style,
-        keyboard_options,
-        keyboard_actions,
-        single_line,
-        max_lines,
-        min_lines,
-        visual_transformation,
-        cursor_color,
-        compose_runtime::callback(decoration),
+    // Its selection in its colors' selection colors, as Compose's fields provide
+    // `colors.textSelectionColors`.
+    compose_runtime::CompositionLocalProvider(
+        compose_foundation::LOCAL_TEXT_SELECTION_COLORS.provides(colors.text_selection_colors),
+        || {
+            BasicTextField(
+                value,
+                on_value_change,
+                modifier,
+                enabled,
+                read_only,
+                style,
+                keyboard_options,
+                keyboard_actions,
+                single_line,
+                max_lines,
+                min_lines,
+                visual_transformation,
+                cursor_color,
+                compose_runtime::callback(decoration),
+            );
+        },
     );
 }
 

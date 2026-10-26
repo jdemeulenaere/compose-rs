@@ -606,6 +606,9 @@ pub struct TextFieldColors {
     pub disabled_prefix_color: Color,
     pub suffix_color: Color,
     pub disabled_suffix_color: Color,
+    /// The selection's colors in the field, as `textSelectionColors` (by default the theme's,
+    /// `LOCAL_TEXT_SELECTION_COLORS`).
+    pub text_selection_colors: compose_foundation::TextSelectionColors,
 }
 
 impl compose_runtime::ComposeArg for TextFieldColors {
@@ -652,6 +655,7 @@ impl TextFieldDefaults {
             disabled_prefix_color: scheme.on_surface.with_alpha(0.38),
             suffix_color: scheme.on_surface_variant,
             disabled_suffix_color: scheme.on_surface.with_alpha(0.38),
+            text_selection_colors: compose_foundation::LOCAL_TEXT_SELECTION_COLORS.current(),
         }
     }
 

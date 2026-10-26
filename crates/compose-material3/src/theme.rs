@@ -3,6 +3,7 @@
 
 use std::rc::Rc;
 
+use compose_foundation::{LOCAL_TEXT_SELECTION_COLORS, TextSelectionColors};
 use compose_runtime::{ComposeArg, CompositionLocal, CompositionLocalProvider, composable};
 use compose_ui::{
     Color, CornerSize, FontWeight, LineHeightAlignment, LineHeightStyle, LineHeightTrim, Shape,
@@ -356,6 +357,7 @@ pub fn MaterialTheme(
 ) {
     // Compared by value, as Compose's: a typography made anew but equal skips the theme, and
     // the local's policy recomposes no reader for it (D1107).
+    let selection_colors = text_selection_colors(&color_scheme);
     let body_large = typography.body_large.clone();
     let typography = Rc::new(typography);
     CompositionLocalProvider(
@@ -363,12 +365,25 @@ pub fn MaterialTheme(
             LOCAL_COLOR_SCHEME.provides(color_scheme),
             LOCAL_SHAPES.provides(shapes),
             LOCAL_TYPOGRAPHY.provides(typography),
+            LOCAL_TEXT_SELECTION_COLORS.provides(selection_colors),
             // The body text style, as Compose's (and no content color: surfaces give it).
             LOCAL_TEXT_STYLE.provides(body_large),
         ),
         || content(),
     );
 }
+
+/// The selection colors of a scheme, as Compose's `rememberTextSelectionColors`: the primary
+/// color's handles, its highlight at 40 % (`TextSelectionBackgroundOpacity`).
+pub(crate) fn text_selection_colors(scheme: &ColorScheme) -> TextSelectionColors {
+    TextSelectionColors {
+        handle_color: scheme.primary,
+        background_color: scheme.primary.with_alpha(TEXT_SELECTION_BACKGROUND_OPACITY),
+    }
+}
+
+/// The alpha of a selection's highlight, as `TextSelectionBackgroundOpacity`.
+const TEXT_SELECTION_BACKGROUND_OPACITY: f32 = 0.4;
 
 /// The current theme, as Kotlin's `MaterialTheme` object (a type only, so the composable keeps
 /// the name in the value namespace).
