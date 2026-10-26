@@ -423,13 +423,25 @@ impl compose_ui::PointerInputModifierNode for BlockPointerNode {
 
 // ---- Minimum touch target --------------------------------------------------------------------
 
-/// The minimum size of an interactive element, as Compose's `minimumInteractiveComponentSize`.
+/// The minimum size of an interactive element by default (48 dp), as Compose's
+/// `LocalMinimumInteractiveComponentSize`'s default.
 pub const MINIMUM_INTERACTIVE_SIZE: Dp = Dp(48.0);
 
-/// Lays its content out at least `MINIMUM_INTERACTIVE_SIZE` in both directions, centered, so
-/// small controls are easy to hit, as Compose's `minimumInteractiveComponentSize()`.
+/// The minimum size of the interactive components below, as Compose's
+/// `LocalMinimumInteractiveComponentSize`: 48 dp by default; 0 dp (or `Dp::UNSPECIFIED`) turns
+/// the minimum off.
+pub static LOCAL_MINIMUM_INTERACTIVE_COMPONENT_SIZE: compose_runtime::CompositionLocal<Dp> =
+    compose_runtime::CompositionLocal::new("LocalMinimumInteractiveComponentSize", || {
+        MINIMUM_INTERACTIVE_SIZE
+    });
+
+/// Lays its content out at least `LOCAL_MINIMUM_INTERACTIVE_COMPONENT_SIZE` in both
+/// directions, centered, so small controls are easy to hit, as Compose's
+/// `minimumInteractiveComponentSize()` (nothing where the local is 0 or unspecified). Reads the
+/// local where it's called: call it in composition.
 pub fn minimum_interactive_component_size(modifier: Modifier) -> Modifier {
-    modifier.minimum_touch_target(MINIMUM_INTERACTIVE_SIZE)
+    let size = LOCAL_MINIMUM_INTERACTIVE_COMPONENT_SIZE.current();
+    if size.is_specified() && size.0 > 0.0 { modifier.minimum_touch_target(size) } else { modifier }
 }
 
 // ---- Checkbox --------------------------------------------------------------------------------
