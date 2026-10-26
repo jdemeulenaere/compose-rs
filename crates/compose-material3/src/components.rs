@@ -304,7 +304,7 @@ fn animated_elevation(
         (Some(_), _) => tween(120, FAST_OUT_SLOW_IN_EASING),
         (None, Some(ElevationInteraction::Hover)) => tween(120, outgoing),
         (None, Some(_)) => tween(150, outgoing),
-        (None, None) => compose_animation::snap(0),
+        (None, None) => compose_animation::snap(0).into(),
     };
     compose_animation::animate_dp_as_state(target, spec, "ElevationAnimation", None).get()
 }

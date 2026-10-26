@@ -9,7 +9,8 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::easing::{Easing, LINEAR_EASING};
-use crate::vector::Animate;
+use crate::spec::{MILLIS_TO_NANOS, VectorizedAnimationSpec, lerp};
+use crate::vector::{Animate, AnimationVector};
 
 /// Values at times within `duration_millis`, as Compose's `KeyframesSpec`: built with
 /// [`keyframes`].
@@ -22,8 +23,8 @@ pub struct KeyframesSpec {
 
 #[derive(Clone, PartialEq, Debug)]
 struct Keyframe {
-    time_millis: u32,
-    value: [f32; 4],
+    time_millis: i32,
+    value: AnimationVector,
     easing: Easing,
 }
 
@@ -31,35 +32,52 @@ struct Keyframe {
 struct Entry {
     duration_millis: u32,
     delay_millis: u32,
-    /// Sorted by time; a later one at the same time replaces an earlier.
+    /// The keyframes, sorted by time; a later one at the same time replaced an earlier.
     frames: Vec<Keyframe>,
+    /// The times of the stretches: the keyframes', with 0 and the duration, sorted.
+    timestamps: Vec<i32>,
+}
+
+impl Entry {
+    fn frame_at(&self, time_millis: i32) -> Option<&Keyframe> {
+        self.frames
+            .binary_search_by_key(&time_millis, |frame| frame.time_millis)
+            .ok()
+            .map(|index| &self.frames[index])
+    }
 }
 
 thread_local! {
     static ENTRIES: RefCell<Vec<Rc<Entry>>> = const { RefCell::new(Vec::new()) };
 }
 
-/// What `keyframes`' builder is given, as Compose's `KeyframesSpecConfig`.
+/// What `keyframes`' builder is given, as Compose's `KeyframesSpecConfig`: its duration and
+/// delay to set, and the keyframes to add.
 pub struct KeyframesBuilder<T: Animate> {
+    /// How long the keyframes play, as `durationMillis` (300 by default).
+    pub duration_millis: u32,
+    /// How long they wait first, as `delayMillis`.
     pub delay_millis: u32,
     frames: Vec<Keyframe>,
     _type: std::marker::PhantomData<T>,
 }
 
-/// A keyframe just added: `.with(easing)` eases from it to the next, as Compose's `with`.
+/// A keyframe just added: `.using(easing)` eases from it to the next, as Compose's `using`.
 pub struct KeyframeEntry<'a> {
     frame: &'a mut Keyframe,
 }
 
 impl KeyframeEntry<'_> {
-    pub fn with(self, easing: Easing) {
+    /// Eases the stretch from this keyframe to the next along `easing` (linear by default).
+    pub fn using(self, easing: Easing) {
         self.frame.easing = easing;
     }
 }
 
 impl<T: Animate> KeyframesBuilder<T> {
-    /// `value` at `time_millis`, as `value at time`. Times past the duration are ignored.
-    pub fn at(&mut self, time_millis: u32, value: T) -> KeyframeEntry<'_> {
+    /// `value` at `time_millis`, as `value at time`. A later one at the same time replaces it;
+    /// times outside 0 to the duration are ignored.
+    pub fn at(&mut self, time_millis: i32, value: T) -> KeyframeEntry<'_> {
         let frame = Keyframe { time_millis, value: value.to_vector(), easing: LINEAR_EASING };
         let index = match self.frames.iter().position(|old| old.time_millis == time_millis) {
             Some(index) => {
@@ -73,23 +91,38 @@ impl<T: Animate> KeyframesBuilder<T> {
         };
         KeyframeEntry { frame: &mut self.frames[index] }
     }
+
+    /// `value` at `fraction` of the duration set so far, rounded to a millisecond, as
+    /// `value atFraction fraction`.
+    pub fn at_fraction(&mut self, fraction: f32, value: T) -> KeyframeEntry<'_> {
+        let time = (f64::from(self.duration_millis as f32 * fraction) + 0.5).floor() as i32;
+        self.at(time, value)
+    }
 }
 
-/// An animation through the values `build` sets at times within `duration_millis`, as
-/// Compose's `keyframes { durationMillis = …; value at time with easing }`: from the start
-/// value (at 0, unless a keyframe sets it) to the target (at the end, unless one sets it), each
-/// stretch eased by the easing of the keyframe it starts at (linear by default).
-pub fn keyframes<T: Animate>(
-    duration_millis: u32,
-    build: impl FnOnce(&mut KeyframesBuilder<T>),
-) -> KeyframesSpec {
-    let mut builder =
-        KeyframesBuilder { delay_millis: 0, frames: Vec::new(), _type: std::marker::PhantomData };
+/// An animation through the values `build` sets at times within its duration, as Compose's
+/// `keyframes { durationMillis = …; value at time using easing }`: from the start value (at 0,
+/// unless a keyframe sets it) to the target (at the end, unless one sets it), each stretch
+/// eased by the easing of the keyframe it starts at (linear by default).
+pub fn keyframes<T: Animate>(build: impl FnOnce(&mut KeyframesBuilder<T>)) -> KeyframesSpec {
+    let mut builder = KeyframesBuilder {
+        duration_millis: crate::spec::DEFAULT_DURATION_MILLIS,
+        delay_millis: 0,
+        frames: Vec::new(),
+        _type: std::marker::PhantomData,
+    };
     build(&mut builder);
-    let mut frames: Vec<Keyframe> =
-        builder.frames.into_iter().filter(|frame| frame.time_millis <= duration_millis).collect();
+    let KeyframesBuilder { duration_millis, delay_millis, mut frames, .. } = builder;
     frames.sort_by_key(|frame| frame.time_millis);
-    let entry = Entry { duration_millis, delay_millis: builder.delay_millis, frames };
+    let duration = duration_millis.min(i32::MAX as u32) as i32;
+    let mut timestamps: Vec<i32> = frames.iter().map(|frame| frame.time_millis).collect();
+    for time in [0, duration] {
+        if !timestamps.contains(&time) {
+            timestamps.push(time);
+        }
+    }
+    timestamps.sort_unstable();
+    let entry = Entry { duration_millis, delay_millis, frames, timestamps };
     let index = ENTRIES.with(|entries| {
         let mut entries = entries.borrow_mut();
         match entries.iter().position(|old| **old == entry) {
@@ -100,7 +133,7 @@ pub fn keyframes<T: Animate>(
             }
         }
     });
-    KeyframesSpec { entry: index as u32, duration_millis, delay_millis: builder.delay_millis }
+    KeyframesSpec { entry: index as u32, duration_millis, delay_millis }
 }
 
 impl KeyframesSpec {
@@ -113,54 +146,87 @@ impl KeyframesSpec {
         self.delay_millis
     }
 
-    pub(crate) fn total_nanos(&self) -> u64 {
-        (u64::from(self.delay_millis) + u64::from(self.duration_millis)) * 1_000_000
+    fn entry(&self) -> Option<Rc<Entry>> {
+        ENTRIES.with(|entries| entries.borrow().get(self.entry as usize).cloned())
     }
 
-    /// The value `play_nanos` in, from `start` to `target`.
-    pub(crate) fn value_at<const N: usize>(
+    /// The play time in milliseconds within the duration, as Compose's `clampPlayTime`.
+    fn clamp_play_time(&self, play_time_millis: i64) -> i64 {
+        (play_time_millis - i64::from(self.delay_millis)).clamp(0, i64::from(self.duration_millis))
+    }
+
+    fn value_from_millis_in(
         &self,
-        play_nanos: u64,
-        start: [f32; N],
-        target: [f32; N],
-    ) -> [f32; N] {
-        let entry = ENTRIES.with(|entries| entries.borrow().get(self.entry as usize).cloned());
-        let Some(entry) = entry else { return target };
-        let delay = u64::from(entry.delay_millis) * 1_000_000;
-        let duration = u64::from(entry.duration_millis) * 1_000_000;
-        let time = play_nanos.saturating_sub(delay).min(duration);
-        let ms = time as f32 / 1_000_000.0;
-        // The stretch the time is in: from the last keyframe at or before it (or the start) to
-        // the next one (or the target at the end).
-        let vector = |value: &[f32; 4]| {
-            let mut out = [0.0; N];
-            out.copy_from_slice(&value[..N]);
-            out
+        entry: &Entry,
+        play_time_millis: i64,
+        initial_value: AnimationVector,
+        target_value: AnimationVector,
+    ) -> AnimationVector {
+        let time = self.clamp_play_time(play_time_millis) as i32;
+        if let Some(frame) = entry.frame_at(time) {
+            return frame.value;
+        }
+        if time >= self.duration_millis as i32 {
+            return target_value;
+        }
+        if time <= 0 {
+            return initial_value;
+        }
+        // The stretch from the last time at or before it to the next.
+        let index = match entry.timestamps.binary_search(&time) {
+            Ok(index) => index,
+            Err(insertion) => insertion - 1,
         };
-        let (mut from_time, mut from_value, mut easing) = (0.0, start, LINEAR_EASING);
-        let (mut to_time, mut to_value) = (entry.duration_millis as f32, target);
-        for frame in &entry.frames {
-            let at = frame.time_millis as f32;
-            if at <= ms {
-                (from_time, from_value, easing) = (at, vector(&frame.value), frame.easing);
-            } else {
-                (to_time, to_value) = (at, vector(&frame.value));
-                break;
-            }
-        }
-        // At the end, the target unless a keyframe there says otherwise.
-        if ms >= entry.duration_millis as f32 {
-            return match entry.frames.last() {
-                Some(frame) if frame.time_millis == entry.duration_millis => vector(&frame.value),
-                _ => target,
-            };
-        }
-        let span = to_time - from_time;
-        let fraction = if span <= 0.0 { 1.0 } else { easing.transform((ms - from_time) / span) };
-        let mut out = [0.0; N];
-        for index in 0..N {
-            out[index] = from_value[index] + (to_value[index] - from_value[index]) * fraction;
-        }
-        out
+        let (from, to) = (entry.timestamps[index], entry.timestamps[index + 1]);
+        let start = entry.frame_at(from);
+        let easing = start.map_or(LINEAR_EASING, |frame| frame.easing);
+        let fraction = easing.transform((time - from) as f32 / (to - from) as f32);
+        let start = start.map_or(initial_value, |frame| frame.value);
+        let end = entry.frame_at(to).map_or(target_value, |frame| frame.value);
+        initial_value.map(|index, _| lerp(component(start, index), component(end, index), fraction))
+    }
+}
+
+/// A vector's component, 0 past its size.
+fn component(vector: AnimationVector, index: usize) -> f32 {
+    vector.as_slice().get(index).copied().unwrap_or(0.0)
+}
+
+impl VectorizedAnimationSpec for KeyframesSpec {
+    fn value_from_nanos(
+        &self,
+        play_time_nanos: i64,
+        initial_value: AnimationVector,
+        target_value: AnimationVector,
+        _: AnimationVector,
+    ) -> AnimationVector {
+        let Some(entry) = self.entry() else { return target_value };
+        self.value_from_millis_in(
+            &entry,
+            play_time_nanos / MILLIS_TO_NANOS,
+            initial_value,
+            target_value,
+        )
+    }
+
+    /// As Compose's `VectorizedKeyframesSpec`: from the value a millisecond before, both read at
+    /// play times the delay is taken off again, and with the sign Compose gives it (the earlier
+    /// value minus the later).
+    fn velocity_from_nanos(
+        &self,
+        play_time_nanos: i64,
+        initial_value: AnimationVector,
+        target_value: AnimationVector,
+        _: AnimationVector,
+    ) -> AnimationVector {
+        let Some(entry) = self.entry() else { return initial_value.new_instance() };
+        let clamped = self.clamp_play_time(play_time_nanos / MILLIS_TO_NANOS);
+        let start = self.value_from_millis_in(&entry, clamped - 1, initial_value, target_value);
+        let end = self.value_from_millis_in(&entry, clamped, initial_value, target_value);
+        initial_value.map(|index, _| (component(start, index) - component(end, index)) * 1000.0)
+    }
+
+    fn duration_nanos(&self, _: AnimationVector, _: AnimationVector, _: AnimationVector) -> i64 {
+        (i64::from(self.delay_millis) + i64::from(self.duration_millis)) * MILLIS_TO_NANOS
     }
 }

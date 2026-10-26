@@ -426,6 +426,7 @@ The log is split by area into the files below, one table each, rows in number or
 | D703 | [runtime](decisions/runtime.md#d703) | current |
 | D704 | [ui-and-layout](decisions/ui-and-layout.md#d704) | current |
 | D705 | [benchmarks](decisions/benchmarks.md#d705) | current |
+| D800 | [ui-and-layout](decisions/ui-and-layout.md#d800) | current |
 | D900 | [api-and-tooling](decisions/api-and-tooling.md#d900) | current |
 | D901 | [api-and-tooling](decisions/api-and-tooling.md#d901) | current |
 | D902 | [ui-and-layout](decisions/ui-and-layout.md#d902) | current |

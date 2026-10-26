@@ -96,7 +96,7 @@ impl compose_runtime::ComposeArg for ExitTransition {
 fn default_spec() -> AnimationSpec {
     AnimationSpec::Spring(SpringSpec {
         stiffness: crate::Spring::STIFFNESS_MEDIUM_LOW,
-        visibility_threshold: Some(0.001),
+        visibility_threshold: Some(crate::AnimationVector::from(0.001)),
         ..spring()
     })
 }

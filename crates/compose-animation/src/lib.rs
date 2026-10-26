@@ -12,6 +12,7 @@
 extern crate compose_runtime as compose;
 
 mod animatable;
+mod animation;
 mod as_state;
 mod content;
 mod content_size;
@@ -20,15 +21,23 @@ mod easing;
 mod infinite;
 mod keyframes;
 mod spec;
+mod spring;
 mod transition;
 mod vector;
 mod visibility;
 
 pub use animatable::{Animatable, AnimationEndReason, AnimationResult};
+pub use animation::{Animation, TargetBasedAnimation};
+#[doc(hidden)]
+pub use as_state::{
+    __dp_default_spring, __int_default_spring, __int_offset_default_spring,
+    __int_size_default_spring, __offset_default_spring, __rect_default_spring,
+    __size_default_spring,
+};
 pub use as_state::{
     animate_color_as_state, animate_dp_as_state, animate_float_as_state, animate_int_as_state,
-    animate_int_offset_as_state, animate_offset_as_state, animate_size_as_state,
-    animate_value_as_state,
+    animate_int_offset_as_state, animate_int_size_as_state, animate_offset_as_state,
+    animate_rect_as_state, animate_size_as_state, animate_value_as_state,
 };
 /// As animation-core's `withInfiniteAnimationFrameNanos`/`Millis` (the runtime's, D901).
 pub use compose_runtime::{
@@ -44,11 +53,21 @@ pub use easing::{
 pub use infinite::{InfiniteTransition, remember_infinite_transition};
 pub use keyframes::{KeyframeEntry, KeyframesBuilder, KeyframesSpec, keyframes};
 pub use spec::{
-    AnimationSpec, DEFAULT_DURATION_MILLIS, DurationBasedSpec, RepeatMode, RepeatableSpec, Spring,
-    SpringSpec, TweenSpec, infinite_repeatable, repeatable, snap, spring, spring_with, tween,
+    AnimationConstants, AnimationSpec, DEFAULT_DURATION_MILLIS, DurationBasedSpec,
+    FloatAnimationSpec, FloatSpringSpec, FloatTweenSpec, RepeatMode, RepeatableSpec, SnapSpec,
+    Spring, SpringSpec, StartOffset, StartOffsetType, TweenSpec, VectorizedAnimationSpec,
+    infinite_repeatable, infinite_repeatable_with, repeatable, repeatable_with, snap, spring,
+    spring_with, tween,
+};
+#[doc(hidden)]
+pub use spring::{
+    SpringSimulation, estimate_animation_duration_millis,
+    estimate_animation_duration_millis_of_mass,
 };
 pub use transition::{Transition, update_transition};
-pub use vector::Animate;
+#[doc(hidden)]
+pub use vector::default_spring;
+pub use vector::{Animate, AnimationVector, VisibilityThreshold};
 pub use visibility::{
     AnimatedVisibility, EnterTransition, ExitTransition, expand_horizontally, expand_in,
     expand_vertically, fade_in, fade_in_with, fade_out, fade_out_with, scale_in, scale_in_with,

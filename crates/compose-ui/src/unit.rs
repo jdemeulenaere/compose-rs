@@ -340,6 +340,35 @@ impl From<(Dp, Dp)> for DpSize {
     }
 }
 
+/// A position in `Dp`, as Compose's `DpOffset`.
+#[derive(Clone, Copy, PartialEq, Default, Debug)]
+pub struct DpOffset {
+    pub x: Dp,
+    pub y: Dp,
+}
+
+impl DpOffset {
+    pub const ZERO: DpOffset = DpOffset { x: Dp(0.0), y: Dp(0.0) };
+
+    pub const fn new(x: Dp, y: Dp) -> DpOffset {
+        DpOffset { x, y }
+    }
+}
+
+impl Add for DpOffset {
+    type Output = DpOffset;
+    fn add(self, other: DpOffset) -> DpOffset {
+        DpOffset::new(Dp(self.x.0 + other.x.0), Dp(self.y.0 + other.y.0))
+    }
+}
+
+impl Sub for DpOffset {
+    type Output = DpOffset;
+    fn sub(self, other: DpOffset) -> DpOffset {
+        DpOffset::new(Dp(self.x.0 - other.x.0), Dp(self.y.0 - other.y.0))
+    }
+}
+
 impl Size {
     pub const ZERO: Size = Size { width: 0.0, height: 0.0 };
 

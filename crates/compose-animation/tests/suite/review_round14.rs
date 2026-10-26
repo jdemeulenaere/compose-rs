@@ -52,7 +52,8 @@ fn samples(
 /// Severity: high. A finite repeatable never ends at its target.
 #[test]
 fn a_finite_repeatable_of_keyframes_ends_at_its_target() {
-    let spec = keyframes(100, |frames| {
+    let spec = keyframes(|frames| {
+        frames.duration_millis = 100;
         frames.at(50, 30.0f32);
     });
     let animatable = Animatable::new(0.0f32);
@@ -71,7 +72,8 @@ fn a_finite_repeatable_of_keyframes_ends_at_its_target() {
 /// Severity: low. A keyframe at the duration that disagrees with the target is unusual.
 #[test]
 fn a_keyframes_animation_ends_at_its_target() {
-    let spec = keyframes(100, |frames| {
+    let spec = keyframes(|frames| {
+        frames.duration_millis = 100;
         frames.at(50, 120.0f32);
         frames.at(100, 90.0f32);
     });
@@ -84,7 +86,8 @@ fn a_keyframes_animation_ends_at_its_target() {
 /// D150): what it reports is what plays.
 #[test]
 fn a_keyframes_specs_duration_is_the_one_played() {
-    let spec = keyframes(200, |frames| {
+    let spec = keyframes(|frames| {
+        frames.duration_millis = 200;
         frames.at(0, 0.0f32);
     });
     assert_eq!((spec.duration_millis(), spec.delay_millis()), (200, 0));

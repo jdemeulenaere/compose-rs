@@ -15,8 +15,8 @@ use compose_runtime::{
 };
 use compose_ui::Color;
 
-use crate::spec::{AnimationSpec, RepeatableSpec};
-use crate::vector::Animate;
+use crate::spec::{RepeatableSpec, VectorizedAnimationSpec};
+use crate::vector::{Animate, AnimationVector};
 
 /// Runs infinite animations while it is in the composition, as Compose's `InfiniteTransition`:
 /// one task sets all its values each frame. A `Copy` handle to the transition its
@@ -136,7 +136,7 @@ struct TransitionAnimationState<T: Animate> {
     animation_spec: Cell<RepeatableSpec>,
     /// The values as vectors, converted once (a color's conversion is the dearest part of its
     /// frame).
-    vectors: Cell<([f32; 4], [f32; 4])>,
+    vectors: Cell<(AnimationVector, AnimationVector)>,
     value: OwnedState<T>,
     is_finished: Cell<bool>,
     /// Its play time starts at the next frame: it was just added or changed.
@@ -166,16 +166,25 @@ impl<T: Animate> TransitionAnimation for TransitionAnimationState<T> {
         let (start, end) = self.vectors.get();
         // A value that isn't a number (NaN, infinite) can't be animated: it's at the target
         // at its first frame, as an `Animatable`'s.
-        if start.iter().chain(&end).any(|value| !value.is_finite()) {
+        if start.as_slice().iter().chain(end.as_slice()).any(|value| !value.is_finite()) {
             let target = self.target_value.borrow().clone();
             self.value.set(target);
             self.is_finished.set(true);
             return;
         }
-        let spec = AnimationSpec::Repeatable(self.animation_spec.get());
-        let frame = spec.value_at(play_time, start, end, T::visibility_threshold());
-        self.value.set(T::from_vector(frame.values));
-        self.is_finished.set(frame.finished);
+        // As Compose's `TargetBasedAnimation.getValueFromNanos`: at the target once it ends (a
+        // finite repeatable's).
+        let spec = self.animation_spec.get();
+        let play_time = play_time.min(i64::MAX as u64) as i64;
+        let velocity = start.new_instance();
+        if play_time >= spec.duration_nanos(start, end, velocity) {
+            let target = self.target_value.borrow().clone();
+            self.value.set(target);
+            self.is_finished.set(true);
+            return;
+        }
+        let value = spec.value_from_nanos(play_time, start, end, velocity);
+        self.value.set(T::from_vector(value));
     }
 
     fn is_finished(&self) -> bool {

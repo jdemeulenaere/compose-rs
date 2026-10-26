@@ -32,21 +32,22 @@ The inventory of Compose's animation and navigation tests and public API against
 | Status | Files | @Test |
 |---|---|---|
 | `covered` | 1 | 1 |
+| `ported` | 1 | 1 |
 | `port` | 7 | 16 |
-| `partial` | 13 | 181 |
-| `feature:<name>` | 71 | 811 |
+| `partial` | 14 | 192 |
+| `feature:<name>` | 69 | 799 |
 | `n/a` | 3 | 12 |
 
 By module:
 
-| Module | Files | @Test | covered | port | partial | feature | n/a |
-|---|---|---|---|---|---|---|---|
-| animation-core | 30 | 212 | 0 | 7 / 16 | 5 / 62 | 17 / 131 | 1 / 3 |
-| animation | 15 | 238 | 0 | 0 | 5 / 51 | 10 / 187 | 0 |
-| animation-graphics | 5 | 22 | 0 | 0 | 0 | 5 / 22 | 0 |
-| navigation-compose | 9 | 121 | 1 / 1 | 0 | 3 / 68 | 4 / 50 | 1 / 2 |
-| navigation3-runtime | 21 | 307 | 0 | 0 | 0 | 20 / 300 | 1 / 7 |
-| navigation3-ui | 15 | 121 | 0 | 0 | 0 | 15 / 121 | 0 |
+| Module | Files | @Test | covered | ported | port | partial | feature | n/a |
+|---|---|---|---|---|---|---|---|---|
+| animation-core | 30 | 212 | 0 | 1 / 1 | 7 / 16 | 6 / 73 | 15 / 119 | 1 / 3 |
+| animation | 15 | 238 | 0 | 0 | 0 | 5 / 51 | 10 / 187 | 0 |
+| animation-graphics | 5 | 22 | 0 | 0 | 0 | 0 | 5 / 22 | 0 |
+| navigation-compose | 9 | 121 | 1 / 1 | 0 | 0 | 3 / 68 | 4 / 50 | 1 / 2 |
+| navigation3-runtime | 21 | 307 | 0 | 0 | 0 | 0 | 20 / 300 | 1 / 7 |
+| navigation3-ui | 15 | 121 | 0 | 0 | 0 | 0 | 15 / 121 | 0 |
 
 `@Test` methods by missing feature (a file counts under its main blocker; the notes name the others):
 
@@ -59,7 +60,7 @@ By module:
 | deferred-transition | 4 | 62 |
 | seekable-transition | 2 | 49 |
 | nav-graphs | 1 | 33 |
-| animation-objects | 3 | 25 |
+| animation-objects | 2 | 14 |
 | animated-image-vector | 5 | 22 |
 | lookahead-visual-debug | 1 | 16 |
 | arc-animation | 2 | 14 |
@@ -76,7 +77,6 @@ By module:
 | decay-animation | 2 | 3 |
 | predictive-back | 1 | 2 |
 | deferred-target-animation | 1 | 1 |
-| spring-estimation | 1 | 1 |
 
 Without Navigation 3 (whose adoption is a decision, not a gap in what compose-rs models), the area is 59 files and 593 tests. Of those:
 
@@ -114,7 +114,7 @@ The "covered" notes cite compose-rs test files under `crates/compose-animation/t
 | 12 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/KeyframeArcAnimationTest.kt` | 2 | keyframes `using ArcMode` in 2D, with easings | `feature:arc-animation` |  |
 | 13 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/KeyframeSplineAnimationTest.kt` | 8 | `keyframesWithSpline`: interpolation, periodic bias, easing, delay, equality | `feature:keyframes-with-spline` |  |
 | 14 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/MonoSplineTest.kt` | 2 | the monotonic spline under `keyframesWithSpline` | `feature:keyframes-with-spline` | internal class; port with the feature |
-| 15 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/PhysicsAnimationTest.kt` | 11 | springs: velocity, under/over/critically damped durations, end snapping, vector springs, zero damping, interruption-aware spec | `feature:animation-objects` | durations need spring-estimation; 1 test needs interruption-aware-spec; velocity tests portable via `Animatable` |
+| 15 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/PhysicsAnimationTest.kt` | 11 | springs: velocity, under/over/critically damped durations, end snapping, vector springs, zero damping, interruption-aware spec | partial | 10 ported (`physics.rs`: velocities, the three damping regimes' durations, end snapping, vector durations and values, zero damping); `testInterruptionAwareAnimationSpec` needs interruption-aware-spec |
 | 16 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/RepeatableAnimationTest.kt` | 11 | repeatable/infiniteRepeatable values, durations, Reverse, StartOffset, zero-duration inner specs | partial | values/Reverse/infinite portable (Reverse covered by `review_animation.rs` reversed-repetition tests; finite end by `review_round14.rs`); StartOffset (2) and `snap()` inside a repeatable need spec-gaps; spline/arc zero-duration need their features; durations need animation-objects |
 | 17 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/SnapAnimationTest.kt` | 1 | `snap()` is finished at play time 0 | port | `animation.rs` `snap_jumps_after_its_delay` covers the delayed case |
 | 18 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/SuspendAnimationTest.kt` | 5 | top-level `animate()` (float, generic), `animateDecay`, `AnimationState.animateTo/animateDecay` | `feature:suspend-animate` | decay ones also need decay-animation |
@@ -126,10 +126,10 @@ The "covered" notes cite compose-rs test files under `crates/compose-animation/t
 | 24 | `compose/animation/animation-core/src/androidDeviceTest/kotlin/androidx/compose/animation/core/InfiniteTransitionTest.kt` | 1 | `rememberInfiniteTransition`: keyframes Reverse float and tween color, frame by frame | port | `infinite.rs` checks against compose-rs's own earlier implementation, never against Compose's expected values; expected values need keyframe/tween evaluation (easier after animation-objects) |
 | 25 | `compose/animation/animation-core/src/androidDeviceTest/kotlin/androidx/compose/animation/core/PathEasingTest.kt` | 12 | `PathEasing`: bounds, invalid paths, compare to cubic, quads, overshoot | `feature:path-easing` |  |
 | 26 | `compose/animation/animation-core/src/androidDeviceTest/kotlin/androidx/compose/animation/core/SeekableTransitionStateTest.kt` | 44 | `SeekableTransitionState`: seekTo, animateTo, snapTo, interruptions, durations, isRunning, cleanup | `feature:seekable-transition` |  |
-| 27 | `compose/animation/animation-core/src/androidDeviceTest/kotlin/androidx/compose/animation/core/SingleValueAnimationTest.kt` | 13 | `animate*AsState`: 1D/2D/4D/color frame by frame, interruption, visibility thresholds, spec and threshold updates | partial | 11 portable now (expect threshold differences, see notes); `animateRectAsState` needs more-converters; 1 needs interruption-aware-spec. compose-rs covers related cases in `animation.rs` (spring continuation) and `review_animation.rs` (finished listener) |
+| 27 | `compose/animation/animation-core/src/androidDeviceTest/kotlin/androidx/compose/animation/core/SingleValueAnimationTest.kt` | 13 | `animate*AsState`: 1D/2D/4D/color frame by frame, interruption, visibility thresholds, spec and threshold updates | partial | 12 ported (`single_value.rs`: 1D/2D/4D/color frame by frame, a target moved every frame, the visibility threshold tests, spec and threshold updates); `interruptionAwareAnimationSpec_usesInterruptionSpecOnInterruption` needs interruption-aware-spec (its interruption frames are ported with one spec: `an_interrupting_animation_starts_where_the_other_left_off`) |
 | 28 | `compose/animation/animation-core/src/androidDeviceTest/kotlin/androidx/compose/animation/core/TransitionTest.kt` | 17 | `updateTransition`/`Transition`: values per segment, animations added mid-flight, MutableTransitionState, child transitions, totalDurationNanos, recomposition counts, interruption-aware spec | partial | ~7 portable now (`content.rs` and `review_round8.rs`/`review_round10.rs` cover isRunning, interruption spring, current state); MutableTransitionState/child transitions/totalDurationNanos need transition-state; 2 need interruption-aware-spec; label test n/a (tooling) |
 | 29 | `compose/animation/animation-core/src/androidHostTest/kotlin/androidx/compose/animation/core/EasingTest.android.kt` | 2 | cubic solver near 0/1 and with overshooting curves | port |  |
-| 30 | `compose/animation/animation-core/src/androidHostTest/kotlin/androidx/compose/animation/core/SpringEstimationTest.kt` | 1 | spring duration estimation against simulation over a grid of mass/stiffness | `feature:spring-estimation` |  |
+| 30 | `compose/animation/animation-core/src/androidHostTest/kotlin/androidx/compose/animation/core/SpringEstimationTest.kt` | 1 | spring duration estimation against simulation over a grid of mass/stiffness | ported | `spring_estimation.rs`: every fifth mass and spring constant of Compose's grid (2.9 million of its 70 million cases) |
 | 31 | `compose/animation/animation/src/androidDeviceTest/kotlin/androidx/compose/animation/AnimateBoundsTest.kt` | 8 | `Modifier.animateBounds`: position, size, bounds, movable content, lazy layouts, scrolling | `feature:animate-bounds` | needs ui lookahead |
 | 32 | `compose/animation/animation/src/androidDeviceTest/kotlin/androidx/compose/animation/AnimatedContentTest.kt` | 17 | `AnimatedContent`: SizeTransform, alignment, slideInto/OutOfContainer, contentKey, subcomposition, interruption, KeepUntilTransitionsFinished, lookahead, cleanup | partial | ~6 portable now (alignment, interruption, right transition on interruption, subcomposition, cleanup, size continuity); compose-rs covers basics in `content.rs`, `review_round8.rs`, `review_round10.rs`, `review_round11.rs`; the rest need animated-content-scope (SizeTransform spec, `using`, slideIntoContainer, contentKey, KeepUntilTransitionsFinished, zIndex), transition-state (`rememberTransition`), ui lookahead (2) |
 | 33 | `compose/animation/animation/src/androidDeviceTest/kotlin/androidx/compose/animation/AnimatedVisibilityTest.kt` | 17 | `AnimatedVisibility`: expand/shrink, slide, fade, scale with exact values, None, Transition overload, seeking, lookahead, veil, settle time | partial | 3 portable now (fade, None/None, interrupted exit; `visibility.rs`, `review_animation.rs`, `review_round11.rs`/`review_round12.rs` cover related cases); expand/slide/scale with custom specs and lambdas need enter-exit-params; veil (4); transition-state; seekable; lookahead; settle time needs spring-estimation |
@@ -379,7 +379,7 @@ One entry per feature. Sizes:
 
 ### Animation core
 
-#### spring-estimation (S–M, not exp.)
+#### spring-estimation (S–M, not exp.): done (D800)
 
 - **API:** `SpringSpec`'s duration: `VectorizedSpringSpec.getDurationNanos` through Compose's `SpringEstimation` (`estimateAnimationDurationMillis`).
 - **Behaviour:** an animation ends at play time ≥ that duration, at the target.
@@ -760,9 +760,9 @@ Since the harness's milestone 1 (D900–D905), compose-test has Compose's clock 
 
 Each item names the Compose test that would catch it, in the file's notes or listed here.
 
-1. **Springs end on a different frame.** compose-rs stops when `|value − target| < threshold` and `|velocity| < threshold × 62.5` on a frame (`spec.rs`). Compose ends at the estimated duration (`SpringEstimation`).
+1. **Springs end on a different frame.** Fixed (D800): a spring ends at Compose's estimated duration.
    - Caught by: `PhysicsAnimationTest.testCriticallydampedDuration`, `testOverdampedDuration`, `testUnderdampedDuration`, `testEndSnapping`; `AnimatedVisibilityTest.testAnimationSettleExactTime`.
-2. **Visibility thresholds.**
+2. **Visibility thresholds.** Fixed (D800): a spring without a threshold uses 0.01 per component, the types' defaults are the tip's (0.4 dp, 1 px), and `animate*AsState` resolves a given threshold as Compose's.
    - **Plain springs.** Compose's `Animatable` and an explicit `spring()` without a threshold use `Spring.DefaultDisplacementThreshold` (0.01) on every dimension. Only `animate*AsState`'s default specs carry the type's threshold. compose-rs's `Animatable` uses `T::visibility_threshold()` for every spring without one, so an `Animatable<Dp>` or `<Offset>` with `spring()` ends earlier than Compose's.
    - **Default values.** At this tip `Dp.VisibilityThreshold` is 0.4 dp and `Offset`/`Size`/`Rect` use 1 px (`VisibilityThresholds.kt`). compose-rs uses 0.1 dp and 0.5 px, which look like older Compose values; check them against the version parity targets (1.12.1) before changing.
    - **`animateFloatAsState`.** Compose's applies a non-default `visibilityThreshold` to any `SpringSpec`, replacing the spec's own. compose-rs fills it only when the spring has none.

@@ -53,14 +53,15 @@ fn compare<T: Animate + ComposeArg + std::fmt::Debug>(
     assert!(
         value
             .to_vector()
+            .as_slice()
             .iter()
-            .zip(reference.to_vector())
-            .all(|(a, b)| *a == b || (a.is_nan() && b.is_nan())),
+            .zip(reference.to_vector().as_slice())
+            .all(|(a, b)| a == b || (a.is_nan() && b.is_nan())),
         "{name} at {} ms: {value:?}, the reference {reference:?}",
         platform::now_nanos() / 1_000_000
     );
     COMPARED.set(COMPARED.get() + 1);
-    SEEN.with(|seen| seen.borrow_mut().push((name, value.to_vector())));
+    SEEN.with(|seen| seen.borrow_mut().push((name, value.to_vector().to_array())));
 }
 
 fn seen(name: &str) -> Vec<[f32; 4]> {
@@ -101,8 +102,9 @@ fn Compared(target: MutableState<f32>, extra: MutableState<bool>) {
         0.0f32,
         100.0,
         infinite_repeatable(
-            keyframes(400, |frames| {
-                frames.at(100, 80.0f32).with(EASE_IN);
+            keyframes(|frames| {
+                frames.duration_millis = 400;
+                frames.at(100, 80.0f32).using(EASE_IN);
             }),
             RepeatMode::Reverse,
         ),

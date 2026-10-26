@@ -109,7 +109,7 @@ fn a_bouncy_spring_overshoots() {
 
 #[test]
 fn snap_jumps_after_its_delay() {
-    let (mut ui, target) = animated(snap(50));
+    let (mut ui, target) = animated(snap(50).into());
     target.set(7.0);
     ui.wait_for_idle();
     // The frame that recomposes for the new target: Compose recomposes only on frames (D900).
@@ -140,8 +140,7 @@ fn colors_go_through_oklab_and_back() {
     // Midway from red to green in Oklab isn't sRGB's muddy (128, 128, 0).
     let start = Color::RED.to_vector();
     let end = Color::GREEN.to_vector();
-    let middle: Vec<f32> = start.iter().zip(end).map(|(a, b)| (a + b) / 2.0).collect();
-    let middle = Color::from_vector([middle[0], middle[1], middle[2], middle[3]]);
+    let middle = Color::from_vector(start.map(|index, a| (a + end[index]) / 2.0));
     assert!(middle.red() > 150 && middle.green() > 150, "{middle:?}");
 }
 
@@ -195,7 +194,8 @@ fn an_infinite_transition_goes_back_and_forth() {
 
 #[test]
 fn keyframes_pass_through_their_values_at_their_times() {
-    let spec = keyframes(160, |frames| {
+    let spec = keyframes(|frames| {
+        frames.duration_millis = 160;
         frames.at(80, 50.0f32);
     });
     let (mut ui, target) = animated(spec.into());
@@ -216,8 +216,9 @@ fn keyframes_pass_through_their_values_at_their_times() {
 
 #[test]
 fn a_keyframe_eases_the_stretch_it_starts() {
-    let eased = keyframes(100, |frames| {
-        frames.at(0, 0.0f32).with(FAST_OUT_SLOW_IN_EASING);
+    let eased = keyframes(|frames| {
+        frames.duration_millis = 100;
+        frames.at(0, 0.0f32).using(FAST_OUT_SLOW_IN_EASING);
     });
     let (mut ui, target) = animated(eased.into());
     target.set(100.0);
@@ -233,15 +234,17 @@ fn a_keyframe_eases_the_stretch_it_starts() {
 #[test]
 fn equal_keyframes_are_one_spec() {
     let build = || {
-        keyframes(300, |frames| {
+        keyframes(|frames| {
+            frames.duration_millis = 300;
             frames.delay_millis = 20;
-            frames.at(100, 0.5f32).with(LINEAR_OUT_SLOW_IN_EASING);
+            frames.at(100, 0.5f32).using(LINEAR_OUT_SLOW_IN_EASING);
         })
     };
     assert_eq!(build(), build());
     assert_ne!(
         build(),
-        keyframes(300, |frames| {
+        keyframes(|frames| {
+            frames.duration_millis = 300;
             frames.at(100, 0.6f32);
         })
     );

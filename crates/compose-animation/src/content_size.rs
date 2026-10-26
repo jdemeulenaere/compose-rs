@@ -25,7 +25,7 @@ impl AnimationModifiers for Modifier {
         // As Compose's default: medium-low stiffness, a pixel's threshold.
         self.animate_content_size_with(SpringSpec {
             stiffness: crate::Spring::STIFFNESS_MEDIUM_LOW,
-            visibility_threshold: Some(1.0),
+            visibility_threshold: Some(crate::AnimationVector::from(1.0)),
             ..spring()
         })
     }
