@@ -16,16 +16,19 @@ What compose-rs's runtime (`crates/compose-runtime`, `crates/compose-macros`) ha
 | Status | Files | Tests |
 |---|---|---|
 | `covered` | 5 | 27 |
-| `port` | 11 | 221 |
-| `partial` | 14 | 203 |
-| `feature:…` | 30 | 583 |
+| `ported` | 11 | 98 |
+| `port` | 0 | 0 |
+| `partial` | 16 | 342 |
+| `feature:…` | 28 | 567 |
 | `n/a` | 91 | 968 |
 
-The `feature:…` files by feature: state-collections 3 files (146 tests), snapshot-isolation 3 (105), computed-state 2 (54), snapshot-observation 2 (54), movable-content 3 (54), retain 2 (37), error-traces 1 (33), composition-observer 4 (28), flow-adapters 2 (18), recomposer 2 (16), composition-data 2 (15), saveable-gaps 2 (10), snapshot-flow 1 (9), frame-end-callback 1 (4). `partial` and `port` rows name further features they need for some of their tests (local-variants, composition-context, composition-api, keyed-side-effect, produce-state-scope, frame-clocks).
+264 tests are ported so far (each cites its Compose test in a `// Compose:` comment), in `ported` and `partial` files.
+
+The `feature:…` files by feature: state-collections 3 files (146 tests), snapshot-isolation 3 (105), computed-state 2 (54), snapshot-observation 2 (54), movable-content 3 (54), retain 2 (37), error-traces 1 (33), composition-observer 4 (28), flow-adapters 2 (18), composition-data 2 (15), saveable-gaps 2 (10), snapshot-flow 1 (9), frame-end-callback 1 (4). `partial` rows name further features they need for some of their tests (composition-context, composition-api, recomposer, movable-content, host-defaults, snapshot-observation).
 
 Of the 968 `n/a` tests, 142 are Android Lint checks, 122 benchmarks, 513 tests of internal data structures and internal APIs (two slot tables, change lists, collections, snapshot id sets, the opt-in tracing API), 49 hot reload (Live Edit), and 142 platform or language specifics (threads, JVM reflection, `Parcelable`, RxJava, LiveData, Kotlin delegates and autoboxing, the Kotlin compiler's ABI and group sizes, Android tracing).
 
-The core suite alone (`nonEmulatorCommonTest`, 1,099 tests) splits: 17 in `covered` files, 183 `port`, 127 `partial`, 462 behind a missing feature, 310 `n/a` (internal data structures).
+The core suite alone (`nonEmulatorCommonTest`, 1,099 tests) splits: 17 in `covered` files, 60 in `ported` files, 262 in `partial` ones, 450 behind a missing feature, 310 `n/a` (internal data structures).
 
 ## Test files
 
