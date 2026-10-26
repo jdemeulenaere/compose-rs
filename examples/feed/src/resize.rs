@@ -24,8 +24,7 @@ pub const RESIZE_LEVELS: u32 = 12;
 
 #[composable]
 pub fn ResizeScreen() {
-    let color_scheme =
-        if is_system_in_dark_theme() { dark_color_scheme() } else { light_color_scheme() };
+    let color_scheme = crate::bench_color_scheme();
     MaterialTheme!(color_scheme = color_scheme, {
         Scaffold!(
             top_bar = {

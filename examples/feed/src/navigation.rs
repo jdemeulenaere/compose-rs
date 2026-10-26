@@ -284,8 +284,7 @@ impl NavigationItem {
 /// The navigation app: the launcher, or the heavy screen of the visit `seed` while it shows.
 #[composable]
 pub fn NavigationApp() {
-    let color_scheme =
-        if is_system_in_dark_theme() { dark_color_scheme() } else { light_color_scheme() };
+    let color_scheme = crate::bench_color_scheme();
     let seed = remember(|| mutable_state_of(0u32));
     let showing = remember(|| mutable_state_of(false));
     MaterialTheme!(color_scheme = color_scheme, {

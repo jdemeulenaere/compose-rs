@@ -26,8 +26,7 @@ pub fn grid_kind(index: u32) -> u32 {
 /// The grid: a top app bar over 3,000 tiles.
 #[composable]
 pub fn GridScreen() {
-    let color_scheme =
-        if is_system_in_dark_theme() { dark_color_scheme() } else { light_color_scheme() };
+    let color_scheme = crate::bench_color_scheme();
     MaterialTheme!(color_scheme = color_scheme, {
         Scaffold!(
             top_bar = {

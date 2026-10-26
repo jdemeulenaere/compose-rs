@@ -112,8 +112,7 @@ fn color(index: u32) -> Color {
 /// 20.
 #[composable]
 pub fn StressScroll() {
-    let color_scheme =
-        if is_system_in_dark_theme() { dark_color_scheme() } else { light_color_scheme() };
+    let color_scheme = crate::bench_color_scheme();
     MaterialTheme!(color_scheme = color_scheme, {
         Scaffold!(
             top_bar = {
@@ -434,8 +433,7 @@ fn Banner(index: u32) {
 /// growing and shrinking, and a canvas of sine waves.
 #[composable]
 pub fn StressAnimation() {
-    let color_scheme =
-        if is_system_in_dark_theme() { dark_color_scheme() } else { light_color_scheme() };
+    let color_scheme = crate::bench_color_scheme();
     MaterialTheme!(color_scheme = color_scheme, {
         Scaffold!(
             top_bar = {

@@ -112,10 +112,16 @@ pub fn FeedAnimated() {
     FeedScreen(true);
 }
 
+/// The benchmark screens' colours: always Material's light scheme, as the Kotlin app's
+/// `MaterialTheme {}` (D645). Following the system's dark mode made the two apps draw different
+/// pixels on a device left in dark mode.
+pub(crate) fn bench_color_scheme() -> ColorScheme {
+    light_color_scheme()
+}
+
 #[composable]
 fn FeedScreen(animated: bool) {
-    let color_scheme =
-        if is_system_in_dark_theme() { dark_color_scheme() } else { light_color_scheme() };
+    let color_scheme = bench_color_scheme();
     MaterialTheme!(color_scheme = color_scheme, {
         Scaffold!(
             top_bar = {
@@ -147,8 +153,7 @@ fn FeedScreen(animated: bool) {
 /// The big screen: 200 posts in a scrolling column, all composed at once.
 #[composable]
 pub fn BigScreen() {
-    let color_scheme =
-        if is_system_in_dark_theme() { dark_color_scheme() } else { light_color_scheme() };
+    let color_scheme = bench_color_scheme();
     MaterialTheme!(color_scheme = color_scheme, {
         Scaffold!(
             top_bar = {
