@@ -45,9 +45,9 @@ fn an_exit_after_a_finished_part_keeps_that_parts_spec() {
         AnimatedVisibility!(
             handle.get(),
             enter = fade_in_with(tween(100).easing(LINEAR_EASING), 0.0)
-                + scale_in_with(tween(1000), 0.5),
+                + scale_in_with(tween(1000), 0.5, compose_ui::TransformOrigin::CENTER),
             exit = fade_out_with(tween(400).easing(LINEAR_EASING), 0.0)
-                + scale_out_with(tween(1000), 0.5),
+                + scale_out_with(tween(1000), 0.5, compose_ui::TransformOrigin::CENTER),
             {
                 Box!(
                     modifier = Modifier

@@ -384,6 +384,12 @@ impl UiHost {
         drop(compose);
         let size = self.size;
         let invalid_before_layout = self.composition.has_invalidations();
+        // A write the pass made to state read while measuring or drawing (a transition's target,
+        // written as it composes, D802) is this frame's layout's and drawing's (`lay_out` applies
+        // it first): it asks for no other frame. One invalidating composition still does.
+        if !invalid_before_layout {
+            self.frame_requested.set(false);
+        }
         let layout = crate::trace::section(c"compose-rs: layout");
         let mut measured = self.lay_out(size);
         drop(layout);

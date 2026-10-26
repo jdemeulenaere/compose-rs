@@ -616,6 +616,122 @@ impl<S: Clone + PartialEq + 'static> Transition<S> {
     ) -> State<Rect> {
         self.animate_value(transition_spec, target_value_by_state)
     }
+
+    /// A value of this transition whose targets are known later (while measuring or drawing),
+    /// as Compose's `createDeferredAnimation`: it joins the transition at its first
+    /// [`animate`](DeferredAnimation::animate). Remembered at its call site: call it on every
+    /// pass, as a composable; it leaves the transition with its call.
+    pub(crate) fn create_deferred_animation<T: Animate>(&self) -> DeferredAnimation<S, T> {
+        let transition = self.clone();
+        let deferred = remember_keyed(self.clone(), move || DeferredAnimation {
+            inner: Rc::new(DeferredInner { transition, data: RefCell::new(None) }),
+        });
+        let removed = deferred.inner.clone();
+        DisposableEffect(deferred.clone(), move |scope| {
+            scope.on_dispose(move || {
+                let data = removed.data.borrow_mut().take();
+                if let Some(data) = data {
+                    let entry: Rc<dyn AnimationEntry> = data.animation.clone();
+                    let inner = &removed.transition.inner;
+                    inner.animations.borrow_mut().retain(|kept| !Rc::ptr_eq(kept, &entry));
+                }
+            })
+        });
+        deferred
+    }
+}
+
+/// A value of a transition whose targets are given while measuring or drawing, as Compose's
+/// `Transition.DeferredAnimation` (made by [`Transition::create_deferred_animation`]).
+pub(crate) struct DeferredAnimation<S: 'static, T: Animate> {
+    inner: Rc<DeferredInner<S, T>>,
+}
+
+struct DeferredInner<S: 'static, T: Animate> {
+    transition: Transition<S>,
+    data: RefCell<Option<Rc<DeferredData<S, T>>>>,
+}
+
+impl<S: 'static, T: Animate> Clone for DeferredAnimation<S, T> {
+    fn clone(&self) -> Self {
+        DeferredAnimation { inner: self.inner.clone() }
+    }
+}
+
+impl<S: 'static, T: Animate> ComposeArg for DeferredAnimation<S, T> {
+    fn same(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.inner, &other.inner)
+    }
+}
+
+type SpecBySegment<S> = Box<dyn Fn(&Segment<S>) -> AnimationSpec>;
+type ValueByState<S, T> = Box<dyn Fn(&S) -> T>;
+
+/// A deferred animation's value and how it's computed, as `DeferredAnimationData`: reading it
+/// updates its target from the transition's segment first.
+pub(crate) struct DeferredData<S: 'static, T: Animate> {
+    transition: Rc<TransitionInner<S>>,
+    animation: Rc<TransitionAnimationState<T>>,
+    transition_spec: RefCell<SpecBySegment<S>>,
+    target_value_by_state: RefCell<ValueByState<S, T>>,
+}
+
+impl<S: Clone + PartialEq + 'static, T: Animate> DeferredData<S, T> {
+    fn update_animation_states(&self) {
+        let segment = self.transition.segment.get();
+        let target = (self.target_value_by_state.borrow())(&segment.target_state);
+        let spec = (self.transition_spec.borrow())(&segment);
+        self.animation.update_target_value(target, spec);
+    }
+
+    /// The value, its target brought up to date first (a state read, as `value`).
+    pub fn value(&self) -> T {
+        self.update_animation_states();
+        self.animation.value.get()
+    }
+}
+
+impl<S: Clone + PartialEq + 'static, T: Animate> DeferredAnimation<S, T> {
+    /// The state its transition is at, read without observing it.
+    pub(crate) fn current_state_untracked(&self) -> S {
+        self.inner.transition.inner.current_untracked()
+    }
+
+    /// Its value animating to `target_value_by_state(target)` along `transition_spec(segment)`,
+    /// as `DeferredAnimation.animate`: the first call joins the transition, at its value for the
+    /// state the transition is at.
+    pub fn animate(
+        &self,
+        transition_spec: impl Fn(&Segment<S>) -> AnimationSpec + 'static,
+        target_value_by_state: impl Fn(&S) -> T + 'static,
+    ) -> Rc<DeferredData<S, T>> {
+        let existing = self.inner.data.borrow().clone();
+        let data = match existing {
+            Some(data) => {
+                *data.transition_spec.borrow_mut() = Box::new(transition_spec);
+                *data.target_value_by_state.borrow_mut() = Box::new(target_value_by_state);
+                data
+            }
+            None => {
+                let transition = &self.inner.transition;
+                let initial = target_value_by_state(&transition.inner.current_untracked());
+                let animation = Rc::new(TransitionAnimationState::new(initial, transition.node()));
+                let entry: Rc<dyn AnimationEntry> = animation.clone();
+                transition.inner.animations.borrow_mut().push(entry);
+                transition.inner.wake();
+                let data = Rc::new(DeferredData {
+                    transition: transition.inner.clone(),
+                    animation,
+                    transition_spec: RefCell::new(Box::new(transition_spec)),
+                    target_value_by_state: RefCell::new(Box::new(target_value_by_state)),
+                });
+                *self.inner.data.borrow_mut() = Some(data.clone());
+                data
+            }
+        };
+        data.update_animation_states();
+        data
+    }
 }
 
 /// A transition following `target_state`, remembered at its call site, as

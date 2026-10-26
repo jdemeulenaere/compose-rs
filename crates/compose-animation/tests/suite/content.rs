@@ -50,9 +50,8 @@ fn a_transform_without_animation_switches_at_once() {
     let mut ui = ComposeTestRule::with_manual_clock(move || {
         AnimatedContent!(
             handle.get(),
-            transition_spec = |_, _| EnterTransition::NONE
-                .together_with(ExitTransition::NONE)
-                .without_size_transform(),
+            transition_spec =
+                |_, _| EnterTransition::NONE.together_with(ExitTransition::NONE).using(None),
             |value: i32| BasicText!("value {}", value)
         );
     });

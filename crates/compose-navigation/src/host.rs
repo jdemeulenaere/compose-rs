@@ -95,7 +95,7 @@ pub fn NavHost<D: Clone + PartialEq + 'static>(
             entry,
             modifier,
             compose_runtime::callback(move |_, _| {
-                enter_transition.together_with(exit_transition).without_size_transform()
+                enter_transition.clone().together_with(exit_transition.clone()).using(None)
             }),
             content_alignment,
             "NavHost",

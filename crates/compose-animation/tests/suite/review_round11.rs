@@ -48,7 +48,7 @@ fn a_content_coming_back_while_it_leaves_springs_back_at_once() {
             transition_spec = |_, _| {
                 fade_in_with(tween(300).delay(90).easing(LINEAR_EASING), 0.0)
                     .together_with(fade_out_with(tween(300).easing(LINEAR_EASING), 0.0))
-                    .without_size_transform()
+                    .using(None)
             },
             |value: i32| {
                 Box!(

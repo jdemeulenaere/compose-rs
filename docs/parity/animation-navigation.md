@@ -34,8 +34,8 @@ The inventory of Compose's animation and navigation tests and public API against
 | `covered` | 1 | 1 |
 | `ported` | 3 | 8 |
 | `port` | 6 | 14 |
-| `partial` | 13 | 187 |
-| `feature:<name>` | 69 | 799 |
+| `partial` | 14 | 200 |
+| `feature:<name>` | 68 | 786 |
 | `n/a` | 3 | 12 |
 
 By module:
@@ -43,7 +43,7 @@ By module:
 | Module | Files | @Test | covered | ported | port | partial | feature | n/a |
 |---|---|---|---|---|---|---|---|---|
 | animation-core | 30 | 212 | 0 | 2 / 3 | 6 / 14 | 6 / 73 | 15 / 119 | 1 / 3 |
-| animation | 15 | 238 | 0 | 1 / 5 | 0 | 4 / 46 | 10 / 187 | 0 |
+| animation | 15 | 238 | 0 | 1 / 5 | 0 | 5 / 59 | 9 / 174 | 0 |
 | animation-graphics | 5 | 22 | 0 | 0 | 0 | 0 | 5 / 22 | 0 |
 | navigation-compose | 9 | 121 | 1 / 1 | 0 | 0 | 3 / 68 | 4 / 50 | 1 / 2 |
 | navigation3-runtime | 21 | 307 | 0 | 0 | 0 | 0 | 20 / 300 | 1 / 7 |
@@ -60,19 +60,18 @@ By module:
 | deferred-transition | 4 | 62 |
 | seekable-transition | 2 | 49 |
 | nav-graphs | 1 | 33 |
-| animation-objects | 2 | 14 |
 | animated-image-vector | 5 | 22 |
 | lookahead-visual-debug | 1 | 16 |
+| animation-objects | 2 | 14 |
 | arc-animation | 2 | 14 |
-| enter-exit-params | 1 | 13 |
 | path-easing | 1 | 12 |
 | keyframes-with-spline | 2 | 10 |
 | nav-dialog-destinations | 1 | 10 |
 | nav3-results | 4 | 10 |
 | captured-animated-visibility | 1 | 9 |
 | animate-bounds | 1 | 8 |
-| suspend-animate | 1 | 5 |
 | nav-transitions | 1 | 5 |
+| suspend-animate | 1 | 5 |
 | motion-duration-scale | 2 | 4 |
 | decay-animation | 2 | 3 |
 | predictive-back | 1 | 2 |
@@ -132,7 +131,7 @@ The "covered" notes cite compose-rs test files under `crates/compose-animation/t
 | 30 | `compose/animation/animation-core/src/androidHostTest/kotlin/androidx/compose/animation/core/SpringEstimationTest.kt` | 1 | spring duration estimation against simulation over a grid of mass/stiffness | ported | `spring_estimation.rs`: every fifth mass and spring constant of Compose's grid (2.9 million of its 70 million cases) |
 | 31 | `compose/animation/animation/src/androidDeviceTest/kotlin/androidx/compose/animation/AnimateBoundsTest.kt` | 8 | `Modifier.animateBounds`: position, size, bounds, movable content, lazy layouts, scrolling | `feature:animate-bounds` | needs ui lookahead |
 | 32 | `compose/animation/animation/src/androidDeviceTest/kotlin/androidx/compose/animation/AnimatedContentTest.kt` | 17 | `AnimatedContent`: SizeTransform, alignment, slideInto/OutOfContainer, contentKey, subcomposition, interruption, KeepUntilTransitionsFinished, lookahead, cleanup | partial | ~6 portable now (alignment, interruption, right transition on interruption, subcomposition, cleanup, size continuity); compose-rs covers basics in `content.rs`, `review_round8.rs`, `review_round10.rs`, `review_round11.rs`; the rest need animated-content-scope (SizeTransform spec, `using`, slideIntoContainer, contentKey, KeepUntilTransitionsFinished, zIndex), transition-state (`rememberTransition`), ui lookahead (2) |
-| 33 | `compose/animation/animation/src/androidDeviceTest/kotlin/androidx/compose/animation/AnimatedVisibilityTest.kt` | 17 | `AnimatedVisibility`: expand/shrink, slide, fade, scale with exact values, None, Transition overload, seeking, lookahead, veil, settle time | partial | 3 portable now (fade, None/None, interrupted exit; `visibility.rs`, `review_animation.rs`, `review_round11.rs`/`review_round12.rs` cover related cases); expand/slide/scale with custom specs and lambdas need enter-exit-params; veil (4); transition-state; seekable; lookahead; settle time needs spring-estimation |
+| 33 | `compose/animation/animation/src/androidDeviceTest/kotlin/androidx/compose/animation/AnimatedVisibilityTest.kt` | 17 | `AnimatedVisibility`: expand/shrink, slide, fade, scale with exact values, None, Transition overload, seeking, lookahead, veil, settle time | partial | 9 ported (`animated_visibility.rs`: expand and shrink, slide, a content size change, fade, scale, the scale spring's threshold, `None`/`None`, an interrupted exit, the settle time; with a test of the column and row defaults); the `Transition` overload (1) needs animated-visibility-scope; seeking (1) seekable-transition; lookahead (1); the veil (5, `verifyDirectionChangeResetsAccumulatedTransitions` among them) veil |
 | 34 | `compose/animation/animation/src/androidDeviceTest/kotlin/androidx/compose/animation/AnimationModifierTest.kt` | 6 | `animateContentSize`: frame-by-frame size, alignment LTR/RTL, lookahead, inspector, re-attach | partial | 2 portable (size test, re-attach; `crossfade.rs` `a_content_size_animates_to_its_new_size` and `review_animation.rs` default spring cover parts); alignment (2) needs animate-content-size-extras; lookahead (1); inspector n/a |
 | 35 | `compose/animation/animation/src/androidDeviceTest/kotlin/androidx/compose/animation/CapturedAnimatedVisibilityTest.kt` | 9 | `CapturedAnimatedVisibility`: content disposed at once, exit animates a captured layer, MutableTransitionState, interruptions, lookahead | `feature:captured-animated-visibility` | needs ui graphics-layer recording |
 | 36 | `compose/animation/animation/src/androidDeviceTest/kotlin/androidx/compose/animation/CrossfadeTest.kt` | 6 | `Crossfade`: shows content, disposes old content, custom spec, null state, rememberSaveable per screen, contentKey | partial | 5 portable (`crossfade.rs` and `review_animation.rs` `crossfading_back_reuses_the_contents_of_the_state` cover parts); contentKey needs crossfade-extras |
@@ -143,7 +142,7 @@ The "covered" notes cite compose-rs test files under `crates/compose-animation/t
 | 41 | `compose/animation/animation/src/androidDeviceTest/kotlin/androidx/compose/animation/SharedTransitionTest.kt` | 71 | `SharedTransitionLayout`, `sharedElement`, `sharedBounds`, overlay, clip, placeholder size, scale-to-bounds, lazy lists, isTransitionActive, velocity | `feature:shared-transition` | needs ui lookahead |
 | 42 | `compose/animation/animation/src/androidHostTest/kotlin/androidx/compose/animation/AndroidFlingSplineTest.kt` | 1 | the fling spline clamps positions out of range | `feature:decay-animation` | compose-rs has the spline privately in `compose-foundation/src/fling.rs` |
 | 43 | `compose/animation/animation/src/androidHostTest/kotlin/androidx/compose/animation/ConverterTest.kt` | 5 | Color (Oklab, clamping), Rect, Dp, Offset converters | ported | `converters.rs` (the color clamp included: compose-rs clamps in Oklab first, as Compose's) |
-| 44 | `compose/animation/animation/src/androidHostTest/kotlin/androidx/compose/animation/EnterExitTransitionConfigTest.kt` | 13 | `EnterTransition/ExitTransition.config`: fade, slide, change size, scale, veil, combined; SizeTransform defaults | `feature:enter-exit-params` | veil (2) also needs veil; SizeTransform default needs animated-content-scope |
+| 44 | `compose/animation/animation/src/androidHostTest/kotlin/androidx/compose/animation/EnterExitTransitionConfigTest.kt` | 13 | `EnterTransition/ExitTransition.config`: fade, slide, change size, scale, veil, combined; SizeTransform defaults | partial | 11 ported (`enter_exit_config.rs`; the offset and size functions checked by what they give); the veil configs (2) need veil |
 | 45 | `compose/animation/animation/src/androidHostTest/kotlin/androidx/compose/animation/SharedMutableTransformStateTest.kt` | 4 | internal state machine of mutable transforms | `feature:deferred-transition` | internal; port with the feature |
 | 46 | `compose/animation/animation-graphics/src/androidDeviceTest/kotlin/androidx/compose/animation/graphics/res/AnimatedVectorPainterResourcesTest.kt` | 2 | `rememberAnimatedVectorPainter` from an AVD resource: config, duplicate targets | `feature:animated-image-vector` | resources become bundled bytes in compose-rs |
 | 47 | `compose/animation/animation-graphics/src/androidDeviceTest/kotlin/androidx/compose/animation/graphics/vector/AnimatorAnimationSpecsTest.kt` | 5 | reversed and combined specs used by vector animators | `feature:animated-image-vector` | internal specs |
@@ -529,7 +528,7 @@ One entry per feature. Sizes:
 
 ### Animation components
 
-#### enter-exit-params (M, not exp.)
+#### enter-exit-params (M, not exp.): done but the veil (D804)
 
 - **API:**
   - the full parameter lists of `expand_*`/`shrink_*` (spec, alignment, `clip`, size lambdas), `slide_in`/`slide_out` (spec, `IntSize -> IntOffset`), `slide_in_horizontally`/`slide_out_horizontally` and the vertical pair (spec, offset lambda), `scale_in`/`scale_out` (spec, `transform_origin`);
@@ -544,7 +543,9 @@ One entry per feature. Sizes:
 - **Tests:** `AnimatedVisibilityTest` (4), `EnterExitTransitionConfigTest` (2), parts of the deferred tests.
 - **Dependencies:** enter-exit-params.
 
-#### animated-visibility-scope (M, not exp.)
+#### animated-visibility-scope (M, not exp.): partly done (D804)
+
+- **Done:** `AnimatedVisibilityScope` with its `transition`, `EnterExitState`, the `MutableTransitionState`, `ColumnScope` and `RowScope` overloads (one function over `AnimatedVisibilityState`). **Left:** `Modifier.animate_enter_exit`, the `Transition<T>.AnimatedVisibility` overload.
 
 - **API:**
   - `AnimatedVisibilityScope` (`transition`, `Modifier.animate_enter_exit`), `EnterExitState`;
@@ -552,7 +553,9 @@ One entry per feature. Sizes:
 - **Tests:** `AnimatedVisibilityTest` (transition overload, the `MutableTransitionState` cases), `CapturedAnimatedVisibilityTest`, `SharedTransitionTest`.
 - **Dependencies:** transition-state, enter-exit-params.
 
-#### animated-content-scope (M–L, not exp.)
+#### animated-content-scope (M–L, not exp.): partly done (D805)
+
+- **Done:** `SizeTransform` (`size_transform(clip, spec)`), `target_content_z_index`, `ContentTransform::using`, no cap on the contents shown (Compose's rule: a content shows while its state is the transition's current or target). **Left:** the scopes (`AnimatedContentScope`, `AnimatedContentTransitionScope` and its methods), `content_key`, `KeepUntilTransitionsFinished`, the `Transition` overload.
 
 - **API:**
   - the scopes: `AnimatedContentScope` (an `AnimatedVisibilityScope`) and `AnimatedContentTransitionScope`, holding `initial_state`, `target_state`, `content_alignment` and the methods `slide_into_container(SlideDirection, spec, offset)`, `slide_out_of_container`, `using(SizeTransform)`, `ExitTransition::KEEP_UNTIL_TRANSITIONS_FINISHED`;
@@ -769,18 +772,18 @@ Each item names the Compose test that would catch it, in the file's notes or lis
    - **Default values.** At this tip `Dp.VisibilityThreshold` is 0.4 dp and `Offset`/`Size`/`Rect` use 1 px (`VisibilityThresholds.kt`). compose-rs uses 0.1 dp and 0.5 px, which look like older Compose values; check them against the version parity targets (1.12.1) before changing.
    - **`animateFloatAsState`.** Compose's applies a non-default `visibilityThreshold` to any `SpringSpec`, replacing the spec's own. compose-rs fills it only when the spring has none.
    - Caught by: `SingleValueAnimationTest.visibilityThresholdTest`, `defaultVisibilityThresholdTest`, `customSpringSpecVisibilityThresholdTest`, `customSpringSpecLargeVisibilityThresholdTest`, `updateVisibilityThresholdTest`.
-3. **Enter and exit transitions animate a 0..1 fraction, not the values.** Every part springs a fraction with threshold 0.001 (`visibility.rs` `default_spec`). Compose animates alpha and scale as floats (threshold 0.01 for the default spring), and size and offset in pixels (1 px). So compose-rs's default fades end later, and expansions and slides of content smaller than 1,000 px end later too.
+3. **Enter and exit transitions animate a 0..1 fraction, not the values.** Fixed (D804). Every part springs a fraction with threshold 0.001 (`visibility.rs` `default_spec`). Compose animates alpha and scale as floats (threshold 0.01 for the default spring), and size and offset in pixels (1 px). So compose-rs's default fades end later, and expansions and slides of content smaller than 1,000 px end later too.
    - Also, slide offsets are fractions times the full size, recomputed each measure, while Compose calls the offset lambda with the full size.
    - Caught by: `AnimatedVisibilityTest.testScaleInAndScaleOutDefaultVisibilityThreshold`, `testAnimationSettleExactTime`, and the frame-by-frame expand and slide tests.
 4. **Colors aren't clamped in Oklab.** Fixed: compose-rs clamps L to 0..1, a and b to ±0.5 and alpha to 0..1 before converting back, as Compose.
    - Caught by: `ConverterTest.testColorConverterClampValuesOutOfRange`.
 5. **`i32` rounds where Compose truncates.** Fixed: `Animate for i32` truncates, as `Int.VectorConverter`'s `toInt()`. `IntOffset` and `IntSize` round half up in both.
    - Caught by: `TypeConverterTest` only checks whole numbers, so add a mid-animation `animate_int_as_state` case.
-6. **`AnimatedVisibility` inside a `Column` or `Row` has the wrong defaults.** Compose's scope overloads default to vertical or horizontal expand and shrink. compose-rs has only the plain overload (`expand_in`/`shrink_out`), so the same call animates differently.
+6. **`AnimatedVisibility` inside a `Column` or `Row` has the wrong defaults.** Fixed (D804): `AnimatedVisibility!((column, visible), …)`. Compose's scope overloads default to vertical or horizontal expand and shrink. compose-rs has only the plain overload (`expand_in`/`shrink_out`), so the same call animates differently.
    - Caught by: no Compose test targets it. Add one with animated-visibility-scope.
-7. **`AnimatedContent` keeps at most three contents and keys them by an internal id.** Compose keeps all and keys by `contentKey(state)`.
+7. **`AnimatedContent` keeps at most three contents and keys them by an internal id.** Fixed (D805) but `contentKey`: no cap; a content shows while its state is the transition's current or target state, as Compose's `AnimatedEnterExitImpl` (so after a second interruption the first content leaves at once, not "Compose keeps all" as this note said).
    - Caught by: `AnimatedContentTest.AnimatedContentWithKeysTest` and `AnimatedContentWithContentKey`. Write a rapid four-state test for the cap.
-8. **The animation containers expose no shared `Transition`.** Content can't read `transition.isRunning` (`AnimatedContentTest.AnimatedContentWithInterruption` does) and nothing can be seeked.
+8. **The animation containers expose no shared `Transition`.** `AnimatedVisibility`'s content has its scope's `transition` now (D804); `AnimatedContent`'s waits on animated-content-scope. Content can't read `transition.isRunning` (`AnimatedContentTest.AnimatedContentWithInterruption` does) and nothing can be seeked.
 9. **`NavHost` has no default transition** (Compose fades for 700 ms) and never pops its start destination. `launch_single_top` compares with `==`, where Compose compares the route and replaces the arguments. All are documented in D291, but ported tests must expect compose-rs's behaviour or the decision must change.
    - Caught by: `NavHostTest.testNavHostAnimations`, `NavHostControllerTest.testNavigateOptionSingleTopDifferentArguments`.
 10. **Keyframe times are `u32`.** Compose's out-of-range negative keyframes can't be written.

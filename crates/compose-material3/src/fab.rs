@@ -301,10 +301,10 @@ pub fn ExtendedFloatingActionButton(
                     AnimatedVisibility(
                         expanded,
                         Modifier.clear_and_set_semantics(|_| {}),
-                        fade_in() + expand_horizontally(),
-                        fade_out() + shrink_horizontally(),
+                        Some(fade_in() + expand_horizontally()),
+                        Some(fade_out() + shrink_horizontally()),
                         "ExtendedFloatingActionButton",
-                        compose_runtime::callback(move || {
+                        compose_runtime::callback(move |_| {
                             let text = text.clone();
                             Box(
                                 Modifier.padding((12.dp(), Dp(0.0), Dp(0.0), Dp(0.0))),

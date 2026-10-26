@@ -26,7 +26,7 @@ fn Panel(visible: MutableState<bool>, enter: EnterTransition, exit: ExitTransiti
 fn panel(enter: EnterTransition, exit: ExitTransition) -> (ComposeTestRule, OwnedState<bool>) {
     let visible = mutable_state_of(false);
     let handle = visible.handle();
-    let ui = ComposeTestRule::with_manual_clock(move || Panel(handle, enter, exit));
+    let ui = ComposeTestRule::with_manual_clock(move || Panel(handle, enter.clone(), exit.clone()));
     (ui, visible)
 }
 

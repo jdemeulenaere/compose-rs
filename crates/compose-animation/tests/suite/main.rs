@@ -3,10 +3,12 @@
 
 extern crate compose_runtime as compose;
 
+mod animated_visibility;
 mod animation;
 mod content;
 mod converters;
 mod crossfade;
+mod enter_exit_config;
 mod infinite;
 mod physics;
 mod review_animation;

@@ -42,7 +42,7 @@ fn animated_content_new_content_runs_its_enter_transition() {
             handle.get(),
             transition_spec = |_, _| fade_in_with(tween(1000).easing(LINEAR_EASING), 0.0)
                 .together_with(ExitTransition::NONE)
-                .without_size_transform(),
+                .using(None),
             |value: i32| {
                 Box!(
                     modifier = Modifier

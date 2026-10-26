@@ -46,8 +46,18 @@ fn Scene(page: MutableState<u32>, visible: MutableState<bool>) {
         // Faded and scaled: a layer lifted out of its content.
         AnimatedVisibility!(
             visible.get(),
-            enter = fade_in() + scale_in(0.5),
-            exit = fade_out() + scale_out(0.5),
+            enter = fade_in()
+                + scale_in_with(
+                    spring_with(1.0, Spring::STIFFNESS_MEDIUM_LOW).visibility_threshold(0.002f32),
+                    0.5,
+                    compose_ui::TransformOrigin::CENTER
+                ),
+            exit = fade_out()
+                + scale_out_with(
+                    spring_with(1.0, Spring::STIFFNESS_MEDIUM_LOW).visibility_threshold(0.002f32),
+                    0.5,
+                    compose_ui::TransformOrigin::CENTER
+                ),
             {
                 Box!(
                     modifier =

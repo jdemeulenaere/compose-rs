@@ -43,7 +43,9 @@ pub use as_state::{
 pub use compose_runtime::{
     with_infinite_animation_frame_millis, with_infinite_animation_frame_nanos,
 };
-pub use content::{AnimatedContent, ContentTransform, default_content_transform};
+pub use content::{
+    AnimatedContent, ContentTransform, SizeTransform, default_content_transform, size_transform,
+};
 pub use content_size::AnimationModifiers;
 pub use crossfade::Crossfade;
 pub use easing::{
@@ -71,10 +73,16 @@ pub use transition::{
 pub use vector::default_spring;
 pub use vector::{Animate, AnimationVector, VisibilityThreshold};
 pub use visibility::{
-    AnimatedVisibility, EnterTransition, ExitTransition, expand_horizontally, expand_in,
-    expand_vertically, fade_in, fade_in_with, fade_out, fade_out_with, scale_in, scale_in_with,
-    scale_out, scale_out_with, shrink_horizontally, shrink_out, shrink_vertically, slide_in,
-    slide_in_vertically, slide_out, slide_out_vertically,
+    AnimatedVisibility, AnimatedVisibilityScope, AnimatedVisibilityState, ChangeSizeConfig,
+    EnterExitState, EnterExitTransitionConfig, EnterTransition, ExitTransition, FadeConfig,
+    ScaleConfig, SlideConfig, expand_horizontally, expand_horizontally_with, expand_in,
+    expand_in_with, expand_vertically, expand_vertically_with, fade_in, fade_in_with, fade_out,
+    fade_out_with, scale_in, scale_in_with, scale_out, scale_out_with, shrink_horizontally,
+    shrink_horizontally_with, shrink_out, shrink_out_with, shrink_vertically,
+    shrink_vertically_with, slide_in, slide_in_horizontally, slide_in_horizontally_with,
+    slide_in_vertically, slide_in_vertically_with, slide_in_with, slide_out,
+    slide_out_horizontally, slide_out_horizontally_with, slide_out_vertically,
+    slide_out_vertically_with, slide_out_with,
 };
 
 #[doc(hidden)]

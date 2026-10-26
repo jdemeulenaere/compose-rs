@@ -10,7 +10,9 @@ use std::pin::Pin;
 use std::rc::Rc;
 use std::task::{Context, Poll, Waker};
 
-use compose_animation::{AnimatedVisibility, fade_in_with, fade_out_with, scale_in, tween};
+use compose_animation::{
+    AnimatedVisibility, Spring, fade_in_with, fade_out_with, scale_in_with, spring_with, tween,
+};
 use compose_foundation::layout::{Box, RowScope};
 use compose_runtime::{
     ComposeArg, CompositionLocalProvider, LaunchedEffect, OwnedState, composable, remember,
@@ -334,10 +336,18 @@ pub fn SnackbarHost(
     AnimatedVisibility(
         current.is_some(),
         modifier,
-        fade_in_with(tween(150), 0.0) + scale_in(0.8),
-        fade_out_with(tween(75), 0.0),
+        // `scaleIn(initialScale = 0.8f)`: its default spring.
+        Some(
+            fade_in_with(tween(150), 0.0)
+                + scale_in_with(
+                    spring_with(1.0, Spring::STIFFNESS_MEDIUM_LOW).visibility_threshold(0.002f32),
+                    0.8,
+                    compose_ui::TransformOrigin::CENTER,
+                ),
+        ),
+        Some(fade_out_with(tween(75), 0.0)),
         "SnackbarHost",
-        compose_runtime::callback(move || {
+        compose_runtime::callback(move |_| {
             let Some(data) = shown.clone() else { return };
             match snackbar.clone() {
                 Some(snackbar) => snackbar(data),

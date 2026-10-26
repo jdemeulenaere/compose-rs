@@ -102,13 +102,13 @@ fn alphas(ui: &mut ComposeTestRule) -> Vec<f32> {
 /// `AnimatedContent(count)` whose spec for 0 -> 1 fades the old content out
 /// (`fadeOut(tween(1000, LinearEasing))`) and for 1 -> 2 has no exit (`ExitTransition.None`),
 /// no enters, no size transform; the count goes 0 -> 1, and 500 ms in (content 0 at half alpha)
-/// on to 2. Compose computes each content's exit once, when it stops being the target
-/// (`remember(segment.targetState == stateForContent) { transitionSpec().initialContentExit }`),
-/// so content 0 goes on fading out from half alpha. Here every content takes the newest
-/// transform: content 0, mid-way through its fade, is given 1 -> 2's exit (none), so its fade
-/// is dropped and it pops back to full alpha until its old animation ends.
+/// on to 2. (Revised with D805: this round expected content 0 to go on fading out, as compose-rs
+/// then kept three contents.) Compose's `AnimatedEnterExitImpl` shows a content only while its
+/// state is the transition's target or current state; the interruption makes the current state
+/// 1 (`updateTarget`), so content 0, neither, leaves at once, and content 1 takes 1 -> 2's
+/// exit, computed when it stopped being the target.
 #[test]
-fn a_content_keeps_its_exit_when_the_state_changes_again() {
+fn a_content_neither_current_nor_target_leaves_at_once() {
     let count = mutable_state_of(0);
     let handle = count.handle();
     let mut ui = ComposeTestRule::with_manual_clock(move || {
@@ -120,7 +120,7 @@ fn a_content_keeps_its_exit_when_the_state_changes_again() {
                 } else {
                     ExitTransition::NONE
                 };
-                EnterTransition::NONE.together_with(exit).without_size_transform()
+                EnterTransition::NONE.together_with(exit).using(None)
             },
             |value: i32| {
                 Box!(
@@ -139,11 +139,11 @@ fn a_content_keeps_its_exit_when_the_state_changes_again() {
     assert!(before.iter().any(|alpha| *alpha > 0.3 && *alpha < 0.7), "{before:?}");
     count.set(2);
     ui.wait_for_idle();
+    ui.on_node_with_tag("0").assert_does_not_exist();
+    ui.on_node_with_tag("2").assert_exists();
+    // Content 1 exits with no exit: gone at the next frame, content 2 at full alpha.
     ui.advance_time_by_frame();
-    ui.on_node_with_tag("0").assert_exists();
-    let after = alphas(&mut ui);
-    assert!(
-        after.iter().any(|alpha| *alpha > 0.3 && *alpha < 0.7),
-        "content 0 should still be fading out (about half alpha); the layers' alphas: {after:?}"
-    );
+    ui.advance_time_by_frame();
+    ui.on_node_with_tag("1").assert_does_not_exist();
+    assert!(alphas(&mut ui).iter().all(|alpha| *alpha == 1.0), "{:?}", alphas(&mut ui));
 }
