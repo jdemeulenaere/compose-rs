@@ -87,6 +87,7 @@ The known differences from Jetpack Compose that an app will run into, distilled 
   - dismissible and permanent navigation drawers, `BottomSheetScaffold` and standard bottom sheets;
   - input chips, date and time pickers, search bars, exposed dropdown menus, multi-choice segmented buttons;
   - the toggleable `Surface` overload, the content overloads of `ExtendedFloatingActionButton` and `BottomAppBar`, and the bottom app bar's scroll behavior.
+- **The theme** is three composition locals (`LOCAL_COLOR_SCHEME`, `LOCAL_TYPOGRAPHY`, `LOCAL_SHAPES`), not one: `MaterialTheme::values()` stands for `MaterialTheme.LocalMaterialTheme.current`. `Typography(fontFamily, …)` is `Typography::from_font_family(family)` with struct update, then `with_default_font_family(family)` for the styles given without one (D1008).
 - **Progress indicators** take their progress as a lambda, as Compose's non-deprecated overloads (the `Float` ones are gone); `drawStopIndicator` is a `DrawStopIndicator` value, as a composable's callbacks take their arguments by value (D1003).
 - **Sliders** take a `SliderState`, as Compose's non-deprecated overload (the value overload is gone); `SliderDefaults::track_with` stands for `Track`'s parameters past the colors, its `drawStopIndicator` and `drawTick` `DrawSliderStopIndicator` and `DrawSliderTick` values. No `RangeSlider` or `VerticalSlider` yet (D1006).
 - **Top app bars' scroll behaviors** have no fling decay before they settle, and dragging the bar itself doesn't collapse it (D186).

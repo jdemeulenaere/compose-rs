@@ -74,6 +74,23 @@ fn an_elevated_surface_is_tinted_with_the_surface_tint() {
     assert_eq!(rect_fills(&mut ui), vec![expected]);
 }
 
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/SurfaceTest.kt, noTonalElevationColorIsSetOnElevatedSurfaceColor_tonalElevationDisabled
+#[test]
+fn with_tonal_elevation_turned_off_an_elevated_surface_keeps_the_surface_color() {
+    let mut ui = compose_test(|| {
+        MaterialTheme!(color_scheme = tinted_scheme(), {
+            CompositionLocalProvider(LOCAL_TONAL_ELEVATION_ENABLED.provides(false), || {
+                Surface!(tonal_elevation = 2.dp(), modifier = Modifier.size(10.dp()), {
+                    record_elevation();
+                });
+            });
+        });
+    });
+    // The elevation still adds up; the color isn't tinted.
+    assert_eq!(recorded_elevation(), Dp(2.0));
+    assert_eq!(rect_fills(&mut ui), vec![tinted_scheme().surface]);
+}
+
 // Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/SurfaceTest.kt, tonalElevationColorIsNotSetOnNonSurfaceColor
 #[test]
 fn an_elevated_surface_of_another_color_is_not_tinted() {

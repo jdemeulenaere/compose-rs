@@ -115,8 +115,10 @@ pub use tabs::{
 pub use text_field::{OutlinedTextField, OutlinedTextFieldDefaults, TextField};
 pub use theme::{
     ColorScheme, DEFAULT_LINE_HEIGHT_STYLE, DEFAULT_TEXT_STYLE, LOCAL_COLOR_SCHEME,
-    LOCAL_CONTENT_COLOR, LOCAL_SHAPES, LOCAL_TEXT_STYLE, LOCAL_TYPOGRAPHY, MaterialTheme, Shapes,
-    TypeScaleToken, TypeScaleTokens, Typography, dark_color_scheme, light_color_scheme,
+    LOCAL_CONTENT_COLOR, LOCAL_SHAPES, LOCAL_TEXT_STYLE, LOCAL_TONAL_ELEVATION_ENABLED,
+    LOCAL_TYPOGRAPHY, MaterialExpressiveTheme, MaterialTheme, MaterialThemeValues,
+    ProvideTextStyle, ShapeDefaults, Shapes, TypeScaleToken, TypeScaleTokens, Typography,
+    content_color_for, dark_color_scheme, expressive_light_color_scheme, light_color_scheme,
 };
 
 // What the defaults of the composables name through `crate::`.

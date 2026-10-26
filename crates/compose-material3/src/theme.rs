@@ -6,8 +6,8 @@ use std::rc::Rc;
 use compose_foundation::{LOCAL_TEXT_SELECTION_COLORS, TextSelectionColors};
 use compose_runtime::{ComposeArg, CompositionLocal, CompositionLocalProvider, composable};
 use compose_ui::{
-    Color, CornerSize, FontWeight, LineHeightAlignment, LineHeightStyle, LineHeightTrim, Shape,
-    TextStyle, TextUnit, UnitExt,
+    Color, CornerSize, Dp, FontFamily, FontWeight, LineHeightAlignment, LineHeightStyle,
+    LineHeightTrim, Shape, TextStyle, TextUnit, UnitExt,
 };
 
 /// The theme's colors, as Compose's `ColorScheme` (the roles components use).
@@ -49,6 +49,20 @@ pub struct ColorScheme {
     pub scrim: Color,
     pub surface_bright: Color,
     pub surface_dim: Color,
+    /// The fixed roles, as `primaryFixed` and the rest: tones that stay the same in the light
+    /// and dark schemes.
+    pub primary_fixed: Color,
+    pub primary_fixed_dim: Color,
+    pub on_primary_fixed: Color,
+    pub on_primary_fixed_variant: Color,
+    pub secondary_fixed: Color,
+    pub secondary_fixed_dim: Color,
+    pub on_secondary_fixed: Color,
+    pub on_secondary_fixed_variant: Color,
+    pub tertiary_fixed: Color,
+    pub tertiary_fixed_dim: Color,
+    pub on_tertiary_fixed: Color,
+    pub on_tertiary_fixed_variant: Color,
 }
 
 const fn argb(value: u32) -> Color {
@@ -94,6 +108,18 @@ pub const fn light_color_scheme() -> ColorScheme {
         scrim: argb(0xFF000000),
         surface_bright: argb(0xFFFEF7FF),
         surface_dim: argb(0xFFDED8E1),
+        primary_fixed: argb(0xFFEADDFF),
+        primary_fixed_dim: argb(0xFFD0BCFF),
+        on_primary_fixed: argb(0xFF21005D),
+        on_primary_fixed_variant: argb(0xFF4F378B),
+        secondary_fixed: argb(0xFFE8DEF8),
+        secondary_fixed_dim: argb(0xFFCCC2DC),
+        on_secondary_fixed: argb(0xFF1D192B),
+        on_secondary_fixed_variant: argb(0xFF4A4458),
+        tertiary_fixed: argb(0xFFFFD8E4),
+        tertiary_fixed_dim: argb(0xFFEFB8C8),
+        on_tertiary_fixed: argb(0xFF31111D),
+        on_tertiary_fixed_variant: argb(0xFF633B48),
     }
 }
 
@@ -136,6 +162,31 @@ pub const fn dark_color_scheme() -> ColorScheme {
         scrim: argb(0xFF000000),
         surface_bright: argb(0xFF3B383E),
         surface_dim: argb(0xFF141218),
+        primary_fixed: argb(0xFFEADDFF),
+        primary_fixed_dim: argb(0xFFD0BCFF),
+        on_primary_fixed: argb(0xFF21005D),
+        on_primary_fixed_variant: argb(0xFF4F378B),
+        secondary_fixed: argb(0xFFE8DEF8),
+        secondary_fixed_dim: argb(0xFFCCC2DC),
+        on_secondary_fixed: argb(0xFF1D192B),
+        on_secondary_fixed_variant: argb(0xFF4A4458),
+        tertiary_fixed: argb(0xFFFFD8E4),
+        tertiary_fixed_dim: argb(0xFFEFB8C8),
+        on_tertiary_fixed: argb(0xFF31111D),
+        on_tertiary_fixed_variant: argb(0xFF633B48),
+    }
+}
+
+/// The light scheme `MaterialExpressiveTheme` takes by default, as
+/// `expressiveLightColorScheme()`: the baseline light scheme with darker content on the
+/// containers (the palettes' tone 30).
+pub const fn expressive_light_color_scheme() -> ColorScheme {
+    ColorScheme {
+        on_primary_container: argb(0xFF4F378B),
+        on_secondary_container: argb(0xFF4A4458),
+        on_tertiary_container: argb(0xFF633B48),
+        on_error_container: argb(0xFF8C1D18),
+        ..light_color_scheme()
     }
 }
 
@@ -150,36 +201,68 @@ impl ColorScheme {
         self.surface_tint.with_alpha(alpha).composite_over(self.surface)
     }
 
-    /// The content color for `background`, as `contentColorFor`: the matching `on` role.
+    /// The content color for `background`, as `contentColorFor`: the matching `on` role (the
+    /// first match, in Compose's order), else `Color::UNSPECIFIED`.
     pub fn content_color_for(&self, background: Color) -> Color {
         let pairs = [
             (self.primary, self.on_primary),
-            (self.primary_container, self.on_primary_container),
             (self.secondary, self.on_secondary),
-            (self.secondary_container, self.on_secondary_container),
             (self.tertiary, self.on_tertiary),
-            (self.tertiary_container, self.on_tertiary_container),
+            (self.background, self.on_background),
             (self.error, self.on_error),
+            (self.primary_container, self.on_primary_container),
+            (self.secondary_container, self.on_secondary_container),
+            (self.tertiary_container, self.on_tertiary_container),
             (self.error_container, self.on_error_container),
             (self.inverse_surface, self.inverse_on_surface),
-            (self.background, self.on_background),
             (self.surface, self.on_surface),
             (self.surface_variant, self.on_surface_variant),
-            (self.surface_container_lowest, self.on_surface),
-            (self.surface_container_low, self.on_surface),
+            (self.surface_bright, self.on_surface),
             (self.surface_container, self.on_surface),
             (self.surface_container_high, self.on_surface),
             (self.surface_container_highest, self.on_surface),
+            (self.surface_container_low, self.on_surface),
+            (self.surface_container_lowest, self.on_surface),
+            (self.surface_dim, self.on_surface),
+            (self.primary_fixed, self.on_primary_fixed),
+            (self.primary_fixed_dim, self.on_primary_fixed),
+            (self.secondary_fixed, self.on_secondary_fixed),
+            (self.secondary_fixed_dim, self.on_secondary_fixed),
+            (self.tertiary_fixed, self.on_tertiary_fixed),
+            (self.tertiary_fixed_dim, self.on_tertiary_fixed),
         ];
         pairs
             .iter()
             .find(|(color, _)| *color == background)
             .map_or(Color::UNSPECIFIED, |(_, on)| *on)
     }
+
+    /// `background` at `elevation`, as Compose's `applyTonalElevation`: the surface color tinted
+    /// by its elevation while `LOCAL_TONAL_ELEVATION_ENABLED`, any other color as it is.
+    pub(crate) fn apply_tonal_elevation(&self, background: Color, elevation: Dp) -> Color {
+        if background == self.surface && LOCAL_TONAL_ELEVATION_ENABLED.current() {
+            self.surface_color_at_elevation(elevation)
+        } else {
+            background
+        }
+    }
 }
 
+/// The content color for `background` in the current theme, as the composable
+/// `contentColorFor`: its scheme's matching role, else `LOCAL_CONTENT_COLOR`.
+pub fn content_color_for(background: Color) -> Color {
+    MaterialTheme::color_scheme().content_color_for(background).or(LOCAL_CONTENT_COLOR.current())
+}
+
+/// Whether surfaces below tint their surface color by their tonal elevation, as Compose's
+/// `LocalTonalElevationEnabled` (on by default).
+pub static LOCAL_TONAL_ELEVATION_ENABLED: CompositionLocal<bool> =
+    CompositionLocal::new("LocalTonalElevationEnabled", || true);
+
 /// The theme's text styles, as Compose's `Typography` (Material 3's type scale,
-/// `TypeScaleTokens`).
+/// `TypeScaleTokens`), and their emphasized versions. `Typography::default()` is Compose's
+/// `Typography()`, [`from_font_family`](Typography::from_font_family) its
+/// `Typography(fontFamily)`.
 #[derive(Clone, PartialEq, Debug)]
 pub struct Typography {
     pub display_large: TextStyle,
@@ -197,6 +280,21 @@ pub struct Typography {
     pub label_large: TextStyle,
     pub label_medium: TextStyle,
     pub label_small: TextStyle,
+    pub display_large_emphasized: TextStyle,
+    pub display_medium_emphasized: TextStyle,
+    pub display_small_emphasized: TextStyle,
+    pub headline_large_emphasized: TextStyle,
+    pub headline_medium_emphasized: TextStyle,
+    pub headline_small_emphasized: TextStyle,
+    pub title_large_emphasized: TextStyle,
+    pub title_medium_emphasized: TextStyle,
+    pub title_small_emphasized: TextStyle,
+    pub body_large_emphasized: TextStyle,
+    pub body_medium_emphasized: TextStyle,
+    pub body_small_emphasized: TextStyle,
+    pub label_large_emphasized: TextStyle,
+    pub label_medium_emphasized: TextStyle,
+    pub label_small_emphasized: TextStyle,
 }
 
 /// How Material 3's text styles spread their line height, as `DefaultLineHeightStyle`
@@ -238,12 +336,33 @@ impl TypeScaleTokens {
     pub const LABEL_LARGE: TypeScaleToken = token(14.0, 20.0, 0.1, FontWeight::MEDIUM);
     pub const LABEL_MEDIUM: TypeScaleToken = token(12.0, 16.0, 0.5, FontWeight::MEDIUM);
     pub const LABEL_SMALL: TypeScaleToken = token(11.0, 16.0, 0.5, FontWeight::MEDIUM);
+    pub const DISPLAY_LARGE_EMPHASIZED: TypeScaleToken = token(57.0, 64.0, 0.0, FontWeight::MEDIUM);
+    pub const DISPLAY_MEDIUM_EMPHASIZED: TypeScaleToken =
+        token(45.0, 52.0, 0.0, FontWeight::MEDIUM);
+    pub const DISPLAY_SMALL_EMPHASIZED: TypeScaleToken = token(36.0, 44.0, 0.0, FontWeight::MEDIUM);
+    pub const HEADLINE_LARGE_EMPHASIZED: TypeScaleToken =
+        token(32.0, 40.0, 0.0, FontWeight::MEDIUM);
+    pub const HEADLINE_MEDIUM_EMPHASIZED: TypeScaleToken =
+        token(28.0, 36.0, 0.0, FontWeight::MEDIUM);
+    pub const HEADLINE_SMALL_EMPHASIZED: TypeScaleToken =
+        token(24.0, 32.0, 0.0, FontWeight::MEDIUM);
+    pub const TITLE_LARGE_EMPHASIZED: TypeScaleToken = token(22.0, 28.0, 0.0, FontWeight::MEDIUM);
+    pub const TITLE_MEDIUM_EMPHASIZED: TypeScaleToken = token(16.0, 24.0, 0.15, FontWeight::BOLD);
+    pub const TITLE_SMALL_EMPHASIZED: TypeScaleToken = token(14.0, 20.0, 0.1, FontWeight::BOLD);
+    pub const BODY_LARGE_EMPHASIZED: TypeScaleToken = token(16.0, 24.0, 0.15, FontWeight::MEDIUM);
+    pub const BODY_MEDIUM_EMPHASIZED: TypeScaleToken = token(14.0, 20.0, 0.25, FontWeight::MEDIUM);
+    pub const BODY_SMALL_EMPHASIZED: TypeScaleToken = token(12.0, 16.0, 0.4, FontWeight::MEDIUM);
+    pub const LABEL_LARGE_EMPHASIZED: TypeScaleToken = token(14.0, 20.0, 0.1, FontWeight::BOLD);
+    pub const LABEL_MEDIUM_EMPHASIZED: TypeScaleToken = token(12.0, 16.0, 0.5, FontWeight::BOLD);
+    pub const LABEL_SMALL_EMPHASIZED: TypeScaleToken = token(11.0, 16.0, 0.5, FontWeight::BOLD);
 }
 
-/// A type scale entry as a text style, as `TypographyTokens`: Material's default text style
-/// (`DefaultTextStyle`: its line height style) with the token's values.
-const fn style(token: TypeScaleToken) -> TextStyle {
+/// A type scale entry as a text style in `font_family`, as `TypographyTokens`: Material's
+/// default text style (`DefaultTextStyle`: its line height style) with the token's values. The
+/// tokens' fonts (`TypefaceTokens.Brand` and `Plain`) are both sans serif.
+const fn style(token: TypeScaleToken, font_family: FontFamily) -> TextStyle {
     TextStyle {
+        font_family: Some(font_family),
         font_size: TextUnit::sp(token.size),
         font_weight: Some(token.weight),
         line_height: TextUnit::sp(token.line_height),
@@ -254,50 +373,149 @@ const fn style(token: TypeScaleToken) -> TextStyle {
 
 impl Default for Typography {
     fn default() -> Self {
-        Typography {
-            display_large: style(TypeScaleTokens::DISPLAY_LARGE),
-            display_medium: style(TypeScaleTokens::DISPLAY_MEDIUM),
-            display_small: style(TypeScaleTokens::DISPLAY_SMALL),
-            headline_large: style(TypeScaleTokens::HEADLINE_LARGE),
-            headline_medium: style(TypeScaleTokens::HEADLINE_MEDIUM),
-            headline_small: style(TypeScaleTokens::HEADLINE_SMALL),
-            title_large: style(TypeScaleTokens::TITLE_LARGE),
-            title_medium: style(TypeScaleTokens::TITLE_MEDIUM),
-            title_small: style(TypeScaleTokens::TITLE_SMALL),
-            body_large: style(TypeScaleTokens::BODY_LARGE),
-            body_medium: style(TypeScaleTokens::BODY_MEDIUM),
-            body_small: style(TypeScaleTokens::BODY_SMALL),
-            label_large: style(TypeScaleTokens::LABEL_LARGE),
-            label_medium: style(TypeScaleTokens::LABEL_MEDIUM),
-            label_small: style(TypeScaleTokens::LABEL_SMALL),
-        }
+        Typography::from_font_family(FontFamily::SansSerif)
     }
 }
 
-/// The theme's corner shapes, as Compose's `Shapes`.
-#[derive(Clone, PartialEq, Debug)]
+impl Typography {
+    /// The type scale in `font_family`, as `Typography(fontFamily)`. Styles given by struct
+    /// update keep theirs; [`with_default_font_family`](Self::with_default_font_family) gives
+    /// them this one where they have none, as Compose's constructor does.
+    pub const fn from_font_family(font_family: FontFamily) -> Typography {
+        Typography {
+            display_large: style(TypeScaleTokens::DISPLAY_LARGE, font_family),
+            display_medium: style(TypeScaleTokens::DISPLAY_MEDIUM, font_family),
+            display_small: style(TypeScaleTokens::DISPLAY_SMALL, font_family),
+            headline_large: style(TypeScaleTokens::HEADLINE_LARGE, font_family),
+            headline_medium: style(TypeScaleTokens::HEADLINE_MEDIUM, font_family),
+            headline_small: style(TypeScaleTokens::HEADLINE_SMALL, font_family),
+            title_large: style(TypeScaleTokens::TITLE_LARGE, font_family),
+            title_medium: style(TypeScaleTokens::TITLE_MEDIUM, font_family),
+            title_small: style(TypeScaleTokens::TITLE_SMALL, font_family),
+            body_large: style(TypeScaleTokens::BODY_LARGE, font_family),
+            body_medium: style(TypeScaleTokens::BODY_MEDIUM, font_family),
+            body_small: style(TypeScaleTokens::BODY_SMALL, font_family),
+            label_large: style(TypeScaleTokens::LABEL_LARGE, font_family),
+            label_medium: style(TypeScaleTokens::LABEL_MEDIUM, font_family),
+            label_small: style(TypeScaleTokens::LABEL_SMALL, font_family),
+            display_large_emphasized: style(TypeScaleTokens::DISPLAY_LARGE_EMPHASIZED, font_family),
+            display_medium_emphasized: style(
+                TypeScaleTokens::DISPLAY_MEDIUM_EMPHASIZED,
+                font_family,
+            ),
+            display_small_emphasized: style(TypeScaleTokens::DISPLAY_SMALL_EMPHASIZED, font_family),
+            headline_large_emphasized: style(
+                TypeScaleTokens::HEADLINE_LARGE_EMPHASIZED,
+                font_family,
+            ),
+            headline_medium_emphasized: style(
+                TypeScaleTokens::HEADLINE_MEDIUM_EMPHASIZED,
+                font_family,
+            ),
+            headline_small_emphasized: style(
+                TypeScaleTokens::HEADLINE_SMALL_EMPHASIZED,
+                font_family,
+            ),
+            title_large_emphasized: style(TypeScaleTokens::TITLE_LARGE_EMPHASIZED, font_family),
+            title_medium_emphasized: style(TypeScaleTokens::TITLE_MEDIUM_EMPHASIZED, font_family),
+            title_small_emphasized: style(TypeScaleTokens::TITLE_SMALL_EMPHASIZED, font_family),
+            body_large_emphasized: style(TypeScaleTokens::BODY_LARGE_EMPHASIZED, font_family),
+            body_medium_emphasized: style(TypeScaleTokens::BODY_MEDIUM_EMPHASIZED, font_family),
+            body_small_emphasized: style(TypeScaleTokens::BODY_SMALL_EMPHASIZED, font_family),
+            label_large_emphasized: style(TypeScaleTokens::LABEL_LARGE_EMPHASIZED, font_family),
+            label_medium_emphasized: style(TypeScaleTokens::LABEL_MEDIUM_EMPHASIZED, font_family),
+            label_small_emphasized: style(TypeScaleTokens::LABEL_SMALL_EMPHASIZED, font_family),
+        }
+    }
+
+    /// Every style without a font family in `font_family`, as `Typography(fontFamily, …)` does
+    /// with the styles it's given (`withDefaultFontFamily`).
+    pub fn with_default_font_family(mut self, font_family: FontFamily) -> Typography {
+        for style in [
+            &mut self.display_large,
+            &mut self.display_medium,
+            &mut self.display_small,
+            &mut self.headline_large,
+            &mut self.headline_medium,
+            &mut self.headline_small,
+            &mut self.title_large,
+            &mut self.title_medium,
+            &mut self.title_small,
+            &mut self.body_large,
+            &mut self.body_medium,
+            &mut self.body_small,
+            &mut self.label_large,
+            &mut self.label_medium,
+            &mut self.label_small,
+            &mut self.display_large_emphasized,
+            &mut self.display_medium_emphasized,
+            &mut self.display_small_emphasized,
+            &mut self.headline_large_emphasized,
+            &mut self.headline_medium_emphasized,
+            &mut self.headline_small_emphasized,
+            &mut self.title_large_emphasized,
+            &mut self.title_medium_emphasized,
+            &mut self.title_small_emphasized,
+            &mut self.body_large_emphasized,
+            &mut self.body_medium_emphasized,
+            &mut self.body_small_emphasized,
+            &mut self.label_large_emphasized,
+            &mut self.label_medium_emphasized,
+            &mut self.label_small_emphasized,
+        ] {
+            if style.font_family.is_none() {
+                style.font_family = Some(font_family);
+            }
+        }
+        self
+    }
+}
+
+/// The theme's corner shapes, as Compose's `Shapes`; `Shapes::default()` is `Shapes()`
+/// (`ShapeDefaults`).
+#[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Shapes {
     pub extra_small: Shape,
     pub small: Shape,
     pub medium: Shape,
     pub large: Shape,
     pub extra_large: Shape,
+    pub large_increased: Shape,
+    pub extra_large_increased: Shape,
+    pub extra_extra_large: Shape,
 }
 
-fn rounded(radius: f32) -> Shape {
-    Shape::Rounded([CornerSize::Dp(radius.dp()); 4])
+const fn rounded(radius: f32) -> Shape {
+    Shape::Rounded([CornerSize::Dp(Dp(radius)); 4])
 }
 
 impl Default for Shapes {
     fn default() -> Self {
         Shapes {
-            extra_small: rounded(4.0),
-            small: rounded(8.0),
-            medium: rounded(12.0),
-            large: rounded(16.0),
-            extra_large: rounded(28.0),
+            extra_small: ShapeDefaults::EXTRA_SMALL,
+            small: ShapeDefaults::SMALL,
+            medium: ShapeDefaults::MEDIUM,
+            large: ShapeDefaults::LARGE,
+            extra_large: ShapeDefaults::EXTRA_LARGE,
+            large_increased: ShapeDefaults::LARGE_INCREASED,
+            extra_large_increased: ShapeDefaults::EXTRA_LARGE_INCREASED,
+            extra_extra_large: ShapeDefaults::EXTRA_EXTRA_LARGE,
         }
     }
+}
+
+/// The shapes `Shapes` takes by default, as Compose's `ShapeDefaults` (`ShapeTokens`).
+pub struct ShapeDefaults;
+
+impl ShapeDefaults {
+    pub const EXTRA_SMALL: Shape = rounded(4.0);
+    pub const SMALL: Shape = rounded(8.0);
+    pub const MEDIUM: Shape = rounded(12.0);
+    pub const LARGE: Shape = rounded(16.0);
+    pub const LARGE_INCREASED: Shape = rounded(20.0);
+    pub const EXTRA_LARGE: Shape = rounded(28.0);
+    pub const EXTRA_LARGE_INCREASED: Shape = rounded(32.0);
+    pub const EXTRA_EXTRA_LARGE: Shape = rounded(48.0);
 }
 
 macro_rules! compose_arg_by_eq {
@@ -366,12 +584,55 @@ pub fn MaterialTheme(
             LOCAL_SHAPES.provides(shapes),
             LOCAL_TYPOGRAPHY.provides(typography),
             LOCAL_TEXT_SELECTION_COLORS.provides(selection_colors),
-            // The body text style, as Compose's (and no content color: surfaces give it).
-            LOCAL_TEXT_STYLE.provides(body_large),
         ),
-        || content(),
+        || {
+            // The body text style, as Compose's (and no content color: surfaces give it).
+            ProvideTextStyle(body_large.clone(), content.clone());
+        },
     );
 }
+
+/// `value` merged into the current text style for `content`, as Compose's `ProvideTextStyle`:
+/// what it sets wins, the rest stays.
+#[composable]
+pub fn ProvideTextStyle(value: TextStyle, content: impl Fn() + 'static) {
+    let merged = LOCAL_TEXT_STYLE.current().merge(&value);
+    CompositionLocalProvider(LOCAL_TEXT_STYLE.provides(merged), || content());
+}
+
+/// An expressive theme, as Compose's `MaterialExpressiveTheme` (without its motion scheme,
+/// which compose-rs's theme doesn't carry yet): outside another expressive theme, what isn't
+/// given is `expressive_light_color_scheme()`, `Shapes::default()` and `Typography::default()`;
+/// inside one, the enclosing theme's.
+#[composable]
+pub fn MaterialExpressiveTheme(
+    #[default(None)] color_scheme: Option<ColorScheme>,
+    #[default(None)] shapes: Option<Shapes>,
+    #[default(None)] typography: Option<Typography>,
+    content: impl Fn() + 'static,
+) {
+    if LOCAL_USING_EXPRESSIVE_THEME.current() {
+        MaterialTheme(
+            color_scheme.unwrap_or_else(MaterialTheme::color_scheme),
+            shapes.unwrap_or_else(MaterialTheme::shapes),
+            typography.unwrap_or_else(MaterialTheme::typography),
+            content,
+        );
+    } else {
+        CompositionLocalProvider(LOCAL_USING_EXPRESSIVE_THEME.provides(true), || {
+            MaterialTheme(
+                color_scheme.unwrap_or_else(expressive_light_color_scheme),
+                shapes.unwrap_or_default(),
+                typography.unwrap_or_default(),
+                content.clone(),
+            );
+        });
+    }
+}
+
+/// Whether an expressive theme is around, as Compose's `LocalUsingExpressiveTheme`.
+static LOCAL_USING_EXPRESSIVE_THEME: CompositionLocal<bool> =
+    CompositionLocal::new("LocalUsingExpressiveTheme", || false);
 
 /// The selection colors of a scheme, as Compose's `rememberTextSelectionColors`: the primary
 /// color's handles, its highlight at 40 % (`TextSelectionBackgroundOpacity`).
@@ -389,7 +650,35 @@ const TEXT_SELECTION_BACKGROUND_OPACITY: f32 = 0.4;
 /// the name in the value namespace).
 pub struct MaterialTheme {}
 
+/// The current theme's values, as Compose's `MaterialTheme.Values` (what
+/// `MaterialTheme.LocalMaterialTheme` holds; compose-rs keeps the theme in a local each).
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct MaterialThemeValues {
+    pub color_scheme: ColorScheme,
+    pub typography: Typography,
+    pub shapes: Shapes,
+}
+
+impl Default for MaterialThemeValues {
+    fn default() -> Self {
+        MaterialThemeValues {
+            color_scheme: light_color_scheme(),
+            typography: Typography::default(),
+            shapes: Shapes::default(),
+        }
+    }
+}
+
 impl MaterialTheme {
+    /// The current theme's values, as `MaterialTheme.LocalMaterialTheme.current`.
+    pub fn values() -> MaterialThemeValues {
+        MaterialThemeValues {
+            color_scheme: LOCAL_COLOR_SCHEME.current(),
+            typography: LOCAL_TYPOGRAPHY.current(),
+            shapes: LOCAL_SHAPES.current(),
+        }
+    }
+
     pub fn color_scheme() -> ColorScheme {
         LOCAL_COLOR_SCHEME.current()
     }

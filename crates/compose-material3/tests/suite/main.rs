@@ -54,5 +54,7 @@ mod snackbar;
 mod surface;
 mod swipe_to_dismiss;
 mod tab;
+mod text;
 mod text_field;
 mod text_selection_colors;
+mod theme;

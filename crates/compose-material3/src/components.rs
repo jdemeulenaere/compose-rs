@@ -328,8 +328,7 @@ pub(crate) fn surface(
     let content_color =
         content_color.or(scheme.content_color_for(color)).or(LOCAL_CONTENT_COLOR.current());
     let elevation = Dp(LOCAL_ABSOLUTE_TONAL_ELEVATION.current().0 + tonal_elevation.0);
-    let color =
-        if color == scheme.surface { scheme.surface_color_at_elevation(elevation) } else { color };
+    let color = scheme.apply_tonal_elevation(color, elevation);
     let modifier = match click {
         // At least the touch target, the state layer in the content color, as Compose's
         // clickable `Surface` (`ripple()` over `LocalContentColor`).
