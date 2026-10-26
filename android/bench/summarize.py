@@ -196,17 +196,23 @@ def navigation_summary(navigation):
 def counters_lines(counters):
     """measure.py --counters (D660): for each scenario and subject, each thread group's median
     instructions per frame (millions), the runs' spread ((max - min) / median), its IPC and the
-    kernel's share of its instructions; then the subject's problems, if any."""
+    kernel's share of its instructions; then the subject's problems, if any. The calibration
+    (`idle`, the feed at rest) is in instructions per second."""
     lines = []
     for scenario, result in counters["scenarios"].items():
+        idle = scenario == "idle"
+        metric, unit = (("instructions_per_second", "M/s") if idle
+                        else ("instructions_per_frame", "M/frame"))
         for name, subject in result["subjects"].items():
-            s = subject["summary"]
+            s = subject.get("summary")
+            if s is None:
+                continue
             parts = []
             for group, metrics in s["groups"].items():
-                per_frame = metrics.get("instructions_per_frame", {})
+                per_frame = metrics.get(metric, {})
                 if per_frame.get("median") is None:
                     continue
-                text = f"{group} {per_frame['median'] / 1e6:.2f} M/frame"
+                text = f"{group} {per_frame['median'] / 1e6:.2f} {unit}"
                 if per_frame.get("spread") is not None:
                     text += f" (spread {100 * per_frame['spread']:.1f}%)"
                 ipc = metrics.get("ipc", {}).get("median")
@@ -223,9 +229,14 @@ def counters_lines(counters):
                         text += f" (spread {100 * navigation['spread']:.1f}%)"
                 parts.append(text)
             frames = s["frames"]["median"]
-            lines.append(f"counters {scenario} {name} ({s['runs']} runs, "
-                         + (f"{frames:.0f}" if frames is not None else "no")
-                         + " frames): " + " | ".join(parts))
+            if idle:
+                what = "at rest"
+            else:
+                what = (f"{frames:.0f}" if frames is not None else "no") + " frames"
+                if s.get("frame_scale_uncertainty_max") is not None:
+                    what += f", frames scaled ±{100 * s['frame_scale_uncertainty_max']:.2f}%"
+            lines.append(f"counters {scenario} {name} ({s['runs']} runs, {what}): "
+                         + " | ".join(parts))
             if s["problems"]:
                 lines.append(f"counters {scenario} {name} problems: {'; '.join(s['problems'])}")
     return lines

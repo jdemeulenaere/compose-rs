@@ -1541,12 +1541,20 @@ class CountersTest(unittest.TestCase):
             "simpleperf stat -p 4242 --per-thread -e instructions:u,instructions:k,cpu-cycles "
             "--csv --verbose -o /data/local/tmp/c.csv sh -c '"), command)
         self.assertIn("echo START $(date +%s%N); dumpsys gfxinfo rs.compose.bench.rs reset > /dev/null; "
-                      "echo READY", command)
+                      "echo TASKS_READY $(ls /proc/4242/task); echo READY", command)
         self.assertIn("read line;", command)
-        self.assertIn("dumpsys gfxinfo rs.compose.bench.rs > /data/local/tmp/g.txt", command)
+        self.assertIn("dumpsys gfxinfo rs.compose.bench.rs > /data/local/tmp/g.txt; "
+                      "for t in /proc/4242/task/*; do echo TASK_END ${t##*/} $(cat $t/comm); done; "
+                      "echo END", command)
         timed = measure.counter_command(1, "p", self.EVENTS, "o", "g", duration_s=10)
         self.assertIn("sleep 10;", timed)
         self.assertNotIn("read line", timed)
+        self.assertNotIn("framestats", timed)
+        # An animation's: framestats at the reset and at the read, for its frame rate.
+        animated = measure.counter_command(1, "p", self.EVENTS, "o", "g", duration_s=30,
+                                           gfx_start="g0")
+        self.assertIn("dumpsys gfxinfo p framestats reset > g0;", animated)
+        self.assertIn("dumpsys gfxinfo p framestats > g;", animated)
 
     def test_the_workloads_window(self):
         """gfxinfo's reset and read each happen within their dumpsys: the frames' window runs
@@ -1554,17 +1562,35 @@ class CountersTest(unittest.TestCase):
         out = "START 900000000\nREADY 1000000000\nEND 11000000000 11050000000\n"
         self.assertEqual(measure.workload_window(out),
                          {"start_ns": 900000000, "ready_ns": 1000000000, "stop_ns": 11000000000,
-                          "end_ns": 11050000000, "frame_window_s": 10.075})
+                          "end_ns": 11050000000, "frame_window_s": 10.075, "tasks_ready": [],
+                          "tasks_end": {}})
         self.assertIsNone(measure.workload_window("START 1\nREADY 1\n"))
 
     def test_frames_in_the_counting_window(self):
-        """An animation draws all the time: its frames are scaled from gfxinfo's window to the
-        counting window (simpleperf's, a little longer). A scroll's or a navigation's window
-        starts and ends idle: its frames are gfxinfo's."""
-        window = {"frame_window_s": 10.0}
-        self.assertEqual(measure.frames_in_window(1200, 10.2, window, continuous=True), 1224.0)
-        self.assertEqual(measure.frames_in_window(1200, 10.2, window, continuous=False), 1200)
-        self.assertEqual(measure.frames_in_window(1200, None, window, continuous=True), 1200)
+        """An animation draws all the time: its frames in the counting window (simpleperf's, a
+        little longer than gfxinfo's) are its frame rate times the window. A scroll's or a
+        navigation's window starts and ends idle: its frames are gfxinfo's."""
+        rate = {"fps": 120.0, "span_s": 29.9, "fps_last": 120.0}
+        self.assertEqual(measure.frames_in_window(3588, 30.2, rate, continuous=True), 3624.0)
+        self.assertEqual(measure.frames_in_window(3588, 30.2, rate, continuous=False), 3588)
+        self.assertEqual(measure.frames_in_window(3588, None, rate, continuous=True), 3588)
+        self.assertEqual(measure.frames_in_window(3588, 30.2, None, continuous=True), 3588)
+
+    def test_the_frame_rate_from_framestats(self):
+        """The frames counted since gfxinfo's reset completed after the latest frame listed at
+        the reset and by the latest listed at the read (framestats' `FrameCompleted`, the same
+        clock): the rate over that span, and over the read's last frames listed."""
+        def stats(completed):
+            rows = "".join(f"0,{t - 8_000_000},{t},\n" for t in completed)
+            return f"---PROFILEDATA---\nFlags,IntendedVsync,FrameCompleted,\n{rows}---PROFILEDATA---\n"
+        start = stats([1_000_000_000, 1_008_333_333])
+        end = stats([1_008_333_333 + 8_333_333 * k for k in range(2401, 2521)])
+        rate = measure.framestats_rate(start, end, frames=2520)
+        self.assertAlmostEqual(rate["span_s"], 2520 * 8_333_333 / 1e9)
+        self.assertAlmostEqual(rate["fps"], 2520 / rate["span_s"])
+        self.assertAlmostEqual(rate["fps_last"], 119 / (119 * 8_333_333 / 1e9))
+        self.assertIsNone(measure.framestats_rate("", end, frames=2520))
+        self.assertIsNone(measure.framestats_rate(start, end, frames=0))
 
     def test_hw_counters(self):
         self.assertEqual(measure.hw_counters(HW_COUNTERS), {0: 4, 7: 4, 8: 3})
@@ -1630,6 +1656,231 @@ class CountersTest(unittest.TestCase):
         lines = summarize.counters_lines(counters)
         self.assertIn("total 20.00 M/frame (spread 1.0%) IPC 1.25 kernel 5%, "
                       "210.0 M/navigation (spread 1.0%)", lines[0])
+        # The calibration (the feed at rest) in M instructions per second; an animation's frame
+        # scaling with its uncertainty.
+        idle = {group: {"instructions_per_second": spread(value), "ipc": spread(0.5),
+                        "kernel_share": spread(0.4), "threads": {}}
+                for group, value in (("main", 1.0e6), ("total", 3.0e6))}
+        counters["scenarios"] = {"idle": {"subjects": {"rs": {"summary": {
+            "runs": 3, "frames": spread(0), "groups": idle, "running_ratio_min": 1.0,
+            "problems": []}}}}}
+        counters["scenarios"]["stress_animation"] = {"subjects": {"compose": {"summary": {
+            "runs": 3, "frames": spread(1200), "groups": groups, "running_ratio_min": 1.0,
+            "frame_scale_uncertainty_max": 0.004, "problems": ["run 0: x"]}}}}
+        lines = summarize.counters_lines(counters)
+        self.assertEqual(lines[0], "counters idle rs (3 runs, at rest): main 1.00 M/s "
+                                   "(spread 1.0%) IPC 0.50 kernel 40% | total 3.00 M/s "
+                                   "(spread 1.0%) IPC 0.50 kernel 40%")
+        self.assertIn("(3 runs, 1200 frames, frames scaled ±0.40%)", lines[1])
+        self.assertEqual(lines[2], "counters stress_animation compose problems: run 0: x")
+
+
+class FakeCounting:
+    """`count_while`'s device: a fake `adb shell` process (the workload's output before and after
+    the host's stop line) and a fake `shell` (its commands recorded)."""
+
+    def __init__(self, before, after="", stderr="", returncode=0, csv=None, frames=100,
+                 frames_after=None):
+        self.before, self.after, self.stderr, self.code = before, after, stderr, returncode
+        self.csv = csv if csv is not None else SIMPLEPERF_STAT
+        self.frames = frames
+        self.frames_after = frames if frames_after is None else frames_after
+        self.commands = []
+        self.killed = False
+        self.stdin = io.StringIO()
+        self.stdout = None
+        self.returncode = None
+
+    def shell(self, command):
+        self.commands.append(command)
+        if command.startswith("pidof"):
+            return "32617\n"
+        if command.startswith("cat ") and command.endswith(".csv"):
+            return self.csv
+        if command.startswith("cat "):
+            return f"Total frames rendered: {self.frames}\n"
+        if command.startswith("dumpsys gfxinfo") and self.stdout is not None:
+            return f"Total frames rendered: {self.frames_after}\n"
+        return ""
+
+    def popen(self, argv, **kwargs):
+        self.commands.append("popen " + argv[-1][:20])
+        self.stdout = io.StringIO(self.before)
+        self.stdin.close = lambda: None
+        return self
+
+    def communicate(self, timeout=None):
+        self.returncode = self.code
+        return self.after, self.stderr
+
+    def poll(self):
+        return self.returncode
+
+    def kill(self):
+        self.killed = True
+        self.returncode = -9
+
+
+class CountersReviewTest(unittest.TestCase):
+    EVENTS = ("instructions:u", "instructions:k", "cpu-cycles")
+    BEFORE = "START 100\nTASKS_READY 32617 32632 32640 32999\nREADY 200\n"
+    AFTER = ("TASK_END 32617 ompose.bench.rs\nTASK_END 32632 RenderThread\n"
+             "TASK_END 32640 hwuiTask0\nTASK_END 33001 binder:32617_4\nEND 10300 10400\n")
+
+    def test_the_handshake(self):
+        """The host's input comes after READY and before the stop line; the counts, the frames
+        and the threads at both ends come back; the device's files are removed."""
+        device = FakeCounting(self.BEFORE, self.AFTER)
+        seen = {}
+
+        def body():
+            seen["stdin_at_body"] = device.stdin.getvalue()
+
+        parsed, frames, gfx, window = measure.count_while(
+            "rs.compose.bench.rs", self.EVENTS, body, run_shell=device.shell, popen=device.popen)
+        self.assertEqual(seen["stdin_at_body"], "")
+        self.assertEqual(device.stdin.getvalue(), "stop\n")
+        self.assertEqual(frames, 100)
+        self.assertEqual(gfx["frames"], 100)
+        self.assertEqual(len(parsed["threads"]), 3)
+        self.assertEqual(window["tasks_ready"], [32617, 32632, 32640, 32999])
+        self.assertEqual(window["tasks_end"][33001], "binder:32617_4")
+        self.assertEqual(window["frames_after"], 100)
+        self.assertTrue(any(command.startswith("rm -f") for command in
+                            device.commands[device.commands.index("cat " + measure.COUNTER_FILES["gfx"]):]))
+        self.assertFalse(device.killed)
+        # With a duration, nothing is written to the workload.
+        device = FakeCounting(self.BEFORE, self.AFTER)
+        measure.count_while("p", self.EVENTS, duration_s=30, run_shell=device.shell,
+                            popen=device.popen)
+        self.assertEqual(device.stdin.getvalue(), "")
+
+    def test_the_handshake_fails(self):
+        """No READY (simpleperf failed): the process is killed, the run stops, the files go."""
+        device = FakeCounting("simpleperf E cmd_stat.cpp] failed to open\n", stderr="boom")
+        with self.assertRaises(SystemExit):
+            measure.count_while("p", self.EVENTS, lambda: self.fail("no body without READY"),
+                                run_shell=device.shell, popen=device.popen)
+        self.assertTrue(device.killed)
+        self.assertTrue(device.commands[-1].startswith("rm -f"))
+        # A workload that never ends (no END): the run stops too.
+        device = FakeCounting(self.BEFORE, "TASK_END 1 x\n")
+        with self.assertRaises(SystemExit):
+            measure.count_while("p", self.EVENTS, run_shell=device.shell, popen=device.popen)
+        self.assertTrue(device.commands[-1].startswith("rm -f"))
+
+    def test_threads_born_or_ended_in_the_window(self):
+        window = measure.workload_window(self.BEFORE + self.AFTER)
+        parsed = measure.parse_simpleperf_stat(SIMPLEPERF_STAT, self.EVENTS)
+        self.assertEqual(measure.thread_problems(window, parsed), [
+            "thread binder:32617_4 (33001) started in the window: counted with its creator's",
+            "thread 32999 ended in the window"])
+        # A thread alive at both ends with no row of simpleperf's isn't counted at all.
+        window["tasks_ready"].append(33002)
+        window["tasks_end"][33002] = "Jit thread pool"
+        self.assertIn("thread Jit thread pool (33002) has no simpleperf row",
+                      measure.thread_problems(window, parsed))
+        # Threads with rows but no count (idle) aren't in the summary, and are fine.
+        parsed["row_tids"].append(33002)
+        self.assertNotIn("thread Jit thread pool (33002) has no simpleperf row",
+                         measure.thread_problems(window, parsed))
+
+    def test_rows_and_mismatches(self):
+        parsed = measure.parse_simpleperf_stat(SIMPLEPERF_STAT, self.EVENTS)
+        self.assertEqual(sorted(parsed["row_tids"]), [32617, 32632, 32640])
+        changed = SIMPLEPERF_STAT.replace("ompose.bench.rs,32617,32617,40646062,instructions:k",
+                                          "ompose.bench.rs,32617,32617,40646063,instructions:k")
+        self.assertEqual(measure.parse_simpleperf_stat(changed, self.EVENTS)["mismatches"],
+                         ["tid 32617 instructions:k: 40646063 in the summary, 40646062 by CPU"])
+
+    def test_rows_not_counted_and_names_with_commas(self):
+        text = ("Performance counter statistics,\n"
+                "a,b thread,10,11,<not counted>,instructions:u,0,/sec,\n"
+                "a,b thread,10,11,5,cpu-cycles,1.0,GHz,\n"
+                "x,10,12,<not supported>,instructions:u,0,/sec,\n"
+                "Total test time,1.000000,seconds,\n")
+        parsed = measure.parse_simpleperf_stat(text, ("instructions:u", "cpu-cycles"))
+        threads = {thread["tid"]: thread for thread in parsed["threads"]}
+        self.assertEqual(threads[11]["name"], "a,b thread")
+        self.assertEqual(threads[11]["counts"], {"instructions:u": None, "cpu-cycles": 5})
+        self.assertEqual(threads[12]["counts"]["instructions:u"], None)
+        self.assertEqual(parsed["not_counted"], ["a,b thread (11) instructions:u: <not counted>",
+                                                 "x (12) instructions:u: <not supported>"])
+        stats = measure.counter_run_stats(parsed, frames=10, events=("instructions:u", "cpu-cycles"))
+        self.assertIn("a,b thread (11) instructions:u: <not counted>", stats["problems"])
+        # A count not counted adds nothing.
+        self.assertEqual(stats["groups"]["total"]["counts"]["instructions:u"], 0)
+
+    def test_binder_threads_by_kind(self):
+        self.assertEqual(measure.normalize_thread_name("binder:8177_3"), "binder")
+        self.assertEqual(measure.normalize_thread_name("HwBinder:8177_1"), "HwBinder")
+        self.assertEqual(measure.normalize_thread_name("RenderThread"), "RenderThread")
+        threads = [{"tid": 2, "pid": 1, "name": "binder:1_2", "counts": {"cpu-cycles": 1}},
+                   {"tid": 3, "pid": 1, "name": "binder:1_3", "counts": {"cpu-cycles": 2}}]
+        groups = measure.group_counters(threads, ("cpu-cycles",))
+        self.assertEqual(groups["binder"]["threads"], {"binder": 2})
+
+    def test_simpleperfs_warnings(self):
+        warning = ("simpleperf W cmd_stat.cpp:1240] It seems the number of hardware events are "
+                   "more than the number of\navailable CPU PMU hardware counters. That will "
+                   "trigger hardware counter\nmultiplexing.")
+        self.assertEqual(measure.stderr_problems(warning),
+                         ["simpleperf warned of multiplexing (more events than counters)"])
+        self.assertEqual(measure.stderr_problems(""), [])
+        self.assertEqual(measure.stderr_problems("simpleperf E x.cpp] failed"),
+                         ["simpleperf said: simpleperf E x.cpp] failed"])
+
+    def test_continuous_scenarios(self):
+        self.assertTrue(measure.counter_continuous("animation"))
+        self.assertTrue(measure.counter_continuous("stress_animation"))
+        for name in ("scroll", "stress_scroll", "navigation", "idle"):
+            self.assertFalse(measure.counter_continuous(name), name)
+
+    def test_the_frame_scalings_uncertainty(self):
+        """One frame of the span's, plus the window's part outside the span (extrapolated at
+        the rate) times how far the rate drifted (its last frames' against the whole span's)."""
+        rate = {"fps": 120.0, "span_s": 30.0, "fps_last": 118.8}
+        self.assertAlmostEqual(measure.frame_scale_uncertainty(rate, 30.3),
+                               1 / 3600 + (0.3 / 30.3) * (1.2 / 120.0))
+        self.assertIsNone(measure.frame_scale_uncertainty(None, 30.3))
+        self.assertIsNone(measure.frame_scale_uncertainty(rate, None))
+
+    def test_idle_edges(self):
+        """Before counting, the host waits until gfxinfo's frames stop growing; after it, any
+        frame drawn after the window's last read means the window ended drawing."""
+        counts = iter([10, 12, 14, 15, 15, 15, 15, 15])
+        slept = []
+        result = measure.wait_idle(lambda: next(counts), slept.append, quiet_s=1.0, poll_s=0.25,
+                                   limit_s=10)
+        self.assertEqual(result, {"waited_s": 1.75, "idle": True})
+        never = measure.wait_idle(iter(range(100)).__next__, lambda s: None, quiet_s=1.0,
+                                  poll_s=0.5, limit_s=2)
+        self.assertEqual(never, {"waited_s": 2.0, "idle": False})
+        self.assertEqual(measure.edge_problems({"idle": True}, 100, 100), [])
+        self.assertEqual(measure.edge_problems({"idle": False, "waited_s": 2.0}, 100, 103), [
+            "the app still drew after waiting 2.0 s for it to idle before the window",
+            "3 frames drawn after the window's last read: it ended drawing"])
+
+    def test_a_missing_group_counts_as_zero(self):
+        def run(hwui):
+            groups = {"main": {"instructions_per_frame": 10.0, "ipc": 1.0, "threads": {}},
+                      "total": {"instructions_per_frame": 10.0 + (hwui or 0), "ipc": 1.0,
+                                "threads": {}}}
+            if hwui is not None:
+                groups["hwuiTask"] = {"instructions_per_frame": hwui, "ipc": 2.0, "threads": {}}
+            return {"frames": 10, "seconds": 1.0, "problems": [],
+                    "running_ratio": {"min": 1.0, "where": None}, "groups": groups}
+        summary = measure.counters_summary([run(None), run(4.0), run(None)])
+        hwui = summary["groups"]["hwuiTask"]
+        self.assertEqual(hwui["instructions_per_frame"]["median"], 0)
+        self.assertEqual(hwui["instructions_per_frame"]["runs"], 3)
+        self.assertEqual(hwui["ipc"]["runs"], 1)
+
+    def test_per_second(self):
+        metrics = measure.counter_run_stats(
+            measure.parse_simpleperf_stat(SIMPLEPERF_STAT, self.EVENTS), 0, self.EVENTS)
+        self.assertAlmostEqual(metrics["groups"]["main"]["instructions_per_second"],
+                               (1518615820 + 40646062) / 3.001741)
 
 
 if __name__ == "__main__":

@@ -122,11 +122,17 @@ starts: simpleperf attaches to a running process), interleaved, with the same co
 thermal guards and locked-clock checks. Each run counts the app's threads with the device's
 simpleperf (`simpleperf stat -p PID --per-thread`, --counter-events: instructions:u,
 instructions:k, cpu-cycles) while a workload on the device resets gfxinfo, waits for the
-scenario's input (or 10 s), then reads gfxinfo: instructions and cycles per thread group (the main
-thread, RenderThread, hwuiTask, the GPU driver's threads, binder, JIT, GC, ART's daemons, other)
-and for the process, per frame drawn in the window, IPC, the kernel's share; the share of each
+scenario's input (or 30 s of an animation), then reads gfxinfo: instructions and cycles per thread
+group (the main thread, RenderThread, hwuiTask, the GPU driver's threads, binder, JIT, GC, ART's
+daemons, other) and for the process, per frame drawn in the window (an animation's from its frame
+rate, by framestats), per navigation, per second, IPC, the kernel's share; the share of each
 thread's running time its counters ran (1 unless multiplexed); and over the runs the median, the
-extremes, the spread and the coefficient of variation.
+extremes, the spread and the coefficient of variation. A scroll's and a navigation's window
+starts once the app is idle and ends 4 s after the last input. Each scenario starts with
+--counter-warmup (1) discarded runs of each subject, and a calibration (`idle`: the feed at rest,
+3 runs a subject) comes first. Each run's `problems` say what may skew it: no frame, multiplexing,
+an edge not idle, threads started or ended in the window (simpleperf inherits: a thread started
+counts with its creator), simpleperf's warnings.
 """
 
 import argparse
@@ -2147,9 +2153,13 @@ def navigation_scenario(tp, out_dir, capacities, subjects, runs, traced_runs, na
 # Pixel 8 Pro's Cortex-X3 (cpu 8) has 3 free counters, and a fourth (cycles split by mode too)
 # made them take turns there: the RenderThread's were counted 77 to 85 % of its running time.
 COUNTER_EVENTS = ("instructions:u", "instructions:k", "cpu-cycles")
-# The screen each counted scenario shows (the timing runs' screens).
+# The screen each counted scenario shows (the timing runs' screens); `idle` is the calibration
+# window: the feed at rest, no input.
 COUNTER_SCREENS = {"scroll": "feed", "animation": "feed_animated", "stress_scroll": "stress",
                    "stress_animation": "stress_animation", "navigation": "navigation"}
+CALIBRATION = "idle"
+# The scenarios that draw all the time: their windows can't start or end idle.
+COUNTER_CONTINUOUS = ("animation", "stress_animation")
 # A cold start can't be counted per thread: simpleperf attaches to a process that exists (with
 # --app, after its first threads ran and started others, whose counts it adds to their creator's).
 COUNTER_SKIPPED = {
@@ -2161,14 +2171,29 @@ COUNTER_GROUPS = ("main", "RenderThread", "hwuiTask", "GPU driver", "binder", "J
                   "ART daemons", "other")
 ART_DAEMONS = ("ReferenceQueueD", "FinalizerDaemon", "FinalizerWatchd", "Signal Catcher",
                "Profile Saver", "ADB-JDWP Connec", "perfetto_hprof_", "Runtime worker")
+# A group's metrics that are zero in a run without the group (the others are None there).
+COUNTED_METRICS = ("instructions", "instructions_u", "instructions_k", "cycles",
+                   "instructions_per_frame", "cycles_per_frame", "instructions_per_second",
+                   "instructions_per_navigation")
 # A counter that ran for less of its thread's running time than this was multiplexed.
 MULTIPLEXED_BELOW = 0.99
 # Threads that ran less than this aren't checked for multiplexing (too short to tell).
 MULTIPLEX_CHECK_MIN_NS = 10_000_000
-# The animations' counted window (the timing runs' traces are as long).
-COUNTER_ANIMATION_S = 10
-COUNTER_CSV = "/data/local/tmp/rs-compose-counters.csv"
-COUNTER_GFX = "/data/local/tmp/rs-compose-counters-gfxinfo.txt"
+# The animations' counted window: long, so that its edges (a few hundred ms) weigh little.
+COUNTER_ANIMATION_S = 30
+# The calibration window (the feed at rest).
+COUNTER_IDLE_S = 10
+# After the scroll's warm-up swipe and the warm-up navigation, the host waits until gfxinfo's
+# frames stop growing for COUNTER_QUIET_S (at most COUNTER_IDLE_LIMIT_S) before counting; after
+# the last fling or navigation, the workload waits COUNTER_SETTLE_S before its last read.
+COUNTER_QUIET_S = 1.0
+COUNTER_IDLE_POLL_S = 0.25
+COUNTER_IDLE_LIMIT_S = 15.0
+COUNTER_SETTLE_S = 4.0
+# The device's files, made unique per invocation by `run_counters`.
+COUNTER_PREFIX = "/data/local/tmp/rs-compose-counters"
+COUNTER_FILES = {"csv": f"{COUNTER_PREFIX}.csv", "gfx": f"{COUNTER_PREFIX}-gfxinfo.txt",
+                 "gfx_start": f"{COUNTER_PREFIX}-gfxinfo-start.txt"}
 
 
 def event_base(event):
@@ -2178,9 +2203,11 @@ def event_base(event):
 
 def parse_simpleperf_stat(text, events):
     """`simpleperf stat --per-thread --csv --verbose`'s output for `events` (in the order given
-    to -e): each thread's {"tid", "pid", "name", "counts": {event: n}, "running": {event: the
-    share of its running time the counter ran, 1 unless multiplexed}, "enabled_ns"}, the counting
-    window's "seconds", and the "mismatches" between the summary and the per-CPU rows.
+    to -e): each thread's {"tid", "pid", "name", "counts": {event: n, None if not counted},
+    "running": {event: the share of its running time the counter ran, 1 unless multiplexed},
+    "enabled_ns"}, the counting window's "seconds", the tids with per-CPU rows ("row_tids": the
+    summary leaves out threads that counted nothing), the counts not counted ("not_counted") and
+    the "mismatches" between the summary and the per-CPU rows.
 
     The per-CPU rows name the event without its modifier, so the n-th row of a thread and CPU
     named `instructions` is the n-th of `events` of that name. The summary's counts are those
@@ -2191,12 +2218,13 @@ def parse_simpleperf_stat(text, events):
     seen = {}
     by_cpu = {}
     summary = {}
+    not_counted = []
     seconds = None
     for line in text.splitlines():
         cells = line.strip().rstrip(",").split(",")
         if len(cells) >= 11 and cells[1] == "tid" and cells[3] == "cpu" and cells[5] == "count":
             names = named.get(cells[0])
-            if not names:
+            if not names or not cells[2].isdigit() or not cells[4].isdigit():
                 continue
             tid, cpu = int(cells[2]), int(cells[4])
             index = seen.get((cells[0], tid, cpu), 0)
@@ -2204,17 +2232,21 @@ def parse_simpleperf_stat(text, events):
             if index >= len(names):
                 continue
             row = by_cpu.setdefault((tid, names[index]), [0, 0, 0])
-            row[0] += int(cells[6])
-            row[1] = max(row[1], int(cells[8]))
-            row[2] += int(cells[10])
+            for slot, cell in ((0, 6), (2, 10)):
+                row[slot] += int(cells[cell]) if cells[cell].isdigit() else 0
+            row[1] = max(row[1], int(cells[8]) if cells[8].isdigit() else 0)
         elif cells[0] == "Total test time" and len(cells) >= 2:
             seconds = float(cells[1])
         elif (len(cells) >= 7 and cells[-6].isdigit() and cells[-5].isdigit()
-              and cells[-4].isdigit() and cells[-3] in events):
+              and (cells[-4].isdigit() or cells[-4].startswith("<not")) and cells[-3] in events):
             tid = int(cells[-5])
             thread = summary.setdefault(tid, {"tid": tid, "pid": int(cells[-6]),
                                               "name": ",".join(cells[:-6]), "counts": {}})
-            thread["counts"][cells[-3]] = int(cells[-4])
+            if cells[-4].isdigit():
+                thread["counts"][cells[-3]] = int(cells[-4])
+            else:
+                thread["counts"][cells[-3]] = None
+                not_counted.append(f"{thread['name']} ({tid}) {cells[-3]}: {cells[-4]}")
     mismatches = []
     threads = []
     for tid, thread in sorted(summary.items()):
@@ -2225,14 +2257,16 @@ def parse_simpleperf_stat(text, events):
             count, enabled, running = by_cpu.get((tid, event), (None, 0, 0))
             thread["running"][event] = running / enabled if enabled else None
             thread["enabled_ns"] = max(thread["enabled_ns"], enabled)
-            if count is not None and count != thread["counts"][event]:
-                mismatches.append(f"tid {tid} {event}: {thread['counts'][event]} in the summary, "
+            summarized = thread["counts"][event]
+            if count is not None and summarized is not None and count != summarized:
+                mismatches.append(f"tid {tid} {event}: {summarized} in the summary, "
                                   f"{count} by CPU")
         threads.append(thread)
     for (tid, event), (count, _, _) in sorted(by_cpu.items()):
         if tid not in summary and count:
             mismatches.append(f"tid {tid} {event}: {count} by CPU, not in the summary")
-    return {"seconds": seconds, "threads": threads, "mismatches": mismatches}
+    return {"seconds": seconds, "threads": threads, "mismatches": mismatches,
+            "not_counted": not_counted, "row_tids": sorted({tid for tid, _ in by_cpu})}
 
 
 def counter_group(name, tid, pid):
@@ -2258,28 +2292,37 @@ def counter_group(name, tid, pid):
     return "other"
 
 
+def normalize_thread_name(name):
+    """A thread's name without its process's number (`binder:8177_3` is `binder`), so the
+    threads listed in a group are the same in every run."""
+    return re.sub(r"^(binder|HwBinder):\d+_\w+$", r"\1", name)
+
+
 def group_counters(threads, events):
     """`parse_simpleperf_stat`'s threads summed by group (`counter_group`), in COUNTER_GROUPS'
-    order, then "total": each group's "counts" and its "threads" (name: how many). The main
-    thread's and the RenderThread's groups are always there."""
+    order, then "total": each group's "counts" (a count not counted adds nothing) and its
+    "threads" (name, `normalize_thread_name`d: how many). The main thread's and the
+    RenderThread's groups are always there."""
     groups = {name: {"threads": {}, "counts": {event: 0 for event in events}}
               for name in COUNTER_GROUPS}
     total = {"threads": {}, "counts": {event: 0 for event in events}}
     for thread in threads:
         group = groups[counter_group(thread["name"], thread["tid"], thread["pid"])]
+        name = normalize_thread_name(thread["name"])
         for target in (group, total):
-            target["threads"][thread["name"]] = target["threads"].get(thread["name"], 0) + 1
+            target["threads"][name] = target["threads"].get(name, 0) + 1
             for event in events:
-                target["counts"][event] += thread["counts"].get(event, 0)
+                target["counts"][event] += thread["counts"].get(event) or 0
     out = {name: group for name, group in groups.items()
            if group["threads"] or name in ("main", "RenderThread")}
     out["total"] = total
     return out
 
 
-def counter_metrics(counts, frames):
+def counter_metrics(counts, frames, seconds=None):
     """A group's instructions and cycles (an event of no modifier is the total; else its `:u`
-    and `:k` summed), IPC, the kernel's share of instructions, and each per frame."""
+    and `:k` summed), IPC, the kernel's share of instructions, and each per frame (and the
+    instructions per second of the counting window)."""
     def total_of(base):
         if base in counts:
             return counts[base]
@@ -2298,6 +2341,8 @@ def counter_metrics(counts, frames):
         "instructions_per_frame": instructions / frames
         if frames and instructions is not None else None,
         "cycles_per_frame": cycles / frames if frames and cycles is not None else None,
+        "instructions_per_second": instructions / seconds
+        if seconds and instructions is not None else None,
         "per_frame": {event: value / frames for event, value in counts.items()} if frames else {},
     }
 
@@ -2305,10 +2350,11 @@ def counter_metrics(counts, frames):
 def counter_run_stats(parsed, frames, events):
     """A counted run: each group's counts and metrics (`counter_metrics`), the lowest share of
     a thread's running time a counter ran (`running_ratio`), and its problems: no frame, no
-    instruction on the main thread or the RenderThread, multiplexed counters, mismatches."""
+    instruction on the main thread or the RenderThread, multiplexed counters, counts not
+    counted, mismatches."""
     groups = {}
     for name, group in group_counters(parsed["threads"], events).items():
-        groups[name] = {**group, **counter_metrics(group["counts"], frames)}
+        groups[name] = {**group, **counter_metrics(group["counts"], frames, parsed["seconds"])}
     lowest = {"min": None, "where": None}
     for thread in parsed["threads"]:
         if thread.get("enabled_ns", MULTIPLEX_CHECK_MIN_NS) < MULTIPLEX_CHECK_MIN_NS:
@@ -2325,6 +2371,7 @@ def counter_run_stats(parsed, frames, events):
     if lowest["min"] is not None and lowest["min"] < MULTIPLEXED_BELOW:
         problems.append(f"counters multiplexed: {lowest['where']} counted "
                         f"{100 * lowest['min']:.1f}% of its running time")
+    problems.extend(parsed.get("not_counted", []))
     problems.extend(parsed["mismatches"])
     return {"frames": frames, "seconds": parsed["seconds"], "groups": groups,
             "running_ratio": lowest, "problems": problems}
@@ -2346,8 +2393,9 @@ def run_spread(values):
 
 def counters_summary(runs):
     """A subject's counted runs: frames, seconds and each group's metrics over the runs
-    (`run_spread`), the threads seen in each group, the lowest running ratio, and the runs'
-    problems."""
+    (`run_spread`; a run without a group counts zero of its COUNTED_METRICS), the threads seen
+    in each group, the lowest running ratio, the frame scaling's largest uncertainty, and the
+    runs' problems."""
     names = []
     for run in runs:
         names.extend(name for name in run["groups"] if name not in names)
@@ -2361,28 +2409,48 @@ def counters_summary(runs):
         for group in present:
             for thread, count in group["threads"].items():
                 threads[thread] = max(threads.get(thread, 0), count)
-        groups[name] = {metric: run_spread([run["groups"].get(name, {}).get(metric)
-                                            for run in runs]) for metric in metrics}
+
+        def value(run, metric):
+            if name in run["groups"]:
+                return run["groups"][name].get(metric)
+            return 0 if metric in COUNTED_METRICS else None
+
+        groups[name] = {metric: run_spread([value(run, metric) for run in runs])
+                        for metric in metrics}
         groups[name]["threads"] = threads
     ratios = [run["running_ratio"]["min"] for run in runs
               if run["running_ratio"]["min"] is not None]
+    scaling = [run["frame_scale"]["uncertainty"] for run in runs
+               if run.get("frame_scale") and run["frame_scale"]["uncertainty"] is not None]
     return {"runs": len(runs), "frames": run_spread([run["frames"] for run in runs]),
             "seconds": run_spread([run["seconds"] for run in runs]), "groups": groups,
             "running_ratio_min": min(ratios) if ratios else None,
+            "frame_scale_uncertainty_max": max(scaling) if scaling else None,
             "problems": [f"run {index}: {problem}" for index, run in enumerate(runs)
                          for problem in run["problems"]]}
 
 
-def counter_command(pid, package, events, out, gfx, duration_s=None):
+def counter_command(pid, package, events, out, gfx, duration_s=None, gfx_start=None):
     """The device's command: simpleperf counting `pid`'s threads (`events`, per thread, CSV
-    with each CPU's rows into `out`) while its workload runs. The workload resets gfxinfo, says
-    `READY <ns>` (`START <ns>` before the reset), waits (`duration_s`, or a line on its input),
-    then writes gfxinfo to `gfx` and says `END <ns before> <ns after>`: the frames it counts were
-    drawn inside the counting window, which starts before the workload and ends after it."""
+    with each CPU's rows into `out`) while its workload runs. The workload resets gfxinfo, lists
+    the process's threads (`TASKS_READY`), says `READY <ns>` (`START <ns>` before the reset),
+    waits (`duration_s`, or a line on its input), then writes gfxinfo to `gfx`, lists the
+    threads with their names (`TASK_END`) and says `END <ns before the read> <ns after>`: the
+    frames it counts were drawn inside the counting window, which starts before the workload and
+    ends after it. simpleperf inherits: a thread started in the window counts with its creator.
+    With `gfx_start`, both dumps are framestats, the reset's written there: the frame rate
+    (`framestats_rate`)."""
     wait = f"sleep {duration_s};" if duration_s else "read line;"
-    workload = (f"echo START $(date +%s%N); dumpsys gfxinfo {package} reset > /dev/null; "
-                f"echo READY $(date +%s%N); {wait} "
-                f"T=$(date +%s%N); dumpsys gfxinfo {package} > {gfx}; "
+    if gfx_start:
+        reset = f"dumpsys gfxinfo {package} framestats reset > {gfx_start};"
+        read = f"dumpsys gfxinfo {package} framestats > {gfx};"
+    else:
+        reset = f"dumpsys gfxinfo {package} reset > /dev/null;"
+        read = f"dumpsys gfxinfo {package} > {gfx};"
+    workload = (f"echo START $(date +%s%N); {reset} "
+                f"echo TASKS_READY $(ls /proc/{pid}/task); echo READY $(date +%s%N); {wait} "
+                f"T=$(date +%s%N); {read} "
+                f"for t in /proc/{pid}/task/*; do echo TASK_END ${{t##*/}} $(cat $t/comm); done; "
                 f"echo END $T $(date +%s%N)")
     return (f"simpleperf stat -p {pid} --per-thread -e {','.join(events)} --csv --verbose "
             f"-o {out} sh -c '{workload}'")
@@ -2390,9 +2458,9 @@ def counter_command(pid, package, events, out, gfx, duration_s=None):
 
 def workload_window(output):
     """The workload's times (`counter_command`): before and after gfxinfo's reset (start,
-    ready) and read (stop, end), in ns, and the frames' window (s): from the middle of the reset's
-    dumpsys to the middle of the read's, each of which happened inside its dumpsys. None if it
-    didn't end."""
+    ready) and read (stop, end), in ns, the frames' window (s): from the middle of the reset's
+    dumpsys to the middle of the read's, each of which happened inside its dumpsys; and the
+    process's threads at both ends. None if it didn't end."""
     found = [re.search(pattern, output, re.M)
              for pattern in (r"^START (\d+)", r"^READY (\d+)", r"^END (\d+) (\d+)")]
     if not all(found):
@@ -2402,18 +2470,118 @@ def workload_window(output):
              "stop_ns": int(end.group(1)), "end_ns": int(end.group(2))}
     times["frame_window_s"] = round(((times["stop_ns"] + times["end_ns"])
                                      - (times["start_ns"] + times["ready_ns"])) / 2e9, 6)
+    tasks = re.search(r"^TASKS_READY(.*)$", output, re.M)
+    times["tasks_ready"] = [int(tid) for tid in (tasks.group(1).split() if tasks else [])
+                            if tid.isdigit()]
+    times["tasks_end"] = {int(tid): name.strip() for tid, name in
+                          re.findall(r"^TASK_END (\d+) ?(.*)$", output, re.M)}
     return times
 
 
-def frames_in_window(frames, seconds, window, continuous):
-    """The frames drawn in the counting window (simpleperf's `seconds`): gfxinfo's `frames`,
-    scaled from the frames' window to it when the screen draws all the time (`continuous`: the
-    animations), since the counting window holds a little more on either side (simpleperf starts
-    counting before its workload, which resets gfxinfo in a dumpsys of 50 to 250 ms). A scroll's
-    or a navigation's window starts and ends idle."""
-    if not continuous or not seconds or not window or not window.get("frame_window_s"):
+def framestats_rate(start_output, end_output, frames):
+    """The frame rate of the `frames` gfxinfo counted between its framestats reset
+    (`start_output`) and read (`end_output`): they completed after the latest frame the reset
+    listed and by the latest the read lists (`FrameCompleted`, one clock), so over that span;
+    and the rate over the read's own frames (its last 120 or so: whether the rate drifted).
+    None without frames or a frame listed in each."""
+    before = [frame["FrameCompleted"] for frame in framestats_frames(start_output)
+              if frame.get("FrameCompleted", 0) > 0]
+    after = sorted(frame["FrameCompleted"] for frame in framestats_frames(end_output)
+                   if frame.get("FrameCompleted", 0) > 0)
+    if not frames or not before or len(after) < 2 or after[-1] <= max(before):
+        return None
+    span_s = (after[-1] - max(before)) / 1e9
+    return {"fps": frames / span_s, "span_s": span_s,
+            "fps_last": (len(after) - 1) / ((after[-1] - after[0]) / 1e9)}
+
+
+def frames_in_window(frames, seconds, rate, continuous):
+    """The frames drawn in the counting window (simpleperf's `seconds`): when the screen draws
+    all the time (`continuous`: the animations), its frame rate (`framestats_rate`) times the
+    window, which holds a little more than gfxinfo's on either side (simpleperf starts counting
+    before its workload, whose dumpsys answer late when the app is busy); else gfxinfo's
+    `frames`, as a scroll's or a navigation's window starts and ends idle."""
+    if not continuous or not seconds or not rate:
         return frames
-    return round(frames * seconds / window["frame_window_s"], 1)
+    return round(rate["fps"] * seconds, 1)
+
+
+def frame_scale_uncertainty(rate, seconds):
+    """`frames_in_window`'s relative uncertainty for an animation: one frame of the span's,
+    plus the part of the window outside the span (counted at the span's rate) times the rate's
+    drift (its last frames' rate against the span's)."""
+    if not rate or not seconds:
+        return None
+    outside = max(seconds - rate["span_s"], 0.0) / seconds
+    return (1 / (rate["fps"] * rate["span_s"])
+            + outside * abs(rate["fps_last"] - rate["fps"]) / rate["fps"])
+
+
+def counter_continuous(scenario):
+    """Whether a scenario draws all the time (its window can't start or end idle)."""
+    return scenario in COUNTER_CONTINUOUS
+
+
+def thread_problems(window, parsed):
+    """Threads born or ended in the window (simpleperf inherits: a thread born counts with its
+    creator; one that ended keeps its row), and threads alive at both ends with no row of
+    simpleperf's (not counted at all)."""
+    if not window:
+        return []
+    ready = set(window.get("tasks_ready", []))
+    end = window.get("tasks_end", {})
+    names = {thread["tid"]: thread["name"] for thread in parsed["threads"]}
+    problems = [f"thread {end[tid]} ({tid}) started in the window: counted with its creator's"
+                for tid in sorted(set(end) - ready)]
+    for tid in sorted(ready - set(end)):
+        problems.append(f"thread {names[tid]} ({tid}) ended in the window" if tid in names
+                        else f"thread {tid} ended in the window")
+    rows = set(parsed.get("row_tids", []))
+    problems.extend(f"thread {end[tid]} ({tid}) has no simpleperf row"
+                    for tid in sorted(ready & set(end)) if tid not in rows)
+    return problems
+
+
+def stderr_problems(stderr):
+    """What simpleperf said on stderr: its multiplexing warning (more events than a CPU's
+    counters), or any other line."""
+    if "multiplexing" in stderr:
+        return ["simpleperf warned of multiplexing (more events than counters)"]
+    return [f"simpleperf said: {line.strip()}" for line in stderr.splitlines() if line.strip()]
+
+
+def wait_idle(read_frames, sleep=time.sleep, quiet_s=COUNTER_QUIET_S, poll_s=COUNTER_IDLE_POLL_S,
+              limit_s=COUNTER_IDLE_LIMIT_S):
+    """Waits until `read_frames()` (gfxinfo's frame count) stops growing for `quiet_s`, polling
+    every `poll_s`, at most `limit_s`: whether the app went idle, and how long it took."""
+    last = read_frames()
+    stable = waited = 0.0
+    while waited < limit_s:
+        sleep(poll_s)
+        waited += poll_s
+        now = read_frames()
+        if now == last:
+            stable += poll_s
+            if stable >= quiet_s:
+                return {"waited_s": round(waited, 3), "idle": True}
+        else:
+            stable = 0.0
+            last = now
+    return {"waited_s": round(waited, 3), "idle": False}
+
+
+def edge_problems(before, frames, frames_after):
+    """A window that didn't start or end idle: the app still drawing after `wait_idle`
+    (`before`), or frames drawn after the window's last read (`frames_after`, gfxinfo's count
+    read after simpleperf ended, against the window's `frames`)."""
+    problems = []
+    if before is not None and not before["idle"]:
+        problems.append(f"the app still drew after waiting {before['waited_s']} s for it to idle "
+                        "before the window")
+    if frames_after is not None and frames is not None and frames_after > frames:
+        problems.append(f"{frames_after - frames} frames drawn after the window's last read: "
+                        "it ended drawing")
+    return problems
 
 
 def hw_counters(output):
@@ -2429,47 +2597,71 @@ def counter_scenarios(scenarios):
              if name not in COUNTER_SCREENS})
 
 
-def pid_of(package):
-    pids = shell(f"pidof {package}").split()
+def pid_of(package, run_shell=None):
+    pids = (run_shell or shell)(f"pidof {package}").split()
     if len(pids) != 1:
         raise SystemExit(f"{package}: {len(pids)} processes running, not one: {pids}")
     return int(pids[0])
 
 
-def count_while(package, events, body=None, duration_s=None):
+def gfx_frames(package, run_shell=None):
+    """gfxinfo's frame count for `package` (since its last reset)."""
+    return parse_gfxinfo((run_shell or shell)(f"dumpsys gfxinfo {package}")).get("frames", 0)
+
+
+def count_while(package, events, body=None, duration_s=None, run_shell=None, popen=None,
+                framestats=False):
     """simpleperf counting `package`'s threads (`counter_command`) while `body()` runs on the
     host, or for `duration_s`. Returns the parsed counts, the frames drawn in the window
-    (gfxinfo), the gfxinfo values and the workload's window."""
-    shell(f"rm -f {COUNTER_CSV} {COUNTER_GFX}")
+    (gfxinfo), the gfxinfo values and the workload's window, with gfxinfo's frame count read
+    again after it (`frames_after`) and, with `framestats`, the frame rate (`rate`,
+    `framestats_rate`). The device's files are removed, whatever happens."""
+    run_shell = run_shell or shell
+    popen = popen or subprocess.Popen
+    csv, gfx_path, gfx_start = (COUNTER_FILES["csv"], COUNTER_FILES["gfx"],
+                                COUNTER_FILES["gfx_start"])
+    files = f"{csv} {gfx_path} {gfx_start}"
+    run_shell(f"rm -f {files}")
     # A first dumpsys outside the window: the reset's inside it is the quicker for it.
-    shell(f"dumpsys gfxinfo {package} > /dev/null")
-    command = counter_command(pid_of(package), package, events, COUNTER_CSV, COUNTER_GFX,
-                              duration_s)
-    process = subprocess.Popen(["adb", "shell", command], stdin=subprocess.PIPE,
-                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    ready = ""
-    while not ready.endswith("\n") or not ready.splitlines()[-1].startswith(("READY", "END")):
-        line = process.stdout.readline()
-        if not line:
-            break
-        ready += line
-    if "READY" not in ready:
-        process.kill()
-        _, error = process.communicate()
-        raise SystemExit(f"simpleperf didn't start counting {package}: {ready}{error}")
-    if body is not None:
-        body()
-    if duration_s is None:
-        process.stdin.write("stop\n")
-        process.stdin.flush()
-    output, error = process.communicate(timeout=(duration_s or 0) + 120)
-    window = workload_window(ready + output)
-    if process.returncode != 0 or window is None:
-        raise SystemExit(f"simpleperf on {package} failed ({process.returncode}): {error}")
-    parsed = parse_simpleperf_stat(shell(f"cat {COUNTER_CSV}"), events)
-    gfx = parse_gfxinfo(shell(f"cat {COUNTER_GFX}"))
-    shell(f"rm -f {COUNTER_CSV} {COUNTER_GFX}")
-    window["simpleperf_stderr"] = error.strip()[-500:]
+    run_shell(f"dumpsys gfxinfo {package} > /dev/null")
+    command = counter_command(pid_of(package, run_shell), package, events, csv, gfx_path,
+                              duration_s, gfx_start if framestats else None)
+    process = popen(["adb", "shell", command], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE, text=True)
+    try:
+        said = ""
+        while not said.endswith("\n") or not said.splitlines()[-1].startswith(("READY", "END")):
+            line = process.stdout.readline()
+            if not line:
+                break
+            said += line
+        if not re.search(r"^READY ", said, re.M):
+            process.kill()
+            _, error = process.communicate(timeout=30)
+            raise SystemExit(f"simpleperf didn't start counting {package}: {said}{error}")
+        if body is not None:
+            body()
+        if duration_s is None:
+            process.stdin.write("stop\n")
+            process.stdin.flush()
+        output, error = process.communicate(timeout=(duration_s or 0) + 120)
+        window = workload_window(said + output)
+        if process.returncode != 0 or window is None:
+            raise SystemExit(f"simpleperf on {package} failed ({process.returncode}): {error}")
+        parsed = parse_simpleperf_stat(run_shell(f"cat {csv}"), events)
+        gfx_text = run_shell(f"cat {gfx_path}")
+        gfx = parse_gfxinfo(gfx_text)
+        rate = (framestats_rate(run_shell(f"cat {gfx_start}"), gfx_text, gfx.get("frames", 0))
+                if framestats else None)
+    except BaseException:
+        if process.poll() is None:
+            process.kill()
+        raise
+    finally:
+        run_shell(f"rm -f {files}")
+    window["rate"] = rate
+    window["simpleperf_stderr"] = error.strip()[-2000:]
+    window["frames_after"] = gfx_frames(package, run_shell)
     return parsed, gfx.get("frames", 0), gfx, window
 
 
@@ -2485,43 +2677,72 @@ def counted_run(scenario, package, name, run, events, optimizations=None, center
                 navigations=NAVIGATIONS):
     """One counted run of `scenario`, as its timing runs but untraced and without meminfo or
     framestats (both run code in the app): the scrolls' 10 flings after a warm-up swipe, the
-    animations' 10 s, the navigations after a warm-up one. Returns `counter_run_stats` with the
-    window, gfxinfo and thermal states."""
+    animations' COUNTER_ANIMATION_S, the navigations after a warm-up one, or the calibration's
+    COUNTER_IDLE_S of the feed at rest. A scroll's, a navigation's and the calibration's window
+    starts once the app is idle (`wait_idle`) and ends COUNTER_SETTLE_S after the last input.
+    Returns `counter_run_stats` with the window, gfxinfo, threads, frame scaling and thermal
+    states, and the problems of the edges, threads and simpleperf's stderr."""
     thermal = cool_down(f"counters {scenario} {name} {run}")
     fresh(package)
     time.sleep(1.0)
-    start(package, COUNTER_SCREENS[scenario], optimizations=optimizations)
+    start(package, COUNTER_SCREENS.get(scenario, "feed"), optimizations=optimizations)
+    before = None
     if scenario in ("scroll", "stress_scroll"):
         time.sleep(5)
         swipe(up=True)
-        time.sleep(1.2)
+        before = wait_idle(lambda: gfx_frames(package))
 
         def flings():
             for flick in range(10):
                 swipe(up=flick % 4 != 3)
                 time.sleep(1.2)
+            time.sleep(COUNTER_SETTLE_S)
 
         parsed, frames, gfx, window = count_while(package, events, flings)
-    elif scenario in ("animation", "stress_animation"):
+    elif counter_continuous(scenario):
         time.sleep(3)
         parsed, frames, gfx, window = count_while(package, events,
-                                                  duration_s=COUNTER_ANIMATION_S)
-        frames = frames_in_window(frames, parsed["seconds"], window, continuous=True)
-    else:
+                                                  duration_s=COUNTER_ANIMATION_S,
+                                                  framestats=True)
+    elif scenario == "navigation":
         time.sleep(3)
         navigate_plain(center)
+        before = wait_idle(lambda: gfx_frames(package))
 
         def navigate():
             for _ in range(navigations):
                 navigate_plain(center)
+            time.sleep(COUNTER_SETTLE_S)
 
         parsed, frames, gfx, window = count_while(package, events, navigate)
-    stats = counter_run_stats(parsed, frames, events)
+    else:
+        time.sleep(3)
+        before = wait_idle(lambda: gfx_frames(package))
+        parsed, frames, gfx, window = count_while(package, events, duration_s=COUNTER_IDLE_S)
+    continuous = counter_continuous(scenario)
+    counted = frames_in_window(frames, parsed["seconds"], window.get("rate"), continuous)
+    stats = counter_run_stats(parsed, counted, events)
+    if scenario == CALIBRATION and "no frame drawn" in stats["problems"]:
+        # The calibration draws nothing, by design.
+        stats["problems"].remove("no frame drawn")
     if scenario == "navigation":
         stats["navigations"] = navigations
         for group in stats["groups"].values():
             group["instructions_per_navigation"] = (
                 group["instructions"] / navigations if group["instructions"] is not None else None)
+    stats["frame_scale"] = {"gfxinfo_frames": frames,
+                            "factor": counted / frames if continuous and frames else 1.0,
+                            "rate": window.get("rate"),
+                            "uncertainty": frame_scale_uncertainty(window.get("rate"),
+                                                                   parsed["seconds"])
+                            if continuous else None}
+    if continuous and not window.get("rate"):
+        stats["problems"].append("no frame rate from framestats: frames not scaled")
+    stats["idle_before"] = before
+    stats["problems"].extend(edge_problems(before, frames, None if continuous else
+                                           window.get("frames_after")))
+    stats["problems"].extend(thread_problems(window, parsed))
+    stats["problems"].extend(stderr_problems(window.get("simpleperf_stderr", "")))
     stats["threads"] = parsed["threads"]
     stats["gfxinfo"] = gfx
     stats["window"] = window
@@ -2536,44 +2757,68 @@ def counters_line(stats):
         return f"{group} {value / 1e6:.2f}" if value is not None else f"{group} n/a"
     return (f"{stats['frames']} frames, M instructions/frame: "
             + ", ".join(text(group) for group in ("main", "RenderThread", "total"))
+            + f", total {(stats['groups']['total'].get('instructions_per_second') or 0) / 1e6:.1f}"
+              " M/s"
             + (f"; problems {stats['problems']}" if stats["problems"] else ""))
 
 
-def counters_scenario(scenario, subjects, runs, events, navigations=NAVIGATIONS, center=None):
-    """`runs` counted runs of each subject, interleaved, and each subject's summary."""
-    result = {"subjects": {name: {"runs": []} for name, _, _ in subjects}}
-    for run in range(runs):
+def counters_scenario(scenario, subjects, runs, events, navigations=NAVIGATIONS, center=None,
+                      warmup=1, result=None, on_run=None):
+    """`warmup` discarded runs (kept apart, as "warmup"), then `runs` counted runs, of each
+    subject, interleaved, into `result`, calling `on_run()` after each; then each subject's
+    summary."""
+    result = result if result is not None else {}
+    result.setdefault("subjects", {name: {"warmup": [], "runs": []} for name, _, _ in subjects})
+    for run in range(-warmup, runs):
         for name, package, optimizations in subjects:
             stats = counted_run(scenario, package, name, run, events, optimizations, center,
                                 navigations)
-            result["subjects"][name]["runs"].append(stats)
-            print("counters", scenario, name, run, counters_line(stats))
+            result["subjects"][name]["warmup" if run < 0 else "runs"].append(stats)
+            print("counters", scenario, name, "warm-up" if run < 0 else run, counters_line(stats))
+            if on_run is not None:
+                on_run()
     for subject in result["subjects"].values():
         subject["summary"] = counters_summary(subject["runs"])
     return result
 
 
 def run_counters(arguments, scenarios, subjects, report):
-    """--counters: the counted runs of each countable scenario asked for, into `report`'s
-    "counters" (written after each scenario)."""
+    """--counters: the calibration (the feed at rest, 3 runs a subject) and the counted runs of
+    each countable scenario asked for, into `report`'s "counters", written after every run."""
     events = [event.strip() for event in arguments.counter_events.split(",") if event.strip()]
     kept, skipped = counter_scenarios(scenarios)
     for name, why in skipped.items():
         print(f"counters: {name} skipped: {why}")
+    # Unique device files per invocation; any left by an earlier one removed.
+    shell(f"rm -f {COUNTER_PREFIX}*")
+    stamp = f"{os.getpid()}-{int(time.time())}"
+    COUNTER_FILES.update({"csv": f"{COUNTER_PREFIX}-{stamp}.csv",
+                          "gfx": f"{COUNTER_PREFIX}-{stamp}-gfxinfo.txt",
+                          "gfx_start": f"{COUNTER_PREFIX}-{stamp}-gfxinfo-start.txt"})
     pmu = hw_counters(shell("simpleperf stat --print-hw-counter 2>&1"))
     if pmu and len(events) > min(pmu.values()):
         print(f"counters: WARNING: {len(events)} events, and a CPU has {min(pmu.values())} "
               "counters: they may be multiplexed (see each run's running_ratio)")
     version = shell("simpleperf --version 2>&1").strip()
-    report["counters"] = {"tool": version.split("] ", 1)[-1], "events": events,
-                          "runs": arguments.counter_runs, "skipped": skipped,
-                          "pmu_counters": {str(cpu): count for cpu, count in pmu.items()},
-                          "animation_s": COUNTER_ANIMATION_S, "scenarios": {}}
+    report["counters"] = {
+        "tool": version.split("] ", 1)[-1], "events": events, "runs": arguments.counter_runs,
+        "warmup_runs": arguments.counter_warmup, "skipped": skipped,
+        "pmu_counters": {str(cpu): count for cpu, count in pmu.items()},
+        "perf_event_paranoid": shell("cat /proc/sys/kernel/perf_event_paranoid").strip(),
+        "animation_s": COUNTER_ANIMATION_S, "idle_s": COUNTER_IDLE_S,
+        "settle_s": COUNTER_SETTLE_S, "scenarios": {}}
+
+    def save():
+        write_report(arguments.out, report, quiet=True)
+
     center = screen_center(shell("wm size")) if "navigation" in kept else None
-    for scenario in kept:
-        report["counters"]["scenarios"][scenario] = counters_scenario(
-            scenario, subjects, arguments.counter_runs, events, arguments.navigations, center)
-        write_report(arguments.out, report)
+    for scenario in [CALIBRATION] + kept:
+        result = report["counters"]["scenarios"].setdefault(scenario, {})
+        counters_scenario(scenario, subjects, 3 if scenario == CALIBRATION
+                          else arguments.counter_runs, events, arguments.navigations, center,
+                          0 if scenario == CALIBRATION else arguments.counter_warmup, result,
+                          save)
+        save()
 
 
 def configure(arguments, source):
@@ -2647,6 +2892,8 @@ def main(argv=None):
                              "of the timing and traced runs (see above)")
     parser.add_argument("--counter-runs", type=int, default=15,
                         help="with --counters: counted runs of each subject in each scenario")
+    parser.add_argument("--counter-warmup", type=int, default=1,
+                        help="with --counters: discarded warm-up runs of each subject first")
     parser.add_argument("--counter-events", default=",".join(COUNTER_EVENTS),
                         help="with --counters: simpleperf's events, comma-separated")
     arguments = parser.parse_args(argv)
@@ -2709,6 +2956,12 @@ def main(argv=None):
         report["locked_clocks"]["moved"] = str(moved)
         write_report(arguments.out, report)
         raise SystemExit(f"stopped: {moved}")
+    except BaseException as stopped:
+        # A run that failed, or ^C: what ran before is kept (the counters' after every run, the
+        # timing scenarios' after every scenario).
+        report["stopped"] = repr(stopped)
+        write_report(arguments.out, report)
+        raise
     if LOCKED["expected"] is not None:
         report["locked_clocks"]["end"] = {name: value for name, value in
                                           check_clocks("end").items() if name != "residency"}
@@ -2719,10 +2972,11 @@ def main(argv=None):
     write_report(arguments.out, report)
 
 
-def write_report(out, report):
+def write_report(out, report, quiet=False):
     with open(os.path.join(out, "report.json"), "w") as file:
         json.dump(report, file, indent=1)
-    print("wrote", os.path.join(out, "report.json"))
+    if not quiet:
+        print("wrote", os.path.join(out, "report.json"))
 
 
 def run_scenarios(arguments, scenarios, tp, capacities, subjects, thermal_log, report):
