@@ -148,3 +148,37 @@ fn grids_start_at_the_right_in_a_right_to_left_layout() {
     assert_eq!(bounds(&mut ui, "h2").left, 140.0);
     assert_eq!(bounds(&mut ui, "h1").top, 100.0);
 }
+
+/// As a list's and Compose's (`LazyGridMeasure`'s `beforeContentPadding`): the lines scrolled
+/// into the start padding stay laid out and shown there, and the viewport takes lines under the
+/// end padding.
+#[test]
+fn a_grid_lays_out_lines_under_its_content_padding() {
+    let state = LazyGridState::new(0, 0);
+    let given = *state;
+    let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || {
+        LazyVerticalGrid!(
+            GridCells::Fixed(2),
+            modifier = Modifier.size((100.dp(), 100.dp())),
+            state = given,
+            content_padding = PaddingValues::symmetric(0.dp(), 30.dp()),
+            |scope: LazyGridScope| {
+                scope.items(40, |index| {
+                    Box!(modifier = Modifier.height(20.dp()).test_tag(format!("{index}")));
+                });
+            }
+        );
+    });
+    assert_eq!(bounds(&mut ui, "0").top, 30.0);
+    assert_eq!(bounds(&mut ui, "7").top, 90.0);
+    ui.on_node_with_tag("8").assert_does_not_exist();
+    // Two lines and 10 px down: line 2 first visible, line 1 under the start padding.
+    state.scroll_by(50.0);
+    ui.wait_for_idle();
+    assert_eq!(state.first_visible_item_index(), 4);
+    assert_eq!(bounds(&mut ui, "3").top, 0.0);
+    assert_eq!(bounds(&mut ui, "4").top, 20.0);
+    assert_eq!(bounds(&mut ui, "11").top, 80.0);
+    ui.on_node_with_tag("1").assert_does_not_exist();
+    ui.on_node_with_tag("12").assert_does_not_exist();
+}

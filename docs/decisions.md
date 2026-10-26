@@ -24,7 +24,7 @@ The log is split by area into the files below, one table each, rows in number or
 | [android-drawing](decisions/android-drawing.md) | The display list and its replayer, render nodes and repaint boundaries, paths, shadows, layers. | 27 |
 | [android-host-and-performance](decisions/android-host-and-performance.md) | The view and activity glue, the frame loop, the hint session, jank, startup, memory, and the optimization flags. | 25 |
 | [desktop](decisions/desktop.md) | The desktop host: window, Skia rendering, input and events. | 6 |
-| [benchmarks](decisions/benchmarks.md) | The benchmark apps, protocols and rounds, and how results are read. | 30 |
+| [benchmarks](decisions/benchmarks.md) | The benchmark apps, protocols and rounds, and how results are read. | 31 |
 | [api-and-tooling](decisions/api-and-tooling.md) | Names, crates and modules, semver, the edit-build loop, testing and documentation, the toolchain's and dependencies' versions. | 26 |
 
 ## Index by number
@@ -415,5 +415,6 @@ The log is split by area into the files below, one table each, rows in number or
 | D644 | [benchmarks](decisions/benchmarks.md#d644) | current |
 | D645 | [benchmarks](decisions/benchmarks.md#d645) | current |
 | D646 | [android-drawing](decisions/android-drawing.md#d646) | current |
-| D647 | [benchmarks](decisions/benchmarks.md#d647) | current |
+| D647 | [benchmarks](decisions/benchmarks.md#d647) | revised by [D649](decisions/benchmarks.md#d649) |
 | D648 | [android-drawing](decisions/android-drawing.md#d648) | current |
+| D649 | [benchmarks](decisions/benchmarks.md#d649) | current |

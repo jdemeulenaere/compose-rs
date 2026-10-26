@@ -6,7 +6,7 @@ The same app, written twice with equivalent widgets, measured on the same device
 
 A social feed (`examples/feed` for compose-rs, `android/bench-compose` for Kotlin Compose), widget for widget:
 
-- **`feed`**: a Material 3 `Scaffold` with a `TopAppBar` over a `LazyColumn` of 1,000 posts, keyed. A post is a `Card` holding a 40 dp circular avatar with initials, the author and the time, two sentences of text (3 lines at most, ellipsized), a like `IconButton` with its count, and a tag.
+- **`feed`**: a Material 3 `Scaffold` with a `TopAppBar` over a `LazyColumn` of 1,000 posts, keyed, which fills the window and takes the scaffold's padding as its content padding (Kotlin's `contentPadding = padding`): its posts scroll under the top bar and are laid out and drawn under the navigation bar. compose-rs's list took that padding as a modifier until D649, so it laid out and drew posts only between the bars, a smaller viewport than Compose's (by the status bar's, the navigation bar's and the top bar's heights, 1,933 px against 2,244 px, 138 dp less, on the Pixel 8 Pro): the results of `feed` and `feed_animated` before D649 (rounds 1 to 16) need measuring again. A post is a `Card` holding a 40 dp circular avatar with initials, the author and the time, two sentences of text (3 lines at most, ellipsized), a like `IconButton` with its count, and a tag.
 - **`feed_animated`**: the same, with a header card whose indeterminate `CircularProgressIndicator`, pulsing dot (alpha) and turning star (rotation) animate forever.
 - **`big`**: 200 posts in a `Column` with `verticalScroll`, all composed at once: the cost of a big screen.
 

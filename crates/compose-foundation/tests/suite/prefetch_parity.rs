@@ -433,3 +433,38 @@ fn paragraph_render_nodes_draws_everything_again_when_it_changes() {
     );
     assert!(!ui.host().frame().drew);
 }
+
+/// With a content padding, the items under it are among those shown, as Compose's
+/// `visibleItemsInfo`: a scroll back prefetches the item before the one under the start
+/// padding, and the urgency is measured from the viewport's start, not the padding's end.
+#[test]
+fn a_scroll_back_prefetches_the_item_before_those_under_the_start_padding() {
+    COMPOSED.with(|composed| composed.borrow_mut().clear());
+    LIVE.with(|live| live.borrow_mut().clear());
+    use_optimizations(Optimizations::NONE);
+    let state = LazyListState::new(0, 0);
+    let given = *state;
+    let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || {
+        LazyColumn!(
+            modifier = Modifier.size((100.dp(), 100.dp())),
+            state = given,
+            content_padding = PaddingValues::symmetric(0.dp(), 30.dp()),
+            |scope: LazyListScope| {
+                scope.items_with(1000, |index| index % 2, Row);
+            }
+        );
+    });
+    // Rows 0 to 3 from 30 px, row 3 under the end padding.
+    assert_eq!(live_items(), (0..4).collect::<Vec<_>>());
+    // 70 px down: row 3 first visible, 10 px into it, row 2 under the start padding at the top,
+    // rows 2 to 6 shown; row 7 prefetched.
+    scroll(&mut ui, *state, 70.0);
+    assert_eq!(live_items(), (2..7).collect::<Vec<_>>());
+    assert!(!ui.host().prefetch(later()));
+    assert_eq!(live_items(), (2..8).collect::<Vec<_>>());
+    // 5 px back: row 1, before row 2, is the one prefetched.
+    scroll(&mut ui, *state, -5.0);
+    assert_eq!(ui.on_node_with_tag("row 2").fetch_semantics_node().bounds.top, 5.0);
+    assert!(!ui.host().prefetch(later()));
+    assert!(live_items().contains(&1), "{:?}", live_items());
+}

@@ -68,10 +68,33 @@ fn scrolling_content(ui: &mut ComposeTestRule) -> Option<[f32; 4]> {
     Some([bounds.left, bounds.top, bounds.right, bounds.bottom])
 }
 
+/// The bounds of the items the screen's lazy list placed, in order, from the tree's dump
+/// (`LazyItem [x,y w×h]`, from the list's origin, here the window's).
+fn placed_items(ui: &mut ComposeTestRule) -> Vec<[f32; 4]> {
+    ui.dump_tree()
+        .lines()
+        .map(str::trim_start)
+        .filter(|line| line.starts_with("LazyItem [") && !line.ends_with("(not placed)"))
+        .map(|line| {
+            let bounds = &line["LazyItem [".len()..line.find(']').expect("bounds")];
+            let (origin, size) = bounds.split_once(' ').expect("an origin and a size");
+            let (x, y) = origin.split_once(',').expect("x,y");
+            let (width, height) = size.split_once('x').expect("wxh");
+            let [x, y, width, height] =
+                [x, y, width, height].map(|value| value.parse::<f32>().expect("a number"));
+            [x, y, x + width, y + height]
+        })
+        .collect()
+}
+
 /// Each screen, edge to edge in the whole window with the bars' insets reported, shows what it
 /// showed inside the bars (the view bench-rs had before D647, `fitsSystemWindows`), where it
 /// showed it: its top app bar starts at the window's top, under the status bar, its content
-/// clear of it, and the scaffold's content ends above the navigation bar.
+/// clear of it, and the scaffold's content ends above the navigation bar. But for the feeds,
+/// whose list takes the scaffold's padding as its content padding, as the Kotlin feed's
+/// `contentPadding = padding` (D649): their list fills the window, its first post below the top
+/// bar where it was, and its viewport goes on under the navigation bar, where it shows the
+/// posts after those it showed.
 #[test]
 fn the_screens_keep_their_content_clear_of_the_system_bars() {
     let screens: [(&str, &str, fn()); 8] = [
@@ -96,14 +119,36 @@ fn the_screens_keep_their_content_clear_of_the_system_bars() {
         let inside = IntSize::new(WIDTH, HEIGHT - STATUS_BAR - NAVIGATION_BAR);
         let expected = texts(&mut screen(content, inside, PlatformWindowInsets::default()), 0.0);
         let mut ui = screen(content, IntSize::new(WIDTH, HEIGHT), insets);
-        let shown = texts(&mut ui, STATUS_BAR as f32);
+        let mut shown = texts(&mut ui, STATUS_BAR as f32);
         assert!(!expected.is_empty(), "{name} shows no text");
+        let feed = name.starts_with("feed");
+        if feed {
+            // Any post after those shown inside the bars is under the navigation bar: its
+            // texts below where the view ended.
+            let end = inside.height as f32;
+            let (under, kept): (Vec<_>, Vec<_>) =
+                shown.into_iter().partition(|text| !expected.contains(text));
+            for (text, bounds) in &under {
+                assert!(bounds[1] >= end, "{name}: {text:?} at {bounds:?}, above {end}");
+            }
+            shown = kept;
+        }
         assert_eq!(shown, expected, "{name}: the texts moved");
         assert_eq!(top_bar(&mut ui, title), [0.0, 0.0, WIDTH as f32, bar], "{name}: its top bar");
         if let Some(content) = scrolling_content(&mut ui) {
-            let bottom = (HEIGHT - NAVIGATION_BAR) as f32;
-            assert_eq!(content, [0.0, bar, WIDTH as f32, bottom], "{name}: its content");
+            let (top, bottom) =
+                if feed { (0.0, HEIGHT as f32) } else { (bar, (HEIGHT - NAVIGATION_BAR) as f32) };
+            assert_eq!(content, [0.0, top, WIDTH as f32, bottom], "{name}: its content");
             scrolling += 1;
+        }
+        if feed {
+            // The first post below the top bar; the last one laid out reaching under the
+            // navigation bar, within the list.
+            let items = placed_items(&mut ui);
+            let (first, last) = (items[0], items[items.len() - 1]);
+            assert_eq!(first[1], bar, "{name}: its first post");
+            let under = (HEIGHT - NAVIGATION_BAR) as f32;
+            assert!(last[1] < HEIGHT as f32 && last[3] > under, "{name}: its last post {last:?}");
         }
     }
     // The feeds, the big screen, the stress list and the grid.

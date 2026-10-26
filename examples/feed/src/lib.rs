@@ -150,8 +150,12 @@ fn FeedScreen(animated: bool) {
             },
             content_window_insets = crate::scaffold_content_window_insets(),
             |padding: PaddingValues| {
+                // The scaffold's padding as the list's content padding, as the Kotlin feed's
+                // `contentPadding = padding` (D649): the list fills the window, its posts
+                // scroll under the top bar and are laid out and drawn under the navigation bar.
                 LazyColumn!(
-                    modifier = Modifier.padding(padding).fill_max_size(),
+                    modifier = Modifier.fill_max_size(),
+                    content_padding = padding,
                     move |scope: LazyListScope| {
                         // Content types as the Kotlin app's: a post reuses a post that left.
                         if animated {

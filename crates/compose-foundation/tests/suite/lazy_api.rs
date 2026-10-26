@@ -330,3 +330,111 @@ fn duplicate_keys_panic_in_debug_builds() {
         });
     });
 }
+
+/// 20 rows 20 px tall in a list 100 px tall whose content is padded 30 px above and below.
+#[composable]
+fn Padded(state: LazyListState, reverse: bool) {
+    LazyColumn!(
+        modifier = Modifier.size((100.dp(), 100.dp())),
+        state = state,
+        content_padding = PaddingValues::symmetric(0.dp(), 30.dp()),
+        reverse_layout = reverse,
+        |scope: LazyListScope| {
+            scope.items(20, |index| {
+                Box!(modifier = Modifier.size((100.dp(), 20.dp())).test_tag(format!("{index}")));
+            });
+        }
+    );
+}
+
+fn position(state: &LazyListState) -> (usize, i32) {
+    (state.first_visible_item_index(), state.first_visible_item_scroll_offset())
+}
+
+/// As Compose's `contentPadding`: the viewport is the list's whole size, the padding comes
+/// before the first item and after the last, and items scrolled into it stay laid out and shown
+/// there (`LazyListMeasure`'s `beforeContentPadding` and `afterContentPadding`).
+#[test]
+fn items_are_laid_out_under_the_content_padding() {
+    let state = LazyListState::new(0, 0);
+    let given = *state;
+    let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || Padded(given, false));
+    // The first item after the padding; the viewport takes items under the end padding.
+    assert_eq!(top_of(&mut ui, "0"), 30.0);
+    assert_eq!(top_of(&mut ui, "3"), 90.0);
+    ui.on_node_with_tag("4").assert_does_not_exist();
+    // Scrolled: the item scrolled into the start padding stays, above the first visible one.
+    state.scroll_to_item(2, 10);
+    ui.wait_for_idle();
+    assert_eq!(top_of(&mut ui, "1"), 0.0);
+    assert_eq!(top_of(&mut ui, "2"), 20.0);
+    assert_eq!(top_of(&mut ui, "5"), 80.0);
+    ui.on_node_with_tag("0").assert_does_not_exist();
+    ui.on_node_with_tag("6").assert_does_not_exist();
+    assert_eq!(position(&state), (2, 10));
+    // At the end: the last item ends where the end padding starts, the items before it fill the
+    // start padding, and the first visible one is the first not wholly in it.
+    state.scroll_to_item(19, 0);
+    ui.wait_for_idle();
+    assert_eq!(top_of(&mut ui, "19"), 50.0);
+    assert_eq!(top_of(&mut ui, "17"), 10.0);
+    assert_eq!(top_of(&mut ui, "16"), -10.0);
+    ui.on_node_with_tag("15").assert_does_not_exist();
+    assert_eq!(position(&state), (18, 0));
+    // Scrolled back: the items before come into the start padding.
+    assert!(state.scroll_by(-45.0));
+    ui.wait_for_idle();
+    assert_eq!(top_of(&mut ui, "15"), 15.0);
+    assert_eq!(top_of(&mut ui, "14"), -5.0);
+    ui.on_node_with_tag("13").assert_does_not_exist();
+    assert_eq!(position(&state), (15, 15));
+}
+
+/// Reversed, the padding at the bottom comes first and takes the items scrolled into it.
+#[test]
+fn a_reversed_list_lays_out_items_under_its_bottom_padding() {
+    let state = LazyListState::new(0, 0);
+    let given = *state;
+    let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || Padded(given, true));
+    assert_eq!(top_of(&mut ui, "0"), 50.0);
+    assert_eq!(top_of(&mut ui, "3"), -10.0);
+    state.scroll_to_item(2, 10);
+    ui.wait_for_idle();
+    assert_eq!(top_of(&mut ui, "2"), 60.0);
+    assert_eq!(top_of(&mut ui, "1"), 80.0);
+    ui.on_node_with_tag("0").assert_does_not_exist();
+}
+
+/// The sticky header is that of the first item laid out, under the start padding, as Compose's
+/// (`applyStickyItems` from the first of `visibleItems`), at the top of the list.
+#[test]
+fn the_sticky_header_is_that_of_the_item_under_the_start_padding() {
+    let state = LazyListState::new(11, 0);
+    let given = *state;
+    let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || {
+        LazyColumn!(
+            modifier = Modifier.size((100.dp(), 100.dp())),
+            state = given,
+            content_padding = PaddingValues::new(0.dp(), 30.dp(), 0.dp(), 0.dp()),
+            |scope: LazyListScope| {
+                for section in ["A", "B"] {
+                    scope.sticky_header(move |_| {
+                        Box!(modifier = Modifier.size((100.dp(), 20.dp())).test_tag(section));
+                    });
+                    scope.items(10, move |index| {
+                        Box!(
+                            modifier = Modifier
+                                .size((100.dp(), 30.dp()))
+                                .test_tag(format!("{section}{index}"))
+                        );
+                    });
+                }
+            }
+        );
+    });
+    // B's header is the first item after the padding, A's last item under it: A's header
+    // sticks at the top, over it.
+    assert_eq!(top_of(&mut ui, "B"), 30.0);
+    assert_eq!(top_of(&mut ui, "A9"), 0.0);
+    assert_eq!(top_of(&mut ui, "A"), 0.0);
+}

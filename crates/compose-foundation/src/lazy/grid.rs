@@ -1347,6 +1347,27 @@ impl MeasurePolicy for LazyGridLayout {
             }
             break;
         }
+        // The lines before the first visible one under the start padding are laid out and shown
+        // too, as a list's and Compose's (`measureLazyGrid` fills `beforeContentPadding`): `lead`
+        // is the first line laid out; those not composed are, in this frame's next round.
+        let mut lead = index;
+        if let Some(&(_, first_main)) = placed.first() {
+            let mut start = first_main;
+            let mut leading: Vec<(usize, i32)> = Vec::new();
+            while start > spacing.min(0) && lead > 0 {
+                let Some(size) = m.line(lead - 1) else {
+                    let room = (start - spacing.min(0)) as usize;
+                    let wanted = room.div_ceil((m.line_sizes.average() + spacing).max(1) as usize);
+                    wanted_before += wanted.min(lead);
+                    break;
+                };
+                start -= size + spacing;
+                leading.push((lead - 1, start));
+                lead -= 1;
+            }
+            leading.reverse();
+            placed.splice(0..0, leading);
+        }
         let at_end = !m.lines.exists(end_index);
         let scrolled_into = index > 0 || offset > 0.0;
         let main_size = if scrolled_into { main_max } else { content_end.min(main_max) };
@@ -1391,7 +1412,7 @@ impl MeasurePolicy for LazyGridLayout {
             };
         // And the lines a focus search asked for beyond those (D477).
         let (beyond_before, beyond_after) = state.beyond_bounds.get();
-        let wanted_start = index.saturating_sub(beyond + beyond_before + wanted_before);
+        let wanted_start = lead.saturating_sub(beyond + beyond_before + wanted_before);
         let mut wanted_end =
             m.lines.at_most_last((end_index + beyond + beyond_after).saturating_sub(1)) + 1;
         if missing {
@@ -1425,13 +1446,13 @@ impl MeasurePolicy for LazyGridLayout {
         let covers = composed_start <= wanted_items.0 && composed_end >= wanted_items.1;
         let prefetch = &state.prefetch;
         prefetch.policy.set(policy);
-        prefetch.visible.set(m.lines.start(end_index) - m.lines.start(index));
+        prefetch.visible.set(m.lines.start(end_index) - m.lines.start(lead));
         // Compose's grid prefetch strategy, once the layout settled: a line at a time, each of
         // its items a request.
         if !missing && wanted_before == 0 {
             let laid = match (placed.first().copied(), placed.last().copied()) {
                 (Some((_, first_main)), Some((last_line, last_main))) => {
-                    let first = index.saturating_sub(beyond);
+                    let first = lead.saturating_sub(beyond);
                     let last = m.lines.at_most_last(end_index - 1 + beyond);
                     Some(Laid {
                         first,
@@ -1589,7 +1610,7 @@ impl MeasurePolicy for LazyGridLayout {
         // Those before, placed first, in the items' order.
         let mut ahead_lines: Vec<(usize, i32)> = Vec::new();
         let mut main = placed.first().map_or(before, |(_, main)| *main);
-        for previous in (placed_start.min(index)..index).rev() {
+        for previous in (placed_start.min(lead)..lead).rev() {
             if let Some(size) = m.line(previous) {
                 main -= size + spacing;
                 ahead_lines.push((previous, main));
@@ -1598,12 +1619,12 @@ impl MeasurePolicy for LazyGridLayout {
         ahead_lines.reverse();
         let extent_start = main - before;
         let pending = state.pending.get();
-        let reaches_start = (index == 0 || placed_start == 0) && wanted_before == 0;
+        let reaches_start = (lead == 0 || placed_start == 0) && wanted_before == 0;
         let average = m.line_sizes.average() as f32 + spacing as f32;
         state.room_backward.set(if reaches_start {
             (-extent_start) as f32 + pending
         } else {
-            (placed_start.min(index) as f32 * average - extent_start as f32 + pending).max(1.0)
+            (placed_start.min(lead) as f32 * average - extent_start as f32 + pending).max(1.0)
         });
         let reaches_end = !missing && (at_end || !m.lines.exists(placed_end));
         state.room_estimated.set((!reaches_start, !reaches_end));
@@ -1623,7 +1644,7 @@ impl MeasurePolicy for LazyGridLayout {
                 post_scroll = overshoot.rest(moved);
             }
         }
-        state.beyond_more.set((placed_start.min(index) > 0, m.lines.exists(placed_end)));
+        state.beyond_more.set((placed_start.min(lead) > 0, m.lines.exists(placed_end)));
         state.room_forward.set(if reaches_end {
             (extent_end.max(content_end) - main_max).max(0) as f32 - pending
         } else {
