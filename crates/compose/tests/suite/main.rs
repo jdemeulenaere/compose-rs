@@ -5,6 +5,7 @@ mod clone_on_use;
 mod composables;
 mod derived;
 mod ergonomics;
+mod jvm_composition;
 mod locals;
 mod readers;
 mod review2_compile_cfg_pattern_param;
