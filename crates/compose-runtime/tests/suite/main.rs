@@ -16,6 +16,7 @@ mod mock;
 mod model;
 mod pausable;
 mod produce_state;
+mod restart;
 mod reusable;
 mod review2;
 mod review3;
