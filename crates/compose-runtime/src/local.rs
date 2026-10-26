@@ -1,15 +1,23 @@
 //! Composition locals, as Compose's `CompositionLocal`: values provided to a subtree and read
 //! anywhere inside it without being passed down.
 //!
-//! A provider is a replace group whose first slot holds the value in a state cell. `current()`
-//! walks up the slot table from the group composing now to the nearest provider of the local,
-//! so a scope restarting on its own finds the same provider as when its parent composed it, and
-//! reads the cell, so a new value recomposes exactly the readers (Compose's
-//! `compositionLocalOf`). The walk visits provider groups only: each group records, when it is
-//! allocated, the nearest provider's group above it (a group's ancestors never change), so a
-//! read costs the providers above it, not the groups (often dozens) between them.
+//! A provider is a replace group (`CompositionLocalProvider`, one key for all, as Compose's
+//! `providerKey`) whose first slot holds what it provides: an entry per local, each a holder (a
+//! state for a dynamic local, the value for a static one, a function for a computed one).
+//! `current()` walks up the slot table from the group composing now through the provider groups
+//! only (each group records, when it is allocated, the nearest provider's group above it: a
+//! group's ancestors never change) to the nearest one providing the local, so a scope
+//! restarting on its own finds the same provider as when its parent composed it, and a read
+//! costs the providers above it, not the groups between them.
+//!
+//! - A **dynamic** local (`CompositionLocal::new`, Compose's `compositionLocalOf`) is held in a
+//!   state: reading it subscribes, and a new value recomposes exactly the readers.
+//! - A **static** local (`new_static`, `staticCompositionLocalOf`) is held as a value: reading it
+//!   records nothing, and a provider whose value changes recomposes its whole content.
+//! - A **computed** one (`with_computed_default`, `provides_computed`) is a function of other
+//!   locals, run at each read where it's read.
 
-use std::any::TypeId;
+use std::any::{Any, TypeId};
 use std::rc::Rc;
 
 use crate::__private::ReplaceGroup;
@@ -17,10 +25,11 @@ use crate::compose_arg::ComposeArg;
 use crate::hash::key_of;
 use crate::remember::remember;
 use crate::runtime::with_runtime;
-use crate::slot_table::{GroupKind, NONE};
-// A provider's policy: writes of a `same` value (`ComposeArg`) invalidate nothing, so locals may
-// hold `Rc`s of trait objects (compared by identity) as well as plain values.
-use crate::state::{OwnedState, ReferentialEqualityPolicy, mutable_state_of_with};
+use crate::slot_table::NONE;
+use crate::state::{MutationPolicy, OwnedState};
+
+/// The key of every provider group, as Compose's `providerKey`.
+const PROVIDER_KEY: u64 = key_of("compose_runtime::CompositionLocalProvider");
 
 /// A composition local: declared as a `static` (or a `const`), identified by its name and
 /// value type, which must be unique together.
@@ -31,27 +40,198 @@ use crate::state::{OwnedState, ReferentialEqualityPolicy, mutable_state_of_with}
 /// ```
 pub struct CompositionLocal<T: 'static> {
     name: &'static str,
-    default: fn() -> T,
+    is_static: bool,
+    default: LocalDefault<T>,
+    /// When a newly provided value is the same as the last one (the dynamic state's policy, a
+    /// static provider's comparison).
+    equivalent: fn(&T, &T) -> bool,
 }
 
-/// A value for a local, for [`CompositionLocalProvider`], as Compose's `provides`.
+/// What a local is outside any provider.
+enum LocalDefault<T: 'static> {
+    Value(fn() -> T),
+    Computed(fn(&CompositionLocalAccessorScope) -> T),
+}
+
+/// Where a computed local reads other locals, as Compose's `CompositionLocalAccessorScope`:
+/// where the computed value is read, or in a [`CompositionLocalMap`].
+pub struct CompositionLocalAccessorScope {
+    map: Option<CompositionLocalMap>,
+}
+
+impl CompositionLocalAccessorScope {
+    /// The value of `local` where the computed value is read, as `currentValue`.
+    pub fn current_value<T: Clone + 'static>(&self, local: &CompositionLocal<T>) -> T {
+        match &self.map {
+            Some(map) => map.get(local),
+            None => local.current(),
+        }
+    }
+}
+
+/// A value for a local, for [`CompositionLocalProvider`], as Compose's `ProvidedValue`: made by
+/// [`provides`](CompositionLocal::provides), [`provides_default`](CompositionLocal::provides_default)
+/// or [`provides_computed`](CompositionLocal::provides_computed).
 pub struct ProvidedValue<T: 'static> {
-    /// The local's identity and its provider groups' key.
-    id: u64,
-    key: u64,
-    value: T,
+    local: u64,
+    name: &'static str,
+    is_static: bool,
+    can_override: bool,
+    equivalent: fn(&T, &T) -> bool,
+    value: Provided<T>,
 }
 
-/// What a provider group keeps.
-struct ProviderSlot<T: 'static> {
+enum Provided<T: 'static> {
+    Value(T),
+    Computed(Rc<dyn Fn(&CompositionLocalAccessorScope) -> T>),
+}
+
+impl<T: Clone + 'static> Clone for ProvidedValue<T> {
+    fn clone(&self) -> Self {
+        ProvidedValue {
+            value: match &self.value {
+                Provided::Value(value) => Provided::Value(value.clone()),
+                Provided::Computed(compute) => Provided::Computed(compute.clone()),
+            },
+            ..*self
+        }
+    }
+}
+
+impl<T: 'static> ProvidedValue<T> {
+    /// Whether it replaces a value provided above, as `canOverride`: not for
+    /// [`provides_default`](CompositionLocal::provides_default).
+    pub fn can_override(&self) -> bool {
+        self.can_override
+    }
+
+    /// The value provided, if it isn't computed.
+    pub fn value(&self) -> Option<&T> {
+        match &self.value {
+            Provided::Value(value) => Some(value),
+            Provided::Computed(_) => None,
+        }
+    }
+
+    /// The name of the local it's for.
+    pub fn local_name(&self) -> &'static str {
+        self.name
+    }
+}
+
+/// What a provider holds for a local.
+enum Holder<T: 'static> {
+    /// A dynamic local's value: reading it subscribes.
+    Dynamic(OwnedState<T>),
+    /// A static local's value: reading it records nothing.
+    Static(T),
+    Computed(Rc<dyn Fn(&CompositionLocalAccessorScope) -> T>),
+}
+
+impl<T: Clone + 'static> Holder<T> {
+    fn read(&self, scope: &CompositionLocalAccessorScope) -> T {
+        match self {
+            Holder::Dynamic(state) => state.get(),
+            Holder::Static(value) => value.clone(),
+            Holder::Computed(compute) => compute(scope),
+        }
+    }
+}
+
+/// A local's holder in a provider: `Rc<Holder<T>>` erased.
+#[derive(Clone)]
+struct Entry {
     local: u64,
-    value: OwnedState<T>,
+    holder: Rc<dyn Any>,
+    /// Made by this provider: its dynamic state may be written in place. One from a
+    /// [`CompositionLocalContext`] belongs to the provider it was captured from.
+    owned: bool,
+}
+
+/// A provider group's first slot: the locals it provides.
+#[derive(Default)]
+struct ProviderEntries {
+    entries: std::cell::RefCell<Vec<Entry>>,
 }
 
 impl<T: 'static> CompositionLocal<T> {
-    /// A local whose value outside any provider is `default()`, as `compositionLocalOf`.
-    pub const fn new(name: &'static str, default: fn() -> T) -> CompositionLocal<T> {
-        CompositionLocal { name, default }
+    /// A dynamic local whose value outside any provider is `default()`, as `compositionLocalOf`:
+    /// reading it subscribes, and a provider's new value (not [`same`](ComposeArg::same) as the
+    /// last) recomposes exactly its readers.
+    pub const fn new(name: &'static str, default: fn() -> T) -> CompositionLocal<T>
+    where
+        T: ComposeArg,
+    {
+        CompositionLocal {
+            name,
+            is_static: false,
+            default: LocalDefault::Value(default),
+            equivalent: <T as ComposeArg>::same,
+        }
+    }
+
+    /// A dynamic local whose provided values change when `policy` says so, as
+    /// `compositionLocalOf(policy) { … }`.
+    pub const fn with_policy<P: MutationPolicy<T> + Copy>(
+        name: &'static str,
+        _policy: P,
+        default: fn() -> T,
+    ) -> CompositionLocal<T> {
+        CompositionLocal {
+            name,
+            is_static: false,
+            default: LocalDefault::Value(default),
+            equivalent: P::equivalent,
+        }
+    }
+
+    /// A static local, as `staticCompositionLocalOf`: reading it records nothing, and a
+    /// provider whose value changes recomposes its whole content. For values that rarely
+    /// change, read in many places.
+    pub const fn new_static(name: &'static str, default: fn() -> T) -> CompositionLocal<T>
+    where
+        T: ComposeArg,
+    {
+        CompositionLocal {
+            name,
+            is_static: true,
+            default: LocalDefault::Value(default),
+            equivalent: <T as ComposeArg>::same,
+        }
+    }
+
+    /// A dynamic local whose value outside any provider is computed from other locals where
+    /// it's read, as `compositionLocalWithComputedDefaultOf { … }`.
+    pub const fn with_computed_default(
+        name: &'static str,
+        compute: fn(&CompositionLocalAccessorScope) -> T,
+    ) -> CompositionLocal<T>
+    where
+        T: ComposeArg,
+    {
+        CompositionLocal {
+            name,
+            is_static: false,
+            default: LocalDefault::Computed(compute),
+            equivalent: <T as ComposeArg>::same,
+        }
+    }
+
+    /// Like [`with_computed_default`](CompositionLocal::with_computed_default), static when
+    /// provided, as `staticCompositionLocalWithComputedDefaultOf { … }`.
+    pub const fn static_with_computed_default(
+        name: &'static str,
+        compute: fn(&CompositionLocalAccessorScope) -> T,
+    ) -> CompositionLocal<T>
+    where
+        T: ComposeArg,
+    {
+        CompositionLocal {
+            name,
+            is_static: true,
+            default: LocalDefault::Computed(compute),
+            equivalent: <T as ComposeArg>::same,
+        }
     }
 
     pub fn name(&self) -> &'static str {
@@ -64,17 +244,42 @@ impl<T: 'static> CompositionLocal<T> {
         key_of(self.name) ^ key_of(std::any::type_name::<T>()).rotate_left(29)
     }
 
-    fn key(&self) -> u64 {
-        key_of("compose_runtime::CompositionLocalProvider") ^ self.id().rotate_left(17)
+    fn provided(&self, value: Provided<T>, can_override: bool) -> ProvidedValue<T> {
+        ProvidedValue {
+            local: self.id(),
+            name: self.name,
+            is_static: self.is_static,
+            can_override,
+            equivalent: self.equivalent,
+            value,
+        }
     }
 
     /// `value` for this local, as `local provides value`.
     pub fn provides(&self, value: T) -> ProvidedValue<T> {
-        ProvidedValue { id: self.id(), key: self.key(), value }
+        self.provided(Provided::Value(value), true)
     }
 
-    /// The value of the nearest provider above the composable composing now, or the default.
-    /// Reading it subscribes the composing scope: a new value recomposes it.
+    /// `value` for this local unless a provider above provides it already, as
+    /// `local providesDefault value`.
+    pub fn provides_default(&self, value: T) -> ProvidedValue<T> {
+        self.provided(Provided::Value(value), false)
+    }
+
+    /// A value computed from other locals where this one is read, as
+    /// `local providesComputed { … }`. A new function makes the provider recompose its content:
+    /// remember the provided value (`remember(|| LOCAL.provides_computed(…))`) if it doesn't
+    /// change.
+    pub fn provides_computed(
+        &self,
+        compute: impl Fn(&CompositionLocalAccessorScope) -> T + 'static,
+    ) -> ProvidedValue<T> {
+        self.provided(Provided::Computed(Rc::new(compute)), true)
+    }
+
+    /// The value of the nearest provider above the composable composing now, or the default,
+    /// as `current`. Reading a dynamic local subscribes the composing scope: a new value
+    /// recomposes it.
     ///
     /// # Panics
     ///
@@ -83,60 +288,362 @@ impl<T: 'static> CompositionLocal<T> {
     where
         T: Clone,
     {
-        let key = self.key();
-        let found = with_runtime(|runtime| {
-            let composition = runtime.check_composing();
-            let table = &runtime.compositions.data(composition).table;
-            // The providers around the group composing now, nearest first.
-            let composing = runtime.frames.last().map_or(NONE, |frame| frame.group);
-            let mut group = table.provider_at_or_above(composing);
-            while group != NONE {
-                let entry = &table[group];
-                if entry.kind == GroupKind::Replace
-                    && entry.key == key
-                    && let Some(slot) = entry.slots.first()
-                    && slot.value.value_type_id() == TypeId::of::<Rc<ProviderSlot<T>>>()
-                {
-                    return slot.value.to_any();
-                }
-                group = entry.enclosing_provider;
-            }
-            None
-        });
-        let Some(found) = found else { return (self.default)() };
-        let slot = found.downcast_ref::<Rc<ProviderSlot<T>>>().expect("type checked");
-        if slot.local != self.id() {
-            return (self.default)();
+        let here = CompositionLocalAccessorScope { map: None };
+        match find_provided(self.id()) {
+            Some(holder) => holder
+                .downcast_ref::<Holder<T>>()
+                .expect("a local's type is in its identity")
+                .read(&here),
+            None => self.default_value(&here),
         }
-        slot.value.handle().get()
+    }
+
+    fn default_value(&self, scope: &CompositionLocalAccessorScope) -> T {
+        match self.default {
+            LocalDefault::Value(default) => default(),
+            LocalDefault::Computed(compute) => compute(scope),
+        }
     }
 }
 
-/// Provides `value` to `content`, as Compose's `CompositionLocalProvider(local provides value)`.
-/// A changed value recomposes the scopes that read it, and only those. Nest providers for
-/// several locals.
-#[allow(non_snake_case)]
-pub fn CompositionLocalProvider<T: Clone + ComposeArg + 'static>(
-    value: ProvidedValue<T>,
-    content: impl FnOnce(),
-) {
-    // A shim, instantiated per call site: the provider's work is instantiated per value type.
-    let group = start_provider(value);
-    content();
-    drop(group);
+/// The holder of the nearest provider of `local` above the composable composing now.
+fn find_provided(local: u64) -> Option<Rc<dyn Any>> {
+    with_runtime(|runtime| {
+        let composition = runtime.check_composing();
+        let table = &runtime.compositions.data(composition).table;
+        let composing = runtime.frames.last().map_or(NONE, |frame| frame.group);
+        let mut group = table.provider_at_or_above(composing);
+        while group != NONE {
+            if let Some(holder) = entries_of(table, group).and_then(|entries| {
+                let entries = entries.entries.borrow();
+                entries.iter().find(|entry| entry.local == local).map(|entry| entry.holder.clone())
+            }) {
+                return Some(holder);
+            }
+            group = table[group].enclosing_provider;
+        }
+        None
+    })
 }
 
-/// Starts a provider's group and provides `value` in it.
-fn start_provider<T: Clone + ComposeArg + 'static>(value: ProvidedValue<T>) -> ReplaceGroup {
-    let ProvidedValue { id, key, value } = value;
-    let group = ReplaceGroup::start(key, "compose_runtime::CompositionLocalProvider");
+/// A provider group's entries.
+fn entries_of(table: &crate::slot_table::SlotTable, group: u32) -> Option<Rc<ProviderEntries>> {
+    let slot = table[group].slots.first()?;
+    if slot.value.value_type_id() != TypeId::of::<Rc<ProviderEntries>>() {
+        return None;
+    }
+    slot.value.to_any()?.downcast_ref::<Rc<ProviderEntries>>().cloned()
+}
+
+/// What the providers above the composable composing now provide, nearest first, a local
+/// once: what [`current_composition_local_map`] and [`current_composition_local_context`]
+/// capture.
+fn visible_entries() -> Vec<Entry> {
+    with_runtime(|runtime| {
+        let composition = runtime.check_composing();
+        let table = &runtime.compositions.data(composition).table;
+        let composing = runtime.frames.last().map_or(NONE, |frame| frame.group);
+        let mut group = table.provider_at_or_above(composing);
+        let mut visible: Vec<Entry> = Vec::new();
+        while group != NONE {
+            if let Some(entries) = entries_of(table, group) {
+                for entry in entries.entries.borrow().iter() {
+                    if !visible.iter().any(|seen| seen.local == entry.local) {
+                        visible.push(Entry { owned: false, ..entry.clone() });
+                    }
+                }
+            }
+            group = table[group].enclosing_provider;
+        }
+        visible
+    })
+}
+
+/// Whether a provider above the provider group starting now provides `local`.
+fn provided_above(local: u64) -> bool {
+    with_runtime(|runtime| {
+        let composition = runtime.check_composing();
+        let table = &runtime.compositions.data(composition).table;
+        let provider = runtime.frames.last().map_or(NONE, |frame| frame.group);
+        let mut group = if provider == NONE { NONE } else { table[provider].enclosing_provider };
+        while group != NONE {
+            if entries_of(table, group).is_some_and(|entries| {
+                entries.entries.borrow().iter().any(|entry| entry.local == local)
+            }) {
+                return true;
+            }
+            group = table[group].enclosing_provider;
+        }
+        false
+    })
+}
+
+/// The locals provided at a point, as Compose's `CompositionLocalMap`
+/// (`currentComposer.currentCompositionLocalMap`): [`get`](CompositionLocalMap::get) reads one
+/// as `current()` would have there.
+#[derive(Clone, Default)]
+pub struct CompositionLocalMap {
+    entries: Rc<[Entry]>,
+}
+
+impl CompositionLocalMap {
+    /// A map providing nothing, as `CompositionLocalMap.Empty`: every local reads its default.
+    pub fn empty() -> CompositionLocalMap {
+        CompositionLocalMap::default()
+    }
+
+    /// The value of `local` in the map, or its default. Reading a dynamic local during
+    /// composition subscribes the composing scope, as reading it through `current()`.
+    pub fn get<T: Clone + 'static>(&self, local: &CompositionLocal<T>) -> T {
+        let scope = CompositionLocalAccessorScope { map: Some(self.clone()) };
+        let id = local.id();
+        match self.entries.iter().find(|entry| entry.local == id) {
+            Some(entry) => entry
+                .holder
+                .downcast_ref::<Holder<T>>()
+                .expect("a local's type is in its identity")
+                .read(&scope),
+            None => local.default_value(&scope),
+        }
+    }
+}
+
+impl std::fmt::Debug for CompositionLocalMap {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "CompositionLocalMap({} locals)", self.entries.len())
+    }
+}
+
+impl ComposeArg for CompositionLocalMap {
+    /// The same holders, as Compose's map `equals` compares its holders.
+    fn same(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.entries, &other.entries)
+            || (self.entries.len() == other.entries.len()
+                && self
+                    .entries
+                    .iter()
+                    .zip(other.entries.iter())
+                    .all(|(a, b)| a.local == b.local && Rc::ptr_eq(&a.holder, &b.holder)))
+    }
+}
+
+/// The locals provided where [`current_composition_local_map`] is called.
+pub fn current_composition_local_map() -> CompositionLocalMap {
+    CompositionLocalMap { entries: visible_entries().into() }
+}
+
+/// Every local provided at a point, to provide elsewhere (another composition, a dialog), as
+/// Compose's `CompositionLocalContext`: give it to [`CompositionLocalProvider`]. A dynamic
+/// local keeps following its provider's value.
+#[derive(Clone, Debug, Default)]
+pub struct CompositionLocalContext {
+    map: CompositionLocalMap,
+}
+
+impl ComposeArg for CompositionLocalContext {
+    fn same(&self, other: &Self) -> bool {
+        self.map.same(&other.map)
+    }
+}
+
+/// The locals provided where it's called, as `currentCompositionLocalContext`.
+pub fn current_composition_local_context() -> CompositionLocalContext {
+    CompositionLocalContext { map: current_composition_local_map() }
+}
+
+/// What a provider applies: the entries it had, updated by what it's given now.
+#[doc(hidden)]
+pub struct ProviderUpdate {
+    entries: Vec<Entry>,
+    /// The locals given now.
+    given: Vec<u64>,
+    /// An entry was added, removed or replaced: the content recomposes as a whole (Compose's
+    /// `providersInvalid`).
+    changed: bool,
+}
+
+impl ProviderUpdate {
+    fn entry(&self, local: u64) -> Option<usize> {
+        self.entries.iter().position(|entry| entry.local == local)
+    }
+
+    fn replace(&mut self, entry: Entry) {
+        self.changed = true;
+        match self.entry(entry.local) {
+            Some(index) => self.entries[index] = entry,
+            None => self.entries.push(entry),
+        }
+    }
+
+    fn give<T: Clone + 'static>(&mut self, provided: ProvidedValue<T>) {
+        let ProvidedValue { local, is_static, can_override, equivalent, value, .. } = provided;
+        // `providesDefault`: nothing if a provider above provides it.
+        if !can_override && provided_above(local) {
+            return;
+        }
+        self.given.push(local);
+        let existing = self.entry(local).map(|index| self.entries[index].clone());
+        let holder = existing.as_ref().and_then(|entry| {
+            entry.holder.clone().downcast::<Holder<T>>().ok().map(|holder| (holder, entry.owned))
+        });
+        match (holder, value) {
+            // A dynamic value: written in place, its readers recompose.
+            (Some((holder, true)), Provided::Value(value)) if !is_static => {
+                if let Holder::Dynamic(state) = &*holder {
+                    state.set(value);
+                    return;
+                }
+                self.replace(new_entry(local, is_static, equivalent, Provided::Value(value)));
+            }
+            (Some((holder, _)), Provided::Value(value)) if is_static => {
+                if let Holder::Static(old) = &*holder
+                    && equivalent(old, &value)
+                {
+                    return;
+                }
+                self.replace(new_entry(local, is_static, equivalent, Provided::Value(value)));
+            }
+            (Some((holder, _)), Provided::Computed(compute)) => {
+                if let Holder::Computed(old) = &*holder
+                    && Rc::ptr_eq(old, &compute)
+                {
+                    return;
+                }
+                self.replace(new_entry(local, is_static, equivalent, Provided::Computed(compute)));
+            }
+            (_, value) => self.replace(new_entry(local, is_static, equivalent, value)),
+        }
+    }
+
+    fn give_context(&mut self, context: CompositionLocalContext) {
+        for entry in context.map.entries.iter() {
+            self.given.push(entry.local);
+            let same = self
+                .entry(entry.local)
+                .is_some_and(|index| Rc::ptr_eq(&self.entries[index].holder, &entry.holder));
+            if !same {
+                self.replace(Entry { owned: false, ..entry.clone() });
+            }
+        }
+    }
+}
+
+/// A new holder for a provided value.
+fn new_entry<T: Clone + 'static>(
+    local: u64,
+    is_static: bool,
+    equivalent: fn(&T, &T) -> bool,
+    value: Provided<T>,
+) -> Entry {
+    let holder = match value {
+        Provided::Value(value) if is_static => Holder::Static(value),
+        Provided::Value(value) => {
+            Holder::Dynamic(crate::state::mutable_state_with_equivalence(value, equivalent))
+        }
+        Provided::Computed(compute) => Holder::Computed(compute),
+    };
+    Entry { local, holder: Rc::new(holder), owned: true }
+}
+
+/// What [`CompositionLocalProvider`] takes: a [`ProvidedValue`], a tuple of them, a `Vec` or an
+/// array of them (Compose's varargs), or a [`CompositionLocalContext`].
+pub trait ProvidedValues {
+    #[doc(hidden)]
+    fn give(self, update: &mut ProviderUpdate);
+}
+
+impl<T: Clone + 'static> ProvidedValues for ProvidedValue<T> {
+    fn give(self, update: &mut ProviderUpdate) {
+        update.give(self);
+    }
+}
+
+impl<T: Clone + 'static> ProvidedValues for Vec<ProvidedValue<T>> {
+    fn give(self, update: &mut ProviderUpdate) {
+        for value in self {
+            update.give(value);
+        }
+    }
+}
+
+impl<T: Clone + 'static, const N: usize> ProvidedValues for [ProvidedValue<T>; N] {
+    fn give(self, update: &mut ProviderUpdate) {
+        for value in self {
+            update.give(value);
+        }
+    }
+}
+
+impl ProvidedValues for CompositionLocalContext {
+    fn give(self, update: &mut ProviderUpdate) {
+        update.give_context(self);
+    }
+}
+
+macro_rules! tuple_values {
+    ($($name:ident),+) => {
+        impl<$($name: ProvidedValues),+> ProvidedValues for ($($name,)+) {
+            #[allow(non_snake_case)]
+            fn give(self, update: &mut ProviderUpdate) {
+                let ($($name,)+) = self;
+                $($name.give(update);)+
+            }
+        }
+    };
+}
+
+tuple_values!(A);
+tuple_values!(A, B);
+tuple_values!(A, B, C);
+tuple_values!(A, B, C, D);
+tuple_values!(A, B, C, D, E);
+tuple_values!(A, B, C, D, E, F);
+tuple_values!(A, B, C, D, E, F, G);
+tuple_values!(A, B, C, D, E, F, G, H);
+
+/// Provides `values` to `content`, as Compose's `CompositionLocalProvider(values) { … }`:
+/// one value, a tuple of them, a `Vec` or an array, or a [`CompositionLocalContext`]. A dynamic
+/// local's new value recomposes the scopes that read it, and only those; a static local's new
+/// value, or a change in what's provided, recomposes the whole content.
+#[allow(non_snake_case)]
+pub fn CompositionLocalProvider(values: impl ProvidedValues, content: impl FnOnce()) {
+    with_composition_locals(values, content)
+}
+
+/// Provides `value` to `content` and returns what it returns, as `withCompositionLocal`.
+pub fn with_composition_local<R>(value: impl ProvidedValues, content: impl FnOnce() -> R) -> R {
+    with_composition_locals(value, content)
+}
+
+/// Provides `values` to `content` and returns what it returns, as `withCompositionLocals`.
+pub fn with_composition_locals<R>(values: impl ProvidedValues, content: impl FnOnce() -> R) -> R {
+    let group = start_provider();
+    let entries: Rc<ProviderEntries> = remember(|| Rc::new(ProviderEntries::default()));
+    let inserting = crate::composer::current().inserting();
+    let mut update = ProviderUpdate {
+        entries: std::mem::take(&mut *entries.entries.borrow_mut()),
+        given: Vec::new(),
+        changed: false,
+    };
+    values.give(&mut update);
+    let ProviderUpdate { entries: mut updated, given, mut changed } = update;
+    // Locals no longer given.
+    let before = updated.len();
+    updated.retain(|entry| given.contains(&entry.local));
+    changed |= updated.len() != before;
+    let dropped = std::mem::replace(&mut *entries.entries.borrow_mut(), updated);
+    drop(dropped);
+    if changed && !inserting {
+        with_runtime(|runtime| runtime.invalidate_providers());
+    }
+    let result = content();
+    drop(group);
+    result
+}
+
+/// Starts a provider's group.
+fn start_provider() -> ReplaceGroup {
+    let group = ReplaceGroup::start(PROVIDER_KEY, "compose_runtime::CompositionLocalProvider");
     with_runtime(|runtime| runtime.mark_provider());
-    let slot: Rc<ProviderSlot<T>> = remember(|| {
-        Rc::new(ProviderSlot {
-            local: id,
-            value: mutable_state_of_with(value.clone(), ReferentialEqualityPolicy),
-        })
-    });
-    slot.value.handle().set(value);
     group
 }

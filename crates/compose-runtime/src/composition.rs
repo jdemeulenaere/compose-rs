@@ -142,7 +142,7 @@ impl Composition {
                 if matches!(entry.kind, GroupKind::Movable | GroupKind::Reusable) {
                     let _ = write!(out, " data={:#018x}", entry.data_key);
                 }
-                if entry.deactivated {
+                if entry.deactivated() {
                     let _ = write!(out, " deactivated");
                 }
                 if entry.kind == GroupKind::Node {
@@ -299,6 +299,7 @@ impl Pass {
                 active,
                 abandoned_groups,
                 reusing,
+                providers_invalid,
                 pause,
                 pausable_pass,
                 resume_next,
@@ -331,6 +332,7 @@ impl Pass {
             *active = Some(ActivePass { composition: id, composing: true });
             *abandoned_groups = false;
             *reusing = 0;
+            *providers_invalid = 0;
             *pause = should_pause;
             *pausable_pass = kind != PassKind::Whole;
             *resume_next = None;
@@ -510,6 +512,7 @@ impl Drop for Pass {
                 runtime.active = None;
                 runtime.frames.clear();
                 runtime.reusing = 0;
+                runtime.providers_invalid = 0;
                 runtime.pause = None;
                 runtime.pausable_pass = false;
                 runtime.resume_next = None;
@@ -714,7 +717,7 @@ fn validate(runtime: &Runtime, id: CompositionId) -> Result<(), String> {
     while let Some((index, deactivated, paused)) = stack.pop() {
         reachable += 1;
         let group = &table[index];
-        let inner_deactivated = deactivated || group.deactivated;
+        let inner_deactivated = deactivated || group.deactivated();
         let inner_paused = paused || region_at(index).is_some();
         if group.kind == GroupKind::Free {
             return Err(format!("group {index} is free but reachable"));

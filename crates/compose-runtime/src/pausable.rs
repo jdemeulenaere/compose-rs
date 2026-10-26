@@ -238,7 +238,7 @@ impl Paused {
         &mut self,
         table: &mut SlotTable,
         scopes: &mut crate::scope::Scopes,
-        removal_stack: &mut Vec<(u32, bool)>,
+        removal_stack: &mut Vec<crate::runtime::RemovalStep>,
         deferred: &mut Deferred,
         removed: Vec<u32>,
         deactivating: bool,

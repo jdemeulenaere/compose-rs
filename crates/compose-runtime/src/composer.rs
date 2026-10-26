@@ -23,7 +23,8 @@ use crate::applier::{Applier, NodeRef};
 use crate::error::{ComposeError, misuse};
 use crate::pausable::{Entry, NO_REGION, RecordedOp, ShouldPauseCallback, deferred_of};
 use crate::runtime::{
-    CompositionData, DeferredEffect, Runtime, remove_siblings, try_with_runtime, with_runtime,
+    CompositionData, DeferredEffect, RemovalStep, Runtime, remove_siblings, try_with_runtime,
+    with_runtime,
 };
 use crate::scope::{RecomposeScope, ScopeId, Scopes};
 use crate::slot_table::{GroupKind, NONE, Slot, SlotTable, SlotValue};
@@ -208,7 +209,10 @@ impl Runtime {
         reusable: bool,
     ) -> (NodeOp, NodeStart) {
         let composition = self.check_composing();
-        let Runtime { compositions, scopes, frames, reusing, resume_next, .. } = self;
+        let Runtime {
+            compositions, scopes, frames, reusing, resume_next, providers_invalid, ..
+        } = self;
+        let providers_invalid = *providers_invalid != 0;
         let CompositionData { table, paused, .. } = compositions.data_mut(composition);
         let parent = frames.last_mut().unwrap_or_else(|| misuse(ComposeError::NotComposing));
         match parent.mode {
@@ -291,6 +295,10 @@ impl Runtime {
         };
 
         let parent = *parent;
+        // Where it sits among its parent's slots (not a restart's: the walking frame has none).
+        if parent.mode == Mode::Normal {
+            table[index].slot_position = parent.slot_cursor.min(u32::from(u8::MAX)) as u8;
+        }
         // A pass reaching paused content's group (a body around it ran): it composes the rest of
         // it, recorded as the region's, and applies it at its end (D592).
         let adopted = match paused {
@@ -305,7 +313,7 @@ impl Runtime {
         let starts_reuse = !inserting && kind == GroupKind::Reusable && group.data_key != data_key;
         if starts_reuse {
             group.data_key = data_key;
-            group.deactivated = false;
+            group.set_flag(crate::slot_table::DEACTIVATED, false);
         }
         let reusing_now = *reusing != 0 || starts_reuse;
         let mut frame = Frame {
@@ -313,8 +321,8 @@ impl Runtime {
             mode: Mode::Normal,
             inserting,
             // Reused content runs: its slots read as empty, as if new, but its groups and
-            // nodes are kept.
-            forced: reusing_now,
+            // nodes are kept. So does the content of a provider whose values changed.
+            forced: reusing_now || providers_invalid,
             skipped: false,
             dirty,
             cursor: if inserting { NONE } else { group.first_child },
@@ -373,7 +381,7 @@ impl Runtime {
                 // unchecked, as Compose's `addRecomposeScope`.
                 frame.forced |= scope.invalid || fresh;
                 scope.invalid = false;
-                scope.conditions.clear();
+                let conditional = scope.conditional;
                 // A paused scope met through its parent's body rather than a resume's walk
                 // resumes too, as Compose's `addRecomposeScope`: from its start, in its segment,
                 // reusing if it paused reusing.
@@ -389,6 +397,9 @@ impl Runtime {
                 // then the scope may still skip, and its reads from the last run stay current.
                 frame.saved_epoch = scope.epoch;
                 frame.scope = group.scope;
+                if conditional {
+                    scopes.clear_conditions(group.scope);
+                }
                 NodeStart::NotNode
             }
             _ => NodeStart::NotNode,
@@ -442,6 +453,9 @@ impl Runtime {
         }
         if *reusing == frames.len() {
             *reusing = 0;
+        }
+        if self.providers_invalid == frames.len() {
+            self.providers_invalid = 0;
         }
         frames.pop();
 
@@ -575,7 +589,7 @@ impl Runtime {
         if changed && !frame.inserting {
             // Pre-order, as removals: a group's slots before its children's.
             let group = &mut table[frame.group];
-            group.deactivated = true;
+            group.set_flag(crate::slot_table::DEACTIVATED, true);
             for slot in &mut group.slots {
                 deactivate_slot(&mut slot.value, &mut deferred.removed_values);
             }
@@ -583,11 +597,11 @@ impl Runtime {
             stack.clear();
             let mut child = group.first_child;
             while child != NONE {
-                stack.push((child, false));
+                stack.push(RemovalStep::enter(child, false));
                 child = table[child].next_sibling;
             }
             stack.reverse();
-            while let Some((index, _)) = stack.pop() {
+            while let Some(RemovalStep { group: index, .. }) = stack.pop() {
                 let group = &mut table[index];
                 group.dirty = false;
                 for slot in &mut group.slots {
@@ -603,7 +617,7 @@ impl Runtime {
                 let start = stack.len();
                 let mut child = group.first_child;
                 while child != NONE {
-                    stack.push((child, false));
+                    stack.push(RemovalStep::enter(child, false));
                     child = table[child].next_sibling;
                 }
                 stack[start..].reverse();
@@ -712,9 +726,9 @@ impl Runtime {
                 && let Some(scope) = scopes.get(group.scope)
                 && scope.invalid
                 && !scope.paused
-                && !scope.conditions.is_empty()
+                && scope.conditional
             {
-                return WalkStep::Check(group.scope, scope.conditions.clone());
+                return WalkStep::Check(group.scope, scopes.conditions(group.scope));
             }
             if group.kind == GroupKind::Restart
                 && scopes.get(group.scope).is_some_and(|scope| scope.invalid)
@@ -785,10 +799,10 @@ impl Runtime {
     pub(crate) fn settle_conditions(&mut self, id: ScopeId) {
         if let Some(scope) = self.scopes.get_mut(id)
             && scope.invalid
-            && !scope.conditions.is_empty()
+            && scope.conditional
         {
             scope.invalid = false;
-            scope.conditions.clear();
+            self.scopes.clear_conditions(id);
         }
     }
 
@@ -1030,6 +1044,14 @@ impl Runtime {
         Ok(())
     }
 
+    /// The provider group composing now changed what it provides in a way its content can't
+    /// see through state: every body in its content runs, as Compose's `providersInvalid`.
+    pub(crate) fn invalidate_providers(&mut self) {
+        if self.providers_invalid == 0 {
+            self.providers_invalid = self.frames.len();
+        }
+    }
+
     /// Marks the group just started as a composition local provider's, before its content runs:
     /// the groups allocated inside it record it as their nearest provider
     /// (`Group::enclosing_provider`), where reading a local starts.
@@ -1039,8 +1061,8 @@ impl Runtime {
         let group = frame.group;
         let group = &mut self.compositions.data_mut(composition).table[group];
         // Its children were allocated under it as a provider, or it has none yet.
-        debug_assert!(group.is_provider || group.first_child == NONE);
-        group.is_provider = true;
+        debug_assert!(group.is_provider() || group.first_child == NONE);
+        group.set_flag(crate::slot_table::PROVIDER, true);
     }
 
     pub(crate) fn record_side_effect(&mut self, effect: DeferredEffect) {

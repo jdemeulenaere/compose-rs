@@ -91,6 +91,10 @@ pub fn hash_key<K: Hash + ?Sized>(key: &K) -> u64 {
     hasher.finish()
 }
 
+/// A map keyed by small integers, hashed with [`KeyHasher`], buildable in a `const`.
+pub(crate) type KeyMap<K, V> =
+    std::collections::HashMap<K, V, std::hash::BuildHasherDefault<KeyHasher>>;
+
 #[cfg(test)]
 mod tests {
     use super::*;

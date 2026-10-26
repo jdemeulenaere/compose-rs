@@ -1305,7 +1305,7 @@ pub fn Spaced() {
 }
 ```
 
-A local is a `static`, named by its name and type together. `CompositionLocalProvider` is a plain function taking one value; nest providers for several.
+A local is a `static`, named by its name and type together. `CompositionLocalProvider` is a plain function taking one value, or a tuple of them (`(LOCAL_A.provides(a), LOCAL_B.provides(b))`, Compose's varargs), and `with_composition_local(values, || …)` returns what its content returns. `staticCompositionLocalOf` is `CompositionLocal::new_static`, `compositionLocalWithComputedDefaultOf { … }` is `CompositionLocal::with_computed_default(name, |scope| scope.current_value(&OTHER) …)`, and `provides_default`, `provides_computed`, `current_composition_local_context()` are Compose's `providesDefault`, `providesComputed`, `currentCompositionLocalContext`.
 
 ### Components
 

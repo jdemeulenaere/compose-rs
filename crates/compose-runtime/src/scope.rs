@@ -32,10 +32,10 @@ pub(crate) struct ScopeEntry {
     /// Invalidated: its body runs in the next pass. With `conditions`, only if one of them
     /// changed.
     pub invalid: bool,
-    /// The derived states whose dependencies changed since the scope read them, when that is
-    /// all that invalidated it (Compose's conditional invalidation): the pass reaching it
-    /// recomputes them, and runs its body only if one changed. Empty when it's invalid outright.
-    pub conditions: Vec<crate::state::StateId>,
+    /// Invalid only on conditions (`Scopes::conditions`): derived states whose dependencies
+    /// changed since the scope read them (Compose's conditional invalidation). The pass reaching
+    /// it recomputes them, and runs its body only if one changed.
+    pub conditional: bool,
     /// Its body was paused by a paused composition (Compose's `RecomposeScopeImpl.paused`): it's
     /// invalid, and the paused composition's next resume runs it, from its start.
     pub paused: bool,
@@ -61,11 +61,46 @@ pub(crate) struct Scopes {
     compaction: u32,
     /// How many compactions of readers ran on this thread (for tests: their cost is bounded).
     pub compactions: u64,
+    /// The conditions of the scopes invalid on conditions (`ScopeEntry::conditional`), by index:
+    /// rare, so kept out of the entries, which a pass scans.
+    conditions: crate::hash::KeyMap<u32, Vec<crate::state::StateId>>,
 }
 
 impl Scopes {
     pub const fn new() -> Scopes {
-        Scopes { entries: Vec::new(), free: Vec::new(), base: 1, compaction: 0, compactions: 0 }
+        Scopes {
+            entries: Vec::new(),
+            free: Vec::new(),
+            base: 1,
+            compaction: 0,
+            compactions: 0,
+            conditions: crate::hash::KeyMap::with_hasher(std::hash::BuildHasherDefault::new()),
+        }
+    }
+
+    /// Makes a scope valid or invalid outright: no conditions any more.
+    pub fn clear_conditions(&mut self, id: ScopeId) {
+        if let Some(entry) = self.get_mut(id)
+            && std::mem::take(&mut entry.conditional)
+        {
+            self.conditions.remove(&id.index);
+        }
+    }
+
+    /// Adds a condition to a scope invalid on conditions.
+    pub fn add_condition(&mut self, id: ScopeId, cell: crate::state::StateId) {
+        if let Some(entry) = self.get_mut(id) {
+            entry.conditional = true;
+            let conditions = self.conditions.entry(id.index).or_default();
+            if !conditions.contains(&cell) {
+                conditions.push(cell);
+            }
+        }
+    }
+
+    /// The conditions of a scope invalid on conditions.
+    pub fn conditions(&self, id: ScopeId) -> Vec<crate::state::StateId> {
+        self.conditions.get(&id.index).cloned().unwrap_or_default()
     }
 
     pub fn alloc(&mut self, composition: u32, group: u32) -> ScopeId {
@@ -76,7 +111,7 @@ impl Scopes {
             entry.group = group;
             entry.epoch = 0;
             entry.invalid = false;
-            entry.conditions.clear();
+            entry.conditional = false;
             entry.paused = false;
             entry.reusing = false;
             entry.segment = 0;
@@ -90,7 +125,7 @@ impl Scopes {
                 group,
                 epoch: 0,
                 invalid: false,
-                conditions: Vec::new(),
+                conditional: false,
                 paused: false,
                 reusing: false,
                 segment: 0,
@@ -105,7 +140,9 @@ impl Scopes {
         debug_assert_eq!(entry.generation, id.generation, "freeing a stale scope");
         entry.generation = entry.generation.wrapping_add(1);
         entry.invalid = false;
-        entry.conditions.clear();
+        if std::mem::take(&mut entry.conditional) {
+            self.conditions.remove(&id.index);
+        }
         entry.paused = false;
         self.free.push(id.index);
     }

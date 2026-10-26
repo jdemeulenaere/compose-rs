@@ -36,7 +36,7 @@ pub(crate) struct Runtime {
     /// The frames of the pass in progress; kept between passes for its capacity.
     pub frames: Vec<Frame>,
     /// Scratch stack for removing subtrees; kept for its capacity.
-    pub removal_stack: Vec<(u32, bool)>,
+    pub removal_stack: Vec<RemovalStep>,
     /// Frame requesters to call once the borrow ends; kept for its capacity.
     pub frame_requests: Vec<Rc<dyn Fn()>>,
     /// Observers of reads outside composition, and the observation in progress.
@@ -60,6 +60,11 @@ pub(crate) struct Runtime {
     /// as Compose's `reusing`, slots read as empty, bodies run and reusable nodes are kept
     /// until that group ends.
     pub reusing: usize,
+    /// The depth (`frames.len()`) of the provider group whose provided values changed in a way
+    /// its content's composables can't see through state (a static local's value, a computed
+    /// one, the set of locals), or 0: as Compose's `providersInvalid`, every body under it runs
+    /// until that group ends.
+    pub providers_invalid: usize,
     /// The paused composition's callback, during its passes (`PausedComposition::resume`): asked
     /// at each pause point.
     pub pause: Option<Rc<dyn crate::pausable::ShouldPauseCallback>>,
@@ -99,6 +104,7 @@ impl Runtime {
             recomposition_counts: None,
             abandoned_groups: false,
             reusing: 0,
+            providers_invalid: 0,
             pause: None,
             pausable_pass: false,
             resume_next: None,
@@ -284,6 +290,12 @@ fn ahead_of_the_pass(table: &SlotTable, frames: &[Frame], group: u32) -> Option<
     None
 }
 
+/// Where a scope's group is.
+struct ScopeLocation {
+    composition: u32,
+    group: u32,
+}
+
 /// Marks a scope invalid, outright or (with `condition`) only if that derived state's value
 /// changed, and its ancestors dirty. Returns whether a frame request was queued.
 ///
@@ -304,22 +316,22 @@ pub(crate) fn invalidate_scope_parts(
         return false;
     };
     if scope.invalid {
+        let conditional = scope.conditional;
         match condition {
-            // Invalid outright already, or conditional: one more condition.
-            Some(cell) => {
-                if !scope.conditions.is_empty() && !scope.conditions.contains(&cell) {
-                    scope.conditions.push(cell);
-                }
-            }
+            // Conditional: one more condition. Invalid outright already: nothing more.
+            Some(cell) if conditional => scopes.add_condition(id, cell),
+            Some(_) => {}
             // Conditional until now: invalid outright.
-            None => scope.conditions.clear(),
+            None => scopes.clear_conditions(id),
         }
         return false;
     }
     scope.invalid = true;
+    let (composition, group) = (scope.composition, scope.group);
     if let Some(cell) = condition {
-        scope.conditions.push(cell);
+        scopes.add_condition(id, cell);
     }
+    let scope = ScopeLocation { composition, group };
     let data = compositions.data_mut(scope.composition);
     let table = &mut data.table;
     // In paused content not applied yet: its paused composition's next resume recomposes it, as
@@ -581,7 +593,7 @@ pub(crate) fn remove_siblings(
     table: &mut SlotTable,
     deferred: &mut Deferred,
     scopes: &mut Scopes,
-    stack: &mut Vec<(u32, bool)>,
+    stack: &mut Vec<RemovalStep>,
     first: u32,
     until: u32,
 ) -> u32 {
@@ -596,39 +608,80 @@ pub(crate) fn remove_siblings(
     count
 }
 
-/// Removes one group and its subtree, in pre-order: a group's slots before its children's.
+/// A step of a removal walk: a group to enter, or to go on with at its next child.
+#[derive(Clone, Copy)]
+pub(crate) struct RemovalStep {
+    pub group: u32,
+    /// The next child to remove (`NONE` once all were).
+    next_child: u32,
+    /// How many of its slots were taken.
+    taken: u32,
+    under_node: bool,
+    entered: bool,
+}
+
+impl RemovalStep {
+    pub fn enter(group: u32, under_node: bool) -> RemovalStep {
+        RemovalStep { group, next_child: NONE, taken: 0, under_node, entered: false }
+    }
+}
+
+/// Removes one group and its subtree, in table order: each group's slots interleaved with its
+/// children's subtrees by where each child sits among them (`Group::slot_position`), as
+/// Compose's slot table holds them, so remember observers are forgotten in the reverse of that
+/// order (D714).
 fn remove_subtree(
     table: &mut SlotTable,
     deferred: &mut Deferred,
     scopes: &mut Scopes,
-    stack: &mut Vec<(u32, bool)>,
+    stack: &mut Vec<RemovalStep>,
     root: u32,
 ) {
     stack.clear();
-    stack.push((root, false));
-    while let Some((index, under_node)) = stack.pop() {
+    stack.push(RemovalStep::enter(root, false));
+    while let Some(mut step) = stack.pop() {
+        let index = step.group;
+        if !step.entered {
+            let group = &mut table[index];
+            debug_assert!(group.kind != GroupKind::Free, "removing a free group");
+            // Only the topmost nodes are released: releasing a node releases its subtree.
+            if group.kind == GroupKind::Node && !step.under_node && !group.node.is_none() {
+                deferred.released_nodes.push(group.node);
+            }
+            if !group.scope.is_none() {
+                scopes.free(group.scope);
+                group.scope = crate::scope::ScopeId::NONE;
+            }
+            step.entered = true;
+            step.next_child = group.first_child;
+        }
+        // Its slots before the next child.
+        let child = step.next_child;
+        let until =
+            if child == NONE { usize::MAX } else { usize::from(table[child].slot_position) };
         let group = &mut table[index];
-        debug_assert!(group.kind != GroupKind::Free, "removing a free group");
-        let is_node = group.kind == GroupKind::Node;
-        // Only the topmost nodes are released: releasing a node releases its subtree.
-        if is_node && !under_node && !group.node.is_none() {
-            deferred.released_nodes.push(group.node);
+        let until = until.min(group.slots.len());
+        let from = step.taken as usize;
+        if until > from {
+            deferred.removed_values.extend(
+                group.slots[from..until]
+                    .iter_mut()
+                    .map(|slot| std::mem::replace(&mut slot.value, SlotValue::Empty)),
+            );
+            step.taken = until as u32;
         }
-        deferred.removed_values.extend(group.slots.drain(..).map(|slot| slot.value));
-        if let Some(kept) = group.kept.take() {
-            deferred.removed_values.push(SlotValue::Plain(kept));
+        if child == NONE {
+            let group = &mut table[index];
+            group.slots.clear();
+            if let Some(kept) = group.kept.take() {
+                deferred.removed_values.push(SlotValue::Plain(kept));
+            }
+            table.free(index);
+            continue;
         }
-        if !group.scope.is_none() {
-            scopes.free(group.scope);
-            group.scope = crate::scope::ScopeId::NONE;
-        }
-        let mut child = group.first_child;
-        let start = stack.len();
-        while child != NONE {
-            stack.push((child, under_node || is_node));
-            child = table[child].next_sibling;
-        }
-        stack[start..].reverse();
-        table.free(index);
+        let under_node = step.under_node || table[index].kind == GroupKind::Node;
+        step.next_child = table[child].next_sibling;
+        stack.push(step);
+        stack.push(RemovalStep::enter(child, under_node));
     }
 }

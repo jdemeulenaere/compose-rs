@@ -45,11 +45,9 @@ struct CellEntry {
     /// A derived state's result whose dependencies may have changed: a read refreshes it first.
     dirty: bool,
     /// A state its calculation read changed (or it was never computed): the refresh recomputes
-    /// it. Without it, only derived states it read are dirty (`dirty_derived`): the refresh
-    /// refreshes them first, and recomputes it only if one of their values changed.
+    /// it. Without it, only derived states it read are dirty (`Cells::dirty_derived`): the
+    /// refresh refreshes them first, and recomputes it only if one of their values changed.
     stale: bool,
-    /// The dirty derived states this one read, while it isn't `stale`.
-    dirty_derived: Vec<StateId>,
     /// The derived state computing this cell, if it is one's result.
     refresh: Option<std::rc::Weak<dyn crate::derived::Refresh>>,
     created_at: &'static Location<'static>,
@@ -72,6 +70,9 @@ pub(crate) struct Cells {
     held_by_disposals: Vec<StateId>,
     /// The generation of new entries (odd): after a reset, above every earlier one.
     base: u32,
+    /// The dirty derived states a dirty derived state that isn't stale read, by its index: rare,
+    /// so kept out of the entries.
+    dirty_derived: crate::hash::KeyMap<u32, Vec<StateId>>,
 }
 
 impl Cells {
@@ -84,6 +85,7 @@ impl Cells {
             held_by_passes: Vec::new(),
             held_by_disposals: Vec::new(),
             base: 1,
+            dirty_derived: crate::hash::KeyMap::with_hasher(std::hash::BuildHasherDefault::new()),
         }
     }
 
@@ -103,7 +105,6 @@ impl Cells {
                 observed: Vec::new(),
                 dirty: false,
                 stale: false,
-                dirty_derived: Vec::new(),
                 refresh: None,
                 created_at,
                 freed: (0, created_at),
@@ -133,8 +134,8 @@ impl Cells {
         entry.observed.clear();
         entry.dirty = false;
         entry.stale = false;
-        entry.dirty_derived.clear();
         entry.refresh = None;
+        self.dirty_derived.remove(&id.index);
         self.free.push(id.index);
         entry.cell.take()
     }
@@ -309,17 +310,36 @@ fn register_observed_read(
 /// `write_cell` or `try_write_cell`.
 type CellLookup = fn(StateId, &'static Location<'static>) -> Result<Rc<dyn Any>, Stale>;
 
-/// Looks a cell up for reading, registering the read.
+/// Looks a cell up for reading, registering the read. A dirty derived state's result is
+/// refreshed first, outside the borrow.
 fn read_cell(id: StateId, at: &'static Location<'static>) -> Result<Rc<dyn Any>, Stale> {
-    refresh_if_dirty(id);
-    with_runtime(|runtime| read_cell_in(runtime, id, at))
+    loop {
+        match with_runtime(|runtime| read_cell_in(runtime, id, at)) {
+            Read::Cell(cell) => return Ok(cell),
+            Read::Stale(stale) => return Err(stale),
+            Read::Refresh(refresh) => refresh.refresh(),
+        }
+    }
 }
 
 /// Like [`read_cell`], for `try_get`: a stale cell once the thread's runtime is gone.
 fn try_read_cell(id: StateId, at: &'static Location<'static>) -> Result<Rc<dyn Any>, Stale> {
-    refresh_if_dirty(id);
-    try_with_runtime(|runtime| read_cell_in(runtime, id, at))
-        .unwrap_or(Err(Stale { created_at: None }))
+    loop {
+        match try_with_runtime(|runtime| read_cell_in(runtime, id, at)) {
+            Some(Read::Cell(cell)) => return Ok(cell),
+            Some(Read::Stale(stale)) => return Err(stale),
+            Some(Read::Refresh(refresh)) => refresh.refresh(),
+            None => return Err(Stale { created_at: None }),
+        }
+    }
+}
+
+/// What a read found.
+enum Read {
+    Cell(Rc<dyn Any>),
+    Stale(Stale),
+    /// A dirty derived state's result: refresh it, then read again.
+    Refresh(Rc<dyn crate::derived::Refresh>),
 }
 
 /// A derived state's result whose dependencies changed is recomputed before it is read, so a
@@ -384,16 +404,17 @@ pub(crate) enum Refreshing {
 /// What refreshing `id` needs; clears its marks when that's recomputing it.
 pub(crate) fn begin_refresh(id: StateId) -> Refreshing {
     try_with_runtime(|runtime| {
-        let Ok(entry) = runtime.cells.entry(id) else { return Refreshing::Clean };
+        let cells = &mut runtime.cells;
+        let Ok(entry) = cells.entry(id) else { return Refreshing::Clean };
         if !entry.dirty {
             Refreshing::Clean
         } else if entry.stale {
             entry.dirty = false;
             entry.stale = false;
-            entry.dirty_derived.clear();
+            cells.dirty_derived.remove(&id.index);
             Refreshing::Recompute
         } else {
-            Refreshing::Check(std::mem::take(&mut entry.dirty_derived))
+            Refreshing::Check(cells.dirty_derived.remove(&id.index).unwrap_or_default())
         }
     })
     .unwrap_or(Refreshing::Clean)
@@ -403,24 +424,28 @@ pub(crate) fn begin_refresh(id: StateId) -> Refreshing {
 /// be recomputed (its marks then cleared); if none did, it's up to date.
 pub(crate) fn settle_refresh(id: StateId) -> bool {
     try_with_runtime(|runtime| {
-        let Ok(entry) = runtime.cells.entry(id) else { return false };
-        let recompute = entry.dirty && (entry.stale || !entry.dirty_derived.is_empty());
-        entry.dirty = false;
-        entry.stale = false;
-        entry.dirty_derived.clear();
-        recompute
+        let cells = &mut runtime.cells;
+        let Ok(entry) = cells.entry(id) else { return false };
+        let dirty = std::mem::take(&mut entry.dirty);
+        let stale = std::mem::take(&mut entry.stale);
+        let derived = cells.dirty_derived.remove(&id.index).is_some_and(|cells| !cells.is_empty());
+        dirty && (stale || derived)
     })
     .unwrap_or(false)
 }
 
-fn read_cell_in(
-    runtime: &mut Runtime,
-    id: StateId,
-    _at: &'static Location<'static>,
-) -> Result<Rc<dyn Any>, Stale> {
+fn read_cell_in(runtime: &mut Runtime, id: StateId, _at: &'static Location<'static>) -> Read {
     let scope = runtime.reading_scope();
     let Runtime { cells, scopes, observers, observing, .. } = runtime;
-    let entry = cells.entry(id)?;
+    let entry = match cells.entry(id) {
+        Ok(entry) => entry,
+        Err(stale) => return Read::Stale(stale),
+    };
+    if entry.dirty
+        && let Some(refresh) = entry.refresh.as_ref().and_then(std::rc::Weak::upgrade)
+    {
+        return Read::Refresh(refresh);
+    }
     match *observing {
         Some(observing) if observing.exclusive || scope.is_none() => {
             register_observed_read(entry, observers, observing)
@@ -428,7 +453,7 @@ fn read_cell_in(
         _ if !scope.is_none() => register_read(entry, scopes, scope),
         _ => {}
     }
-    Ok(entry.cell.clone().expect("a live cell"))
+    Read::Cell(entry.cell.clone().expect("a live cell"))
 }
 
 /// Looks a cell up for writing.
@@ -515,11 +540,15 @@ pub(crate) fn invalidate_readers_except(id: StateId, skip: ScopeId) {
             let Ok(entry) = cells.entry(cell) else { continue };
             match through {
                 None => entry.stale = true,
-                Some(derived) if !entry.stale && !entry.dirty_derived.contains(&derived) => {
-                    entry.dirty_derived.push(derived)
+                Some(derived) if !entry.stale => {
+                    let read = cells.dirty_derived.entry(cell.index).or_default();
+                    if !read.contains(&derived) {
+                        read.push(derived);
+                    }
                 }
                 Some(_) => {}
             }
+            let Ok(entry) = cells.entry(cell) else { continue };
             if entry.dirty {
                 continue;
             }
@@ -728,6 +757,15 @@ pub fn mutable_state_of_with<T: 'static, P: MutationPolicy<T>>(
     _policy: P,
 ) -> OwnedState<T> {
     new_state(value, P::equivalent, Location::caller())
+}
+
+/// A new state cell whose policy is `equivalent`: a composition local's provider's.
+#[track_caller]
+pub(crate) fn mutable_state_with_equivalence<T: 'static>(
+    value: T,
+    equivalent: fn(&T, &T) -> bool,
+) -> OwnedState<T> {
+    new_state(value, equivalent, Location::caller())
 }
 
 /// A new state holding an empty list, as Compose's `mutableStateListOf()`: `edit` it to change

@@ -76,7 +76,13 @@ pub use frame_clock::{
 };
 pub use hash::{KeyHasher, hash_key, key_of};
 pub use immutable_list::ImmutableList;
-pub use local::{CompositionLocal, CompositionLocalProvider, ProvidedValue};
+#[doc(hidden)]
+pub use local::ProviderUpdate;
+pub use local::{
+    CompositionLocal, CompositionLocalAccessorScope, CompositionLocalContext, CompositionLocalMap,
+    CompositionLocalProvider, ProvidedValue, ProvidedValues, current_composition_local_context,
+    current_composition_local_map, with_composition_local, with_composition_locals,
+};
 pub use pausable::{PausedComposition, PausedWatch, ShouldPauseCallback};
 pub use remember::{
     Observed, Remember, RememberObserver, key, remember, remember_keyed, remember_observer,

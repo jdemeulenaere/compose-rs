@@ -44,12 +44,13 @@ fn is_composable_name(name: &str) -> bool {
 
 /// Composables that return a value are named in lower case, as Compose's: `remember_…`
 /// (`remember_scroll_state`, `remember_coroutine_scope`), `animate_…_as_state`, `…_as_state`,
-/// `produce_state` (and `produce_state_with`), `update_transition`.
+/// `produce_state` (and `produce_state_with`), `update_transition`, `with_composition_local(s)`.
 fn is_value_composable_name(name: &str) -> bool {
     name.starts_with("remember")
         || name.starts_with("animate_")
         || name.ends_with("_as_state")
         || name.starts_with("produce_state")
+        || name.starts_with("with_composition_local")
         || name == "update_transition"
 }
 
