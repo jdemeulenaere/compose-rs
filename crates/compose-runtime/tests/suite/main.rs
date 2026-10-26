@@ -6,6 +6,7 @@ extern crate compose_runtime as compose;
 
 mod composition;
 mod composition_reusing;
+mod frame_clocks;
 mod holders;
 mod mock;
 mod model;

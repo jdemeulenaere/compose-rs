@@ -399,6 +399,12 @@ pub async fn with_infinite_animation_frame_millis<R>(on_frame: impl FnOnce(u64) 
     with_infinite_animation_frame_nanos(move |nanos| on_frame(nanos / 1_000_000)).await
 }
 
+/// The job of the task being polled now, if a task is: a future can cancel the task awaiting
+/// it, as a coroutine's suspension resumed with a `CancellationException` cancels it.
+pub(crate) fn current_job() -> Option<Job> {
+    CURRENT_TASK.try_with(Cell::get).ok().flatten().map(|key| Job { key })
+}
+
 /// Polls `job` now, on this thread, if it's waiting (not finished, nor being polled): for
 /// handlers whose task must see an event before the dispatch goes on (`pointer_input`, as
 /// Compose resumes it undispatched). Returns whether it was polled.
