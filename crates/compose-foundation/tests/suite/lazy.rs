@@ -436,14 +436,17 @@ fn a_lazy_list_has_scroll_semantics_and_scrolls_by_its_action() {
         .copied()
         .unwrap();
     assert_eq!((range.value, range.max_value), (100.0, 900.0));
-    // At the start, nothing to scroll back by.
+    // At the start, nothing to scroll back by: handled, as Compose's (its action always is),
+    // and nothing moves (D864).
     state.request_scroll_to_item(0, 0);
     ui.wait_for_idle();
-    assert!(!ui.host().perform_semantics_action_with(
+    assert!(ui.host().perform_semantics_action(
         node,
         &compose_ui::SemanticsActions::SCROLL_BY,
         |scroll| scroll(0.0, -100.0)
     ));
+    ui.wait_for_idle();
+    assert_eq!(state.first_visible_item_index(), 0);
 }
 
 /// A scrolling column too.
@@ -512,13 +515,15 @@ fn scroll_by_goes_towards_the_end_of_a_reversed_list() {
         .copied()
         .unwrap();
     assert!(range.reverse_scrolling);
-    // Back towards the first item: already there.
-    assert!(!ui.host().perform_semantics_action_with(
+    // Back towards the first item: already there (handled, nothing moves, D864).
+    assert!(ui.host().perform_semantics_action(
         node,
         &compose_ui::SemanticsActions::SCROLL_BY,
         |scroll| scroll(0.0, -100.0)
     ));
-    assert!(ui.host().perform_semantics_action_with(
+    ui.wait_for_idle();
+    assert_eq!(given.first_visible_item_index(), 0);
+    assert!(ui.host().perform_semantics_action(
         node,
         &compose_ui::SemanticsActions::SCROLL_BY,
         |scroll| scroll(0.0, 100.0)

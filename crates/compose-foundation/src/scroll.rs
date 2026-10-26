@@ -475,6 +475,10 @@ impl compose_ui::SemanticsModifierNode for ScrollNode {
         _context: &mut compose_ui::EventContext<'_>,
     ) -> bool {
         let compose_ui::SemanticsAction::ScrollBy { x, y } = action else { return false };
+        // Not offered when disabled, as Compose's scrollable (the range stays).
+        if !self.enabled {
+            return false;
+        }
         // Towards the content's end (its value growing), as Compose's (D491).
         let delta = if self.vertical { y } else { x };
         delta != 0.0 && self.state.dispatch_raw_delta(delta) != 0.0

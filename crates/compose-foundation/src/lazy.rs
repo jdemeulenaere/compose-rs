@@ -2239,13 +2239,16 @@ impl MeasurePolicy for LazyListLayout {
         let mut attempt = 0;
         // How far the items were scrolled back to fill a gap at the end.
         let mut scrolled_back = 0;
+        // The items laid out before a scroll back stay laid out, as Compose's `visibleItems` (an
+        // empty item at the very end, D863).
+        let mut laid_end = index;
         loop {
             attempt += 1;
             placed.clear();
             missing = false;
             let mut main = before - offset.round() as i32;
             end_index = index;
-            while end_index < count && main < main_max {
+            while end_index < count && (main < main_max || end_index < laid_end) {
                 match measure(end_index, &mut sizes) {
                     Some(placeable) => {
                         let size = main_of(&placeable);
@@ -2260,6 +2263,7 @@ impl MeasurePolicy for LazyListLayout {
                 }
             }
             content_end = if placed.is_empty() { main } else { main - spacing } + after;
+            laid_end = laid_end.max(end_index);
             // At the end with room left: scrolled back so the last item ends the viewport.
             let gap = (main_max - content_end) as f32;
             if !missing
@@ -2917,12 +2921,25 @@ impl compose_ui::SemanticsModifierNode for LazyScrollNode {
         } else {
             config.set_horizontal_scroll_axis_range(range);
         }
-        let (state, vertical) = (self.state, self.vertical);
-        config.scroll_by(None, move |x, y| {
-            // Towards the content's end, as Compose's lazy layouts' `scrollBy` (D491).
-            let delta = if vertical { y } else { x };
-            delta != 0.0 && state.dispatch(delta, None) != 0.0
-        });
+    }
+
+    fn perform_action(
+        &mut self,
+        action: compose_ui::SemanticsAction,
+        _context: &mut EventContext<'_>,
+    ) -> bool {
+        let compose_ui::SemanticsAction::ScrollBy { x, y } = action else { return false };
+        // Not offered with user scrolling off, as Compose's (the range stays).
+        if !self.enabled {
+            return false;
+        }
+        // Towards the content's end, as Compose's lazy layouts' `scrollBy` (D491); handled even
+        // where the list can't move that way, as Compose's (its action always returns true).
+        let delta = if self.vertical { y } else { x };
+        if delta != 0.0 {
+            self.state.dispatch(delta, None);
+        }
+        delta != 0.0
     }
 }
 

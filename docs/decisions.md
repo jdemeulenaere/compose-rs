@@ -28,6 +28,7 @@ The log is split by area into the files below, one table each, rows in number or
 | [android-drawing](decisions/android-drawing.md) | The display list and its replayer, render nodes and repaint boundaries, paths, shadows, layers. | 28 |
 | [android-host-and-performance](decisions/android-host-and-performance.md) | The view and activity glue, the frame loop, the hint session, jank, startup, memory, and the optimization flags. | 27 |
 | [lazy-and-prefetch](decisions/lazy-and-prefetch.md) | Lazy lists and grids, item reuse, the policy of composing only what is in view, prefetch. | 69 |
+| [lazy-and-prefetch](decisions/lazy-and-prefetch.md) | Lazy lists and grids, item reuse, the policy of composing only what is in view, prefetch. | 71 |
 | [android-drawing](decisions/android-drawing.md) | The display list and its replayer, render nodes and repaint boundaries, paths, shadows, layers. | 27 |
 | [android-host-and-performance](decisions/android-host-and-performance.md) | The view and activity glue, the frame loop, the hint session, jank, startup, memory, and the optimization flags. | 25 |
 | [desktop](decisions/desktop.md) | The desktop host: window, Skia rendering, input and events. | 6 |
@@ -480,6 +481,8 @@ The log is split by area into the files below, one table each, rows in number or
 | D860 | [lazy-and-prefetch](decisions/lazy-and-prefetch.md#d860) | current |
 | D861 | [lazy-and-prefetch](decisions/lazy-and-prefetch.md#d861) | current |
 | D862 | [ui-and-layout](decisions/ui-and-layout.md#d862) | current |
+| D863 | [lazy-and-prefetch](decisions/lazy-and-prefetch.md#d863) | current |
+| D864 | [lazy-and-prefetch](decisions/lazy-and-prefetch.md#d864) | current |
 | D900 | [api-and-tooling](decisions/api-and-tooling.md#d900) | current |
 | D901 | [api-and-tooling](decisions/api-and-tooling.md#d901) | current |
 | D902 | [ui-and-layout](decisions/ui-and-layout.md#d902) | current |

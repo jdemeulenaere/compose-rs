@@ -266,6 +266,9 @@ pub(crate) struct LaidOut {
     /// without reading it (a read would measure it again, D471).
     version: OwnedState<u64>,
     written: Cell<u64>,
+    /// Whether anything read the items yet: until then no one is told of a change (a state
+    /// write per scrolled frame a list without readers would pay for nothing).
+    read: Cell<bool>,
 }
 
 impl LaidOut {
@@ -277,6 +280,7 @@ impl LaidOut {
             viewport: Cell::new(LaidViewport { max_span: 1, ..LaidViewport::default() }),
             version: compose_runtime::mutable_state_of(0),
             written: Cell::new(0),
+            read: Cell::new(false),
         }
     }
 
@@ -292,13 +296,18 @@ impl LaidOut {
     /// `keys_changed`: the items' keys may differ for the same indices (new items laid out).
     pub(crate) fn end(&self, viewport: LaidViewport, keys_changed: bool) {
         let mut scratch = self.scratch.borrow_mut();
-        scratch.sort_unstable_by_key(|item| item.index);
+        if !scratch.is_sorted_by_key(|item| item.index) {
+            scratch.sort_unstable_by_key(|item| item.index);
+        }
         let mut items = self.items.borrow_mut();
         if !keys_changed && *items == *scratch && self.viewport.get() == viewport {
             return;
         }
         std::mem::swap(&mut *items, &mut *scratch);
         self.viewport.set(viewport);
+        if !self.read.get() {
+            return;
+        }
         let version = self.written.get().wrapping_add(1);
         self.written.set(version);
         self.version.set(version);
@@ -307,6 +316,7 @@ impl LaidOut {
     /// The items and viewport last laid out (a state read: a later layout that changes them
     /// tells the reader).
     pub(crate) fn read<R>(&self, read: impl FnOnce(&[LaidItem], LaidViewport) -> R) -> R {
+        self.read.set(true);
         self.version.get();
         read(&self.items.borrow(), self.viewport.get())
     }

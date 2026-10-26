@@ -25,6 +25,7 @@ mod lazy_grid_layout_info;
 mod lazy_grid_reuse;
 mod lazy_grid_scroll;
 mod lazy_layout_info;
+mod lazy_list;
 mod lazy_request_scroll;
 mod lazy_reuse;
 mod lazy_scroll;

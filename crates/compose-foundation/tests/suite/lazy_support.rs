@@ -116,6 +116,116 @@ pub fn px(n: i32) -> Dp {
     n.dp()
 }
 
+/// The bounds in the root of the node tagged `tag` (unclipped), as Compose's
+/// `getUnclippedBoundsInRoot`.
+pub fn bounds(ui: &mut compose_test::ComposeTestRule, tag: &str) -> compose_ui::Rect {
+    ui.on_node_with_tag(tag).fetch_semantics_node().bounds
+}
+
+impl Lazy {
+    /// Where the node tagged `tag` starts along the axis (its top or its left), in the root, as
+    /// Compose's tests' `assertMainAxisStartPositionInRootIsEqualTo` reads it.
+    pub fn main_start(&self, ui: &mut compose_test::ComposeTestRule, tag: &str) -> f32 {
+        let rect = bounds(ui, tag);
+        if self.vertical { rect.top } else { rect.left }
+    }
+
+    /// The node's length along the axis.
+    pub fn main_size(&self, ui: &mut compose_test::ComposeTestRule, tag: &str) -> f32 {
+        let rect = bounds(ui, tag);
+        if self.vertical { rect.height() } else { rect.width() }
+    }
+
+    /// The node's length across the axis.
+    pub fn cross_size(&self, ui: &mut compose_test::ComposeTestRule, tag: &str) -> f32 {
+        let rect = bounds(ui, tag);
+        if self.vertical { rect.width() } else { rect.height() }
+    }
+
+    /// Scrolls the node tagged `tag` by `distance` along the axis with the semantics `ScrollBy`
+    /// action, as Compose's tests' `scrollMainAxisBy`, then lets the UI settle.
+    pub fn scroll_main_axis_by(
+        &self,
+        ui: &mut compose_test::ComposeTestRule,
+        tag: &str,
+        distance: f32,
+    ) {
+        let action = if self.vertical {
+            compose_ui::SemanticsAction::ScrollBy { x: 0.0, y: distance }
+        } else {
+            compose_ui::SemanticsAction::ScrollBy { x: distance, y: 0.0 }
+        };
+        ui.on_node_with_tag(tag).perform_semantics_action(action);
+        ui.wait_for_idle();
+    }
+
+    /// Drags the node tagged `tag` by `distance` along the axis (positive: towards the content's
+    /// end, the finger moving the other way) without a fling, as Compose's tests' touch
+    /// `scrollBy(x, y, density)`: past the touch slop (8 dp), then the distance, a pause, a
+    /// release.
+    pub fn drag_main_axis_by(
+        &self,
+        ui: &mut compose_test::ComposeTestRule,
+        tag: &str,
+        distance: f32,
+    ) {
+        let rect = bounds(ui, tag);
+        let center =
+            compose_ui::Offset::new((rect.left + rect.right) / 2.0, (rect.top + rect.bottom) / 2.0);
+        let along = |amount: f32| {
+            if self.vertical {
+                compose_ui::Offset::new(0.0, amount)
+            } else {
+                compose_ui::Offset::new(amount, 0.0)
+            }
+        };
+        let slop = 8.0f32.copysign(distance);
+        let mut finger = crate::scroll_support::Touch::down(ui, center);
+        finger.move_by(ui, along(-slop));
+        finger.move_by(ui, along(-distance));
+        finger.advance_event_time(100);
+        finger.up(ui);
+        ui.wait_for_idle();
+    }
+
+    /// `fill_max_width` or `fill_max_height` across the axis, as Compose's tests'
+    /// `fillMaxCrossAxis`.
+    pub fn fill_max_cross_axis(&self) -> Modifier {
+        if self.vertical { Modifier.fill_max_width() } else { Modifier.fill_max_height() }
+    }
+
+    /// The list's `fill_parent_max_*` along the axis, as Compose's tests' `fillParentMaxMainAxis`.
+    pub fn fill_parent_max_main_axis(&self, scope: &LazyItemScope) -> Modifier {
+        if self.vertical {
+            Modifier.fill_parent_max_height(scope)
+        } else {
+            Modifier.fill_parent_max_width(scope)
+        }
+    }
+
+    /// The list's `fill_parent_max_*` across the axis, as Compose's tests' `fillParentMaxCrossAxis`.
+    pub fn fill_parent_max_cross_axis(&self, scope: &LazyItemScope) -> Modifier {
+        if self.vertical {
+            Modifier.fill_parent_max_width(scope)
+        } else {
+            Modifier.fill_parent_max_height(scope)
+        }
+    }
+}
+
+/// Whether the node tagged `tag` shows inside the node tagged `container`: it exists and some of
+/// it is within the container's bounds, as Compose's `assertIsDisplayed` (its bounds clipped by
+/// the scrolling container around it, non-empty).
+pub fn is_displayed(ui: &mut compose_test::ComposeTestRule, tag: &str, container: &str) -> bool {
+    if ui.count_nodes(&compose_test::has_test_tag(tag)) == 0 {
+        return false;
+    }
+    let (item, around) = (bounds(ui, tag), bounds(ui, container));
+    let width = item.right.min(around.right) - item.left.max(around.left);
+    let height = item.bottom.min(around.bottom) - item.top.max(around.top);
+    width > 0.0 && height > 0.0
+}
+
 impl Lazy {
     /// The two cases of Compose's grid tests compose-rs's grids take: each orientation, not
     /// reversed (grids have no `reverse_layout` yet: feature:grid-parity).
