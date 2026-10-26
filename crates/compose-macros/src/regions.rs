@@ -284,12 +284,19 @@ impl Regions {
         }
     }
 
-    /// The region statement of the last region again (same key).
-    fn same_region(&mut self) -> Stmt {
-        let key = proc_macro2::Literal::u64_suffixed(self.key ^ self.next);
+    /// A key for the branches of one conditional.
+    fn branch_key(&mut self) -> u64 {
+        self.next += 1;
+        self.key ^ self.next
+    }
+
+    /// The group statement of `branch` (from 1) of the conditional whose branches share `key`.
+    fn branch_region(key: u64, branch: u64) -> Stmt {
+        let key = proc_macro2::Literal::u64_suffixed(key);
+        let branch = proc_macro2::Literal::u64_suffixed(branch);
         let name = Ident::new("__compose_region", Span::mixed_site());
         parse_quote! {
-            let #name = ::compose::__private::region(#key);
+            let #name = ::compose::__private::branch(#key, #branch);
         }
     }
 
@@ -365,17 +372,47 @@ impl Regions {
         }
     }
 
+    /// An `if` chain (`if … else if … else …`): if a branch makes likely composable calls, every
+    /// branch gets a group of the chain's key with its index as data key, an absent `else` an
+    /// empty one, as Compose's compiler gives each branch a group and an `if` without `else` an
+    /// empty `else` group: switching branches deletes the old branch's group where it stands
+    /// (`Composer::start_branch_group`), so what it held is removed before what follows (D715).
     fn visit_if(&mut self, expr: &mut syn::ExprIf) {
+        self.visit_chain(expr);
+        if self.chain_likely(expr) {
+            let key = self.branch_key();
+            Self::wrap_chain(expr, key, 1);
+        }
+    }
+
+    /// Transforms an `if` chain's conditions and branches.
+    fn visit_chain(&mut self, expr: &mut syn::ExprIf) {
         self.visit_expr_mut(&mut expr.cond);
         self.visit_block_mut(&mut expr.then_branch);
-        if self.likely_block(&expr.then_branch) {
-            self.wrap_block(&mut expr.then_branch);
-            // Without an `else`, an empty one with the same region, as Compose's compiler gives
-            // the `if` an empty `else` group: the branch's group stays in place when it's not
-            // taken, so content it drops is removed there, before what comes after the `if`
-            // (its remember observers forgotten in table order, D715).
-            if expr.else_branch.is_none() {
-                let region = self.same_region();
+        if let Some((_, otherwise)) = &mut expr.else_branch {
+            match &mut **otherwise {
+                Expr::If(inner) => self.visit_chain(inner),
+                Expr::Block(block) => self.visit_block_mut(&mut block.block),
+                other => self.visit_expr_mut(other),
+            }
+        }
+    }
+
+    /// Whether a branch of an `if` chain makes a likely composable call.
+    fn chain_likely(&self, expr: &syn::ExprIf) -> bool {
+        self.likely_block(&expr.then_branch)
+            || expr.else_branch.as_ref().is_some_and(|(_, otherwise)| match &**otherwise {
+                Expr::If(inner) => self.chain_likely(inner),
+                Expr::Block(block) => self.likely_block(&block.block),
+                other => self.likely_expr(other),
+            })
+    }
+
+    fn wrap_chain(expr: &mut syn::ExprIf, key: u64, branch: u64) {
+        expr.then_branch.stmts.insert(0, Self::branch_region(key, branch));
+        match &mut expr.else_branch {
+            None => {
+                let region = Self::branch_region(key, branch + 1);
                 expr.else_branch = Some((
                     Default::default(),
                     Box::new(Expr::Block(syn::ExprBlock {
@@ -385,17 +422,17 @@ impl Regions {
                     })),
                 ));
             }
-        }
-        if let Some((_, otherwise)) = &mut expr.else_branch {
-            match &mut **otherwise {
+            Some((_, otherwise)) => match &mut **otherwise {
+                Expr::If(inner) => Self::wrap_chain(inner, key, branch + 1),
                 Expr::Block(block) => {
-                    self.visit_block_mut(&mut block.block);
-                    if self.likely_block(&block.block) {
-                        self.wrap_block(&mut block.block);
-                    }
+                    block.block.stmts.insert(0, Self::branch_region(key, branch + 1))
                 }
-                other => self.visit_expr_mut(other),
-            }
+                other => {
+                    let region = Self::branch_region(key, branch + 1);
+                    let inner = std::mem::replace(other, Expr::Verbatim(TokenStream::new()));
+                    *other = crate::call::block_of(region, inner);
+                }
+            },
         }
     }
 
@@ -605,8 +642,16 @@ impl VisitMut for Regions {
                         }
                     }
                     self.visit_expr_mut(&mut arm.body);
-                    if self.likely_expr(&arm.body) {
-                        self.wrap_expr(&mut arm.body);
+                }
+                // As an `if` chain's branches: every arm a group of the match's key, its index
+                // as data key, if one makes likely composable calls (D715).
+                if match_expr.arms.iter().any(|arm| self.likely_expr(&arm.body)) {
+                    let key = self.branch_key();
+                    for (index, arm) in match_expr.arms.iter_mut().enumerate() {
+                        let region = Self::branch_region(key, index as u64 + 1);
+                        let inner =
+                            std::mem::replace(&mut *arm.body, Expr::Verbatim(TokenStream::new()));
+                        *arm.body = crate::call::block_of(region, inner);
                     }
                 }
             }

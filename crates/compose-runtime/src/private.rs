@@ -103,6 +103,17 @@ pub fn region(key: u64) -> Region {
     Region { composer, unwinding: std::thread::panicking() }
 }
 
+/// A branch's region group: `branch` (from 1) of the conditional whose branches share `key`.
+/// Outside a composition pass it does nothing, as [`region`].
+#[inline]
+pub fn branch(key: u64, branch: u64) -> Region {
+    let composer = crate::composer::try_current();
+    if let Some(composer) = composer {
+        composer.start_branch_group(key, branch);
+    }
+    Region { composer, unwinding: std::thread::panicking() }
+}
+
 impl Drop for Region {
     #[inline]
     fn drop(&mut self) {
