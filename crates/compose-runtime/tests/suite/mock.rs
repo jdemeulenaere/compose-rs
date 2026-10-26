@@ -922,14 +922,14 @@ impl CompositionTest {
         changed_frames
     }
 
-    /// Moves the clock forward by `duration`, running the timers and frames due, as
-    /// `advanceTimeBy`.
+    /// Moves the clock forward by `duration`, running the tasks, timers and frame awaiters due,
+    /// as `advanceTimeBy`. It recomposes nothing: Compose's test scheduler sends no apply
+    /// notifications, so its recomposer waits for the next `advance`.
     pub fn advance_time_by(&mut self, duration: Duration) {
         let end = now_nanos() + duration.as_nanos() as u64;
         loop {
             run_ready();
-            let next_frame = (self.composition().has_invalidations() || has_frame_awaiters())
-                .then(|| now_nanos() + FRAME.as_nanos() as u64);
+            let next_frame = has_frame_awaiters().then(|| now_nanos() + FRAME.as_nanos() as u64);
             let next = [next_frame, next_timer_deadline()].into_iter().flatten().min();
             match next {
                 Some(next) if next <= end => {
@@ -937,7 +937,6 @@ impl CompositionTest {
                     fire_timers();
                     if Some(next) == next_frame {
                         dispatch_frame();
-                        self.composition().recompose();
                     }
                 }
                 _ => {

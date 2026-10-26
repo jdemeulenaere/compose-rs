@@ -167,13 +167,64 @@ pub fn remember_updated_state<T: ComposeArg + Clone>(value: T) -> crate::state::
     state.as_state()
 }
 
-/// State a coroutine produces, as Compose's `produceState(initialValue, key) { … }`: starting at
-/// `initial`, set by `producer`'s coroutine (launched, as `LaunchedEffect`, again when `key`
-/// changes; cancelled when this leaves the composition).
+/// The receiver of a [`produce_state`] producer, as Compose's `ProduceStateScope`: the state it
+/// produces (it derefs to its [`MutableState`](crate::MutableState) handle: `scope.set(…)`),
+/// and [`await_dispose`](ProduceStateScope::await_dispose).
+pub struct ProduceStateScope<T: 'static> {
+    state: crate::state::MutableState<T>,
+}
+
+impl<T: 'static> Clone for ProduceStateScope<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<T: 'static> Copy for ProduceStateScope<T> {}
+
+impl<T: 'static> std::ops::Deref for ProduceStateScope<T> {
+    type Target = crate::state::MutableState<T>;
+    fn deref(&self) -> &crate::state::MutableState<T> {
+        &self.state
+    }
+}
+
+impl<T: 'static> ProduceStateScope<T> {
+    /// Waits until the producer is cancelled (its key changed, or the call left the
+    /// composition), then runs `on_dispose`, as Compose's `awaitDispose`: for a producer whose
+    /// source pushes values through a callback it registered, to unregister it. It never
+    /// completes.
+    pub fn await_dispose(
+        &self,
+        on_dispose: impl FnOnce() + 'static,
+    ) -> impl std::future::Future<Output = std::convert::Infallible> + 'static {
+        let guard = OnDrop(Some(on_dispose));
+        async move {
+            let _guard = guard;
+            std::future::pending::<std::convert::Infallible>().await
+        }
+    }
+}
+
+/// Runs its function when dropped: when a producer's task is cancelled.
+struct OnDrop<F: FnOnce()>(Option<F>);
+
+impl<F: FnOnce()> Drop for OnDrop<F> {
+    fn drop(&mut self) {
+        if let Some(on_dispose) = self.0.take() {
+            on_dispose();
+        }
+    }
+}
+
+/// State a coroutine produces, as Compose's `produceState(initialValue, key1, …) { … }`:
+/// starting at `initial`, set by `producer`'s coroutine, launched as a [`LaunchedEffect`] keyed
+/// on `key` (`()` for none, a tuple for several): again when `key` changes, cancelled when this
+/// leaves the composition. `producer` itself runs only when the coroutine starts.
 pub fn produce_state<T, K, F>(
     initial: T,
     key: K,
-    producer: impl FnOnce(crate::state::MutableState<T>) -> F,
+    producer: impl FnOnce(ProduceStateScope<T>) -> F + 'static,
 ) -> crate::state::State<T>
 where
     T: PartialEq + 'static,
@@ -181,6 +232,32 @@ where
     F: std::future::Future<Output = ()> + 'static,
 {
     let state = crate::remember::remember(|| crate::state::mutable_state_of(initial));
-    LaunchedEffect(key, producer(state));
+    launch_producer(state, key, producer)
+}
+
+/// Like [`produce_state`], with the state's mutation policy, as
+/// `produceState(initialValue, key1, mutationPolicy) { … }`.
+pub fn produce_state_with<T, K, P, F>(
+    initial: T,
+    key: K,
+    policy: P,
+    producer: impl FnOnce(ProduceStateScope<T>) -> F + 'static,
+) -> crate::state::State<T>
+where
+    T: 'static,
+    K: ComposeArg,
+    P: crate::state::MutationPolicy<T>,
+    F: std::future::Future<Output = ()> + 'static,
+{
+    let state = crate::remember::remember(|| crate::state::mutable_state_of_with(initial, policy));
+    launch_producer(state, key, producer)
+}
+
+fn launch_producer<T: 'static, K: ComposeArg, F: std::future::Future<Output = ()> + 'static>(
+    state: crate::state::MutableState<T>,
+    key: K,
+    producer: impl FnOnce(ProduceStateScope<T>) -> F + 'static,
+) -> crate::state::State<T> {
+    LaunchedEffect(key, async move { producer(ProduceStateScope { state }).await });
     state.into()
 }

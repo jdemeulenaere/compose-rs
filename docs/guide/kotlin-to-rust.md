@@ -547,7 +547,7 @@ pub fn Saver() {
 }
 ```
 
-`produce_state(initial, key, |state| async move { … })` and `remember_updated_state(value)` are `produceState` and `rememberUpdatedState`.
+`produce_state(initial, key, |scope| async move { … })` and `remember_updated_state(value)` are `produceState` and `rememberUpdatedState`: `scope.set(…)` writes the state, `scope.await_dispose(|| …).await` is `awaitDispose`, and `produce_state_with(initial, key, policy, …)` takes a mutation policy.
 
 ### Blocking work: `spawn_background`
 

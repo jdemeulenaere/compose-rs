@@ -56,7 +56,8 @@ pub use composition::{ApplierRef, Composition};
 pub use derived::{DerivedState, derived_state_of, derived_state_of_with};
 pub use effects::{
     DisposableEffect, DisposableEffectResult, DisposableEffectScope, KeyedSideEffect,
-    LaunchedEffect, SideEffect, produce_state, remember_coroutine_scope, remember_updated_state,
+    LaunchedEffect, ProduceStateScope, SideEffect, produce_state, produce_state_with,
+    remember_coroutine_scope, remember_updated_state,
 };
 pub use error::ComposeError;
 pub use executor::{
