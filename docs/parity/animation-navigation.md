@@ -32,9 +32,9 @@ The inventory of Compose's animation and navigation tests and public API against
 | Status | Files | @Test |
 |---|---|---|
 | `covered` | 1 | 1 |
-| `ported` | 1 | 1 |
-| `port` | 7 | 16 |
-| `partial` | 14 | 192 |
+| `ported` | 3 | 8 |
+| `port` | 6 | 14 |
+| `partial` | 13 | 187 |
 | `feature:<name>` | 69 | 799 |
 | `n/a` | 3 | 12 |
 
@@ -42,8 +42,8 @@ By module:
 
 | Module | Files | @Test | covered | ported | port | partial | feature | n/a |
 |---|---|---|---|---|---|---|---|---|
-| animation-core | 30 | 212 | 0 | 1 / 1 | 7 / 16 | 6 / 73 | 15 / 119 | 1 / 3 |
-| animation | 15 | 238 | 0 | 0 | 0 | 5 / 51 | 10 / 187 | 0 |
+| animation-core | 30 | 212 | 0 | 2 / 3 | 6 / 14 | 6 / 73 | 15 / 119 | 1 / 3 |
+| animation | 15 | 238 | 0 | 1 / 5 | 0 | 4 / 46 | 10 / 187 | 0 |
 | animation-graphics | 5 | 22 | 0 | 0 | 0 | 0 | 5 / 22 | 0 |
 | navigation-compose | 9 | 121 | 1 / 1 | 0 | 0 | 3 / 68 | 4 / 50 | 1 / 2 |
 | navigation3-runtime | 21 | 307 | 0 | 0 | 0 | 0 | 20 / 300 | 1 / 7 |
@@ -119,7 +119,7 @@ The "covered" notes cite compose-rs test files under `crates/compose-animation/t
 | 17 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/SnapAnimationTest.kt` | 1 | `snap()` is finished at play time 0 | port | `animation.rs` `snap_jumps_after_its_delay` covers the delayed case |
 | 18 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/SuspendAnimationTest.kt` | 5 | top-level `animate()` (float, generic), `animateDecay`, `AnimationState.animateTo/animateDecay` | `feature:suspend-animate` | decay ones also need decay-animation |
 | 19 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/TweenAnimationTest.kt` | 3 | tween delay, custom easing, value past the duration | port | custom easing must be a `fn` (`Easing::Function`); covered in part by `animation.rs` `a_tween_moves_with_the_clock_and_ends_at_its_target` |
-| 20 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/TypeConverterTest.kt` | 2 | Float and Int vector converters | port | add a fractional case: Compose's Int converter truncates, compose-rs rounds (see notes) |
+| 20 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/TypeConverterTest.kt` | 2 | Float and Int vector converters | ported | `converters.rs`, with fractions: Compose's `Int` converter truncates, as compose-rs's now does |
 | 21 | `compose/animation/animation-core/src/androidDeviceTest/kotlin/androidx/compose/animation/core/DeferredTransitionTest.kt` | 8 | `DeferredTransitionState`: defer/animateTo, pending state, child transitions, interruption | `feature:deferred-transition` | new at the tip, not experimental |
 | 22 | `compose/animation/animation-core/src/androidDeviceTest/kotlin/androidx/compose/animation/core/DurationScaleTransitionTest.kt` | 3 | child transitions (plain, seekable, seeking) under `MotionDurationScale` | `feature:motion-duration-scale` | also needs transition-state (child transitions) and seekable-transition |
 | 23 | `compose/animation/animation-core/src/androidDeviceTest/kotlin/androidx/compose/animation/core/EasingTest.kt` | 1 | cubic Bezier evaluation matches a drawn path (bitmap comparison) | port | compare `Easing::CubicBezier` against a densely sampled parametric curve instead of bitmaps |
@@ -142,7 +142,7 @@ The "covered" notes cite compose-rs test files under `crates/compose-animation/t
 | 40 | `compose/animation/animation/src/androidDeviceTest/kotlin/androidx/compose/animation/LookaheadAnimationVisualDebugHelperTest.kt` | 16 | debug overlays for shared elements and animateBounds | `feature:lookahead-visual-debug` | experimental (`@ExperimentalLookaheadAnimationVisualDebugApi`) |
 | 41 | `compose/animation/animation/src/androidDeviceTest/kotlin/androidx/compose/animation/SharedTransitionTest.kt` | 71 | `SharedTransitionLayout`, `sharedElement`, `sharedBounds`, overlay, clip, placeholder size, scale-to-bounds, lazy lists, isTransitionActive, velocity | `feature:shared-transition` | needs ui lookahead |
 | 42 | `compose/animation/animation/src/androidHostTest/kotlin/androidx/compose/animation/AndroidFlingSplineTest.kt` | 1 | the fling spline clamps positions out of range | `feature:decay-animation` | compose-rs has the spline privately in `compose-foundation/src/fling.rs` |
-| 43 | `compose/animation/animation/src/androidHostTest/kotlin/androidx/compose/animation/ConverterTest.kt` | 5 | Color (Oklab, clamping), Rect, Dp, Offset converters | partial | Color covered by `animation.rs` `colors_go_through_oklab_and_back`; clamp test portable and expected to fail (see notes); Rect needs more-converters |
+| 43 | `compose/animation/animation/src/androidHostTest/kotlin/androidx/compose/animation/ConverterTest.kt` | 5 | Color (Oklab, clamping), Rect, Dp, Offset converters | ported | `converters.rs` (the color clamp included: compose-rs clamps in Oklab first, as Compose's) |
 | 44 | `compose/animation/animation/src/androidHostTest/kotlin/androidx/compose/animation/EnterExitTransitionConfigTest.kt` | 13 | `EnterTransition/ExitTransition.config`: fade, slide, change size, scale, veil, combined; SizeTransform defaults | `feature:enter-exit-params` | veil (2) also needs veil; SizeTransform default needs animated-content-scope |
 | 45 | `compose/animation/animation/src/androidHostTest/kotlin/androidx/compose/animation/SharedMutableTransformStateTest.kt` | 4 | internal state machine of mutable transforms | `feature:deferred-transition` | internal; port with the feature |
 | 46 | `compose/animation/animation-graphics/src/androidDeviceTest/kotlin/androidx/compose/animation/graphics/res/AnimatedVectorPainterResourcesTest.kt` | 2 | `rememberAnimatedVectorPainter` from an AVD resource: config, duplicate targets | `feature:animated-image-vector` | resources become bundled bytes in compose-rs |
@@ -770,9 +770,9 @@ Each item names the Compose test that would catch it, in the file's notes or lis
 3. **Enter and exit transitions animate a 0..1 fraction, not the values.** Every part springs a fraction with threshold 0.001 (`visibility.rs` `default_spec`). Compose animates alpha and scale as floats (threshold 0.01 for the default spring), and size and offset in pixels (1 px). So compose-rs's default fades end later, and expansions and slides of content smaller than 1,000 px end later too.
    - Also, slide offsets are fractions times the full size, recomputed each measure, while Compose calls the offset lambda with the full size.
    - Caught by: `AnimatedVisibilityTest.testScaleInAndScaleOutDefaultVisibilityThreshold`, `testAnimationSettleExactTime`, and the frame-by-frame expand and slide tests.
-4. **Colors aren't clamped in Oklab.** Compose clamps L to 0..1, a and b to ±0.5 and alpha to 0..1 before converting back. compose-rs converts first and clamps the sRGB channels, so a bouncy color spring overshoots differently.
+4. **Colors aren't clamped in Oklab.** Fixed: compose-rs clamps L to 0..1, a and b to ±0.5 and alpha to 0..1 before converting back, as Compose.
    - Caught by: `ConverterTest.testColorConverterClampValuesOutOfRange`.
-5. **`i32` rounds where Compose truncates.** `Int.VectorConverter` uses `toInt()`; compose-rs's `Animate for i32` rounds. `IntOffset` and `IntSize` round in both.
+5. **`i32` rounds where Compose truncates.** Fixed: `Animate for i32` truncates, as `Int.VectorConverter`'s `toInt()`. `IntOffset` and `IntSize` round half up in both.
    - Caught by: `TypeConverterTest` only checks whole numbers, so add a mid-animation `animate_int_as_state` case.
 6. **`AnimatedVisibility` inside a `Column` or `Row` has the wrong defaults.** Compose's scope overloads default to vertical or horizontal expand and shrink. compose-rs has only the plain overload (`expand_in`/`shrink_out`), so the same call animates differently.
    - Caught by: no Compose test targets it. Add one with animated-visibility-scope.

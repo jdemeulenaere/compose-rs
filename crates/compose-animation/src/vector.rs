@@ -167,12 +167,13 @@ impl Animate for AnimationVector {
     }
 }
 
+/// Truncated toward zero, as `Int.VectorConverter` (`toInt`).
 impl Animate for i32 {
     fn to_vector(&self) -> AnimationVector {
         AnimationVector::from(*self as f32)
     }
     fn from_vector(vector: AnimationVector) -> i32 {
-        vector[0].round() as i32
+        vector[0] as i32
     }
     fn visibility_threshold() -> f32 {
         1.0

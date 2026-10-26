@@ -11,6 +11,27 @@ fn a_float_is_a_vector_of_one() {
     assert_eq!(f32::from_vector(AnimationVector::from(5.0)), 5.0);
 }
 
+// Compose: compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/TypeConverterTest.kt, testIntToVectorConverter
+// With fractions: Compose's `Int.VectorConverter` truncates (`toInt`).
+#[test]
+fn an_int_is_a_vector_of_one_truncated_back() {
+    assert_eq!(100.to_vector(), AnimationVector::from(100.0));
+    assert_eq!(i32::from_vector(AnimationVector::from(5.0)), 5);
+    assert_eq!(i32::from_vector(AnimationVector::from(5.9)), 5);
+    assert_eq!(i32::from_vector(AnimationVector::from(-5.9)), -5);
+}
+
+// Compose: compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/TypeConverterTest.kt, testIntToVectorConverter
+// Mid-animation: the value is truncated toward the start.
+#[test]
+fn an_int_animation_truncates_its_values() {
+    let animation = TargetBasedAnimation::new(tween(100).easing(LINEAR_EASING), 0, 10);
+    // 10 × 59 % = 5.9.
+    assert_eq!(animation.value_from_millis(59), 5);
+    let down = TargetBasedAnimation::new(tween(100).easing(LINEAR_EASING), 0, -10);
+    assert_eq!(down.value_from_millis(59), -5);
+}
+
 // Compose: compose/animation/animation/src/androidHostTest/kotlin/androidx/compose/animation/ConverterTest.kt, testColorConverter
 #[test]
 fn colors_go_to_oklab_and_back() {
