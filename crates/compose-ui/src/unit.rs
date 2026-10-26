@@ -30,7 +30,8 @@ pub fn round_to_int(x: f32) -> i32 {
 
 impl Dp {
     pub const ZERO: Dp = Dp(0.0);
-    /// The thinnest line, as `Dp.Hairline`: a border of it is one pixel wide.
+    /// The thinnest line, as `Dp.Hairline`: no space taken, a stroke or border of it a single pixel
+    /// wide whatever the density (a stroke of width 0).
     pub const HAIRLINE: Dp = Dp(0.0);
     /// No value: a default meaning "decide elsewhere", as `Dp.Unspecified`.
     pub const UNSPECIFIED: Dp = Dp(f32::NAN);
@@ -529,6 +530,80 @@ impl DpRect {
 
     pub fn size(&self) -> DpSize {
         DpSize::new(self.width(), self.height())
+    }
+}
+
+/// An offset in `Dp`, as Compose's `DpOffset`: what a menu's `offset` takes.
+#[derive(Clone, Copy, PartialEq, Default)]
+pub struct DpOffset {
+    pub x: Dp,
+    pub y: Dp,
+}
+
+impl DpOffset {
+    pub const ZERO: DpOffset = DpOffset { x: Dp::ZERO, y: Dp::ZERO };
+    /// No value, as `DpOffset.Unspecified`.
+    pub const UNSPECIFIED: DpOffset = DpOffset { x: Dp::UNSPECIFIED, y: Dp::UNSPECIFIED };
+
+    pub const fn new(x: Dp, y: Dp) -> DpOffset {
+        DpOffset { x, y }
+    }
+
+    /// Whether it has a value, as `isSpecified`: both coordinates do.
+    pub fn is_specified(self) -> bool {
+        self.x.is_specified() && self.y.is_specified()
+    }
+
+    pub fn is_unspecified(self) -> bool {
+        !self.is_specified()
+    }
+
+    /// Itself if specified, else `or_else()`, as `takeOrElse`.
+    pub fn take_or_else(self, or_else: impl FnOnce() -> DpOffset) -> DpOffset {
+        if self.is_specified() { self } else { or_else() }
+    }
+
+    /// From `start` to `stop` by `fraction`, as `lerp(DpOffset, DpOffset, Float)`.
+    pub fn lerp(start: DpOffset, stop: DpOffset, fraction: f32) -> DpOffset {
+        let lerp = |a: Dp, b: Dp| Dp(a.0 + (b.0 - a.0) * fraction);
+        DpOffset::new(lerp(start.x, stop.x), lerp(start.y, stop.y))
+    }
+}
+
+impl fmt::Debug for DpOffset {
+    /// As Compose's `toString`: `(1.0.dp, 2.0.dp)`, or `DpOffset.Unspecified`.
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.is_specified() {
+            write!(formatter, "({:?}.dp, {:?}.dp)", self.x.0, self.y.0)
+        } else {
+            formatter.write_str("DpOffset.Unspecified")
+        }
+    }
+}
+
+impl ComposeArg for DpOffset {
+    fn same(&self, other: &Self) -> bool {
+        self == other
+    }
+}
+
+impl Add for DpOffset {
+    type Output = DpOffset;
+    fn add(self, other: DpOffset) -> DpOffset {
+        DpOffset::new(self.x + other.x, self.y + other.y)
+    }
+}
+
+impl Sub for DpOffset {
+    type Output = DpOffset;
+    fn sub(self, other: DpOffset) -> DpOffset {
+        DpOffset::new(self.x - other.x, self.y - other.y)
+    }
+}
+
+impl From<(Dp, Dp)> for DpOffset {
+    fn from((x, y): (Dp, Dp)) -> DpOffset {
+        DpOffset::new(x, y)
     }
 }
 

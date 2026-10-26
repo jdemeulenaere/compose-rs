@@ -7,7 +7,7 @@ use compose_foundation::ScrollModifiers as _;
 use compose_foundation::layout::{Arrangement, Box, Column, ColumnScope, Row};
 use compose_runtime::{CompositionLocalProvider, composable, remember};
 use compose_ui::{
-    Alignment, Constraints, Dp, IntOffset, IntSize, Layout, LayoutDirection, Measurable,
+    Alignment, Constraints, Dp, DpOffset, IntOffset, IntSize, Layout, LayoutDirection, Measurable,
     MeasurePolicy, MeasureResult, MeasureScope, Modifier, Placeable, PopupPositionProvider,
     PopupProperties, Rect, UnitExt,
 };
@@ -186,9 +186,9 @@ pub fn AlertDialog(
 const MENU_VERTICAL_MARGIN: Dp = Dp(48.0);
 
 /// Places a menu as Compose's `DropdownMenuPositionProvider`: below its anchor at its start
-/// (moved by `offset`), else ending with the anchor's end, else at the window's end; below,
-/// else above, else centered on the anchor's top, else at the window's bottom, keeping 48 dp
-/// from the window's top and bottom.
+/// (moved by `offset`, in pixels: the menu's `DpOffset` rounded at the density), else ending
+/// with the anchor's end, else at the window's end; below, else above, else centered on the
+/// anchor's top, else at the window's bottom, keeping 48 dp from the window's top and bottom.
 struct DropdownMenuPosition {
     offset: IntOffset,
     vertical_margin: i32,
@@ -259,13 +259,15 @@ pub fn DropdownMenu(
     expanded: bool,
     on_dismiss_request: impl Fn() + 'static,
     #[default(crate::Modifier)] modifier: Modifier,
-    #[default(crate::IntOffset::ZERO)] offset: IntOffset,
+    #[default(crate::DpOffset::ZERO)] offset: DpOffset,
     #[default(crate::remember_scroll_state(0))] scroll_state: compose_foundation::ScrollState,
     content: impl Fn(ColumnScope) + 'static,
 ) {
     if expanded {
         let density = compose_ui::LOCAL_DENSITY.current();
         let vertical_margin = density.round_to_px(MENU_VERTICAL_MARGIN);
+        // In pixels at the density, as Compose's `contentOffset.x.roundToPx()`.
+        let offset = IntOffset::new(density.round_to_px(offset.x), density.round_to_px(offset.y));
         let provider = compose_runtime::remember_keyed(OffsetKey(offset, vertical_margin), || {
             Rc::new(DropdownMenuPosition { offset, vertical_margin })
                 as Rc<dyn PopupPositionProvider>

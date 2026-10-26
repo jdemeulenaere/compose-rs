@@ -112,8 +112,8 @@ pub use compose_foundation::{
     PasswordVisualTransformation, ScrollState, VisualTransformation, remember_scroll_state,
 };
 pub use compose_ui::{
-    AnnotatedString, Color, Dp, FontFamily, FontStyle, IntOffset, Modifier, RECTANGLE_SHAPE,
-    SpanStyle, StrokeCap, TextAlign, TextDecoration, TextOverflow, TextUnit,
+    AnnotatedString, Color, Dp, DpOffset, FontFamily, FontStyle, IntOffset, Modifier,
+    RECTANGLE_SHAPE, SpanStyle, StrokeCap, TextAlign, TextDecoration, TextOverflow, TextUnit,
 };
 
 pub(crate) use selection::blend as selection_blend;
