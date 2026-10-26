@@ -235,13 +235,16 @@ fn a_decay_stops_at_its_threshold_velocity() {
     assert!((full.value_from_nanos(far) - rest.value_from_nanos(far)).abs() < 2.0);
 }
 
+/// How an animation ended, once it has.
+type Ended<T> = std::rc::Rc<std::cell::RefCell<Option<AnimationResult<T>>>>;
+
 /// Runs `animatable` along `run`, sampling its value and velocity every frame (16 ms): the
 /// first sample at play time 0.
 fn samples<T: Animate>(
     animatable: &Animatable<T>,
     frames: usize,
     run: impl std::future::Future<Output = AnimationResult<T>> + 'static,
-) -> (Vec<(T, T)>, std::rc::Rc<std::cell::RefCell<Option<AnimationResult<T>>>>) {
+) -> (Vec<(T, T)>, Ended<T>) {
     let mut ui = ComposeTestRule::with_manual_clock(|| {});
     let scope = CoroutineScope::new();
     let result = std::rc::Rc::new(std::cell::RefCell::new(None));

@@ -32,8 +32,8 @@ The inventory of Compose's animation and navigation tests and public API against
 | Status | Files | @Test |
 |---|---|---|
 | `covered` | 1 | 1 |
-| `ported` | 5 | 18 |
-| `port` | 6 | 14 |
+| `ported` | 10 | 31 |
+| `port` | 1 | 1 |
 | `partial` | 15 | 206 |
 | `feature:<name>` | 65 | 770 |
 | `n/a` | 3 | 12 |
@@ -42,7 +42,7 @@ By module:
 
 | Module | Files | @Test | covered | ported | port | partial | feature | n/a |
 |---|---|---|---|---|---|---|---|---|
-| animation-core | 30 | 212 | 0 | 4 / 13 | 6 / 14 | 7 / 79 | 12 / 103 | 1 / 3 |
+| animation-core | 30 | 212 | 0 | 9 / 26 | 1 / 1 | 7 / 79 | 12 / 103 | 1 / 3 |
 | animation | 15 | 238 | 0 | 1 / 5 | 0 | 5 / 59 | 9 / 174 | 0 |
 | animation-graphics | 5 | 22 | 0 | 0 | 0 | 0 | 5 / 22 | 0 |
 | navigation-compose | 9 | 121 | 1 / 1 | 0 | 0 | 3 / 68 | 4 / 50 | 1 / 2 |
@@ -106,7 +106,7 @@ The "covered" notes cite compose-rs test files under `crates/compose-animation/t
 | 6 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/DeferredTargetAnimationTest.kt` | 1 | `DeferredTargetAnimation.updateTarget` value/idle/pendingTarget | `feature:deferred-target-animation` |  |
 | 7 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/DelayedAnimationTest.kt` | 5 | Compose's internal `delayed(spec, nanos)` wrapper: duration, values, velocity, zero, equality | `feature:seekable-transition` | tests an internal helper of Compose's seekable transitions; adapt only if the port has the same wrapper |
 | 8 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/DurationScaleTest.kt` | 1 | `animate()` honours `MotionDurationScale` (5x, and 0 = finish at once, infinite too) | `feature:motion-duration-scale` | also needs suspend-animate's `animate()` |
-| 9 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/EasingUnitTest.kt` | 6 | `CubicBezierEasing`: 0 and 1 ends, overshoot, equality, small fractions | port | partly covered by `animation.rs` `easings_follow_their_curves` (values only) |
+| 9 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/EasingUnitTest.kt` | 6 | `CubicBezierEasing`: 0 and 1 ends, overshoot, equality, small fractions | ported | `easing.rs` |
 | 10 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/IsInfiniteTest.kt` | 8 | `isInfinite` of every vectorized spec, exponential decay and `DecayAnimation` | ported | `animation_objects.rs` |
 | 11 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/KeyframeAnimationTest.kt` | 12 | keyframes: start/end override, easing per stretch, multi-dimensional, equality, `atFraction`, out-of-range times | partial | 8 portable now through `Animatable` sampling (covered in part by `animation.rs` keyframe tests and `review_round14.rs`); `atFraction` (2) needs spec-gaps; negative times can't be written (`at(u32)`); exact `getValueFromMillis` checks are easier after animation-objects |
 | 12 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/KeyframeArcAnimationTest.kt` | 2 | keyframes `using ArcMode` in 2D, with easings | `feature:arc-animation` |  |
@@ -114,19 +114,19 @@ The "covered" notes cite compose-rs test files under `crates/compose-animation/t
 | 14 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/MonoSplineTest.kt` | 2 | the monotonic spline under `keyframesWithSpline` | `feature:keyframes-with-spline` | internal class; port with the feature |
 | 15 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/PhysicsAnimationTest.kt` | 11 | springs: velocity, under/over/critically damped durations, end snapping, vector springs, zero damping, interruption-aware spec | partial | 10 ported (`physics.rs`: velocities, the three damping regimes' durations, end snapping, vector durations and values, zero damping); `testInterruptionAwareAnimationSpec` needs interruption-aware-spec |
 | 16 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/RepeatableAnimationTest.kt` | 11 | repeatable/infiniteRepeatable values, durations, Reverse, StartOffset, zero-duration inner specs | partial | values/Reverse/infinite portable (Reverse covered by `review_animation.rs` reversed-repetition tests; finite end by `review_round14.rs`); StartOffset (2) and `snap()` inside a repeatable need spec-gaps; spline/arc zero-duration need their features; durations need animation-objects |
-| 17 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/SnapAnimationTest.kt` | 1 | `snap()` is finished at play time 0 | port | `animation.rs` `snap_jumps_after_its_delay` covers the delayed case |
+| 17 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/SnapAnimationTest.kt` | 1 | `snap()` is finished at play time 0 | ported | `easing.rs` |
 | 18 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/SuspendAnimationTest.kt` | 5 | top-level `animate()` (float, generic), `animateDecay`, `AnimationState.animateTo/animateDecay` | `feature:suspend-animate` | decay ones also need decay-animation |
-| 19 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/TweenAnimationTest.kt` | 3 | tween delay, custom easing, value past the duration | port | custom easing must be a `fn` (`Easing::Function`); covered in part by `animation.rs` `a_tween_moves_with_the_clock_and_ends_at_its_target` |
+| 19 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/TweenAnimationTest.kt` | 3 | tween delay, custom easing, value past the duration | ported | `easing.rs` (the custom easing an `Easing::Function`) |
 | 20 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/TypeConverterTest.kt` | 2 | Float and Int vector converters | ported | `converters.rs`, with fractions: Compose's `Int` converter truncates, as compose-rs's now does |
 | 21 | `compose/animation/animation-core/src/androidDeviceTest/kotlin/androidx/compose/animation/core/DeferredTransitionTest.kt` | 8 | `DeferredTransitionState`: defer/animateTo, pending state, child transitions, interruption | `feature:deferred-transition` | new at the tip, not experimental |
 | 22 | `compose/animation/animation-core/src/androidDeviceTest/kotlin/androidx/compose/animation/core/DurationScaleTransitionTest.kt` | 3 | child transitions (plain, seekable, seeking) under `MotionDurationScale` | `feature:motion-duration-scale` | also needs transition-state (child transitions) and seekable-transition |
-| 23 | `compose/animation/animation-core/src/androidDeviceTest/kotlin/androidx/compose/animation/core/EasingTest.kt` | 1 | cubic Bezier evaluation matches a drawn path (bitmap comparison) | port | compare `Easing::CubicBezier` against a densely sampled parametric curve instead of bitmaps |
+| 23 | `compose/animation/animation-core/src/androidDeviceTest/kotlin/androidx/compose/animation/core/EasingTest.kt` | 1 | cubic Bezier evaluation matches a drawn path (bitmap comparison) | ported | `easing.rs`: the evaluation against the curve sampled by its parameter, not bitmaps |
 | 24 | `compose/animation/animation-core/src/androidDeviceTest/kotlin/androidx/compose/animation/core/InfiniteTransitionTest.kt` | 1 | `rememberInfiniteTransition`: keyframes Reverse float and tween color, frame by frame | port | `infinite.rs` checks against compose-rs's own earlier implementation, never against Compose's expected values; expected values need keyframe/tween evaluation (easier after animation-objects) |
 | 25 | `compose/animation/animation-core/src/androidDeviceTest/kotlin/androidx/compose/animation/core/PathEasingTest.kt` | 12 | `PathEasing`: bounds, invalid paths, compare to cubic, quads, overshoot | `feature:path-easing` |  |
 | 26 | `compose/animation/animation-core/src/androidDeviceTest/kotlin/androidx/compose/animation/core/SeekableTransitionStateTest.kt` | 44 | `SeekableTransitionState`: seekTo, animateTo, snapTo, interruptions, durations, isRunning, cleanup | `feature:seekable-transition` |  |
 | 27 | `compose/animation/animation-core/src/androidDeviceTest/kotlin/androidx/compose/animation/core/SingleValueAnimationTest.kt` | 13 | `animate*AsState`: 1D/2D/4D/color frame by frame, interruption, visibility thresholds, spec and threshold updates | partial | 12 ported (`single_value.rs`: 1D/2D/4D/color frame by frame, a target moved every frame, the visibility threshold tests, spec and threshold updates); `interruptionAwareAnimationSpec_usesInterruptionSpecOnInterruption` needs interruption-aware-spec (its interruption frames are ported with one spec: `an_interrupting_animation_starts_where_the_other_left_off`) |
 | 28 | `compose/animation/animation-core/src/androidDeviceTest/kotlin/androidx/compose/animation/core/TransitionTest.kt` | 17 | `updateTransition`/`Transition`: values per segment, animations added mid-flight, MutableTransitionState, child transitions, totalDurationNanos, recomposition counts, interruption-aware spec | partial | 14 ported (`transition.rs`: values per segment on the play time, the start frame, a value added mid-way, `MutableTransitionState` set before composing, recreated, idle, child transitions (running, a value added to a finished child), total duration, recomposition counts, a child starting uninterrupted, a recreated state's fresh segment, labels); `childTransitionStartsUninterrupted_usingSeekableTransition` needs seekable-transition; the two `interruptionAwareAnimationSpec_*` need interruption-aware-spec |
-| 29 | `compose/animation/animation-core/src/androidHostTest/kotlin/androidx/compose/animation/core/EasingTest.android.kt` | 2 | cubic solver near 0/1 and with overshooting curves | port |  |
+| 29 | `compose/animation/animation-core/src/androidHostTest/kotlin/androidx/compose/animation/core/EasingTest.android.kt` | 2 | cubic solver near 0/1 and with overshooting curves | ported | `easing.rs` |
 | 30 | `compose/animation/animation-core/src/androidHostTest/kotlin/androidx/compose/animation/core/SpringEstimationTest.kt` | 1 | spring duration estimation against simulation over a grid of mass/stiffness | ported | `spring_estimation.rs`: every fifth mass and spring constant of Compose's grid (2.9 million of its 70 million cases) |
 | 31 | `compose/animation/animation/src/androidDeviceTest/kotlin/androidx/compose/animation/AnimateBoundsTest.kt` | 8 | `Modifier.animateBounds`: position, size, bounds, movable content, lazy layouts, scrolling | `feature:animate-bounds` | needs ui lookahead |
 | 32 | `compose/animation/animation/src/androidDeviceTest/kotlin/androidx/compose/animation/AnimatedContentTest.kt` | 17 | `AnimatedContent`: SizeTransform, alignment, slideInto/OutOfContainer, contentKey, subcomposition, interruption, KeepUntilTransitionsFinished, lookahead, cleanup | partial | ~6 portable now (alignment, interruption, right transition on interruption, subcomposition, cleanup, size continuity); compose-rs covers basics in `content.rs`, `review_round8.rs`, `review_round10.rs`, `review_round11.rs`; the rest need animated-content-scope (SizeTransform spec, `using`, slideIntoContainer, contentKey, KeepUntilTransitionsFinished, zIndex), transition-state (`rememberTransition`), ui lookahead (2) |
@@ -448,7 +448,9 @@ One entry per feature. Sizes:
   - the Android spline exists privately in `compose-foundation/src/fling.rs` and should move into compose-animation;
   - compose-foundation doesn't depend on compose-animation today, while Compose's foundation does depend on animation-core. Foundation's flings using `spline_based_decay` would add that crate edge, a D292 decision.
 
-#### easing-functions (S, not exp.)
+#### easing-functions (S, not exp.): the curves done (D808)
+
+- **Done:** the 30 `Ease*` curves; cubic Béziers solved as Compose's. **Left:** an `Easing` holding data or a capturing closure (`PathEasing` needs it), which an interned table (D150's way) or a non-`Copy` spec would give.
 
 - **API:**
   - the 30 missing `Ease*` curves (Back, Bounce, Circ, Cubic, Elastic, Expo, Quad, Quart, Quint, Sine, each in In, Out and InOut);

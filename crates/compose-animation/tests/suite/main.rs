@@ -9,6 +9,7 @@ mod animation_objects;
 mod content;
 mod converters;
 mod crossfade;
+mod easing;
 mod enter_exit_config;
 mod infinite;
 mod physics;
