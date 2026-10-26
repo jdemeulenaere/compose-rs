@@ -1956,6 +1956,8 @@ impl MeasurePolicy for LazyListLayout {
         let mut missing;
         let mut content_end;
         let mut attempt = 0;
+        // How far the items were scrolled back to fill a gap at the end.
+        let mut scrolled_back = 0;
         loop {
             attempt += 1;
             placed.clear();
@@ -1989,6 +1991,7 @@ impl MeasurePolicy for LazyListLayout {
                 && attempt < 3
             {
                 offset -= gap;
+                scrolled_back += gap as i32;
                 let wanted = step_back(&mut index, &mut offset, &mut sizes, measure);
                 wanted_before = wanted_before.max(wanted);
                 if wanted > 0 {
@@ -2004,13 +2007,18 @@ impl MeasurePolicy for LazyListLayout {
         // them to fill `beforeContentPadding`: `lead` is the first item laid out, `index` stays
         // the first visible one (the first not wholly in the padding). Those not composed are
         // composed in this frame's next round, as many as the room takes at the average size.
+        // The bound is Compose's `minOffset`, the spacing taken in when negative; after a scroll
+        // back to fill a gap at the end, Compose fills the start padding to
+        // `beforeContentPadding` only (`LazyListMeasure.kt:249-251`), keeping the items its first
+        // loop added before the scroll back: the spacing plus the gap, at most 0.
+        let bound = (spacing.min(0) + scrolled_back).min(0);
         let mut lead = index;
         if let Some((_, first_main)) = placed.first() {
             let mut start = *first_main;
             let mut leading: Vec<(Placeable, i32)> = Vec::new();
-            while start > spacing.min(0) && lead > 0 {
+            while start > bound && lead > 0 {
                 let Some(placeable) = measure(lead - 1, &mut sizes) else {
-                    let room = (start - spacing.min(0)) as usize;
+                    let room = (start - bound) as usize;
                     let wanted = room.div_ceil((sizes.average() + spacing).max(1) as usize);
                     wanted_before += wanted.min(lead);
                     break;
@@ -2292,8 +2300,10 @@ impl MeasurePolicy for LazyListLayout {
             let after_composed = count.saturating_sub(placed_end.max(end_index)) as f32 * average;
             (after_composed + (extent_end.max(content_end) - main_max) as f32 - pending).max(1.0)
         });
-        // The sticky header over the first visible item, kept composed: at the list's start,
-        // or where it is if lower, pushed out by the next header.
+        // The sticky header over the first item laid out (under the start padding, if any, as
+        // Compose's `applyStickyItems`), kept composed: at the list's start, or where it is if
+        // lower, pushed out by the next header, its size and the spacing after it ending where
+        // that one starts (Compose's `nextStickyItemOffset - mainAxisSizeWithSpacings`, D649).
         let headers = info.items.headers_around(lead);
         let header = headers.map(|(header, _)| header);
         if state.sticky_written.replace(header) != header {
@@ -2310,7 +2320,7 @@ impl MeasurePolicy for LazyListLayout {
                 && let Some((_, next_main)) =
                     ahead.iter().chain(&placed).chain(&beyond).find(|(other, _)| *other == next)
             {
-                at = at.min(next_main - main_of(&placeable));
+                at = at.min(next_main - main_of(&placeable) - spacing);
             }
             placed.retain(|(other, _)| *other != placeable);
             beyond.retain(|(other, _)| *other != placeable);

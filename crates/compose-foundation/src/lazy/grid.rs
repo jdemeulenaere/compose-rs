@@ -1306,6 +1306,8 @@ impl MeasurePolicy for LazyGridLayout {
         let mut missing;
         let mut content_end;
         let mut attempt = 0;
+        // How far the lines were scrolled back to fill a gap at the end.
+        let mut scrolled_back = 0;
         loop {
             attempt += 1;
             placed.clear();
@@ -1338,6 +1340,7 @@ impl MeasurePolicy for LazyGridLayout {
                 && attempt < 3
             {
                 offset -= gap;
+                scrolled_back += gap as i32;
                 let wanted = step_back(m, state, spacing, &mut index, &mut offset);
                 wanted_before = wanted_before.max(wanted);
                 if wanted > 0 {
@@ -1349,14 +1352,17 @@ impl MeasurePolicy for LazyGridLayout {
         }
         // The lines before the first visible one under the start padding are laid out and shown
         // too, as a list's and Compose's (`measureLazyGrid` fills `beforeContentPadding`): `lead`
-        // is the first line laid out; those not composed are, in this frame's next round.
+        // is the first line laid out; those not composed are, in this frame's next round. The
+        // bound as a list's: the spacing when negative, plus the gap scrolled back at the end
+        // (`LazyGridMeasure.kt:247`), at most 0.
+        let bound = (spacing.min(0) + scrolled_back).min(0);
         let mut lead = index;
         if let Some(&(_, first_main)) = placed.first() {
             let mut start = first_main;
             let mut leading: Vec<(usize, i32)> = Vec::new();
-            while start > spacing.min(0) && lead > 0 {
+            while start > bound && lead > 0 {
                 let Some(size) = m.line(lead - 1) else {
-                    let room = (start - spacing.min(0)) as usize;
+                    let room = (start - bound) as usize;
                     let wanted = room.div_ceil((m.line_sizes.average() + spacing).max(1) as usize);
                     wanted_before += wanted.min(lead);
                     break;

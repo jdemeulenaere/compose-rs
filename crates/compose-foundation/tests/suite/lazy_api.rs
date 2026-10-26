@@ -405,6 +405,80 @@ fn a_reversed_list_lays_out_items_under_its_bottom_padding() {
     ui.on_node_with_tag("0").assert_does_not_exist();
 }
 
+/// At a negative spacing, the item before the first one under the start padding overlaps the
+/// viewport's start and is laid out too, as Compose's `minOffset` takes the spacing in; but after
+/// a scroll back to fill a gap at the end, Compose fills the start padding to
+/// `beforeContentPadding` only (`LazyListMeasure.kt:249-251`), so the bound is the spacing plus
+/// the gap, at most 0.
+#[test]
+fn a_negative_spacing_lays_out_the_overlapping_item_but_after_a_scroll_back() {
+    let state = LazyListState::new(4, 0);
+    let given = *state;
+    let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || {
+        LazyColumn!(
+            modifier = Modifier.size((100.dp(), 100.dp())),
+            state = given,
+            content_padding = PaddingValues::new(0.dp(), 30.dp(), 0.dp(), 0.dp()),
+            vertical_arrangement = Arrangement::spaced_by((-10.0).dp()),
+            |scope: LazyListScope| {
+                scope.items(10, |index| {
+                    Box!(
+                        modifier = Modifier.size((100.dp(), 20.dp())).test_tag(format!("{index}"))
+                    );
+                });
+            }
+        );
+    });
+    // Item 4 at 30 px, an item every 10 px: item 9 ends the list, item 1 at 0, and item 0, at
+    // -10 px, overlaps the viewport by the spacing.
+    assert_eq!(top_of(&mut ui, "9"), 80.0);
+    assert_eq!(top_of(&mut ui, "1"), 0.0);
+    assert_eq!(top_of(&mut ui, "0"), -10.0);
+    // To the last item, scrolled back 50 px to end the list: the same place, without item 0.
+    state.scroll_to_item(9, 0);
+    ui.wait_for_idle();
+    assert_eq!(position(&state), (4, 0));
+    assert_eq!(top_of(&mut ui, "9"), 80.0);
+    assert_eq!(top_of(&mut ui, "1"), 0.0);
+    ui.on_node_with_tag("0").assert_does_not_exist();
+}
+
+/// The next header pushes the sticking one out by its size with the spacing after it, as
+/// Compose's `nextStickyItemOffset - mainAxisSizeWithSpacings`: with spacing, the header leaves
+/// that much earlier.
+#[test]
+fn the_next_header_pushes_the_sticking_one_out_with_its_spacing() {
+    let state = LazyListState::new(0, 0);
+    let given = *state;
+    let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || {
+        LazyColumn!(
+            modifier = Modifier.size((100.dp(), 100.dp())),
+            state = given,
+            vertical_arrangement = Arrangement::spaced_by(10.dp()),
+            |scope: LazyListScope| {
+                for section in ["A", "B"] {
+                    scope.sticky_header(move |_| {
+                        Box!(modifier = Modifier.size((100.dp(), 20.dp())).test_tag(section));
+                    });
+                    scope.items(10, move |index| {
+                        Box!(
+                            modifier = Modifier
+                                .size((100.dp(), 30.dp()))
+                                .test_tag(format!("{section}{index}"))
+                        );
+                    });
+                }
+            }
+        );
+    });
+    // A9 from 390 px, 15 px into it; B's header after it and its spacing, at 430 px: 25 px down.
+    state.scroll_to_item(10, 15);
+    ui.wait_for_idle();
+    assert_eq!(top_of(&mut ui, "B"), 25.0);
+    // A's header (20 px) and the spacing after it (10 px) end where B's starts.
+    assert_eq!(top_of(&mut ui, "A"), -5.0);
+}
+
 /// The sticky header is that of the first item laid out, under the start padding, as Compose's
 /// (`applyStickyItems` from the first of `visibleItems`), at the top of the list.
 #[test]

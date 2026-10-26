@@ -182,3 +182,37 @@ fn a_grid_lays_out_lines_under_its_content_padding() {
     ui.on_node_with_tag("1").assert_does_not_exist();
     ui.on_node_with_tag("12").assert_does_not_exist();
 }
+
+/// As a list's: at a negative spacing, the line overlapping the viewport's start by the spacing
+/// is laid out, but not after a scroll back to fill a gap at the end (`LazyGridMeasure.kt:247`).
+#[test]
+fn a_negative_spacing_lays_out_the_overlapping_line_but_after_a_scroll_back() {
+    let state = LazyGridState::new(8, 0);
+    let given = *state;
+    let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || {
+        LazyVerticalGrid!(
+            GridCells::Fixed(2),
+            modifier = Modifier.size((100.dp(), 100.dp())),
+            state = given,
+            content_padding = PaddingValues::new(0.dp(), 30.dp(), 0.dp(), 0.dp()),
+            vertical_arrangement = Arrangement::spaced_by((-10.0).dp()),
+            |scope: LazyGridScope| {
+                scope.items(20, |index| {
+                    Box!(modifier = Modifier.height(20.dp()).test_tag(format!("{index}")));
+                });
+            }
+        );
+    });
+    // Line 4 at 30 px, a line every 10 px: line 9 ends the grid, line 1 at 0, and line 0, at
+    // -10 px, overlaps the viewport by the spacing.
+    assert_eq!(bounds(&mut ui, "18").top, 80.0);
+    assert_eq!(bounds(&mut ui, "2").top, 0.0);
+    assert_eq!(bounds(&mut ui, "0").top, -10.0);
+    // To the last line, scrolled back 50 px to end the grid: the same place, without line 0.
+    state.scroll_to_item(18, 0);
+    ui.wait_for_idle();
+    assert_eq!(state.first_visible_item_index(), 8);
+    assert_eq!(bounds(&mut ui, "18").top, 80.0);
+    assert_eq!(bounds(&mut ui, "2").top, 0.0);
+    ui.on_node_with_tag("0").assert_does_not_exist();
+}

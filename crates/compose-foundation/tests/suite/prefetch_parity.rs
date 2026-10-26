@@ -435,8 +435,9 @@ fn paragraph_render_nodes_draws_everything_again_when_it_changes() {
 }
 
 /// With a content padding, the items under it are among those shown, as Compose's
-/// `visibleItemsInfo`: a scroll back prefetches the item before the one under the start
-/// padding, and the urgency is measured from the viewport's start, not the padding's end.
+/// `visibleItemsInfo`: a scroll back prefetches the item before the first one laid out under
+/// the start padding, not the one before the first visible item (which the layout already
+/// laid out there).
 #[test]
 fn a_scroll_back_prefetches_the_item_before_those_under_the_start_padding() {
     COMPOSED.with(|composed| composed.borrow_mut().clear());
@@ -462,9 +463,13 @@ fn a_scroll_back_prefetches_the_item_before_those_under_the_start_padding() {
     assert_eq!(live_items(), (2..7).collect::<Vec<_>>());
     assert!(!ui.host().prefetch(later()));
     assert_eq!(live_items(), (2..8).collect::<Vec<_>>());
-    // 5 px back: row 1, before row 2, is the one prefetched.
+    // 5 px back: row 3 still first visible, rows 2 (at 5 px) and 1 (at -15 px) under the start
+    // padding, laid out by the layout itself; row 0, before row 1, is the one prefetched.
     scroll(&mut ui, *state, -5.0);
+    assert_eq!(state.first_visible_item_index(), 3);
     assert_eq!(ui.on_node_with_tag("row 2").fetch_semantics_node().bounds.top, 5.0);
+    assert_eq!(ui.on_node_with_tag("row 1").fetch_semantics_node().bounds.top, -15.0);
+    assert!(!live_items().contains(&0), "{:?}", live_items());
     assert!(!ui.host().prefetch(later()));
-    assert!(live_items().contains(&1), "{:?}", live_items());
+    assert!(live_items().contains(&0), "{:?}", live_items());
 }
