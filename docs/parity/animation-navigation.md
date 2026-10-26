@@ -32,17 +32,17 @@ The inventory of Compose's animation and navigation tests and public API against
 | Status | Files | @Test |
 |---|---|---|
 | `covered` | 1 | 1 |
-| `ported` | 3 | 8 |
+| `ported` | 5 | 18 |
 | `port` | 6 | 14 |
-| `partial` | 14 | 200 |
-| `feature:<name>` | 68 | 786 |
+| `partial` | 15 | 206 |
+| `feature:<name>` | 65 | 770 |
 | `n/a` | 3 | 12 |
 
 By module:
 
 | Module | Files | @Test | covered | ported | port | partial | feature | n/a |
 |---|---|---|---|---|---|---|---|---|
-| animation-core | 30 | 212 | 0 | 2 / 3 | 6 / 14 | 6 / 73 | 15 / 119 | 1 / 3 |
+| animation-core | 30 | 212 | 0 | 4 / 13 | 6 / 14 | 7 / 79 | 12 / 103 | 1 / 3 |
 | animation | 15 | 238 | 0 | 1 / 5 | 0 | 5 / 59 | 9 / 174 | 0 |
 | animation-graphics | 5 | 22 | 0 | 0 | 0 | 0 | 5 / 22 | 0 |
 | navigation-compose | 9 | 121 | 1 / 1 | 0 | 0 | 3 / 68 | 4 / 50 | 1 / 2 |
@@ -62,7 +62,6 @@ By module:
 | nav-graphs | 1 | 33 |
 | animated-image-vector | 5 | 22 |
 | lookahead-visual-debug | 1 | 16 |
-| animation-objects | 2 | 14 |
 | arc-animation | 2 | 14 |
 | path-easing | 1 | 12 |
 | keyframes-with-spline | 2 | 10 |
@@ -73,8 +72,8 @@ By module:
 | nav-transitions | 1 | 5 |
 | suspend-animate | 1 | 5 |
 | motion-duration-scale | 2 | 4 |
-| decay-animation | 2 | 3 |
 | predictive-back | 1 | 2 |
+| decay-animation | 1 | 1 |
 | deferred-target-animation | 1 | 1 |
 
 Without Navigation 3 (whose adoption is a decision, not a gap in what compose-rs models), the area is 59 files and 593 tests. Of those:
@@ -99,16 +98,16 @@ The "covered" notes cite compose-rs test files under `crates/compose-animation/t
 
 | # | Compose test file (under `frameworks/support`) | @Test | Covers | Status | Notes |
 |---|---|---|---|---|---|
-| 1 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/AnimatableTest.kt` | 9 | `Animatable`: animateTo (float, generic), interruption, animateDecay, updateBounds, IntSize bounds, toString of results | partial | animateTo/generic/interruption portable now (interruption covered by `animation.rs` `an_animatable_interrupted_by_another_animation_says_so`); missing `animateDecay` (decay-animation), `updateBounds`/`BoundReached` (animatable-bounds), IntSize converter (more-converters), `InterruptionAwareAnimationSpec`; the 2 `toString` tests are n/a (Rust `Debug`) |
-| 2 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/AnimationTest.kt` | 6 | `TargetBasedAnimation` values/velocities for snap, keyframes, tween, spring; infinite repeatable velocity across repetitions | `feature:animation-objects` | the spec math exists (`AnimationSpec::frame`, crate-private); needs the public `TargetBasedAnimation`/vectorized evaluation API |
+| 1 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/AnimatableTest.kt` | 9 | `Animatable`: animateTo (float, generic), interruption, animateDecay, updateBounds, IntSize bounds, toString of results | partial | 6 ported (`animation_objects.rs`: decay, spring and Offset tween frame by frame (16 ms frames, not 50), a stop, an interruption starting at the interrupted frame, bounds, an `IntSize` never negative); the 2 `toString` tests are n/a (Rust `Debug`); `animateTo_interruptionAwareAnimationSpec` needs interruption-aware-spec |
+| 2 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/AnimationTest.kt` | 6 | `TargetBasedAnimation` values/velocities for snap, keyframes, tween, spring; infinite repeatable velocity across repetitions | partial | 5 ported (`animation_objects.rs`); `testVectorizedInfiniteRepeatableSpec_velocityOnRepetitions` repeats a spec of the test's own, and compose-rs's specs are a closed set (`AnimationSpec`): it needs custom specs (custom-specs) |
 | 3 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/AnimationVectorTest.kt` | 3 | `AnimationVector1D..4D`: reset, hashCode, factory functions | n/a: compose-rs's vectors are `[f32; 4]` (`Animate::to_vector`); reset/hashCode/factories have no analogue |  |
 | 4 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/ArcAnimationTest.kt` | 12 | `ArcAnimationSpec` (ArcAbove/Below/Linear) interpolation in 1-4 dimensions, equality, curve shape | `feature:arc-animation` | experimental (`@ExperimentalAnimationSpecApi`) |
-| 5 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/DecayAnimationTest.kt` | 2 | `exponentialDecay` values and the velocity threshold | `feature:decay-animation` |  |
+| 5 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/DecayAnimationTest.kt` | 2 | `exponentialDecay` values and the velocity threshold | ported | `animation_objects.rs` |
 | 6 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/DeferredTargetAnimationTest.kt` | 1 | `DeferredTargetAnimation.updateTarget` value/idle/pendingTarget | `feature:deferred-target-animation` |  |
 | 7 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/DelayedAnimationTest.kt` | 5 | Compose's internal `delayed(spec, nanos)` wrapper: duration, values, velocity, zero, equality | `feature:seekable-transition` | tests an internal helper of Compose's seekable transitions; adapt only if the port has the same wrapper |
 | 8 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/DurationScaleTest.kt` | 1 | `animate()` honours `MotionDurationScale` (5x, and 0 = finish at once, infinite too) | `feature:motion-duration-scale` | also needs suspend-animate's `animate()` |
 | 9 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/EasingUnitTest.kt` | 6 | `CubicBezierEasing`: 0 and 1 ends, overshoot, equality, small fractions | port | partly covered by `animation.rs` `easings_follow_their_curves` (values only) |
-| 10 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/IsInfiniteTest.kt` | 8 | `isInfinite` of every vectorized spec, exponential decay and `DecayAnimation` | `feature:animation-objects` | 2 tests also need decay-animation |
+| 10 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/IsInfiniteTest.kt` | 8 | `isInfinite` of every vectorized spec, exponential decay and `DecayAnimation` | ported | `animation_objects.rs` |
 | 11 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/KeyframeAnimationTest.kt` | 12 | keyframes: start/end override, easing per stretch, multi-dimensional, equality, `atFraction`, out-of-range times | partial | 8 portable now through `Animatable` sampling (covered in part by `animation.rs` keyframe tests and `review_round14.rs`); `atFraction` (2) needs spec-gaps; negative times can't be written (`at(u32)`); exact `getValueFromMillis` checks are easier after animation-objects |
 | 12 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/KeyframeArcAnimationTest.kt` | 2 | keyframes `using ArcMode` in 2D, with easings | `feature:arc-animation` |  |
 | 13 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/KeyframeSplineAnimationTest.kt` | 8 | `keyframesWithSpline`: interpolation, periodic bias, easing, delay, equality | `feature:keyframes-with-spline` |  |
@@ -386,7 +385,7 @@ One entry per feature. Sizes:
 - **Tests:** `SpringEstimationTest`, `PhysicsAnimationTest` (duration and end-snapping tests), `AnimatedVisibilityTest.testAnimationSettleExactTime`, `SeekableTransitionStateTest` (durations).
 - **Dependencies:** none. Do it together with the visibility-threshold fixes (see the notes).
 
-#### animation-objects (M, not exp.)
+#### animation-objects (M, not exp.): done but custom specs (D800, D807)
 
 - **API:**
   - `Animation`, `TargetBasedAnimation`;
@@ -398,7 +397,7 @@ One entry per feature. Sizes:
 - **Tests:** `AnimationTest`, `IsInfiniteTest`, `PhysicsAnimationTest`, and the exact-value parts of `TweenAnimationTest`, `KeyframeAnimationTest`, `RepeatableAnimationTest` and `InfiniteTransitionTest`.
 - **Dependencies:** spring-estimation for spring durations.
 
-#### spec-gaps (S, not exp.)
+#### spec-gaps (S, not exp.): done (D800)
 
 - **API:**
   - `StartOffset`/`StartOffsetType` (`Delay`, `FastForward`), with `initialStartOffset` on `repeatable`/`infiniteRepeatable`;
@@ -408,7 +407,7 @@ One entry per feature. Sizes:
 - **Tests:** `RepeatableAnimationTest` (3), `KeyframeAnimationTest` (2).
 - **Dependencies:** none.
 
-#### more-converters (S, not exp.)
+#### more-converters (S, not exp.): done (D800)
 
 - **API:**
   - `Animate` for `Rect`, `IntSize` (rounded, clamped at 0) and `DpOffset` (a new compose-ui type);
@@ -418,7 +417,7 @@ One entry per feature. Sizes:
 - **Tests:** `SingleValueAnimationTest.animate4DRectTest`, `ConverterTest.testRectConverter`, `AnimatableTest.testIntSize_alwaysWithinValidBounds`.
 - **Dependencies:** compose-ui `DpOffset`.
 
-#### animatable-bounds (S, not exp.)
+#### animatable-bounds (S, not exp.): done (D800, D807)
 
 - **API:**
   - `Animatable::update_bounds`, `lower_bound`, `upper_bound`, and `AnimationEndReason::BoundReached`;
@@ -434,7 +433,9 @@ One entry per feature. Sizes:
 - **Tests:** `SuspendAnimationTest`, `DurationScaleTest`.
 - **Dependencies:** animation-objects; decay-animation for the decay forms.
 
-#### decay-animation (M, not exp.)
+#### decay-animation (M, not exp.): partly done (D807)
+
+- **Done:** `FloatDecayAnimationSpec`, `FloatExponentialDecaySpec`, `VectorizedDecayAnimationSpec`, `DecayAnimationSpec`, `exponential_decay`, `generate_decay_animation_spec`, `calculate_target_value`, `DecayAnimation` (and `float_decay_animation` for its `FloatDecayAnimationSpec` constructor), `Animatable::animate_decay`. **Left:** the spline family (`spline_based_decay`, `remember_spline_based_decay`), which waits on moving foundation's fling spline (the D292 crate edge).
 
 - **API:**
   - the specs: `DecayAnimationSpec`, `FloatDecayAnimationSpec`, `VectorizedDecayAnimationSpec`, `exponential_decay`, `FloatExponentialDecaySpec`, `generate_decay_animation_spec`;

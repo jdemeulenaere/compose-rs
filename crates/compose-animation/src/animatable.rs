@@ -275,12 +275,12 @@ impl<T: Animate> Animatable<T> {
     ) -> AnimationResult<T> {
         let animation =
             TargetBasedAnimation::with_velocity_vector(spec, self.value(), target, velocity);
-        self.run_animation(animation, velocity).await
+        self.run_animation(&animation, velocity).await
     }
 
     async fn run_animation(
         &self,
-        animation: TargetBasedAnimation<T>,
+        animation: &dyn Animation<T>,
         velocity: AnimationVector,
     ) -> AnimationResult<T> {
         let inner = &self.inner;
@@ -316,7 +316,7 @@ impl<T: Animate> Animatable<T> {
         let mut started = None;
         if start_time != AnimationConstants::UNSPECIFIED_TIME {
             started = Some(start_time);
-            if let Some(reason) = self.frame(&animation, start_time, start_time) {
+            if let Some(reason) = self.frame(animation, start_time, start_time) {
                 return AnimationResult { end_reason: reason, end_value: self.value() };
             }
         }
@@ -333,7 +333,7 @@ impl<T: Animate> Animatable<T> {
                 return interrupted();
             }
             let begin = *started.get_or_insert(time);
-            if let Some(reason) = self.frame(&animation, time, begin) {
+            if let Some(reason) = self.frame(animation, time, begin) {
                 return AnimationResult { end_reason: reason, end_value: self.value() };
             }
         }
@@ -343,7 +343,7 @@ impl<T: Animate> Animatable<T> {
     /// animation ended, if it did.
     fn frame(
         &self,
-        animation: &TargetBasedAnimation<T>,
+        animation: &dyn Animation<T>,
         frame_time: i64,
         start_time: i64,
     ) -> Option<AnimationEndReason> {
@@ -359,6 +359,22 @@ impl<T: Animate> Animatable<T> {
         }
         inner.value.set(value);
         animation.is_finished_from_nanos(play_time).then_some(AnimationEndReason::Finished)
+    }
+
+    /// Decays from the current value at `initial_velocity` along `spec`, stopping at a bound if
+    /// it reaches one, as `animateDecay`: the target is where it stops.
+    pub async fn animate_decay(
+        &self,
+        initial_velocity: T,
+        spec: &crate::decay::DecayAnimationSpec,
+    ) -> AnimationResult<T> {
+        let velocity = initial_velocity.to_vector();
+        let animation = crate::decay::DecayAnimation::with_velocity_vector(
+            spec.clone(),
+            self.value(),
+            velocity,
+        );
+        self.run_animation(&animation, velocity).await
     }
 
     /// Jumps to `target` (clamped to the bounds), interrupting an animation, as `snapTo`.

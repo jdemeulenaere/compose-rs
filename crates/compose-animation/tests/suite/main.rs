@@ -5,6 +5,7 @@ extern crate compose_runtime as compose;
 
 mod animated_visibility;
 mod animation;
+mod animation_objects;
 mod content;
 mod converters;
 mod crossfade;
