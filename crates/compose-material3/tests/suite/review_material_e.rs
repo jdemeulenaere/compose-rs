@@ -313,7 +313,9 @@ fn SwipeApp(state: SwipeToDismissBoxState) {
             },
             modifier = Modifier.test_tag("box"),
             |_| {
-                ListItem!({ Text!("Swipe me") }, modifier = Modifier.test_tag("item"));
+                ListItem!(modifier = Modifier.test_tag("item"), {
+                    Text!("Swipe me");
+                });
             }
         );
     });

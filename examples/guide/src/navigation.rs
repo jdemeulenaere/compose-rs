@@ -80,10 +80,9 @@ pub fn Inbox(on_open: impl Fn(u32) + 'static, on_settings: impl Fn() + 'static) 
                 |index| index as u32,
                 move |index| {
                     let id = index as u32;
-                    ListItem!(
-                        headline_content = { Text!("Message {}", id) },
-                        modifier = Modifier.clickable(move || on_open(id))
-                    );
+                    ClickableListItem!(move || on_open(id), {
+                        Text!("Message {}", id);
+                    });
                 },
             );
         });

@@ -3,7 +3,6 @@
 use compose::foundation::layout::*;
 use compose::material3::*;
 use compose::runtime::*;
-use compose::ui::*;
 
 // ANCHOR: dialog
 #[composable]
@@ -51,18 +50,15 @@ pub fn SizePicker(selected: usize, on_select: impl Fn(usize) + 'static) {
     // One group for accessibility: "1 of 3"-style navigation between the options.
     Column!(modifier = Modifier.selectable_group(), {
         for (index, size) in SIZES.into_iter().enumerate() {
-            ListItem!(
-                headline_content = {
-                    Text!(size);
-                },
-                // The whole row selects, as a radio button.
-                modifier = Modifier.selectable_with(
-                    index == selected,
-                    ClickableOptions { role: Some(Role::RadioButton), ..ClickableOptions::DEFAULT },
-                    move || on_select(index),
-                ),
-                // `None`: the row handles the click, not the button.
+            // The whole item selects, as a radio button.
+            SelectableListItem!(
+                index == selected,
+                move || on_select(index),
+                // `None`: the item handles the click, not the button.
                 leading_content = Some(move || RadioButton!(index == selected, None::<fn()>)),
+                {
+                    Text!(size);
+                }
             );
         }
     });

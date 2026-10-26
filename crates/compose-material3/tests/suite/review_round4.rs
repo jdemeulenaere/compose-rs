@@ -178,9 +178,11 @@ fn a_list_item_merges_its_texts_into_one_node() {
     let mut ui = compose_test(|| {
         MaterialTheme!({
             ListItem!(
-                { Text!("Headline") },
                 modifier = Modifier.test_tag("item"),
                 supporting_content = Some(|| Text!("Supporting")),
+                {
+                    Text!("Headline");
+                }
             );
         });
     });

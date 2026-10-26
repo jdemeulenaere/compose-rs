@@ -597,20 +597,26 @@ fn list_items_are_as_high_as_their_lines_with_their_padding() {
     let mut ui = compose_test(|| {
         MaterialTheme!({
             Column!({
-                ListItem!({ Text!("One") }, modifier = Modifier.test_tag("one"));
+                ListItem!(modifier = Modifier.test_tag("one"), {
+                    Text!("One");
+                });
                 ListItem!(
-                    { Text!("Two") },
                     modifier = Modifier.test_tag("two"),
                     supporting_content = Some(|| Text!("Supporting")),
                     leading_content = Some(|| {
                         Icon!(icons::filled::star(), None, modifier = Modifier.test_tag("icon"))
                     }),
+                    {
+                        Text!("Two");
+                    }
                 );
                 ListItem!(
-                    { Text!("Three") },
                     modifier = Modifier.test_tag("three"),
                     overline_content = Some(|| Text!("Overline")),
                     supporting_content = Some(|| Text!("Supporting")),
+                    {
+                        Text!("Three");
+                    }
                 );
             });
         });

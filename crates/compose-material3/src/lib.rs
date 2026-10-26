@@ -64,7 +64,10 @@ pub use icon::{
     FilledIconButton, FilledTonalIconButton, Icon, IconButton, IconButtonColors,
     IconButtonDefaults, IconToggleButton, IconToggleButtonColors, OutlinedIconButton, icons,
 };
-pub use list_item::{ListItem, ListItemColors, ListItemDefaults};
+pub use list_item::{
+    ClickableListItem, ListItem, ListItemColors, ListItemDefaults, ListItemElevation,
+    ListItemShapes, SelectableListItem, ToggleableListItem,
+};
 pub use navigation::{
     NavigationBar, NavigationBarDefaults, NavigationBarItem, NavigationBarItemColors,
     NavigationBarItemDefaults, NavigationRail, NavigationRailDefaults, NavigationRailItem,

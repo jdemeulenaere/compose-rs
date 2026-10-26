@@ -9,7 +9,7 @@ The known differences from Jetpack Compose that an app will run into, distilled 
   - a function with optional parameters is `<name>` (Compose's defaults) and `<name>_with` (all of them);
   - overloads differing by a type take a tuple or `impl Into` (`padding((16.dp(), 8.dp()))`);
   - the clickable family takes `ClickableOptions` (D263, D265);
-  - composable overloads are named after what they add: `ClickableSurface`, `SelectableSurface`, `AnnotatedText`, `IndeterminateCircularProgressIndicator` (D181);
+  - composable overloads are named after what they add: `ClickableSurface`, `SelectableSurface`, `ClickableListItem`, `SelectableListItem`, `ToggleableListItem`, `AnnotatedText`, `IndeterminateCircularProgressIndicator` (D181);
   - lazy list forms are `items`, `items_keyed`, `items_list`, `items_indexed`, … (D174);
   - a composable extension of a type is a method taking every parameter: `transition.AnimatedVisibility(…)`, `transition.AnimatedContent(…)` (D812).
 - **Struct update instead of named arguments of constructors.** `ColorScheme { primary, ..base }`, `ButtonColors { container_color, ..ButtonDefaults::button_colors() }`, `KeyboardOptions { ime_action, ..KeyboardOptions::DEFAULT }` (D180, D261). A default that depends on another parameter (an outlined button's border reading `enabled`) is an `Option` whose `None` is Compose's default.

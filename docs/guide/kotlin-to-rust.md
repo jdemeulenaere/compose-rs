@@ -1603,10 +1603,10 @@ A dialog shows while it's in the composition, as in Compose. Back, Escape and a 
 Column(Modifier.selectableGroup()) {
     sizes.forEachIndexed { index, size ->
         ListItem(
-            headlineContent = { Text(size) },
-            modifier = Modifier.selectable(index == selected, role = Role.RadioButton, onClick = { onSelect(index) }),
+            selected = index == selected,
+            onClick = { onSelect(index) },
             leadingContent = { RadioButton(index == selected, onClick = null) },
-        )
+        ) { Text(size) }
     }
 }
 ```
@@ -1620,25 +1620,22 @@ pub fn SizePicker(selected: usize, on_select: impl Fn(usize) + 'static) {
     // One group for accessibility: "1 of 3"-style navigation between the options.
     Column!(modifier = Modifier.selectable_group(), {
         for (index, size) in SIZES.into_iter().enumerate() {
-            ListItem!(
-                headline_content = {
-                    Text!(size);
-                },
-                // The whole row selects, as a radio button.
-                modifier = Modifier.selectable_with(
-                    index == selected,
-                    ClickableOptions { role: Some(Role::RadioButton), ..ClickableOptions::DEFAULT },
-                    move || on_select(index),
-                ),
-                // `None`: the row handles the click, not the button.
+            // The whole item selects, as a radio button.
+            SelectableListItem!(
+                index == selected,
+                move || on_select(index),
+                // `None`: the item handles the click, not the button.
                 leading_content = Some(move || RadioButton!(index == selected, None::<fn()>)),
+                {
+                    Text!(size);
+                }
             );
         }
     });
 }
 ```
 
-An optional callback (`onClick = null`) is `None`; a bare `None` needs its type (`None::<fn()>`), as Rust can't infer it. `Modifier.toggleable` and `Checkbox!(checked, None::<fn(bool)>)` make a checkable row the same way.
+An optional callback (`onClick = null`) is `None`; a bare `None` needs its type (`None::<fn()>`), as Rust can't infer it. Kotlin's `ListItem` overloads are named apart: `ListItem!`, `ClickableListItem!`, `SelectableListItem!` (`selected`, as here) and `ToggleableListItem!` (`checked`, with `Checkbox!(checked, None::<fn(bool)>)` as its leading content for a checkable row).
 
 ## Accessibility and semantics
 

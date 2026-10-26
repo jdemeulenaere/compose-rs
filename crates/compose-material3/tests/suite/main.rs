@@ -8,6 +8,7 @@ mod app_bars;
 mod buttons;
 mod components;
 mod drawer;
+mod interactive_list;
 mod intrinsics;
 mod material;
 mod material_tokens;
