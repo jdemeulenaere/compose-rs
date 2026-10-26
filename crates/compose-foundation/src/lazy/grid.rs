@@ -23,7 +23,9 @@ use super::{
     BEYOND, FIRST_STEP, Interval, Items, ItemsRef, LazyItems, LazyListInner, LazyListState,
     LazyScrollElement, MOST_IN_A_ROUND, MOST_MISSING, Sizes, composed_range, content_type_of,
 };
+use crate::gestures::{LocalBoxFuture, ScrollBlock, ScrollableState};
 use crate::layout::{HorizontalArrangement, MainAxisArrangement, VerticalArrangement};
+use crate::mutator::{MutatePriority, MutationInterrupted};
 
 /// How a grid's cross axis is cut into cells, as Compose's `GridCells`: a vertical grid's
 /// columns, a horizontal one's rows.
@@ -137,25 +139,65 @@ impl LazyGridState {
     }
 
     /// Scrolls to the line of item `index` (and `scroll_offset` pixels into it) at the next
-    /// layout, as `scrollToItem`.
-    pub fn scroll_to_item(&self, index: usize, scroll_offset: i32) {
-        self.list.scroll_to_item(index, scroll_offset);
+    /// layout, as `requestScrollToItem`: a scroll going on is stopped.
+    pub fn request_scroll_to_item(&self, index: usize, scroll_offset: i32) {
+        self.list.request_scroll_to_item(index, scroll_offset);
     }
 
-    /// Scrolls by `pixels` (positive: towards the end), returning whether it moved.
-    pub fn scroll_by(&self, pixels: f32) -> bool {
-        self.list.scroll_by(pixels)
+    /// Scrolls to the line of item `index` (and `scroll_offset` pixels into it) in a scroll of
+    /// the default priority, as `scrollToItem`.
+    pub async fn scroll_to_item(
+        &self,
+        index: usize,
+        scroll_offset: i32,
+    ) -> Result<(), MutationInterrupted> {
+        self.list.scroll_to_item(index, scroll_offset).await
+    }
+
+    /// The interaction source the grid reports its drags to, as `interactionSource`.
+    pub fn interaction_source(&self) -> compose_ui::MutableInteractionSource {
+        self.list.interaction_source()
+    }
+}
+
+impl ScrollableState for LazyGridState {
+    fn scroll_boxed<'a>(
+        &'a self,
+        priority: MutatePriority,
+        block: ScrollBlock<'a>,
+    ) -> LocalBoxFuture<'a, Result<(), MutationInterrupted>> {
+        self.list.scroll_boxed(priority, block)
+    }
+
+    fn dispatch_raw_delta(&self, delta: f32) -> f32 {
+        self.list.dispatch_raw_delta(delta)
+    }
+
+    fn is_scroll_in_progress(&self) -> bool {
+        self.list.is_scroll_in_progress()
     }
 
     /// Whether the grid can scroll towards its end, as `canScrollForward` (as last laid out).
-    pub fn can_scroll_forward(&self) -> bool {
+    fn can_scroll_forward(&self) -> bool {
         self.list.can_scroll_forward()
     }
 
     /// Whether the grid can scroll towards its start, as `canScrollBackward` (as last laid
     /// out).
-    pub fn can_scroll_backward(&self) -> bool {
+    fn can_scroll_backward(&self) -> bool {
         self.list.can_scroll_backward()
+    }
+
+    fn last_scrolled_forward(&self) -> bool {
+        self.list.last_scrolled_forward()
+    }
+
+    fn last_scrolled_backward(&self) -> bool {
+        self.list.last_scrolled_backward()
+    }
+
+    fn internal_interaction_source(&self) -> Option<compose_ui::MutableInteractionSource> {
+        self.list.internal_interaction_source()
     }
 }
 
@@ -745,6 +787,7 @@ fn LazyGrid(
         vertical,
         reverse: false,
         enabled: true,
+        fling_behavior: None,
     });
     let items = ItemsRef(items);
     // The items' saveable state, kept by key while they're scrolled away (D290).

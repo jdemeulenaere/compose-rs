@@ -36,13 +36,13 @@ fn review_scrolling_back_over_lines_of_different_heights_returns_to_the_top() {
         );
     });
     for _ in 0..80 {
-        state.scroll_by(37.0);
+        state.dispatch_raw_delta(37.0);
         ui.wait_for_idle();
     }
     let far = state.first_visible_item_index();
     assert!(far > 30, "{far}");
     for _ in 0..80 {
-        state.scroll_by(-37.0);
+        state.dispatch_raw_delta(-37.0);
         ui.wait_for_idle();
     }
     assert_eq!(state.first_visible_item_index(), 0);
@@ -52,10 +52,10 @@ fn review_scrolling_back_over_lines_of_different_heights_returns_to_the_top() {
     let line0 = (0..3).map(|i| 20 + (i * 7919 % 13) * 5).max().unwrap() as f32;
     assert_eq!(bounds(&mut ui, "3").top, line0 + 3.0);
     // A big jump back from far.
-    state.scroll_to_item(500, 0);
+    state.request_scroll_to_item(500, 0);
     ui.wait_for_idle();
     for _ in 0..30 {
-        state.scroll_by(-1000.0);
+        state.dispatch_raw_delta(-1000.0);
         ui.wait_for_idle();
     }
     assert_eq!(state.first_visible_item_index(), 0);
@@ -95,13 +95,13 @@ fn review_the_end_clamps_with_padding_and_spacing() {
                 );
             }
         });
-        state.scroll_by(100_000.0);
+        state.dispatch_raw_delta(100_000.0);
         ui.wait_for_idle();
         let last = bounds(&mut ui, "30");
         let end = if vertical { last.bottom } else { last.right };
         assert_eq!(end, 200.0 - 11.0, "vertical {vertical}");
         assert!(!state.can_scroll_forward());
-        state.scroll_by(-100_000.0);
+        state.dispatch_raw_delta(-100_000.0);
         ui.wait_for_idle();
         let first = bounds(&mut ui, "0");
         assert_eq!(if vertical { first.top } else { first.left }, 7.0);
@@ -133,7 +133,7 @@ fn review_items_removed_at_the_end_while_scrolled_there() {
             }
         );
     });
-    state.scroll_by(100_000.0);
+    state.dispatch_raw_delta(100_000.0);
     ui.wait_for_idle();
     assert_eq!(bounds(&mut ui, "299").bottom, 200.0);
     count.set(250);
@@ -163,7 +163,7 @@ fn review_scroll_to_an_item_mid_line_with_an_offset() {
             }
         );
     });
-    state.scroll_to_item(101, 20);
+    state.request_scroll_to_item(101, 20);
     ui.wait_for_idle();
     assert_eq!(state.first_visible_item_index(), 99);
     assert_eq!(state.first_visible_item_scroll_offset(), 20);
@@ -192,7 +192,7 @@ fn review_adaptive_resize_keeps_the_first_item_and_offset() {
             }
         );
     });
-    state.scroll_to_item(400, 10);
+    state.request_scroll_to_item(400, 10);
     ui.wait_for_idle();
     assert_eq!(state.first_visible_item_index(), 400);
     ui.host().resize(IntSize::new(300, 300));
@@ -241,7 +241,7 @@ fn review_grid_items_removed_far_before_keep_their_composition() {
             }
         );
     });
-    state.scroll_to_item(900, 0);
+    state.request_scroll_to_item(900, 0);
     ui.wait_for_idle();
     let before = REMEMBERED.with(Cell::get);
     keys.set((60..3000).collect());
@@ -330,7 +330,7 @@ fn review_spans_asked_again_on_each_recomposition_of_the_caller() {
     let state = LazyGridState::new(0, 0);
     let given = *state;
     let mut ui = ComposeTestRule::sized(IntSize::new(300, 300), move || SpanCaller(handle, given));
-    state.scroll_to_item(90_000, 0);
+    state.request_scroll_to_item(90_000, 0);
     ui.wait_for_idle();
     SPANS_ASKED.with(|asked| *asked.borrow_mut() = 0);
     let start = std::time::Instant::now();
@@ -392,7 +392,7 @@ fn review_list_items_removed_at_the_end_while_scrolled_there() {
             }
         );
     });
-    state.scroll_by(100_000.0);
+    state.dispatch_raw_delta(100_000.0);
     ui.wait_for_idle();
     assert_eq!(bounds(&mut ui, "74").bottom, 200.0);
     count.set(62);
@@ -446,7 +446,7 @@ fn review_grid_scrolling_one_way_composes_each_item_once() {
             );
         });
         for _ in 0..300 {
-            state.scroll_by(9.0);
+            state.dispatch_raw_delta(9.0);
             ui.wait_for_idle();
             ui.host().prefetch(std::time::Instant::now() + std::time::Duration::from_secs(60));
         }
@@ -492,7 +492,7 @@ fn review_grid_prefetch_asks_for_no_frame_and_draws_nothing() {
         );
     });
     for step in 0..200 {
-        state.scroll_by(if step < 150 { 13.0 } else { -13.0 });
+        state.dispatch_raw_delta(if step < 150 { 13.0 } else { -13.0 });
         ui.wait_for_idle();
         let position = (state.first_visible_item_index(), state.first_visible_item_scroll_offset());
         let display = ui.dump_display_list();

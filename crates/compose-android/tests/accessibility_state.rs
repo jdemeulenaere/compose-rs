@@ -300,7 +300,7 @@ fn with_no_service_nothing_is_read_or_told() {
     for step in 0..6 {
         screen.set(step % 2 == 0);
         kotlin.frames();
-        scroll.scroll_to(step * 10);
+        scroll.dispatch_raw_delta((step * 10 - scroll.value()) as f32);
         kotlin.frames();
         kotlin.run_posted();
     }
@@ -320,13 +320,13 @@ fn scrolls_made_with_no_service_on_are_not_told_on_connecting() {
     let id = kotlin.nodes.iter().find(|node| node.scroll.is_some()).expect("a scrolling node").id;
     kotlin.events.clear();
 
-    scroll.scroll_to(100);
+    scroll.dispatch_raw_delta((100 - scroll.value()) as f32);
     kotlin.frames();
     kotlin.run_posted();
     assert_eq!(kotlin.events, [Event::Scrolled { id, delta: 100 }, Event::ContentChanged]);
 
     kotlin.disconnect();
-    scroll.scroll_to(150);
+    scroll.dispatch_raw_delta((150 - scroll.value()) as f32);
     kotlin.frames();
     kotlin.events.clear();
     kotlin.connect();
@@ -334,7 +334,7 @@ fn scrolls_made_with_no_service_on_are_not_told_on_connecting() {
     assert_eq!(kotlin.events, [Event::ContentChanged]);
 
     kotlin.events.clear();
-    scroll.scroll_to(200);
+    scroll.dispatch_raw_delta((200 - scroll.value()) as f32);
     kotlin.frames();
     kotlin.run_posted();
     assert_eq!(kotlin.events, [Event::Scrolled { id, delta: 50 }, Event::ContentChanged]);

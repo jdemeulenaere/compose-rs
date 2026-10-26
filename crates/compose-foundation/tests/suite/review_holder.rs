@@ -52,7 +52,7 @@ fn BigList() {
 
 fn scroll_through(ui: &mut ComposeTestRule, pixels: f32, steps: usize) {
     for _ in 0..steps {
-        LIST.get().unwrap().scroll_by(pixels);
+        LIST.get().unwrap().dispatch_raw_delta(pixels);
         ui.wait_for_idle();
     }
 }

@@ -120,7 +120,7 @@ fn switches_scrolled_into_a_list_show_their_values_at_once() {
     ui.advance_time_by(std::time::Duration::from_secs(2));
     let mut mismatches = Vec::new();
     for step in 0..60 {
-        state.scroll_by(40.0);
+        state.dispatch_raw_delta(40.0);
         ui.wait_for_idle();
         let now = ui.dump_display_list();
         ui.advance_time_by(std::time::Duration::from_secs(2));
@@ -153,7 +153,7 @@ fn prefetching_reused_switches_starts_no_animation() {
     ui.advance_time_by(std::time::Duration::from_secs(2));
     let mut animating = Vec::new();
     for step in 0..40 {
-        state.scroll_by(40.0);
+        state.dispatch_raw_delta(40.0);
         ui.wait_for_idle();
         ui.advance_time_by(std::time::Duration::from_secs(2));
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
@@ -187,7 +187,7 @@ fn control_prefetching_same_valued_switches_asks_for_no_frame() {
     ui.advance_time_by(std::time::Duration::from_secs(2));
     let mut animating = Vec::new();
     for step in 0..40 {
-        state.scroll_by(40.0);
+        state.dispatch_raw_delta(40.0);
         ui.wait_for_idle();
         ui.advance_time_by(std::time::Duration::from_secs(2));
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
@@ -221,7 +221,7 @@ fn a_jump_reusing_switches_of_other_values_leaves_no_animation_running() {
     ui.wait_for_idle();
     ui.advance_time_by(std::time::Duration::from_secs(2));
     // Every slot reused by an item of the other value.
-    state.scroll_to_item(100, 0);
+    state.request_scroll_to_item(100, 0);
     ui.wait_for_idle();
     let awaiting = compose_runtime::platform::has_frame_awaiters();
     assert!(!awaiting, "reused switches left animations waiting for frames");

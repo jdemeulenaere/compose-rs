@@ -19,6 +19,7 @@ pub mod gestures;
 mod image;
 pub mod layout;
 pub mod lazy;
+mod mutator;
 mod scroll;
 pub mod scrollbar;
 pub mod shape;
@@ -35,13 +36,18 @@ pub use compose_ui::{
 pub use compose_ui::{BorderRenderer, BorderStroke};
 pub use dark_theme::is_system_in_dark_theme;
 pub use flags::ComposeFoundationFlags;
-pub use gestures::{DraggableModifier, DraggableState, Orientation, remember_draggable_state};
+pub use gestures::{
+    DefaultFlingBehavior, DefaultScrollableState, DraggableModifier, DraggableState, FlingBehavior,
+    Orientation, ScrollScope, ScrollableDefaults, ScrollableModifier, ScrollableState,
+    ScrollableStateExt, remember_draggable_state, remember_scrollable_state, scrollable_state,
+};
 pub use image::{ContentScale, Image};
 pub use lazy::{
     GridCells, GridItemSpan, LazyColumn, LazyGridItemSpanScope, LazyGridScope, LazyGridState,
     LazyHorizontalGrid, LazyItemModifiers, LazyItemScope, LazyListScope, LazyListState, LazyRow,
     LazyVerticalGrid, remember_lazy_grid_state, remember_lazy_list_state,
 };
+pub use mutator::{MutatePriority, MutationInterrupted, MutatorMutex};
 pub use scroll::{ScrollModifiers, ScrollState, remember_scroll_state};
 pub use scrollbar::{
     HorizontalScrollbar, LOCAL_SCROLLBAR_STYLE, ScrollbarAdapter, ScrollbarStyle,

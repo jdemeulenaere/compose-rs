@@ -21,307 +21,42 @@ use std::task::{Poll, Waker};
 
 use compose_runtime::{ComposeArg, CoroutineScope, OwnedState, State};
 
-use crate::unit::Offset;
-
-/// How many interactions a collector that hasn't run yet keeps, the oldest dropped beyond, as
-/// Compose's `extraBufferCapacity = 16` with `DROP_OLDEST`.
-const BUFFER_CAPACITY: usize = 16;
-
-/// What identifies one interaction, for the interaction ending it (a release names its press).
-fn next_id() -> u64 {
-    static NEXT: AtomicU64 = AtomicU64::new(1);
-    NEXT.fetch_add(1, Ordering::Relaxed)
-}
-
-macro_rules! identified {
-    ($(#[$doc:meta])* $name:ident) => {
-        $(#[$doc])*
-        #[derive(Clone, Copy)]
-        pub struct $name {
-            id: u64,
-        }
-
-        impl $name {
-            /// A new one, distinct from every other.
-            #[allow(clippy::new_without_default)]
-            pub fn new() -> $name {
-                $name { id: next_id() }
-            }
-        }
-
-        /// The same interaction, not one equal to it: as Compose's classes, compared by identity.
-        impl PartialEq for $name {
-            fn eq(&self, other: &Self) -> bool {
-                self.id == other.id
-            }
-        }
-
-        impl Eq for $name {}
-
-        impl fmt::Debug for $name {
-            fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-                write!(formatter, "{}#{}", stringify!($name), self.id)
-            }
-        }
-    };
-}
-
-identified!(
-    /// A focus gained, as `FocusInteraction.Focus`: `FocusInteraction::Unfocus` names it.
-    Focus
-);
-identified!(
-    /// A hover started, as `HoverInteraction.Enter`: `HoverInteraction::Exit` names it.
-    HoverEnter
-);
-identified!(
-    /// A drag started, as `DragInteraction.Start`: `DragInteraction::Stop` and `Cancel` name it.
-    DragStart
-);
-
-/// A press, as `PressInteraction.Press`: where it went down (in the pressed node), and the
-/// identity a `PressInteraction::Release` or `Cancel` names it by.
-#[derive(Clone, Copy)]
-pub struct Press {
-    id: u64,
-    /// Where it was pressed, in the pressed node's coordinates, as `pressPosition`.
-    pub press_position: Offset,
-}
-
-impl Press {
-    /// A new press at `press_position`, distinct from every other, as
-    /// `PressInteraction.Press(pressPosition)`.
-    pub fn new(press_position: Offset) -> Press {
-        Press { id: next_id(), press_position }
-    }
-}
-
-/// The same press, not one at the same place: compared by identity, as Compose's class.
-impl PartialEq for Press {
-    fn eq(&self, other: &Self) -> bool {
-        self.id == other.id
-    }
-}
-
-impl Eq for Press {}
-
-impl fmt::Debug for Press {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "Press#{}({:?})", self.id, self.press_position)
-    }
-}
-
-/// A press and how it ended, as `PressInteraction`.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum PressInteraction {
-    /// Pressed, as `PressInteraction.Press`.
-    Press(Press),
-    /// The press released (a click), as `PressInteraction.Release(press)`.
-    Release(Press),
-    /// The press cancelled (moved off, a scroll took it), as `PressInteraction.Cancel(press)`.
-    Cancel(Press),
-}
-
-impl PressInteraction {
-    /// The press it is or ends.
-    pub fn press(&self) -> Press {
-        match *self {
-            PressInteraction::Press(press)
-            | PressInteraction::Release(press)
-            | PressInteraction::Cancel(press) => press,
-        }
-    }
-}
-
-/// A focus gained or lost, as `FocusInteraction`.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum FocusInteraction {
-    /// As `FocusInteraction.Focus`.
-    Focus(Focus),
-    /// The focus lost, as `FocusInteraction.Unfocus(focus)`.
-    Unfocus(Focus),
-}
-
-/// A mouse over the component or gone, as `HoverInteraction`.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum HoverInteraction {
-    /// As `HoverInteraction.Enter`.
-    Enter(HoverEnter),
-    /// The hover over, as `HoverInteraction.Exit(enter)`.
-    Exit(HoverEnter),
-}
-
-/// A drag started and how it ended, as `DragInteraction`.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum DragInteraction {
-    /// As `DragInteraction.Start`.
-    Start(DragStart),
-    /// The drag ended, as `DragInteraction.Stop(start)`.
-    Stop(DragStart),
-    /// The drag cancelled, as `DragInteraction.Cancel(start)`.
-    Cancel(DragStart),
-}
-
-/// Something that happened to a component, as Compose's `Interaction`: the kinds foundation
-/// emits, or one of the app's own (`Custom`, compared by identity, as a Kotlin object).
+/// A clickable's press, focus and hover, shared, as Compose's `MutableInteractionSource` with
+/// `collectIsPressedAsState`, `collectIsFocusedAsState` and `collectIsHoveredAsState`. Remember
+/// one and give it to `Modifier.clickable_with`.
 #[derive(Clone)]
-pub enum Interaction {
-    Press(PressInteraction),
-    Focus(FocusInteraction),
-    Hover(HoverInteraction),
-    Drag(DragInteraction),
-    /// An interaction of the app's own, as a class implementing `Interaction`: downcast it.
-    Custom(Rc<dyn Any>),
+pub struct MutableInteractionSource {
+    pressed: Rc<OwnedState<bool>>,
+    focused: Rc<OwnedState<bool>>,
+    hovered: Rc<OwnedState<bool>>,
+    dragged: Rc<OwnedState<bool>>,
 }
 
-impl Interaction {
-    /// An interaction of the app's own, as a Kotlin `object : Interaction`.
-    pub fn custom(value: impl Any) -> Interaction {
-        Interaction::Custom(Rc::new(value))
-    }
-}
-
-impl PartialEq for Interaction {
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Interaction::Press(a), Interaction::Press(b)) => a == b,
-            (Interaction::Focus(a), Interaction::Focus(b)) => a == b,
-            (Interaction::Hover(a), Interaction::Hover(b)) => a == b,
-            (Interaction::Drag(a), Interaction::Drag(b)) => a == b,
-            (Interaction::Custom(a), Interaction::Custom(b)) => Rc::ptr_eq(a, b),
-            _ => false,
-        }
-    }
-}
-
-impl fmt::Debug for Interaction {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Interaction::Press(press) => write!(formatter, "{press:?}"),
-            Interaction::Focus(focus) => write!(formatter, "{focus:?}"),
-            Interaction::Hover(hover) => write!(formatter, "{hover:?}"),
-            Interaction::Drag(drag) => write!(formatter, "{drag:?}"),
-            Interaction::Custom(_) => formatter.write_str("Custom"),
-        }
-    }
-}
-
-impl From<PressInteraction> for Interaction {
-    fn from(interaction: PressInteraction) -> Interaction {
-        Interaction::Press(interaction)
-    }
-}
-
-impl From<FocusInteraction> for Interaction {
-    fn from(interaction: FocusInteraction) -> Interaction {
-        Interaction::Focus(interaction)
-    }
-}
-
-impl From<HoverInteraction> for Interaction {
-    fn from(interaction: HoverInteraction) -> Interaction {
-        Interaction::Hover(interaction)
-    }
-}
-
-impl From<DragInteraction> for Interaction {
-    fn from(interaction: DragInteraction) -> Interaction {
-        Interaction::Drag(interaction)
-    }
-}
-
-/// One collector's queue.
-#[derive(Default)]
-struct Subscriber {
-    queue: RefCell<VecDeque<Interaction>>,
-    waker: RefCell<Option<Waker>>,
-}
-
-/// The interactions under way, by kind, each by identity: what `is_pressed` and its siblings
-/// read (and compose-rs's indications, `InteractionStates`).
-#[derive(Default)]
-pub(crate) struct Ongoing {
-    presses: Vec<Press>,
-    focuses: Vec<Focus>,
-    hovers: Vec<HoverEnter>,
-    drags: Vec<DragStart>,
-}
-
-impl Ongoing {
-    pub(crate) fn pressed(&self) -> bool {
-        !self.presses.is_empty()
-    }
-
-    pub(crate) fn hovered(&self) -> bool {
-        !self.hovers.is_empty()
-    }
-
-    pub(crate) fn focused(&self) -> bool {
-        !self.focuses.is_empty()
-    }
-
-    pub(crate) fn apply(&mut self, interaction: &Interaction) {
-        fn remove<T: PartialEq>(list: &mut Vec<T>, item: &T) {
-            if let Some(index) = list.iter().position(|value| value == item) {
-                list.remove(index);
-            }
-        }
-        match interaction {
-            Interaction::Press(PressInteraction::Press(press)) => self.presses.push(*press),
-            Interaction::Press(PressInteraction::Release(press))
-            | Interaction::Press(PressInteraction::Cancel(press)) => {
-                remove(&mut self.presses, press)
-            }
-            Interaction::Focus(FocusInteraction::Focus(focus)) => self.focuses.push(*focus),
-            Interaction::Focus(FocusInteraction::Unfocus(focus)) => {
-                remove(&mut self.focuses, focus)
-            }
-            Interaction::Hover(HoverInteraction::Enter(enter)) => self.hovers.push(*enter),
-            Interaction::Hover(HoverInteraction::Exit(enter)) => remove(&mut self.hovers, enter),
-            Interaction::Drag(DragInteraction::Start(start)) => self.drags.push(*start),
-            Interaction::Drag(DragInteraction::Stop(start))
-            | Interaction::Drag(DragInteraction::Cancel(start)) => remove(&mut self.drags, start),
-            Interaction::Custom(_) => {}
-        }
-    }
-}
-
-/// Which of the source's derived states.
-#[derive(Clone, Copy)]
-enum Kind {
-    Pressed,
-    Focused,
-    Hovered,
-    Dragged,
-}
-
-/// A listener's callback (`InteractionSource::listen`): called with each interaction as it's
-/// emitted, while the listener is held.
-pub(crate) struct Listener(RefCell<ListenerCallback>);
-
-type ListenerCallback = Box<dyn FnMut(&Interaction)>;
-
-struct SourceInner {
-    subscribers: RefCell<Vec<Weak<Subscriber>>>,
-    listeners: RefCell<Vec<Weak<Listener>>>,
-    ongoing: RefCell<Ongoing>,
-    /// The derived states, made when first read.
-    states: [OnceCell<OwnedState<bool>>; 4],
-}
-
-impl SourceInner {
-    fn is(&self, kind: Kind) -> bool {
-        let ongoing = self.ongoing.borrow();
-        match kind {
-            Kind::Pressed => !ongoing.presses.is_empty(),
-            Kind::Focused => !ongoing.focuses.is_empty(),
-            Kind::Hovered => !ongoing.hovers.is_empty(),
-            Kind::Dragged => !ongoing.drags.is_empty(),
+impl MutableInteractionSource {
+    pub fn new() -> MutableInteractionSource {
+        MutableInteractionSource {
+            pressed: Rc::new(compose_runtime::mutable_state_of(false)),
+            focused: Rc::new(compose_runtime::mutable_state_of(false)),
+            hovered: Rc::new(compose_runtime::mutable_state_of(false)),
+            dragged: Rc::new(compose_runtime::mutable_state_of(false)),
         }
     }
 
     fn state(&self, kind: Kind) -> &OwnedState<bool> {
         self.states[kind as usize].get_or_init(|| compose_runtime::mutable_state_of(self.is(kind)))
+    }
+
+    /// Whether a drag is going on (a scrollable's, a draggable's), as `collectIsDraggedAsState`
+    /// (a state read).
+    pub fn is_dragged(&self) -> bool {
+        self.dragged.get()
+    }
+
+    /// A drag started (`true`, Compose's `DragInteraction.Start`) or ended (`false`, its `Stop`
+    /// or `Cancel`): for foundation's gestures, until the interactions' stream comes.
+    #[doc(hidden)]
+    pub fn set_dragged(&self, dragged: bool) {
+        write_soon(&self.dragged, dragged);
     }
 }
 

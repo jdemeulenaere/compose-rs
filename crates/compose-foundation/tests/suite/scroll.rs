@@ -103,12 +103,16 @@ fn content_scrolled_out_of_the_viewport_is_not_hit() {
 #[test]
 fn setting_the_scroll_state_scrolls() {
     let mut ui = ComposeTestRule::sized(IntSize::new(100, 200), List);
-    state().scroll_to(250);
+    CoroutineScope::new().launch(async {
+        let _ = state().scroll_to(250).await;
+    });
     ui.wait_for_idle();
     assert_eq!(top(&mut ui, 5), 0.0);
-    state().scroll_to(10_000);
+    CoroutineScope::new().launch(async {
+        let _ = state().scroll_to(10_000).await;
+    });
     ui.wait_for_idle();
-    assert_eq!(state().value(), 800, "clamped at layout");
+    assert_eq!(state().value(), 800, "clamped at once");
 }
 
 /// `rememberScrollState(initial)` through its call macro, and `Spacer()` without a modifier.

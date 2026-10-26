@@ -199,20 +199,10 @@ fn tab_row(
 
 /// Scrolls `scroll` to `target` over 250 ms, eased, as Compose's `ScrollableTabRowScrollSpec`.
 async fn scroll_with_tween(scroll: &ScrollState, target: i32) {
-    let start = scroll.value();
-    if start == target {
+    if scroll.value() == target {
         return;
     }
-    let began = compose_runtime::with_frame_nanos(|time| time).await;
-    loop {
-        let now = compose_runtime::with_frame_nanos(|time| time).await;
-        let fraction = ((now - began) as f32 / 250_000_000.0).min(1.0);
-        let eased = FAST_OUT_SLOW_IN_EASING.transform(fraction);
-        scroll.scroll_to(start + ((target - start) as f32 * eased).round() as i32);
-        if fraction >= 1.0 {
-            break;
-        }
-    }
+    let _ = scroll.animate_scroll_to(target, compose_animation::tween(250)).await;
 }
 
 /// Tabs, then the divider. Fixed: each tab an equal share of the width, as tall as the

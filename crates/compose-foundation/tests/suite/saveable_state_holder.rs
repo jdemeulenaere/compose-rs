@@ -189,7 +189,7 @@ fn CountingList() {
 }
 
 fn scroll_to(ui: &mut ComposeTestRule, index: usize) {
-    LIST.get().unwrap().scroll_to_item(index, 0);
+    LIST.get().unwrap().request_scroll_to_item(index, 0);
     ui.wait_for_idle();
 }
 
@@ -242,10 +242,10 @@ fn lazy_grid_cells_keep_their_saveable_state_when_scrolled_away() {
     ui.on_node_with_tag("cell 4").perform_click();
     ui.on_node_with_tag("cell 5").perform_click();
     ui.on_node_with_tag("cell 5").perform_click();
-    GRID.get().unwrap().scroll_to_item(150, 0);
+    GRID.get().unwrap().request_scroll_to_item(150, 0);
     ui.wait_for_idle();
     ui.on_node_with_tag("cell 4").assert_does_not_exist();
-    GRID.get().unwrap().scroll_to_item(0, 0);
+    GRID.get().unwrap().request_scroll_to_item(0, 0);
     ui.wait_for_idle();
     ui.on_node_with_text("cell 3: 0").assert_exists();
     ui.on_node_with_text("cell 4: 1").assert_exists();

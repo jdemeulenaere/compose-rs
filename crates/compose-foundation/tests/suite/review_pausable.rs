@@ -41,7 +41,7 @@ fn later() -> Instant {
 }
 
 fn scroll(ui: &mut ComposeTestRule, state: LazyListState, pixels: f32) {
-    state.scroll_by(pixels);
+    state.dispatch_raw_delta(pixels);
     ui.wait_for_idle();
 }
 

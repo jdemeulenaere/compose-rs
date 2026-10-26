@@ -79,7 +79,7 @@ fn grid(keys: Vec<usize>) -> GridFixture {
 fn review3_grid_first_composed_item_moved_keeps_the_items_in_view() {
     crate::legacy::lazy_lists();
     let mut g = grid((0..3000).collect());
-    g.state.scroll_to_item(900, 0);
+    g.state.request_scroll_to_item(900, 0);
     g.ui.wait_for_idle();
     let composed = live();
     let first = composed[0];
@@ -97,7 +97,7 @@ fn review3_grid_first_composed_item_moved_keeps_the_items_in_view() {
 #[test]
 fn review3_grid_data_change_cost_on_100k_items() {
     let mut g = grid((0..100_000).collect());
-    g.state.scroll_to_item(50_000, 0);
+    g.state.request_scroll_to_item(50_000, 0);
     g.ui.wait_for_idle();
     let mut keys: Vec<usize> = (0..100_000).collect();
     keys[49_950..50_100].reverse();
@@ -116,7 +116,7 @@ fn review3_grid_data_change_cost_on_100k_items() {
     );
     for count in [1_000usize, 100_000] {
         let mut g = grid((0..count).collect());
-        g.state.scroll_to_item(count / 2, 0);
+        g.state.request_scroll_to_item(count / 2, 0);
         g.ui.wait_for_idle();
         let mut best = std::time::Duration::MAX;
         for round in 0..20 {

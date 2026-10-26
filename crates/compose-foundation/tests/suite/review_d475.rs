@@ -347,7 +347,7 @@ fn a_scroll_onto_cards_and_dividers_composes_what_comes_into_view() {
     });
     ui.wait_for_idle();
     BODIES.with(|cell| cell.set(0));
-    state.scroll_by(601.0);
+    state.dispatch_raw_delta(601.0);
     ui.host().frame();
     let composed = BODIES.with(std::cell::Cell::get);
     assert!(composed <= 10, "the frame composed {composed} items");
@@ -373,7 +373,7 @@ fn baseline_composed_after_scrolling_in_steps() {
         );
     });
     for _ in 0..47 {
-        state.scroll_by(20.0);
+        state.dispatch_raw_delta(20.0);
         ui.wait_for_idle();
     }
     for _ in 0..5 {
@@ -467,9 +467,9 @@ fn an_emptied_list_takes_no_scroll() {
     assert_eq!(state.first_visible_item_index(), 10);
     count.set(0);
     ui.wait_for_idle();
-    let moved = state.scroll_by(500.0);
+    let moved = state.dispatch_raw_delta(500.0);
     ui.wait_for_idle();
     count.set(100);
     ui.wait_for_idle();
-    assert_eq!((moved, state.first_visible_item_index()), (false, 0));
+    assert_eq!((moved != 0.0, state.first_visible_item_index()), (false, 0));
 }

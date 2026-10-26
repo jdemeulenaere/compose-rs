@@ -44,7 +44,7 @@ fn a_programmatic_scroll_past_the_composed_items_fills_its_frame() {
     let state = LazyListState::new(0, 0);
     let mut ui = rows(*state, 10.0);
     ui.wait_for_idle();
-    state.scroll_by(1800.0);
+    state.dispatch_raw_delta(1800.0);
     ui.host().frame();
     let first = state.first_visible_item_index();
     let both = shown(&mut ui, 180) && shown(&mut ui, 229);
@@ -57,7 +57,7 @@ fn a_programmatic_scroll_of_160_rows_fills_its_frame() {
     let state = LazyListState::new(0, 0);
     let mut ui = rows(*state, 50.0);
     ui.wait_for_idle();
-    state.scroll_by(8000.0);
+    state.dispatch_raw_delta(8000.0);
     ui.host().frame();
     let first = state.first_visible_item_index();
     let both = shown(&mut ui, 160) && shown(&mut ui, 169);

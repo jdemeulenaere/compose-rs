@@ -224,7 +224,7 @@ fn on_globally_positioned_reports_the_layer_after_it_and_follows_a_scroll() {
     // Clipped by the scroll's viewport: 10 px of it shows.
     assert_eq!(first.bounds_in_root(), Rect::new(10.0, 90.0, 60.0, 100.0));
     assert_eq!(log.borrow().len(), 1);
-    state.scroll_to(30);
+    state.dispatch_raw_delta(30.0 - state.value() as f32);
     ui.wait_for_idle();
     let moved = *log.borrow().last().unwrap();
     assert_eq!(moved.position_in_window(), Offset::new(10.0, 60.0));

@@ -120,7 +120,8 @@ fn passes_bounds_are_in_pixels_and_follow_scrolling() {
     );
     let a = ui.on_node_with_tag("a").fetch_semantics_node().bounds;
     assert_eq!((a.left, a.top, a.width()), (20.0, 20.0, 40.0));
-    STATE.with(|cell| cell.borrow().as_ref().unwrap().scroll_to(10));
+    let state = STATE.with(|cell| *cell.borrow().as_ref().unwrap());
+    state.dispatch_raw_delta(10.0 - state.value() as f32);
     ui.wait_for_idle();
     let a = ui.on_node_with_tag("a").fetch_semantics_node().bounds;
     assert_eq!(a.top, 10.0);

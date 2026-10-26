@@ -111,7 +111,7 @@ fn x_items_that_left_are_deactivated_once_idle() {
         for step in [3.0f32, 7.0, 15.0, 33.0, 64.0] {
             let (mut ui, state) = list(pattern);
             for frame in 0..40 {
-                state.scroll_by(step);
+                state.dispatch_raw_delta(step);
                 ui.wait_for_idle();
                 idle(&mut ui);
                 let first = state.first_visible_item_index();
@@ -180,7 +180,7 @@ fn x_an_infinite_animation_in_a_row_that_left_runs_forever() {
         ui.host().frame();
     }
     idle(&mut ui);
-    state.scroll_by(64.0);
+    state.dispatch_raw_delta(64.0);
     for _ in 0..3 {
         ui.host().frame();
     }
@@ -238,7 +238,7 @@ fn x_stuck_rows_are_out_of_semantics_hits_and_drawing() {
         );
     });
     idle(&mut ui);
-    state.scroll_by(64.0);
+    state.dispatch_raw_delta(64.0);
     ui.wait_for_idle();
     // Before the idle time that deactivates them (D575): rows 0 to 4 wait, composed.
     let live = live_items();
@@ -290,7 +290,7 @@ fn x_grid_items_that_left_are_deactivated_once_idle() {
                 );
             });
             for frame in 0..40 {
-                state.scroll_by(step);
+                state.dispatch_raw_delta(step);
                 ui.wait_for_idle();
                 idle(&mut ui);
                 let first = state.first_visible_item_index();
@@ -350,7 +350,7 @@ fn x_a_frames_scroll_lands_where_asked() {
                         }
                     );
                 });
-                state.scroll_by(5000.0 + start as f32);
+                state.dispatch_raw_delta(5000.0 + start as f32);
                 ui.wait_for_idle();
                 idle(&mut ui);
                 ui.wait_for_idle();
@@ -360,7 +360,7 @@ fn x_a_frames_scroll_lands_where_asked() {
                         + state.first_visible_item_scroll_offset() as f32
                 };
                 let before = absolute(&state);
-                state.scroll_by(by as f32);
+                state.dispatch_raw_delta(by as f32);
                 ui.host().frame();
                 let after = absolute(&state);
                 runs += 1;
@@ -460,7 +460,7 @@ fn x_a_still_screen_goes_idle_holding_what_compose_would() {
             // A list.
             let (mut ui, state) = list(pattern);
             for _ in 0..12 {
-                state.scroll_by(step);
+                state.dispatch_raw_delta(step);
                 ui.wait_for_idle();
                 idle(&mut ui);
             }
@@ -491,7 +491,7 @@ fn x_a_still_screen_goes_idle_holding_what_compose_would() {
                 );
             });
             for _ in 0..12 {
-                state.scroll_by(step);
+                state.dispatch_raw_delta(step);
                 ui.wait_for_idle();
                 idle(&mut ui);
             }

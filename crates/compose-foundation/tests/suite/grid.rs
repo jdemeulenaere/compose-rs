@@ -73,7 +73,7 @@ fn an_adaptive_grid_fits_as_many_columns_as_it_can_and_composes_lazily() {
     assert_eq!(bounds(&mut ui, "3").top, 100.0);
     // Far rows aren't composed.
     ui.on_node_with_tag("200").assert_does_not_exist();
-    state.scroll_to_item(200, 0);
+    state.request_scroll_to_item(200, 0);
     ui.wait_for_idle();
     // Item 200's row (66: items 198 to 200) at the top.
     assert_eq!(state.first_visible_item_index(), 198);
@@ -106,7 +106,7 @@ fn a_horizontal_grid_fills_its_columns_and_scrolls_sideways() {
     assert_eq!((first.left, first.top, first.height()), (10.0, 10.0, 80.0));
     assert_eq!((second.left, second.top), (10.0, 110.0));
     assert_eq!((third.left, third.top), (65.0, 10.0));
-    state.scroll_by(110.0);
+    state.dispatch_raw_delta(110.0);
     ui.wait_for_idle();
     // Two columns of 55 scrolled off: the third first, items 4 and 5.
     assert_eq!(state.first_visible_item_index(), 4);
@@ -173,7 +173,7 @@ fn a_grid_lays_out_lines_under_its_content_padding() {
     assert_eq!(bounds(&mut ui, "7").top, 90.0);
     ui.on_node_with_tag("8").assert_does_not_exist();
     // Two lines and 10 px down: line 2 first visible, line 1 under the start padding.
-    state.scroll_by(50.0);
+    state.dispatch_raw_delta(50.0);
     ui.wait_for_idle();
     assert_eq!(state.first_visible_item_index(), 4);
     assert_eq!(bounds(&mut ui, "3").top, 0.0);
@@ -209,7 +209,7 @@ fn a_negative_spacing_lays_out_the_overlapping_line_but_after_a_scroll_back() {
     assert_eq!(bounds(&mut ui, "2").top, 0.0);
     assert_eq!(bounds(&mut ui, "0").top, -10.0);
     // To the last line, scrolled back 50 px to end the grid: the same place, without line 0.
-    state.scroll_to_item(18, 0);
+    state.request_scroll_to_item(18, 0);
     ui.wait_for_idle();
     assert_eq!(state.first_visible_item_index(), 8);
     assert_eq!(bounds(&mut ui, "18").top, 80.0);

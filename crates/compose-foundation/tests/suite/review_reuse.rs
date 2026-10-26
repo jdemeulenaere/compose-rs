@@ -325,12 +325,12 @@ fn a_reused_rows_inner_list_reuses_its_items() {
     });
     ui.wait_for_idle();
     for _ in 0..10 {
-        state.scroll_by(20.0);
+        state.dispatch_raw_delta(20.0);
         ui.wait_for_idle();
     }
     let early = INNER_NODES.with(|nodes| nodes.borrow().len());
     for _ in 0..50 {
-        state.scroll_by(20.0);
+        state.dispatch_raw_delta(20.0);
         ui.wait_for_idle();
     }
     let late = INNER_NODES.with(|nodes| nodes.borrow().len());

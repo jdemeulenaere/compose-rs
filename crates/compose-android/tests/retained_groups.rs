@@ -17,6 +17,7 @@ use compose_android::serialize::{
     compositing, layer_entry, operand_bytes, outline_kind, shader, tag, write_display_list,
     write_groups_ahead,
 };
+use compose_foundation::ScrollableState;
 use compose_runtime::*;
 use compose_ui::platform::*;
 use compose_ui::*;
@@ -1155,7 +1156,7 @@ fn groups_written_ahead_are_what_the_frame_placing_them_writes() {
             6 => -40.0,
             _ => 17.0,
         };
-        state.scroll_by(delta);
+        state.dispatch_raw_delta(delta);
         let bytes = serialized.frame();
         copied += serialized.cache.copied_ahead();
         let cached = without_kept_records(bytes.clone());
@@ -1262,7 +1263,7 @@ fn a_kept_item_placed_again_is_drawn_from_its_kept_record() {
     let mut kept_for: HashMap<u64, usize> = HashMap::new();
     let (mut placed_again, mut nested) = (0, 0);
     for step in 0..60 {
-        state.scroll_by(if step % 10 >= 7 { -23.0 } else { 19.0 });
+        state.dispatch_raw_delta(if step % 10 >= 7 { -23.0 } else { 19.0 });
         let bytes = serialized.frame();
         let records = records(&bytes);
         let (_, items) = read(&bytes);
@@ -1328,7 +1329,7 @@ fn a_kept_item_that_changes_is_no_longer_kept() {
         );
     });
     for _ in 0..10 {
-        state.scroll_by(19.0);
+        state.dispatch_raw_delta(19.0);
         serialized.frame();
         serialized.prefetch_and_write_ahead();
     }
@@ -1379,7 +1380,7 @@ fn a_kept_item_whose_nested_layer_changes_is_no_longer_kept() {
         );
     });
     for _ in 0..10 {
-        state.scroll_by(19.0);
+        state.dispatch_raw_delta(19.0);
         serialized.frame();
         serialized.prefetch_and_write_ahead();
     }
@@ -1398,7 +1399,7 @@ fn frames_list_kept_groups_only_when_asked() {
     let mut serialized = Serialized::new(move || feed(given, shown));
     serialized.host.set_keep_unplaced_groups(false);
     for _ in 0..10 {
-        state.scroll_by(19.0);
+        state.dispatch_raw_delta(19.0);
         let bytes = serialized.frame();
         assert!(kept_entries(&bytes).is_empty());
         assert!(serialized.host.with_tree(|tree| tree.display_list().kept.is_empty()));
@@ -2155,7 +2156,7 @@ fn review_inner_layers_in_kept_and_ahead_items_match_fresh_writes() {
     let mut ahead: HashMap<(u64, u64), Vec<u8>> = HashMap::new();
     let mut checked = 0;
     for step in 0..80u32 {
-        state.scroll_by(if step % 10 >= 7 { -37.0 } else { 23.0 });
+        state.dispatch_raw_delta(if step % 10 >= 7 { -37.0 } else { 23.0 });
         if step % 4 == 1 {
             tick.set(step);
         }
@@ -2532,7 +2533,7 @@ mod randomized_inner_layers {
                         owned[knob].set(values[knob]);
                     }
                     6 | 7 => {
-                        state.scroll_by(rng.below(90) as f32 - 40.0);
+                        state.dispatch_raw_delta(rng.below(90) as f32 - 40.0);
                     }
                     8 => {
                         rtl = !rtl;

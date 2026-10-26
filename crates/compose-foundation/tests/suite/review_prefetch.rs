@@ -118,7 +118,7 @@ fn list(first: usize) -> (ComposeTestRule, Owned<LazyListState>) {
 fn prefetch_leaves_the_host_without_pending_work() {
     crate::legacy::lazy_lists();
     let (mut ui, state) = list(0);
-    state.scroll_by(30.0);
+    state.dispatch_raw_delta(30.0);
     ui.wait_for_idle();
     assert!(!ui.host().has_pending_work());
     assert!(!ui.host().prefetch(later()));
@@ -137,10 +137,10 @@ fn prefetch_leaves_the_host_without_pending_work() {
 fn prefetch_waits_for_a_pending_scroll() {
     crate::legacy::lazy_lists();
     let (mut ui, state) = list(0);
-    state.scroll_by(30.0);
+    state.dispatch_raw_delta(30.0);
     ui.wait_for_idle();
     let last = last_composed();
-    state.scroll_by(200.0);
+    state.dispatch_raw_delta(200.0);
     assert!(ui.host().has_pending_work(), "a frame is due");
     ui.host().prefetch(later());
     assert_eq!(compositions(last + 1), 0, "prefetch ran before the due frame");
@@ -159,7 +159,7 @@ fn prefetch_waits_for_a_pending_scroll() {
 fn one_slow_item_does_not_disable_prefetch_for_good() {
     crate::legacy::lazy_lists();
     let (mut ui, state) = list(0);
-    state.scroll_by(30.0);
+    state.dispatch_raw_delta(30.0);
     ui.wait_for_idle();
     let last = last_composed();
     SLOW.with(|slow| slow.set(Some(last + 1)));
@@ -167,7 +167,7 @@ fn one_slow_item_does_not_disable_prefetch_for_good() {
     assert_eq!(compositions(last + 1), 1);
     let mut prefetched = 0;
     for _ in 0..10 {
-        state.scroll_by(20.0);
+        state.dispatch_raw_delta(20.0);
         ui.wait_for_idle();
         let before = total_compositions();
         ui.host().prefetch(Instant::now() + Duration::from_millis(16));
@@ -188,16 +188,16 @@ fn one_slow_item_does_not_disable_prefetch_for_good() {
 fn after_a_slow_item_an_idle_time_shorter_than_it_is_left_alone() {
     crate::legacy::lazy_lists();
     let (mut ui, state) = list(0);
-    state.scroll_by(30.0);
+    state.dispatch_raw_delta(30.0);
     ui.wait_for_idle();
     ui.host().prefetch(later());
     let last = last_composed();
     SLOW.with(|slow| slow.set(Some(last + 1)));
-    state.scroll_by(20.0);
+    state.dispatch_raw_delta(20.0);
     ui.wait_for_idle();
     ui.host().prefetch(later());
     assert_eq!(compositions(last + 1), 1, "the slow item, prefetched");
-    state.scroll_by(20.0);
+    state.dispatch_raw_delta(20.0);
     ui.wait_for_idle();
     let before = total_compositions();
     ui.host().prefetch(Instant::now() + Duration::from_millis(20));
@@ -219,12 +219,12 @@ fn idle_times_too_short_for_a_steady_step_do_not_wear_its_estimate_down() {
     ITEM_MILLIS.with(|millis| millis.set(20));
     // Timed at least four times (`SETTLED_STEPS`).
     for _ in 0..4 {
-        state.scroll_by(20.0);
+        state.dispatch_raw_delta(20.0);
         ui.wait_for_idle();
         ui.host().prefetch(later());
     }
     for millis in [14; 6] {
-        state.scroll_by(20.0);
+        state.dispatch_raw_delta(20.0);
         ui.wait_for_idle();
         let before = total_compositions();
         ui.host().prefetch(Instant::now() + Duration::from_millis(millis));
@@ -241,13 +241,13 @@ fn idle_times_too_short_for_a_steady_step_do_not_wear_its_estimate_down() {
 fn an_idle_time_within_the_safety_margin_is_left_alone() {
     crate::legacy::lazy_lists();
     let (mut ui, state) = list(0);
-    state.scroll_by(30.0);
+    state.dispatch_raw_delta(30.0);
     ui.wait_for_idle();
     let before = total_compositions();
     ui.host().prefetch(Instant::now() + Duration::from_micros(200));
     assert_eq!(total_compositions(), before);
     // Given up until the next scroll, whose idle time does it.
-    state.scroll_by(1.0);
+    state.dispatch_raw_delta(1.0);
     ui.wait_for_idle();
     ui.host().prefetch(later());
     assert!(total_compositions() > before);
@@ -288,7 +288,7 @@ fn a_prefetched_row_of_a_nested_lazy_row_is_composed_ahead() {
             }
         );
     });
-    state.scroll_by(30.0);
+    state.dispatch_raw_delta(30.0);
     ui.wait_for_idle();
     let last = last_composed();
     ui.host().prefetch(later());
@@ -296,7 +296,7 @@ fn a_prefetched_row_of_a_nested_lazy_row_is_composed_ahead() {
     assert_eq!(compositions(last + 2), 1);
     let cells = CELLS.with(|cells| cells.get());
     // The frame scrolling the prefetched rows in.
-    state.scroll_by(40.0);
+    state.dispatch_raw_delta(40.0);
     ui.host().frame();
     let in_frame = CELLS.with(|cells| cells.get()) - cells;
     assert_eq!(in_frame, 0, "{in_frame} cells of prefetched rows composed in the frame");
@@ -332,11 +332,11 @@ fn a_prefetched_box_with_constraints_is_ready_for_the_frame() {
             }
         );
     });
-    state.scroll_by(30.0);
+    state.dispatch_raw_delta(30.0);
     ui.wait_for_idle();
     ui.host().prefetch(later());
     let before = total_compositions();
-    state.scroll_by(40.0);
+    state.dispatch_raw_delta(40.0);
     let stats = ui.host().frame();
     assert_eq!(total_compositions(), before, "content of prefetched items composed in the frame");
     assert!(!stats.recomposed);
@@ -394,7 +394,7 @@ fn auto_list() -> (ComposeTestRule, Owned<LazyListState>) {
 fn an_item_focused_when_prefetched_is_scrolled_into_view() {
     crate::legacy::lazy_lists();
     let (mut ui, state) = auto_list();
-    state.scroll_by(30.0);
+    state.dispatch_raw_delta(30.0);
     ui.wait_for_idle();
     let last = last_composed();
     AUTO.with(|auto| auto.set(Some(last + 1)));

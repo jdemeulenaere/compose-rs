@@ -159,7 +159,7 @@ fn a_focused_item_stays_pinned_when_items_are_inserted_before_it() {
     keys.edit(|keys| keys.insert(0, 5000));
     ui.wait_for_idle();
     ui.on_node_with_tag("field").assert_is_focused();
-    state.scroll_by(300.0);
+    state.dispatch_raw_delta(300.0);
     ui.wait_for_idle();
     ui.type_text("x");
     assert_eq!(text.get(), "ax", "the focused field didn't take the text");
@@ -191,7 +191,7 @@ fn removing_the_focused_item_releases_its_pin() {
         keys.remove(0);
     });
     ui.wait_for_idle();
-    state.scroll_by(300.0);
+    state.dispatch_raw_delta(300.0);
     ui.wait_for_idle();
     assert_eq!(state.first_visible_item_index(), 15);
     ui.on_node_with_tag("key 1").assert_does_not_exist();
@@ -439,7 +439,7 @@ fn a_long_scroll_by_is_drawn_in_one_frame() {
     let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || {
         KeyedRows(given, Rc::new((0..5000).collect()), false)
     });
-    state.scroll_by(30_000.0);
+    state.dispatch_raw_delta(30_000.0);
     ui.host().frame();
     ui.on_node_with_tag("key 1500").assert_exists();
     assert_eq!(top(&mut ui, "key 1500"), 0.0);
@@ -523,14 +523,14 @@ fn a_scroll_frame_does_not_walk_every_item_interval() {
     let time = |ui: &mut ComposeTestRule| {
         let start = std::time::Instant::now();
         for _ in 0..20 {
-            state.scroll_by(20.0);
+            state.dispatch_raw_delta(20.0);
             ui.wait_for_idle();
         }
         start.elapsed()
     };
     let near = time(&mut ui);
     assert_eq!(state.first_visible_item_index(), 20);
-    state.scroll_to_item(900_000, 0);
+    state.request_scroll_to_item(900_000, 0);
     ui.wait_for_idle();
     let far = time(&mut ui);
     assert_eq!(state.first_visible_item_index(), 900_020);

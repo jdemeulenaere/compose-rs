@@ -30,10 +30,10 @@ By area: `foundation-layout` 29 files (850 tests); lazy lists, grids and `LazyLa
 | Status | Files | `@Test` methods |
 |---|---|---|
 | `covered` | 13 | 132 |
-| `ported` | 1 | 27 |
+| `ported` | 2 | 35 |
 | `port` | 20 | 242 |
-| `partial` | 21 | 762 |
-| `feature:<name>` | 120 | 1,833 |
+| `partial` | 22 | 849 |
+| `feature:<name>` | 118 | 1,738 |
 | `n/a` | 10 | 133 |
 | **Total** | **185** | **3,129** |
 
@@ -239,11 +239,11 @@ All need `feature:pager`. Pager prefetch already uses a cache window in 1.12.1 (
 | compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/OverscrollTest.kt | 40 | `Modifier.overscroll`, `rememberOverscrollEffect`, `LocalOverscrollFactory`, overscroll on scrollables (drag, fling, reverse, nested) | feature:overscroll |
 | compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/ScrollAccessibilityTest.kt | 9 | Accessibility scroll actions on `verticalScroll`/`horizontalScroll` | covered (`compose-android/tests/accessibility_scroll.rs`, `lazy.rs::a_scrolling_column_has_scroll_semantics_and_scrolls_by_its_action`) |
 | compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/ScrollFocusableInteractionTest.kt | 19 | A focused child of a scroll stays in view on resize | partial (as LazyListFocusableInteractionTest: feature:keep-focused-in-view) |
-| compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/ScrollTest.kt | 42 | `verticalScroll`/`horizontalScroll`: small/large content, `reverseScrolling`, `scrollTo`, `animateScrollTo`, swipes, coercion, RTL, `isScrollInProgress`, nested | partial (scroll exists: `scroll.rs` 5 tests, `rtl.rs`. Missing: `reverse_scrolling`, `enabled`, `fling_behavior`, `animate_scroll_to`, `scroll {}`, `is_scroll_in_progress`, interaction source (feature:scroll-state-api); the five intrinsics tests are ported in `intrinsics.rs`) |
+| compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/ScrollTest.kt | 42 | `verticalScroll`/`horizontalScroll`: small/large content, `reverseScrolling`, `scrollTo`, `animateScrollTo`, swipes, coercion, RTL, `isScrollInProgress`, nested | partial (`scroll_state.rs`: 10 tests porting 19 (content fitting or not, scroll to the end, reversed, `canScroll*`, viewport size, coercion of `scrollTo`, `animateScrollTo` and a shrinking range, a fling stopped by a touch, semantics enabled or not), in the three configurations; `scroll.rs`, `rtl.rs`. Missing: `performScrollTo` (harness), state restoration, overscroll, `scrollIndicatorState` (feature:scroll-indicator-state), inspector tests n/a, the measure-count and resize-before-placement tests; the five intrinsics tests are ported in `intrinsics.rs`) |
 | compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/Scrollable2DInputTest.kt | 22 | `scrollable2D` input: drag, fling, nested | feature:scrollable2d |
 | compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/Scrollable2DTest.kt | 15 | `scrollable2D` semantics, animations, `isScrollInProgress` | feature:scrollable2d |
 | compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/ScrollableAreaTest.kt | 13 | `Modifier.scrollableArea` clip, direction, overscroll node | feature:scrollable (+ overscroll) |
-| compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/ScrollableTest.kt | 87 | `Modifier.scrollable`: drags, mouse wheel, trackpad, keyboard paging, flings, nested scroll, interaction source, `isScrollInProgress`, `MutatePriority` | feature:scrollable (the behaviours exist inside `vertical_scroll` and the lazy lists; the public modifier and state don't) |
+| compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/ScrollableTest.kt | 87 | `Modifier.scrollable`: drags, mouse wheel, trackpad, keyboard paging, flings, nested scroll, interaction source, `isScrollInProgress`, `MutatePriority` | partial (`scrollable.rs`: 18 tests porting 22: drags and the wheel each way and reversed, disabled, disposal mid-fling, interaction source, fling behaviors (velocity 0, velocity, reversed, scope), keyframed `animateScrollBy`, `isScrollInProgress` on cancel and interruption, NaN, last scroll direction, nested drag, no momentum. Missing: keyboard paging, `startWithoutSlop_ifFlinging` (a drag during a fling still waits for the slop), the nested-fling and nested-scroll dispatch cases (to port next), trackpad and indirect pointers (feature:pointer-input-types), overscroll (feature:overscroll), focus and semantics `scrollBy` animation; the mouse-drag tests differ (D856)) |
 | compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/StretchOverscrollIntegrationTest.kt | 24 | Android stretch overscroll consumes pulls and flings | feature:overscroll |
 | compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/StretchOverscrollScreenshotTest.kt | 4 | Stretch rendering per edge | feature:overscroll (screenshots) |
 | compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/SystemGestureExclusionTest.kt | 7 | `systemGestureExclusion` rects | feature:system-gesture-exclusion |
@@ -270,7 +270,7 @@ All need `feature:pager`. Pager prefetch already uses a cache window in 1.12.1 (
 | compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/relocation/BringIntoViewRequesterViewIntegrationTest.kt | 4 | `bringIntoView` reaching Android's `requestRectangleOnScreen` | n/a: Android View interop |
 | compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/relocation/BringIntoViewResponderTest.kt | 20 | `BringIntoViewRequester` propagating up through responders, interrupting requests | feature:bring-into-view |
 | compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/relocation/BringIntoViewScrollableInteractionTest.kt | 24 | Scrollables scroll requested rects into view (leading, trailing, center, bigger than the parent) | feature:bring-into-view (compose-rs scrolls a focused node into view, `ModifierNode::bring_into_view`: some cases can be checked through focus now) |
-| compose/foundation/foundation/src/androidHostTest/kotlin/androidx/compose/foundation/MutatorMutexTest.kt | 8 | `MutatorMutex` priorities, `tryMutate`, `tryLock` | feature:mutator-mutex |
+| compose/foundation/foundation/src/androidHostTest/kotlin/androidx/compose/foundation/MutatorMutexTest.kt | 8 | `MutatorMutex` priorities, `tryMutate`, `tryLock` | ported (`mutator_mutex.rs`: 7 tests for the 8; `tryLock`/`unlock` are internal, checked through `try_mutate`; an interrupted mutation returns `Err(MutationInterrupted)`, D850) |
 | compose/foundation/foundation/src/androidHostTest/kotlin/androidx/compose/foundation/gestures/BringIntoViewRequestPriorityQueueTest.kt | 15 | The internal request queue of `ContentInViewNode` | n/a: internal class (port its rules with feature:bring-into-view if compose-rs grows the same queue) |
 | compose/foundation/foundation/src/androidHostTest/kotlin/androidx/compose/foundation/gestures/DraggableAnchorsTest.kt | 11 | `DraggableAnchors` builder, closest anchor, min/max, equality | feature:anchored-draggable |
 | compose/foundation/foundation/src/androidHostTest/kotlin/androidx/compose/foundation/gestures/DraggableIsAnyChangedToDownTest.kt | 10 | The internal `isAnyChangedToDown` helper | n/a: internal helper |
@@ -423,17 +423,20 @@ Each entry gives the Compose API, what it does, the test files that need it (by 
    - Tests: MutatorMutexTest; used by scrollable, draggable, anchored-draggable and pager.
    - Depends on: runtime's coroutine cancellation (exists: `Job`).
    - Size: S. Experimental: no.
+   - **Done** (D850): `compose_foundation::{MutatorMutex, MutatePriority, MutationInterrupted}`.
 3. **scrollable.**
    - API: `ScrollableState`, `Modifier.scrollable`, `scrollableArea`, `ScrollScope`, `FlingBehavior`, `ScrollableDefaults`, `scrollBy`/`animateScrollBy`/`stopScroll`, keyboard Page Up/Down and arrow scrolling.
    - Does: the public scrolling primitive that `vertical_scroll` and the lazy lists build on. compose-rs's `DragScroller` and the scroll nodes already do drags, wheel, flings and nested scroll, privately.
    - Tests: ScrollableTest, ScrollableAreaTest, and most scroll-state and lazy-state tests.
    - Depends on: mutator-mutex; interaction (`DragInteraction`, misc ledger) for `interactionSource`.
    - Size: L. Experimental: no.
+   - **Mostly done** (D851, D852, D855): `ScrollableState`, `ScrollableStateExt` (`scroll`, `scroll_by`, `animate_scroll_by`, `stop_scroll`), `ScrollScope`, `FlingBehavior`, `DefaultFlingBehavior`, `ScrollableDefaults` (`fling_behavior`, `reverse_direction`), `scrollable_state`/`remember_scrollable_state`, `Modifier.scrollable`/`scrollable_with`. Left: `scrollableArea`, keyboard paging, `TargetedFlingBehavior`, `BringIntoViewSpec`, `clipScrollableContainer`, `checkScrollableContainerConstraints`, the overscroll overload.
 4. **scroll-state-api.**
    - API: the rest of `ScrollState`, and `verticalScroll`'s `enabled`/`flingBehavior`/`reverseScrolling` parameters.
    - Tests: ScrollTest (rest).
    - Depends on: scrollable.
    - Size: S–M. Experimental: no.
+   - **Mostly done** (D853): `scroll_to`, `animate_scroll_to`, `scroll {}`, `can_scroll_*`, `is_scroll_in_progress`, `last_scrolled_*`, `interaction_source`, `vertical_scroll_with`/`horizontal_scroll_with` (`enabled`, `fling_behavior`, `reverse_scrolling`). Left: `scrollIndicatorState`, the `Saver` as a value, the `overscrollEffect` overload.
 5. **lazy-layout-info.**
    - API: `layoutInfo` with item infos on list and grid states.
    - Does: what most of Compose's lazy tests assert with.
@@ -652,7 +655,8 @@ Each entry gives the Compose API, what it does, the test files that need it (by 
 ### compose-rs behaviour that likely differs from Compose
 
 - **The reversed default arrangement** of `LazyColumn`/`LazyRow` stays `TOP`/`START`. Compose's becomes `Bottom`/`End` (D171, documented). Caught by `LazyArrangementsTest` and `LazyListsReverseLayoutTest`'s short-list cases, and by `LazyRowTest` in RTL with `reverseLayout`. A port should pass the arrangement explicitly, or the decision should be revisited: Rust can default a parameter from another through an `Option`, as D180 does for material3.
-- **`ScrollState::scroll_to` doesn't coerce** to `[0, max_value]` until the next layout. Compose's `scrollTo` consumes a delta clamped to the range at once, so `value` never exceeds `maxValue`. Caught by `ScrollTest.scroller_coerce_whenScrollTo` and `largeContent_coerceWhenMaxChanges`.
+- **`ScrollState::scroll_to`** clamps at once, as Compose's (D853), and is `async`; a jump outside a task is `dispatch_raw_delta`. The lazy states' synchronous jump is `request_scroll_to_item`, `scroll_to_item` being `async`. Tests port `runBlocking { state.scrollTo(…) }` with `scroll_support::run`.
+- **Mouse drags scroll** compose-rs's scrollables, where Compose's ignore them (D856, for the user to confirm): the `scrollable_mouse*DragDoesNotScroll` tests aren't ported.
 - **Velocity tracking** (`crates/compose-foundation/src/fling.rs`) differs from Compose's `VelocityTracker1D` (ui, `input/pointer/util/VelocityTracker.kt`):
   - compose-rs fits a straight line (least squares, degree 1) through the last 100 ms of samples;
   - Compose's default fits a quadratic (`Strategy.Lsq2`) over at most 20 samples, and drops the history at a gap of more than 40 ms (`AssumePointerMoveStoppedMilliseconds`), so a pause before the release flings at 0;

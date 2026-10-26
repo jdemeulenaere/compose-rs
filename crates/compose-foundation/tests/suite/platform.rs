@@ -292,7 +292,7 @@ fn a_lazy_list_keeps_its_position_in_a_new_host() {
         );
     };
     let mut ui = compose_test(content);
-    STATE.with(|cell| *cell.borrow()).unwrap().scroll_to_item(30, 10);
+    STATE.with(|cell| *cell.borrow()).unwrap().request_scroll_to_item(30, 10);
     ui.wait_for_idle();
     let mut ui = recreate(ui, content);
     let state = STATE.with(|cell| *cell.borrow()).unwrap();
@@ -312,7 +312,8 @@ fn a_scroll_state_keeps_its_value_in_a_new_host() {
         });
     };
     let mut ui = compose_test(content);
-    STATE.with(|cell| *cell.borrow()).unwrap().scroll_to(250);
+    let state = STATE.with(|cell| *cell.borrow()).unwrap();
+    state.dispatch_raw_delta(250.0 - state.value() as f32);
     ui.wait_for_idle();
     let _ui = recreate(ui, content);
     assert_eq!(STATE.with(|cell| *cell.borrow()).unwrap().value(), 250);

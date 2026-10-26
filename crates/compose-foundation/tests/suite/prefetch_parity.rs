@@ -101,7 +101,7 @@ fn later() -> Instant {
 }
 
 fn scroll(ui: &mut ComposeTestRule, state: LazyListState, pixels: f32) {
-    state.scroll_by(pixels);
+    state.dispatch_raw_delta(pixels);
     ui.wait_for_idle();
 }
 
@@ -409,7 +409,7 @@ fn a_grid_prefetches_the_next_line_and_composes_the_lines_in_view() {
     assert!((0..15).all(|item| live.contains(&item)) && live.len() <= 18, "{live:?}");
     assert!(!ui.host().has_prefetch_work());
     // 30 px down: lines 1 to 6 show; line 7 (items 21 to 23) prefetched, line 0 gone.
-    state.scroll_by(30.0);
+    state.dispatch_raw_delta(30.0);
     ui.wait_for_idle();
     assert_eq!(live_items(), (3..21).collect::<Vec<_>>());
     assert!(!ui.host().prefetch(later()));

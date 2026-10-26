@@ -29,7 +29,7 @@ fn switches_in_reused_items_snap_without_writing_state_while_composing() {
     });
     ui.wait_for_idle();
     for _ in 0..20 {
-        state.scroll_by(40.0);
+        state.dispatch_raw_delta(40.0);
         ui.wait_for_idle();
     }
 }
@@ -52,7 +52,7 @@ fn radio_buttons_in_reused_items_snap_without_writing_state_while_composing() {
     });
     ui.wait_for_idle();
     for _ in 0..20 {
-        state.scroll_by(40.0);
+        state.dispatch_raw_delta(40.0);
         ui.wait_for_idle();
     }
 }

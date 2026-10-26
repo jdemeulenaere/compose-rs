@@ -175,7 +175,7 @@ fn scrolling_a_lazy_list_keeps_the_selection_on_its_item() {
     let to = at(&mut ui, "item 3", 9);
     drag(&mut ui, from, to);
     assert_eq!(selected(&mut ui).as_deref(), Some("item 3"));
-    state.scroll_to_item(3, 0);
+    state.request_scroll_to_item(3, 0);
     ui.wait_for_idle();
     assert_eq!(selected(&mut ui).as_deref(), Some("item 3"));
 }

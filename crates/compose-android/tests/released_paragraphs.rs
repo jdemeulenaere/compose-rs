@@ -371,7 +371,7 @@ fn a_scrolled_lazy_list_with_prefetch_draws_only_live_paragraphs() {
         );
     });
     for step in 0..60 {
-        state.scroll_by(if step % 6 == 5 { -90.0 } else { 37.0 });
+        state.dispatch_raw_delta(if step % 6 == 5 { -90.0 } else { 37.0 });
         checked.frame();
         checked.prefetch();
         checked.frame();
@@ -401,7 +401,7 @@ fn a_scrolled_lazy_list_drawing_ahead_draws_only_live_paragraphs() {
         );
     });
     for step in 0..60 {
-        state.scroll_by(if step % 6 == 5 { -90.0 } else { 37.0 });
+        state.dispatch_raw_delta(if step % 6 == 5 { -90.0 } else { 37.0 });
         checked.frame();
         checked.prefetch_and_draw_ahead();
         checked.frame();

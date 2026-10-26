@@ -135,7 +135,7 @@ fn prefetched_items_reach_the_hosts_uri_handler() {
             }
         );
     });
-    state.scroll_by(30.0);
+    state.dispatch_raw_delta(30.0);
     ui.wait_for_idle();
     let before = fake.opened.borrow().len();
     let prefetched =

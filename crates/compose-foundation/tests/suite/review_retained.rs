@@ -88,7 +88,7 @@ fn lazy_items_drawing_the_scroll_draw_it_in_the_frame_laying_it_out() {
     let state = LazyListState::new(0, 0);
     let given = *state;
     let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || scene(given));
-    assert!(state.scroll_by(13.0));
+    assert!(state.dispatch_raw_delta(13.0) != 0.0);
     ui.host().frame();
     assert_eq!(state.first_visible_item_scroll_offset(), 13);
     let incremental = dump(&ui.host().display_list());

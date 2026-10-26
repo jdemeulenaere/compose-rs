@@ -115,7 +115,7 @@ fn opening_a_dialog_inside_a_scrolled_column_does_not_scroll_it() {
         );
     });
     let state = STATE.with(|cell| (*cell.borrow()).unwrap());
-    state.scroll_to(400);
+    state.dispatch_raw_delta(400.0 - state.value() as f32);
     ui.wait_for_idle();
     assert_eq!(state.value(), 400);
     OPEN.with(|cell| cell.borrow().unwrap().set(true));
@@ -198,7 +198,8 @@ fn passes_a_popup_follows_its_anchor_when_it_scrolls() {
         });
     });
     assert_eq!(bounds(&mut ui, "popup").top, 155.0);
-    STATE.with(|cell| (*cell.borrow()).unwrap()).scroll_to(100);
+    let state = STATE.with(|cell| (*cell.borrow()).unwrap());
+    state.dispatch_raw_delta(100.0 - state.value() as f32);
     ui.wait_for_idle();
     assert_eq!(bounds(&mut ui, "popup").top, 55.0);
 }
@@ -385,7 +386,7 @@ fn a_popup_in_a_lazy_item_scrolled_out_of_view_is_gone() {
         );
     });
     ui.on_node_with_tag("popup").assert_exists();
-    state.scroll_to_item(10, 0);
+    state.request_scroll_to_item(10, 0);
     ui.wait_for_idle();
     tap(&mut ui, 130.0, 10.0);
     assert_eq!(CLICKS.with(Cell::get), 0, "the popup of an item out of view took a tap");

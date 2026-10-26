@@ -49,7 +49,7 @@ fn scrolling_back_onto_a_big_item_out_of_view_moves_the_whole_delta() {
     let mut ui = ComposeTestRule::sized(IntSize::new(100, 500), header_list(*state, 1000.0, 50.0));
     ui.wait_for_idle();
     assert_eq!(state.first_visible_item_index(), 3);
-    state.scroll_by(-600.0);
+    state.dispatch_raw_delta(-600.0);
     ui.wait_for_idle();
     assert_eq!(
         (state.first_visible_item_index(), state.first_visible_item_scroll_offset()),
@@ -78,7 +78,7 @@ fn scrolling_on_onto_a_big_item_out_of_view_moves_the_whole_delta() {
             }
         );
     });
-    state.scroll_by(600.0);
+    state.dispatch_raw_delta(600.0);
     ui.wait_for_idle();
     assert_eq!(
         (state.first_visible_item_index(), state.first_visible_item_scroll_offset()),

@@ -107,7 +107,7 @@ fn review2_another_lists_items_composed_in_a_requests_first_pass_show_at_once() 
     assert!(in_tree(&ui, "other 0.0"));
     // Row 7 requested.
     ROW_PART_TIME.set(Duration::from_millis(4));
-    given.scroll_by(5.0);
+    given.dispatch_raw_delta(5.0);
     ui.wait_for_idle();
     // A write first in the idle time: the other list's keys change.
     let scheduler = SCHEDULER.with(|s| s.borrow().clone()).expect("a scheduler");
@@ -182,7 +182,7 @@ fn review2_a_paused_reused_items_requesters_attach_at_apply() {
     assert!(requester(3).request_focus());
     ui.wait_for_idle();
     // 25 px down: row 1 leaves, rows 7 and 8 next.
-    given.scroll_by(25.0);
+    given.dispatch_raw_delta(25.0);
     ui.wait_for_idle();
     ROW_PART_TIME.set(Duration::from_millis(4));
     // The trim lets row 1 go (to the pool), the next request reuses its slot and pauses.
@@ -283,16 +283,16 @@ fn nested_prefetch_after_switch(switch: bool) -> Option<usize> {
         ui.wait_for_idle();
         second_given
     } else {
-        first_given.scroll_to_item(0, 0);
+        first_given.request_scroll_to_item(0, 0);
         ui.wait_for_idle();
         first_given
     };
     CELLS.with(|cells| cells.borrow_mut().clear());
     CELLS_AT_MEASURE.with(|at| at.borrow_mut().clear());
-    state.scroll_by(5.0);
+    state.dispatch_raw_delta(5.0);
     ui.wait_for_idle();
     assert!(!ui.host().prefetch(later()));
-    state.scroll_by(100.0);
+    state.dispatch_raw_delta(100.0);
     ui.wait_for_idle();
     assert!(!ui.host().prefetch(later()));
     ui.host().composition().validate();

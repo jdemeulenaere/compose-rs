@@ -83,13 +83,13 @@ fn lazy_items_see_the_providers_around_the_list() {
     ui.on_node_with_text("item 0: second (0)").assert_exists();
     ui.on_node_with_text("item 4: second (0)").assert_exists();
     // Items scrolled in compose under the providers too.
-    LIST.get().unwrap().scroll_to_item(500, 0);
+    LIST.get().unwrap().request_scroll_to_item(500, 0);
     ui.wait_for_idle();
     ui.on_node_with_text("item 500: second (0)").assert_exists();
     // Prefetched between frames, then shown.
     ui.on_node_with_text("item 501: second (0)").assert_exists();
     while ui.host().prefetch(std::time::Instant::now() + std::time::Duration::from_secs(1)) {}
-    state.scroll_by(200.0);
+    state.dispatch_raw_delta(200.0);
     ui.wait_for_idle();
     ui.on_node_with_text("item 510: second (0)").assert_exists();
     // An item running again on its own still finds them.

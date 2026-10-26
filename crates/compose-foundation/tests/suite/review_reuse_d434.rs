@@ -143,10 +143,10 @@ fn a_reused_rows_inner_list_starts_at_its_own_position_with_its_own_items() {
     });
     ui.wait_for_idle();
     // Row 0's carousel scrolled on.
-    INNER_STATES.with(|s| s.borrow()[&0]).scroll_to_item(20, 0);
+    INNER_STATES.with(|s| s.borrow()[&0]).request_scroll_to_item(20, 0);
     ui.wait_for_idle();
     for _ in 0..30 {
-        state.scroll_by(20.0);
+        state.dispatch_raw_delta(20.0);
         ui.wait_for_idle();
     }
     let positions: Vec<(usize, usize)> = INNER_STATES.with(|s| {
@@ -157,7 +157,7 @@ fn a_reused_rows_inner_list_starts_at_its_own_position_with_its_own_items() {
     });
     assert!(positions.iter().all(|(_, index)| *index == 0), "{positions:?}");
     // Back to row 0: its carousel where it was (saved).
-    state.scroll_to_item(0, 0);
+    state.request_scroll_to_item(0, 0);
     ui.wait_for_idle();
     let back = INNER_STATES.with(|s| s.borrow()[&0].first_visible_item_index());
     assert_eq!(back, 20);
@@ -209,7 +209,7 @@ fn a_focused_item_removed_from_the_data_does_not_stay_pinned() {
     ui.on_node_with_tag("i2").assert_is_focused();
     removed.set(true);
     ui.wait_for_idle();
-    state.scroll_to_item(100, 0);
+    state.request_scroll_to_item(100, 0);
     ui.wait_for_idle();
     removed.set(false);
     ui.wait_for_idle();
@@ -330,7 +330,7 @@ fn a_selection_does_not_move_to_the_item_reusing_the_selected_ones_text() {
     assert_eq!(ui.host().with_tree(|tree| tree.selected_text()).as_deref(), Some("world"));
     let before = ui.dump_display_list();
     // Item 0 leaves; the items coming take the slots of those leaving.
-    state.scroll_to_item(500, 0);
+    state.request_scroll_to_item(500, 0);
     ui.wait_for_idle();
     let display = ui.dump_display_list();
     let _ = before;

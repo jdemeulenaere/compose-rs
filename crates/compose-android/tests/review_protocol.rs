@@ -18,6 +18,7 @@ use compose_android::serialize::{
     GroupCache, KEPT_ENTRY_BYTES, LAYER_ENTRY_BYTES, Resources, Writer, operand_bytes, tag,
     write_display_list,
 };
+use compose_foundation::ScrollableState;
 use compose_runtime::*;
 use compose_ui::platform::*;
 use compose_ui::*;
@@ -440,7 +441,7 @@ fn a_scrolled_lazy_list_keeps_its_records_sound() {
         );
     });
     for step in 0..40 {
-        state.scroll_by(if step % 7 == 6 { -45.0 } else { 13.0 });
+        state.dispatch_raw_delta(if step % 7 == 6 { -45.0 } else { 13.0 });
         tick.set(step);
         let (layers, records) = parse(&checked.frame());
         assert!(layers.len() >= 5 && records.len() >= 5, "{} {}", layers.len(), records.len());

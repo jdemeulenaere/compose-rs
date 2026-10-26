@@ -187,7 +187,7 @@ impl Fixture {
     /// Scrolls `items` items down (or up), a frame for each, without prefetching.
     fn scroll(&mut self, items: i32) {
         for _ in 0..items.abs() {
-            self.state.scroll_by(items.signum() as f32 * 20.0);
+            self.state.dispatch_raw_delta(items.signum() as f32 * 20.0);
             self.ui.wait_for_idle();
         }
     }
@@ -339,7 +339,7 @@ fn prefetch_composes_the_next_items_in_the_slots_of_those_left_behind() {
         if step == 20 {
             before = nodes_of(0..1000);
         }
-        list.state.scroll_by(10.0);
+        list.state.dispatch_raw_delta(10.0);
         list.ui.wait_for_idle();
         let composed: HashSet<u64> = live().into_iter().collect();
         list.ui.host().prefetch(later());
@@ -461,7 +461,7 @@ fn a_reused_items_modifier_nodes_are_reset_for_it() {
     });
     ui.wait_for_idle();
     for _ in 0..40 {
-        state.scroll_by(20.0);
+        state.dispatch_raw_delta(20.0);
         ui.wait_for_idle();
     }
     // Each item placed told its size, though it's the size the node it reused had told: the
@@ -606,7 +606,7 @@ fn the_first_layout_composes_few_items_beyond_those_it_lays_out_and_keeps_none_f
         })
     };
     // A jump: all five leave; the four laid out are kept for reuse, item 4 is disposed.
-    state.scroll_to_item(500, 0);
+    state.request_scroll_to_item(500, 0);
     ui.wait_for_idle();
     let composed = live();
     assert!(composed.iter().all(|item| *item > 400), "{composed:?}");

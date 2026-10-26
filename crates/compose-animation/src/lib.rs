@@ -13,6 +13,7 @@ extern crate compose_runtime as compose;
 
 mod animatable;
 mod animation;
+mod animation_state;
 mod as_state;
 mod content;
 mod content_size;
@@ -33,6 +34,7 @@ mod visibility;
 
 pub use animatable::{Animatable, AnimationEndReason, AnimationResult};
 pub use animation::{Animation, TargetBasedAnimation};
+pub use animation_state::{AnimationScope, AnimationState, animate};
 #[doc(hidden)]
 pub use as_state::{
     __dp_default_spring, __int_default_spring, __int_offset_default_spring,

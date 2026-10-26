@@ -7,6 +7,7 @@
 
 use std::time::{Duration, Instant};
 
+use compose::foundation::ScrollableState;
 use compose::test::*;
 use compose::ui::platform::Optimizations;
 use compose::ui::{IntSize, PointerEvent, Role};
@@ -181,11 +182,11 @@ fn lazy_scroll_frame(criterion: &mut Criterion) {
     let mut frame = move || {
         // Back to the top, untimed, before the end.
         if list.first_visible_item_index() > 90_000 {
-            list.scroll_to_item(0, 0);
+            list.request_scroll_to_item(0, 0);
             ui.wait_for_idle();
         }
         let start = Instant::now();
-        list.scroll_by(100.0);
+        list.dispatch_raw_delta(100.0);
         ui.wait_for_idle();
         start.elapsed()
     };

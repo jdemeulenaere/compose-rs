@@ -30,6 +30,7 @@ pub fn Draft() {
 #[composable]
 pub fn LongList() {
     let list = remember_lazy_list_state!();
+    let scope = remember_coroutine_scope();
     // Recomposes its readers when the answer changes, not on every scrolled pixel.
     let scrolled = remember(move || derived_state_of(move || list.first_visible_item_index() > 0));
     Box!(modifier = Modifier.fill_max_size(), {
@@ -37,9 +38,16 @@ pub fn LongList() {
             scope.items(1_000, |index| Text!("Item {}", index));
         });
         if scrolled.get() {
-            SmallFloatingActionButton!(on_click = move || list.scroll_to_item(0, 0), {
-                Icon!(icons::filled::keyboard_arrow_up(), Some("Back to the top"));
-            });
+            SmallFloatingActionButton!(
+                on_click = move || {
+                    scope.launch(async move {
+                        let _ = list.scroll_to_item(0, 0).await;
+                    });
+                },
+                {
+                    Icon!(icons::filled::keyboard_arrow_up(), Some("Back to the top"));
+                }
+            );
         }
     });
 }

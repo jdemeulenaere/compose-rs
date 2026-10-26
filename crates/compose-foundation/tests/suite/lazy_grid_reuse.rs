@@ -209,7 +209,7 @@ impl Fixture {
     /// Scrolls `lines` lines on (or back), a frame for each, without prefetching.
     fn scroll(&mut self, lines: i32) {
         for _ in 0..lines.abs() {
-            self.state.scroll_by(lines.signum() as f32 * 20.0);
+            self.state.dispatch_raw_delta(lines.signum() as f32 * 20.0);
             self.ui.wait_for_idle();
         }
     }
@@ -493,7 +493,7 @@ fn a_spanned_header_reuses_only_headers_and_the_first_visible_item_is_its_lines_
         let first = grid.state.first_visible_item_index();
         assert_eq!(first, 250, "vertical {vertical}: line 150 starts section 25");
         // A jump to an item: its line first.
-        grid.state.scroll_to_item(1004, 0);
+        grid.state.request_scroll_to_item(1004, 0);
         grid.ui.wait_for_idle();
         assert_eq!(grid.state.first_visible_item_index(), 1003);
     }
@@ -509,7 +509,7 @@ fn prefetch_composes_the_next_grid_items_in_the_slots_of_those_left_behind() {
             if step == 20 {
                 before = nodes_of(0..2000);
             }
-            grid.state.scroll_by(10.0);
+            grid.state.dispatch_raw_delta(10.0);
             grid.ui.wait_for_idle();
             let composed: HashSet<u64> = live().into_iter().collect();
             grid.ui.host().prefetch(later());

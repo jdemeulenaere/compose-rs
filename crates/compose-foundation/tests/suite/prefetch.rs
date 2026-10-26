@@ -82,7 +82,7 @@ fn after_the_first_layout_and_a_scroll_down_prefetch_composes_the_next_items() {
     assert!(ui.host().has_prefetch_work(), "the two rows after those in view");
     assert!(!ui.host().prefetch(later()));
     assert_eq!(live_items(), (0..7).collect::<Vec<_>>());
-    state.scroll_by(30.0);
+    state.dispatch_raw_delta(30.0);
     ui.wait_for_idle();
     let last = last_live();
     assert!(ui.host().has_prefetch_work());
@@ -105,12 +105,12 @@ fn after_the_first_layout_and_a_scroll_down_prefetch_composes_the_next_items() {
 fn a_scroll_that_reveals_prefetched_items_does_not_compose_them_again() {
     crate::legacy::lazy_lists();
     let (mut ui, state) = list(0);
-    state.scroll_by(30.0);
+    state.dispatch_raw_delta(30.0);
     ui.wait_for_idle();
     let last = last_live();
     ui.host().prefetch(later());
     // Two rows on: the prefetched ones are wanted now, and found composed.
-    state.scroll_by(40.0);
+    state.dispatch_raw_delta(40.0);
     let stats = ui.host().frame();
     assert!(!stats.recomposed, "nothing composed in the frame");
     ui.wait_for_idle();
@@ -128,7 +128,7 @@ fn a_scroll_that_reveals_prefetched_items_does_not_compose_them_again() {
 /// Scrolls down `frames` times by 30 px, prefetching after each frame.
 fn scroll_down_prefetching(ui: &mut ComposeTestRule, state: LazyListState, frames: usize) {
     for _ in 0..frames {
-        state.scroll_by(30.0);
+        state.dispatch_raw_delta(30.0);
         ui.wait_for_idle();
         ui.host().prefetch(later());
     }
@@ -149,7 +149,7 @@ fn a_scroll_reversing_direction_finds_the_items_behind_composed() {
     let first = live_items()[0];
     // Back up two rows in one frame: the list wants the two items before the first it wanted,
     // which it kept composed (and measured), as it keeps those prefetched ahead.
-    state.scroll_by(-50.0);
+    state.dispatch_raw_delta(-50.0);
     let stats = ui.host().frame();
     assert!(!stats.recomposed, "nothing composed in the frame");
     ui.wait_for_idle();
@@ -163,7 +163,7 @@ fn a_scroll_reversing_direction_finds_the_items_behind_composed() {
     assert_eq!(items[0], first - 2, "{items:?}");
     assert_eq!((compositions(first - 1), compositions(first - 2)), (before.0 + 1, before.1 + 1));
     // And two rows down again: the two below the wanted ones were kept too.
-    state.scroll_by(40.0);
+    state.dispatch_raw_delta(40.0);
     let stats = ui.host().frame();
     assert!(!stats.recomposed, "nothing composed in the frame");
 }
@@ -174,7 +174,7 @@ fn a_frame_composing_items_keeps_the_two_behind_the_wanted_ones() {
     let (mut ui, state) = list(100);
     // Five rows down with no prefetching: the frame composes the rows it scrolls to (105 to
     // 109), and of those it no longer wants (100 to 104) keeps the two next to them.
-    state.scroll_by(100.0);
+    state.dispatch_raw_delta(100.0);
     ui.wait_for_idle();
     assert_eq!(state.first_visible_item_index(), 105);
     assert_eq!(live_items(), (103..110).collect::<Vec<_>>());
@@ -204,7 +204,7 @@ fn a_jump_composes_only_the_items_it_wants() {
     let expected = composed_at(10);
     let (mut ui, state) = list(100);
     scroll_down_prefetching(&mut ui, *state, 5);
-    state.scroll_to_item(10, 0);
+    state.request_scroll_to_item(10, 0);
     ui.wait_for_idle();
     assert_eq!(live_items(), expected);
     // Wanting from one past the item after the composed ones (5 before the first visible): the
@@ -215,7 +215,7 @@ fn a_jump_composes_only_the_items_it_wants() {
     let expected = composed_at(last + 7);
     let (mut ui, state) = list(100);
     scroll_down_prefetching(&mut ui, *state, 5);
-    state.scroll_to_item(last + 7, 0);
+    state.request_scroll_to_item(last + 7, 0);
     ui.wait_for_idle();
     assert_eq!(live_items(), expected);
 }
@@ -225,7 +225,7 @@ fn a_scroll_up_prefetches_the_items_before() {
     crate::legacy::lazy_lists();
     let (mut ui, state) = list(100);
     let first = LIVE.with(|live| live.borrow().iter().copied().min().unwrap());
-    state.scroll_by(-30.0);
+    state.dispatch_raw_delta(-30.0);
     ui.wait_for_idle();
     let first_now = LIVE.with(|live| live.borrow().iter().copied().min().unwrap());
     assert!(first_now < first);
@@ -241,7 +241,7 @@ fn a_scroll_up_prefetches_the_items_before() {
 fn prefetch_past_its_deadline_does_nothing() {
     crate::legacy::lazy_lists();
     let (mut ui, state) = list(0);
-    state.scroll_by(30.0);
+    state.dispatch_raw_delta(30.0);
     ui.wait_for_idle();
     let last = last_live();
     assert!(ui.host().prefetch(Instant::now()), "work left");
@@ -256,13 +256,13 @@ fn prefetch_past_its_deadline_does_nothing() {
 fn prefetched_items_left_far_behind_are_disposed() {
     crate::legacy::lazy_lists();
     let (mut ui, state) = list(100);
-    state.scroll_by(30.0);
+    state.dispatch_raw_delta(30.0);
     ui.wait_for_idle();
     let last = last_live();
     ui.host().prefetch(later());
     assert!(live(last + 2));
     // Back up, far: the items prefetched below go, as the composed ones out of view do.
-    state.scroll_by(-240.0);
+    state.dispatch_raw_delta(-240.0);
     ui.wait_for_idle();
     assert_eq!(state.first_visible_item_index(), 89);
     assert!(!live(last + 1) && !live(last + 2), "{:?}", LIVE.with(|live| live.borrow().clone()));
@@ -296,9 +296,9 @@ fn prefetch_changes_nothing_in_view_and_composes_no_more_than_it_prefetches() {
     let (mut prefetched, state) = list(0);
     for frame in 0..60 {
         let delta = if frame < 40 { 15.0 } else { -15.0 };
-        plain_state.scroll_by(delta);
+        plain_state.dispatch_raw_delta(delta);
         plain.wait_for_idle();
-        state.scroll_by(delta);
+        state.dispatch_raw_delta(delta);
         prefetched.wait_for_idle();
         assert_eq!(rows_in_view(&mut plain), rows_in_view(&mut prefetched));
         assert_eq!(plain_state.first_visible_item_index(), state.first_visible_item_index());
@@ -336,7 +336,7 @@ fn a_grid_prefetches_its_next_rows() {
             }
         );
     });
-    state.scroll_by(30.0);
+    state.dispatch_raw_delta(30.0);
     ui.wait_for_idle();
     let last = last_live();
     assert_eq!(last % 3, 2, "whole rows composed");
@@ -417,7 +417,7 @@ fn counted_list() -> (ComposeTestRule, Owned<LazyListState>) {
 fn a_frame_revealing_prefetched_items_lays_out_no_text() {
     crate::legacy::lazy_lists();
     let (mut ui, state) = counted_list();
-    state.scroll_by(30.0);
+    state.dispatch_raw_delta(30.0);
     ui.wait_for_idle();
     let before = text_layouts();
     ui.host().prefetch(later());
@@ -425,7 +425,7 @@ fn a_frame_revealing_prefetched_items_lays_out_no_text() {
     // A row at a time: the prefetched items come into the wanted range, then into view.
     for _ in 0..6 {
         let before = text_layouts();
-        state.scroll_by(20.0);
+        state.dispatch_raw_delta(20.0);
         let stats = ui.host().frame();
         assert_eq!(text_layouts(), before, "text laid out in the frame");
         assert_eq!(stats.bodies_run, 0, "composed in the frame");
@@ -437,11 +437,11 @@ fn a_frame_revealing_prefetched_items_lays_out_no_text() {
 fn a_prefetch_with_nothing_to_do_does_nothing() {
     crate::legacy::lazy_lists();
     let (mut ui, state) = counted_list();
-    state.scroll_by(30.0);
+    state.dispatch_raw_delta(30.0);
     ui.wait_for_idle();
     assert!(!ui.host().prefetch(later()));
     // A scroll within the same items wants no other: nothing is asked for.
-    state.scroll_by(5.0);
+    state.dispatch_raw_delta(5.0);
     ui.wait_for_idle();
     assert!(!ui.host().has_prefetch_work(), "a request with nothing to do");
     let (layouts, live) = (text_layouts(), LIVE.with(|live| live.borrow().len()));
@@ -459,7 +459,7 @@ fn prefetch_asks_for_no_frame() {
     let wakes = std::rc::Rc::new(std::cell::Cell::new(0));
     let counter = wakes.clone();
     ui.host().set_frame_waker(move || counter.set(counter.get() + 1));
-    state.scroll_by(30.0);
+    state.dispatch_raw_delta(30.0);
     ui.wait_for_idle();
     let before = wakes.get();
     assert!(!ui.host().prefetch(later()));
@@ -576,7 +576,7 @@ fn a_frame_revealing_prefetched_items_draws_only_them() {
     let state = LazyListState::new(0, 0);
     let given = *state;
     let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || PaintedList(given));
-    state.scroll_by(30.0);
+    state.dispatch_raw_delta(30.0);
     ui.wait_for_idle();
     let before = row_groups(&ui.host().display_list());
     let last_drawn = *before.keys().max().unwrap();
@@ -592,7 +592,7 @@ fn a_frame_revealing_prefetched_items_draws_only_them() {
     assert_eq!(draws(last_drawn + 2), 0, "a prefetched item isn't drawn");
 
     // Two rows on: the prefetched items are placed now, found composed.
-    state.scroll_by(40.0);
+    state.dispatch_raw_delta(40.0);
     let stats = ui.host().frame();
     assert!(!stats.recomposed, "nothing composed in the frame");
     assert!(stats.drew);
@@ -663,7 +663,7 @@ fn prefetched_painted_list() -> (ComposeTestRule, Owned<LazyListState>, usize) {
     let given = *state;
     let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || PaintedList(given));
     assert!(!ui.host().has_draw_ahead_work(), "nothing measured ahead yet");
-    state.scroll_by(30.0);
+    state.dispatch_raw_delta(30.0);
     ui.wait_for_idle();
     let last_drawn = *row_groups(&ui.host().display_list()).keys().max().unwrap();
     assert!(!ui.host().prefetch(later()));
@@ -688,7 +688,7 @@ fn a_prefetched_item_drawn_ahead_is_kept_by_the_frame_placing_it() {
     assert!(!ui.host().needs_frame(), "drawing ahead asks for no frame");
 
     // Two rows on: the frame places them, drawing neither again.
-    state.scroll_by(40.0);
+    state.dispatch_raw_delta(40.0);
     assert!(ui.host().draw_ahead().is_none(), "a frame has work");
     ui.host().frame();
     let list = ui.host().display_list();
@@ -718,7 +718,7 @@ fn items_measured_ahead_are_forgotten_once_placed_or_gone() {
     crate::legacy::lazy_lists();
     let (mut ui, state, _) = prefetched_painted_list();
     assert_eq!(ui.host().with_tree(|tree| tree.measured_ahead_count()), 2);
-    state.scroll_by(40.0);
+    state.dispatch_raw_delta(40.0);
     ui.wait_for_idle();
     // The frame placing them forgot them (asking `has_draw_ahead_work` would too).
     assert_eq!(ui.host().with_tree(|tree| tree.measured_ahead_count()), 0, "both placed");
@@ -730,7 +730,7 @@ fn items_measured_ahead_are_forgotten_once_placed_or_gone() {
     assert_eq!(draws(last_drawn + 1), 0);
     let (mut ui, state, last_drawn) = prefetched_painted_list();
     // Back up far: the items prefetched below are disposed before any is drawn ahead.
-    state.scroll_by(-30.0);
+    state.dispatch_raw_delta(-30.0);
     ui.wait_for_idle();
     ui.host().prefetch(later());
     assert!(!ui.host().has_draw_ahead_work(), "disposed");
@@ -765,7 +765,7 @@ fn an_item_drawn_ahead_draws_again_when_what_it_read_changes() {
             }
         );
     });
-    state.scroll_by(30.0);
+    state.dispatch_raw_delta(30.0);
     ui.wait_for_idle();
     ui.host().prefetch(later());
     let mut ahead = Vec::new();
@@ -777,7 +777,7 @@ fn an_item_drawn_ahead_draws_again_when_what_it_read_changes() {
     assert!(ui.host().needs_frame(), "the write asks for a frame");
     assert!(ui.host().draw_ahead().is_none(), "the frame goes first");
     ui.wait_for_idle();
-    state.scroll_by(40.0);
+    state.dispatch_raw_delta(40.0);
     ui.host().frame();
     let list = ui.host().display_list();
     for (key, version) in ahead {
@@ -839,9 +839,9 @@ fn drawing_ahead_changes_nothing_a_frame_draws() {
                 order.set(keys);
             }
         }
-        plain_state.scroll_by(delta);
+        plain_state.dispatch_raw_delta(delta);
         plain.wait_for_idle();
-        state.scroll_by(delta);
+        state.dispatch_raw_delta(delta);
         ahead.wait_for_idle();
         assert_eq!(
             dump_without_paragraphs(&plain.host().display_list()),
@@ -946,7 +946,7 @@ fn a_scroll_frame_after_prefetch_asks_for_no_other_frame() {
     });
     for _ in 0..5 {
         ui.host().prefetch(later());
-        state.scroll_by(60.0);
+        state.dispatch_raw_delta(60.0);
         ui.host().frame();
         assert!(!ui.host().has_pending_work(), "the scroll frame asked for another");
     }

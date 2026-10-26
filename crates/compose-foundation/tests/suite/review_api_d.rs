@@ -233,11 +233,11 @@ fn a_sticky_header_of_a_reversed_list_sticks_to_the_bottom() {
     let given = *state;
     let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || ReversedSections(given));
     assert_eq!(bounds(&mut ui, "A").bottom, 100.0);
-    state.scroll_to_item(5, 10);
+    state.request_scroll_to_item(5, 10);
     ui.wait_for_idle();
     assert_eq!(bounds(&mut ui, "A").bottom, 100.0);
     // B's header 10 px from the bottom pushes A's down.
-    state.scroll_to_item(10, 20);
+    state.request_scroll_to_item(10, 20);
     ui.wait_for_idle();
     assert_eq!(bounds(&mut ui, "B").bottom, 90.0);
     assert_eq!(bounds(&mut ui, "A").bottom, 110.0);

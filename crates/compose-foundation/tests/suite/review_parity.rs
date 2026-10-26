@@ -100,18 +100,18 @@ fn list(optimizations: Optimizations) -> (ComposeTestRule, Owned<LazyListState>)
 #[test]
 fn a_grid_scrolled_back_prefetches_the_whole_line_before() {
     let (mut ui, state) = grid();
-    state.scroll_by(200.0);
+    state.dispatch_raw_delta(200.0);
     ui.wait_for_idle();
     ui.host().prefetch(later());
     // At 195 px: lines 9 (items 27 to 29) to 14 show; line 8 (items 24 to 26) is the one before.
-    state.scroll_by(-5.0);
+    state.dispatch_raw_delta(-5.0);
     ui.wait_for_idle();
     assert_eq!(state.first_visible_item_index(), 27);
     ui.host().prefetch(later());
     let live = live_items();
     assert!((24..27).all(|item| live.contains(&item)), "line 8 prefetched whole: {live:?}");
     let before = total();
-    state.scroll_by(-10.0);
+    state.dispatch_raw_delta(-10.0);
     ui.wait_for_idle();
     assert_eq!(total(), before, "items composed in the frame showing line 8");
 }
@@ -119,13 +119,13 @@ fn a_grid_scrolled_back_prefetches_the_whole_line_before() {
 #[test]
 fn a_grid_scrolled_back_line_by_line_composes_nothing_in_its_frames() {
     let (mut ui, state) = grid();
-    state.scroll_by(400.0);
+    state.dispatch_raw_delta(400.0);
     ui.wait_for_idle();
     ui.host().prefetch(later());
     let mut in_frames = Vec::new();
     for _ in 0..12 {
         let before = total();
-        state.scroll_by(-7.0);
+        state.dispatch_raw_delta(-7.0);
         ui.wait_for_idle();
         in_frames.push(total() - before);
         ui.host().prefetch(later());
@@ -138,7 +138,7 @@ fn a_grid_scrolled_back_line_by_line_composes_nothing_in_its_frames() {
 fn a_list_scrolled_back_composes_nothing_in_its_frames_after_the_turn() {
     let (mut ui, state) = list(Optimizations::NONE);
     for _ in 0..10 {
-        state.scroll_by(15.0);
+        state.dispatch_raw_delta(15.0);
         ui.wait_for_idle();
         ui.host().prefetch(later());
     }
@@ -146,7 +146,7 @@ fn a_list_scrolled_back_composes_nothing_in_its_frames_after_the_turn() {
     let mut in_frames = Vec::new();
     for _ in 0..10 {
         let before = total();
-        state.scroll_by(-15.0);
+        state.dispatch_raw_delta(-15.0);
         ui.wait_for_idle();
         in_frames.push(total() - before);
         ui.host().prefetch(later());
@@ -160,14 +160,14 @@ fn a_list_scrolled_back_composes_nothing_in_its_frames_after_the_turn() {
 #[test]
 fn a_grid_scrolled_back_composes_only_the_line_that_comes_into_view() {
     let (mut ui, state) = grid();
-    state.scroll_by(400.0);
+    state.dispatch_raw_delta(400.0);
     ui.wait_for_idle();
     // The idle time after deactivates the lines the frame passed (Compose's measurement
     // composes them to step over, and deactivates them).
     ui.host().prefetch(later());
     // The frame scrolled back 7 px composes line 19, three items, not two lines.
     let before = total();
-    state.scroll_by(-7.0);
+    state.dispatch_raw_delta(-7.0);
     ui.wait_for_idle();
     assert_eq!(total() - before, 3);
 }
@@ -178,11 +178,11 @@ fn a_grid_scrolled_back_composes_only_the_line_that_comes_into_view() {
 #[test]
 fn a_frame_where_an_item_only_leaves_runs_no_composition() {
     let (mut ui, state) = list(Optimizations::NONE);
-    state.scroll_by(30.0);
+    state.dispatch_raw_delta(30.0);
     ui.wait_for_idle();
     ui.host().prefetch(later());
     assert!(live_items().contains(&7));
-    state.scroll_by(20.0);
+    state.dispatch_raw_delta(20.0);
     let stats = ui.host().frame();
     assert!(!stats.recomposed, "a composition round for row 1 leaving");
     ui.wait_for_idle();
@@ -219,7 +219,7 @@ fn items_an_estimate_composed_beyond_the_next_one_are_let_go() {
             }
         );
     });
-    state.scroll_by(60.0);
+    state.dispatch_raw_delta(60.0);
     ui.wait_for_idle();
     ui.host().prefetch(later());
     let live = live_items();
@@ -329,14 +329,14 @@ fn a_request_for_an_item_already_composed_learns_its_nested_lists_count() {
     });
     // 60 px down (rows 1 and 2 kept behind), no prefetch; then 5 px back: row 2, composed, is
     // requested, and its carousel shows 4 cells.
-    state.scroll_by(60.0);
+    state.dispatch_raw_delta(60.0);
     ui.wait_for_idle();
-    state.scroll_by(-5.0);
+    state.dispatch_raw_delta(-5.0);
     ui.wait_for_idle();
     assert!(!ui.host().prefetch(later()));
     // Forward again: a row never composed is requested; its carousel's 4 cells (the count
     // learned) are composed before it's measured, not 2.
-    state.scroll_by(25.0);
+    state.dispatch_raw_delta(25.0);
     ui.wait_for_idle();
     assert!(!ui.host().prefetch(later()));
     let at = |row: usize| CELLS_AT_MEASURE.with(|at| at.borrow().get(&row).copied());
@@ -373,12 +373,12 @@ fn a_nested_list_starting_scrolled_is_prefetched_from_its_first_visible_item() {
             }
         );
     });
-    state.scroll_by(5.0);
+    state.dispatch_raw_delta(5.0);
     ui.wait_for_idle();
     ui.host().prefetch(later());
     let cells = || CELLS.with(|cells| cells.borrow().values().sum::<usize>());
     let before = cells();
-    state.scroll_by(20.0);
+    state.dispatch_raw_delta(20.0);
     ui.host().frame();
     assert_eq!(cells(), before, "cells composed in the frame showing the row");
 }
@@ -430,13 +430,13 @@ fn an_item_composed_ahead_and_cancelled_is_kept_for_reuse() {
     // Composing a row takes 3 ms, measuring it 6 ms. 5 px down: row 6 prefetched whole (the
     // averages' first samples).
     SLOW.set(Some((Duration::from_millis(3), Duration::from_millis(6))));
-    state.scroll_by(5.0);
+    state.dispatch_raw_delta(5.0);
     ui.wait_for_idle();
     assert!(!ui.host().prefetch(later()));
     // 18 px more, 6 px a frame: row 7 requested, not urgent; 7 ms composes it, and leaves too
     // little to measure it.
     for _ in 0..3 {
-        state.scroll_by(6.0);
+        state.dispatch_raw_delta(6.0);
         ui.wait_for_idle();
     }
     assert!(ui.host().prefetch(Instant::now() + Duration::from_millis(7)), "measuring left");
@@ -451,7 +451,7 @@ fn an_item_composed_ahead_and_cancelled_is_kept_for_reuse() {
     };
     let children = list(&mut ui);
     // 3 px back: row 7's request is cancelled, row 0's composes in its place; row 7 is kept.
-    state.scroll_by(-3.0);
+    state.dispatch_raw_delta(-3.0);
     ui.wait_for_idle();
     assert!(!ui.host().prefetch(later()));
     assert_eq!(list(&mut ui), children, "row 7 disposed rather than kept for reuse");
@@ -492,14 +492,14 @@ fn a_grids_urgency_goes_by_the_last_visible_items_size() {
     });
     SLOW_CELLS.set(Duration::from_millis(25));
     // 5 px down: line 3 (items 9 to 11) requested and composed, the average's first sample.
-    state.scroll_by(5.0);
+    state.dispatch_raw_delta(5.0);
     ui.wait_for_idle();
     assert!(!ui.host().prefetch(later()));
     // 10 px more twice: line 3 shows from 95 px; its last item, 10 px tall, ends 5 px past the
     // viewport, less than the 10 px scrolled: line 4's requests are urgent (by the line's 40 px,
     // they wouldn't be) and compose with 5 ms left.
     for _ in 0..2 {
-        state.scroll_by(10.0);
+        state.dispatch_raw_delta(10.0);
         ui.wait_for_idle();
     }
     ui.host().prefetch(Instant::now() + Duration::from_millis(5));

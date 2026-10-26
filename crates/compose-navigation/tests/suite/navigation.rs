@@ -239,7 +239,7 @@ fn an_entry_keeps_its_state_while_on_the_stack() {
     let mut ui = compose_test(App);
     ui.on_node_with_tag("home counter").perform_click();
     ui.on_node_with_tag("home counter").perform_click();
-    LIST.get().unwrap().scroll_to_item(30, 10);
+    LIST.get().unwrap().request_scroll_to_item(30, 10);
     ui.wait_for_idle();
     navigate(&mut ui, Screen::Detail(1));
     ui.on_node_with_tag("detail counter").perform_click();
@@ -308,7 +308,7 @@ fn a_screens_own_back_handler_goes_before_the_host() {
 fn the_back_stack_and_its_states_survive_the_process() {
     let mut ui = compose_test(App);
     ui.on_node_with_tag("home counter").perform_click();
-    LIST.get().unwrap().scroll_to_item(42, 0);
+    LIST.get().unwrap().request_scroll_to_item(42, 0);
     ui.wait_for_idle();
     navigate(&mut ui, Screen::Detail(5));
     ui.on_node_with_tag("detail counter").perform_click();

@@ -71,7 +71,7 @@ fn a_scrollbar_follows_a_lazy_list_and_hides_when_it_fits() {
     });
     // 200 of 2000 px: a 20 px thumb.
     assert_eq!(thumb(&mut ui).map(|thumb| thumb.height()), Some(20.0));
-    list.scroll_to_item(50, 0);
+    list.request_scroll_to_item(50, 0);
     ui.wait_for_idle();
     // 1000 of the 1800 px of room: the thumb 100 px of its 180 down.
     assert_eq!(thumb(&mut ui).map(|thumb| thumb.top.round()), Some(100.0));

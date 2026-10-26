@@ -244,7 +244,7 @@ fn a_list_with_user_scrolling_disabled_ignores_the_wheel_but_not_its_state() {
     ui.host().send_pointer(PointerEvent::scroll(Offset::new(50.0, 50.0), Offset::new(0.0, 45.0)));
     ui.wait_for_idle();
     assert_eq!(state.first_visible_item_index(), 0);
-    state.scroll_to_item(3, 0);
+    state.request_scroll_to_item(3, 0);
     ui.wait_for_idle();
     assert_eq!(top_of(&mut ui, "3"), 0.0);
 }
@@ -284,18 +284,18 @@ fn a_sticky_header_stays_at_the_top_until_the_next_one_pushes_it_out() {
     let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || Sections(given));
     assert_eq!(top_of(&mut ui, "A"), 0.0);
     // Scrolled into section A's items: its header stays at the top, over them.
-    state.scroll_to_item(5, 10);
+    state.request_scroll_to_item(5, 10);
     ui.wait_for_idle();
     assert_eq!(top_of(&mut ui, "A"), 0.0);
     assert_eq!(top_of(&mut ui, "A4"), -10.0);
     assert!(ui.dump_tree().contains("A4"), "{}", ui.dump_tree());
     // B's header 10 px from the top pushes A's up.
-    state.scroll_to_item(10, 20);
+    state.request_scroll_to_item(10, 20);
     ui.wait_for_idle();
     assert_eq!(top_of(&mut ui, "B"), 10.0);
     assert_eq!(top_of(&mut ui, "A"), -10.0);
     // Far into B: B's header at the top, A's gone.
-    state.scroll_to_item(18, 5);
+    state.request_scroll_to_item(18, 5);
     ui.wait_for_idle();
     assert_eq!(top_of(&mut ui, "B"), 0.0);
     ui.on_node_with_tag("A").assert_does_not_exist();
@@ -364,7 +364,7 @@ fn items_are_laid_out_under_the_content_padding() {
     assert_eq!(top_of(&mut ui, "3"), 90.0);
     ui.on_node_with_tag("4").assert_does_not_exist();
     // Scrolled: the item scrolled into the start padding stays, above the first visible one.
-    state.scroll_to_item(2, 10);
+    state.request_scroll_to_item(2, 10);
     ui.wait_for_idle();
     assert_eq!(top_of(&mut ui, "1"), 0.0);
     assert_eq!(top_of(&mut ui, "2"), 20.0);
@@ -374,7 +374,7 @@ fn items_are_laid_out_under_the_content_padding() {
     assert_eq!(position(&state), (2, 10));
     // At the end: the last item ends where the end padding starts, the items before it fill the
     // start padding, and the first visible one is the first not wholly in it.
-    state.scroll_to_item(19, 0);
+    state.request_scroll_to_item(19, 0);
     ui.wait_for_idle();
     assert_eq!(top_of(&mut ui, "19"), 50.0);
     assert_eq!(top_of(&mut ui, "17"), 10.0);
@@ -382,7 +382,7 @@ fn items_are_laid_out_under_the_content_padding() {
     ui.on_node_with_tag("15").assert_does_not_exist();
     assert_eq!(position(&state), (18, 0));
     // Scrolled back: the items before come into the start padding.
-    assert!(state.scroll_by(-45.0));
+    assert!(state.dispatch_raw_delta(-45.0) != 0.0);
     ui.wait_for_idle();
     assert_eq!(top_of(&mut ui, "15"), 15.0);
     assert_eq!(top_of(&mut ui, "14"), -5.0);
@@ -398,7 +398,7 @@ fn a_reversed_list_lays_out_items_under_its_bottom_padding() {
     let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || Padded(given, true));
     assert_eq!(top_of(&mut ui, "0"), 50.0);
     assert_eq!(top_of(&mut ui, "3"), -10.0);
-    state.scroll_to_item(2, 10);
+    state.request_scroll_to_item(2, 10);
     ui.wait_for_idle();
     assert_eq!(top_of(&mut ui, "2"), 60.0);
     assert_eq!(top_of(&mut ui, "1"), 80.0);
@@ -435,7 +435,7 @@ fn a_negative_spacing_lays_out_the_overlapping_item_but_after_a_scroll_back() {
     assert_eq!(top_of(&mut ui, "1"), 0.0);
     assert_eq!(top_of(&mut ui, "0"), -10.0);
     // To the last item, scrolled back 50 px to end the list: the same place, without item 0.
-    state.scroll_to_item(9, 0);
+    state.request_scroll_to_item(9, 0);
     ui.wait_for_idle();
     assert_eq!(position(&state), (4, 0));
     assert_eq!(top_of(&mut ui, "9"), 80.0);
@@ -472,7 +472,7 @@ fn the_next_header_pushes_the_sticking_one_out_with_its_spacing() {
         );
     });
     // A9 from 390 px, 15 px into it; B's header after it and its spacing, at 430 px: 25 px down.
-    state.scroll_to_item(10, 15);
+    state.request_scroll_to_item(10, 15);
     ui.wait_for_idle();
     assert_eq!(top_of(&mut ui, "B"), 25.0);
     // A's header (20 px) and the spacing after it (10 px) end where B's starts.

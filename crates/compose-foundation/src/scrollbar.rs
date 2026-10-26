@@ -43,7 +43,9 @@ impl ScrollbarAdapter for ScrollStateAdapter {
         self.0.viewport_size() as f64
     }
     fn scroll_to(&self, scroll_offset: f64) {
-        self.0.scroll_to(scroll_offset.round() as i32);
+        // At once, within the range (Compose Desktop's suspends in a scroll).
+        let delta = scroll_offset.round() as i32 - self.0.value();
+        crate::ScrollableState::dispatch_raw_delta(&self.0, delta as f32);
     }
 }
 
@@ -73,7 +75,7 @@ impl ScrollbarAdapter for LazyListAdapter {
         let average = (average as f64).max(1.0);
         let offset = scroll_offset.max(0.0);
         let index = ((offset / average).floor() as usize).min(count.saturating_sub(1));
-        self.0.scroll_to_item(index, (offset - index as f64 * average).round() as i32);
+        self.0.request_scroll_to_item(index, (offset - index as f64 * average).round() as i32);
     }
 }
 

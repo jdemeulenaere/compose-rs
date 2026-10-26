@@ -1,5 +1,15 @@
-//! `Modifier.draggable`, as Compose's: drags along one axis reported as deltas to a
-//! `DraggableState`.
+//! Compose's `foundation.gestures`: `Modifier.draggable` (drags along one axis reported as
+//! deltas to a `DraggableState`), and scrolling (`scrollable`: `ScrollableState`,
+//! `Modifier.scrollable`, flings).
+
+mod scrollable;
+
+pub use scrollable::{
+    DefaultFlingBehavior, DefaultScrollableState, FlingBehavior, LocalBoxFuture, ScrollBlock,
+    ScrollScope, ScrollableDefaults, ScrollableModifier, ScrollableState, ScrollableStateExt,
+    remember_scrollable_state, scrollable_state,
+};
+pub(crate) use scrollable::{DragSession, ScrollCore};
 
 use std::cell::RefCell;
 use std::rc::Rc;

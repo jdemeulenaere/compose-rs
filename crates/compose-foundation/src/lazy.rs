@@ -34,8 +34,8 @@ use std::hash::Hash;
 use std::rc::{Rc, Weak};
 
 use compose_runtime::{
-    ComposeArg, ImmutableList, ObjectHandle, Owned, OwnedState, SaveableStateHolder, composable,
-    hash_key, key, mutable_state_of, remember,
+    ComposeArg, CoroutineScope, ImmutableList, ObjectHandle, Owned, OwnedState,
+    SaveableStateHolder, composable, hash_key, key, mutable_state_of, remember,
 };
 use compose_ui::{
     Alignment, Constraints, Dp, EventContext, HorizontalAlignment, IntSize, Layout, Measurable,
@@ -44,8 +44,10 @@ use compose_ui::{
     PrefetchScheduler, Rect, VerticalAlignment,
 };
 
+use crate::gestures::{LocalBoxFuture, ScrollBlock, ScrollableState, ScrollableStateExt};
 use crate::layout::{HorizontalArrangement, MainAxisArrangement, VerticalArrangement};
-use crate::scroll::{DragScroller, bring_into_view_delta};
+use crate::mutator::{MutatePriority, MutationInterrupted};
+use crate::scroll::{DragScroller, ScrollDriver, bring_into_view_delta, same_fling};
 use prefetch::{Laid, Policy, Prefetch};
 
 /// The lines a grid composes and places beyond each side of its viewport (D456), and the least
@@ -170,7 +172,17 @@ struct LazyListInner {
     sticky: OwnedState<Option<usize>>,
     /// What was last written to `sticky`, read without observing it.
     sticky_written: Cell<Option<usize>>,
+    /// Its scrolls' mutex and flags.
+    core: crate::gestures::ScrollCore,
+    /// The nested-scroll parents a drag's or a fling's delta going through the scroll scope
+    /// comes through, set around it by the list's node: what an estimated end leaves of it goes
+    /// to them (D479).
+    scroll_outer: RefCell<Option<Outer>>,
 }
+
+/// The nested-scroll parents a delta came through, the list's axis, whether it runs against the
+/// pointer, and the delta's source.
+type Outer = (compose_ui::platform::NestedScrollChain, bool, bool, compose_ui::NestedScrollSource);
 
 impl LazyListInner {
     /// Asks the items' composition for the items `range`: a write of `composed`, or, when it
@@ -226,6 +238,8 @@ impl LazyListInner {
             beyond_more: Cell::new((false, false)),
             beyond_ended: Cell::new(false),
             dispose_leaving: Cell::new(false),
+            core: crate::gestures::ScrollCore::new(),
+            scroll_outer: RefCell::new(None),
         }
     }
 }
@@ -311,9 +325,21 @@ impl LazyListState {
         self.inner().map_or(0, |inner| inner.first_offset.get())
     }
 
-    /// Scrolls to `index` (and `scroll_offset` pixels into it) at the next layout, as
-    /// `scrollToItem`, without animation.
-    pub fn scroll_to_item(&self, index: usize, scroll_offset: i32) {
+    /// Scrolls to `index` (and `scroll_offset` pixels into it) at the next layout, without
+    /// animation, as `requestScrollToItem`: a scroll going on (a fling) is stopped.
+    pub fn request_scroll_to_item(&self, index: usize, scroll_offset: i32) {
+        let Some(inner) = self.inner() else { return };
+        if inner.core.is_scroll_in_progress() {
+            let state = *self;
+            CoroutineScope::new().launch(async move {
+                let _ = state.stop_scroll(MutatePriority::Default).await;
+            });
+        }
+        self.snap_to_item(index, scroll_offset);
+    }
+
+    /// Moves the position to `index`, `scroll_offset` into it, for the next layout.
+    fn snap_to_item(&self, index: usize, scroll_offset: i32) {
         let Some(inner) = self.inner() else { return };
         // A jump is no user input: nothing it passes goes to nested-scroll parents.
         inner.overshoot.borrow_mut().take();
@@ -325,10 +351,25 @@ impl LazyListState {
         inner.remeasure.update(|count| count.wrapping_add(1));
     }
 
-    /// Scrolls by `pixels` (positive: towards the end) at the next layout, as
-    /// `scrollBy`/`dispatchRawDelta`; returns whether the list can move that way.
-    pub fn scroll_by(&self, pixels: f32) -> bool {
-        self.dispatch(pixels, None) != 0.0
+    /// Scrolls to `index` (and `scroll_offset` pixels into it), without animation, in a scroll
+    /// of the default priority, as `scrollToItem`: the list is there from its next layout.
+    pub async fn scroll_to_item(
+        &self,
+        index: usize,
+        scroll_offset: i32,
+    ) -> Result<(), MutationInterrupted> {
+        let state = *self;
+        self.scroll(MutatePriority::Default, move |_| async move {
+            state.snap_to_item(index, scroll_offset);
+        })
+        .await
+    }
+
+    /// The interaction source the list reports its drags to, as `interactionSource`.
+    pub fn interaction_source(&self) -> compose_ui::MutableInteractionSource {
+        self.inner().map_or_else(compose_ui::MutableInteractionSource::new, |inner| {
+            inner.core.interaction_source.clone()
+        })
     }
 
     /// Scrolls by up to `pixels`, as far as the list goes (as last laid out); returns the
@@ -395,15 +436,55 @@ impl LazyListState {
     pub(crate) fn layout_info(&self) -> (usize, f32, i32, i32, i32) {
         self.inner().map_or((0, 1.0, 0, 0, 0), |inner| inner.layout_info.get())
     }
+}
+
+impl ScrollableState for LazyListState {
+    fn scroll_boxed<'a>(
+        &'a self,
+        priority: MutatePriority,
+        block: ScrollBlock<'a>,
+    ) -> LocalBoxFuture<'a, Result<(), MutationInterrupted>> {
+        let Some(inner) = self.inner() else { return Box::pin(async { Ok(()) }) };
+        let state = *self;
+        // A drag's or a fling's deltas learn the parents around from the node (D479).
+        let consume = Rc::new(move |delta: f32| {
+            let outer = state.inner().and_then(|inner| inner.scroll_outer.borrow().clone());
+            state.dispatch(delta, outer)
+        });
+        Box::pin(async move { inner.core.scroll(priority, consume, block).await })
+    }
+
+    /// Scrolls by up to `delta` pixels (positive: towards the end) at the next layout, as far
+    /// as the list goes as last laid out (an end not laid out isn't known: it takes it all,
+    /// D476); returns the pixels it will move.
+    fn dispatch_raw_delta(&self, delta: f32) -> f32 {
+        self.dispatch(delta, None)
+    }
+
+    fn is_scroll_in_progress(&self) -> bool {
+        self.inner().is_some_and(|inner| inner.core.is_scroll_in_progress())
+    }
 
     /// Whether the list can scroll towards its end, as `canScrollForward` (as last laid out).
-    pub fn can_scroll_forward(&self) -> bool {
+    fn can_scroll_forward(&self) -> bool {
         self.inner().is_some_and(|inner| inner.room_forward.get() > 0.0)
     }
 
     /// Whether the list can scroll towards its start, as `canScrollBackward`.
-    pub fn can_scroll_backward(&self) -> bool {
+    fn can_scroll_backward(&self) -> bool {
         self.inner().is_some_and(|inner| inner.room_backward.get() > 0.0)
+    }
+
+    fn last_scrolled_forward(&self) -> bool {
+        self.inner().is_some_and(|inner| inner.core.last_scrolled_forward())
+    }
+
+    fn last_scrolled_backward(&self) -> bool {
+        self.inner().is_some_and(|inner| inner.core.last_scrolled_backward())
+    }
+
+    fn internal_interaction_source(&self) -> Option<compose_ui::MutableInteractionSource> {
+        self.inner().map(|inner| inner.core.interaction_source.clone())
     }
 }
 
@@ -1513,6 +1594,7 @@ fn LazyList(
         vertical,
         reverse,
         enabled: user_scroll_enabled,
+        fling_behavior: None,
     });
     let items = ItemsRef(items);
     // The items' saveable state, kept by key while they're scrolled away, as Compose's
@@ -2502,13 +2584,17 @@ struct LazyScrollElement {
     vertical: bool,
     reverse: bool,
     enabled: bool,
+    fling_behavior: Option<Rc<dyn crate::gestures::FlingBehavior>>,
 }
 
 struct LazyScrollNode {
     state: LazyListState,
+    /// The state as a scrollable state, for drags and flings.
+    dyn_state: Rc<dyn ScrollableState>,
     vertical: bool,
     reverse: bool,
     enabled: bool,
+    fling_behavior: Option<Rc<dyn crate::gestures::FlingBehavior>>,
     drag: DragScroller,
 }
 
@@ -2517,34 +2603,44 @@ impl ModifierNodeElement for LazyScrollElement {
     fn create(&self) -> LazyScrollNode {
         LazyScrollNode {
             state: self.state,
+            dyn_state: Rc::new(self.state),
             vertical: self.vertical,
             reverse: self.reverse,
             enabled: self.enabled,
+            fling_behavior: self.fling_behavior.clone(),
             drag: DragScroller::default(),
+        })
+    }
+
+    fn update(&self, node: &mut dyn ModifierNode) {
+        if let Some(node) = node.downcast_mut::<LazyScrollNode>() {
+            // A fling scrolls the state it started with: a new state stops it (the old one's
+            // owner may be going, D240).
+            if node.state != self.state {
+                node.drag.cancel();
+                node.drag.stop_fling();
+                node.dyn_state = Rc::new(self.state);
+            }
+            node.state = self.state;
+            node.vertical = self.vertical;
+            node.reverse = self.reverse;
+            node.fling_behavior = self.fling_behavior.clone();
+            if node.enabled && !self.enabled {
+                node.drag.cancel();
+                node.drag.stop_fling();
+            }
+            node.enabled = self.enabled;
         }
     }
 
-    fn update(&self, node: &mut LazyScrollNode) {
-        // A fling scrolls the state it started with: a new state stops it (the old one's
-        // owner may be going, D240).
-        if node.state != self.state {
-            node.drag.stop_fling();
-        }
-        node.state = self.state;
-        node.vertical = self.vertical;
-        node.reverse = self.reverse;
-        if node.enabled && !self.enabled {
-            node.drag.cancel();
-            node.drag.stop_fling();
-        }
-        node.enabled = self.enabled;
-    }
-
-    fn same(&self, other: &Self) -> bool {
-        other.vertical == self.vertical
-            && other.reverse == self.reverse
-            && other.enabled == self.enabled
-            && other.state.same(&self.state)
+    fn same(&self, other: &dyn ModifierNodeElement) -> bool {
+        other.downcast_ref::<LazyScrollElement>().is_some_and(|other| {
+            other.vertical == self.vertical
+                && other.reverse == self.reverse
+                && other.enabled == self.enabled
+                && other.state.same(&self.state)
+                && same_fling(&other.fling_behavior, &self.fling_behavior)
+        })
     }
 
     fn name(&self) -> &'static str {
@@ -2693,13 +2789,28 @@ impl PointerInputModifierNode for LazyScrollNode {
         let flung = state;
         let outer = self.drag.outer_chain();
         let vertical = self.vertical;
+        // A drag's and a fling's deltas, through the scroll scope, carry the parents around, so
+        // what an estimated end leaves goes to them once laid out (D479, D489).
+        let set_outer: crate::scroll::OuterSetter = Rc::new(move |chain_and_source| {
+            if let Some(inner) = state.inner() {
+                *inner.scroll_outer.borrow_mut() =
+                    chain_and_source.map(|(chain, source)| (chain, vertical, reverse, source));
+            }
+        });
+        let driver = ScrollDriver {
+            state: &self.dyn_state,
+            fling_behavior: self.fling_behavior.as_ref(),
+            interaction_source: None,
+            set_outer: Some(&set_outer),
+        };
         self.drag.on_pointer_event(
             event,
             pass,
             self.vertical,
             reverse,
             context,
-            // What an estimated end leaves goes to the parents once laid out (D479).
+            &driver,
+            // The wheel: what an estimated end leaves goes to the parents once laid out (D479).
             move |delta| {
                 let outer = outer.clone();
                 state.dispatch(
@@ -2709,8 +2820,8 @@ impl PointerInputModifierNode for LazyScrollNode {
                     }),
                 )
             },
-            // As a fling's scroll, or the nested-scroll parent of the scrollables inside: its
-            // own parents get what an estimated end leaves of it too (D489).
+            // As the nested-scroll parent of the scrollables inside: its own parents get what
+            // an estimated end leaves of it too (D489).
             move |chain: &compose_ui::platform::NestedScrollChain,
                   source: compose_ui::NestedScrollSource| {
                 let outer = (!chain.is_empty()).then(|| (chain.clone(), vertical, reverse, source));

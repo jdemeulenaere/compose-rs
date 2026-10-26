@@ -148,7 +148,7 @@ fn scrolling_back_past_the_composed_items_moves_by_the_distance_asked() {
         );
     });
     assert_eq!(top(&mut ui, "row 100"), 0.0);
-    assert!(state.scroll_by(-200.0));
+    assert!(state.dispatch_raw_delta(-200.0) != 0.0);
     ui.wait_for_idle();
     assert_eq!(
         (state.first_visible_item_index(), state.first_visible_item_scroll_offset()),
@@ -271,7 +271,7 @@ fn scrolling_does_not_recompose_the_caller_of_the_list() {
     let given = *state;
     let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || Screen(given));
     take_count();
-    state.scroll_by(60.0);
+    state.dispatch_raw_delta(60.0);
     ui.wait_for_idle();
     assert_eq!(state.first_visible_item_index(), 3);
     assert_eq!(take_count(), 0, "the caller of LazyColumn recomposed on a scroll");
@@ -308,7 +308,7 @@ fn scrolling_one_row_composes_only_the_rows_coming_into_range() {
         );
     });
     take_count();
-    state.scroll_by(60.0);
+    state.dispatch_raw_delta(60.0);
     ui.wait_for_idle();
     assert_eq!(state.first_visible_item_index(), 3);
     let ran = take_count();
@@ -344,7 +344,7 @@ fn a_jump_fills_the_viewport_in_one_frame() {
             }
         );
     });
-    state.scroll_to_item(500, 0);
+    state.request_scroll_to_item(500, 0);
     ui.host().frame();
     ui.on_node_with_tag("row 500").assert_exists();
     ui.on_node_with_tag("row 549").assert_exists();
@@ -420,7 +420,7 @@ fn a_focused_item_scrolled_out_of_view_keeps_focus() {
     ui.on_node_with_tag("field").request_focus();
     ui.type_text("a");
     assert_eq!(text.get(), "a");
-    state.scroll_by(300.0);
+    state.dispatch_raw_delta(300.0);
     ui.wait_for_idle();
     ui.type_text("x");
     assert_eq!(text.get(), "ax", "the focused field didn't take the text");

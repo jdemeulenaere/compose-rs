@@ -433,14 +433,14 @@ fn composed_by_a_scroll(pattern: &'static [f32], parity: usize, start: i32, by: 
     let state = LazyListState::new(0, 0);
     let mut ui = patterned(*state, pattern, parity);
     ui.wait_for_idle();
-    state.scroll_by(3000.0 + start as f32);
+    state.dispatch_raw_delta(3000.0 + start as f32);
     ui.wait_for_idle();
     for _ in 0..3 {
         ui.host().prefetch(std::time::Instant::now() + std::time::Duration::from_secs(60));
         ui.wait_for_idle();
     }
     BODIES.with(|cell| cell.set(0));
-    state.scroll_by(by as f32);
+    state.dispatch_raw_delta(by as f32);
     ui.host().frame();
     BODIES.with(std::cell::Cell::get)
 }

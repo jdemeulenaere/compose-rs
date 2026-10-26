@@ -71,12 +71,12 @@ fn scrolling_composes_the_items_it_reaches_in_the_same_frame() {
 #[test]
 fn scroll_to_item_jumps_far_and_clamps_at_the_end() {
     let (mut ui, state) = list();
-    state.scroll_to_item(500, 0);
+    state.request_scroll_to_item(500, 0);
     ui.wait_for_idle();
     ui.on_node_with_text("item 500").assert_exists();
     assert_eq!(ui.on_node_with_tag("row 500").fetch_semantics_node().bounds.top, 0.0);
     // Past the end: the last item ends the viewport.
-    state.scroll_to_item(999, 0);
+    state.request_scroll_to_item(999, 0);
     ui.wait_for_idle();
     assert_eq!(ui.on_node_with_tag("row 999").fetch_semantics_node().bounds.bottom, 100.0);
     assert_eq!(state.first_visible_item_index(), 995);
@@ -171,7 +171,7 @@ fn scrolling_keeps_what_the_items_drew() {
     let before = ui.host().display_list();
     assert!(before.groups.len() >= 5, "{}", before.dump());
     // Less than an item: the same items, moved.
-    assert!(state.scroll_by(13.0));
+    assert!(state.dispatch_raw_delta(13.0) != 0.0);
     ui.wait_for_idle();
     assert_eq!(state.first_visible_item_scroll_offset(), 13);
     let after = ui.host().display_list();
@@ -437,7 +437,7 @@ fn a_lazy_list_has_scroll_semantics_and_scrolls_by_its_action() {
         .unwrap();
     assert_eq!((range.value, range.max_value), (100.0, 900.0));
     // At the start, nothing to scroll back by.
-    state.scroll_to_item(0, 0);
+    state.request_scroll_to_item(0, 0);
     ui.wait_for_idle();
     assert!(!ui.host().perform_semantics_action_with(
         node,
@@ -555,7 +555,7 @@ fn a_scroll_past_the_estimated_room_leaves_the_list_scrollable_until_laid_out() 
         );
     });
     // 900 px estimated on; 2,000 asked.
-    assert!(state.scroll_by(2000.0));
+    assert!(state.dispatch_raw_delta(2000.0) != 0.0);
     assert!(state.can_scroll_forward());
     ui.wait_for_idle();
     assert!(!state.can_scroll_forward(), "laid out at its end");

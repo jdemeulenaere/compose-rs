@@ -88,7 +88,7 @@ fn nested(connected: bool) -> ComposeTestRule {
     CONNECTION.with(|cell| *cell.borrow_mut() = None);
     let mut ui = ComposeTestRule::sized(IntSize::new(100, 300), move || Nested(connected));
     // The outer column scrolled 50 down: the inner one (at its top) is at 50 to 150.
-    outer().scroll_to(50);
+    outer().dispatch_raw_delta(50.0 - outer().value() as f32);
     ui.wait_for_idle();
     assert_eq!((outer().value(), inner().value()), (50, 0));
     ui

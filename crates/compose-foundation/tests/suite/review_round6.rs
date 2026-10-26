@@ -53,7 +53,7 @@ fn a_grid_keeps_its_first_item_when_its_column_count_changes() {
             });
         });
     });
-    state.scroll_to_item(30, 0);
+    state.request_scroll_to_item(30, 0);
     ui.wait_for_idle();
     assert_eq!(state.first_visible_item_index(), 30);
     ui.host().resize(IntSize::new(400, 200));
@@ -155,7 +155,7 @@ fn a_lazy_scrollbar_thumb_reaches_the_end_with_spacing() {
             VerticalScrollbar!(adapter, modifier = Modifier.fill_max_height());
         });
     });
-    list.scroll_to_item(19, 0);
+    list.request_scroll_to_item(19, 0);
     ui.wait_for_idle();
     assert!(!list.can_scroll_forward());
     let thumb = thumb(&mut ui).expect("a thumb");

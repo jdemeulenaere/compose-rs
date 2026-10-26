@@ -259,7 +259,7 @@ fn scroll_restore_with_async_items() {
         });
     });
     ui.on_node_with_text("item 0").assert_exists();
-    LIST.get().unwrap().scroll_to_item(40, 0);
+    LIST.get().unwrap().request_scroll_to_item(40, 0);
     ui.wait_for_idle();
     nav().navigate(Screen::Settings);
     ui.wait_for_idle();
@@ -437,9 +437,9 @@ fn nested_nav_in_lazy_in_nav() {
     ui.wait_for_idle();
     ui.on_node_with_tag("detail counter").perform_click();
     ui.on_node_with_text("Detail 1007 clicks: 1, note 1007").assert_exists();
-    LIST.get().unwrap().scroll_to_item(60, 0);
+    LIST.get().unwrap().request_scroll_to_item(60, 0);
     ui.wait_for_idle();
-    LIST.get().unwrap().scroll_to_item(0, 0);
+    LIST.get().unwrap().request_scroll_to_item(0, 0);
     ui.wait_for_idle();
     ui.on_node_with_text("Detail 1007 clicks: 1, note 1007").assert_exists();
     nav().navigate(Screen::Settings);

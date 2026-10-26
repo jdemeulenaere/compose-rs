@@ -35,6 +35,7 @@ dependencies = [
 name = "compose-foundation"
 version = "0.1.0"
 dependencies = [
+ "compose-animation",
  "compose-runtime",
  "compose-ui",
  "unicode-segmentation",

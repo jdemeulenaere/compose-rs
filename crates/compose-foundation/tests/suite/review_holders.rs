@@ -109,8 +109,8 @@ fn a_fling_outlives_a_keyed_scroll_state() {
 fn a_handle_copied_out_of_a_temporary_owner_is_stale() {
     let state = *LazyListState::new(3, 0);
     assert_eq!(state.first_visible_item_index(), 0, "the default, not the freed state's 3");
-    state.scroll_to_item(5, 0);
-    assert!(!state.scroll_by(10.0));
+    state.request_scroll_to_item(5, 0);
+    assert_eq!(state.dispatch_raw_delta(10.0), 0.0);
     assert_eq!(state.first_visible_item_index(), 0);
 }
 
@@ -138,7 +138,7 @@ fn a_lazy_grid_keeps_its_position_in_a_new_host() {
         );
     };
     let mut ui = compose_test(content);
-    GRID.get().unwrap().scroll_to_item(60, 10);
+    GRID.get().unwrap().request_scroll_to_item(60, 10);
     ui.wait_for_idle();
     assert_eq!(GRID.get().unwrap().first_visible_item_index(), 60);
     let bytes = ui.host().save_state().to_bytes();

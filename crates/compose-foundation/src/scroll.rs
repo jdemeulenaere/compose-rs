@@ -5,21 +5,33 @@
 //! The offset is state: the node reads it while measuring (observed, so a write by the
 //! application scrolls), and writes it when the wheel or a drag scrolls.
 
+use std::cell::Cell;
 use std::rc::Rc;
 
+use compose_animation::AnimationSpec;
 use compose_runtime::{
     ComposeArg, CoroutineScope, Job, MutableState, ObjectHandle, Owned, OwnedState, composable,
-    mutable_state_of, with_frame_nanos,
+    mutable_state_of,
 };
 use compose_ui::{
     Constraints, DrawModifierNode, DrawScope, EventContext, IntSize, LayoutModifierNode,
     Measurable, MeasureResult, MeasureScope, Modifier, ModifierNode, ModifierNodeElement,
-    NestedScrollConnection, NestedScrollSource, Offset, Outline, PointerEvent, PointerEventPass,
-    PointerEventType, PointerId, PointerInputModifierNode, Rect, platform::NestedScrollChain,
+    MutableInteractionSource, NestedScrollConnection, NestedScrollSource, Offset, Outline,
+    PointerEvent, PointerEventPass, PointerEventType, PointerId, PointerInputModifierNode, Rect,
+    platform::NestedScrollChain,
 };
 
+use crate::gestures::{
+    DefaultFlingBehavior, DragSession, FlingBehavior, LocalBoxFuture, ScrollBlock, ScrollCore,
+    ScrollScope, ScrollableState, ScrollableStateExt,
+};
+use crate::mutator::{MutatePriority, MutationInterrupted};
+
 /// How far content is scrolled, in pixels, and how far it can be, as Compose's `ScrollState`:
-/// state, so reading it in composition recomposes on scrolls, and setting it scrolls.
+/// state, so reading it in composition recomposes on scrolls. A [`ScrollableState`]: it
+/// scrolls in `scroll` blocks ([`scroll_to`](Self::scroll_to),
+/// [`animate_scroll_to`](Self::animate_scroll_to), drags and flings) or at once
+/// (`dispatch_raw_delta`), within `[0, max_value]`.
 ///
 /// A `Copy` handle of its states (D240): [`new`](Self::new) returns its owner, and
 /// [`remember_scroll_state`] keeps that in the composition. Once its owner went, it reads 0
@@ -39,6 +51,12 @@ struct ScrollStates {
     value: OwnedState<i32>,
     max: OwnedState<i32>,
     viewport: OwnedState<i32>,
+    /// The content's length along the axis, as last laid out.
+    content_size: OwnedState<i32>,
+    /// The fraction of a pixel scrolled but not shown, as Compose's `accumulator`.
+    accumulator: Cell<f32>,
+    /// Its scrolls' mutex and flags.
+    core: ScrollCore,
 }
 
 impl ScrollState {
@@ -48,6 +66,9 @@ impl ScrollState {
             value: mutable_state_of(initial.max(0)),
             max: mutable_state_of(i32::MAX),
             viewport: mutable_state_of(0),
+            content_size: mutable_state_of(0),
+            accumulator: Cell::new(0.0),
+            core: ScrollCore::new(),
         };
         let (value, max, viewport) =
             (states.value.handle(), states.max.handle(), states.viewport.handle());
@@ -74,9 +95,20 @@ impl ScrollState {
         self.read(self.value, 0)
     }
 
-    /// The largest offset, known once laid out.
+    /// The largest offset, known once laid out (`i32::MAX` before), as `maxValue`.
     pub fn max_value(&self) -> i32 {
         self.read(self.max, 0)
+    }
+
+    /// Sets the largest offset (the layout's), the value coerced into it at once, as Compose's
+    /// `maxValue` setter.
+    fn set_max_value(&self, max: i32) {
+        if self.max.try_get() != Some(max) {
+            self.write(self.max, max);
+        }
+        if self.value.try_get().is_some_and(|value| value > max) {
+            self.write(self.value, max);
+        }
     }
 
     /// The viewport's length along the scroll's axis, in pixels, as `viewportSize` (a state
@@ -85,10 +117,89 @@ impl ScrollState {
         self.read(self.viewport, 0)
     }
 
-    /// Scrolls to `value` (clamped to the content at the next layout), as `scrollTo`, without
-    /// animation.
-    pub fn scroll_to(&self, value: i32) {
-        self.write(self.value, value.max(0));
+    /// The interaction source its container reports its drags to, as `interactionSource`.
+    pub fn interaction_source(&self) -> MutableInteractionSource {
+        self.object.try_get().map_or_else(MutableInteractionSource::new, |states| {
+            states.core.interaction_source.clone()
+        })
+    }
+
+    /// Consumes `delta` pixels within `[0, max_value]`, the fraction of a pixel carried to the
+    /// next, as Compose's `ScrollState`'s consumer; returns the pixels used.
+    fn consume(&self, delta: f32) -> f32 {
+        let Some(states) = self.object.try_get() else { return 0.0 };
+        let value = self.value();
+        let absolute = value as f32 + delta + states.accumulator.get();
+        let new_value = absolute.clamp(0.0, self.max_value().max(0) as f32);
+        let changed = absolute != new_value;
+        let consumed = new_value - value as f32;
+        let consumed_int = consumed.round() as i32;
+        if consumed_int != 0 {
+            // The layout read the value: the write measures it again.
+            self.write(self.value, value + consumed_int);
+        }
+        states.accumulator.set(consumed - consumed_int as f32);
+        // Without a floating-point rounding error when nothing was cut.
+        if changed { consumed } else { delta }
+    }
+
+    /// Scrolls to `value` (within `[0, max_value]`) in a scroll of the default priority, as
+    /// `scrollTo`; returns the pixels it moved.
+    pub async fn scroll_to(&self, value: i32) -> Result<f32, MutationInterrupted> {
+        self.scroll_by((value - self.value()) as f32).await
+    }
+
+    /// Scrolls to `value` along `spec` (Compose's default: `spring()`), as `animateScrollTo`.
+    pub async fn animate_scroll_to(
+        &self,
+        value: i32,
+        spec: impl Into<AnimationSpec>,
+    ) -> Result<(), MutationInterrupted> {
+        self.animate_scroll_by((value - self.value()) as f32, spec).await.map(|_| ())
+    }
+}
+
+impl ScrollableState for ScrollState {
+    fn scroll_boxed<'a>(
+        &'a self,
+        priority: MutatePriority,
+        block: ScrollBlock<'a>,
+    ) -> LocalBoxFuture<'a, Result<(), MutationInterrupted>> {
+        let Some(states) = self.object.get() else { return Box::pin(async { Ok(()) }) };
+        let state = *self;
+        Box::pin(async move {
+            states.core.scroll(priority, Rc::new(move |delta| state.consume(delta)), block).await
+        })
+    }
+
+    fn dispatch_raw_delta(&self, delta: f32) -> f32 {
+        self.consume(delta)
+    }
+
+    fn is_scroll_in_progress(&self) -> bool {
+        self.object.try_get().is_some_and(|states| states.core.is_scroll_in_progress())
+    }
+
+    /// Whether `value < max_value`, as `canScrollForward`.
+    fn can_scroll_forward(&self) -> bool {
+        self.value() < self.max_value()
+    }
+
+    /// Whether `value > 0`, as `canScrollBackward`.
+    fn can_scroll_backward(&self) -> bool {
+        self.value() > 0
+    }
+
+    fn last_scrolled_forward(&self) -> bool {
+        self.object.try_get().is_some_and(|states| states.core.last_scrolled_forward())
+    }
+
+    fn last_scrolled_backward(&self) -> bool {
+        self.object.try_get().is_some_and(|states| states.core.last_scrolled_backward())
+    }
+
+    fn internal_interaction_source(&self) -> Option<MutableInteractionSource> {
+        self.object.try_get().map(|states| states.core.interaction_source.clone())
     }
 }
 
@@ -120,21 +231,87 @@ pub trait ScrollModifiers {
     fn vertical_scroll(self, state: ScrollState) -> Modifier;
     /// Scrolls the content horizontally, as `Modifier.horizontalScroll(state)`.
     fn horizontal_scroll(self, state: ScrollState) -> Modifier;
+    /// The same with Compose's optional parameters, as `Modifier.verticalScroll(state, enabled,
+    /// flingBehavior, reverseScrolling)`: `enabled = false` ignores drags and the wheel (the
+    /// state still scrolls), `fling_behavior` (`None`: the default) is what a release does, and
+    /// `reverse_scrolling` starts the content at the bottom, scrolled from there.
+    fn vertical_scroll_with(
+        self,
+        state: ScrollState,
+        enabled: bool,
+        fling_behavior: Option<Rc<dyn FlingBehavior>>,
+        reverse_scrolling: bool,
+    ) -> Modifier;
+    /// As `Modifier.horizontalScroll(state, enabled, flingBehavior, reverseScrolling)`.
+    fn horizontal_scroll_with(
+        self,
+        state: ScrollState,
+        enabled: bool,
+        fling_behavior: Option<Rc<dyn FlingBehavior>>,
+        reverse_scrolling: bool,
+    ) -> Modifier;
 }
 
 impl ScrollModifiers for Modifier {
     fn vertical_scroll(self, state: ScrollState) -> Modifier {
-        self.then_custom(ScrollElement { state, vertical: true })
+        self.vertical_scroll_with(state, true, None, false)
     }
 
     fn horizontal_scroll(self, state: ScrollState) -> Modifier {
-        self.then_custom(ScrollElement { state, vertical: false })
+        self.horizontal_scroll_with(state, true, None, false)
+    }
+
+    fn vertical_scroll_with(
+        self,
+        state: ScrollState,
+        enabled: bool,
+        fling_behavior: Option<Rc<dyn FlingBehavior>>,
+        reverse_scrolling: bool,
+    ) -> Modifier {
+        self.then_custom(ScrollElement {
+            state,
+            vertical: true,
+            enabled,
+            fling_behavior,
+            reverse_scrolling,
+        })
+    }
+
+    fn horizontal_scroll_with(
+        self,
+        state: ScrollState,
+        enabled: bool,
+        fling_behavior: Option<Rc<dyn FlingBehavior>>,
+        reverse_scrolling: bool,
+    ) -> Modifier {
+        self.then_custom(ScrollElement {
+            state,
+            vertical: false,
+            enabled,
+            fling_behavior,
+            reverse_scrolling,
+        })
     }
 }
 
 struct ScrollElement {
     state: ScrollState,
     vertical: bool,
+    enabled: bool,
+    fling_behavior: Option<Rc<dyn FlingBehavior>>,
+    reverse_scrolling: bool,
+}
+
+/// Whether two optional fling behaviors are the same (by identity).
+pub(crate) fn same_fling(
+    a: &Option<Rc<dyn FlingBehavior>>,
+    b: &Option<Rc<dyn FlingBehavior>>,
+) -> bool {
+    match (a, b) {
+        (None, None) => true,
+        (Some(a), Some(b)) => Rc::ptr_eq(a, b),
+        _ => false,
+    }
 }
 
 impl ModifierNodeElement for ScrollElement {
@@ -142,26 +319,45 @@ impl ModifierNodeElement for ScrollElement {
     fn create(&self) -> ScrollNode {
         ScrollNode {
             state: self.state,
+            dyn_state: Rc::new(self.state),
             vertical: self.vertical,
+            enabled: self.enabled,
+            fling_behavior: self.fling_behavior.clone(),
+            reverse_scrolling: self.reverse_scrolling,
             drag: DragScroller::default(),
-            fraction: Rc::default(),
             laid_out: 0,
             rtl: false,
+        })
+    }
+
+    fn update(&self, node: &mut dyn ModifierNode) {
+        if let Some(node) = node.downcast_mut::<ScrollNode>() {
+            // A fling scrolls the state it started with: a new state stops it (the old one's
+            // owner may be going, D240).
+            if node.state != self.state {
+                node.drag.cancel();
+                node.drag.stop_fling();
+                node.dyn_state = Rc::new(self.state);
+            }
+            if node.enabled && !self.enabled {
+                node.drag.cancel();
+            }
+            node.state = self.state;
+            node.vertical = self.vertical;
+            node.enabled = self.enabled;
+            node.fling_behavior = self.fling_behavior.clone();
+            node.reverse_scrolling = self.reverse_scrolling;
         }
     }
 
-    fn update(&self, node: &mut ScrollNode) {
-        // A fling scrolls the state it started with: a new state stops it (the old one's
-        // owner may be going, D240).
-        if node.state != self.state {
-            node.drag.stop_fling();
-        }
-        node.state = self.state;
-        node.vertical = self.vertical;
-    }
-
-    fn same(&self, other: &Self) -> bool {
-        other.vertical == self.vertical && other.state.same(&self.state)
+    fn same(&self, other: &dyn ModifierNodeElement) -> bool {
+        other.downcast_ref::<ScrollElement>().is_some_and(|other| {
+            other.vertical == self.vertical
+                && other.state.same(&self.state)
+                && other.enabled == self.enabled
+                && other.reverse_scrolling == self.reverse_scrolling
+                && same_fling(&other.fling_behavior, &self.fling_behavior)
+        })
     }
 
     fn name(&self) -> &'static str {
@@ -202,51 +398,6 @@ fn event_time(event: &PointerEvent) -> u64 {
     if event.time_nanos != 0 { event.time_nanos } else { compose_runtime::platform::now_nanos() }
 }
 
-/// Scrolls with `scroll_by` (pixels towards the end; returns those used) along a fling starting
-/// at `velocity` (pixels per second), frame by frame, until its distance is covered or an edge
-/// stops it, as Compose's default fling behaviour.
-///
-/// `on_end` gets the velocity left when it ends (none once its distance is covered; what an edge
-/// stopped).
-fn fling(
-    velocity: f32,
-    density: f32,
-    scroll_by: Rc<dyn Fn(f32) -> f32>,
-    on_end: impl FnOnce(f32) + 'static,
-) -> Job {
-    let course = crate::fling::Fling::new(velocity, density);
-    CoroutineScope::new().launch(async move {
-        let start = with_frame_nanos(|time| time).await;
-        let mut covered = 0.0f32;
-        loop {
-            let now = with_frame_nanos(|time| time).await;
-            let fraction = if course.duration_nanos == 0 {
-                1.0
-            } else {
-                now.saturating_sub(start) as f32 / course.duration_nanos as f32
-            };
-            let target = course.distance_at(fraction);
-            let delta = target - covered;
-            covered = target;
-            let used = if delta == 0.0 { 0.0 } else { scroll_by(delta) };
-            // An edge took less than asked: the fling ends there.
-            if fraction >= 1.0 {
-                on_end(0.0);
-                break;
-            }
-            if (delta - used).abs() > 0.5 {
-                // Its velocity there: the spline's slope (it slows down fast), as Compose's
-                // `velocityLeft`.
-                let step = 0.01f32.min(fraction);
-                let seconds = course.duration_nanos as f32 / 1e9;
-                let slope = (course.distance_at(fraction) - course.distance_at(fraction - step))
-                    / (step * seconds).max(f32::EPSILON);
-                on_end(slope);
-                break;
-            }
-        }
-    })
-}
 
 /// Scrolls by `delta` (pixels towards the end, before a right-to-left reversal) through the
 /// nested-scroll `chain`, as Compose's scrollables with their `NestedScrollDispatcher`: the
@@ -281,15 +432,25 @@ pub(crate) fn touch_slop(context: &EventContext<'_>) -> f32 {
 
 struct ScrollNode {
     state: ScrollState,
+    /// The state as a scrollable state, for drags and flings.
+    dyn_state: Rc<dyn ScrollableState>,
     vertical: bool,
+    enabled: bool,
+    fling_behavior: Option<Rc<dyn FlingBehavior>>,
+    reverse_scrolling: bool,
     drag: DragScroller,
-    /// The fraction of a pixel scrolled but not yet shown: shared with its semantics' scroll
-    /// action.
-    fraction: Rc<std::cell::Cell<f32>>,
     /// The offset the last layout used.
     laid_out: i32,
     /// Horizontal in a right-to-left layout: its content starts at the right.
     rtl: bool,
+}
+
+impl ScrollNode {
+    /// Whether the content runs against the pointer: scrolled from its end
+    /// (`reverse_scrolling`), or a row right to left (both: neither).
+    fn mirrored(&self, rtl: bool) -> bool {
+        self.reverse_scrolling ^ (!self.vertical && rtl)
+    }
 }
 
 impl compose_ui::SemanticsModifierNode for ScrollNode {
@@ -299,19 +460,24 @@ impl compose_ui::SemanticsModifierNode for ScrollNode {
         let range = compose_ui::ScrollAxisRange {
             value: self.state.value() as f32,
             max_value: self.state.max_value() as f32,
-            reverse_scrolling: false,
+            reverse_scrolling: self.reverse_scrolling,
         };
         if self.vertical {
             config.set_vertical_scroll_axis_range(range);
         } else {
             config.set_horizontal_scroll_axis_range(range);
         }
-        let (state, vertical, fraction) = (self.state, self.vertical, self.fraction.clone());
-        config.scroll_by(None, move |x, y| {
-            // Towards the content's end (its value growing), as Compose's (D491).
-            let delta = if vertical { y } else { x };
-            delta != 0.0 && scroll_carrying(&state, delta, &fraction) != 0.0
-        });
+    }
+
+    fn perform_action(
+        &mut self,
+        action: compose_ui::SemanticsAction,
+        _context: &mut compose_ui::EventContext<'_>,
+    ) -> bool {
+        let compose_ui::SemanticsAction::ScrollBy { x, y } = action else { return false };
+        // Towards the content's end (its value growing), as Compose's (D491).
+        let delta = if self.vertical { y } else { x };
+        delta != 0.0 && self.state.dispatch_raw_delta(delta) != 0.0
     }
 }
 
@@ -319,7 +485,8 @@ impl ModifierNode for ScrollNode {
     fn as_semantics(&mut self) -> Option<&mut dyn compose_ui::SemanticsModifierNode> {
         Some(self)
     }
-    fn on_release(&mut self, _context: &mut compose_ui::ReleaseContext<'_>) {
+    fn on_detach(&mut self, _context: &mut compose_ui::DetachContext<'_>) {
+        self.drag.cancel();
         self.drag.stop_fling();
     }
     fn on_reset(&mut self, _context: &mut compose_ui::NodeContext<'_>) {
@@ -341,12 +508,13 @@ impl ModifierNode for ScrollNode {
     }
     /// Scrolls the least that shows `rect` (its start, if it's longer than the viewport).
     fn bring_into_view(&mut self, rect: Rect, viewport: IntSize) -> Option<Rect> {
-        let (start, end, length) = scroll_axis(rect, viewport, self.vertical, self.rtl);
+        let mirrored = self.mirrored(self.rtl);
+        let (start, end, length) = scroll_axis(rect, viewport, self.vertical, mirrored);
         // Where it will be once the scrolling asked for (not yet laid out) is.
         let pending = (self.state.value() - self.laid_out) as f32;
         let delta = bring_into_view_delta(start - pending, end - pending, length);
-        let used = scroll_carrying(&self.state, delta, &self.fraction);
-        Some(scrolled_rect(rect, used, self.vertical, self.rtl))
+        let used = if delta == 0.0 { 0.0 } else { self.state.dispatch_raw_delta(delta) };
+        Some(scrolled_rect(rect, used, self.vertical, mirrored))
     }
 }
 
@@ -461,24 +629,28 @@ impl LayoutModifierNode for ScrollNode {
         let height = constraints.constrain_height(placeable.height);
         let max =
             if self.vertical { placeable.height - height } else { placeable.width - width }.max(0);
-        if self.state.max_value() != max {
-            self.state.write(self.state.max, max);
-        }
+        // Before placing: the value is coerced into the new range at once, as Compose's.
+        self.state.set_max_value(max);
         let viewport = if self.vertical { height } else { width };
         if self.state.viewport_size() != viewport {
             self.state.write(self.state.viewport, viewport);
         }
-        let value = self.state.value().min(max);
-        self.laid_out = value;
-        if value != self.state.value() {
-            self.state.write(self.state.value, value);
+        if let Some(states) = self.state.object.try_get() {
+            let content = if self.vertical { placeable.height } else { placeable.width };
+            if states.content_size.try_get() != Some(content) {
+                let _ = states.content_size.try_set(content);
+            }
         }
+        let value = self.state.value().clamp(0, max);
+        self.laid_out = value;
+        // Scrolled from the end when reversed, as Compose's `ScrollNode`.
+        let offset = if self.reverse_scrolling { value - max } else { -value };
         // Relatively: a horizontal scroll's content starts at the right in a right-to-left
         // layout, and scrolls toward the left.
         if self.vertical {
-            scope.place_relative(&placeable, 0, -value);
+            scope.place_relative(&placeable, 0, offset);
         } else {
-            scope.place_relative(&placeable, -value, 0);
+            scope.place_relative(&placeable, offset, 0);
         }
         scope.layout(width, height)
     }
@@ -511,25 +683,27 @@ impl PointerInputModifierNode for ScrollNode {
         _bounds: IntSize,
         context: &mut EventContext<'_>,
     ) {
-        let (vertical, state) = (self.vertical, self.state);
-        let fraction = &*self.fraction;
-        let reverse = !vertical && context.layout_direction() == compose_ui::LayoutDirection::Rtl;
-        let flung = state;
+        if !self.enabled {
+            return;
+        }
+        let state = self.state;
+        let reverse = self.mirrored(context.layout_direction() == compose_ui::LayoutDirection::Rtl);
+        let driver = ScrollDriver {
+            state: &self.dyn_state,
+            fling_behavior: self.fling_behavior.as_ref(),
+            interaction_source: None,
+            set_outer: None,
+        };
         self.drag.on_pointer_event(
             event,
             pass,
-            vertical,
+            self.vertical,
             reverse,
             context,
-            |delta| scroll_carrying(&state, delta, fraction),
+            &driver,
+            |delta| state.dispatch_raw_delta(delta),
             move |_: &NestedScrollChain, _: NestedScrollSource| {
-                let fraction = std::cell::Cell::new(0.0f32);
-                Rc::new(move |delta| {
-                    let mut left = fraction.get();
-                    let used = scroll_state_by(&flung, delta, &mut left);
-                    fraction.set(left);
-                    used
-                })
+                Rc::new(move |delta| state.dispatch_raw_delta(delta))
             },
         );
     }
@@ -539,32 +713,44 @@ impl PointerInputModifierNode for ScrollNode {
     }
 }
 
-/// `scroll_state_by` with the fraction carried in `fraction`.
-fn scroll_carrying(state: &ScrollState, delta: f32, fraction: &std::cell::Cell<f32>) -> f32 {
-    let mut left = fraction.get();
-    let used = scroll_state_by(state, delta, &mut left);
-    fraction.set(left);
-    used
+/// What a scrollable node's drags and flings drive: its state (a drag holds its scroll, a fling
+/// runs in one), its fling behavior (`None`: the default), the interaction source told of drags
+/// (`None`: the state's own, if any), and for a lazy list, where its scope's deltas learn the
+/// nested-scroll parents around (D479).
+pub(crate) struct ScrollDriver<'a> {
+    pub state: &'a Rc<dyn ScrollableState>,
+    pub fling_behavior: Option<&'a Rc<dyn FlingBehavior>>,
+    pub interaction_source: Option<&'a MutableInteractionSource>,
+    pub set_outer: Option<&'a OuterSetter>,
 }
 
-/// Scrolls `state` by `delta` pixels, within its range, carrying the fraction of a pixel left
-/// over to the next delta (slow drags and fine wheels add up); returns the pixels used.
-fn scroll_state_by(state: &ScrollState, delta: f32, fraction: &mut f32) -> f32 {
-    let old = state.value();
-    let max = state.max_value().max(0);
-    let start = old as f32 + *fraction;
-    let clamped = (start + delta).clamp(0.0, max as f32);
-    let new = clamped.round();
-    *fraction = clamped - new;
-    if new as i32 != old {
-        // The layout read the value: the write measures it again.
-        state.write(state.value, new as i32);
+/// Tells a lazy list's scope the nested-scroll parents its next deltas come through (`None`
+/// after them).
+pub(crate) type OuterSetter = Rc<dyn Fn(Option<(NestedScrollChain, NestedScrollSource)>)>;
+
+/// Scrolls `delta` through `scope`, the parents named to `set_outer` around it.
+fn scope_scroll(
+    scope: &ScrollScope,
+    set_outer: Option<&OuterSetter>,
+    chain: &NestedScrollChain,
+    source: NestedScrollSource,
+    delta: f32,
+) -> f32 {
+    match set_outer {
+        Some(set_outer) => {
+            set_outer((!chain.is_empty()).then(|| (chain.clone(), source)));
+            let used = scope.scroll_by(delta);
+            set_outer(None);
+            used
+        }
+        None => scope.scroll_by(delta),
     }
-    clamped - start
 }
 
 /// The wheel and drags of a scrollable node, as Compose's `scrollable`: `scroll_by` gets the
-/// deltas (positive towards the end) and returns the part it used.
+/// wheel's deltas (positive towards the end) and returns the part it used; a drag holds the
+/// state's scroll (`ScrollDriver`) and its deltas go through the scroll's scope; a release
+/// flings in a scroll of its own, with the fling behavior.
 ///
 /// A drag is taken by the innermost scrollable once past the touch slop (its Main pass, which
 /// runs from the target outward: an outer one sees it consumed), then in the Initial pass, so
@@ -580,6 +766,10 @@ pub(crate) struct DragScroller {
     pressed: Vec<(PointerId, Offset)>,
     /// A fling going on: a press stops it (and does nothing else).
     fling: Option<Job>,
+    /// The drag's hold on the state's scroll, while it scrolls.
+    session: Option<DragSession>,
+    /// Where the drag going on was told (to tell it ended).
+    dragged: Option<MutableInteractionSource>,
     /// The nested-scroll connections around, as the last press or wheel turn found them.
     chain: NestedScrollChain,
     /// The axis, for a cancel's fling dispatch.
@@ -622,9 +812,8 @@ impl DragScroller {
         (!self.chain.is_empty()).then(|| self.chain.clone())
     }
 
-    /// `scroll_by` scrolls during the event; `flinger` gives a scroll usable later, by a
-    /// fling's task (a touch let go while moving flings, as on Android) or as the nested-scroll
-    /// parent of the scrollables inside.
+    /// `scroll_by` scrolls the wheel's deltas during the event; `flinger` gives a scroll usable
+    /// later, as the nested-scroll parent of the scrollables inside.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn on_pointer_event(
         &mut self,
@@ -633,6 +822,7 @@ impl DragScroller {
         vertical: bool,
         reverse: bool,
         context: &EventContext<'_>,
+        driver: &ScrollDriver<'_>,
         mut scroll_by: impl FnMut(f32) -> f32,
         flinger: impl Fn(&NestedScrollChain, NestedScrollSource) -> Rc<dyn Fn(f32) -> f32>,
     ) {
@@ -656,9 +846,22 @@ impl DragScroller {
         let mut reversed =
             move |delta: f32| if reverse { -scroll_by(-delta) } else { scroll_by(delta) };
         let chain = self.chain.clone();
-        // Through the connections around.
-        let mut scroll_by = move |delta: f32| {
+        // The wheel, through the connections around.
+        let mut wheel_by = move |delta: f32| {
             dispatch_scroll(&chain, vertical, delta, NestedScrollSource::UserInput, &mut reversed)
+        };
+        // A drag's deltas: through the connections around, then the drag's scroll scope.
+        let chain = self.chain.clone();
+        let set_outer = driver.set_outer;
+        let drag_by = |session: &Option<DragSession>, delta: f32| {
+            let Some(scope) = session.as_ref().and_then(DragSession::scope) else { return };
+            let mut own = |delta: f32| {
+                let delta = if reverse { -delta } else { delta };
+                let used =
+                    scope_scroll(&scope, set_outer, &chain, NestedScrollSource::UserInput, delta);
+                if reverse { -used } else { used }
+            };
+            dispatch_scroll(&chain, vertical, delta, NestedScrollSource::UserInput, &mut own);
         };
         let along_axis = move |offset: Offset| if vertical { offset.y } else { offset.x };
         // Where the pointer is in the window: the deltas don't count the content's own moves (a
@@ -671,7 +874,7 @@ impl DragScroller {
                     return;
                 }
                 // The scrollables and connections around had what's left along the axis.
-                scroll_by(delta);
+                wheel_by(delta);
                 if vertical {
                     event.scroll_delta.y = 0.0;
                 } else {
@@ -714,7 +917,7 @@ impl DragScroller {
                     drag.last = position;
                     event.consume();
                     // Dragging content up scrolls down.
-                    scroll_by(-along);
+                    drag_by(&self.session, -along);
                 }
             }
             (PointerEventType::Move, PointerEventPass::Main) => {
@@ -733,8 +936,19 @@ impl DragScroller {
                 if along.abs() > slop {
                     drag.scrolling = true;
                     event.consume();
+                    // The drag holds the state's scroll (a fling or an animated scroll stops),
+                    // and says so to the interaction source.
+                    self.session = Some(DragSession::start(driver.state.clone()));
+                    let source = driver
+                        .interaction_source
+                        .cloned()
+                        .or_else(|| driver.state.internal_interaction_source());
+                    if let Some(source) = &source {
+                        source.set_dragged(true);
+                    }
+                    self.dragged = source;
                     // What moved past the slop scrolls.
-                    scroll_by(-(along - slop.copysign(along)));
+                    drag_by(&self.session, -(along - slop.copysign(along)));
                 }
             }
             (PointerEventType::Release, PointerEventPass::Initial) => {
@@ -757,6 +971,7 @@ impl DragScroller {
                     return;
                 }
                 event.consume();
+                self.end_drag();
                 // A touch let go while moving: the content goes on, slowing down.
                 drag.tracker.add(event_time(event), along_axis(position));
                 // The platform's fling bounds (`ViewConfiguration`, D907).
@@ -769,22 +984,27 @@ impl DragScroller {
                     0.0
                 };
                 let density = context.density().density;
-                self.end(velocity, density, configuration.minimum_fling_velocity, reverse, flinger);
+                self.end(velocity, density, reverse, driver);
             }
             _ => {}
         }
     }
 
+    /// The drag's hold on the state's scroll ends, and the interaction source hears it.
+    fn end_drag(&mut self) {
+        if let Some(session) = self.session.take() {
+            session.end();
+        }
+        if let Some(source) = self.dragged.take() {
+            source.set_dragged(false);
+        }
+    }
+
     /// A drag's end at `velocity` (towards the end): the connections around take their part
-    /// first, the content flings with the rest, then they hear how it ended.
-    fn end(
-        &mut self,
-        velocity: f32,
-        density: f32,
-        minimum: f32,
-        reverse: bool,
-        flinger: impl Fn(&NestedScrollChain, NestedScrollSource) -> Rc<dyn Fn(f32) -> f32>,
-    ) {
+    /// first, the content flings with the rest in a scroll of its own (the fling behavior, the
+    /// default's spline at `density` if none), then they hear how it ended, as Compose's
+    /// `onScrollStopped`.
+    fn end(&mut self, velocity: f32, density: f32, reverse: bool, driver: &ScrollDriver<'_>) {
         let vertical = self.vertical;
         let chain = self.chain.clone();
         let axis = move |value: f32| {
@@ -792,33 +1012,55 @@ impl DragScroller {
         };
         let along_axis = move |offset: Offset| if vertical { offset.y } else { offset.x };
         let velocity = velocity + along_axis(chain.pre_fling(axis(-velocity)));
-        if velocity.abs() > minimum {
-            let scroll = flinger(&chain, NestedScrollSource::SideEffect);
+        let state = driver.state.clone();
+        let behavior: Rc<dyn FlingBehavior> = match driver.fling_behavior {
+            Some(behavior) => behavior.clone(),
+            None => Rc::new(DefaultFlingBehavior::new(density)),
+        };
+        let set_outer = driver.set_outer.cloned();
+        self.fling = Some(CoroutineScope::new().launch(async move {
             let flung = chain.clone();
-            let scroll: Rc<dyn Fn(f32) -> f32> = Rc::new(move |delta: f32| {
-                let mut reversed =
-                    |delta: f32| if reverse { -scroll(-delta) } else { scroll(delta) };
-                dispatch_scroll(
-                    &flung,
-                    vertical,
-                    delta,
-                    NestedScrollSource::SideEffect,
-                    &mut reversed,
-                )
-            });
-            let on_end = move |left: f32| {
-                chain.post_fling(axis(-(velocity - left)), axis(-left));
-            };
-            self.fling = Some(fling(velocity, density, scroll, on_end));
-        } else {
-            chain.post_fling(Offset::ZERO, axis(-velocity));
-        }
+            let _ = state
+                .scroll(MutatePriority::Default, move |scope| async move {
+                    // The fling's deltas, the state's way (as its velocity): through the
+                    // connections around, then the scroll's scope.
+                    let nested = ScrollScope::new(move |state_delta: f32| {
+                        let delta = if reverse { -state_delta } else { state_delta };
+                        let mut own = |delta: f32| {
+                            let delta = if reverse { -delta } else { delta };
+                            let used = scope_scroll(
+                                &scope,
+                                set_outer.as_ref(),
+                                &flung,
+                                NestedScrollSource::SideEffect,
+                                delta,
+                            );
+                            if reverse { -used } else { used }
+                        };
+                        let used = dispatch_scroll(
+                            &flung,
+                            vertical,
+                            delta,
+                            NestedScrollSource::SideEffect,
+                            &mut own,
+                        );
+                        if reverse { -used } else { used }
+                    });
+                    // The velocity the state's way, as Compose's `reverseIfNeeded`.
+                    let toward_state = if reverse { -velocity } else { velocity };
+                    let left = behavior.perform_fling(nested, toward_state).await;
+                    let left = if reverse { -left } else { left };
+                    chain.post_fling(axis(-(velocity - left)), axis(-left));
+                })
+                .await;
+        }));
     }
 
     /// The gesture is cancelled: a drag going on stops without velocity, as Compose's
     /// `onDragStopped(Zero)` (the connections around still hear it end).
     pub(crate) fn cancel(&mut self) {
         self.pressed.clear();
+        self.end_drag();
         if self.drag.take().is_some_and(|drag| drag.scrolling) {
             let chain = self.chain.clone();
             chain.pre_fling(Offset::ZERO);
