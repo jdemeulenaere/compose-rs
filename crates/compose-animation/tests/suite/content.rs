@@ -57,7 +57,9 @@ fn a_transform_without_animation_switches_at_once() {
         );
     });
     count.set(1);
-    ui.advance_time_by(Duration::from_millis(16));
+    // A frame recomposes for the change (Compose recomposes only on frames, D900), the next
+    // ends the transition, which has nothing to animate.
+    ui.advance_time_by(Duration::from_millis(32));
     ui.on_node_with_text("value 1").assert_exists();
     ui.on_node_with_text("value 0").assert_does_not_exist();
 }

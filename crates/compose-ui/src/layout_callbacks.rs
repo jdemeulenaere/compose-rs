@@ -222,6 +222,34 @@ impl UiTree {
         any
     }
 
+    /// The bounds in the root of semantics node `node` (its semantics modifier's layer), in
+    /// pixels: unclipped, at its position through the graphics layers around it, as Compose's
+    /// `unclippedBoundsInRoot`; and clipped by the clips around it (its own outside its
+    /// semantics, its ancestors'), as `SemanticsNode.boundsInRoot`. `None` if it has no
+    /// semantics or isn't placed where the root shows it. For tests' bounds assertions.
+    pub fn semantics_bounds_in_root(&mut self, node: NodeId) -> Option<(Rect, Rect)> {
+        self.get(node)?;
+        let (_, layer) = self.own_semantics(node)?;
+        if !self.is_placed_in_root(node) {
+            return None;
+        }
+        let value = self.node(node);
+        let mut layer_of_entry = 0;
+        let mut entry = None;
+        for (index, bits) in value.capabilities.iter().enumerate() {
+            if entry.is_none() && layer_of_entry == layer && bits & capability::SEMANTICS != 0 {
+                entry = Some(index);
+            }
+            if bits & capability::LAYOUT != 0 {
+                layer_of_entry += 1;
+            }
+        }
+        let coordinates = self.coordinates(node, layer, entry.unwrap_or(0));
+        let size = self.node(node).layers[layer].measured;
+        let unclipped = Rect::from_offset_size(coordinates.position_in_root, size.into());
+        Some((unclipped, coordinates.clipped_bounds))
+    }
+
     /// Whether `node` and its ancestors are placed: laid out where the root shows it.
     fn is_placed_in_root(&self, node: NodeId) -> bool {
         let mut current = Some(node);

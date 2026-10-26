@@ -31,7 +31,7 @@ fn texts(ui: &mut ComposeTestRule, shift: f32) -> Vec<(String, [f32; 4])> {
     let count = ui.count_nodes(&matcher);
     let mut texts: Vec<(String, [f32; 4])> = (0..count)
         .map(|index| {
-            let node = ui.on_all_nodes(matcher.clone(), index).fetch_semantics_node();
+            let node = ui.on_all_nodes(matcher.clone()).get(index).fetch_semantics_node();
             let text = node.config.all_text().collect::<Vec<_>>().join("");
             let bounds = node.bounds;
             (text, [bounds.left, bounds.top - shift, bounds.right, bounds.bottom - shift])
@@ -64,7 +64,7 @@ fn scrolling_content(ui: &mut ComposeTestRule) -> Option<[f32; 4]> {
     if ui.count_nodes(&matcher) == 0 {
         return None;
     }
-    let bounds = ui.on_all_nodes(matcher, 0).fetch_semantics_node().bounds;
+    let bounds = ui.on_all_nodes(matcher).get(0).fetch_semantics_node().bounds;
     Some([bounds.left, bounds.top, bounds.right, bounds.bottom])
 }
 

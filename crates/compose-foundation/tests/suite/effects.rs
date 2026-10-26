@@ -64,17 +64,23 @@ fn delay_waits_for_the_test_clock() {
         }
     }
     let mut ui = compose_test(Screen);
-    // With the clock advancing on its own, waiting for idle lets the delay pass.
+    // The clock advancing on its own runs frames while they're needed, not past delays, as
+    // Compose's (D900): the delay waits for the clock.
+    ui.on_node_with_text("shown").assert_does_not_exist();
+    ui.advance_time_by(Duration::from_millis(1000));
     ui.on_node_with_text("shown").assert_exists();
 
     let mut ui = ComposeTestRule::with_manual_clock(Screen);
-    let start = ui.current_time_millis();
+    assert_eq!(ui.current_time_millis(), 0);
     ui.on_node_with_text("shown").assert_does_not_exist();
-    ui.advance_time_by(Duration::from_millis(999));
+    ui.advance_time_by_ignoring_frame_duration(Duration::from_millis(999));
     ui.on_node_with_text("shown").assert_does_not_exist();
-    ui.advance_time_by(Duration::from_millis(1));
+    ui.advance_time_by_ignoring_frame_duration(Duration::from_millis(1));
+    // The state is written at 1000 ms; the frame that shows it comes 16 ms later.
+    ui.on_node_with_text("shown").assert_does_not_exist();
+    ui.advance_time_by_frame();
     ui.on_node_with_text("shown").assert_exists();
-    assert_eq!(ui.current_time_millis() - start, 1000);
+    assert_eq!(ui.current_time_millis(), 1016);
 }
 
 #[composable]
@@ -148,6 +154,8 @@ fn a_scope_launches_from_a_handler_and_is_cancelled_with_its_caller() {
     let handle = shown.handle();
     let mut ui = compose_test(move || Screen(handle));
     ui.on_node_with_tag("button").perform_click();
+    // The task's delay waits for the clock (D900).
+    ui.advance_time_by(Duration::from_millis(100));
     ui.on_node_with_text("1").assert_exists();
     shown.set(false);
     ui.wait_for_idle();

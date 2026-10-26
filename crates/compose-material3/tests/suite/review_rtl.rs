@@ -70,7 +70,8 @@ fn a_content_size_animation_keeps_the_contents_start_at_the_right() {
     let handle = wide.handle();
     let mut ui = ComposeTestRule::with_manual_clock(move || Growing(handle));
     ui.host().set_layout_direction(LayoutDirection::Rtl);
-    ui.wait_for_idle();
+    // The frame that recomposes for it: Compose recomposes only on frames (D900).
+    ui.advance_time_by_frame();
     assert_eq!(bounds(&mut ui, "content").right, 400.0);
     wide.set(true);
     ui.wait_for_idle();

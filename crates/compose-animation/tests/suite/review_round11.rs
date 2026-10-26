@@ -70,6 +70,8 @@ fn a_content_coming_back_while_it_leaves_springs_back_at_once() {
     );
     count.set(0);
     ui.wait_for_idle();
+    // The frame that recomposes for the change: Compose recomposes only on frames (D900).
+    ui.advance_time_by_frame();
     ui.advance_time_by(Duration::from_millis(160));
     ui.on_node_with_tag("0").assert_exists();
     let back = alphas(&mut ui);

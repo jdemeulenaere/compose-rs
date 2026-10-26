@@ -38,6 +38,8 @@ fn a_switch_reused_from_the_kept_pool_snaps_to_its_new_value() {
     flip.set(true);
     count.set(6);
     ui.wait_for_idle();
+    // The frame that recomposes for it: Compose recomposes only on frames (D900).
+    ui.advance_time_by_frame();
     let now = ui.dump_display_list();
     ui.advance_time_by(std::time::Duration::from_secs(2));
     let settled = ui.dump_display_list();
@@ -68,6 +70,8 @@ fn a_radio_button_reused_from_the_kept_pool_snaps_to_its_new_value() {
     flip.set(true);
     count.set(6);
     ui.wait_for_idle();
+    // The frame that recomposes for it: Compose recomposes only on frames (D900).
+    ui.advance_time_by_frame();
     let now = ui.dump_display_list();
     ui.advance_time_by(std::time::Duration::from_secs(2));
     let settled = ui.dump_display_list();

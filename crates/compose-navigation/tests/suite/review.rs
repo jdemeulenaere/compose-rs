@@ -171,7 +171,8 @@ fn back_during_transition_keeps_state() {
     FADE.set(true);
     let mut ui = ComposeTestRule::with_manual_clock(App);
     ui.on_node_with_tag("home counter").perform_click();
-    ui.wait_for_idle();
+    // The frame that recomposes for it: Compose recomposes only on frames (D900).
+    ui.advance_time_by_frame();
     ui.on_node_with_text("Home clicks: 1").assert_exists();
     nav().navigate(Screen::Detail(1));
     ui.advance_time_by(Duration::from_millis(100));

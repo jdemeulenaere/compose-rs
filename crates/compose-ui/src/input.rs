@@ -153,6 +153,20 @@ pub enum Key {
     MoveEnd,
     PageUp,
     PageDown,
+    /// The modifier keys, as Compose's `Key.ShiftLeft`… A host reports what they hold in
+    /// [`KeyEvent::modifiers`]; tests' key injection presses them as keys (D903).
+    ShiftLeft,
+    ShiftRight,
+    CtrlLeft,
+    CtrlRight,
+    AltLeft,
+    AltRight,
+    MetaLeft,
+    MetaRight,
+    /// The lock keys, as `Key.CapsLock`, `Key.NumLock`, `Key.ScrollLock`.
+    CapsLock,
+    NumLock,
+    ScrollLock,
     Character(char),
     Other(u32),
 }

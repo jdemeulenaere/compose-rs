@@ -114,6 +114,8 @@ pub struct SemanticsConfiguration {
     pub progress_bar_range_info: Option<ProgressBarRangeInfo>,
     /// It's a dialog (its own pane, modal), as `isDialog`.
     pub is_dialog: bool,
+    /// It's a popup (its own window over the content), as `isPopup`.
+    pub is_popup: bool,
     /// Its descendants have no semantics, as `clearAndSetSemantics`.
     pub clear_descendants: bool,
     /// The properties belong to the nearest ancestor with semantics, in both trees, as if its
@@ -213,6 +215,7 @@ impl SemanticsConfiguration {
             self.vertical_scroll_axis_range = other.vertical_scroll_axis_range;
         }
         self.is_dialog |= other.is_dialog;
+        self.is_popup |= other.is_popup;
         self.clear_descendants |= other.clear_descendants;
         self.disabled |= other.disabled;
         self.focusable |= other.focusable;
@@ -292,6 +295,7 @@ impl fmt::Debug for SemanticsConfiguration {
             (self.merge_descendants, "merged"),
             (self.part_of_parent, "part_of_parent"),
             (self.is_dialog, "dialog"),
+            (self.is_popup, "popup"),
             (self.clear_descendants, "cleared"),
             (self.selectable_group, "selectable_group"),
         ] {

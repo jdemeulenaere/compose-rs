@@ -167,7 +167,7 @@ pub use text::{
 };
 pub use text_input::{ImeAction, ImeOptions, KeyboardCapitalization, KeyboardType};
 pub use text_selection::Selectable;
-pub use unit::{Density, Dp, DpSize, IntOffset, IntSize, Offset, Rect, Size, Sp, UnitExt};
+pub use unit::{Density, Dp, DpRect, DpSize, IntOffset, IntSize, Offset, Rect, Size, Sp, UnitExt};
 pub use window::{
     AlignmentOffsetPositionProvider, Dialog, DialogProperties, Popup, PopupProperties,
     PopupWithPositionProvider,

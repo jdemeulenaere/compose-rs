@@ -326,7 +326,10 @@ fn poll_task(key: TaskKey) -> bool {
     });
     let Some((mut future, waker)) = polled else { return false };
     let mut context = Context::from_waker(&waker);
+    // The task being polled, for [`cancel_current_task`]; restored after (a nested `poll_now`).
+    let previous = CURRENT_TASK.with(|current| current.replace(Some(key)));
     let poll = future.as_mut().poll(&mut context);
+    CURRENT_TASK.with(|current| current.set(previous));
     let done = with_executor(move |executor| {
         let Some(slot) = executor.slot(key) else { return Some(future) };
         if poll.is_ready() || slot.cancelled {
@@ -343,6 +346,57 @@ fn poll_task(key: TaskKey) -> bool {
     // A finished or cancelled task's drops (user code) run outside the borrow.
     drop(done);
     true
+}
+
+thread_local! {
+    /// The task [`poll_task`] is polling.
+    static CURRENT_TASK: Cell<Option<TaskKey>> = const { Cell::new(None) };
+    /// What the test environment says of infinite animations ([`set_infinite_animation_policy`]).
+    static INFINITE_ANIMATION_POLICY: RefCell<Option<Rc<dyn Fn() -> bool>>> =
+        const { RefCell::new(None) };
+}
+
+/// Cancels the task being polled, as throwing a `CancellationException` in a coroutine: its
+/// future is dropped once this poll returns. Outside a task, nothing.
+fn cancel_current_task() {
+    if let Some(key) = CURRENT_TASK.with(Cell::get) {
+        cancel(key);
+    }
+}
+
+/// Sets this thread's policy for infinite animations, as an `InfiniteAnimationPolicy` in the
+/// coroutine context of Compose's test environment: before each frame an infinite animation
+/// waits for ([`with_infinite_animation_frame_nanos`]), `allows()` says whether it may run; when
+/// it says no, the task waiting is cancelled, as the test policy's `CancellationException`.
+/// `None` (the default): they run. For test rules (D901).
+pub fn set_infinite_animation_policy(allows: Option<Rc<dyn Fn() -> bool>>) {
+    INFINITE_ANIMATION_POLICY.with(|policy| *policy.borrow_mut() = allows);
+}
+
+/// The policy [`set_infinite_animation_policy`] set last, to restore it.
+pub fn infinite_animation_policy() -> Option<Rc<dyn Fn() -> bool>> {
+    INFINITE_ANIMATION_POLICY.with(|policy| policy.borrow().clone())
+}
+
+/// Like [`with_frame_nanos`], for an animation that never ends (an infinite transition's, an
+/// `infinite_repeatable`'s), as Compose's `withInfiniteAnimationFrameNanos`: under a policy that
+/// stops infinite animations (a test rule advancing its clock by itself), the task is cancelled
+/// instead and the frame never comes.
+pub async fn with_infinite_animation_frame_nanos<R>(on_frame: impl FnOnce(u64) -> R) -> R {
+    let allowed = INFINITE_ANIMATION_POLICY
+        .with(|policy| policy.borrow().clone())
+        .is_none_or(|allows| allows());
+    if !allowed {
+        cancel_current_task();
+        return std::future::pending().await;
+    }
+    with_frame_nanos(on_frame).await
+}
+
+/// Like [`with_infinite_animation_frame_nanos`], with the time in milliseconds, as
+/// `withInfiniteAnimationFrameMillis`.
+pub async fn with_infinite_animation_frame_millis<R>(on_frame: impl FnOnce(u64) -> R) -> R {
+    with_infinite_animation_frame_nanos(move |nanos| on_frame(nanos / 1_000_000)).await
 }
 
 /// Polls `job` now, on this thread, if it's waiting (not finished, nor being polled): for

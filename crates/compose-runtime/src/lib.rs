@@ -59,7 +59,10 @@ pub use effects::{
     UpdatedState, produce_state, remember_coroutine_scope, remember_updated_state,
 };
 pub use error::ComposeError;
-pub use executor::{CoroutineScope, Job, delay, with_frame_millis, with_frame_nanos};
+pub use executor::{
+    CoroutineScope, Job, delay, with_frame_millis, with_frame_nanos,
+    with_infinite_animation_frame_millis, with_infinite_animation_frame_nanos,
+};
 pub use hash::{KeyHasher, hash_key, key_of};
 pub use immutable_list::ImmutableList;
 pub use local::{CompositionLocal, CompositionLocalProvider, ProvidedValue};

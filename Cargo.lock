@@ -793,6 +793,7 @@ name = "compose-test"
 version = "0.1.0"
 dependencies = [
  "compose-runtime",
+ "compose-skia",
  "compose-ui",
  "smallvec",
 ]

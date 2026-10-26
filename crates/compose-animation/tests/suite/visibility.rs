@@ -49,6 +49,8 @@ fn expanding_pushes_what_follows_down_frame_by_frame() {
     );
     visible.set(true);
     ui.wait_for_idle();
+    // The frame that recomposes for the new target: Compose recomposes only on frames (D900).
+    ui.advance_time_by_frame();
     ui.on_node_with_text("details").assert_exists();
     let mut tops = Vec::new();
     for _ in 0..40 {
@@ -68,6 +70,8 @@ fn leaving_content_stays_until_its_exit_ends() {
     ui.advance_time_by(Duration::from_secs(1));
     visible.set(false);
     ui.wait_for_idle();
+    // The frame that recomposes for the new target: Compose recomposes only on frames (D900).
+    ui.advance_time_by_frame();
     ui.advance_time_by_frame();
     ui.advance_time_by_frame();
     ui.on_node_with_text("details").assert_exists();

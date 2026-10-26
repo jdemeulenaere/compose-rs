@@ -21,7 +21,8 @@ compose-desktop = { workspace = true, optional = true }
 # `compose::test`: the test rule, for tests (as a dev-dependency feature).
 test = ["dep:compose-test"]
 # `compose::desktop`: run_app, a winit window drawn with Skia.
-desktop = ["dep:compose-desktop"]
+# With `test` too, `capture_to_image` draws with Skia (compose-test's `skia`).
+desktop = ["dep:compose-desktop", "compose-test?/skia"]
 
 [dev-dependencies]
 trybuild = "1"

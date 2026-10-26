@@ -5,7 +5,7 @@ use std::rc::Rc;
 
 use compose_runtime::{ComposeArg, OwnedState, State, mutable_state_of, with_frame_nanos};
 
-use crate::spec::AnimationSpec;
+use crate::spec::{AnimationSpec, RepeatableSpec};
 use crate::vector::Animate;
 
 /// Why an animation ended, as Compose's `AnimationEndReason`, and `Interrupted`: another
@@ -174,8 +174,16 @@ impl<T: Animate> Animatable<T> {
             };
         }
         let mut started = None;
+        // An infinite animation waits for its frames as one, which a test rule's policy can
+        // stop (Compose's `callWithFrameNanos`, D901).
+        let infinite =
+            matches!(spec, AnimationSpec::Repeatable(RepeatableSpec { iterations: None, .. }));
         loop {
-            let time = with_frame_nanos(|time| time).await;
+            let time = if infinite {
+                compose_runtime::with_infinite_animation_frame_nanos(|time| time).await
+            } else {
+                with_frame_nanos(|time| time).await
+            };
             if inner.generation.get() != generation {
                 return AnimationResult {
                     end_reason: AnimationEndReason::Interrupted,

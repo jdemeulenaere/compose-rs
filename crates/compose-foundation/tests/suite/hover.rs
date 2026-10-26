@@ -84,9 +84,10 @@ fn a_tooltip_shows_after_the_pointer_rests_and_hides_when_it_leaves() {
             Box!(modifier = Modifier.size(50.dp()));
         });
     });
+    // A move, then the frame that recomposes for it: Compose recomposes only on frames (D900).
     let rest = |ui: &mut ComposeTestRule, x: f32, y: f32| {
         ui.host().send_pointer(PointerEvent::moved(Offset::new(x, y), false));
-        ui.wait_for_idle();
+        ui.advance_time_by_frame();
     };
     rest(&mut ui, 10.0, 10.0);
     ui.advance_time_by(Duration::from_millis(300));
@@ -106,6 +107,6 @@ fn a_tooltip_shows_after_the_pointer_rests_and_hides_when_it_leaves() {
     ui.advance_time_by(Duration::from_millis(600));
     ui.on_node_with_tag("tooltip").assert_exists();
     ui.host().send_pointer(PointerEvent::press(Offset::new(10.0, 10.0)));
-    ui.wait_for_idle();
+    ui.advance_time_by_frame();
     ui.on_node_with_tag("tooltip").assert_does_not_exist();
 }

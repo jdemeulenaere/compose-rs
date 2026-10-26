@@ -108,8 +108,9 @@ fn advancing_the_clock_one_frame_runs_one_animation_frame() {
 /// Input: a test rule with `mainClock.autoAdvance` off and a `LaunchedEffect` counting
 /// `loop { delay(10 ms).await; count += 1 }`; the test advances the clock 100 ms.
 ///
-/// Compose: `mainClock.advanceTimeBy(100)` advances the test scheduler through every task due
-/// on the way, each at its own time: the delays end at 10, 20, … 100 ms, and `count` is 10.
+/// Compose: `mainClock.advanceTimeBy(100, ignoreFrameDuration = true)` advances the test
+/// scheduler through every task due on the way, each at its own time: the delays end at 10,
+/// 20, … 100 ms, and `count` is 10. (Without `ignoreFrameDuration`, 100 ms rounds up to 112.)
 ///
 /// Instead: `advance_time_by` moves the clock in 16 ms steps and fires timers only at the end
 /// of each step, so each `delay` ends up to 16 ms late and the next one starts from there: the
@@ -128,7 +129,7 @@ fn advancing_the_clock_ends_each_delay_at_its_deadline() {
         });
     }
     let mut ui = ComposeTestRule::with_manual_clock(Ticker);
-    ui.advance_time_by(Duration::from_millis(100));
+    ui.advance_time_by_ignoring_frame_duration(Duration::from_millis(100));
     assert_eq!(COUNT.with(Cell::get), 10);
 }
 
@@ -158,7 +159,8 @@ fn a_cancelled_delay_does_not_move_the_test_clock() {
     // Started with the clock still, so the delay doesn't end on its own.
     let mut ui = ComposeTestRule::with_manual_clock(move || Screen(handle));
     waiting.set(false);
-    ui.wait_for_idle();
+    // The frame that recomposes for it (D900).
+    ui.advance_time_by_frame();
     let start = ui.current_time_millis();
     ui.set_auto_advance(true);
     ui.wait_for_idle();

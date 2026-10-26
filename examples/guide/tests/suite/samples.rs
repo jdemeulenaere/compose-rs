@@ -444,8 +444,8 @@ fn the_apps_own_scheme_opens_where_it_is_allowed() {
             interop::AppLinks();
         });
     });
-    ui.on_all_nodes(has_text("Open"), 0).perform_click();
-    ui.on_all_nodes(has_text("Open"), 1).perform_click();
+    ui.on_all_nodes(has_text("Open")).get(0).perform_click();
+    ui.on_all_nodes(has_text("Open")).get(1).perform_click();
     assert_eq!(*opened.borrow(), ["myapp://inbox"]);
 }
 

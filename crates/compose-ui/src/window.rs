@@ -169,6 +169,8 @@ pub fn PopupWithPositionProvider(
                 Layout(catcher, fill.clone(), compose_runtime::callback(|| {}));
             }
             let mut modifier = Modifier.overlay(position_provider.clone(), properties.focusable);
+            // The popup's window, as Compose's `popup()` semantics on its layout.
+            modifier = modifier.semantics(|config| config.is_popup = true);
             if properties.focusable {
                 modifier = modifier.focusable();
             }
@@ -474,8 +476,10 @@ impl PointerInputModifierNode for DismissOnClickNode {
             }
             _ => {}
         }
-        // Modal: nothing beneath gets it.
-        if self.modal {
+        // Modal: nothing beneath gets what's outside the content. What's inside is the
+        // content's: consuming its moves would cancel its presses (a clickable's press ends at
+        // a consumed move), as a touch's move between its down and up (D902).
+        if self.modal && outside {
             event.consume();
         }
     }

@@ -46,7 +46,9 @@ fn a_tween_moves_with_the_clock_and_ends_at_its_target() {
     assert_eq!(seen(), 0.0);
     target.set(100.0);
     ui.wait_for_idle();
-    // The first frame starts the animation; the next ones move it, 16 ms apart.
+    // The frame that recomposes for the new target: Compose recomposes only on frames (D900).
+    ui.advance_time_by_frame();
+    // The next frame starts the animation; the next ones move it, 16 ms apart.
     ui.advance_time_by(Duration::from_millis(16));
     let early = seen();
     ui.advance_time_by(Duration::from_millis(48));
@@ -110,7 +112,9 @@ fn snap_jumps_after_its_delay() {
     let (mut ui, target) = animated(snap(50));
     target.set(7.0);
     ui.wait_for_idle();
-    // The animation starts at the first frame after the change (16 ms), and snaps 50 ms later.
+    // The frame that recomposes for the new target: Compose recomposes only on frames (D900).
+    ui.advance_time_by_frame();
+    // The animation starts at the next frame (16 ms), and snaps 50 ms later.
     ui.advance_time_by(Duration::from_millis(48));
     assert_eq!(seen(), 0.0);
     ui.advance_time_by(Duration::from_millis(32));
@@ -197,6 +201,8 @@ fn keyframes_pass_through_their_values_at_their_times() {
     let (mut ui, target) = animated(spec.into());
     target.set(100.0);
     ui.wait_for_idle();
+    // The frame that recomposes for the new target: Compose recomposes only on frames (D900).
+    ui.advance_time_by_frame();
     ui.advance_time_by(Duration::from_millis(16));
     // 48 ms in: on the way from 0 to 50 (at 80 ms), linearly.
     ui.advance_time_by(Duration::from_millis(48));
@@ -216,6 +222,8 @@ fn a_keyframe_eases_the_stretch_it_starts() {
     let (mut ui, target) = animated(eased.into());
     target.set(100.0);
     ui.wait_for_idle();
+    // The frame that recomposes for the new target: Compose recomposes only on frames (D900).
+    ui.advance_time_by_frame();
     ui.advance_time_by(Duration::from_millis(16));
     ui.advance_time_by(Duration::from_millis(48));
     // Fast out, slow in: past the linear 48 by then.

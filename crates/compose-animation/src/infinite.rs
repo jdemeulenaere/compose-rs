@@ -11,7 +11,7 @@ use std::task::{Poll, Waker};
 
 use compose_runtime::{
     ComposeArg, DisposableEffect, LaunchedEffect, ObjectHandle, Owned, OwnedState, SideEffect,
-    State, composable, remember, with_frame_nanos,
+    State, composable, remember, with_infinite_animation_frame_nanos,
 };
 use compose_ui::Color;
 
@@ -100,7 +100,9 @@ impl TransitionInner {
                 }
             })
             .await;
-            let time = with_frame_nanos(|time| time).await;
+            // An infinite animation's frame: a test rule advancing its clock by itself stops
+            // it, as Compose's test `InfiniteAnimationPolicy` (D901).
+            let time = with_infinite_animation_frame_nanos(|time| time).await;
             self.on_frame(time);
         }
     }

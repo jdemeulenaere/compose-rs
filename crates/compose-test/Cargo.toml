@@ -9,6 +9,11 @@ publish.workspace = true
 [dependencies]
 compose-runtime.workspace = true
 compose-ui.workspace = true
+# `capture_to_image` draws frames with Skia's raster renderer (D904).
+compose-skia = { workspace = true, optional = true }
+
+[features]
+skia = ["dep:compose-skia"]
 
 [dev-dependencies]
 smallvec = "1.13"

@@ -93,6 +93,8 @@ fn a_switch_toggles_and_its_thumb_slides() {
     assert_eq!(bounds(&mut ui, "switch").width(), 52.0);
     ui.on_node_with_tag("switch").assert_is_off();
     ui.on_node_with_tag("switch").perform_click();
+    // The frame that recomposes for it: Compose recomposes only on frames (D900).
+    ui.advance_time_by_frame();
     ui.on_node_with_tag("switch").assert_is_on();
     // The thumb (the last shape drawn) moves right over a few frames.
     let thumb = |ui: &mut ComposeTestRule| {

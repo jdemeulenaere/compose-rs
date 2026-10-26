@@ -39,10 +39,13 @@ fn the_countdown_counts_down_on_the_test_clock() {
     // `mainClock.autoAdvance = false`: time moves only when the test says.
     let mut ui = ComposeTestRule::with_manual_clock(|| effects::Countdown(3));
     ui.on_node_with_text("3 s").assert_exists();
-    ui.advance_time_by(Duration::from_secs(1));
+    // The delay ends at 1 s; the frame that shows the change comes 16 ms later, as Compose's
+    // (`advance_time_by` rounds up to whole frames: 1,008 ms here).
+    ui.advance_time_by(Duration::from_millis(1016));
     ui.on_node_with_text("2 s").assert_exists();
-    // `compose_test`'s clock advances by itself: waiting for idle runs through the delays.
+    // `compose_test`'s clock advances by itself while frames are needed, but not past delays.
     let mut ui = compose_test(|| effects::Countdown(3));
+    ui.advance_time_by(Duration::from_secs(3));
     ui.on_node_with_text("0 s").assert_exists();
 }
 // ANCHOR_END: clock

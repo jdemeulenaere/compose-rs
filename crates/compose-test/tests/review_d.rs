@@ -19,8 +19,8 @@ fn an_indexed_node_past_the_matches_does_not_exist() {
     let mut ui = compose_test(|| {
         Text!("A");
     });
-    ui.on_all_nodes(has_text("A"), 0).assert_exists();
-    ui.on_all_nodes(has_text("A"), 1).assert_does_not_exist();
+    ui.on_all_nodes(has_text("A")).get(0).assert_exists();
+    ui.on_all_nodes(has_text("A")).get(1).assert_does_not_exist();
 }
 
 /// An editable node: a focus target (when enabled) taking text input, logging what it gets.

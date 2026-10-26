@@ -19,7 +19,7 @@ fn parity() {
 
 /// Clicks the center of `matcher`'s `index`th node, then runs frames until idle.
 fn click_frame(ui: &mut ComposeTestRule, matcher: &Matcher, index: usize) -> Duration {
-    let center = ui.on_all_nodes(matcher.clone(), index).fetch_semantics_node().center();
+    let center = ui.on_all_nodes(matcher.clone()).get(index).fetch_semantics_node().center();
     let start = Instant::now();
     ui.host().send_pointer(PointerEvent::press(center));
     ui.host().send_pointer(PointerEvent::release(center));

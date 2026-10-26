@@ -15,15 +15,15 @@ fn adding_toggling_filtering_and_removing() {
     }
     ui.on_node_with_tag("draft").assert_text_equals(&[""]);
     assert_eq!(ui.count_nodes(&has_role(Role::Checkbox)), 3);
-    ui.on_all_nodes(has_role(Role::Checkbox), 1).perform_click();
-    ui.on_all_nodes(has_role(Role::Checkbox), 1).assert_is_on();
+    ui.on_all_nodes(has_role(Role::Checkbox)).get(1).perform_click();
+    ui.on_all_nodes(has_role(Role::Checkbox)).get(1).assert_is_on();
     ui.on_node_with_text("Done").perform_click();
     assert_eq!(ui.count_nodes(&has_role(Role::Checkbox)), 1);
     ui.on_node_with_text("eggs").assert_exists();
     ui.on_node_with_text("Active").perform_click();
     assert_eq!(ui.count_nodes(&has_role(Role::Checkbox)), 2);
     ui.on_node_with_text("All").perform_click();
-    ui.on_all_nodes(has_text("Remove"), 0).perform_click();
+    ui.on_all_nodes(has_text("Remove")).get(0).perform_click();
     ui.on_node_with_text("milk").assert_does_not_exist();
     assert_eq!(ui.count_nodes(&has_role(Role::Checkbox)), 2);
 }
@@ -35,7 +35,7 @@ fn toggling_one_item_recomposes_one_row() {
         add(&mut ui, title);
     }
     let before = ui.recomposition_counts();
-    ui.on_all_nodes(has_role(Role::Checkbox), 1).perform_click();
+    ui.on_all_nodes(has_role(Role::Checkbox)).get(1).perform_click();
     let recomposed = ui.recomposition_counts().since(&before);
     // The row's content reads `done`, so the layout invoking it re-runs it: one checkbox, and
     // nothing above the row (not even `TodoRow`'s own body).
@@ -62,10 +62,10 @@ fn a_thousand_items_toggle_one_row() {
     let mut ui = ComposeTestRule::sized(IntSize::new(400, 100_000), || TodoAppWith(1000));
     assert_eq!(ui.count_nodes(&has_role(Role::Checkbox)), 1000);
     let before = ui.recomposition_counts();
-    ui.on_all_nodes(has_role(Role::Checkbox), 500).perform_click();
+    ui.on_all_nodes(has_role(Role::Checkbox)).get(500).perform_click();
     let recomposed = ui.recomposition_counts().since(&before);
     assert_one_row(&recomposed);
-    ui.on_all_nodes(has_role(Role::Checkbox), 500).assert_is_on();
+    ui.on_all_nodes(has_role(Role::Checkbox)).get(500).assert_is_on();
 }
 
 #[test]

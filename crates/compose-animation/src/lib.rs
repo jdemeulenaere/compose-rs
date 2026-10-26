@@ -30,6 +30,10 @@ pub use as_state::{
     animate_int_offset_as_state, animate_offset_as_state, animate_size_as_state,
     animate_value_as_state,
 };
+/// As animation-core's `withInfiniteAnimationFrameNanos`/`Millis` (the runtime's, D901).
+pub use compose_runtime::{
+    with_infinite_animation_frame_millis, with_infinite_animation_frame_nanos,
+};
 pub use content::{AnimatedContent, ContentTransform, default_content_transform};
 pub use content_size::AnimationModifiers;
 pub use crossfade::Crossfade;

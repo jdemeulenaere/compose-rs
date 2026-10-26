@@ -299,6 +299,34 @@ impl DpSize {
     }
 }
 
+/// A rectangle in `Dp`, as Compose's `DpRect`: what a test's bounds assertions read
+/// (`getUnclippedBoundsInRoot`).
+#[derive(Clone, Copy, PartialEq, Debug, Default)]
+pub struct DpRect {
+    pub left: Dp,
+    pub top: Dp,
+    pub right: Dp,
+    pub bottom: Dp,
+}
+
+impl DpRect {
+    pub const fn new(left: Dp, top: Dp, right: Dp, bottom: Dp) -> DpRect {
+        DpRect { left, top, right, bottom }
+    }
+
+    pub fn width(&self) -> Dp {
+        Dp(self.right.0 - self.left.0)
+    }
+
+    pub fn height(&self) -> Dp {
+        Dp(self.bottom.0 - self.top.0)
+    }
+
+    pub fn size(&self) -> DpSize {
+        DpSize::new(self.width(), self.height())
+    }
+}
+
 impl From<Dp> for DpSize {
     /// A square.
     fn from(size: Dp) -> DpSize {

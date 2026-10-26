@@ -142,8 +142,9 @@ fn fade_in_defaults_to_a_medium_low_spring() {
     let (mut ui, visible) = panel(fade_in(), fade_out());
     visible.set(true);
     ui.wait_for_idle();
-    // The first frame starts the animation (play time 0); six more are 96 ms in.
-    for _ in 0..7 {
+    // The first frame recomposes (Compose recomposes only on frames, D900), the next starts the
+    // animation (play time 0); six more are 96 ms in.
+    for _ in 0..8 {
         ui.advance_time_by_frame();
     }
     let alpha = alphas(&mut ui)[0];
@@ -175,7 +176,8 @@ fn animate_content_size_defaults_to_a_medium_low_spring() {
     let mut ui = ComposeTestRule::with_manual_clock(move || Expanding(handle));
     expanded.set(true);
     ui.wait_for_idle();
-    for _ in 0..7 {
+    // A frame recomposes (D900), the next starts the animation, six more are 96 ms in.
+    for _ in 0..8 {
         ui.advance_time_by_frame();
     }
     let top = below_top(&mut ui);

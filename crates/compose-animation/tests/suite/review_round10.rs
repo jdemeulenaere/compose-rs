@@ -43,6 +43,8 @@ fn an_interrupted_transition_is_at_the_state_it_was_heading_for() {
     ui.advance_time_by(Duration::from_millis(500));
     target.set(0);
     ui.wait_for_idle();
+    // The frame that recomposes for the change: Compose recomposes only on frames (D900).
+    ui.advance_time_by_frame();
     ui.advance_time_by_frame();
     let (current, target_state, running) = *seen.borrow();
     assert!(running, "the value is still going back");
@@ -77,6 +79,8 @@ fn an_interrupting_change_asks_for_the_spec_from_the_interrupted_target() {
     ui.advance_time_by(Duration::from_millis(500));
     target.set(2);
     ui.wait_for_idle();
+    // The frame that recomposes for the change: Compose recomposes only on frames (D900).
+    ui.advance_time_by_frame();
     let segments = segments.borrow().clone();
     assert_eq!(segments.last(), Some(&(1, 2)), "segments asked for: {segments:?}");
 }
