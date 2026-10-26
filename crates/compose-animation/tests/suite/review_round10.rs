@@ -138,7 +138,8 @@ fn a_content_neither_current_nor_target_leaves_at_once() {
     let before = alphas(&mut ui);
     assert!(before.iter().any(|alpha| *alpha > 0.3 && *alpha < 0.7), "{before:?}");
     count.set(2);
-    ui.wait_for_idle();
+    // Composed at the next frame.
+    ui.advance_time_by_frame();
     ui.on_node_with_tag("0").assert_does_not_exist();
     ui.on_node_with_tag("2").assert_exists();
     // Content 1 exits with no exit: gone at the next frame, content 2 at full alpha.

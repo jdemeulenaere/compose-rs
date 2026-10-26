@@ -732,26 +732,26 @@ Navigation 3 is a separate library from Navigation Compose. Adopting it would me
 
 | Compose | compose-rs (`compose_test`, `crates/compose-test/src/lib.rs`) |
 |---|---|
-| `createComposeRule()` + `rule.setContent { … }` | `compose_test(|| …)` or `ComposeTestRule::with_manual_clock(|| …)`. The content is fixed at creation, so drive changes through `mutable_state_of` handles created outside (see `visibility.rs` `panel()`) |
+| `createComposeRule()` + `rule.setContent { … }` | `compose_test(|| …)` or `ComposeTestRule::with_manual_clock(|| …)` (or `set_content`); drive changes through `mutable_state_of` handles created outside (see `visibility.rs` `panel()`) |
 | `rule.mainClock.autoAdvance = false` before `setContent` | `ComposeTestRule::with_manual_clock`, or `set_auto_advance(false)` |
 | `rule.mainClock.advanceTimeByFrame()` | `advance_time_by_frame()` (16 ms) |
-| `rule.mainClock.advanceTimeBy(ms)` | `advance_time_by(Duration::from_millis(ms))`, rounded up to whole frames as Compose's; `advance_time_by_with(d, true)` for `ignoreFrameDuration = true` |
+| `rule.mainClock.advanceTimeBy(ms)` | `advance_time_by(Duration::from_millis(ms))`, rounded up to whole frames as Compose's; `advance_time_by_ignoring_frame_duration(d)` for `ignoreFrameDuration = true` |
 | `rule.runOnIdle { … }`, `runOnUiThread { … }` | plain code after `wait_for_idle()`: everything runs on the test thread |
-| `rule.waitForIdle()` | `wait_for_idle()`. With auto-advance on it moves the clock while animations ask for frames, up to 60 s of test time |
-| `rule.waitUntil { cond }`, `mainClock.advanceTimeUntil { cond }` | missing: loop on `advance_time_by_frame()` with a bound |
+| `rule.waitForIdle()` | `wait_for_idle()`. With auto-advance on it moves the clock while a frame is needed, up to 60 s of test time; with it off, a state change composes only at the next `advance_time_by…` frame, as Compose's (D900) |
+| `rule.waitUntil { cond }`, `mainClock.advanceTimeUntil { cond }` | `wait_until(|rule| …)`, `advance_time_until(|rule| …)` |
 | `LaunchedEffect(Unit) { withFrameNanos { … } }` inside content, asserting per frame | works as is (`compose_runtime::with_frame_nanos`, `LaunchedEffect`). Compose's `SingleValueAnimationTest` and `InfiniteTransitionTest` use this pattern. Or sample from the test: read the state after each `advance_time_by_frame()` |
 | `onGloballyPositioned { coords.localToRoot(…) }`, `size` | `Modifier.on_globally_positioned` and `on_size_changed` exist (`compose-ui/src/layout_callbacks.rs`); or `on_node_with_tag(t).fetch_semantics_node().bounds` (root coordinates, used by `visibility.rs`) |
-| `assertPositionInRootIsEqualTo`, `getBoundsInRoot`, `assertWidthIsEqualTo` | missing: compare `fetch_semantics_node().bounds` |
-| `captureToImage()` and pixel or screenshot assertions | missing: assert on `dump_display_list()` or `draw_snapshot()` (alphas and layer transforms, as `crossfade.rs` `alphas()` does), or on z-order in the display list |
+| `assertPositionInRootIsEqualTo`, `getBoundsInRoot`, `assertWidthIsEqualTo` | the bounds assertions (docs/09), or compare `fetch_semantics_node().bounds` |
+| `captureToImage()` and pixel or screenshot assertions | `capture_to_image` with `assert_pixels` (D904), or the display list (alphas and layer transforms, as `crossfade.rs` `alphas()` does; z-order) |
 | `CompositionLocalProvider(LocalDensity provides Density(1f))` | the default test host is at density 1; else `compose_test_with(size, Density(…), …)` |
 | `StateRestorationTester` / activity recreation | `host.save_state()` → `to_bytes` → a new rule with `restore_state` (see `recreate()` in `compose-navigation/tests/suite/navigation.rs`) |
 | `Espresso.pressBack()` / `onBackPressedDispatcher.onBackPressed()` | `ui.host().on_back_pressed()`; no predictive-back progress events |
-| `performTouchInput { swipe… }` | missing as a DSL (only `perform_click`); inject `PointerEvent`s through the host |
+| `performTouchInput { swipe… }` | the touch injection scope (D903) |
 | recomposition counts (`TransitionTest.testRecompositionCountWhenPassingTransition`) | `recomposition_counts()` / `track_recompositions` |
 | `DetectLeaksAfterTestSuccess` | n/a |
 | `TestNavHostController`, `createNavController(context)` | `NavController::new(start)` (returns its owner) or `remember_nav_controller(start)` |
 | an exception from an interrupted `animateTo` | `AnimationResult { end_reason: AnimationEndReason::Interrupted, .. }` (D120) |
-| `assertEquals(expected, actual, delta)` over frames | assert per frame with a tolerance. Spring results agree with Compose's math (`spec.rs`), but end frames don't (see below) |
+| `assertEquals(expected, actual, delta)` over frames | assert per frame; specs evaluate as Compose's to the bit (D800), so exact comparisons hold where Compose's do |
 
 **Pure spec tests (`commonTest` `Vectorized*`):** evaluate the specs directly: every spec is a `VectorizedAnimationSpec` (`value_from_millis(play_time, start, end, velocity)` is Compose's `getValueFromMillis`; `at()` in `keyframe_animation.rs` is Compose's `at` helper), and `TargetBasedAnimation` is Compose's.
 

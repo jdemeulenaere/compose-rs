@@ -51,8 +51,8 @@ fn frames<T: Clone + PartialEq + 'static, V: Clone + PartialEq + 'static>(
     count: usize,
 ) -> Vec<(i64, V)> {
     target.set(new_target);
-    // The change composes now; the animation's first frame is the next one.
-    ui.wait_for_idle();
+    // The change composes at the next frame; the animation's first frame is the one after.
+    ui.advance_time_by_frame();
     (0..count)
         .map(|frame| {
             ui.advance_time_by_frame();
@@ -335,7 +335,8 @@ fn a_threshold_changed_mid_tween_leaves_the_tween_alone() {
         ))
     });
     target.set(true);
-    ui.wait_for_idle();
+    // The change composes at the next frame; the tween starts at the one after.
+    ui.advance_time_by_frame();
     let mut play = 0;
     loop {
         ui.advance_time_by_frame();

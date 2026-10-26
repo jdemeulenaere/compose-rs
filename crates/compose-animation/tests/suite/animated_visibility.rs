@@ -585,7 +585,8 @@ fn a_transitions_visibility_follows_its_states() {
     ui.wait_for_idle();
     ui.on_node_unmerged(has_test_tag("content")).assert_does_not_exist();
     state.set(TestState::State2);
-    ui.wait_for_idle();
+    // Composed at the next frame (Compose's loop checks the width before, trivially below 100).
+    ui.advance_time_by_frame();
     while showing_state() != TestState::State2 {
         assert!(bounds(&mut ui, "content").width() < 100.0);
         ui.advance_time_by_frame();
@@ -593,7 +594,6 @@ fn a_transitions_visibility_follows_its_states() {
     let shown = bounds(&mut ui, "content");
     assert_eq!((shown.width(), shown.height()), (100.0, 100.0));
     state.set(TestState::State3);
-    ui.wait_for_idle();
     while showing_state() != TestState::State3 {
         assert!(bounds(&mut ui, "content").width() > 0.0);
         assert!(!disposed.get());

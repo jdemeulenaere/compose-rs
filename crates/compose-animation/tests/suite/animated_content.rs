@@ -279,8 +279,11 @@ fn a_recreated_transitions_content_animates_its_size_without_jumps() {
     });
     // Grows, then shrinks, each time from a transition recreated.
     for (from, grows) in [(IntSize::new(200, 200), true), (IntSize::new(300, 300), false)] {
+        // Recreated, the clock advancing by itself; then the change, frame by frame.
+        ui.set_auto_advance(true);
         toggle.update(|toggle| !toggle);
         ui.wait_for_idle();
+        ui.set_auto_advance(false);
         target.update(|target| !target);
         let mut frames = 0;
         while size.get() == from {

@@ -134,7 +134,8 @@ fn a_transition_starts_at_the_frame_after_its_change() {
         seen.borrow_mut().push((transition.play_time_nanos(), actual.get()));
     });
     target.set(To);
-    ui.wait_for_idle();
+    // The change composes at the next frame.
+    ui.advance_time_by_frame();
     let expected = TargetBasedAnimation::new(tween(200), 0.0f32, 1000.0);
     // The first frame after the change is play time 0, then one every 16 ms, up to 208 ms,
     // where it ends (its play time back at 0). The frame at 0 changes nothing, so composes
