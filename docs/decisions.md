@@ -376,7 +376,7 @@ The log is split by area into the files below, one table each, rows in number or
 | D569 | [benchmarks](decisions/benchmarks.md#d569) | revised by [D574](decisions/benchmarks.md#d574), [D579](decisions/benchmarks.md#d579), [D601](decisions/android-host-and-performance.md#d601) |
 | D570 | [ui-and-layout](decisions/ui-and-layout.md#d570) | current |
 | D571 | [text](decisions/text.md#d571) | current |
-| D572 | [ui-and-layout](decisions/ui-and-layout.md#d572) | current |
+| D572 | [ui-and-layout](decisions/ui-and-layout.md#d572) | revised by [D1003](decisions/ui-and-layout.md#d1003) |
 | D573 | [ui-and-layout](decisions/ui-and-layout.md#d573) | current |
 | D574 | [benchmarks](decisions/benchmarks.md#d574) | revised by [D579](decisions/benchmarks.md#d579) |
 | D575 | [lazy-and-prefetch](decisions/lazy-and-prefetch.md#d575) | revised by [D578](decisions/lazy-and-prefetch.md#d578) |
@@ -543,6 +543,7 @@ The log is split by area into the files below, one table each, rows in number or
 | D1000 | [text](decisions/text.md#d1000) | current |
 | D1001 | [ui-and-layout](decisions/ui-and-layout.md#d1001) | current |
 | D1002 | [ui-and-layout](decisions/ui-and-layout.md#d1002) | current |
+| D1003 | [ui-and-layout](decisions/ui-and-layout.md#d1003) | current |
 | D1150 | [ui-and-layout](decisions/ui-and-layout.md#d1150) | current |
 | D1151 | [ui-and-layout](decisions/ui-and-layout.md#d1151) | current |
 | D1152 | [ui-and-layout](decisions/ui-and-layout.md#d1152) | current |

@@ -44,7 +44,7 @@ fn arcs(ui: &mut ComposeTestRule) -> Vec<(f32, f32)> {
 fn a_round_capped_linear_indicator_keeps_its_caps_in_its_bounds() {
     let mut ui = ComposeTestRule::sized(IntSize::new(400, 400), || {
         MaterialTheme!({
-            LinearProgressIndicator!(0.5, stroke_cap = StrokeCap::Round);
+            LinearProgressIndicator!(|| 0.5, stroke_cap = StrokeCap::Round);
         });
     });
     let found = lines(&mut ui);
@@ -63,7 +63,7 @@ fn a_round_capped_linear_indicator_keeps_its_caps_in_its_bounds() {
 fn a_linear_indicator_without_a_gap_starts_its_track_where_the_progress_ends() {
     let mut ui = ComposeTestRule::sized(IntSize::new(400, 400), || {
         MaterialTheme!({
-            LinearProgressIndicator!(0.5, gap_size = 0.dp());
+            LinearProgressIndicator!(|| 0.5, gap_size = 0.dp());
         });
     });
     let found = lines(&mut ui);
@@ -74,7 +74,7 @@ fn a_linear_indicator_without_a_gap_starts_its_track_where_the_progress_ends() {
     for (progress, expected) in [(1.0, vec![(2.0, 238.0)]), (0.0, vec![(2.0, 238.0)])] {
         let mut ui = ComposeTestRule::sized(IntSize::new(400, 400), move || {
             MaterialTheme!({
-                LinearProgressIndicator!(progress, gap_size = 0.dp());
+                LinearProgressIndicator!(move || progress, gap_size = 0.dp());
             });
         });
         let found = lines(&mut ui);
@@ -90,20 +90,20 @@ fn a_linear_indicator_without_a_gap_starts_its_track_where_the_progress_ends() {
 fn a_round_capped_linear_indicator_at_zero_draws_no_progress_dot() {
     let mut ui = ComposeTestRule::sized(IntSize::new(400, 400), || {
         MaterialTheme!({
-            LinearProgressIndicator!(0.0, stroke_cap = StrokeCap::Round);
+            LinearProgressIndicator!(|| 0.0, stroke_cap = StrokeCap::Round);
         });
     });
     let found = lines(&mut ui);
     assert_eq!(found.len(), 1, "only the track: {found:?}");
 }
 
-/// Compose's `drawIndeterminateCircularIndicator` moves the arc's start forward by the stroke
-/// cap's offset when the cap isn't `Butt` (the default, `Round`, is one):
-/// `(180 / PI) * (strokeWidth / (CircularIndicatorDiameter / 2)) / 2`, 5.73 degrees for the
-/// default 4 dp stroke, so the arc's capped start shows where the animation puts it. At the start
-/// of the animation, the arc starts at -90 + 5.73 = -84.27 degrees; here at -90.
+/// Material 3 1.3's indeterminate circular indicator (androidx-main's tip) draws, in a canvas
+/// turned by its rotations, a determinate arc from 0 degrees (3 o'clock) of its progress, a
+/// tenth of the circle at the start of the cycle (`CircularIndeterminateMinProgress`): at the
+/// start, the arc is at 0 degrees, 36 degrees long. (Material 3 1.0's started at the top past
+/// its stroke cap, 0.1 degree long.)
 #[test]
-fn the_indeterminate_circular_arc_starts_past_its_stroke_cap() {
+fn the_indeterminate_circular_arc_starts_at_a_tenth_of_the_circle() {
     let mut ui = ComposeTestRule::with_manual_clock(|| {
         MaterialTheme!({
             IndeterminateCircularProgressIndicator!();
@@ -111,9 +111,8 @@ fn the_indeterminate_circular_arc_starts_past_its_stroke_cap() {
     });
     let found = arcs(&mut ui);
     let (start, sweep) = found[0];
-    let expected = -90.0 + (180.0 / std::f32::consts::PI) * (4.0 / 20.0) / 2.0;
-    assert!((start - expected).abs() < 0.01, "start {start}, expected {expected} ({found:?})");
-    assert!((sweep - 0.1).abs() < 0.001, "the minimum sweep: {sweep}");
+    assert!(start.abs() < 0.01, "start {start} ({found:?})");
+    assert!((sweep - 36.0).abs() < 0.001, "a tenth of the circle: {sweep}");
 }
 
 /// Material 3 1.4's `ProgressIndicatorDefaults` (`LinearStrokeCap`,
@@ -125,9 +124,9 @@ fn every_indicator_defaults_to_a_round_cap() {
     let mut ui = ComposeTestRule::with_manual_clock(|| {
         MaterialTheme!({
             Column!({
-                CircularProgressIndicator!(0.25);
+                CircularProgressIndicator!(|| 0.25);
                 IndeterminateCircularProgressIndicator!();
-                LinearProgressIndicator!(0.5);
+                LinearProgressIndicator!(|| 0.5);
                 IndeterminateLinearProgressIndicator!();
             });
         });
@@ -140,7 +139,10 @@ fn every_indicator_defaults_to_a_round_cap() {
         .ops
         .iter()
         .filter_map(|op| match op {
-            DrawOp::DrawArc { paint, .. } => Some(("arc", paint.cap)),
+            // The strokes (not the stop dot, a fill).
+            DrawOp::DrawArc { paint, .. } if paint.style != compose_ui::PaintStyle::Fill => {
+                Some(("arc", paint.cap))
+            }
             DrawOp::DrawLine(_, _, paint) => Some(("line", paint.cap)),
             _ => None,
         })
@@ -157,13 +159,14 @@ fn passes_a_determinate_indicator_draws_a_new_progress() {
     let handle = progress.handle();
     let mut ui = ComposeTestRule::sized(IntSize::new(400, 400), move || {
         MaterialTheme!({
-            CircularProgressIndicator!(handle.get());
+            CircularProgressIndicator!(move || handle.get());
         });
     });
-    assert_eq!(arcs(&mut ui), vec![(-90.0, 90.0)]);
+    // The progress arc from the top, after its track.
+    assert_eq!(arcs(&mut ui).last(), Some(&(270.0, 90.0)));
     progress.set(0.5);
     ui.wait_for_idle();
-    assert_eq!(arcs(&mut ui), vec![(-90.0, 180.0)]);
+    assert_eq!(arcs(&mut ui).last(), Some(&(270.0, 180.0)));
 }
 
 /// Compose's `ListItem` is one merged semantics node (`Modifier.semantics(mergeDescendants =

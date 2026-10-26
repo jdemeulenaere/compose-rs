@@ -70,7 +70,7 @@ pub use navigation::{
     NavigationRailItemColors, NavigationRailItemDefaults,
 };
 pub use progress::{
-    CircularProgressIndicator, IndeterminateCircularProgressIndicator,
+    CircularProgressIndicator, DrawStopIndicator, IndeterminateCircularProgressIndicator,
     IndeterminateLinearProgressIndicator, LinearProgressIndicator, ProgressIndicatorDefaults,
 };
 pub use scaffold::{

@@ -401,8 +401,8 @@ fn Controls(cards: MutableState<u32>) {
         horizontal_arrangement = Arrangement::spaced_by(16.dp()),
         vertical_alignment = Alignment::CENTER_VERTICALLY,
         |row: RowScope| {
-            CircularProgressIndicator!(level.get());
-            LinearProgressIndicator!(level.get(), modifier = Modifier.weight(row, 1.0));
+            CircularProgressIndicator!(move || level.get());
+            LinearProgressIndicator!(move || level.get(), modifier = Modifier.weight(row, 1.0));
             if switched.get() {
                 IndeterminateCircularProgressIndicator!();
             }

@@ -525,8 +525,8 @@ fn progress_indicators_draw_their_progress_and_animate_when_indeterminate() {
     let mut ui = ComposeTestRule::with_manual_clock(|| {
         MaterialTheme!({
             Column!({
-                CircularProgressIndicator!(0.25, modifier = Modifier.test_tag("circular"));
-                LinearProgressIndicator!(0.5, modifier = Modifier.test_tag("linear"));
+                CircularProgressIndicator!(|| 0.25, modifier = Modifier.test_tag("circular"));
+                LinearProgressIndicator!(|| 0.5, modifier = Modifier.test_tag("linear"));
                 IndeterminateCircularProgressIndicator!();
             });
         });
@@ -542,19 +542,28 @@ fn progress_indicators_draw_their_progress_and_animate_when_indeterminate() {
     assert_eq!((info.current, info.range), (0.25, (0.0, 1.0)));
     let linear = ui.on_node_with_tag("linear").fetch_semantics_node().bounds;
     assert_eq!((linear.width(), linear.height()), (240.0, 4.0));
-    // A quarter turn from the top; a line half way, then its track past Material 3 1.4's 4 dp
-    // gap (and the 4 dp stroke, for the caps), their round caps (the default) inside the
-    // indicator: the track from 128 to 238, the line from 2 to 120 (D572).
+    // A quarter turn from the top, after its track past the 4 dp gap (and the 4 dp stroke, for
+    // the caps: 8 dp of the 40 dp circle's circumference, 22.9 degrees); a line half way, then
+    // its track past Material 3 1.4's 4 dp gap (and the stroke), their round caps (the default)
+    // inside the indicator: the track from 128 to 238, the line from 2 to 120 (D572).
     let list = ui.host().display_list();
     let arcs: Vec<(f32, f32)> = list
         .ops
         .iter()
         .filter_map(|op| match op {
-            DrawOp::DrawArc { start_angle, sweep_angle, .. } => Some((*start_angle, *sweep_angle)),
+            // The strokes (not the linear indicator's stop dot, a filled circle).
+            DrawOp::DrawArc { start_angle, sweep_angle, paint, .. }
+                if paint.style != compose_ui::PaintStyle::Fill =>
+            {
+                Some((*start_angle, *sweep_angle))
+            }
             _ => None,
         })
         .collect();
-    assert_eq!(arcs[0], (-90.0, 90.0));
+    let gap = 8.0 / (std::f32::consts::PI * 40.0) * 360.0;
+    assert!((arcs[0].0 - (270.0 + 90.0 + gap)).abs() < 1e-3, "the track: {arcs:?}");
+    assert!((arcs[0].1 - (360.0 - 90.0 - 2.0 * gap)).abs() < 1e-3, "the track: {arcs:?}");
+    assert_eq!(arcs[1], (270.0, 90.0));
     let lines: Vec<f32> = list
         .ops
         .iter()
@@ -565,17 +574,21 @@ fn progress_indicators_draw_their_progress_and_animate_when_indeterminate() {
         .collect();
     assert_eq!(lines, vec![110.0, 118.0]);
     // The indeterminate arc moves frame to frame, drawing again only.
-    let first = arcs[1];
+    let first = arcs[2];
     ui.advance_time_by(std::time::Duration::from_millis(300));
     let list = ui.host().display_list();
     let moved = list
         .ops
         .iter()
         .filter_map(|op| match op {
-            DrawOp::DrawArc { start_angle, sweep_angle, .. } => Some((*start_angle, *sweep_angle)),
+            DrawOp::DrawArc { start_angle, sweep_angle, paint, .. }
+                if paint.style != compose_ui::PaintStyle::Fill =>
+            {
+                Some((*start_angle, *sweep_angle))
+            }
             _ => None,
         })
-        .nth(1);
+        .nth(2);
     assert_ne!(moved, Some(first));
 }
 

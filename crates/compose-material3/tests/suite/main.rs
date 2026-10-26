@@ -15,6 +15,7 @@ mod menu_position;
 mod modal_bottom_sheet;
 mod modal_navigation_drawer;
 mod progress_indicator;
+mod progress_indicator_screenshots;
 mod review_d479;
 mod review_d554_local;
 mod review_e;

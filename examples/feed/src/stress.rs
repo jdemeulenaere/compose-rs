@@ -370,12 +370,13 @@ fn ActionCard(index: u32) {
                         Text!("Hint");
                     });
                 });
-                // Without Material 3 1.4's gap, as Stress.kt's (which also leaves out the stop
-                // dot, which compose-rs's indicator doesn't draw): a line, then the track.
+                // Without Material 3 1.4's gap and its stop dot, as Stress.kt's: a line, then the
+                // track.
                 LinearProgressIndicator!(
-                    progress,
+                    move || progress,
                     modifier = Modifier.fill_max_width(),
-                    gap_size = 0.dp()
+                    gap_size = 0.dp(),
+                    draw_stop_indicator = Some(DrawStopIndicator::none())
                 );
                 Row!(
                     horizontal_arrangement = Arrangement::spaced_by(8.dp()),

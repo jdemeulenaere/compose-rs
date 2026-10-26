@@ -597,9 +597,10 @@ fn Stats(seed: u32, index: u32) {
                 // Without Material 3 1.4's gap, as Navigation.kt's (which also leaves out the
                 // stop dot), as the stress screen's.
                 LinearProgressIndicator!(
-                    progress as f32 / 100.0,
+                    move || progress as f32 / 100.0,
                     modifier = Modifier.fill_max_width(),
-                    gap_size = 0.dp()
+                    gap_size = 0.dp(),
+                    draw_stop_indicator = Some(DrawStopIndicator::none())
                 );
                 Row!(
                     horizontal_arrangement = Arrangement::spaced_by(8.dp()),
