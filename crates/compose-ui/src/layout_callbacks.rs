@@ -223,10 +223,12 @@ impl UiTree {
     }
 
     /// The bounds in the root of semantics node `node` (its semantics modifier's layer), in
-    /// pixels: unclipped, at its position through the graphics layers around it, as Compose's
-    /// `unclippedBoundsInRoot`; and clipped by the clips around it (its own outside its
-    /// semantics, its ancestors'), as `SemanticsNode.boundsInRoot`. `None` if it has no
-    /// semantics or isn't placed where the root shows it. For tests' bounds assertions.
+    /// pixels: unclipped, its top left mapped through the graphics layers around it and its own
+    /// size, unscaled, as Compose's `unclippedBoundsInRoot` (`Rect(positionInRoot, size)` in
+    /// ui-test's `BoundsAssertions.kt`); and the layer-mapped bounding box clipped by the clips
+    /// around it (its own outside its semantics, its ancestors'), as `SemanticsNode.boundsInRoot`.
+    /// `None` if it has no semantics or isn't placed where the root shows it. For tests' bounds
+    /// assertions.
     pub fn semantics_bounds_in_root(&mut self, node: NodeId) -> Option<(Rect, Rect)> {
         self.get(node)?;
         let (_, layer) = self.own_semantics(node)?;

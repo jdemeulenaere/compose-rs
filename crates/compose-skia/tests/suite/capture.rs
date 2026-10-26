@@ -1,14 +1,21 @@
-//! `capture_to_image` and the pixel assertions, as Compose's `captureToImage` with its test
-//! utilities' `assertPixels` (drawn with Skia's raster renderer: compose-test's `skia` feature).
+//! compose-test's `capture_to_image` and the pixel assertions, as Compose's `captureToImage`
+//! with its test utilities' `assertPixels`, drawn by `raster_colors`: here, as only this crate's
+//! tests link Skia (D904).
 
 #![allow(non_snake_case)]
 
 use std::cell::Cell;
 
-use compose_foundation::layout::*;
-use compose_runtime::*;
-use compose_test::*;
-use compose_ui::{Color, Dialog, IntOffset, IntSize, Modifier, PaddingValues, Popup, UnitExt};
+use compose::foundation::layout::*;
+use compose::runtime::*;
+use compose::test::*;
+use compose::ui::{Color, Dialog, IntOffset, IntSize, Modifier, PaddingValues, Popup, UnitExt};
+
+/// A test rule capturing with Skia.
+fn compose_test(content: impl Fn() + 'static) -> ComposeTestRule {
+    set_capture_renderer(compose_skia::raster_colors);
+    compose::test::compose_test(content)
+}
 
 const TOP_LEFT: Color = Color::from_argb(0xFFFF0000);
 const TOP_RIGHT: Color = Color::from_argb(0xFF00FF00);

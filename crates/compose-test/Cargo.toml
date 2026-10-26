@@ -9,16 +9,10 @@ publish.workspace = true
 [dependencies]
 compose-runtime.workspace = true
 compose-ui.workspace = true
-# `capture_to_image` draws frames with Skia's raster renderer (D904).
-compose-skia = { workspace = true, optional = true }
-
-[features]
-skia = ["dep:compose-skia"]
 
 [dev-dependencies]
 smallvec = "1.13"
-# The harness's own tests (tests/suite) compose with foundation and animation, and capture
-# pixels with Skia.
+# The harness's own tests (tests/suite) compose with foundation and animation. Its capture
+# tests are compose-skia's (D904): only that crate's tests link Skia.
 compose-foundation.workspace = true
 compose-animation.workspace = true
-compose-test = { path = ".", features = ["skia"] }

@@ -872,10 +872,10 @@ impl MouseInjectionScope<'_> {
         let root = self.0.to_root(position);
         self.input().mouse = root;
         let inside = self.0.within_root(root);
+        // Leaving the window: the exit, then the move, as Compose's `enqueueMouseMove`.
         if !inside && self.input().mouse_entered {
             self.input().mouse_entered = false;
             self.0.rule.host.send_pointer_left();
-            return;
         }
         if inside && !self.input().mouse_pressed {
             self.input().mouse_entered = true;
@@ -928,6 +928,8 @@ impl MouseInjectionScope<'_> {
         );
         self.cancel_touch();
         self.input().mouse_pressed = true;
+        // A press ends the hover until the release, as Compose's on Android (`exitHoverOnPress`).
+        self.input().mouse_entered = false;
         self.mouse_event(PointerEvent::press(position));
     }
 

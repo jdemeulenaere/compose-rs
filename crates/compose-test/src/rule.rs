@@ -169,6 +169,9 @@ impl ComposeTestRule {
         for _ in 0..10_000 {
             platform::fire_timers();
             platform::run_ready();
+            // Focus moves happen at once; what they call writes for the next frame (D906).
+            self.host.handle_focus_requests();
+            platform::run_ready();
             if self.needs_clock_frame() {
                 if self.next_frame.is_none() {
                     self.next_frame =

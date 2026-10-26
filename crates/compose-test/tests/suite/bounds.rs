@@ -234,6 +234,61 @@ fn the_bounds_in_the_root_are_clipped_and_the_unclipped_ones_not() {
     );
 }
 
+/// A box in a graphics layer: Compose's unclipped bounds are `Rect(positionInRoot, size)`
+/// (`BoundsAssertions.kt`, `unclippedBoundsInRoot`): the top left mapped through the layer,
+/// the size unscaled; its bounds in the root (`boundsInRoot`) are the layer-mapped bounding
+/// box. A 10 dp box scaled 2 around its center: top left at -5, 10 dp unclipped, 20 dp in the
+/// root.
+#[test]
+fn a_scaled_nodes_bounds_in_the_root_are_scaled_and_its_unclipped_size_is_not() {
+    let mut ui = compose_test(|| {
+        Box!(modifier = Modifier.padding(20.dp()), {
+            Box!(modifier = Modifier.scale(2.0).test_tag(TAG).size(10.dp()));
+        });
+    });
+    let clipped = ui.on_node_with_tag(TAG).get_bounds_in_root();
+    assert_eq!(
+        (clipped.left, clipped.top, clipped.right, clipped.bottom),
+        (15.dp(), 15.dp(), 35.dp(), 35.dp())
+    );
+    let unclipped = ui.on_node_with_tag(TAG).get_unclipped_bounds_in_root();
+    assert_eq!(
+        (unclipped.left, unclipped.top, unclipped.width(), unclipped.height()),
+        (15.dp(), 15.dp(), 10.dp(), 10.dp())
+    );
+    ui.on_node_with_tag(TAG)
+        .assert_width_is_equal_to(10.dp())
+        .assert_position_in_root_is_equal_to(15.dp(), 15.dp());
+}
+
+/// The same with a quarter turn: a 20 by 10 dp box rotated 90° around its center is 10 by
+/// 20 dp in the root; its unclipped bounds start at its top left mapped through the turn
+/// (the top right corner of the turned box) and keep its own size.
+#[test]
+fn a_rotated_nodes_bounds_in_the_root_are_turned() {
+    let mut ui = compose_test(|| {
+        Box!(modifier = Modifier.padding(20.dp()), {
+            Box!(modifier = Modifier.rotate(90.0).test_tag(TAG).size((20.dp(), 10.dp())));
+        });
+    });
+    let clipped = ui.on_node_with_tag(TAG).get_bounds_in_root();
+    let rounded = |dp: Dp| Dp(dp.0.round());
+    assert_eq!(
+        (
+            rounded(clipped.left),
+            rounded(clipped.top),
+            rounded(clipped.right),
+            rounded(clipped.bottom)
+        ),
+        (25.dp(), 15.dp(), 35.dp(), 35.dp())
+    );
+    let unclipped = ui.on_node_with_tag(TAG).get_unclipped_bounds_in_root();
+    assert_eq!(
+        (rounded(unclipped.left), rounded(unclipped.top), unclipped.width(), unclipped.height()),
+        (35.dp(), 15.dp(), 20.dp(), 10.dp())
+    );
+}
+
 // Compose: compose/ui/ui-test/src/androidDeviceTest/kotlin/androidx/compose/ui/test/assertions/BoundsAssertionsTest.kt, assertBoundsInRootUsesLocalDensity (at the root's density)
 /// Bounds are in dp at the root's density: 20 dp of padding is 40 px at density 2.
 #[test]

@@ -178,8 +178,10 @@ impl UiHost {
         }
     }
 
-    /// Moves focus as `FocusRequester`s asked, now that the tree is free.
-    fn handle_focus_requests(&self) {
+    /// Moves focus as `FocusRequester`s asked, now that the tree is free, running what the moves
+    /// call (`on_focus_changed`) without recomposing: a frame does it first, and a test rule
+    /// between frames, so what the calls write recomposes at its next frame (D906).
+    pub fn handle_focus_requests(&self) {
         loop {
             let pending = self.with_tree(|tree| tree.focus_requests.pending.take());
             if pending.is_empty() {

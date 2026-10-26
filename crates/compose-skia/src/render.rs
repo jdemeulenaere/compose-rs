@@ -379,6 +379,22 @@ fn draw_op(
     }
 }
 
+/// `list` drawn over white into a raster of `size` pixels with `optimizations`, its colors row
+/// by row: a test's capture renderer (`compose::test::set_capture_renderer(raster_colors)`,
+/// D904).
+pub fn raster_colors(
+    list: &DisplayList,
+    size: compose_ui::IntSize,
+    text_measurer: &dyn TextMeasurer,
+    optimizations: Optimizations,
+) -> Vec<Color> {
+    use compose_ui::platform::Renderer;
+    let mut renderer = RasterRenderer::new(size.width, size.height);
+    renderer.set_optimizations(optimizations);
+    renderer.render(list, Color::WHITE, 1.0, text_measurer);
+    renderer.colors()
+}
+
 /// A renderer onto a CPU raster surface: for tests, screenshots, and windows presenting pixels.
 pub struct RasterRenderer {
     surface: Surface,

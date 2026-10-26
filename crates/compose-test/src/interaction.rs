@@ -9,7 +9,7 @@ use compose_ui::{Key, ProgressBarRangeInfo, SemanticsAction};
 use crate::matcher::{Matcher, NodeRef, TreeView, same_set};
 use crate::print::print_node;
 use crate::rule::ComposeTestRule;
-use crate::selector::{Relative, Selector};
+use crate::selector::{Relative, SelectError, Selector};
 
 /// A node found by a selector, as `SemanticsNodeInteraction`.
 pub struct SemanticsNodeInteraction<'a> {
@@ -43,7 +43,7 @@ impl<'a> SemanticsNodeInteraction<'a> {
     /// selector picks in it (or why it can't pick).
     pub(crate) fn with_selection<R>(
         &mut self,
-        f: impl FnOnce(&TreeView<'_>, Result<Vec<NodeRef<'_>>, String>) -> R,
+        f: impl FnOnce(&TreeView<'_>, Result<Vec<NodeRef<'_>>, SelectError>) -> R,
     ) -> R {
         self.rule.implicit_wait();
         let tree = self.rule.host.semantics_tree(self.merged);
@@ -52,7 +52,7 @@ impl<'a> SemanticsNodeInteraction<'a> {
             if selection.nodes.is_empty()
                 && let Some(error) = selection.custom_error
             {
-                return Err(error);
+                return Err(SelectError::IndexOutOfRange(error));
             }
             Ok(selection.nodes)
         });
@@ -303,9 +303,7 @@ impl<'a> SemanticsNodeInteraction<'a> {
         let count = self.with_selection(|view, selection| match selection {
             Ok(nodes) => Ok((nodes.len(), view.node(0).node().dump())),
             // An index past the nodes selects nothing.
-            Err(error) if error.starts_with("can't retrieve node at index") => {
-                Ok((0, String::new()))
-            }
+            Err(SelectError::IndexOutOfRange(_)) => Ok((0, String::new())),
             Err(error) => Err(error),
         });
         match count {
@@ -477,7 +475,10 @@ impl<'a> SemanticsNodeInteraction<'a> {
                     nodes.len()
                 )),
                 Ok(nodes) => Ok(Some((nodes[0].id(), nodes[0].is_root(), window))),
-                Err(_) => Ok(None),
+                // An index past the nodes selects none: not displayed. Other failures (a
+                // step from not exactly one node) fail, as Compose's.
+                Err(SelectError::IndexOutOfRange(_)) => Ok(None),
+                Err(error) => Err(error.to_string()),
             }
         });
         let (id, is_root, window) = match found {

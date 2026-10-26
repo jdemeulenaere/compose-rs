@@ -488,3 +488,14 @@ fn texts_descriptions_values_and_ranges_are_asserted() {
     ui.on_node(has_text_exactly(&["a", "b"], false)).assert_exists();
     ui.on_node(has_content_description_exactly(&["first", "second"])).assert_exists();
 }
+
+/// compose-test draws nothing itself: without a renderer installed (compose-skia's tests
+/// install one; this binary never does), a capture fails saying how to install one (D904).
+#[test]
+fn capturing_without_a_renderer_fails_saying_how_to_install_one() {
+    let mut ui = compose_test(|| Box!(modifier = Modifier.size(10.dp()).test_tag("box")));
+    let message = expect_error(|| {
+        ui.on_node_with_tag("box").capture_to_image();
+    });
+    assert!(message.contains("set_capture_renderer(compose_skia::raster_colors)"), "{message}");
+}

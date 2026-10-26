@@ -12,7 +12,7 @@ use compose_foundation::layout::*;
 use compose_foundation::*;
 use compose_runtime::*;
 use compose_test::*;
-use compose_ui::{Dp, PaddingValues, UnitExt};
+use compose_ui::{Dp, Modifier, PaddingValues, UnitExt};
 
 #[composable]
 fn Counts(count1: MutableState<i32>, count2: MutableState<i32>, sum: State<i32>) {
@@ -381,4 +381,33 @@ fn the_policy_cancels_a_task_waiting_for_an_infinite_frame() {
         assert!(dropped.get(), "the task was cancelled (millis: {millis})");
         assert!(!ran.get(), "the frame never came (millis: {millis})");
     }
+}
+
+/// A focus request moves the focus at once, but what its `on_focus_changed` writes shows at
+/// the next frame of the clock, as any state write: Compose recomposes only on frames (D900).
+#[test]
+fn a_focus_changes_state_shows_at_the_next_frame() {
+    let requester = compose_ui::FocusRequester::new();
+    let attached = requester;
+    let mut ui = ComposeTestRule::with_manual_clock(move || {
+        let focused = remember(|| mutable_state_of(false));
+        Column!({
+            Box!(
+                modifier = Modifier
+                    .on_focus_changed(move |has_focus: bool| focused.set(has_focus))
+                    .focus_requester(attached)
+                    .focusable()
+                    .size(10.dp())
+                    .test_tag("box")
+            );
+            BasicText!("focused: {}", focused.get());
+        });
+    });
+    requester.request_focus();
+    ui.wait_for_idle();
+    ui.on_node_with_tag("box").assert_is_focused();
+    ui.on_node_with_text("focused: false").assert_exists();
+    assert_eq!(ui.current_time_millis(), 0);
+    ui.advance_time_by_frame();
+    ui.on_node_with_text("focused: true").assert_exists();
 }

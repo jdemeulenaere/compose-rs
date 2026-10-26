@@ -11,6 +11,7 @@ mod text;
 
 pub use render::{
     RasterRenderer, SkiaImageDecoder, decode_image, draw_display_list, install_path_operator,
+    raster_colors,
 };
 pub use skia_safe;
 pub use text::SkiaTextMeasurer;

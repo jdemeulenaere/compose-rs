@@ -1,8 +1,11 @@
 //! Capturing a node's pixels, as Compose's `captureToImage`, with the pixel assertions of
 //! Compose's test utilities (`assertPixels`, `assertPixelColor`, `assertContainsColor`). The
-//! frame is drawn by compose-skia's raster renderer: the `skia` feature (on with the facade's
-//! `desktop` and `test` features).
+//! frame is drawn by the renderer a test installs (`set_capture_renderer`: compose-skia's
+//! `raster_colors`).
 
+use std::sync::Mutex;
+
+use compose_ui::platform::{DisplayList, NodeId, Optimizations, TextMeasurer};
 use compose_ui::{Color, IntOffset, IntSize};
 
 use crate::interaction::SemanticsNodeInteraction;
@@ -122,7 +125,7 @@ impl CapturedImage {
 
 impl SemanticsNodeInteraction<'_> {
     /// The window's pixels where the node is (its bounds clipped by the clips around it), as
-    /// `captureToImage`. Needs compose-test's `skia` feature.
+    /// `captureToImage`. Needs a renderer (`set_capture_renderer`).
     #[track_caller]
     pub fn capture_to_image(&mut self) -> CapturedImage {
         let node = self.fetch_semantics_node();
@@ -149,34 +152,38 @@ impl SemanticsNodeInteraction<'_> {
     }
 }
 
-/// A window's pixels (the main content's, or an overlay's), drawn from what the last frame
-/// drew, over white.
-#[cfg(feature = "skia")]
-fn render(
-    rule: &mut crate::ComposeTestRule,
-    window: Option<compose_ui::platform::NodeId>,
-) -> CapturedImage {
-    use compose_ui::platform::Renderer;
-    let size = rule.host.size();
-    let mut renderer = compose_skia::RasterRenderer::new(size.width, size.height);
-    renderer.set_optimizations(rule.host.optimizations());
-    rule.host.with_tree(|tree| {
-        let list = tree.window_display_list(window);
-        renderer.render(&list, Color::WHITE, 1.0, tree.text_measurer_ref());
-    });
-    let (width, height) = renderer.size();
-    let pixels = renderer.colors();
-    CapturedImage::new(width, height, pixels)
+/// Draws a display list of `size` pixels, over white, with the host's optimizations, into its
+/// colors row by row: what [`capture_to_image`](SemanticsNodeInteraction::capture_to_image)
+/// renders with. compose-skia's `raster_colors` is one (D904).
+pub type CaptureRenderer =
+    fn(&DisplayList, IntSize, &dyn TextMeasurer, Optimizations) -> Vec<Color>;
+
+/// The renderer [`set_capture_renderer`] installed.
+static RENDERER: Mutex<Option<CaptureRenderer>> = Mutex::new(None);
+
+/// Installs `renderer` for `capture_to_image`, for the whole test binary, as a test needing
+/// pixels does once (`set_capture_renderer(compose_skia::raster_colors)`): compose-test draws
+/// nothing itself, so only the crates whose tests capture link a renderer (D904).
+pub fn set_capture_renderer(renderer: CaptureRenderer) {
+    *RENDERER.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(renderer);
 }
 
-#[cfg(not(feature = "skia"))]
+/// A window's pixels (the main content's, or an overlay's), drawn from what the last frame
+/// drew.
 #[track_caller]
-fn render(
-    _rule: &mut crate::ComposeTestRule,
-    _window: Option<compose_ui::platform::NodeId>,
-) -> CapturedImage {
-    panic!(
-        "compose-test: capture_to_image draws with Skia: enable compose-test's `skia` feature \
-         (the facade's `desktop` and `test` features together)"
-    );
+fn render(rule: &mut crate::ComposeTestRule, window: Option<NodeId>) -> CapturedImage {
+    let renderer = *RENDERER.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let Some(renderer) = renderer else {
+        panic!(
+            "compose-test: capture_to_image needs a renderer: call \
+             `set_capture_renderer(compose_skia::raster_colors)` first (D904)"
+        );
+    };
+    let size = rule.host.size();
+    let optimizations = rule.host.optimizations();
+    let pixels = rule.host.with_tree(|tree| {
+        let list = tree.window_display_list(window);
+        renderer(&list, size, tree.text_measurer_ref(), optimizations)
+    });
+    CapturedImage::new(size.width, size.height, pixels)
 }

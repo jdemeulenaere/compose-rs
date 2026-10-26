@@ -25,6 +25,11 @@ fn retained_and_redrawn(ui: &mut ComposeTestRule) -> (String, String) {
 fn check_frames(ui: &mut ComposeTestRule, frames: usize, what: &str) {
     for frame in 0..frames {
         ui.advance_time_by_frame();
+        // A drawing left for the next frame (a focus the frame's effect asked for, moved after
+        // it, D906) changes what drawing everything draws now: compare the frames that leave none.
+        if ui.host().with_tree(|tree| tree.needs_draw()) {
+            continue;
+        }
         let (retained, redrawn) = retained_and_redrawn(ui);
         if retained != redrawn {
             let diff: Vec<String> = retained

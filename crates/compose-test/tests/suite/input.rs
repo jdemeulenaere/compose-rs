@@ -471,6 +471,27 @@ fn a_mouse_click_presses_and_releases() {
     assert!(message.contains("primary button only"), "{message}");
 }
 
+// Compose: compose/ui/ui-test/src/commonMain/kotlin/androidx/compose/ui/test/InputDispatcher.kt, enqueueMouseMove (an exit, then the move)
+/// A move out of the window sends the exit, then the move: a drag pressed inside keeps
+/// hearing its moves out there.
+#[test]
+fn a_mouse_moving_out_of_the_window_exits_then_moves() {
+    let (mut ui, events) = recording_box(Offset::ZERO);
+    ui.on_node_with_tag("box").perform_mouse_input(|mouse| {
+        mouse.move_to(Offset::new(10.0, 10.0));
+        mouse.press(MouseButton::Primary);
+        mouse.move_to(Offset::new(-50.0, -50.0));
+        mouse.release(MouseButton::Primary);
+    });
+    let recorded = events.borrow().clone();
+    let moved_out = recorded
+        .iter()
+        .find(|event| event.kind == PointerEventType::Move && event.position.x < 0.0)
+        .unwrap_or_else(|| panic!("the drag's move out of the window: {recorded:?}"));
+    assert!(moved_out.pressed);
+    assert_eq!(recorded.last().unwrap().kind, PointerEventType::Release);
+}
+
 // Compose: compose/ui/ui-test/src/androidDeviceTest/kotlin/androidx/compose/ui/test/injectionscope/mouse/MoveTest.kt
 /// Moves hover: the node hears the mouse come in and move; an exit sends it away.
 #[test]
@@ -592,17 +613,27 @@ fn modifier_keys_held_mark_the_events() {
 /// A key held past 500 ms repeats, then every 50 ms, as Compose's key injection.
 #[test]
 fn a_held_key_repeats() {
-    let (mut ui, keys) = recording_keys();
-    ui.on_node_with_tag("keys").perform_key_input(|keys| keys.press_key_for(Key::Backspace, 620));
-    let recorded = keys.borrow().clone();
-    let t0 = recorded[0].1;
-    let downs: Vec<u64> = recorded
-        .iter()
-        .filter(|(event, _)| event.kind == KeyEventType::KeyDown)
-        .map(|(_, millis)| millis - t0)
-        .collect();
-    assert_eq!(downs, [0, 500, 550, 600]);
-    assert_eq!(recorded.last().unwrap().1 - t0, 620);
+    // Held 620 ms; then exactly as long as a repeat's time (600, 650 ms): the repeat due at
+    // the release still comes, before it, as Compose's `sendRepeatKeysIfNeeded`.
+    for (held, expected) in [
+        (620, &[0, 500, 550, 600][..]),
+        (600, &[0, 500, 550, 600]),
+        (650, &[0, 500, 550, 600, 650]),
+    ] {
+        let (mut ui, keys) = recording_keys();
+        ui.on_node_with_tag("keys")
+            .perform_key_input(|keys| keys.press_key_for(Key::Backspace, held));
+        let recorded = keys.borrow().clone();
+        let t0 = recorded[0].1;
+        let downs: Vec<u64> = recorded
+            .iter()
+            .filter(|(event, _)| event.kind == KeyEventType::KeyDown)
+            .map(|(_, millis)| millis - t0)
+            .collect();
+        assert_eq!(downs, expected, "held {held} ms");
+        let last = recorded.last().unwrap();
+        assert_eq!((last.0.kind, last.1 - t0), (KeyEventType::KeyUp, held), "held {held} ms");
+    }
 }
 
 // Compose: compose/ui/ui-test/src/androidDeviceTest/kotlin/androidx/compose/ui/test/injectionscope/key/LockKeysTest.kt

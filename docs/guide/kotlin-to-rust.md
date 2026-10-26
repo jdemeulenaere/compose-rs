@@ -2101,7 +2101,7 @@ Compose's test API, in snake case:
 | `hasText("a") and isEnabled()`, `hasAnyAncestor(hasTestTag("list"))` | `has_text("a") & is_enabled()`, `has_any_ancestor(has_test_tag("list"))` |
 | `performClick()`, `performTouchInput { swipeUp() }`, `performMouseInput { scroll(1f) }`, `performKeyInput { pressKey(Key.Enter) }` | `perform_click()`, `perform_touch_input(\|touch\| touch.swipe_up())`, `perform_mouse_input(\|mouse\| mouse.scroll(1.0, ScrollWheel::Vertical))`, `perform_key_input(\|keys\| keys.press_key(Key::Enter))` |
 | `assertIsDisplayed()`, `assertWidthIsEqualTo(48.dp)`, `assertPositionInRootIsEqualTo(8.dp, 16.dp)` | `assert_is_displayed()`, `assert_width_is_equal_to(48.dp())`, `assert_position_in_root_is_equal_to(8.dp(), 16.dp())` |
-| `captureToImage().assertPixels { Color.Red }` | `capture_to_image().assert_pixels(None, \|_\| Some(Color::RED))` (with the facade's `desktop` feature) |
+| `captureToImage().assertPixels { Color.Red }` | `capture_to_image().assert_pixels(None, \|_\| Some(Color::RED))`, after `set_capture_renderer(compose_skia::raster_colors)` (the test crate depends on compose-skia) |
 | `mainClock.advanceTimeBy(100)`, `waitUntil { … }`, `runOnIdle { … }` | `advance_time_by(Duration::from_millis(100))`, `wait_until(\|ui\| …)`, `run_on_idle(\|ui\| …)` |
 
 Also `perform_text_input`, `perform_key_press`, `perform_semantics_action`, `perform_scroll_to`, `request_focus`, and on the rule `type_text`, `press_key`. Dumps for debugging: `print_to_string`, `dump_tree()`, `dump_semantics()`, `dump_display_list()`. [docs/09](../09-testing.md) lists the whole API.
@@ -2130,9 +2130,11 @@ fn the_countdown_counts_down_on_the_test_clock() {
     // `mainClock.autoAdvance = false`: time moves only when the test says.
     let mut ui = ComposeTestRule::with_manual_clock(|| effects::Countdown(3));
     ui.on_node_with_text("3 s").assert_exists();
-    // The delay ends at 1 s; the frame that shows the change comes 16 ms later, as Compose's
-    // (`advance_time_by` rounds up to whole frames: 1,008 ms here).
-    ui.advance_time_by(Duration::from_millis(1016));
+    // The delay ends at 1 s; the frame that shows the change comes 16 ms later, at 1,016 ms, as
+    // Compose's. `advance_time_by` rounds up to whole frames: 1 s is 1,008 ms, a frame short.
+    ui.advance_time_by(Duration::from_secs(1));
+    ui.on_node_with_text("3 s").assert_exists();
+    ui.advance_time_by_frame();
     ui.on_node_with_text("2 s").assert_exists();
     // `compose_test`'s clock advances by itself while frames are needed, but not past delays.
     let mut ui = compose_test(|| effects::Countdown(3));

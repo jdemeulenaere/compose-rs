@@ -250,3 +250,24 @@ fn a_node_clipped_away_by_an_ancestor_is_not_displayed() {
     let bounds = ui.on_node_with_tag("half").get_bounds_in_root();
     assert_eq!((bounds.left, bounds.right), (40.dp(), 50.dp()));
 }
+
+/// An index past the nodes selects none: not displayed. A step from not exactly one node
+/// (the parent of a missing node) fails, as Compose's selector does, rather than saying "not
+/// displayed".
+#[test]
+fn a_selector_that_cannot_select_fails_rather_than_saying_not_displayed() {
+    let mut ui = compose_test(|| Item(0, None, None));
+    assert!(!ui.on_node_with_tag("item0").on_child_at(5).is_displayed());
+    assert!(ui.on_node_with_tag("item0").on_child_at(5).is_not_displayed());
+    let message = expect_error(|| {
+        ui.on_node_with_tag("missing").on_parent().is_displayed();
+    });
+    assert!(message.contains("expected exactly 1 node"), "{message}");
+    expect_error(|| {
+        ui.on_node_with_tag("missing").on_parent().is_not_displayed();
+    });
+    expect_error(|| {
+        ui.on_node_with_tag("missing").on_parent().assert_does_not_exist();
+    });
+    ui.on_node_with_tag("item0").on_child_at(5).assert_does_not_exist();
+}

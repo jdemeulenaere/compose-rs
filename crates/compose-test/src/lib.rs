@@ -28,7 +28,7 @@ use compose_ui::platform::Optimizations;
 use compose_ui::{IntSize, platform::UiHost};
 
 pub use bounds::DpAssertions;
-pub use capture::CapturedImage;
+pub use capture::{CaptureRenderer, CapturedImage, set_capture_renderer};
 pub use injection::{
     InjectionScope, KeyInjectionScope, MouseButton, MouseInjectionScope, ScrollWheel,
     TouchInjectionScope, ViewConfiguration,

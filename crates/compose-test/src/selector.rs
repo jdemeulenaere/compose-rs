@@ -62,6 +62,27 @@ pub(crate) struct Selection<'a> {
     pub(crate) custom_error: Option<String>,
 }
 
+/// Why a selector picked no node.
+#[derive(Clone, Debug)]
+pub(crate) enum SelectError {
+    /// An index past the nodes before it: it picks none, as Compose's index selector's
+    /// `customErrorOnNoMatch` (absence assertions pass, `exists` fails with this message).
+    IndexOutOfRange(String),
+    /// A step from one node found not exactly one node before it, as Compose's
+    /// `requiresExactlyOneNode`: every use fails.
+    NotExactlyOne(String),
+}
+
+impl std::fmt::Display for SelectError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SelectError::IndexOutOfRange(message) | SelectError::NotExactlyOne(message) => {
+                formatter.write_str(message)
+            }
+        }
+    }
+}
+
 /// A chain of steps finding nodes in a tree, with its description.
 #[derive(Clone)]
 pub(crate) struct Selector {
@@ -102,7 +123,7 @@ impl Selector {
 
     /// The nodes this selects in `tree`; an error when a step from one node finds not exactly
     /// one before it, as Compose's.
-    pub(crate) fn select<'a>(&self, tree: &'a TreeView<'a>) -> Result<Selection<'a>, String> {
+    pub(crate) fn select<'a>(&self, tree: &'a TreeView<'a>) -> Result<Selection<'a>, SelectError> {
         let before = match &self.before {
             Some(before) => Some(before.select(tree)?),
             None => None,
@@ -114,13 +135,15 @@ impl Selector {
             Step::Relative(relative) => {
                 let before = before.expect("a step after another");
                 if before.nodes.len() != 1 {
-                    return Err(before.custom_error.unwrap_or_else(|| {
-                        format!(
-                            "expected exactly 1 node for ({}), found {}",
-                            self.before.as_ref().map_or("", |b| b.description.as_str()),
-                            before.nodes.len()
-                        )
-                    }));
+                    return Err(SelectError::NotExactlyOne(before.custom_error.unwrap_or_else(
+                        || {
+                            format!(
+                                "expected exactly 1 node for ({}), found {}",
+                                self.before.as_ref().map_or("", |b| b.description.as_str()),
+                                before.nodes.len()
+                            )
+                        },
+                    )));
                 }
                 relative.select(before.nodes[0])
             }

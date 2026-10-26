@@ -9,7 +9,6 @@ mod support;
 
 mod actions;
 mod bounds;
-mod capture;
 mod clock;
 mod displayed;
 mod input;

@@ -2,6 +2,7 @@
 //! they build and link once (docs/08-fast-builds.md).
 
 mod brush;
+mod capture;
 mod line_height;
 mod path_semantics;
 mod path_steps;

@@ -154,6 +154,12 @@ impl UiTree {
         true
     }
 
+    /// Whether something drawn changed since the last draw (the next [`draw`](Self::draw)
+    /// records): for tests comparing a frame's drawing with drawing everything again.
+    pub fn needs_draw(&self) -> bool {
+        self.needs_draw
+    }
+
     /// The window `node` shows in: the overlay (a popup's or a dialog's) it's in, or `None`
     /// for the main content. For tests capturing a window's pixels, as Compose's popups and
     /// dialogs are windows of their own.

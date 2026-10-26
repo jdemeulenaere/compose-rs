@@ -795,8 +795,6 @@ dependencies = [
  "compose-animation",
  "compose-foundation",
  "compose-runtime",
- "compose-skia",
- "compose-test",
  "compose-ui",
  "smallvec",
 ]
