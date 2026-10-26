@@ -368,6 +368,45 @@ impl SemanticsNode {
 
 use crate::tree::{UiTree, capability};
 
+thread_local! {
+    /// The semantics tree being built takes deactivated content in
+    /// ([`UiTree::semantics_tree_with_deactivated`]).
+    static WITH_DEACTIVATED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+impl UiTree {
+    /// Whether `node` is left out of the semantics tree: not placed, unless it's deactivated
+    /// content and the tree takes that in.
+    fn left_out(&self, node: NodeId) -> bool {
+        let value = self.node(node);
+        !value.placed && !(value.deactivated && WITH_DEACTIVATED.with(std::cell::Cell::get))
+    }
+
+    /// The semantics tree with deactivated content in it too (a lazy list's items kept for
+    /// reuse), where they were last placed, as Compose's `skipDeactivatedNodes = false`: for
+    /// tests' `assert_is_deactivated`.
+    pub fn semantics_tree_with_deactivated(&mut self, merged: bool) -> SemanticsNode {
+        let previous = WITH_DEACTIVATED.with(|with| with.replace(true));
+        let tree = self.semantics_tree(merged);
+        WITH_DEACTIVATED.with(|with| with.set(previous));
+        tree
+    }
+
+    /// Whether `node` is in deactivated content (it or an ancestor deactivated), as Compose's
+    /// `LayoutInfo.isDeactivated`.
+    pub fn is_deactivated(&self, node: NodeId) -> bool {
+        let mut current = Some(node);
+        while let Some(id) = current {
+            let Some(value) = self.get(id) else { return false };
+            if value.deactivated {
+                return true;
+            }
+            current = value.parent;
+        }
+        false
+    }
+}
+
 impl UiTree {
     /// The semantics a node's own modifiers set, and the layer of the first one (whose bounds
     /// are the node's semantic bounds).
@@ -472,7 +511,7 @@ impl UiTree {
         parent: &mut SemanticsConfiguration,
         out: &mut Vec<SemanticsNode>,
     ) {
-        if !self.node(node).placed {
+        if self.left_out(node) {
             return;
         }
         let own = self.own_semantics(node).filter(|(config, _)| !config.is_empty());
@@ -529,7 +568,7 @@ impl UiTree {
         config: &mut SemanticsConfiguration,
         children: &mut Vec<SemanticsNode>,
     ) {
-        if !self.node(node).placed || self.node(node).overlay {
+        if self.left_out(node) || self.node(node).overlay {
             return;
         }
         if let Some((own, _)) = self.own_semantics(node) {

@@ -18,6 +18,7 @@ extern crate compose_runtime as compose;
 
 mod bounds;
 mod capture;
+mod configuration_override;
 mod injection;
 mod interaction;
 mod matcher;
@@ -33,7 +34,8 @@ use compose_ui::platform::Optimizations;
 use compose_ui::{IntSize, platform::UiHost};
 
 pub use bounds::DpAssertions;
-pub use capture::{CaptureRenderer, CapturedImage, set_capture_renderer};
+pub use capture::{CaptureRenderer, CapturedImage, ShapeCheck, set_capture_renderer};
+pub use configuration_override::DeviceConfigurationOverride;
 pub use injection::{
     InjectionScope, KeyInjectionScope, MouseButton, MouseInjectionScope, ScrollWheel,
     TouchInjectionScope,

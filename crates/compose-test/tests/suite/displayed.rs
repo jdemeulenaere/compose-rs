@@ -271,3 +271,31 @@ fn a_selector_that_cannot_select_fails_rather_than_saying_not_displayed() {
     });
     ui.on_node_with_tag("item0").on_child_at(5).assert_does_not_exist();
 }
+
+// Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/layout/SubcomposeLayoutTest.kt, assertIsDetached (its `assertIsDeactivated` checks)
+/// A lazy list's items that left, kept for reuse, are deactivated: the finders don't see them,
+/// `assert_is_deactivated` does; a shown item isn't deactivated, nor one never composed.
+#[test]
+fn items_kept_for_reuse_are_deactivated() {
+    let count = mutable_state_of(3usize);
+    let handle = count.handle();
+    let mut ui = compose_test(move || {
+        LazyColumn!(modifier = Modifier.size((100.dp(), 300.dp())), |scope: LazyListScope| {
+            scope.items(handle.get(), |i| {
+                Box!(modifier = Modifier.size(20.dp()).test_tag(format!("item{i}")));
+            });
+        });
+    });
+    let message = expect_error(|| {
+        ui.on_node_with_tag("item0").assert_is_deactivated();
+    });
+    assert!(message.contains("is active"), "{message}");
+    count.set(0);
+    ui.wait_for_idle();
+    ui.on_node_with_tag("item0").assert_does_not_exist();
+    ui.on_node_with_tag("item0").assert_is_deactivated();
+    let message = expect_error(|| {
+        ui.on_node_with_tag("item9").assert_is_deactivated();
+    });
+    assert!(message.contains("found 0"), "{message}");
+}

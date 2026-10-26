@@ -176,3 +176,51 @@ fn a_node_under_a_popup_or_a_dialog_captures_without_them() {
     // The dialog's own window has its content.
     dialog.on_node(is_dialog()).capture_to_image().assert_contains_color(Color::RED);
 }
+
+// Compose: compose/test-utils/src/androidMain/kotlin/androidx/compose/testutils/ImageAssertions.android.kt, assertShape (as foundation's ShapeTest and BackgroundTest use it)
+/// A red circle filling a white box is that shape (its anti-aliased edge left out); a square
+/// isn't; a 20 dp padded square in it is.
+#[test]
+fn a_drawn_shape_is_asserted_by_its_outline() {
+    let density = compose::ui::Density::default();
+    let mut ui = compose_test(|| {
+        Column!({
+            Box!(modifier = Modifier.test_tag("circle").size(100.dp()).background(Color::WHITE), {
+                Box!(
+                    modifier = Modifier
+                        .fill_max_size()
+                        .clip(compose::foundation::CIRCLE_SHAPE)
+                        .background(Color::RED)
+                );
+            });
+            Box!(modifier = Modifier.test_tag("square").size(100.dp()).background(Color::WHITE), {
+                Box!(modifier = Modifier.padding(20.dp()).fill_max_size().background(Color::BLUE));
+            });
+        });
+    });
+    let circle = ui.on_node_with_tag("circle").capture_to_image();
+    circle.assert_shape(
+        density,
+        &compose::foundation::CIRCLE_SHAPE,
+        Color::RED,
+        Some(Color::WHITE),
+    );
+    let wrong = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        circle.assert_shape(
+            density,
+            &compose::ui::Shape::Rectangle,
+            Color::RED,
+            Some(Color::WHITE),
+        );
+    }));
+    assert!(wrong.is_err(), "a circle isn't a square");
+    let square = ui.on_node_with_tag("square").capture_to_image();
+    square.assert_shape_padded(
+        density,
+        20.dp(),
+        20.dp(),
+        Color::WHITE,
+        Color::BLUE,
+        &compose::ui::Shape::Rectangle,
+    );
+}

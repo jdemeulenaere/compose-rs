@@ -10,6 +10,7 @@ mod support;
 mod actions;
 mod bounds;
 mod clock;
+mod configuration_override;
 mod displayed;
 mod input;
 mod restoration;

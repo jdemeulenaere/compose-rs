@@ -6,7 +6,9 @@
 use std::sync::Mutex;
 
 use compose_ui::platform::{DisplayList, NodeId, Optimizations, TextMeasurer};
-use compose_ui::{Color, IntOffset, IntSize};
+use compose_ui::{
+    Color, Density, Dp, IntOffset, IntSize, LayoutDirection, Offset, Rect, Shape, Size,
+};
 
 use crate::interaction::SemanticsNodeInteraction;
 
@@ -102,6 +104,151 @@ impl CapturedImage {
         self
     }
 
+    /// `shape` filled with `shape_color` over the whole image, `background_color` around it if
+    /// given, as the test utilities' `assertShape(density, shape, shapeColor, backgroundColor)`:
+    /// pixels within 1 dp of an edge (anti-aliased) aren't checked.
+    #[track_caller]
+    pub fn assert_shape(
+        &self,
+        density: Density,
+        shape: &Shape,
+        shape_color: Color,
+        background_color: Option<Color>,
+    ) -> &Self {
+        self.assert_shape_with(&ShapeCheck::new(
+            density,
+            shape.clone(),
+            shape_color,
+            background_color,
+            self,
+        ))
+    }
+
+    /// `shape` filled with `shape_color`, `horizontal_padding` and `vertical_padding` in from
+    /// the image's edges, over `background_color`, as `assertShape(density, horizontalPadding,
+    /// verticalPadding, backgroundColor, shapeColor, shape)`.
+    #[track_caller]
+    pub fn assert_shape_padded(
+        &self,
+        density: Density,
+        horizontal_padding: Dp,
+        vertical_padding: Dp,
+        background_color: Color,
+        shape_color: Color,
+        shape: &Shape,
+    ) -> &Self {
+        let mut check =
+            ShapeCheck::new(density, shape.clone(), shape_color, Some(background_color), self);
+        check.shape_size = Size::new(
+            self.width as f32 - density.to_px(horizontal_padding) * 2.0,
+            self.height as f32 - density.to_px(vertical_padding) * 2.0,
+        );
+        self.assert_shape_with(&check)
+    }
+
+    /// The shape and its background as `check` says, as the full `assertShape`: inside the
+    /// shape (farther than the gap from its edge, away from its center), the shape's color;
+    /// outside it and inside the background's shape, the background's; pixels outside the
+    /// background's bounds aren't checked.
+    #[track_caller]
+    pub fn assert_shape_with(&self, check: &ShapeCheck) -> &Self {
+        let bounds = |center: Offset, size: Size| {
+            Rect::new(
+                center.x - size.width / 2.0,
+                center.y - size.height / 2.0,
+                center.x + size.width / 2.0,
+                center.y + size.height / 2.0,
+            )
+        };
+        let shape_bounds = bounds(check.shape_center, check.shape_size);
+        let background_bounds = bounds(check.background_center, check.background_size);
+        let outline = |shape: &Shape, bounds: Rect| {
+            shape.outline_in(
+                Size::new(bounds.width(), bounds.height()),
+                &check.density,
+                LayoutDirection::Ltr,
+            )
+        };
+        let shape_outline = outline(&check.shape, shape_bounds);
+        let background_outline = outline(&check.background_shape, background_bounds);
+        let gap = check.anti_aliasing_gap;
+        let inside = |outline: &compose_ui::Outline, bounds: Rect, point: Offset| {
+            outline.contains(Offset::new(point.x - bounds.left, point.y - bounds.top))
+        };
+        // Farther from the center by the gap (inside even there: well inside), or closer to it
+        // (outside even there: well outside), as the test utilities' anchor moves.
+        let farther = |x: f32, y: f32, center: Offset| {
+            let move_away = |value: f32, anchor: f32| {
+                if value > anchor {
+                    value + gap
+                } else if value < anchor {
+                    value - gap
+                } else {
+                    value
+                }
+            };
+            Offset::new(move_away(x, center.x), move_away(y, center.y))
+        };
+        let closer = |x: f32, y: f32, center: Offset| {
+            let move_in = |value: f32, anchor: f32| {
+                if value > anchor {
+                    (value - gap).max(anchor)
+                } else if value < anchor {
+                    (value + gap).min(anchor)
+                } else {
+                    value
+                }
+            };
+            Offset::new(move_in(x, center.x), move_in(y, center.y))
+        };
+        let in_bounds = |bounds: Rect, x: f32, y: f32| {
+            bounds.left <= x + gap
+                && bounds.top <= y + gap
+                && bounds.right >= x - gap
+                && bounds.bottom >= y - gap
+        };
+        let range = |from: f32, to: f32, limit: i32| {
+            (from.max(0.0).round() as i32)..(to.min(limit as f32).round() as i32)
+        };
+        let rows = range(
+            shape_bounds.top.min(background_bounds.top),
+            shape_bounds.bottom.max(background_bounds.bottom),
+            self.height,
+        );
+        for y in rows {
+            let columns = range(
+                shape_bounds.left.min(background_bounds.left),
+                shape_bounds.right.max(background_bounds.right),
+                self.width,
+            );
+            for x in columns {
+                let (fx, fy) = (x as f32, y as f32);
+                let in_shape = in_bounds(shape_bounds, fx, fy);
+                let in_background = in_bounds(background_bounds, fx, fy);
+                let shape_inside = in_shape
+                    && inside(&shape_outline, shape_bounds, farther(fx, fy, check.shape_center));
+                if shape_inside {
+                    self.assert_pixel_color(check.shape_color, x, y);
+                    continue;
+                }
+                let Some(background_color) = check.background_color else { continue };
+                let shape_outside = !in_shape
+                    || !inside(&shape_outline, shape_bounds, closer(fx, fy, check.shape_center));
+                if in_background
+                    && shape_outside
+                    && inside(
+                        &background_outline,
+                        background_bounds,
+                        farther(fx, fy, check.background_center),
+                    )
+                {
+                    self.assert_pixel_color(background_color, x, y);
+                }
+            }
+        }
+        self
+    }
+
     /// Some pixel is exactly `color`, as `assertContainsColor`.
     #[track_caller]
     pub fn assert_contains_color(&self, color: Color) -> &Self {
@@ -191,4 +338,48 @@ fn render(rule: &mut crate::ComposeTestRule, window: Option<NodeId>) -> Captured
         renderer(&list, size, tree.text_measurer_ref(), optimizations)
     });
     CapturedImage::new(size.width, size.height, pixels)
+}
+
+/// What [`CapturedImage::assert_shape_with`] checks, as the test utilities' `assertShape`
+/// parameters: the shape's bounding box `shape_size` centered at `shape_center`, the
+/// background's likewise, and the gap left unchecked along their edges (1 dp by default).
+#[derive(Clone, Debug)]
+pub struct ShapeCheck {
+    pub density: Density,
+    pub shape: Shape,
+    pub shape_color: Color,
+    pub shape_size: Size,
+    pub shape_center: Offset,
+    pub background_shape: Shape,
+    /// `None`: only the shape's pixels are checked.
+    pub background_color: Option<Color>,
+    pub background_size: Size,
+    pub background_center: Offset,
+    pub anti_aliasing_gap: f32,
+}
+
+impl ShapeCheck {
+    /// `shape` and a rectangular background both filling `image`, with a 1 dp gap.
+    pub fn new(
+        density: Density,
+        shape: Shape,
+        shape_color: Color,
+        background_color: Option<Color>,
+        image: &CapturedImage,
+    ) -> ShapeCheck {
+        let size = Size::new(image.width as f32, image.height as f32);
+        let center = Offset::new(size.width / 2.0, size.height / 2.0);
+        ShapeCheck {
+            density,
+            shape,
+            shape_color,
+            shape_size: size,
+            shape_center: center,
+            background_shape: Shape::Rectangle,
+            background_color,
+            background_size: size,
+            background_center: center,
+            anti_aliasing_gap: density.to_px(Dp(1.0)),
+        }
+    }
 }

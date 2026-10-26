@@ -316,6 +316,36 @@ impl<'a> SemanticsNodeInteraction<'a> {
         self
     }
 
+    /// The node is deactivated content (a lazy list's item kept for reuse), as
+    /// `assertIsDeactivated`: it's looked for among the deactivated nodes too, which the
+    /// other finders leave out.
+    #[track_caller]
+    pub fn assert_is_deactivated(&mut self) -> &mut Self {
+        self.rule.implicit_wait();
+        let tree =
+            self.rule.host.with_tree(|tree| tree.semantics_tree_with_deactivated(self.merged));
+        let view = TreeView::new(&tree);
+        let found: Result<Vec<_>, String> = match self.selector.select(&view) {
+            Ok(selection) => Ok(selection.nodes.iter().map(|node| node.id()).collect()),
+            Err(error) => Err(error.to_string()),
+        };
+        let description = self.selector.description.clone();
+        let ids = found
+            .unwrap_or_else(|error| panic!("compose-test: Failed: assertDeactivated: {error}"));
+        assert!(
+            ids.len() == 1,
+            "compose-test: Failed: assertDeactivated: expected exactly 1 node {description}, \
+             found {}",
+            ids.len()
+        );
+        let deactivated = self.rule.host.with_tree(|tree| tree.is_deactivated(ids[0]));
+        assert!(
+            deactivated,
+            "compose-test: Failed: assertDeactivated: the node {description} is active"
+        );
+        self
+    }
+
     /// Checks `matcher` on the node, in its tree, as `assert(matcher)`.
     #[track_caller]
     pub fn assert(&mut self, matcher: Matcher) -> &mut Self {
