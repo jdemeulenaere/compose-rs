@@ -24,6 +24,8 @@ import android.util.Log
 import android.util.SparseArray
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.text.BreakIterator
+import java.util.PriorityQueue
 import kotlin.math.ceil
 
 /**
@@ -207,6 +209,12 @@ internal class TextMeasurer(
          */
         val maxIntrinsicWidth: Float,
     ) {
+        /**
+         * The width of the widest segment of [content] between line break opportunities, as
+         * Compose's `LayoutIntrinsics.minIntrinsicWidth`: measured when first asked.
+         */
+        val minIntrinsicWidth: Float by lazy(LazyThreadSafetyMode.NONE) { minIntrinsicWidth(content, paint) }
+
         /** [content] with its line height span, for a `StaticLayout` (made when one needs it). */
         val staticText: CharSequence by lazy(LazyThreadSafetyMode.NONE) { withLineHeight(content, lineHeight, lineHeightStyle) }
 
@@ -638,6 +646,9 @@ internal class TextMeasurer(
         return same
     }
 
+    /** Paragraph [handle]'s minimum intrinsic width ([Intrinsics.minIntrinsicWidth]), or NaN. */
+    fun minIntrinsicWidth(handle: Int): Float = intrinsics.get(handle)?.minIntrinsicWidth ?: Float.NaN
+
     fun hitTest(handle: Int, x: Float, y: Float): Int {
         val layout = layouts.get(handle) ?: return 0
         val line = layout.getLineForVertical(y.toInt())
@@ -838,6 +849,35 @@ internal class TextMeasurer(
 }
 
 /** A growable list of ints, without boxing them. */
+/**
+ * The width of [text]'s widest segment between line break opportunities, as Compose's
+ * `LayoutIntrinsics.computeMinIntrinsicWidth`: of the ten longest segments, the widest.
+ */
+private fun minIntrinsicWidth(text: CharSequence, paint: TextPaint): Float {
+    val iterator = BreakIterator.getLineInstance(paint.textLocale)
+    iterator.setText(text.toString())
+    val candidates = PriorityQueue<IntArray>(MIN_WIDTH_CANDIDATES, compareBy { it[1] - it[0] })
+    var start = 0
+    var end = iterator.next()
+    while (end != BreakIterator.DONE) {
+        if (candidates.size < MIN_WIDTH_CANDIDATES) {
+            candidates.add(intArrayOf(start, end))
+        } else {
+            val shortest = candidates.peek()
+            if (shortest != null && shortest[1] - shortest[0] < end - start) {
+                candidates.poll()
+                candidates.add(intArrayOf(start, end))
+            }
+        }
+        start = end
+        end = iterator.next()
+    }
+    return candidates.maxOfOrNull { Layout.getDesiredWidth(text, it[0], it[1], paint) } ?: 0f
+}
+
+/** How many of the longest segments [minIntrinsicWidth] measures, as Compose's heap. */
+private const val MIN_WIDTH_CANDIDATES = 10
+
 internal class IntList {
     private var values = IntArray(16)
     var size = 0

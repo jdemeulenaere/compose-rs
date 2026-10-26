@@ -53,6 +53,12 @@ pub trait TextBackend: 'static {
     fn restyle(&mut self, _previous: u32, _handle: u32, _color: u32, _decoration: u8) -> bool {
         false
     }
+    /// Paragraph `handle`'s width with every soft line break taken (its widest segment between
+    /// line break opportunities), as Compose's `minIntrinsicWidth`. `None` (the default) when the
+    /// backend doesn't know it.
+    fn min_intrinsic_width(&self, _handle: u32) -> Option<f32> {
+        None
+    }
     /// The UTF-16 offset nearest to `position`.
     fn hit_test(&self, handle: u32, position: Offset) -> usize;
     /// The cursor before UTF-16 offset `offset`: its top, bottom and x.
@@ -220,6 +226,10 @@ impl<B: TextBackend> TextMeasurer for AndroidTextMeasurer<B> {
 
     fn max_intrinsic_width(&self, paragraph: ParagraphHandle) -> Option<f32> {
         self.entry(paragraph).laid_out.max_intrinsic_width
+    }
+
+    fn min_intrinsic_width(&self, paragraph: ParagraphHandle) -> Option<f32> {
+        self.backend.min_intrinsic_width(paragraph.0 as u32)
     }
 
     /// A new handle for the same layout in `style`'s paint: Kotlin draws the layout it has in

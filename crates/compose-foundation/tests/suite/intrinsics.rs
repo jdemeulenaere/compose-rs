@@ -60,7 +60,7 @@ impl MeasurePolicy for TestIntrinsics {
         measurables: &[Measurable],
         _: Constraints,
     ) -> MeasureResult {
-        let mut asked = Asked { scope: &mut **scope, measurable: measurables[0] };
+        let mut asked = Asked { scope, measurable: measurables[0] };
         (self.test)(&mut asked);
         self.ran.set(true);
         scope.layout(0, 0)

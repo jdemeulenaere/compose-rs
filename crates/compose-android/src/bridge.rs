@@ -139,6 +139,7 @@ struct JniText {
     relayout: JMethodID,
     restyle: JMethodID,
     probe_layout: JMethodID,
+    min_intrinsic_width: JMethodID,
     hit_test: JMethodID,
     cursor: JMethodID,
     release: JMethodID,
@@ -284,6 +285,22 @@ impl TextBackend for JniText {
             };
             check(env, "TextMeasurer.restyle");
             restyled.and_then(|value| value.z()).unwrap_or(false)
+        })
+    }
+
+    fn min_intrinsic_width(&self, handle: u32) -> Option<f32> {
+        with_main_env(|env| {
+            // SAFETY: the method's signature is `(I)F`.
+            let width = unsafe {
+                env.call_method_unchecked(
+                    &*self.measurer,
+                    self.min_intrinsic_width,
+                    ReturnType::Primitive(Primitive::Float),
+                    &[JValue::Int(handle as jint).as_jni()],
+                )
+            };
+            check(env, "TextMeasurer.minIntrinsicWidth");
+            width.and_then(|value| value.f()).ok().filter(|width| !width.is_nan())
         })
     }
 
@@ -525,6 +542,7 @@ fn create(
         relayout: method(env, measurer, jni_str!("relayout"), jni_sig!("(IIII)Z")),
         restyle: method(env, measurer, jni_str!("restyle"), jni_sig!("(IIII)Z")),
         probe_layout: method(env, measurer, jni_str!("probeLayout"), jni_sig!("(IIII)Z")),
+        min_intrinsic_width: method(env, measurer, jni_str!("minIntrinsicWidth"), jni_sig!("(I)F")),
         hit_test: method(env, measurer, jni_str!("hitTest"), jni_sig!("(IFF)I")),
         cursor: method(env, measurer, jni_str!("cursor"), jni_sig!("(II)V")),
         release: method(env, measurer, jni_str!("release"), jni_sig!("(I)V")),
