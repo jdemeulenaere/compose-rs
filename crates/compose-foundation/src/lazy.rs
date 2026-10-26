@@ -1276,7 +1276,14 @@ struct Items {
     headers: Vec<usize>,
     /// Some items have spans (a grid's): its lines are found by walking the items.
     has_custom_spans: bool,
+    /// The keys asked for, by index modulo its length: a key function runs once per item while
+    /// the items stay, as Compose's key-index map calls it (the composition, the layout and
+    /// the layout info ask for a key several times a frame).
+    keys: [Cell<(usize, u64)>; KEY_CACHE],
 }
+
+/// How many keys `Items` keeps: more than the items in view of most lists.
+const KEY_CACHE: usize = 64;
 
 impl Items {
     fn new(intervals: Vec<Interval>) -> Items {
@@ -1291,7 +1298,8 @@ impl Items {
             }
             count += interval.count;
         }
-        Items { intervals, starts, count, headers, has_custom_spans }
+        let keys = std::array::from_fn(|_| Cell::new((usize::MAX, 0)));
+        Items { intervals, starts, count, headers, has_custom_spans, keys }
     }
 
     /// The interval holding item `index`, and the item's index in it.
@@ -1318,12 +1326,20 @@ impl Items {
     }
 
     fn key(&self, index: usize) -> u64 {
-        match self.find(index) {
+        let cached = &self.keys[index % KEY_CACHE];
+        if let (at, key) = cached.get()
+            && at == index
+        {
+            return key;
+        }
+        let key = match self.find(index) {
             Some((interval, local)) => {
                 interval.key.as_ref().map_or(hash_key(&DefaultKey(index)), |key| key(local))
             }
             None => hash_key(&DefaultKey(index)),
-        }
+        };
+        cached.set((index, key));
+        key
     }
 
     /// The sticky header at or before `index`, and the next header after it, if any.

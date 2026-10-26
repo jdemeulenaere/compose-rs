@@ -30,8 +30,8 @@ By area: `foundation-layout` 29 files (850 tests); lazy lists, grids and `LazyLa
 | Status | Files | `@Test` methods |
 |---|---|---|
 | `covered` | 13 | 132 |
-| `ported` | 9 | 170 |
-| `port` | 17 | 186 |
+| `ported` | 10 | 191 |
+| `port` | 16 | 165 |
 | `partial` | 23 | 822 |
 | `feature:<name>` | 113 | 1,686 |
 | `n/a` | 10 | 133 |
@@ -94,7 +94,7 @@ The table's suite references (`lazy_api.rs`, `fling.rs`, …) are files in `crat
 | compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/list/LazyColumnMouseHoverTest.kt | 4 | Hover follows content scrolled by the wheel under a resting mouse | port (`review_round6.rs::scrolling_under_a_resting_mouse_moves_the_hover` covers one case) |
 | compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/list/LazyColumnTest.kt | 20 | Disposal when data changes or the list leaves, removals, alignment, a fling stopped by a press, nested LazyRow reuse, recomposition order | port (partly in `fling.rs::a_press_during_a_fling_stops_it_without_clicking`, `lazy_reuse.rs`; `flingAnimationStopsOnFingerDown` uses `animateScrollBy`) |
 | compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/list/LazyColumnTrackpadHoverTest.kt | 8 | Hover during trackpad pans | feature:pointer-input-types (trackpad pan events, ui) |
-| compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/list/LazyCustomKeysTest.kt | 21 | Keyed items keep state through removals, reorders and replacement; keys in `LazyListItemInfo` | port (`lazy_api.rs::keyed_list_items_keep_their_state_when_items_before_them_go`, `lazy_reuse.rs::reordered_items_keep_their_nodes…`; 1 test needs feature:lazy-layout-info) |
+| compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/list/LazyCustomKeysTest.kt | 21 | Keyed items keep state through removals, reorders and replacement; keys in `LazyListItemInfo` | ported (`lazy_custom_keys.rs`: 13 tests, all 21; keys compared hashed (D170); they found D867) |
 | compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/list/LazyListAnimateScrollScope.kt | 1 | `animateScrollToItem` doesn't stop at a sticky header with the same index | ported (`lazy_scroll.rs::a_sticking_header_is_not_an_item_found_in_view`) |
 | compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/list/LazyListBeyondBoundsAndExtraItemsTest.kt | 2 | Beyond-bounds items placed with `beyondBoundsItemCount` items | feature:beyond-bounds-api |
 | compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/list/LazyListBeyondBoundsItemCountTest.kt | 3 | The internal `beyondBoundsItemCount` parameter | n/a: internal parameter, not public API |
