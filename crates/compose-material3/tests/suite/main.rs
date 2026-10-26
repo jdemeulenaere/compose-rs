@@ -11,6 +11,7 @@ mod drawer;
 mod intrinsics;
 mod material;
 mod material_tokens;
+mod progress_indicator;
 mod review_d479;
 mod review_d554_local;
 mod review_e;

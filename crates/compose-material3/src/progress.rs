@@ -48,11 +48,17 @@ impl ProgressIndicatorDefaults {
     }
 }
 
+/// A progress coerced between 0 and 1, NaN taken as 0: what Compose's indicators report
+/// (`coercedProgress().takeUnless { it.isNaN() } ?: 0f`) and, here, draw.
+fn coerce_progress(progress: f32) -> f32 {
+    if progress.is_nan() { 0.0 } else { progress.clamp(0.0, 1.0) }
+}
+
 /// How the progress is read: a value (determinate) or none (indeterminate).
 fn progress_semantics(modifier: Modifier, progress: Option<f32>) -> Modifier {
     modifier.semantics_with(true, move |config| {
         config.set_progress_bar_range_info(ProgressBarRangeInfo {
-            current: progress.map_or(0.0, |progress| progress.clamp(0.0, 1.0)),
+            current: progress.map_or(0.0, coerce_progress),
             range: if progress.is_some() { (0.0, 1.0) } else { (0.0, 0.0) },
             steps: 0,
         });
@@ -79,7 +85,7 @@ pub fn CircularProgressIndicator(
         if track_color.alpha() > 0 {
             scope.draw_arc(oval, 0.0, 360.0, Paint::stroke_with(track_color, stroke, stroke_cap));
         }
-        let sweep = progress.clamp(0.0, 1.0) * 360.0;
+        let sweep = coerce_progress(progress) * 360.0;
         scope.draw_arc(oval, -90.0, sweep, Paint::stroke_with(color, stroke, stroke_cap));
     });
 }
@@ -179,7 +185,7 @@ pub fn LinearProgressIndicator(
     let modifier = linear_size(progress_semantics(modifier, Some(progress)));
     compose_foundation::layout::Canvas(modifier, move |scope| {
         let rtl = scope.layout_direction() == compose_ui::LayoutDirection::Rtl;
-        let progress = progress.clamp(0.0, 1.0);
+        let progress = coerce_progress(progress);
         let track_start = progress + progress.min(linear_gap_fraction(scope, gap_size, stroke_cap));
         if track_start <= 1.0 {
             draw_line_fraction(scope, track_start, 1.0, track_color, stroke_cap, rtl);
