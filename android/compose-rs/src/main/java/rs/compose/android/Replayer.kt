@@ -204,7 +204,8 @@ internal class Replayer(private val text: TextMeasurer) {
 
     /**
      * A group's render node. Its origin is the group's; what it draws outside its bounds isn't
-     * clipped (`setClipToBounds(false)`), except by an alpha's offscreen layer, which they bound.
+     * clipped (`setClipToBounds(false)`), except by an alpha's offscreen layer, which they bound,
+     * or the clip to them standing for it (`COMPOSITING_MODULATE_ALPHA_IN_BOUNDS`).
      * A layer's node has the layer's bounds (from the group's origin to the layer's far
      * corner: the layer's own when it's at the group's origin, as Compose's), others the
      * view's size (their bounds only limit what a change of theirs repaints, as D154's).
@@ -907,14 +908,18 @@ internal class Replayer(private val text: TextMeasurer) {
         if (changed(old, ENTRY_AMBIENT, ENTRY_SPOT)) node.setAmbientShadowColor(buffer.getInt(at + ENTRY_AMBIENT))
         if (changed(old, ENTRY_SPOT, ENTRY_COMPOSITING)) node.setSpotShadowColor(buffer.getInt(at + ENTRY_SPOT))
         // Compose's strategies: an offscreen buffer (a compositing layer) always, or HWUI's for
-        // an alpha below 1 when overlapping, or the alpha multiplying each drawing's.
+        // an alpha below 1 when overlapping, or the alpha multiplying each drawing's. One drawing
+        // faded by its paint (`SINGLE_DRAWING_FADE`) is clipped to the node's bounds, as the
+        // offscreen buffer it stands for bounds it (D521).
         if (changed(old, ENTRY_COMPOSITING, ENTRY_BOUNDS)) {
-            when (buffer.get(at + ENTRY_COMPOSITING).toInt()) {
+            val compositing = buffer.get(at + ENTRY_COMPOSITING).toInt()
+            node.setClipToBounds(compositing == COMPOSITING_MODULATE_ALPHA_IN_BOUNDS)
+            when (compositing) {
                 COMPOSITING_OFFSCREEN -> {
                     node.setUseCompositingLayer(true, null)
                     node.setHasOverlappingRendering(true)
                 }
-                COMPOSITING_MODULATE_ALPHA -> {
+                COMPOSITING_MODULATE_ALPHA, COMPOSITING_MODULATE_ALPHA_IN_BOUNDS -> {
                     node.setUseCompositingLayer(false, null)
                     node.setHasOverlappingRendering(false)
                 }
@@ -1003,6 +1008,7 @@ internal class Replayer(private val text: TextMeasurer) {
         node.setSpotShadowColor(BLACK)
         node.setUseCompositingLayer(false, null)
         node.setHasOverlappingRendering(true)
+        node.setClipToBounds(false)
     }
 
     /**
@@ -1619,6 +1625,7 @@ internal class Replayer(private val text: TextMeasurer) {
         const val COMPOSITING_AUTO = 0
         const val COMPOSITING_OFFSCREEN = 1
         const val COMPOSITING_MODULATE_ALPHA = 2
+        const val COMPOSITING_MODULATE_ALPHA_IN_BOUNDS = 3
         const val BLACK = 0xFF000000.toInt()
     }
 }

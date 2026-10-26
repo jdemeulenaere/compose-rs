@@ -32,8 +32,10 @@ impl Optimization {
     /// drawing with a paint and no nested layer, fades that paint instead of compositing its
     /// content offscreen (Android: `setHasOverlappingRendering(false)`; an alpha layer inside a
     /// recording around one such drawing is folded into its paint), as Compose's
-    /// `CompositingStrategy.ModulateAlpha` would. The pixels are the same (one drawing can't
-    /// overlap itself). Compose's `Auto` draws such a layer offscreen (D153, D157, D521).
+    /// `CompositingStrategy.ModulateAlpha` would, clipped to the bounds the offscreen buffer
+    /// would have had (Android: the node's `setClipToBounds(true)`, a folded layer's clip). The
+    /// pixels are the same (one drawing can't overlap itself), a drawing past the layer's bounds
+    /// too. Compose's `Auto` draws such a layer offscreen (D153, D157, D521).
     pub const SINGLE_DRAWING_FADE: Optimization = Optimization {
         bit: 0,
         name: "single_drawing_fade",

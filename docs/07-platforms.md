@@ -136,7 +136,7 @@ What compose-rs does beyond Compose's work is a flag of `Optimization::ALL` (`co
 
 | Flag | Default | What it does (Compose instead) |
 |---|---|---|
-| `single_drawing_fade` | on | fades a layer holding one drawing by its paint, `ModulateAlpha`-like (an offscreen layer, `Auto`) (D521) |
+| `single_drawing_fade` | on | fades a layer holding one drawing by its paint, `ModulateAlpha`-like, clipped to the bounds its offscreen buffer would have had (an offscreen layer, `Auto`) (D521, D648) |
 | `performance_hint` | on | the main thread and the RenderThread in a hint session of compose-rs's own (HWUI's session only) (D390, D500, D568, D581, D610) |
 | `reuse_paragraph_at_same_layout_width` | on | keeps a paragraph when new width bounds lay it out at the same width (lays it out again) (D551) |
 | `prefetch_two_ahead` | off | prefetches two items (grid lines) ahead (one) (D156, D560) |

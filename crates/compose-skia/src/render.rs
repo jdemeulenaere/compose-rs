@@ -180,7 +180,9 @@ impl Walk<'_> {
         let start = self.canvas.save_count();
         let outer_alpha = self.alpha;
         if let Some(mut layer) = group.layer {
-            // One drawing faded by its paint, with the optimization (D521).
+            // One drawing faded by its paint, with the optimization (D521), clipped to the
+            // bounds the offscreen buffer it stands for has.
+            let mut faded_in_bounds = false;
             if layer.compositing_strategy == CompositingStrategy::Auto
                 && layer.alpha < 1.0
                 && self.optimizations.contains(Optimization::SINGLE_DRAWING_FADE)
@@ -190,6 +192,7 @@ impl Walk<'_> {
                 && single_drawing(&group.content.ops).is_some()
             {
                 layer.compositing_strategy = CompositingStrategy::ModulateAlpha;
+                faded_in_bounds = true;
             }
             for op in layer.operations() {
                 match op {
@@ -203,6 +206,10 @@ impl Walk<'_> {
                     }
                     op => draw_op(self.canvas, &op, &[], self.measurer, start, self.alpha),
                 }
+            }
+            if faded_in_bounds {
+                self.canvas.save();
+                self.canvas.clip_rect(rect(&layer.bounds), None, false);
             }
             if let Some(alpha) = layer.modulated_alpha() {
                 self.alpha *= alpha;

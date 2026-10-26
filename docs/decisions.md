@@ -21,7 +21,7 @@ The log is split by area into the files below, one table each, rows in number or
 | [ui-and-layout](decisions/ui-and-layout.md) | Modifiers and nodes, layout and intrinsics, drawing in the tree, input, focus, semantics, animation, Material 3, navigation, platform values. | 84 |
 | [text](decisions/text.md) | Text measurement and layout on each platform, fonts, text fields and editing. | 26 |
 | [lazy-and-prefetch](decisions/lazy-and-prefetch.md) | Lazy lists and grids, item reuse, the policy of composing only what is in view, prefetch. | 64 |
-| [android-drawing](decisions/android-drawing.md) | The display list and its replayer, render nodes and repaint boundaries, paths, shadows, layers. | 26 |
+| [android-drawing](decisions/android-drawing.md) | The display list and its replayer, render nodes and repaint boundaries, paths, shadows, layers. | 27 |
 | [android-host-and-performance](decisions/android-host-and-performance.md) | The view and activity glue, the frame loop, the hint session, jank, startup, memory, and the optimization flags. | 25 |
 | [desktop](decisions/desktop.md) | The desktop host: window, Skia rendering, input and events. | 6 |
 | [benchmarks](decisions/benchmarks.md) | The benchmark apps, protocols and rounds, and how results are read. | 30 |
@@ -340,7 +340,7 @@ The log is split by area into the files below, one table each, rows in number or
 | D511 | [android-host-and-performance](decisions/android-host-and-performance.md#d511) | current |
 | D512 | [ui-and-layout](decisions/ui-and-layout.md#d512) | superseded by [D530](decisions/ui-and-layout.md#d530), [D534](decisions/android-drawing.md#d534) |
 | D520 | [android-host-and-performance](decisions/android-host-and-performance.md#d520) | revised by [D581](decisions/android-host-and-performance.md#d581), [D601](decisions/android-host-and-performance.md#d601) |
-| D521 | [android-drawing](decisions/android-drawing.md#d521) | current |
+| D521 | [android-drawing](decisions/android-drawing.md#d521) | revised by [D648](decisions/android-drawing.md#d648) |
 | D522 | [android-drawing](decisions/android-drawing.md#d522) | current |
 | D523 | [ui-and-layout](decisions/ui-and-layout.md#d523) | current |
 | D524 | [ui-and-layout](decisions/ui-and-layout.md#d524) | current |
@@ -416,3 +416,4 @@ The log is split by area into the files below, one table each, rows in number or
 | D645 | [benchmarks](decisions/benchmarks.md#d645) | current |
 | D646 | [android-drawing](decisions/android-drawing.md#d646) | current |
 | D647 | [benchmarks](decisions/benchmarks.md#d647) | current |
+| D648 | [android-drawing](decisions/android-drawing.md#d648) | current |

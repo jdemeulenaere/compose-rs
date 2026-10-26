@@ -322,6 +322,47 @@ fn the_single_drawing_fade_keeps_overlapping_layers_offscreen() {
     );
 }
 
+/// A 20 × 20 layer at half alpha drawing one rect twice its width (not clipped), with
+/// `optimizations`: the pixels inside the layer and past it.
+fn overflowing_pixels(optimizations: compose::ui::platform::Optimizations) -> (Color, Color) {
+    use compose::ui::{GraphicsLayerScope, Modifier, Paint, Rect, UnitExt};
+    let mut host =
+        UiHost::new(IntSize::new(40, 20), Density::new(1.0), Box::new(SkiaTextMeasurer::new()));
+    host.set_optimizations(optimizations);
+    host.set_content(move || {
+        compose::foundation::layout::Canvas(
+            Modifier.size((20.dp(), 20.dp())).graphics_layer_with(GraphicsLayerScope {
+                alpha: 0.5,
+                ..GraphicsLayerScope::default()
+            }),
+            |scope| scope.draw_rect(Rect::new(0.0, 0.0, 40.0, 20.0), Paint::fill(Color::RED)),
+        );
+    });
+    host.frame();
+    let mut renderer = RasterRenderer::new(40, 20);
+    renderer.set_optimizations(host.optimizations());
+    host.with_tree(|tree| {
+        renderer.render(tree.display_list(), Color::WHITE, 1.0, tree.text_measurer_ref())
+    });
+    (renderer.pixel(10, 10), renderer.pixel(30, 10))
+}
+
+/// With `SINGLE_DRAWING_FADE`, a faded drawing past its layer's bounds is clipped to them, as
+/// the offscreen buffer it stands for bounds it: the same pixels as without it.
+#[test]
+fn the_single_drawing_fade_keeps_its_layers_bounds() {
+    use compose::ui::platform::{Optimization, Optimizations};
+    let fade = Optimizations::NONE.with(Optimization::SINGLE_DRAWING_FADE, true);
+    let (inside, past) = overflowing_pixels(Optimizations::NONE);
+    assert_eq!(past, Color::WHITE, "the offscreen buffer bounds it");
+    assert_ne!(inside, Color::WHITE);
+    let (faded_inside, faded_past) = overflowing_pixels(fade);
+    assert_eq!(faded_past, past);
+    // The same but for rounding.
+    let near = |a: u8, b: u8| a.abs_diff(b) <= 2;
+    assert!(near(faded_inside.green(), inside.green()), "{faded_inside:?} against {inside:?}");
+}
+
 /// A clip is a layer clipping to its shape, anti-aliased as Compose Desktop's render node's
 /// `setClipRRect`: a corner outside the rounded rectangle shows the background.
 #[test]
