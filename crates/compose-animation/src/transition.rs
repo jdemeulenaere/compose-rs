@@ -8,6 +8,7 @@
 //! clock. `update_transition` follows a target; `remember_transition` a
 //! [`MutableTransitionState`].
 
+use std::any::Any;
 use std::cell::{Cell, RefCell};
 use std::rc::{Rc, Weak};
 use std::task::{Poll, Waker};
@@ -170,6 +171,10 @@ struct TransitionInner<S: 'static> {
     update_children_needed: Cell<bool>,
     animations: RefCell<Vec<Rc<dyn AnimationEntry>>>,
     transitions: RefCell<Vec<Rc<dyn TransitionNode>>>,
+    /// Bumped when a value or child transition joins or leaves: what tools read the lists
+    /// through, as Compose's state lists.
+    lists_version: OwnedState<u32>,
+    lists_count: Cell<u32>,
     /// Its task, waiting for something to animate.
     idle: RefCell<Option<Waker>>,
 }
@@ -177,6 +182,12 @@ struct TransitionInner<S: 'static> {
 /// A transition, its state type erased: what a parent drives and a value asks.
 trait TransitionNode {
     fn label(&self) -> Option<String>;
+    /// Its values, for tools.
+    fn animation_entries(&self) -> Vec<Rc<dyn AnimationEntry>>;
+    /// Its child transitions, for tools.
+    fn child_transitions(&self) -> Vec<Rc<dyn TransitionNode>>;
+    /// Whether its values are animating (a state read).
+    fn is_running(&self) -> bool;
     /// The play time (a state read).
     fn play_time_nanos(&self) -> i64;
     /// The same, without observing it: what a value changed in composition starts at.
@@ -195,9 +206,104 @@ trait AnimationEntry {
     fn is_finished(&self) -> bool;
     fn reset_animation(&self);
     fn duration_nanos(&self) -> i64;
+    fn label(&self) -> String;
+    /// The value (a state read), boxed.
+    fn value_any(&self) -> Box<dyn Any>;
+    fn target_value_any(&self) -> Box<dyn Any>;
+    fn animation_spec(&self) -> AnimationSpec;
+}
+
+/// A value of a transition, for tools (an inspector), as Compose's
+/// `Transition.TransitionAnimationState`: [`Transition::animations`] lists them.
+#[derive(Clone)]
+pub struct TransitionAnimation {
+    entry: Rc<dyn AnimationEntry>,
+}
+
+impl TransitionAnimation {
+    /// Its name, as `label`: the one its `animate_*` call gives (Compose's defaults,
+    /// `FloatAnimation` and the like), or an animation container's (`Built-in alpha`).
+    pub fn label(&self) -> String {
+        self.entry.label()
+    }
+
+    /// Its value if it's a `T`, as `value` (a state read).
+    pub fn value<T: Animate>(&self) -> Option<T> {
+        self.entry.value_any().downcast::<T>().ok().map(|value| *value)
+    }
+
+    /// Its target if it's a `T`, as `targetValue`.
+    pub fn target_value<T: Animate>(&self) -> Option<T> {
+        self.entry.target_value_any().downcast::<T>().ok().map(|value| *value)
+    }
+
+    /// The spec it plays, as `animationSpec`.
+    pub fn animation_spec(&self) -> AnimationSpec {
+        self.entry.animation_spec()
+    }
+
+    /// How long its animation plays, from the play time it started at.
+    pub fn duration_nanos(&self) -> i64 {
+        self.entry.duration_nanos()
+    }
+}
+
+impl std::fmt::Debug for TransitionAnimation {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "TransitionAnimation({})", self.label())
+    }
+}
+
+/// A child transition, its state type erased, for tools, as the `Transition<*>`s of Compose's
+/// `transitions`.
+#[derive(Clone)]
+pub struct AnyTransition {
+    node: Rc<dyn TransitionNode>,
+}
+
+impl AnyTransition {
+    /// Its name, after its parent's, as `label`.
+    pub fn label(&self) -> Option<String> {
+        self.node.label()
+    }
+
+    /// Its values, as `animations`.
+    pub fn animations(&self) -> Vec<TransitionAnimation> {
+        let entries = self.node.animation_entries();
+        entries.into_iter().map(|entry| TransitionAnimation { entry }).collect()
+    }
+
+    /// Its child transitions, as `transitions`.
+    pub fn transitions(&self) -> Vec<AnyTransition> {
+        let nodes = self.node.child_transitions();
+        nodes.into_iter().map(|node| AnyTransition { node }).collect()
+    }
+
+    /// Whether its values are animating, as `isRunning` (a state read).
+    pub fn is_running(&self) -> bool {
+        self.node.is_running()
+    }
+
+    /// Its parent's play time, as `playTimeNanos` (a state read).
+    pub fn play_time_nanos(&self) -> i64 {
+        self.node.play_time_nanos()
+    }
+
+    /// The duration of its longest value or child transition, as `totalDurationNanos`.
+    pub fn total_duration_nanos(&self) -> i64 {
+        self.node.total_duration_nanos()
+    }
 }
 
 impl<S: Clone + PartialEq + 'static> TransitionInner<S> {
+    /// A value or child transition joined or left.
+    fn lists_changed(&self) {
+        let version = self.lists_count.get().wrapping_add(1);
+        self.lists_count.set(version);
+        // In composition too (a deferred animation leaving with its call).
+        self.lists_version.set_in_composition(version);
+    }
+
     fn current_untracked(&self) -> S {
         self.state.current_untracked()
     }
@@ -342,6 +448,20 @@ impl<S: Clone + PartialEq + 'static> TransitionInner<S> {
 }
 
 impl<S: Clone + PartialEq + 'static> TransitionNode for TransitionInner<S> {
+    fn animation_entries(&self) -> Vec<Rc<dyn AnimationEntry>> {
+        self.lists_version.get();
+        self.animations.borrow().clone()
+    }
+
+    fn child_transitions(&self) -> Vec<Rc<dyn TransitionNode>> {
+        self.lists_version.get();
+        self.transitions.borrow().clone()
+    }
+
+    fn is_running(&self) -> bool {
+        self.start_time_nanos.get() != AnimationConstants::UNSPECIFIED_TIME
+    }
+
     fn label(&self) -> Option<String> {
         let parent = self.parent.as_ref().and_then(Weak::upgrade).and_then(|parent| parent.label());
         match (parent, self.label) {
@@ -416,6 +536,8 @@ impl<S: Clone + PartialEq + 'static> Transition<S> {
                 update_children_needed: Cell::new(false),
                 animations: RefCell::new(Vec::new()),
                 transitions: RefCell::new(Vec::new()),
+                lists_version: mutable_state_of(0),
+                lists_count: Cell::new(0),
                 idle: RefCell::new(None),
                 state,
             }),
@@ -466,6 +588,20 @@ impl<S: Clone + PartialEq + 'static> Transition<S> {
         self.inner.total_duration_nanos()
     }
 
+    /// Its values, for tools (an inspector), as `animations`: those of its `animate_*` calls
+    /// and its animation containers' (`AnimatedVisibility`'s alpha, `Built-in alpha`), in the
+    /// order they joined.
+    pub fn animations(&self) -> Vec<TransitionAnimation> {
+        let entries = self.inner.animation_entries();
+        entries.into_iter().map(|entry| TransitionAnimation { entry }).collect()
+    }
+
+    /// Its child transitions, for tools, as `transitions`.
+    pub fn transitions(&self) -> Vec<AnyTransition> {
+        let nodes = self.inner.child_transitions();
+        nodes.into_iter().map(|node| AnyTransition { node }).collect()
+    }
+
     /// Animates to `target_state`, as Compose's internal `animateTo`: called on every pass by
     /// the composable that owns the transition.
     fn animate_to(&self, target_state: S) {
@@ -496,8 +632,10 @@ impl<S: Clone + PartialEq + 'static> Transition<S> {
         DisposableEffect(child.clone(), move |scope| {
             let node: Rc<dyn TransitionNode> = added;
             parent.transitions.borrow_mut().push(node.clone());
+            parent.lists_changed();
             scope.on_dispose(move || {
                 parent.transitions.borrow_mut().retain(|kept| !Rc::ptr_eq(kept, &node));
+                parent.lists_changed();
             })
         });
         child.inner.update_target(target_state);
@@ -515,22 +653,34 @@ impl<S: Clone + PartialEq + 'static> Transition<S> {
         transition_spec: impl Fn(&Segment<S>) -> AnimationSpec,
         target_value_by_state: impl Fn(&S) -> T,
     ) -> State<T> {
+        self.animate_labeled("ValueAnimation", transition_spec, target_value_by_state)
+    }
+
+    /// `animate_value` with the label tools show (Compose's default for each type).
+    fn animate_labeled<T: Animate>(
+        &self,
+        label: &'static str,
+        transition_spec: impl Fn(&Segment<S>) -> AnimationSpec,
+        target_value_by_state: impl Fn(&S) -> T,
+    ) -> State<T> {
         let initial_state = remember_keyed(self.clone(), || self.inner.current_untracked());
         let initial_value = target_value_by_state(&initial_state);
         let target_value = target_value_by_state(&self.target_state());
         let spec = transition_spec(&self.segment());
         let node = self.node();
         let animation = remember_keyed(self.clone(), move || {
-            Rc::new(TransitionAnimationState::new(initial_value, node))
+            Rc::new(TransitionAnimationState::new(initial_value, node, label.to_string()))
         });
         animation.update_target_value(target_value, spec);
         let (inner, added) = (self.inner.clone(), animation.clone());
         DisposableEffect(animation.clone(), move |scope| {
             let entry: Rc<dyn AnimationEntry> = added;
             inner.animations.borrow_mut().push(entry.clone());
+            inner.lists_changed();
             inner.wake();
             scope.on_dispose(move || {
                 inner.animations.borrow_mut().retain(|kept| !Rc::ptr_eq(kept, &entry));
+                inner.lists_changed();
             })
         });
         animation.value.as_state()
@@ -542,7 +692,7 @@ impl<S: Clone + PartialEq + 'static> Transition<S> {
         transition_spec: impl Fn(&Segment<S>) -> AnimationSpec,
         target_value_by_state: impl Fn(&S) -> f32,
     ) -> State<f32> {
-        self.animate_value(transition_spec, target_value_by_state)
+        self.animate_labeled("FloatAnimation", transition_spec, target_value_by_state)
     }
 
     /// As `Transition.animateDp`.
@@ -551,7 +701,7 @@ impl<S: Clone + PartialEq + 'static> Transition<S> {
         transition_spec: impl Fn(&Segment<S>) -> AnimationSpec,
         target_value_by_state: impl Fn(&S) -> Dp,
     ) -> State<Dp> {
-        self.animate_value(transition_spec, target_value_by_state)
+        self.animate_labeled("DpAnimation", transition_spec, target_value_by_state)
     }
 
     /// As `Transition.animateColor`: in Oklab.
@@ -560,7 +710,7 @@ impl<S: Clone + PartialEq + 'static> Transition<S> {
         transition_spec: impl Fn(&Segment<S>) -> AnimationSpec,
         target_value_by_state: impl Fn(&S) -> Color,
     ) -> State<Color> {
-        self.animate_value(transition_spec, target_value_by_state)
+        self.animate_labeled("ColorAnimation", transition_spec, target_value_by_state)
     }
 
     /// As `Transition.animateOffset`.
@@ -569,7 +719,7 @@ impl<S: Clone + PartialEq + 'static> Transition<S> {
         transition_spec: impl Fn(&Segment<S>) -> AnimationSpec,
         target_value_by_state: impl Fn(&S) -> Offset,
     ) -> State<Offset> {
-        self.animate_value(transition_spec, target_value_by_state)
+        self.animate_labeled("OffsetAnimation", transition_spec, target_value_by_state)
     }
 
     /// As `Transition.animateSize`.
@@ -578,7 +728,7 @@ impl<S: Clone + PartialEq + 'static> Transition<S> {
         transition_spec: impl Fn(&Segment<S>) -> AnimationSpec,
         target_value_by_state: impl Fn(&S) -> Size,
     ) -> State<Size> {
-        self.animate_value(transition_spec, target_value_by_state)
+        self.animate_labeled("SizeAnimation", transition_spec, target_value_by_state)
     }
 
     /// As `Transition.animateInt`.
@@ -587,7 +737,7 @@ impl<S: Clone + PartialEq + 'static> Transition<S> {
         transition_spec: impl Fn(&Segment<S>) -> AnimationSpec,
         target_value_by_state: impl Fn(&S) -> i32,
     ) -> State<i32> {
-        self.animate_value(transition_spec, target_value_by_state)
+        self.animate_labeled("IntAnimation", transition_spec, target_value_by_state)
     }
 
     /// As `Transition.animateIntOffset`.
@@ -596,7 +746,7 @@ impl<S: Clone + PartialEq + 'static> Transition<S> {
         transition_spec: impl Fn(&Segment<S>) -> AnimationSpec,
         target_value_by_state: impl Fn(&S) -> IntOffset,
     ) -> State<IntOffset> {
-        self.animate_value(transition_spec, target_value_by_state)
+        self.animate_labeled("IntOffsetAnimation", transition_spec, target_value_by_state)
     }
 
     /// As `Transition.animateIntSize`.
@@ -605,7 +755,7 @@ impl<S: Clone + PartialEq + 'static> Transition<S> {
         transition_spec: impl Fn(&Segment<S>) -> AnimationSpec,
         target_value_by_state: impl Fn(&S) -> IntSize,
     ) -> State<IntSize> {
-        self.animate_value(transition_spec, target_value_by_state)
+        self.animate_labeled("IntSizeAnimation", transition_spec, target_value_by_state)
     }
 
     /// As `Transition.animateRect`.
@@ -614,17 +764,20 @@ impl<S: Clone + PartialEq + 'static> Transition<S> {
         transition_spec: impl Fn(&Segment<S>) -> AnimationSpec,
         target_value_by_state: impl Fn(&S) -> Rect,
     ) -> State<Rect> {
-        self.animate_value(transition_spec, target_value_by_state)
+        self.animate_labeled("RectAnimation", transition_spec, target_value_by_state)
     }
 
     /// A value of this transition whose targets are known later (while measuring or drawing),
     /// as Compose's `createDeferredAnimation`: it joins the transition at its first
     /// [`animate`](DeferredAnimation::animate). Remembered at its call site: call it on every
     /// pass, as a composable; it leaves the transition with its call.
-    pub(crate) fn create_deferred_animation<T: Animate>(&self) -> DeferredAnimation<S, T> {
+    pub(crate) fn create_deferred_animation<T: Animate>(
+        &self,
+        label: &'static str,
+    ) -> DeferredAnimation<S, T> {
         let transition = self.clone();
         let deferred = remember_keyed(self.clone(), move || DeferredAnimation {
-            inner: Rc::new(DeferredInner { transition, data: RefCell::new(None) }),
+            inner: Rc::new(DeferredInner { transition, label, data: RefCell::new(None) }),
         });
         let removed = deferred.inner.clone();
         DisposableEffect(deferred.clone(), move |scope| {
@@ -634,6 +787,7 @@ impl<S: Clone + PartialEq + 'static> Transition<S> {
                     let entry: Rc<dyn AnimationEntry> = data.animation.clone();
                     let inner = &removed.transition.inner;
                     inner.animations.borrow_mut().retain(|kept| !Rc::ptr_eq(kept, &entry));
+                    inner.lists_changed();
                 }
             })
         });
@@ -649,6 +803,7 @@ pub(crate) struct DeferredAnimation<S: 'static, T: Animate> {
 
 struct DeferredInner<S: 'static, T: Animate> {
     transition: Transition<S>,
+    label: &'static str,
     data: RefCell<Option<Rc<DeferredData<S, T>>>>,
 }
 
@@ -692,6 +847,18 @@ impl<S: Clone + PartialEq + 'static, T: Animate> DeferredData<S, T> {
 }
 
 impl<S: Clone + PartialEq + 'static, T: Animate> DeferredAnimation<S, T> {
+    /// Leaves the transition, as Compose's when its `createDeferredAnimation` call leaves the
+    /// composition: the next [`animate`](Self::animate) joins it anew.
+    pub(crate) fn leave(&self) {
+        let data = self.inner.data.borrow_mut().take();
+        if let Some(data) = data {
+            let entry: Rc<dyn AnimationEntry> = data.animation.clone();
+            let inner = &self.inner.transition.inner;
+            inner.animations.borrow_mut().retain(|kept| !Rc::ptr_eq(kept, &entry));
+            inner.lists_changed();
+        }
+    }
+
     /// The state its transition is at, read without observing it.
     pub(crate) fn current_state_untracked(&self) -> S {
         self.inner.transition.inner.current_untracked()
@@ -715,9 +882,12 @@ impl<S: Clone + PartialEq + 'static, T: Animate> DeferredAnimation<S, T> {
             None => {
                 let transition = &self.inner.transition;
                 let initial = target_value_by_state(&transition.inner.current_untracked());
-                let animation = Rc::new(TransitionAnimationState::new(initial, transition.node()));
+                let label = self.inner.label.to_string();
+                let animation =
+                    Rc::new(TransitionAnimationState::new(initial, transition.node(), label));
                 let entry: Rc<dyn AnimationEntry> = animation.clone();
                 transition.inner.animations.borrow_mut().push(entry);
+                transition.inner.lists_changed();
                 transition.inner.wake();
                 let data = Rc::new(DeferredData {
                     transition: transition.inner.clone(),
@@ -781,6 +951,7 @@ const RESET_ANIMATION_SNAP: f32 = -3.0;
 /// A value of a transition, as Compose's `Transition.TransitionAnimationState`.
 struct TransitionAnimationState<T: Animate> {
     transition: Weak<dyn TransitionNode>,
+    label: String,
     target_value: RefCell<T>,
     animation_spec: Cell<AnimationSpec>,
     animation: RefCell<TargetBasedAnimation<T>>,
@@ -796,7 +967,11 @@ struct TransitionAnimationState<T: Animate> {
 }
 
 impl<T: Animate> TransitionAnimationState<T> {
-    fn new(initial_value: T, transition: Weak<dyn TransitionNode>) -> TransitionAnimationState<T> {
+    fn new(
+        initial_value: T,
+        transition: Weak<dyn TransitionNode>,
+        label: String,
+    ) -> TransitionAnimationState<T> {
         let zero = initial_value.to_vector().new_instance();
         let threshold = AnimationVector::filled(zero.size(), T::visibility_threshold());
         let interruption_spec = AnimationSpec::Spring(spring().visibility_threshold(threshold));
@@ -810,6 +985,7 @@ impl<T: Animate> TransitionAnimationState<T> {
         let duration = animation.duration_nanos();
         TransitionAnimationState {
             transition,
+            label,
             target_value: RefCell::new(initial_value.clone()),
             animation_spec: Cell::new(default_spec),
             animation: RefCell::new(animation),
@@ -903,5 +1079,21 @@ impl<T: Animate> AnimationEntry for TransitionAnimationState<T> {
 
     fn duration_nanos(&self) -> i64 {
         self.duration_nanos.get()
+    }
+
+    fn label(&self) -> String {
+        self.label.clone()
+    }
+
+    fn value_any(&self) -> Box<dyn Any> {
+        Box::new(self.value.get())
+    }
+
+    fn target_value_any(&self) -> Box<dyn Any> {
+        Box::new(self.target_value.borrow().clone())
+    }
+
+    fn animation_spec(&self) -> AnimationSpec {
+        self.animation_spec.get()
     }
 }

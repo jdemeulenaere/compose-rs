@@ -458,7 +458,7 @@ fn size_animation_modifier<T: Clone + PartialEq + 'static>(
     } else if size_transform.is_some() {
         should_animate.set(true);
     }
-    let deferred = transition.create_deferred_animation::<IntSize>();
+    let deferred = transition.create_deferred_animation::<IntSize>("DeferredAnimation");
     let animation = should_animate.get().then_some(deferred);
     let clip =
         animation.is_some() && size_transform.as_ref().is_none_or(|transform| transform.clip);

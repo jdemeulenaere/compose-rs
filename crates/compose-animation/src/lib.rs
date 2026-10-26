@@ -80,7 +80,8 @@ pub use spring::{
     estimate_animation_duration_millis_of_mass,
 };
 pub use transition::{
-    MutableTransitionState, Segment, Transition, remember_transition, update_transition,
+    AnyTransition, MutableTransitionState, Segment, Transition, TransitionAnimation,
+    remember_transition, update_transition,
 };
 #[doc(hidden)]
 pub use vector::default_spring;
@@ -88,14 +89,14 @@ pub use vector::{Animate, AnimationVector, VisibilityThreshold};
 pub use visibility::{
     AnimatedVisibility, AnimatedVisibilityScope, AnimatedVisibilityState, ChangeSizeConfig,
     EnterExitState, EnterExitTransitionConfig, EnterTransition, ExitTransition, FadeConfig,
-    ScaleConfig, SlideConfig, expand_horizontally, expand_horizontally_with, expand_in,
+    ScaleConfig, SlideConfig, VeilConfig, expand_horizontally, expand_horizontally_with, expand_in,
     expand_in_with, expand_vertically, expand_vertically_with, fade_in, fade_in_with, fade_out,
     fade_out_with, scale_in, scale_in_with, scale_out, scale_out_with, shrink_horizontally,
     shrink_horizontally_with, shrink_out, shrink_out_with, shrink_vertically,
     shrink_vertically_with, slide_in, slide_in_horizontally, slide_in_horizontally_with,
     slide_in_vertically, slide_in_vertically_with, slide_in_with, slide_out,
     slide_out_horizontally, slide_out_horizontally_with, slide_out_vertically,
-    slide_out_vertically_with, slide_out_with,
+    slide_out_vertically_with, slide_out_with, unveil_in, unveil_in_with, veil_out, veil_out_with,
 };
 
 #[doc(hidden)]

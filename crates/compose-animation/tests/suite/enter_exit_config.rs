@@ -2,7 +2,7 @@
 //! constructor sets, `+`, and the size transform's defaults.
 
 use compose_animation::*;
-use compose_ui::{Alignment, IntOffset, IntSize, TransformOrigin};
+use compose_ui::{Alignment, Color, IntOffset, IntSize, TransformOrigin};
 
 // Compose: compose/animation/animation/src/androidHostTest/kotlin/androidx/compose/animation/EnterExitTransitionConfigTest.kt, testFadeInConfig
 #[test]
@@ -12,6 +12,7 @@ fn a_fade_in_sets_only_its_fade() {
     let fade = config.fade.expect("a fade");
     assert_eq!((fade.alpha, fade.animation_spec), (0.5, spec));
     assert!(config.slide.is_none() && config.change_size.is_none() && config.scale.is_none());
+    assert!(config.veil.is_none());
 }
 
 // Compose: compose/animation/animation/src/androidHostTest/kotlin/androidx/compose/animation/EnterExitTransitionConfigTest.kt, testFadeOutConfig
@@ -137,4 +138,26 @@ fn content_transforms_share_the_default_size_transform() {
     let second = fade_in().together_with(fade_out());
     assert_eq!(first.size_transform, second.size_transform);
     assert!(first.size_transform.is_some());
+}
+
+// Compose: compose/animation/animation/src/androidHostTest/kotlin/androidx/compose/animation/EnterExitTransitionConfigTest.kt, testVeilConfig
+#[test]
+fn an_unveil_sets_its_veil() {
+    let spec = AnimationSpec::from(tween(DEFAULT_DURATION_MILLIS));
+    let veil = unveil_in_with(spec, Color::RED, false).config().veil.clone().expect("a veil");
+    assert_eq!(veil.initial_color, Color::RED);
+    assert_eq!(veil.target_color, Color::RED.with_alpha(0.0));
+    assert_eq!(veil.animation_spec, spec);
+    assert!(!veil.match_parent_size);
+}
+
+// Compose: compose/animation/animation/src/androidHostTest/kotlin/androidx/compose/animation/EnterExitTransitionConfigTest.kt, testVeilOutConfig
+#[test]
+fn a_veil_out_sets_its_veil() {
+    let spec = AnimationSpec::from(spring());
+    let veil = veil_out_with(spec, Color::BLUE, true).config().veil.clone().expect("a veil");
+    assert_eq!(veil.initial_color, Color::BLUE.with_alpha(0.0));
+    assert_eq!(veil.target_color, Color::BLUE);
+    assert_eq!(veil.animation_spec, spec);
+    assert!(veil.match_parent_size);
 }

@@ -14,10 +14,10 @@ use std::rc::Rc;
 
 use compose_runtime::{ComposeArg, State, composable, mutable_state_of, remember, remember_keyed};
 use compose_ui::{
-    Alignment, ColumnScope, Constraints, DetachContext, HorizontalAlignment, IntOffset, IntSize,
-    LayoutDirection, LayoutModifierNode, Measurable, MeasurePolicy, MeasureResult, MeasureScope,
-    Modifier, ModifierNode, ModifierNodeElement, RECTANGLE_SHAPE, RowScope, TransformOrigin,
-    VerticalAlignment,
+    Alignment, Color, ColumnScope, Constraints, DetachContext, DrawModifierNode, DrawScope,
+    HorizontalAlignment, IntOffset, IntSize, LayoutDirection, LayoutModifierNode, Measurable,
+    MeasurePolicy, MeasureResult, MeasureScope, Modifier, ModifierNode, ModifierNodeElement, Paint,
+    RECTANGLE_SHAPE, RowScope, TransformOrigin, VerticalAlignment,
 };
 
 use crate::spec::{AnimationSpec, Spring, spring, spring_with};
@@ -64,6 +64,19 @@ pub struct ScaleConfig {
     pub animation_spec: AnimationSpec,
 }
 
+/// A scrim's color over the content at the hidden end (`initial_color` entering,
+/// `target_color` exiting), the other end its transparent copy, along its spec, as Compose's
+/// `VeilConfig`. Over the parent's bounds when `match_parent_size`, as Compose's; compose-rs
+/// draws it over the content's bounds then (a draw node can't see its parent's), affected by
+/// the other parts' transforms either way.
+#[derive(Clone, PartialEq, Debug)]
+pub struct VeilConfig {
+    pub initial_color: Color,
+    pub target_color: Color,
+    pub animation_spec: AnimationSpec,
+    pub match_parent_size: bool,
+}
+
 /// The same function (Compose compares lambdas by identity).
 impl PartialEq for SlideConfig {
     fn eq(&self, other: &SlideConfig) -> bool {
@@ -105,6 +118,7 @@ pub struct EnterExitTransitionConfig {
     pub slide: Option<SlideConfig>,
     pub change_size: Option<ChangeSizeConfig>,
     pub scale: Option<ScaleConfig>,
+    pub veil: Option<VeilConfig>,
     /// The content stays until every transition of its `AnimatedContent` ends, as `hold`
     /// (`ExitTransition.KeepUntilTransitionsFinished`).
     pub hold: bool,
@@ -116,6 +130,7 @@ impl EnterExitTransitionConfig {
         slide: None,
         change_size: None,
         scale: None,
+        veil: None,
         hold: false,
     };
 
@@ -126,6 +141,7 @@ impl EnterExitTransitionConfig {
             slide: other.slide.clone().or_else(|| self.slide.clone()),
             change_size: other.change_size.clone().or_else(|| self.change_size.clone()),
             scale: other.scale.clone().or_else(|| self.scale.clone()),
+            veil: other.veil.clone().or_else(|| self.veil.clone()),
             hold: self.hold || other.hold,
         }
     }
@@ -234,6 +250,60 @@ fn default_offset_spec() -> AnimationSpec {
 /// The default spec of an expansion or shrink, a pixel's threshold.
 fn default_size_spec() -> AnimationSpec {
     AnimationSpec::Spring(default_spring().visibility_threshold(IntSize::VISIBILITY_THRESHOLD))
+}
+
+/// The default spec and color of a veil, as `unveilIn()`'s and `veilOut()`'s.
+fn default_veil_spec() -> AnimationSpec {
+    AnimationSpec::Spring(default_spring())
+}
+
+fn default_veil_color() -> Color {
+    Color::BLACK.with_alpha(0.5)
+}
+
+/// A scrim over the content as it enters, from half-transparent black to transparent, as
+/// `unveilIn()`.
+pub fn unveil_in() -> EnterTransition {
+    unveil_in_with(default_veil_spec(), default_veil_color(), false)
+}
+
+/// A scrim from `initial_color` to its transparent copy along `animation_spec`, over the
+/// parent's bounds when `match_parent_size` (see [`VeilConfig`]), as `unveilIn(animationSpec,
+/// initialColor, matchParentSize)`.
+pub fn unveil_in_with(
+    animation_spec: impl Into<AnimationSpec>,
+    initial_color: Color,
+    match_parent_size: bool,
+) -> EnterTransition {
+    let veil = VeilConfig {
+        initial_color,
+        target_color: initial_color.with_alpha(0.0),
+        animation_spec: animation_spec.into(),
+        match_parent_size,
+    };
+    enter(EnterExitTransitionConfig { veil: Some(veil), ..EnterExitTransitionConfig::NONE })
+}
+
+/// A scrim over the content as it exits, from transparent to half-transparent black, as
+/// `veilOut()`.
+pub fn veil_out() -> ExitTransition {
+    veil_out_with(default_veil_spec(), default_veil_color(), false)
+}
+
+/// A scrim from `target_color`'s transparent copy to it along `animation_spec`, as
+/// `veilOut(animationSpec, targetColor, matchParentSize)`.
+pub fn veil_out_with(
+    animation_spec: impl Into<AnimationSpec>,
+    target_color: Color,
+    match_parent_size: bool,
+) -> ExitTransition {
+    let veil = VeilConfig {
+        initial_color: target_color.with_alpha(0.0),
+        target_color,
+        animation_spec: animation_spec.into(),
+        match_parent_size,
+    };
+    exit(EnterExitTransitionConfig { veil: Some(veil), ..EnterExitTransitionConfig::NONE })
 }
 
 /// Fades in from transparent, as `fadeIn()`.
@@ -884,6 +954,10 @@ fn neutralized(exit: &ExitTransition) -> ExitTransition {
                 .change_size
                 .clone()
                 .map(|change| ChangeSizeConfig { size: NEUTRAL_SIZE.with(Rc::clone), ..change }),
+            veil: config
+                .veil
+                .clone()
+                .map(|veil| VeilConfig { target_color: veil.initial_color, ..veil }),
             hold: config.hold,
         },
     }
@@ -903,22 +977,119 @@ fn create_enter_exit_modifier(
         parts.enter.config.change_size.is_some() || parts.exit.config.change_size.is_some();
     let animate_alpha = parts.enter.config.fade.is_some() || parts.exit.config.fade.is_some();
     let animate_scale = parts.enter.config.scale.is_some() || parts.exit.config.scale.is_some();
+    let animate_veil = parts.enter.config.veil.is_some() || parts.exit.config.veil.is_some();
+    let veil = deferred_if(transition, animate_veil, "Built-in veil")
+        .map(|animation| Modifier.then_custom(VeilElement { animation, parts: parts.clone() }));
+    let veil_over_parent = parts
+        .enter
+        .config
+        .veil
+        .as_ref()
+        .or(parts.exit.config.veil.as_ref())
+        .is_some_and(|veil| veil.match_parent_size);
     let animations = Animations {
-        slide: deferred_if(transition, animate_slide),
-        size: deferred_if(transition, animate_size),
-        offset: deferred_if(transition, animate_size),
-        alpha: deferred_if(transition, animate_alpha),
-        scale: deferred_if(transition, animate_scale),
-        transform_origin: deferred_if(transition, animate_scale),
+        slide: deferred_if(transition, animate_slide, "Built-in slide"),
+        size: deferred_if(transition, animate_size, "Built-in shrink/expand"),
+        offset: deferred_if(transition, animate_size, "Built-in InterruptionHandlingOffset"),
+        alpha: deferred_if(transition, animate_alpha, "Built-in alpha"),
+        scale: deferred_if(transition, animate_scale, "Built-in scale"),
+        transform_origin: deferred_if(
+            transition,
+            animate_scale,
+            "TransformOriginInterruptionHandling",
+        ),
     };
     let no_clip = parts.enter.config.change_size.as_ref().is_some_and(|change| !change.clip)
         || parts.exit.config.change_size.as_ref().is_some_and(|change| !change.clip)
         || !animate_size;
     let layer = graphics_layer_block(&animations, &parts);
-    let modifier = if no_clip { Modifier } else { Modifier.clip(RECTANGLE_SHAPE) };
-    modifier
+    let clip = if no_clip { Modifier } else { Modifier.clip(RECTANGLE_SHAPE) };
+    // Over the parent: before the other parts (not transformed by them); else after them.
+    let (before, after) = match veil {
+        Some(veil) if veil_over_parent => (veil, Modifier),
+        Some(veil) => (Modifier, veil),
+        None => (Modifier, Modifier),
+    };
+    before
+        .then(clip)
         .then_custom(EnterExitElement { transition: transition.clone(), parts, animations })
         .then(layer)
+        .then(after)
+}
+
+/// The veil, as Compose's `VeilModifierElement`: a rect of the animated color over the content,
+/// read while drawing.
+struct VeilElement {
+    animation: DeferredAnimation<EnterExitState, Color>,
+    parts: EnterExit,
+}
+
+struct VeilNode {
+    animation: DeferredAnimation<EnterExitState, Color>,
+    parts: EnterExit,
+}
+
+impl ModifierNodeElement for VeilElement {
+    fn create(&self) -> Box<dyn ModifierNode> {
+        Box::new(VeilNode { animation: self.animation.clone(), parts: self.parts.clone() })
+    }
+
+    fn update(&self, node: &mut dyn ModifierNode) {
+        if let Some(node) = node.downcast_mut::<VeilNode>() {
+            node.animation = self.animation.clone();
+            node.parts = self.parts.clone();
+        }
+    }
+
+    fn same(&self, other: &dyn ModifierNodeElement) -> bool {
+        other.downcast_ref::<VeilElement>().is_some_and(|other| {
+            other.animation.same(&self.animation)
+                && *other.parts.enter == *self.parts.enter
+                && *other.parts.exit == *self.parts.exit
+        })
+    }
+
+    fn name(&self) -> &'static str {
+        "veil"
+    }
+}
+
+impl ModifierNode for VeilNode {
+    fn as_draw(&mut self) -> Option<&mut dyn DrawModifierNode> {
+        Some(self)
+    }
+}
+
+impl DrawModifierNode for VeilNode {
+    fn draw_after(&mut self, scope: &mut DrawScope<'_>) {
+        let (enter, exit) =
+            (self.parts.enter.config.veil.clone(), self.parts.exit.config.veil.clone());
+        let specs = (
+            enter.as_ref().map(|veil| veil.animation_spec),
+            exit.as_ref().map(|veil| veil.animation_spec),
+        );
+        let color = self.animation.animate(
+            move |segment| part_spec(segment, specs.0, specs.1, default_veil_spec()),
+            move |state| match state {
+                EnterExitState::Visible => enter
+                    .as_ref()
+                    .map(|veil| veil.target_color)
+                    .or(exit.as_ref().map(|veil| veil.initial_color))
+                    .unwrap_or(Color::TRANSPARENT),
+                EnterExitState::PreEnter => {
+                    enter.as_ref().map_or(Color::TRANSPARENT, |veil| veil.initial_color)
+                }
+                EnterExitState::PostExit => {
+                    exit.as_ref().map_or(Color::TRANSPARENT, |veil| veil.target_color)
+                }
+            },
+        );
+        let color = color.value();
+        if color.alpha() != 0 {
+            let bounds = scope.bounds();
+            scope.draw_rect(bounds, Paint::fill(color));
+        }
+    }
 }
 
 /// A deferred animation of the transition, or none: remembered either way, so it stays with
@@ -926,8 +1097,18 @@ fn create_enter_exit_modifier(
 fn deferred_if<T: Animate>(
     transition: &Transition<EnterExitState>,
     needed: bool,
+    label: &'static str,
 ) -> Option<DeferredAnimation<EnterExitState, T>> {
-    let deferred = transition.create_deferred_animation::<T>();
+    let deferred = transition.create_deferred_animation::<T>(label);
+    // Not needed, Compose's call leaves the composition (its animation leaves the transition
+    // once the pass is applied): used again, it starts anew, at its value for the state the
+    // transition is at.
+    let leaving = deferred.clone();
+    compose_runtime::SideEffect(move || {
+        if !needed {
+            leaving.leave();
+        }
+    });
     needed.then_some(deferred)
 }
 

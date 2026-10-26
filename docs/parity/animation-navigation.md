@@ -32,9 +32,9 @@ The inventory of Compose's animation and navigation tests and public API against
 | Status | Files | @Test |
 |---|---|---|
 | `covered` | 1 | 1 |
-| `ported` | 16 | 78 |
+| `ported` | 17 | 91 |
 | `port` | 0 | 0 |
-| `partial` | 12 | 164 |
+| `partial` | 11 | 151 |
 | `feature:<name>` | 64 | 769 |
 | `n/a` | 2 | 9 |
 
@@ -43,7 +43,7 @@ By module:
 | Module | Files | @Test | covered | ported | port | partial | feature | n/a |
 |---|---|---|---|---|---|---|---|---|
 | animation-core | 30 | 212 | 0 | 15 / 73 | 0 | 4 / 37 | 11 / 102 | 0 |
-| animation | 15 | 238 | 0 | 1 / 5 | 0 | 5 / 59 | 9 / 174 | 0 |
+| animation | 15 | 238 | 0 | 2 / 18 | 0 | 4 / 46 | 9 / 174 | 0 |
 | animation-graphics | 5 | 22 | 0 | 0 | 0 | 0 | 5 / 22 | 0 |
 | navigation-compose | 9 | 121 | 1 / 1 | 0 | 0 | 3 / 68 | 4 / 50 | 1 / 2 |
 | navigation3-runtime | 21 | 307 | 0 | 0 | 0 | 0 | 20 / 300 | 1 / 7 |
@@ -129,7 +129,7 @@ The "covered" notes cite compose-rs test files under `crates/compose-animation/t
 | 30 | `compose/animation/animation-core/src/androidHostTest/kotlin/androidx/compose/animation/core/SpringEstimationTest.kt` | 1 | spring duration estimation against simulation over a grid of mass/stiffness | ported | `spring_estimation.rs`: every fifth mass and spring constant of Compose's grid (2.9 million of its 70 million cases) |
 | 31 | `compose/animation/animation/src/androidDeviceTest/kotlin/androidx/compose/animation/AnimateBoundsTest.kt` | 8 | `Modifier.animateBounds`: position, size, bounds, movable content, lazy layouts, scrolling | `feature:animate-bounds` | needs ui lookahead |
 | 32 | `compose/animation/animation/src/androidDeviceTest/kotlin/androidx/compose/animation/AnimatedContentTest.kt` | 17 | `AnimatedContent`: SizeTransform, alignment, slideInto/OutOfContainer, contentKey, subcomposition, interruption, KeepUntilTransitionsFinished, lookahead, cleanup | partial | 6 ported (`animated_content.rs`: the size transform frame by frame, to and from an empty content, the alignment, an exit finished then interrupted, a transition recreated; `compose-material3/tests/suite/animated_content.rs`: a scaffold with tabs); `slideIntoContainer`/`slideOutOfContainer`, `contentKey` and `KeepUntilTransitionsFinished` (6: `SlideInAndOutOfContainer`, `WithContentKey`, `WithKeysTest`, `testExitHold`, `testExitHoldDefersUntilAllFinished`, `testRightEnterExitTransitionIsChosenDuringInterruption`) need animated-content-scope, `testAnimatedContentCleanup` too (`contentKey`, an internal map); lookahead and `animateBounds` (3); `AnimatedContentWithInterruption` asserts in layout callbacks that the content sliding out stays at the container's origin: to check against Compose before porting |
-| 33 | `compose/animation/animation/src/androidDeviceTest/kotlin/androidx/compose/animation/AnimatedVisibilityTest.kt` | 17 | `AnimatedVisibility`: expand/shrink, slide, fade, scale with exact values, None, Transition overload, seeking, lookahead, veil, settle time | partial | 10 ported (`animated_visibility.rs`: expand and shrink, slide, a content size change, fade, scale, the scale spring's threshold, `None`/`None`, the `Transition` overload, an interrupted exit, the settle time; with a test of the column and row defaults); seeking (1) seekable-transition; lookahead (1); the veil (5, `verifyDirectionChangeResetsAccumulatedTransitions` among them) veil |
+| 33 | `compose/animation/animation/src/androidDeviceTest/kotlin/androidx/compose/animation/AnimatedVisibilityTest.kt` | 17 | `AnimatedVisibility`: expand/shrink, slide, fade, scale with exact values, None, Transition overload, seeking, lookahead, veil, settle time | partial | 15 ported (`animated_visibility.rs`: expand and shrink, slide, a content size change, fade, scale, the scale spring's threshold, `None`/`None`, the `Transition` overload, an interrupted exit, the settle time, with a test of the column and row defaults; `veil.rs`: the five veil tests); seeking (1) seekable-transition; lookahead (1) |
 | 34 | `compose/animation/animation/src/androidDeviceTest/kotlin/androidx/compose/animation/AnimationModifierTest.kt` | 6 | `animateContentSize`: frame-by-frame size, alignment LTR/RTL, lookahead, inspector, re-attach | partial | 3 ported (`content_size.rs`: the frame-by-frame size with its finished listener, alignment left to right and right to left); `properFinalStateAfterReAttach` needs movable content (compose-runtime has no `movableContentOf`); lookahead (1) needs lookahead; inspector n/a |
 | 35 | `compose/animation/animation/src/androidDeviceTest/kotlin/androidx/compose/animation/CapturedAnimatedVisibilityTest.kt` | 9 | `CapturedAnimatedVisibility`: content disposed at once, exit animates a captured layer, MutableTransitionState, interruptions, lookahead | `feature:captured-animated-visibility` | needs ui graphics-layer recording |
 | 36 | `compose/animation/animation/src/androidDeviceTest/kotlin/androidx/compose/animation/CrossfadeTest.kt` | 6 | `Crossfade`: shows content, disposes old content, custom spec, null state, rememberSaveable per screen, contentKey | partial | 5 ported (`crossfade_ported.rs`); `crossfadeTest_contentKey` needs crossfade-extras (`Transition::Crossfade`) |
@@ -140,7 +140,7 @@ The "covered" notes cite compose-rs test files under `crates/compose-animation/t
 | 41 | `compose/animation/animation/src/androidDeviceTest/kotlin/androidx/compose/animation/SharedTransitionTest.kt` | 71 | `SharedTransitionLayout`, `sharedElement`, `sharedBounds`, overlay, clip, placeholder size, scale-to-bounds, lazy lists, isTransitionActive, velocity | `feature:shared-transition` | needs ui lookahead |
 | 42 | `compose/animation/animation/src/androidHostTest/kotlin/androidx/compose/animation/AndroidFlingSplineTest.kt` | 1 | the fling spline clamps positions out of range | `feature:decay-animation` | compose-rs has the spline privately in `compose-foundation/src/fling.rs` |
 | 43 | `compose/animation/animation/src/androidHostTest/kotlin/androidx/compose/animation/ConverterTest.kt` | 5 | Color (Oklab, clamping), Rect, Dp, Offset converters | ported | `converters.rs` (the color clamp included: compose-rs clamps in Oklab first, as Compose's) |
-| 44 | `compose/animation/animation/src/androidHostTest/kotlin/androidx/compose/animation/EnterExitTransitionConfigTest.kt` | 13 | `EnterTransition/ExitTransition.config`: fade, slide, change size, scale, veil, combined; SizeTransform defaults | partial | 11 ported (`enter_exit_config.rs`; the offset and size functions checked by what they give); the veil configs (2) need veil |
+| 44 | `compose/animation/animation/src/androidHostTest/kotlin/androidx/compose/animation/EnterExitTransitionConfigTest.kt` | 13 | `EnterTransition/ExitTransition.config`: fade, slide, change size, scale, veil, combined; SizeTransform defaults | ported | `enter_exit_config.rs` (the offset and size functions checked by what they give) |
 | 45 | `compose/animation/animation/src/androidHostTest/kotlin/androidx/compose/animation/SharedMutableTransformStateTest.kt` | 4 | internal state machine of mutable transforms | `feature:deferred-transition` | internal; port with the feature |
 | 46 | `compose/animation/animation-graphics/src/androidDeviceTest/kotlin/androidx/compose/animation/graphics/res/AnimatedVectorPainterResourcesTest.kt` | 2 | `rememberAnimatedVectorPainter` from an AVD resource: config, duplicate targets | `feature:animated-image-vector` | resources become bundled bytes in compose-rs |
 | 47 | `compose/animation/animation-graphics/src/androidDeviceTest/kotlin/androidx/compose/animation/graphics/vector/AnimatorAnimationSpecsTest.kt` | 5 | reversed and combined specs used by vector animators | `feature:animated-image-vector` | internal specs |
@@ -269,7 +269,7 @@ Deprecated and left out:
 | `EaseInBack`, `EaseInBounce`, `EaseInCirc`, `EaseInCubic`, `EaseInElastic`, `EaseInExpo`, `EaseInOutBack`, `EaseInOutBounce`, `EaseInOutCirc`, `EaseInOutCubic`, `EaseInOutElastic`, `EaseInOutExpo`, `EaseInOutQuad`, `EaseInOutQuart`, `EaseInOutQuint`, `EaseInOutSine`, `EaseInQuad`, `EaseInQuart`, `EaseInQuint`, `EaseInSine`, `EaseOutBack`, `EaseOutBounce`, `EaseOutCirc`, `EaseOutCubic`, `EaseOutElastic`, `EaseOutExpo`, `EaseOutQuad`, `EaseOutQuart`, `EaseOutQuint`, `EaseOutSine` | present (D808) | easing-functions |
 | `PathEasing(path)` | missing | path-easing |
 | `TransitionState`, `MutableTransitionState` (`currentState`, `targetState`, `isIdle`), `rememberTransition(transitionState, label)` | present (`MutableTransitionState` only: the sealed `TransitionState` waits for seekable and deferred states) | transition-state |
-| `Transition.segment`, `Transition.Segment` (`initialState`, `targetState`, `isTransitioningTo`), `pendingTargetState`, `label`, `animations`, `transitions`, `totalDurationNanos`, `Transition.TransitionAnimationState` (`animation`, `animationSpec`, `label`, `typeConverter`) | `segment`, `Segment`, `label`, `total_duration_nanos` present; `pendingTargetState` and the tooling getters missing | transition-state |
+| `Transition.segment`, `Transition.Segment` (`initialState`, `targetState`, `isTransitioningTo`), `pendingTargetState`, `label`, `animations`, `transitions`, `totalDurationNanos`, `Transition.TransitionAnimationState` (`animation`, `animationSpec`, `label`, `typeConverter`) | present (`animations`, `transitions`: `TransitionAnimation`, `AnyTransition`, D813) but `pendingTargetState` | transition-state |
 | `Transition.createChildTransition(label, transform)` | present | transition-state |
 | `Transition.animateInt`, `animateIntOffset`, `animateIntSize`, `animateRect`, `animateSize` (and `label` on all `animate*`) | present, without the `label` | transition-state, more-converters |
 | `SeekableTransitionState` (`seekTo`, `animateTo(spec)`, `snapTo`, `fraction`, `currentState`, `targetState`) | missing | seekable-transition |
@@ -289,7 +289,7 @@ Deprecated and left out:
 | `slideIn(spec, initialOffset: (IntSize) -> IntOffset)`, `slideOut`, `slideInHorizontally(spec, initialOffsetX)`, `slideOutHorizontally`, `slideInVertically(spec, initialOffsetY)`, `slideOutVertically` | present (`_with` forms, D804) | enter-exit-params |
 | `scaleIn(spec, initialScale, transformOrigin)`, `scaleOut(…, transformOrigin)` | present (`_with` forms, D804) | enter-exit-params |
 | `EnterTransition.config`, `ExitTransition.config`, `EnterExitTransitionConfig`, `FadeConfig`, `SlideConfig`, `ChangeSizeConfig`, `ScaleConfig` | present (D804) | enter-exit-params |
-| `unveilIn(spec, initialColor, matchParentSize)`, `veilOut(…)`, `VeilConfig` | missing (new at this tip) | veil |
+| `unveilIn(spec, initialColor, matchParentSize)`, `veilOut(…)`, `VeilConfig` | present (`_with` forms, D814); `matchParentSize` draws over the content's bounds | veil |
 | `AnimatedVisibility(MutableTransitionState<Boolean>, …)`, `Transition<T>.AnimatedVisibility(visible: (T) -> Boolean, …)`, `ColumnScope.AnimatedVisibility` (×2), `RowScope.AnimatedVisibility` (×2) | present: one `AnimatedVisibility` over `AnimatedVisibilityState` (`(column, visible)` for a scope's), and `transition.AnimatedVisibility(…)` (D804, D812) | animated-visibility-scope |
 | `AnimatedVisibilityScope` (`transition`, `Modifier.animateEnterExit(enter, exit, label)`), `EnterExitState` (`PreEnter`, `Visible`, `PostExit`) | present but `Modifier.animate_enter_exit` (D804) | animated-visibility-scope |
 | `AnimatedContent(…, contentKey, content: AnimatedContentScope.(S) -> Unit)`, `Transition<S>.AnimatedContent(…)` | `transition.AnimatedContent(…)` present (D812); no `contentKey`, and the content takes the state, not a scope | animated-content-scope |
@@ -490,9 +490,9 @@ One entry per feature. Sizes:
   - the runtime and ui areas: a context element on compose-rs's executor and frame clock;
   - transition-state and seekable-transition for the transition tests.
 
-#### transition-state (M–L, not exp.): done but the tooling getters (D803)
+#### transition-state (M–L, not exp.): done but `InfiniteTransition`'s tooling getters (D803, D813)
 
-- **Done:** `MutableTransitionState`, `remember_transition`, `Segment` (the spec closures take it), `pending_target_state` aside; child transitions; `total_duration_nanos`, `label`; `animate_int`, `animate_int_offset`, `animate_int_size`, `animate_rect`, `animate_size`. Left: the tooling getters (`animations`, `transitions`, `TransitionAnimationState`'s), `pending_target_state` (deferred-transition).
+- **Done:** `MutableTransitionState`, `remember_transition`, `Segment` (the spec closures take it), `pending_target_state` aside; child transitions; `total_duration_nanos`, `label`; `animate_int`, `animate_int_offset`, `animate_int_size`, `animate_rect`, `animate_size`; the tooling getters `animations`, `transitions` (`TransitionAnimation`, `AnyTransition`, D813). Left: `InfiniteTransition`'s tooling getters, the `label` parameters of the `animate_*` calls, `pending_target_state` (deferred-transition).
 
 - **API:**
   - the states: `TransitionState`, `MutableTransitionState` (`is_idle`), `remember_transition(state, label)`;
@@ -529,7 +529,7 @@ One entry per feature. Sizes:
 
 ### Animation components
 
-#### enter-exit-params (M, not exp.): done but the veil (D804)
+#### enter-exit-params (M, not exp.): done (D804, D814)
 
 - **API:**
   - the full parameter lists of `expand_*`/`shrink_*` (spec, alignment, `clip`, size lambdas), `slide_in`/`slide_out` (spec, `IntSize -> IntOffset`), `slide_in_horizontally`/`slide_out_horizontally` and the vertical pair (spec, offset lambda), `scale_in`/`scale_out` (spec, `transform_origin`);
@@ -538,7 +538,7 @@ One entry per feature. Sizes:
 - **Tests:** `EnterExitTransitionConfigTest`, and most of `AnimatedVisibilityTest` and `AnimatedContentTest`.
 - **Dependencies:** none.
 
-#### veil (S–M, not exp., new at this tip)
+#### veil (S–M, not exp., new at this tip): done but `match_parent_size`'s parent bounds (D814)
 
 - **API:** `unveil_in(spec, initial_color, match_parent_size)`, `veil_out`, `VeilConfig`.
 - **Tests:** `AnimatedVisibilityTest` (4), `EnterExitTransitionConfigTest` (2), parts of the deferred tests.
