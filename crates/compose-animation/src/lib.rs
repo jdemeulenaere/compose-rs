@@ -67,10 +67,10 @@ pub use infinite::{InfiniteTransition, remember_infinite_transition};
 pub use keyframes::{KeyframeEntry, KeyframesBuilder, KeyframesSpec, keyframes};
 pub use spec::{
     AnimationConstants, AnimationSpec, DEFAULT_DURATION_MILLIS, DurationBasedSpec,
-    FloatAnimationSpec, FloatSpringSpec, FloatTweenSpec, RepeatMode, RepeatableSpec, SnapSpec,
-    Spring, SpringSpec, StartOffset, StartOffsetType, TweenSpec, VectorizedAnimationSpec,
-    infinite_repeatable, infinite_repeatable_with, repeatable, repeatable_with, snap, spring,
-    spring_with, tween,
+    FloatAnimationSpec, FloatSpringSpec, FloatTweenSpec, InterruptionAwareAnimationSpec,
+    RepeatMode, RepeatableSpec, SnapSpec, Spring, SpringSpec, StartOffset, StartOffsetType,
+    TweenSpec, VectorizedAnimationSpec, infinite_repeatable, infinite_repeatable_with, repeatable,
+    repeatable_with, snap, spring, spring_with, tween,
 };
 #[doc(hidden)]
 pub use spring::{

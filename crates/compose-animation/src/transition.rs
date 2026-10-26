@@ -837,6 +837,7 @@ impl<T: Animate> TransitionAnimationState<T> {
         let spec = self.animation_spec.get();
         let spec = match spec {
             AnimationSpec::Spring(_) => spec,
+            AnimationSpec::InterruptionAware(aware) if is_interrupted => aware.interruption_spec(),
             _ if is_interrupted => self.interruption_spec,
             _ => spec,
         };

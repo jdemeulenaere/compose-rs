@@ -62,6 +62,9 @@ pub fn animate_value_as_state<T: Animate>(
         // The animation running is interrupted by the new one (it reads the frame and the
         // velocity the running one is at), not cancelled first.
         let listener = listener.clone();
+        // An interruption-aware spec's interruption spec when it interrupts, as Compose's
+        // `restartAnimation`.
+        let animation_spec = animation_spec.resolve(animatable.is_running());
         scope.launch(async move {
             let result = animatable.animate_to(target_value, animation_spec).await;
             if result.end_reason != AnimationEndReason::Interrupted {

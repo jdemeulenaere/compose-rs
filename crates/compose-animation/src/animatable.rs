@@ -273,6 +273,8 @@ impl<T: Animate> Animatable<T> {
         spec: AnimationSpec,
         velocity: AnimationVector,
     ) -> AnimationResult<T> {
+        // An interruption-aware spec's interruption spec when one runs, as Compose's.
+        let spec = spec.resolve(self.inner.is_running.get());
         let animation =
             TargetBasedAnimation::with_velocity_vector(spec, self.value(), target, velocity);
         self.run_animation(&animation, velocity).await

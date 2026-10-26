@@ -837,6 +837,73 @@ pub enum AnimationSpec {
     Repeatable(RepeatableSpec),
     /// Values at given times, as `KeyframesSpec`.
     Keyframes(KeyframesSpec),
+    /// One spec, and another when it interrupts an animation running, as
+    /// `InterruptionAwareAnimationSpec`.
+    InterruptionAware(InterruptionAwareAnimationSpec),
+}
+
+impl From<InterruptionAwareAnimationSpec> for AnimationSpec {
+    fn from(spec: InterruptionAwareAnimationSpec) -> AnimationSpec {
+        AnimationSpec::InterruptionAware(spec)
+    }
+}
+
+/// A spec and the spec to use when it interrupts an animation still running, as Compose's
+/// `InterruptionAwareAnimationSpec`: `Animatable`, `animate*AsState` and transitions pick the
+/// interruption spec when they interrupt. It stays `Copy`: its two specs are kept in a table of
+/// this thread's, equal pairs sharing an entry (as keyframes, D150).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct InterruptionAwareAnimationSpec {
+    entry: u32,
+}
+
+thread_local! {
+    static INTERRUPTION_AWARE: std::cell::RefCell<Vec<(AnimationSpec, AnimationSpec)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+impl InterruptionAwareAnimationSpec {
+    /// `animation_spec`, and `interruption_spec` when interrupting, as
+    /// `InterruptionAwareAnimationSpec(animationSpec, interruptionSpec)`.
+    pub fn new(
+        animation_spec: impl Into<AnimationSpec>,
+        interruption_spec: impl Into<AnimationSpec>,
+    ) -> InterruptionAwareAnimationSpec {
+        let pair = (animation_spec.into(), interruption_spec.into());
+        let entry = INTERRUPTION_AWARE.with(|entries| {
+            let mut entries = entries.borrow_mut();
+            match entries.iter().position(|old| *old == pair) {
+                Some(index) => index,
+                None => {
+                    entries.push(pair);
+                    entries.len() - 1
+                }
+            }
+        });
+        InterruptionAwareAnimationSpec { entry: entry as u32 }
+    }
+
+    /// `animation_spec` both when starting and when interrupting, as
+    /// `InterruptionAwareAnimationSpec(animationSpec)`: an interruption keeps it (a transition's
+    /// value interrupted otherwise takes a spring).
+    pub fn of(animation_spec: impl Into<AnimationSpec>) -> InterruptionAwareAnimationSpec {
+        let spec = animation_spec.into();
+        InterruptionAwareAnimationSpec::new(spec, spec)
+    }
+
+    fn pair(&self) -> (AnimationSpec, AnimationSpec) {
+        INTERRUPTION_AWARE.with(|entries| entries.borrow()[self.entry as usize])
+    }
+
+    /// The spec when starting from rest, as `animationSpec`.
+    pub fn animation_spec(&self) -> AnimationSpec {
+        self.pair().0
+    }
+
+    /// The spec when interrupting, as `interruptionSpec`.
+    pub fn interruption_spec(&self) -> AnimationSpec {
+        self.pair().1
+    }
 }
 
 impl From<KeyframesSpec> for AnimationSpec {
@@ -876,20 +943,33 @@ impl Default for AnimationSpec {
 }
 
 impl AnimationSpec {
-    fn spec(&self) -> &dyn VectorizedAnimationSpec {
+    /// Runs `f` with the spec evaluated: an interruption-aware spec's animation spec, as its
+    /// `vectorize`.
+    fn with_spec<R>(&self, f: impl FnOnce(&dyn VectorizedAnimationSpec) -> R) -> R {
         match self {
-            AnimationSpec::Tween(tween) => tween,
-            AnimationSpec::Spring(spring) => spring,
-            AnimationSpec::Snap(snap) => snap,
-            AnimationSpec::Repeatable(repeatable) => repeatable,
-            AnimationSpec::Keyframes(keyframes) => keyframes,
+            AnimationSpec::Tween(tween) => f(tween),
+            AnimationSpec::Spring(spring) => f(spring),
+            AnimationSpec::Snap(snap) => f(snap),
+            AnimationSpec::Repeatable(repeatable) => f(repeatable),
+            AnimationSpec::Keyframes(keyframes) => f(keyframes),
+            AnimationSpec::InterruptionAware(aware) => f(&aware.animation_spec()),
+        }
+    }
+
+    /// The spec to play: an interruption-aware spec's interruption spec when it interrupts an
+    /// animation running, its animation spec otherwise; any other spec as it is.
+    pub(crate) fn resolve(self, interrupting: bool) -> AnimationSpec {
+        match self {
+            AnimationSpec::InterruptionAware(aware) if interrupting => aware.interruption_spec(),
+            AnimationSpec::InterruptionAware(aware) => aware.animation_spec(),
+            spec => spec,
         }
     }
 }
 
 impl VectorizedAnimationSpec for AnimationSpec {
     fn is_infinite(&self) -> bool {
-        self.spec().is_infinite()
+        self.with_spec(|spec| spec.is_infinite())
     }
 
     fn value_from_nanos(
@@ -899,7 +979,9 @@ impl VectorizedAnimationSpec for AnimationSpec {
         target_value: AnimationVector,
         initial_velocity: AnimationVector,
     ) -> AnimationVector {
-        self.spec().value_from_nanos(play_time_nanos, initial_value, target_value, initial_velocity)
+        self.with_spec(|spec| {
+            spec.value_from_nanos(play_time_nanos, initial_value, target_value, initial_velocity)
+        })
     }
 
     fn velocity_from_nanos(
@@ -909,12 +991,9 @@ impl VectorizedAnimationSpec for AnimationSpec {
         target_value: AnimationVector,
         initial_velocity: AnimationVector,
     ) -> AnimationVector {
-        self.spec().velocity_from_nanos(
-            play_time_nanos,
-            initial_value,
-            target_value,
-            initial_velocity,
-        )
+        self.with_spec(|spec| {
+            spec.velocity_from_nanos(play_time_nanos, initial_value, target_value, initial_velocity)
+        })
     }
 
     fn duration_nanos(
@@ -923,7 +1002,7 @@ impl VectorizedAnimationSpec for AnimationSpec {
         target_value: AnimationVector,
         initial_velocity: AnimationVector,
     ) -> i64 {
-        self.spec().duration_nanos(initial_value, target_value, initial_velocity)
+        self.with_spec(|spec| spec.duration_nanos(initial_value, target_value, initial_velocity))
     }
 
     fn end_velocity(
@@ -932,7 +1011,7 @@ impl VectorizedAnimationSpec for AnimationSpec {
         target_value: AnimationVector,
         initial_velocity: AnimationVector,
     ) -> AnimationVector {
-        self.spec().end_velocity(initial_value, target_value, initial_velocity)
+        self.with_spec(|spec| spec.end_velocity(initial_value, target_value, initial_velocity))
     }
 }
 
@@ -1023,6 +1102,7 @@ macro_rules! by_value {
 
 by_value!(
     AnimationSpec,
+    InterruptionAwareAnimationSpec,
     TweenSpec,
     SpringSpec,
     SnapSpec,

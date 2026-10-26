@@ -12,6 +12,7 @@ mod crossfade;
 mod easing;
 mod enter_exit_config;
 mod infinite;
+mod interruption_aware;
 mod physics;
 mod review_animation;
 mod review_retained;
