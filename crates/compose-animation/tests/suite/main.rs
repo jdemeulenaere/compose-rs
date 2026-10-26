@@ -5,6 +5,7 @@ extern crate compose_runtime as compose;
 
 mod animation;
 mod content;
+mod converters;
 mod crossfade;
 mod infinite;
 mod physics;

@@ -267,7 +267,8 @@ impl Animate for Rect {
 
 /// Colors animate in the Oklab color space, with alpha, as Compose's `Color.VectorConverter`:
 /// perceptually even, without the gray midpoint of an sRGB blend. The vector is (alpha, L, a,
-/// b).
+/// b); converting back clamps it to Oklab's range first (alpha and L to 0..1, a and b to
+/// ±0.5), as Compose's, so an overshooting spring stays a color.
 impl Animate for Color {
     /// As `Color.equals`: the packed colors (no conversion to Oklab).
     fn same_value(&self, other: &Color) -> bool {
@@ -292,7 +293,10 @@ impl Animate for Color {
     }
 
     fn from_vector(vector: AnimationVector) -> Color {
-        let (alpha, lightness, a, b) = (vector[0].clamp(0.0, 1.0), vector[1], vector[2], vector[3]);
+        let alpha = vector[0].clamp(0.0, 1.0);
+        let lightness = vector[1].clamp(0.0, 1.0);
+        let a = vector[2].clamp(-0.5, 0.5);
+        let b = vector[3].clamp(-0.5, 0.5);
         let l = (lightness + 0.396_337_78 * a + 0.215_803_76 * b).powi(3);
         let m = (lightness - 0.105_561_346 * a - 0.063_854_17 * b).powi(3);
         let s = (lightness - 0.089_484_18 * a - 1.291_485_5 * b).powi(3);
