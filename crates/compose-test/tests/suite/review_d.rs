@@ -2,9 +2,9 @@
 
 #![allow(non_snake_case)]
 
+use crate::support::*;
 use compose_test::*;
 use compose_ui::*;
-use crate::support::*;
 
 /// `onAllNodes(matcher)[index].assertDoesNotExist()` passes in Compose when fewer than
 /// `index + 1` nodes match. compose-test's `assert_does_not_exist` ignores the index and fails

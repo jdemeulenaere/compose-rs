@@ -266,9 +266,8 @@ fn running_on_idle_waits_then_returns_the_result() {
         ui.run_without_implicit_wait(|ui| ui.count_nodes(&has_text("shown")))
     });
     assert_eq!(count, 0, "not recomposed yet");
-    let count = ui.run_on_idle(|ui| {
-        ui.run_without_implicit_wait(|ui| ui.count_nodes(&has_text("shown")))
-    });
+    let count =
+        ui.run_on_idle(|ui| ui.run_without_implicit_wait(|ui| ui.count_nodes(&has_text("shown"))));
     assert_eq!(count, 1);
 }
 

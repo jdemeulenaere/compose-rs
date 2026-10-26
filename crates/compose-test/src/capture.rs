@@ -131,7 +131,10 @@ impl SemanticsNodeInteraction<'_> {
             .host
             .with_tree(|tree| tree.semantics_bounds_in_root(node.id))
             .map_or(node.bounds, |(_, clipped)| clipped);
-        let window = render(self.rule);
+        // The node's window alone: a popup or dialog over it isn't in its pixels, as Compose's
+        // windows (and capturing a popup's node gives the popup's).
+        let window = self.rule.host.with_tree(|tree| tree.window_of(node.id));
+        let window = render(self.rule, window);
         let left = (bounds.left.round() as i32).clamp(0, window.width);
         let top = (bounds.top.round() as i32).clamp(0, window.height);
         let right = (bounds.right.round() as i32).clamp(left, window.width);
@@ -146,32 +149,32 @@ impl SemanticsNodeInteraction<'_> {
     }
 }
 
-/// The window's pixels, drawn from the last frame's display list over white.
+/// A window's pixels (the main content's, or an overlay's), drawn from what the last frame
+/// drew, over white.
 #[cfg(feature = "skia")]
-fn render(rule: &mut crate::ComposeTestRule) -> CapturedImage {
+fn render(
+    rule: &mut crate::ComposeTestRule,
+    window: Option<compose_ui::platform::NodeId>,
+) -> CapturedImage {
     use compose_ui::platform::Renderer;
     let size = rule.host.size();
     let mut renderer = compose_skia::RasterRenderer::new(size.width, size.height);
     renderer.set_optimizations(rule.host.optimizations());
     rule.host.with_tree(|tree| {
-        renderer.render(tree.display_list(), Color::WHITE, 1.0, tree.text_measurer_ref());
+        let list = tree.window_display_list(window);
+        renderer.render(&list, Color::WHITE, 1.0, tree.text_measurer_ref());
     });
     let (width, height) = renderer.size();
-    // Native-order premultiplied pixels; over an opaque white window, every pixel is opaque.
-    let pixels = renderer
-        .pixels()
-        .into_iter()
-        .map(|pixel| {
-            let [blue, green, red, alpha] = pixel.to_ne_bytes();
-            Color::from_argb(u32::from_be_bytes([alpha, red, green, blue]))
-        })
-        .collect();
+    let pixels = renderer.colors();
     CapturedImage::new(width, height, pixels)
 }
 
 #[cfg(not(feature = "skia"))]
 #[track_caller]
-fn render(_rule: &mut crate::ComposeTestRule) -> CapturedImage {
+fn render(
+    _rule: &mut crate::ComposeTestRule,
+    _window: Option<compose_ui::platform::NodeId>,
+) -> CapturedImage {
     panic!(
         "compose-test: capture_to_image draws with Skia: enable compose-test's `skia` feature \
          (the facade's `desktop` and `test` features together)"

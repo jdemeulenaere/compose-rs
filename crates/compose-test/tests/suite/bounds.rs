@@ -14,16 +14,22 @@ const TAG: &str = "box";
 /// Compose's `composeBox`.
 #[composable]
 fn PlacedBox(start: Dp, top: Dp, width: Dp, height: Dp) {
-    Box!(modifier = Modifier.fill_max_size().wrap_content_size_with(Alignment::TOP_START, false), {
-        Box!(modifier = Modifier.padding(PaddingValues { start, top, ..PaddingValues::ZERO }), {
+    Box!(
+        modifier = Modifier.fill_max_size().wrap_content_size_with(Alignment::TOP_START, false),
+        {
             Box!(
-                modifier = Modifier
-                    .test_tag(TAG)
-                    .required_size((width, height))
-                    .background(Color::BLACK)
+                modifier = Modifier.padding(PaddingValues { start, top, ..PaddingValues::ZERO }),
+                {
+                    Box!(
+                        modifier = Modifier
+                            .test_tag(TAG)
+                            .required_size((width, height))
+                            .background(Color::BLACK)
+                    );
+                }
             );
-        });
-    });
+        }
+    );
 }
 
 fn compose_box() -> ComposeTestRule {
@@ -148,19 +154,16 @@ fn a_position_is_compared_within_the_tolerance_given() {
         .assert_left_position_in_root_is_equal_to_with_tolerance(left, success)
         .assert_top_position_in_root_is_equal_to_with_tolerance(top, success);
     expect_error(|| {
-        ui.on_node_with_tag(TAG).assert_position_in_root_is_equal_to_with_tolerance(
-            left, top, failure,
-        );
+        ui.on_node_with_tag(TAG)
+            .assert_position_in_root_is_equal_to_with_tolerance(left, top, failure);
     });
     expect_error(|| {
-        ui.on_node_with_tag(TAG).assert_left_position_in_root_is_equal_to_with_tolerance(
-            left, failure,
-        );
+        ui.on_node_with_tag(TAG)
+            .assert_left_position_in_root_is_equal_to_with_tolerance(left, failure);
     });
     expect_error(|| {
-        ui.on_node_with_tag(TAG).assert_top_position_in_root_is_equal_to_with_tolerance(
-            top, failure,
-        );
+        ui.on_node_with_tag(TAG)
+            .assert_top_position_in_root_is_equal_to_with_tolerance(top, failure);
     });
 }
 
@@ -225,7 +228,10 @@ fn the_bounds_in_the_root_are_clipped_and_the_unclipped_ones_not() {
         (Dp(-30.0), Dp(-10.0), 50.dp(), 90.dp())
     );
     let clipped = ui.on_node_with_tag(TAG).get_bounds_in_root();
-    assert_eq!((clipped.left, clipped.top, clipped.right, clipped.bottom), (0.dp(), 0.dp(), 50.dp(), 90.dp()));
+    assert_eq!(
+        (clipped.left, clipped.top, clipped.right, clipped.bottom),
+        (0.dp(), 0.dp(), 50.dp(), 90.dp())
+    );
 }
 
 // Compose: compose/ui/ui-test/src/androidDeviceTest/kotlin/androidx/compose/ui/test/assertions/BoundsAssertionsTest.kt, assertBoundsInRootUsesLocalDensity (at the root's density)
@@ -256,6 +262,9 @@ fn dp_values_compare_within_a_tolerance() {
     Dp::UNSPECIFIED.assert_is_equal_to(Dp::UNSPECIFIED, "width", 0.5.dp());
     Dp(f32::INFINITY).assert_is_equal_to(Dp(f32::INFINITY), "width", 0.5.dp());
     let message = expect_error(|| 10.dp().assert_is_equal_to(11.dp(), "width", 0.5.dp()));
-    assert!(message.contains("Actual width is 10.0.dp, expected 11.0.dp (tolerance: 0.5.dp)"), "{message}");
+    assert!(
+        message.contains("Actual width is 10.0.dp, expected 11.0.dp (tolerance: 0.5.dp)"),
+        "{message}"
+    );
     expect_error(|| 10.dp().assert_is_equal_to(Dp::UNSPECIFIED, "width", 0.5.dp()));
 }

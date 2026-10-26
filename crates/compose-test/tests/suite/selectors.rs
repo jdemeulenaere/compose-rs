@@ -71,10 +71,8 @@ fn has_any_ancestor_looks_up_to_the_root_but_not_at_the_node() {
         });
     });
     ui.on_all_nodes(has_any_ancestor(tag("Parent"))).assert_count_equals(2);
-    ui.on_all_nodes(has_any_ancestor(tag("Grandparent")) & !tag("Parent"))
-        .assert_count_equals(2);
-    ui.on_all_nodes(has_any_ancestor(tag("Parent").or(tag("Grandparent"))))
-        .assert_count_equals(3);
+    ui.on_all_nodes(has_any_ancestor(tag("Grandparent")) & !tag("Parent")).assert_count_equals(2);
+    ui.on_all_nodes(has_any_ancestor(tag("Parent").or(tag("Grandparent")))).assert_count_equals(3);
     ui.on_node(has_any_ancestor(tag("Node"))).assert_does_not_exist();
     ui.on_node(has_any_ancestor(tag("Child1"))).assert_does_not_exist();
 }
@@ -257,7 +255,10 @@ fn on_last_selects_the_last_node_if_any() {
     let message = expect_error(|| {
         ui.on_node_with_tag("Child1").on_children().on_last().assert_exists();
     });
-    assert!(message.contains("(((with tag \"Child1\").children).last)") || message.contains("found 0"), "{message}");
+    assert!(
+        message.contains("(((with tag \"Child1\").children).last)") || message.contains("found 0"),
+        "{message}"
+    );
 }
 
 // Compose: compose/ui/ui-test/src/androidDeviceTest/kotlin/androidx/compose/ui/test/selectors/FilterSelectorTest.kt, FilterToOneSelectorTest.kt
@@ -265,10 +266,7 @@ fn on_last_selects_the_last_node_if_any() {
 fn filters_keep_the_matching_nodes() {
     let mut ui = compose_test(Family);
     ui.on_node_with_tag("Parent").on_children().filter(tag("Child1")).assert_count_equals(1);
-    ui.on_node_with_tag("Parent")
-        .on_children()
-        .filter_to_one(tag("Child1"))
-        .assert(tag("Child1"));
+    ui.on_node_with_tag("Parent").on_children().filter_to_one(tag("Child1")).assert(tag("Child1"));
     let message = expect_error(|| {
         ui.on_node_with_tag("Parent")
             .on_children()
@@ -322,7 +320,8 @@ fn all_or_any_of_the_nodes_satisfy_a_matcher() {
 fn the_unmerged_tree_shows_what_merging_hides() {
     let mut ui = compose_test(|| {
         Box!(
-            modifier = Modifier.semantics(|config| config.merge_descendants = true).test_tag("parent"),
+            modifier =
+                Modifier.semantics(|config| config.merge_descendants = true).test_tag("parent"),
             {
                 Leaf("child");
             }

@@ -457,6 +457,26 @@ impl RasterRenderer {
         Color::from_argb(u32::from_le_bytes(bytes))
     }
 
+    /// Every pixel's color (unpremultiplied ARGB), row by row: what tests capturing a frame
+    /// compare (compose-test's `capture_to_image`).
+    pub fn colors(&mut self) -> Vec<Color> {
+        let (width, height) = self.size();
+        let info = skia_safe::ImageInfo::new(
+            (width, height),
+            skia_safe::ColorType::BGRA8888,
+            skia_safe::AlphaType::Unpremul,
+            None,
+        );
+        let mut bytes = vec![0u8; (width * height * 4) as usize];
+        self.surface.read_pixels(&info, &mut bytes, (width * 4) as usize, (0, 0));
+        bytes
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|pixel| Color::from_argb(u32::from_le_bytes(*pixel)))
+            .collect()
+    }
+
     /// The surface as a PNG file.
     pub fn png(&mut self) -> Vec<u8> {
         let image = self.surface.image_snapshot();

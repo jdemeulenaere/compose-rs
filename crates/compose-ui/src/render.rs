@@ -154,6 +154,46 @@ impl UiTree {
         true
     }
 
+    /// The window `node` shows in: the overlay (a popup's or a dialog's) it's in, or `None`
+    /// for the main content. For tests capturing a window's pixels, as Compose's popups and
+    /// dialogs are windows of their own.
+    pub fn window_of(&self, node: NodeId) -> Option<NodeId> {
+        let mut current = Some(node);
+        while let Some(id) = current {
+            let value = self.get(id)?;
+            if value.overlay {
+                return Some(id);
+            }
+            current = value.parent;
+        }
+        None
+    }
+
+    /// A display list of one window as the last frame drew it: the main content (`None`) or
+    /// one overlay, where its provider put it. Recorded afresh from the boundaries the frame
+    /// kept (drawn again only if changed since), observing nothing: for tests capturing a
+    /// window's pixels without the other windows over it ([`draw`](Self::draw) records them
+    /// all into one list).
+    pub fn window_display_list(&mut self, window: Option<NodeId>) -> DisplayList {
+        let mut recording = DisplayList::default();
+        match window {
+            None => self.draw_node(self.root_id(), &mut recording, None),
+            Some(node) => {
+                if let Some(value) = self.get(node).filter(|value| value.overlay && value.placed) {
+                    let placed = value.layers[0].offset;
+                    let at = value.overlay_origin - Offset::new(placed.x as f32, placed.y as f32);
+                    translate(&mut recording, at);
+                    self.draw_node(node, &mut recording, None);
+                    translate(&mut recording, negate(at));
+                }
+            }
+        }
+        let mut groups = mem::take(&mut recording.groups);
+        self.draw_boundaries(&recording.boundaries, &mut groups, None);
+        recording.groups = groups;
+        recording
+    }
+
     /// Notes the repaint boundaries among `groups` (the last frame's) that are composed and
     /// not placed now, unchanged since drawn: the frames list their groups while they stay so
     /// ([`DisplayList::kept`]).

@@ -7,8 +7,8 @@ use compose_foundation::*;
 use compose_runtime::*;
 use compose_test::*;
 use compose_ui::{
-    ClickableOptions, Color, LOCAL_LAYOUT_DIRECTION, LayoutDirection, Modifier, ProgressBarRangeInfo, Role,
-    ToggleableState, UnitExt,
+    ClickableOptions, Color, LOCAL_LAYOUT_DIRECTION, LayoutDirection, Modifier,
+    ProgressBarRangeInfo, Role, ToggleableState, UnitExt,
 };
 
 #[track_caller]
@@ -38,6 +38,7 @@ impl ComposeArg for Orientation {
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
+#[allow(clippy::enum_variant_names)] // Compose's names: where the target starts.
 enum Start {
     FullyAfter,
     PartiallyAfter,
@@ -149,17 +150,26 @@ fn Boxes(orientation: Orientation, viewport: i32, state: ScrollState) {
 /// least to show: aligned with the viewport's nearest edge, or not moved if it shows already.
 #[test]
 fn scrolling_to_a_node_brings_it_into_its_viewport() {
-    for orientation in [Orientation::HorizontalLtr, Orientation::HorizontalRtl, Orientation::Vertical]
+    for orientation in
+        [Orientation::HorizontalLtr, Orientation::HorizontalRtl, Orientation::Vertical]
     {
         for small in [true, false] {
             for start in Start::ALL {
                 let vertical = orientation == Orientation::Vertical;
                 let mut expected = match start {
                     Start::FullyAfter | Start::PartiallyAfter | Start::EndAlignedIn => {
-                        if vertical { Alignment::Bottom } else { Alignment::Right }
+                        if vertical {
+                            Alignment::Bottom
+                        } else {
+                            Alignment::Right
+                        }
                     }
                     Start::FullyBefore | Start::PartiallyBefore | Start::StartAlignedIn => {
-                        if vertical { Alignment::Top } else { Alignment::Left }
+                        if vertical {
+                            Alignment::Top
+                        } else {
+                            Alignment::Left
+                        }
                     }
                     Start::CenterAlignedIn => Alignment::Center,
                 };
@@ -192,9 +202,15 @@ fn scrolling_to_a_node_brings_it_into_its_viewport() {
                     Alignment::Bottom => assert_eq!(after.bottom, viewport.bottom, "{case}"),
                     Alignment::Center => {
                         let (a, b) = if vertical {
-                            (center(after.top.0, after.bottom.0), center(viewport.top.0, viewport.bottom.0))
+                            (
+                                center(after.top.0, after.bottom.0),
+                                center(viewport.top.0, viewport.bottom.0),
+                            )
                         } else {
-                            (center(after.left.0, after.right.0), center(viewport.left.0, viewport.right.0))
+                            (
+                                center(after.left.0, after.right.0),
+                                center(viewport.left.0, viewport.right.0),
+                            )
                         };
                         assert_eq!(a, b, "{case}");
                     }
@@ -303,7 +319,10 @@ fn printing_the_root_draws_the_hierarchy() {
                     {
                         Box!(
                             modifier = Modifier.clickable_with(
-                                ClickableOptions { role: Some(Role::Button), ..ClickableOptions::DEFAULT },
+                                ClickableOptions {
+                                    role: Some(Role::Button),
+                                    ..ClickableOptions::DEFAULT
+                                },
                                 || {}
                             ),
                             {
@@ -370,10 +389,24 @@ fn printing_stops_at_the_depth_given() {
 #[test]
 fn toggle_and_selection_states_are_asserted() {
     let mut ui = compose_test(|| {
-        Box!(modifier = Modifier.semantics(|config| config.toggleable_state = Some(ToggleableState::On)).test_tag("on"));
-        Box!(modifier = Modifier.semantics(|config| config.toggleable_state = Some(ToggleableState::Off)).test_tag("off"));
-        Box!(modifier = Modifier.semantics(|config| config.selected = Some(true)).test_tag("selected"));
-        Box!(modifier = Modifier.semantics(|config| config.selected = Some(false)).test_tag("unselected"));
+        Box!(
+            modifier = Modifier
+                .semantics(|config| config.toggleable_state = Some(ToggleableState::On))
+                .test_tag("on")
+        );
+        Box!(
+            modifier = Modifier
+                .semantics(|config| config.toggleable_state = Some(ToggleableState::Off))
+                .test_tag("off")
+        );
+        Box!(
+            modifier =
+                Modifier.semantics(|config| config.selected = Some(true)).test_tag("selected")
+        );
+        Box!(
+            modifier =
+                Modifier.semantics(|config| config.selected = Some(false)).test_tag("unselected")
+        );
         Box!(modifier = Modifier.semantics(|config| config.focusable = true).test_tag("plain"));
     });
     ui.on_node_with_tag("on").assert_is_on().assert_is_toggleable();
@@ -425,7 +458,10 @@ fn texts_descriptions_values_and_ranges_are_asserted() {
             {
                 BasicText!("a");
                 BasicText!("b");
-                Box!(modifier = Modifier.semantics(|config| config.content_description.push("second".into())));
+                Box!(
+                    modifier = Modifier
+                        .semantics(|config| config.content_description.push("second".into()))
+                );
             }
         );
     });
@@ -436,7 +472,11 @@ fn texts_descriptions_values_and_ranges_are_asserted() {
         .assert_content_description_equals(&["second", "first"])
         .assert_content_description_contains("sec", true, false)
         .assert_value_equals("half")
-        .assert_range_info_equals(ProgressBarRangeInfo { current: 0.5, range: (0.0, 1.0), steps: 0 })
+        .assert_range_info_equals(ProgressBarRangeInfo {
+            current: 0.5,
+            range: (0.0, 1.0),
+            steps: 0,
+        })
         .assert_has_no_click_action();
     expect_error(|| {
         ui.on_node_with_tag("node").assert_text_equals(&["a"]);

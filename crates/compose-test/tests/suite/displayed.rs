@@ -7,9 +7,7 @@ use compose_foundation::layout::*;
 use compose_foundation::*;
 use compose_runtime::*;
 use compose_test::*;
-use compose_ui::{
-    Color, Dp, Layout, Modifier, SizeSpec, UnitExt, measure_policy,
-};
+use compose_ui::{Color, Dp, Layout, Modifier, SizeSpec, UnitExt, measure_policy};
 
 const COLORS: [Color; 3] = [Color::RED, Color::GREEN, Color::BLUE];
 
@@ -98,7 +96,11 @@ fn a_lazy_item_not_composed_or_only_prefetched_is_not_displayed() {
 fn an_item_no_longer_placed_is_not_displayed() {
     let place = mutable_state_of(true);
     let handle = place.handle();
-    let mut ui = compose_test(move || PlaceConditionally!(handle.get(), { Item(0, None, None); }));
+    let mut ui = compose_test(move || {
+        PlaceConditionally!(handle.get(), {
+            Item(0, None, None);
+        })
+    });
     ui.on_node_with_tag("item0").assert_is_displayed();
     ui.run_on_idle(|_| place.set(false));
     ui.on_node_with_tag("item0").assert_is_not_displayed();
@@ -211,11 +213,17 @@ fn the_displayed_assertions_fail_naming_the_node() {
     let message = expect_error(|| {
         ui.on_node_with_tag("item1").assert_is_displayed();
     });
-    assert!(message.contains("Assert failed: the component with tag \"item1\" is not displayed!"), "{message}");
+    assert!(
+        message.contains("Assert failed: the component with tag \"item1\" is not displayed!"),
+        "{message}"
+    );
     let message = expect_error(|| {
         ui.on_node_with_tag("item0").assert_is_not_displayed();
     });
-    assert!(message.contains("Assert failed: the component with tag \"item0\" is displayed!"), "{message}");
+    assert!(
+        message.contains("Assert failed: the component with tag \"item0\" is displayed!"),
+        "{message}"
+    );
     let mut text = compose_test(|| BasicText!("item0"));
     let message = expect_error(|| {
         text.on_node_with_text("item1").assert_is_displayed();

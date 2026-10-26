@@ -2,10 +2,10 @@
 
 #![allow(non_snake_case)]
 
+use crate::support::*;
 use compose_runtime::*;
 use compose_test::*;
 use compose_ui::*;
-use crate::support::*;
 
 #[composable]
 fn Counter() {
