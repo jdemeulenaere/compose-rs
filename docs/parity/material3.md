@@ -486,6 +486,8 @@ Add a module per Compose test file under `crates/compose-material3/tests/suite/`
 
 ### What compose-test lacks (to add first)
 
+> Since the harness's milestone 1 (D900–D905), compose-test has Compose's clock model (rounding, frames on the test clock, `advance_time_until`, `wait_until`, the infinite-animation policy), bounds and displayed assertions, matchers over the tree and selectors (`on_children`, `on_parent`, collections), the touch, mouse (primary button) and key injection scopes, `perform_scroll_to`, `capture_to_image` with `assert_pixels`, and `print_to_string`; `perform_click` is a touch click. The notes in this section and the mapping above that call these missing are out of date: docs/09 lists the API, and [ui-text-and-test](ui-text-and-test.md) what is still missing. Existing tests that relied on the old timing gained a frame where they wait for a recomposition (D900).
+
 1. Bounds assertions: `assert_width_is_equal_to`, `assert_height_is_equal_to`, `assert_position_in_root_is_equal_to`, `assert_left_position_in_root_is_equal_to`, and touch bounds (the node's minimum-touch-target bounds) for `assertTouchWidthIsEqualTo`.
 2. A gesture helper over `send_pointer` and the clock: `swipe_up/down/left/right(duration)`, `drag(from, to, steps)`, `long_click`, `click_at(offset)`, mouse `hover_enter/exit`.
 3. Matchers and assertions: `is_selected`, `is_toggleable`, `is_selectable`, `has_progress_bar_range_info`, `is_dialog`, `has_state_description`, `assert_is_selected`, `assert_range_info_equals`, `assert_is_displayed` (inside the root and not clipped away), `assert_count_equals`, tree navigation (`on_children`, `on_parent`, `on_child_at`).

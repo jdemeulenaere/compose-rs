@@ -712,6 +712,8 @@ Suggested steps, each with its tests: (a) 3.13 and 3.14 (or the narrow fix-up of
 
 ### What the harness lacks (worth adding before mass-porting)
 
+> Since the harness's milestone 1 (D900–D905), compose-test has Compose's clock model (rounding, frames on the test clock, `advance_time_until`, `wait_until`, the infinite-animation policy), bounds and displayed assertions, matchers over the tree and selectors (`on_children`, `on_parent`, collections), the touch, mouse (primary button) and key injection scopes, `perform_scroll_to`, `capture_to_image` with `assert_pixels`, and `print_to_string`; `perform_click` is a touch click. The notes in this section and the mapping above that call these missing are out of date: docs/09 lists the API, and [ui-text-and-test](ui-text-and-test.md) what is still missing. Existing tests that relied on the old timing gained a frame where they wait for a recomposition (D900).
+
 - **Bounds assertions in dp:** `assert_position_in_root_is_equal_to`, `assert_width_is_equal_to`, `assert_height_is_equal_to`, `get_bounds_in_root`, `get_unclipped_bounds_in_root`, `assert_is_displayed`/`assert_is_not_displayed` (placed and inside the window). Today every test computes them from `fetch_semantics_node().bounds`.
 - **Capturing a node's pixels:** `capture_to_image()` of a node (crop the rendered frame to its bounds) and `assert_pixels { pos -> color }`, `assert_color`, a shape assertion (Compose's `assertShape`), in a test helper of compose-skia's suite. The `RasterRenderer` route works but each test repeats the setup.
 - **Swapping content:** Compose tests set content once and toggle state; compose-test's rule does the same. Tests that call `setContent` twice need a new rule.

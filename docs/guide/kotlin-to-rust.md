@@ -2092,7 +2092,19 @@ fn opening_a_message_and_going_back() {
 }
 ```
 
-Finders: `on_node_with_text`, `on_node_with_tag` (`Modifier.test_tag`), `on_node_with_content_description`, `on_node(matcher)` and `on_all_nodes(matcher, index)`, with matchers combined by `and` and `or`. Actions: `perform_click`, `perform_text_input`, `perform_key_press`, `perform_semantics_action`, `request_focus`, and on the rule `type_text`, `press_key`. Dumps for debugging: `dump_tree()`, `dump_semantics()`, `dump_display_list()`.
+Compose's test API, in snake case:
+
+| Compose | compose-rs |
+|---|---|
+| `onNodeWithText`, `onNodeWithTag`, `onNodeWithContentDescription`, `onNode(matcher)`, `onRoot()`, `useUnmergedTree = true` | `on_node_with_text`, `on_node_with_tag` (`Modifier.test_tag`), `on_node_with_content_description`, `on_node(matcher)`, `on_root()`; `on_node_unmerged`, `on_node_with_tag_unmerged`… |
+| `onAllNodes(matcher)[i]`, `onFirst()`, `onChildren()`, `onParent()`, `assertCountEquals(n)` | `on_all_nodes(matcher).get(i)`, `on_first()`, `on_children()`, `on_parent()`, `assert_count_equals(n)` |
+| `hasText("a") and isEnabled()`, `hasAnyAncestor(hasTestTag("list"))` | `has_text("a") & is_enabled()`, `has_any_ancestor(has_test_tag("list"))` |
+| `performClick()`, `performTouchInput { swipeUp() }`, `performMouseInput { scroll(1f) }`, `performKeyInput { pressKey(Key.Enter) }` | `perform_click()`, `perform_touch_input(\|touch\| touch.swipe_up())`, `perform_mouse_input(\|mouse\| mouse.scroll(1.0, ScrollWheel::Vertical))`, `perform_key_input(\|keys\| keys.press_key(Key::Enter))` |
+| `assertIsDisplayed()`, `assertWidthIsEqualTo(48.dp)`, `assertPositionInRootIsEqualTo(8.dp, 16.dp)` | `assert_is_displayed()`, `assert_width_is_equal_to(48.dp())`, `assert_position_in_root_is_equal_to(8.dp(), 16.dp())` |
+| `captureToImage().assertPixels { Color.Red }` | `capture_to_image().assert_pixels(None, \|_\| Some(Color::RED))` (with the facade's `desktop` feature) |
+| `mainClock.advanceTimeBy(100)`, `waitUntil { … }`, `runOnIdle { … }` | `advance_time_by(Duration::from_millis(100))`, `wait_until(\|ui\| …)`, `run_on_idle(\|ui\| …)` |
+
+Also `perform_text_input`, `perform_key_press`, `perform_semantics_action`, `perform_scroll_to`, `request_focus`, and on the rule `type_text`, `press_key`. Dumps for debugging: `print_to_string`, `dump_tree()`, `dump_semantics()`, `dump_display_list()`. [docs/09](../09-testing.md) lists the whole API.
 
 Recomposition counts check what an event recomposed, which Compose tests can't easily do:
 
@@ -2109,7 +2121,7 @@ fn a_click_recomposes_only_the_button_content() {
 }
 ```
 
-The rule's clock advances by itself while waiting for idle, as `mainClock.autoAdvance`; a rule made with `with_manual_clock` advances only when told:
+The rule's clock is Compose's test clock: it starts at 0, frames come 16 ms after something needs one (a state change recomposes at the next frame), and waiting for idle advances it a frame at a time while frames are needed, as `mainClock.autoAdvance`, but not past `delay`s; a rule made with `with_manual_clock` advances only when told:
 
 <!-- snippet: tests/suite/testing.rs#clock -->
 ```rust

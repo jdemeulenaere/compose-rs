@@ -751,6 +751,8 @@ Navigation 3 is a separate library from Navigation Compose. Adopting it would me
 
 ### What the harness lacks
 
+> Since the harness's milestone 1 (D900–D905), compose-test has Compose's clock model (rounding, frames on the test clock, `advance_time_until`, `wait_until`, the infinite-animation policy), bounds and displayed assertions, matchers over the tree and selectors (`on_children`, `on_parent`, collections), the touch, mouse (primary button) and key injection scopes, `perform_scroll_to`, `capture_to_image` with `assert_pixels`, and `print_to_string`; `perform_click` is a touch click. The notes in this section and the mapping above that call these missing are out of date: docs/09 lists the API, and [ui-text-and-test](ui-text-and-test.md) what is still missing. Existing tests that relied on the old timing gained a frame where they wait for a recomposition (D900).
+
 - **`advance_time_by` doesn't round up to whole frames.** Compose's `advanceTimeBy(ms)` advances `ceil(ms / 16) × 16` unless `ignoreFrameDuration` (`ui-test/.../AbstractMainTestClock.kt`); compose-rs's advances exactly `duration`.
   - compose-rs schedules frames 16 ms after the call's start, so their phase also drifts after a non-multiple advance or a delay.
   - Tests that `advanceTimeBy(duration)` and then expect the end state can land one frame short.

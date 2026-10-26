@@ -18,14 +18,14 @@ The log is split by area into the files below, one table each, rows in number or
 | File | Covers | Rows |
 |---|---|---|
 | [runtime](decisions/runtime.md) | `#[composable]`, groups and keys, skipping, lambdas, the call macro, the composer, recomposition, `remember`, effects, state handles, pausable composition. | 100 |
-| [ui-and-layout](decisions/ui-and-layout.md) | Modifiers and nodes, layout and intrinsics, drawing in the tree, input, focus, semantics, animation, Material 3, navigation, platform values. | 86 |
+| [ui-and-layout](decisions/ui-and-layout.md) | Modifiers and nodes, layout and intrinsics, drawing in the tree, input, focus, semantics, animation, Material 3, navigation, platform values. | 87 |
 | [text](decisions/text.md) | Text measurement and layout on each platform, fonts, text fields and editing. | 26 |
 | [lazy-and-prefetch](decisions/lazy-and-prefetch.md) | Lazy lists and grids, item reuse, the policy of composing only what is in view, prefetch. | 64 |
 | [android-drawing](decisions/android-drawing.md) | The display list and its replayer, render nodes and repaint boundaries, paths, shadows, layers. | 27 |
 | [android-host-and-performance](decisions/android-host-and-performance.md) | The view and activity glue, the frame loop, the hint session, jank, startup, memory, and the optimization flags. | 25 |
 | [desktop](decisions/desktop.md) | The desktop host: window, Skia rendering, input and events. | 6 |
 | [benchmarks](decisions/benchmarks.md) | The benchmark apps, protocols and rounds, and how results are read. | 34 |
-| [api-and-tooling](decisions/api-and-tooling.md) | Names, crates and modules, semver, the edit-build loop, testing and documentation, the toolchain's and dependencies' versions. | 27 |
+| [api-and-tooling](decisions/api-and-tooling.md) | Names, crates and modules, semver, the edit-build loop, testing and documentation, the toolchain's and dependencies' versions. | 32 |
 
 ## Index by number
 
@@ -142,7 +142,7 @@ The log is split by area into the files below, one table each, rows in number or
 | D109 | [runtime](decisions/runtime.md#d109) | superseded by [D122](decisions/runtime.md#d122) |
 | D110 | [runtime](decisions/runtime.md#d110) | current |
 | D111 | [runtime](decisions/runtime.md#d111) | current |
-| D112 | [api-and-tooling](decisions/api-and-tooling.md#d112) | current |
+| D112 | [api-and-tooling](decisions/api-and-tooling.md#d112) | revised by [D900](decisions/api-and-tooling.md#d900) |
 | D113 | [desktop](decisions/desktop.md#d113) | current |
 | D114 | [runtime](decisions/runtime.md#d114) | current |
 | D115 | [runtime](decisions/runtime.md#d115) | current |
@@ -426,3 +426,9 @@ The log is split by area into the files below, one table each, rows in number or
 | D703 | [runtime](decisions/runtime.md#d703) | current |
 | D704 | [ui-and-layout](decisions/ui-and-layout.md#d704) | current |
 | D705 | [benchmarks](decisions/benchmarks.md#d705) | current |
+| D900 | [api-and-tooling](decisions/api-and-tooling.md#d900) | current |
+| D901 | [api-and-tooling](decisions/api-and-tooling.md#d901) | current |
+| D902 | [ui-and-layout](decisions/ui-and-layout.md#d902) | current |
+| D903 | [api-and-tooling](decisions/api-and-tooling.md#d903) | current |
+| D904 | [api-and-tooling](decisions/api-and-tooling.md#d904) | current |
+| D905 | [api-and-tooling](decisions/api-and-tooling.md#d905) | current |

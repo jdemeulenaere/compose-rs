@@ -879,6 +879,8 @@ Cite the Compose test in each adapted test's doc comment (`/// Compose: Clickabl
 
 ### What the harness lacks, by priority
 
+> Since the harness's milestone 1 (D900–D905), compose-test has Compose's clock model (rounding, frames on the test clock, `advance_time_until`, `wait_until`, the infinite-animation policy), bounds and displayed assertions, matchers over the tree and selectors (`on_children`, `on_parent`, collections), the touch, mouse (primary button) and key injection scopes, `perform_scroll_to`, `capture_to_image` with `assert_pixels`, and `print_to_string`; `perform_click` is a touch click. The notes in this section and the mapping above that call these missing are out of date: docs/09 lists the API, and [ui-text-and-test](ui-text-and-test.md) what is still missing. Existing tests that relied on the old timing gained a frame where they wait for a recomposition (D900).
+
 1. Pointer buttons and keyboard modifiers on `PointerEvent` (right click for every context-menu test, Shift+click for `TextFieldShiftClickTest`): a ui-area change, then `perform_mouse_input`-style helpers.
 2. A touch/mouse gesture DSL (`down`, `move_to`, `up`, `long_click`, `double_click`, `swipe`) on `SemanticsNodeInteraction`, defaulting to touch as Compose's.
 3. Semantics assertions and text actions listed above (`assert_is_selected`, `assert_editable_text_equals`, `assert_text_selection_range`, `perform_text_replacement`, `perform_text_clearance`, `perform_text_input_selection`).
