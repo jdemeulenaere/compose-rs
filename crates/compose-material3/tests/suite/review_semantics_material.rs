@@ -18,8 +18,9 @@ fn a_slider_in_a_clickable_card_is_its_own_node() {
         MaterialTheme!({
             Card!(on_click = || {}, modifier = Modifier.test_tag("card"), {
                 Text!("Volume");
+                let slider = remember_slider_state!(0.5);
                 Slider!(
-                    0.5,
+                    slider,
                     |_| {},
                     modifier = Modifier.width(200.dp()).test_tag("slider"),
                     enabled = false
@@ -48,8 +49,9 @@ fn a_slider_in_a_clickable_card_is_its_own_node() {
 fn a_sliders_own_state_description_is_kept() {
     let mut ui = compose_test(|| {
         MaterialTheme!({
+            let slider = remember_slider_state!(0.5);
             Slider!(
-                0.5,
+                slider,
                 |_| {},
                 modifier = Modifier
                     .width(200.dp())

@@ -105,7 +105,8 @@ fn Screen() {
                         label = Some(|| Text!("Label", modifier = Modifier.test_tag("label"))),
                     );
                     Switch!(true, Some(|_| {}), modifier = Modifier.test_tag("switch"));
-                    Slider!(0.5, |_| {}, modifier = Modifier.width(200.dp()).test_tag("slider"));
+                    let slider = remember_slider_state!(0.5);
+                    Slider!(slider, |_| {}, modifier = Modifier.width(200.dp()).test_tag("slider"));
                     Box!(modifier = Modifier.size(40.dp()).test_tag("anchor"), {
                         DropdownMenu!(true, || {}, modifier = Modifier.test_tag("menu"), {
                             DropdownMenuItem!(

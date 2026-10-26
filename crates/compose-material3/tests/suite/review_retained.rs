@@ -38,7 +38,7 @@ fn center(ui: &mut ComposeTestRule, tag: &str) -> Offset {
 fn Screen() {
     let on = remember(|| mutable_state_of(false));
     let checked = remember(|| mutable_state_of(false));
-    let value = remember(|| mutable_state_of(0.2f32));
+    let slider = remember_slider_state!(0.2);
     let tab = remember(|| mutable_state_of(0usize));
     let item = remember(|| mutable_state_of(0usize));
     let text = remember(|| mutable_state_of(String::new()));
@@ -60,8 +60,8 @@ fn Screen() {
             });
             Box!(modifier = Modifier.repaint_boundary(), {
                 Slider!(
-                    value.get(),
-                    move |new| value.set(new),
+                    slider,
+                    move |new| slider.set_value(new),
                     modifier = Modifier.width(200.dp()).test_tag("slider"),
                 );
             });

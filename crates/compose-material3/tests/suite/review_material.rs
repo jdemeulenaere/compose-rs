@@ -170,18 +170,25 @@ fn the_title_starts_56_dp_in_after_a_navigation_icon() {
 #[test]
 fn a_slider_whose_value_does_not_change_keeps_its_thumb() {
     let mut ui = ComposeTestRule::sized(IntSize::new(300, 100), || {
-        Slider!(0.25, |_| {}, modifier = Modifier.width(220.dp()));
+        let state = remember_slider_state!(0.25);
+        Slider!(
+            state,
+            |_| {},
+            modifier = Modifier.width(220.dp()),
+            thumb =
+                Some(|_| Box!(modifier = Modifier.width(4.dp()).height(44.dp()).test_tag("thumb"))),
+        );
     });
-    // The thumb: the last round rectangle drawn, centered on its value along the 10..210 track.
+    // The handle, centered on its value along the 2..218 track.
     let thumb = |ui: &mut ComposeTestRule| {
-        let (rect, _) = *round_rects(ui).last().expect("the thumb");
+        let rect = ui.on_node_unmerged(has_test_tag("thumb")).fetch_semantics_node().bounds;
         (rect.left + rect.right) / 2.0
     };
-    assert_eq!(thumb(&mut ui), 60.0);
+    assert_eq!(thumb(&mut ui), 56.0);
     ui.host().send_pointer(PointerEvent::press(Offset::new(160.0, 24.0)));
     ui.host().send_pointer(PointerEvent::release(Offset::new(160.0, 24.0)));
     ui.wait_for_idle();
-    assert_eq!(thumb(&mut ui), 60.0, "the value is still 0.25");
+    assert_eq!(thumb(&mut ui), 56.0, "the value is still 0.25");
 }
 
 /// In Compose a press on a slider only records where it is (`SliderState.onPress`); the value
@@ -196,10 +203,11 @@ fn a_vertical_swipe_on_a_slider_scrolls_its_column() {
     #[composable]
     fn Screen() {
         let state = remember_scroll_state!();
+        let slider = remember_slider_state!(VALUE.with(Cell::get));
         Column!(modifier = Modifier.fill_max_size().vertical_scroll(state), {
             Spacer(Modifier.height(100.dp()));
             Slider!(
-                VALUE.with(Cell::get),
+                slider,
                 |value| VALUE.with(|cell| cell.set(value)),
                 modifier = Modifier.width(220.dp()).test_tag("slider")
             );
@@ -231,18 +239,29 @@ fn a_vertical_swipe_on_a_slider_scrolls_its_column() {
     assert!(after.top < before.top, "the column scrolled: {before:?} -> {after:?}");
 }
 
-/// Compose's slider draws its steps: a tick (stop indicator) at each of the `steps` values
-/// between the ends (`SliderDefaults.Track`'s `drawTicks` / `drawStopIndicator`, in the
-/// `activeTickColor` and `inactiveTickColor` that `SliderColors` carries). Here a slider with
-/// steps draws the same three shapes as a continuous one (two track parts and the thumb), so
-/// the stops it snaps to aren't shown, and `SliderColors` has no tick colors.
+/// Compose's slider draws its steps: a tick (a 4 dp dot) at each stop but the last (where the
+/// stop dot is) and those in the gap around the handle (`SliderDefaults.Track`'s `drawTick`
+/// and `drawStopIndicator`). At 40 % of 4 steps (stops at 0, 20, 40, 60, 80 and 100 %): the
+/// stop dot and the ticks at 0, 20, 60 and 80 % (40 % is in the gap).
 #[test]
 fn a_slider_with_steps_draws_its_ticks() {
     let mut ui = ComposeTestRule::sized(IntSize::new(300, 100), || {
-        Slider!(0.5, |_| {}, modifier = Modifier.width(220.dp()), steps = 4);
+        let state = remember_slider_state!(0.4, 4);
+        Slider!(state, |_| {}, modifier = Modifier.width(220.dp()));
     });
-    let shapes = round_rects(&mut ui).len();
-    assert!(shapes >= 3 + 4, "{shapes} shapes: the 4 ticks aren't drawn");
+    let dots: Vec<f32> = ui
+        .host()
+        .display_list()
+        .ops
+        .iter()
+        .filter_map(|op| match op {
+            DrawOp::DrawArc { oval, sweep_angle, .. } if *sweep_angle == 360.0 => {
+                Some((oval.left + oval.right) / 2.0)
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(dots, [208.0, 8.0, 48.0, 128.0, 168.0], "the stop dot and 4 ticks");
 }
 
 /// Compose's `slideOnKeyEvents` moves the value on `KeyDown` and calls
@@ -252,27 +271,28 @@ fn a_slider_with_steps_draws_its_ticks() {
 #[test]
 fn a_slider_finishes_a_key_change_on_key_up() {
     thread_local! { static FINISHED: Cell<u32> = const { Cell::new(0) }; }
+    thread_local! { static STATE: Cell<Option<SliderState>> = const { Cell::new(None) }; }
     #[composable]
-    fn Screen(value: MutableState<f32>) {
+    fn Screen() {
+        let state = remember_slider_state!(0.0, 9);
+        STATE.with(|cell| cell.set(Some(state)));
         Slider!(
-            value.get(),
-            move |new| value.set(new),
+            state,
+            move |new| state.set_value(new),
             modifier = Modifier.width(220.dp()).test_tag("slider"),
-            steps = 9,
             on_value_change_finished =
-                || FINISHED.with(|finished| finished.set(finished.get() + 1)),
+                Some(|| FINISHED.with(|finished| finished.set(finished.get() + 1))),
         );
     }
-    let value = mutable_state_of(0.0f32);
-    let handle = value.handle();
-    let mut ui = ComposeTestRule::sized(IntSize::new(300, 100), move || Screen(handle));
+    let value = || STATE.with(Cell::get).expect("composed").value();
+    let mut ui = ComposeTestRule::sized(IntSize::new(300, 100), Screen);
     ui.on_node_with_tag("slider").request_focus();
     // A held arrow: three key downs, then the key up.
     for _ in 0..3 {
         ui.host().send_key(KeyEvent::down(Key::DirectionRight));
         ui.wait_for_idle();
     }
-    assert!((value.get() - 0.3).abs() < 0.001, "{}", value.get());
+    assert!((value() - 0.3).abs() < 0.001, "{}", value());
     assert_eq!(FINISHED.with(Cell::get), 0, "finished before the key was released");
     ui.host().send_key(KeyEvent::up(Key::DirectionRight));
     ui.wait_for_idle();

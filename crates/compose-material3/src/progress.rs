@@ -15,6 +15,7 @@ use compose_ui::{
     ProgressBarRangeInfo, Rect, SemanticsConfiguration, SemanticsModifierNode, StrokeCap,
 };
 
+use crate::components::increase_semantics_bounds;
 use crate::theme::MaterialTheme;
 
 /// As Compose's `ProgressIndicatorDefaults`.
@@ -346,6 +347,7 @@ pub fn LinearProgressIndicator(
     #[default(crate::ProgressIndicatorDefaults::LINEAR_INDICATOR_TRACK_GAP_SIZE)] gap_size: Dp,
     #[default(None)] draw_stop_indicator: Option<DrawStopIndicator>,
 ) {
+    let modifier = increase_semantics_bounds(modifier, false);
     let modifier = linear_size(progress_semantics(modifier, Some(progress.clone())));
     compose_foundation::layout::Canvas(modifier, move |scope| {
         let progress = coerce_progress(progress());
@@ -425,6 +427,7 @@ pub fn IndeterminateLinearProgressIndicator(
         infinite_repeatable(tween(LINEAR_DURATION).easing(Easing::Linear), RepeatMode::Restart),
     );
     // Its own repaint boundary, as the circular one's.
+    let modifier = increase_semantics_bounds(modifier, false);
     let modifier = linear_size(progress_semantics(modifier, None)).repaint_boundary();
     compose_foundation::layout::Canvas(modifier, move |scope| {
         let gap = linear_gap_fraction(scope, gap_size, stroke_cap);

@@ -395,7 +395,11 @@ fn Controls(cards: MutableState<u32>) {
             single_line = true,
         );
     });
-    Slider!(level.get(), move |value| level.set(value));
+    let slider = remember_slider_state!(level.get());
+    Slider!(slider, move |value| {
+        slider.set_value(value);
+        level.set(value);
+    });
     Row!(
         modifier = Modifier.padding((0.dp(), 8.dp())),
         horizontal_arrangement = Arrangement::spaced_by(16.dp()),

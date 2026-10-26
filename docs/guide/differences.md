@@ -88,6 +88,7 @@ The known differences from Jetpack Compose that an app will run into, distilled 
   - input chips, date and time pickers, search bars, exposed dropdown menus, multi-choice segmented buttons;
   - the toggleable `Surface` overload, the content overloads of `ExtendedFloatingActionButton` and `BottomAppBar`, and the bottom app bar's scroll behavior.
 - **Progress indicators** take their progress as a lambda, as Compose's non-deprecated overloads (the `Float` ones are gone); `drawStopIndicator` is a `DrawStopIndicator` value, as a composable's callbacks take their arguments by value (D1003).
+- **Sliders** take a `SliderState`, as Compose's non-deprecated overload (the value overload is gone); `SliderDefaults::track_with` stands for `Track`'s parameters past the colors, its `drawStopIndicator` and `drawTick` `DrawSliderStopIndicator` and `DrawSliderTick` values. No `RangeSlider` or `VerticalSlider` yet (D1006).
 - **Top app bars' scroll behaviors** have no fling decay before they settle, and dragging the bar itself doesn't collapse it (D186).
 - **A `SeekableTransitionState` call can end a frame before Compose's**, as a task waiting for a frame resumes before that frame's composition (D821, D817; a runtime parity item). One interrupted by another cancels its task, as Compose's `CancellationException` does (D823).
 - **Icons** are material-icons-core's filled set (D187).

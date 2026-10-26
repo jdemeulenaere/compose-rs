@@ -165,37 +165,39 @@ fn radio_buttons_select_one() {
 #[test]
 fn a_slider_follows_presses_drags_and_keys() {
     thread_local! { static FINISHED: Cell<u32> = const { Cell::new(0) }; }
+    thread_local! { static STATE: Cell<Option<SliderState>> = const { Cell::new(None) }; }
     #[composable]
-    fn Screen(value: MutableState<f32>) {
+    fn Screen() {
+        let state = remember_slider_state!(0.0, 9, (0.0, 100.0));
+        STATE.with(|cell| cell.set(Some(state)));
         Slider!(
-            value.get(),
-            move |new| value.set(new),
+            state,
+            move |new| state.set_value(new),
             modifier = Modifier.width(220.dp()).test_tag("slider"),
-            value_range = (0.0, 100.0),
-            steps = 9,
             on_value_change_finished =
-                || FINISHED.with(|finished| finished.set(finished.get() + 1)),
+                Some(|| FINISHED.with(|finished| finished.set(finished.get() + 1))),
         );
     }
-    let value = mutable_state_of(0.0f32);
-    let handle = value.handle();
-    let mut ui = ComposeTestRule::sized(IntSize::new(300, 100), move || Screen(handle));
+    let value = || STATE.with(Cell::get).expect("composed").value();
+    let mut ui = ComposeTestRule::sized(IntSize::new(300, 100), Screen);
     let slider = bounds(&mut ui, "slider");
-    assert_eq!((slider.width(), slider.height()), (220.0, 48.0));
-    // The track runs from 10 to 210: the middle is 50, a step.
+    // As high as the handle (its 48 dp touch target outside its bounds), its semantics 10 dp
+    // wider on each side, as Compose's.
+    assert_eq!((slider.width(), slider.height()), (240.0, 44.0));
+    // The track runs from 2 to 218 (half the 4 dp handle in): the middle is 50, a step.
     ui.host().send_pointer(PointerEvent::press(Offset::new(110.0, 24.0)));
     ui.host().send_pointer(PointerEvent::release(Offset::new(110.0, 24.0)));
     ui.wait_for_idle();
-    assert!((value.get() - 50.0).abs() < 0.001, "{}", value.get());
-    // Dragged to 68 px: 29 %, snapped to 30.
+    assert!((value() - 50.0).abs() < 0.001, "{}", value());
+    // Dragged to 68 px, the value 8 px (the slop) behind the pointer: 34 %, snapped to 30.
     ui.host().send_pointer(PointerEvent::press(Offset::new(110.0, 24.0)));
     ui.host().send_pointer(PointerEvent::moved(Offset::new(68.0, 24.0), true));
     ui.host().send_pointer(PointerEvent::release(Offset::new(68.0, 24.0)));
     ui.wait_for_idle();
-    assert!((value.get() - 30.0).abs() < 0.001, "{}", value.get());
+    assert!((value() - 30.0).abs() < 0.001, "{}", value());
     ui.on_node_with_tag("slider").request_focus();
     ui.press_key(Key::DirectionRight);
-    assert!((value.get() - 40.0).abs() < 0.001, "{}", value.get());
+    assert!((value() - 40.0).abs() < 0.001, "{}", value());
     assert_eq!(FINISHED.with(Cell::get), 3);
 }
 
@@ -376,16 +378,12 @@ fn tonal_elevation_tints_the_surface_color_and_adds_up() {
 
 #[test]
 fn a_slider_takes_set_progress_snapped_to_its_steps() {
-    let value = mutable_state_of(0.0f32);
-    let handle = value.handle();
+    thread_local! { static STATE: Cell<Option<SliderState>> = const { Cell::new(None) }; }
     let mut ui = compose_test(move || {
         MaterialTheme!({
-            Slider!(
-                handle.get(),
-                move |new| handle.set(new),
-                modifier = Modifier.test_tag("slider"),
-                steps = 3,
-            );
+            let state = remember_slider_state!(0.0, 3);
+            STATE.with(|cell| cell.set(Some(state)));
+            Slider!(state, move |new| state.set_value(new), modifier = Modifier.test_tag("slider"));
         });
     });
     let node = ui.on_node_with_tag("slider").fetch_semantics_node();
@@ -395,19 +393,11 @@ fn a_slider_takes_set_progress_snapped_to_its_steps() {
         .copied()
         .expect("a range");
     assert_eq!((info.current, info.range, info.steps), (0.0, (0.0, 1.0), 3));
-    ui.on_node_with_tag("slider").perform_semantics_action_with(
-        &compose_ui::SemanticsActions::SET_PROGRESS,
-        |set| {
-            set(0.3);
-        },
-    );
-    assert_eq!(value.get(), 0.25, "snapped to the nearest of the 5 stops");
-    let info = ui
-        .on_node_with_tag("slider")
-        .fetch_semantics_node()
-        .config
-        .get(&compose_ui::SemanticsProperties::PROGRESS_BAR_RANGE_INFO)
-        .copied();
+    ui.on_node_with_tag("slider")
+        .perform_semantics_action(compose_ui::SemanticsAction::SetProgress(0.3));
+    let value = STATE.with(Cell::get).expect("composed").value();
+    assert_eq!(value, 0.25, "snapped to the nearest of the 5 stops");
+    let info = ui.on_node_with_tag("slider").fetch_semantics_node().config.progress_bar_range_info;
     assert_eq!(info.map(|info| info.current), Some(0.25));
 }
 
@@ -488,17 +478,22 @@ fn a_sliders_set_progress_goes_on_from_the_value_asked() {
 #[test]
 fn a_right_to_left_slider_runs_from_the_right() {
     use compose_ui::{LayoutDirection, Offset, PointerEvent};
-    let value = mutable_state_of(0.0f32);
-    let handle = value.handle();
+    thread_local! { static STATE: Cell<Option<SliderState>> = const { Cell::new(None) }; }
     let mut ui = compose_test(move || {
         MaterialTheme!({
+            let state = remember_slider_state!();
+            STATE.with(|cell| cell.set(Some(state)));
             Slider!(
-                handle.get(),
-                move |new| handle.set(new),
-                modifier = Modifier.test_tag("slider")
+                state,
+                move |new| state.set_value(new),
+                modifier = Modifier.test_tag("slider"),
+                thumb = Some(|_| Box!(
+                    modifier = Modifier.width(4.dp()).height(44.dp()).test_tag("thumb")
+                )),
             );
         });
     });
+    let value = || STATE.with(Cell::get).expect("composed").value();
     ui.host().set_layout_direction(LayoutDirection::Rtl);
     ui.wait_for_idle();
     let bounds = ui.on_node_with_tag("slider").fetch_semantics_node().bounds;
@@ -507,16 +502,10 @@ fn a_right_to_left_slider_runs_from_the_right() {
     ui.host().send_pointer(PointerEvent::press(at));
     ui.host().send_pointer(PointerEvent::release(at));
     ui.wait_for_idle();
-    assert!(value.get() > 0.95, "{}", value.get());
-    // The thumb is drawn on the left: the display list mirrors the slider.
-    let list = ui.host().display_list();
-    assert!(
-        list.ops
-            .iter()
-            .any(|op| matches!(op, compose_ui::platform::DrawOp::Transform { scale, .. } if scale.0 == -1.0)),
-        "{}",
-        list.dump()
-    );
+    assert!(value() > 0.95, "{}", value());
+    // The handle is placed on the left.
+    let handle = ui.on_node_unmerged(has_test_tag("thumb")).fetch_semantics_node().bounds;
+    assert!(handle.right < bounds.left + 30.0, "{handle:?} in {bounds:?}");
 }
 
 #[test]
@@ -541,7 +530,8 @@ fn progress_indicators_draw_their_progress_and_animate_when_indeterminate() {
         .expect("a range");
     assert_eq!((info.current, info.range), (0.25, (0.0, 1.0)));
     let linear = ui.on_node_with_tag("linear").fetch_semantics_node().bounds;
-    assert_eq!((linear.width(), linear.height()), (240.0, 4.0));
+    // Its semantics 10 dp taller on each side than the 4 dp line, as Compose's.
+    assert_eq!((linear.width(), linear.height()), (240.0, 24.0));
     // A quarter turn from the top, after its track past the 4 dp gap (and the 4 dp stroke, for
     // the caps: 8 dp of the 40 dp circle's circumference, 22.9 degrees); a line half way, then
     // its track past Material 3 1.4's 4 dp gap (and the stroke), their round caps (the default)

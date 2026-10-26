@@ -1,7 +1,6 @@
 //! Compose's `ProgressIndicatorTest.kt`, adapted: the indicators' progress semantics, sizes and
-//! animations. Not ported: the three `*_semanticsNodeBounds`/`scrollingBounds` tests, where
-//! Compose's semantics bounds are 10 dp taller than the line on each side
-//! (`IncreaseVerticalSemanticsBounds`): compose-rs's semantics bounds are a node's.
+//! animations, and the linear indicators' semantics bounds, 10 dp taller than the line on each
+//! side (`IncreaseVerticalSemanticsBounds`).
 
 use compose_foundation::layout::*;
 use compose_material3::*;
@@ -177,4 +176,55 @@ fn a_circular_indicator_reports_a_nan_progress_as_zero() {
         range_info(&mut ui, "circular"),
         ProgressBarRangeInfo { current: 0.0, range: (0.0, 1.0), steps: 0 }
     );
+}
+
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/ProgressIndicatorTest.kt, indeterminateLinearProgressIndicator_semanticsNodeBounds
+#[test]
+fn an_indeterminate_linear_indicators_semantics_reach_10_dp_past_the_line() {
+    let mut ui = ComposeTestRule::with_manual_clock(|| {
+        MaterialTheme!({
+            IndeterminateLinearProgressIndicator!(modifier = Modifier.test_tag("linear"));
+        });
+    });
+    let node = bounds(&mut ui, "linear");
+    assert_eq!((node.width(), node.height()), (240.0, 24.0));
+}
+
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/ProgressIndicatorTest.kt, determinateLinearProgressIndicator_semanticsNodeBounds
+#[test]
+fn a_determinate_linear_indicators_semantics_reach_10_dp_past_the_line() {
+    let mut ui = compose_test(|| {
+        MaterialTheme!({
+            LinearProgressIndicator!(|| 1.0, modifier = Modifier.test_tag("linear"));
+        });
+    });
+    let node = bounds(&mut ui, "linear");
+    assert_eq!((node.width(), node.height()), (240.0, 24.0));
+}
+
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/ProgressIndicatorTest.kt, determinateLinearProgressIndicator_scrollingBounds
+#[test]
+fn a_linear_indicators_semantics_bounds_scroll_with_it() {
+    use compose_foundation::ScrollModifiers;
+    let mut ui = compose_test(|| {
+        MaterialTheme!({
+            let scroll = compose_foundation::remember_scroll_state!();
+            Column!(modifier = Modifier.vertical_scroll(scroll), {
+                for index in 0..20 {
+                    Text!("Item {}", index);
+                }
+                Box!(modifier = Modifier.test_tag("visual"), {
+                    LinearProgressIndicator!(|| 1.0, modifier = Modifier.test_tag("with padding"));
+                });
+                for index in 0..20 {
+                    Text!("Item {}", index);
+                }
+            });
+        });
+    });
+    let visual = bounds(&mut ui, "visual");
+    assert_eq!((visual.width(), visual.height()), (240.0, 4.0));
+    let semantics = bounds(&mut ui, "with padding");
+    assert_eq!((semantics.width(), semantics.height()), (240.0, 24.0));
+    assert_eq!(semantics.top, visual.top - 10.0);
 }

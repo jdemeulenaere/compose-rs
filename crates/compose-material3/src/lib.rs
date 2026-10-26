@@ -29,6 +29,7 @@ mod scaffold;
 mod segmented_button;
 mod selection;
 mod sheet;
+mod slider;
 mod snackbar;
 mod swipe_to_dismiss;
 mod tabs;
@@ -87,12 +88,15 @@ pub use segmented_button::{
     SingleChoiceSegmentedButtonRow, SingleChoiceSegmentedButtonRowScope,
 };
 pub use selection::{
-    RadioButton, RadioButtonColors, RadioButtonDefaults, Slider, SliderColors, SliderDefaults,
-    Switch, SwitchColors, SwitchDefaults,
+    RadioButton, RadioButtonColors, RadioButtonDefaults, Switch, SwitchColors, SwitchDefaults,
 };
 pub use sheet::{
     BottomSheetDefaults, ModalBottomSheet, SheetState, SheetValue,
     remember_modal_bottom_sheet_state,
+};
+pub use slider::{
+    DrawSliderStopIndicator, DrawSliderTick, Slider, SliderColors, SliderDefaults, SliderState,
+    remember_slider_state,
 };
 pub use snackbar::{
     PlainTooltip, Snackbar, SnackbarData, SnackbarDuration, SnackbarHost, SnackbarHostState,

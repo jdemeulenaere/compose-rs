@@ -141,14 +141,15 @@ fn a_disabled_switchs_colors_are_composited_over_the_surface() {
 
 /// Compose's `SliderDefaults.colors()` has its own disabled colors, all from `onSurface`: the
 /// thumb `onSurface` at 38 % over the surface (opaque), the active track `onSurface` at 38 %,
-/// the inactive track `onSurface` at 12 %. Here a disabled slider draws its enabled colors at
-/// 38 %: a faded `primary` thumb and active track, and `surface_container_highest` at 38 %.
+/// the inactive track `onSurface` at 12 %. (Drawn: the inactive and the active track, then the
+/// handle, placed last.)
 #[test]
 fn a_disabled_slider_has_materials_disabled_colors() {
     let mut ui = compose_test(|| {
         MaterialTheme!({
             remember_scheme();
-            Slider!(0.5, |_| {}, modifier = Modifier.width(200.dp()), enabled = false);
+            let slider = remember_slider_state!(0.5);
+            Slider!(slider, |_| {}, modifier = Modifier.width(200.dp()), enabled = false);
         });
     });
     let scheme = scheme();

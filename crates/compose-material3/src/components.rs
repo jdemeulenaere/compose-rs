@@ -435,6 +435,72 @@ pub static LOCAL_MINIMUM_INTERACTIVE_COMPONENT_SIZE: compose_runtime::Compositio
         MINIMUM_INTERACTIVE_SIZE
     });
 
+/// How far a slider's or a linear indicator's semantics node reaches past its layout on each
+/// side, as Compose's `HorizontalSemanticsBoundsPadding` and `VerticalSemanticsBoundsPadding`.
+pub(crate) const SEMANTICS_BOUNDS_PADDING: Dp = Dp(10.0);
+
+/// The semantics node `SEMANTICS_BOUNDS_PADDING` wider (`horizontal`) or taller on each side
+/// than the layout, which stays as it was, as Compose's `IncreaseHorizontalSemanticsBounds` and
+/// `IncreaseVerticalSemanticsBounds`: a "negative padding" layout, a merging semantics node
+/// (whose bounds are the node's semantic bounds) and the padding back. Thin controls reach
+/// screen readers' minimum box this way.
+pub(crate) fn increase_semantics_bounds(modifier: Modifier, horizontal: bool) -> Modifier {
+    let padding = if horizontal {
+        compose_ui::PaddingValues::symmetric(SEMANTICS_BOUNDS_PADDING, Dp(0.0))
+    } else {
+        compose_ui::PaddingValues::symmetric(Dp(0.0), SEMANTICS_BOUNDS_PADDING)
+    };
+    modifier
+        .then_custom(NegativePadding { horizontal })
+        .semantics_with(true, |_| {})
+        .padding(padding)
+}
+
+/// The layout of `increase_semantics_bounds`: measures what's inside `SEMANTICS_BOUNDS_PADDING`
+/// larger on each side and takes the size without it, placing it that much before.
+#[derive(Clone, Copy, PartialEq)]
+struct NegativePadding {
+    horizontal: bool,
+}
+
+impl ModifierNodeElement for NegativePadding {
+    fn create(&self) -> std::boxed::Box<dyn ModifierNode> {
+        std::boxed::Box::new(*self)
+    }
+    fn update(&self, node: &mut dyn ModifierNode) {
+        if let Some(node) = node.downcast_mut::<NegativePadding>() {
+            *node = *self;
+        }
+    }
+    fn same(&self, other: &dyn ModifierNodeElement) -> bool {
+        other.downcast_ref::<NegativePadding>() == Some(self)
+    }
+    fn name(&self) -> &'static str {
+        "increaseSemanticsBounds"
+    }
+}
+
+impl ModifierNode for NegativePadding {
+    fn as_layout(&mut self) -> Option<&mut dyn compose_ui::LayoutModifierNode> {
+        Some(self)
+    }
+}
+
+impl compose_ui::LayoutModifierNode for NegativePadding {
+    fn measure(
+        &mut self,
+        scope: &mut compose_ui::MeasureScope<'_>,
+        content: compose_ui::Measurable,
+        constraints: compose_ui::Constraints,
+    ) -> compose_ui::MeasureResult {
+        let padding = scope.density().round_to_px(SEMANTICS_BOUNDS_PADDING);
+        let (dx, dy) = if self.horizontal { (padding, 0) } else { (0, padding) };
+        let placeable = scope.measure(content, constraints.offset(dx * 2, dy * 2));
+        scope.place(&placeable, -dx, -dy);
+        scope.layout(placeable.width - dx * 2, placeable.height - dy * 2)
+    }
+}
+
 /// Lays its content out at least `LOCAL_MINIMUM_INTERACTIVE_COMPONENT_SIZE` in both
 /// directions, centered, so small controls are easy to hit, as Compose's
 /// `minimumInteractiveComponentSize()` (nothing where the local is 0 or unspecified). Reads the
