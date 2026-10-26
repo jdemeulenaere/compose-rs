@@ -314,6 +314,7 @@ impl Runtime {
                     parent.cursor = table[found].next_sibling;
                 } else {
                     // Move the match in front of the cursor, and its nodes with it.
+                    *recorded_changes += 1;
                     table[previous].next_sibling = table[found].next_sibling;
                     table[found].next_sibling = parent.cursor;
                     table.link_after(parent.group, parent.last_placed, found);

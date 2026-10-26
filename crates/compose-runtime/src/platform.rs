@@ -30,7 +30,7 @@ pub fn reader_compaction_count() -> u64 {
 
 /// The number of slots written and side effects recorded by passes on this thread so far: what
 /// Compose's change list holds besides node changes (a `remember` computing anew, a keyed
-/// `remember` or effect whose keys changed, a `SideEffect`, groups removed). For tests.
+/// `remember` or effect whose keys changed, a `SideEffect`, groups moved or removed). For tests.
 pub fn recorded_changes() -> u64 {
     crate::runtime::with_runtime(|runtime| runtime.recorded_changes)
 }

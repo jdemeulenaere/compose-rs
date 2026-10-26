@@ -1955,3 +1955,470 @@ fn observers_between_side_effects_keep_their_order() {
     test.advance();
     assert_eq!(order.joined(), "R[1], R[2], R[3], R[4], F[4], F[3], F[2], F[1]");
 }
+
+// ---- Keys, groups and observation scopes ---------------------------------------------------
+
+#[composable]
+fn Container(content: impl Fn() + 'static) {
+    content();
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/CompositionTests.kt, testCompoundKeyHashCodeStaysTheSameAfterRecompositions
+#[test]
+fn the_composite_key_hash_stays_the_same_across_recompositions() {
+    #[composable]
+    fn Test(outer_keys: Log, inner_keys: Log, outer: ScopeHolder, inner: ScopeHolder) {
+        outer.capture();
+        outer_keys.push(current_composite_key_hash().to_string());
+        let (inner_keys, inner) = (inner_keys.clone(), inner.clone());
+        Container!({
+            let (inner_keys, inner) = (inner_keys.clone(), inner.clone());
+            Linear!({
+                inner.capture();
+                inner_keys.push(current_composite_key_hash().to_string());
+            });
+        });
+        assert_eq!(
+            outer_keys.entries().last().cloned(),
+            Some(current_composite_key_hash().to_string()),
+            "the key is rolled back after the content"
+        );
+    }
+    let mut test = composition_test();
+    let (outer_keys, inner_keys) = (Log::new(), Log::new());
+    let (outer, inner) = (ScopeHolder::new(), ScopeHolder::new());
+    let (ok, ik, o, i) = (outer_keys.clone(), inner_keys.clone(), outer.clone(), inner.clone());
+    test.compose(move || Test(ok.clone(), ik.clone(), o.clone(), i.clone()));
+    let outer_size = outer_keys.entries().len();
+    outer.invalidate();
+    test.expect_no_changes();
+    assert_ne!(outer_keys.entries().len(), outer_size);
+    let inner_size = inner_keys.entries().len();
+    inner.invalidate();
+    test.expect_no_changes();
+    assert_ne!(inner_keys.entries().len(), inner_size);
+    let (outer_keys, inner_keys) = (outer_keys.entries(), inner_keys.entries());
+    assert_ne!(inner_keys[0], outer_keys[0]);
+    assert!(inner_keys.iter().all(|key| *key == inner_keys[0]));
+    assert!(outer_keys.iter().all(|key| *key == outer_keys[0]));
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/CompositionTests.kt, testSwappingGroups
+#[test]
+fn keyed_groups_without_nodes_swap() {
+    #[composable]
+    fn NoNodes() {}
+    let mut test = composition_test();
+    let items = var(vec![0, 1, 2, 3, 4]);
+    let scope = ScopeHolder::new();
+    let (i, s) = (items.clone(), scope.clone());
+    test.compose(move || {
+        s.capture();
+        for item in i.borrow().clone() {
+            key(item, NoNodes);
+        }
+    });
+    items.borrow_mut().swap(2, 3);
+    scope.invalidate();
+    test.expect_changes();
+    test.verify_consistent();
+}
+
+/// Invalidates every scope added since the last call, as `invalidateComposition()`.
+#[derive(Clone, Default)]
+struct Invalidates(std::rc::Rc<std::cell::RefCell<Vec<RecomposeScope>>>);
+
+impl ComposeArg for Invalidates {
+    fn same(&self, other: &Self) -> bool {
+        std::rc::Rc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl Invalidates {
+    fn add(&self) {
+        self.0.borrow_mut().push(current_recompose_scope());
+    }
+
+    fn invalidate(&self) {
+        for scope in std::mem::take(&mut *self.0.borrow_mut()) {
+            scope.invalidate();
+        }
+    }
+}
+
+type Items = Var<Vec<(i32, Vec<i32>)>>;
+
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/CompositionTests.kt, testInsertOnMultipleLevels
+#[test]
+fn insertions_on_several_levels_in_one_pass() {
+    #[composable]
+    fn Numbers(numbers: std::rc::Rc<Vec<i32>>, invalidates: Invalidates) {
+        Linear!({
+            Linear!({
+                invalidates.add();
+                for number in numbers.iter() {
+                    Text(&number.to_string());
+                }
+            });
+        });
+    }
+    #[composable]
+    fn Item(number: i32, numbers: std::rc::Rc<Vec<i32>>, invalidates: Invalidates) {
+        Linear!({
+            invalidates.add();
+            Text(&number.to_string());
+            Numbers(numbers.clone(), invalidates.clone());
+        });
+    }
+    #[composable]
+    fn Test(items: Items, invalidates: Invalidates) {
+        invalidates.add();
+        Linear!({
+            invalidates.add();
+            for (number, numbers) in items.borrow().iter() {
+                Item(*number, std::rc::Rc::new(numbers.clone()), invalidates.clone());
+            }
+        });
+    }
+    let mut test = composition_test();
+    let items: Items = var(vec![(1, vec![0, 1, 2, 3, 4]), (3, vec![0, 1, 2, 3, 4])]);
+    let invalidates = Invalidates::default();
+    let (i, inv) = (items.clone(), invalidates.clone());
+    test.compose(move || Test(i.clone(), inv.clone()));
+    let shown = items.clone();
+    test.validate(move |v| {
+        v.linear(|v| {
+            for (number, numbers) in shown.borrow().iter() {
+                v.linear(|v| {
+                    v.text(&number.to_string());
+                    v.linear(|v| v.linear(|v| numbers.iter().for_each(|n| v.text(&n.to_string()))));
+                });
+            }
+        })
+    });
+    items.borrow_mut()[0].1.insert(2, 100);
+    items.borrow_mut()[1].1.insert(3, 200);
+    items.borrow_mut().insert(1, (2, vec![0, 1, 2]));
+    invalidates.invalidate();
+    test.expect_changes();
+    test.revalidate();
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/CompositionTests.kt, testInsertingAfterSkipping
+#[test]
+fn an_insertion_after_skipped_groups() {
+    // The items are state: Kotlin re-runs the container's lambda with its parent, compose-rs
+    // memoizes it on its captures (D710).
+    type Items = MutableState<Vec<(i32, Vec<i32>)>>;
+    #[composable]
+    fn Test(items: Items, invalidates: Invalidates) {
+        invalidates.add();
+        Linear!({
+            for (item, numbers) in items.get() {
+                Text(&item.to_string());
+                let invalidates = invalidates.clone();
+                let numbers = std::rc::Rc::new(numbers);
+                Linear!({
+                    invalidates.add();
+                    for number in numbers.iter() {
+                        Text(&number.to_string());
+                    }
+                });
+            }
+        });
+    }
+    let mut test = composition_test();
+    let items = mutable_state_of_with(vec![(1, vec![0, 1, 2, 3, 4])], NeverEqualPolicy);
+    let invalidates = Invalidates::default();
+    let (i, inv) = (items.handle(), invalidates.clone());
+    test.compose(move || Test(i, inv.clone()));
+    test.validate(move |v| {
+        v.linear(|v| {
+            for (item, numbers) in i.get() {
+                v.text(&item.to_string());
+                v.linear(|v| numbers.iter().for_each(|n| v.text(&n.to_string())));
+            }
+        })
+    });
+    items.edit(|items| items.push((2, vec![3, 4, 5, 6])));
+    invalidates.invalidate();
+    test.expect_changes();
+    test.revalidate();
+}
+
+/// `(include_even, include_odd)`, as the two Kotlin `var`s of the even-odd tests.
+type EvenOdd = std::rc::Rc<std::cell::Cell<(bool, bool)>>;
+
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/CompositionTests.kt, evenOddRecomposeGroup
+#[test]
+fn keyed_texts_come_and_go_by_parity() {
+    #[composable]
+    fn EmitText(flags: EvenOdd, invalidates: Invalidates) {
+        invalidates.add();
+        let (even, odd) = flags.get();
+        if odd {
+            key(1, || Text("odd 1"));
+        }
+        if even {
+            key(2, || Text("even 2"));
+        }
+        if odd {
+            key(3, || Text("odd 3"));
+        }
+        if even {
+            key(4, || Text("even 4"));
+        }
+    }
+    #[composable]
+    fn Test(flags: EvenOdd, invalidates: Invalidates) {
+        Linear!({
+            Wrap!({ EmitText(flags.clone(), invalidates.clone()) });
+            EmitText(flags.clone(), invalidates.clone());
+            Wrap!({ EmitText(flags.clone(), invalidates.clone()) });
+            EmitText(flags.clone(), invalidates.clone());
+        });
+    }
+    let mut test = composition_test();
+    let flags: EvenOdd = std::rc::Rc::new(std::cell::Cell::new((true, true)));
+    let invalidates = Invalidates::default();
+    let (f, i) = (flags.clone(), invalidates.clone());
+    test.compose(move || Test(f.clone(), i.clone()));
+    let shown = flags.clone();
+    test.validate(move |v| {
+        v.linear(|v| {
+            for _ in 0..4 {
+                let (even, odd) = shown.get();
+                for (number, is_odd) in [(1, true), (2, false), (3, true), (4, false)] {
+                    if (is_odd && odd) || (!is_odd && even) {
+                        v.text(&format!("{} {number}", if is_odd { "odd" } else { "even" }));
+                    }
+                }
+            }
+        })
+    });
+    for next in [(false, true), (true, false), (false, false), (true, false), (true, true)] {
+        flags.set(next);
+        invalidates.invalidate();
+        test.expect_changes();
+        test.revalidate();
+    }
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/CompositionTests.kt, testMovingSlotsButNotNodes
+#[test]
+fn keyed_groups_move_their_slots_without_nodes() {
+    #[composable]
+    fn Content(order: MutableState<Vec<i32>>, include_text: MutableState<Vec<i32>>) {
+        for i in order.get() {
+            key(i, || {
+                if include_text.with(|included| included.contains(&i)) {
+                    Text(&format!("Text for {i}"));
+                }
+            });
+        }
+        Text("End");
+    }
+    let mut test = composition_test();
+    let order = mutable_state_list_from([1, 2, 3, 4, 5]);
+    let include_text = mutable_state_list_from([4]);
+    let (o, i) = (order.handle(), include_text.handle());
+    test.compose(move || Content(o, i));
+    test.validate(move |v| {
+        for item in o.get() {
+            if i.with(|included| included.contains(&item)) {
+                v.text(&format!("Text for {item}"));
+            }
+        }
+        v.text("End");
+    });
+    order.edit(|order| order.swap(2, 4));
+    include_text.edit(|included| {
+        included.retain(|&item| item != 4);
+        included.push(3);
+    });
+    test.expect_changes();
+    test.revalidate();
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/CompositionTests.kt, evenOddWithMovement
+#[test]
+fn keyed_groups_move_while_their_content_changes() {
+    #[composable]
+    fn EmitText(all: bool, order: Var<Vec<i32>>, flags: EvenOdd, invalidates: Invalidates) {
+        invalidates.add();
+        let (even, odd) = flags.get();
+        for i in order.borrow().clone() {
+            if i % 2 == 1 && (all || odd) {
+                key(i, || Text(&format!("odd {i}")));
+            }
+            if i % 2 == 0 && (all || even) {
+                key(i, || Text(&format!("even {i}")));
+            }
+        }
+    }
+    #[composable]
+    fn Test(order: Var<Vec<i32>>, flags: EvenOdd, invalidates: Invalidates) {
+        Linear!({
+            invalidates.add();
+            for i in order.borrow().clone() {
+                key(i, || {
+                    Text(&format!("group {i}"));
+                    let (even, odd) = flags.get();
+                    if i == 2 || (even && odd) {
+                        Text("including everything");
+                    } else {
+                        if even {
+                            Text("including evens");
+                        }
+                        if odd {
+                            Text("including odds");
+                        }
+                    }
+                    EmitText(i == 2, order.clone(), flags.clone(), invalidates.clone());
+                });
+            }
+            EmitText(false, order.clone(), flags.clone(), invalidates.clone());
+        });
+    }
+    fn expect_emit(v: &mut Expected, all: bool, order: &[i32], (even, odd): (bool, bool)) {
+        for &i in order {
+            if i % 2 == 1 && (odd || all) {
+                v.text(&format!("odd {i}"));
+            }
+            if i % 2 == 0 && (even || all) {
+                v.text(&format!("even {i}"));
+            }
+        }
+    }
+    let mut test = composition_test();
+    let order = var(vec![1, 2, 3, 4]);
+    let flags: EvenOdd = std::rc::Rc::new(std::cell::Cell::new((true, true)));
+    let invalidates = Invalidates::default();
+    let (o, f, i) = (order.clone(), flags.clone(), invalidates.clone());
+    test.compose(move || Test(o.clone(), f.clone(), i.clone()));
+    let (shown_order, shown_flags) = (order.clone(), flags.clone());
+    test.validate(move |v| {
+        v.linear(|v| {
+            let order = shown_order.borrow().clone();
+            let (even, odd) = shown_flags.get();
+            for &i in &order {
+                v.text(&format!("group {i}"));
+                if i == 2 || (even && odd) {
+                    v.text("including everything");
+                } else {
+                    if even {
+                        v.text("including evens");
+                    }
+                    if odd {
+                        v.text("including odds");
+                    }
+                }
+                expect_emit(v, i == 2, &order, (even, odd));
+            }
+            expect_emit(v, false, &order, (even, odd));
+        })
+    });
+    for (next_order, next_flags) in [
+        (vec![1, 2, 4, 3], (false, true)),
+        (vec![1, 4, 2, 3], (true, false)),
+        (vec![3, 4, 2, 1], (false, false)),
+        (vec![4, 3, 2, 1], (true, false)),
+        (vec![1, 2, 3, 4], (true, true)),
+    ] {
+        *order.borrow_mut() = next_order;
+        flags.set(next_flags);
+        invalidates.invalidate();
+        test.expect_changes();
+        test.revalidate();
+    }
+}
+
+type States = std::rc::Rc<std::cell::RefCell<Vec<OwnedState<i32>>>>;
+
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/CompositionTests.kt, testObservationScopes
+#[test]
+fn only_the_states_of_the_latest_run_invalidate() {
+    // Compose's unremembered states live while the test references them; here the test keeps
+    // their owners.
+    #[composable]
+    fn Test(states: States, iterations: Counter) {
+        let s1 = mutable_state_of(iterations.increment() as i32 - 1);
+        Text(&format!("s1 {}", s1.get()));
+        states.borrow_mut().push(s1);
+        let s2 = mutable_state_of(iterations.increment() as i32 - 1);
+        Text(&format!("s2 {}", s2.get()));
+        states.borrow_mut().push(s2);
+    }
+    let mut test = composition_test();
+    let states: States = std::rc::Rc::default();
+    let iterations = Counter::new();
+    let (s, i) = (states.clone(), iterations.clone());
+    test.compose(move || Test(s.clone(), i.clone()));
+    let bump = |first: bool| {
+        let states = states.borrow();
+        let state = if first { states.first() } else { states.last() };
+        state.expect("a state").update(|value| value + 1);
+    };
+    for _ in 0..10 {
+        bump(false);
+        test.expect_changes();
+    }
+    bump(true);
+    test.expect_no_changes();
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/CompositionTests.kt, testObservationScopes_IndirectInvalidate
+#[test]
+fn a_state_of_an_earlier_run_invalidates_nothing() {
+    #[composable]
+    fn Indirect(iteration: i32, states: States) {
+        let state = mutable_state_of(iteration * 1000 + 7);
+        Text(&format!("{iteration} state = {}", state.get()));
+        states.borrow_mut().push(state);
+    }
+    #[composable]
+    fn ComposeIndirect(iteration: State<i32>, states: States) {
+        Text(&format!("Iteration {}", iteration.get()));
+        Indirect(iteration.get(), states);
+    }
+    let mut test = composition_test();
+    let states: States = std::rc::Rc::default();
+    let iteration = mutable_state_of(0);
+    let (s, i) = (states.clone(), iteration.as_state());
+    test.compose(move || ComposeIndirect(i, s.clone()));
+    for _ in 0..10 {
+        iteration.update(|iteration| iteration + 1);
+        test.expect_changes();
+    }
+    states.borrow().first().expect("a state").update(|value| value + 1);
+    test.expect_no_changes();
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/CompositionTests.kt, testApplierBeginEndCallbacks
+#[test]
+fn the_applier_hears_a_pass_begin_and_end_before_its_effects() {
+    // Compose calls `onBeginChanges` only once composition is over, when it applies its
+    // recorded changes; compose-rs applies changes as the pass composes (D31), so the applier
+    // hears the pass begin before composition, and end before observers and effects.
+    let mut test = composition_test();
+    let checks = Log::new();
+    let c = checks.clone();
+    test.compose(move || {
+        let counts = compose_runtime::platform::current()
+            .with_applier(|views: &mut ViewApplier| (views.begin_changes, views.end_changes));
+        assert_eq!(counts, (1, 0), "begun, not ended, during composition");
+        c.push("composition");
+        let c2 = c.clone();
+        SideEffect(move || c2.push("SideEffect"));
+        struct Check(Log);
+        impl RememberObserver for Check {
+            fn on_remembered(&self) {
+                self.0.push("RememberObserver");
+            }
+        }
+        let c3 = c.clone();
+        remember_observer(move || Check(c3));
+    });
+    assert_eq!(test.with_views(|views| (views.begin_changes, views.end_changes)), (1, 1));
+    assert_eq!(checks.entries(), ["composition", "RememberObserver", "SideEffect"]);
+}
