@@ -216,10 +216,11 @@ fn a_wheel_over_the_bar_itself_doesnt_collapse_it() {
 fn a_fling_collapses_an_enter_always_bar() {
     let mut ui = ComposeTestRule::sized(IntSize::new(400, 600), || Screen(1, true, 0));
     ui.set_auto_advance(false);
-    flick(&mut ui, 400.0, &[392.0, 384.0, 376.0, 370.0]);
+    // 8 px every 10 ms: 800 px/s, as Compose's Lsq2 tracker reads it (D862).
+    flick(&mut ui, 400.0, &[392.0, 384.0, 376.0, 368.0]);
     ui.advance_time_by(Duration::from_secs(3));
-    // The drag went to the bar; the content scrolled by the fling only: 750 px/s flings 118 px
-    // (Android's spline), of which the bar takes the 42 px it had left.
+    // The drag went to the bar; the content scrolled by the fling only: 800 px/s flings about
+    // 130 px (Android's spline), of which the bar takes the 40 px it had left.
     assert!(scrolled(&mut ui) > 50.0, "no fling: {}", scrolled(&mut ui));
     assert_eq!(height(&mut ui), 0.0);
 }

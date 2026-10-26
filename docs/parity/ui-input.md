@@ -12,10 +12,11 @@ This ledger maps Jetpack Compose UI's tests and public API in input, focus, sema
 
 | Status | Files | `@Test` methods |
 |---|---|---|
-| `covered` | 5 | 39 |
-| `port` | 15 | 302 |
+| `covered` | 3 | 6 |
+| `ported` | 3 | 67 |
+| `port` | 16 | 313 |
 | `partial` | 36 | 1,185 |
-| `feature:*` | 133 | 1,543 |
+| `feature:*` | 131 | 1,498 |
 | `n/a` | 50 | 456 |
 | **Total** | **239** | **3,525** |
 
@@ -27,7 +28,7 @@ By feature (rows whose status is that feature; `partial` rows needing it are in 
 | autofill | 11 | 166 |
 | indirect-pointer-input | 7 | 123 |
 | focus-hierarchy | 6 | 97 |
-| velocity-tracker | 6 | 90 |
+| velocity-tracker | 3 | 23 |
 | focus-properties | 9 | 79 |
 | platform-text-input | 7 | 76 |
 | focus-requester-api | 8 | 62 |
@@ -162,10 +163,10 @@ By feature (rows whose status is that feature; `partial` rows needing it are in 
 | `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/input/pointer/SuspendingPointerInputFilterTest.kt` | 31 | `pointerInput` coroutine: awaiting events, synthetic cancel events, keys, block replacement, timeouts, delegation | `partial` | Awaiting events, key restarts, block replacement without restart and `with_timeout` (OrNull) exist (`fnd/pointer_input.rs`, `fnd/review_round7.rs` `passes_callbacks_removing_the_node_or_changing_the_key`); synthetic cancel, `awaitPointerEventScope`, multiple keys, `withTimeout` throwing and `SuspendingPointerInputModifierNode` delegation need pointer-event-model. |
 | `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/input/pointer/util/PlatformVelocityTrackerTest.kt` | 7 | The platform velocity tracker: positions, changes with history, duplicate times, maximum, reset, gaps | `feature:velocity-tracker` |  |
 | `compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/node/SharePointerInputWithSiblingTest.kt` | 5 | `sharePointerInputWithSiblings` lets stacked siblings both get events | `feature:hit-test-extensions` |  |
-| `compose/ui/ui/src/androidHostTest/kotlin/androidx/compose/ui/gesture/scrollorientationlocking/PolyFitLeastSquaresTest.kt` | 21 | The least-squares polynomial fit behind Lsq2 | `feature:velocity-tracker` | Internal function, but a Rust Lsq2 needs the same fit. |
+| `compose/ui/ui/src/androidHostTest/kotlin/androidx/compose/ui/gesture/scrollorientationlocking/PolyFitLeastSquaresTest.kt` | 21 | The least-squares polynomial fit behind Lsq2 | ported (`compose-ui/tests/suite/velocity_tracker.rs`: 5 tests for the 21; `poly_fit_least_squares`, hidden, returns `None` where Compose throws) | By the foundation gestures workstream (D862). |
 | `compose/ui/ui/src/androidHostTest/kotlin/androidx/compose/ui/input/pointer/PointerInputTest.kt` | 43 | `PointerInputChange` helpers: `changedToDown/Up(IgnoreConsumed)`, `positionChange(d)(IgnoreConsumed)`, consumption | `feature:pointer-event-model` |  |
-| `compose/ui/ui/src/androidHostTest/kotlin/androidx/compose/ui/input/pointer/util/VelocityTracker1DTest.kt` | 36 | `VelocityTracker1D`: Lsq2 and impulse, differential data, linear and stopped motion | `feature:velocity-tracker` |  |
-| `compose/ui/ui/src/androidHostTest/kotlin/androidx/compose/ui/input/pointer/util/VelocityTrackerTest.kt` | 10 | `VelocityTracker`: expected values, maximum velocity, the 40 ms gap, few samples | `feature:velocity-tracker` | compose-rs's internal tracker (`crates/compose-foundation/src/fling.rs`) is a linear fit over 100 ms with no 40 ms gap rule (notes). |
+| `compose/ui/ui/src/androidHostTest/kotlin/androidx/compose/ui/input/pointer/util/VelocityTracker1DTest.kt` | 36 | `VelocityTracker1D`: Lsq2 and impulse, differential data, linear and stopped motion | ported (`compose-ui/tests/suite/velocity_tracker.rs`: 33 tests for the 36; the data-driven cases generated from Compose's data) | D862. |
+| `compose/ui/ui/src/androidHostTest/kotlin/androidx/compose/ui/input/pointer/util/VelocityTrackerTest.kt` | 10 | `VelocityTracker`: expected values, maximum velocity, the 40 ms gap, few samples | ported (`compose-ui/tests/suite/velocity_tracker.rs`: 8 tests for the 10, the recorded gestures in `velocity_data.rs`) | D862; foundation's drags use it. |
 | `compose/ui/ui/src/androidHostTest/kotlin/androidx/compose/ui/node/HitTestResultTest.kt` | 19 | The internal hit result list: hits, clipped hits, minimum-touch-target speculative hits | n/a: internal `HitTestResult`; the behaviour is ported from `AndroidPointerInputTest` and `RestrictedSizeTest` |  |
 | `compose/ui/ui/src/androidHostTest/kotlin/androidx/compose/ui/node/HitTestTouchBoundsExpansionTest.kt` | 10 | `TouchBoundsExpansion` widens hit bounds (stylus only, RTL, out of parent, overlaps) | `feature:hit-test-extensions` |  |
 | `compose/ui/ui/src/androidHostTest/kotlin/androidx/compose/ui/node/TouchBoundsExpansionTest.kt` | 4 | `TouchBoundsExpansion` construction and limits | `feature:hit-test-extensions` |  |
@@ -508,7 +509,8 @@ Sizes: S under a day, M a few days, L one to two weeks, XL several weeks. "Tests
 
 ### velocity-tracker (M)
 - **Compose API:** `VelocityTracker`, `VelocityTracker1D`, `addPointerInputChange`.
-- **What:** public trackers in compose-ui with Compose's Lsq2 (second-degree least squares) and impulse strategies, differential data, maximum velocity, the 40 ms "pointer stopped" rule; historical samples. compose-rs's is a crate-private linear fit (`compose-foundation/src/fling.rs`).
+- **What:** public trackers in compose-ui with Compose's Lsq2 (second-degree least squares) and impulse strategies, differential data, maximum velocity, the 40 ms "pointer stopped" rule; historical samples.
+- **Done** (D862): `Velocity`, `VelocityTracker` (Android's default, `Lsq2VelocityTracker`, with `add_pointer_input_change` taking the change's time, position and down/up flags), `VelocityTracker1D`; foundation's drags and scrollables use it. Left: historical samples (pointer-event-model), the framework tracker (`isFrameworkVelocityTrackerEnabled`, off by default), PlatformVelocityTrackerTest and the parity tests.
 - **Tests:** VelocityTrackerTest, VelocityTracker1DTest, PlatformVelocityTrackerTest, PolyFitLeastSquaresTest, VelocityTrackingParityTest, VelocityTrackingListParityTest.
 - **Depends on:** pointer-event-model (historical changes); foundation's fling adopts it (foundation area).
 - **Experimental:** no.
@@ -726,7 +728,7 @@ Sizes: S under a day, M a few days, L one to two weeks, XL several weeks. "Tests
 9. **A cancelled gesture restarts the `pointer_input` block** (`PointerInputDriver::stop`); Compose keeps the coroutine and sends it synthetic up events (consumed), so code after `awaitPointerEvent` still runs. Caught by `SuspendingPointerInputFilterTest.testSyntheticCancelEvent`, `testSyntheticMouseCancelEvent`, `SuspendingPointerInputFilterCoroutineJobTest.isPointerInputJobStillActive_cancelPointerEvent_assertsTrue`.
 10. **One change per pointer event.** A second finger's press is its own event, so a block never sees two changes in one `PointerEvent` (D75). Caught by `PointerInputEventProcessorTest.process_2DownOn2DifferentPointerNodes_hitAndDispatchInfoAreCorrect` and the multi-pointer `HitPathTrackerTest` cases.
 11. **Desktop sends only the left mouse button**, and pointer events carry no keyboard modifiers (docs/06 notes no Shift+click). Caught by `PointerInputEventProcessorTest.buttonsPressed`, `metaState`.
-12. **The velocity tracker is a linear least-squares fit over 100 ms with no 40 ms "stopped" cut-off** (`crates/compose-foundation/src/fling.rs`); Compose uses Lsq2 (or the framework tracker) and discards samples before a 40 ms gap, so a drag that pauses before release flings in compose-rs and not in Compose. Caught by `VelocityTrackerTest.calculateVelocity_gapOf40MillisecondsInPositions_positionsAfterGapIgnored`, `PlatformVelocityTrackerTest.longGapBetweenEvents_resetsTracking`.
+12. **The velocity tracker** is Compose's since D862 (Lsq2 over 20 samples within 100 ms, the 40 ms cut-off, a release 40 ms after the last move giving none).
 13. **Density changes don't restart `pointer_input` blocks**: the density is read per event. Caught by `PointerInputDensityTest.compositionLocalDensityChangeRestartsPointerInputOverload1`.
 14. **Semantics children are in composition order**, not sorted by placement and z-index. Caught by `SemanticsTests.testChildrenAreZSorted`, `AndroidComposeViewAccessibilityDelegateCompatTest.drawingOrder_customZIndex`, the `AndroidAccessibilityTest.testSortedAccessibilityNodeInfo_*` cases.
 15. **Transparent nodes stay in semantics and accessibility.** Compose hides alpha-0 content. Caught by `SemanticsInfoTest.transparent`, `AndroidAccessibilityTest.testTransparentNode_withAlphaModifier_notAccessible`.

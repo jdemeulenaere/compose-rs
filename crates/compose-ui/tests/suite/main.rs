@@ -35,4 +35,5 @@ mod text_style_attributes;
 mod text_style_values;
 mod text_unit;
 mod ui;
-mod word_boundary;
+mod velocity_data;
+mod velocity_tracker;

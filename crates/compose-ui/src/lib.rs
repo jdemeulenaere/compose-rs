@@ -73,6 +73,7 @@ mod text_style;
 mod trace;
 mod tree;
 mod unit;
+mod velocity_tracker;
 mod view_configuration;
 mod window;
 mod word_boundary;
@@ -238,6 +239,9 @@ pub use text_style::TextStyle;
 pub use unit::{
     Density, Dp, DpOffset, DpRect, DpSize, IntOffset, IntSize, Offset, Rect, Size, TextUnit,
     TextUnitType, UnitExt,
+};
+pub use velocity_tracker::{
+    Velocity, VelocityTracker, VelocityTracker1D, VelocityTrackingStrategy, poly_fit_least_squares,
 };
 pub use view_configuration::{LOCAL_VIEW_CONFIGURATION, ViewConfiguration};
 pub use window::{

@@ -261,6 +261,7 @@ fn drag_driver(
                 // sheet it drags, doesn't count), as Compose's `positionChange()`.
                 let mut at = start.position;
                 let mut tracker = crate::fling::VelocityTracker::default();
+                tracker.press(down.uptime_millis * 1_000_000, along(down.position));
                 tracker.add(start.uptime_millis * 1_000_000, along(start.position));
                 let velocity = loop {
                     let change = scope.await_pointer_event(PointerEventPass::Main).await;
@@ -276,10 +277,7 @@ fn drag_driver(
                             tracker.add(change.uptime_millis * 1_000_000, along(at));
                         }
                         PointerEventType::Release => {
-                            tracker.add(
-                                change.uptime_millis * 1_000_000,
-                                along(at + change.position_change()),
-                            );
+                            tracker.release(change.uptime_millis * 1_000_000);
                             break tracker.velocity();
                         }
                         PointerEventType::Move => break 0.0,

@@ -659,10 +659,7 @@ Each entry gives the Compose API, what it does, the test files that need it (by 
 - **The reversed default arrangement** of `LazyColumn`/`LazyRow` stays `TOP`/`START`. Compose's becomes `Bottom`/`End` (D171, documented). Caught by `LazyArrangementsTest` and `LazyListsReverseLayoutTest`'s short-list cases, and by `LazyRowTest` in RTL with `reverseLayout`. A port should pass the arrangement explicitly, or the decision should be revisited: Rust can default a parameter from another through an `Option`, as D180 does for material3.
 - **`ScrollState::scroll_to`** clamps at once, as Compose's (D853), and is `async`; a jump outside a task is `dispatch_raw_delta`. The lazy states' synchronous jump is `request_scroll_to_item`, `scroll_to_item` being `async`. Tests port `runBlocking { state.scrollTo(…) }` with `scroll_support::run`.
 - **Mouse drags scroll** compose-rs's scrollables, where Compose's ignore them (D856, for the user to confirm): the `scrollable_mouse*DragDoesNotScroll` tests aren't ported.
-- **Velocity tracking** (`crates/compose-foundation/src/fling.rs`) differs from Compose's `VelocityTracker1D` (ui, `input/pointer/util/VelocityTracker.kt`):
-  - compose-rs fits a straight line (least squares, degree 1) through the last 100 ms of samples;
-  - Compose's default fits a quadratic (`Strategy.Lsq2`) over at most 20 samples, and drops the history at a gap of more than 40 ms (`AssumePointerMoveStoppedMilliseconds`), so a pause before the release flings at 0;
-  - tip's draggable also tracks per pointer and counts the first still events (Tip differences 7).
+- **Velocity tracking** is Compose's `VelocityTracker1D` (Lsq2, 20 samples, the 40 ms cut-off; D862) since this workstream. Left: tip's draggable tracking per pointer and counting the first still events (Tip differences 7).
 
   Caught by `DraggableTest`'s velocity tests (`draggable_velocityProxy`…), `ScrollableTest`'s fling tests, `Scrollable2DInputTest`, `TouchScrollable2DTest.scrollable_assertVelocityCalculationIsSimilarInsideOutsideVelocityTracker`, and the anchored-drag velocity-threshold tests.
 - **Negative padding** doesn't panic. Compose's `padding` requires non-negative values (`PaddingTest.negative*Padding_throws`), and `PaddingValues.minus` coerces to non-negative (`PaddingValuesTest.minusPaddingValues_mustBeNonNegative`).

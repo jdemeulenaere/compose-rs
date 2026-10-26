@@ -1,47 +1,45 @@
-//! Velocity tracking and flings, as Compose's `VelocityTracker` and its default fling on
-//! Android (`SplineBasedFloatDecayAnimationSpec`: Android's `OverScroller` curve).
+//! Velocity tracking along an axis (compose-ui's `VelocityTracker1D`, as Compose's drags use
+//! it) and flings, as Compose's default fling on Android (`SplineBasedFloatDecayAnimationSpec`:
+//! Android's `OverScroller` curve).
 
-use std::collections::VecDeque;
-
-/// A pointer's speed along an axis, in pixels per second, from its moves in the last 100 ms,
-/// as Compose's `VelocityTracker` (a least-squares line through them here).
+/// A pointer's speed along an axis, in pixels per second, as Compose's default
+/// (`Lsq2VelocityTracker.addPointerInputChange`): compose-ui's `VelocityTracker1D` fitting the
+/// last 20 positions within 100 ms by Lsq2, cut at a pause of more than 40 ms, and none if the
+/// release comes more than 40 ms after the last move (D862).
 #[derive(Default)]
 pub(crate) struct VelocityTracker {
-    /// Times (nanoseconds) and positions.
-    samples: VecDeque<(u64, f32)>,
+    tracker: compose_ui::VelocityTracker1D,
+    /// The last event's time, in milliseconds.
+    last_millis: i64,
 }
 
 impl VelocityTracker {
-    /// How far back the moves count, as Compose's `HorizonMilliseconds`.
-    const HORIZON_NANOS: u64 = 100_000_000;
+    /// A press at `position` (along the axis), `time_nanos`: tracking starts over from it.
+    pub(crate) fn press(&mut self, time_nanos: u64, position: f32) {
+        self.tracker.reset_tracking();
+        self.add(time_nanos, position);
+    }
 
+    /// A move to `position`.
     pub(crate) fn add(&mut self, time_nanos: u64, position: f32) {
-        self.samples.push_back((time_nanos, position));
-        while self
-            .samples
-            .front()
-            .is_some_and(|(at, _)| time_nanos.saturating_sub(*at) > Self::HORIZON_NANOS)
-        {
-            self.samples.pop_front();
+        let millis = (time_nanos / 1_000_000) as i64;
+        self.tracker.add_data_point(millis, position);
+        self.last_millis = millis;
+    }
+
+    /// The release: no velocity if it comes more than 40 ms after the last move (the pointer
+    /// had stopped), as Compose's fix for b/238654963.
+    pub(crate) fn release(&mut self, time_nanos: u64) {
+        let millis = (time_nanos / 1_000_000) as i64;
+        if millis - self.last_millis > 40 {
+            self.tracker.reset_tracking();
         }
+        self.last_millis = millis;
     }
 
     pub(crate) fn velocity(&self) -> f32 {
-        if self.samples.len() < 2 {
-            return 0.0;
-        }
-        let count = self.samples.len() as f32;
-        let first = self.samples[0].0;
-        let times: Vec<f32> =
-            self.samples.iter().map(|(at, _)| at.saturating_sub(first) as f32 / 1e9).collect();
-        let mean_time = times.iter().sum::<f32>() / count;
-        let mean_position = self.samples.iter().map(|(_, at)| at).sum::<f32>() / count;
-        let (mut covariance, mut variance) = (0.0, 0.0);
-        for (time, (_, position)) in times.iter().zip(&self.samples) {
-            covariance += (time - mean_time) * (position - mean_position);
-            variance += (time - mean_time) * (time - mean_time);
-        }
-        if variance <= f32::EPSILON { 0.0 } else { covariance / variance }
+        // Within no maximum: a NaN (samples at one time) is 0, as Compose's drags ask it.
+        self.tracker.calculate_velocity_with(f32::MAX)
     }
 }
 
@@ -151,15 +149,5 @@ mod tests {
         assert!(Fling::new(-1000.0, 2.625).distance < 0.0);
         // As Android's OverScroller: 1,000 px/s at 420 dpi glides about 95 px.
         assert!((slow.distance - 95.5).abs() < 1.0, "{}", slow.distance);
-    }
-
-    #[test]
-    fn velocity_follows_the_samples_within_the_horizon() {
-        let mut tracker = VelocityTracker::default();
-        for step in 0..10u64 {
-            tracker.add(step * 10_000_000, step as f32 * 20.0);
-        }
-        // 20 px every 10 ms.
-        assert!((tracker.velocity() - 2000.0).abs() < 1.0, "{}", tracker.velocity());
     }
 }

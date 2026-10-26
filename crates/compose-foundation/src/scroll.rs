@@ -370,7 +370,7 @@ impl ModifierNodeElement for ScrollElement {
 impl Drag {
     fn new(event: &PointerEvent, position: Offset, along: f32) -> Drag {
         let mut tracker = crate::fling::VelocityTracker::default();
-        tracker.add(event_time(event), along);
+        tracker.press(event_time(event), along);
         Drag {
             pointer: event.pointer,
             start: position,
@@ -963,7 +963,7 @@ impl DragScroller {
                     drag.start = at - (drag.last - drag.start);
                     drag.last = at;
                     drag.tracker = crate::fling::VelocityTracker::default();
-                    drag.tracker.add(event_time(event), along_axis(at));
+                    drag.tracker.press(event_time(event), along_axis(at));
                     return;
                 }
                 let Some(mut drag) = self.drag.take() else { return };
@@ -973,7 +973,7 @@ impl DragScroller {
                 event.consume();
                 self.end_drag();
                 // A touch let go while moving: the content goes on, slowing down.
-                drag.tracker.add(event_time(event), along_axis(position));
+                drag.tracker.release(event_time(event));
                 // The platform's fling bounds (`ViewConfiguration`, D907).
                 let configuration = context.view_configuration();
                 let maximum = configuration.maximum_fling_velocity;
