@@ -28,6 +28,13 @@ pub fn reader_compaction_count() -> u64 {
     crate::runtime::with_runtime(|runtime| runtime.scopes.compactions)
 }
 
+/// The number of slots written and side effects recorded by passes on this thread so far: what
+/// Compose's change list holds besides node changes (a `remember` computing anew, a keyed
+/// `remember` or effect whose keys changed, a `SideEffect`, groups removed). For tests.
+pub fn recorded_changes() -> u64 {
+    crate::runtime::with_runtime(|runtime| runtime.recorded_changes)
+}
+
 /// The number of composable bodies run on this thread so far (restart groups that didn't skip).
 /// For tests and frame statistics.
 pub fn bodies_run() -> u64 {

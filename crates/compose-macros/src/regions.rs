@@ -284,6 +284,15 @@ impl Regions {
         }
     }
 
+    /// The region statement of the last region again (same key).
+    fn same_region(&mut self) -> Stmt {
+        let key = proc_macro2::Literal::u64_suffixed(self.key ^ self.next);
+        let name = Ident::new("__compose_region", Span::mixed_site());
+        parse_quote! {
+            let #name = ::compose::__private::region(#key);
+        }
+    }
+
     fn wrap_block(&mut self, block: &mut Block) {
         let region = self.region();
         block.stmts.insert(0, region);
@@ -361,6 +370,21 @@ impl Regions {
         self.visit_block_mut(&mut expr.then_branch);
         if self.likely_block(&expr.then_branch) {
             self.wrap_block(&mut expr.then_branch);
+            // Without an `else`, an empty one with the same region, as Compose's compiler gives
+            // the `if` an empty `else` group: the branch's group stays in place when it's not
+            // taken, so content it drops is removed there, before what comes after the `if`
+            // (its remember observers forgotten in table order, D715).
+            if expr.else_branch.is_none() {
+                let region = self.same_region();
+                expr.else_branch = Some((
+                    Default::default(),
+                    Box::new(Expr::Block(syn::ExprBlock {
+                        attrs: Vec::new(),
+                        label: None,
+                        block: parse_quote! { { #region } },
+                    })),
+                ));
+            }
         }
         if let Some((_, otherwise)) = &mut expr.else_branch {
             match &mut **otherwise {

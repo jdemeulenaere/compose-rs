@@ -7,6 +7,9 @@ fn Screen(items: Rc<Vec<u32>>, mode: Mode, content: Rc<dyn Fn()>) {
     } else {
         log("not a composable call");
     }
+    if items.len() > 2 {
+        Text("Many".into());
+    }
     match mode {
         Mode::List => {
             for item in items.iter() {

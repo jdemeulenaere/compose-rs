@@ -837,9 +837,10 @@ impl CompositionTest {
         self.with_views(|views| views.tree.dump())
     }
 
-    /// The changes applied to the views so far.
+    /// The changes passes made so far: to the views, and the slots written and side effects
+    /// recorded (what Compose's change list holds).
     pub fn changes(&self) -> u64 {
-        self.with_views(|views| views.changes)
+        self.with_views(|views| views.changes) + recorded_changes()
     }
 
     /// Checks the views against what `expected` builds, and keeps it for [`revalidate`], as

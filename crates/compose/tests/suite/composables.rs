@@ -489,7 +489,8 @@ fn effects_and_observers() {
     assert_eq!(take_log(), ["effect 1"]);
     value.set(2);
     composition.recompose();
-    assert_eq!(take_log(), ["forgotten low", "stop 0", "start 1", "effect 2"]);
+    // Forgotten in the reverse of table order, as Compose's: the effect after the `if` first.
+    assert_eq!(take_log(), ["stop 0", "forgotten low", "start 1", "effect 2"]);
     drop(composition);
     assert_eq!(take_log(), ["stop 1"]);
 }

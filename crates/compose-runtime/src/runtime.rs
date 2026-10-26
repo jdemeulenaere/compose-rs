@@ -52,6 +52,9 @@ pub(crate) struct Runtime {
     pub exiting: bool,
     /// Composable bodies run on this thread: frame statistics and tests.
     pub bodies_run: u64,
+    /// Slots written and side effects recorded on this thread: what Compose's change list
+    /// holds besides node changes. For tests (`platform::recorded_changes`).
+    pub recorded_changes: u64,
     /// Body runs per composable, while tracking is on (`track_recompositions`).
     pub recomposition_counts: Option<std::collections::HashMap<&'static str, u64>>,
     /// A group guard was dropped by an unwinding panic in this pass, leaving its group open.
@@ -101,6 +104,7 @@ impl Runtime {
             finishing: 0,
             exiting: false,
             bodies_run: 0,
+            recorded_changes: 0,
             recomposition_counts: None,
             abandoned_groups: false,
             reusing: 0,
@@ -605,6 +609,43 @@ pub(crate) fn remove_siblings(
         remove_subtree(table, deferred, scopes, stack, current);
         current = next;
     }
+    count
+}
+
+/// Removes `group`'s children from `first` on and its slots from `keep` on, interleaved in table
+/// order (by where each child sits among the slots), as a group ending removes what its body
+/// didn't reach. Returns the number of nodes the children contributed. The caller unlinks them.
+pub(crate) fn remove_children_and_slots(
+    table: &mut SlotTable,
+    deferred: &mut Deferred,
+    scopes: &mut Scopes,
+    stack: &mut Vec<RemovalStep>,
+    group: u32,
+    first: u32,
+    keep: usize,
+) -> u32 {
+    if table[group].slots.len() <= keep {
+        return remove_siblings(table, deferred, scopes, stack, first, NONE);
+    }
+    let trailing: Vec<SlotValue> =
+        table[group].slots.drain(keep..).map(|slot| slot.value).collect();
+    let mut trailing = trailing.into_iter();
+    let mut position = keep;
+    let mut count = 0;
+    let mut current = first;
+    while current != NONE {
+        let child_position = usize::from(table[current].slot_position);
+        while position < child_position {
+            let Some(value) = trailing.next() else { break };
+            deferred.removed_values.push(value);
+            position += 1;
+        }
+        let next = table[current].next_sibling;
+        count += table[current].node_count;
+        remove_subtree(table, deferred, scopes, stack, current);
+        current = next;
+    }
+    deferred.removed_values.extend(trailing);
     count
 }
 

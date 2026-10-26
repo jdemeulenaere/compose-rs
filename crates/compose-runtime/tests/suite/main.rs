@@ -9,6 +9,7 @@ mod composition_and_derived_state;
 mod composition_local;
 mod composition_reusing;
 mod derived_snapshot_state;
+mod effects;
 mod frame_clocks;
 mod holders;
 mod mock;

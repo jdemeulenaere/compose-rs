@@ -255,7 +255,6 @@ fn a_disposable_effect_runs_after_composition_and_disposes_after_the_next() {
 
 // Compose: compose/runtime/runtime/integration-tests/src/androidTest/kotlin/androidx/compose/runtime/SideEffectTests.kt, testDisposableEffectRelativeOrdering
 #[test]
-#[ignore = "forget order: a conditional's removed content is forgotten after later replaced values (fixed with the remember-order ports)"]
 fn disposable_effects_dispose_in_reverse_order() {
     #[composable]
     fn Unmountable(log: Log) {

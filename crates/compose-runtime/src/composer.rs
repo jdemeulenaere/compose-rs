@@ -23,8 +23,8 @@ use crate::applier::{Applier, NodeRef};
 use crate::error::{ComposeError, misuse};
 use crate::pausable::{Entry, NO_REGION, RecordedOp, ShouldPauseCallback, deferred_of};
 use crate::runtime::{
-    CompositionData, DeferredEffect, RemovalStep, Runtime, remove_siblings, try_with_runtime,
-    with_runtime,
+    CompositionData, DeferredEffect, RemovalStep, Runtime, remove_children_and_slots,
+    remove_siblings, try_with_runtime, with_runtime,
 };
 use crate::scope::{RecomposeScope, ScopeId, Scopes};
 use crate::slot_table::{GroupKind, NONE, Slot, SlotTable, SlotValue};
@@ -436,6 +436,7 @@ impl Runtime {
             abandoned_groups,
             reusing,
             pausable_pass,
+            recorded_changes,
             ..
         } = self;
         let CompositionData { table, deferred, paused, .. } = compositions.data_mut(composition);
@@ -471,14 +472,24 @@ impl Runtime {
             }
             let deferred = deferred_of(deferred, paused, frame.region);
             let mut removed = 0;
+            let keep = (frame.slot_cursor as usize).min(table[frame.group].slots.len());
             if frame.cursor != NONE {
-                removed =
-                    remove_siblings(table, deferred, scopes, removal_stack, frame.cursor, NONE);
+                *recorded_changes += 1;
+                // The children not matched and the slots not reached, in table order.
+                removed = remove_children_and_slots(
+                    table,
+                    deferred,
+                    scopes,
+                    removal_stack,
+                    frame.group,
+                    frame.cursor,
+                    keep,
+                );
                 table.set_next(frame.group, frame.last_placed, NONE);
+            } else {
+                let slots = &mut table[frame.group].slots;
+                deferred.removed_values.extend(slots.drain(keep..).map(|slot| slot.value));
             }
-            let slots = &mut table[frame.group].slots;
-            let keep = (frame.slot_cursor as usize).min(slots.len());
-            deferred.removed_values.extend(slots.drain(keep..).map(|slot| slot.value));
             if frame.region != NO_REGION
                 && let Some(paused) = paused
             {
@@ -809,7 +820,7 @@ impl Runtime {
     /// Ends a restart started by [`walk_step`]: removes what the restart function did not match.
     pub(crate) fn finish_restart(&mut self) -> NodeOp {
         let Some(active) = self.active else { misuse(ComposeError::NotComposing) };
-        let Runtime { compositions, scopes, frames, removal_stack, .. } = self;
+        let Runtime { compositions, scopes, frames, removal_stack, recorded_changes, .. } = self;
         let CompositionData { table, deferred, paused, .. } =
             compositions.data_mut(active.composition.index);
         let frame = frames.last_mut().expect("walk frame");
@@ -822,6 +833,7 @@ impl Runtime {
         }
         let mut op = NodeOp::None;
         if frame.cursor != frame.limit {
+            *recorded_changes += 1;
             if frame.region == NO_REGION
                 && let Some(paused) = paused.as_mut()
                 && paused.holds_regions()
@@ -1028,6 +1040,7 @@ impl Runtime {
                 _ => deferred.remembered.push(observer.clone()),
             }
         }
+        self.recorded_changes += 1;
         let slots = &mut table[position.group].slots;
         let index = position.index as usize;
         if index == slots.len() {
@@ -1067,6 +1080,7 @@ impl Runtime {
 
     pub(crate) fn record_side_effect(&mut self, effect: DeferredEffect) {
         let composition = self.check_composing();
+        self.recorded_changes += 1;
         let (region, segment) =
             self.frames.last().map_or((NO_REGION, 0), |frame| (frame.region, frame.segment));
         let data = self.compositions.data_mut(composition);

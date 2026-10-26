@@ -141,7 +141,7 @@ Calls of the same composable inside one group match **in order**. That's Compose
 | Construct | Group | Key |
 |---|---|---|
 | each composable body | restart group (or replace group if non-restartable) | declaration path |
-| each `if`/`else` branch, `match` arm, `if let` | replace group | structural index in the body (`KEY ^ n`) |
+| each `if`/`else` branch, `match` arm, `if let` | replace group | structural index in the body (`KEY ^ n`); an `if` without `else` gets an empty `else` with its branch's group (the same key), as Compose's compiler gives it an empty `else` group: when the branch isn't taken its group stays in place and the content it drops is removed there, before what follows (D715) |
 | each loop (`for`, `while`, `while let`, `loop`), as a whole | replace group | structural index |
 | `key(id, \|\| …)` / `key!(id, { … })` | movable group | the key's hash, from `ComposeArg + Hash` |
 | `remember`, memoized lambdas | slots in the current group | position |

@@ -378,8 +378,15 @@ impl Pass {
     pub(crate) fn finish(mut self) {
         let resume = self.kind == PassKind::Resume;
         let (op, applier) = with_runtime(|runtime| {
-            let Runtime { compositions, scopes, frames, removal_stack, abandoned_groups, .. } =
-                runtime;
+            let Runtime {
+                compositions,
+                scopes,
+                frames,
+                removal_stack,
+                abandoned_groups,
+                recorded_changes,
+                ..
+            } = runtime;
             let data = compositions.get_mut(self.id).expect("a live composition");
             if frames.len() != 1 {
                 misuse(if *abandoned_groups {
@@ -410,6 +417,7 @@ impl Pass {
             }
             let table = &mut data.table;
             if !frame.skipped && frame.cursor != NONE {
+                *recorded_changes += 1;
                 let count = remove_siblings(
                     table,
                     &mut data.deferred,
