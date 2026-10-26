@@ -12,6 +12,8 @@ mod bounds;
 mod clock;
 mod displayed;
 mod input;
+mod restoration;
 mod review_d;
 mod rule;
+mod run;
 mod selectors;

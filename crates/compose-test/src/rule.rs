@@ -25,9 +25,22 @@ pub const DEFAULT_WAIT_TIMEOUT: Duration = Duration::from_secs(1);
 /// The tolerance of bounds assertions given none, as Compose's (0.5 dp).
 pub const DEFAULT_BOUNDS_TOLERANCE: Dp = Dp(0.5);
 
-/// How long `wait_for_idle` lets the test clock run (animations) before deciding the UI never
-/// idles.
-const IDLE_TIMEOUT: Duration = Duration::from_secs(60);
+/// How long `wait_for_idle` waits (the test clock running animations, or idling resources
+/// staying busy) before deciding the UI never idles, unless told otherwise
+/// (`ComposeUiTestConfig::test_timeout`).
+pub const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Something outside compose-rs the test waits for, as Compose's `IdlingResource`: waiting for
+/// idle also waits until each registered one is idle.
+pub trait IdlingResource {
+    /// Whether it's idle now, as `isIdleNow`.
+    fn is_idle_now(&self) -> bool;
+    /// What it's busy with, for the failure when it never idles, as
+    /// `getDiagnosticMessageIfBusy`.
+    fn diagnostic_message_if_busy(&self) -> Option<String> {
+        None
+    }
+}
 
 /// A UI under test, as Compose's `ComposeTestRule`: owns a headless host on a test clock, and
 /// waits for idle after every action and before every finder's look at the tree.
@@ -53,6 +66,10 @@ pub struct ComposeTestRule {
     /// The injected pointers and keys, kept across `perform_*_input` blocks, as Compose's
     /// `InputDispatcher` state.
     pub(crate) input: InputState,
+    /// How long waiting for idle may take (`DEFAULT_IDLE_TIMEOUT`).
+    idle_timeout: Duration,
+    /// What waiting for idle also waits for, as `registerIdlingResource`.
+    idling_resources: Vec<Rc<dyn IdlingResource>>,
 }
 
 /// A test rule composing `content` in the default root, measuring text with the fixed-advance
@@ -98,6 +115,8 @@ impl ComposeTestRule {
             implicit_wait: true,
             bounds_tolerance: DEFAULT_BOUNDS_TOLERANCE,
             input: InputState::default(),
+            idle_timeout: DEFAULT_IDLE_TIMEOUT,
+            idling_resources: Vec::new(),
         };
         if let Some(optimizations) = thread_optimizations() {
             rule.host.set_optimizations(optimizations);
@@ -220,21 +239,79 @@ impl ComposeTestRule {
     /// hand, a needed frame waits for `advance_time_by`.
     pub fn wait_for_idle(&mut self) {
         let start = platform::now_nanos();
+        let started = std::time::Instant::now();
         let mut frames = 0;
         loop {
             self.run_current();
-            if self.next_frame.is_none() || !self.auto_advance.get() {
+            let frame_due = self.next_frame.is_some() && self.auto_advance.get();
+            let busy: Vec<Option<String>> = self
+                .idling_resources
+                .iter()
+                .filter(|resource| !resource.is_idle_now())
+                .map(|resource| resource.diagnostic_message_if_busy())
+                .collect();
+            if !frame_due && busy.is_empty() {
                 return;
             }
             let elapsed = Duration::from_nanos(platform::now_nanos() - start);
-            assert!(
-                elapsed <= IDLE_TIMEOUT && frames < 100_000,
-                "compose-test: the UI never became idle ({frames} frames, {elapsed:?} of test \
-                 time): an animation or a recomposition that never ends?"
-            );
-            self.advance_clock_to(platform::now_nanos() + FRAME_DURATION.as_nanos() as u64);
+            let waited = started.elapsed();
+            if elapsed > self.idle_timeout || waited > self.idle_timeout || frames >= 100_000 {
+                let reasons: Vec<String> = busy.into_iter().flatten().collect();
+                panic!(
+                    "compose-test: ComposeNotIdleException: the UI never became idle ({frames} \
+                     frames, {elapsed:?} of test time{}){}",
+                    if frame_due { ": an animation or a recomposition that never ends?" } else { "" },
+                    if reasons.is_empty() {
+                        String::new()
+                    } else {
+                        format!("; busy idling resources: {}", reasons.join("; "))
+                    }
+                );
+            }
+            if frame_due {
+                // A frame needed: the clock moves a frame on, as Compose's idling.
+                self.advance_clock_to(platform::now_nanos() + FRAME_DURATION.as_nanos() as u64);
+            } else {
+                // Only idling resources busy: real time passes for them, the clock stays, as
+                // Espresso's wait.
+                std::thread::sleep(Duration::from_millis(10));
+            }
             frames += 1;
         }
+    }
+
+    /// Waits for idle, as `awaitIdle`: Rust tests aren't suspended, so it's `wait_for_idle`
+    /// behind an `async fn`, for code written against Compose's suspending form.
+    pub async fn await_idle(&mut self) {
+        self.wait_for_idle();
+    }
+
+    /// Whether the UI has work left, without doing any or moving the clock, as
+    /// `hasPendingWork`: a frame needed (a recomposition, an animation), a task ready, a pass
+    /// due (layout, drawing, focus).
+    pub fn has_pending_work(&self) -> bool {
+        self.next_frame.is_some()
+            || self.needs_clock_frame()
+            || self.host.has_pending_work()
+            || platform::has_ready_tasks()
+    }
+
+    /// Waiting for idle also waits until `resource` is idle, as `registerIdlingResource`.
+    pub fn register_idling_resource(&mut self, resource: Rc<dyn IdlingResource>) {
+        if !self.idling_resources.iter().any(|known| Rc::ptr_eq(known, &resource)) {
+            self.idling_resources.push(resource);
+        }
+    }
+
+    /// As `unregisterIdlingResource`.
+    pub fn unregister_idling_resource(&mut self, resource: &Rc<dyn IdlingResource>) {
+        self.idling_resources.retain(|known| !Rc::ptr_eq(known, resource));
+    }
+
+    /// How long waiting for idle may take before it fails (one minute by default), as the
+    /// test's `testTimeout` bounds it in Compose (here per wait, in test time or real time).
+    pub fn set_idle_timeout(&mut self, timeout: Duration) {
+        self.idle_timeout = timeout;
     }
 
     /// Waits for idle unless in [`run_without_implicit_wait`](Self::run_without_implicit_wait):

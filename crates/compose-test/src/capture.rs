@@ -168,6 +168,11 @@ pub fn set_capture_renderer(renderer: CaptureRenderer) {
     *RENDERER.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(renderer);
 }
 
+/// Whether a renderer is installed (the failure pipeline takes a screenshot then).
+pub(crate) fn has_capture_renderer() -> bool {
+    RENDERER.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).is_some()
+}
+
 /// A window's pixels (the main content's, or an overlay's), drawn from what the last frame
 /// drew.
 #[track_caller]
