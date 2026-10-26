@@ -92,10 +92,11 @@ impl SheetState {
         )
     }
 
-    /// Where it last settled (a state read), as `currentValue`.
+    /// Where it last settled (a state read), as `currentValue` (the anchored state's settled
+    /// value).
     pub fn current_value(&self) -> SheetValue {
         self.inner().map_or(SheetValue::Hidden, |inner| {
-            SheetValue::from_key(inner.anchored.current_value())
+            SheetValue::from_key(inner.anchored.settled_value())
         })
     }
 
@@ -105,9 +106,12 @@ impl SheetState {
             .map_or(SheetValue::Hidden, |inner| SheetValue::from_key(inner.anchored.target_value()))
     }
 
-    /// Whether it's showing, as `isVisible`.
+    /// Whether it's showing, as `isVisible`: not hidden, or dragged more than half way out of
+    /// hiding (the anchored state's current value).
     pub fn is_visible(&self) -> bool {
-        self.current_value() != SheetValue::Hidden
+        self.inner().is_some_and(|inner| {
+            SheetValue::from_key(inner.anchored.current_value()) != SheetValue::Hidden
+        })
     }
 
     /// Whether it can rest expanded, as `hasExpandedState`.
@@ -178,13 +182,57 @@ impl ComposeArg for SheetState {
     }
 }
 
+impl SheetState {
+    /// Saves where it last settled, as Compose's `SheetState.Saver`, restoring a state made
+    /// with the same arguments.
+    pub fn saver(
+        skip_partially_expanded: bool,
+        confirm_value_change: impl Fn(SheetValue) -> bool + 'static,
+        skip_hidden_state: bool,
+    ) -> impl compose_runtime::Saver<Owned<SheetState>> {
+        let confirm_value_change = Rc::new(confirm_value_change);
+        compose_runtime::saver(
+            |state: &Owned<SheetState>| {
+                state.inner()?;
+                Some(compose_runtime::SavedValue::Int(state.current_value() as i64))
+            },
+            move |saved| match saved {
+                compose_runtime::SavedValue::Int(key) if (0..=2).contains(key) => {
+                    let confirm_value_change = confirm_value_change.clone();
+                    Some(SheetState::new(
+                        skip_partially_expanded,
+                        SheetValue::from_key(*key as u8),
+                        move |value| confirm_value_change(value),
+                        skip_hidden_state,
+                    ))
+                }
+                _ => None,
+            },
+        )
+    }
+}
+
 /// A modal sheet's state remembered here, hidden, as `rememberModalBottomSheetState(
-/// skipPartiallyExpanded)`.
+/// skipPartiallyExpanded, confirmValueChange)`: saved across the host's recreation (a
+/// `rememberSaveable`, as Compose's). `confirm_value_change` is the first composition's.
 #[composable(non_restartable)]
 pub fn remember_modal_bottom_sheet_state(
     #[default(false)] skip_partially_expanded: bool,
+    #[default(|_| true)] confirm_value_change: impl Fn(SheetValue) -> bool + 'static,
 ) -> SheetState {
-    remember(|| SheetState::new(skip_partially_expanded, SheetValue::Hidden, |_| true, false))
+    let restored = confirm_value_change.clone();
+    #[allow(clippy::redundant_closure)] // A `Callback` derefs to the function; it isn't one.
+    compose_runtime::remember_saveable_with(
+        SheetState::saver(skip_partially_expanded, move |value| restored(value), false),
+        move || {
+            SheetState::new(
+                skip_partially_expanded,
+                SheetValue::Hidden,
+                move |value| confirm_value_change(value),
+                false,
+            )
+        },
+    )
 }
 
 /// As Compose's `BottomSheetDefaults`.
@@ -330,8 +378,14 @@ pub fn ModalBottomSheet(
     let scope = remember_coroutine_scope();
     let density = compose_ui::LOCAL_DENSITY.current();
     {
+        // Shown on entering, unless it's already shown (a state restored expanded), as
+        // Compose's with `isModalBottomSheetStateRestorationFixEnabled` (on by default).
         let state = sheet_state;
-        LaunchedEffect(sheet_state, async move { state.show().await });
+        LaunchedEffect(sheet_state, async move {
+            if state.target_value() == SheetValue::Hidden {
+                state.show().await;
+            }
+        });
     }
     // Hides the sheet, then tells the caller.
     // The scrim hides the sheet (if `confirm_value_change` lets it), then tells the caller, as

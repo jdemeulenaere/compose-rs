@@ -2,7 +2,6 @@
 
 #![allow(non_snake_case)]
 
-use std::cell::Cell;
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -172,15 +171,7 @@ fn SwipeApp(state: SwipeToDismissBoxState) {
 
 #[test]
 fn a_swipe_past_the_threshold_dismisses_and_a_short_one_settles_back() {
-    thread_local! { static ASKED: Cell<u32> = const { Cell::new(0) }; }
-    let state = SwipeToDismissBoxState::new(
-        SwipeToDismissBoxValue::Settled,
-        |value| {
-            ASKED.with(|asked| asked.set(asked.get() + 1));
-            value != SwipeToDismissBoxValue::StartToEnd
-        },
-        |_| 56.0,
-    );
+    let state = SwipeToDismissBoxState::new(SwipeToDismissBoxValue::Settled, |_| 56.0);
     let given = *state;
     let mut ui = ComposeTestRule::sized(IntSize::new(400, 600), move || SwipeApp(given));
     ui.set_auto_advance(false);
@@ -219,7 +210,6 @@ fn a_swipe_past_the_threshold_dismisses_and_a_short_one_settles_back() {
     ui.advance_time_by(Duration::from_secs(1));
     assert_eq!(state.current_value(), SwipeToDismissBoxValue::EndToStart);
     assert_eq!(bounds(&mut ui, "item").left, -400.0);
-    assert!(ASKED.with(Cell::get) >= 2);
     // Reset brings it back.
     let scope = CoroutineScope::new();
     let resetting = *state;

@@ -13,11 +13,15 @@ pub(crate) type Key = u8;
 pub(crate) struct Anchored {
     /// The offset while dragged or animated (pixels).
     offset: Animatable<f32>,
-    /// At rest at `current`'s anchor (wherever the layout puts it), not at `offset`.
+    /// At rest at `settled`'s anchor (wherever the layout puts it), not at `offset`.
     resting: Cell<bool>,
     /// The values and their offsets, as the last layout found them.
     anchors: RefCell<Vec<(Key, f32)>>,
+    /// As Compose's `currentValue`: where it last settled, or, while dragged, the anchor it was
+    /// dragged half way to.
     current: OwnedState<Key>,
+    /// As Compose's `settledValue`: where it last settled.
+    settled: OwnedState<Key>,
     target: OwnedState<Key>,
     confirm_value_change: Box<dyn Fn(Key) -> bool>,
     spec: AnimationSpec,
@@ -34,15 +38,27 @@ impl Anchored {
             resting: Cell::new(true),
             anchors: RefCell::new(Vec::new()),
             current: mutable_state_of(initial),
+            settled: mutable_state_of(initial),
             target: mutable_state_of(initial),
             confirm_value_change,
             spec,
         }
     }
 
-    /// Where it last settled (a state read), as `currentValue`.
+    /// Where it last settled, or, while dragged, the anchor it was dragged half way to (a state
+    /// read), as `currentValue`.
     pub fn current_value(&self) -> Key {
         self.current.get()
+    }
+
+    /// Where it last settled (a state read), as `settledValue`.
+    pub fn settled_value(&self) -> Key {
+        self.settled.get()
+    }
+
+    /// Whether it's at rest at its settled anchor (not dragged nor animating).
+    pub fn is_resting(&self) -> bool {
+        self.resting.get()
     }
 
     /// Where it's going, or the anchor it's been dragged nearest (a state read), as
@@ -68,7 +84,7 @@ impl Anchored {
     pub fn offset(&self) -> f32 {
         let dragged = self.offset.value();
         if self.resting.get() {
-            self.position_of(self.current.get()).unwrap_or(f32::NAN)
+            self.position_of(self.settled.get()).unwrap_or(f32::NAN)
         } else {
             dragged
         }
@@ -98,7 +114,35 @@ impl Anchored {
         {
             self.target.set(nearest);
         }
+        self.update_current(start, offset);
         offset - start
+    }
+
+    /// While dragged from `previous` to `offset`: the current value becomes the anchor in the
+    /// drag's direction once the offset is half way to it from the current one, if
+    /// `confirm_value_change` lets it, as Compose's `AnchoredDragScope.dragTo` (`updateIfNeeded`).
+    fn update_current(&self, previous: f32, offset: f32) {
+        let forward = offset >= previous;
+        let current = self.current.get();
+        let Some(current_at) = self.position_of(current) else { return };
+        let (left, right) = if offset == current_at {
+            let from = offset + if forward { 1.0 } else { -1.0 };
+            let other = self.closest(from, forward).unwrap_or(current);
+            if forward { (current, other) } else { (other, current) }
+        } else {
+            (
+                self.closest(offset, false).unwrap_or(current),
+                self.closest(offset, true).unwrap_or(current),
+            )
+        };
+        let position = |value| self.position_of(value).unwrap_or(current_at);
+        let distance = (position(left) - position(right)).abs();
+        if (offset - current_at).abs() >= distance / 2.0 {
+            let closest = if forward { right } else { left };
+            if closest != current && (self.confirm_value_change)(closest) {
+                self.current.set(closest);
+            }
+        }
     }
 
     /// The lowest and highest anchors.
@@ -140,8 +184,7 @@ impl Anchored {
         }
         let Some(target) = self.position_of(value) else {
             // Nowhere to go: the value is taken as is, as Compose's.
-            self.target.set(value);
-            self.current.set(value);
+            self.settle_at(value);
             return;
         };
         self.target.set(value);
@@ -169,6 +212,7 @@ impl Anchored {
         self.resting.set(true);
         self.target.set(value);
         self.current.set(value);
+        self.settled.set(value);
     }
 
     /// After a drag let go at `velocity` (pixels per second): to the next anchor in its
@@ -181,7 +225,7 @@ impl Anchored {
         positional_threshold: &dyn Fn(f32) -> f32,
         velocity_threshold: f32,
     ) {
-        let current = self.current.get();
+        let current = self.settled.get();
         let offset = self.offset();
         let target = self.compute_target(
             offset,

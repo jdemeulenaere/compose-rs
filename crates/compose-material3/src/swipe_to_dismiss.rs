@@ -7,7 +7,7 @@ use std::rc::Rc;
 use compose_animation::AnimationSpec;
 use compose_foundation::gestures::{DraggableModifier, DraggableState, Orientation};
 use compose_foundation::layout::{Arrangement, Row, RowScope};
-use compose_runtime::{ComposeArg, composable, remember, remember_coroutine_scope};
+use compose_runtime::{ComposeArg, composable, remember_coroutine_scope};
 use compose_ui::{
     Alignment, Constraints, Dp, Layout, LayoutDirection, Measurable, MeasurePolicy, MeasureResult,
     MeasureScope, Modifier,
@@ -64,22 +64,20 @@ impl SwipeToDismissBoxState {
         self.object.get()
     }
 
-    /// As `SwipeToDismissBoxState(initialValue, density, confirmValueChange,
-    /// positionalThreshold)`: `confirm_value_change` can refuse a dismissal (the content comes
-    /// back); `positional_threshold` gives, from the width, how far (pixels) a swipe must go.
+    /// As `SwipeToDismissBoxState(initialValue, positionalThreshold)`: `positional_threshold`
+    /// gives, from the distance to the next anchor (the width), how far (pixels) a swipe must
+    /// go. Compose's overload with `confirmValueChange` is deprecated (`SwipeToDismissBox`'s
+    /// `on_dismiss` and `gestures_enabled` replace it), and not here (D1001).
     #[track_caller]
     pub fn new(
         initial_value: SwipeToDismissBoxValue,
-        confirm_value_change: impl Fn(SwipeToDismissBoxValue) -> bool + 'static,
         positional_threshold: impl Fn(f32) -> f32 + 'static,
     ) -> Owned<SwipeToDismissBoxState> {
         Owned::new(
             SwipeInner {
                 anchored: Anchored::new(
                     initial_value as u8,
-                    Box::new(move |key| {
-                        confirm_value_change(SwipeToDismissBoxValue::from_key(key))
-                    }),
+                    Box::new(|_| true),
                     AnimationSpec::Spring(compose_animation::spring()),
                 ),
                 positional_threshold: Box::new(positional_threshold),
@@ -88,10 +86,18 @@ impl SwipeToDismissBoxState {
         )
     }
 
-    /// Where it last settled (a state read), as `currentValue`.
+    /// Where it last settled, or, while swiped, the anchor it was swiped half way to (a state
+    /// read), as `currentValue`.
     pub fn current_value(&self) -> SwipeToDismissBoxValue {
         self.inner().map_or(SwipeToDismissBoxValue::Settled, |inner| {
             SwipeToDismissBoxValue::from_key(inner.anchored.current_value())
+        })
+    }
+
+    /// Where it last settled (a state read), as `settledValue`.
+    pub fn settled_value(&self) -> SwipeToDismissBoxValue {
+        self.inner().map_or(SwipeToDismissBoxValue::Settled, |inner| {
+            SwipeToDismissBoxValue::from_key(inner.anchored.settled_value())
         })
     }
 
@@ -124,7 +130,7 @@ impl SwipeToDismissBoxState {
         let Some(inner) = self.inner() else { return 0.0 };
         let anchored = &inner.anchored;
         let offset = self.require_offset();
-        let from = anchored.position_of(anchored.current_value()).unwrap_or(0.0);
+        let from = anchored.position_of(anchored.settled_value()).unwrap_or(0.0);
         let to = anchored.position_of(anchored.target_value()).unwrap_or(from);
         if offset.is_nan() || from == to {
             1.0
@@ -161,22 +167,63 @@ impl ComposeArg for SwipeToDismissBoxState {
     }
 }
 
+impl SwipeToDismissBoxState {
+    /// Saves where it last settled, as Compose's `SwipeToDismissBoxState.Saver(
+    /// positionalThreshold)`.
+    pub fn saver(
+        positional_threshold: impl Fn(f32) -> f32 + 'static,
+    ) -> impl compose_runtime::Saver<Owned<SwipeToDismissBoxState>> {
+        let positional_threshold = Rc::new(positional_threshold);
+        compose_runtime::saver(
+            |state: &Owned<SwipeToDismissBoxState>| {
+                state.inner()?;
+                Some(compose_runtime::SavedValue::Int(state.current_value() as i64))
+            },
+            move |saved| match saved {
+                compose_runtime::SavedValue::Int(key) if (0..=2).contains(key) => {
+                    let positional_threshold = positional_threshold.clone();
+                    Some(SwipeToDismissBoxState::new(
+                        SwipeToDismissBoxValue::from_key(*key as u8),
+                        move |distance| positional_threshold(distance),
+                    ))
+                }
+                _ => None,
+            },
+        )
+    }
+}
+
+/// As Compose's `SwipeToDismissBoxDefaults`.
+pub struct SwipeToDismissBoxDefaults;
+
+impl SwipeToDismissBoxDefaults {
+    /// How far a swipe must go to dismiss: 56 dp whatever the distance, as
+    /// `positionalThreshold` (read in composition: the density's).
+    pub fn positional_threshold() -> compose_runtime::Callback<dyn Fn(f32) -> f32> {
+        let threshold = compose_ui::LOCAL_DENSITY.current().to_px(Dp(56.0));
+        compose_runtime::callback(move |_: f32| threshold)
+    }
+}
+
 /// A swipe-to-dismiss state remembered here, as `rememberSwipeToDismissBoxState(initialValue,
-/// confirmValueChange)`: a swipe of 56 dp dismisses (`SwipeToDismissBoxDefaults`'s positional
-/// threshold).
+/// positionalThreshold)`: saved across the host's recreation (a `rememberSaveable`, as
+/// Compose's). `positional_threshold` is the first composition's.
 #[composable(non_restartable)]
 pub fn remember_swipe_to_dismiss_box_state(
     #[default(crate::SwipeToDismissBoxValue::Settled)] initial_value: SwipeToDismissBoxValue,
-    #[default(|_| true)] confirm_value_change: impl Fn(SwipeToDismissBoxValue) -> bool + 'static,
+    #[default(crate::SwipeToDismissBoxDefaults::positional_threshold())]
+    positional_threshold: impl Fn(f32) -> f32 + 'static,
 ) -> SwipeToDismissBoxState {
-    let threshold = compose_ui::LOCAL_DENSITY.current().to_px(Dp(56.0));
-    remember(move || {
-        SwipeToDismissBoxState::new(
-            initial_value,
-            move |value| confirm_value_change(value),
-            move |_| threshold,
-        )
-    })
+    let restored = positional_threshold.clone();
+    #[allow(clippy::redundant_closure)] // A `Callback` derefs to the function; it isn't one.
+    compose_runtime::remember_saveable_with(
+        SwipeToDismissBoxState::saver(move |distance| restored(distance)),
+        move || {
+            SwipeToDismissBoxState::new(initial_value, move |distance| {
+                positional_threshold(distance)
+            })
+        },
+    )
 }
 
 /// A release faster than this dismisses, as Compose's `DismissThreshold` (125 dp/s).
@@ -185,8 +232,8 @@ const VELOCITY_THRESHOLD: Dp = Dp(125.0);
 /// Content that can be swiped away sideways, as Compose's `SwipeToDismissBox`: dragged across,
 /// it uncovers `background_content` (as large as the content, behind it), and let go past the
 /// threshold or fast enough it settles away (`StartToEnd` or `EndToStart`, each if enabled), else
-/// back in place. Remove the item when the state says it's dismissed (or in
-/// `confirm_value_change`).
+/// back in place. Once it settles away, `on_dismiss` hears the direction: remove the item then.
+/// A dismissed item can't be swiped (reset its state to bring it back).
 #[composable]
 pub fn SwipeToDismissBox(
     state: SwipeToDismissBoxState,
@@ -195,8 +242,20 @@ pub fn SwipeToDismissBox(
     #[default(true)] enable_dismiss_from_start_to_end: bool,
     #[default(true)] enable_dismiss_from_end_to_start: bool,
     #[default(true)] gestures_enabled: bool,
+    #[default(|_| {})] on_dismiss: impl Fn(SwipeToDismissBoxValue) + 'static,
     content: impl Fn(RowScope) + 'static,
 ) {
+    // Tells `on_dismiss` once settled away, as Compose's `LaunchedEffect(settledValue,
+    // onDismiss)`.
+    let settled = state.settled_value();
+    {
+        let on_dismiss = on_dismiss.clone();
+        compose_runtime::LaunchedEffect((settled, on_dismiss.clone()), async move {
+            if settled != SwipeToDismissBoxValue::Settled {
+                on_dismiss(state.dismiss_direction());
+            }
+        });
+    }
     let scope = remember_coroutine_scope();
     let density = compose_ui::LOCAL_DENSITY.current();
     let rtl = compose_ui::LOCAL_LAYOUT_DIRECTION.current() == LayoutDirection::Rtl;
@@ -231,12 +290,12 @@ pub fn SwipeToDismissBox(
         )
     };
     Layout(
-        // Dragged only while in place, as Compose's (a dismissed item stays away); the offset is
-        // logical (towards the end positive), so a right-to-left drag is reversed.
+        // Dragged only while settled in place, as Compose's (a dismissed item stays away); the
+        // offset is logical (towards the end positive), so a right-to-left drag is reversed.
         modifier.draggable(
             drag,
             Orientation::Horizontal,
-            gestures_enabled && state.current_value() == SwipeToDismissBoxValue::Settled,
+            gestures_enabled && settled == SwipeToDismissBoxValue::Settled,
             rtl,
             |_| {},
             settle,
@@ -292,6 +351,11 @@ impl MeasurePolicy for SwipeLayout {
         };
         let anchored = &inner.anchored;
         anchored.update_anchors(anchors.into_iter().map(|(value, at)| (value as u8, at)).collect());
+        // At rest at a value it has no anchor for (its direction disabled): back in place, as
+        // Compose's new anchors' target (the value kept if it has an anchor, else `Settled`).
+        if anchored.is_resting() && !anchored.has_anchor(anchored.settled_value()) {
+            anchored.snap_to(SwipeToDismissBoxValue::Settled as u8);
+        }
         // Read while measuring: a frame of the swipe places the content again only.
         let offset = anchored.offset();
         let offset = if offset.is_nan() { 0 } else { offset.round() as i32 };

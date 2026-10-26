@@ -94,7 +94,7 @@ pub use snackbar::{
     SnackbarResult, SnackbarVisuals,
 };
 pub use swipe_to_dismiss::{
-    SwipeToDismissBox, SwipeToDismissBoxState, SwipeToDismissBoxValue,
+    SwipeToDismissBox, SwipeToDismissBoxDefaults, SwipeToDismissBoxState, SwipeToDismissBoxValue,
     remember_swipe_to_dismiss_box_state,
 };
 pub use tabs::{ScrollableTabRow, Tab, TabRow, TabRowDefaults};

@@ -337,7 +337,7 @@ fn swipe(ui: &mut ComposeTestRule, y: f32, xs: &[f32]) {
 /// Instead: the drag works on a dismissed item: it comes back into view.
 #[test]
 fn a_dismissed_item_cant_be_dragged_back() {
-    let state = SwipeToDismissBoxState::new(SwipeToDismissBoxValue::Settled, |_| true, |_| 56.0);
+    let state = SwipeToDismissBoxState::new(SwipeToDismissBoxValue::Settled, |_| 56.0);
     let given = *state;
     let mut ui = ComposeTestRule::sized(IntSize::new(400, 600), move || SwipeApp(given));
     ui.set_auto_advance(false);
@@ -366,7 +366,7 @@ fn a_dismissed_item_cant_be_dragged_back() {
 /// left-to-right would: `EndToStart`.
 #[test]
 fn the_dismiss_direction_is_logical_right_to_left() {
-    let state = SwipeToDismissBoxState::new(SwipeToDismissBoxValue::Settled, |_| true, |_| 56.0);
+    let state = SwipeToDismissBoxState::new(SwipeToDismissBoxValue::Settled, |_| 56.0);
     let given = *state;
     let mut ui = ComposeTestRule::sized(IntSize::new(400, 600), move || SwipeApp(given));
     ui.host().set_layout_direction(LayoutDirection::Rtl);
