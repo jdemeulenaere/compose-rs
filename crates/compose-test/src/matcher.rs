@@ -184,6 +184,24 @@ impl std::ops::Not for Matcher {
     }
 }
 
+/// Both, as Kotlin's infix `and`: `has_text("a") & is_enabled()`.
+impl std::ops::BitAnd for Matcher {
+    type Output = Matcher;
+
+    fn bitand(self, other: Matcher) -> Matcher {
+        self.and(other)
+    }
+}
+
+/// Either, as Kotlin's infix `or`: `has_text("a") | has_text("b")`.
+impl std::ops::BitOr for Matcher {
+    type Output = Matcher;
+
+    fn bitor(self, other: Matcher) -> Matcher {
+        self.or(other)
+    }
+}
+
 impl fmt::Debug for Matcher {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(&self.description)

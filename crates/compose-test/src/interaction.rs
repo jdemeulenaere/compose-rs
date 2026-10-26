@@ -279,8 +279,8 @@ impl<'a> SemanticsNodeInteraction<'a> {
             let Some((x, y)) = delta else { return self };
             assert!(
                 self.rule.auto_advance(),
-                "compose-test: performScrollTo can't scroll the node into view with the clock \
-                 advanced by hand: scrolls take frames"
+                "compose-test: Action performScrollTo() cannot scroll the node into view because \
+                 mainClock.autoAdvance is set to false: scrolls take frames"
             );
             self.rule.host.perform_semantics_action(scrollable, SemanticsAction::ScrollBy { x, y });
         }
@@ -545,15 +545,17 @@ impl<'a> SemanticsNodeInteraction<'a> {
     /// The node and its descendants to `max_depth` (`usize::MAX`: all), as `printToString`.
     #[track_caller]
     pub fn print_to_string(&mut self, max_depth: usize) -> String {
-        self.with_node(|node| print_node(node, max_depth))
-            .unwrap_or_else(|message| panic!("compose-test: printToString: {message}"))
+        let printed = self
+            .with_node(|node| print_node(node, max_depth))
+            .unwrap_or_else(|message| panic!("compose-test: printToString: {message}"));
+        format!("Printing with useUnmergedTree = '{}'\n{printed}", !self.merged)
     }
 
     /// Prints [`print_to_string`](Self::print_to_string) to stderr under `tag`, as
     /// `printToLog`.
     pub fn print_to_log(&mut self, tag: &str, max_depth: usize) -> &mut Self {
         let printed = self.print_to_string(max_depth);
-        eprintln!("{tag}: {printed}");
+        eprintln!("{tag}: printToLog:\n{printed}");
         self
     }
 }
@@ -667,14 +669,32 @@ impl<'a> SemanticsNodeInteractionCollection<'a> {
     }
 
     /// Each node and its descendants to `max_depth`, as `printToString`.
+    /// Numbered from 1 when there are several, as Compose's (whose default depth is 0 here).
     pub fn print_to_string(&mut self, max_depth: usize) -> String {
-        self.with_nodes(|nodes| {
+        let merged = self.merged;
+        let printed = self.with_nodes(|nodes| {
+            if nodes.is_empty() {
+                return "There were 0 nodes found!".to_string();
+            }
+            let numbered = nodes.len() > 1;
             nodes
                 .iter()
                 .enumerate()
-                .map(|(index, node)| format!("{index}) {}", print_node(*node, max_depth)))
+                .map(|(index, node)| {
+                    let printed = print_node(*node, max_depth);
+                    if numbered { format!("{}) {printed}", index + 1) } else { printed }
+                })
                 .collect::<Vec<_>>()
                 .join("\n")
-        })
+        });
+        format!("Printing with useUnmergedTree = '{}'\n{printed}", !merged)
+    }
+
+    /// Prints [`print_to_string`](Self::print_to_string) to stderr under `tag`, as
+    /// `printToLog`.
+    pub fn print_to_log(&mut self, tag: &str, max_depth: usize) -> &mut Self {
+        let printed = self.print_to_string(max_depth);
+        eprintln!("{tag}: printToLog:\n{printed}");
+        self
     }
 }

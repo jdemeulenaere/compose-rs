@@ -7,8 +7,10 @@ extern crate compose_runtime as compose;
 #[path = "../../../compose-ui/tests/support/mod.rs"]
 mod support;
 
+mod actions;
 mod bounds;
 mod clock;
 mod displayed;
 mod review_d;
 mod rule;
+mod selectors;
