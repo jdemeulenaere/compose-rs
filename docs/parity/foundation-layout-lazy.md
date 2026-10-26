@@ -30,8 +30,8 @@ By area: `foundation-layout` 29 files (850 tests); lazy lists, grids and `LazyLa
 | Status | Files | `@Test` methods |
 |---|---|---|
 | `covered` | 13 | 132 |
-| `ported` | 8 | 153 |
-| `port` | 19 | 219 |
+| `ported` | 9 | 170 |
+| `port` | 18 | 202 |
 | `partial` | 22 | 806 |
 | `feature:<name>` | 113 | 1,686 |
 | `n/a` | 10 | 133 |
@@ -120,7 +120,7 @@ The table's suite references (`lazy_api.rs`, `fling.rs`, …) are files in `crat
 | compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/list/LazyListTest.kt | 94 | The list at large: items, empty/nullable, scrolling, wrap content, fill parent, state restore, nested lists, recomposition counts, RTL, overscroll, keys | partial (61 of 94 ported in `tests/suite/lazy_list.rs`, both orientations, each citing its test; they found D863 and D864. Left: the lookahead and placement-animator tests (feature:lookahead, feature:animate-item), `beyondBoundsItemCount` (internal: drop), custom overscroll (feature:overscroll), `semanticsScroll_isAnimated` (D491: not animated), the pixel captures (`zIndex…`, `doesNotClipHorizontalOverdraw`), state restoration, `Modifier.composed`, the nested-fling cancellation test (needs a paused clock driving a fling while another swipe runs), negative counts (`usize`: n/a)) |
 | compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/list/LazyListsContentPaddingTest.kt | 23 | Content padding: applied, scroll position, items in the padding, to the end, reversed, larger than the parent | ported (`lazy_list_content_padding.rs`: 19 tests, all 23 in both orientations; `overscrollWithContentPadding` is a scroll past the end, no overscroll effect. They found D865) |
 | compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/list/LazyListsIndexedTest.kt | 6 | `itemsIndexed` passes indices and items | covered (`lazy_api.rs::items_over_a_list_get_each_item_and_its_index`) |
-| compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/list/LazyListsReverseLayoutTest.kt | 17 | Reverse layout of columns and rows (RTL too): positions, initial scroll, scroll directions | port (`lazy_api.rs` 4 reversed tests, `lazy.rs::scroll_by_goes_towards_the_end_of_a_reversed_list`) |
+| compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/list/LazyListsReverseLayoutTest.kt | 17 | Reverse layout of columns and rows (RTL too): positions, initial scroll, scroll directions | ported (`lazy_list_reverse_layout.rs`: 7 tests, all 17; they found D866) |
 | compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/list/LazyNestedScrollingTest.kt | 9 | Nested scroll dispatch from a list at its edges; wheel in a row inside a column | covered (`review_nested_scroll.rs`, `review_d479.rs`, `review_lazy.rs::the_wheel_delta_a_nested_lazy_list_leaves_scrolls_its_parent`) |
 | compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/list/LazyRowTest.kt | 5 | LazyRow vertical alignment, scrolling and layout in RTL | port (`rtl.rs::a_lazy_row_starts_at_the_right` covers RTL) |
 | compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/list/LazyScrollAccessibilityTest.kt | 9 | Android accessibility scroll actions forward/back/up/down/left/right at the start, middle and end | covered (`compose-android/tests/accessibility_scroll.rs`, `lazy.rs::a_lazy_list_has_scroll_semantics_and_scrolls_by_its_action`) |

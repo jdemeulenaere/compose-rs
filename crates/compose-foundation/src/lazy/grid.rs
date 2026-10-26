@@ -21,8 +21,9 @@ use compose_ui::{
 use super::layout_info::{LaidItem, LaidViewport};
 use super::prefetch::{Laid, Policy};
 use super::{
-    BEYOND, FIRST_STEP, Interval, Items, ItemsRef, LazyItems, LazyListInner, LazyListState,
-    LazyScrollElement, MOST_IN_A_ROUND, MOST_MISSING, Sizes, composed_range, content_type_of,
+    BEYOND, FIRST_STEP, Interval, ItemStacking, Items, ItemsRef, LazyItems, LazyListInner,
+    LazyListState, LazyScrollElement, MOST_IN_A_ROUND, MOST_MISSING, Sizes, composed_range,
+    content_type_of,
 };
 use crate::gestures::{
     LocalBoxFuture, ScrollBlock, ScrollScope, ScrollableState, ScrollableStateExt,
@@ -987,7 +988,9 @@ fn LazyGrid(
     Layout(
         modifier,
         policy,
-        compose_runtime::callback(move || LazyItems(list, items.clone(), holder, fallback)),
+        compose_runtime::callback(move || {
+            LazyItems(list, items.clone(), holder, fallback, ItemStacking::AtTheOrigin)
+        }),
     );
 }
 

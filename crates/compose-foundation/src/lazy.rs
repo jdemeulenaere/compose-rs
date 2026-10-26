@@ -39,7 +39,7 @@ use std::rc::{Rc, Weak};
 
 use compose_runtime::{
     ComposeArg, CoroutineScope, ImmutableList, ObjectHandle, Owned, OwnedState,
-    SaveableStateHolder, composable, hash_key, key, mutable_state_of, remember,
+    SaveableStateHolder, composable, hash_key, key, mutable_state_of,
 };
 use compose_ui::{
     Alignment, Constraints, Dp, EventContext, HorizontalAlignment, IntSize, Layout, Measurable,
@@ -1409,12 +1409,13 @@ fn compose_slot(
     state: LazyListState,
     items: &ItemsRef,
     holder: SaveableStateHolder,
+    stacking: ItemStacking,
 ) {
     let composer = compose_runtime::platform::current();
     match content {
         SlotContent::Item(index) => {
             composer.start_reusable_group(SLOT_GROUP, slot.key);
-            LazyItem(index, state, items.clone(), holder);
+            LazyItem(index, state, items.clone(), holder, stacking);
         }
         SlotContent::Deactivated => {
             // Its data key changes as its item leaves: the composer deactivates its content
@@ -1788,7 +1789,10 @@ fn LazyList(
     Layout(
         modifier,
         policy,
-        compose_runtime::callback(move || LazyItems(state, items.clone(), holder, fallback)),
+        compose_runtime::callback(move || {
+            let stacking = ItemStacking::Along { vertical, reverse };
+            LazyItems(state, items.clone(), holder, fallback, stacking)
+        }),
     );
 }
 
@@ -1801,6 +1805,7 @@ fn LazyItems(
     items: ItemsRef,
     holder: SaveableStateHolder,
     fallback: Option<Constraints>,
+    stacking: ItemStacking,
 ) {
     // Each item in a slot of its own, which an item of its content type reuses once it left
     // (D430). Kept when the list is in content reused (an outer list's item reused for
@@ -1904,7 +1909,9 @@ fn LazyItems(
                     // then those kept for reuse, deactivated: their nodes stay, unmeasured and
                     // unplaced. One loop, so a slot's group moves between the two.
                     for &(slot, content) in &composed {
-                        key(slot.id, || compose_slot(slot, content, state, &items, holder));
+                        key(slot.id, || {
+                            compose_slot(slot, content, state, &items, holder, stacking)
+                        });
                     }
                 },
             );
@@ -1918,8 +1925,16 @@ fn LazyItems(
 /// doesn't run the provider again).
 #[composable]
 #[allow(non_snake_case)]
-fn LazyItem(index: usize, state: LazyListState, items: ItemsRef, holder: SaveableStateHolder) {
-    let policy = remember(|| Rc::new(ItemLayout) as Rc<dyn MeasurePolicy>);
+fn LazyItem(
+    index: usize,
+    state: LazyListState,
+    items: ItemsRef,
+    holder: SaveableStateHolder,
+    stacking: ItemStacking,
+) {
+    let policy = compose_runtime::remember_keyed(stacking, || {
+        Rc::new(ItemLayout { stacking }) as Rc<dyn MeasurePolicy>
+    });
     let inner = state.inner_or_detached();
     let pinned = inner.pinned.handle();
     let item_key = items.0.key(index);
@@ -1956,8 +1971,26 @@ fn LazyItem(index: usize, state: LazyListState, items: ItemsRef, holder: Saveabl
     inner.prefetch.composing_item.set(composing);
 }
 
-/// An item: its children stacked at the top start, as large as the largest.
-struct ItemLayout;
+/// How an item's node stacks its children.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(crate) enum ItemStacking {
+    /// At the top start, as large as the largest: a grid's, as Compose's `LazyGridMeasuredItem`.
+    AtTheOrigin,
+    /// One after the other along the axis (the last first, reversed), as Compose's
+    /// `LazyListMeasuredItem`: a list's.
+    Along { vertical: bool, reverse: bool },
+}
+
+impl ComposeArg for ItemStacking {
+    fn same(&self, other: &Self) -> bool {
+        self == other
+    }
+}
+
+/// An item: its children stacked as its layout's `ItemStacking` says.
+struct ItemLayout {
+    stacking: ItemStacking,
+}
 
 impl MeasurePolicy for ItemLayout {
     fn measure(
@@ -1968,6 +2001,32 @@ impl MeasurePolicy for ItemLayout {
     ) -> MeasureResult {
         let placeables: Vec<Placeable> =
             measurables.iter().map(|&measurable| scope.measure(measurable, constraints)).collect();
+        if let (ItemStacking::Along { vertical, reverse }, [_, _, ..]) =
+            (self.stacking, placeables.as_slice())
+        {
+            let main_of = |placeable: &Placeable| {
+                if vertical { placeable.height } else { placeable.width }
+            };
+            let cross_of = |placeable: &Placeable| {
+                if vertical { placeable.width } else { placeable.height }
+            };
+            let main: i32 = placeables.iter().map(main_of).sum();
+            let cross = placeables.iter().map(cross_of).max().unwrap_or(0);
+            let (width, height) = if vertical {
+                (constraints.constrain_width(cross), constraints.constrain_height(main))
+            } else {
+                (constraints.constrain_width(main), constraints.constrain_height(cross))
+            };
+            let mut offset = 0;
+            for placeable in &placeables {
+                let size = main_of(placeable);
+                let at = if reverse { main - offset - size } else { offset };
+                let (x, y) = if vertical { (0, at) } else { (at, 0) };
+                scope.place_relative(placeable, x, y);
+                offset += size;
+            }
+            return scope.layout(width, height);
+        }
         let size = placeables.iter().fold(
             IntSize::new(constraints.min_width, constraints.min_height),
             |size, placeable| {
