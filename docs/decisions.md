@@ -61,7 +61,7 @@ The log is split by area into the files below, one table each, rows in number or
 | D28 | [runtime](decisions/runtime.md#d28) | current |
 | D29 | [runtime](decisions/runtime.md#d29) | current |
 | D30 | [runtime](decisions/runtime.md#d30) | current |
-| D31 | [runtime](decisions/runtime.md#d31) | current |
+| D31 | [runtime](decisions/runtime.md#d31) | revised by [D712](decisions/runtime.md#d712) |
 | D32 | [runtime](decisions/runtime.md#d32) | current |
 | D33 | [runtime](decisions/runtime.md#d33) | current |
 | D34 | [runtime](decisions/runtime.md#d34) | current |

@@ -24,6 +24,8 @@ use compose_runtime::*;
 /// A mock view, as Compose's `mock.View`: a name, string attributes, and the lifecycle a node
 /// sees (`ComposeNodeLifecycleCallback`: reused, deactivated, released).
 pub struct View {
+    /// Unique on the thread: which view instance this is, as the mock views' identity.
+    pub id: u64,
     pub name: &'static str,
     pub attributes: BTreeMap<&'static str, String>,
     /// Not deactivated (`Applier::deactivate`), or reused since.
@@ -40,9 +42,14 @@ pub struct ViewCallbacks {
     pub on_release: Option<Box<dyn Fn()>>,
 }
 
+thread_local! {
+    static NEXT_VIEW_ID: Cell<u64> = const { Cell::new(1) };
+}
+
 impl View {
     pub fn new(name: &'static str) -> View {
-        View { name, attributes: BTreeMap::new(), active: true, callbacks: None }
+        let id = NEXT_VIEW_ID.with(|next| next.replace(next.get() + 1));
+        View { id, name, attributes: BTreeMap::new(), active: true, callbacks: None }
     }
 
     /// Sets an attribute, as `View.attribute(name, value)`. A node is modified only while it's
@@ -229,15 +236,17 @@ pub fn LinearWithCallbacks(
     on_set: Action,
     content: impl FnOnce(),
 ) {
-    let on_reuse = remember_updated_state(on_reuse);
-    let on_deactivate = remember_updated_state(on_deactivate);
-    let on_release = remember_updated_state(on_release);
+    // `rememberUpdatedState`s the view keeps: after a reuse forgot them, it calls the last
+    // callbacks they held (Kotlin's states outlive their slots; a forgotten one here is freed).
+    let on_reuse = updated(on_reuse);
+    let on_deactivate = updated(on_deactivate);
+    let on_release = updated(on_release);
     let factory = move || {
         let mut view = View::new("linear");
         view.callbacks = Some(Rc::new(ViewCallbacks {
-            on_reuse: Some(Box::new(move || (on_reuse.get())())),
-            on_deactivate: Some(Box::new(move || (on_deactivate.get())())),
-            on_release: Some(Box::new(move || (on_release.get())())),
+            on_reuse: Some(Box::new(move || (on_reuse.borrow().clone())())),
+            on_deactivate: Some(Box::new(move || (on_deactivate.borrow().clone())())),
+            on_release: Some(Box::new(move || (on_release.borrow().clone())())),
         }));
         view
     };
@@ -246,6 +255,13 @@ pub fn LinearWithCallbacks(
         |updater| updater.set(on_set, |_, on_set| on_set()),
         content,
     );
+}
+
+/// A remembered cell holding the latest `action`, as `rememberUpdatedState`.
+fn updated(action: Action) -> Rc<RefCell<Action>> {
+    let cell = remember(|| Rc::new(RefCell::new(action.clone())));
+    *cell.borrow_mut() = action;
+    cell
 }
 
 /// A `linear` view that content being reused replaces, as the mock's `NonReusableLinear`.
@@ -830,6 +846,39 @@ impl CompositionTest {
     /// Runs `f` with the mock views' applier.
     pub fn with_views<R>(&self, f: impl FnOnce(&mut ViewApplier) -> R) -> R {
         self.composition().with_applier(f)
+    }
+
+    /// The ids of the views, depth first, as `root.flatten()`.
+    pub fn flatten(&self) -> Vec<u64> {
+        self.with_views(|views| {
+            let mut ids = Vec::new();
+            let mut stack: Vec<NodeRef> = views.roots().into_iter().rev().collect();
+            while let Some(node) = stack.pop() {
+                ids.push(views.tree.get(node).expect("a live view").id);
+                let children: Vec<NodeRef> = views.tree.children(node).collect();
+                stack.extend(children.into_iter().rev());
+            }
+            ids
+        })
+    }
+
+    /// The id of the first text view whose text starts with `prefix`, as `findTextWith`.
+    #[track_caller]
+    pub fn find_text_with(&self, prefix: &str) -> u64 {
+        let found = self.with_views(|views| {
+            let mut stack = views.roots();
+            while let Some(node) = stack.pop() {
+                let view = views.tree.get(node).expect("a live view");
+                if view.name == "text"
+                    && view.attribute("text").is_some_and(|text| text.starts_with(prefix))
+                {
+                    return Some(view.id);
+                }
+                stack.extend(views.tree.children(node));
+            }
+            None
+        });
+        found.unwrap_or_else(|| panic!("no text starting with {prefix:?}"))
     }
 
     /// The views, as an indented dump.
