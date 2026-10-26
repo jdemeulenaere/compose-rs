@@ -1046,23 +1046,23 @@ fn a_remember_keyed_on_fewer_keys_computes_anew() {
     // Compose's varargs: an array; one of another length is a change. Compose also checks the
     // slot table freed the dropped keys' slots: here the keys are one slot.
     #[composable]
-    fn Content(keys: MutableState<std::rc::Rc<Vec<i32>>>, remembered: Log) {
+    fn Content(keys: MutableState<std::rc::Rc<Vec<i32>>>, remembered: Log, ids: Counter) {
         let keys = keys.get();
+        let id = move || ids.increment();
         let value = match keys.len() {
-            5 => remember_keyed([keys[0], keys[1], keys[2], keys[3], keys[4]], || {
-                std::rc::Rc::new(())
-            }),
-            4 => remember_keyed([keys[0], keys[1], keys[2], keys[3]], || std::rc::Rc::new(())),
-            3 => remember_keyed([keys[0], keys[1], keys[2]], || std::rc::Rc::new(())),
-            _ => remember_keyed([0; 0], || std::rc::Rc::new(())),
+            5 => remember_keyed([keys[0], keys[1], keys[2], keys[3], keys[4]], id),
+            4 => remember_keyed([keys[0], keys[1], keys[2], keys[3]], id),
+            3 => remember_keyed([keys[0], keys[1], keys[2]], id),
+            _ => remember_keyed([0; 0], id),
         };
-        remembered.push(format!("{:p}", std::rc::Rc::as_ptr(&value)));
+        remembered.push(value.to_string());
     }
     let mut test = composition_test();
     let keys = mutable_state_of_with(std::rc::Rc::new(vec![1, 2, 3, 4, 5]), NeverEqualPolicy);
     let remembered = Log::new();
+    let ids = Counter::new();
     let (k, r) = (keys.handle(), remembered.clone());
-    test.compose(move || Content(k, r.clone()));
+    test.compose(move || Content(k, r.clone(), ids.clone()));
     let unique = || {
         let mut entries = remembered.entries();
         entries.sort();
@@ -2421,4 +2421,894 @@ fn the_applier_hears_a_pass_begin_and_end_before_its_effects() {
     });
     assert_eq!(test.with_views(|views| (views.begin_changes, views.end_changes)), (1, 1));
     assert_eq!(checks.entries(), ["composition", "RememberObserver", "SideEffect"]);
+}
+
+// ---- Elided groups, defaults, early returns, loops -----------------------------------------
+
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/CompositionTests.kt, testRestartOfDefaultFunctions
+#[test]
+fn a_composable_with_defaults_skips_then_recomposes() {
+    #[composable]
+    fn Defaults(#[default(1000)] a: i32, b: State<i32>) {
+        Text(&format!("{a} {}", b.get()));
+    }
+    #[composable]
+    fn Test(state_a: MutableState<i32>, state_b: MutableState<i32>) {
+        Defaults!(a = state_a.get(), b = state_b.as_state());
+        state_b.get();
+    }
+    let mut test = composition_test();
+    let (state_a, state_b) = (mutable_state_of(1000), mutable_state_of(2000));
+    let (a, b) = (state_a.handle(), state_b.handle());
+    test.compose(move || Test(a, b));
+    // `Defaults` skips: only what it reads changed... then recomposes.
+    state_b.update(|b| b + 1);
+    test.advance();
+    state_a.update(|a| a + 1);
+    test.advance();
+    test.validate(|v| v.text("1001 2001"));
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/CompositionTests.kt, testRememberNotRecomputedInElidedGroupAfterMovableGroup
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/CompositionTests.kt, testRememberNotRecomputedInElidedGroupAfterNestedMovableGroup
+#[test]
+fn a_remember_after_keyed_groups_is_not_recomputed() {
+    for nested in [false, true] {
+        #[composable]
+        fn Content(base_key: MutableState<i32>, invocations: Counter, nested: bool) {
+            let base = base_key.get();
+            key(base, || remember(move || base.to_string()));
+            if nested {
+                key((), || key((), || {}));
+            } else {
+                key((), || {});
+            }
+            remember(move || {
+                assert_eq!(invocations.increment(), 1, "the remember runs once");
+            });
+        }
+        let mut test = composition_test();
+        let base_key = mutable_state_of(0);
+        let invocations = Counter::new();
+        let (b, i) = (base_key.handle(), invocations.clone());
+        test.compose(move || Content(b, i.clone(), nested));
+        base_key.update(|key| key + 1);
+        test.advance();
+        assert_eq!(invocations.get(), 1, "remembered once");
+    }
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/CompositionTests.kt, testInvalidateCapturingLambdaInElidedGroupAfterMovableGroup
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/CompositionTests.kt, testInvalidateCapturingLambdaInElidedGroupAfterNestedMovableGroup
+#[test]
+fn a_lambda_capturing_a_keyed_value_recomposes() {
+    for nested in [false, true] {
+        #[composable]
+        fn Content(base_key: MutableState<i32>, seen: Var<(String, String)>, nested: bool) {
+            let base = base_key.get();
+            let captor = key(base, || remember(move || base.to_string()));
+            if nested {
+                key((), || key((), || {}));
+            } else {
+                key((), || {});
+            }
+            seen.borrow_mut().0 = captor.clone();
+            Container!({ seen.borrow_mut().1 = captor.clone() });
+        }
+        let mut test = composition_test();
+        let base_key = mutable_state_of(0);
+        let seen = var((String::new(), String::new()));
+        let (b, s) = (base_key.handle(), seen.clone());
+        test.compose(move || Content(b, s.clone(), nested));
+        assert_eq!(*seen.borrow(), ("0".to_string(), "0".to_string()));
+        base_key.update(|key| key + 1);
+        test.advance();
+        assert_eq!(*seen.borrow(), ("1".to_string(), "1".to_string()), "both scopes recomposed");
+    }
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/CompositionTests.kt, testInvalidateDoesNotRecomputeDefaultValues
+#[test]
+fn an_invalidated_composable_keeps_its_default_argument() {
+    #[composable]
+    fn ComposableWithDefaultArg(
+        #[default(std::rc::Rc::new(()))] default_value: std::rc::Rc<()>,
+        block: impl Fn(RecomposeScope, std::rc::Rc<()>) + 'static,
+    ) {
+        block(current_recompose_scope(), default_value);
+    }
+    let mut test = composition_test();
+    let scope = ScopeHolder::new();
+    let defaults = Log::new();
+    let (s, d) = (scope.clone(), defaults.clone());
+    test.compose(move || {
+        let (s, d) = (s.clone(), d.clone());
+        ComposableWithDefaultArg!(move |parent: RecomposeScope, value: std::rc::Rc<()>| {
+            s.0.set(Some(parent));
+            d.push(format!("{:p}", std::rc::Rc::as_ptr(&value)));
+        });
+    });
+    scope.invalidate();
+    test.expect_no_changes();
+    let mut values = defaults.entries();
+    values.dedup();
+    assert_eq!(values.len(), 1, "the default argument isn't computed again");
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/CompositionTests.kt, textWithElvis
+#[test]
+fn a_composable_in_an_option_fallback() {
+    #[composable]
+    fn Content() {
+        let value: Option<&str> = None;
+        value.map(|_| Text("Bye!")).unwrap_or_else(|| Text("Hello!"));
+    }
+    let mut test = composition_test();
+    test.compose(Content);
+    test.validate(|v| v.text("Hello!"));
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/CompositionTests.kt, textWithIfNotNull
+#[test]
+fn a_composable_after_an_if_valued_none() {
+    #[composable]
+    fn Content(condition: bool) {
+        let result = if condition {
+            Text("Bye!");
+            Some(())
+        } else {
+            None
+        };
+        if result.is_none() {
+            Text("Hello!");
+        }
+    }
+    let mut test = composition_test();
+    test.compose(|| Content(false));
+    test.validate(|v| v.text("Hello!"));
+}
+
+/// `Test_CM1_RetFun`: Kotlin's inline wrapper `M1 { … }` is a block here, a `return` in it the
+/// composable's.
+#[composable]
+fn Test_CM1_RetFun(condition: bool) {
+    Text("Root - before");
+    {
+        Text("M1 - before");
+        if condition {
+            return;
+        }
+        Text("M1 - after");
+    }
+    Text("Root - after");
+}
+
+fn expect_cm1_ret_fun(v: &mut Expected, condition: bool) {
+    v.text("Root - before");
+    v.text("M1 - before");
+    if condition {
+        return;
+    }
+    v.text("M1 - after");
+    v.text("Root - after");
+}
+
+#[composable]
+fn Test_CM1_CCM1_RetFun(condition: bool) {
+    Text("Root - before");
+    {
+        Text("M1 - begin");
+        if condition {
+            Text("if - begin");
+            {
+                Text("In CCM1");
+                return;
+            }
+        }
+        Text("M1 - end");
+    }
+    Text("Root - end");
+}
+
+fn expect_cm1_ccm1_ret_fun(v: &mut Expected, condition: bool) {
+    v.text("Root - before");
+    v.text("M1 - begin");
+    if condition {
+        v.text("if - begin");
+        v.text("In CCM1");
+        return;
+    }
+    v.text("M1 - end");
+    v.text("Root - end");
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/CompositionTests.kt, testNonLocalReturn_CM1_RetFunc_FalseTrue
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/CompositionTests.kt, testNonLocalReturn_CM1_RetFunc_TrueFalse
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/CompositionTests.kt, test_CM1_CCM1_RetFun_FalseTrue
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/CompositionTests.kt, test_CM1_CCM1_RetFun_TrueFalse
+#[test]
+fn an_early_return_inside_nested_blocks_both_ways() {
+    for nested in [false, true] {
+        for initial in [false, true] {
+            let mut test = composition_test();
+            let condition = mutable_state_of(initial);
+            let c = condition.handle();
+            if nested {
+                test.compose(move || Test_CM1_CCM1_RetFun(c.get()));
+                test.validate(move |v| expect_cm1_ccm1_ret_fun(v, c.get()));
+            } else {
+                test.compose(move || Test_CM1_RetFun(c.get()));
+                test.validate(move |v| expect_cm1_ret_fun(v, c.get()));
+            }
+            condition.set(!initial);
+            test.expect_changes();
+            test.revalidate();
+            test.verify_consistent();
+        }
+    }
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/CompositionTests.kt, test_returnConditionally_fromInlineLambda
+#[test]
+fn a_return_from_a_lambda_skips_its_end() {
+    #[composable]
+    fn Content(condition: MutableState<bool>) {
+        // Kotlin's inline wrapper with a local return: an immediately called closure.
+        (|| {
+            if condition.get() {
+                return;
+            }
+            Text("Test");
+        })();
+    }
+    let mut test = composition_test();
+    let condition = mutable_state_of(true);
+    let c = condition.handle();
+    test.compose(move || Content(c));
+    test.validate(move |v| {
+        if !c.get() {
+            v.text("Test");
+        }
+    });
+    condition.set(false);
+    test.expect_changes();
+    test.revalidate();
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/CompositionTests.kt, test_returnConditionally_fromNodeLambda_local_initial_return
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/CompositionTests.kt, test_returnConditionally_fromNodeLambda_local_initial_no_return
+#[test]
+fn a_return_from_a_node_content_lambda_both_ways() {
+    #[composable]
+    fn Content(condition: MutableState<bool>) {
+        Text("Before outer");
+        Linear!({
+            Text("Before inner");
+            Linear!({
+                Text("Before return");
+                if condition.get() {
+                    return;
+                }
+                Text("After return");
+            });
+            Text("After inner");
+        });
+        Text("Before outer");
+    }
+    for initial in [true, false] {
+        let mut test = composition_test();
+        let condition = mutable_state_of(initial);
+        let c = condition.handle();
+        test.compose(move || Content(c));
+        test.validate(move |v| {
+            v.text("Before outer");
+            v.linear(|v| {
+                v.text("Before inner");
+                v.linear(|v| {
+                    v.text("Before return");
+                    if !c.get() {
+                        v.text("After return");
+                    }
+                });
+                v.text("After inner");
+            });
+            v.text("Before outer");
+        });
+        for _ in 0..4 {
+            condition.update(|condition| !condition);
+            test.expect_changes();
+            test.verify_consistent();
+            test.revalidate();
+        }
+    }
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/CompositionTests.kt, test_returnConditionally_fromFunction_nonLocal
+#[test]
+fn a_composable_returning_early_shows_its_text_once_given_one() {
+    #[composable]
+    fn TextWithNonLocalReturn(text: Option<String>) {
+        {
+            let Some(text) = text else { return };
+            Text(&text);
+        }
+    }
+    let mut test = composition_test();
+    let text = mutable_state_of(None::<String>);
+    let t = text.handle();
+    test.compose(move || TextWithNonLocalReturn(t.get()));
+    test.validate(move |v| {
+        if let Some(text) = t.get() {
+            v.text(&text);
+        }
+    });
+    text.set(Some("Test".into()));
+    test.expect_changes();
+    test.revalidate();
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/CompositionTests.kt, test_returnConditionally_simulatedIf
+#[test]
+fn early_returns_one_after_the_other_go_away() {
+    #[composable]
+    fn Content(c1: MutableState<bool>, c2: MutableState<bool>, c3: MutableState<bool>) {
+        Text("A");
+        if c1.get() {
+            return;
+        }
+        Text("B");
+        if c2.get() {
+            return;
+        }
+        Text("C");
+        if c3.get() {
+            return;
+        }
+        Text("D");
+    }
+    let mut test = composition_test();
+    let (c1, c2, c3) = (mutable_state_of(true), mutable_state_of(true), mutable_state_of(true));
+    let (h1, h2, h3) = (c1.handle(), c2.handle(), c3.handle());
+    test.compose(move || Content(h1, h2, h3));
+    test.validate(move |v| {
+        v.text("A");
+        if h1.get() {
+            return;
+        }
+        v.text("B");
+        if h2.get() {
+            return;
+        }
+        v.text("C");
+        if h3.get() {
+            return;
+        }
+        v.text("D");
+    });
+    for condition in [&c1, &c2, &c3] {
+        condition.set(false);
+        test.expect_changes();
+        test.revalidate();
+    }
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/CompositionTests.kt, test_remember_in_a_loop
+#[test]
+fn remembers_after_a_growing_loop_keep_their_values() {
+    #[composable]
+    fn Content(
+        key_object: std::rc::Rc<()>,
+        values: Var<[i32; 3]>,
+        counter: Counter,
+        scope: ScopeHolder,
+    ) {
+        for index in 0..counter.get() {
+            let k = key_object.clone();
+            remember_keyed(k, move || index);
+        }
+        scope.capture();
+        let k = key_object.clone();
+        let i1 = remember_keyed(k.clone(), || 1);
+        let i2 = remember_keyed(k.clone(), || 2);
+        let i3 = remember_keyed(k, || 3);
+        *values.borrow_mut() = [i1, i2, i3];
+        counter.increment();
+    }
+    let mut test = composition_test();
+    let key_object = std::rc::Rc::new(());
+    let values = var([0; 3]);
+    let (counter, scope) = (Counter::new(), ScopeHolder::new());
+    let (k, v, c, s) = (key_object.clone(), values.clone(), counter.clone(), scope.clone());
+    test.compose(move || Content(k.clone(), v.clone(), c.clone(), s.clone()));
+    test.advance();
+    test.verify_consistent();
+    assert_eq!((*values.borrow(), counter.get()), ([1, 2, 3], 1));
+    for expected in [2, 3] {
+        scope.invalidate();
+        test.advance();
+        test.verify_consistent();
+        assert_eq!((*values.borrow(), counter.get()), ([1, 2, 3], expected));
+    }
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/CompositionTests.kt, testRememberAddedAndRemovedInALoop
+#[test]
+fn remembers_added_and_removed_in_a_loop_keep_their_values() {
+    #[composable]
+    fn Content(counter: MutableState<i32>, seen: Var<Vec<usize>>) {
+        let mut list = Vec::new();
+        for _ in 0..counter.get() {
+            let value = remember(|| std::rc::Rc::new(()));
+            list.push(std::rc::Rc::as_ptr(&value) as usize);
+        }
+        let mut seen = seen.borrow_mut();
+        for index in 0..list.len().min(seen.len()) {
+            assert_eq!(list[index], seen[index], "the value at {index} was kept");
+        }
+        *seen = list;
+    }
+    let mut test = composition_test();
+    let counter = mutable_state_of(0);
+    let seen = var(Vec::new());
+    let (c, s) = (counter.handle(), seen.clone());
+    test.compose(move || Content(c, s.clone()));
+    while counter.get() < 100 {
+        counter.update(|counter| counter + 1);
+        test.advance();
+    }
+    while counter.get() > 0 {
+        counter.update(|counter| counter - 1);
+        test.advance();
+    }
+    assert!(seen.borrow().is_empty());
+}
+
+// ---- Returns, loops, skipping and group shapes -----------------------------------------------
+
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/CompositionTests.kt, earlyComposableUnitReturn
+#[test]
+fn an_early_return_from_a_match_arm() {
+    #[composable]
+    fn Content(state: MutableState<bool>) {
+        match state.get() {
+            true => return Text("true"),
+            false => Text("false"),
+        }
+        Text("after");
+    }
+    let mut test = composition_test();
+    let state = mutable_state_of(true);
+    let s = state.handle();
+    test.compose(move || Content(s));
+    test.validate(|v| v.text("true"));
+    state.set(false);
+    test.expect_changes();
+    test.validate(|v| {
+        v.text("false");
+        v.text("after");
+    });
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/CompositionTests.kt, test_forgottenValue_isFreedFromSlotTable
+#[test]
+fn a_forgotten_value_is_freed_from_the_slot_table() {
+    // Compose looks for the value in the slot table; here, its `Rc` count says who holds it.
+    #[composable]
+    fn Content(remember_value: MutableState<bool>, value: std::rc::Rc<()>) {
+        if remember_value.get() {
+            remember(move || value);
+        }
+    }
+    let mut test = composition_test();
+    let value = std::rc::Rc::new(());
+    let remember_value = mutable_state_of(false);
+    let (r, v) = (remember_value.handle(), value.clone());
+    test.compose(move || Content(r, v.clone()));
+    // The test, the content closure and the kept arguments hold it; the slot is one more.
+    let baseline = std::rc::Rc::strong_count(&value);
+    let held = |value: &std::rc::Rc<()>| std::rc::Rc::strong_count(value) - baseline;
+    remember_value.set(true);
+    test.expect_changes();
+    assert_eq!(held(&value), 1, "the slot holds it");
+    remember_value.set(false);
+    test.expect_changes();
+    assert_eq!(held(&value), 0, "freed");
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/CompositionTests.kt, continueInALoop
+#[test]
+fn a_continue_in_a_loop_keeps_the_groups_balanced() {
+    #[composable]
+    fn Content(iterations: MutableState<i32>) {
+        for i in 1..=iterations.get() {
+            if i == 4 {
+                continue;
+            }
+            Text(&i.to_string());
+        }
+    }
+    let mut test = composition_test();
+    let iterations = mutable_state_of(5);
+    let i = iterations.handle();
+    test.compose(move || Content(i));
+    iterations.update(|iterations| iterations + 1);
+    test.expect_changes();
+    test.validate(|v| [1, 2, 3, 5, 6].iter().for_each(|i| v.text(&i.to_string())));
+    test.verify_consistent();
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/CompositionTests.kt, composableWithUnstableParameters_skipped
+#[test]
+fn a_composable_given_the_same_mutable_object_skips() {
+    struct Foo {
+        i: std::cell::Cell<i32>,
+    }
+    #[composable]
+    fn UnstableComp(foo: std::rc::Rc<Foo>, invoke_count: Counter) {
+        foo.i.get();
+        invoke_count.increment();
+    }
+    #[composable]
+    fn Content(trigger: MutableState<i32>, data: std::rc::Rc<Foo>, invoke_count: Counter) {
+        Linear!({
+            trigger.get();
+            UnstableComp(data.clone(), invoke_count.clone());
+        });
+    }
+    let mut test = composition_test();
+    let invoke_count = Counter::new();
+    let trigger = mutable_state_of(0);
+    let data = std::rc::Rc::new(Foo { i: std::cell::Cell::new(0) });
+    let (t, d, c) = (trigger.handle(), data.clone(), invoke_count.clone());
+    test.compose(move || Content(t, d.clone(), c.clone()));
+    assert_eq!(invoke_count.get(), 1);
+    trigger.set(1);
+    data.i.set(data.i.get() + 1);
+    test.advance();
+    assert_eq!(invoke_count.get(), 1, "the same object: skipped (strong skipping)");
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/CompositionTests.kt, readingDerivedState_invalidatesWhenValueNotChanged
+#[test]
+fn a_derived_state_whose_dependencies_change_recomposes_when_its_value_does() {
+    let mut test = composition_test();
+    let (state, condition) = (mutable_state_of(0), mutable_state_of(false));
+    let (s, c) = (state.handle(), condition.handle());
+    let derived = derived_state_of(move || if !c.get() { 0 } else { s.get() });
+    let d = derived.as_state();
+    test.compose(move || Text(&d.get().to_string()));
+    test.validate(move |v| v.text(&d.get().to_string()));
+    condition.set(true);
+    test.expect_no_changes();
+    test.revalidate();
+    state.update(|state| state + 1);
+    test.expect_changes();
+    test.revalidate();
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/CompositionTests.kt, earlyReturnFromInlined
+#[test]
+fn an_early_return_from_an_inlined_block() {
+    #[composable]
+    #[allow(clippy::needless_return)]
+    fn Content(condition: bool) {
+        (|| {
+            if condition {
+                return;
+            } else {
+                Text("");
+                return;
+            }
+        })();
+    }
+    let mut test = composition_test();
+    test.compose(|| Content(true));
+    test.validate(|_| {});
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/CompositionTests.kt, remember_withComposableParam
+#[test]
+fn a_remember_keyed_on_a_composables_value() {
+    #[composable]
+    fn key_value() -> &'static str {
+        "key"
+    }
+    #[composable]
+    fn Content() {
+        let text = remember_keyed(key_value(), String::new);
+        Text(&text);
+    }
+    let mut test = composition_test();
+    test.compose(Content);
+    test.validate(|v| v.text(""));
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/CompositionTests.kt, remember_defaultParamInRestartableFunction
+#[test]
+fn a_remember_keyed_on_a_default_reading_a_local() {
+    // Defaults are evaluated where the composable is called (ledger, behaviour 4).
+    static LOCAL_NUMBER: CompositionLocal<i32> = CompositionLocal::new("LocalNumber", || 0);
+    #[composable]
+    fn Test(#[default(LOCAL_NUMBER.current())] number: i32) {
+        let remembered = remember_keyed(number, || number + 1);
+        assert_eq!(remembered, number + 1);
+    }
+    #[composable]
+    fn Content(state: MutableState<i32>) {
+        CompositionLocalProvider(LOCAL_NUMBER.provides(state.get()), || Test!());
+    }
+    let mut test = composition_test();
+    let state = mutable_state_of(0);
+    let s = state.handle();
+    test.compose(move || Content(s));
+    test.validate(|_| {});
+    state.update(|state| state + 1);
+    test.advance();
+    test.revalidate();
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/CompositionTests.kt, rememberAfterLoop
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/CompositionTests.kt, appendingRememberAfterLoop
+#[test]
+fn remembers_after_a_loop_that_grows_and_shrinks() {
+    #[composable]
+    fn Content(count: MutableState<i32>) {
+        for _ in 0..count.get() {
+            Text("Some text");
+        }
+        let current = count.get();
+        let some_remember = remember_keyed(current, || current + 1);
+        assert_eq!(some_remember, current + 1);
+        for index in 0..count.get() {
+            remember(|| index);
+        }
+    }
+    let mut test = composition_test();
+    let count = mutable_state_of(1);
+    let c = count.handle();
+    test.compose(move || Content(c));
+    test.validate(move |v| (0..c.get()).for_each(|_| v.text("Some text")));
+    for next in [2, 3, 1] {
+        count.set(next);
+        test.advance();
+        test.revalidate();
+        test.verify_consistent();
+    }
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/CompositionTests.kt, derivedStateOfLeak
+#[test]
+fn a_derived_state_whose_dependency_composition_writes_keeps_working() {
+    #[composable]
+    fn Content(state: MutableState<i32>) {
+        let derived = remember(move || derived_state_of(move || state.get() > 100));
+        state.update(|state| state + 1);
+        Text(&derived.get().to_string());
+        Wrap!({ Text(&derived.get().to_string()) });
+    }
+    let mut test = composition_test();
+    let state = mutable_state_of(10);
+    let s = state.handle();
+    test.compose(move || Content(s));
+    for _ in 0..100 {
+        state.update(|state| state + 1);
+        test.advance_ignoring_pending_work();
+    }
+    test.validate(|v| {
+        v.text("true");
+        v.text("true");
+    });
+    test.verify_consistent();
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/CompositionTests.kt, removeGroupAtEndOfGroup
+#[test]
+fn a_group_removed_at_the_end_of_its_parent() {
+    /// Compose's `ExplicitStartReplaceGroup`: a replace group around `content`, or none.
+    fn explicit_group(key: u64, insert_group: bool, content: impl FnOnce()) {
+        let composer = compose_runtime::platform::current();
+        if insert_group {
+            composer.start_replace_group(key);
+        }
+        content();
+        if insert_group {
+            composer.end_group();
+        }
+    }
+    #[composable]
+    fn Content(state: MutableState<bool>) {
+        Linear!({
+            Linear!({
+                explicit_group(0x7e52e5de, true, || Text("Before"));
+                explicit_group(0x9222f9c, state.get(), || {});
+                explicit_group(0x22d2581c, true, || Text("After"));
+            });
+            Linear!({ Text(&format!("State is {}", state.get())) });
+            if state.get() {
+                Text("State is on");
+            }
+            if !state.get() {
+                Text("State is off");
+            }
+        });
+    }
+    let mut test = composition_test();
+    let state = mutable_state_of(true);
+    let s = state.handle();
+    test.compose(move || Content(s));
+    test.validate(move |v| {
+        v.linear(|v| {
+            v.linear(|v| {
+                v.text("Before");
+                v.text("After");
+            });
+            v.linear(|v| v.text(&format!("State is {}", s.get())));
+            v.text(if s.get() { "State is on" } else { "State is off" });
+        })
+    });
+    for next in [false, true] {
+        state.set(next);
+        test.advance();
+        test.revalidate();
+        test.verify_consistent();
+    }
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/CompositionTests.kt, avoidsThrashingTheSlotTable
+#[test]
+fn a_hundred_containers_recompose_their_texts_in_place() {
+    #[composable]
+    fn Content(data: MutableState<i32>) {
+        for index in 0..100 {
+            Linear!({ Text(&format!("Value: {index}, data: {}", data.get())) });
+        }
+    }
+    let mut test = composition_test();
+    let data = mutable_state_of(0);
+    let d = data.handle();
+    test.compose(move || Content(d));
+    test.validate(move |v| {
+        (0..100).for_each(|i| v.linear(|v| v.text(&format!("Value: {i}, data: {}", d.get()))))
+    });
+    let groups = test.composition().group_count();
+    data.update(|data| data + 1);
+    test.advance();
+    test.revalidate();
+    assert_eq!(test.composition().group_count(), groups, "groups kept, not recreated");
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/CompositionTests.kt, testRecomposeToGroupEnd_withNodeGroupSibling
+#[test]
+fn restarted_scopes_beside_a_node_group_insert_their_views() {
+    #[composable]
+    fn RestartGroup(content: impl Fn() + 'static) {
+        content();
+    }
+    #[composable]
+    fn Content(show_a: MutableState<bool>, show_b: MutableState<bool>) {
+        Linear!({
+            RestartGroup!({
+                if show_a.get() {
+                    Text("A");
+                }
+                for index in 0..10 {
+                    Text(&format!("C{index}"));
+                }
+            });
+        });
+        RestartGroup!({
+            if show_b.get() {
+                Text("B");
+            }
+            Text("Static");
+        });
+    }
+    let mut test = composition_test();
+    let (show_a, show_b) = (mutable_state_of(false), mutable_state_of(false));
+    let (a, b) = (show_a.handle(), show_b.handle());
+    test.compose(move || Content(a, b));
+    test.validate(move |v| {
+        v.linear(|v| {
+            if a.get() {
+                v.text("A");
+            }
+            (0..10).for_each(|i| v.text(&format!("C{i}")));
+        });
+        if b.get() {
+            v.text("B");
+        }
+        v.text("Static");
+    });
+    show_a.set(true);
+    show_b.set(true);
+    test.expect_changes();
+    test.revalidate();
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/CompositionTests.kt, removedScopeInvalidationsAreCleared
+#[test]
+fn an_invalidated_scope_removed_by_its_parent_leaves_nothing_behind() {
+    #[composable]
+    fn Content(visible: MutableState<bool>, child_state: MutableState<i32>) {
+        if visible.get() {
+            Wrap!({ Text(&format!("Child: {}", child_state.get())) });
+        }
+    }
+    let mut test = composition_test();
+    let (visible, child_state) = (mutable_state_of(true), mutable_state_of(0));
+    let (v, c) = (visible.handle(), child_state.handle());
+    test.compose(move || Content(v, c));
+    test.validate(|v| v.text("Child: 0"));
+    visible.set(false);
+    child_state.update(|state| state + 1);
+    test.expect_changes();
+    test.validate(|_| {});
+    assert!(!test.composition().has_invalidations());
+    test.verify_consistent();
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/CompositionTests.kt, testMoveAndInsertKeyedGroups
+#[test]
+fn keyed_groups_move_and_get_inserted_together() {
+    #[composable]
+    fn Content(list: MutableState<Vec<&'static str>>) {
+        for item in list.get() {
+            key(item, || Text(&format!("Item {item}")));
+        }
+    }
+    let mut test = composition_test();
+    let list = mutable_state_of(vec!["A", "B"]);
+    let l = list.handle();
+    test.compose(move || Content(l));
+    test.validate(move |v| l.get().iter().for_each(|item| v.text(&format!("Item {item}"))));
+    for next in [vec!["B", "NEW", "A"], vec!["B", "A"], vec!["A", "B", "NEW"], vec!["A", "B"]] {
+        list.set(next);
+        test.expect_changes();
+        test.revalidate();
+        test.verify_consistent();
+    }
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/CompositionTests.kt, testJoinInvalidate
+#[test]
+fn a_scope_invalidating_itself_while_its_parent_recomposes() {
+    #[composable]
+    fn Composition(texts: Var<i32>, outer: ScopeHolder, inner: ScopeHolder, force: Var<bool>) {
+        Linear!({
+            outer.capture();
+            for _ in 0..*texts.borrow() {
+                Text("Some text");
+            }
+            Container!({
+                Text("Some text");
+                // The invalidation outlives the pass.
+                inner.capture();
+                if std::mem::take(&mut *force.borrow_mut()) {
+                    inner.invalidate();
+                }
+            });
+        });
+    }
+    let mut test = composition_test();
+    let texts = var(5);
+    let (outer, inner) = (ScopeHolder::new(), ScopeHolder::new());
+    let force = var(false);
+    let (t, o, i, f) = (texts.clone(), outer.clone(), inner.clone(), force.clone());
+    test.compose(move || Composition(t.clone(), o.clone(), i.clone(), f.clone()));
+    *texts.borrow_mut() = 4;
+    outer.invalidate();
+    inner.invalidate();
+    *force.borrow_mut() = true;
+    test.expect_changes();
+    *texts.borrow_mut() = 3;
+    outer.invalidate();
+    *force.borrow_mut() = true;
+    test.expect_changes();
+    test.expect_no_changes();
+    test.validate(|v| {
+        v.linear(|v| {
+            (0..4).for_each(|_| v.text("Some text"));
+        })
+    });
+    test.verify_consistent();
 }

@@ -660,7 +660,7 @@ impl ComposeArg for Counter {
 /// A recompose scope a composable hands out, as a captured `var scope: RecomposeScope?` that
 /// Compose's tests set to `currentRecomposeScope` and invalidate later.
 #[derive(Clone, Default)]
-pub struct ScopeHolder(Rc<Cell<Option<RecomposeScope>>>);
+pub struct ScopeHolder(pub Rc<Cell<Option<RecomposeScope>>>);
 
 impl ScopeHolder {
     pub fn new() -> ScopeHolder {
