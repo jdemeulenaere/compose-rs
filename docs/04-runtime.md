@@ -46,6 +46,8 @@ impl Composer {
 pub fn current() -> Composer;   // thread-local; panics outside a pass with a clear message
 ```
 
+**Emitting nodes.** Code emitting nodes of its own applier's tree doesn't need the composer: `ComposeNode::<A>(factory, |updater| …)` and `ReusableComposeNode::<A>(…)` are Compose's (with `…WithContent` and `…WithSkippableUpdate` forms, as Rust has no overloads). A node group starts (one key for every node group, as Compose's: the composable around it gives it its identity), `factory` makes the node when the group is new, and the `Updater` remembers each value in the node's group: `set(value, |node, value| …)` runs on a new node or a changed value (`ComposeArg::same`), `update` on a changed one only, `init` on a new node only, `reconcile` at every pass. The blocks reach the node through `Applier::node_mut` (Compose's `Applier.current`); an applier whose nodes aren't updated that way needn't implement it. Content being reused reads the updater's values as empty, so its setters run again after the applier reset the node (`Applier::reuse`).
+
 Generated code, and the few hand-written primitives such as `remember` and `key`, are the only users of `Composer`. Applications never see it, as in Compose: it and `current()` live in `compose_runtime::platform` (D260). A `Composer` is a handle to its thread's runtime, valid in any pass on that thread, so a content lambda may capture it and run again in a later pass.
 
 ## Passes and recomposition

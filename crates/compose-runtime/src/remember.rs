@@ -157,6 +157,20 @@ pub(crate) fn remember_keys<K: ComposeArg>(keys: K) -> bool {
     false
 }
 
+/// Reserves the next slot for `value`, as Compose's `rememberedValue() != value` followed by
+/// `updateRememberedValue(value)`: keeps a clone of `value` unless the slot holds a `same` one,
+/// and says whether it changed.
+pub(crate) fn update_remembered<V: ComposeArg + Clone>(value: &V) -> bool {
+    let (position, kept) = slot_next(TypeId::of::<V>());
+    if let Some(kept) = kept
+        && downcast::<V>(&kept).same(value)
+    {
+        return false;
+    }
+    slot_set(position, SlotValue::Plain(Rc::new(value.clone())), type_name::<V>());
+    true
+}
+
 /// Callbacks for a remembered value entering and leaving the composition, as Compose's
 /// `RememberObserver`. Each value gets exactly one of `on_forgotten` (after `on_remembered`) or
 /// `on_abandoned` (if its pass never completed).

@@ -138,3 +138,54 @@ fn the_filter_removes_contacts() {
     test.expect_changes();
     test.validate(move |v| expect_contacts(v, &[&jon]));
 }
+
+/// A node counting the changes to its property, as `SetUpdateNode` in `composeNodeSetVsUpdate`.
+#[derive(Debug)]
+struct SetUpdateNode {
+    property: String,
+    change_count: u32,
+}
+
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/CompositionTests.kt, composeNodeSetVsUpdate
+#[test]
+fn an_updater_sets_on_new_nodes_and_updates_only_old_ones() {
+    use compose_runtime::platform::NodeTree;
+    type Nodes = NodeTree<SetUpdateNode>;
+    let composition = Composition::new(Nodes::new());
+    let value = mutable_state_of(String::from("initial"));
+    let handle = value.handle();
+    let make = move || SetUpdateNode { property: handle.get(), change_count: 0 };
+    let set = |node: &mut SetUpdateNode, value: &String| {
+        node.property = value.clone();
+        node.change_count += 1;
+    };
+    composition.set_content(move || {
+        ComposeNode::<Nodes>(make, |updater| updater.set(handle.get(), set));
+        ComposeNode::<Nodes>(make, |updater| updater.update(handle.get(), set));
+    });
+    let nodes = |composition: &Composition| {
+        composition.with_applier(|nodes: &mut Nodes| {
+            let root = nodes.root();
+            let children: Vec<_> = nodes.children(root).collect();
+            children
+                .iter()
+                .map(|&node| {
+                    let node = nodes.get(node).expect("a live node");
+                    (node.property.clone(), node.change_count)
+                })
+                .collect::<Vec<_>>()
+        })
+    };
+    assert_eq!(
+        nodes(&composition),
+        [("initial".to_string(), 1), ("initial".to_string(), 0)],
+        "set runs on a new node, update doesn't"
+    );
+    value.set("changed".into());
+    composition.recompose();
+    assert_eq!(
+        nodes(&composition),
+        [("changed".to_string(), 2), ("changed".to_string(), 1)],
+        "both run on a changed value"
+    );
+}

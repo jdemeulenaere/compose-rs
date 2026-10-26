@@ -177,6 +177,10 @@ impl<N: 'static> Applier for NodeTree<N> {
         self.reference(child)
     }
 
+    fn node_mut(&mut self, node: NodeRef) -> &mut N {
+        self.get_mut(node).expect("compose-runtime: NodeTree: a live node")
+    }
+
     fn create(&mut self, node: N) -> NodeRef {
         let child = self.alloc(node, NO_PARENT);
         self.reference(child)

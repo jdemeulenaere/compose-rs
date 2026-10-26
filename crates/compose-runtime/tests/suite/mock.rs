@@ -167,6 +167,12 @@ impl Applier for ViewApplier {
         }
     }
 
+    fn node_mut(&mut self, node: NodeRef) -> &mut View {
+        // What an `Updater` changes.
+        self.changes += 1;
+        self.tree.get_mut(node).expect("a live view")
+    }
+
     fn create(&mut self, node: View) -> NodeRef {
         self.changes += 1;
         Applier::create(&mut self.tree, node)
@@ -188,89 +194,93 @@ impl Applier for ViewApplier {
 
 // ---- Emitters ------------------------------------------------------------------------------
 
-/// Emits a view named `name` and runs `update` on it (at once if new, through the applier
-/// otherwise), then `content` inside it. `reusable`: a `ReusableComposeNode`'s, kept when
-/// content is reused.
-fn view_node(
-    name: &'static str,
-    reusable: bool,
-    callbacks: Option<Rc<ViewCallbacks>>,
-    update: impl FnOnce(&mut View) -> bool,
-    content: impl FnOnce(),
-) {
-    let composer = current();
-    let key = key_of("mock::view_node") ^ key_of(name);
-    let factory = || {
-        let mut view = View::new(name);
-        view.callbacks = callbacks;
-        view
-    };
-    let node = if reusable {
-        composer.start_reusable_node(key, factory)
-    } else {
-        composer.start_node(key, factory)
-    };
-    composer.with_applier(|applier: &mut ViewApplier| {
-        let view = applier.tree.get_mut(node).expect("a live view");
-        if update(view) {
-            applier.changes += 1;
-        }
-    });
-    content();
-    composer.end_group();
+/// A view named `name`, for a node factory.
+fn view(name: &'static str) -> impl FnOnce() -> View {
+    move || View::new(name)
 }
 
-/// Sets `attribute` to `value` if it differs: returns whether it did.
-fn set_if_changed(view: &mut View, attribute: &'static str, value: &str) -> bool {
-    if view.attribute(attribute) == Some(value) {
-        return false;
-    }
-    view.set_attribute(attribute, value);
-    true
+/// Sets attribute `name` of a view to `value`, as `set(value) { attribute = it }`.
+fn set_attribute(name: &'static str) -> impl FnOnce(&mut View, &String) {
+    move |view, value| view.set_attribute(name, value.clone())
 }
 
 /// A `linear` view around `content`, as the mock's `Linear` (a `ReusableComposeNode`).
 #[composable]
 pub fn Linear(content: impl Fn() + 'static) {
-    view_node("linear", true, None, |_| false, || content());
+    ReusableComposeNodeWithContent::<ViewApplier>(view("linear"), |_| {}, || content());
 }
 
-/// A `linear` view whose lifecycle callbacks call `callbacks`, as the mock's
-/// `Linear(onReuse, onDeactivate, onRelease, content)`.
+/// A callback a mock view calls: compared by identity.
+pub type Action = Rc<dyn Fn()>;
+
+/// An action that does nothing, a fresh one each call.
+pub fn nothing() -> Action {
+    Rc::new(|| {})
+}
+
+/// A `linear` view whose lifecycle calls the latest `on_reuse`, `on_deactivate` and
+/// `on_release`, and whose update calls `on_set` when it changes, as the mock's
+/// `Linear(onReuse, onDeactivate, onRelease, onSet, content)`.
 #[composable(non_restartable)]
-pub fn LinearWithCallbacks(callbacks: Rc<ViewCallbacks>, content: impl FnOnce()) {
-    view_node("linear", true, Some(callbacks), |_| false, content);
+pub fn LinearWithCallbacks(
+    on_reuse: Action,
+    on_deactivate: Action,
+    on_release: Action,
+    on_set: Action,
+    content: impl FnOnce(),
+) {
+    let on_reuse = remember_updated_state(on_reuse);
+    let on_deactivate = remember_updated_state(on_deactivate);
+    let on_release = remember_updated_state(on_release);
+    let factory = move || {
+        let mut view = View::new("linear");
+        view.callbacks = Some(Rc::new(ViewCallbacks {
+            on_reuse: Some(Box::new(move || (on_reuse.get())())),
+            on_deactivate: Some(Box::new(move || (on_deactivate.get())())),
+            on_release: Some(Box::new(move || (on_release.get())())),
+        }));
+        view
+    };
+    ReusableComposeNodeWithContent::<ViewApplier>(
+        factory,
+        |updater| updater.set(on_set, |_, on_set| on_set()),
+        content,
+    );
 }
 
 /// A `linear` view that content being reused replaces, as the mock's `NonReusableLinear`.
 #[composable]
 pub fn NonReusableLinear(content: impl Fn() + 'static) {
-    view_node("linear", false, None, |_| false, || content());
+    ComposeNodeWithContent::<ViewApplier>(view("linear"), |_| {}, || content());
 }
 
 /// A `text` view showing `value`, as the mock's `Text` (non-restartable, a reusable node).
 #[composable(non_restartable)]
 pub fn Text(value: &str) {
-    view_node("text", true, None, |view| set_if_changed(view, "text", value), || {});
+    ReusableComposeNode::<ViewApplier>(view("text"), |updater| {
+        updater.set(value.to_string(), set_attribute("text"))
+    });
 }
 
 /// A `text` view that content being reused replaces, as the mock's `NonReusableText`.
 #[composable]
 pub fn NonReusableText(value: String) {
-    view_node("text", false, None, |view| set_if_changed(view, "text", &value), || {});
+    ComposeNode::<ViewApplier>(view("text"), |updater| updater.set(value, set_attribute("text")));
 }
 
 /// An `edit` view with `value`, as the mock's `Edit`.
 #[composable]
 pub fn Edit(value: String) {
-    view_node("edit", true, None, |view| set_if_changed(view, "value", &value), || {});
+    ReusableComposeNode::<ViewApplier>(view("edit"), |updater| {
+        updater.set(value, set_attribute("value"))
+    });
 }
 
 /// `content` in a `box` view if `selected`, as is otherwise, as the mock's `SelectBox`.
 #[composable]
 pub fn SelectBox(selected: bool, content: impl Fn() + 'static) {
     if selected {
-        view_node("box", true, None, |_| false, || content());
+        ReusableComposeNodeWithContent::<ViewApplier>(view("box"), |_| {}, || content());
     } else {
         content();
     }

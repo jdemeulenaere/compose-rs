@@ -101,6 +101,18 @@ pub trait Applier: 'static {
         panic!("compose-runtime: this applier doesn't attach nodes made apart (Applier::attach)")
     }
 
+    /// The node `node` refers to, for [`ComposeNode`]'s [`Updater`] to update, as Compose's
+    /// `Applier.current`. An applier whose nodes aren't updated that way needn't implement it.
+    ///
+    /// [`ComposeNode`]: crate::ComposeNode
+    /// [`Updater`]: crate::Updater
+    fn node_mut(&mut self, _node: NodeRef) -> &mut Self::Node {
+        panic!(
+            "compose-runtime: this applier doesn't lend its nodes (Applier::node_mut): \
+             ComposeNode's Updater can't update them"
+        )
+    }
+
     /// Called before a pass applies its first change.
     fn on_begin_changes(&mut self) {}
 
