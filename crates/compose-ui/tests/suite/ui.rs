@@ -193,7 +193,10 @@ fn repaint_boundaries_are_groups_of_their_own_operations() {
     let layer = list.groups[1];
     assert_eq!(ops(&layer), "rect 0,0 10x10 #FF0000FF\n");
     assert_eq!(layer.layer.map(|layer| layer.alpha), Some(0.5));
-    assert_eq!(list.ops[layer.layer_start..layer.start], [DrawOp::SaveLayerAlpha(0.5)]);
+    assert_eq!(
+        list.ops[layer.layer_start..layer.start],
+        [DrawOp::SaveLayerAlpha { bounds: Rect::new(0.0, 0.0, 10.0, 10.0), alpha: 0.5 }]
+    );
     assert_eq!(list.ops[layer.end..layer.layer_end], [DrawOp::Restore]);
     assert_eq!(list.groups[0].layer, None);
     assert_ne!(list.groups[0].key, list.groups[1].key);

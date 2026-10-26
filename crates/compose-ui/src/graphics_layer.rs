@@ -314,7 +314,9 @@ impl LayerProperties {
             Outline::Rectangle(rect) => DrawOp::ClipRect(rect),
             Outline::Rounded(rect, radii) => DrawOp::ClipRoundRect(rect, radii),
         });
-        let alpha = self.offscreen().then_some(DrawOp::SaveLayerAlpha(self.alpha));
+        let alpha = self
+            .offscreen()
+            .then_some(DrawOp::SaveLayerAlpha { bounds: self.bounds, alpha: self.alpha });
         [save, transform, shadow, clip, alpha].into_iter().flatten()
     }
 

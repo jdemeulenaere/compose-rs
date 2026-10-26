@@ -98,7 +98,7 @@ fn passes_draw_with_content_balances_saves_around_it() {
     let (mut depth, mut max) = (0i32, 0i32);
     for op in &list.ops {
         match op {
-            DrawOp::Save | DrawOp::SaveLayerAlpha(_) => depth += 1,
+            DrawOp::Save | DrawOp::SaveLayerAlpha { .. } => depth += 1,
             DrawOp::Restore => depth -= 1,
             _ => {}
         }

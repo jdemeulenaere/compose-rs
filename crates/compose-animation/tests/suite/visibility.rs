@@ -78,7 +78,7 @@ fn leaving_content_stays_until_its_exit_ends() {
         .ops
         .iter()
         .filter_map(|op| match op {
-            DrawOp::SaveLayerAlpha(alpha) => Some(*alpha),
+            DrawOp::SaveLayerAlpha { alpha, .. } => Some(*alpha),
             _ => None,
         })
         .collect();

@@ -39,7 +39,7 @@ fn drawings(list: &FlatDisplayList, isolated: bool) -> Vec<String> {
         }
         let floor = if isolated { open.last().map_or(0, |open| open.2) } else { 0 };
         match op {
-            DrawOp::Save | DrawOp::SaveLayerAlpha(_) => stack.push(at),
+            DrawOp::Save | DrawOp::SaveLayerAlpha { .. } => stack.push(at),
             DrawOp::Restore => {
                 if stack.len() > floor {
                     at = stack.pop().unwrap();
@@ -73,11 +73,11 @@ pub(crate) fn check_groups(list: &FlatDisplayList) {
                             | DrawOp::DrawShadow { .. }
                             | DrawOp::ClipRect(_)
                             | DrawOp::ClipRoundRect(..)
-                            | DrawOp::SaveLayerAlpha(_)
+                            | DrawOp::SaveLayerAlpha { .. }
                     ),
                     "{group:?} applies its layer with {op:?}\n{dump}"
                 );
-                matches!(op, DrawOp::Save | DrawOp::SaveLayerAlpha(_))
+                matches!(op, DrawOp::Save | DrawOp::SaveLayerAlpha { .. })
             })
             .count();
         assert!(after.iter().all(|op| *op == DrawOp::Restore), "{group:?}\n{dump}");
@@ -88,7 +88,7 @@ pub(crate) fn check_groups(list: &FlatDisplayList) {
         let (mut depth, mut x, mut y) = (0i32, 0.0f32, 0.0f32);
         for op in &list.ops[group.start..group.end] {
             match op {
-                DrawOp::Save | DrawOp::SaveLayerAlpha(_) => depth += 1,
+                DrawOp::Save | DrawOp::SaveLayerAlpha { .. } => depth += 1,
                 DrawOp::Restore => depth -= 1,
                 DrawOp::Translate(by) => {
                     x += by.x;

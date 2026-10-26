@@ -17,7 +17,7 @@ fn alphas(ui: &mut ComposeTestRule) -> Vec<f32> {
         .ops
         .iter()
         .filter_map(|op| match op {
-            DrawOp::SaveLayerAlpha(alpha) => Some(*alpha),
+            DrawOp::SaveLayerAlpha { alpha, .. } => Some(*alpha),
             _ => None,
         })
         .collect()

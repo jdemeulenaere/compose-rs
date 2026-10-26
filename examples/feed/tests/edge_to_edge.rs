@@ -41,33 +41,71 @@ fn texts(ui: &mut ComposeTestRule, shift: f32) -> Vec<(String, [f32; 4])> {
     texts
 }
 
+/// The bounds of the top app bar holding the text `title`: the outermost of its ancestors
+/// shorter than the window (the scaffold's top bar slot).
+fn top_bar(ui: &mut ComposeTestRule, title: &str) -> [f32; 4] {
+    let mut node = ui.on_node_with_text(title).node_id();
+    ui.host().with_tree(|tree| {
+        while let Some(parent) = tree.parent_of(node)
+            && tree.bounds_in_root(parent).height() < HEIGHT as f32
+        {
+            node = parent;
+        }
+        let bounds = tree.bounds_in_root(node);
+        [bounds.left, bounds.top, bounds.right, bounds.bottom]
+    })
+}
+
+/// The bounds of the screen's vertically scrolling content (a lazy list, a grid, a scrolling
+/// column), if it has one: inside its scaffold's padding.
+fn scrolling_content(ui: &mut ComposeTestRule) -> Option<[f32; 4]> {
+    let matcher =
+        Matcher::new("scrolls vertically", |config| config.vertical_scroll_axis_range.is_some());
+    if ui.count_nodes(&matcher) == 0 {
+        return None;
+    }
+    let bounds = ui.on_all_nodes(matcher, 0).fetch_semantics_node().bounds;
+    Some([bounds.left, bounds.top, bounds.right, bounds.bottom])
+}
+
 /// Each screen, edge to edge in the whole window with the bars' insets reported, shows what it
 /// showed inside the bars (the view bench-rs had before D647, `fitsSystemWindows`), where it
-/// showed it, below the status bar: its top app bar's content clears the status bar (its
-/// container reaching under it) and the content's padding clears the navigation bar.
+/// showed it: its top app bar starts at the window's top, under the status bar, its content
+/// clear of it, and the scaffold's content ends above the navigation bar.
 #[test]
 fn the_screens_keep_their_content_clear_of_the_system_bars() {
-    let screens: [(&str, fn()); 8] = [
-        ("feed", compose_rs_feed::Feed),
-        ("feed_animated", compose_rs_feed::FeedAnimated),
-        ("big", compose_rs_feed::BigScreen),
-        ("stress", compose_rs_feed::stress::StressScroll),
-        ("stress_animation", compose_rs_feed::stress::StressAnimation),
-        ("navigation", compose_rs_feed::navigation::NavigationApp),
-        ("grid", compose_rs_feed::grid::GridScreen),
-        ("resize", compose_rs_feed::resize::ResizeScreen),
+    let screens: [(&str, &str, fn()); 8] = [
+        ("feed", "Feed", compose_rs_feed::Feed),
+        ("feed_animated", "Feed", compose_rs_feed::FeedAnimated),
+        ("big", "Big screen", compose_rs_feed::BigScreen),
+        ("stress", "Stress", compose_rs_feed::stress::StressScroll),
+        ("stress_animation", "Stress animation", compose_rs_feed::stress::StressAnimation),
+        ("navigation", "Navigation", compose_rs_feed::navigation::NavigationApp),
+        ("grid", "Grid", compose_rs_feed::grid::GridScreen),
+        ("resize", "Resize", compose_rs_feed::resize::ResizeScreen),
     ];
     let insets = PlatformWindowInsets {
         status_bars: Insets::new(0, STATUS_BAR, 0, 0),
         navigation_bars: Insets::new(0, 0, 0, NAVIGATION_BAR),
         ..PlatformWindowInsets::default()
     };
-    for (name, content) in screens {
+    // A small top app bar: 64 dp (144 px) below the status bar.
+    let bar = (STATUS_BAR + 144) as f32;
+    let mut scrolling = 0;
+    for (name, title, content) in screens {
         let inside = IntSize::new(WIDTH, HEIGHT - STATUS_BAR - NAVIGATION_BAR);
         let expected = texts(&mut screen(content, inside, PlatformWindowInsets::default()), 0.0);
         let mut ui = screen(content, IntSize::new(WIDTH, HEIGHT), insets);
         let shown = texts(&mut ui, STATUS_BAR as f32);
         assert!(!expected.is_empty(), "{name} shows no text");
         assert_eq!(shown, expected, "{name}: the texts moved");
+        assert_eq!(top_bar(&mut ui, title), [0.0, 0.0, WIDTH as f32, bar], "{name}: its top bar");
+        if let Some(content) = scrolling_content(&mut ui) {
+            let bottom = (HEIGHT - NAVIGATION_BAR) as f32;
+            assert_eq!(content, [0.0, bar, WIDTH as f32, bottom], "{name}: its content");
+            scrolling += 1;
+        }
     }
+    // The feeds, the big screen, the stress list and the grid.
+    assert_eq!(scrolling, 5);
 }

@@ -410,7 +410,11 @@ fn a_lifted_layer_is_its_layers_entry_not_operations() {
     );
     assert_eq!(groups(&items), [(group.key, group.version)]);
     // In the display list, the layer's operations are there; in the bytes, nowhere.
-    assert!(list.ops.iter().any(|op| matches!(op, DrawOp::SaveLayerAlpha(_))), "{}", list.dump());
+    assert!(
+        list.ops.iter().any(|op| matches!(op, DrawOp::SaveLayerAlpha { .. })),
+        "{}",
+        list.dump()
+    );
     let operations = all_operations(&items);
     for lifted in [tag::SAVE, tag::TRANSFORM, tag::CLIP_RECT, tag::SAVE_LAYER_ALPHA, tag::RESTORE] {
         assert!(!operations.contains(&lifted), "{lifted} written: {items:?}");
@@ -687,7 +691,7 @@ fn a_layer_around_a_group_is_not_folded_into_it() {
     let mut content = DisplayList::default();
     content.push(DrawOp::DrawRect(Rect::new(0.0, 0.0, 4.0, 4.0), Paint::fill(Color::BLACK)));
     let mut list = DisplayList::default();
-    list.push(DrawOp::SaveLayerAlpha(0.5));
+    list.push(DrawOp::SaveLayerAlpha { bounds: Rect::new(0.0, 0.0, 10.0, 10.0), alpha: 0.5 });
     list.boundaries.push(Boundary { at: 1, key: 1 });
     list.push(DrawOp::Restore);
     list.groups.push(group(1, 1, None, content));

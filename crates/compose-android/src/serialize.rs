@@ -604,7 +604,7 @@ pub fn operand_bytes(bytes: &[u8], at: usize) -> usize {
         tag::DRAW_RECT | tag::DRAW_LINE => painted(16),
         tag::DRAW_ROUND_RECT => painted(32),
         tag::DRAW_PARAGRAPH => 12,
-        tag::SAVE_LAYER_ALPHA => 4,
+        tag::SAVE_LAYER_ALPHA => 16 + 4,
         tag::TRANSFORM => 28,
         tag::DRAW_IMAGE => 4 + 32 + 4,
         tag::DRAW_SHADOW => 1 + 32 + 4 + 12 + 4 + 8,
@@ -1166,7 +1166,7 @@ impl<'a> Serializer<'a> {
             }
             // A layer holding one drawing and no group: a folded alpha inside a group's record
             // would change it without changing its version.
-            if let DrawOp::SaveLayerAlpha(alpha) = ops[index]
+            if let DrawOp::SaveLayerAlpha { alpha, .. } = ops[index]
                 && self.cache.optimizations.contains(Optimization::SINGLE_DRAWING_FADE)
                 && let Some(end) = foldable_layer(ops, index)
                 && !self.draws_before(&boundaries[boundary..], end, child)
@@ -1348,8 +1348,9 @@ fn write_op(
             out.u32(handle.0 as u32);
             out.offset(*offset);
         }
-        DrawOp::SaveLayerAlpha(alpha) => {
+        DrawOp::SaveLayerAlpha { bounds, alpha } => {
             out.u8(tag::SAVE_LAYER_ALPHA);
+            out.rect(bounds);
             out.f32(*alpha);
         }
         DrawOp::Transform { pivot, scale, rotation, translation } => {
@@ -1451,10 +1452,36 @@ mod tests {
         assert_eq!(read_u32(&out.bytes, 17), 0xFF00_0000);
     }
 
+    /// A layer carries its bounds, as Compose's `Canvas.saveLayer(bounds, paint)`: the replayer
+    /// bounds the offscreen buffer by them, not by the recording canvas's size when it was
+    /// recorded, which a recording kept as its node grows outlives (D646).
+    #[test]
+    fn a_layer_carries_its_bounds() {
+        let mut list = DisplayList::default();
+        let bounds = Rect::new(1.0, 2.0, 30.0, 40.0);
+        list.push(DrawOp::SaveLayerAlpha { bounds, alpha: 0.5 });
+        list.push(DrawOp::DrawRect(Rect::new(0.0, 0.0, 4.0, 4.0), Paint::fill(Color::BLACK)));
+        list.push(DrawOp::DrawRect(Rect::new(1.0, 1.0, 2.0, 2.0), Paint::fill(Color::WHITE)));
+        list.push(DrawOp::Restore);
+        let (mut resources, mut out) = (Resources::default(), Writer::default());
+        write_display_list(
+            &list,
+            &mut resources,
+            &mut GroupCache::new(Optimizations::NONE),
+            &mut out,
+        );
+        assert_eq!(out.bytes[0], tag::SAVE_LAYER_ALPHA);
+        let float = |at: usize| f32::from_le_bytes(out.bytes[at..at + 4].try_into().unwrap());
+        assert_eq!([float(1), float(5), float(9), float(13)], [1.0, 2.0, 30.0, 40.0]);
+        assert_eq!(float(17), 0.5);
+        assert_eq!(operand_bytes(&out.bytes, 0), 20);
+        assert_eq!(out.bytes[21], tag::DRAW_RECT);
+    }
+
     #[test]
     fn a_layer_with_one_drawing_fades_its_paint_instead() {
         let mut list = DisplayList::default();
-        list.push(DrawOp::SaveLayerAlpha(0.5));
+        list.push(DrawOp::SaveLayerAlpha { bounds: Rect::new(0.0, 0.0, 10.0, 10.0), alpha: 0.5 });
         list.push(DrawOp::ClipRect(Rect::new(0.0, 0.0, 4.0, 4.0)));
         list.push(DrawOp::DrawRect(Rect::new(0.0, 0.0, 4.0, 4.0), Paint::fill(Color::BLACK)));
         list.push(DrawOp::Restore);
@@ -1622,7 +1649,8 @@ mod tests {
     #[test]
     fn a_group_can_start_with_a_folded_layer() {
         let mut content = DisplayList::default();
-        content.push(DrawOp::SaveLayerAlpha(0.5));
+        content
+            .push(DrawOp::SaveLayerAlpha { bounds: Rect::new(0.0, 0.0, 10.0, 10.0), alpha: 0.5 });
         content.push(DrawOp::DrawRect(Rect::new(0.0, 0.0, 4.0, 4.0), Paint::fill(Color::BLACK)));
         content.push(DrawOp::Restore);
         let mut list = DisplayList::default();
@@ -2004,7 +2032,7 @@ mod tests {
     #[test]
     fn a_folded_layer_fades_a_shaders_alpha() {
         let mut list = DisplayList::default();
-        list.push(DrawOp::SaveLayerAlpha(0.5));
+        list.push(DrawOp::SaveLayerAlpha { bounds: Rect::new(0.0, 0.0, 10.0, 10.0), alpha: 0.5 });
         gradient_rect(
             &mut list,
             Shader::SweepGradient {

@@ -196,8 +196,9 @@ impl Walk<'_> {
                     // An offscreen layer inside a modulated one is faded as one composite,
                     // its content drawn at full alpha in it (HWUI multiplies a child node's
                     // layer alpha, not what's inside its layer).
-                    DrawOp::SaveLayerAlpha(alpha) => {
-                        self.canvas.save_layer_alpha_f(None, (alpha * self.alpha).clamp(0.0, 1.0));
+                    DrawOp::SaveLayerAlpha { bounds, alpha } => {
+                        let alpha = (alpha * self.alpha).clamp(0.0, 1.0);
+                        self.canvas.save_layer_alpha_f(rect(&bounds), alpha);
                         self.alpha = 1.0;
                     }
                     op => draw_op(self.canvas, &op, &[], self.measurer, start, self.alpha),
@@ -361,8 +362,8 @@ fn draw_op(
                 flags,
             );
         }
-        DrawOp::SaveLayerAlpha(alpha) => {
-            canvas.save_layer_alpha_f(None, alpha.clamp(0.0, 1.0));
+        DrawOp::SaveLayerAlpha { bounds, alpha } => {
+            canvas.save_layer_alpha_f(rect(bounds), alpha.clamp(0.0, 1.0));
         }
         DrawOp::Transform { pivot, scale, rotation, translation } => {
             canvas.translate((pivot.x + translation.x, pivot.y + translation.y));

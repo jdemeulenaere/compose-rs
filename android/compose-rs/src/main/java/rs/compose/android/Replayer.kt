@@ -499,8 +499,12 @@ internal class Replayer(private val text: TextMeasurer) {
                     text.draw(canvas, hardware, handle, buffer.float(), buffer.float())
                 }
                 SAVE_LAYER_ALPHA -> {
+                    // Bounded by its own bounds, as Compose's `saveLayer(bounds, paint)`: without
+                    // them, by the recording's size when recorded, which a recording kept as its
+                    // node grows outlives (D646).
+                    buffer.readRect(rect)
                     val alpha = (buffer.float().coerceIn(0f, 1f) * 255f + 0.5f).toInt()
-                    canvas.saveLayerAlpha(null, alpha)
+                    canvas.saveLayerAlpha(rect, alpha)
                 }
                 TRANSFORM -> {
                     val pivotX = buffer.float()

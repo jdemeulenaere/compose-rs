@@ -22,9 +22,14 @@ pub enum DrawOp {
     DrawLine(Offset, Offset, Paint),
     /// A paragraph laid out by the text measurer, drawn by handle at an offset.
     DrawParagraph(ParagraphHandle, Offset),
-    /// Saves, then draws what follows into a layer composited with `alpha` at the matching
-    /// restore, as a graphics layer's alpha.
-    SaveLayerAlpha(f32),
+    /// Saves, then draws what follows into a layer bounded by `bounds`, composited with `alpha`
+    /// at the matching restore, as a graphics layer's alpha. Bounded as Compose's
+    /// `Canvas.saveLayer(bounds, paint)`: a recording kept as its node grows bounds it by
+    /// them, not by its size when it was recorded (D646).
+    SaveLayerAlpha {
+        bounds: Rect,
+        alpha: f32,
+    },
     /// Transforms what follows (until the matching restore of an earlier save): scaled by
     /// `scale` and rotated by `rotation` degrees (clockwise) around `pivot`, then moved by
     /// `translation`, as a graphics layer.
@@ -305,7 +310,7 @@ impl FlatDisplayList {
                 DrawOp::DrawParagraph(handle, offset) => {
                     writeln!(out, "paragraph {} at {} {}", handle.0, offset.x, offset.y)
                 }
-                DrawOp::SaveLayerAlpha(alpha) => writeln!(out, "save layer alpha {alpha}"),
+                DrawOp::SaveLayerAlpha { alpha, .. } => writeln!(out, "save layer alpha {alpha}"),
                 DrawOp::DrawImage { image, src, dst, alpha } => writeln!(
                     out,
                     "image {}x{} {} into {} alpha {alpha}",
@@ -356,7 +361,7 @@ impl FlatDisplayList {
                     offset.y
                 ),
             };
-            if matches!(op, DrawOp::Save | DrawOp::SaveLayerAlpha(_)) {
+            if matches!(op, DrawOp::Save | DrawOp::SaveLayerAlpha { .. }) {
                 depth += 1;
             }
         }
@@ -374,7 +379,7 @@ pub fn single_drawing(ops: &[DrawOp]) -> Option<usize> {
     let mut drawings = 0;
     for (index, op) in ops.iter().enumerate() {
         match op {
-            DrawOp::SaveLayerAlpha(_) => return None,
+            DrawOp::SaveLayerAlpha { .. } => return None,
             DrawOp::Save => depth += 1,
             DrawOp::Restore if depth == 0 => return (drawings == 1).then_some(index),
             DrawOp::Restore => depth -= 1,

@@ -270,9 +270,12 @@ impl DrawScope<'_> {
         self.list.push(DrawOp::DrawPath { path: path.path_data(), offset, scale, paint });
     }
 
-    /// Saves, and draws what follows into a layer composited with `alpha` at the next restore.
-    pub fn save_layer_alpha(&mut self, alpha: f32) {
-        self.list.push(DrawOp::SaveLayerAlpha(alpha));
+    /// Saves, and draws what follows into a layer bounded by `bounds` (in the node's
+    /// coordinates), composited with `alpha` at the next restore, as Compose's
+    /// `Canvas.saveLayer(bounds, paint)`.
+    pub fn save_layer_alpha(&mut self, bounds: Rect, alpha: f32) {
+        let bounds = self.to_list(bounds);
+        self.list.push(DrawOp::SaveLayerAlpha { bounds, alpha });
     }
 
     /// Transforms what follows until the restore of a save made before: scaled and rotated

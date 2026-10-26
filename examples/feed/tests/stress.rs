@@ -313,15 +313,18 @@ fn group_records(bytes: &[u8]) -> Vec<(u64, u64, Vec<u8>)> {
     records
 }
 
-/// At parity, the expanded card lays its text out in four lines and draws it whole within its
-/// grown clip once its size animation ends, as Compose's. Its column's record keeps the bytes
-/// and the version of the frame that expanded it, when the column was still one line high
-/// (D323: its content didn't change, only its size), so Android keeps the recording made then.
-/// A paragraph's drawing mustn't depend on the size of the recording it's drawn into: before
-/// D646 the Pixel 8 Pro's card kept the two lines that fitted it then (`Layout.draw` draws
-/// only the lines within the canvas's clip bounds).
+/// The Rust side of the expanded card, and the condition D646 is about. At parity the card
+/// lays its text out in four lines and draws it whole within its grown clip once its size
+/// animation ends, as Compose's; and its column's record keeps the bytes and the version of the
+/// frame that expanded it, when the column was still one line high (D323: only its size
+/// changed), so Android keeps the recording made then. Drawn into that recording, a paragraph
+/// must not depend on the recording's size: before D646 the Pixel 8 Pro's card showed the two
+/// lines that fitted it then (`Layout.draw` draws only the lines within the canvas's clip
+/// bounds). This test passes without D646's fix, which is Kotlin's (`TextAndroidCanvas`):
+/// android/compose-rs has no Android test setup, so the fix has no automated test; it was
+/// checked on the device with screenshots.
 #[test]
-fn the_expanded_card_lays_out_and_draws_its_four_lines() {
+fn the_expanded_cards_text_is_whole_and_its_record_kept_as_it_grows() {
     use compose::ui::platform::DrawOp;
     use compose::ui::platform::Optimizations;
     use compose_android::serialize::{GroupCache, Resources, Writer, write_display_list};
