@@ -3,6 +3,7 @@
 
 extern crate compose_runtime as compose;
 
+mod animated_content;
 mod app_bars;
 mod buttons;
 mod components;

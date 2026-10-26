@@ -191,6 +191,31 @@ pub fn AnimatedContent<T: Clone + PartialEq + 'static>(
     );
 }
 
+impl<S: Clone + PartialEq + 'static> Transition<S> {
+    /// `AnimatedContent` of this transition's states, as Compose's
+    /// `Transition.AnimatedContent(modifier, transitionSpec, contentAlignment, content)`: the
+    /// transition's target state's content enters as the others exit, on the transition's clock
+    /// (`AnimatedContent(target_state, …)` is this of `update_transition(target_state)`). A
+    /// method, so every parameter is given: `default_content_transform` for Compose's default
+    /// spec, `Alignment::TOP_START` its default alignment.
+    #[allow(non_snake_case)]
+    pub fn AnimatedContent(
+        &self,
+        modifier: Modifier,
+        transition_spec: impl Fn(S, S) -> ContentTransform + 'static,
+        content_alignment: Alignment,
+        content: impl Fn(S) + 'static,
+    ) {
+        AnimatedContentOf(
+            self.clone(),
+            modifier,
+            compose_runtime::callback(transition_spec),
+            content_alignment,
+            compose_runtime::callback(content),
+        );
+    }
+}
+
 type Spec<T> = compose_runtime::Callback<dyn Fn(T, T) -> ContentTransform>;
 
 /// `AnimatedContent` of a transition, as Compose's `Transition.AnimatedContentImpl`.
@@ -357,7 +382,11 @@ fn ContentOfState<T: Clone + PartialEq + 'static>(
                     shown.states.retain(|(_, kept)| *kept != left_state);
                     drop(shown);
                     left_root.target_sizes.borrow_mut().retain(|(kept, _)| *kept != left_state);
-                    removed.set_in_composition(removed.get() + 1);
+                    // Freed already when the transition changed (the stack's state is keyed by
+                    // it): nothing to compose again.
+                    if let Some(count) = removed.try_get() {
+                        removed.set_in_composition(count + 1);
+                    }
                 })
             });
             content(state);

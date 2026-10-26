@@ -128,8 +128,8 @@ The "covered" notes cite compose-rs test files under `crates/compose-animation/t
 | 29 | `compose/animation/animation-core/src/androidHostTest/kotlin/androidx/compose/animation/core/EasingTest.android.kt` | 2 | cubic solver near 0/1 and with overshooting curves | ported | `easing.rs` |
 | 30 | `compose/animation/animation-core/src/androidHostTest/kotlin/androidx/compose/animation/core/SpringEstimationTest.kt` | 1 | spring duration estimation against simulation over a grid of mass/stiffness | ported | `spring_estimation.rs`: every fifth mass and spring constant of Compose's grid (2.9 million of its 70 million cases) |
 | 31 | `compose/animation/animation/src/androidDeviceTest/kotlin/androidx/compose/animation/AnimateBoundsTest.kt` | 8 | `Modifier.animateBounds`: position, size, bounds, movable content, lazy layouts, scrolling | `feature:animate-bounds` | needs ui lookahead |
-| 32 | `compose/animation/animation/src/androidDeviceTest/kotlin/androidx/compose/animation/AnimatedContentTest.kt` | 17 | `AnimatedContent`: SizeTransform, alignment, slideInto/OutOfContainer, contentKey, subcomposition, interruption, KeepUntilTransitionsFinished, lookahead, cleanup | partial | ~6 portable now (alignment, interruption, right transition on interruption, subcomposition, cleanup, size continuity); compose-rs covers basics in `content.rs`, `review_round8.rs`, `review_round10.rs`, `review_round11.rs`; the rest need animated-content-scope (SizeTransform spec, `using`, slideIntoContainer, contentKey, KeepUntilTransitionsFinished, zIndex), transition-state (`rememberTransition`), ui lookahead (2) |
-| 33 | `compose/animation/animation/src/androidDeviceTest/kotlin/androidx/compose/animation/AnimatedVisibilityTest.kt` | 17 | `AnimatedVisibility`: expand/shrink, slide, fade, scale with exact values, None, Transition overload, seeking, lookahead, veil, settle time | partial | 9 ported (`animated_visibility.rs`: expand and shrink, slide, a content size change, fade, scale, the scale spring's threshold, `None`/`None`, an interrupted exit, the settle time; with a test of the column and row defaults); the `Transition` overload (1) needs animated-visibility-scope; seeking (1) seekable-transition; lookahead (1); the veil (5, `verifyDirectionChangeResetsAccumulatedTransitions` among them) veil |
+| 32 | `compose/animation/animation/src/androidDeviceTest/kotlin/androidx/compose/animation/AnimatedContentTest.kt` | 17 | `AnimatedContent`: SizeTransform, alignment, slideInto/OutOfContainer, contentKey, subcomposition, interruption, KeepUntilTransitionsFinished, lookahead, cleanup | partial | 6 ported (`animated_content.rs`: the size transform frame by frame, to and from an empty content, the alignment, an exit finished then interrupted, a transition recreated; `compose-material3/tests/suite/animated_content.rs`: a scaffold with tabs); `slideIntoContainer`/`slideOutOfContainer`, `contentKey` and `KeepUntilTransitionsFinished` (6: `SlideInAndOutOfContainer`, `WithContentKey`, `WithKeysTest`, `testExitHold`, `testExitHoldDefersUntilAllFinished`, `testRightEnterExitTransitionIsChosenDuringInterruption`) need animated-content-scope, `testAnimatedContentCleanup` too (`contentKey`, an internal map); lookahead and `animateBounds` (3); `AnimatedContentWithInterruption` asserts in layout callbacks that the content sliding out stays at the container's origin: to check against Compose before porting |
+| 33 | `compose/animation/animation/src/androidDeviceTest/kotlin/androidx/compose/animation/AnimatedVisibilityTest.kt` | 17 | `AnimatedVisibility`: expand/shrink, slide, fade, scale with exact values, None, Transition overload, seeking, lookahead, veil, settle time | partial | 10 ported (`animated_visibility.rs`: expand and shrink, slide, a content size change, fade, scale, the scale spring's threshold, `None`/`None`, the `Transition` overload, an interrupted exit, the settle time; with a test of the column and row defaults); seeking (1) seekable-transition; lookahead (1); the veil (5, `verifyDirectionChangeResetsAccumulatedTransitions` among them) veil |
 | 34 | `compose/animation/animation/src/androidDeviceTest/kotlin/androidx/compose/animation/AnimationModifierTest.kt` | 6 | `animateContentSize`: frame-by-frame size, alignment LTR/RTL, lookahead, inspector, re-attach | partial | 3 ported (`content_size.rs`: the frame-by-frame size with its finished listener, alignment left to right and right to left); `properFinalStateAfterReAttach` needs movable content (compose-runtime has no `movableContentOf`); lookahead (1) needs lookahead; inspector n/a |
 | 35 | `compose/animation/animation/src/androidDeviceTest/kotlin/androidx/compose/animation/CapturedAnimatedVisibilityTest.kt` | 9 | `CapturedAnimatedVisibility`: content disposed at once, exit animates a captured layer, MutableTransitionState, interruptions, lookahead | `feature:captured-animated-visibility` | needs ui graphics-layer recording |
 | 36 | `compose/animation/animation/src/androidDeviceTest/kotlin/androidx/compose/animation/CrossfadeTest.kt` | 6 | `Crossfade`: shows content, disposes old content, custom spec, null state, rememberSaveable per screen, contentKey | partial | 5 ported (`crossfade_ported.rs`); `crossfadeTest_contentKey` needs crossfade-extras (`Transition::Crossfade`) |
@@ -198,7 +198,7 @@ The "covered" notes cite compose-rs test files under `crates/compose-animation/t
 What compose-rs lacks or only partly has, from each `api/current.txt`, non-deprecated, experimental included. Each item names its feature. Rust-shaped equivalents count as present:
 
 - a `TwoWayConverter` is the `Animate` trait;
-- an `AnimationVector` is `[f32; 4]`;
+- `AnimationVector1D` to `AnimationVector4D` are one `AnimationVector` of one to four components;
 - a cancellation is `AnimationEndReason::Interrupted`;
 - default arguments are `#[default]` parameters or `_with` forms.
 
@@ -213,31 +213,29 @@ Deprecated and left out:
 
 **animation-core:**
 
-- `Animatable`: `new`, `value`, `as_state`, `target_value`, `velocity`, `is_running`, `animate_to`, `animate_to_with_velocity`, `snap_to`, `stop`.
-- `AnimationResult`, with `end_value` in place of `endState`, and `AnimationEndReason::Finished`.
-- `animate_{value,float,dp,color,int,offset,int_offset,size}_as_state`, with `label` and `finished_listener`.
+- `Animatable`: `new`, `new_with(initial, visibility_threshold, label)`, `value`, `as_state`, `target_value`, `velocity`, `velocity_vector`, `is_running`, `label`, `lower_bound`/`upper_bound`/`update_bounds`, `animate_to`, `animate_to_with_velocity`, `animate_decay`, `snap_to`, `stop`.
+- `AnimationResult`, with `end_value` in place of `endState`, and `AnimationEndReason` (`Finished`, `BoundReached`, and `Interrupted` for a cancellation).
+- `animate_{value,float,dp,color,int,offset,int_offset,size,int_size,rect}_as_state`, with `label`, `finished_listener` and (on `animate_value_as_state`) `visibility_threshold`.
 - The specs and constants:
-  - `tween` (`.delay`, `.easing`), `spring`/`spring_with`, `snap(delay)`, `repeatable`, `infinite_repeatable`, `RepeatMode`;
-  - `keyframes(duration, |f| f.at(t, v).with(easing))` with `delay_millis`;
-  - `Spring::*` constants, `DEFAULT_DURATION_MILLIS`.
-- `Easing::{Linear, CubicBezier, Function}`, with the four standard curves and `EASE`, `EASE_IN`, `EASE_OUT`, `EASE_IN_OUT`.
+  - `tween` (`.delay`, `.easing`), `spring`/`spring_with` (`.visibility_threshold`), `snap(delay)`, `repeatable`/`infinite_repeatable` (their `_with` forms take a `StartOffset`), `RepeatMode`, `InterruptionAwareAnimationSpec`;
+  - `keyframes(|f| { f.duration_millis = …; f.delay_millis = …; f.at(t, v).using(easing); f.at_fraction(fraction, v); })`;
+  - `Spring::*` constants, `DEFAULT_DURATION_MILLIS`, `AnimationConstants`;
+  - every spec a `VectorizedAnimationSpec`; `FloatAnimationSpec` (`FloatTweenSpec`, `FloatSpringSpec`); the decays (`exponential_decay`, `FloatExponentialDecaySpec`, `generate_decay_animation_spec`).
+- `Animation`, `TargetBasedAnimation`, `DecayAnimation`, `AnimationVector`.
+- `Easing::{Linear, CubicBezier, Function}`, with the standard curves, `EASE`, `EASE_IN`, `EASE_OUT`, `EASE_IN_OUT` and Compose's thirty `EasingFunctions` curves.
 - `remember_infinite_transition` with `animate_value/float/color`.
-- `update_transition` with `current_state`, `target_state`, `is_running`, `animate_value/float/dp/color/offset`. The generic `animate_value` also covers `i32`, `IntOffset`, `Size`.
-- `Animate` for `f32`, `i32`, `Dp`, `Offset`, `IntOffset`, `Size`, `Color` (Oklab).
+- `update_transition` and `remember_transition(&MutableTransitionState)`, with `current_state`, `target_state`, `segment`, `is_running`, `label`, `total_duration_nanos`, `create_child_transition` and `animate_value/float/dp/color/offset/size/int/int_offset/int_size/rect`.
+- `DeferredTargetAnimation`.
+- `Animate` for `f32`, `i32`, `Dp`, `DpOffset`, `Offset`, `IntOffset`, `Size`, `IntSize`, `Rect`, `Color` (Oklab) and `AnimationVector`; the `VisibilityThreshold` constants.
 
 **animation:**
 
-- `AnimatedVisibility(visible, modifier, enter, exit, label, content)`.
-- `EnterTransition`/`ExitTransition` with `+` and `NONE`.
-- The transitions:
-  - `fade_in`/`fade_in_with(spec, alpha)` and the `fade_out` pair;
-  - `scale_in(scale)`/`scale_in_with(spec, scale)` and the `scale_out` pair;
-  - `expand_{in,horizontally,vertically}()` and `shrink_{out,horizontally,vertically}()`, defaults only;
-  - `slide_in((fx, fy))`/`slide_out` (fractions of the size), `slide_in_vertically()`/`slide_out_vertically()`.
-- `AnimatedContent(target_state, modifier, transition_spec(initial, target), content_alignment, label, content)`, with `ContentTransform` (`together_with`, `without_size_transform`) and `default_content_transform()`.
+- `AnimatedVisibility(visible, modifier, enter, exit, label, content)`, `visible` a `bool`, a `MutableTransitionState<bool>`, or either with the `ColumnScope` or `RowScope` it's in; `transition.AnimatedVisibility(visible, modifier, enter, exit, content)`; the content gets an `AnimatedVisibilityScope`.
+- `EnterTransition`/`ExitTransition` with `+`, `NONE` and `config()` (`EnterExitTransitionConfig`, `FadeConfig`, `SlideConfig`, `ChangeSizeConfig`, `ScaleConfig`).
+- The transitions, with Compose's parameters in their `_with` forms: `fade_in`/`fade_out`, `scale_in`/`scale_out`, `expand_{in,horizontally,vertically}`/`shrink_{out,horizontally,vertically}`, `slide_in`/`slide_out` and their horizontal and vertical forms.
+- `AnimatedContent(target_state, modifier, transition_spec(initial, target), content_alignment, label, content)` and `transition.AnimatedContent(modifier, transition_spec, content_alignment, content)`, with `ContentTransform` (`together_with`, `using`, `target_content_z_index`), `size_transform(clip, spec)` and `default_content_transform()`.
 - `Crossfade(target_state, modifier, animation_spec, label, content)`.
 - `Modifier.animate_content_size()`/`animate_content_size_with(spec, alignment, finished_listener)`.
-- `DeferredTargetAnimation`.
 
 **navigation:** see [Navigation Compose](#navigation-compose-androidxnavigationcompose-and-navcontroller).
 
@@ -245,30 +243,30 @@ Deprecated and left out:
 
 | API | compose-rs | Feature |
 |---|---|---|
-| `Animatable(initialValue, typeConverter, visibilityThreshold, label)`; `Animatable(Float, visibilityThreshold)` | no threshold or label parameter: springs without a threshold use `Animate::visibility_threshold()` (see notes) | animatable-bounds |
-| `Animatable.updateBounds`, `lowerBound`, `upperBound`, `AnimationEndReason.BoundReached` | missing | animatable-bounds |
-| `Animatable.label`, `typeConverter`, `velocityVector` | missing (trivial) | animatable-bounds |
+| `Animatable(initialValue, typeConverter, visibilityThreshold, label)`; `Animatable(Float, visibilityThreshold)` | present: `Animatable::new_with(initial, visibility_threshold, label)`, the converter being the type's `Animate` (D800) | animatable-bounds |
+| `Animatable.updateBounds`, `lowerBound`, `upperBound`, `AnimationEndReason.BoundReached` | present (D800) | animatable-bounds |
+| `Animatable.label`, `typeConverter`, `velocityVector` | present (`label`, `velocity_vector`; the converter is the type's `Animate`) | animatable-bounds |
 | `Animatable.animateTo(…, block)`: the per-frame callback on `Animatable` | missing | suspend-animate |
-| `Animatable.animateDecay(initialVelocity, DecayAnimationSpec, block)` | missing | decay-animation |
+| `Animatable.animateDecay(initialVelocity, DecayAnimationSpec, block)` | present without the block: `animate_decay(velocity, &spec)` (D807) | decay-animation |
 | `AnimationResult.endState: AnimationState` | `end_value` only | suspend-animate |
-| `animateIntSizeAsState`, `animateRectAsState`; `animateValueAsState(…, visibilityThreshold, …)` | missing; `animate_value_as_state` has no threshold parameter | more-converters |
-| `Animation` interface (`durationNanos`, `getValueFromNanos`, `getVelocityVectorFromNanos`, `isFinishedFromNanos`, `isInfinite`, `targetValue`, `typeConverter`); `TargetBasedAnimation`; `Animation.getVelocityFromNanos` | missing (the math is crate-private `AnimationSpec::frame`/`value_at`) | animation-objects |
-| `AnimationSpec.vectorize`, `FiniteAnimationSpec`, `DurationBasedAnimationSpec` (an enum of tween and keyframes in compose-rs, without snap) | partial: `AnimationSpec` enum; no vectorized form | animation-objects, spec-gaps |
-| `VectorizedAnimationSpec`, `VectorizedFiniteAnimationSpec`, `VectorizedDurationBasedAnimationSpec`, `VectorizedTweenSpec`, `VectorizedSpringSpec`, `VectorizedSnapSpec`, `VectorizedKeyframesSpec`, `VectorizedRepeatableSpec`, `VectorizedInfiniteRepeatableSpec`, `VectorizedFloatAnimationSpec` (`getDurationNanos`, `getValueFromNanos`, `getVelocityFromNanos`, `getEndVelocity`, `isInfinite`) | missing | animation-objects |
-| `FloatAnimationSpec`, `FloatTweenSpec`, `FloatSpringSpec` | missing | animation-objects |
-| `AnimationVector`, `AnimationVector1D..4D`, `AnimationVector(…)` factories | `[f32; 4]` (Rust-shaped; no 1D..4D types) | animation-objects (only if the evaluation API needs them) |
-| `AnimationConstants.UnspecifiedTime` | missing | animation-objects |
-| `SpringSpec` duration (Compose's spring estimation), and ending an animation at that duration | compose-rs ends a spring when value and speed are under the threshold, frame by frame | spring-estimation |
+| `animateIntSizeAsState`, `animateRectAsState`; `animateValueAsState(…, visibilityThreshold, …)` | present (D800) | more-converters |
+| `Animation` interface (`durationNanos`, `getValueFromNanos`, `getVelocityVectorFromNanos`, `isFinishedFromNanos`, `isInfinite`, `targetValue`, `typeConverter`); `TargetBasedAnimation`; `Animation.getVelocityFromNanos` | present: the `Animation` trait, `TargetBasedAnimation` (D800) | animation-objects |
+| `AnimationSpec.vectorize`, `FiniteAnimationSpec`, `DurationBasedAnimationSpec` | the `AnimationSpec` enum and the spec types are each a `VectorizedAnimationSpec` (no separate vectorized types); `DurationBasedSpec` holds tween, keyframes and snap. Specs of one's own (a `VectorizedAnimationSpec` an app writes) can't be given: custom specs, animation-objects' remainder | animation-objects, spec-gaps |
+| `VectorizedAnimationSpec`, `VectorizedFiniteAnimationSpec`, `VectorizedDurationBasedAnimationSpec`, `VectorizedTweenSpec`, `VectorizedSpringSpec`, `VectorizedSnapSpec`, `VectorizedKeyframesSpec`, `VectorizedRepeatableSpec`, `VectorizedInfiniteRepeatableSpec`, `VectorizedFloatAnimationSpec` (`getDurationNanos`, `getValueFromNanos`, `getVelocityFromNanos`, `getEndVelocity`, `isInfinite`) | present as one `VectorizedAnimationSpec` trait the spec types implement (D800) | animation-objects |
+| `FloatAnimationSpec`, `FloatTweenSpec`, `FloatSpringSpec` | present (D800) | animation-objects |
+| `AnimationVector`, `AnimationVector1D..4D`, `AnimationVector(…)` factories | one `AnimationVector` of one to four components (no 1D..4D types) | animation-objects |
+| `AnimationConstants.UnspecifiedTime` | present (D800) | animation-objects |
+| `SpringSpec` duration (Compose's spring estimation), and ending an animation at that duration | present (D800) | spring-estimation |
 | `AnimationState` (ctor, `copy`, `isFinished`, `createZeroVectorFrom`), `AnimationScope` (`cancelAnimation`, times, value, velocity), `animate(…)` (float and generic), `AnimationState.animateTo`, `animateDecay(…)` (float and on `AnimationState`), `sequentialAnimation` | missing | suspend-animate (decay forms: decay-animation) |
-| `DecayAnimationSpec`, `FloatDecayAnimationSpec`, `VectorizedDecayAnimationSpec`, `exponentialDecay`, `FloatExponentialDecaySpec`, `generateDecayAnimationSpec`, `calculateTargetValue` (both), `DecayAnimation` (3 ctors), `DecayAnimation(FloatDecayAnimationSpec, …)` | missing | decay-animation |
+| `DecayAnimationSpec`, `FloatDecayAnimationSpec`, `VectorizedDecayAnimationSpec`, `exponentialDecay`, `FloatExponentialDecaySpec`, `generateDecayAnimationSpec`, `calculateTargetValue` (both), `DecayAnimation` (3 ctors), `DecayAnimation(FloatDecayAnimationSpec, …)` | present (D807) | decay-animation |
 | `ArcAnimationSpec` (experimental), `ArcMode` (`ArcAbove`, `ArcBelow`, `ArcLinear`), `KeyframesSpecConfig.using(entity, ArcMode)` | missing | arc-animation |
-| `KeyframesSpecBaseConfig.atFraction`, `using(entity, easing)` (compose-rs names it `with`, Compose's deprecated name), `durationMillis` settable in the builder | partial | spec-gaps |
+| `KeyframesSpecBaseConfig.atFraction`, `using(entity, easing)`, `durationMillis` settable in the builder | present (`at_fraction`, `using`, `duration_millis` settable) | spec-gaps |
 | `KeyframesWithSplineSpec`, `keyframesWithSpline(init)`, `keyframesWithSpline(periodicBias, init)` | missing | keyframes-with-spline |
-| `StartOffset`, `StartOffsetType` (`Delay`, `FastForward`); `initialStartOffset` on `repeatable`, `infiniteRepeatable`, `RepeatableSpec`, `InfiniteRepeatableSpec` | missing | spec-gaps |
-| `SnapSpec` as a `DurationBasedAnimationSpec` (so `repeatable(snap())` works) | `AnimationSpec::Snap` only, not repeatable | spec-gaps |
-| `InterruptionAwareAnimationSpec(animationSpec, interruptionSpec)` | missing (transitions hard-code a default spring on interruption) | interruption-aware-spec |
+| `StartOffset`, `StartOffsetType` (`Delay`, `FastForward`); `initialStartOffset` on `repeatable`, `infiniteRepeatable`, `RepeatableSpec`, `InfiniteRepeatableSpec` | present (`repeatable_with`, `infinite_repeatable_with`) | spec-gaps |
+| `SnapSpec` as a `DurationBasedAnimationSpec` (so `repeatable(snap())` works) | present (D800) | spec-gaps |
+| `InterruptionAwareAnimationSpec(animationSpec, interruptionSpec)` | present (D809) | interruption-aware-spec |
 | `Easing` as a `fun interface` (any object, capturing lambdas) | `Easing::Function(fn(f32) -> f32)` (no captures) | easing-functions |
-| `EaseInBack`, `EaseInBounce`, `EaseInCirc`, `EaseInCubic`, `EaseInElastic`, `EaseInExpo`, `EaseInOutBack`, `EaseInOutBounce`, `EaseInOutCirc`, `EaseInOutCubic`, `EaseInOutElastic`, `EaseInOutExpo`, `EaseInOutQuad`, `EaseInOutQuart`, `EaseInOutQuint`, `EaseInOutSine`, `EaseInQuad`, `EaseInQuart`, `EaseInQuint`, `EaseInSine`, `EaseOutBack`, `EaseOutBounce`, `EaseOutCirc`, `EaseOutCubic`, `EaseOutElastic`, `EaseOutExpo`, `EaseOutQuad`, `EaseOutQuart`, `EaseOutQuint`, `EaseOutSine` | missing (only `Ease`, `EaseIn`, `EaseOut`, `EaseInOut`) | easing-functions |
+| `EaseInBack`, `EaseInBounce`, `EaseInCirc`, `EaseInCubic`, `EaseInElastic`, `EaseInExpo`, `EaseInOutBack`, `EaseInOutBounce`, `EaseInOutCirc`, `EaseInOutCubic`, `EaseInOutElastic`, `EaseInOutExpo`, `EaseInOutQuad`, `EaseInOutQuart`, `EaseInOutQuint`, `EaseInOutSine`, `EaseInQuad`, `EaseInQuart`, `EaseInQuint`, `EaseInSine`, `EaseOutBack`, `EaseOutBounce`, `EaseOutCirc`, `EaseOutCubic`, `EaseOutElastic`, `EaseOutExpo`, `EaseOutQuad`, `EaseOutQuart`, `EaseOutQuint`, `EaseOutSine` | present (D808) | easing-functions |
 | `PathEasing(path)` | missing | path-easing |
 | `TransitionState`, `MutableTransitionState` (`currentState`, `targetState`, `isIdle`), `rememberTransition(transitionState, label)` | present (`MutableTransitionState` only: the sealed `TransitionState` waits for seekable and deferred states) | transition-state |
 | `Transition.segment`, `Transition.Segment` (`initialState`, `targetState`, `isTransitioningTo`), `pendingTargetState`, `label`, `animations`, `transitions`, `totalDurationNanos`, `Transition.TransitionAnimationState` (`animation`, `animationSpec`, `label`, `typeConverter`) | `segment`, `Segment`, `label`, `total_duration_nanos` present; `pendingTargetState` and the tooling getters missing | transition-state |
@@ -279,25 +277,25 @@ Deprecated and left out:
 | `DeferredTargetAnimation` (`updateTarget`, `value`, `pendingTarget`, `isIdle`) | present (D810) | deferred-target-animation |
 | `InfiniteTransition.animations`, `label`, `InfiniteTransition.TransitionAnimationState` (`animation`, `animationSpec`, `label`, `typeConverter`); `label` on `animateFloat`/`animateValue` | missing (tooling-facing; `label` is accepted and ignored elsewhere) | transition-state |
 | `withInfiniteAnimationFrameNanos`, `withInfiniteAnimationFrameMillis` (and the `InfiniteAnimationPolicy` they consult); `MotionDurationScale` honoured by every animation | missing | motion-duration-scale |
-| `Rect.VectorConverter`, `IntSize.VectorConverter` (clamped at 0), `DpOffset.VectorConverter`; `TwoWayConverter(to, from)` factory | `Animate` impls missing for `Rect`, `IntSize`; compose-ui has no `DpOffset` | more-converters |
-| `VisibilityThreshold` for `Int`, `IntOffset`, `IntSize`, `Offset`, `Size`, `Rect`, `Dp`, `DpOffset` | private per-type `visibility_threshold()`, with different values (see notes) | more-converters |
+| `Rect.VectorConverter`, `IntSize.VectorConverter` (clamped at 0), `DpOffset.VectorConverter`; `TwoWayConverter(to, from)` factory | present (`Animate` impls; compose-ui has `DpOffset`); `TwoWayConverter(to, from)` is an `Animate` impl | more-converters |
+| `VisibilityThreshold` for `Int`, `IntOffset`, `IntSize`, `Offset`, `Size`, `Rect`, `Dp`, `DpOffset` | present: the `VisibilityThreshold` constants, Compose's values (D800) | more-converters |
 
 ### animation (`androidx.compose.animation`)
 
 | API | compose-rs | Feature |
 |---|---|---|
 | `fadeIn`/`fadeOut` | present | |
-| `expandIn(spec, expandFrom, clip, initialSize)`, `expandHorizontally(spec, expandFrom, clip, initialWidth)`, `expandVertically(spec, expandFrom, clip, initialHeight)`, `shrinkOut`, `shrinkHorizontally`, `shrinkVertically` with their parameters | defaults only | enter-exit-params |
-| `slideIn(spec, initialOffset: (IntSize) -> IntOffset)`, `slideOut`, `slideInHorizontally(spec, initialOffsetX)`, `slideOutHorizontally`, `slideInVertically(spec, initialOffsetY)`, `slideOutVertically` | fractions of the size, default spec; no horizontal forms | enter-exit-params |
-| `scaleIn(spec, initialScale, transformOrigin)`, `scaleOut(…, transformOrigin)` | no `transformOrigin`; `scale_in` has no default scale | enter-exit-params |
-| `EnterTransition.config`, `ExitTransition.config`, `EnterExitTransitionConfig`, `FadeConfig`, `SlideConfig`, `ChangeSizeConfig`, `ScaleConfig` | private `Parts` | enter-exit-params |
+| `expandIn(spec, expandFrom, clip, initialSize)`, `expandHorizontally(spec, expandFrom, clip, initialWidth)`, `expandVertically(spec, expandFrom, clip, initialHeight)`, `shrinkOut`, `shrinkHorizontally`, `shrinkVertically` with their parameters | present (`_with` forms, D804) | enter-exit-params |
+| `slideIn(spec, initialOffset: (IntSize) -> IntOffset)`, `slideOut`, `slideInHorizontally(spec, initialOffsetX)`, `slideOutHorizontally`, `slideInVertically(spec, initialOffsetY)`, `slideOutVertically` | present (`_with` forms, D804) | enter-exit-params |
+| `scaleIn(spec, initialScale, transformOrigin)`, `scaleOut(…, transformOrigin)` | present (`_with` forms, D804) | enter-exit-params |
+| `EnterTransition.config`, `ExitTransition.config`, `EnterExitTransitionConfig`, `FadeConfig`, `SlideConfig`, `ChangeSizeConfig`, `ScaleConfig` | present (D804) | enter-exit-params |
 | `unveilIn(spec, initialColor, matchParentSize)`, `veilOut(…)`, `VeilConfig` | missing (new at this tip) | veil |
-| `AnimatedVisibility(MutableTransitionState<Boolean>, …)`, `Transition<T>.AnimatedVisibility(visible: (T) -> Boolean, …)`, `ColumnScope.AnimatedVisibility` (×2), `RowScope.AnimatedVisibility` (×2) | missing; the scope overloads' defaults (vertical or horizontal expand and shrink) differ from the plain one's | animated-visibility-scope |
-| `AnimatedVisibilityScope` (`transition`, `Modifier.animateEnterExit(enter, exit, label)`), `EnterExitState` (`PreEnter`, `Visible`, `PostExit`) | missing: content gets no scope | animated-visibility-scope |
-| `AnimatedContent(…, contentKey, content: AnimatedContentScope.(S) -> Unit)`, `Transition<S>.AnimatedContent(…)` | no `contentKey`, no scope, no `Transition` overload | animated-content-scope |
+| `AnimatedVisibility(MutableTransitionState<Boolean>, …)`, `Transition<T>.AnimatedVisibility(visible: (T) -> Boolean, …)`, `ColumnScope.AnimatedVisibility` (×2), `RowScope.AnimatedVisibility` (×2) | present: one `AnimatedVisibility` over `AnimatedVisibilityState` (`(column, visible)` for a scope's), and `transition.AnimatedVisibility(…)` (D804, D812) | animated-visibility-scope |
+| `AnimatedVisibilityScope` (`transition`, `Modifier.animateEnterExit(enter, exit, label)`), `EnterExitState` (`PreEnter`, `Visible`, `PostExit`) | present but `Modifier.animate_enter_exit` (D804) | animated-visibility-scope |
+| `AnimatedContent(…, contentKey, content: AnimatedContentScope.(S) -> Unit)`, `Transition<S>.AnimatedContent(…)` | `transition.AnimatedContent(…)` present (D812); no `contentKey`, and the content takes the state, not a scope | animated-content-scope |
 | `AnimatedContentTransitionScope` (`initialState`, `targetState`, `isTransitioningTo`, `contentAlignment`, `slideIntoContainer(towards, spec, initialOffset)`, `slideOutOfContainer`, `using(SizeTransform?)`, `ExitTransition.KeepUntilTransitionsFinished`), `SlideDirection` (`Left`, `Right`, `Up`, `Down`, `Start`, `End`) | `transition_spec(initial, target)` only | animated-content-scope |
 | `AnimatedContentScope` | missing | animated-content-scope |
-| `ContentTransform(targetContentEnter, initialContentExit, targetContentZIndex, sizeTransform)`, `SizeTransform(clip, sizeAnimationSpec)`, `SizeTransform` interface | `size_transform: bool` (on or off, default spring) | animated-content-scope |
+| `ContentTransform(targetContentEnter, initialContentExit, targetContentZIndex, sizeTransform)`, `SizeTransform(clip, sizeAnimationSpec)`, `SizeTransform` interface | present (`ContentTransform`, `size_transform(clip, spec)`, D805) | animated-content-scope |
 | `Transition<T>.Crossfade(modifier, animationSpec, contentKey, content)` (the plain overload has no `contentKey`) | missing | crossfade-extras |
 | `animateContentSize(animationSpec, alignment, finishedListener)` (both overloads) | present (`animate_content_size_with(spec, alignment, finished_listener)`, D811) | animate-content-size-extras |
 | `CapturedAnimatedVisibility(visible, …)`, `CapturedAnimatedVisibility(MutableTransitionState, …)` | missing | captured-animated-visibility |
@@ -546,9 +544,9 @@ One entry per feature. Sizes:
 - **Tests:** `AnimatedVisibilityTest` (4), `EnterExitTransitionConfigTest` (2), parts of the deferred tests.
 - **Dependencies:** enter-exit-params.
 
-#### animated-visibility-scope (M, not exp.): partly done (D804)
+#### animated-visibility-scope (M, not exp.): partly done (D804, D812)
 
-- **Done:** `AnimatedVisibilityScope` with its `transition`, `EnterExitState`, the `MutableTransitionState`, `ColumnScope` and `RowScope` overloads (one function over `AnimatedVisibilityState`). **Left:** `Modifier.animate_enter_exit`, the `Transition<T>.AnimatedVisibility` overload.
+- **Done:** `AnimatedVisibilityScope` with its `transition`, `EnterExitState`, the `MutableTransitionState`, `ColumnScope` and `RowScope` overloads (one function over `AnimatedVisibilityState`), the `Transition` overload (`transition.AnimatedVisibility`, D812). **Left:** `Modifier.animate_enter_exit`.
 
 - **API:**
   - `AnimatedVisibilityScope` (`transition`, `Modifier.animate_enter_exit`), `EnterExitState`;
@@ -556,9 +554,9 @@ One entry per feature. Sizes:
 - **Tests:** `AnimatedVisibilityTest` (transition overload, the `MutableTransitionState` cases), `CapturedAnimatedVisibilityTest`, `SharedTransitionTest`.
 - **Dependencies:** transition-state, enter-exit-params.
 
-#### animated-content-scope (M–L, not exp.): partly done (D805)
+#### animated-content-scope (M–L, not exp.): partly done (D805, D812)
 
-- **Done:** `SizeTransform` (`size_transform(clip, spec)`), `target_content_z_index`, `ContentTransform::using`, no cap on the contents shown (Compose's rule: a content shows while its state is the transition's current or target). **Left:** the scopes (`AnimatedContentScope`, `AnimatedContentTransitionScope` and its methods), `content_key`, `KeepUntilTransitionsFinished`, the `Transition` overload.
+- **Done:** `SizeTransform` (`size_transform(clip, spec)`), `target_content_z_index`, `ContentTransform::using`, no cap on the contents shown (Compose's rule: a content shows while its state is the transition's current or target), the `Transition` overload (`transition.AnimatedContent`, D812). **Left:** the scopes (`AnimatedContentScope`, `AnimatedContentTransitionScope` and its methods), `content_key`, `KeepUntilTransitionsFinished`.
 
 - **API:**
   - the scopes: `AnimatedContentScope` (an `AnimatedVisibilityScope`) and `AnimatedContentTransitionScope`, holding `initial_state`, `target_state`, `content_alignment` and the methods `slide_into_container(SlideDirection, spec, offset)`, `slide_out_of_container`, `using(SizeTransform)`, `ExitTransition::KEEP_UNTIL_TRANSITIONS_FINISHED`;
@@ -755,7 +753,7 @@ Navigation 3 is a separate library from Navigation Compose. Adopting it would me
 | an exception from an interrupted `animateTo` | `AnimationResult { end_reason: AnimationEndReason::Interrupted, .. }` (D120) |
 | `assertEquals(expected, actual, delta)` over frames | assert per frame with a tolerance. Spring results agree with Compose's math (`spec.rs`), but end frames don't (see below) |
 
-**Pure spec tests (`commonTest` `Vectorized*`):** until animation-objects exists, sample through an `Animatable` in a rule. `review_round14.rs` `samples()` is the pattern: the first value is at play time 0, then one every 16 ms. That only reaches 16 ms granularity, so prefer waiting for animation-objects for exact checks.
+**Pure spec tests (`commonTest` `Vectorized*`):** evaluate the specs directly: every spec is a `VectorizedAnimationSpec` (`value_from_millis(play_time, start, end, velocity)` is Compose's `getValueFromMillis`; `at()` in `keyframe_animation.rs` is Compose's `at` helper), and `TargetBasedAnimation` is Compose's.
 
 ### What the harness lacks
 
@@ -786,14 +784,14 @@ Each item names the Compose test that would catch it, in the file's notes or lis
    - Caught by: no Compose test targets it. Add one with animated-visibility-scope.
 7. **`AnimatedContent` keeps at most three contents and keys them by an internal id.** Fixed (D805) but `contentKey`: no cap; a content shows while its state is the transition's current or target state, as Compose's `AnimatedEnterExitImpl` (so after a second interruption the first content leaves at once, not "Compose keeps all" as this note said).
    - Caught by: `AnimatedContentTest.AnimatedContentWithKeysTest` and `AnimatedContentWithContentKey`. Write a rapid four-state test for the cap.
-8. **The animation containers expose no shared `Transition`.** `AnimatedVisibility`'s content has its scope's `transition` now (D804); `AnimatedContent`'s waits on animated-content-scope. Content can't read `transition.isRunning` (`AnimatedContentTest.AnimatedContentWithInterruption` does) and nothing can be seeked.
+8. **The animation containers expose no shared `Transition`.** `AnimatedVisibility`'s content has its scope's `transition` now (D804), and both run on a transition of the app's (`transition.AnimatedVisibility`, `transition.AnimatedContent`, D812); `AnimatedContent`'s content still gets no scope (animated-content-scope). Content can't read `transition.isRunning` (`AnimatedContentTest.AnimatedContentWithInterruption` does) and nothing can be seeked.
 9. **`NavHost` has no default transition** (Compose fades for 700 ms) and never pops its start destination. `launch_single_top` compares with `==`, where Compose compares the route and replaces the arguments. All are documented in D291, but ported tests must expect compose-rs's behaviour or the decision must change.
    - Caught by: `NavHostTest.testNavHostAnimations`, `NavHostControllerTest.testNavigateOptionSingleTopDifferentArguments`.
-10. **Keyframe times are `u32`.** Compose's out-of-range negative keyframes can't be written.
+10. **Keyframe times are `u32`.** Fixed: they're `i32`, and out-of-range keyframes are ignored as Compose's (`keyframe_animation.rs`).
     - Also: at the end, compose-rs's frame returns the target; Compose's *vectorized* spec returns a keyframe placed at the duration, while its `TargetBasedAnimation` returns the target. Compare at the matching level.
     - Caught by: `KeyframeAnimationTest.outOfRangeValues_withForcedInitialAndTarget`.
 11. **`InfiniteTransition` timing.** Its values accept finite `RepeatableSpec`s (Compose requires `InfiniteRepeatableSpec`), and run on frame time rather than the transition's play time (documented, D420).
-    - Caught by: `InfiniteTransitionTest.transitionTest` checks the phase from the first frame. It may still pass, since both start there.
+    - Caught by: `InfiniteTransitionTest.transitionTest` checks the phase from the first frame. It passes (`infinite_transition.rs`, through 2.1 s of frames), since both start there.
 12. **A transition value added mid-flight jumps to its target.** Fixed (D803): `Transition` is Compose's single play-time loop. In Compose, a `Transition.animateFloat` first composed while the transition runs starts at its value for `currentState` and animates to the target's.
     - compose-rs's `Transition::animate_value` remembers an `Animatable` at the target state's value (`transition.rs`), so it never animates.
     - Caught by: `TransitionTest.addNewAnimationInFlightTest`. It reads Compose's internal `playTimeNanos`; sample frames instead.

@@ -686,6 +686,37 @@ pub fn AnimatedVisibility<V: AnimatedVisibilityState>(
     );
 }
 
+impl<S: Clone + PartialEq + 'static> Transition<S> {
+    /// Shows `content` while `visible` holds for this transition's target or current state,
+    /// animating it in and out on the transition's clock, as Compose's
+    /// `Transition.AnimatedVisibility(visible, modifier, enter, exit, content)`. `enter` and
+    /// `exit` default (`None`) to Compose's `fadeIn() + expandIn()` and `shrinkOut() +
+    /// fadeOut()`. A method, so every parameter is given.
+    #[allow(non_snake_case)]
+    pub fn AnimatedVisibility(
+        &self,
+        visible: impl Fn(&S) -> bool + 'static,
+        modifier: Modifier,
+        enter: impl Into<Option<EnterTransition>>,
+        exit: impl Into<Option<ExitTransition>>,
+        content: impl Fn(AnimatedVisibilityScope) + 'static,
+    ) {
+        let enter = enter.into().unwrap_or_else(|| fade_in() + expand_in());
+        let exit = exit.into().unwrap_or_else(|| shrink_out() + fade_out());
+        AnimatedEnterExit(
+            self.clone(),
+            Rc::new(visible),
+            modifier,
+            enter,
+            exit,
+            Rc::new(|current, target| {
+                current == EnterExitState::PostExit && target == EnterExitState::PostExit
+            }),
+            compose_runtime::callback(content),
+        );
+    }
+}
+
 /// Whether the content shows for a parent state.
 pub(crate) type VisibleFn<T> = Rc<dyn Fn(&T) -> bool>;
 /// Whether the content goes once its exit ends, from its transition's current and target.

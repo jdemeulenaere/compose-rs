@@ -534,3 +534,72 @@ fn in_a_column_or_a_row_the_defaults_expand_along_it() {
     assert_eq!(row.height(), 100.0, "{row:?}");
     assert!(row.width() > 0.0 && row.width() < 100.0, "{row:?}");
 }
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum TestState {
+    State1,
+    State2,
+    State3,
+}
+
+thread_local! {
+    static SHOWING: std::cell::RefCell<Option<Transition<TestState>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+fn showing_state() -> TestState {
+    SHOWING.with(|showing| showing.borrow().as_ref().unwrap().current_state())
+}
+
+// Compose: compose/animation/animation/src/androidDeviceTest/kotlin/androidx/compose/animation/AnimatedVisibilityTest.kt, testTransitionExtensionAnimatedVisibility
+#[test]
+fn a_transitions_visibility_follows_its_states() {
+    let state = mutable_state_of(TestState::State1);
+    let handle = state.handle();
+    let disposed = Rc::new(Cell::new(false));
+    let seen = disposed.clone();
+    let mut ui = ComposeTestRule::with_manual_clock(move || {
+        let transition = update_transition(handle.get(), None);
+        SHOWING.with(|showing| *showing.borrow_mut() = Some(transition.clone()));
+        let seen = seen.clone();
+        let linear = tween(100).easing(LINEAR_EASING);
+        transition.AnimatedVisibility(
+            // Only visible in State2.
+            |state| *state == TestState::State2,
+            Modifier.test_tag("content"),
+            // Linear, or the target size is reached before the animation ends.
+            expand_in_with(linear, Alignment::BOTTOM_END, true, |_| IntSize::ZERO),
+            shrink_out_with(linear, Alignment::BOTTOM_END, true, |_| IntSize::ZERO),
+            move |_| {
+                let seen = seen.clone();
+                Box!(modifier = Modifier.required_size(100.dp()), {
+                    let seen = seen.clone();
+                    DisposableEffect((), move |scope| {
+                        let seen = seen.clone();
+                        scope.on_dispose(move || seen.set(true))
+                    });
+                });
+            },
+        );
+    });
+    ui.wait_for_idle();
+    ui.on_node_unmerged(has_test_tag("content")).assert_does_not_exist();
+    state.set(TestState::State2);
+    ui.wait_for_idle();
+    while showing_state() != TestState::State2 {
+        assert!(bounds(&mut ui, "content").width() < 100.0);
+        ui.advance_time_by_frame();
+    }
+    let shown = bounds(&mut ui, "content");
+    assert_eq!((shown.width(), shown.height()), (100.0, 100.0));
+    state.set(TestState::State3);
+    ui.wait_for_idle();
+    while showing_state() != TestState::State3 {
+        assert!(bounds(&mut ui, "content").width() > 0.0);
+        assert!(!disposed.get());
+        ui.advance_time_by_frame();
+    }
+    // Removed when its exit ends, never measured at 0.
+    ui.on_node_unmerged(has_test_tag("content")).assert_does_not_exist();
+    assert!(disposed.get());
+}
