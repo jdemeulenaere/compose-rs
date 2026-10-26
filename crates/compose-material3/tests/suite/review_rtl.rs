@@ -40,9 +40,11 @@ fn a_crossfade_puts_its_content_at_the_right() {
 #[composable]
 fn Growing(wide: MutableState<bool>) {
     Box!(
-        modifier = Modifier
-            .test_tag("animated")
-            .animate_content_size_with(tween(100).easing(LINEAR_EASING)),
+        modifier = Modifier.test_tag("animated").animate_content_size_with(
+            tween(100).easing(LINEAR_EASING),
+            Alignment::TOP_START,
+            None::<fn(_, _)>,
+        ),
         {
             Box!(
                 modifier = Modifier

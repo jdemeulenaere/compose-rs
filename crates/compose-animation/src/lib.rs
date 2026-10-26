@@ -18,6 +18,7 @@ mod content;
 mod content_size;
 mod crossfade;
 mod decay;
+mod deferred_target;
 mod easing;
 mod infinite;
 mod keyframes;
@@ -54,6 +55,7 @@ pub use decay::{
     VectorizedDecayAnimationSpec, exponential_decay, float_decay_animation,
     generate_decay_animation_spec,
 };
+pub use deferred_target::DeferredTargetAnimation;
 pub use easing::{
     EASE, EASE_IN, EASE_IN_BACK, EASE_IN_BOUNCE, EASE_IN_CIRC, EASE_IN_CUBIC, EASE_IN_ELASTIC,
     EASE_IN_EXPO, EASE_IN_OUT, EASE_IN_OUT_BACK, EASE_IN_OUT_BOUNCE, EASE_IN_OUT_CIRC,

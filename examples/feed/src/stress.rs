@@ -615,29 +615,34 @@ fn ExpandingCard() {
     });
     let is_expanded = expanded.get();
     Card!(modifier = Modifier.fill_max_width(), {
-        Column!(modifier = Modifier.animate_content_size_with(tween(500)).padding(12.dp()), {
-            Text!("Release notes", style = MaterialTheme::typography().title_small);
-            if is_expanded {
-                Text!(
-                    "{} {} {} {}",
-                    SENTENCES[0],
-                    SENTENCES[1],
-                    SENTENCES[2],
-                    SENTENCES[3],
-                    style = MaterialTheme::typography().body_medium,
-                    max_lines = 4,
-                    overflow = TextOverflow::Ellipsis
-                );
-            } else {
-                Text!(
-                    "{}",
-                    SENTENCES[0],
-                    style = MaterialTheme::typography().body_medium,
-                    max_lines = 1,
-                    overflow = TextOverflow::Ellipsis
-                );
+        Column!(
+            modifier = Modifier
+                .animate_content_size_with(tween(500), Alignment::TOP_START, None::<fn(_, _)>)
+                .padding(12.dp()),
+            {
+                Text!("Release notes", style = MaterialTheme::typography().title_small);
+                if is_expanded {
+                    Text!(
+                        "{} {} {} {}",
+                        SENTENCES[0],
+                        SENTENCES[1],
+                        SENTENCES[2],
+                        SENTENCES[3],
+                        style = MaterialTheme::typography().body_medium,
+                        max_lines = 4,
+                        overflow = TextOverflow::Ellipsis
+                    );
+                } else {
+                    Text!(
+                        "{}",
+                        SENTENCES[0],
+                        style = MaterialTheme::typography().body_medium,
+                        max_lines = 1,
+                        overflow = TextOverflow::Ellipsis
+                    );
+                }
             }
-        });
+        );
     });
 }
 

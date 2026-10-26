@@ -32,17 +32,17 @@ The inventory of Compose's animation and navigation tests and public API against
 | Status | Files | @Test |
 |---|---|---|
 | `covered` | 1 | 1 |
-| `ported` | 13 | 64 |
+| `ported` | 14 | 65 |
 | `port` | 1 | 1 |
 | `partial` | 12 | 173 |
-| `feature:<name>` | 65 | 770 |
+| `feature:<name>` | 64 | 769 |
 | `n/a` | 3 | 12 |
 
 By module:
 
 | Module | Files | @Test | covered | ported | port | partial | feature | n/a |
 |---|---|---|---|---|---|---|---|---|
-| animation-core | 30 | 212 | 0 | 12 / 59 | 1 / 1 | 4 / 46 | 12 / 103 | 1 / 3 |
+| animation-core | 30 | 212 | 0 | 13 / 60 | 1 / 1 | 4 / 46 | 11 / 102 | 1 / 3 |
 | animation | 15 | 238 | 0 | 1 / 5 | 0 | 5 / 59 | 9 / 174 | 0 |
 | animation-graphics | 5 | 22 | 0 | 0 | 0 | 0 | 5 / 22 | 0 |
 | navigation-compose | 9 | 121 | 1 / 1 | 0 | 0 | 3 / 68 | 4 / 50 | 1 / 2 |
@@ -74,7 +74,6 @@ By module:
 | motion-duration-scale | 2 | 4 |
 | predictive-back | 1 | 2 |
 | decay-animation | 1 | 1 |
-| deferred-target-animation | 1 | 1 |
 
 Without Navigation 3 (whose adoption is a decision, not a gap in what compose-rs models), the area is 59 files and 593 tests. Of those:
 
@@ -103,7 +102,7 @@ The "covered" notes cite compose-rs test files under `crates/compose-animation/t
 | 3 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/AnimationVectorTest.kt` | 3 | `AnimationVector1D..4D`: reset, hashCode, factory functions | n/a: compose-rs's vectors are `[f32; 4]` (`Animate::to_vector`); reset/hashCode/factories have no analogue |  |
 | 4 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/ArcAnimationTest.kt` | 12 | `ArcAnimationSpec` (ArcAbove/Below/Linear) interpolation in 1-4 dimensions, equality, curve shape | `feature:arc-animation` | experimental (`@ExperimentalAnimationSpecApi`) |
 | 5 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/DecayAnimationTest.kt` | 2 | `exponentialDecay` values and the velocity threshold | ported | `animation_objects.rs` |
-| 6 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/DeferredTargetAnimationTest.kt` | 1 | `DeferredTargetAnimation.updateTarget` value/idle/pendingTarget | `feature:deferred-target-animation` |  |
+| 6 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/DeferredTargetAnimationTest.kt` | 1 | `DeferredTargetAnimation.updateTarget` value/idle/pendingTarget | ported | `deferred_target.rs` |
 | 7 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/DelayedAnimationTest.kt` | 5 | Compose's internal `delayed(spec, nanos)` wrapper: duration, values, velocity, zero, equality | `feature:seekable-transition` | tests an internal helper of Compose's seekable transitions; adapt only if the port has the same wrapper |
 | 8 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/DurationScaleTest.kt` | 1 | `animate()` honours `MotionDurationScale` (5x, and 0 = finish at once, infinite too) | `feature:motion-duration-scale` | also needs suspend-animate's `animate()` |
 | 9 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/EasingUnitTest.kt` | 6 | `CubicBezierEasing`: 0 and 1 ends, overshoot, equality, small fractions | ported | `easing.rs` |
@@ -131,7 +130,7 @@ The "covered" notes cite compose-rs test files under `crates/compose-animation/t
 | 31 | `compose/animation/animation/src/androidDeviceTest/kotlin/androidx/compose/animation/AnimateBoundsTest.kt` | 8 | `Modifier.animateBounds`: position, size, bounds, movable content, lazy layouts, scrolling | `feature:animate-bounds` | needs ui lookahead |
 | 32 | `compose/animation/animation/src/androidDeviceTest/kotlin/androidx/compose/animation/AnimatedContentTest.kt` | 17 | `AnimatedContent`: SizeTransform, alignment, slideInto/OutOfContainer, contentKey, subcomposition, interruption, KeepUntilTransitionsFinished, lookahead, cleanup | partial | ~6 portable now (alignment, interruption, right transition on interruption, subcomposition, cleanup, size continuity); compose-rs covers basics in `content.rs`, `review_round8.rs`, `review_round10.rs`, `review_round11.rs`; the rest need animated-content-scope (SizeTransform spec, `using`, slideIntoContainer, contentKey, KeepUntilTransitionsFinished, zIndex), transition-state (`rememberTransition`), ui lookahead (2) |
 | 33 | `compose/animation/animation/src/androidDeviceTest/kotlin/androidx/compose/animation/AnimatedVisibilityTest.kt` | 17 | `AnimatedVisibility`: expand/shrink, slide, fade, scale with exact values, None, Transition overload, seeking, lookahead, veil, settle time | partial | 9 ported (`animated_visibility.rs`: expand and shrink, slide, a content size change, fade, scale, the scale spring's threshold, `None`/`None`, an interrupted exit, the settle time; with a test of the column and row defaults); the `Transition` overload (1) needs animated-visibility-scope; seeking (1) seekable-transition; lookahead (1); the veil (5, `verifyDirectionChangeResetsAccumulatedTransitions` among them) veil |
-| 34 | `compose/animation/animation/src/androidDeviceTest/kotlin/androidx/compose/animation/AnimationModifierTest.kt` | 6 | `animateContentSize`: frame-by-frame size, alignment LTR/RTL, lookahead, inspector, re-attach | partial | 2 portable (size test, re-attach; `crossfade.rs` `a_content_size_animates_to_its_new_size` and `review_animation.rs` default spring cover parts); alignment (2) needs animate-content-size-extras; lookahead (1); inspector n/a |
+| 34 | `compose/animation/animation/src/androidDeviceTest/kotlin/androidx/compose/animation/AnimationModifierTest.kt` | 6 | `animateContentSize`: frame-by-frame size, alignment LTR/RTL, lookahead, inspector, re-attach | partial | 3 ported (`content_size.rs`: the frame-by-frame size with its finished listener, alignment left to right and right to left); `properFinalStateAfterReAttach` needs movable content (compose-runtime has no `movableContentOf`); lookahead (1) needs lookahead; inspector n/a |
 | 35 | `compose/animation/animation/src/androidDeviceTest/kotlin/androidx/compose/animation/CapturedAnimatedVisibilityTest.kt` | 9 | `CapturedAnimatedVisibility`: content disposed at once, exit animates a captured layer, MutableTransitionState, interruptions, lookahead | `feature:captured-animated-visibility` | needs ui graphics-layer recording |
 | 36 | `compose/animation/animation/src/androidDeviceTest/kotlin/androidx/compose/animation/CrossfadeTest.kt` | 6 | `Crossfade`: shows content, disposes old content, custom spec, null state, rememberSaveable per screen, contentKey | partial | 5 portable (`crossfade.rs` and `review_animation.rs` `crossfading_back_reuses_the_contents_of_the_state` cover parts); contentKey needs crossfade-extras |
 | 37 | `compose/animation/animation/src/androidDeviceTest/kotlin/androidx/compose/animation/DeferredAnimatedContentTest.kt` | 29 | `DeferredAnimatedContent`: gates, preview transforms, hand-off velocity, interruption specs, veil | `feature:deferred-transition` |  |
@@ -237,7 +236,8 @@ Deprecated and left out:
   - `slide_in((fx, fy))`/`slide_out` (fractions of the size), `slide_in_vertically()`/`slide_out_vertically()`.
 - `AnimatedContent(target_state, modifier, transition_spec(initial, target), content_alignment, label, content)`, with `ContentTransform` (`together_with`, `without_size_transform`) and `default_content_transform()`.
 - `Crossfade(target_state, modifier, animation_spec, label, content)`.
-- `Modifier.animate_content_size()`/`animate_content_size_with(spec)`.
+- `Modifier.animate_content_size()`/`animate_content_size_with(spec, alignment, finished_listener)`.
+- `DeferredTargetAnimation`.
 
 **navigation:** see [Navigation Compose](#navigation-compose-androidxnavigationcompose-and-navcontroller).
 
@@ -276,7 +276,7 @@ Deprecated and left out:
 | `Transition.animateInt`, `animateIntOffset`, `animateIntSize`, `animateRect`, `animateSize` (and `label` on all `animate*`) | present, without the `label` | transition-state, more-converters |
 | `SeekableTransitionState` (`seekTo`, `animateTo(spec)`, `snapTo`, `fraction`, `currentState`, `targetState`) | missing | seekable-transition |
 | `DeferredTransitionState` (`defer`, `animateTo`, `pendingTargetState`), `DeferredTransition`, `rememberDeferredTransition` | missing (new at this tip) | deferred-transition |
-| `DeferredTargetAnimation` (`updateTarget`, `value`, `pendingTarget`, `isIdle`) | missing | deferred-target-animation |
+| `DeferredTargetAnimation` (`updateTarget`, `value`, `pendingTarget`, `isIdle`) | present (D810) | deferred-target-animation |
 | `InfiniteTransition.animations`, `label`, `InfiniteTransition.TransitionAnimationState` (`animation`, `animationSpec`, `label`, `typeConverter`); `label` on `animateFloat`/`animateValue` | missing (tooling-facing; `label` is accepted and ignored elsewhere) | transition-state |
 | `withInfiniteAnimationFrameNanos`, `withInfiniteAnimationFrameMillis` (and the `InfiniteAnimationPolicy` they consult); `MotionDurationScale` honoured by every animation | missing | motion-duration-scale |
 | `Rect.VectorConverter`, `IntSize.VectorConverter` (clamped at 0), `DpOffset.VectorConverter`; `TwoWayConverter(to, from)` factory | `Animate` impls missing for `Rect`, `IntSize`; compose-ui has no `DpOffset` | more-converters |
@@ -299,7 +299,7 @@ Deprecated and left out:
 | `AnimatedContentScope` | missing | animated-content-scope |
 | `ContentTransform(targetContentEnter, initialContentExit, targetContentZIndex, sizeTransform)`, `SizeTransform(clip, sizeAnimationSpec)`, `SizeTransform` interface | `size_transform: bool` (on or off, default spring) | animated-content-scope |
 | `Transition<T>.Crossfade(modifier, animationSpec, contentKey, content)` (the plain overload has no `contentKey`) | missing | crossfade-extras |
-| `animateContentSize(animationSpec, alignment, finishedListener)` (both overloads) | spec only | animate-content-size-extras |
+| `animateContentSize(animationSpec, alignment, finishedListener)` (both overloads) | present (`animate_content_size_with(spec, alignment, finished_listener)`, D811) | animate-content-size-extras |
 | `CapturedAnimatedVisibility(visible, …)`, `CapturedAnimatedVisibility(MutableTransitionState, …)` | missing | captured-animated-visibility |
 | `DeferredAnimatedContent`, `DeferredAnimatedVisibility`, `MutableContentTransform(…)`, `MutableTransform`, `TransformScope` (`alpha`, `scale`, `offset`, `transformOrigin`, `veil`) | missing (new at this tip) | deferred-transition |
 | `SharedTransitionLayout`, `SharedTransitionScope(content)`, the `SharedTransitionScope` interface:<br>• the modifiers: `sharedElement`, `sharedBounds`, `sharedElementWithCallerManagedVisibility`, `skipToLookaheadSize`, `skipToLookaheadPosition`, `renderInSharedTransitionScopeOverlay`;<br>• the state: `rememberSharedContentState(key[, config])`, `SharedContentConfig(…)`, `OverlayClip`, `isTransitionActive`;<br>• the nested types: `SharedContentState` (`key`, `isMatchFound`, `clipPathInOverlay`, `parentSharedContentState`, `prepareTransitionWithInitialVelocity`), `SharedContentConfig` (`isEnabled`, `shouldKeepEnabledForOngoingAnimation`, `permitTransformDuringDeferredTransition`, `alternativeTargetBoundsInTransitionScopeAfterRemoval`), `PlaceholderSize` (`ContentSize`, `AnimatedSize`), `ResizeMode` (`RemeasureToBounds`, `scaleToBounds(contentScale, alignment)`);<br>• `SharedTransitionDefaults` (`BoundsTransform`, `SharedContentConfig`) and `BoundsTransform` | missing | shared-transition |
@@ -513,7 +513,7 @@ One entry per feature. Sizes:
 - **Tests:** `SeekableTransitionStateTest` (44), `DelayedAnimationTest`, `DurationScaleTransitionTest` (2), `AnimatedVisibilityTest.testSeekingAnimatedVisibility`.
 - **Dependencies:** transition-state, animation-objects, spring-estimation.
 
-#### deferred-target-animation (S, not exp.)
+#### deferred-target-animation (S, not exp.): done (D810)
 
 - **API:** `DeferredTargetAnimation(converter)`: `update_target(target, scope, spec)`, `value`, `pending_target`, `is_idle`.
 - **Tests:** `DeferredTargetAnimationTest`.
@@ -574,7 +574,7 @@ One entry per feature. Sizes:
 - **Tests:** `CrossfadeTest.crossfadeTest_contentKey`.
 - **Dependencies:** transition-state.
 
-#### animate-content-size-extras (S, not exp.)
+#### animate-content-size-extras (S, not exp.): done (D811)
 
 - **API:** `alignment` (the content placed within the animating size) and `finished_listener(initial, target)` on `animate_content_size`.
 - **Tests:** `AnimationModifierTest` (2 alignment).

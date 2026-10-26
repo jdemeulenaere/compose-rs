@@ -53,7 +53,11 @@ fn a_content_size_animates_to_its_new_size() {
     fn Expanding(expanded: MutableState<bool>) {
         Column!({
             Box!(
-                modifier = Modifier.animate_content_size_with(tween(100).easing(LINEAR_EASING)),
+                modifier = Modifier.animate_content_size_with(
+                    tween(100).easing(LINEAR_EASING),
+                    compose_ui::Alignment::TOP_START,
+                    None::<fn(_, _)>,
+                ),
                 {
                     Spacer(
                         Modifier.size((50.dp(), if expanded.get() { 100.dp() } else { 20.dp() })),
