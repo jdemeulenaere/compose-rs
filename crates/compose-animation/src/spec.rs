@@ -195,6 +195,17 @@ impl FloatTweenSpec {
     fn clamp_play_time(&self, play_time_nanos: i64) -> i64 {
         play_time_nanos.saturating_sub(self.delay_nanos()).clamp(0, self.duration_nanos_value())
     }
+
+    /// The eased fraction of the change `play_time_nanos` in.
+    fn fraction(&self, play_time_nanos: i64) -> f32 {
+        let clamped = self.clamp_play_time(play_time_nanos);
+        let raw_fraction = if self.duration == 0 {
+            1.0
+        } else {
+            clamped as f32 / self.duration_nanos_value() as f32
+        };
+        self.easing.transform(raw_fraction)
+    }
 }
 
 impl Default for FloatTweenSpec {
@@ -211,13 +222,7 @@ impl FloatAnimationSpec for FloatTweenSpec {
         target_value: f32,
         _initial_velocity: f32,
     ) -> f32 {
-        let clamped = self.clamp_play_time(play_time_nanos);
-        let raw_fraction = if self.duration == 0 {
-            1.0
-        } else {
-            clamped as f32 / self.duration_nanos_value() as f32
-        };
-        lerp(initial_value, target_value, self.easing.transform(raw_fraction))
+        lerp(initial_value, target_value, self.fraction(play_time_nanos))
     }
 
     fn velocity_from_nanos(
@@ -379,10 +384,10 @@ impl VectorizedAnimationSpec for TweenSpec {
         target_value: AnimationVector,
         initial_velocity: AnimationVector,
     ) -> AnimationVector {
-        let float = self.float();
-        each_component(initial_value, target_value, initial_velocity, |_, from, to, velocity| {
-            float.value_from_nanos(play_time_nanos, from, to, velocity)
-        })
+        // Each component's value is a `FloatTweenSpec`'s: the same eased fraction, computed once.
+        let _ = initial_velocity;
+        let fraction = self.float().fraction(play_time_nanos);
+        initial_value.map(|index, from| lerp(from, component(target_value, index), fraction))
     }
 
     fn velocity_from_nanos(
@@ -780,16 +785,14 @@ impl VectorizedAnimationSpec for RepeatableSpec {
         target_value: AnimationVector,
         initial_velocity: AnimationVector,
     ) -> AnimationVector {
+        // Compose passes the repetition's start velocity, but no duration-based spec's value
+        // depends on its initial velocity (a tween's, keyframes' or snap's): it isn't computed
+        // (an infinite transition's values are read every frame).
         self.animation.value_from_nanos(
             self.repetition_play_time_nanos(play_time_nanos),
             initial_value,
             target_value,
-            self.repetition_start_velocity(
-                play_time_nanos,
-                initial_value,
-                initial_velocity,
-                target_value,
-            ),
+            initial_velocity,
         )
     }
 
