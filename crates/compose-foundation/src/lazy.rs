@@ -1698,6 +1698,7 @@ pub fn LazyColumn(
     #[default(false)] reverse_layout: bool,
     #[default(crate::layout::Arrangement::TOP)] vertical_arrangement: impl Into<VerticalArrangement>,
     #[default(crate::Alignment::START)] horizontal_alignment: HorizontalAlignment,
+    #[default(None)] fling_behavior: Option<Rc<dyn crate::gestures::FlingBehavior>>,
     #[default(true)] user_scroll_enabled: bool,
     content: impl Fn(LazyListScope) + 'static,
 ) {
@@ -1709,6 +1710,7 @@ pub fn LazyColumn(
         reverse_layout,
         vertical_arrangement.into().0,
         Alignment::new(horizontal_alignment.bias, -1.0),
+        fling_behavior,
         user_scroll_enabled,
         content,
     );
@@ -1727,6 +1729,7 @@ pub fn LazyRow(
         HorizontalArrangement,
     >,
     #[default(crate::Alignment::TOP)] vertical_alignment: VerticalAlignment,
+    #[default(None)] fling_behavior: Option<Rc<dyn crate::gestures::FlingBehavior>>,
     #[default(true)] user_scroll_enabled: bool,
     content: impl Fn(LazyListScope) + 'static,
 ) {
@@ -1738,6 +1741,7 @@ pub fn LazyRow(
         reverse_layout,
         horizontal_arrangement.into().0,
         Alignment::new(-1.0, vertical_alignment.bias),
+        fling_behavior,
         user_scroll_enabled,
         content,
     );
@@ -1753,6 +1757,7 @@ fn LazyList(
     reverse: bool,
     arrangement: MainAxisArrangement,
     alignment: Alignment,
+    fling_behavior: Option<Rc<dyn crate::gestures::FlingBehavior>>,
     user_scroll_enabled: bool,
     content: impl Fn(LazyListScope) + 'static,
 ) {
@@ -1786,7 +1791,7 @@ fn LazyList(
         vertical,
         reverse,
         enabled: user_scroll_enabled,
-        fling_behavior: None,
+        fling_behavior,
     });
     let items = ItemsRef(items);
     // The items' saveable state, kept by key while they're scrolled away, as Compose's
@@ -1948,9 +1953,7 @@ fn LazyItem(
     holder: SaveableStateHolder,
     stacking: ItemStacking,
 ) {
-    let policy = compose_runtime::remember_keyed(stacking, || {
-        Rc::new(ItemLayout { stacking }) as Rc<dyn MeasurePolicy>
-    });
+    let policy = ItemLayout::shared(stacking);
     let inner = state.inner_or_detached();
     let pinned = inner.pinned.handle();
     let item_key = items.0.key(index);
@@ -2006,6 +2009,26 @@ impl ComposeArg for ItemStacking {
 /// An item: its children stacked as its layout's `ItemStacking` says.
 struct ItemLayout {
     stacking: ItemStacking,
+}
+
+impl ItemLayout {
+    /// The policy for `stacking`, one per thread: the same across reuse, so a reused item's
+    /// node isn't measured again for a new policy (Compose's items have no node of their own).
+    fn shared(stacking: ItemStacking) -> Rc<dyn MeasurePolicy> {
+        thread_local! {
+            static POLICIES: RefCell<Vec<(ItemStacking, Rc<dyn MeasurePolicy>)>> =
+                const { RefCell::new(Vec::new()) };
+        }
+        POLICIES.with(|policies| {
+            let mut policies = policies.borrow_mut();
+            if let Some((_, policy)) = policies.iter().find(|(at, _)| *at == stacking) {
+                return policy.clone();
+            }
+            let policy = Rc::new(ItemLayout { stacking }) as Rc<dyn MeasurePolicy>;
+            policies.push((stacking, policy.clone()));
+            policy
+        })
+    }
 }
 
 impl MeasurePolicy for ItemLayout {

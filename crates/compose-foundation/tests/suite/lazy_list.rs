@@ -718,6 +718,7 @@ fn items_of_an_array_are_laid_out_one_after_the_other() {
 }
 
 // Compose: compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/list/LazyListTest.kt, changeItemsCountAndScrollImmediately
+// Compose: compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/list/LazyColumnTest.kt, changeItemsCountAndScrollImmediately
 #[test]
 fn a_scroll_right_after_the_count_shrank_sees_the_new_count() {
     for lazy in orientations() {

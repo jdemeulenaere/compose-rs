@@ -841,6 +841,8 @@ pub fn LazyVerticalGrid(
     #[default(crate::layout::Arrangement::START)] horizontal_arrangement: impl Into<
         HorizontalArrangement,
     >,
+    #[default(None)] fling_behavior: Option<Rc<dyn crate::gestures::FlingBehavior>>,
+    #[default(true)] user_scroll_enabled: bool,
     content: impl Fn(LazyGridScope) + 'static,
 ) {
     // (The `#[composable]` transform converts `impl Into` parameters.)
@@ -853,6 +855,8 @@ pub fn LazyVerticalGrid(
         true,
         vertical_arrangement.0,
         cross_spacing,
+        fling_behavior,
+        user_scroll_enabled,
         content,
     );
 }
@@ -872,6 +876,8 @@ pub fn LazyHorizontalGrid(
         HorizontalArrangement,
     >,
     #[default(crate::layout::Arrangement::TOP)] vertical_arrangement: impl Into<VerticalArrangement>,
+    #[default(None)] fling_behavior: Option<Rc<dyn crate::gestures::FlingBehavior>>,
+    #[default(true)] user_scroll_enabled: bool,
     content: impl Fn(LazyGridScope) + 'static,
 ) {
     let cross_spacing = vertical_arrangement.spacing();
@@ -883,6 +889,8 @@ pub fn LazyHorizontalGrid(
         false,
         horizontal_arrangement.0,
         cross_spacing,
+        fling_behavior,
+        user_scroll_enabled,
         content,
     );
 }
@@ -930,6 +938,8 @@ fn LazyGrid(
     vertical: bool,
     arrangement: MainAxisArrangement,
     cross_spacing: Dp,
+    fling_behavior: Option<Rc<dyn crate::gestures::FlingBehavior>>,
+    user_scroll_enabled: bool,
     content: impl Fn(LazyGridScope) + 'static,
 ) {
     let scope = LazyGridScope::default();
@@ -963,8 +973,8 @@ fn LazyGrid(
         state: list,
         vertical,
         reverse: false,
-        enabled: true,
-        fling_behavior: None,
+        enabled: user_scroll_enabled,
+        fling_behavior,
     });
     let items = ItemsRef(items);
     // The items' saveable state, kept by key while they're scrolled away (D290).
