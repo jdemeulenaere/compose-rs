@@ -22,6 +22,7 @@ mod drawer;
 mod fab;
 mod icon;
 mod list_item;
+mod motion;
 mod navigation;
 mod progress;
 mod scaffold;
@@ -101,7 +102,12 @@ pub use swipe_to_dismiss::{
     SwipeToDismissBox, SwipeToDismissBoxDefaults, SwipeToDismissBoxState, SwipeToDismissBoxValue,
     remember_swipe_to_dismiss_box_state,
 };
-pub use tabs::{ScrollableTabRow, Tab, TabRow, TabRowDefaults};
+#[doc(hidden)]
+pub use tabs::default_tab_divider;
+pub use tabs::{
+    ContentTab, LeadingIconTab, PrimaryScrollableTabRow, PrimaryTabRow, SecondaryScrollableTabRow,
+    SecondaryTabRow, Tab, TabIndicatorModifiers, TabIndicatorScope, TabPosition, TabRowDefaults,
+};
 pub use text_field::{OutlinedTextField, OutlinedTextFieldDefaults, TextField};
 pub use theme::{
     ColorScheme, DEFAULT_LINE_HEIGHT_STYLE, DEFAULT_TEXT_STYLE, LOCAL_COLOR_SCHEME,

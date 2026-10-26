@@ -16,7 +16,7 @@ fn drawn(ui: &mut ComposeTestRule) -> String {
 fn review_d554_tab_texts_are_drawn() {
     let mut ui = ComposeTestRule::sized(IntSize::new(400, 200), || {
         MaterialTheme!({
-            TabRow!(0, modifier = Modifier.test_tag("row"), {
+            SecondaryTabRow!(0, modifier = Modifier.test_tag("row"), {
                 for index in 0..3 {
                     Tab!(index == 0, || {}, text = Some(move || Text!("Tab {}", index)));
                 }
@@ -36,7 +36,7 @@ fn review_d554_tab_texts_are_drawn() {
 fn review_d554_scrollable_tab_texts_are_drawn() {
     let mut ui = ComposeTestRule::sized(IntSize::new(400, 200), || {
         MaterialTheme!({
-            ScrollableTabRow!(0, {
+            SecondaryScrollableTabRow!(0, {
                 for index in 0..3 {
                     Tab!(index == 0, || {}, text = Some(move || Text!("Tab {}", index)));
                 }

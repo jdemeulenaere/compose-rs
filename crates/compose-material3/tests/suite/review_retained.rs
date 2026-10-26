@@ -78,7 +78,7 @@ fn Screen() {
                 );
             });
             Box!(modifier = Modifier.repaint_boundary(), {
-                TabRow!(tab.get(), modifier = Modifier.test_tag("tabs"), {
+                SecondaryTabRow!(tab.get(), modifier = Modifier.test_tag("tabs"), {
                     for (index, name) in ["One", "Two"].into_iter().enumerate() {
                         Tab!(
                             tab.get() == index,

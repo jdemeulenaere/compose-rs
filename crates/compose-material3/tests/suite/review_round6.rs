@@ -20,7 +20,7 @@ fn indicator(ui: &mut ComposeTestRule) -> Option<(f32, f32)> {
 #[composable]
 fn Tabs(selected: MutableState<usize>, count: usize) {
     MaterialTheme!({
-        TabRow!(selected.get(), modifier = Modifier.test_tag("row"), {
+        SecondaryTabRow!(selected.get(), modifier = Modifier.test_tag("row"), {
             for index in 0..count {
                 Tab!(
                     selected.get() == index,
@@ -42,7 +42,7 @@ fn Tabs(selected: MutableState<usize>, count: usize) {
 fn every_tab_is_as_tall_as_the_row() {
     let mut ui = ComposeTestRule::sized(IntSize::new(400, 200), || {
         MaterialTheme!({
-            TabRow!(0, modifier = Modifier.test_tag("row"), {
+            SecondaryTabRow!(0, modifier = Modifier.test_tag("row"), {
                 Tab!(
                     true,
                     || {},

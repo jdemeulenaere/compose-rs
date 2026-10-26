@@ -766,7 +766,7 @@ fn a_tab_row_shares_its_width_and_slides_its_indicator() {
     let handle = selected.handle();
     let mut ui = ComposeTestRule::with_manual_clock(move || {
         MaterialTheme!({
-            TabRow!(handle.get(), modifier = Modifier.test_tag("row"), {
+            SecondaryTabRow!(handle.get(), modifier = Modifier.test_tag("row"), {
                 for (index, name) in ["One", "Two"].into_iter().enumerate() {
                     Tab!(
                         handle.get() == index,

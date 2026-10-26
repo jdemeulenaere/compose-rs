@@ -166,7 +166,7 @@ fn a_scrollable_tab_row_sizes_its_tabs_and_scrolls_to_the_selected_one() {
     #[composable]
     fn Tabs(selected: MutableState<usize>) {
         MaterialTheme!({
-            ScrollableTabRow!(selected.get(), modifier = Modifier.test_tag("row"), {
+            SecondaryScrollableTabRow!(selected.get(), modifier = Modifier.test_tag("row"), {
                 for index in 0..8usize {
                     Tab!(
                         selected.get() == index,
@@ -188,7 +188,7 @@ fn a_scrollable_tab_row_sizes_its_tabs_and_scrolls_to_the_selected_one() {
     let first = bounds(&mut ui, "tab 0");
     // 52 dp in, at least 90 dp wide.
     assert_eq!(first.left, 52.0);
-    assert!(first.width() >= 90.0);
+    assert!(first.width() >= 90.0, "{first:?}");
     // Selecting the sixth scrolls it to the middle.
     selected.set(5);
     ui.advance_time_by(Duration::from_millis(500));

@@ -50,5 +50,6 @@ mod sheets;
 mod snackbar;
 mod surface;
 mod swipe_to_dismiss;
+mod tab;
 mod text_field;
 mod text_selection_colors;
