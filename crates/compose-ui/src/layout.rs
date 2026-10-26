@@ -1,5 +1,6 @@
-//! Measure and place: `MeasurePolicy`, `Measurable`, `Placeable`, `MeasureScope`, and the
-//! `Layout` composable that `Box`, `Column` and `Row` are written on (docs/06-ui.md, "Layout").
+//! Measure and place: `MeasurePolicy`, `Measurable`, `Placeable`, `MeasureScope`, intrinsic
+//! sizes (`IntrinsicMeasureScope`), and the `Layout` composable that `Box`, `Column` and `Row`
+//! are written on (docs/06-ui.md, "Layout").
 //!
 //! One pass measures each node with constraints and places its children as it goes: a policy
 //! calls `scope.measure` on its children, `scope.place` on the results, and returns its size with
@@ -17,7 +18,14 @@ use crate::text::TextMeasurer;
 use crate::tree::{NodeId, UiTree};
 use crate::unit::{Density, IntOffset, IntSize};
 
-/// How a layout node measures its children and places them, as Compose's `MeasurePolicy`.
+/// How a layout node measures its children and places them, as Compose's `MeasurePolicy`, and
+/// what it answers when asked its intrinsic sizes.
+///
+/// The four intrinsic functions default to Compose's: they run `measure` in an intrinsic
+/// measurement, where measuring a child returns a placeable sized by that child's intrinsic on
+/// the axis asked (and by the constraint on the other one) and placing does nothing; the
+/// result's width (or height) is the answer. A layout that knows its intrinsics more cheaply,
+/// or whose `measure` has side effects, overrides them, as Compose's do.
 pub trait MeasurePolicy: 'static {
     fn measure(
         &self,
@@ -26,6 +34,58 @@ pub trait MeasurePolicy: 'static {
         constraints: Constraints,
     ) -> MeasureResult;
 
+    /// The smallest width this layout can take at `height` and still paint its content
+    /// correctly, as `minIntrinsicWidth`.
+    fn min_intrinsic_width(
+        &self,
+        scope: &mut IntrinsicMeasureScope<'_>,
+        measurables: &[IntrinsicMeasurable],
+        height: i32,
+    ) -> i32 {
+        Intrinsic::MinWidth.measured(scope, height, |scope, constraints| {
+            self.measure(scope, measurables, constraints)
+        })
+    }
+
+    /// The smallest height this layout can take at `width` and still paint its content
+    /// correctly, as `minIntrinsicHeight`.
+    fn min_intrinsic_height(
+        &self,
+        scope: &mut IntrinsicMeasureScope<'_>,
+        measurables: &[IntrinsicMeasurable],
+        width: i32,
+    ) -> i32 {
+        Intrinsic::MinHeight.measured(scope, width, |scope, constraints| {
+            self.measure(scope, measurables, constraints)
+        })
+    }
+
+    /// The smallest width beyond which a larger one doesn't make it lower, at `height`, as
+    /// `maxIntrinsicWidth`.
+    fn max_intrinsic_width(
+        &self,
+        scope: &mut IntrinsicMeasureScope<'_>,
+        measurables: &[IntrinsicMeasurable],
+        height: i32,
+    ) -> i32 {
+        Intrinsic::MaxWidth.measured(scope, height, |scope, constraints| {
+            self.measure(scope, measurables, constraints)
+        })
+    }
+
+    /// The smallest height beyond which a larger one doesn't make it narrower, at `width`, as
+    /// `maxIntrinsicHeight`.
+    fn max_intrinsic_height(
+        &self,
+        scope: &mut IntrinsicMeasureScope<'_>,
+        measurables: &[IntrinsicMeasurable],
+        width: i32,
+    ) -> i32 {
+        Intrinsic::MaxHeight.measured(scope, width, |scope, constraints| {
+            self.measure(scope, measurables, constraints)
+        })
+    }
+
     /// A name for dumps: the type's name.
     fn debug_name(&self) -> &'static str {
         crate::tree::short_type_name(std::any::type_name::<Self>())
@@ -33,7 +93,8 @@ pub trait MeasurePolicy: 'static {
 }
 
 /// A closure measures as a policy, as a Kotlin lambda converts to the `MeasurePolicy` fun
-/// interface: `Layout!(modifier, measure_policy(|scope, measurables, constraints| …), …)`.
+/// interface: `Layout!(modifier, measure_policy(|scope, measurables, constraints| …), …)`. Its
+/// intrinsics are the defaults (measured in an intrinsic measurement).
 impl<F> MeasurePolicy for F
 where
     F: Fn(&mut MeasureScope<'_>, &[Measurable], Constraints) -> MeasureResult + 'static,
@@ -71,6 +132,11 @@ pub struct Measurable {
     pub(crate) layer: u32,
 }
 
+/// What intrinsic sizes are asked of, as Compose's `IntrinsicMeasurable`: the same handle as
+/// [`Measurable`], whose intrinsics an [`IntrinsicMeasureScope`] answers
+/// (`scope.min_intrinsic_width(measurable, height)` for `measurable.minIntrinsicWidth(height)`).
+pub type IntrinsicMeasurable = Measurable;
+
 /// A measured `Measurable`, to place, as `Placeable`. Its size is within the constraints it was
 /// measured with.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -93,21 +159,84 @@ pub struct MeasureResult {
     pub height: i32,
 }
 
-/// What a measure policy or layout modifier works with, as Compose's `MeasureScope` and
-/// `Placeable.PlacementScope` in one.
-pub struct MeasureScope<'a> {
-    pub(crate) tree: &'a mut UiTree,
-    pub(crate) node: NodeId,
-    /// This measurement, to reject a child measured twice in it.
-    pub(crate) run: u64,
-    /// What `place_relative` placed in a right-to-left layout, mirrored once the layout's
-    /// width is known.
-    pub(crate) relative: Vec<(Placeable, IntOffset)>,
+/// The largest size a layout may take on each axis, as Compose's: 2^24 - 1 pixels.
+pub const MAX_LAYOUT_DIMENSION: i32 = (1 << 24) - 1;
+
+/// Panics unless both sizes are within 0 and [`MAX_LAYOUT_DIMENSION`], as Compose's
+/// `checkMeasuredSize`.
+fn check_measured_size(width: i32, height: i32) {
+    const MASK: i32 = !MAX_LAYOUT_DIMENSION;
+    assert!(
+        width & MASK == 0 && height & MASK == 0,
+        "Size({width} x {height}) is out of range. Each dimension must be between 0 and \
+         {MAX_LAYOUT_DIMENSION}."
+    );
 }
 
-impl MeasureScope<'_> {
+/// Which intrinsic an intrinsic measurement asks: what measuring a child returns in it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Intrinsic {
+    MinWidth,
+    MinHeight,
+    MaxWidth,
+    MaxHeight,
+}
+
+impl Intrinsic {
+    /// The constraints a default intrinsic function measures with to answer for `value` (the
+    /// size on the other axis), as Compose's: `Constraints(maxHeight = height)` for a width.
+    pub(crate) fn constraints(self, value: i32) -> Constraints {
+        match self {
+            Intrinsic::MinWidth | Intrinsic::MaxWidth => {
+                Constraints::new(0, Constraints::INFINITY, 0, value)
+            }
+            Intrinsic::MinHeight | Intrinsic::MaxHeight => {
+                Constraints::new(0, value, 0, Constraints::INFINITY)
+            }
+        }
+    }
+
+    /// The size of `result` that answers: its width for a width.
+    pub(crate) fn of(self, result: MeasureResult) -> i32 {
+        match self {
+            Intrinsic::MinWidth | Intrinsic::MaxWidth => result.width,
+            Intrinsic::MinHeight | Intrinsic::MaxHeight => result.height,
+        }
+    }
+
+    /// Compose's default intrinsic: `measure` run in an intrinsic measurement asking `self`.
+    pub(crate) fn measured(
+        self,
+        scope: &mut IntrinsicMeasureScope<'_>,
+        value: i32,
+        measure: impl FnOnce(&mut MeasureScope<'_>, Constraints) -> MeasureResult,
+    ) -> i32 {
+        self.of(measure(&mut scope.intrinsics_scope(self), self.constraints(value)))
+    }
+}
+
+/// The size an intrinsic measurement gives the axis it doesn't ask when that axis is
+/// unbounded, as Compose's `LargeDimension` (2^15 - 1).
+const LARGE_DIMENSION: i32 = (1 << 15) - 1;
+
+/// What a policy or layout modifier asking intrinsic sizes works with, as Compose's
+/// `IntrinsicMeasureScope`: the density, the layout direction, and its children's (or its
+/// content's) intrinsics. A [`MeasureScope`] is one too (it dereferences to it), so a policy
+/// asks its children's intrinsics while measuring.
+pub struct IntrinsicMeasureScope<'a> {
+    pub(crate) tree: &'a mut UiTree,
+    /// The node whose policy or modifier asks.
+    pub(crate) node: NodeId,
+}
+
+impl IntrinsicMeasureScope<'_> {
     pub fn density(&self) -> Density {
         self.tree.density
+    }
+
+    /// The direction of the layout, as `IntrinsicMeasureScope.layoutDirection`.
+    pub fn layout_direction(&self) -> LayoutDirection {
+        self.tree.node(self.node).layout_direction
     }
 
     /// compose-rs's optimizations beyond Compose's the host uses (`UiHost::set_optimizations`,
@@ -133,102 +262,185 @@ impl MeasureScope<'_> {
         self.tree.window_insets.map(|state| state.get()).unwrap_or_default()
     }
 
-    /// The direction of the layout being measured, as `MeasureScope.layoutDirection`.
-    pub fn layout_direction(&self) -> LayoutDirection {
-        self.tree.node(self.node).layout_direction
-    }
-
     pub fn text_measurer(&mut self) -> &mut dyn TextMeasurer {
         &mut *self.tree.text_measurer
     }
 
+    /// The data `measurable`'s modifiers give its parent (weight, alignment), as
+    /// `IntrinsicMeasurable.parentData`.
+    pub fn parent_data(&self, measurable: Measurable) -> ParentData {
+        self.tree.node(measurable.node).parent_data
+    }
+
+    /// The smallest width `measurable` can take at `height` and still paint its content
+    /// correctly, as `IntrinsicMeasurable.minIntrinsicWidth`.
+    pub fn min_intrinsic_width(&mut self, measurable: IntrinsicMeasurable, height: i32) -> i32 {
+        self.intrinsic(measurable, Intrinsic::MinWidth, height)
+    }
+
+    /// The smallest height `measurable` can take at `width` and still paint its content
+    /// correctly, as `IntrinsicMeasurable.minIntrinsicHeight`.
+    pub fn min_intrinsic_height(&mut self, measurable: IntrinsicMeasurable, width: i32) -> i32 {
+        self.intrinsic(measurable, Intrinsic::MinHeight, width)
+    }
+
+    /// The smallest width beyond which a larger one doesn't make `measurable` lower, at
+    /// `height`: the width it takes unconstrained, as `IntrinsicMeasurable.maxIntrinsicWidth`.
+    pub fn max_intrinsic_width(&mut self, measurable: IntrinsicMeasurable, height: i32) -> i32 {
+        self.intrinsic(measurable, Intrinsic::MaxWidth, height)
+    }
+
+    /// The smallest height beyond which a larger one doesn't make `measurable` narrower, at
+    /// `width`, as `IntrinsicMeasurable.maxIntrinsicHeight`.
+    pub fn max_intrinsic_height(&mut self, measurable: IntrinsicMeasurable, width: i32) -> i32 {
+        self.intrinsic(measurable, Intrinsic::MaxHeight, width)
+    }
+
+    /// `measurable`'s intrinsic `kind` at `value` (the size on the other axis): a child's,
+    /// which is then measured again, and whose change measures again the layout that asked
+    /// (Compose's `intrinsicsUsageByParent`), or this node's content's (the rest of its chain).
+    pub(crate) fn intrinsic(&mut self, measurable: Measurable, kind: Intrinsic, value: i32) -> i32 {
+        if measurable.layer == 0 {
+            assert_eq!(
+                self.tree.parent_of(measurable.node),
+                Some(self.node),
+                "compose-ui: a layout asked the intrinsic size of a node that isn't its child"
+            );
+            let child = self.tree.node_mut(measurable.node);
+            // Measured again after it was asked, as Compose's `onIntrinsicsQueried`: its
+            // default intrinsics run its measuring code, which may keep what it saw.
+            child.constraints = None;
+            child.intrinsics_asked = true;
+            self.tree.node_mut(self.node).children_intrinsics_asked = true;
+        } else {
+            assert_eq!(
+                measurable.node, self.node,
+                "compose-ui: a layout modifier asked the intrinsic size of another node's content"
+            );
+        }
+        self.tree.intrinsic(measurable.node, measurable.layer as usize, kind, value)
+    }
+
+    /// A measure scope where measuring a child asks its intrinsic `kind` and placing does
+    /// nothing, as Compose's `IntrinsicsMeasureScope`: what the default intrinsics measure in.
+    pub(crate) fn intrinsics_scope(&mut self, kind: Intrinsic) -> MeasureScope<'_> {
+        MeasureScope {
+            base: IntrinsicMeasureScope { tree: &mut *self.tree, node: self.node },
+            run: 0,
+            relative: Vec::new(),
+            intrinsic: Some(kind),
+        }
+    }
+}
+
+/// What a measure policy or layout modifier works with, as Compose's `MeasureScope` and
+/// `Placeable.PlacementScope` in one. It dereferences to [`IntrinsicMeasureScope`].
+pub struct MeasureScope<'a> {
+    pub(crate) base: IntrinsicMeasureScope<'a>,
+    /// This measurement, to reject a child measured twice in it.
+    pub(crate) run: u64,
+    /// What `place_relative` placed in a right-to-left layout, mirrored once the layout's
+    /// width is known.
+    pub(crate) relative: Vec<(Placeable, IntOffset)>,
+    /// In an intrinsic measurement (a default intrinsic function measuring), the intrinsic
+    /// asked: measuring returns it, placing does nothing.
+    pub(crate) intrinsic: Option<Intrinsic>,
+}
+
+impl<'a> std::ops::Deref for MeasureScope<'a> {
+    type Target = IntrinsicMeasureScope<'a>;
+
+    fn deref(&self) -> &IntrinsicMeasureScope<'a> {
+        &self.base
+    }
+}
+
+impl std::ops::DerefMut for MeasureScope<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.base
+    }
+}
+
+impl<'a> MeasureScope<'a> {
+    pub(crate) fn new(tree: &'a mut UiTree, node: NodeId, run: u64) -> MeasureScope<'a> {
+        MeasureScope {
+            base: IntrinsicMeasureScope { tree, node },
+            run,
+            relative: Vec::new(),
+            intrinsic: None,
+        }
+    }
+
     /// Measures `measurable` with `constraints`.
+    ///
+    /// In an intrinsic measurement (a default intrinsic function running `measure`), returns a
+    /// placeable sized by `measurable`'s intrinsic on the axis asked, and by the constraints'
+    /// maximum on the other axis, as Compose's `DefaultIntrinsicMeasurable`.
     ///
     /// # Panics
     ///
     /// If this measurement already measured it, as Compose does: a second measurement would
     /// leave the layout depending on constraints no later pass replays.
     pub fn measure(&mut self, measurable: Measurable, constraints: Constraints) -> Placeable {
+        if let Some(kind) = self.intrinsic {
+            let other = |max: i32| if max == Constraints::INFINITY { LARGE_DIMENSION } else { max };
+            let (width, height) = match kind {
+                Intrinsic::MinWidth | Intrinsic::MaxWidth => (
+                    self.base.intrinsic(measurable, kind, constraints.max_height),
+                    other(constraints.max_height),
+                ),
+                Intrinsic::MinHeight | Intrinsic::MaxHeight => (
+                    other(constraints.max_width),
+                    self.base.intrinsic(measurable, kind, constraints.max_width),
+                ),
+            };
+            return Placeable { measurable, width, height };
+        }
+        let node = self.base.node;
+        let tree = &mut *self.base.tree;
         let size = if measurable.layer == 0 {
             assert_eq!(
-                self.tree.parent_of(measurable.node),
-                Some(self.node),
+                tree.parent_of(measurable.node),
+                Some(node),
                 "compose-ui: a policy measured a node that isn't its child"
             );
-            let child = self.tree.node_mut(measurable.node);
+            let child = tree.node_mut(measurable.node);
             assert!(
                 child.measured_in != self.run,
                 "compose-ui: a measure policy measured the same child twice in one measurement"
             );
             child.measured_in = self.run;
-            self.tree.measure_node(measurable.node, constraints)
+            tree.measure_node(measurable.node, constraints)
         } else {
             assert_eq!(
-                measurable.node, self.node,
+                measurable.node, node,
                 "compose-ui: a layout modifier measured another node's content"
             );
-            let layer = &mut self.tree.node_mut(measurable.node).layers[measurable.layer as usize];
+            let layer = &mut tree.node_mut(measurable.node).layers[measurable.layer as usize];
             assert!(
                 layer.measured_in != self.run,
                 "compose-ui: a layout modifier measured its content twice in one measurement"
             );
             layer.measured_in = self.run;
-            self.tree.measure_layer(measurable.node, measurable.layer as usize, constraints)
+            tree.measure_layer(measurable.node, measurable.layer as usize, constraints)
         };
         Placeable { measurable, width: size.width, height: size.height }
     }
 
-    /// The width `measurable` takes when its width is unbounded and its height at most
-    /// `height`, as Compose's `maxIntrinsicWidth` for layouts that don't compute their own:
-    /// measured to ask, then to be measured again (with `measure`) for its place. Costs a
-    /// measurement of its subtree.
-    pub fn max_intrinsic_width(&mut self, measurable: Measurable, height: i32) -> i32 {
-        assert_eq!(
-            self.tree.parent_of(measurable.node),
-            Some(self.node),
-            "compose-ui: a policy asked the width of a node that isn't its child"
-        );
-        assert_eq!(measurable.layer, 0, "compose-ui: intrinsic widths are asked of children");
-        let probe = Constraints::new(0, Constraints::INFINITY, 0, height);
-        self.tree.node_mut(measurable.node).intrinsics_asked = true;
-        self.probe(measurable, probe).width
-    }
-
-    /// The height `measurable` takes at `width` (fixed) with an unbounded height, as Compose's
-    /// `maxIntrinsicHeight` for layouts that don't compute their own: measured to ask, then to
-    /// be measured again (with `measure`) for its place.
-    pub fn max_intrinsic_height(&mut self, measurable: Measurable, width: i32) -> i32 {
-        assert_eq!(
-            self.tree.parent_of(measurable.node),
-            Some(self.node),
-            "compose-ui: a policy asked the height of a node that isn't its child"
-        );
-        assert_eq!(measurable.layer, 0, "compose-ui: intrinsic heights are asked of children");
-        let probe = Constraints::new(width, width, 0, Constraints::INFINITY);
-        self.tree.node_mut(measurable.node).intrinsics_asked = true;
-        self.probe(measurable, probe).height
-    }
-
-    /// Measures `measurable` with `probe` to ask its intrinsic size: layout callbacks don't
-    /// hear the sizes it measures (`on_size_changed`).
-    fn probe(&mut self, measurable: Measurable, probe: Constraints) -> IntSize {
-        self.tree.intrinsic_probes += 1;
-        let size = self.tree.measure_node(measurable.node, probe);
-        self.tree.intrinsic_probes -= 1;
-        size
-    }
-
     /// Runs `action` after the layout, outside the tree, as the layout callbacks
     /// (`on_size_changed`) run: a text's `on_text_layout`. What it writes is laid out within the
-    /// frame (D172).
+    /// frame (D172). Nothing runs from an intrinsic measurement, which isn't the layout's.
     pub fn run_after_layout(&mut self, action: impl FnOnce() + 'static) {
-        self.tree.layout_callbacks.push(crate::input::Action::Run(Box::new(action)));
+        if self.intrinsic.is_none() {
+            self.base.tree.layout_callbacks.push(crate::input::Action::Run(Box::new(action)));
+        }
     }
 
-    /// Whether this measurement only asks an intrinsic size (`max_intrinsic_width` measuring
-    /// a child to ask): what it measures isn't the layout's.
-    pub fn is_intrinsic_probe(&self) -> bool {
-        self.tree.intrinsic_probes > 0
+    /// Whether this is an intrinsic measurement: a default intrinsic function running
+    /// `measure` (Compose's `IntrinsicsMeasureScope`), where measuring returns intrinsics and
+    /// placing does nothing. What it measures isn't the layout's.
+    pub(crate) fn is_intrinsic_measurement(&self) -> bool {
+        self.intrinsic.is_some()
     }
 
     /// Places `placeable` at `x`, `y` in this node's coordinates, as `Placeable.place`.
@@ -237,13 +449,19 @@ impl MeasureScope<'_> {
     }
 
     pub fn place_at(&mut self, placeable: &Placeable, position: IntOffset) {
+        if self.intrinsic.is_some() {
+            return;
+        }
         let measurable = placeable.measurable;
-        self.tree.place(measurable.node, measurable.layer as usize, position);
+        self.base.tree.place(measurable.node, measurable.layer as usize, position);
     }
 
     /// Places `placeable` at `x` from the start, as `placeRelative`: in a right-to-left
     /// layout, mirrored in the width the layout reports (`x` from its right edge).
     pub fn place_relative(&mut self, placeable: &Placeable, x: i32, y: i32) {
+        if self.intrinsic.is_some() {
+            return;
+        }
         self.place(placeable, x, y);
         if self.layout_direction() == LayoutDirection::Rtl {
             self.relative.push((*placeable, IntOffset::new(x, y)));
@@ -251,13 +469,16 @@ impl MeasureScope<'_> {
     }
 
     /// The result of a measurement of `width` by `height`, as `MeasureScope.layout`.
+    ///
+    /// # Panics
+    ///
+    /// If a size is negative or larger than [`MAX_LAYOUT_DIMENSION`], as Compose's (an
+    /// intrinsic measurement takes a negative size as zero first, as Compose's).
     pub fn layout(&self, width: i32, height: i32) -> MeasureResult {
+        let (width, height) =
+            if self.intrinsic.is_some() { (width.max(0), height.max(0)) } else { (width, height) };
+        check_measured_size(width, height);
         MeasureResult { width, height }
-    }
-
-    /// The data `measurable`'s modifiers give its parent (weight, alignment).
-    pub fn parent_data(&self, measurable: Measurable) -> ParentData {
-        self.tree.node(measurable.node).parent_data
     }
 }
 

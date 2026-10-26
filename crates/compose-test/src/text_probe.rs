@@ -127,6 +127,10 @@ impl<M: TextMeasurer> TextMeasurer for CountingTextMeasurer<M> {
         self.inner.max_intrinsic_width(paragraph)
     }
 
+    fn min_intrinsic_width(&self, paragraph: ParagraphHandle) -> Option<f32> {
+        self.inner.min_intrinsic_width(paragraph)
+    }
+
     fn relayout(
         &mut self,
         paragraph: ParagraphHandle,

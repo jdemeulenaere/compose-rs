@@ -4,7 +4,7 @@ use std::mem;
 use std::panic::{self, AssertUnwindSafe};
 
 use crate::constraints::Constraints;
-use crate::layout::{Measurable, MeasureResult, MeasureScope};
+use crate::layout::{Intrinsic, IntrinsicMeasureScope, Measurable, MeasureResult, MeasureScope};
 use crate::nodes::Taken;
 use crate::tree::{Layer, NodeId, Observation, UiTree, capability, observation_key};
 use crate::unit::{IntOffset, IntSize};
@@ -23,8 +23,6 @@ impl UiTree {
             }
         }
         self.window = size;
-        // A panic in a probe unwound past its count.
-        self.intrinsic_probes = 0;
         let root = self.root_id();
         let constraints = Constraints::fixed(size.width, size.height);
         let value = self.node(root);
@@ -149,24 +147,9 @@ impl UiTree {
     /// only descendants changed, they're measured again in place, and the node itself only if
     /// one of its children's sizes changed.
     ///
-    /// An intrinsic probe (`max_intrinsic_width`, `max_intrinsic_height`) doesn't fill this
-    /// cache, as Compose's intrinsics don't touch its measurement (D556): it reads the size of a
-    /// node measured with the same constraints and nothing changed inside since; otherwise it
-    /// measures the node for itself and leaves it to be measured again (what its layers hold
-    /// then is the probe's, not a measurement to return).
+    /// Intrinsics don't touch this cache (they measure nothing): a node whose intrinsics were
+    /// asked is measured again by the parent that asked (D1201).
     pub(crate) fn measure_node(&mut self, node: NodeId, constraints: Constraints) -> IntSize {
-        if self.intrinsic_probes > 0 {
-            let value = self.node(node);
-            if value.constraints == Some(constraints)
-                && !value.needs_measure
-                && !value.subtree_needs_measure
-            {
-                return value.layers[0].size;
-            }
-            let size = self.measure_layer(node, 0, constraints);
-            self.node_mut(node).constraints = None;
-            return size;
-        }
         let value = self.node(node);
         if value.constraints == Some(constraints)
             && !value.needs_measure
@@ -180,6 +163,13 @@ impl UiTree {
         value.needs_measure = false;
         value.subtree_needs_measure = false;
         value.constraints = Some(constraints);
+        // What this measurement asks of its descendants' intrinsics is asked anew, unless its
+        // own were asked: then what its parent asked through it holds (Compose's
+        // `clearSubtreeIntrinsicsUsage`).
+        if value.children_intrinsics_asked && !value.intrinsics_asked {
+            self.clear_intrinsics_usage_below(node);
+        }
+        let value = self.node_mut(node);
         if value.inner_layers.is_empty() {
             // Measured, it draws again.
             self.invalidate_draw_of(node);
@@ -232,8 +222,10 @@ impl UiTree {
             if (!value.needs_measure && !value.subtree_needs_measure) || value.deactivated {
                 continue;
             }
-            // Its parent's size depends on its intrinsics, not just its size.
-            if value.intrinsics_asked {
+            // Its parent (or a layout above whose intrinsics were asked through it) asked its
+            // intrinsics, which may have changed: that layout measures again, as Compose's
+            // `invalidateIntrinsicsParent`.
+            if value.intrinsics_asked && self.intrinsics_invalidated(child) {
                 return true;
             }
             let Some(constraints) = value.constraints else { return true };
@@ -243,6 +235,95 @@ impl UiTree {
             }
         }
         false
+    }
+
+    /// Whether `node`, whose intrinsics its parent asked, needs measuring itself, or a
+    /// descendant does whose intrinsics were asked through it (each one's flag set up to `node`):
+    /// what asked may have changed (Compose's `invalidateIntrinsicsParent`).
+    fn intrinsics_invalidated(&self, node: NodeId) -> bool {
+        let value = self.node(node);
+        value.needs_measure
+            || value.subtree_needs_measure
+                && value.children_intrinsics_asked
+                && value.children.iter().any(|child| {
+                    let value = self.node(child.node);
+                    value.intrinsics_asked
+                        && !value.deactivated
+                        && (value.needs_measure || value.subtree_needs_measure)
+                        && self.intrinsics_invalidated(child.node)
+                })
+    }
+
+    /// Forgets which intrinsics `node`'s measurement asked below it: its children's, and
+    /// theirs asked through them (Compose's `clearSubtreeIntrinsicsUsage`).
+    fn clear_intrinsics_usage_below(&mut self, node: NodeId) {
+        self.node_mut(node).children_intrinsics_asked = false;
+        for index in 0..self.node(node).children.len() {
+            let child = self.node(node).children[index].node;
+            let value = self.node_mut(child);
+            if value.intrinsics_asked {
+                value.intrinsics_asked = false;
+                if value.children_intrinsics_asked {
+                    self.clear_intrinsics_usage_below(child);
+                }
+            }
+        }
+    }
+
+    /// The intrinsic `kind` at `value` (the size on the other axis) of layer `layer` of `node`:
+    /// its layout modifier's intrinsic function with the rest as its content, or past the last
+    /// one its policy's with its children. Nothing is measured, placed or kept.
+    pub(crate) fn intrinsic(
+        &mut self,
+        node: NodeId,
+        layer: usize,
+        kind: Intrinsic,
+        value: i32,
+    ) -> i32 {
+        let entry = self.node_mut(node);
+        if layer < entry.layout_indices.len() {
+            let index = entry.layout_indices[layer] as usize;
+            // Out of the chain while it runs, so it can ask the rest of its own node.
+            let mut modifier_node = mem::replace(&mut entry.chain[index], Box::new(Taken));
+            let result = panic::catch_unwind(AssertUnwindSafe(|| {
+                let mut scope = IntrinsicMeasureScope { tree: &mut *self, node };
+                let content = Measurable { node, layer: layer as u32 + 1 };
+                let layout = modifier_node.as_layout().expect("compose-ui: a layout node");
+                match kind {
+                    Intrinsic::MinWidth => layout.min_intrinsic_width(&mut scope, content, value),
+                    Intrinsic::MinHeight => layout.min_intrinsic_height(&mut scope, content, value),
+                    Intrinsic::MaxWidth => layout.max_intrinsic_width(&mut scope, content, value),
+                    Intrinsic::MaxHeight => layout.max_intrinsic_height(&mut scope, content, value),
+                }
+            }));
+            self.node_mut(node).chain[index] = modifier_node;
+            return result.unwrap_or_else(|panic| panic::resume_unwind(panic));
+        }
+        let policy = entry.policy.clone();
+        let children = mem::take(&mut entry.children);
+        // Deactivated children (content kept for reuse) aren't there for the policy.
+        let active: Vec<Measurable>;
+        let measurables: &[Measurable] =
+            if children.iter().any(|child| self.node(child.node).deactivated) {
+                active = (children.iter())
+                    .filter(|child| !self.node(child.node).deactivated)
+                    .copied()
+                    .collect();
+                &active
+            } else {
+                &children
+            };
+        let result = panic::catch_unwind(AssertUnwindSafe(|| {
+            let mut scope = IntrinsicMeasureScope { tree: &mut *self, node };
+            match kind {
+                Intrinsic::MinWidth => policy.min_intrinsic_width(&mut scope, measurables, value),
+                Intrinsic::MinHeight => policy.min_intrinsic_height(&mut scope, measurables, value),
+                Intrinsic::MaxWidth => policy.max_intrinsic_width(&mut scope, measurables, value),
+                Intrinsic::MaxHeight => policy.max_intrinsic_height(&mut scope, measurables, value),
+            }
+        }));
+        self.node_mut(node).children = children;
+        result.unwrap_or_else(|panic| panic::resume_unwind(panic))
     }
 
     /// Measures layer `layer` of `node`: a layout modifier, or past the last one the node's
@@ -267,7 +348,7 @@ impl UiTree {
             let observer = if custom { self.observer.clone() } else { None };
             let mut relative = Vec::new();
             let result = panic::catch_unwind(AssertUnwindSafe(|| {
-                let mut scope = MeasureScope { tree: &mut *self, node, run, relative: Vec::new() };
+                let mut scope = MeasureScope::new(&mut *self, node, run);
                 let content = Measurable { node, layer: layer as u32 + 1 };
                 let mut measure = || {
                     modifier_node.as_layout().expect("compose-ui: a layout node").measure(
@@ -299,7 +380,6 @@ impl UiTree {
             for (index, child) in children.iter().enumerate() {
                 let child = self.node_mut(child.node);
                 child.placed = false;
-                child.intrinsics_asked = false;
                 if child.deactivated {
                     active = active.min(index);
                 } else if active < index {
@@ -320,7 +400,7 @@ impl UiTree {
             let observer = self.observer.clone();
             let mut relative = Vec::new();
             let result = panic::catch_unwind(AssertUnwindSafe(|| {
-                let mut scope = MeasureScope { tree: &mut *self, node, run, relative: Vec::new() };
+                let mut scope = MeasureScope::new(&mut *self, node, run);
                 let result = match &observer {
                     Some(observer) => observer
                         .observe(observation_key(node, Observation::Measure), || {

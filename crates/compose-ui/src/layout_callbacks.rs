@@ -9,7 +9,7 @@ use compose_runtime::{Callback, IntoCallback};
 
 use crate::constraints::Constraints;
 use crate::input::Action;
-use crate::layout::{Measurable, MeasureResult, MeasureScope};
+use crate::layout::{IntrinsicMeasureScope, Measurable, MeasureResult, MeasureScope};
 use crate::modifier::{LayoutModifierNode, Modifier, ModifierNode, ModifierNodeElement};
 use crate::tree::{NodeId, UiTree, capability};
 use crate::unit::{IntSize, Offset, Rect};
@@ -121,14 +121,48 @@ impl LayoutModifierNode for OnSizeChangedNode {
     ) -> MeasureResult {
         let placeable = scope.measure(content, constraints);
         let size = placeable.size();
-        // An intrinsic probe's size isn't the layout's.
-        if self.last != Some(size) && !scope.is_intrinsic_probe() {
+        // An intrinsic measurement's size isn't the layout's.
+        if self.last != Some(size) && !scope.is_intrinsic_measurement() {
             self.last = Some(size);
             let callback = self.callback.clone();
-            scope.tree.layout_callbacks.push(Action::Run(Box::new(move || callback(size))));
+            scope.run_after_layout(move || callback(size));
         }
         scope.place(&placeable, 0, 0);
         scope.layout(placeable.width, placeable.height)
+    }
+
+    // Its content's intrinsics, as Compose's `onSizeChanged`, which isn't a layout modifier.
+    fn min_intrinsic_width(
+        &mut self,
+        scope: &mut IntrinsicMeasureScope<'_>,
+        content: Measurable,
+        height: i32,
+    ) -> i32 {
+        scope.min_intrinsic_width(content, height)
+    }
+    fn min_intrinsic_height(
+        &mut self,
+        scope: &mut IntrinsicMeasureScope<'_>,
+        content: Measurable,
+        width: i32,
+    ) -> i32 {
+        scope.min_intrinsic_height(content, width)
+    }
+    fn max_intrinsic_width(
+        &mut self,
+        scope: &mut IntrinsicMeasureScope<'_>,
+        content: Measurable,
+        height: i32,
+    ) -> i32 {
+        scope.max_intrinsic_width(content, height)
+    }
+    fn max_intrinsic_height(
+        &mut self,
+        scope: &mut IntrinsicMeasureScope<'_>,
+        content: Measurable,
+        width: i32,
+    ) -> i32 {
+        scope.max_intrinsic_height(content, width)
     }
 }
 

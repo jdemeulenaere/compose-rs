@@ -16,6 +16,7 @@ use crate::draw::DrawScope;
 use crate::graphics::{Color, Shape};
 use crate::input::{EventContext, KeyEvent, PointerEvent, PointerEventPass};
 use crate::layout::{Measurable, MeasureResult, MeasureScope};
+use crate::layout_modifiers::SizeOrIntrinsic;
 use crate::semantics::{Role, SemanticsConfiguration};
 use crate::text::SharedString;
 use crate::unit::{Dp, DpSize, IntSize};
@@ -89,12 +90,25 @@ impl Modifier {
         self.size_in(SizeSpec::exact(size.width, size.height, false))
     }
 
-    pub fn width(self, width: Dp) -> Modifier {
-        self.size_in(SizeSpec::exact(width, Dp::UNSPECIFIED, false))
+    /// A width within the incoming constraints, as `Modifier.width`'s overloads: in dp
+    /// (`width(40.dp())`), or the content's intrinsic width (`width(IntrinsicSize::Max)`).
+    pub fn width(self, width: impl Into<SizeOrIntrinsic>) -> Modifier {
+        match width.into() {
+            SizeOrIntrinsic::Size(width) => {
+                self.size_in(SizeSpec::exact(width, Dp::UNSPECIFIED, false))
+            }
+            SizeOrIntrinsic::Intrinsic(size) => self.intrinsic_size(true, size, true),
+        }
     }
 
-    pub fn height(self, height: Dp) -> Modifier {
-        self.size_in(SizeSpec::exact(Dp::UNSPECIFIED, height, false))
+    /// A height within the incoming constraints, as `Modifier.height`'s overloads (as `width`).
+    pub fn height(self, height: impl Into<SizeOrIntrinsic>) -> Modifier {
+        match height.into() {
+            SizeOrIntrinsic::Size(height) => {
+                self.size_in(SizeSpec::exact(Dp::UNSPECIFIED, height, false))
+            }
+            SizeOrIntrinsic::Intrinsic(size) => self.intrinsic_size(false, size, true),
+        }
     }
 
     /// Exact sizes, overriding the incoming constraints, as `Modifier.requiredSize`'s overloads
@@ -102,6 +116,28 @@ impl Modifier {
     pub fn required_size(self, size: impl Into<DpSize>) -> Modifier {
         let size = size.into();
         self.size_in(SizeSpec::exact(size.width, size.height, true))
+    }
+
+    /// An exact width, overriding the incoming constraints, as `Modifier.requiredWidth`'s
+    /// overloads: in dp, or the content's intrinsic width.
+    pub fn required_width(self, width: impl Into<SizeOrIntrinsic>) -> Modifier {
+        match width.into() {
+            SizeOrIntrinsic::Size(width) => {
+                self.size_in(SizeSpec::exact(width, Dp::UNSPECIFIED, true))
+            }
+            SizeOrIntrinsic::Intrinsic(size) => self.intrinsic_size(true, size, false),
+        }
+    }
+
+    /// An exact height, overriding the incoming constraints, as `Modifier.requiredHeight`'s
+    /// overloads (as `required_width`).
+    pub fn required_height(self, height: impl Into<SizeOrIntrinsic>) -> Modifier {
+        match height.into() {
+            SizeOrIntrinsic::Size(height) => {
+                self.size_in(SizeSpec::exact(Dp::UNSPECIFIED, height, true))
+            }
+            SizeOrIntrinsic::Intrinsic(size) => self.intrinsic_size(false, size, false),
+        }
     }
 
     /// Bounds on the size, as `Modifier.sizeIn` (`Dp::UNSPECIFIED` for no bound).
@@ -993,6 +1029,10 @@ pub struct DetachContext<'a> {
 }
 
 /// A node that changes how its content is measured and placed, as `LayoutModifierNode`.
+///
+/// Its intrinsic functions default to Compose's (`NodeMeasuringIntrinsics`): `measure` run in
+/// an intrinsic measurement, where measuring `content` returns its intrinsic on the axis asked
+/// and placing does nothing (see [`MeasurePolicy`](crate::MeasurePolicy)).
 pub trait LayoutModifierNode {
     /// Measures `content` (the rest of the chain and the layout node's own policy) and places
     /// it, returning this node's size.
@@ -1002,6 +1042,52 @@ pub trait LayoutModifierNode {
         content: Measurable,
         constraints: Constraints,
     ) -> MeasureResult;
+
+    /// As `LayoutModifierNode.minIntrinsicWidth`: this layer's smallest width at `height`.
+    fn min_intrinsic_width(
+        &mut self,
+        scope: &mut crate::layout::IntrinsicMeasureScope<'_>,
+        content: crate::layout::IntrinsicMeasurable,
+        height: i32,
+    ) -> i32 {
+        crate::layout::Intrinsic::MinWidth
+            .measured(scope, height, |scope, constraints| self.measure(scope, content, constraints))
+    }
+
+    /// As `LayoutModifierNode.minIntrinsicHeight`: this layer's smallest height at `width`.
+    fn min_intrinsic_height(
+        &mut self,
+        scope: &mut crate::layout::IntrinsicMeasureScope<'_>,
+        content: crate::layout::IntrinsicMeasurable,
+        width: i32,
+    ) -> i32 {
+        crate::layout::Intrinsic::MinHeight
+            .measured(scope, width, |scope, constraints| self.measure(scope, content, constraints))
+    }
+
+    /// As `LayoutModifierNode.maxIntrinsicWidth`: the width beyond which this layer gets no
+    /// lower, at `height`.
+    fn max_intrinsic_width(
+        &mut self,
+        scope: &mut crate::layout::IntrinsicMeasureScope<'_>,
+        content: crate::layout::IntrinsicMeasurable,
+        height: i32,
+    ) -> i32 {
+        crate::layout::Intrinsic::MaxWidth
+            .measured(scope, height, |scope, constraints| self.measure(scope, content, constraints))
+    }
+
+    /// As `LayoutModifierNode.maxIntrinsicHeight`: the height beyond which this layer gets no
+    /// narrower, at `width`.
+    fn max_intrinsic_height(
+        &mut self,
+        scope: &mut crate::layout::IntrinsicMeasureScope<'_>,
+        content: crate::layout::IntrinsicMeasurable,
+        width: i32,
+    ) -> i32 {
+        crate::layout::Intrinsic::MaxHeight
+            .measured(scope, width, |scope, constraints| self.measure(scope, content, constraints))
+    }
 }
 
 /// A node that draws, as `DrawModifierNode`: `draw` before the content (the rest of the chain

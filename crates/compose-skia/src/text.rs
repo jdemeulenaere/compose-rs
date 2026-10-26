@@ -173,6 +173,11 @@ impl TextMeasurer for SkiaTextMeasurer {
         Some(self.entry(paragraph).max_intrinsic_width)
     }
 
+    /// SkParagraph's `minIntrinsicWidth`: its widest word.
+    fn min_intrinsic_width(&self, paragraph: ParagraphHandle) -> Option<f32> {
+        Some(self.entry(paragraph).paragraph.min_intrinsic_width())
+    }
+
     fn hit_test(&self, paragraph: ParagraphHandle, position: Offset) -> TextPosition {
         let entry = self.entry(paragraph);
         let found = entry.paragraph.get_glyph_position_at_coordinate((position.x, position.y));

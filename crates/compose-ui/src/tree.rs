@@ -165,9 +165,12 @@ pub struct LayoutNode {
     pub(crate) measured_in: u64,
     /// The layout direction where it was composed (`LOCAL_LAYOUT_DIRECTION`).
     pub(crate) layout_direction: crate::alignment::LayoutDirection,
-    /// Its parent asked its intrinsic width in its last measurement: a change inside it
-    /// measures the parent again, not just it in place.
+    /// Its parent asked its intrinsics (in its measurement, or for a layout above, through
+    /// its own intrinsics), as Compose's `intrinsicsUsageByParent`: a change in it measures that
+    /// layout again, not just it in place (D1201).
     pub(crate) intrinsics_asked: bool,
+    /// It asked a child's intrinsics since it last forgot them: one has `intrinsics_asked`.
+    pub(crate) children_intrinsics_asked: bool,
     /// An overlay (`Modifier.overlay`): placed in the root at `overlay_origin`, not where its
     /// parent placed it; drawn last and hit first.
     pub(crate) overlay: bool,
@@ -207,6 +210,7 @@ impl LayoutNode {
             placed: false,
             measured_in: 0,
             intrinsics_asked: false,
+            children_intrinsics_asked: false,
             layout_direction: crate::alignment::LayoutDirection::Ltr,
             overlay: false,
             overlay_origin: crate::unit::Offset::ZERO,
@@ -297,8 +301,6 @@ pub struct UiTree {
     pub(crate) positioned: Vec<NodeId>,
     /// Something was laid out (or a position-aware node came) since the last callbacks.
     pub(crate) laid_out_since_callbacks: bool,
-    /// Intrinsic probes in progress (`MeasureScope::max_intrinsic_width` measuring to ask).
-    pub(crate) intrinsic_probes: u32,
     /// The window's insets, the host's state: read while measuring (insets paddings), so a
     /// change measures their readers again.
     pub(crate) window_insets:
@@ -362,7 +364,6 @@ impl UiTree {
             layout_callbacks: Vec::new(),
             positioned: Vec::new(),
             laid_out_since_callbacks: false,
-            intrinsic_probes: 0,
             window_insets: None,
             measured_ahead: Vec::new(),
             kept: Vec::new(),

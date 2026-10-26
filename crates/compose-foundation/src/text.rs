@@ -4,10 +4,10 @@
 
 use compose_runtime::{Callback, composable};
 use compose_ui::{
-    AnnotatedString, Constraints, DetachContext, DrawModifierNode, DrawScope, Layout,
-    LayoutModifierNode, Measurable, MeasureResult, MeasureScope, Modifier, ModifierNode,
-    ModifierNodeElement, Offset, SemanticsConfiguration, SemanticsModifierNode, SharedString,
-    TextLayoutResult, TextStyle, empty_measure_policy,
+    AnnotatedString, Constraints, DetachContext, DrawModifierNode, DrawScope,
+    IntrinsicMeasureScope, Layout, LayoutModifierNode, Measurable, MeasureResult, MeasureScope,
+    Modifier, ModifierNode, ModifierNodeElement, Offset, SemanticsConfiguration,
+    SemanticsModifierNode, SharedString, TextLayoutResult, TextStyle, empty_measure_policy,
     platform::{ParagraphHandle, TextLayoutOptions},
 };
 
@@ -128,7 +128,11 @@ pub(crate) struct TextElement {
 /// The height of `lines` lines of text in `style` (at least one), as Compose's
 /// `heightInLines`: the first line's height and each further line's, measured from one and two
 /// lines of "H" laid out in the style.
-pub(crate) fn height_of_lines(scope: &mut MeasureScope<'_>, style: &TextStyle, lines: u32) -> i32 {
+pub(crate) fn height_of_lines(
+    scope: &mut IntrinsicMeasureScope<'_>,
+    style: &TextStyle,
+    lines: u32,
+) -> i32 {
     let density = scope.density();
     let options =
         TextLayoutOptions { direction: scope.layout_direction(), ..TextLayoutOptions::default() };
@@ -148,7 +152,7 @@ pub(crate) fn height_of_lines(scope: &mut MeasureScope<'_>, style: &TextStyle, l
 }
 
 /// Whether the host keeps a text's paragraph at the same layout width (D551).
-fn reuses_at_same_width(scope: &MeasureScope<'_>) -> bool {
+fn reuses_at_same_width(scope: &IntrinsicMeasureScope<'_>) -> bool {
     scope
         .optimizations()
         .contains(compose_ui::platform::Optimization::REUSE_PARAGRAPH_AT_SAME_LAYOUT_WIDTH)
@@ -461,12 +465,12 @@ impl TextNode {
         true
     }
 
-    /// The paragraph an intrinsic probe at `constraints` measures, leaving the measured one and
-    /// its constraints as they are: the measured paragraph if the probe wouldn't lay it out
-    /// again, else the probes' own, laid out again by the same rule.
+    /// The paragraph an intrinsic height at `constraints` reads, leaving the measured one and
+    /// its constraints as they are: the measured paragraph if the constraints wouldn't lay it
+    /// out again, else the intrinsics' own, laid out again by the same rule (D554).
     fn probe_paragraph(
         &mut self,
-        scope: &mut MeasureScope<'_>,
+        scope: &mut IntrinsicMeasureScope<'_>,
         constraints: Constraints,
         density: compose_ui::Density,
         direction: compose_ui::LayoutDirection,
@@ -545,40 +549,19 @@ impl LayoutModifierNode for TextNode {
                 self.constraints = None;
             }
         }
-        let probing = scope.is_intrinsic_probe();
-        let (paragraph, relaid) = if probing {
-            (self.probe_paragraph(scope, constraints, density, direction), false)
-        } else {
-            let relaid = self.lay_out(scope, constraints, density, direction);
-            self.constraints = Some(constraints);
-            (self.paragraph.expect("laid out"), relaid)
-        };
+        let relaid = self.lay_out(scope, constraints, density, direction);
+        self.constraints = Some(constraints);
+        let paragraph = self.paragraph.expect("laid out");
         let metrics = scope.text_measurer().metrics(paragraph);
         let natural = metrics.size;
-        // At least `min_lines` high, as Compose's `heightInLines`.
-        let min_height = if self.min_lines > 1 {
-            match self.min_height {
-                Some((at, height)) if at == density => height,
-                _ => {
-                    let height = height_of_lines(scope, &self.style, self.min_lines);
-                    self.min_height = Some((density, height));
-                    height
-                }
-            }
-        } else {
-            0
-        };
+        let min_height = self.min_lines_height(scope, density);
         let size = constraints
             .constrain(compose_ui::IntSize::new(natural.width, natural.height.max(min_height)));
         // Text larger than its bounds is clipped, as Compose's `TextOverflow.Clip`.
-        if !probing {
-            self.overflows = natural.width > size.width || natural.height > size.height;
-        }
+        self.overflows = natural.width > size.width || natural.height > size.height;
         // Each new layout is heard, as Compose's `onTextLayout`: a paragraph laid out again
         // (a new text, style or width), or a new size.
-        if let Some(callback) = &self.on_text_layout
-            && !probing
-        {
+        if let Some(callback) = &self.on_text_layout {
             let result = TextLayoutResult {
                 size,
                 line_count: metrics.line_count,
@@ -597,6 +580,110 @@ impl LayoutModifierNode for TextNode {
         let placeable = scope.measure(content, Constraints::fixed(size.width, size.height));
         scope.place(&placeable, 0, 0);
         scope.layout(size.width, size.height)
+    }
+
+    /// The width with every soft line break taken (its longest word), as Compose's text
+    /// node (`ParagraphIntrinsics.minIntrinsicWidth`, rounded up).
+    fn min_intrinsic_width(
+        &mut self,
+        scope: &mut IntrinsicMeasureScope<'_>,
+        _content: Measurable,
+        _height: i32,
+    ) -> i32 {
+        self.intrinsic_widths(scope).0
+    }
+
+    /// The height laid out at `width`, at least `min_lines` high, as Compose's text node.
+    fn min_intrinsic_height(
+        &mut self,
+        scope: &mut IntrinsicMeasureScope<'_>,
+        _content: Measurable,
+        width: i32,
+    ) -> i32 {
+        self.intrinsic_height(scope, width)
+    }
+
+    /// The width without soft line breaks, as Compose's text node
+    /// (`ParagraphIntrinsics.maxIntrinsicWidth`, rounded up).
+    fn max_intrinsic_width(
+        &mut self,
+        scope: &mut IntrinsicMeasureScope<'_>,
+        _content: Measurable,
+        _height: i32,
+    ) -> i32 {
+        self.intrinsic_widths(scope).1
+    }
+
+    /// As `min_intrinsic_height`, as Compose's.
+    fn max_intrinsic_height(
+        &mut self,
+        scope: &mut IntrinsicMeasureScope<'_>,
+        _content: Measurable,
+        width: i32,
+    ) -> i32 {
+        self.intrinsic_height(scope, width)
+    }
+}
+
+impl TextNode {
+    /// At least `min_lines` high, as Compose's `heightInLines` (0 for one line).
+    fn min_lines_height(
+        &mut self,
+        scope: &mut IntrinsicMeasureScope<'_>,
+        density: compose_ui::Density,
+    ) -> i32 {
+        if self.min_lines <= 1 {
+            return 0;
+        }
+        match self.min_height {
+            Some((at, height)) if at == density => height,
+            _ => {
+                let height = height_of_lines(scope, &self.style, self.min_lines);
+                self.min_height = Some((density, height));
+                height
+            }
+        }
+    }
+
+    /// The text's minimum and maximum intrinsic widths, rounded up, from its paragraph in this
+    /// density and direction (the measured one, else the intrinsics' own, laid out unbounded):
+    /// they don't depend on the width it's laid out at. A measurer that doesn't know its texts'
+    /// minimum width gives the maximum for it; one that doesn't know either, the width laid out
+    /// unbounded.
+    fn intrinsic_widths(&mut self, scope: &mut IntrinsicMeasureScope<'_>) -> (i32, i32) {
+        let density = scope.density();
+        let direction = scope.layout_direction();
+        let paragraph = match self.paragraph {
+            Some(paragraph) if self.density == Some(density) && self.direction == direction => {
+                paragraph
+            }
+            _ => self.probe_paragraph(scope, Constraints::unbounded(), density, direction),
+        };
+        let measurer = scope.text_measurer();
+        let max = match measurer.max_intrinsic_width(paragraph) {
+            Some(width) => width.ceil() as i32,
+            None => {
+                let unbounded =
+                    self.probe_paragraph(scope, Constraints::unbounded(), density, direction);
+                scope.text_measurer().metrics(unbounded).size.width
+            }
+        };
+        let min = scope
+            .text_measurer()
+            .min_intrinsic_width(paragraph)
+            .map_or(max, |width| width.ceil() as i32);
+        (min, max)
+    }
+
+    /// The text's height laid out at `width`, at least `min_lines` high, as Compose's
+    /// `intrinsicHeight`.
+    fn intrinsic_height(&mut self, scope: &mut IntrinsicMeasureScope<'_>, width: i32) -> i32 {
+        let density = scope.density();
+        let direction = scope.layout_direction();
+        let constraints = Constraints::new(0, width, 0, Constraints::INFINITY);
+        let paragraph = self.probe_paragraph(scope, constraints, density, direction);
+        let height = scope.text_measurer().metrics(paragraph).size.height;
+        height.max(self.min_lines_height(scope, density))
     }
 }
 

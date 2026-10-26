@@ -1,11 +1,12 @@
-//! More layout modifiers, as Compose's: `aspectRatio`, `wrapContent*`, `defaultMinSize` and
+//! More layout modifiers, as Compose's: `aspectRatio`, `wrapContent*`, `defaultMinSize`,
+//! `width`/`height`/`requiredWidth`/`requiredHeight(IntrinsicSize)` and
 //! `Modifier.layout { measurable, constraints -> … }`.
 
 use std::rc::Rc;
 
 use crate::alignment::{Alignment, HorizontalAlignment, VerticalAlignment};
 use crate::constraints::Constraints;
-use crate::layout::{Measurable, MeasureResult, MeasureScope};
+use crate::layout::{Intrinsic, IntrinsicMeasureScope, Measurable, MeasureResult, MeasureScope};
 use crate::modifier::{LayoutModifierNode, Modifier, ModifierNode, ModifierNodeElement};
 use crate::unit::{Dp, IntSize};
 
@@ -106,6 +107,18 @@ trait LayoutRule: PartialEq + Clone + 'static {
         content: Measurable,
         constraints: Constraints,
     ) -> MeasureResult;
+
+    /// Its intrinsic `kind` at `value`, if it has its own; `None` for Compose's default
+    /// (`measure` in an intrinsic measurement).
+    fn intrinsic(
+        &self,
+        _scope: &mut IntrinsicMeasureScope<'_>,
+        _content: Measurable,
+        _kind: Intrinsic,
+        _value: i32,
+    ) -> Option<i32> {
+        None
+    }
 }
 
 /// A layout modifier that is its data: the element and its node in one.
@@ -135,6 +148,23 @@ impl<R: LayoutRule> ModifierNode for LayoutData<R> {
     }
 }
 
+impl<R: LayoutRule> LayoutData<R> {
+    fn intrinsic(
+        &self,
+        scope: &mut IntrinsicMeasureScope<'_>,
+        content: Measurable,
+        kind: Intrinsic,
+        value: i32,
+    ) -> i32 {
+        match self.0.intrinsic(scope, content, kind, value) {
+            Some(intrinsic) => intrinsic,
+            None => kind.measured(scope, value, |scope, constraints| {
+                self.0.measure(scope, content, constraints)
+            }),
+        }
+    }
+}
+
 impl<R: LayoutRule> LayoutModifierNode for LayoutData<R> {
     fn measure(
         &mut self,
@@ -143,6 +173,42 @@ impl<R: LayoutRule> LayoutModifierNode for LayoutData<R> {
         constraints: Constraints,
     ) -> MeasureResult {
         self.0.measure(scope, content, constraints)
+    }
+
+    fn min_intrinsic_width(
+        &mut self,
+        scope: &mut IntrinsicMeasureScope<'_>,
+        content: Measurable,
+        height: i32,
+    ) -> i32 {
+        self.intrinsic(scope, content, Intrinsic::MinWidth, height)
+    }
+
+    fn min_intrinsic_height(
+        &mut self,
+        scope: &mut IntrinsicMeasureScope<'_>,
+        content: Measurable,
+        width: i32,
+    ) -> i32 {
+        self.intrinsic(scope, content, Intrinsic::MinHeight, width)
+    }
+
+    fn max_intrinsic_width(
+        &mut self,
+        scope: &mut IntrinsicMeasureScope<'_>,
+        content: Measurable,
+        height: i32,
+    ) -> i32 {
+        self.intrinsic(scope, content, Intrinsic::MaxWidth, height)
+    }
+
+    fn max_intrinsic_height(
+        &mut self,
+        scope: &mut IntrinsicMeasureScope<'_>,
+        content: Measurable,
+        width: i32,
+    ) -> i32 {
+        self.intrinsic(scope, content, Intrinsic::MaxHeight, width)
     }
 }
 
@@ -215,6 +281,25 @@ impl LayoutRule for AspectRatio {
         let placeable = scope.measure(content, wrapped);
         scope.place_relative(&placeable, 0, 0);
         scope.layout(placeable.width, placeable.height)
+    }
+
+    /// As Compose's `AspectRatioNode`: from the other axis' size at the ratio when it's
+    /// bounded, else the content's.
+    fn intrinsic(
+        &self,
+        scope: &mut IntrinsicMeasureScope<'_>,
+        content: Measurable,
+        kind: Intrinsic,
+        value: i32,
+    ) -> Option<i32> {
+        if value == Constraints::INFINITY {
+            return Some(scope.intrinsic(content, kind, value));
+        }
+        let round = crate::unit::round_to_int;
+        Some(match kind {
+            Intrinsic::MinWidth | Intrinsic::MaxWidth => round(value as f32 * self.ratio),
+            Intrinsic::MinHeight | Intrinsic::MaxHeight => round(value as f32 / self.ratio),
+        })
     }
 }
 
@@ -296,6 +381,141 @@ impl LayoutRule for DefaultMinSize {
         let placeable = scope.measure(content, wrapped);
         scope.place(&placeable, 0, 0);
         scope.layout(placeable.width, placeable.height)
+    }
+
+    /// As Compose's `UnspecifiedConstraintsNode`: the content's, at least the minimum.
+    fn intrinsic(
+        &self,
+        scope: &mut IntrinsicMeasureScope<'_>,
+        content: Measurable,
+        kind: Intrinsic,
+        value: i32,
+    ) -> Option<i32> {
+        let minimum = match kind {
+            Intrinsic::MinWidth | Intrinsic::MaxWidth => self.min_width,
+            Intrinsic::MinHeight | Intrinsic::MaxHeight => self.min_height,
+        };
+        let minimum = if minimum.is_specified() { scope.density().round_to_px(minimum) } else { 0 };
+        Some(scope.intrinsic(content, kind, value).max(minimum))
+    }
+}
+
+/// An intrinsic size, as Compose's `IntrinsicSize`: what `Modifier::width`, `height`,
+/// `required_width` and `required_height` size the content to when given one.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum IntrinsicSize {
+    /// The content's minimum intrinsic size.
+    Min,
+    /// The content's maximum intrinsic size.
+    Max,
+}
+
+/// What `Modifier::width`, `height`, `required_width` and `required_height` take, as their
+/// Compose overloads: a size in dp (`width(40.dp())`) or an intrinsic size
+/// (`width(IntrinsicSize::Max)`).
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum SizeOrIntrinsic {
+    Size(Dp),
+    Intrinsic(IntrinsicSize),
+}
+
+impl From<Dp> for SizeOrIntrinsic {
+    fn from(size: Dp) -> SizeOrIntrinsic {
+        SizeOrIntrinsic::Size(size)
+    }
+}
+
+impl From<IntrinsicSize> for SizeOrIntrinsic {
+    fn from(size: IntrinsicSize) -> SizeOrIntrinsic {
+        SizeOrIntrinsic::Intrinsic(size)
+    }
+}
+
+impl Modifier {
+    /// Sizes the content's width (`horizontal`) or height to its intrinsic `size`, as Compose's
+    /// `IntrinsicWidthNode` and `IntrinsicHeightNode`: within the incoming constraints with
+    /// `enforce_incoming` (`width(IntrinsicSize)`), else whatever they are
+    /// (`requiredWidth(IntrinsicSize)`).
+    pub(crate) fn intrinsic_size(
+        self,
+        horizontal: bool,
+        size: IntrinsicSize,
+        enforce_incoming: bool,
+    ) -> Modifier {
+        self.then_custom(LayoutData(IntrinsicSizeRule { horizontal, size, enforce_incoming }))
+    }
+}
+
+#[derive(Clone, Copy, PartialEq)]
+struct IntrinsicSizeRule {
+    horizontal: bool,
+    size: IntrinsicSize,
+    enforce_incoming: bool,
+}
+
+impl IntrinsicSizeRule {
+    /// The intrinsic of `size` on this rule's axis.
+    fn own(&self) -> Intrinsic {
+        match (self.horizontal, self.size) {
+            (true, IntrinsicSize::Min) => Intrinsic::MinWidth,
+            (true, IntrinsicSize::Max) => Intrinsic::MaxWidth,
+            (false, IntrinsicSize::Min) => Intrinsic::MinHeight,
+            (false, IntrinsicSize::Max) => Intrinsic::MaxHeight,
+        }
+    }
+}
+
+impl LayoutRule for IntrinsicSizeRule {
+    const NAME: &'static str = "intrinsic_size";
+
+    /// As Compose's `IntrinsicSizeModifier.measure`: the content at its intrinsic size on the
+    /// axis (unless enforcing incoming constraints that fix it), within the incoming
+    /// constraints when enforcing them.
+    fn measure(
+        &self,
+        scope: &mut MeasureScope<'_>,
+        content: Measurable,
+        constraints: Constraints,
+    ) -> MeasureResult {
+        let fixed = if self.horizontal {
+            constraints.has_fixed_width()
+        } else {
+            constraints.has_fixed_height()
+        };
+        let content_constraints = if self.enforce_incoming && fixed {
+            constraints
+        } else if self.horizontal {
+            let width = scope.intrinsic(content, self.own(), constraints.max_height).max(0);
+            Constraints::new(width, width, 0, Constraints::INFINITY)
+        } else {
+            let height = scope.intrinsic(content, self.own(), constraints.max_width).max(0);
+            Constraints::new(0, Constraints::INFINITY, height, height)
+        };
+        let placeable = scope.measure(
+            content,
+            if self.enforce_incoming {
+                constraints.constrain_by(content_constraints)
+            } else {
+                content_constraints
+            },
+        );
+        scope.place_relative(&placeable, 0, 0);
+        scope.layout(placeable.width, placeable.height)
+    }
+
+    /// On its axis, both intrinsics are the content's of its size; across it, the content's.
+    fn intrinsic(
+        &self,
+        scope: &mut IntrinsicMeasureScope<'_>,
+        content: Measurable,
+        kind: Intrinsic,
+        value: i32,
+    ) -> Option<i32> {
+        let on_axis = match kind {
+            Intrinsic::MinWidth | Intrinsic::MaxWidth => self.horizontal,
+            Intrinsic::MinHeight | Intrinsic::MaxHeight => !self.horizontal,
+        };
+        Some(scope.intrinsic(content, if on_axis { self.own() } else { kind }, value))
     }
 }
 

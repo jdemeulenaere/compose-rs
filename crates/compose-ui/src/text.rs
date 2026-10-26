@@ -451,6 +451,13 @@ pub trait TextMeasurer: std::any::Any {
     fn max_intrinsic_width(&self, _paragraph: ParagraphHandle) -> Option<f32> {
         None
     }
+    /// The text's width with every soft line break taken (its widest word), as Compose's
+    /// `ParagraphIntrinsics.minIntrinsicWidth`: what `IntrinsicSize::Min` sizes a text to.
+    /// `None` when the measurer doesn't know it (the default): the text then answers its
+    /// maximum intrinsic width for it.
+    fn min_intrinsic_width(&self, _paragraph: ParagraphHandle) -> Option<f32> {
+        None
+    }
     /// Lays out `paragraph`'s text again, in the same style and options, at `constraints`, as
     /// Compose lays out a new `Paragraph` from the `ParagraphIntrinsics` it keeps (the text's
     /// spans, paint and own width, measured once): returns the new paragraph and releases
@@ -463,7 +470,7 @@ pub trait TextMeasurer: std::any::Any {
     ) -> Option<ParagraphHandle> {
         None
     }
-    /// Lays `text` out for an intrinsic probe: measured, never drawn, so a platform prepares
+    /// Lays `text` out for its intrinsic sizes: measured, never drawn, so a platform prepares
     /// nothing to draw it (Android doesn't record it ahead, D322). `measured` is the text's
     /// measured paragraph in the same style, options, density and direction, if there's one: what
     /// the measurer kept of it may be reused (as Compose's intrinsics come from its
@@ -548,6 +555,8 @@ struct FixedParagraph {
     exceeded_max_lines: bool,
     /// The widest hard line's width.
     intrinsic: f32,
+    /// The widest word's width.
+    min_intrinsic: f32,
 }
 
 impl FixedTextMeasurer {
@@ -656,6 +665,12 @@ impl TextMeasurer for FixedTextMeasurer {
             size,
             exceeded_max_lines,
             intrinsic,
+            min_intrinsic: text
+                .split([' ', '\n'])
+                .map(|word| word.chars().count())
+                .max()
+                .unwrap_or(0) as f32
+                * advance,
         };
         match self.free.pop() {
             Some(index) => {
@@ -687,6 +702,10 @@ impl TextMeasurer for FixedTextMeasurer {
 
     fn max_intrinsic_width(&self, handle: ParagraphHandle) -> Option<f32> {
         Some(self.paragraph(handle).intrinsic)
+    }
+
+    fn min_intrinsic_width(&self, handle: ParagraphHandle) -> Option<f32> {
+        Some(self.paragraph(handle).min_intrinsic)
     }
 
     /// The same lines under a new handle: its paragraphs have no paint.

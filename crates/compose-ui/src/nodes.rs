@@ -11,7 +11,7 @@ use crate::graphics::{Color, Outline, Paint, Shape};
 use crate::input::{
     EventContext, Key, KeyEvent, KeyEventType, PointerEvent, PointerEventPass, PointerEventType,
 };
-use crate::layout::{Measurable, MeasureResult, MeasureScope};
+use crate::layout::{Intrinsic, IntrinsicMeasureScope, Measurable, MeasureResult, MeasureScope};
 use crate::modifier::{
     Clickable, DrawModifierNode, Element, Fill, FocusTargetModifierNode, KeyInputModifierNode,
     LayoutModifierNode, ModifierNode, ModifierNodeElement, PaddingValues, PointerInputModifierNode,
@@ -221,7 +221,7 @@ struct SizeNode(SizeSpec);
 
 impl SizeNode {
     /// As Compose's `SizeNode.targetConstraints`.
-    fn target_constraints(&self, scope: &MeasureScope<'_>) -> Constraints {
+    fn target_constraints(&self, scope: &IntrinsicMeasureScope<'_>) -> Constraints {
         let density = scope.density();
         let spec = &self.0;
         let px = |dp: Dp| density.round_to_px(dp).max(0);
@@ -292,6 +292,70 @@ impl LayoutModifierNode for SizeNode {
         let placeable = scope.measure(content, wrapped);
         scope.place_relative(&placeable, 0, 0);
         scope.layout(placeable.width, placeable.height)
+    }
+
+    // As Compose's `SizeNode`: a fixed size is the intrinsic; otherwise the content's, asked
+    // within the target (unless enforcing the incoming constraints) and kept within it.
+    fn min_intrinsic_width(
+        &mut self,
+        scope: &mut IntrinsicMeasureScope<'_>,
+        content: Measurable,
+        height: i32,
+    ) -> i32 {
+        self.intrinsic(scope, content, Intrinsic::MinWidth, height)
+    }
+    fn min_intrinsic_height(
+        &mut self,
+        scope: &mut IntrinsicMeasureScope<'_>,
+        content: Measurable,
+        width: i32,
+    ) -> i32 {
+        self.intrinsic(scope, content, Intrinsic::MinHeight, width)
+    }
+    fn max_intrinsic_width(
+        &mut self,
+        scope: &mut IntrinsicMeasureScope<'_>,
+        content: Measurable,
+        height: i32,
+    ) -> i32 {
+        self.intrinsic(scope, content, Intrinsic::MaxWidth, height)
+    }
+    fn max_intrinsic_height(
+        &mut self,
+        scope: &mut IntrinsicMeasureScope<'_>,
+        content: Measurable,
+        width: i32,
+    ) -> i32 {
+        self.intrinsic(scope, content, Intrinsic::MaxHeight, width)
+    }
+}
+
+impl SizeNode {
+    fn intrinsic(
+        &self,
+        scope: &mut IntrinsicMeasureScope<'_>,
+        content: Measurable,
+        kind: Intrinsic,
+        value: i32,
+    ) -> i32 {
+        let target = self.target_constraints(scope);
+        let enforce = self.0.enforce_incoming;
+        match kind {
+            Intrinsic::MinWidth | Intrinsic::MaxWidth => {
+                if target.has_fixed_width() {
+                    return target.max_width;
+                }
+                let height = if enforce { value } else { target.constrain_height(value) };
+                target.constrain_width(scope.intrinsic(content, kind, height))
+            }
+            Intrinsic::MinHeight | Intrinsic::MaxHeight => {
+                if target.has_fixed_height() {
+                    return target.max_height;
+                }
+                let width = if enforce { value } else { target.constrain_width(value) };
+                target.constrain_height(scope.intrinsic(content, kind, width))
+            }
+        }
     }
 }
 

@@ -132,10 +132,12 @@ pub use input::{
 };
 pub use interaction::MutableInteractionSource;
 pub use layout::{
-    EmptyMeasurePolicy, Layout, Measurable, MeasurePolicy, MeasureResult, MeasureScope, Placeable,
-    empty_measure_policy, measure_policy,
+    EmptyMeasurePolicy, IntrinsicMeasurable, IntrinsicMeasureScope, Layout, MAX_LAYOUT_DIMENSION,
+    Measurable, MeasurePolicy, MeasureResult, MeasureScope, Placeable, empty_measure_policy,
+    measure_policy,
 };
 pub use layout_callbacks::{GlobalPositionAwareModifierNode, LayoutCoordinates};
+pub use layout_modifiers::{IntrinsicSize, SizeOrIntrinsic};
 pub use modifier::{
     AlignScope, BoxScope, ClickableOptions, ColumnScope, DetachContext, DrawModifierNode,
     FocusTargetModifierNode, Indication, KeyInputModifierNode, LayoutModifierNode, Modifier,
