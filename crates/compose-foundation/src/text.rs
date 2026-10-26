@@ -702,7 +702,7 @@ impl DrawModifierNode for TextNode {
 
 impl SemanticsModifierNode for TextNode {
     fn apply_semantics(&self, config: &mut SemanticsConfiguration) {
-        config.set_text(self.text.text.clone());
+        config.set_text(self.text.text().clone());
     }
 }
 
@@ -711,7 +711,7 @@ pub(crate) const SELECTION_COLOR: compose_ui::Color = compose_ui::Color::from_ar
 
 impl compose_ui::Selectable for TextNode {
     fn text(&self) -> SharedString {
-        self.text.text.clone()
+        self.text.text().clone()
     }
 
     fn version(&self) -> u64 {
@@ -724,7 +724,7 @@ impl compose_ui::Selectable for TextNode {
         measurer: &mut dyn compose_ui::platform::TextMeasurer,
     ) -> Option<usize> {
         let paragraph = self.paragraph?;
-        let text = self.text.text.as_str();
+        let text = self.text.as_str();
         let mut offset = measurer.hit_test(paragraph, position).offset.min(text.len());
         while !text.is_char_boundary(offset) {
             offset -= 1;
@@ -734,7 +734,7 @@ impl compose_ui::Selectable for TextNode {
 
     fn word_at(&self, offset: usize) -> std::ops::Range<usize> {
         use unicode_segmentation::UnicodeSegmentation;
-        let text = self.text.text.as_str();
+        let text = self.text.as_str();
         text.split_word_bound_indices()
             .map(|(start, word)| start..start + word.len())
             .find(|range| range.contains(&offset) || range.end == offset && offset == text.len())

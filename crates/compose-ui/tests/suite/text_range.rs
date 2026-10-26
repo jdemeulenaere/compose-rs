@@ -166,7 +166,7 @@ fn the_selected_text_and_its_surroundings_keep_their_styles() {
     let value = TextFieldValue::new(text, TextRange::new(3, 5), None);
     let selected = value.selected_text();
     assert_eq!(selected.as_str(), "de");
-    assert_eq!((selected.span_styles[0].start, selected.span_styles[0].end), (0, 1));
+    assert_eq!((selected.span_styles()[0].start, selected.span_styles()[0].end), (0, 1));
     assert_eq!(value.text_before_selection(2).as_str(), "bc");
     assert_eq!(value.text_before_selection(10).as_str(), "abc");
     assert_eq!(value.text_after_selection(1).as_str(), "f");

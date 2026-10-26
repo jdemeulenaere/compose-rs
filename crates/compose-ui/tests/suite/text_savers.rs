@@ -2,6 +2,10 @@
 
 use compose_runtime::saveable::Saveable;
 use compose_ui::{
+    AnnotatedString, AnnotatedStringBuilder, Annotation, LinkAnnotation, StringAnnotation,
+    TextFieldValue, TextLinkStyles, TtsAnnotation,
+};
+use compose_ui::{
     BaselineShift, Color, EmojiSupportMatch, FontStyle, FontSynthesis, FontWeight, Hyphens,
     LineBreak, LineHeightAlignment, LineHeightMode, LineHeightStyle, LineHeightTrim, Locale,
     LocaleList, Offset, ParagraphStyle, PlatformParagraphStyle, Shadow, SpanStyle, TextAlign,
@@ -235,4 +239,134 @@ fn paragraph_styles_survive_saved_state_one_field_after_another() {
         set(&mut style);
         assert_eq!(through_bytes(&style), Some(style));
     }
+}
+
+fn link_styles(last: SpanStyle) -> TextLinkStyles {
+    let colored = |color| Some(SpanStyle { color, ..SpanStyle::DEFAULT });
+    TextLinkStyles {
+        style: colored(Color::RED),
+        focused_style: colored(Color::GREEN),
+        hovered_style: colored(Color::BLUE),
+        pressed_style: Some(last),
+    }
+}
+
+// Compose: compose/ui/ui-text/src/androidHostTest/kotlin/androidx/compose/ui/text/SaversTest.kt, test_TextLinkStyles
+// Compose: compose/ui/ui-text/src/androidHostTest/kotlin/androidx/compose/ui/text/SaversTest.kt, test_TextLinkStyles_withNonNullValues
+#[test]
+fn link_styles_round_trip() {
+    round_trips(TextLinkStyles::default());
+    round_trips(link_styles(SpanStyle { color: Color::GRAY, ..SpanStyle::DEFAULT }));
+}
+
+fn paragraphs(b: &mut AnnotatedStringBuilder) {
+    let justify =
+        ParagraphStyle { text_align: Some(TextAlign::Justify), ..ParagraphStyle::DEFAULT };
+    b.with_paragraph_style(justify, |b| {
+        b.append("1");
+    });
+    let rtl =
+        ParagraphStyle { text_direction: Some(TextDirection::Rtl), ..ParagraphStyle::DEFAULT };
+    b.with_paragraph_style(rtl, |b| {
+        b.append("2");
+    });
+}
+
+fn spans(b: &mut AnnotatedStringBuilder) {
+    b.with_style(SpanStyle { color: Color::RED, ..SpanStyle::DEFAULT }, |b| {
+        b.append("3");
+    });
+    b.with_style(SpanStyle { font_style: Some(FontStyle::Italic), ..SpanStyle::DEFAULT }, |b| {
+        b.append("4");
+    });
+}
+
+fn annotations(b: &mut AnnotatedStringBuilder) {
+    b.with_annotation("Tag1", "Annotation1", |b| {
+        b.append("5");
+    });
+    b.with_tts_annotation(TtsAnnotation::Verbatim("verbatim1".into()), |b| {
+        b.append("6");
+    });
+    b.with_annotation("Tag2", "Annotation2", |b| {
+        b.append("7");
+    });
+    b.with_tts_annotation(TtsAnnotation::Verbatim("verbatim2".into()), |b| {
+        b.append("8");
+    });
+    let white = SpanStyle { color: Color::WHITE, ..SpanStyle::DEFAULT };
+    b.with_link(LinkAnnotation::url("url3").with_styles(Some(link_styles(white))), |b| {
+        b.append("11");
+    });
+    let gray = SpanStyle { background: Color::GRAY, ..SpanStyle::DEFAULT };
+    let clickable = LinkAnnotation::clickable("tag3", None).with_styles(Some(link_styles(gray)));
+    b.with_link(clickable, |b| {
+        b.append("12");
+    });
+}
+
+// Compose: compose/ui/ui-text/src/androidHostTest/kotlin/androidx/compose/ui/text/SaversTest.kt, test_AnnotatedString
+// Compose: compose/ui/ui-text/src/androidHostTest/kotlin/androidx/compose/ui/text/SaversTest.kt, test_AnnotatedString_withSpanStyles
+// Compose: compose/ui/ui-text/src/androidHostTest/kotlin/androidx/compose/ui/text/SaversTest.kt, test_AnnotatedString_withParagraphStyles
+// Compose: compose/ui/ui-text/src/androidHostTest/kotlin/androidx/compose/ui/text/SaversTest.kt, test_AnnotatedString_withAnnotations
+// Compose: compose/ui/ui-text/src/androidHostTest/kotlin/androidx/compose/ui/text/SaversTest.kt, test_AnnotatedString_withSpanAndParagraphStylesAndAnnotations
+// (the deprecated `UrlAnnotation`s of the last two have no counterpart)
+#[test]
+fn annotated_strings_round_trip() {
+    let texts = [
+        AnnotatedString::new("abc"),
+        AnnotatedString::build(spans),
+        AnnotatedString::build(paragraphs),
+        AnnotatedString::build(annotations),
+        AnnotatedString::build(|b| {
+            paragraphs(b);
+            spans(b);
+            annotations(b);
+        }),
+    ];
+    for text in texts {
+        round_trips(text.clone());
+        assert_eq!(through_bytes(&text), Some(text));
+    }
+}
+
+// Compose: compose/ui/ui-text/src/androidHostTest/kotlin/androidx/compose/ui/text/SaversTest.kt, test_AnnotationSaver_ParagraphStyle
+// Compose: compose/ui/ui-text/src/androidHostTest/kotlin/androidx/compose/ui/text/SaversTest.kt, test_AnnotationSaver_SpanStyle
+// Compose: compose/ui/ui-text/src/androidHostTest/kotlin/androidx/compose/ui/text/SaversTest.kt, test_AnnotationSaver_VerbatimTtsAnnotation
+// Compose: compose/ui/ui-text/src/androidHostTest/kotlin/androidx/compose/ui/text/SaversTest.kt, test_AnnotationSaver_LinkAnnotationUrl
+// Compose: compose/ui/ui-text/src/androidHostTest/kotlin/androidx/compose/ui/text/SaversTest.kt, test_AnnotationSaver_LinkAnnotationClickable
+// Compose: compose/ui/ui-text/src/androidHostTest/kotlin/androidx/compose/ui/text/SaversTest.kt, test_AnnotationSaver_StringAnnotation
+// (test_AnnotationSaver_UrlAnnotation tests the deprecated `UrlAnnotation`)
+#[test]
+fn annotations_round_trip() {
+    let red = SpanStyle { color: Color::RED, ..SpanStyle::DEFAULT };
+    let styles = TextLinkStyles { style: Some(red.clone()), ..Default::default() };
+    let centered =
+        ParagraphStyle { text_align: Some(TextAlign::Center), ..ParagraphStyle::DEFAULT };
+    for annotation in [
+        Annotation::ParagraphStyle(centered),
+        Annotation::SpanStyle(red),
+        Annotation::Tts(TtsAnnotation::Verbatim("verbatim".into())),
+        Annotation::Link(LinkAnnotation::url("url").with_styles(Some(styles.clone()))),
+        Annotation::Link(LinkAnnotation::clickable("tag", None).with_styles(Some(styles))),
+        Annotation::StringAnnotation(StringAnnotation("string".into())),
+    ] {
+        round_trips(annotation);
+    }
+}
+
+// Compose: compose/ui/ui-text/src/androidHostTest/kotlin/androidx/compose/ui/text/input/TextFieldValueTest.kt, test_Saver
+// Compose: compose/ui/ui-text/src/androidHostTest/kotlin/androidx/compose/ui/text/input/TextFieldValueTest.kt, test_Saver_defaultInstance
+#[test]
+fn text_field_values_save_their_text_and_selection() {
+    let text = AnnotatedString::build(|b| {
+        paragraphs(b);
+        spans(b);
+        annotations(b);
+    });
+    let original =
+        TextFieldValue::new(text.clone(), TextRange::new(1, 2), Some(TextRange::new(3, 4)));
+    let restored = TextFieldValue::restore(&original.save());
+    assert_eq!(restored, Some(TextFieldValue::new(text, TextRange::new(1, 2), None)));
+    round_trips(TextFieldValue::default());
 }

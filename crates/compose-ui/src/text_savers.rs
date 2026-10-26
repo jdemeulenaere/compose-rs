@@ -4,6 +4,10 @@
 
 use compose_runtime::saveable::{Saveable, SavedValue};
 
+use crate::annotated::{
+    AnnotatedRange, AnnotatedString, Annotation, LinkAnnotation, StringAnnotation, TextLinkStyles,
+    TtsAnnotation,
+};
 use crate::font::{FontStyle, FontSynthesis, FontWeight};
 use crate::graphics::{Color, Shadow};
 use crate::intl::{Locale, LocaleList};
@@ -16,6 +20,8 @@ use crate::text_attributes::{
     LineHeightAlignment, LineHeightMode, LineHeightStyle, LineHeightTrim, TextAlign,
     TextDecoration, TextDirection, TextGeometricTransform, TextIndent, TextMotion,
 };
+use crate::text_editing::TextFieldValue;
+use crate::text_range::TextRange;
 use crate::unit::{Offset, TextUnit, TextUnitType};
 
 fn list(saved: &SavedValue) -> Option<&[SavedValue]> {
@@ -407,5 +413,130 @@ impl Saveable for SpanStyle {
             shadow: Option::restore(shadow)?,
             ..SpanStyle::DEFAULT
         })
+    }
+}
+
+/// As `TextLinkStylesSaver`: the four states' styles.
+impl Saveable for TextLinkStyles {
+    fn save(&self) -> SavedValue {
+        SavedValue::List(vec![
+            self.style.save(),
+            self.focused_style.save(),
+            self.hovered_style.save(),
+            self.pressed_style.save(),
+        ])
+    }
+    fn restore(saved: &SavedValue) -> Option<TextLinkStyles> {
+        let [style, focused, hovered, pressed] = list(saved)? else { return None };
+        Some(TextLinkStyles {
+            style: Option::restore(style)?,
+            focused_style: Option::restore(focused)?,
+            hovered_style: Option::restore(hovered)?,
+            pressed_style: Option::restore(pressed)?,
+        })
+    }
+}
+
+/// As `AnnotationSaver`: a marker and the item. A link's listener isn't saved (a restored
+/// clickable has none, as Compose's). Bullets aren't saved, as Compose's.
+impl Saveable for Annotation {
+    fn save(&self) -> SavedValue {
+        let (marker, item) = match self {
+            Annotation::ParagraphStyle(style) => (0, style.save()),
+            Annotation::SpanStyle(style) => (1, style.save()),
+            Annotation::Tts(TtsAnnotation::Verbatim(verbatim)) => (2, verbatim.save()),
+            Annotation::Link(LinkAnnotation::Url { url, styles, .. }) => {
+                (4, SavedValue::List(vec![url.save(), styles.save()]))
+            }
+            Annotation::Link(LinkAnnotation::Clickable { tag, styles, .. }) => {
+                (5, SavedValue::List(vec![tag.save(), styles.save()]))
+            }
+            Annotation::StringAnnotation(annotation) => (6, annotation.0.save()),
+            Annotation::Bullet(_) => return SavedValue::Bool(false),
+        };
+        SavedValue::List(vec![SavedValue::Int(marker), item])
+    }
+    fn restore(saved: &SavedValue) -> Option<Annotation> {
+        let [marker, item] = list(saved)? else { return None };
+        let link = |item: &SavedValue| -> Option<(SharedString, Option<TextLinkStyles>)> {
+            let [name, styles] = list(item)? else { return None };
+            Some((SharedString::restore(name)?, Option::restore(styles)?))
+        };
+        Some(match i64::restore(marker)? {
+            0 => Annotation::ParagraphStyle(ParagraphStyle::restore(item)?),
+            1 => Annotation::SpanStyle(SpanStyle::restore(item)?),
+            2 => Annotation::Tts(TtsAnnotation::Verbatim(SharedString::restore(item)?)),
+            4 => {
+                let (url, styles) = link(item)?;
+                Annotation::Link(LinkAnnotation::Url {
+                    url,
+                    styles,
+                    link_interaction_listener: None,
+                })
+            }
+            5 => {
+                let (tag, styles) = link(item)?;
+                Annotation::Link(LinkAnnotation::Clickable {
+                    tag,
+                    styles,
+                    link_interaction_listener: None,
+                })
+            }
+            6 => Annotation::StringAnnotation(StringAnnotation(SharedString::restore(item)?)),
+            _ => return None,
+        })
+    }
+}
+
+/// As `AnnotatedStringSaver`: the text and its annotations, each with its range and tag
+/// (bullets left out, as Compose's).
+impl Saveable for AnnotatedString {
+    fn save(&self) -> SavedValue {
+        let annotations = self
+            .annotations()
+            .iter()
+            .filter(|range| !matches!(range.item, Annotation::Bullet(_)))
+            .map(|range| {
+                SavedValue::List(vec![
+                    range.item.save(),
+                    range.start.save(),
+                    range.end.save(),
+                    range.tag.save(),
+                ])
+            })
+            .collect();
+        SavedValue::List(vec![self.text().save(), SavedValue::List(annotations)])
+    }
+    fn restore(saved: &SavedValue) -> Option<AnnotatedString> {
+        let [text, annotations] = list(saved)? else { return None };
+        let annotations: Option<Vec<AnnotatedRange<Annotation>>> = list(annotations)?
+            .iter()
+            .map(|range| {
+                let [item, start, end, tag] = list(range)? else { return None };
+                Some(AnnotatedRange {
+                    item: Annotation::restore(item)?,
+                    start: usize::restore(start)?,
+                    end: usize::restore(end)?,
+                    tag: SharedString::restore(tag)?,
+                })
+            })
+            .collect();
+        Some(AnnotatedString::with_annotations(SharedString::restore(text)?, annotations?))
+    }
+}
+
+/// Saved as its text and selection, as `TextFieldValue.Saver` (the composition is the input
+/// method's, which a restored field doesn't have).
+impl Saveable for TextFieldValue {
+    fn save(&self) -> SavedValue {
+        SavedValue::List(vec![self.annotated_string().save(), self.selection().save()])
+    }
+    fn restore(saved: &SavedValue) -> Option<TextFieldValue> {
+        let [text, selection] = list(saved)? else { return None };
+        Some(TextFieldValue::new(
+            AnnotatedString::restore(text)?,
+            TextRange::restore(selection)?,
+            None,
+        ))
     }
 }

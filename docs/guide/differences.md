@@ -58,7 +58,7 @@ The known differences from Jetpack Compose that an app will run into, distilled 
 
 ## Text and input
 
-- **Text** has no link annotations and no paragraph styles in spans. `TextLayoutResult` is a snapshot of the layout's metrics, without Compose's queries (`getLineForOffset`, `getBoundingBox`) (D233). Text fields take a `String` value and have no `on_text_layout`, and there's no `TextFieldState` or `TextFieldValue` overload.
+- **Text** lays out an `AnnotatedString`'s span styles: its paragraph styles, links (not clickable yet), text-to-speech annotations and bullets are kept but not laid out or drawn, and the measurers don't draw a style's shadow, baseline shift, geometric transform, font features, locales, draw style or indent (docs/11). `TextLayoutResult` is a snapshot of the layout's metrics, without Compose's queries (`getLineForOffset`, `getBoundingBox`) (D233). Text fields take a `String` value and have no `on_text_layout`, and there's no `TextFieldState` or `TextFieldValue` overload.
 - **Focus requests are asynchronous**: `FocusManager` and `FocusRequester` requests apply after the current event or at the next frame, so `move_focus` says whether a tree was there to ask, not whether the focus moved. Arrow keys don't move the focus, as on desktop Compose (D230).
 - **Semantics** have no custom actions or pane titles, so a bottom sheet's drag handle offers no expand, collapse or dismiss actions to accessibility services.
 - **Content descriptions of icons and images are `&'static str`** (`Icon!(icon, Some("Search"))`): a description built at run time goes through `Modifier.semantics` ([Accessibility](kotlin-to-rust.md#accessibility-and-semantics)).

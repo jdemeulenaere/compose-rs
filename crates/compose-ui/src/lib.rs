@@ -116,7 +116,10 @@ pub mod platform {
 pub use alignment::{
     Alignment, HorizontalAlignment, LOCAL_LAYOUT_DIRECTION, LayoutDirection, VerticalAlignment,
 };
-pub use annotated::{AnnotatedString, AnnotatedStringBuilder, SpanRange};
+pub use annotated::{
+    AnnotatedRange, AnnotatedString, AnnotatedStringBuilder, Annotation, Bullet, LinkAnnotation,
+    LinkInteractionListener, SpanRange, StringAnnotation, TextLinkStyles, TtsAnnotation,
+};
 pub use back::{
     BackHandler, LOCAL_BACK_HANDLERS_ENABLED, LOCAL_ON_BACK_PRESSED_DISPATCHER,
     OnBackPressedDispatcher,

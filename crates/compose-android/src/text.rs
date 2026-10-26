@@ -363,7 +363,7 @@ fn paint_free_runs(
     text: &AnnotatedString,
     style: &TextStyle,
 ) -> Vec<(std::ops::Range<usize>, TextStyle, Color)> {
-    if text.span_styles.is_empty() {
+    if !text.has_span_styles() {
         return Vec::new();
     }
     text.runs(&TextStyle { color: Color::UNSPECIFIED, text_decoration: None, ..style.clone() })
