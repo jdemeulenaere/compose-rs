@@ -36,7 +36,7 @@ pub trait TextBackend: 'static {
         None
     }
     /// Lays out paragraph `previous`'s text again as paragraph `handle`, as `relayout` does,
-    /// for an intrinsic probe: `previous` is kept, and `handle` isn't recorded ahead. `None`
+    /// for its intrinsic sizes: `previous` is kept, and `handle` isn't recorded ahead. `None`
     /// (the default) when the backend kept nothing of `previous`.
     fn probe_layout(
         &mut self,
@@ -121,7 +121,7 @@ impl<B: TextBackend> AndroidTextMeasurer<B> {
         handle
     }
 
-    /// Lays out `text` in `style` and `runs`; for an intrinsic probe (`probe`: Kotlin doesn't
+    /// Lays out `text` in `style` and `runs`; for intrinsic sizes (`probe`: Kotlin doesn't
     /// record it ahead) or to be drawn.
     #[allow(clippy::too_many_arguments)]
     fn layout_runs(
@@ -377,7 +377,7 @@ fn width_bounds(constraints: Constraints) -> (i32, i32) {
 
 /// The request `TextMeasurer.kt` reads: line options, then the base style, then the runs.
 ///
-/// Options: flags (u8: 1 soft wrap, 2 for an intrinsic probe only), max lines (u32), ellipsis (u8), alignment (u8: 0 normal, 1
+/// Options: flags (u8: 1 soft wrap, 2 for intrinsic sizes only), max lines (u32), ellipsis (u8), alignment (u8: 0 normal, 1
 /// opposite, 2 center, 3 justify), right to left (u8), min and max width (i32, max
 /// `i32::MAX` unbounded). A style: color (ARGB u32), font size (px f32), weight (u32), italic
 /// (u8), family (u8: 0 sans serif, 1 serif, 2 monospace, 3 cursive, 4 named, then its name's

@@ -221,6 +221,34 @@ pub fn Wrap(#[default(Modifier)] modifier: Modifier, content: impl Fn() + 'stati
 }
 // ANCHOR_END: custom_layout
 
+// ANCHOR: intrinsics
+/// Its first child in a square as wide as the child's maximum intrinsic width.
+pub struct Square;
+
+impl MeasurePolicy for Square {
+    fn measure(
+        &self,
+        scope: &mut MeasureScope<'_>,
+        measurables: &[Measurable],
+        constraints: Constraints,
+    ) -> MeasureResult {
+        let side = scope.max_intrinsic_width(measurables[0], constraints.max_height);
+        let placeable = scope.measure(measurables[0], Constraints::fixed(side, side));
+        scope.place(&placeable, 0, 0);
+        scope.layout(side, side)
+    }
+
+    fn min_intrinsic_width(
+        &self,
+        scope: &mut IntrinsicMeasureScope<'_>,
+        measurables: &[IntrinsicMeasurable],
+        height: i32,
+    ) -> i32 {
+        scope.min_intrinsic_width(measurables[0], height)
+    }
+}
+// ANCHOR_END: intrinsics
+
 // ANCHOR: layout_modifier
 /// `Modifier.indent(level)`, as a Kotlin extension function: a trait on `Modifier`.
 pub trait IndentModifier {

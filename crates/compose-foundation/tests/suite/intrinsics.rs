@@ -1111,6 +1111,49 @@ fn a_required_size_on_one_axis_changes_the_intrinsics_on_the_other() {
     }
 }
 
+/// Counts its measurements.
+#[composable]
+fn CountMeasures(modifier: Modifier, measures: Rc<Cell<u32>>) {
+    let policy = remember(|| {
+        compose_ui::measure_policy(move |scope, _, _| {
+            measures.set(measures.get() + 1);
+            scope.layout(0, 0)
+        })
+    });
+    Layout(modifier, policy, callback(|| {}));
+}
+
+// Compose: compose/foundation/foundation-layout/src/androidDeviceTest/kotlin/androidx/compose/foundation/layout/SizeTest.kt, testModifiers_doNotCauseUnnecessaryRemeasure
+#[test]
+fn size_modifiers_dont_measure_their_content_again_when_a_sibling_changes() {
+    let first = mutable_state_of(true);
+    let handle = first.handle();
+    let measures = Rc::new(Cell::new(0));
+    let counted = measures.clone();
+    let mut ui = ComposeTestRule::sized(IntSize::new(400, 400), move || {
+        let counted = counted.clone();
+        Box!({
+            if handle.get() {
+                Box!(modifier = Modifier);
+            } else {
+                Row!({});
+            }
+            CountMeasures(Modifier.size(10.dp()), counted.clone());
+            CountMeasures(Modifier.required_size(10.dp()), counted.clone());
+            CountMeasures(
+                Modifier.wrap_content_size_with(Alignment::BOTTOM_END, false),
+                counted.clone(),
+            );
+            CountMeasures(Modifier.fill_max_size_with(0.8), counted.clone());
+            CountMeasures(Modifier.default_min_size(10.dp(), 20.dp()), counted.clone());
+        });
+    });
+    assert_eq!(measures.get(), 5);
+    first.set(false);
+    ui.wait_for_idle();
+    assert_eq!(measures.get(), 5);
+}
+
 // ---- BoxTest, PaddingTest ----------------------------------------------------------------------
 
 // Compose: compose/foundation/foundation-layout/src/androidDeviceTest/kotlin/androidx/compose/foundation/layout/BoxTest.kt, testBox_hasCorrectIntrinsicMeasurements

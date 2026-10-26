@@ -357,8 +357,8 @@ pub(crate) struct TextNode {
     /// The style changed in paint only since the paragraph was laid out: the next measurement
     /// gives the paragraph the new paint (`TextMeasurer::restyle`).
     restyle: bool,
-    /// The paragraph intrinsic probes measure, when their constraints would lay the text out
-    /// differently: kept apart, so a probe doesn't replace the measured paragraph, as Compose's
+    /// The paragraph the intrinsics read, when their constraints would lay the text out
+    /// differently: kept apart, so intrinsics don't replace the measured paragraph, as Compose's
     /// intrinsics have caches of their own.
     probe: Option<Probe>,
     /// The paragraph is larger than the node: drawn clipped.
@@ -371,7 +371,7 @@ pub(crate) struct TextNode {
     version: u64,
 }
 
-/// A paragraph laid out for intrinsic probes, at `constraints`, in `density` and `direction`.
+/// A paragraph laid out for the intrinsics, at `constraints`, in `density` and `direction`.
 struct Probe {
     paragraph: ParagraphHandle,
     constraints: Constraints,

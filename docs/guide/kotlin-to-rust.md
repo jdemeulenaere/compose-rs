@@ -938,7 +938,36 @@ pub fn Wrap(#[default(Modifier)] modifier: Modifier, content: impl Fn() + 'stati
 - `scope.layout(width, height)` returns the result, after the placements rather than around them;
 - `scope.density()` converts `Dp` to pixels.
 
-Intrinsic measurements are approximated ([Differences](differences.md#layout)).
+Intrinsics are methods of the policy with Compose's defaults, and the scope asks a child's: Kotlin's `measurable.maxIntrinsicWidth(height)` is `scope.max_intrinsic_width(measurable, height)`, and `Modifier.width(IntrinsicSize.Max)` is `Modifier.width(IntrinsicSize::Max)`:
+
+<!-- snippet: src/layouts.rs#intrinsics -->
+```rust
+/// Its first child in a square as wide as the child's maximum intrinsic width.
+pub struct Square;
+
+impl MeasurePolicy for Square {
+    fn measure(
+        &self,
+        scope: &mut MeasureScope<'_>,
+        measurables: &[Measurable],
+        constraints: Constraints,
+    ) -> MeasureResult {
+        let side = scope.max_intrinsic_width(measurables[0], constraints.max_height);
+        let placeable = scope.measure(measurables[0], Constraints::fixed(side, side));
+        scope.place(&placeable, 0, 0);
+        scope.layout(side, side)
+    }
+
+    fn min_intrinsic_width(
+        &self,
+        scope: &mut IntrinsicMeasureScope<'_>,
+        measurables: &[IntrinsicMeasurable],
+        height: i32,
+    ) -> i32 {
+        scope.min_intrinsic_width(measurables[0], height)
+    }
+}
+```
 
 ### `Modifier.layout`
 

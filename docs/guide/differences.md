@@ -36,7 +36,7 @@ The known differences from Jetpack Compose that an app will run into, distilled 
 
 ## Layout
 
-- **Intrinsics are approximated** by measuring the child once to ask (`max_intrinsic_width`, `max_intrinsic_height`); there are no min intrinsics or per-layout formulas, so `IntrinsicSize.Min` rows can differ (D137).
+- **Intrinsics** are Compose's (D1200), except that the layouts Compose builds on `SubcomposeLayout` (lazy lists and grids, `BoxWithConstraints`) panic when asked, as Compose's, though compose-rs doesn't subcompose them; and a policy can't call the default intrinsics from its own (Kotlin's `super`).
 - **No alignment lines** (`alignBy(FirstBaseline)`, `paddingFrom`): bars place their titles by measured heights (D186).
 - **`LayoutCoordinates` is a snapshot** given to `on_globally_positioned` (size, position in the root and window, bounds), not a live object: no `localPositionOf`, no parent coordinates, and a graphics layer's property change alone doesn't report new coordinates (D172).
 - **Window insets aren't consumed**: nested paddings of the same insets add up. Sides are physical (no `Start`/`End`); there's no `exclude`, no `WindowInsets(left, top, …)`, no insets animations nor `consumeWindowInsets` (D222). Material's `Scaffold` and bars take their insets as `PaddingValues`, zero by default (D183).

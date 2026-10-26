@@ -30,9 +30,10 @@ By area: `foundation-layout` 29 files (850 tests); lazy lists, grids and `LazyLa
 | Status | Files | `@Test` methods |
 |---|---|---|
 | `covered` | 13 | 132 |
+| `ported` | 1 | 27 |
 | `port` | 20 | 242 |
 | `partial` | 21 | 762 |
-| `feature:<name>` | 121 | 1,860 |
+| `feature:<name>` | 120 | 1,833 |
 | `n/a` | 10 | 133 |
 | **Total** | **185** | **3,129** |
 
@@ -43,6 +44,7 @@ These counts are per file, by the file's status. Many `partial` and `port` files
 Statuses:
 
 - `covered`: compose-rs's tests already exercise the file's scenarios. The row cites the compose-rs tests and says how fully.
+- `ported`: Compose's tests are adapted as Rust tests, which the row cites.
 - `port`: the feature exists in compose-rs, and the tests should be adapted.
 - `partial`: some of the feature exists. The row says what's missing.
 - `feature:<name>`: needs a missing feature, named in [Missing features](#missing-features).
@@ -56,8 +58,8 @@ The table's suite references (`lazy_api.rs`, `fling.rs`, …) are files in `crat
 |---|---|---|---|
 | compose/foundation/foundation-layout/src/androidDeviceTest/kotlin/androidx/compose/foundation/layout/AlignmentLineTest.kt | 14 | `paddingFrom` / `paddingFromBaseline` around alignment lines: offsets, too little space, min constraints | feature:alignment-lines |
 | compose/foundation/foundation-layout/src/androidDeviceTest/kotlin/androidx/compose/foundation/layout/ArrangementTest.kt | 1 | Parameterized table of `Arrangement.arrange` outputs (Start/End/Center/Space*/spacedBy, LTR/RTL) | port (`HorizontalArrangement::arrange` / `VerticalArrangement::arrange` are public; `foundation.rs::row_arrangements_follow_compose` checks a few by layout) |
-| compose/foundation/foundation-layout/src/androidDeviceTest/kotlin/androidx/compose/foundation/layout/AspectRatioTest.kt | 6 | `aspectRatio` sizing (width/height first), zero/negative ratio throwing, intrinsics | partial (`aspect_ratio`, `aspect_ratio_with` exist; `modifiers_api.rs::aspect_ratio_sizes_from_the_width_or_the_height_first`. Missing: intrinsics test needs feature:intrinsics; check invalid-ratio panics; inspector test n/a) |
-| compose/foundation/foundation-layout/src/androidDeviceTest/kotlin/androidx/compose/foundation/layout/BoxTest.kt | 14 | Box alignment, stretch children, RTL, `propagateMinConstraints` (and its changes), child sizes the box, intrinsics, `matchParentSize` | partial (Box, `content_alignment`, `propagate_min_constraints` exist; `foundation.rs::a_box_aligns_its_children`. Missing: `matchParentSize` (feature:layout-modifiers), intrinsics (feature:intrinsics)) |
+| compose/foundation/foundation-layout/src/androidDeviceTest/kotlin/androidx/compose/foundation/layout/AspectRatioTest.kt | 6 | `aspectRatio` sizing (width/height first), zero/negative ratio throwing, intrinsics | partial (`aspect_ratio`, `aspect_ratio_with` exist; `modifiers_api.rs::aspect_ratio_sizes_from_the_width_or_the_height_first`; `testAspectRatioModifier_intrinsicDimensions` ported in `intrinsics.rs`. Missing: check invalid-ratio panics; inspector test n/a) |
+| compose/foundation/foundation-layout/src/androidDeviceTest/kotlin/androidx/compose/foundation/layout/BoxTest.kt | 14 | Box alignment, stretch children, RTL, `propagateMinConstraints` (and its changes), child sizes the box, intrinsics, `matchParentSize` | partial (Box, `content_alignment`, `propagate_min_constraints` exist; `foundation.rs::a_box_aligns_its_children`. `testBox_hasCorrectIntrinsicMeasurements` ported in `intrinsics.rs`, without its `matchParentSize` child. Missing: `matchParentSize` (feature:layout-modifiers), with `…withNoAlignedChildren`) |
 | compose/foundation/foundation-layout/src/androidDeviceTest/kotlin/androidx/compose/foundation/layout/BoxWithConstraintsTest.kt | 17 | Content composed with the measured constraints, relayout/recomposition interplay, model writes during measure, disposal, Dp accessors, infinity | partial (exists; `grid.rs::box_with_constraints_composes_for_its_constraints`, `review_round6.rs` box tests. compose-rs composes for a hint then again (docs/06), so tests counting steps (`allTheStepsCalledExactlyOnce`, `withConstraintCallbackIsNotExecutedWithInnerRecompositions`) may differ: see Notes) |
 | compose/foundation/foundation-layout/src/androidDeviceTest/kotlin/androidx/compose/foundation/layout/ContextualFlowRowColumnTest.kt | 77 | `ContextualFlowRow` / `ContextualFlowColumn` | n/a: the API is `@Deprecated` |
 | compose/foundation/foundation-layout/src/androidDeviceTest/kotlin/androidx/compose/foundation/layout/FitInsideTest.kt | 2 | `Modifier.fitInside(RectRulers)` | feature:ruler-fit |
@@ -66,14 +68,14 @@ The table's suite references (`lazy_api.rs`, `fling.rs`, …) are files in `crat
 | compose/foundation/foundation-layout/src/androidDeviceTest/kotlin/androidx/compose/foundation/layout/FlexBoxTest.kt | 21 | FlexBox baselines, RTL, invalid grow/shrink, intrinsics, focus order | feature:flexbox (+ alignment-lines, intrinsics) |
 | compose/foundation/foundation-layout/src/androidDeviceTest/kotlin/androidx/compose/foundation/layout/FlowRowColumnTest.kt | 128 | FlowRow/FlowColumn wrapping, maxItems, maxLines, weights, `fillMaxRowHeight`, arrangements, intrinsics (45), RTL | feature:flow-layout (+ intrinsics) |
 | compose/foundation/foundation-layout/src/androidDeviceTest/kotlin/androidx/compose/foundation/layout/GridTest.kt | 79 | The `Grid` layout: track sizes (fixed/%/fr/auto/min-max), gaps, spans, auto placement, areas, RTL | feature:grid-layout |
-| compose/foundation/foundation-layout/src/androidDeviceTest/kotlin/androidx/compose/foundation/layout/IntrinsicTest.kt | 27 | `width/height(IntrinsicSize.Min/Max)`, `requiredWidth/Height(IntrinsicSize)` | feature:intrinsics |
+| compose/foundation/foundation-layout/src/androidDeviceTest/kotlin/androidx/compose/foundation/layout/IntrinsicTest.kt | 27 | `width/height(IntrinsicSize.Min/Max)`, `requiredWidth/Height(IntrinsicSize)` | ported (`intrinsics.rs`, all 27, grouped by scenario) |
 | compose/foundation/foundation-layout/src/androidDeviceTest/kotlin/androidx/compose/foundation/layout/LayoutReuseTest.kt | 9 | Box/Row/Column/Spacer/Flow layouts inside `ReusableContent` re-measure correctly | port (`ReusableContent` and reuse exist; the 2 Flow cases need feature:flow-layout) |
 | compose/foundation/foundation-layout/src/androidDeviceTest/kotlin/androidx/compose/foundation/layout/OffsetTest.kt | 14 | `offset`, `absoluteOffset`, lambda offsets, RTL, no remeasure on offset change | partial (`offset(x, y)` exists, checked in `rtl.rs`. Missing: `absolute_offset`, `offset { IntOffset }` (feature:layout-modifiers); 4 inspector tests n/a) |
-| compose/foundation/foundation-layout/src/androidDeviceTest/kotlin/androidx/compose/foundation/layout/PaddingTest.kt | 19 | padding overloads, negative padding throws, absolutePadding, RTL, intrinsics | partial (padding exists, `modifiers_api.rs::padding_and_size_take_each_overloads_arguments`, `rtl.rs`. Missing: `absolute_padding`, `PaddingValues.Absolute`, the negative-padding panic (feature:layout-modifiers), intrinsics; inspector tests n/a) |
+| compose/foundation/foundation-layout/src/androidDeviceTest/kotlin/androidx/compose/foundation/layout/PaddingTest.kt | 19 | padding overloads, negative padding throws, absolutePadding, RTL, intrinsics | partial (padding exists, `modifiers_api.rs::padding_and_size_take_each_overloads_arguments`, `rtl.rs`. `intrinsicMeasurements` ported in `intrinsics.rs`. Missing: `absolute_padding`, `PaddingValues.Absolute`, the negative-padding panic (feature:layout-modifiers); inspector tests n/a) |
 | compose/foundation/foundation-layout/src/androidDeviceTest/kotlin/androidx/compose/foundation/layout/PaddingValuesTest.kt | 4 | `PaddingValues` zero, `plus`, `minus` (non-negative) | partial (`PaddingValues` exists; `+`/`-` missing: feature:layout-modifiers) |
 | compose/foundation/foundation-layout/src/androidDeviceTest/kotlin/androidx/compose/foundation/layout/RowColumnModifierTest.kt | 8 | Row/Column relayout when a child's align / alignBy / weight modifier changes | partial (align and weight exist; `alignBy` needs feature:alignment-lines) |
-| compose/foundation/foundation-layout/src/androidDeviceTest/kotlin/androidx/compose/foundation/layout/RowColumnTest.kt | 133 | Row/Column: weights (31), arrangements (49), alignments, rounding, RTL (19), alignBy (8), intrinsics (7), wrap/size interplay | partial (Row/Column/weight/align/arrangements exist; `foundation.rs` has 4 such tests. Missing: alignBy/alignByBaseline (feature:alignment-lines), intrinsics (feature:intrinsics), `Arrangement.Absolute` (feature:layout-modifiers); about 110 tests portable now) |
-| compose/foundation/foundation-layout/src/androidDeviceTest/kotlin/androidx/compose/foundation/layout/SizeTest.kt | 50 | size/width/height/sizeIn/required*/fillMax*/wrapContent*/defaultMinSize; constraints satisfiable or not; intrinsics (20) | partial (most exist; `compose-ui/tests/suite/ui.rs::size_modifiers_follow_compose`, `modifiers_api.rs`. Missing: `required_width/height/size_in/width_in/height_in` (feature:layout-modifiers), intrinsics) |
+| compose/foundation/foundation-layout/src/androidDeviceTest/kotlin/androidx/compose/foundation/layout/RowColumnTest.kt | 133 | Row/Column: weights (31), arrangements (49), alignments, rounding, RTL (19), alignBy (8), intrinsics (7), wrap/size interplay | partial (Row/Column/weight/align/arrangements exist; `foundation.rs` has 4 such tests. The 11 intrinsics tests are ported in `intrinsics.rs` (their `alignBy` variants wait on alignment lines). Missing: alignBy/alignByBaseline (feature:alignment-lines), `Arrangement.Absolute` (feature:layout-modifiers); about 100 tests portable now) |
+| compose/foundation/foundation-layout/src/androidDeviceTest/kotlin/androidx/compose/foundation/layout/SizeTest.kt | 50 | size/width/height/sizeIn/required*/fillMax*/wrapContent*/defaultMinSize; constraints satisfiable or not; intrinsics (20) | partial (most exist; `compose-ui/tests/suite/ui.rs::size_modifiers_follow_compose`, `modifiers_api.rs`. The 19 intrinsics tests and `testModifiers_doNotCauseUnnecessaryRemeasure` are ported in `intrinsics.rs` (with `required_width`/`required_height`, D1203). Missing: `required_size_in/width_in/height_in` (feature:layout-modifiers)) |
 | compose/foundation/foundation-layout/src/androidDeviceTest/kotlin/androidx/compose/foundation/layout/SpacerTest.kt | 6 | Spacer sized by size/width/height, inside smaller containers | port |
 | compose/foundation/foundation-layout/src/androidDeviceTest/kotlin/androidx/compose/foundation/layout/VisibleTest.kt | 8 | `Modifier.visible(false)`: not drawn, keeps space, not clickable or focusable | feature:layout-modifiers |
 | compose/foundation/foundation-layout/src/androidDeviceTest/kotlin/androidx/compose/foundation/layout/WindowInsetsControllerTest.kt | 11 | `imeNestedScroll`: scrolling and flinging the IME open or closed | feature:window-insets (Android IME animation controller) |
@@ -237,7 +239,7 @@ All need `feature:pager`. Pager prefetch already uses a cache window in 1.12.1 (
 | compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/OverscrollTest.kt | 40 | `Modifier.overscroll`, `rememberOverscrollEffect`, `LocalOverscrollFactory`, overscroll on scrollables (drag, fling, reverse, nested) | feature:overscroll |
 | compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/ScrollAccessibilityTest.kt | 9 | Accessibility scroll actions on `verticalScroll`/`horizontalScroll` | covered (`compose-android/tests/accessibility_scroll.rs`, `lazy.rs::a_scrolling_column_has_scroll_semantics_and_scrolls_by_its_action`) |
 | compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/ScrollFocusableInteractionTest.kt | 19 | A focused child of a scroll stays in view on resize | partial (as LazyListFocusableInteractionTest: feature:keep-focused-in-view) |
-| compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/ScrollTest.kt | 42 | `verticalScroll`/`horizontalScroll`: small/large content, `reverseScrolling`, `scrollTo`, `animateScrollTo`, swipes, coercion, RTL, `isScrollInProgress`, nested | partial (scroll exists: `scroll.rs` 5 tests, `rtl.rs`. Missing: `reverse_scrolling`, `enabled`, `fling_behavior`, `animate_scroll_to`, `scroll {}`, `is_scroll_in_progress`, interaction source (feature:scroll-state-api)) |
+| compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/ScrollTest.kt | 42 | `verticalScroll`/`horizontalScroll`: small/large content, `reverseScrolling`, `scrollTo`, `animateScrollTo`, swipes, coercion, RTL, `isScrollInProgress`, nested | partial (scroll exists: `scroll.rs` 5 tests, `rtl.rs`. Missing: `reverse_scrolling`, `enabled`, `fling_behavior`, `animate_scroll_to`, `scroll {}`, `is_scroll_in_progress`, interaction source (feature:scroll-state-api); the five intrinsics tests are ported in `intrinsics.rs`) |
 | compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/Scrollable2DInputTest.kt | 22 | `scrollable2D` input: drag, fling, nested | feature:scrollable2d |
 | compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/Scrollable2DTest.kt | 15 | `scrollable2D` semantics, animations, `isScrollInProgress` | feature:scrollable2d |
 | compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/ScrollableAreaTest.kt | 13 | `Modifier.scrollableArea` clip, direction, overscroll node | feature:scrollable (+ overscroll) |
@@ -327,11 +329,11 @@ The benchmarks (docs/12, docs/15, docs/16) compare against 1.12.1. Moving parity
 From `compose/foundation/foundation-layout/api/current.txt` and `compose/foundation/foundation/api/current.txt`, non-deprecated, experimental included (marked *exp*). `restricted_current.txt` adds nothing public. Grouped by the feature that would add them; compose-rs names follow Compose's in snake_case.
 
 - **layout-modifiers:**
-  - `requiredWidth`, `requiredHeight`, `requiredSize(w, h)`, `requiredSizeIn`, `requiredWidthIn`, `requiredHeightIn`;
+  - `requiredSize(w, h)`, `requiredSizeIn`, `requiredWidthIn`, `requiredHeightIn` (`required_width`/`required_height` came with intrinsics, D1203);
   - `absolutePadding`, `absoluteOffset(x, y)`, `offset { IntOffset }` and `absoluteOffset { IntOffset }`;
   - `PaddingValues.Absolute`, `PaddingValues.plus`/`minus`, `calculateStartPadding`/`calculateEndPadding` (check compose-rs's `PaddingValues` for the `calculate*` methods);
   - `BoxScope.matchParentSize`, `Arrangement.Absolute` (Left, Right, Center, SpaceBetween/Around/Evenly, `spacedBy`, `aligned`), `Modifier.visible`.
-- **intrinsics:** `IntrinsicSize`, `Modifier.width/height(IntrinsicSize)`, `requiredWidth/requiredHeight(IntrinsicSize)`, and min/max intrinsic width and height on every layout here (ui's `MeasurePolicy.minIntrinsicWidth` and friends).
+- **intrinsics:** done (D1200–D1205): `IntrinsicSize`, `Modifier.width/height(IntrinsicSize)`, `requiredWidth/requiredHeight(IntrinsicSize)`, and Compose's intrinsics on every layout here. Flow layouts, `FlexBox` and `Grid` bring theirs.
 - **alignment-lines:** `paddingFrom` (Dp and TextUnit), `paddingFromBaseline`, `RowScope.alignBy` (line or lambda), `alignByBaseline`, `ColumnScope.alignBy`.
 - **flow-layout:** `FlowRow`, `FlowColumn` (`maxItemsInEachRow`, `maxLines`, `itemVerticalAlignment`), `FlowRowScope.fillMaxRowHeight` (*exp*), `FlowColumnScope.fillMaxColumnWidth` (*exp*), `FlowRowOverflowScope`/`FlowColumnOverflowScope` (*exp*, `shownItemCount`, `totalItemCount`). The `overflow` overloads and `ContextualFlow*` are deprecated.
 - **flexbox:** `FlexBox`, `FlexBoxConfig`/`FlexBoxConfigScope`, `FlexConfig`/`FlexConfigScope`, `FlexBoxScope.flex`, `FlexDirection`, `FlexWrap`, `FlexJustifyContent`, `FlexAlignItems`, `FlexAlignSelf`, `FlexAlignContent`, `FlexBasis`. They are stable at tip, added 2025-12-08, after 1.12.
@@ -499,11 +501,9 @@ Each entry gives the Compose API, what it does, the test files that need it (by 
     - Tests: OverscrollTest, StretchOverscrollIntegrationTest, StretchOverscrollScreenshotTest, AnchoredDraggableOverscrollTest, ScrollableAreaTest, parts of LazyListTest and LazyListsContentPaddingTest.
     - Depends on: scrollable; a stretch effect on Android (a `RenderEffect` or `EdgeEffect` in the replayer: graphics, android).
     - Size: L. Experimental: no.
-18. **intrinsics.**
+18. **intrinsics.** Done (PL-3, D1200–D1205; `crates/compose-foundation/tests/suite/intrinsics.rs`).
     - API: `IntrinsicSize`, the intrinsic modifiers, min and max intrinsics on every layout.
-    - Tests: IntrinsicTest, parts of RowColumnTest, SizeTest, BoxTest, AspectRatioTest, PaddingTest, FlowRowColumnTest and FlexBoxTest.
-    - Depends on: ui's `MeasurePolicy` intrinsic methods (today `max_intrinsic_*` probes by measuring; there is no min; ui ledger).
-    - Size: L. Experimental: no.
+    - Tests: IntrinsicTest, parts of RowColumnTest, SizeTest, BoxTest, AspectRatioTest, PaddingTest and ScrollTest are ported; FlowRowColumnTest's and FlexBoxTest's come with those layouts.
 19. **alignment-lines.**
     - API: `paddingFrom`, `paddingFromBaseline`, `alignBy`, `alignByBaseline`.
     - Tests: AlignmentLineTest, RowColumnModifierTest, parts of RowColumnTest and FlexBoxTest.
@@ -512,7 +512,7 @@ Each entry gives the Compose API, what it does, the test files that need it (by 
 20. **flow-layout.**
     - API: `FlowRow`, `FlowColumn` and their scopes.
     - Tests: FlowRowColumnTest, 2 of LayoutReuseTest.
-    - Depends on: intrinsics for 45 tests.
+    - Depends on: intrinsics for 45 tests (done).
     - Size: L. Experimental: no (`fillMaxRowHeight` and the overflow scopes are).
 21. **transformable.**
     - API: `detectTransformGestures`, the `calculate*` helpers, `transformable`, `TransformableState`.
@@ -558,12 +558,12 @@ Each entry gives the Compose API, what it does, the test files that need it (by 
 29. **flexbox.**
     - API: `FlexBox` and its configs.
     - Tests: FlexBoxTest, FlexBoxDirectionTest.
-    - Depends on: alignment-lines (baseline tests), intrinsics.
+    - Depends on: alignment-lines (baseline tests), intrinsics (done).
     - Size: L. Experimental: no (new at tip).
 30. **grid-layout.**
     - API: `Grid` and its configuration.
     - Tests: GridTest.
-    - Depends on: intrinsics (content-based tracks need min/max content sizes).
+    - Depends on: intrinsics (done; content-based tracks need min/max content sizes).
     - Size: L–XL. Experimental: no (new at tip).
 31. **ruler-fit.**
     - API: `fitInside`, `fitOutside`.
@@ -599,7 +599,7 @@ Each entry gives the Compose API, what it does, the test files that need it (by 
 5. **draggable** (M), then **gesture-detectors** (M), then **scroll-indicator-state** (S).
 6. **lazy-semantics** (M), **keep-focused-in-view** (M), **bring-into-view** (M).
 7. **snapping** (M), then **anchored-draggable** (M–L), then **overscroll** (L).
-8. **intrinsics** (L) and **alignment-lines** (L), when the ui work they depend on lands; then **flow-layout** (L).
+8. **intrinsics** (L, done) and **alignment-lines** (L), when the ui work it depends on lands; then **flow-layout** (L).
 9. **transformable** (M) and **scrollable2d** (M), after ui's multi-pointer events.
 10. **pinnable** (M), **beyond-bounds-api** (M), **animate-item** (L).
 11. **pager** (XL), then **staggered-grid** (L–XL).
@@ -662,7 +662,7 @@ Each entry gives the Compose API, what it does, the test files that need it (by 
 - **Negative padding** doesn't panic. Compose's `padding` requires non-negative values (`PaddingTest.negative*Padding_throws`), and `PaddingValues.minus` coerces to non-negative (`PaddingValuesTest.minusPaddingValues_mustBeNonNegative`).
 - **Out-of-range grid spans** are clamped where Compose throws (documented in `lazy/grid.rs`). `LazyGridSpanTest` cases that expect an exception should become clamping tests that cite the deviation.
 - **`BoxWithConstraints` composes** first for a hinted constraint, then again if the real one differs. Compose subcomposes once, during measure. Tests counting compositions or steps (`BoxWithConstraintsTest.allTheStepsCalledExactlyOnce`, `withConstraintCallbackIsNotExecutedWithInnerRecompositions`, `updateConstraintsRecomposingWithConstraints`) may see an extra composition when the hint is wrong.
-- **Intrinsics** are probes. compose-rs's `max_intrinsic_width/height` measure the child with loosened constraints; Compose asks policies for intrinsics without measuring (and there is no min here). Anything relying on intrinsics not measuring (`SizeTest.testIntrinsicMeasurements_notQueriedWhenConstraintsAreFixed`, `testModifiers_doNotCauseUnnecessaryRemeasure`) differs. That's the intrinsics feature.
+- **Lazy lists and grids have no intrinsics** and panic when asked, with Compose's `SubcomposeLayout` message (D1204), though compose-rs doesn't subcompose them: the same behaviour, for another reason.
 - **Window insets aren't consumed** (D222): nested paddings of the same insets add up. Caught by `WindowInsetsPaddingTest.consumedInsets`, `consumedPadding` and `withConsumedWindowInsets`.
 - **Lazy items are composed in rounds** within a frame, not during measurement. Tests that count recompositions of items or callers (`LazyColumnTest.recompositionOrder`, `LazyListTest` composition-count tests) can see different orders. The count of items composed per frame should match (D487, D492). Compare against `review_lazy.rs::scrolling_one_row_composes_only_the_rows_coming_into_range`.
 - **Lazy lists compose no `beyondBoundsItemCount` items** (Compose's is internal and 0 by default, the same). With compose-rs's recommended optimizations, items are kept behind and two are prefetched ahead. Lazy tests about what's composed must set `Optimizations::NONE` to match Compose.

@@ -36,6 +36,7 @@ pub trait TextMeasurer {
     fn metrics(&self, paragraph: ParagraphHandle) -> ParagraphMetrics; // size, baselines, line metrics
     fn hit_test(&self, paragraph: ParagraphHandle, position: Offset) -> TextPosition; // for selection and the cursor
     fn max_intrinsic_width(&self, paragraph: ParagraphHandle) -> Option<f32>; // the text's own width
+    fn min_intrinsic_width(&self, paragraph: ParagraphHandle) -> Option<f32>; // its widest segment between line breaks
     fn relayout(&mut self, paragraph: ParagraphHandle, constraints: Constraints) -> Option<ParagraphHandle>; // the same text at new constraints
     fn restyle(&mut self, paragraph: ParagraphHandle, style: &TextStyle) -> Option<ParagraphHandle>; // the same layout in a new paint
     fn release(&mut self, paragraph: ParagraphHandle);
