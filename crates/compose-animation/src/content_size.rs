@@ -73,19 +73,6 @@ struct AnimData {
     animatable: Animatable<IntSize>,
     /// Where the animation running started.
     start_size: Rc<Cell<IntSize>>,
-    /// How many animations run (an interrupted one until it sees it was): `isRunning`, read
-    /// while measuring without measuring again when it changes (a frame a test runs at the same
-    /// time would start the animation a frame early).
-    running: Rc<Cell<u32>>,
-}
-
-/// Counts an animation running until it ends or is dropped (its scope cancelled).
-struct RunningGuard(Rc<Cell<u32>>);
-
-impl Drop for RunningGuard {
-    fn drop(&mut self) {
-        self.0.set(self.0.get() - 1);
-    }
 }
 
 struct ContentSizeNode {
@@ -155,24 +142,17 @@ impl ContentSizeNode {
         let Some(data) = &self.data else {
             let animatable =
                 Animatable::new_with(target_size, Some(IntSize::VISIBILITY_THRESHOLD), "Size");
-            self.data = Some(AnimData {
-                animatable,
-                start_size: Rc::new(Cell::new(target_size)),
-                running: Rc::new(Cell::new(0)),
-            });
+            self.data = Some(AnimData { animatable, start_size: Rc::new(Cell::new(target_size)) });
             return target_size;
         };
         let current = data.animatable.value();
-        let was_interrupted = target_size != current && data.running.get() == 0;
+        let was_interrupted = target_size != current && !data.animatable.is_running();
         if target_size != data.animatable.target_value() || was_interrupted {
             data.start_size.set(current);
             let (animatable, start, spec) =
                 (data.animatable.clone(), data.start_size.clone(), self.spec);
             let listener = self.listener.clone();
-            data.running.set(data.running.get() + 1);
-            let guard = RunningGuard(data.running.clone());
             self.scope.launch(async move {
-                let _guard = guard;
                 let result = animatable.animate_to(target_size, spec).await;
                 let finished = result.end_reason == AnimationEndReason::Finished;
                 if let Some(listener) = listener.filter(|_| finished) {

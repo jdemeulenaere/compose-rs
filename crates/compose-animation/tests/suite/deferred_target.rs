@@ -19,12 +19,12 @@ fn a_deferred_target_animates_from_the_next_frame() {
         Offset::new(10.0, 20.0)
     );
     assert_eq!(animation.value(), Some(Offset::new(10.0, 20.0)));
-    // No `wait_for_idle` between the targets: run at the current time, the test rule would
-    // give the task launched a frame then (compose-test, not Compose, frames between ticks).
-    ui.advance_time_by_frame();
+    // What's due now runs (Compose's `runCurrent`), with no frame.
+    ui.wait_for_idle();
     assert!(animation.is_idle());
     // A new target: nothing moves before a frame.
     animation.update_target(Offset::new(100.0, 200.0), *scope, spring());
+    ui.wait_for_idle();
     assert_eq!(animation.value(), Some(Offset::new(10.0, 20.0)));
     assert_eq!(animation.pending_target(), Some(Offset::new(100.0, 200.0)));
     // The first frame starts the animation, the second moves it.
