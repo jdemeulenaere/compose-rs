@@ -123,7 +123,7 @@ The randomized test (`tests/suite/pausable.rs`; with the reviews' `review_pausab
 
 Effects are written in Rust on remember observers, as in Compose:
 
-- `SideEffect(|| …)` runs after a successful pass.
+- `SideEffect(|| …)` runs after a successful pass. `KeyedSideEffect(keys, || …)` (Compose's `SideEffect(key1, …)`, named apart as Rust has no overloads) runs only after the passes whose `keys` aren't `same` as the last ones (an array stands for Compose's vararg keys; one of another length is a change).
 - `DisposableEffect(keys, |scope| { …; scope.on_dispose(|| …) })` gets the cleanup when the keys change or the group leaves.
 - `LaunchedEffect(keys, async move { … })` runs a future on the UI thread's executor after the pass, and cancels it (drops the future) when the keys change or the call leaves the composition. A future given on a pass whose keys are the same is dropped unpolled.
 - `produce_state(initial, key, |state| async move { … })` (as `produceState`) is state a coroutine sets, launched as `LaunchedEffect`; `remember_updated_state(value)` (as `rememberUpdatedState`) keeps the latest value for effects started earlier (a plain cell updated at each composition, not state, since composition doesn't write state).

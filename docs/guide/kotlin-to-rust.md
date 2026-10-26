@@ -512,7 +512,9 @@ pub fn Tracked(screen: SharedString, analytics: Rc<Analytics>) {
 }
 ```
 
-`SideEffect`, `DisposableEffect` and `LaunchedEffect` take plain closures and futures, not lambdas the transform clones into: what they use is moved, so clone what's used after them.
+`SideEffect(key1, key2) { … }` is `KeyedSideEffect((key1, key2), move || …)`: it runs only when the keys changed.
+
+`SideEffect`, `KeyedSideEffect`, `DisposableEffect` and `LaunchedEffect` take plain closures and futures, not lambdas the transform clones into: what they use is moved, so clone what's used after them.
 
 ### `rememberCoroutineScope`
 

@@ -680,6 +680,106 @@ impl ComposeArg for ScopeHolder {
     }
 }
 
+/// A key that is never the same as itself, as the `NeverEqualObject` of Compose's tests: an
+/// effect keyed on it runs again at each pass.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct NeverEqual;
+
+impl ComposeArg for NeverEqual {
+    fn same(&self, _: &Self) -> bool {
+        false
+    }
+}
+
+// ---- Channels ------------------------------------------------------------------------------
+
+/// A test channel between the test and its tasks, as the `Channel`s and `CompletableDeferred`s
+/// Compose's effect tests use: an unbounded queue whose receiver awaits the next value.
+pub struct Channel<T> {
+    inner: Rc<ChannelInner<T>>,
+}
+
+struct ChannelInner<T> {
+    queue: RefCell<std::collections::VecDeque<T>>,
+    waiting: RefCell<Vec<std::task::Waker>>,
+    /// Keep only the latest value, as `Channel.CONFLATED`.
+    conflated: bool,
+}
+
+impl<T> Clone for Channel<T> {
+    fn clone(&self) -> Self {
+        Channel { inner: self.inner.clone() }
+    }
+}
+
+impl<T: 'static> ComposeArg for Channel<T> {
+    fn same(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.inner, &other.inner)
+    }
+}
+
+impl<T> Default for Channel<T> {
+    fn default() -> Self {
+        Channel::new()
+    }
+}
+
+impl<T> Channel<T> {
+    pub fn new() -> Channel<T> {
+        Channel::with_conflation(false)
+    }
+
+    /// A channel keeping only its latest value, as `Channel(Channel.CONFLATED)`.
+    pub fn conflated() -> Channel<T> {
+        Channel::with_conflation(true)
+    }
+
+    fn with_conflation(conflated: bool) -> Channel<T> {
+        Channel {
+            inner: Rc::new(ChannelInner {
+                queue: RefCell::new(Default::default()),
+                waiting: RefCell::new(Vec::new()),
+                conflated,
+            }),
+        }
+    }
+
+    /// Sends `value`, waking the receivers, as `trySend`.
+    pub fn send(&self, value: T) {
+        {
+            let mut queue = self.inner.queue.borrow_mut();
+            if self.inner.conflated {
+                queue.clear();
+            }
+            queue.push_back(value);
+        }
+        let waiting = std::mem::take(&mut *self.inner.waiting.borrow_mut());
+        for waker in waiting {
+            waker.wake();
+        }
+    }
+
+    /// The next value if one is there, as `tryReceive`.
+    pub fn try_receive(&self) -> Option<T> {
+        self.inner.queue.borrow_mut().pop_front()
+    }
+
+    /// Waits for the next value, as `receive()`.
+    pub fn receive(&self) -> impl std::future::Future<Output = T> + 'static
+    where
+        T: 'static,
+    {
+        let inner = self.inner.clone();
+        std::future::poll_fn(move |context| match inner.queue.borrow_mut().pop_front() {
+            Some(value) => std::task::Poll::Ready(value),
+            None => {
+                inner.waiting.borrow_mut().push(context.waker().clone());
+                std::task::Poll::Pending
+            }
+        })
+    }
+}
+
 // ---- The composition driver ----------------------------------------------------------------
 
 /// The time between two frames of the test clock, as `TestMonotonicFrameClock`'s.

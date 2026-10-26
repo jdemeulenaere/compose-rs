@@ -146,7 +146,7 @@ fn remember_new<T: Remember>(position: SlotPosition, value: T) -> T::Output {
 
 /// Reserves the next slot for `keys`, keeps them unless they are `same` as the kept ones, and
 /// says whether they were.
-fn remember_keys<K: ComposeArg>(keys: K) -> bool {
+pub(crate) fn remember_keys<K: ComposeArg>(keys: K) -> bool {
     let (position, kept) = slot_next(TypeId::of::<K>());
     if let Some(kept) = kept
         && downcast::<K>(&kept).same(&keys)

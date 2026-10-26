@@ -16,3 +16,4 @@ mod review4;
 mod review5;
 mod review6;
 mod scenarios;
+mod side_effects;

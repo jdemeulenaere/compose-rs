@@ -32,6 +32,19 @@ pub fn SideEffect<F: FnOnce() + 'static>(effect: F) {
     record_effect(DeferredEffect::Slot(slot));
 }
 
+/// Runs `effect` after a successful pass that ran this call with `keys` not
+/// [`same`](ComposeArg::same) as the last time, and after the first, as Compose's
+/// `SideEffect(key1, …) { … }`: work that only needs redoing when something changed. `keys` is
+/// one value or a tuple (`SideEffect(key1, key2)`); an array stands for vararg keys, and an
+/// array of another length is a change.
+#[allow(non_snake_case)]
+pub fn KeyedSideEffect<K: ComposeArg, F: FnOnce() + 'static>(keys: K, effect: F) {
+    if crate::remember::remember_keys(keys) {
+        return;
+    }
+    record_effect(DeferredEffect::Boxed(Box::new(effect)));
+}
+
 /// The receiver of a [`DisposableEffect`]'s body, as Compose's `DisposableEffectScope`.
 pub struct DisposableEffectScope {
     _private: (),
