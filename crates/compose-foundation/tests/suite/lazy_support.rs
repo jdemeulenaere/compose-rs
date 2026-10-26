@@ -130,6 +130,12 @@ impl Lazy {
         if self.vertical { rect.top } else { rect.left }
     }
 
+    /// Where the node tagged `tag` starts across the axis, in the root.
+    pub fn cross_start(&self, ui: &mut compose_test::ComposeTestRule, tag: &str) -> f32 {
+        let rect = bounds(ui, tag);
+        if self.vertical { rect.left } else { rect.top }
+    }
+
     /// The node's length along the axis.
     pub fn main_size(&self, ui: &mut compose_test::ComposeTestRule, tag: &str) -> f32 {
         let rect = bounds(ui, tag);

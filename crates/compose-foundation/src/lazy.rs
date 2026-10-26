@@ -2147,6 +2147,19 @@ impl MeasurePolicy for LazyListLayout {
             state.room_forward.set(0.0);
             state.room_estimated.set((false, false));
             state.beyond_more.set((false, false));
+            // As large as its padding, as Compose's (its measurement's size excludes it).
+            let (main_padding, cross_padding) = (before + after, cross_before + cross_after);
+            let size = if vertical {
+                IntSize::new(
+                    constraints.constrain_width(cross_padding),
+                    constraints.constrain_height(main_padding),
+                )
+            } else {
+                IntSize::new(
+                    constraints.constrain_width(main_padding),
+                    constraints.constrain_height(cross_padding),
+                )
+            };
             state.laid_out.begin();
             let keys_changed = state.note_laid_items(&info.items);
             state.laid_out.end(
@@ -2154,7 +2167,7 @@ impl MeasurePolicy for LazyListLayout {
                     start: -before,
                     end: main_max - before,
                     count: 0,
-                    size: IntSize::new(constraints.min_width, constraints.min_height),
+                    size,
                     vertical,
                     reverse,
                     before,
@@ -2164,7 +2177,7 @@ impl MeasurePolicy for LazyListLayout {
                 },
                 keys_changed,
             );
-            return scope.layout(constraints.min_width, constraints.min_height);
+            return scope.layout(size.width, size.height);
         }
         state.had_items.set(true);
         index = index.min(count.saturating_sub(1));
@@ -2226,11 +2239,14 @@ impl MeasurePolicy for LazyListLayout {
                 break;
             }
         }
-        // Past the end of the last item: at its end (the room left then scrolls back).
+        // Past the end of the last item: at its end (the room left then scrolls back), or as
+        // far beyond it as padding larger than the viewport lets it go, as Compose's (kept
+        // small: a huge offset's scroll back would lose pixels to `f32`).
         if index + 1 == count
             && let Some(placeable) = measure(index, &mut sizes)
         {
-            offset = offset.min(main_of(&placeable) as f32);
+            let beyond = (before + after - main_max).max(0);
+            offset = offset.min((main_of(&placeable) + beyond) as f32);
         }
         let mut placed: Vec<(Placeable, i32)> = Vec::new();
         let mut end_index;
@@ -2248,7 +2264,10 @@ impl MeasurePolicy for LazyListLayout {
             missing = false;
             let mut main = before - offset.round() as i32;
             end_index = index;
-            while end_index < count && (main < main_max || end_index < laid_end) {
+            // At least one item, as Compose's, even with padding larger than the viewport.
+            while end_index < count
+                && (main < main_max || end_index < laid_end || placed.is_empty())
+            {
                 match measure(end_index, &mut sizes) {
                     Some(placeable) => {
                         let size = main_of(&placeable);
