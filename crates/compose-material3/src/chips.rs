@@ -65,7 +65,7 @@ fn chip(
     }
     let start = if leading_icon.is_some() { 8.dp() } else { 16.dp() };
     let end = if trailing_icon.is_some() { 8.dp() } else { 16.dp() };
-    CompositionLocalProvider(LOCAL_TEXT_STYLE.provides(typography.label_large), || {
+    CompositionLocalProvider(LOCAL_TEXT_STYLE.provides(typography.label_large.clone()), || {
         let (label, leading, trailing) =
             (label.clone(), leading_icon.clone(), trailing_icon.clone());
         Row(
@@ -233,15 +233,18 @@ pub fn Badge(
     match content {
         Some(content) => {
             CompositionLocalProvider(LOCAL_CONTENT_COLOR.provides(content_color), || {
-                CompositionLocalProvider(LOCAL_TEXT_STYLE.provides(typography.label_small), || {
-                    let content = content.clone();
-                    Box(
-                        modifier.clone().padding((4.dp(), 0.dp())),
-                        Alignment::CENTER,
-                        false,
-                        compose_runtime::callback(move |_| content()),
-                    );
-                });
+                CompositionLocalProvider(
+                    LOCAL_TEXT_STYLE.provides(typography.label_small.clone()),
+                    || {
+                        let content = content.clone();
+                        Box(
+                            modifier.clone().padding((4.dp(), 0.dp())),
+                            Alignment::CENTER,
+                            false,
+                            compose_runtime::callback(move |_| content()),
+                        );
+                    },
+                );
             });
         }
         None => Box(modifier, Alignment::CENTER, false, compose_runtime::callback(|_| {})),

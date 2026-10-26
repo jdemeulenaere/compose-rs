@@ -3,8 +3,8 @@
 
 use compose_runtime::{ComposeArg, CompositionLocal, CompositionLocalProvider, composable};
 use compose_ui::{
-    Color, CornerSize, FontWeight, LineHeightAlignment, LineHeightStyle, LineHeightTrim, Shape, Sp,
-    TextStyle, UnitExt,
+    Color, CornerSize, FontWeight, LineHeightAlignment, LineHeightStyle, LineHeightTrim, Shape,
+    TextStyle, TextUnit, UnitExt,
 };
 
 /// The theme's colors, as Compose's `ColorScheme` (the roles components use).
@@ -177,7 +177,7 @@ impl ColorScheme {
 
 /// The theme's text styles, as Compose's `Typography` (Material 3's type scale,
 /// `TypeScaleTokens`).
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Debug)]
 pub struct Typography {
     pub display_large: TextStyle,
     pub display_medium: TextStyle,
@@ -199,7 +199,7 @@ pub struct Typography {
 /// How Material 3's text styles spread their line height, as `DefaultLineHeightStyle`
 /// (`TypographyTokens.kt`): centered on the text, neither end trimmed.
 pub const DEFAULT_LINE_HEIGHT_STYLE: LineHeightStyle =
-    LineHeightStyle { alignment: LineHeightAlignment::CENTER, trim: LineHeightTrim::None };
+    LineHeightStyle::new(LineHeightAlignment::CENTER, LineHeightTrim::None);
 
 /// A type scale entry: its size, line height, tracking (letter spacing, sp) and weight, as
 /// `TypeScaleTokens`' `…Size`, `…LineHeight`, `…Tracking` and `…Weight`.
@@ -241,10 +241,10 @@ impl TypeScaleTokens {
 /// (`DefaultTextStyle`: its line height style) with the token's values.
 const fn style(token: TypeScaleToken) -> TextStyle {
     TextStyle {
-        font_size: Sp(token.size),
+        font_size: TextUnit::sp(token.size),
         font_weight: Some(token.weight),
-        line_height: Sp(token.line_height),
-        letter_spacing: Sp(token.tracking),
+        line_height: TextUnit::sp(token.line_height),
+        letter_spacing: TextUnit::sp(token.tracking),
         ..DEFAULT_TEXT_STYLE
     }
 }
@@ -341,11 +341,12 @@ pub fn MaterialTheme(
 ) {
     CompositionLocalProvider(LOCAL_COLOR_SCHEME.provides(color_scheme), || {
         CompositionLocalProvider(LOCAL_SHAPES.provides(shapes), || {
-            CompositionLocalProvider(LOCAL_TYPOGRAPHY.provides(typography), || {
+            CompositionLocalProvider(LOCAL_TYPOGRAPHY.provides(typography.clone()), || {
                 // The body text style, as Compose's (and no content color: surfaces give it).
-                CompositionLocalProvider(LOCAL_TEXT_STYLE.provides(typography.body_large), || {
-                    content()
-                });
+                CompositionLocalProvider(
+                    LOCAL_TEXT_STYLE.provides(typography.body_large.clone()),
+                    || content(),
+                );
             });
         });
     });

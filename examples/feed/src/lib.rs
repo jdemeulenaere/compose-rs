@@ -263,17 +263,17 @@ fn PostCard(index: u32) {
                             "{}",
                             post.initials,
                             color = Color::WHITE,
-                            style = typography.title_small
+                            style = typography.title_small.clone()
                         );
                     }
                 );
                 Spacer(Modifier.width(12.dp()));
                 Column!({
-                    Text!("{}", post.author, style = typography.title_small);
+                    Text!("{}", post.author, style = typography.title_small.clone());
                     Text!(
                         "{} h ago",
                         post.hours,
-                        style = typography.body_small,
+                        style = typography.body_small.clone(),
                         color = scheme.on_surface_variant
                     );
                 });
@@ -282,7 +282,7 @@ fn PostCard(index: u32) {
             Text!(
                 "{}",
                 post.body,
-                style = typography.body_medium,
+                style = typography.body_medium.clone(),
                 max_lines = 3,
                 overflow = TextOverflow::Ellipsis
             );
@@ -295,9 +295,18 @@ fn PostCard(index: u32) {
                         tint = if is_liked { Color::from_argb(0xFFE53935) } else { scheme.outline }
                     );
                 });
-                Text!("{}", post.likes + u32::from(is_liked), style = typography.label_large);
+                Text!(
+                    "{}",
+                    post.likes + u32::from(is_liked),
+                    style = typography.label_large.clone()
+                );
                 Spacer(Modifier.weight(row, 1.0));
-                Text!("#{}", post.tag, style = typography.label_large, color = scheme.primary);
+                Text!(
+                    "#{}",
+                    post.tag,
+                    style = typography.label_large.clone(),
+                    color = scheme.primary
+                );
             });
         });
     });

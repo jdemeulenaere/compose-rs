@@ -616,15 +616,18 @@ pub fn NavigationDrawerItem(
             }
             let label = label.clone();
             CompositionLocalProvider(LOCAL_CONTENT_COLOR.provides(text_color), || {
-                CompositionLocalProvider(LOCAL_TEXT_STYLE.provides(typography.label_large), || {
-                    let label = label.clone();
-                    Box(
-                        Modifier.weight(row, 1.0),
-                        Alignment::CENTER_START,
-                        false,
-                        compose_runtime::callback(move |_| label()),
-                    );
-                });
+                CompositionLocalProvider(
+                    LOCAL_TEXT_STYLE.provides(typography.label_large.clone()),
+                    || {
+                        let label = label.clone();
+                        Box(
+                            Modifier.weight(row, 1.0),
+                            Alignment::CENTER_START,
+                            false,
+                            compose_runtime::callback(move |_| label()),
+                        );
+                    },
+                );
             });
             if let Some(badge) = badge.clone() {
                 Spacer(Modifier.width(12.dp()));

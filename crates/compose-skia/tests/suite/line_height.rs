@@ -5,7 +5,8 @@
 //! style centers the height and trims nothing. Each case states Compose's heights.
 
 use compose::ui::{
-    Constraints, Density, LineHeightAlignment, LineHeightStyle, LineHeightTrim, Sp, TextStyle,
+    Constraints, Density, LineHeightAlignment, LineHeightStyle, LineHeightTrim, TextStyle,
+    TextUnit,
     platform::{TextLayoutOptions, TextMeasurer},
 };
 use compose_skia::SkiaTextMeasurer;
@@ -22,14 +23,17 @@ fn height(text: &str, style: &TextStyle) -> i32 {
     measurer.metrics(paragraph).size.height
 }
 
-const TALL: TextStyle =
-    TextStyle { font_size: Sp(16.0), line_height: Sp(40.0), ..TextStyle::DEFAULT };
+const TALL: TextStyle = TextStyle {
+    font_size: TextUnit::sp(16.0),
+    line_height: TextUnit::sp(40.0),
+    ..TextStyle::DEFAULT
+};
 
 /// No line height style: a single line keeps its font's height (trimmed at both ends: 19 px
 /// with Roboto on Android), and two lines are the font's height and one line height (59 px).
 #[test]
 fn a_style_without_a_line_height_style_trims_both_ends() {
-    let font = height("Hello", &TextStyle { font_size: Sp(16.0), ..TextStyle::DEFAULT });
+    let font = height("Hello", &TextStyle { font_size: TextUnit::sp(16.0), ..TextStyle::DEFAULT });
     assert!(font < 30, "the font's own height: {font}");
     let one = height("Hello", &TALL);
     assert_eq!(one, font, "one line, trimmed at both ends");
@@ -44,10 +48,10 @@ fn a_style_without_a_line_height_style_trims_both_ends() {
 #[test]
 fn a_centered_untrimmed_style_makes_every_line_the_line_height() {
     let material = TextStyle {
-        line_height_style: Some(LineHeightStyle {
-            alignment: LineHeightAlignment::CENTER,
-            trim: LineHeightTrim::None,
-        }),
+        line_height_style: Some(LineHeightStyle::new(
+            LineHeightAlignment::CENTER,
+            LineHeightTrim::None,
+        )),
         ..TALL
     };
     assert_eq!(height("Hello", &material), 40);

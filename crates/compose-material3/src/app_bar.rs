@@ -639,7 +639,7 @@ fn single_row_top_app_bar(
                 Modifier.padding(window_insets),
                 policy.clone(),
                 title.clone(),
-                title_style,
+                title_style.clone(),
                 None,
                 false,
                 navigation_icon.clone(),
@@ -738,6 +738,7 @@ fn two_rows_top_app_bar(bar: TwoRows) {
                 (title.clone(), navigation_icon.clone(), actions.clone());
             let (policies, top_alpha, bottom_alpha) =
                 (policies.clone(), top_alpha.clone(), bottom_alpha.clone());
+            let (title_style, small_title_style) = (title_style.clone(), small_title_style.clone());
             Column(
                 Modifier,
                 Arrangement::TOP,
@@ -747,7 +748,7 @@ fn two_rows_top_app_bar(bar: TwoRows) {
                         Modifier.padding(window_insets).clip_to_bounds(),
                         policies.0.clone(),
                         title.clone(),
-                        small_title_style,
+                        small_title_style.clone(),
                         Some(top_alpha.clone()),
                         !top_shown,
                         navigation_icon.clone(),
@@ -765,7 +766,7 @@ fn two_rows_top_app_bar(bar: TwoRows) {
                             .clip_to_bounds(),
                         policies.1.clone(),
                         title.clone(),
-                        title_style,
+                        title_style.clone(),
                         Some(bottom_alpha.clone()),
                         top_shown,
                         None,
@@ -815,7 +816,7 @@ fn top_app_bar_row(
             bar_slot(
                 title_modifier,
                 colors.title_content_color,
-                Some(title_style),
+                Some(title_style.clone()),
                 Some(title.clone()),
             );
             bar_slot(

@@ -291,6 +291,168 @@ impl Paint {
     }
 }
 
+/// sRGB's transfer function, to linear light.
+fn srgb_to_linear(channel: f32) -> f32 {
+    if channel <= 0.04045 { channel / 12.92 } else { ((channel + 0.055) / 1.055).powf(2.4) }
+}
+
+/// sRGB's transfer function, from linear light.
+fn linear_to_srgb(channel: f32) -> f32 {
+    if channel <= 0.003_130_8 { channel * 12.92 } else { 1.055 * channel.powf(1.0 / 2.4) - 0.055 }
+}
+
+/// A color's Oklab lightness and opponents, and its alpha.
+fn to_oklab(color: Color) -> [f32; 4] {
+    let channel = |value: u8| srgb_to_linear(value as f32 / 255.0);
+    let (r, g, b) = (channel(color.red()), channel(color.green()), channel(color.blue()));
+    let l = (0.412_221_47 * r + 0.536_332_55 * g + 0.051_445_995 * b).cbrt();
+    let m = (0.211_903_5 * r + 0.680_699_5 * g + 0.107_396_96 * b).cbrt();
+    let s = (0.088_302_46 * r + 0.281_718_85 * g + 0.629_978_7 * b).cbrt();
+    [
+        0.210_454_26 * l + 0.793_617_8 * m - 0.004_072_047 * s,
+        1.977_998_5 * l - 2.428_592_2 * m + 0.450_593_7 * s,
+        0.025_904_037 * l + 0.782_771_77 * m - 0.808_675_77 * s,
+        color.alpha() as f32 / 255.0,
+    ]
+}
+
+fn from_oklab([lightness, a, b, alpha]: [f32; 4]) -> Color {
+    let l = (lightness + 0.396_337_78 * a + 0.215_803_76 * b).powi(3);
+    let m = (lightness - 0.105_561_346 * a - 0.063_854_17 * b).powi(3);
+    let s = (lightness - 0.089_484_18 * a - 1.291_485_5 * b).powi(3);
+    let red = 4.076_741_7 * l - 3.307_711_6 * m + 0.230_969_94 * s;
+    let green = -1.268_438 * l + 2.609_757_4 * m - 0.341_319_38 * s;
+    let blue = -0.004_196_086_3 * l - 0.703_418_6 * m + 1.707_614_7 * s;
+    let channel = |value: f32| (linear_to_srgb(value).clamp(0.0, 1.0) * 255.0).round() as u32;
+    let alpha = (alpha.clamp(0.0, 1.0) * 255.0).round() as u32;
+    Color::from_argb(alpha << 24 | channel(red) << 16 | channel(green) << 8 | channel(blue))
+}
+
+impl Color {
+    /// Between `start` and `stop`, interpolated in the Oklab color space, as Compose's
+    /// `lerp(Color, Color, Float)`; `fraction` is kept in 0 to 1. An unspecified end counts as
+    /// transparent black, and two unspecified ends give unspecified, as Compose's (whose
+    /// unspecified color is transparent black in an unspecified color space).
+    pub fn lerp(start: Color, stop: Color, fraction: f32) -> Color {
+        if !start.is_specified() && !stop.is_specified() {
+            return Color::UNSPECIFIED;
+        }
+        let lab = |color: Color| to_oklab(if color.is_specified() { color } else { Color(0) });
+        let (start, stop) = (lab(start), lab(stop));
+        let t = fraction.clamp(0.0, 1.0);
+        let mix = |index: usize| crate::unit::lerp_f32(start[index], stop[index], t);
+        from_oklab([mix(0), mix(1), mix(2), mix(3)])
+    }
+
+    /// This color with its alpha multiplied by `alpha` (when not NaN and below 1), as
+    /// Compose's internal `Color.modulate` for text.
+    pub(crate) fn modulate(self, alpha: f32) -> Color {
+        if alpha.is_nan() || alpha >= 1.0 {
+            self
+        } else {
+            self.with_alpha(self.alpha() as f32 / 255.0 * alpha)
+        }
+    }
+}
+
+/// A shadow cast by text, as Compose's `Shadow`: its color, offset from the text, and blur
+/// radius in pixels.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct Shadow {
+    pub color: Color,
+    pub offset: crate::unit::Offset,
+    pub blur_radius: f32,
+}
+
+impl Shadow {
+    /// As `Shadow.None`: black, no offset, no blur.
+    pub const NONE: Shadow =
+        Shadow { color: Color::BLACK, offset: crate::unit::Offset::ZERO, blur_radius: 0.0 };
+
+    /// Between `start` and `stop`, as Compose's `lerp(Shadow, Shadow, Float)`.
+    pub fn lerp(start: Shadow, stop: Shadow, fraction: f32) -> Shadow {
+        use crate::unit::lerp_f32;
+        Shadow {
+            color: Color::lerp(start.color, stop.color, fraction),
+            offset: crate::unit::Offset::new(
+                lerp_f32(start.offset.x, stop.offset.x, fraction),
+                lerp_f32(start.offset.y, stop.offset.y, fraction),
+            ),
+            blur_radius: lerp_f32(start.blur_radius, stop.blur_radius, fraction),
+        }
+    }
+}
+
+impl Default for Shadow {
+    fn default() -> Self {
+        Shadow::NONE
+    }
+}
+
+impl compose_runtime::ComposeArg for Shadow {
+    fn same(&self, other: &Self) -> bool {
+        self == other
+    }
+}
+
+/// How the corners of a stroke's segments are drawn, as `StrokeJoin`.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
+pub enum StrokeJoin {
+    /// Sharp, up to the miter limit.
+    #[default]
+    Miter,
+    Round,
+    Bevel,
+}
+
+/// A stroke's geometry, as Compose's `Stroke` draw style (without a path effect).
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct Stroke {
+    /// The width in pixels; 0 is a hairline.
+    pub width: f32,
+    /// How far a sharp corner may reach, as a multiple of the width.
+    pub miter: f32,
+    pub cap: StrokeCap,
+    pub join: StrokeJoin,
+}
+
+impl Stroke {
+    /// As `Stroke.DefaultMiter`.
+    pub const DEFAULT_MITER: f32 = 4.0;
+
+    /// A stroke `width` pixels wide with Compose's defaults: miter 4, flat ends, mitered
+    /// corners.
+    pub const fn new(width: f32) -> Stroke {
+        Stroke {
+            width,
+            miter: Stroke::DEFAULT_MITER,
+            cap: StrokeCap::Butt,
+            join: StrokeJoin::Miter,
+        }
+    }
+}
+
+impl Default for Stroke {
+    fn default() -> Self {
+        Stroke::new(0.0)
+    }
+}
+
+/// Whether a drawing fills its shape or strokes its outline, as Compose's `DrawStyle` (`Fill`
+/// or a `Stroke`).
+#[derive(Clone, Copy, PartialEq, Debug, Default)]
+pub enum DrawStyle {
+    #[default]
+    Fill,
+    Stroke(Stroke),
+}
+
+impl compose_runtime::ComposeArg for DrawStyle {
+    fn same(&self, other: &Self) -> bool {
+        self == other
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

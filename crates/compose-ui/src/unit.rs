@@ -1,4 +1,4 @@
-//! Units and geometry: `Dp`, `Sp`, `Density`, sizes, offsets and rectangles, as Compose's
+//! Units and geometry: `Dp`, `TextUnit`, `Density`, sizes, offsets and rectangles, as Compose's
 //! `androidx.compose.ui.unit` and `geometry`.
 
 use std::fmt;
@@ -89,40 +89,229 @@ impl Neg for Dp {
     }
 }
 
-/// Scale-independent pixels: the unit of text size, as Compose's `TextUnit` in `sp`.
-#[derive(Clone, Copy, PartialOrd, Default)]
-pub struct Sp(pub f32);
+/// What a [`TextUnit`] measures, as Compose's `TextUnitType`.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
+pub enum TextUnitType {
+    /// No value: decided elsewhere (inherited, or a default).
+    #[default]
+    Unspecified,
+    /// Scale-independent pixels: density-independent pixels times the font scale.
+    Sp,
+    /// A multiple of the font size (for a font size, of the size it's relative to).
+    Em,
+}
 
-impl PartialEq for Sp {
+/// A text measure, as Compose's `TextUnit`: in `sp`, in `em`, or unspecified (decided
+/// elsewhere). Made with `14.sp()` and `1.5.em()` ([`UnitExt`]) or [`TextUnit::sp`] and
+/// [`TextUnit::em`].
+///
+/// Equal when their types and their values' bits are, as Compose's packed value: unspecified
+/// equals unspecified. Arithmetic needs a specified unit, and comparisons two of the same type:
+/// otherwise they panic, as Compose's throw.
+#[derive(Clone, Copy)]
+pub struct TextUnit {
+    value: f32,
+    unit: TextUnitType,
+}
+
+impl TextUnit {
+    /// As `TextUnit.Unspecified`: its value is NaN.
+    pub const UNSPECIFIED: TextUnit = TextUnit { value: f32::NAN, unit: TextUnitType::Unspecified };
+
+    /// As `TextUnit(value, type)`. An unspecified type's value is NaN, whatever is given.
+    pub const fn new(value: f32, unit: TextUnitType) -> TextUnit {
+        match unit {
+            TextUnitType::Unspecified => TextUnit::UNSPECIFIED,
+            _ => TextUnit { value, unit },
+        }
+    }
+
+    /// `value` sp, as `value.sp`.
+    pub const fn sp(value: f32) -> TextUnit {
+        TextUnit { value, unit: TextUnitType::Sp }
+    }
+
+    /// `value` em, as `value.em`.
+    pub const fn em(value: f32) -> TextUnit {
+        TextUnit { value, unit: TextUnitType::Em }
+    }
+
+    /// The value, in its type's unit (NaN when unspecified).
+    pub const fn value(self) -> f32 {
+        self.value
+    }
+
+    /// Its type, as Compose's `type`.
+    pub const fn unit_type(self) -> TextUnitType {
+        self.unit
+    }
+
+    pub const fn is_sp(self) -> bool {
+        matches!(self.unit, TextUnitType::Sp)
+    }
+
+    pub const fn is_em(self) -> bool {
+        matches!(self.unit, TextUnitType::Em)
+    }
+
+    pub const fn is_specified(self) -> bool {
+        !self.is_unspecified()
+    }
+
+    pub const fn is_unspecified(self) -> bool {
+        matches!(self.unit, TextUnitType::Unspecified)
+    }
+
+    /// `self` if specified, else `other`, as `takeOrElse`.
+    pub const fn or(self, other: TextUnit) -> TextUnit {
+        if self.is_specified() { self } else { other }
+    }
+
+    /// Between `start` and `stop`, as Compose's `lerp(TextUnit, TextUnit, Float)`: both must be
+    /// specified and of the same type.
+    pub fn lerp(start: TextUnit, stop: TextUnit, fraction: f32) -> TextUnit {
+        check_arithmetic_pair(start, stop);
+        TextUnit { value: lerp_f32(start.value, stop.value, fraction), unit: start.unit }
+    }
+
+    fn checked(self) -> TextUnit {
+        assert!(self.is_specified(), "Cannot perform operation for Unspecified type.");
+        self
+    }
+}
+
+/// Between `start` and `stop`, as Compose's `lerp(Float, Float, Float)`.
+pub(crate) fn lerp_f32(start: f32, stop: f32, fraction: f32) -> f32 {
+    (1.0 - fraction) * start + fraction * stop
+}
+
+fn check_arithmetic_pair(a: TextUnit, b: TextUnit) {
+    assert!(a.is_specified() && b.is_specified(), "Cannot perform operation for Unspecified type.");
+    assert!(a.unit == b.unit, "Cannot perform operation for {:?} and {:?}", a.unit, b.unit);
+}
+
+impl Default for TextUnit {
+    fn default() -> Self {
+        TextUnit::UNSPECIFIED
+    }
+}
+
+impl PartialEq for TextUnit {
     fn eq(&self, other: &Self) -> bool {
-        same_value(self.0, other.0)
+        self.unit == other.unit && self.value.to_bits() == other.value.to_bits()
     }
 }
 
-impl Sp {
-    pub const UNSPECIFIED: Sp = Sp(f32::NAN);
+impl Eq for TextUnit {}
 
-    pub fn is_specified(self) -> bool {
-        !self.0.is_nan()
+impl std::hash::Hash for TextUnit {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.unit.hash(state);
+        self.value.to_bits().hash(state);
     }
 }
 
-impl fmt::Debug for Sp {
+/// Compares two specified units of the same type, as Compose's `compareTo`: anything else
+/// panics, as Compose's throws.
+impl PartialOrd for TextUnit {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        check_arithmetic_pair(*self, *other);
+        self.value.partial_cmp(&other.value)
+    }
+}
+
+impl Neg for TextUnit {
+    type Output = TextUnit;
+    fn neg(self) -> TextUnit {
+        let unit = self.checked();
+        TextUnit { value: -unit.value, ..unit }
+    }
+}
+
+impl Mul<f32> for TextUnit {
+    type Output = TextUnit;
+    fn mul(self, other: f32) -> TextUnit {
+        let unit = self.checked();
+        TextUnit { value: unit.value * other, ..unit }
+    }
+}
+
+impl Mul<TextUnit> for f32 {
+    type Output = TextUnit;
+    fn mul(self, other: TextUnit) -> TextUnit {
+        let unit = other.checked();
+        TextUnit { value: self * unit.value, ..unit }
+    }
+}
+
+impl Div<f32> for TextUnit {
+    type Output = TextUnit;
+    fn div(self, other: f32) -> TextUnit {
+        let unit = self.checked();
+        TextUnit { value: unit.value / other, ..unit }
+    }
+}
+
+/// Compose's `Int` and `Double` overloads of `times` and `div`: computed in `f32`, as
+/// Compose's (a `Double` is converted after the operation).
+macro_rules! text_unit_arithmetic {
+    ($($type:ty),*) => {
+        $(
+            impl Mul<$type> for TextUnit {
+                type Output = TextUnit;
+                fn mul(self, other: $type) -> TextUnit {
+                    let unit = self.checked();
+                    TextUnit { value: (unit.value as f64 * other as f64) as f32, ..unit }
+                }
+            }
+
+            impl Mul<TextUnit> for $type {
+                type Output = TextUnit;
+                fn mul(self, other: TextUnit) -> TextUnit {
+                    other * self
+                }
+            }
+
+            impl Div<$type> for TextUnit {
+                type Output = TextUnit;
+                fn div(self, other: $type) -> TextUnit {
+                    let unit = self.checked();
+                    TextUnit { value: (unit.value as f64 / other as f64) as f32, ..unit }
+                }
+            }
+        )*
+    };
+}
+
+text_unit_arithmetic!(i32, f64);
+
+impl fmt::Debug for TextUnit {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "{}.sp", self.0)
+        match self.unit {
+            TextUnitType::Unspecified => formatter.write_str("Unspecified"),
+            TextUnitType::Sp => write!(formatter, "{:?}.sp", self.value),
+            TextUnitType::Em => write!(formatter, "{:?}.em", self.value),
+        }
     }
 }
 
-impl ComposeArg for Sp {
+impl fmt::Display for TextUnit {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(self, formatter)
+    }
+}
+
+impl ComposeArg for TextUnit {
     fn same(&self, other: &Self) -> bool {
         self == other
     }
 }
 
-/// `16.dp()`, `14.sp()`, as Kotlin's `16.dp`.
+/// `16.dp()`, `14.sp()`, `1.5.em()`, as Kotlin's `16.dp`, `14.sp` and `1.5.em`.
 pub trait UnitExt {
     fn dp(self) -> Dp;
-    fn sp(self) -> Sp;
+    fn sp(self) -> TextUnit;
+    fn em(self) -> TextUnit;
 }
 
 macro_rules! unit_ext {
@@ -131,8 +320,11 @@ macro_rules! unit_ext {
             fn dp(self) -> Dp {
                 Dp(self as f32)
             }
-            fn sp(self) -> Sp {
-                Sp(self as f32)
+            fn sp(self) -> TextUnit {
+                TextUnit::sp(self as f32)
+            }
+            fn em(self) -> TextUnit {
+                TextUnit::em(self as f32)
             }
         })*
     };
@@ -140,7 +332,7 @@ macro_rules! unit_ext {
 
 unit_ext!(i32, u32, f32, f64, usize);
 
-/// Pixels per `Dp`, and the font scale applied to `Sp`, as Compose's `Density`.
+/// Pixels per `Dp`, and the font scale applied to `sp`, as Compose's `Density`.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Density {
     pub density: f32,
@@ -174,8 +366,11 @@ impl Density {
         dp.0 * self.density
     }
 
-    pub fn sp_to_px(&self, sp: Sp) -> f32 {
-        sp.0 * self.font_scale * self.density
+    /// The pixels for a measure in `sp`, as Compose's `TextUnit.toPx`. Panics for another
+    /// type ("Only Sp can convert to Px", as Compose's): an `em` is relative to a font size.
+    pub fn sp_to_px(&self, sp: TextUnit) -> f32 {
+        assert!(sp.is_sp(), "Only Sp can convert to Px");
+        sp.value() * self.font_scale * self.density
     }
 
     pub fn to_dp(&self, px: f32) -> Dp {
@@ -239,11 +434,19 @@ impl Sub for IntOffset {
     }
 }
 
-/// A floating-point position, as `Offset`: pointer positions and drawing.
-#[derive(Clone, Copy, PartialEq, Default, Debug)]
+/// A floating-point position, as `Offset`: pointer positions and drawing. Equal when both
+/// coordinates are, unspecified (NaN) included: `UNSPECIFIED` equals itself, as Compose's
+/// packed value.
+#[derive(Clone, Copy, Default, Debug)]
 pub struct Offset {
     pub x: f32,
     pub y: f32,
+}
+
+impl PartialEq for Offset {
+    fn eq(&self, other: &Self) -> bool {
+        same_value(self.x, other.x) && same_value(self.y, other.y)
+    }
 }
 
 impl Offset {

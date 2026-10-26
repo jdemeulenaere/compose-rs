@@ -259,7 +259,7 @@ impl ModifierNodeElement for TextElement {
     fn create(&self) -> TextNode {
         TextNode {
             text: self.text.clone(),
-            style: self.style,
+            style: self.style.clone(),
             options: self.options,
             min_lines: self.min_lines,
             min_height: None,
@@ -293,7 +293,7 @@ impl ModifierNodeElement for TextElement {
                 node.selection_rects.clear();
             }
             node.text = self.text.clone();
-            node.style = self.style;
+            node.style = self.style.clone();
             node.options = self.options;
             node.min_lines = self.min_lines;
             node.min_height = None;
@@ -304,7 +304,7 @@ impl ModifierNodeElement for TextElement {
         } else if node.style != self.style {
             // Only its paint changed (its color, its decoration): the layout is kept and drawn
             // again in the new paint, as Compose's `updateDraw` (`hasSameDrawAffectingAttributes`).
-            node.style = self.style;
+            node.style = self.style.clone();
             node.restyle = true;
         }
         node.selectable = self.selectable;

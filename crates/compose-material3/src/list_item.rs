@@ -124,13 +124,17 @@ pub fn ListItem(
                         Alignment::START,
                         compose_runtime::callback(move |_| {
                             if let Some(overline) = overline.clone() {
-                                styled(colors.overline_color, typography.label_small, &overline);
+                                styled(
+                                    colors.overline_color,
+                                    typography.label_small.clone(),
+                                    &overline,
+                                );
                             }
-                            styled(colors.headline_color, typography.body_large, &headline);
+                            styled(colors.headline_color, typography.body_large.clone(), &headline);
                             if let Some(supporting) = supporting.clone() {
                                 styled(
                                     colors.supporting_text_color,
-                                    typography.body_medium,
+                                    typography.body_medium.clone(),
                                     &supporting,
                                 );
                             }
@@ -141,7 +145,7 @@ pub fn ListItem(
                             LOCAL_CONTENT_COLOR.provides(colors.trailing_icon_color),
                             || {
                                 CompositionLocalProvider(
-                                    LOCAL_TEXT_STYLE.provides(typography.label_small),
+                                    LOCAL_TEXT_STYLE.provides(typography.label_small.clone()),
                                     || {
                                         Box(
                                             Modifier.padding((16.dp(), 0.dp(), 0.dp(), 0.dp())),

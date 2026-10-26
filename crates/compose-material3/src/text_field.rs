@@ -233,7 +233,7 @@ fn decorated_field(
         ],
     );
     let text_color = if enabled { colors.text_color } else { colors.disabled_text_color };
-    let style = TextStyle { color: text_style.color.or(text_color), ..text_style };
+    let style = TextStyle { color: text_style.color.or(text_color), ..text_style.clone() };
     let typography = MaterialTheme::typography();
     let label_color = pick(
         enabled,
@@ -284,14 +284,14 @@ fn decorated_field(
     // a label), as Compose's `prefixSuffixAlpha`.
     let prefix_style = TextStyle {
         color: if enabled { colors.prefix_color } else { colors.disabled_prefix_color },
-        ..text_style
+        ..text_style.clone()
     };
     let suffix_style = TextStyle {
         color: if enabled { colors.suffix_color } else { colors.disabled_suffix_color },
-        ..text_style
+        ..text_style.clone()
     };
     // The label's style, from the body-large text's to the small one's as it floats.
-    let label_style = lerp_style(&typography.body_large, &typography.body_small, progress);
+    let label_style = TextStyle::lerp(&typography.body_large, &typography.body_small, progress);
     let container_color =
         if enabled { colors.container_color } else { colors.disabled_container_color };
     let placeholder_color =
@@ -301,7 +301,7 @@ fn decorated_field(
     // Shown while the field is empty and its label floated (or it has none), as Compose's.
     let show_placeholder = empty && slots.placeholder.is_some() && (!has_label || is_focused);
     let floated_label_height = typography.body_small.line_height;
-    let supporting_style = typography.body_small;
+    let supporting_style = typography.body_small.clone();
     // Remembered: the layout (remembered too) writes it, the outline reads it. Not state: the
     // outline draws in the node the layout measures, so measuring it draws it again (a reader
     // in another repaint boundary would draw a stale cut, docs/06).
@@ -312,6 +312,7 @@ fn decorated_field(
     let outline = remember(Path::new);
     let decoration = {
         let (label_width, label_start) = (label_width.clone(), label_start.clone());
+        let style = style.clone();
         move |inner_text_field: Callback| {
             let mut container = Modifier
                 .size_in(SizeSpec::bounds(
@@ -367,6 +368,8 @@ fn decorated_field(
             let slots = slots.clone();
             let supporting_text = slots.supporting_text.clone();
             let below = remember(|| Rc::new(SupportingLayout) as Rc<dyn MeasurePolicy>);
+            let (label_style, style) = (label_style.clone(), style.clone());
+            let (prefix_style, suffix_style) = (prefix_style.clone(), suffix_style.clone());
             let content = compose_runtime::callback(move || {
                 // Each icon in a 48 dp box, centered, as Compose's `IconDefaultSizeModifier`.
                 for (icon, color) in
@@ -390,31 +393,34 @@ fn decorated_field(
                     }
                 }
                 if let Some(label) = slots.label.clone() {
+                    let label_style = label_style.clone();
                     Box!({
                         CompositionLocalProvider(LOCAL_CONTENT_COLOR.provides(label_color), || {
                             CompositionLocalProvider(
-                                LOCAL_TEXT_STYLE.provides(label_style),
+                                LOCAL_TEXT_STYLE.provides(label_style.clone()),
                                 &*label,
                             );
                         });
                     });
                 }
                 if show_placeholder && let Some(placeholder) = slots.placeholder.clone() {
+                    let style = style.clone();
                     Box!({
                         CompositionLocalProvider(
                             LOCAL_CONTENT_COLOR.provides(placeholder_color),
                             || {
-                                CompositionLocalProvider(LOCAL_TEXT_STYLE.provides(style), || {
-                                    placeholder()
-                                });
+                                CompositionLocalProvider(
+                                    LOCAL_TEXT_STYLE.provides(style.clone()),
+                                    &*placeholder,
+                                );
                             },
                         );
                     });
                 }
                 // As Compose's `PrefixSuffixTextPadding`: 2 dp between them and the text.
                 for (content, style, padding) in [
-                    (&slots.prefix, prefix_style, (0.dp(), 2.dp())),
-                    (&slots.suffix, suffix_style, (2.dp(), 0.dp())),
+                    (&slots.prefix, prefix_style.clone(), (0.dp(), 2.dp())),
+                    (&slots.suffix, suffix_style.clone(), (2.dp(), 0.dp())),
                 ] {
                     if let Some(content) = content.clone() {
                         CompositionLocalProvider(LOCAL_TEXT_STYLE.provides(style), || {
@@ -446,18 +452,20 @@ fn decorated_field(
                 // The supporting text below the container, 16 dp in, 4 dp under it.
                 Some(supporting_text) => {
                     let (container, policy, content) = (container.clone(), policy.clone(), content);
+                    let supporting_style = supporting_style.clone();
                     compose_ui::Layout(
                         Modifier,
                         below,
                         compose_runtime::callback(move || {
                             compose_ui::Layout(container.clone(), policy.clone(), content.clone());
                             let supporting_text = supporting_text.clone();
+                            let supporting_style = supporting_style.clone();
                             CompositionLocalProvider(
                                 LOCAL_CONTENT_COLOR.provides(supporting_color),
                                 || {
                                     let supporting_text = supporting_text.clone();
                                     CompositionLocalProvider(
-                                        LOCAL_TEXT_STYLE.provides(supporting_style),
+                                        LOCAL_TEXT_STYLE.provides(supporting_style.clone()),
                                         || {
                                             let supporting_text = supporting_text.clone();
                                             Box(
@@ -513,17 +521,6 @@ fn decorated_field(
     );
 }
 
-/// `from`'s size and line height going to `to`'s by `fraction`, the rest `to`'s.
-fn lerp_style(from: &TextStyle, to: &TextStyle, fraction: f32) -> TextStyle {
-    let lerp = |a: f32, b: f32| a + (b - a) * fraction;
-    TextStyle {
-        font_size: compose_ui::Sp(lerp(from.font_size.0, to.font_size.0)),
-        line_height: compose_ui::Sp(lerp(from.line_height.0, to.line_height.0)),
-        letter_spacing: compose_ui::Sp(lerp(from.letter_spacing.0, to.letter_spacing.0)),
-        ..*to
-    }
-}
-
 #[derive(Clone, Copy, PartialEq)]
 struct LayoutKey((Variant, [bool; 7], u32));
 
@@ -552,7 +549,7 @@ struct DecorationLayout {
     has_suffix: bool,
     single_line: bool,
     progress: f32,
-    floated_label_height: compose_ui::Sp,
+    floated_label_height: compose_ui::TextUnit,
     /// The label's width, for the outline's cut.
     label_width: Rc<std::cell::Cell<f32>>,
     /// The floated label's start, for the outline's cut.

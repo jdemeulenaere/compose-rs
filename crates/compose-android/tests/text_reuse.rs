@@ -380,7 +380,8 @@ fn Cases() {
         BasicText!(HEBREW_END, style = align(TextAlign::End));
         BasicText!(
             SPACED,
-            style = TextStyle { letter_spacing: compose_ui::Sp(1.0), ..TextStyle::DEFAULT }
+            style =
+                TextStyle { letter_spacing: compose_ui::TextUnit::sp(1.0), ..TextStyle::DEFAULT }
         );
     });
 }
@@ -468,7 +469,7 @@ fn a_new_paint_keeps_the_layout_and_later_layouts_are_in_it() {
     let blue = TextStyle {
         color: compose_ui::Color::BLUE,
         text_decoration: Some(compose_ui::TextDecoration::UNDERLINE),
-        ..red
+        ..red.clone()
     };
     let restyled = measurer.restyle(paragraph, &blue).expect("Kotlin keeps the layout");
     assert_ne!(restyled, paragraph, "a new handle draws the new paint");

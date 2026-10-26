@@ -326,9 +326,13 @@ fn Launcher(seed: MutableState<u32>, showing: MutableState<bool>) {
                         modifier = Modifier.size((320.dp(), 240.dp())),
                         {
                             Column!(horizontal_alignment = Alignment::CENTER_HORIZONTALLY, {
-                                Text!("Open screen {}", visits + 1, style = typography.title_large);
+                                Text!(
+                                    "Open screen {}",
+                                    visits + 1,
+                                    style = typography.title_large.clone()
+                                );
                                 Spacer(Modifier.height(8.dp()));
-                                Text!("{} visits", visits, style = typography.body_medium);
+                                Text!("{} visits", visits, style = typography.body_medium.clone());
                             });
                         }
                     );
@@ -422,18 +426,18 @@ fn Profile(seed: u32, index: u32) {
                             "{}",
                             initials,
                             color = Color::WHITE,
-                            style = typography.title_medium
+                            style = typography.title_medium.clone()
                         );
                     }
                 );
                 Spacer(Modifier.width(12.dp()));
                 Column!(modifier = Modifier.weight(row, 1.0), {
-                    Text!("{}", name, style = typography.title_medium);
+                    Text!("{}", name, style = typography.title_medium.clone());
                     Text!(
                         "{} · {} followers",
                         handle,
                         followers,
-                        style = typography.body_small,
+                        style = typography.body_small.clone(),
                         color = scheme.on_surface_variant
                     );
                 });
@@ -446,7 +450,7 @@ fn Profile(seed: u32, index: u32) {
                 });
             });
             Spacer(Modifier.height(8.dp()));
-            Text!("{}", bio, style = typography.body_medium);
+            Text!("{}", bio, style = typography.body_medium.clone());
             Spacer(Modifier.height(8.dp()));
             Row!(horizontal_arrangement = Arrangement::spaced_by(8.dp()), {
                 AssistChip!(
@@ -517,17 +521,17 @@ fn Article(seed: u32, index: u32) {
     });
     Card!(modifier = Modifier.fill_max_width().padding((16.dp(), 6.dp())), {
         Column!(modifier = Modifier.padding(16.dp()), {
-            Text!("{}", title, style = typography.title_large);
+            Text!("{}", title, style = typography.title_large.clone());
             Spacer(Modifier.height(4.dp()));
             Text!(
                 "{} · {} min read",
                 author,
                 minutes,
-                style = typography.label_medium,
+                style = typography.label_medium.clone(),
                 color = scheme.on_surface_variant
             );
             Spacer(Modifier.height(8.dp()));
-            AnnotatedText!(body.clone(), style = typography.body_medium);
+            AnnotatedText!(body.clone(), style = typography.body_medium.clone());
             Spacer(Modifier.height(12.dp()));
             Row!(
                 horizontal_arrangement = Arrangement::spaced_by(16.dp()),
@@ -562,14 +566,14 @@ fn Stats(seed: u32, index: u32) {
             {
                 Row!(vertical_alignment = Alignment::CENTER_VERTICALLY, |row: RowScope| {
                     Column!(modifier = Modifier.weight(row, 1.0), {
-                        Text!("{}", label, style = typography.label_large);
-                        Text!("{}", value, style = typography.headline_small);
+                        Text!("{}", label, style = typography.label_large.clone());
+                        Text!("{}", value, style = typography.headline_small.clone());
                         Text!(
                             "{}{}.{} %",
                             if up { "+" } else { "-" },
                             delta / 10,
                             delta % 10,
-                            style = typography.label_medium,
+                            style = typography.label_medium.clone(),
                             color = if up { scheme.primary } else { scheme.error }
                         );
                     });
@@ -608,7 +612,7 @@ fn Stats(seed: u32, index: u32) {
                             Text!("Share");
                         });
                         Spacer(Modifier.weight(row, 1.0));
-                        Text!("{} %", progress, style = typography.label_large);
+                        Text!("{} %", progress, style = typography.label_large.clone());
                     }
                 );
             }
@@ -628,7 +632,7 @@ fn Gallery(seed: u32, index: u32) {
             Text!(
                 "{}",
                 album,
-                style = typography.title_medium,
+                style = typography.title_medium.clone(),
                 modifier = Modifier.weight(row, 1.0)
             );
             Icon!(icons::filled::arrow_forward(), Some("More"));
@@ -648,7 +652,7 @@ fn Gallery(seed: u32, index: u32) {
         Text!(
             "{}",
             caption,
-            style = typography.body_small,
+            style = typography.body_small.clone(),
             max_lines = 2,
             overflow = TextOverflow::Ellipsis
         );
@@ -704,11 +708,11 @@ fn Banner(seed: u32, index: u32) {
                 }
             });
             Column!(modifier = Modifier.align(scope, Alignment::BOTTOM_START).padding(16.dp()), {
-                Text!("{}", title, style = typography.title_large, color = Color::WHITE);
+                Text!("{}", title, style = typography.title_large.clone(), color = Color::WHITE);
                 Text!(
                     "{}",
                     line,
-                    style = typography.body_medium,
+                    style = typography.body_medium.clone(),
                     color = Color::WHITE,
                     max_lines = 1,
                     overflow = TextOverflow::Ellipsis

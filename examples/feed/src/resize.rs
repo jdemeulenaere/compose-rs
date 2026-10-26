@@ -73,13 +73,13 @@ pub fn ResizeContent() {
         modifier = Modifier.fill_max_size().padding(8.dp()),
         vertical_arrangement = Arrangement::spaced_by(4.dp()),
         {
-            Text!("Resizing", style = typography.title_large);
-            Text!("{} {}", SENTENCES[0], SENTENCES[1], style = typography.body_medium);
+            Text!("Resizing", style = typography.title_large.clone());
+            Text!("{} {}", SENTENCES[0], SENTENCES[1], style = typography.body_medium.clone());
             Text!(
                 "Centered across the width",
                 modifier = Modifier.fill_max_width(),
                 text_align = Some(TextAlign::Center),
-                style = typography.title_medium
+                style = typography.title_medium.clone()
             );
             Text!(
                 "{} {}",
@@ -87,7 +87,7 @@ pub fn ResizeContent() {
                 SENTENCES[3],
                 max_lines = 1,
                 overflow = TextOverflow::Ellipsis,
-                style = typography.body_small
+                style = typography.body_small.clone()
             );
             ResizeGrid();
             ResizeDeep(0);

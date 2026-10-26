@@ -9,7 +9,7 @@ use compose_ui::DEFAULT_SHADOW_COLOR;
 use compose_ui::{
     Alignment, Color, Dp, DrawModifierNode, DrawScope, FontWeight, Modifier, ModifierNode,
     ModifierNodeElement, MutableInteractionSource, Offset, Paint, Rect, Role, Shape, SharedString,
-    Sp, TextStyle, UnitExt,
+    TextStyle, TextUnit, UnitExt,
 };
 
 use crate::theme::{LOCAL_CONTENT_COLOR, MaterialTheme};
@@ -25,14 +25,14 @@ pub fn Text(
     #[format] text: SharedString,
     #[default(crate::Modifier)] modifier: Modifier,
     #[default(crate::Color::UNSPECIFIED)] color: Color,
-    #[default(crate::Sp::UNSPECIFIED)] font_size: Sp,
+    #[default(crate::TextUnit::UNSPECIFIED)] font_size: TextUnit,
     #[default(None)] font_style: Option<compose_ui::FontStyle>,
     #[default(None)] font_weight: Option<FontWeight>,
     #[default(None)] font_family: Option<compose_ui::FontFamily>,
-    #[default(crate::Sp::UNSPECIFIED)] letter_spacing: Sp,
+    #[default(crate::TextUnit::UNSPECIFIED)] letter_spacing: TextUnit,
     #[default(None)] text_decoration: Option<compose_ui::TextDecoration>,
     #[default(None)] text_align: Option<compose_ui::TextAlign>,
-    #[default(crate::Sp::UNSPECIFIED)] line_height: Sp,
+    #[default(crate::TextUnit::UNSPECIFIED)] line_height: TextUnit,
     #[default(crate::TextOverflow::Clip)] overflow: compose_ui::TextOverflow,
     #[default(true)] soft_wrap: bool,
     #[default(u32::MAX)] max_lines: u32,
@@ -53,7 +53,7 @@ pub fn Text(
         text_decoration,
         text_align,
         line_height,
-        line_height_style: None,
+        ..TextStyle::DEFAULT
     });
     BasicText(text, modifier, style, on_text_layout, overflow, soft_wrap, max_lines, min_lines);
 }

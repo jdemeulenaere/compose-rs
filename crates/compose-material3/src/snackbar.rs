@@ -401,67 +401,70 @@ pub fn Snackbar(
         None,
         compose_runtime::callback(move || {
             let (data, visuals, policy) = (snackbar_data.clone(), visuals.clone(), policy.clone());
-            CompositionLocalProvider(LOCAL_TEXT_STYLE.provides(typography.body_medium), || {
-                let (data, visuals) = (data.clone(), visuals.clone());
-                compose_ui::Layout(
-                    Modifier.size_in(SizeSpec::bounds(
-                        Dp::UNSPECIFIED,
-                        Dp::UNSPECIFIED,
-                        600.dp(),
-                        Dp::UNSPECIFIED,
-                    )),
-                    policy.clone(),
-                    compose_runtime::callback(move || {
-                        let message = visuals.message.clone();
-                        Box(
-                            Modifier,
-                            Alignment::CENTER_START,
-                            false,
-                            compose_runtime::callback(move |_| themed_text(message.clone())),
-                        );
-                        if let Some(label) = visuals.action_label.clone() {
-                            // The action in its color, as `textButtonColors(contentColor =
-                            // actionColor)`.
-                            let data = data.clone();
-                            crate::button::Button(
-                                compose_runtime::callback(move || data.perform_action()),
+            CompositionLocalProvider(
+                LOCAL_TEXT_STYLE.provides(typography.body_medium.clone()),
+                || {
+                    let (data, visuals) = (data.clone(), visuals.clone());
+                    compose_ui::Layout(
+                        Modifier.size_in(SizeSpec::bounds(
+                            Dp::UNSPECIFIED,
+                            Dp::UNSPECIFIED,
+                            600.dp(),
+                            Dp::UNSPECIFIED,
+                        )),
+                        policy.clone(),
+                        compose_runtime::callback(move || {
+                            let message = visuals.message.clone();
+                            Box(
                                 Modifier,
-                                true,
-                                crate::ButtonDefaults::shape(),
-                                crate::ButtonColors {
-                                    content_color: action_color,
-                                    ..crate::ButtonDefaults::text_button_colors()
-                                },
-                                None,
-                                None,
-                                crate::ButtonDefaults::TEXT_BUTTON_CONTENT_PADDING,
-                                None,
-                                compose_runtime::callback(move |_: RowScope| {
-                                    themed_text(label.clone())
-                                }),
+                                Alignment::CENTER_START,
+                                false,
+                                compose_runtime::callback(move |_| themed_text(message.clone())),
                             );
-                        }
-                        if visuals.with_dismiss_action {
-                            let data = data.clone();
-                            IconButton(
-                                compose_runtime::callback(move || data.dismiss()),
-                                Modifier,
-                                true,
-                                crate::IconButtonDefaults::icon_button_colors(),
-                                None,
-                                compose_runtime::callback(|| {
-                                    Icon(
-                                        icons::filled::close(),
-                                        Some("Dismiss"),
-                                        Modifier,
-                                        LOCAL_CONTENT_COLOR.current(),
-                                    )
-                                }),
-                            );
-                        }
-                    }),
-                );
-            });
+                            if let Some(label) = visuals.action_label.clone() {
+                                // The action in its color, as `textButtonColors(contentColor =
+                                // actionColor)`.
+                                let data = data.clone();
+                                crate::button::Button(
+                                    compose_runtime::callback(move || data.perform_action()),
+                                    Modifier,
+                                    true,
+                                    crate::ButtonDefaults::shape(),
+                                    crate::ButtonColors {
+                                        content_color: action_color,
+                                        ..crate::ButtonDefaults::text_button_colors()
+                                    },
+                                    None,
+                                    None,
+                                    crate::ButtonDefaults::TEXT_BUTTON_CONTENT_PADDING,
+                                    None,
+                                    compose_runtime::callback(move |_: RowScope| {
+                                        themed_text(label.clone())
+                                    }),
+                                );
+                            }
+                            if visuals.with_dismiss_action {
+                                let data = data.clone();
+                                IconButton(
+                                    compose_runtime::callback(move || data.dismiss()),
+                                    Modifier,
+                                    true,
+                                    crate::IconButtonDefaults::icon_button_colors(),
+                                    None,
+                                    compose_runtime::callback(|| {
+                                        Icon(
+                                            icons::filled::close(),
+                                            Some("Dismiss"),
+                                            Modifier,
+                                            LOCAL_CONTENT_COLOR.current(),
+                                        )
+                                    }),
+                                );
+                            }
+                        }),
+                    );
+                },
+            );
         }),
     );
 }
@@ -474,7 +477,7 @@ pub fn Snackbar(
 struct SnackbarLayout {
     action: bool,
     dismiss: bool,
-    line_height: compose_ui::Sp,
+    line_height: compose_ui::TextUnit,
 }
 
 impl compose_ui::MeasurePolicy for SnackbarLayout {
@@ -567,17 +570,20 @@ pub fn PlainTooltip(
         None,
         compose_runtime::callback(move || {
             let content = content.clone();
-            CompositionLocalProvider(LOCAL_TEXT_STYLE.provides(typography.body_small), || {
-                let content = content.clone();
-                Box(
-                    Modifier
-                        .size_in(SizeSpec::bounds(40.dp(), 24.dp(), 200.dp(), Dp::UNSPECIFIED))
-                        .padding((8.dp(), 4.dp())),
-                    Alignment::CENTER_START,
-                    false,
-                    compose_runtime::callback(move |_| content()),
-                );
-            });
+            CompositionLocalProvider(
+                LOCAL_TEXT_STYLE.provides(typography.body_small.clone()),
+                || {
+                    let content = content.clone();
+                    Box(
+                        Modifier
+                            .size_in(SizeSpec::bounds(40.dp(), 24.dp(), 200.dp(), Dp::UNSPECIFIED))
+                            .padding((8.dp(), 4.dp())),
+                        Alignment::CENTER_START,
+                        false,
+                        compose_runtime::callback(move |_| content()),
+                    );
+                },
+            );
         }),
     );
 }

@@ -339,7 +339,7 @@ pub fn Tab(
         )
         .semantics(move |config| config.set_selected(selected));
     CompositionLocalProvider(LOCAL_CONTENT_COLOR.provides(color), || {
-        CompositionLocalProvider(LOCAL_TEXT_STYLE.provides(typography.title_small), || {
+        CompositionLocalProvider(LOCAL_TEXT_STYLE.provides(typography.title_small.clone()), || {
             let (text, icon) = (text.clone(), icon.clone());
             Column(
                 modifier.clone(),

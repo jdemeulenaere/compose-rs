@@ -98,7 +98,8 @@ pub fn AlertDialog(
                                     LOCAL_CONTENT_COLOR.provides(scheme.on_surface),
                                     || {
                                         CompositionLocalProvider(
-                                            LOCAL_TEXT_STYLE.provides(typography.headline_small),
+                                            LOCAL_TEXT_STYLE
+                                                .provides(typography.headline_small.clone()),
                                             || {
                                                 let alignment = if centered {
                                                     compose_ui::Alignment::CENTER_HORIZONTALLY
@@ -129,7 +130,8 @@ pub fn AlertDialog(
                                     LOCAL_CONTENT_COLOR.provides(scheme.on_surface_variant),
                                     || {
                                         CompositionLocalProvider(
-                                            LOCAL_TEXT_STYLE.provides(typography.body_medium),
+                                            LOCAL_TEXT_STYLE
+                                                .provides(typography.body_medium.clone()),
                                             || {
                                                 // What's left once the title and
                                                 // buttons have their room.

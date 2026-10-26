@@ -290,17 +290,17 @@ fn RichPost(index: u32) {
                             "{}",
                             index % 100,
                             color = Color::WHITE,
-                            style = typography.title_small
+                            style = typography.title_small.clone()
                         );
                     }
                 );
                 Spacer(Modifier.width(12.dp()));
                 Column!(modifier = Modifier.weight(row, 1.0), {
-                    Text!("{}", author, style = typography.title_small);
+                    Text!("{}", author, style = typography.title_small.clone());
                     Text!(
                         "{} h ago",
                         (index * 7) % 24 + 1,
-                        style = typography.body_small,
+                        style = typography.body_small.clone(),
                         color = scheme.on_surface_variant
                     );
                 });
@@ -309,7 +309,7 @@ fn RichPost(index: u32) {
             Spacer(Modifier.height(8.dp()));
             AnnotatedText!(
                 body.clone(),
-                style = typography.body_medium,
+                style = typography.body_medium.clone(),
                 max_lines = 4,
                 overflow = TextOverflow::Ellipsis
             );
@@ -352,7 +352,7 @@ fn ActionCard(index: u32) {
             modifier = Modifier.padding(16.dp()),
             vertical_arrangement = Arrangement::spaced_by(8.dp()),
             {
-                Text!("Task {}", index, style = typography.title_small);
+                Text!("Task {}", index, style = typography.title_small.clone());
                 Row!(horizontal_arrangement = Arrangement::spaced_by(8.dp()), {
                     AssistChip!(
                         || {},
@@ -388,7 +388,7 @@ fn ActionCard(index: u32) {
                             Text!("Later");
                         });
                         Spacer(Modifier.weight(row, 1.0));
-                        Text!("{} %", index * 13 % 100, style = typography.label_large);
+                        Text!("{} %", index * 13 % 100, style = typography.label_large.clone());
                     }
                 );
             }
@@ -410,11 +410,16 @@ fn Banner(index: u32) {
             .background(Brush::linear_gradient([color(index), color(index + 2), color(index + 5)])),
         |scope: BoxScope| {
             Column!(modifier = Modifier.align(scope, Alignment::BOTTOM_START).padding(16.dp()), {
-                Text!("Featured {}", index, style = typography.title_large, color = Color::WHITE);
+                Text!(
+                    "Featured {}",
+                    index,
+                    style = typography.title_large.clone(),
+                    color = Color::WHITE
+                );
                 Text!(
                     "{}",
                     SENTENCES[(index as usize * 5) % SENTENCES.len()],
-                    style = typography.body_medium,
+                    style = typography.body_medium.clone(),
                     color = Color::WHITE,
                     max_lines = 1,
                     overflow = TextOverflow::Ellipsis

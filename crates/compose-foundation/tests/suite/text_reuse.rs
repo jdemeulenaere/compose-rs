@@ -248,9 +248,9 @@ fn a_paint_only_style_change_keeps_the_layout_and_draws_it_again_as_compose() {
     let mut ui = ComposeTestRule::with_host(host, move || Styled(style));
     let red = TextStyle { color: compose_ui::Color::RED, ..TextStyle::DEFAULT };
     let underlined =
-        TextStyle { text_decoration: Some(compose_ui::TextDecoration::UNDERLINE), ..red };
+        TextStyle { text_decoration: Some(compose_ui::TextDecoration::UNDERLINE), ..red.clone() };
     // Compose's `hasSameDrawAffectingAttributes`: drawn again in the new paint, not laid out.
-    for paint in [red, underlined] {
+    for paint in [red, underlined.clone()] {
         let before = drawn(&mut ui);
         counter.clear();
         style.set(paint);
@@ -262,8 +262,8 @@ fn a_paint_only_style_change_keeps_the_layout_and_draws_it_again_as_compose() {
         assert_ne!(drawn(&mut ui), before, "drawn again, in the new paint");
     }
     // What lays it out differently lays it out again.
-    let bigger = TextStyle { font_size: compose_ui::Sp(20.0), ..underlined };
-    for layout in [bigger, TextStyle { text_align: Some(TextAlign::Center), ..bigger }] {
+    let bigger = TextStyle { font_size: compose_ui::TextUnit::sp(20.0), ..underlined };
+    for layout in [bigger.clone(), TextStyle { text_align: Some(TextAlign::Center), ..bigger }] {
         counter.clear();
         style.set(layout);
         ui.wait_for_idle();
@@ -280,17 +280,17 @@ fn layout_affecting_attributes_are_composes() {
     let paint_only = TextStyle {
         color: compose_ui::Color::BLUE,
         text_decoration: Some(compose_ui::TextDecoration::LINE_THROUGH),
-        ..base
+        ..base.clone()
     };
     assert!(base.has_same_layout_affecting_attributes(&paint_only));
     for other in [
-        TextStyle { font_size: compose_ui::Sp(3.0), ..base },
-        TextStyle { font_weight: Some(compose_ui::FontWeight(700)), ..base },
-        TextStyle { font_style: Some(compose_ui::FontStyle::Italic), ..base },
-        TextStyle { font_family: Some(compose_ui::FontFamily::Serif), ..base },
-        TextStyle { letter_spacing: compose_ui::Sp(1.0), ..base },
-        TextStyle { text_align: Some(TextAlign::End), ..base },
-        TextStyle { line_height: compose_ui::Sp(30.0), ..base },
+        TextStyle { font_size: compose_ui::TextUnit::sp(3.0), ..base.clone() },
+        TextStyle { font_weight: Some(compose_ui::FontWeight::new(700)), ..base.clone() },
+        TextStyle { font_style: Some(compose_ui::FontStyle::Italic), ..base.clone() },
+        TextStyle { font_family: Some(compose_ui::FontFamily::Serif), ..base.clone() },
+        TextStyle { letter_spacing: compose_ui::TextUnit::sp(1.0), ..base.clone() },
+        TextStyle { text_align: Some(TextAlign::End), ..base.clone() },
+        TextStyle { line_height: compose_ui::TextUnit::sp(30.0), ..base.clone() },
     ] {
         assert!(!base.has_same_layout_affecting_attributes(&other), "{other:?}");
     }

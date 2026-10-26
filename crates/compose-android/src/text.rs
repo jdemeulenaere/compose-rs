@@ -366,7 +366,7 @@ fn paint_free_runs(
     if text.span_styles.is_empty() {
         return Vec::new();
     }
-    text.runs(&TextStyle { color: Color::UNSPECIFIED, text_decoration: None, ..*style })
+    text.runs(&TextStyle { color: Color::UNSPECIFIED, text_decoration: None, ..style.clone() })
 }
 
 /// The minimum and maximum width Kotlin lays a paragraph out between (`i32::MAX`: unbounded).
@@ -435,22 +435,17 @@ fn encode_request(
 /// What of `style` only paints: its color (ARGB, black if unset) and decoration (1 underline,
 /// 2 line through).
 fn paint_of(style: &TextStyle) -> (u32, u8) {
-    let color = if style.color.is_specified() { style.color } else { Color::BLACK };
+    let color = compose_ui::platform::resolve_text_color(style);
     let decoration = style.text_decoration.unwrap_or_default();
     (color.argb(), u8::from(decoration.underline) | (u8::from(decoration.line_through) << 1))
 }
 
 fn encode_style(out: &mut Writer, style: &TextStyle, background: Color, density: &Density) {
     let (color, decoration) = paint_of(style);
-    let font_size = if style.font_size.is_specified() {
-        style.font_size
-    } else {
-        compose_ui::platform::DEFAULT_FONT_SIZE
-    };
-    let font_px = density.sp_to_px(font_size);
+    let font_px = compose_ui::platform::resolve_font_size_px(style, density);
     out.u32(color);
     out.f32(font_px);
-    out.u32(u32::from(style.font_weight.map_or(400, |weight| weight.0)));
+    out.u32(u32::from(style.font_weight.map_or(400, |weight| weight.weight())));
     out.u8(u8::from(style.font_style == Some(compose_ui::FontStyle::Italic)));
     match style.font_family {
         None | Some(FontFamily::SansSerif) => out.u8(0),
@@ -463,17 +458,10 @@ fn encode_style(out: &mut Writer, style: &TextStyle, background: Color, density:
             out.bytes.extend_from_slice(name.as_bytes());
         }
     }
-    out.f32(if style.letter_spacing.is_specified() {
-        density.sp_to_px(style.letter_spacing)
-    } else {
-        0.0
-    });
+    let px = |unit| compose_ui::platform::resolve_text_unit_px(unit, font_px, density);
+    out.f32(px(style.letter_spacing).unwrap_or(0.0));
     out.u8(decoration);
-    out.f32(if style.line_height.is_specified() {
-        density.sp_to_px(style.line_height)
-    } else {
-        0.0
-    });
+    out.f32(px(style.line_height).unwrap_or(0.0));
     // How the line height is spread, as Compose's `LineHeightStyleSpan`: the alignment's top
     // ratio (-1 proportional) and the trim (1 the first line's top, 2 the last line's bottom).
     // A style without one takes `LineHeightStyle.Default`, as Compose's `createCharSequence`
@@ -581,7 +569,7 @@ mod tests {
         let mut measurer = AndroidTextMeasurer::new(Fake::default());
         let text = AnnotatedString::build(|builder| {
             builder.with_style(
-                SpanStyle { font_size: compose_ui::Sp(20.0), ..SpanStyle::DEFAULT },
+                SpanStyle { font_size: compose_ui::TextUnit::sp(20.0), ..SpanStyle::DEFAULT },
                 |builder| {
                     builder.append("big");
                 },
@@ -625,7 +613,7 @@ mod tests {
         let options = TextLayoutOptions::default();
         let constraints = Constraints::new(0, 300, 0, 300);
         let density = Density::new(2.0);
-        let plain = TextStyle { line_height: compose_ui::Sp(20.0), ..TextStyle::DEFAULT };
+        let plain = TextStyle { line_height: compose_ui::TextUnit::sp(20.0), ..TextStyle::DEFAULT };
         let styles = [
             (LineHeightAlignment::CENTER, LineHeightTrim::None, 0b00),
             (LineHeightAlignment::PROPORTIONAL, LineHeightTrim::Both, 0b11),
@@ -634,8 +622,10 @@ mod tests {
         ];
         measurer.layout_annotated(&text, &plain, options, constraints, &density);
         for (alignment, trim, _) in styles {
-            let style =
-                TextStyle { line_height_style: Some(LineHeightStyle { alignment, trim }), ..plain };
+            let style = TextStyle {
+                line_height_style: Some(LineHeightStyle::new(alignment, trim)),
+                ..plain.clone()
+            };
             measurer.layout_annotated(&text, &style, options, constraints, &density);
         }
         let requests = &measurer.backend.requests;

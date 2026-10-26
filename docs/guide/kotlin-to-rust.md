@@ -34,7 +34,7 @@ compose-rs keeps Compose's names, parameter names, parameter order and defaults,
 | `Alignment.CenterVertically`, `Arrangement.SpaceBetween`, `Color.Red` | `Alignment::CENTER_VERTICALLY`, `Arrangement::SPACE_BETWEEN`, `Color::RED` |
 | `MaterialTheme.colorScheme.primary` | `MaterialTheme::color_scheme().primary` |
 | `LocalDensity.current` | `LOCAL_DENSITY.current()` |
-| `16.dp`, `14.sp` | `16.dp()`, `14.sp()` |
+| `16.dp`, `14.sp`, `1.5.em` | `16.dp()`, `14.sp()`, `1.5.em()` |
 
 A file usually starts with a wildcard import of each module it uses, as the samples do:
 

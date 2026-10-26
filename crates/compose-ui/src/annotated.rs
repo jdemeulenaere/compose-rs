@@ -7,62 +7,13 @@ use std::sync::Arc;
 use compose_runtime::ComposeArg;
 
 use crate::graphics::Color;
-use crate::text::{FontFamily, FontStyle, FontWeight, SharedString, TextDecoration, TextStyle};
-use crate::unit::Sp;
-
-/// How a span of text looks, as Compose's `SpanStyle`: what isn't set comes from the text's
-/// style (or an enclosing span).
-#[derive(Clone, Copy, PartialEq, Debug)]
-pub struct SpanStyle {
-    pub color: Color,
-    pub font_size: Sp,
-    pub font_weight: Option<FontWeight>,
-    pub font_style: Option<FontStyle>,
-    pub font_family: Option<FontFamily>,
-    pub letter_spacing: Sp,
-    pub text_decoration: Option<TextDecoration>,
-    /// Painted behind the span's glyphs.
-    pub background: Color,
-}
-
-impl SpanStyle {
-    /// Nothing set.
-    pub const DEFAULT: SpanStyle = SpanStyle {
-        color: Color::UNSPECIFIED,
-        font_size: Sp::UNSPECIFIED,
-        font_weight: None,
-        font_style: None,
-        font_family: None,
-        letter_spacing: Sp::UNSPECIFIED,
-        text_decoration: None,
-        background: Color::UNSPECIFIED,
-    };
-
-    /// `style` with this span's set fields over it, as `TextStyle.merge(SpanStyle)`.
-    pub fn over(&self, style: &TextStyle) -> TextStyle {
-        style.merge(&TextStyle {
-            color: self.color,
-            font_size: self.font_size,
-            font_weight: self.font_weight,
-            font_style: self.font_style,
-            font_family: self.font_family,
-            letter_spacing: self.letter_spacing,
-            text_decoration: self.text_decoration,
-            text_align: None,
-            line_height: Sp::UNSPECIFIED,
-            line_height_style: None,
-        })
-    }
-}
-
-impl Default for SpanStyle {
-    fn default() -> Self {
-        SpanStyle::DEFAULT
-    }
-}
+use crate::span_style::SpanStyle;
+use crate::text::SharedString;
+use crate::text_style::TextStyle;
+use crate::unit::TextUnit;
 
 /// A span style over bytes `start..end` of a text, as `AnnotatedString.Range<SpanStyle>`.
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Debug)]
 pub struct SpanRange {
     pub style: SpanStyle,
     pub start: usize,
@@ -117,7 +68,7 @@ impl AnnotatedString {
             .iter()
             .filter(|span| intersect(start, end, span.start, span.end))
             .map(|span| SpanRange {
-                style: span.style,
+                style: span.style.clone(),
                 start: start.max(span.start) - start,
                 end: end.min(span.end) - start,
             })
@@ -157,7 +108,9 @@ impl AnnotatedString {
                         bound(span.start) <= range.start && range.end <= bound(span.end)
                     })
                 };
-                let style = covering().fold(*style, |style, span| span.style.over(&style));
+                let style = covering().fold(style.clone(), |style, span| {
+                    style.merge_span_style(&relative_to(&span.style, &style))
+                });
                 let background = covering().fold(Color::UNSPECIFIED, |background, span| {
                     span.style.background.or(background)
                 });
@@ -173,6 +126,21 @@ impl AnnotatedString {
 pub(crate) fn intersect(l_start: usize, l_end: usize, r_start: usize, r_end: usize) -> bool {
     ((l_start == l_end || r_start == r_end) && l_start == r_start)
         || (l_start < r_end && r_start < l_end)
+}
+
+/// `span` with an `em` font size made relative to `style`'s, as Android's `RelativeSizeSpan`
+/// scales the size it's applied over (an unset size being 14 sp).
+fn relative_to<'a>(span: &'a SpanStyle, style: &TextStyle) -> std::borrow::Cow<'a, SpanStyle> {
+    if !span.font_size.is_em() {
+        return std::borrow::Cow::Borrowed(span);
+    }
+    let base = style.font_size;
+    let font_size = if base.is_sp() || base.is_em() {
+        TextUnit::new(base.value() * span.font_size.value(), base.unit_type())
+    } else {
+        crate::text::DEFAULT_FONT_SIZE * span.font_size.value()
+    };
+    std::borrow::Cow::Owned(SpanStyle { font_size, ..span.clone() })
 }
 
 impl Default for AnnotatedString {
@@ -265,7 +233,7 @@ impl AnnotatedStringBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::text::FontWeight;
+    use crate::font::FontWeight;
 
     #[test]
     fn spans_split_the_text_into_runs_in_their_styles() {

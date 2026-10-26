@@ -219,7 +219,7 @@ impl compose::ui::platform::TextMeasurer for Recording {
         constraints: compose::ui::Constraints,
         density: &Density,
     ) -> compose::ui::platform::ParagraphHandle {
-        self.laid_out.borrow_mut().push((text.to_string(), *style, constraints.max_width));
+        self.laid_out.borrow_mut().push((text.to_string(), style.clone(), constraints.max_width));
         self.inner.layout(text, style, options, constraints, density)
     }
     fn metrics(
@@ -259,7 +259,7 @@ impl compose::ui::platform::TextMeasurer for Recording {
 #[test]
 fn the_posts_text_is_laid_out_in_body_medium_at_the_kotlin_apps_width() {
     use compose::material3::{DEFAULT_LINE_HEIGHT_STYLE, Typography};
-    use compose::ui::Sp;
+    use compose::ui::TextUnit;
     let laid_out = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
     let measurer = Recording { inner: FixedTextMeasurer::new(), laid_out: laid_out.clone() };
     let mut ui = compose_test_with(
@@ -278,7 +278,7 @@ fn the_posts_text_is_laid_out_in_body_medium_at_the_kotlin_apps_width() {
     let body_medium = Typography::default().body_medium;
     assert_eq!(
         (style.font_size, style.line_height, style.letter_spacing),
-        (Sp(14.0), Sp(20.0), Sp(0.2))
+        (TextUnit::sp(14.0), TextUnit::sp(20.0), TextUnit::sp(0.2))
     );
     assert_eq!(style.line_height_style, Some(DEFAULT_LINE_HEIGHT_STYLE));
     assert!(style.has_same_layout_affecting_attributes(&body_medium));
@@ -290,8 +290,8 @@ fn the_posts_text_is_laid_out_in_body_medium_at_the_kotlin_apps_width() {
             .find(|(text, _, _)| text == prefix)
             .map(|(_, style, _)| style.letter_spacing)
     };
-    assert_eq!(tracking("Tile 1"), Some(Sp(0.4)));
-    assert_eq!(tracking("Section 1"), Some(Sp(0.1)));
+    assert_eq!(tracking("Tile 1"), Some(TextUnit::sp(0.4)));
+    assert_eq!(tracking("Section 1"), Some(TextUnit::sp(0.1)));
 }
 
 /// The `GROUP` records of a frame's bytes (`write_display_list`'s): each group's key, the

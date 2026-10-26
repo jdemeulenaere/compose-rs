@@ -9,8 +9,9 @@ use std::rc::Rc;
 use compose_runtime::ComposeArg;
 
 use crate::constraints::Constraints;
-use crate::graphics::Color;
-use crate::unit::{Density, IntSize, Offset, Sp};
+use crate::text_attributes::TextOverflow;
+use crate::text_style::TextStyle;
+use crate::unit::{Density, IntSize, Offset, TextUnit};
 
 /// A string shared by pointer: a static literal or an `Rc<str>`. Cheap to clone; compared by
 /// pointer and length first, then by value (UI strings are short).
@@ -114,236 +115,6 @@ impl From<&Rc<str>> for SharedString {
 impl From<&SharedString> for SharedString {
     fn from(text: &SharedString) -> SharedString {
         text.clone()
-    }
-}
-
-/// Font weight, 100 to 900, as `FontWeight`.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub struct FontWeight(pub u16);
-
-impl ComposeArg for FontWeight {
-    fn same(&self, other: &Self) -> bool {
-        self == other
-    }
-}
-
-impl FontWeight {
-    pub const NORMAL: FontWeight = FontWeight(400);
-    pub const MEDIUM: FontWeight = FontWeight(500);
-    pub const BOLD: FontWeight = FontWeight(700);
-}
-
-/// Upright or italic, as `FontStyle`.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub enum FontStyle {
-    Normal,
-    Italic,
-}
-
-/// A font family, as `FontFamily`: the generic ones, or a family installed on the system by
-/// name (falling back to the default).
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub enum FontFamily {
-    SansSerif,
-    Serif,
-    Monospace,
-    Cursive,
-    Named(&'static str),
-}
-
-/// Lines drawn through or under text, as `TextDecoration` (combinable with `|`).
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
-pub struct TextDecoration {
-    pub underline: bool,
-    pub line_through: bool,
-}
-
-impl TextDecoration {
-    pub const NONE: TextDecoration = TextDecoration { underline: false, line_through: false };
-    pub const UNDERLINE: TextDecoration = TextDecoration { underline: true, line_through: false };
-    pub const LINE_THROUGH: TextDecoration =
-        TextDecoration { underline: false, line_through: true };
-}
-
-impl std::ops::BitOr for TextDecoration {
-    type Output = TextDecoration;
-    fn bitor(self, other: TextDecoration) -> TextDecoration {
-        TextDecoration {
-            underline: self.underline || other.underline,
-            line_through: self.line_through || other.line_through,
-        }
-    }
-}
-
-/// How lines sit in a paragraph's width, as `TextAlign`: `Start` and `End` follow the text's
-/// direction.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-#[non_exhaustive]
-pub enum TextAlign {
-    Left,
-    Right,
-    Center,
-    Justify,
-    Start,
-    End,
-}
-
-/// What shows when text doesn't fit, as `TextOverflow`.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
-#[non_exhaustive]
-pub enum TextOverflow {
-    /// Cut at the bounds.
-    #[default]
-    Clip,
-    /// The last line shown ends with "…".
-    Ellipsis,
-    /// Drawn past the bounds.
-    Visible,
-}
-
-macro_rules! compose_arg_by_eq {
-    ($($type:ty),*) => {
-        $(impl ComposeArg for $type {
-            fn same(&self, other: &Self) -> bool {
-                self == other
-            }
-        })*
-    };
-}
-
-/// Where a line's extra height goes, as `LineHeightStyle.Alignment`: the share of it above the
-/// text (`top_ratio`, 0 to 1), or `PROPORTIONAL` (-1: as the font's ascent and descent share
-/// its height).
-#[derive(Clone, Copy, PartialEq, Debug)]
-pub struct LineHeightAlignment {
-    pub top_ratio: f32,
-}
-
-impl LineHeightAlignment {
-    pub const TOP: LineHeightAlignment = LineHeightAlignment { top_ratio: 0.0 };
-    pub const CENTER: LineHeightAlignment = LineHeightAlignment { top_ratio: 0.5 };
-    pub const PROPORTIONAL: LineHeightAlignment = LineHeightAlignment { top_ratio: -1.0 };
-    pub const BOTTOM: LineHeightAlignment = LineHeightAlignment { top_ratio: 1.0 };
-}
-
-/// Whether the first line's space above the text and the last line's below it are left out,
-/// as `LineHeightStyle.Trim`.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub enum LineHeightTrim {
-    FirstLineTop,
-    LastLineBottom,
-    Both,
-    None,
-}
-
-impl LineHeightTrim {
-    pub fn trims_first_line_top(self) -> bool {
-        matches!(self, LineHeightTrim::FirstLineTop | LineHeightTrim::Both)
-    }
-
-    pub fn trims_last_line_bottom(self) -> bool {
-        matches!(self, LineHeightTrim::LastLineBottom | LineHeightTrim::Both)
-    }
-}
-
-/// How a line height is spread around each line's text, as Compose's `LineHeightStyle` (its
-/// `Mode.Fixed`, the default: every line is the line height). A style without one
-/// (`TextStyle::line_height_style` `None`) takes `LineHeightStyle::DEFAULT`, proportional with
-/// both ends trimmed, as Compose's `createCharSequence` does without `includeFontPadding`
-/// (which compose-rs doesn't have). Material 3's text styles center it and trim nothing
-/// (`DefaultLineHeightStyle`).
-#[derive(Clone, Copy, PartialEq, Debug)]
-pub struct LineHeightStyle {
-    pub alignment: LineHeightAlignment,
-    pub trim: LineHeightTrim,
-}
-
-impl LineHeightStyle {
-    /// As `LineHeightStyle.Default`: proportional, both ends trimmed.
-    pub const DEFAULT: LineHeightStyle = LineHeightStyle {
-        alignment: LineHeightAlignment::PROPORTIONAL,
-        trim: LineHeightTrim::Both,
-    };
-}
-
-compose_arg_by_eq!(FontStyle, FontFamily, TextDecoration, TextAlign, TextOverflow, LineHeightStyle);
-
-/// How text looks, as Compose's `TextStyle`: what isn't set (`None`, unspecified) comes from
-/// the style it's merged over, or the measurer's defaults.
-#[derive(Clone, Copy, PartialEq, Debug)]
-pub struct TextStyle {
-    pub color: Color,
-    pub font_size: Sp,
-    pub font_weight: Option<FontWeight>,
-    pub font_style: Option<FontStyle>,
-    pub font_family: Option<FontFamily>,
-    pub letter_spacing: Sp,
-    pub text_decoration: Option<TextDecoration>,
-    pub text_align: Option<TextAlign>,
-    pub line_height: Sp,
-    /// How `line_height` is spread around each line: `None` as `LineHeightStyle::DEFAULT`
-    /// (proportionally, both ends trimmed), as Compose's.
-    pub line_height_style: Option<LineHeightStyle>,
-}
-
-impl TextStyle {
-    /// As `TextStyle.Default`: nothing set, which the theme or measurer resolves.
-    pub const DEFAULT: TextStyle = TextStyle {
-        color: Color::UNSPECIFIED,
-        font_size: Sp::UNSPECIFIED,
-        font_weight: None,
-        font_style: None,
-        font_family: None,
-        letter_spacing: Sp::UNSPECIFIED,
-        text_decoration: None,
-        text_align: None,
-        line_height: Sp::UNSPECIFIED,
-        line_height_style: None,
-    };
-
-    /// Whether a text in `other` is laid out as in this style, as Compose's
-    /// `hasSameLayoutAffectingAttributes`: everything but what only paints (the color and the
-    /// decoration, Compose's `hasSameDrawAffectingAttributes`) is the same.
-    pub fn has_same_layout_affecting_attributes(&self, other: &TextStyle) -> bool {
-        TextStyle { color: other.color, text_decoration: other.text_decoration, ..*self } == *other
-    }
-
-    /// `other`'s set fields over these, as `merge`.
-    pub fn merge(&self, other: &TextStyle) -> TextStyle {
-        let sp = |other: Sp, this: Sp| if other.is_specified() { other } else { this };
-        TextStyle {
-            color: other.color.or(self.color),
-            font_size: sp(other.font_size, self.font_size),
-            font_weight: other.font_weight.or(self.font_weight),
-            font_style: other.font_style.or(self.font_style),
-            font_family: other.font_family.or(self.font_family),
-            letter_spacing: sp(other.letter_spacing, self.letter_spacing),
-            text_decoration: other.text_decoration.or(self.text_decoration),
-            text_align: other.text_align.or(self.text_align),
-            line_height: sp(other.line_height, self.line_height),
-            line_height_style: other.line_height_style.or(self.line_height_style),
-        }
-    }
-}
-
-impl Default for TextStyle {
-    fn default() -> Self {
-        TextStyle::DEFAULT
-    }
-}
-
-impl ComposeArg for TextStyle {
-    fn same(&self, other: &Self) -> bool {
-        self.color == other.color
-            && self.font_size.same(&other.font_size)
-            && self.font_weight == other.font_weight
-            && self.font_style == other.font_style
-            && self.font_family == other.font_family
-            && self.letter_spacing.same(&other.letter_spacing)
-            && self.text_decoration == other.text_decoration
-            && self.text_align == other.text_align
-            && self.line_height.same(&other.line_height)
-            && self.line_height_style == other.line_height_style
     }
 }
 
@@ -534,8 +305,46 @@ pub trait TextMeasurer: std::any::Any {
     fn release(&mut self, paragraph: ParagraphHandle);
 }
 
-/// The default font size when a style leaves it unspecified, as Material's body text.
-pub const DEFAULT_FONT_SIZE: Sp = Sp(14.0);
+/// The default font size when a style leaves it unspecified, as Compose's (`DefaultFontSize`).
+pub const DEFAULT_FONT_SIZE: TextUnit = TextUnit::sp(14.0);
+
+/// A style's font size in pixels: 14 sp when unset, and an `em` size a multiple of 14 sp (a
+/// text's own style has no enclosing size; a span's `em` size is resolved over its text's by
+/// [`crate::AnnotatedString::runs`]).
+pub fn resolve_font_size_px(style: &TextStyle, density: &Density) -> f32 {
+    let size = style.font_size;
+    if size.is_sp() {
+        density.sp_to_px(size)
+    } else if size.is_em() {
+        density.sp_to_px(DEFAULT_FONT_SIZE) * size.value()
+    } else {
+        density.sp_to_px(DEFAULT_FONT_SIZE)
+    }
+}
+
+/// The color a style's text is painted in by a measurer without text shaders: its color, a
+/// brush's color or gradient average at its alpha, black when unset (Compose's default).
+pub fn resolve_text_color(style: &TextStyle) -> crate::graphics::Color {
+    match style.foreground() {
+        crate::text_attributes::TextForegroundStyle::Unspecified => crate::graphics::Color::BLACK,
+        crate::text_attributes::TextForegroundStyle::Color(color) => color,
+        crate::text_attributes::TextForegroundStyle::Brush { brush, alpha } => {
+            brush.color(if alpha.is_nan() { 1.0 } else { alpha })
+        }
+    }
+}
+
+/// The pixels of `unit` in text `font_px` pixels high: `sp` through the density, `em` a
+/// multiple of the font size; `None` when unspecified. For letter spacing and line heights.
+pub fn resolve_text_unit_px(unit: TextUnit, font_px: f32, density: &Density) -> Option<f32> {
+    if unit.is_sp() {
+        Some(density.sp_to_px(unit))
+    } else if unit.is_em() {
+        Some(unit.value() * font_px)
+    } else {
+        None
+    }
+}
 
 /// A measurer with a fixed advance per character (`font size × 0.5`) and line height
 /// (`font size × 1.25`), breaking lines at spaces to fit the width: deterministic layout for
@@ -606,21 +415,12 @@ impl TextMeasurer for FixedTextMeasurer {
         constraints: Constraints,
         density: &Density,
     ) -> ParagraphHandle {
-        let font_size =
-            if style.font_size.is_specified() { style.font_size } else { DEFAULT_FONT_SIZE };
-        let font_px = density.sp_to_px(font_size);
+        let font_px = resolve_font_size_px(style, density);
         // Letter spacing widens each character's advance.
-        let spacing = if style.letter_spacing.is_specified() {
-            density.sp_to_px(style.letter_spacing)
-        } else {
-            0.0
-        };
+        let spacing = resolve_text_unit_px(style.letter_spacing, font_px, density).unwrap_or(0.0);
         let advance = font_px * 0.5 + spacing;
-        let line_height = if style.line_height.is_specified() {
-            density.sp_to_px(style.line_height)
-        } else {
-            font_px * 1.25
-        };
+        let line_height =
+            resolve_text_unit_px(style.line_height, font_px, density).unwrap_or(font_px * 1.25);
         let max_chars = if options.soft_wrap && constraints.has_bounded_width() && advance > 0.0 {
             ((constraints.max_width as f32 / advance).floor() as usize).max(1)
         } else {
@@ -816,7 +616,7 @@ mod tests {
     #[test]
     fn fixed_measurer_breaks_lines_at_spaces() {
         let mut measurer = FixedTextMeasurer::new();
-        let style = TextStyle { font_size: Sp(10.0), ..TextStyle::DEFAULT };
+        let style = TextStyle { font_size: TextUnit::sp(10.0), ..TextStyle::DEFAULT };
         // 5 px per character, 12.5 px per line.
         let options = TextLayoutOptions::default();
         let handle = measurer.layout(

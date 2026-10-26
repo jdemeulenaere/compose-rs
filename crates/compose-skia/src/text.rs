@@ -399,19 +399,14 @@ impl SkiaTextMeasurer {
 
 /// The font size of `style` in pixels (the default size if unset).
 fn font_px_of(style: &TextStyle, density: &Density) -> f32 {
-    let font_size = if style.font_size.is_specified() {
-        style.font_size
-    } else {
-        compose_ui::platform::DEFAULT_FONT_SIZE
-    };
-    density.sp_to_px(font_size)
+    compose_ui::platform::resolve_font_size_px(style, density)
 }
 
 /// SkParagraph's style for `style`.
 fn skia_text_style(style: &TextStyle, density: &Density) -> SkiaTextStyle {
     let font_px = font_px_of(style, density);
     let mut text_style = SkiaTextStyle::new();
-    let color = if style.color.is_specified() { style.color } else { compose_ui::Color::BLACK };
+    let color = compose_ui::platform::resolve_text_color(style);
     text_style.set_color(skia_safe::Color::new(color.argb()));
     text_style.set_font_size(font_px);
     text_style.set_font_families(&families(style.font_family));
@@ -421,12 +416,13 @@ fn skia_text_style(style: &TextStyle, density: &Density) -> SkiaTextStyle {
         _ => font_style::Slant::Upright,
     };
     text_style.set_font_style(FontStyle::new(
-        font_style::Weight::from(weight.0 as i32),
+        font_style::Weight::from(weight.weight() as i32),
         font_style::Width::NORMAL,
         slant,
     ));
-    if style.letter_spacing.is_specified() {
-        text_style.set_letter_spacing(density.sp_to_px(style.letter_spacing));
+    let px = |unit| compose_ui::platform::resolve_text_unit_px(unit, font_px, density);
+    if let Some(spacing) = px(style.letter_spacing) {
+        text_style.set_letter_spacing(spacing);
     }
     if let Some(decoration) = style.text_decoration {
         let mut kind = skia_safe::textlayout::TextDecoration::NO_DECORATION;
@@ -439,8 +435,10 @@ fn skia_text_style(style: &TextStyle, density: &Density) -> SkiaTextStyle {
         text_style.set_decoration_type(kind);
         text_style.set_decoration_color(skia_safe::Color::new(color.argb()));
     }
-    if style.line_height.is_specified() && font_px > 0.0 {
-        text_style.set_height(density.sp_to_px(style.line_height) / font_px);
+    if let Some(line_height) = px(style.line_height)
+        && font_px > 0.0
+    {
+        text_style.set_height(line_height / font_px);
         text_style.set_height_override(true);
         // A centered line height splits the extra space evenly (Material 3's, D571); Skia's
         // default scales the font's ascent and descent, as Compose's proportional alignment

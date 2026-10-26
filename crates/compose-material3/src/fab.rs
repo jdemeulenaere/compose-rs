@@ -157,7 +157,7 @@ fn fab(
         Some(click),
         compose_runtime::callback(move || {
             let content = content.clone();
-            CompositionLocalProvider(LOCAL_TEXT_STYLE.provides(label), || {
+            CompositionLocalProvider(LOCAL_TEXT_STYLE.provides(label.clone()), || {
                 let content = content.clone();
                 Box(
                     Modifier,

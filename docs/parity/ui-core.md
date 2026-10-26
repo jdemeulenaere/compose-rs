@@ -17,9 +17,9 @@ What of Jetpack Compose's ui core compose-rs has, which of Compose's tests its o
 | Status | Files | Tests |
 |---|---|---|
 | `covered` | 3 | 11 |
-| `ported` | 4 | 29 |
+| `ported` | 5 | 86 |
 | `port` | 13 | 118 |
-| `partial` | 53 | 1,118 |
+| `partial` | 52 | 1,061 |
 | `feature:<name>` | 105 | 1,632 |
 | `n/a` | 57 | 257 |
 
@@ -287,7 +287,7 @@ Status in bold for the ones that need work now (`port`, `partial`, `covered`); `
 | `compose/ui/ui-unit/src/commonTest/kotlin/androidx/compose/ui/unit/IntOffsetTest.kt` | 4 | `IntOffset` lerp, plus/minus, to `Offset` | **partial** | `+`/`-` exist; lerp and conversions missing. |
 | `compose/ui/ui-unit/src/commonTest/kotlin/androidx/compose/ui/unit/IntRectTest.kt` | 32 | `IntRect` operations | `feature:geometry-unit-api` |  |
 | `compose/ui/ui-unit/src/commonTest/kotlin/androidx/compose/ui/unit/IntSizeTest.kt` | 7 | `IntSize` arithmetic, center, rounding from `Size` | **partial** | `IntSize` and `Size::from(IntSize)` exist; the rest missing. |
-| `compose/ui/ui-unit/src/commonTest/kotlin/androidx/compose/ui/unit/TextUnitTest.kt` | 57 | `TextUnit`: sp and em construction, arithmetic, comparisons, lerp, unspecified | **partial** | `Sp` exists (unit.rs); `em` and `TextUnit`'s type rules missing (feature:geometry-unit-api; text agent's line heights may need em). |
+| `compose/ui/ui-unit/src/commonTest/kotlin/androidx/compose/ui/unit/TextUnitTest.kt` | 57 | `TextUnit`: sp and em construction, arithmetic, comparisons, lerp, unspecified | ported | `crates/compose-ui/tests/suite/text_unit.rs` (all 57): Compose's `TextUnit` with `em` replaces `Sp` (the ui-text workstream, D1102). |
 | `compose/ui/ui-unit/src/commonTest/kotlin/androidx/compose/ui/unit/VelocityTest.kt` | 11 | `Velocity` arithmetic and copy | `feature:geometry-unit-api` | compose-rs passes velocities as offsets or floats (compose-foundation fling.rs). |
 
 ### `compose/ui/ui-util`
@@ -400,8 +400,8 @@ From each module's `api/current.txt` (public, non-deprecated; experimental inclu
 
 ### `ui-unit`
 
-- **Has:** `Dp` (`ZERO`, `UNSPECIFIED`, `+ - * /`, unary minus, `is_specified`, `value`), `Sp`, `.dp()`/`.sp()` (`UnitExt`), `Density` (`density`, `font_scale`, `round_to_px`, `to_px`, `sp_to_px`, `to_dp`), `DpSize` (`new`, from `Dp` or a pair), `IntSize` (`ZERO`, `new`), `IntOffset` (`ZERO`, `new`, `+`, `-`), `Constraints` (`new`, `fixed`, `at_most`, `unbounded`, `INFINITY`, bounded/fixed queries, `constrain*`, `loosen`, `offset`, `constrain_by`), `LayoutDirection`.
-- **Missing** (**geometry-unit-api**): `Dp.Hairline`, `Dp.Infinity`, `isFinite`, comparisons, `coerceIn/AtLeast/AtMost`, `min`/`max`, `lerp`, `takeOrElse`, `Dp / Dp`; `DpOffset` (all); `DpRect` (all); `DpSize` arithmetic, `Unspecified`, `center`, `lerp`, `takeOrElse`; `IntOffset` `times`/`div`/`rem`, unary minus, `lerp`, `round(Offset)`, `toOffset`, mixed `Offset ± IntOffset`, `IntOffset.Max`; `IntRect` (all); `IntSize` `times`/`div`, `center`, `toIntRect`, `toSize`, `roundToIntSize`, `toIntSize`; `TextUnit`, `TextUnitType`, `.em`, `isSp`/`isEm`, arithmetic and comparisons, `lerp`, `takeOrElse` (compose-rs has only `Sp`); `Velocity` (all); `Density(density, fontScale)` as a function, `FontScaling` (`toDp(TextUnit)`, `toSp(Dp)`), `Density.toSp`, `toDpSize`, `toSize`, `toRect(DpRect)`, `roundToPx(TextUnit)`; `Constraints.fixedWidth`, `fixedHeight`, `fitPrioritizingWidth`, `fitPrioritizingHeight`, `isZero`, `isSatisfiedBy`, `copy`, `copyMaxDimensions`. `ComposeUiUnitFlags` (*experimental*, `@ExperimentalUnitApi`): flags, not to port.
+- **Has:** `Dp` (`ZERO`, `UNSPECIFIED`, `+ - * /`, unary minus, `is_specified`, `value`), `TextUnit` and `TextUnitType` (sp, em, unspecified, arithmetic, comparisons, `lerp`, `or`: D1102), `.dp()`/`.sp()`/`.em()` (`UnitExt`), `Density` (`density`, `font_scale`, `round_to_px`, `to_px`, `sp_to_px`, `to_dp`), `DpSize` (`new`, from `Dp` or a pair), `IntSize` (`ZERO`, `new`), `IntOffset` (`ZERO`, `new`, `+`, `-`), `Constraints` (`new`, `fixed`, `at_most`, `unbounded`, `INFINITY`, bounded/fixed queries, `constrain*`, `loosen`, `offset`, `constrain_by`), `LayoutDirection`.
+- **Missing** (**geometry-unit-api**): `Dp.Hairline`, `Dp.Infinity`, `isFinite`, comparisons, `coerceIn/AtLeast/AtMost`, `min`/`max`, `lerp`, `takeOrElse`, `Dp / Dp`; `DpOffset` (all); `DpRect` (all); `DpSize` arithmetic, `Unspecified`, `center`, `lerp`, `takeOrElse`; `IntOffset` `times`/`div`/`rem`, unary minus, `lerp`, `round(Offset)`, `toOffset`, mixed `Offset ± IntOffset`, `IntOffset.Max`; `IntRect` (all); `IntSize` `times`/`div`, `center`, `toIntRect`, `toSize`, `roundToIntSize`, `toIntSize`; `Velocity` (all); `Density(density, fontScale)` as a function, `FontScaling` (`toDp(TextUnit)`, `toSp(Dp)`), `Density.toSp`, `toDpSize`, `toSize`, `toRect(DpRect)`, `roundToPx(TextUnit)`; `Constraints.fixedWidth`, `fixedHeight`, `fitPrioritizingWidth`, `fitPrioritizingHeight`, `isZero`, `isSatisfiedBy`, `copy`, `copyMaxDimensions`. `ComposeUiUnitFlags` (*experimental*, `@ExperimentalUnitApi`): flags, not to port.
 
 ### `ui-util`
 

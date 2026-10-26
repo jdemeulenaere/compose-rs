@@ -9,7 +9,8 @@ use compose_material3::*;
 use compose_runtime::*;
 use compose_test::*;
 use compose_ui::{
-    Color, FontWeight, LineHeightAlignment, LineHeightStyle, LineHeightTrim, Sp, TextStyle, UnitExt,
+    Color, FontWeight, LineHeightAlignment, LineHeightStyle, LineHeightTrim, TextStyle, TextUnit,
+    UnitExt,
 };
 
 /// `TypeScaleTokens`: each style's size, line height, tracking and weight, over Material's
@@ -35,12 +36,11 @@ fn the_type_scale_is_material_3_1_4s() {
         (typography.label_medium, 12.0, 16.0, 0.5, medium),
         (typography.label_small, 11.0, 16.0, 0.5, medium),
     ];
-    let centered =
-        LineHeightStyle { alignment: LineHeightAlignment::CENTER, trim: LineHeightTrim::None };
+    let centered = LineHeightStyle::new(LineHeightAlignment::CENTER, LineHeightTrim::None);
     for (style, size, line_height, tracking, weight) in expected {
-        assert_eq!(style.font_size, Sp(size));
-        assert_eq!(style.line_height, Sp(line_height), "{size} sp");
-        assert_eq!(style.letter_spacing, Sp(tracking), "{size} sp");
+        assert_eq!(style.font_size, TextUnit::sp(size));
+        assert_eq!(style.line_height, TextUnit::sp(line_height), "{size} sp");
+        assert_eq!(style.letter_spacing, TextUnit::sp(tracking), "{size} sp");
         assert_eq!(style.font_weight, Some(weight), "{size} sp");
         assert_eq!(style.line_height_style, Some(centered), "{size} sp");
         assert_eq!(style.color, Color::UNSPECIFIED);
@@ -53,8 +53,8 @@ fn the_type_scale_is_material_3_1_4s() {
 #[test]
 fn a_merged_style_keeps_its_tracking_and_line_height_style() {
     let body = Typography::default().body_medium;
-    let merged = body.merge(&TextStyle { font_size: Sp(20.0), ..TextStyle::DEFAULT });
-    assert_eq!(merged.letter_spacing, Sp(0.2));
+    let merged = body.merge(&TextStyle { font_size: TextUnit::sp(20.0), ..TextStyle::DEFAULT });
+    assert_eq!(merged.letter_spacing, TextUnit::sp(0.2));
     assert_eq!(merged.line_height_style, Some(DEFAULT_LINE_HEIGHT_STYLE));
     let proportional = LineHeightStyle::DEFAULT;
     assert_eq!(proportional.alignment, LineHeightAlignment::PROPORTIONAL);

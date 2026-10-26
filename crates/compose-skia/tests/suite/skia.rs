@@ -164,7 +164,7 @@ fn shadows_darken_beneath_an_elevated_shape() {
 
 #[test]
 fn text_styles_change_the_layout_as_compose() {
-    use compose::ui::{FontFamily, FontStyle, Sp, TextAlign, TextOverflow};
+    use compose::ui::{FontFamily, FontStyle, TextAlign, TextOverflow, TextUnit};
     let mut measurer = SkiaTextMeasurer::new();
     let density = Density::default();
     let options = TextLayoutOptions::default();
@@ -177,7 +177,7 @@ fn text_styles_change_the_layout_as_compose() {
     };
     let plain = width(&mut measurer, TextStyle::DEFAULT, options);
     // Letter spacing: 2 px more per character (11 of them).
-    let spaced = TextStyle { letter_spacing: Sp(2.0), ..TextStyle::DEFAULT };
+    let spaced = TextStyle { letter_spacing: TextUnit::sp(2.0), ..TextStyle::DEFAULT };
     assert!((width(&mut measurer, spaced, options) - plain - 22).abs() <= 2);
     // Another family or slant measures differently.
     let mono = TextStyle { font_family: Some(FontFamily::Monospace), ..TextStyle::DEFAULT };

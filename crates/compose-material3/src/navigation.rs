@@ -222,7 +222,7 @@ fn navigation_item(
             if let Some(label) = label.clone() {
                 CompositionLocalProvider(LOCAL_CONTENT_COLOR.provides(text_color), || {
                     CompositionLocalProvider(
-                        LOCAL_TEXT_STYLE.provides(typography.label_medium),
+                        LOCAL_TEXT_STYLE.provides(typography.label_medium.clone()),
                         || {
                             Box(
                                 if show_label { Modifier } else { Modifier.alpha(0.0) },

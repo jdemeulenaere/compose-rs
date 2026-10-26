@@ -799,7 +799,7 @@ fn a_reset_with_new_styles_keeps_the_buffer_and_composition() {
     processor.apply(&[&SetComposingRegionCommand::new(0, 3)]);
     let buffers = processor.buffers_made;
     let styled = AnnotatedString::build(|builder| {
-        builder.with_style(crate::annotated::SpanStyle::DEFAULT, |builder| {
+        builder.with_style(crate::SpanStyle::DEFAULT, |builder| {
             builder.append("abc");
         });
     });

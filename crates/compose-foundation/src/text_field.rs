@@ -137,7 +137,7 @@ impl ModifierNodeElement for TextFieldElement {
             on_value_change: self.on_value_change.clone(),
             enabled: self.enabled,
             read_only: self.read_only,
-            style: self.style,
+            style: self.style.clone(),
             single_line: self.single_line,
             max_lines: self.max_lines,
             min_lines: self.min_lines,
@@ -192,7 +192,7 @@ impl ModifierNodeElement for TextFieldElement {
             if node.style != self.style {
                 node.line_bounds = None;
             }
-            node.style = self.style;
+            node.style = self.style.clone();
             node.single_line = self.single_line;
             node.visual_transformation = self.visual_transformation.clone();
             node.invalidate_paragraph();

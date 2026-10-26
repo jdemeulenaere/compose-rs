@@ -26,12 +26,14 @@ mod draw_modifiers;
 mod focus;
 mod focus_manager;
 mod focus_requester;
+mod font;
 mod graphics;
 mod graphics_layer;
 mod host;
 mod image;
 mod input;
 mod interaction;
+mod intl;
 mod layout;
 mod layout_callbacks;
 mod layout_modifiers;
@@ -45,18 +47,24 @@ mod node_context;
 mod nodes;
 mod optimizations;
 mod overlay;
+mod paragraph_style;
 mod path;
 mod platform_services;
+mod platform_text_style;
 mod pointer_input;
 mod prefetch;
 mod render;
 mod semantics;
 mod semantics_properties;
+mod span_style;
 mod text;
+mod text_attributes;
 mod text_editing;
 mod text_input;
 mod text_range;
+mod text_savers;
 mod text_selection;
+mod text_style;
 mod trace;
 mod tree;
 mod unit;
@@ -94,7 +102,7 @@ pub mod platform {
     pub use crate::semantics::{OtherSlot, OtherValue};
     pub use crate::text::{
         DEFAULT_FONT_SIZE, FixedTextMeasurer, ParagraphHandle, ParagraphMetrics, TextLayoutOptions,
-        TextMeasurer, TextPosition,
+        TextMeasurer, TextPosition, resolve_font_size_px, resolve_text_color, resolve_text_unit_px,
     };
     pub use crate::tree::{LayoutNode, NodeId, UiTree};
     pub use crate::unit::round_to_int;
@@ -108,7 +116,7 @@ pub mod platform {
 pub use alignment::{
     Alignment, HorizontalAlignment, LOCAL_LAYOUT_DIRECTION, LayoutDirection, VerticalAlignment,
 };
-pub use annotated::{AnnotatedString, AnnotatedStringBuilder, SpanRange, SpanStyle};
+pub use annotated::{AnnotatedString, AnnotatedStringBuilder, SpanRange};
 pub use back::{
     BackHandler, LOCAL_BACK_HANDLERS_ENABLED, LOCAL_ON_BACK_PRESSED_DISPATCHER,
     OnBackPressedDispatcher,
@@ -127,8 +135,10 @@ pub use focus_manager::{
     SoftwareKeyboardController,
 };
 pub use focus_requester::FocusRequester;
+pub use font::{FontFamily, FontStyle, FontSynthesis, FontWeight};
 pub use graphics::{
-    Color, CornerSize, Outline, Paint, PaintStyle, RECTANGLE_SHAPE, Shape, StrokeCap,
+    Color, CornerSize, DrawStyle, Outline, Paint, PaintStyle, RECTANGLE_SHAPE, Shadow, Shape,
+    Stroke, StrokeCap, StrokeJoin,
 };
 pub use graphics_layer::{
     CompositingStrategy, DEFAULT_SHADOW_COLOR, GraphicsLayerScope, TransformOrigin,
@@ -140,6 +150,7 @@ pub use input::{
     PointerEventType, PointerIcon, PointerId, PointerType,
 };
 pub use interaction::MutableInteractionSource;
+pub use intl::{Locale, LocaleList};
 pub use layout::{
     EmptyMeasurePolicy, IntrinsicMeasurable, IntrinsicMeasureScope, Layout, MAX_LAYOUT_DIMENSION,
     Measurable, MeasurePolicy, MeasureResult, MeasureScope, Placeable, empty_measure_policy,
@@ -157,6 +168,7 @@ pub use modifier::{
 pub use nested_scroll::{NestedScrollConnection, NestedScrollSource};
 pub use node_context::{NodeContext, NodeHandle};
 pub use overlay::{PopupPositionProvider, WindowPosition};
+pub use paragraph_style::ParagraphStyle;
 pub use path::{
     CornerRadius, ImageVector, Matrix, Path, PathCommand, PathData, PathDirection, PathError,
     PathFillType, PathOperation, PathStep, RoundRect,
@@ -164,6 +176,9 @@ pub use path::{
 pub use platform_services::{
     DEFAULT_URI_SCHEMES, HapticFeedback, HapticFeedbackType, LOCAL_HAPTIC_FEEDBACK,
     LOCAL_URI_HANDLER, PlatformUriHandler, UriHandler, check_uri, uri_for_log,
+};
+pub use platform_text_style::{
+    EmojiSupportMatch, PlatformParagraphStyle, PlatformSpanStyle, PlatformTextStyle,
 };
 pub use pointer_input::{
     AwaitPointerEvent, Axis, DragGestures, PointerInputChange, PointerInputScope, TapGestures,
@@ -180,9 +195,13 @@ pub use semantics::{
     SemanticsPropertyKey, SemanticsValue, SetProgressFn, SetSelectionFn, ShowTextSubstitutionFn,
     StringList, TextActionFn, ToggleableState, ValueSlot,
 };
-pub use text::{
-    FontFamily, FontStyle, FontWeight, LineHeightAlignment, LineHeightStyle, LineHeightTrim,
-    SharedString, TextAlign, TextDecoration, TextLayoutResult, TextOverflow, TextStyle,
+pub use span_style::SpanStyle;
+pub use text::{SharedString, TextLayoutResult};
+pub use text_attributes::{
+    BaselineShift, Hyphens, LineBreak, LineBreakStrategy, LineBreakStrictness, LineBreakWordBreak,
+    LineHeightAlignment, LineHeightMode, LineHeightStyle, LineHeightTrim, ResolvedTextDirection,
+    TextAlign, TextDecoration, TextDirection, TextForegroundStyle, TextGeometricTransform,
+    TextIndent, TextMotion, TextOverflow,
 };
 pub use text_editing::{
     BackspaceCommand, CommitTextCommand, DeleteAllCommand, DeleteSurroundingTextCommand,
@@ -193,8 +212,11 @@ pub use text_editing::{
 pub use text_input::{ImeAction, ImeOptions, KeyboardCapitalization, KeyboardType};
 pub use text_range::TextRange;
 pub use text_selection::Selectable;
+pub use text_style::TextStyle;
 pub use unit::{
-    Density, Dp, DpOffset, DpRect, DpSize, IntOffset, IntSize, Offset, Rect, Size, Sp, UnitExt,
+    Density, Dp, DpOffset, DpRect, DpSize, IntOffset, IntSize, Offset, Rect, Size, TextUnit,
+    TextUnitType,
+    UnitExt,
 };
 pub use view_configuration::{LOCAL_VIEW_CONFIGURATION, ViewConfiguration};
 pub use window::{
