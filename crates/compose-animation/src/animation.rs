@@ -116,6 +116,16 @@ impl<T: Animate> TargetBasedAnimation<T> {
         }
     }
 
+    /// The same, its spec starting `start_delay_nanos` in (Compose's internal `delayed`, which a
+    /// transition's value added or changed mid-way plays): at its initial value and velocity
+    /// until then.
+    pub(crate) fn delayed(mut self, start_delay_nanos: i64) -> Self {
+        self.start_delay_nanos = start_delay_nanos.max(0);
+        self.duration_nanos.set(None);
+        self.end_velocity.set(None);
+        self
+    }
+
     /// Where it starts, as `initialValue`.
     pub fn initial_value(&self) -> T {
         self.initial_value.clone()

@@ -82,7 +82,7 @@ The known differences from Jetpack Compose that an app will run into, distilled 
 
 ## Animation and Material
 
-- **Transitions** have no child transitions; `AnimatedContent` keeps at most three states' contents while they animate.
+- **`AnimatedContent`** keeps at most three states' contents while they animate.
 - **Material 3 lacks**, among others:
   - dismissible and permanent navigation drawers, `BottomSheetScaffold` and standard bottom sheets;
   - input chips, date and time pickers, search bars, exposed dropdown menus, multi-choice segmented buttons;

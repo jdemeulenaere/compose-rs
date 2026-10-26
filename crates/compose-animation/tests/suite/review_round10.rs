@@ -32,7 +32,7 @@ fn an_interrupted_transition_is_at_the_state_it_was_heading_for() {
     let mut ui = ComposeTestRule::with_manual_clock(move || {
         let transition = update_transition(handle.get(), "Interrupted");
         let _value = transition.animate_float(
-            |_, _| tween(1000).easing(LINEAR_EASING).into(),
+            |_| tween(1000).easing(LINEAR_EASING).into(),
             |&state| state as f32 * 100.0,
         );
         *report.borrow_mut() =
@@ -67,8 +67,8 @@ fn an_interrupting_change_asks_for_the_spec_from_the_interrupted_target() {
         let transition = update_transition(handle.get(), "Segments");
         let log = log.clone();
         let _value = transition.animate_float(
-            move |&initial, &target| {
-                log.borrow_mut().push((initial, target));
+            move |segment| {
+                log.borrow_mut().push((segment.initial_state, segment.target_state));
                 tween(1000).easing(LINEAR_EASING).into()
             },
             |&state| state as f32 * 100.0,

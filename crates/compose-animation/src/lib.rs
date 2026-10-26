@@ -64,7 +64,9 @@ pub use spring::{
     SpringSimulation, estimate_animation_duration_millis,
     estimate_animation_duration_millis_of_mass,
 };
-pub use transition::{Transition, update_transition};
+pub use transition::{
+    MutableTransitionState, Segment, Transition, remember_transition, update_transition,
+};
 #[doc(hidden)]
 pub use vector::default_spring;
 pub use vector::{Animate, AnimationVector, VisibilityThreshold};

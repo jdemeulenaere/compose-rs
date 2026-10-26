@@ -802,6 +802,15 @@ impl<T: 'static> MutableState<T> {
         State { handle: *self }
     }
 
+    /// Writes the value, even during composition, invalidating its readers: for state a
+    /// composable owns and updates as it composes, whose readers are the composables it calls
+    /// (they recompose later in the same pass), as a `Transition`'s target, which Compose writes
+    /// in composition (D802). Elsewhere, as [`set`](Self::set).
+    #[track_caller]
+    pub fn set_in_composition(&self, value: T) {
+        self.set_while_composing(value);
+    }
+
     /// Writes the value during composition, invalidating its readers: for a composition local's
     /// provider, whose readers are its descendants, which recompose later in the same pass.
     #[track_caller]

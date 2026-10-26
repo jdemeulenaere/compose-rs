@@ -75,9 +75,9 @@ fn a_transition_animates_its_values_together_then_reaches_its_target() {
     let mut ui = ComposeTestRule::with_manual_clock(move || {
         let transition = update_transition(handle.get(), "Expand");
         let width = transition
-            .animate_dp(|_, _| tween(100).into(), |&open| if open { 200.dp() } else { 100.dp() });
-        let alpha = transition
-            .animate_float(|_, _| tween(200).into(), |&open| if open { 1.0 } else { 0.5 });
+            .animate_dp(|_| tween(100).into(), |&open| if open { 200.dp() } else { 100.dp() });
+        let alpha =
+            transition.animate_float(|_| tween(200).into(), |&open| if open { 1.0 } else { 0.5 });
         report.set((width.get().0, transition.current_state(), transition.is_running()));
         Box!(modifier = Modifier.size((width.get(), 10.dp())).alpha(alpha.get()).test_tag("box"));
     });

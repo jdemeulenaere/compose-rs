@@ -127,8 +127,8 @@ fn transition_is_running_is_observable() {
     let report = running_seen.clone();
     let mut ui = ComposeTestRule::with_manual_clock(move || {
         let transition = update_transition(handle.get(), "Expand");
-        let alpha = transition
-            .animate_float(|_, _| tween(1000).into(), |&open| if open { 1.0 } else { 0.0 });
+        let alpha =
+            transition.animate_float(|_| tween(1000).into(), |&open| if open { 1.0 } else { 0.0 });
         report.set(transition.is_running());
         // The value is read only while drawing.
         Box!(
@@ -158,7 +158,7 @@ fn transition_interrupted_tween_continues_on_a_spring() {
     let mut ui = ComposeTestRule::with_manual_clock(move || {
         let transition = update_transition(handle.get(), "Open");
         let state = transition.animate_float(
-            |_, _| tween(1000).easing(LINEAR_EASING).into(),
+            |_| tween(1000).easing(LINEAR_EASING).into(),
             |&open| if open { 100.0 } else { 0.0 },
         );
         report.set(state.get());

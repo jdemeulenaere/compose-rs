@@ -17,8 +17,8 @@ The log is split by area into the files below, one table each, rows in number or
 
 | File | Covers | Rows |
 |---|---|---|
-| [runtime](decisions/runtime.md) | `#[composable]`, groups and keys, skipping, lambdas, the call macro, the composer, recomposition, `remember`, effects, state handles, pausable composition. | 100 |
-| [ui-and-layout](decisions/ui-and-layout.md) | Modifiers and nodes, layout and intrinsics, drawing in the tree, input, focus, semantics, animation, Material 3, navigation, platform values. | 87 |
+| [runtime](decisions/runtime.md) | `#[composable]`, groups and keys, skipping, lambdas, the call macro, the composer, recomposition, `remember`, effects, state handles, pausable composition. | 101 |
+| [ui-and-layout](decisions/ui-and-layout.md) | Modifiers and nodes, layout and intrinsics, drawing in the tree, input, focus, semantics, animation, Material 3, navigation, platform values. | 89 |
 | [text](decisions/text.md) | Text measurement and layout on each platform, fonts, text fields and editing. | 26 |
 | [lazy-and-prefetch](decisions/lazy-and-prefetch.md) | Lazy lists and grids, item reuse, the policy of composing only what is in view, prefetch. | 64 |
 | [android-drawing](decisions/android-drawing.md) | The display list and its replayer, render nodes and repaint boundaries, paths, shadows, layers. | 27 |
@@ -283,7 +283,7 @@ The log is split by area into the files below, one table each, rows in number or
 | D420 | [ui-and-layout](decisions/ui-and-layout.md#d420) | current |
 | D421 | [runtime](decisions/runtime.md#d421) | current |
 | D422 | [ui-and-layout](decisions/ui-and-layout.md#d422) | current |
-| D423 | [ui-and-layout](decisions/ui-and-layout.md#d423) | current |
+| D423 | [ui-and-layout](decisions/ui-and-layout.md#d423) | superseded by [D803](decisions/ui-and-layout.md#d803) |
 | D424 | [benchmarks](decisions/benchmarks.md#d424) | current |
 | D430 | [lazy-and-prefetch](decisions/lazy-and-prefetch.md#d430) | revised by [D460](decisions/lazy-and-prefetch.md#d460) |
 | D431 | [lazy-and-prefetch](decisions/lazy-and-prefetch.md#d431) | revised by [D434](decisions/lazy-and-prefetch.md#d434), [D435](decisions/lazy-and-prefetch.md#d435) |
@@ -427,6 +427,8 @@ The log is split by area into the files below, one table each, rows in number or
 | D704 | [ui-and-layout](decisions/ui-and-layout.md#d704) | current |
 | D705 | [benchmarks](decisions/benchmarks.md#d705) | current |
 | D800 | [ui-and-layout](decisions/ui-and-layout.md#d800) | current |
+| D802 | [runtime](decisions/runtime.md#d802) | current |
+| D803 | [ui-and-layout](decisions/ui-and-layout.md#d803) | current |
 | D900 | [api-and-tooling](decisions/api-and-tooling.md#d900) | current |
 | D901 | [api-and-tooling](decisions/api-and-tooling.md#d901) | current |
 | D902 | [ui-and-layout](decisions/ui-and-layout.md#d902) | current |
