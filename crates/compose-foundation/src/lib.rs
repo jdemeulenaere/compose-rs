@@ -43,9 +43,10 @@ pub use gestures::{
 };
 pub use image::{ContentScale, Image};
 pub use lazy::{
-    GridCells, GridItemSpan, LazyColumn, LazyGridItemSpanScope, LazyGridScope, LazyGridState,
-    LazyHorizontalGrid, LazyItemModifiers, LazyItemScope, LazyListScope, LazyListState, LazyRow,
-    LazyVerticalGrid, remember_lazy_grid_state, remember_lazy_list_state,
+    GridCells, GridItemSpan, LazyColumn, LazyGridItemInfo, LazyGridItemSpanScope,
+    LazyGridLayoutInfo, LazyGridScope, LazyGridState, LazyHorizontalGrid, LazyItemModifiers,
+    LazyItemScope, LazyLayoutScrollScope, LazyListItemInfo, LazyListLayoutInfo, LazyListScope,
+    LazyListState, LazyRow, LazyVerticalGrid, remember_lazy_grid_state, remember_lazy_list_state,
 };
 pub use mutator::{MutatePriority, MutationInterrupted, MutatorMutex};
 pub use scroll::{ScrollModifiers, ScrollState, remember_scroll_state};

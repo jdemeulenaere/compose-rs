@@ -14,16 +14,19 @@ use std::rc::Rc;
 
 use compose_runtime::{ComposeArg, ImmutableList, ObjectHandle, Owned, composable};
 use compose_ui::{
-    Constraints, Density, Dp, Layout, Measurable, MeasurePolicy, MeasureResult, MeasureScope,
-    Modifier, PaddingValues, Placeable, PrefetchScheduler,
+    Constraints, Density, Dp, IntOffset, IntSize, Layout, Measurable, MeasurePolicy, MeasureResult,
+    MeasureScope, Modifier, PaddingValues, Placeable, PrefetchScheduler,
 };
 
+use super::layout_info::{LaidItem, LaidViewport};
 use super::prefetch::{Laid, Policy};
 use super::{
     BEYOND, FIRST_STEP, Interval, Items, ItemsRef, LazyItems, LazyListInner, LazyListState,
     LazyScrollElement, MOST_IN_A_ROUND, MOST_MISSING, Sizes, composed_range, content_type_of,
 };
-use crate::gestures::{LocalBoxFuture, ScrollBlock, ScrollableState};
+use crate::gestures::{
+    LocalBoxFuture, ScrollBlock, ScrollScope, ScrollableState, ScrollableStateExt,
+};
 use crate::layout::{HorizontalArrangement, MainAxisArrangement, VerticalArrangement};
 use crate::mutator::{MutatePriority, MutationInterrupted};
 
@@ -154,9 +157,182 @@ impl LazyGridState {
         self.list.scroll_to_item(index, scroll_offset).await
     }
 
+    /// What the grid laid out last, as `layoutInfo`: the items in view (with their lines and
+    /// cells), the viewport and the padding (a state read).
+    pub fn layout_info(&self) -> super::LazyGridLayoutInfo {
+        let Some(inner) = self.list.inner() else { return super::LazyGridLayoutInfo::default() };
+        let items = inner.laid_items.borrow().clone();
+        inner.laid_out.read(|laid, viewport| super::LazyGridLayoutInfo {
+            visible_items_info: laid
+                .iter()
+                .map(|item| {
+                    let (offset, size, row, column) = if viewport.vertical {
+                        (
+                            IntOffset::new(item.cross, item.main),
+                            IntSize::new(item.cross_size, item.main_size),
+                            item.line,
+                            item.lane,
+                        )
+                    } else {
+                        (
+                            IntOffset::new(item.main, item.cross),
+                            IntSize::new(item.main_size, item.cross_size),
+                            item.lane,
+                            item.line,
+                        )
+                    };
+                    super::LazyGridItemInfo {
+                        index: item.index,
+                        key: items.as_ref().map_or(0, |items| items.key(item.index)),
+                        offset,
+                        size,
+                        row,
+                        column,
+                        content_type: items
+                            .as_ref()
+                            .and_then(|items| items.content_type(item.index)),
+                        span: item.span,
+                    }
+                })
+                .collect(),
+            viewport_start_offset: viewport.start,
+            viewport_end_offset: viewport.end,
+            total_items_count: viewport.count,
+            viewport_size: viewport.size,
+            orientation: if viewport.vertical {
+                crate::gestures::Orientation::Vertical
+            } else {
+                crate::gestures::Orientation::Horizontal
+            },
+            reverse_layout: viewport.reverse,
+            before_content_padding: viewport.before,
+            after_content_padding: viewport.after,
+            main_axis_item_spacing: viewport.spacing,
+            max_span: viewport.max_span,
+        })
+    }
+
+    /// Animates a scroll to item `index`'s line, `scroll_offset` pixels into it, in a scroll
+    /// of the default priority, as `animateScrollToItem`.
+    pub async fn animate_scroll_to_item(
+        &self,
+        index: usize,
+        scroll_offset: i32,
+    ) -> Result<(), MutationInterrupted> {
+        let state = *self;
+        self.scroll(MutatePriority::Default, move |scope| async move {
+            let density = state.list.inner().map_or(1.0, |inner| inner.density.get());
+            let cells = state
+                .list
+                .inner()
+                .map_or(1, |inner| inner.laid_out.read(|_, viewport| viewport.max_span));
+            let scope = state.lazy_layout_scroll_scope(scope);
+            super::animate_scroll::animate_scroll_to_item(
+                &scope,
+                index,
+                scroll_offset,
+                100 * cells,
+                density,
+            )
+            .await;
+        })
+        .await
+    }
+
+    /// A lazy layout scroll scope over this grid and a scroll's `scroll_scope`, as Compose's
+    /// `LazyLayoutScrollScope(state, scrollScope)`.
+    pub fn lazy_layout_scroll_scope(
+        &self,
+        scroll_scope: ScrollScope,
+    ) -> impl super::LazyLayoutScrollScope {
+        GridScrollScope { state: *self, scope: scroll_scope }
+    }
+
     /// The interaction source the grid reports its drags to, as `interactionSource`.
     pub fn interaction_source(&self) -> compose_ui::MutableInteractionSource {
         self.list.interaction_source()
+    }
+}
+
+/// A grid's lazy layout scroll scope, as the one Compose's `LazyLayoutScrollScope(state, …)`
+/// makes for a `LazyGridState`.
+struct GridScrollScope {
+    state: LazyGridState,
+    scope: ScrollScope,
+}
+
+impl GridScrollScope {
+    /// `read` of the position ahead once the scrolling asked since the last layout is laid out
+    /// (as a list's scope, D858), the items in view as last laid out, the scrolling asked and
+    /// the cells in a line.
+    fn ahead<R>(
+        &self,
+        read: impl FnOnce(&super::layout_info::Ahead, &[LaidItem], f32, usize) -> R,
+    ) -> Option<R> {
+        let inner = self.state.list.inner()?;
+        let pending = inner.pending.get();
+        inner.laid_out.read(|laid, viewport| {
+            let lines = super::layout_info::laid_lines(laid, true);
+            let ahead = super::layout_info::ahead(
+                &lines,
+                pending,
+                viewport.spacing,
+                viewport.end,
+                viewport.count,
+                viewport.max_span,
+            )?;
+            Some(read(&ahead, laid, pending, viewport.max_span.max(1)))
+        })
+    }
+}
+
+impl super::LazyLayoutScrollScope for GridScrollScope {
+    fn scroll_scope(&self) -> &ScrollScope {
+        &self.scope
+    }
+
+    fn first_visible_item_index(&self) -> usize {
+        self.ahead(|ahead, _, _, _| ahead.first)
+            .unwrap_or_else(|| self.state.first_visible_item_index())
+    }
+
+    fn first_visible_item_scroll_offset(&self) -> i32 {
+        self.ahead(|ahead, _, _, _| ahead.offset)
+            .unwrap_or_else(|| self.state.first_visible_item_scroll_offset())
+    }
+
+    fn last_visible_item_index(&self) -> usize {
+        self.ahead(|ahead, _, _, _| ahead.last).unwrap_or(0)
+    }
+
+    fn item_count(&self) -> usize {
+        let Some(inner) = self.state.list.inner() else { return 0 };
+        inner.laid_out.read(|_, viewport| viewport.count)
+    }
+
+    fn snap_to_item(&self, index: usize, offset: i32) {
+        self.state.list.snap_to_item(index, offset);
+    }
+
+    fn calculate_distance_to(&self, target_index: usize, target_offset: i32) -> i32 {
+        self.ahead(|ahead, laid, pending, cells| {
+            let visible = (ahead.first..=ahead.last).contains(&target_index);
+            let item = laid.iter().find(|item| item.index == target_index);
+            let distance = match item {
+                Some(item) if visible => (item.main as f32 - pending).round() as i32,
+                _ => {
+                    // In lines, as Compose's grid scope.
+                    let cells = cells as i32;
+                    let before = target_index < ahead.first;
+                    let lines_diff = (target_index as i32 - ahead.first as i32
+                        + (cells - 1) * if before { -1 } else { 1 })
+                        / cells;
+                    ahead.average * lines_diff - ahead.offset
+                }
+            };
+            distance + target_offset
+        })
+        .unwrap_or(0)
     }
 }
 
@@ -1215,6 +1391,7 @@ impl MeasurePolicy for LazyGridLayout {
         // grid's first column, a horizontal one's first line, at the right.
         let layout_direction = scope.layout_direction();
         state.rtl.set(layout_direction == compose_ui::LayoutDirection::Rtl);
+        state.density.set(density.density);
         let px = |dp: Dp| density.round_to_px(dp);
         let (before, after, cross_before, cross_after) = if vertical {
             (
@@ -1311,6 +1488,23 @@ impl MeasurePolicy for LazyGridLayout {
             state.room_estimated.set((false, false));
             state.beyond_more.set((false, false));
             drop(measurer);
+            state.laid_out.begin();
+            let keys_changed = state.note_laid_items(&info.items);
+            state.laid_out.end(
+                LaidViewport {
+                    start: -before,
+                    end: main_max - before,
+                    count: 0,
+                    size: IntSize::new(constraints.min_width, constraints.min_height),
+                    vertical,
+                    reverse: false,
+                    before,
+                    after,
+                    spacing,
+                    max_span: slots.count(),
+                },
+                keys_changed,
+            );
             return scope.layout(constraints.min_width, constraints.min_height);
         }
         state.had_items.set(true);
@@ -1740,6 +1934,51 @@ impl MeasurePolicy for LazyGridLayout {
         for (placeable, main, cross) in &pinned {
             place(m.scope, placeable, *main, *cross);
         }
+        // The items in view for `layout_info`, as Compose's `visibleItemsInfo`: those of the lines
+        // laid out from the first under the start padding to the last in view.
+        let mut laid = state.laid_out.begin();
+        for &(line, main) in &placed {
+            let (first_cell, _, _) = m.measured_line(line).expect("a line measured");
+            let mut slot = 0;
+            for (position, item) in (m.lines.start(line)..m.lines.start(line + 1)).enumerate() {
+                let (placeable, cross) = m.cells[first_cell + position];
+                let span = m.lines.span(item);
+                let (main_size, cross_size) = if vertical {
+                    (placeable.height, placeable.width)
+                } else {
+                    (placeable.width, placeable.height)
+                };
+                laid.push(LaidItem {
+                    index: item,
+                    main: main - before,
+                    cross,
+                    main_size,
+                    cross_size,
+                    line: line as i32,
+                    lane: slot as i32,
+                    span,
+                    sticky: false,
+                });
+                slot += span;
+            }
+        }
+        drop(laid);
+        let keys_changed = state.note_laid_items(&info.items);
+        state.laid_out.end(
+            LaidViewport {
+                start: -before,
+                end: main_max - before,
+                count,
+                size: IntSize::new(width, height),
+                vertical,
+                reverse: false,
+                before,
+                after,
+                spacing,
+                max_span: slots.count(),
+            },
+            keys_changed,
+        );
         if let Some(post_scroll) = post_scroll {
             m.scope.run_after_layout(post_scroll);
         }

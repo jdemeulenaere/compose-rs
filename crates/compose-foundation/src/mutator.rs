@@ -127,6 +127,11 @@ impl MutatorMutex {
         Interruptible { mutator: &mutator, block: std::pin::pin!(block(receiver)) }.await
     }
 
+    /// Whether a mutation is running (not `try_mutate`): no state read.
+    pub(crate) fn is_mutating(&self) -> bool {
+        self.inner.borrow().current.is_some()
+    }
+
     /// Runs `block` now if no mutation is running nor `try_mutate` (and returns `true`), else
     /// returns `false`, as `tryMutate`. Mutations started meanwhile wait for it.
     pub fn try_mutate(&self, block: impl FnOnce()) -> bool {

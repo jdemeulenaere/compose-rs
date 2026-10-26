@@ -54,24 +54,24 @@ struct LazyListAdapter(LazyListState);
 
 impl ScrollbarAdapter for LazyListAdapter {
     fn scroll_offset(&self) -> f64 {
-        let (_, average, _, _, _) = self.0.layout_info();
+        let (_, average, _, _, _) = self.0.scroll_estimates();
         self.0.first_visible_item_index() as f64 * average as f64
             + self.0.first_visible_item_scroll_offset() as f64
     }
     /// The items at their average size, with the spacing between them (not after the last)
     /// and the padding, as Compose Desktop's.
     fn content_size(&self) -> f64 {
-        let (count, average, spacing, _, padding) = self.0.layout_info();
+        let (count, average, spacing, _, padding) = self.0.scroll_estimates();
         if count == 0 {
             return padding as f64;
         }
         count as f64 * average as f64 - spacing as f64 + padding as f64
     }
     fn viewport_size(&self) -> f64 {
-        self.0.layout_info().3 as f64
+        self.0.scroll_estimates().3 as f64
     }
     fn scroll_to(&self, scroll_offset: f64) {
-        let (count, average, _, _, _) = self.0.layout_info();
+        let (count, average, _, _, _) = self.0.scroll_estimates();
         let average = (average as f64).max(1.0);
         let offset = scroll_offset.max(0.0);
         let index = ((offset / average).floor() as usize).min(count.saturating_sub(1));

@@ -20,13 +20,17 @@
 //! Lazy grids (`grid`) compose their items the same way, one slot per item, and lay them out
 //! in lines.
 
+mod animate_scroll;
 mod grid;
+mod layout_info;
 mod prefetch;
 
+pub use animate_scroll::LazyLayoutScrollScope;
 pub use grid::{
     GridCells, GridItemSpan, LazyGridItemSpanScope, LazyGridScope, LazyGridState,
     LazyHorizontalGrid, LazyVerticalGrid, remember_lazy_grid_state,
 };
+pub use layout_info::{LazyGridItemInfo, LazyGridLayoutInfo, LazyListItemInfo, LazyListLayoutInfo};
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -44,7 +48,9 @@ use compose_ui::{
     PrefetchScheduler, Rect, VerticalAlignment,
 };
 
-use crate::gestures::{LocalBoxFuture, ScrollBlock, ScrollableState, ScrollableStateExt};
+use crate::gestures::{
+    LocalBoxFuture, ScrollBlock, ScrollScope, ScrollableState, ScrollableStateExt,
+};
 use crate::layout::{HorizontalArrangement, MainAxisArrangement, VerticalArrangement};
 use crate::mutator::{MutatePriority, MutationInterrupted};
 use crate::scroll::{DragScroller, ScrollDriver, bring_into_view_delta, same_fling};
@@ -174,6 +180,12 @@ struct LazyListInner {
     sticky_written: Cell<Option<usize>>,
     /// Its scrolls' mutex and flags.
     core: crate::gestures::ScrollCore,
+    /// What the last layout placed in view, for `layout_info`.
+    laid_out: layout_info::LaidOut,
+    /// Pixels per dp, as last laid out (an animated scroll's distances are in dp).
+    density: Cell<f32>,
+    /// The items as last laid out: `layout_info`'s keys and content types are theirs.
+    laid_items: RefCell<Option<Rc<Items>>>,
     /// The nested-scroll parents a drag's or a fling's delta going through the scroll scope
     /// comes through, set around it by the list's node: what an estimated end leaves of it goes
     /// to them (D479).
@@ -185,6 +197,16 @@ struct LazyListInner {
 type Outer = (compose_ui::platform::NestedScrollChain, bool, bool, compose_ui::NestedScrollSource);
 
 impl LazyListInner {
+    /// Notes `items` as those laid out; returns whether they're others than last time.
+    fn note_laid_items(&self, items: &Rc<Items>) -> bool {
+        let mut laid = self.laid_items.borrow_mut();
+        if laid.as_ref().is_some_and(|laid| Rc::ptr_eq(laid, items)) {
+            return false;
+        }
+        *laid = Some(items.clone());
+        true
+    }
+
     /// Asks the items' composition for the items `range`: a write of `composed`, or, when it
     /// holds `range` already (the composition composed another range, following the items'
     /// keys, D455), a count bumped so it composes `composed` again.
@@ -239,6 +261,9 @@ impl LazyListInner {
             beyond_ended: Cell::new(false),
             dispose_leaving: Cell::new(false),
             core: crate::gestures::ScrollCore::new(),
+            laid_out: layout_info::LaidOut::new(),
+            density: Cell::new(1.0),
+            laid_items: RefCell::new(None),
             scroll_outer: RefCell::new(None),
         }
     }
@@ -329,7 +354,7 @@ impl LazyListState {
     /// animation, as `requestScrollToItem`: a scroll going on (a fling) is stopped.
     pub fn request_scroll_to_item(&self, index: usize, scroll_offset: i32) {
         let Some(inner) = self.inner() else { return };
-        if inner.core.is_scroll_in_progress() {
+        if inner.core.is_scroll_in_progress_untracked() {
             let state = *self;
             CoroutineScope::new().launch(async move {
                 let _ = state.stop_scroll(MutatePriority::Default).await;
@@ -338,16 +363,32 @@ impl LazyListState {
         self.snap_to_item(index, scroll_offset);
     }
 
-    /// Moves the position to `index`, `scroll_offset` into it, for the next layout.
-    fn snap_to_item(&self, index: usize, scroll_offset: i32) {
+    /// Moves the position to `index`, `scroll_offset` into it (a negative offset: before it,
+    /// as Compose's), for the next layout.
+    pub(crate) fn snap_to_item(&self, index: usize, scroll_offset: i32) {
         let Some(inner) = self.inner() else { return };
         // A jump is no user input: nothing it passes goes to nested-scroll parents.
         inner.overshoot.borrow_mut().take();
-        inner.position.set((index, scroll_offset.max(0) as f32));
+        inner.position.set((index, scroll_offset as f32));
         inner.first_key.set(None);
         inner.pending.set(0.0);
         inner.room_backward.set(f32::INFINITY);
         inner.room_forward.set(f32::INFINITY);
+        if compose_runtime::is_composing() {
+            // Asked while composing (a list's content asking, as Compose's tests do): no state
+            // write then; the list's node is measured again, the position read then.
+            if let Some(list) = inner.prefetch.node.get() {
+                compose_runtime::platform::current().with_applier(
+                    |tree: &mut compose_ui::platform::UiTree| tree.invalidate_measure(list),
+                );
+            }
+            return;
+        }
+        // The position is the state's at once, as Compose's `requestPositionAndForgetLastKnownKey`;
+        // the layout coerces it into the items.
+        inner.published.set((index, scroll_offset));
+        inner.first_index.set(index);
+        inner.first_offset.set(scroll_offset);
         inner.remeasure.update(|count| count.wrapping_add(1));
     }
 
@@ -363,6 +404,33 @@ impl LazyListState {
             state.snap_to_item(index, scroll_offset);
         })
         .await
+    }
+
+    /// Animates a scroll to `index`, `scroll_offset` pixels into it, in a scroll of the default
+    /// priority, as `animateScrollToItem`: a spring towards it, 2,500 dp at a time, jumping to
+    /// a hundred items before it when it's further, then to its offset.
+    pub async fn animate_scroll_to_item(
+        &self,
+        index: usize,
+        scroll_offset: i32,
+    ) -> Result<(), MutationInterrupted> {
+        let state = *self;
+        self.scroll(MutatePriority::Default, move |scope| async move {
+            let density = state.inner().map_or(1.0, |inner| inner.density.get());
+            let scope = state.lazy_layout_scroll_scope(scope);
+            animate_scroll::animate_scroll_to_item(&scope, index, scroll_offset, 100, density)
+                .await;
+        })
+        .await
+    }
+
+    /// A lazy layout scroll scope over this list and a scroll's `scroll_scope`, as Compose's
+    /// `LazyLayoutScrollScope(state, scrollScope)`.
+    pub fn lazy_layout_scroll_scope(
+        &self,
+        scroll_scope: ScrollScope,
+    ) -> impl LazyLayoutScrollScope {
+        ListScrollScope { state: *self, scope: scroll_scope }
     }
 
     /// The interaction source the list reports its drags to, as `interactionSource`.
@@ -433,7 +501,39 @@ impl LazyListState {
     /// The item count, the average item size (with its spacing), the spacing, the viewport's
     /// length and the content padding along the axis, as last laid out: a scrollbar's
     /// estimates (a state read).
-    pub(crate) fn layout_info(&self) -> (usize, f32, i32, i32, i32) {
+    /// What the list laid out last, as `layoutInfo`: the items in view, the viewport and the
+    /// padding (a state read: a layout that changes them tells the reader).
+    pub fn layout_info(&self) -> LazyListLayoutInfo {
+        let Some(inner) = self.inner() else { return LazyListLayoutInfo::default() };
+        let items = inner.laid_items.borrow().clone();
+        inner.laid_out.read(|laid, viewport| LazyListLayoutInfo {
+            visible_items_info: laid
+                .iter()
+                .map(|item| LazyListItemInfo {
+                    index: item.index,
+                    key: items.as_ref().map_or(0, |items| items.key(item.index)),
+                    offset: item.main,
+                    size: item.main_size,
+                    content_type: items.as_ref().and_then(|items| items.content_type(item.index)),
+                })
+                .collect(),
+            viewport_start_offset: viewport.start,
+            viewport_end_offset: viewport.end,
+            total_items_count: viewport.count,
+            viewport_size: viewport.size,
+            orientation: if viewport.vertical {
+                crate::gestures::Orientation::Vertical
+            } else {
+                crate::gestures::Orientation::Horizontal
+            },
+            reverse_layout: viewport.reverse,
+            before_content_padding: viewport.before,
+            after_content_padding: viewport.after,
+            main_axis_item_spacing: viewport.spacing,
+        })
+    }
+
+    pub(crate) fn scroll_estimates(&self) -> (usize, f32, i32, i32, i32) {
         self.inner().map_or((0, 1.0, 0, 0, 0), |inner| inner.layout_info.get())
     }
 }
@@ -485,6 +585,81 @@ impl ScrollableState for LazyListState {
 
     fn internal_interaction_source(&self) -> Option<compose_ui::MutableInteractionSource> {
         self.inner().map(|inner| inner.core.interaction_source.clone())
+    }
+}
+
+/// A list's lazy layout scroll scope, as the one Compose's `LazyLayoutScrollScope(state, …)`
+/// makes for a `LazyListState`. Compose measures a scroll at once; compose-rs at the next
+/// layout (D476), so this scope sees the last layout's items moved by the scrolling asked since,
+/// as Compose's `copyWithScrollDeltaWithoutRemeasure` does for a small scroll (D858).
+struct ListScrollScope {
+    state: LazyListState,
+    scope: ScrollScope,
+}
+
+impl ListScrollScope {
+    /// `read` of the position ahead, the items in view as last laid out and the scrolling asked
+    /// since (`None` before a layout with items).
+    fn ahead<R>(
+        &self,
+        read: impl FnOnce(&layout_info::Ahead, &[layout_info::LaidItem], f32) -> R,
+    ) -> Option<R> {
+        let inner = self.state.inner()?;
+        let pending = inner.pending.get();
+        inner.laid_out.read(|laid, viewport| {
+            let lines = layout_info::laid_lines(laid, false);
+            let ahead = layout_info::ahead(
+                &lines,
+                pending,
+                viewport.spacing,
+                viewport.end,
+                viewport.count,
+                1,
+            )?;
+            Some(read(&ahead, laid, pending))
+        })
+    }
+}
+
+impl LazyLayoutScrollScope for ListScrollScope {
+    fn scroll_scope(&self) -> &ScrollScope {
+        &self.scope
+    }
+
+    fn first_visible_item_index(&self) -> usize {
+        self.ahead(|ahead, _, _| ahead.first)
+            .unwrap_or_else(|| self.state.first_visible_item_index())
+    }
+
+    fn first_visible_item_scroll_offset(&self) -> i32 {
+        self.ahead(|ahead, _, _| ahead.offset)
+            .unwrap_or_else(|| self.state.first_visible_item_scroll_offset())
+    }
+
+    fn last_visible_item_index(&self) -> usize {
+        self.ahead(|ahead, _, _| ahead.last).unwrap_or(0)
+    }
+
+    fn item_count(&self) -> usize {
+        let Some(inner) = self.state.inner() else { return 0 };
+        inner.laid_out.read(|_, viewport| viewport.count)
+    }
+
+    fn snap_to_item(&self, index: usize, offset: i32) {
+        self.state.snap_to_item(index, offset);
+    }
+
+    fn calculate_distance_to(&self, target_index: usize, target_offset: i32) -> i32 {
+        self.ahead(|ahead, laid, pending| {
+            let visible = (ahead.first..=ahead.last).contains(&target_index);
+            let item = laid.iter().find(|item| item.index == target_index && !item.sticky);
+            let distance = match item {
+                Some(item) if visible => (item.main as f32 - pending).round() as i32,
+                _ => ahead.average * (target_index as i32 - ahead.first as i32) - ahead.offset,
+            };
+            distance + target_offset
+        })
+        .unwrap_or(0)
     }
 }
 
@@ -1682,6 +1857,15 @@ fn LazyItems(
     }
     #[cfg(debug_assertions)]
     items.0.check_keys(&indices);
+    // Other items composed: the list measures again. A slot can take another item without its
+    // node moving or its size changing (an empty item after another), which wouldn't measure
+    // the list again by itself.
+    if *inner.children.borrow() != indices
+        && let Some(list) = inner.prefetch.node.get()
+    {
+        compose_runtime::platform::current()
+            .with_applier(|tree: &mut compose_ui::platform::UiTree| tree.invalidate_measure(list));
+    }
     *inner.children.borrow_mut() = indices.clone();
     // The items' constraints, for those composing for theirs (`BoxWithConstraints`).
     let hint = inner.item_constraints.get().or(fallback);
@@ -1844,6 +2028,7 @@ impl MeasurePolicy for LazyListLayout {
         // Compose's (so a centered item rounds as in left to right).
         let layout_direction = scope.layout_direction();
         state.rtl.set(layout_direction == compose_ui::LayoutDirection::Rtl);
+        state.density.set(density.density);
         let direction = compose_ui::LayoutDirection::Ltr;
         let px = |dp: Dp| density.round_to_px(dp);
         // Positions along the axis are worked out from the list's start (its end, reversed:
@@ -1962,6 +2147,23 @@ impl MeasurePolicy for LazyListLayout {
             state.room_forward.set(0.0);
             state.room_estimated.set((false, false));
             state.beyond_more.set((false, false));
+            state.laid_out.begin();
+            let keys_changed = state.note_laid_items(&info.items);
+            state.laid_out.end(
+                layout_info::LaidViewport {
+                    start: -before,
+                    end: main_max - before,
+                    count: 0,
+                    size: IntSize::new(constraints.min_width, constraints.min_height),
+                    vertical,
+                    reverse,
+                    before,
+                    after,
+                    spacing,
+                    max_span: 1,
+                },
+                keys_changed,
+            );
             return scope.layout(constraints.min_width, constraints.min_height);
         }
         state.had_items.set(true);
@@ -2383,6 +2585,18 @@ impl MeasurePolicy for LazyListLayout {
         // Compose's `applyStickyItems`), kept composed: at the list's start, or where it is if
         // lower, pushed out by the next header, its size and the spacing after it ending where
         // that one starts (Compose's `nextStickyItemOffset - mainAxisSizeWithSpacings`, D649).
+        // The items in view for `layout_info`, as Compose's `visibleItemsInfo`: those laid out
+        // from the first under the start padding to the last in view (not those beyond, placed
+        // for a focus search or pinned), then the sticky header where it sticks.
+        let mut laid = state.laid_out.begin();
+        for (position, (placeable, main)) in placed.iter().enumerate() {
+            laid.push(layout_info::LaidItem {
+                index: lead + position,
+                main: main - before,
+                main_size: main_of(placeable),
+                ..Default::default()
+            });
+        }
         let headers = info.items.headers_around(lead);
         let header = headers.map(|(header, _)| header);
         if state.sticky_written.replace(header) != header {
@@ -2404,6 +2618,14 @@ impl MeasurePolicy for LazyListLayout {
             placed.retain(|(other, _)| *other != placeable);
             beyond.retain(|(other, _)| *other != placeable);
             ahead.retain(|(other, _)| *other != placeable);
+            laid.retain(|item| item.index != header);
+            laid.push(layout_info::LaidItem {
+                index: header,
+                main: at - before,
+                main_size: main_of(&placeable),
+                sticky: true,
+                ..Default::default()
+            });
             sticky = Some((placeable, at));
         }
         let children = state.children.borrow().clone();
@@ -2455,6 +2677,23 @@ impl MeasurePolicy for LazyListLayout {
         for (placeable, main) in ahead.iter().chain(&placed).chain(&beyond).chain(&sticky) {
             layout(scope, placeable, *main);
         }
+        drop(laid);
+        let keys_changed = state.note_laid_items(&info.items);
+        state.laid_out.end(
+            layout_info::LaidViewport {
+                start: -before,
+                end: main_max - before,
+                count,
+                size: IntSize::new(width, height),
+                vertical,
+                reverse,
+                before,
+                after,
+                spacing,
+                max_span: 1,
+            },
+            keys_changed,
+        );
         if let Some(post_scroll) = post_scroll {
             scope.run_after_layout(post_scroll);
         }

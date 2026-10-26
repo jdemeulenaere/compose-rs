@@ -209,6 +209,12 @@ impl ScrollCore {
         self.scrolling.get()
     }
 
+    /// Whether a scroll is going on, without reading state (what reads it isn't told when it
+    /// changes): a jump asked from composition doesn't subscribe its caller.
+    pub(crate) fn is_scroll_in_progress_untracked(&self) -> bool {
+        self.mutex.is_mutating()
+    }
+
     pub(crate) fn last_scrolled_forward(&self) -> bool {
         self.last_forward.get()
     }
