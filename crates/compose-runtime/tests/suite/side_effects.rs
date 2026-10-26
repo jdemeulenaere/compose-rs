@@ -438,3 +438,55 @@ fn a_long_lived_effect_sees_the_updated_state() {
     test.advance();
     assert_eq!(output.try_receive().as_deref(), Some("world"));
 }
+
+/// `remember_updated_state` is state: a composable reading it recomposes when its value
+/// changes (Compose's `State<T>`), and not when it's given the same value.
+#[test]
+fn remember_updated_state_is_state_its_readers_follow() {
+    #[composable]
+    fn Reader(value: State<String>, log: Log) {
+        log.push(format!("Reader({})", value.get()));
+    }
+    #[composable]
+    fn Content(arg: MutableState<String>, other: MutableState<i32>, log: Log) {
+        other.get();
+        let current = remember_updated_state(arg.get());
+        Reader(current, log);
+    }
+    let mut test = composition_test();
+    let arg = mutable_state_of(String::from("hello"));
+    let other = mutable_state_of(0);
+    let log = Log::new();
+    let (a, o, l) = (arg.handle(), other.handle(), log.clone());
+    test.compose(move || Content(a, o, l.clone()));
+    assert_eq!(log.take(), ["Reader(hello)"]);
+    arg.set("world".into());
+    test.advance();
+    assert_eq!(log.take(), ["Reader(world)"], "the reader followed the new value");
+    other.set(1);
+    test.advance();
+    assert!(log.take().is_empty(), "the same value: the reader skipped");
+}
+
+/// `referential_equality_policy` compares by identity: a new `Rc` of an equal value is a
+/// change, the same `Rc` isn't.
+#[test]
+fn the_referential_policy_compares_by_identity() {
+    #[composable]
+    fn Reader(value: MutableState<Rc<Vec<i32>>>, log: Log) {
+        log.push(format!("{:?}", value.get()));
+    }
+    let mut test = composition_test();
+    let list = Rc::new(vec![32]);
+    let state = mutable_state_of_with(list.clone(), referential_equality_policy());
+    let log = Log::new();
+    let (s, l) = (state.handle(), log.clone());
+    test.compose(move || Reader(s, l.clone()));
+    assert_eq!(log.take(), ["[32]"]);
+    state.set(list);
+    test.expect_no_changes();
+    assert!(log.take().is_empty(), "the same Rc: no change");
+    state.set(Rc::new(vec![32]));
+    test.advance();
+    assert_eq!(log.take(), ["[32]"], "a new Rc of an equal list: a change");
+}

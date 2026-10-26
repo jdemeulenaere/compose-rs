@@ -56,8 +56,7 @@ pub use composition::{ApplierRef, Composition};
 pub use derived::{DerivedState, derived_state_of, derived_state_of_with};
 pub use effects::{
     DisposableEffect, DisposableEffectResult, DisposableEffectScope, KeyedSideEffect,
-    LaunchedEffect, SideEffect, UpdatedState, produce_state, remember_coroutine_scope,
-    remember_updated_state,
+    LaunchedEffect, SideEffect, produce_state, remember_coroutine_scope, remember_updated_state,
 };
 pub use error::ComposeError;
 pub use executor::{
@@ -81,9 +80,10 @@ pub use saveable::{
 pub use saveable_state_holder::{SaveableStateHolder, remember_saveable_state_holder};
 pub use scope::RecomposeScope;
 pub use state::{
-    MutableState, MutationPolicy, NeverEqualPolicy, ObjectHandle, Owned, OwnedState, State,
-    StructuralEqualityPolicy, mutable_state_list_from, mutable_state_list_of, mutable_state_of,
-    mutable_state_of_with, never_equal_policy, structural_equality_policy,
+    MutableState, MutationPolicy, NeverEqualPolicy, ObjectHandle, Owned, OwnedState,
+    ReferentialEqualityPolicy, State, StructuralEqualityPolicy, mutable_state_list_from,
+    mutable_state_list_of, mutable_state_of, mutable_state_of_with, never_equal_policy,
+    referential_equality_policy, structural_equality_policy,
 };
 
 #[doc(hidden)]

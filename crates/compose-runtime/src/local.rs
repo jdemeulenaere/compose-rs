@@ -18,17 +18,9 @@ use crate::hash::key_of;
 use crate::remember::remember;
 use crate::runtime::with_runtime;
 use crate::slot_table::{GroupKind, NONE};
-use crate::state::{MutationPolicy, OwnedState, mutable_state_of_with};
-
-/// Writes of a `same` value (`ComposeArg`) invalidate nothing: a provider's policy, so locals
-/// may hold `Rc`s of trait objects (compared by identity) as well as plain values.
-struct SamePolicy;
-
-impl<T: ComposeArg> MutationPolicy<T> for SamePolicy {
-    fn equivalent(a: &T, b: &T) -> bool {
-        a.same(b)
-    }
-}
+// A provider's policy: writes of a `same` value (`ComposeArg`) invalidate nothing, so locals may
+// hold `Rc`s of trait objects (compared by identity) as well as plain values.
+use crate::state::{OwnedState, ReferentialEqualityPolicy, mutable_state_of_with};
 
 /// A composition local: declared as a `static` (or a `const`), identified by its name and
 /// value type, which must be unique together.
@@ -140,7 +132,10 @@ fn start_provider<T: Clone + ComposeArg + 'static>(value: ProvidedValue<T>) -> R
     let group = ReplaceGroup::start(key, "compose_runtime::CompositionLocalProvider");
     with_runtime(|runtime| runtime.mark_provider());
     let slot: Rc<ProviderSlot<T>> = remember(|| {
-        Rc::new(ProviderSlot { local: id, value: mutable_state_of_with(value.clone(), SamePolicy) })
+        Rc::new(ProviderSlot {
+            local: id,
+            value: mutable_state_of_with(value.clone(), ReferentialEqualityPolicy),
+        })
     });
     slot.value.handle().set_while_composing(value);
     group

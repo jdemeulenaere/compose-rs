@@ -570,6 +570,25 @@ impl<T> MutationPolicy<T> for NeverEqualPolicy {
     }
 }
 
+/// Writes of the same value by identity invalidate nothing, as Compose's
+/// `referentialEqualityPolicy()` (`===`): identity as [`ComposeArg`](crate::ComposeArg)
+/// defines it, so an `Rc` (a Kotlin object's analogue) by pointer, a state handle by handle,
+/// and a small value (which Kotlin boxes) by value. Writing a new `Rc` of an equal value is a
+/// change.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ReferentialEqualityPolicy;
+
+impl<T: crate::ComposeArg> MutationPolicy<T> for ReferentialEqualityPolicy {
+    fn equivalent(a: &T, b: &T) -> bool {
+        a.same(b)
+    }
+}
+
+/// As Compose's `referentialEqualityPolicy()`.
+pub fn referential_equality_policy() -> ReferentialEqualityPolicy {
+    ReferentialEqualityPolicy
+}
+
 /// As Compose's `structuralEqualityPolicy()`.
 pub fn structural_equality_policy() -> StructuralEqualityPolicy {
     StructuralEqualityPolicy

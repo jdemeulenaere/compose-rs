@@ -155,39 +155,16 @@ pub fn remember_coroutine_scope() -> CoroutineScope {
     remember_observer(|| ScopeObserver(CoroutineScope::new())).0.handle()
 }
 
-/// The latest value given, for effects started earlier to read, as Compose's
-/// `rememberUpdatedState`: an effect keyed on something else (a timeout) calls the newest
-/// callback. Not state: reading it observes nothing.
-pub struct UpdatedState<T: 'static> {
-    value: std::rc::Rc<std::cell::RefCell<T>>,
-}
-
-impl<T: 'static> Clone for UpdatedState<T> {
-    fn clone(&self) -> Self {
-        UpdatedState { value: self.value.clone() }
-    }
-}
-
-impl<T: Clone + 'static> UpdatedState<T> {
-    /// The latest value.
-    pub fn get(&self) -> T {
-        self.value.borrow().clone()
-    }
-}
-
-impl<T: 'static> UpdatedState<T> {
-    /// Reads the latest value in place.
-    pub fn with<R>(&self, read: impl FnOnce(&T) -> R) -> R {
-        read(&self.value.borrow())
-    }
-}
-
-/// Remembers `value`, updated at each composition, as `rememberUpdatedState(value)`.
-pub fn remember_updated_state<T: Clone + 'static>(value: T) -> UpdatedState<T> {
-    let cell =
-        crate::remember::remember(|| std::rc::Rc::new(std::cell::RefCell::new(value.clone())));
-    *cell.borrow_mut() = value;
-    UpdatedState { value: cell }
+/// A state holding the latest `value` this call was given, as Compose's
+/// `rememberUpdatedState(newValue)`: an effect started earlier (keyed on something else, a
+/// timeout) reads the newest callback through it. It's written during composition when the
+/// value changes (by [`same`](ComposeArg::same)), so a composable reading it recomposes then.
+pub fn remember_updated_state<T: ComposeArg + Clone>(value: T) -> crate::state::State<T> {
+    let state = crate::remember::remember(|| {
+        crate::state::mutable_state_of_with(value.clone(), crate::state::ReferentialEqualityPolicy)
+    });
+    state.set_while_composing(value);
+    state.as_state()
 }
 
 /// State a coroutine produces, as Compose's `produceState(initialValue, key) { … }`: starting at
