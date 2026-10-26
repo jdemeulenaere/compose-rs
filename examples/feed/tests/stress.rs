@@ -293,3 +293,85 @@ fn the_posts_text_is_laid_out_in_body_medium_at_the_kotlin_apps_width() {
     assert_eq!(tracking("Tile 1"), Some(Sp(0.4)));
     assert_eq!(tracking("Section 1"), Some(Sp(0.1)));
 }
+
+/// The `GROUP` records of a frame's bytes (`write_display_list`'s): each group's key, the
+/// version the replayer keeps its recording by, and its content's bytes.
+fn group_records(bytes: &[u8]) -> Vec<(u64, u64, Vec<u8>)> {
+    use compose_android::serialize::{LAYER_ENTRY_BYTES, tag};
+    let u32_at = |at: usize| u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap());
+    let u64_at = |at: usize| u64::from_le_bytes(bytes[at..at + 8].try_into().unwrap());
+    let mut at = 0;
+    if bytes.first() == Some(&tag::LAYERS) {
+        at = 5 + u32_at(1) as usize * LAYER_ENTRY_BYTES;
+    }
+    let mut records = Vec::new();
+    while bytes.get(at) == Some(&tag::GROUP) {
+        let (key, version, length) = (u64_at(at + 1), u64_at(at + 9), u32_at(at + 17) as usize);
+        records.push((key, version, bytes[at + 21..at + 21 + length].to_vec()));
+        at += 21 + length;
+    }
+    records
+}
+
+/// At parity, the expanded card lays its text out in four lines and draws it whole within its
+/// grown clip once its size animation ends, as Compose's. Its column's record keeps the bytes
+/// and the version of the frame that expanded it, when the column was still one line high
+/// (D323: its content didn't change, only its size), so Android keeps the recording made then.
+/// A paragraph's drawing mustn't depend on the size of the recording it's drawn into: before
+/// D646 the Pixel 8 Pro's card kept the two lines that fitted it then (`Layout.draw` draws
+/// only the lines within the canvas's clip bounds).
+#[test]
+fn the_expanded_card_lays_out_and_draws_its_four_lines() {
+    use compose::ui::platform::DrawOp;
+    use compose::ui::platform::Optimizations;
+    use compose_android::serialize::{GroupCache, Resources, Writer, write_display_list};
+    use_optimizations(Optimizations::NONE);
+    let mut ui = phone(StressAnimation);
+    let (mut resources, mut cache, mut bytes) =
+        (Resources::default(), GroupCache::default(), Writer::default());
+    // Each frame's bytes, as the view writes them for the replayer.
+    let mut write = |ui: &mut ComposeTestRule| {
+        ui.host().with_tree(|tree| {
+            write_display_list(tree.display_list(), &mut resources, &mut cache, &mut bytes)
+        });
+        resources.collect();
+        resources.write_pending(&mut Writer::default());
+        group_records(&bytes.bytes)
+    };
+    let more = "Reading about incremental computation";
+    while ui.count_nodes(&has_text_containing(more)) == 0 {
+        ui.advance_time_by_frame();
+        write(&mut ui);
+    }
+    let text = ui.on_node(has_text_containing(more)).node_id();
+    let column = ui.host().with_tree(|tree| tree.parent_of(text)).expect("the card's column");
+    let height =
+        |ui: &mut ComposeTestRule| ui.host().with_tree(|tree| tree.bounds_in_root(column).height());
+    let record = |records: Vec<(u64, u64, Vec<u8>)>| {
+        records.into_iter().find(|(key, ..)| *key == column.to_bits()).expect("its record")
+    };
+    let expanding = record(write(&mut ui));
+    // Still the collapsed card's height: a title and a line, 12 dp above and below.
+    assert_eq!(height(&mut ui), (27 + 45 + 45 + 27) as f32);
+    for _ in 0..40 {
+        ui.advance_time_by_frame();
+        write(&mut ui);
+    }
+    // The text: four lines of 20 sp (45 px).
+    let bounds = ui.on_node(has_text_containing(more)).fetch_semantics_node().bounds;
+    assert_eq!(bounds.bottom - bounds.top, 4.0 * 45.0);
+    let expanded = height(&mut ui);
+    assert_eq!(expanded, (27 + 45 + 4 * 45 + 27) as f32);
+    // Drawn whole, within the column's clip at its grown size.
+    let list = ui.host().with_tree(|tree| tree.display_list().flatten());
+    let clip = list.ops.iter().find_map(|op| match op {
+        DrawOp::ClipRect(rect) if rect.width() == 936.0 && rect.height() > 200.0 => Some(*rect),
+        _ => None,
+    });
+    assert_eq!(clip.map(|clip| clip.height()), Some(expanded));
+    let paragraphs = list.ops.iter().filter(|op| matches!(op, DrawOp::DrawParagraph(..)));
+    assert!(paragraphs.count() > 0);
+    // The record Android recorded at the collapsed size is the one it keeps.
+    let grown = record(write(&mut ui));
+    assert_eq!((grown.1, &grown.2), (expanding.1, &expanding.2));
+}

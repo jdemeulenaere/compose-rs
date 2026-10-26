@@ -116,10 +116,14 @@ pub fn StressScroll() {
     MaterialTheme!(color_scheme = color_scheme, {
         Scaffold!(
             top_bar = {
-                TopAppBar!({
-                    Text!("Stress");
-                });
+                TopAppBar!(
+                    {
+                        Text!("Stress");
+                    },
+                    window_insets = crate::top_app_bar_window_insets()
+                );
             },
+            content_window_insets = crate::scaffold_content_window_insets(),
             |padding: PaddingValues| {
                 LazyColumn!(
                     modifier = Modifier.padding(padding).fill_max_size(),
@@ -437,10 +441,14 @@ pub fn StressAnimation() {
     MaterialTheme!(color_scheme = color_scheme, {
         Scaffold!(
             top_bar = {
-                TopAppBar!({
-                    Text!("Stress animation");
-                });
+                TopAppBar!(
+                    {
+                        Text!("Stress animation");
+                    },
+                    window_insets = crate::top_app_bar_window_insets()
+                );
             },
+            content_window_insets = crate::scaffold_content_window_insets(),
             |padding: PaddingValues| {
                 Column!(
                     modifier = Modifier.padding(padding).fill_max_size().padding(16.dp()),

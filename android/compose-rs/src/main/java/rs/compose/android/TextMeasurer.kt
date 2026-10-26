@@ -59,6 +59,12 @@ internal class TextMeasurer(
      * ([restyle]), and puts them back.
      */
     private val paints = HashMap<PaintStyle, TextPaint>()
+    /**
+     * The canvas layouts draw on ([drawInPaint]), around the one they're drawn into, as
+     * Compose's shared `TextAndroidCanvas`: its clip bounds reach past the bottom, so a layout
+     * draws all its lines, not only those within a recording's size when it was recorded (D646).
+     */
+    private val textCanvas = TextAndroidCanvas()
 
     /** What of a text style its paint holds: the key of [paints]. */
     private data class PaintStyle(
@@ -714,9 +720,12 @@ internal class TextMeasurer(
     /**
      * Draws [layout] in paragraph [handle]'s paint: a layout given a new paint ([restyle]) still
      * holds the old one, whose color and decoration are swapped for the drawing (a recording
-     * copies them), then put back (other layouts of that style share it).
+     * copies them), then put back (other layouts of that style share it). Every line is drawn,
+     * whatever [target]'s clip, through [textCanvas] (D646).
      */
-    private fun drawInPaint(handle: Int, layout: Layout, canvas: Canvas) {
+    private fun drawInPaint(handle: Int, layout: Layout, target: Canvas) {
+        textCanvas.setCanvas(target)
+        val canvas: Canvas = textCanvas
         val wanted = intrinsics.get(handle)?.paint
         val held = layout.paint
         if (wanted == null || wanted === held) {

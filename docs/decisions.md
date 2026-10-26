@@ -21,10 +21,10 @@ The log is split by area into the files below, one table each, rows in number or
 | [ui-and-layout](decisions/ui-and-layout.md) | Modifiers and nodes, layout and intrinsics, drawing in the tree, input, focus, semantics, animation, Material 3, navigation, platform values. | 84 |
 | [text](decisions/text.md) | Text measurement and layout on each platform, fonts, text fields and editing. | 26 |
 | [lazy-and-prefetch](decisions/lazy-and-prefetch.md) | Lazy lists and grids, item reuse, the policy of composing only what is in view, prefetch. | 64 |
-| [android-drawing](decisions/android-drawing.md) | The display list and its replayer, render nodes and repaint boundaries, paths, shadows, layers. | 25 |
+| [android-drawing](decisions/android-drawing.md) | The display list and its replayer, render nodes and repaint boundaries, paths, shadows, layers. | 26 |
 | [android-host-and-performance](decisions/android-host-and-performance.md) | The view and activity glue, the frame loop, the hint session, jank, startup, memory, and the optimization flags. | 25 |
 | [desktop](decisions/desktop.md) | The desktop host: window, Skia rendering, input and events. | 6 |
-| [benchmarks](decisions/benchmarks.md) | The benchmark apps, protocols and rounds, and how results are read. | 29 |
+| [benchmarks](decisions/benchmarks.md) | The benchmark apps, protocols and rounds, and how results are read. | 30 |
 | [api-and-tooling](decisions/api-and-tooling.md) | Names, crates and modules, semver, the edit-build loop, testing and documentation, the toolchain's and dependencies' versions. | 26 |
 
 ## Index by number
@@ -414,3 +414,5 @@ The log is split by area into the files below, one table each, rows in number or
 | D643 | [benchmarks](decisions/benchmarks.md#d643) | current |
 | D644 | [benchmarks](decisions/benchmarks.md#d644) | current |
 | D645 | [benchmarks](decisions/benchmarks.md#d645) | current |
+| D646 | [android-drawing](decisions/android-drawing.md#d646) | current |
+| D647 | [benchmarks](decisions/benchmarks.md#d647) | current |

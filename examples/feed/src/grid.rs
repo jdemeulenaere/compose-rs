@@ -30,10 +30,14 @@ pub fn GridScreen() {
     MaterialTheme!(color_scheme = color_scheme, {
         Scaffold!(
             top_bar = {
-                TopAppBar!({
-                    Text!("Grid");
-                });
+                TopAppBar!(
+                    {
+                        Text!("Grid");
+                    },
+                    window_insets = crate::top_app_bar_window_insets()
+                );
             },
+            content_window_insets = crate::scaffold_content_window_insets(),
             |padding: PaddingValues| {
                 LazyVerticalGrid!(
                     GridCells::Adaptive(100.dp()),
