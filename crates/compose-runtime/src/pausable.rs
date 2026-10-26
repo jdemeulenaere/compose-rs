@@ -1088,7 +1088,7 @@ pub(crate) fn cancel(id: CompositionId, state: &Rc<Cell<PausedState>>, invalidat
         flatten(&mut paused.segments, 0, &mut flat);
         let applier = data.applier.clone();
         for scope in enclosing {
-            invalidate_scope_parts(scopes, compositions, frame_requests, scope, None);
+            invalidate_scope_parts(scopes, compositions, frame_requests, None, scope, None);
         }
         Some((paused, removals, flat, applier, true))
     })

@@ -557,3 +557,37 @@ fn an_unchanged_derived_state_leaves_no_invalidation_behind() {
     assert!(!test.composition().has_invalidations());
     test.verify_consistent();
 }
+
+// Compose: compose/runtime/runtime/src/nonEmulatorCommonTest/kotlin/androidx/compose/runtime/CompositionAndDerivedStateTests.kt, writingToADerivedStateDependencyTriggersAForwardInvalidate
+#[test]
+fn writing_a_derived_state_dependency_in_composition_invalidates_forward() {
+    #[composable]
+    fn Content(a: MutableState<i32>, b: MutableState<i32>, d: State<i32>) {
+        DisplayIndirect("d", d);
+        let c = remember(|| mutable_state_of(0));
+        c.set(a.get() + b.get());
+        let e = remember(move || derived_state_of(move || a.get() + b.get() + c.get()));
+        DisplayIndirect("e", e);
+    }
+    let mut test = composition_test();
+    let (a, b) = (mutable_state_of(12), mutable_state_of(30));
+    let (ah, bh) = (a.handle(), b.handle());
+    let d = derived_state_of(move || ah.get() + bh.get());
+    let ds = d.as_state();
+    test.compose(move || Content(ah, bh, ds));
+    test.validate(move |v| {
+        let (a, b) = (ah.get(), bh.get());
+        v.text(&format!("d = {}", a + b));
+        v.text(&format!("e = {}", a + b + a + b));
+    });
+    a.update(|a| a + 1);
+    test.expect_changes();
+    test.revalidate();
+    b.update(|b| b - 1);
+    test.expect_changes();
+    test.revalidate();
+    a.update(|a| a + 1);
+    b.update(|b| b - 1);
+    test.advance();
+    test.revalidate();
+}

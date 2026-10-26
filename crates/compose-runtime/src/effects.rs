@@ -163,7 +163,7 @@ pub fn remember_updated_state<T: ComposeArg + Clone>(value: T) -> crate::state::
     let state = crate::remember::remember(|| {
         crate::state::mutable_state_of_with(value.clone(), crate::state::ReferentialEqualityPolicy)
     });
-    state.set_while_composing(value);
+    state.set(value);
     state.as_state()
 }
 

@@ -27,9 +27,9 @@ impl NodeRef {
 ///
 /// The runtime calls it during a pass (insertions, moves and removals, top-down, as composition
 /// reaches them) and at the end of the pass (releases), never while the runtime itself is busy.
-/// During the pass an applier runs as part of composition: it may read state, but writing state
-/// then is a misuse, as it is for composables. Releases run after composition, so the nodes it
-/// drops may own state and write it.
+/// During the pass an applier runs as part of composition: a state it writes then is a write
+/// during composition (allowed, as in Compose, D703: a composable that read it before
+/// recomposes in the next pass). Releases run after composition.
 pub trait Applier: 'static {
     /// The type of the nodes the composition emits.
     type Node: 'static;

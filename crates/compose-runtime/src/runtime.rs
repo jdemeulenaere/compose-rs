@@ -221,16 +221,82 @@ pub(crate) fn frames_requested(runtime: &Runtime) -> bool {
 
 /// Marks a scope invalid and its ancestors dirty. Returns whether a frame request was queued.
 pub(crate) fn invalidate_scope(runtime: &mut Runtime, id: ScopeId) -> bool {
-    let Runtime { scopes, compositions, frame_requests, .. } = runtime;
-    invalidate_scope_parts(scopes, compositions, frame_requests, id, None)
+    let Runtime { scopes, compositions, frame_requests, active, frames, .. } = runtime;
+    let pass = PassFrames::of(*active, frames);
+    invalidate_scope_parts(scopes, compositions, frame_requests, pass, id, None)
+}
+
+/// The frames of the pass composing now, for an invalidation made during it to tell whether the
+/// pass will still reach the scope.
+pub(crate) struct PassFrames<'a> {
+    pub composition: u32,
+    pub frames: &'a mut [Frame],
+}
+
+impl PassFrames<'_> {
+    /// The composing pass's frames, if one is composing.
+    pub fn of(active: Option<ActivePass>, frames: &mut [Frame]) -> Option<PassFrames<'_>> {
+        match active {
+            Some(ActivePass { composition, composing: true }) => {
+                Some(PassFrames { composition: composition.index, frames })
+            }
+            _ => None,
+        }
+    }
+}
+
+/// Where the pass composing now will reach `group`: the depth of the innermost open frame above
+/// it, and that frame's child holding it, if that child is still ahead of the frame's cursor
+/// (an old child not reached yet). `None` if the pass has gone past it, won't go into it
+/// (skipped, or new content), or is inside it.
+fn ahead_of_the_pass(table: &SlotTable, frames: &[Frame], group: u32) -> Option<(usize, u32)> {
+    // The frames are the path from the sentinel to the group composing now: the innermost open
+    // ancestor of `group` is the deepest match walking up from it.
+    let mut depth = 0;
+    let mut ancestor = table[group].parent;
+    while ancestor != NONE {
+        depth += 1;
+        ancestor = table[ancestor].parent;
+    }
+    let (mut child, mut current) = (NONE, group);
+    loop {
+        if depth < frames.len() && frames[depth].group == current {
+            break;
+        }
+        if depth == 0 {
+            return None;
+        }
+        child = current;
+        current = table[current].parent;
+        depth -= 1;
+    }
+    if child == NONE {
+        // The group is open: its body runs now (or ran).
+        return None;
+    }
+    let mut pending = frames[depth].cursor;
+    while pending != NONE {
+        if pending == child {
+            return Some((depth, child));
+        }
+        pending = table[pending].next_sibling;
+    }
+    None
 }
 
 /// Marks a scope invalid, outright or (with `condition`) only if that derived state's value
 /// changed, and its ancestors dirty. Returns whether a frame request was queued.
+///
+/// During a pass of the scope's composition (a state written during composition, D703), a
+/// scope the pass will still reach is invalidated for it (Compose's imminent invalidation): the
+/// groups between it and the open frame above are marked dirty, not the open ones, and no frame
+/// is asked for. One the pass has gone past, or is running, recomposes in the next pass, which
+/// its dirty ancestors and a frame request ask for, as Compose's deferred invalidation.
 pub(crate) fn invalidate_scope_parts(
     scopes: &mut Scopes,
     compositions: &mut Compositions,
     frame_requests: &mut Vec<Rc<dyn Fn()>>,
+    pass: Option<PassFrames<'_>>,
     id: ScopeId,
     condition: Option<crate::state::StateId>,
 ) -> bool {
@@ -273,6 +339,19 @@ pub(crate) fn invalidate_scope_parts(
         if paused.state.get() == crate::pausable::PausedState::ApplyPending {
             paused.state.set(crate::pausable::PausedState::RecomposePending);
         }
+        return false;
+    }
+    if let Some(pass) = pass
+        && pass.composition == scope.composition
+        && let Some((depth, child)) = ahead_of_the_pass(table, pass.frames, scope.group)
+    {
+        let mut group = scope.group;
+        while group != child {
+            group = table[group].parent;
+            table[group].dirty = true;
+        }
+        // A body skipping later walks into it.
+        pass.frames[depth].dirty = true;
         return false;
     }
     let mut group = table[scope.group].parent;

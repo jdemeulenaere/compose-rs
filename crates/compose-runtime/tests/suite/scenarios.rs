@@ -747,16 +747,27 @@ fn update_and_edit() {
     assert!(composition.has_invalidations(), "never-equal policy invalidates equal writes");
 }
 
-#[cfg(debug_assertions)]
+/// A write during composition is allowed, as Compose's (D703): a scope writing a state it read
+/// recomposes in the next pass, until the value settles.
 #[test]
-fn writing_state_during_composition_panics() {
+fn a_scope_writing_what_it_read_recomposes_in_the_next_pass() {
     let composition = new_composition();
     let state = mutable_state_of(0);
     let handle = state.handle();
-    let result = catch_unwind(AssertUnwindSafe(|| composition.set_content(move || handle.set(1))));
-    let message = panic_message(result.expect_err("panics"));
-    assert!(message.contains("during composition"), "{message}");
-    assert!(composition.is_poisoned());
+    composition.set_content(move || {
+        let value = handle.get();
+        log(format!("value {value}"));
+        if value < 3 {
+            handle.set(value + 1);
+        }
+    });
+    assert_eq!(take_log(), ["value 0"]);
+    assert!(composition.recompose());
+    assert!(composition.recompose());
+    assert!(composition.recompose());
+    assert!(!composition.recompose(), "settled");
+    assert_eq!(take_log(), ["value 1", "value 2", "value 3"]);
+    assert_eq!(state.get(), 3);
 }
 
 struct Observer(&'static str);

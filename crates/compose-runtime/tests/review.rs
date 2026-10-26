@@ -243,23 +243,28 @@ impl Applier for CountingApplier {
     }
 }
 
-/// Insertions and moves are applied during composition (D31), so an applier is composable code:
-/// it may read state, but writing it then is a misuse (debug panic). Nodes it releases at the end
-/// of the pass drop outside composition, and may write state.
-#[cfg(debug_assertions)]
+/// Insertions and moves are applied during composition (D31), so an applier writing state
+/// writes during composition, which is allowed as in Compose (D703): a composable that read the
+/// state before (here the one composing) recomposes in the next pass.
 #[test]
-fn an_applier_writing_state_during_composition_is_a_misuse() {
+fn an_applier_writing_state_during_composition_recomposes_its_readers_next() {
     let inserted = mutable_state_of(0u32);
-    let composition =
-        Composition::new(CountingApplier { tree: Tree::new(), inserted: inserted.handle() });
-    let result = catch_unwind(AssertUnwindSafe(|| {
-        composition.set_content(|| {
-            let composer = current();
-            composer.start_node(key_of("review::CountedLeaf"), || Label("x".into()));
-            composer.end_group();
-        })
-    }));
-    assert!(panic_message(result.expect_err("a misuse")).contains("during composition"));
+    let handle = inserted.handle();
+    let composition = Composition::new(CountingApplier { tree: Tree::new(), inserted: handle });
+    let runs = Rc::new(Cell::new(0));
+    let counted = runs.clone();
+    composition.set_content(move || {
+        counted.set(counted.get() + 1);
+        handle.get();
+        let composer = current();
+        composer.start_node(key_of("review::CountedLeaf"), || Label("x".into()));
+        composer.end_group();
+    });
+    assert_eq!((inserted.get(), runs.get()), (1, 1));
+    assert!(composition.has_invalidations(), "the reader recomposes in the next pass");
+    assert!(composition.recompose());
+    assert_eq!((inserted.get(), runs.get()), (1, 2));
+    assert!(!composition.recompose());
 }
 
 // ---- Finding 8: a stale handle's panic loses the creation site once its slot is reused -------

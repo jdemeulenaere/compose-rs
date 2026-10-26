@@ -15,7 +15,7 @@ use std::panic::Location;
 use std::rc::Rc;
 
 use crate::runtime::{
-    Runtime, invalidate_scope_parts, request_frames, try_with_runtime, with_runtime,
+    PassFrames, Runtime, invalidate_scope_parts, request_frames, try_with_runtime, with_runtime,
 };
 use crate::scope::{ScopeId, Scopes};
 
@@ -442,17 +442,13 @@ fn try_write_cell(id: StateId, at: &'static Location<'static>) -> Result<Rc<dyn 
         .unwrap_or(Err(Stale { created_at: None }))
 }
 
+/// A write during composition is allowed, as Compose's (D703): it invalidates the readers, the
+/// ones the pass will still reach in this pass.
 fn write_cell_in(
     runtime: &mut Runtime,
     id: StateId,
-    at: &'static Location<'static>,
+    _at: &'static Location<'static>,
 ) -> Result<Rc<dyn Any>, Stale> {
-    if cfg!(debug_assertions) && runtime.is_composing() {
-        panic!(
-            "compose-runtime: state written at {at} during composition; composition must be a \
-             pure function of state: write in a handler or an effect"
-        );
-    }
     let entry = runtime.cells.entry(id)?;
     Ok(entry.cell.clone().expect("a live cell"))
 }
@@ -473,7 +469,9 @@ fn invalidate_readers(id: StateId) {
 /// state nobody reads stays dirty, computed by its next read only.
 pub(crate) fn invalidate_readers_except(id: StateId, skip: ScopeId) {
     let (requested, flush) = with_runtime(|runtime| {
-        let Runtime { cells, scopes, compositions, frame_requests, observers, .. } = runtime;
+        let Runtime {
+            cells, scopes, compositions, frame_requests, observers, active, frames, ..
+        } = runtime;
         let Ok(entry) = cells.entry(id) else {
             return (false, false);
         };
@@ -487,6 +485,7 @@ pub(crate) fn invalidate_readers_except(id: StateId, skip: ScopeId) {
                     scopes,
                     compositions,
                     frame_requests,
+                    PassFrames::of(*active, frames),
                     reader.scope,
                     None,
                 );
@@ -534,6 +533,7 @@ pub(crate) fn invalidate_readers_except(id: StateId, skip: ScopeId) {
                     scopes,
                     compositions,
                     frame_requests,
+                    PassFrames::of(*active, frames),
                     reader.scope,
                     Some(cell),
                 );
@@ -846,11 +846,9 @@ impl<T: 'static> MutableState<T> {
         f(&value)
     }
 
-    /// Writes the value, invalidating the readers unless the policy finds it equivalent.
-    ///
-    /// # Panics
-    ///
-    /// In debug builds, during composition (composition must be a pure function of state).
+    /// Writes the value, invalidating the readers unless the policy finds it equivalent. During
+    /// composition too, as in Compose (D703): a reader the pass will still reach recomposes in
+    /// it, one it has passed (a backward write) in the next pass.
     #[track_caller]
     pub fn set(&self, value: T) {
         let at = Location::caller();
@@ -973,22 +971,6 @@ impl<T: 'static> MutableState<T> {
         if self.write_with(value, at, lookup).unwrap_or_else(|error| stale(error, at)) {
             let skip = with_runtime(|runtime| runtime.reading_scope());
             invalidate_readers_except(self.id, skip);
-        }
-    }
-
-    /// Writes the value during composition, invalidating its readers: for a composition local's
-    /// provider, whose readers are its descendants, which recompose later in the same pass.
-    #[track_caller]
-    pub(crate) fn set_while_composing(&self, value: T) {
-        let at = Location::caller();
-        let lookup: CellLookup = |id, _| {
-            with_runtime(|runtime| {
-                let entry = runtime.cells.entry(id)?;
-                Ok(entry.cell.clone().expect("a live cell"))
-            })
-        };
-        if self.write_with(value, at, lookup).unwrap_or_else(|error| stale(error, at)) {
-            invalidate_readers(self.id);
         }
     }
 

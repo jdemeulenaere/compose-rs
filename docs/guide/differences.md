@@ -27,7 +27,6 @@ The known differences from Jetpack Compose that an app will run into, distilled 
 
 ## Runtime and state
 
-- **Writing state during composition panics** (Compose allows it with caveats).
 - **No snapshot isolation.** Writes are seen at once; there's no `Snapshot` API, no `snapshotFlow`, and no Flow integration (`collectAsState`): collect in a `LaunchedEffect` and write state ([docs/05](../05-state.md#snapshots)).
 - **Coroutines are Rust futures** on a UI-thread executor, with `delay`, `with_frame_nanos` and cancellation by dropping. There are no dispatchers: blocking work goes through `spawn_background`, a thread pool taking a `Send` closure, and work already running isn't interrupted when its task is cancelled (D231). State handles are `!Send`: everything touching state runs on the UI thread.
 - **No subcomposition.** Content Compose composes while measuring (lazy items, `BoxWithConstraints`) is composed for what the measurement asks, then the frame recomposes and measures again, up to three rounds. `BoxWithConstraints` usually composes once, from a hint of its constraints (D142); lazy lists compose ahead between frames (D156). There's no `SubcomposeLayout`.

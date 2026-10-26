@@ -137,6 +137,6 @@ fn start_provider<T: Clone + ComposeArg + 'static>(value: ProvidedValue<T>) -> R
             value: mutable_state_of_with(value.clone(), ReferentialEqualityPolicy),
         })
     });
-    slot.value.handle().set_while_composing(value);
+    slot.value.handle().set(value);
     group
 }

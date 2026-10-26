@@ -343,9 +343,9 @@ fn exiting_entry_back_handler_takes_back() {
     );
 }
 
-/// Navigating while composing is a state write during composition: debug builds panic.
+/// Navigating while composing is a state write during composition, allowed as in Compose
+/// (D703): the host shows the new destination at the next pass.
 #[test]
-#[cfg_attr(debug_assertions, should_panic(expected = "during composition"))]
 fn navigate_in_composition() {
     let mut ui = compose_test(|| {
         let nav_controller = remember_nav_controller(Screen::Home);
@@ -359,6 +359,8 @@ fn navigate_in_composition() {
         });
     });
     ui.wait_for_idle();
+    assert_eq!(nav().current_destination(), Screen::Settings);
+    ui.on_node_with_text("other").assert_exists();
 }
 
 /// A redirect goes in an effect.
