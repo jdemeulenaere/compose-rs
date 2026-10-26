@@ -321,6 +321,18 @@ impl Modifier {
         self.then_element(Element::Clickable(options.into_clickable(action)))
     }
 
+    /// A toggle of three states (a checkbox for a group: on, off or partly on): a click calls
+    /// `on_click`, and its semantics say its `state`, as `Modifier.triStateToggleable`.
+    pub fn tri_state_toggleable_with(
+        self,
+        state: crate::semantics::ToggleableState,
+        options: ClickableOptions,
+        on_click: impl IntoCallback<dyn Fn()>,
+    ) -> Modifier {
+        self.semantics(|config| config.toggleable_state = Some(state))
+            .clickable_with(options, on_click)
+    }
+
     /// A selectable item (a radio button, a tab): a click calls `on_click`, and its semantics
     /// say whether it's `selected`, as `Modifier.selectable`.
     pub fn selectable(self, selected: bool, on_click: impl IntoCallback<dyn Fn()>) -> Modifier {

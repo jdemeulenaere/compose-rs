@@ -562,6 +562,7 @@ One entry per feature, in the suggested order (below, after the entries). Sizes:
 
 **3.28 `paint-and-draw-style`** — L.
 - *API:* Compose's `Paint` (alpha, blend mode, color filter, filter quality, anti-alias, path effect, stroke join, miter, style), `DrawStyle`/`Fill`/`Stroke`, `PathEffect` (dash, corner, chain, stamped), `PointMode`, `ClipOp`, `FilterQuality`, and Compose-shaped `DrawScope` calls (color or brush, `topLeft`/`size`, `alpha`, `style`, `colorFilter`, `blendMode`), `drawPoints`, `drawRoundRect(cornerRadius)`, `withTransform`/`DrawTransform`, `rotateRad`, the `inset` and uniform `scale` overloads, clips with `ClipOp.Difference`, `drawIntoCanvas`, `DrawContext`, `Modifier.scale(scaleX, scaleY)`.
+- *Has:* `Stroke { width, cap }` (D1009, for the checkbox's strokes: no join or miter yet, the renderers' miter).
 - *Does:* the full drawing vocabulary. Each addition is a `DrawOp` (or paint field) that both renderers replay: Skia on desktop, the Kotlin replayer on Android (docs/07, docs/13).
 - *Tests:* PaintTest; completes DrawScopeTest, AndroidCanvasTest.
 - *Depends on:* 3.30 for blend modes and color filters; 3.1 (`CornerRadius`, `Size`). Foundation's `border` with a brush (missing, docs/11) and `Canvas` users.

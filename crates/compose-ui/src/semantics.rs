@@ -64,6 +64,12 @@ pub enum ToggleableState {
     Indeterminate,
 }
 
+impl compose_runtime::ComposeArg for ToggleableState {
+    fn same(&self, other: &Self) -> bool {
+        self == other
+    }
+}
+
 impl From<bool> for ToggleableState {
     fn from(value: bool) -> ToggleableState {
         if value { ToggleableState::On } else { ToggleableState::Off }

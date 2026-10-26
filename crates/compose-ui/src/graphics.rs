@@ -483,6 +483,32 @@ impl compose_runtime::ComposeArg for StrokeCap {
     }
 }
 
+/// A stroke's style, as Compose's `Stroke` draw style: its width in pixels and its ends (its
+/// join is the renderer's default, a miter, as `Stroke.DefaultJoin`).
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct Stroke {
+    pub width: f32,
+    pub cap: StrokeCap,
+}
+
+impl Stroke {
+    /// A `width` pixels stroke with flat ends, as `Stroke(width)`.
+    pub const fn new(width: f32) -> Stroke {
+        Stroke { width, cap: StrokeCap::Butt }
+    }
+
+    /// The paint stroking with it in `color`.
+    pub fn paint(self, color: Color) -> Paint {
+        Paint::stroke_with(color, self.width, self.cap)
+    }
+}
+
+impl compose_runtime::ComposeArg for Stroke {
+    fn same(&self, other: &Self) -> bool {
+        self == other
+    }
+}
+
 /// What a draw operation paints with, as a subset of Compose's `Paint`.
 ///
 /// A paint with a `shader` (a gradient, from `DrawScope::brush_paint`) paints with it; its

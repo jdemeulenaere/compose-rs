@@ -15,6 +15,7 @@ extern crate compose_runtime as compose;
 mod anchored;
 mod app_bar;
 mod button;
+mod checkbox;
 mod chips;
 mod components;
 mod dialog;
@@ -45,12 +46,12 @@ pub use button::{
     Button, ButtonColors, ButtonDefaults, ButtonElevation, ElevatedButton, FilledTonalButton,
     OutlinedButton, TextButton,
 };
+pub use checkbox::{Checkbox, CheckboxColors, CheckboxDefaults, TriStateCheckbox};
 pub use chips::{AssistChip, Badge, BadgedBox, FilterChip, SuggestionChip};
 pub use components::{
-    AnnotatedText, Checkbox, CheckboxColors, CheckboxDefaults, ClickableSurface,
-    LOCAL_ABSOLUTE_TONAL_ELEVATION, LOCAL_MINIMUM_INTERACTIVE_COMPONENT_SIZE,
-    MINIMUM_INTERACTIVE_SIZE, SelectableSurface, Surface, Text, TextFieldColors, TextFieldDefaults,
-    minimum_interactive_component_size,
+    AnnotatedText, ClickableSurface, LOCAL_ABSOLUTE_TONAL_ELEVATION,
+    LOCAL_MINIMUM_INTERACTIVE_COMPONENT_SIZE, MINIMUM_INTERACTIVE_SIZE, SelectableSurface, Surface,
+    Text, TextFieldColors, TextFieldDefaults, minimum_interactive_component_size,
 };
 pub use dialog::{AlertDialog, DropdownMenu, DropdownMenuItem};
 pub use drawer::{

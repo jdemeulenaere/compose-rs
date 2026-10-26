@@ -88,28 +88,47 @@ fn screen() -> (UiHost, OwnedState<bool>) {
     (host, checked)
 }
 
-/// A checkbox toggled back and forth: once warm, a frame that recomposes it allocates
-/// nothing, as compose-ui's frames that recompose and update modifiers (allocations.rs).
-/// Here each toggle allocates 7 times: every recomposition of a `Checkbox` allocates its
-/// modifier chain (more than four elements spill the inline `SmallVec`) and the `Rc`s of its
-/// two custom elements (`minimum_interactive_component_size`, the checkbox's drawing).
+/// Frames 16 ms apart on a manual clock until nothing animates (at most 2 s).
+fn settle_animations(host: &mut UiHost) {
+    for _ in 0..125 {
+        if !host.needs_frame() {
+            return;
+        }
+        compose_runtime::platform::advance_clock(std::time::Duration::from_millis(16));
+        host.frame();
+    }
+    panic!("the animations never ended");
+}
+
+/// A checkbox toggled back and forth: once warm, each toggle's frames allocate a bounded number
+/// of times and keep nothing, and an idle frame allocates nothing, as compose-ui's frames that
+/// recompose and update modifiers (allocations.rs). The checkbox animates as Compose's (D1009):
+/// a toggle starts five animations (its check mark's two, its three colors'), whose launches
+/// and frames allocate in compose-animation (a few allocations a frame for each running
+/// animation, as a `Switch`'s thumb or an `animate_color_as_state`): about 110 a toggle, all
+/// freed.
 #[test]
-fn toggling_a_checkbox_allocates_nothing_once_warm() {
+fn toggling_a_checkbox_allocates_a_bounded_amount_once_warm() {
+    compose_runtime::platform::set_manual_clock(0);
     let (mut host, checked) = screen();
     for round in 0..4 {
         checked.set(round % 2 == 0);
-        host.settle(10);
+        settle_animations(&mut host);
     }
+    let live = LIVE_BYTES.with(Cell::get);
     let before = allocations();
     for round in 0..10 {
         checked.set(round % 2 == 0);
-        host.settle(10);
+        settle_animations(&mut host);
     }
-    // A few per toggle, for what changed (the checkbox's drawing element is a new `Rc` when its
-    // state changes, D95), and none kept.
-    assert!(
-        allocations() - before <= 30,
-        "allocations over 10 toggles: {}",
-        allocations() - before
-    );
+    let toggles = allocations() - before;
+    assert!(toggles <= 1300, "allocations over 10 toggles: {toggles}");
+    // Back where it was: what the toggles allocated is freed (a little slack for buffers that
+    // grew once).
+    let grown = LIVE_BYTES.with(Cell::get) - live;
+    assert!(grown <= 4096, "live bytes grew by {grown}");
+    // At rest, a frame allocates nothing.
+    let before = allocations();
+    host.frame();
+    assert_eq!(allocations() - before, 0, "an idle frame allocated");
 }

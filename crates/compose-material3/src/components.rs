@@ -1,5 +1,5 @@
 //! Material 3 components: `Text`, `Surface` (and its clickable and selectable overloads),
-//! `Checkbox`, the text fields' colors, as Compose's, with their `…Defaults`.
+//! The text fields' colors, as Compose's, with their `…Defaults`.
 
 use compose_foundation::layout::Box;
 use compose_foundation::{BasicText, BorderStroke};
@@ -7,9 +7,8 @@ use compose_runtime::{CompositionLocalProvider, composable};
 use compose_ui::ClickableOptions;
 use compose_ui::DEFAULT_SHADOW_COLOR;
 use compose_ui::{
-    Alignment, Color, Dp, DrawModifierNode, DrawScope, FontWeight, Modifier, ModifierNode,
-    ModifierNodeElement, MutableInteractionSource, Offset, Paint, Rect, Role, Shape, SharedString,
-    TextStyle, TextUnit, UnitExt,
+    Alignment, Color, Dp, FontWeight, Modifier, ModifierNode, ModifierNodeElement,
+    MutableInteractionSource, Role, Shape, SharedString, Sp, TextStyle,
 };
 
 use crate::theme::{LOCAL_CONTENT_COLOR, MaterialTheme};
@@ -507,146 +506,6 @@ impl compose_ui::LayoutModifierNode for NegativePadding {
 pub fn minimum_interactive_component_size(modifier: Modifier) -> Modifier {
     let size = LOCAL_MINIMUM_INTERACTIVE_COMPONENT_SIZE.current();
     if size.is_specified() && size.0 > 0.0 { modifier.minimum_touch_target(size) } else { modifier }
-}
-
-// ---- Checkbox --------------------------------------------------------------------------------
-
-/// A checkbox's colors, as Compose's `CheckboxColors` (the enabled ones).
-#[derive(Clone, Copy, PartialEq, Debug)]
-pub struct CheckboxColors {
-    pub checked_box_color: Color,
-    pub checked_check_color: Color,
-    pub unchecked_border_color: Color,
-    pub disabled_color: Color,
-}
-
-impl compose_runtime::ComposeArg for CheckboxColors {
-    fn same(&self, other: &Self) -> bool {
-        self == other
-    }
-}
-
-pub struct CheckboxDefaults {}
-
-impl CheckboxDefaults {
-    pub fn colors() -> CheckboxColors {
-        let scheme = MaterialTheme::color_scheme();
-        CheckboxColors {
-            checked_box_color: scheme.primary,
-            checked_check_color: scheme.on_primary,
-            unchecked_border_color: scheme.on_surface_variant,
-            disabled_color: scheme.on_surface.with_alpha(0.38),
-        }
-    }
-}
-
-/// A checkbox, as Compose's: a 20 dp box in a 48 dp touch target, toggled by a click when
-/// `on_checked_change` is given.
-#[composable]
-pub fn Checkbox(
-    checked: bool,
-    on_checked_change: Option<impl Fn(bool) + 'static>,
-    #[default(crate::Modifier)] modifier: Modifier,
-    #[default(true)] enabled: bool,
-    #[default(crate::CheckboxDefaults::colors())] colors: CheckboxColors,
-) {
-    // As Compose's: the touch target only with a callback, then a 20 dp box whatever the size.
-    let modifier = match on_checked_change {
-        Some(on_checked_change) => {
-            // A circle around the box, as Compose's `ripple(bounded = false, 20.dp)`.
-            let indication = compose_ui::Indication::unbounded(
-                if checked { colors.checked_box_color } else { colors.unchecked_border_color },
-                20.dp(),
-            );
-            let options = ClickableOptions {
-                enabled,
-                role: Some(Role::Checkbox),
-                indication,
-                ..ClickableOptions::DEFAULT
-            };
-            minimum_interactive_component_size(modifier.toggleable_with(
-                checked,
-                options,
-                on_checked_change,
-            ))
-        }
-        None => modifier,
-    };
-    let modifier = modifier
-        .padding(2.dp())
-        .required_size((20.dp(), 20.dp()))
-        .then_custom(CheckboxElement { checked, enabled, colors });
-    compose_foundation::layout::Spacer(modifier);
-}
-
-struct CheckboxElement {
-    checked: bool,
-    enabled: bool,
-    colors: CheckboxColors,
-}
-
-impl ModifierNodeElement for CheckboxElement {
-    type Node = CheckboxNode;
-    fn create(&self) -> CheckboxNode {
-        CheckboxNode { checked: self.checked, enabled: self.enabled, colors: self.colors }
-    }
-    fn update(&self, node: &mut CheckboxNode) {
-        *node = CheckboxNode { checked: self.checked, enabled: self.enabled, colors: self.colors };
-    }
-    fn same(&self, other: &Self) -> bool {
-        other.checked == self.checked
-            && other.enabled == self.enabled
-            && other.colors == self.colors
-    }
-    fn name(&self) -> &'static str {
-        "checkbox"
-    }
-}
-
-struct CheckboxNode {
-    checked: bool,
-    enabled: bool,
-    colors: CheckboxColors,
-}
-
-impl ModifierNode for CheckboxNode {
-    fn as_draw(&mut self) -> Option<&mut dyn DrawModifierNode> {
-        Some(self)
-    }
-}
-
-impl DrawModifierNode for CheckboxNode {
-    fn draw(&mut self, scope: &mut DrawScope<'_>) {
-        let size = scope.size();
-        let density = scope.density();
-        let stroke = density.to_px(2.dp());
-        let radius = density.to_px(2.dp());
-        let colors = self.colors;
-        let box_rect = Rect::new(0.0, 0.0, size.width, size.height);
-        if self.checked {
-            let fill = if self.enabled { colors.checked_box_color } else { colors.disabled_color };
-            scope.draw_round_rect(box_rect, [radius; 4], Paint::fill(fill));
-            // Square ends, as Compose's check mark.
-            let check = Paint::stroke_with(
-                colors.checked_check_color,
-                stroke,
-                compose_ui::StrokeCap::Square,
-            );
-            let point = |x: f32, y: f32| Offset::new(size.width * x, size.height * y);
-            scope.draw_line(point(0.2, 0.5), point(0.4, 0.7), check);
-            scope.draw_line(point(0.4, 0.7), point(0.8, 0.3), check);
-        } else {
-            let border =
-                if self.enabled { colors.unchecked_border_color } else { colors.disabled_color };
-            let half = stroke / 2.0;
-            let inset = Rect::new(half, half, size.width - half, size.height - half);
-            scope.draw_round_rect(
-                inset,
-                [(radius - half).max(0.0); 4],
-                Paint::stroke(border, stroke),
-            );
-        }
-    }
 }
 
 // ---- TextField -------------------------------------------------------------------------------

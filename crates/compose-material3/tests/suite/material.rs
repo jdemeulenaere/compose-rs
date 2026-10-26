@@ -118,7 +118,9 @@ fn a_checkbox_toggles_in_a_touch_target() {
     let checked = mutable_state_of(false);
     let handle = checked.handle();
     let mut ui = compose_test(move || Screen(handle));
-    assert_eq!(bounds(&mut ui, "box").width(), 48.0);
+    // The box and its padding (24 dp) in its 48 dp touch target, as Compose's: the toggle is
+    // inside `minimumInteractiveComponentSize`, so its semantics bounds are the box's.
+    assert_eq!(bounds(&mut ui, "box").width(), 24.0);
     ui.on_node_with_tag("box").assert_is_off().perform_click();
     ui.on_node_with_tag("box").assert_is_on();
     assert!(checked.get());
