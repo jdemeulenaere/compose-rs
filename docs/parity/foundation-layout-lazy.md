@@ -31,8 +31,8 @@ By area: `foundation-layout` 29 files (850 tests); lazy lists, grids and `LazyLa
 |---|---|---|
 | `covered` | 13 | 132 |
 | `ported` | 9 | 170 |
-| `port` | 18 | 202 |
-| `partial` | 22 | 806 |
+| `port` | 17 | 186 |
+| `partial` | 23 | 822 |
 | `feature:<name>` | 113 | 1,686 |
 | `n/a` | 10 | 133 |
 | **Total** | **185** | **3,129** |
@@ -103,7 +103,7 @@ The table's suite references (`lazy_api.rs`, `fling.rs`, …) are files in `crat
 | compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/list/LazyListCacheWindowTest.kt | 18 | Cache window: initial fill, small scrolls fill the window, kept items not disposed or recomposed, dataset changes | feature:cache-window |
 | compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/list/LazyListFocusMoveCompositionCountTest.kt | 6 | A focus move beyond bounds composes a bounded number of items (various sizes, nesting) | covered (`review_d475.rs::tab_past_unfocusable_rows_finds_the_next_and_leaves_few_composed`, `review_d486.rs`, `lazy.rs::tab_lays_out_the_next_row…`; port the large and different-size cases) |
 | compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/list/LazyListFocusMoveTest.kt | 9 | 2D and 1D focus moves among visible, just-beyond, far and nested items, with user scroll off | covered (`lazy.rs` tab and move-focus tests, `review_d475.rs`, `review_d479.rs`; the `userScrollEnabled = false` variants are worth porting) |
-| compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/list/LazyListHeadersTest.kt | 16 | Sticky headers: shown, replaced, pushed, with pinned items, in the content padding, empty header | port (`lazy_api.rs` 5 sticky tests, `review_api_d.rs` 2; 12 tests use `layoutInfo` (feature:lazy-layout-info), some use `beyondBoundsItemCount` (internal)) |
+| compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/list/LazyListHeadersTest.kt | 16 | Sticky headers: shown, replaced, pushed, with pinned items, in the content padding, empty header | partial (`lazy_list_headers.rs`: 7 tests porting 10. Left: the two `beyondBoundsItemCount = 1` tests and the three focus tests, which compose every item with it (internal: drop, or rewrite them to scroll first), and `withPinnedItem` (needs `LocalPinnableContainer`: feature:pinnable)) |
 | compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/list/LazyListItemAppearanceAnimationTest.kt | 10 | `animateItem` fade-in | feature:animate-item |
 | compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/list/LazyListItemDisappearanceAnimationTest.kt | 12 | `animateItem` fade-out, container size during removal | feature:animate-item |
 | compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/list/LazyListItemPlacementAnimationTest.kt | 50 | `animateItem` placement on reorders and size changes | feature:animate-item |
