@@ -15,12 +15,13 @@ use crate::text_input::{
     ImeAction, KeyboardActions, KeyboardOptions, OffsetMapping, VisualTransformation,
 };
 use compose_ui::{
-    AnyModifierNodeElement, Color, Constraints, DrawModifierNode, DrawScope, EventContext,
-    FocusTargetModifierNode, IntSize, IntrinsicMeasureScope, Key, KeyEvent, KeyEventType,
-    KeyInputModifierNode, Layout, LayoutModifierNode, Measurable, MeasureResult, MeasureScope,
-    Modifier, ModifierNode, ModifierNodeElement, Offset, Paint, PointerEvent, PointerEventPass,
-    PointerEventType, PointerInputModifierNode, Rect, ReleaseContext, SemanticsConfiguration,
-    SemanticsModifierNode, TextStyle, empty_measure_policy,
+    AnyModifierNodeElement, Color, CommitTextCommand, Constraints, DeleteSurroundingTextCommand,
+    DrawModifierNode, DrawScope, EditCommand, EditProcessor, EventContext, FocusTargetModifierNode,
+    IntSize, IntrinsicMeasureScope, Key, KeyEvent, KeyEventType, KeyInputModifierNode, Layout,
+    LayoutModifierNode, Measurable, MeasureResult, MeasureScope, Modifier, ModifierNode,
+    ModifierNodeElement, Offset, Paint, PointerEvent, PointerEventPass, PointerEventType,
+    PointerInputModifierNode, Rect, ReleaseContext, SemanticsConfiguration, SemanticsModifierNode,
+    SetSelectionCommand, TextFieldValue, TextRange, TextStyle, empty_measure_policy,
     platform::{ParagraphHandle, TextLayoutOptions},
 };
 use unicode_segmentation::UnicodeSegmentation;
@@ -426,22 +427,48 @@ impl TextFieldNode {
         self.cursor.min(self.anchor)..self.cursor.max(self.anchor)
     }
 
-    /// Replaces the selection (or inserts at the cursor) with `with`.
+    /// Replaces the selection (or inserts at the cursor) with `with`, as Compose's key input
+    /// commits typed text (`CommitTextCommand(text, 1)`).
     fn replace_selection(&mut self, with: &str, typing: bool, context: &mut EventContext<'_>) {
-        let range = self.selection();
-        let mut text = self.text.clone();
-        text.replace_range(range.clone(), with);
-        self.edit(text, range.start + with.len(), typing, context);
+        self.apply_commands(&[&CommitTextCommand::new(with, 1)], typing, context);
     }
 
-    /// Deletes `range` (empty: nothing), leaving the cursor at its start.
+    /// Deletes `range` (empty: nothing), leaving the cursor at its start: the text around a
+    /// collapsed selection as Compose's key input deletes it (`DeleteSurroundingTextCommand`).
     fn delete(&mut self, range: std::ops::Range<usize>, context: &mut EventContext<'_>) {
         if range.is_empty() {
             return;
         }
-        let mut text = self.text.clone();
-        text.replace_range(range.clone(), "");
-        self.edit(text, range.start, false, context);
+        let collapsed = self.anchor == self.cursor;
+        if collapsed && range.end == self.cursor {
+            let command = DeleteSurroundingTextCommand::new(range.len(), 0);
+            self.apply_commands(&[&command], false, context);
+        } else if collapsed && range.start == self.cursor {
+            let command = DeleteSurroundingTextCommand::new(0, range.len());
+            self.apply_commands(&[&command], false, context);
+        } else {
+            let select = SetSelectionCommand::new(range.start as isize, range.end as isize);
+            self.apply_commands(&[&select, &CommitTextCommand::new("", 0)], false, context);
+        }
+    }
+
+    /// Applies `commands` to the text and selection through an `EditProcessor`, as Compose's
+    /// text field applies its key input's commands, then records the edit.
+    fn apply_commands(
+        &mut self,
+        commands: &[&dyn EditCommand],
+        typing: bool,
+        context: &mut EventContext<'_>,
+    ) {
+        let mut processor = EditProcessor::new();
+        processor.reset(TextFieldValue::new(
+            self.text.as_str(),
+            TextRange::new(self.anchor, self.cursor),
+            None,
+        ));
+        let value = processor.apply(commands);
+        let selection = value.selection();
+        self.edit(value.text().to_string(), selection.end, selection.start, typing, context);
     }
 
     fn invalidate_paragraph(&mut self) {
@@ -478,13 +505,21 @@ impl TextFieldNode {
         }
     }
 
-    /// Replaces the text and moves the cursor, then tells the application.
-    fn edit(&mut self, text: String, cursor: usize, typing: bool, context: &mut EventContext<'_>) {
+    /// Replaces the text and moves the cursor and the selection's anchor, then tells the
+    /// application.
+    fn edit(
+        &mut self,
+        text: String,
+        cursor: usize,
+        anchor: usize,
+        typing: bool,
+        context: &mut EventContext<'_>,
+    ) {
         self.record_undo(typing);
         if let Some((at, _)) = self.last_typing {
             self.last_typing = Some((at, cursor));
         }
-        self.set_text(text, cursor, cursor, context);
+        self.set_text(text, cursor, anchor, context);
     }
 
     fn set_text(

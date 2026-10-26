@@ -94,6 +94,37 @@ impl AnnotatedString {
         self.text.as_str()
     }
 
+    /// The text's length in bytes, as Compose's `length` (in UTF-16 units there: D1100).
+    pub fn len(&self) -> usize {
+        self.text.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.text.is_empty()
+    }
+
+    /// Bytes `start..end` of the text with the styles over them, as Compose's `subSequence`: a
+    /// range intersecting them is cut to them and moved with them (an empty range at `start`
+    /// is kept). Panics if `start > end` or an end isn't at a character boundary.
+    pub fn sub_sequence(&self, start: usize, end: usize) -> AnnotatedString {
+        assert!(start <= end, "start ({start}) should be less or equal to end ({end})");
+        if start == 0 && end == self.text.len() {
+            return self.clone();
+        }
+        let text = &self.text.as_str()[start..end];
+        let spans: Vec<SpanRange> = self
+            .span_styles
+            .iter()
+            .filter(|span| intersect(start, end, span.start, span.end))
+            .map(|span| SpanRange {
+                style: span.style,
+                start: start.max(span.start) - start,
+                end: end.min(span.end) - start,
+            })
+            .collect();
+        AnnotatedString { text: text.to_string().into(), span_styles: spans.into() }
+    }
+
     /// The runs of the text with the same spans: each byte range with the style it's drawn in
     /// (the spans covering it over `style`, in their order) and its background. Covers the
     /// whole text.
@@ -134,6 +165,14 @@ impl AnnotatedString {
             })
             .collect()
     }
+}
+
+/// Whether `l_start..l_end` and `r_start..r_end` intersect, as Compose's `intersect`: ranges are
+/// closed at their start and open at their end, and an empty range intersects a range starting
+/// at the same offset.
+pub(crate) fn intersect(l_start: usize, l_end: usize, r_start: usize, r_end: usize) -> bool {
+    ((l_start == l_end || r_start == r_end) && l_start == r_start)
+        || (l_start < r_end && r_start < l_end)
 }
 
 impl Default for AnnotatedString {

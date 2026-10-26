@@ -23,4 +23,5 @@ mod review_retained;
 mod single_drawing_extent;
 #[path = "../support/mod.rs"]
 mod support;
+mod text_range;
 mod ui;

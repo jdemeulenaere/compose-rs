@@ -53,7 +53,9 @@ mod render;
 mod semantics;
 mod semantics_properties;
 mod text;
+mod text_editing;
 mod text_input;
+mod text_range;
 mod text_selection;
 mod trace;
 mod tree;
@@ -182,7 +184,14 @@ pub use text::{
     FontFamily, FontStyle, FontWeight, LineHeightAlignment, LineHeightStyle, LineHeightTrim,
     SharedString, TextAlign, TextDecoration, TextLayoutResult, TextOverflow, TextStyle,
 };
+pub use text_editing::{
+    BackspaceCommand, CommitTextCommand, DeleteAllCommand, DeleteSurroundingTextCommand,
+    DeleteSurroundingTextInCodePointsCommand, EditCommand, EditProcessor, EditingBuffer,
+    FinishComposingTextCommand, MoveCursorCommand, SetComposingRegionCommand,
+    SetComposingTextCommand, SetSelectionCommand, TextFieldValue,
+};
 pub use text_input::{ImeAction, ImeOptions, KeyboardCapitalization, KeyboardType};
+pub use text_range::TextRange;
 pub use text_selection::Selectable;
 pub use unit::{
     Density, Dp, DpOffset, DpRect, DpSize, IntOffset, IntSize, Offset, Rect, Size, Sp, UnitExt,

@@ -806,6 +806,7 @@ dependencies = [
  "compose-runtime",
  "log",
  "smallvec",
+ "unicode-segmentation",
 ]
 
 [[package]]
