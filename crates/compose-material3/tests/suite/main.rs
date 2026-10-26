@@ -12,6 +12,7 @@ mod intrinsics;
 mod material;
 mod material_tokens;
 mod modal_bottom_sheet;
+mod modal_navigation_drawer;
 mod progress_indicator;
 mod review_d479;
 mod review_d554_local;

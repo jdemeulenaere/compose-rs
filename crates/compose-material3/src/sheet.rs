@@ -364,7 +364,8 @@ const VELOCITY_THRESHOLD: Dp = Dp(125.0);
 pub fn ModalBottomSheet(
     on_dismiss_request: impl Fn() + 'static,
     #[default(crate::Modifier)] modifier: Modifier,
-    #[default(crate::remember_modal_bottom_sheet_state(false))] sheet_state: SheetState,
+    #[default(crate::remember_modal_bottom_sheet_state(false, crate::always_confirm()))]
+    sheet_state: SheetState,
     #[default(crate::BottomSheetDefaults::SHEET_MAX_WIDTH)] sheet_max_width: Dp,
     #[default(crate::BottomSheetDefaults::expanded_shape())] shape: Shape,
     #[default(crate::BottomSheetDefaults::container_color())] container_color: Color,

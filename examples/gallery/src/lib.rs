@@ -81,7 +81,7 @@ fn Home(about: bool, on_open_card: impl Fn(u32) + 'static) {
     let dialog = remember_saveable(|| mutable_state_of(about));
     let searching = remember_saveable(|| mutable_state_of(false));
     let query = remember_saveable(|| mutable_state_of(String::new()));
-    let drawer = remember_drawer_state(DrawerValue::Closed);
+    let drawer = remember_drawer_state!(DrawerValue::Closed);
     let list = remember_lazy_list_state!();
     let scroll_behavior = TopAppBarDefaults::enter_always_scroll_behavior();
     let snackbars = remember(SnackbarHostState::new);

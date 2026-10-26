@@ -47,12 +47,18 @@ struct DrawerInner {
     target: OwnedState<DrawerValue>,
     /// Where it last settled, as `currentValue`.
     current: OwnedState<DrawerValue>,
-    /// Shown: open, opening, closing or dragged (its scrim and sheet are composed).
+    /// Shown: open, opening, closing or dragged (its scrim is composed and its sheet placed).
     shown: OwnedState<bool>,
+    /// Animating to a value, as `isAnimationRunning`.
+    animating: OwnedState<bool>,
+    /// The sheet's width as last laid out (NaN before), the distance from closed to open.
+    width: std::cell::Cell<f32>,
+    /// Whether it may settle at a value, as `confirmStateChange`.
+    confirm_state_change: Box<dyn Fn(DrawerValue) -> bool>,
 }
 
 impl DrawerInner {
-    /// At `value`: settled there, its sheet composed only while open.
+    /// At `value`: settled there, its sheet placed only while open.
     fn settle(&self, value: DrawerValue) {
         self.target.set(value);
         self.current.set(value);
@@ -78,8 +84,14 @@ impl DrawerState {
         self.object.get()
     }
 
+    /// As `DrawerState(initialValue, confirmStateChange)`: `confirm_state_change` can keep it
+    /// from settling at a value (a drag let go, `open`, `close` or `snap_to`); the drawer's scrim
+    /// asks it before closing.
     #[track_caller]
-    pub fn new(initial_value: DrawerValue) -> Owned<DrawerState> {
+    pub fn new(
+        initial_value: DrawerValue,
+        confirm_state_change: impl Fn(DrawerValue) -> bool + 'static,
+    ) -> Owned<DrawerState> {
         let open = initial_value == DrawerValue::Open;
         Owned::new(
             DrawerInner {
@@ -87,9 +99,31 @@ impl DrawerState {
                 target: mutable_state_of(initial_value),
                 current: mutable_state_of(initial_value),
                 shown: mutable_state_of(open),
+                animating: mutable_state_of(false),
+                width: std::cell::Cell::new(f32::NAN),
+                confirm_state_change: Box::new(confirm_state_change),
             },
             |object| DrawerState { object },
         )
+    }
+
+    /// Whether `confirm_state_change` lets it settle at `value`.
+    pub(crate) fn confirm_state_change(&self, value: DrawerValue) -> bool {
+        self.inner().is_some_and(|inner| (inner.confirm_state_change)(value))
+    }
+
+    /// Whether it's animating to a value (`open`, `close`, or settling after a drag), as
+    /// `isAnimationRunning` (a state read).
+    pub fn is_animation_running(&self) -> bool {
+        self.inner().is_some_and(|inner| inner.animating.get())
+    }
+
+    /// The sheet's offset from its open position, in pixels: 0 open, minus its width closed
+    /// (towards the start edge), NaN before it's laid out, as `currentOffset` (a state read).
+    pub fn current_offset(&self) -> f32 {
+        let Some(inner) = self.inner() else { return f32::NAN };
+        let fraction = inner.open.value().clamp(0.0, 1.0);
+        (fraction - 1.0) * inner.width.get()
     }
 
     /// Where it is or is going, as `targetValue` (a state read).
@@ -121,12 +155,17 @@ impl DrawerState {
         self.animate_to(DrawerValue::Closed).await;
     }
 
-    /// Opens or closes it at once, as `snapTo`.
+    /// Opens or closes it at once, as `snapTo`: settled there if `confirm_state_change` lets
+    /// it (else the sheet moves and the value stays, as Compose's).
     pub fn snap_to(&self, value: DrawerValue) {
         let open = value == DrawerValue::Open;
         let Some(inner) = self.inner() else { return };
         inner.open.snap_to(if open { 1.0 } else { 0.0 });
-        inner.settle(value);
+        if (inner.confirm_state_change)(value) {
+            inner.settle(value);
+        } else {
+            inner.shown.set(true);
+        }
     }
 
     async fn animate_to(&self, value: DrawerValue) {
@@ -135,14 +174,23 @@ impl DrawerState {
         let Some(inner) = self.inner() else { return };
         inner.target.set(value);
         inner.shown.set(true);
+        inner.animating.set(true);
         let result =
             inner.open.animate_to(if open { 1.0 } else { 0.0 }, tween(ANIMATION_MILLIS)).await;
         if result.end_reason == compose_animation::AnimationEndReason::Finished {
-            inner.settle(value);
+            inner.animating.set(false);
+            // Settled there only if `confirm_state_change` lets it, as Compose's
+            // `anchoredDrag(targetValue)`.
+            if (inner.confirm_state_change)(value) {
+                inner.settle(value);
+            } else {
+                inner.target.set(inner.current.get());
+            }
         }
     }
 
-    /// Dragged by `delta` pixels of a sheet `width` wide (positive towards open).
+    /// Dragged by `delta` pixels of a sheet `width` wide (positive towards open); its target the
+    /// nearer value, as Compose's `targetValue` while dragged.
     fn drag_by(&self, delta: f32, width: f32) {
         let Some(inner) = self.inner() else { return };
         let fraction = (self.fraction() + delta / width.max(1.0)).clamp(0.0, 1.0);
@@ -150,6 +198,16 @@ impl DrawerState {
         if fraction > 0.0 && !inner.shown.get() {
             inner.shown.set(true);
         }
+        let nearer = if fraction > 0.5 { DrawerValue::Open } else { DrawerValue::Closed };
+        if inner.target.get() != nearer {
+            inner.target.set(nearer);
+        }
+    }
+
+    /// The sheet's width as last laid out, or the widest a sheet gets before that.
+    fn width(&self, density: compose_ui::Density) -> f32 {
+        let width = self.inner().map_or(f32::NAN, |inner| inner.width.get());
+        if width.is_nan() { density.to_px(DrawerDefaults::MAXIMUM_DRAWER_WIDTH) } else { width }
     }
 
     /// How far open it is, 0 to 1 (a state read).
@@ -165,32 +223,45 @@ impl ComposeArg for DrawerState {
 }
 
 impl DrawerState {
-    /// Saves whether it's open, as Compose's `DrawerState.Saver` (its current value).
-    pub fn saver() -> impl compose_runtime::Saver<Owned<DrawerState>> {
+    /// Saves whether it's open, as Compose's `DrawerState.Saver(confirmStateChange)` (its
+    /// current value), restoring a state with `confirm_state_change`.
+    pub fn saver(
+        confirm_state_change: impl Fn(DrawerValue) -> bool + 'static,
+    ) -> impl compose_runtime::Saver<Owned<DrawerState>> {
+        let confirm_state_change = Rc::new(confirm_state_change);
         compose_runtime::saver(
             |state: &Owned<DrawerState>| {
                 state.inner()?;
                 Some(compose_runtime::SavedValue::Bool(state.current_value() == DrawerValue::Open))
             },
-            |saved| match saved {
-                compose_runtime::SavedValue::Bool(open) => Some(DrawerState::new(if *open {
-                    DrawerValue::Open
-                } else {
-                    DrawerValue::Closed
-                })),
+            move |saved| match saved {
+                compose_runtime::SavedValue::Bool(open) => {
+                    let confirm_state_change = confirm_state_change.clone();
+                    Some(DrawerState::new(
+                        if *open { DrawerValue::Open } else { DrawerValue::Closed },
+                        move |value| confirm_state_change(value),
+                    ))
+                }
                 _ => None,
             },
         )
     }
 }
 
-/// A drawer state remembered at its call site, as `rememberDrawerState(initialValue)`: saved
-/// across the host's recreation (a `rememberSaveable`, as Compose's).
+/// A drawer state remembered at its call site, as `rememberDrawerState(initialValue,
+/// confirmStateChange)`: saved across the host's recreation (a `rememberSaveable`, as
+/// Compose's). `confirm_state_change` is the first composition's.
 #[composable(non_restartable)]
-pub fn remember_drawer_state(initial_value: DrawerValue) -> DrawerState {
-    compose_runtime::remember_saveable_with(DrawerState::saver(), || {
-        DrawerState::new(initial_value)
-    })
+pub fn remember_drawer_state(
+    initial_value: DrawerValue,
+    #[default(|_| true)] confirm_state_change: impl Fn(DrawerValue) -> bool + 'static,
+) -> DrawerState {
+    let restored = confirm_state_change.clone();
+    #[allow(clippy::redundant_closure)] // A `Callback` derefs to the function; it isn't one.
+    compose_runtime::remember_saveable_with(
+        DrawerState::saver(move |value| restored(value)),
+        move || DrawerState::new(initial_value, move |value| confirm_state_change(value)),
+    )
 }
 
 /// As Compose's `DrawerDefaults`.
@@ -214,6 +285,12 @@ impl DrawerDefaults {
         MaterialTheme::color_scheme().surface_container_low
     }
 
+    /// The insets a sheet's content keeps clear of, as `DrawerDefaults.windowInsets`: none here,
+    /// Material's insets parameters being padding, zero by default (D183, D222).
+    pub fn window_insets() -> compose_ui::PaddingValues {
+        compose_ui::PaddingValues::ZERO
+    }
+
     /// The scrim: 32 % of the scheme's scrim color, as `DrawerDefaults.scrimColor`.
     pub fn scrim_color() -> Color {
         MaterialTheme::color_scheme().scrim.with_alpha(0.32)
@@ -230,7 +307,8 @@ impl DrawerDefaults {
 pub fn ModalNavigationDrawer(
     drawer_content: impl Fn() + 'static,
     #[default(crate::Modifier)] modifier: Modifier,
-    #[default(crate::remember_drawer_state(crate::DrawerValue::Closed))] drawer_state: DrawerState,
+    #[default(crate::remember_drawer_state(crate::DrawerValue::Closed, crate::always_confirm()))]
+    drawer_state: DrawerState,
     #[default(true)] gestures_enabled: bool,
     #[default(crate::DrawerDefaults::scrim_color())] scrim_color: Color,
     content: impl Fn() + 'static,
@@ -239,20 +317,18 @@ pub fn ModalNavigationDrawer(
     let shown = drawer_state.inner().is_some_and(|inner| inner.shown.get());
     let rtl = compose_ui::LOCAL_LAYOUT_DIRECTION.current() == LayoutDirection::Rtl;
     let density = compose_ui::LOCAL_DENSITY.current();
-    // The width the sheet was last laid out at: a drag moves it by fractions of it.
-    let width = remember(|| Rc::new(std::cell::Cell::new(DrawerDefaults::MAXIMUM_DRAWER_WIDTH.0)));
     let policy = {
-        let (state, width) = (drawer_state, width.clone());
+        let state = drawer_state;
         compose_runtime::remember_keyed(drawer_state, || {
-            Rc::new(DrawerLayout { state, width }) as Rc<dyn MeasurePolicy>
+            Rc::new(DrawerLayout { state }) as Rc<dyn MeasurePolicy>
         })
     };
-    // A drag across the drawer moves the sheet; let go, it settles open or closed, as
-    // Compose's `anchoredDraggable` on the drawer's box.
+    // A drag across the drawer moves the sheet (by fractions of its width); let go, it settles
+    // open or closed, as Compose's `anchoredDraggable` on the drawer's box.
     let drag = {
-        let (dragged, width) = (drawer_state, width.clone());
-        compose_runtime::remember_keyed(drawer_state, move || {
-            DraggableState::new(move |delta| dragged.drag_by(delta, width.get()))
+        let dragged = drawer_state;
+        compose_runtime::remember_keyed((drawer_state, density), move || {
+            DraggableState::new(move |delta| dragged.drag_by(delta, dragged.width(density)))
         })
     };
     let threshold = density.to_px(VELOCITY_THRESHOLD);
@@ -267,10 +343,24 @@ pub fn ModalNavigationDrawer(
                 } else {
                     state.fraction() > 0.5
                 };
-                if open { state.open().await } else { state.close().await }
+                let target = if open { DrawerValue::Open } else { DrawerValue::Closed };
+                // A value `confirm_state_change` refuses goes back to the settled one, as
+                // Compose's `settle`.
+                let target =
+                    if state.confirm_state_change(target) { target } else { state.current_value() };
+                if target == DrawerValue::Open { state.open().await } else { state.close().await }
             });
         }
     };
+    let focus_requester = remember(compose_ui::FocusRequester::new);
+    {
+        let is_open = drawer_state.is_open();
+        compose_runtime::LaunchedEffect(is_open, async move {
+            if is_open {
+                focus_requester.request_focus();
+            }
+        });
+    }
     let modifier = modifier.fill_max_size().draggable(
         drag,
         Orientation::Horizontal,
@@ -293,10 +383,13 @@ pub fn ModalNavigationDrawer(
                 compose_runtime::callback(move |_| content()),
             );
             if shown {
-                // The scrim, its alpha following the drawer (read while drawing).
+                // The scrim, its alpha following the drawer (read while drawing); its click
+                // closes the drawer if `confirm_state_change` lets it, as Compose's.
                 let fraction = state;
                 let close = compose_runtime::callback(move || {
-                    scope.launch(async move { state.close().await });
+                    if state.confirm_state_change(DrawerValue::Closed) {
+                        scope.launch(async move { state.close().await });
+                    }
                 });
                 Box(
                     Modifier
@@ -317,23 +410,27 @@ pub fn ModalNavigationDrawer(
                     false,
                     compose_runtime::callback(|_| {}),
                 );
-                // Back closes it while it's open, as Compose's `DrawerPredictiveBackHandler`:
-                // registered after the content's handlers (so it goes before them) and before
-                // the sheet's (which go before it).
+                // Back closes it while it's open or opening, as Compose's
+                // `DrawerPredictiveBackHandler` (enabled while its target is open): registered
+                // after the content's handlers (so it goes before them) and before the sheet's
+                // (which go before it).
                 compose_ui::BackHandler(
-                    state.is_open(),
+                    state.target_value() == DrawerValue::Open,
                     compose_runtime::callback(move || {
                         scope.launch(async move { state.close().await });
                     }),
                 );
-                let drawer_content = drawer_content.clone();
-                Box(
-                    Modifier,
-                    Alignment::TOP_START,
-                    false,
-                    compose_runtime::callback(move |_| drawer_content()),
-                );
             }
+            // The sheet, composed and measured even while closed (placed only while shown), as
+            // Compose's: its width gives the closed offset. Opened, its first focusable takes the
+            // focus, as Compose's `LaunchedEffect(isOpen) { focusRequester.requestFocus() }`.
+            let drawer_content = drawer_content.clone();
+            Box(
+                Modifier.focus_requester(focus_requester),
+                Alignment::TOP_START,
+                false,
+                compose_runtime::callback(move |_| drawer_content()),
+            );
         }),
     );
 }
@@ -444,11 +541,9 @@ impl compose_ui::SemanticsModifierNode for ScrimNode {
 }
 
 /// The content, then (while shown) the scrim over it, then the sheet at the start edge, slid
-/// out by how far the drawer is closed.
+/// out by how far the drawer is closed (placed only while shown).
 struct DrawerLayout {
     state: DrawerState,
-    /// The sheet's width, for drags.
-    width: Rc<std::cell::Cell<f32>>,
 }
 
 impl MeasurePolicy for DrawerLayout {
@@ -466,12 +561,21 @@ impl MeasurePolicy for DrawerLayout {
         let height = constraints.constrain_height(content.height);
         // Read while measuring: a frame of the slide places the sheet again only.
         scope.place_relative(&content, 0, 0);
-        if let [scrim, sheet] = rest {
+        let (scrim, sheet) = match rest {
+            [scrim, sheet] => (Some(scrim), sheet),
+            [sheet] => (None, sheet),
+            _ => return scope.layout(width, height),
+        };
+        if let Some(scrim) = scrim {
             let scrim = scope.measure(*scrim, Constraints::fixed(width, height));
             scope.place_relative(&scrim, 0, 0);
-            let sheet = scope.measure(*sheet, Constraints::new(0, width, height, height));
-            self.width.set(sheet.width.max(1) as f32);
-            // Read while measuring: a frame of the slide places the sheet again only.
+        }
+        let sheet = scope.measure(*sheet, Constraints::new(0, width, height, height));
+        if let Some(inner) = self.state.inner() {
+            inner.width.set(sheet.width.max(1) as f32);
+        }
+        // Read while measuring: a frame of the slide places the sheet again only.
+        if scrim.is_some() {
             let hidden = 1.0 - self.state.fraction();
             scope.place_relative(&sheet, -(sheet.width as f32 * hidden).round() as i32, 0);
         }
@@ -493,6 +597,7 @@ pub fn ModalDrawerSheet(
     #[default(crate::DrawerDefaults::modal_container_color())] drawer_container_color: Color,
     #[default(crate::Color::UNSPECIFIED)] drawer_content_color: Color,
     #[default(crate::DrawerDefaults::MODAL_DRAWER_ELEVATION)] drawer_tonal_elevation: Dp,
+    #[default(crate::DrawerDefaults::window_insets())] window_insets: compose_ui::PaddingValues,
     content: impl Fn(ColumnScope) + 'static,
 ) {
     let content_color = drawer_content_color
@@ -514,8 +619,9 @@ pub fn ModalDrawerSheet(
         Dp(0.0),
         None,
         compose_runtime::callback(move || {
+            // Its content inside the insets, as Compose's `windowInsetsPadding(windowInsets)`.
             Column(
-                Modifier.fill_max_height(),
+                Modifier.fill_max_height().padding(window_insets),
                 compose_foundation::layout::Arrangement::TOP,
                 Alignment::START,
                 content.clone(),

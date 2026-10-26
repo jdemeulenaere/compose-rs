@@ -80,7 +80,7 @@ fn click(ui: &mut ComposeTestRule, at: Offset) {
 /// a closed drawer ignores the drag and stays closed.
 #[test]
 fn dragging_the_content_opens_a_closed_drawer() {
-    let state = DrawerState::new(DrawerValue::Closed);
+    let state = DrawerState::new(DrawerValue::Closed, |_| true);
     let given = *state;
     let mut ui = ComposeTestRule::sized(IntSize::new(800, 600), move || Drawer(given, true));
     ui.set_auto_advance(false);
@@ -106,7 +106,7 @@ fn dragging_the_content_opens_a_closed_drawer() {
 /// only the position): at 83 % open the drawer springs back open.
 #[test]
 fn a_fast_fling_towards_the_start_closes_the_drawer() {
-    let state = DrawerState::new(DrawerValue::Open);
+    let state = DrawerState::new(DrawerValue::Open, |_| true);
     let given = *state;
     let mut ui = ComposeTestRule::sized(IntSize::new(800, 600), move || Drawer(given, true));
     ui.set_auto_advance(false);
@@ -129,7 +129,7 @@ fn a_fast_fling_towards_the_start_closes_the_drawer() {
 /// Instead: the scrim's click always closes the drawer.
 #[test]
 fn the_scrim_does_not_close_the_drawer_when_gestures_are_disabled() {
-    let state = DrawerState::new(DrawerValue::Open);
+    let state = DrawerState::new(DrawerValue::Open, |_| true);
     let given = *state;
     let mut ui = ComposeTestRule::sized(IntSize::new(800, 600), move || Drawer(given, false));
     ui.set_auto_advance(false);
@@ -151,7 +151,7 @@ fn the_scrim_does_not_close_the_drawer_when_gestures_are_disabled() {
 /// shown), so `is_open()` is true before the drawer has opened.
 #[test]
 fn the_current_value_stays_closed_while_the_drawer_opens() {
-    let state = DrawerState::new(DrawerValue::Closed);
+    let state = DrawerState::new(DrawerValue::Closed, |_| true);
     let given = *state;
     let mut ui = ComposeTestRule::sized(IntSize::new(800, 600), move || Opener(given));
     ui.set_auto_advance(false);
@@ -184,7 +184,7 @@ fn TwoRoots(state: DrawerState) {
 /// the scrim nor the sheet is placed (the sheet is composed but never laid out).
 #[test]
 fn content_with_two_root_nodes_still_shows_the_sheet() {
-    let state = DrawerState::new(DrawerValue::Open);
+    let state = DrawerState::new(DrawerValue::Open, |_| true);
     let given = *state;
     let mut ui = ComposeTestRule::sized(IntSize::new(800, 600), move || TwoRoots(given));
     ui.wait_for_idle();
@@ -212,7 +212,7 @@ fn InColumn(state: DrawerState) {
 /// sheet is squeezed to it.
 #[test]
 fn the_drawer_fills_the_space_whatever_its_content() {
-    let state = DrawerState::new(DrawerValue::Open);
+    let state = DrawerState::new(DrawerValue::Open, |_| true);
     let given = *state;
     let mut ui = ComposeTestRule::sized(IntSize::new(800, 600), move || InColumn(given));
     ui.wait_for_idle();
@@ -232,7 +232,7 @@ fn the_drawer_fills_the_space_whatever_its_content() {
 /// and square ones facing the content.
 #[test]
 fn right_to_left_the_sheets_rounded_corners_face_the_content() {
-    let state = DrawerState::new(DrawerValue::Open);
+    let state = DrawerState::new(DrawerValue::Open, |_| true);
     let given = *state;
     let mut ui = ComposeTestRule::sized(IntSize::new(800, 600), move || Drawer(given, true));
     ui.host().set_layout_direction(LayoutDirection::Rtl);
@@ -318,7 +318,7 @@ fn Clicked(state: DrawerState, clicks: compose_runtime::MutableState<u32>) {
 /// at moves in the main pass, before its ancestors' drag consumes them.
 #[test]
 fn swiping_the_drawer_closed_from_an_item_does_not_click_it() {
-    let state = DrawerState::new(DrawerValue::Open);
+    let state = DrawerState::new(DrawerValue::Open, |_| true);
     let clicks = compose_runtime::mutable_state_of(0u32);
     let (given, counted) = (*state, *clicks);
     let mut ui = ComposeTestRule::sized(IntSize::new(800, 600), move || Clicked(given, counted));
@@ -345,7 +345,7 @@ fn swiping_the_drawer_closed_from_an_item_does_not_click_it() {
 /// closes the drawer.
 #[test]
 fn tab_never_focuses_the_scrim() {
-    let state = DrawerState::new(DrawerValue::Open);
+    let state = DrawerState::new(DrawerValue::Open, |_| true);
     let clicks = compose_runtime::mutable_state_of(0u32);
     let (given, counted) = (*state, *clicks);
     let mut ui = ComposeTestRule::sized(IntSize::new(800, 600), move || Clicked(given, counted));

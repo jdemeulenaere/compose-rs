@@ -33,7 +33,7 @@ fn AppWithSheetHandler(state: DrawerState, log: MutableState<u32>) {
 /// handler inside the open drawer gets back before the drawer closes.
 #[test]
 fn a_handler_inside_the_open_drawer_goes_before_the_drawer() {
-    let state = DrawerState::new(DrawerValue::Open);
+    let state = DrawerState::new(DrawerValue::Open, |_| true);
     let owner = mutable_state_of(0u32);
     let log = owner.handle();
     let given = *state;
@@ -50,7 +50,7 @@ fn a_handler_inside_the_open_drawer_goes_before_the_drawer() {
 
 #[composable]
 fn OwnDrawer() {
-    let state = remember_drawer_state(DrawerValue::Open);
+    let state = remember_drawer_state!(DrawerValue::Open);
     MaterialTheme!({
         ModalNavigationDrawer!(
             {

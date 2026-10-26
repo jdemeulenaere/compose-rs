@@ -122,7 +122,7 @@ fn MenuInDrawer(drawer: DrawerState, expanded: MutableState<bool>) {
 /// in: the menu is a focusable popup, whose back goes before what's beneath it.
 #[test]
 fn back_dismisses_a_menu_before_closing_its_drawer() {
-    let drawer = DrawerState::new(DrawerValue::Open);
+    let drawer = DrawerState::new(DrawerValue::Open, |_| true);
     let owner = mutable_state_of(true);
     let expanded = owner.handle();
     let given = *drawer;

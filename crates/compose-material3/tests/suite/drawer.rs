@@ -48,7 +48,7 @@ fn sheet_left(ui: &mut ComposeTestRule) -> f32 {
 
 #[test]
 fn the_drawer_slides_in_and_the_scrim_closes_it() {
-    let state = DrawerState::new(DrawerValue::Closed);
+    let state = DrawerState::new(DrawerValue::Closed, |_| true);
     let given = *state;
     let mut ui = ComposeTestRule::sized(IntSize::new(800, 600), move || App(given));
     ui.set_auto_advance(false);
@@ -80,7 +80,7 @@ fn the_drawer_slides_in_and_the_scrim_closes_it() {
 
 #[test]
 fn dragging_the_sheet_to_the_start_closes_it() {
-    let state = DrawerState::new(DrawerValue::Open);
+    let state = DrawerState::new(DrawerValue::Open, |_| true);
     let given = *state;
     let mut ui = ComposeTestRule::sized(IntSize::new(800, 600), move || App(given));
     ui.set_auto_advance(false);
@@ -100,7 +100,7 @@ fn dragging_the_sheet_to_the_start_closes_it() {
 
 #[test]
 fn back_closes_an_open_drawer_and_passes_through_a_closed_one() {
-    let state = DrawerState::new(DrawerValue::Closed);
+    let state = DrawerState::new(DrawerValue::Closed, |_| true);
     let given = *state;
     let mut ui = ComposeTestRule::sized(IntSize::new(800, 600), move || App(given));
     ui.set_auto_advance(false);
@@ -122,7 +122,7 @@ fn back_closes_an_open_drawer_and_passes_through_a_closed_one() {
 fn an_open_drawer_stays_open_in_a_new_host() {
     // `remember_drawer_state` is saveable, as Compose's (D293).
     let content = || {
-        let state = remember_drawer_state(DrawerValue::Closed);
+        let state = remember_drawer_state!(DrawerValue::Closed);
         App(state);
     };
     let mut ui = ComposeTestRule::sized(IntSize::new(800, 600), content);
@@ -159,7 +159,7 @@ fn AppWithBackHandler(state: DrawerState, log: MutableState<u32>) {
 /// first, as Compose's drawer sheet's handler (composed after the content).
 #[test]
 fn an_open_drawer_takes_back_before_the_content() {
-    let state = DrawerState::new(DrawerValue::Closed);
+    let state = DrawerState::new(DrawerValue::Closed, |_| true);
     let owner = mutable_state_of(0u32);
     let log = owner.handle();
     let given = *state;

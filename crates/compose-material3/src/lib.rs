@@ -118,6 +118,13 @@ pub use compose_ui::{
 
 pub(crate) use selection::blend as selection_blend;
 
+/// A confirmation that accepts every value: the states' default `confirm_value_change`, for
+/// the defaults that remember a state (`ModalNavigationDrawer`'s, `ModalBottomSheet`'s).
+#[doc(hidden)]
+pub fn always_confirm<T: 'static>() -> compose_runtime::Callback<dyn Fn(T) -> bool> {
+    compose_runtime::callback(|_: T| true)
+}
+
 #[doc(hidden)]
 pub fn window_default_dialog_properties() -> compose_ui::DialogProperties {
     compose_ui::DialogProperties::default()
