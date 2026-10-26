@@ -206,7 +206,11 @@ def counters_lines(counters):
         for name, subject in result["subjects"].items():
             s = subject.get("summary")
             if s is None:
-                continue
+                # A report written on a failure: the runs done, summarized here.
+                if not subject.get("runs"):
+                    continue
+                import measure
+                s = measure.counters_summary(subject["runs"])
             parts = []
             for group, metrics in s["groups"].items():
                 per_frame = metrics.get(metric, {})
@@ -245,6 +249,9 @@ def counters_lines(counters):
 def main(path):
     r = json.load(open(path))
     print("device", r["device"], "android", r["android"])
+    # A report measure.py wrote on a failure (or ^C): what stopped it.
+    if r.get("stopped"):
+        print("stopped:", r["stopped"])
     # Reports since docs/15 name the scenarios run; earlier ones ran the first three.
     print("scenarios", ", ".join(r.get("scenarios", ["startup", "scroll", "animation"])))
     if "startup_ms" in r:

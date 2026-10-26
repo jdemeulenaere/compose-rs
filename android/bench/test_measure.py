@@ -7,6 +7,7 @@ import json
 import os
 import tempfile
 import unittest
+import unittest.mock
 import zipfile
 
 import measure
@@ -1483,8 +1484,6 @@ class CountersTest(unittest.TestCase):
     def test_a_run_and_its_checks(self):
         parsed = measure.parse_simpleperf_stat(SIMPLEPERF_STAT, self.EVENTS)
         stats = measure.counter_run_stats(parsed, frames=360, events=self.EVENTS)
-        self.assertEqual(stats["frames"], 360)
-        self.assertEqual(stats["seconds"], 3.001741)
         main = stats["groups"]["main"]
         self.assertEqual(main["instructions"], 1518615820 + 40646062)
         self.assertAlmostEqual(main["instructions_per_frame"], (1518615820 + 40646062) / 360)
@@ -1540,12 +1539,13 @@ class CountersTest(unittest.TestCase):
         self.assertTrue(command.startswith(
             "simpleperf stat -p 4242 --per-thread -e instructions:u,instructions:k,cpu-cycles "
             "--csv --verbose -o /data/local/tmp/c.csv sh -c '"), command)
-        self.assertIn("echo START $(date +%s%N); dumpsys gfxinfo rs.compose.bench.rs reset > /dev/null; "
-                      "echo TASKS_READY $(ls /proc/4242/task); echo READY", command)
+        self.assertIn("sh -c 'echo TASKS_READY; grep -H . /proc/4242/task/*/stat 2>/dev/null; "
+                      "echo START $(date +%s%N); dumpsys gfxinfo rs.compose.bench.rs reset > /dev/null; "
+                      "echo READY", command)
         self.assertIn("read line;", command)
         self.assertIn("dumpsys gfxinfo rs.compose.bench.rs > /data/local/tmp/g.txt; "
-                      "for t in /proc/4242/task/*; do echo TASK_END ${t##*/} $(cat $t/comm); done; "
-                      "echo END", command)
+                      "echo TASKS_END; grep -H . /proc/4242/task/*/stat 2>/dev/null; echo END",
+                      command)
         timed = measure.counter_command(1, "p", self.EVENTS, "o", "g", duration_s=10)
         self.assertIn("sleep 10;", timed)
         self.assertNotIn("read line", timed)
@@ -1562,7 +1562,7 @@ class CountersTest(unittest.TestCase):
         out = "START 900000000\nREADY 1000000000\nEND 11000000000 11050000000\n"
         self.assertEqual(measure.workload_window(out),
                          {"start_ns": 900000000, "ready_ns": 1000000000, "stop_ns": 11000000000,
-                          "end_ns": 11050000000, "frame_window_s": 10.075, "tasks_ready": [],
+                          "end_ns": 11050000000, "frame_window_s": 10.075, "tasks_ready": {},
                           "tasks_end": {}})
         self.assertIsNone(measure.workload_window("START 1\nREADY 1\n"))
 
@@ -1589,6 +1589,7 @@ class CountersTest(unittest.TestCase):
         self.assertAlmostEqual(rate["span_s"], 2520 * 8_333_333 / 1e9)
         self.assertAlmostEqual(rate["fps"], 2520 / rate["span_s"])
         self.assertAlmostEqual(rate["fps_last"], 119 / (119 * 8_333_333 / 1e9))
+        self.assertAlmostEqual(rate["fps_first"], 1 / (8_333_333 / 1e9))
         self.assertIsNone(measure.framestats_rate("", end, frames=2520))
         self.assertIsNone(measure.framestats_rate(start, end, frames=0))
 
@@ -1619,7 +1620,8 @@ class CountersTest(unittest.TestCase):
                 measure.main(["--out", "out", "--counters", "--counter-runs", "3"])
             self.assertTrue(captured["counters"])
             self.assertEqual(captured["counter_runs"], 3)
-            self.assertEqual(captured["counter_events"], "instructions:u,instructions:k,cpu-cycles")
+            self.assertEqual(captured["counter_events"],
+                             "instructions:u,instructions:k,cpu-cycles,task:task_newtask")
             captured.clear()
             with self.assertRaises(SystemExit):
                 measure.main(["--out", "out", "--counters"])
@@ -1704,7 +1706,7 @@ class FakeCounting:
         return ""
 
     def popen(self, argv, **kwargs):
-        self.commands.append("popen " + argv[-1][:20])
+        self.commands.append("popen " + argv[-1])
         self.stdout = io.StringIO(self.before)
         self.stdin.close = lambda: None
         return self
@@ -1723,9 +1725,18 @@ class FakeCounting:
 
 class CountersReviewTest(unittest.TestCase):
     EVENTS = ("instructions:u", "instructions:k", "cpu-cycles")
-    BEFORE = "START 100\nTASKS_READY 32617 32632 32640 32999\nREADY 200\n"
-    AFTER = ("TASK_END 32617 ompose.bench.rs\nTASK_END 32632 RenderThread\n"
-             "TASK_END 32640 hwuiTask0\nTASK_END 33001 binder:32617_4\nEND 10300 10400\n")
+    @staticmethod
+    def stat(tid, name, start):
+        """A thread's line of `grep -H . /proc/32617/task/*/stat` (its start time: field 22)."""
+        return (f"/proc/32617/task/{tid}/stat:{tid} ({name}) S 943 943 0 0 -1 4194624 2784 0 0 "
+                f"0 4 1 0 0 0 -10 23 0 {start} 17624166400 43075\n")
+
+    BEFORE = ("TASKS_READY\n" + stat(32617, "ompose.bench.rs", 100) + stat(32632, "RenderThread", 120)
+              + stat(32640, "hwuiTask0", 130) + stat(32999, "RenderThread", 140)
+              + "START 100\nREADY 200\n")
+    AFTER = ("TASKS_END\n" + stat(32617, "ompose.bench.rs", 100) + stat(32632, "RenderThread", 120)
+             + stat(32640, "hwuiTask0", 130) + stat(33001, "binder:32617_4", 900)
+             + "END 10300 10400\n")
 
     def test_the_handshake(self):
         """The host's input comes after READY and before the stop line; the counts, the frames
@@ -1743,8 +1754,8 @@ class CountersReviewTest(unittest.TestCase):
         self.assertEqual(frames, 100)
         self.assertEqual(gfx["frames"], 100)
         self.assertEqual(len(parsed["threads"]), 3)
-        self.assertEqual(window["tasks_ready"], [32617, 32632, 32640, 32999])
-        self.assertEqual(window["tasks_end"][33001], "binder:32617_4")
+        self.assertEqual(sorted(window["tasks_ready"]), [32617, 32632, 32640, 32999])
+        self.assertEqual(window["tasks_end"][33001], {"name": "binder:32617_4", "start": 900})
         self.assertEqual(window["frames_after"], 100)
         self.assertTrue(any(command.startswith("rm -f") for command in
                             device.commands[device.commands.index("cat " + measure.COUNTER_FILES["gfx"]):]))
@@ -1764,7 +1775,7 @@ class CountersReviewTest(unittest.TestCase):
         self.assertTrue(device.killed)
         self.assertTrue(device.commands[-1].startswith("rm -f"))
         # A workload that never ends (no END): the run stops too.
-        device = FakeCounting(self.BEFORE, "TASK_END 1 x\n")
+        device = FakeCounting(self.BEFORE, "TASKS_END\n")
         with self.assertRaises(SystemExit):
             measure.count_while("p", self.EVENTS, run_shell=device.shell, popen=device.popen)
         self.assertTrue(device.commands[-1].startswith("rm -f"))
@@ -1774,10 +1785,17 @@ class CountersReviewTest(unittest.TestCase):
         parsed = measure.parse_simpleperf_stat(SIMPLEPERF_STAT, self.EVENTS)
         self.assertEqual(measure.thread_problems(window, parsed), [
             "thread binder:32617_4 (33001) started in the window: counted with its creator's",
-            "thread 32999 ended in the window"])
+            "thread RenderThread (32999) ended in the window"])
+        # A tid reused: its start time changed.
+        reused = json.loads(json.dumps(window))
+        reused["tasks_end"]["32640"] = {"name": "binder:32617_5", "start": 950}
+        reused = {**reused, "tasks_ready": {int(k): v for k, v in reused["tasks_ready"].items()},
+                  "tasks_end": {int(k): v for k, v in reused["tasks_end"].items()}}
+        self.assertIn("thread 32640 reused: hwuiTask0 ended and binder:32617_5 started in the "
+                      "window", measure.thread_problems(reused, parsed))
         # A thread alive at both ends with no row of simpleperf's isn't counted at all.
-        window["tasks_ready"].append(33002)
-        window["tasks_end"][33002] = "Jit thread pool"
+        window["tasks_ready"][33002] = {"name": "Jit thread pool", "start": 150}
+        window["tasks_end"][33002] = {"name": "Jit thread pool", "start": 150}
         self.assertIn("thread Jit thread pool (33002) has no simpleperf row",
                       measure.thread_problems(window, parsed))
         # Threads with rows but no count (idle) aren't in the summary, and are fine.
@@ -1826,6 +1844,14 @@ class CountersReviewTest(unittest.TestCase):
                    "trigger hardware counter\nmultiplexing.")
         self.assertEqual(measure.stderr_problems(warning),
                          ["simpleperf warned of multiplexing (more events than counters)"])
+        full = (warning + " As a result, events are not counted all the time processes\n"
+                "running, and event counts are smaller than what really happen.\n"
+                "Use --print-hw-counter to show available hardware counters.\n"
+                "If on a rooted device, try --use-devfreq-counters to get more counters.\n\n"
+                "dumpsys: service not found\n")
+        self.assertEqual(measure.stderr_problems(full), [
+            "simpleperf warned of multiplexing (more events than counters)",
+            "simpleperf said: dumpsys: service not found"])
         self.assertEqual(measure.stderr_problems(""), [])
         self.assertEqual(measure.stderr_problems("simpleperf E x.cpp] failed"),
                          ["simpleperf said: simpleperf E x.cpp] failed"])
@@ -1837,11 +1863,15 @@ class CountersReviewTest(unittest.TestCase):
             self.assertFalse(measure.counter_continuous(name), name)
 
     def test_the_frame_scalings_uncertainty(self):
-        """One frame of the span's, plus the window's part outside the span (extrapolated at
-        the rate) times how far the rate drifted (its last frames' against the whole span's)."""
-        rate = {"fps": 120.0, "span_s": 30.0, "fps_last": 118.8}
+        """A frame at each end of the span, plus the window's part outside the span
+        (extrapolated at the rate) times how far the rate drifted at either end (the reset's
+        frames' and the read's against the whole span's)."""
+        rate = {"fps": 120.0, "span_s": 30.0, "fps_last": 118.8, "fps_first": 122.4}
         self.assertAlmostEqual(measure.frame_scale_uncertainty(rate, 30.3),
-                               1 / 3600 + (0.3 / 30.3) * (1.2 / 120.0))
+                               2 / 3600 + (0.3 / 30.3) * (2.4 / 120.0))
+        del rate["fps_first"]
+        self.assertAlmostEqual(measure.frame_scale_uncertainty(rate, 30.3),
+                               2 / 3600 + (0.3 / 30.3) * (1.2 / 120.0))
         self.assertIsNone(measure.frame_scale_uncertainty(None, 30.3))
         self.assertIsNone(measure.frame_scale_uncertainty(rate, None))
 
@@ -1881,6 +1911,206 @@ class CountersReviewTest(unittest.TestCase):
             measure.parse_simpleperf_stat(SIMPLEPERF_STAT, self.EVENTS), 0, self.EVENTS)
         self.assertAlmostEqual(metrics["groups"]["main"]["instructions_per_second"],
                                (1518615820 + 40646062) / 3.001741)
+
+
+class CountersThirdReviewTest(unittest.TestCase):
+    EVENTS = ("instructions:u", "instructions:k", "cpu-cycles", "task:task_newtask")
+
+    def test_tracepoints_keep_their_names(self):
+        self.assertEqual(measure.event_base("instructions:u"), "instructions")
+        self.assertEqual(measure.event_base("cpu-cycles:uk"), "cpu-cycles")
+        self.assertEqual(measure.event_base("task:task_newtask"), "task:task_newtask")
+        self.assertEqual(measure.hardware_events(self.EVENTS),
+                         ["instructions:u", "instructions:k", "cpu-cycles"])
+
+    def test_threads_started_and_ended_inside_the_window(self):
+        """`task:task_newtask` counts each thread's new threads, those that also ended in the
+        window included, which the lists at both ends can't see."""
+        text = ("Performance counter statistics,\n"
+                "task:task_newtask,tid,10,cpu,0,count,2,time_enabled,100,time running,100,id,1,\n"
+                "main,10,10,2,task:task_newtask,1.0,/sec,\n"
+                "main,10,10,500,instructions:u,1.0,/sec,\n"
+                "Total test time,1.000000,seconds,\n")
+        parsed = measure.parse_simpleperf_stat(text, self.EVENTS)
+        self.assertEqual(parsed["threads"][0]["counts"]["task:task_newtask"], 2)
+        window = {"tasks_ready": {10: {"name": "main", "start": 1}},
+                  "tasks_end": {10: {"name": "main", "start": 1},
+                                11: {"name": "binder:10_4", "start": 5}}}
+        self.assertEqual(measure.thread_problems(window, parsed), [
+            "thread binder:10_4 (11) started in the window: counted with its creator's",
+            "1 thread started and ended inside the window (task_newtask counted 2): counted with "
+            "its creator's"])
+        # Its counts aren't instructions: per frame, not in IPC.
+        metrics = measure.counter_metrics({"instructions:u": 10, "cpu-cycles": 5,
+                                           "task:task_newtask": 2}, frames=2)
+        self.assertEqual((metrics["instructions"], metrics["ipc"]), (10, 2.0))
+        self.assertEqual(metrics["per_frame"]["task:task_newtask"], 1.0)
+
+    def test_the_tail_after_the_window(self):
+        """A short count after the window: work still running there (not frames) is said when
+        its rate is above twice the calibration's highest."""
+        self.assertEqual(measure.tail_problems(0.5e6, [0.2e6, 0.35e6]), [])
+        self.assertEqual(measure.tail_problems(0.8e6, [0.2e6, 0.35e6]), [
+            "the app ran 0.80 M instructions/s after the window, above twice its calibration's "
+            "0.35 M/s: the window may have ended mid-work"])
+        self.assertEqual(measure.tail_problems(9e6, []), [])
+        self.assertEqual(measure.tail_problems(None, [0.2e6]), [])
+        device = FakeCounting("", csv=SIMPLEPERF_STAT)
+        tail = measure.count_tail("rs.compose.bench.rs", run_shell=device.shell)
+        self.assertEqual(tail["instructions"], 1518615820 + 40646062 + 3812401494 + 175991219
+                         + 8675679503 + 130162704)
+        self.assertAlmostEqual(tail["rate"], tail["instructions"] / 3.001741)
+        # Which threads ran it, by group.
+        self.assertEqual(tail["groups"]["hwuiTask"], 8675679503 + 130162704)
+        self.assertEqual(sum(tail["groups"].values()), tail["instructions"])
+        self.assertTrue(any(command.startswith("simpleperf stat -p 32617 --per-thread "
+                                               "-e instructions:u,instructions:k ")
+                            and "--duration 2.5" in command for command in device.commands))
+        self.assertTrue(device.commands[-1].startswith("rm -f"))
+
+    def test_the_report_is_written_whole(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with contextlib.redirect_stdout(io.StringIO()):
+                measure.write_report(directory, {"a": 1})
+                measure.write_report(directory, {"a": 2})
+            self.assertEqual(os.listdir(directory), ["report.json"])
+            with open(os.path.join(directory, "report.json")) as file:
+                self.assertEqual(json.load(file), {"a": 2})
+
+    def test_a_failure_writes_what_ran(self):
+        with tempfile.TemporaryDirectory() as directory:
+            report = {"done": ["scroll"]}
+
+            def run():
+                raise SystemExit("stopped: the clocks moved")
+
+            with contextlib.redirect_stdout(io.StringIO()):
+                with self.assertRaises(SystemExit):
+                    measure.save_on_failure(run, directory, report)
+            with open(os.path.join(directory, "report.json")) as file:
+                saved = json.load(file)
+            self.assertEqual(saved["done"], ["scroll"])
+            self.assertIn("the clocks moved", saved["stopped"])
+
+    def test_each_run_is_saved(self):
+        saved = []
+        subjects = [("compose", "rs.compose.bench.compose", None), ("rs", "rs.compose.bench.rs", "none")]
+
+        def counted_run(scenario, package, name, run, *args):
+            return {"frames": 10, "seconds": 1.0, "problems": [],
+                    "running_ratio": {"min": 1.0, "where": None},
+                    "groups": {"total": {"instructions_per_frame": 1.0, "instructions_per_second": 1.0,
+                                         "threads": {}}}}
+
+        result = {}
+        with unittest.mock.patch.object(measure, "counted_run", counted_run):
+            with contextlib.redirect_stdout(io.StringIO()):
+                measure.counters_scenario("scroll", subjects, 2, ("instructions:u",), warmup=1,
+                                          result=result,
+                                          on_run=lambda: saved.append(json.dumps(result)))
+        self.assertEqual(len(saved), 6)
+        self.assertEqual(len(json.loads(saved[2])["subjects"]["compose"]["runs"]), 1)
+        self.assertEqual(len(result["subjects"]["rs"]["warmup"]), 1)
+        self.assertEqual(result["subjects"]["rs"]["summary"]["runs"], 2)
+
+    def test_count_while_with_framestats(self):
+        def stats(completed):
+            rows = "".join(f"0,{t - 8_000_000},{t},\n" for t in completed)
+            return (f"Total frames rendered: 240\n---PROFILEDATA---\n"
+                    f"Flags,IntendedVsync,FrameCompleted,\n{rows}---PROFILEDATA---\n")
+
+        class Device(FakeCounting):
+            def shell(self, command):
+                if command == "cat " + measure.COUNTER_FILES["gfx_start"]:
+                    self.commands.append(command)
+                    return stats([1_000_000_000, 1_008_333_333])
+                if command == "cat " + measure.COUNTER_FILES["gfx"]:
+                    self.commands.append(command)
+                    return stats([1_008_333_333 + 8_333_333 * k for k in range(121, 241)])
+                return super().shell(command)
+
+        device = Device(CountersReviewTest.BEFORE, CountersReviewTest.AFTER)
+        _, frames, _, window = measure.count_while("p", ("instructions:u",), duration_s=2,
+                                                   run_shell=device.shell, popen=device.popen,
+                                                   framestats=True)
+        self.assertEqual(frames, 240)
+        self.assertAlmostEqual(window["rate"]["fps"], 240 / (240 * 8_333_333 / 1e9))
+        self.assertTrue(any(command.startswith("popen") and "framestats reset" in command
+                            for command in device.commands))
+
+    def test_the_cleanup_doesnt_hide_the_failure(self):
+        class Device(FakeCounting):
+            def shell(self, command):
+                if command.startswith("rm -f") and self.stdout is not None:
+                    raise RuntimeError("adb: device offline")
+                return super().shell(command)
+
+        device = Device("simpleperf E cmd_stat.cpp] failed\n")
+        with contextlib.redirect_stdout(io.StringIO()):
+            with self.assertRaises(SystemExit):
+                measure.count_while("p", ("instructions:u",), run_shell=device.shell,
+                                    popen=device.popen)
+
+    def counted(self, scenario, frames, frames_after, tail_rate=0.1e6, name="rs"):
+        """`counted_run` with the device replaced: its count's frames and gfxinfo's after."""
+        parsed = measure.parse_simpleperf_stat(SIMPLEPERF_STAT, self.EVENTS[:3])
+        window = {"tasks_ready": {}, "tasks_end": {}, "frames_after": frames_after,
+                  "simpleperf_stderr": "", "rate": None}
+        patches = {
+            "cool_down": lambda what: {}, "fresh": lambda package: None,
+            "start": lambda *args, **kwargs: None, "swipe": lambda up: None,
+            "navigate_plain": lambda center: None, "finish_thermal": lambda thermal: thermal,
+            "wait_idle": lambda *args, **kwargs: {"waited_s": 1.0, "idle": True},
+            "wait_threads": lambda package: {"waited_s": 2.0, "idle": True},
+            "count_while": lambda *args, **kwargs: (parsed, frames, {"frames": frames}, window),
+            "count_tail": lambda package: {"instructions": 1, "seconds": 2.5, "rate": tail_rate},
+        }
+        with contextlib.ExitStack() as stack:
+            for attribute, value in patches.items():
+                stack.enter_context(unittest.mock.patch.object(measure, attribute, value))
+            stack.enter_context(unittest.mock.patch.object(measure.time, "sleep", lambda s: None))
+            return measure.counted_run(scenario, "rs.compose.bench.rs", name, 0, self.EVENTS[:3],
+                                       "none", (504, 1200))
+
+    def test_the_calibration_draws_nothing(self):
+        stats = self.counted(measure.CALIBRATION, 0, 0)
+        self.assertNotIn("no frame drawn", stats["problems"])
+        self.assertEqual(stats["threads_settled"], {"waited_s": 2.0, "idle": True})
+        stats = self.counted(measure.CALIBRATION, 3, 3)
+        self.assertIn("the calibration drew 3 frames", stats["problems"])
+
+    def test_a_window_that_ended_drawing(self):
+        self.assertEqual(self.counted("scroll", 1790, 1790)["problems"], [])
+        self.assertIn("4 frames drawn after the window's last read: it ended drawing",
+                      self.counted("scroll", 1790, 1794)["problems"])
+        original = dict(measure.IDLE_RATES)
+        try:
+            measure.IDLE_RATES["rs"] = [0.3e6]
+            self.assertEqual(len(self.counted("navigation", 45, 45, tail_rate=5e6)["problems"]), 1)
+        finally:
+            measure.IDLE_RATES.clear()
+            measure.IDLE_RATES.update(original)
+
+    def test_summarize_a_stopped_report(self):
+        """A report written on a failure: what stopped it, and the subjects' runs summarized
+        though their summary wasn't made."""
+        run = {"frames": 10, "seconds": 1.0, "problems": [],
+               "running_ratio": {"min": 1.0, "where": None},
+               "groups": {"main": {"instructions_per_frame": 2e6, "ipc": 1.0, "kernel_share": 0.1,
+                                   "threads": {}}}}
+        report = {"device": "Pixel 8 Pro", "android": "17", "stopped": "SystemExit('x')",
+                  "counters": {"events": ["instructions:u"], "tool": "simpleperf",
+                               "scenarios": {"scroll": {"subjects": {"rs": {"runs": [run, run]}}}}}}
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "report.json")
+            with open(path, "w") as file:
+                json.dump(report, file)
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                summarize.main(path)
+        text = output.getvalue()
+        self.assertIn("stopped: SystemExit('x')", text)
+        self.assertIn("counters scroll rs (2 runs, 10 frames): main 2.00 M/frame", text)
 
 
 if __name__ == "__main__":
