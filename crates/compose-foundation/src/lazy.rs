@@ -2385,6 +2385,43 @@ impl MeasurePolicy for LazyListLayout {
     fn debug_name(&self) -> &'static str {
         "LazyList"
     }
+
+    // As Compose's `SubcomposeLayout`: it composes while measuring, so it has no intrinsics.
+    fn min_intrinsic_width(
+        &self,
+        _: &mut compose_ui::IntrinsicMeasureScope<'_>,
+        _: &[compose_ui::IntrinsicMeasurable],
+        _: i32,
+    ) -> i32 {
+        panic!("{}", compose_ui::platform::NO_INTRINSICS_MESSAGE)
+    }
+
+    fn min_intrinsic_height(
+        &self,
+        _: &mut compose_ui::IntrinsicMeasureScope<'_>,
+        _: &[compose_ui::IntrinsicMeasurable],
+        _: i32,
+    ) -> i32 {
+        panic!("{}", compose_ui::platform::NO_INTRINSICS_MESSAGE)
+    }
+
+    fn max_intrinsic_width(
+        &self,
+        _: &mut compose_ui::IntrinsicMeasureScope<'_>,
+        _: &[compose_ui::IntrinsicMeasurable],
+        _: i32,
+    ) -> i32 {
+        panic!("{}", compose_ui::platform::NO_INTRINSICS_MESSAGE)
+    }
+
+    fn max_intrinsic_height(
+        &self,
+        _: &mut compose_ui::IntrinsicMeasureScope<'_>,
+        _: &[compose_ui::IntrinsicMeasurable],
+        _: i32,
+    ) -> i32 {
+        panic!("{}", compose_ui::platform::NO_INTRINSICS_MESSAGE)
+    }
 }
 
 /// Sizes along the axis by index (a list's items, a grid's items or lines), as last measured,

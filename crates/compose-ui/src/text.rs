@@ -555,8 +555,28 @@ struct FixedParagraph {
     exceeded_max_lines: bool,
     /// The widest hard line's width.
     intrinsic: f32,
-    /// The widest word's width.
+    /// The widest segment's width ([`widest_segment`]).
     min_intrinsic: f32,
+}
+
+/// The characters in `text`'s longest segment between line break opportunities: a word with
+/// the spaces after it, as a line break iterator segments text (what Compose's
+/// `minIntrinsicWidth` measures).
+fn widest_segment(text: &str) -> usize {
+    let mut widest = 0;
+    for line in text.split('\n') {
+        let (mut length, mut after_space) = (0, false);
+        for character in line.chars() {
+            if character != ' ' && after_space {
+                widest = widest.max(length);
+                length = 0;
+            }
+            after_space = character == ' ';
+            length += 1;
+        }
+        widest = widest.max(length);
+    }
+    widest
 }
 
 impl FixedTextMeasurer {
@@ -665,12 +685,7 @@ impl TextMeasurer for FixedTextMeasurer {
             size,
             exceeded_max_lines,
             intrinsic,
-            min_intrinsic: text
-                .split([' ', '\n'])
-                .map(|word| word.chars().count())
-                .max()
-                .unwrap_or(0) as f32
-                * advance,
+            min_intrinsic: widest_segment(text) as f32 * advance,
         };
         match self.free.pop() {
             Some(index) => {

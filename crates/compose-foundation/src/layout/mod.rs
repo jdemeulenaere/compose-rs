@@ -11,8 +11,9 @@ use std::rc::Rc;
 use compose_runtime::{composable, remember_keyed};
 use compose_ui::platform::round_to_int;
 use compose_ui::{
-    Alignment, Constraints, HorizontalAlignment, Layout, Measurable, MeasurePolicy, MeasureResult,
-    MeasureScope, Modifier, ParentAlignment, Placeable, VerticalAlignment, empty_measure_policy,
+    Alignment, Constraints, HorizontalAlignment, IntrinsicMeasurable, IntrinsicMeasureScope,
+    Layout, Measurable, MeasurePolicy, MeasureResult, MeasureScope, Modifier, ParentAlignment,
+    Placeable, VerticalAlignment, empty_measure_policy,
 };
 use smallvec_free::Buffer;
 
@@ -251,6 +252,185 @@ impl MeasurePolicy for RowColumnMeasurePolicy {
             Orientation::Vertical => scope.layout(cross_size, main_size),
         }
     }
+
+    // As Compose's `RowMeasurePolicy` and `ColumnMeasurePolicy` (`IntrinsicMeasureBlocks`):
+    // along the main axis, the children's sizes and the spacing, weighted children at the
+    // largest size per weight; across it, the largest child at the main-axis size it'd get.
+    fn min_intrinsic_width(
+        &self,
+        scope: &mut IntrinsicMeasureScope<'_>,
+        measurables: &[IntrinsicMeasurable],
+        height: i32,
+    ) -> i32 {
+        self.intrinsic(scope, measurables, height, false, true)
+    }
+
+    fn min_intrinsic_height(
+        &self,
+        scope: &mut IntrinsicMeasureScope<'_>,
+        measurables: &[IntrinsicMeasurable],
+        width: i32,
+    ) -> i32 {
+        self.intrinsic(scope, measurables, width, false, false)
+    }
+
+    fn max_intrinsic_width(
+        &self,
+        scope: &mut IntrinsicMeasureScope<'_>,
+        measurables: &[IntrinsicMeasurable],
+        height: i32,
+    ) -> i32 {
+        self.intrinsic(scope, measurables, height, true, true)
+    }
+
+    fn max_intrinsic_height(
+        &self,
+        scope: &mut IntrinsicMeasureScope<'_>,
+        measurables: &[IntrinsicMeasurable],
+        width: i32,
+    ) -> i32 {
+        self.intrinsic(scope, measurables, width, true, false)
+    }
+}
+
+impl RowColumnMeasurePolicy {
+    /// The minimum (or `max`imum) intrinsic width (`width`) or height at `available` on the
+    /// other axis: the main axis' size when asked along it, else the cross axis'.
+    fn intrinsic(
+        &self,
+        scope: &mut IntrinsicMeasureScope<'_>,
+        measurables: &[IntrinsicMeasurable],
+        available: i32,
+        max: bool,
+        width: bool,
+    ) -> i32 {
+        let spacing = self.arrangement.spacing(&scope.density());
+        let along_main = width == (self.orientation == Orientation::Horizontal);
+        if along_main {
+            intrinsic_main_axis_size(
+                scope,
+                measurables,
+                available,
+                spacing,
+                |scope, child, cross| child_intrinsic(scope, child, max, width, cross),
+            )
+        } else {
+            // The main-axis size a child takes is its maximum intrinsic, as Compose asks.
+            intrinsic_cross_axis_size(
+                scope,
+                measurables,
+                available,
+                spacing,
+                |scope, child, cross| child_intrinsic(scope, child, true, !width, cross),
+                |scope, child, main| child_intrinsic(scope, child, max, width, main),
+            )
+        }
+    }
+}
+
+/// `child`'s minimum (or `max`imum) intrinsic width (`width`) or height at `other`.
+fn child_intrinsic(
+    scope: &mut IntrinsicMeasureScope<'_>,
+    child: IntrinsicMeasurable,
+    max: bool,
+    width: bool,
+    other: i32,
+) -> i32 {
+    match (max, width) {
+        (false, true) => scope.min_intrinsic_width(child, other),
+        (false, false) => scope.min_intrinsic_height(child, other),
+        (true, true) => scope.max_intrinsic_width(child, other),
+        (true, false) => scope.max_intrinsic_height(child, other),
+    }
+}
+
+/// A child's weight, if it has one (a positive one), as `RowColumnParentData.weight`.
+fn weight_of(scope: &IntrinsicMeasureScope<'_>, child: IntrinsicMeasurable) -> f32 {
+    scope.parent_data(child).weight.map_or(0.0, |(weight, _)| weight)
+}
+
+/// As Compose's `intrinsicMainAxisSize`: the children's main-axis sizes at `cross_available`
+/// plus the spacing, the weighted ones at the largest main-axis size per weight.
+fn intrinsic_main_axis_size(
+    scope: &mut IntrinsicMeasureScope<'_>,
+    children: &[IntrinsicMeasurable],
+    cross_available: i32,
+    spacing: i32,
+    mut main_axis_size: impl FnMut(&mut IntrinsicMeasureScope<'_>, IntrinsicMeasurable, i32) -> i32,
+) -> i32 {
+    if children.is_empty() {
+        return 0;
+    }
+    let mut weight_unit_space = 0;
+    let mut fixed_space = 0;
+    let mut total_weight = 0.0f32;
+    for &child in children {
+        let weight = weight_of(scope, child);
+        let size = main_axis_size(scope, child, cross_available);
+        if weight == 0.0 {
+            fixed_space += size;
+        } else if weight > 0.0 {
+            total_weight += weight;
+            weight_unit_space = weight_unit_space.max(round_to_int(size as f32 / weight));
+        }
+    }
+    round_to_int(weight_unit_space as f32 * total_weight)
+        + fixed_space
+        + (children.len() as i32 - 1) * spacing
+}
+
+/// As Compose's `intrinsicCrossAxisSize`: the largest cross-axis size of the children, each
+/// at the main-axis space it would get (its own maximum, within what's left of
+/// `main_available`; for weighted ones, their share of what remains).
+fn intrinsic_cross_axis_size(
+    scope: &mut IntrinsicMeasureScope<'_>,
+    children: &[IntrinsicMeasurable],
+    main_available: i32,
+    spacing: i32,
+    mut main_axis_size: impl FnMut(&mut IntrinsicMeasureScope<'_>, IntrinsicMeasurable, i32) -> i32,
+    mut cross_axis_size: impl FnMut(&mut IntrinsicMeasureScope<'_>, IntrinsicMeasurable, i32) -> i32,
+) -> i32 {
+    if children.is_empty() {
+        return 0;
+    }
+    let mut fixed_space = ((children.len() as i32 - 1) * spacing).min(main_available);
+    let mut cross_axis_max = 0;
+    let mut total_weight = 0.0f32;
+    for &child in children {
+        let weight = weight_of(scope, child);
+        if weight == 0.0 {
+            let remaining = if main_available == Constraints::INFINITY {
+                Constraints::INFINITY
+            } else {
+                main_available - fixed_space
+            };
+            let main_axis_space =
+                main_axis_size(scope, child, Constraints::INFINITY).min(remaining);
+            fixed_space += main_axis_space;
+            cross_axis_max = cross_axis_max.max(cross_axis_size(scope, child, main_axis_space));
+        } else if weight > 0.0 {
+            total_weight += weight;
+        }
+    }
+    let weight_unit_space = if total_weight == 0.0 {
+        0
+    } else if main_available == Constraints::INFINITY {
+        Constraints::INFINITY
+    } else {
+        round_to_int((main_available - fixed_space).max(0) as f32 / total_weight)
+    };
+    for &child in children {
+        let weight = weight_of(scope, child);
+        if weight > 0.0 {
+            let main = if weight_unit_space != Constraints::INFINITY {
+                round_to_int(weight_unit_space as f32 * weight)
+            } else {
+                Constraints::INFINITY
+            };
+            cross_axis_max = cross_axis_max.max(cross_axis_size(scope, child, main));
+        }
+    }
+    cross_axis_max
 }
 
 /// What `BoxWithConstraints`' content knows: the constraints the box was measured with, as
@@ -361,6 +541,43 @@ impl compose_ui::MeasurePolicy for BoxWithConstraintsPolicy {
             self.measured.set(constraints);
         }
         self.inner.measure(scope, measurables, constraints)
+    }
+
+    // As Compose's `SubcomposeLayout`: it composes while measuring, so it has no intrinsics.
+    fn min_intrinsic_width(
+        &self,
+        _: &mut compose_ui::IntrinsicMeasureScope<'_>,
+        _: &[compose_ui::IntrinsicMeasurable],
+        _: i32,
+    ) -> i32 {
+        panic!("{}", compose_ui::platform::NO_INTRINSICS_MESSAGE)
+    }
+
+    fn min_intrinsic_height(
+        &self,
+        _: &mut compose_ui::IntrinsicMeasureScope<'_>,
+        _: &[compose_ui::IntrinsicMeasurable],
+        _: i32,
+    ) -> i32 {
+        panic!("{}", compose_ui::platform::NO_INTRINSICS_MESSAGE)
+    }
+
+    fn max_intrinsic_width(
+        &self,
+        _: &mut compose_ui::IntrinsicMeasureScope<'_>,
+        _: &[compose_ui::IntrinsicMeasurable],
+        _: i32,
+    ) -> i32 {
+        panic!("{}", compose_ui::platform::NO_INTRINSICS_MESSAGE)
+    }
+
+    fn max_intrinsic_height(
+        &self,
+        _: &mut compose_ui::IntrinsicMeasureScope<'_>,
+        _: &[compose_ui::IntrinsicMeasurable],
+        _: i32,
+    ) -> i32 {
+        panic!("{}", compose_ui::platform::NO_INTRINSICS_MESSAGE)
     }
 
     fn debug_name(&self) -> &'static str {

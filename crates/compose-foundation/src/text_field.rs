@@ -16,11 +16,11 @@ use crate::text_input::{
 };
 use compose_ui::{
     Color, Constraints, DetachContext, DrawModifierNode, DrawScope, EventContext,
-    FocusTargetModifierNode, IntSize, Key, KeyEvent, KeyEventType, KeyInputModifierNode, Layout,
-    LayoutModifierNode, Measurable, MeasureResult, MeasureScope, Modifier, ModifierNode,
-    ModifierNodeElement, Offset, Paint, PointerEvent, PointerEventPass, PointerEventType,
-    PointerInputModifierNode, Rect, SemanticsConfiguration, SemanticsModifierNode, TextStyle,
-    empty_measure_policy,
+    FocusTargetModifierNode, IntSize, IntrinsicMeasureScope, Key, KeyEvent, KeyEventType,
+    KeyInputModifierNode, Layout, LayoutModifierNode, Measurable, MeasureResult, MeasureScope,
+    Modifier, ModifierNode, ModifierNodeElement, Offset, Paint, PointerEvent, PointerEventPass,
+    PointerEventType, PointerInputModifierNode, Rect, SemanticsConfiguration,
+    SemanticsModifierNode, TextStyle, empty_measure_policy,
     platform::{ParagraphHandle, TextLayoutOptions},
 };
 use unicode_segmentation::UnicodeSegmentation;
@@ -709,7 +709,7 @@ impl ModifierNode for TextFieldNode {
 impl TextFieldNode {
     /// The fewest and most pixels high the field's text may be: from `min_lines` and
     /// `max_lines` in a multi-line field, any height in a single line.
-    fn line_bounds(&mut self, scope: &mut MeasureScope<'_>) -> (i32, i32) {
+    fn line_bounds(&mut self, scope: &mut IntrinsicMeasureScope<'_>) -> (i32, i32) {
         if self.single_line || (self.min_lines <= 1 && self.max_lines == u32::MAX) {
             return (0, i32::MAX);
         }
@@ -901,6 +901,110 @@ impl LayoutModifierNode for TextFieldNode {
         let placeable = scope.measure(content, Constraints::fixed(size.width, size.height));
         scope.place(&placeable, 0, 0);
         scope.layout(size.width, size.height)
+    }
+
+    /// The size it measures at an unbounded width, as Compose's text field's default.
+    fn min_intrinsic_width(
+        &mut self,
+        scope: &mut IntrinsicMeasureScope<'_>,
+        _content: Measurable,
+        height: i32,
+    ) -> i32 {
+        self.intrinsic_size(scope, Constraints::new(0, Constraints::INFINITY, 0, height)).width
+    }
+
+    /// The size it measures at `width`, as Compose's text field's default.
+    fn min_intrinsic_height(
+        &mut self,
+        scope: &mut IntrinsicMeasureScope<'_>,
+        _content: Measurable,
+        width: i32,
+    ) -> i32 {
+        self.intrinsic_size(scope, Constraints::new(0, width, 0, Constraints::INFINITY)).height
+    }
+
+    /// Its text's maximum intrinsic width, as Compose's text field (`TextDelegate`'s).
+    fn max_intrinsic_width(
+        &mut self,
+        scope: &mut IntrinsicMeasureScope<'_>,
+        _content: Measurable,
+        _height: i32,
+    ) -> i32 {
+        let unbounded = Constraints::unbounded();
+        self.with_intrinsic_paragraph(scope, unbounded, |measurer, paragraph| {
+            match measurer.max_intrinsic_width(paragraph) {
+                Some(width) => width.ceil() as i32,
+                None => measurer.metrics(paragraph).size.width,
+            }
+        })
+    }
+
+    /// As `min_intrinsic_height`.
+    fn max_intrinsic_height(
+        &mut self,
+        scope: &mut IntrinsicMeasureScope<'_>,
+        _content: Measurable,
+        width: i32,
+    ) -> i32 {
+        self.intrinsic_size(scope, Constraints::new(0, width, 0, Constraints::INFINITY)).height
+    }
+}
+
+impl TextFieldNode {
+    /// Runs `read` on its shown text laid out for `constraints` (as `measure` lays it out),
+    /// a paragraph of its own, released after: its intrinsics leave what it measured, its
+    /// scroll and its cursor as they are.
+    fn with_intrinsic_paragraph<T>(
+        &mut self,
+        scope: &mut IntrinsicMeasureScope<'_>,
+        constraints: Constraints,
+        read: impl FnOnce(&mut dyn compose_ui::platform::TextMeasurer, ParagraphHandle) -> T,
+    ) -> T {
+        let density = scope.density();
+        let options = TextLayoutOptions {
+            soft_wrap: !self.single_line,
+            max_lines: if self.single_line { 1 } else { u32::MAX },
+            direction: scope.layout_direction(),
+            overflow: compose_ui::TextOverflow::Clip,
+        };
+        let cursor_width = density.round_to_px(CURSOR_WIDTH);
+        let mut text_constraints = constraints.offset(-cursor_width, 0);
+        text_constraints.min_height = 0;
+        let text = self.display_text().into_owned();
+        let text = match self.visual_transformation.filter(&text) {
+            Some(transformed) => transformed.text,
+            None => text,
+        };
+        let measurer = scope.text_measurer();
+        let paragraph = measurer.layout_probe(
+            None,
+            &compose_ui::AnnotatedString::from(text),
+            &self.style,
+            options,
+            text_constraints,
+            &density,
+        );
+        let result = read(measurer, paragraph);
+        measurer.release(paragraph);
+        result
+    }
+
+    /// The size `measure` gives it at `constraints`, as Compose's text field's default
+    /// intrinsics measure it.
+    fn intrinsic_size(
+        &mut self,
+        scope: &mut IntrinsicMeasureScope<'_>,
+        constraints: Constraints,
+    ) -> IntSize {
+        let cursor_width = scope.density().round_to_px(CURSOR_WIDTH);
+        let text = self.with_intrinsic_paragraph(scope, constraints, |measurer, paragraph| {
+            measurer.metrics(paragraph).size
+        });
+        let (min_height, max_height) = self.line_bounds(scope);
+        constraints.constrain(IntSize::new(
+            text.width + cursor_width,
+            text.height.max(min_height).min(max_height),
+        ))
     }
 }
 

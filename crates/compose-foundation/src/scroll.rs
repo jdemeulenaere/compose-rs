@@ -397,6 +397,55 @@ pub(crate) fn bring_into_view_delta(start: f32, end: f32, length: f32) -> f32 {
 }
 
 impl LayoutModifierNode for ScrollNode {
+    // As Compose's `ScrollingLayoutNode`: the content's, unbounded along the scroll.
+    fn min_intrinsic_width(
+        &mut self,
+        scope: &mut compose_ui::IntrinsicMeasureScope<'_>,
+        content: Measurable,
+        height: i32,
+    ) -> i32 {
+        scope.min_intrinsic_width(
+            content,
+            if self.vertical { Constraints::INFINITY } else { height },
+        )
+    }
+
+    fn min_intrinsic_height(
+        &mut self,
+        scope: &mut compose_ui::IntrinsicMeasureScope<'_>,
+        content: Measurable,
+        width: i32,
+    ) -> i32 {
+        scope.min_intrinsic_height(
+            content,
+            if self.vertical { width } else { Constraints::INFINITY },
+        )
+    }
+
+    fn max_intrinsic_width(
+        &mut self,
+        scope: &mut compose_ui::IntrinsicMeasureScope<'_>,
+        content: Measurable,
+        height: i32,
+    ) -> i32 {
+        scope.max_intrinsic_width(
+            content,
+            if self.vertical { Constraints::INFINITY } else { height },
+        )
+    }
+
+    fn max_intrinsic_height(
+        &mut self,
+        scope: &mut compose_ui::IntrinsicMeasureScope<'_>,
+        content: Measurable,
+        width: i32,
+    ) -> i32 {
+        scope.max_intrinsic_height(
+            content,
+            if self.vertical { width } else { Constraints::INFINITY },
+        )
+    }
+
     fn measure(
         &mut self,
         scope: &mut MeasureScope<'_>,

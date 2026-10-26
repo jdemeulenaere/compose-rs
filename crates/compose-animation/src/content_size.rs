@@ -6,8 +6,8 @@ use std::rc::Rc;
 
 use compose_runtime::CoroutineScope;
 use compose_ui::{
-    Alignment, Constraints, DetachContext, IntSize, LayoutModifierNode, Measurable, MeasureResult,
-    MeasureScope, Modifier, ModifierNode, ModifierNodeElement,
+    Alignment, Constraints, DetachContext, IntSize, IntrinsicMeasureScope, LayoutModifierNode,
+    Measurable, MeasureResult, MeasureScope, Modifier, ModifierNode, ModifierNodeElement,
 };
 
 use crate::animatable::{Animatable, AnimationEndReason};
@@ -178,5 +178,42 @@ impl LayoutModifierNode for ContentSizeNode {
         let offset = self.alignment.align(measured, size, scope.layout_direction());
         scope.place_at(&placeable, offset);
         scope.layout(size.width, size.height)
+    }
+
+    // Its content's, as Compose's `LayoutModifierNodeWithPassThroughIntrinsics`.
+    fn min_intrinsic_width(
+        &mut self,
+        scope: &mut IntrinsicMeasureScope<'_>,
+        content: Measurable,
+        height: i32,
+    ) -> i32 {
+        scope.min_intrinsic_width(content, height)
+    }
+
+    fn min_intrinsic_height(
+        &mut self,
+        scope: &mut IntrinsicMeasureScope<'_>,
+        content: Measurable,
+        width: i32,
+    ) -> i32 {
+        scope.min_intrinsic_height(content, width)
+    }
+
+    fn max_intrinsic_width(
+        &mut self,
+        scope: &mut IntrinsicMeasureScope<'_>,
+        content: Measurable,
+        height: i32,
+    ) -> i32 {
+        scope.max_intrinsic_width(content, height)
+    }
+
+    fn max_intrinsic_height(
+        &mut self,
+        scope: &mut IntrinsicMeasureScope<'_>,
+        content: Measurable,
+        width: i32,
+    ) -> i32 {
+        scope.max_intrinsic_height(content, width)
     }
 }

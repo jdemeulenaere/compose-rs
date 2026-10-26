@@ -2,9 +2,10 @@
 
 use compose_runtime::composable;
 use compose_ui::{
-    Alignment, Constraints, DrawModifierNode, DrawScope, ImageBitmap, IntSize, LayoutModifierNode,
-    Measurable, MeasureResult, MeasureScope, Modifier, ModifierNode, ModifierNodeElement, Rect,
-    Role, SemanticsConfiguration, SemanticsModifierNode, Size,
+    Alignment, Constraints, DrawModifierNode, DrawScope, ImageBitmap, IntSize,
+    IntrinsicMeasureScope, LayoutModifierNode, Measurable, MeasureResult, MeasureScope, Modifier,
+    ModifierNode, ModifierNodeElement, Rect, Role, SemanticsConfiguration, SemanticsModifierNode,
+    Size,
 };
 
 /// How an image's size maps to its node's, as Compose's `ContentScale`.
@@ -136,20 +137,15 @@ impl ModifierNode for ImageNode {
     }
 }
 
-impl LayoutModifierNode for ImageNode {
-    /// Its pixels' size within the constraints, scaled by its content scale, as Compose's
-    /// painter node (`modifyConstraints`): with fixed constraints, their size.
-    fn measure(
-        &mut self,
-        scope: &mut MeasureScope<'_>,
-        content: Measurable,
-        constraints: Constraints,
-    ) -> MeasureResult {
+impl ImageNode {
+    /// Its pixels' size within `constraints`, scaled by its content scale, as Compose's
+    /// painter node (`modifyConstraints`'s minimum): with fixed constraints, their size.
+    fn sized(&self, constraints: Constraints) -> IntSize {
         let bounded = constraints.max_width != Constraints::INFINITY
             && constraints.max_height != Constraints::INFINITY;
         let fixed = constraints.min_width == constraints.max_width
             && constraints.min_height == constraints.max_height;
-        let size = if bounded && fixed {
+        if bounded && fixed {
             IntSize::new(constraints.max_width, constraints.max_height)
         } else {
             let (width, height) = (self.bitmap.width() as i32, self.bitmap.height() as i32);
@@ -176,10 +172,64 @@ impl LayoutModifierNode for ImageNode {
                 constraints.constrain_width(scaled.width.round() as i32),
                 constraints.constrain_height(scaled.height.round() as i32),
             )
-        };
+        }
+    }
+}
+
+impl LayoutModifierNode for ImageNode {
+    /// Its pixels' size within the constraints, scaled by its content scale ([`Self::sized`]).
+    fn measure(
+        &mut self,
+        scope: &mut MeasureScope<'_>,
+        content: Measurable,
+        constraints: Constraints,
+    ) -> MeasureResult {
+        let size = self.sized(constraints);
         let placeable = scope.measure(content, Constraints::fixed(size.width, size.height));
         scope.place(&placeable, 0, 0);
         scope.layout(size.width, size.height)
+    }
+
+    // As Compose's painter node sized to its painter: at least its size at the other axis'
+    // size, else the content's.
+    fn min_intrinsic_width(
+        &mut self,
+        scope: &mut IntrinsicMeasureScope<'_>,
+        content: Measurable,
+        height: i32,
+    ) -> i32 {
+        let own = self.sized(Constraints::new(0, Constraints::INFINITY, 0, height)).width;
+        own.max(scope.min_intrinsic_width(content, height))
+    }
+
+    fn max_intrinsic_width(
+        &mut self,
+        scope: &mut IntrinsicMeasureScope<'_>,
+        content: Measurable,
+        height: i32,
+    ) -> i32 {
+        let own = self.sized(Constraints::new(0, Constraints::INFINITY, 0, height)).width;
+        own.max(scope.max_intrinsic_width(content, height))
+    }
+
+    fn min_intrinsic_height(
+        &mut self,
+        scope: &mut IntrinsicMeasureScope<'_>,
+        content: Measurable,
+        width: i32,
+    ) -> i32 {
+        let own = self.sized(Constraints::new(0, width, 0, Constraints::INFINITY)).height;
+        own.max(scope.min_intrinsic_height(content, width))
+    }
+
+    fn max_intrinsic_height(
+        &mut self,
+        scope: &mut IntrinsicMeasureScope<'_>,
+        content: Measurable,
+        width: i32,
+    ) -> i32 {
+        let own = self.sized(Constraints::new(0, width, 0, Constraints::INFINITY)).height;
+        own.max(scope.max_intrinsic_height(content, width))
     }
 }
 

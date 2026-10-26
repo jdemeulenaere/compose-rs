@@ -13,6 +13,7 @@ mod foundation;
 mod grid;
 mod hover;
 mod image;
+mod intrinsics;
 mod lazy;
 mod lazy_api;
 mod lazy_grid_reuse;

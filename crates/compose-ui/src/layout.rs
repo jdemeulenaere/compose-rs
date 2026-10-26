@@ -173,6 +173,17 @@ fn check_measured_size(width: i32, height: i32) {
     );
 }
 
+/// What asking the intrinsics of a layout that composes while it measures panics with, as
+/// Compose's `SubcomposeLayout` (lazy lists and grids, `BoxWithConstraints`), word for word.
+pub const NO_INTRINSICS_MESSAGE: &str = "Asking for intrinsic measurements of SubcomposeLayout \
+    layouts is not supported. This includes components that are built on top of \
+    SubcomposeLayout, such as lazy lists, BoxWithConstraints, TabRow, etc. To mitigate this:\n\
+    - if intrinsic measurements are used to achieve 'match parent' sizing, consider replacing \
+    the parent of the component with a custom layout which controls the order in which children \
+    are measured, making intrinsic measurement not needed\n\
+    - adding a size modifier to the component, in order to fast return the queried intrinsic \
+    measurement.";
+
 /// Which intrinsic an intrinsic measurement asks: what measuring a child returns in it.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum Intrinsic {

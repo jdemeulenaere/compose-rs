@@ -73,8 +73,8 @@ pub mod platform {
     pub use crate::host::{FrameStats, LOCAL_CONSTRAINTS_HINT, UiHost};
     pub use crate::image::{ImageDecoder, set_image_decoder};
     pub use crate::input::Action;
-    pub use crate::layout::StackMeasurePolicy;
     pub use crate::layout::emit_layout_node;
+    pub use crate::layout::{NO_INTRINSICS_MESSAGE, StackMeasurePolicy};
     pub use crate::logging::{LogFilter, StderrLogger, default_max_level, install_stderr_logger};
     pub use crate::modifier::shared_custom_modifier;
     pub use crate::nested_scroll::NestedScrollChain;
