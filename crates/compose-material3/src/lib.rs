@@ -56,6 +56,7 @@ pub use components::{
 };
 pub use dialog::{
     AlertDialog, AlertDialogDefaults, BasicAlertDialog, DropdownMenu, DropdownMenuItem,
+    MenuDefaults, MenuItemColors,
 };
 pub use drawer::{
     DrawerDefaults, DrawerState, DrawerValue, ModalDrawerSheet, ModalNavigationDrawer,

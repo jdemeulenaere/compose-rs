@@ -1,16 +1,19 @@
 //! `AlertDialog`, `BasicAlertDialog`, `DropdownMenu` and `DropdownMenuItem`, as Compose's
 //! Material 3.
 
-use compose_ui::ClickableOptions;
+use std::cell::Cell;
 use std::rc::Rc;
 
+use compose_animation::{AnimationSpec, MutableTransitionState, remember_transition};
+use compose_foundation::BorderStroke;
 use compose_foundation::ScrollModifiers as _;
 use compose_foundation::layout::{Arrangement, Box, Column, ColumnScope};
 use compose_runtime::{CompositionLocalProvider, composable, remember};
 use compose_ui::{
-    Alignment, Constraints, Dp, DpOffset, IntOffset, IntSize, Layout, LayoutDirection, Measurable,
-    MeasurePolicy, MeasureResult, MeasureScope, Modifier, Placeable, PopupPositionProvider,
-    PopupProperties, Rect, UnitExt,
+    Alignment, ClickableOptions, Color, Constraints, Dp, DpOffset, IntOffset, IntSize, Layout,
+    LayoutDirection, Measurable, MeasurePolicy, MeasureResult, MeasureScope, Modifier,
+    MutableInteractionSource, PaddingValues, Placeable, PopupPositionProvider, PopupProperties,
+    Rect, Shape, TransformOrigin, UnitExt,
 };
 
 use crate::components::Surface;
@@ -376,6 +379,35 @@ const MENU_VERTICAL_MARGIN: Dp = Dp(48.0);
 struct DropdownMenuPosition {
     offset: IntOffset,
     vertical_margin: i32,
+    /// Where the menu grows from, set as it's placed, as the provider's `transformOrigin`.
+    transform_origin: Cell<TransformOrigin>,
+}
+
+/// The point of the menu nearest its anchor, as fractions of its size, as Compose's
+/// `calculateTransformOrigin`: the side facing the anchor, or the middle of their overlap.
+fn transform_origin(anchor: Rect, menu: Rect) -> TransformOrigin {
+    fn pivot(anchor: (f32, f32), menu: (f32, f32)) -> f32 {
+        let size = menu.1 - menu.0;
+        if menu.0 >= anchor.1 {
+            0.0
+        } else if menu.1 <= anchor.0 {
+            1.0
+        } else if size == 0.0 {
+            0.0
+        } else {
+            // Integer pixels, as Compose's `IntRect`s.
+            let center = ((anchor.0.max(menu.0) + anchor.1.min(menu.1)) / 2.0).trunc();
+            (center - menu.0) / size
+        }
+    }
+    let round = |rect: Rect| {
+        Rect::new(rect.left.round(), rect.top.round(), rect.right.round(), rect.bottom.round())
+    };
+    let (anchor, menu) = (round(anchor), round(menu));
+    TransformOrigin {
+        pivot_fraction_x: pivot((anchor.left, anchor.right), (menu.left, menu.right)),
+        pivot_fraction_y: pivot((anchor.top, anchor.bottom), (menu.top, menu.bottom)),
+    }
 }
 
 impl PopupPositionProvider for DropdownMenuPosition {
@@ -426,17 +458,153 @@ impl PopupPositionProvider for DropdownMenuPosition {
         .find(|&y| y >= margin && y + popup.height <= window.height - margin)
         .unwrap_or(bottom_to_anchor_top);
         // Kept in the window, as a popup window clipped to the screen.
-        IntOffset::new(
+        let position = IntOffset::new(
             x.min(window.width - popup.width).max(0),
             y.min(window.height - popup.height).max(0),
-        )
+        );
+        let menu = Rect::new(
+            position.x as f32,
+            position.y as f32,
+            (position.x + popup.width) as f32,
+            (position.y + popup.height) as f32,
+        );
+        self.transform_origin.set(transform_origin(anchor, menu));
+        position
     }
 }
 
+/// As Compose's `MenuDefaults`: the stable menu's values.
+pub struct MenuDefaults;
+
+impl MenuDefaults {
+    /// A focusable popup, as `DefaultMenuProperties`.
+    pub const DEFAULT_MENU_PROPERTIES: PopupProperties = PopupProperties {
+        focusable: true,
+        dismiss_on_back_press: true,
+        dismiss_on_click_outside: true,
+    };
+    /// No tonal elevation, as `TonalElevation`.
+    pub const TONAL_ELEVATION: Dp = Dp(0.0);
+    /// 3 dp, as `ShadowElevation` (`MenuTokens.ContainerElevation`, level 2).
+    pub const SHADOW_ELEVATION: Dp = Dp(3.0);
+    /// 20 dp, as `LeadingIconSize`.
+    pub const LEADING_ICON_SIZE: Dp = Dp(20.0);
+    /// 20 dp, as `TrailingIconSize` (without precision pointer sizing).
+    pub const TRAILING_ICON_SIZE: Dp = Dp(20.0);
+    /// 12 dp at the start and end, as `DropdownMenuItemContentPadding`.
+    pub const DROPDOWN_MENU_ITEM_CONTENT_PADDING: PaddingValues = PaddingValues::new(
+        MENU_ITEM_HORIZONTAL_PADDING,
+        Dp(0.0),
+        MENU_ITEM_HORIZONTAL_PADDING,
+        Dp(0.0),
+    );
+
+    /// The extra-small shape, as `shape`.
+    pub fn shape() -> Shape {
+        MaterialTheme::shapes().extra_small
+    }
+
+    /// The surface container, as `containerColor`.
+    pub fn container_color() -> Color {
+        MaterialTheme::color_scheme().surface_container
+    }
+
+    /// The items' colors, as `itemColors()`: the text in the on-surface color, the icons in its
+    /// variant, all the on-surface color at 38 % when disabled (`ListTokens`).
+    pub fn item_colors() -> MenuItemColors {
+        let scheme = MaterialTheme::color_scheme();
+        let disabled = scheme.on_surface.with_alpha(0.38);
+        MenuItemColors {
+            text_color: scheme.on_surface,
+            leading_icon_color: scheme.on_surface_variant,
+            trailing_icon_color: scheme.on_surface_variant,
+            disabled_text_color: disabled,
+            disabled_leading_icon_color: disabled,
+            disabled_trailing_icon_color: disabled,
+        }
+    }
+
+    /// [`item_colors`](Self::item_colors) with the colors given (`Color::UNSPECIFIED` keeps a
+    /// default), as `itemColors(textColor, …)`.
+    pub fn item_colors_with(
+        text_color: Color,
+        leading_icon_color: Color,
+        trailing_icon_color: Color,
+        disabled_text_color: Color,
+        disabled_leading_icon_color: Color,
+        disabled_trailing_icon_color: Color,
+    ) -> MenuItemColors {
+        let base = Self::item_colors();
+        let or = |color: Color, default: Color| if color.is_specified() { color } else { default };
+        MenuItemColors {
+            text_color: or(text_color, base.text_color),
+            leading_icon_color: or(leading_icon_color, base.leading_icon_color),
+            trailing_icon_color: or(trailing_icon_color, base.trailing_icon_color),
+            disabled_text_color: or(disabled_text_color, base.disabled_text_color),
+            disabled_leading_icon_color: or(
+                disabled_leading_icon_color,
+                base.disabled_leading_icon_color,
+            ),
+            disabled_trailing_icon_color: or(
+                disabled_trailing_icon_color,
+                base.disabled_trailing_icon_color,
+            ),
+        }
+    }
+}
+
+/// A menu item's text and icon colors, enabled and not, as Compose's `MenuItemColors` (its
+/// container colors are the expressive items').
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct MenuItemColors {
+    pub text_color: Color,
+    pub leading_icon_color: Color,
+    pub trailing_icon_color: Color,
+    pub disabled_text_color: Color,
+    pub disabled_leading_icon_color: Color,
+    pub disabled_trailing_icon_color: Color,
+}
+
+impl MenuItemColors {
+    /// As `textColor(enabled)`.
+    pub fn text_color(&self, enabled: bool) -> Color {
+        if enabled { self.text_color } else { self.disabled_text_color }
+    }
+
+    /// As `leadingIconColor(enabled)`.
+    pub fn leading_icon_color(&self, enabled: bool) -> Color {
+        if enabled { self.leading_icon_color } else { self.disabled_leading_icon_color }
+    }
+
+    /// As `trailingIconColor(enabled)`.
+    pub fn trailing_icon_color(&self, enabled: bool) -> Color {
+        if enabled { self.trailing_icon_color } else { self.disabled_trailing_icon_color }
+    }
+}
+
+impl compose_runtime::ComposeArg for MenuItemColors {
+    fn same(&self, other: &Self) -> bool {
+        self == other
+    }
+}
+
+/// An item's padding at its start and end, and between its text and icons, as Compose's
+/// `DropdownMenuItemHorizontalPadding`.
+const MENU_ITEM_HORIZONTAL_PADDING: Dp = Dp(12.0);
+/// The width an item's icon takes at least, as `ListTokens.ItemLeadingIconSize` and
+/// `ItemTrailingIconSize`.
+const MENU_ITEM_ICON_SLOT: Dp = Dp(24.0);
+/// A menu's size and opacity as it opens or closes, as Compose's `ClosedScaleTarget` and
+/// `ClosedAlphaTarget`.
+const CLOSED_SCALE: f32 = 0.8;
+const CLOSED_ALPHA: f32 = 0.0;
+
 /// A menu shown while `expanded`, below its anchor (the layout around it), as Compose's
-/// `DropdownMenu`: on the extra-small shape in the surface container, as wide as its widest
-/// item (112 to 280 dp), 8 dp above and below its items, scrolling if taller than the window;
-/// it takes the focus, and a click outside or Escape calls `on_dismiss_request`.
+/// `DropdownMenu`: on `shape` in `container_color` (by default the extra-small shape in the
+/// surface container, 3 dp of shadow), as wide as its widest item, 8 dp above and below its
+/// items, scrolling if taller than the window. It grows in from its anchor's side (from 0.8 of
+/// its size, fading in) and shrinks out the same way before it leaves; it takes the focus (its
+/// `properties`), and a click outside or Escape calls `on_dismiss_request`.
 #[composable]
 #[allow(non_snake_case)]
 pub fn DropdownMenu(
@@ -445,36 +613,66 @@ pub fn DropdownMenu(
     #[default(crate::Modifier)] modifier: Modifier,
     #[default(crate::DpOffset::ZERO)] offset: DpOffset,
     #[default(crate::remember_scroll_state(0))] scroll_state: compose_foundation::ScrollState,
+    #[default(crate::MenuDefaults::DEFAULT_MENU_PROPERTIES)] properties: PopupProperties,
+    #[default(crate::MenuDefaults::shape())] shape: Shape,
+    #[default(crate::MenuDefaults::container_color())] container_color: Color,
+    #[default(crate::MenuDefaults::TONAL_ELEVATION)] tonal_elevation: Dp,
+    #[default(crate::MenuDefaults::SHADOW_ELEVATION)] shadow_elevation: Dp,
+    #[default(None)] border: Option<BorderStroke>,
     content: impl Fn(ColumnScope) + 'static,
 ) {
-    if expanded {
+    // Shown from when it's expanded to when it has animated out, as Compose's
+    // `MutableTransitionState(false)` the menu's transition follows.
+    let expanded_state = remember(|| MutableTransitionState::new(false));
+    expanded_state.set_target_state(expanded);
+    if expanded_state.current_state() || expanded_state.target_state() {
         let density = compose_ui::LOCAL_DENSITY.current();
         let vertical_margin = density.round_to_px(MENU_VERTICAL_MARGIN);
         // In pixels at the density, as Compose's `contentOffset.x.roundToPx()`.
         let offset = IntOffset::new(density.round_to_px(offset.x), density.round_to_px(offset.y));
-        let provider = compose_runtime::remember_keyed(OffsetKey(offset, vertical_margin), || {
-            Rc::new(DropdownMenuPosition { offset, vertical_margin })
-                as Rc<dyn PopupPositionProvider>
+        let position = compose_runtime::remember_keyed(OffsetKey(offset, vertical_margin), || {
+            Rc::new(DropdownMenuPosition {
+                offset,
+                vertical_margin,
+                transform_origin: Cell::new(TransformOrigin::CENTER),
+            })
         });
+        let provider = position.clone() as Rc<dyn PopupPositionProvider>;
         let column = remember(|| Rc::new(MenuColumn) as Rc<dyn MeasurePolicy>);
         let scroll = scroll_state;
-        let scheme = MaterialTheme::color_scheme();
         compose_ui::PopupWithPositionProvider(
             provider,
             Some(on_dismiss_request),
-            PopupProperties { focusable: true, ..PopupProperties::default() },
+            properties,
             compose_runtime::callback(move || {
                 let (modifier, content, column, scroll) =
                     (modifier.clone(), content.clone(), column.clone(), scroll);
+                // The open and close animation, as Compose's `DropdownMenuContent`.
+                let transition = remember_transition(&expanded_state, "DropDownMenu");
+                let scale = transition.animate_float(
+                    |_| AnimationSpec::Spring(crate::motion::FAST_SPATIAL),
+                    |expanded| if *expanded { 1.0 } else { CLOSED_SCALE },
+                );
+                let alpha = transition.animate_float(
+                    |_| AnimationSpec::Spring(crate::motion::FAST_EFFECTS),
+                    |expanded| if *expanded { 1.0 } else { CLOSED_ALPHA },
+                );
+                let position = position.clone();
+                let layer = Modifier.graphics_layer(move |layer| {
+                    let scale = scale.get();
+                    layer.scale_x = scale;
+                    layer.scale_y = scale;
+                    layer.alpha = alpha.get();
+                    layer.transform_origin = position.transform_origin.get();
+                });
                 Surface(
-                    Modifier,
-                    MaterialTheme::shapes().extra_small,
-                    scheme.surface_container,
-                    compose_ui::Color::UNSPECIFIED,
-                    Dp(0.0),
-                    // As `MenuDefaults.ShadowElevation`.
-                    3.dp(),
-                    None,
+                    layer,
+                    shape,
+                    container_color,
+                    Color::UNSPECIFIED,
+                    tonal_elevation,
+                    shadow_elevation,
+                    border,
                     compose_runtime::callback(move || {
                         let content = content.clone();
                         // The modifier on the items' column, its 8 dp padding outside the
@@ -500,8 +698,9 @@ impl compose_runtime::ComposeArg for OffsetKey {
     }
 }
 
-/// A menu's items, one under the other, all as wide as the widest (at its natural width), at
-/// least 112 dp and at most 280 dp, as Compose's `width(IntrinsicSize.Max)` menu.
+/// A menu's items, one under the other at its start, the menu as wide as the widest's natural
+/// width, as Compose's `Column(Modifier.width(IntrinsicSize.Max))` (its items 112 to 280 dp
+/// wide, filling it).
 struct MenuColumn;
 
 impl MeasurePolicy for MenuColumn {
@@ -511,18 +710,14 @@ impl MeasurePolicy for MenuColumn {
         measurables: &[Measurable],
         constraints: Constraints,
     ) -> MeasureResult {
-        let density = scope.density();
-        let min = density.round_to_px(112.dp()).min(constraints.max_width);
-        let max = density.round_to_px(280.dp()).min(constraints.max_width).max(min);
-        // Each item's natural width first, then all at the widest.
         let widest = measurables
             .iter()
             .map(|&child| scope.max_intrinsic_width(child, Constraints::INFINITY))
             .max()
             .unwrap_or(0);
         // A width given to the menu wins, as `width(IntrinsicSize.Max)` within it.
-        let width = widest.clamp(min, max).clamp(constraints.min_width, constraints.max_width);
-        let item = Constraints::new(width, width, 0, Constraints::INFINITY);
+        let width = widest.clamp(constraints.min_width, constraints.max_width);
+        let item = Constraints::new(0, width, 0, Constraints::INFINITY);
         let placeables: Vec<Placeable> =
             measurables.iter().map(|&child| scope.measure(child, item)).collect();
         let mut y = 0;
@@ -538,8 +733,10 @@ impl MeasurePolicy for MenuColumn {
     }
 }
 
-/// An item of a menu, as Compose's `DropdownMenuItem`: at least 48 dp high, 12 dp in, its text
-/// in the label-large style, with optional icons at its ends.
+/// An item of a menu, as Compose's `DropdownMenuItem`: filling the menu's width (112 to 280 dp
+/// when the menu asks how wide it would be), at least 48 dp high, `content_padding` in (12 dp
+/// at its ends), its text in the label-large style, with optional icons at its ends (each at
+/// least 24 dp wide, 12 dp from the text) in `colors`.
 #[composable]
 #[allow(non_snake_case)]
 pub fn DropdownMenuItem(
@@ -549,31 +746,49 @@ pub fn DropdownMenuItem(
     #[default(None)] leading_icon: Option<impl Fn() + 'static>,
     #[default(None)] trailing_icon: Option<impl Fn() + 'static>,
     #[default(true)] enabled: bool,
+    #[default(crate::MenuDefaults::item_colors())] colors: MenuItemColors,
+    #[default(crate::MenuDefaults::DROPDOWN_MENU_ITEM_CONTENT_PADDING)]
+    content_padding: PaddingValues,
+    #[default(None)] interaction_source: Option<MutableInteractionSource>,
 ) {
-    let scheme = MaterialTheme::color_scheme();
-    let color = if enabled { scheme.on_surface } else { scheme.on_surface.with_alpha(0.38) };
-    let label = MaterialTheme::typography().label_large.clone();
     let layout = {
         let leading = leading_icon.is_some();
-        compose_runtime::remember_keyed(leading, move || {
-            Rc::new(MenuItemLayout { leading }) as Rc<dyn MeasurePolicy>
+        // The widest its content would like: 280 dp with the padding, as Compose's `sizeIn`
+        // (compose-ui asks a width by measuring, which a bounded `size_in` would fill).
+        let density = compose_ui::LOCAL_DENSITY.current();
+        let max_width = density.round_to_px(DROPDOWN_MENU_ITEM_MAX_WIDTH)
+            - density.round_to_px(content_padding.start)
+            - density.round_to_px(content_padding.end);
+        compose_runtime::remember_keyed((leading, max_width), move || {
+            Rc::new(MenuItemLayout { leading, max_width }) as Rc<dyn MeasurePolicy>
         })
     };
+    // The ripple in the content color around the item, as Compose's `ripple(true)`.
+    let indication = LOCAL_CONTENT_COLOR.current().into();
     let modifier = modifier
         .clickable_with(
-            ClickableOptions { enabled, indication: color.into(), ..ClickableOptions::DEFAULT },
+            ClickableOptions {
+                enabled,
+                indication,
+                interaction_source,
+                ..ClickableOptions::DEFAULT
+            },
             on_click,
         )
         .fill_max_width()
+        // At least the width it would like when the menu asks, as Compose's `sizeIn` (the
+        // layout keeps to its maximum).
         .size_in(compose_ui::SizeSpec::bounds(
-            Dp::UNSPECIFIED,
+            DROPDOWN_MENU_ITEM_MIN_WIDTH,
             48.dp(),
             Dp::UNSPECIFIED,
             Dp::UNSPECIFIED,
         ))
-        .padding((12.dp(), 0.dp()));
-    CompositionLocalProvider(LOCAL_CONTENT_COLOR.provides(color), || {
-        CompositionLocalProvider(LOCAL_TEXT_STYLE.provides(label), || {
+        .padding(content_padding);
+    let label = MaterialTheme::typography().label_large;
+    crate::ProvideTextStyle(
+        label,
+        compose_runtime::callback(move || {
             let (text, leading, trailing) =
                 (text.clone(), leading_icon.clone(), trailing_icon.clone());
             Layout(
@@ -581,30 +796,46 @@ pub fn DropdownMenuItem(
                 layout.clone(),
                 compose_runtime::callback(move || {
                     if let Some(leading) = leading.clone() {
-                        leading();
+                        let color = colors.leading_icon_color(enabled);
+                        CompositionLocalProvider(LOCAL_CONTENT_COLOR.provides(color), &*leading);
                     }
                     let text = text.clone();
-                    Box(
-                        Modifier,
-                        Alignment::CENTER_START,
-                        false,
-                        compose_runtime::callback(move |_| text()),
-                    );
+                    let color = colors.text_color(enabled);
+                    CompositionLocalProvider(LOCAL_CONTENT_COLOR.provides(color), || {
+                        let text = text.clone();
+                        Box(
+                            Modifier,
+                            Alignment::TOP_START,
+                            false,
+                            compose_runtime::callback(move |_| text()),
+                        );
+                    });
                     if let Some(trailing) = trailing.clone() {
-                        trailing();
+                        let color = colors.trailing_icon_color(enabled);
+                        CompositionLocalProvider(LOCAL_CONTENT_COLOR.provides(color), || {
+                            trailing()
+                        });
                     }
                 }),
             );
-        });
-    });
+        }),
+    );
 }
 
-/// A menu item's row: the leading icon, the text taking the rest of a bounded width, and the
-/// trailing icon at the end, 12 dp apart and centered vertically; at their natural widths when
-/// the width is unbounded (the menu asking how wide it would be).
+/// The width a menu item would like, as Compose's `DropdownMenuItemDefaultMinWidth` and
+/// `DropdownMenuItemDefaultMaxWidth`.
+const DROPDOWN_MENU_ITEM_MIN_WIDTH: Dp = Dp(112.0);
+const DROPDOWN_MENU_ITEM_MAX_WIDTH: Dp = Dp(280.0);
+
+/// A menu item's row, as Compose's: the leading icon, the text taking the rest of a bounded
+/// width, and the trailing icon at the end, 12 dp apart and centered vertically, each icon at
+/// the start of a slot at least 24 dp wide (`defaultMinSize`); at their natural widths when the
+/// width is unbounded (the menu asking how wide it would be).
 struct MenuItemLayout {
     /// The first child is the leading icon (the text the second).
     leading: bool,
+    /// The widest it is when its width is unbounded, in pixels.
+    max_width: i32,
 }
 
 impl MeasurePolicy for MenuItemLayout {
@@ -614,16 +845,20 @@ impl MeasurePolicy for MenuItemLayout {
         measurables: &[Measurable],
         constraints: Constraints,
     ) -> MeasureResult {
-        let gap = scope.density().round_to_px(12.dp());
+        let density = scope.density();
+        let gap = density.round_to_px(MENU_ITEM_HORIZONTAL_PADDING);
+        let icon_slot = density.round_to_px(MENU_ITEM_ICON_SLOT);
         let loose = Constraints::new(0, Constraints::INFINITY, 0, constraints.max_height);
         let count = measurables.len();
         let text_index = usize::from(self.leading).min(count.saturating_sub(1));
         let mut placeables: Vec<Option<Placeable>> = vec![None; count];
+        let mut slots = vec![0; count];
         let mut fixed = 0;
         for (index, &child) in measurables.iter().enumerate() {
             if index != text_index {
                 let placeable = scope.measure(child, loose);
-                fixed += placeable.width + gap;
+                slots[index] = placeable.width.max(icon_slot);
+                fixed += slots[index] + gap;
                 placeables[index] = Some(placeable);
             }
         }
@@ -634,19 +869,24 @@ impl MeasurePolicy for MenuItemLayout {
                 let room = (constraints.max_width - fixed).max(0);
                 Constraints::new(room, room, 0, constraints.max_height)
             };
-            placeables[text_index] = Some(scope.measure(text, text_constraints));
+            let placeable = scope.measure(text, text_constraints);
+            slots[text_index] = placeable.width;
+            placeables[text_index] = Some(placeable);
         }
-        let content: i32 =
-            placeables.iter().flatten().map(|placeable| placeable.width).sum::<i32>()
-                + gap * (count.saturating_sub(1) as i32);
+        let mut content: i32 = slots.iter().sum::<i32>() + gap * (count.saturating_sub(1) as i32);
+        if constraints.max_width == Constraints::INFINITY {
+            content = content.min(self.max_width);
+        }
         let width = constraints.constrain_width(content);
         let height = constraints.constrain_height(
             placeables.iter().flatten().map(|placeable| placeable.height).max().unwrap_or(0),
         );
         let mut x = 0;
-        for placeable in placeables.iter().flatten() {
-            scope.place_relative(placeable, x, (height - placeable.height) / 2);
-            x += placeable.width + gap;
+        for (placeable, slot) in placeables.iter().zip(&slots) {
+            if let Some(placeable) = placeable {
+                scope.place_relative(placeable, x, (height - placeable.height) / 2);
+            }
+            x += slot + gap;
         }
         scope.layout(width, height)
     }
