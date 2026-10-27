@@ -147,6 +147,7 @@ impl ModifierNodeElement for TextFieldElement {
             paragraph: None,
             constraints: None,
             stale: Vec::new(),
+            intrinsics: None,
             density: None,
             direction: compose_ui::LayoutDirection::Ltr,
             cursor_rect: None,
@@ -338,6 +339,9 @@ pub(crate) struct TextFieldNode {
     /// The layout direction it was laid out in (an empty field's cursor side).
     direction: compose_ui::LayoutDirection,
     stale: Vec<ParagraphHandle>,
+    /// The paragraph its intrinsics read, kept for the next ones with the same text, style,
+    /// density, direction and constraints, as a text's (`TextNode::probe`, D1208).
+    intrinsics: Option<IntrinsicParagraph>,
     /// Where the cursor is drawn, from the measurer, refreshed at measurement: moving the
     /// cursor asks for one (the paragraph is kept).
     cursor_rect: Option<Rect>,
@@ -678,7 +682,10 @@ impl ModifierNode for TextFieldNode {
         Some(self)
     }
     fn on_detach(&mut self, context: &mut DetachContext<'_>) {
-        for paragraph in self.paragraph.take().into_iter().chain(self.stale.drain(..)) {
+        let intrinsics = self.intrinsics.take().map(|intrinsics| intrinsics.paragraph);
+        for paragraph in
+            self.paragraph.take().into_iter().chain(self.stale.drain(..)).chain(intrinsics)
+        {
             context.text_measurer.release(paragraph);
         }
     }
@@ -923,20 +930,24 @@ impl LayoutModifierNode for TextFieldNode {
         self.intrinsic_size(scope, Constraints::new(0, width, 0, Constraints::INFINITY)).height
     }
 
-    /// Its text's maximum intrinsic width, as Compose's text field (`TextDelegate`'s).
+    /// Its text's maximum intrinsic width, as Compose's text field (`TextDelegate`'s), and
+    /// the cursor's width, which `measure` adds beside the text (D1206): the field doesn't wrap
+    /// at its maximum intrinsic width.
     fn max_intrinsic_width(
         &mut self,
         scope: &mut IntrinsicMeasureScope<'_>,
         _content: Measurable,
         _height: i32,
     ) -> i32 {
+        let cursor_width = scope.density().round_to_px(CURSOR_WIDTH);
         let unbounded = Constraints::unbounded();
-        self.with_intrinsic_paragraph(scope, unbounded, |measurer, paragraph| {
+        let text = self.with_intrinsic_paragraph(scope, unbounded, |measurer, paragraph| {
             match measurer.max_intrinsic_width(paragraph) {
                 Some(width) => width.ceil() as i32,
                 None => measurer.metrics(paragraph).size.width,
             }
-        })
+        });
+        text + cursor_width
     }
 
     /// As `min_intrinsic_height`.
@@ -950,9 +961,20 @@ impl LayoutModifierNode for TextFieldNode {
     }
 }
 
+/// A paragraph a text field's intrinsics laid out, and what for.
+struct IntrinsicParagraph {
+    paragraph: ParagraphHandle,
+    text: String,
+    style: TextStyle,
+    options: TextLayoutOptions,
+    density: compose_ui::Density,
+    constraints: Constraints,
+}
+
 impl TextFieldNode {
     /// Runs `read` on its shown text laid out for `constraints` (as `measure` lays it out),
-    /// a paragraph of its own, released after: its intrinsics leave what it measured, its
+    /// in a paragraph of its own, kept for the next intrinsics asked with the same text, style,
+    /// density, direction and constraints (D1208): its intrinsics leave what it measured, its
     /// scroll and its cursor as they are.
     fn with_intrinsic_paragraph<T>(
         &mut self,
@@ -976,17 +998,39 @@ impl TextFieldNode {
             None => text,
         };
         let measurer = scope.text_measurer();
-        let paragraph = measurer.layout_probe(
-            None,
-            &compose_ui::AnnotatedString::from(text),
-            &self.style,
-            options,
-            text_constraints,
-            &density,
-        );
-        let result = read(measurer, paragraph);
-        measurer.release(paragraph);
-        result
+        let kept = self.intrinsics.as_ref().filter(|kept| {
+            kept.text == text
+                && kept.style == self.style
+                && kept.options == options
+                && kept.density == density
+                && kept.constraints == text_constraints
+        });
+        let paragraph = match kept {
+            Some(kept) => kept.paragraph,
+            None => {
+                if let Some(old) = self.intrinsics.take() {
+                    measurer.release(old.paragraph);
+                }
+                let paragraph = measurer.layout_probe(
+                    None,
+                    &compose_ui::AnnotatedString::from(text.as_str()),
+                    &self.style,
+                    options,
+                    text_constraints,
+                    &density,
+                );
+                self.intrinsics = Some(IntrinsicParagraph {
+                    paragraph,
+                    text,
+                    style: self.style,
+                    options,
+                    density,
+                    constraints: text_constraints,
+                });
+                paragraph
+            }
+        };
+        read(measurer, paragraph)
     }
 
     /// The size `measure` gives it at `constraints`, as Compose's text field's default

@@ -1921,3 +1921,137 @@ fn a_texts_intrinsics_are_its_widest_word_its_whole_width_and_its_height_at_a_wi
     assert_eq!(max_at_whole, single.height);
     assert_eq!(max_unbounded, single.height);
 }
+
+// ---- Text fields -------------------------------------------------------------------------------
+
+// Review of D1204 (D1206): a text field's maximum intrinsic width, as CoreTextField's
+// `maxIntrinsicWidth`, sizes it to its text on one line, the cursor beside it.
+#[test]
+fn a_text_field_at_its_maximum_intrinsic_width_doesnt_wrap() {
+    let (intrinsic, unbounded) = (cell(), cell());
+    let (at_max, natural) = (intrinsic.clone(), unbounded.clone());
+    let _ui = ComposeTestRule::sized(IntSize::new(800, 800), move || {
+        let (at_max, natural) = (at_max.clone(), natural.clone());
+        Column!({
+            BasicTextField!(
+                "Hello there friend".to_string(),
+                |_| {},
+                modifier = Modifier.width(IntrinsicSize::Max).then(size_into(&at_max))
+            );
+            BasicTextField!(
+                "Hello there friend".to_string(),
+                |_| {},
+                modifier = Modifier.then(size_into(&natural))
+            );
+        });
+    });
+    // The width it measures unbounded, one line high.
+    assert_eq!(intrinsic.get(), unbounded.get());
+}
+
+// Review of D1204 (D1206): a text field's minimum intrinsic width is no wider than its maximum.
+#[test]
+fn a_text_fields_minimum_intrinsic_width_is_at_most_its_maximum() {
+    for text in ["Hello there friend", "", "a"] {
+        let scene = layout(move || {
+            BasicTextField!(text.to_string(), |_| {});
+        });
+        test_intrinsics(vec![scene], |asked| {
+            for height in [0, 20, INF] {
+                assert!(asked.min_width(height) <= asked.max_width(height), "at {height}");
+            }
+        });
+    }
+}
+
+// Review of D1204 (D1208): as a text's (Compose's `MultiParagraphLayoutCache.intrinsicHeight`
+// caches its height by width), a text field's intrinsics lay its text out once for a width.
+#[test]
+fn a_text_fields_intrinsics_lay_its_text_out_once_for_the_same_width() {
+    let tick = mutable_state_of(0);
+    let ticks = tick.handle();
+    let (measurer, counter) =
+        CountingTextMeasurer::new(compose_ui::platform::FixedTextMeasurer::new());
+    let host = compose_ui::platform::UiHost::new(
+        IntSize::new(300, 300),
+        compose_ui::Density::new(1.0),
+        Box::new(measurer),
+    );
+    let mut ui = ComposeTestRule::with_host(host, move || {
+        Layout(
+            Modifier,
+            compose_ui::measure_policy(move |scope, measurables, _| {
+                let _ = ticks.get();
+                let field = measurables[0];
+                let _ = scope.max_intrinsic_height(field, 200);
+                let _ = scope.min_intrinsic_height(field, 200);
+                let placeable = scope.measure(field, Constraints::new(0, 200, 0, 300));
+                scope.place(&placeable, 0, 0);
+                scope.layout(200, placeable.height)
+            }),
+            callback(|| BasicTextField!("Field text".to_string(), |_| {})),
+        );
+    });
+    counter.clear();
+    for step in 1..=3 {
+        tick.set(step);
+        ui.wait_for_idle();
+    }
+    // Laid out once for that width, before the counts, and kept.
+    assert_eq!(counter.of("Field text").probes, 0);
+}
+
+// ---- Layouts without intrinsics ----------------------------------------------------------------
+
+/// Asks `content`'s maximum intrinsic width from its parent's measurement.
+fn ask_the_intrinsic_width_of(content: impl Fn() + 'static) {
+    let content = layout(content);
+    test_intrinsics(vec![content], |asked| {
+        asked.max_width(INF);
+    });
+}
+
+// Review of D1204 (no Compose test pins it): Compose's `SubcomposeLayout` panics with
+// `NoIntrinsicsMessage` (ui/layout/SubcomposeLayout.kt) when asked its intrinsics.
+// (`NoIntrinsicsMessage`: lazy lists are built on it in Compose)
+#[test]
+#[should_panic(
+    expected = "Asking for intrinsic measurements of SubcomposeLayout layouts is not supported"
+)]
+fn a_lazy_lists_intrinsics_panic() {
+    ask_the_intrinsic_width_of(|| {
+        LazyColumn!(|scope: LazyListScope| {
+            scope.items(3, |index| BasicText!("Row {}", index));
+        });
+    });
+}
+
+// Review of D1204 (no Compose test pins it): Compose's `SubcomposeLayout` panics with
+// `NoIntrinsicsMessage` (ui/layout/SubcomposeLayout.kt) when asked its intrinsics.
+// (lazy grids are built on it in Compose)
+#[test]
+#[should_panic(
+    expected = "Asking for intrinsic measurements of SubcomposeLayout layouts is not supported"
+)]
+fn a_lazy_grids_intrinsics_panic() {
+    ask_the_intrinsic_width_of(|| {
+        LazyVerticalGrid!(GridCells::Fixed(2), |scope: LazyGridScope| {
+            scope.items(3, |index| BasicText!("Cell {}", index));
+        });
+    });
+}
+
+// Review of D1204 (no Compose test pins it): Compose's `SubcomposeLayout` panics with
+// `NoIntrinsicsMessage` (ui/layout/SubcomposeLayout.kt) when asked its intrinsics.
+// (`BoxWithConstraints` is built on it in Compose)
+#[test]
+#[should_panic(
+    expected = "Asking for intrinsic measurements of SubcomposeLayout layouts is not supported"
+)]
+fn box_with_constraints_intrinsics_panic() {
+    ask_the_intrinsic_width_of(|| {
+        BoxWithConstraints!(|_scope: BoxWithConstraintsScope| {
+            BasicText!("content");
+        });
+    });
+}
