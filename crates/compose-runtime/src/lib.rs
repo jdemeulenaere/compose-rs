@@ -47,6 +47,7 @@ pub mod saveable;
 mod saveable_state_holder;
 mod scope;
 mod slot_table;
+pub mod snapshots;
 mod state;
 
 pub use background::{Background, spawn_background};

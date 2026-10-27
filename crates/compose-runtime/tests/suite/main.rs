@@ -31,3 +31,4 @@ mod review7;
 mod saveable_state_registry;
 mod scenarios;
 mod side_effects;
+mod snapshots;
