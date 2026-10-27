@@ -942,7 +942,8 @@ Intrinsics are methods of the policy with Compose's defaults, and the scope asks
 
 <!-- snippet: src/layouts.rs#intrinsics -->
 ```rust
-/// Its first child in a square as wide as the child's maximum intrinsic width.
+/// Its first child in a square as wide as the child's maximum intrinsic width: that width is
+/// its minimum intrinsic width too.
 pub struct Square;
 
 impl MeasurePolicy for Square {
@@ -964,7 +965,7 @@ impl MeasurePolicy for Square {
         measurables: &[IntrinsicMeasurable],
         height: i32,
     ) -> i32 {
-        scope.min_intrinsic_width(measurables[0], height)
+        scope.max_intrinsic_width(measurables[0], height)
     }
 }
 ```

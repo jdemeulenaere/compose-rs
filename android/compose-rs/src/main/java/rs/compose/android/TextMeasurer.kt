@@ -848,7 +848,6 @@ internal class TextMeasurer(
     }
 }
 
-/** A growable list of ints, without boxing them. */
 /**
  * The width of [text]'s widest segment between line break opportunities, as Compose's
  * `LayoutIntrinsics.computeMinIntrinsicWidth`: of the ten longest segments, the widest.
@@ -878,6 +877,7 @@ private fun minIntrinsicWidth(text: CharSequence, paint: TextPaint): Float {
 /** How many of the longest segments [minIntrinsicWidth] measures, as Compose's heap. */
 private const val MIN_WIDTH_CANDIDATES = 10
 
+/** A growable list of ints, without boxing them. */
 internal class IntList {
     private var values = IntArray(16)
     var size = 0
