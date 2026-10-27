@@ -24,6 +24,7 @@ mod infinite;
 mod keyframes;
 mod spec;
 mod spring;
+mod suspend;
 mod transition;
 mod vector;
 mod visibility;
@@ -82,6 +83,7 @@ pub use spring::{
     SpringSimulation, estimate_animation_duration_millis,
     estimate_animation_duration_millis_of_mass,
 };
+pub use suspend::{AnimationScope, AnimationState, animate, animate_decay, animate_value};
 pub use transition::{
     AnyTransition, MutableTransitionState, Segment, Transition, TransitionAnimation,
     remember_transition, update_transition,

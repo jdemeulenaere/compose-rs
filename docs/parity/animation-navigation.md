@@ -32,17 +32,17 @@ The inventory of Compose's animation and navigation tests and public API against
 | Status | Files | @Test |
 |---|---|---|
 | `covered` | 1 | 1 |
-| `ported` | 19 | 103 |
+| `ported` | 20 | 108 |
 | `port` | 0 | 0 |
 | `partial` | 9 | 139 |
-| `feature:<name>` | 64 | 769 |
+| `feature:<name>` | 63 | 764 |
 | `n/a` | 2 | 9 |
 
 By module:
 
 | Module | Files | @Test | covered | ported | port | partial | feature | n/a |
 |---|---|---|---|---|---|---|---|---|
-| animation-core | 30 | 212 | 0 | 16 / 79 | 0 | 3 / 31 | 11 / 102 | 0 |
+| animation-core | 30 | 212 | 0 | 17 / 84 | 0 | 3 / 31 | 10 / 97 | 0 |
 | animation | 15 | 238 | 0 | 3 / 24 | 0 | 3 / 40 | 9 / 174 | 0 |
 | animation-graphics | 5 | 22 | 0 | 0 | 0 | 0 | 5 / 22 | 0 |
 | navigation-compose | 9 | 121 | 1 / 1 | 0 | 0 | 3 / 68 | 4 / 50 | 1 / 2 |
@@ -70,7 +70,6 @@ By module:
 | captured-animated-visibility | 1 | 9 |
 | animate-bounds | 1 | 8 |
 | nav-transitions | 1 | 5 |
-| suspend-animate | 1 | 5 |
 | motion-duration-scale | 2 | 4 |
 | predictive-back | 1 | 2 |
 | decay-animation | 1 | 1 |
@@ -114,7 +113,7 @@ The "covered" notes cite compose-rs test files under `crates/compose-animation/t
 | 15 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/PhysicsAnimationTest.kt` | 11 | springs: velocity, under/over/critically damped durations, end snapping, vector springs, zero damping, interruption-aware spec | ported | `physics.rs`, `interruption_aware.rs` |
 | 16 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/RepeatableAnimationTest.kt` | 11 | repeatable/infiniteRepeatable values, durations, Reverse, StartOffset, zero-duration inner specs | partial | 9 ported (`repeatable_animation.rs`); the zero-duration spline (keyframes-with-spline) and arc (arc-animation) specs need their features |
 | 17 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/SnapAnimationTest.kt` | 1 | `snap()` is finished at play time 0 | ported | `easing.rs` |
-| 18 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/SuspendAnimationTest.kt` | 5 | top-level `animate()` (float, generic), `animateDecay`, `AnimationState.animateTo/animateDecay` | `feature:suspend-animate` | decay ones also need decay-animation |
+| 18 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/SuspendAnimationTest.kt` | 5 | top-level `animate()` (float, generic), `animateDecay`, `AnimationState.animateTo/animateDecay` | ported | `suspend_animation.rs` (16 ms frames, not 50) |
 | 19 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/TweenAnimationTest.kt` | 3 | tween delay, custom easing, value past the duration | ported | `easing.rs` (the custom easing an `Easing::Function`) |
 | 20 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/TypeConverterTest.kt` | 2 | Float and Int vector converters | ported | `converters.rs`, with fractions: Compose's `Int` converter truncates, as compose-rs's now does |
 | 21 | `compose/animation/animation-core/src/androidDeviceTest/kotlin/androidx/compose/animation/core/DeferredTransitionTest.kt` | 8 | `DeferredTransitionState`: defer/animateTo, pending state, child transitions, interruption | `feature:deferred-transition` | new at the tip, not experimental |
@@ -246,9 +245,9 @@ Deprecated and left out:
 | `Animatable(initialValue, typeConverter, visibilityThreshold, label)`; `Animatable(Float, visibilityThreshold)` | present: `Animatable::new_with(initial, visibility_threshold, label)`, the converter being the type's `Animate` (D800) | animatable-bounds |
 | `Animatable.updateBounds`, `lowerBound`, `upperBound`, `AnimationEndReason.BoundReached` | present (D800) | animatable-bounds |
 | `Animatable.label`, `typeConverter`, `velocityVector` | present (`label`, `velocity_vector`; the converter is the type's `Animate`) | animatable-bounds |
-| `Animatable.animateTo(…, block)`: the per-frame callback on `Animatable` | missing | suspend-animate |
+| `Animatable.animateTo(…, block)`: the per-frame callback on `Animatable` | present (`animate_to_with`, `animate_decay_with`, D819) | suspend-animate |
 | `Animatable.animateDecay(initialVelocity, DecayAnimationSpec, block)` | present without the block: `animate_decay(velocity, &spec)` (D807) | decay-animation |
-| `AnimationResult.endState: AnimationState` | `end_value` only | suspend-animate |
+| `AnimationResult.endState: AnimationState` | `end_value` only (D819) | suspend-animate |
 | `animateIntSizeAsState`, `animateRectAsState`; `animateValueAsState(…, visibilityThreshold, …)` | present (D800) | more-converters |
 | `Animation` interface (`durationNanos`, `getValueFromNanos`, `getVelocityVectorFromNanos`, `isFinishedFromNanos`, `isInfinite`, `targetValue`, `typeConverter`); `TargetBasedAnimation`; `Animation.getVelocityFromNanos` | present: the `Animation` trait, `TargetBasedAnimation` (D800) | animation-objects |
 | `AnimationSpec.vectorize`, `FiniteAnimationSpec`, `DurationBasedAnimationSpec` | the `AnimationSpec` enum and the spec types are each a `VectorizedAnimationSpec` (no separate vectorized types); `DurationBasedSpec` holds tween, keyframes and snap. `AnimationSpec::custom` and `DurationBasedSpec::custom` take specs of an app's own (D816) | animation-objects, spec-gaps |
@@ -257,7 +256,7 @@ Deprecated and left out:
 | `AnimationVector`, `AnimationVector1D..4D`, `AnimationVector(…)` factories | one `AnimationVector` of one to four components (no 1D..4D types) | animation-objects |
 | `AnimationConstants.UnspecifiedTime` | present (D800) | animation-objects |
 | `SpringSpec` duration (Compose's spring estimation), and ending an animation at that duration | present (D800) | spring-estimation |
-| `AnimationState` (ctor, `copy`, `isFinished`, `createZeroVectorFrom`), `AnimationScope` (`cancelAnimation`, times, value, velocity), `animate(…)` (float and generic), `AnimationState.animateTo`, `animateDecay(…)` (float and on `AnimationState`), `sequentialAnimation` | missing | suspend-animate (decay forms: decay-animation) |
+| `AnimationState` (ctor, `copy`, `isFinished`, `createZeroVectorFrom`), `AnimationScope` (`cancelAnimation`, times, value, velocity), `animate(…)` (float and generic), `AnimationState.animateTo`, `animateDecay(…)` (float and on `AnimationState`), `sequentialAnimation` | present (`animate`, `animate_value`, `animate_decay`, `AnimationState`, `AnimationScope`, D819) | suspend-animate (decay forms: decay-animation) |
 | `DecayAnimationSpec`, `FloatDecayAnimationSpec`, `VectorizedDecayAnimationSpec`, `exponentialDecay`, `FloatExponentialDecaySpec`, `generateDecayAnimationSpec`, `calculateTargetValue` (both), `DecayAnimation` (3 ctors), `DecayAnimation(FloatDecayAnimationSpec, …)` | present (D807) | decay-animation |
 | `ArcAnimationSpec` (experimental), `ArcMode` (`ArcAbove`, `ArcBelow`, `ArcLinear`), `KeyframesSpecConfig.using(entity, ArcMode)` | missing | arc-animation |
 | `KeyframesSpecBaseConfig.atFraction`, `using(entity, easing)`, `durationMillis` settable in the builder | present (`at_fraction`, `using`, `duration_millis` settable) | spec-gaps |
@@ -424,7 +423,7 @@ One entry per feature. Sizes:
 - **Tests:** `AnimatableTest.testUpdateBounds`.
 - **Dependencies:** none (bounds matter most for decay-animation).
 
-#### suspend-animate (M, not exp.)
+#### suspend-animate (M, not exp.): done but `AnimationResult.endState` (D819)
 
 - **API:** `animate(initial, target, initial_velocity, spec, block)` (`f32` and generic), `AnimationState`, `AnimationScope`, `AnimationState::animate_to`, `animate_decay`, `sequential_animation`, the per-frame `block` on `Animatable::animate_to`, and `AnimationResult::end_state`.
 - **What it does:** low-level animations without an `Animatable`.

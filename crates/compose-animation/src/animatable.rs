@@ -254,7 +254,7 @@ impl<T: Animate> Animatable<T> {
         spec: impl Into<AnimationSpec>,
     ) -> AnimationResult<T> {
         let velocity = self.inner.velocity.get();
-        self.animate_from(target, spec.into(), velocity).await
+        self.animate_from(target, spec.into(), velocity, &mut |_| {}).await
     }
 
     /// The same, starting at `initial_velocity`, as `animateTo(…, initialVelocity)`.
@@ -264,7 +264,19 @@ impl<T: Animate> Animatable<T> {
         spec: impl Into<AnimationSpec>,
         initial_velocity: T,
     ) -> AnimationResult<T> {
-        self.animate_from(target, spec.into(), initial_velocity.to_vector()).await
+        self.animate_from(target, spec.into(), initial_velocity.to_vector(), &mut |_| {}).await
+    }
+
+    /// The same, `block` called with this animatable after each frame sets the value, as
+    /// `animateTo(targetValue, animationSpec, initialVelocity, block)`.
+    pub async fn animate_to_with(
+        &self,
+        target: T,
+        spec: impl Into<AnimationSpec>,
+        initial_velocity: T,
+        mut block: impl FnMut(&Animatable<T>),
+    ) -> AnimationResult<T> {
+        self.animate_from(target, spec.into(), initial_velocity.to_vector(), &mut block).await
     }
 
     async fn animate_from(
@@ -272,18 +284,20 @@ impl<T: Animate> Animatable<T> {
         target: T,
         spec: AnimationSpec,
         velocity: AnimationVector,
+        block: &mut dyn FnMut(&Animatable<T>),
     ) -> AnimationResult<T> {
         // An interruption-aware spec's interruption spec when one runs, as Compose's.
         let spec = spec.resolve(self.inner.is_running.get());
         let animation =
             TargetBasedAnimation::with_velocity_vector(spec, self.value(), target, velocity);
-        self.run_animation(&animation, velocity).await
+        self.run_animation(&animation, velocity, block).await
     }
 
     async fn run_animation(
         &self,
         animation: &dyn Animation<T>,
         velocity: AnimationVector,
+        block: &mut dyn FnMut(&Animatable<T>),
     ) -> AnimationResult<T> {
         let inner = &self.inner;
         // Read before taking over: the frame the running animation (if any) is at.
@@ -318,7 +332,9 @@ impl<T: Animate> Animatable<T> {
         let mut started = None;
         if start_time != AnimationConstants::UNSPECIFIED_TIME {
             started = Some(start_time);
-            if let Some(reason) = self.frame(animation, start_time, start_time) {
+            let ended = self.frame(animation, start_time, start_time);
+            block(self);
+            if let Some(reason) = ended {
                 return AnimationResult { end_reason: reason, end_value: self.value() };
             }
         }
@@ -335,7 +351,9 @@ impl<T: Animate> Animatable<T> {
                 return interrupted();
             }
             let begin = *started.get_or_insert(time);
-            if let Some(reason) = self.frame(animation, time, begin) {
+            let ended = self.frame(animation, time, begin);
+            block(self);
+            if let Some(reason) = ended {
                 return AnimationResult { end_reason: reason, end_value: self.value() };
             }
         }
@@ -376,7 +394,24 @@ impl<T: Animate> Animatable<T> {
             self.value(),
             velocity,
         );
-        self.run_animation(&animation, velocity).await
+        self.run_animation(&animation, velocity, &mut |_| {}).await
+    }
+
+    /// The same, `block` called with this animatable after each frame sets the value, as
+    /// `animateDecay(initialVelocity, animationSpec, block)`.
+    pub async fn animate_decay_with(
+        &self,
+        initial_velocity: T,
+        spec: &crate::decay::DecayAnimationSpec,
+        mut block: impl FnMut(&Animatable<T>),
+    ) -> AnimationResult<T> {
+        let velocity = initial_velocity.to_vector();
+        let animation = crate::decay::DecayAnimation::with_velocity_vector(
+            spec.clone(),
+            self.value(),
+            velocity,
+        );
+        self.run_animation(&animation, velocity, &mut block).await
     }
 
     /// Jumps to `target` (clamped to the bounds), interrupting an animation, as `snapTo`.

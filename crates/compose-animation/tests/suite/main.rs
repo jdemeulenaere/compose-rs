@@ -35,6 +35,7 @@ mod review_round8;
 mod review_round9;
 mod single_value;
 mod spring_estimation;
+mod suspend_animation;
 mod transition;
 mod veil;
 mod visibility;
