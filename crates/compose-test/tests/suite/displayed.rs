@@ -86,7 +86,7 @@ fn a_lazy_item_not_composed_or_only_prefetched_is_not_displayed() {
     ui.on_node_with_tag("item0").assert_is_displayed();
     ui.on_node_with_tag("item2").assert_does_not_exist();
     ui.on_node_with_tag("item2").assert_is_not_displayed();
-    state.scroll_by(5.0);
+    state.dispatch_raw_delta(5.0);
     ui.wait_for_idle();
     ui.on_node_with_tag("item2").assert_is_not_displayed();
 }
