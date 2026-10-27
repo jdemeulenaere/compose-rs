@@ -340,9 +340,22 @@ fn invalidating_parent_data_measures_the_parent_again() {
     });
     assert_eq!(measured.get(), 10);
     value.set(30);
-    handle.borrow().expect("a handle").invalidate_parent_data();
+    let node = handle.borrow().expect("a handle");
+    node.invalidate_parent_data();
     host.frame();
     assert_eq!(measured.get(), 30);
+    // From the node's own code (a task reaching it): its data, given once it's back in its
+    // chain, is the new one.
+    let changed = value.clone();
+    compose_runtime::CoroutineScope::new().launch(async move {
+        node.with_node(|_: &mut LiveNode, context| {
+            changed.set(40);
+            context.invalidate_parent_data();
+        });
+    });
+    host.frame();
+    host.frame();
+    assert_eq!(measured.get(), 40);
 }
 
 // Compose: compose/ui/ui/src/androidDeviceTest/kotlin/androidx/compose/ui/platform/LayoutIdTest.kt, testTags

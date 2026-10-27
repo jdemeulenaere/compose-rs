@@ -80,7 +80,8 @@ impl UiTree {
             entry.node = taken;
         }
         let result = result.unwrap_or_else(|panic| panic::resume_unwind(panic));
-        // What its `remeasure_sync` asked, now that it's back in its chain.
+        // What its `remeasure_sync` asked (where measuring is allowed: no entry is out of its
+        // chain but this one), now that it's back in it.
         if !self.remeasure_after.is_empty() {
             for node in mem::take(&mut self.remeasure_after) {
                 self.remeasure_now(node);

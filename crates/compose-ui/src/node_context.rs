@@ -150,9 +150,19 @@ impl NodeContext<'_> {
 
     fn invalidate(&mut self, what: Invalidation) {
         // As Compose's: a detached node's invalidations do nothing.
-        if self.is_attached() {
-            self.tree.invalidate_entry_at(self.node, self.index, what);
+        if !self.is_attached() {
+            return;
         }
+        // The parent data's fold asks every node of the chain, this one too (and an outer
+        // layout node measuring, inside a measurement): where the tree applies its nodes'
+        // requests, with every node in its chain, as a handle's.
+        if what == Invalidation::ParentData && self.index.is_some() {
+            let requests = &self.tree.focus_requests;
+            requests.node_invalidations.borrow_mut().push((self.node, self.entry, what));
+            requests.wake();
+            return;
+        }
+        self.tree.invalidate_entry_at(self.node, self.index, what);
     }
 
     /// Draws again what the node draws in, as `DrawModifierNode.invalidateDraw`.

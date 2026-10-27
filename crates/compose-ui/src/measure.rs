@@ -199,12 +199,13 @@ impl UiTree {
     /// Measures `node` now with its last constraints, whether or not it asked, and so places
     /// its content, as Compose's `forceRemeasure` (`Remeasurement`, `remeasureSync`): its
     /// position in its parent stays; a new size measures its parent in the next layout, as
-    /// Compose's `doRemeasure` asks it. Nothing for a deactivated node (the layout skips it);
+    /// Compose's `doRemeasure` asks it. Nothing for a deactivated node or one out of the tree;
     /// the root, or a node never measured, is measured in the next layout.
     pub(crate) fn remeasure_now(&mut self, node: NodeId) {
         let root = self.root_id();
         let Some(value) = self.get(node) else { return };
-        if value.deactivated {
+        // Out of the tree, or content kept for reuse: no layout measures it either.
+        if value.deactivated || !value.attached {
             return;
         }
         let Some(constraints) = value.constraints.filter(|_| node != root) else {
@@ -219,6 +220,10 @@ impl UiTree {
         self.remeasure_allowed = allowed;
         let size = result.unwrap_or_else(|panic| panic::resume_unwind(panic));
         self.laid_out_since_callbacks = true;
+        // Popups measured in it are placed by their providers, as after a layout.
+        if !self.overlays.is_empty() {
+            self.position_overlays();
+        }
         if size != before
             && let Some(parent) = self.parent_of(node)
         {
