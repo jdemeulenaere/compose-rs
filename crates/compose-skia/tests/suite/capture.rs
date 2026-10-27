@@ -199,19 +199,9 @@ fn a_drawn_shape_is_asserted_by_its_outline() {
         });
     });
     let circle = ui.on_node_with_tag("circle").capture_to_image();
-    circle.assert_shape(
-        density,
-        &compose::foundation::CIRCLE_SHAPE,
-        Color::RED,
-        Some(Color::WHITE),
-    );
+    circle.assert_shape(density, compose::foundation::CIRCLE_SHAPE, Color::RED, Some(Color::WHITE));
     let wrong = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        circle.assert_shape(
-            density,
-            &compose::ui::Shape::Rectangle,
-            Color::RED,
-            Some(Color::WHITE),
-        );
+        circle.assert_shape(density, compose::ui::Shape::Rectangle, Color::RED, Some(Color::WHITE));
     }));
     assert!(wrong.is_err(), "a circle isn't a square");
     let square = ui.on_node_with_tag("square").capture_to_image();
@@ -221,6 +211,6 @@ fn a_drawn_shape_is_asserted_by_its_outline() {
         20.dp(),
         Color::WHITE,
         Color::BLUE,
-        &compose::ui::Shape::Rectangle,
+        compose::ui::Shape::Rectangle,
     );
 }

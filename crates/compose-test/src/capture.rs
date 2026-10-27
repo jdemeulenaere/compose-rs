@@ -111,13 +111,13 @@ impl CapturedImage {
     pub fn assert_shape(
         &self,
         density: Density,
-        shape: &Shape,
+        shape: Shape,
         shape_color: Color,
         background_color: Option<Color>,
     ) -> &Self {
         self.assert_shape_with(&ShapeCheck::new(
             density,
-            shape.clone(),
+            shape,
             shape_color,
             background_color,
             self,
@@ -135,10 +135,9 @@ impl CapturedImage {
         vertical_padding: Dp,
         background_color: Color,
         shape_color: Color,
-        shape: &Shape,
+        shape: Shape,
     ) -> &Self {
-        let mut check =
-            ShapeCheck::new(density, shape.clone(), shape_color, Some(background_color), self);
+        let mut check = ShapeCheck::new(density, shape, shape_color, Some(background_color), self);
         check.shape_size = Size::new(
             self.width as f32 - density.to_px(horizontal_padding) * 2.0,
             self.height as f32 - density.to_px(vertical_padding) * 2.0,
@@ -162,15 +161,15 @@ impl CapturedImage {
         };
         let shape_bounds = bounds(check.shape_center, check.shape_size);
         let background_bounds = bounds(check.background_center, check.background_size);
-        let outline = |shape: &Shape, bounds: Rect| {
+        let outline = |shape: Shape, bounds: Rect| {
             shape.outline_in(
                 Size::new(bounds.width(), bounds.height()),
                 &check.density,
                 LayoutDirection::Ltr,
             )
         };
-        let shape_outline = outline(&check.shape, shape_bounds);
-        let background_outline = outline(&check.background_shape, background_bounds);
+        let shape_outline = outline(check.shape, shape_bounds);
+        let background_outline = outline(check.background_shape, background_bounds);
         let gap = check.anti_aliasing_gap;
         let inside = |outline: &compose_ui::Outline, bounds: Rect, point: Offset| {
             outline.contains(Offset::new(point.x - bounds.left, point.y - bounds.top))

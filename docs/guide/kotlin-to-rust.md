@@ -2103,6 +2103,8 @@ Compose's test API, in snake case:
 | `assertIsDisplayed()`, `assertWidthIsEqualTo(48.dp)`, `assertPositionInRootIsEqualTo(8.dp, 16.dp)` | `assert_is_displayed()`, `assert_width_is_equal_to(48.dp())`, `assert_position_in_root_is_equal_to(8.dp(), 16.dp())` |
 | `captureToImage().assertPixels { Color.Red }` | `capture_to_image().assert_pixels(None, \|_\| Some(Color::RED))`, after `set_capture_renderer(compose_skia::raster_colors)` (the test crate depends on compose-skia) |
 | `mainClock.advanceTimeBy(100)`, `waitUntil { … }`, `runOnIdle { … }` | `advance_time_by(Duration::from_millis(100))`, `wait_until(\|ui\| …)`, `run_on_idle(\|ui\| …)` |
+| `runComposeUiTest { setContent { App() }; … }` | `run_compose_ui_test(\|ui\| { ui.set_content(App); … })` |
+| `StateRestorationTester(rule).emulateSavedInstanceStateRestore()` | `StateRestorationTester::new()`, `tester.set_content(&mut ui, App)`, `tester.emulate_save_and_restore(&mut ui)` |
 
 Also `perform_text_input`, `perform_key_press`, `perform_semantics_action`, `perform_scroll_to`, `request_focus`, and on the rule `type_text`, `press_key`. Dumps for debugging: `print_to_string`, `dump_tree()`, `dump_semantics()`, `dump_display_list()`. [docs/09](../09-testing.md) lists the whole API.
 

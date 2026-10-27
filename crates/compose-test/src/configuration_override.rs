@@ -29,8 +29,7 @@ impl DeviceConfigurationOverride {
     /// The content laid out in `direction`, as `DeviceConfigurationOverride.LayoutDirection`.
     pub fn layout_direction(direction: LayoutDirection) -> DeviceConfigurationOverride {
         DeviceConfigurationOverride::new(move |content| {
-            let content = content.clone();
-            CompositionLocalProvider(LOCAL_LAYOUT_DIRECTION.provides(direction), move || content());
+            CompositionLocalProvider(LOCAL_LAYOUT_DIRECTION.provides(direction), &**content);
         })
     }
 
@@ -40,10 +39,7 @@ impl DeviceConfigurationOverride {
         DeviceConfigurationOverride::new(move |content| {
             let mut configuration = LOCAL_CONFIGURATION.current();
             configuration.night_mode = is_dark_mode;
-            let content = content.clone();
-            CompositionLocalProvider(LOCAL_CONFIGURATION.provides(configuration), move || {
-                content()
-            });
+            CompositionLocalProvider(LOCAL_CONFIGURATION.provides(configuration), &**content);
         })
     }
 
