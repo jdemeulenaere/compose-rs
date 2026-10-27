@@ -27,6 +27,7 @@ mod motion;
 mod navigation;
 mod progress;
 mod scaffold;
+mod scrim;
 mod segmented_button;
 mod selection;
 mod sheet;
@@ -89,6 +90,7 @@ pub use scaffold::{
     Card, CardColors, CardDefaults, CardElevation, DividerDefaults, ElevatedCard, FabPosition,
     HorizontalDivider, OutlinedCard, Scaffold, ScaffoldDefaults, VerticalDivider,
 };
+pub use scrim::{Scrim, ScrimDefaults};
 pub use segmented_button::{
     CheckableSegmentedButton, MultiChoiceSegmentedButtonRow, MultiChoiceSegmentedButtonRowScope,
     SegmentedButton, SegmentedButtonColors, SegmentedButtonDefaults,
@@ -151,6 +153,16 @@ pub fn always_confirm<T: 'static>() -> compose_runtime::Callback<dyn Fn(T) -> bo
 #[doc(hidden)]
 pub fn window_default_dialog_properties() -> compose_ui::DialogProperties {
     compose_ui::DialogProperties::default()
+}
+
+/// `Scrim`'s default `on_click`: nothing, one callback per thread (the same every pass, so the
+/// scrim can skip).
+#[doc(hidden)]
+pub fn scrim_default_on_click() -> Option<compose_runtime::Callback> {
+    thread_local! {
+        static CLICK: compose_runtime::Callback = compose_runtime::callback(|| {});
+    }
+    Some(CLICK.with(Clone::clone))
 }
 
 /// `ModalBottomSheet`'s default `drag_handle`: `BottomSheetDefaults::drag_handle`, one callback

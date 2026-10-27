@@ -851,7 +851,7 @@ pub fn ModalBottomSheet(
                             .then_custom(crate::drawer::ScrimElement {
                                 close: dismiss.clone(),
                                 enabled: properties.should_dismiss_on_click_outside,
-                                description: "Close sheet",
+                                description: Some("Close sheet"),
                             }),
                         Alignment::TOP_START,
                         false,

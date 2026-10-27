@@ -53,6 +53,7 @@ mod review_round6;
 mod review_round8;
 mod review_rtl;
 mod review_semantics_material;
+mod scrim;
 mod segmented_button;
 mod segments_and_rails;
 mod sheet_state;

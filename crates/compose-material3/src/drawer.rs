@@ -404,7 +404,7 @@ pub fn ModalNavigationDrawer(
                         .then_custom(ScrimElement {
                             close,
                             enabled: gestures_enabled,
-                            description: "Close navigation menu",
+                            description: Some("Close navigation menu"),
                         }),
                     Alignment::TOP_START,
                     false,
@@ -441,13 +441,13 @@ pub fn ModalNavigationDrawer(
 pub(crate) struct ScrimElement {
     pub close: compose_runtime::Callback,
     pub enabled: bool,
-    pub description: &'static str,
+    pub description: Option<&'static str>,
 }
 
 pub(crate) struct ScrimNode {
     close: compose_runtime::Callback,
     enabled: bool,
-    description: &'static str,
+    description: Option<&'static str>,
     pressed: Option<compose_ui::PointerId>,
 }
 
@@ -529,13 +529,19 @@ impl compose_ui::PointerInputModifierNode for ScrimNode {
 
 impl compose_ui::SemanticsModifierNode for ScrimNode {
     fn apply_semantics(&self, config: &mut compose_ui::SemanticsConfiguration) {
-        config.set_content_description(self.description);
-        if self.enabled {
-            let close = self.close.clone();
-            config.on_click(None, move || {
-                close();
-                true
-            });
+        if let Some(description) = self.description {
+            config.content_description.push(description.into());
+        }
+        config.clickable |= self.enabled;
+    }
+
+    fn perform_action(
+        &mut self,
+        action: compose_ui::SemanticsAction,
+        context: &mut compose_ui::EventContext<'_>,
+    ) -> bool {
+        if action != compose_ui::SemanticsAction::OnClick || !self.enabled {
+            return false;
         }
     }
 }
