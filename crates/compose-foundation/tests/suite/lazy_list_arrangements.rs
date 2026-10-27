@@ -254,8 +254,24 @@ fn the_first_item_changes_once_past_its_spacing() {
 // Compose: compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/list/LazyArrangementsTest.kt, row_defaultArrangementIsEndWithReverseLayout
 #[test]
 fn a_reversed_short_list_is_arranged_from_the_end() {
-    // Compose's default arrangement when reversed, given (compose-rs's default stays `TOP`
-    // and `START`, D171).
+    // By default (no arrangement given: from the end when reversed, as Compose's, D875), and
+    // given explicitly.
+    let mut ui = rule(|| {
+        LazyColumn!(
+            modifier = Modifier.required_size(CONTAINER_SIZE.dp()),
+            reverse_layout = true,
+            |scope: LazyListScope| two_items(&scope)
+        );
+    });
+    assert_column_arranged(&mut ui, Arrangement::BOTTOM, true);
+    let mut ui = rule(|| {
+        LazyRow!(
+            modifier = Modifier.required_size(CONTAINER_SIZE.dp()),
+            reverse_layout = true,
+            |scope: LazyListScope| two_items(&scope)
+        );
+    });
+    assert_row_arranged(&mut ui, Arrangement::END, LayoutDirection::Ltr, true);
     let mut ui = column_with(Arrangement::BOTTOM, true);
     assert_column_arranged(&mut ui, Arrangement::BOTTOM, true);
     let mut ui = row_with(Arrangement::END, LayoutDirection::Ltr, true);

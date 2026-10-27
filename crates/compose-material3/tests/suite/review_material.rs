@@ -210,12 +210,21 @@ fn a_vertical_swipe_on_a_slider_scrolls_its_column() {
     let before = bounds(&mut ui, "slider");
     // From the middle of the track (50 %), straight up by 100 px.
     let host = ui.host();
-    host.send_pointer(PointerEvent::press(Offset::new(110.0, before.top + 24.0)));
+    host.send_pointer(
+        PointerEvent::press(Offset::new(110.0, before.top + 24.0))
+            .with_pointer(compose_ui::PointerId(0), compose_ui::PointerType::Touch),
+    );
     for step in 1..=10 {
         let y = before.top + 24.0 - 10.0 * step as f32;
-        host.send_pointer(PointerEvent::moved(Offset::new(110.0, y), true));
+        host.send_pointer(
+            PointerEvent::moved(Offset::new(110.0, y), true)
+                .with_pointer(compose_ui::PointerId(0), compose_ui::PointerType::Touch),
+        );
     }
-    host.send_pointer(PointerEvent::release(Offset::new(110.0, before.top - 76.0)));
+    host.send_pointer(
+        PointerEvent::release(Offset::new(110.0, before.top - 76.0))
+            .with_pointer(compose_ui::PointerId(0), compose_ui::PointerType::Touch),
+    );
     ui.wait_for_idle();
     assert_eq!(VALUE.with(Cell::get), 0.2, "the slider kept its value");
     let after = bounds(&mut ui, "slider");

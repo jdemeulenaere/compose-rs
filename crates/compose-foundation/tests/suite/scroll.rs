@@ -65,10 +65,22 @@ fn a_drag_scrolls_and_cancels_the_click_under_it() {
     CLICKS.with(|clicks| clicks.borrow_mut().clear());
     let mut ui = ComposeTestRule::sized(IntSize::new(100, 200), List);
     let host = ui.host();
-    host.send_pointer(PointerEvent::press(Offset::new(50.0, 150.0)));
-    host.send_pointer(PointerEvent::moved(Offset::new(50.0, 140.0), true));
-    host.send_pointer(PointerEvent::moved(Offset::new(50.0, 50.0), true));
-    host.send_pointer(PointerEvent::release(Offset::new(50.0, 50.0)));
+    host.send_pointer(
+        PointerEvent::press(Offset::new(50.0, 150.0))
+            .with_pointer(compose_ui::PointerId(0), compose_ui::PointerType::Touch),
+    );
+    host.send_pointer(
+        PointerEvent::moved(Offset::new(50.0, 140.0), true)
+            .with_pointer(compose_ui::PointerId(0), compose_ui::PointerType::Touch),
+    );
+    host.send_pointer(
+        PointerEvent::moved(Offset::new(50.0, 50.0), true)
+            .with_pointer(compose_ui::PointerId(0), compose_ui::PointerType::Touch),
+    );
+    host.send_pointer(
+        PointerEvent::release(Offset::new(50.0, 50.0))
+            .with_pointer(compose_ui::PointerId(0), compose_ui::PointerType::Touch),
+    );
     ui.wait_for_idle();
     // What moved past the 8 px slop scrolls, as Compose's.
     assert_eq!(state().value(), 92);

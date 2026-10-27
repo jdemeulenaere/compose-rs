@@ -197,13 +197,22 @@ fn a_slow_drag_scrolls() {
         });
     });
     let host = ui.host();
-    host.send_pointer(PointerEvent::press(Offset::new(50.0, 80.0)));
+    host.send_pointer(
+        PointerEvent::press(Offset::new(50.0, 80.0))
+            .with_pointer(compose_ui::PointerId(0), compose_ui::PointerType::Touch),
+    );
     let mut y = 80.0;
     for _ in 0..50 {
         y -= 0.4;
-        host.send_pointer(PointerEvent::moved(Offset::new(50.0, y), true));
+        host.send_pointer(
+            PointerEvent::moved(Offset::new(50.0, y), true)
+                .with_pointer(compose_ui::PointerId(0), compose_ui::PointerType::Touch),
+        );
     }
-    host.send_pointer(PointerEvent::release(Offset::new(50.0, y)));
+    host.send_pointer(
+        PointerEvent::release(Offset::new(50.0, y))
+            .with_pointer(compose_ui::PointerId(0), compose_ui::PointerType::Touch),
+    );
     ui.wait_for_idle();
     assert!(state.value() >= 11, "scrolled {} px by a 20 px drag", state.value());
 }
@@ -228,11 +237,20 @@ fn a_drag_in_a_nested_lazy_list_scrolls_only_the_list() {
         });
     });
     let host = ui.host();
-    host.send_pointer(PointerEvent::press(Offset::new(50.0, 90.0)));
+    host.send_pointer(
+        PointerEvent::press(Offset::new(50.0, 90.0))
+            .with_pointer(compose_ui::PointerId(0), compose_ui::PointerType::Touch),
+    );
     for y in [80.0, 70.0, 60.0, 50.0, 40.0] {
-        host.send_pointer(PointerEvent::moved(Offset::new(50.0, y), true));
+        host.send_pointer(
+            PointerEvent::moved(Offset::new(50.0, y), true)
+                .with_pointer(compose_ui::PointerId(0), compose_ui::PointerType::Touch),
+        );
     }
-    host.send_pointer(PointerEvent::release(Offset::new(50.0, 40.0)));
+    host.send_pointer(
+        PointerEvent::release(Offset::new(50.0, 40.0))
+            .with_pointer(compose_ui::PointerId(0), compose_ui::PointerType::Touch),
+    );
     ui.wait_for_idle();
     assert!(state.first_visible_item_index() >= 2, "the lazy list scrolled");
     assert_eq!(outer.value(), 0, "the outer column scrolled too");
@@ -456,11 +474,20 @@ fn a_drag_scrolls_by_what_it_moved_past_the_slop() {
     let given = *state;
     let mut ui = ComposeTestRule::sized(IntSize::new(200, 200), move || Rows(given, 1000));
     let host = ui.host();
-    host.send_pointer(PointerEvent::press(Offset::new(50.0, 90.0)));
+    host.send_pointer(
+        PointerEvent::press(Offset::new(50.0, 90.0))
+            .with_pointer(compose_ui::PointerId(0), compose_ui::PointerType::Touch),
+    );
     for y in [80.0, 70.0, 60.0, 50.0, 40.0] {
-        host.send_pointer(PointerEvent::moved(Offset::new(50.0, y), true));
+        host.send_pointer(
+            PointerEvent::moved(Offset::new(50.0, y), true)
+                .with_pointer(compose_ui::PointerId(0), compose_ui::PointerType::Touch),
+        );
     }
-    host.send_pointer(PointerEvent::release(Offset::new(50.0, 40.0)));
+    host.send_pointer(
+        PointerEvent::release(Offset::new(50.0, 40.0))
+            .with_pointer(compose_ui::PointerId(0), compose_ui::PointerType::Touch),
+    );
     ui.wait_for_idle();
     assert_eq!(
         (state.first_visible_item_index(), state.first_visible_item_scroll_offset()),

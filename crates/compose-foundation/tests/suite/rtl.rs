@@ -105,9 +105,18 @@ fn a_horizontal_scroll_starts_at_the_right_and_scrolls_the_other_way() {
     assert_eq!(left(&mut ui, "0"), 150.0);
     assert_eq!(left(&mut ui, "1"), 100.0);
     // Dragging right scrolls forward, bringing later items in from the left.
-    ui.host().send_pointer(PointerEvent::press(Offset::new(120.0, 10.0)));
-    ui.host().send_pointer(PointerEvent::moved(Offset::new(190.0, 10.0), true));
-    ui.host().send_pointer(PointerEvent::release(Offset::new(190.0, 10.0)));
+    ui.host().send_pointer(
+        PointerEvent::press(Offset::new(120.0, 10.0))
+            .with_pointer(compose_ui::PointerId(0), compose_ui::PointerType::Touch),
+    );
+    ui.host().send_pointer(
+        PointerEvent::moved(Offset::new(190.0, 10.0), true)
+            .with_pointer(compose_ui::PointerId(0), compose_ui::PointerType::Touch),
+    );
+    ui.host().send_pointer(
+        PointerEvent::release(Offset::new(190.0, 10.0))
+            .with_pointer(compose_ui::PointerId(0), compose_ui::PointerType::Touch),
+    );
     ui.wait_for_idle();
     assert!(state.value() > 0, "scrolled forward: {}", state.value());
     assert_eq!(left(&mut ui, "0"), 150.0 + state.value() as f32);

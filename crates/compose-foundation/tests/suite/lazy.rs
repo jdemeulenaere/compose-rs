@@ -88,11 +88,20 @@ fn scroll_to_item_jumps_far_and_clamps_at_the_end() {
 fn a_drag_scrolls_the_list() {
     let (mut ui, state) = list();
     let host = ui.host();
-    host.send_pointer(PointerEvent::press(Offset::new(50.0, 90.0)));
+    host.send_pointer(
+        PointerEvent::press(Offset::new(50.0, 90.0))
+            .with_pointer(compose_ui::PointerId(0), compose_ui::PointerType::Touch),
+    );
     for y in [80.0, 70.0, 60.0, 50.0, 40.0] {
-        host.send_pointer(PointerEvent::moved(Offset::new(50.0, y), true));
+        host.send_pointer(
+            PointerEvent::moved(Offset::new(50.0, y), true)
+                .with_pointer(compose_ui::PointerId(0), compose_ui::PointerType::Touch),
+        );
     }
-    host.send_pointer(PointerEvent::release(Offset::new(50.0, 40.0)));
+    host.send_pointer(
+        PointerEvent::release(Offset::new(50.0, 40.0))
+            .with_pointer(compose_ui::PointerId(0), compose_ui::PointerType::Touch),
+    );
     ui.wait_for_idle();
     // Moved 50 px, the first 8 within the slop.
     assert_eq!(state.first_visible_item_index(), 2);

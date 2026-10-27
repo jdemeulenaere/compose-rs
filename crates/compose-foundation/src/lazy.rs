@@ -1697,9 +1697,9 @@ impl PartialEq for ListInfo {
 
 /// A vertical lazy list, as Compose's `LazyColumn`. `reverse_layout` lays the items out from
 /// the bottom (the first one there, scrolled from there); the arrangement stays from the top,
-/// as Compose's (whose default becomes `Arrangement.Bottom` when reversed: pass
-/// `Arrangement::BOTTOM` here). `user_scroll_enabled = false` keeps drags and the wheel from
-/// scrolling it (the state still does).
+/// as Compose's, and so does its default: from the top, from the bottom when reversed.
+/// `user_scroll_enabled = false` keeps drags and the wheel from scrolling it (the state still
+/// does).
 #[composable(non_restartable)]
 #[allow(non_snake_case)]
 pub fn LazyColumn(
@@ -1707,7 +1707,7 @@ pub fn LazyColumn(
     #[default(crate::remember_lazy_list_state(0, 0))] state: LazyListState,
     #[default(crate::layout::PaddingValues::ZERO)] content_padding: PaddingValues,
     #[default(false)] reverse_layout: bool,
-    #[default(crate::layout::Arrangement::TOP)] vertical_arrangement: impl Into<VerticalArrangement>,
+    #[default(None)] vertical_arrangement: impl Into<Option<VerticalArrangement>>,
     #[default(crate::Alignment::START)] horizontal_alignment: HorizontalAlignment,
     #[default(None)] fling_behavior: Option<Rc<dyn crate::gestures::FlingBehavior>>,
     #[default(true)] user_scroll_enabled: bool,
@@ -1719,7 +1719,15 @@ pub fn LazyColumn(
         content_padding,
         true,
         reverse_layout,
-        vertical_arrangement.into().0,
+        // As Compose's default: from the top, from the bottom when reversed.
+        vertical_arrangement
+            .into()
+            .unwrap_or(if reverse_layout {
+                crate::layout::Arrangement::BOTTOM
+            } else {
+                crate::layout::Arrangement::TOP
+            })
+            .0,
         Alignment::new(horizontal_alignment.bias, -1.0),
         fling_behavior,
         user_scroll_enabled,
@@ -1736,9 +1744,7 @@ pub fn LazyRow(
     #[default(crate::remember_lazy_list_state(0, 0))] state: LazyListState,
     #[default(crate::layout::PaddingValues::ZERO)] content_padding: PaddingValues,
     #[default(false)] reverse_layout: bool,
-    #[default(crate::layout::Arrangement::START)] horizontal_arrangement: impl Into<
-        HorizontalArrangement,
-    >,
+    #[default(None)] horizontal_arrangement: impl Into<Option<HorizontalArrangement>>,
     #[default(crate::Alignment::TOP)] vertical_alignment: VerticalAlignment,
     #[default(None)] fling_behavior: Option<Rc<dyn crate::gestures::FlingBehavior>>,
     #[default(true)] user_scroll_enabled: bool,
@@ -1750,7 +1756,15 @@ pub fn LazyRow(
         content_padding,
         false,
         reverse_layout,
-        horizontal_arrangement.into().0,
+        // As Compose's default: from the start, from the end when reversed.
+        horizontal_arrangement
+            .into()
+            .unwrap_or(if reverse_layout {
+                crate::layout::Arrangement::END
+            } else {
+                crate::layout::Arrangement::START
+            })
+            .0,
         Alignment::new(-1.0, vertical_alignment.bias),
         fling_behavior,
         user_scroll_enabled,

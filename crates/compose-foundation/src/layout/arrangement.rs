@@ -417,6 +417,20 @@ impl ComposeArg for HorizontalOrVerticalArrangement {
     }
 }
 
+/// An arrangement given where an optional one is taken (a reversed lazy list's default
+/// depends on its reversal, so its parameter is an `Option`): `CENTER`, `spaced_by(…)`.
+impl From<HorizontalOrVerticalArrangement> for Option<VerticalArrangement> {
+    fn from(arrangement: HorizontalOrVerticalArrangement) -> Option<VerticalArrangement> {
+        Some(arrangement.into())
+    }
+}
+
+impl From<HorizontalOrVerticalArrangement> for Option<HorizontalArrangement> {
+    fn from(arrangement: HorizontalOrVerticalArrangement) -> Option<HorizontalArrangement> {
+        Some(arrangement.into())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

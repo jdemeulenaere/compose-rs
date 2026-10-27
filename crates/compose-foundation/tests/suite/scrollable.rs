@@ -555,3 +555,35 @@ fn a_drag_without_momentum_scrolls_by_its_distance_less_the_slop() {
     assert_eq!(state.value(), 300 - 8);
     drop(scroll);
 }
+
+/// A mouse drag and drop from `start` to `end` in 100 ms, as Compose's `performMouseInput {
+/// dragAndDrop(…) }`: the primary button pressed, moves an event period apart, released.
+fn mouse_drag(ui: &mut ComposeTestRule, start: Offset, end: Offset) {
+    let host = ui.host();
+    host.send_pointer(PointerEvent::press(start));
+    for step in 1..=6 {
+        let fraction = step as f32 / 6.0;
+        let at = Offset::new(
+            start.x + (end.x - start.x) * fraction,
+            start.y + (end.y - start.y) * fraction,
+        );
+        host.send_pointer(PointerEvent::moved(at, true));
+    }
+    host.send_pointer(PointerEvent::release(end));
+    ui.wait_for_idle();
+}
+
+// Compose: compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/ScrollableTest.kt, scrollable_mouseHorizontalDragDoesNotScroll
+// Compose: compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/ScrollableTest.kt, scrollable_mouseVerticalDragDoesNotScroll
+#[test]
+fn a_mouse_drag_does_not_scroll() {
+    for (orientation, along) in [
+        (Orientation::Horizontal, Offset::new(100.0, 0.0)),
+        (Orientation::Vertical, Offset::new(0.0, 100.0)),
+    ] {
+        let (state, total) = total_state();
+        let mut ui = scrollable_content(move || Modifier.scrollable(state.clone(), orientation));
+        mouse_drag(&mut ui, CENTER, CENTER + along);
+        assert_eq!(total.get(), 0.0, "{orientation:?}");
+    }
+}

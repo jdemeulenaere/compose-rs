@@ -70,12 +70,21 @@ fn a_header_sticks_while_its_items_scroll_under_it() {
     let top = ui.on_node_with_text("Section 1").fetch_semantics_node().bounds.top;
     let host = ui.host();
     let mut y = 2000.0;
-    host.send_pointer(PointerEvent::press(Offset::new(500.0, y)));
+    host.send_pointer(
+        PointerEvent::press(Offset::new(500.0, y))
+            .with_pointer(compose::ui::PointerId(0), compose::ui::PointerType::Touch),
+    );
     while y > 600.0 {
         y -= 50.0;
-        host.send_pointer(PointerEvent::moved(Offset::new(500.0, y), true));
+        host.send_pointer(
+            PointerEvent::moved(Offset::new(500.0, y), true)
+                .with_pointer(compose::ui::PointerId(0), compose::ui::PointerType::Touch),
+        );
     }
-    host.send_pointer(PointerEvent::release(Offset::new(500.0, y)));
+    host.send_pointer(
+        PointerEvent::release(Offset::new(500.0, y))
+            .with_pointer(compose::ui::PointerId(0), compose::ui::PointerType::Touch),
+    );
     ui.advance_time_by_frame();
     // Item 0 scrolled away (not placed: only the items in view are); its section's header is
     // where it was.

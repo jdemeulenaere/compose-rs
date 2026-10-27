@@ -246,14 +246,23 @@ fn a_drag_collapses_the_bar_and_a_release_halfway_settles_it() {
     let mut ui = ComposeTestRule::sized(IntSize::new(400, 600), || Screen(2, false));
     ui.set_auto_advance(false);
     // Up 8 dp past the touch slop, then 30 more, slowly.
-    ui.host().send_pointer(PointerEvent::press(Offset::new(200.0, 400.0)));
+    ui.host().send_pointer(
+        PointerEvent::press(Offset::new(200.0, 400.0))
+            .with_pointer(compose_ui::PointerId(0), compose_ui::PointerType::Touch),
+    );
     for y in [392.0, 382.0, 372.0, 362.0] {
-        ui.host().send_pointer(PointerEvent::moved(Offset::new(200.0, y), true));
+        ui.host().send_pointer(
+            PointerEvent::moved(Offset::new(200.0, y), true)
+                .with_pointer(compose_ui::PointerId(0), compose_ui::PointerType::Touch),
+        );
         ui.advance_time_by(Duration::from_millis(100));
     }
     assert_eq!(height(&mut ui), 112.0 - 30.0);
     ui.advance_time_by(Duration::from_millis(200));
-    ui.host().send_pointer(PointerEvent::release(Offset::new(200.0, 362.0)));
+    ui.host().send_pointer(
+        PointerEvent::release(Offset::new(200.0, 362.0))
+            .with_pointer(compose_ui::PointerId(0), compose_ui::PointerType::Touch),
+    );
     ui.advance_time_by(Duration::from_secs(1));
     // Past half way: collapsed.
     assert_eq!(height(&mut ui), 64.0);

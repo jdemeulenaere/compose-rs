@@ -301,12 +301,21 @@ fn a_combined_clickable_in_a_scroll_doesnt_long_click_once_dragged() {
         );
     });
     let host = ui.host();
-    host.send_pointer(PointerEvent::press(Offset::new(50.0, 80.0)));
+    host.send_pointer(
+        PointerEvent::press(Offset::new(50.0, 80.0))
+            .with_pointer(compose_ui::PointerId(0), compose_ui::PointerType::Touch),
+    );
     for y in [70.0, 60.0, 50.0, 40.0] {
-        host.send_pointer(PointerEvent::moved(Offset::new(50.0, y), true));
+        host.send_pointer(
+            PointerEvent::moved(Offset::new(50.0, y), true)
+                .with_pointer(compose_ui::PointerId(0), compose_ui::PointerType::Touch),
+        );
     }
     ui.advance_time_by(Duration::from_millis(600));
-    ui.host().send_pointer(PointerEvent::release(Offset::new(50.0, 40.0)));
+    ui.host().send_pointer(
+        PointerEvent::release(Offset::new(50.0, 40.0))
+            .with_pointer(compose_ui::PointerId(0), compose_ui::PointerType::Touch),
+    );
     ui.advance_time_by(Duration::from_millis(400));
     assert!(log.borrow().is_empty(), "{:?}", log.borrow());
 }

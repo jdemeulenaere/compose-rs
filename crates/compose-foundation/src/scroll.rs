@@ -371,14 +371,7 @@ impl Drag {
     fn new(event: &PointerEvent, position: Offset, along: f32) -> Drag {
         let mut tracker = crate::fling::VelocityTracker::default();
         tracker.press(event_time(event), along);
-        Drag {
-            pointer: event.pointer,
-            start: position,
-            last: position,
-            scrolling: false,
-            tracker,
-            touch: event.pointer_type == compose_ui::PointerType::Touch,
-        }
+        Drag { pointer: event.pointer, start: position, last: position, scrolling: false, tracker }
     }
 }
 
@@ -390,7 +383,6 @@ struct Drag {
     scrolling: bool,
     /// Its speed, for the fling at its release.
     tracker: crate::fling::VelocityTracker,
-    touch: bool,
 }
 
 /// When an event happened (its time, else now), for velocities.
@@ -898,8 +890,10 @@ impl DragScroller {
                 }
                 self.pressed.retain(|(pointer, _)| *pointer != event.pointer);
                 self.pressed.push((event.pointer, position));
-                // Another finger joining a drag leaves it to the first.
-                if self.drag.is_none() {
+                // Another finger joining a drag leaves it to the first. A mouse doesn't drag a
+                // scrollable, as Compose's `CanDragCalculation` (`type != PointerType.Mouse`,
+                // D874): its wheel scrolls it.
+                if self.drag.is_none() && event.pointer_type != compose_ui::PointerType::Mouse {
                     self.drag = Some(Drag::new(event, position, along_axis(position)));
                 }
             }
@@ -975,17 +969,14 @@ impl DragScroller {
                 }
                 event.consume();
                 self.end_drag();
-                // A touch let go while moving: the content goes on, slowing down.
+                // A finger or a stylus let go while moving: the content goes on, slowing down
+                // (every pointer that drags flings, as Compose's).
                 drag.tracker.release(event_time(event));
                 // The platform's fling bounds (`ViewConfiguration`, D907).
                 let configuration = context.view_configuration();
                 let maximum = configuration.maximum_fling_velocity;
-                // The finger's velocity; the content scrolls the other way.
-                let velocity = if drag.touch {
-                    (-drag.tracker.velocity()).clamp(-maximum, maximum)
-                } else {
-                    0.0
-                };
+                // The pointer's velocity; the content scrolls the other way.
+                let velocity = (-drag.tracker.velocity()).clamp(-maximum, maximum);
                 let density = context.density().density;
                 self.end(velocity, density, reverse, driver);
             }

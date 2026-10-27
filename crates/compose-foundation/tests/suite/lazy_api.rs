@@ -170,11 +170,20 @@ fn a_reversed_list_starts_at_the_bottom_and_scrolls_up() {
     // A drag down pulls the items down with the finger: further on, the later items come in
     // from the top (30 px, the first 8 within the slop).
     let host = ui.host();
-    host.send_pointer(PointerEvent::press(Offset::new(50.0, 10.0)));
+    host.send_pointer(
+        PointerEvent::press(Offset::new(50.0, 10.0))
+            .with_pointer(compose_ui::PointerId(0), compose_ui::PointerType::Touch),
+    );
     for y in [20.0, 30.0, 40.0] {
-        host.send_pointer(PointerEvent::moved(Offset::new(50.0, y), true));
+        host.send_pointer(
+            PointerEvent::moved(Offset::new(50.0, y), true)
+                .with_pointer(compose_ui::PointerId(0), compose_ui::PointerType::Touch),
+        );
     }
-    host.send_pointer(PointerEvent::release(Offset::new(50.0, 40.0)));
+    host.send_pointer(
+        PointerEvent::release(Offset::new(50.0, 40.0))
+            .with_pointer(compose_ui::PointerId(0), compose_ui::PointerType::Touch),
+    );
     ui.wait_for_idle();
     assert_eq!(state.first_visible_item_index(), 2);
     assert_eq!(state.first_visible_item_scroll_offset(), 7);
