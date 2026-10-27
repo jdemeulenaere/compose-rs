@@ -29,7 +29,10 @@ pub(crate) struct FocusRequests {
         RefCell<Vec<(NodeId, crate::node_chain::EntryId, crate::node_context::Invalidation)>>,
     /// The entries handles were made for that are attached, by `EntryId`: what
     /// `NodeHandle::is_attached` answers without the tree.
-    pub(crate) attached_entries: RefCell<std::collections::HashSet<u64>>,
+    /// FNV-hashed: asked for each request a handle makes.
+    pub(crate) attached_entries: RefCell<
+        std::collections::HashSet<u64, std::hash::BuildHasherDefault<compose_runtime::KeyHasher>>,
+    >,
 }
 
 /// A focus change asked for outside dispatch.

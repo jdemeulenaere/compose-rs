@@ -6,7 +6,7 @@ use std::any::Any;
 use std::fmt;
 use std::rc::Rc;
 
-use compose_runtime::{CompositionLocal, OwnedState};
+use compose_runtime::CompositionLocal;
 
 use crate::draw::DrawScope;
 use crate::graphics::{Color, Paint};
@@ -183,16 +183,25 @@ pub static LOCAL_INDICATION: CompositionLocal<Indication> =
 // ---- The nodes -------------------------------------------------------------------------------
 
 /// What an indication node shows: whether its source has presses, hovers and focuses under way,
-/// a state its listener writes as each is emitted (D1057: no collecting task) and its drawing
-/// reads. Each interaction is tracked by identity, as `collect_is_pressed_as_state`'s, so an
-/// end without its start (a start dropped with a detached node's queue) changes nothing. It
-/// listens from when it's made until its node is detached ([`stop`](Self::stop)), and again
-/// from its node's next attachment ([`start`](Self::start)).
+/// which its listener keeps as each is emitted (D1057: no collecting task), drawing its node
+/// again when it changes, as Compose's indication nodes keep fields and call `invalidateDraw`
+/// (no state written, so none while composing either). Each interaction is tracked by
+/// identity, as `collect_is_pressed_as_state`'s, so an end without its start (a start dropped
+/// with a detached node's queue) changes nothing. It listens from when it's made until its node
+/// is detached ([`stop`](Self::stop)), and again from its node's next attachment
+/// ([`attach`](Self::attach)), whose context names what draws it.
 pub(crate) struct InteractionStates {
     source: InteractionSource,
-    /// Bits: `PRESSED`, `HOVERED`, `FOCUSED`.
-    state: OwnedState<u8>,
+    shared: Rc<StatesShared>,
     listener: Option<Rc<Listener>>,
+}
+
+#[derive(Default)]
+struct StatesShared {
+    /// Bits: `PRESSED`, `HOVERED`, `FOCUSED`.
+    bits: std::cell::Cell<u8>,
+    /// What draws the indication (its host's handle), once attached.
+    handle: std::cell::Cell<Option<NodeHandle>>,
 }
 
 pub(crate) const PRESSED: u8 = 1;
@@ -203,53 +212,53 @@ impl InteractionStates {
     /// Listens to `source`'s interactions from now on, as Compose's indication nodes collect
     /// them from their attachment.
     pub(crate) fn collect(source: &InteractionSource) -> InteractionStates {
-        let mut states = InteractionStates {
-            source: source.clone(),
-            state: compose_runtime::mutable_state_of(0u8),
-            listener: None,
-        };
+        let mut states =
+            InteractionStates { source: source.clone(), shared: Rc::default(), listener: None };
         states.start();
         states
     }
 
     /// Listens from now on (from nothing under way, as a new collection), unless it does.
-    pub(crate) fn start(&mut self) {
+    fn start(&mut self) {
         if self.listener.is_some() {
             return;
         }
-        let handle = self.state.handle();
+        let shared = self.shared.clone();
         let mut ongoing = Ongoing::default();
         let listener = self.source.listen(move |interaction| {
             ongoing.apply(interaction);
             let bits = if ongoing.pressed() { PRESSED } else { 0 }
                 | if ongoing.hovered() { HOVERED } else { 0 }
                 | if ongoing.focused() { FOCUSED } else { 0 };
-            if handle.try_get() == Some(bits) {
-                return;
-            }
-            // An emission while composing (a node's update ending its interactions) writes
-            // after the composition, as a collecting task would.
-            if compose_runtime::is_composing() {
-                compose_runtime::platform::launch(async move {
-                    let _ = handle.try_set(bits);
-                });
-            } else {
-                let _ = handle.try_set(bits);
+            if shared.bits.replace(bits) != bits
+                && let Some(handle) = shared.handle.get()
+            {
+                handle.invalidate_draw();
             }
         });
         self.listener = Some(listener);
     }
 
-    /// The bits, a state read.
+    /// Its node is attached (in `context`, its host's): it listens, and draws through it.
+    pub(crate) fn attach(&mut self, context: &mut NodeContext<'_>) {
+        self.start();
+        self.shared.handle.set(Some(context.handle()));
+        if self.get() != 0 {
+            context.invalidate_draw();
+        }
+    }
+
+    /// What's under way.
     pub(crate) fn get(&self) -> u8 {
-        self.state.try_get().unwrap_or(0)
+        self.shared.bits.get()
     }
 
     /// Stops listening, and shows nothing under way: its node is detached, as Compose's node
     /// scope cancelled (attached again, it starts from nothing, as a new collection).
     pub(crate) fn stop(&mut self) {
         self.listener = None;
-        crate::interaction::write_soon(&self.state, 0);
+        self.shared.bits.set(0);
+        self.shared.handle.set(None);
     }
 }
 
@@ -272,8 +281,8 @@ impl ModifierNode for DefaultDebugIndicationNode {
     fn as_draw(&mut self) -> Option<&mut dyn DrawModifierNode> {
         Some(self)
     }
-    fn on_attach(&mut self, _context: &mut NodeContext<'_>) {
-        self.0.start();
+    fn on_attach(&mut self, context: &mut NodeContext<'_>) {
+        self.0.attach(context);
     }
     fn on_detach(&mut self, _context: &mut NodeContext<'_>) {
         self.0.stop();
@@ -333,8 +342,8 @@ impl ModifierNode for StateLayerNode {
     fn as_draw(&mut self) -> Option<&mut dyn DrawModifierNode> {
         Some(self)
     }
-    fn on_attach(&mut self, _context: &mut NodeContext<'_>) {
-        self.states.start();
+    fn on_attach(&mut self, context: &mut NodeContext<'_>) {
+        self.states.attach(context);
     }
     fn on_detach(&mut self, _context: &mut NodeContext<'_>) {
         self.states.stop();

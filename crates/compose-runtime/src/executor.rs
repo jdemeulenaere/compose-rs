@@ -272,8 +272,9 @@ fn is_live(key: TaskKey) -> bool {
 pub fn run_ready() -> bool {
     let mut ran = false;
     // A set: a frame resumes hundreds of tasks (an animated value each), and a scan per key
-    // made that quadratic.
-    let mut polled: HashSet<TaskKey, BuildHasherDefault<KeyHasher>> = HashSet::default();
+    // made that quadratic; the first few in an array, so a run polling a task or two (an
+    // event's) allocates nothing.
+    let mut polled = Polled::default();
     let mut deferred: Vec<TaskKey> = Vec::new();
     loop {
         let mut keys = with_executor(|executor| {
@@ -295,7 +296,6 @@ pub fn run_ready() -> bool {
             }
             return ran;
         }
-        polled.reserve(keys.len());
         for &key in &keys {
             if !polled.insert(key) {
                 if !deferred.contains(&key) {
@@ -307,6 +307,37 @@ pub fn run_ready() -> bool {
         }
         keys.clear();
         with_executor(|executor| executor.polling = keys);
+    }
+}
+
+/// The tasks a `run_ready` polled: an array for the first few, a set past them.
+#[derive(Default)]
+struct Polled {
+    few: [Option<TaskKey>; 8],
+    many: Option<HashSet<TaskKey, BuildHasherDefault<KeyHasher>>>,
+}
+
+impl Polled {
+    /// Notes `key`; whether it wasn't yet.
+    fn insert(&mut self, key: TaskKey) -> bool {
+        if let Some(many) = &mut self.many {
+            return many.insert(key);
+        }
+        for slot in &mut self.few {
+            match slot {
+                Some(kept) if *kept == key => return false,
+                Some(_) => {}
+                None => {
+                    *slot = Some(key);
+                    return true;
+                }
+            }
+        }
+        let mut many: HashSet<TaskKey, BuildHasherDefault<KeyHasher>> =
+            self.few.iter().flatten().copied().collect();
+        let inserted = many.insert(key);
+        self.many = Some(many);
+        inserted
     }
 }
 

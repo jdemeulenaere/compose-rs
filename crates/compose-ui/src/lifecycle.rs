@@ -411,16 +411,21 @@ impl UiTree {
         self.run_lifecycle();
         let requests = self.focus_requests.clone();
         loop {
-            let pending = mem::take(&mut *requests.node_invalidations.borrow_mut());
+            let mut pending = mem::take(&mut *requests.node_invalidations.borrow_mut());
             if pending.is_empty() {
                 return;
             }
-            for (node, entry, what) in pending {
+            for (node, entry, what) in pending.drain(..) {
                 if let Some(index) = self.entry_index(node, entry)
                     && self.node(node).chain[index].state & entry_state::ATTACHED != 0
                 {
                     self.invalidate_entry_at(node, Some(index), what);
                 }
+            }
+            // Its capacity back, so the next request doesn't allocate.
+            let mut current = requests.node_invalidations.borrow_mut();
+            if current.is_empty() {
+                *current = pending;
             }
         }
     }

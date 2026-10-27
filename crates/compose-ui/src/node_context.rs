@@ -5,6 +5,7 @@
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
+use std::hash::BuildHasherDefault;
 use std::marker::PhantomData;
 use std::rc::{Rc, Weak};
 
@@ -217,7 +218,10 @@ struct Registration {
 type TreeBorrow = dyn Fn(&mut dyn FnMut(&mut UiTree)) -> bool;
 
 thread_local! {
-    static TREES: RefCell<HashMap<u32, Registration>> = RefCell::new(HashMap::new());
+    // FNV, not SipHash: looked up for each request a handle makes (an indication's each
+    // interaction), by a counter no one chooses.
+    static TREES: RefCell<HashMap<u32, Registration, BuildHasherDefault<compose_runtime::KeyHasher>>> =
+        RefCell::new(HashMap::default());
     static NEXT_TREE: Cell<u32> = const { Cell::new(0) };
 }
 
