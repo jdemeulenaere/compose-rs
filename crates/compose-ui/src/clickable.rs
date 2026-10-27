@@ -1094,3 +1094,67 @@ impl ClickableNode {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::host::UiHost;
+    use crate::modifier::{ClickableOptions, Modifier};
+    use crate::tree::{NodeId, UiTree};
+
+    /// The first layout node with a clickable, and its entry.
+    fn clickable_entry(tree: &UiTree) -> (NodeId, usize) {
+        let mut stack = vec![tree.root_id()];
+        while let Some(id) = stack.pop() {
+            let value = tree.node(id);
+            if let Some(index) = value
+                .chain
+                .iter()
+                .position(|entry| entry.node.downcast_ref::<ClickableNode>().is_some())
+            {
+                return (id, index);
+            }
+            stack.extend(tree.children_of(id));
+        }
+        panic!("no clickable");
+    }
+
+    /// Detached, the clickable drops what it queued to emit but its fallbacks, as Compose's
+    /// node scope is cancelled (D1057): a press queued and not yet sent never is.
+    #[test]
+    fn detaching_a_clickable_drops_what_it_queued() {
+        let source = MutableInteractionSource::new();
+        let given = source.clone();
+        let host = UiHost::headless(100, 100);
+        host.set_content(move || {
+            let options = ClickableOptions {
+                interaction_source: Some(given.clone()),
+                indication: crate::indication::Indication::NONE,
+                ..ClickableOptions::DEFAULT
+            };
+            crate::layout::emit_layout_node(
+                Modifier.clickable_with(options, || {}),
+                crate::layout::empty_measure_policy(),
+                || {},
+            );
+        });
+        let mut host = host;
+        host.frame();
+        let heard = Rc::new(RefCell::new(Vec::new()));
+        let sink = heard.clone();
+        let _listener =
+            source.listen(move |interaction| sink.borrow_mut().push(interaction.clone()));
+        let press = Press::new(Offset::ZERO);
+        host.with_tree(|tree| {
+            let (node, index) = clickable_entry(tree);
+            tree.with_entry(node, index, |modifier_node, context| {
+                let clickable = modifier_node.downcast_mut::<ClickableNode>().expect("clickable");
+                clickable.shared.borrow().emit_soon(PressInteraction::Press(press));
+                clickable.on_detach(context);
+            });
+        });
+        compose_runtime::platform::run_ready();
+        assert!(heard.borrow().is_empty(), "{:?}", heard.borrow());
+        assert!(!source.is_pressed());
+    }
+}

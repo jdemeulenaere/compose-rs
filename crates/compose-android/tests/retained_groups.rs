@@ -2625,3 +2625,63 @@ mod randomized_inner_layers {
         assert!(kept > 0 && inner > 0 && ahead > 0);
     }
 }
+
+/// A shape whose outline is one remembered `Path`, reset for each outline (as Kotlin code
+/// reuses a `Path`): a triangle inset by `inset`.
+struct ResetPathShape {
+    path: Path,
+    inset: f32,
+}
+
+impl CustomShape for ResetPathShape {
+    fn create_outline(&self, size: Size, _: LayoutDirection, _: &Density) -> compose_ui::Outline {
+        self.path.reset();
+        self.path.move_to(self.inset, size.height);
+        self.path.line_to(size.width / 2.0, self.inset);
+        self.path.line_to(size.width - self.inset, size.height);
+        self.path.close();
+        compose_ui::Outline::Generic(self.path.data(), Offset::ZERO)
+    }
+
+    fn same(&self, other: &dyn CustomShape) -> bool {
+        other.downcast_ref::<ResetPathShape>().is_some_and(|other| other.inset == self.inset)
+    }
+}
+
+/// The serial bits of a layer's path outline in its `LAYERS` entry (after its id and offset).
+fn path_outline_serial(bytes: &[u8], layer: usize) -> u32 {
+    let entry = 5 + layer * LAYER_ENTRY_BYTES + 8;
+    u32_at(bytes, entry + layer_entry::OUTLINE_RADII + 12)
+}
+
+/// A path changed in place and outlining a layer: its new contents are defined again under the
+/// same id once nothing holds the old ones (D532), so the `LAYERS` entry tells them apart by the
+/// definition's serial, which changes the entry's bytes and has the replayer set the outline
+/// again (D1055). The outline's id and offset alone would stay the same.
+#[test]
+fn a_path_outline_defined_again_in_place_changes_the_layer_entry() {
+    let inset = mutable_state_of(2.0f32);
+    let handle = inset.handle();
+    let mut serialized = Serialized::new(move || {
+        let path = remember(Path::new);
+        let shape = Shape::custom(ResetPathShape { path: path.clone(), inset: handle.get() });
+        Leaf(Modifier.size(40.dp()).clip(shape).then(painted(|| Color::RED)));
+    });
+    let mut frames = vec![serialized.frame()];
+    for next in [4.0f32, 6.0, 8.0] {
+        inset.set(next);
+        frames.push(serialized.frame());
+    }
+    let ids: Vec<u32> = frames.iter().map(|bytes| path_outline(bytes, 0).0).collect();
+    // Once the first contents were let go, each new contents takes the id the last held.
+    assert!(ids.windows(2).any(|pair| pair[0] == pair[1]), "an id defined again in place: {ids:?}");
+    for (index, pair) in frames.windows(2).enumerate() {
+        if ids[index] != ids[index + 1] {
+            continue;
+        }
+        let (before, after) = (&pair[0], &pair[1]);
+        assert_ne!(path_outline_serial(before, 0), path_outline_serial(after, 0));
+        let entry = |bytes: &[u8]| bytes[5 + 8..5 + LAYER_ENTRY_BYTES].to_vec();
+        assert_ne!(entry(before), entry(after), "the entry changed: the outline is set again");
+    }
+}

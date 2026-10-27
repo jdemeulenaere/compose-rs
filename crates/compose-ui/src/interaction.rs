@@ -623,16 +623,19 @@ impl ComposeArg for MutableInteractionSource {
 /// then one at once (Compose's `tryEmit`, where the node ends its interactions, and its hovers,
 /// which compose-rs sends at once so a hover the frame's layout finds draws in that frame), so
 /// a release then an exit go out in that order. [`cancel`](Emitter::cancel) is the node's
-/// scope cancelled on detach: what's queued isn't sent, but cancellations, as Compose's
-/// `invokeOnCompletion { tryEmit(cancel) }`.
+/// scope cancelled on detach: what's queued isn't sent, but its fallbacks, which Compose's
+/// nodes send at once when their scope is cancelled first: a press's cancellation
+/// (`invokeOnCompletion { tryEmit(cancel) }`) and focus changes (`FocusableNode`'s
+/// `emitWithFallback`), so a source never stays focused or pressed for an end dropped.
 #[derive(Default)]
 pub(crate) struct Emitter(OnceCell<Rc<EmitterQueue>>);
 
 #[derive(Default)]
 struct EmitterQueue {
-    /// Each with the source it goes to: a node given a new source still sends what it queued
-    /// to the old one, as Compose's launched coroutines captured it.
-    pending: RefCell<VecDeque<(InteractionSource, Interaction)>>,
+    /// Each with the source it goes to (a node given a new source still sends what it queued
+    /// to the old one, as Compose's launched coroutines captured it), and whether it's sent
+    /// even if the node is cancelled first (its fallback).
+    pending: RefCell<VecDeque<(InteractionSource, Interaction, bool)>>,
     /// The task sending them, while it runs.
     job: Cell<Option<Job>>,
     waker: RefCell<Option<Waker>>,
@@ -642,12 +645,22 @@ impl EmitterQueue {
     /// Sends what's queued, in order (each taken before it's sent: a callback may queue more).
     fn send_pending(&self) {
         loop {
-            let Some((source, interaction)) = self.pending.borrow_mut().pop_front() else {
+            let Some((source, interaction, _)) = self.pending.borrow_mut().pop_front() else {
                 break;
             };
             source.send(interaction);
         }
     }
+}
+
+/// Whether `interaction` is sent though its node is cancelled before its task sends it, as
+/// Compose's components fall back to `tryEmit` for a press's cancellation and focus changes.
+fn has_fallback(interaction: &Interaction) -> bool {
+    matches!(
+        interaction,
+        Interaction::Press(PressInteraction::Cancel(_))
+            | Interaction::Focus(FocusInteraction::Focus(_) | FocusInteraction::Unfocus(_))
+    )
 }
 
 impl Emitter {
@@ -658,7 +671,9 @@ impl Emitter {
         interaction: impl Into<Interaction>,
     ) {
         let queue = self.0.get_or_init(Rc::default);
-        queue.pending.borrow_mut().push_back((source.clone(), interaction.into()));
+        let interaction = interaction.into();
+        let fallback = has_fallback(&interaction);
+        queue.pending.borrow_mut().push_back((source.clone(), interaction, fallback));
         match queue.job.get() {
             Some(job) if job.is_active() => {
                 if let Some(waker) = queue.waker.borrow_mut().take() {
@@ -687,7 +702,7 @@ impl Emitter {
     }
 
     /// The node detached or reset (its scope cancelled): what's queued is dropped but its
-    /// cancellations, sent now, and the task ends.
+    /// fallbacks, sent now in order, and the task ends.
     pub(crate) fn cancel(&self) {
         let Some(queue) = self.0.get() else { return };
         if let Some(job) = queue.job.take() {
@@ -695,10 +710,11 @@ impl Emitter {
         }
         queue.waker.borrow_mut().take();
         loop {
-            let Some((source, interaction)) = queue.pending.borrow_mut().pop_front() else {
+            let Some((source, interaction, fallback)) = queue.pending.borrow_mut().pop_front()
+            else {
                 break;
             };
-            if matches!(interaction, Interaction::Press(PressInteraction::Cancel(_))) {
+            if fallback {
                 source.send(interaction);
             }
         }
@@ -775,6 +791,8 @@ mod tests {
                 Interaction::Press(PressInteraction::Release(_)) => "Release",
                 Interaction::Press(PressInteraction::Cancel(_)) => "Cancel",
                 Interaction::Hover(HoverInteraction::Exit(_)) => "Exit",
+                Interaction::Focus(FocusInteraction::Focus(_)) => "Focus",
+                Interaction::Focus(FocusInteraction::Unfocus(_)) => "Unfocus",
                 _ => "other",
             })
         });
@@ -800,20 +818,41 @@ mod tests {
     }
 
     /// Cancelled (its node detached), an emitter sends none of what it queued but its
-    /// cancellations, as Compose's node scope cancelled with `invokeOnCompletion { tryEmit }`
-    /// (D1057): a press queued before the node left never reaches a collector after it.
+    /// fallbacks, in order: press cancellations, as Compose's `invokeOnCompletion { tryEmit }`,
+    /// and focus changes, as `FocusableNode.emitWithFallback` (D1057). A press queued before
+    /// the node left never reaches a collector after its cancel, and a focus's end is never
+    /// dropped (the source would stay focused).
     #[test]
-    fn a_cancelled_emitter_sends_only_its_cancellations() {
+    fn a_cancelled_emitter_sends_only_its_fallbacks() {
         let source = MutableInteractionSource::new();
         let (_listener, heard) = heard(&source);
         let emitter = Emitter::default();
         let (first, second) = (Press::new(Offset::ZERO), Press::new(Offset::ZERO));
+        let focus = Focus::new();
+        emitter.emit_soon(&source, FocusInteraction::Focus(focus));
         emitter.emit_soon(&source, PressInteraction::Press(first));
+        emitter.emit_soon(&source, PressInteraction::Release(first));
         emitter.emit_soon(&source, PressInteraction::Cancel(second));
+        emitter.emit_soon(&source, HoverInteraction::Exit(HoverEnter::new()));
+        emitter.emit_soon(&source, FocusInteraction::Unfocus(focus));
         emitter.cancel();
         compose_runtime::platform::run_ready();
-        assert_eq!(*heard.borrow(), ["Cancel"]);
-        assert!(!source.is_pressed());
+        assert_eq!(*heard.borrow(), ["Focus", "Cancel", "Unfocus"]);
+        assert!(!source.is_pressed() && !source.is_focused());
+    }
+
+    /// A focus whose end the emitter falls back to sending: queued, then cancelled, the source
+    /// isn't left focused.
+    #[test]
+    fn a_focus_ended_in_a_cancelled_queue_leaves_the_source_unfocused() {
+        let source = MutableInteractionSource::new();
+        let emitter = Emitter::default();
+        let focus = Focus::new();
+        emitter.emit_now(&source, FocusInteraction::Focus(focus));
+        assert!(source.is_focused());
+        emitter.emit_soon(&source, FocusInteraction::Unfocus(focus));
+        emitter.cancel();
+        assert!(!source.is_focused());
     }
 
     /// A listener dropped hears nothing more.
