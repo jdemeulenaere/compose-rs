@@ -340,6 +340,8 @@ pub struct UiTree {
     /// Layout nodes whose modifier nodes asked `remeasure_sync` in a callback: measured once it
     /// returns, the entry back in its chain.
     pub(crate) remeasure_after: Vec<NodeId>,
+    /// The reads modifier nodes observe (`NodeContext::observe_reads`).
+    pub(crate) observations: crate::observer_node::NodeObservations,
 }
 
 impl Drop for UiTree {
@@ -406,6 +408,7 @@ impl UiTree {
             side_effects: Vec::new(),
             remeasure_allowed: false,
             remeasure_after: Vec::new(),
+            observations: Default::default(),
         }
     }
 
@@ -895,6 +898,7 @@ impl UiTree {
                 if removed.state & entry_state::HAS_HANDLE != 0 {
                     self.focus_requests.attached_entries.borrow_mut().remove(&removed.id.0);
                 }
+                self.forget_entry_reads(removed.id, removed.state);
                 let mut context = ReleaseContext { text_measurer: &mut *self.text_measurer };
                 removed.node.on_release(&mut context);
             }
@@ -1376,6 +1380,9 @@ impl UiTree {
             }
             for layer in &value.inner_layers {
                 self.inner_layer_owners.remove(&layer.key);
+            }
+            for entry in &value.chain {
+                self.forget_entry_reads(entry.id, entry.state);
             }
             let mut context = ReleaseContext { text_measurer: &mut *self.text_measurer };
             for entry in &mut value.chain {

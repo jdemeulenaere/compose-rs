@@ -223,6 +223,15 @@ impl NodeContext<'_> {
         }
     }
 
+    /// Runs `block`, observing the state it reads, as `observeReads`: once a write changes one
+    /// of them, the node's `ObserverModifierNode::on_observed_reads_changed` is called (if it
+    /// answers `as_observer`), once; observing again replaces what the last observation read.
+    /// Works detached too: the call comes if the node is attached when the write is told.
+    pub fn observe_reads<R>(&mut self, block: impl FnOnce() -> R) -> R {
+        *self.state_mut() |= entry_state::OBSERVES;
+        self.tree.observe_entry_reads(self.node, self.entry, block)
+    }
+
     /// The layout node's `Remeasurement`, as `RemeasurementModifier.onRemeasurementAvailable`
     /// gives it: what measures it on demand.
     pub fn remeasurement(&self) -> crate::remeasurement::Remeasurement {

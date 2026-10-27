@@ -145,6 +145,8 @@ pub(crate) mod entry_state {
     pub(crate) const HAS_SCOPE: u8 = 4;
     /// A handle was made for it: its attachment is mirrored where handles read it.
     pub(crate) const HAS_HANDLE: u8 = 8;
+    /// It observed reads (`NodeContext::observe_reads`): forgotten when it's dropped.
+    pub(crate) const OBSERVES: u8 = 16;
 }
 
 /// One modifier node of a layout node's chain.

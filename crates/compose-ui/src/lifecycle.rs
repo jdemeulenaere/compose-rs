@@ -326,6 +326,7 @@ impl UiTree {
         for mut entry in entries {
             let mut state = entry.state;
             self.mark_entry_detached(entry.id, &mut state);
+            self.forget_entry_reads(entry.id, state);
             let mut context = ReleaseContext { text_measurer: &mut *self.text_measurer };
             entry.node.on_release(&mut context);
         }
@@ -422,7 +423,11 @@ impl UiTree {
     pub fn apply_node_requests(&mut self) {
         // Outside passes: a callback may measure its node (`remeasure_sync`).
         let allowed = mem::replace(&mut self.remeasure_allowed, true);
-        let result = panic::catch_unwind(AssertUnwindSafe(|| self.run_lifecycle()));
+        let result = panic::catch_unwind(AssertUnwindSafe(|| {
+            self.run_lifecycle();
+            // The observer nodes whose observed reads changed (`ObserverModifierNode`).
+            self.notify_observer_nodes();
+        }));
         self.remeasure_allowed = allowed;
         result.unwrap_or_else(|panic| panic::resume_unwind(panic));
         let requests = self.focus_requests.clone();

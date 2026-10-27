@@ -12,6 +12,7 @@ mod mutable_paths;
 mod paragraph;
 mod paragraph_style;
 mod node_invalidation;
+mod observer_nodes;
 mod retained_drawing;
 mod review_d;
 mod review_d2;

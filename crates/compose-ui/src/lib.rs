@@ -49,6 +49,7 @@ mod nested_scroll;
 mod node_chain;
 mod node_context;
 mod nodes;
+mod observer_node;
 mod optimizations;
 mod overlay;
 mod paragraph;
@@ -190,6 +191,7 @@ pub use modifier::{
 };
 pub use nested_scroll::{NestedScrollConnection, NestedScrollSource};
 pub use node_context::{NodeContext, NodeHandle};
+pub use observer_node::ObserverModifierNode;
 pub use overlay::{PopupPositionProvider, WindowPosition};
 pub use paragraph::{Paragraph, TextLayoutInput};
 pub use paragraph_style::ParagraphStyle;
