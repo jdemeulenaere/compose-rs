@@ -240,7 +240,10 @@ impl Runtime {
         // statement's key, the branch as data key): deleted where it stands, as Compose's
         // `startReplaceGroup` deletes the group it doesn't expect, so what it held is forgotten
         // before what follows (D715). Its nodes' removal is applied before `op`
-        // (`start_branch_group_of`).
+        // (`start_branch_group_of`). The group starting is then inserted without looking
+        // further, as Compose's: in a loop without keys, the next group of this key is the next
+        // iteration's, whose state isn't this one's (D716).
+        let mut deleted = false;
         if kind == GroupKind::Replace
             && data_key != 0
             && !parent.inserting
@@ -255,8 +258,9 @@ impl Runtime {
         {
             *recorded_changes += 1;
             *branch_removal = delete_branch(table, paused, deferred, scopes, removal_stack, parent);
+            deleted = true;
         }
-        if !parent.inserting && !force_replace {
+        if !parent.inserting && !force_replace && !deleted {
             let mut previous = parent.last_placed;
             let mut current = parent.cursor;
             let mut nodes_before = 0;
