@@ -60,18 +60,30 @@ fn paragraph_layout(entry: &Entry) -> compose_ui::platform::ParagraphLayout {
     use compose_ui::platform::{GlyphBox, LaidOutLine, ParagraphLayout, ParagraphSize};
     let text = &entry.text;
     let paragraph = &entry.paragraph;
+    // Each UTF-16 index's byte offset (a low surrogate's: its character's), the end included:
+    // the line metrics' indices read in constant time, so reading the layout is O(n).
+    let mut bytes = Vec::with_capacity(text.len() + 1);
+    for (offset, character) in text.char_indices() {
+        bytes.extend(std::iter::repeat_n(offset, character.len_utf16()));
+    }
+    bytes.push(text.len());
+    let byte_at = |index: usize| bytes[index.min(bytes.len() - 1)];
     let mut lines = Vec::new();
     for line in paragraph.get_line_metrics() {
-        let start = byte_offset(text, line.start_index);
-        let end = byte_offset(text, line.end_including_newline);
-        let visible_end = byte_offset(text, line.end_excluding_whitespaces).max(start);
+        let start = byte_at(line.start_index);
+        let end = byte_at(line.end_including_newline);
+        let visible_end = byte_at(line.end_excluding_whitespaces).max(start);
         let mut glyphs = Vec::new();
+        // A running UTF-16 index through the line.
+        let mut unit = line.start_index;
         for (index, character) in text[start..end].char_indices() {
+            let units = character.len_utf16();
+            let range = unit..unit + units;
+            unit += units;
             if character == '\n' {
                 continue;
             }
             let offset = start + index;
-            let range = utf16_index(text, offset)..utf16_index(text, offset + character.len_utf8());
             let boxes =
                 paragraph.get_rects_for_range(range, RectHeightStyle::Max, RectWidthStyle::Tight);
             let glyph = match boxes.first() {
