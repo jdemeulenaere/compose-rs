@@ -54,7 +54,9 @@ pub use components::{
     Text, TextFieldColors, TextFieldDefaults, ToggleableSurface,
     minimum_interactive_component_size,
 };
-pub use dialog::{AlertDialog, DropdownMenu, DropdownMenuItem};
+pub use dialog::{
+    AlertDialog, AlertDialogDefaults, BasicAlertDialog, DropdownMenu, DropdownMenuItem,
+};
 pub use drawer::{
     DrawerDefaults, DrawerState, DrawerValue, ModalDrawerSheet, ModalNavigationDrawer,
     NavigationDrawerItem, NavigationDrawerItemColors, NavigationDrawerItemDefaults,

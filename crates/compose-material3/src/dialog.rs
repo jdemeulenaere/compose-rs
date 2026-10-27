@@ -1,10 +1,11 @@
-//! `AlertDialog`, `DropdownMenu` and `DropdownMenuItem`, as Compose's Material 3.
+//! `AlertDialog`, `BasicAlertDialog`, `DropdownMenu` and `DropdownMenuItem`, as Compose's
+//! Material 3.
 
 use compose_ui::ClickableOptions;
 use std::rc::Rc;
 
 use compose_foundation::ScrollModifiers as _;
-use compose_foundation::layout::{Arrangement, Box, Column, ColumnScope, Row};
+use compose_foundation::layout::{Arrangement, Box, Column, ColumnScope};
 use compose_runtime::{CompositionLocalProvider, composable, remember};
 use compose_ui::{
     Alignment, Constraints, Dp, DpOffset, IntOffset, IntSize, Layout, LayoutDirection, Measurable,
@@ -17,11 +18,88 @@ use crate::theme::{LOCAL_CONTENT_COLOR, LOCAL_TEXT_STYLE, MaterialTheme};
 
 // ---- AlertDialog -----------------------------------------------------------------------------
 
-/// A dialog with a title, text and buttons, as Compose's `AlertDialog`: on the extra-large
-/// shape, in the high surface container, 24 dp in, 280 to 560 dp wide; the icon and title
-/// centered above the text, the buttons at the end, 8 dp apart.
+/// As Compose's `AlertDialogDefaults`.
+pub struct AlertDialogDefaults;
+
+impl AlertDialogDefaults {
+    /// The dialog's icon, as `IconSize`.
+    pub const ICON_SIZE: Dp = Dp(24.0);
+    /// No tonal elevation, as `TonalElevation`.
+    pub const TONAL_ELEVATION: Dp = Dp(0.0);
+
+    /// The extra-large shape, as `shape` (`DialogTokens.ContainerShape`).
+    pub fn shape() -> compose_ui::Shape {
+        MaterialTheme::shapes().extra_large
+    }
+
+    /// The high surface container, as `containerColor`.
+    pub fn container_color() -> compose_ui::Color {
+        MaterialTheme::color_scheme().surface_container_high
+    }
+
+    /// The secondary color, as `iconContentColor`.
+    pub fn icon_content_color() -> compose_ui::Color {
+        MaterialTheme::color_scheme().secondary
+    }
+
+    /// On-surface, as `titleContentColor`.
+    pub fn title_content_color() -> compose_ui::Color {
+        MaterialTheme::color_scheme().on_surface
+    }
+
+    /// On-surface-variant, as `textContentColor`.
+    pub fn text_content_color() -> compose_ui::Color {
+        MaterialTheme::color_scheme().on_surface_variant
+    }
+}
+
+/// A dialog's width bounds, as `DialogMinWidth` and `DialogMaxWidth`.
+const DIALOG_MIN_WIDTH: Dp = Dp(280.0);
+const DIALOG_MAX_WIDTH: Dp = Dp(560.0);
+/// Between the buttons, along and across their rows, as `ButtonsMainAxisSpacing` and
+/// `ButtonsCrossAxisSpacing`.
+const BUTTONS_MAIN_AXIS_SPACING: Dp = Dp(8.0);
+const BUTTONS_CROSS_AXIS_SPACING: Dp = Dp(8.0);
+
+/// A dialog of any content, as Compose's `BasicAlertDialog`: `content` 280 to 560 dp wide (its
+/// minimum passed on to the content), in a dialog dismissed by `on_dismiss_request`. The content
+/// styles itself.
 #[composable]
 #[allow(non_snake_case)]
+pub fn BasicAlertDialog(
+    on_dismiss_request: impl Fn() + 'static,
+    #[default(crate::Modifier)] modifier: Modifier,
+    #[default(crate::window_default_dialog_properties())] properties: compose_ui::DialogProperties,
+    content: impl Fn() + 'static,
+) {
+    compose_ui::Dialog(
+        on_dismiss_request,
+        properties,
+        compose_runtime::callback(move || {
+            let content = content.clone();
+            Box(
+                modifier.clone().size_in(compose_ui::SizeSpec::bounds(
+                    DIALOG_MIN_WIDTH,
+                    Dp::UNSPECIFIED,
+                    DIALOG_MAX_WIDTH,
+                    Dp::UNSPECIFIED,
+                )),
+                Alignment::TOP_START,
+                true,
+                compose_runtime::callback(move |_| content()),
+            );
+        }),
+    );
+}
+
+/// A dialog with a title, text and buttons, as Compose's `AlertDialog`: a `BasicAlertDialog`
+/// of a surface (`shape`, `container_color`, `tonal_elevation`), 24 dp in; the icon (in
+/// `icon_content_color`) and the title (in `title_content_color`, the headline small style)
+/// centered above the text (in `text_content_color`, body medium), which takes the room left;
+/// the buttons at the end (in the primary color, label large), 8 dp apart, the confirm button
+/// last, or first when they're stacked because they don't fit on one row.
+#[composable]
+#[allow(non_snake_case, clippy::too_many_arguments)]
 pub fn AlertDialog(
     on_dismiss_request: impl Fn() + 'static,
     confirm_button: impl Fn() + 'static,
@@ -30,147 +108,154 @@ pub fn AlertDialog(
     #[default(None)] icon: Option<impl Fn() + 'static>,
     #[default(None)] title: Option<impl Fn() + 'static>,
     #[default(None)] text: Option<impl Fn() + 'static>,
+    #[default(crate::AlertDialogDefaults::shape())] shape: compose_ui::Shape,
+    #[default(crate::AlertDialogDefaults::container_color())] container_color: compose_ui::Color,
+    #[default(crate::AlertDialogDefaults::icon_content_color())]
+    icon_content_color: compose_ui::Color,
+    #[default(crate::AlertDialogDefaults::title_content_color())]
+    title_content_color: compose_ui::Color,
+    #[default(crate::AlertDialogDefaults::text_content_color())]
+    text_content_color: compose_ui::Color,
+    #[default(crate::AlertDialogDefaults::TONAL_ELEVATION)] tonal_elevation: Dp,
     #[default(crate::window_default_dialog_properties())] properties: compose_ui::DialogProperties,
 ) {
-    compose_ui::Dialog(
+    let content = AlertDialogParts {
+        confirm_button,
+        dismiss_button,
+        icon,
+        title,
+        text,
+        shape,
+        container_color,
+        icon_content_color,
+        title_content_color,
+        text_content_color,
+        tonal_elevation,
+    };
+    BasicAlertDialog(
         on_dismiss_request,
+        modifier,
         properties,
+        compose_runtime::callback(move || alert_dialog_content(&content)),
+    );
+}
+
+/// What `AlertDialog` lays out in its dialog.
+#[derive(Clone)]
+struct AlertDialogParts {
+    confirm_button: compose_runtime::Callback,
+    dismiss_button: Option<compose_runtime::Callback>,
+    icon: Option<compose_runtime::Callback>,
+    title: Option<compose_runtime::Callback>,
+    text: Option<compose_runtime::Callback>,
+    shape: compose_ui::Shape,
+    container_color: compose_ui::Color,
+    icon_content_color: compose_ui::Color,
+    title_content_color: compose_ui::Color,
+    text_content_color: compose_ui::Color,
+    tonal_elevation: Dp,
+}
+
+/// `content` in `color` and `style` merged into the text style, as Compose's
+/// `ProvideContentColorTextStyle`.
+fn provide_content_color_text_style(
+    color: compose_ui::Color,
+    style: compose_ui::TextStyle,
+    content: impl FnOnce(),
+) {
+    let merged = LOCAL_TEXT_STYLE.current().merge(&style);
+    CompositionLocalProvider(LOCAL_CONTENT_COLOR.provides(color), || {
+        CompositionLocalProvider(LOCAL_TEXT_STYLE.provides(merged), content);
+    });
+}
+
+/// As Compose's `AlertDialogContent`.
+fn alert_dialog_content(parts: &AlertDialogParts) {
+    let parts = parts.clone();
+    Surface(
+        Modifier,
+        parts.shape,
+        parts.container_color,
+        compose_ui::Color::UNSPECIFIED,
+        parts.tonal_elevation,
+        Dp(0.0),
+        None,
         compose_runtime::callback(move || {
-            let scheme = MaterialTheme::color_scheme();
-            let typography = MaterialTheme::typography();
-            let (confirm, dismiss, icon, title, text) = (
-                confirm_button.clone(),
-                dismiss_button.clone(),
-                icon.clone(),
-                title.clone(),
-                text.clone(),
-            );
-            Surface(
-                modifier.clone().size_in(compose_ui::SizeSpec::bounds(
-                    280.dp(),
-                    Dp::UNSPECIFIED,
-                    560.dp(),
-                    Dp::UNSPECIFIED,
-                )),
-                MaterialTheme::shapes().extra_large,
-                scheme.surface_container_high,
-                compose_ui::Color::UNSPECIFIED,
-                Dp(0.0),
-                Dp(0.0),
-                None,
-                compose_runtime::callback(move || {
-                    let (confirm, dismiss, icon, title, text) = (
-                        confirm.clone(),
-                        dismiss.clone(),
-                        icon.clone(),
-                        title.clone(),
-                        text.clone(),
-                    );
-                    Column(
-                        Modifier.padding(24.dp()),
-                        Arrangement::TOP,
-                        compose_ui::Alignment::START,
-                        compose_runtime::callback(move |column: ColumnScope| {
-                            if let Some(icon) = icon.clone() {
-                                CompositionLocalProvider(
-                                    LOCAL_CONTENT_COLOR.provides(scheme.secondary),
-                                    || {
-                                        Box(
-                                            Modifier
-                                                .align(
-                                                    column,
-                                                    compose_ui::Alignment::CENTER_HORIZONTALLY,
-                                                )
-                                                .padding((0.dp(), 0.dp(), 0.dp(), 16.dp())),
-                                            Alignment::CENTER,
-                                            false,
-                                            compose_runtime::callback({
-                                                let icon = icon.clone();
-                                                move |_| icon()
-                                            }),
-                                        );
-                                    },
+            let parts = parts.clone();
+            Column(
+                Modifier.padding(24.dp()),
+                Arrangement::TOP,
+                compose_ui::Alignment::START,
+                compose_runtime::callback(move |column: ColumnScope| {
+                    let typography = MaterialTheme::typography();
+                    if let Some(icon) = parts.icon.clone() {
+                        CompositionLocalProvider(
+                            LOCAL_CONTENT_COLOR.provides(parts.icon_content_color),
+                            || {
+                                Box(
+                                    Modifier
+                                        .padding((0.dp(), 0.dp(), 0.dp(), 16.dp()))
+                                        .align(column, compose_ui::Alignment::CENTER_HORIZONTALLY),
+                                    Alignment::TOP_START,
+                                    false,
+                                    compose_runtime::callback(move |_| icon()),
                                 );
-                            }
-                            if let Some(title) = title.clone() {
-                                let centered = icon.is_some();
-                                CompositionLocalProvider(
-                                    LOCAL_CONTENT_COLOR.provides(scheme.on_surface),
-                                    || {
-                                        CompositionLocalProvider(
-                                            LOCAL_TEXT_STYLE
-                                                .provides(typography.headline_small.clone()),
-                                            || {
-                                                let alignment = if centered {
-                                                    compose_ui::Alignment::CENTER_HORIZONTALLY
-                                                } else {
-                                                    compose_ui::Alignment::START
-                                                };
-                                                Box(
-                                                    Modifier.align(column, alignment).padding((
-                                                        0.dp(),
-                                                        0.dp(),
-                                                        0.dp(),
-                                                        16.dp(),
-                                                    )),
-                                                    Alignment::TOP_START,
-                                                    false,
-                                                    compose_runtime::callback({
-                                                        let title = title.clone();
-                                                        move |_| title()
-                                                    }),
-                                                );
-                                            },
-                                        );
-                                    },
+                            },
+                        );
+                    }
+                    if let Some(title) = parts.title.clone() {
+                        // Centered under an icon.
+                        let alignment = if parts.icon.is_some() {
+                            compose_ui::Alignment::CENTER_HORIZONTALLY
+                        } else {
+                            compose_ui::Alignment::START
+                        };
+                        provide_content_color_text_style(
+                            parts.title_content_color,
+                            typography.headline_small,
+                            || {
+                                Box(
+                                    Modifier
+                                        .padding((0.dp(), 0.dp(), 0.dp(), 16.dp()))
+                                        .align(column, alignment),
+                                    Alignment::TOP_START,
+                                    false,
+                                    compose_runtime::callback(move |_| title()),
                                 );
-                            }
-                            if let Some(text) = text.clone() {
-                                CompositionLocalProvider(
-                                    LOCAL_CONTENT_COLOR.provides(scheme.on_surface_variant),
-                                    || {
-                                        CompositionLocalProvider(
-                                            LOCAL_TEXT_STYLE
-                                                .provides(typography.body_medium.clone()),
-                                            || {
-                                                // What's left once the title and
-                                                // buttons have their room.
-                                                Box(
-                                                    Modifier
-                                                        .weight_with(column, 1.0, false)
-                                                        .padding((0.dp(), 0.dp(), 0.dp(), 24.dp())),
-                                                    Alignment::TOP_START,
-                                                    false,
-                                                    compose_runtime::callback({
-                                                        let text = text.clone();
-                                                        move |_| text()
-                                                    }),
-                                                );
-                                            },
-                                        );
-                                    },
+                            },
+                        );
+                    }
+                    if let Some(text) = parts.text.clone() {
+                        provide_content_color_text_style(
+                            parts.text_content_color,
+                            typography.body_medium,
+                            || {
+                                // What's left once the title and buttons have their room.
+                                Box(
+                                    Modifier
+                                        .weight_with(column, 1.0, false)
+                                        .padding((0.dp(), 0.dp(), 0.dp(), 24.dp()))
+                                        .align(column, compose_ui::Alignment::START),
+                                    Alignment::TOP_START,
+                                    false,
+                                    compose_runtime::callback(move |_| text()),
                                 );
-                            }
+                            },
+                        );
+                    }
+                    let (confirm, dismiss) =
+                        (parts.confirm_button.clone(), parts.dismiss_button.clone());
+                    Box(
+                        Modifier.align(column, compose_ui::Alignment::END),
+                        Alignment::TOP_START,
+                        false,
+                        compose_runtime::callback(move |_| {
                             let (confirm, dismiss) = (confirm.clone(), dismiss.clone());
-                            CompositionLocalProvider(
-                                LOCAL_CONTENT_COLOR.provides(scheme.primary),
-                                || {
-                                    Row(
-                                        Modifier.align(column, compose_ui::Alignment::END),
-                                        Arrangement::spaced_by(8.dp()).into(),
-                                        Alignment::CENTER_VERTICALLY,
-                                        compose_runtime::callback({
-                                            let (confirm, dismiss) =
-                                                (confirm.clone(), dismiss.clone());
-                                            move |_| {
-                                                if let Some(dismiss) = dismiss.clone() {
-                                                    dismiss();
-                                                }
-                                                confirm();
-                                            }
-                                        }),
-                                    );
-                                },
+                            // Note: a text button takes its own colors, not this one.
+                            provide_content_color_text_style(
+                                MaterialTheme::color_scheme().primary,
+                                MaterialTheme::typography().label_large,
+                                || alert_dialog_buttons(confirm, dismiss),
                             );
                         }),
                     );
@@ -178,6 +263,105 @@ pub fn AlertDialog(
             );
         }),
     );
+}
+
+/// The buttons, as Compose's `AlertDialogFlowRow`: a flow row in the other layout direction,
+/// so the confirm button comes last on a row, first when they stack; 8 dp apart along a row,
+/// and across rows 8 dp less what the touch target adds to a button (`ButtonDefaults.MinHeight`
+/// of 40 dp).
+fn alert_dialog_buttons(
+    confirm: compose_runtime::Callback,
+    dismiss: Option<compose_runtime::Callback>,
+) {
+    let minimum = crate::LOCAL_MINIMUM_INTERACTIVE_COMPONENT_SIZE.current();
+    let from_touch_target = if minimum.is_specified() { minimum.0 } else { 0.0 } - 40.0;
+    let cross =
+        Dp((BUTTONS_CROSS_AXIS_SPACING.0 - from_touch_target)
+            .clamp(0.0, BUTTONS_CROSS_AXIS_SPACING.0));
+    let policy = compose_runtime::remember_keyed(cross.0.to_bits(), move || {
+        Rc::new(ButtonsFlowRow { main: BUTTONS_MAIN_AXIS_SPACING, cross }) as Rc<dyn MeasurePolicy>
+    });
+    Layout(
+        Modifier,
+        policy,
+        compose_runtime::callback(move || {
+            confirm();
+            if let Some(dismiss) = &dismiss {
+                dismiss();
+            }
+        }),
+    );
+}
+
+/// `AlertDialogFlowRow`'s layout: the buttons in rows as wide as allowed, `main` apart, rows
+/// `cross` apart, as a `FlowRow` with `spacedBy` arrangements in the other layout direction
+/// (each row from the end).
+struct ButtonsFlowRow {
+    main: Dp,
+    cross: Dp,
+}
+
+impl MeasurePolicy for ButtonsFlowRow {
+    fn measure(
+        &self,
+        scope: &mut MeasureScope<'_>,
+        measurables: &[Measurable],
+        constraints: Constraints,
+    ) -> MeasureResult {
+        let density = scope.density();
+        let main = density.round_to_px(self.main);
+        let cross = density.round_to_px(self.cross);
+        let loose = Constraints::new(0, constraints.max_width, 0, constraints.max_height);
+        let placeables: Vec<Placeable> =
+            measurables.iter().map(|measurable| scope.measure(*measurable, loose)).collect();
+        // The rows: the placeables' indexes, a new row when the next doesn't fit.
+        let mut rows: Vec<(Vec<usize>, i32, i32)> = Vec::new();
+        for (index, placeable) in placeables.iter().enumerate() {
+            let fits = rows.last().is_some_and(|(_, width, _)| {
+                width + main + placeable.width <= constraints.max_width
+            });
+            match rows.last_mut() {
+                Some((items, width, height)) if fits => {
+                    items.push(index);
+                    *width += main + placeable.width;
+                    *height = (*height).max(placeable.height);
+                }
+                _ => rows.push((vec![index], placeable.width, placeable.height)),
+            }
+        }
+        let width = rows
+            .iter()
+            .map(|(_, width, _)| *width)
+            .max()
+            .unwrap_or(0)
+            .clamp(constraints.min_width, constraints.max_width);
+        let height = rows.iter().map(|(_, _, height)| *height).sum::<i32>()
+            + cross * (rows.len() as i32 - 1).max(0);
+        let height = height.clamp(constraints.min_height, constraints.max_height);
+        // In the other layout direction: from the right in a left-to-right layout.
+        let from_right = scope.layout_direction() == LayoutDirection::Ltr;
+        let mut y = 0;
+        for (items, _, row_height) in &rows {
+            let mut x = if from_right { width } else { 0 };
+            for &index in items {
+                let placeable = &placeables[index];
+                if from_right {
+                    x -= placeable.width;
+                    scope.place(placeable, x, y);
+                    x -= main;
+                } else {
+                    scope.place(placeable, x, y);
+                    x += placeable.width + main;
+                }
+            }
+            y += row_height + cross;
+        }
+        scope.layout(width, height)
+    }
+
+    fn debug_name(&self) -> &'static str {
+        "AlertDialogFlowRow"
+    }
 }
 
 // ---- DropdownMenu ----------------------------------------------------------------------------
