@@ -342,3 +342,34 @@ fn a_pixels_scroll_moves_the_first_items_offset() {
         assert_eq!(info.visible_items_info.first().map(|item| item.offset), Some(-1));
     }
 }
+
+// D863: an empty last item stays laid out once the list scrolls back from past its end.
+#[test]
+fn an_empty_last_item_stays_laid_out_after_a_long_scroll_back() {
+    for lazy in [Lazy::column(), Lazy::row()] {
+        let state = LazyListState::new(0, 0);
+        let handle = *state;
+        let mut ui = ComposeTestRule::sized(IntSize::new(1000, 1000), move || {
+            LazyColumnOrRow(
+                lazy,
+                lazy.sized(px(100), px(100)),
+                handle,
+                no_padding(),
+                move |scope: LazyListScope| {
+                    scope.items(6, move |index| {
+                        let main = if index == 5 { 0 } else { 30 };
+                        Spacer(lazy.main_axis_size(px(main)).then(lazy.cross_axis_size(px(100))));
+                    });
+                },
+            );
+        });
+        // Every item composed first (by a scroll to the end), then a scroll past the end that
+        // the measurement scrolls back from in one pass, as Compose's.
+        let _ = run(&mut ui, async move { handle.scroll_by(200.0).await });
+        let _ = run(&mut ui, async move { handle.scroll_by(-30.0).await });
+        let _ = run(&mut ui, async move { handle.scroll_by(1000.0).await });
+        let info = state.layout_info();
+        let last = info.visible_items_info.last().map(|item| item.index);
+        assert_eq!(last, Some(5), "{lazy:?}");
+    }
+}

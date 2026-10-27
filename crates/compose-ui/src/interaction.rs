@@ -29,7 +29,9 @@ pub struct MutableInteractionSource {
     pressed: Rc<OwnedState<bool>>,
     focused: Rc<OwnedState<bool>>,
     hovered: Rc<OwnedState<bool>>,
-    dragged: Rc<OwnedState<bool>>,
+    /// The drags going on: as Compose's `collectIsDraggedAsState`, which counts the starts not
+    /// yet stopped or cancelled (two scrollables sharing the source, one still dragging).
+    dragged: Rc<OwnedState<u32>>,
 }
 
 impl MutableInteractionSource {
@@ -38,7 +40,7 @@ impl MutableInteractionSource {
             pressed: Rc::new(compose_runtime::mutable_state_of(false)),
             focused: Rc::new(compose_runtime::mutable_state_of(false)),
             hovered: Rc::new(compose_runtime::mutable_state_of(false)),
-            dragged: Rc::new(compose_runtime::mutable_state_of(false)),
+            dragged: Rc::new(compose_runtime::mutable_state_of(0)),
         }
     }
 
@@ -49,14 +51,20 @@ impl MutableInteractionSource {
     /// Whether a drag is going on (a scrollable's, a draggable's), as `collectIsDraggedAsState`
     /// (a state read).
     pub fn is_dragged(&self) -> bool {
-        self.dragged.get()
+        self.dragged.get() > 0
     }
 
     /// A drag started (`true`, Compose's `DragInteraction.Start`) or ended (`false`, its `Stop`
     /// or `Cancel`): for foundation's gestures, until the interactions' stream comes.
     #[doc(hidden)]
     pub fn set_dragged(&self, dragged: bool) {
-        write_soon(&self.dragged, dragged);
+        let update = move |count: &u32| if dragged { count + 1 } else { count.saturating_sub(1) };
+        if compose_runtime::is_composing() {
+            let state = self.dragged.clone();
+            compose_runtime::CoroutineScope::new().launch(async move { state.update(update) });
+        } else {
+            self.dragged.update(update);
+        }
     }
 }
 

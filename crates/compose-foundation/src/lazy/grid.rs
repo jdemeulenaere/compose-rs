@@ -1573,6 +1573,8 @@ impl MeasurePolicy for LazyGridLayout {
         let mut attempt = 0;
         // How far the lines were scrolled back to fill a gap at the end.
         let mut scrolled_back = 0;
+        // The lines laid out before a scroll back stay laid out, as a list's items (D863).
+        let mut laid_end = index;
         loop {
             attempt += 1;
             placed.clear();
@@ -1580,7 +1582,9 @@ impl MeasurePolicy for LazyGridLayout {
             let mut main = before - offset.round() as i32;
             end_index = index;
             // At least one line, as a list's (D865).
-            while m.lines.exists(end_index) && (main < main_max || placed.is_empty()) {
+            while m.lines.exists(end_index)
+                && (main < main_max || placed.is_empty() || end_index < laid_end)
+            {
                 match m.line(end_index) {
                     Some(size) => {
                         placed.push((end_index, main));
@@ -1594,6 +1598,7 @@ impl MeasurePolicy for LazyGridLayout {
                 }
             }
             content_end = if placed.is_empty() { main } else { main - spacing } + after;
+            laid_end = laid_end.max(end_index);
             // At the end with room left: scrolled back so the last line ends the viewport.
             let gap = (main_max - content_end) as f32;
             if !missing

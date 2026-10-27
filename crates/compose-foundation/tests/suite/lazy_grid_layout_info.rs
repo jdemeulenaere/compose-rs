@@ -415,3 +415,37 @@ fn the_layout_info_says_the_cells_in_a_line() {
         assert_eq!(state.layout_info().max_span, 4);
     }
 }
+
+// Review of D863 for grids: a scroll back to fill a gap at the end keeps the lines laid out
+// before it, an empty last line included, as a list's (Compose's grid measurement only adds
+// lines to those it laid out).
+#[test]
+fn an_empty_last_line_stays_laid_out_after_a_scroll_back() {
+    for lazy in Lazy::grids() {
+        let state = LazyGridState::new(0, 0);
+        let handle = *state;
+        let mut ui = ComposeTestRule::sized(IntSize::new(1000, 1000), move || {
+            LazyGrid(
+                lazy,
+                1,
+                lazy.sized(px(100), px(100)),
+                handle,
+                no_padding(),
+                move |scope: LazyGridScope| {
+                    scope.items(6, move |index| {
+                        let main = if index == 5 { 0 } else { 30 };
+                        Spacer(lazy.main_axis_size(px(main)).then(lazy.cross_axis_size(px(100))));
+                    });
+                },
+            );
+        });
+        // Every item composed first (by a scroll to the end), then a scroll past the end that
+        // the measurement scrolls back from in one pass, as Compose's.
+        let _ = run(&mut ui, async move { handle.scroll_by(200.0).await });
+        let _ = run(&mut ui, async move { handle.scroll_by(-30.0).await });
+        let _ = run(&mut ui, async move { handle.scroll_by(1000.0).await });
+        let info = state.layout_info();
+        let last = info.visible_items_info.last().map(|item| item.index);
+        assert_eq!(last, Some(5), "{lazy:?}");
+    }
+}

@@ -587,3 +587,96 @@ fn a_mouse_drag_does_not_scroll() {
         assert_eq!(total.get(), 0.0, "{orientation:?}");
     }
 }
+
+// Review of D852: a wheel turn scrolls in a scroll of the user-input priority, as Compose's
+// `NonTouchScrollingLogic.userScroll` (`scrollLogic.scroll(MutatePriority.UserInput)`): the
+// state says it's scrolling while it applies, and it stops an animated scroll going on.
+#[test]
+fn a_wheel_turn_is_a_user_scroll_that_stops_an_animation() {
+    let seen: Rc<RefCell<Option<DefaultScrollableState>>> = Rc::default();
+    let in_progress = Rc::new(Cell::new(None::<bool>));
+    let (reader, flag) = (seen.clone(), in_progress.clone());
+    let state = scrollable_state(move |delta| {
+        if let Some(state) = reader.borrow().as_ref() {
+            flag.set(Some(state.is_scroll_in_progress()));
+        }
+        delta
+    });
+    *seen.borrow_mut() = Some(state.clone());
+    let scrolled = state.clone();
+    let mut ui =
+        scrollable_content(move || Modifier.scrollable(scrolled.clone(), Orientation::Vertical));
+    wheel(&mut ui, Offset::new(0.0, 10.0));
+    assert_eq!(in_progress.get(), Some(true), "scrolling while the wheel's delta applies");
+    assert!(!state.is_scroll_in_progress(), "and not after");
+
+    ui.set_auto_advance(false);
+    let result: Rc<RefCell<Option<Result<f32, MutationInterrupted>>>> = Rc::default();
+    let (animated, into) = (state.clone(), result.clone());
+    launch(async move {
+        *into.borrow_mut() = Some(animated.animate_scroll_by(1000.0, tween(1000)).await);
+    });
+    ui.advance_time_by(Duration::from_millis(100));
+    assert!(state.is_scroll_in_progress(), "animating");
+    wheel(&mut ui, Offset::new(0.0, 10.0));
+    ui.advance_time_by(Duration::from_millis(16));
+    assert!(matches!(*result.borrow(), Some(Err(MutationInterrupted))), "the wheel stopped it");
+    assert!(!state.is_scroll_in_progress());
+}
+
+// Review of D855: `Modifier.scrollable` without an interaction source reports its drags to none
+// (Compose's `scrollable(interactionSource = null)` emits nothing), not to its state's own
+// source, which only `vertical_scroll` and the lazy layouts give it.
+#[test]
+fn a_scrollable_without_a_source_reports_its_drags_nowhere() {
+    let owner = ScrollState::new(0);
+    let state = *owner;
+    let mut ui = scrollable_content(move || {
+        Modifier.scrollable_with(state, Orientation::Vertical, true, false, None, None)
+    });
+    let mut finger = Touch::down(&mut ui, CENTER);
+    finger.move_by(&mut ui, Offset::new(0.0, -20.0));
+    assert!(!state.interaction_source().is_dragged());
+    finger.up(&mut ui);
+}
+
+// Review of D855: `is_dragged` counts the drags going on, as Compose's `collectIsDraggedAsState`
+// counts the starts not stopped: two scrollables sharing a source, one released while the
+// other drags, still dragged.
+#[test]
+fn a_shared_source_is_dragged_while_any_drag_goes_on() {
+    let source = MutableInteractionSource::new();
+    let shared = source.clone();
+    let (first, second) = (total_state().0, total_state().0);
+    let mut ui = ComposeTestRule::sized(IntSize::new(300, 300), move || {
+        let (first, second, shared) = (first.clone(), second.clone(), shared.clone());
+        Column!(modifier = Modifier.test_tag("column"), {
+            for state in [first.clone(), second.clone()] {
+                let source = Some(shared.clone());
+                Box!(
+                    modifier = Modifier.size(100.dp()).scrollable_with(
+                        state,
+                        Orientation::Horizontal,
+                        true,
+                        false,
+                        None,
+                        source
+                    )
+                );
+            }
+        });
+    });
+    let seen = source.clone();
+    ui.on_node_with_tag("column").perform_touch_input(move |touch| {
+        let (top, bottom) = (Offset::new(50.0, 50.0), Offset::new(50.0, 150.0));
+        touch.down_pointer(0, top);
+        touch.move_pointer_by(0, Offset::new(20.0, 0.0), 16);
+        touch.down_pointer(1, bottom);
+        touch.move_pointer_by(1, Offset::new(20.0, 0.0), 16);
+        assert!(seen.is_dragged());
+        touch.up_pointer(0);
+        assert!(seen.is_dragged(), "the other still drags");
+        touch.up_pointer(1);
+        assert!(!seen.is_dragged());
+    });
+}

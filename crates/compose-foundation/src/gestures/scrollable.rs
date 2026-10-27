@@ -534,12 +534,16 @@ impl DragSession {
         self.shared.scope.borrow().clone()
     }
 
-    /// The drag ended: the scroll ends (when its task next runs).
+    /// The drag ended: the scroll ends now (its task polled at once), so what follows (a
+    /// fling's scroll) doesn't depend on the order the executor runs tasks in.
     pub(crate) fn end(self) {
         self.shared.done.set(true);
         let waker = self.shared.waker.borrow_mut().take();
         match waker {
-            Some(waker) => waker.wake(),
+            Some(waker) => {
+                waker.wake();
+                compose_runtime::platform::poll_now(self.job);
+            }
             None => self.job.cancel(),
         }
     }
@@ -768,12 +772,12 @@ impl PointerInputModifierNode for ScrollableNode {
             return;
         }
         let state = self.dyn_state.clone();
-        let raw = state.clone();
         let interaction_source = self.interaction_source.clone();
         let driver = crate::scroll::ScrollDriver {
             state: &self.dyn_state,
             fling_behavior: self.fling_behavior.as_ref(),
             interaction_source: interaction_source.as_ref(),
+            state_source: false,
             set_outer: None,
         };
         self.drag.on_pointer_event(
@@ -785,8 +789,6 @@ impl PointerInputModifierNode for ScrollableNode {
             !self.reverse_direction,
             context,
             &driver,
-            // The wheel scrolls at once, as Compose's raw scroll.
-            |delta| raw.dispatch_raw_delta(delta),
             // As the nested-scroll parent of the scrollables inside: what they leave scrolls it,
             // unless a scroll of its own goes on, as Compose's `performRawScroll`.
             move |_: &NestedScrollChain, _: NestedScrollSource| {

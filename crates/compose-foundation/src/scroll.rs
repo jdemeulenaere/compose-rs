@@ -691,6 +691,7 @@ impl PointerInputModifierNode for ScrollNode {
             state: &self.dyn_state,
             fling_behavior: self.fling_behavior.as_ref(),
             interaction_source: None,
+            state_source: true,
             set_outer: None,
         };
         self.drag.on_pointer_event(
@@ -700,7 +701,6 @@ impl PointerInputModifierNode for ScrollNode {
             reverse,
             context,
             &driver,
-            |delta| state.dispatch_raw_delta(delta),
             move |_: &NestedScrollChain, _: NestedScrollSource| {
                 Rc::new(move |delta| state.dispatch_raw_delta(delta))
             },
@@ -720,6 +720,10 @@ pub(crate) struct ScrollDriver<'a> {
     pub state: &'a Rc<dyn ScrollableState>,
     pub fling_behavior: Option<&'a Rc<dyn FlingBehavior>>,
     pub interaction_source: Option<&'a MutableInteractionSource>,
+    /// Without one, the drags go to the state's own source (`vertical_scroll`'s and the lazy
+    /// layouts', which give Compose's `scrollable` their state's `internalInteractionSource`);
+    /// `Modifier.scrollable` without one reports nothing, as Compose's.
+    pub state_source: bool,
     pub set_outer: Option<&'a OuterSetter>,
 }
 
@@ -805,14 +809,9 @@ impl NestedScrollConnection for ScrollableConnection {
 }
 
 impl DragScroller {
-    /// The nested-scroll parents around the last press or wheel turn (none: `None`): they're
-    /// offered what this scrollable leaves of a delta.
-    pub(crate) fn outer_chain(&self) -> Option<NestedScrollChain> {
-        (!self.chain.is_empty()).then(|| self.chain.clone())
-    }
-
-    /// `scroll_by` scrolls the wheel's deltas during the event; `flinger` gives a scroll usable
-    /// later, as the nested-scroll parent of the scrollables inside.
+    /// The wheel's and the drags' deltas scroll the driver's state in scrolls of the user-input
+    /// priority; `flinger` gives a scroll usable later, as the nested-scroll parent of the
+    /// scrollables inside.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn on_pointer_event(
         &mut self,
@@ -822,7 +821,6 @@ impl DragScroller {
         reverse: bool,
         context: &EventContext<'_>,
         driver: &ScrollDriver<'_>,
-        mut scroll_by: impl FnMut(f32) -> f32,
         flinger: impl Fn(&NestedScrollChain, NestedScrollSource) -> Rc<dyn Fn(f32) -> f32>,
     ) {
         let slop = touch_slop(context);
@@ -840,27 +838,22 @@ impl DragScroller {
                 reverse,
             }));
         }
-        // A horizontal scroll in a right-to-left layout goes the other way, as Compose's
-        // `reverseDirection`.
-        let mut reversed =
-            move |delta: f32| if reverse { -scroll_by(-delta) } else { scroll_by(delta) };
-        let chain = self.chain.clone();
-        // The wheel, through the connections around.
-        let mut wheel_by = move |delta: f32| {
-            dispatch_scroll(&chain, vertical, delta, NestedScrollSource::UserInput, &mut reversed)
-        };
-        // A drag's deltas: through the connections around, then the drag's scroll scope.
-        let chain = self.chain.clone();
+        // A drag's deltas, and a wheel turn's: through the connections around, then the scroll
+        // scope of a scroll of the user-input priority (a drag's, held while it lasts; a wheel
+        // turn's, as Compose's `NonTouchScrollingLogic.userScroll`), so either stops a fling or
+        // an animation and the state says it's scrolling (D879). A horizontal scroll in a
+        // right-to-left layout goes the other way, as Compose's `reverseDirection`.
+        let chain = &self.chain;
         let set_outer = driver.set_outer;
         let drag_by = |session: &Option<DragSession>, delta: f32| {
             let Some(scope) = session.as_ref().and_then(DragSession::scope) else { return };
             let mut own = |delta: f32| {
                 let delta = if reverse { -delta } else { delta };
                 let used =
-                    scope_scroll(&scope, set_outer, &chain, NestedScrollSource::UserInput, delta);
+                    scope_scroll(&scope, set_outer, chain, NestedScrollSource::UserInput, delta);
                 if reverse { -used } else { used }
             };
-            dispatch_scroll(&chain, vertical, delta, NestedScrollSource::UserInput, &mut own);
+            dispatch_scroll(chain, vertical, delta, NestedScrollSource::UserInput, &mut own);
         };
         let along_axis = move |offset: Offset| if vertical { offset.y } else { offset.x };
         // Where the pointer is in the window: the deltas don't count the content's own moves (a
@@ -873,7 +866,11 @@ impl DragScroller {
                     return;
                 }
                 // The scrollables and connections around had what's left along the axis.
-                wheel_by(delta);
+                let session = Some(DragSession::start(driver.state.clone()));
+                drag_by(&session, delta);
+                if let Some(session) = session {
+                    session.end();
+                }
                 if vertical {
                     event.scroll_delta.y = 0.0;
                 } else {
@@ -940,10 +937,9 @@ impl DragScroller {
                     // The drag holds the state's scroll (a fling or an animated scroll stops),
                     // and says so to the interaction source.
                     self.session = Some(DragSession::start(driver.state.clone()));
-                    let source = driver
-                        .interaction_source
-                        .cloned()
-                        .or_else(|| driver.state.internal_interaction_source());
+                    let source = driver.interaction_source.cloned().or_else(|| {
+                        driver.state_source.then(|| driver.state.internal_interaction_source())?
+                    });
                     if let Some(source) = &source {
                         source.set_dragged(true);
                     }

@@ -2983,12 +2983,29 @@ struct LazyScrollNode {
     enabled: bool,
     fling_behavior: Option<Rc<dyn crate::gestures::FlingBehavior>>,
     drag: DragScroller,
+    /// Tells the state's scroll scope the parents around a drag's, a fling's or a wheel turn's
+    /// deltas: built once (not on each pass of each event), the axis and the mirroring it names
+    /// them with set by each event.
+    set_outer: crate::scroll::OuterSetter,
+    outer_axis: Rc<Cell<(bool, bool)>>,
+}
+
+/// The node's `set_outer`: the parents around the deltas, with the axis and mirroring the
+/// events set in `axis`.
+fn outer_setter(state: LazyListState, axis: Rc<Cell<(bool, bool)>>) -> crate::scroll::OuterSetter {
+    Rc::new(move |chain_and_source| {
+        if let Some(inner) = state.inner() {
+            let (vertical, reverse) = axis.get();
+            *inner.scroll_outer.borrow_mut() =
+                chain_and_source.map(|(chain, source)| (chain, vertical, reverse, source));
+        }
+    })
 }
 
 impl ModifierNodeElement for LazyScrollElement {
-    type Node = LazyScrollNode;
-    fn create(&self) -> LazyScrollNode {
-        LazyScrollNode {
+    fn create(&self) -> Box<dyn ModifierNode> {
+        let axis = Rc::new(Cell::new((self.vertical, self.reverse)));
+        Box::new(LazyScrollNode {
             state: self.state,
             dyn_state: Rc::new(self.state),
             vertical: self.vertical,
@@ -2996,6 +3013,8 @@ impl ModifierNodeElement for LazyScrollElement {
             enabled: self.enabled,
             fling_behavior: self.fling_behavior.clone(),
             drag: DragScroller::default(),
+            set_outer: outer_setter(self.state, axis.clone()),
+            outer_axis: axis,
         })
     }
 
@@ -3007,6 +3026,7 @@ impl ModifierNodeElement for LazyScrollElement {
                 node.drag.cancel();
                 node.drag.stop_fling();
                 node.dyn_state = Rc::new(self.state);
+                node.set_outer = outer_setter(self.state, node.outer_axis.clone());
             }
             node.state = self.state;
             node.vertical = self.vertical;
@@ -3184,24 +3204,19 @@ impl PointerInputModifierNode for LazyScrollNode {
         if !self.enabled {
             return;
         }
-        let state = self.state;
         let reverse = self.mirrored(context.layout_direction() == compose_ui::LayoutDirection::Rtl);
-        let flung = state;
-        let outer = self.drag.outer_chain();
+        let flung = self.state;
         let vertical = self.vertical;
-        // A drag's and a fling's deltas, through the scroll scope, carry the parents around, so
-        // what an estimated end leaves goes to them once laid out (D479, D489).
-        let set_outer: crate::scroll::OuterSetter = Rc::new(move |chain_and_source| {
-            if let Some(inner) = state.inner() {
-                *inner.scroll_outer.borrow_mut() =
-                    chain_and_source.map(|(chain, source)| (chain, vertical, reverse, source));
-            }
-        });
+        // A drag's, a fling's and a wheel turn's deltas, through the scroll scope, carry the
+        // parents around, so what an estimated end leaves goes to them once laid out (D479,
+        // D489).
+        self.outer_axis.set((vertical, reverse));
         let driver = ScrollDriver {
             state: &self.dyn_state,
             fling_behavior: self.fling_behavior.as_ref(),
             interaction_source: None,
-            set_outer: Some(&set_outer),
+            state_source: true,
+            set_outer: Some(&self.set_outer),
         };
         self.drag.on_pointer_event(
             event,
@@ -3210,16 +3225,6 @@ impl PointerInputModifierNode for LazyScrollNode {
             reverse,
             context,
             &driver,
-            // The wheel: what an estimated end leaves goes to the parents once laid out (D479).
-            move |delta| {
-                let outer = outer.clone();
-                state.dispatch(
-                    delta,
-                    outer.map(|chain| {
-                        (chain, vertical, reverse, compose_ui::NestedScrollSource::UserInput)
-                    }),
-                )
-            },
             // As the nested-scroll parent of the scrollables inside: its own parents get what
             // an estimated end leaves of it too (D489).
             move |chain: &compose_ui::platform::NestedScrollChain,
