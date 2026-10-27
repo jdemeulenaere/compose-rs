@@ -337,3 +337,78 @@ fn the_semantics_follow_the_offset_enabled_or_not() {
         assert_eq!(state.value() > 0, enabled, "only an enabled scroller takes the swipe");
     }
 }
+
+/// Compose's `configAwareSwipe`: a swipe over the scroller in 200 ms, towards its content's end
+/// (up; left; right to left, right) or back.
+fn config_aware_swipe(ui: &mut ComposeTestRule, config: Config, forward: bool) {
+    let bounds = ui.on_node_with_tag(TAG).fetch_semantics_node().bounds;
+    let (center_x, center_y) =
+        ((bounds.left + bounds.right) / 2.0, (bounds.top + bounds.bottom) / 2.0);
+    let (from, to) = match config {
+        Config::Vertical => {
+            (Offset::new(center_x, bounds.bottom - 1.0), Offset::new(center_x, bounds.top))
+        }
+        Config::HorizontalLtr => {
+            (Offset::new(bounds.right - 1.0, center_y), Offset::new(bounds.left, center_y))
+        }
+        Config::HorizontalRtl => {
+            (Offset::new(bounds.left, center_y), Offset::new(bounds.right - 1.0, center_y))
+        }
+    };
+    let (from, to) = if forward { (from, to) } else { (to, from) };
+    swipe(ui, from, to, 200);
+}
+
+// Compose: compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/ScrollTest.kt, swipeForward_swipeBackward
+#[test]
+fn a_swipe_forward_then_back_scrolls_both_ways() {
+    for config in CONFIGS {
+        let owner = ScrollState::new(0);
+        let state = *owner;
+        let mut ui = scrollable_content(config, state, || 100, true);
+        ui.set_auto_advance(false);
+        assert_eq!(state.value(), 0);
+        config_aware_swipe(&mut ui, config, true);
+        ui.advance_time_by(Duration::from_millis(5000));
+        let scrolled = state.value();
+        assert!(scrolled > 0, "{config:?}");
+        config_aware_swipe(&mut ui, config, false);
+        ui.advance_time_by(Duration::from_millis(5000));
+        assert!(state.value() < scrolled, "{config:?}: {} after {scrolled}", state.value());
+    }
+}
+
+// Compose: compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/ScrollTest.kt, scrollStateMaxValue_changesOnResize_beforePlacement
+#[test]
+fn the_maximum_is_known_once_measured_before_placement() {
+    for config in CONFIGS {
+        let seen = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let into = seen.clone();
+        let mut ui = ComposeTestRule::sized(IntSize::new(300, 300), move || {
+            let state = remember_scroll_state!();
+            let (at_first, on_size) = (into.clone(), into.clone());
+            DisposableEffect(state, move |scope| {
+                at_first.borrow_mut().push(state.max_value());
+                scope.on_dispose(|| {})
+            });
+            let scroll = if config == Config::Vertical {
+                Modifier.vertical_scroll(state)
+            } else {
+                Modifier.horizontal_scroll(state)
+            };
+            // Called after the measurement, before the placement.
+            let modifier = Modifier
+                .size(100.dp())
+                .on_size_changed(move |_| on_size.borrow_mut().push(state.max_value()))
+                .then(scroll);
+            Box!(modifier = modifier, {
+                Spacer(Modifier.size(100.dp()));
+            });
+        });
+        if config == Config::HorizontalRtl {
+            ui.host().set_layout_direction(LayoutDirection::Rtl);
+        }
+        ui.wait_for_idle();
+        assert_eq!(*seen.borrow(), vec![i32::MAX, 0], "{config:?}");
+    }
+}
