@@ -50,6 +50,7 @@ mod review_round6;
 mod review_round8;
 mod review_rtl;
 mod review_semantics_material;
+mod segmented_button;
 mod segments_and_rails;
 mod sheets;
 mod slide_using_keys;

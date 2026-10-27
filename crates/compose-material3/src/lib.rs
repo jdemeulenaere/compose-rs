@@ -89,6 +89,7 @@ pub use scaffold::{
     OutlinedCard, Scaffold, ScaffoldDefaults, VerticalDivider,
 };
 pub use segmented_button::{
+    CheckableSegmentedButton, MultiChoiceSegmentedButtonRow, MultiChoiceSegmentedButtonRowScope,
     SegmentedButton, SegmentedButtonColors, SegmentedButtonDefaults,
     SingleChoiceSegmentedButtonRow, SingleChoiceSegmentedButtonRowScope,
 };

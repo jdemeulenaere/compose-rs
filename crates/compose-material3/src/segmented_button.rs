@@ -1,5 +1,6 @@
 //! Segmented buttons, as Compose's Material 3: `SingleChoiceSegmentedButtonRow` and its
-//! `SegmentedButton`s, with `SegmentedButtonDefaults` and `SegmentedButtonColors`.
+//! `SegmentedButton`s, `MultiChoiceSegmentedButtonRow` and its `CheckableSegmentedButton`s, with
+//! `SegmentedButtonDefaults` and `SegmentedButtonColors`.
 
 use std::rc::Rc;
 
@@ -20,6 +21,17 @@ use crate::theme::{LOCAL_TEXT_STYLE, MaterialTheme};
 pub struct SingleChoiceSegmentedButtonRowScope(());
 
 impl compose_runtime::ComposeArg for SingleChoiceSegmentedButtonRowScope {
+    fn same(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+/// The scope of a `MultiChoiceSegmentedButtonRow`'s content, as Compose's
+/// `MultiChoiceSegmentedButtonRowScope`: what its `CheckableSegmentedButton`s take.
+#[derive(Clone, Copy, Debug)]
+pub struct MultiChoiceSegmentedButtonRowScope(());
+
+impl compose_runtime::ComposeArg for MultiChoiceSegmentedButtonRowScope {
     fn same(&self, _: &Self) -> bool {
         true
     }
@@ -88,23 +100,28 @@ impl SegmentedButtonDefaults {
     pub const BORDER_WIDTH: Dp = Dp(1.0);
     /// The check's size, as `IconSize`.
     pub const ICON_SIZE: Dp = Dp(18.0);
+    /// Around a button's content, as `ContentPadding`: 12 dp at the sides, the buttons' 8 dp
+    /// above and below.
+    pub const CONTENT_PADDING: compose_ui::PaddingValues =
+        compose_ui::PaddingValues::new(Dp(12.0), Dp(8.0), Dp(12.0), Dp(8.0));
 
-    /// As `colors()`: the secondary container when active, outlined.
+    /// As `colors()` (`OutlinedSegmentedButtonTokens`): the secondary container when active,
+    /// no container inactive, outlined (the outline at 12 % disabled).
     pub fn colors() -> SegmentedButtonColors {
         let scheme = MaterialTheme::color_scheme();
         let disabled_content = scheme.on_surface.with_alpha(0.38);
-        let disabled_border = scheme.on_surface.with_alpha(0.12);
+        let disabled_border = scheme.outline.with_alpha(0.12);
         SegmentedButtonColors {
             active_container_color: scheme.secondary_container,
             active_content_color: scheme.on_secondary_container,
             active_border_color: scheme.outline,
-            inactive_container_color: scheme.surface,
+            inactive_container_color: Color::TRANSPARENT,
             inactive_content_color: scheme.on_surface,
             inactive_border_color: scheme.outline,
             disabled_active_container_color: scheme.secondary_container,
             disabled_active_content_color: disabled_content,
             disabled_active_border_color: disabled_border,
-            disabled_inactive_container_color: scheme.surface,
+            disabled_inactive_container_color: Color::TRANSPARENT,
             disabled_inactive_content_color: disabled_content,
             disabled_inactive_border_color: disabled_border,
         }
@@ -140,18 +157,42 @@ impl SegmentedButtonDefaults {
         BorderStroke::new(SegmentedButtonDefaults::BORDER_WIDTH, color)
     }
 
-    /// A check mark when `active`, as `Icon(active)` (shown at once, where Compose animates
-    /// it in).
+    /// The check of an active button, as `ActiveIcon()`.
+    pub fn active_icon() {
+        crate::icon::Icon(
+            crate::icons::filled::check(),
+            None,
+            Modifier.size(SegmentedButtonDefaults::ICON_SIZE),
+            crate::theme::LOCAL_CONTENT_COLOR.current(),
+        );
+    }
+
+    /// The active icon when `active`, as `Icon(active)` (shown at once, where Compose fades
+    /// and scales it in).
     pub fn icon(active: bool) {
         if active {
-            crate::icon::Icon(
-                crate::icons::filled::check(),
-                None,
-                Modifier.size(SegmentedButtonDefaults::ICON_SIZE),
-                crate::theme::LOCAL_CONTENT_COLOR.current(),
-            );
+            SegmentedButtonDefaults::active_icon();
         }
     }
+}
+
+/// A row of segmented buttons each checked or not, as Compose's
+/// `MultiChoiceSegmentedButtonRow`: as `SingleChoiceSegmentedButtonRow`, its buttons
+/// `CheckableSegmentedButton`s.
+#[composable]
+pub fn MultiChoiceSegmentedButtonRow(
+    #[default(crate::Modifier)] modifier: Modifier,
+    #[default(crate::SegmentedButtonDefaults::BORDER_WIDTH)] space: Dp,
+    content: impl Fn(MultiChoiceSegmentedButtonRowScope) + 'static,
+) {
+    let policy = compose_runtime::remember_keyed(space, move || {
+        Rc::new(SegmentedRowLayout { space }) as Rc<dyn MeasurePolicy>
+    });
+    Layout(
+        modifier,
+        policy,
+        compose_runtime::callback(move || content(MultiChoiceSegmentedButtonRowScope(()))),
+    );
 }
 
 /// A row of segmented buttons of which one is selected, as Compose's
@@ -241,6 +282,7 @@ impl MeasurePolicy for SegmentedRowLayout {
 /// `border` `None` is the default outline in `colors`' border color; `icon` `None` the default
 /// check (`Some(|| {})` for none).
 #[composable]
+#[allow(clippy::too_many_arguments)]
 pub fn SegmentedButton(
     scope: SingleChoiceSegmentedButtonRowScope,
     selected: bool,
@@ -250,16 +292,15 @@ pub fn SegmentedButton(
     #[default(true)] enabled: bool,
     #[default(crate::SegmentedButtonDefaults::colors())] colors: SegmentedButtonColors,
     #[default(None)] border: Option<BorderStroke>,
+    #[default(crate::SegmentedButtonDefaults::CONTENT_PADDING)]
+    content_padding: compose_ui::PaddingValues,
     #[default(None)] interaction_source: Option<MutableInteractionSource>,
     #[default(None)] icon: Option<impl Fn() + 'static>,
     label: impl Fn() + 'static,
 ) {
     let _ = scope;
-    let border = border.unwrap_or_else(|| {
-        SegmentedButtonDefaults::border_stroke(colors.border_color(enabled, selected))
-    });
     let interaction_source = remembered_interaction_source(interaction_source);
-    let mut click = Some(SurfaceClick {
+    let click = SurfaceClick {
         on_click,
         enabled,
         role: None,
@@ -267,39 +308,139 @@ pub fn SegmentedButton(
         selected: Some(selected),
         checked: None,
         elevations: None,
+    };
+    let modifier = modifier.semantics(|config| config.role = Some(Role::RadioButton));
+    segmented_button(
+        selected,
+        click,
+        shape,
+        modifier,
+        enabled,
+        colors,
+        border,
+        content_padding,
+        icon,
+        label,
+    );
+}
+
+/// A checkable button of a `MultiChoiceSegmentedButtonRow`, as Compose's `SegmentedButton(checked,
+/// onCheckedChange, shape, …)` (named apart, D181): as `SegmentedButton`, a click calling
+/// `on_checked_change(!checked)`, in the active colors when `checked`; a toggle for
+/// accessibility.
+#[composable]
+#[allow(clippy::too_many_arguments)]
+pub fn CheckableSegmentedButton(
+    scope: MultiChoiceSegmentedButtonRowScope,
+    checked: bool,
+    on_checked_change: impl Fn(bool) + 'static,
+    shape: Shape,
+    #[default(crate::Modifier)] modifier: Modifier,
+    #[default(true)] enabled: bool,
+    #[default(crate::SegmentedButtonDefaults::colors())] colors: SegmentedButtonColors,
+    #[default(None)] border: Option<BorderStroke>,
+    #[default(crate::SegmentedButtonDefaults::CONTENT_PADDING)]
+    content_padding: compose_ui::PaddingValues,
+    #[default(None)] interaction_source: Option<MutableInteractionSource>,
+    #[default(None)] icon: Option<impl Fn() + 'static>,
+    label: impl Fn() + 'static,
+) {
+    let _ = scope;
+    let interaction_source = remembered_interaction_source(interaction_source);
+    let click = SurfaceClick {
+        on_click: compose_runtime::callback(move || on_checked_change(!checked)),
+        enabled,
+        role: None,
+        interaction_source,
+        selected: None,
+        checked: Some(checked),
+        elevations: None,
+    };
+    segmented_button(
+        checked,
+        click,
+        shape,
+        modifier,
+        enabled,
+        colors,
+        border,
+        content_padding,
+        icon,
+        label,
+    );
+}
+
+/// The segmented buttons' body: a clickable surface of `shape` in the active colors when
+/// `active`, at least the buttons' minimum size, over its neighbours while interacted with and
+/// more while active (Compose's `interactionZIndex`), its icon and label centered.
+#[allow(clippy::too_many_arguments)]
+fn segmented_button(
+    active: bool,
+    click: SurfaceClick,
+    shape: Shape,
+    modifier: Modifier,
+    enabled: bool,
+    colors: SegmentedButtonColors,
+    border: Option<BorderStroke>,
+    content_padding: compose_ui::PaddingValues,
+    icon: Option<compose_runtime::Callback>,
+    label: compose_runtime::Callback,
+) {
+    let border = border.unwrap_or_else(|| {
+        SegmentedButtonDefaults::border_stroke(colors.border_color(enabled, active))
     });
-    let label_style = MaterialTheme::typography().label_large.clone();
-    let policy = remember(|| Rc::new(IconLabelLayout) as Rc<dyn MeasurePolicy>);
-    let modifier = modifier
-        .size_in(compose_ui::SizeSpec::bounds(
-            crate::ButtonDefaults::MIN_WIDTH,
-            crate::ButtonDefaults::MIN_HEIGHT,
-            Dp::UNSPECIFIED,
-            Dp::UNSPECIFIED,
-        ))
-        .semantics(|config| config.set_role(Role::RadioButton));
+    // Each interaction under way raises it, an active button by 5 more, so its border shows
+    // over its neighbours' (read here: an interaction composes it again).
+    let source = &click.interaction_source;
+    let interactions = [source.is_pressed(), source.is_focused(), source.is_hovered()]
+        .into_iter()
+        .filter(|on| *on)
+        .count() as f32;
+    let z_index = interactions + if active { CHECKED_Z_INDEX_FACTOR } else { 0.0 };
+    let mut click = Some(click);
+    let label_style = MaterialTheme::typography().label_large;
+    let coroutines = compose_runtime::remember_coroutine_scope();
+    let policy = remember(move || {
+        Rc::new(IconLabelLayout { scope: coroutines, offset: Default::default() })
+            as Rc<dyn MeasurePolicy>
+    });
+    let modifier = modifier.z_index(z_index).size_in(compose_ui::SizeSpec::bounds(
+        crate::ButtonDefaults::MIN_WIDTH,
+        crate::ButtonDefaults::MIN_HEIGHT,
+        Dp::UNSPECIFIED,
+        Dp::UNSPECIFIED,
+    ));
+    // As Compose's `SegmentedButtonContent`: the icon and label, centered in the padding.
     let content = compose_runtime::callback(move || {
-        let (icon, label) = (icon.clone(), label.clone());
-        Layout(
-            Modifier.padding(crate::ButtonDefaults::TEXT_BUTTON_CONTENT_PADDING),
-            policy.clone(),
-            compose_runtime::callback(move || {
-                let icon = icon.clone();
-                Box(
+        let (icon, label, policy) = (icon.clone(), label.clone(), policy.clone());
+        Box(
+            Modifier.padding(content_padding),
+            Alignment::CENTER,
+            false,
+            compose_runtime::callback(move |_| {
+                let (icon, label) = (icon.clone(), label.clone());
+                Layout(
                     Modifier,
-                    Alignment::CENTER,
-                    false,
-                    compose_runtime::callback(move |_| match &icon {
-                        Some(icon) => icon(),
-                        None => SegmentedButtonDefaults::icon(selected),
+                    policy.clone(),
+                    compose_runtime::callback(move || {
+                        let icon = icon.clone();
+                        Box(
+                            Modifier,
+                            Alignment::CENTER,
+                            false,
+                            compose_runtime::callback(move |_| match &icon {
+                                Some(icon) => icon(),
+                                None => SegmentedButtonDefaults::icon(active),
+                            }),
+                        );
+                        let label = label.clone();
+                        Box(
+                            Modifier,
+                            Alignment::CENTER,
+                            false,
+                            compose_runtime::callback(move |_| label()),
+                        );
                     }),
-                );
-                let label = label.clone();
-                Box(
-                    Modifier,
-                    Alignment::CENTER,
-                    false,
-                    compose_runtime::callback(move |_| label()),
                 );
             }),
         );
@@ -308,8 +449,8 @@ pub fn SegmentedButton(
         surface(
             modifier.clone(),
             shape,
-            colors.container_color(enabled, selected),
-            colors.content_color(enabled, selected),
+            colors.container_color(enabled, active),
+            colors.content_color(enabled, active),
             Dp(0.0),
             Dp(0.0),
             Some(border),
@@ -319,9 +460,21 @@ pub fn SegmentedButton(
     });
 }
 
-/// The icon, then (if the icon shows) 8 dp, then the label, centered in the button, as
-/// Compose's `SegmentedButtonContent`.
-struct IconLabelLayout;
+/// Between the icon's room and the label, as `IconSpacing`.
+const ICON_SPACING: Dp = Dp(8.0);
+
+/// How much an active button rises over its neighbours, as `CheckedZIndexFactor`.
+const CHECKED_Z_INDEX_FACTOR: f32 = 5.0;
+
+/// The icon's room (the icon or `ICON_SIZE`, whichever is wider), 8 dp, then the label, as
+/// Compose's `SegmentedButtonContentMeasurePolicy`: without an icon, the label moves back by
+/// half that room (the standard scheme's fast spatial spring when it changes), so it's
+/// centered.
+struct IconLabelLayout {
+    scope: compose_runtime::CoroutineScope,
+    /// The label's animated offset, and the first offset it starts from.
+    offset: std::cell::RefCell<(Option<compose_animation::Animatable<f32>>, Option<f32>)>,
+}
 
 impl MeasurePolicy for IconLabelLayout {
     fn measure(
@@ -333,21 +486,43 @@ impl MeasurePolicy for IconLabelLayout {
         let [icon, label] = measurables else {
             return scope.layout(constraints.min_width, constraints.min_height);
         };
-        let loose = constraints.loosen();
-        let icon = scope.measure(*icon, loose);
-        let spacing = if icon.width > 0 {
-            scope.density().round_to_px(crate::ButtonDefaults::ICON_SPACING)
-        } else {
-            0
+        let icon = scope.measure(*icon, constraints);
+        let label = scope.measure(*label, constraints);
+        let density = scope.density();
+        let icon_size = density.round_to_px(SegmentedButtonDefaults::ICON_SIZE);
+        let spacing = density.round_to_px(ICON_SPACING);
+        let width = icon_size.max(icon.width) + spacing + label.width;
+        let height = label.height;
+        let target = if icon.width == 0 { -(icon_size + spacing) / 2 } else { 0 } as f32;
+        let offset = {
+            let mut state = self.offset.borrow_mut();
+            match state.1 {
+                None => {
+                    state.1 = Some(target);
+                    target
+                }
+                Some(initial) => {
+                    let animatable = state
+                        .0
+                        .get_or_insert_with(|| compose_animation::Animatable::new(initial))
+                        .clone();
+                    if animatable.target_value() != target {
+                        let running = animatable.clone();
+                        self.scope.launch(async move {
+                            let spec = compose_animation::AnimationSpec::Spring(
+                                crate::motion::FAST_SPATIAL,
+                            );
+                            running.animate_to(target, spec).await;
+                        });
+                    }
+                    // Read while measuring: each frame of the move measures it again.
+                    animatable.value()
+                }
+            }
         };
-        let label = scope.measure(*label, loose);
-        // Centered in the button (its minimum size).
-        let content_width = icon.width + spacing + label.width;
-        let width = constraints.constrain_width(content_width);
-        let height = constraints.constrain_height(icon.height.max(label.height));
-        let start = (width - content_width) / 2;
-        scope.place_relative(&icon, start, (height - icon.height) / 2);
-        scope.place_relative(&label, start + icon.width + spacing, (height - label.height) / 2);
+        scope.place_relative(&icon, 0, (height - icon.height) / 2);
+        let x = icon_size + spacing + offset.round() as i32;
+        scope.place_relative(&label, x, (height - label.height) / 2);
         scope.layout(width, height)
     }
 
