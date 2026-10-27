@@ -32,9 +32,9 @@ The inventory of Compose's animation and navigation tests and public API against
 | Status | Files | @Test |
 |---|---|---|
 | `covered` | 1 | 1 |
-| `ported` | 17 | 91 |
+| `ported` | 18 | 97 |
 | `port` | 0 | 0 |
-| `partial` | 11 | 151 |
+| `partial` | 10 | 145 |
 | `feature:<name>` | 64 | 769 |
 | `n/a` | 2 | 9 |
 
@@ -42,7 +42,7 @@ By module:
 
 | Module | Files | @Test | covered | ported | port | partial | feature | n/a |
 |---|---|---|---|---|---|---|---|---|
-| animation-core | 30 | 212 | 0 | 15 / 73 | 0 | 4 / 37 | 11 / 102 | 0 |
+| animation-core | 30 | 212 | 0 | 16 / 79 | 0 | 3 / 31 | 11 / 102 | 0 |
 | animation | 15 | 238 | 0 | 2 / 18 | 0 | 4 / 46 | 9 / 174 | 0 |
 | animation-graphics | 5 | 22 | 0 | 0 | 0 | 0 | 5 / 22 | 0 |
 | navigation-compose | 9 | 121 | 1 / 1 | 0 | 0 | 3 / 68 | 4 / 50 | 1 / 2 |
@@ -98,7 +98,7 @@ The "covered" notes cite compose-rs test files under `crates/compose-animation/t
 | # | Compose test file (under `frameworks/support`) | @Test | Covers | Status | Notes |
 |---|---|---|---|---|---|
 | 1 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/AnimatableTest.kt` | 9 | `Animatable`: animateTo (float, generic), interruption, animateDecay, updateBounds, IntSize bounds, toString of results | ported | `animation_objects.rs` and `interruption_aware.rs` (16 ms frames, not 50); the 2 `toString` tests are n/a (Rust `Debug`) |
-| 2 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/AnimationTest.kt` | 6 | `TargetBasedAnimation` values/velocities for snap, keyframes, tween, spring; infinite repeatable velocity across repetitions | partial | 5 ported (`animation_objects.rs`); `testVectorizedInfiniteRepeatableSpec_velocityOnRepetitions` repeats a spec of the test's own, and compose-rs's specs are a closed set (`AnimationSpec`): it needs custom specs (custom-specs) |
+| 2 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/AnimationTest.kt` | 6 | `TargetBasedAnimation` values/velocities for snap, keyframes, tween, spring; infinite repeatable velocity across repetitions | ported | `animation_objects.rs` (`testVectorizedInfiniteRepeatableSpec_velocityOnRepetitions` with a `DurationBasedSpec::custom`, D816) |
 | 3 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/AnimationVectorTest.kt` | 3 | `AnimationVector1D..4D`: reset, hashCode, factory functions | partial | 2 ported (`animation_vector.rs`: `reset`, the factory); `testHashCode` n/a (`AnimationVector` holds floats: no `Hash`) |
 | 4 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/ArcAnimationTest.kt` | 12 | `ArcAnimationSpec` (ArcAbove/Below/Linear) interpolation in 1-4 dimensions, equality, curve shape | `feature:arc-animation` | experimental (`@ExperimentalAnimationSpecApi`) |
 | 5 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/DecayAnimationTest.kt` | 2 | `exponentialDecay` values and the velocity threshold | ported | `animation_objects.rs` |
@@ -107,7 +107,7 @@ The "covered" notes cite compose-rs test files under `crates/compose-animation/t
 | 8 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/DurationScaleTest.kt` | 1 | `animate()` honours `MotionDurationScale` (5x, and 0 = finish at once, infinite too) | `feature:motion-duration-scale` | also needs suspend-animate's `animate()` |
 | 9 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/EasingUnitTest.kt` | 6 | `CubicBezierEasing`: 0 and 1 ends, overshoot, equality, small fractions | ported | `easing.rs` |
 | 10 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/IsInfiniteTest.kt` | 8 | `isInfinite` of every vectorized spec, exponential decay and `DecayAnimation` | ported | `animation_objects.rs` |
-| 11 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/KeyframeAnimationTest.kt` | 12 | keyframes: start/end override, easing per stretch, multi-dimensional, equality, `atFraction`, out-of-range times | ported | `keyframe_animation.rs`; `testNotEquals0` inverted there: equal keyframes built twice are equal, sharing an entry (D150) |
+| 11 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/KeyframeAnimationTest.kt` | 12 | keyframes: start/end override, easing per stretch, multi-dimensional, equality, `atFraction`, out-of-range times | ported | `keyframe_animation.rs`; `testNotEquals0` inverted there: keyframes built alike are equal (D816) |
 | 12 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/KeyframeArcAnimationTest.kt` | 2 | keyframes `using ArcMode` in 2D, with easings | `feature:arc-animation` |  |
 | 13 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/KeyframeSplineAnimationTest.kt` | 8 | `keyframesWithSpline`: interpolation, periodic bias, easing, delay, equality | `feature:keyframes-with-spline` |  |
 | 14 | `compose/animation/animation-core/src/commonTest/kotlin/androidx/compose/animation/core/MonoSplineTest.kt` | 2 | the monotonic spline under `keyframesWithSpline` | `feature:keyframes-with-spline` | internal class; port with the feature |
@@ -251,7 +251,7 @@ Deprecated and left out:
 | `AnimationResult.endState: AnimationState` | `end_value` only | suspend-animate |
 | `animateIntSizeAsState`, `animateRectAsState`; `animateValueAsState(…, visibilityThreshold, …)` | present (D800) | more-converters |
 | `Animation` interface (`durationNanos`, `getValueFromNanos`, `getVelocityVectorFromNanos`, `isFinishedFromNanos`, `isInfinite`, `targetValue`, `typeConverter`); `TargetBasedAnimation`; `Animation.getVelocityFromNanos` | present: the `Animation` trait, `TargetBasedAnimation` (D800) | animation-objects |
-| `AnimationSpec.vectorize`, `FiniteAnimationSpec`, `DurationBasedAnimationSpec` | the `AnimationSpec` enum and the spec types are each a `VectorizedAnimationSpec` (no separate vectorized types); `DurationBasedSpec` holds tween, keyframes and snap. Specs of one's own (a `VectorizedAnimationSpec` an app writes) can't be given: custom specs, animation-objects' remainder | animation-objects, spec-gaps |
+| `AnimationSpec.vectorize`, `FiniteAnimationSpec`, `DurationBasedAnimationSpec` | the `AnimationSpec` enum and the spec types are each a `VectorizedAnimationSpec` (no separate vectorized types); `DurationBasedSpec` holds tween, keyframes and snap. `AnimationSpec::custom` and `DurationBasedSpec::custom` take specs of an app's own (D816) | animation-objects, spec-gaps |
 | `VectorizedAnimationSpec`, `VectorizedFiniteAnimationSpec`, `VectorizedDurationBasedAnimationSpec`, `VectorizedTweenSpec`, `VectorizedSpringSpec`, `VectorizedSnapSpec`, `VectorizedKeyframesSpec`, `VectorizedRepeatableSpec`, `VectorizedInfiniteRepeatableSpec`, `VectorizedFloatAnimationSpec` (`getDurationNanos`, `getValueFromNanos`, `getVelocityFromNanos`, `getEndVelocity`, `isInfinite`) | present as one `VectorizedAnimationSpec` trait the spec types implement (D800) | animation-objects |
 | `FloatAnimationSpec`, `FloatTweenSpec`, `FloatSpringSpec` | present (D800) | animation-objects |
 | `AnimationVector`, `AnimationVector1D..4D`, `AnimationVector(…)` factories | one `AnimationVector` of one to four components (no 1D..4D types) | animation-objects |
@@ -265,7 +265,7 @@ Deprecated and left out:
 | `StartOffset`, `StartOffsetType` (`Delay`, `FastForward`); `initialStartOffset` on `repeatable`, `infiniteRepeatable`, `RepeatableSpec`, `InfiniteRepeatableSpec` | present (`repeatable_with`, `infinite_repeatable_with`) | spec-gaps |
 | `SnapSpec` as a `DurationBasedAnimationSpec` (so `repeatable(snap())` works) | present (D800) | spec-gaps |
 | `InterruptionAwareAnimationSpec(animationSpec, interruptionSpec)` | present (D809) | interruption-aware-spec |
-| `Easing` as a `fun interface` (any object, capturing lambdas) | `Easing::Function(fn(f32) -> f32)` (no captures) | easing-functions |
+| `Easing` as a `fun interface` (any object, capturing lambdas) | present: `Easing::custom(closure)` (D816) | easing-functions |
 | `EaseInBack`, `EaseInBounce`, `EaseInCirc`, `EaseInCubic`, `EaseInElastic`, `EaseInExpo`, `EaseInOutBack`, `EaseInOutBounce`, `EaseInOutCirc`, `EaseInOutCubic`, `EaseInOutElastic`, `EaseInOutExpo`, `EaseInOutQuad`, `EaseInOutQuart`, `EaseInOutQuint`, `EaseInOutSine`, `EaseInQuad`, `EaseInQuart`, `EaseInQuint`, `EaseInSine`, `EaseOutBack`, `EaseOutBounce`, `EaseOutCirc`, `EaseOutCubic`, `EaseOutElastic`, `EaseOutExpo`, `EaseOutQuad`, `EaseOutQuart`, `EaseOutQuint`, `EaseOutSine` | present (D808) | easing-functions |
 | `PathEasing(path)` | missing | path-easing |
 | `TransitionState`, `MutableTransitionState` (`currentState`, `targetState`, `isIdle`), `rememberTransition(transitionState, label)` | present (`MutableTransitionState` only: the sealed `TransitionState` waits for seekable and deferred states) | transition-state |
@@ -383,7 +383,7 @@ One entry per feature. Sizes:
 - **Tests:** `SpringEstimationTest`, `PhysicsAnimationTest` (duration and end-snapping tests), `AnimatedVisibilityTest.testAnimationSettleExactTime`, `SeekableTransitionStateTest` (durations).
 - **Dependencies:** none. Do it together with the visibility-threshold fixes (see the notes).
 
-#### animation-objects (M, not exp.): done but custom specs (D800, D807)
+#### animation-objects (M, not exp.): done (D800, D807, D816)
 
 - **API:**
   - `Animation`, `TargetBasedAnimation`;
@@ -446,9 +446,9 @@ One entry per feature. Sizes:
   - the Android spline exists privately in `compose-foundation/src/fling.rs` and should move into compose-animation;
   - compose-foundation doesn't depend on compose-animation today, while Compose's foundation does depend on animation-core. Foundation's flings using `spline_based_decay` would add that crate edge, a D292 decision.
 
-#### easing-functions (S, not exp.): the curves done (D808)
+#### easing-functions (S, not exp.): done (D808, D816)
 
-- **Done:** the 30 `Ease*` curves; cubic Béziers solved as Compose's. **Left:** an `Easing` holding data or a capturing closure (`PathEasing` needs it), which an interned table (D150's way) or a non-`Copy` spec would give.
+- **Done:** the 30 `Ease*` curves; cubic Béziers solved as Compose's. `Easing::custom` holds any closure (D816).
 
 - **API:**
   - the 30 missing `Ease*` curves (Back, Bounce, Circ, Cubic, Elastic, Expo, Quad, Quart, Quint, Sine, each in In, Out and InOut);

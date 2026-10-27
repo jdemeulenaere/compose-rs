@@ -122,7 +122,7 @@ fn keyframes_differing_in_duration_easing_or_keyframes_differ() {
     assert_ne!(animation, altered_easing);
     assert_ne!(animation, altered_keyframes);
     // Compose's `testNotEquals0` has equal keyframes built twice differ (`KeyframesSpec` has
-    // no `equals`); here they're equal, sharing an entry (D150).
+    // no `equals`); here keyframes built alike are equal (D816).
     assert_eq!(animation, spec(500, LINEAR_EASING, (200, 0.5), 300));
 }
 

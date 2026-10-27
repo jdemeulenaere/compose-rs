@@ -7,11 +7,8 @@
 //! the delay, keyframes past the duration ignored, a later keyframe at the same time replacing
 //! an earlier, multi-component values (`Offset`, `Color` in Oklab), reversed repetitions
 //! (time reversed, as `VectorizedRepeatableSpec`), interruptions (a transition's spring,
-//! `animate*AsState` restarting from the current value), equal specs sharing an entry, the
+//! `animate*AsState` restarting from the current value), specs built alike equal, the
 //! velocity reset once an animation ends (as `Animatable.endAnimation`).
-//!
-//! Not kept, as D150 documents it: each distinct keyframes spec stays in the thread's table
-//! for good (keyframes built from changing data grow it, each `keyframes` call scanning it).
 
 use compose_animation::*;
 use compose_runtime::*;
@@ -82,8 +79,8 @@ fn a_keyframes_animation_ends_at_its_target() {
     assert_eq!(animatable.value(), 100.0, "{values:?}");
 }
 
-/// Lock-in: a `KeyframesSpec`'s duration and delay are read-only (its keyframes are interned,
-/// D150): what it reports is what plays.
+/// Lock-in: a `KeyframesSpec`'s duration and delay are read-only (its keyframes are shared
+/// behind an `Rc`, D816): what it reports is what plays.
 #[test]
 fn a_keyframes_specs_duration_is_the_one_played() {
     let spec = keyframes(|frames| {
