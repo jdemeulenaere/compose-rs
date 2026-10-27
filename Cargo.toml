@@ -10,6 +10,11 @@ edition = "2024"
 rust-version = "1.88"
 publish = false
 
+# A dropped future (`scroll_by` instead of `dispatch_raw_delta`, D853) or an ignored result is an
+# error everywhere in the workspace.
+[workspace.lints.rust]
+unused_must_use = "deny"
+
 [workspace.dependencies]
 compose-macros = { path = "crates/compose-macros" }
 compose-runtime = { path = "crates/compose-runtime" }

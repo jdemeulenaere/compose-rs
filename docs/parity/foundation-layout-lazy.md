@@ -626,8 +626,8 @@ Each entry gives the Compose API, what it does, the test files that need it (by 
   - `onNodeWithTag(tag)` is `on_node_with_tag(tag)`, and `onNodeWithText` is `on_node_with_text`.
   - `assertExists`/`assertDoesNotExist` exist. `on_all_nodes(matcher, index)` and `count_nodes` cover `onAllNodes…[i]` and `assertCountEquals`.
 - **State-driven scrolls.**
-  - `runBlocking { state.scrollToItem(i, o) }` is `state.scroll_to_item(i, o)` then `wait_for_idle()`. compose-rs applies it at the next layout, so read `first_visible_item_index()` only after a frame, where Compose's suspend call returns after the layout.
-  - `state.scrollBy(x)` / `dispatchRawDelta(x)` is `state.scroll_by(x)`, which returns whether it can move that way, not the pixels consumed.
+  - `runBlocking { state.scrollToItem(i, o) }` is `scroll_support::run(&mut ui, async move { state.scroll_to_item(i, o).await })`: `scroll_to_item` is `async`, as Compose's suspend function, and returns after the layout (D853). `state.requestScrollToItem(i, o)` is `request_scroll_to_item(i, o)`, which writes the position at once (D861).
+  - `runBlocking { state.scrollBy(x) }` is `run(&mut ui, async move { state.scroll_by(x).await })` (`ScrollableStateExt::scroll_by`, `async`, returning the pixels consumed); `state.dispatchRawDelta(x)` is `dispatch_raw_delta(x)`, synchronous. A `scroll_by(x)` not awaited is a dropped future, and the workspace denies `unused_must_use`, so it doesn't compile.
 - **Gestures.**
   - `performTouchInput { down/moveBy/up }` has no DSL. Build `PointerEvent::press/moved/release(…).at_time(ns).with_pointer(PointerId, PointerType::Touch)` and send them with `host().send_pointer` (see `fling.rs::swipe_up`).
   - Compose's `swipeUp()`/`swipeWithVelocity` interpolate moves over a duration: write the same number of samples, at the same times, or the velocity differs.

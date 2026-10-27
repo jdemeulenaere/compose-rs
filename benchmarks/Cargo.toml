@@ -39,6 +39,5 @@ harness = false
 name = "text"
 harness = false
 
-[[bench]]
-name = "semantics"
-harness = false
+[lints]
+workspace = true

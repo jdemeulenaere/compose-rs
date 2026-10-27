@@ -16,3 +16,6 @@ smallvec = "1.13"
 # tests are compose-skia's (D904): only that crate's tests link Skia.
 compose-foundation.workspace = true
 compose-animation.workspace = true
+
+[lints]
+workspace = true

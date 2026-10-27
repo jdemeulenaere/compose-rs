@@ -22,3 +22,6 @@ compose-android.workspace = true
 
 [dev-dependencies]
 compose = { path = "../../crates/compose", features = ["test"] }
+
+[lints]
+workspace = true

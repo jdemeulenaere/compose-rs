@@ -16,3 +16,6 @@ counter = { path = "../counter", default-features = false }
 todo = { path = "../todo", default-features = false }
 gallery = { path = "../gallery", default-features = false }
 compose = { path = "../../crates/compose" }
+
+[lints]
+workspace = true

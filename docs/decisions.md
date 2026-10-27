@@ -43,6 +43,7 @@ The log is split by area into the files below, one table each, rows in number or
 | [api-and-tooling](decisions/api-and-tooling.md) | Names, crates and modules, semver, the edit-build loop, testing and documentation, the toolchain's and dependencies' versions. | 39 |
 | [api-and-tooling](decisions/api-and-tooling.md) | Names, crates and modules, semver, the edit-build loop, testing and documentation, the toolchain's and dependencies' versions. | 40 |
 | [api-and-tooling](decisions/api-and-tooling.md) | Names, crates and modules, semver, the edit-build loop, testing and documentation, the toolchain's and dependencies' versions. | 41 |
+| [api-and-tooling](decisions/api-and-tooling.md) | Names, crates and modules, semver, the edit-build loop, testing and documentation, the toolchain's and dependencies' versions. | 42 |
 
 ## Index by number
 
@@ -502,6 +503,7 @@ The log is split by area into the files below, one table each, rows in number or
 | D873 | [lazy-and-prefetch](decisions/lazy-and-prefetch.md#d873) | current |
 | D874 | [ui-and-layout](decisions/ui-and-layout.md#d874) | current |
 | D875 | [lazy-and-prefetch](decisions/lazy-and-prefetch.md#d875) | current |
+| D876 | [api-and-tooling](decisions/api-and-tooling.md#d876) | current |
 | D900 | [api-and-tooling](decisions/api-and-tooling.md#d900) | current |
 | D901 | [api-and-tooling](decisions/api-and-tooling.md#d901) | current |
 | D902 | [ui-and-layout](decisions/ui-and-layout.md#d902) | current |

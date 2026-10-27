@@ -19,3 +19,6 @@ arboard = { version = "3", default-features = false }
 
 [dev-dependencies]
 compose-foundation.workspace = true
+
+[lints]
+workspace = true

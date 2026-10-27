@@ -25,3 +25,6 @@ desktop = ["dep:compose-desktop"]
 
 [dev-dependencies]
 trybuild = "1"
+
+[lints]
+workspace = true

@@ -16,3 +16,6 @@ syn = { version = "3", default-features = false, features = ["derive", "full", "
 
 [dev-dependencies]
 prettyplease = "0.3"
+
+[lints]
+workspace = true
