@@ -37,7 +37,7 @@ compose-ui ──► compose-runtime
 compose-foundation ──► compose-ui ──► compose-runtime
 compose-material3 ──► compose-foundation
 compose-animation ──► compose-ui
-compose-foundation ──► compose-animation   (the scrolls' animations, D820, D882)
+compose-foundation ──► compose-animation   (the scrolls' animations and flings' decay, D820, D826, D882)
 compose-skia ──► compose-ui
 compose-desktop ──► compose-skia
 compose-android ──► compose-ui

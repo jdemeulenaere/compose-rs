@@ -300,7 +300,7 @@ Deprecated and left out:
 | `SharedTransitionLayout`, `SharedTransitionScope(content)`, the `SharedTransitionScope` interface:<br>• the modifiers: `sharedElement`, `sharedBounds`, `sharedElementWithCallerManagedVisibility`, `skipToLookaheadSize`, `skipToLookaheadPosition`, `renderInSharedTransitionScopeOverlay`;<br>• the state: `rememberSharedContentState(key[, config])`, `SharedContentConfig(…)`, `OverlayClip`, `isTransitionActive`;<br>• the nested types: `SharedContentState` (`key`, `isMatchFound`, `clipPathInOverlay`, `parentSharedContentState`, `prepareTransitionWithInitialVelocity`), `SharedContentConfig` (`isEnabled`, `shouldKeepEnabledForOngoingAnimation`, `permitTransformDuringDeferredTransition`, `alternativeTargetBoundsInTransitionScopeAfterRemoval`), `PlaceholderSize` (`ContentSize`, `AnimatedSize`), `ResizeMode` (`RemeasureToBounds`, `scaleToBounds(contentScale, alignment)`);<br>• `SharedTransitionDefaults` (`BoundsTransform`, `SharedContentConfig`) and `BoundsTransform` | missing | shared-transition |
 | `Modifier.animateBounds(lookaheadScope, modifier, boundsTransform, animateMotionFrameOfReference)` | missing | animate-bounds |
 | `LookaheadAnimationVisualDebugging(…)`, `CustomizedLookaheadAnimationVisualDebugging(…)` (experimental) | missing | lookahead-visual-debug |
-| `splineBasedDecay(density)`, `rememberSplineBasedDecay()`, `SplineBasedFloatDecayAnimationSpec` | present (D820; foundation's flings still use `fling.rs`'s spline) | decay-animation |
+| `splineBasedDecay(density)`, `rememberSplineBasedDecay()`, `SplineBasedFloatDecayAnimationSpec` | present (D820; foundation's flings decay along it, D826) | decay-animation |
 | `Color.VectorConverter(colorSpace)` | `Animate for Color` (sRGB only: compose-rs colors have no color spaces) | (none: n/a until color spaces exist) |
 | `Animatable(Color)`, `animateColorAsState`, `InfiniteTransition.animateColor`, `Transition.animateColor` | present | |
 
@@ -430,7 +430,7 @@ One entry per feature. Sizes:
 
 #### decay-animation (M, not exp.): done (D807, D820)
 
-- **Done:** `FloatDecayAnimationSpec`, `FloatExponentialDecaySpec`, `VectorizedDecayAnimationSpec`, `DecayAnimationSpec`, `exponential_decay`, `generate_decay_animation_spec`, `calculate_target_value`, `DecayAnimation` (and `float_decay_animation` for its `FloatDecayAnimationSpec` constructor), `Animatable::animate_decay`. The spline family (`spline_based_decay`, `remember_spline_based_decay`, D820); foundation's flings are to switch to it (D820).
+- **Done:** `FloatDecayAnimationSpec`, `FloatExponentialDecaySpec`, `VectorizedDecayAnimationSpec`, `DecayAnimationSpec`, `exponential_decay`, `generate_decay_animation_spec`, `calculate_target_value`, `DecayAnimation` (and `float_decay_animation` for its `FloatDecayAnimationSpec` constructor), `Animatable::animate_decay`. The spline family (`spline_based_decay`, `remember_spline_based_decay`, D820); foundation's flings decay along it (D820, D826).
 
 - **API:**
   - the specs: `DecayAnimationSpec`, `FloatDecayAnimationSpec`, `VectorizedDecayAnimationSpec`, `exponential_decay`, `FloatExponentialDecaySpec`, `generate_decay_animation_spec`;
@@ -440,8 +440,7 @@ One entry per feature. Sizes:
 - **Tests:** `DecayAnimationTest`, `IsInfiniteTest` (2), `AnimatableTest.animateDecayTest`, `SuspendAnimationTest` (2), `AndroidFlingSplineTest`.
 - **Dependencies:**
   - animation-objects and animatable-bounds;
-  - the Android spline exists privately in `compose-foundation/src/fling.rs` and should move into compose-animation;
-  - compose-foundation doesn't depend on compose-animation today, while Compose's foundation does depend on animation-core. Foundation's flings using `spline_based_decay` would add that crate edge, a D292 decision.
+  - the Android spline moved from `compose-foundation/src/fling.rs` into compose-animation, and compose-foundation depends on compose-animation, as Compose's foundation on animation-core (D820, D826).
 
 #### easing-functions (S, not exp.): done (D808, D816)
 

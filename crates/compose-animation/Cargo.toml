@@ -12,6 +12,9 @@ compose-ui.workspace = true
 
 [dev-dependencies]
 compose-test.workspace = true
+# For tests/suite only. compose-foundation depends on compose-animation (D820), so this crate's
+# own unit tests (`--lib`) link a second compose-animation through it: they must not use
+# compose-foundation, whose types would be the other copy's (D826).
 compose-foundation.workspace = true
 
 [lints]
