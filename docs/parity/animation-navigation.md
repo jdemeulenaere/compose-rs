@@ -32,9 +32,9 @@ The inventory of Compose's animation and navigation tests and public API against
 | Status | Files | @Test |
 |---|---|---|
 | `covered` | 1 | 1 |
-| `ported` | 18 | 97 |
+| `ported` | 19 | 103 |
 | `port` | 0 | 0 |
-| `partial` | 10 | 145 |
+| `partial` | 9 | 139 |
 | `feature:<name>` | 64 | 769 |
 | `n/a` | 2 | 9 |
 
@@ -43,7 +43,7 @@ By module:
 | Module | Files | @Test | covered | ported | port | partial | feature | n/a |
 |---|---|---|---|---|---|---|---|---|
 | animation-core | 30 | 212 | 0 | 16 / 79 | 0 | 3 / 31 | 11 / 102 | 0 |
-| animation | 15 | 238 | 0 | 2 / 18 | 0 | 4 / 46 | 9 / 174 | 0 |
+| animation | 15 | 238 | 0 | 3 / 24 | 0 | 3 / 40 | 9 / 174 | 0 |
 | animation-graphics | 5 | 22 | 0 | 0 | 0 | 0 | 5 / 22 | 0 |
 | navigation-compose | 9 | 121 | 1 / 1 | 0 | 0 | 3 / 68 | 4 / 50 | 1 / 2 |
 | navigation3-runtime | 21 | 307 | 0 | 0 | 0 | 0 | 20 / 300 | 1 / 7 |
@@ -128,11 +128,11 @@ The "covered" notes cite compose-rs test files under `crates/compose-animation/t
 | 29 | `compose/animation/animation-core/src/androidHostTest/kotlin/androidx/compose/animation/core/EasingTest.android.kt` | 2 | cubic solver near 0/1 and with overshooting curves | ported | `easing.rs` |
 | 30 | `compose/animation/animation-core/src/androidHostTest/kotlin/androidx/compose/animation/core/SpringEstimationTest.kt` | 1 | spring duration estimation against simulation over a grid of mass/stiffness | ported | `spring_estimation.rs`: every fifth mass and spring constant of Compose's grid (2.9 million of its 70 million cases) |
 | 31 | `compose/animation/animation/src/androidDeviceTest/kotlin/androidx/compose/animation/AnimateBoundsTest.kt` | 8 | `Modifier.animateBounds`: position, size, bounds, movable content, lazy layouts, scrolling | `feature:animate-bounds` | needs ui lookahead |
-| 32 | `compose/animation/animation/src/androidDeviceTest/kotlin/androidx/compose/animation/AnimatedContentTest.kt` | 17 | `AnimatedContent`: SizeTransform, alignment, slideInto/OutOfContainer, contentKey, subcomposition, interruption, KeepUntilTransitionsFinished, lookahead, cleanup | partial | 6 ported (`animated_content.rs`: the size transform frame by frame, to and from an empty content, the alignment, an exit finished then interrupted, a transition recreated; `compose-material3/tests/suite/animated_content.rs`: a scaffold with tabs); `slideIntoContainer`/`slideOutOfContainer`, `contentKey` and `KeepUntilTransitionsFinished` (6: `SlideInAndOutOfContainer`, `WithContentKey`, `WithKeysTest`, `testExitHold`, `testExitHoldDefersUntilAllFinished`, `testRightEnterExitTransitionIsChosenDuringInterruption`) need animated-content-scope, `testAnimatedContentCleanup` too (`contentKey`, an internal map); lookahead and `animateBounds` (3); `AnimatedContentWithInterruption` asserts in layout callbacks that the content sliding out stays at the container's origin: to check against Compose before porting |
+| 32 | `compose/animation/animation/src/androidDeviceTest/kotlin/androidx/compose/animation/AnimatedContentTest.kt` | 17 | `AnimatedContent`: SizeTransform, alignment, slideInto/OutOfContainer, contentKey, subcomposition, interruption, KeepUntilTransitionsFinished, lookahead, cleanup | partial | 12 ported (`animated_content.rs`: the size transform frame by frame, to and from an empty content, the alignment, an exit finished then interrupted, a transition recreated; `animated_content_scope.rs`: slides into and out of the container, `contentKey` (2), `KeepUntilTransitionsFinished` (2), the enter and exit an interruption picks, the last with a wait one frame later (D817); `compose-material3/tests/suite/animated_content.rs`: a scaffold with tabs); lookahead and `animateBounds` (3); n/a: `AnimatedContentWithInterruption` (the test ends as it sets the flag, so its layout-callback assertions never see the interruption, under which Compose's content slides too) and `testAnimatedContentCleanup` (an internal map's size) |
 | 33 | `compose/animation/animation/src/androidDeviceTest/kotlin/androidx/compose/animation/AnimatedVisibilityTest.kt` | 17 | `AnimatedVisibility`: expand/shrink, slide, fade, scale with exact values, None, Transition overload, seeking, lookahead, veil, settle time | partial | 15 ported (`animated_visibility.rs`: expand and shrink, slide, a content size change, fade, scale, the scale spring's threshold, `None`/`None`, the `Transition` overload, an interrupted exit, the settle time, with a test of the column and row defaults; `veil.rs`: the five veil tests); seeking (1) seekable-transition; lookahead (1) |
 | 34 | `compose/animation/animation/src/androidDeviceTest/kotlin/androidx/compose/animation/AnimationModifierTest.kt` | 6 | `animateContentSize`: frame-by-frame size, alignment LTR/RTL, lookahead, inspector, re-attach | partial | 3 ported (`content_size.rs`: the frame-by-frame size with its finished listener, alignment left to right and right to left); `properFinalStateAfterReAttach` needs movable content (compose-runtime has no `movableContentOf`); lookahead (1) needs lookahead; inspector n/a |
 | 35 | `compose/animation/animation/src/androidDeviceTest/kotlin/androidx/compose/animation/CapturedAnimatedVisibilityTest.kt` | 9 | `CapturedAnimatedVisibility`: content disposed at once, exit animates a captured layer, MutableTransitionState, interruptions, lookahead | `feature:captured-animated-visibility` | needs ui graphics-layer recording |
-| 36 | `compose/animation/animation/src/androidDeviceTest/kotlin/androidx/compose/animation/CrossfadeTest.kt` | 6 | `Crossfade`: shows content, disposes old content, custom spec, null state, rememberSaveable per screen, contentKey | partial | 5 ported (`crossfade_ported.rs`); `crossfadeTest_contentKey` needs crossfade-extras (`Transition::Crossfade`) |
+| 36 | `compose/animation/animation/src/androidDeviceTest/kotlin/androidx/compose/animation/CrossfadeTest.kt` | 6 | `Crossfade`: shows content, disposes old content, custom spec, null state, rememberSaveable per screen, contentKey | ported | `crossfade_ported.rs` (`crossfadeTest_contentKey` with a wait one frame later, D817) |
 | 37 | `compose/animation/animation/src/androidDeviceTest/kotlin/androidx/compose/animation/DeferredAnimatedContentTest.kt` | 29 | `DeferredAnimatedContent`: gates, preview transforms, hand-off velocity, interruption specs, veil | `feature:deferred-transition` |  |
 | 38 | `compose/animation/animation/src/androidDeviceTest/kotlin/androidx/compose/animation/DeferredAnimatedVisibilityTest.kt` | 21 | `DeferredAnimatedVisibility`: enter/exit gates, preview scale/offset, hand-off, interruption | `feature:deferred-transition` |  |
 | 39 | `compose/animation/animation/src/androidDeviceTest/kotlin/androidx/compose/animation/DeferredSharedElementTest.kt` | 15 | shared elements under deferred transitions: previews, hand-off, cancellation | `feature:shared-transition` | also deferred-transition |
@@ -233,7 +233,7 @@ Deprecated and left out:
 - `AnimatedVisibility(visible, modifier, enter, exit, label, content)`, `visible` a `bool`, a `MutableTransitionState<bool>`, or either with the `ColumnScope` or `RowScope` it's in; `transition.AnimatedVisibility(visible, modifier, enter, exit, content)`; the content gets an `AnimatedVisibilityScope`.
 - `EnterTransition`/`ExitTransition` with `+`, `NONE` and `config()` (`EnterExitTransitionConfig`, `FadeConfig`, `SlideConfig`, `ChangeSizeConfig`, `ScaleConfig`).
 - The transitions, with Compose's parameters in their `_with` forms: `fade_in`/`fade_out`, `scale_in`/`scale_out`, `expand_{in,horizontally,vertically}`/`shrink_{out,horizontally,vertically}`, `slide_in`/`slide_out` and their horizontal and vertical forms.
-- `AnimatedContent(target_state, modifier, transition_spec(initial, target), content_alignment, label, content)` and `transition.AnimatedContent(modifier, transition_spec, content_alignment, content)`, with `ContentTransform` (`together_with`, `using`, `target_content_z_index`), `size_transform(clip, spec)` and `default_content_transform()`.
+- `AnimatedContent(target_state, modifier, transition_spec(scope), content_alignment, label, content_key, content(scope, state))` and `transition.AnimatedContent(modifier, transition_spec, content_alignment, content_key, content)`, the scopes `AnimatedContentTransitionScope` (`slide_into_container`, `slide_out_of_container`, `SlideDirection`) and `AnimatedContentScope`, `ExitTransition::KEEP_UNTIL_TRANSITIONS_FINISHED`, `transition.Crossfade(…)`, with `ContentTransform` (`together_with`, `using`, `target_content_z_index`), `size_transform(clip, spec)` and `default_content_transform()`.
 - `Crossfade(target_state, modifier, animation_spec, label, content)`.
 - `Modifier.animate_content_size()`/`animate_content_size_with(spec, alignment, finished_listener)`.
 
@@ -291,12 +291,12 @@ Deprecated and left out:
 | `EnterTransition.config`, `ExitTransition.config`, `EnterExitTransitionConfig`, `FadeConfig`, `SlideConfig`, `ChangeSizeConfig`, `ScaleConfig` | present (D804) | enter-exit-params |
 | `unveilIn(spec, initialColor, matchParentSize)`, `veilOut(…)`, `VeilConfig` | present (`_with` forms, D814); `matchParentSize` draws over the content's bounds | veil |
 | `AnimatedVisibility(MutableTransitionState<Boolean>, …)`, `Transition<T>.AnimatedVisibility(visible: (T) -> Boolean, …)`, `ColumnScope.AnimatedVisibility` (×2), `RowScope.AnimatedVisibility` (×2) | present: one `AnimatedVisibility` over `AnimatedVisibilityState` (`(column, visible)` for a scope's), and `transition.AnimatedVisibility(…)` (D804, D812) | animated-visibility-scope |
-| `AnimatedVisibilityScope` (`transition`, `Modifier.animateEnterExit(enter, exit, label)`), `EnterExitState` (`PreEnter`, `Visible`, `PostExit`) | present but `Modifier.animate_enter_exit` (D804) | animated-visibility-scope |
-| `AnimatedContent(…, contentKey, content: AnimatedContentScope.(S) -> Unit)`, `Transition<S>.AnimatedContent(…)` | `transition.AnimatedContent(…)` present (D812); no `contentKey`, and the content takes the state, not a scope | animated-content-scope |
-| `AnimatedContentTransitionScope` (`initialState`, `targetState`, `isTransitioningTo`, `contentAlignment`, `slideIntoContainer(towards, spec, initialOffset)`, `slideOutOfContainer`, `using(SizeTransform?)`, `ExitTransition.KeepUntilTransitionsFinished`), `SlideDirection` (`Left`, `Right`, `Up`, `Down`, `Start`, `End`) | `transition_spec(initial, target)` only | animated-content-scope |
-| `AnimatedContentScope` | missing | animated-content-scope |
+| `AnimatedVisibilityScope` (`transition`, `Modifier.animateEnterExit(enter, exit, label)`), `EnterExitState` (`PreEnter`, `Visible`, `PostExit`) | present (`scope.animate_enter_exit(enter, exit, label)`, D804, D817) | animated-visibility-scope |
+| `AnimatedContent(…, contentKey, content: AnimatedContentScope.(S) -> Unit)`, `Transition<S>.AnimatedContent(…)` | present (`content_key: ContentKey`, the content taking an `AnimatedContentScope` and the state, D812, D817) | animated-content-scope |
+| `AnimatedContentTransitionScope` (`initialState`, `targetState`, `isTransitioningTo`, `contentAlignment`, `slideIntoContainer(towards, spec, initialOffset)`, `slideOutOfContainer`, `using(SizeTransform?)`, `ExitTransition.KeepUntilTransitionsFinished`), `SlideDirection` (`Left`, `Right`, `Up`, `Down`, `Start`, `End`) | present (D817) | animated-content-scope |
+| `AnimatedContentScope` | present (D817) | animated-content-scope |
 | `ContentTransform(targetContentEnter, initialContentExit, targetContentZIndex, sizeTransform)`, `SizeTransform(clip, sizeAnimationSpec)`, `SizeTransform` interface | present (`ContentTransform`, `size_transform(clip, spec)`, D805) | animated-content-scope |
-| `Transition<T>.Crossfade(modifier, animationSpec, contentKey, content)` (the plain overload has no `contentKey`) | missing | crossfade-extras |
+| `Transition<T>.Crossfade(modifier, animationSpec, contentKey, content)` (the plain overload has no `contentKey`) | present (`transition.Crossfade(…)`, D817) | crossfade-extras |
 | `animateContentSize(animationSpec, alignment, finishedListener)` (both overloads) | present (`animate_content_size_with(spec, alignment, finished_listener)`, D811) | animate-content-size-extras |
 | `CapturedAnimatedVisibility(visible, …)`, `CapturedAnimatedVisibility(MutableTransitionState, …)` | missing | captured-animated-visibility |
 | `DeferredAnimatedContent`, `DeferredAnimatedVisibility`, `MutableContentTransform(…)`, `MutableTransform`, `TransformScope` (`alpha`, `scale`, `offset`, `transformOrigin`, `veil`) | missing (new at this tip) | deferred-transition |
@@ -544,9 +544,9 @@ One entry per feature. Sizes:
 - **Tests:** `AnimatedVisibilityTest` (4), `EnterExitTransitionConfigTest` (2), parts of the deferred tests.
 - **Dependencies:** enter-exit-params.
 
-#### animated-visibility-scope (M, not exp.): partly done (D804, D812)
+#### animated-visibility-scope (M, not exp.): done (D804, D812, D817)
 
-- **Done:** `AnimatedVisibilityScope` with its `transition`, `EnterExitState`, the `MutableTransitionState`, `ColumnScope` and `RowScope` overloads (one function over `AnimatedVisibilityState`), the `Transition` overload (`transition.AnimatedVisibility`, D812). **Left:** `Modifier.animate_enter_exit`.
+- **Done:** `AnimatedVisibilityScope` with its `transition`, `EnterExitState`, the `MutableTransitionState`, `ColumnScope` and `RowScope` overloads (one function over `AnimatedVisibilityState`), the `Transition` overload (`transition.AnimatedVisibility`, D812). `scope.animate_enter_exit` (D817).
 
 - **API:**
   - `AnimatedVisibilityScope` (`transition`, `Modifier.animate_enter_exit`), `EnterExitState`;
@@ -554,9 +554,9 @@ One entry per feature. Sizes:
 - **Tests:** `AnimatedVisibilityTest` (transition overload, the `MutableTransitionState` cases), `CapturedAnimatedVisibilityTest`, `SharedTransitionTest`.
 - **Dependencies:** transition-state, enter-exit-params.
 
-#### animated-content-scope (M–L, not exp.): partly done (D805, D812)
+#### animated-content-scope (M–L, not exp.): done (D805, D812, D817)
 
-- **Done:** `SizeTransform` (`size_transform(clip, spec)`), `target_content_z_index`, `ContentTransform::using`, no cap on the contents shown (Compose's rule: a content shows while its state is the transition's current or target), the `Transition` overload (`transition.AnimatedContent`, D812). **Left:** the scopes (`AnimatedContentScope`, `AnimatedContentTransitionScope` and its methods), `content_key`, `KeepUntilTransitionsFinished`.
+- **Done:** `SizeTransform` (`size_transform(clip, spec)`), `target_content_z_index`, `ContentTransform::using`, no cap on the contents shown (Compose's rule: a content shows while its state is the transition's current or target), the `Transition` overload (`transition.AnimatedContent`, D812). The scopes (`AnimatedContentScope`, `AnimatedContentTransitionScope` and its methods), `content_key`, `KeepUntilTransitionsFinished` (D817).
 
 - **API:**
   - the scopes: `AnimatedContentScope` (an `AnimatedVisibilityScope`) and `AnimatedContentTransitionScope`, holding `initial_state`, `target_state`, `content_alignment` and the methods `slide_into_container(SlideDirection, spec, offset)`, `slide_out_of_container`, `using(SizeTransform)`, `ExitTransition::KEEP_UNTIL_TRANSITIONS_FINISHED`;
@@ -566,7 +566,7 @@ One entry per feature. Sizes:
 - **Tests:** `AnimatedContentTest` (~9), `EnterExitTransitionConfigTest` (SizeTransform default); NavHost and NavDisplay transitions build on it.
 - **Dependencies:** transition-state, animated-visibility-scope, enter-exit-params.
 
-#### crossfade-extras (S, not exp.)
+#### crossfade-extras (S, not exp.): done (D817)
 
 - **API:** `Transition::Crossfade(modifier, animation_spec, content_key, content)`. Compose's plain `Crossfade` has no `contentKey`.
 - **Tests:** `CrossfadeTest.crossfadeTest_contentKey`.
@@ -782,9 +782,10 @@ Each item names the Compose test that would catch it, in the file's notes or lis
    - Caught by: `TypeConverterTest` only checks whole numbers, so add a mid-animation `animate_int_as_state` case.
 6. **`AnimatedVisibility` inside a `Column` or `Row` has the wrong defaults.** Fixed (D804): `AnimatedVisibility!((column, visible), …)`. Compose's scope overloads default to vertical or horizontal expand and shrink. compose-rs has only the plain overload (`expand_in`/`shrink_out`), so the same call animates differently.
    - Caught by: no Compose test targets it. Add one with animated-visibility-scope.
-7. **`AnimatedContent` keeps at most three contents and keys them by an internal id.** Fixed (D805) but `contentKey`: no cap; a content shows while its state is the transition's current or target state, as Compose's `AnimatedEnterExitImpl` (so after a second interruption the first content leaves at once, not "Compose keeps all" as this note said).
+7. **`AnimatedContent` keeps at most three contents and keys them by an internal id.** Fixed (D805, and `contentKey` D817): no cap; a content shows while its state is the transition's current or target state, as Compose's `AnimatedEnterExitImpl` (so after a second interruption the first content leaves at once, not "Compose keeps all" as this note said).
    - Caught by: `AnimatedContentTest.AnimatedContentWithKeysTest` and `AnimatedContentWithContentKey`. Write a rapid four-state test for the cap.
-8. **The animation containers expose no shared `Transition`.** `AnimatedVisibility`'s content has its scope's `transition` now (D804), and both run on a transition of the app's (`transition.AnimatedVisibility`, `transition.AnimatedContent`, D812); `AnimatedContent`'s content still gets no scope (animated-content-scope). Content can't read `transition.isRunning` (`AnimatedContentTest.AnimatedContentWithInterruption` does) and nothing can be seeked.
+8. **The animation containers expose no shared `Transition`.** `AnimatedVisibility`'s content has its scope's `transition` now (D804), and both run on a transition of the app's (`transition.AnimatedVisibility`, `transition.AnimatedContent`, D812); `AnimatedContent`'s content gets an `AnimatedContentScope` (D817). Nothing can be seeked yet (seekable-transition).
+   - A task resumed by a frame continues within that frame, before its composition, where Compose dispatches it after: a frame callback that changes a transition's target sees the transition run a frame later than Compose's (D817; `AnimatedContentWithKeysTest`, `crossfadeTest_contentKey` wait a frame more).
 9. **`NavHost` has no default transition** (Compose fades for 700 ms) and never pops its start destination. `launch_single_top` compares with `==`, where Compose compares the route and replaces the arguments. All are documented in D291, but ported tests must expect compose-rs's behaviour or the decision must change.
    - Caught by: `NavHostTest.testNavHostAnimations`, `NavHostControllerTest.testNavigateOptionSingleTopDifferentArguments`.
 10. **Keyframe times are `u32`.** Fixed: they're `i32`, and out-of-range keyframes are ignored as Compose's (`keyframe_animation.rs`).

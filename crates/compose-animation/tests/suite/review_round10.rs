@@ -114,15 +114,15 @@ fn a_content_neither_current_nor_target_leaves_at_once() {
     let mut ui = ComposeTestRule::with_manual_clock(move || {
         AnimatedContent!(
             handle.get(),
-            transition_spec = |_, target| {
-                let exit = if target == 1 {
+            transition_spec = |scope: AnimatedContentTransitionScope<i32>| {
+                let exit = if *scope.target_state() == 1 {
                     fade_out_with(tween(1000).easing(LINEAR_EASING), 0.0)
                 } else {
                     ExitTransition::NONE
                 };
                 EnterTransition::NONE.together_with(exit).using(None)
             },
-            |value: i32| {
+            |_, value: i32| {
                 Box!(
                     modifier = Modifier
                         .size((50.dp(), 20.dp()))

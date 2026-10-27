@@ -94,12 +94,13 @@ pub fn NavHost<D: Clone + PartialEq + 'static>(
         AnimatedContent(
             entry,
             modifier,
-            compose_runtime::callback(move |_, _| {
+            compose_runtime::callback(move |_| {
                 enter_transition.clone().together_with(exit_transition.clone()).using(None)
             }),
             content_alignment,
             "NavHost",
-            compose_runtime::callback(move |entry: NavBackStackEntry<D>| {
+            compose_animation::ContentKey::state(),
+            compose_runtime::callback(move |_, entry: NavBackStackEntry<D>| {
                 AnimatedEntry(nav_controller, holder, entry, &content)
             }),
         );

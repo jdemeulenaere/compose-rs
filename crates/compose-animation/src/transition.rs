@@ -773,11 +773,11 @@ impl<S: Clone + PartialEq + 'static> Transition<S> {
     /// pass, as a composable; it leaves the transition with its call.
     pub(crate) fn create_deferred_animation<T: Animate>(
         &self,
-        label: &'static str,
+        label: impl FnOnce() -> String,
     ) -> DeferredAnimation<S, T> {
         let transition = self.clone();
         let deferred = remember_keyed(self.clone(), move || DeferredAnimation {
-            inner: Rc::new(DeferredInner { transition, label, data: RefCell::new(None) }),
+            inner: Rc::new(DeferredInner { transition, label: label(), data: RefCell::new(None) }),
         });
         let removed = deferred.inner.clone();
         DisposableEffect(deferred.clone(), move |scope| {
@@ -803,7 +803,7 @@ pub(crate) struct DeferredAnimation<S: 'static, T: Animate> {
 
 struct DeferredInner<S: 'static, T: Animate> {
     transition: Transition<S>,
-    label: &'static str,
+    label: String,
     data: RefCell<Option<Rc<DeferredData<S, T>>>>,
 }
 
@@ -882,7 +882,7 @@ impl<S: Clone + PartialEq + 'static, T: Animate> DeferredAnimation<S, T> {
             None => {
                 let transition = &self.inner.transition;
                 let initial = target_value_by_state(&transition.inner.current_untracked());
-                let label = self.inner.label.to_string();
+                let label = self.inner.label.clone();
                 let animation =
                     Rc::new(TransitionAnimationState::new(initial, transition.node(), label));
                 let entry: Rc<dyn AnimationEntry> = animation.clone();

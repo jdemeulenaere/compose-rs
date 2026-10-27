@@ -173,6 +173,12 @@ impl ExitTransition {
     /// No animation, as `ExitTransition.None`.
     pub const NONE: ExitTransition = ExitTransition { config: EnterExitTransitionConfig::NONE };
 
+    /// Keeps the content shown, unchanged, until every transition of its `AnimatedContent` ends,
+    /// as `ExitTransition.KeepUntilTransitionsFinished`: `+` another exit to animate it too.
+    pub const KEEP_UNTIL_TRANSITIONS_FINISHED: ExitTransition = ExitTransition {
+        config: EnterExitTransitionConfig { hold: true, ..EnterExitTransitionConfig::NONE },
+    };
+
     /// Its parts, as `config`.
     pub fn config(&self) -> &EnterExitTransitionConfig {
         &self.config
@@ -644,6 +650,24 @@ impl AnimatedVisibilityScope {
     pub fn transition(&self) -> &Transition<EnterExitState> {
         &self.transition
     }
+
+    /// A modifier animating a child of the content in and out with the content, along `enter`
+    /// and `exit` (`None`: Compose's `fadeIn()` and `fadeOut()`), on the content's transition,
+    /// as `Modifier.animateEnterExit(enter, exit, label)`: the content stays until these end
+    /// too. Call it on every pass of the content, as a composable (it remembers its
+    /// animations); its value goes in the child's modifier.
+    pub fn animate_enter_exit(
+        &self,
+        enter: impl Into<Option<EnterTransition>>,
+        exit: impl Into<Option<ExitTransition>>,
+        label: &'static str,
+    ) -> Modifier {
+        let enter = enter.into().unwrap_or_else(fade_in);
+        let exit = exit.into().unwrap_or_else(fade_out);
+        let (active_enter, active_exit) =
+            update_enter_exit_modifier_state(&self.transition, enter, exit);
+        create_enter_exit_modifier(&self.transition, active_enter, active_exit, label)
+    }
 }
 
 impl ComposeArg for AnimatedVisibilityScope {
@@ -843,7 +867,8 @@ pub(crate) fn AnimatedEnterExit<T: Clone + PartialEq + 'static>(
                 transition: child.clone(),
                 target_size: target_size.as_state(),
             };
-            let enter_exit = create_enter_exit_modifier(&child, active_enter, active_exit);
+            let enter_exit =
+                create_enter_exit_modifier(&child, active_enter, active_exit, "Built-in");
             let policy = remember(move || {
                 Rc::new(EnterExitMeasurePolicy { target_size }) as Rc<dyn MeasurePolicy>
             });
@@ -970,6 +995,7 @@ fn create_enter_exit_modifier(
     transition: &Transition<EnterExitState>,
     enter: EnterTransition,
     exit: ExitTransition,
+    label: &'static str,
 ) -> Modifier {
     let parts = EnterExit { enter: Rc::new(enter), exit: Rc::new(exit) };
     let animate_slide = parts.enter.config.slide.is_some() || parts.exit.config.slide.is_some();
@@ -978,7 +1004,7 @@ fn create_enter_exit_modifier(
     let animate_alpha = parts.enter.config.fade.is_some() || parts.exit.config.fade.is_some();
     let animate_scale = parts.enter.config.scale.is_some() || parts.exit.config.scale.is_some();
     let animate_veil = parts.enter.config.veil.is_some() || parts.exit.config.veil.is_some();
-    let veil = deferred_if(transition, animate_veil, "Built-in veil")
+    let veil = deferred_if(transition, animate_veil, label, " veil")
         .map(|animation| Modifier.then_custom(VeilElement { animation, parts: parts.clone() }));
     let veil_over_parent = parts
         .enter
@@ -988,14 +1014,15 @@ fn create_enter_exit_modifier(
         .or(parts.exit.config.veil.as_ref())
         .is_some_and(|veil| veil.match_parent_size);
     let animations = Animations {
-        slide: deferred_if(transition, animate_slide, "Built-in slide"),
-        size: deferred_if(transition, animate_size, "Built-in shrink/expand"),
-        offset: deferred_if(transition, animate_size, "Built-in InterruptionHandlingOffset"),
-        alpha: deferred_if(transition, animate_alpha, "Built-in alpha"),
-        scale: deferred_if(transition, animate_scale, "Built-in scale"),
+        slide: deferred_if(transition, animate_slide, label, " slide"),
+        size: deferred_if(transition, animate_size, label, " shrink/expand"),
+        offset: deferred_if(transition, animate_size, label, " InterruptionHandlingOffset"),
+        alpha: deferred_if(transition, animate_alpha, label, " alpha"),
+        scale: deferred_if(transition, animate_scale, label, " scale"),
         transform_origin: deferred_if(
             transition,
             animate_scale,
+            "",
             "TransformOriginInterruptionHandling",
         ),
     };
@@ -1095,8 +1122,10 @@ fn deferred_if<T: Animate>(
     transition: &Transition<EnterExitState>,
     needed: bool,
     label: &'static str,
+    part: &'static str,
 ) -> Option<DeferredAnimation<EnterExitState, T>> {
-    let deferred = transition.create_deferred_animation::<T>(label);
+    // `"{label}{part}"`, made once, as Compose's `remember { "$label alpha" }`.
+    let deferred = transition.create_deferred_animation::<T>(|| format!("{label}{part}"));
     // Not needed, Compose's call leaves the composition (its animation leaves the transition
     // once the pass is applied): used again, it starts anew, at its value for the state the
     // transition is at.

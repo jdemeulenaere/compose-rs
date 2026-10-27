@@ -8,9 +8,11 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use compose_animation::*;
+use compose_foundation::layout::*;
 use compose_foundation::*;
 use compose_runtime::*;
 use compose_test::*;
+use compose_ui::UnitExt;
 
 const FIRST: &str = "first";
 const SECOND: &str = "second";
@@ -144,4 +146,61 @@ fn a_crossfade_keeps_each_screens_saved_state() {
     ui.advance_time_by_frame();
     assert_eq!(counters[0].get(), 1);
     assert_eq!(counters[1].get(), 2);
+}
+
+// Compose: compose/animation/animation/src/androidDeviceTest/kotlin/androidx/compose/animation/CrossfadeTest.kt, crossfadeTest_contentKey
+#[test]
+fn a_crossfade_keeps_a_content_while_its_key_stays() {
+    let target = mutable_state_of(1);
+    let handle = target.handle();
+    let list = Rc::new(std::cell::RefCell::new(Vec::new()));
+    let seen = list.clone();
+    let mut ui = compose_test(move || {
+        let transition = update_transition(handle.get(), None);
+        let holder = remember_saveable_state_holder();
+        let seen = seen.clone();
+        transition.Crossfade(
+            Modifier,
+            tween(DEFAULT_DURATION_MILLIS),
+            ContentKey::of(|state: &i32| *state > 0),
+            move |state: i32| {
+                if state > 0 {
+                    let seen = seen.clone();
+                    holder.SaveableStateProvider(true, move || {
+                        let count = remember_saveable(|| mutable_state_of(0));
+                        LaunchedEffect((), async move {
+                            count.update(|count| count + 1);
+                            seen.borrow_mut().push(count.get());
+                        });
+                    });
+                }
+                Box!(modifier = Modifier.required_size(200.dp()));
+            },
+        );
+        let watched = transition.clone();
+        LaunchedEffect((), async move {
+            // The same key: no animation.
+            assert!(!watched.is_running());
+            handle.set(2);
+            let watched_again = watched.clone();
+            with_frame_millis(move |_| {
+                assert!(!watched_again.is_running());
+                assert_eq!(watched_again.current_state(), watched_again.target_state());
+                // A new key: an animation.
+                handle.set(-1);
+            })
+            .await;
+            // As in `AnimatedContentTest.AnimatedContentWithKeysTest`'s port: compose-rs
+            // resumes this task before the frame's composition, so the transition runs from
+            // the frame after the next.
+            with_frame_millis(|_| ()).await;
+            with_frame_millis(move |_| assert!(watched.is_running())).await;
+        });
+    });
+    ui.wait_for_idle();
+    assert_eq!(*list.borrow(), [1]);
+    // Back to 1: a target change, the saved count restored.
+    target.set(1);
+    ui.wait_for_idle();
+    assert_eq!(*list.borrow(), [1, 2]);
 }

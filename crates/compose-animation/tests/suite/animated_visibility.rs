@@ -677,3 +677,41 @@ fn a_scale_pivots_on_its_transform_origin() {
     let corner = (pivot.x + (0.0 - pivot.x) * scale.0, pivot.y + (0.0 - pivot.y) * scale.1);
     assert_eq!(corner, (50.0, 50.0));
 }
+
+/// `animate_enter_exit` animates a child on the content's transition, with the content's own
+/// parts, and the content stays until the child's exit ends too.
+#[test]
+fn a_childs_own_enter_and_exit_play_with_the_content() {
+    use_optimizations(Optimizations::NONE);
+    let visible = mutable_state_of(true);
+    let handle = visible.handle();
+    let mut ui = ComposeTestRule::with_manual_clock(move || {
+        AnimatedVisibility!(
+            handle.get(),
+            enter = EnterTransition::NONE,
+            exit = ExitTransition::NONE,
+            move |scope: AnimatedVisibilityScope| {
+                let linear = tween(160).easing(LINEAR_EASING);
+                let child = scope.animate_enter_exit(
+                    fade_in_with(linear.clone(), 0.0),
+                    fade_out_with(linear, 0.0),
+                    "child",
+                );
+                Box!(
+                    modifier =
+                        child.required_size(100.dp()).background(Color::RED).test_tag("child")
+                );
+            }
+        );
+    });
+    visible.set(false);
+    ui.advance_time_by_frame();
+    ui.advance_time_by_frame();
+    // Half-way through the child's exit: half its alpha, and still there.
+    ui.advance_time_by(Duration::from_millis(80));
+    let alpha = layers(&mut ui).0.first().copied().expect("a layer");
+    assert!((alpha - 0.5).abs() < 0.01, "{alpha}");
+    ui.on_node_unmerged(has_test_tag("child")).assert_exists();
+    ui.advance_time_by(Duration::from_millis(160));
+    ui.on_node_unmerged(has_test_tag("child")).assert_does_not_exist();
+}

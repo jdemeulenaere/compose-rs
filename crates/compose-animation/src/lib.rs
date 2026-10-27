@@ -46,7 +46,8 @@ pub use compose_runtime::{
     with_infinite_animation_frame_millis, with_infinite_animation_frame_nanos,
 };
 pub use content::{
-    AnimatedContent, ContentTransform, SizeTransform, default_content_transform, size_transform,
+    AnimatedContent, AnimatedContentScope, AnimatedContentTransitionScope, ContentKey,
+    ContentTransform, SizeTransform, SlideDirection, default_content_transform, size_transform,
 };
 pub use content_size::AnimationModifiers;
 pub use crossfade::Crossfade;

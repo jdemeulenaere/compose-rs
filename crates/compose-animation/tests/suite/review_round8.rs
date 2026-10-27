@@ -40,10 +40,10 @@ fn animated_content_new_content_runs_its_enter_transition() {
     let mut ui = ComposeTestRule::with_manual_clock(move || {
         AnimatedContent!(
             handle.get(),
-            transition_spec = |_, _| fade_in_with(tween(1000).easing(LINEAR_EASING), 0.0)
+            transition_spec = |_| fade_in_with(tween(1000).easing(LINEAR_EASING), 0.0)
                 .together_with(ExitTransition::NONE)
                 .using(None),
-            |value: i32| {
+            |_, value: i32| {
                 Box!(
                     modifier = Modifier
                         .size((50.dp(), 20.dp()))
@@ -74,7 +74,7 @@ fn animated_content_new_content_runs_its_enter_transition() {
 #[test]
 fn animated_content_measures_contents_with_its_constraints() {
     let mut ui = ComposeTestRule::with_manual_clock(|| {
-        AnimatedContent!(0, modifier = Modifier.size((200.dp(), 100.dp())), |_value: i32| {
+        AnimatedContent!(0, modifier = Modifier.size((200.dp(), 100.dp())), |_, _value: i32| {
             Box!(modifier = Modifier.test_tag("screen"));
         });
     });
@@ -94,7 +94,7 @@ fn animated_content_returning_state_keeps_its_content() {
     let seen = created.clone();
     let mut ui = ComposeTestRule::with_manual_clock(move || {
         let seen = seen.clone();
-        AnimatedContent!(handle.get(), move |value: i32| {
+        AnimatedContent!(handle.get(), move |_, value: i32| {
             if value == 0 {
                 remember(|| seen.set(seen.get() + 1));
             }

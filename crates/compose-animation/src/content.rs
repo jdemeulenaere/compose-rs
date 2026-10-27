@@ -14,18 +14,21 @@ use compose_runtime::{
     ComposeArg, DisposableEffect, State, composable, key, mutable_state_of, remember,
     remember_keyed,
 };
+use std::hash::{Hash, Hasher};
+
 use compose_ui::{
-    Alignment, Constraints, IntSize, LayoutDirection, LayoutModifierNode, Measurable,
-    MeasurePolicy, MeasureResult, MeasureScope, Modifier, ModifierNode, ModifierNodeElement,
-    RECTANGLE_SHAPE,
+    Alignment, Constraints, IntOffset, IntSize, LOCAL_LAYOUT_DIRECTION, LayoutDirection,
+    LayoutModifierNode, Measurable, MeasurePolicy, MeasureResult, MeasureScope, Modifier,
+    ModifierNode, ModifierNodeElement, RECTANGLE_SHAPE,
 };
 
-use crate::spec::{AnimationSpec, Spring, spring_with, tween};
-use crate::transition::{DeferredAnimation, Transition, update_transition};
+use crate::spec::{AnimationSpec, Spring, spring, spring_with, tween};
+use crate::transition::{DeferredAnimation, Segment, Transition, update_transition};
 use crate::vector::VisibilityThreshold;
 use crate::visibility::{
     AnimatedEnterExit, AnimatedVisibilityScope, EnterExitState, EnterTransition, ExitTransition,
-    fade_in_with, fade_out_with, scale_in_with,
+    fade_in_with, fade_out_with, scale_in_with, slide_in_horizontally_with,
+    slide_in_vertically_with, slide_out_horizontally_with, slide_out_vertically_with,
 };
 
 /// How the container's size animates from the old content's to the new one's, as Compose's
@@ -133,23 +136,278 @@ pub fn default_content_transform() -> ContentTransform {
     .together_with(fade_out_with(tween(90), 0.0))
 }
 
-/// The states shown, each with the id its content is keyed by.
-struct Visible<T> {
-    states: Vec<(u64, T)>,
-    next_id: u64,
+/// Where a content slides into or out of its container, as Compose's
+/// `AnimatedContentTransitionScope.SlideDirection`: `Start` and `End` follow the layout
+/// direction.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SlideDirection {
+    Left,
+    Right,
+    Up,
+    Down,
+    Start,
+    End,
+}
+
+/// What a `transition_spec` is given, as Compose's `AnimatedContentTransitionScope`: the change
+/// (its `initial_state` and `target_state`, as a `Segment`), the content alignment, and the
+/// slides into and out of the container.
+pub struct AnimatedContentTransitionScope<S: 'static> {
+    initial_state: S,
+    target_state: S,
+    root: Rc<Root<S>>,
+}
+
+impl<S: Clone + 'static> Clone for AnimatedContentTransitionScope<S> {
+    fn clone(&self) -> Self {
+        AnimatedContentTransitionScope {
+            initial_state: self.initial_state.clone(),
+            target_state: self.target_state.clone(),
+            root: self.root.clone(),
+        }
+    }
+}
+
+impl<S: Clone + PartialEq + 'static> AnimatedContentTransitionScope<S> {
+    /// The state the change starts from, as `initialState`.
+    pub fn initial_state(&self) -> &S {
+        &self.initial_state
+    }
+
+    /// The state the change goes to, as `targetState`.
+    pub fn target_state(&self) -> &S {
+        &self.target_state
+    }
+
+    /// Whether the change goes from `initial` to `target`, as `isTransitioningTo`.
+    pub fn is_transitioning_to(&self, initial: &S, target: &S) -> bool {
+        self.initial_state == *initial && self.target_state == *target
+    }
+
+    /// The change, as the scope's `Segment`.
+    pub fn segment(&self) -> Segment<S> {
+        Segment {
+            initial_state: self.initial_state.clone(),
+            target_state: self.target_state.clone(),
+        }
+    }
+
+    /// How the contents are aligned in the container, as `contentAlignment`.
+    pub fn content_alignment(&self) -> Alignment {
+        self.root.content_alignment.get()
+    }
+
+    /// The entering content slides in from the container's edge `towards` the other, along a
+    /// spring of a pixel's threshold, as `slideIntoContainer(towards)`.
+    pub fn slide_into_container(&self, towards: SlideDirection) -> EnterTransition {
+        self.slide_into_container_with(towards, default_container_slide_spec(), |offset| offset)
+    }
+
+    /// The same along `animation_spec`, from `initial_offset(the offset of a full slide)`, as
+    /// `slideIntoContainer(towards, animationSpec, initialOffset)`: the slide accounts for the
+    /// container's size (animated) and the content alignment.
+    pub fn slide_into_container_with(
+        &self,
+        towards: SlideDirection,
+        animation_spec: impl Into<AnimationSpec>,
+        initial_offset: impl Fn(i32) -> i32 + 'static,
+    ) -> EnterTransition {
+        let root = self.root.clone();
+        let spec = animation_spec.into();
+        match self.root.horizontal(towards) {
+            Some(true) => slide_in_horizontally_with(spec, move |width| {
+                let current = root.current_size.get();
+                initial_offset(current.width - root.offset(IntSize::new(width, width), current).x)
+            }),
+            Some(false) => slide_in_horizontally_with(spec, move |width| {
+                let current = root.current_size.get();
+                initial_offset(-root.offset(IntSize::new(width, width), current).x - width)
+            }),
+            None => match towards {
+                SlideDirection::Up => slide_in_vertically_with(spec, move |height| {
+                    let current = root.current_size.get();
+                    let offset = root.offset(IntSize::new(height, height), current);
+                    initial_offset(current.height - offset.y)
+                }),
+                SlideDirection::Down => slide_in_vertically_with(spec, move |height| {
+                    let current = root.current_size.get();
+                    initial_offset(-root.offset(IntSize::new(height, height), current).y - height)
+                }),
+                _ => EnterTransition::NONE,
+            },
+        }
+    }
+
+    /// The exiting content slides out of the container `towards` its edge, along a spring of
+    /// a pixel's threshold, as `slideOutOfContainer(towards)`.
+    pub fn slide_out_of_container(&self, towards: SlideDirection) -> ExitTransition {
+        self.slide_out_of_container_with(towards, default_container_slide_spec(), |offset| offset)
+    }
+
+    /// The same along `animation_spec`, to `target_offset(the offset of a full slide)`, as
+    /// `slideOutOfContainer(towards, animationSpec, targetOffset)`: the slide accounts for the
+    /// target content's size and the content alignment.
+    pub fn slide_out_of_container_with(
+        &self,
+        towards: SlideDirection,
+        animation_spec: impl Into<AnimationSpec>,
+        target_offset: impl Fn(i32) -> i32 + 'static,
+    ) -> ExitTransition {
+        let root = self.root.clone();
+        let spec = animation_spec.into();
+        let target = self.target_state.clone();
+        match self.root.horizontal(towards) {
+            Some(true) => slide_out_horizontally_with(spec, move |width| {
+                let size = root.target_size(&target);
+                target_offset(-root.offset(IntSize::new(width, width), size).x - width)
+            }),
+            Some(false) => slide_out_horizontally_with(spec, move |width| {
+                let size = root.target_size(&target);
+                target_offset(-root.offset(IntSize::new(width, width), size).x + size.width)
+            }),
+            None => match towards {
+                SlideDirection::Up => slide_out_vertically_with(spec, move |height| {
+                    let size = root.target_size(&target);
+                    target_offset(-root.offset(IntSize::new(height, height), size).y - height)
+                }),
+                SlideDirection::Down => slide_out_vertically_with(spec, move |height| {
+                    let size = root.target_size(&target);
+                    target_offset(-root.offset(IntSize::new(height, height), size).y + size.height)
+                }),
+                _ => ExitTransition::NONE,
+            },
+        }
+    }
+}
+
+/// The spec of a slide into or out of the container by default: `spring()` with a pixel's
+/// threshold, as Compose's.
+fn default_container_slide_spec() -> AnimationSpec {
+    AnimationSpec::Spring(spring().visibility_threshold(IntOffset::VISIBILITY_THRESHOLD))
+}
+
+/// What tells a state's content from another's, as Compose's `contentKey`: the state itself by
+/// default ([`ContentKey::state`]), or a key of it ([`ContentKey::of`]); a new target state of
+/// the same key as a content shown takes that content over, without animating.
+pub struct ContentKey<T> {
+    key: Option<KeyOf<T>>,
+}
+
+/// A state's key, as the hash of what `ContentKey::of` was given.
+type KeyOf<T> = Rc<dyn Fn(&T) -> u64>;
+
+impl<T> Clone for ContentKey<T> {
+    fn clone(&self) -> Self {
+        ContentKey { key: self.key.clone() }
+    }
+}
+
+impl<T: 'static> ContentKey<T> {
+    /// The state itself, as `contentKey = { it }`.
+    pub fn state() -> ContentKey<T> {
+        ContentKey { key: None }
+    }
+
+    /// `key(state)`, as `contentKey = { … }`. Keys are compared by their hash.
+    pub fn of<K: Hash>(key: impl Fn(&T) -> K + 'static) -> ContentKey<T> {
+        ContentKey {
+            key: Some(Rc::new(move |state| {
+                let mut hasher = std::hash::DefaultHasher::new();
+                key(state).hash(&mut hasher);
+                hasher.finish()
+            })),
+        }
+    }
+}
+
+impl<T: 'static> ComposeArg for ContentKey<T> {
+    fn same(&self, other: &Self) -> bool {
+        match (&self.key, &other.key) {
+            (None, None) => true,
+            (Some(a), Some(b)) => Rc::ptr_eq(a, b),
+            _ => false,
+        }
+    }
+}
+
+/// What a content of `AnimatedContent` is given, as Compose's `AnimatedContentScope`: an
+/// `AnimatedVisibilityScope` (its `transition`, `animate_enter_exit`).
+#[derive(Clone)]
+pub struct AnimatedContentScope {
+    scope: AnimatedVisibilityScope,
+}
+
+impl std::ops::Deref for AnimatedContentScope {
+    type Target = AnimatedVisibilityScope;
+    fn deref(&self) -> &AnimatedVisibilityScope {
+        &self.scope
+    }
+}
+
+impl ComposeArg for AnimatedContentScope {
+    fn same(&self, other: &Self) -> bool {
+        self.scope.same(&other.scope)
+    }
+}
+
+/// The states shown, each with the id its content is keyed by: its content key's (keyed), or
+/// one of its own.
+pub(crate) struct Visible<T> {
+    pub(crate) states: Vec<(u64, T)>,
+    pub(crate) next_id: u64,
 }
 
 impl<T: PartialEq> Visible<T> {
-    fn position(&self, state: &T) -> Option<usize> {
-        self.states.iter().position(|(_, shown)| shown == state)
+    /// Where `state`'s content is: the state's, or one of the same key.
+    pub(crate) fn position(&self, key: &ContentKey<T>, state: &T) -> Option<usize> {
+        match &key.key {
+            None => self.states.iter().position(|(_, shown)| shown == state),
+            Some(key) => {
+                let wanted = key(state);
+                self.states.iter().position(|(_, shown)| key(shown) == wanted)
+            }
+        }
+    }
+
+    /// The id of a new content for `state`.
+    pub(crate) fn new_id(&mut self, key: &ContentKey<T>, state: &T) -> u64 {
+        match &key.key {
+            None => {
+                self.next_id += 1;
+                self.next_id - 1
+            }
+            Some(key) => key(state),
+        }
     }
 }
 
 /// What `AnimatedContent`'s parts share, as Compose's `AnimatedContentTransitionScopeImpl`.
 struct Root<T> {
     content_alignment: Cell<Alignment>,
+    layout_direction: Cell<LayoutDirection>,
+    /// The container's size as last measured (animated, while it animates), as `currentSize`.
+    current_size: Cell<IntSize>,
     /// Each content's measured size, by state.
     target_sizes: RefCell<Vec<(T, State<IntSize>)>>,
+}
+
+impl<T> Root<T> {
+    /// Whether a slide `towards` goes left (`Some(true)`), right (`Some(false)`) or neither.
+    fn horizontal(&self, towards: SlideDirection) -> Option<bool> {
+        let ltr = self.layout_direction.get() == LayoutDirection::Ltr;
+        match towards {
+            SlideDirection::Left => Some(true),
+            SlideDirection::Right => Some(false),
+            SlideDirection::Start => Some(ltr),
+            SlideDirection::End => Some(!ltr),
+            SlideDirection::Up | SlideDirection::Down => None,
+        }
+    }
+
+    /// Where a content of `full` is placed in `current`, as `calculateOffset`.
+    fn offset(&self, full: IntSize, current: IntSize) -> IntOffset {
+        self.content_alignment.get().align(full, current, LayoutDirection::Ltr)
+    }
 }
 
 impl<T: PartialEq + Clone> Root<T> {
@@ -162,24 +420,24 @@ impl<T: PartialEq + Clone> Root<T> {
     }
 }
 
-/// Shows `content(target_state)`; when the state changes, the new content enters as the old
-/// one exits (`transition_spec(initial, target)`), stacked and aligned by
-/// `content_alignment`, as Compose's `AnimatedContent`. States are told apart with `==`. Every
-/// content still exiting stays until its exit ends.
+/// Shows `content(scope, target_state)`; when the state changes, the new content enters as the
+/// old one exits (`transition_spec(scope)`, the scope holding the change), stacked and aligned
+/// by `content_alignment`, as Compose's `AnimatedContent`. States are told apart by
+/// `content_key` (the state itself, with `==`, by default). Every content still exiting stays
+/// until its exit ends.
 #[composable(non_restartable)]
 #[allow(non_snake_case)]
 pub fn AnimatedContent<T: Clone + PartialEq + 'static>(
     target_state: T,
     #[default(crate::Modifier)] modifier: Modifier,
-    #[default(|_, _| crate::default_content_transform())] transition_spec: impl Fn(
-        T,
-        T,
-    )
-        -> ContentTransform
+    #[default(|_| crate::default_content_transform())] transition_spec: impl Fn(
+        AnimatedContentTransitionScope<T>,
+    ) -> ContentTransform
     + 'static,
     #[default(crate::Alignment::TOP_START)] content_alignment: Alignment,
     #[default("AnimatedContent")] label: &'static str,
-    content: impl Fn(T) + 'static,
+    #[default(crate::ContentKey::state())] content_key: ContentKey<T>,
+    content: impl Fn(AnimatedContentScope, T) + 'static,
 ) {
     let transition = update_transition(target_state, label);
     AnimatedContentOf(
@@ -187,36 +445,42 @@ pub fn AnimatedContent<T: Clone + PartialEq + 'static>(
         modifier,
         transition_spec,
         content_alignment,
+        content_key,
         compose_runtime::callback(content),
     );
 }
 
 impl<S: Clone + PartialEq + 'static> Transition<S> {
     /// `AnimatedContent` of this transition's states, as Compose's
-    /// `Transition.AnimatedContent(modifier, transitionSpec, contentAlignment, content)`: the
-    /// transition's target state's content enters as the others exit, on the transition's clock
-    /// (`AnimatedContent(target_state, …)` is this of `update_transition(target_state)`). A
-    /// method, so every parameter is given: `default_content_transform` for Compose's default
-    /// spec, `Alignment::TOP_START` its default alignment.
+    /// `Transition.AnimatedContent(modifier, transitionSpec, contentAlignment, contentKey,
+    /// content)`: the transition's target state's content enters as the others exit, on the
+    /// transition's clock (`AnimatedContent(target_state, …)` is this of
+    /// `update_transition(target_state)`). A method, so every parameter is given:
+    /// `|_| default_content_transform()` for Compose's default spec, `Alignment::TOP_START` its
+    /// default alignment, `ContentKey::state()` its default key.
     #[allow(non_snake_case)]
     pub fn AnimatedContent(
         &self,
         modifier: Modifier,
-        transition_spec: impl Fn(S, S) -> ContentTransform + 'static,
+        transition_spec: impl Fn(AnimatedContentTransitionScope<S>) -> ContentTransform + 'static,
         content_alignment: Alignment,
-        content: impl Fn(S) + 'static,
+        content_key: ContentKey<S>,
+        content: impl Fn(AnimatedContentScope, S) + 'static,
     ) {
         AnimatedContentOf(
             self.clone(),
             modifier,
             compose_runtime::callback(transition_spec),
             content_alignment,
+            content_key,
             compose_runtime::callback(content),
         );
     }
 }
 
-type Spec<T> = compose_runtime::Callback<dyn Fn(T, T) -> ContentTransform>;
+type Spec<T> =
+    compose_runtime::Callback<dyn Fn(AnimatedContentTransitionScope<T>) -> ContentTransform>;
+type Content<T> = compose_runtime::Callback<dyn Fn(AnimatedContentScope, T)>;
 
 /// `AnimatedContent` of a transition, as Compose's `Transition.AnimatedContentImpl`.
 #[composable(non_restartable)]
@@ -226,16 +490,24 @@ pub(crate) fn AnimatedContentOf<T: Clone + PartialEq + 'static>(
     modifier: Modifier,
     transition_spec: Spec<T>,
     content_alignment: Alignment,
-    content: compose_runtime::Callback<dyn Fn(T)>,
+    content_key: ContentKey<T>,
+    content: Content<T>,
 ) {
+    let layout_direction = LOCAL_LAYOUT_DIRECTION.current();
     let root = remember_keyed(transition.clone(), || {
         Rc::new(Root {
             content_alignment: Cell::new(content_alignment),
+            layout_direction: Cell::new(layout_direction),
+            current_size: Cell::new(IntSize::ZERO),
             target_sizes: RefCell::new(Vec::new()),
         })
     });
     let visible = remember_keyed(transition.clone(), || {
-        Rc::new(RefCell::new(Visible { states: vec![(0, transition.current_state())], next_id: 1 }))
+        let current = transition.current_state();
+        let mut visible = Visible { states: Vec::new(), next_id: 0 };
+        let id = visible.new_id(&content_key, &current);
+        visible.states.push((id, current));
+        Rc::new(RefCell::new(visible))
     });
     // Bumped when a content leaves: the stack composes again without it.
     let removed = remember_keyed(transition.clone(), || mutable_state_of(0u64));
@@ -243,32 +515,35 @@ pub(crate) fn AnimatedContentOf<T: Clone + PartialEq + 'static>(
     let target = transition.target_state();
     {
         let mut shown = visible.borrow_mut();
-        if shown.position(&current).is_none() {
-            let id = shown.next_id;
-            shown.next_id += 1;
+        if !shown.states.iter().any(|(_, state)| *state == current) {
+            let id = shown.new_id(&content_key, &current);
             shown.states = vec![(id, current.clone())];
         }
         if current == target {
             // At rest: the current state's content only.
             if shown.states.len() != 1 || shown.states[0].1 != current {
-                let kept = shown.position(&current).map(|index| shown.states[index].0);
-                let id = kept.unwrap_or_else(|| {
-                    shown.next_id += 1;
-                    shown.next_id - 1
-                });
+                let kept = shown.position(&ContentKey::state(), &current);
+                let id = match kept {
+                    Some(index) => shown.states[index].0,
+                    None => shown.new_id(&content_key, &current),
+                };
                 shown.states = vec![(id, current.clone())];
             }
             root.content_alignment.set(content_alignment);
+            root.layout_direction.set(layout_direction);
         } else {
-            match shown.position(&target) {
+            match shown.position(&content_key, &target) {
                 None => {
-                    let id = shown.next_id;
-                    shown.next_id += 1;
+                    let id = shown.new_id(&content_key, &target);
                     shown.states.push((id, target.clone()));
                 }
-                Some(index) if index != shown.states.len() - 1 => {
-                    let entry = shown.states.remove(index);
-                    shown.states.push(entry);
+                // The target last; a state of the same key replaced by the target, its content
+                // taken over (Compose's `currentlyVisible[id] = targetState`).
+                Some(index)
+                    if index != shown.states.len() - 1 || shown.states[index].1 != target =>
+                {
+                    let (id, _) = shown.states.remove(index);
+                    shown.states.push((id, target.clone()));
                 }
                 Some(_) => {}
             }
@@ -277,8 +552,12 @@ pub(crate) fn AnimatedContentOf<T: Clone + PartialEq + 'static>(
     let segment = transition.segment();
     let content_transform = {
         let spec = transition_spec.clone();
-        let (initial, target) = (segment.initial_state.clone(), segment.target_state.clone());
-        remember_keyed(SegmentKey(segment.clone()), move || spec(initial, target))
+        let scope = AnimatedContentTransitionScope {
+            initial_state: segment.initial_state.clone(),
+            target_state: segment.target_state.clone(),
+            root: root.clone(),
+        };
+        remember_keyed(SegmentKey(segment.clone()), move || spec(scope))
     };
     let size_modifier =
         size_animation_modifier(&transition, &root, content_transform.size_transform.clone());
@@ -329,17 +608,26 @@ fn ContentOfState<T: Clone + PartialEq + 'static>(
     visible: Rc<RefCell<Visible<T>>>,
     removed: compose_runtime::MutableState<u64>,
     state: T,
-    content: compose_runtime::Callback<dyn Fn(T)>,
+    content: Content<T>,
 ) {
     let segment = transition.segment();
+    let scope_of = {
+        let root = root.clone();
+        move |initial_state: T, target_state: T| AnimatedContentTransitionScope {
+            initial_state,
+            target_state,
+            root: root.clone(),
+        }
+    };
     // The enter it was given when it became the target.
     let spec_on_enter = {
         let (spec, segment, state) = (transition_spec.clone(), segment.clone(), state.clone());
+        let scope_of = scope_of.clone();
         remember(move || {
             if state != segment.initial_state && state != segment.target_state {
-                spec(segment.initial_state, state)
+                spec(scope_of(segment.initial_state, state))
             } else {
-                spec(segment.initial_state, segment.target_state)
+                spec(scope_of(segment.initial_state, segment.target_state))
             }
         })
     };
@@ -351,9 +639,9 @@ fn ContentOfState<T: Clone + PartialEq + 'static>(
             if is_target {
                 ExitTransition::NONE
             } else if state != segment.initial_state && state != segment.target_state {
-                spec(state, segment.initial_state).initial_content_exit
+                spec(scope_of(state, segment.initial_state)).initial_content_exit
             } else {
-                spec(segment.initial_state, segment.target_state).initial_content_exit
+                spec(scope_of(segment.initial_state, segment.target_state)).initial_content_exit
             }
         })
     };
@@ -389,7 +677,7 @@ fn ContentOfState<T: Clone + PartialEq + 'static>(
                     }
                 })
             });
-            content(state);
+            content(AnimatedContentScope { scope }, state);
         }),
     );
 }
@@ -458,7 +746,8 @@ fn size_animation_modifier<T: Clone + PartialEq + 'static>(
     } else if size_transform.is_some() {
         should_animate.set(true);
     }
-    let deferred = transition.create_deferred_animation::<IntSize>("DeferredAnimation");
+    let deferred =
+        transition.create_deferred_animation::<IntSize>(|| "DeferredAnimation".to_string());
     let animation = should_animate.get().then_some(deferred);
     let clip =
         animation.is_some() && size_transform.as_ref().is_none_or(|transform| transform.clip);
@@ -582,6 +871,7 @@ impl<T: Clone + PartialEq + 'static> LayoutModifierNode for SizeNode<T> {
                 size
             }
         };
+        self.root.current_size.set(size);
         let at = self.root.content_alignment.get().align(current, size, LayoutDirection::Ltr);
         scope.place_at(&placeable, at);
         scope.layout(size.width, size.height)

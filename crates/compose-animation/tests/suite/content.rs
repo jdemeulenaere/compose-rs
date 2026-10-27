@@ -13,7 +13,7 @@ use compose_ui::UnitExt;
 
 #[composable]
 fn Counter(count: MutableState<i32>) {
-    AnimatedContent!(count.get(), modifier = Modifier.test_tag("container"), |value: i32| {
+    AnimatedContent!(count.get(), modifier = Modifier.test_tag("container"), |_, value: i32| {
         Box!(
             modifier =
                 Modifier.size(((50 + value * 50).dp(), 20.dp())).test_tag(format!("{value}")),
@@ -51,8 +51,8 @@ fn a_transform_without_animation_switches_at_once() {
         AnimatedContent!(
             handle.get(),
             transition_spec =
-                |_, _| EnterTransition::NONE.together_with(ExitTransition::NONE).using(None),
-            |value: i32| BasicText!("value {}", value)
+                |_| EnterTransition::NONE.together_with(ExitTransition::NONE).using(None),
+            |_, value: i32| BasicText!("value {}", value)
         );
     });
     count.set(1);

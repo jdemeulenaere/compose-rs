@@ -45,12 +45,12 @@ fn a_content_coming_back_while_it_leaves_springs_back_at_once() {
     let mut ui = ComposeTestRule::with_manual_clock(move || {
         AnimatedContent!(
             handle.get(),
-            transition_spec = |_, _| {
+            transition_spec = |_| {
                 fade_in_with(tween(300).delay(90).easing(LINEAR_EASING), 0.0)
                     .together_with(fade_out_with(tween(300).easing(LINEAR_EASING), 0.0))
                     .using(None)
             },
-            |value: i32| {
+            |_, value: i32| {
                 Box!(
                     modifier = Modifier
                         .size((50.dp(), 20.dp()))

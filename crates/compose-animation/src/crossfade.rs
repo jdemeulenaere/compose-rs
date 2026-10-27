@@ -5,13 +5,16 @@ use std::rc::Rc;
 
 use compose_runtime::{
     SideEffect, composable, key, mutable_state_of, remember, remember_coroutine_scope,
+    remember_keyed,
 };
 use compose_ui::{
     Constraints, IntSize, Layout, Measurable, MeasurePolicy, MeasureResult, MeasureScope, Modifier,
 };
 
 use crate::animatable::Animatable;
+use crate::content::{ContentKey, Visible};
 use crate::spec::AnimationSpec;
+use crate::transition::Transition;
 
 /// One state's content: its alpha animates in, then out when another state follows.
 struct Item<T> {
@@ -158,4 +161,77 @@ pub fn Crossfade<T: Clone + PartialEq + 'static>(
             }
         }),
     );
+}
+
+impl<S: Clone + PartialEq + 'static> Transition<S> {
+    /// The transition's states' contents crossfading, each an alpha on the transition along
+    /// `animation_spec`, as Compose's `Transition.Crossfade(modifier, animationSpec,
+    /// contentKey, content)`: a new target state of the same key as a content shown takes
+    /// that content over, without fading. A method, so every parameter is given (Compose's
+    /// defaults: `tween(DEFAULT_DURATION_MILLIS)`, `ContentKey::state()`).
+    #[allow(non_snake_case)]
+    pub fn Crossfade(
+        &self,
+        modifier: Modifier,
+        animation_spec: impl Into<AnimationSpec>,
+        content_key: ContentKey<S>,
+        content: impl Fn(S) + 'static,
+    ) {
+        let transition = self.clone();
+        let spec = animation_spec.into();
+        let visible = remember_keyed(transition.clone(), || {
+            let current = transition.current_state();
+            let mut visible = Visible { states: Vec::new(), next_id: 0 };
+            let id = visible.new_id(&content_key, &current);
+            visible.states.push((id, current));
+            Rc::new(RefCell::new(visible))
+        });
+        let (current, target) = (transition.current_state(), transition.target_state());
+        {
+            let mut shown = visible.borrow_mut();
+            if current == target && (shown.states.len() != 1 || shown.states[0].1 != target) {
+                // At rest: the intermediate contents go.
+                shown.states.retain(|(_, state)| *state == target);
+            }
+            if !shown.states.iter().any(|(_, state)| *state == target) {
+                // A content of the same key is the target's now; else the target's comes in.
+                match shown.position(&content_key, &target) {
+                    Some(index) => shown.states[index].1 = target.clone(),
+                    None => {
+                        let id = shown.new_id(&content_key, &target);
+                        shown.states.push((id, target.clone()));
+                    }
+                }
+            }
+        }
+        let states: Vec<(u64, S)> = visible.borrow().states.clone();
+        let content = Rc::new(content);
+        let policy = remember(|| Rc::new(StackLayout) as Rc<dyn MeasurePolicy>);
+        Layout(
+            modifier,
+            policy,
+            compose_runtime::callback(move || {
+                for (id, state) in &states {
+                    let (transition, spec, content) =
+                        (transition.clone(), spec.clone(), content.clone());
+                    let state = state.clone();
+                    key(*id, move || {
+                        let shown = state.clone();
+                        let alpha = transition.animate_float(
+                            move |_| spec.clone(),
+                            move |current| if *current == shown { 1.0 } else { 0.0 },
+                        );
+                        let layer = remember(|| {
+                            Modifier.graphics_layer(move |layer| layer.alpha = alpha.get())
+                        });
+                        Layout(
+                            layer,
+                            remember(|| Rc::new(StackLayout) as Rc<dyn MeasurePolicy>),
+                            compose_runtime::callback(move || content(state.clone())),
+                        );
+                    });
+                }
+            }),
+        );
+    }
 }

@@ -42,11 +42,13 @@ fn on_transition(
     let mut ui = ComposeTestRule::with_manual_clock(move || {
         let transition = remember_transition(&state, None);
         PLAYING.with(|playing| *playing.borrow_mut() = Some(transition.clone()));
+        let (spec, content) = (spec.clone(), content.clone());
         transition.AnimatedContent(
             Modifier.test_tag("container"),
-            spec.clone(),
+            move |scope| spec(*scope.initial_state(), *scope.target_state()),
             alignment(),
-            content.clone(),
+            ContentKey::state(),
+            move |_, state| content(state),
         );
     });
     ui.wait_for_idle();
@@ -216,20 +218,21 @@ fn an_exit_finished_then_interrupted_goes_back_from_where_it_was() {
         AnimatedContent!(
             handle.get(),
             modifier = Modifier.fill_max_size(),
-            transition_spec = |_, target: i32| if target == 2 {
-                // 1 exits fast (100 ms) to the left; 2 enters slowly (500 ms).
-                ContentTransform::new(
-                    slide_in_horizontally_with(tween(500), |width| width),
-                    slide_out_horizontally_with(tween(100), |width| -width),
-                )
-            } else {
-                // Back to 1: 1 enters slowly, 2 exits fast.
-                ContentTransform::new(
-                    slide_in_horizontally_with(tween(500), |width| -width),
-                    slide_out_horizontally_with(tween(100), |width| width),
-                )
-            },
-            |state: i32| {
+            transition_spec =
+                |scope: AnimatedContentTransitionScope<i32>| if *scope.target_state() == 2 {
+                    // 1 exits fast (100 ms) to the left; 2 enters slowly (500 ms).
+                    ContentTransform::new(
+                        slide_in_horizontally_with(tween(500), |width| width),
+                        slide_out_horizontally_with(tween(100), |width| -width),
+                    )
+                } else {
+                    // Back to 1: 1 enters slowly, 2 exits fast.
+                    ContentTransform::new(
+                        slide_in_horizontally_with(tween(500), |width| -width),
+                        slide_out_horizontally_with(tween(100), |width| width),
+                    )
+                },
+            |_, state: i32| {
                 Box!(modifier = Modifier.size(100.dp()).test_tag(format!("{state}")));
             }
         );
@@ -268,9 +271,10 @@ fn a_recreated_transitions_content_animates_its_size_without_jumps() {
                     assert_ne!(size, IntSize::ZERO);
                     seen.set(size);
                 }),
-                |_, _| fade_in().together_with(fade_out()),
+                |_| fade_in().together_with(fade_out()),
                 Alignment::TOP_START,
-                |small: bool| {
+                ContentKey::state(),
+                |_, small: bool| {
                     let side = if small { 200 } else { 300 };
                     Box!(modifier = Modifier.size(side.dp()));
                 },
