@@ -58,6 +58,7 @@ mod platform_services;
 mod platform_text_style;
 mod pointer_input;
 mod prefetch;
+mod remeasurement;
 mod render;
 mod semantics;
 mod semantics_properties;
@@ -209,6 +210,7 @@ pub use pointer_input::{
 pub use prefetch::{
     LOCAL_PREFETCH_SCHEDULER, PrefetchRequest, PrefetchRequestScope, PrefetchScheduler,
 };
+pub use remeasurement::{Remeasurement, RemeasurementModifier};
 pub use semantics::{
     AccessibilityAction, ActionFn, AnySemanticsPropertyKey, CollectionInfo, CollectionItemInfo,
     ColorProducer, CustomAccessibilityAction, GetScrollViewportLengthFn, GetTextLayoutResultFn,

@@ -60,6 +60,12 @@ impl NodeKinds {
         self.0 & other.0 != 0
     }
 
+    /// Whether it has every one of `other`'s kinds.
+    #[inline]
+    pub(crate) const fn all(self, other: NodeKinds) -> bool {
+        self.0 & other.0 == other.0
+    }
+
     #[inline]
     pub(crate) const fn is_empty(self) -> bool {
         self.0 == 0

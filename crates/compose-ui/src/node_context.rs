@@ -202,6 +202,32 @@ impl NodeContext<'_> {
     pub fn invalidate_draw_for_subtree(&mut self) {
         self.invalidate(Invalidation::DrawForSubtree);
     }
+
+    /// Measures the layout node now, with its last constraints, even if nothing asked, as
+    /// `LayoutModifierNode.remeasureSync` (Compose's `forceRemeasure`): from a callback where the
+    /// tree is free (a task's `NodeHandle::with_node`, a lifecycle callback at a frame's start),
+    /// once the callback returns, the node back in its chain (the measurement may run it). Where
+    /// the tree is in a pass (a composition's end, a measurement), it's measured in the layout
+    /// that follows instead (`invalidate_measurement`). Nothing for a detached node.
+    pub fn remeasure_sync(&mut self) {
+        if !self.is_attached() {
+            return;
+        }
+        if !self.tree.remeasure_allowed {
+            self.invalidate(Invalidation::Measurement);
+        } else if self.index.is_none() {
+            // Out of its chain: nothing of the measurement is it.
+            self.tree.remeasure_now(self.node);
+        } else if !self.tree.remeasure_after.contains(&self.node) {
+            self.tree.remeasure_after.push(self.node);
+        }
+    }
+
+    /// The layout node's `Remeasurement`, as `RemeasurementModifier.onRemeasurementAvailable`
+    /// gives it: what measures it on demand.
+    pub fn remeasurement(&self) -> crate::remeasurement::Remeasurement {
+        crate::remeasurement::Remeasurement::new(self.tree.key, self.node)
+    }
 }
 
 /// A modifier node, named from outside its callbacks (a task, a callback, a stored closure):
@@ -260,8 +286,22 @@ pub(crate) fn set_tree_borrow(key: u32, borrow: Rc<TreeBorrow>) {
     });
 }
 
-fn requests_of(key: u32) -> Option<Rc<FocusRequests>> {
+pub(crate) fn requests_of(key: u32) -> Option<Rc<FocusRequests>> {
     TREES.with(|trees| trees.borrow().get(&key)?.requests.upgrade())
+}
+
+/// Runs `f` with the tree of `key` if it's free (its host's composition holds it and nothing
+/// borrows it), the tree allowing measurements meanwhile. Returns whether `f` ran.
+pub(crate) fn with_free_tree(key: u32, f: &mut dyn FnMut(&mut UiTree)) -> bool {
+    let Some(borrow) = TREES.with(|trees| trees.borrow().get(&key)?.borrow.clone()) else {
+        return false;
+    };
+    borrow(&mut |tree: &mut UiTree| {
+        let allowed = std::mem::replace(&mut tree.remeasure_allowed, true);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(tree)));
+        tree.remeasure_allowed = allowed;
+        result.unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+    })
 }
 
 impl NodeHandle {
@@ -348,11 +388,10 @@ impl NodeHandle {
         &self,
         f: impl FnOnce(&mut N, &mut NodeContext<'_>) -> R,
     ) -> Option<R> {
-        let borrow = TREES.with(|trees| trees.borrow().get(&self.tree)?.borrow.clone())?;
         let mut f = Some(f);
         let mut result = None;
         let (node, entry) = (self.node, self.entry);
-        borrow(&mut |tree: &mut UiTree| {
+        with_free_tree(self.tree, &mut |tree: &mut UiTree| {
             let Some(index) = tree.entry_index(node, entry) else { return };
             let Some(f) = f.take() else { return };
             result = tree.with_entry(node, index, |modifier_node, context| {

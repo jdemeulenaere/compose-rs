@@ -79,7 +79,14 @@ impl UiTree {
         {
             entry.node = taken;
         }
-        result.unwrap_or_else(|panic| panic::resume_unwind(panic))
+        let result = result.unwrap_or_else(|panic| panic::resume_unwind(panic));
+        // What its `remeasure_sync` asked, now that it's back in its chain.
+        if !self.remeasure_after.is_empty() {
+            for node in mem::take(&mut self.remeasure_after) {
+                self.remeasure_now(node);
+            }
+        }
+        result
     }
 
     /// The index of entry `entry` in `node`'s chain, if it's there.
@@ -413,8 +420,15 @@ impl UiTree {
     /// Applies what modifier nodes asked through their handles, and runs the lifecycle steps
     /// queued outside a pass: at a frame's start, and before each layout.
     pub fn apply_node_requests(&mut self) {
-        self.run_lifecycle();
+        // Outside passes: a callback may measure its node (`remeasure_sync`).
+        let allowed = mem::replace(&mut self.remeasure_allowed, true);
+        let result = panic::catch_unwind(AssertUnwindSafe(|| self.run_lifecycle()));
+        self.remeasure_allowed = allowed;
+        result.unwrap_or_else(|panic| panic::resume_unwind(panic));
         let requests = self.focus_requests.clone();
+        for node in mem::take(&mut *requests.measure_requests.borrow_mut()) {
+            self.invalidate_layout_of(node);
+        }
         // Nothing taken when nothing's asked: what's taken with no request would lose its capacity.
         while !requests.node_invalidations.borrow().is_empty() {
             let mut pending = mem::take(&mut *requests.node_invalidations.borrow_mut());
@@ -440,6 +454,7 @@ impl UiTree {
     /// work by itself (they had kept `prefetch` from running).
     pub(crate) fn has_node_requests(&self) -> bool {
         !self.focus_requests.node_invalidations.borrow().is_empty()
+            || !self.focus_requests.measure_requests.borrow().is_empty()
     }
 
     /// Applies `what` for entry `index` of `node`'s chain (`None`: an entry out of it).

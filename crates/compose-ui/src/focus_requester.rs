@@ -27,6 +27,9 @@ pub(crate) struct FocusRequests {
     /// applies observed writes (`UiTree::apply_node_requests`).
     pub(crate) node_invalidations:
         RefCell<Vec<(NodeId, crate::node_chain::EntryId, crate::node_context::Invalidation)>>,
+    /// Layout nodes a `Remeasurement` asked to measure while their tree was busy: measured in
+    /// the next layout.
+    pub(crate) measure_requests: RefCell<Vec<NodeId>>,
     /// The entries handles were made for that are attached, by `EntryId`: what
     /// `NodeHandle::is_attached` answers without the tree.
     /// FNV-hashed: asked for each request a handle makes.

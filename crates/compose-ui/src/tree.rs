@@ -334,6 +334,12 @@ pub struct UiTree {
     /// (`NodeContext::side_effect`): the host runs them as soon as it has released the tree
     /// after a composition pass, before the layout (D1161).
     pub(crate) side_effects: Vec<Box<dyn FnOnce()>>,
+    /// Nodes may be measured from their callbacks now (`NodeContext::remeasure_sync`): the tree
+    /// is free of passes (a frame's start, a handle's `with_node`).
+    pub(crate) remeasure_allowed: bool,
+    /// Layout nodes whose modifier nodes asked `remeasure_sync` in a callback: measured once it
+    /// returns, the entry back in its chain.
+    pub(crate) remeasure_after: Vec<NodeId>,
 }
 
 impl Drop for UiTree {
@@ -398,6 +404,8 @@ impl UiTree {
             hover_stale: false,
             paused_lifecycle: Vec::new(),
             side_effects: Vec::new(),
+            remeasure_allowed: false,
+            remeasure_after: Vec::new(),
         }
     }
 

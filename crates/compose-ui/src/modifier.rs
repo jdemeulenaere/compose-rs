@@ -1239,6 +1239,11 @@ pub trait DrawModifierNode {
     }
     /// Draws, the content where it calls `scope.draw_content()`, as `ContentDrawScope`.
     fn draw_with_content(&mut self, _scope: &mut crate::draw_modifiers::ContentDrawScope<'_, '_>) {}
+    /// The layer it draws in was measured at a new size (its first measurement included), as
+    /// `DrawModifierNode.onMeasureResultChanged`: a node keeping something sized by it (a
+    /// cache) may drop it or `invalidate_draw`. Nothing by default: a node measured again draws
+    /// again anyway (D1164). Runs inside the measurement: it may invalidate, not measure.
+    fn on_measure_result_changed(&mut self, _context: &mut crate::node_context::NodeContext<'_>) {}
 }
 
 /// A node that receives pointer events hitting its bounds, as `PointerInputModifierNode`.

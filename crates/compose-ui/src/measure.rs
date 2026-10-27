@@ -196,6 +196,36 @@ impl UiTree {
         size
     }
 
+    /// Measures `node` now with its last constraints, whether or not it asked, and so places
+    /// its content, as Compose's `forceRemeasure` (`Remeasurement`, `remeasureSync`): its
+    /// position in its parent stays; a new size measures its parent in the next layout, as
+    /// Compose's `doRemeasure` asks it. Nothing for a deactivated node (the layout skips it);
+    /// the root, or a node never measured, is measured in the next layout.
+    pub(crate) fn remeasure_now(&mut self, node: NodeId) {
+        let root = self.root_id();
+        let Some(value) = self.get(node) else { return };
+        if value.deactivated {
+            return;
+        }
+        let Some(constraints) = value.constraints.filter(|_| node != root) else {
+            self.invalidate_layout_of(node);
+            return;
+        };
+        let before = value.layers[0].size;
+        self.node_mut(node).needs_measure = true;
+        // A measurement isn't a place to measure from (its callbacks invalidate instead).
+        let allowed = mem::replace(&mut self.remeasure_allowed, false);
+        let result = panic::catch_unwind(AssertUnwindSafe(|| self.measure_node(node, constraints)));
+        self.remeasure_allowed = allowed;
+        let size = result.unwrap_or_else(|panic| panic::resume_unwind(panic));
+        self.laid_out_since_callbacks = true;
+        if size != before
+            && let Some(parent) = self.parent_of(node)
+        {
+            self.invalidate_measure(parent);
+        }
+    }
+
     /// Measures `parent`'s child at `index` with `constraints` before the layout that places it
     /// (a lazy list's next item, between frames), as Compose's `premeasure`: that layout, measuring
     /// it with the same constraints, finds it measured. Returns its size, or `None` without such
@@ -424,6 +454,7 @@ impl UiTree {
         let measured = IntSize::new(result.width.max(0), result.height.max(0));
         let size = constraints.constrain(measured);
         let value = &mut self.node_mut(node).layers[layer];
+        let resized = value.measured != measured;
         value.measured = measured;
         value.size = size;
         // A new measured size within the same coerced one moves the centering.
@@ -432,7 +463,41 @@ impl UiTree {
             value.offset = offset;
             self.invalidate_position(node, layer);
         }
+        if resized {
+            self.measure_result_changed(node, layer);
+        }
         size
+    }
+
+    /// Layer `layer` of `node` was measured at a new size: its draw nodes are told
+    /// (`DrawModifierNode::on_measure_result_changed`), as Compose's coordinator tells those it
+    /// draws (`onMeasureResultChanged`). The built-in elements' nodes have nothing to hear.
+    fn measure_result_changed(&mut self, node: NodeId, layer: usize) {
+        let value = self.node(node);
+        if !value.kinds.any(NodeKinds::DRAW) || !value.kinds.any(NodeKinds::OBSERVED) {
+            return;
+        }
+        // The entries drawing in the layer: those after the layout node measuring the layer
+        // outside it, up to its own (compose-rs draws a node in the layer its own layout node
+        // measures, `LayoutNode::layer_of`).
+        let start = match layer {
+            0 => 0,
+            _ => value.layout_indices[layer - 1] as usize + 1,
+        };
+        let end =
+            value.layout_indices.get(layer).map_or(value.chain.len(), |&index| index as usize + 1);
+        for index in start..end {
+            let Some(entry) = self.node(node).chain.get(index) else { return };
+            let hears = NodeKinds::DRAW | NodeKinds::OBSERVED;
+            if entry.kinds.all(hears) && entry.state & crate::node_chain::entry_state::ATTACHED != 0
+            {
+                self.with_entry(node, index, |modifier_node, context| {
+                    if let Some(draw) = modifier_node.as_draw() {
+                        draw.on_measure_result_changed(context);
+                    }
+                });
+            }
+        }
     }
 
     /// The result of application measuring code, or, if it panicked, the node marked for
