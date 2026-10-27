@@ -919,6 +919,45 @@ impl MeasurePolicy for TopAppBarLayout {
         scope.layout(width, height)
     }
 
+    // As Compose's `TopAppBarLayout`: its slots side by side, and at least its height.
+    fn min_intrinsic_width(
+        &self,
+        scope: &mut compose_ui::IntrinsicMeasureScope<'_>,
+        measurables: &[compose_ui::IntrinsicMeasurable],
+        height: i32,
+    ) -> i32 {
+        measurables.iter().map(|&slot| scope.min_intrinsic_width(slot, height)).sum()
+    }
+
+    fn min_intrinsic_height(
+        &self,
+        scope: &mut compose_ui::IntrinsicMeasureScope<'_>,
+        measurables: &[compose_ui::IntrinsicMeasurable],
+        width: i32,
+    ) -> i32 {
+        let own = scope.density().round_to_px(self.height);
+        measurables.iter().map(|&slot| scope.min_intrinsic_height(slot, width)).fold(own, i32::max)
+    }
+
+    fn max_intrinsic_width(
+        &self,
+        scope: &mut compose_ui::IntrinsicMeasureScope<'_>,
+        measurables: &[compose_ui::IntrinsicMeasurable],
+        height: i32,
+    ) -> i32 {
+        measurables.iter().map(|&slot| scope.max_intrinsic_width(slot, height)).sum()
+    }
+
+    fn max_intrinsic_height(
+        &self,
+        scope: &mut compose_ui::IntrinsicMeasureScope<'_>,
+        measurables: &[compose_ui::IntrinsicMeasurable],
+        width: i32,
+    ) -> i32 {
+        let own = scope.density().round_to_px(self.height);
+        measurables.iter().map(|&slot| scope.max_intrinsic_height(slot, width)).fold(own, i32::max)
+    }
+
     fn debug_name(&self) -> &'static str {
         "TopAppBarLayout"
     }

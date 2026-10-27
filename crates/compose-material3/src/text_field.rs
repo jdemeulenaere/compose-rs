@@ -559,7 +559,128 @@ struct DecorationLayout {
     label_start: Rc<std::cell::Cell<f32>>,
 }
 
+/// A decoration's slots, as its children come.
+struct DecorationSlots {
+    leading: Option<Measurable>,
+    trailing: Option<Measurable>,
+    label: Option<Measurable>,
+    placeholder: Option<Measurable>,
+    prefix: Option<Measurable>,
+    suffix: Option<Measurable>,
+    text: Option<Measurable>,
+}
+
 impl DecorationLayout {
+    fn slots(&self, measurables: &[Measurable]) -> DecorationSlots {
+        let mut children = measurables.iter().copied();
+        let mut next = |present: bool| if present { children.next() } else { None };
+        DecorationSlots {
+            leading: next(self.has_leading),
+            trailing: next(self.has_trailing),
+            label: next(self.has_label),
+            placeholder: next(self.has_placeholder),
+            prefix: next(self.has_prefix),
+            suffix: next(self.has_suffix),
+            text: next(true),
+        }
+    }
+
+    /// The paddings `measure` puts around the content: (start, end, above and below, the
+    /// filled field's floated label's room), given which icons there are.
+    fn paddings(
+        &self,
+        density: compose_ui::Density,
+        slots: &DecorationSlots,
+    ) -> (i32, i32, i32, i32) {
+        let padding = density.round_to_px(16.dp());
+        let beside_icon = density.round_to_px(4.dp());
+        let outlined = self.variant == Variant::Outlined;
+        let vertical =
+            density.round_to_px(if self.has_label && !outlined { 8.dp() } else { 16.dp() });
+        let start = if slots.leading.is_some() { beside_icon } else { padding };
+        let end = if slots.trailing.is_some() { beside_icon } else { padding };
+        let label_room = if self.has_label && !outlined {
+            density.sp_to_px(self.floated_label_height).round() as i32
+        } else {
+            0
+        };
+        (start, end, vertical, label_room)
+    }
+
+    /// As Compose's `intrinsicWidth`: the icons beside the widest of the text and the
+    /// placeholder with the affixes, and the label.
+    fn intrinsic_width(
+        &self,
+        scope: &mut compose_ui::IntrinsicMeasureScope<'_>,
+        measurables: &[Measurable],
+        height: i32,
+        max: bool,
+    ) -> i32 {
+        let slots = self.slots(measurables);
+        let Some(text) = slots.text else { return 0 };
+        let (start, end, _, _) = self.paddings(scope.density(), &slots);
+        let mut ask = |slot: Option<Measurable>| {
+            slot.map_or(0, |slot| {
+                if max {
+                    scope.max_intrinsic_width(slot, height)
+                } else {
+                    scope.min_intrinsic_width(slot, height)
+                }
+            })
+        };
+        let (leading, trailing) = (ask(slots.leading), ask(slots.trailing));
+        let affixes = ask(slots.prefix) + ask(slots.suffix);
+        let middle =
+            (ask(Some(text)) + affixes).max(ask(slots.placeholder) + affixes).max(ask(slots.label));
+        leading + start + middle + end + trailing
+    }
+
+    /// As Compose's `intrinsicHeight`: the content at the width left by the icons and the
+    /// affixes, between the paddings and the floated label's room, and the icons.
+    fn intrinsic_height(
+        &self,
+        scope: &mut compose_ui::IntrinsicMeasureScope<'_>,
+        measurables: &[Measurable],
+        width: i32,
+        max: bool,
+    ) -> i32 {
+        let slots = self.slots(measurables);
+        let Some(text) = slots.text else { return 0 };
+        let (start, end, vertical, label_room) = self.paddings(scope.density(), &slots);
+        let less = |width: i32, by: i32| {
+            if width == Constraints::INFINITY { width } else { (width - by).max(0) }
+        };
+        let ask = |scope: &mut compose_ui::IntrinsicMeasureScope<'_>, slot, width| {
+            if max {
+                scope.max_intrinsic_height(slot, width)
+            } else {
+                scope.min_intrinsic_height(slot, width)
+            }
+        };
+        let mut remaining = less(width, start + end);
+        let mut icons = 0;
+        for icon in [slots.leading, slots.trailing].into_iter().flatten() {
+            icons = icons.max(ask(scope, icon, width));
+            let icon_width = scope.max_intrinsic_width(icon, Constraints::INFINITY);
+            remaining = less(remaining, icon_width);
+        }
+        let label = slots.label.map_or(0, |label| ask(scope, label, remaining));
+        let mut content = 0;
+        for affix in [slots.prefix, slots.suffix].into_iter().flatten() {
+            content = content.max(ask(scope, affix, remaining));
+            let affix_width = scope.max_intrinsic_width(affix, Constraints::INFINITY);
+            remaining = less(remaining, affix_width);
+        }
+        content = content.max(ask(scope, text, remaining));
+        if let Some(placeholder) = slots.placeholder {
+            content = content.max(ask(scope, placeholder, remaining));
+        }
+        // The label floats in its room (filled) or on the edge (outlined), as `measure` has
+        // it; resting, it's no higher than the text.
+        let _ = label;
+        (vertical + label_room + content + vertical).max(icons)
+    }
+
     fn key(&self) -> (Variant, [bool; 7], u32) {
         (
             self.variant,
@@ -693,6 +814,45 @@ impl MeasurePolicy for DecorationLayout {
             scope.place_relative(&indicator, 0, height - indicator.height);
         }
         scope.layout(width, height)
+    }
+
+    // As Compose's `TextFieldMeasurePolicy` and `OutlinedTextFieldMeasurePolicy`: the slots'
+    // intrinsics in the layout's arrangement, without measuring (its measurement keeps the
+    // label's place for the outline) (D1207).
+    fn min_intrinsic_width(
+        &self,
+        scope: &mut compose_ui::IntrinsicMeasureScope<'_>,
+        measurables: &[compose_ui::IntrinsicMeasurable],
+        height: i32,
+    ) -> i32 {
+        self.intrinsic_width(scope, measurables, height, false)
+    }
+
+    fn max_intrinsic_width(
+        &self,
+        scope: &mut compose_ui::IntrinsicMeasureScope<'_>,
+        measurables: &[compose_ui::IntrinsicMeasurable],
+        height: i32,
+    ) -> i32 {
+        self.intrinsic_width(scope, measurables, height, true)
+    }
+
+    fn min_intrinsic_height(
+        &self,
+        scope: &mut compose_ui::IntrinsicMeasureScope<'_>,
+        measurables: &[compose_ui::IntrinsicMeasurable],
+        width: i32,
+    ) -> i32 {
+        self.intrinsic_height(scope, measurables, width, false)
+    }
+
+    fn max_intrinsic_height(
+        &self,
+        scope: &mut compose_ui::IntrinsicMeasureScope<'_>,
+        measurables: &[compose_ui::IntrinsicMeasurable],
+        width: i32,
+    ) -> i32 {
+        self.intrinsic_height(scope, measurables, width, true)
     }
 
     fn debug_name(&self) -> &'static str {

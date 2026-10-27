@@ -256,8 +256,6 @@ impl MeasurePolicy for NavigationBarItemLayout {
     ) -> MeasureResult {
         let density = scope.density();
         let loose = constraints.loosen();
-        let width = constraints.max_width;
-        let height = constraints.max_height;
         let pill = scope.measure(measurables[0], loose);
         let icon = scope.measure(measurables[1], loose);
         let label = measurables.get(2).map(|&label| scope.measure(label, loose));
@@ -265,6 +263,21 @@ impl MeasurePolicy for NavigationBarItemLayout {
         // A hidden label takes no room: the icon centered alone, the label (transparent) under.
         let shown = label.as_ref().filter(|_| self.label);
         let content = pill.height + shown.map_or(0, |label| gap + label.height);
+        // Unbounded (asked its intrinsics), as Compose's: the icon and 44 dp each side
+        // (`NavigationBarItemToIconMinimumPadding`); the bar's 80 dp high, or with a label its
+        // content and the indicator's 4 dp above and below (D1207).
+        let width = if constraints.has_bounded_width() {
+            constraints.max_width
+        } else {
+            icon.width + 2 * density.round_to_px(44.dp())
+        };
+        let height = if constraints.has_bounded_height() {
+            constraints.max_height
+        } else if shown.is_some() {
+            content + 2 * gap
+        } else {
+            constraints.constrain_height(density.round_to_px(80.dp()))
+        };
         let top = (height - content).max(0) / 2;
         let center = |child_width: i32| (width - child_width) / 2;
         scope.place_relative(&pill, center(pill.width), top);

@@ -497,7 +497,8 @@ impl compose_ui::MeasurePolicy for SnackbarLayout {
         let buttons: Vec<_> =
             measurables[1..].iter().map(|&button| scope.measure(button, loose)).collect();
         let buttons_width: i32 = buttons.iter().map(|button| button.width).sum();
-        let width = constraints.max_width;
+        // At most 600 dp, as Compose's `OneRowSnackbar` (`ContainerMaxWidth`, D1207).
+        let width = constraints.max_width.min(px(600.0));
         let text_width = (width - start - end - buttons_width).max(0);
         let text = scope.measure(
             measurables[0],

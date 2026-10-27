@@ -475,4 +475,41 @@ impl MeasurePolicy for ScaffoldLayout {
     fn debug_name(&self) -> &'static str {
         "Scaffold"
     }
+
+    // As Compose's, built on `SubcomposeLayout`: no intrinsics (D1207).
+    fn min_intrinsic_width(
+        &self,
+        _: &mut compose_ui::IntrinsicMeasureScope<'_>,
+        _: &[compose_ui::IntrinsicMeasurable],
+        _: i32,
+    ) -> i32 {
+        panic!("{}", compose_ui::platform::NO_INTRINSICS_MESSAGE)
+    }
+
+    fn min_intrinsic_height(
+        &self,
+        _: &mut compose_ui::IntrinsicMeasureScope<'_>,
+        _: &[compose_ui::IntrinsicMeasurable],
+        _: i32,
+    ) -> i32 {
+        panic!("{}", compose_ui::platform::NO_INTRINSICS_MESSAGE)
+    }
+
+    fn max_intrinsic_width(
+        &self,
+        _: &mut compose_ui::IntrinsicMeasureScope<'_>,
+        _: &[compose_ui::IntrinsicMeasurable],
+        _: i32,
+    ) -> i32 {
+        panic!("{}", compose_ui::platform::NO_INTRINSICS_MESSAGE)
+    }
+
+    fn max_intrinsic_height(
+        &self,
+        _: &mut compose_ui::IntrinsicMeasureScope<'_>,
+        _: &[compose_ui::IntrinsicMeasurable],
+        _: i32,
+    ) -> i32 {
+        panic!("{}", compose_ui::platform::NO_INTRINSICS_MESSAGE)
+    }
 }
