@@ -19,7 +19,8 @@ fn an_animated_content_switches_to_and_from_a_scaffold_with_tabs() {
             AnimatedContent!(handle.get(), |_, scaffold: bool| {
                 if scaffold {
                     Scaffold!(modifier = Modifier.fill_max_size(), |_| {
-                        TabRow!(0, {
+                        // Compose's deprecated `TabRow` is `PrimaryTabRow` here (D1005).
+                        PrimaryTabRow!(0, {
                             for index in 0..15 {
                                 Text!("{}", index, modifier = Modifier.width(100.dp()));
                             }

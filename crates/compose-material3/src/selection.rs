@@ -290,7 +290,7 @@ impl ThumbNode {
         if animatable.target_value() != target {
             let animatable = animatable.clone();
             let spec = if pressed {
-                compose_animation::snap(0)
+                compose_animation::snap(0).into()
             } else {
                 compose_animation::AnimationSpec::Spring(crate::motion::FAST_SPATIAL)
             };

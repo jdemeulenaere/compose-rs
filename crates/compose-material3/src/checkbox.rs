@@ -253,17 +253,17 @@ fn checkbox(
     let transition = compose_animation::update_transition(state, "Checkbox");
     let spatial = AnimationSpec::Spring(crate::motion::DEFAULT_SPATIAL);
     let check_fraction = transition.animate_float(
-        move |initial, target| match (initial, target) {
+        move |segment| match (&segment.initial_state, &segment.target_state) {
             (ToggleableState::Off, _) => spatial,
-            (_, ToggleableState::Off) => compose_animation::snap(SNAP_ANIMATION_DELAY),
+            (_, ToggleableState::Off) => compose_animation::snap(SNAP_ANIMATION_DELAY).into(),
             _ => spatial,
         },
         |state| if *state == ToggleableState::Off { 0.0 } else { 1.0 },
     );
     let gravitation = transition.animate_float(
-        move |initial, target| match (initial, target) {
-            (ToggleableState::Off, _) => compose_animation::snap(0),
-            (_, ToggleableState::Off) => compose_animation::snap(SNAP_ANIMATION_DELAY),
+        move |segment| match (&segment.initial_state, &segment.target_state) {
+            (ToggleableState::Off, _) => compose_animation::snap(0).into(),
+            (_, ToggleableState::Off) => compose_animation::snap(SNAP_ANIMATION_DELAY).into(),
             _ => spatial,
         },
         |state| if *state == ToggleableState::Indeterminate { 1.0 } else { 0.0 },

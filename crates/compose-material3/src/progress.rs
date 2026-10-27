@@ -54,7 +54,7 @@ impl ProgressIndicatorDefaults {
     pub const PROGRESS_ANIMATION_SPEC: SpringSpec = SpringSpec {
         damping_ratio: compose_animation::Spring::DAMPING_RATIO_NO_BOUNCY,
         stiffness: compose_animation::Spring::STIFFNESS_VERY_LOW,
-        visibility_threshold: Some(1.0 / 1000.0),
+        visibility_threshold: Some(compose_animation::AnimationVector::filled(1, 1.0 / 1000.0)),
     };
 
     /// A linear indicator's color, as `linearColor`.
