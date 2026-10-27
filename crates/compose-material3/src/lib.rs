@@ -85,8 +85,8 @@ pub use progress::{
     IndeterminateLinearProgressIndicator, LinearProgressIndicator, ProgressIndicatorDefaults,
 };
 pub use scaffold::{
-    Card, CardColors, CardDefaults, CardElevation, ElevatedCard, FabPosition, HorizontalDivider,
-    OutlinedCard, Scaffold, ScaffoldDefaults, VerticalDivider,
+    Card, CardColors, CardDefaults, CardElevation, DividerDefaults, ElevatedCard, FabPosition,
+    HorizontalDivider, OutlinedCard, Scaffold, ScaffoldDefaults, VerticalDivider,
 };
 pub use segmented_button::{
     CheckableSegmentedButton, MultiChoiceSegmentedButtonRow, MultiChoiceSegmentedButtonRowScope,

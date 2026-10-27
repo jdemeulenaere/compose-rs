@@ -16,28 +16,54 @@ use crate::theme::{LOCAL_CONTENT_COLOR, MaterialTheme};
 
 // ---- Dividers --------------------------------------------------------------------------------
 
-/// A horizontal line, as Compose's `HorizontalDivider`: as wide as allowed.
+/// As Compose's `DividerDefaults` (`DividerTokens`).
+pub struct DividerDefaults;
+
+impl DividerDefaults {
+    /// 1 dp, as `Thickness`.
+    pub const THICKNESS: Dp = Dp(1.0);
+
+    /// The outline variant, as `color`.
+    pub fn color() -> Color {
+        crate::MaterialTheme::color_scheme().outline_variant
+    }
+}
+
+/// A horizontal line, as Compose's `HorizontalDivider`: as wide as allowed, `thickness` high, a
+/// line of that width drawn through its middle (`Dp::HAIRLINE`: no height, a one-pixel line).
 #[composable]
 pub fn HorizontalDivider(
     #[default(crate::Modifier)] modifier: Modifier,
-    #[default(crate::Dp(1.0))] thickness: Dp,
-    #[default(crate::MaterialTheme::color_scheme().outline_variant)] color: Color,
+    #[default(crate::DividerDefaults::THICKNESS)] thickness: Dp,
+    #[default(crate::DividerDefaults::color())] color: Color,
 ) {
-    compose_foundation::layout::Spacer(
-        modifier.fill_max_width().height(thickness).background(color),
-    );
+    compose_foundation::layout::Canvas(modifier.fill_max_width().height(thickness), move |scope| {
+        let width = scope.density().to_px(thickness);
+        let size = scope.size();
+        scope.draw_line(
+            compose_ui::Offset::new(0.0, width / 2.0),
+            compose_ui::Offset::new(size.width, width / 2.0),
+            compose_ui::Paint::stroke(color, width),
+        );
+    });
 }
 
-/// A vertical line, as Compose's `VerticalDivider`: as tall as allowed.
+/// A vertical line, as Compose's `VerticalDivider`: as tall as allowed, `thickness` wide.
 #[composable]
 pub fn VerticalDivider(
     #[default(crate::Modifier)] modifier: Modifier,
-    #[default(crate::Dp(1.0))] thickness: Dp,
-    #[default(crate::MaterialTheme::color_scheme().outline_variant)] color: Color,
+    #[default(crate::DividerDefaults::THICKNESS)] thickness: Dp,
+    #[default(crate::DividerDefaults::color())] color: Color,
 ) {
-    compose_foundation::layout::Spacer(
-        modifier.fill_max_height().width(thickness).background(color),
-    );
+    compose_foundation::layout::Canvas(modifier.fill_max_height().width(thickness), move |scope| {
+        let width = scope.density().to_px(thickness);
+        let size = scope.size();
+        scope.draw_line(
+            compose_ui::Offset::new(width / 2.0, 0.0),
+            compose_ui::Offset::new(width / 2.0, size.height),
+            compose_ui::Paint::stroke(color, width),
+        );
+    });
 }
 
 // ---- Card ------------------------------------------------------------------------------------

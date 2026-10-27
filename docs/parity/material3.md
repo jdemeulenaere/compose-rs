@@ -87,8 +87,8 @@ Screenshot tests (`*ScreenshotTest.kt`) compare against Android goldens, which c
 | `compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/DateRangePickerScreenshotTest.kt` | 7 | DateRangePicker month, selections spanning months, RTL, invalid selection, mode toggle, locale | `feature:date-picker` |  |
 | `compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/DateRangePickerTest.kt` | 26 | DateRangePickerState construction, selection rules, restoration, displayed month, selectable dates, keyboard, colors | `feature:date-picker` |  |
 | `compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/DismissibleNavigationDrawerTest.kt` | 19 | DismissibleNavigationDrawer offsets and widths, pane title, open/close/animateTo/snapTo, clicks, swipes (LTR/RTL), confirmStateChange, dismiss action, focus on open | `feature:dismissible-permanent-drawers` | Pane title and dismiss action need feature:semantics-gaps. |
-| `compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/DividerScreenshotTest.kt` | 4 | horizontal and vertical dividers, hairline thickness | `port` | Display-list tests (a 1 dp `outline_variant` rect). Hairline needs a `Dp::HAIRLINE` (one pixel) in compose-ui, missing. |
-| `compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/DividerTest.kt` | 6 | divider default and custom sizes, indents keep the size, hairline thickness | `port` | `divider_hairlineThickness` needs `Dp::HAIRLINE` (compose-ui). |
+| `compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/DividerScreenshotTest.kt` | 4 | horizontal and vertical dividers, hairline thickness | `ported` | `suite/divider.rs` (all 4: the line, its color, its place, the hairline's no-width stroke; D1015). |
+| `compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/DividerTest.kt` | 6 | divider default and custom sizes, indents keep the size, hairline thickness | `ported` | `suite/divider.rs` (all 6; D1015). |
 | `compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/DragHandleTest.kt` | 11 | VerticalDragHandle accessibility size, visuals when pressed, custom sizes/shapes/colors | `feature:vertical-drag-handle` |  |
 | `compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/ExposedDropdownMenuTest.kt` | 31 | ExposedDropdownMenuBox expanding and collapsing (click, back, Escape, Enter, Space), editable and read-only anchors, focus, IME, scroll, width matching the field, positioning, semantics | `feature:exposed-dropdown-menu` |  |
 | `compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/FloatingActionButtonMenuScreenshotTest.kt` | 12 | FAB menu collapsed/expanded, colors, item variants | `feature:fab-menu` |  |
@@ -254,7 +254,7 @@ From `compose/material3/material3/api/current.txt` (`restricted_current.txt` is 
 ### Cards, surfaces, dividers, icons
 
 - **`Surface`**: complete (the toggleable overload is `ToggleableSurface`, D1010).
-- **Dividers**: `DividerDefaults::THICKNESS`; `Dp.Hairline` thickness (compose-ui has no hairline `Dp`).
+- **Dividers**: complete (D1015).
 - **`Icon`**: the `ImageBitmap` and `Painter` overloads (and the `ColorProducer` tint one). `content_description` is `Option<&'static str>` here, so a description built at run time can't be given.
 
 ### Lists
@@ -416,7 +416,7 @@ One entry per missing component or feature, named as the table names them. Sizes
 | `text-autosize` (foundation) | `TextAutoSize` | `Text(auto_size)` (TextTest) | M |
 | `link-annotations` (ui-text) | `LinkAnnotation.Url`/`Clickable`, `TextLinkStyles` | text-links | M |
 | `painter` (ui) | a `Painter` abstraction (`VectorPainter`, `BitmapPainter`) | icon-overloads | M |
-| `dp-hairline` (ui) | `Dp::HAIRLINE` (one pixel whatever the density) | DividerTest, DividerScreenshotTest | S |
+| `dp-hairline` (ui, done) | `Dp::HAIRLINE` (one pixel whatever the density) | DividerTest, DividerScreenshotTest | S |
 | `path-measure` (ui) | `PathMeasure` (length, segments of a path) | wavy-progress; Compose's checkbox draws its checkmark with it too | S-M |
 | `predictive-back` (ui/platforms) | `PredictiveBackHandler` with progress events (Android 14's `OnBackAnimationCallback`), `NavigationEvent`; docs/11 notes it's missing | predictive-back, material-transitions | M |
 | `lookahead` (ui) | `LookaheadScope`, approach layouts | ~6 tests (Scaffold, ModalBottomSheet, SwipeToDismiss, DraggableAnchors, two Slider scenarios) | XL |
