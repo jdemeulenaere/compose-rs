@@ -748,3 +748,62 @@ fn a_small_custom_thumb_is_measured_with_the_sliders_constraints() {
     // Centred in the 4 dp wrapper at the start.
     assert_eq!(thumb.left - slider.left, 1.0, "{slider:?} {thumb:?}");
 }
+
+/// `SetProgress` looks for the nearest stop from a distance of the target itself, as Compose's
+/// `sliderSemantics` (`var distance: Float = newValue`): below zero no stop is that near, so the
+/// value asked is the target as is (the state's setter snaps it then), not its nearest stop.
+#[test]
+fn set_progress_below_zero_asks_for_the_target_as_composes() {
+    let asked = Rc::new(std::cell::RefCell::new(Vec::new()));
+    let seen = asked.clone();
+    let state = SliderState::new(0.0, 3, (-50.0, 50.0));
+    let handle = *state;
+    let mut ui = compose_test(material(move || {
+        let seen = seen.clone();
+        Slider!(
+            handle,
+            move |new| {
+                seen.borrow_mut().push(new);
+                handle.set_value(new);
+            },
+            modifier = Modifier.test_tag(TAG),
+        );
+    }));
+    for target in [-20.0, 20.0] {
+        ui.on_node_with_tag(TAG).perform_semantics_action_with(
+            &SemanticsActions::SET_PROGRESS,
+            |set| {
+                set(target);
+            },
+        );
+    }
+    // Above zero, the nearest stop.
+    assert_eq!(*asked.borrow(), [-20.0, 25.0]);
+}
+
+/// Every key down asks for a value, as Compose's `slideOnKeyEvents` calls `onValueChange` on
+/// each, the same value at an end too.
+#[test]
+fn every_key_down_asks_for_a_value_even_at_the_ends() {
+    let asked = Rc::new(std::cell::RefCell::new(Vec::new()));
+    let seen = asked.clone();
+    let state = SliderState::new(1.0, 0, (0.0, 1.0));
+    let handle = *state;
+    let mut ui = compose_test(material(move || {
+        let seen = seen.clone();
+        Slider!(
+            handle,
+            move |new| {
+                seen.borrow_mut().push(new);
+                handle.set_value(new);
+            },
+            modifier = Modifier.test_tag(TAG),
+        );
+    }));
+    ui.press_key(compose_ui::Key::Tab);
+    ui.press_key(compose_ui::Key::MoveEnd);
+    ui.press_key(compose_ui::Key::DirectionRight);
+    ui.press_key(compose_ui::Key::MoveHome);
+    ui.press_key(compose_ui::Key::MoveHome);
+    assert_eq!(*asked.borrow(), [1.0, 1.0, 0.0, 0.0]);
+}

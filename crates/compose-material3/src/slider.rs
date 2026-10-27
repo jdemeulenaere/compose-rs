@@ -973,7 +973,7 @@ impl KeyInputModifierNode for SliderInputNode {
             Key::PageDown => value - page * delta,
             _ => return false,
         };
-        self.change_to(target.clamp(start.min(end), start.max(end)), context);
+        self.ask(target.clamp(start.min(end), start.max(end)), context);
         true
     }
 }
@@ -1025,8 +1025,9 @@ impl SemanticsModifierNode for SliderInputNode {
     }
 }
 
-/// `target` in the state's range at its nearest stop, as `sliderSemantics`' search: the last
-/// of two stops as near (`<=`).
+/// `target` in the state's range at its nearest stop, as `sliderSemantics`' search: from a
+/// distance of the target itself (`var distance: Float = newValue`: below zero no stop is that
+/// near, and the target stays as is), the last of two stops as near (`<=`).
 fn nearest_stop(state: SliderState, target: f32) -> f32 {
     let (start, end) = state.track_range();
     let target = target.clamp(start.min(end), start.max(end));
@@ -1035,7 +1036,7 @@ fn nearest_stop(state: SliderState, target: f32) -> f32 {
         return target;
     }
     let mut value = target;
-    let mut distance = f32::INFINITY;
+    let mut distance = target;
     for index in 0..=steps + 1 {
         let stop = start + (end - start) * (index as f32 / (steps + 1) as f32);
         if (stop - target).abs() <= distance {
