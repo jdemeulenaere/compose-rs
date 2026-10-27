@@ -86,7 +86,7 @@ The known differences from Jetpack Compose that an app will run into, distilled 
 - **Material 3 lacks**, among others:
   - dismissible and permanent navigation drawers, `BottomSheetScaffold` and standard bottom sheets;
   - input chips, date and time pickers, search bars, exposed dropdown menus, multi-choice segmented buttons;
-  - the toggleable `Surface` overload, the content overloads of `ExtendedFloatingActionButton` and `BottomAppBar`, and the bottom app bar's scroll behavior.
+  - the content overloads of `ExtendedFloatingActionButton` and `BottomAppBar`, and the bottom app bar's scroll behavior.
 - **The theme** is three composition locals (`LOCAL_COLOR_SCHEME`, `LOCAL_TYPOGRAPHY`, `LOCAL_SHAPES`), not one: `MaterialTheme::values()` stands for `MaterialTheme.LocalMaterialTheme.current`. `Typography(fontFamily, …)` is `Typography::from_font_family(family)` with struct update, then `with_default_font_family(family)` for the styles given without one (D1008).
 - **Progress indicators** take their progress as a lambda, as Compose's non-deprecated overloads (the `Float` ones are gone); `drawStopIndicator` is a `DrawStopIndicator` value, as a composable's callbacks take their arguments by value (D1003).
 - **Checkboxes**' stroke overload is two optional parameters, `checkmark_stroke` and `outline_stroke`; `CheckboxDefaults.colors(checkedColor, …)` is `CheckboxDefaults::colors_with` (D1009).

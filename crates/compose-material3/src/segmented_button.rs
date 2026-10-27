@@ -265,6 +265,7 @@ pub fn SegmentedButton(
         role: None,
         interaction_source,
         selected: Some(selected),
+        checked: None,
         elevations: None,
     });
     let label_style = MaterialTheme::typography().label_large.clone();

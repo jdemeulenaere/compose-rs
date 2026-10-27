@@ -227,6 +227,7 @@ pub fn Card(
         role: None,
         interaction_source,
         selected: None,
+        checked: None,
         elevations: Some(crate::components::Elevations {
             default: elevation.default_elevation,
             pressed: elevation.pressed_elevation,

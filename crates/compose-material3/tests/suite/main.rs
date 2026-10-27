@@ -10,6 +10,8 @@ mod checkbox;
 mod checkbox_screenshots;
 mod components;
 mod drawer;
+mod icon_toggle_button;
+mod icon_toggle_button_screenshots;
 mod interactive_list;
 mod intrinsics;
 mod material;

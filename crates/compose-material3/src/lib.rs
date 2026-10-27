@@ -51,7 +51,8 @@ pub use chips::{AssistChip, Badge, BadgedBox, FilterChip, SuggestionChip};
 pub use components::{
     AnnotatedText, ClickableSurface, LOCAL_ABSOLUTE_TONAL_ELEVATION,
     LOCAL_MINIMUM_INTERACTIVE_COMPONENT_SIZE, MINIMUM_INTERACTIVE_SIZE, SelectableSurface, Surface,
-    Text, TextFieldColors, TextFieldDefaults, minimum_interactive_component_size,
+    Text, TextFieldColors, TextFieldDefaults, ToggleableSurface,
+    minimum_interactive_component_size,
 };
 pub use dialog::{AlertDialog, DropdownMenu, DropdownMenuItem};
 pub use drawer::{
@@ -64,8 +65,9 @@ pub use fab::{
     FloatingActionButtonElevation, LargeFloatingActionButton, SmallFloatingActionButton,
 };
 pub use icon::{
-    FilledIconButton, FilledTonalIconButton, Icon, IconButton, IconButtonColors,
-    IconButtonDefaults, IconToggleButton, IconToggleButtonColors, OutlinedIconButton, icons,
+    FilledIconButton, FilledIconToggleButton, FilledTonalIconButton, FilledTonalIconToggleButton,
+    Icon, IconButton, IconButtonColors, IconButtonDefaults, IconToggleButton,
+    IconToggleButtonColors, OutlinedIconButton, OutlinedIconToggleButton, icons,
 };
 pub use list_item::{
     ClickableListItem, ListItem, ListItemColors, ListItemDefaults, ListItemElevation,

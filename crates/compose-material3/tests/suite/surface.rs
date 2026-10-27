@@ -1,6 +1,10 @@
 //! Compose's `SurfaceTest.kt`, adapted: tonal elevation, absolute elevation, and the clickable,
 //! selectable and toggleable overloads. The screenshot checks of the surface's color read the
 //! display list's fills instead.
+//!
+//! Not ported: the three `*_smallTouchTarget_clickOutsideShapeBounds` tests (a click outside a
+//! 40 dp circle, in its 48 dp touch target: compose-ui hit tests a node's bounds only, ui's
+//! feature:hit-test-extensions) and `clickable_interactionSource` (dep:interaction-stream).
 
 use std::cell::Cell;
 
@@ -139,4 +143,201 @@ fn a_surface_provides_its_content_color() {
         });
     });
     assert_eq!(CONTENT.with(Cell::get), Some(Color::BLUE));
+}
+
+// ---- The clickable, selectable and toggleable overloads -------------------------------------
+
+/// Which overload a test exercises, as the test file's three groups.
+#[derive(Clone, Copy, PartialEq)]
+enum Kind {
+    Clickable,
+    Selectable,
+    Toggleable,
+}
+
+/// A surface of `kind` tagged "surface", in `shape`, `role` given by its modifier if any,
+/// showing its state as text (the clicks for a clickable one, on or off for the others) over a
+/// `size` spacer; each click counts.
+fn overload(
+    kind: Kind,
+    shape: compose_ui::Shape,
+    role: Option<compose_ui::Role>,
+    size: f32,
+) -> (ComposeTestRule, OwnedState<i32>) {
+    let state = mutable_state_of(0);
+    let handle = state.handle();
+    let ui = compose_test(move || {
+        MaterialTheme!({
+            let modifier = match role {
+                Some(role) => Modifier.semantics(move |config| config.role = Some(role)),
+                None => Modifier,
+            }
+            .test_tag("surface");
+            let on = handle.get() % 2 == 1;
+            let content = move || {
+                let label =
+                    if kind == Kind::Clickable { handle.get().to_string() } else { on.to_string() };
+                Text!("{}", label);
+                compose_foundation::layout::Spacer(Modifier.size(size.dp()));
+            };
+            let click = move || handle.set(handle.get() + 1);
+            match kind {
+                Kind::Clickable => {
+                    ClickableSurface!(click, modifier = modifier, shape = shape, { content() });
+                }
+                Kind::Selectable => {
+                    SelectableSurface!(on, click, modifier = modifier, shape = shape, {
+                        content()
+                    });
+                }
+                Kind::Toggleable => {
+                    ToggleableSurface!(on, move |_| click(), modifier = modifier, shape = shape, {
+                        content()
+                    });
+                }
+            }
+        });
+    });
+    (ui, state)
+}
+
+/// The surface clicks, has no role of its own (or the one its modifier gives) and merges its
+/// text, which follows the clicks.
+fn check_semantics(kind: Kind, role: Option<compose_ui::Role>) {
+    let (mut ui, _state) = overload(kind, compose_ui::RECTANGLE_SHAPE, role, 30.0);
+    let (before, after) = if kind == Kind::Clickable { ("0", "1") } else { ("false", "true") };
+    let node = ui.on_node_with_tag("surface").fetch_semantics_node();
+    assert_eq!(node.config.role, role);
+    ui.on_node_with_tag("surface")
+        .assert_has_click_action()
+        .assert_is_enabled()
+        .assert_text_equals(&[before])
+        .perform_click()
+        .assert_text_equals(&[after]);
+}
+
+/// A click in the shape's bounds clicks; one at (10, 10), outside a 100 dp circle's, doesn't.
+fn check_click_outside_the_shape(kind: Kind) {
+    let (mut ui, state) = overload(kind, compose_foundation::CIRCLE_SHAPE, None, 100.0);
+    ui.on_node_with_tag("surface").perform_click();
+    assert_eq!(state.get(), 1);
+    ui.on_node_with_tag("surface")
+        .perform_touch_input(|touch| touch.click_at(compose_ui::Offset::new(10.0, 10.0)));
+    assert_eq!(state.get(), 1);
+}
+
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/SurfaceTest.kt, clickable_semantics
+#[test]
+fn a_clickable_surface_clicks_and_merges_its_content() {
+    check_semantics(Kind::Clickable, None);
+}
+
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/SurfaceTest.kt, clickable_withCustomSemantics
+#[test]
+fn a_clickable_surface_takes_the_role_its_modifier_gives() {
+    check_semantics(Kind::Clickable, Some(compose_ui::Role::Checkbox));
+}
+
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/SurfaceTest.kt, clickable_clickAction
+#[test]
+fn a_clickable_surface_calls_back_on_each_click() {
+    let (mut ui, state) = overload(Kind::Clickable, compose_ui::RECTANGLE_SHAPE, None, 30.0);
+    ui.on_node_with_tag("surface").perform_click();
+    assert_eq!(state.get(), 1);
+    ui.on_node_with_tag("surface").perform_click().perform_click();
+    assert_eq!(state.get(), 3);
+}
+
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/SurfaceTest.kt, clickable_clickOutsideShapeBounds
+#[test]
+fn a_click_outside_a_round_clickable_surface_misses() {
+    check_click_outside_the_shape(Kind::Clickable);
+}
+
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/SurfaceTest.kt, clickable_enabled_disabled
+#[test]
+fn a_disabled_clickable_modifier_on_a_surface_doesnt_click() {
+    let count = mutable_state_of(0);
+    let enabled = mutable_state_of(true);
+    let (count_handle, enabled_handle) = (count.handle(), enabled.handle());
+    let mut ui = compose_test(move || {
+        MaterialTheme!({
+            let options = compose_ui::ClickableOptions {
+                enabled: enabled_handle.get(),
+                indication: compose_ui::Indication::NONE,
+                ..compose_ui::ClickableOptions::DEFAULT
+            };
+            Surface!(
+                modifier = Modifier
+                    .test_tag("surface")
+                    .clickable_with(options, move || count_handle.set(count_handle.get() + 1)),
+                {
+                    compose_foundation::layout::Spacer(Modifier.size(30.dp()));
+                }
+            );
+        });
+    });
+    ui.on_node_with_tag("surface").assert_is_enabled().perform_click();
+    assert_eq!(count.get(), 1);
+    enabled.set(false);
+    ui.on_node_with_tag("surface").assert_is_not_enabled().perform_click().perform_click();
+    assert_eq!(count.get(), 1);
+}
+
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/SurfaceTest.kt, selectable_semantics
+#[test]
+fn a_selectable_surface_clicks_and_merges_its_content() {
+    check_semantics(Kind::Selectable, None);
+}
+
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/SurfaceTest.kt, selectable_customSemantics
+#[test]
+fn a_selectable_surface_takes_the_role_its_modifier_gives() {
+    check_semantics(Kind::Selectable, Some(compose_ui::Role::Switch));
+}
+
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/SurfaceTest.kt, selectable_clickAction
+#[test]
+fn a_selectable_surface_flips_on_each_click() {
+    let (mut ui, state) = overload(Kind::Selectable, compose_ui::RECTANGLE_SHAPE, None, 30.0);
+    ui.on_node_with_tag("surface").perform_click();
+    assert_eq!(state.get() % 2, 1);
+    ui.on_node_with_tag("surface").perform_click();
+    assert_eq!(state.get() % 2, 0);
+}
+
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/SurfaceTest.kt, selectable_clickOutsideShapeBounds
+#[test]
+fn a_click_outside_a_round_selectable_surface_misses() {
+    check_click_outside_the_shape(Kind::Selectable);
+}
+
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/SurfaceTest.kt, toggleable_semantics
+#[test]
+fn a_toggleable_surface_clicks_and_merges_its_content() {
+    check_semantics(Kind::Toggleable, None);
+    let (mut ui, _state) = overload(Kind::Toggleable, compose_ui::RECTANGLE_SHAPE, None, 30.0);
+    ui.on_node_with_tag("surface").assert_is_off().perform_click().assert_is_on();
+}
+
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/SurfaceTest.kt, toggleable_customSemantics
+#[test]
+fn a_toggleable_surface_takes_the_role_its_modifier_gives() {
+    check_semantics(Kind::Toggleable, Some(compose_ui::Role::Tab));
+}
+
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/SurfaceTest.kt, toggleable_toggleAction
+#[test]
+fn a_toggleable_surface_toggles_on_each_click() {
+    let (mut ui, state) = overload(Kind::Toggleable, compose_ui::RECTANGLE_SHAPE, None, 30.0);
+    ui.on_node_with_tag("surface").perform_click();
+    assert_eq!(state.get() % 2, 1);
+    ui.on_node_with_tag("surface").perform_click();
+    assert_eq!(state.get() % 2, 0);
+}
+
+// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/SurfaceTest.kt, toggleable_clickOutsideShapeBounds
+#[test]
+fn a_click_outside_a_round_toggleable_surface_misses() {
+    check_click_outside_the_shape(Kind::Toggleable);
 }

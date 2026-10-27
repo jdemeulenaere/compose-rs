@@ -136,6 +136,7 @@ fn fab(
         role: Some(Role::Button),
         interaction_source,
         selected: None,
+        checked: None,
         // The shadow follows the press, hover and focus, animated (`surface`).
         elevations: Some(Elevations {
             default: elevation.default_elevation,

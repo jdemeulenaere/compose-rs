@@ -421,50 +421,29 @@ pub fn Snackbar(
                                 false,
                                 compose_runtime::callback(move |_| themed_text(message.clone())),
                             );
-                            if let Some(label) = visuals.action_label.clone() {
-                                // The action in its color, as `textButtonColors(contentColor =
-                                // actionColor)`.
-                                let data = data.clone();
-                                crate::button::Button(
-                                    compose_runtime::callback(move || data.perform_action()),
-                                    Modifier,
-                                    true,
-                                    crate::ButtonDefaults::shape(),
-                                    crate::ButtonColors {
-                                        content_color: action_color,
-                                        ..crate::ButtonDefaults::text_button_colors()
-                                    },
-                                    None,
-                                    None,
-                                    crate::ButtonDefaults::TEXT_BUTTON_CONTENT_PADDING,
-                                    None,
-                                    compose_runtime::callback(move |_: RowScope| {
-                                        themed_text(label.clone())
-                                    }),
-                                );
-                            }
-                            if visuals.with_dismiss_action {
-                                let data = data.clone();
-                                IconButton(
-                                    compose_runtime::callback(move || data.dismiss()),
-                                    Modifier,
-                                    true,
-                                    crate::IconButtonDefaults::icon_button_colors(),
-                                    None,
-                                    compose_runtime::callback(|| {
-                                        Icon(
-                                            icons::filled::close(),
-                                            Some("Dismiss"),
-                                            Modifier,
-                                            LOCAL_CONTENT_COLOR.current(),
-                                        )
-                                    }),
-                                );
-                            }
-                        }),
-                    );
-                },
-            );
+                        }
+                        if visuals.with_dismiss_action {
+                            let data = data.clone();
+                            IconButton(
+                                compose_runtime::callback(move || data.dismiss()),
+                                Modifier,
+                                true,
+                                crate::IconButtonDefaults::icon_button_colors(),
+                                None,
+                                crate::IconButtonDefaults::standard_shape(),
+                                compose_runtime::callback(|| {
+                                    Icon(
+                                        icons::filled::close(),
+                                        Some("Dismiss"),
+                                        Modifier,
+                                        LOCAL_CONTENT_COLOR.current(),
+                                    )
+                                }),
+                            );
+                        }
+                    }),
+                );
+            });
         }),
     );
 }

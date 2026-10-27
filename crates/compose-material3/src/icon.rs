@@ -164,6 +164,11 @@ impl compose_runtime::ComposeArg for IconToggleButtonColors {
 pub struct IconButtonDefaults;
 
 impl IconButtonDefaults {
+    /// A circle, as `standardShape`: the standard icon buttons'.
+    pub fn standard_shape() -> Shape {
+        CIRCLE_SHAPE
+    }
+
     /// A circle, as `filledShape`.
     pub fn filled_shape() -> Shape {
         CIRCLE_SHAPE
@@ -204,8 +209,22 @@ impl IconButtonDefaults {
         IconButtonColors {
             container_color: scheme.primary,
             content_color: scheme.on_primary,
-            disabled_container_color: scheme.on_surface.with_alpha(0.12),
+            disabled_container_color: scheme.on_surface.with_alpha(0.1),
             disabled_content_color: scheme.on_surface.with_alpha(0.38),
+        }
+    }
+
+    /// As `filledIconToggleButtonColors()` (`FilledIconButtonTokens`): the surface container
+    /// unchecked, the primary color checked.
+    pub fn filled_icon_toggle_button_colors() -> IconToggleButtonColors {
+        let scheme = MaterialTheme::color_scheme();
+        IconToggleButtonColors {
+            container_color: scheme.surface_container,
+            content_color: scheme.on_surface_variant,
+            disabled_container_color: scheme.on_surface.with_alpha(0.1),
+            disabled_content_color: scheme.on_surface.with_alpha(0.38),
+            checked_container_color: scheme.primary,
+            checked_content_color: scheme.on_primary,
         }
     }
 
@@ -215,8 +234,22 @@ impl IconButtonDefaults {
         IconButtonColors {
             container_color: scheme.secondary_container,
             content_color: scheme.on_secondary_container,
-            disabled_container_color: scheme.on_surface.with_alpha(0.12),
+            disabled_container_color: scheme.on_surface.with_alpha(0.1),
             disabled_content_color: scheme.on_surface.with_alpha(0.38),
+        }
+    }
+
+    /// As `filledTonalIconToggleButtonColors()` (`FilledTonalIconButtonTokens`): the secondary
+    /// container unchecked, the secondary color checked.
+    pub fn filled_tonal_icon_toggle_button_colors() -> IconToggleButtonColors {
+        let scheme = MaterialTheme::color_scheme();
+        IconToggleButtonColors {
+            container_color: scheme.secondary_container,
+            content_color: scheme.on_secondary_container,
+            disabled_container_color: scheme.on_surface.with_alpha(0.1),
+            disabled_content_color: scheme.on_surface.with_alpha(0.38),
+            checked_container_color: scheme.secondary,
+            checked_content_color: scheme.on_secondary,
         }
     }
 
@@ -225,10 +258,34 @@ impl IconButtonDefaults {
         IconButtonDefaults::icon_button_colors()
     }
 
-    /// A 1 dp outline in the content color (12 % disabled), as `outlinedIconButtonBorder`.
+    /// As `outlinedIconToggleButtonColors()`: no container and the content color unchecked,
+    /// the inverse surface and its content checked.
+    pub fn outlined_icon_toggle_button_colors() -> IconToggleButtonColors {
+        let scheme = MaterialTheme::color_scheme();
+        let content = LOCAL_CONTENT_COLOR.current();
+        IconToggleButtonColors {
+            container_color: Color::TRANSPARENT,
+            content_color: content,
+            disabled_container_color: Color::TRANSPARENT,
+            disabled_content_color: content.with_alpha(0.38),
+            checked_container_color: scheme.inverse_surface,
+            checked_content_color: crate::theme::content_color_for(scheme.inverse_surface),
+        }
+    }
+
+    /// A 1 dp outline in the content color (38 % disabled, `OutlinedIconButtonTokens`), as
+    /// `outlinedIconButtonBorder`.
     pub fn outlined_icon_button_border(enabled: bool) -> BorderStroke {
         let content = LOCAL_CONTENT_COLOR.current();
-        BorderStroke::new(1.dp(), if enabled { content } else { content.with_alpha(0.12) })
+        BorderStroke::new(1.dp(), if enabled { content } else { content.with_alpha(0.38) })
+    }
+
+    /// The outline unchecked, none checked, as `outlinedIconToggleButtonBorder`.
+    pub fn outlined_icon_toggle_button_border(
+        enabled: bool,
+        checked: bool,
+    ) -> Option<BorderStroke> {
+        (!checked).then(|| IconButtonDefaults::outlined_icon_button_border(enabled))
     }
 }
 
@@ -238,8 +295,8 @@ fn centered(space: f32, content: f32) -> f32 {
     ((space.round() - content.round()) / 2.0 + 0.5).floor()
 }
 
-/// An icon button, as Compose's `IconButton`: a 40 dp circular state layer in a 48 dp touch
-/// target around its icon, in the content color.
+/// An icon button, as Compose's `IconButton`: a 40 dp state layer of `shape` (a circle by
+/// default) in a 48 dp touch target around its icon, in the content color.
 #[composable]
 pub fn IconButton(
     on_click: impl Fn() + 'static,
@@ -247,13 +304,14 @@ pub fn IconButton(
     #[default(true)] enabled: bool,
     #[default(crate::IconButtonDefaults::icon_button_colors())] colors: IconButtonColors,
     #[default(None)] interaction_source: Option<MutableInteractionSource>,
+    #[default(crate::IconButtonDefaults::standard_shape())] shape: Shape,
     content: impl Fn() + 'static,
 ) {
     let color = colors.content_color(enabled);
     let mut modifier = minimum_interactive_component_size(modifier)
         .size((40.dp(), 40.dp()))
-        .clip(CIRCLE_SHAPE)
-        .background(colors.container_color(enabled));
+        .clip(shape)
+        .background_with(colors.container_color(enabled), shape);
     modifier = modifier.clickable_with(
         ClickableOptions {
             enabled,
@@ -285,15 +343,17 @@ pub fn IconToggleButton(
     #[default(crate::IconButtonDefaults::icon_toggle_button_colors())]
     colors: IconToggleButtonColors,
     #[default(None)] interaction_source: Option<MutableInteractionSource>,
+    #[default(crate::IconButtonDefaults::standard_shape())] shape: Shape,
     content: impl Fn() + 'static,
 ) {
     let interaction_source = crate::components::remembered_interaction_source(interaction_source);
     let color = colors.content_color(enabled, checked);
     let modifier = minimum_interactive_component_size(modifier)
         .size((40.dp(), 40.dp()))
-        .clip(CIRCLE_SHAPE)
-        .background(colors.container_color(enabled, checked))
-        .clickable_with(
+        .clip(shape)
+        .background_with(colors.container_color(enabled, checked), shape)
+        .toggleable_with(
+            checked,
             ClickableOptions {
                 enabled,
                 role: Some(Role::Checkbox),
@@ -301,9 +361,8 @@ pub fn IconToggleButton(
                 interaction_source: Some(interaction_source),
                 ..ClickableOptions::DEFAULT
             },
-            move || on_checked_change(!checked),
-        )
-        .semantics(move |config| config.set_toggleable_state(checked.into()));
+            on_checked_change,
+        );
     CompositionLocalProvider(LOCAL_CONTENT_COLOR.provides(color), || {
         Box(
             modifier.clone(),
@@ -334,6 +393,7 @@ fn surface_icon_button(
         role: Some(Role::Button),
         interaction_source,
         selected: None,
+        checked: None,
         elevations: None,
     };
     crate::components::surface(
@@ -420,6 +480,136 @@ pub fn OutlinedIconButton(
     let border = border.or_else(|| Some(IconButtonDefaults::outlined_icon_button_border(enabled)));
     surface_icon_button(
         on_click,
+        modifier,
+        enabled,
+        shape,
+        colors,
+        border,
+        interaction_source,
+        content,
+    );
+}
+
+/// The filled and outlined icon toggle buttons' body: a toggleable surface of `shape` (a
+/// checkbox, to accessibility) around a 40 dp box centering the content.
+#[allow(clippy::too_many_arguments)]
+fn surface_icon_toggle_button(
+    checked: bool,
+    on_checked_change: compose_runtime::Callback<dyn Fn(bool)>,
+    modifier: Modifier,
+    enabled: bool,
+    shape: Shape,
+    colors: IconToggleButtonColors,
+    border: Option<BorderStroke>,
+    interaction_source: Option<MutableInteractionSource>,
+    content: compose_runtime::Callback,
+) {
+    let interaction_source = crate::components::remembered_interaction_source(interaction_source);
+    let click = crate::components::SurfaceClick {
+        on_click: compose_runtime::callback(move || on_checked_change(!checked)),
+        enabled,
+        role: Some(Role::Checkbox),
+        interaction_source,
+        selected: None,
+        checked: Some(checked),
+        elevations: None,
+    };
+    crate::components::surface(
+        modifier,
+        shape,
+        colors.container_color(enabled, checked),
+        colors.content_color(enabled, checked),
+        Dp(0.0),
+        Dp(0.0),
+        border,
+        Some(click),
+        compose_runtime::callback(move || {
+            let content = content.clone();
+            Box(
+                Modifier.size(40.dp()),
+                Alignment::CENTER,
+                false,
+                compose_runtime::callback(move |_| content()),
+            );
+        }),
+    );
+}
+
+/// An icon toggle button on a filled circle, as Compose's `FilledIconToggleButton`: the
+/// surface container unchecked, the primary color checked.
+#[composable]
+pub fn FilledIconToggleButton(
+    checked: bool,
+    on_checked_change: impl Fn(bool) + 'static,
+    #[default(crate::Modifier)] modifier: Modifier,
+    #[default(true)] enabled: bool,
+    #[default(crate::IconButtonDefaults::filled_shape())] shape: Shape,
+    #[default(crate::IconButtonDefaults::filled_icon_toggle_button_colors())]
+    colors: IconToggleButtonColors,
+    #[default(None)] interaction_source: Option<MutableInteractionSource>,
+    content: impl Fn() + 'static,
+) {
+    surface_icon_toggle_button(
+        checked,
+        on_checked_change,
+        modifier,
+        enabled,
+        shape,
+        colors,
+        None,
+        interaction_source,
+        content,
+    );
+}
+
+/// An icon toggle button on a tonal circle, as Compose's `FilledTonalIconToggleButton`: the
+/// secondary container unchecked, the secondary color checked.
+#[composable]
+pub fn FilledTonalIconToggleButton(
+    checked: bool,
+    on_checked_change: impl Fn(bool) + 'static,
+    #[default(crate::Modifier)] modifier: Modifier,
+    #[default(true)] enabled: bool,
+    #[default(crate::IconButtonDefaults::filled_shape())] shape: Shape,
+    #[default(crate::IconButtonDefaults::filled_tonal_icon_toggle_button_colors())]
+    colors: IconToggleButtonColors,
+    #[default(None)] interaction_source: Option<MutableInteractionSource>,
+    content: impl Fn() + 'static,
+) {
+    surface_icon_toggle_button(
+        checked,
+        on_checked_change,
+        modifier,
+        enabled,
+        shape,
+        colors,
+        None,
+        interaction_source,
+        content,
+    );
+}
+
+/// An icon toggle button in an outlined circle, as Compose's `OutlinedIconToggleButton`: the
+/// outline unchecked, the inverse surface checked; `border` `None` is the default,
+/// `outlined_icon_toggle_button_border(enabled, checked)`.
+#[composable]
+pub fn OutlinedIconToggleButton(
+    checked: bool,
+    on_checked_change: impl Fn(bool) + 'static,
+    #[default(crate::Modifier)] modifier: Modifier,
+    #[default(true)] enabled: bool,
+    #[default(crate::IconButtonDefaults::outlined_shape())] shape: Shape,
+    #[default(crate::IconButtonDefaults::outlined_icon_toggle_button_colors())]
+    colors: IconToggleButtonColors,
+    #[default(None)] border: Option<BorderStroke>,
+    #[default(None)] interaction_source: Option<MutableInteractionSource>,
+    content: impl Fn() + 'static,
+) {
+    let border =
+        border.or_else(|| IconButtonDefaults::outlined_icon_toggle_button_border(enabled, checked));
+    surface_icon_toggle_button(
+        checked,
+        on_checked_change,
         modifier,
         enabled,
         shape,

@@ -163,6 +163,7 @@ pub fn ClickableSurface(
         role: None,
         interaction_source,
         selected: None,
+        checked: None,
         elevations: None,
     };
     surface(
@@ -202,6 +203,48 @@ pub fn SelectableSurface(
         role: None,
         interaction_source,
         selected: Some(selected),
+        checked: None,
+        elevations: None,
+    };
+    surface(
+        modifier,
+        shape,
+        color,
+        content_color,
+        tonal_elevation,
+        shadow_elevation,
+        border,
+        Some(click),
+        content,
+    );
+}
+
+/// A toggleable surface, as Compose's `Surface(checked, onCheckedChange, …)` overload: a
+/// clickable surface toggling `checked` (`on_checked_change(!checked)`), whose semantics say
+/// whether it's on.
+#[composable]
+pub fn ToggleableSurface(
+    checked: bool,
+    on_checked_change: impl Fn(bool) + 'static,
+    #[default(crate::Modifier)] modifier: Modifier,
+    #[default(true)] enabled: bool,
+    #[default(crate::RECTANGLE_SHAPE)] shape: Shape,
+    #[default(crate::MaterialTheme::color_scheme().surface)] color: Color,
+    #[default(crate::Color::UNSPECIFIED)] content_color: Color,
+    #[default(crate::Dp(0.0))] tonal_elevation: Dp,
+    #[default(crate::Dp(0.0))] shadow_elevation: Dp,
+    #[default(None)] border: Option<BorderStroke>,
+    #[default(None)] interaction_source: Option<MutableInteractionSource>,
+    content: impl Fn() + 'static,
+) {
+    let interaction_source = remembered_interaction_source(interaction_source);
+    let click = SurfaceClick {
+        on_click: compose_runtime::callback(move || on_checked_change(!checked)),
+        enabled,
+        role: None,
+        interaction_source,
+        selected: None,
+        checked: Some(checked),
         elevations: None,
     };
     surface(
@@ -234,6 +277,8 @@ pub(crate) struct SurfaceClick {
     pub interaction_source: MutableInteractionSource,
     /// Whether it's selected, for a selectable surface.
     pub selected: Option<bool>,
+    /// Whether it's on, for a toggleable surface.
+    pub checked: Option<bool>,
     /// The shadow's elevation in each state (in place of the surface's shadow elevation),
     /// following `interaction_source`.
     pub elevations: Option<Elevations>,
@@ -354,8 +399,16 @@ pub(crate) fn surface(
                     },
                     click.on_click,
                 );
-            match click.selected {
-                Some(selected) => modifier.semantics(move |config| config.set_selected(selected)),
+            let modifier = match click.selected {
+                Some(selected) => {
+                    modifier.semantics(move |config| config.selected = Some(selected))
+                }
+                None => modifier,
+            };
+            match click.checked {
+                Some(checked) => {
+                    modifier.semantics(move |config| config.toggleable_state = Some(checked.into()))
+                }
                 None => modifier,
             }
         }
