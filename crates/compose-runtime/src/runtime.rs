@@ -55,6 +55,9 @@ pub(crate) struct Runtime {
     /// Slots written and side effects recorded on this thread: what Compose's change list
     /// holds besides node changes. For tests (`platform::recorded_changes`).
     pub recorded_changes: u64,
+    /// The removal of the nodes of a branch group `start_group` just deleted (D715), for
+    /// `start_branch_group_of` to apply first.
+    pub branch_removal: crate::composer::NodeOp,
     /// Body runs per composable, while tracking is on (`track_recompositions`).
     pub recomposition_counts: Option<std::collections::HashMap<&'static str, u64>>,
     /// A group guard was dropped by an unwinding panic in this pass, leaving its group open.
@@ -105,6 +108,7 @@ impl Runtime {
             exiting: false,
             bodies_run: 0,
             recorded_changes: 0,
+            branch_removal: crate::composer::NodeOp::None,
             recomposition_counts: None,
             abandoned_groups: false,
             reusing: 0,

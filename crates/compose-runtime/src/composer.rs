@@ -207,7 +207,7 @@ impl Runtime {
         data_key: u64,
         identity: Option<Identity>,
         reusable: bool,
-    ) -> ([NodeOp; 2], NodeStart) {
+    ) -> (NodeOp, NodeStart) {
         let composition = self.check_composing();
         let Runtime {
             compositions,
@@ -218,6 +218,7 @@ impl Runtime {
             providers_invalid,
             removal_stack,
             recorded_changes,
+            branch_removal,
             ..
         } = self;
         let providers_invalid = *providers_invalid != 0;
@@ -231,8 +232,6 @@ impl Runtime {
         }
 
         let mut op = NodeOp::None;
-        // Another branch's group deleted where this one starts: applied before `op`.
-        let mut removal = NodeOp::None;
         let mut found = NONE;
         // Content being reused replaces the node groups that aren't reusable nodes, as
         // Compose's `forceReplace` (a `ComposeNode` under `ReusableContent`).
@@ -240,7 +239,8 @@ impl Runtime {
         // Another branch of the same conditional where this one starts (a branch group: the
         // statement's key, the branch as data key): deleted where it stands, as Compose's
         // `startReplaceGroup` deletes the group it doesn't expect, so what it held is forgotten
-        // before what follows (D715).
+        // before what follows (D715). Its nodes' removal is applied before `op`
+        // (`start_branch_group_of`).
         if kind == GroupKind::Replace
             && data_key != 0
             && !parent.inserting
@@ -253,35 +253,8 @@ impl Runtime {
             && other.data_key != 0
             && other.data_key != data_key
         {
-            let (branch, next) = (parent.cursor, other.next_sibling);
-            if parent.region == NO_REGION
-                && let Some(paused) = paused.as_mut()
-                && paused.holds_regions()
-            {
-                paused.discard_regions_in(
-                    table,
-                    scopes,
-                    removal_stack,
-                    deferred,
-                    vec![branch],
-                    false,
-                );
-            }
-            let deferred = deferred_of(deferred, paused, parent.region);
-            let count = remove_siblings(table, deferred, scopes, removal_stack, branch, next);
-            table.set_next(parent.group, parent.last_placed, next);
-            parent.cursor = next;
             *recorded_changes += 1;
-            if count > 0 {
-                let (node_parent, index) = (parent.node_parent, parent.node_index);
-                match paused {
-                    Some(paused) if parent.region != NO_REGION => paused.record(
-                        parent.region,
-                        RecordedOp::Remove { parent: node_parent, index, count },
-                    ),
-                    _ => removal = NodeOp::Remove { parent: node_parent, index, count },
-                }
-            }
+            *branch_removal = delete_branch(table, paused, deferred, scopes, removal_stack, parent);
         }
         if !parent.inserting && !force_replace {
             let mut previous = parent.last_placed;
@@ -465,7 +438,7 @@ impl Runtime {
         if starts_reuse && *reusing == 0 {
             *reusing = frames.len();
         }
-        ([removal, op], node_start)
+        (op, node_start)
     }
 
     /// Records the node a new node group inserted.
@@ -1271,15 +1244,62 @@ pub(crate) fn run_walk(base: usize) {
 // Non-generic cores of the composer's generic methods: generated code instantiates the generic
 // shims per composable, so they stay thin, and the work happens here, compiled once.
 
+/// Deletes the other branch's group at `parent`'s cursor (D715), returning the removal of its
+/// nodes to apply, if any.
+#[cold]
+#[inline(never)]
+fn delete_branch(
+    table: &mut SlotTable,
+    paused: &mut Option<Box<crate::pausable::Paused>>,
+    deferred: &mut crate::runtime::Deferred,
+    scopes: &mut Scopes,
+    removal_stack: &mut Vec<RemovalStep>,
+    parent: &mut Frame,
+) -> NodeOp {
+    let (branch, next) = (parent.cursor, table[parent.cursor].next_sibling);
+    if parent.region == NO_REGION
+        && let Some(paused) = paused.as_mut()
+        && paused.holds_regions()
+    {
+        paused.discard_regions_in(table, scopes, removal_stack, deferred, vec![branch], false);
+    }
+    let deferred = deferred_of(deferred, paused, parent.region);
+    let count = remove_siblings(table, deferred, scopes, removal_stack, branch, next);
+    table.set_next(parent.group, parent.last_placed, next);
+    parent.cursor = next;
+    if count == 0 {
+        return NodeOp::None;
+    }
+    let (node_parent, index) = (parent.node_parent, parent.node_index);
+    match paused {
+        Some(paused) if parent.region != NO_REGION => {
+            paused.record(parent.region, RecordedOp::Remove { parent: node_parent, index, count });
+            NodeOp::None
+        }
+        _ => NodeOp::Remove { parent: node_parent, index, count },
+    }
+}
+
 fn start_group(kind: GroupKind, key: u64, data_key: u64) -> NodeStart {
     start_group_of(kind, key, data_key, false)
 }
 
 fn start_group_of(kind: GroupKind, key: u64, data_key: u64, reusable: bool) -> NodeStart {
-    let (ops, start) =
+    let (op, start) =
         with_runtime(|runtime| runtime.start_group(kind, key, data_key, None, reusable));
-    ops.into_iter().for_each(apply_node_op);
+    apply_node_op(op);
     start
+}
+
+/// Starts a branch group (D715): another branch's group deleted where it starts has its nodes
+/// removed first.
+fn start_branch_group_of(key: u64, branch: u64) {
+    let (removal, op) = with_runtime(|runtime| {
+        let (op, _) = runtime.start_group(GroupKind::Replace, key, branch, None, false);
+        (std::mem::replace(&mut runtime.branch_removal, NodeOp::None), op)
+    });
+    apply_node_op(removal);
+    apply_node_op(op);
 }
 
 /// Resets a node kept by content being reused (`Applier::reuse`), before the pass updates it.
@@ -1306,18 +1326,18 @@ fn reuse_node(node: NodeRef, region: u32) {
 /// an `#[inline]` composable can have a copy per crate, with distinct addresses.
 pub(crate) fn start_restart_group_of(key: u64, identity: crate::__private::RestartIdentity) {
     let identity = Some(Identity::Type(identity.type_id, identity.name));
-    let (ops, _) =
+    let (op, _) =
         with_runtime(|runtime| runtime.start_group(GroupKind::Restart, key, 0, identity, false));
-    ops.into_iter().for_each(apply_node_op);
+    apply_node_op(op);
 }
 
 /// Starts the replace group of a non-restartable composable, identified by the type name of a
 /// marker closure (its parameters may borrow, so no `TypeId`).
 pub(crate) fn start_replace_group_of(key: u64, identity: &'static str) {
     let identity = Some(Identity::Name(identity));
-    let (ops, _) =
+    let (op, _) =
         with_runtime(|runtime| runtime.start_group(GroupKind::Replace, key, 0, identity, false));
-    ops.into_iter().for_each(apply_node_op);
+    apply_node_op(op);
 }
 
 /// A group guard dropped while a panic unwinds: its group stays open. Recorded, so the error a
@@ -1482,7 +1502,7 @@ impl Composer {
     /// Compose's `startReplaceGroup` deletes the group it doesn't expect. End it with
     /// [`end_group`](Composer::end_group).
     pub fn start_branch_group(&self, key: u64, branch: u64) {
-        start_group(GroupKind::Replace, key, branch);
+        start_branch_group_of(key, branch);
     }
 
     /// Starts a keyed group, matched by `key` and `data_key`, so it moves with its data.
@@ -1535,12 +1555,12 @@ impl Composer {
     /// [`PausableContent`]: crate::platform::PausableContent
     /// [`Composition::recompose_pausable_for`]: crate::Composition::recompose_pausable_for
     pub fn start_pausable_group(&self, key: u64, target: Option<u64>) {
-        let (ops, _) = with_runtime(|runtime| {
+        let (op, _) = with_runtime(|runtime| {
             let started = runtime.start_group(GroupKind::Replace, key, 0, None, false);
             runtime.begin_region(target);
             started
         });
-        ops.into_iter().for_each(apply_node_op);
+        apply_node_op(op);
     }
 
     /// Starts a reusable group, as Compose's `startReusableGroup` (what `ReusableContent` and
