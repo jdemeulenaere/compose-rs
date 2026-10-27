@@ -469,6 +469,13 @@ Sizes: S under a day, M a few days, L one to two weeks, XL multi-week. None of t
 - **Test-rule waits:** done in compose-test (D900); the runtime kit's `CompositionTest` has `advance`, `advance_count`, `advance_ignoring_pending_work` and `advance_time_by` on the manual clock.
 - **Recreation:** crates/compose-runtime/tests/suite/restoration.rs has a `RestorationTester` (Compose's `StateRestorationTester`: the registry saved to bytes, the composition recreated); saveable tests that recreate an activity in a UI host map to saving a `UiHost`'s state and composing it in a new host, as crates/compose-foundation/tests/suite/platform.rs's `remember_saveable_comes_back_in_a_new_host` does.
 
+### Performance of milestone 1
+
+Measured against the fork point, alternating saved bench binaries (the machine was shared and loaded, so medians and minimums of many rounds are compared):
+
+- **Runtime benches:** within ±2% but for `state get` (−14%) and 1,000 local reads (−13%). D715's branch deletion first cost keyed rotation about 9% (a second node operation returned from every `start_group`); it is a cold function now, whose removal waits in the runtime for `start_branch_group`. `1000 keyed rows/reverse`, suspected of +8%, measured −1% over 20 interleaved rounds in both orders (medians 1,436 vs 1,428 µs): the larger destructure in `start_group` and the per-group `slot_position` write don't show.
+- **The heavy navigation screen's first frame** (`benches/ui.rs`, `navigation`) looked 4–9% slower under load. It isn't: the review's deterministic probe has the branch about 8% faster than main, with the same group and allocation counts. Not a regression.
+
 ### Behaviour that likely differs from Compose
 
 1. **`derived_state_of` computed eagerly**: fixed (D711), it's lazy with conditional invalidation, as Compose's.
