@@ -1,6 +1,7 @@
 //! Headless UI frames (docs/09-testing.md targets): a counter click under 1 ms, and toggling
 //! one of 1,000 todos under 4 ms frame p99. Each iteration is a press and release on a node
-//! followed by a frame (recompose, measure, draw).
+//! followed by its frame (recompose, measure, draw); the toggle is also timed until idle, its
+//! checkbox animating as Compose's (10 to 18 frames of the check mark and the colors, D1020).
 //!
 //! Every host runs at parity (`Optimizations::NONE`, Compose's work), as before the hosts'
 //! default became the recommended set (D610).
@@ -18,14 +19,39 @@ fn parity() {
     use_optimizations(Optimizations::NONE);
 }
 
-/// Clicks the center of `matcher`'s `index`th node, then runs frames until idle.
-fn click_frame(ui: &mut ComposeTestRule, matcher: &Matcher, index: usize) -> Duration {
+/// Clicks the center of `matcher`'s `index`th node, then runs frames until idle: the time of
+/// all of them (an animation the click starts included).
+fn click_until_idle(ui: &mut ComposeTestRule, matcher: &Matcher, index: usize) -> Duration {
     let center = ui.on_all_nodes(matcher.clone()).get(index).fetch_semantics_node().center();
     let start = Instant::now();
     ui.host().send_pointer(PointerEvent::press(center));
     ui.host().send_pointer(PointerEvent::release(center));
     ui.wait_for_idle();
     start.elapsed()
+}
+
+/// Clicks the center of `matcher`'s `index`th node, then times the click's frame only; the
+/// frames after it (an animation it started) run untimed, until idle.
+fn click_frame(ui: &mut ComposeTestRule, matcher: &Matcher, index: usize) -> Duration {
+    click_frame_then(ui, matcher, index, |_| {})
+}
+
+/// `click_frame`, `after` timed with the click's frame (what renders it).
+fn click_frame_then(
+    ui: &mut ComposeTestRule,
+    matcher: &Matcher,
+    index: usize,
+    mut after: impl FnMut(&mut ComposeTestRule),
+) -> Duration {
+    let center = ui.on_all_nodes(matcher.clone()).get(index).fetch_semantics_node().center();
+    let start = Instant::now();
+    ui.host().send_pointer(PointerEvent::press(center));
+    ui.host().send_pointer(PointerEvent::release(center));
+    ui.host().frame();
+    after(ui);
+    let elapsed = start.elapsed();
+    ui.wait_for_idle();
+    elapsed
 }
 
 fn report_p99(name: &str, mut samples: Vec<Duration>) {
@@ -70,6 +96,12 @@ fn ui(criterion: &mut Criterion) {
     // The frame p99 the roadmap targets.
     let samples = (0..500).map(|_| click_frame(&mut todos, &checkbox, 500)).collect();
     report_p99("toggle 1 of 1000 todos", samples);
+    // The toggle with its checkbox's animation: Compose's checkbox animates too (D1009).
+    criterion.bench_function("toggle 1 of 1000 todos until idle", |bench| {
+        bench.iter_custom(|iterations| {
+            (0..iterations).map(|_| click_until_idle(&mut todos, &checkbox, 500)).sum()
+        })
+    });
 }
 
 /// A toggle in a 480 × 640 dp window at 2×, as the desktop host does it: dispatch, recompose,
@@ -87,13 +119,13 @@ fn desktop_frame(criterion: &mut Criterion) {
     let mut renderer = compose_skia::RasterRenderer::new(960, 1280);
     renderer.set_optimizations(Optimizations::NONE);
     let checkbox = has_role(Role::Checkbox);
+    // The click's frame rendered (the checkbox's animation frames after it untimed).
     let mut frame = |ui: &mut ComposeTestRule| {
-        let elapsed = click_frame(ui, &checkbox, 3);
-        let start = Instant::now();
-        ui.host().with_tree(|tree| {
-            renderer.render(tree.display_list(), Color::WHITE, 1.0, tree.text_measurer_ref())
-        });
-        elapsed + start.elapsed()
+        click_frame_then(ui, &checkbox, 3, |ui| {
+            ui.host().with_tree(|tree| {
+                renderer.render(tree.display_list(), Color::WHITE, 1.0, tree.text_measurer_ref())
+            });
+        })
     };
     criterion.bench_function("toggle 1 of 1000 todos, rendered at 2x", |bench| {
         bench.iter_custom(|iterations| (0..iterations).map(|_| frame(&mut ui)).sum())
