@@ -14,7 +14,7 @@ use compose_ui::{
     platform::{ParagraphMetrics, UiHost},
 };
 use jni::ids::{JMethodID, JStaticMethodID};
-use jni::objects::{JByteArray, JByteBuffer, JClass, JIntArray, JObject, JString};
+use jni::objects::{JByteArray, JByteBuffer, JClass, JFloatArray, JIntArray, JObject, JString};
 use jni::refs::Global;
 use jni::signature::{MethodSignature, Primitive, ReturnType};
 use jni::strings::JNIStr;
@@ -142,6 +142,7 @@ struct JniText {
     min_intrinsic_width: JMethodID,
     hit_test: JMethodID,
     cursor: JMethodID,
+    paragraph_layout: JMethodID,
     release: JMethodID,
 }
 
@@ -339,6 +340,34 @@ impl TextBackend for JniText {
             check(env, "TextMeasurer.cursor");
         });
         Rect::new(self.result(0), self.result(1), self.result(2), self.result(3))
+    }
+
+    fn paragraph_layout(&self, handle: u32) -> Option<Vec<f32>> {
+        with_main_env(|env| {
+            let values = env.with_local_frame(2, |env| -> jni::errors::Result<Option<Vec<f32>>> {
+                // SAFETY: the method's signature is `(I)[F`.
+                let array = unsafe {
+                    env.call_method_unchecked(
+                        &*self.measurer,
+                        self.paragraph_layout,
+                        ReturnType::Object,
+                        &[JValue::Int(handle as jint).as_jni()],
+                    )
+                }?
+                .l()?;
+                if array.is_null() {
+                    return Ok(None);
+                }
+                // SAFETY: `paragraphLayout` returns a `float[]`, a local reference of this frame.
+                let array = unsafe { JFloatArray::from_raw(env, array.into_raw()) };
+                let mut values = vec![0.0; array.len(env)?];
+                array.get_region(env, 0, &mut values)?;
+                Ok(Some(values))
+            });
+            // An exception: the queries come from the cursors instead.
+            check(env, "TextMeasurer.paragraphLayout");
+            values.ok().flatten()
+        })
     }
 
     fn release(&mut self, handle: u32) {
@@ -545,6 +574,7 @@ fn create(
         min_intrinsic_width: method(env, measurer, jni_str!("minIntrinsicWidth"), jni_sig!("(I)F")),
         hit_test: method(env, measurer, jni_str!("hitTest"), jni_sig!("(IFF)I")),
         cursor: method(env, measurer, jni_str!("cursor"), jni_sig!("(II)V")),
+        paragraph_layout: method(env, measurer, jni_str!("paragraphLayout"), jni_sig!("(I)[F")),
         release: method(env, measurer, jni_str!("release"), jni_sig!("(I)V")),
         measurer: env.new_global_ref(measurer).expect("compose-android: a global ref"),
         results: results as *const f32,

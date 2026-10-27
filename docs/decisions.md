@@ -19,7 +19,7 @@ The log is split by area into the files below, one table each, rows in number or
 |---|---|---|
 | [runtime](decisions/runtime.md) | `#[composable]`, groups and keys, skipping, lambdas, the call macro, the composer, recomposition, `remember`, effects, state handles, pausable composition. | 108 |
 | [ui-and-layout](decisions/ui-and-layout.md) | Modifiers and nodes, layout and intrinsics, drawing in the tree, input, focus, semantics, animation, Material 3, navigation, platform values. | 139 |
-| [text](decisions/text.md) | Text measurement and layout on each platform, fonts, text fields and editing. | 32 |
+| [text](decisions/text.md) | Text measurement and layout on each platform, fonts, text fields and editing. | 33 |
 | [lazy-and-prefetch](decisions/lazy-and-prefetch.md) | Lazy lists and grids, item reuse, the policy of composing only what is in view, prefetch. | 64 |
 | [android-drawing](decisions/android-drawing.md) | The display list and its replayer, render nodes and repaint boundaries, paths, shadows, layers. | 27 |
 | [android-host-and-performance](decisions/android-host-and-performance.md) | The view and activity glue, the frame loop, the hint session, jank, startup, memory, and the optimization flags. | 25 |
@@ -227,7 +227,7 @@ The log is split by area into the files below, one table each, rows in number or
 | D230 | [ui-and-layout](decisions/ui-and-layout.md#d230) | current |
 | D231 | [runtime](decisions/runtime.md#d231) | current |
 | D232 | [runtime](decisions/runtime.md#d232) | current |
-| D233 | [text](decisions/text.md#d233) | current |
+| D233 | [text](decisions/text.md#d233) | revised by [D1105](decisions/text.md#d1105) |
 | D234 | [text](decisions/text.md#d234) | current |
 | D235 | [text](decisions/text.md#d235) | current |
 | D240 | [runtime](decisions/runtime.md#d240) | current |
@@ -475,6 +475,7 @@ The log is split by area into the files below, one table each, rows in number or
 | D1102 | [text](decisions/text.md#d1102) | current |
 | D1103 | [text](decisions/text.md#d1103) | current |
 | D1104 | [text](decisions/text.md#d1104) | current |
+| D1105 | [text](decisions/text.md#d1105) | current |
 | D1150 | [ui-and-layout](decisions/ui-and-layout.md#d1150) | current |
 | D1151 | [ui-and-layout](decisions/ui-and-layout.md#d1151) | current |
 | D1152 | [ui-and-layout](decisions/ui-and-layout.md#d1152) | current |

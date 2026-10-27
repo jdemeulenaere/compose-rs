@@ -63,6 +63,13 @@ pub trait TextBackend: 'static {
     fn hit_test(&self, handle: u32, position: Offset) -> usize;
     /// The cursor before UTF-16 offset `offset`: its top, bottom and x.
     fn cursor(&self, handle: u32, offset: usize) -> Rect;
+    /// Paragraph `handle`'s layout for the `Paragraph` queries, in one crossing, as
+    /// `TextMeasurer.kt`'s `paragraphLayout` writes it (read by [`paragraph_from_layout`]).
+    /// `None` (the default: a backend that can't) reads the queries from the cursor at each
+    /// character instead.
+    fn paragraph_layout(&self, _handle: u32) -> Option<Vec<f32>> {
+        None
+    }
     fn release(&mut self, handle: u32);
 }
 
@@ -308,6 +315,16 @@ impl<B: TextBackend> TextMeasurer for AndroidTextMeasurer<B> {
         rects
     }
 
+    fn paragraph(&self, paragraph: ParagraphHandle) -> std::rc::Rc<dyn compose_ui::Paragraph> {
+        let entry = self.entry(paragraph);
+        let layout = self
+            .backend
+            .paragraph_layout(paragraph.0 as u32)
+            .and_then(|data| paragraph_from_layout(&entry.text, &data))
+            .unwrap_or_else(|| compose_ui::platform::sampled_paragraph(self, paragraph));
+        std::rc::Rc::new(layout)
+    }
+
     fn text(&self, paragraph: ParagraphHandle) -> &str {
         &self.entry(paragraph).text
     }
@@ -342,6 +359,118 @@ pub fn utf16_index(text: &str, offset: usize) -> usize {
         offset -= 1;
     }
     text[..offset].encode_utf16().count()
+}
+
+/// Floats of a paragraph's layout as `TextMeasurer.kt`'s `paragraphLayout` writes them: its line
+/// count, UTF-16 length, width, height, min and max intrinsic widths and whether it exceeded its
+/// max lines or ellipsized; per line its start, end, visible end, top, bottom, baseline, left,
+/// right, width and whether its paragraph runs right to left; per UTF-16 offset, the text's end
+/// included, its primary and secondary horizontal positions and whether the character there is
+/// right to left.
+pub const PARAGRAPH_HEADER: usize = 8;
+pub const PARAGRAPH_LINE: usize = 10;
+pub const PARAGRAPH_OFFSET: usize = 3;
+
+/// The `ParagraphLayout` of `text` from `data` (see [`PARAGRAPH_HEADER`]), its UTF-16 offsets
+/// as bytes; `None` when the data doesn't fit the text. Each character's box is Compose's from
+/// the positions (`TextLayout.getBoundingBox`), and a line's end positions as Compose's
+/// one-run lines' (its edges).
+pub fn paragraph_from_layout(
+    text: &str,
+    data: &[f32],
+) -> Option<compose_ui::platform::ParagraphLayout> {
+    use compose_ui::Paragraph;
+    use compose_ui::platform::{CharPosition, LineLayout, ParagraphLayout};
+    let header = data.get(..PARAGRAPH_HEADER)?;
+    let (lines, length) = (header[0] as usize, header[1] as usize);
+    let units: usize = text.chars().map(char::len_utf16).sum();
+    let offsets_at = PARAGRAPH_HEADER + lines * PARAGRAPH_LINE;
+    if length != units || data.len() != offsets_at + (length + 1) * PARAGRAPH_OFFSET {
+        return None;
+    }
+    let offset_data = |index: usize| &data[offsets_at + index * PARAGRAPH_OFFSET..][..3];
+    // Each character boundary's UTF-16 index.
+    let mut boundaries: Vec<(usize, usize)> = Vec::with_capacity(text.len() + 1);
+    let mut unit = 0;
+    for (offset, c) in text.char_indices() {
+        boundaries.push((offset, unit));
+        unit += c.len_utf16();
+    }
+    boundaries.push((text.len(), unit));
+    let mut positions: Vec<CharPosition> = boundaries
+        .iter()
+        .map(|&(offset, unit)| {
+            let values = offset_data(unit);
+            CharPosition {
+                offset,
+                primary: values[0],
+                secondary: values[1],
+                right_to_left: values[2] != 0.0 && offset < text.len(),
+                left: values[0],
+                right: values[0],
+            }
+        })
+        .collect();
+    let line_layouts = (0..lines)
+        .map(|line| {
+            let values = &data[PARAGRAPH_HEADER + line * PARAGRAPH_LINE..][..PARAGRAPH_LINE];
+            let start = byte_offset(text, values[0] as usize);
+            let rtl = values[9] != 0.0;
+            let (left, right) = (values[6], values[7]);
+            // Compose's upstream end of a one-run line: its end edge for the paragraph's
+            // direction, and for the other one when the line's run is the other way.
+            let end_primary = if rtl { left } else { right };
+            let run_rtl = offset_data(values[0] as usize)[2] != 0.0;
+            let end_secondary = if run_rtl == rtl {
+                end_primary
+            } else if rtl {
+                right
+            } else {
+                left
+            };
+            LineLayout {
+                start,
+                end: byte_offset(text, values[1] as usize),
+                visible_end: byte_offset(text, values[2] as usize),
+                ellipsized: false,
+                top: values[3],
+                bottom: values[4],
+                baseline: values[5],
+                left,
+                right,
+                width: values[8],
+                right_to_left: rtl,
+                end_primary,
+                end_secondary,
+            }
+        })
+        .collect::<Vec<_>>();
+    let exceeded = header[6] != 0.0;
+    let ellipsized = header[7] != 0.0;
+    let mut layout = ParagraphLayout {
+        text: text.to_string(),
+        width: header[2],
+        height: header[3],
+        min_intrinsic_width: header[4],
+        max_intrinsic_width: header[5],
+        did_exceed_max_lines: exceeded,
+        lines: line_layouts,
+        positions: Vec::new(),
+    };
+    if ellipsized && let Some(last) = layout.lines.last_mut() {
+        last.ellipsized = true;
+    }
+    layout.positions = positions.clone();
+    // The characters' boxes, for selections.
+    for (index, position) in positions.iter_mut().enumerate() {
+        if index + 1 < boundaries.len() && !layout.lines.is_empty() {
+            let bounds = layout.get_bounding_box(position.offset);
+            position.left = bounds.left.min(bounds.right);
+            position.right = bounds.left.max(bounds.right);
+        }
+    }
+    layout.positions = positions;
+    Some(layout)
 }
 
 /// The byte offset of UTF-16 `index` of `text` (at a character boundary).
@@ -478,17 +607,21 @@ mod tests {
     use super::*;
     use compose_ui::IntSize;
 
-    /// A fake backend: 10 px per UTF-16 unit, 20 px lines, no wrapping.
+    /// A fake backend: 10 px per UTF-16 unit, 20 px lines, no wrapping; with `layouts`, it
+    /// gives its paragraphs' layouts as `TextMeasurer.kt` does (one line).
     #[derive(Default)]
     struct Fake {
         live: std::collections::HashSet<u32>,
         requests: Vec<Vec<u8>>,
+        layouts: bool,
+        texts: std::collections::HashMap<u32, String>,
     }
 
     impl TextBackend for Fake {
         fn layout(&mut self, handle: u32, text: &str, request: &[u8]) -> LaidOut {
             self.live.insert(handle);
             self.requests.push(request.to_vec());
+            self.texts.insert(handle, text.to_string());
             let units = text.encode_utf16().count() as i32;
             LaidOut {
                 metrics: ParagraphMetrics {
@@ -508,6 +641,19 @@ mod tests {
         fn cursor(&self, _handle: u32, offset: usize) -> Rect {
             Rect::new(offset as f32 * 10.0, 0.0, offset as f32 * 10.0, 20.0)
         }
+        fn paragraph_layout(&self, handle: u32) -> Option<Vec<f32>> {
+            if !self.layouts {
+                return None;
+            }
+            let units = self.texts[&handle].encode_utf16().count();
+            let width = units as f32 * 10.0;
+            let mut data = vec![1.0, units as f32, width, 20.0, width, width, 0.0, 0.0];
+            data.extend([0.0, units as f32, units as f32, 0.0, 20.0, 16.0, 0.0, width, width, 0.0]);
+            for unit in 0..=units {
+                data.extend([unit as f32 * 10.0, unit as f32 * 10.0, 0.0]);
+            }
+            Some(data)
+        }
         fn release(&mut self, handle: u32) {
             self.live.remove(&handle);
         }
@@ -523,6 +669,34 @@ mod tests {
         let two = measurer.layout("one\ntwo", &TextStyle::DEFAULT, options, constraints, &density);
         assert!(!measurer.did_exceed_max_lines(one));
         assert!(measurer.did_exceed_max_lines(two));
+    }
+
+    #[test]
+    fn paragraph_queries_come_from_the_backends_layout_in_bytes() {
+        let text = "a\u{e9}\u{1F600}b";
+        for layouts in [true, false] {
+            let mut measurer = AndroidTextMeasurer::new(Fake { layouts, ..Fake::default() });
+            let handle = measurer.layout(
+                text,
+                &TextStyle::DEFAULT,
+                TextLayoutOptions::default(),
+                Constraints::unbounded(),
+                &Density::new(1.0),
+            );
+            // Without the backend's layout, the queries come from its cursors.
+            let paragraph = measurer.paragraph(handle);
+            measurer.release(handle);
+            assert_eq!(paragraph.line_count(), 1, "{layouts}");
+            assert_eq!(paragraph.get_line_end(0, false), text.len(), "{layouts}");
+            assert_eq!(paragraph.get_line_end(0, true), text.len(), "{layouts}");
+            // The emoji: bytes 3 to 7, UTF-16 units 2 to 4.
+            assert_eq!(paragraph.get_horizontal_position(3, true), 20.0, "{layouts}");
+            assert_eq!(paragraph.get_horizontal_position(7, true), 40.0, "{layouts}");
+            assert_eq!(paragraph.get_bounding_box(3), Rect::new(20.0, 0.0, 40.0, 20.0));
+            assert_eq!(paragraph.get_cursor_rect(text.len()), Rect::new(50.0, 0.0, 50.0, 20.0));
+            assert_eq!(paragraph.get_offset_for_position(Offset::new(29.0, 10.0)), 3);
+            assert_eq!(paragraph.width(), 50.0, "{layouts}");
+        }
     }
 
     #[test]

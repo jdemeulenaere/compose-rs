@@ -23,6 +23,7 @@ mod dispatch;
 mod display_list;
 mod draw;
 mod draw_modifiers;
+mod fixed_text;
 mod focus;
 mod focus_manager;
 mod focus_requester;
@@ -47,6 +48,7 @@ mod node_context;
 mod nodes;
 mod optimizations;
 mod overlay;
+mod paragraph;
 mod paragraph_style;
 mod path;
 mod platform_services;
@@ -83,6 +85,7 @@ pub mod platform {
         Boundary, DisplayList, DrawGroup, DrawOp, FlatDisplayList, FlatGroup, Renderer, fits_in,
         single_drawing, single_drawing_extent,
     };
+    pub use crate::fixed_text::{FixedFontMetrics, FixedTextMeasurer};
     pub use crate::graphics_layer::LayerProperties;
     pub use crate::host::{FrameStats, LOCAL_CONSTRAINTS_HINT, UiHost};
     pub use crate::image::{ImageDecoder, set_image_decoder};
@@ -93,6 +96,10 @@ pub mod platform {
     pub use crate::modifier::shared_custom_modifier;
     pub use crate::nested_scroll::NestedScrollChain;
     pub use crate::optimizations::{Optimization, Optimizations};
+    pub use crate::paragraph::{
+        CharPosition, GlyphBox, LaidOutLine, LineLayout, ParagraphLayout, ParagraphSize,
+        sampled_paragraph, word_boundary,
+    };
     pub use crate::path::{PathOperator, set_path_operator};
     pub use crate::pointer_input::{PointerInputDriver, run_soon};
     pub use crate::render::KEPT_CAPACITY;
@@ -101,8 +108,8 @@ pub mod platform {
     #[doc(hidden)]
     pub use crate::semantics::{OtherSlot, OtherValue};
     pub use crate::text::{
-        DEFAULT_FONT_SIZE, FixedTextMeasurer, ParagraphHandle, ParagraphMetrics, TextLayoutOptions,
-        TextMeasurer, TextPosition, resolve_font_size_px, resolve_text_color, resolve_text_unit_px,
+        DEFAULT_FONT_SIZE, ParagraphHandle, ParagraphMetrics, TextLayoutOptions, TextMeasurer,
+        TextPosition, resolve_font_size_px, resolve_text_color, resolve_text_unit_px,
     };
     pub use crate::tree::{LayoutNode, NodeId, UiTree};
     pub use crate::unit::round_to_int;
@@ -171,6 +178,7 @@ pub use modifier::{
 pub use nested_scroll::{NestedScrollConnection, NestedScrollSource};
 pub use node_context::{NodeContext, NodeHandle};
 pub use overlay::{PopupPositionProvider, WindowPosition};
+pub use paragraph::{Paragraph, TextLayoutInput};
 pub use paragraph_style::ParagraphStyle;
 pub use path::{
     CornerRadius, ImageVector, Matrix, Path, PathCommand, PathData, PathDirection, PathError,

@@ -4,6 +4,7 @@
 mod brush;
 mod capture;
 mod line_height;
+mod paragraph;
 mod path_semantics;
 mod path_steps;
 mod review_f;

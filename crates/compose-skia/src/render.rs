@@ -279,7 +279,8 @@ fn draw_op(
             );
         }
         DrawOp::DrawParagraph(handle, offset) => {
-            if let Some(paragraph) = measurer.and_then(|measurer| measurer.paragraph(*handle)) {
+            if let Some(paragraph) = measurer.and_then(|measurer| measurer.skia_paragraph(*handle))
+            {
                 paragraph.paint(canvas, (offset.x, offset.y));
             }
         }

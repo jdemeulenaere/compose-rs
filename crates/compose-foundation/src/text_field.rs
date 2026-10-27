@@ -1057,7 +1057,7 @@ impl TextFieldNode {
                 self.intrinsics = Some(IntrinsicParagraph {
                     paragraph,
                     text,
-                    style: self.style,
+                    style: self.style.clone(),
                     options,
                     density,
                     constraints: text_constraints,

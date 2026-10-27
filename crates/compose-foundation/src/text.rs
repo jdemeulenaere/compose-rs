@@ -327,6 +327,15 @@ impl ModifierNodeElement for TextElement {
     }
 }
 
+/// What `on_text_layout` last heard of a layout: a measurement with the same paragraph and
+/// these is no new layout.
+#[derive(Clone, Copy, PartialEq)]
+struct HeardLayout {
+    size: compose_ui::IntSize,
+    metrics: compose_ui::platform::ParagraphMetrics,
+    did_exceed_max_lines: bool,
+}
+
 /// A text's node: its laid-out paragraph, kept while the text, style and constraints hold.
 pub(crate) struct TextNode {
     text: AnnotatedString,
@@ -338,7 +347,7 @@ pub(crate) struct TextNode {
     on_text_layout: Option<Callback<dyn Fn(TextLayoutResult)>>,
     /// What `on_text_layout` last heard: a measurement with the same paragraph and result is
     /// no new layout.
-    last_layout: Option<TextLayoutResult>,
+    last_layout: Option<HeardLayout>,
     paragraph: Option<ParagraphHandle>,
     constraints: Option<Constraints>,
     /// The density it was laid out at: a new one lays it out again.
@@ -556,17 +565,26 @@ impl LayoutModifierNode for TextNode {
         // Each new layout is heard, as Compose's `onTextLayout`: a paragraph laid out again
         // (a new text, style or width), or a new size.
         if let Some(callback) = &self.on_text_layout {
-            let result = TextLayoutResult {
+            let heard = HeardLayout {
                 size,
-                line_count: metrics.line_count,
-                first_baseline: metrics.first_baseline,
-                last_baseline: metrics.last_baseline,
-                did_overflow_width: natural.width > size.width,
-                did_overflow_height: natural.height > size.height
-                    || scope.text_measurer().did_exceed_max_lines(paragraph),
+                metrics,
+                did_exceed_max_lines: scope.text_measurer().did_exceed_max_lines(paragraph),
             };
-            if relaid || self.last_layout != Some(result) {
-                self.last_layout = Some(result);
+            if relaid || self.last_layout != Some(heard) {
+                self.last_layout = Some(heard);
+                // The paragraph's queries, asked for only when there's a callback to hear them.
+                let input = compose_ui::TextLayoutInput {
+                    text: self.text.clone(),
+                    style: self.style.clone(),
+                    max_lines: self.options.max_lines,
+                    soft_wrap: self.options.soft_wrap,
+                    overflow: self.options.overflow,
+                    density,
+                    layout_direction: direction,
+                    constraints,
+                };
+                let result =
+                    TextLayoutResult::new(input, scope.text_measurer().paragraph(paragraph), size);
                 let callback = callback.clone();
                 scope.run_after_layout(move || callback(result));
             }

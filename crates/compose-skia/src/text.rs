@@ -49,6 +49,75 @@ struct Entry {
     /// The text's own width its layout width was chosen from (SkParagraph's
     /// `maxIntrinsicWidth` after the first layout).
     max_intrinsic_width: f32,
+    /// It ends with an ellipsis (more lines than its maximum, ellipsized).
+    ellipsized: bool,
+}
+
+/// The queries of `entry`'s paragraph (D1105): its lines from SkParagraph's line metrics, each
+/// character's box from its rectangles (and its bidi run's direction from theirs), read once
+/// into a `ParagraphLayout`, which answers as Android's `Layout` does.
+fn paragraph_layout(entry: &Entry) -> compose_ui::platform::ParagraphLayout {
+    use compose_ui::platform::{GlyphBox, LaidOutLine, ParagraphLayout, ParagraphSize};
+    let text = &entry.text;
+    let paragraph = &entry.paragraph;
+    let mut lines = Vec::new();
+    for line in paragraph.get_line_metrics() {
+        let start = byte_offset(text, line.start_index);
+        let end = byte_offset(text, line.end_including_newline);
+        let visible_end = byte_offset(text, line.end_excluding_whitespaces).max(start);
+        let mut glyphs = Vec::new();
+        for (index, character) in text[start..end].char_indices() {
+            if character == '\n' {
+                continue;
+            }
+            let offset = start + index;
+            let range = utf16_index(text, offset)..utf16_index(text, offset + character.len_utf8());
+            let boxes =
+                paragraph.get_rects_for_range(range, RectHeightStyle::Max, RectWidthStyle::Tight);
+            let glyph = match boxes.first() {
+                Some(first) => {
+                    let (left, right) =
+                        boxes.iter().fold((f32::INFINITY, f32::NEG_INFINITY), |(l, r), b| {
+                            (l.min(b.rect.left), r.max(b.rect.right))
+                        });
+                    let rtl = first.direct == skia_safe::textlayout::TextDirection::RTL;
+                    GlyphBox { offset, left, right, right_to_left: rtl }
+                }
+                // No rectangle (a character shaped into the one before it, or ellipsized):
+                // empty, after the box before it.
+                None => {
+                    let x = glyphs.last().map_or(line.left as f32, |b: &GlyphBox| {
+                        if b.right_to_left { b.left } else { b.right }
+                    });
+                    GlyphBox { offset, left: x, right: x, right_to_left: entry.right_to_left }
+                }
+            };
+            glyphs.push(glyph);
+        }
+        lines.push(LaidOutLine {
+            start,
+            end,
+            visible_end,
+            top: (line.baseline - line.ascent) as f32,
+            bottom: (line.baseline + line.descent) as f32,
+            baseline: line.baseline as f32,
+            left: line.left as f32,
+            right: (line.left + line.width) as f32,
+            width: line.width as f32,
+            right_to_left: entry.right_to_left,
+            glyphs,
+        });
+    }
+    let width = paragraph.max_width();
+    let size = ParagraphSize {
+        width: if width.is_finite() { width } else { entry.metrics.size.width as f32 },
+        height: paragraph.height(),
+        min_intrinsic_width: paragraph.min_intrinsic_width(),
+        max_intrinsic_width: entry.max_intrinsic_width,
+        did_exceed_max_lines: paragraph.did_exceed_max_lines(),
+        ellipsized: entry.ellipsized,
+    };
+    ParagraphLayout::from_lines(text.clone(), size, lines)
 }
 
 /// Lays out paragraphs with SkParagraph and the system's fonts, keeping each until released:
@@ -77,8 +146,9 @@ impl SkiaTextMeasurer {
         SkiaTextMeasurer { collection, paragraphs: Vec::new(), free: Vec::new() }
     }
 
-    /// The paragraph behind `handle`, for drawing.
-    pub fn paragraph(&self, handle: ParagraphHandle) -> Option<&Paragraph> {
+    /// The SkParagraph behind `handle`, for drawing (`TextMeasurer::paragraph` gives its
+    /// queries).
+    pub fn skia_paragraph(&self, handle: ParagraphHandle) -> Option<&Paragraph> {
         self.paragraphs.get(handle.0 as usize)?.as_ref().map(|entry| &entry.paragraph)
     }
 
@@ -258,6 +328,10 @@ impl TextMeasurer for SkiaTextMeasurer {
             .collect()
     }
 
+    fn paragraph(&self, paragraph: ParagraphHandle) -> std::rc::Rc<dyn compose_ui::Paragraph> {
+        std::rc::Rc::new(paragraph_layout(self.entry(paragraph)))
+    }
+
     fn text(&self, paragraph: ParagraphHandle) -> &str {
         &self.entry(paragraph).text
     }
@@ -377,12 +451,14 @@ impl SkiaTextMeasurer {
             line_count: paragraph.line_number().max(1) as u32,
         };
         drop(lines);
+        let ellipsized = ellipsis && paragraph.did_exceed_max_lines();
         let entry = Entry {
             paragraph,
             text: text.to_string(),
             metrics,
             right_to_left,
             max_intrinsic_width,
+            ellipsized,
         };
         match self.free.pop() {
             Some(index) => {

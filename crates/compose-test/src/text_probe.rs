@@ -173,6 +173,10 @@ impl<M: TextMeasurer> TextMeasurer for CountingTextMeasurer<M> {
         self.inner.selection_rects(paragraph, range)
     }
 
+    fn paragraph(&self, paragraph: ParagraphHandle) -> std::rc::Rc<dyn compose_ui::Paragraph> {
+        self.inner.paragraph(paragraph)
+    }
+
     fn text(&self, paragraph: ParagraphHandle) -> &str {
         self.inner.text(paragraph)
     }

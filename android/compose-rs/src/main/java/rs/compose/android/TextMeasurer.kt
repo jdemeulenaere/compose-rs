@@ -669,6 +669,68 @@ internal class TextMeasurer(
         results.putInt(12, lineBottom(layout, line, lines, lastLines.get(handle)).toRawBits())
     }
 
+    /**
+     * Paragraph [handle]'s layout for Rust's `Paragraph` queries, read in one crossing (D1105;
+     * Rust's `paragraph_from_layout` reads it): its line count, UTF-16 length, width, height,
+     * min and max intrinsic widths, whether it exceeded its max lines and whether its last line
+     * is ellipsized; per line its start, end (the text's end for an ellipsized last line, as
+     * Compose's `TextLayout.getLineEnd`), visible end, top, bottom, baseline, left, right, width
+     * and whether its paragraph runs right to left; per UTF-16 offset, the text's end included,
+     * its primary and secondary horizontal positions and whether the character there is right
+     * to left. Null without a layout. Rust asks only for a text with an `onTextLayout`.
+     */
+    fun paragraphLayout(handle: Int): FloatArray? {
+        val layout = layouts.get(handle) ?: return null
+        val kept = intrinsics.get(handle)
+        val text = layout.text
+        val length = text.length
+        val lines = (kept?.maxLines ?: layout.lineCount).coerceIn(1, layout.lineCount.coerceAtLeast(1))
+        val lastLine = lastLines.get(handle)
+        val lastEllipsized = layout.getEllipsisCount(lines - 1) > 0
+        val out = FloatArray(PARAGRAPH_HEADER + lines * PARAGRAPH_LINE + (length + 1) * PARAGRAPH_OFFSET)
+        out[0] = lines.toFloat()
+        out[1] = length.toFloat()
+        out[2] = layout.width.toFloat()
+        out[3] = lineBottom(layout, lines - 1, lines, lastLine)
+        // The widest word with its trailing spaces, as Compose's `minIntrinsicWidth`.
+        var widest = 0f
+        var wordStart = 0
+        for (index in 0 until length) {
+            val breaks = text[index] == '\n' || (text[index] == ' ' && (index + 1 == length || text[index + 1] != ' '))
+            if (breaks) {
+                widest = maxOf(widest, Layout.getDesiredWidth(text, wordStart, index + 1, layout.paint))
+                wordStart = index + 1
+            }
+        }
+        if (wordStart < length) widest = maxOf(widest, Layout.getDesiredWidth(text, wordStart, length, layout.paint))
+        out[4] = widest
+        out[5] = kept?.maxIntrinsicWidth ?: layout.width.toFloat()
+        out[6] = if (layout.lineCount > lines || lastEllipsized) 1f else 0f
+        out[7] = if (lastEllipsized) 1f else 0f
+        for (line in 0 until lines) {
+            val at = PARAGRAPH_HEADER + line * PARAGRAPH_LINE
+            val ellipsized = line == lines - 1 && lastEllipsized
+            out[at] = layout.getLineStart(line).toFloat()
+            out[at + 1] = (if (ellipsized) length else layout.getLineEnd(line)).toFloat()
+            out[at + 2] = (if (ellipsized) layout.getLineStart(line) + layout.getEllipsisStart(line) else layout.getLineVisibleEnd(line)).toFloat()
+            out[at + 3] = layout.getLineTop(line).toFloat()
+            out[at + 4] = lineBottom(layout, line, lines, lastLine)
+            out[at + 5] = lineBaseline(layout, line, lines, lastLine)
+            out[at + 6] = layout.getLineLeft(line)
+            out[at + 7] = layout.getLineRight(line)
+            out[at + 8] = layout.getLineWidth(line)
+            out[at + 9] = if (layout.getParagraphDirection(line) == Layout.DIR_RIGHT_TO_LEFT) 1f else 0f
+        }
+        val offsets = PARAGRAPH_HEADER + lines * PARAGRAPH_LINE
+        for (offset in 0..length) {
+            val at = offsets + offset * PARAGRAPH_OFFSET
+            out[at] = layout.getPrimaryHorizontal(offset)
+            out[at + 1] = layout.getSecondaryHorizontal(offset)
+            out[at + 2] = if (offset < length && layout.isRtlCharAt(offset)) 1f else 0f
+        }
+        return out
+    }
+
     fun release(handle: Int) {
         layouts.remove(handle)
         lastLines.remove(handle)
@@ -845,6 +907,10 @@ internal class TextMeasurer(
         const val INITIAL_RECORD_NANOS = 30_000L
         /** The most one recording counts for in [recordNanos]. */
         const val MAX_RECORD_NANOS = 1_000_000L
+        /** [paragraphLayout]'s floats: its header's, a line's and an offset's (Rust's `PARAGRAPH_*`). */
+        const val PARAGRAPH_HEADER = 8
+        const val PARAGRAPH_LINE = 10
+        const val PARAGRAPH_OFFSET = 3
     }
 }
 

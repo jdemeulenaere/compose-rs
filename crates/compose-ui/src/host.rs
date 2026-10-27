@@ -8,9 +8,10 @@ use std::rc::Rc;
 use compose_runtime::Composition;
 
 use crate::display_list::FlatDisplayList;
+use crate::fixed_text::FixedTextMeasurer;
 use crate::input::{Action, KeyEvent, PointerEvent};
 use crate::semantics::SemanticsNode;
-use crate::text::{FixedTextMeasurer, TextMeasurer};
+use crate::text::TextMeasurer;
 use crate::tree::{NodeId, UiTree};
 use crate::unit::{Density, IntSize};
 

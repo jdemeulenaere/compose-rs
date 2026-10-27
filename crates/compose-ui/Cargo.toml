@@ -10,4 +10,5 @@ publish.workspace = true
 log.workspace = true
 compose-runtime.workspace = true
 smallvec = { version = "1.13", features = ["const_new", "union"] }
+unicode-bidi = "0.3"
 unicode-segmentation = "1"

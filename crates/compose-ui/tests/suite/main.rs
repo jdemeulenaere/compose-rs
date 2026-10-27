@@ -8,6 +8,7 @@ mod annotated_string_builder;
 mod intrinsics;
 mod modifier_nodes;
 mod mutable_paths;
+mod paragraph;
 mod paragraph_style;
 mod retained_drawing;
 mod review_d;

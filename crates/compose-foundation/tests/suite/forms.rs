@@ -281,17 +281,49 @@ fn a_text_is_at_least_min_lines_high_and_reports_its_layout() {
     // "H" and "H\nH" give the first line's height and each next one's.
     let three = height_of(&mut ui, "three");
     assert!((three - lines_high(3)).abs() <= 1, "{three}");
-    let first = *layouts.borrow().last().expect("reported");
+    let first = layouts.borrow().last().expect("reported").clone();
     assert_eq!(first.line_count, 1);
     assert!(!first.has_visual_overflow());
     assert_eq!(layouts.borrow().len(), 1, "once per new layout");
     // 40 dp at 7 px a character: 5 per line, so three lines cut to two.
     text.set(String::from("aaaa bbbb cccc"));
     ui.wait_for_idle();
-    let cut = *layouts.borrow().last().expect("reported");
+    let cut = layouts.borrow().last().expect("reported").clone();
     assert_eq!(cut.line_count, 2);
     assert!(cut.did_overflow_height && cut.has_visual_overflow());
     assert_eq!(layouts.borrow().len(), 2);
+}
+
+/// A text's layout result has Compose's queries (D1105), its input, and outlives the text.
+#[test]
+fn a_texts_layout_result_answers_queries_after_the_text_is_gone() {
+    let layouts = Rc::new(RefCell::new(Vec::<TextLayoutResult>::new()));
+    let seen = layouts.clone();
+    let shown = mutable_state_of(true);
+    let handle = shown.handle();
+    let mut ui = compose_test(move || {
+        let seen = seen.clone();
+        if handle.get() {
+            BasicText!(
+                "ab cd",
+                on_text_layout = move |result: TextLayoutResult| seen.borrow_mut().push(result)
+            );
+        }
+    });
+    let result = layouts.borrow().last().expect("reported").clone();
+    shown.set(false);
+    ui.wait_for_idle();
+    assert_eq!(result.layout_input.text.as_str(), "ab cd");
+    assert_eq!(result.layout_input.max_lines, u32::MAX);
+    // 7 px a character (14 sp, half an em).
+    assert_eq!(result.get_cursor_rect(2).left, 14.0);
+    assert_eq!(result.get_line_for_offset(4), 0);
+    assert_eq!(result.get_bounding_box(3).left, 21.0);
+    assert_eq!(result.get_bounding_box(3).right, 28.0);
+    assert_eq!(result.get_offset_for_position(compose_ui::Offset::new(29.0, 5.0)), 4);
+    assert_eq!(result.get_word_boundary(4), compose_ui::TextRange::new(3, 5));
+    assert_eq!(result.multi_paragraph.width(), 35.0);
+    assert_eq!(result, result.clone());
 }
 
 #[test]
