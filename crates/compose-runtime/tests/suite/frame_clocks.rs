@@ -2,6 +2,7 @@
 //! Tasks run on this thread's executor (`platform::run_ready`).
 
 use std::cell::Cell;
+use std::future::Future;
 use std::rc::Rc;
 
 use compose_runtime::platform::run_ready;
@@ -125,4 +126,49 @@ fn the_executor_clock_waits_for_the_hosts_frames() {
     assert!(compose_runtime::platform::has_frame_awaiters());
     compose_runtime::platform::dispatch_frame();
     assert_eq!(received.get(), Some(3_000));
+}
+
+/// `send_frame` runs each awaiter's `on_frame` itself, before returning, as Compose's: the
+/// task resumes later, with the result.
+#[test]
+fn a_sent_frame_runs_on_frame_at_once() {
+    let scope = CoroutineScope::new();
+    let clock = BroadcastFrameClock::new();
+    let (ran, resumed) = (Rc::new(Cell::new(None)), Rc::new(Cell::new(false)));
+    let (c, r, s) = (clock.clone(), ran.clone(), resumed.clone());
+    launch(&scope, async move {
+        let r = r.clone();
+        c.with_frame_nanos(move |time| r.set(Some(time))).await;
+        s.set(true);
+    });
+    clock.send_frame(5);
+    assert_eq!(ran.get(), Some(5), "on_frame ran in send_frame");
+    assert!(!resumed.get(), "the task resumes on the executor");
+    run_ready();
+    assert!(resumed.get());
+}
+
+/// A waker counting its wakes.
+struct CountingWaker(std::sync::atomic::AtomicUsize);
+
+impl std::task::Wake for CountingWaker {
+    fn wake(self: std::sync::Arc<Self>) {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+/// A paused clock's awaiter polled again keeps one waker: resuming wakes it once.
+#[test]
+fn a_paused_awaiter_polled_again_is_woken_once() {
+    let clock = PausableMonotonicFrameClock::new(BroadcastFrameClock::new());
+    clock.pause();
+    let counter = std::sync::Arc::new(CountingWaker(std::sync::atomic::AtomicUsize::new(0)));
+    let waker = std::task::Waker::from(counter.clone());
+    let mut context = std::task::Context::from_waker(&waker);
+    let mut future = std::pin::pin!(clock.with_frame_nanos(|time| time));
+    for _ in 0..3 {
+        assert!(future.as_mut().poll(&mut context).is_pending());
+    }
+    clock.resume();
+    assert_eq!(counter.0.load(std::sync::atomic::Ordering::SeqCst), 1);
 }

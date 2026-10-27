@@ -13,16 +13,24 @@ use std::task::{Context, Poll, Waker};
 use crate::executor::{Job, current_job};
 
 /// A source of frames, as Compose's `MonotonicFrameClock`: [`with_frame_nanos`] waits for the
-/// next frame and calls `on_frame` with its time in nanoseconds.
+/// next frame and calls `on_frame` with its time in nanoseconds. A clock may run `on_frame`
+/// when it sends the frame, before the task resumes (a [`BroadcastFrameClock`] does), so it's
+/// `'static`.
 ///
 /// [`with_frame_nanos`]: MonotonicFrameClock::with_frame_nanos
 pub trait MonotonicFrameClock {
     /// Waits for the next frame, then runs `on_frame` with its time, as `withFrameNanos`.
-    fn with_frame_nanos<R>(&self, on_frame: impl FnOnce(u64) -> R) -> impl Future<Output = R>;
+    fn with_frame_nanos<R: 'static>(
+        &self,
+        on_frame: impl FnOnce(u64) -> R + 'static,
+    ) -> impl Future<Output = R>;
 
     /// Like [`with_frame_nanos`](MonotonicFrameClock::with_frame_nanos), with the time in
     /// milliseconds, as `withFrameMillis`.
-    fn with_frame_millis<R>(&self, on_frame: impl FnOnce(u64) -> R) -> impl Future<Output = R> {
+    fn with_frame_millis<R: 'static>(
+        &self,
+        on_frame: impl FnOnce(u64) -> R + 'static,
+    ) -> impl Future<Output = R> {
         self.with_frame_nanos(move |nanos| on_frame(nanos / 1_000_000))
     }
 }
@@ -33,13 +41,17 @@ pub trait MonotonicFrameClock {
 pub struct ExecutorFrameClock;
 
 impl MonotonicFrameClock for ExecutorFrameClock {
-    fn with_frame_nanos<R>(&self, on_frame: impl FnOnce(u64) -> R) -> impl Future<Output = R> {
+    fn with_frame_nanos<R: 'static>(
+        &self,
+        on_frame: impl FnOnce(u64) -> R + 'static,
+    ) -> impl Future<Output = R> {
         crate::executor::with_frame_nanos(on_frame)
     }
 }
 
 /// A frame clock whose frames are sent by its owner, as Compose's `BroadcastFrameClock`:
-/// [`send_frame`](BroadcastFrameClock::send_frame) resumes every task waiting for a frame.
+/// [`send_frame`](BroadcastFrameClock::send_frame) runs every waiting task's `on_frame` and
+/// resumes the task.
 /// A clone shares the clock.
 #[derive(Clone)]
 pub struct BroadcastFrameClock {
@@ -52,10 +64,15 @@ struct BroadcastInner {
     on_new_awaiters: Option<Box<dyn Fn()>>,
 }
 
+/// An awaiter's `on_frame`, writing its result for the task.
+type OnFrame = Box<dyn FnOnce(u64)>;
+
 /// A task waiting for a frame of a [`BroadcastFrameClock`].
 struct Awaiter {
-    /// The frame's time, once sent.
-    time: Cell<Option<u64>>,
+    /// Runs the task's `on_frame` with the frame's time and keeps its result for the task.
+    on_frame: RefCell<Option<OnFrame>>,
+    /// The frame came: `on_frame` ran.
+    done: Cell<bool>,
     waker: RefCell<Waker>,
     /// The task awaiting, cancelled with the clock.
     job: Option<Job>,
@@ -93,12 +110,17 @@ impl BroadcastFrameClock {
         !self.inner.awaiters.borrow().is_empty()
     }
 
-    /// Sends a frame at `time_nanos`: every task waiting for one resumes with it, as
-    /// `sendFrame`.
+    /// Sends a frame at `time_nanos`, as `sendFrame`: runs the `on_frame` of every task waiting
+    /// for one, now, then wakes the task, which resumes with the result.
     pub fn send_frame(&self, time_nanos: u64) {
         let awaiters = std::mem::take(&mut *self.inner.awaiters.borrow_mut());
         for awaiter in awaiters {
-            awaiter.time.set(Some(time_nanos));
+            // Taken out first: `on_frame` may await the clock again.
+            let on_frame = awaiter.on_frame.borrow_mut().take();
+            if let Some(on_frame) = on_frame {
+                on_frame(time_nanos);
+            }
+            awaiter.done.set(true);
             let waker = awaiter.waker.borrow().clone();
             waker.wake();
         }
@@ -119,29 +141,40 @@ impl BroadcastFrameClock {
 }
 
 impl MonotonicFrameClock for BroadcastFrameClock {
-    fn with_frame_nanos<R>(&self, on_frame: impl FnOnce(u64) -> R) -> impl Future<Output = R> {
-        FrameAwait { inner: self.inner.clone(), on_frame: Some(on_frame), awaiter: None }
+    fn with_frame_nanos<R: 'static>(
+        &self,
+        on_frame: impl FnOnce(u64) -> R + 'static,
+    ) -> impl Future<Output = R> {
+        let result = Rc::new(Cell::new(None));
+        let kept = result.clone();
+        FrameAwait {
+            inner: self.inner.clone(),
+            on_frame: Some(Box::new(move |time| kept.set(Some(on_frame(time))))),
+            result,
+            awaiter: None,
+        }
     }
 }
 
 /// The future of [`BroadcastFrameClock::with_frame_nanos`].
-struct FrameAwait<F> {
+struct FrameAwait<R> {
     inner: Rc<BroadcastInner>,
-    on_frame: Option<F>,
+    /// `on_frame`, writing its result, until the awaiter holds it.
+    on_frame: Option<OnFrame>,
+    result: Rc<Cell<Option<R>>>,
     awaiter: Option<Rc<Awaiter>>,
 }
 
-impl<F> Unpin for FrameAwait<F> {}
+impl<R> Unpin for FrameAwait<R> {}
 
-impl<R, F: FnOnce(u64) -> R> Future for FrameAwait<F> {
+impl<R> Future for FrameAwait<R> {
     type Output = R;
 
     fn poll(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<R> {
         if let Some(awaiter) = &self.awaiter {
-            if let Some(time) = awaiter.time.get() {
+            if awaiter.done.get() {
                 self.awaiter = None;
-                let on_frame = self.on_frame.take().expect("polled after it completed");
-                return Poll::Ready(on_frame(time));
+                return Poll::Ready(self.result.take().expect("on_frame ran"));
             }
             *awaiter.waker.borrow_mut() = context.waker().clone();
             return Poll::Pending;
@@ -155,7 +188,8 @@ impl<R, F: FnOnce(u64) -> R> Future for FrameAwait<F> {
             return Poll::Pending;
         }
         let awaiter = Rc::new(Awaiter {
-            time: Cell::new(None),
+            on_frame: RefCell::new(self.on_frame.take()),
+            done: Cell::new(false),
             waker: RefCell::new(context.waker().clone()),
             job: current_job(),
         });
@@ -172,7 +206,7 @@ impl<R, F: FnOnce(u64) -> R> Future for FrameAwait<F> {
     }
 }
 
-impl<F> Drop for FrameAwait<F> {
+impl<R> Drop for FrameAwait<R> {
     /// An awaiter cancelled before its frame stops waiting.
     fn drop(&mut self) {
         if let Some(awaiter) = self.awaiter.take()
@@ -197,6 +231,7 @@ pub struct PausableMonotonicFrameClock<C: MonotonicFrameClock> {
 #[derive(Default)]
 struct Latch {
     closed: Cell<bool>,
+    /// The tasks waiting, each once however often it's polled.
     waiting: RefCell<Vec<Waker>>,
 }
 
@@ -225,12 +260,18 @@ impl<C: MonotonicFrameClock> PausableMonotonicFrameClock<C> {
 }
 
 impl<C: MonotonicFrameClock> MonotonicFrameClock for PausableMonotonicFrameClock<C> {
-    fn with_frame_nanos<R>(&self, on_frame: impl FnOnce(u64) -> R) -> impl Future<Output = R> {
+    fn with_frame_nanos<R: 'static>(
+        &self,
+        on_frame: impl FnOnce(u64) -> R + 'static,
+    ) -> impl Future<Output = R> {
         let latch = self.latch.clone();
         async move {
             std::future::poll_fn(|context| {
                 if latch.closed.get() {
-                    latch.waiting.borrow_mut().push(context.waker().clone());
+                    let mut waiting = latch.waiting.borrow_mut();
+                    if !waiting.iter().any(|waker| waker.will_wake(context.waker())) {
+                        waiting.push(context.waker().clone());
+                    }
                     Poll::Pending
                 } else {
                     Poll::Ready(())
