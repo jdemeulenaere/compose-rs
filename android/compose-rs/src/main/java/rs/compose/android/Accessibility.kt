@@ -1,6 +1,7 @@
 package rs.compose.android
 
 import android.graphics.Rect
+import android.os.Build
 import android.os.Bundle
 import android.util.SparseArray
 import android.view.MotionEvent
@@ -199,13 +200,13 @@ internal class Accessibility(private val view: ComposeRsView) :
     override fun createAccessibilityNodeInfo(virtualViewId: Int): AccessibilityNodeInfo? {
         refresh()
         if (virtualViewId == HOST_VIEW_ID) {
-            val info = AccessibilityNodeInfo(view)
+            val info = newNodeInfo(view, View.NO_ID)
             view.onInitializeAccessibilityNodeInfo(info)
             for (root in roots) info.addChild(view, root)
             return info
         }
         val node = nodes.get(virtualViewId) ?: return null
-        val info = AccessibilityNodeInfo(view, virtualViewId)
+        val info = newNodeInfo(view, virtualViewId)
         info.packageName = view.context.packageName
         info.setParent(view, if (node.parent == -1) View.NO_ID else node.parent)
         for (child in node.children) info.addChild(view, child)
@@ -239,7 +240,8 @@ internal class Accessibility(private val view: ComposeRsView) :
             info.text = node.text
         }
         if (node.description.isNotEmpty()) info.contentDescription = node.description
-        if (node.state.isNotEmpty()) info.stateDescription = node.state
+        // A state description from API 30 (`setStateDescription`); before, none.
+        if (node.state.isNotEmpty() && Build.VERSION.SDK_INT >= 30) info.stateDescription = node.state
         if (node.error.isNotEmpty()) {
             info.isContentInvalid = true
             info.error = node.error
@@ -264,12 +266,7 @@ internal class Accessibility(private val view: ComposeRsView) :
             if (info.isClickable) info.addAction(AccessibilityAction.ACTION_CLICK)
             if (info.isFocusable && !info.isFocused) info.addAction(AccessibilityAction.ACTION_FOCUS)
             node.range?.let { range ->
-                info.rangeInfo = AccessibilityNodeInfo.RangeInfo(
-                    AccessibilityNodeInfo.RangeInfo.RANGE_TYPE_FLOAT,
-                    range[1],
-                    range[2],
-                    range[0],
-                )
+                info.rangeInfo = newRangeInfo(range[1], range[2], range[0])
                 info.addAction(AccessibilityAction.ACTION_SET_PROGRESS)
                 info.addAction(AccessibilityAction.ACTION_SCROLL_FORWARD)
                 info.addAction(AccessibilityAction.ACTION_SCROLL_BACKWARD)
@@ -442,3 +439,25 @@ internal class Accessibility(private val view: ComposeRsView) :
         const val CLICKABLE = 1
     }
 }
+
+/**
+ * A node's info for [view] (its virtual child [virtualViewId], or the view itself with
+ * `View.NO_ID`): constructed from API 30, obtained from the pool before (the constructors are
+ * API 30's; lint's NewApi).
+ */
+private fun newNodeInfo(view: View, virtualViewId: Int): AccessibilityNodeInfo =
+    if (Build.VERSION.SDK_INT >= 30) {
+        if (virtualViewId == View.NO_ID) AccessibilityNodeInfo(view) else AccessibilityNodeInfo(view, virtualViewId)
+    } else {
+        @Suppress("DEPRECATION")
+        if (virtualViewId == View.NO_ID) AccessibilityNodeInfo.obtain(view) else AccessibilityNodeInfo.obtain(view, virtualViewId)
+    }
+
+/** A float range from [min] to [max] at [current]: constructed from API 30, obtained before. */
+private fun newRangeInfo(min: Float, max: Float, current: Float): AccessibilityNodeInfo.RangeInfo =
+    if (Build.VERSION.SDK_INT >= 30) {
+        AccessibilityNodeInfo.RangeInfo(AccessibilityNodeInfo.RangeInfo.RANGE_TYPE_FLOAT, min, max, current)
+    } else {
+        @Suppress("DEPRECATION")
+        AccessibilityNodeInfo.RangeInfo.obtain(AccessibilityNodeInfo.RangeInfo.RANGE_TYPE_FLOAT, min, max, current)
+    }

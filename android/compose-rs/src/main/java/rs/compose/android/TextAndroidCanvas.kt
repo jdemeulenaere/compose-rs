@@ -111,7 +111,8 @@ internal class TextAndroidCanvas : Canvas() {
 
     override fun concat(matrix: Matrix?) = nativeCanvas.concat(matrix)
 
-    @TargetApi(33)
+    // As lint's API database has it: the framework calls an override only where it exists.
+    @TargetApi(35)
     override fun concat(m: Matrix44?) = nativeCanvas.concat(m)
 
     override fun setMatrix(matrix: Matrix?) = nativeCanvas.setMatrix(matrix)
@@ -151,10 +152,10 @@ internal class TextAndroidCanvas : Canvas() {
 
     override fun clipOutPath(path: Path): Boolean = nativeCanvas.clipOutPath(path)
 
-    @TargetApi(33)
+    @TargetApi(35)
     override fun clipShader(shader: Shader) = nativeCanvas.clipShader(shader)
 
-    @TargetApi(33)
+    @TargetApi(35)
     override fun clipOutShader(shader: Shader) = nativeCanvas.clipOutShader(shader)
 
     override fun getDrawFilter(): DrawFilter? = nativeCanvas.drawFilter
@@ -282,8 +283,11 @@ internal class TextAndroidCanvas : Canvas() {
 
     override fun drawPaint(paint: Paint) = nativeCanvas.drawPaint(paint)
 
+    // API 31, as Compose's (`@RequiresApi(S)`).
+    @TargetApi(31)
     override fun drawPatch(patch: NinePatch, dst: Rect, paint: Paint?) = nativeCanvas.drawPatch(patch, dst, paint)
 
+    @TargetApi(31)
     override fun drawPatch(patch: NinePatch, dst: RectF, paint: Paint?) = nativeCanvas.drawPatch(patch, dst, paint)
 
     override fun drawPath(path: Path, paint: Paint) = nativeCanvas.drawPath(path, paint)
@@ -307,6 +311,7 @@ internal class TextAndroidCanvas : Canvas() {
     override fun drawRect(left: Float, top: Float, right: Float, bottom: Float, paint: Paint) =
         nativeCanvas.drawRect(left, top, right, bottom, paint)
 
+    @TargetApi(36)
     override fun drawRegion(region: Region, paint: Paint) = nativeCanvas.drawRegion(region, paint)
 
     override fun drawRGB(r: Int, g: Int, b: Int) = nativeCanvas.drawRGB(r, g, b)

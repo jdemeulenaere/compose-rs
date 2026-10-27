@@ -22,7 +22,7 @@ The log is split by area into the files below, one table each, rows in number or
 | [text](decisions/text.md) | Text measurement and layout on each platform, fonts, text fields and editing. | 42 |
 | [lazy-and-prefetch](decisions/lazy-and-prefetch.md) | Lazy lists and grids, item reuse, the policy of composing only what is in view, prefetch. | 64 |
 | [android-drawing](decisions/android-drawing.md) | The display list and its replayer, render nodes and repaint boundaries, paths, shadows, layers. | 28 |
-| [android-host-and-performance](decisions/android-host-and-performance.md) | The view and activity glue, the frame loop, the hint session, jank, startup, memory, and the optimization flags. | 25 |
+| [android-host-and-performance](decisions/android-host-and-performance.md) | The view and activity glue, the frame loop, the hint session, jank, startup, memory, and the optimization flags. | 26 |
 | [desktop](decisions/desktop.md) | The desktop host: window, Skia rendering, input and events. | 6 |
 | [benchmarks](decisions/benchmarks.md) | The benchmark apps, protocols and rounds, and how results are read. | 34 |
 | [api-and-tooling](decisions/api-and-tooling.md) | Names, crates and modules, semver, the edit-build loop, testing and documentation, the toolchain's and dependencies' versions. | 38 |
@@ -478,6 +478,7 @@ The log is split by area into the files below, one table each, rows in number or
 | D1055 | [android-drawing](decisions/android-drawing.md#d1055) | current |
 | D1056 | [ui-and-layout](decisions/ui-and-layout.md#d1056) | current |
 | D1057 | [ui-and-layout](decisions/ui-and-layout.md#d1057) | current |
+| D1058 | [android-host-and-performance](decisions/android-host-and-performance.md#d1058) | current |
 | D1100 | [text](decisions/text.md#d1100) | revised by [D1112](decisions/text.md#d1112) |
 | D1101 | [text](decisions/text.md#d1101) | current |
 | D1102 | [text](decisions/text.md#d1102) | current |
