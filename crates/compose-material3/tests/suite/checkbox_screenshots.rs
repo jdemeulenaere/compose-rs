@@ -496,3 +496,40 @@ fn an_indeterminate_checkbox_draws_its_line_with_the_stroke_given() {
         assert_eq!(drawn(&mut ui), expected);
     }
 }
+
+/// The check mark's whole length: the lines from (4, 10) to (8, 14) to (16, 6).
+const FULL_CHECK: f32 = 16.970562;
+
+/// The play time of a change's animations at Compose's golden: the change's first frame
+/// recomposes, its animations start on the next, and `advanceTimeBy(100)` runs whole frames
+/// (112 ms): 96 ms in.
+const GOLDEN_PLAY_TIME_MILLIS: i64 = 96;
+
+/// The check mark drawn in at the golden (`checkBox_unchecked_animateToChecked`) is exactly the
+/// default spatial spring's (damping 0.9, stiffness 700) fraction of it, 96 ms in.
+#[test]
+fn a_checkings_check_mark_follows_the_default_spatial_spring() {
+    use compose_animation::{FloatAnimationSpec, FloatSpringSpec};
+    let spring = FloatSpringSpec::new(0.9, 700.0, 0.01);
+    let fraction = spring.value_from_nanos(GOLDEN_PLAY_TIME_MILLIS * 1_000_000, 0.0, 1.0, 0.0);
+    for s in schemes() {
+        let found = toggled(s, false, Duration::from_millis(100));
+        let length = check_length(&found);
+        assert!(
+            (length - FULL_CHECK * fraction).abs() < 0.02,
+            "{length} for {fraction}: {found:?}"
+        );
+    }
+}
+
+/// Unchecking, the check mark stays whole until the snap's 100 ms delay (`SnapAnimationDelay`):
+/// whole at the golden (96 ms in, `checkBox_checked_animateToUnchecked`), gone a frame later.
+#[test]
+fn an_uncheckings_check_mark_snaps_away_at_100_ms() {
+    for s in schemes() {
+        let at_golden = toggled(s, true, Duration::from_millis(100));
+        assert!((check_length(&at_golden) - FULL_CHECK).abs() < 0.01, "{at_golden:?}");
+        let a_frame_later = toggled(s, true, Duration::from_millis(116));
+        assert_eq!(check_length(&a_frame_later), 0.0, "{a_frame_later:?}");
+    }
+}
