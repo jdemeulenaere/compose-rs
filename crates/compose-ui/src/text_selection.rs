@@ -29,7 +29,8 @@ pub trait Selectable {
     fn text(&self) -> SharedString;
     /// The offset nearest to `position`, from the measurer (`None` before it's laid out).
     fn offset_at(&self, position: Offset, measurer: &mut dyn TextMeasurer) -> Option<usize>;
-    /// The word (or run between words) at `offset`: what a double-click selects.
+    /// The word at `offset`, as `getWordBoundary` (`platform::word_boundary`): what a
+    /// double-click selects.
     fn word_at(&self, offset: usize) -> Range<usize>;
     /// Bumped when its text changes: a selection ending in it is dropped then.
     fn version(&self) -> u64 {

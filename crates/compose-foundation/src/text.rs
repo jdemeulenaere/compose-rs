@@ -750,13 +750,9 @@ impl compose_ui::Selectable for TextNode {
         Some(offset)
     }
 
+    /// As Compose's `getWordBoundary` (D1108).
     fn word_at(&self, offset: usize) -> std::ops::Range<usize> {
-        use unicode_segmentation::UnicodeSegmentation;
-        let text = self.text.as_str();
-        text.split_word_bound_indices()
-            .map(|(start, word)| start..start + word.len())
-            .find(|range| range.contains(&offset) || range.end == offset && offset == text.len())
-            .unwrap_or(offset..offset)
+        compose_ui::platform::word_boundary(self.text.as_str(), offset).range()
     }
 
     fn set_selection(

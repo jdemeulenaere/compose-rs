@@ -72,6 +72,7 @@ mod tree;
 mod unit;
 mod view_configuration;
 mod window;
+mod word_boundary;
 
 /// Host and platform plumbing: what hosts (compose-desktop, compose-android, compose-test) and
 /// the toolkit's own crates use to drive a composition, measure text, draw a frame's display
@@ -98,7 +99,7 @@ pub mod platform {
     pub use crate::optimizations::{Optimization, Optimizations};
     pub use crate::paragraph::{
         CharPosition, GlyphBox, LaidOutLine, LineLayout, ParagraphLayout, ParagraphSize,
-        sampled_paragraph, word_boundary,
+        sampled_paragraph,
     };
     pub use crate::path::{PathOperator, set_path_operator};
     pub use crate::pointer_input::{PointerInputDriver, run_soon};
@@ -113,6 +114,7 @@ pub mod platform {
     };
     pub use crate::tree::{LayoutNode, NodeId, UiTree};
     pub use crate::unit::round_to_int;
+    pub use crate::word_boundary::word_boundary;
 
     /// Trace sections around a frame's phases, for the platform's tracer.
     pub mod trace {

@@ -93,10 +93,11 @@ pub trait Paragraph {
         let line = self.get_line_for_offset(offset);
         Rect::new(horizontal, self.get_line_top(line), horizontal, self.get_line_bottom(line))
     }
-    /// The word at `offset`, as Compose's: a word ending or starting at `offset` counts, and
-    /// an offset between spaces is a collapsed range there.
+    /// The word around `offset`, as Compose's `WordIterator` finds it
+    /// ([`word_boundary`](crate::platform::word_boundary): Unicode's word breaks, a run of
+    /// punctuation a word, a collapsed range between spaces).
     fn get_word_boundary(&self, offset: usize) -> TextRange {
-        word_boundary(self.text(), offset)
+        crate::word_boundary::word_boundary(self.text(), offset)
     }
     /// The area of `start..end`'s selection, as Android's `Layout.getSelectionPath`.
     fn get_path_for_range(&self, start: usize, end: usize) -> Path;
@@ -125,44 +126,6 @@ pub struct TextLayoutInput {
     pub density: Density,
     pub layout_direction: crate::alignment::LayoutDirection,
     pub constraints: crate::constraints::Constraints,
-}
-
-/// Whether `c` belongs to a word: a letter, a digit, a mark, or a pictograph (emoji and their
-/// joiners and modifiers), as Compose's word iterator counts them.
-fn is_word_char(c: char) -> bool {
-    c.is_alphanumeric()
-        || matches!(c as u32,
-            0x0300..=0x036F // combining marks
-            | 0x200D // zero width joiner
-            | 0x20E3 // combining enclosing keycap
-            | 0x2190..=0x2BFF // arrows, symbols, dingbats
-            | 0xFE00..=0xFE0F // variation selectors
-            | 0x1F000..=0x1FAFF // emoji and pictographs
-            | 0xE0020..=0xE007F) // tags
-}
-
-/// The word at `offset` of `text`, as Compose's `getWordBoundary` (Android's `WordIterator`):
-/// the letters, digits and pictographs around it; a word ending or starting at `offset` counts;
-/// elsewhere the collapsed range at `offset`.
-pub fn word_boundary(text: &str, offset: usize) -> TextRange {
-    let offset = crate::text_editing::floor_char_boundary(text, offset);
-    let before = text[..offset].chars().next_back().is_some_and(is_word_char);
-    let after = text[offset..].chars().next().is_some_and(is_word_char);
-    if !before && !after {
-        return TextRange::at(offset);
-    }
-    let start = text[..offset]
-        .char_indices()
-        .rev()
-        .take_while(|&(_, c)| is_word_char(c))
-        .last()
-        .map_or(offset, |(index, _)| index);
-    let end = text[offset..]
-        .char_indices()
-        .take_while(|&(_, c)| is_word_char(c))
-        .last()
-        .map_or(offset, |(index, c)| offset + index + c.len_utf8());
-    TextRange::new(start, end)
 }
 
 /// One line of a [`ParagraphLayout`].

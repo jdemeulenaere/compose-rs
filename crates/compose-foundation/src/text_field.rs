@@ -247,12 +247,9 @@ fn next_word_in(text: &str, offset: usize) -> usize {
         .map_or(text.len(), |(end, _)| end)
 }
 
-/// The word (or the run between words) at `offset` in `text`.
+/// The word at `offset` in `text`, as Compose's `getWordBoundary` (D1108).
 fn word_at_in(text: &str, offset: usize) -> std::ops::Range<usize> {
-    text.split_word_bound_indices()
-        .map(|(start, word)| start..start + word.len())
-        .find(|range| range.contains(&offset) || range.end == offset && offset == text.len())
-        .unwrap_or(offset..offset)
+    compose_ui::platform::word_boundary(text, offset).range()
 }
 
 fn floor_char_boundary(text: &str, offset: usize) -> usize {
