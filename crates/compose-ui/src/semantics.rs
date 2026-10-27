@@ -352,9 +352,9 @@ impl UiTree {
                 if config.is_clearing_semantics {
                     // Nothing inside reads.
                 } else if merged && config.is_merging_semantics_of_descendants {
-                    let own = config.clone();
+                    let mut own = config.clone();
                     for child in children_of(self) {
-                        self.merge_into(child, &mut config, &mut children);
+                        self.merge_into(child, &mut config, Some(&mut own), &mut children);
                     }
                     if own != config {
                         own_config = Some(Box::new(own));
@@ -381,30 +381,43 @@ impl UiTree {
     }
 
     /// Merges `node`'s subtree into `config`, except descendants that merge themselves, which
-    /// become `children`.
+    /// become `children`. `own` is the merging node's own configuration while no semantics node
+    /// is between it and `node`: a part of it (`PART_OF_PARENT`, a text field's inner field) sets
+    /// its properties there too, as if its own modifiers did.
     fn merge_into(
         &mut self,
         node: NodeId,
         config: &mut SemanticsConfiguration,
+        mut own: Option<&mut SemanticsConfiguration>,
         children: &mut Vec<SemanticsNode>,
     ) {
         if self.left_out(node) || self.node(node).overlay {
             return;
         }
-        if let Some((own, _)) = self.own_semantics(node) {
-            if own.is_merging_semantics_of_descendants {
+        if let Some((mut semantics, _)) = self.own_semantics(node) {
+            if semantics.is_merging_semantics_of_descendants {
                 self.semantics_of(node, true, config, children);
                 return;
             }
-            config.merge_child(&own);
-            if own.is_clearing_semantics {
+            match own.as_deref_mut() {
+                Some(own) if semantics.contains(&PART_OF_PARENT) => {
+                    semantics.remove(&PART_OF_PARENT);
+                    own.apply(&semantics);
+                    config.apply(&semantics);
+                }
+                _ => {
+                    config.merge_child(&semantics);
+                    own = None;
+                }
+            }
+            if semantics.is_clearing_semantics {
                 return;
             }
         }
         let count = self.node(node).children.len();
         for index in 0..count {
             let child = self.node(node).children[index].node;
-            self.merge_into(child, config, children);
+            self.merge_into(child, config, own.as_deref_mut(), children);
         }
     }
 }

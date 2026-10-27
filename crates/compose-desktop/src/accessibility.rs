@@ -56,7 +56,8 @@ fn add(node: &SemanticsNode, nodes: &mut Vec<(AccessNodeId, Node)>, visit: &mut 
     let descriptions = join(config.get(&P::CONTENT_DESCRIPTION));
     let disabled = config.contains(&P::DISABLED);
     let clickable = own.contains(&A::ON_CLICK);
-    let range = config.get(&P::PROGRESS_BAR_RANGE_INFO).copied();
+    // As Compose's delegate, from the node's own configuration (`unmergedConfig`).
+    let range = own.get(&P::PROGRESS_BAR_RANGE_INFO).copied();
     let role = match config.get(&P::ROLE).copied() {
         Some(Role::Button) => accesskit::Role::Button,
         Some(Role::Checkbox) => accesskit::Role::CheckBox,
@@ -134,7 +135,7 @@ fn add(node: &SemanticsNode, nodes: &mut Vec<(AccessNodeId, Node)>, visit: &mut 
         if clickable {
             access.add_action(Action::Click);
         }
-        if config.contains(&P::FOCUSED) {
+        if own.contains(&P::FOCUSED) {
             access.add_action(Action::Focus);
         }
     }
@@ -153,22 +154,30 @@ fn progress_step(info: compose_ui::ProgressBarRangeInfo) -> f32 {
 }
 
 /// Performs an assistive technology's request (a click, a focus, a value's increment or a new
-/// value) as a semantics action. Returns whether a node did it.
+/// value) as a semantics action. Returns whether a node did it. A disabled node's are refused,
+/// as Compose's delegate refuses them (`if (!node.enabled()) return false`, D1255).
 pub(crate) fn perform(host: &mut UiHost, request: &ActionRequest) -> bool {
     let node = NodeId::from_bits(request.target_node.0);
-    let progress = || {
-        host.with_tree(|tree| {
-            let root = tree.semantics_tree(true);
-            fn find(node: &SemanticsNode, id: NodeId) -> Option<&SemanticsNode> {
-                if node.id == id {
-                    return Some(node);
-                }
-                node.children.iter().find_map(|child| find(child, id))
+    let (disabled, range) = host.with_tree(|tree| {
+        let root = tree.semantics_tree(true);
+        fn find(node: &SemanticsNode, id: NodeId) -> Option<&SemanticsNode> {
+            if node.id == id {
+                return Some(node);
             }
-            find(&root, node)
-                .and_then(|found| found.config.get(&P::PROGRESS_BAR_RANGE_INFO).copied())
-        })
-    };
+            node.children.iter().find_map(|child| find(child, id))
+        }
+        let found = find(&root, node);
+        (
+            found.is_none_or(|found| found.config.contains(&P::DISABLED)),
+            found.and_then(|found| {
+                found.unmerged_config().get(&P::PROGRESS_BAR_RANGE_INFO).copied()
+            }),
+        )
+    });
+    if disabled {
+        return false;
+    }
+    let progress = || range;
     let progress_to = match request.action {
         Action::Click => return host.perform_semantics_action(node, &A::ON_CLICK),
         Action::Focus => return host.perform_semantics_action(node, &A::REQUEST_FOCUS),
@@ -259,6 +268,138 @@ mod tests {
         assert!(perform(&mut host, &focus));
         host.frame();
         assert_eq!(tree_update(&host, "App").focus, button);
+    }
+
+    fn host_with(content: impl Fn() + 'static) -> UiHost {
+        let mut host = UiHost::new(
+            IntSize::new(200, 100),
+            Density::default(),
+            Box::new(FixedTextMeasurer::default()),
+        );
+        host.set_content(content);
+        host.frame();
+        host
+    }
+
+    /// The window's first node and its id.
+    fn first_node(host: &UiHost) -> (AccessNodeId, Node) {
+        let update = tree_update(host, "App");
+        let root = update.tree.as_ref().unwrap().root;
+        let (_, window) = update.nodes.iter().find(|(node, _)| *node == root).unwrap();
+        let first = window.children()[0];
+        let (_, node) = update.nodes.iter().find(|(node, _)| *node == first).unwrap();
+        (first, node.clone())
+    }
+
+    fn click(node: AccessNodeId) -> ActionRequest {
+        ActionRequest {
+            action: Action::Click,
+            target_tree: accesskit::TreeId::ROOT,
+            target_node: node,
+            data: None,
+        }
+    }
+
+    // Compose: compose/ui/ui/src/androidMain/kotlin/androidx/compose/ui/platform/AndroidComposeViewAccessibilityDelegateCompat.android.kt, the actions read from `unmergedConfig`
+    /// A merging node offers its own actions, not those its descendants merged into it (D1252):
+    /// a merging group holding a clickable part and a range offers no click and no increments,
+    /// though Compose's policies merge both into its merged configuration.
+    #[test]
+    fn a_merging_node_offers_its_own_actions_only() {
+        use compose_ui::{ProgressBarRangeInfo, SemanticsActions};
+        let host = host_with(|| {
+            compose_foundation::layout::Box(
+                Modifier.size((80.dp(), 30.dp())).semantics_with(true, |_| {}),
+                compose_ui::Alignment::TOP_START,
+                false,
+                compose_runtime::callback(|_| {
+                    compose_foundation::layout::Box(
+                        Modifier.size(10.dp()).semantics(|config| {
+                            config.on_click(None, || true);
+                            config.set_progress_bar_range_info(ProgressBarRangeInfo {
+                                current: 0.5,
+                                range: (0.0, 1.0),
+                                steps: 0,
+                            });
+                            config.set_progress(None, |_| true);
+                        }),
+                        compose_ui::Alignment::TOP_START,
+                        false,
+                        compose_runtime::callback(|_| {}),
+                    )
+                }),
+            );
+        });
+        let merged = host.semantics_tree(true);
+        assert!(merged.children[0].config.contains(&SemanticsActions::ON_CLICK));
+        let (_, node) = first_node(&host);
+        assert!(!node.supports_action(Action::Click), "{node:?}");
+        assert!(!node.supports_action(Action::Increment), "{node:?}");
+        assert!(!node.supports_action(Action::ScrollRight), "{node:?}");
+    }
+
+    /// A card's click is its own `OnClick`, whatever its descendants merged.
+    #[test]
+    fn a_cards_click_is_its_own() {
+        use std::cell::Cell;
+        use std::rc::Rc;
+        let (card, part) = (Rc::new(Cell::new(0)), Rc::new(Cell::new(0)));
+        let (card_count, part_count) = (card.clone(), part.clone());
+        let mut host = host_with(move || {
+            let (card_count, part_count) = (card_count.clone(), part_count.clone());
+            compose_foundation::layout::Box(
+                Modifier
+                    .size((80.dp(), 30.dp()))
+                    .clickable(move || card_count.set(card_count.get() + 1)),
+                compose_ui::Alignment::TOP_START,
+                false,
+                compose_runtime::callback(move |_| {
+                    let part_count = part_count.clone();
+                    compose_foundation::layout::Box(
+                        Modifier.size(10.dp()).semantics(move |config| {
+                            let part_count = part_count.clone();
+                            config.on_click(None, move || {
+                                part_count.set(part_count.get() + 1);
+                                true
+                            });
+                        }),
+                        compose_ui::Alignment::TOP_START,
+                        false,
+                        compose_runtime::callback(|_| {}),
+                    )
+                }),
+            );
+        });
+        let (id, node) = first_node(&host);
+        assert!(node.supports_action(Action::Click));
+        assert!(perform(&mut host, &click(id)));
+        assert_eq!((card.get(), part.get()), (1, 0));
+    }
+
+    // Compose: compose/ui/ui/src/androidMain/kotlin/androidx/compose/ui/platform/AndroidComposeViewAccessibilityDelegateCompat.android.kt, performActionHelper's `if (!node.enabled()) return false`
+    /// A disabled node's actions are refused by the bridge, as Compose's delegate refuses them:
+    /// its click, which would call the callback, isn't called (D1255).
+    #[test]
+    fn a_disabled_nodes_actions_are_refused() {
+        use std::cell::Cell;
+        use std::rc::Rc;
+        let clicks = Rc::new(Cell::new(0));
+        let counted = clicks.clone();
+        let mut host = host_with(move || {
+            let counted = counted.clone();
+            compose_foundation::layout::Box(
+                Modifier.size((80.dp(), 30.dp())).clickable_with(
+                    ClickableOptions { enabled: false, ..ClickableOptions::DEFAULT },
+                    move || counted.set(counted.get() + 1),
+                ),
+                compose_ui::Alignment::TOP_START,
+                false,
+                compose_runtime::callback(|_| {}),
+            );
+        });
+        let (id, _) = first_node(&host);
+        assert!(!perform(&mut host, &click(id)));
+        assert_eq!(clicks.get(), 0);
     }
 
     #[test]

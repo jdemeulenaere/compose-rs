@@ -296,3 +296,54 @@ fn a_node_scrolling_both_ways_pages_by_its_width_and_its_height() {
     assert_eq!(scroll_amount(found, RIGHT, shown), Some((100.0, 0.0)));
     assert_eq!(scroll_amount(found, DOWN, shown), Some((0.0, 50.0)));
 }
+
+/// A clickable card around a horizontally scrolling row, as a `Card(on_click)` holding a
+/// carousel.
+#[composable]
+fn CardAroundARow() {
+    Box!(modifier = Modifier.clickable(|| {}).size((100.dp(), 40.dp())), {
+        Row!(
+            modifier =
+                Modifier.size((100.dp(), 40.dp())).horizontal_scroll(remember_scroll_state!()),
+            {
+                for index in 0..10 {
+                    BasicText!("tile {}", index, modifier = Modifier.size((40.dp(), 40.dp())));
+                }
+            }
+        );
+    });
+}
+
+// Compose: compose/ui/ui/src/androidMain/kotlin/androidx/compose/ui/platform/AndroidComposeViewAccessibilityDelegateCompat.android.kt, the scroll ranges read from `unmergedConfig`
+/// A merging node's record takes its scroll from its own configuration, not the merged one
+/// (D1252): the card around a scrolling row offers no scroll, though Compose's policy merges
+/// the row's range into the card's merged configuration.
+#[test]
+fn a_card_around_a_scrolling_row_offers_no_scroll() {
+    use compose_ui::{SemanticsActions, SemanticsProperties};
+    let mut host = UiHost::headless(200, 200);
+    host.set_content(CardAroundARow);
+    host.settle(10);
+    let root = host.semantics_tree(true);
+    let card = root
+        .children
+        .iter()
+        .find(|node| node.config.contains(&SemanticsActions::ON_CLICK))
+        .expect("the card");
+    assert!(
+        card.config.contains(&SemanticsProperties::HORIZONTAL_SCROLL_AXIS_RANGE),
+        "the merged configuration has the row's range: {:?}",
+        card.config
+    );
+    let mut writer = Writer::default();
+    write_tree(&root, &mut writer);
+    let records = records(&writer.bytes);
+    let record = records.iter().find(|record| record.flags & flag::CLICKABLE != 0).unwrap();
+    assert_eq!(record.flags & flag::SCROLL, 0, "{record:?}");
+    assert_eq!(record.scroll, None);
+    assert_eq!(scroll_actions(card), 0);
+    let (found, shown) = find_shown(&root, virtual_id(card.id)).unwrap();
+    for action in [scroll_action::FORWARD, scroll_action::RIGHT] {
+        assert_eq!(scroll_amount(found, action, shown), None);
+    }
+}

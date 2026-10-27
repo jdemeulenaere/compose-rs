@@ -10,6 +10,8 @@ use compose_ui::{
     PointerEvent, PointerEventPass, PointerEventType, PointerInputModifierNode, Rect, Role,
     SemanticsConfiguration, SemanticsModifierNode, UnitExt,
 };
+use std::cell::Cell;
+use std::rc::Rc;
 
 use crate::components::minimum_interactive_component_size;
 use crate::theme::MaterialTheme;
@@ -557,7 +559,7 @@ struct SliderNode {
     radius: f32,
     /// The value last asked for, until the application gives the slider its new value: keys
     /// pressed before the next frame go on from it.
-    asked: Option<f32>,
+    asked: Rc<Cell<Option<f32>>>,
 }
 
 impl ModifierNodeElement for SliderElement {
@@ -575,12 +577,12 @@ impl ModifierNodeElement for SliderElement {
             dragging: false,
             focused: false,
             radius: 10.0,
-            asked: None,
+            asked: Rc::default(),
         }
     }
     fn update(&self, node: &mut SliderNode) {
         node.value = self.value;
-        node.asked = None;
+        node.asked.set(None);
         node.on_value_change = self.on_value_change.clone();
         node.on_value_change_finished = self.on_value_change_finished.clone();
         node.enabled = self.enabled;
@@ -626,8 +628,8 @@ impl SliderNode {
     /// Asks the application for `value`: the slider shows the value it is given back (it is
     /// controlled), as Compose's.
     fn change_to(&mut self, value: f32, context: &mut EventContext<'_>) {
-        if value != self.asked.unwrap_or(self.value) {
-            self.asked = Some(value);
+        if value != self.asked.get().unwrap_or(self.value) {
+            self.asked.set(Some(value));
             let callback = self.on_value_change.clone();
             context.run(move || callback(value));
         }
@@ -645,7 +647,7 @@ impl ModifierNode for SliderNode {
         self.press = None;
         self.dragging = false;
         self.focused = false;
-        self.asked = None;
+        self.asked.set(None);
     }
     fn as_layout(&mut self) -> Option<&mut dyn LayoutModifierNode> {
         Some(self)
@@ -861,7 +863,7 @@ impl KeyInputModifierNode for SliderNode {
             return true;
         }
         let step = if self.steps > 0 { 1.0 / (self.steps + 1) as f32 } else { 0.01 };
-        let fraction = self.fraction_of(self.asked.unwrap_or(self.value));
+        let fraction = self.fraction_of(self.asked.get().unwrap_or(self.value));
         // Right is toward the start in a right-to-left layout, as Compose Desktop's.
         let rtl = context.layout_direction() == compose_ui::LayoutDirection::Rtl;
         let target = match event.key {
@@ -897,18 +899,20 @@ impl SemanticsModifierNode for SliderNode {
         // Moves to the value asked (in the range, snapped to the steps), as Compose's slider's
         // `setProgress`.
         let (range, steps, enabled) = (self.range, self.steps, self.enabled);
-        let current = self.asked.unwrap_or(self.value);
+        let (value, asked) = (self.value, self.asked.clone());
         let on_value_change = self.on_value_change.clone();
         let finished = self.on_value_change_finished.clone();
         config.set_progress(None, move |target| {
             if !enabled {
                 return false;
             }
-            let value = snapped(range, steps, fraction_in(range, target));
-            if value == current {
+            let target = snapped(range, steps, fraction_in(range, target));
+            // From the value last asked, as the keys go on (the node's `change_to`).
+            if target == asked.get().unwrap_or(value) {
                 return false;
             }
-            on_value_change(value);
+            asked.set(Some(target));
+            on_value_change(target);
             if let Some(finished) = &finished {
                 finished();
             }

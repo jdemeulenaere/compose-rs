@@ -121,10 +121,9 @@ fn passes_buttons_switches_and_text_fields_describe_themselves() {
         button.config.get(&compose_ui::SemanticsProperties::ROLE).copied(),
         Some(Role::Button)
     );
-    let button_id = button.id;
-    assert!(
-        !ui.host().perform_semantics_action(button_id, &compose_ui::SemanticsActions::ON_CLICK)
-    );
+    // Its click is offered, as Compose's: the platform bridges refuse a disabled node's
+    // actions (D1255).
+    assert!(button.config.contains(&compose_ui::SemanticsActions::ON_CLICK));
     let switch = ui.on_node_with_tag("switch").fetch_semantics_node();
     assert_eq!(
         switch.config.get(&compose_ui::SemanticsProperties::ROLE).copied(),

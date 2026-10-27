@@ -495,6 +495,51 @@ type SetStringFn = dyn Fn(String) -> bool;
 static SET_STRING: SemanticsPropertyKey<AccessibilityAction<SetStringFn>> =
     SemanticsPropertyKey::action("SetString");
 
+// Compose: compose/ui/ui/src/commonMain/kotlin/androidx/compose/ui/semantics/SemanticsConfiguration.kt, set (an AccessibilityAction over one already set)
+/// An application's action collapses over an earlier one on a node as Compose's own do: the
+/// outer's label, the inner's function.
+#[test]
+fn an_applications_action_collapses_on_a_node() {
+    let mut inner = SemanticsConfiguration::default();
+    inner.set(
+        &SET_STRING,
+        AccessibilityAction::new(None, Rc::new(|value: String| value == "yes") as Rc<SetStringFn>),
+    );
+    let mut outer = SemanticsConfiguration::default();
+    outer.set(&SET_STRING, AccessibilityAction { label: Some("say".into()), action: None });
+    inner.apply(&outer);
+    let action = inner.get(&SET_STRING).expect("the action");
+    assert_eq!(action.label.as_deref(), Some("say"));
+    assert!(action.action.as_ref().is_some_and(|action| action("yes".to_string())));
+}
+
+/// A type with an `as_any` of its own, under the glob imports apps use: the semantics'
+/// helpers don't clash with it (they're named apart and not exported at the root).
+mod an_apps_own_as_any {
+    use compose_ui::*;
+
+    trait AsAny {
+        fn as_any(&self) -> &dyn std::any::Any;
+    }
+
+    #[derive(Clone, PartialEq, Debug)]
+    struct Mine;
+
+    impl AsAny for Mine {
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+    }
+
+    impl SemanticsValue for Mine {}
+
+    #[test]
+    fn an_apps_as_any_is_its_own() {
+        assert!(Mine.as_any().is::<Mine>());
+        let _ = Modifier;
+    }
+}
+
 // Compose: compose/ui/ui-test/src/androidDeviceTest/kotlin/androidx/compose/ui/test/CallSemanticsActionTest.kt, performSemanticsAction
 /// An application declares its own keys and actions as statics; the harness performs an
 /// action with its arguments.
@@ -675,7 +720,7 @@ fn key_matchers_read_the_keys() {
     assert!(message.contains("Focused = 'true'"), "{message}");
 }
 
-/// A clickable's semantics, as Compose's: a click (refused when disabled), the focus when
+/// A clickable's semantics, as Compose's: a click (called even when disabled, D1255), the focus when
 /// enabled, else disabled; printed as Compose prints them.
 #[test]
 fn a_clickables_semantics_are_composes() {
@@ -709,8 +754,8 @@ fn a_clickables_semantics_are_composes() {
         .assert(is_not_enabled());
     let disabled = ui.on_node_with_tag("disabled").node_id();
     assert!(
-        !ui.host().perform_semantics_action(disabled, &SemanticsActions::ON_CLICK),
-        "a disabled click is refused"
+        ui.host().perform_semantics_action(disabled, &SemanticsActions::ON_CLICK),
+        "a disabled click is called, as Compose's (the bridges refuse it, D1255)"
     );
     let printed = ui.on_node_with_tag("enabled").print_to_string(0);
     assert!(printed.contains("Focused = 'false'"), "{printed}");
@@ -718,4 +763,81 @@ fn a_clickables_semantics_are_composes() {
     assert!(printed.contains("MergeDescendants = 'true'"), "{printed}");
     let printed = ui.on_node_with_tag("disabled").print_to_string(0);
     assert!(printed.contains("[Disabled]"), "{printed}");
+}
+
+// Compose: compose/ui/ui-test/src/commonMain/kotlin/androidx/compose/ui/test/SemanticsMatcher.kt, expectValue
+/// `expect_value` checks the value, not only the key: an unfocused focusable isn't
+/// `Focused = 'true'`, a button isn't a tab.
+#[test]
+fn expect_value_compares_the_value() {
+    let mut ui = compose_test(|| {
+        Box!(
+            modifier = Modifier
+                .clickable_with(
+                    compose_ui::ClickableOptions {
+                        role: Some(compose_ui::Role::Button),
+                        ..compose_ui::ClickableOptions::DEFAULT
+                    },
+                    || {},
+                )
+                .size(10.dp())
+                .test_tag("button")
+        );
+    });
+    let mut matches = |matcher: Matcher| {
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            ui.on_node_with_tag("button").assert(matcher);
+        }))
+        .is_ok()
+    };
+    assert!(matches(expect_value(&SemanticsProperties::FOCUSED, false)));
+    assert!(!matches(expect_value(&SemanticsProperties::FOCUSED, true)));
+    assert!(matches(expect_value(&SemanticsProperties::ROLE, compose_ui::Role::Button)));
+    assert!(!matches(expect_value(&SemanticsProperties::ROLE, compose_ui::Role::Tab)));
+    let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        ui.on_node_with_tag("button")
+            .assert(expect_value(&SemanticsProperties::ROLE, compose_ui::Role::Tab));
+    }));
+    let message = failed.expect_err("a button isn't a tab");
+    let message = message.downcast_ref::<String>().cloned().unwrap_or_default();
+    assert!(message.contains("Role = 'Tab'"), "{message}");
+}
+
+// Compose: compose/ui/ui/src/commonMain/kotlin/androidx/compose/ui/semantics/SemanticsProperties.kt, IsDialog
+#[test]
+#[should_panic(
+    expected = "merge function called on unmergeable property IsDialog. A dialog should not be a \
+                child of a clickable/focusable node."
+)]
+fn a_dialog_does_not_merge() {
+    SemanticsProperties::IS_DIALOG.merge(None, &());
+}
+
+// Compose: compose/ui/ui/src/commonMain/kotlin/androidx/compose/ui/semantics/SemanticsProperties.kt, IsPopup
+#[test]
+#[should_panic(
+    expected = "merge function called on unmergeable property IsPopup. A popup should not be a \
+                child of a clickable/focusable node."
+)]
+fn a_popup_does_not_merge() {
+    SemanticsProperties::IS_POPUP.merge(None, &());
+}
+
+// Compose: compose/ui/ui/src/commonMain/kotlin/androidx/compose/ui/semantics/SemanticsProperties.kt, HideFromAccessibility, Shape, BackgroundColor
+/// Hiding, the shape and the background color never merge up: the parent's, else none.
+#[test]
+fn hiding_the_shape_and_the_background_keep_the_parents() {
+    use compose_ui::{ColorProducer, Shape};
+    let hide = &SemanticsProperties::HIDE_FROM_ACCESSIBILITY;
+    assert_eq!(hide.merge(None, &()), None);
+    assert_eq!(hide.merge(Some(&()), &()), Some(()));
+    let shape = &SemanticsProperties::SHAPE;
+    assert_eq!(shape.merge(None, &Shape::Rectangle), None);
+    let circle = Shape::Rounded([compose_ui::CornerSize::Percent(50.0); 4]);
+    assert_eq!(shape.merge(Some(&circle), &Shape::Rectangle), Some(circle));
+    let background = &SemanticsProperties::BACKGROUND_COLOR;
+    let red = ColorProducer(Rc::new(|| compose_ui::Color::RED));
+    let blue = ColorProducer(Rc::new(|| compose_ui::Color::BLUE));
+    assert_eq!(background.merge(None, &red), None);
+    assert_eq!(background.merge(Some(&blue), &red), Some(blue));
 }

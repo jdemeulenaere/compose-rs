@@ -217,41 +217,62 @@ impl fmt::Debug for CustomAccessibilityAction {
 
 // ---- Slots -------------------------------------------------------------------------------------
 
-/// A value of an application's own key type, in `ValueSlot::Other`.
-pub trait OtherValue {
-    fn as_any(&self) -> &dyn Any;
-    fn eq_other(&self, other: &dyn OtherValue) -> bool;
-    fn fmt_other(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result;
+mod sealed {
+    // The sealing trait: nameable by nothing outside, as sealing wants.
+    #[allow(unnameable_types)]
+    pub trait Sealed {}
+    impl<T: Clone + PartialEq + std::fmt::Debug + 'static> Sealed for T {}
+}
+
+/// A value of an application's own key type, in `ValueSlot::Other`: implemented for every
+/// value type (sealed), its methods named apart so they don't clash with a type's own
+/// (`as_any`…). Not for apps.
+#[doc(hidden)]
+pub trait OtherValue: sealed::Sealed {
+    fn __semantics_as_any(&self) -> &dyn Any;
+    fn __semantics_eq(&self, other: &dyn OtherValue) -> bool;
+    fn __semantics_fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result;
 }
 
 impl<T: Clone + PartialEq + fmt::Debug + 'static> OtherValue for T {
-    fn as_any(&self) -> &dyn Any {
+    fn __semantics_as_any(&self) -> &dyn Any {
         self
     }
-    fn eq_other(&self, other: &dyn OtherValue) -> bool {
-        other.as_any().downcast_ref::<T>().is_some_and(|other| other == self)
+    fn __semantics_eq(&self, other: &dyn OtherValue) -> bool {
+        other.__semantics_as_any().downcast_ref::<T>().is_some_and(|other| other == self)
     }
-    fn fmt_other(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn __semantics_fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Debug::fmt(self, formatter)
     }
 }
 
+/// How an application's action over an earlier one of its key collapses (`ValueSlot::over`).
+type CollapseOther = fn(&OtherSlot, &OtherSlot) -> Option<OtherSlot>;
+
 /// An `OtherValue` in a slot: one allocation, compared by value; a function (an application's
-/// action, `ScrollByOffset`…) says so, to be printed by name.
+/// action, `ScrollByOffset`…) says so, to be printed by name, and an application's action
+/// carries how it collapses over an earlier one. Not for apps.
+#[doc(hidden)]
 #[derive(Clone)]
 pub struct OtherSlot {
     value: Rc<dyn OtherValue>,
     is_action: bool,
+    collapse: Option<CollapseOther>,
 }
 
 impl OtherSlot {
     pub fn new(value: impl OtherValue + 'static) -> OtherSlot {
-        OtherSlot { value: Rc::new(value), is_action: false }
+        OtherSlot { value: Rc::new(value), is_action: false, collapse: None }
     }
 
     /// A function's.
     pub fn action(value: impl OtherValue + 'static) -> OtherSlot {
-        OtherSlot { value: Rc::new(value), is_action: true }
+        OtherSlot { value: Rc::new(value), is_action: true, collapse: None }
+    }
+
+    /// An application's `AccessibilityAction`.
+    fn accessibility_action<F: ?Sized + 'static>(action: AccessibilityAction<F>) -> OtherSlot {
+        OtherSlot { value: Rc::new(action), is_action: true, collapse: Some(collapse_other::<F>) }
     }
 
     pub fn value(&self) -> &dyn OtherValue {
@@ -259,15 +280,34 @@ impl OtherSlot {
     }
 }
 
+/// `new` over `old`, both an application's actions of signature `F`.
+fn collapse_other<F: ?Sized + 'static>(new: &OtherSlot, old: &OtherSlot) -> Option<OtherSlot> {
+    let new = new.value.__semantics_as_any().downcast_ref::<AccessibilityAction<F>>()?;
+    let old = old.value.__semantics_as_any().downcast_ref::<AccessibilityAction<F>>()?;
+    Some(OtherSlot::accessibility_action(collapse_action(new.clone(), old)))
+}
+
+/// An action set over an earlier one on a node: its label and function, each where it has one,
+/// else the earlier's (Compose's `SemanticsConfiguration.set`).
+fn collapse_action<F: ?Sized>(
+    new: AccessibilityAction<F>,
+    old: &AccessibilityAction<F>,
+) -> AccessibilityAction<F> {
+    AccessibilityAction {
+        label: new.label.or_else(|| old.label.clone()),
+        action: new.action.or_else(|| old.action.clone()),
+    }
+}
+
 impl PartialEq for OtherSlot {
     fn eq(&self, other: &Self) -> bool {
-        self.value.eq_other(&*other.value)
+        self.value.__semantics_eq(&*other.value)
     }
 }
 
 impl fmt::Debug for OtherSlot {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.value.fmt_other(formatter)
+        self.value.__semantics_fmt(formatter)
     }
 }
 
@@ -325,16 +365,8 @@ impl ValueSlot {
     /// This value set over `previous`: an action keeps `previous`'s label and function where it
     /// has none (Compose's `SemanticsConfiguration.set`); any other value replaces it.
     fn over(self, previous: &ValueSlot) -> ValueSlot {
-        fn collapse<F: ?Sized>(
-            new: AccessibilityAction<F>,
-            old: &AccessibilityAction<F>,
-        ) -> AccessibilityAction<F> {
-            AccessibilityAction {
-                label: new.label.or_else(|| old.label.clone()),
-                action: new.action.or_else(|| old.action.clone()),
-            }
-        }
         use ValueSlot as V;
+        use collapse_action as collapse;
         match (self, previous) {
             (V::Action(new), V::Action(old)) => V::Action(collapse(new, old)),
             (V::ScrollByAction(new), V::ScrollByAction(old)) => {
@@ -359,6 +391,10 @@ impl ValueSlot {
             (V::GetScrollViewportLengthAction(new), V::GetScrollViewportLengthAction(old)) => {
                 V::GetScrollViewportLengthAction(collapse(new, old))
             }
+            (V::Other(new), V::Other(old)) => match new.collapse.and_then(|f| f(&new, old)) {
+                Some(collapsed) => V::Other(collapsed),
+                None => V::Other(new),
+            },
             (new, _) => new,
         }
     }
@@ -433,7 +469,7 @@ pub trait SemanticsValue: Clone + PartialEq + fmt::Debug + 'static {
     #[doc(hidden)]
     fn from_slot(slot: &ValueSlot) -> Option<&Self> {
         match slot {
-            ValueSlot::Other(other) => other.value.as_any().downcast_ref::<Self>(),
+            ValueSlot::Other(other) => other.value.__semantics_as_any().downcast_ref::<Self>(),
             _ => None,
         }
     }
@@ -510,7 +546,7 @@ impl<F: ?Sized + 'static> SemanticsValue for AccessibilityAction<F> {
             GetTextLayoutResultFn => GetTextLayoutResultAction,
             GetScrollViewportLengthFn => GetScrollViewportLengthAction,
         }
-        ValueSlot::Other(OtherSlot::action(this.take().expect("set once")))
+        ValueSlot::Other(OtherSlot::accessibility_action(this.take().expect("set once")))
     }
 
     fn from_slot(slot: &ValueSlot) -> Option<&Self> {
@@ -524,7 +560,7 @@ impl<F: ?Sized + 'static> SemanticsValue for AccessibilityAction<F> {
             ValueSlot::ShowTextSubstitutionAction(action) => action,
             ValueSlot::GetTextLayoutResultAction(action) => action,
             ValueSlot::GetScrollViewportLengthAction(action) => action,
-            ValueSlot::Other(other) => other.value.as_any(),
+            ValueSlot::Other(other) => other.value.__semantics_as_any(),
             _ => return None,
         };
         value.downcast_ref::<Self>()
@@ -554,8 +590,11 @@ pub struct SemanticsPropertyKey<T> {
     name: &'static str,
     merge_policy: fn(Option<&T>, &T) -> Option<T>,
     important_for_accessibility: bool,
-    /// Interior mutability keeps each key in memory of its own: two keys are never merged into
-    /// one address, whatever their contents.
+    /// Keeps each key's address its own: a type with interior mutability isn't `Freeze`, so a
+    /// static holding it goes to writable `.data`, where the compiler doesn't fold statics of
+    /// equal contents into one address (as it may in read-only data), and `&KEY` is never
+    /// promoted to a constant's copy. Keys compare by address (Compose's by identity), so two
+    /// keys of the same name and type stay two keys.
     _identity: AtomicBool,
 }
 

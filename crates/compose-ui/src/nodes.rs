@@ -740,8 +740,9 @@ impl PointerInputModifierNode for ClickableNode {
 }
 
 impl SemanticsModifierNode for ClickableNode {
-    /// As Compose's clickable: its role, its click (which a disabled one refuses), the focus
-    /// when enabled, else disabled.
+    /// As Compose's clickable: its role, its click (called whether enabled or not: refusing a
+    /// disabled node's actions is the platform bridges', D1255), the focus when enabled, else
+    /// disabled.
     fn apply_semantics(&self, config: &mut SemanticsConfiguration) {
         config.is_merging_semantics_of_descendants = true;
         let enabled = self.spec.enabled();
@@ -758,10 +759,8 @@ impl SemanticsModifierNode for ClickableNode {
                 }
                 let on_click = clickable.on_click.clone();
                 config.on_click(None, move || {
-                    if enabled {
-                        on_click();
-                    }
-                    enabled
+                    on_click();
+                    true
                 });
             }
             Press::Toggle(toggleable) => {
@@ -772,10 +771,8 @@ impl SemanticsModifierNode for ClickableNode {
                 let (on_value_change, value) =
                     (toggleable.on_value_change.clone(), toggleable.value);
                 config.on_click(None, move || {
-                    if enabled {
-                        on_value_change(!value);
-                    }
-                    enabled
+                    on_value_change(!value);
+                    true
                 });
             }
         }
@@ -1053,9 +1050,8 @@ impl SemanticsModifierNode for CombinedClickableNode {
     fn apply_semantics(&self, config: &mut SemanticsConfiguration) {
         self.clickable.apply_semantics(config);
         let on_long_click = self.handlers.borrow().on_long_click.clone();
-        if let Some(on_long_click) = on_long_click
-            && self.clickable.spec.enabled()
-        {
+        // Whether enabled or not, as Compose's (D1255).
+        if let Some(on_long_click) = on_long_click {
             config.on_long_click(None, move || {
                 on_long_click();
                 true

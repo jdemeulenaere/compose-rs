@@ -87,6 +87,9 @@ pub mod platform {
     pub use crate::pointer_input::{PointerInputDriver, run_soon};
     pub use crate::render::KEPT_CAPACITY;
     pub use crate::semantics::SemanticsNode;
+    /// A semantics value of an application's own type, as `ValueSlot` holds it: not for apps.
+    #[doc(hidden)]
+    pub use crate::semantics::{OtherSlot, OtherValue};
     pub use crate::text::{
         DEFAULT_FONT_SIZE, FixedTextMeasurer, ParagraphHandle, ParagraphMetrics, TextLayoutOptions,
         TextMeasurer, TextPosition,
@@ -169,11 +172,11 @@ pub use prefetch::{
 pub use semantics::{
     AccessibilityAction, ActionFn, AnySemanticsPropertyKey, CollectionInfo, CollectionItemInfo,
     ColorProducer, CustomAccessibilityAction, GetScrollViewportLengthFn, GetTextLayoutResultFn,
-    IndexForKey, IndexForKeyFn, InputTextSuggestionState, LiveRegionMode, OtherSlot, OtherValue,
-    PART_OF_PARENT, ProgressBarRangeInfo, Role, ScrollAxisRange, ScrollByFn, ScrollByOffset,
-    ScrollByOffsetFn, ScrollToIndexFn, SemanticsActions, SemanticsConfiguration,
-    SemanticsProperties, SemanticsPropertyKey, SemanticsValue, SetProgressFn, SetSelectionFn,
-    ShowTextSubstitutionFn, StringList, TextActionFn, ToggleableState, ValueSlot,
+    IndexForKey, IndexForKeyFn, InputTextSuggestionState, LiveRegionMode, PART_OF_PARENT,
+    ProgressBarRangeInfo, Role, ScrollAxisRange, ScrollByFn, ScrollByOffset, ScrollByOffsetFn,
+    ScrollToIndexFn, SemanticsActions, SemanticsConfiguration, SemanticsProperties,
+    SemanticsPropertyKey, SemanticsValue, SetProgressFn, SetSelectionFn, ShowTextSubstitutionFn,
+    StringList, TextActionFn, ToggleableState, ValueSlot,
 };
 pub use text::{
     FontFamily, FontStyle, FontWeight, LineHeightAlignment, LineHeightStyle, LineHeightTrim,

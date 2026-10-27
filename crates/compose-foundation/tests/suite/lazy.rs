@@ -476,6 +476,16 @@ fn a_scrolling_column_has_scroll_semantics_and_scrolls_by_its_action() {
     ));
     ui.wait_for_idle();
     assert_eq!(scroll.value(), 60);
+    // Fractions of a pixel add up with the node's own, as its drags' do.
+    for _ in 0..2 {
+        ui.host().perform_semantics_action_with(
+            node,
+            &compose_ui::SemanticsActions::SCROLL_BY,
+            |scroll| scroll(0.0, 0.4),
+        );
+    }
+    ui.wait_for_idle();
+    assert_eq!(scroll.value(), 61, "0.4 and 0.4 make a pixel");
 }
 
 /// `ScrollBy` is towards the content's end, as Compose's lazy layouts' (D491): a reversed list

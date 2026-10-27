@@ -411,6 +411,36 @@ fn a_slider_takes_set_progress_snapped_to_its_steps() {
     assert_eq!(info.map(|info| info.current), Some(0.25));
 }
 
+/// `SetProgress` asks from the value last asked, as the slider's keys do: asked twice for the
+/// same stop before the application answers, it asks once.
+#[test]
+fn a_sliders_set_progress_goes_on_from_the_value_asked() {
+    let asked = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let seen = asked.clone();
+    let mut ui = compose_test(move || {
+        let seen = seen.clone();
+        MaterialTheme!({
+            let seen = seen.clone();
+            // A value the application never changes.
+            Slider!(
+                0.0,
+                move |new| seen.borrow_mut().push(new),
+                modifier = Modifier.test_tag("slider"),
+                steps = 3,
+            );
+        });
+    });
+    let node = ui.on_node_with_tag("slider").node_id();
+    let set = ui
+        .host()
+        .semantics_action(node, &compose_ui::SemanticsActions::SET_PROGRESS)
+        .expect("a slider sets its progress");
+    assert!(set(0.3));
+    assert!(!set(0.3), "the stop asked already");
+    assert!(set(0.5));
+    assert_eq!(*asked.borrow(), [0.25, 0.5]);
+}
+
 #[test]
 fn a_right_to_left_slider_runs_from_the_right() {
     use compose_ui::{LayoutDirection, Offset, PointerEvent};

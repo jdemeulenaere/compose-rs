@@ -96,7 +96,8 @@ fn flags(node: &SemanticsNode) -> u32 {
         }
     };
     set(&mut flags, node.unmerged_config().contains(&A::ON_CLICK), flag::CLICKABLE);
-    set(&mut flags, config.contains(&P::FOCUSED), flag::FOCUSABLE);
+    // Focusable as Compose's `isFocusable`, from the node's own configuration.
+    set(&mut flags, node.unmerged_config().contains(&P::FOCUSED), flag::FOCUSABLE);
     set(&mut flags, config.get(&P::FOCUSED) == Some(&true), flag::FOCUSED);
     set(&mut flags, config.contains(&P::EDITABLE_TEXT), flag::EDITABLE);
     set(&mut flags, config.contains(&P::PASSWORD), flag::PASSWORD);

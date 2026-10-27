@@ -296,6 +296,14 @@ internal class Accessibility(private val view: ComposeRsView) :
         if (virtualViewId == HOST_VIEW_ID) return view.performAccessibilityAction(action, arguments)
         refresh()
         val node = nodes.get(virtualViewId) ?: return false
+        // As Compose's delegate: the accessibility focus moves to a disabled node, its other
+        // actions are refused (`if (!node.enabled()) return false`, D1255).
+        if (node.flags and DISABLED != 0 &&
+            action != AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS &&
+            action != AccessibilityNodeInfo.ACTION_CLEAR_ACCESSIBILITY_FOCUS
+        ) {
+            return false
+        }
         return when (action) {
             AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS -> {
                 if (accessibilityFocused == virtualViewId) return false

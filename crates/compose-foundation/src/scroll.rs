@@ -144,7 +144,7 @@ impl ModifierNodeElement for ScrollElement {
             state: self.state,
             vertical: self.vertical,
             drag: DragScroller::default(),
-            fraction: 0.0,
+            fraction: Rc::default(),
             laid_out: 0,
             rtl: false,
         }
@@ -283,8 +283,9 @@ struct ScrollNode {
     state: ScrollState,
     vertical: bool,
     drag: DragScroller,
-    /// The fraction of a pixel scrolled but not yet shown.
-    fraction: f32,
+    /// The fraction of a pixel scrolled but not yet shown: shared with its semantics' scroll
+    /// action.
+    fraction: Rc<std::cell::Cell<f32>>,
     /// The offset the last layout used.
     laid_out: i32,
     /// Horizontal in a right-to-left layout: its content starts at the right.
@@ -305,11 +306,11 @@ impl compose_ui::SemanticsModifierNode for ScrollNode {
         } else {
             config.set_horizontal_scroll_axis_range(range);
         }
-        let (state, vertical) = (self.state, self.vertical);
+        let (state, vertical, fraction) = (self.state, self.vertical, self.fraction.clone());
         config.scroll_by(None, move |x, y| {
             // Towards the content's end (its value growing), as Compose's (D491).
             let delta = if vertical { y } else { x };
-            delta != 0.0 && scroll_state_by(&state, delta, &mut 0.0) != 0.0
+            delta != 0.0 && scroll_carrying(&state, delta, &fraction) != 0.0
         });
     }
 }
@@ -344,7 +345,7 @@ impl ModifierNode for ScrollNode {
         // Where it will be once the scrolling asked for (not yet laid out) is.
         let pending = (self.state.value() - self.laid_out) as f32;
         let delta = bring_into_view_delta(start - pending, end - pending, length);
-        let used = scroll_state_by(&self.state, delta, &mut self.fraction);
+        let used = scroll_carrying(&self.state, delta, &self.fraction);
         Some(scrolled_rect(rect, used, self.vertical, self.rtl))
     }
 }
@@ -505,7 +506,7 @@ impl PointerInputModifierNode for ScrollNode {
         context: &mut EventContext<'_>,
     ) {
         let (vertical, state) = (self.vertical, self.state);
-        let fraction = &mut self.fraction;
+        let fraction = &*self.fraction;
         let reverse = !vertical && context.layout_direction() == compose_ui::LayoutDirection::Rtl;
         let flung = state;
         self.drag.on_pointer_event(
@@ -514,7 +515,7 @@ impl PointerInputModifierNode for ScrollNode {
             vertical,
             reverse,
             context,
-            |delta| scroll_state_by(&state, delta, fraction),
+            |delta| scroll_carrying(&state, delta, fraction),
             move |_: &NestedScrollChain, _: NestedScrollSource| {
                 let fraction = std::cell::Cell::new(0.0f32);
                 Rc::new(move |delta| {
@@ -530,6 +531,14 @@ impl PointerInputModifierNode for ScrollNode {
     fn on_cancel_pointer_input(&mut self) {
         self.drag.cancel();
     }
+}
+
+/// `scroll_state_by` with the fraction carried in `fraction`.
+fn scroll_carrying(state: &ScrollState, delta: f32, fraction: &std::cell::Cell<f32>) -> f32 {
+    let mut left = fraction.get();
+    let used = scroll_state_by(state, delta, &mut left);
+    fraction.set(left);
+    used
 }
 
 /// Scrolls `state` by `delta` pixels, within its range, carrying the fraction of a pixel left
