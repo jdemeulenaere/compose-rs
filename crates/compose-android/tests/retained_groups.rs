@@ -2685,3 +2685,37 @@ fn a_path_outline_defined_again_in_place_changes_the_layer_entry() {
         assert_ne!(entry(before), entry(after), "the entry changed: the outline is set again");
     }
 }
+
+/// A layer clipping to a cut shape while only its alpha animates: its outline is the same
+/// path each frame (kept by the layer for its shape, size, direction and density), so the
+/// `LAYERS` entry names the same path and defines nothing new, as Compose's layer keeps its
+/// outline until its shape or size changes (D1059).
+#[test]
+fn an_alpha_animation_over_a_cut_shape_keeps_its_path() {
+    let alpha = mutable_state_of(1.0f32);
+    let handle = alpha.handle();
+    let mut serialized = Serialized::new(move || {
+        Leaf(
+            Modifier
+                .size(40.dp())
+                .graphics_layer(move |layer| {
+                    layer.alpha = handle.get();
+                    layer.shape = compose_foundation::CutCornerShape(6.dp());
+                    layer.clip = true;
+                })
+                .then(painted(|| Color::RED)),
+        );
+    });
+    let first = serialized.frame();
+    let (id, _) = path_outline(&first, 0);
+    let mut defined = Writer::default();
+    serialized.resources.write_pending(&mut defined);
+    for next in [0.8f32, 0.6, 0.4] {
+        alpha.set(next);
+        let bytes = serialized.frame();
+        let (layers, _) = read(&bytes);
+        assert_eq!(layers[0].alpha, next);
+        assert_eq!(path_outline(&bytes, 0).0, id, "the same path");
+        assert!(!serialized.resources.has_pending(), "nothing defined again");
+    }
+}

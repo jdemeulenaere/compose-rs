@@ -479,6 +479,7 @@ The log is split by area into the files below, one table each, rows in number or
 | D1056 | [ui-and-layout](decisions/ui-and-layout.md#d1056) | current |
 | D1057 | [ui-and-layout](decisions/ui-and-layout.md#d1057) | current |
 | D1058 | [android-host-and-performance](decisions/android-host-and-performance.md#d1058) | current |
+| D1059 | [ui-and-layout](decisions/ui-and-layout.md#d1059) | current |
 | D1100 | [text](decisions/text.md#d1100) | revised by [D1112](decisions/text.md#d1112) |
 | D1101 | [text](decisions/text.md#d1101) | current |
 | D1102 | [text](decisions/text.md#d1102) | current |

@@ -130,6 +130,20 @@ struct GraphicsLayerElement(Layer);
 
 pub(crate) struct GraphicsLayerNode {
     layer: Layer,
+    /// Its last path outline, with what it was made for (D1059).
+    outline: std::cell::RefCell<Option<CachedOutline>>,
+}
+
+/// A layer's path outline and what it was made for: made again only when one of them changes,
+/// as Compose's layer keeps its outline until its shape or size changes (D1059). So an
+/// animation of its other properties (an alpha over a cut shape) keeps the same path, which
+/// Android doesn't define again each frame.
+struct CachedOutline {
+    shape: Shape,
+    size: Size,
+    direction: LayoutDirection,
+    density: Density,
+    outline: Outline,
 }
 
 impl GraphicsLayerNode {
@@ -137,6 +151,7 @@ impl GraphicsLayerNode {
     pub(crate) fn clip(shape: Shape) -> GraphicsLayerNode {
         GraphicsLayerNode {
             layer: Layer::Fixed(GraphicsLayerScope { shape, clip: true, ..Default::default() }),
+            outline: Default::default(),
         }
     }
 
@@ -172,7 +187,28 @@ impl GraphicsLayerNode {
         origin: Offset,
         size: Size,
     ) -> LayerProperties {
-        LayerProperties::new(&self.scope(density, size), origin, size, direction)
+        let layer = self.scope(density, size);
+        LayerProperties::new(&layer, origin, size, || {
+            let mut cache = self.outline.borrow_mut();
+            if let Some(cached) = &*cache
+                && cached.shape == layer.shape
+                && cached.size == size
+                && cached.direction == direction
+                && cached.density == layer.density
+            {
+                return cached.outline.clone();
+            }
+            let outline = layer.shape.outline_in(size, &layer.density, direction);
+            // Paths alone: the other outlines are values, as cheap to make again as to compare.
+            *cache = matches!(outline, Outline::Generic(..)).then(|| CachedOutline {
+                shape: layer.shape.clone(),
+                size,
+                direction,
+                density: layer.density,
+                outline: outline.clone(),
+            });
+            outline
+        })
     }
 }
 
@@ -207,13 +243,13 @@ pub struct LayerProperties {
 }
 
 impl LayerProperties {
-    /// `layer`'s properties for a layer at `origin` in its group, of `size`, its shape laid
-    /// out in `direction`.
+    /// `layer`'s properties for a layer at `origin` in its group, of `size`, its outline (in
+    /// the layer's own coordinates) from `outline`, asked only if it clips or casts a shadow.
     pub(crate) fn new(
         layer: &GraphicsLayerScope,
         origin: Offset,
         size: Size,
-        direction: LayoutDirection,
+        outline: impl FnOnce() -> Outline,
     ) -> LayerProperties {
         let pivot = Offset::new(
             size.width * layer.transform_origin.pivot_fraction_x,
@@ -221,8 +257,7 @@ impl LayerProperties {
         );
         let bounds = Rect::new(origin.x, origin.y, origin.x + size.width, origin.y + size.height);
         let shadow_elevation = layer.shadow_elevation.max(0.0);
-        let outline = (layer.clip || shadow_elevation > 0.0)
-            .then(|| layer.shape.outline_in(size, &layer.density, direction).translate(origin));
+        let outline = (layer.clip || shadow_elevation > 0.0).then(|| outline().translate(origin));
         LayerProperties {
             alpha: layer.alpha.clamp(0.0, 1.0),
             pivot: pivot + origin,
@@ -331,7 +366,7 @@ fn faded(color: Color, alpha: f32) -> Color {
 impl ModifierNodeElement for GraphicsLayerElement {
     type Node = GraphicsLayerNode;
     fn create(&self) -> GraphicsLayerNode {
-        GraphicsLayerNode { layer: self.0.clone() }
+        GraphicsLayerNode { layer: self.0.clone(), outline: Default::default() }
     }
 
     fn update(&self, node: &mut GraphicsLayerNode) {
