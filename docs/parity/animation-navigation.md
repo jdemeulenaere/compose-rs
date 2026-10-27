@@ -32,10 +32,10 @@ The inventory of Compose's animation and navigation tests and public API against
 | Status | Files | @Test |
 |---|---|---|
 | `covered` | 1 | 1 |
-| `ported` | 20 | 108 |
+| `ported` | 21 | 109 |
 | `port` | 0 | 0 |
 | `partial` | 9 | 139 |
-| `feature:<name>` | 63 | 764 |
+| `feature:<name>` | 62 | 763 |
 | `n/a` | 2 | 9 |
 
 By module:
@@ -43,7 +43,7 @@ By module:
 | Module | Files | @Test | covered | ported | port | partial | feature | n/a |
 |---|---|---|---|---|---|---|---|---|
 | animation-core | 30 | 212 | 0 | 17 / 84 | 0 | 3 / 31 | 10 / 97 | 0 |
-| animation | 15 | 238 | 0 | 3 / 24 | 0 | 3 / 40 | 9 / 174 | 0 |
+| animation | 15 | 238 | 0 | 4 / 25 | 0 | 3 / 40 | 8 / 173 | 0 |
 | animation-graphics | 5 | 22 | 0 | 0 | 0 | 0 | 5 / 22 | 0 |
 | navigation-compose | 9 | 121 | 1 / 1 | 0 | 0 | 3 / 68 | 4 / 50 | 1 / 2 |
 | navigation3-runtime | 21 | 307 | 0 | 0 | 0 | 0 | 20 / 300 | 1 / 7 |
@@ -72,7 +72,6 @@ By module:
 | nav-transitions | 1 | 5 |
 | motion-duration-scale | 2 | 4 |
 | predictive-back | 1 | 2 |
-| decay-animation | 1 | 1 |
 
 Without Navigation 3 (whose adoption is a decision, not a gap in what compose-rs models), the area is 59 files and 593 tests. Of those:
 
@@ -137,7 +136,7 @@ The "covered" notes cite compose-rs test files under `crates/compose-animation/t
 | 39 | `compose/animation/animation/src/androidDeviceTest/kotlin/androidx/compose/animation/DeferredSharedElementTest.kt` | 15 | shared elements under deferred transitions: previews, hand-off, cancellation | `feature:shared-transition` | also deferred-transition |
 | 40 | `compose/animation/animation/src/androidDeviceTest/kotlin/androidx/compose/animation/LookaheadAnimationVisualDebugHelperTest.kt` | 16 | debug overlays for shared elements and animateBounds | `feature:lookahead-visual-debug` | experimental (`@ExperimentalLookaheadAnimationVisualDebugApi`) |
 | 41 | `compose/animation/animation/src/androidDeviceTest/kotlin/androidx/compose/animation/SharedTransitionTest.kt` | 71 | `SharedTransitionLayout`, `sharedElement`, `sharedBounds`, overlay, clip, placeholder size, scale-to-bounds, lazy lists, isTransitionActive, velocity | `feature:shared-transition` | needs ui lookahead |
-| 42 | `compose/animation/animation/src/androidHostTest/kotlin/androidx/compose/animation/AndroidFlingSplineTest.kt` | 1 | the fling spline clamps positions out of range | `feature:decay-animation` | compose-rs has the spline privately in `compose-foundation/src/fling.rs` |
+| 42 | `compose/animation/animation/src/androidHostTest/kotlin/androidx/compose/animation/AndroidFlingSplineTest.kt` | 1 | the fling spline clamps positions out of range | ported | `spline_decay.rs`, with flings checked against values computed in Kotlin's numeric semantics |
 | 43 | `compose/animation/animation/src/androidHostTest/kotlin/androidx/compose/animation/ConverterTest.kt` | 5 | Color (Oklab, clamping), Rect, Dp, Offset converters | ported | `converters.rs` (the color clamp included: compose-rs clamps in Oklab first, as Compose's) |
 | 44 | `compose/animation/animation/src/androidHostTest/kotlin/androidx/compose/animation/EnterExitTransitionConfigTest.kt` | 13 | `EnterTransition/ExitTransition.config`: fade, slide, change size, scale, veil, combined; SizeTransform defaults | ported | `enter_exit_config.rs` (the offset and size functions checked by what they give) |
 | 45 | `compose/animation/animation/src/androidHostTest/kotlin/androidx/compose/animation/SharedMutableTransformStateTest.kt` | 4 | internal state machine of mutable transforms | `feature:deferred-transition` | internal; port with the feature |
@@ -302,7 +301,7 @@ Deprecated and left out:
 | `SharedTransitionLayout`, `SharedTransitionScope(content)`, the `SharedTransitionScope` interface:<br>• the modifiers: `sharedElement`, `sharedBounds`, `sharedElementWithCallerManagedVisibility`, `skipToLookaheadSize`, `skipToLookaheadPosition`, `renderInSharedTransitionScopeOverlay`;<br>• the state: `rememberSharedContentState(key[, config])`, `SharedContentConfig(…)`, `OverlayClip`, `isTransitionActive`;<br>• the nested types: `SharedContentState` (`key`, `isMatchFound`, `clipPathInOverlay`, `parentSharedContentState`, `prepareTransitionWithInitialVelocity`), `SharedContentConfig` (`isEnabled`, `shouldKeepEnabledForOngoingAnimation`, `permitTransformDuringDeferredTransition`, `alternativeTargetBoundsInTransitionScopeAfterRemoval`), `PlaceholderSize` (`ContentSize`, `AnimatedSize`), `ResizeMode` (`RemeasureToBounds`, `scaleToBounds(contentScale, alignment)`);<br>• `SharedTransitionDefaults` (`BoundsTransform`, `SharedContentConfig`) and `BoundsTransform` | missing | shared-transition |
 | `Modifier.animateBounds(lookaheadScope, modifier, boundsTransform, animateMotionFrameOfReference)` | missing | animate-bounds |
 | `LookaheadAnimationVisualDebugging(…)`, `CustomizedLookaheadAnimationVisualDebugging(…)` (experimental) | missing | lookahead-visual-debug |
-| `splineBasedDecay(density)`, `rememberSplineBasedDecay()`, `SplineBasedFloatDecayAnimationSpec` | missing (foundation has the spline privately in `fling.rs`) | decay-animation |
+| `splineBasedDecay(density)`, `rememberSplineBasedDecay()`, `SplineBasedFloatDecayAnimationSpec` | present (D820; foundation's flings still use `fling.rs`'s spline) | decay-animation |
 | `Color.VectorConverter(colorSpace)` | `Animate for Color` (sRGB only: compose-rs colors have no color spaces) | (none: n/a until color spaces exist) |
 | `Animatable(Color)`, `animateColorAsState`, `InfiniteTransition.animateColor`, `Transition.animateColor` | present | |
 
@@ -430,9 +429,9 @@ One entry per feature. Sizes:
 - **Tests:** `SuspendAnimationTest`, `DurationScaleTest`.
 - **Dependencies:** animation-objects; decay-animation for the decay forms.
 
-#### decay-animation (M, not exp.): partly done (D807)
+#### decay-animation (M, not exp.): done (D807, D820)
 
-- **Done:** `FloatDecayAnimationSpec`, `FloatExponentialDecaySpec`, `VectorizedDecayAnimationSpec`, `DecayAnimationSpec`, `exponential_decay`, `generate_decay_animation_spec`, `calculate_target_value`, `DecayAnimation` (and `float_decay_animation` for its `FloatDecayAnimationSpec` constructor), `Animatable::animate_decay`. **Left:** the spline family (`spline_based_decay`, `remember_spline_based_decay`), which waits on moving foundation's fling spline (the D292 crate edge).
+- **Done:** `FloatDecayAnimationSpec`, `FloatExponentialDecaySpec`, `VectorizedDecayAnimationSpec`, `DecayAnimationSpec`, `exponential_decay`, `generate_decay_animation_spec`, `calculate_target_value`, `DecayAnimation` (and `float_decay_animation` for its `FloatDecayAnimationSpec` constructor), `Animatable::animate_decay`. The spline family (`spline_based_decay`, `remember_spline_based_decay`, D820); foundation's flings are to switch to it (D820).
 
 - **API:**
   - the specs: `DecayAnimationSpec`, `FloatDecayAnimationSpec`, `VectorizedDecayAnimationSpec`, `exponential_decay`, `FloatExponentialDecaySpec`, `generate_decay_animation_spec`;

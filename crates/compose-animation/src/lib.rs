@@ -23,6 +23,7 @@ mod easing;
 mod infinite;
 mod keyframes;
 mod spec;
+mod spline;
 mod spring;
 mod suspend;
 mod transition;
@@ -77,6 +78,12 @@ pub use spec::{
     SpringSpec, StartOffset, StartOffsetType, TweenSpec, VectorizedAnimationSpec,
     VectorizedDurationBasedAnimationSpec, infinite_repeatable, infinite_repeatable_with,
     repeatable, repeatable_with, snap, spring, spring_with, tween,
+};
+#[doc(hidden)]
+pub use spline::fling_position;
+pub use spline::{
+    FlingResult, SplineBasedFloatDecayAnimationSpec, remember_spline_based_decay,
+    spline_based_decay,
 };
 #[doc(hidden)]
 pub use spring::{

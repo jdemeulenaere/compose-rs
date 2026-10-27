@@ -36,6 +36,8 @@ compose-macros ── (generated code calls) ──► compose-runtime
 compose-ui ──► compose-runtime
 compose-foundation ──► compose-ui ──► compose-runtime
 compose-material3 ──► compose-foundation
+compose-animation ──► compose-ui
+compose-foundation ··► compose-animation   (allowed, D820: flings' spline decay)
 compose-skia ──► compose-ui
 compose-desktop ──► compose-skia
 compose-android ──► compose-ui
