@@ -692,18 +692,8 @@ internal class TextMeasurer(
         out[1] = length.toFloat()
         out[2] = layout.width.toFloat()
         out[3] = lineBottom(layout, lines - 1, lines, lastLine)
-        // The widest word with its trailing spaces, as Compose's `minIntrinsicWidth`.
-        var widest = 0f
-        var wordStart = 0
-        for (index in 0 until length) {
-            val breaks = text[index] == '\n' || (text[index] == ' ' && (index + 1 == length || text[index + 1] != ' '))
-            if (breaks) {
-                widest = maxOf(widest, Layout.getDesiredWidth(text, wordStart, index + 1, layout.paint))
-                wordStart = index + 1
-            }
-        }
-        if (wordStart < length) widest = maxOf(widest, Layout.getDesiredWidth(text, wordStart, length, layout.paint))
-        out[4] = widest
+        // Compose's `minIntrinsicWidth` (its line breaker's segments), as the intrinsics measure it.
+        out[4] = kept?.minIntrinsicWidth ?: layout.width.toFloat()
         out[5] = kept?.maxIntrinsicWidth ?: layout.width.toFloat()
         out[6] = if (layout.lineCount > lines || lastEllipsized) 1f else 0f
         out[7] = if (lastEllipsized) 1f else 0f
@@ -712,7 +702,7 @@ internal class TextMeasurer(
             val ellipsized = line == lines - 1 && lastEllipsized
             out[at] = layout.getLineStart(line).toFloat()
             out[at + 1] = (if (ellipsized) length else layout.getLineEnd(line)).toFloat()
-            out[at + 2] = (if (ellipsized) layout.getLineStart(line) + layout.getEllipsisStart(line) else layout.getLineVisibleEnd(line)).toFloat()
+            out[at + 2] = (if (ellipsized) layout.getLineStart(line) + layout.getEllipsisStart(line) else lineVisibleEnd(layout, line)).toFloat()
             out[at + 3] = layout.getLineTop(line).toFloat()
             out[at + 4] = lineBottom(layout, line, lines, lastLine)
             out[at + 5] = lineBaseline(layout, line, lines, lastLine)
@@ -729,6 +719,17 @@ internal class TextMeasurer(
             out[at + 2] = if (offset < length && layout.isRtlCharAt(offset)) 1f else 0f
         }
         return out
+    }
+
+    /**
+     * Line [line]'s end without its trailing spaces and line feed, as Compose's
+     * `LayoutHelper.lineEndToVisibleEnd` (not `Layout.getLineVisibleEnd`, which keeps some).
+     */
+    private fun lineVisibleEnd(layout: Layout, line: Int): Int {
+        val start = layout.getLineStart(line)
+        var end = layout.getLineEnd(line)
+        while (end > start && isLineEndSpace(layout.text[end - 1])) end--
+        return end
     }
 
     fun release(handle: Int) {
@@ -939,6 +940,11 @@ private fun minIntrinsicWidth(text: CharSequence, paint: TextPaint): Float {
     }
     return candidates.maxOfOrNull { Layout.getDesiredWidth(text, it[0], it[1], paint) } ?: 0f
 }
+
+/** A space a line's visible end leaves out, as Compose's `LayoutHelper.isLineEndSpace`. */
+internal fun isLineEndSpace(c: Char): Boolean =
+    c == ' ' || c == '\n' || c == ' ' || (c in ' '..' ' && c != ' ') ||
+        c == ' ' || c == '　'
 
 /** How many of the longest segments [minIntrinsicWidth] measures, as Compose's heap. */
 private const val MIN_WIDTH_CANDIDATES = 10

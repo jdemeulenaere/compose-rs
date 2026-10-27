@@ -128,6 +128,14 @@ pub struct TextLayoutInput {
     pub constraints: crate::constraints::Constraints,
 }
 
+/// Whether a line's visible end leaves `c` out, as Compose's `LayoutHelper.isLineEndSpace`:
+/// the space, the line feed, the ogham space mark, the en to hair spaces but the figure space,
+/// the medium mathematical space and the ideographic space (a tab stays visible).
+pub(crate) fn is_line_end_space(c: char) -> bool {
+    matches!(c, ' ' | '\n' | '\u{1680}' | '\u{205F}' | '\u{3000}')
+        || (('\u{2000}'..='\u{200A}').contains(&c) && c != '\u{2007}')
+}
+
 /// One line of a [`ParagraphLayout`].
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct LineLayout {
@@ -518,7 +526,7 @@ pub fn sampled_paragraph<M: crate::text::TextMeasurer + ?Sized>(
         line.left = line.left.min(cursor.left);
         line.right = line.right.max(cursor.left);
         if let Some(c) = text[offset..].chars().next()
-            && !c.is_whitespace()
+            && !is_line_end_space(c)
         {
             line.visible_end = offset + c.len_utf8();
         }

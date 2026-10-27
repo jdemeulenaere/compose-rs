@@ -474,7 +474,7 @@ impl FixedTextMeasurer {
             let content_end = range.end.min(paragraph.end).max(range.start);
             let visible_end = (range.start..content_end)
                 .rev()
-                .find(|&index| !glyphs[index].character.is_whitespace())
+                .find(|&index| !crate::paragraph::is_line_end_space(glyphs[index].character))
                 .map_or(range.start, |index| index + 1);
             let line_glyphs = &glyphs[range.start..content_end.max(range.start)];
             let (ascent, descent) = if line_glyphs.is_empty() {

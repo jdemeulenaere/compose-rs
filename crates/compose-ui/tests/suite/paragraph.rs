@@ -1606,3 +1606,15 @@ fn intrinsic_widths_of_styled_text_and_words() {
     let text: String = (1..=50).map(|length| "a".repeat(length) + " ").collect();
     assert_eq!(paragraph(&text, sized(12.0), None).min_intrinsic_width(), 51.0 * 12.0);
 }
+
+/// A line's visible end leaves out the spaces Compose's `LayoutHelper.isLineEndSpace` names (the
+/// space, the line feed, the ogham and ideographic spaces, the en to hair spaces but the figure
+/// space): a tab or a figure space stays visible (D1109).
+#[test]
+fn a_lines_visible_end_leaves_out_compose_s_line_end_spaces() {
+    let visible = |text: &str| paragraph(text, sized(10.0), None).get_line_end(0, true);
+    assert_eq!(visible("abc   "), 3);
+    assert_eq!(visible("abc\u{3000}\u{2003} "), 3);
+    assert_eq!(visible("abc\t"), 4);
+    assert_eq!(visible("abc\u{2007}"), "abc\u{2007}".len());
+}
