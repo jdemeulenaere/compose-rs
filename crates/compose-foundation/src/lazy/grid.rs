@@ -226,7 +226,7 @@ impl LazyGridState {
             let cells = state
                 .list
                 .inner()
-                .map_or(1, |inner| inner.laid_out.read(|_, viewport| viewport.max_span));
+                .map_or(1, |inner| inner.laid_out.read_untracked(|_, viewport| viewport.max_span));
             let scope = state.lazy_layout_scroll_scope(scope);
             super::animate_scroll::animate_scroll_to_item(
                 &scope,
@@ -272,7 +272,7 @@ impl GridScrollScope {
     ) -> Option<R> {
         let inner = self.state.list.inner()?;
         let pending = inner.pending.get();
-        inner.laid_out.read(|laid, viewport| {
+        inner.laid_out.read_untracked(|laid, viewport| {
             let lines = super::layout_info::laid_lines(laid, true);
             let ahead = super::layout_info::ahead(
                 &lines,
@@ -308,7 +308,7 @@ impl super::LazyLayoutScrollScope for GridScrollScope {
 
     fn item_count(&self) -> usize {
         let Some(inner) = self.state.list.inner() else { return 0 };
-        inner.laid_out.read(|_, viewport| viewport.count)
+        inner.laid_out.read_untracked(|_, viewport| viewport.count)
     }
 
     fn snap_to_item(&self, index: usize, offset: i32) {

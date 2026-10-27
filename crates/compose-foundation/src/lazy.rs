@@ -606,7 +606,7 @@ impl ListScrollScope {
     ) -> Option<R> {
         let inner = self.state.inner()?;
         let pending = inner.pending.get();
-        inner.laid_out.read(|laid, viewport| {
+        inner.laid_out.read_untracked(|laid, viewport| {
             let lines = layout_info::laid_lines(laid, false);
             let ahead = layout_info::ahead(
                 &lines,
@@ -642,7 +642,7 @@ impl LazyLayoutScrollScope for ListScrollScope {
 
     fn item_count(&self) -> usize {
         let Some(inner) = self.state.inner() else { return 0 };
-        inner.laid_out.read(|_, viewport| viewport.count)
+        inner.laid_out.read_untracked(|_, viewport| viewport.count)
     }
 
     fn snap_to_item(&self, index: usize, offset: i32) {

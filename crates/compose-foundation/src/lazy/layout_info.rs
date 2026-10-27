@@ -320,4 +320,30 @@ impl LaidOut {
         self.version.get();
         read(&self.items.borrow(), self.viewport.get())
     }
+
+    /// The same, read by a scroll in a task (a scroll scope), which observes nothing: it doesn't
+    /// make the measurement tell readers of each change from then on.
+    pub(crate) fn read_untracked<R>(&self, read: impl FnOnce(&[LaidItem], LaidViewport) -> R) -> R {
+        read(&self.items.borrow(), self.viewport.get())
+    }
+
+    /// Whether anything read the items as a reader to tell.
+    #[cfg(test)]
+    pub(crate) fn was_read(&self) -> bool {
+        self.read.get()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_untracked_read_does_not_ask_for_changes() {
+        let laid = LaidOut::new();
+        laid.read_untracked(|items, _| assert!(items.is_empty()));
+        assert!(!laid.was_read());
+        laid.read(|items, _| assert!(items.is_empty()));
+        assert!(laid.was_read());
+    }
 }
