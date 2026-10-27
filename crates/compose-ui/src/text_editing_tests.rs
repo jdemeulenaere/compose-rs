@@ -931,3 +931,19 @@ fn a_reversed_selection_stays_reversed_after_commands() {
     let value = processor.apply(&[&SetSelectionCommand::new(1, 3)]);
     assert_eq!(value.selection(), TextRange::new(3, 1));
 }
+
+/// A collapsed range inside a character stays collapsed, at the character's start; only a
+/// range that covers something widens to whole characters (D1112).
+#[test]
+fn a_cursor_inside_a_character_goes_to_its_start() {
+    let text = "a\u{1F600}b";
+    let mut selecting = buffer(text, TextRange::at(0));
+    SetSelectionCommand::new(2, 2).apply_to(&mut selecting);
+    assert_selection(&selecting, 1, 1);
+    let mut widening = buffer(text, TextRange::at(0));
+    SetSelectionCommand::new(2, 3).apply_to(&mut widening);
+    assert_selection(&widening, 1, 5);
+    let mut composing = buffer(text, TextRange::at(0));
+    SetComposingRegionCommand::new(2, 2).apply_to(&mut composing);
+    assert_eq!(composing.composition(), None);
+}

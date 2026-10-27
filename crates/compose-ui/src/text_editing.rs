@@ -454,7 +454,7 @@ impl fmt::Display for CommitTextCommand {
 
 /// Marks `start..end` (its ends in either order, kept in the text) as the composition,
 /// committing any composition first, as Compose's `SetComposingRegionCommand`; an empty range
-/// leaves none. A range inside characters widens to them.
+/// leaves none (one inside a character too). A range inside characters widens to them.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct SetComposingRegionCommand {
     pub start: isize,
@@ -467,12 +467,18 @@ impl SetComposingRegionCommand {
     }
 }
 
-/// `start..end` (in either order) kept in the buffer's text, widened to whole characters.
+/// `start..end` (in either order) kept in the buffer's text: a range covering something widened
+/// to whole characters, a collapsed one (a cursor) at its character's start (D1112).
 fn clamped_range(buffer: &EditingBuffer, start: isize, end: isize) -> (usize, usize) {
     let clamp = |offset: isize| offset.clamp(0, buffer.len() as isize) as usize;
     let (start, end) = (clamp(start), clamp(end));
     let (min, max) = (start.min(end), start.max(end));
-    (floor_char_boundary(buffer.as_str(), min), ceil_char_boundary(buffer.as_str(), max))
+    let text = buffer.as_str();
+    if min == max {
+        let at = floor_char_boundary(text, min);
+        return (at, at);
+    }
+    (floor_char_boundary(text, min), ceil_char_boundary(text, max))
 }
 
 impl EditCommand for SetComposingRegionCommand {
