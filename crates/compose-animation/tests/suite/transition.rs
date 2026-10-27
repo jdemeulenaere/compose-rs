@@ -638,3 +638,42 @@ fn a_composition_writing_a_measured_state_asks_for_no_other_frame() {
     let plays = play_times.borrow();
     assert_eq!(&plays[composed..], &[16_000_000][..], "{plays:?}");
 }
+
+thread_local! {
+    static LISTED: RefCell<Vec<(String, Option<f32>)>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Tools see a transition's values and an infinite transition's with their labels: the ones
+/// given, or Compose's defaults.
+#[test]
+fn tools_list_the_values_with_their_labels() {
+    let target = mutable_state_of(From);
+    let handle = target.handle();
+    let _ui = ComposeTestRule::with_manual_clock(move || {
+        let transition = update_transition(handle.get(), None);
+        let _ = transition.animate_float_with(|_| tween(100).into(), "alpha", |_| 0.5);
+        let _ = transition.animate_dp(|_| tween(100).into(), |_| compose_ui::Dp(1.0));
+        let infinite = remember_infinite_transition!("pulse");
+        let _ =
+            infinite.animate_float(0.0, 1.0, infinite_repeatable(tween(100), RepeatMode::Reverse));
+        let _ = infinite.animate_color_with(
+            Color::RED,
+            Color::BLUE,
+            infinite_repeatable(tween(100), RepeatMode::Reverse),
+            "glow",
+        );
+        let mut listed: Vec<(String, Option<f32>)> = transition
+            .animations()
+            .iter()
+            .map(|animation| (animation.label(), animation.value::<f32>()))
+            .collect();
+        listed.push((infinite.label().to_string(), None));
+        listed.extend(infinite.animations().iter().map(|animation| (animation.label(), None)));
+        LISTED.with(|seen| *seen.borrow_mut() = listed);
+    });
+    // The lists fill as the effects run: a later pass sees them.
+    let listed = LISTED.with(|seen| seen.borrow().clone());
+    let labels: Vec<&str> = listed.iter().map(|(label, _)| label.as_str()).collect();
+    assert_eq!(labels, ["alpha", "DpAnimation", "pulse", "FloatAnimation", "glow"]);
+    assert_eq!(listed[0].1, Some(0.5));
+}

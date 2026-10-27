@@ -16,6 +16,7 @@ use compose_runtime::{
 use compose_ui::Color;
 
 use crate::spec::{RepeatableSpec, VectorizedAnimationSpec};
+use crate::transition::{ToolingEntry, TransitionAnimation};
 use crate::vector::{Animate, AnimationVector};
 
 /// Runs infinite animations while it is in the composition, as Compose's `InfiniteTransition`:
@@ -33,16 +34,18 @@ impl ComposeArg for InfiniteTransition {
 }
 
 struct TransitionInner {
+    /// Its name for tools, as `label`.
+    label: &'static str,
     /// Its values, as `_animations`: added and removed as their calls enter and leave the
     /// composition.
-    animations: RefCell<Vec<Rc<dyn TransitionAnimation>>>,
+    animations: RefCell<Vec<Rc<dyn InfiniteAnimation>>>,
     /// Its task, waiting for a value to animate (none yet, or all finished): it asks for no
     /// frames meanwhile, as Compose's transition stops running (`isRunning`).
     idle: RefCell<Option<Waker>>,
 }
 
 /// A value of a transition, as `InfiniteTransition.TransitionAnimationState`, its type erased.
-trait TransitionAnimation {
+trait InfiniteAnimation: ToolingEntry {
     /// Sets the value at this frame. Compose passes the transition's play time; this is the
     /// frame's time, so a value whose call moves to another transition goes on where it was.
     fn on_play_time_changed(&self, frame_time_nanos: u64);
@@ -59,12 +62,12 @@ impl TransitionInner {
         }
     }
 
-    fn add_animation(&self, animation: Rc<dyn TransitionAnimation>) {
+    fn add_animation(&self, animation: Rc<dyn InfiniteAnimation>) {
         self.animations.borrow_mut().push(animation);
         self.refresh();
     }
 
-    fn remove_animation(&self, animation: &Rc<dyn TransitionAnimation>) {
+    fn remove_animation(&self, animation: &Rc<dyn InfiniteAnimation>) {
         self.animations.borrow_mut().retain(|kept| !Rc::ptr_eq(kept, animation));
     }
 
@@ -113,10 +116,13 @@ impl TransitionInner {
 pub fn remember_infinite_transition(
     #[default("InfiniteTransition")] label: &'static str,
 ) -> InfiniteTransition {
-    let _ = label;
     let transition = remember(|| {
         Owned::new(
-            TransitionInner { animations: RefCell::new(Vec::new()), idle: RefCell::new(None) },
+            TransitionInner {
+                label,
+                animations: RefCell::new(Vec::new()),
+                idle: RefCell::new(None),
+            },
             |inner| InfiniteTransition { inner },
         )
     });
@@ -131,6 +137,7 @@ pub fn remember_infinite_transition(
 
 /// A value of a transition, as `TransitionAnimationState`.
 struct TransitionAnimationState<T: Animate> {
+    label: &'static str,
     initial_value: RefCell<T>,
     target_value: RefCell<T>,
     animation_spec: RefCell<RepeatableSpec>,
@@ -161,7 +168,7 @@ impl<T: Animate> TransitionAnimationState<T> {
     }
 }
 
-impl<T: Animate> TransitionAnimation for TransitionAnimationState<T> {
+impl<T: Animate> InfiniteAnimation for TransitionAnimationState<T> {
     fn on_play_time_changed(&self, frame_time_nanos: u64) {
         if self.start_on_the_next_frame.replace(false) {
             self.play_time_nanos_offset.set(frame_time_nanos);
@@ -206,8 +213,20 @@ impl InfiniteTransition {
         target_value: T,
         animation_spec: RepeatableSpec,
     ) -> State<T> {
+        self.animate_value_with(initial_value, target_value, animation_spec, "ValueAnimation")
+    }
+
+    /// The same with the `label` tools show, as `InfiniteTransition.animateValue(…, label)`.
+    pub fn animate_value_with<T: Animate + ComposeArg>(
+        &self,
+        initial_value: T,
+        target_value: T,
+        animation_spec: RepeatableSpec,
+        label: &'static str,
+    ) -> State<T> {
         let animation = remember(|| {
             Rc::new(TransitionAnimationState {
+                label,
                 initial_value: RefCell::new(initial_value.clone()),
                 target_value: RefCell::new(target_value.clone()),
                 animation_spec: RefCell::new(animation_spec.clone()),
@@ -231,7 +250,7 @@ impl InfiniteTransition {
         });
         let state = animation.value.as_state();
         let transition = self.inner;
-        let added: Rc<dyn TransitionAnimation> = animation.clone();
+        let added: Rc<dyn InfiniteAnimation> = animation.clone();
         // Keyed on the transition too: a call given another transition moves its value there
         // (on where it was), rather than staying with one that may leave the composition.
         DisposableEffect((added.clone(), *self), move |scope| {
@@ -265,7 +284,18 @@ impl InfiniteTransition {
         target_value: f32,
         animation_spec: RepeatableSpec,
     ) -> State<f32> {
-        self.animate_value(initial_value, target_value, animation_spec)
+        self.animate_value_with(initial_value, target_value, animation_spec, "FloatAnimation")
+    }
+
+    /// The same with the `label` tools show, as `InfiniteTransition.animateFloat(…, label)`.
+    pub fn animate_float_with(
+        &self,
+        initial_value: f32,
+        target_value: f32,
+        animation_spec: RepeatableSpec,
+        label: &'static str,
+    ) -> State<f32> {
+        self.animate_value_with(initial_value, target_value, animation_spec, label)
     }
 
     /// As `InfiniteTransition.animateColor`.
@@ -275,6 +305,54 @@ impl InfiniteTransition {
         target_value: Color,
         animation_spec: RepeatableSpec,
     ) -> State<Color> {
-        self.animate_value(initial_value, target_value, animation_spec)
+        self.animate_value_with(initial_value, target_value, animation_spec, "ColorAnimation")
+    }
+
+    /// The same with the `label` tools show, as `InfiniteTransition.animateColor(…, label)`.
+    pub fn animate_color_with(
+        &self,
+        initial_value: Color,
+        target_value: Color,
+        animation_spec: RepeatableSpec,
+        label: &'static str,
+    ) -> State<Color> {
+        self.animate_value_with(initial_value, target_value, animation_spec, label)
+    }
+
+    /// Its name for tools, as `label`.
+    pub fn label(&self) -> &'static str {
+        self.inner.try_get().map_or("InfiniteTransition", |inner| inner.label)
+    }
+
+    /// Its values, for tools, as `animations`, in the order they joined.
+    pub fn animations(&self) -> Vec<TransitionAnimation> {
+        let Some(inner) = self.inner.try_get() else { return Vec::new() };
+        let entries = inner.animations.borrow().clone();
+        entries
+            .into_iter()
+            .map(|entry| TransitionAnimation::new(entry as Rc<dyn ToolingEntry>))
+            .collect()
+    }
+}
+
+impl<T: Animate> ToolingEntry for TransitionAnimationState<T> {
+    fn duration_nanos(&self) -> i64 {
+        self.duration_nanos.get()
+    }
+
+    fn label(&self) -> String {
+        self.label.to_string()
+    }
+
+    fn value_any(&self) -> Box<dyn std::any::Any> {
+        Box::new(self.value.get())
+    }
+
+    fn target_value_any(&self) -> Box<dyn std::any::Any> {
+        Box::new(self.target_value.borrow().clone())
+    }
+
+    fn animation_spec(&self) -> crate::spec::AnimationSpec {
+        crate::spec::AnimationSpec::Repeatable(self.animation_spec.borrow().clone())
     }
 }

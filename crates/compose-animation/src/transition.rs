@@ -201,10 +201,14 @@ trait TransitionNode {
 }
 
 /// A value of a transition, its type erased, as `TransitionAnimationState`.
-trait AnimationEntry {
+trait AnimationEntry: ToolingEntry {
     fn on_play_time_changed(&self, play_time_nanos: i64, scale_to_end: bool);
     fn is_finished(&self) -> bool;
     fn reset_animation(&self);
+}
+
+/// A value of a transition (or of an infinite transition), its type erased: what tools see.
+pub(crate) trait ToolingEntry {
     fn duration_nanos(&self) -> i64;
     fn label(&self) -> String;
     /// The value (a state read), boxed.
@@ -217,7 +221,13 @@ trait AnimationEntry {
 /// `Transition.TransitionAnimationState`: [`Transition::animations`] lists them.
 #[derive(Clone)]
 pub struct TransitionAnimation {
-    entry: Rc<dyn AnimationEntry>,
+    entry: Rc<dyn ToolingEntry>,
+}
+
+impl TransitionAnimation {
+    pub(crate) fn new(entry: Rc<dyn ToolingEntry>) -> TransitionAnimation {
+        TransitionAnimation { entry }
+    }
 }
 
 impl TransitionAnimation {
@@ -270,7 +280,10 @@ impl AnyTransition {
     /// Its values, as `animations`.
     pub fn animations(&self) -> Vec<TransitionAnimation> {
         let entries = self.node.animation_entries();
-        entries.into_iter().map(|entry| TransitionAnimation { entry }).collect()
+        entries
+            .into_iter()
+            .map(|entry| TransitionAnimation { entry: entry as Rc<dyn ToolingEntry> })
+            .collect()
     }
 
     /// Its child transitions, as `transitions`.
@@ -593,7 +606,10 @@ impl<S: Clone + PartialEq + 'static> Transition<S> {
     /// order they joined.
     pub fn animations(&self) -> Vec<TransitionAnimation> {
         let entries = self.inner.animation_entries();
-        entries.into_iter().map(|entry| TransitionAnimation { entry }).collect()
+        entries
+            .into_iter()
+            .map(|entry| TransitionAnimation { entry: entry as Rc<dyn ToolingEntry> })
+            .collect()
     }
 
     /// Its child transitions, for tools, as `transitions`.
@@ -656,6 +672,17 @@ impl<S: Clone + PartialEq + 'static> Transition<S> {
         self.animate_labeled("ValueAnimation", transition_spec, target_value_by_state)
     }
 
+    /// The same with the `label` tools show (`ValueAnimation` by default), as
+    /// `Transition.animateValue(typeConverter, transitionSpec, label, targetValueByState)`.
+    pub fn animate_value_with<T: Animate>(
+        &self,
+        transition_spec: impl Fn(&Segment<S>) -> AnimationSpec,
+        label: &'static str,
+        target_value_by_state: impl Fn(&S) -> T,
+    ) -> State<T> {
+        self.animate_labeled(label, transition_spec, target_value_by_state)
+    }
+
     /// `animate_value` with the label tools show (Compose's default for each type).
     fn animate_labeled<T: Animate>(
         &self,
@@ -695,6 +722,16 @@ impl<S: Clone + PartialEq + 'static> Transition<S> {
         self.animate_labeled("FloatAnimation", transition_spec, target_value_by_state)
     }
 
+    /// The same with the `label` tools show (`FloatAnimation` by default), as `Transition.animateFloat(transitionSpec, label, targetValueByState)`.
+    pub fn animate_float_with(
+        &self,
+        transition_spec: impl Fn(&Segment<S>) -> AnimationSpec,
+        label: &'static str,
+        target_value_by_state: impl Fn(&S) -> f32,
+    ) -> State<f32> {
+        self.animate_labeled(label, transition_spec, target_value_by_state)
+    }
+
     /// As `Transition.animateDp`.
     pub fn animate_dp(
         &self,
@@ -702,6 +739,16 @@ impl<S: Clone + PartialEq + 'static> Transition<S> {
         target_value_by_state: impl Fn(&S) -> Dp,
     ) -> State<Dp> {
         self.animate_labeled("DpAnimation", transition_spec, target_value_by_state)
+    }
+
+    /// The same with the `label` tools show (`DpAnimation` by default), as `Transition.animateDp(transitionSpec, label, targetValueByState)`.
+    pub fn animate_dp_with(
+        &self,
+        transition_spec: impl Fn(&Segment<S>) -> AnimationSpec,
+        label: &'static str,
+        target_value_by_state: impl Fn(&S) -> Dp,
+    ) -> State<Dp> {
+        self.animate_labeled(label, transition_spec, target_value_by_state)
     }
 
     /// As `Transition.animateColor`: in Oklab.
@@ -713,6 +760,16 @@ impl<S: Clone + PartialEq + 'static> Transition<S> {
         self.animate_labeled("ColorAnimation", transition_spec, target_value_by_state)
     }
 
+    /// The same with the `label` tools show (`ColorAnimation` by default), as `Transition.animateColor(transitionSpec, label, targetValueByState)`.
+    pub fn animate_color_with(
+        &self,
+        transition_spec: impl Fn(&Segment<S>) -> AnimationSpec,
+        label: &'static str,
+        target_value_by_state: impl Fn(&S) -> Color,
+    ) -> State<Color> {
+        self.animate_labeled(label, transition_spec, target_value_by_state)
+    }
+
     /// As `Transition.animateOffset`.
     pub fn animate_offset(
         &self,
@@ -720,6 +777,16 @@ impl<S: Clone + PartialEq + 'static> Transition<S> {
         target_value_by_state: impl Fn(&S) -> Offset,
     ) -> State<Offset> {
         self.animate_labeled("OffsetAnimation", transition_spec, target_value_by_state)
+    }
+
+    /// The same with the `label` tools show (`OffsetAnimation` by default), as `Transition.animateOffset(transitionSpec, label, targetValueByState)`.
+    pub fn animate_offset_with(
+        &self,
+        transition_spec: impl Fn(&Segment<S>) -> AnimationSpec,
+        label: &'static str,
+        target_value_by_state: impl Fn(&S) -> Offset,
+    ) -> State<Offset> {
+        self.animate_labeled(label, transition_spec, target_value_by_state)
     }
 
     /// As `Transition.animateSize`.
@@ -731,6 +798,16 @@ impl<S: Clone + PartialEq + 'static> Transition<S> {
         self.animate_labeled("SizeAnimation", transition_spec, target_value_by_state)
     }
 
+    /// The same with the `label` tools show (`SizeAnimation` by default), as `Transition.animateSize(transitionSpec, label, targetValueByState)`.
+    pub fn animate_size_with(
+        &self,
+        transition_spec: impl Fn(&Segment<S>) -> AnimationSpec,
+        label: &'static str,
+        target_value_by_state: impl Fn(&S) -> Size,
+    ) -> State<Size> {
+        self.animate_labeled(label, transition_spec, target_value_by_state)
+    }
+
     /// As `Transition.animateInt`.
     pub fn animate_int(
         &self,
@@ -738,6 +815,16 @@ impl<S: Clone + PartialEq + 'static> Transition<S> {
         target_value_by_state: impl Fn(&S) -> i32,
     ) -> State<i32> {
         self.animate_labeled("IntAnimation", transition_spec, target_value_by_state)
+    }
+
+    /// The same with the `label` tools show (`IntAnimation` by default), as `Transition.animateInt(transitionSpec, label, targetValueByState)`.
+    pub fn animate_int_with(
+        &self,
+        transition_spec: impl Fn(&Segment<S>) -> AnimationSpec,
+        label: &'static str,
+        target_value_by_state: impl Fn(&S) -> i32,
+    ) -> State<i32> {
+        self.animate_labeled(label, transition_spec, target_value_by_state)
     }
 
     /// As `Transition.animateIntOffset`.
@@ -749,6 +836,16 @@ impl<S: Clone + PartialEq + 'static> Transition<S> {
         self.animate_labeled("IntOffsetAnimation", transition_spec, target_value_by_state)
     }
 
+    /// The same with the `label` tools show (`IntOffsetAnimation` by default), as `Transition.animateIntOffset(transitionSpec, label, targetValueByState)`.
+    pub fn animate_int_offset_with(
+        &self,
+        transition_spec: impl Fn(&Segment<S>) -> AnimationSpec,
+        label: &'static str,
+        target_value_by_state: impl Fn(&S) -> IntOffset,
+    ) -> State<IntOffset> {
+        self.animate_labeled(label, transition_spec, target_value_by_state)
+    }
+
     /// As `Transition.animateIntSize`.
     pub fn animate_int_size(
         &self,
@@ -758,6 +855,16 @@ impl<S: Clone + PartialEq + 'static> Transition<S> {
         self.animate_labeled("IntSizeAnimation", transition_spec, target_value_by_state)
     }
 
+    /// The same with the `label` tools show (`IntSizeAnimation` by default), as `Transition.animateIntSize(transitionSpec, label, targetValueByState)`.
+    pub fn animate_int_size_with(
+        &self,
+        transition_spec: impl Fn(&Segment<S>) -> AnimationSpec,
+        label: &'static str,
+        target_value_by_state: impl Fn(&S) -> IntSize,
+    ) -> State<IntSize> {
+        self.animate_labeled(label, transition_spec, target_value_by_state)
+    }
+
     /// As `Transition.animateRect`.
     pub fn animate_rect(
         &self,
@@ -765,6 +872,16 @@ impl<S: Clone + PartialEq + 'static> Transition<S> {
         target_value_by_state: impl Fn(&S) -> Rect,
     ) -> State<Rect> {
         self.animate_labeled("RectAnimation", transition_spec, target_value_by_state)
+    }
+
+    /// The same with the `label` tools show (`RectAnimation` by default), as `Transition.animateRect(transitionSpec, label, targetValueByState)`.
+    pub fn animate_rect_with(
+        &self,
+        transition_spec: impl Fn(&Segment<S>) -> AnimationSpec,
+        label: &'static str,
+        target_value_by_state: impl Fn(&S) -> Rect,
+    ) -> State<Rect> {
+        self.animate_labeled(label, transition_spec, target_value_by_state)
     }
 
     /// A value of this transition whose targets are known later (while measuring or drawing),
@@ -1078,7 +1195,9 @@ impl<T: Animate> AnimationEntry for TransitionAnimationState<T> {
     fn reset_animation(&self) {
         self.reset_snap_value.set(RESET_NO_SNAP);
     }
+}
 
+impl<T: Animate> ToolingEntry for TransitionAnimationState<T> {
     fn duration_nanos(&self) -> i64 {
         self.duration_nanos.get()
     }

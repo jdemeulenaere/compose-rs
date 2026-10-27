@@ -271,11 +271,11 @@ Deprecated and left out:
 | `TransitionState`, `MutableTransitionState` (`currentState`, `targetState`, `isIdle`), `rememberTransition(transitionState, label)` | present (`MutableTransitionState` only: the sealed `TransitionState` waits for seekable and deferred states) | transition-state |
 | `Transition.segment`, `Transition.Segment` (`initialState`, `targetState`, `isTransitioningTo`), `pendingTargetState`, `label`, `animations`, `transitions`, `totalDurationNanos`, `Transition.TransitionAnimationState` (`animation`, `animationSpec`, `label`, `typeConverter`) | present (`animations`, `transitions`: `TransitionAnimation`, `AnyTransition`, D813) but `pendingTargetState` | transition-state |
 | `Transition.createChildTransition(label, transform)` | present | transition-state |
-| `Transition.animateInt`, `animateIntOffset`, `animateIntSize`, `animateRect`, `animateSize` (and `label` on all `animate*`) | present, without the `label` | transition-state, more-converters |
+| `Transition.animateInt`, `animateIntOffset`, `animateIntSize`, `animateRect`, `animateSize` (and `label` on all `animate*`) | present (the labels in `_with` forms, D818) | transition-state, more-converters |
 | `SeekableTransitionState` (`seekTo`, `animateTo(spec)`, `snapTo`, `fraction`, `currentState`, `targetState`) | missing | seekable-transition |
 | `DeferredTransitionState` (`defer`, `animateTo`, `pendingTargetState`), `DeferredTransition`, `rememberDeferredTransition` | missing (new at this tip) | deferred-transition |
 | `DeferredTargetAnimation` (`updateTarget`, `value`, `pendingTarget`, `isIdle`) | present (D810) | deferred-target-animation |
-| `InfiniteTransition.animations`, `label`, `InfiniteTransition.TransitionAnimationState` (`animation`, `animationSpec`, `label`, `typeConverter`); `label` on `animateFloat`/`animateValue` | missing (tooling-facing; `label` is accepted and ignored elsewhere) | transition-state |
+| `InfiniteTransition.animations`, `label`, `InfiniteTransition.TransitionAnimationState` (`animation`, `animationSpec`, `label`, `typeConverter`); `label` on `animateFloat`/`animateValue` | present (`animations()`, `label()`, `animate_*_with(…, label)`, D818) | transition-state |
 | `withInfiniteAnimationFrameNanos`, `withInfiniteAnimationFrameMillis` (and the `InfiniteAnimationPolicy` they consult); `MotionDurationScale` honoured by every animation | missing | motion-duration-scale |
 | `Rect.VectorConverter`, `IntSize.VectorConverter` (clamped at 0), `DpOffset.VectorConverter`; `TwoWayConverter(to, from)` factory | present (`Animate` impls; compose-ui has `DpOffset`); `TwoWayConverter(to, from)` is an `Animate` impl | more-converters |
 | `VisibilityThreshold` for `Int`, `IntOffset`, `IntSize`, `Offset`, `Size`, `Rect`, `Dp`, `DpOffset` | present: the `VisibilityThreshold` constants, Compose's values (D800) | more-converters |
@@ -490,9 +490,9 @@ One entry per feature. Sizes:
   - the runtime and ui areas: a context element on compose-rs's executor and frame clock;
   - transition-state and seekable-transition for the transition tests.
 
-#### transition-state (M–L, not exp.): done but `InfiniteTransition`'s tooling getters (D803, D813)
+#### transition-state (M–L, not exp.): done (D803, D813, D818)
 
-- **Done:** `MutableTransitionState`, `remember_transition`, `Segment` (the spec closures take it), `pending_target_state` aside; child transitions; `total_duration_nanos`, `label`; `animate_int`, `animate_int_offset`, `animate_int_size`, `animate_rect`, `animate_size`; the tooling getters `animations`, `transitions` (`TransitionAnimation`, `AnyTransition`, D813). Left: `InfiniteTransition`'s tooling getters, the `label` parameters of the `animate_*` calls, `pending_target_state` (deferred-transition).
+- **Done:** `MutableTransitionState`, `remember_transition`, `Segment` (the spec closures take it), `pending_target_state` aside; child transitions; `total_duration_nanos`, `label`; `animate_int`, `animate_int_offset`, `animate_int_size`, `animate_rect`, `animate_size`; the tooling getters `animations`, `transitions` (`TransitionAnimation`, `AnyTransition`, D813). `InfiniteTransition`'s tooling getters and the `animate_*` calls' labels (D818). Left: `pending_target_state` (deferred-transition).
 
 - **API:**
   - the states: `TransitionState`, `MutableTransitionState` (`is_idle`), `remember_transition(state, label)`;
