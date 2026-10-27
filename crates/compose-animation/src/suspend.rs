@@ -341,16 +341,9 @@ pub async fn animate(
     target_value: f32,
     initial_velocity: f32,
     spec: impl Into<AnimationSpec>,
-    mut block: impl FnMut(f32, f32),
+    block: impl FnMut(f32, f32),
 ) {
-    animate_value(
-        initial_value,
-        target_value,
-        Some(initial_velocity),
-        spec,
-        move |value, velocity| block(value, velocity),
-    )
-    .await;
+    animate_value(initial_value, target_value, Some(initial_velocity), spec, block).await;
 }
 
 /// The same for any animated type, the velocity at rest when `None`, as Compose's
