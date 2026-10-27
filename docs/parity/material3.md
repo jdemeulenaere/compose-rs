@@ -10,7 +10,7 @@ What compose-rs's Material 3 (`crates/compose-material3`) has of Jetpack Compose
   - `compose/material3/material3-ripple`: the ripple node Material 3 draws its ripples with (4 test files).
 - **Not inventoried file by file:** the adaptive libraries, window size classes, navigation suite and A2UI (section 5, with a scope recommendation each), and Material 2 (section 6, a summary and a recommendation).
 - **Left out:** helper files without `@Test` (`AutoTestFrameClock.kt`, `GoldenCommon.kt`, `MaterialTest.kt`, `MaterialWindowInsetsActivity.kt`), the benchmarks (`compose/material3/benchmark`, `integration-tests/macrobenchmark`: performance, not behaviour), the demos and the catalog.
-- **compose-rs:** `crates/compose-material3` at `7f744da`: 22 source files (10,476 lines), 37 integration test modules in `crates/compose-material3/tests/suite/` (shortened to `suite/` below) with 204 `#[test]`s, and `tests/review_e_allocations.rs` (1).
+- **compose-rs:** `crates/compose-material3` at the inventory (`7f744da`): 22 source files (10,476 lines), 37 integration test modules in `crates/compose-material3/tests/suite/` (shortened to `suite/` below) with 204 `#[test]`s, and `tests/review_e_allocations.rs` (1). After milestone 1 (D1000-D1018): 26 source files (15,169 lines), 68 modules with 629 `#[test]`s; the statuses below are the current ones.
 
 ## Totals
 
@@ -18,22 +18,23 @@ What compose-rs's Material 3 (`crates/compose-material3`) has of Jetpack Compose
 
 | Status | Files | `@Test` methods |
 |---|---|---|
-| `covered` | 2 | 13 |
-| `port` | 21 | 234 |
-| `partial` | 44 | 1,223 |
-| `feature:<name>` | 90 | 1,289 |
-| `n/a` | 4 | 11 |
+| `ported` | 15 | 196 |
+| `covered` | 1 | 7 |
+| `port` | 15 | 182 |
+| `partial` | 39 | 1,162 |
+| `feature:<name>` | 85 | 1,183 |
+| `n/a` | 6 | 40 |
 | **Total** | **161** | **2,770** |
 
-Of the `partial` files' 1,223 tests, roughly half port today against the API compose-rs has; the rest wait on the features named in their notes. Beyond the four `n/a` files, about 20 tests inside other files are n/a too (Compose's internal `ComponentStyle` API, motion frame-of-reference tags), each said in its row.
+Of the `partial` files' 1,162 tests, roughly half port today against the API compose-rs has; the rest wait on the features named in their notes. Beyond the four `n/a` files, about 20 tests inside other files are n/a too (Compose's internal `ComponentStyle` API, motion frame-of-reference tags), each said in its row.
 
 The tests that need a missing feature, by feature: date pickers 138, time pickers 102, carousel 99, floating toolbar 82, search bar 66, toggle buttons 51, text field decorator 48, button group 46, wide navigation rail 46, bottom sheet scaffold 44, wavy progress 44, interactive list items 42, short navigation bar 37, ripple 34, split button 33, exposed dropdown menu 31, tooltip box 28, dynamic color 27, dismissible and permanent drawers 25, and 19 smaller ones (section 3).
 
-**The API.** Material 3's `api/current.txt` has 321 classes and 150 distinct public, non-deprecated top-level composables (counting overloads once). compose-rs has 61 of those names, some only as the overload Compose has deprecated (below); the 89 it lacks are listed in section 2, with the classes, parameters and members it lacks or only partly has.
+**The API.** Material 3's `api/current.txt` has 321 classes and 150 distinct public, non-deprecated top-level composables (counting overloads once). compose-rs had 61 of those names at the inventory, some only as the overload Compose has deprecated (below; milestone 1 added more, D1000-D1018); the ones it lacks are listed in section 2, with the classes, parameters and members it lacks or only partly has.
 
 ## Main findings
 
-1. **Several compose-rs components follow overloads Compose has deprecated at tip, and lack their replacements.** `Slider(value, …)` (deprecated for `Slider(state: SliderState, …)`; replaced, D1006), `ListItem(headline_content, …)` (deprecated for the `content`-trailing and interactive overloads; replaced, D1004), `TabRow` and `ScrollableTabRow` (deprecated for `PrimaryTabRow`, `SecondaryTabRow`, `PrimaryScrollableTabRow`, `SecondaryScrollableTabRow`; replaced, D1005), and `CircularProgressIndicator(progress: f32)`/`LinearProgressIndicator(progress: f32)` (deprecated for `progress: () -> Float`; replaced, D1003). Compose's tests for these components use the new overloads, so the files are `partial`. compose-rs's slider drew Material 3 1.0's slider (a 20 dp round thumb), where Compose's is 1.2+'s (a 4 by 44 dp handle, a 16 dp track with gaps and stop indicators); it is the tip's now (D1006).
+1. **Several compose-rs components follow overloads Compose has deprecated at tip, and lack their replacements.** `Slider(value, …)` (deprecated for `Slider(state: SliderState, …)`; replaced, D1006), `ListItem(headline_content, …)` (deprecated for the `content`-trailing and interactive overloads; replaced, D1004), `TabRow` and `ScrollableTabRow` (deprecated for `PrimaryTabRow`, `SecondaryTabRow`, `PrimaryScrollableTabRow`, `SecondaryScrollableTabRow`; replaced, D1005), `CircularProgressIndicator(progress: f32)`/`LinearProgressIndicator(progress: f32)` (deprecated for `progress: () -> Float`; replaced, D1003), and `rememberModalBottomSheetState` and the `SheetState(skipPartiallyExpanded, …)` constructor (deprecated for `rememberBottomSheetState` and the enabled values, which rest a short sheet half way too; added, the legacy ones kept, D1017). Compose's tests for these components use the new overloads, so the files are `partial`. compose-rs's slider drew Material 3 1.0's slider (a 20 dp round thumb), where Compose's is 1.2+'s (a 4 by 44 dp handle, a 16 dp track with gaps and stop indicators); it is the tip's now (D1006).
 2. **About half of Compose's Material 3 tests wait on a missing component or feature**, most of them stable, not experimental: the date and time pickers (240 tests), the expressive components (floating toolbar, button group, toggle and split buttons, short navigation bar, wide navigation rail, FAB menu, loading and wavy indicators, interactive list items, app bar rows: ~450 tests), search bars, carousel, bottom sheet scaffold, exposed dropdown menu, tooltip box, pull to refresh. Several need work outside Material 3 first: a pager and snapping in foundation (carousel, scroll field), `TextFieldState` text fields (secure text field, the state overloads), alignment lines (baseline tests throughout), richer semantics (pane titles, custom and dismiss actions, live regions), an interaction stream (ripples, pressed shapes), a port of `androidx.graphics.shapes` (loading indicator, material shapes), predictive back, and lookahead (a handful of tests).
 3. **The test harness needs a small layer of helpers before porting at scale**, and porting will surface real differences. compose-test has no bounds assertions (`assertWidthIsEqualTo`, touch bounds), no touch-gesture DSL (`swipeUp`), no matchers for selection, toggle or range info, no way to emit interactions into a `MutableInteractionSource`, and no pixel capture in the material crate's tests (section 4). Suspected differences found while reading (section 4, "Suspected differences"): NaN progress reports NaN where Compose reports 0; `surface_color_at_elevation` tints with `primary` where Compose uses `surface_tint`; `MaterialTheme` doesn't theme the text selection colors; `remember_modal_bottom_sheet_state` and `remember_swipe_to_dismiss_box_state` are plain `remember`s where Compose's are saveable.
 
@@ -396,7 +397,7 @@ One entry per missing component or feature, named as the table names them. Sizes
 | `sheet-state-complete` (done, D1017) | `rememberModalBottomSheetState(confirm_value_change)` as a saveable, `sheet_gestures_enabled`, `ModalBottomSheetProperties`, `SheetState.Saver`, `is_animation_running` | The modal sheet's full API | ModalBottomSheetTest (~6), ModalBottomSheetDialogTest (5) | none (`secure_policy` needs an Android window-flag hook) | S | yes |
 | `swipe-to-dismiss-complete` (done) | `SwipeToDismissBox(on_dismiss)`, saveable `rememberSwipeToDismissBoxState`, `SwipeToDismissBoxState.Saver`, `settled_value` | The swipe-to-dismiss API in full | SwipeToDismissTest (~3) | none | S | no |
 | `minimum-interactive-size-local` (done, without the alignment lines) | `LocalMinimumInteractiveComponentSize`, `MinimumInteractive*AlignmentLine` | Change or turn off the 48 dp touch target per subtree | ~25 `withoutMinimumTouchTarget` tests (Checkbox, RadioButton, Switch, IconButton), InteractiveComponentSizeTest | dep:alignment-lines for the alignment lines only | S | no |
-| `icon-overloads` | `Icon(bitmap: ImageBitmap, …)`, `Icon(painter: Painter, …)`, `ColorProducer` tint | Icons from bitmaps and painters | IconTest (~6) | dep:painter for the painter overload | S (bitmap) / M (painter) | no |
+| `icon-overloads` | `Icon(bitmap: ImageBitmap, …)`, `Icon(painter: Painter, …)`, `ColorProducer` tint | Icons from bitmaps and painters | IconTest (~6) | dep:painter for the painter overload; the bitmap one needs a tint on `DrawImage` (a color filter in the display list and both renderers: compose-ui) | S-M (bitmap) / M (painter) | no |
 
 ### Dependencies outside Material 3
 
@@ -506,6 +507,8 @@ Found while reading compose-rs against Compose; each names the Compose test that
 13. **Ripples are static.** State layers at 8 % (hovered) and 10 % (pressed, focused), no ripple animation, no drag state, no inset focus rings (docs/11; `RippleTest`, the 21 `*_insetFocusRings` screenshot scenarios).
 14. **Run-time content descriptions.** `Icon`'s `content_description` is an `Option<&'static str>`, so a description built at run time ("3 new messages") can't be given; Compose takes any `String?` (an API gap more than a behaviour one, found writing `IconTest` scenarios).
 15. **Segmented button borders** (fixed, D1013). compose-rs laid the segmented row out without Compose's z-index (D187), so a selected segment's border could be drawn under its neighbour's (`SegmentedButtonScreenshotTest.stroke_zIndex`). The buttons take Compose's `interactionZIndex` now. Also fixed: a button without an icon was narrower than Compose's, which keeps the icon's room and moves the label back by half of it (`SegmentedButtonTest.segmentedButton_Sizing`), and the unchecked container is transparent and the disabled outline the outline color at 12 %, the tip's tokens.
+16. **Menus without their animation or icon colors** (fixed, D1016). `DropdownMenu` appeared and left at once, where Compose's grows in from 0.8 of its size and fades (and out again) from its anchor's side (`MenuTest.menu_canBeTriggered` steps through it); its items' icons were in the on-surface color, Compose's in its variant (`MenuScreenshotTest`), and a trailing icon sat at the item's end instead of the start of its 24 dp slot (`MenuTest.dropdownMenuItem_noLeadingIcon_trailingIconPosition`). The menu's 280 dp maximum also clamped content that isn't an item.
+17. **Bottom sheets at 1.3's behaviour** (fixed, D1017). A sheet shorter than half the window had no partially expanded state and every sheet moved on 300 ms tweens; the tip's default state rests any sheet half its height up and animates on the motion scheme's springs (`ModalBottomSheetTest.modalBottomSheet_shortSheet_partiallyExpandedAtHalfContentHeight`). An empty sheet showed itself (Compose's stays hidden until shown, without moving: `modalBottomSheet_emptySheet_expandDoesNotAnimate`), and a state whose anchor went stayed there (`SheetStateTest` reconciliation tests).
 
 ## 5. Adaptive libraries, window size classes, navigation suite, A2UI
 
