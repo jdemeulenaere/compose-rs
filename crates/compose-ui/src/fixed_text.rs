@@ -468,6 +468,8 @@ impl FixedTextMeasurer {
         // direction.
         let mut bidi: Option<(usize, Option<ParagraphBidiInfo<'_>>, bool)> = None;
         let mut measured_lines = Vec::new();
+        // An ellipsized last line's visible end, before its "…".
+        let mut shown_visible_end = None;
         for (number, (paragraph_index, range)) in lines.iter().enumerate() {
             let paragraph = paragraphs[*paragraph_index].clone();
             // The line's glyphs without its line feed, and its visible ones.
@@ -476,6 +478,21 @@ impl FixedTextMeasurer {
                 .rev()
                 .find(|&index| !crate::paragraph::is_line_end_space(glyphs[index].character))
                 .map_or(range.start, |index| index + 1);
+            // An ellipsized last line shows what fits before its "…" (one advance of the
+            // style's font), as Android's ellipsis start (D1110).
+            let shown_end = if ellipsized && number + 1 == lines.len() {
+                let margin = if range.start == paragraph.start { indent.0 } else { indent.1 };
+                let room = width - margin - base_px * metrics.advance;
+                let (mut used, mut index) = (0.0, range.start);
+                while index < visible_end && used + glyphs[index].advance <= room + 0.001 {
+                    used += glyphs[index].advance;
+                    index += 1;
+                }
+                shown_visible_end = Some(offset_of(index));
+                index
+            } else {
+                visible_end
+            };
             let line_glyphs = &glyphs[range.start..content_end.max(range.start)];
             let (ascent, descent) = if line_glyphs.is_empty() {
                 (base_ascent, base_descent)
@@ -517,7 +534,7 @@ impl FixedTextMeasurer {
                 measured_lines.push(LineLayout {
                     start: offset_of(range.start),
                     end: offset_of(range.end),
-                    visible_end: offset_of(visible_end),
+                    visible_end: offset_of(shown_end),
                     ellipsized: ellipsized && number + 1 == lines.len(),
                     top,
                     bottom: top + height,
@@ -678,7 +695,11 @@ impl FixedTextMeasurer {
                 positions: Vec::new(),
             };
         }
-        ParagraphLayout::from_lines(string.to_string(), size, laid_out)
+        let mut layout = ParagraphLayout::from_lines(string.to_string(), size, laid_out);
+        if let (Some(shown), Some(last)) = (shown_visible_end, layout.lines.last_mut()) {
+            last.visible_end = shown;
+        }
+        layout
     }
 }
 

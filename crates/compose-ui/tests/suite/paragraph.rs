@@ -872,7 +872,13 @@ fn an_empty_last_line_starts_and_ends_at_the_texts_end() {
 // Compose: compose/ui/ui-text/src/androidDeviceTest/kotlin/androidx/compose/ui/text/ParagraphIntegrationTest.kt, getLineEllipsisOffset
 #[test]
 fn an_ellipsized_last_line_ends_at_the_texts_end_and_shows_its_own() {
-    let setup = Setup { max_lines: 2, overflow: TextOverflow::Ellipsis, ..Setup::default() };
+    // Compose's paragraph is as wide as a float goes: the "…" hides nothing of "bbb".
+    let setup = Setup {
+        width: Some(1_000_000.0),
+        max_lines: 2,
+        overflow: TextOverflow::Ellipsis,
+        ..Setup::default()
+    };
     let paragraph = lay_out("aaa\nbbb\nccc", setup);
     assert_eq!(paragraph.line_count(), 2);
     assert_eq!(paragraph.get_line_end(0, false), 4);
@@ -902,7 +908,8 @@ fn a_wrapped_ellipsized_line_ends_at_the_texts_end() {
     assert!(paragraph.is_line_ellipsized(1));
     assert_eq!(paragraph.get_line_start(1), 5);
     assert_eq!(paragraph.get_line_end(1, false), 15);
-    assert_ne!(paragraph.get_line_end(1, true), 15);
+    // Compose expects only that the "…" hides some: here one character, its width (D1110).
+    assert_eq!(paragraph.get_line_end(1, true), 9);
 }
 
 // Compose: compose/ui/ui-text/src/androidDeviceTest/kotlin/androidx/compose/ui/text/ParagraphIntegrationTest.kt, lineHeight_inSp
