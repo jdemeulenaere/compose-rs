@@ -42,6 +42,13 @@ pub fn bodies_run() -> u64 {
     crate::runtime::with_runtime(|runtime| runtime.bodies_run)
 }
 
+/// The number of state reads on this thread so far: a caller compares it around code it runs
+/// to know whether that code read state (a lazy layout's key function, whose keys it keeps
+/// only if they read none).
+pub fn state_reads() -> u64 {
+    crate::runtime::try_with_runtime(|runtime| runtime.state_reads).unwrap_or(0)
+}
+
 /// Starts (or stops) counting body runs per composable on this thread, for
 /// [`recomposition_counts`]. For tests and tools; off by default.
 pub fn track_recompositions(enabled: bool) {

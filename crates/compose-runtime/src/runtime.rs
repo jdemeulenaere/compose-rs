@@ -52,12 +52,9 @@ pub(crate) struct Runtime {
     pub exiting: bool,
     /// Composable bodies run on this thread: frame statistics and tests.
     pub bodies_run: u64,
-    /// Slots written and side effects recorded on this thread: what Compose's change list
-    /// holds besides node changes. For tests (`platform::recorded_changes`).
-    pub recorded_changes: u64,
-    /// The removal of the nodes of a branch group `start_group` just deleted (D715), for
-    /// `start_branch_group_of` to apply first.
-    pub branch_removal: crate::composer::NodeOp,
+    /// State reads on this thread so far (tracked or not): what a caller checks to know whether
+    /// code it ran read state (`platform::state_reads`).
+    pub state_reads: u64,
     /// Body runs per composable, while tracking is on (`track_recompositions`).
     pub recomposition_counts: Option<std::collections::HashMap<&'static str, u64>>,
     /// A group guard was dropped by an unwinding panic in this pass, leaving its group open.
@@ -107,8 +104,7 @@ impl Runtime {
             finishing: 0,
             exiting: false,
             bodies_run: 0,
-            recorded_changes: 0,
-            branch_removal: crate::composer::NodeOp::None,
+            state_reads: 0,
             recomposition_counts: None,
             abandoned_groups: false,
             reusing: 0,

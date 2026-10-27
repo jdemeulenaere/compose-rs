@@ -32,6 +32,7 @@ The log is split by area into the files below, one table each, rows in number or
 | [lazy-and-prefetch](decisions/lazy-and-prefetch.md) | Lazy lists and grids, item reuse, the policy of composing only what is in view, prefetch. | 72 |
 | [lazy-and-prefetch](decisions/lazy-and-prefetch.md) | Lazy lists and grids, item reuse, the policy of composing only what is in view, prefetch. | 73 |
 | [lazy-and-prefetch](decisions/lazy-and-prefetch.md) | Lazy lists and grids, item reuse, the policy of composing only what is in view, prefetch. | 74 |
+| [lazy-and-prefetch](decisions/lazy-and-prefetch.md) | Lazy lists and grids, item reuse, the policy of composing only what is in view, prefetch. | 75 |
 | [android-drawing](decisions/android-drawing.md) | The display list and its replayer, render nodes and repaint boundaries, paths, shadows, layers. | 27 |
 | [android-host-and-performance](decisions/android-host-and-performance.md) | The view and activity glue, the frame loop, the hint session, jank, startup, memory, and the optimization flags. | 25 |
 | [desktop](decisions/desktop.md) | The desktop host: window, Skia rendering, input and events. | 6 |
@@ -490,11 +491,12 @@ The log is split by area into the files below, one table each, rows in number or
 | D864 | [lazy-and-prefetch](decisions/lazy-and-prefetch.md#d864) | current |
 | D865 | [lazy-and-prefetch](decisions/lazy-and-prefetch.md#d865) | current |
 | D866 | [lazy-and-prefetch](decisions/lazy-and-prefetch.md#d866) | current |
-| D867 | [lazy-and-prefetch](decisions/lazy-and-prefetch.md#d867) | current |
+| D867 | [lazy-and-prefetch](decisions/lazy-and-prefetch.md#d867) | revised by [D872](decisions/lazy-and-prefetch.md#d872) |
 | D868 | [api-and-tooling](decisions/api-and-tooling.md#d868) | current |
 | D869 | [ui-and-layout](decisions/ui-and-layout.md#d869) | current |
 | D870 | [ui-and-layout](decisions/ui-and-layout.md#d870) | current |
 | D871 | [api-and-tooling](decisions/api-and-tooling.md#d871) | current |
+| D872 | [lazy-and-prefetch](decisions/lazy-and-prefetch.md#d872) | current |
 | D900 | [api-and-tooling](decisions/api-and-tooling.md#d900) | current |
 | D901 | [api-and-tooling](decisions/api-and-tooling.md#d901) | current |
 | D902 | [ui-and-layout](decisions/ui-and-layout.md#d902) | current |

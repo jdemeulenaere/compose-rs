@@ -353,3 +353,27 @@ fn the_key_function_is_called_once() {
     });
     assert_eq!(calls.get(), 1);
 }
+
+// Review of D867: a key function reading state the content lambda doesn't read sees it change,
+// as Compose's key map (a `derivedStateOf`) does.
+#[test]
+fn keys_read_from_state_follow_it() {
+    let state = LazyListState::new(0, 0);
+    let handle = *state;
+    let ids = mutable_state_of(vec![0, 1, 2]);
+    let ids_handle = ids.handle();
+    let mut ui = rule(move || {
+        LazyColumn!(state = handle, move |scope: LazyListScope| {
+            scope.items_keyed(
+                3,
+                move |index| ids_handle.get()[index],
+                move |index| remembered_item(ids_handle.get()[index]),
+            );
+        });
+    });
+    assert_eq!(visible_keys(*state), keys(&[0, 1, 2]));
+    ids.set(vec![0, 2, 1]);
+    ui.wait_for_idle();
+    assert_eq!(visible_keys(*state), keys(&[0, 2, 1]));
+    assert_items(&mut ui, &["0", "2", "1"]);
+}

@@ -1278,7 +1278,7 @@ struct Items {
     has_custom_spans: bool,
     /// The keys asked for, by index modulo its length: a key function runs once per item while
     /// the items stay, as Compose's key-index map calls it (the composition, the layout and
-    /// the layout info ask for a key several times a frame).
+    /// the layout info ask for a key several times a frame); one that read state isn't kept.
     keys: [Cell<(usize, u64)>; KEY_CACHE],
 }
 
@@ -1332,9 +1332,20 @@ impl Items {
         {
             return key;
         }
-        let key = match self.find(index) {
-            Some((interval, local)) => {
-                interval.key.as_ref().map_or(hash_key(&DefaultKey(index)), |key| key(local))
+        let key = match self
+            .find(index)
+            .and_then(|(interval, local)| Some((interval.key.as_ref()?, local)))
+        {
+            Some((key, local)) => {
+                // A key function reading state isn't kept: its keys follow the state, read
+                // each time (observed by whoever asks), as Compose's key map is a derived state
+                // of what they read.
+                let reads = compose_runtime::platform::state_reads();
+                let key = key(local);
+                if compose_runtime::platform::state_reads() != reads {
+                    return key;
+                }
+                key
             }
             None => hash_key(&DefaultKey(index)),
         };

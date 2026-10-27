@@ -434,7 +434,12 @@ pub(crate) fn settle_refresh(id: StateId) -> bool {
     .unwrap_or(false)
 }
 
-fn read_cell_in(runtime: &mut Runtime, id: StateId, _at: &'static Location<'static>) -> Read {
+fn read_cell_in(
+    runtime: &mut Runtime,
+    id: StateId,
+    _at: &'static Location<'static>,
+) -> Result<Rc<dyn Any>, Stale> {
+    runtime.state_reads = runtime.state_reads.wrapping_add(1);
     let scope = runtime.reading_scope();
     let Runtime { cells, scopes, observers, observing, .. } = runtime;
     let entry = match cells.entry(id) {
