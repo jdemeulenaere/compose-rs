@@ -72,7 +72,7 @@ impl<T: Animate> DeferredTargetAnimation<T> {
         scope: CoroutineScope,
         animation_spec: impl Into<AnimationSpec>,
     ) -> T {
-        self.inner.pending_target.set_in_composition(Some(target.clone()));
+        self.inner.pending_target.set(Some(target.clone()));
         let animatable = self
             .inner
             .animatable

@@ -992,26 +992,6 @@ impl<T: 'static> MutableState<T> {
         State { handle: *self }
     }
 
-    /// Writes the value, even during composition, invalidating its readers but the scope
-    /// composing: for state a composable owns and updates as it composes, before it and the
-    /// composables it calls read it later in the pass, as a `Transition`'s target, which Compose
-    /// writes in composition (its scope's invalidation is imminent there: done in the same
-    /// pass). Elsewhere, as [`set`](Self::set) (D802).
-    #[track_caller]
-    pub fn set_in_composition(&self, value: T) {
-        let at = Location::caller();
-        let lookup: CellLookup = |id, _| {
-            with_runtime(|runtime| {
-                let entry = runtime.cells.entry(id)?;
-                Ok(entry.cell.clone().expect("a live cell"))
-            })
-        };
-        if self.write_with(value, at, lookup).unwrap_or_else(|error| stale(error, at)) {
-            let skip = with_runtime(|runtime| runtime.reading_scope());
-            invalidate_readers_except(self.id, skip);
-        }
-    }
-
     /// Returns whether the value changed.
     fn write(&self, value: T, at: &'static Location<'static>) -> Result<bool, Stale> {
         self.write_with(value, at, write_cell)

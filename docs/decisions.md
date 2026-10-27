@@ -433,7 +433,7 @@ The log is split by area into the files below, one table each, rows in number or
 | D714 | [runtime](decisions/runtime.md#d714) | current |
 | D715 | [runtime](decisions/runtime.md#d715) | current |
 | D800 | [ui-and-layout](decisions/ui-and-layout.md#d800) | current |
-| D802 | [runtime](decisions/runtime.md#d802) | current |
+| D802 | [runtime](decisions/runtime.md#d802) | revised by [D712](decisions/runtime.md#d712) |
 | D803 | [ui-and-layout](decisions/ui-and-layout.md#d803) | current |
 | D804 | [ui-and-layout](decisions/ui-and-layout.md#d804) | current |
 | D805 | [ui-and-layout](decisions/ui-and-layout.md#d805) | current |

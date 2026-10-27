@@ -385,7 +385,7 @@ fn ContentOfState<T: Clone + PartialEq + 'static>(
                     // Freed already when the transition changed (the stack's state is keyed by
                     // it): nothing to compose again.
                     if let Some(count) = removed.try_get() {
-                        removed.set_in_composition(count + 1);
+                        removed.set(count + 1);
                     }
                 })
             });

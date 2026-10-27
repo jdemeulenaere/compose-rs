@@ -33,7 +33,7 @@ fn the_hash_inside_animated_visibility_survives_a_modifier_change() {
     let use_first_modifier = mutable_state_of(true);
     let checks = std::rc::Rc::new(std::cell::Cell::new(0));
     let (handle, c) = (use_first_modifier.handle(), checks.clone());
-    let mut ui = ComposeTestRule::with_manual_clock(move || Content(handle, c.clone()));
+    let mut ui = compose_test(move || Content(handle, c.clone()));
     ui.wait_for_idle();
     let before = checks.get();
     use_first_modifier.set(false);

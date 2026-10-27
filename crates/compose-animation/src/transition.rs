@@ -107,7 +107,7 @@ impl<S: Clone + PartialEq + 'static> MutableTransitionState<S> {
     /// Animates the transition remembered with this state to `target_state`: in a handler, or
     /// in composition before the transition's call, as Compose allows.
     pub fn set_target_state(&self, target_state: S) {
-        self.inner.target.set_in_composition(target_state);
+        self.inner.target.set(target_state);
     }
 
     /// Whether the transition is at its target and not running, as `isIdle` (state reads).
@@ -122,11 +122,11 @@ impl<S: Clone + PartialEq + 'static> MutableTransitionState<S> {
     /// Sets the current state, in composition or out of it.
     fn set_current(&self, current: S) {
         *self.inner.current_untracked.borrow_mut() = current.clone();
-        self.inner.current.set_in_composition(current);
+        self.inner.current.set(current);
     }
 
     fn set_running(&self, running: bool) {
-        self.inner.is_running.set_in_composition(running);
+        self.inner.is_running.set(running);
     }
 }
 
@@ -301,7 +301,7 @@ impl<S: Clone + PartialEq + 'static> TransitionInner<S> {
         let version = self.lists_count.get().wrapping_add(1);
         self.lists_count.set(version);
         // In composition too (a deferred animation leaving with its call).
-        self.lists_version.set_in_composition(version);
+        self.lists_version.set(version);
     }
 
     fn current_untracked(&self) -> S {
@@ -318,13 +318,13 @@ impl<S: Clone + PartialEq + 'static> TransitionInner<S> {
 
     fn set_start_time(&self, start_time_nanos: i64) {
         self.start_time_untracked.set(start_time_nanos);
-        self.start_time_nanos.set_in_composition(start_time_nanos);
+        self.start_time_nanos.set(start_time_nanos);
     }
 
     fn set_play_time(&self, play_time_nanos: i64) {
         if self.parent.is_none() {
             self.play_time_untracked.set(play_time_nanos);
-            self.play_time_nanos.set_in_composition(play_time_nanos);
+            self.play_time_nanos.set(play_time_nanos);
         }
     }
 
@@ -349,13 +349,13 @@ impl<S: Clone + PartialEq + 'static> TransitionInner<S> {
         if current_target == target_state {
             return;
         }
-        self.segment.set_in_composition(Segment {
+        self.segment.set(Segment {
             initial_state: current_target.clone(),
             target_state: target_state.clone(),
         });
         self.state.set_current(current_target);
         *self.target_untracked.borrow_mut() = target_state.clone();
-        self.target.set_in_composition(target_state);
+        self.target.set(target_state);
         if !self.is_running_untracked() {
             self.update_children_needed.set(true);
         }
@@ -1063,7 +1063,7 @@ impl<T: Animate> AnimationEntry for TransitionAnimationState<T> {
         let finished = animation.is_finished_from_nanos(play_time);
         drop(animation);
         *self.value_untracked.borrow_mut() = value.clone();
-        self.value.set_in_composition(value);
+        self.value.set(value);
         if finished {
             self.is_finished.set(true);
         }
