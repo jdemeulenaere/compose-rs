@@ -23,6 +23,7 @@ mod lazy;
 mod lazy_api;
 mod lazy_column_row;
 mod lazy_custom_keys;
+mod lazy_grid_content_padding;
 mod lazy_grid_layout_info;
 mod lazy_grid_reuse;
 mod lazy_grid_scroll;

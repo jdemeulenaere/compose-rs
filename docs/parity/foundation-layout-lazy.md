@@ -31,8 +31,8 @@ By area: `foundation-layout` 29 files (850 tests); lazy lists, grids and `LazyLa
 |---|---|---|
 | `covered` | 13 | 132 |
 | `ported` | 11 | 196 |
-| `port` | 13 | 111 |
-| `partial` | 25 | 871 |
+| `port` | 12 | 87 |
+| `partial` | 26 | 895 |
 | `feature:<name>` | 113 | 1,686 |
 | `n/a` | 10 | 133 |
 | **Total** | **185** | **3,129** |
@@ -151,7 +151,7 @@ The table's suite references (`lazy_api.rs`, `fling.rs`, …) are files in `crat
 | compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyGridSlotsReuseTest.kt | 10 | Grid slot reuse | covered (`lazy_grid_reuse.rs`: 13 tests) |
 | compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyGridSpanTest.kt | 16 | Spans, line breaks, horizontal spacing, `maxLineSpan` per cell kind | covered (`lazy_grid_reuse.rs::spans_lay_items_out_in_lines_as_compose`, `review_grid_d450.rs` span tests; the `FixedSize` cases need feature:grid-parity) |
 | compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyGridTest.kt | 60 | Grids at large: fixed/adaptive/fixed-size cells, spacing, scrolling, RTL, state, wrap content | partial (`grid.rs`, `review_grid_d450.rs`, `review_grid_d455.rs`. Missing: `GridCells.FixedSize`, cross-axis arrangement, `userScrollEnabled`, reverse (feature:grid-parity)) |
-| compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyGridsContentPaddingTest.kt | 24 | Grid content padding | port (`grid.rs::a_grid_lays_out_lines_under_its_content_padding`, `review_grid_d450.rs::review_the_end_clamps_with_padding_and_spacing`; reversed cases need feature:grid-parity) |
+| compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyGridsContentPaddingTest.kt | 24 | Grid content padding | partial (`lazy_grid_content_padding.rs`: 11 tests porting 22; they found D865 in grids too. Left: the two reversed cases (feature:grid-parity: grids have no `reverse_layout`)) |
 | compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyGridsIndexedTest.kt | 2 | Indexed grid items | covered (`lazy_grid_reuse.rs::the_list_and_indexed_forms_take_keys_spans_and_content_types`) |
 | compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyGridsReverseLayoutTest.kt | 7 | Grid `reverseLayout` | feature:grid-parity |
 | compose/foundation/foundation/integration-tests/lazy-tests/src/androidTest/kotlin/androidx/compose/foundation/lazy/grid/LazyNestedScrollingTest.kt | 4 | Nested scroll from a grid at its edges | port (`review_d479.rs::a_nested_grid_passing_its_estimated_start_offers_the_rest`) |

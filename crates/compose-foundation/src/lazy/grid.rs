@@ -1501,6 +1501,19 @@ impl MeasurePolicy for LazyGridLayout {
             state.room_estimated.set((false, false));
             state.beyond_more.set((false, false));
             drop(measurer);
+            // As large as its padding, as a list's (D865).
+            let (main_padding, cross_padding) = (before + after, cross_before + cross_after);
+            let size = if vertical {
+                IntSize::new(
+                    constraints.constrain_width(cross_padding),
+                    constraints.constrain_height(main_padding),
+                )
+            } else {
+                IntSize::new(
+                    constraints.constrain_width(main_padding),
+                    constraints.constrain_height(cross_padding),
+                )
+            };
             state.laid_out.begin();
             let keys_changed = state.note_laid_items(&info.items);
             state.laid_out.end(
@@ -1508,7 +1521,7 @@ impl MeasurePolicy for LazyGridLayout {
                     start: -before,
                     end: main_max - before,
                     count: 0,
-                    size: IntSize::new(constraints.min_width, constraints.min_height),
+                    size,
                     vertical,
                     reverse: false,
                     before,
@@ -1518,7 +1531,7 @@ impl MeasurePolicy for LazyGridLayout {
                 },
                 keys_changed,
             );
-            return scope.layout(constraints.min_width, constraints.min_height);
+            return scope.layout(size.width, size.height);
         }
         state.had_items.set(true);
         // From here on, in lines: the first visible one, and the pixels into it.
@@ -1545,11 +1558,13 @@ impl MeasurePolicy for LazyGridLayout {
                 break;
             }
         }
-        // Past the end of the last line: at its end.
+        // Past the end of the last line: at its end, or beyond it by as much as padding larger
+        // than the viewport lets it go, as a list's (D865).
         if !m.lines.exists(index + 1)
             && let Some(size) = m.line(index)
         {
-            offset = offset.min(size as f32);
+            let beyond = (before + after - main_max).max(0);
+            offset = offset.min((size + beyond) as f32);
         }
         let mut placed: Vec<(usize, i32)> = Vec::new();
         let mut end_index;
@@ -1564,7 +1579,8 @@ impl MeasurePolicy for LazyGridLayout {
             missing = false;
             let mut main = before - offset.round() as i32;
             end_index = index;
-            while m.lines.exists(end_index) && main < main_max {
+            // At least one line, as a list's (D865).
+            while m.lines.exists(end_index) && (main < main_max || placed.is_empty()) {
                 match m.line(end_index) {
                     Some(size) => {
                         placed.push((end_index, main));
