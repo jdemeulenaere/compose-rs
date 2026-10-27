@@ -159,6 +159,10 @@ pub fn remember_coroutine_scope() -> CoroutineScope {
 /// `rememberUpdatedState(newValue)`: an effect started earlier (keyed on something else, a
 /// timeout) reads the newest callback through it. It's written during composition when the
 /// value changes (by [`same`](ComposeArg::same)), so a composable reading it recomposes then.
+/// Compose's compares with `equals` (its `mutableStateOf`'s structural policy); `same` is `==`
+/// for small values and identity for shared data (`Rc`, callbacks: a Kotlin lambda's `equals`
+/// is identity too), and a callback, its most common value, has no `PartialEq`, so an `Rc` of
+/// equal contents counts as a change here (parity behaviour 14).
 pub fn remember_updated_state<T: ComposeArg + Clone>(value: T) -> crate::state::State<T> {
     let state = crate::remember::remember(|| {
         crate::state::mutable_state_of_with(value.clone(), crate::state::ReferentialEqualityPolicy)
