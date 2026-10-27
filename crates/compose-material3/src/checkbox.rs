@@ -234,8 +234,12 @@ fn checkbox(
                 indication,
                 interaction_source,
             };
-            minimum_interactive_component_size(modifier)
-                .tri_state_toggleable_with(state, options, on_click)
+            // The toggle around the touch target, so all 48 dp take a press: compose-ui hit
+            // tests a node's bounds only, where Compose's toggle (inside the touch target)
+            // takes the target's presses by extending its hit test (D1009).
+            minimum_interactive_component_size(
+                modifier.tri_state_toggleable_with(state, options, on_click),
+            )
         }
         None => modifier,
     };

@@ -1,11 +1,11 @@
 //! Selection controls, as Compose's: `Switch` and `RadioButton` (the slider is `slider.rs`).
 
-use compose_animation::{Animatable, spring, tween};
+use compose_animation::{Animatable, tween};
 use compose_runtime::{CoroutineScope, composable};
 use compose_ui::ClickableOptions;
 use compose_ui::{
-    Color, DrawModifierNode, DrawScope, Modifier, ModifierNode, ModifierNodeElement, Offset, Paint,
-    Rect, Role, UnitExt,
+    Color, Dp, DrawModifierNode, DrawScope, Modifier, ModifierNode, ModifierNodeElement,
+    MutableInteractionSource, Offset, Paint, Rect, Role, UnitExt,
 };
 use std::cell::Cell;
 use std::rc::Rc;
@@ -18,19 +18,26 @@ const DISABLED_ALPHA: f32 = 0.38;
 
 // ---- Switch ----------------------------------------------------------------------------------
 
-/// A switch's colors, as Compose's `SwitchColors`.
+/// A switch's colors, as Compose's `SwitchColors`: its thumb's, track's, border's and the thumb
+/// content's (icon), checked and unchecked, enabled and disabled.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct SwitchColors {
     pub checked_thumb_color: Color,
     pub checked_track_color: Color,
+    pub checked_border_color: Color,
+    pub checked_icon_color: Color,
     pub unchecked_thumb_color: Color,
     pub unchecked_track_color: Color,
     pub unchecked_border_color: Color,
+    pub unchecked_icon_color: Color,
     pub disabled_checked_thumb_color: Color,
     pub disabled_checked_track_color: Color,
+    pub disabled_checked_border_color: Color,
+    pub disabled_checked_icon_color: Color,
     pub disabled_unchecked_thumb_color: Color,
     pub disabled_unchecked_track_color: Color,
     pub disabled_unchecked_border_color: Color,
+    pub disabled_unchecked_icon_color: Color,
 }
 
 impl compose_runtime::ComposeArg for SwitchColors {
@@ -39,145 +46,364 @@ impl compose_runtime::ComposeArg for SwitchColors {
     }
 }
 
-/// As Compose's `SwitchDefaults`.
-pub struct SwitchDefaults;
+impl SwitchColors {
+    /// The thumb's color, as `thumbColor(enabled, checked)`.
+    pub fn thumb_color(&self, enabled: bool, checked: bool) -> Color {
+        match (enabled, checked) {
+            (true, true) => self.checked_thumb_color,
+            (true, false) => self.unchecked_thumb_color,
+            (false, true) => self.disabled_checked_thumb_color,
+            (false, false) => self.disabled_unchecked_thumb_color,
+        }
+    }
 
-impl SwitchDefaults {
-    /// From the theme, as `SwitchDefaults.colors()`.
-    pub fn colors() -> SwitchColors {
-        let scheme = MaterialTheme::color_scheme();
-        SwitchColors {
-            checked_thumb_color: scheme.on_primary,
-            checked_track_color: scheme.primary,
-            unchecked_thumb_color: scheme.outline,
-            unchecked_track_color: scheme.surface_container_highest,
-            unchecked_border_color: scheme.outline,
-            // Opaque, over the surface, as Compose's `compositeOver(colorScheme.surface)`.
-            disabled_checked_thumb_color: scheme.surface,
-            disabled_checked_track_color: scheme
-                .on_surface
-                .with_alpha(0.12)
-                .composite_over(scheme.surface),
-            disabled_unchecked_thumb_color: scheme
-                .on_surface
-                .with_alpha(0.38)
-                .composite_over(scheme.surface),
-            disabled_unchecked_track_color: scheme
-                .surface_container_highest
-                .with_alpha(0.12)
-                .composite_over(scheme.surface),
-            disabled_unchecked_border_color: scheme
-                .on_surface
-                .with_alpha(0.12)
-                .composite_over(scheme.surface),
+    /// The track's color, as `trackColor(enabled, checked)`.
+    pub fn track_color(&self, enabled: bool, checked: bool) -> Color {
+        match (enabled, checked) {
+            (true, true) => self.checked_track_color,
+            (true, false) => self.unchecked_track_color,
+            (false, true) => self.disabled_checked_track_color,
+            (false, false) => self.disabled_unchecked_track_color,
+        }
+    }
+
+    /// The track's border color, as `borderColor(enabled, checked)`.
+    pub fn border_color(&self, enabled: bool, checked: bool) -> Color {
+        match (enabled, checked) {
+            (true, true) => self.checked_border_color,
+            (true, false) => self.unchecked_border_color,
+            (false, true) => self.disabled_checked_border_color,
+            (false, false) => self.disabled_unchecked_border_color,
+        }
+    }
+
+    /// The thumb content's color, as `iconColor(enabled, checked)`.
+    pub fn icon_color(&self, enabled: bool, checked: bool) -> Color {
+        match (enabled, checked) {
+            (true, true) => self.checked_icon_color,
+            (true, false) => self.unchecked_icon_color,
+            (false, true) => self.disabled_checked_icon_color,
+            (false, false) => self.disabled_unchecked_icon_color,
         }
     }
 }
 
-/// A switch, as Compose's: a 52 × 32 dp track whose thumb slides (animated) to the end when
-/// checked, in a 48 dp touch target, toggled by a click when `on_checked_change` is given.
+/// As Compose's `SwitchDefaults`.
+pub struct SwitchDefaults;
+
+impl SwitchDefaults {
+    /// The thumb content's size, as `IconSize`.
+    pub const ICON_SIZE: Dp = Dp(16.0);
+
+    /// From the theme, as `SwitchDefaults.colors()` (`SwitchTokens`): the disabled colors
+    /// opaque, over the surface.
+    pub fn colors() -> SwitchColors {
+        let scheme = MaterialTheme::color_scheme();
+        let over =
+            |color: Color, alpha: f32| color.with_alpha(alpha).composite_over(scheme.surface);
+        SwitchColors {
+            checked_thumb_color: scheme.on_primary,
+            checked_track_color: scheme.primary,
+            checked_border_color: Color::TRANSPARENT,
+            checked_icon_color: scheme.on_primary_container,
+            unchecked_thumb_color: scheme.outline,
+            unchecked_track_color: scheme.surface_container_highest,
+            unchecked_border_color: scheme.outline,
+            unchecked_icon_color: scheme.surface_container_highest,
+            disabled_checked_thumb_color: over(scheme.surface, 1.0),
+            disabled_checked_track_color: over(scheme.on_surface, 0.12),
+            disabled_checked_border_color: Color::TRANSPARENT,
+            disabled_checked_icon_color: over(scheme.on_surface, 0.38),
+            disabled_unchecked_thumb_color: over(scheme.on_surface, 0.38),
+            disabled_unchecked_track_color: over(scheme.surface_container_highest, 0.12),
+            disabled_unchecked_border_color: over(scheme.on_surface, 0.12),
+            disabled_unchecked_icon_color: over(scheme.surface_container_highest, 0.38),
+        }
+    }
+}
+
+/// The track, as `SwitchTokens.TrackWidth` and `TrackHeight`, its outline `TrackOutlineWidth`.
+const SWITCH_WIDTH: Dp = Dp(52.0);
+const SWITCH_HEIGHT: Dp = Dp(32.0);
+const TRACK_OUTLINE_WIDTH: Dp = Dp(2.0);
+/// The thumb: checked (or with content) and unchecked, and pressed, as `ThumbDiameter`,
+/// `UncheckedThumbDiameter` and `SwitchTokens.PressedHandleWidth`.
+const THUMB_DIAMETER: Dp = Dp(24.0);
+const UNCHECKED_THUMB_DIAMETER: Dp = Dp(16.0);
+const PRESSED_THUMB_DIAMETER: Dp = Dp(28.0);
+/// The thumb's state layer, as `SwitchTokens.StateLayerSize`.
+const STATE_LAYER_SIZE: Dp = Dp(40.0);
+
+/// A switch, as Compose's `Switch`: a 52 × 32 dp track (bordered, its color by the state) and
+/// a thumb sliding to the end when checked, growing from 16 to 24 dp (24 dp with
+/// `thumb_content`, which shows in it in the icon color) and to 28 dp while pressed, in a 48 dp
+/// touch target, toggled by a click when `on_checked_change` is given.
 #[composable]
 pub fn Switch(
     checked: bool,
     on_checked_change: Option<impl Fn(bool) + 'static>,
     #[default(crate::Modifier)] modifier: Modifier,
+    #[default(None)] thumb_content: Option<impl Fn() + 'static>,
     #[default(true)] enabled: bool,
     #[default(crate::SwitchDefaults::colors())] colors: SwitchColors,
+    #[default(None)] interaction_source: Option<MutableInteractionSource>,
 ) {
+    let interaction_source = crate::components::remembered_interaction_source(interaction_source);
     let modifier = match on_checked_change {
-        Some(on_checked_change) => minimum_interactive_component_size(
-            modifier.toggleable_with(
-                checked,
-                ClickableOptions {
-                    enabled,
-                    role: Some(Role::Switch),
-                    indication: if checked {
-                        colors.checked_track_color
-                    } else {
-                        colors.unchecked_thumb_color
-                    }
-                    .into(),
-                    ..ClickableOptions::DEFAULT
-                },
-                on_checked_change,
-            ),
-        ),
+        // The toggle around the touch target, so all of it takes a press, as the checkbox's
+        // (D1009).
+        Some(on_checked_change) => minimum_interactive_component_size(modifier.toggleable_with(
+            checked,
+            ClickableOptions {
+                enabled,
+                role: Some(Role::Switch),
+                indication: compose_ui::Indication::NONE,
+                interaction_source: Some(interaction_source.clone()),
+            },
+            on_checked_change,
+        )),
         None => modifier,
     };
-    compose_foundation::layout::Spacer(
-        modifier.required_size((52.dp(), 32.dp())).then_custom(SwitchElement {
-            checked,
-            enabled,
-            colors,
+    let track = compose_foundation::CIRCLE_SHAPE;
+    let (thumb_color, icon_color) =
+        (colors.thumb_color(enabled, checked), colors.icon_color(enabled, checked));
+    // The thumb's state layer in the content color, as `ripple()`'s.
+    let ripple_color = crate::theme::LOCAL_CONTENT_COLOR.current();
+    let has_content = thumb_content.is_some();
+    let modifier = modifier
+        .wrap_content_size()
+        .required_size((SWITCH_WIDTH, SWITCH_HEIGHT))
+        .border_with(TRACK_OUTLINE_WIDTH, colors.border_color(enabled, checked), track)
+        .background_with(colors.track_color(enabled, checked), track);
+    compose_foundation::layout::Box(
+        modifier,
+        compose_ui::Alignment::TOP_START,
+        false,
+        compose_runtime::callback(move |scope: compose_ui::BoxScope| {
+            let thumb_content = thumb_content.clone();
+            let thumb = Modifier
+                .align(scope, compose_ui::Alignment::CENTER_START)
+                .then_custom(ThumbElement {
+                    source: interaction_source.clone(),
+                    checked,
+                    has_content,
+                })
+                .then_custom(ThumbStateLayer {
+                    source: interaction_source.clone(),
+                    color: ripple_color,
+                })
+                .background_with(thumb_color, compose_foundation::CIRCLE_SHAPE);
+            compose_foundation::layout::Box(
+                thumb,
+                compose_ui::Alignment::CENTER,
+                false,
+                compose_runtime::callback(move |_| {
+                    if let Some(content) = thumb_content.clone() {
+                        compose_runtime::CompositionLocalProvider(
+                            crate::theme::LOCAL_CONTENT_COLOR.provides(icon_color),
+                            &*content,
+                        );
+                    }
+                }),
+            );
         }),
     );
 }
 
-struct SwitchElement {
+/// The thumb's size and place, as Compose's `ThumbElement`.
+struct ThumbElement {
+    source: MutableInteractionSource,
     checked: bool,
-    enabled: bool,
-    colors: SwitchColors,
+    has_content: bool,
 }
 
-struct SwitchNode {
+/// As Compose's `ThumbNode`: the thumb's size and offset animated (the standard scheme's fast
+/// spatial spring) to its state's, snapping while pressed.
+struct ThumbNode {
+    source: MutableInteractionSource,
     checked: bool,
-    enabled: bool,
-    colors: SwitchColors,
-    /// 0 unchecked, 1 checked: the thumb's position and size.
-    progress: Animatable<f32>,
+    has_content: bool,
+    size: Option<Animatable<f32>>,
+    offset: Option<Animatable<f32>>,
+    /// The first size and offset (pixels), which the animations start from.
+    initial: Option<(f32, f32)>,
     scope: compose_runtime::Owned<CoroutineScope>,
-    /// A new value to animate to, started when drawn: a reset (reused for another item's switch,
-    /// after the update giving it its value) shows the value at once instead (D435).
-    animate: bool,
 }
 
-impl ModifierNodeElement for SwitchElement {
-    type Node = SwitchNode;
-    fn create(&self) -> SwitchNode {
-        SwitchNode {
+impl ModifierNodeElement for ThumbElement {
+    type Node = ThumbNode;
+    fn create(&self) -> ThumbNode {
+        ThumbNode {
+            source: self.source.clone(),
             checked: self.checked,
-            enabled: self.enabled,
-            colors: self.colors,
-            progress: Animatable::new(if self.checked { 1.0 } else { 0.0 }),
+            has_content: self.has_content,
+            size: None,
+            offset: None,
+            initial: None,
             scope: CoroutineScope::new(),
-            animate: false,
         }
     }
-    fn update(&self, node: &mut SwitchNode) {
-        node.animate |= node.checked != self.checked;
+
+    fn update(&self, node: &mut ThumbNode) {
+        node.source = self.source.clone();
         node.checked = self.checked;
-        node.enabled = self.enabled;
-        node.colors = self.colors;
+        node.has_content = self.has_content;
     }
+
     fn same(&self, other: &Self) -> bool {
-        other.checked == self.checked
-            && other.enabled == self.enabled
-            && other.colors == self.colors
+        other.source == self.source
+            && other.checked == self.checked
+            && other.has_content == self.has_content
     }
+
     fn name(&self) -> &'static str {
-        "switch"
+        "switchThumb"
     }
 }
 
-impl ModifierNode for SwitchNode {
-    fn as_draw(&mut self) -> Option<&mut dyn DrawModifierNode> {
+impl ModifierNode for ThumbNode {
+    fn as_layout(&mut self) -> Option<&mut dyn compose_ui::LayoutModifierNode> {
         Some(self)
     }
+
     fn on_release(&mut self, _context: &mut compose_ui::ReleaseContext<'_>) {
         self.scope.cancel();
     }
-    /// Reused for another item's switch: attached again after the pass that gave it its value
-    /// (from the pass or from the kept pool), it shows the value at once, as a new one,
-    /// without animating (D435, D1156).
-    fn on_attach(&mut self, _context: &mut compose_ui::NodeContext<'_>) {
-        self.animate = false;
-        let target = if self.checked { 1.0 } else { 0.0 };
-        if self.progress.value() != target || self.progress.is_running() {
-            self.progress.snap_to(target);
-        }
+
+    /// Reused for another item's switch: at its value at once, as a new one (D435, D1156).
+    fn on_reset(&mut self, _context: &mut compose_ui::NodeContext<'_>) {
+        self.size = None;
+        self.offset = None;
+        self.initial = None;
     }
 }
 
+impl ThumbNode {
+    /// The animated value going to `target`, on a spring (snapping while `pressed`).
+    fn follow(
+        &self,
+        animatable: &Option<Animatable<f32>>,
+        target: f32,
+        pressed: bool,
+    ) -> Option<f32> {
+        let animatable = animatable.as_ref()?;
+        if animatable.target_value() != target {
+            let animatable = animatable.clone();
+            let spec = if pressed {
+                compose_animation::snap(0)
+            } else {
+                compose_animation::AnimationSpec::Spring(crate::motion::FAST_SPATIAL)
+            };
+            self.scope.launch(async move {
+                animatable.animate_to(target, spec).await;
+            });
+        }
+        Some(animatable.value())
+    }
+}
+
+impl compose_ui::LayoutModifierNode for ThumbNode {
+    fn measure(
+        &mut self,
+        scope: &mut compose_ui::MeasureScope<'_>,
+        content: compose_ui::Measurable,
+        _constraints: compose_ui::Constraints,
+    ) -> compose_ui::MeasureResult {
+        // Read while measuring: a press measures the thumb again.
+        let pressed = self.source.is_pressed();
+        let density = scope.density();
+        let diameter = if pressed {
+            PRESSED_THUMB_DIAMETER
+        } else if self.has_content || self.checked {
+            THUMB_DIAMETER
+        } else {
+            UNCHECKED_THUMB_DIAMETER
+        };
+        let size = density.to_px(diameter);
+        let min_bound = density.to_px(Dp((SWITCH_HEIGHT.0 - diameter.0) / 2.0));
+        let padding = (SWITCH_HEIGHT.0 - THUMB_DIAMETER.0) / 2.0;
+        let max_bound = density.to_px(Dp(SWITCH_WIDTH.0 - THUMB_DIAMETER.0 - padding));
+        let outline = density.to_px(TRACK_OUTLINE_WIDTH);
+        let offset = match (pressed, self.checked) {
+            (true, true) => max_bound - outline,
+            (true, false) => outline,
+            (false, true) => max_bound,
+            (false, false) => min_bound,
+        };
+        match self.initial {
+            None => self.initial = Some((size, offset)),
+            Some((initial_size, initial_offset)) => {
+                self.size.get_or_insert_with(|| Animatable::new(initial_size));
+                self.offset.get_or_insert_with(|| Animatable::new(initial_offset));
+            }
+        }
+        // Read while measuring: each frame of the animations measures the thumb again.
+        let actual = self.follow(&self.size, size, pressed).unwrap_or(size) as i32;
+        let x = self.follow(&self.offset, offset, pressed).unwrap_or(offset) as i32;
+        let placeable = scope.measure(content, compose_ui::Constraints::fixed(actual, actual));
+        scope.place_relative(&placeable, x, 0);
+        scope.layout(actual, actual)
+    }
+}
+
+/// The thumb's state layer: a `STATE_LAYER_SIZE` circle around it while its switch is pressed,
+/// focused or hovered, as Compose's `indication(interactionSource, ripple(bounded = false))`.
+struct ThumbStateLayer {
+    source: MutableInteractionSource,
+    color: Color,
+}
+
+impl ModifierNodeElement for ThumbStateLayer {
+    fn create(&self) -> std::boxed::Box<dyn ModifierNode> {
+        std::boxed::Box::new(ThumbStateLayer { source: self.source.clone(), color: self.color })
+    }
+
+    fn update(&self, node: &mut dyn ModifierNode) {
+        if let Some(node) = node.downcast_mut::<ThumbStateLayer>() {
+            node.source = self.source.clone();
+            node.color = self.color;
+        }
+    }
+
+    fn same(&self, other: &dyn ModifierNodeElement) -> bool {
+        other
+            .downcast_ref::<ThumbStateLayer>()
+            .is_some_and(|other| other.source == self.source && other.color == self.color)
+    }
+
+    fn name(&self) -> &'static str {
+        "switchThumbIndication"
+    }
+}
+
+impl ModifierNode for ThumbStateLayer {
+    fn as_draw(&mut self) -> Option<&mut dyn DrawModifierNode> {
+        Some(self)
+    }
+}
+
+impl DrawModifierNode for ThumbStateLayer {
+    fn draw_after(&mut self, scope: &mut DrawScope<'_>) {
+        // Read while drawing: a press, focus or hover draws the thumb again.
+        let alpha = if self.source.is_pressed() || self.source.is_focused() {
+            0.10
+        } else if self.source.is_hovered() {
+            0.08
+        } else {
+            return;
+        };
+        let size = scope.size();
+        let center = Offset::new(size.width / 2.0, size.height / 2.0);
+        let radius = scope.density().to_px(STATE_LAYER_SIZE) / 2.0;
+        scope.draw_round_rect(
+            Rect::new(center.x - radius, center.y - radius, center.x + radius, center.y + radius),
+            [radius; 4],
+            Paint::fill(self.color.with_alpha(alpha)),
+        );
+    }
+}
+
+/// `from` blended toward `to` by `fraction`, channel by channel.
 pub(crate) fn blend(from: Color, to: Color, fraction: f32) -> Color {
     let channel =
         |a: u8, b: u8| (f32::from(a) + (f32::from(b) - f32::from(a)) * fraction).round() as u32;
@@ -187,91 +413,6 @@ pub(crate) fn blend(from: Color, to: Color, fraction: f32) -> Color {
             | channel(from.green(), to.green()) << 8
             | channel(from.blue(), to.blue()),
     )
-}
-
-impl DrawModifierNode for SwitchNode {
-    fn draw(&mut self, scope: &mut DrawScope<'_>) {
-        if std::mem::take(&mut self.animate) {
-            let (progress, target) = (self.progress.clone(), if self.checked { 1.0 } else { 0.0 });
-            self.scope.launch(async move {
-                progress.animate_to(target, spring()).await;
-            });
-        }
-        mirrored_in_rtl(scope, |scope| self.draw_start_to_end(scope));
-    }
-}
-
-impl SwitchNode {
-    /// Drawn from the start on the left (mirrored in a right-to-left layout).
-    fn draw_start_to_end(&mut self, scope: &mut DrawScope<'_>) {
-        // Read while drawing: each animation frame redraws the switch only.
-        let progress = self.progress.value().clamp(0.0, 1.0);
-        let size = scope.size();
-        let density = scope.density();
-        let colors = self.colors;
-        // Material's disabled colors, as `SwitchDefaults.colors()`'s.
-        let (checked_thumb, checked_track, unchecked_thumb, unchecked_track, unchecked_border) =
-            if self.enabled {
-                (
-                    colors.checked_thumb_color,
-                    colors.checked_track_color,
-                    colors.unchecked_thumb_color,
-                    colors.unchecked_track_color,
-                    colors.unchecked_border_color,
-                )
-            } else {
-                (
-                    colors.disabled_checked_thumb_color,
-                    colors.disabled_checked_track_color,
-                    colors.disabled_unchecked_thumb_color,
-                    colors.disabled_unchecked_track_color,
-                    colors.disabled_unchecked_border_color,
-                )
-            };
-        let track = Rect::new(0.0, 0.0, size.width, size.height);
-        let radius = size.height / 2.0;
-        scope.draw_round_rect(
-            track,
-            [radius; 4],
-            Paint::fill(blend(unchecked_track, checked_track, progress)),
-        );
-        if progress < 1.0 {
-            let border = density.to_px(2.dp());
-            let half = border / 2.0;
-            let inset = Rect::new(half, half, size.width - half, size.height - half);
-            let opacity = f32::from(unchecked_border.alpha()) / 255.0 * (1.0 - progress);
-            scope.draw_round_rect(
-                inset,
-                [radius - half; 4],
-                Paint::stroke(unchecked_border.with_alpha(opacity), border),
-            );
-        }
-        // The thumb: 16 dp unchecked, 24 dp checked, centered 16 dp from its end.
-        let diameter = density.to_px(16.dp()) + density.to_px(8.dp()) * progress;
-        let start = radius;
-        let end = size.width - radius;
-        let center = Offset::new(start + (end - start) * progress, size.height / 2.0);
-        let half = diameter / 2.0;
-        scope.draw_round_rect(
-            Rect::new(center.x - half, center.y - half, center.x + half, center.y + half),
-            [half; 4],
-            Paint::fill(blend(unchecked_thumb, checked_thumb, progress)),
-        );
-    }
-}
-
-/// Draws with `draw`, mirrored around the node's center in a right-to-left layout: a switch's
-/// thumb and a slider's track go from the right, as Compose's.
-fn mirrored_in_rtl(scope: &mut DrawScope<'_>, draw: impl FnOnce(&mut DrawScope<'_>)) {
-    if scope.layout_direction() != compose_ui::LayoutDirection::Rtl {
-        draw(scope);
-        return;
-    }
-    let size = scope.size();
-    scope.save();
-    scope.transform(Offset::new(size.width / 2.0, 0.0), (-1.0, 1.0), 0.0, Offset::ZERO);
-    draw(scope);
-    scope.restore();
 }
 
 // ---- RadioButton -----------------------------------------------------------------------------

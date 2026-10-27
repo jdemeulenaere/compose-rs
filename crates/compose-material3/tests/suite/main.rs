@@ -58,6 +58,8 @@ mod slider_screenshots;
 mod snackbar;
 mod surface;
 mod swipe_to_dismiss;
+mod switch;
+mod switch_screenshots;
 mod tab;
 mod text;
 mod text_field;
