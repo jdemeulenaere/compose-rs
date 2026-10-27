@@ -165,6 +165,9 @@ struct Entry {
     /// Made by this provider: its dynamic state may be written in place. One from a
     /// [`CompositionLocalContext`] belongs to the provider it was captured from.
     owned: bool,
+    /// Given in the provider's pass now: entries not given are dropped after it (checked in
+    /// place, so a provider's pass allocates nothing).
+    given: bool,
 }
 
 /// A provider group's first slot: the locals it provides.
@@ -378,7 +381,7 @@ fn visible_entries() -> Vec<Entry> {
             if let Some(entries) = entries_of(table, group) {
                 for entry in entries.entries.borrow().iter() {
                     if !visible.iter().any(|seen| seen.local == entry.local) {
-                        visible.push(Entry { owned: false, ..entry.clone() });
+                        visible.push(Entry { owned: false, given: false, ..entry.clone() });
                     }
                 }
             }
@@ -483,9 +486,8 @@ pub fn current_composition_local_context() -> CompositionLocalContext {
 /// What a provider applies: the entries it had, updated by what it's given now.
 #[doc(hidden)]
 pub struct ProviderUpdate {
+    /// The entries, each marked as it's given.
     entries: Vec<Entry>,
-    /// The locals given now.
-    given: Vec<u64>,
     /// An entry was added, removed or replaced: the content recomposes as a whole (Compose's
     /// `providersInvalid`).
     changed: bool,
@@ -510,8 +512,10 @@ impl ProviderUpdate {
         if !can_override && provided_above(local) {
             return;
         }
-        self.given.push(local);
-        let existing = self.entry(local).map(|index| self.entries[index].clone());
+        let existing = self.entry(local).map(|index| {
+            self.entries[index].given = true;
+            self.entries[index].clone()
+        });
         let holder = existing.as_ref().and_then(|entry| {
             entry.holder.clone().downcast::<Holder<T>>().ok().map(|holder| (holder, entry.owned))
         });
@@ -546,12 +550,14 @@ impl ProviderUpdate {
 
     fn give_context(&mut self, context: CompositionLocalContext) {
         for entry in context.map.entries.iter() {
-            self.given.push(entry.local);
-            let same = self
-                .entry(entry.local)
-                .is_some_and(|index| Rc::ptr_eq(&self.entries[index].holder, &entry.holder));
+            let index = self.entry(entry.local);
+            if let Some(index) = index {
+                self.entries[index].given = true;
+            }
+            let same =
+                index.is_some_and(|index| Rc::ptr_eq(&self.entries[index].holder, &entry.holder));
             if !same {
-                self.replace(Entry { owned: false, ..entry.clone() });
+                self.replace(Entry { owned: false, given: true, ..entry.clone() });
             }
         }
     }
@@ -571,7 +577,7 @@ fn new_entry<T: Clone + 'static>(
         }
         Provided::Computed(compute) => Holder::Computed(compute),
     };
-    Entry { local, holder: Rc::new(holder), owned: true }
+    Entry { local, holder: Rc::new(holder), owned: true, given: true }
 }
 
 /// What [`CompositionLocalProvider`] takes: a [`ProvidedValue`], a tuple of them, a `Vec` or an
@@ -651,14 +657,16 @@ pub fn with_composition_locals<R>(values: impl ProvidedValues, content: impl FnO
     let inserting = crate::composer::current().inserting();
     let mut update = ProviderUpdate {
         entries: std::mem::take(&mut *entries.entries.borrow_mut()),
-        given: Vec::new(),
         changed: false,
     };
+    for entry in &mut update.entries {
+        entry.given = false;
+    }
     values.give(&mut update);
-    let ProviderUpdate { entries: mut updated, given, mut changed } = update;
+    let ProviderUpdate { entries: mut updated, mut changed } = update;
     // Locals no longer given.
     let before = updated.len();
-    updated.retain(|entry| given.contains(&entry.local));
+    updated.retain(|entry| entry.given);
     changed |= updated.len() != before;
     let dropped = std::mem::replace(&mut *entries.entries.borrow_mut(), updated);
     drop(dropped);

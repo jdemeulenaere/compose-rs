@@ -416,3 +416,48 @@ fn dropping_a_composition_frees_what_it_allocated() {
     assert_eq!(live_state_count(), 0);
     assert_eq!(live_scope_count(), 0);
 }
+
+static LOCAL_NUMBER: CompositionLocal<u64> = CompositionLocal::new("allocations::Number", || 0);
+static LOCAL_OTHER: CompositionLocal<u64> =
+    CompositionLocal::new_static("allocations::Other", || 0);
+
+thread_local! {
+    static PROVIDER_TRIGGER: Cell<Option<MutableState<u64>>> = const { Cell::new(None) };
+}
+
+/// `#[composable] fn Provider()`: reads a trigger, then provides an unchanged value to a text.
+fn Provider() {
+    let composer = current();
+    composer.start_restart_group(key_of("allocations::Provider"));
+    if composer.skipping() {
+        composer.skip_to_group_end();
+    } else {
+        let trigger = remember(|| mutable_state_of(0u64));
+        PROVIDER_TRIGGER.with(|handle| handle.set(Some(trigger)));
+        trigger.get();
+        CompositionLocalProvider((LOCAL_NUMBER.provides(5), LOCAL_OTHER.provides(7)), || {
+            Text(LOCAL_NUMBER.current())
+        });
+    }
+    composer.end_restart_group(|_| Provider());
+}
+
+#[test]
+fn a_provider_recomposing_with_the_same_values_allocates_nothing() {
+    let composition = Composition::new(Tree::new());
+    composition.set_content(Provider);
+    let trigger = PROVIDER_TRIGGER.with(Cell::get).expect("trigger");
+    for _ in 0..3 {
+        trigger.update(|value| value + 1);
+        composition.recompose();
+    }
+    runs();
+    for _ in 0..100 {
+        let allocated = allocations_in(|| {
+            trigger.update(|value| value + 1);
+            composition.recompose();
+        });
+        assert_eq!(allocated, 0, "the provider's pass allocates nothing");
+        assert_eq!(runs(), 0, "the text skips");
+    }
+}
