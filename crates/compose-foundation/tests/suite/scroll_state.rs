@@ -412,3 +412,31 @@ fn the_maximum_is_known_once_measured_before_placement() {
         assert_eq!(*seen.borrow(), vec![i32::MAX, 0], "{config:?}");
     }
 }
+
+// Review of D864: `vertical_scroll`'s and `Modifier.scrollable`'s `ScrollBy` is handled at an
+// edge too (Compose's `scrollBy` semantics action launches the scroll and returns true), as the
+// lazy layouts' is.
+#[test]
+fn semantics_scroll_by_is_handled_at_an_edge() {
+    let owner = ScrollState::new(0);
+    let state = *owner;
+    let mut ui = scrollable_content(Config::Vertical, state, || 100, true);
+    let node = ui.on_node_with_tag(TAG).fetch_semantics_node();
+    let back = compose_ui::SemanticsAction::ScrollBy { x: 0.0, y: -10.0 };
+    assert!(ui.host().perform_semantics_action(node.id, back), "at the start, backward");
+    assert_eq!(state.value(), 0);
+
+    // A state consuming nothing: always at an edge.
+    let scrollable = compose_foundation::scrollable_state(|_| 0.0);
+    let mut ui = ComposeTestRule::sized(IntSize::new(300, 300), move || {
+        Box!(
+            modifier = Modifier
+                .test_tag("scrollable")
+                .size(100.dp())
+                .scrollable(scrollable.clone(), Orientation::Vertical)
+        );
+    });
+    let node = ui.on_node_with_tag("scrollable").fetch_semantics_node();
+    let forward = compose_ui::SemanticsAction::ScrollBy { x: 0.0, y: 10.0 };
+    assert!(ui.host().perform_semantics_action(node.id, forward), "consuming nothing");
+}

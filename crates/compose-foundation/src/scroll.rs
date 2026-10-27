@@ -470,9 +470,13 @@ impl compose_ui::SemanticsModifierNode for ScrollNode {
         if !self.enabled {
             return false;
         }
-        // Towards the content's end (its value growing), as Compose's (D491).
+        // Towards the content's end (its value growing), as Compose's (D491); handled even
+        // where nothing moves (an edge), as Compose's action returns true (D877).
         let delta = if self.vertical { y } else { x };
-        delta != 0.0 && self.state.dispatch_raw_delta(delta) != 0.0
+        if delta != 0.0 {
+            self.state.dispatch_raw_delta(delta);
+        }
+        true
     }
 }
 

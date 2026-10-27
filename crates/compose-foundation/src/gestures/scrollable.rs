@@ -746,9 +746,13 @@ impl compose_ui::SemanticsModifierNode for ScrollableNode {
         if !self.enabled {
             return false;
         }
-        // The state's own way, as Compose's `semanticsScrollBy` (its two reversals cancel).
+        // The state's own way, as Compose's `semanticsScrollBy` (its two reversals cancel);
+        // handled even where nothing moves (an edge), as Compose's action returns true (D877).
         let delta = if self.vertical { y } else { x };
-        delta != 0.0 && self.dyn_state.dispatch_raw_delta(delta) != 0.0
+        if delta != 0.0 {
+            self.dyn_state.dispatch_raw_delta(delta);
+        }
+        true
     }
 }
 
