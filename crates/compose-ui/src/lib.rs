@@ -15,7 +15,9 @@ extern crate compose_runtime as compose;
 mod alignment;
 mod annotated;
 mod back;
+mod border;
 mod brush;
+mod clickable;
 mod clipboard;
 mod configuration;
 mod constraints;
@@ -32,6 +34,7 @@ mod graphics;
 mod graphics_layer;
 mod host;
 mod image;
+mod indication;
 mod input;
 mod interaction;
 mod intl;
@@ -133,7 +136,9 @@ pub use back::{
     BackHandler, LOCAL_BACK_HANDLERS_ENABLED, LOCAL_ON_BACK_PRESSED_DISPATCHER,
     OnBackPressedDispatcher,
 };
+pub use border::{BorderRenderer, BorderStroke};
 pub use brush::{Brush, ColorStops, TileMode};
+pub use clickable::TAP_INDICATION_DELAY;
 pub use clipboard::{ClipboardManager, LOCAL_CLIPBOARD_MANAGER};
 pub use configuration::{
     Configuration, HostEvents, HostProps, LOCAL_CONFIGURATION, LOCAL_HOST_EVENTS, LOCAL_HOST_PROPS,
@@ -149,19 +154,23 @@ pub use focus_manager::{
 pub use focus_requester::FocusRequester;
 pub use font::{FontFamily, FontStyle, FontSynthesis, FontWeight};
 pub use graphics::{
-    Color, CornerSize, DrawStyle, Outline, Paint, PaintStyle, RECTANGLE_SHAPE, Shadow, Shape,
-    Stroke, StrokeCap, StrokeJoin,
+    Color, CornerSize, CornerSizes, CustomShape, DrawStyle, Outline, Paint, PaintStyle,
+    RECTANGLE_SHAPE, Shadow, Shape, Stroke, StrokeCap, StrokeJoin,
 };
 pub use graphics_layer::{
     CompositingStrategy, DEFAULT_SHADOW_COLOR, GraphicsLayerScope, TransformOrigin,
 };
 pub use host::LOCAL_DENSITY;
 pub use image::{ImageBitmap, decode_image_bytes, remember_image_resource};
+pub use indication::{Indication, IndicationNodeFactory, LOCAL_INDICATION};
 pub use input::{
     EventContext, Key, KeyEvent, KeyEventType, KeyModifiers, PointerEvent, PointerEventPass,
     PointerEventType, PointerIcon, PointerId, PointerType,
 };
-pub use interaction::MutableInteractionSource;
+pub use interaction::{
+    DragInteraction, DragStart, Focus, FocusInteraction, HoverEnter, HoverInteraction, Interaction,
+    InteractionSource, Interactions, MutableInteractionSource, Press, PressInteraction,
+};
 pub use intl::{Locale, LocaleList};
 pub use layout::{
     EmptyMeasurePolicy, IntrinsicMeasurable, IntrinsicMeasureScope, Layout, MAX_LAYOUT_DIMENSION,
@@ -172,8 +181,8 @@ pub use layout_callbacks::{GlobalPositionAwareModifierNode, LayoutCoordinates};
 pub use layout_modifiers::{IntrinsicSize, SizeOrIntrinsic};
 pub use modifier::{
     AlignScope, AnyModifierNodeElement, BoxScope, ClickableOptions, ColumnScope, DrawModifierNode,
-    FocusTargetModifierNode, Indication, InspectorInfo, KeyInputModifierNode, LayoutModifierNode,
-    Modifier, ModifierNode, ModifierNodeElement, PaddingValues, ParentAlignment, ParentData,
+    FocusTargetModifierNode, InspectorInfo, KeyInputModifierNode, LayoutModifierNode, Modifier,
+    ModifierNode, ModifierNodeElement, PaddingValues, ParentAlignment, ParentData,
     PointerInputModifierNode, ReleaseContext, RowScope, SemanticsModifierNode, SizeSpec,
     WeightScope,
 };

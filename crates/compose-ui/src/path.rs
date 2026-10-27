@@ -409,6 +409,81 @@ impl PathData {
             .unwrap_or(Rect::new(0.0, 0.0, 0.0, 0.0))
     }
 
+    /// Whether `point` is inside, by its fill type, for hit testing a clip to it: its curves
+    /// flattened (16 segments each). Contents with steps, which a platform computes, are taken
+    /// as their bounds.
+    pub fn contains(&self, point: Offset) -> bool {
+        if !self.steps.is_empty() {
+            return self.bounds().contains(point);
+        }
+        let mut winding = 0i32;
+        let mut crossings = 0u32;
+        let mut edge = |from: Offset, to: Offset| {
+            // A ray to the right of `point`: an edge crossing it winds up or down.
+            let upward = from.y <= point.y && to.y > point.y;
+            let downward = from.y > point.y && to.y <= point.y;
+            if upward || downward {
+                let x = from.x + (point.y - from.y) / (to.y - from.y) * (to.x - from.x);
+                if x > point.x {
+                    winding += if upward { 1 } else { -1 };
+                    crossings += 1;
+                }
+            }
+        };
+        const SEGMENTS: usize = 16;
+        let (mut current, mut start) = (Offset::ZERO, Offset::ZERO);
+        for command in &self.commands {
+            match *command {
+                PathCommand::MoveTo(to) => {
+                    edge(current, start);
+                    current = to;
+                    start = to;
+                }
+                PathCommand::LineTo(to) => {
+                    edge(current, to);
+                    current = to;
+                }
+                PathCommand::QuadTo(control, to) => {
+                    let from = current;
+                    for index in 1..=SEGMENTS {
+                        let t = index as f32 / SEGMENTS as f32;
+                        let u = 1.0 - t;
+                        let next = Offset::new(
+                            u * u * from.x + 2.0 * u * t * control.x + t * t * to.x,
+                            u * u * from.y + 2.0 * u * t * control.y + t * t * to.y,
+                        );
+                        edge(current, next);
+                        current = next;
+                    }
+                }
+                PathCommand::CubicTo(first, second, to) => {
+                    let from = current;
+                    for index in 1..=SEGMENTS {
+                        let t = index as f32 / SEGMENTS as f32;
+                        let u = 1.0 - t;
+                        let (a, b, c, d) = (u * u * u, 3.0 * u * u * t, 3.0 * u * t * t, t * t * t);
+                        let next = Offset::new(
+                            a * from.x + b * first.x + c * second.x + d * to.x,
+                            a * from.y + b * first.y + c * second.y + d * to.y,
+                        );
+                        edge(current, next);
+                        current = next;
+                    }
+                }
+                PathCommand::Close => {
+                    edge(current, start);
+                    current = start;
+                }
+            }
+        }
+        // Each contour is closed for filling.
+        edge(current, start);
+        match self.fill_type {
+            PathFillType::NonZero => winding != 0,
+            PathFillType::EvenOdd => crossings % 2 == 1,
+        }
+    }
+
     /// Whether it's one convex contour, as `isConvex`: its points (curves' control points
     /// included) turn one way. Contents with steps aren't known to be (false), as Android's
     /// before its path computes.

@@ -390,13 +390,17 @@ fn layer_pixels(
             Modifier.size(40.dp()),
             Alignment::CENTER,
             false,
-            compose::runtime::callback(move |_| {
-                compose::foundation::layout::Canvas(
-                    Modifier
-                        .size((20.dp(), 20.dp()))
-                        .graphics_layer_with(GraphicsLayerScope { alpha: 0.5, ..layer }),
-                    draw,
-                );
+            compose::runtime::callback({
+                let layer = layer.clone();
+                move |_| {
+                    compose::foundation::layout::Canvas(
+                        Modifier.size((20.dp(), 20.dp())).graphics_layer_with(GraphicsLayerScope {
+                            alpha: 0.5,
+                            ..layer.clone()
+                        }),
+                        draw,
+                    );
+                }
             }),
         );
     });
@@ -426,8 +430,8 @@ fn the_single_drawing_fade_keeps_a_moved_or_turned_layers_edges() {
         GraphicsLayerScope { rotation_z: 30.0, ..Default::default() },
     ];
     for layer in layers {
-        let offscreen = transformed_layer_pixels(layer, Optimizations::NONE);
-        let faded = transformed_layer_pixels(layer, fade);
+        let offscreen = transformed_layer_pixels(layer.clone(), Optimizations::NONE);
+        let faded = transformed_layer_pixels(layer.clone(), fade);
         assert!(offscreen.iter().any(|pixel| *pixel != Color::WHITE));
         for (index, (a, b)) in offscreen.iter().zip(&faded).enumerate() {
             assert!(
@@ -566,7 +570,7 @@ fn the_single_drawing_fade_matches_offscreen() {
     ];
     for (name, scale, draw) in cases {
         let layer = GraphicsLayerScope { scale_x: scale, scale_y: scale, ..Default::default() };
-        let offscreen = layer_pixels(layer, Optimizations::NONE, draw);
+        let offscreen = layer_pixels(layer.clone(), Optimizations::NONE, draw);
         let faded = layer_pixels(layer, fade, draw);
         assert!(offscreen.iter().any(|pixel| *pixel != Color::WHITE), "{name}");
         for (index, (a, b)) in offscreen.iter().zip(&faded).enumerate() {

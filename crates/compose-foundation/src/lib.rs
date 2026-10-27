@@ -32,24 +32,7 @@ pub use compose_ui::{
     RECTANGLE_SHAPE, Role, Shape, SpanStyle, TextAlign, TextDecoration, TextOverflow, TextStyle,
 };
 
-/// A border's width and color, as Compose's `BorderStroke`.
-#[derive(Clone, Copy, PartialEq, Debug)]
-pub struct BorderStroke {
-    pub width: compose_ui::Dp,
-    pub color: Color,
-}
-
-impl BorderStroke {
-    pub const fn new(width: compose_ui::Dp, color: Color) -> BorderStroke {
-        BorderStroke { width, color }
-    }
-}
-
-impl compose_runtime::ComposeArg for BorderStroke {
-    fn same(&self, other: &Self) -> bool {
-        self == other
-    }
-}
+pub use compose_ui::{BorderRenderer, BorderStroke};
 pub use dark_theme::is_system_in_dark_theme;
 pub use flags::ComposeFoundationFlags;
 pub use gestures::{DraggableModifier, DraggableState, Orientation, remember_draggable_state};
@@ -64,7 +47,10 @@ pub use scrollbar::{
     HorizontalScrollbar, LOCAL_SCROLLBAR_STYLE, ScrollbarAdapter, ScrollbarStyle,
     VerticalScrollbar, remember_lazy_list_scrollbar_adapter, remember_scrollbar_adapter,
 };
-pub use shape::{CIRCLE_SHAPE, RoundedCornerShape, RoundedCorners};
+pub use shape::{
+    AbsoluteCutCornerShape, AbsoluteRoundedCornerShape, CIRCLE_SHAPE, CornerSize, CornerSizes,
+    CutCornerShape, GenericShape, RoundedCornerShape, RoundedCorners, ZERO_CORNER_SIZE,
+};
 pub use text::{
     BasicAnnotatedText, BasicText, DisableSelection, LOCAL_SELECTION_DISABLED, SelectionContainer,
 };

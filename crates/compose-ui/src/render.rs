@@ -509,14 +509,14 @@ impl UiTree {
         groups.push(DrawGroup {
             key: node.to_bits(),
             version: retained.version,
-            layer: retained.layer,
+            layer: retained.layer.clone(),
             content: Arc::clone(&content),
             descendants: 0,
             empty: true,
         });
         let (nested, nested_draws) = self.draw_boundaries(&content.boundaries, groups, observer);
         // A shadow is a drawing too, under no content (as a Compose layer's).
-        let shadow = groups[index].layer.is_some_and(|layer| layer.casts_shadow());
+        let shadow = groups[index].layer.as_ref().is_some_and(|layer| layer.casts_shadow());
         let draws = !content.ops.is_empty() || nested_draws || shadow;
         let retained = self.node_mut(node).retained.as_mut().expect("a repaint boundary");
         // Drawing something or nothing changes what draws it (a reference or none): a new
@@ -585,14 +585,14 @@ impl UiTree {
         groups.push(DrawGroup {
             key,
             version: inner.version,
-            layer: inner.layer,
+            layer: inner.layer.clone(),
             content: Arc::clone(&content),
             descendants: 0,
             empty: true,
         });
         let (nested, nested_draws) = self.draw_boundaries(&content.boundaries, groups, observer);
         // A shadow is a drawing too, under no content (as a Compose layer's).
-        let shadow = groups[index].layer.is_some_and(|layer| layer.casts_shadow());
+        let shadow = groups[index].layer.as_ref().is_some_and(|layer| layer.casts_shadow());
         let draws = !content.ops.is_empty() || nested_draws || shadow;
         let inner = owner.and_then(|node| {
             self.get_mut(node)?.inner_layers.iter_mut().find(|inner| inner.key == key)

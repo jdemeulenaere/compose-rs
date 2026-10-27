@@ -498,6 +498,12 @@ impl DrawModifierNode for ScrollNode {
 }
 
 impl PointerInputModifierNode for ScrollNode {
+    /// It waits for a touch's drag past a press, so a clickable inside delays its press (not a
+    /// mouse's, as Compose's scrollables, which a mouse doesn't drag).
+    fn waits_for_gesture(&self, press: &PointerEvent) -> bool {
+        press.pointer_type != compose_ui::PointerType::Mouse
+    }
+
     fn on_pointer_event(
         &mut self,
         event: &mut PointerEvent,

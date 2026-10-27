@@ -454,7 +454,7 @@ impl Drop for DragGuard {
 /// Runs `callback` as a task of its own: from a drop that may happen while composing or
 /// dispatching, where user code can't run.
 pub fn run_soon(callback: impl FnOnce() + 'static) {
-    CoroutineScope::new().launch(async move { callback() });
+    compose_runtime::platform::launch(async move { callback() });
 }
 
 /// `detect_tap_gestures`' callbacks, each given the position in the node.

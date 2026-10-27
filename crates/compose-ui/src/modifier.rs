@@ -38,6 +38,10 @@ impl Modifier {
         &self.elements
     }
 
+    pub(crate) fn elements_mut(&mut self) -> &mut [Element] {
+        &mut self.elements
+    }
+
     pub fn is_empty(&self) -> bool {
         self.elements.is_empty()
     }
@@ -230,16 +234,6 @@ impl Modifier {
         }
     }
 
-    /// A border of `width` and `color` around the bounds, as `Modifier.border(width, color)`.
-    pub fn border(self, width: Dp, color: Color) -> Modifier {
-        self.border_with(width, color, Shape::Rectangle)
-    }
-
-    /// `border` in `shape`, as `Modifier.border_with(width, color, shape)`.
-    pub fn border_with(self, width: Dp, color: Color, shape: Shape) -> Modifier {
-        self.then_element(Element::Border(width, color, shape))
-    }
-
     /// Clips the content to `shape`, as `Modifier.clip`: a graphics layer clipping to its
     /// outline (a render node on Android), as Compose's `graphicsLayer(shape = shape, clip =
     /// true)`.
@@ -262,27 +256,25 @@ impl Modifier {
 
     // ---- Input ------------------------------------------------------------------------------
 
-    /// Calls `on_click` on a press released inside, and on Enter or Space when focused, as
-    /// `Modifier.clickable`.
+    /// Calls `on_click` on a press released inside, and on Enter, Space or the D-pad's center
+    /// when focused, as `Modifier.clickable(onClick)`: its indication is [`LOCAL_INDICATION`]'s
+    /// (read now), its interaction source its own, made when first needed.
+    ///
+    /// [`LOCAL_INDICATION`]: crate::LOCAL_INDICATION
     pub fn clickable(self, on_click: impl IntoCallback<dyn Fn()>) -> Modifier {
         self.clickable_with(ClickableOptions::DEFAULT, on_click)
     }
 
-    /// `clickable` with Compose's optional parameters (`enabled`, `role`, `indication`,
-    /// `interaction_source`): `Modifier.clickable_with(ClickableOptions { role:
+    /// `clickable` with Compose's optional parameters (`interaction_source`, `indication`,
+    /// `enabled`, `on_click_label`, `role`): `Modifier.clickable_with(ClickableOptions { role:
     /// Some(Role::Button), ..ClickableOptions::DEFAULT }, on_click)`.
     pub fn clickable_with(
         self,
         options: ClickableOptions,
         on_click: impl IntoCallback<dyn Fn()>,
     ) -> Modifier {
-        self.then_element(Element::Clickable(Clickable {
-            enabled: options.enabled,
-            role: options.role,
-            indication: options.indication,
-            interaction_source: options.interaction_source,
-            on_click: on_click.into_callback(),
-        }))
+        let action = crate::clickable::ClickAction::Click(on_click.into_callback());
+        self.then_element(Element::Clickable(options.into_clickable(action)))
     }
 
     /// A toggle: a click calls `on_value_change(!value)`, as `Modifier.toggleable`.
@@ -294,21 +286,39 @@ impl Modifier {
         self.toggleable_with(value, ClickableOptions::DEFAULT, on_value_change)
     }
 
-    /// `toggleable` with Compose's optional parameters, as `clickable_with`.
+    /// `toggleable` with Compose's optional parameters, as `clickable_with` (no
+    /// `on_click_label`: Compose's has none).
     pub fn toggleable_with(
         self,
         value: bool,
         options: ClickableOptions,
         on_value_change: impl IntoCallback<dyn Fn(bool)>,
     ) -> Modifier {
-        self.then_element(Element::Toggleable(Toggleable {
-            value,
-            enabled: options.enabled,
-            role: options.role,
-            indication: options.indication,
-            interaction_source: options.interaction_source,
-            on_value_change: on_value_change.into_callback(),
-        }))
+        let action = crate::clickable::ClickAction::Toggle(value, on_value_change.into_callback());
+        let options = ClickableOptions { on_click_label: None, ..options };
+        self.then_element(Element::Clickable(options.into_clickable(action)))
+    }
+
+    /// A toggle of three states (a parent checkbox): its semantics say `state`, a click calls
+    /// `on_click`, as `Modifier.triStateToggleable`.
+    pub fn tri_state_toggleable(
+        self,
+        state: crate::semantics::ToggleableState,
+        on_click: impl IntoCallback<dyn Fn()>,
+    ) -> Modifier {
+        self.tri_state_toggleable_with(state, ClickableOptions::DEFAULT, on_click)
+    }
+
+    /// `tri_state_toggleable` with Compose's optional parameters, as `toggleable_with`.
+    pub fn tri_state_toggleable_with(
+        self,
+        state: crate::semantics::ToggleableState,
+        options: ClickableOptions,
+        on_click: impl IntoCallback<dyn Fn()>,
+    ) -> Modifier {
+        let action = crate::clickable::ClickAction::TriState(state, on_click.into_callback());
+        let options = ClickableOptions { on_click_label: None, ..options };
+        self.then_element(Element::Clickable(options.into_clickable(action)))
     }
 
     /// A selectable item (a radio button, a tab): a click calls `on_click`, and its semantics
@@ -317,13 +327,14 @@ impl Modifier {
         self.selectable_with(selected, ClickableOptions::DEFAULT, on_click)
     }
 
-    /// `selectable` with Compose's optional parameters, as `clickable_with`.
+    /// `selectable` with Compose's optional parameters, as `toggleable_with`.
     pub fn selectable_with(
         self,
         selected: bool,
         options: ClickableOptions,
         on_click: impl IntoCallback<dyn Fn()>,
     ) -> Modifier {
+        let options = ClickableOptions { on_click_label: None, ..options };
         self.semantics(|config| config.set_selected(selected)).clickable_with(options, on_click)
     }
 
@@ -333,11 +344,40 @@ impl Modifier {
         self.semantics(|config| config.selectable_group())
     }
 
+    /// An indeterminate progress to accessibility, as `Modifier.progressSemantics()`: merging its
+    /// descendants, as Compose's (so screen readers focus it).
+    pub fn progress_semantics(self) -> Modifier {
+        self.semantics_with(true, |config| {
+            config
+                .set_progress_bar_range_info(crate::semantics::ProgressBarRangeInfo::INDETERMINATE)
+        })
+    }
+
+    /// A progress of `value` in `value_range` (kept in it) with `steps` stops between the ends,
+    /// as `Modifier.progressSemantics(value, valueRange, steps)` (Compose's defaults: `(0.0, 1.0)`
+    /// and 0).
+    pub fn progress_semantics_with(
+        self,
+        value: f32,
+        value_range: (f32, f32),
+        steps: u32,
+    ) -> Modifier {
+        let current = value.clamp(value_range.0, value_range.1.max(value_range.0));
+        self.semantics_with(true, move |config| {
+            config.set_progress_bar_range_info(crate::semantics::ProgressBarRangeInfo {
+                current,
+                range: value_range,
+                steps,
+            })
+        })
+    }
+
     /// A click, a double click and a long press, as `Modifier.combinedClickable`: with
     /// `on_double_click`, a click waits for the double-click timeout (300 ms) before calling
     /// `on_click`; with `on_long_click`, holding past the long-press timeout (400 ms) calls it
     /// instead, with `LOCAL_HAPTIC_FEEDBACK`'s `LongPress` feedback (read when made in
-    /// composition). Enter and Space click when focused.
+    /// composition). Enter, Space and the D-pad's center click when focused; holding one
+    /// long-clicks, pressing one twice double-clicks.
     pub fn combined_clickable(
         self,
         on_long_click: Option<Callback<dyn Fn()>>,
@@ -352,7 +392,8 @@ impl Modifier {
         )
     }
 
-    /// `combined_clickable` with Compose's optional parameters, as `clickable_with`.
+    /// `combined_clickable` with Compose's optional parameters, as `clickable_with`, and
+    /// `on_long_click_label` and `haptic_feedback_enabled`.
     pub fn combined_clickable_with(
         self,
         options: ClickableOptions,
@@ -360,20 +401,21 @@ impl Modifier {
         on_double_click: Option<Callback<dyn Fn()>>,
         on_click: impl IntoCallback<dyn Fn()>,
     ) -> Modifier {
-        self.then_custom(crate::nodes::CombinedClickableElement {
-            clickable: Clickable {
-                enabled: options.enabled,
-                role: options.role,
-                indication: options.indication,
-                interaction_source: options.interaction_source,
-                on_click: on_click.into_callback(),
-            },
-            // A long click vibrates, as Compose's (`hapticFeedbackEnabled`, on by default).
-            haptic_feedback: on_long_click
-                .as_ref()
-                .and_then(|_| crate::platform_services::current_haptic_feedback()),
+        // A long click vibrates, as Compose's (`hapticFeedbackEnabled`, on by default).
+        let haptic_feedback = on_long_click
+            .as_ref()
+            .filter(|_| options.haptic_feedback_enabled)
+            .and_then(|_| crate::platform_services::current_haptic_feedback());
+        let combined = crate::clickable::Combined {
             on_long_click,
             on_double_click,
+            on_long_click_label: options.on_long_click_label.clone(),
+            haptic_feedback,
+        };
+        let action = crate::clickable::ClickAction::Click(on_click.into_callback());
+        self.then_custom(crate::clickable::CombinedClickableElement {
+            clickable: options.into_clickable(action),
+            combined,
         })
     }
 
@@ -386,23 +428,35 @@ impl Modifier {
         self.hoverable_with(interaction_source, true)
     }
 
-    /// `hoverable` with `enabled`, as `Modifier.hoverable_with(interactionSource, enabled)`.
+    /// `hoverable` with `enabled`, as `Modifier.hoverable(interactionSource, enabled)`:
+    /// disabled, it's no modifier.
     pub fn hoverable_with(
         self,
         interaction_source: crate::interaction::MutableInteractionSource,
         enabled: bool,
     ) -> Modifier {
-        self.then_custom(crate::nodes::HoverableElement { interaction_source, enabled })
+        if !enabled {
+            return self;
+        }
+        self.then_custom(crate::nodes::HoverableElement { interaction_source })
     }
 
     /// Makes the element a focus target, as `Modifier.focusable()`.
     pub fn focusable(self) -> Modifier {
-        self.focusable_with(true)
+        self.focusable_with(true, None)
     }
 
-    /// `focusable` with `enabled`, as `Modifier.focusable_with(enabled)` (no interaction source yet).
-    pub fn focusable_with(self, enabled: bool) -> Modifier {
-        self.then_element(Element::Focusable(enabled))
+    /// `focusable` with `enabled` and the source its focus is emitted into, as
+    /// `Modifier.focusable(enabled, interactionSource)`: disabled, it's no modifier.
+    pub fn focusable_with(
+        self,
+        enabled: bool,
+        interaction_source: Option<crate::interaction::MutableInteractionSource>,
+    ) -> Modifier {
+        if !enabled {
+            return self;
+        }
+        self.then_element(Element::Focusable(interaction_source))
     }
 
     /// Calls `on_focus_changed` when the focus target after it in the chain gains or loses
@@ -481,31 +535,56 @@ impl fmt::Debug for Modifier {
     }
 }
 
-/// What `clickable_with`, `toggleable_with`, `selectable_with` and `combined_clickable_with`
-/// take beyond their required parameters: Compose's optional ones, built by struct update from
-/// `DEFAULT` (D261, D263).
-#[derive(Clone, PartialEq)]
+/// What `clickable_with`, `toggleable_with`, `tri_state_toggleable_with`, `selectable_with` and
+/// `combined_clickable_with` take beyond their required parameters: Compose's optional ones,
+/// built by struct update from `DEFAULT` (D261, D263, D1052).
+#[derive(Clone, PartialEq, Debug)]
 pub struct ClickableOptions {
     /// Whether it reacts to input (and says so to accessibility), as `enabled`.
     pub enabled: bool,
     /// What it is to accessibility, as `role`.
     pub role: Option<Role>,
-    /// The state layer drawn while pressed or focused (Material's ripple, without its
-    /// animation), as `indication`; `Indication::NONE` draws none.
-    pub indication: Indication,
-    /// Where its press is reported, as `interactionSource`: with `Indication::NONE`, something
-    /// else shows the press.
+    /// What accessibility says the click does, as `onClickLabel` (`clickable` and
+    /// `combined_clickable` only).
+    pub on_click_label: Option<SharedString>,
+    /// What shows its interactions, as `indication`: `Indication::LOCAL` (the default, as the
+    /// overloads without one) is `LOCAL_INDICATION`'s, `Indication::NONE` none.
+    pub indication: crate::indication::Indication,
+    /// Where its interactions are emitted, as `interactionSource`: without one, it makes its
+    /// own when first needed (for its indication).
     pub interaction_source: Option<crate::interaction::MutableInteractionSource>,
+    /// What accessibility says the long click does, as `onLongClickLabel`
+    /// (`combined_clickable` only).
+    pub on_long_click_label: Option<SharedString>,
+    /// Whether a long click vibrates, as `hapticFeedbackEnabled` (`combined_clickable` only).
+    pub haptic_feedback_enabled: bool,
 }
 
 impl ClickableOptions {
-    /// Compose's defaults: enabled, no role, no indication, no interaction source.
+    /// Compose's defaults: enabled, no role, no labels, `LOCAL_INDICATION`'s indication, no
+    /// interaction source, haptic feedback.
     pub const DEFAULT: ClickableOptions = ClickableOptions {
         enabled: true,
         role: None,
-        indication: Indication::NONE,
+        on_click_label: None,
+        indication: crate::indication::Indication::LOCAL,
         interaction_source: None,
+        on_long_click_label: None,
+        haptic_feedback_enabled: true,
     };
+
+    fn into_clickable(self, action: crate::clickable::ClickAction) -> Clickable {
+        Clickable {
+            enabled: self.enabled,
+            role: self.role,
+            on_click_label: self.on_click_label.map(std::rc::Rc::new),
+            use_local_indication: self.indication.is_local(),
+            // `LOCAL`'s is set where the node is (`resolve_local_indications`, D1056).
+            indication: if self.indication.is_local() { None } else { self.indication.resolve() },
+            interaction_source: self.interaction_source,
+            action,
+        }
+    }
 }
 
 impl Default for ClickableOptions {
@@ -699,61 +778,7 @@ macro_rules! scopes_compose_arg {
 
 scopes_compose_arg!(RowScope, ColumnScope, BoxScope);
 
-/// A state layer shown while pressed, focused or hovered, as Material's ripple (without its
-/// animation): `color` over the node's bounds, or, `unbounded`, a circle of `radius` centered
-/// on it, as `ripple(bounded = false, radius)`. An unspecified color shows nothing.
-#[derive(Clone, Copy, PartialEq, Debug)]
-pub struct Indication {
-    pub color: Color,
-    /// The circle's radius, for an unbounded one.
-    pub radius: Option<crate::unit::Dp>,
-}
-
-impl Indication {
-    /// None, as `indication = null`.
-    pub const NONE: Indication = Indication { color: Color::UNSPECIFIED, radius: None };
-
-    /// Over the node's bounds, as `ripple()`.
-    pub fn bounded(color: Color) -> Indication {
-        Indication { color, radius: None }
-    }
-
-    /// A circle of `radius` centered on the node, as `ripple(bounded = false, radius)`.
-    pub fn unbounded(color: Color, radius: crate::unit::Dp) -> Indication {
-        Indication { color, radius: Some(radius) }
-    }
-}
-
-impl From<Color> for Indication {
-    fn from(color: Color) -> Indication {
-        Indication::bounded(color)
-    }
-}
-
-/// `clickable`'s data.
-#[derive(Clone)]
-pub(crate) struct Clickable {
-    pub enabled: bool,
-    pub role: Option<Role>,
-    /// The state layer, drawn at 10% while pressed or focused (Material's indication).
-    pub indication: Indication,
-    /// Where its press is reported.
-    pub interaction_source: Option<crate::interaction::MutableInteractionSource>,
-    pub on_click: Callback<dyn Fn()>,
-}
-
-/// `toggleable`'s data.
-#[derive(Clone)]
-pub(crate) struct Toggleable {
-    pub value: bool,
-    pub enabled: bool,
-    pub role: Option<Role>,
-    /// As `Clickable::indication`.
-    pub indication: Indication,
-    /// As `Clickable::interaction_source`.
-    pub interaction_source: Option<crate::interaction::MutableInteractionSource>,
-    pub on_value_change: Callback<dyn Fn(bool)>,
-}
+pub(crate) use crate::clickable::Clickable;
 
 /// One modifier element: plain data, compared on recomposition to update its node in place.
 #[derive(Clone)]
@@ -766,11 +791,11 @@ pub(crate) enum Element {
     Weight(f32, bool),
     Align(ParentAlignment),
     Background(Color, Shape),
+    /// A solid border (a brush's is a custom element, as `background_with`'s).
     Border(Dp, Color, Shape),
     Clip(Shape),
     Clickable(Clickable),
-    Toggleable(Toggleable),
-    Focusable(bool),
+    Focusable(Option<crate::interaction::MutableInteractionSource>),
     OnFocusChanged(Callback<dyn Fn(bool)>),
     OnKeyEvent(Callback<dyn Fn(KeyEvent) -> bool>),
     TestTag(SharedString),
@@ -779,6 +804,12 @@ pub(crate) enum Element {
     ZIndex(f32),
     Custom(Rc<dyn AnyModifierNodeElement>),
 }
+
+// An element stays inline and small (D1052): a chain of a few is one allocation.
+#[cfg(target_pointer_width = "64")]
+const _: () = assert!(std::mem::size_of::<Element>() == 64, "an Element is 64 bytes");
+#[cfg(target_pointer_width = "64")]
+const _: () = assert!(std::mem::size_of::<Modifier>() == 392, "a Modifier is 392 bytes");
 
 impl Element {
     /// Whether `other` is the same kind of element, so its node can be updated in place.
@@ -803,20 +834,7 @@ impl Element {
             (Background(a, b), Background(c, d)) => a == c && b == d,
             (Border(a, b, c), Border(d, e, f)) => a == d && b == e && c == f,
             (Clip(a), Clip(b)) => a == b,
-            (Clickable(a), Clickable(b)) => {
-                a.enabled == b.enabled
-                    && a.role == b.role
-                    && a.indication == b.indication
-                    && a.interaction_source == b.interaction_source
-                    && a.on_click.ptr_eq(&b.on_click)
-            }
-            (Toggleable(a), Toggleable(b)) => {
-                a.value == b.value
-                    && a.enabled == b.enabled
-                    && a.role == b.role
-                    && a.indication == b.indication
-                    && a.on_value_change.ptr_eq(&b.on_value_change)
-            }
+            (Clickable(a), Clickable(b)) => a.same(b),
             (Focusable(a), Focusable(b)) => a == b,
             (OnFocusChanged(a), OnFocusChanged(b)) => a.ptr_eq(b),
             (OnKeyEvent(a), OnKeyEvent(b)) => a.ptr_eq(b),
@@ -871,13 +889,20 @@ impl fmt::Debug for Element {
                 write!(formatter, "border({width:?}, {color:?}, {shape:?})")
             }
             Clip(shape) => write!(formatter, "clip({shape:?})"),
-            Clickable(clickable) => write!(formatter, "clickable(enabled = {})", clickable.enabled),
-            Toggleable(toggleable) => write!(
-                formatter,
-                "toggleable({}, enabled = {})",
-                toggleable.value, toggleable.enabled
-            ),
-            Focusable(enabled) => write!(formatter, "focusable({enabled})"),
+            Clickable(clickable) => match clickable.action {
+                crate::clickable::ClickAction::Click(_) => {
+                    write!(formatter, "clickable(enabled = {})", clickable.enabled)
+                }
+                crate::clickable::ClickAction::Toggle(value, _) => {
+                    write!(formatter, "toggleable({value}, enabled = {})", clickable.enabled)
+                }
+                crate::clickable::ClickAction::TriState(state, _) => write!(
+                    formatter,
+                    "tri_state_toggleable({state:?}, enabled = {})",
+                    clickable.enabled
+                ),
+            },
+            Focusable(_) => formatter.write_str("focusable"),
             OnFocusChanged(_) => formatter.write_str("on_focus_changed"),
             OnKeyEvent(_) => formatter.write_str("on_key_event"),
             TestTag(tag) => write!(formatter, "test_tag({tag:?})"),
@@ -1057,6 +1082,12 @@ pub trait ModifierNode: Any {
     fn on_detach(&mut self, _context: &mut crate::node_context::NodeContext<'_>) {
         crate::lifecycle::default_callback_ran();
     }
+    /// Whether its drawing reads state that should draw it again when written, as a
+    /// user-defined element's node always is: a built-in node hosting one (a clickable's
+    /// indication) says so. Asked once, when the node is made (its kinds).
+    fn observes_reads(&self) -> bool {
+        false
+    }
     /// Its layout node is deactivated or reused for other content (a lazy list's item that
     /// left, reused by one that came), as Compose's `Modifier.Node.onReset`: forget what the old
     /// content's interactions left (a press, a hover, a gesture, a focus, an animation under
@@ -1220,6 +1251,12 @@ pub trait PointerInputModifierNode {
     );
     /// The gesture ended without its events (the node left, or another took the pointer).
     fn on_cancel_pointer_input(&mut self) {}
+    /// Whether, enabled, it waits for a gesture past a press (a drag's slop), as a Compose
+    /// gesture whose state is `Waiting` once it saw a press: a clickable inside it delays showing
+    /// its press (`EventContext::has_waiting_parent`).
+    fn waits_for_gesture(&self, _press: &PointerEvent) -> bool {
+        false
+    }
     /// The mouse pointer's look over it, as `Modifier.pointerHoverIcon` (the innermost on the
     /// hovered path wins).
     fn hover_icon(&self) -> Option<crate::input::PointerIcon> {

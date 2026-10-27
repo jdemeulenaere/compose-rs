@@ -1,56 +1,69 @@
-//! Shapes, as Compose's `androidx.compose.foundation.shape`.
+//! Shapes, as Compose's `androidx.compose.foundation.shape`: the corner-based shapes, rounded
+//! or cut, relative to the layout direction or absolute, and `GenericShape`.
 
-use compose_ui::{CornerSize, Dp, Shape};
+use compose_ui::{CustomShape, Density, LayoutDirection, Outline, Path, Shape, Size};
+
+pub use compose_ui::{CornerSize, CornerSizes};
+
+/// What the corner-based shapes take, as `RoundedCornerShape`'s overloads (compose-rs's earlier
+/// name of [`CornerSizes`]).
+pub use compose_ui::CornerSizes as RoundedCorners;
 
 /// Rounded corners, as `RoundedCornerShape`'s overloads: `RoundedCornerShape(8.dp())` for every
-/// corner, `RoundedCornerShape(50)` in percent of the shorter side (or a `CornerSize`), and
-/// `RoundedCornerShape((top_start, top_end, bottom_end, bottom_start))` in `Dp` or
-/// `CornerSize`s, each corner its own.
-pub fn RoundedCornerShape(corners: impl RoundedCorners) -> Shape {
+/// corner, `RoundedCornerShape(4.0)` in pixels, `RoundedCornerShape(50)` in percent of the
+/// shorter side, a `CornerSize`, or four (`(top_start, top_end, bottom_end, bottom_start)`, each
+/// a `Dp`, pixels, a percent or a `CornerSize`). The start corners are the right ones right to
+/// left.
+pub fn RoundedCornerShape(corners: impl CornerSizes) -> Shape {
     Shape::Rounded(corners.corner_sizes())
 }
 
-/// What `RoundedCornerShape` takes: one size for every corner, or four (top start, top end,
-/// bottom end, bottom start).
-pub trait RoundedCorners {
-    fn corner_sizes(self) -> [CornerSize; 4];
+/// Cut corners, as `CutCornerShape`'s overloads (taking what `RoundedCornerShape` takes).
+pub fn CutCornerShape(corners: impl CornerSizes) -> Shape {
+    Shape::Cut(corners.corner_sizes())
 }
 
-impl RoundedCorners for Dp {
-    fn corner_sizes(self) -> [CornerSize; 4] {
-        [CornerSize::Dp(self); 4]
-    }
+/// Rounded corners that don't follow the layout direction, as `AbsoluteRoundedCornerShape`: four
+/// are `(top_left, top_right, bottom_right, bottom_left)`.
+pub fn AbsoluteRoundedCornerShape(corners: impl CornerSizes) -> Shape {
+    Shape::AbsoluteRounded(corners.corner_sizes())
 }
 
-impl RoundedCorners for i32 {
-    /// Percent of the shorter side, as `RoundedCornerShape(percent: Int)`.
-    fn corner_sizes(self) -> [CornerSize; 4] {
-        [CornerSize::Percent(self as f32); 4]
-    }
-}
-
-impl RoundedCorners for CornerSize {
-    fn corner_sizes(self) -> [CornerSize; 4] {
-        [self; 4]
-    }
-}
-
-impl RoundedCorners for (Dp, Dp, Dp, Dp) {
-    fn corner_sizes(self) -> [CornerSize; 4] {
-        [
-            CornerSize::Dp(self.0),
-            CornerSize::Dp(self.1),
-            CornerSize::Dp(self.2),
-            CornerSize::Dp(self.3),
-        ]
-    }
-}
-
-impl RoundedCorners for (CornerSize, CornerSize, CornerSize, CornerSize) {
-    fn corner_sizes(self) -> [CornerSize; 4] {
-        [self.0, self.1, self.2, self.3]
-    }
+/// Cut corners that don't follow the layout direction, as `AbsoluteCutCornerShape`.
+pub fn AbsoluteCutCornerShape(corners: impl CornerSizes) -> Shape {
+    Shape::AbsoluteCut(corners.corner_sizes())
 }
 
 /// A circle (a pill for a non-square box), as `CircleShape`.
 pub const CIRCLE_SHAPE: Shape = Shape::Rounded([CornerSize::Percent(50.0); 4]);
+
+/// No corner, as `ZeroCornerSize`.
+pub const ZERO_CORNER_SIZE: CornerSize = CornerSize::ZERO;
+
+/// A shape `builder` draws into a path, given the box's size and the layout direction, as
+/// `GenericShape { size, layoutDirection -> … }`: its outline is that path. Each call is a new
+/// shape (Compose's compares by its lambda): remember it to keep it the same.
+pub fn GenericShape(builder: impl Fn(&Path, Size, LayoutDirection) + 'static) -> Shape {
+    Shape::custom(GenericShapeOutline(Box::new(builder)))
+}
+
+#[allow(clippy::type_complexity)]
+struct GenericShapeOutline(Box<dyn Fn(&Path, Size, LayoutDirection)>);
+
+impl CustomShape for GenericShapeOutline {
+    fn create_outline(
+        &self,
+        size: Size,
+        layout_direction: LayoutDirection,
+        _density: &Density,
+    ) -> Outline {
+        let path = Path::new();
+        (self.0)(&path, size, layout_direction);
+        Outline::generic(&path)
+    }
+
+    /// The same shape only (Compose's compares its lambda, by identity).
+    fn same(&self, other: &dyn CustomShape) -> bool {
+        other.downcast_ref::<GenericShapeOutline>().is_some_and(|other| std::ptr::eq(self, other))
+    }
+}

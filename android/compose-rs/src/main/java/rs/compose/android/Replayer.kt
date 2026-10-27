@@ -65,7 +65,8 @@ internal inline fun ByteBuffer.floatAt(index: Int): Float = Float.fromBits(getIn
  * no group's bytes: the frame's `LAYERS` section lists them for every group that has a layer,
  * nested ones in kept parents included, and they're set on the groups' nodes before the replay,
  * as Compose sets its layers' (`GraphicsLayerV29`, D525): an outline when it clips or casts a
- * shadow (`setRoundRect`, or `setPath` for corners that differ), `setClipToOutline`, the
+ * shadow (`setRoundRect`, or `setPath` for corners that differ and for a path, D1055),
+ * `setClipToOutline` (a recording clipped to the path where the outline can't clip), the
  * elevation and the shadows' colors (HWUI draws the shadow, inside the `enableZ` that the
  * parent's recording puts around the node, as Compose's), and the compositing strategy
  * (`setUseCompositingLayer`, `setHasOverlappingRendering`). So a layer-only animation records
@@ -929,14 +930,26 @@ internal class Replayer(private val text: TextMeasurer) {
     /**
      * Sets the outline of kind [kind] at [at] (a `LAYERS` entry after its key) on [node], at
      * [alpha], as Compose's `AndroidGraphicsLayer`: a rectangle or a rounded rectangle whose
-     * corners are the same with `setRoundRect` (whole pixels), others as a path (`setPath`,
-     * left in [outlinePath]); none without one. Returns whether the outline can clip
-     * (`Outline.canClip`: a path can't before API 33).
+     * corners are the same with `setRoundRect` (whole pixels), others and a path as a path
+     * (`setPath`, `setConvexPath` before API 30, left in [outlinePath]); none without one, or
+     * for a concave path before API 29 (Compose's `updatePathOutline`). Returns whether the
+     * outline can clip (`Outline.canClip`: a path can't before API 33; nor can no outline).
      */
     private fun setOutline(node: RenderNode, buffer: ByteBuffer, at: Int, kind: Int, alpha: Float): Boolean {
         if (kind == OUTLINE_NONE) {
             node.setOutline(null)
             return true
+        }
+        if (kind == OUTLINE_PATH) {
+            readOutlinePath(buffer, at, outlinePath)
+            if (Build.VERSION.SDK_INT <= 28 && !outlinePath.isConvex) {
+                node.setOutline(null)
+                return false
+            }
+            setPath(outlinePath)
+            outline.alpha = alpha
+            node.setOutline(outline)
+            return outline.canClip()
         }
         val left = buffer.floatAt(at + ENTRY_OUTLINE_BOUNDS)
         val top = buffer.floatAt(at + ENTRY_OUTLINE_BOUNDS + 4)
@@ -955,20 +968,30 @@ internal class Replayer(private val text: TextMeasurer) {
             rect.set(left, top, right, bottom)
             outlinePath.rewind()
             outlinePath.addRoundRect(rect, radii, Path.Direction.CCW)
-            if (Build.VERSION.SDK_INT >= 30) {
-                outline.setPath(outlinePath)
-            } else {
-                @Suppress("DEPRECATION")
-                outline.setConvexPath(outlinePath)
-            }
+            setPath(outlinePath)
         }
         outline.alpha = alpha
         node.setOutline(outline)
         return outline.canClip()
     }
 
-    /** The outline of the `LAYERS` entry at [at] (after its key), a rounded rectangle, as a path. */
+    /** [outline] set to [path]: `setPath` from API 30, `setConvexPath` before, as Compose's. */
+    private fun setPath(path: Path) {
+        if (Build.VERSION.SDK_INT >= 30) {
+            outline.setPath(path)
+        } else {
+            @Suppress("DEPRECATION")
+            outline.setConvexPath(path)
+        }
+    }
+
+    /** The outline of the `LAYERS` entry at [at] (after its key) as a path of its own. */
     private fun outlinePathOf(buffer: ByteBuffer, at: Int): Path {
+        val path = Path()
+        if (buffer.get(at + ENTRY_OUTLINE_KIND).toInt() == OUTLINE_PATH) {
+            readOutlinePath(buffer, at, path)
+            return path
+        }
         rect.set(
             buffer.floatAt(at + ENTRY_OUTLINE_BOUNDS),
             buffer.floatAt(at + ENTRY_OUTLINE_BOUNDS + 4),
@@ -976,7 +999,20 @@ internal class Replayer(private val text: TextMeasurer) {
             buffer.floatAt(at + ENTRY_OUTLINE_BOUNDS + 12),
         )
         readRadii(buffer, at + ENTRY_OUTLINE_RADII)
-        return Path().apply { addRoundRect(rect, radii, Path.Direction.CCW) }
+        path.addRoundRect(rect, radii, Path.Direction.CCW)
+        return path
+    }
+
+    /**
+     * The path outline of the `LAYERS` entry at [at] (after its key: its path's id and offset in
+     * the radii's place, the path defined before the section) into [into]: empty for an unknown
+     * path, which then clips everything out, as an unknown `CLIP_PATH` does.
+     */
+    private fun readOutlinePath(buffer: ByteBuffer, at: Int, into: Path) {
+        into.rewind()
+        val kept = paths.get(buffer.getInt(at + ENTRY_OUTLINE_RADII)) ?: return
+        into.set(kept.path)
+        into.offset(buffer.floatAt(at + ENTRY_OUTLINE_RADII + 4), buffer.floatAt(at + ENTRY_OUTLINE_RADII + 8))
     }
 
     /** The 4 corner radii at [at] as 8 floats, into [radii]. */
@@ -1020,7 +1056,11 @@ internal class Replayer(private val text: TextMeasurer) {
         canvas.rotate(buffer.floatAt(at + ENTRY_ROTATION))
         canvas.scale(buffer.floatAt(at + ENTRY_SCALE), buffer.floatAt(at + ENTRY_SCALE + 4))
         canvas.translate(-pivotX, -pivotY)
-        if (buffer.get(at + ENTRY_CLIP).toInt() != 0 && buffer.get(at + ENTRY_OUTLINE_KIND).toInt() != OUTLINE_NONE) {
+        val outlineKind = buffer.get(at + ENTRY_OUTLINE_KIND).toInt()
+        if (buffer.get(at + ENTRY_CLIP).toInt() != 0 && outlineKind == OUTLINE_PATH) {
+            readOutlinePath(buffer, at, clip)
+            canvas.clipPath(clip)
+        } else if (buffer.get(at + ENTRY_CLIP).toInt() != 0 && outlineKind != OUTLINE_NONE) {
             rect.set(
                 buffer.floatAt(at + ENTRY_OUTLINE_BOUNDS),
                 buffer.floatAt(at + ENTRY_OUTLINE_BOUNDS + 4),
@@ -1616,6 +1656,7 @@ internal class Replayer(private val text: TextMeasurer) {
         const val ENTRY_BOUNDS = 79
         const val ENTRY_END = 95
         const val OUTLINE_NONE = 0
+        const val OUTLINE_PATH = 3
         const val COMPOSITING_AUTO = 0
         const val COMPOSITING_OFFSCREEN = 1
         const val COMPOSITING_MODULATE_ALPHA = 2

@@ -109,43 +109,183 @@ impl ComposeArg for Color {
     }
 }
 
-/// A corner size, as `CornerSize`: a fixed size or a percentage of the shorter side.
+/// A corner's size, as Compose's `CornerSize`: fixed in dp or pixels, or a percentage of the
+/// shape's shorter side.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum CornerSize {
+    /// As `CornerSize(size: Dp)`.
     Dp(Dp),
+    /// As `CornerSize(size: Float)`, in pixels.
+    Px(f32),
+    /// As `CornerSize(percent: Int)`, of the shorter side (0 to 100).
     Percent(f32),
 }
 
 impl CornerSize {
-    pub fn to_px(self, size: Size, density: &Density) -> f32 {
-        let shorter = size.width.min(size.height);
-        let px = match self {
+    /// No corner, as `ZeroCornerSize`.
+    pub const ZERO: CornerSize = CornerSize::Px(0.0);
+
+    /// A percentage of the shorter side, as `CornerSize(percent)`: panics outside 0 to 100, as
+    /// Compose throws.
+    pub fn percent(percent: i32) -> CornerSize {
+        assert!(
+            (0..=100).contains(&percent),
+            "compose-ui: the percent should be in the range of [0, 100], was {percent}"
+        );
+        CornerSize::Percent(percent as f32)
+    }
+
+    /// The corner's size in pixels for a shape of `shape_size`, as `toPx` (not limited: the
+    /// shape scales its corners down to fit).
+    pub fn to_px(self, shape_size: Size, density: &Density) -> f32 {
+        match self {
             CornerSize::Dp(dp) => density.to_px(dp),
-            CornerSize::Percent(percent) => shorter * percent / 100.0,
-        };
-        px.clamp(0.0, shorter / 2.0)
+            CornerSize::Px(px) => px,
+            CornerSize::Percent(percent) => {
+                shape_size.width.min(shape_size.height) * (percent / 100.0)
+            }
+        }
     }
 }
 
-/// A shape, as Compose's `Shape`: what backgrounds, borders and clips follow.
-#[derive(Clone, Copy, PartialEq, Debug)]
+impl From<Dp> for CornerSize {
+    fn from(size: Dp) -> CornerSize {
+        CornerSize::Dp(size)
+    }
+}
+
+impl From<f32> for CornerSize {
+    /// Pixels, as `CornerSize(size: Float)`.
+    fn from(px: f32) -> CornerSize {
+        CornerSize::Px(px)
+    }
+}
+
+impl From<i32> for CornerSize {
+    /// A percentage, as `CornerSize(percent: Int)`.
+    fn from(percent: i32) -> CornerSize {
+        CornerSize::percent(percent)
+    }
+}
+
+/// What the corner-based shapes take: one size for every corner (a `Dp`, an `f32` in pixels, an
+/// `i32` percentage, a `CornerSize`), or four, Compose's overloads taking `topStart`, `topEnd`,
+/// `bottomEnd` and `bottomStart` (top left, top right, bottom right and bottom left for the
+/// absolute shapes).
+pub trait CornerSizes {
+    fn corner_sizes(self) -> [CornerSize; 4];
+}
+
+impl<T: Into<CornerSize>> CornerSizes for T {
+    fn corner_sizes(self) -> [CornerSize; 4] {
+        [self.into(); 4]
+    }
+}
+
+impl<A: Into<CornerSize>, B: Into<CornerSize>, C: Into<CornerSize>, D: Into<CornerSize>> CornerSizes
+    for (A, B, C, D)
+{
+    fn corner_sizes(self) -> [CornerSize; 4] {
+        [self.0.into(), self.1.into(), self.2.into(), self.3.into()]
+    }
+}
+
+impl CornerSizes for [CornerSize; 4] {
+    fn corner_sizes(self) -> [CornerSize; 4] {
+        self
+    }
+}
+
+/// A shape of the app's own, as a class implementing Compose's `Shape`: wrap it with
+/// [`Shape::custom`].
+pub trait CustomShape: std::any::Any {
+    /// Its outline in a box of `size`, as `createOutline`.
+    fn create_outline(
+        &self,
+        size: Size,
+        layout_direction: crate::alignment::LayoutDirection,
+        density: &Density,
+    ) -> Outline;
+
+    /// Whether `other` is the same shape, as Compose's `equals`: a shape with no properties
+    /// compares its type (`other.downcast_ref::<Self>().is_some()`).
+    fn same(&self, other: &dyn CustomShape) -> bool;
+}
+
+impl dyn CustomShape {
+    /// `self` as `T`, for [`same`](CustomShape::same).
+    pub fn downcast_ref<T: CustomShape>(&self) -> Option<&T> {
+        (self as &dyn std::any::Any).downcast_ref::<T>()
+    }
+}
+
+/// A shape, as Compose's `Shape`: what backgrounds, borders, clips and shadows follow. Compose's
+/// corner-based shapes are variants, so they're plain values (`foundation::RoundedCornerShape`
+/// and its siblings make them); any other is `Custom` (`foundation::GenericShape`, or an app's
+/// own [`CustomShape`]).
+#[derive(Clone)]
 pub enum Shape {
+    /// As `RectangleShape`.
     Rectangle,
-    /// Rounded corners: top start, top end, bottom end, bottom start.
+    /// Rounded corners: top start, top end, bottom end, bottom start (mirrored right to left),
+    /// as `RoundedCornerShape`.
     Rounded([CornerSize; 4]),
+    /// Cut corners, as `CutCornerShape`.
+    Cut([CornerSize; 4]),
+    /// Rounded corners: top left, top right, bottom right, bottom left, whatever the direction,
+    /// as `AbsoluteRoundedCornerShape`.
+    AbsoluteRounded([CornerSize; 4]),
+    /// Cut corners top left, top right, bottom right, bottom left, as `AbsoluteCutCornerShape`.
+    AbsoluteCut([CornerSize; 4]),
+    /// Any other shape.
+    Custom(std::rc::Rc<dyn CustomShape>),
 }
 
 /// As Compose's `RectangleShape`.
 pub const RECTANGLE_SHAPE: Shape = Shape::Rectangle;
 
 impl Shape {
+    /// A shape of the app's own.
+    pub fn custom(shape: impl CustomShape) -> Shape {
+        Shape::Custom(std::rc::Rc::new(shape))
+    }
+
+    /// Its corners (top start, top end, bottom end, bottom start; or top left, top right,
+    /// bottom right, bottom left for the absolute ones) if it's corner-based, as
+    /// `CornerBasedShape`'s `topStart` and siblings.
+    pub fn corners(&self) -> Option<[CornerSize; 4]> {
+        match self {
+            Shape::Rounded(corners)
+            | Shape::Cut(corners)
+            | Shape::AbsoluteRounded(corners)
+            | Shape::AbsoluteCut(corners) => Some(*corners),
+            Shape::Rectangle | Shape::Custom(_) => None,
+        }
+    }
+
+    /// A corner-based shape of the same kind with `corners`, as `CornerBasedShape.copy`: one
+    /// size for all, or four (`(top_start, top_end, bottom_end, bottom_start)`); another shape
+    /// as it is.
+    pub fn copy(&self, corners: impl CornerSizes) -> Shape {
+        let corners = corners.corner_sizes();
+        match self {
+            Shape::Rounded(_) => Shape::Rounded(corners),
+            Shape::Cut(_) => Shape::Cut(corners),
+            Shape::AbsoluteRounded(_) => Shape::AbsoluteRounded(corners),
+            Shape::AbsoluteCut(_) => Shape::AbsoluteCut(corners),
+            Shape::Rectangle | Shape::Custom(_) => self.clone(),
+        }
+    }
+
     /// The shape's outline in a box of `size`, left to right.
     pub fn outline(&self, size: Size, density: &Density) -> Outline {
         self.outline_in(size, density, crate::alignment::LayoutDirection::Ltr)
     }
 
-    /// The shape's outline in a box of `size`, its start and end corners mirrored in a
-    /// right-to-left layout, as Compose's `RoundedCornerShape`.
+    /// The shape's outline in a box of `size`, as `createOutline`. A corner-based shape scales
+    /// its two start corners down together, and its two end corners, when they're more than
+    /// the shorter side, as Compose's `CornerBasedShape` (a negative corner panics, as Compose
+    /// throws); the relative ones mirror their corners right to left.
     pub fn outline_in(
         &self,
         size: Size,
@@ -153,20 +293,69 @@ impl Shape {
         direction: crate::alignment::LayoutDirection,
     ) -> Outline {
         let rect = Rect::new(0.0, 0.0, size.width, size.height);
+        let (corners, rounded, absolute) = match self {
+            Shape::Rectangle => return Outline::Rectangle(rect),
+            Shape::Custom(shape) => return shape.create_outline(size, direction, density),
+            Shape::Rounded(corners) => (corners, true, false),
+            Shape::Cut(corners) => (corners, false, false),
+            Shape::AbsoluteRounded(corners) => (corners, true, true),
+            Shape::AbsoluteCut(corners) => (corners, false, true),
+        };
+        let [mut top_start, mut top_end, mut bottom_end, mut bottom_start] =
+            corners.map(|corner| corner.to_px(size, density));
+        let shorter = size.width.min(size.height);
+        if top_start + bottom_start > shorter {
+            let scale = shorter / (top_start + bottom_start);
+            top_start *= scale;
+            bottom_start *= scale;
+        }
+        if top_end + bottom_end > shorter {
+            let scale = shorter / (top_end + bottom_end);
+            top_end *= scale;
+            bottom_end *= scale;
+        }
+        assert!(
+            top_start >= 0.0 && top_end >= 0.0 && bottom_end >= 0.0 && bottom_start >= 0.0,
+            "compose-ui: corner size in px can't be negative (top_start = {top_start}, top_end = \
+             {top_end}, bottom_end = {bottom_end}, bottom_start = {bottom_start})"
+        );
+        if top_start + top_end + bottom_end + bottom_start == 0.0 {
+            return Outline::Rectangle(rect);
+        }
+        // Top left, top right, bottom right, bottom left.
+        let ltr = absolute || direction == crate::alignment::LayoutDirection::Ltr;
+        let radii = if ltr {
+            [top_start, top_end, bottom_end, bottom_start]
+        } else {
+            [top_end, top_start, bottom_start, bottom_end]
+        };
+        if rounded { Outline::Rounded(rect, radii) } else { Outline::cut(rect, radii) }
+    }
+}
+
+impl PartialEq for Shape {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Shape::Rectangle, Shape::Rectangle) => true,
+            (Shape::Rounded(a), Shape::Rounded(b))
+            | (Shape::Cut(a), Shape::Cut(b))
+            | (Shape::AbsoluteRounded(a), Shape::AbsoluteRounded(b))
+            | (Shape::AbsoluteCut(a), Shape::AbsoluteCut(b)) => a == b,
+            (Shape::Custom(a), Shape::Custom(b)) => std::rc::Rc::ptr_eq(a, b) || (**a).same(&**b),
+            _ => false,
+        }
+    }
+}
+
+impl fmt::Debug for Shape {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Shape::Rectangle => Outline::Rectangle(rect),
-            Shape::Rounded(corners) => {
-                let mut radii = corners.map(|corner| corner.to_px(size, density));
-                // Top left, top right, bottom right, bottom left.
-                if direction == crate::alignment::LayoutDirection::Rtl {
-                    radii = [radii[1], radii[0], radii[3], radii[2]];
-                }
-                if radii.iter().all(|radius| *radius == 0.0) {
-                    Outline::Rectangle(rect)
-                } else {
-                    Outline::Rounded(rect, radii)
-                }
-            }
+            Shape::Rectangle => formatter.write_str("Rectangle"),
+            Shape::Rounded(corners) => write!(formatter, "Rounded({corners:?})"),
+            Shape::Cut(corners) => write!(formatter, "Cut({corners:?})"),
+            Shape::AbsoluteRounded(corners) => write!(formatter, "AbsoluteRounded({corners:?})"),
+            Shape::AbsoluteCut(corners) => write!(formatter, "AbsoluteCut({corners:?})"),
+            Shape::Custom(_) => formatter.write_str("Custom"),
         }
     }
 }
@@ -178,18 +367,72 @@ impl ComposeArg for Shape {
 }
 
 /// A shape's outline in pixels, as `Outline`.
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Debug)]
 pub enum Outline {
     Rectangle(Rect),
     /// Corner radii: top left, top right, bottom right, bottom left.
     Rounded(Rect, [f32; 4]),
+    /// Any path, as `Outline.Generic(path)`: its contents (shared, as the display list holds
+    /// them), moved by the offset.
+    Generic(std::sync::Arc<crate::path::PathData>, crate::unit::Offset),
 }
 
 impl Outline {
+    /// A path's outline, as `Outline.Generic(path)`: its contents now.
+    pub fn generic(path: &crate::path::Path) -> Outline {
+        Outline::Generic(path.data(), crate::unit::Offset::ZERO)
+    }
+
+    /// `rect` with its corners cut by `cuts` (top left, top right, bottom right, bottom left),
+    /// as `CutCornerShape`'s path.
+    fn cut(rect: Rect, cuts: [f32; 4]) -> Outline {
+        let (width, height) = (rect.right - rect.left, rect.bottom - rect.top);
+        let path = crate::path::Path::new();
+        path.move_to(0.0, cuts[0]);
+        path.line_to(cuts[0], 0.0);
+        path.line_to(width - cuts[1], 0.0);
+        path.line_to(width, cuts[1]);
+        path.line_to(width, height - cuts[2]);
+        path.line_to(width - cuts[2], height);
+        path.line_to(cuts[3], height);
+        path.line_to(0.0, height - cuts[3]);
+        path.close();
+        Outline::Generic(path.data(), crate::unit::Offset::new(rect.left, rect.top))
+    }
+
+    /// Its bounds, as `Outline.bounds`.
+    pub fn bounds(&self) -> Rect {
+        match self {
+            Outline::Rectangle(rect) | Outline::Rounded(rect, _) => *rect,
+            Outline::Generic(path, offset) => {
+                let bounds = path.bounds();
+                Rect::new(
+                    bounds.left + offset.x,
+                    bounds.top + offset.y,
+                    bounds.right + offset.x,
+                    bounds.bottom + offset.y,
+                )
+            }
+        }
+    }
+
+    /// The same outline moved by `by`.
+    pub fn translate(&self, by: crate::unit::Offset) -> Outline {
+        let moved = |rect: &Rect| {
+            Rect::new(rect.left + by.x, rect.top + by.y, rect.right + by.x, rect.bottom + by.y)
+        };
+        match self {
+            Outline::Rectangle(rect) => Outline::Rectangle(moved(rect)),
+            Outline::Rounded(rect, radii) => Outline::Rounded(moved(rect), *radii),
+            Outline::Generic(path, offset) => Outline::Generic(path.clone(), *offset + by),
+        }
+    }
+
     /// Whether `point` is inside the outline: for clipping hit tests.
     pub fn contains(&self, point: crate::unit::Offset) -> bool {
         match self {
             Outline::Rectangle(rect) => rect.contains(point),
+            Outline::Generic(path, offset) => path.contains(point - *offset),
             Outline::Rounded(rect, radii) => {
                 if !rect.contains(point) {
                     return false;
@@ -469,8 +712,9 @@ mod tests {
         assert_eq!(Color::UNSPECIFIED.or(Color::RED), Color::RED);
     }
 
+    /// Corners larger than the box scale down to fit, as Compose's `CornerBasedShape`.
     #[test]
-    fn rounded_corners_are_clamped_to_half_the_shorter_side() {
+    fn oversized_rounded_corners_scale_down_to_fit() {
         let shape = Shape::Rounded([CornerSize::Dp(Dp(100.0)); 4]);
         let outline = shape.outline(Size::new(40.0, 20.0), &Density::default());
         assert_eq!(outline, Outline::Rounded(Rect::new(0.0, 0.0, 40.0, 20.0), [10.0; 4]));

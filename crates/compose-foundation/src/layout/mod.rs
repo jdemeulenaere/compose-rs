@@ -593,6 +593,22 @@ pub fn Canvas(modifier: Modifier, on_draw: impl Fn(&mut compose_ui::DrawScope<'_
     Spacer(modifier.draw_behind(on_draw));
 }
 
+/// `Canvas` described to accessibility as `content_description`, as Compose's
+/// `Canvas(modifier, contentDescription, onDraw)`.
+#[allow(non_snake_case)]
+pub fn Canvas_with(
+    modifier: Modifier,
+    content_description: impl Into<compose_ui::SharedString>,
+    on_draw: impl Fn(&mut compose_ui::DrawScope<'_>) + 'static,
+) {
+    let content_description = content_description.into();
+    Spacer(
+        modifier
+            .draw_behind(on_draw)
+            .semantics(move |config| config.set_content_description(content_description.clone())),
+    );
+}
+
 /// A row: its children side by side, as Compose's `Row`.
 #[composable]
 pub fn Row(

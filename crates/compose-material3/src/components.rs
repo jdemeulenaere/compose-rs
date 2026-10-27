@@ -100,16 +100,16 @@ pub(crate) fn surface_modifier(
 ) -> Modifier {
     let modifier = modifier.shadow_with(
         shadow_elevation,
-        shape,
+        shape.clone(),
         false,
         DEFAULT_SHADOW_COLOR,
         DEFAULT_SHADOW_COLOR,
     );
     let modifier = match border {
-        Some(border) => modifier.border_with(border.width, border.color, shape),
+        Some(border) => modifier.border_stroke(border, shape.clone()),
         None => modifier,
     };
-    modifier.background_with(color, shape).clip(shape)
+    modifier.background_with(color, shape.clone()).clip(shape)
 }
 
 /// A themed container, as Compose's `Surface`: its shape and color (the surface color tinted
@@ -352,6 +352,7 @@ pub(crate) fn surface(
                         role: click.role,
                         indication: content_color.into(),
                         interaction_source: Some(click.interaction_source),
+                        ..ClickableOptions::DEFAULT
                     },
                     click.on_click,
                 );
@@ -656,9 +657,9 @@ impl TextFieldDefaults {
 
     /// The filled field's shape: extra small, rounded at the top only.
     pub fn shape() -> Shape {
-        let radius = match MaterialTheme::shapes().extra_small {
-            Shape::Rounded(corners) => corners[0],
-            Shape::Rectangle => compose_ui::CornerSize::Dp(Dp(0.0)),
+        let radius = match MaterialTheme::shapes().extra_small.corners() {
+            Some(corners) => corners[0],
+            None => compose_ui::CornerSize::Dp(Dp(0.0)),
         };
         Shape::Rounded([
             radius,

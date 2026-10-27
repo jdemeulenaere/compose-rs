@@ -68,7 +68,8 @@ impl NodeKinds {
     /// The kinds of `node`, which an element of a user-defined type made if `observed`: what
     /// it answers to, asked once.
     pub(crate) fn of(node: &mut dyn ModifierNode, observed: bool) -> NodeKinds {
-        let mut kinds = if observed { NodeKinds::OBSERVED } else { NodeKinds::NONE };
+        let mut kinds =
+            if observed || node.observes_reads() { NodeKinds::OBSERVED } else { NodeKinds::NONE };
         let mut add = |has: bool, kind: NodeKinds| {
             if has {
                 kinds |= kind;

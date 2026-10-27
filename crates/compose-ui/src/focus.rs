@@ -164,6 +164,7 @@ impl UiTree {
                 density,
                 view_configuration,
                 layout_direction: value.layout_direction,
+                waiting_parent: false,
             };
             target.on_focus_changed(focused, &mut context);
         }
@@ -210,6 +211,7 @@ impl UiTree {
                 density,
                 view_configuration,
                 layout_direction: value.layout_direction,
+                waiting_parent: false,
             };
             target.on_focus_tap(tap - origin, &mut context);
         }

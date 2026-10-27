@@ -50,6 +50,12 @@ pub struct ProgressBarRangeInfo {
     pub steps: u32,
 }
 
+impl ProgressBarRangeInfo {
+    /// An indeterminate progress, as `ProgressBarRangeInfo.Indeterminate`: 0 in an empty range.
+    pub const INDETERMINATE: ProgressBarRangeInfo =
+        ProgressBarRangeInfo { current: 0.0, range: (0.0, 0.0), steps: 0 };
+}
+
 /// A toggle's state, as `ToggleableState`.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum ToggleableState {

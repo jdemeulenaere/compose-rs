@@ -8,7 +8,7 @@ pub use crate::composer::{Composer, KeptArguments, current};
 pub use crate::derived::flush_derived_states;
 pub use crate::executor::{
     Delay, WithFrame, advance_clock, cancel_current_task, current_job, dispatch_frame, fire_timers,
-    has_frame_awaiters, has_ready_tasks, infinite_animation_policy, next_timer,
+    has_frame_awaiters, has_ready_tasks, infinite_animation_policy, launch, next_timer,
     next_timer_deadline, now_nanos, poll_now, run_ready, set_infinite_animation_policy,
     set_manual_clock, set_wake_handler,
 };

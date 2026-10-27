@@ -13,11 +13,11 @@ use compose_ui::*;
 
 /// The group of the node with key `key`.
 fn group(list: &FlatDisplayList, key: u64) -> FlatGroup {
-    *list
-        .groups
+    list.groups
         .iter()
         .find(|group| group.key == key)
         .unwrap_or_else(|| panic!("no group {key}\n{}", list.dump()))
+        .clone()
 }
 
 /// The groups' keys, in the order they start.
@@ -183,7 +183,7 @@ fn a_layer_after_a_drawing_is_part_of_its_nodes_content() {
     let before = host.display_list();
     // The node isn't a boundary: the frame draws the background, then the layer's group.
     assert_eq!(before.groups.len(), 1, "{}", before.dump());
-    let layer = before.groups[0];
+    let layer = before.groups[0].clone();
     assert_eq!(layer.layer.map(|layer| layer.alpha), Some(1.0));
     take_log();
     alpha.set(0.5);
@@ -459,7 +459,9 @@ fn shapes(list: &FlatDisplayList) -> Vec<(usize, usize, usize, usize, Option<Lay
     let mut shapes: Vec<_> = list
         .groups
         .iter()
-        .map(|group| (group.layer_start, group.start, group.end, group.layer_end, group.layer))
+        .map(|group| {
+            (group.layer_start, group.start, group.end, group.layer_end, group.layer.clone())
+        })
         .collect();
     shapes.sort_by_key(|shape| (shape.0, shape.1, std::cmp::Reverse(shape.2)));
     shapes

@@ -141,6 +141,8 @@ pub enum Key {
     Enter,
     NumPadEnter,
     Space,
+    /// The D-pad's center, as `Key.DirectionCenter`.
+    DirectionCenter,
     Tab,
     Backspace,
     Delete,
@@ -234,6 +236,9 @@ pub struct EventContext<'a> {
     pub(crate) density: crate::unit::Density,
     pub(crate) view_configuration: crate::view_configuration::ViewConfiguration,
     pub(crate) layout_direction: crate::alignment::LayoutDirection,
+    /// Whether something around the handling node (a scrollable) waits for a gesture past a
+    /// press, while handling a press, as Compose's `hasWaitingParent`.
+    pub(crate) waiting_parent: bool,
 }
 
 impl EventContext<'_> {
@@ -252,6 +257,13 @@ impl EventContext<'_> {
     /// right-to-left layout.
     pub fn layout_direction(&self) -> crate::alignment::LayoutDirection {
         self.layout_direction
+    }
+
+    /// Whether something around the handling node waits for a gesture past the press being
+    /// handled (a scrollable for its slop), as Compose's `hasWaitingParent`: a clickable then
+    /// delays showing the press by `TAP_INDICATION_DELAY`.
+    pub fn has_waiting_parent(&self) -> bool {
+        self.waiting_parent
     }
 
     /// Where the pointer is in the window, while handling a pointer event.

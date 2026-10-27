@@ -274,7 +274,7 @@ impl Default for Typography {
 }
 
 /// The theme's corner shapes, as Compose's `Shapes`.
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Debug)]
 pub struct Shapes {
     pub extra_small: Shape,
     pub small: Shape,

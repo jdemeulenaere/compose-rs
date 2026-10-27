@@ -592,7 +592,7 @@ pub fn NavigationDrawerItem(
     let row_modifier = modifier
         .size_in(SizeSpec::bounds(Dp::UNSPECIFIED, 56.dp(), Dp::UNSPECIFIED, Dp::UNSPECIFIED))
         .fill_max_width()
-        .background_with(container, pill)
+        .background_with(container, pill.clone())
         .clip(pill)
         .clickable_with(
             ClickableOptions {

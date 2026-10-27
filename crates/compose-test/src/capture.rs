@@ -161,15 +161,15 @@ impl CapturedImage {
         };
         let shape_bounds = bounds(check.shape_center, check.shape_size);
         let background_bounds = bounds(check.background_center, check.background_size);
-        let outline = |shape: Shape, bounds: Rect| {
+        let outline = |shape: &Shape, bounds: Rect| {
             shape.outline_in(
                 Size::new(bounds.width(), bounds.height()),
                 &check.density,
                 LayoutDirection::Ltr,
             )
         };
-        let shape_outline = outline(check.shape, shape_bounds);
-        let background_outline = outline(check.background_shape, background_bounds);
+        let shape_outline = outline(&check.shape, shape_bounds);
+        let background_outline = outline(&check.background_shape, background_bounds);
         let gap = check.anti_aliasing_gap;
         let inside = |outline: &compose_ui::Outline, bounds: Rect, point: Offset| {
             outline.contains(Offset::new(point.x - bounds.left, point.y - bounds.top))

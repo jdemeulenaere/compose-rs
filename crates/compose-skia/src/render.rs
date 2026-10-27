@@ -179,7 +179,7 @@ impl Walk<'_> {
         }
         let start = self.canvas.save_count();
         let outer_alpha = self.alpha;
-        if let Some(mut layer) = group.layer {
+        if let Some(mut layer) = group.layer.clone() {
             // One fill faded by its paint, with the optimization (D521), when it lies within the
             // bounds its offscreen buffer would have had (D648).
             if layer.compositing_strategy == CompositingStrategy::Auto
@@ -338,15 +338,21 @@ fn draw_op(
             spot,
             transparent_occluder,
         } => {
-            let mut path = skia_safe::PathBuilder::new();
-            match outline {
+            let path = match outline {
                 compose_ui::Outline::Rectangle(bounds) => {
+                    let mut path = skia_safe::PathBuilder::new();
                     path.add_rect(rect(bounds), None, None);
+                    path.detach()
                 }
                 compose_ui::Outline::Rounded(bounds, radii) => {
+                    let mut path = skia_safe::PathBuilder::new();
                     path.add_rrect(round_rect(bounds, radii), None, None);
+                    path.detach()
                 }
-            }
+                compose_ui::Outline::Generic(generic, offset) => {
+                    skia_path(generic).make_offset((offset.x, offset.y))
+                }
+            };
             // As Compose Desktop (Skiko's render node): the light in the window's pixels, the
             // occluder transparent for a faded layer.
             let flags = if *transparent_occluder {
@@ -356,7 +362,7 @@ fn draw_op(
             };
             skia_safe::utils::shadow_utils::draw_shadow(
                 canvas,
-                &path.detach(),
+                &path,
                 skia_safe::Point3::new(0.0, 0.0, *elevation),
                 skia_safe::Point3::new(light.0, light.1, light.2),
                 *light_radius,

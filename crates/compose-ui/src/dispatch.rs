@@ -168,14 +168,23 @@ impl UiTree {
             };
             self.update_hover(now, event, &mut actions, &mut requests);
         }
+        // For a press, whether something before each entry (around it) waits for a gesture past
+        // it, as Compose's `hasWaitingParent`.
+        let waiting = if event.kind == PointerEventType::Press {
+            self.waiting_before(&path, &event)
+        } else {
+            Vec::new()
+        };
         for pass in [PointerEventPass::Initial, PointerEventPass::Main, PointerEventPass::Final] {
             if pass == PointerEventPass::Main {
-                for entry in path.iter().rev() {
+                for (index, entry) in path.iter().enumerate().rev() {
+                    let waiting_parent = waiting.get(index).copied().unwrap_or(false);
                     self.deliver_pointer(
                         entry,
                         &mut event,
                         pass,
                         position,
+                        waiting_parent,
                         &mut actions,
                         &mut requests,
                     );
@@ -187,6 +196,7 @@ impl UiTree {
                         &mut event,
                         pass,
                         position,
+                        false,
                         &mut actions,
                         &mut requests,
                     );
@@ -214,14 +224,33 @@ impl UiTree {
         }
     }
 
-    /// Ends every pointer gesture in progress, as when the window loses the pointer.
+    /// For each entry of `path`, whether an entry before it (around it) waits for a gesture
+    /// past a press.
+    fn waiting_before(&mut self, path: &[HitEntry], event: &PointerEvent) -> Vec<bool> {
+        let mut waiting = Vec::with_capacity(path.len());
+        let mut any = false;
+        for entry in path {
+            waiting.push(any);
+            if !any
+                && let Some(value) = self.get_mut(entry.node)
+                && value.chain_version == entry.version
+                && let Some(handler) = value.chain[entry.index as usize].node.as_pointer_input()
+            {
+                any = handler.waits_for_gesture(event);
+            }
+        }
+        waiting
+    }
+
     /// Sends one pointer event, in a pass, to one entry of a hit path.
+    #[allow(clippy::too_many_arguments)]
     fn deliver_pointer(
         &mut self,
         entry: &HitEntry,
         event: &mut PointerEvent,
         pass: PointerEventPass,
         position: Offset,
+        waiting_parent: bool,
         actions: &mut Vec<Action>,
         requests: &mut Requests,
     ) {
@@ -246,6 +275,7 @@ impl UiTree {
             density,
             view_configuration,
             layout_direction: value.layout_direction,
+            waiting_parent,
         };
         if let Some(handler) = value.chain[entry.index as usize].node.as_pointer_input() {
             handler.on_pointer_event(event, pass, bounds, &mut context);
@@ -299,6 +329,7 @@ impl UiTree {
                     &mut events[index],
                     pass,
                     position,
+                    false,
                     actions,
                     requests,
                 );
@@ -344,6 +375,7 @@ impl UiTree {
         actions
     }
 
+    /// Ends every pointer gesture in progress, as when the window loses the pointer.
     pub fn cancel_pointers(&mut self) {
         for (_, path) in std::mem::take(&mut self.captures) {
             for entry in path {
@@ -443,6 +475,7 @@ impl UiTree {
                 density,
                 view_configuration,
                 layout_direction: value.layout_direction,
+                waiting_parent: false,
             };
             if let Some(handler) = value.chain[index].node.as_key_input()
                 && handler.on_key_event(&event, &mut context)
@@ -567,6 +600,7 @@ impl UiTree {
                 density,
                 view_configuration,
                 layout_direction: value.layout_direction,
+                waiting_parent: false,
             };
             if let Some(handler) = value.chain[index].node.as_key_input()
                 && send(handler, &mut context)

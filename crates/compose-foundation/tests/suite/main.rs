@@ -3,6 +3,8 @@
 
 extern crate compose_runtime as compose;
 
+mod clickable_parity;
+mod combined_clickable_parity;
 mod draw_modifiers;
 mod drawing_api;
 mod effects;
@@ -13,6 +15,9 @@ mod foundation;
 mod grid;
 mod hover;
 mod image;
+mod indication;
+mod interaction_helpers;
+mod interaction_source;
 mod intrinsics;
 mod lazy;
 mod lazy_api;
@@ -28,6 +33,7 @@ mod pointer_input;
 mod prefetch;
 mod prefetch_parity;
 mod prefetch_pausable;
+mod progress_canvas_parity;
 mod review_api_d;
 mod review_d470;
 mod review_d475;
@@ -76,9 +82,11 @@ mod saveable_state_holder;
 mod scroll;
 mod scrollbar;
 mod selection;
+mod selection_focus_hover_parity;
 mod semantics_actions;
 mod semantics_properties;
 mod shadow;
+mod shape_parity;
 mod text_input;
 mod text_reuse;
 mod window;

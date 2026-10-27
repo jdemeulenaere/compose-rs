@@ -845,6 +845,7 @@ class ComposeRsView @JvmOverloads constructor(
         KeyEvent.KEYCODE_MOVE_END -> 12
         KeyEvent.KEYCODE_PAGE_UP -> 13
         KeyEvent.KEYCODE_PAGE_DOWN -> 14
+        KeyEvent.KEYCODE_DPAD_CENTER -> 15
         else -> 0
     }
 

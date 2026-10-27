@@ -1196,6 +1196,12 @@ impl UiTree {
             return;
         }
         value.chain_version = value.chain_version.wrapping_add(1);
+        // A hover stays tracked, as Compose's hit path keeps the reused node: its modifier nodes forget
+        // theirs (`on_reset`), and the mouse resting there doesn't enter it again until it moves.
+        let version = value.chain_version;
+        for entry in self.hovered.iter_mut().filter(|entry| entry.node == node) {
+            entry.version = version;
+        }
         if self.focused() == Some(node) {
             self.focus = None;
             self.focus_listeners_dirty = true;

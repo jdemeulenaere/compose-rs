@@ -649,7 +649,7 @@ pub fn Author(name: SharedString, online: bool) {
 
 - **One method per Compose name.** Overloads that differ by an argument's type take `impl Into<…>`, with a tuple standing for several arguments: `padding(8.dp())`, `padding((16.dp(), 8.dp()))` (horizontal, vertical), `padding((start, top, end, bottom))`, `size(48.dp())`, `size((48.dp(), 24.dp()))`.
 - **Optional parameters**: the short method takes Compose's defaults for them, and `<name>_with` takes all of them, in Compose's order: `fill_max_width()` and `fill_max_width_with(0.5)`, `background(color)` and `background_with(color, shape)`, `border(width, color)` and `border_with(width, color, shape)`, `shadow(elevation)` and `shadow_with(…)`.
-- **The clickable family** (`clickable`, `toggleable`, `selectable`, `combined_clickable`) takes its optional parameters (`enabled`, `role`, `indication`, `interaction_source`) as a `ClickableOptions` struct, built by struct update from `ClickableOptions::DEFAULT`.
+- **The clickable family** (`clickable`, `toggleable`, `tri_state_toggleable`, `selectable`, `combined_clickable`) takes its optional parameters (`enabled`, `role`, `on_click_label`, `indication`, `interaction_source`, and `combined_clickable`'s `on_long_click_label` and `haptic_feedback_enabled`) as a `ClickableOptions` struct, built by struct update from `ClickableOptions::DEFAULT`; its `indication` defaults to `Indication::LOCAL` (`LocalIndication.current`), and `Indication::NONE` is Kotlin's `indication = null`.
 
 ```kotlin
 Modifier.padding(horizontal = 16.dp, vertical = 8.dp)

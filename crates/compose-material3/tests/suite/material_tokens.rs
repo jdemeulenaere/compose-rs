@@ -103,8 +103,8 @@ fn the_buttons_and_tracks_colors_are_material_3_1_4s() {
         (outlined.container_color, outlined.content_color, outlined.disabled_content_color),
         (Color::TRANSPARENT, scheme.on_surface_variant, dim_variant)
     );
-    assert_eq!((border.width, border.color), (1.dp(), scheme.outline_variant));
-    assert_eq!(disabled_border.color, scheme.outline_variant.with_alpha(0.1));
+    assert_eq!((border.width, border.brush), (1.dp(), scheme.outline_variant.into()));
+    assert_eq!(disabled_border.brush, scheme.outline_variant.with_alpha(0.1).into());
     assert_eq!(
         (filled.disabled_container_color, filled.disabled_content_color),
         (scheme.on_surface.with_alpha(0.1), dim_variant)

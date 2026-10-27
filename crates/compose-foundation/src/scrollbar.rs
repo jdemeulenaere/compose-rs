@@ -96,7 +96,7 @@ pub fn remember_lazy_list_scrollbar_adapter(
 }
 
 /// How scrollbars look, as Compose Desktop's `ScrollbarStyle`.
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Debug)]
 pub struct ScrollbarStyle {
     /// The thumb's shortest length.
     pub minimal_height: Dp,
@@ -195,7 +195,7 @@ impl ModifierNodeElement for ScrollbarElement {
             adapter: self.adapter.clone(),
             vertical: self.vertical,
             reverse: self.reverse,
-            style: self.style,
+            style: self.style.clone(),
             drag: None,
             density: compose_ui::Density::default(),
             hovered: false,
@@ -206,7 +206,7 @@ impl ModifierNodeElement for ScrollbarElement {
         node.adapter = self.adapter.clone();
         node.vertical = self.vertical;
         node.reverse = self.reverse;
-        node.style = self.style;
+        node.style = self.style.clone();
     }
     fn same(&self, other: &Self) -> bool {
         Rc::ptr_eq(&other.adapter, &self.adapter)
@@ -309,11 +309,11 @@ impl DrawModifierNode for ScrollbarNode {
         let active = self.drag.is_some() || self.hovered;
         let color = if active { self.style.hover_color } else { self.style.unhover_color };
         let size = compose_ui::Size::new(rect.width(), rect.height());
-        let outline =
-            match self.style.shape.outline_in(size, &scope.density(), scope.layout_direction()) {
-                compose_ui::Outline::Rounded(_, radii) => compose_ui::Outline::Rounded(rect, radii),
-                compose_ui::Outline::Rectangle(_) => compose_ui::Outline::Rectangle(rect),
-            };
+        let outline = self
+            .style
+            .shape
+            .outline_in(size, &scope.density(), scope.layout_direction())
+            .translate(compose_ui::Offset::new(rect.left, rect.top));
         scope.draw_outline(outline, compose_ui::Paint::fill(color));
     }
 }

@@ -335,11 +335,12 @@ fn decorated_field(
                     let shape = OutlinedTextFieldDefaults::shape();
                     let (label_width, label_start) = (label_width.clone(), label_start.clone());
                     let outline = outline.clone();
+                    let drawn = shape.clone();
                     container.background_with(container_color, shape).draw_behind(move |scope| {
                         draw_notched_outline(
                             scope,
                             &outline,
-                            shape,
+                            &drawn,
                             thickness,
                             indicator,
                             label_start.get(),
@@ -893,7 +894,7 @@ impl MeasurePolicy for SupportingLayout {
 fn draw_notched_outline(
     scope: &mut compose_ui::DrawScope<'_>,
     path: &Path,
-    shape: Shape,
+    shape: &Shape,
     thickness: Dp,
     color: Color,
     label_start: f32,
@@ -905,7 +906,7 @@ fn draw_notched_outline(
     let half = stroke / 2.0;
     let radius = match shape.outline(size, &density) {
         compose_ui::Outline::Rounded(_, radii) => radii[0],
-        compose_ui::Outline::Rectangle(_) => 0.0,
+        compose_ui::Outline::Rectangle(_) | compose_ui::Outline::Generic(..) => 0.0,
     };
     let radius = (radius - half).max(0.0);
     let (left, top, right, bottom) = (half, half, size.width - half, size.height - half);

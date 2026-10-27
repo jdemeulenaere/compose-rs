@@ -694,8 +694,9 @@ impl Job {
     }
 }
 
-/// Starts `future` as a task of no scope (an effect's), as `launch` on a scope of its own.
-pub(crate) fn launch(future: impl Future<Output = ()> + 'static) -> Job {
+/// Starts `future` as a task of no scope (an effect's, a modifier node's), as `launch` on a scope of
+/// its own, without the arena object a [`CoroutineScope`] is: cancel it through its [`Job`].
+pub fn launch(future: impl Future<Output = ()> + 'static) -> Job {
     Job { key: spawn(Box::pin(future)) }
 }
 

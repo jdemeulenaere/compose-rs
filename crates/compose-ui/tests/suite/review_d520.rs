@@ -204,7 +204,8 @@ fn review_alpha_clips_and_identity_transforms_add_no_layer_as_composes() {
         });
     });
     let list = host.display_list();
-    let layers: Vec<LayerProperties> = list.groups.iter().filter_map(|group| group.layer).collect();
+    let layers: Vec<LayerProperties> =
+        list.groups.iter().filter_map(|group| group.layer.clone()).collect();
     assert_eq!(layers.len(), 1, "only alpha(0.5) is a layer: {layers:?}");
     assert!(layers[0].clip, "alpha's layer clips to its bounds");
 }

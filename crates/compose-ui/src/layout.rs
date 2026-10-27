@@ -554,10 +554,12 @@ pub fn Layout(
 /// `Layout`'s body, for composables that build their node by hand. The node is reusable, as
 /// Compose's `Layout` (`ReusableComposeNode`): content reused in its place keeps it.
 pub fn emit_layout_node(
-    modifier: Modifier,
+    mut modifier: Modifier,
     measure_policy: Rc<dyn MeasurePolicy>,
     content: impl FnOnce(),
 ) {
+    // The clickables showing `LOCAL_INDICATION` show this node's (D1056).
+    crate::clickable::resolve_local_indications(&mut modifier);
     let composer = current();
     let node = composer.start_reusable_node(compose_runtime::key_of("compose_ui::Layout"), || {
         crate::tree::LayoutNode::new(measure_policy.clone())

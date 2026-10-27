@@ -1500,12 +1500,12 @@ fn a_clip_is_a_layer_clipping_to_its_outline() {
 /// HWUI draws the shadow), clipping if asked; no drawing of it in any record.
 #[test]
 fn a_shadow_is_its_layers_elevation_outline_and_colors() {
-    let shape = compose_foundation::RoundedCornerShape(5.dp());
+    let shape = || compose_foundation::RoundedCornerShape(5.dp());
     let mut serialized = Serialized::new(move || {
         Leaf(
             Modifier
                 .size(30.dp())
-                .shadow_with(6.dp(), shape, false, Color::RED, Color::BLUE)
+                .shadow_with(6.dp(), shape(), false, Color::RED, Color::BLUE)
                 .then(painted(|| Color::WHITE)),
         );
     });
@@ -1523,13 +1523,19 @@ fn a_shadow_is_its_layers_elevation_outline_and_colors() {
     assert!(!all_operations(&items).contains(&tag::DRAW_SHADOW), "{items:?}");
     // Clipping too: the same outline, clipped to.
     let mut serialized = Serialized::new(move || {
-        Leaf(Modifier.size(30.dp()).shadow_with(6.dp(), shape, true, Color::BLACK, Color::BLACK));
+        Leaf(Modifier.size(30.dp()).shadow_with(6.dp(), shape(), true, Color::BLACK, Color::BLACK));
     });
     let (layers, _) = read(&serialized.frame());
     assert!(layers[0].clip && layers[0].elevation == 6.0, "{layers:?}");
     // With nothing in it, its shadow is still drawn, as a Compose layer's.
     let mut serialized = Serialized::new(move || {
-        Leaf(Modifier.size(30.dp()).shadow_with(6.dp(), shape, false, Color::BLACK, Color::BLACK));
+        Leaf(Modifier.size(30.dp()).shadow_with(
+            6.dp(),
+            shape(),
+            false,
+            Color::BLACK,
+            Color::BLACK,
+        ));
     });
     let (layers, _) = read(&serialized.frame());
     assert!(!layers[0].clip && layers[0].elevation == 6.0, "{layers:?}");
@@ -1643,8 +1649,8 @@ fn a_layer_after_a_drawing_is_a_group_of_its_own() {
         Leaf(
             Modifier
                 .size(40.dp())
-                .background_with(Color::GREEN, shape)
-                .clip(shape)
+                .background_with(Color::GREEN, shape.clone())
+                .clip(shape.clone())
                 .then(painted(|| Color::RED)),
         );
     });
@@ -1666,6 +1672,100 @@ fn a_layer_after_a_drawing_is_a_group_of_its_own() {
             },
         ]
     );
+}
+
+/// A layer's path outline in its `LAYERS` entry: the path's id and its offset, after the
+/// outline's bounds.
+fn path_outline(bytes: &[u8], layer: usize) -> (u32, (f32, f32)) {
+    use layer_entry as e;
+    let entry = 5 + layer * LAYER_ENTRY_BYTES + 8;
+    assert_eq!(bytes[entry + e::OUTLINE_KIND], outline_kind::PATH);
+    let at = entry + e::OUTLINE_RADII;
+    (u32_at(bytes, at), (f32_at(bytes, at + 4), f32_at(bytes, at + 8)))
+}
+
+/// The first point of path `id` as its pending definition gives it (its contents: a fill type,
+/// no steps, its commands, the first a move).
+fn first_point_of_path(resources: &mut Resources, id: u32) -> (f32, f32) {
+    let mut pending = Writer::default();
+    resources.write_pending(&mut pending);
+    let bytes = &pending.bytes;
+    let mut definition = vec![tag::DEFINE_PATH];
+    definition.extend_from_slice(&id.to_le_bytes());
+    let at = bytes
+        .windows(5)
+        .position(|window| window == definition.as_slice())
+        .unwrap_or_else(|| panic!("path {id} defined"));
+    assert_eq!(u32_at(bytes, at + 6), 0, "no steps");
+    assert_eq!(bytes[at + 14], compose_android::serialize::command::MOVE_TO);
+    (f32_at(bytes, at + 15), f32_at(bytes, at + 19))
+}
+
+/// A layer clipping to a path (a cut corner shape) has its path as its node's outline, as
+/// Compose's layer (`setPathOutline`): a `PATH` outline in its `LAYERS` entry, the path defined
+/// before it, its record holding no clip, so the outline changes with the layer alone (D1055).
+/// A cut, then a rectangle, then a cut whose corners animate: each frame's entry is its outline,
+/// the content's record and version the same throughout.
+#[test]
+fn a_layer_clipping_to_a_path_has_a_path_outline() {
+    let corner = mutable_state_of(Some(6.0f32));
+    let handle = corner.handle();
+    let mut serialized = Serialized::new(move || {
+        let shape = match handle.get() {
+            Some(corner) => compose_foundation::CutCornerShape(corner.dp()),
+            None => RECTANGLE_SHAPE,
+        };
+        Leaf(Modifier.size(40.dp()).clip(shape).then(painted(|| Color::RED)));
+    });
+    let density = serialized.host.with_tree(|tree| tree.density().density);
+    let size = 40.0 * density;
+    let content = vec![Item::Operation(tag::DRAW_RECT)];
+    // The group's version, its content as drawn.
+    let version_of = |items: &[Item]| match items {
+        [Item::Group { content: drawn, version, .. }] => {
+            assert_eq!(drawn, &content, "no clip in the record");
+            *version
+        }
+        other => panic!("one group: {other:?}"),
+    };
+    let bytes = serialized.frame();
+    let (layers, items) = read(&bytes);
+    assert_eq!(layers.len(), 1);
+    assert!(layers[0].clip);
+    assert_eq!(
+        layers[0].outline.map(|outline| (outline.0, outline.1)),
+        Some((outline_kind::PATH, (0.0, 0.0, size, size)))
+    );
+    let (first, offset) = path_outline(&bytes, 0);
+    assert_eq!(offset, (0.0, 0.0));
+    assert_eq!(first_point_of_path(&mut serialized.resources, first), (0.0, 6.0 * density));
+    let version = version_of(&items);
+    // A rectangle: the node's outline, its record as it was.
+    corner.set(None);
+    let bytes = serialized.frame();
+    let (layers, items) = read(&bytes);
+    assert!(layers[0].clip);
+    assert_eq!(
+        layers[0].outline,
+        Some((outline_kind::RECTANGLE, (0.0, 0.0, size, size), [0.0; 4]))
+    );
+    assert_eq!(version_of(&items), version, "the content didn't change");
+    // A cut again, its corners growing: new contents each frame, a new path.
+    let mut ids = vec![first];
+    for corner_size in [2.0f32, 4.0, 8.0] {
+        corner.set(Some(corner_size));
+        let bytes = serialized.frame();
+        let (layers, items) = read(&bytes);
+        assert!(layers[0].clip);
+        let (id, _) = path_outline(&bytes, 0);
+        assert!(!ids.contains(&id), "new contents, a new path");
+        ids.push(id);
+        assert_eq!(
+            first_point_of_path(&mut serialized.resources, id),
+            (0.0, corner_size * density)
+        );
+        assert_eq!(version_of(&items), version, "the content didn't change");
+    }
 }
 
 /// An inner layer keeps its drawing, as Compose's layer does, while what draws its node draws
@@ -1720,6 +1820,7 @@ fn the_kotlin_constants_are_rusts() {
         ("COMPOSITING_OFFSCREEN", compositing::OFFSCREEN as u64),
         ("COMPOSITING_MODULATE_ALPHA", compositing::MODULATE_ALPHA as u64),
         ("OUTLINE_NONE", outline_kind::NONE as u64),
+        ("OUTLINE_PATH", outline_kind::PATH as u64),
         ("ENTRY_ALPHA", e::ALPHA as u64),
         ("ENTRY_PIVOT", e::PIVOT as u64),
         ("ENTRY_SCALE", e::SCALE as u64),

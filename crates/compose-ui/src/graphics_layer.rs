@@ -56,7 +56,7 @@ pub enum CompositingStrategy {
 pub const DEFAULT_SHADOW_COLOR: Color = Color::BLACK;
 
 /// The properties a graphics layer applies, as Compose's `GraphicsLayerScope`.
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Debug)]
 pub struct GraphicsLayerScope {
     pub alpha: f32,
     pub scale_x: f32,
@@ -110,7 +110,7 @@ impl Default for GraphicsLayerScope {
 
 /// A shadow's layer, as Compose's `ShadowGraphicsLayerElement`: its elevation in dp, made pixels
 /// at the layer's density.
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Debug)]
 struct ShadowSpec {
     elevation: Dp,
     shape: Shape,
@@ -144,7 +144,7 @@ impl GraphicsLayerNode {
     /// the caller observes).
     pub(crate) fn scope(&self, density: Density, size: Size) -> GraphicsLayerScope {
         match &self.layer {
-            Layer::Fixed(layer) => GraphicsLayerScope { size, density, ..*layer },
+            Layer::Fixed(layer) => GraphicsLayerScope { size, density, ..layer.clone() },
             Layer::Block(block) => {
                 let mut layer = GraphicsLayerScope { size, density, ..Default::default() };
                 block(&mut layer);
@@ -154,7 +154,7 @@ impl GraphicsLayerNode {
                 shadow_elevation: density.to_px(shadow.elevation),
                 ambient_shadow_color: shadow.ambient_color,
                 spot_shadow_color: shadow.spot_color,
-                shape: shadow.shape,
+                shape: shadow.shape.clone(),
                 clip: shadow.clip,
                 size,
                 density,
@@ -179,7 +179,7 @@ impl GraphicsLayerNode {
 /// A graphics layer's properties as its group carries them
 /// ([`DrawGroup::layer`](crate::platform::DrawGroup)), as a render node's: in its group's
 /// coordinates.
-#[derive(Clone, Copy, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Debug)]
 pub struct LayerProperties {
     /// In 0..=1.
     pub alpha: f32,
@@ -221,12 +221,8 @@ impl LayerProperties {
         );
         let bounds = Rect::new(origin.x, origin.y, origin.x + size.width, origin.y + size.height);
         let shadow_elevation = layer.shadow_elevation.max(0.0);
-        let outline = (layer.clip || shadow_elevation > 0.0).then(|| {
-            match layer.shape.outline_in(size, &layer.density, direction) {
-                Outline::Rectangle(rect) => Outline::Rectangle(moved(rect, origin)),
-                Outline::Rounded(rect, radii) => Outline::Rounded(moved(rect, origin), radii),
-            }
-        });
+        let outline = (layer.clip || shadow_elevation > 0.0)
+            .then(|| layer.shape.outline_in(size, &layer.density, direction).translate(origin));
         LayerProperties {
             alpha: layer.alpha.clamp(0.0, 1.0),
             pivot: pivot + origin,
@@ -299,7 +295,7 @@ impl LayerProperties {
             translation: self.translation,
         });
         let px = |dp: f32| dp * self.density;
-        let shadow = self.outline.filter(|_| shadow).map(|outline| DrawOp::DrawShadow {
+        let shadow = self.outline.clone().filter(|_| shadow).map(|outline| DrawOp::DrawShadow {
             outline,
             elevation: self.shadow_elevation,
             light: (0.0, -px(300.0), px(600.0)),
@@ -310,9 +306,10 @@ impl LayerProperties {
             spot: faded(self.spot_shadow_color, 0.19 * self.alpha),
             transparent_occluder: self.alpha < 1.0,
         });
-        let clip = self.outline.filter(|_| self.clip).map(|outline| match outline {
+        let clip = self.outline.clone().filter(|_| self.clip).map(|outline| match outline {
             Outline::Rectangle(rect) => DrawOp::ClipRect(rect),
             Outline::Rounded(rect, radii) => DrawOp::ClipRoundRect(rect, radii),
+            Outline::Generic(path, offset) => DrawOp::ClipPath { path, offset },
         });
         let alpha = self
             .offscreen()
@@ -329,10 +326,6 @@ impl LayerProperties {
 /// `color` with its alpha multiplied by `alpha`.
 fn faded(color: Color, alpha: f32) -> Color {
     color.with_alpha(color.alpha() as f32 / 255.0 * alpha)
-}
-
-fn moved(rect: Rect, by: Offset) -> Rect {
-    Rect::new(rect.left + by.x, rect.top + by.y, rect.right + by.x, rect.bottom + by.y)
 }
 
 impl ModifierNodeElement for GraphicsLayerElement {

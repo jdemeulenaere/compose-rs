@@ -2672,6 +2672,12 @@ impl ModifierNode for LazyScrollNode {
 }
 
 impl PointerInputModifierNode for LazyScrollNode {
+    /// Scrolling by drags, it waits for a touch's past a press: a clickable inside delays its press
+    /// (not a mouse's, as Compose's scrollables).
+    fn waits_for_gesture(&self, press: &PointerEvent) -> bool {
+        self.enabled && press.pointer_type != compose_ui::PointerType::Mouse
+    }
+
     fn on_pointer_event(
         &mut self,
         event: &mut PointerEvent,

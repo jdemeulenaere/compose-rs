@@ -1125,6 +1125,7 @@ pub extern "system" fn Java_rs_compose_android_ComposeRsNative_key(
         12 => Key::MoveEnd,
         13 => Key::PageUp,
         14 => Key::PageDown,
+        15 => Key::DirectionCenter,
         _ => match character {
             Some(c) => Key::Character(c),
             None => return false,

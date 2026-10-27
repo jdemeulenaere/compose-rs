@@ -87,7 +87,7 @@ pub mod tag {
 }
 
 /// A path command's kind, as `Replayer.kt` reads it.
-mod command {
+pub mod command {
     pub const MOVE_TO: u8 = 0;
     pub const LINE_TO: u8 = 1;
     pub const QUAD_TO: u8 = 2;
@@ -236,12 +236,18 @@ impl Writer {
         }
         self.f32(alpha.clamp(0.0, 1.0));
     }
-    /// Kind (0 rectangle, 1 rounded), bounds, radii.
+    /// Kind (0 rectangle, 1 rounded), bounds, radii. A path's outline is its bounds' rectangle
+    /// (the replayer skips flattened shadows, which a render node draws).
     fn outline(&mut self, outline: &Outline) {
         match outline {
             Outline::Rectangle(rect) => {
                 self.u8(0);
                 self.rect(rect);
+                self.radii(&[0.0; 4]);
+            }
+            Outline::Generic(..) => {
+                self.u8(0);
+                self.rect(&outline.bounds());
                 self.radii(&[0.0; 4]);
             }
             Outline::Rounded(rect, radii) => {
@@ -902,6 +908,10 @@ pub mod outline_kind {
     pub const NONE: u8 = 0;
     pub const RECTANGLE: u8 = 1;
     pub const ROUNDED: u8 = 2;
+    /// A path (`Outline::Generic`): its bounds, then in the radii's place its id (defined
+    /// before the `LAYERS` section, in the resource changes), its offset, and the low bits of
+    /// its definition's serial (an id defined again in place, D532, changes the entry).
+    pub const PATH: u8 = 3;
 }
 
 /// A `LAYERS` entry's compositing byte, as `Replayer.kt` reads it.
@@ -940,7 +950,7 @@ pub fn write_display_list(
     cache.copied_ahead = 0;
     cache.written = 0;
     cache.unchanged = 0;
-    write_layers(&list.groups, cache, out);
+    write_layers(&list.groups, cache, resources, out);
     let mut serializer =
         Serializer { groups: &list.kept, folds: Vec::new(), resources, cache, out, ahead: false };
     serializer.write_groups_and_kept(&list.groups);
@@ -976,7 +986,7 @@ pub fn write_groups_ahead(
     cache.copied_ahead = 0;
     cache.written = 0;
     cache.unchanged = 0;
-    write_layers(groups, cache, out);
+    write_layers(groups, cache, resources, out);
     cache.ahead.push(Vec::new());
     let mut serializer =
         Serializer { groups, folds: Vec::new(), resources, cache, out, ahead: true };
@@ -995,7 +1005,12 @@ pub fn write_groups_ahead(
 
 /// The `LAYERS` section: every group's layer, if one has one, each after the ones nested in it
 /// (as drawing closes them).
-fn write_layers(groups: &[DrawGroup], cache: &mut GroupCache, out: &mut Writer) {
+fn write_layers(
+    groups: &[DrawGroup],
+    cache: &mut GroupCache,
+    resources: &mut Resources,
+    out: &mut Writer,
+) {
     let layered = |group: &DrawGroup| !group.empty && group.layer.is_some();
     let count = groups.iter().filter(|group| layered(group)).count();
     if count == 0 {
@@ -1010,7 +1025,7 @@ fn write_layers(groups: &[DrawGroup], cache: &mut GroupCache, out: &mut Writer) 
             && (index == groups.len() || last + groups[last].descendants < index)
         {
             open.pop();
-            write_layer(groups, last, cache, out);
+            write_layer(groups, last, cache, resources, out);
         }
         if groups.get(index).is_some_and(layered) {
             open.push(index);
@@ -1020,9 +1035,15 @@ fn write_layers(groups: &[DrawGroup], cache: &mut GroupCache, out: &mut Writer) 
 }
 
 /// The `LAYERS` entry of the group at `index` of `groups`.
-fn write_layer(groups: &[DrawGroup], index: usize, cache: &GroupCache, out: &mut Writer) {
+fn write_layer(
+    groups: &[DrawGroup],
+    index: usize,
+    cache: &GroupCache,
+    resources: &mut Resources,
+    out: &mut Writer,
+) {
     let group = &groups[index];
-    let layer = group.layer.expect("a layer");
+    let layer = group.layer.as_ref().expect("a layer");
     out.u32(group.key as u32);
     out.u32((group.key >> 32) as u32);
     out.f32(layer.alpha);
@@ -1033,7 +1054,7 @@ fn write_layer(groups: &[DrawGroup], index: usize, cache: &GroupCache, out: &mut
     out.offset(layer.translation);
     let start = out.bytes.len();
     out.u8(u8::from(layer.clip && layer.outline.is_some()));
-    match layer.outline {
+    match &layer.outline {
         None => {
             out.u8(outline_kind::NONE);
             out.rect(&Rect::new(0.0, 0.0, 0.0, 0.0));
@@ -1041,13 +1062,22 @@ fn write_layer(groups: &[DrawGroup], index: usize, cache: &GroupCache, out: &mut
         }
         Some(Outline::Rectangle(rect)) => {
             out.u8(outline_kind::RECTANGLE);
-            out.rect(&rect);
+            out.rect(rect);
             out.radii(&[0.0; 4]);
         }
         Some(Outline::Rounded(rect, radii)) => {
             out.u8(outline_kind::ROUNDED);
-            out.rect(&rect);
-            out.radii(&radii);
+            out.rect(rect);
+            out.radii(radii);
+        }
+        // The node's outline is the path, as Compose's layer's `setPathOutline` (D1055).
+        Some(outline @ Outline::Generic(path, offset)) => {
+            let id = resources.path_id(path);
+            out.u8(outline_kind::PATH);
+            out.rect(&outline.bounds());
+            out.u32(id);
+            out.offset(*offset);
+            out.u32(resources.defined_at.get(&id).copied().unwrap_or(0) as u32);
         }
     }
     out.f32(layer.shadow_elevation);
@@ -1066,7 +1096,7 @@ fn write_layer(groups: &[DrawGroup], index: usize, cache: &GroupCache, out: &mut
 /// buffer, but for the promoted layer's resampling under the node's transform (D521, D648). Read from its cached record while its version stays.
 fn compositing_of(groups: &[DrawGroup], index: usize, cache: &GroupCache) -> u8 {
     let group = &groups[index];
-    let Some(layer) = group.layer else { return compositing::AUTO };
+    let Some(layer) = &group.layer else { return compositing::AUTO };
     match layer.compositing_strategy {
         CompositingStrategy::Offscreen => return compositing::OFFSCREEN,
         CompositingStrategy::ModulateAlpha => return compositing::MODULATE_ALPHA,

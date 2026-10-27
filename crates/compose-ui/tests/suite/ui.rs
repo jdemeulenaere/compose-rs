@@ -190,7 +190,7 @@ fn repaint_boundaries_are_groups_of_their_own_operations() {
     assert_eq!(ops(&list.groups[0]), "rect 5,5 10x10 #FFFF0000\n");
     assert!(matches!(list.ops[list.groups[0].start - 1], DrawOp::Translate(_)));
     // The layer's: its content, its alpha a property applied just outside it.
-    let layer = list.groups[1];
+    let layer = list.groups[1].clone();
     assert_eq!(ops(&layer), "rect 0,0 10x10 #FF0000FF\n");
     assert_eq!(layer.layer.map(|layer| layer.alpha), Some(0.5));
     assert_eq!(
@@ -248,8 +248,10 @@ fn a_click_is_a_press_released_inside() {
     });
     click(&mut host, 10.0, 10.0);
     assert_eq!(clicks.get(), 1);
-    // Released outside: cancelled.
+    // Moved outside and released there: cancelled by the move, as Compose's (a release alone
+    // isn't checked against the bounds).
     host.send_pointer(PointerEvent::press(Offset::new(10.0, 10.0)));
+    host.send_pointer(PointerEvent::moved(Offset::new(80.0, 10.0), true));
     host.send_pointer(PointerEvent::release(Offset::new(80.0, 10.0)));
     assert_eq!(clicks.get(), 1);
     // Moved out and back: cancelled, as Compose's tap detection.
@@ -278,8 +280,10 @@ fn the_innermost_clickable_takes_the_click_and_the_topmost_sibling_is_hit() {
     assert_eq!(take_log(), ["inner", "top", "outer"]);
 }
 
+/// A disabled clickable still takes its presses, so the clickable around it doesn't click.
+// Compose: compose/foundation/foundation/src/androidDeviceTest/kotlin/androidx/compose/foundation/ClickableTest.kt, click_consumedWhenDisabled
 #[test]
-fn a_disabled_clickable_ignores_clicks_and_its_parent_gets_them() {
+fn a_disabled_clickable_ignores_clicks_and_keeps_them_from_its_parent() {
     let mut host = host(|| {
         Stack!(modifier = Modifier.clickable(|| log("parent")), {
             Leaf(Modifier.size(20.dp()).clickable_with(
@@ -289,7 +293,7 @@ fn a_disabled_clickable_ignores_clicks_and_its_parent_gets_them() {
         });
     });
     click(&mut host, 5.0, 5.0);
-    assert_eq!(take_log(), ["parent"]);
+    assert!(take_log().is_empty());
 }
 
 #[test]

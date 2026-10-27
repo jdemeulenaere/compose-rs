@@ -30,6 +30,8 @@ pub fn round_to_int(x: f32) -> i32 {
 
 impl Dp {
     pub const ZERO: Dp = Dp(0.0);
+    /// The thinnest line, as `Dp.Hairline`: a border of it is one pixel wide.
+    pub const HAIRLINE: Dp = Dp(0.0);
     /// No value: a default meaning "decide elsewhere", as `Dp.Unspecified`.
     pub const UNSPECIFIED: Dp = Dp(f32::NAN);
 

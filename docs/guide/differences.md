@@ -50,8 +50,8 @@ The known differences from Jetpack Compose that an app will run into, distilled 
 
 ## Drawing and graphics
 
-- **No text in a `DrawScope`**: no `drawText`, no `TextMeasurer`/`rememberTextMeasurer`. No color filters or blend modes, and no `Brush` on `border`.
-- **Ripples are static** state layers (8 % hovered, 10 % pressed or focused), not animated ripples.
+- **No text in a `DrawScope`**: no `drawText`, no `TextMeasurer`/`rememberTextMeasurer`. No color filters or blend modes.
+- **Ripples are static** state layers (8 % hovered, 10 % pressed or focused), not animated ripples. Material's components draw them; a plain `clickable` draws `LOCAL_INDICATION`'s (foundation's debug overlay unless provided), read where its node is, as Compose's (D1056); clickables take the focus in touch mode too (Compose's don't: there's no input mode yet).
 - **Desktop renders on the CPU** (Skia's raster backend): well under a millisecond a frame up to about 1080p, slower at 4K. A GPU surface is planned (D93).
 - **Graphics layers, clips and shadows are Compose's**: each `graphics_layer`, `clip`, `clip_to_bounds`, `alpha` and `shadow` is a layer (a render node on Android, its shadow the platform's elevation shadow, D522-D525). Desktop draws shadows with Skia's shadow utilities, lit as Compose Desktop's. No `rotation_x`/`rotation_y`, camera distance, render effects, color filters or blend modes on a layer, and shapes are rectangles and rounded rectangles (no generic outline). compose-rs's own optimizations beyond Compose's rendering are flags set per view (`ComposeRsView.optimizations`, `WindowOptions::optimizations`, D520): by default the `recommended` ones, which include `single_drawing_fade` (a layer holding one drawing fades its paint, as `ModulateAlpha`, where Compose's `Auto` composites offscreen: the same pixels, up to rounding) (D610); `none` draws exactly as Compose does.
 - **Interactive elevations animate and recompose**: a button's or card's shadow follows its press, hover and focus as Compose's does, animated and read in composition (D526).

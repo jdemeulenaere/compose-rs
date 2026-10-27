@@ -170,6 +170,7 @@ fn navigation_item(
                 role: Some(Role::Tab),
                 indication: Color::UNSPECIFIED.into(),
                 interaction_source: Some(interaction.clone()),
+                ..ClickableOptions::DEFAULT
             },
             on_click,
         )
@@ -181,11 +182,11 @@ fn navigation_item(
         policy,
         compose_runtime::callback(move || {
             // The pill, then the icon over it, then the label.
-            let (pressed, pill_shape) = (interaction.clone(), pill);
+            let (pressed, pill_shape) = (interaction.clone(), pill.clone());
             Box(
                 Modifier
                     .size_in(SizeSpec::bounds(pill_width, pill_height, pill_width, pill_height))
-                    .background_with(indicator, pill)
+                    .background_with(indicator, pill.clone())
                     .draw_behind(move |scope| {
                         // Read while drawing: a press, focus or hover draws again only.
                         // Material's state layers: pressed and focused 10 %, hovered 8 %.

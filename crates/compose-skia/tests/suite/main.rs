@@ -1,6 +1,7 @@
 //! The compose-skia integration tests in one binary, each file a module, so
 //! they build and link once (docs/08-fast-builds.md).
 
+mod border_shapes;
 mod brush;
 mod capture;
 mod line_height;

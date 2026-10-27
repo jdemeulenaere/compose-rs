@@ -49,17 +49,18 @@ fn chip(
         Dp::UNSPECIFIED,
     ));
     if let Some(border) = look.border {
-        surface = surface.border_with(border.width, border.color, shape);
+        surface = surface.border_stroke(border, shape.clone());
     }
-    let mut surface = surface.background_with(look.container, shape).clip(shape).clickable_with(
-        ClickableOptions {
-            enabled,
-            role: Some(role),
-            indication: look.label.into(),
-            ..ClickableOptions::DEFAULT
-        },
-        on_click,
-    );
+    let mut surface =
+        surface.background_with(look.container, shape.clone()).clip(shape).clickable_with(
+            ClickableOptions {
+                enabled,
+                role: Some(role),
+                indication: look.label.into(),
+                ..ClickableOptions::DEFAULT
+            },
+            on_click,
+        );
     if let Some(selected) = selected {
         surface = surface.semantics(move |config| config.set_selected(selected));
     }
@@ -228,7 +229,7 @@ pub fn Badge(
     let size = if content.is_some() { 16.dp() } else { 6.dp() };
     let modifier = modifier
         .size_in(SizeSpec::bounds(size, size, Dp::UNSPECIFIED, Dp::UNSPECIFIED))
-        .background_with(container_color, pill)
+        .background_with(container_color, pill.clone())
         .clip(pill);
     match content {
         Some(content) => {

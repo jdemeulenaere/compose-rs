@@ -177,7 +177,7 @@ fn a_click_outside_a_rounded_clip_does_not_click() {
 fn a_focused_node_that_becomes_unfocusable_loses_focus() {
     let enabled = mutable_state_of(true);
     let handle = enabled.handle();
-    let mut host = host(move || Leaf(Modifier.size(10.dp()).focusable_with(handle.get())));
+    let mut host = host(move || Leaf(Modifier.size(10.dp()).focusable_with(handle.get(), None)));
     host.send_key(KeyEvent::down(Key::Tab));
     assert!(host.with_tree(|tree| tree.focused()).is_some());
     enabled.set(false);

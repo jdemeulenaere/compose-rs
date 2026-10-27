@@ -198,9 +198,9 @@ impl BottomSheetDefaults {
 
     /// Extra-large top corners, as `ExpandedShape`.
     pub fn expanded_shape() -> Shape {
-        let corner = match MaterialTheme::shapes().extra_large {
-            Shape::Rounded(corners) => corners[0],
-            Shape::Rectangle => compose_ui::CornerSize::Dp(Dp(0.0)),
+        let corner = match MaterialTheme::shapes().extra_large.corners() {
+            Some(corners) => corners[0],
+            None => compose_ui::CornerSize::Dp(Dp(0.0)),
         };
         let none = compose_ui::CornerSize::Dp(Dp(0.0));
         Shape::Rounded([corner, corner, none, none])

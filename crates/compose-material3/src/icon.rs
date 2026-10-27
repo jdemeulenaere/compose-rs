@@ -260,6 +260,7 @@ pub fn IconButton(
             role: Some(Role::Button),
             indication: color.into(),
             interaction_source,
+            ..ClickableOptions::DEFAULT
         },
         on_click,
     );
@@ -298,6 +299,7 @@ pub fn IconToggleButton(
                 role: Some(Role::Checkbox),
                 indication: color.into(),
                 interaction_source: Some(interaction_source),
+                ..ClickableOptions::DEFAULT
             },
             move || on_checked_change(!checked),
         )

@@ -80,6 +80,9 @@ impl DrawScope<'_> {
         match outline {
             Outline::Rectangle(rect) => self.draw_rect(rect, paint),
             Outline::Rounded(rect, radii) => self.draw_round_rect(rect, radii, paint),
+            Outline::Generic(path, offset) => {
+                self.draw_path_scaled(&path, offset, (1.0, 1.0), paint)
+            }
         }
     }
 
@@ -301,6 +304,10 @@ impl DrawScope<'_> {
             Outline::Rounded(rect, radii) => {
                 let rect = self.to_list(rect);
                 self.list.push(DrawOp::ClipRoundRect(rect, radii));
+            }
+            Outline::Generic(path, offset) => {
+                let offset = offset + self.origin;
+                self.list.push(DrawOp::ClipPath { path, offset });
             }
         }
     }

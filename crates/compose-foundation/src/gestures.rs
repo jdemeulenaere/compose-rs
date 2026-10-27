@@ -180,6 +180,11 @@ impl ModifierNode for DraggableNode {
 }
 
 impl PointerInputModifierNode for DraggableNode {
+    /// It waits for a drag past a press, so a clickable inside delays its press.
+    fn waits_for_gesture(&self, _press: &PointerEvent) -> bool {
+        true
+    }
+
     fn on_pointer_event(
         &mut self,
         event: &mut PointerEvent,

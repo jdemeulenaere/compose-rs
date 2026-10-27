@@ -205,7 +205,7 @@ pub struct FlatDisplayList {
 /// (if it clips to its bounds) and `SaveLayerAlpha` (if its alpha is below 1); and
 /// `ops[end..layer_end]` after it, a `Restore` for each save. Without a layer,
 /// `layer_start == start` and `layer_end == end`.
-#[derive(Clone, Copy, PartialEq, Debug, Default)]
+#[derive(Clone, PartialEq, Debug, Default)]
 pub struct FlatGroup {
     pub key: u64,
     pub version: u64,
@@ -254,6 +254,9 @@ impl DisplayList {
         match outline {
             Outline::Rectangle(rect) => self.push(DrawOp::DrawRect(rect, paint)),
             Outline::Rounded(rect, radii) => self.push(DrawOp::DrawRoundRect(rect, radii, paint)),
+            Outline::Generic(path, offset) => {
+                self.push(DrawOp::DrawPath { path, offset, scale: (1.0, 1.0), paint })
+            }
         }
     }
 
@@ -261,6 +264,7 @@ impl DisplayList {
         match outline {
             Outline::Rectangle(rect) => self.push(DrawOp::ClipRect(rect)),
             Outline::Rounded(rect, radii) => self.push(DrawOp::ClipRoundRect(rect, radii)),
+            Outline::Generic(path, offset) => self.push(DrawOp::ClipPath { path, offset }),
         }
     }
 }
@@ -338,13 +342,14 @@ impl FlatDisplayList {
                 ),
                 DrawOp::DrawShadow { outline, elevation, ambient, spot, .. } => {
                     let (rect, radii) = match outline {
-                        crate::graphics::Outline::Rectangle(rect) => (rect, [0.0; 4]),
-                        crate::graphics::Outline::Rounded(rect, radii) => (rect, *radii),
+                        crate::graphics::Outline::Rectangle(rect) => (*rect, [0.0; 4]),
+                        crate::graphics::Outline::Rounded(rect, radii) => (*rect, *radii),
+                        crate::graphics::Outline::Generic(..) => (outline.bounds(), [-1.0; 4]),
                     };
                     writeln!(
                         out,
                         "shadow {} radii {:?} elevation {elevation} {ambient:?} {spot:?}",
-                        rect_text(rect),
+                        rect_text(&rect),
                         radii
                     )
                 }
@@ -527,18 +532,18 @@ fn flatten_group(
     let Some(group) = group else { return };
     *next += 1;
     let layer_start = flat.ops.len();
-    if let Some(layer) = group.layer {
+    if let Some(layer) = &group.layer {
         flat.ops.extend(layer.operations());
     }
     let start = flat.ops.len();
     flatten_into(&group.content, groups, next, flat);
     let end = flat.ops.len();
-    if end == start && !group.layer.is_some_and(|layer| layer.casts_shadow()) {
+    if end == start && !group.layer.as_ref().is_some_and(|layer| layer.casts_shadow()) {
         // Nothing to apply them to.
         flat.ops.truncate(layer_start);
         return;
     }
-    let restores = group.layer.map_or(0, |layer| layer.restores());
+    let restores = group.layer.as_ref().map_or(0, |layer| layer.restores());
     flat.ops.extend((0..restores).map(|_| DrawOp::Restore));
     flat.groups.push(FlatGroup {
         key: group.key,
@@ -547,7 +552,7 @@ fn flatten_group(
         end,
         layer_start,
         layer_end: flat.ops.len(),
-        layer: group.layer,
+        layer: group.layer.clone(),
     });
 }
 

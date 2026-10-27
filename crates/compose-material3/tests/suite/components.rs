@@ -804,7 +804,7 @@ fn cards_are_a_shadow_layer_and_a_clip_layer_as_composes() {
     });
     let list = ui.host().display_list();
     let layers: Vec<compose_ui::platform::LayerProperties> =
-        list.groups.iter().filter_map(|group| group.layer).collect();
+        list.groups.iter().filter_map(|group| group.layer.clone()).collect();
     let rounded = |layer: &compose_ui::platform::LayerProperties| matches!(layer.outline, Some(compose_ui::Outline::Rounded(_, radii)) if radii == [12.0; 4]);
     let clips: Vec<_> = layers.iter().filter(|layer| layer.clip).collect();
     let shadows: Vec<_> = layers.iter().filter(|layer| layer.shadow_elevation > 0.0).collect();
@@ -828,7 +828,7 @@ fn a_buttons_shadow_layer_comes_with_its_elevation() {
         let list = ui.host().display_list();
         list.groups
             .iter()
-            .filter_map(|group| group.layer)
+            .filter_map(|group| group.layer.clone())
             .map(|layer| layer.shadow_elevation)
             .filter(|elevation| *elevation > 0.0)
             .collect()
