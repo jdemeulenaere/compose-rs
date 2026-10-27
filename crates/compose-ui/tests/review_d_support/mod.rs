@@ -58,12 +58,13 @@ pub struct FragileElement;
 pub struct FragileNode;
 
 impl ModifierNodeElement for FragileElement {
-    fn create(&self) -> Box<dyn ModifierNode> {
-        Box::new(FragileNode)
+    type Node = FragileNode;
+    fn create(&self) -> FragileNode {
+        FragileNode
     }
-    fn update(&self, _: &mut dyn ModifierNode) {}
-    fn same(&self, other: &dyn ModifierNodeElement) -> bool {
-        other.downcast_ref::<FragileElement>().is_some()
+    fn update(&self, _: &mut Self::Node) {}
+    fn same(&self, _other: &Self) -> bool {
+        true
     }
 }
 
@@ -71,7 +72,7 @@ impl ModifierNode for FragileNode {
     fn as_layout(&mut self) -> Option<&mut dyn LayoutModifierNode> {
         Some(self)
     }
-    fn on_detach(&mut self, _: &mut DetachContext<'_>) {
+    fn on_release(&mut self, _: &mut ReleaseContext<'_>) {
         DETACHED.with(|detached| detached.set(detached.get() + 1));
     }
 }

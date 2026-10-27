@@ -116,6 +116,14 @@ impl Composition {
         f(applier)
     }
 
+    /// A weak reference to the applier, as type `A`, that reaches it from outside this
+    /// composition's borrows (a modifier node's handle, used from a task between frames): it
+    /// doesn't keep the applier alive.
+    pub fn applier_ref<A: Applier>(&self) -> ApplierRef<A> {
+        let applier = with_runtime(|runtime| Rc::downgrade(&self.data(runtime).applier));
+        ApplierRef { applier, _type: PhantomData }
+    }
+
     /// A text dump of the groups and slots, for tests.
     pub fn dump(&self) -> String {
         with_runtime(|runtime| {
@@ -512,6 +520,32 @@ impl Drop for Pass {
                 data.poisoned = true;
             }
         });
+    }
+}
+
+/// A weak reference to a composition's applier ([`Composition::applier_ref`]).
+pub struct ApplierRef<A> {
+    applier: std::rc::Weak<RefCell<dyn ErasedApplier>>,
+    _type: PhantomData<fn() -> A>,
+}
+
+impl<A> Clone for ApplierRef<A> {
+    fn clone(&self) -> Self {
+        ApplierRef { applier: self.applier.clone(), _type: PhantomData }
+    }
+}
+
+impl<A: Applier> ApplierRef<A> {
+    /// Runs `f` with the applier if it's free: its composition lives, no pass is under way on
+    /// the thread and nothing else borrows it. `None` otherwise.
+    pub fn try_with<R>(&self, f: impl FnOnce(&mut A) -> R) -> Option<R> {
+        let applier = self.applier.upgrade()?;
+        if try_with_runtime(|runtime| runtime.active.is_some()).unwrap_or(true) {
+            return None;
+        }
+        let mut applier = applier.try_borrow_mut().ok()?;
+        let applier = applier.as_any_mut().downcast_mut::<A>()?;
+        Some(f(applier))
     }
 }
 

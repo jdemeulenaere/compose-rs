@@ -303,12 +303,13 @@ struct GrowOnFocusNode {
 }
 
 impl ModifierNodeElement for GrowOnFocus {
-    fn create(&self) -> Box<dyn ModifierNode> {
-        Box::new(GrowOnFocusNode { focused: false })
+    type Node = GrowOnFocusNode;
+    fn create(&self) -> GrowOnFocusNode {
+        GrowOnFocusNode { focused: false }
     }
-    fn update(&self, _: &mut dyn ModifierNode) {}
-    fn same(&self, other: &dyn ModifierNodeElement) -> bool {
-        other.downcast_ref::<GrowOnFocus>().is_some()
+    fn update(&self, _: &mut Self::Node) {}
+    fn same(&self, _other: &Self) -> bool {
+        true
     }
 }
 
@@ -445,32 +446,34 @@ fn custom_elements_of_different_types_get_their_own_nodes() {
     struct B;
     struct Logged(&'static str);
     impl ModifierNode for Logged {
-        fn on_detach(&mut self, _: &mut DetachContext<'_>) {
+        fn on_release(&mut self, _: &mut ReleaseContext<'_>) {
             log(format!("detach {}", self.0));
         }
     }
     impl ModifierNodeElement for A {
-        fn create(&self) -> Box<dyn ModifierNode> {
+        type Node = Logged;
+        fn create(&self) -> Logged {
             log("create A");
-            Box::new(Logged("A"))
+            Logged("A")
         }
-        fn update(&self, _: &mut dyn ModifierNode) {
+        fn update(&self, _: &mut Self::Node) {
             log("update A");
         }
-        fn same(&self, other: &dyn ModifierNodeElement) -> bool {
-            other.downcast_ref::<A>().is_some()
+        fn same(&self, _other: &Self) -> bool {
+            true
         }
     }
     impl ModifierNodeElement for B {
-        fn create(&self) -> Box<dyn ModifierNode> {
+        type Node = Logged;
+        fn create(&self) -> Logged {
             log("create B");
-            Box::new(Logged("B"))
+            Logged("B")
         }
-        fn update(&self, _: &mut dyn ModifierNode) {
+        fn update(&self, _: &mut Self::Node) {
             log("update B");
         }
-        fn same(&self, other: &dyn ModifierNodeElement) -> bool {
-            other.downcast_ref::<B>().is_some()
+        fn same(&self, _other: &Self) -> bool {
+            true
         }
     }
     let second = mutable_state_of(false);

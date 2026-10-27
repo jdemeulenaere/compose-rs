@@ -14,7 +14,8 @@ use smallvec::SmallVec;
 use crate::display_list::{Boundary, DisplayList, DrawGroup, DrawOp};
 use crate::draw::DrawScope;
 use crate::graphics_layer::{GraphicsLayerNode, LayerProperties};
-use crate::tree::{NodeId, Observation, UiTree, capability, observation_key};
+use crate::node_chain::NodeKinds;
+use crate::tree::{NodeId, Observation, UiTree, observation_key};
 use crate::unit::Offset;
 
 /// The most repaint boundaries composed and not placed whose groups the frames keep listing
@@ -380,7 +381,7 @@ impl UiTree {
             return;
         }
         // One observation for the node's drawing, before and after its children.
-        let custom = value.all_capabilities & capability::CUSTOM != 0;
+        let custom = value.kinds.any(NodeKinds::OBSERVED);
         match observer.filter(|_| custom) {
             Some(observer) => observer.observe(observation_key(node, Observation::Draw), || {
                 self.draw_node_observed(node, list, Some(observer))
@@ -478,7 +479,7 @@ impl UiTree {
             let mut recording =
                 Arc::get_mut(&mut retained.recording).map(mem::take).unwrap_or_default();
             recording.clear();
-            let custom = self.node(node).all_capabilities & capability::CUSTOM != 0;
+            let custom = self.node(node).kinds.any(NodeKinds::OBSERVED);
             match observer.filter(|_| custom) {
                 Some(observer) => observer
                     .observe(observation_key(node, Observation::Draw), || {
@@ -558,10 +559,7 @@ impl UiTree {
         {
             let origins = self.layer_origins(node);
             let value = self.node(node);
-            let layer = value.capabilities[..entry]
-                .iter()
-                .filter(|bits| **bits & capability::LAYOUT != 0)
-                .count();
+            let layer = value.layer_of(entry);
             let mut unused = DisplayList::default();
             self.draw_inner_layer(node, entry, layer, &origins, &mut unused, observer);
         }
@@ -641,7 +639,7 @@ impl UiTree {
         else {
             return false;
         };
-        if value.chain[entry].downcast_ref::<GraphicsLayerNode>().is_none() {
+        if value.chain[entry].node.downcast_ref::<GraphicsLayerNode>().is_none() {
             return false;
         }
         let key = value.inner_layers[slot].key;
@@ -653,7 +651,7 @@ impl UiTree {
                 let size = value.layers[layer].measured.into();
                 let direction = value.layout_direction;
                 let graphics =
-                    value.chain[entry].downcast_ref::<GraphicsLayerNode>().expect("a layer");
+                    value.chain[entry].node.downcast_ref::<GraphicsLayerNode>().expect("a layer");
                 let properties = graphics.properties(density, direction, origins[layer], size);
                 let inner = &mut value.inner_layers[slot];
                 // Recorded in place: the frames that shared it are gone (`draw` clears the
@@ -692,13 +690,10 @@ impl UiTree {
     ) -> Option<LayerProperties> {
         let value = self.node(node);
         let index = value.retained.as_ref()?.layer_entry? as usize;
-        let layer = value.capabilities[..index]
-            .iter()
-            .filter(|bits| **bits & capability::LAYOUT != 0)
-            .count();
+        let layer = value.layer_of(index);
         let origin = self.layer_origins(node)[layer];
         let size = value.layers[layer].measured.into();
-        let graphics = value.chain[index].downcast_ref::<GraphicsLayerNode>()?;
+        let graphics = value.chain[index].node.downcast_ref::<GraphicsLayerNode>()?;
         let (density, direction) = (self.density, value.layout_direction);
         let properties = || graphics.properties(density, direction, origin, size);
         Some(match observer {
@@ -727,13 +722,13 @@ impl UiTree {
         let density = self.density;
         let mut after: SmallVec<[(u16, u16); 4]> = SmallVec::new();
         let length = self.node(node).chain.len();
-        if self.node(node).all_capabilities & capability::DRAW != 0 {
+        if self.node(node).kinds.any(NodeKinds::DRAW) {
             let lifted =
                 self.node(node).retained.as_ref().and_then(|retained| retained.layer_entry);
             for index in from..length {
                 let value = self.node_mut(node);
-                let bits = value.capabilities[index];
-                if bits & capability::DRAW != 0 && lifted != Some(index as u16) {
+                let bits = value.chain[index].kinds;
+                if bits.any(NodeKinds::DRAW) && lifted != Some(index as u16) {
                     // An inner layer draws the rest in a group of its own.
                     if self.draw_inner_layer(node, index, layer, origins, list, observer) {
                         self.draw_afters(node, &after, origins, list);
@@ -741,14 +736,16 @@ impl UiTree {
                     }
                     let value = self.node_mut(node);
                     let draws_content =
-                        value.chain[index].as_draw().is_some_and(|draw| draw.draws_content());
+                        value.chain[index].node.as_draw().is_some_and(|draw| draw.draws_content());
                     let size = value.layers[layer].measured.into();
                     let layout_direction = value.layout_direction;
                     if draws_content {
                         // Out of the chain while it draws the rest of its node.
-                        let mut entry =
-                            mem::replace(&mut value.chain[index], Box::new(crate::nodes::Taken));
-                        let next_layer = layer + usize::from(bits & capability::LAYOUT != 0);
+                        let mut entry = mem::replace(
+                            &mut value.chain[index].node,
+                            Box::new(crate::nodes::Taken),
+                        );
+                        let next_layer = layer + usize::from(bits.any(NodeKinds::LAYOUT));
                         let mut scope = DrawScope {
                             list,
                             origin: origins[layer],
@@ -766,18 +763,18 @@ impl UiTree {
                         if let Some(draw) = entry.as_draw() {
                             draw.draw_with_content(&mut content_scope);
                         }
-                        self.node_mut(node).chain[index] = entry;
+                        self.node_mut(node).chain[index].node = entry;
                         self.draw_afters(node, &after, origins, list);
                         return;
                     }
                     let mut scope =
                         DrawScope { list, origin: origins[layer], size, density, layout_direction };
-                    if let Some(draw) = value.chain[index].as_draw() {
+                    if let Some(draw) = value.chain[index].node.as_draw() {
                         draw.draw(&mut scope);
                     }
                     after.push((index as u16, layer as u16));
                 }
-                if bits & capability::LAYOUT != 0 {
+                if bits.any(NodeKinds::LAYOUT) {
                     layer += 1;
                 }
             }
@@ -818,7 +815,7 @@ impl UiTree {
                 density,
                 layout_direction: value.layout_direction,
             };
-            if let Some(draw) = value.chain[index as usize].as_draw() {
+            if let Some(draw) = value.chain[index as usize].node.as_draw() {
                 draw.draw_after(&mut scope);
             }
         }

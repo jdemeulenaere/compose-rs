@@ -55,7 +55,7 @@ pub(crate) fn create(element: &Element) -> Box<dyn ModifierNode> {
         Element::Semantics(merge, properties) => {
             Box::new(SemanticsNode(*merge, properties.clone()))
         }
-        Element::Custom(element) => element.create(),
+        Element::Custom(element) => element.create_boxed(),
     }
 }
 
@@ -87,11 +87,14 @@ pub(crate) fn update(element: &Element, node: &mut dyn ModifierNode) {
         ),
         Element::Clickable(clickable) => {
             if let Some(node) = node.downcast_mut::<ClickableNode>() {
-                // A source swapped or the clickable disabled mid-press: the old press is over.
+                // A source swapped (its press, focus and hover told over) or the clickable
+                // disabled mid-press: the old press is over.
                 let pressed = node.state.pressed.is_some() || node.state.keys_pressed != 0;
                 let swapped =
                     node.spec.interaction_source() != clickable.interaction_source.as_ref();
-                if pressed && (swapped || !clickable.enabled) {
+                // Released on the old source, at the swap: the reset after the pass sees the
+                // new one (`ModifierNode::on_reset`).
+                if swapped || (pressed && !clickable.enabled) {
                     node.release_later();
                 }
                 node.spec = Press::Click(clickable.clone());
@@ -103,7 +106,9 @@ pub(crate) fn update(element: &Element, node: &mut dyn ModifierNode) {
                 let pressed = node.state.pressed.is_some() || node.state.keys_pressed != 0;
                 let swapped =
                     node.spec.interaction_source() != toggleable.interaction_source.as_ref();
-                if pressed && (swapped || !toggleable.enabled) {
+                // Released on the old source, at the swap: the reset after the pass sees the
+                // new one (`ModifierNode::on_reset`).
+                if swapped || (pressed && !toggleable.enabled) {
                     node.release_later();
                 }
                 node.spec = Press::Toggle(toggleable.clone());
@@ -125,7 +130,7 @@ pub(crate) fn update(element: &Element, node: &mut dyn ModifierNode) {
         Element::Semantics(merge, properties) => {
             set!(SemanticsNode, SemanticsNode(*merge, properties.clone()))
         }
-        Element::Custom(element) => element.update(node),
+        Element::Custom(element) => element.update_dyn(node),
     }
 }
 
@@ -507,6 +512,9 @@ struct PressState {
     hovered: bool,
     /// A combined clickable's tap detection holds a press (it reports there).
     tap_pressed: Option<Rc<std::cell::Cell<bool>>>,
+    /// Its interaction source was told its press, focus or hover since it was last released:
+    /// what releasing it tells over (a source it never told, swapped in, is left alone).
+    published: bool,
 }
 
 fn key_bit(key: Key) -> u8 {
@@ -536,11 +544,11 @@ struct ClickableNode {
 
 impl ModifierNode for ClickableNode {
     /// Leaving mid-press releases its interaction source, as Compose's `disposeInteractions`.
-    fn on_detach(&mut self, _context: &mut crate::modifier::DetachContext<'_>) {
+    fn on_release(&mut self, _context: &mut crate::modifier::ReleaseContext<'_>) {
         self.release_later();
     }
     /// Reused, the same as leaving: its press, focus and hover are over.
-    fn on_reset(&mut self) {
+    fn on_reset(&mut self, _context: &mut crate::node_context::NodeContext<'_>) {
         self.release_later();
         let tap_pressed = self.state.tap_pressed.take();
         if let Some(pressed) = &tap_pressed {
@@ -623,16 +631,20 @@ fn inside(event: &PointerEvent, bounds: IntSize) -> bool {
 
 impl ClickableNode {
     /// Its press changed: drawn again, and told to its interaction source.
-    fn press_changed(&self, context: &mut EventContext<'_>) {
+    fn press_changed(&mut self, context: &mut EventContext<'_>) {
         context.invalidate_draw();
         self.publish_press();
     }
 
     /// Releases its interaction source after the composition applying a change (a state
     /// can't be written while composing): its press, focus and hover are over.
-    fn release_later(&self) {
+    fn release_later(&mut self) {
         let active = self.is_pressed() || self.state.focused || self.state.hovered;
-        if active && let Some(source) = self.spec.interaction_source().cloned() {
+        let published = std::mem::take(&mut self.state.published);
+        if active
+            && published
+            && let Some(source) = self.spec.interaction_source().cloned()
+        {
             compose_runtime::CoroutineScope::new().launch(async move {
                 source.set_pressed(false);
                 source.set_focused(false);
@@ -648,8 +660,9 @@ impl ClickableNode {
             || self.state.tap_pressed.as_ref().is_some_and(|pressed| pressed.get())
     }
 
-    fn publish_press(&self) {
+    fn publish_press(&mut self) {
         if let Some(source) = self.spec.interaction_source() {
+            self.state.published = true;
             source.set_pressed(self.is_pressed());
             source.set_focused(self.state.focused);
             source.set_hovered(self.state.hovered);
@@ -824,7 +837,7 @@ struct CombinedHandlers {
     haptic_feedback: Option<Rc<dyn crate::platform_services::HapticFeedback>>,
 }
 
-struct CombinedClickableNode {
+pub(crate) struct CombinedClickableNode {
     clickable: ClickableNode,
     handlers: Rc<std::cell::RefCell<CombinedHandlers>>,
     driver: crate::pointer_input::PointerInputDriver,
@@ -913,7 +926,8 @@ impl CombinedClickableNode {
 }
 
 impl ModifierNodeElement for CombinedClickableElement {
-    fn create(&self) -> Box<dyn ModifierNode> {
+    type Node = CombinedClickableNode;
+    fn create(&self) -> CombinedClickableNode {
         let tap_pressed = Rc::new(std::cell::Cell::new(false));
         let handlers = Rc::new(std::cell::RefCell::new(CombinedHandlers {
             interaction_source: self.clickable.interaction_source.clone(),
@@ -924,7 +938,7 @@ impl ModifierNodeElement for CombinedClickableElement {
             haptic_feedback: self.haptic_feedback.clone(),
         }));
         let pressed = compose_runtime::mutable_state_of(false);
-        Box::new(CombinedClickableNode {
+        CombinedClickableNode {
             clickable: ClickableNode {
                 spec: Press::Click(self.clickable.clone()),
                 state: PressState { tap_pressed: Some(tap_pressed), ..PressState::default() },
@@ -932,11 +946,10 @@ impl ModifierNodeElement for CombinedClickableElement {
             driver: CombinedClickableNode::driver(&handlers, pressed.handle()),
             handlers,
             pressed,
-        })
+        }
     }
 
-    fn update(&self, node: &mut dyn ModifierNode) {
-        let Some(node) = node.downcast_mut::<CombinedClickableNode>() else { return };
+    fn update(&self, node: &mut CombinedClickableNode) {
         let mut handlers = node.handlers.borrow_mut();
         // Another kind of gesture to wait for: the detection starts over.
         let restart = handlers.on_long_click.is_some() != self.on_long_click.is_some()
@@ -958,14 +971,14 @@ impl ModifierNodeElement for CombinedClickableElement {
         node.clickable.state.disable_if(!self.clickable.enabled);
     }
 
-    fn same(&self, other: &dyn ModifierNodeElement) -> bool {
+    fn same(&self, other: &Self) -> bool {
         let same_callback =
             |a: &Option<Callback<dyn Fn()>>, b: &Option<Callback<dyn Fn()>>| match (a, b) {
                 (Some(a), Some(b)) => a.ptr_eq(b),
                 (None, None) => true,
                 _ => false,
             };
-        other.downcast_ref::<CombinedClickableElement>().is_some_and(|other| {
+        {
             let (a, b) = (&self.clickable, &other.clickable);
             a.enabled == b.enabled
                 && a.role == b.role
@@ -979,7 +992,7 @@ impl ModifierNodeElement for CombinedClickableElement {
                     (None, None) => true,
                     _ => false,
                 }
-        })
+        }
     }
 
     fn name(&self) -> &'static str {
@@ -988,12 +1001,12 @@ impl ModifierNodeElement for CombinedClickableElement {
 }
 
 impl ModifierNode for CombinedClickableNode {
-    fn on_detach(&mut self, _context: &mut crate::modifier::DetachContext<'_>) {
+    fn on_release(&mut self, _context: &mut crate::modifier::ReleaseContext<'_>) {
         self.stop();
     }
-    fn on_reset(&mut self) {
+    fn on_reset(&mut self, context: &mut crate::node_context::NodeContext<'_>) {
         self.stop();
-        self.clickable.on_reset();
+        self.clickable.on_reset(context);
     }
     fn as_pointer_input(&mut self) -> Option<&mut dyn PointerInputModifierNode> {
         Some(self)
@@ -1080,7 +1093,7 @@ pub(crate) struct HoverableElement {
     pub(crate) enabled: bool,
 }
 
-struct HoverableNode {
+pub(crate) struct HoverableNode {
     spec: HoverableElement,
     hovered: bool,
 }
@@ -1097,21 +1110,18 @@ impl HoverableNode {
 }
 
 impl ModifierNodeElement for HoverableElement {
-    fn create(&self) -> Box<dyn ModifierNode> {
-        Box::new(HoverableNode { spec: self.clone(), hovered: false })
+    type Node = HoverableNode;
+    fn create(&self) -> HoverableNode {
+        HoverableNode { spec: self.clone(), hovered: false }
     }
-    fn update(&self, node: &mut dyn ModifierNode) {
-        if let Some(node) = node.downcast_mut::<HoverableNode>() {
-            if !self.enabled || node.spec.interaction_source != self.interaction_source {
-                node.exit();
-            }
-            node.spec = self.clone();
+    fn update(&self, node: &mut HoverableNode) {
+        if !self.enabled || node.spec.interaction_source != self.interaction_source {
+            node.exit();
         }
+        node.spec = self.clone();
     }
-    fn same(&self, other: &dyn ModifierNodeElement) -> bool {
-        other.downcast_ref::<HoverableElement>().is_some_and(|other| {
-            other.enabled == self.enabled && other.interaction_source == self.interaction_source
-        })
+    fn same(&self, other: &Self) -> bool {
+        other.enabled == self.enabled && other.interaction_source == self.interaction_source
     }
     fn name(&self) -> &'static str {
         "hoverable"
@@ -1119,10 +1129,10 @@ impl ModifierNodeElement for HoverableElement {
 }
 
 impl ModifierNode for HoverableNode {
-    fn on_detach(&mut self, _context: &mut crate::modifier::DetachContext<'_>) {
+    fn on_release(&mut self, _context: &mut crate::modifier::ReleaseContext<'_>) {
         self.exit();
     }
-    fn on_reset(&mut self) {
+    fn on_reset(&mut self, _context: &mut crate::node_context::NodeContext<'_>) {
         self.exit();
     }
     fn as_pointer_input(&mut self) -> Option<&mut dyn PointerInputModifierNode> {
@@ -1161,7 +1171,7 @@ struct FocusableNode {
 }
 
 impl ModifierNode for FocusableNode {
-    fn on_reset(&mut self) {
+    fn on_reset(&mut self, _context: &mut crate::node_context::NodeContext<'_>) {
         self.focused = false;
     }
     fn as_focus_target(&mut self) -> Option<&mut dyn FocusTargetModifierNode> {
@@ -1198,7 +1208,7 @@ pub(crate) struct OnFocusChangedNode {
 
 impl ModifierNode for OnFocusChangedNode {
     /// Reused, it reports the new content's focus to the new callback.
-    fn on_reset(&mut self) {
+    fn on_reset(&mut self, _context: &mut crate::node_context::NodeContext<'_>) {
         self.last = None;
     }
 }

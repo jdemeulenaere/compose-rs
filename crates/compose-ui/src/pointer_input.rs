@@ -701,28 +701,25 @@ struct PointerInputNode {
 }
 
 impl<K: ComposeArg + Clone + 'static> ModifierNodeElement for PointerInputElement<K> {
-    fn create(&self) -> Box<dyn ModifierNode> {
-        Box::new(PointerInputNode {
+    type Node = PointerInputNode;
+    fn create(&self) -> PointerInputNode {
+        PointerInputNode {
             key: self.key.clone(),
             driver: PointerInputDriver::from_block(self.block.clone()),
-        })
-    }
-    fn update(&self, node: &mut dyn ModifierNode) {
-        if let Some(node) = node.downcast_mut::<PointerInputNode>() {
-            let same = node.key.downcast_ref::<K>().is_some_and(|key| key.same(&self.key));
-            node.driver.block = self.block.clone();
-            if !same {
-                // A new key: the block starts over.
-                node.key = self.key.clone();
-                node.driver.stop();
-            }
         }
     }
-    fn same(&self, other: &dyn ModifierNodeElement) -> bool {
+    fn update(&self, node: &mut PointerInputNode) {
+        let same = node.key.downcast_ref::<K>().is_some_and(|key| key.same(&self.key));
+        node.driver.block = self.block.clone();
+        if !same {
+            // A new key: the block starts over.
+            node.key = self.key.clone();
+            node.driver.stop();
+        }
+    }
+    fn same(&self, other: &Self) -> bool {
         // The block isn't compared, as Compose's: only the key restarts it.
-        other
-            .downcast_ref::<PointerInputElement<K>>()
-            .is_some_and(|other| other.key.same(&self.key) && Rc::ptr_eq(&other.block, &self.block))
+        other.key.same(&self.key) && Rc::ptr_eq(&other.block, &self.block)
     }
     fn name(&self) -> &'static str {
         "pointer_input"
@@ -733,12 +730,12 @@ impl ModifierNode for PointerInputNode {
     fn as_pointer_input(&mut self) -> Option<&mut dyn PointerInputModifierNode> {
         Some(self)
     }
-    fn on_detach(&mut self, _context: &mut crate::modifier::DetachContext<'_>) {
+    fn on_release(&mut self, _context: &mut crate::modifier::ReleaseContext<'_>) {
         self.driver.stop();
     }
     /// Reused, its block starts again at the next event, as Compose's
     /// `resetPointerInputHandler`.
-    fn on_reset(&mut self) {
+    fn on_reset(&mut self, _context: &mut crate::node_context::NodeContext<'_>) {
         self.driver.stop();
     }
 }

@@ -138,33 +138,30 @@ struct ScrollElement {
 }
 
 impl ModifierNodeElement for ScrollElement {
-    fn create(&self) -> Box<dyn ModifierNode> {
-        Box::new(ScrollNode {
+    type Node = ScrollNode;
+    fn create(&self) -> ScrollNode {
+        ScrollNode {
             state: self.state,
             vertical: self.vertical,
             drag: DragScroller::default(),
             fraction: 0.0,
             laid_out: 0,
             rtl: false,
-        })
-    }
-
-    fn update(&self, node: &mut dyn ModifierNode) {
-        if let Some(node) = node.downcast_mut::<ScrollNode>() {
-            // A fling scrolls the state it started with: a new state stops it (the old one's
-            // owner may be going, D240).
-            if node.state != self.state {
-                node.drag.stop_fling();
-            }
-            node.state = self.state;
-            node.vertical = self.vertical;
         }
     }
 
-    fn same(&self, other: &dyn ModifierNodeElement) -> bool {
-        other
-            .downcast_ref::<ScrollElement>()
-            .is_some_and(|other| other.vertical == self.vertical && other.state.same(&self.state))
+    fn update(&self, node: &mut ScrollNode) {
+        // A fling scrolls the state it started with: a new state stops it (the old one's
+        // owner may be going, D240).
+        if node.state != self.state {
+            node.drag.stop_fling();
+        }
+        node.state = self.state;
+        node.vertical = self.vertical;
+    }
+
+    fn same(&self, other: &Self) -> bool {
+        other.vertical == self.vertical && other.state.same(&self.state)
     }
 
     fn name(&self) -> &'static str {
@@ -326,10 +323,10 @@ impl ModifierNode for ScrollNode {
     fn as_semantics(&mut self) -> Option<&mut dyn compose_ui::SemanticsModifierNode> {
         Some(self)
     }
-    fn on_detach(&mut self, _context: &mut compose_ui::DetachContext<'_>) {
+    fn on_release(&mut self, _context: &mut compose_ui::ReleaseContext<'_>) {
         self.drag.stop_fling();
     }
-    fn on_reset(&mut self) {
+    fn on_reset(&mut self, _context: &mut compose_ui::NodeContext<'_>) {
         self.drag.cancel();
         self.drag.stop_fling();
     }

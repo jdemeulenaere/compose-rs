@@ -405,30 +405,27 @@ struct DismissOnClickNode {
 }
 
 impl ModifierNodeElement for DismissOnClick {
-    fn create(&self) -> Box<dyn ModifierNode> {
-        Box::new(DismissOnClickNode {
+    type Node = DismissOnClickNode;
+    fn create(&self) -> DismissOnClickNode {
+        DismissOnClickNode {
             on_dismiss: self.on_dismiss.clone(),
             inside: self.inside.clone(),
             on_press: self.on_press,
             modal: self.modal,
             pressed_outside: false,
-        })
-    }
-    fn update(&self, node: &mut dyn ModifierNode) {
-        if let Some(node) = node.downcast_mut::<DismissOnClickNode>() {
-            node.on_dismiss = self.on_dismiss.clone();
-            node.inside = self.inside.clone();
-            node.on_press = self.on_press;
-            node.modal = self.modal;
         }
     }
-    fn same(&self, other: &dyn ModifierNodeElement) -> bool {
-        other.downcast_ref::<DismissOnClick>().is_some_and(|other| {
-            other.on_dismiss.ptr_eq(&self.on_dismiss)
-                && Rc::ptr_eq(&other.inside, &self.inside)
-                && other.on_press == self.on_press
-                && other.modal == self.modal
-        })
+    fn update(&self, node: &mut DismissOnClickNode) {
+        node.on_dismiss = self.on_dismiss.clone();
+        node.inside = self.inside.clone();
+        node.on_press = self.on_press;
+        node.modal = self.modal;
+    }
+    fn same(&self, other: &Self) -> bool {
+        other.on_dismiss.ptr_eq(&self.on_dismiss)
+            && Rc::ptr_eq(&other.inside, &self.inside)
+            && other.on_press == self.on_press
+            && other.modal == self.modal
     }
     fn name(&self) -> &'static str {
         "dismiss_on_click_outside"

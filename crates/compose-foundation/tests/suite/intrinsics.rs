@@ -1758,16 +1758,15 @@ impl PartialEq for RecordsAsked {
 }
 
 impl ModifierNodeElement for RecordsAsked {
-    fn create(&self) -> Box<dyn ModifierNode> {
-        Box::new(self.clone())
+    type Node = Self;
+    fn create(&self) -> Self {
+        self.clone()
     }
-    fn update(&self, node: &mut dyn ModifierNode) {
-        if let Some(node) = node.downcast_mut::<RecordsAsked>() {
-            *node = self.clone();
-        }
+    fn update(&self, node: &mut Self) {
+        *node = self.clone();
     }
-    fn same(&self, other: &dyn ModifierNodeElement) -> bool {
-        other.downcast_ref::<RecordsAsked>() == Some(self)
+    fn same(&self, other: &Self) -> bool {
+        other == self
     }
 }
 

@@ -460,7 +460,7 @@ impl Modifier {
 
 /// A modifier of one user-defined element shared by reference: for a toolkit whose element
 /// must stay the same object across recompositions (foundation's text field).
-pub fn shared_custom_modifier(element: Rc<dyn ModifierNodeElement>) -> Modifier {
+pub fn shared_custom_modifier(element: Rc<dyn AnyModifierNodeElement>) -> Modifier {
     Modifier.then_element(Element::Custom(element))
 }
 
@@ -777,7 +777,7 @@ pub(crate) enum Element {
     Semantics(bool, Rc<SemanticsConfiguration>),
     /// `z_index`: the order among siblings, read from the elements as parent data.
     ZIndex(f32),
-    Custom(Rc<dyn ModifierNodeElement>),
+    Custom(Rc<dyn AnyModifierNodeElement>),
 }
 
 impl Element {
@@ -823,7 +823,7 @@ impl Element {
             (TestTag(a), TestTag(b)) => a.same(b),
             (Semantics(a, b), Semantics(c, d)) => a == c && (Rc::ptr_eq(b, d) || b == d),
             (ZIndex(a), ZIndex(b)) => a == b,
-            (Custom(a), Custom(b)) => Rc::ptr_eq(a, b) || ModifierNodeElement::same(&**a, &**b),
+            (Custom(a), Custom(b)) => Rc::ptr_eq(a, b) || a.same_dyn(&**b),
             _ => false,
         }
     }
@@ -884,7 +884,14 @@ impl fmt::Debug for Element {
             Semantics(merge, _) => write!(formatter, "semantics(merge = {merge})"),
             ZIndex(z_index) => write!(formatter, "z_index({z_index})"),
             Custom(element) => {
-                write!(formatter, "{}", crate::tree::short_type_name(element.name()))
+                let mut info = InspectorInfo::default();
+                element.inspect_dyn(&mut info);
+                let name = info.name.unwrap_or_else(|| element.name_dyn());
+                write!(formatter, "{}", crate::tree::short_type_name(name))?;
+                match info.value {
+                    Some(value) => write!(formatter, "({value})"),
+                    None => Ok(()),
+                }
             }
         }
     }
@@ -892,23 +899,78 @@ impl fmt::Debug for Element {
 
 // ---- Modifier.Node ---------------------------------------------------------------------------
 
-/// A user-defined modifier element, as Compose's `ModifierNodeElement`: it creates its node,
-/// and updates it in place when a new element of the same type replaces it.
-pub trait ModifierNodeElement: Any {
-    fn create(&self) -> Box<dyn ModifierNode>;
-    /// Updates `node`, which this element's type created.
-    fn update(&self, node: &mut dyn ModifierNode);
-    /// Whether `other` (of the same type, as `as_any` downcasts) is equal, so the node needs no
-    /// update.
-    fn same(&self, other: &dyn ModifierNodeElement) -> bool;
+/// A user-defined modifier element, as Compose's `ModifierNodeElement<N>`: it creates its node,
+/// and updates it in place when a new element of the same type replaces it. Added to a chain
+/// with `Modifier.then_custom(element)`.
+pub trait ModifierNodeElement: 'static {
+    /// The node it creates and updates.
+    type Node: ModifierNode;
+    fn create(&self) -> Self::Node;
+    /// Updates `node`, which an element of this type created (Compose's `update(node: N)`). An
+    /// update then invalidates what the node's kinds say (a layout node is measured again, a
+    /// draw node drawn again), unless `ModifierNode::should_auto_invalidate` says not to.
+    fn update(&self, node: &mut Self::Node);
+    /// Whether `other` is equal, so the node needs no update (Compose's `equals`).
+    fn same(&self, other: &Self) -> bool;
     /// A name for dumps.
     fn name(&self) -> &'static str {
         std::any::type_name::<Self>()
     }
+    /// What inspection and dumps show of it, as `InspectorInfo.inspectableProperties()`: by
+    /// default its name.
+    fn inspectable_properties(&self, info: &mut InspectorInfo) {
+        info.name = Some(self.name());
+    }
 }
 
-impl dyn ModifierNodeElement {
-    /// `self` as `T`, for `same`.
+/// What an element shows inspection and dumps, as Compose's `InspectorInfo`.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct InspectorInfo {
+    pub name: Option<&'static str>,
+    pub value: Option<String>,
+    pub properties: Vec<(&'static str, String)>,
+}
+
+/// The object-safe form of `ModifierNodeElement` a chain stores, implemented for every element:
+/// what the chain diff calls without knowing the element's type.
+pub trait AnyModifierNodeElement: Any {
+    fn create_boxed(&self) -> Box<dyn ModifierNode>;
+    /// Updates `node`, which an element of the same type created.
+    fn update_dyn(&self, node: &mut dyn ModifierNode);
+    /// Whether `other` is an equal element of the same type.
+    fn same_dyn(&self, other: &dyn AnyModifierNodeElement) -> bool;
+    fn name_dyn(&self) -> &'static str;
+    fn inspect_dyn(&self, info: &mut InspectorInfo);
+}
+
+impl<E: ModifierNodeElement> AnyModifierNodeElement for E {
+    fn create_boxed(&self) -> Box<dyn ModifierNode> {
+        Box::new(self.create())
+    }
+
+    fn update_dyn(&self, node: &mut dyn ModifierNode) {
+        let node = node.downcast_mut::<E::Node>();
+        debug_assert!(node.is_some(), "compose-ui: an element updates the node its type created");
+        if let Some(node) = node {
+            self.update(node);
+        }
+    }
+
+    fn same_dyn(&self, other: &dyn AnyModifierNodeElement) -> bool {
+        (other as &dyn Any).downcast_ref::<E>().is_some_and(|other| self.same(other))
+    }
+
+    fn name_dyn(&self) -> &'static str {
+        self.name()
+    }
+
+    fn inspect_dyn(&self, info: &mut InspectorInfo) {
+        self.inspectable_properties(info);
+    }
+}
+
+impl dyn AnyModifierNodeElement {
+    /// The element as `T`, if it is one.
     pub fn downcast_ref<T: ModifierNodeElement>(&self) -> Option<&T> {
         (self as &dyn Any).downcast_ref::<T>()
     }
@@ -973,16 +1035,58 @@ pub trait ModifierNode: Any {
     fn is_pointer_observer(&self) -> bool {
         false
     }
-    /// Called when the node leaves the tree, before it's dropped: release resources here.
-    fn on_detach(&mut self, _context: &mut DetachContext<'_>) {}
+    /// Whether an update of the node by its element invalidates what its kinds say (a layout
+    /// node is measured again, a draw node drawn again), as Compose's `shouldAutoInvalidate`.
+    /// A node that invalidates itself, and only when its update changed something, says no.
+    fn should_auto_invalidate(&self) -> bool {
+        true
+    }
+    /// The node was attached, as `Modifier.Node.onAttach`: its layout node is in the tree and
+    /// active, and every node of the layout nodes attached with it is marked attached already.
+    /// Runs at the end of the composition pass that attached it, children's nodes before their
+    /// parents', head to tail in a chain; again after each reuse. Its context reaches the tree:
+    /// it may start work in `coroutine_scope()`, which detaching cancels.
+    fn on_attach(&mut self, _context: &mut crate::node_context::NodeContext<'_>) {
+        crate::lifecycle::default_callback_ran();
+    }
+    /// The node is detached, as `Modifier.Node.onDetach`: its layout node left the tree, the node
+    /// left its chain, or its content is deactivated or reused (after `on_reset`). Runs at the
+    /// end of the pass, parents' nodes before their children's, tail to head in a chain; the
+    /// node still attached, and its coroutine scope cancelled after. It may be attached again
+    /// (reuse): what it holds outside itself is given back in `on_release`.
+    fn on_detach(&mut self, _context: &mut crate::node_context::NodeContext<'_>) {
+        crate::lifecycle::default_callback_ran();
+    }
     /// Its layout node is deactivated or reused for other content (a lazy list's item that
     /// left, reused by one that came), as Compose's `Modifier.Node.onReset`: forget what the old
     /// content's interactions left (a press, a hover, a gesture, a focus, an animation under
-    /// way). The node stays, and the new content's element updates it. Called after the pass
-    /// that reused or deactivated it, outside composition (after the new element's `update`,
-    /// so a node snapping to its value snaps to the new one): it may write state, but not reach
-    /// the tree, as `on_detach`.
-    fn on_reset(&mut self) {}
+    /// way), then `on_detach` and `on_attach` follow. The node stays, and the new content's
+    /// element updates it. Only an attached node is reset, as Compose's: a node reused from
+    /// the kept pool was reset when it was deactivated (D1156).
+    ///
+    /// **The order differs from Compose's:** Compose resets a reused node before the new
+    /// content's `update`; compose-rs applies changes as composition goes, where application
+    /// code can't write state (D434), so the reset runs after the pass, *after* `update`. A
+    /// reset therefore sees the new element's values (an interaction source swapped by
+    /// `update` is the new one: release the old one there), and a node showing its value
+    /// shows the new one from `on_attach`, which follows. It runs outside composition: it may
+    /// write state. A reset changing what the node measures says so (`invalidate_measurement`):
+    /// reuse alone measures nothing again.
+    fn on_reset(&mut self, _context: &mut crate::node_context::NodeContext<'_>) {}
+    /// The density changed, as `DelegatableNode.onDensityChange` (the host's: compose-rs's
+    /// density is its tree's).
+    fn on_density_change(&mut self, _context: &mut crate::node_context::NodeContext<'_>) {
+        crate::lifecycle::default_callback_ran();
+    }
+    /// Its layout node's layout direction changed, as `onLayoutDirectionChange`.
+    fn on_layout_direction_change(&mut self, _context: &mut crate::node_context::NodeContext<'_>) {
+        crate::lifecycle::default_callback_ran();
+    }
+    /// The node is dropped (removed from its chain, or its layout node released), after its
+    /// `on_detach`: give back what it holds outside itself (a paragraph to the text measurer).
+    /// compose-rs's: Compose's nodes are collected. Kept apart from `on_detach` so a node
+    /// detached for reuse keeps its caches (D1153).
+    fn on_release(&mut self, _context: &mut ReleaseContext<'_>) {}
     /// Asked to show `rect` (in this node's coordinates; `viewport` is its size), as Compose's
     /// `BringIntoViewResponder`: a scrolling node scrolls so it is in view, and returns where it
     /// will then be, for the scrolling ancestors. `None`: not a scrolling node.
@@ -1023,8 +1127,8 @@ impl dyn ModifierNode {
     }
 }
 
-/// What a node can reach when detached.
-pub struct DetachContext<'a> {
+/// What a node reaches when released (`ModifierNode::on_release`).
+pub struct ReleaseContext<'a> {
     pub text_measurer: &'a mut dyn crate::text::TextMeasurer,
 }
 

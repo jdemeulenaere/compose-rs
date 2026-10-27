@@ -608,11 +608,12 @@ fn state_read_by_a_policy_or_a_draw_node_measures_or_draws_again_without_recompo
     }
     struct Shade(MutableState<u32>);
     impl ModifierNodeElement for Shade {
-        fn create(&self) -> Box<dyn ModifierNode> {
-            Box::new(ShadeNode(self.0))
+        type Node = ShadeNode;
+        fn create(&self) -> ShadeNode {
+            ShadeNode(self.0)
         }
-        fn update(&self, _: &mut dyn ModifierNode) {}
-        fn same(&self, _: &dyn ModifierNodeElement) -> bool {
+        fn update(&self, _: &mut Self::Node) {}
+        fn same(&self, _: &Self) -> bool {
             true
         }
     }

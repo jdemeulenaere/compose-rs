@@ -11,7 +11,8 @@ use crate::constraints::Constraints;
 use crate::input::Action;
 use crate::layout::{IntrinsicMeasureScope, Measurable, MeasureResult, MeasureScope};
 use crate::modifier::{LayoutModifierNode, Modifier, ModifierNode, ModifierNodeElement};
-use crate::tree::{NodeId, UiTree, capability};
+use crate::node_chain::NodeKinds;
+use crate::tree::{NodeId, UiTree};
 use crate::unit::{IntSize, Offset, Rect};
 
 /// Where a laid-out node is, as Compose's `LayoutCoordinates` (a snapshot rather than a live
@@ -86,16 +87,15 @@ struct OnSizeChangedNode {
 }
 
 impl ModifierNodeElement for OnSizeChangedElement {
-    fn create(&self) -> Box<dyn ModifierNode> {
-        Box::new(OnSizeChangedNode { callback: self.0.clone(), last: None })
+    type Node = OnSizeChangedNode;
+    fn create(&self) -> OnSizeChangedNode {
+        OnSizeChangedNode { callback: self.0.clone(), last: None }
     }
-    fn update(&self, node: &mut dyn ModifierNode) {
-        if let Some(node) = node.downcast_mut::<OnSizeChangedNode>() {
-            node.callback = self.0.clone();
-        }
+    fn update(&self, node: &mut OnSizeChangedNode) {
+        node.callback = self.0.clone();
     }
-    fn same(&self, other: &dyn ModifierNodeElement) -> bool {
-        other.downcast_ref::<OnSizeChangedElement>().is_some_and(|other| other.0.ptr_eq(&self.0))
+    fn same(&self, other: &Self) -> bool {
+        other.0.ptr_eq(&self.0)
     }
     fn name(&self) -> &'static str {
         "on_size_changed"
@@ -106,9 +106,10 @@ impl ModifierNode for OnSizeChangedNode {
     fn as_layout(&mut self) -> Option<&mut dyn LayoutModifierNode> {
         Some(self)
     }
-    /// Reused, it reports the new content's size.
-    fn on_reset(&mut self) {
+    /// Reused, it reports the new content's size, measured again for it.
+    fn on_reset(&mut self, context: &mut crate::node_context::NodeContext<'_>) {
         self.last = None;
+        context.invalidate_measurement();
     }
 }
 
@@ -174,18 +175,15 @@ struct OnGloballyPositionedNode {
 }
 
 impl ModifierNodeElement for OnGloballyPositionedElement {
-    fn create(&self) -> Box<dyn ModifierNode> {
-        Box::new(OnGloballyPositionedNode { callback: self.0.clone(), last: None })
+    type Node = OnGloballyPositionedNode;
+    fn create(&self) -> OnGloballyPositionedNode {
+        OnGloballyPositionedNode { callback: self.0.clone(), last: None }
     }
-    fn update(&self, node: &mut dyn ModifierNode) {
-        if let Some(node) = node.downcast_mut::<OnGloballyPositionedNode>() {
-            node.callback = self.0.clone();
-        }
+    fn update(&self, node: &mut OnGloballyPositionedNode) {
+        node.callback = self.0.clone();
     }
-    fn same(&self, other: &dyn ModifierNodeElement) -> bool {
-        other
-            .downcast_ref::<OnGloballyPositionedElement>()
-            .is_some_and(|other| other.0.ptr_eq(&self.0))
+    fn same(&self, other: &Self) -> bool {
+        other.0.ptr_eq(&self.0)
     }
     fn name(&self) -> &'static str {
         "on_globally_positioned"
@@ -197,7 +195,7 @@ impl ModifierNode for OnGloballyPositionedNode {
         Some(self)
     }
     /// Reused, it reports the new content's coordinates.
-    fn on_reset(&mut self) {
+    fn on_reset(&mut self, _context: &mut crate::node_context::NodeContext<'_>) {
         self.last = None;
     }
 }
@@ -234,19 +232,17 @@ impl UiTree {
         let placed = self.is_placed_in_root(node);
         for index in 0..count {
             let value = self.node_mut(node);
-            if value.chain[index].as_global_position_aware().is_none() {
+            if value.chain[index].node.as_global_position_aware().is_none() {
                 continue;
             }
             any = true;
             if !placed {
                 continue;
             }
-            let layer = value.capabilities[..index]
-                .iter()
-                .filter(|bits| **bits & capability::LAYOUT != 0)
-                .count();
+            let layer = value.layer_of(index);
             let coordinates = self.coordinates(node, layer, index);
             if let Some(action) = self.node_mut(node).chain[index]
+                .node
                 .as_global_position_aware()
                 .and_then(|aware| aware.on_globally_positioned(coordinates))
             {
@@ -272,11 +268,11 @@ impl UiTree {
         let value = self.node(node);
         let mut layer_of_entry = 0;
         let mut entry = None;
-        for (index, bits) in value.capabilities.iter().enumerate() {
-            if entry.is_none() && layer_of_entry == layer && bits & capability::SEMANTICS != 0 {
+        for (index, bits) in value.chain.iter().map(|entry| entry.kinds).enumerate() {
+            if entry.is_none() && layer_of_entry == layer && bits.any(NodeKinds::SEMANTICS) {
                 entry = Some(index);
             }
-            if bits & capability::LAYOUT != 0 {
+            if bits.any(NodeKinds::LAYOUT) {
                 layer_of_entry += 1;
             }
         }
@@ -315,11 +311,11 @@ impl UiTree {
                     break;
                 }
                 let size = value.layers[layer_of_entry].size;
-                if entry.hit_clip_at(size.into(), self.density).is_some() {
+                if entry.node.hit_clip_at(size.into(), self.density).is_some() {
                     let clip = self.rect_in_root(id, layer_of_entry, Some(index), size);
                     *bounds = intersect(*bounds, clip);
                 }
-                if value.capabilities[index] & capability::LAYOUT != 0 {
+                if value.chain[index].kinds.any(NodeKinds::LAYOUT) {
                     layer_of_entry += 1;
                 }
             }
@@ -376,15 +372,13 @@ impl UiTree {
             let end = before.unwrap_or(value.chain.len());
             // The innermost first.
             for index in (0..end).rev() {
-                let Some(graphics) =
-                    value.chain[index].downcast_ref::<crate::graphics_layer::GraphicsLayerNode>()
+                let Some(graphics) = value.chain[index]
+                    .node
+                    .downcast_ref::<crate::graphics_layer::GraphicsLayerNode>()
                 else {
                     continue;
                 };
-                let entry_layer = value.capabilities[..index]
-                    .iter()
-                    .filter(|bits| **bits & capability::LAYOUT != 0)
-                    .count();
+                let entry_layer = value.layer_of(index);
                 let properties = graphics.properties(
                     self.density,
                     value.layout_direction,

@@ -35,10 +35,13 @@ mod interaction;
 mod layout;
 mod layout_callbacks;
 mod layout_modifiers;
+mod lifecycle;
 mod logging;
 mod measure;
 mod modifier;
 mod nested_scroll;
+mod node_chain;
+mod node_context;
 mod nodes;
 mod optimizations;
 mod overlay;
@@ -139,12 +142,14 @@ pub use layout::{
 pub use layout_callbacks::{GlobalPositionAwareModifierNode, LayoutCoordinates};
 pub use layout_modifiers::{IntrinsicSize, SizeOrIntrinsic};
 pub use modifier::{
-    AlignScope, BoxScope, ClickableOptions, ColumnScope, DetachContext, DrawModifierNode,
-    FocusTargetModifierNode, Indication, KeyInputModifierNode, LayoutModifierNode, Modifier,
-    ModifierNode, ModifierNodeElement, PaddingValues, ParentAlignment, ParentData,
-    PointerInputModifierNode, RowScope, SemanticsModifierNode, SizeSpec, WeightScope,
+    AlignScope, AnyModifierNodeElement, BoxScope, ClickableOptions, ColumnScope, DrawModifierNode,
+    FocusTargetModifierNode, Indication, InspectorInfo, KeyInputModifierNode, LayoutModifierNode,
+    Modifier, ModifierNode, ModifierNodeElement, PaddingValues, ParentAlignment, ParentData,
+    PointerInputModifierNode, ReleaseContext, RowScope, SemanticsModifierNode, SizeSpec,
+    WeightScope,
 };
 pub use nested_scroll::{NestedScrollConnection, NestedScrollSource};
+pub use node_context::{NodeContext, NodeHandle};
 pub use overlay::{PopupPositionProvider, WindowPosition};
 pub use path::{
     CornerRadius, ImageVector, Matrix, Path, PathCommand, PathData, PathDirection, PathError,

@@ -57,31 +57,28 @@ pub(crate) struct OverlayNode {
 }
 
 impl ModifierNodeElement for OverlayElement {
-    fn create(&self) -> Box<dyn ModifierNode> {
-        Box::new(OverlayNode {
+    type Node = OverlayNode;
+    fn create(&self) -> OverlayNode {
+        OverlayNode {
             provider: self.provider.clone(),
             focus_on_open: self.focus_on_open,
             focused_once: false,
             pass_through: self.pass_through,
-        })
-    }
-    fn update(&self, node: &mut dyn ModifierNode) {
-        if let Some(node) = node.downcast_mut::<OverlayNode>() {
-            node.provider = self.provider.clone();
-            if self.focus_on_open && !node.focus_on_open {
-                // Taking the focus again: it moves in, as when it opened.
-                node.focused_once = false;
-            }
-            node.focus_on_open = self.focus_on_open;
-            node.pass_through = self.pass_through;
         }
     }
-    fn same(&self, other: &dyn ModifierNodeElement) -> bool {
-        other.downcast_ref::<OverlayElement>().is_some_and(|other| {
-            Rc::ptr_eq(&other.provider, &self.provider)
-                && other.focus_on_open == self.focus_on_open
-                && other.pass_through == self.pass_through
-        })
+    fn update(&self, node: &mut OverlayNode) {
+        node.provider = self.provider.clone();
+        if self.focus_on_open && !node.focus_on_open {
+            // Taking the focus again: it moves in, as when it opened.
+            node.focused_once = false;
+        }
+        node.focus_on_open = self.focus_on_open;
+        node.pass_through = self.pass_through;
+    }
+    fn same(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&other.provider, &self.provider)
+            && other.focus_on_open == self.focus_on_open
+            && other.pass_through == self.pass_through
     }
     fn name(&self) -> &'static str {
         "overlay"
@@ -90,8 +87,10 @@ impl ModifierNodeElement for OverlayElement {
 
 impl ModifierNode for OverlayNode {
     /// Reused for another popup: the focus goes into it again when it opens.
-    fn on_reset(&mut self) {
+    fn on_reset(&mut self, context: &mut crate::node_context::NodeContext<'_>) {
         self.focused_once = false;
+        // Laid out again, where it may take the focus (`position_overlays`).
+        context.invalidate_measurement();
     }
 }
 

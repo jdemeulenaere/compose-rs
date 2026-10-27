@@ -392,12 +392,13 @@ struct BlockPointer;
 struct BlockPointerNode;
 
 impl ModifierNodeElement for BlockPointer {
-    fn create(&self) -> std::boxed::Box<dyn ModifierNode> {
-        std::boxed::Box::new(BlockPointerNode)
+    type Node = BlockPointerNode;
+    fn create(&self) -> BlockPointerNode {
+        BlockPointerNode
     }
-    fn update(&self, _: &mut dyn ModifierNode) {}
-    fn same(&self, other: &dyn ModifierNodeElement) -> bool {
-        other.downcast_ref::<BlockPointer>().is_some()
+    fn update(&self, _: &mut Self::Node) {}
+    fn same(&self, _other: &Self) -> bool {
+        true
     }
     fn name(&self) -> &'static str {
         "block_pointer"
@@ -509,25 +510,17 @@ struct CheckboxElement {
 }
 
 impl ModifierNodeElement for CheckboxElement {
-    fn create(&self) -> std::boxed::Box<dyn ModifierNode> {
-        std::boxed::Box::new(CheckboxNode {
-            checked: self.checked,
-            enabled: self.enabled,
-            colors: self.colors,
-        })
+    type Node = CheckboxNode;
+    fn create(&self) -> CheckboxNode {
+        CheckboxNode { checked: self.checked, enabled: self.enabled, colors: self.colors }
     }
-    fn update(&self, node: &mut dyn ModifierNode) {
-        if let Some(node) = node.downcast_mut::<CheckboxNode>() {
-            *node =
-                CheckboxNode { checked: self.checked, enabled: self.enabled, colors: self.colors };
-        }
+    fn update(&self, node: &mut CheckboxNode) {
+        *node = CheckboxNode { checked: self.checked, enabled: self.enabled, colors: self.colors };
     }
-    fn same(&self, other: &dyn ModifierNodeElement) -> bool {
-        other.downcast_ref::<CheckboxElement>().is_some_and(|other| {
-            other.checked == self.checked
-                && other.enabled == self.enabled
-                && other.colors == self.colors
-        })
+    fn same(&self, other: &Self) -> bool {
+        other.checked == self.checked
+            && other.enabled == self.enabled
+            && other.colors == self.colors
     }
     fn name(&self) -> &'static str {
         "checkbox"

@@ -49,20 +49,17 @@ struct IconNode {
 }
 
 impl ModifierNodeElement for IconElement {
-    fn create(&self) -> std::boxed::Box<dyn ModifierNode> {
-        std::boxed::Box::new(IconNode { image_vector: self.image_vector.clone(), tint: self.tint })
+    type Node = IconNode;
+    fn create(&self) -> IconNode {
+        IconNode { image_vector: self.image_vector.clone(), tint: self.tint }
     }
-    fn update(&self, node: &mut dyn ModifierNode) {
-        if let Some(node) = node.downcast_mut::<IconNode>() {
-            node.image_vector = self.image_vector.clone();
-            node.tint = self.tint;
-        }
+    fn update(&self, node: &mut IconNode) {
+        node.image_vector = self.image_vector.clone();
+        node.tint = self.tint;
     }
-    fn same(&self, other: &dyn ModifierNodeElement) -> bool {
+    fn same(&self, other: &Self) -> bool {
         use compose_runtime::ComposeArg;
-        other.downcast_ref::<IconElement>().is_some_and(|other| {
-            other.tint == self.tint && other.image_vector.same(&self.image_vector)
-        })
+        other.tint == self.tint && other.image_vector.same(&self.image_vector)
     }
     fn name(&self) -> &'static str {
         "icon"

@@ -133,29 +133,27 @@ struct SwitchNode {
 }
 
 impl ModifierNodeElement for SwitchElement {
-    fn create(&self) -> std::boxed::Box<dyn ModifierNode> {
-        std::boxed::Box::new(SwitchNode {
+    type Node = SwitchNode;
+    fn create(&self) -> SwitchNode {
+        SwitchNode {
             checked: self.checked,
             enabled: self.enabled,
             colors: self.colors,
             progress: Animatable::new(if self.checked { 1.0 } else { 0.0 }),
             scope: CoroutineScope::new(),
             animate: false,
-        })
+        }
     }
-    fn update(&self, node: &mut dyn ModifierNode) {
-        let Some(node) = node.downcast_mut::<SwitchNode>() else { return };
+    fn update(&self, node: &mut SwitchNode) {
         node.animate |= node.checked != self.checked;
         node.checked = self.checked;
         node.enabled = self.enabled;
         node.colors = self.colors;
     }
-    fn same(&self, other: &dyn ModifierNodeElement) -> bool {
-        other.downcast_ref::<SwitchElement>().is_some_and(|other| {
-            other.checked == self.checked
-                && other.enabled == self.enabled
-                && other.colors == self.colors
-        })
+    fn same(&self, other: &Self) -> bool {
+        other.checked == self.checked
+            && other.enabled == self.enabled
+            && other.colors == self.colors
     }
     fn name(&self) -> &'static str {
         "switch"
@@ -166,12 +164,13 @@ impl ModifierNode for SwitchNode {
     fn as_draw(&mut self) -> Option<&mut dyn DrawModifierNode> {
         Some(self)
     }
-    fn on_detach(&mut self, _context: &mut compose_ui::DetachContext<'_>) {
+    fn on_release(&mut self, _context: &mut compose_ui::ReleaseContext<'_>) {
         self.scope.cancel();
     }
-    /// Reused for another item's switch (after its value came, and the pass ended): shown at
-    /// its value, as a new one, without animating.
-    fn on_reset(&mut self) {
+    /// Reused for another item's switch: attached again after the pass that gave it its value
+    /// (from the pass or from the kept pool), it shows the value at once, as a new one,
+    /// without animating (D435, D1156).
+    fn on_attach(&mut self, _context: &mut compose_ui::NodeContext<'_>) {
         self.animate = false;
         let target = if self.checked { 1.0 } else { 0.0 };
         if self.progress.value() != target || self.progress.is_running() {
@@ -358,29 +357,27 @@ struct RadioNode {
 }
 
 impl ModifierNodeElement for RadioElement {
-    fn create(&self) -> std::boxed::Box<dyn ModifierNode> {
-        std::boxed::Box::new(RadioNode {
+    type Node = RadioNode;
+    fn create(&self) -> RadioNode {
+        RadioNode {
             selected: self.selected,
             enabled: self.enabled,
             colors: self.colors,
             dot: Animatable::new(if self.selected { 5.0 } else { 0.0 }),
             scope: CoroutineScope::new(),
             animate: false,
-        })
+        }
     }
-    fn update(&self, node: &mut dyn ModifierNode) {
-        let Some(node) = node.downcast_mut::<RadioNode>() else { return };
+    fn update(&self, node: &mut RadioNode) {
         node.animate |= node.selected != self.selected;
         node.selected = self.selected;
         node.enabled = self.enabled;
         node.colors = self.colors;
     }
-    fn same(&self, other: &dyn ModifierNodeElement) -> bool {
-        other.downcast_ref::<RadioElement>().is_some_and(|other| {
-            other.selected == self.selected
-                && other.enabled == self.enabled
-                && other.colors == self.colors
-        })
+    fn same(&self, other: &Self) -> bool {
+        other.selected == self.selected
+            && other.enabled == self.enabled
+            && other.colors == self.colors
     }
     fn name(&self) -> &'static str {
         "radio_button"
@@ -391,11 +388,12 @@ impl ModifierNode for RadioNode {
     fn as_draw(&mut self) -> Option<&mut dyn DrawModifierNode> {
         Some(self)
     }
-    fn on_detach(&mut self, _context: &mut compose_ui::DetachContext<'_>) {
+    fn on_release(&mut self, _context: &mut compose_ui::ReleaseContext<'_>) {
         self.scope.cancel();
     }
-    /// Reused for another item's button: shown at its value, as a new one.
-    fn on_reset(&mut self) {
+    /// Reused for another item's button: attached again, shown at its value, as a new one
+    /// (D435, D1156).
+    fn on_attach(&mut self, _context: &mut compose_ui::NodeContext<'_>) {
         self.animate = false;
         let target = if self.selected { 5.0 } else { 0.0 };
         if self.dot.value() != target || self.dot.is_running() {
@@ -546,8 +544,9 @@ struct SliderNode {
 }
 
 impl ModifierNodeElement for SliderElement {
-    fn create(&self) -> std::boxed::Box<dyn ModifierNode> {
-        std::boxed::Box::new(SliderNode {
+    type Node = SliderNode;
+    fn create(&self) -> SliderNode {
+        SliderNode {
             value: self.value,
             on_value_change: self.on_value_change.clone(),
             on_value_change_finished: self.on_value_change_finished.clone(),
@@ -560,10 +559,9 @@ impl ModifierNodeElement for SliderElement {
             focused: false,
             radius: 10.0,
             asked: None,
-        })
+        }
     }
-    fn update(&self, node: &mut dyn ModifierNode) {
-        let Some(node) = node.downcast_mut::<SliderNode>() else { return };
+    fn update(&self, node: &mut SliderNode) {
         node.value = self.value;
         node.asked = None;
         node.on_value_change = self.on_value_change.clone();
@@ -573,20 +571,18 @@ impl ModifierNodeElement for SliderElement {
         node.steps = self.steps;
         node.colors = self.colors;
     }
-    fn same(&self, other: &dyn ModifierNodeElement) -> bool {
-        other.downcast_ref::<SliderElement>().is_some_and(|other| {
-            other.value == self.value
-                && other.on_value_change.ptr_eq(&self.on_value_change)
-                && match (&other.on_value_change_finished, &self.on_value_change_finished) {
-                    (Some(a), Some(b)) => a.ptr_eq(b),
-                    (None, None) => true,
-                    _ => false,
-                }
-                && other.enabled == self.enabled
-                && other.range == self.range
-                && other.steps == self.steps
-                && other.colors == self.colors
-        })
+    fn same(&self, other: &Self) -> bool {
+        other.value == self.value
+            && other.on_value_change.ptr_eq(&self.on_value_change)
+            && match (&other.on_value_change_finished, &self.on_value_change_finished) {
+                (Some(a), Some(b)) => a.ptr_eq(b),
+                (None, None) => true,
+                _ => false,
+            }
+            && other.enabled == self.enabled
+            && other.range == self.range
+            && other.steps == self.steps
+            && other.colors == self.colors
     }
     fn name(&self) -> &'static str {
         "slider"
@@ -635,7 +631,7 @@ impl SliderNode {
 }
 
 impl ModifierNode for SliderNode {
-    fn on_reset(&mut self) {
+    fn on_reset(&mut self, _context: &mut compose_ui::NodeContext<'_>) {
         self.press = None;
         self.dragging = false;
         self.focused = false;

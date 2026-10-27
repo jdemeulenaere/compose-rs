@@ -66,12 +66,13 @@ struct MeasureContentTwice;
 struct MeasureContentTwiceNode;
 
 impl ModifierNodeElement for MeasureContentTwice {
-    fn create(&self) -> Box<dyn ModifierNode> {
-        Box::new(MeasureContentTwiceNode)
+    type Node = MeasureContentTwiceNode;
+    fn create(&self) -> MeasureContentTwiceNode {
+        MeasureContentTwiceNode
     }
-    fn update(&self, _: &mut dyn ModifierNode) {}
-    fn same(&self, other: &dyn ModifierNodeElement) -> bool {
-        other.downcast_ref::<MeasureContentTwice>().is_some()
+    fn update(&self, _: &mut Self::Node) {}
+    fn same(&self, _other: &Self) -> bool {
+        true
     }
 }
 

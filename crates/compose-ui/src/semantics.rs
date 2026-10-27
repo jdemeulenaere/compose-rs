@@ -366,7 +366,8 @@ impl SemanticsNode {
 
 // ---- The semantics tree ----------------------------------------------------------------------
 
-use crate::tree::{UiTree, capability};
+use crate::node_chain::NodeKinds;
+use crate::tree::UiTree;
 
 thread_local! {
     /// The semantics tree being built takes deactivated content in
@@ -420,15 +421,15 @@ impl UiTree {
         node: NodeId,
     ) -> Option<(SemanticsConfiguration, usize)> {
         let value = self.get_mut(node)?;
-        if value.all_capabilities & capability::SEMANTICS == 0 {
+        if !value.kinds.any(NodeKinds::SEMANTICS) {
             return None;
         }
         let mut config = SemanticsConfiguration::default();
         let mut layers: SmallVec<[usize; 8]> = SmallVec::new();
         let mut layer = 0;
-        for bits in &value.capabilities {
+        for bits in value.chain.iter().map(|entry| entry.kinds) {
             layers.push(layer);
-            if bits & capability::LAYOUT != 0 {
+            if bits.any(NodeKinds::LAYOUT) {
                 layer += 1;
             }
         }
@@ -437,8 +438,8 @@ impl UiTree {
         // From the innermost to the outermost, so an outer modifier's values win, as Compose's
         // `collapsedSemantics` (`tailToHead`).
         for index in (0..value.chain.len()).rev() {
-            if value.capabilities[index] & capability::SEMANTICS != 0
-                && let Some(semantics) = value.chain[index].as_semantics()
+            if value.chain[index].kinds.any(NodeKinds::SEMANTICS)
+                && let Some(semantics) = value.chain[index].node.as_semantics()
             {
                 let mut own = SemanticsConfiguration::default();
                 semantics.apply_semantics(&mut own);

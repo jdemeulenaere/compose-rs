@@ -7,7 +7,8 @@ use crate::input::{
     Action, EventContext, Key, KeyEvent, KeyEventType, PointerEvent, PointerEventPass,
     PointerEventType, Requests,
 };
-use crate::tree::{NodeId, UiTree, capability};
+use crate::node_chain::NodeKinds;
+use crate::tree::{NodeId, UiTree};
 use crate::unit::{IntSize, Offset};
 
 /// A pointer input node on a hit path.
@@ -80,12 +81,12 @@ impl UiTree {
             }
             origins.push(origin);
         }
-        if value.all_capabilities & (capability::POINTER | capability::DRAW) != 0 {
+        if value.kinds.any(NodeKinds::POINTER_INPUT | NodeKinds::DRAW) {
             for index in 0..value.chain.len() {
-                let bits = value.capabilities[index];
+                let bits = value.chain[index].kinds;
                 let size = value.layers[layer].measured.into();
-                if bits & capability::DRAW != 0
-                    && let Some(clip) = value.chain[index].hit_clip_at(size, density)
+                if bits.any(NodeKinds::DRAW)
+                    && let Some(clip) = value.chain[index].node.hit_clip_at(size, density)
                     && !clip
                         .outline_in(size, &density, value.layout_direction)
                         .contains(local - origins[layer])
@@ -93,7 +94,7 @@ impl UiTree {
                     // Outside the clip: nothing after it, nor the children, is hit.
                     return hit_since(path, start);
                 }
-                if bits & capability::POINTER != 0
+                if bits.any(NodeKinds::POINTER_INPUT)
                     && contains(value.layers[layer].measured, local - origins[layer])
                 {
                     path.push(HitEntry {
@@ -101,10 +102,10 @@ impl UiTree {
                         index: index as u16,
                         layer: layer as u16,
                         version: value.chain_version,
-                        observer: value.chain[index].is_pointer_observer(),
+                        observer: value.chain[index].node.is_pointer_observer(),
                     });
                 }
-                if bits & capability::LAYOUT != 0 {
+                if bits.any(NodeKinds::LAYOUT) {
                     layer += 1;
                 }
             }
@@ -206,7 +207,7 @@ impl UiTree {
         for entry in path {
             if let Some(value) = self.get_mut(entry.node)
                 && value.chain_version == entry.version
-                && let Some(handler) = value.chain[entry.index as usize].as_pointer_input()
+                && let Some(handler) = value.chain[entry.index as usize].node.as_pointer_input()
             {
                 handler.on_cancel_pointer_input();
             }
@@ -246,7 +247,7 @@ impl UiTree {
             view_configuration,
             layout_direction: value.layout_direction,
         };
-        if let Some(handler) = value.chain[entry.index as usize].as_pointer_input() {
+        if let Some(handler) = value.chain[entry.index as usize].node.as_pointer_input() {
             handler.on_pointer_event(event, pass, bounds, &mut context);
         }
         event.position = position;
@@ -313,7 +314,7 @@ impl UiTree {
             if value.chain_version != entry.version {
                 return None;
             }
-            value.chain[entry.index as usize].as_pointer_input()?.hover_icon()
+            value.chain[entry.index as usize].node.as_pointer_input()?.hover_icon()
         });
         self.hovered = hovered;
         icon.unwrap_or_default()
@@ -348,7 +349,7 @@ impl UiTree {
             for entry in path {
                 if let Some(value) = self.get_mut(entry.node)
                     && value.chain_version == entry.version
-                    && let Some(handler) = value.chain[entry.index as usize].as_pointer_input()
+                    && let Some(handler) = value.chain[entry.index as usize].node.as_pointer_input()
                 {
                     handler.on_cancel_pointer_input();
                     // A gesture's drawing (a press, a drag) ends without a context to say so.
@@ -433,7 +434,7 @@ impl UiTree {
         let mut requests = Requests::default();
         let mut performed = false;
         for index in 0..self.node(node).chain.len() {
-            if self.node(node).capabilities[index] & capability::SEMANTICS == 0 {
+            if !self.node(node).chain[index].kinds.any(NodeKinds::SEMANTICS) {
                 continue;
             }
             let density = self.density;
@@ -452,7 +453,7 @@ impl UiTree {
                 view_configuration,
                 layout_direction: value.layout_direction,
             };
-            if let Some(semantics) = value.chain[index].as_semantics()
+            if let Some(semantics) = value.chain[index].node.as_semantics()
                 && semantics.perform_action(action, &mut context)
             {
                 performed = true;
@@ -477,7 +478,7 @@ impl UiTree {
         while let Some(id) = node {
             let value = self.node(id);
             for index in (0..value.chain.len()).rev() {
-                if value.capabilities[index] & capability::KEY != 0 {
+                if value.chain[index].kinds.any(NodeKinds::KEY_INPUT) {
                     path.push((id, index));
                 }
             }
@@ -509,7 +510,7 @@ impl UiTree {
                 view_configuration,
                 layout_direction: value.layout_direction,
             };
-            if let Some(handler) = value.chain[index].as_key_input()
+            if let Some(handler) = value.chain[index].node.as_key_input()
                 && handler.on_key_event(&event, &mut context)
             {
                 consumed = true;
@@ -559,10 +560,10 @@ impl UiTree {
         while let Some(node) = next {
             next = self.node(node).parent;
             for index in (0..self.node(node).chain.len()).rev() {
-                if self.node(node).capabilities[index] & capability::KEY == 0 {
+                if !self.node(node).chain[index].kinds.any(NodeKinds::KEY_INPUT) {
                     continue;
                 }
-                let handler = self.get_mut(node)?.chain[index].as_key_input();
+                let handler = self.get_mut(node)?.chain[index].node.as_key_input();
                 if let Some(handler) = handler
                     && handler.text_input_area().is_some()
                 {
@@ -581,17 +582,15 @@ impl UiTree {
         while let Some(node) = next {
             next = self.node(node).parent;
             for index in (0..self.node(node).chain.len()).rev() {
-                if self.node(node).capabilities[index] & capability::KEY == 0 {
+                if !self.node(node).chain[index].kinds.any(NodeKinds::KEY_INPUT) {
                     continue;
                 }
                 let layer = {
                     let value = self.node(node);
-                    value.capabilities[..index]
-                        .iter()
-                        .filter(|bits| **bits & capability::LAYOUT != 0)
-                        .count()
+                    value.layer_of(index)
                 };
                 let area = self.get_mut(node)?.chain[index]
+                    .node
                     .as_key_input()
                     .and_then(|handler| handler.text_input_area());
                 if let Some(area) = area {
@@ -635,7 +634,7 @@ impl UiTree {
                 view_configuration,
                 layout_direction: value.layout_direction,
             };
-            if let Some(handler) = value.chain[index].as_key_input()
+            if let Some(handler) = value.chain[index].node.as_key_input()
                 && send(handler, &mut context)
             {
                 consumed = true;

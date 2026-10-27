@@ -20,6 +20,9 @@ pub struct FrameStats {
     pub recomposed: bool,
     pub measured: bool,
     pub drew: bool,
+    /// A modifier node's semantics changed without a recomposition or a layout saying so
+    /// (`invalidate_semantics`, or a semantics node's update): accessibility reads them again.
+    pub semantics_changed: bool,
     /// Composable bodies that ran (didn't skip).
     pub bodies_run: u64,
 }
@@ -117,6 +120,15 @@ impl UiHost {
         composition.with_applier(|tree: &mut UiTree| {
             *tree.focus_requests.wake.borrow_mut() = Some(Rc::new(move || focus_wake()));
         });
+        // Modifier nodes' handles reach the tree through the composition, when it's free.
+        let applier = composition.applier_ref::<UiTree>();
+        let key = composition.with_applier(|tree: &mut UiTree| tree.key);
+        crate::node_context::set_tree_borrow(
+            key,
+            Rc::new(move |f: &mut dyn FnMut(&mut UiTree)| {
+                applier.try_with(|tree| f(tree)).is_some()
+            }),
+        );
         // Writes to state read while measuring or drawing ask for a frame, as composition's do.
         let observer = compose_runtime::platform::ReadObserver::new(move || request());
         composition.with_applier(|tree: &mut UiTree| tree.set_read_observer(observer));
@@ -328,6 +340,7 @@ impl UiHost {
             || self.with_tree(|tree| tree.needs_draw)
             || compose_runtime::platform::has_ready_tasks()
             || self.with_tree(|tree| !tree.focus_requests.pending.borrow().is_empty())
+            || self.with_tree(|tree| tree.has_node_requests())
             || self.with_tree(|tree| tree.has_beyond_bounds_moves())
     }
 
@@ -342,6 +355,8 @@ impl UiHost {
         compose_runtime::platform::fire_timers();
         compose_runtime::platform::run_ready();
         self.handle_focus_requests();
+        // What the tasks' modifier node handles asked, in this frame.
+        self.with_tree(|tree| tree.apply_node_requests());
         compose_runtime::platform::dispatch_frame();
         drop(tasks);
         let compose = crate::trace::section(c"compose-rs: recompose");
@@ -487,7 +502,9 @@ impl UiHost {
         }
         // Content that moved under a resting mouse: the hover follows it, as Compose Desktop's
         // synthetic move after a layout.
-        if measured {
+        // Pointer nodes that came, went or changed without a layout too (D1159).
+        let hover_stale = self.with_tree(|tree| std::mem::take(&mut tree.hover_stale));
+        if measured || hover_stale {
             let actions = self.with_tree(|tree| tree.refresh_hover());
             Self::run(actions);
         }
@@ -503,10 +520,12 @@ impl UiHost {
         if self.frame_requested.get() {
             self.wake();
         }
+        let semantics_changed = self.with_tree(|tree| std::mem::take(&mut tree.semantics_changed));
         FrameStats {
             recomposed,
             measured,
             drew,
+            semantics_changed,
             bodies_run: compose_runtime::platform::bodies_run() - bodies,
         }
     }
@@ -647,6 +666,7 @@ impl UiHost {
         // composition, by the frame's next round).
         for _ in 0..4 {
             let again = self.with_tree(|tree| {
+                tree.apply_node_requests();
                 tree.apply_observed_writes();
                 tree.layout(size)
             });

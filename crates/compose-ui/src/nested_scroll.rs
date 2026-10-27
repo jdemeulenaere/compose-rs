@@ -157,18 +157,15 @@ struct NestedScrollElement {
 }
 
 impl ModifierNodeElement for NestedScrollElement {
-    fn create(&self) -> Box<dyn ModifierNode> {
-        Box::new(NestedScrollNode { connection: self.connection.clone() })
+    type Node = NestedScrollNode;
+    fn create(&self) -> NestedScrollNode {
+        NestedScrollNode { connection: self.connection.clone() }
     }
-    fn update(&self, node: &mut dyn ModifierNode) {
-        if let Some(node) = node.downcast_mut::<NestedScrollNode>() {
-            node.connection = self.connection.clone();
-        }
+    fn update(&self, node: &mut NestedScrollNode) {
+        node.connection = self.connection.clone();
     }
-    fn same(&self, other: &dyn ModifierNodeElement) -> bool {
-        other
-            .downcast_ref::<NestedScrollElement>()
-            .is_some_and(|other| Rc::ptr_eq(&other.connection, &self.connection))
+    fn same(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&other.connection, &self.connection)
     }
     fn name(&self) -> &'static str {
         "nested_scroll"

@@ -15,7 +15,7 @@ use crate::text_input::{
     ImeAction, KeyboardActions, KeyboardOptions, OffsetMapping, VisualTransformation,
 };
 use compose_ui::{
-    Color, Constraints, DetachContext, DrawModifierNode, DrawScope, EventContext,
+    AnyModifierNodeElement, Color, Constraints, ReleaseContext, DrawModifierNode, DrawScope, EventContext,
     FocusTargetModifierNode, IntSize, IntrinsicMeasureScope, Key, KeyEvent, KeyEventType,
     KeyInputModifierNode, Layout, LayoutModifierNode, Measurable, MeasureResult, MeasureScope,
     Modifier, ModifierNode, ModifierNodeElement, Offset, Paint, PointerEvent, PointerEventPass,
@@ -66,7 +66,7 @@ pub fn BasicTextField(
     } else {
         crate::text::validate_min_max_lines(min_lines, max_lines);
     }
-    let element: Rc<dyn ModifierNodeElement> = Rc::new(TextFieldElement {
+    let element: Rc<dyn AnyModifierNodeElement> = Rc::new(TextFieldElement {
         value,
         on_value_change,
         enabled,
@@ -123,8 +123,9 @@ pub(crate) struct TextFieldElement {
 }
 
 impl ModifierNodeElement for TextFieldElement {
-    fn create(&self) -> Box<dyn ModifierNode> {
-        Box::new(TextFieldNode {
+    type Node = TextFieldNode;
+    fn create(&self) -> TextFieldNode {
+        TextFieldNode {
             // At the start, as Compose's `TextFieldValue` with no selection given.
             cursor: 0,
             anchor: 0,
@@ -165,11 +166,10 @@ impl ModifierNodeElement for TextFieldElement {
             visual_transformation: self.visual_transformation.clone(),
             mapping: None,
             shown_text: None,
-        })
+        }
     }
 
-    fn update(&self, node: &mut dyn ModifierNode) {
-        let Some(node) = node.downcast_mut::<TextFieldNode>() else { return };
+    fn update(&self, node: &mut TextFieldNode) {
         if node.value != self.value {
             node.value = self.value.clone();
             node.awaiting_value = false;
@@ -210,21 +210,19 @@ impl ModifierNodeElement for TextFieldElement {
         node.keyboard_actions = self.keyboard_actions.clone();
     }
 
-    fn same(&self, other: &dyn ModifierNodeElement) -> bool {
-        other.downcast_ref::<TextFieldElement>().is_some_and(|other| {
-            other.value == self.value
-                && other.on_value_change.ptr_eq(&self.on_value_change)
-                && other.enabled == self.enabled
-                && other.read_only == self.read_only
-                && other.style == self.style
-                && other.single_line == self.single_line
-                && other.max_lines == self.max_lines
-                && other.min_lines == self.min_lines
-                && other.cursor_color == self.cursor_color
-                && other.keyboard_options == self.keyboard_options
-                && other.keyboard_actions.same(&self.keyboard_actions)
-                && other.visual_transformation.same(&self.visual_transformation)
-        })
+    fn same(&self, other: &Self) -> bool {
+        other.value == self.value
+            && other.on_value_change.ptr_eq(&self.on_value_change)
+            && other.enabled == self.enabled
+            && other.read_only == self.read_only
+            && other.style == self.style
+            && other.single_line == self.single_line
+            && other.max_lines == self.max_lines
+            && other.min_lines == self.min_lines
+            && other.cursor_color == self.cursor_color
+            && other.keyboard_options == self.keyboard_options
+            && other.keyboard_actions.same(&self.keyboard_actions)
+            && other.visual_transformation.same(&self.visual_transformation)
     }
 
     fn name(&self) -> &'static str {
@@ -681,7 +679,7 @@ impl ModifierNode for TextFieldNode {
     fn as_key_input(&mut self) -> Option<&mut dyn KeyInputModifierNode> {
         Some(self)
     }
-    fn on_detach(&mut self, context: &mut DetachContext<'_>) {
+    fn on_release(&mut self, context: &mut ReleaseContext<'_>) {
         let intrinsics = self.intrinsics.take().map(|intrinsics| intrinsics.paragraph);
         for paragraph in
             self.paragraph.take().into_iter().chain(self.stale.drain(..)).chain(intrinsics)
@@ -691,11 +689,13 @@ impl ModifierNode for TextFieldNode {
     }
     /// Reused for another field: its editing (cursor, selection, history, composing text,
     /// gestures, scroll) goes, as a new field's, and the new element's value comes in.
-    fn on_reset(&mut self) {
+    fn on_reset(&mut self, context: &mut compose_ui::NodeContext<'_>) {
         // As a new field's: the text is the value (an edit not taken yet is dropped).
         if self.text != self.value {
             self.text = self.value.clone();
             self.invalidate_paragraph();
+            // Another text to lay out: reuse alone doesn't measure the node again.
+            context.invalidate_measurement();
         }
         self.awaiting_value = false;
         self.cursor = 0;
@@ -1529,12 +1529,13 @@ struct FocusOnTapNode {
 }
 
 impl ModifierNodeElement for FocusOnTap {
-    fn create(&self) -> Box<dyn ModifierNode> {
-        Box::new(FocusOnTapNode::default())
+    type Node = FocusOnTapNode;
+    fn create(&self) -> FocusOnTapNode {
+        FocusOnTapNode::default()
     }
-    fn update(&self, _: &mut dyn ModifierNode) {}
-    fn same(&self, other: &dyn ModifierNodeElement) -> bool {
-        other.downcast_ref::<FocusOnTap>().is_some()
+    fn update(&self, _: &mut Self::Node) {}
+    fn same(&self, _other: &Self) -> bool {
+        true
     }
     fn name(&self) -> &'static str {
         "focus_on_tap"

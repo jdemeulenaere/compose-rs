@@ -126,16 +126,15 @@ trait LayoutRule: PartialEq + Clone + 'static {
 struct LayoutData<R>(R);
 
 impl<R: LayoutRule> ModifierNodeElement for LayoutData<R> {
-    fn create(&self) -> Box<dyn ModifierNode> {
-        Box::new(self.clone())
+    type Node = Self;
+    fn create(&self) -> Self {
+        self.clone()
     }
-    fn update(&self, node: &mut dyn ModifierNode) {
-        if let Some(node) = node.downcast_mut::<LayoutData<R>>() {
-            *node = self.clone();
-        }
+    fn update(&self, node: &mut Self) {
+        *node = self.clone();
     }
-    fn same(&self, other: &dyn ModifierNodeElement) -> bool {
-        other.downcast_ref::<LayoutData<R>>().is_some_and(|other| other == self)
+    fn same(&self, other: &Self) -> bool {
+        other == self
     }
     fn name(&self) -> &'static str {
         R::NAME
@@ -526,16 +525,15 @@ type MeasureFunction = Rc<dyn Fn(&mut MeasureScope<'_>, Measurable, Constraints)
 struct LayoutElement(MeasureFunction);
 
 impl ModifierNodeElement for LayoutElement {
-    fn create(&self) -> Box<dyn ModifierNode> {
-        Box::new(self.clone())
+    type Node = Self;
+    fn create(&self) -> Self {
+        self.clone()
     }
-    fn update(&self, node: &mut dyn ModifierNode) {
-        if let Some(node) = node.downcast_mut::<LayoutElement>() {
-            *node = self.clone();
-        }
+    fn update(&self, node: &mut Self) {
+        *node = self.clone();
     }
-    fn same(&self, other: &dyn ModifierNodeElement) -> bool {
-        other.downcast_ref::<LayoutElement>().is_some_and(|other| Rc::ptr_eq(&other.0, &self.0))
+    fn same(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&other.0, &self.0)
     }
     fn name(&self) -> &'static str {
         "layout"

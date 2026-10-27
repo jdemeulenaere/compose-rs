@@ -24,16 +24,15 @@ struct MarkerNode {
 }
 
 impl ModifierNodeElement for Marker {
-    fn create(&self) -> Box<dyn ModifierNode> {
-        Box::new(MarkerNode { color: self.color })
+    type Node = MarkerNode;
+    fn create(&self) -> MarkerNode {
+        MarkerNode { color: self.color }
     }
-    fn update(&self, node: &mut dyn ModifierNode) {
-        if let Some(node) = (node as &mut dyn std::any::Any).downcast_mut::<MarkerNode>() {
-            node.color = self.color;
-        }
+    fn update(&self, node: &mut MarkerNode) {
+        node.color = self.color;
     }
-    fn same(&self, other: &dyn ModifierNodeElement) -> bool {
-        other.downcast_ref::<Marker>() == Some(self)
+    fn same(&self, other: &Self) -> bool {
+        other == self
     }
 }
 

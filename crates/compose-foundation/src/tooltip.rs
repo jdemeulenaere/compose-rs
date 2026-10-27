@@ -214,22 +214,16 @@ struct HoverNode {
 }
 
 impl ModifierNodeElement for HoverElement {
-    fn create(&self) -> std::boxed::Box<dyn ModifierNode> {
-        std::boxed::Box::new(HoverNode {
-            on_hover: self.on_hover.clone(),
-            in_window: self.in_window,
-        })
+    type Node = HoverNode;
+    fn create(&self) -> HoverNode {
+        HoverNode { on_hover: self.on_hover.clone(), in_window: self.in_window }
     }
-    fn update(&self, node: &mut dyn ModifierNode) {
-        if let Some(node) = node.downcast_mut::<HoverNode>() {
-            node.on_hover = self.on_hover.clone();
-            node.in_window = self.in_window;
-        }
+    fn update(&self, node: &mut HoverNode) {
+        node.on_hover = self.on_hover.clone();
+        node.in_window = self.in_window;
     }
-    fn same(&self, other: &dyn ModifierNodeElement) -> bool {
-        other.downcast_ref::<HoverElement>().is_some_and(|other| {
-            other.on_hover.ptr_eq(&self.on_hover) && other.in_window == self.in_window
-        })
+    fn same(&self, other: &Self) -> bool {
+        other.on_hover.ptr_eq(&self.on_hover) && other.in_window == self.in_window
     }
     fn name(&self) -> &'static str {
         "tooltip_area"

@@ -112,27 +112,21 @@ pub struct TextElement {
 }
 
 impl ModifierNodeElement for TextElement {
-    fn create(&self) -> Box<dyn ModifierNode> {
-        Box::new(TextNode {
-            text: self.text.clone(),
-            paragraph: None,
-            constraints: None,
-            stale: None,
-        })
+    type Node = TextNode;
+    fn create(&self) -> TextNode {
+        TextNode { text: self.text.clone(), paragraph: None, constraints: None, stale: None }
     }
 
-    fn update(&self, node: &mut dyn ModifierNode) {
-        if let Some(node) = node.downcast_mut::<TextNode>()
-            && node.text != self.text
-        {
+    fn update(&self, node: &mut TextNode) {
+        if node.text != self.text {
             node.text = self.text.clone();
             node.stale = node.paragraph.take().or(node.stale.take());
             node.constraints = None;
         }
     }
 
-    fn same(&self, other: &dyn ModifierNodeElement) -> bool {
-        other.downcast_ref::<TextElement>().is_some_and(|other| other.text == self.text)
+    fn same(&self, other: &Self) -> bool {
+        other.text == self.text
     }
 }
 
@@ -154,7 +148,7 @@ impl ModifierNode for TextNode {
     fn as_semantics(&mut self) -> Option<&mut dyn SemanticsModifierNode> {
         Some(self)
     }
-    fn on_detach(&mut self, context: &mut DetachContext<'_>) {
+    fn on_release(&mut self, context: &mut ReleaseContext<'_>) {
         for paragraph in [self.paragraph.take(), self.stale.take()].into_iter().flatten() {
             context.text_measurer.release(paragraph);
         }

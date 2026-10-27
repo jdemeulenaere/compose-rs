@@ -189,8 +189,9 @@ struct ScrollbarNode {
 }
 
 impl ModifierNodeElement for ScrollbarElement {
-    fn create(&self) -> Box<dyn ModifierNode> {
-        Box::new(ScrollbarNode {
+    type Node = ScrollbarNode;
+    fn create(&self) -> ScrollbarNode {
+        ScrollbarNode {
             adapter: self.adapter.clone(),
             vertical: self.vertical,
             reverse: self.reverse,
@@ -199,23 +200,19 @@ impl ModifierNodeElement for ScrollbarElement {
             density: compose_ui::Density::default(),
             hovered: false,
             rtl: false,
-        })
-    }
-    fn update(&self, node: &mut dyn ModifierNode) {
-        if let Some(node) = node.downcast_mut::<ScrollbarNode>() {
-            node.adapter = self.adapter.clone();
-            node.vertical = self.vertical;
-            node.reverse = self.reverse;
-            node.style = self.style;
         }
     }
-    fn same(&self, other: &dyn ModifierNodeElement) -> bool {
-        other.downcast_ref::<ScrollbarElement>().is_some_and(|other| {
-            Rc::ptr_eq(&other.adapter, &self.adapter)
-                && other.vertical == self.vertical
-                && other.reverse == self.reverse
-                && other.style == self.style
-        })
+    fn update(&self, node: &mut ScrollbarNode) {
+        node.adapter = self.adapter.clone();
+        node.vertical = self.vertical;
+        node.reverse = self.reverse;
+        node.style = self.style;
+    }
+    fn same(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&other.adapter, &self.adapter)
+            && other.vertical == self.vertical
+            && other.reverse == self.reverse
+            && other.style == self.style
     }
     fn name(&self) -> &'static str {
         "scrollbar"
@@ -223,7 +220,7 @@ impl ModifierNodeElement for ScrollbarElement {
 }
 
 impl ModifierNode for ScrollbarNode {
-    fn on_reset(&mut self) {
+    fn on_reset(&mut self, _context: &mut compose_ui::NodeContext<'_>) {
         self.drag = None;
         self.hovered = false;
     }

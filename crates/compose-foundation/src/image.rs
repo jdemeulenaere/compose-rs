@@ -90,34 +90,31 @@ struct ImageNode {
 }
 
 impl ModifierNodeElement for ImageElement {
-    fn create(&self) -> Box<dyn ModifierNode> {
-        Box::new(ImageNode {
+    type Node = ImageNode;
+    fn create(&self) -> ImageNode {
+        ImageNode {
             bitmap: self.bitmap.clone(),
             content_description: self.content_description,
             alignment: self.alignment,
             content_scale: self.content_scale,
             alpha: self.alpha,
-        })
-    }
-
-    fn update(&self, node: &mut dyn ModifierNode) {
-        if let Some(node) = node.downcast_mut::<ImageNode>() {
-            node.bitmap = self.bitmap.clone();
-            node.content_description = self.content_description;
-            node.alignment = self.alignment;
-            node.content_scale = self.content_scale;
-            node.alpha = self.alpha;
         }
     }
 
-    fn same(&self, other: &dyn ModifierNodeElement) -> bool {
-        other.downcast_ref::<ImageElement>().is_some_and(|other| {
-            other.bitmap.same_image(&self.bitmap)
-                && other.content_description == self.content_description
-                && other.alignment == self.alignment
-                && other.content_scale == self.content_scale
-                && other.alpha == self.alpha
-        })
+    fn update(&self, node: &mut ImageNode) {
+        node.bitmap = self.bitmap.clone();
+        node.content_description = self.content_description;
+        node.alignment = self.alignment;
+        node.content_scale = self.content_scale;
+        node.alpha = self.alpha;
+    }
+
+    fn same(&self, other: &Self) -> bool {
+        other.bitmap.same_image(&self.bitmap)
+            && other.content_description == self.content_description
+            && other.alignment == self.alignment
+            && other.content_scale == self.content_scale
+            && other.alpha == self.alpha
     }
 
     fn name(&self) -> &'static str {

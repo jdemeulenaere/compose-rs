@@ -10,9 +10,11 @@ use compose_runtime::ComposeArg;
 use crate::modifier::{Modifier, ModifierNode, ModifierNodeElement};
 use crate::tree::NodeId;
 
-/// The focus requests a tree has been given (by `FocusRequester`s and the `FocusManager`),
-/// handled by its host once it's free (after the event dispatched, or at the next frame); and
-/// what the `SoftwareKeyboardController` last asked, for the platform.
+/// The requests a tree has been given from outside its passes: focus requests (by
+/// `FocusRequester`s and the `FocusManager`), handled by its host once it's free (after the
+/// event dispatched, or at the next frame); what the `SoftwareKeyboardController` last asked,
+/// for the platform; and its modifier nodes' invalidations through their handles. The design's
+/// `TreeRequests` (docs/parity/design/modifier-nodes.md §3.3), its name kept.
 #[derive(Default)]
 pub(crate) struct FocusRequests {
     pub(crate) pending: RefCell<Vec<FocusRequest>>,
@@ -21,6 +23,13 @@ pub(crate) struct FocusRequests {
     pub(crate) software_keyboard: std::cell::Cell<Option<bool>>,
     /// Asks the host for a frame.
     pub(crate) wake: RefCell<Option<Rc<dyn Fn()>>>,
+    /// What modifier nodes asked through their handles (`NodeHandle`), applied where the tree
+    /// applies observed writes (`UiTree::apply_node_requests`).
+    pub(crate) node_invalidations:
+        RefCell<Vec<(NodeId, crate::node_chain::EntryId, crate::node_context::Invalidation)>>,
+    /// The entries handles were made for that are attached, by `EntryId`: what
+    /// `NodeHandle::is_attached` answers without the tree.
+    pub(crate) attached_entries: RefCell<std::collections::HashSet<u64>>,
 }
 
 /// A focus change asked for outside dispatch.
@@ -168,13 +177,12 @@ impl FocusRequesterNode {
 }
 
 impl ModifierNodeElement for FocusRequesterElement {
-    fn create(&self) -> Box<dyn ModifierNode> {
-        Box::new(FocusRequesterNode { requester: self.0, owner: None })
+    type Node = FocusRequesterNode;
+    fn create(&self) -> FocusRequesterNode {
+        FocusRequesterNode { requester: self.0, owner: None }
     }
-    fn update(&self, node: &mut dyn ModifierNode) {
-        if let Some(node) = node.downcast_mut::<FocusRequesterNode>()
-            && !node.requester.same(&self.0)
-        {
+    fn update(&self, node: &mut FocusRequesterNode) {
+        if !node.requester.same(&self.0) {
             if let Some((requests, at)) = &node.owner {
                 node.requester.detach(requests, *at);
                 self.0.attach(requests, *at);
@@ -182,8 +190,8 @@ impl ModifierNodeElement for FocusRequesterElement {
             node.requester = self.0;
         }
     }
-    fn same(&self, other: &dyn ModifierNodeElement) -> bool {
-        other.downcast_ref::<FocusRequesterElement>().is_some_and(|other| other.0.same(&self.0))
+    fn same(&self, other: &Self) -> bool {
+        other.0.same(&self.0)
     }
     fn name(&self) -> &'static str {
         "focus_requester"
@@ -191,7 +199,7 @@ impl ModifierNodeElement for FocusRequesterElement {
 }
 
 impl ModifierNode for FocusRequesterNode {
-    fn on_detach(&mut self, _context: &mut crate::modifier::DetachContext<'_>) {
+    fn on_release(&mut self, _context: &mut crate::modifier::ReleaseContext<'_>) {
         self.detach();
     }
 }

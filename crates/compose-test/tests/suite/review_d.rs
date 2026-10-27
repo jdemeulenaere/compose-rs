@@ -30,19 +30,16 @@ struct FieldNode {
 }
 
 impl ModifierNodeElement for Field {
-    fn create(&self) -> Box<dyn ModifierNode> {
-        Box::new(FieldNode { name: self.name, enabled: self.enabled })
+    type Node = FieldNode;
+    fn create(&self) -> FieldNode {
+        FieldNode { name: self.name, enabled: self.enabled }
     }
-    fn update(&self, node: &mut dyn ModifierNode) {
-        if let Some(node) = node.downcast_mut::<FieldNode>() {
-            node.name = self.name;
-            node.enabled = self.enabled;
-        }
+    fn update(&self, node: &mut FieldNode) {
+        node.name = self.name;
+        node.enabled = self.enabled;
     }
-    fn same(&self, other: &dyn ModifierNodeElement) -> bool {
-        other
-            .downcast_ref::<Field>()
-            .is_some_and(|other| other.name == self.name && other.enabled == self.enabled)
+    fn same(&self, other: &Self) -> bool {
+        other.name == self.name && other.enabled == self.enabled
     }
 }
 

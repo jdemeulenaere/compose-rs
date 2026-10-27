@@ -347,7 +347,7 @@ pub(crate) struct ScrimElement {
     pub description: &'static str,
 }
 
-struct ScrimNode {
+pub(crate) struct ScrimNode {
     close: compose_runtime::Callback,
     enabled: bool,
     description: &'static str,
@@ -355,27 +355,24 @@ struct ScrimNode {
 }
 
 impl compose_ui::ModifierNodeElement for ScrimElement {
-    fn create(&self) -> std::boxed::Box<dyn compose_ui::ModifierNode> {
-        std::boxed::Box::new(ScrimNode {
+    type Node = ScrimNode;
+    fn create(&self) -> ScrimNode {
+        ScrimNode {
             close: self.close.clone(),
             enabled: self.enabled,
             description: self.description,
             pressed: None,
-        })
-    }
-    fn update(&self, node: &mut dyn compose_ui::ModifierNode) {
-        if let Some(node) = node.downcast_mut::<ScrimNode>() {
-            node.close = self.close.clone();
-            node.enabled = self.enabled;
-            node.description = self.description;
         }
     }
-    fn same(&self, other: &dyn compose_ui::ModifierNodeElement) -> bool {
-        other.downcast_ref::<ScrimElement>().is_some_and(|other| {
-            other.close.ptr_eq(&self.close)
-                && other.enabled == self.enabled
-                && other.description == self.description
-        })
+    fn update(&self, node: &mut ScrimNode) {
+        node.close = self.close.clone();
+        node.enabled = self.enabled;
+        node.description = self.description;
+    }
+    fn same(&self, other: &Self) -> bool {
+        other.close.ptr_eq(&self.close)
+            && other.enabled == self.enabled
+            && other.description == self.description
     }
     fn name(&self) -> &'static str {
         "drawer_scrim"

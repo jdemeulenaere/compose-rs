@@ -135,35 +135,32 @@ struct DraggableNode {
 }
 
 impl ModifierNodeElement for DraggableElement {
-    fn create(&self) -> std::boxed::Box<dyn ModifierNode> {
+    type Node = DraggableNode;
+    fn create(&self) -> DraggableNode {
         let callbacks = Rc::new(RefCell::new(self.callbacks.clone()));
-        std::boxed::Box::new(DraggableNode {
+        DraggableNode {
             orientation: self.orientation,
             driver: drag_driver(self.orientation, callbacks.clone()),
             callbacks,
-        })
-    }
-    fn update(&self, node: &mut dyn ModifierNode) {
-        if let Some(node) = node.downcast_mut::<DraggableNode>() {
-            let restart = node.orientation != self.orientation
-                || !node.callbacks.borrow().state.same(&self.callbacks.state);
-            *node.callbacks.borrow_mut() = self.callbacks.clone();
-            if restart {
-                node.orientation = self.orientation;
-                node.driver.stop();
-                node.driver = drag_driver(self.orientation, node.callbacks.clone());
-            }
         }
     }
-    fn same(&self, other: &dyn ModifierNodeElement) -> bool {
-        other.downcast_ref::<DraggableElement>().is_some_and(|other| {
-            let (mine, theirs) = (&self.callbacks, &other.callbacks);
-            other.orientation == self.orientation
-                && theirs.state.same(&mine.state)
-                && theirs.reverse_direction == mine.reverse_direction
-                && Rc::ptr_eq(&theirs.on_drag_started, &mine.on_drag_started)
-                && Rc::ptr_eq(&theirs.on_drag_stopped, &mine.on_drag_stopped)
-        })
+    fn update(&self, node: &mut DraggableNode) {
+        let restart = node.orientation != self.orientation
+            || !node.callbacks.borrow().state.same(&self.callbacks.state);
+        *node.callbacks.borrow_mut() = self.callbacks.clone();
+        if restart {
+            node.orientation = self.orientation;
+            node.driver.stop();
+            node.driver = drag_driver(self.orientation, node.callbacks.clone());
+        }
+    }
+    fn same(&self, other: &Self) -> bool {
+        let (mine, theirs) = (&self.callbacks, &other.callbacks);
+        other.orientation == self.orientation
+            && theirs.state.same(&mine.state)
+            && theirs.reverse_direction == mine.reverse_direction
+            && Rc::ptr_eq(&theirs.on_drag_started, &mine.on_drag_started)
+            && Rc::ptr_eq(&theirs.on_drag_stopped, &mine.on_drag_stopped)
     }
     fn name(&self) -> &'static str {
         "draggable"
@@ -174,10 +171,10 @@ impl ModifierNode for DraggableNode {
     fn as_pointer_input(&mut self) -> Option<&mut dyn PointerInputModifierNode> {
         Some(self)
     }
-    fn on_detach(&mut self, _context: &mut compose_ui::DetachContext<'_>) {
+    fn on_release(&mut self, _context: &mut compose_ui::ReleaseContext<'_>) {
         self.driver.stop();
     }
-    fn on_reset(&mut self) {
+    fn on_reset(&mut self, _context: &mut compose_ui::NodeContext<'_>) {
         self.driver.stop();
     }
 }

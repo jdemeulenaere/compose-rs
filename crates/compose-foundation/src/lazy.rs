@@ -954,20 +954,17 @@ struct ParentSizeElement {
 }
 
 impl ModifierNodeElement for ParentSizeElement {
-    fn create(&self) -> Box<dyn ModifierNode> {
-        Box::new(self.clone())
+    type Node = Self;
+    fn create(&self) -> Self {
+        self.clone()
     }
-    fn update(&self, node: &mut dyn ModifierNode) {
-        if let Some(node) = node.downcast_mut::<ParentSizeElement>() {
-            *node = self.clone();
-        }
+    fn update(&self, node: &mut Self) {
+        *node = self.clone();
     }
-    fn same(&self, other: &dyn ModifierNodeElement) -> bool {
-        other.downcast_ref::<ParentSizeElement>().is_some_and(|other| {
-            Rc::ptr_eq(&other.parent, &self.parent)
-                && other.width == self.width
-                && other.height == self.height
-        })
+    fn same(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&other.parent, &self.parent)
+            && other.width == self.width
+            && other.height == self.height
     }
     fn name(&self) -> &'static str {
         match (self.width, self.height) {
@@ -2516,41 +2513,38 @@ struct LazyScrollNode {
 }
 
 impl ModifierNodeElement for LazyScrollElement {
-    fn create(&self) -> Box<dyn ModifierNode> {
-        Box::new(LazyScrollNode {
+    type Node = LazyScrollNode;
+    fn create(&self) -> LazyScrollNode {
+        LazyScrollNode {
             state: self.state,
             vertical: self.vertical,
             reverse: self.reverse,
             enabled: self.enabled,
             drag: DragScroller::default(),
-        })
-    }
-
-    fn update(&self, node: &mut dyn ModifierNode) {
-        if let Some(node) = node.downcast_mut::<LazyScrollNode>() {
-            // A fling scrolls the state it started with: a new state stops it (the old one's
-            // owner may be going, D240).
-            if node.state != self.state {
-                node.drag.stop_fling();
-            }
-            node.state = self.state;
-            node.vertical = self.vertical;
-            node.reverse = self.reverse;
-            if node.enabled && !self.enabled {
-                node.drag.cancel();
-                node.drag.stop_fling();
-            }
-            node.enabled = self.enabled;
         }
     }
 
-    fn same(&self, other: &dyn ModifierNodeElement) -> bool {
-        other.downcast_ref::<LazyScrollElement>().is_some_and(|other| {
-            other.vertical == self.vertical
-                && other.reverse == self.reverse
-                && other.enabled == self.enabled
-                && other.state.same(&self.state)
-        })
+    fn update(&self, node: &mut LazyScrollNode) {
+        // A fling scrolls the state it started with: a new state stops it (the old one's
+        // owner may be going, D240).
+        if node.state != self.state {
+            node.drag.stop_fling();
+        }
+        node.state = self.state;
+        node.vertical = self.vertical;
+        node.reverse = self.reverse;
+        if node.enabled && !self.enabled {
+            node.drag.cancel();
+            node.drag.stop_fling();
+        }
+        node.enabled = self.enabled;
+    }
+
+    fn same(&self, other: &Self) -> bool {
+        other.vertical == self.vertical
+            && other.reverse == self.reverse
+            && other.enabled == self.enabled
+            && other.state.same(&self.state)
     }
 
     fn name(&self) -> &'static str {
@@ -2607,11 +2601,11 @@ impl ModifierNode for LazyScrollNode {
         Some(self)
     }
 
-    fn on_detach(&mut self, _context: &mut compose_ui::DetachContext<'_>) {
+    fn on_release(&mut self, _context: &mut compose_ui::ReleaseContext<'_>) {
         self.drag.stop_fling();
     }
 
-    fn on_reset(&mut self) {
+    fn on_reset(&mut self, _context: &mut compose_ui::NodeContext<'_>) {
         self.drag.cancel();
         self.drag.stop_fling();
     }

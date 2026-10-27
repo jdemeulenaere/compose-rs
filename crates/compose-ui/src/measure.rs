@@ -5,8 +5,9 @@ use std::panic::{self, AssertUnwindSafe};
 
 use crate::constraints::Constraints;
 use crate::layout::{Intrinsic, IntrinsicMeasureScope, Measurable, MeasureResult, MeasureScope};
+use crate::node_chain::NodeKinds;
 use crate::nodes::Taken;
-use crate::tree::{Layer, NodeId, Observation, UiTree, capability, observation_key};
+use crate::tree::{Layer, NodeId, Observation, UiTree, observation_key};
 use crate::unit::{IntOffset, IntSize};
 
 impl UiTree {
@@ -75,7 +76,8 @@ impl UiTree {
             value.overlay_origin = crate::unit::Offset::new(position.x as f32, position.y as f32);
             if focus {
                 for entry in value.chain.iter_mut() {
-                    if let Some(overlay) = entry.downcast_mut::<crate::overlay::OverlayNode>() {
+                    if let Some(overlay) = entry.node.downcast_mut::<crate::overlay::OverlayNode>()
+                    {
                         overlay.focused_once = true;
                     }
                 }
@@ -284,7 +286,7 @@ impl UiTree {
         if layer < entry.layout_indices.len() {
             let index = entry.layout_indices[layer] as usize;
             // Out of the chain while it runs, so it can ask the rest of its own node.
-            let mut modifier_node = mem::replace(&mut entry.chain[index], Box::new(Taken));
+            let mut modifier_node = mem::replace(&mut entry.chain[index].node, Box::new(Taken));
             let result = panic::catch_unwind(AssertUnwindSafe(|| {
                 let mut scope = IntrinsicMeasureScope { tree: &mut *self, node };
                 let content = Measurable { node, layer: layer as u32 + 1 };
@@ -296,7 +298,7 @@ impl UiTree {
                     Intrinsic::MaxHeight => layout.max_intrinsic_height(&mut scope, content, value),
                 }
             }));
-            self.node_mut(node).chain[index] = modifier_node;
+            self.node_mut(node).chain[index].node = modifier_node;
             return result.unwrap_or_else(|panic| panic::resume_unwind(panic));
         }
         let policy = entry.policy.clone();
@@ -342,8 +344,8 @@ impl UiTree {
         let result = if layer < value.layout_indices.len() {
             let index = value.layout_indices[layer] as usize;
             // Out of the chain while it runs, so it can measure the rest of its own node.
-            let mut modifier_node = mem::replace(&mut value.chain[index], Box::new(Taken));
-            let custom = value.capabilities[index] & capability::CUSTOM != 0;
+            let mut modifier_node = mem::replace(&mut value.chain[index].node, Box::new(Taken));
+            let custom = value.chain[index].kinds.any(NodeKinds::OBSERVED);
             let run = self.next_measure_run();
             let observer = if custom { self.observer.clone() } else { None };
             let mut relative = Vec::new();
@@ -366,7 +368,7 @@ impl UiTree {
                 relative = scope.relative;
                 result
             }));
-            self.node_mut(node).chain[index] = modifier_node;
+            self.node_mut(node).chain[index].node = modifier_node;
             let result = self.recover(node, result);
             self.mirror(relative, result.width);
             result

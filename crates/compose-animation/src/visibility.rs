@@ -14,10 +14,10 @@ use std::rc::Rc;
 
 use compose_runtime::{ComposeArg, State, composable, mutable_state_of, remember, remember_keyed};
 use compose_ui::{
-    Alignment, Color, ColumnScope, Constraints, DetachContext, DrawModifierNode, DrawScope,
-    HorizontalAlignment, IntOffset, IntSize, LayoutDirection, LayoutModifierNode, Measurable,
-    MeasurePolicy, MeasureResult, MeasureScope, Modifier, ModifierNode, ModifierNodeElement, Paint,
-    RECTANGLE_SHAPE, RowScope, TransformOrigin, VerticalAlignment,
+    Alignment, Color, ColumnScope, Constraints, DrawModifierNode, DrawScope, HorizontalAlignment,
+    IntOffset, IntSize, LayoutDirection, LayoutModifierNode, Measurable, MeasurePolicy,
+    MeasureResult, MeasureScope, Modifier, ModifierNode, ModifierNodeElement, Paint,
+    RECTANGLE_SHAPE, ReleaseContext, RowScope, TransformOrigin, VerticalAlignment,
 };
 
 use crate::spec::{AnimationSpec, Spring, spring, spring_with};
@@ -1030,23 +1030,20 @@ struct VeilNode {
 }
 
 impl ModifierNodeElement for VeilElement {
-    fn create(&self) -> Box<dyn ModifierNode> {
-        Box::new(VeilNode { animation: self.animation.clone(), parts: self.parts.clone() })
+    type Node = VeilNode;
+    fn create(&self) -> VeilNode {
+        VeilNode { animation: self.animation.clone(), parts: self.parts.clone() }
     }
 
-    fn update(&self, node: &mut dyn ModifierNode) {
-        if let Some(node) = node.downcast_mut::<VeilNode>() {
-            node.animation = self.animation.clone();
-            node.parts = self.parts.clone();
-        }
+    fn update(&self, node: &mut VeilNode) {
+        node.animation = self.animation.clone();
+        node.parts = self.parts.clone();
     }
 
-    fn same(&self, other: &dyn ModifierNodeElement) -> bool {
-        other.downcast_ref::<VeilElement>().is_some_and(|other| {
-            other.animation.same(&self.animation)
-                && *other.parts.enter == *self.parts.enter
-                && *other.parts.exit == *self.parts.exit
-        })
+    fn same(&self, other: &Self) -> bool {
+        other.animation.same(&self.animation)
+            && *other.parts.enter == *self.parts.enter
+            && *other.parts.exit == *self.parts.exit
     }
 
     fn name(&self) -> &'static str {
@@ -1259,29 +1256,26 @@ struct EnterExitNode {
 }
 
 impl ModifierNodeElement for EnterExitElement {
-    fn create(&self) -> Box<dyn ModifierNode> {
-        Box::new(EnterExitNode {
+    type Node = EnterExitNode;
+    fn create(&self) -> EnterExitNode {
+        EnterExitNode {
             transition: self.transition.clone(),
             parts: self.parts.clone(),
             animations: self.animations.clone(),
             current_alignment: None,
-        })
-    }
-
-    fn update(&self, node: &mut dyn ModifierNode) {
-        if let Some(node) = node.downcast_mut::<EnterExitNode>() {
-            node.transition = self.transition.clone();
-            node.parts = self.parts.clone();
-            node.animations = self.animations.clone();
         }
     }
 
-    fn same(&self, other: &dyn ModifierNodeElement) -> bool {
-        other.downcast_ref::<EnterExitElement>().is_some_and(|other| {
-            other.transition.same(&self.transition)
-                && *other.parts.enter == *self.parts.enter
-                && *other.parts.exit == *self.parts.exit
-        })
+    fn update(&self, node: &mut EnterExitNode) {
+        node.transition = self.transition.clone();
+        node.parts = self.parts.clone();
+        node.animations = self.animations.clone();
+    }
+
+    fn same(&self, other: &Self) -> bool {
+        other.transition.same(&self.transition)
+            && *other.parts.enter == *self.parts.enter
+            && *other.parts.exit == *self.parts.exit
     }
 
     fn name(&self) -> &'static str {
@@ -1294,7 +1288,7 @@ impl ModifierNode for EnterExitNode {
         Some(self)
     }
 
-    fn on_detach(&mut self, _context: &mut DetachContext<'_>) {}
+    fn on_release(&mut self, _context: &mut ReleaseContext<'_>) {}
 }
 
 impl EnterExitNode {

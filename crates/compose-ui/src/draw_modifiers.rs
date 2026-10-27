@@ -124,25 +124,22 @@ struct DrawWithCacheNode {
 type CacheKey = (crate::unit::Size, crate::unit::Density, crate::alignment::LayoutDirection);
 
 impl ModifierNodeElement for DrawWithCacheElement {
-    fn create(&self) -> Box<dyn ModifierNode> {
-        Box::new(DrawWithCacheNode {
+    type Node = DrawWithCacheNode;
+    fn create(&self) -> DrawWithCacheNode {
+        DrawWithCacheNode {
             build: self.0.clone(),
             cached: None,
             stale: Rc::default(),
             version: compose_runtime::mutable_state_of(0),
             observer: None,
-        })
-    }
-    fn update(&self, node: &mut dyn ModifierNode) {
-        if let Some(node) = node.downcast_mut::<DrawWithCacheNode>() {
-            node.build = self.0.clone();
-            node.cached = None;
         }
     }
-    fn same(&self, other: &dyn ModifierNodeElement) -> bool {
-        other
-            .downcast_ref::<DrawWithCacheElement>()
-            .is_some_and(|other| Rc::ptr_eq(&other.0, &self.0))
+    fn update(&self, node: &mut DrawWithCacheNode) {
+        node.build = self.0.clone();
+        node.cached = None;
+    }
+    fn same(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&other.0, &self.0)
     }
     fn name(&self) -> &'static str {
         "draw_with_cache"
@@ -153,7 +150,7 @@ impl ModifierNode for DrawWithCacheNode {
     fn as_draw(&mut self) -> Option<&mut dyn DrawModifierNode> {
         Some(self)
     }
-    fn on_detach(&mut self, _context: &mut crate::modifier::DetachContext<'_>) {
+    fn on_release(&mut self, _context: &mut crate::modifier::ReleaseContext<'_>) {
         self.observer = None;
         self.cached = None;
     }
@@ -212,16 +209,15 @@ pub(crate) struct BackgroundBrushElement {
 }
 
 impl ModifierNodeElement for BackgroundBrushElement {
-    fn create(&self) -> Box<dyn ModifierNode> {
-        Box::new(self.clone())
+    type Node = Self;
+    fn create(&self) -> Self {
+        self.clone()
     }
-    fn update(&self, node: &mut dyn ModifierNode) {
-        if let Some(node) = node.downcast_mut::<BackgroundBrushElement>() {
-            *node = self.clone();
-        }
+    fn update(&self, node: &mut Self) {
+        *node = self.clone();
     }
-    fn same(&self, other: &dyn ModifierNodeElement) -> bool {
-        other.downcast_ref::<BackgroundBrushElement>().is_some_and(|other| other == self)
+    fn same(&self, other: &Self) -> bool {
+        other == self
     }
     fn name(&self) -> &'static str {
         "background"
@@ -251,16 +247,15 @@ struct DrawBehindElement(DrawBehind);
 struct DrawBehindNode(DrawBehind);
 
 impl ModifierNodeElement for DrawBehindElement {
-    fn create(&self) -> Box<dyn ModifierNode> {
-        Box::new(DrawBehindNode(self.0.clone()))
+    type Node = DrawBehindNode;
+    fn create(&self) -> DrawBehindNode {
+        DrawBehindNode(self.0.clone())
     }
-    fn update(&self, node: &mut dyn ModifierNode) {
-        if let Some(node) = node.downcast_mut::<DrawBehindNode>() {
-            node.0 = self.0.clone();
-        }
+    fn update(&self, node: &mut DrawBehindNode) {
+        node.0 = self.0.clone();
     }
-    fn same(&self, other: &dyn ModifierNodeElement) -> bool {
-        other.downcast_ref::<DrawBehindElement>().is_some_and(|other| Rc::ptr_eq(&other.0, &self.0))
+    fn same(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&other.0, &self.0)
     }
     fn name(&self) -> &'static str {
         "draw_behind"
@@ -284,18 +279,15 @@ struct DrawWithContentElement(DrawWithContent);
 struct DrawWithContentNode(DrawWithContent);
 
 impl ModifierNodeElement for DrawWithContentElement {
-    fn create(&self) -> Box<dyn ModifierNode> {
-        Box::new(DrawWithContentNode(self.0.clone()))
+    type Node = DrawWithContentNode;
+    fn create(&self) -> DrawWithContentNode {
+        DrawWithContentNode(self.0.clone())
     }
-    fn update(&self, node: &mut dyn ModifierNode) {
-        if let Some(node) = node.downcast_mut::<DrawWithContentNode>() {
-            node.0 = self.0.clone();
-        }
+    fn update(&self, node: &mut DrawWithContentNode) {
+        node.0 = self.0.clone();
     }
-    fn same(&self, other: &dyn ModifierNodeElement) -> bool {
-        other
-            .downcast_ref::<DrawWithContentElement>()
-            .is_some_and(|other| Rc::ptr_eq(&other.0, &self.0))
+    fn same(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&other.0, &self.0)
     }
     fn name(&self) -> &'static str {
         "draw_with_content"

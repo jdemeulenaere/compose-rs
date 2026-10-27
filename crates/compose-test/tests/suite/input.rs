@@ -37,12 +37,13 @@ struct RecorderElement(Events);
 struct RecorderNode(Events);
 
 impl ModifierNodeElement for RecorderElement {
-    fn create(&self) -> Box<dyn ModifierNode> {
-        Box::new(RecorderNode(self.0.clone()))
+    type Node = RecorderNode;
+    fn create(&self) -> RecorderNode {
+        RecorderNode(self.0.clone())
     }
-    fn update(&self, _node: &mut dyn ModifierNode) {}
-    fn same(&self, other: &dyn ModifierNodeElement) -> bool {
-        other.downcast_ref::<RecorderElement>().is_some_and(|other| Rc::ptr_eq(&other.0, &self.0))
+    fn update(&self, _node: &mut RecorderNode) {}
+    fn same(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&other.0, &self.0)
     }
 }
 

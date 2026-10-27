@@ -6,7 +6,7 @@ use std::rc::Rc;
 
 use compose_runtime::CoroutineScope;
 use compose_ui::{
-    Alignment, Constraints, DetachContext, IntSize, IntrinsicMeasureScope, LayoutModifierNode,
+    Alignment, Constraints, IntSize, IntrinsicMeasureScope, LayoutModifierNode,
     Measurable, MeasureResult, MeasureScope, Modifier, ModifierNode, ModifierNodeElement,
 };
 
@@ -84,34 +84,31 @@ struct ContentSizeNode {
 }
 
 impl ModifierNodeElement for ContentSizeElement {
-    fn create(&self) -> Box<dyn ModifierNode> {
-        Box::new(ContentSizeNode {
+    type Node = ContentSizeNode;
+    fn create(&self) -> ContentSizeNode {
+        ContentSizeNode {
             spec: self.spec,
             alignment: self.alignment,
             listener: self.listener.clone(),
             data: None,
             scope: CoroutineScope::new(),
-        })
-    }
-
-    fn update(&self, node: &mut dyn ModifierNode) {
-        if let Some(node) = node.downcast_mut::<ContentSizeNode>() {
-            node.spec = self.spec;
-            node.alignment = self.alignment;
-            node.listener = self.listener.clone();
         }
     }
 
-    fn same(&self, other: &dyn ModifierNodeElement) -> bool {
-        other.downcast_ref::<ContentSizeElement>().is_some_and(|other| {
-            other.spec == self.spec
-                && other.alignment == self.alignment
-                && match (&other.listener, &self.listener) {
-                    (Some(a), Some(b)) => Rc::ptr_eq(a, b),
-                    (None, None) => true,
-                    _ => false,
-                }
-        })
+    fn update(&self, node: &mut ContentSizeNode) {
+        node.spec = self.spec;
+        node.alignment = self.alignment;
+        node.listener = self.listener.clone();
+    }
+
+    fn same(&self, other: &Self) -> bool {
+        other.spec == self.spec
+            && other.alignment == self.alignment
+            && match (&other.listener, &self.listener) {
+                (Some(a), Some(b)) => Rc::ptr_eq(a, b),
+                (None, None) => true,
+                _ => false,
+            }
     }
 
     fn name(&self) -> &'static str {
@@ -124,15 +121,19 @@ impl ModifierNode for ContentSizeNode {
         Some(self)
     }
 
-    fn on_detach(&mut self, _context: &mut DetachContext<'_>) {
+    /// Detached (left, deactivated or reused): its animation stops, as with Compose's node
+    /// scope.
+    fn on_detach(&mut self, _context: &mut compose_ui::NodeContext<'_>) {
         self.scope.cancel();
         // A node attached again (reused) starts a scope of its own.
         self.scope = CoroutineScope::new();
     }
 
     /// Reused, the new content's size is taken at once, as Compose's `animData = null`.
-    fn on_reset(&mut self) {
+    fn on_reset(&mut self, context: &mut compose_ui::NodeContext<'_>) {
         self.data = None;
+        // Measured again to take the size at once (reuse alone doesn't measure).
+        context.invalidate_measurement();
     }
 }
 

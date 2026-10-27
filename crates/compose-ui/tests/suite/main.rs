@@ -4,6 +4,7 @@
 extern crate compose_runtime as compose;
 
 mod intrinsics;
+mod modifier_nodes;
 mod mutable_paths;
 mod retained_drawing;
 mod review_d;

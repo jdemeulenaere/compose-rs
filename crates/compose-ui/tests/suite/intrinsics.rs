@@ -437,12 +437,13 @@ impl MeasurePolicy for PropagatingBox {
 struct UsingIntrinsics;
 
 impl ModifierNodeElement for UsingIntrinsics {
-    fn create(&self) -> Box<dyn ModifierNode> {
-        Box::new(UsingIntrinsics)
+    type Node = Self;
+    fn create(&self) -> Self {
+        UsingIntrinsics
     }
-    fn update(&self, _: &mut dyn ModifierNode) {}
-    fn same(&self, other: &dyn ModifierNodeElement) -> bool {
-        other.downcast_ref::<UsingIntrinsics>().is_some()
+    fn update(&self, _: &mut Self) {}
+    fn same(&self, _other: &Self) -> bool {
+        true
     }
 }
 
@@ -512,16 +513,15 @@ struct FixedIntrinsics {
 }
 
 impl ModifierNodeElement for FixedIntrinsics {
-    fn create(&self) -> Box<dyn ModifierNode> {
-        Box::new(*self)
+    type Node = Self;
+    fn create(&self) -> Self {
+        *self
     }
-    fn update(&self, node: &mut dyn ModifierNode) {
-        if let Some(node) = node.downcast_mut::<FixedIntrinsics>() {
-            *node = *self;
-        }
+    fn update(&self, node: &mut Self) {
+        *node = *self;
     }
-    fn same(&self, other: &dyn ModifierNodeElement) -> bool {
-        other.downcast_ref::<FixedIntrinsics>() == Some(self)
+    fn same(&self, other: &Self) -> bool {
+        other == self
     }
 }
 

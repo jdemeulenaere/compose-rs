@@ -409,7 +409,8 @@ impl App {
         }
         // Screen readers see what changed (only while one is on: nothing is built otherwise).
         let focus = shown.host.with_tree(|tree| tree.focused());
-        if stats.recomposed || stats.measured || stats.drew || focus != shown.accessibility_focus {
+        let changed = stats.recomposed || stats.measured || stats.drew || stats.semantics_changed;
+        if changed || focus != shown.accessibility_focus {
             shown.accessibility_focus = focus;
             let (host, title) = (&shown.host, &shown.title);
             shown.accessibility.update_if_active(|| accessibility::tree_update(host, title));

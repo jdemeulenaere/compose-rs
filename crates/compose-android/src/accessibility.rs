@@ -40,11 +40,12 @@ pub mod flag {
 }
 
 /// Whether a frame that did `stats` may have changed the semantics (`frame`'s `SEMANTICS`): it
-/// recomposed or laid something out. `Accessibility.kt` then reads the tree again when next
+/// recomposed, laid something out, or a modifier node said its semantics changed
+/// (`FrameStats::semantics_changed`, D1158). `Accessibility.kt` then reads the tree again when next
 /// asked, whether or not a service is on (a field write, as Compose's
 /// `currentSemanticsNodesInvalidated`), and tells the services on, if any (D630).
 pub fn semantics_may_have_changed(stats: &compose_ui::platform::FrameStats) -> bool {
-    stats.recomposed || stats.measured
+    stats.recomposed || stats.measured || stats.semantics_changed
 }
 
 /// A node's virtual view id: its index (live nodes have distinct ones).

@@ -4,7 +4,7 @@
 
 use compose_runtime::{Callback, composable};
 use compose_ui::{
-    AnnotatedString, Constraints, DetachContext, DrawModifierNode, DrawScope,
+    AnnotatedString, Constraints, ReleaseContext, DrawModifierNode, DrawScope,
     IntrinsicMeasureScope, Layout, LayoutModifierNode, Measurable, MeasureResult, MeasureScope,
     Modifier, ModifierNode, ModifierNodeElement, Offset, SemanticsConfiguration,
     SemanticsModifierNode, SharedString, TextLayoutResult, TextStyle, empty_measure_policy,
@@ -255,8 +255,9 @@ pub(crate) fn same_callback<F: ?Sized>(
 }
 
 impl ModifierNodeElement for TextElement {
-    fn create(&self) -> Box<dyn ModifierNode> {
-        Box::new(TextNode {
+    type Node = TextNode;
+    fn create(&self) -> TextNode {
+        TextNode {
             text: self.text.clone(),
             style: self.style,
             options: self.options,
@@ -276,15 +277,14 @@ impl ModifierNodeElement for TextElement {
             selection_rects: Vec::new(),
             selectable: self.selectable,
             version: 0,
-        })
+        }
     }
 
-    fn update(&self, node: &mut dyn ModifierNode) {
-        if let Some(node) = node.downcast_mut::<TextNode>()
-            && (node.text != self.text
-                || !node.style.has_same_layout_affecting_attributes(&self.style)
-                || node.options != self.options
-                || node.min_lines != self.min_lines)
+    fn update(&self, node: &mut TextNode) {
+        if node.text != self.text
+            || !node.style.has_same_layout_affecting_attributes(&self.style)
+            || node.options != self.options
+            || node.min_lines != self.min_lines
         {
             if node.text != self.text {
                 // A new text: a selection in it is dropped, as Compose's.
@@ -301,31 +301,25 @@ impl ModifierNodeElement for TextElement {
             let probe = node.probe.take().map(|probe| probe.paragraph);
             node.stale.extend(node.paragraph.take().into_iter().chain(probe));
             node.constraints = None;
-        } else if let Some(node) = node.downcast_mut::<TextNode>()
-            && node.style != self.style
-        {
+        } else if node.style != self.style {
             // Only its paint changed (its color, its decoration): the layout is kept and drawn
             // again in the new paint, as Compose's `updateDraw` (`hasSameDrawAffectingAttributes`).
             node.style = self.style;
             node.restyle = true;
         }
-        if let Some(node) = node.downcast_mut::<TextNode>() {
-            node.selectable = self.selectable;
-            // A new listener hears the next new layout, as Compose swaps its lambda: the
-            // paragraph is kept.
-            node.on_text_layout = self.on_text_layout.clone();
-        }
+        node.selectable = self.selectable;
+        // A new listener hears the next new layout, as Compose swaps its lambda: the paragraph
+        // is kept.
+        node.on_text_layout = self.on_text_layout.clone();
     }
 
-    fn same(&self, other: &dyn ModifierNodeElement) -> bool {
-        other.downcast_ref::<TextElement>().is_some_and(|other| {
-            other.text == self.text
-                && other.style == self.style
-                && other.options == self.options
-                && other.min_lines == self.min_lines
-                && same_callback(&other.on_text_layout, &self.on_text_layout)
-                && other.selectable == self.selectable
-        })
+    fn same(&self, other: &Self) -> bool {
+        other.text == self.text
+            && other.style == self.style
+            && other.options == self.options
+            && other.min_lines == self.min_lines
+            && same_callback(&other.on_text_layout, &self.on_text_layout)
+            && other.selectable == self.selectable
     }
 
     fn name(&self) -> &'static str {
@@ -381,7 +375,7 @@ struct Probe {
 
 impl ModifierNode for TextNode {
     /// Reused for another text: a selection in it goes, as with a new text.
-    fn on_reset(&mut self) {
+    fn on_reset(&mut self, _context: &mut compose_ui::NodeContext<'_>) {
         self.selection = None;
         self.selection_rects.clear();
         // Another item's text, even if it reads the same: a selection doesn't move to it.
@@ -399,7 +393,7 @@ impl ModifierNode for TextNode {
     fn as_selectable(&mut self) -> Option<&mut dyn compose_ui::Selectable> {
         if self.selectable { Some(self) } else { None }
     }
-    fn on_detach(&mut self, context: &mut DetachContext<'_>) {
+    fn on_release(&mut self, context: &mut ReleaseContext<'_>) {
         let probe = self.probe.take().map(|probe| probe.paragraph);
         let paragraphs = self.paragraph.take().into_iter().chain(self.stale.drain(..));
         for paragraph in paragraphs.chain(probe) {

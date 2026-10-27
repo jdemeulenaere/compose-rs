@@ -7,8 +7,9 @@ use crate::focus_manager::FocusDirection;
 use smallvec::SmallVec;
 
 use crate::input::{Action, EventContext, Requests};
+use crate::node_chain::NodeKinds;
 use crate::nodes::OnFocusChangedNode;
-use crate::tree::{NodeId, UiTree, capability};
+use crate::tree::{NodeId, UiTree};
 use crate::unit::Rect;
 
 /// The focused target.
@@ -28,12 +29,15 @@ impl UiTree {
     pub(crate) fn focus_target_index(&mut self, node: NodeId) -> Option<usize> {
         let value = self.get_mut(node)?;
         // Content kept for reuse takes no focus (nor keys, which go to the focused node).
-        if value.all_capabilities & capability::FOCUS == 0 || value.deactivated {
+        if !value.kinds.any(NodeKinds::FOCUS_TARGET) || value.deactivated {
             return None;
         }
         (0..value.chain.len()).find(|&index| {
-            value.capabilities[index] & capability::FOCUS != 0
-                && value.chain[index].as_focus_target().is_some_and(|target| target.can_focus())
+            value.chain[index].kinds.any(NodeKinds::FOCUS_TARGET)
+                && value.chain[index]
+                    .node
+                    .as_focus_target()
+                    .is_some_and(|target| target.can_focus())
         })
     }
 
@@ -110,9 +114,9 @@ impl UiTree {
                     rect.right - origin.x,
                     rect.bottom - origin.y,
                 );
-                let is_layout = self.node(id).capabilities[index] & capability::LAYOUT != 0;
+                let is_layout = self.node(id).chain[index].kinds.any(NodeKinds::LAYOUT);
                 if let Some(value) = self.get_mut(id)
-                    && let Some(moved) = value.chain[index].bring_into_view(local, viewport)
+                    && let Some(moved) = value.chain[index].node.bring_into_view(local, viewport)
                 {
                     rect = Rect::new(
                         moved.left + origin.x,
@@ -148,7 +152,7 @@ impl UiTree {
         let view_configuration = self.view_configuration();
         if let Some((value, (text_measurer, clipboard))) = self.node_and_measurer(node)
             && let Some(target) =
-                value.chain.get_mut(index).and_then(|entry| entry.as_focus_target())
+                value.chain.get_mut(index).and_then(|entry| entry.node.as_focus_target())
         {
             let mut context = EventContext {
                 node,
@@ -184,18 +188,17 @@ impl UiTree {
         let Some(focus) = self.focus else { return };
         let layer = {
             let value = self.node(focus.node);
-            value.capabilities[..focus.index as usize]
-                .iter()
-                .filter(|bits| **bits & capability::LAYOUT != 0)
-                .count()
+            value.layer_of(focus.index as usize)
         };
         let origin = self.layer_origin(focus.node, layer);
         let mut requests = Requests::default();
         let density = self.density;
         let view_configuration = self.view_configuration();
         if let Some((value, (text_measurer, clipboard))) = self.node_and_measurer(focus.node)
-            && let Some(target) =
-                value.chain.get_mut(focus.index as usize).and_then(|entry| entry.as_focus_target())
+            && let Some(target) = value
+                .chain
+                .get_mut(focus.index as usize)
+                .and_then(|entry| entry.node.as_focus_target())
         {
             let mut context = EventContext {
                 node: focus.node,
@@ -243,11 +246,12 @@ impl UiTree {
         };
         let value = self.node_mut(node);
         let target = index.filter(|&index| {
-            value.capabilities.get(index).is_some_and(|bits| bits & capability::FOCUS != 0)
+            value.chain.get(index).is_some_and(|entry| entry.kinds.any(NodeKinds::FOCUS_TARGET))
         });
         match target {
             Some(index)
                 if value.chain[index]
+                    .node
                     .as_focus_target()
                     .is_some_and(|target| target.can_focus()) =>
             {
@@ -289,17 +293,18 @@ impl UiTree {
             if value.deactivated {
                 continue;
             }
-            if value.all_capabilities & capability::FOCUS_EVENT != 0 {
+            if value.kinds.any(NodeKinds::FOCUS_EVENT) {
                 let below = ancestors.iter().skip(1).any(|ancestor| *ancestor == node);
                 for index in 0..value.chain.len() {
-                    if value.capabilities[index] & capability::FOCUS_EVENT == 0 {
+                    if !value.chain[index].kinds.any(NodeKinds::FOCUS_EVENT) {
                         continue;
                     }
                     let has_focus = below
                         || focus.is_some_and(|focus| {
                             focus.node == node && focus.index as usize > index
                         });
-                    if let Some(listener) = value.chain[index].downcast_mut::<OnFocusChangedNode>()
+                    if let Some(listener) =
+                        value.chain[index].node.downcast_mut::<OnFocusChangedNode>()
                         && listener.last != Some(has_focus)
                     {
                         listener.last = Some(has_focus);
@@ -425,8 +430,10 @@ impl UiTree {
         let mut current = Some(node);
         while let Some(id) = current {
             let value = self.node(id);
-            if let Some(index) =
-                value.chain.iter().position(|entry| entry.is_beyond_bounds_layout())
+            if let Some(index) = value
+                .chain
+                .iter()
+                .position(|entry| entry.kinds.any(NodeKinds::BEYOND_BOUNDS_LAYOUT))
             {
                 return Some((id, index));
             }
@@ -460,13 +467,13 @@ impl UiTree {
             if let Some(value) = self.get_mut(active.0)
                 && active.1 < value.chain.len()
             {
-                value.chain[active.1].end_beyond_bounds();
+                value.chain[active.1].node.end_beyond_bounds();
             }
         }
         let layout_direction = self.node(container).layout_direction;
         let more = self.get_mut(container).is_some_and(|value| {
             index < value.chain.len()
-                && value.chain[index].lay_out_beyond_bounds(direction, layout_direction)
+                && value.chain[index].node.lay_out_beyond_bounds(direction, layout_direction)
         });
         if !more {
             self.beyond_search.exhausted.push((container, index));
@@ -496,7 +503,7 @@ impl UiTree {
             && let Some(value) = self.get_mut(container)
             && index < value.chain.len()
         {
-            value.chain[index].end_beyond_bounds();
+            value.chain[index].node.end_beyond_bounds();
         }
     }
 
@@ -543,8 +550,10 @@ impl UiTree {
             // Only a container clipping its content (a scroll's viewport, `clip`) hides it.
             let value = self.node(container);
             let size = value.layers[0].measured.into();
-            let clips =
-                value.chain.iter().any(|entry| entry.hit_clip_at(size, self.density).is_some());
+            let clips = value
+                .chain
+                .iter()
+                .any(|entry| entry.node.hit_clip_at(size, self.density).is_some());
             let outer = self.bounds_in_root(container);
             let outside = clips
                 && (bounds.right <= outer.left

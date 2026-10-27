@@ -52,7 +52,7 @@ pub use callback::{Callback, IntoCallback, IntoOptionalCallback, callback};
 pub use compose_arg::ComposeArg;
 pub use compose_macros::{ComposeArg, composable};
 pub use composer::current_recompose_scope;
-pub use composition::Composition;
+pub use composition::{ApplierRef, Composition};
 pub use derived::{DerivedState, derived_state_of, derived_state_of_with};
 pub use effects::{
     DisposableEffect, DisposableEffectResult, DisposableEffectScope, LaunchedEffect, SideEffect,

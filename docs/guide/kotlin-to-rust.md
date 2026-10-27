@@ -1003,7 +1003,7 @@ impl IndentModifier for Modifier {
 }
 ```
 
-For a modifier with state of its own, implement `ModifierNodeElement` and `ModifierNode` (Compose's `Modifier.Node`) and add it with `Modifier.then_custom(element)`; there's no `Modifier.composed`.
+For a modifier with state of its own, implement `ModifierNodeElement` (Compose's `ModifierNodeElement<N>`: its `type Node`, `create`, `update`, and `same` for `equals`) and `ModifierNode` (Compose's `Modifier.Node`), and add it with `Modifier.then_custom(element)`; there's no `Modifier.composed`.
 
 ## Drawing
 

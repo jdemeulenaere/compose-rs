@@ -491,37 +491,35 @@ struct SizeNode<T: 'static> {
 }
 
 impl<T: Clone + PartialEq + 'static> ModifierNodeElement for SizeElement<T> {
-    fn create(&self) -> Box<dyn ModifierNode> {
-        Box::new(SizeNode {
+    type Node = SizeNode<T>;
+
+    fn create(&self) -> SizeNode<T> {
+        SizeNode {
             animation: self.animation.clone(),
             size_transform: self.size_transform.clone(),
             root: self.root.clone(),
             transition: self.transition.clone(),
             last_size: self.last_size.clone(),
-        })
-    }
-
-    fn update(&self, node: &mut dyn ModifierNode) {
-        if let Some(node) = node.downcast_mut::<SizeNode<T>>() {
-            node.animation = self.animation.clone();
-            node.size_transform = self.size_transform.clone();
-            node.root = self.root.clone();
-            node.transition = self.transition.clone();
-            node.last_size = self.last_size.clone();
         }
     }
 
-    fn same(&self, other: &dyn ModifierNodeElement) -> bool {
-        other.downcast_ref::<SizeElement<T>>().is_some_and(|other| {
-            let same_animation = match (&other.animation, &self.animation) {
-                (Some(a), Some(b)) => a.same(b),
-                (None, None) => true,
-                _ => false,
-            };
-            same_animation
-                && other.size_transform == self.size_transform
-                && Rc::ptr_eq(&other.root, &self.root)
-        })
+    fn update(&self, node: &mut SizeNode<T>) {
+        node.animation = self.animation.clone();
+        node.size_transform = self.size_transform.clone();
+        node.root = self.root.clone();
+        node.transition = self.transition.clone();
+        node.last_size = self.last_size.clone();
+    }
+
+    fn same(&self, other: &Self) -> bool {
+        let same_animation = match (&other.animation, &self.animation) {
+            (Some(a), Some(b)) => a.same(b),
+            (None, None) => true,
+            _ => false,
+        };
+        same_animation
+            && other.size_transform == self.size_transform
+            && Rc::ptr_eq(&other.root, &self.root)
     }
 
     fn name(&self) -> &'static str {
@@ -534,7 +532,7 @@ impl<T: Clone + PartialEq + 'static> ModifierNode for SizeNode<T> {
         Some(self)
     }
 
-    fn on_reset(&mut self) {
+    fn on_reset(&mut self, _context: &mut compose_ui::NodeContext<'_>) {
         self.last_size.set(None);
     }
 }

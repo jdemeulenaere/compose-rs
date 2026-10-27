@@ -12,7 +12,8 @@ use smallvec::SmallVec;
 
 use crate::display_list::DisplayList;
 use crate::layout::{Measurable, MeasurePolicy, StackMeasurePolicy};
-use crate::modifier::{DetachContext, Element, Modifier, ModifierNode, ParentData};
+use crate::modifier::{Element, Modifier, ParentData, ReleaseContext};
+use crate::node_chain::{ChainEntry, EntryId, NodeKinds, entry_state, match_kinds};
 use crate::nodes;
 use crate::text::TextMeasurer;
 use crate::unit::{Density, IntOffset, IntSize, Offset};
@@ -82,46 +83,6 @@ impl fmt::Debug for NodeId {
     }
 }
 
-/// What a chain entry can do, cached when the chain changes.
-pub(crate) mod capability {
-    pub(crate) const LAYOUT: u8 = 1;
-    pub(crate) const DRAW: u8 = 2;
-    pub(crate) const POINTER: u8 = 4;
-    pub(crate) const SEMANTICS: u8 = 8;
-    pub(crate) const FOCUS: u8 = 16;
-    pub(crate) const KEY: u8 = 32;
-    pub(crate) const FOCUS_EVENT: u8 = 64;
-    /// A user-defined element's node: its measuring and drawing are observed for state reads.
-    pub(crate) const CUSTOM: u8 = 128;
-}
-
-fn capabilities_of(node: &mut dyn ModifierNode) -> u8 {
-    use capability::*;
-    let mut bits = 0;
-    if node.as_layout().is_some() {
-        bits |= LAYOUT;
-    }
-    if node.as_draw().is_some() {
-        bits |= DRAW;
-    }
-    if node.as_pointer_input().is_some() {
-        bits |= POINTER;
-    }
-    if node.as_semantics().is_some() {
-        bits |= SEMANTICS;
-    }
-    if node.as_focus_target().is_some() {
-        bits |= FOCUS;
-    }
-    if node.as_key_input().is_some() {
-        bits |= KEY;
-    }
-    if node.downcast_ref::<nodes::OnFocusChangedNode>().is_some() {
-        bits |= FOCUS_EVENT;
-    }
-    bits
-}
-
 /// A measured layer of a node: one per layout modifier, outermost first, then the node's own
 /// content (its policy and children). Each layer's offset is relative to the layer outside it;
 /// the first layer's is the node's position in its parent's content.
@@ -145,9 +106,9 @@ pub struct LayoutNode {
     pub(crate) children: Vec<Measurable>,
     pub(crate) policy: Rc<dyn MeasurePolicy>,
     pub(crate) modifier: Modifier,
-    pub(crate) chain: Vec<Box<dyn ModifierNode>>,
-    pub(crate) capabilities: SmallVec<[u8; 16]>,
-    pub(crate) all_capabilities: u8,
+    pub(crate) chain: Vec<ChainEntry>,
+    /// Its chain's kinds: the head's aggregate (Compose's `NodeChain.aggregateChildKindSet`).
+    pub(crate) kinds: NodeKinds,
     /// The chain indices of the layout modifier nodes, outermost first.
     pub(crate) layout_indices: SmallVec<[u16; 4]>,
     /// Bumped when the chain's nodes change, so pointer captures of removed nodes lapse.
@@ -188,6 +149,12 @@ pub struct LayoutNode {
     /// Its content is deactivated (a lazy list's item kept for reuse): unplaced, its modifier
     /// nodes reset, left out of the walks that only concern content in use.
     pub(crate) deactivated: bool,
+    /// In the tree: the root, or a child of an attached node (Compose's `LayoutNode.isAttached`;
+    /// a deactivated node stays attached, its modifier nodes don't).
+    pub(crate) attached: bool,
+    /// Attached in the pass under way, with an ancestor that was (or itself) queued to attach
+    /// its subtree's modifier nodes at the pass's end (`Lifecycle::Attach`).
+    pub(crate) attaching: bool,
 }
 
 impl LayoutNode {
@@ -198,8 +165,7 @@ impl LayoutNode {
             policy,
             modifier: Modifier,
             chain: Vec::new(),
-            capabilities: SmallVec::new(),
-            all_capabilities: 0,
+            kinds: NodeKinds::NONE,
             layout_indices: SmallVec::new(),
             chain_version: 0,
             parent_data: ParentData::default(),
@@ -219,6 +185,8 @@ impl LayoutNode {
             inner_layers: Vec::new(),
             z_index: 0.0,
             deactivated: false,
+            attached: false,
+            attaching: false,
         }
     }
 
@@ -229,6 +197,12 @@ impl LayoutNode {
 
     pub fn modifier(&self) -> &Modifier {
         &self.modifier
+    }
+
+    /// The layer chain entry `index` measures and draws in: the number of layout modifier
+    /// nodes before it.
+    pub(crate) fn layer_of(&self, index: usize) -> usize {
+        self.chain[..index].iter().filter(|entry| entry.kinds.any(NodeKinds::LAYOUT)).count()
     }
 }
 
@@ -301,6 +275,8 @@ pub struct UiTree {
     pub(crate) positioned: Vec<NodeId>,
     /// Something was laid out (or a position-aware node came) since the last callbacks.
     pub(crate) laid_out_since_callbacks: bool,
+    /// The last `EntryId` given to a chain entry.
+    pub(crate) next_entry: u64,
     /// The window's insets, the host's state: read while measuring (insets paddings), so a
     /// change measures their readers again.
     pub(crate) window_insets:
@@ -321,15 +297,36 @@ pub struct UiTree {
     pub(crate) inner_layer_owners: std::collections::HashMap<u64, NodeId>,
     /// The last inner layer's key, without its flag.
     next_inner_layer: u64,
-    /// The nodes reused in the pass under way, whose modifier nodes are reset when it ends
-    /// (`run_resets`); kept for its capacity.
-    pending_resets: Vec<NodeId>,
+    /// The tree's key in the thread's registry of trees, which its nodes' handles name it by.
+    pub(crate) key: u32,
+    /// The modifier nodes' lifecycle steps the pass under way queued, run when it ends
+    /// (lifecycle.rs); kept for its capacity.
+    pub(crate) lifecycle: Vec<crate::lifecycle::Lifecycle>,
+    /// The coroutine scopes nodes made (`NodeContext::coroutine_scope`), cancelled when they
+    /// are detached.
+    pub(crate) scopes:
+        std::collections::HashMap<EntryId, compose_runtime::Owned<compose_runtime::CoroutineScope>>,
+    /// A node's semantics changed outside what recomposition and layout say (its
+    /// `invalidate_semantics`, a semantics node's update): the frame's stats tell it.
+    pub(crate) semantics_changed: bool,
+    /// Pointer nodes came, went or changed: the resting mouse's hover is refreshed even if
+    /// nothing was laid out.
+    pub(crate) hover_stale: bool,
+}
+
+impl Drop for UiTree {
+    fn drop(&mut self) {
+        crate::node_context::unregister_tree(self.key);
+    }
 }
 
 impl UiTree {
     pub fn new(density: Density, text_measurer: Box<dyn TextMeasurer>) -> UiTree {
         let mut root = LayoutNode::new(Rc::new(StackMeasurePolicy));
         root.placed = true;
+        root.attached = true;
+        let focus_requests = Rc::new(crate::focus_requester::FocusRequests::default());
+        let key = crate::node_context::register_tree(&focus_requests);
         UiTree {
             slots: vec![Slot { generation: 0, node: Some(root) }],
             free: Vec::new(),
@@ -357,13 +354,14 @@ impl UiTree {
             mouse: None,
             observer: None,
             measure_runs: 0,
-            focus_requests: Rc::default(),
+            focus_requests,
             text_selection: None,
             bring_into_view_after_layout: None,
             beyond_search: crate::focus::BeyondSearch::default(),
             layout_callbacks: Vec::new(),
             positioned: Vec::new(),
             laid_out_since_callbacks: false,
+            next_entry: 0,
             window_insets: None,
             measured_ahead: Vec::new(),
             kept: Vec::new(),
@@ -371,7 +369,11 @@ impl UiTree {
             optimizations: crate::optimizations::Optimizations::defaults(),
             inner_layer_owners: std::collections::HashMap::new(),
             next_inner_layer: 0,
-            pending_resets: Vec::new(),
+            key,
+            lifecycle: Vec::new(),
+            semantics_changed: false,
+            scopes: std::collections::HashMap::new(),
+            hover_stale: false,
         }
     }
 
@@ -420,10 +422,13 @@ impl UiTree {
         self.density
     }
 
-    /// Changes the density: everything is measured again.
+    /// Changes the density: everything is measured again, and the attached modifier nodes are
+    /// told (`ModifierNode::on_density_change`, where the tree next applies its nodes'
+    /// requests).
     pub fn set_density(&mut self, density: Density) {
         if self.density != density {
             self.density = density;
+            self.queue_lifecycle(crate::lifecycle::Lifecycle::Density);
             for index in 0..self.slots.len() {
                 if let Some(node) = &mut self.slots[index].node {
                     node.needs_measure = true;
@@ -504,6 +509,15 @@ impl UiTree {
         self.get(node).into_iter().flat_map(|node| node.children.iter().map(|child| child.node))
     }
 
+    /// The modifier nodes of `node`'s chain, head to tail, as `LayoutNode`'s `getModifierInfo`
+    /// lists them: for tests and tools.
+    pub fn modifier_nodes(
+        &self,
+        node: NodeId,
+    ) -> impl Iterator<Item = &dyn crate::modifier::ModifierNode> + '_ {
+        self.get(node).into_iter().flat_map(|node| node.chain.iter().map(|entry| &*entry.node))
+    }
+
     /// The number of live nodes, the root included.
     pub fn node_count(&self) -> usize {
         self.slots.len() - self.free.len()
@@ -525,7 +539,11 @@ impl UiTree {
     }
 
     fn invalidate_measure_with(&mut self, node: NodeId, whole: bool) {
-        if self.get(node).is_none_or(|value| value.deactivated) {
+        let Some(value) = self.get_mut(node) else { return };
+        if value.deactivated {
+            // Deactivated content (kept for reuse) isn't measured; reused, it is if it asked
+            // meanwhile, as Compose marks a deactivated node dirty without scheduling it.
+            value.needs_measure = true;
             return;
         }
         if whole {
@@ -717,7 +735,12 @@ impl UiTree {
         direction: crate::alignment::LayoutDirection,
     ) {
         if self.node(node).layout_direction != direction {
-            self.node_mut(node).layout_direction = direction;
+            let value = self.node_mut(node);
+            value.layout_direction = direction;
+            // Its attached modifier nodes are told, as Compose's `onLayoutDirectionChange`.
+            if value.chain.iter().any(|entry| entry.state & entry_state::ATTACH_RAN != 0) {
+                self.queue_lifecycle(crate::lifecycle::Lifecycle::LayoutDirection(node));
+            }
             self.invalidate_measure(node);
         }
     }
@@ -741,46 +764,72 @@ impl UiTree {
     /// as Compose's chain diff), updates its node in place, keeping its state; the others'
     /// nodes are created or detached.
     pub fn set_modifier(&mut self, node: NodeId, modifier: Modifier) {
+        let mut next_entry = self.next_entry;
         let value = self.node_mut(node);
         if value.modifier.same(&modifier) {
             return;
         }
         let old = value.modifier.elements();
         let new = modifier.elements();
+        // What the updated, inserted and removed nodes' kinds say to invalidate, as Compose's
+        // `autoInvalidateUpdatedNode`, `…InsertedNode` and `…RemovedNode` (NodeKind.kt).
+        let mut invalidated = NodeKinds::NONE;
         // The common case, the same kinds in the same order: update in place, allocating nothing.
         if old.len() == new.len() && old.iter().zip(new).all(|(old, new)| old.same_kind(new)) {
             for (index, (old, new)) in old.iter().zip(new).enumerate() {
                 if !old.same(new) {
-                    nodes::update(new, &mut *value.chain[index]);
+                    let entry = &mut value.chain[index];
+                    nodes::update(new, &mut *entry.node);
+                    if entry.node.should_auto_invalidate() {
+                        invalidated |= entry.kinds;
+                    }
                 }
             }
             let previous = std::mem::replace(&mut value.modifier, modifier);
             let parent_data_changed = self.refresh_chain(node);
             drop(previous);
             self.revalidate_focus(node, None);
-            self.invalidate_measure(node);
-            if parent_data_changed && let Some(parent) = self.parent_of(node) {
-                self.invalidate_measure(parent);
-            }
+            self.auto_invalidate(node, invalidated, parent_data_changed);
             return;
         }
-        let matched = match_kinds(old, new);
-        let mut old_nodes: SmallVec<[Option<Box<dyn ModifierNode>>; 4]> =
+        let matched = match_kinds(old, new, Element::same_kind);
+        let mut old_nodes: SmallVec<[Option<ChainEntry>; 4]> =
             std::mem::take(&mut value.chain).into_iter().map(Some).collect();
         let mut chain = Vec::with_capacity(new.len());
         let mut reused = 0;
+        // New nodes of a node in the tree are attached at once, as Compose's chain update marks
+        // them; their `on_attach` runs when the pass ends.
+        let attached = value.attached && !value.deactivated;
+        let mut inserted = false;
         for (index, element) in new.iter().enumerate() {
             match matched[index] {
                 Some(old_index) => {
                     let mut entry = old_nodes[old_index].take().expect("matched once");
                     if !old[old_index].same(element) {
-                        nodes::update(element, &mut *entry);
+                        nodes::update(element, &mut *entry.node);
+                        if entry.node.should_auto_invalidate() {
+                            invalidated |= entry.kinds;
+                        }
                     }
                     chain.push(entry);
                     reused += 1;
                 }
-                None => chain.push(nodes::create(element)),
+                None => {
+                    next_entry += 1;
+                    let observed = matches!(element, Element::Custom(_));
+                    let mut entry =
+                        ChainEntry::new(nodes::create(element), observed, EntryId(next_entry));
+                    if attached {
+                        entry.state = entry_state::ATTACHED;
+                        inserted = true;
+                    }
+                    invalidated |= entry.kinds;
+                    chain.push(entry);
+                }
             }
+        }
+        for removed in old_nodes.iter().flatten() {
+            invalidated |= removed.kinds;
         }
         let changed = reused != old.len() || reused != new.len();
         if changed {
@@ -788,16 +837,57 @@ impl UiTree {
         }
         value.chain = chain;
         value.modifier = modifier;
+        // A node attached in this pass attaches its whole subtree when it ends.
+        let attaching = value.attaching;
+        self.next_entry = next_entry;
         let parent_data_changed = self.refresh_chain(node);
         if changed {
             self.remap_captures(node, &matched);
         }
-        let mut context = DetachContext { text_measurer: &mut *self.text_measurer };
+        if inserted && !attaching {
+            self.queue_lifecycle(crate::lifecycle::Lifecycle::AttachEntries(node));
+        }
+        // The removed nodes: detached when the pass ends (if they were attached), then released.
+        let mut detaching: SmallVec<[ChainEntry; 2]> = SmallVec::new();
         for mut removed in old_nodes.into_iter().flatten() {
-            removed.on_detach(&mut context);
+            if removed.state & entry_state::ATTACH_RAN != 0 {
+                detaching.push(removed);
+            } else {
+                if removed.state & entry_state::HAS_HANDLE != 0 {
+                    self.focus_requests.attached_entries.borrow_mut().remove(&removed.id.0);
+                }
+                let mut context = ReleaseContext { text_measurer: &mut *self.text_measurer };
+                removed.node.on_release(&mut context);
+            }
+        }
+        if !detaching.is_empty() {
+            self.queue_lifecycle(crate::lifecycle::Lifecycle::Removed(node, detaching));
         }
         self.revalidate_focus(node, Some(&matched));
-        self.invalidate_measure(node);
+        self.auto_invalidate(node, invalidated, parent_data_changed);
+    }
+
+    /// Invalidates what a chain change's nodes' `kinds` say, as Compose's auto-invalidation
+    /// (`NodeKind.kt`, `autoInvalidateNodeSelf`): a layout node measures `node` again (and draws
+    /// it), a draw node (a graphics layer included) draws it again; a change of its parent data
+    /// measures its parent. An overlay (compose-rs's popup windows) is positioned, and takes or
+    /// gives back the focus, by the layout: it lays out again, as Compose's popup updates its
+    /// window. A semantics node's change is told in the frame's stats (semantics are read
+    /// afresh when asked); a pointer node's has the resting mouse's hover refreshed (an `Enter`
+    /// for one that came under it), as the layout does; focus is revalidated by the chain
+    /// change itself.
+    fn auto_invalidate(&mut self, node: NodeId, kinds: NodeKinds, parent_data_changed: bool) {
+        if kinds.any(NodeKinds::LAYOUT | NodeKinds::OVERLAY) {
+            self.invalidate_measure(node);
+        } else if kinds.any(NodeKinds::DRAW | NodeKinds::GRAPHICS_LAYER) {
+            self.invalidate_draw_of(node);
+        }
+        if kinds.any(NodeKinds::SEMANTICS) {
+            self.semantics_changed = true;
+        }
+        if kinds.any(NodeKinds::POINTER_INPUT) && self.mouse.is_some() {
+            self.hover_stale = true;
+        }
         if parent_data_changed && let Some(parent) = self.parent_of(node) {
             self.invalidate_measure(parent);
         }
@@ -811,11 +901,10 @@ impl UiTree {
             return;
         }
         let value = self.node(node);
-        let (version, capabilities) = (value.chain_version, value.capabilities.clone());
-        let layer_of = |index: usize| {
-            capabilities[..index].iter().filter(|bits| **bits & capability::LAYOUT != 0).count()
-                as u16
-        };
+        let version = value.chain_version;
+        let layers: SmallVec<[u16; 8]> =
+            (0..value.chain.len()).map(|index| value.layer_of(index) as u16).collect();
+        let layer_of = |index: usize| layers[index];
         let remap = |entry: &mut crate::dispatch::HitEntry| {
             if entry.node != node {
                 return true;
@@ -845,22 +934,23 @@ impl UiTree {
         // as the composition is applied.
         let live = self.shows_requesters(node);
         let value = self.node_mut(node);
-        value.capabilities.clear();
         value.layout_indices.clear();
-        value.all_capabilities = 0;
-        let mut parent_data = ParentData::default();
+        // The aggregates, from the tail: each entry's kinds and those after it.
+        let mut aggregate = NodeKinds::NONE;
+        for entry in value.chain.iter_mut().rev() {
+            aggregate |= entry.kinds;
+            entry.aggregate = aggregate;
+        }
+        value.kinds = aggregate;
         for (index, entry) in value.chain.iter_mut().enumerate() {
-            if let Some(requester) =
-                entry.downcast_mut::<crate::focus_requester::FocusRequesterNode>()
+            if entry.kinds.any(NodeKinds::FOCUS_REQUESTER)
                 && live
+                && let Some(requester) =
+                    entry.node.downcast_mut::<crate::focus_requester::FocusRequesterNode>()
             {
                 requester.attach(&focus_requests, node);
             }
-            let custom = matches!(value.modifier.elements().get(index), Some(Element::Custom(_)));
-            let bits = capabilities_of(&mut **entry) | if custom { capability::CUSTOM } else { 0 };
-            value.capabilities.push(bits);
-            value.all_capabilities |= bits;
-            if bits & capability::LAYOUT != 0 {
+            if entry.kinds.any(NodeKinds::LAYOUT) {
                 value.layout_indices.push(index as u16);
             }
         }
@@ -868,23 +958,28 @@ impl UiTree {
         // drawing modifier is a graphics layer (which makes it one, as each of Compose's
         // graphics layers is a layer). Each other graphics layer is a group of its own inside
         // the node's drawing (an inner layer, D522).
-        let is_layer = |entry: &dyn ModifierNode| {
-            entry.downcast_ref::<crate::graphics_layer::GraphicsLayerNode>().is_some()
+        let is_layer = |entry: &ChainEntry| entry.kinds.any(NodeKinds::GRAPHICS_LAYER);
+        let layer_entry = if value.kinds.any(NodeKinds::GRAPHICS_LAYER) {
+            value
+                .chain
+                .iter()
+                .position(is_layer)
+                .filter(|&index| {
+                    value.chain[..index].iter().all(|entry| !entry.kinds.any(NodeKinds::DRAW))
+                })
+                .map(|index| index as u16)
+        } else {
+            None
         };
-        let layer_entry = value
-            .chain
-            .iter()
-            .position(|entry| is_layer(&**entry))
-            .filter(|&index| {
-                value.capabilities[..index].iter().all(|bits| bits & capability::DRAW == 0)
-            })
-            .map(|index| index as u16);
-        let boundary =
-            layer_entry.is_some() || value.chain.iter().any(|entry| entry.is_repaint_boundary());
-        let inner: SmallVec<[u16; 2]> = (0..value.chain.len())
-            .filter(|&index| is_layer(&*value.chain[index]) && layer_entry != Some(index as u16))
-            .map(|index| index as u16)
-            .collect();
+        let boundary = layer_entry.is_some() || value.kinds.any(NodeKinds::REPAINT_BOUNDARY);
+        let inner: SmallVec<[u16; 2]> = if value.kinds.any(NodeKinds::GRAPHICS_LAYER) {
+            (0..value.chain.len())
+                .filter(|&index| is_layer(&value.chain[index]) && layer_entry != Some(index as u16))
+                .map(|index| index as u16)
+                .collect()
+        } else {
+            SmallVec::new()
+        };
         if !inner.is_empty() || !value.inner_layers.is_empty() {
             let mut layers = std::mem::take(&mut value.inner_layers);
             // Kept by chain index: the same render node for the same layer.
@@ -919,10 +1014,7 @@ impl UiTree {
             }
             _ => value.retained = None,
         }
-        let overlay = value
-            .chain
-            .iter()
-            .any(|entry| entry.downcast_ref::<crate::overlay::OverlayNode>().is_some());
+        let overlay = value.kinds.any(NodeKinds::OVERLAY);
         let parent = value.parent;
         if overlay != value.overlay {
             value.overlay = overlay;
@@ -939,8 +1031,7 @@ impl UiTree {
             self.invalidate_children_draw_of(parent);
         }
         let value = self.node_mut(node);
-        let positioned =
-            value.chain.iter_mut().any(|entry| entry.as_global_position_aware().is_some());
+        let positioned = value.kinds.any(NodeKinds::GLOBAL_POSITION_AWARE);
         let z_index = value
             .modifier
             .elements()
@@ -959,6 +1050,17 @@ impl UiTree {
             self.register_positioned(node);
         }
         let value = self.node_mut(node);
+        value.layers.resize(value.layout_indices.len() + 1, Layer::default());
+        // A new listener reports its initial state.
+        let listens = value.kinds.any(NodeKinds::FOCUS_EVENT);
+        self.focus_listeners_dirty |= listens;
+        self.refresh_parent_data(node)
+    }
+
+    /// Recomputes `node`'s parent data from its elements. Returns whether it changed.
+    pub(crate) fn refresh_parent_data(&mut self, node: NodeId) -> bool {
+        let value = self.node_mut(node);
+        let mut parent_data = ParentData::default();
         for element in value.modifier.elements() {
             match element {
                 // The outermost wins, as Compose's parent data chain folds from the outside.
@@ -971,12 +1073,8 @@ impl UiTree {
                 _ => {}
             }
         }
-        value.layers.resize(value.layout_indices.len() + 1, Layer::default());
         let changed = value.parent_data != parent_data;
         value.parent_data = parent_data;
-        // A new listener reports its initial state.
-        let listens = value.all_capabilities & capability::FOCUS_EVENT != 0;
-        self.focus_listeners_dirty |= listens;
         changed
     }
 
@@ -1037,10 +1135,14 @@ impl UiTree {
     /// The bounds of `node` in the root, in pixels.
     /// `node`'s overlay modifier node, if it's an overlay.
     pub(crate) fn overlay_node(&self, node: NodeId) -> Option<&crate::overlay::OverlayNode> {
-        self.get(node)?
+        let value = self.get(node)?;
+        if !value.kinds.any(NodeKinds::OVERLAY) {
+            return None;
+        }
+        value
             .chain
             .iter()
-            .find_map(|entry| entry.downcast_ref::<crate::overlay::OverlayNode>())
+            .find_map(|entry| entry.node.downcast_ref::<crate::overlay::OverlayNode>())
     }
 
     pub fn bounds_in_root(&self, node: NodeId) -> crate::unit::Rect {
@@ -1055,7 +1157,8 @@ impl UiTree {
     /// node reused or deactivated: the focus, if it's here, goes; pointer captures of its
     /// modifier nodes lapse; it's drawn again. Its modifier nodes are kept, with their caches,
     /// for the new content's elements to update, as Compose's chain diff does (D431); each is
-    /// reset (`ModifierNode::on_reset`) by `run_resets`, after the pass.
+    /// reset, detached and attached again (`ModifierNode::on_reset`, `on_detach`, `on_attach`)
+    /// after the pass (D1153).
     fn reset_modifier_state(&mut self, node: NodeId) {
         let value = self.node_mut(node);
         if let Some(retained) = &mut value.retained {
@@ -1072,16 +1175,6 @@ impl UiTree {
         }
         if self.text_selection.as_ref().is_some_and(|selection| selection.container() == node) {
             self.text_selection = None;
-        }
-    }
-
-    /// Resets the modifier nodes of `node` (`ModifierNode::on_reset`), after the pass that reused
-    /// or deactivated it: outside composition, so a reset may write state, as Compose applies a
-    /// node's `onReuse` with the pass's changes.
-    fn run_resets(&mut self, node: NodeId) {
-        let Some(value) = self.get_mut(node) else { return };
-        for entry in &mut value.chain {
-            entry.on_reset();
         }
     }
 
@@ -1110,12 +1203,12 @@ impl UiTree {
     fn set_requesters_attached(&mut self, node: NodeId, attached: bool) {
         let requests = self.focus_requests.clone();
         let value = self.node_mut(node);
-        if value.all_capabilities & capability::CUSTOM == 0 {
+        if !value.kinds.any(NodeKinds::FOCUS_REQUESTER) {
             return;
         }
         for entry in &mut value.chain {
             if let Some(requester) =
-                entry.downcast_mut::<crate::focus_requester::FocusRequesterNode>()
+                entry.node.downcast_mut::<crate::focus_requester::FocusRequesterNode>()
             {
                 if attached {
                     requester.attach(&requests, node);
@@ -1142,8 +1235,13 @@ impl UiTree {
         }
     }
 
-    /// Frees `node` and its subtree, detaching their modifier nodes.
+    /// Frees `node` and its subtree: their modifier nodes detached (those still attached: a
+    /// subtree removed in the pass releasing it, before the pass's end detaches it) and
+    /// released.
     fn free_subtree(&mut self, node: NodeId) {
+        // Nodes its chains lost in this pass first, while their layout nodes live.
+        self.release_removed_in_subtree(node);
+        self.detach_subtree(node);
         let mut stack = vec![node];
         while let Some(id) = stack.pop() {
             let slot = &mut self.slots[id.index as usize];
@@ -1164,9 +1262,9 @@ impl UiTree {
             for layer in &value.inner_layers {
                 self.inner_layer_owners.remove(&layer.key);
             }
-            let mut context = DetachContext { text_measurer: &mut *self.text_measurer };
+            let mut context = ReleaseContext { text_measurer: &mut *self.text_measurer };
             for entry in &mut value.chain {
-                entry.on_detach(&mut context);
+                entry.node.on_release(&mut context);
             }
             drop(value);
         }
@@ -1183,7 +1281,16 @@ impl Applier for UiTree {
     fn insert(&mut self, parent: NodeRef, index: usize, mut node: LayoutNode) -> NodeRef {
         let parent = NodeId::from_ref(parent);
         node.parent = Some(parent);
+        // Attached with its parent; the first of a new subtree attaches the subtree's modifier
+        // nodes when the pass ends, children's first, as Compose's `LayoutNode.attach`.
+        let parent_value = self.node(parent);
+        let (attached, under_attaching) = (parent_value.attached, parent_value.attaching);
+        node.attached = attached;
+        node.attaching = attached;
         let id = self.alloc(node);
+        if attached && !under_attaching {
+            self.queue_lifecycle(crate::lifecycle::Lifecycle::Attach(id));
+        }
         let length = self.node(parent).children.len();
         assert!(index <= length, "compose-ui: insert at {index} past {length} children");
         self.node_mut(parent).children.insert(index, Measurable { node: id, layer: 0 });
@@ -1211,6 +1318,21 @@ impl Applier for UiTree {
         value.parent = Some(parent);
         self.node_mut(parent).children.insert(index, Measurable { node: id, layer: 0 });
         self.invalidate_measure(parent);
+        // In the tree now, its subtree too: their modifier nodes are attached when the pass ends.
+        let parent_value = self.node(parent);
+        if parent_value.attached {
+            let under_attaching = parent_value.attaching;
+            let mut stack = vec![id];
+            while let Some(next) = stack.pop() {
+                let value = self.node_mut(next);
+                value.attached = true;
+                value.attaching = true;
+                stack.extend(value.children.iter().map(|child| child.node));
+            }
+            if !under_attaching {
+                self.queue_lifecycle(crate::lifecycle::Lifecycle::Attach(id));
+            }
+        }
         // In the tree now: its requesters, and those of what was attached to it, attach.
         if self.shows_requesters(id) {
             let mut stack = vec![id];
@@ -1228,9 +1350,20 @@ impl Applier for UiTree {
         let removed: SmallVec<[Measurable; 8]> =
             self.node_mut(parent).children.drain(index..index + count).collect();
         for child in removed {
-            if let Some(child) = self.get_mut(child.node) {
-                child.parent = None;
-                child.placed = false;
+            let Some(value) = self.get_mut(child.node) else { continue };
+            value.parent = None;
+            value.placed = false;
+            // Out of the tree, its subtree too: their modifier nodes are detached when the pass
+            // ends (or when it releases them, first), as Compose's `LayoutNode.detach`.
+            if value.attached {
+                let mut stack = vec![child.node];
+                while let Some(next) = stack.pop() {
+                    let value = self.node_mut(next);
+                    value.attached = false;
+                    value.attaching = false;
+                    stack.extend(value.children.iter().map(|child| child.node));
+                }
+                self.queue_lifecycle(crate::lifecycle::Lifecycle::Detach(child.node));
             }
         }
         self.invalidate_measure(parent);
@@ -1251,8 +1384,8 @@ impl Applier for UiTree {
 
     /// Content reused in `node`'s place keeps it, as Compose's `LayoutNode.onReuse`: what the
     /// tree keeps of its old content is reset now (`reset_modifier_state`) and its modifier nodes
-    /// after the pass (`on_end_changes`), unless that was done when it was deactivated; then
-    /// composition gives it its new modifier and policy, and it's measured again.
+    /// reset, detached and attached again after the pass (`on_end_changes`); then composition
+    /// gives it its new modifier and policy, which measure it again if they changed.
     fn reuse_paused(&mut self, node: NodeRef) -> bool {
         // A deactivated node is shown again (its focus requesters attached) at apply; one still
         // shown is reset now, before the pass updates it, as unpaused.
@@ -1269,47 +1402,39 @@ impl Applier for UiTree {
         let Some(value) = self.get_mut(node) else { return };
         if std::mem::take(&mut value.deactivated) {
             self.set_requesters_attached(node, true);
-            // Its parent has a child to measure again (an ordinary layout's, or a list's).
+            // Its parent has a child to measure again (an ordinary layout's, or a list's): it
+            // measures it again if it asked to while deactivated (`needs_measure` kept), as
+            // Compose's `rescheduleRemeasureOrRelayout`; its ancestors, reused before it, are
+            // active again.
             if let Some(parent) = self.parent_of(node) {
                 self.invalidate_measure(parent);
             }
         } else {
             self.reset_modifier_state(node);
         }
-        // Reset after the pass, after the new content's elements updated it, also when it was
-        // reset as it was deactivated (with the old content's): a node showing its value (a
-        // switch) shows the new one at once (D435).
-        self.pending_resets.push(node);
-        // Measured again, its ancestors marked up to the first already marked (the content
-        // reused around it marked them).
+        // Reset (if it wasn't when deactivated), detached and attached again after the pass,
+        // after the new content's elements updated it: a node showing its value (a switch)
+        // shows the new one at once from its `on_attach` (D435, D1156).
+        self.queue_lifecycle(crate::lifecycle::Lifecycle::Reuse(node));
+        // Drawn again; measured again only if something asks, as Compose's reuse reschedules
+        // only a pending measurement (a deactivated node's asked meanwhile).
         self.invalidate_draw_of(node);
-        let value = self.node_mut(node);
-        value.needs_measure = true;
-        let mut parent = value.parent;
-        while let Some(id) = parent {
-            let value = self.node_mut(id);
-            if value.subtree_needs_measure {
-                break;
-            }
-            value.subtree_needs_measure = true;
-            parent = value.parent;
-        }
     }
 
     /// `node`'s content was deactivated (a lazy list's item kept for reuse, an inactive
     /// `ReusableContentHost`), as Compose's `LayoutNode.onDeactivate`, at the end of the pass: it
     /// stays in the tree, but its parent no longer measures it (`measurables` leave it out), so
     /// it isn't placed, drawn, hit, focused or in the semantics, in any layout; nothing measures
-    /// it, whatever it read; its modifier nodes are reset and its focus requesters detached,
-    /// until content reuses it.
+    /// it, whatever it read (what it reads marks it to measure once reused); its modifier nodes
+    /// are reset and detached, as Compose's `resetModifierState`, and its focus requesters
+    /// detached, until content reuses it.
     fn deactivate(&mut self, node: NodeRef) {
         let node = NodeId::from_ref(node);
         let Some(value) = self.get_mut(node) else { return };
-        if std::mem::replace(&mut value.deactivated, true) {
+        if value.deactivated {
             return;
         }
         value.placed = false;
-        value.needs_measure = false;
         value.subtree_needs_measure = false;
         // The outermost deactivated node: its parent lays out and draws without it.
         if let Some(parent) = value.parent
@@ -1318,7 +1443,9 @@ impl Applier for UiTree {
             self.invalidate_measure(parent);
         }
         self.reset_modifier_state(node);
-        self.run_resets(node);
+        // At the end of the pass already: reset and detached now, still active as they run.
+        self.reset_and_detach(node);
+        self.node_mut(node).deactivated = true;
         self.set_requesters_attached(node, false);
         self.measured_ahead.retain(|ahead| *ahead != node);
         self.kept.retain(|kept| *kept != node);
@@ -1327,21 +1454,10 @@ impl Applier for UiTree {
         }
     }
 
-    /// A pass that panicked before its end left no reset to run.
-    fn on_begin_changes(&mut self) {
-        self.pending_resets.clear();
-    }
-
-    /// The modifier nodes of the nodes reused in the pass are reset, now that it's over.
+    /// The modifier nodes' lifecycle steps the pass queued run now that it's over, in Compose's
+    /// orders (lifecycle.rs); their side effects, once the host releases the tree.
     fn on_end_changes(&mut self) {
-        let mut pending = std::mem::take(&mut self.pending_resets);
-        for node in pending.drain(..) {
-            // Deactivated since (reset then), or released.
-            if self.get(node).is_some_and(|value| !value.deactivated) {
-                self.run_resets(node);
-            }
-        }
-        self.pending_resets = pending;
+        self.run_lifecycle();
     }
 
     fn release(&mut self, node: NodeRef) {
@@ -1357,54 +1473,6 @@ impl Applier for UiTree {
         self.free_subtree(node);
         self.needs_draw = true;
     }
-}
-
-/// For each new element, the old element of the same kind it reuses: a longest common
-/// subsequence of kinds, so nodes keep their state when elements are added or removed around
-/// them. Equal prefixes and suffixes are matched without the table.
-fn match_kinds(old: &[Element], new: &[Element]) -> SmallVec<[Option<usize>; 8]> {
-    let mut matched: SmallVec<[Option<usize>; 8]> = SmallVec::from_elem(None, new.len());
-    let shortest = old.len().min(new.len());
-    let prefix = (0..shortest).take_while(|&i| old[i].same_kind(&new[i])).count();
-    let suffix = (0..shortest - prefix)
-        .take_while(|&i| old[old.len() - 1 - i].same_kind(&new[new.len() - 1 - i]))
-        .count();
-    for i in 0..prefix {
-        matched[i] = Some(i);
-    }
-    for i in 0..suffix {
-        matched[new.len() - 1 - i] = Some(old.len() - 1 - i);
-    }
-    let old_middle = &old[prefix..old.len() - suffix];
-    let new_middle = &new[prefix..new.len() - suffix];
-    if old_middle.is_empty() || new_middle.is_empty() {
-        return matched;
-    }
-    // lengths[i][j]: the LCS of old_middle[i..] and new_middle[j..].
-    let (rows, columns) = (old_middle.len() + 1, new_middle.len() + 1);
-    let mut lengths = vec![0u16; rows * columns];
-    for i in (0..old_middle.len()).rev() {
-        for j in (0..new_middle.len()).rev() {
-            lengths[i * columns + j] = if old_middle[i].same_kind(&new_middle[j]) {
-                lengths[(i + 1) * columns + j + 1] + 1
-            } else {
-                lengths[(i + 1) * columns + j].max(lengths[i * columns + j + 1])
-            };
-        }
-    }
-    let (mut i, mut j) = (0, 0);
-    while i < old_middle.len() && j < new_middle.len() {
-        if old_middle[i].same_kind(&new_middle[j]) {
-            matched[prefix + j] = Some(prefix + i);
-            i += 1;
-            j += 1;
-        } else if lengths[(i + 1) * columns + j] >= lengths[i * columns + j + 1] {
-            i += 1;
-        } else {
-            j += 1;
-        }
-    }
-    matched
 }
 
 /// The last segment of a type path, without generics: `compose_ui::layout::Stack` → `Stack`.

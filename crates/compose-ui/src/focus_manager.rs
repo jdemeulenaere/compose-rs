@@ -12,7 +12,7 @@ use compose_runtime::{ComposeArg, CompositionLocal};
 
 use crate::focus_requester::{FocusRequest, FocusRequests};
 use crate::input::Action;
-use crate::tree::{NodeId, UiTree, capability};
+use crate::tree::{NodeId, UiTree};
 use crate::unit::Rect;
 
 /// Where `FocusManager::move_focus` moves the focus, as Compose's `FocusDirection`.
@@ -221,11 +221,7 @@ impl UiTree {
         let Some(index) = index.filter(|_| !value.layers.is_empty()) else {
             return self.bounds_in_root(node);
         };
-        let layer = value.capabilities[..index]
-            .iter()
-            .filter(|bits| **bits & capability::LAYOUT != 0)
-            .count()
-            .min(value.layers.len() - 1);
+        let layer = value.layer_of(index).min(value.layers.len() - 1);
         let size = value.layers[layer].measured;
         let origin = self.layer_origin(node, layer);
         Rect::new(origin.x, origin.y, origin.x + size.width as f32, origin.y + size.height as f32)

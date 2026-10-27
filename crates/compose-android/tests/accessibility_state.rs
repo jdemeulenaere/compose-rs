@@ -389,3 +389,13 @@ fn the_kotlin_is_the_model() {
         assert!(view.contains(line), "ComposeRsView.kt lacks {line:?}");
     }
 }
+
+/// A frame whose only change is a modifier node's semantics (`invalidate_semantics`, or a
+/// semantics node's update, D1158) may have changed the semantics too.
+#[test]
+fn a_semantics_only_frame_may_change_the_semantics() {
+    use compose_ui::platform::FrameStats;
+    assert!(!semantics_may_have_changed(&FrameStats::default()));
+    let changed = FrameStats { semantics_changed: true, ..FrameStats::default() };
+    assert!(semantics_may_have_changed(&changed));
+}

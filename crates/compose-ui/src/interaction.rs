@@ -87,16 +87,15 @@ struct HoverIconElement(crate::input::PointerIcon);
 struct HoverIconNode(crate::input::PointerIcon);
 
 impl crate::modifier::ModifierNodeElement for HoverIconElement {
-    fn create(&self) -> Box<dyn crate::modifier::ModifierNode> {
-        Box::new(HoverIconNode(self.0))
+    type Node = HoverIconNode;
+    fn create(&self) -> HoverIconNode {
+        HoverIconNode(self.0)
     }
-    fn update(&self, node: &mut dyn crate::modifier::ModifierNode) {
-        if let Some(node) = node.downcast_mut::<HoverIconNode>() {
-            node.0 = self.0;
-        }
+    fn update(&self, node: &mut HoverIconNode) {
+        node.0 = self.0;
     }
-    fn same(&self, other: &dyn crate::modifier::ModifierNodeElement) -> bool {
-        other.downcast_ref::<HoverIconElement>().is_some_and(|other| other.0 == self.0)
+    fn same(&self, other: &Self) -> bool {
+        other.0 == self.0
     }
     fn name(&self) -> &'static str {
         "pointer_hover_icon"

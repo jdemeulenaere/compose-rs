@@ -336,25 +336,22 @@ fn moved(rect: Rect, by: Offset) -> Rect {
 }
 
 impl ModifierNodeElement for GraphicsLayerElement {
-    fn create(&self) -> Box<dyn ModifierNode> {
-        Box::new(GraphicsLayerNode { layer: self.0.clone() })
+    type Node = GraphicsLayerNode;
+    fn create(&self) -> GraphicsLayerNode {
+        GraphicsLayerNode { layer: self.0.clone() }
     }
 
-    fn update(&self, node: &mut dyn ModifierNode) {
-        if let Some(node) = node.downcast_mut::<GraphicsLayerNode>() {
-            node.layer = self.0.clone();
+    fn update(&self, node: &mut GraphicsLayerNode) {
+        node.layer = self.0.clone();
+    }
+
+    fn same(&self, other: &Self) -> bool {
+        match (&self.0, &other.0) {
+            (Layer::Fixed(a), Layer::Fixed(b)) => a == b,
+            (Layer::Block(a), Layer::Block(b)) => Rc::ptr_eq(a, b),
+            (Layer::Shadow(a), Layer::Shadow(b)) => a == b,
+            _ => false,
         }
-    }
-
-    fn same(&self, other: &dyn ModifierNodeElement) -> bool {
-        other.downcast_ref::<GraphicsLayerElement>().is_some_and(|other| {
-            match (&self.0, &other.0) {
-                (Layer::Fixed(a), Layer::Fixed(b)) => a == b,
-                (Layer::Block(a), Layer::Block(b)) => Rc::ptr_eq(a, b),
-                (Layer::Shadow(a), Layer::Shadow(b)) => a == b,
-                _ => false,
-            }
-        })
     }
 
     fn name(&self) -> &'static str {
@@ -383,12 +380,13 @@ struct RepaintBoundaryElement;
 struct RepaintBoundaryNode;
 
 impl crate::modifier::ModifierNodeElement for RepaintBoundaryElement {
-    fn create(&self) -> Box<dyn ModifierNode> {
-        Box::new(RepaintBoundaryNode)
+    type Node = RepaintBoundaryNode;
+    fn create(&self) -> RepaintBoundaryNode {
+        RepaintBoundaryNode
     }
-    fn update(&self, _node: &mut dyn ModifierNode) {}
-    fn same(&self, other: &dyn crate::modifier::ModifierNodeElement) -> bool {
-        other.downcast_ref::<RepaintBoundaryElement>().is_some()
+    fn update(&self, _node: &mut RepaintBoundaryNode) {}
+    fn same(&self, _other: &Self) -> bool {
+        true
     }
     fn name(&self) -> &'static str {
         "repaint_boundary"

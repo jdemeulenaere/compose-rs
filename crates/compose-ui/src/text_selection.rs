@@ -16,8 +16,9 @@ use crate::modifier::{
     FocusTargetModifierNode, KeyInputModifierNode, Modifier, ModifierNode, ModifierNodeElement,
     PointerInputModifierNode,
 };
+use crate::node_chain::NodeKinds;
 use crate::text::{SharedString, TextMeasurer};
-use crate::tree::{NodeId, UiTree, capability};
+use crate::tree::{NodeId, UiTree};
 use crate::unit::{IntSize, Offset};
 
 /// A text a `SelectionContainer` can select in, as Compose's `Selectable`: a modifier node
@@ -134,24 +135,24 @@ impl UiTree {
             }
             if node != container
                 && value.chain.iter().any(|entry| {
-                    entry.downcast_ref::<SelectionContainerNode>().is_some()
-                        || entry.downcast_ref::<DisableSelectionNode>().is_some()
+                    entry.node.downcast_ref::<SelectionContainerNode>().is_some()
+                        || entry.node.downcast_ref::<DisableSelectionNode>().is_some()
                 })
             {
                 continue;
             }
             let mut layer = 0;
             for index in 0..self.node(node).chain.len() {
-                let bits = self.node(node).capabilities[index];
+                let bits = self.node(node).chain[index].kinds;
                 let version = self.get_mut(node).and_then(|value| {
-                    value.chain[index].as_selectable().map(|text| text.version())
+                    value.chain[index].node.as_selectable().map(|text| text.version())
                 });
                 if let Some(version) = version {
                     let origin = self.layer_origin(node, layer);
                     let size = self.node(node).layers[layer].measured;
                     entries.push(Entry { node, index, origin, size, version });
                 }
-                if bits & capability::LAYOUT != 0 {
+                if bits.any(NodeKinds::LAYOUT) {
                     layer += 1;
                 }
             }
@@ -168,7 +169,7 @@ impl UiTree {
 
     fn selectable_text(&mut self, node: NodeId, index: usize) -> SharedString {
         self.get_mut(node)
-            .and_then(|value| value.chain[index].as_selectable().map(|text| text.text()))
+            .and_then(|value| value.chain[index].node.as_selectable().map(|text| text.text()))
             .unwrap_or(SharedString::EMPTY)
     }
 
@@ -177,7 +178,7 @@ impl UiTree {
         let local = position - entry.origin;
         self.node_and_measurer(entry.node)
             .and_then(|(value, (measurer, _))| {
-                value.chain[entry.index].as_selectable()?.offset_at(local, measurer)
+                value.chain[entry.index].node.as_selectable()?.offset_at(local, measurer)
             })
             .unwrap_or(0)
     }
@@ -230,7 +231,7 @@ impl UiTree {
     fn word(&mut self, point: Point) -> Range<usize> {
         self.get_mut(point.node)
             .and_then(|value| {
-                value.chain[point.index].as_selectable().map(|text| text.word_at(point.offset))
+                value.chain[point.index].node.as_selectable().map(|text| text.word_at(point.offset))
             })
             .unwrap_or(point.offset..point.offset)
     }
@@ -362,7 +363,7 @@ impl UiTree {
             let text = self.selectable_text(entry.node, entry.index);
             let range = range.map(|range| clamp(&text, range));
             if let Some((value, (measurer, _))) = self.node_and_measurer(entry.node)
-                && let Some(selectable) = value.chain[entry.index].as_selectable()
+                && let Some(selectable) = value.chain[entry.index].node.as_selectable()
                 && selectable.set_selection(range, measurer)
             {
                 self.invalidate_draw_of(entry.node);
@@ -434,12 +435,13 @@ pub(crate) struct SelectionContainerNode {
 }
 
 impl ModifierNodeElement for SelectionContainerElement {
-    fn create(&self) -> Box<dyn ModifierNode> {
-        Box::new(SelectionContainerNode { dragging: false, focused: false, last_press: None })
+    type Node = SelectionContainerNode;
+    fn create(&self) -> SelectionContainerNode {
+        SelectionContainerNode { dragging: false, focused: false, last_press: None }
     }
-    fn update(&self, _node: &mut dyn ModifierNode) {}
-    fn same(&self, other: &dyn ModifierNodeElement) -> bool {
-        other.downcast_ref::<SelectionContainerElement>().is_some()
+    fn update(&self, _node: &mut SelectionContainerNode) {}
+    fn same(&self, _other: &Self) -> bool {
+        true
     }
     fn name(&self) -> &'static str {
         "selection_container"
@@ -448,7 +450,7 @@ impl ModifierNodeElement for SelectionContainerElement {
 
 impl ModifierNode for SelectionContainerNode {
     /// Reused: no press selecting, no focus, no click run (the tree drops its selection).
-    fn on_reset(&mut self) {
+    fn on_reset(&mut self, _context: &mut crate::node_context::NodeContext<'_>) {
         self.dragging = false;
         self.focused = false;
         self.last_press = None;
@@ -560,12 +562,13 @@ pub(crate) struct DisableSelectionNode;
 struct DisableSelectionElement;
 
 impl ModifierNodeElement for DisableSelectionElement {
-    fn create(&self) -> Box<dyn ModifierNode> {
-        Box::new(DisableSelectionNode)
+    type Node = DisableSelectionNode;
+    fn create(&self) -> DisableSelectionNode {
+        DisableSelectionNode
     }
-    fn update(&self, _node: &mut dyn ModifierNode) {}
-    fn same(&self, other: &dyn ModifierNodeElement) -> bool {
-        other.downcast_ref::<DisableSelectionElement>().is_some()
+    fn update(&self, _node: &mut DisableSelectionNode) {}
+    fn same(&self, _other: &Self) -> bool {
+        true
     }
     fn name(&self) -> &'static str {
         "disable_selection"

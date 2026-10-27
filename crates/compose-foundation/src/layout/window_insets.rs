@@ -224,16 +224,15 @@ impl WindowInsetsModifiers for Modifier {
 struct InsetsPadding(WindowInsets);
 
 impl ModifierNodeElement for InsetsPadding {
-    fn create(&self) -> Box<dyn ModifierNode> {
-        Box::new(*self)
+    type Node = Self;
+    fn create(&self) -> Self {
+        *self
     }
-    fn update(&self, node: &mut dyn ModifierNode) {
-        if let Some(node) = node.downcast_mut::<InsetsPadding>() {
-            *node = *self;
-        }
+    fn update(&self, node: &mut Self) {
+        *node = *self;
     }
-    fn same(&self, other: &dyn ModifierNodeElement) -> bool {
-        other.downcast_ref::<InsetsPadding>().is_some_and(|other| other == self)
+    fn same(&self, other: &Self) -> bool {
+        other == self
     }
     fn name(&self) -> &'static str {
         "window_insets_padding"
