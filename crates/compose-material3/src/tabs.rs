@@ -206,8 +206,9 @@ struct TabIndicatorOffset {
 }
 
 impl ModifierNodeElement for TabIndicatorOffset {
-    fn create(&self) -> std::boxed::Box<dyn ModifierNode> {
-        std::boxed::Box::new(TabIndicatorOffsetNode {
+    type Node = TabIndicatorOffsetNode;
+    fn create(&self) -> TabIndicatorOffsetNode {
+        TabIndicatorOffsetNode {
             positions: self.positions.clone(),
             selected_tab_index: self.selected_tab_index,
             match_content_size: self.match_content_size,
@@ -215,23 +216,19 @@ impl ModifierNodeElement for TabIndicatorOffset {
             width: None,
             initial: None,
             scope: CoroutineScope::new(),
-        })
-    }
-
-    fn update(&self, node: &mut dyn ModifierNode) {
-        if let Some(node) = node.downcast_mut::<TabIndicatorOffsetNode>() {
-            node.positions = self.positions.clone();
-            node.selected_tab_index = self.selected_tab_index;
-            node.match_content_size = self.match_content_size;
         }
     }
 
-    fn same(&self, other: &dyn ModifierNodeElement) -> bool {
-        other.downcast_ref::<TabIndicatorOffset>().is_some_and(|other| {
-            Rc::ptr_eq(&other.positions, &self.positions)
-                && other.selected_tab_index == self.selected_tab_index
-                && other.match_content_size == self.match_content_size
-        })
+    fn update(&self, node: &mut TabIndicatorOffsetNode) {
+        node.positions = self.positions.clone();
+        node.selected_tab_index = self.selected_tab_index;
+        node.match_content_size = self.match_content_size;
+    }
+
+    fn same(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&other.positions, &self.positions)
+            && other.selected_tab_index == self.selected_tab_index
+            && other.match_content_size == self.match_content_size
     }
 
     fn name(&self) -> &'static str {

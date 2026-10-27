@@ -354,21 +354,18 @@ struct ThumbStateLayer {
 }
 
 impl ModifierNodeElement for ThumbStateLayer {
-    fn create(&self) -> std::boxed::Box<dyn ModifierNode> {
-        std::boxed::Box::new(ThumbStateLayer { source: self.source.clone(), color: self.color })
+    type Node = ThumbStateLayer;
+    fn create(&self) -> ThumbStateLayer {
+        ThumbStateLayer { source: self.source.clone(), color: self.color }
     }
 
-    fn update(&self, node: &mut dyn ModifierNode) {
-        if let Some(node) = node.downcast_mut::<ThumbStateLayer>() {
-            node.source = self.source.clone();
-            node.color = self.color;
-        }
+    fn update(&self, node: &mut ThumbStateLayer) {
+        node.source = self.source.clone();
+        node.color = self.color;
     }
 
-    fn same(&self, other: &dyn ModifierNodeElement) -> bool {
-        other
-            .downcast_ref::<ThumbStateLayer>()
-            .is_some_and(|other| other.source == self.source && other.color == self.color)
+    fn same(&self, other: &Self) -> bool {
+        other.source == self.source && other.color == self.color
     }
 
     fn name(&self) -> &'static str {

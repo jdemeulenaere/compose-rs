@@ -515,16 +515,15 @@ struct NegativePadding {
 }
 
 impl ModifierNodeElement for NegativePadding {
-    fn create(&self) -> std::boxed::Box<dyn ModifierNode> {
-        std::boxed::Box::new(*self)
+    type Node = NegativePadding;
+    fn create(&self) -> NegativePadding {
+        *self
     }
-    fn update(&self, node: &mut dyn ModifierNode) {
-        if let Some(node) = node.downcast_mut::<NegativePadding>() {
-            *node = *self;
-        }
+    fn update(&self, node: &mut NegativePadding) {
+        *node = *self;
     }
-    fn same(&self, other: &dyn ModifierNodeElement) -> bool {
-        other.downcast_ref::<NegativePadding>() == Some(self)
+    fn same(&self, other: &Self) -> bool {
+        other == self
     }
     fn name(&self) -> &'static str {
         "increaseSemanticsBounds"

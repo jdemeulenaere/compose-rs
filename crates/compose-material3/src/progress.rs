@@ -129,22 +129,19 @@ struct ProgressSemantics {
 }
 
 impl ModifierNodeElement for ProgressSemantics {
-    fn create(&self) -> std::boxed::Box<dyn ModifierNode> {
-        std::boxed::Box::new(ProgressSemanticsNode { progress: self.progress.clone() })
+    type Node = ProgressSemanticsNode;
+    fn create(&self) -> ProgressSemanticsNode {
+        ProgressSemanticsNode { progress: self.progress.clone() }
     }
-    fn update(&self, node: &mut dyn ModifierNode) {
-        if let Some(node) = node.downcast_mut::<ProgressSemanticsNode>() {
-            node.progress = self.progress.clone();
+    fn update(&self, node: &mut ProgressSemanticsNode) {
+        node.progress = self.progress.clone();
+    }
+    fn same(&self, other: &Self) -> bool {
+        match (&self.progress, &other.progress) {
+            (Some(a), Some(b)) => a.ptr_eq(b),
+            (None, None) => true,
+            _ => false,
         }
-    }
-    fn same(&self, other: &dyn ModifierNodeElement) -> bool {
-        other.downcast_ref::<ProgressSemantics>().is_some_and(|other| {
-            match (&self.progress, &other.progress) {
-                (Some(a), Some(b)) => a.ptr_eq(b),
-                (None, None) => true,
-                _ => false,
-            }
-        })
     }
     fn name(&self) -> &'static str {
         "progress_semantics"

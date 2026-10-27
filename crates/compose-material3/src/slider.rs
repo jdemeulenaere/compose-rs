@@ -726,8 +726,9 @@ struct SliderInputNode {
 }
 
 impl ModifierNodeElement for SliderInput {
-    fn create(&self) -> std::boxed::Box<dyn ModifierNode> {
-        std::boxed::Box::new(SliderInputNode {
+    type Node = SliderInputNode;
+    fn create(&self) -> SliderInputNode {
+        SliderInputNode {
             state: self.state,
             on_value_change: self.on_value_change.clone(),
             on_value_change_finished: self.on_value_change_finished.clone(),
@@ -737,11 +738,10 @@ impl ModifierNodeElement for SliderInput {
             drag_lag: None,
             focused: false,
             asked: None,
-        })
+        }
     }
 
-    fn update(&self, node: &mut dyn ModifierNode) {
-        let Some(node) = node.downcast_mut::<SliderInputNode>() else { return };
+    fn update(&self, node: &mut SliderInputNode) {
         node.state = self.state;
         node.asked = None;
         node.on_value_change = self.on_value_change.clone();
@@ -750,18 +750,16 @@ impl ModifierNodeElement for SliderInput {
         node.interaction_source = self.interaction_source.clone();
     }
 
-    fn same(&self, other: &dyn ModifierNodeElement) -> bool {
-        other.downcast_ref::<SliderInput>().is_some_and(|other| {
-            other.state == self.state
-                && other.on_value_change.ptr_eq(&self.on_value_change)
-                && match (&other.on_value_change_finished, &self.on_value_change_finished) {
-                    (Some(a), Some(b)) => a.ptr_eq(b),
-                    (None, None) => true,
-                    _ => false,
-                }
-                && other.enabled == self.enabled
-                && other.interaction_source == self.interaction_source
-        })
+    fn same(&self, other: &Self) -> bool {
+        other.state == self.state
+            && other.on_value_change.ptr_eq(&self.on_value_change)
+            && match (&other.on_value_change_finished, &self.on_value_change_finished) {
+                (Some(a), Some(b)) => a.ptr_eq(b),
+                (None, None) => true,
+                _ => false,
+            }
+            && other.enabled == self.enabled
+            && other.interaction_source == self.interaction_source
     }
 
     fn name(&self) -> &'static str {
@@ -817,7 +815,7 @@ impl SliderInputNode {
 }
 
 impl ModifierNode for SliderInputNode {
-    fn on_reset(&mut self) {
+    fn on_reset(&mut self, _context: &mut compose_ui::NodeContext<'_>) {
         self.press = None;
         self.drag_lag = None;
         self.focused = false;
