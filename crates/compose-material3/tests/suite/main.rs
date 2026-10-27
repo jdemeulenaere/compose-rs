@@ -10,6 +10,7 @@ mod buttons;
 mod checkbox;
 mod checkbox_screenshots;
 mod components;
+mod content_description;
 mod divider;
 mod drawer;
 mod icon_toggle_button;

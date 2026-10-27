@@ -125,6 +125,9 @@ struct Param {
     /// Written `impl Into<T>` in a restartable composable: the function takes a `T`, and the
     /// call macro converts what it's given.
     into: bool,
+    /// Written `Option<impl Into<T>>` in a restartable composable: the function takes an
+    /// `Option<T>`, and the call macro converts a `Some`'s value (`None` as written).
+    optional_into: bool,
     /// The names the parameter binds in the body.
     visible: Vec<String>,
 }
@@ -298,6 +301,7 @@ fn call_macro(function: &ItemFn, params: &[Param], key: u64, site: &str) -> Toke
                     quote!(optional #arity)
                 }
                 (None, None) if param.into => quote!(into),
+                (None, None) if param.optional_into => quote!(optional_into),
                 (None, None) => quote!(value),
             };
             let default =
@@ -558,7 +562,8 @@ fn transform(
         }
         typed.attrs = attributes;
         // `impl Into<T>`: a `T` if the composable is restartable (below), else generic.
-        let converted = into_type(&typed.ty).is_some();
+        let converted = into_type(&typed.ty).is_some()
+            || option_argument(&typed.ty).and_then(into_type).is_some();
         if let Some(callback) = callback_type(&typed.ty)? {
             *typed.ty = callback;
         } else if let Some(callback) = optional_callback_type(&typed.ty)? {
@@ -616,6 +621,7 @@ fn transform(
             default,
             format,
             into: false,
+            optional_into: false,
             visible,
         });
     }
@@ -634,6 +640,17 @@ fn transform(
                 *typed.ty = target.clone();
                 param.ty = target;
                 param.into = true;
+            } else if impl_trait.is_none() {
+                impl_trait = Some(typed.ty.span());
+            }
+        } else if let FnArg::Typed(typed) = input
+            && let Some(target) = option_argument(&typed.ty).and_then(into_type)
+        {
+            if restartable {
+                let target: Type = syn::parse_quote!(::core::option::Option<#target>);
+                *typed.ty = target.clone();
+                param.ty = target;
+                param.optional_into = true;
             } else if impl_trait.is_none() {
                 impl_trait = Some(typed.ty.span());
             }

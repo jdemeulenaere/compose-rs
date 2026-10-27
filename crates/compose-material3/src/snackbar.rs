@@ -589,7 +589,7 @@ pub fn Snackbar(
                 compose_runtime::callback(|| {
                     Icon(
                         icons::filled::close(),
-                        Some("Dismiss"),
+                        Some("Dismiss".into()),
                         Modifier,
                         LOCAL_CONTENT_COLOR.current(),
                     )

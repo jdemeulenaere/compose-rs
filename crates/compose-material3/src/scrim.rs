@@ -22,7 +22,7 @@ impl ScrimDefaults {
 #[composable]
 #[allow(non_snake_case)]
 pub fn Scrim(
-    content_description: Option<&'static str>,
+    content_description: Option<impl Into<compose_ui::SharedString>>,
     #[default(crate::Modifier)] modifier: Modifier,
     #[default(crate::scrim_default_on_click())] on_click: Option<impl Fn() + 'static>,
     #[default(|| 1.0)] alpha: impl Fn() -> f32 + 'static,

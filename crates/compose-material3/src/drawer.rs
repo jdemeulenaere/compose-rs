@@ -404,7 +404,7 @@ pub fn ModalNavigationDrawer(
                         .then_custom(ScrimElement {
                             close,
                             enabled: gestures_enabled,
-                            description: Some("Close navigation menu"),
+                            description: Some("Close navigation menu".into()),
                         }),
                     Alignment::TOP_START,
                     false,
@@ -441,13 +441,13 @@ pub fn ModalNavigationDrawer(
 pub(crate) struct ScrimElement {
     pub close: compose_runtime::Callback,
     pub enabled: bool,
-    pub description: Option<&'static str>,
+    pub description: Option<compose_ui::SharedString>,
 }
 
 pub(crate) struct ScrimNode {
     close: compose_runtime::Callback,
     enabled: bool,
-    description: Option<&'static str>,
+    description: Option<compose_ui::SharedString>,
     pressed: Option<compose_ui::PointerId>,
 }
 
@@ -457,14 +457,14 @@ impl compose_ui::ModifierNodeElement for ScrimElement {
         ScrimNode {
             close: self.close.clone(),
             enabled: self.enabled,
-            description: self.description,
+            description: self.description.clone(),
             pressed: None,
         }
     }
     fn update(&self, node: &mut ScrimNode) {
         node.close = self.close.clone();
         node.enabled = self.enabled;
-        node.description = self.description;
+        node.description = self.description.clone();
     }
     fn same(&self, other: &Self) -> bool {
         other.close.ptr_eq(&self.close)
@@ -529,8 +529,8 @@ impl compose_ui::PointerInputModifierNode for ScrimNode {
 
 impl compose_ui::SemanticsModifierNode for ScrimNode {
     fn apply_semantics(&self, config: &mut compose_ui::SemanticsConfiguration) {
-        if let Some(description) = self.description {
-            config.set_content_description(description);
+        if let Some(description) = &self.description {
+            config.set_content_description(description.clone());
         }
         if self.enabled {
             let close = self.close.clone();

@@ -59,7 +59,7 @@ impl ContentScale {
 #[allow(non_snake_case)]
 pub fn Image(
     bitmap: ImageBitmap,
-    content_description: Option<&'static str>,
+    content_description: Option<impl Into<compose_ui::SharedString>>,
     #[default(crate::Modifier)] modifier: Modifier,
     #[default(crate::Alignment::CENTER)] alignment: Alignment,
     #[default(crate::ContentScale::Fit)] content_scale: ContentScale,
@@ -75,7 +75,7 @@ pub fn Image(
 
 struct ImageElement {
     bitmap: ImageBitmap,
-    content_description: Option<&'static str>,
+    content_description: Option<compose_ui::SharedString>,
     alignment: Alignment,
     content_scale: ContentScale,
     alpha: f32,
@@ -83,7 +83,7 @@ struct ImageElement {
 
 struct ImageNode {
     bitmap: ImageBitmap,
-    content_description: Option<&'static str>,
+    content_description: Option<compose_ui::SharedString>,
     alignment: Alignment,
     content_scale: ContentScale,
     alpha: f32,
@@ -94,7 +94,7 @@ impl ModifierNodeElement for ImageElement {
     fn create(&self) -> ImageNode {
         ImageNode {
             bitmap: self.bitmap.clone(),
-            content_description: self.content_description,
+            content_description: self.content_description.clone(),
             alignment: self.alignment,
             content_scale: self.content_scale,
             alpha: self.alpha,
@@ -103,7 +103,7 @@ impl ModifierNodeElement for ImageElement {
 
     fn update(&self, node: &mut ImageNode) {
         node.bitmap = self.bitmap.clone();
-        node.content_description = self.content_description;
+        node.content_description = self.content_description.clone();
         node.alignment = self.alignment;
         node.content_scale = self.content_scale;
         node.alpha = self.alpha;
@@ -273,8 +273,8 @@ impl DrawModifierNode for ImageNode {
 
 impl SemanticsModifierNode for ImageNode {
     fn apply_semantics(&self, config: &mut SemanticsConfiguration) {
-        if let Some(description) = self.content_description {
-            config.set_content_description(description);
+        if let Some(description) = &self.content_description {
+            config.set_content_description(description.clone());
             config.set_role(Role::Image);
         }
     }

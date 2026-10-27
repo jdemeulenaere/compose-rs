@@ -71,7 +71,7 @@ pub fn Greeting(
 
 A composable is a free function marked `#[composable]`. Default values are `#[default(…)]` attributes, evaluated where the composable is called.
 
-A parameter typed `impl Into<T>` takes anything that converts: `"Ada"` for a `SharedString`, the reference-counted string compose-rs uses for text. A plain `SharedString` parameter takes only a `SharedString`.
+A parameter typed `impl Into<T>` takes anything that converts: `"Ada"` for a `SharedString`, the reference-counted string compose-rs uses for text. A plain `SharedString` parameter takes only a `SharedString`. An `Option<impl Into<T>>` parameter, as Compose's `contentDescription: String?`, takes `None`, `Some` of anything that converts (`Some("Close")`, `Some(format!("{count} new"))`) or an `Option` of it.
 
 `#[composable]` turns `impl Into<T>` and `impl Fn(…)` parameters into concrete types, so the composable stays a single non-generic function.
 

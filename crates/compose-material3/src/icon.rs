@@ -21,14 +21,14 @@ use crate::theme::{LOCAL_CONTENT_COLOR, MaterialTheme};
 #[composable]
 pub fn Icon(
     image_vector: ImageVector,
-    content_description: Option<&'static str>,
+    content_description: Option<impl Into<compose_ui::SharedString>>,
     #[default(crate::Modifier)] modifier: Modifier,
     #[default(crate::LOCAL_CONTENT_COLOR.current())] tint: Color,
 ) {
     let (width, height) = (image_vector.default_width, image_vector.default_height);
     let modifier = match content_description {
         Some(description) => modifier.semantics(move |config| {
-            config.set_content_description(description);
+            config.set_content_description(description.clone());
             config.set_role(Role::Image);
         }),
         None => modifier,

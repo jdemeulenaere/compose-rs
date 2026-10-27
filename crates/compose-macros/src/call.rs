@@ -26,6 +26,8 @@ struct Parameter {
     optional: Option<usize>,
     /// An `impl Into<T>` parameter: what it's given is converted.
     into: bool,
+    /// An `Option<impl Into<T>>` parameter: a `Some`'s value is converted.
+    optional_into: bool,
     default: Option<TokenStream>,
 }
 
@@ -49,7 +51,14 @@ impl Parse for Parameter {
         } else {
             None
         };
-        Ok(Parameter { name, callback, optional, into: kind == "into", default })
+        Ok(Parameter {
+            name,
+            callback,
+            optional,
+            into: kind == "into",
+            optional_into: kind == "optional_into",
+            default,
+        })
     }
 }
 
@@ -690,6 +699,22 @@ fn build(call: Call) -> syn::Result<TokenStream> {
                 let value = shared_value(argument.into_value(), &mentions);
                 quote! { ::core::convert::Into::into(#value) }
             }
+            // An `Option<impl Into<T>>` parameter converts a `Some`'s value (`Some("Close")`,
+            // `Some(format!(…))`); `None` passes as written, another `Option` is mapped.
+            None if parameter.optional_into => match argument.into_value() {
+                Value::Expr(Expr::Call(call)) if is_some(&call.func) && call.args.len() == 1 => {
+                    let inner = call.args[0].clone();
+                    let value = shared_value(Value::Expr(inner), &mentions);
+                    quote! { ::core::option::Option::Some(::core::convert::Into::into(#value)) }
+                }
+                Value::Expr(Expr::Path(path)) if path.path.is_ident("None") => {
+                    path.into_token_stream()
+                }
+                value => {
+                    let value = shared_value(value, &mentions);
+                    quote! { ::core::option::Option::map(#value, ::core::convert::Into::into) }
+                }
+            },
             // An `impl Into<T>` parameter converts what it's given.
             None if parameter.into => {
                 let value = shared_value(argument.into_value(), &mentions);

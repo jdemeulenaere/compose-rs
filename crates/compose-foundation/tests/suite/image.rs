@@ -115,3 +115,13 @@ fn the_alignment_and_alpha_are_applied() {
         list.ops.iter().any(|op| matches!(op, DrawOp::DrawImage { alpha, .. } if *alpha == 0.5))
     );
 }
+
+/// A description built at run time, as Compose's `contentDescription: String?` (D1022).
+#[test]
+fn an_images_description_can_be_built_at_run_time() {
+    let mut ui = compose_test(|| {
+        let index = 7;
+        Image!(bitmap(4, 4), Some(format!("Photo {index}")));
+    });
+    ui.on_node_with_content_description("Photo 7").assert_exists();
+}
