@@ -34,12 +34,13 @@ fn SheetApp(state: SheetState, shown: MutableState<bool>, content_height: f32) {
     });
 }
 
-/// A 400 by 600 window showing a sheet of `content_height` dp (and its 48 dp drag handle).
+/// A 400 by 600 window showing a sheet of `content_height` dp (and its 48 dp drag handle),
+/// resting at `values`.
 fn sheet(
     content_height: f32,
+    values: &[SheetValue],
 ) -> (ComposeTestRule, Owned<SheetState>, MutableState<bool>, Rc<dyn std::any::Any>) {
-    let state =
-        SheetState::new_skipping(false, || 56.0, || 125.0, SheetValue::Hidden, |_| true, false);
+    let state = SheetState::new(values, || 56.0, || 125.0, SheetValue::Hidden, |_| true);
     let owner = mutable_state_of(true);
     let shown = owner.handle();
     let given = *state;
@@ -52,17 +53,18 @@ fn sheet(
 }
 
 #[test]
-fn a_short_sheet_shows_expanded_and_a_tall_one_half_way() {
-    let (mut ui, state, _shown, _owner) = sheet(200.0);
+fn a_sheet_without_a_half_way_shows_expanded_and_one_with_shows_half_way() {
+    let (mut ui, state, _shown, _owner) = sheet(200.0, &[SheetValue::Hidden, SheetValue::Expanded]);
     assert_eq!(state.current_value(), SheetValue::Expanded);
     // The handle's 48 dp (22 + 4 + 22) above the content, at the bottom.
     assert_eq!(bounds(&mut ui, "content").top, 600.0 - 200.0);
     ui.on_node_with_content_description("Drag handle").assert_exists();
     assert!(!state.has_partially_expanded_state());
 
-    let (mut ui, state, _shown, _owner) = sheet(500.0);
+    // Half its 548 dp up (Compose's default since its deterministic partial expansion).
+    let (mut ui, state, _shown, _owner) = sheet(500.0, &SheetValue::ALL);
     assert_eq!(state.current_value(), SheetValue::PartiallyExpanded);
-    assert_eq!(bounds(&mut ui, "content").top, 300.0 + 48.0);
+    assert_eq!(bounds(&mut ui, "content").top, 326.0 + 48.0);
     let scope = CoroutineScope::new();
     let expanding = *state;
     scope.launch(async move { expanding.expand().await });
@@ -73,8 +75,13 @@ fn a_short_sheet_shows_expanded_and_a_tall_one_half_way() {
 
 #[test]
 fn the_sheet_slides_up_as_it_shows() {
-    let state =
-        SheetState::new_skipping(true, || 56.0, || 125.0, SheetValue::Hidden, |_| true, false);
+    let state = SheetState::new(
+        &[SheetValue::Hidden, SheetValue::Expanded],
+        || 56.0,
+        || 125.0,
+        SheetValue::Hidden,
+        |_| true,
+    );
     let owner = mutable_state_of(false);
     let shown = owner.handle();
     let given = *state;
@@ -92,7 +99,7 @@ fn the_sheet_slides_up_as_it_shows() {
 
 #[test]
 fn dragging_the_sheet_down_dismisses_it_and_a_short_drag_comes_back() {
-    let (mut ui, state, shown, _owner) = sheet(200.0);
+    let (mut ui, state, shown, _owner) = sheet(200.0, &[SheetValue::Hidden, SheetValue::Expanded]);
     // 40 dp down (past the touch slop): less than the 56 dp threshold, slowly.
     ui.host().send_pointer(PointerEvent::press(Offset::new(200.0, 450.0)));
     for y in [460.0, 470.0, 480.0, 498.0] {
@@ -119,14 +126,14 @@ fn dragging_the_sheet_down_dismisses_it_and_a_short_drag_comes_back() {
 
 #[test]
 fn the_scrim_and_escape_dismiss_the_sheet() {
-    let (mut ui, state, shown, _owner) = sheet(200.0);
+    let (mut ui, state, shown, _owner) = sheet(200.0, &[SheetValue::Hidden, SheetValue::Expanded]);
     ui.host().send_pointer(PointerEvent::press(Offset::new(200.0, 100.0)));
     ui.host().send_pointer(PointerEvent::release(Offset::new(200.0, 100.0)));
     ui.advance_time_by(Duration::from_millis(600));
     assert!(!shown.get());
     assert!(!state.is_visible());
 
-    let (mut ui, _state, shown, _owner) = sheet(200.0);
+    let (mut ui, _state, shown, _owner) = sheet(200.0, &[SheetValue::Hidden, SheetValue::Expanded]);
     ui.press_key(Key::Escape);
     ui.advance_time_by(Duration::from_millis(600));
     assert!(!shown.get());
@@ -136,7 +143,7 @@ fn the_scrim_and_escape_dismiss_the_sheet() {
 /// dismisses it; while the sheet shows, back never leaves the app.
 #[test]
 fn back_partially_expands_then_dismisses_the_sheet() {
-    let (mut ui, state, shown, _owner) = sheet(500.0);
+    let (mut ui, state, shown, _owner) = sheet(500.0, &SheetValue::ALL);
     assert_eq!(state.current_value(), SheetValue::PartiallyExpanded);
     let scope = CoroutineScope::new();
     let expanding = *state;
@@ -241,8 +248,7 @@ fn ScrollingSheetApp(state: SheetState) {
 
 #[test]
 fn the_contents_scrolls_drag_the_sheet_first() {
-    let state =
-        SheetState::new_skipping(false, || 56.0, || 125.0, SheetValue::Hidden, |_| true, false);
+    let state = SheetState::new(&SheetValue::ALL, || 56.0, || 125.0, SheetValue::Hidden, |_| true);
     let given = *state;
     let mut ui = ComposeTestRule::sized(IntSize::new(400, 600), move || ScrollingSheetApp(given));
     ui.set_auto_advance(false);
@@ -275,7 +281,8 @@ fn the_contents_scrolls_drag_the_sheet_first() {
 
 #[test]
 fn a_dragged_sheet_follows_the_finger() {
-    let (mut ui, _state, _shown, _owner) = sheet(200.0);
+    let (mut ui, _state, _shown, _owner) =
+        sheet(200.0, &[SheetValue::Hidden, SheetValue::Expanded]);
     ui.host().send_pointer(PointerEvent::press(Offset::new(200.0, 450.0)));
     for y in [470.0, 500.0, 550.0] {
         ui.host().send_pointer(PointerEvent::moved(Offset::new(200.0, y), true));

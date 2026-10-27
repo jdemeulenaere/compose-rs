@@ -101,7 +101,7 @@ pub use selection::{
 };
 pub use sheet::{
     BottomSheetDefaults, ModalBottomSheet, ModalBottomSheetDefaults, ModalBottomSheetProperties,
-    SheetState, SheetValue, remember_bottom_sheet_state, remember_modal_bottom_sheet_state,
+    SheetState, SheetValue, remember_bottom_sheet_state,
 };
 pub use slider::{
     DrawSliderStopIndicator, DrawSliderTick, Slider, SliderColors, SliderDefaults, SliderState,

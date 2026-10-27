@@ -159,11 +159,15 @@ fn Bare(state: SheetState, height: Dp) {
 
 // Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/ModalBottomSheetTest.kt, modalBottomSheet_defaultStateForSmallContentIsFullExpanded
 #[test]
-fn a_legacy_states_short_sheet_shows_expanded() {
-    // Compose's flag `isBottomSheetPartiallyExpandedDeterministicEnabled` off: the legacy
-    // state, `remember_modal_bottom_sheet_state`.
+fn a_short_sheet_that_cant_rest_half_way_shows_expanded() {
+    // Compose's flag `isBottomSheetPartiallyExpandedDeterministicEnabled` off (the legacy
+    // states, which rest short sheets expanded): here, a state without the half way (the
+    // legacy states are gone, D1019).
     let mut ui = compose_test(|| {
-        let state = remember_modal_bottom_sheet_state!();
+        let state = remember_bottom_sheet_state!(
+            SheetValue::Hidden,
+            enabled_values = &[SheetValue::Hidden, SheetValue::Expanded]
+        );
         keep(state);
         Bare(state, SHEET_HEIGHT);
     });
@@ -171,25 +175,6 @@ fn a_legacy_states_short_sheet_shows_expanded() {
     assert_eq!(state().current_value(), SheetValue::Expanded);
     ui.on_node_with_tag("sheetContentTag")
         .assert_top_position_in_root_is_equal_to(height - SHEET_HEIGHT);
-}
-
-// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/ModalBottomSheetTest.kt, modalBottomSheet_defaultStateForLargeContentIsHalfExpanded
-#[test]
-fn a_legacy_states_tall_sheet_shows_half_way_down_the_window() {
-    let mut ui = compose_test(|| {
-        let state = remember_modal_bottom_sheet_state!();
-        keep(state);
-        MaterialTheme!({
-            ModalBottomSheet!(|| {}, sheet_state = state, {
-                // Deliberately not the whole window.
-                Box!(modifier = Modifier.fill_max_size_with(0.6).test_tag("sheetContentTag"));
-            });
-        });
-    });
-    ui.wait_for_idle();
-    let height = ui.on_node(is_popup()).get_unclipped_bounds_in_root().height().0;
-    assert_eq!(state().target_value(), SheetValue::PartiallyExpanded);
-    assert!((state().require_offset() - height / 2.0).abs() <= 1.0);
 }
 
 /// A sheet of a box `fraction` of the window high, shown while `shown`, with `state`; back
@@ -254,11 +239,14 @@ fn back_keeps_the_sheet_without_dismissing_on_back_press() {
 
 // Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/ModalBottomSheetTest.kt, modalBottomSheet_shortSheet_sizeChanges_snapsToNewTarget
 #[test]
-fn a_legacy_short_sheet_follows_its_size() {
+fn a_short_sheet_follows_its_size() {
     let size = mutable_state_of(56.dp());
     let given = size.handle();
     let mut ui = compose_test(move || {
-        let state = remember_modal_bottom_sheet_state!();
+        let state = remember_bottom_sheet_state!(
+            SheetValue::Hidden,
+            enabled_values = &[SheetValue::Hidden, SheetValue::Expanded]
+        );
         keep(state);
         Bare(state, given.get());
     });
@@ -296,7 +284,10 @@ fn an_empty_sheet_shows_without_moving() {
     let ui = compose_test(|| {
         let scope = remember_coroutine_scope();
         SCOPE.with(|cell| cell.set(Some(scope)));
-        let state = remember_modal_bottom_sheet_state!();
+        let state = remember_bottom_sheet_state!(
+            SheetValue::Hidden,
+            enabled_values = &[SheetValue::Hidden, SheetValue::Expanded]
+        );
         keep(state);
         MaterialTheme!({
             ModalBottomSheet!(|| {}, sheet_state = state, drag_handle = None::<fn()>, |_| {});

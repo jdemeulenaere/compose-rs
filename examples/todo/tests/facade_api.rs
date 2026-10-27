@@ -117,8 +117,11 @@ fn App(expanded: bool) {
     let scroll = remember_scroll_state!();
     let _scroll2 = remember_scroll_state!(initial = 10);
     let _list = remember_lazy_list_state!();
-    let _sheet = remember_modal_bottom_sheet_state!();
-    let _sheet2 = remember_modal_bottom_sheet_state!(skip_partially_expanded = true);
+    let _sheet = remember_bottom_sheet_state!(SheetValue::Hidden);
+    let _sheet2 = remember_bottom_sheet_state!(
+        SheetValue::Hidden,
+        enabled_values = &[SheetValue::Hidden, SheetValue::Expanded]
+    );
     let _swipe = remember_swipe_to_dismiss_box_state!();
     let snackbars = remember(SnackbarHostState::new);
     let scope = remember_coroutine_scope();

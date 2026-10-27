@@ -1,8 +1,9 @@
 //! Compose's `SheetStateTest.kt`, the scenarios through the public API (the others reach the
 //! internal `anchoredDraggableState`): the constructor's contracts, `confirm_value_change`,
 //! anchors changing under a state and reconciling with them. Compose's tests turning
-//! `isBottomSheetPartiallyExpandedDeterministicEnabled` off use the legacy states here
-//! (`SheetState::new_skipping`, `remember_modal_bottom_sheet_state`).
+//! `isBottomSheetPartiallyExpandedDeterministicEnabled` off hold with the default states,
+//! but `state_missingAnchors_findsClosest` (a short sheet resting expanded): the legacy states
+//! are gone (D1019).
 
 #![allow(non_snake_case)]
 
@@ -108,7 +109,7 @@ fn a_sheet_keeps_its_value_as_its_content_changes() {
     let items = mutable_state_of(0usize);
     let count = items.handle();
     let mut ui = compose_test(move || {
-        let state = remember_modal_bottom_sheet_state!();
+        let state = remember_bottom_sheet_state!(SheetValue::Hidden);
         STATE.with(|cell| cell.set(Some(state)));
         MaterialTheme!({
             ModalBottomSheet!(|| {}, sheet_state = state, drag_handle = None::<fn()>, {
@@ -159,54 +160,23 @@ fn a_sheet_keeps_its_value_as_its_content_changes() {
     assert!(!state().has_partially_expanded_state() && !state().has_expanded_state());
 }
 
-/// A legacy state (Compose's tests with the deterministic flag off) at density 1.
-fn legacy_state() -> Owned<SheetState> {
-    SheetState::new_skipping(
-        false,
+/// A state resting anywhere, at density 1.
+fn default_state() -> Owned<SheetState> {
+    SheetState::new(
+        &SheetValue::ALL,
         || BottomSheetDefaults::POSITIONAL_THRESHOLD.0,
         || BottomSheetDefaults::VELOCITY_THRESHOLD.0,
         SheetValue::Hidden,
         |_| true,
-        false,
     )
 }
 
-// Compose: compose/material3/material3/src/androidDeviceTest/kotlin/androidx/compose/material3/SheetStateTest.kt, state_missingAnchors_findsClosest
-#[test]
-fn a_sheet_too_short_to_rest_half_way_shows_expanded() {
-    let short = mutable_state_of(false);
-    let given = short.handle();
-    let state = legacy_state();
-    let sheet = *state;
-    let mut ui = compose_test(move || {
-        let scope = remember_coroutine_scope();
-        SCOPE.with(|cell| cell.set(Some(scope)));
-        MaterialTheme!({
-            ModalBottomSheet!(|| {}, sheet_state = sheet, drag_handle = None::<fn()>, {
-                if given.get() {
-                    Box!(modifier = Modifier.fill_max_width().height(1.dp()));
-                } else {
-                    Box!(modifier = Modifier.fill_max_size().test_tag("sheetTag"));
-                }
-            });
-        });
-    });
-    let hiding = *state;
-    launch(async move { hiding.hide().await });
-    ui.run_on_idle(|_| assert_eq!(state.current_value(), SheetValue::Hidden));
-    short.set(true);
-    ui.wait_for_idle();
-    let showing = *state;
-    launch(async move { showing.show().await });
-    ui.run_on_idle(|_| assert_eq!(state.current_value(), SheetValue::Expanded));
-}
-
-/// A legacy state's empty sheet shown (expanded, though nowhere to go), then given content of
+/// An empty sheet shown (expanded, though nowhere to go), then given content of
 /// `fraction` of the window: it reconciles with the content's expanded anchor.
 fn reconciles(fraction: f32) {
     let content = mutable_state_of(false);
     let given = content.handle();
-    let state = legacy_state();
+    let state = default_state();
     let sheet = *state;
     let mut ui = compose_test(move || {
         let scope = remember_coroutine_scope();

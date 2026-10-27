@@ -54,11 +54,6 @@ struct SheetInner {
     anchored: Anchored,
     skip_partially_expanded: bool,
     skip_hidden_state: bool,
-    /// Half its content high when partially expanded (at most half the window), and that
-    /// whatever its height, as Compose's `isBottomSheetPartiallyExpandedDeterministicEnabled`
-    /// (the constructor taking the enabled values); else half the window, only if taller
-    /// (the legacy states).
-    deterministic: bool,
     /// How far a drag must go to settle at the next anchor, in pixels, as
     /// `positionalThreshold`.
     positional_threshold: Box<dyn Fn() -> f32>,
@@ -110,30 +105,6 @@ impl SheetState {
             Box::new(velocity_threshold),
             initial_value,
             Rc::new(confirm_value_change),
-            true,
-        )
-    }
-
-    /// The legacy state, as Compose's deprecated `SheetState(skipPartiallyExpanded,
-    /// positionalThreshold, velocityThreshold, initialValue, confirmValueChange,
-    /// skipHiddenState)`: partially expanded at half the window, only for a sheet taller than
-    /// that.
-    #[track_caller]
-    pub fn new_skipping(
-        skip_partially_expanded: bool,
-        positional_threshold: impl Fn() -> f32 + 'static,
-        velocity_threshold: impl Fn() -> f32 + 'static,
-        initial_value: SheetValue,
-        confirm_value_change: impl Fn(SheetValue) -> bool + 'static,
-        skip_hidden_state: bool,
-    ) -> Owned<SheetState> {
-        Self::create(
-            &enabled_values(skip_partially_expanded, skip_hidden_state),
-            Box::new(positional_threshold),
-            Box::new(velocity_threshold),
-            initial_value,
-            Rc::new(confirm_value_change),
-            false,
         )
     }
 
@@ -144,7 +115,6 @@ impl SheetState {
         velocity_threshold: Box<dyn Fn() -> f32>,
         initial_value: SheetValue,
         confirm_value_change: Rc<dyn Fn(SheetValue) -> bool>,
-        deterministic: bool,
     ) -> Owned<SheetState> {
         assert!(
             enabled_values.contains(&SheetValue::Expanded),
@@ -164,7 +134,6 @@ impl SheetState {
                 ),
                 skip_partially_expanded: !enabled_values.contains(&SheetValue::PartiallyExpanded),
                 skip_hidden_state: !enabled_values.contains(&SheetValue::Hidden),
-                deterministic,
                 positional_threshold,
                 velocity_threshold,
                 confirm_value_change,
@@ -292,18 +261,6 @@ impl SheetState {
     }
 }
 
-/// The values of the legacy constructor's flags.
-fn enabled_values(skip_partially_expanded: bool, skip_hidden_state: bool) -> Vec<SheetValue> {
-    let mut values = vec![SheetValue::Expanded];
-    if !skip_partially_expanded {
-        values.push(SheetValue::PartiallyExpanded);
-    }
-    if !skip_hidden_state {
-        values.push(SheetValue::Hidden);
-    }
-    values
-}
-
 /// A 300 ms ease, as Compose's `BottomSheetAnimationSpec`: drags settle with it until a sheet
 /// sets its motion.
 const BOTTOM_SHEET_ANIMATION_SPEC: AnimationSpec =
@@ -334,25 +291,6 @@ impl SheetState {
             Rc::new(positional_threshold),
             Rc::new(velocity_threshold),
             Rc::new(confirm_value_change),
-            true,
-        )
-    }
-
-    /// The legacy states' saver, as the deprecated `SheetState.Saver(skipPartiallyExpanded,
-    /// positionalThreshold, velocityThreshold, confirmValueChange, skipHiddenState)`.
-    pub fn saver_skipping(
-        skip_partially_expanded: bool,
-        positional_threshold: impl Fn() -> f32 + 'static,
-        velocity_threshold: impl Fn() -> f32 + 'static,
-        confirm_value_change: impl Fn(SheetValue) -> bool + 'static,
-        skip_hidden_state: bool,
-    ) -> impl compose_runtime::Saver<Owned<SheetState>> {
-        Self::saver_with(
-            enabled_values(skip_partially_expanded, skip_hidden_state),
-            Rc::new(positional_threshold),
-            Rc::new(velocity_threshold),
-            Rc::new(confirm_value_change),
-            false,
         )
     }
 
@@ -361,7 +299,6 @@ impl SheetState {
         positional_threshold: Rc<dyn Fn() -> f32>,
         velocity_threshold: Rc<dyn Fn() -> f32>,
         confirm_value_change: Rc<dyn Fn(SheetValue) -> bool>,
-        deterministic: bool,
     ) -> impl compose_runtime::Saver<Owned<SheetState>> {
         compose_runtime::saver(
             |state: &Owned<SheetState>| {
@@ -382,7 +319,6 @@ impl SheetState {
                         Box::new(move || velocity()),
                         value,
                         confirm_value_change.clone(),
-                        deterministic,
                     ))
                 }
                 _ => None,
@@ -409,7 +345,6 @@ fn remember_sheet_state(
     enabled_values: &[SheetValue],
     confirm_value_change: Rc<dyn Fn(SheetValue) -> bool>,
     initial_value: SheetValue,
-    deterministic: bool,
 ) -> SheetState {
     let density = compose_ui::LOCAL_DENSITY.current();
     let (positional, velocity) = thresholds(density);
@@ -420,7 +355,6 @@ fn remember_sheet_state(
             positional.clone(),
             velocity.clone(),
             confirm_value_change.clone(),
-            deterministic,
         ),
         move || {
             let (positional, velocity) = (positional.clone(), velocity.clone());
@@ -430,7 +364,6 @@ fn remember_sheet_state(
                 Box::new(move || velocity()),
                 initial_value,
                 confirm_value_change.clone(),
-                deterministic,
             )
         },
     )
@@ -446,25 +379,7 @@ pub fn remember_bottom_sheet_state(
     #[default(|_| true)] confirm_value_change: impl Fn(SheetValue) -> bool + 'static,
 ) -> SheetState {
     let confirm: Rc<dyn Fn(SheetValue) -> bool> = Rc::new(move |value| confirm_value_change(value));
-    remember_sheet_state(enabled_values, confirm, initial_value, true)
-}
-
-/// A modal sheet's legacy state remembered here, hidden, as the deprecated
-/// `rememberModalBottomSheetState(skipPartiallyExpanded, confirmValueChange)`: partially
-/// expanded at half the window, only for a sheet taller than that. Saved across the host's
-/// recreation; `confirm_value_change` is the first composition's.
-#[composable(non_restartable)]
-pub fn remember_modal_bottom_sheet_state(
-    #[default(false)] skip_partially_expanded: bool,
-    #[default(|_| true)] confirm_value_change: impl Fn(SheetValue) -> bool + 'static,
-) -> SheetState {
-    let confirm: Rc<dyn Fn(SheetValue) -> bool> = Rc::new(move |value| confirm_value_change(value));
-    remember_sheet_state(
-        &enabled_values(skip_partially_expanded, false),
-        confirm,
-        SheetValue::Hidden,
-        false,
-    )
+    remember_sheet_state(enabled_values, confirm, initial_value)
 }
 
 /// What a modal sheet's back and outside clicks do, as Compose's `ModalBottomSheetProperties`.
@@ -930,12 +845,10 @@ impl MeasurePolicy for SheetLayout {
         // at its height.
         let mut anchors = Vec::with_capacity(3);
         anchors.push((SheetValue::Hidden, full));
-        if !inner.skip_partially_expanded
-            && sheet_height != 0.0
-            && (inner.deterministic || sheet_height > full / 2.0)
-        {
-            let visible =
-                if inner.deterministic { (full / 2.0).min(sheet_height / 2.0) } else { full / 2.0 };
+        // Half the sheet's height, at most half the window's (Compose's flag
+        // `isBottomSheetPartiallyExpandedDeterministicEnabled`, on by default).
+        if !inner.skip_partially_expanded && sheet_height != 0.0 {
+            let visible = (full / 2.0).min(sheet_height / 2.0);
             anchors.push((SheetValue::PartiallyExpanded, full - visible));
         }
         if sheet_height != 0.0 {
